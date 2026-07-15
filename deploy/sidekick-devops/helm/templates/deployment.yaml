@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-sidekick
+  namespace: {{ .Release.Namespace }}
+  labels: {app: {{ .Release.Name }}-sidekick}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: {{ .Release.Name }}-sidekick}
+  template:
+    metadata:
+      labels: {app: {{ .Release.Name }}-sidekick}
+    spec:
+      serviceAccountName: {{ .Release.Name }}-sidekick
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: sidekick
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            readOnlyRootFilesystem: false
+          ports: [{containerPort: 8000}]
+          env:
+            - {name: MODEL_ENDPOINT, value: {{ .Values.model.endpoint | quote }}}
+            - {name: INSPECT_NAMESPACE, value: {{ .Values.inspect.namespace | quote }}}
+            - {name: PROMETHEUS_URL, value: {{ .Values.observability.prometheusUrl | quote }}}
+            - {name: LOKI_URL, value: {{ .Values.observability.lokiUrl | quote }}}
+            - {name: GRAFANA_URL, value: {{ .Values.observability.grafanaUrl | quote }}}
+            - {name: MONITOR_ENABLED, value: {{ .Values.monitor.enabled | ternary "1" "0" | quote }}}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8000}
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources: {{ toYaml .Values.resources | nindent 12 }}

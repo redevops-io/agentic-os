@@ -1,0 +1,33 @@
+image:
+  repository: sidekick-devops
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Your OpenAI-compatible model endpoint (for narration + advisors; missions run without it).
+model:
+  endpoint: ""
+
+inspect:
+  namespace: default          # default namespace for inspection endpoints
+
+# Point at your in-cluster observability (leave blank to disable a source).
+observability:
+  prometheusUrl: ""           # e.g. http://prometheus.monitoring.svc:9090
+  lokiUrl: ""                 # e.g. http://loki.monitoring.svc:3100
+  grafanaUrl: ""
+
+monitor:
+  enabled: true
+
+# Read-only cluster inspection. clusterWide=true lets the audit read pods+metrics across all
+# namespaces (get/list only); set false to scope the Role to .inspect.namespace.
+rbac:
+  clusterWide: true
+
+service:
+  type: ClusterIP
+  port: 80
+
+resources:
+  requests: {cpu: 100m, memory: 128Mi}
+  limits: {cpu: 500m, memory: 512Mi}

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: sidekick-devops
+description: Sidekick for DevOps — the Mission Runtime + Projects cockpit with read-only cluster inspection
+type: application
+version: 0.1.0
+appVersion: "v6"

@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-sidekick
+  namespace: {{ .Release.Namespace }}
+  labels: {app: {{ .Release.Name }}-sidekick}
+spec:
+  type: {{ .Values.service.type }}
+  selector: {app: {{ .Release.Name }}-sidekick}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: 8000

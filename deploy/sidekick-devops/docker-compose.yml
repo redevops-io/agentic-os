@@ -1,0 +1,59 @@
+# Sidekick for DevOps — one-command standalone bundle.
+#   cp .env.example .env   # set MODEL_ENDPOINT + KUBECONFIG_HOST
+#   docker compose up
+# Then open http://localhost:8000/cockpit (Sidekick + Projects) and :3000 (Grafana).
+name: sidekick-devops
+
+services:
+  sidekick:
+    build:
+      context: ../..                              # repo root (needs agentic_os/ + apps/infra/)
+      dockerfile: deploy/sidekick-devops/Dockerfile
+    image: sidekick-devops:latest
+    ports: ["8000:8000"]
+    environment:
+      MODEL_ENDPOINT: ${MODEL_ENDPOINT:-}         # your OpenAI-compatible LLM (for narration/advisors)
+      INSPECT_NAMESPACE: ${INSPECT_NAMESPACE:-default}
+      KUBECONFIG: /home/app/.kube/config          # read-only cluster inspection
+      PROMETHEUS_URL: http://prometheus:9090
+      LOKI_URL: http://loki:3100
+      GRAFANA_URL: ${GRAFANA_URL:-http://localhost:3000}
+      MONITOR_ENABLED: ${MONITOR_ENABLED:-1}
+    volumes:
+      # mount YOUR cluster's kubeconfig read-only — Sidekick only inspects (get/list); it never mutates without a gate
+      - ${KUBECONFIG_HOST:-~/.kube/config}:/home/app/.kube/config:ro
+    depends_on: [prometheus, loki]
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    ports: ["9090:9090"]
+    volumes: ["./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.2.2
+    ports: ["3000:3000"]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    volumes: ["./observability/grafana/provisioning:/etc/grafana/provisioning:ro"]
+    depends_on: [prometheus, loki]
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.2.0
+    command: -config.file=/etc/loki/loki-config.yml
+    ports: ["3100:3100"]
+    volumes: ["./observability/loki-config.yml:/etc/loki/loki-config.yml:ro"]
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:3.2.0
+    command: -config.file=/etc/promtail/promtail-config.yml
+    volumes:
+      - ./observability/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/log:/var/log:ro
+    depends_on: [loki]
+    restart: unless-stopped
