@@ -30,6 +30,7 @@ type MissionRuntime struct {
 	evidence                 *EvidenceLog
 	verifier                 Verifier
 	policyPlane              *PolicyDecisionPlane
+	context                  *LocalContextRuntime // the single resolution door (bind · policy · belief · model)
 	learners                 *LearningStack
 	governance               *GovernanceLog
 	plans                    map[string]*ExecutionPlan
@@ -90,6 +91,10 @@ func NewMissionRuntime(registry Registry, executor *Executor, opts ...RuntimeOpt
 	if rt.policyPlane == nil {
 		rt.policyPlane = NewPolicyDecisionPlane(registry, rt.learning, grantsOf, rt.evidence)
 	}
+	// The Mission Runtime decides no context itself — it states a need and the Context Runtime
+	// resolves it (bind · policy · belief · model). Mirrors Python runtime.py self.context.
+	rt.context = NewLocalContextRuntime(registry)
+	rt.context.PolicyPlane = rt.policyPlane
 	if rt.learners == nil {
 		rt.learners = NewLearningStack()
 	}
@@ -227,7 +232,7 @@ func (rt *MissionRuntime) Run(missionID string) *Mission {
 				runnable = append(runnable, gnode{n, nil})
 				continue
 			}
-			d := rt.policyPlane.Decide(n, world, m, graph)
+			d := rt.context.Resolve(ContextIntent{Kind: CheckPolicy, Node: n, World: world, Mission: m, Graph: graph}).Value.(ApprovalDecision)
 			if d.Required {
 				gated = append(gated, gnode{n, &d})
 			} else {
@@ -367,7 +372,8 @@ func (rt *MissionRuntime) beliefIssue(node *Node, world *WorldState) (string, *B
 	for _, k := range keys {
 		if fw, ok := node.Inputs[k].(map[string]any); ok {
 			if wk, ok := fw["$from_world"].(string); ok {
-				if b := world.Belief(wk); b != nil && (b.Conflict || b.Confidence < rt.disambiguationConfidence) {
+				b, _ := rt.context.Resolve(ContextIntent{Kind: ResolveBelief, World: world, Key: wk}).Value.(*Belief)
+				if b != nil && (b.Conflict || b.Confidence < rt.disambiguationConfidence) {
 					return wk, b, true
 				}
 			}
