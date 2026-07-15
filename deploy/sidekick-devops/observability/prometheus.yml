@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: sidekick
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["sidekick:8000"]
+
+  # Add your own targets here (node-exporter, app metrics, etc.):
+  # - job_name: my-app
+  #   static_configs:
+  #     - targets: ["my-app:9100"]
