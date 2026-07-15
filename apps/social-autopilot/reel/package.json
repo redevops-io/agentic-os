@@ -1,0 +1,2 @@
+{ "name": "social-autopilot-reel", "private": true, "type": "module",
+  "dependencies": { "puppeteer-core": "^23", "puppeteer-screen-recorder": "^3" } }

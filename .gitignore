@@ -1,0 +1,9 @@
+_brief.md
+.sidekick*
+__pycache__/
+*.pyc
+.env
+.venv/
+node_modules/
+# Claude Code local session dir
+.claude/

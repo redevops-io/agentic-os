@@ -1,0 +1,216 @@
+# Self-contained demo of the Agentic Business OS.
+#
+#   docker compose -f deploy/docker-compose.yml up --build
+#
+# Brings up the control plane (dashboard at http://localhost:8080/) plus a uniform
+# stand-in service for each of the 9 compose modules, so the fleet lights up green.
+# The module stand-ins use deploy/Dockerfile.module — they do NOT depend on each
+# module repo's own (possibly incomplete) Dockerfile.
+#
+# All build contexts are the REPO ROOT (..), so run with the -f path above.
+
+x-module: &module
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile.module
+  networks: [agentic]
+  restart: unless-stopped
+  # This host's AppArmor/seccomp default blocks socketpair(), which breaks the
+  # asyncio event loop's self-pipe (uvicorn fails to start). Opt out for the demo.
+  security_opt:
+    - seccomp=unconfined
+    - apparmor=unconfined
+
+services:
+  control-plane:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: uvicorn agentic_os.control_plane:app --host 0.0.0.0 --port 8080
+    ports: ["8080:8080"]
+    environment:
+      # Optional: set AGENTIC_OS_API_KEY to require X-API-Key on mutating routes.
+      - AGENTIC_OS_API_KEY=${AGENTIC_OS_API_KEY:-}
+      - AGENTIC_OS_HOME=/data
+    volumes:
+      - agentic_os_data:/data
+    networks: [agentic]
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.control-plane.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.control-plane.priority=1"
+      - "traefik.http.services.control-plane.loadbalancer.server.port=8080"
+    depends_on:
+      - edge-sentinel
+      - agentic-support
+      - agentic-billing
+      - agentic-books
+      - agentic-compliance
+      - control-tower
+      - market-radar
+      - growth-engine
+      - social-autopilot
+    restart: unless-stopped
+
+  # --- module stand-ins (service name == module name, so DNS resolves) --------
+  edge-sentinel:
+    <<: *module
+    environment:
+      - MODULE_NAME=edge-sentinel
+      - MODULE_PAIN=network security & systems handled
+      - MODULE_AGENTS=triage,remediation
+      - PORT=8101
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.edge-sentinel.rule=PathPrefix(`/m/edge-sentinel`)"
+      - "traefik.http.routers.edge-sentinel.priority=10"
+      - "traefik.http.routers.edge-sentinel.middlewares=edge-sentinel-strip"
+      - "traefik.http.middlewares.edge-sentinel-strip.stripprefix.prefixes=/m/edge-sentinel"
+      - "traefik.http.services.edge-sentinel.loadbalancer.server.port=8101"
+
+  agentic-support:
+    <<: *module
+    environment:
+      - MODULE_NAME=agentic-support
+      - MODULE_PAIN=customer support
+      - MODULE_AGENTS=responder,escalation
+      - PORT=8102
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.agentic-support.rule=PathPrefix(`/m/agentic-support`)"
+      - "traefik.http.routers.agentic-support.priority=10"
+      - "traefik.http.routers.agentic-support.middlewares=agentic-support-strip"
+      - "traefik.http.middlewares.agentic-support-strip.stripprefix.prefixes=/m/agentic-support"
+      - "traefik.http.services.agentic-support.loadbalancer.server.port=8102"
+
+  agentic-billing:
+    <<: *module
+    environment:
+      - MODULE_NAME=agentic-billing
+      - MODULE_PAIN=payments & reconciliation
+      - MODULE_AGENTS=checkout,reconciliation,dunning
+      - PORT=8103
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.agentic-billing.rule=PathPrefix(`/m/agentic-billing`)"
+      - "traefik.http.routers.agentic-billing.priority=10"
+      - "traefik.http.routers.agentic-billing.middlewares=agentic-billing-strip"
+      - "traefik.http.middlewares.agentic-billing-strip.stripprefix.prefixes=/m/agentic-billing"
+      - "traefik.http.services.agentic-billing.loadbalancer.server.port=8103"
+
+  agentic-books:
+    <<: *module
+    environment:
+      - MODULE_NAME=agentic-books
+      - MODULE_PAIN=bookkeeping & close
+      - MODULE_AGENTS=categorize,reconcile,close
+      - PORT=8104
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.agentic-books.rule=PathPrefix(`/m/agentic-books`)"
+      - "traefik.http.routers.agentic-books.priority=10"
+      - "traefik.http.routers.agentic-books.middlewares=agentic-books-strip"
+      - "traefik.http.middlewares.agentic-books-strip.stripprefix.prefixes=/m/agentic-books"
+      - "traefik.http.services.agentic-books.loadbalancer.server.port=8104"
+
+  agentic-compliance:
+    <<: *module
+    environment:
+      - MODULE_NAME=agentic-compliance
+      - MODULE_PAIN=data privacy & regulations
+      - MODULE_AGENTS=monitor,evidence
+      - PORT=8105
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.agentic-compliance.rule=PathPrefix(`/m/agentic-compliance`)"
+      - "traefik.http.routers.agentic-compliance.priority=10"
+      - "traefik.http.routers.agentic-compliance.middlewares=agentic-compliance-strip"
+      - "traefik.http.middlewares.agentic-compliance-strip.stripprefix.prefixes=/m/agentic-compliance"
+      - "traefik.http.services.agentic-compliance.loadbalancer.server.port=8105"
+
+  control-tower:
+    <<: *module
+    environment:
+      - MODULE_NAME=control-tower
+      - MODULE_PAIN=business performance visibility
+      - MODULE_AGENTS=analyst
+      - PORT=8106
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.control-tower.rule=PathPrefix(`/m/control-tower`)"
+      - "traefik.http.routers.control-tower.priority=10"
+      - "traefik.http.routers.control-tower.middlewares=control-tower-strip"
+      - "traefik.http.middlewares.control-tower-strip.stripprefix.prefixes=/m/control-tower"
+      - "traefik.http.services.control-tower.loadbalancer.server.port=8106"
+
+  market-radar:
+    <<: *module
+    environment:
+      - MODULE_NAME=market-radar
+      - MODULE_PAIN=competitor intelligence
+      - MODULE_AGENTS=watcher,briefer
+      - PORT=8107
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.market-radar.rule=PathPrefix(`/m/market-radar`)"
+      - "traefik.http.routers.market-radar.priority=10"
+      - "traefik.http.routers.market-radar.middlewares=market-radar-strip"
+      - "traefik.http.middlewares.market-radar-strip.stripprefix.prefixes=/m/market-radar"
+      - "traefik.http.services.market-radar.loadbalancer.server.port=8107"
+
+  growth-engine:
+    <<: *module
+    environment:
+      - MODULE_NAME=growth-engine
+      - MODULE_PAIN=marketing attribution
+      - MODULE_AGENTS=attribution,channel_optimizer
+      - PORT=8108
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.growth-engine.rule=PathPrefix(`/m/growth-engine`)"
+      - "traefik.http.routers.growth-engine.priority=10"
+      - "traefik.http.routers.growth-engine.middlewares=growth-engine-strip"
+      - "traefik.http.middlewares.growth-engine-strip.stripprefix.prefixes=/m/growth-engine"
+      - "traefik.http.services.growth-engine.loadbalancer.server.port=8108"
+
+  social-autopilot:
+    <<: *module
+    environment:
+      - MODULE_NAME=social-autopilot
+      - MODULE_PAIN=social media growth
+      - MODULE_AGENTS=content,engagement
+      - PORT=8109
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.social-autopilot.rule=PathPrefix(`/m/social-autopilot`)"
+      - "traefik.http.routers.social-autopilot.priority=10"
+      - "traefik.http.routers.social-autopilot.middlewares=social-autopilot-strip"
+      - "traefik.http.middlewares.social-autopilot-strip.stripprefix.prefixes=/m/social-autopilot"
+      - "traefik.http.services.social-autopilot.loadbalancer.server.port=8109"
+
+  # --- optional polish: Traefik routes / -> control-plane, /m/{module} -> module
+  traefik:
+    image: traefik:v3.0
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+    ports: ["80:80"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [agentic]
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    depends_on: [control-plane]
+    restart: unless-stopped
+
+networks:
+  agentic:
+    driver: bridge
+
+volumes:
+  agentic_os_data:

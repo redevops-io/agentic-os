@@ -1,0 +1,144 @@
+# The redevops.io Agentic Business OS — module catalog.
+# agentic-os reads this to deploy modules and give each one its fleet of agents.
+# Each module is a separate open-source repo under github.com/redevops-io.
+
+modules:
+  - name: edge-sentinel
+    repo: redevops-io/edge-sentinel
+    pain: network security & systems handled
+    deploy: compose            # how the module is stood up
+    port: 8101
+    tagline: "Your firewall, triaged and explained by an agent."
+    agents: [triage, remediation]
+    approval_required: [remediation]   # auto-writing firewall rules pauses for a human
+
+  - name: agentic-support
+    repo: redevops-io/agentic-support
+    pain: customer support
+    deploy: compose
+    port: 8102
+    tagline: "Front-line support that answers, escalates, and never sleeps."
+    agents: [responder, escalation]
+    approval_required: []
+
+  - name: agentic-billing
+    repo: redevops-io/agentic-billing
+    pain: payments & reconciliation
+    deploy: compose
+    port: 8103
+    tagline: "Checkout to reconciliation, with humans in the loop when money moves."
+    agents: [checkout, reconciliation, dunning]
+    approval_required: [refund, dunning]   # money moves -> human-in-the-loop
+
+  - name: agentic-books
+    repo: redevops-io/agentic-books
+    pain: bookkeeping & close
+    deploy: compose
+    port: 8104
+    tagline: "Books that categorize, reconcile, and close themselves."
+    agents: [categorize, reconcile, close]
+    approval_required: [close]
+
+  - name: agentic-compliance
+    repo: redevops-io/agentic-compliance
+    pain: data privacy & regulations
+    deploy: compose
+    port: 8105
+    tagline: "Continuous compliance monitoring with audit-ready evidence."
+    agents: [monitor, evidence]
+    approval_required: [policy_change]
+
+  - name: control-tower
+    repo: redevops-io/control-tower
+    pain: business performance visibility
+    deploy: compose
+    port: 8106
+    tagline: "Ask your business anything, in plain language."
+    agents: [analyst]          # the natural-language analytics agent
+    approval_required: []
+
+  - name: market-radar
+    repo: redevops-io/market-radar
+    pain: competitor intelligence
+    deploy: compose
+    port: 8107
+    tagline: "Watch every competitor and get briefed before they move."
+    agents: [watcher, briefer]
+    approval_required: []
+
+  - name: growth-engine
+    repo: redevops-io/growth-engine
+    pain: marketing attribution
+    deploy: compose
+    port: 8108
+    tagline: "Know what's working and put spend where it pays."
+    agents: [attribution, channel_optimizer]
+    approval_required: [budget_change]   # reallocating ad spend pauses for a human
+  - name: outreach-engine
+    repo: redevops-io/outreach-engine
+    pain: pilot outreach & pipeline
+    deploy: compose
+    port: 8214
+    tagline: "Lands pilots — learns which outreach play converts per account signal."
+    agents: [sourcer, personalizer, sequencer]
+    approval_required: [send_sequence]   # nothing sends without a human sign-off
+
+  - name: social-autopilot
+    repo: redevops-io/social-autopilot
+    pain: social media growth
+    deploy: compose
+    port: 8109
+    tagline: "Create, schedule, and engage across social — on autopilot."
+    agents: [content, engagement]
+    approval_required: [publish]
+
+  - name: sidekick
+    repo: redevops-io/sidekick
+    pain: build & automate (ship fast, cheap)
+    deploy: tool               # a CLI tool, not a long-running service
+    agents: [coder]
+    approval_required: []
+  - name: guide
+    repo: redevops-io/context-runtime
+    pain: onboarding & help
+    deploy: compose
+    port: 8215
+    tagline: "Ask how to use any app — RAG over the stack's docs, RBAC-scoped."
+    agents: [retriever, walkthrough]
+    approval_required: []
+
+  - name: agentic-crm
+    repo: redevops-io/agentic-os-stack
+    pain: sales pipeline & CRM
+    deploy: compose
+    port: 8210
+    tagline: "A pipeline that scores, researches, and drafts outreach on a real CRM."
+    agents: [score, research, draft, qualify]
+    approval_required: [send]   # a human sends any outreach before it reaches a prospect
+
+  - name: lifecycle
+    repo: redevops-io/agentic-os-stack
+    pain: lifecycle email & SMS marketing
+    deploy: compose
+    port: 8211
+    tagline: "Klaviyo-style lifecycle marketing on a self-hosted Listmonk core."
+    agents: [segment, campaign, automation]
+    approval_required: [send]
+
+  - name: agentic-privacy
+    repo: redevops-io/agentic-os-stack
+    pain: GDPR/CCPA data-subject requests
+    deploy: compose
+    port: 8212
+    tagline: "DSAR intake, fulfillment, and a tamper-evident audit trail."
+    agents: [intake, access, delete, retention]
+    approval_required: [delete]   # erasure is dry-run until a human confirms
+
+  - name: growth-assistant
+    repo: redevops-io/agentic-os-stack
+    pain: founder growth & traction
+    deploy: compose
+    port: 8213
+    tagline: "Strategic traction for first-time founders — and the freelancers to execute it."
+    agents: [strategy, content, outreach, hiring]
+    approval_required: []

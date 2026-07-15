@@ -1,0 +1,20 @@
+# The control plane. Modules are brought up by `agentic-os up <name>` (each ships its own compose).
+services:
+  control-plane:
+    build: .
+    command: uvicorn agentic_os.control_plane:app --host 0.0.0.0 --port 8080
+    ports: ["8080:8080"]
+    environment:
+      - AGENTIC_OS_CONFIG=/app/config.yaml
+      - AGENTIC_OS_HOME=/data
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - agentic_os_data:/data
+      # NOTE: do NOT bind-mount /var/run/docker.sock here. Mounting the host
+      # Docker socket grants the container effective root on the host (it can
+      # start privileged containers, mount the host FS, etc.). In dev the Fleet
+      # shells out to `docker compose` on the host directly, so the control
+      # plane container does not need access to the socket.
+    restart: unless-stopped
+volumes:
+  agentic_os_data:

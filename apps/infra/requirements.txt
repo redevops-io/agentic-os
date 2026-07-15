@@ -1,0 +1,3 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+agentic-os @ https://github.com/redevops-io/agentic-os/archive/c6ba11d72574fb274d5caabea983811bb4436815.tar.gz
