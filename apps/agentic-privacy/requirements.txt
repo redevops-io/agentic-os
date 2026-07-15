@@ -1,0 +1,6 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+httpx>=0.27
+boto3>=1.34
+context-runtime @ https://github.com/redevops-io/context-runtime/archive/e44ed9f3dbe0a7a63126976bba3bdb62b554dcb6.tar.gz
+agentic-os @ https://github.com/redevops-io/agentic-os/archive/c6ba11d72574fb274d5caabea983811bb4436815.tar.gz

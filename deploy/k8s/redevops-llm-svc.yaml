@@ -1,0 +1,23 @@
+# Example: a dedicated OpenAI-compatible LLM endpoint for the Agentic-OS agents — a selector-less
+# Service (its own LoadBalancer IP + API) backed by an external host running an OpenAI-compatible
+# server (e.g. llama.cpp/ollama on :8001). Replace <host-ip> with your server's address.
+apiVersion: v1
+kind: Namespace
+metadata: { name: redevops }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redevops-llm
+  namespace: redevops
+  labels: { app: redevops-llm, purpose: redevops-agents-llm }
+spec:
+  type: LoadBalancer
+  ports: [{ name: http, port: 8000, targetPort: 8001, protocol: TCP }]
+---
+apiVersion: v1
+kind: Endpoints
+metadata: { name: redevops-llm, namespace: redevops }
+subsets:
+  - addresses: [{ ip: <host-ip> }]   # the host running the OpenAI-compatible server (:8001)
+    ports: [{ name: http, port: 8001, protocol: TCP }]

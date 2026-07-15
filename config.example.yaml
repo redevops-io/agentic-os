@@ -1,0 +1,23 @@
+# Copy to config.yaml. The router tiers are tried cheapest-first; the first that provides a
+# task's required capability handles it — keeping the bulk of work on local hardware.
+router:
+  monthly_budget_usd: 200
+  tiers:
+    - name: local        # ~free; the bulk of the work runs here (your EVO-X2 / proxmox box)
+      base_url: http://localhost:11434/v1
+      model: qwen3.5-122b
+      api_key: EMPTY
+      cost_per_1k: 0.0
+      good_for: [draft, classify, summarize, route, extract, code]
+    - name: cheap        # cents; harder reasoning
+      base_url: https://api.moonshot.ai/v1
+      model: kimi-k2.7-code
+      api_key: $KIMI_API_KEY
+      cost_per_1k: 0.002
+      good_for: [reason, plan, review]
+    - name: premium      # the hard 5%
+      base_url: https://api.openai.com/v1
+      model: gpt-5-codex
+      api_key: $OPENAI_API_KEY
+      cost_per_1k: 0.02
+      good_for: [hard-reason, adversarial-review]
