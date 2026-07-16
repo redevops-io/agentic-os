@@ -14,7 +14,9 @@ package mission
 // behind the SAME interface. Every resolution carries Provenance — the EXPLAIN surface.
 
 import (
+	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -93,6 +95,8 @@ func buildRoutes() []routeRule {
 			"leads to", "depends on", "path from"}},
 		{"analytical", []string{"count", "sum", "average", "group by", "how many", "total", "top", "per", "aggregate"}}, // structured
 		{"vision", []string{"image", "photo", "video", "frame", "picture", "visual", "diagram", "screenshot"}},          // multimodal
+		{"code", []string{"definition", "define", "defined", "declared", "references", "reference", "callers",          // code structure
+			"function", "class", "method", "import", "symbol", "implementation", "where is"}},
 	}
 	rules := make([]routeRule, 0, len(spec))
 	for _, s := range spec {
@@ -192,10 +196,121 @@ func sortByScoreDesc(rows []map[string]any) {
 // LocalContextRuntime is the in-repo default resolver over the capability registry, policy plane
 // and belief fusion. Not a real optimizer — but the same interface as production, so wiring the
 // real Context Runtime is a swap.
+// ── code scope-graph retrieval arm (structural: definitions · references · symbols) ──
+type codePat struct {
+	re   *regexp.Regexp
+	kind string
+}
+
+var codeLangs = map[string][]codePat{
+	".py": {{regexp.MustCompile(`(?m)^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)`), "function"},
+		{regexp.MustCompile(`(?m)^\s*class\s+([A-Za-z_]\w*)`), "class"}},
+	".js": {{regexp.MustCompile(`(?m)^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)`), "function"}},
+	".ts": {{regexp.MustCompile(`(?m)^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)`), "function"}},
+	".go": {{regexp.MustCompile(`(?m)^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)`), "function"},
+		{regexp.MustCompile(`(?m)^\s*type\s+([A-Za-z_]\w*)`), "type"}},
+}
+var codeWordRE = regexp.MustCompile(`[A-Za-z_]\w*`)
+
+type codeSym struct {
+	name, kind, file, sig string
+	line                  int
+}
+type codeRef struct {
+	file string
+	line int
+}
+
+// CodeGraphRetriever — the code analog of the graph arm (Go port of context.py's CodeGraphRetriever).
+// Regex signature extraction per language + a word-reference scan; 5 MB/file cap. Swap for a
+// tree-sitter engine in production.
+type CodeGraphRetriever struct {
+	Symbols []codeSym
+	Refs    map[string][]codeRef
+}
+
+func NewCodeGraphRetriever() *CodeGraphRetriever {
+	return &CodeGraphRetriever{Refs: map[string][]codeRef{}}
+}
+
+func codeExt(name string) string {
+	if i := strings.LastIndex(name, "."); i >= 0 {
+		return name[i:]
+	}
+	return ""
+}
+
+func (cg *CodeGraphRetriever) Index(filename, text string) *CodeGraphRetriever {
+	pats, ok := codeLangs[codeExt(filename)]
+	if !ok || len(text) > 5*1024*1024 {
+		return cg
+	}
+	for _, p := range pats {
+		for _, m := range p.re.FindAllStringSubmatchIndex(text, -1) {
+			cg.Symbols = append(cg.Symbols, codeSym{name: text[m[2]:m[3]], kind: p.kind, file: filename,
+				line: strings.Count(text[:m[0]], "\n") + 1, sig: strings.TrimSpace(text[m[0]:m[1]])})
+		}
+	}
+	for _, m := range codeWordRE.FindAllStringIndex(text, -1) {
+		w := text[m[0]:m[1]]
+		cg.Refs[w] = append(cg.Refs[w], codeRef{file: filename, line: strings.Count(text[:m[0]], "\n") + 1})
+	}
+	return cg
+}
+
+func (cg *CodeGraphRetriever) Retrieve(query string, k int) []map[string]any {
+	q := strings.ToLower(query)
+	qwords := map[string]bool{}
+	for _, w := range codeWordRE.FindAllString(query, -1) {
+		qwords[w] = true
+	}
+	rows := []map[string]any{}
+	for _, w := range []string{"reference", "references", "caller", "callers", "usage", "used by", "who calls"} {
+		if strings.Contains(q, w) {
+			for n := range qwords {
+				for _, r := range cg.Refs[n] {
+					rows = append(rows, map[string]any{"id": fmt.Sprintf("%s:%d", r.file, r.line), "name": n,
+						"kind": "reference", "file": r.file, "line": r.line, "text": "reference to " + n, "score": 1.0})
+				}
+			}
+			if k > 0 && len(rows) > k {
+				rows = rows[:k]
+			}
+			return rows
+		}
+	}
+	type sc struct {
+		row map[string]any
+		s   float64
+	}
+	var ss []sc
+	for _, sym := range cg.Symbols {
+		var score float64
+		if qwords[sym.name] {
+			score = 1.0
+		} else if strings.Contains(q, strings.ToLower(sym.name)) {
+			score = 0.6
+		}
+		if score > 0 {
+			ss = append(ss, sc{map[string]any{"id": fmt.Sprintf("%s:%d", sym.file, sym.line), "name": sym.name,
+				"kind": sym.kind, "file": sym.file, "line": sym.line, "text": sym.sig, "score": score}, score})
+		}
+	}
+	sort.SliceStable(ss, func(i, j int) bool { return ss[i].s > ss[j].s })
+	for _, x := range ss {
+		rows = append(rows, x.row)
+	}
+	if k > 0 && len(rows) > k {
+		rows = rows[:k]
+	}
+	return rows
+}
+
 type LocalContextRuntime struct {
 	Registry    Registry
 	PolicyPlane *PolicyDecisionPlane
 	Model       string
+	Trust       *TrustStore                   // nil = lazy-load on first untrusted-source capability
 	Retrievers  map[string]KnowledgeRetriever // engine → retriever (production injects the real engines)
 }
 
@@ -289,9 +404,42 @@ func (lc *LocalContextRuntime) bind(intent ContextIntent) ContextBundle {
 		return ContextBundle{Provenance: Provenance{Resolver: "capability-registry",
 			Representation: rep, Reason: "no capability provides '" + intent.Outcome + "'"}}
 	}
+	cands := make([]any, 0, len(candidates)) // full (discoverable) candidate set for provenance
+	for _, c := range candidates {
+		cands = append(cands, c)
+	}
+	// Trust boundary: untrusted-source caps stay discoverable (in cands) but are not bindable —
+	// fail closed until the source is trusted. Built-in caps (Source "") are trusted.
+	bindable := make([]*CapabilitySpec, 0, len(candidates))
+	untrusted := map[string]bool{}
+	for _, c := range candidates {
+		if lc.trusted(c) {
+			bindable = append(bindable, c)
+		} else if c.Source != "" {
+			untrusted[c.Source] = true
+		}
+	}
+	if len(bindable) == 0 {
+		srcs := make([]string, 0, len(untrusted))
+		for s := range untrusted {
+			srcs = append(srcs, s)
+		}
+		sort.Strings(srcs)
+		alts := []string{}
+		for _, c := range candidates {
+			alts = append(alts, c.Name)
+			if len(alts) >= 4 {
+				break
+			}
+		}
+		return ContextBundle{Candidates: cands, Provenance: Provenance{Resolver: "capability-registry",
+			Representation: rep, Alternatives: alts,
+			Reason: "provider(s) of '" + intent.Outcome + "' are from untrusted source(s) " +
+				strings.Join(srcs, ", ") + " — trust the source to bind"}}
+	}
 	var chosen *CapabilitySpec
 	if intent.Prefer != "" {
-		for _, c := range candidates {
+		for _, c := range bindable {
 			if c.Name == intent.Prefer {
 				chosen = c
 				break
@@ -299,10 +447,10 @@ func (lc *LocalContextRuntime) bind(intent ContextIntent) ContextBundle {
 		}
 	}
 	if chosen == nil {
-		chosen = rankCandidates(candidates)[0]
+		chosen = rankCandidates(bindable)[0]
 	}
 	alts := []string{}
-	for _, c := range candidates {
+	for _, c := range bindable {
 		if c.Name != chosen.Name {
 			alts = append(alts, c.Name)
 		}
@@ -311,16 +459,24 @@ func (lc *LocalContextRuntime) bind(intent ContextIntent) ContextBundle {
 		}
 	}
 	reason := "top of candidates by cost"
-	if rep == "provides" && len(candidates) == 1 {
+	if rep == "provides" && len(bindable) == 1 {
 		reason = "sole provider of '" + intent.Outcome + "'"
-	}
-	cands := make([]any, 0, len(candidates))
-	for _, c := range candidates {
-		cands = append(cands, c)
 	}
 	return ContextBundle{Value: chosen, Candidates: cands, Provenance: Provenance{
 		Resolver: "capability-registry", Representation: rep, Score: score,
 		Alternatives: alts, Reason: reason}}
+}
+
+// trusted: is this capability's source trusted? Built-in ("") always is; otherwise consult the trust
+// store (lazily loaded, so the common all-built-in case never touches disk).
+func (lc *LocalContextRuntime) trusted(cap *CapabilitySpec) bool {
+	if cap.Source == "" {
+		return true
+	}
+	if lc.Trust == nil {
+		lc.Trust = NewTrustStore("")
+	}
+	return lc.Trust.IsTrusted(cap.Source)
 }
 
 // ── resolver: policy decision ──

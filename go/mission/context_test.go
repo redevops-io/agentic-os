@@ -118,3 +118,69 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
+
+// ── #1 code scope-graph + #2 trust boundary ──
+func hasNameKind(rows []map[string]any, name, kind string) bool {
+	for _, r := range rows {
+		if r["name"] == name && r["kind"] == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func TestRouterPicksCodeEngine(t *testing.T) {
+	if g, _ := RouteRepresentation("definition of Widget", ""); g != "code" {
+		t.Errorf("route=%q want code", g)
+	}
+	if g, _ := RouteRepresentation("references to build", ""); g != "code" {
+		t.Errorf("route=%q want code", g)
+	}
+	if g, _ := RouteRepresentation("summarize the design", ""); g != "vector" {
+		t.Errorf("route=%q want vector", g)
+	}
+}
+
+func TestCodeGraphRetriever(t *testing.T) {
+	cg := NewCodeGraphRetriever().Index("m.py", "class Widget:\n    pass\n\ndef build_widget():\n    w = Widget()\n")
+	if !hasNameKind(cg.Retrieve("where is Widget defined", 5), "Widget", "class") {
+		t.Fatalf("no Widget class definition found")
+	}
+	if !hasNameKind(cg.Retrieve("build_widget function", 5), "build_widget", "function") {
+		t.Fatalf("no build_widget function found")
+	}
+	if !hasNameKind(cg.Retrieve("references to Widget", 5), "Widget", "reference") {
+		t.Fatalf("no Widget references found")
+	}
+}
+
+func TestBindTrustBoundary(t *testing.T) {
+	reg := NewCapabilityRegistry(nil)
+	c := CapabilitySpec{Name: "plug.do", Operator: "plug", Provides: []string{"outcome_x"}, Source: "plugin:sketchy"}
+	reg.Register(CapabilityManifest{Operator: "plug", Capabilities: []CapabilitySpec{c}})
+
+	cr := &LocalContextRuntime{Registry: reg, Model: "local:template", Trust: TrustStoreWith()}
+	b := cr.Resolve(ContextIntent{Kind: BindCapability, Outcome: "outcome_x", Need: "do x"})
+	if b.Value != nil {
+		t.Fatalf("untrusted source should fail closed, got %v", b.Value)
+	}
+	if !contains2(b.Provenance.Reason, "untrusted") {
+		t.Fatalf("reason=%q", b.Provenance.Reason)
+	}
+	if len(b.Candidates) == 0 {
+		t.Fatalf("untrusted cap must stay discoverable in candidates")
+	}
+	cr2 := &LocalContextRuntime{Registry: reg, Model: "local:template", Trust: TrustStoreWith("plugin:sketchy")}
+	b2 := cr2.Resolve(ContextIntent{Kind: BindCapability, Outcome: "outcome_x", Need: "do x"})
+	if cap, _ := b2.Value.(*CapabilitySpec); cap == nil || cap.Name != "plug.do" {
+		t.Fatalf("trusted source should bind, got %v", b2.Value)
+	}
+}
+
+func TestBuiltinSourceTrustedByDefault(t *testing.T) {
+	cr := NewLocalContextRuntime(ctxRegistry()) // built-in caps have Source ""
+	b := cr.Resolve(ContextIntent{Kind: BindCapability, Outcome: "contacts", Need: "x"})
+	if cap, _ := b.Value.(*CapabilitySpec); cap == nil || cap.Name != "crm.find_contacts" {
+		t.Fatalf("built-in should bind without a trust store, got %v", b.Value)
+	}
+}

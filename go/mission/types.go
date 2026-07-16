@@ -90,6 +90,7 @@ type CapabilitySpec struct {
 	EstimatedValue   string            `json:"estimated_value"` // low|medium|high
 	Provides         []string          `json:"provides"`
 	Embedding        []float64         `json:"embedding"`
+	Source           string            `json:"source"` // provenance/origin ("plugin:<name>"); "" = built-in/trusted
 }
 
 // NewCapabilitySpec applies the Python defaults (deterministic, confidence 0.9, medium value).

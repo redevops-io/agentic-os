@@ -33,6 +33,8 @@ spec:
             - {name: LOKI_URL, value: {{ .Values.observability.lokiUrl | quote }}}
             - {name: GRAFANA_URL, value: {{ .Values.observability.grafanaUrl | quote }}}
             - {name: MONITOR_ENABLED, value: {{ .Values.monitor.enabled | ternary "1" "0" | quote }}}
+            - {name: ALERT_WEBHOOK_URL, value: {{ .Values.alert.webhookUrl | quote }}}
+            - {name: COCKPIT_URL, value: {{ .Values.alert.cockpitUrl | quote }}}
           readinessProbe:
             httpGet: {path: /healthz, port: 8000}
             initialDelaySeconds: 3

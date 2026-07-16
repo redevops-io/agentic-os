@@ -75,6 +75,14 @@ def _runtime() -> MissionRuntime:
 
 
 runtime = _runtime()
+
+# Alerting: turn approval gates into stakeholder sign-off alerts (opt-in via ALERT_WEBHOOK_URL).
+# The monitor loop spawns governed response missions on live signals; each parks on its gate, which
+# fires GateReached → an alert with a cockpit deep-link so a stakeholder can sign off fast.
+if os.environ.get("ALERT_WEBHOOK_URL"):
+    from notify import AlertContributor
+    runtime.lifecycle.install(AlertContributor())
+
 monitor = MonitorLoop(runtime, AUDIT_GRANTS)
 
 app = FastAPI(title="Sidekick for DevOps")
