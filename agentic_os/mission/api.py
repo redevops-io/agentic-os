@@ -448,4 +448,18 @@ function renderDetail(){
 
 refreshAll();
 setInterval(()=>{ refreshAll(); }, 5000);
+// Deep-link from /overview: /cockpit?template=<t>&goal=<g>[&run=1] pre-fills the launch form so a
+// customer lands with the workflow ready to run (run=1 launches it immediately).
+(function(){
+  const p=new URLSearchParams(location.search), g=p.get('goal'), t=p.get('template');
+  if(!g && !t) return;
+  if(g) document.getElementById('goal').value=g;
+  if(t){const s=document.getElementById('tpl');
+    if(![...s.options].some(o=>o.value===t)){const o=document.createElement('option');o.value=t;o.textContent=t;s.appendChild(o);}
+    s.value=t;}
+  if(p.get('run')==='1'){ launch(); return; }
+  const b=[...document.querySelectorAll('button')].find(x=>x.textContent.trim()==='Launch');
+  if(b){ b.scrollIntoView({block:'center'}); b.style.boxShadow='0 0 0 3px var(--teal)';
+    setTimeout(()=>{ b.style.boxShadow=''; }, 4500); }
+})();
 </script></body></html>"""

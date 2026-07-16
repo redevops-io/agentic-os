@@ -109,20 +109,30 @@ def _group_for(name: str) -> str:
     return "Other"
 
 
-# Cross-module workflows (mirrors WORKFLOWS in DASHBOARD_HTML) — shown on /overview.
+# Cross-app missions shown on /overview — each is a REAL runnable Projects mission (a kernel
+# template over live operators). ``template`` + ``goal`` deep-link into the cockpit
+# (/cockpit?template=…&goal=…) so a visitor lands with the workflow pre-filled and runs it.
 WORKFLOWS: list[dict] = [
-    {"name": "New customer onboarding",
-     "desc": "Set up the subscription, send a welcome + onboarding, record the books entry, and file the consent record.",
-     "steps": ["agentic-billing", "agentic-support", "agentic-books", "agentic-compliance"]},
-    {"name": "Storm-damage lead → booked job",
-     "desc": "Spot the demand spike, put spend where it converts, answer the lead, and bill the booked job.",
-     "steps": ["market-radar", "growth-engine", "agentic-support", "agentic-billing"]},
-    {"name": "Security incident",
-     "desc": "Triage the threat and propose a block, then log the audit-ready compliance evidence.",
-     "steps": ["edge-sentinel", "agentic-compliance"]},
-    {"name": "Lead → loyal customer",
-     "desc": "Score and qualify the lead on the CRM, run the onboarding lifecycle campaign, and keep the consent/retention record audit-ready.",
-     "steps": ["agentic-crm", "lifecycle", "agentic-privacy"]},
+    {"name": "Product launch across the fleet", "template": "product_launch",
+     "goal": "Launch Context Runtime v5 across the fleet — market brief, announcement, blog, publish to social, email the list, brief support, track signups.",
+     "desc": "One cross-app mission: market brief → announcement → blog → social publish (gated) → lifecycle email → support brief → BI tracking.",
+     "steps": ["market-radar", "guide", "social-autopilot", "lifecycle", "agentic-support"]},
+    {"name": "Deploy the stack as a governed mission", "template": "deploy_app",
+     "goal": "Deploy the app to a Proxmox k3s node — supply-chain scan, terraform plan, approval gate, provision, configure, verify.",
+     "desc": "Sidekick deploys through the runtime: scan → plan (the diff is evidence) → approval gate → provision → configure → verify, with saga rollback on failure.",
+     "steps": ["edge-sentinel", "infra"]},
+    {"name": "Revenue rescue", "template": "revenue_rescue",
+     "goal": "Recover the failed payment and retain the at-risk customer.",
+     "desc": "Detect the failed charge, decide the retry + outreach, and rescue the revenue — behind the money gate, with saga compensation.",
+     "steps": ["finops", "agentic-support", "lifecycle"]},
+    {"name": "New-customer onboarding", "template": "onboarding",
+     "goal": "Onboard the new customer — set up the subscription, send welcome + onboarding, record the books entry, file the consent record.",
+     "desc": "Set up the subscription, send welcome + onboarding, record the books entry, and file the consent record — the classic cross-app mission.",
+     "steps": ["agentic-crm", "agentic-support", "lifecycle"]},
+    {"name": "Multi-cloud deploy (SkyPilot)", "template": "sky_deploy",
+     "goal": "Deploy to the cheapest available cloud/GPU — preflight the clouds, rank cost + availability, approve the chosen target, launch (failing over on capacity), and verify.",
+     "desc": "SkyPilot picks the cloud/region/instance by live price + availability (the ranked table is the gate evidence), fails over on capacity, and learns which placement actually delivers — governed as a mission.",
+     "steps": ["sky.check", "sky.optimize", "sky.launch", "verify"]},
 ]
 
 # Static module → OSS core label (the live ✓/✕ still comes from each /health).

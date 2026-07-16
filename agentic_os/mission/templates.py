@@ -163,6 +163,28 @@ def cost_audit(mission_id: str) -> ExecutionIntent:
                            steps=[inventory, slo, scan, estimate, safe, risky, verify])
 
 
+def sky_deploy(mission_id: str) -> ExecutionIntent:
+    """Multi-cloud placement as a governed mission (v6 Phase 6.1) — Sidekick drives SkyPilot.
+
+    check → optimize → [approval] launch → verify. ``sky.optimize``'s ranked cost/availability
+    table is the evidence the approver sees; ``sky.launch`` is the highest-consequence step (the
+    approval gate) and fails over across clouds on capacity, with saga undo = ``sky.down``. The
+    measured launch outcome (real cost, capacity, spot preemption, time-to-ready) is the reward the
+    placement optimizer learns from — the same measured-cost loop the decision engine already runs."""
+    s_check = IntentStep(outcome="clouds_enabled", value_hint="medium",
+                         need="preflight the candidate clouds' credentials and quota (sky check)")
+    s_opt = IntentStep(outcome="placement_ranked", inputs_from=["clouds_enabled"], value_hint="high",
+                       need="rank cloud/region/instance/spot by live price and availability (sky optimize); "
+                            "the ranked table is the evidence presented at the approval gate")
+    s_launch = IntentStep(outcome="cluster_launched", inputs_from=["placement_ranked"], value_hint="high",
+                          need="provision the chosen candidate (sky launch), failing over across clouds on capacity",
+                          constraints=["highest-consequence — requires human approval on the ranked cost"])
+    s_verify = IntentStep(outcome="deploy_verified", inputs_from=["cluster_launched"], value_hint="high",
+                          need="verify the launched workload's health and endpoint")
+    return ExecutionIntent(mission_id=mission_id, rationale="sky-deploy template",
+                           steps=[s_check, s_opt, s_launch, s_verify])
+
+
 TEMPLATES = {
     "onboarding": onboarding,
     "invoice_recovery": invoice_recovery,
@@ -171,6 +193,7 @@ TEMPLATES = {
     "cost_audit": cost_audit,
     "revenue_rescue": revenue_rescue,
     "product_launch": product_launch,
+    "sky_deploy": sky_deploy,
 }
 
 
