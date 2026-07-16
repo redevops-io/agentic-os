@@ -13,7 +13,7 @@ from pathlib import Path
 import httpx
 import yaml
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -24,6 +24,13 @@ from .registry import Module, Registry
 from .router import Router
 
 CONFIG_PATH = os.environ.get("AGENTIC_OS_CONFIG", "config.yaml")
+
+# Read-only demo posture: the per-app dashboards stay viewable, but their mutating surface
+# (the /api/agent chat, whose tools include real core-mutating actions) is turned off — governed
+# actions run through the Mission cockpit. v6: apps are orchestrated by the runtime, not driven
+# ad-hoc per app. Set DEMO_READ_ONLY=1 for the public demo; unset (0) for local/dev.
+DEMO_READ_ONLY = os.environ.get("DEMO_READ_ONLY", "0") == "1"
+COCKPIT_URL = os.environ.get("COCKPIT_URL", "https://demo.redevops.io/cockpit")
 
 
 def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
@@ -320,6 +327,15 @@ async def module_api(name: str, path: str, request: Request) -> Response:
     base = MODULE_SERVICES.get(name)
     if base is None:
         raise HTTPException(404, f"no module {name}")
+    # Read-only demo: the dashboards (GET) stay live, but the app's mutating surface — the
+    # /api/agent chat, whose tools make real core calls — is gated off. Governed actions run in
+    # the Mission cockpit. (Reads/SSE are GET and pass through.)
+    if DEMO_READ_ONLY and request.method == "POST":
+        return JSONResponse(status_code=403, content={
+            "read_only": True,
+            "message": "This is a read-only demo view. Governed actions run through the Mission cockpit.",
+            "cockpit": COCKPIT_URL,
+        })
     client_ip = (request.headers.get("cf-connecting-ip")
                  or (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
                  or (request.client.host if request.client else ""))

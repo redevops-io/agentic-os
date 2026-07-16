@@ -4,10 +4,11 @@ answer carries provenance (the EXPLAIN surface). See docs ADR: context-runtime-c
 from __future__ import annotations
 
 from agentic_os.mission.context import (
-    BIND_CAPABILITY, RETRIEVE_KNOWLEDGE, SELECT_MODEL, ContextIntent, KeywordRetriever,
-    LocalContextRuntime, route_representation,
+    BIND_CAPABILITY, RETRIEVE_KNOWLEDGE, SELECT_MODEL, CodeGraphRetriever, ContextIntent,
+    KeywordRetriever, LocalContextRuntime, route_representation,
 )
 from agentic_os.mission.registry import CapabilityRegistry
+from agentic_os.mission.trust import TrustStore
 from agentic_os.mission.types import CapabilityManifest, CapabilitySpec
 
 
@@ -86,3 +87,59 @@ def test_unknown_kind_raises():
         assert False, "expected ValueError"
     except ValueError:
         pass
+
+
+# ── #1 code scope-graph retrieval arm ──
+_SRC = "class Widget:\n    pass\n\n\ndef build_widget():\n    w = Widget()\n    return w\n"
+
+
+def test_router_picks_code_engine_for_structural_queries():
+    assert route_representation("definition of Widget")[0] == "code"
+    assert route_representation("references to build_widget")[0] == "code"
+    assert route_representation("summarize the design")[0] == "vector"   # non-code still defaults
+
+
+def test_code_graph_retriever_finds_definitions_and_references():
+    cg = CodeGraphRetriever().index("m.py", _SRC)
+    defs = cg.retrieve("where is Widget defined")
+    assert any(d["name"] == "Widget" and d["kind"] == "class" for d in defs)
+    assert any(d["name"] == "build_widget" for d in cg.retrieve("build_widget function"))
+    refs = cg.retrieve("references to Widget")
+    assert any(r["kind"] == "reference" and r["name"] == "Widget" for r in refs)
+
+
+def test_retrieve_routes_to_the_code_engine_with_provenance():
+    cg = CodeGraphRetriever().index("a.py", "def handler():\n    return 1\n")
+    cr = LocalContextRuntime(_registry(), retrievers={"code": cg})
+    b = cr.resolve(ContextIntent(kind=RETRIEVE_KNOWLEDGE, need="definition of handler"))
+    assert b.provenance.representation == "code"
+    assert b.value and b.value[0]["name"] == "handler"
+
+
+# ── #2 capability trust boundary ──
+def _untrusted_registry():
+    reg = CapabilityRegistry(None)
+    c = CapabilitySpec("plug.do", "plug"); c.provides = ["outcome_x"]; c.source = "plugin:sketchy"
+    reg.register(CapabilityManifest(operator="plug", capabilities=[c]))
+    return reg
+
+
+def test_builtin_source_is_trusted_by_default():
+    # existing caps carry source="" → bind works with no trust store touched
+    b = LocalContextRuntime(_registry()).resolve(
+        ContextIntent(kind=BIND_CAPABILITY, outcome="contacts", need="x"))
+    assert b.value.name == "crm.find_contacts"
+
+
+def test_bind_fails_closed_on_untrusted_source_but_stays_discoverable():
+    cr = LocalContextRuntime(_untrusted_registry(), trust=TrustStore(trusted=set()))
+    b = cr.resolve(ContextIntent(kind=BIND_CAPABILITY, outcome="outcome_x", need="do x"))
+    assert b.value is None                                   # not bindable
+    assert "untrusted" in b.provenance.reason
+    assert any(getattr(c, "name", None) == "plug.do" for c in b.candidates)   # still discovered
+
+
+def test_bind_binds_once_the_source_is_trusted():
+    cr = LocalContextRuntime(_untrusted_registry(), trust=TrustStore(trusted={"plugin:sketchy"}))
+    b = cr.resolve(ContextIntent(kind=BIND_CAPABILITY, outcome="outcome_x", need="do x"))
+    assert b.value is not None and b.value.name == "plug.do"
