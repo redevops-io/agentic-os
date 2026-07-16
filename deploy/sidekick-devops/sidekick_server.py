@@ -27,6 +27,7 @@ from agentic_os.mission.runtime import MissionRuntime
 from agentic_os.mission.store import EventStore
 
 from apps.infra.operator import build_infra_operator
+from apps.sky.operator import build_sky_operator
 
 INSPECT_NAMESPACE = os.environ.get("INSPECT_NAMESPACE", "default")
 AUDIT_GRANTS = ["infra:read", "infra:write"]
@@ -67,7 +68,8 @@ def _mnum(v: str) -> int:
 # ── runtime: infra operator (deploy/teardown/drift as governed missions) ─────────────────────────
 def _runtime() -> MissionRuntime:
     infra = build_infra_operator()  # handlers dry-run until you wire real runners (see README)
-    ops = {"infra": infra}
+    sky = build_sky_operator()      # drives the `sky` CLI when SkyPilot is installed; dry-run otherwise
+    ops = {"infra": infra, "sky": sky}
     reg = CapabilityRegistry()
     for op in ops.values():
         reg.register(op.manifest)

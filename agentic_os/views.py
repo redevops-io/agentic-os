@@ -229,12 +229,18 @@ def overview_page(*, groups: dict, has_agent: set, module_meta: dict, workflows:
         )
     modules_html = "".join(sections)
 
-    workflows_html = "".join(
-        f'<li><span class="wf-name">{html.escape(w["name"])}</span>'
-        + (f'<span class="wf-desc">{html.escape(w["desc"])}</span>' if w.get("desc") else "")
-        + f'<span class="wf-steps">{html.escape(" → ".join(w["steps"]))}</span></li>'
-        for w in workflows
-    )
+    from urllib.parse import quote
+
+    def _wf(w):
+        # deep-link into the Projects cockpit with the mission pre-filled + ready to run
+        href = f'/cockpit?template={quote(w.get("template", ""))}&goal={quote(w.get("goal", w["name"]))}'
+        return (
+            f'<a class="wf" href="{html.escape(href)}">'
+            f'<span class="wf-top"><span class="wf-name">{html.escape(w["name"])}</span>'
+            f'<span class="wf-run">Run in Projects &#8594;</span></span>'
+            + (f'<span class="wf-desc">{html.escape(w["desc"])}</span>' if w.get("desc") else "")
+            + f'<span class="wf-steps">{html.escape(" → ".join(w["steps"]))}</span></a>')
+    workflows_html = "".join(_wf(w) for w in workflows)
 
     return f"""<!doctype html>
 <html lang="en">
@@ -280,9 +286,14 @@ def overview_page(*, groups: dict, has_agent: set, module_meta: dict, workflows:
   .core{{align-self:flex-start;font:500 11px/16px var(--font-mono);color:var(--on-surface-muted)}}
   .omod__open{{align-self:flex-start;font:500 12px/16px var(--font-sans);color:var(--primary);margin-top:2px}}
   .wlist{{list-style:none;margin:var(--sp-4) 0 0;padding:0;display:flex;flex-direction:column;gap:var(--sp-3)}}
-  .wlist li{{background:var(--surface-container);border:1px solid var(--outline-variant);border-radius:var(--radius-md);
-    padding:var(--sp-4);display:flex;flex-direction:column;gap:4px}}
+  .wlist a.wf{{text-decoration:none;background:var(--surface-container);border:1px solid var(--outline-variant);
+    border-radius:var(--radius-md);padding:var(--sp-4);display:flex;flex-direction:column;gap:4px;
+    transition:border-color .15s,background .15s}}
+  .wlist a.wf:hover{{border-color:var(--primary);background:var(--surface-container-high)}}
+  .wf-top{{display:flex;align-items:center;justify-content:space-between;gap:var(--sp-3)}}
   .wf-name{{font:500 14px/20px var(--font-sans);color:var(--primary)}}
+  .wf-run{{font:600 12px/16px var(--font-sans);color:var(--primary);opacity:.5;white-space:nowrap}}
+  .wlist a.wf:hover .wf-run{{opacity:1}}
   .wf-desc{{font:400 13px/18px var(--font-sans);color:var(--on-surface-variant)}}
   .wf-steps{{font:400 12px/18px var(--font-mono);color:var(--on-surface-muted)}}
   .legend{{font:400 13px/18px var(--font-sans);color:var(--on-surface-muted);margin:0 0 var(--sp-2)}}
@@ -342,7 +353,8 @@ def overview_page(*, groups: dict, has_agent: set, module_meta: dict, workflows:
   </section>
 
   <section>
-    <h2 class="sect-label">Cross-module workflows — how they connect</h2>
+    <h2 class="sect-label">Cross-app missions — click to run in Projects</h2>
+    <p class="legend">Each is a real runnable mission (a kernel template over live operators). Click one to open the Projects cockpit with the workflow pre-filled, ready to launch.</p>
     <ul class="wlist">{workflows_html}</ul>
   </section>
 </div>
