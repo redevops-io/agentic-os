@@ -19,6 +19,12 @@ observability:
 monitor:
   enabled: true
 
+# Stakeholder sign-off alerting (opt-in): a webhook that gets a message when a governed response
+# mission holds for approval, and when a mission finishes. cockpitUrl deep-links the approval.
+alert:
+  webhookUrl: ""              # Slack-compatible / any JSON endpoint; "" = alerting off
+  cockpitUrl: ""              # e.g. https://sidekick.internal — used for the approval deep-link
+
 # Read-only cluster inspection. clusterWide=true lets the audit read pods+metrics across all
 # namespaces (get/list only); set false to scope the Role to .inspect.namespace.
 rbac:

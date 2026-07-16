@@ -36,6 +36,21 @@ docker compose up             # builds Sidekick, starts Prometheus + Grafana + L
 - The infra operator ships with **dry-run handlers**. Wire your real runners (Terraform/Ansible/kubectl)
   by passing `run=`/`http_get=` to `build_infra_operator(...)` in `sidekick_server.py`.
 
+## Long-running monitoring + stakeholder sign-off
+
+Deployed as a standing container (compose, or the Helm chart in your cluster), Sidekick is a
+**continuous monitoring agent**: the monitor loop reads live signals (cluster usage via
+metrics-server/kubectl, Prometheus, Loki) and — when a rule fires — spawns a **governed response
+mission** that parks on its approval gate. Set **`ALERT_WEBHOOK_URL`** (Slack-compatible or any JSON
+endpoint) and each gate immediately **alerts a stakeholder for sign-off** with a cockpit deep-link
+(`COCKPIT_URL`), and each mission's outcome is alerted too — the fast path from *issue detected* to
+*human approves the fix*. This is `notify.py` (an `AlertContributor` on the runtime's lifecycle);
+alerting is off until the webhook is set.
+
+```bash
+ALERT_WEBHOOK_URL=https://hooks.slack.com/services/…  COCKPIT_URL=https://sidekick.internal  docker compose up
+```
+
 ## Run it in your cluster instead
 
 See [`helm/`](helm/) for a Helm chart that runs Sidekick **in** your Kubernetes cluster with a

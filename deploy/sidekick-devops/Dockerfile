@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir "fastapi==0.115.6" "uvicorn==0.32.1" "pydantic>=2
 # the kernel + the infra operator + the bundle server/modules/skills
 COPY agentic_os /app/agentic_os
 COPY apps/infra /app/apps/infra
-COPY deploy/sidekick-devops/sidekick_server.py deploy/sidekick-devops/mcp_reads.py deploy/sidekick-devops/monitor.py /app/
+COPY deploy/sidekick-devops/sidekick_server.py deploy/sidekick-devops/mcp_reads.py deploy/sidekick-devops/monitor.py deploy/sidekick-devops/notify.py /app/
 COPY deploy/sidekick-devops/skills /app/skills
 
 # non-root (uvicorn binds unprivileged :8000); a home dir for the mounted kubeconfig

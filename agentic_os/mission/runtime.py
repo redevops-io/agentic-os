@@ -18,6 +18,7 @@ from typing import Any
 from . import belief, cost as costmod
 from .compiler import compile_intent, CompileError
 from .context import LocalContextRuntime, ContextIntent, CHECK_POLICY, RESOLVE_BELIEF
+from .lifecycle import LifecycleRegistry, MissionStarted, GateReached, MissionFinished
 from .evidence import EvidenceLog
 from .executor import Executor, OperatorError
 from .learning import LearningRouter, reflect
@@ -78,6 +79,7 @@ class MissionRuntime:
         # The Context Runtime — the single door for every context decision (policy, belief, model). The
         # runtime states a need; the Context Runtime resolves it. Production swaps this for the real CR.
         self.context = LocalContextRuntime(registry, self.policy_plane)
+        self.lifecycle = LifecycleRegistry()   # mission lifecycle hooks (no-op until a contributor is installed)
         # P9b: three separate learners behind a promotion gate. They only RECOMMEND — nothing
         # mutates production routing until a policy promotes it (Observe→Recommend→Shadow→Promote).
         self.learners = learners or LearningStack()
@@ -99,6 +101,7 @@ class MissionRuntime:
         self._missions[m.id] = m
         self.store.append("MissionCreated", m.id,
                           {"goal": goal, "template": template, "constraints": m.constraints})
+        self.lifecycle.dispatch(MissionStarted(mission_id=m.id, goal=goal, template=template))
         try:
             self._plan_and_gate(m)
         except CompileError as e:
@@ -275,6 +278,7 @@ class MissionRuntime:
                            "human_task": {"id": task.id, "assignee": task.assignee,
                                           "prompt": task.prompt, "evidence": task.evidence,
                                           "options": task.options}})
+        self.lifecycle.dispatch(GateReached(mission_id=m.id, node_id=node.id, capability=node.capability))
         self._set_state(m, MissionState.WAITING_HUMAN)
 
     # ── belief-driven disambiguation (state estimation, Whitepaper v5 · P4) ──────
@@ -651,3 +655,5 @@ class MissionRuntime:
         m.state = state
         m.updated_at = now()
         self.store.append("MissionStateChanged", m.id, {"state": state.value})
+        if state in (MissionState.SUCCEEDED, MissionState.FAILED):
+            self.lifecycle.dispatch(MissionFinished(mission_id=m.id, state=state.value))
