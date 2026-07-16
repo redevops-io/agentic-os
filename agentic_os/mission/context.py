@@ -91,6 +91,8 @@ _ROUTES = [
                     "leads to", "depends on", "path from")),                                                   # multi-hop
     ("analytical", ("count", "sum", "average", "group by", "how many", "total", "top", "per", "aggregate")),   # structured
     ("vision",     ("image", "photo", "video", "frame", "picture", "visual", "diagram", "screenshot")),        # multimodal
+    ("code",       ("definition", "define", "defined", "declared", "references", "reference", "callers",       # code structure
+                    "function", "class", "method", "import", "symbol", "implementation", "where is")),
 ]
 
 
@@ -130,15 +132,106 @@ class KeywordRetriever:
         return scored[:k]
 
 
+def _ext(name: str) -> str:
+    i = name.rfind(".")
+    return name[i:] if i >= 0 else ""
+
+
+class CodeGraphRetriever:
+    """Dependency-light code scope-graph — a *structural* retrieval arm (definitions · references ·
+    symbols) over a codebase, the code analog of the graph arm. Inspired by tree-sitter scope-graph
+    indexers (xai-codebase-graph): index the symbols, then answer 'definition of X' / 'references to
+    X' structurally instead of by vector similarity — ideal for a coding/DevOps Sidekick. Python is
+    parsed with the stdlib ``ast``; other languages fall back to a signature regex. Swap for a
+    tree-sitter engine in production. Files over 5 MB are skipped (AST blow-up), like the original."""
+
+    _MAX = 5 * 1024 * 1024
+    _LANG = {".py": "py", ".js": "js", ".jsx": "js", ".ts": "ts", ".tsx": "ts", ".go": "go"}
+    _SIG = {
+        "js": re.compile(r"^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)", re.M),
+        "go": re.compile(r"^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)", re.M),
+    }
+    _WORD = re.compile(r"[A-Za-z_]\w*")
+
+    def __init__(self):
+        self.symbols: list[dict] = []          # {name, kind, file, line, sig}
+        self._refs: dict[str, list] = {}       # name → [(file, line)]
+
+    def index(self, filename: str, text: str) -> "CodeGraphRetriever":
+        lang = self._LANG.get(_ext(filename))
+        if lang is None or len(text.encode("utf-8", "ignore")) > self._MAX:
+            return self
+        (self._index_python if lang == "py" else self._index_regex)(filename, text, lang)
+        return self
+
+    def index_dir(self, root: str) -> "CodeGraphRetriever":
+        import os
+        skip = ("/.git", "/node_modules", "/__pycache__", "/.venv", "/dist", "/build")
+        for dp, _dn, fns in os.walk(root):
+            if any(s in dp for s in skip):
+                continue
+            for fn in fns:
+                if _ext(fn) in self._LANG:
+                    p = os.path.join(dp, fn)
+                    try:
+                        with open(p, encoding="utf-8", errors="ignore") as fh:
+                            self.index(p, fh.read())
+                    except OSError:
+                        pass
+        return self
+
+    def _index_python(self, filename: str, text: str, _lang: str) -> None:
+        import ast
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            return self._index_regex(filename, text, "py")
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self.symbols.append({"name": node.name, "kind": "function", "file": filename,
+                                     "line": node.lineno, "sig": f"def {node.name}(...)"})
+            elif isinstance(node, ast.ClassDef):
+                self.symbols.append({"name": node.name, "kind": "class", "file": filename,
+                                     "line": node.lineno, "sig": f"class {node.name}"})
+            elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                self._refs.setdefault(node.id, []).append((filename, node.lineno))
+
+    def _index_regex(self, filename: str, text: str, lang: str) -> None:
+        pat = self._SIG.get(lang, self._SIG["js"])
+        for m in pat.finditer(text):
+            self.symbols.append({"name": m.group(1), "kind": "function", "file": filename,
+                                 "line": text.count("\n", 0, m.start()) + 1, "sig": m.group(0).strip()})
+
+    def retrieve(self, query: str, k: int = 5) -> list[dict]:
+        """Answer a structural code query: 'references/callers of X' → reference sites; otherwise →
+        the definitions whose symbol name the query names. Ranked, EXPLAIN-friendly rows."""
+        q = (query or "").lower()
+        qwords = set(self._WORD.findall(query or ""))
+        if any(w in q for w in ("reference", "references", "caller", "callers", "usage", "used by", "who calls")):
+            rows = [{"id": f"{f}:{ln}", "name": n, "kind": "reference", "file": f, "line": ln,
+                     "text": f"reference to {n}", "score": 1.0}
+                    for n in qwords for (f, ln) in self._refs.get(n, [])]
+            return rows[:k]
+        scored = []
+        for s in self.symbols:
+            score = 1.0 if s["name"] in qwords else (0.6 if s["name"].lower() in q else 0.0)
+            if score:
+                scored.append({"id": f"{s['file']}:{s['line']}", "name": s["name"], "kind": s["kind"],
+                               "file": s["file"], "line": s["line"], "text": s["sig"], "score": score})
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        return scored[:k]
+
+
 class LocalContextRuntime:
     """In-repo default resolver over the capability registry, policy plane and belief fusion. Not a real
     optimizer — but the same Protocol as production, so wiring the real Context Runtime is a swap."""
 
     def __init__(self, registry, policy_plane=None, model: str = "local:template",
-                 retrievers: dict[str, KnowledgeRetriever] | None = None):
+                 retrievers: dict[str, KnowledgeRetriever] | None = None, trust=None):
         self.registry = registry
         self.policy_plane = policy_plane
         self.model = model
+        self.trust = trust     # TrustStore | None (lazy-loaded on first untrusted-source capability)
         # engine → retriever. Production injects the real Context Runtime engines here (pgvector · HippoRAG ·
         # graph · SQL/DuckDB · Elastic · vision); the router below picks among them by query shape.
         self.retrievers = retrievers or {}
@@ -183,13 +276,34 @@ class LocalContextRuntime:
         if not candidates:
             return ContextBundle(None, Provenance("capability-registry", rep,
                                  reason=f"no capability provides '{intent.outcome}'"))
-        chosen = next((c for c in candidates if c.name == intent.prefer), None) if intent.prefer else None
+        # Trust boundary: untrusted-source capabilities are discoverable (in `candidates`) but NOT
+        # bindable — the bind door fails closed until the source is trusted. Built-in caps (source
+        # "") are trusted, so nothing existing changes.
+        bindable = [c for c in candidates if self._trusted(c)]
+        if not bindable:
+            srcs = sorted({c.source for c in candidates if getattr(c, "source", "")})
+            return ContextBundle(None, Provenance("capability-registry", rep,
+                                 alternatives=[c.name for c in candidates][:4],
+                                 reason=(f"provider(s) of '{intent.outcome}' are from untrusted source(s) "
+                                         f"{srcs} — trust the source to bind")), candidates)
+        chosen = next((c for c in bindable if c.name == intent.prefer), None) if intent.prefer else None
         if chosen is None:
-            chosen = cost.rank_candidates(candidates)[0]
-        alts = [c.name for c in candidates if c.name != chosen.name][:4]
-        reason = (f"sole provider of '{intent.outcome}'" if rep == "provides" and len(candidates) == 1
-                  else f"top of {len(candidates)} candidates by cost")
+            chosen = cost.rank_candidates(bindable)[0]
+        alts = [c.name for c in bindable if c.name != chosen.name][:4]
+        reason = (f"sole provider of '{intent.outcome}'" if rep == "provides" and len(bindable) == 1
+                  else f"top of {len(bindable)} candidates by cost")
         return ContextBundle(chosen, Provenance("capability-registry", rep, score, alts, reason), candidates)
+
+    def _trusted(self, cap) -> bool:
+        """Is this capability's source trusted? Built-in ("") always is; otherwise consult the trust
+        store (lazily loaded, so the common all-built-in case never touches disk)."""
+        src = getattr(cap, "source", "")
+        if not src:
+            return True
+        if self.trust is None:
+            from .trust import TrustStore
+            self.trust = TrustStore()
+        return self.trust.is_trusted(src)
 
     # ── resolver: policy decision ──
     def _policy(self, intent: ContextIntent) -> ContextBundle:

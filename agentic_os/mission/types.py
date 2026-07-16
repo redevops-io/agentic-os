@@ -81,6 +81,7 @@ class CapabilitySpec:
     estimated_value: str = "medium"             # low|medium|high
     provides: list[str] = field(default_factory=list)  # world-state keys/outcomes it can satisfy
     embedding: list[float] = field(default_factory=list)  # for semantic discovery
+    source: str = ""                            # provenance/origin (e.g. "plugin:<name>"); "" = built-in/trusted
 
     def key(self) -> str:
         return self.name
