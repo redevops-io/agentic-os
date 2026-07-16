@@ -311,6 +311,26 @@ def overview_page(*, groups: dict, has_agent: set, module_meta: dict, workflows:
   </div>
 
   <section>
+    <h2 class="sect-label">The mission layer — the unit of delivery is a mission</h2>
+    <p class="lede" style="margin-top:var(--sp-3)">Above the fleet sits <b>Mission Runtime</b>. The thing you deliver is no longer a release — it is a <b>mission</b>: an executable business objective that is authored, verified, deployed and observed as one governed workflow. Anything that moves money, touches compliance or changes infrastructure pauses for your sign-off, and a mission that fails <b>unwinds its own committed effects</b>.</p>
+    <div class="flow" style="margin-top:var(--sp-4)">
+      <span class="node">Author</span><span class="arr">→</span>
+      <span class="node">Mission CI · simulate · verify · replay</span><span class="arr">→</span>
+      <span class="node gate">supply-chain + approval gate</span><span class="arr">→</span>
+      <span class="node">Deploy · Terraform + Ansible</span><span class="arr">→</span>
+      <span class="node">Run</span><span class="arr">→</span>
+      <span class="node">Observe · EXPLAIN + timeline</span>
+    </div>
+    <div class="kgrid">
+      <div class="kcard"><h3>Missions</h3><p>An objective — like <i>Revenue Rescue</i> or <i>New-customer onboarding</i> — planned and run across several modules at once. Every step is event-sourced, so a mission is replayable, resumable and fully auditable.</p></div>
+      <div class="kcard"><h3>Mission CI</h3><p>A mission is tested before it ships: simulate the outcome, verify it against evidence, replay it from the log, and regress it against known-good missions. A failing mission is blocked from promotion.</p></div>
+      <div class="kcard"><h3>Deployment is a mission</h3><p>Shipping infrastructure runs <i>through</i> the runtime — an infra operator wraps Terraform and Ansible, gated by a supply-chain scan and your approval, and rolled back by the same saga that unwinds any mission.</p></div>
+      <div class="kcard"><h3>Monitoring agent</h3><p>A standing container watches the live deployment; when a rule fires it spawns a governed response mission and alerts you for one-click sign-off. The loop runs on the infra, so your own machine can be powered down.</p></div>
+    </div>
+    <p class="legend" style="margin-top:var(--sp-4)">Full detail: <a href="https://redevops.io/whitepaper-v6" style="color:var(--primary)">Whitepaper v6</a> &middot; <a href="https://redevops.io/sidekick/under-the-hood" style="color:var(--primary)">Sidekick under-the-hood</a> &middot; <a href="https://redevops.io/mission-runtime/under-the-hood" style="color:var(--primary)">Mission Runtime under-the-hood</a></p>
+  </section>
+
+  <section>
     <h2 class="sect-label">The kernel — what runs underneath</h2>
     <div class="kgrid">{kernel_html}</div>
   </section>
