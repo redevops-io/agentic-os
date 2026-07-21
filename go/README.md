@@ -1,6 +1,6 @@
 # agentic-os/go — Mission Runtime (Go)
 
-A Go port of the Python **v5 Mission Runtime** kernel (`agentic_os/mission`). Same event-sourced,
+A Go port of the Python **Mission Runtime** kernel (its v5 architecture generation) (`agentic_os/mission`). Same event-sourced,
 resumable design; same layered architecture (plan → simulate → run → gate → compensate → learn).
 The point of the port: a Go runtime can orchestrate the existing Python agentic apps unchanged,
 because the runtime↔app boundary is the language-agnostic **HTTP `/invoke` operator contract**.
