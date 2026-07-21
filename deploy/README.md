@@ -1,7 +1,7 @@
 # Agentic Business OS — self-contained demo
 
-This brings up the **control plane** plus a stand-in service for each of the nine
-`deploy: compose` modules, so the dashboard's fleet lights up green end-to-end —
+This brings up the **control plane** plus a stand-in service for nine of the
+`deploy: compose` modules, so those cards light up in the dashboard end-to-end —
 without depending on any individual module repo's own Dockerfile.
 
 ## Run
@@ -20,8 +20,8 @@ Then open the dashboard:
 
 The dashboard polls `/api/fleet` every 5 seconds. Each module card shows its pain
 label, tagline, agent chips, any approval-gated actions, and a live status dot
-(green = up, red = down, grey = n/a). The summary line reads `N/10 modules up`
-(sidekick is a `deploy: tool`, so 9 services back the compose fleet).
+(green = up, red = down, grey = n/a). The summary line reads `N/15 modules up`
+(the fleet has 15 agent modules; this self-contained demo stands up nine of them, so it reads `9/15`).
 
 ## What's running
 
