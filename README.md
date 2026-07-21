@@ -130,6 +130,7 @@ falls back up the tiers on failure — keeping >90% of work on local hardware.
 | [`agentic_os/workflows.py`](agentic_os/workflows.py) | cross-module workflows (e.g. new-customer onboarding) |
 | [`agentic_os/context.py`](agentic_os/context.py) | shared business context + approvals/audit log |
 | [`agentic_os/control_plane.py`](agentic_os/control_plane.py) | FastAPI control plane |
+| [`agentic_os/mission/`](agentic_os/mission/) | Mission Runtime — the operator/mission engine the reference apps run on (operators, planes, compiler; Go port in [`go/mission/`](go/mission/)) |
 | [`agentic_os/cli.py`](agentic_os/cli.py) | `agentic-os` CLI |
 | [`modules.yaml`](modules.yaml) | the module catalog |
 | [`docs/`](docs/) | architecture + operations |

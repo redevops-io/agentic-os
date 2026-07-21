@@ -2,8 +2,9 @@
 
 The reference application implementations that run on the Mission Runtime — one focused,
 open-source agentic system per business function. Each app is the *implementation* (agents +
-operators + core logic + seed data); the **deployment** (compose, ansible, k3s, ingress, secrets)
-is kept separate, so you can run these apps under your own infrastructure.
+operators + core logic + seed data); the **deployment** is kept separate — a self-contained compose
+demo lives in [`../deploy/`](../deploy/), while the full Terraform / Ansible / k3s machinery is
+maintained separately — so you can run these apps under your own infrastructure.
 
 Each app follows the v6 operator pattern:
 
@@ -23,5 +24,6 @@ The catalog that binds these to the fleet — repo, agents, and which tasks need
 
 `billing` · `books` · `compliance` · `support` · `control-tower` · `edge-sentinel` ·
 `growth-engine` · `growth-assistant` · `market-radar` · `social-autopilot` · `outreach-engine` ·
-`lifecycle` · `guide` · `agentic-crm` · `agentic-privacy` — plus `infra`, the deploy / teardown /
-cost-audit / drift operator that turns a deployment into a governed mission.
+`lifecycle` · `guide` · `agentic-crm` · `agentic-privacy` — plus `infra` (deploy / teardown /
+cost-audit / drift) and `sky` (SkyPilot elastic-compute), the operators that turn a deployment
+into a governed mission.
