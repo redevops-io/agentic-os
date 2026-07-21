@@ -11,6 +11,12 @@ re-implement them. Five pieces:
 | Fleet | `agentic_os/fleet.py` | deploy modules (their own compose) + dispatch their agents |
 | Control plane | `agentic_os/control_plane.py` | FastAPI surface; `cli.py` is the terminal equivalent |
 
+Alongside this control-plane kernel, [`agentic_os/mission/`](../agentic_os/mission/) is the **Mission
+Runtime** — the operator + mission engine the [reference apps](../apps/README.md) run on (typed
+operators exposing capabilities/invoke, mission planes, and the compiler). The control plane
+orchestrates the fleet; the Mission Runtime executes governed missions on it (Go port in
+[`go/mission/`](../go/mission/)).
+
 ## Request flow
 
 1. An event (new signup, security alert, scheduled tick) starts a **workflow** (`workflows.py`)

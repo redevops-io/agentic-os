@@ -22,8 +22,9 @@ Planning + execution
 - `belief.go` `cost.go` `registry.go` — sensor-fusion, cost model, capability discovery + policy scoping.
 - `compiler.go` `scheduler.go` `simulator.go` `planner.go` `templates.go` — logical→physical
   compile (fail-closed), cost-aware Kahn scheduling, dry-run projection, template/model planners.
-  `templates.go` carries the full v6 set at parity with Python: `onboarding · invoice_recovery ·
-  deploy_app · teardown_app · cost_audit · revenue_rescue · product_launch`.
+  `templates.go` carries the v6 templates (near-parity with Python, which additionally ships
+  `sky_deploy`): `onboarding · invoice_recovery · deploy_app · teardown_app · cost_audit ·
+  revenue_rescue · product_launch`.
 - `executor.go` `operators.go` `operator_sdk.go` `httpclient.go` — the executor + saga compensation,
   `HTTPOperatorClient`/`LocalOperatorClient`, and the `Operator` SDK exposing **GET /capabilities**
   + **POST /invoke** (server-side idempotency).
