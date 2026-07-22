@@ -1,0 +1,16 @@
+# Federated operators — external `/invoke` services Sidekick governs as first-class capabilities.
+#
+# Point Sidekick at this file with SIDEKICK_MODULES=/app/modules.yaml (see .env.example). At startup
+# Sidekick discovers each service's manifest over `GET {url}/capabilities` and executes over
+# `POST {url}/invoke` — so operators can live in their own repos and run as their own services
+# without Sidekick importing their code. Absent SIDEKICK_MODULES the server uses its built-in
+# in-process operators (infra + sky) and this file is ignored.
+#
+# The URLs below are the redevops-aws-demo deploy-and-operate operators as named in its
+# deploy/compose.demo.yml (service name = DNS name on the compose network).
+operators:
+  infra:              http://infra:8230              # Terraform/Ansible provision + configure + verify
+  edge-sentinel:      http://edge-sentinel:8241      # ECR/Inspector supply-chain scan → harden → rollout → rescan
+  operate:            http://operate:8242            # incident: gather evidence → diagnose → remediate → verify
+  agentic-compliance: http://agentic-compliance:8243 # CIS/OpenSCAP posture scan → gated remediation
+  agentic-privacy:    http://agentic-privacy:8244    # PII/data-map scan (active only where a data source exists)
