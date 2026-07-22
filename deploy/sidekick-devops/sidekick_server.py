@@ -66,7 +66,8 @@ def _mnum(v: str) -> int:
 
 
 # ── runtime: infra operator (deploy/teardown/drift as governed missions) ─────────────────────────
-def _runtime() -> MissionRuntime:
+def _local_runtime() -> MissionRuntime:
+    """Built-in operators, co-located in-process (the standalone bundle's default)."""
     infra = build_infra_operator()  # handlers dry-run until you wire real runners (see README)
     sky = build_sky_operator()      # drives the `sky` CLI when SkyPilot is installed; dry-run otherwise
     ops = {"infra": infra, "sky": sky}
@@ -74,6 +75,34 @@ def _runtime() -> MissionRuntime:
     for op in ops.values():
         reg.register(op.manifest)
     return MissionRuntime(reg, Executor(LocalOperatorClient(ops)), store=EventStore())
+
+
+def _federated_runtime(modules_path: str) -> MissionRuntime:
+    """Drive external operator *services* (from modules.yaml) over the HTTP /invoke contract.
+
+    Sidekick discovers each service's manifest at GET /capabilities and executes over POST /invoke —
+    so the deploy-and-operate operators (infra, edge-sentinel, operate, compliance, privacy) run as
+    their own SIM=0 services and Sidekick governs them without importing their code.
+    """
+    import federation
+
+    from agentic_os.mission.operators import HTTPOperatorClient
+
+    modules = federation.load_modules(modules_path)
+    reg = CapabilityRegistry()
+    resolved = federation.federate(reg, modules)
+    if not resolved:  # nothing reachable → don't come up blind; fall back to local operators
+        print("[federation] no operators reachable — falling back to local runtime")
+        return _local_runtime()
+    print(f"[federation] governing {len(resolved)} operator service(s): {', '.join(sorted(resolved))}")
+    client = HTTPOperatorClient(resolved, timeout=float(os.environ.get("OPERATOR_TIMEOUT", "60")))
+    return MissionRuntime(reg, Executor(client), store=EventStore())
+
+
+def _runtime() -> MissionRuntime:
+    import federation
+    modules_path = federation.modules_path_from_env()
+    return _federated_runtime(modules_path) if modules_path else _local_runtime()
 
 
 runtime = _runtime()

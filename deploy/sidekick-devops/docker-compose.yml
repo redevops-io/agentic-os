@@ -20,6 +20,10 @@ services:
       GRAFANA_URL: ${GRAFANA_URL:-http://localhost:3000}
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}   # stakeholder sign-off alerts (Slack/webhook)
       MONITOR_ENABLED: ${MONITOR_ENABLED:-1}
+      # Federated operators (optional): mount a modules.yaml and set this to govern external /invoke
+      # services (e.g. the redevops-aws-demo deploy-and-operate operators). Unset → built-in operators.
+      SIDEKICK_MODULES: ${SIDEKICK_MODULES:-}
+      OPERATOR_TIMEOUT: ${OPERATOR_TIMEOUT:-60}
     volumes:
       # mount YOUR cluster's kubeconfig read-only — Sidekick only inspects (get/list); it never mutates without a gate
       - ${KUBECONFIG_HOST:-~/.kube/config}:/home/app/.kube/config:ro
