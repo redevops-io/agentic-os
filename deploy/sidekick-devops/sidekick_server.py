@@ -141,6 +141,7 @@ def observability():
         "cluster": cluster_inventory(),
         "perf": mcp_reads.perf_signals(),
         "logs": mcp_reads.loki_tail(),
+        "cloudwatch": mcp_reads.cloudwatch_alarms(),   # post-deploy AWS health (modeled until creds wired)
         "namespace": INSPECT_NAMESPACE,
     }
 
