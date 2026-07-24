@@ -181,3 +181,63 @@ def perf_signals(ns: str | None = None) -> dict:
     if graf:
         return {"source": "live:grafana", "grafana_url": graf, "note": "Grafana configured (Prometheus unreachable)"}
     return {"source": "modeled", "note": "set PROMETHEUS_URL / GRAFANA_URL for live observability"}
+
+
+# ──────────────────────────── AWS CloudWatch (post-deploy telemetry) ────────────────────────────
+# Once a stack is deployed to AWS, the health signal is CloudWatch, not Prometheus. These read it the
+# same read-only way as the Prometheus/Loki paths — boto3 is imported lazily (only needed on the AWS
+# path) and the client is injectable for tests; a missing SDK / creds degrades to a modeled note.
+def _cloudwatch_client(client=None, service: str = "cloudwatch"):
+    if client is not None:
+        return client
+    import boto3  # lazy: only the AWS path needs it
+    return boto3.client(service, region_name=os.environ.get("AWS_REGION", "us-east-1"))
+
+
+def cloudwatch_alarms(state: str = "ALARM", client=None) -> dict:
+    """CloudWatch alarms in ``state`` (default ALARM) — the post-deploy signal the monitor turns into a
+    governed response mission. Modeled note when boto3/creds absent."""
+    try:
+        c = _cloudwatch_client(client)
+    except Exception:  # noqa: BLE001 — no boto3/creds
+        return {"source": "modeled", "alarms": [], "note": "set AWS creds (+ boto3) for live CloudWatch"}
+    try:
+        resp = c.describe_alarms(StateValue=state)
+        alarms = [{"name": a.get("AlarmName"), "metric": a.get("MetricName"),
+                   "namespace": a.get("Namespace"), "state": a.get("StateValue"),
+                   "reason": (a.get("StateReason") or "")[:200]}
+                  for a in resp.get("MetricAlarms", []) or []]
+        return {"source": "live:cloudwatch", "count": len(alarms), "alarms": alarms}
+    except Exception as e:  # noqa: BLE001
+        return {"source": "modeled", "alarms": [], "note": f"CloudWatch unreachable: {e}"}
+
+
+def cloudwatch_query(expr: str, window_s: int = 300, client=None, now=None,
+                     poll=0.5, max_wait=15.0) -> dict:
+    """Run a CloudWatch Logs Insights query over the last ``window_s`` seconds. Read-only; modeled note
+    when unconfigured. ``now``/``client`` injectable for tests."""
+    import time as _t
+    lg = os.environ.get("CLOUDWATCH_LOG_GROUP")
+    try:
+        c = _cloudwatch_client(client, service="logs")
+    except Exception:  # noqa: BLE001
+        return {"source": "modeled", "rows": [], "note": "set AWS creds + CLOUDWATCH_LOG_GROUP for live logs"}
+    try:
+        end = int((now or _t.time)())
+        kwargs = {"startTime": end - int(window_s), "endTime": end, "queryString": expr}
+        if lg:
+            kwargs["logGroupName"] = lg
+        qid = c.start_query(**kwargs)["queryId"]
+        waited = 0.0
+        while True:
+            res = c.get_query_results(queryId=qid)
+            if res.get("status") in ("Complete", "Failed", "Cancelled", "Timeout"):
+                break
+            if waited >= max_wait:
+                return {"source": "live:cloudwatch", "rows": [], "note": "query timed out"}
+            _t.sleep(poll)
+            waited += poll
+        rows = [{col["field"]: col.get("value") for col in row} for row in res.get("results", []) or []]
+        return {"source": "live:cloudwatch", "count": len(rows), "rows": rows}
+    except Exception as e:  # noqa: BLE001
+        return {"source": "modeled", "rows": [], "note": f"CloudWatch Logs unreachable: {e}"}

@@ -20,10 +20,13 @@ _REQ_CPU_M, _REQ_MEM_MI = 500, 512
 
 
 class MonitorLoop:
-    def __init__(self, runtime, audit_grants, interval: float = 20.0):
+    def __init__(self, runtime, audit_grants, interval: float = 20.0, cw_template: str = "cost_audit"):
         self.runtime = runtime
         self.audit_grants = audit_grants
         self.interval = interval
+        # template a CloudWatch-alarm response mission uses; point at an incident template where the
+        # runtime registers one (defaults to the always-present cost_audit).
+        self.cw_template = cw_template
         self.armed = True
         self.signals: dict[str, dict] = {}     # rule -> latest evaluation
         self.triggered: list[dict] = []        # response missions this loop spawned
@@ -62,7 +65,25 @@ class MonitorLoop:
         self._rule("slo_burn", False, "reliability", "error budget 62% remaining — healthy", "cost_audit", "")
         # RULE drift — modeled: no infra drift ⇒ no response
         self._rule("drift", False, "config", "live state matches IaC — no drift", "cost_audit", "")
+
+        # RULE cloudwatch — post-deploy AWS health: each alarm in ALARM state becomes a governed
+        # response mission (one per alarm; cleared alarms resolve so they can re-trigger later).
+        self._evaluate_cloudwatch()
         return self.status()
+
+    def _evaluate_cloudwatch(self) -> None:
+        alarms = mcp_reads.cloudwatch_alarms()          # modeled (empty) until AWS creds are wired
+        firing = {a["name"]: a for a in alarms.get("alarms", []) if a.get("name")}
+        # resolve previously-firing cloudwatch alarms that have cleared
+        for rule in [r for r in list(self._open) if r.startswith("cloudwatch:")]:
+            if rule.split(":", 1)[1] not in firing:
+                self._rule(rule, False, "reliability", f"{rule} cleared", self.cw_template, "")
+        # fire a response mission for each active alarm
+        for name, a in firing.items():
+            self._rule(f"cloudwatch:{name}", True, "reliability",
+                       f"CloudWatch alarm {name} in ALARM: {a.get('reason', '')}",
+                       self.cw_template,
+                       f"Investigate CloudWatch alarm {name} (monitor-triggered)")
 
     def _rule(self, rule: str, firing: bool, severity: str, reason: str, template: str, goal: str):
         self.signals[rule] = {"rule": rule, "firing": bool(firing), "severity": severity,
