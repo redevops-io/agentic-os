@@ -14,9 +14,31 @@ is tested without terraform / ansible / network.
 """
 from __future__ import annotations
 
+import json
+import os
+
 from agentic_os.mission.operator_sdk import Operator, capability
 
 from . import core
+
+
+def _cloud(i) -> str:
+    """Target cloud for a step: explicit step input wins, else the DEMO_CLOUD env (multi-cloud demo),
+    else 'aws'. Keeps existing single-cloud missions byte-identical."""
+    return i.get("cloud") or os.environ.get("DEMO_CLOUD") or "aws"
+
+
+def _vars(i) -> "dict | None":
+    """Terraform vars: explicit step input wins, else DEMO_TF_VARS (JSON) from the env."""
+    if i.get("vars"):
+        return i["vars"]
+    raw = os.environ.get("DEMO_TF_VARS")
+    if raw:
+        try:
+            return json.loads(raw)
+        except Exception:  # noqa: BLE001
+            return None
+    return None
 
 
 def build_infra_operator(*, run=None, http_get=None) -> Operator:
@@ -24,10 +46,10 @@ def build_infra_operator(*, run=None, http_get=None) -> Operator:
     http_get = http_get or core._http_get
 
     def _plan(i):
-        return core.terraform_plan(i.get("cloud", "aws"), i.get("vars"), run=run)
+        return core.terraform_plan(_cloud(i), _vars(i), run=run)
 
     def _provision(i):
-        return core.terraform_apply(i.get("cloud", "aws"), i.get("vars"), run=run)
+        return core.terraform_apply(_cloud(i), _vars(i), run=run)
 
     def _configure(i):
         return core.ansible_playbook(i.get("playbook", "playbooks/deploy-app.yml"),
@@ -37,14 +59,14 @@ def build_infra_operator(*, run=None, http_get=None) -> Operator:
         return core.verify(i.get("host", ""), port=i.get("port", 8000), http_get=http_get)
 
     def _destroy(i):
-        return core.terraform_destroy(i.get("cloud", "aws"), i.get("vars"), run=run)
+        return core.terraform_destroy(_cloud(i), _vars(i), run=run)
 
     def _rollback(i):
         return core.ansible_playbook(i.get("rollback_playbook", "playbooks/rollback.yml"),
                                      inventory=i.get("inventory"), extra_vars=i.get("extra_vars"), run=run)
 
     def _drift(i):
-        return core.drift(i.get("cloud", "aws"), check_playbook=i.get("check_playbook"),
+        return core.drift(_cloud(i), check_playbook=i.get("check_playbook"),
                           inventory=i.get("inventory"), run=run)
 
     return Operator("infra", [
