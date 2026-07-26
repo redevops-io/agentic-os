@@ -47,6 +47,9 @@ def _env_dir(cloud: str) -> str:
 def _var_args(tf_vars: "dict | None") -> list:
     out: list = []
     for k, v in (tf_vars or {}).items():
+        # Python bools stringify as "True"/"False"; terraform bool vars need lowercase true/false.
+        if isinstance(v, bool):
+            v = "true" if v else "false"
         out += ["-var", f"{k}={v}"]
     return out
 
@@ -56,12 +59,23 @@ def _last_line(text: str) -> str:
     return lines[-1] if lines else ""
 
 
+def _err_summary(err: str) -> str:
+    """The most informative line of a terraform failure — the `Error:` line if present (terraform
+    puts the caret-pointed config line last, which is useless on its own), else the last line."""
+    lines = [ln.strip() for ln in (err or "").splitlines() if ln.strip()]
+    for ln in lines:
+        if ln.startswith("Error:") or ln.startswith("│ Error:"):
+            return ln.lstrip("│ ").strip()
+    return lines[-1] if lines else ""
+
+
 # ── Terraform ────────────────────────────────────────────────────────────────
 def terraform_plan(cloud: str, tf_vars: "dict | None" = None, *, run: Runner = _run) -> dict:
     argv = ["terraform", f"-chdir={_env_dir(cloud)}", "plan", "-input=false", "-no-color"] + _var_args(tf_vars)
     rc, out, err = run(argv, None)
     return {"status": "done" if rc == 0 else "error", "action": "plan", "cloud": cloud,
-            "rc": rc, "summary": _last_line(out) if rc == 0 else _last_line(err), "stdout": out[-4000:]}
+            "rc": rc, "summary": _last_line(out) if rc == 0 else _err_summary(err),
+            "stdout": out[-4000:], "stderr": err[-3000:]}
 
 
 def terraform_apply(cloud: str, tf_vars: "dict | None" = None, *, run: Runner = _run) -> dict:
@@ -70,7 +84,8 @@ def terraform_apply(cloud: str, tf_vars: "dict | None" = None, *, run: Runner = 
     rc, out, err = run(argv, None)
     return {"status": "done" if rc == 0 else "error", "action": "provision", "cloud": cloud,
             "rc": rc, "outputs": terraform_outputs(cloud, run=run) if rc == 0 else {},
-            "summary": _last_line(out) if rc == 0 else _last_line(err), "stdout": out[-4000:]}
+            "summary": _last_line(out) if rc == 0 else _err_summary(err),
+            "stdout": out[-4000:], "stderr": err[-3000:]}
 
 
 def terraform_destroy(cloud: str, tf_vars: "dict | None" = None, *, run: Runner = _run) -> dict:
