@@ -19,5 +19,5 @@ decision is an ordinary mission — gated, evidence-backed, saga-rolled-back. It
 directly). The `sky_deploy` mission template runs check → optimize → **[approval]** → launch → verify.
 
 **Self-learning:** `sky.launch` returns the *measured* placement outcome (real cost, capacity,
-preemption, time-to-ready) — the reward the placement optimizer learns from, the deployment analog of
-the v4 measured-cost loop. See `deploy/sidekick-devops/skills/deployment-skypilot/`.
+preemption, time-to-ready) — recorded as the reward signal a future placement optimizer will learn from,
+the deployment analog of the measured-cost loop. See `deploy/sidekick-devops/skills/deployment-skypilot/`.
