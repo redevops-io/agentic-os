@@ -2,7 +2,8 @@
 
 A lean, one-command packaging of the Mission Runtime as a DevOps copilot: the **runtime**, the
 **Projects cockpit**, the **infra operator** (deploy · teardown · drift as governed missions), the
-three **deployment skills**, and a full **observability** stack (Prometheus · Grafana · Loki).
+**deployment skills** — per-cloud targets (aws · azure · gcp · digitalocean · proxmox) plus
+skypilot · preflight · audit · observability · stack-selection — and a full **observability** stack (Prometheus · Grafana · Loki).
 Point it at your cluster (a **read-only** kubeconfig) and your model endpoint. It only *inspects*
 until you approve a gated action — nothing mutates without passing an approval gate.
 
@@ -23,7 +24,7 @@ docker compose up             # builds Sidekick, starts Prometheus + Grafana + L
 |---|---|
 | `sidekick_server.py` | the server — mounts the `/missions` API + `/cockpit` + `/observability` + the monitor loop |
 | `apps/infra` operator (from the kernel) | deploy · provision · configure · verify · drift · destroy · rollback, each a gated capability |
-| `skills/` | `deployment-stack-selection` · `deployment-audit` · `deployment-observability` |
+| `skills/` | `deployment-aws` · `deployment-azure` · `deployment-gcp` · `deployment-digitalocean` · `deployment-proxmox` · `deployment-skypilot` · `deployment-preflight` · `deployment-audit` · `deployment-observability` · `deployment-stack-selection` |
 | `mcp_reads.py` | read-only ops reads — cluster usage (metrics-server / kubectl), Prometheus (PromQL), Loki (LogQL) |
 | `monitor.py` | the standing monitor loop — watches live signals, spawns governed response missions |
 | `observability/` | Prometheus + Grafana (datasources) + Loki + Promtail configs |
