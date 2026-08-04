@@ -370,11 +370,28 @@ class MergeSignals:
 
 class MergeAdvisor(Protocol):
     """The learning hook. An enterprise overlay implements this (e.g. a contextual bandit over
-    topologies) and injects it into :class:`MergeTopologyPlanner`; the public runtime ships none, so
-    without an advisor the planner is fully deterministic. ``advise`` returns a pass-rate per strategy
-    value for the given context band."""
+    topologies) and registers it (below); the public runtime ships none, so without an advisor the
+    planner is fully deterministic. ``advise`` returns a pass-rate per strategy value for the band."""
 
     def advise(self, band: str) -> dict[str, float]: ...
+
+
+# ── overlay registration hook ──
+# The one seam an enterprise overlay uses to attach the learned router. Public ships NO advisor, so a
+# public-only deployment is fully deterministic. An overlay package (agentic-os-enterprise), when
+# installed alongside, calls `set_default_advisor(MergeLearner(...))` on import — the public core never
+# imports anything private; it only offers this hook. This is the pattern every extension point follows.
+_DEFAULT_ADVISOR: "MergeAdvisor | None" = None
+
+
+def set_default_advisor(advisor: "MergeAdvisor | None") -> None:
+    """Register the process-wide default merge advisor (enterprise overlay). None restores determinism."""
+    global _DEFAULT_ADVISOR
+    _DEFAULT_ADVISOR = advisor
+
+
+def get_default_advisor() -> "MergeAdvisor | None":
+    return _DEFAULT_ADVISOR
 
 
 class MergeTopologyPlanner:
@@ -384,7 +401,8 @@ class MergeTopologyPlanner:
     COUPLING_HI = 6
 
     def __init__(self, advisor: MergeAdvisor | None = None) -> None:
-        self.advisor = advisor
+        # explicit injection wins; else the registered overlay default (None in a public-only deploy).
+        self.advisor = advisor if advisor is not None else get_default_advisor()
 
     def feasible(self, sig: MergeSignals) -> list[MergeStrategy]:
         fits = sig.context_tokens <= int(sig.window_tokens * 0.8)
