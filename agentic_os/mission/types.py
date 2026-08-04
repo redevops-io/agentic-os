@@ -14,6 +14,14 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import Any
 
+#: Semantic version of the canonical cross-runtime plan contract — ``ExecutionPlan`` together with
+#: ``PlanAxes`` (the six logical planning dimensions), ``ExecutionGraph`` and ``GovernancePlan``. This is
+#: the object every runtime (Python spec, Go and Kotlin ports) speaks; Discovery and the planner build it
+#: through adapters. Compatibility within a major is additive-only (new optional fields, new axes, new
+#: node/edge kinds); a breaking change to the plan shape, its serialization, or its hashing bumps the major.
+#: The intelligence that *generates* the best plan is the product; this typed object is the public contract.
+EXECUTION_PLAN_CONTRACT_VERSION = "execution-plan/v1"
+
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
@@ -160,16 +168,141 @@ class SimResult:
 
 
 @dataclass
+class PlanAxes:
+    """The LOGICAL execution plan — the fields of ONE plan the runtime optimizes as a whole
+    (Whitepaper v8):
+
+        Goal -> Execution Plan { representation, retrieval, reasoning, model, execution topology,
+                                 verification } -> Mission
+
+    Given a goal the runtime does not make a scattered set of independent choices, it produces one plan
+    (the way a relational optimizer produces one query plan). The Execution Compiler lowers these logical
+    axes into the physical ExecutionGraph; `ExecutionPlan` carries both — the axes it was planned from and
+    the graph it lowered to — plus the governing policy, budget and evidence requirements."""
+    representation: str = ""          # documents | sql | property_graph | temporal | vision | code | ...
+    retrieval: str = ""               # bm25 | dense | hybrid | graph | diver | ...
+    reasoning: str = ""               # terse | reason | decompose | mapreduce (+sc/+v/effort)
+    model: str = ""                   # model / tier chosen
+    topology: str = "single_agent"    # one of mission.topology.TOPOLOGY_KINDS
+    verification: str = ""            # citations | policy | fact | state_transition | none
+    policy_refs: list[str] = field(default_factory=list)
+    budget_usd: float = 0.0
+    evidence_requirements: list[str] = field(default_factory=list)
+
+
+@dataclass
+class GovernancePlan:
+    """The governance envelope for a plan — the single home for approvals, policy, verification and
+    budget limits (nested under ExecutionPlan). Policy prunes plans BEFORE learning or model calls; every
+    side-effecting node is gated unless autonomy says otherwise."""
+    approvals_required: list[str] = field(default_factory=list)   # capabilities / nodes gated on a human
+    policy_refs: list[str] = field(default_factory=list)          # permission grants the plan runs under
+    verification: str = ""                                        # citations | policy | state_transition | none
+    budget_usd: float = 0.0
+    autonomy: str = "gated"                                       # gated | shadow | auto
+
+
+@dataclass
 class ExecutionPlan:
-    """A compiled revision. A mission has MANY plans over its life."""
-    mission_id: str
-    intent_id: str
-    graph: ExecutionGraph
+    """The ONE public cross-runtime schema (Whitepaper v8 · the "one execution plan").
+
+        DiscoveryProposal → ExecutionPlan → CompiledMissionGraph (`graph`) → MissionRun → Outcome
+
+    A single object spans the whole flow: the LOGICAL plan (`axes`, the six whitepaper dimensions), the
+    governance envelope (`governance`), the planner's expectations, the `discovery_context` that triggered
+    it, and the PHYSICAL plan it lowered to (`graph`, None until compiled). Every runtime (Python spec, Go
+    and Kotlin ports) speaks this object; the intelligence that *generates* the best one is the product.
+    Versioned as ``EXECUTION_PLAN_CONTRACT_VERSION`` (execution-plan/v1). A mission has many revisions."""
+    # cross-runtime identity + provenance (all optional so a plan can exist pre-mission, pre-compile)
+    goal: str = ""
+    mission_id: str = ""
+    intent_id: str = ""
+    discovery_context: dict[str, Any] = field(default_factory=dict)   # the proposal that triggered the plan
+    axes: PlanAxes | None = None                 # the six whitepaper axes (representation/retrieval/…)
+    governance: GovernancePlan | None = None     # governance envelope + planner expectations
+    deadline: float | None = None
+    expected_cost: float = 0.0
+    expected_latency_ms: int = 0
+    expected_quality: float = 0.0                # the planner's confidence in this plan (0..1)
+    fallback: "ExecutionPlan | None" = None      # the next-best plan if this one misses the bar
+    graph: ExecutionGraph | None = None          # the CompiledMissionGraph — None until the compiler runs
     revision: int = 1
     reason: str = "initial"                     # "initial" | "replan: <cause>"
     projection: SimResult | None = None
     id: str = field(default_factory=lambda: new_id("plan"))
     created_at: float = field(default_factory=now)
+
+    # ── doc-named accessors: the sub-plans are nested fields of the one object ──────────────
+    @property
+    def plan_id(self) -> str:
+        return self.id
+
+    @property
+    def representation_plan(self) -> str:
+        return self.axes.representation if self.axes else ""
+
+    @property
+    def retrieval_plan(self) -> str:
+        return self.axes.retrieval if self.axes else ""
+
+    @property
+    def reasoning_plan(self) -> str:
+        return self.axes.reasoning if self.axes else ""
+
+    @property
+    def model_plan(self) -> str:
+        return self.axes.model if self.axes else ""
+
+    @property
+    def topology_plan(self) -> str:
+        return self.axes.topology if self.axes else "single_agent"
+
+    @property
+    def verification_plan(self) -> str:
+        if self.governance and self.governance.verification:
+            return self.governance.verification
+        return self.axes.verification if self.axes else ""
+
+    @property
+    def evidence_requirements(self) -> list[str]:
+        return list(self.axes.evidence_requirements) if self.axes else []
+
+    @classmethod
+    def from_axes(cls, axes: "PlanAxes", *, goal: str = "", discovery_context: dict | None = None,
+                  governance: "GovernancePlan | None" = None, expected_cost: float = 0.0,
+                  expected_latency_ms: int = 0, expected_quality: float = 0.0,
+                  fallback: "ExecutionPlan | None" = None, deadline: float | None = None) -> "ExecutionPlan":
+        """Build the canonical logical plan from the six-axis `PlanAxes` (pre-compilation)."""
+        return cls(goal=goal, axes=axes, discovery_context=dict(discovery_context or {}),
+                   governance=governance, expected_cost=expected_cost or (axes.budget_usd if axes else 0.0),
+                   expected_latency_ms=expected_latency_ms, expected_quality=expected_quality,
+                   fallback=fallback, deadline=deadline)
+
+    def explain(self) -> dict:
+        """Unified EXPLAIN across discovery → planner → governance → compiled graph."""
+        a = self.axes
+        return {
+            "plan_id": self.id,
+            "goal": self.goal,
+            "discovery_context": self.discovery_context,
+            "logical_plan": {
+                "representation": a.representation if a else "",
+                "retrieval": a.retrieval if a else "",
+                "reasoning": a.reasoning if a else "",
+                "model": a.model if a else "",
+                "topology": a.topology if a else "single_agent",
+                "verification": self.verification_plan,
+            },
+            "governance": asdict(self.governance) if self.governance else None,
+            "evidence_requirements": self.evidence_requirements,
+            "expected": {"cost": self.expected_cost, "latency_ms": self.expected_latency_ms,
+                         "quality": self.expected_quality},
+            "fallback": (asdict(self.fallback.axes) if self.fallback and self.fallback.axes else None),
+            "compiled": ({"graph_id": self.graph.id, "nodes": len(self.graph.nodes)}
+                         if self.graph else None),
+            "revision": self.revision,
+            "reason": self.reason,
+        }
 
 
 # ─── humans as nodes ─────────────────────────────────────────────────────────
