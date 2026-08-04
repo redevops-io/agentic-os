@@ -17,9 +17,9 @@ What is NOT here (enterprise overlay): fleet-wide **enforcement** (the clean-dec
 cross-tenant analytics, and operational console aggregation. Those consume this same vocabulary; a
 public-only deployment records and replays events without them.
 
-Contract version: :data:`SCHEMA_VERSION` (``runtime-event/v1``). Additive-only within a major (new event
-types, new optional envelope fields, new specialized schemas); a breaking change to the envelope or the
-NDJSON serialization bumps the major. The ``_demo`` self-test is the executable golden fixture.
+Contract version: :data:`SCHEMA_VERSION` (``runtime-event/v10`` — the Whitepaper v10 RuntimeEvent family).
+Additive within that lineage (new event types, new optional envelope fields, new specialized schemas); a
+later whitepaper that redefines the envelope or the NDJSON serialization bumps the version. The ``_demo`` self-test is the executable golden fixture.
 """
 from __future__ import annotations
 
@@ -51,12 +51,12 @@ class Severity(str, Enum):
 
 
 #: Semantic version of the public runtime-event contract (the envelope + NDJSON serialization).
-SCHEMA_VERSION = "runtime-event/v1"
+SCHEMA_VERSION = "runtime-event/v10"
 CONTRACT_VERSION = SCHEMA_VERSION
 
 # the versioned schemas the v9 amendment enumerates (required fields per record kind)
 SCHEMAS: dict[str, list[str]] = {
-    "runtime-event/v1": ["event_id", "event_type", "schema_version", "timestamp", "actor", "result_status"],
+    "runtime-event/v10": ["event_id", "event_type", "schema_version", "timestamp", "actor", "result_status"],
     "dereference-event/v1": ["event_id", "artifact_handles", "visibility"],
     "capability-event/v1": ["event_id", "capability_id"],
     "verification-event/v1": ["event_id", "result_status"],
@@ -112,7 +112,7 @@ class RuntimeEvent:
             EventType.VERIFICATION: "verification-event/v1", EventType.POLICY_DECISION: "policy-decision/v1",
         }.get(self.event_type)
         d = asdict(self)
-        missing = [f for f in SCHEMAS["runtime-event/v1"] if not d.get(f)]
+        missing = [f for f in SCHEMAS["runtime-event/v10"] if not d.get(f)]
         if spec_schema:
             missing += [f for f in SCHEMAS[spec_schema] if not d.get(f)]
         return missing

@@ -14,10 +14,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-#: Semantic version of the public control-plane wire protocol. Additive-only within a major (new record
-#: types, new optional fields); a breaking change to the canonical wire form bumps the major. The GOLDEN
+#: Version = the whitepaper that specifies it (v9, the Kotlin/Spark execution profile). Additive within
+#: that lineage (new record types, new optional fields); a later whitepaper redefining the wire form bumps
+#: it. The GOLDEN
 #: fixtures below are the cross-language conformance vectors (byte-identical in Python, Go and Kotlin).
-CONTRACT_VERSION = "control-plane/v1"
+CONTRACT_VERSION = "control-plane/v9"
 
 
 def _canonical(fields: dict[str, str]) -> str:
