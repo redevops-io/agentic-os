@@ -19,9 +19,11 @@ core (verifiable in ``_demo`` below); the fourth is a *hook*:
    (contextual bandit over topologies) is an enterprise overlay injected here. With no advisor the planner
    is fully deterministic (``select`` == ``rule_choice``).
 
-Contract version: this is ``merge/v1``. Compatibility within a major is additive-only (new enum members,
-new optional fields, new ledger kinds); a breaking change to the merge semantics or the wire shape of a
-:class:`LedgerBundle` bumps the major. The ``_demo`` self-test is the executable golden fixture.
+Contract version: ``merge/v9`` — the version is the **whitepaper that canonically specifies** the operator
+(v9, the Kotlin/JVM-for-Spark line where ``merge()`` was introduced). Compatibility is additive within that
+lineage (new enum members, new optional fields, new ledger kinds); a later whitepaper that redefines the
+merge semantics or the wire shape of a :class:`LedgerBundle` bumps the version. The ``_demo`` self-test is
+the executable golden fixture.
 """
 from __future__ import annotations
 
@@ -32,7 +34,7 @@ from hashlib import sha256
 from typing import Callable, Protocol
 
 #: Semantic version of the public merge contract. See the module docstring for the compatibility rule.
-CONTRACT_VERSION = "merge/v1"
+CONTRACT_VERSION = "merge/v9"
 
 
 # ════════════════════════════ contracts ════════════════════════════

@@ -20,7 +20,7 @@ from typing import Any
 #: through adapters. Compatibility within a major is additive-only (new optional fields, new axes, new
 #: node/edge kinds); a breaking change to the plan shape, its serialization, or its hashing bumps the major.
 #: The intelligence that *generates* the best plan is the product; this typed object is the public contract.
-EXECUTION_PLAN_CONTRACT_VERSION = "execution-plan/v1"
+EXECUTION_PLAN_CONTRACT_VERSION = "execution-plan/v8"
 
 
 def new_id(prefix: str) -> str:
@@ -212,7 +212,7 @@ class ExecutionPlan:
     governance envelope (`governance`), the planner's expectations, the `discovery_context` that triggered
     it, and the PHYSICAL plan it lowered to (`graph`, None until compiled). Every runtime (Python spec, Go
     and Kotlin ports) speaks this object; the intelligence that *generates* the best one is the product.
-    Versioned as ``EXECUTION_PLAN_CONTRACT_VERSION`` (execution-plan/v1). A mission has many revisions."""
+    Versioned as ``EXECUTION_PLAN_CONTRACT_VERSION`` (execution-plan/v8 — the Whitepaper v8 "one execution plan"). A mission has many revisions."""
     # cross-runtime identity + provenance (all optional so a plan can exist pre-mission, pre-compile)
     goal: str = ""
     mission_id: str = ""
