@@ -1,0 +1,62 @@
+{{- if .Values.model.server.enabled }}
+# In-cluster OpenAI-compatible model server on AMD Instinct (ROCm / vLLM). This is what makes the
+# reference system self-contained on Supermicro AMD Instinct (MI300X / MI350X 8-GPU) nodes: it requests
+# `amd.com/gpu` and schedules onto Instinct nodes via the values under `.amd`.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rr.fullname" . }}-model
+  labels:
+    {{- include "rr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: model
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: model
+  template:
+    metadata:
+      labels:
+        {{- include "rr.labels" . | nindent 8 }}
+        app.kubernetes.io/component: model
+    spec:
+      {{- with .Values.amd.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.amd.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: vllm
+          image: {{ .Values.model.server.image }}
+          args:
+            - "--model={{ .Values.model.server.servedModelId }}"
+            - "--served-model-name={{ .Values.model.server.servedModelId }}"
+            - "--port=8000"
+          ports:
+            - { name: http, containerPort: 8000 }
+          readinessProbe:
+            httpGet: { path: /v1/models, port: http }
+            initialDelaySeconds: 60
+            periodSeconds: 15
+          resources:
+            requests:
+              {{- toYaml .Values.model.server.resources.requests | nindent 14 }}
+              {{ .Values.amd.gpuResourceName }}: {{ .Values.model.server.gpus | quote }}
+            limits:
+              {{- toYaml .Values.model.server.resources.limits | nindent 14 }}
+              {{ .Values.amd.gpuResourceName }}: {{ .Values.model.server.gpus | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rr.fullname" . }}-model
+  labels: {{- include "rr.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: model
+  ports:
+    - { name: http, port: 8000, targetPort: http }
+{{- end }}

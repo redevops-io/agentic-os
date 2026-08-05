@@ -1,0 +1,108 @@
+# ReDevOps Runtime Reference System — values.
+# A vendor blueprint packages a deployable stack; this packages the same, and additionally makes the
+# deployment a governed Mission (plan → gate → apply → verify → record) and keeps execution deterministic.
+
+nameOverride: ""
+fullnameOverride: ""
+
+# ── the runtime service: Context Runtime + Mission Runtime, exposed as a standing HTTP/gRPC service ──
+# (the Go zero-dependency core service; missions run WITHOUT a model — the model is only for narration
+# and the answer/OpenIE arms.)
+# The PUBLIC Python runtime — agentic_os.control_plane built from the public redevops-io/agentic-os
+# repo (dashboard + /health + runnable missions + approvals). Go/Kotlin runtimes ship as separate,
+# private charts (the commercial 'on request' layer).
+runtime:
+  image:
+    repository: ghcr.io/redevops-io/redevops-runtime
+    tag: v6
+    pullPolicy: IfNotPresent
+  replicas: 1
+  http:
+    port: 8080
+  grpc:
+    enabled: false
+    port: 50051
+  resources:
+    requests: { cpu: "500m", memory: "512Mi" }
+    limits:   { cpu: "2",    memory: "2Gi" }
+  # Governed-execution defaults baked into the runtime config (see templates/configmap.yaml).
+  mission:
+    # deny-by-default: no capability runs without an explicit grant.
+    denyByDefault: true
+    # every mission is event-sourced + replayable; keep the ledger on a PVC for durable replay.
+    ledger:
+      persistent: true
+      size: 5Gi
+      storageClass: ""
+    # human approval gate for side-effecting missions ("" webhook = auto-approve in non-prod).
+    approvalWebhook: ""
+    # verification is on: a mission's terminal state must replay identically.
+    verification: true
+
+# ── retrieval (ReDevOps RAG). backend = inmemory (demo) | pgvector (managed-DB-friendly) ──
+retriever:
+  backend: pgvector
+  pgvector:
+    # Point at Azure Database for PostgreSQL / AWS RDS / Cloud SQL + pgvector, or the bundled one below.
+    dsn: ""                       # e.g. postgres://user:pass@host:5432/redevops_rag?sslmode=require
+    bundled:
+      enabled: true               # deploy an in-cluster pgvector Postgres for a self-contained demo
+      image: pgvector/pgvector:pg16
+      size: 10Gi
+      storageClass: ""
+
+# ── model endpoint (OpenAI-compatible). Point at an existing endpoint, OR bundle a ROCm/vLLM server. ──
+model:
+  # External endpoint (leave server.enabled=false to use this). Missions run without it.
+  endpoint: ""                    # e.g. http://vllm.ml-services:8000/v1
+  model: ""                       # served model id
+  apiKeySecret: ""                # name of a Secret with key OPENAI_API_KEY (optional)
+  # Optional in-cluster model server on AMD Instinct (ROCm). Turn on to make this a self-contained
+  # reference system on Supermicro AMD Instinct (MI300X / MI350X 8-GPU) nodes.
+  server:
+    enabled: false
+    image: rocm/vllm:latest       # ROCm vLLM image
+    servedModelId: "meta-llama/Llama-3.1-8B-Instruct"
+    gpus: 1                        # AMD GPUs to request (amd.com/gpu)
+    resources:
+      requests: { cpu: "4", memory: "32Gi" }
+      limits:   { cpu: "8", memory: "64Gi" }
+
+# ── optional Projects + Sidekick cockpit (the Mission DevOps control plane UI) ──
+# The runtime (control-plane) serves its own dashboard, so the cockpit is optional/off by default;
+# no public cockpit image is published (point cockpit.image at your own if you enable it).
+cockpit:
+  enabled: false
+  image:
+    repository: ghcr.io/redevops-io/cockpit
+    tag: v6
+  service:
+    type: ClusterIP
+    port: 8240
+
+# ── AMD Instinct / ROCm scheduling. Applied to the model server (and any GPU workload). ──
+# The AMD GPU device plugin advertises `amd.com/gpu`; select Instinct nodes and tolerate their taint.
+amd:
+  gpuResourceName: amd.com/gpu
+  nodeSelector: {}                # e.g. { amd.com/gpu.device-id: "0x74a1" } or your Instinct label
+  tolerations: []                 # e.g. [{ key: amd.com/gpu, operator: Exists, effect: NoSchedule }]
+
+# ── deploy-as-a-Mission: the post-install/upgrade verification hook ──
+# The install is not "kubectl apply and hope": a Helm hook Job runs acceptance checks against the freshly
+# deployed runtime, and records the result as a deployment-mission Outcome (provenance + verify). If the
+# checks fail, the release is marked failed — the governed-deployment equivalent of a mission that gates.
+deployMission:
+  verify:
+    enabled: true
+    image: curlimages/curl:8.10.1
+    # acceptance checks the hook runs (HTTP GET against the runtime; non-2xx fails the release).
+    checks:
+      - /health
+    timeoutSeconds: 120
+
+serviceAccount:
+  create: true
+  name: ""
+
+podAnnotations: {}
+imagePullSecrets: []

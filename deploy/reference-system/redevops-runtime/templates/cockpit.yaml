@@ -1,0 +1,42 @@
+{{- if .Values.cockpit.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rr.fullname" . }}-cockpit
+  labels:
+    {{- include "rr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cockpit
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: cockpit
+  template:
+    metadata:
+      labels:
+        {{- include "rr.labels" . | nindent 8 }}
+        app.kubernetes.io/component: cockpit
+    spec:
+      containers:
+        - name: cockpit
+          image: "{{ .Values.cockpit.image.repository }}:{{ .Values.cockpit.image.tag }}"
+          env:
+            - name: RDO_RUNTIME_URL
+              value: "http://{{ include "rr.fullname" . }}:{{ .Values.runtime.http.port }}"
+          ports:
+            - { name: http, containerPort: {{ .Values.cockpit.service.port }} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rr.fullname" . }}-cockpit
+  labels: {{- include "rr.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.cockpit.service.type }}
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: cockpit
+  ports:
+    - { name: http, port: {{ .Values.cockpit.service.port }}, targetPort: http }
+{{- end }}

@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rr.fullname" . }}-config
+  labels:
+    {{- include "rr.labels" . | nindent 4 }}
+data:
+  # Governed-execution config the runtime reads at boot. These are the differentiators a plain
+  # blueprint doesn't carry: deny-by-default grants, an event-sourced replayable ledger, an approval
+  # gate on side effects, and mandatory verification (terminal-state replay).
+  runtime.yaml: |
+    retriever:
+      backend: {{ .Values.retriever.backend | quote }}
+    model:
+      endpoint: {{ include "rr.modelEndpoint" . | quote }}
+      model: {{ .Values.model.model | quote }}
+    mission:
+      deny_by_default: {{ .Values.runtime.mission.denyByDefault }}
+      verification: {{ .Values.runtime.mission.verification }}
+      approval_webhook: {{ .Values.runtime.mission.approvalWebhook | quote }}
+      ledger:
+        persistent: {{ .Values.runtime.mission.ledger.persistent }}

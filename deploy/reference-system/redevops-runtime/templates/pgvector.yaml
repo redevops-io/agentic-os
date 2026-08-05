@@ -1,0 +1,64 @@
+{{- if and (eq .Values.retriever.backend "pgvector") .Values.retriever.pgvector.bundled.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rr.fullname" . }}-pgvector
+  labels:
+    {{- include "rr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pgvector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: pgvector
+  template:
+    metadata:
+      labels:
+        {{- include "rr.labels" . | nindent 8 }}
+        app.kubernetes.io/component: pgvector
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.retriever.pgvector.bundled.image }}
+          env:
+            - { name: POSTGRES_USER, value: redevops }
+            - { name: POSTGRES_PASSWORD, value: redevops }
+            - { name: POSTGRES_DB, value: redevops_rag }
+          ports:
+            - { name: postgres, containerPort: 5432 }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "redevops"] }
+            initialDelaySeconds: 5
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: {{ include "rr.fullname" . }}-pgvector }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "rr.fullname" . }}-pgvector
+  labels: {{- include "rr.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.retriever.pgvector.bundled.size }}
+  {{- with .Values.retriever.pgvector.bundled.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rr.fullname" . }}-pgvector
+  labels: {{- include "rr.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: pgvector
+  ports:
+    - { name: postgres, port: 5432, targetPort: postgres }
+{{- end }}

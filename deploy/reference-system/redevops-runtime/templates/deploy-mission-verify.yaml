@@ -1,0 +1,47 @@
+{{- if .Values.deployMission.verify.enabled }}
+# ── Deploy-as-a-Mission: the verification gate ──
+# A vendor blueprint's install ends at `kubectl apply`. Here the install is a governed Mission: this
+# post-install/post-upgrade Helm hook runs acceptance checks against the freshly deployed runtime and,
+# on any failure, fails the release (hook-failed) — the deployment equivalent of a mission that gates
+# instead of silently proceeding. The Job's logs are the deployment Outcome's evidence.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "rr.fullname" . }}-verify
+  labels:
+    {{- include "rr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: deploy-mission-verify
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.deployMission.verify.timeoutSeconds }}
+  template:
+    metadata:
+      labels: {{- include "rr.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: verify
+          image: {{ .Values.deployMission.verify.image }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              BASE="http://{{ include "rr.fullname" . }}:{{ .Values.runtime.http.port }}"
+              echo "deployment-mission :: verifying $BASE"
+              # wait for the runtime to accept traffic, then assert each acceptance check returns 2xx.
+              for path in {{ range .Values.deployMission.verify.checks }}{{ . }} {{ end }}; do
+                echo "  check GET $path"
+                for i in $(seq 1 30); do
+                  code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE$path" || echo 000)
+                  case "$code" in
+                    2*) echo "    ok ($code)"; break ;;
+                    *)  if [ "$i" = "30" ]; then echo "    FAIL ($code) after retries"; exit 1; fi; sleep 4 ;;
+                  esac
+                done
+              done
+              echo "deployment-mission :: PASS — governed deployment verified, Outcome recorded"
+{{- end }}

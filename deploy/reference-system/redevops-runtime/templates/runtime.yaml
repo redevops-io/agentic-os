@@ -1,0 +1,104 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rr.fullname" . }}
+  labels:
+    {{- include "rr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: runtime
+spec:
+  replicas: {{ .Values.runtime.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: runtime
+  template:
+    metadata:
+      labels:
+        {{- include "rr.labels" . | nindent 8 }}
+        app.kubernetes.io/component: runtime
+      annotations:
+        # roll the pods when the governed config changes
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}{{ toYaml . | nindent 8 }}{{- end }}
+    spec:
+      serviceAccountName: {{ include "rr.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: runtime
+          image: "{{ .Values.runtime.image.repository }}:{{ .Values.runtime.image.tag }}"
+          imagePullPolicy: {{ .Values.runtime.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.runtime.http.port }}
+            {{- if .Values.runtime.grpc.enabled }}
+            - name: grpc
+              containerPort: {{ .Values.runtime.grpc.port }}
+            {{- end }}
+          env:
+            - name: RDO_PGVECTOR_DSN
+              value: {{ include "rr.pgvectorDsn" . | quote }}
+            {{- if .Values.model.apiKeySecret }}
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.model.apiKeySecret }}, key: OPENAI_API_KEY }
+            {{- end }}
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 10
+          resources: {{ toYaml .Values.runtime.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/redevops
+            {{- if .Values.runtime.mission.ledger.persistent }}
+            - name: ledger
+              mountPath: /var/lib/redevops/ledger
+            {{- end }}
+      volumes:
+        - name: config
+          configMap: { name: {{ include "rr.fullname" . }}-config }
+        {{- if .Values.runtime.mission.ledger.persistent }}
+        - name: ledger
+          persistentVolumeClaim: { claimName: {{ include "rr.fullname" . }}-ledger }
+        {{- end }}
+---
+{{- if .Values.runtime.mission.ledger.persistent }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "rr.fullname" . }}-ledger
+  labels: {{- include "rr.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.runtime.mission.ledger.size }}
+  {{- with .Values.runtime.mission.ledger.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+---
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rr.fullname" . }}
+  labels:
+    {{- include "rr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: runtime
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: runtime
+  ports:
+    - name: http
+      port: {{ .Values.runtime.http.port }}
+      targetPort: http
+    {{- if .Values.runtime.grpc.enabled }}
+    - name: grpc
+      port: {{ .Values.runtime.grpc.port }}
+      targetPort: grpc
+    {{- end }}
