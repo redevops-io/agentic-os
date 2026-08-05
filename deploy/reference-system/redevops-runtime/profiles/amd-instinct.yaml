@@ -1,0 +1,21 @@
+# ── amd-instinct profile ────────────────────────────────────────────────────────────────────────
+# Self-contained on Supermicro AMD Instinct (MI300X / MI325X / MI355X, 8-GPU). Schedules an in-cluster
+# ROCm/vLLM OpenAI-compatible server onto `amd.com/gpu`. A single large-HBM Instinct (192–288 GB) fits
+# models/context that would otherwise force multi-GPU sharding — an explainable planner difference.
+# PIN THE IMAGE BY DIGEST: a mutable tag (`:latest`) fails deployment conformance.
+# Install with:  helm install rr <chart> -f profiles/amd-instinct.yaml
+model:
+  endpoint: ""                                  # served in-cluster (below), not external
+  server:
+    enabled: true
+    image: rocm/vllm@sha256:REPLACE_WITH_PINNED_DIGEST   # digest-pinned; :latest fails conformance
+    gpus: 1                                      # amd.com/gpu to request
+
+retriever:
+  backend: pgvector
+
+amd:
+  gpuResourceName: amd.com/gpu
+  nodeSelector: {}                              # e.g. { amd.com/gpu.device-id: "0x74a1" } or your Instinct label
+  tolerations:
+    - { key: amd.com/gpu, operator: Exists, effect: NoSchedule }

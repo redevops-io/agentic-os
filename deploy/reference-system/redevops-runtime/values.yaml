@@ -61,7 +61,7 @@ model:
   # reference system on Supermicro AMD Instinct (MI300X / MI350X 8-GPU) nodes.
   server:
     enabled: false
-    image: rocm/vllm:latest       # ROCm vLLM image
+    image: rocm/vllm:latest       # ROCm vLLM image (DEMO default; PIN BY DIGEST in prod — see profiles/amd-instinct.yaml)
     servedModelId: "meta-llama/Llama-3.1-8B-Instruct"
     gpus: 1                        # AMD GPUs to request (amd.com/gpu)
     resources:
