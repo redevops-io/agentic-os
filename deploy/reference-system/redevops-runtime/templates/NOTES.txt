@@ -1,0 +1,23 @@
+ReDevOps Runtime Reference System — {{ .Chart.Version }} (appVersion {{ .Chart.AppVersion }})
+
+The stack is installed as a governed deployment mission. The post-install verification hook
+({{ include "rr.fullname" . }}-verify) has already asserted the acceptance checks; if it failed,
+this release failed with it — that is the point.
+
+Runtime service:   {{ include "rr.fullname" . }}:{{ .Values.runtime.http.port }}   (HTTP{{ if .Values.runtime.grpc.enabled }} + gRPC {{ .Values.runtime.grpc.port }}{{ end }})
+Retrieval:         {{ .Values.retriever.backend }}{{ if and (eq .Values.retriever.backend "pgvector") .Values.retriever.pgvector.bundled.enabled }} (bundled pgvector){{ end }}
+Model endpoint:    {{ include "rr.modelEndpoint" . | default "(none — missions still run; narration/answer arms disabled)" }}
+{{- if .Values.model.server.enabled }}
+Model server:      in-cluster ROCm/vLLM on AMD Instinct ({{ .Values.model.server.gpus }}× {{ .Values.amd.gpuResourceName }})
+{{- end }}
+{{- if .Values.cockpit.enabled }}
+Cockpit UI:        kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "rr.fullname" . }}-cockpit {{ .Values.cockpit.service.port }}:{{ .Values.cockpit.service.port }}
+{{- end }}
+
+Smoke it:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "rr.fullname" . }} {{ .Values.runtime.http.port }}:{{ .Values.runtime.http.port }} &
+  curl localhost:{{ .Values.runtime.http.port }}/readyz
+
+What makes this a Reference System and not just a chart: execution inside the stack is deterministic,
+replayable and provenance-carrying (deny-by-default grants, an event-sourced ledger, verification on),
+and the deployment itself was verified as a mission. Runs on any Kubernetes; ROCm/Instinct-ready.
