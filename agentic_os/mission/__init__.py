@@ -16,14 +16,15 @@ sit behind injectable interfaces (Protocols) so production wiring is a swap, not
 rewrite. The in-repo defaults make the whole kernel runnable and testable in-process.
 """
 from .types import (
-    Mission, MissionState, ExecutionIntent, IntentStep, ExecutionPlan, Node, NodeState,
-    NodeCost, Budget, HumanTask, CapabilityManifest, CapabilitySpec, WorldFact, Belief,
-    MissionOutcomeEvent, SimResult, Lesson, ExecutionGraph,
+    Mission, MissionState, ExecutionIntent, IntentStep, ExecutionPlan, PlanAxes, GovernancePlan,
+    Node, NodeState, NodeCost, Budget, HumanTask, CapabilityManifest, CapabilitySpec, WorldFact,
+    Belief, MissionOutcomeEvent, SimResult, Lesson, ExecutionGraph, EXECUTION_PLAN_CONTRACT_VERSION,
 )
 from .runtime import MissionRuntime
 
 __all__ = [
-    "Mission", "MissionState", "ExecutionIntent", "IntentStep", "ExecutionPlan", "Node",
+    "Mission", "MissionState", "ExecutionIntent", "IntentStep", "ExecutionPlan", "PlanAxes",
+    "GovernancePlan", "EXECUTION_PLAN_CONTRACT_VERSION", "Node",
     "NodeState", "NodeCost", "Budget", "HumanTask", "CapabilityManifest", "CapabilitySpec",
     "WorldFact", "Belief", "MissionOutcomeEvent", "SimResult", "Lesson", "ExecutionGraph",
     "MissionRuntime",
