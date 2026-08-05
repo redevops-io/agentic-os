@@ -6,7 +6,7 @@ self-contained dark-themed activity dashboard for ONE fictional tenant —
 "Summit Roofing Co.", a ~12-person local roofing contractor. All data is mock data
 driven from the MODULE_DATA dict keyed by MODULE_NAME.
 
-The whole UI is a hand-coded dark Material Design 3 system (see deploy/MD3_SPEC.md):
+The whole UI is a hand-coded dark Material Design 3 system (see deploy/dashboard-design-spec.md):
 MD3 tokens + reusable patterns live in BASE_CSS, reused by every module page. Each
 module renders to its category-appropriate layout (billing, books, support, social,
 SIEM, compliance, BI, growth, market-intel). No external libraries, no JS charting —
@@ -374,7 +374,7 @@ def _data() -> dict:
 
 
 # --- shared Material Design 3 (dark) CSS -------------------------------------
-# Tokens + reusable patterns from deploy/MD3_SPEC.md sections (A) + (B).
+# Tokens + reusable patterns from deploy/dashboard-design-spec.md sections (A) + (B).
 # Reused verbatim by every module page (and mirrored in control_plane.py).
 BASE_CSS = """
 :root{
