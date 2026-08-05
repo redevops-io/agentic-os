@@ -118,3 +118,8 @@ sudo docker run --rm \
   - `"remediate"` `{"rule_id": ...}` → **approval-gated** (`approval_required:[policy_change]`):
     returns `{"status":"pending_approval", …}` with the exact remediation that *would* run.
     System fixes are **never auto-applied** by the agent.
+
+## Data artifacts
+
+`content/` and `results/` (SCAP datastreams + scan output) are **fetched/generated at deploy time**, not
+vendored — they are multi-MB OpenSCAP artifacts. See the Dockerfile.

@@ -71,7 +71,7 @@ Each module dashboard: header (module name + "Summit Roofing Co." tenant + green
 8. **growth-engine** (GA4/HubSpot): KPIs leads · conversions · CAC/CPL · ROAS · spend. Mid: conversion funnel bars + channel trend. Bottom: channel attribution table (source, spend, conv, CPL, ROAS color-coded).
 9. **market-radar** (Crayon/Klue): KPIs competitors tracked · changes this week · price moves · new campaigns. Mid: competitor cards grid (positioning, last-change pill). Bottom: change feed (timestamp, competitor, change-type pill) + price-move table.
 
-## Control-plane dashboard (the fleet home — fix the "chaotic" layout)
+## Control-plane dashboard (the fleet home)
 - Tighten the top: header row (title + "Run your whole business on agents" + tenant line + "N/15 up" pill) as a compact app bar on `--surface-container-low`. Move **Approvals** + **Cross-module workflows** into a SLIM full-width band (two equal cards, not a huge empty block) — keep them compact, not dominating the fold.
 - Module groups: each functional group is a section with a small uppercase `--primary` label + divider, then an auto-fit grid of EQUAL-HEIGHT module cards. Cards: repo visual (16:9, object-cover, radius top), title + status pill, pain label, tagline, agent chips, approval-gated note, footer with "Open dashboard" filled teal button + "source ↗". Snap to the grid; consistent gaps `--sp-4`; consistent card heights per row.
 - Keep live `/api/fleet` polling, `/m/{name}` proxy, `/assets` mount.
