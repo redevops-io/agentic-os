@@ -103,16 +103,60 @@ class PolicyDecisionPlane:
         rules: list[str] = []
         if node.approval_required or (cap and cap.approval_required):
             rules.append(ApprovalRule.MANDATORY.value)          # statically mandatory — kept, not removed
-        if self._mission_policy_requires(mission, node):
-            rules.append(ApprovalRule.MISSION_POLICY.value)
-
         risk = self.assess(node, world, mission, graph)
+        # mission-policy/v1 — evaluate the named MissionPolicy (or lift the legacy `approval:` tokens),
+        # producing a deny/gate outcome and the exact policy identity (ref + digest) to pin for replay.
+        outcome = self._evaluate_policy(node, mission, risk)
+        if self._mission_policy_requires(mission, node) or (outcome is not None and outcome.gated):
+            rules.append(ApprovalRule.MISSION_POLICY.value)
         if risk.score >= self.risk_threshold or risk.regulatory or not risk.permissioned:
             rules.append(ApprovalRule.DYNAMIC_RISK.value)
 
-        required = bool(rules)
+        denied = outcome is not None and outcome.blocked
+        required = denied or bool(rules)
         packet = self._packet(node, mission, risk, rules, graph) if required else {}
-        return ApprovalDecision(required=required, rules=rules, risk=risk, packet=packet)
+        dec = ApprovalDecision(required=required, rules=rules, risk=risk, packet=packet)
+        if outcome is not None:
+            support = getattr(getattr(mission, "policy", None), "support_message", "")
+            dec.denied = outcome.blocked
+            dec.policy_ref = outcome.policy_ref
+            dec.policy_digest = outcome.policy_digest
+            dec.explain = {"effect": outcome.effect.value, "matched_rule": outcome.matched_rule,
+                           "reason": outcome.reason, "suggested_action": outcome.suggested_action,
+                           "message": outcome.message(support), "trace": list(outcome.trace)}
+        return dec
+
+    def explain_policy(self, node, mission, world=None, graph=None) -> dict:
+        """EXPLAIN POLICY — which rule of which policy (id@version, digest) decided this node, why, and
+        what to do about it, plus the full per-rule trace. Governance you can inspect, not just obey."""
+        risk = self.assess(node, world, mission, graph)
+        outcome = self._evaluate_policy(node, mission, risk)
+        if outcome is None:
+            return {"policy": None, "effect": "allow", "trace": []}
+        support = getattr(getattr(mission, "policy", None), "support_message", "")
+        return {"policy": outcome.policy_ref, "policy_digest": outcome.policy_digest,
+                "effect": outcome.effect.value, "matched_rule": outcome.matched_rule,
+                "reason": outcome.reason, "suggested_action": outcome.suggested_action,
+                "message": outcome.message(support), "trace": list(outcome.trace)}
+
+    def _evaluate_policy(self, node, mission, risk):
+        """Resolve the mission's MissionPolicy (explicit, or lifted from `approval:` constraints) and
+        evaluate this node against it. Returns None when the mission carries no policy at all."""
+        from .policy import NodeContext, from_constraints
+        pol = getattr(mission, "policy", None)
+        if pol is None:
+            constraints = getattr(mission, "constraints", None) or []
+            if not any(isinstance(c, str) and c.startswith("approval:") for c in constraints):
+                return None
+            pol = from_constraints(constraints, getattr(mission, "policy_refs", []) or [])
+        cap = self.registry.get(node.capability)
+        reversible = bool(node.undo or (cap and cap.undo))
+        cost = float(getattr(getattr(node, "cost", None), "usd", 0.0) or 0.0)
+        budget = float(getattr(getattr(mission, "budget", None), "usd", 0.0) or 0.0)
+        ctx = NodeContext(capability=node.capability, side_effecting=node.side_effecting,
+                          reversible=reversible, regulatory=risk.regulatory, cost_usd=cost,
+                          over_budget=(budget > 0 and cost > budget), permissioned=risk.permissioned)
+        return pol.evaluate(ctx)
 
     # ── the evidence-backed approval packet ─────────────────────────────────────
     def _packet(self, node, mission, risk: RiskFactors, rules, graph) -> dict:

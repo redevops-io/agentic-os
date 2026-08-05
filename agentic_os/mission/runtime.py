@@ -188,14 +188,17 @@ class MissionRuntime:
     # ── create + plan + simulate ──────────────────────────────────────────────
     def create_mission(self, goal: str, *, constraints: list[str] | None = None,
                         policy_refs: list[str] | None = None, budget: Budget | None = None,
-                        template: str | None = None, verified_intent: Any = None) -> Mission:
+                        template: str | None = None, verified_intent: Any = None,
+                        policy: "MissionPolicy | None" = None) -> Mission:
         # v0.2.x Slice 1 — carry the Discovery seal across the boundary. ``verified_intent`` is an
         # optional sealed VerifiedIntent (duck-typed: a runtime_contracts.VerifiedIntent, or a dict, or
         # anything exposing ``content_hash``/``evidence``); its identity is recorded on the mission and
         # in MissionCreated so the exact evidence a decision used is resolvable at replay/EXPLAIN time.
+        # mission-policy/v1 — an optional named MissionPolicy is the mission's single pinned authority.
         identity = _intent_identity(verified_intent)
         m = Mission(goal=goal, constraints=constraints or [], policy_refs=policy_refs or [],
-                    budget=budget or Budget(), template=template, world_state_id=new_id("world"),
+                    policy=policy, budget=budget or Budget(), template=template,
+                    world_state_id=new_id("world"),
                     intent_content_hash=identity.get("intent_content_hash", ""),
                     evidence_refs=identity.get("evidence_refs", []))
         self._missions[m.id] = m
@@ -204,7 +207,11 @@ class MissionRuntime:
         # `rehydrate` had no choice but to invent an authority on restart.
         self.store.append("MissionCreated", m.id,
                           {"goal": goal, "template": template, "constraints": m.constraints,
-                           "policy_refs": list(m.policy_refs or []), **identity})
+                           "policy_refs": list(m.policy_refs or []),
+                           # mission-policy/v1 — pin the named policy identity onto mission creation
+                           "policy": (m.policy.ref if m.policy else None),
+                           "policy_digest": (m.policy.digest() if m.policy else None),
+                           **identity})
         self.lifecycle.dispatch(MissionStarted(mission_id=m.id, goal=goal, template=template))
         try:
             self._plan_and_gate(m)
@@ -344,6 +351,17 @@ class MissionRuntime:
                     runnable.append((n, None))            # a human already cleared this node
                     continue
                 decision = self.context.resolve(ContextIntent(kind=CHECK_POLICY, node=n, world=world, mission=m, graph=graph)).value
+                # mission-policy/v1 — every policy decision is a ledger event (the Decision Ledger),
+                # pinning the exact evaluated policy identity onto the mission history for replay.
+                if getattr(decision, "policy_digest", ""):
+                    self.store.append("PolicyEvaluated", m.id,
+                                      {"node_id": n.id, "capability": n.capability,
+                                       "policy": decision.policy_ref, "policy_digest": decision.policy_digest,
+                                       "effect": decision.explain.get("effect", "allow"),
+                                       "matched_rule": decision.explain.get("matched_rule", "")})
+                if getattr(decision, "denied", False):    # a policy DENY rule — hard block, no human gate
+                    self._block_denied(m, n, decision)
+                    return m
                 (gated if decision.required else runnable).append((n, decision))
 
             # Execute the ready wave: independent nodes run concurrently (bounded) when max_concurrency>1,
@@ -529,6 +547,19 @@ class MissionRuntime:
                                           "options": task.options}})
         self.lifecycle.dispatch(GateReached(mission_id=m.id, node_id=node.id, capability=node.capability))
         self._set_state(m, MissionState.WAITING_HUMAN)
+
+    def _block_denied(self, m, node, decision) -> None:
+        """mission-policy/v1 — a DENY rule forbids this action outright. Unlike a gate, no human can
+        approve it; the mission blocks with the policy's actionable reason (deny always wins)."""
+        self.store.append("PolicyDenied", m.id,
+                          {"node_id": node.id, "capability": node.capability,
+                           "policy": decision.policy_ref, "policy_digest": decision.policy_digest,
+                           "explain": decision.explain})
+        m.outcome = {"blocked": "policy_denied", "node": node.id, "capability": node.capability,
+                     "policy": decision.policy_ref, "policy_digest": decision.policy_digest,
+                     "message": decision.explain.get("message", "")}
+        self.lifecycle.dispatch(GateReached(mission_id=m.id, node_id=node.id, capability=node.capability))
+        self._set_state(m, MissionState.FAILED)
 
     # ── belief-driven disambiguation (state estimation, Whitepaper v5 · P4) ──────
     def _belief_issue(self, node, world: WorldState):
