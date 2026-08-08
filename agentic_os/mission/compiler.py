@@ -100,6 +100,9 @@ def compile_intent(
                 node.depends_on.append(up)
             # inputs the node will read from world state at run time
             node.inputs[upstream_outcome] = {"$from_world": upstream_outcome}
+        # carry the step's non-material (cosmetic) inputs onto the node, so belief-disagreement
+        # gating stays material-only (cosmetic disagreement never blocks execution).
+        node.cosmetic_inputs = list(step.cosmetic_inputs)
 
     _assert_acyclic(graph)
     return ExecutionPlan(mission_id=mission.id, intent_id=intent.id, graph=graph,

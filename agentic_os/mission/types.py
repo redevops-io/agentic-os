@@ -111,6 +111,7 @@ class IntentStep:
     inputs_from: list[str] = field(default_factory=list)  # outcomes of upstream steps
     constraints: list[str] = field(default_factory=list)
     value_hint: str = "medium"
+    cosmetic_inputs: list[str] = field(default_factory=list)  # inputs whose disagreement is NOT material (don't gate)
     id: str = field(default_factory=lambda: new_id("istep"))
 
 
@@ -138,6 +139,7 @@ class Node:
     status: NodeState = NodeState.PENDING
     attempts: int = 0
     idempotency_key: str = ""
+    cosmetic_inputs: list[str] = field(default_factory=list)  # $from_world inputs whose disagreement is non-material
     result: dict[str, Any] | None = None
     cost: NodeCost = field(default_factory=NodeCost)
     assertions: list["StateAssertion"] = field(default_factory=list)  # P7: state-transition checks
@@ -321,13 +323,31 @@ class HumanTask:
 
 # ─── world state + belief ────────────────────────────────────────────────────
 @dataclass
+class DecisionEvidence:
+    """One reader's evidence for a material interpreted field. Each independent reader (a regex,
+    a model, a policy, a retrieval, a prior belief) contributes evidence for the same field. No
+    ``source_type`` is privileged over another — the runtime never encodes 'regex wins' or
+    'model wins'; when readers disagree on a material field the disagreement is routed to the
+    controller, not silently resolved."""
+    field: str
+    value: Any
+    source_type: str = "prior"          # regex | model | policy | retrieval | prior
+    source_ref: str = ""                # rule id, span, chunk id, policy id
+    confidence: float = 1.0
+    id: str = field(default_factory=lambda: new_id("de"))
+
+
+@dataclass
 class Belief:
-    """A confidence-weighted view of one fact, fused from possibly-disagreeing observations."""
+    """A confidence-weighted view of one fact, fused from possibly-disagreeing observations.
+    ``evidence`` carries the per-reader ``DecisionEvidence`` the fusion saw (survives replay, as
+    beliefs are recomputed from the observation event log)."""
     value: Any
     confidence: float = 1.0
     sources: list[str] = field(default_factory=list)
     conflict: bool = False
     updated_at: float = field(default_factory=now)
+    evidence: list[DecisionEvidence] = field(default_factory=list)
 
 
 @dataclass

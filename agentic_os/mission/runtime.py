@@ -236,7 +236,9 @@ class MissionRuntime:
         # (this is how conflicting / low-confidence beliefs enter — see _belief_issue below)
         for obs in (result.get("_observations") if isinstance(result, dict) else None) or []:
             world.observe(obs["key"], obs.get("value"), obs.get("source", node.operator),
-                          float(obs.get("confidence", 1.0)))
+                          float(obs.get("confidence", 1.0)),
+                          source_type=obs.get("source_type", "prior"),
+                          source_ref=obs.get("source_ref", ""))
         self.store.append("NodeSucceeded", m.id,
                           {"node_id": node.id, "capability": node.capability, "result": result})
         self.learning.record_capability(node.capability, True)
@@ -284,12 +286,18 @@ class MissionRuntime:
     # ── belief-driven disambiguation (state estimation, Whitepaper v5 · P4) ──────
     def _belief_issue(self, node, world: WorldState):
         """A required $from_world input whose fused belief is conflicting or low-confidence.
-        Observations are not facts — surface the disagreement instead of silently trusting one."""
+        Observations are not facts — surface the disagreement instead of silently trusting one.
+        MATERIAL fields only: a field the node declares cosmetic never blocks execution, so
+        disagreement on non-material metadata does not gate (spec §3)."""
+        cosmetic = set(getattr(node, "cosmetic_inputs", []) or [])
         for v in node.inputs.values():
             if isinstance(v, dict) and "$from_world" in v:
-                b = self.context.resolve(ContextIntent(kind=RESOLVE_BELIEF, world=world, key=v["$from_world"])).value
+                key = v["$from_world"]
+                if key in cosmetic:
+                    continue                      # non-material — disagreement here is not a gate
+                b = self.context.resolve(ContextIntent(kind=RESOLVE_BELIEF, world=world, key=key)).value
                 if b is not None and (b.conflict or b.confidence < self.disambiguation_confidence):
-                    return v["$from_world"], b
+                    return key, b
         return None
 
     def _park_disambiguation(self, m: Mission, node, key: str, belief) -> None:
@@ -309,7 +317,9 @@ class MissionRuntime:
                                           "evidence": task.evidence, "options": task.options}})
         self.store.append("BeliefDisputed", m.id,
                           {"key": key, "value": belief.value, "sources": belief.sources,
-                           "confidence": belief.confidence, "conflict": belief.conflict})
+                           "confidence": belief.confidence, "conflict": belief.conflict,
+                           # the per-reader evidence the controller weighs — survives replay
+                           "evidence": [to_jsonable(de) for de in belief.evidence]})
         self._set_state(m, MissionState.WAITING_HUMAN)
 
     # ── verification escalation (P7B) ───────────────────────────────────────────

@@ -104,15 +104,17 @@ class WorldState:
                 obs.append(e.payload)
         return obs
 
-    def observe(self, key: str, value: Any, source: str, confidence: float = 1.0) -> None:
+    def observe(self, key: str, value: Any, source: str, confidence: float = 1.0,
+                source_type: str = "prior", source_ref: str = "") -> None:
         self._store.append("ObservationWritten", self.mission_id,
-                            {"key": key, "value": value, "source": source, "confidence": confidence})
+                            {"key": key, "value": value, "source": source, "confidence": confidence,
+                             "source_type": source_type, "source_ref": source_ref})
 
     def belief(self, key: str) -> Belief | None:
         obs = self._observations(key)
         if not obs:
             return None
-        return self._fuse(obs)
+        return self._fuse(obs, key)
 
     def get(self, key: str, default: Any = None) -> Any:
         b = self.belief(key)
