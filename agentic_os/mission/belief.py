@@ -11,18 +11,32 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from .types import Belief, now
+from .types import Belief, DecisionEvidence, now
 
 
-def fuse(observations: list[dict]) -> Belief:
-    """Fuse observations [{value, source, confidence}] of ONE key into a single Belief.
+def fuse(observations: list[dict], key: str = "") -> Belief:
+    """Fuse observations [{value, source, confidence, source_type?, source_ref?}] of ONE key
+    into a single Belief.
 
     Strategy: group by value, sum source-confidence per candidate, pick the strongest.
     Confidence = winner_mass / total_mass. `conflict` when a competing value also carries
-    substantial (>=0.34 of total) mass — i.e. the sources genuinely disagree.
+    substantial (>=0.34 of total) mass — i.e. the sources genuinely disagree. Selection is by
+    confidence mass only: NO ``source_type`` is privileged (never 'regex wins' / 'model wins').
+    Each observation is also captured as a ``DecisionEvidence`` on the belief.
     """
     if not observations:
         return Belief(value=None, confidence=0.0, sources=[])
+
+    evidence = [
+        DecisionEvidence(
+            field=key or o.get("key", ""),
+            value=o.get("value"),
+            source_type=o.get("source_type", "prior"),
+            source_ref=o.get("source_ref", ""),
+            confidence=float(o.get("confidence", 1.0)),
+        )
+        for o in observations
+    ]
 
     mass: dict[Any, float] = defaultdict(float)
     maxconf: dict[Any, float] = defaultdict(float)   # reliability: the best single source per value
@@ -55,6 +69,7 @@ def fuse(observations: list[dict]) -> Belief:
         sources=src[win_key],
         conflict=runner_mass >= 0.34 * total,   # a competing value carries substantial mass
         updated_at=now(),
+        evidence=evidence,
     )
 
 
