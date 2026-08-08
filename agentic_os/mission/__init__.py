@@ -18,7 +18,8 @@ rewrite. The in-repo defaults make the whole kernel runnable and testable in-pro
 from .types import (
     Mission, MissionState, ExecutionIntent, IntentStep, ExecutionPlan, PlanAxes, GovernancePlan,
     Node, NodeState, NodeCost, Budget, HumanTask, CapabilityManifest, CapabilitySpec, WorldFact,
-    Belief, MissionOutcomeEvent, SimResult, Lesson, ExecutionGraph, EXECUTION_PLAN_CONTRACT_VERSION,
+    Belief, DecisionEvidence, MissionOutcomeEvent, SimResult, Lesson, ExecutionGraph,
+    EXECUTION_PLAN_CONTRACT_VERSION,
 )
 from .runtime import MissionRuntime
 
@@ -26,6 +27,6 @@ __all__ = [
     "Mission", "MissionState", "ExecutionIntent", "IntentStep", "ExecutionPlan", "PlanAxes",
     "GovernancePlan", "EXECUTION_PLAN_CONTRACT_VERSION", "Node",
     "NodeState", "NodeCost", "Budget", "HumanTask", "CapabilityManifest", "CapabilitySpec",
-    "WorldFact", "Belief", "MissionOutcomeEvent", "SimResult", "Lesson", "ExecutionGraph",
+    "WorldFact", "Belief", "DecisionEvidence", "MissionOutcomeEvent", "SimResult", "Lesson", "ExecutionGraph",
     "MissionRuntime",
 ]

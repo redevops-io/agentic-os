@@ -300,14 +300,41 @@ class MissionRuntime:
                     return key, b
         return None
 
+    @staticmethod
+    def _evidence_lines(key: str, belief) -> list:
+        """What the controller is shown, one line per reader.
+
+        A reader that lost is still evidence: "the regex read `crossing` from
+        span 12-27 and the model read `persistent` from the whole sentence" is
+        decidable, and "two sources disagreed" is not.
+        """
+        lines = [f"key={key}", f"current={belief.value!r}",
+                 f"confidence={belief.confidence}", f"conflict={belief.conflict}"]
+        for de in getattr(belief, "evidence", ()) or ():
+            ref = f" @{de.source_ref}" if getattr(de, "source_ref", "") else ""
+            lines.append(
+                f"read by {de.source_type}{ref}: {de.value!r} "
+                f"(confidence {de.confidence})")
+        if not getattr(belief, "evidence", ()):
+            # Older observations carry no per-reader evidence. Say so rather
+            # than showing a shorter list that looks like agreement.
+            lines.append(f"sources={belief.sources} "
+                         "(no per-reader evidence recorded for this belief)")
+        return lines
+
     def _park_disambiguation(self, m: Mission, node, key: str, belief) -> None:
         node.status = NodeState.WAITING
         why = "conflicting sources" if belief.conflict else f"low confidence ({belief.confidence})"
+        # The per-reader packet, not a summary of it. The gate exists so a
+        # person decides which reading is right; handing them
+        # "sources=['a','b']" tells them a disagreement happened and withholds
+        # the only thing they need to settle it — what each reader actually
+        # read, and from where. `_evidence_lines` keeps the old key/current
+        # lines so existing consumers of `HumanTask.evidence` still parse.
         task = HumanTask(
             mission_id=m.id, node_id=node.id, assignee="data-steward",
             prompt=f"Resolve '{key}' before '{node.capability}' runs — {why}.",
-            evidence=[f"key={key}", f"current={belief.value!r}", f"confidence={belief.confidence}",
-                      f"sources={belief.sources}", f"conflict={belief.conflict}"],
+            evidence=self._evidence_lines(key, belief),
             options=["resolve"],
         )
         self.store.append("NodeParked", m.id,
@@ -352,7 +379,13 @@ class MissionRuntime:
         if pending.get("kind") == "disambiguation" and pending.get("node_id") == node_id:
             key = pending.get("key")
             value = (edit or {}).get("value")
-            self._world(mission_id).observe(key, value, source="human", confidence=100.0)
+            # `source_type="human"` so the authoritative answer is not filed
+            # under "prior" beside the readings it overruled. A resolution that
+            # looks like a guess in the evidence list cannot be told from one
+            # later, which defeats the record the gate exists to produce.
+            self._world(mission_id).observe(
+                key, value, source="human", confidence=100.0,
+                source_type="human", source_ref=f"human-task:{pending.get('id', '')}")
             self.store.append("BeliefResolved", mission_id,
                               {"key": key, "value": value, "node_id": node_id})
             self.store.append("NodeResumed", mission_id, {"node_id": node_id})
