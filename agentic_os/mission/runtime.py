@@ -42,6 +42,21 @@ _TERMINAL = {NodeState.DONE, NodeState.SKIPPED, NodeState.COMPENSATED}
 _BUSINESS_VALUE = {"onboarding": 100.0, "invoice_recovery": 250.0}
 
 
+class ReplayDivergence(RuntimeError):
+    """A restart rebuilt a different program and claimed the original's id.
+
+    `rehydrate` recomputes the graph rather than storing it, which is right —
+    the graph is deterministic given the code. The code is the part that
+    changes. Nothing compared the recomputed plan against the `signature`
+    `PlanCreated` has recorded since the kernel was written, so a deploy
+    between the run and the restart produced a mission that folded the
+    original's execution events into a program the log never described.
+
+    Raised rather than logged. A caller that genuinely wants the new program
+    should plan a new mission, which is what a new program is.
+    """
+
+
 class UnrecoverableAuthority(RuntimeError):
     """A log cannot say what a mission was permitted to do.
 
@@ -145,7 +160,12 @@ class MissionRuntime:
         m.active_plan_id = plan.id
         self.store.append("PlanCreated", m.id,
                           {"plan_id": plan.id, "revision": revision, "reason": reason,
-                           "signature": self._signature(plan), "projection": plan.projection})
+                           "signature": self._signature(plan), "projection": plan.projection,
+                           # The template the planner *resolved*, not the one
+                           # the caller asked for. Without it a restart has to
+                           # re-derive the choice, and for TemplatePlanner that
+                           # means keyword-matching the goal prose again.
+                           "template": getattr(intent, "template", None) or m.template})
         if len(candidates) > 1:
             self.store.append("PlanSelected", m.id,
                               {"plan_id": plan.id, "considered": len(candidates),
@@ -720,7 +740,15 @@ class MissionRuntime:
                 "Pass `policy_refs=` from the permissions plane, or accept that "
                 "this log predates authority recording — but do not let it "
                 "replay as a wildcard.")
-        m = Mission(goal=goal or "", template=created.payload.get("template"),
+        active = self._active_plan_record(mission_id)
+        # The resolved template, when the log has one. Falling back to
+        # `MissionCreated` keeps pre-existing logs working — and those are
+        # exactly the logs where the template is the caller's request rather
+        # than the planner's answer, so they re-derive it and this method's
+        # signature check is what stands between that and a silent swap.
+        template = (active or {}).get("template") or created.payload.get("template")
+
+        m = Mission(goal=goal or "", template=template,
                     constraints=created.payload.get("constraints", []),
                     policy_refs=list(policy_refs if policy_refs is not None
                                      else recorded))
@@ -729,9 +757,38 @@ class MissionRuntime:
         self._missions[mission_id] = m
         intent = self.planner.plan(mission_id, m.goal, {"template": m.template})
         plan = compile_intent(m, intent, LocalContextRuntime(self._scoped(m)), revision=1, reason="rehydrate")
+
+        if active is not None:
+            recorded_signature = active.get("signature")
+            rebuilt = self._signature(plan)
+            if recorded_signature is not None and rebuilt != recorded_signature:
+                raise ReplayDivergence(
+                    f"{mission_id}: the log describes {recorded_signature!r} "
+                    f"and this build produces {rebuilt!r}. Replay would fold "
+                    "the original's execution events into a different program "
+                    "under its id. If the new program is the intended one, "
+                    "plan a new mission — that is what a new program is.")
+
         self._plans[mission_id] = plan
         m.active_plan_id = plan.id
         return m
+
+    def _active_plan_record(self, mission_id: str) -> dict | None:
+        """The `PlanCreated` payload for the plan that was last activated.
+
+        Not simply the last `PlanCreated`: a re-plan can create a candidate
+        that is never activated, and comparing against a plan the mission never
+        ran would refuse a replay that is perfectly faithful.
+        """
+        events = list(self.store.for_mission(mission_id))
+        activated = [e for e in events if e.type == "PlanActivated"]
+        if not activated:
+            return None
+        plan_id = activated[-1].payload.get("plan_id")
+        for event in reversed(events):
+            if event.type == "PlanCreated" and event.payload.get("plan_id") == plan_id:
+                return event.payload
+        return None
 
     # ── helpers ────────────────────────────────────────────────────────────────
     def _capability_of(self, mission_id: str, node_id: str) -> str:

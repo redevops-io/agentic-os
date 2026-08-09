@@ -53,6 +53,10 @@ class TemplatePlanner:
         if template:
             intent = templates.get(template, mission_id)
             if intent:
+                # Name the choice on the way out. A caller that recorded only
+                # its own argument recorded `None` here, leaving the goal
+                # string as the sole record of which template ran.
+                intent.template = template
                 return intent
         # generic fallback: one outcome named after the goal
         return ExecutionIntent(
