@@ -42,6 +42,15 @@ _TERMINAL = {NodeState.DONE, NodeState.SKIPPED, NodeState.COMPENSATED}
 _BUSINESS_VALUE = {"onboarding": 100.0, "invoice_recovery": 250.0}
 
 
+class UnrecoverableAuthority(RuntimeError):
+    """A log cannot say what a mission was permitted to do.
+
+    Raised rather than defaulted. The default it replaces was a wildcard, and a
+    wildcard is not a conservative guess — it is the most permissive answer
+    available, applied precisely where nobody recorded one.
+    """
+
+
 class MissionRuntime:
     def __init__(
         self,
@@ -87,6 +96,10 @@ class MissionRuntime:
         self.governance = GovernanceLog(self.store)
         self._plans: dict[str, ExecutionPlan] = {}     # plan_id/mission_id -> plan (recompilable)
         self._missions: dict[str, Mission] = {}
+        #: Node ids whose approval predates capability scoping. Surfaced by
+        #: `approval_scope` so replay evidence does not imply an old event
+        #: recorded information it never held.
+        self._legacy_approvals: set[str] = set()
 
     # ── world state ──────────────────────────────────────────────────────────
     def _world(self, mission_id: str) -> WorldState:
@@ -99,8 +112,13 @@ class MissionRuntime:
         m = Mission(goal=goal, constraints=constraints or [], policy_refs=policy_refs or [],
                     budget=budget or Budget(), template=template, world_state_id=new_id("world"))
         self._missions[m.id] = m
+        # `policy_refs` is part of the record, not only of the object. Without
+        # it the log says what happened and cannot say why it was allowed, and
+        # `rehydrate` had no choice but to invent an authority on restart.
         self.store.append("MissionCreated", m.id,
-                          {"goal": goal, "template": template, "constraints": m.constraints})
+                          {"goal": goal, "template": template,
+                           "constraints": m.constraints,
+                           "policy_refs": list(m.policy_refs or [])})
         self.lifecycle.dispatch(MissionStarted(mission_id=m.id, goal=goal, template=template))
         try:
             self._plan_and_gate(m)
@@ -668,15 +686,44 @@ class MissionRuntime:
                 "recommendations": [to_jsonable(r) for r in self.learners.recommendations()]}
 
     # ── restart / rehydrate ────────────────────────────────────────────────────
-    def rehydrate(self, mission_id: str) -> Mission:
+    def rehydrate(self, mission_id: str, policy_refs: list[str] | None = None) -> Mission:
         """Rebuild a mission from the event log after a restart (fresh runtime, same EventStore):
         recompile the deterministic plan and reconstruct the Mission shell. `run()` then resumes
-        from the folded execution state. This is the durability proof."""
+        from the folded execution state. This is the durability proof.
+
+        **Authority is restored, never invented.** This used to pass
+        `policy_refs=["*"]` with a note that grants would be re-resolved in
+        production, because `MissionCreated` did not record them — so replay
+        did not reconstruct the mission, it reconstructed a strictly more
+        permissive one. Since `compile_intent` fails closed on a missing grant,
+        a mission that had been legitimately refused under a restrictive policy
+        would compile and run on restart, and the event log would show it
+        succeeding with no record of what changed.
+
+        A log written before policy was recorded genuinely does not say what
+        was permitted. Rehydrating it as `["*"]` fabricates an authority nobody
+        granted, so it raises instead, and a caller holding the grants from the
+        permissions plane may pass them explicitly.
+
+        This is deliberately stricter than the approval grandfathering in
+        `_approved`. Being lenient about a recorded fact is not the same as
+        manufacturing an unrecorded one — one keeps a narrow permission alive,
+        the other invents a broad one.
+        """
         goal = self.repo.goal(mission_id)
         created = next(e for e in self.store.for_mission(mission_id) if e.type == "MissionCreated")
+        recorded = created.payload.get("policy_refs")
+        if policy_refs is None and recorded is None:
+            raise UnrecoverableAuthority(
+                f"{mission_id}: MissionCreated records no policy_refs, so what "
+                "this mission was permitted to do cannot be reconstructed. "
+                "Pass `policy_refs=` from the permissions plane, or accept that "
+                "this log predates authority recording — but do not let it "
+                "replay as a wildcard.")
         m = Mission(goal=goal or "", template=created.payload.get("template"),
                     constraints=created.payload.get("constraints", []),
-                    policy_refs=["*"])   # grants re-resolved via permissions plane in prod
+                    policy_refs=list(policy_refs if policy_refs is not None
+                                     else recorded))
         m.id = mission_id
         m.state = self.repo.state(mission_id) or MissionState.PLANNING
         self._missions[mission_id] = m
@@ -729,11 +776,34 @@ class MissionRuntime:
         current = {n.id: n.capability for n in plan.graph.nodes} if plan else {}
         still_applies = set()
         for node_id, approved_capability in granted.items():
-            if approved_capability and node_id in current \
-                    and current[node_id] != approved_capability:
+            if approved_capability is None:
+                # Recorded before the capability was stored. Kept, and marked:
+                # an unscoped approval is not equivalent to a scoped one, and
+                # replay evidence should not imply the old event contained
+                # information it never held.
+                self._legacy_approvals.add(node_id)
+                still_applies.add(node_id)
+                continue
+            if node_id in current and current[node_id] != approved_capability:
                 continue
             still_applies.add(node_id)
         return still_applies - invalidated
+
+    LEGACY_UNSCOPED_APPROVAL = "LEGACY_UNSCOPED_APPROVAL"
+
+    def approval_scope(self, mission_id: str, node_id: str) -> str:
+        """How well an approval is bound — for replay evidence.
+
+        `SCOPED` if it names the capability it approved, `LEGACY_UNSCOPED_APPROVAL`
+        if it predates that, `NONE` if there is no approval. A reader of a
+        replayed mission can then see which consents were bound to an
+        invocation and which were only bound to a place.
+        """
+        for e in self.store.for_mission(mission_id):
+            if e.type == "ApprovalGranted" and e.payload.get("node_id") == node_id:
+                return ("SCOPED" if e.payload.get("capability")
+                        else self.LEGACY_UNSCOPED_APPROVAL)
+        return "NONE"
 
     def _signature(self, plan: ExecutionPlan) -> str:
         return "->".join(n.capability for n in plan.graph.nodes)
