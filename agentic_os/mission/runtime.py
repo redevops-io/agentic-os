@@ -143,14 +143,59 @@ class MissionRuntime:
             self.store.append("MissionBlocked", m.id, {"reason": "no_permitted_plan", "detail": str(e)})
         return m
 
+    def create_mission_from_intent(self, intent, *, policy_refs: list[str] | None = None,
+                                   budget: Budget | None = None) -> Mission:
+        """The Discovery-fed entry point: a mission from a sealed `VerifiedIntent`.
+
+        The difference from `create_mission` is not the argument type. It is
+        that nothing below this call can read the user's sentence, because the
+        artifact does not contain it — `VerifiedIntent` carries `utterance_ref`
+        and never the utterance. The invariant stops being a rule anyone has to
+        remember and becomes a property of what was passed in.
+
+        `goal` is still set, because `Mission` requires one and operators log
+        it. It is a label derived from the objective, and it is not consulted:
+        `IntentPlanner` accepts the parameter and ignores it, and a test
+        corrupts it to prove that.
+        """
+        from .from_intent import IntentPlanner, check_executable, mission_record, template_for
+
+        # Refuse before anything is recorded. A mission created and then blocked
+        # leaves a log entry for a request that was never admissible, and the
+        # next reader has to work out which blocked missions were real.
+        check_executable(intent)
+        template = template_for(intent)
+
+        m = Mission(goal=f"objective:{intent.objective}", constraints=[],
+                    policy_refs=policy_refs or [], budget=budget or Budget(),
+                    template=template, world_state_id=new_id("world"))
+        self._missions[m.id] = m
+        self.store.append("MissionCreated", m.id,
+                          {"goal": m.goal, "template": template,
+                           "constraints": m.constraints,
+                           "policy_refs": list(m.policy_refs or []),
+                           **mission_record(intent)})
+        self.lifecycle.dispatch(MissionStarted(mission_id=m.id, goal=m.goal,
+                                               template=template))
+        try:
+            self._plan_and_gate(m, planner=IntentPlanner(),
+                                context={"verified_intent": intent})
+        except CompileError as e:
+            self._set_state(m, MissionState.FAILED)
+            self.store.append("MissionBlocked", m.id,
+                              {"reason": "no_permitted_plan", "detail": str(e)})
+        return m
+
     def _scoped(self, m: Mission) -> PolicyScopedRegistry:
         """Stage-1 policy scoping: the planner/compiler/simulator only ever see the capabilities
         this mission's principal is permitted to use."""
         return PolicyScopedRegistry(self.registry, m.policy_refs)
 
-    def _plan_and_gate(self, m: Mission, revision: int = 1, reason: str = "initial") -> None:
+    def _plan_and_gate(self, m: Mission, revision: int = 1, reason: str = "initial",
+                       planner=None, context: dict | None = None) -> None:
         scoped = self._scoped(m)
-        intent = self.planner.plan(m.id, m.goal, {"template": m.template})
+        planner = planner or self.planner
+        intent = planner.plan(m.id, m.goal, {"template": m.template, **(context or {})})
         # P9a: active plan selection — generate bounded candidates, policy-prune, simulate, score,
         # select. The default (rank-best) plan is kept unless a candidate clearly wins.
         selector = ActivePlanner(scoped, self.policy, self.learning)
@@ -755,7 +800,23 @@ class MissionRuntime:
         m.id = mission_id
         m.state = self.repo.state(mission_id) or MissionState.PLANNING
         self._missions[mission_id] = m
-        intent = self.planner.plan(mission_id, m.goal, {"template": m.template})
+
+        # A mission created from a sealed intent replans from that intent, which
+        # the log carries whole. Storing only `intent_hash` would prove the
+        # intent had not changed and be unable to reconstruct it, sending replay
+        # back to the goal string — the one input this path exists to not read.
+        stored = created.payload.get("intent")
+        if stored is not None:
+            from runtime_contracts import intent_from_json
+
+            from .from_intent import IntentPlanner
+
+            planner, context = IntentPlanner(), {
+                "verified_intent": intent_from_json(stored)}
+        else:
+            planner, context = self.planner, {}
+
+        intent = planner.plan(mission_id, m.goal, {"template": m.template, **context})
         plan = compile_intent(m, intent, LocalContextRuntime(self._scoped(m)), revision=1, reason="rehydrate")
 
         if active is not None:

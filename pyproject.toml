@@ -6,6 +6,11 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "AGPL-3.0-or-later WITH Commons-Clause" }
 dependencies = [
+    # The Discovery -> Mission boundary, owned by neither runtime. Pinned to a
+    # tag: a branch can be rebased under a consumer, and a contract that moves
+    # silently is not a contract. Importing it is why this repository carries
+    # the Commons Clause — see LICENSE.md.
+    "runtime-contracts @ git+https://github.com/redevops-io/runtime-contracts.git@v0.2.1",
     "pyyaml>=6.0",
     "fastapi>=0.110",
     "uvicorn>=0.29",
