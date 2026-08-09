@@ -82,6 +82,13 @@ def compile_intent(
         node = Node(
             capability=cap.name, operator=cap.operator, produces=step.outcome,
             approval_required=human, side_effecting=cap.side_effecting, undo=cap.undo,
+            # The sealed intent's verified fields, when there was one, under a
+            # key of their own. Flat would collide: the second pass writes
+            # `node.inputs[<upstream outcome>]`, so a field named after an
+            # outcome would be overwritten by the world reference — two values
+            # in one namespace, last writer wins, nothing recorded.
+            inputs=({"intent": dict(intent.verified_fields)}
+                    if getattr(intent, "verified_fields", None) else {}),
             idempotency_key=_idem(mission.id, revision, step.outcome),
             cost=NodeCost(usd=cap.cost.usd, latency_ms=cap.cost.latency_ms,
                           tokens=cap.cost.tokens, human_minutes=cap.cost.human_minutes),

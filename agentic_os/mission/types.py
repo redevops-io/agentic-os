@@ -121,6 +121,13 @@ class ExecutionIntent:
     mission_id: str
     steps: list[IntentStep] = field(default_factory=list)
     rationale: str = ""
+    verified_fields: dict[str, str] = field(default_factory=dict)
+    """The sealed intent's fields, when this plan came from one.
+
+    A channel of their own rather than `IntentStep.constraints`, because the
+    compiler substring-matches constraints for "human"/"review" to decide
+    whether a node needs approval — so a *value* containing either would add an
+    unrequested gate. Data must not be able to steer an authority decision."""
     template: str | None = None
     """Which template produced these steps, once the planner has decided.
 
