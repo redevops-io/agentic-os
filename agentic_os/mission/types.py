@@ -121,6 +121,13 @@ class ExecutionIntent:
     mission_id: str
     steps: list[IntentStep] = field(default_factory=list)
     rationale: str = ""
+    template: str | None = None
+    """Which template produced these steps, once the planner has decided.
+
+    The caller's `template=` argument is a request; this is the answer. They
+    differ whenever the planner chose one itself, and only the answer is
+    reproducible — recovering the request means re-running whatever made the
+    choice, which for `TemplatePlanner` means re-reading the goal prose."""
     id: str = field(default_factory=lambda: new_id("intent"))
 
 
