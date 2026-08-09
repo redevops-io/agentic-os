@@ -157,7 +157,7 @@ class MissionRuntime:
         while True:
             status = self.repo.node_status(mission_id)
             done = {nid for nid, st in status.items() if st in _TERMINAL}
-            approved = self._approved(mission_id)
+            approved = self._approved(mission_id, plan)
 
             if all(n.id in done for n in graph.nodes):
                 return self._succeed(m, plan, world)
@@ -403,7 +403,17 @@ class MissionRuntime:
             self._fail(m, plan, reason=f"verification rejected {node_id}")
             return m
         if decision == "approve":
-            self.store.append("ApprovalGranted", mission_id, {"node_id": node_id, "edit": edit})
+            # The capability, not only the node. `_node_id` is derived from
+            # (mission, revision, outcome) and does not contain the capability,
+            # so an approval recorded as a bare node id also authorises any
+            # OTHER capability later bound to the same outcome at the same
+            # revision — and binding is a Context Runtime decision made per
+            # compile, with `plan_select` choosing among candidates. A provider
+            # swap is exactly when a human's yes should stop applying, because
+            # what they approved is not what would run.
+            self.store.append("ApprovalGranted", mission_id, {
+                "node_id": node_id, "edit": edit,
+                "capability": self._capability_of(mission_id, node_id)})
             self.store.append("NodeResumed", mission_id, {"node_id": node_id})
             return self.run(mission_id)
         self.store.append("ApprovalRejected", mission_id, {"node_id": node_id})
@@ -677,17 +687,53 @@ class MissionRuntime:
         return m
 
     # ── helpers ────────────────────────────────────────────────────────────────
-    def _approved(self, mission_id: str) -> set[str]:
-        """Approved node ids, minus any a mid-flight policy change invalidated (P10). A tightened
-        policy forces the human to re-approve under the new grants — the old ApprovalGranted no
-        longer counts."""
-        granted, invalidated = set(), set()
+    def _capability_of(self, mission_id: str, node_id: str) -> str:
+        plan = self._plans.get(mission_id)
+        if plan is None:
+            return ""
+        for node in plan.graph.nodes:
+            if node.id == node_id:
+                return node.capability
+        return ""
+
+    def _approved(self, mission_id: str, plan=None) -> set[str]:
+        """Approved node ids, minus any that no longer apply.
+
+        Three ways an approval stops counting, and only the first was checked:
+
+        a mid-flight policy change invalidated it (P10) — a tightened policy
+        forces re-approval under the new grants;
+
+        the mission was re-planned to a new revision — node ids embed the
+        revision, so consent given for the plan it replaced simply does not
+        match;
+
+        **the capability bound to the outcome changed.** This one was invisible
+        because the approval recorded only a node id, which does not contain
+        the capability. A human who approved `pay.invoice` satisfying `paid`
+        was also approving whatever else got bound to `paid` afterwards.
+
+        Approvals recorded before the capability was stored are grandfathered
+        rather than refused. Failing closed on them would park missions that
+        have already run and succeeded, which changes the outcome of history on
+        replay — a worse fault than the one it would close, and one this
+        project has a name for.
+        """
+        granted, invalidated = {}, set()
         for e in self.store.for_mission(mission_id):
             if e.type == "ApprovalGranted":
-                granted.add(e.payload["node_id"])
+                granted[e.payload["node_id"]] = e.payload.get("capability")
             elif e.type == "ApprovalInvalidated":
                 invalidated.add(e.payload["node_id"])
-        return granted - invalidated
+
+        current = {n.id: n.capability for n in plan.graph.nodes} if plan else {}
+        still_applies = set()
+        for node_id, approved_capability in granted.items():
+            if approved_capability and node_id in current \
+                    and current[node_id] != approved_capability:
+                continue
+            still_applies.add(node_id)
+        return still_applies - invalidated
 
     def _signature(self, plan: ExecutionPlan) -> str:
         return "->".join(n.capability for n in plan.graph.nodes)
