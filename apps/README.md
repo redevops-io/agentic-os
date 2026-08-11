@@ -6,7 +6,7 @@ operators + core logic + seed data); the **deployment** is kept separate — a s
 demo lives in [`../deploy/`](../deploy/), while the full Terraform / Ansible / k3s machinery is
 maintained separately — so you can run these apps under your own infrastructure.
 
-Each app follows the v6-generation operator pattern:
+Each app follows the shared operator pattern:
 
 | File | Role |
 |---|---|
