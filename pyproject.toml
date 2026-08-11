@@ -1,6 +1,6 @@
 [project]
 name = "agentic-os"
-version = "0.2.2"
+version = "0.2.3"
 description = "The control plane for the redevops.io Agentic Business OS — run your business as a cost-aware fleet of agents."
 readme = "README.md"
 requires-python = ">=3.10"
