@@ -8,8 +8,13 @@ Ties the layers together over the event-sourced world-state blackboard:
       -> outcome event -> reflection -> learning.
 
 `run()` is RESUMABLE: all execution state lives in the event log, so a fresh runtime built on
-the same EventStore can `rehydrate()` (recompile the deterministic graph) and continue exactly
-where a crash left off. That is the durability guarantee — the in-process stand-in for Dagster.
+the same EventStore can `rehydrate()` and continue exactly where a crash left off. That is the
+durability guarantee — the in-process stand-in for Dagster.
+
+`rehydrate()` is EXACT REPLAY (v0.2.x): it recompiles the deterministic plan pinned to the mission's
+original evidence identity and VERIFIES it reproduces the sealed plan fingerprint + ContextEpoch,
+failing closed (`ReplayError`) on drift — it reconstructs/verifies the decision path, it does not
+execute. To plan against *current* evidence instead, use the explicit `re_evaluate()`.
 """
 from __future__ import annotations
 
