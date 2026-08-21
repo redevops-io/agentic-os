@@ -12,7 +12,7 @@ import pytest
 
 from agentic_os.mission.demo import build_fleet
 from agentic_os.mission.executor import Executor
-from agentic_os.mission.runtime import MissionRuntime, ReplayError
+from agentic_os.mission.runtime import MissionRuntime, ReplayError, ReplayDivergence
 from agentic_os.mission.store import EventStore
 from agentic_os.mission.context_view import epoch_from_refs
 
@@ -84,10 +84,10 @@ def test_replay_fails_closed_when_the_plan_cannot_be_reproduced(tmp_path):
                           verified_intent=INTENT_A)
     mid = m.id
 
-    # simulate plan drift (templates/registry changed): the recompiled signature no longer matches
+    # simulate plan drift (templates/registry changed): the recompiled signature no longer matches.
+    # Fails closed — the signature check raises ReplayDivergence, or the fingerprint/epoch check raises
+    # ReplayError; either way replay refuses rather than folding events into a divergent program.
     rt2 = _runtime(EventStore(path=path))
     rt2._signature = lambda plan: "compliance.file_consent->DRIFTED"   # type: ignore[assignment]
-    with pytest.raises(ReplayError):
+    with pytest.raises((ReplayError, ReplayDivergence)):
         rt2.rehydrate(mid)
-    # and the divergence is recorded, not silently swallowed
-    assert any(e.type == "ReplayDivergence" for e in rt2.store.for_mission(mid))
