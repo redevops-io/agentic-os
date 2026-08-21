@@ -1,0 +1,26 @@
+# ── nvidia-nim profile ──────────────────────────────────────────────────────────────────────────
+# Self-contained on an NVIDIA GPU node (H100/H200/A100, 8-GPU). Schedules an in-cluster NIM
+# (NVIDIA Inference Microservice) — an OpenAI-compatible server — onto `nvidia.com/gpu`. Because NIM
+# is OpenAI-compatible, the EXISTING model adapter (agent_harness.nim / the model contract) serves it
+# by pointing at the in-cluster endpoint; there is no bespoke execution path.
+# PIN THE IMAGE BY DIGEST: a mutable tag (`:latest`) fails deployment conformance.
+# Requires an NGC pull secret for the NIM container + the NVIDIA GPU Operator (advertises nvidia.com/gpu).
+# Install with:  helm install rr <chart> -f profiles/nvidia-nim.yaml
+model:
+  endpoint: ""                                  # served in-cluster (below), not external
+  server:
+    enabled: true
+    # digest-pinned NIM container from NGC (nvcr.io). Ask NVIDIA for the pinned digest of the LLM NIM
+    # you're entitled to; :latest / a floating tag fails conformance.
+    image: nvcr.io/nim/meta/llama-3.1-8b-instruct@sha256:REPLACE_WITH_PINNED_DIGEST
+    gpus: 1                                      # nvidia.com/gpu to request
+
+retriever:
+  backend: pgvector                             # pgvector stays canonical — NOT a vendor retrieval store
+
+nvidia:
+  gpuResourceName: nvidia.com/gpu               # NVIDIA GPU Operator / device plugin
+  imagePullSecret: ngc-secret                   # kubectl create secret docker-registry ngc-secret ...
+  nodeSelector: {}                              # e.g. { nvidia.com/gpu.product: "NVIDIA-H100-80GB-HBM3" }
+  tolerations:
+    - { key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }

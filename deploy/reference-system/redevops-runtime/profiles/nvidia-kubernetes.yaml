@@ -1,0 +1,24 @@
+# ── nvidia-kubernetes profile ───────────────────────────────────────────────────────────────────
+# Run the governed runtime against an EXTERNAL NIM endpoint — either hosted (NGC / build.nvidia.com,
+# `https://integrate.api.nvidia.com/v1`) or a self-hosted NIM you run elsewhere. Because NIM is
+# OpenAI-compatible, the EXISTING model adapter serves NVIDIA by pointing at the endpoint — there is
+# no NVIDIA-specific adapter, exactly as the AMD profile consumes a ROCm endpoint.
+# Hosted needs an NGC API key (a Secret, referenced by name — never inlined). Self-hosted needs the
+# NVIDIA GPU Operator + (optionally) the NIM Operator on the serving cluster.
+# Install with:  helm install rr <chart> -f profiles/nvidia-kubernetes.yaml
+model:
+  endpoint: "https://integrate.api.nvidia.com/v1"   # hosted NIM; or your self-hosted OpenAI-compatible URL
+  server:
+    enabled: false                              # external endpoint; do not bundle a server here
+  # the model id MUST be pinned (the adapter refuses an unpinned model in production)
+  id: "meta/llama-3.1-8b-instruct"
+  # API key is a Secret referenced by NAME; the value never enters values/evidence.
+  apiKeySecret: ngc-api-key                     # kubectl create secret generic ngc-api-key --from-literal=key=...
+
+retriever:
+  backend: pgvector                             # pgvector stays canonical — NOT a vendor retrieval store
+
+nvidia:
+  gpuResourceName: nvidia.com/gpu               # only relevant if self-hosting the endpoint on this cluster
+  nodeSelector: {}
+  tolerations: []

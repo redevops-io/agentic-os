@@ -1,0 +1,18 @@
+# ── amd-kubernetes profile ──────────────────────────────────────────────────────────────────────
+# Run the governed runtime on an AMD-GPU Kubernetes cluster, consuming an EXTERNAL ROCm-served,
+# OpenAI-compatible model endpoint (vLLM / SGLang / TGI on ROCm). Because ROCm serving is
+# OpenAI-compatible, the EXISTING model + retrieval adapters serve AMD by pointing at an endpoint —
+# there is no AMD-specific adapter. Requires the AMD GPU Operator (device plugin advertising
+# `amd.com/gpu`). Install with:  helm install rr <chart> -f profiles/amd-kubernetes.yaml
+model:
+  endpoint: "http://vllm.ml-services:8000/v1"   # your ROCm vLLM/SGLang OpenAI-compatible endpoint
+  server:
+    enabled: false                              # external endpoint; do not bundle a server here
+
+retriever:
+  backend: pgvector                             # pgvector stays canonical — NOT a vendor retrieval store
+
+amd:
+  gpuResourceName: amd.com/gpu                  # AMD GPU Operator device plugin
+  nodeSelector: {}                              # label your Instinct nodes, e.g. { amd.com/gpu.present: "true" }
+  tolerations: []                               # tolerate the Instinct node taint if any

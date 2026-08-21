@@ -1,0 +1,25 @@
+# ── nemo-retriever overlay ──────────────────────────────────────────────────────────────────────
+# Optional overlay: route embedding + reranking through NeMo Retriever NIMs (OpenAI-compatible) while
+# ReDevOps RAG keeps owning stable chunk identity, reference-first context, retrieval provenance,
+# ranking evidence, snapshot identity and verification. NeMo Retriever is a *capability behind* the RAG
+# contract (redevops_rag NemoRetrieverEmbedder / NemoRetrieverReranker), NOT a replacement retrieval
+# store — pgvector stays canonical. Compose on top of a model profile:
+#   helm install rr <chart> -f profiles/nvidia-nim.yaml -f profiles/nemo-retriever.yaml
+retriever:
+  backend: pgvector                             # canonical index stays pgvector
+  nemo:
+    enabled: true
+    # digest-pinned NeMo Retriever NIMs from NGC; ask NVIDIA for the pinned digests you're entitled to.
+    embedding:
+      endpoint: ""                              # in-cluster or hosted NeMo embedding NIM /v1/embeddings
+      model: "nvidia/llama-3.2-nv-embedqa-1b-v2"
+      image: nvcr.io/nim/nvidia/llama-3.2-nv-embedqa-1b-v2@sha256:REPLACE_WITH_PINNED_DIGEST
+    reranking:
+      endpoint: ""                              # NeMo reranking NIM /v1/ranking
+      model: "nvidia/llama-3.2-nv-rerankqa-1b-v2"
+      image: nvcr.io/nim/nvidia/llama-3.2-nv-rerankqa-1b-v2@sha256:REPLACE_WITH_PINNED_DIGEST
+    apiKeySecret: ngc-api-key                   # referenced by name; value never inlined
+
+nvidia:
+  gpuResourceName: nvidia.com/gpu
+  imagePullSecret: ngc-secret
