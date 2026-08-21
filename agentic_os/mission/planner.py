@@ -1,8 +1,21 @@
 """Mission Planner — the LOGICAL layer (SQL -> logical plan).
 
 Goal + world/belief state + discovered capabilities -> an ExecutionIntent (WHAT outcomes are
-needed, in what dependency shape), NOT nodes and NOT apps. This is the one place the LLM runs;
-everything below it (compile, schedule, execute) is deterministic.
+needed, in what dependency shape), NOT nodes and NOT apps.
+
+**The invariant, restated.** This used to read "the one place the LLM runs". That was true
+while Mission was the top of the stack and it stops being true once a Discovery Runtime sits
+above it: models interpret and discover upstream, and Mission is handed meaning that is already
+closed. Counting model calls was always a proxy for the property that actually matters, which is
+
+    no LLM may change mission semantics after a VerifiedIntent is sealed.
+
+Below a sealed intent, everything is deterministic — compile, schedule, execute. Mission may
+one day use a model for a genuinely hard *planning* problem, and if it does, that model's output
+is an execution proposal constrained by the verified intent and the capability manifest. It is
+never a re-reading of what the user wanted. The difference is the whole boundary: Mission may
+answer EXECUTABLE, UNSUPPORTED_CAPABILITY, NEEDS_APPROVAL, POLICY_DENIED or BUDGET_EXCEEDED, and
+may never answer "I could not do what you meant, so I interpreted it as something else".
 
 Production wires a `ThinkModel` (RedHatAI/Qwen3-Coder-Next-NVFP4, thinking mode, self-hosted).
 The default `TemplatePlanner` matches the goal to a Mission Template and needs no model, so the
@@ -40,6 +53,10 @@ class TemplatePlanner:
         if template:
             intent = templates.get(template, mission_id)
             if intent:
+                # Name the choice on the way out. A caller that recorded only
+                # its own argument recorded `None` here, leaving the goal
+                # string as the sole record of which template ran.
+                intent.template = template
                 return intent
         # generic fallback: one outcome named after the goal
         return ExecutionIntent(

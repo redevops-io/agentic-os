@@ -149,3 +149,61 @@ def test_removing_the_disagreement_gate_regresses_this():
     rt, m = _two_reader_mission(cosmetic=False)
     assert m.state == MissionState.WAITING_HUMAN
     assert m.state != MissionState.SUCCEEDED          # the side effect did NOT happen on a disputed amount
+
+
+# ── the three gaps the branch left ──────────────────────────────────────────
+
+def test_decision_evidence_is_importable_from_the_package():
+    """Tests reached into `.types` for it. A contract type consumers cannot
+    import from the package boundary is a private type with a public
+    docstring — and a prior commit exists to fix exactly this omission for
+    PlanAxes/GovernancePlan."""
+    from agentic_os.mission import DecisionEvidence as Exported
+    from agentic_os.mission.types import DecisionEvidence as Internal
+
+    assert Exported is Internal
+    assert "DecisionEvidence" in __import__(
+        "agentic_os.mission", fromlist=["__all__"]).__all__
+
+
+def test_the_controller_is_shown_each_reader_not_a_summary():
+    """The gate exists so a person decides which reading is right. Handing
+    them `sources=['regex','model']` reports that a disagreement happened and
+    withholds the only thing that settles it."""
+    rt, m = _two_reader_mission(cosmetic=False)
+    task = rt.repo.pending_human(m.id)
+    blob = "\n".join(task["evidence"])
+
+    assert "read by regex" in blob and "read by model" in blob
+    # both readings, including the one that lost
+    assert "100" in blob and "200" in blob
+    # and where each came from, so the controller can go and look
+    assert "@rule:total" in blob and "@span:12-18" in blob
+
+
+def test_a_belief_with_no_per_reader_evidence_says_so(monkeypatch):
+    """Older observations carry none. Showing a shorter list would look like
+    agreement."""
+    from agentic_os.mission.runtime import MissionRuntime
+    from agentic_os.mission.types import Belief
+
+    lines = MissionRuntime._evidence_lines(
+        "amount", Belief(value=1, confidence=0.4, sources=["a", "b"],
+                         conflict=True, evidence=[]))
+    assert any("no per-reader evidence recorded" in one for one in lines)
+
+
+def test_the_humans_answer_is_recorded_as_human():
+    """Not `prior`. An authoritative resolution filed beside the readings it
+    overruled cannot be told from a guess when the belief is re-fused on
+    replay."""
+    rt, m = _two_reader_mission(cosmetic=False)
+    task = rt.repo.pending_human(m.id)
+    rt.approve(m.id, task["node_id"], "approve", edit={"value": 150})
+
+    written = [e for e in rt.store.for_mission(m.id)
+               if e.type == "ObservationWritten"
+               and e.payload.get("source") == "human"]
+    assert written, "the resolution was not written as an observation"
+    assert written[-1].payload["source_type"] == "human"
+    assert written[-1].payload["source_ref"].startswith("human-task:")
