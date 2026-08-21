@@ -42,6 +42,51 @@ _TERMINAL = {NodeState.DONE, NodeState.SKIPPED, NodeState.COMPENSATED}
 _BUSINESS_VALUE = {"onboarding": 100.0, "invoice_recovery": 250.0}
 
 
+def _evidence_refs(evidence: Any) -> list[str]:
+    """Extract stable evidence-ref strings from a VerifiedIntent's evidence (or a plain list). Each
+    item may be a DecisionEvidence (``field``/``source_ref``), an EvidenceRef (``pin()``), or a dict —
+    duck-typed so Mission stays decoupled from runtime_contracts. Empty/opaque items are skipped."""
+    refs: list[str] = []
+    for e in evidence or ():
+        pin = getattr(e, "pin", None)             # EvidenceRef → its content-addressed pin
+        if callable(pin):
+            refs.append(pin()); continue
+        if isinstance(e, dict):
+            r = e.get("source_ref") or e.get("ref") or e.get("content_hash") or ""
+            fld = e.get("field") or ""
+        else:
+            r = getattr(e, "source_ref", "") or getattr(e, "content_hash", "") or ""
+            fld = getattr(e, "field", "") or ""
+        if r:
+            refs.append(f"{fld}:{r}" if fld else str(r))
+    return refs
+
+
+def _intent_identity(verified_intent: Any) -> dict[str, Any]:
+    """Duck-type a sealed VerifiedIntent into the identity a mission records: its ``content_hash`` and
+    the evidence refs it consumed. Accepts a runtime_contracts.VerifiedIntent, a dict, or None; returns
+    an empty dict when there is nothing to carry (so a goal-only mission is unchanged)."""
+    if verified_intent is None:
+        return {}
+    if isinstance(verified_intent, dict):
+        ch = verified_intent.get("content_hash", "") or ""
+        evidence = verified_intent.get("evidence") or verified_intent.get("evidence_refs") or ()
+        produced_by = verified_intent.get("produced_by", "") or ""
+    else:
+        ch = getattr(verified_intent, "content_hash", "") or ""
+        evidence = getattr(verified_intent, "evidence", ()) or ()
+        produced_by = getattr(verified_intent, "produced_by", "") or ""
+    out: dict[str, Any] = {}
+    if ch:
+        out["intent_content_hash"] = ch
+    refs = _evidence_refs(evidence)
+    if refs:
+        out["evidence_refs"] = refs
+    if produced_by:
+        out["intent_produced_by"] = produced_by
+    return out
+
+
 class MissionRuntime:
     def __init__(
         self,
@@ -95,12 +140,20 @@ class MissionRuntime:
     # ── create + plan + simulate ──────────────────────────────────────────────
     def create_mission(self, goal: str, *, constraints: list[str] | None = None,
                         policy_refs: list[str] | None = None, budget: Budget | None = None,
-                        template: str | None = None) -> Mission:
+                        template: str | None = None, verified_intent: Any = None) -> Mission:
+        # v0.2.x Slice 1 — carry the Discovery seal across the boundary. ``verified_intent`` is an
+        # optional sealed VerifiedIntent (duck-typed: a runtime_contracts.VerifiedIntent, or a dict, or
+        # anything exposing ``content_hash``/``evidence``); its identity is recorded on the mission and
+        # in MissionCreated so the exact evidence a decision used is resolvable at replay/EXPLAIN time.
+        identity = _intent_identity(verified_intent)
         m = Mission(goal=goal, constraints=constraints or [], policy_refs=policy_refs or [],
-                    budget=budget or Budget(), template=template, world_state_id=new_id("world"))
+                    budget=budget or Budget(), template=template, world_state_id=new_id("world"),
+                    intent_content_hash=identity.get("intent_content_hash", ""),
+                    evidence_refs=identity.get("evidence_refs", []))
         self._missions[m.id] = m
         self.store.append("MissionCreated", m.id,
-                          {"goal": goal, "template": template, "constraints": m.constraints})
+                          {"goal": goal, "template": template, "constraints": m.constraints,
+                           **identity})
         self.lifecycle.dispatch(MissionStarted(mission_id=m.id, goal=goal, template=template))
         try:
             self._plan_and_gate(m)
@@ -633,7 +686,11 @@ class MissionRuntime:
         created = next(e for e in self.store.for_mission(mission_id) if e.type == "MissionCreated")
         m = Mission(goal=goal or "", template=created.payload.get("template"),
                     constraints=created.payload.get("constraints", []),
-                    policy_refs=["*"])   # grants re-resolved via permissions plane in prod
+                    policy_refs=["*"],   # grants re-resolved via permissions plane in prod
+                    # v0.2.x Slice 1: replay carries the original evidence identity back, so the
+                    # rehydrated mission resolves the SAME sealed intent + evidence it was created from.
+                    intent_content_hash=created.payload.get("intent_content_hash", ""),
+                    evidence_refs=list(created.payload.get("evidence_refs", [])))
         m.id = mission_id
         m.state = self.repo.state(mission_id) or MissionState.PLANNING
         self._missions[mission_id] = m

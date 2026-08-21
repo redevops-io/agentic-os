@@ -24,18 +24,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from hashlib import sha256
 from typing import Callable
 
 from agentic_os.mission.events import (
     EventLedger, EventType, RuntimeEvent, ResultStatus, capability_event,
 )
+# Reference-first context types now live in their canonical home (context_view) as the runtime-wide
+# EvidenceSnapshot/ContextEpoch primitive; re-exported here so existing importers keep working.
+from agentic_os.mission.context_view import ArtifactHandle, ContextView, content_hash as _hash
 
 CONTRACT_VERSION = "evaluation/v10"
-
-
-def _hash(*parts: str) -> str:
-    return sha256("|".join(parts).encode()).hexdigest()[:16]
 
 
 # ════════════════════════════ versioned inputs ════════════════════════════
@@ -75,33 +73,8 @@ class HarnessProfile(str, Enum):
     VERIFICATION_HEAVY = "verification_heavy"; PARALLEL = "parallel"; PRODUCTION = "production"
 
 
-# ════════════════════════════ reference-first context ════════════════════════════
-@dataclass(frozen=True)
-class ArtifactHandle:
-    """A governed reference — carries enough to plan without exposing the object (v10)."""
-    ref: str
-    kind: str
-    content_hash: str
-    authority: str = ""
-    visibility: str = "private"
-    approved: bool = False                  # only approved handles may be materialized
-
-
-@dataclass(frozen=True)
-class ContextView:
-    """A bounded, content-addressed working set materialized from approved handles (v10). Reproducible:
-    a function of (handles, plan, pins) — so any run's inputs are themselves a governed artifact."""
-    id: str
-    content_hash: str
-    derived_from: tuple[str, ...]           # the handle refs materialized
-    pins: tuple[str, ...]                   # dataset/protocol/program version pins
-    budget: int = 0
-
-    @staticmethod
-    def materialize(handles: list[ArtifactHandle], pins: list[str], budget: int = 0) -> "ContextView":
-        approved = [h for h in handles if h.approved]           # reference-first: only approved refs
-        ch = _hash(*[h.content_hash for h in approved], *pins)
-        return ContextView(f"cv-{ch}", ch, tuple(h.ref for h in approved), tuple(sorted(pins)), budget)
+# reference-first context (ArtifactHandle / ContextView) is imported from context_view above — the
+# canonical EvidenceSnapshot/ContextEpoch primitive, re-exported here for back-compat.
 
 
 # ════════════════════════════ the benchmark program + run ════════════════════════════
