@@ -35,6 +35,9 @@ class EventType(str, Enum):
     TOOL_PROPOSAL = "tool_proposal"; TOOL_RESULT = "tool_result"; VERIFICATION = "verification"
     MERGE = "merge"; PROMOTION = "promotion"; POLICY_DECISION = "policy_decision"
     HUMAN_REVIEW = "human_review"
+    # v0.2.x Slice 4 — a world/evidence delta on the governance timeline, so Governance can correlate an
+    # evidence-change *series* against an action *series* (evidence-aware trajectory rules).
+    EVIDENCE_CHANGE = "evidence_change"
 
 
 class ResultStatus(str, Enum):
@@ -133,6 +136,15 @@ def tool_result_event(actor, timestamp, capability_id, result_status=ResultStatu
 
 def policy_decision_event(actor, timestamp, policy_context, result_status, **kw) -> RuntimeEvent:
     return RuntimeEvent(EventType.POLICY_DECISION, actor, timestamp, policy_context=policy_context, result_status=result_status, **kw)
+
+
+def evidence_change_event(actor, timestamp, ref, change_type="updated", **kw) -> RuntimeEvent:
+    """A world/evidence delta on the timeline (v0.2.x Slice 4). ``ref`` is the logical artifact id and
+    ``change_type`` is created|updated|deleted; both land in the payload and ``evidence_refs`` so a
+    trajectory rule can match on them and correlate the evidence series to a following action series."""
+    payload = {"ref": ref, "change_type": change_type, **kw.pop("payload", {})}
+    return RuntimeEvent(EventType.EVIDENCE_CHANGE, actor, timestamp, payload=payload,
+                        evidence_refs=[ref], result_status=ResultStatus.OBSERVED, **kw)
 
 
 class EventLedger:
