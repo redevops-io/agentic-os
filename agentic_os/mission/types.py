@@ -384,6 +384,12 @@ class Mission:
     active_plan_id: str | None = None
     outcome: dict[str, Any] | None = None
     template: str | None = None
+    # Evidence identity carried across the Discovery→Mission boundary (v0.2.x Slice 1): the sealed
+    # VerifiedIntent this mission was created from, and the exact evidence refs it consumed — so the
+    # seal is no longer dropped at the first hop and replay/EXPLAIN can resolve what was actually used.
+    intent_content_hash: str = ""
+    evidence_refs: list[str] = field(default_factory=list)
+    context_epoch_id: str = ""              # the ContextEpoch (ContextView) this mission's plan is pinned to
     id: str = field(default_factory=lambda: new_id("mission"))
     created_at: float = field(default_factory=now)
     updated_at: float = field(default_factory=now)

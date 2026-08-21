@@ -17,6 +17,15 @@ operators exposing capabilities/invoke, mission planes, and the compiler). The c
 orchestrates the fleet; the Mission Runtime executes governed missions on it (Go port in
 [`go/mission/`](../go/mission/)).
 
+**Evidence-native mission spine (v0.2.x).** A mission binds to a **ContextEpoch** — a content-addressed
+`ContextView` ([`mission/context_view.py`](../agentic_os/mission/context_view.py)) that pins the exact
+evidence a decision used. A mission carries `intent_content_hash` / `evidence_refs` / `context_epoch_id`,
+and `create_mission(verified_intent=…)` carries the sealed intent across the Discovery→Mission boundary
+(previously dropped). `rehydrate()` is now **exact replay** — it recompiles pinned to the original
+evidence and verifies the sealed plan fingerprint + epoch, failing closed (`ReplayError`) on drift;
+`re_evaluate()` is the explicit re-planning against *current* evidence. A typed `EVIDENCE_CHANGE` event
+lets Governance correlate evidence deltas against action trajectories.
+
 ## Request flow
 
 1. An event (new signup, security alert, scheduled tick) starts a **workflow** (`workflows.py`)
