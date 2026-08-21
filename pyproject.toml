@@ -1,6 +1,6 @@
 [project]
 name = "agentic-os"
-version = "0.2.3"
+version = "0.2.4"
 description = "The control plane for the redevops.io Agentic Business OS — run your business as a cost-aware fleet of agents."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -10,7 +10,7 @@ dependencies = [
     # tag: a branch can be rebased under a consumer, and a contract that moves
     # silently is not a contract. Importing it is why this repository carries
     # the Commons Clause — see LICENSE.md.
-    "runtime-contracts @ git+https://github.com/redevops-io/runtime-contracts.git@v0.2.2",
+    "runtime-contracts @ git+https://github.com/redevops-io/runtime-contracts.git@v0.3.0",
     "pyyaml>=6.0",
     "fastapi>=0.110",
     "uvicorn>=0.29",
