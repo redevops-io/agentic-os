@@ -375,6 +375,7 @@ class Mission:
     # seal is no longer dropped at the first hop and replay/EXPLAIN can resolve what was actually used.
     intent_content_hash: str = ""
     evidence_refs: list[str] = field(default_factory=list)
+    context_epoch_id: str = ""              # the ContextEpoch (ContextView) this mission's plan is pinned to
     id: str = field(default_factory=lambda: new_id("mission"))
     created_at: float = field(default_factory=now)
     updated_at: float = field(default_factory=now)
