@@ -1,6 +1,8 @@
 # The redevops.io Agentic Business OS — module catalog.
 # agentic-os reads this to deploy modules and give each one its fleet of agents.
-# Each module is a separate open-source repo under github.com/redevops-io.
+# Each module is a separate repo under github.com/redevops-io; licensing varies
+# per repo. This control plane is AGPL-3.0-or-later WITH Commons Clause, which
+# is source-available rather than open source — do not infer either from here.
 
 modules:
   - name: edge-sentinel

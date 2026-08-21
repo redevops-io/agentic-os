@@ -1,6 +1,8 @@
 """Thinking-model adapter for the Mission Planner.
 
-The planner is the one place the LLM runs. Production points it at the local, self-hosted
+The planner is where a model runs *inside Mission* — and once a Discovery Runtime
+exists, meaning arrives already closed, so nothing here may re-read it (see
+`planner.py` for the invariant). Production points it at the local, self-hosted
 `RedHatAI/Qwen3-Coder-Next-NVFP4` (NVFP4, fits gpu0/48GB, thinking mode) via an OpenAI-compatible
 endpoint — the same shape the agent apps already use. Dependency-free (urllib), with an injectable
 transport so tests exercise parsing without a GPU.

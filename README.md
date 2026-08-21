@@ -6,8 +6,8 @@
 
 *Run your whole business as a fleet of agents — on hardware you own, with the cheapest model that's good enough for each task.*
 
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE) ![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB.svg) ![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8.svg) [![NVIDIA Inception](https://img.shields.io/badge/NVIDIA-Inception%20Program%20Member-76B900.svg)](https://www.nvidia.com/en-us/startups/)
-&nbsp;·&nbsp; self-hosted &nbsp;·&nbsp; no lock-in &nbsp;·&nbsp; open-core
+[![License: AGPL-3.0 + Commons Clause](https://img.shields.io/badge/License-AGPL--3.0%20%2B%20Commons%20Clause-blue.svg)](LICENSE.md) ![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB.svg) ![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8.svg) [![NVIDIA Inception](https://img.shields.io/badge/NVIDIA-Inception%20Program%20Member-76B900.svg)](https://www.nvidia.com/en-us/startups/)
+&nbsp;·&nbsp; self-hosted &nbsp;·&nbsp; no lock-in &nbsp;·&nbsp; source-available
 
 </div>
 
@@ -139,4 +139,12 @@ falls back up the tiers on failure — keeping >90% of work on local hardware.
 
 ## License
 
-AGPL-3.0-or-later. Self-host freely; redevops.io monetizes setup + optional managed cloud. See [LICENSE](LICENSE).
+**Source-available, not open source:** AGPL-3.0-or-later **WITH** the Commons
+Clause. Self-host freely, including inside a company for its own business. What
+the Clause removes is the right to *sell it* — to charge third parties for the
+software, for hosting it, or for services whose value derives substantially
+from it. That is the part redevops.io reserves.
+
+Releases up to and including `v0.1.0` remain available under AGPL-3.0-or-later
+alone; this is not retroactive. See [LICENSE.md](LICENSE.md) for the reasoning,
+the effective commit, and what it means for anything depending on this package.

@@ -100,6 +100,30 @@ def _intent_identity(verified_intent: Any) -> dict[str, Any]:
     return out
 
 
+class ReplayDivergence(RuntimeError):
+    """A restart rebuilt a different program and claimed the original's id.
+
+    `rehydrate` recomputes the graph rather than storing it, which is right —
+    the graph is deterministic given the code. The code is the part that
+    changes. Nothing compared the recomputed plan against the `signature`
+    `PlanCreated` has recorded since the kernel was written, so a deploy
+    between the run and the restart produced a mission that folded the
+    original's execution events into a program the log never described.
+
+    Raised rather than logged. A caller that genuinely wants the new program
+    should plan a new mission, which is what a new program is.
+    """
+
+
+class UnrecoverableAuthority(RuntimeError):
+    """A log cannot say what a mission was permitted to do.
+
+    Raised rather than defaulted. The default it replaces was a wildcard, and a
+    wildcard is not a conservative guess — it is the most permissive answer
+    available, applied precisely where nobody recorded one.
+    """
+
+
 class MissionRuntime:
     def __init__(
         self,
@@ -145,6 +169,10 @@ class MissionRuntime:
         self.governance = GovernanceLog(self.store)
         self._plans: dict[str, ExecutionPlan] = {}     # plan_id/mission_id -> plan (recompilable)
         self._missions: dict[str, Mission] = {}
+        #: Node ids whose approval predates capability scoping. Surfaced by
+        #: `approval_scope` so replay evidence does not imply an old event
+        #: recorded information it never held.
+        self._legacy_approvals: set[str] = set()
 
     # ── world state ──────────────────────────────────────────────────────────
     def _world(self, mission_id: str) -> WorldState:
@@ -164,9 +192,12 @@ class MissionRuntime:
                     intent_content_hash=identity.get("intent_content_hash", ""),
                     evidence_refs=identity.get("evidence_refs", []))
         self._missions[m.id] = m
+        # `policy_refs` is part of the record, not only of the object. Without
+        # it the log says what happened and cannot say why it was allowed, and
+        # `rehydrate` had no choice but to invent an authority on restart.
         self.store.append("MissionCreated", m.id,
                           {"goal": goal, "template": template, "constraints": m.constraints,
-                           **identity})
+                           "policy_refs": list(m.policy_refs or []), **identity})
         self.lifecycle.dispatch(MissionStarted(mission_id=m.id, goal=goal, template=template))
         try:
             self._plan_and_gate(m)
@@ -176,14 +207,59 @@ class MissionRuntime:
             self.store.append("MissionBlocked", m.id, {"reason": "no_permitted_plan", "detail": str(e)})
         return m
 
+    def create_mission_from_intent(self, intent, *, policy_refs: list[str] | None = None,
+                                   budget: Budget | None = None) -> Mission:
+        """The Discovery-fed entry point: a mission from a sealed `VerifiedIntent`.
+
+        The difference from `create_mission` is not the argument type. It is
+        that nothing below this call can read the user's sentence, because the
+        artifact does not contain it — `VerifiedIntent` carries `utterance_ref`
+        and never the utterance. The invariant stops being a rule anyone has to
+        remember and becomes a property of what was passed in.
+
+        `goal` is still set, because `Mission` requires one and operators log
+        it. It is a label derived from the objective, and it is not consulted:
+        `IntentPlanner` accepts the parameter and ignores it, and a test
+        corrupts it to prove that.
+        """
+        from .from_intent import IntentPlanner, check_executable, mission_record, template_for
+
+        # Refuse before anything is recorded. A mission created and then blocked
+        # leaves a log entry for a request that was never admissible, and the
+        # next reader has to work out which blocked missions were real.
+        check_executable(intent)
+        template = template_for(intent)
+
+        m = Mission(goal=f"objective:{intent.objective}", constraints=[],
+                    policy_refs=policy_refs or [], budget=budget or Budget(),
+                    template=template, world_state_id=new_id("world"))
+        self._missions[m.id] = m
+        self.store.append("MissionCreated", m.id,
+                          {"goal": m.goal, "template": template,
+                           "constraints": m.constraints,
+                           "policy_refs": list(m.policy_refs or []),
+                           **mission_record(intent)})
+        self.lifecycle.dispatch(MissionStarted(mission_id=m.id, goal=m.goal,
+                                               template=template))
+        try:
+            self._plan_and_gate(m, planner=IntentPlanner(),
+                                context={"verified_intent": intent})
+        except CompileError as e:
+            self._set_state(m, MissionState.FAILED)
+            self.store.append("MissionBlocked", m.id,
+                              {"reason": "no_permitted_plan", "detail": str(e)})
+        return m
+
     def _scoped(self, m: Mission) -> PolicyScopedRegistry:
         """Stage-1 policy scoping: the planner/compiler/simulator only ever see the capabilities
         this mission's principal is permitted to use."""
         return PolicyScopedRegistry(self.registry, m.policy_refs)
 
-    def _plan_and_gate(self, m: Mission, revision: int = 1, reason: str = "initial") -> None:
+    def _plan_and_gate(self, m: Mission, revision: int = 1, reason: str = "initial",
+                       planner=None, context: dict | None = None) -> None:
         scoped = self._scoped(m)
-        intent = self.planner.plan(m.id, m.goal, {"template": m.template})
+        planner = planner or self.planner
+        intent = planner.plan(m.id, m.goal, {"template": m.template, **(context or {})})
         # P9a: active plan selection — generate bounded candidates, policy-prune, simulate, score,
         # select. The default (rank-best) plan is kept unless a candidate clearly wins.
         selector = ActivePlanner(scoped, self.policy, self.learning)
@@ -203,6 +279,10 @@ class MissionRuntime:
         self.store.append("PlanCreated", m.id,
                           {"plan_id": plan.id, "revision": revision, "reason": reason,
                            "signature": sig, "projection": plan.projection,
+                           # The template the planner *resolved*, not the one the caller asked for —
+                           # so a restart doesn't re-derive it (TemplatePlanner would keyword-match the
+                           # goal prose again).
+                           "template": getattr(intent, "template", None) or m.template,
                            "plan_fingerprint": fp, "context_epoch_id": epoch.id,
                            "context_epoch_refs": list(epoch.derived_from),
                            "context_epoch_pins": list(epoch.pins)})
@@ -235,7 +315,7 @@ class MissionRuntime:
         while True:
             status = self.repo.node_status(mission_id)
             done = {nid for nid, st in status.items() if st in _TERMINAL}
-            approved = self._approved(mission_id)
+            approved = self._approved(mission_id, plan)
 
             if all(n.id in done for n in graph.nodes):
                 return self._succeed(m, plan, world)
@@ -378,14 +458,41 @@ class MissionRuntime:
                     return key, b
         return None
 
+    @staticmethod
+    def _evidence_lines(key: str, belief) -> list:
+        """What the controller is shown, one line per reader.
+
+        A reader that lost is still evidence: "the regex read `crossing` from
+        span 12-27 and the model read `persistent` from the whole sentence" is
+        decidable, and "two sources disagreed" is not.
+        """
+        lines = [f"key={key}", f"current={belief.value!r}",
+                 f"confidence={belief.confidence}", f"conflict={belief.conflict}"]
+        for de in getattr(belief, "evidence", ()) or ():
+            ref = f" @{de.source_ref}" if getattr(de, "source_ref", "") else ""
+            lines.append(
+                f"read by {de.source_type}{ref}: {de.value!r} "
+                f"(confidence {de.confidence})")
+        if not getattr(belief, "evidence", ()):
+            # Older observations carry no per-reader evidence. Say so rather
+            # than showing a shorter list that looks like agreement.
+            lines.append(f"sources={belief.sources} "
+                         "(no per-reader evidence recorded for this belief)")
+        return lines
+
     def _park_disambiguation(self, m: Mission, node, key: str, belief) -> None:
         node.status = NodeState.WAITING
         why = "conflicting sources" if belief.conflict else f"low confidence ({belief.confidence})"
+        # The per-reader packet, not a summary of it. The gate exists so a
+        # person decides which reading is right; handing them
+        # "sources=['a','b']" tells them a disagreement happened and withholds
+        # the only thing they need to settle it — what each reader actually
+        # read, and from where. `_evidence_lines` keeps the old key/current
+        # lines so existing consumers of `HumanTask.evidence` still parse.
         task = HumanTask(
             mission_id=m.id, node_id=node.id, assignee="data-steward",
             prompt=f"Resolve '{key}' before '{node.capability}' runs — {why}.",
-            evidence=[f"key={key}", f"current={belief.value!r}", f"confidence={belief.confidence}",
-                      f"sources={belief.sources}", f"conflict={belief.conflict}"],
+            evidence=self._evidence_lines(key, belief),
             options=["resolve"],
         )
         self.store.append("NodeParked", m.id,
@@ -430,7 +537,13 @@ class MissionRuntime:
         if pending.get("kind") == "disambiguation" and pending.get("node_id") == node_id:
             key = pending.get("key")
             value = (edit or {}).get("value")
-            self._world(mission_id).observe(key, value, source="human", confidence=100.0)
+            # `source_type="human"` so the authoritative answer is not filed
+            # under "prior" beside the readings it overruled. A resolution that
+            # looks like a guess in the evidence list cannot be told from one
+            # later, which defeats the record the gate exists to produce.
+            self._world(mission_id).observe(
+                key, value, source="human", confidence=100.0,
+                source_type="human", source_ref=f"human-task:{pending.get('id', '')}")
             self.store.append("BeliefResolved", mission_id,
                               {"key": key, "value": value, "node_id": node_id})
             self.store.append("NodeResumed", mission_id, {"node_id": node_id})
@@ -448,7 +561,17 @@ class MissionRuntime:
             self._fail(m, plan, reason=f"verification rejected {node_id}")
             return m
         if decision == "approve":
-            self.store.append("ApprovalGranted", mission_id, {"node_id": node_id, "edit": edit})
+            # The capability, not only the node. `_node_id` is derived from
+            # (mission, revision, outcome) and does not contain the capability,
+            # so an approval recorded as a bare node id also authorises any
+            # OTHER capability later bound to the same outcome at the same
+            # revision — and binding is a Context Runtime decision made per
+            # compile, with `plan_select` choosing among candidates. A provider
+            # swap is exactly when a human's yes should stop applying, because
+            # what they approved is not what would run.
+            self.store.append("ApprovalGranted", mission_id, {
+                "node_id": node_id, "edit": edit,
+                "capability": self._capability_of(mission_id, node_id)})
             self.store.append("NodeResumed", mission_id, {"node_id": node_id})
             return self.run(mission_id)
         self.store.append("ApprovalRejected", mission_id, {"node_id": node_id})
@@ -703,29 +826,92 @@ class MissionRuntime:
                 "recommendations": [to_jsonable(r) for r in self.learners.recommendations()]}
 
     # ── restart / rehydrate ────────────────────────────────────────────────────
-    def rehydrate(self, mission_id: str) -> Mission:
+    def rehydrate(self, mission_id: str, policy_refs: list[str] | None = None) -> Mission:
         """EXACT REPLAY — rebuild a mission from the event log after a restart and reproduce the SEALED
-        decision path: recompile the deterministic plan pinned to the ORIGINAL evidence identity, and
-        verify it reproduces the sealed plan fingerprint + ContextEpoch. Fails closed (``ReplayError``)
-        if it cannot — replay must reproduce the original, never silently substitute a divergent plan.
+        decision path: recompile the deterministic plan pinned to the ORIGINAL evidence identity, verify
+        it reproduces the sealed plan signature/fingerprint + ContextEpoch, and fail closed
+        (``ReplayDivergence`` / ``ReplayError``) rather than silently substitute a divergent plan. This
+        reconstructs/verifies the historical decision; it does NOT execute — ``run()`` resumes from the
+        folded state under the normal gates, and ``re_evaluate`` is the explicit re-plan against current
+        evidence.
 
-        This reconstructs/verifies the historical decision; it does NOT execute. ``run()`` resumes from
-        the folded execution state under the normal Mission gates — consequential actions are never
-        re-fired by replay. To plan against *current* evidence, use the explicit ``re_evaluate``."""
+        **Authority is restored, never invented.** This used to pass
+        `policy_refs=["*"]` with a note that grants would be re-resolved in
+        production, because `MissionCreated` did not record them — so replay
+        did not reconstruct the mission, it reconstructed a strictly more
+        permissive one. Since `compile_intent` fails closed on a missing grant,
+        a mission that had been legitimately refused under a restrictive policy
+        would compile and run on restart, and the event log would show it
+        succeeding with no record of what changed.
+
+        A log written before policy was recorded genuinely does not say what
+        was permitted. Rehydrating it as `["*"]` fabricates an authority nobody
+        granted, so it raises instead, and a caller holding the grants from the
+        permissions plane may pass them explicitly.
+
+        This is deliberately stricter than the approval grandfathering in
+        `_approved`. Being lenient about a recorded fact is not the same as
+        manufacturing an unrecorded one — one keeps a narrow permission alive,
+        the other invents a broad one.
+        """
         goal = self.repo.goal(mission_id)
         created = next(e for e in self.store.for_mission(mission_id) if e.type == "MissionCreated")
-        m = Mission(goal=goal or "", template=created.payload.get("template"),
+        recorded = created.payload.get("policy_refs")
+        if policy_refs is None and recorded is None:
+            raise UnrecoverableAuthority(
+                f"{mission_id}: MissionCreated records no policy_refs, so what "
+                "this mission was permitted to do cannot be reconstructed. "
+                "Pass `policy_refs=` from the permissions plane, or accept that "
+                "this log predates authority recording — but do not let it "
+                "replay as a wildcard.")
+        active = self._active_plan_record(mission_id)
+        # The resolved template, when the log has one. Falling back to
+        # `MissionCreated` keeps pre-existing logs working — and those are
+        # exactly the logs where the template is the caller's request rather
+        # than the planner's answer, so they re-derive it and this method's
+        # signature check is what stands between that and a silent swap.
+        template = (active or {}).get("template") or created.payload.get("template")
+
+        m = Mission(goal=goal or "", template=template,
                     constraints=created.payload.get("constraints", []),
-                    policy_refs=["*"],   # grants re-resolved via permissions plane in prod
-                    # v0.2.x Slice 1: replay carries the original evidence identity back, so the
-                    # rehydrated mission resolves the SAME sealed intent + evidence it was created from.
+                    policy_refs=list(policy_refs if policy_refs is not None else recorded),
+                    # v0.2.x: replay carries the original evidence identity back, so the rehydrated
+                    # mission resolves the SAME sealed intent + evidence it was created from.
                     intent_content_hash=created.payload.get("intent_content_hash", ""),
                     evidence_refs=list(created.payload.get("evidence_refs", [])))
         m.id = mission_id
         m.state = self.repo.state(mission_id) or MissionState.PLANNING
         self._missions[mission_id] = m
-        intent = self.planner.plan(mission_id, m.goal, {"template": m.template})
+
+        # A mission created from a sealed intent replans from that intent, which
+        # the log carries whole. Storing only `intent_hash` would prove the
+        # intent had not changed and be unable to reconstruct it, sending replay
+        # back to the goal string — the one input this path exists to not read.
+        stored = created.payload.get("intent")
+        if stored is not None:
+            from runtime_contracts import intent_from_json
+
+            from .from_intent import IntentPlanner
+
+            planner, context = IntentPlanner(), {
+                "verified_intent": intent_from_json(stored)}
+        else:
+            planner, context = self.planner, {}
+
+        intent = planner.plan(mission_id, m.goal, {"template": m.template, **context})
         plan = compile_intent(m, intent, LocalContextRuntime(self._scoped(m)), revision=1, reason="rehydrate")
+
+        if active is not None:
+            recorded_signature = active.get("signature")
+            rebuilt = self._signature(plan)
+            if recorded_signature is not None and rebuilt != recorded_signature:
+                raise ReplayDivergence(
+                    f"{mission_id}: the log describes {recorded_signature!r} "
+                    f"and this build produces {rebuilt!r}. Replay would fold "
+                    "the original's execution events into a different program "
+                    "under its id. If the new program is the intended one, "
+                    "plan a new mission — that is what a new program is.")
+
         self._plans[mission_id] = plan
         m.active_plan_id = plan.id
 
@@ -791,18 +977,94 @@ class MissionRuntime:
         })
         return m
 
+    def _active_plan_record(self, mission_id: str) -> dict | None:
+        """The `PlanCreated` payload for the plan that was last activated.
+
+        Not simply the last `PlanCreated`: a re-plan can create a candidate
+        that is never activated, and comparing against a plan the mission never
+        ran would refuse a replay that is perfectly faithful.
+        """
+        events = list(self.store.for_mission(mission_id))
+        activated = [e for e in events if e.type == "PlanActivated"]
+        if not activated:
+            return None
+        plan_id = activated[-1].payload.get("plan_id")
+        for event in reversed(events):
+            if event.type == "PlanCreated" and event.payload.get("plan_id") == plan_id:
+                return event.payload
+        return None
+
     # ── helpers ────────────────────────────────────────────────────────────────
-    def _approved(self, mission_id: str) -> set[str]:
-        """Approved node ids, minus any a mid-flight policy change invalidated (P10). A tightened
-        policy forces the human to re-approve under the new grants — the old ApprovalGranted no
-        longer counts."""
-        granted, invalidated = set(), set()
+    def _capability_of(self, mission_id: str, node_id: str) -> str:
+        plan = self._plans.get(mission_id)
+        if plan is None:
+            return ""
+        for node in plan.graph.nodes:
+            if node.id == node_id:
+                return node.capability
+        return ""
+
+    def _approved(self, mission_id: str, plan=None) -> set[str]:
+        """Approved node ids, minus any that no longer apply.
+
+        Three ways an approval stops counting, and only the first was checked:
+
+        a mid-flight policy change invalidated it (P10) — a tightened policy
+        forces re-approval under the new grants;
+
+        the mission was re-planned to a new revision — node ids embed the
+        revision, so consent given for the plan it replaced simply does not
+        match;
+
+        **the capability bound to the outcome changed.** This one was invisible
+        because the approval recorded only a node id, which does not contain
+        the capability. A human who approved `pay.invoice` satisfying `paid`
+        was also approving whatever else got bound to `paid` afterwards.
+
+        Approvals recorded before the capability was stored are grandfathered
+        rather than refused. Failing closed on them would park missions that
+        have already run and succeeded, which changes the outcome of history on
+        replay — a worse fault than the one it would close, and one this
+        project has a name for.
+        """
+        granted, invalidated = {}, set()
         for e in self.store.for_mission(mission_id):
             if e.type == "ApprovalGranted":
-                granted.add(e.payload["node_id"])
+                granted[e.payload["node_id"]] = e.payload.get("capability")
             elif e.type == "ApprovalInvalidated":
                 invalidated.add(e.payload["node_id"])
-        return granted - invalidated
+
+        current = {n.id: n.capability for n in plan.graph.nodes} if plan else {}
+        still_applies = set()
+        for node_id, approved_capability in granted.items():
+            if approved_capability is None:
+                # Recorded before the capability was stored. Kept, and marked:
+                # an unscoped approval is not equivalent to a scoped one, and
+                # replay evidence should not imply the old event contained
+                # information it never held.
+                self._legacy_approvals.add(node_id)
+                still_applies.add(node_id)
+                continue
+            if node_id in current and current[node_id] != approved_capability:
+                continue
+            still_applies.add(node_id)
+        return still_applies - invalidated
+
+    LEGACY_UNSCOPED_APPROVAL = "LEGACY_UNSCOPED_APPROVAL"
+
+    def approval_scope(self, mission_id: str, node_id: str) -> str:
+        """How well an approval is bound — for replay evidence.
+
+        `SCOPED` if it names the capability it approved, `LEGACY_UNSCOPED_APPROVAL`
+        if it predates that, `NONE` if there is no approval. A reader of a
+        replayed mission can then see which consents were bound to an
+        invocation and which were only bound to a place.
+        """
+        for e in self.store.for_mission(mission_id):
+            if e.type == "ApprovalGranted" and e.payload.get("node_id") == node_id:
+                return ("SCOPED" if e.payload.get("capability")
+                        else self.LEGACY_UNSCOPED_APPROVAL)
+        return "NONE"
 
     def _signature(self, plan: ExecutionPlan) -> str:
         return "->".join(n.capability for n in plan.graph.nodes)
