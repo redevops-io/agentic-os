@@ -61,3 +61,25 @@ class ContextView:
         approved = [h for h in handles if h.approved]           # reference-first: only approved refs
         ch = content_hash(*[h.content_hash for h in approved], *pins)
         return ContextView(f"cv-{ch}", ch, tuple(h.ref for h in approved), tuple(sorted(pins)), budget)
+
+
+# ──────────────────────────── ContextEpoch binding ────────────────────────────
+# A ContextView bound to a mission/run IS the ContextEpoch (v0.2.x Slice 2) — the point-in-time
+# evidence view a decision was made against. We reuse ContextView rather than adding a second snapshot
+# type, so "the evidence a mission used" and "the pinned inputs of a run" are the same object.
+
+def epoch_from_refs(evidence_refs, pins=()) -> ContextView:
+    """Build the ContextEpoch (a :class:`ContextView`) that pins an exact set of evidence refs. The
+    epoch id is a deterministic function of the refs + pins, so rebuilding it from the same identity
+    reproduces the same id (exact replay), and a mutated evidence set yields a different epoch (re-eval).
+    Each ref is its own content identity (already versioned, e.g. ``field:src#v7``)."""
+    handles = [ArtifactHandle(ref=r, kind="evidence", content_hash=r, approved=True)
+               for r in (evidence_refs or ())]
+    return ContextView.materialize(handles, list(pins))
+
+
+def plan_fingerprint(signature: str, intent_id: str = "") -> str:
+    """A stable content-address of a plan's structural identity (its capability signature + the intent
+    it lowered from). Replay recompiles the plan and checks this matches the sealed value — proving the
+    historical decision path was reproduced, not silently replaced by a divergent plan."""
+    return content_hash(signature, intent_id)

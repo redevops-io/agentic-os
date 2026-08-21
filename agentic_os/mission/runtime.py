@@ -37,9 +37,17 @@ from .types import (
     Mission, MissionState, ExecutionPlan, HumanTask, MissionOutcomeEvent, NodeState,
     VerificationDecision, Budget, new_id, now, to_jsonable,
 )
+from .context_view import epoch_from_refs, plan_fingerprint
 
 _TERMINAL = {NodeState.DONE, NodeState.SKIPPED, NodeState.COMPENSATED}
 _BUSINESS_VALUE = {"onboarding": 100.0, "invoice_recovery": 250.0}
+
+
+class ReplayError(Exception):
+    """Exact replay could not reproduce the sealed decision path — the recompiled plan's fingerprint or
+    the rebuilt ContextEpoch does not match what was sealed at execution time (e.g. templates/registry
+    drifted). Fail closed: replay must reproduce the original, or say it cannot. Re-planning against
+    changed inputs is the separate, explicit ``re_evaluate`` operation, never a silent fallback here."""
 
 
 def _evidence_refs(evidence: Any) -> list[str]:
@@ -178,9 +186,21 @@ class MissionRuntime:
         plan.projection = plan.projection or simulate(plan, m, scoped, self.policy)
         self._plans[m.id] = plan
         m.active_plan_id = plan.id
+        # v0.2.x Slice 2 — bind the ContextEpoch (the evidence view this plan was made against) and the
+        # plan fingerprint (its structural identity), and persist both so a restart can EXACT-REPLAY:
+        # reproduce this same plan against this same pinned evidence, or explicitly re-evaluate instead.
+        sig = self._signature(plan)
+        epoch = epoch_from_refs(m.evidence_refs, pins=[m.intent_content_hash] if m.intent_content_hash else [])
+        m.context_epoch_id = epoch.id
+        # Fingerprint the deterministic structural identity (the capability signature); intent_id is
+        # provenance and may be freshly minted per compile, so it is deliberately excluded.
+        fp = plan_fingerprint(sig)
         self.store.append("PlanCreated", m.id,
                           {"plan_id": plan.id, "revision": revision, "reason": reason,
-                           "signature": self._signature(plan), "projection": plan.projection})
+                           "signature": sig, "projection": plan.projection,
+                           "plan_fingerprint": fp, "context_epoch_id": epoch.id,
+                           "context_epoch_refs": list(epoch.derived_from),
+                           "context_epoch_pins": list(epoch.pins)})
         if len(candidates) > 1:
             self.store.append("PlanSelected", m.id,
                               {"plan_id": plan.id, "considered": len(candidates),
@@ -679,9 +699,14 @@ class MissionRuntime:
 
     # ── restart / rehydrate ────────────────────────────────────────────────────
     def rehydrate(self, mission_id: str) -> Mission:
-        """Rebuild a mission from the event log after a restart (fresh runtime, same EventStore):
-        recompile the deterministic plan and reconstruct the Mission shell. `run()` then resumes
-        from the folded execution state. This is the durability proof."""
+        """EXACT REPLAY — rebuild a mission from the event log after a restart and reproduce the SEALED
+        decision path: recompile the deterministic plan pinned to the ORIGINAL evidence identity, and
+        verify it reproduces the sealed plan fingerprint + ContextEpoch. Fails closed (``ReplayError``)
+        if it cannot — replay must reproduce the original, never silently substitute a divergent plan.
+
+        This reconstructs/verifies the historical decision; it does NOT execute. ``run()`` resumes from
+        the folded execution state under the normal Mission gates — consequential actions are never
+        re-fired by replay. To plan against *current* evidence, use the explicit ``re_evaluate``."""
         goal = self.repo.goal(mission_id)
         created = next(e for e in self.store.for_mission(mission_id) if e.type == "MissionCreated")
         m = Mission(goal=goal or "", template=created.payload.get("template"),
@@ -698,6 +723,67 @@ class MissionRuntime:
         plan = compile_intent(m, intent, LocalContextRuntime(self._scoped(m)), revision=1, reason="rehydrate")
         self._plans[mission_id] = plan
         m.active_plan_id = plan.id
+
+        # Verify exact replay reproduced the sealed plan + evidence identity (fail closed on drift).
+        sealed = self._last_plan_meta(mission_id)
+        if sealed:
+            got_fp = plan_fingerprint(self._signature(plan))
+            want_fp = sealed.get("plan_fingerprint", "")
+            if want_fp and got_fp != want_fp:
+                self.store.append("ReplayDivergence", mission_id,
+                                  {"kind": "plan_fingerprint", "expected": want_fp, "got": got_fp})
+                raise ReplayError(
+                    f"replay could not reproduce the sealed plan for {mission_id}: "
+                    f"fingerprint {got_fp} != {want_fp} (templates/registry drifted — use re_evaluate)")
+            got_epoch = epoch_from_refs(
+                m.evidence_refs, pins=[m.intent_content_hash] if m.intent_content_hash else []).id
+            want_epoch = sealed.get("context_epoch_id", "")
+            if want_epoch and got_epoch != want_epoch:
+                self.store.append("ReplayDivergence", mission_id,
+                                  {"kind": "context_epoch", "expected": want_epoch, "got": got_epoch})
+                raise ReplayError(
+                    f"replay could not reproduce the sealed ContextEpoch for {mission_id}: "
+                    f"{got_epoch} != {want_epoch}")
+            m.context_epoch_id = want_epoch or got_epoch
+        return m
+
+    def _last_plan_meta(self, mission_id: str) -> dict | None:
+        """The latest PlanCreated payload for a mission (the sealed plan identity to replay against)."""
+        meta = None
+        for e in self.store.for_mission(mission_id):
+            if e.type == "PlanCreated":
+                meta = e.payload
+        return meta
+
+    def re_evaluate(self, mission_id: str, *, verified_intent: Any = None,
+                    cause: str = "re-evaluation") -> Mission:
+        """EXPLICIT RE-EVALUATION — the deliberate counterpart to exact replay. Re-plan the mission
+        against *current* evidence (a freshly sealed ``verified_intent`` if Discovery re-ran, else the
+        mission's current evidence), producing a NEW revision that may differ from the sealed one. The
+        difference is recorded explainably (``PlanReevaluated``: old/new plan fingerprint + ContextEpoch).
+
+        Unlike ``rehydrate``, this is allowed to produce a different plan — it is not replay. It does not
+        itself execute; the new plan runs through the normal ``run()`` gates."""
+        m = self._missions.get(mission_id) or self.rehydrate(mission_id)
+        before = self._last_plan_meta(mission_id) or {}
+        old_fp, old_epoch = before.get("plan_fingerprint", ""), m.context_epoch_id
+        # adopt the current evidence identity (re-sealed intent = Discovery re-ran against new evidence)
+        if verified_intent is not None:
+            identity = _intent_identity(verified_intent)
+            m.intent_content_hash = identity.get("intent_content_hash", m.intent_content_hash)
+            if "evidence_refs" in identity:
+                m.evidence_refs = identity["evidence_refs"]
+        rev = int(before.get("revision", 1)) + 1
+        self._plan_and_gate(m, revision=rev, reason=f"re-evaluate: {cause}")
+        after = self._last_plan_meta(mission_id) or {}
+        new_fp, new_epoch = after.get("plan_fingerprint", ""), m.context_epoch_id
+        self.store.append("PlanReevaluated", mission_id, {
+            "cause": cause, "revision": rev,
+            "old_plan_fingerprint": old_fp, "new_plan_fingerprint": new_fp,
+            "old_context_epoch_id": old_epoch, "new_context_epoch_id": new_epoch,
+            "plan_changed": bool(old_fp) and old_fp != new_fp,
+            "evidence_changed": bool(old_epoch) and old_epoch != new_epoch,
+        })
         return m
 
     # ── helpers ────────────────────────────────────────────────────────────────
