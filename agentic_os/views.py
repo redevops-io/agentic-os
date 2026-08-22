@@ -311,15 +311,36 @@ def overview_page(*, groups: dict, has_agent: set, module_meta: dict, workflows:
   cheapest capable AI model, and pauses anything risky for your one-click approval. Everything below
   is running live on demo data for a fictional tenant, <b>Summit Roofing Co.</b></p>
 
-  <div class="flow">
-    <span class="node">You</span><span class="arr">→</span>
-    <span class="node">Control plane</span><span class="arr">→</span>
-    <span class="node">Fleet</span><span class="arr">→</span>
-    <span class="node">Router (cheapest model)</span><span class="arr">→</span>
-    <span class="node">Module agent</span><span class="arr">→</span>
-    <span class="node">OSS core</span>
-    <span class="arr">·</span><span class="node gate">money / compliance / infra → approval</span>
-  </div>
+  <section>
+    <h2 class="sect-label">The architecture — one execution path from intent to governed outcome</h2>
+    <p class="lede" style="margin-top:var(--sp-3)">Under every module sit three runtimes, an <b>Execution Planner</b> and a capability plane. A goal or event flows down the stack to a governed outcome; <b>governance is a cross-cutting control plane, not a final step</b>.</p>
+    <div class="flow" style="margin-top:var(--sp-4)">
+      <span class="node">Discovery Runtime</span><span class="arr">→</span>
+      <span class="node">Execution Planner</span><span class="arr">→</span>
+      <span class="node">Mission Runtime</span><span class="arr">→</span>
+      <span class="node">Context Runtime</span><span class="arr">→</span>
+      <span class="node">Capability Plane</span><span class="arr">→</span>
+      <span class="node gate">Governed outcome</span>
+    </div>
+    <p class="legend" style="margin-top:var(--sp-3);font-family:var(--font-mono);font-size:12px">
+      observe · correlate · verify · propose &nbsp;&rarr;&nbsp; represent · optimize · constrain · compile &nbsp;&rarr;&nbsp;
+      simulate · gate · execute · compensate · replay &nbsp;&rarr;&nbsp; retrieve · route · reason · verify &nbsp;&rarr;&nbsp;
+      models · RAG · SQL · graphs · APIs · agents · humans &nbsp;&rarr;&nbsp; observe · reconcile · learn</p>
+    <p class="legend">Cross-cutting planes: <b>Identity · Policy · Security · Observability · Evaluation · State · Artifact lineage</b></p>
+  </section>
+
+  <section>
+    <h2 class="sect-label">In practice — how a request flows through the fleet</h2>
+    <div class="flow" style="margin-top:var(--sp-4)">
+      <span class="node">You</span><span class="arr">→</span>
+      <span class="node">Control plane</span><span class="arr">→</span>
+      <span class="node">Fleet</span><span class="arr">→</span>
+      <span class="node">Router (cheapest model)</span><span class="arr">→</span>
+      <span class="node">Module agent</span><span class="arr">→</span>
+      <span class="node">OSS core</span>
+      <span class="arr">·</span><span class="node gate">money / compliance / infra → approval</span>
+    </div>
+  </section>
 
   <section>
     <h2 class="sect-label">The mission layer — the unit of delivery is a mission</h2>
