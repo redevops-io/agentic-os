@@ -138,9 +138,16 @@ class MissionRuntime:
         policy_plane=None,
         learners=None,
         disambiguation_confidence: float = 0.75,
+        max_concurrency: int = 1,
     ):
         self.registry = registry
         self.executor = executor
+        # Execution concurrency: how many ready-wave nodes run at once. Default 1 = the historical serial
+        # drain (byte-identical behaviour); >1 dispatches independent ready nodes concurrently (bounded,
+        # per-operator limits honoured). Env AGENTIC_OS_MISSION_CONCURRENCY overrides. The plan fingerprint,
+        # node identity, idempotency and event-sourced replay are unaffected — only wall-clock changes.
+        import os as _os
+        self.max_concurrency = max(1, int(_os.getenv("AGENTIC_OS_MISSION_CONCURRENCY") or max_concurrency))
         # below this fused-belief confidence (or on conflict) an input is disambiguated, not trusted
         self.disambiguation_confidence = disambiguation_confidence
         self.store = store or EventStore()
@@ -339,14 +346,11 @@ class MissionRuntime:
                 decision = self.context.resolve(ContextIntent(kind=CHECK_POLICY, node=n, world=world, mission=m, graph=graph)).value
                 (gated if decision.required else runnable).append((n, decision))
 
-            for node, _ in runnable:
-                issue = self._belief_issue(node, world)
-                if issue is not None:                     # an input belief is conflicting/uncertain
-                    self._park_disambiguation(m, node, *issue)
-                    return m
-                res = self._execute(m, plan, world, node)
-                if res is False:                          # failure -> mission already failed/compensated
-                    return m
+            # Execute the ready wave: independent nodes run concurrently (bounded) when max_concurrency>1,
+            # serially when ==1; results commit in deterministic node order either way.
+            outcome = self._execute_wave(m, plan, world, [n for n, _ in runnable])
+            if outcome is False or outcome == "parked":   # a node failed/compensated, or an input needs disambiguation
+                return m
 
             if gated:
                 node, decision = gated[0]
@@ -357,18 +361,32 @@ class MissionRuntime:
                 return m
 
     def _execute(self, m: Mission, plan: ExecutionPlan, world: WorldState, node) -> bool:
+        """Serial node execution (the ``max_concurrency == 1`` route) — resolve inputs, invoke the
+        operator, apply the result. Behaviour is byte-identical to the historical path."""
         inputs = self._resolve_inputs(m, world, node)
         self.store.append("NodeDispatched", m.id, {"node_id": node.id, "capability": node.capability})
         try:
             result = self.executor.run(node, inputs)
         except Exception as e:  # noqa: BLE001
-            self.store.append("NodeFailed", m.id,
-                              {"node_id": node.id, "capability": node.capability, "error": str(e)})
-            self.learning.record_capability(node.capability, False)
-            self._observe_routing(node, False)
-            self._saga(m, plan, world)
-            self._fail(m, plan, reason=f"{node.capability}: {e}")
-            return False
+            return self._fail_node(m, plan, world, node, e)
+        return self._finish(m, plan, world, node, result)
+
+    def _fail_node(self, m: Mission, plan: ExecutionPlan, world: WorldState, node, e) -> bool:
+        """The operator raised — record, learn, compensate, fail. Shared by the serial and concurrent
+        paths so failure semantics are identical."""
+        self.store.append("NodeFailed", m.id,
+                          {"node_id": node.id, "capability": node.capability, "error": str(e)})
+        self.learning.record_capability(node.capability, False)
+        self._observe_routing(node, False)
+        self._saga(m, plan, world)
+        self._fail(m, plan, reason=f"{node.capability}: {e}")
+        return False
+
+    def _finish(self, m: Mission, plan: ExecutionPlan, world: WorldState, node, result) -> bool:
+        """Apply a successful operator result: verify before it becomes authoritative, commit to world
+        state, emit the success event. This mutates shared world/learning state, so the concurrent path
+        calls it SERIALLY in deterministic node order after the parallel operator invocations have joined
+        — the network wait overlaps, the state transition does not."""
         node.result = result
         # P7B: verify a consequential result BEFORE it becomes authoritative world state.
         if needs_verification(node) and node.id not in self._verify_ok(m.id):
@@ -408,6 +426,77 @@ class MissionRuntime:
         production routing until a policy promotes it."""
         if node.produces:
             self.learners.routing.observe(node.produces, node.capability, ok)
+
+    def _execute_wave(self, m: Mission, plan: ExecutionPlan, world: WorldState, nodes: list):
+        """Run one ready wave. The nodes are independent (all deps already terminal), so their operator
+        invocations may overlap. Returns True (all committed), False (a node failed/parked → mission
+        stopped), or "parked" (a belief needs disambiguation before this wave runs).
+
+        Concurrency is bounded by ``self.max_concurrency`` and per-operator limits (``policy
+        .per_operator_limit``). max_concurrency==1 is the exact historical serial drain. Regardless of
+        concurrency, results are COMMITTED serially in deterministic node order, so world state, events and
+        the plan fingerprint are identical to a serial run — only the network waits overlap.
+        """
+        # Belief gate is a pre-execution check on independent inputs; park the mission if any node's input
+        # is conflicting/uncertain (same as the serial path, evaluated up-front for the whole wave).
+        for node in nodes:
+            issue = self._belief_issue(node, world)
+            if issue is not None:
+                self._park_disambiguation(m, node, *issue)
+                return "parked"
+
+        if self.max_concurrency <= 1 or len(nodes) <= 1:
+            for node in nodes:
+                if self._execute(m, plan, world, node) is False:
+                    return False
+            return True
+
+        # Concurrent path: resolve inputs from the current (stable) world snapshot and emit the dispatch
+        # events in node order, then invoke operators concurrently, then commit results in node order.
+        import concurrent.futures as _cf
+        prepared = []
+        for node in nodes:
+            inputs = self._resolve_inputs(m, world, node)
+            self.store.append("NodeDispatched", m.id, {"node_id": node.id, "capability": node.capability})
+            prepared.append((node, inputs))
+        sems = self._operator_semaphores([n.operator for n, _ in prepared])
+
+        def _call(node, inputs):
+            sem = sems.get(node.operator)
+            if sem is None:
+                return self.executor.run(node, inputs)
+            with sem:                                    # honour per-operator in-flight limits
+                return self.executor.run(node, inputs)
+
+        results: dict[str, tuple[str, object]] = {}
+        workers = min(self.max_concurrency, len(prepared))
+        with _cf.ThreadPoolExecutor(max_workers=workers) as pool:
+            futs = {pool.submit(_call, node, inputs): node.id for node, inputs in prepared}
+            for fut in _cf.as_completed(futs):           # JOIN BARRIER — all invocations complete here
+                nid = futs[fut]
+                try:
+                    results[nid] = ("ok", fut.result())
+                except Exception as e:  # noqa: BLE001
+                    results[nid] = ("err", e)
+
+        for node, _ in prepared:                         # commit serially, deterministic order
+            kind, payload = results[node.id]
+            ok = (self._fail_node(m, plan, world, node, payload) if kind == "err"
+                  else self._finish(m, plan, world, node, payload))
+            if ok is False:                              # first failure/park stops the mission (fail-fast)
+                return False
+        return True
+
+    def _operator_semaphores(self, operators) -> dict:
+        """A bounding Semaphore per operator that declares a per_operator_limit — so a wave never issues
+        more than the provider allows in flight, independent of the global concurrency cap."""
+        import threading
+        sems: dict[str, threading.Semaphore] = {}
+        for op in set(operators):
+            limit = self.policy.per_operator_limit.get(op)
+            if limit:
+                sems[op] = threading.Semaphore(limit)
+        return sems
 
     def _resolve_inputs(self, m: Mission, world: WorldState, node) -> dict:
         resolved: dict[str, Any] = {"_goal": m.goal, "_mission": m.id}
