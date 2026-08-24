@@ -90,6 +90,13 @@ class CapabilitySpec:
     provides: list[str] = field(default_factory=list)  # world-state keys/outcomes it can satisfy
     embedding: list[float] = field(default_factory=list)  # for semantic discovery
     source: str = ""                            # provenance/origin (e.g. "plugin:<name>"); "" = built-in/trusted
+    # ── security surface (v0.3.x, additive) — the metadata the opt-in Executor security seams read
+    # (isolation_for / authority_for) and the SecurityMonitor projects into boundary telemetry. All empty
+    # by default, so a capability that declares nothing is unchanged. Mirrors CapabilityDescriptor's fields.
+    required_authority: list[str] = field(default_factory=list)   # permissions the caller's authority must cover
+    isolation_class: str = ""                   # "" | "in_process" | "sandbox" | "strict" — executor confinement
+    network: list[str] = field(default_factory=list)              # declared egress endpoints (finer than permissions)
+    data_classifications: list[str] = field(default_factory=list)  # sensitivity of the data it touches (e.g. "pii")
 
     def key(self) -> str:
         return self.name
