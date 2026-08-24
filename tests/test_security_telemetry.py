@@ -68,3 +68,13 @@ def test_failure_at_the_boundary_also_emits():
         ex.run(Node(capability="storage.upload", operator="op"), {})
     assert len(mon.trajectory.events) == 1                        # a refused side effect is still telemetry
     assert mon.trajectory.events[0].result == "error"
+
+
+def test_enforce_drives_containment_end_to_end():
+    from runtime_contracts import ContainmentState
+    ex, mon = _executor()
+    ex.run(Node(capability="crm.read", operator="op"), {})
+    ex.run(Node(capability="storage.upload", operator="op"), {})
+    disp, reasons, state = mon.enforce(max_external_records=100)
+    assert disp is GovernanceDisposition.DENY and state is ContainmentState.CONTAINED
+    assert mon.containment.history[-1] == ("CONTAINING", "CONTAINED")
