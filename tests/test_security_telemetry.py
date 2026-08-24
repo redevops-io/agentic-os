@@ -78,3 +78,20 @@ def test_enforce_drives_containment_end_to_end():
     disp, reasons, state = mon.enforce(max_external_records=100)
     assert disp is GovernanceDisposition.DENY and state is ContainmentState.CONTAINED
     assert mon.containment.history[-1] == ("CONTAINING", "CONTAINED")
+
+
+def test_delegated_authority_refused_at_boundary():
+    from runtime_contracts import AuthorityContext, PrincipalRef
+    # leased authority covers read:crm but NOT write:storage
+    auth = AuthorityContext(authority_id="m1", principal=PrincipalRef(id="svc:ad", kind="service"),
+                            purpose="run", scope=("read:crm",))
+    req = {"crm.read": ("read:crm",), "storage.upload": ("write:storage",)}
+    ex, mon = _executor()
+    ex.authority = auth
+    ex.authority_for = lambda node: req.get(node.capability, ())
+    # covered → runs
+    ex.run(Node(capability="crm.read", operator="op"), {})
+    # uncovered → refused before the side effect, and the refusal is telemetry
+    with pytest.raises(OperatorError):
+        ex.run(Node(capability="storage.upload", operator="op"), {})
+    assert mon.trajectory.events[-1].result == "error"
