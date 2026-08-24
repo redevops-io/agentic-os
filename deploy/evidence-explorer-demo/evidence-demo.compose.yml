@@ -1,0 +1,14 @@
+# demo.redevops.io/evidence — Historical Evidence Plane / Evidence Explorer (standalone).
+#   evidence-api :8101 (FastAPI) persists a REAL benchmark run through the open EvidenceStore seam
+#   (runtime_contracts.store.FileEvidenceStore), then serves a DuckDB SQL query UI over the saved rows.
+#   cloudflared: demo.redevops.io /^(evidence|api/evidence)/ -> 192.168.40.105:8101
+services:
+  evidence-api:
+    build: .
+    image: ${EVIDENCE_API_IMAGE:-evidence-demo:latest}
+    container_name: evidence-api
+    restart: unless-stopped
+    ports:
+      - "${EVIDENCE_EDGE_PORT:-8101}:8101"
+    security_opt:
+      - apparmor=docker-contextos
