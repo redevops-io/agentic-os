@@ -60,13 +60,37 @@ spec:
             - name: RDO_SANDBOX_ENABLED
               value: "true"
             {{- end }}
-            {{- if .Values.security.vault.addr }}
+            {{- if .Values.security.credentialBroker.enabled }}
+            # authority-scoped credential brokerage. backend=local uses the open env/file dev providers;
+            # backend=vault|openbao selects the enterprise production broker. A capability declaring
+            # production_broker_required rejects assurance=development (fail-closed) — the secret never
+            # enters a plan/context/fingerprint/telemetry/lakehouse; only a CredentialGrant reference does.
+            - name: RDO_CREDENTIAL_BROKER
+              value: {{ .Values.security.credentialBroker.backend | quote }}
+            - name: RDO_CREDENTIAL_BROKER_ASSURANCE
+              value: {{ .Values.security.credentialBroker.assurance | quote }}
+            - name: RDO_CREDENTIAL_BROKER_FAIL_CLOSED
+              value: {{ .Values.security.credentialBroker.failClosed | quote }}
+            {{- if .Values.security.credentialBroker.vault.addr }}
             - name: VAULT_ADDR
-              value: {{ .Values.security.vault.addr | quote }}
-            {{- if .Values.security.vault.roleSecret }}
-            - name: VAULT_TOKEN
+              value: {{ .Values.security.credentialBroker.vault.addr | quote }}
+            - name: VAULT_NAMESPACE
+              value: {{ .Values.security.credentialBroker.vault.namespace | quote }}
+            - name: RDO_VAULT_AUTH_METHOD
+              value: {{ .Values.security.credentialBroker.vault.auth.method | quote }}
+            - name: RDO_VAULT_ROLE
+              value: {{ .Values.security.credentialBroker.vault.auth.role | quote }}
+            {{- if .Values.security.credentialBroker.vault.transit.enabled }}
+            - name: RDO_VAULT_TRANSIT_ENABLED
+              value: "true"
+            {{- end }}
+            {{- if eq .Values.security.credentialBroker.vault.auth.method "approle" }}
+            {{- if .Values.security.credentialBroker.vault.auth.approleSecret }}
+            - name: VAULT_APPROLE_SECRET_ID
               valueFrom:
-                secretKeyRef: { name: {{ .Values.security.vault.roleSecret }}, key: token }
+                secretKeyRef: { name: {{ .Values.security.credentialBroker.vault.auth.approleSecret }}, key: secret_id }
+            {{- end }}
+            {{- end }}
             {{- end }}
             {{- end }}
             {{- if .Values.security.siemEndpoint }}
