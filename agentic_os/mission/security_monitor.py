@@ -64,6 +64,27 @@ class SecurityMonitor:
             permissions_exercised=permissions, network=network, data_classifications=classifications,
             side_effects=side_effects, result=("error" if error is not None else "ok")))
 
+    def observe_credential(self, node: Node, event_type: str, *, grant: "Any | None" = None,
+                           reason: str = "") -> None:
+        """Record a canonical credential event (issued/redeemed/revoked/denied) at the boundary — SAFE
+        fields only: grant id + secret-ref fingerprint + authority ref, never the secret. This is the
+        authoritative fact that authority to use a credential was granted/exercised; the agent cannot
+        suppress it. Governance can then correlate sensitive-read authority with egress."""
+        from runtime_contracts import RuntimeSecurityEvent, TelemetryKind  # noqa: PLC0415
+        self._seq += 1
+        refs: tuple[str, ...] = ()
+        authority_ref = ""
+        if grant is not None:
+            authority_ref = getattr(grant, "authority_ref", "") or ""
+            cref = getattr(grant, "credential_ref", None)
+            fp = cref.fingerprint() if cref is not None and hasattr(cref, "fingerprint") else ""
+            refs = tuple(x for x in (f"grant:{getattr(grant, 'grant_id', '')}", fp and f"secret:{fp}") if x)
+        self.trajectory.add(RuntimeSecurityEvent(
+            event_id=f"{self.mission_id or 'm'}:{node.capability}:cred:{self._seq}",
+            kind=TelemetryKind.SECURITY, event_type=event_type, sequence=self._seq,
+            mission_id=self.mission_id, capability=node.capability, authority_chain_ref=authority_ref,
+            evidence_refs=refs, decision=event_type, result=("error" if "DENIED" in event_type else "ok")))
+
     def disposition(self, **thresholds):
         """Correlate the trajectory-so-far into (GovernanceDisposition, reasons)."""
         from runtime_contracts import correlate   # noqa: PLC0415
