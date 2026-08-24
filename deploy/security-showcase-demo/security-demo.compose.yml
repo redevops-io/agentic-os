@@ -1,0 +1,13 @@
+# demo.redevops.io/security — intrinsic-security + telemetry showcase (standalone).
+#   security-api :8099 (FastAPI) runs the REAL SecurityMonitor over a canned scenario.
+#   cloudflared: demo.redevops.io /^(security|api/security)/ -> 192.168.40.105:8099
+services:
+  security-api:
+    build: .
+    image: ${SEC_API_IMAGE:-security-demo:latest}
+    container_name: security-api
+    restart: unless-stopped
+    ports:
+      - "${SEC_EDGE_PORT:-8099}:8099"
+    security_opt:
+      - apparmor=docker-contextos
