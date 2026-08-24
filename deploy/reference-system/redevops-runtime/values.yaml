@@ -53,10 +53,27 @@ security:
     tag: "0.3.0"
   sandbox:
     enabled: true                 # route isolation-declaring capabilities through the SubprocessSandbox (fail-closed)
-  # JIT credential broker — secrets leased at the boundary, never baked into a plan/context/fingerprint.
-  vault:
-    addr: ""                      # e.g. https://vault.vault:8200
-    roleSecret: ""                # name of a Secret with key `token` for the broker's Vault auth
+  # ── authority-scoped credential brokerage (runtime-contracts SecretStore/CredentialBroker seams) ──
+  # The runtime holds SecretRefs; a capability receives a short-lived, authority-scoped CredentialGrant only
+  # at the execution boundary — the secret never enters a plan/context/fingerprint/telemetry/lakehouse. The
+  # OPEN runtime ships env/file dev providers + a development LocalCredentialBroker; the Vault/OpenBao
+  # PRODUCTION broker (dynamic secrets, leases, revocation, Transit) is the enterprise plugin below.
+  credentialBroker:
+    enabled: false
+    backend: local               # local (dev env/file) | vault | openbao — vault/openbao need security.image
+    assurance: development       # development | production. A capability declaring production_broker_required
+                                 # rejects a 'development' broker and (with failClosed) does not run.
+    failClosed: true             # a declared production credential requirement with no production broker blocks execution
+    # backend: vault | openbao — the enterprise broker's connection + workload auth (never a static root token).
+    vault:
+      addr: ""                   # e.g. https://vault.vault:8200
+      namespace: ""              # per-tenant path/namespace prefix, e.g. secret/data/redevops/{tenant_id}
+      auth:
+        method: kubernetes       # kubernetes | approle | aws | azure | gcp (prefer workload-native auth)
+        role: ""                 # Vault/OpenBao role bound to the runtime's workload identity
+        approleSecret: ""        # name of a Secret with the AppRole secret_id (bootstrap material) — only if method=approle
+      transit:
+        enabled: false           # KeyService via Vault/OpenBao Transit — sign/HMAC/encrypt with NON-exportable keys
   # Boundary correlation → GovernanceDisposition → Containment; export dispositions (redacted) to a SIEM.
   siemEndpoint: ""
 
