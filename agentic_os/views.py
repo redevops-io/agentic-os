@@ -432,6 +432,7 @@ def permissions_page(*, subjects, roles, resource, columns, subject_kinds, resou
 <div class="top"><a href="/overview">&larr; Agentic OS</a><span class="dot up"></span></div>
 <h1>&#128273; Permissions &mdash; access control for your apps</h1>
 <p class="sub">Define who may read which data, at row + column granularity, and preview live what each subject sees. Grants persist to a store the plane enforces on every tool call (privileged bypass &rarr; database grant &rarr; table grant &rarr; row scope &rarr; column mask). Editing here updates the <b>preview</b>; a client app enforces the same grants by installing the authorizer over the shared store.</p>
+<p class="sub">This is the <b>data-access</b> plane. The layer beneath it &mdash; per-call security decisions, boundary telemetry, and correlation &amp; containment of a <em>series</em> of calls &mdash; is the v0.3.0 intrinsic-security plane: <a href="/security">Intrinsic Security &amp; Telemetry &rarr;</a></p>
 <div style="display:flex;gap:12px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
   <span id="pstatus" class="badge" style="font-size:11px">checking…</span>
   <input id="apikey" type="password" placeholder="admin X-API-Key (if set)" style="width:230px" oninput="saveKey()">
