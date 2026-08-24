@@ -377,6 +377,7 @@ class Mission:
     goal: str
     constraints: list[str] = field(default_factory=list)
     policy_refs: list[str] = field(default_factory=list)   # permission grants this mission runs under
+    policy: "MissionPolicy | None" = None                  # named, versioned policy — the single authority
     budget: Budget = field(default_factory=Budget)
     deadline: float | None = None
     state: MissionState = MissionState.PLANNING
@@ -497,6 +498,11 @@ class ApprovalDecision:
     risk: RiskFactors = field(default_factory=RiskFactors)
     packet: dict = field(default_factory=dict)            # action · evidence · impact · alternatives
     id: str = field(default_factory=lambda: new_id("apd"))
+    # mission-policy/v1 — the evaluated policy pinned onto the decision (empty when no MissionPolicy)
+    denied: bool = False                                  # a policy DENY rule hard-blocked the node
+    policy_ref: str = ""                                  # "finance-prod@12"
+    policy_digest: str = ""                               # "sha256:…" — replayable policy identity
+    explain: dict = field(default_factory=dict)           # {matched_rule, reason, suggested_action, trace}
 
 
 def to_jsonable(obj: Any) -> Any:

@@ -10,7 +10,7 @@ executor is responsible for:
 """
 from __future__ import annotations
 
-from typing import Callable, Protocol
+from typing import Any, Callable, Protocol
 
 from .types import Node
 
@@ -46,13 +46,76 @@ class InMemoryOperatorClient:
         return result
 
 
+class Sandbox(Protocol):
+    """Opt-in isolation boundary. A capability that declares an isolation class runs its invoke through
+    this instead of in-process. Duck-typed so the (enterprise) sandbox implementation is injected, never
+    imported here."""
+    def invoke(self, operator: str, capability: str, inputs: dict, idempotency_key: str,
+               *, isolation: str) -> dict: ...
+
+
+class SecurityMonitorSpi(Protocol):
+    """Opt-in security-telemetry sink. The executor calls ``observe`` at the capability boundary — outside
+    the operator/model's control — so a compromised agent cannot lie by omission about what it did."""
+    def observe(self, node: Node, result: dict | None, *, isolation: str, error: str | None = None) -> None: ...
+
+
 class Executor:
-    def __init__(self, client: OperatorClient):
+    def __init__(self, client: OperatorClient, *, sandbox: "Sandbox | None" = None,
+                 isolation_for: "Callable[[Node], str] | None" = None,
+                 monitor: "SecurityMonitorSpi | None" = None,
+                 authority: "Any | None" = None,
+                 authority_for: "Callable[[Node], Any] | None" = None):
         self.client = client
+        # Opt-in isolation seam. `isolation_for(node)` reports the isolation class a capability requires
+        # ("" | "in_process" | "sandbox" | "strict"), e.g. from its CapabilityDescriptor. When it requires
+        # confinement, execution routes through `sandbox`. All default None → behaviour is unchanged.
+        self.sandbox = sandbox
+        self.isolation_for = isolation_for
+        self.monitor = monitor
+        # Opt-in delegated-authority seam. `authority` is the mission's leased AuthorityContext (already
+        # narrowed to this mission's scope); `authority_for(node)` reports the permissions a capability
+        # requires (e.g. its CapabilityDescriptor.required_authority). When BOTH are wired, a node whose
+        # required authority is not covered by the leased chain is refused at the boundary — a capability
+        # can never exercise authority the mission was not delegated. Both None → behaviour unchanged.
+        self.authority = authority
+        self.authority_for = authority_for
 
     def run(self, node: Node, inputs: dict) -> dict:
         node.attempts += 1
-        return self.client.invoke(node.operator, node.capability, inputs, node.idempotency_key)
+        isolation = self.isolation_for(node) if self.isolation_for else ""
+        if self.authority is not None and self.authority_for is not None:
+            required = tuple(self.authority_for(node) or ())
+            missing = [p for p in required if not self.authority.permits(p)]
+            if missing:
+                # Fail closed: the capability declares authority the leased chain does not cover. Refuse
+                # before any side effect; the refusal is itself telemetry.
+                err = (f"capability '{node.capability}' requires authority {missing} not covered by the "
+                       f"leased authority chain {self.authority.chain_ref}")
+                if self.monitor is not None:
+                    self.monitor.observe(node, None, isolation=isolation, error=err)
+                raise OperatorError(err)
+        try:
+            if isolation in {"sandbox", "strict"}:
+                if self.sandbox is None:
+                    # Fail closed: a capability that DECLARES isolation must not silently run in-process
+                    # because a caller omitted the sandbox plane. Declaring isolation is the opt-in;
+                    # enforcing it is not.
+                    raise OperatorError(
+                        f"capability '{node.capability}' requires isolation '{isolation}' but no sandbox is "
+                        "wired — refusing to run it unconfined")
+                result = self.sandbox.invoke(node.operator, node.capability, inputs, node.idempotency_key,
+                                             isolation=isolation)
+            else:
+                result = self.client.invoke(node.operator, node.capability, inputs, node.idempotency_key)
+        except Exception as e:
+            # Emit at the boundary even on failure — a refused/failed side effect is itself telemetry.
+            if self.monitor is not None:
+                self.monitor.observe(node, None, isolation=isolation, error=str(e))
+            raise
+        if self.monitor is not None:
+            self.monitor.observe(node, result, isolation=isolation)
+        return result
 
     def compensate(self, node: Node) -> dict | None:
         """Run the node's undo capability (saga) — best effort; never raises past the caller."""

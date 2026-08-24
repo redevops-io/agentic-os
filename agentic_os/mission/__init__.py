@@ -22,6 +22,10 @@ from .types import (
     EXECUTION_PLAN_CONTRACT_VERSION,
 )
 from .runtime import MissionRuntime
+from .policy import (
+    MissionPolicy, PolicyRule, Effect, NodeContext, PolicyOutcome, from_constraints,
+    CONTRACT_VERSION as MISSION_POLICY_CONTRACT_VERSION,
+)
 
 __all__ = [
     "Mission", "MissionState", "ExecutionIntent", "IntentStep", "ExecutionPlan", "PlanAxes",
@@ -29,4 +33,7 @@ __all__ = [
     "NodeState", "NodeCost", "Budget", "HumanTask", "CapabilityManifest", "CapabilitySpec",
     "WorldFact", "Belief", "DecisionEvidence", "MissionOutcomeEvent", "SimResult", "Lesson", "ExecutionGraph",
     "MissionRuntime",
+    # mission-policy/v1 — policy as a first-class, versioned, digest-pinned object
+    "MissionPolicy", "PolicyRule", "Effect", "NodeContext", "PolicyOutcome", "from_constraints",
+    "MISSION_POLICY_CONTRACT_VERSION",
 ]
