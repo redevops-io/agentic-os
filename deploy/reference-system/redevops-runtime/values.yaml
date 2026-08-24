@@ -39,6 +39,36 @@ runtime:
     # verification is on: a mission's terminal state must replay identically.
     verification: true
 
+# ── v0.3.0 intrinsic-security + telemetry plugins (Enterprise Edition) ──
+# The canonical security/telemetry CONTRACTS are open (runtime-contracts@0.3.0, already the runtime's
+# dependency); the ENFORCEMENT planes — sandbox, Vault credential broker, correlation → containment, SIEM
+# export, adversarial corpus — and the OpenTelemetry bridge are the private `runtime-plugins-enterprise`
+# package, injected in-process by the runtime at boot. Enabling them requires an enterprise runtime image
+# that bundles that package (the public ghcr.io/redevops-io/redevops-runtime image cannot import it) —
+# set security.image below. All off by default; the open runtime is unchanged when disabled.
+security:
+  enabled: false
+  image:
+    repository: ""                # e.g. ghcr.io/redevops-io/redevops-runtime-enterprise (bundles the plugins)
+    tag: "0.3.0"
+  sandbox:
+    enabled: true                 # route isolation-declaring capabilities through the SubprocessSandbox (fail-closed)
+  # JIT credential broker — secrets leased at the boundary, never baked into a plan/context/fingerprint.
+  vault:
+    addr: ""                      # e.g. https://vault.vault:8200
+    roleSecret: ""                # name of a Secret with key `token` for the broker's Vault auth
+  # Boundary correlation → GovernanceDisposition → Containment; export dispositions (redacted) to a SIEM.
+  siemEndpoint: ""
+
+# ── Mission-native OpenTelemetry — the interoperability/export layer over the native trace ──
+# The Mission is the root trace; a deployment substrate nests under it. Point at an existing OTLP collector
+# (fronting Tempo/Jaeger); the runtime is the semantic source of truth, OTel is the export.
+telemetry:
+  otel:
+    enabled: false
+    endpoint: ""                  # OTLP collector, e.g. http://otel-collector.monitoring:4317
+    serviceName: redevops-mission
+
 # ── retrieval (ReDevOps RAG). backend = inmemory (demo) | pgvector (managed-DB-friendly) ──
 retriever:
   backend: pgvector

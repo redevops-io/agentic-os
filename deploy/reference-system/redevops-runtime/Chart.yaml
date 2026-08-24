@@ -7,8 +7,8 @@ description: >-
   itself is a governed, verifiable Mission, and execution inside the stack is deterministic,
   replayable and provenance-carrying. Runs on any Kubernetes; ROCm/Instinct-ready.
 type: application
-version: 0.1.0
-appVersion: "v6"
+version: 0.2.0
+appVersion: "0.3.0"
 keywords:
   - redevops
   - context-runtime
