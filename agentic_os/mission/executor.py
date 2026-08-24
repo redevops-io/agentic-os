@@ -10,7 +10,7 @@ executor is responsible for:
 """
 from __future__ import annotations
 
-from typing import Callable, Protocol
+from typing import Any, Callable, Protocol
 
 from .types import Node
 
@@ -63,7 +63,9 @@ class SecurityMonitorSpi(Protocol):
 class Executor:
     def __init__(self, client: OperatorClient, *, sandbox: "Sandbox | None" = None,
                  isolation_for: "Callable[[Node], str] | None" = None,
-                 monitor: "SecurityMonitorSpi | None" = None):
+                 monitor: "SecurityMonitorSpi | None" = None,
+                 authority: "Any | None" = None,
+                 authority_for: "Callable[[Node], Any] | None" = None):
         self.client = client
         # Opt-in isolation seam. `isolation_for(node)` reports the isolation class a capability requires
         # ("" | "in_process" | "sandbox" | "strict"), e.g. from its CapabilityDescriptor. When it requires
@@ -71,10 +73,28 @@ class Executor:
         self.sandbox = sandbox
         self.isolation_for = isolation_for
         self.monitor = monitor
+        # Opt-in delegated-authority seam. `authority` is the mission's leased AuthorityContext (already
+        # narrowed to this mission's scope); `authority_for(node)` reports the permissions a capability
+        # requires (e.g. its CapabilityDescriptor.required_authority). When BOTH are wired, a node whose
+        # required authority is not covered by the leased chain is refused at the boundary — a capability
+        # can never exercise authority the mission was not delegated. Both None → behaviour unchanged.
+        self.authority = authority
+        self.authority_for = authority_for
 
     def run(self, node: Node, inputs: dict) -> dict:
         node.attempts += 1
         isolation = self.isolation_for(node) if self.isolation_for else ""
+        if self.authority is not None and self.authority_for is not None:
+            required = tuple(self.authority_for(node) or ())
+            missing = [p for p in required if not self.authority.permits(p)]
+            if missing:
+                # Fail closed: the capability declares authority the leased chain does not cover. Refuse
+                # before any side effect; the refusal is itself telemetry.
+                err = (f"capability '{node.capability}' requires authority {missing} not covered by the "
+                       f"leased authority chain {self.authority.chain_ref}")
+                if self.monitor is not None:
+                    self.monitor.observe(node, None, isolation=isolation, error=err)
+                raise OperatorError(err)
         try:
             if isolation in {"sandbox", "strict"}:
                 if self.sandbox is None:
