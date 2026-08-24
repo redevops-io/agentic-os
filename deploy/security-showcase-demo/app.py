@@ -130,11 +130,28 @@ button{background:var(--teal);color:#0f0f12;border:0;border-radius:8px;padding:9
 <em>what a running mission is allowed to do</em>, records it at the boundary, and correlates the <strong>series</strong> of
 calls — because a run of individually-permissible calls can compose into an exfiltration. Every number below comes from
 running the <strong>real</strong> runtime security monitor over a canned scenario; nothing is mocked.</p>
-<button onclick="run()">▶ Run the scenario</button> <span id="tid" class="mono"></span></div>
+<button id="go" onclick="run()">▶ Run the scenario</button> <span id="tid" class="mono">not yet run</span></div>
 <div id="out"></div>
 <script>
 async function run(){
-  const r = await fetch('/api/security/scenario'); const d = await r.json();
+  const btn = document.getElementById('go');
+  btn.disabled = true; btn.textContent = 'running…';
+  document.getElementById('tid').textContent = 'running the real monitor…';
+  try{
+    const r = await fetch('/api/security/scenario', {cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const d = await r.json();
+    render(d);
+    document.getElementById('out').scrollIntoView({behavior:'smooth', block:'start'});
+  }catch(e){
+    document.getElementById('tid').textContent = 'error: ' + e.message;
+    document.getElementById('out').innerHTML =
+      '<div class="card"><p class="sub">Could not reach the security monitor: '+e.message+'</p></div>';
+  }finally{
+    btn.disabled = false; btn.textContent = '▶ Run the scenario';
+  }
+}
+function render(d){
   document.getElementById('tid').textContent = 'trace_id ' + d.trace_id;
   const call = c => `<tr><td>${c.capability}</td><td class="mono">${(c.required_authority||[]).join(', ')||'—'}</td>
     <td class="mono">${(c.data_classifications||[]).join(', ')||'—'}</td><td class="mono">${(c.network||[]).join(', ')||'—'}</td>
@@ -154,7 +171,6 @@ async function run(){
     <ul class="reasons">${t.reasons.map(x=>`<li>${x}</li>`).join('')||'<li>no correlation triggered</li>'}</ul>
     <p class="sub">Individually permissible calls — read PII, then egress — correlate into an exfiltration shape. DENY drives containment; a NO_OVERRIDE stop cannot be reopened by the thing that caused it.</p></div>
   <div class="card"><h2>4 · Mission-native trace tree (one causal tree, OTel-exportable)</h2>
-    <div class="tree">${d.spans.map(s=>'  '.repeat((s.parent_span_id?1:0))+'• '+s.name+'   '+s.status+'   '+(s.attributes['redevops.network']?('→ '+s.attributes['redevops.network'].join(',')):'')).join('\\n')}</div></div>`;
+    <div class="tree">${d.spans.map(s=>'  '.repeat((s.parent_span_id?1:0))+'• '+s.name+'   '+s.status+'   '+(((s.attributes||{})['redevops.network'])?('→ '+s.attributes['redevops.network'].join(',')):'')).join('\\n')}</div></div>`;
 }
-run();
 </script></div></body></html>"""
