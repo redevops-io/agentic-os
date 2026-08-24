@@ -43,10 +43,9 @@ class MissionTrace:
         """Project a ``SecurityTrajectory`` into the nested OTel span tree rooted at this Mission. Each
         event's span parents to the span of its causal parent event when present, else to a per-capability
         node span under the Mission root — so the causal event stream becomes a proper trace tree."""
-        from runtime_contracts import span_of                     # noqa: PLC0415
-        from runtime_contracts.protocol.telemetry import causal_order   # noqa: PLC0415 — disambiguate:
-        # models.investigation also exports a causal_order (over transitions); we need the telemetry one.
-        ordered = causal_order(list(getattr(trajectory, "events", ())))
+        from runtime_contracts import causal_order_events, span_of   # noqa: PLC0415
+        # causal_order_events orders the telemetry stream (distinct from models' investigation causal_order).
+        ordered = causal_order_events(list(getattr(trajectory, "events", ())))
         ctx_by_event: dict[str, Any] = {}
         out: list[dict] = []
         for e in ordered:
