@@ -289,7 +289,7 @@ class MissionRuntime:
         m.context_epoch_id = epoch.id
         # Fingerprint the deterministic structural identity (the capability signature); intent_id is
         # provenance and may be freshly minted per compile, so it is deliberately excluded.
-        fp = plan_fingerprint(sig)
+        fp = plan_fingerprint(sig, security=self._security_envelope(m))
         self.store.append("PlanCreated", m.id,
                           {"plan_id": plan.id, "revision": revision, "reason": reason,
                            "signature": sig, "projection": plan.projection,
@@ -1038,7 +1038,7 @@ class MissionRuntime:
         # Verify exact replay reproduced the sealed plan + evidence identity (fail closed on drift).
         sealed = self._last_plan_meta(mission_id)
         if sealed:
-            got_fp = plan_fingerprint(self._signature(plan))
+            got_fp = plan_fingerprint(self._signature(plan), security=self._security_envelope(m))
             want_fp = sealed.get("plan_fingerprint", "")
             if want_fp and got_fp != want_fp:
                 self.store.append("ReplayDivergence", mission_id,
@@ -1188,6 +1188,22 @@ class MissionRuntime:
 
     def _signature(self, plan: ExecutionPlan) -> str:
         return "->".join(n.capability for n in plan.graph.nodes)
+
+    def _security_envelope(self, m: Mission) -> str:
+        """The mission's security posture folded into the plan fingerprint — but only when it opts into the
+        security plane by attaching a ``MissionPolicy``. Returns "" otherwise (fingerprint unchanged, so
+        existing sealed plans replay). When present it binds the pinned policy digest, the effective grants,
+        and the tenant, so a revoked grant / changed policy cannot EXACT-REPLAY a stale sealed plan.
+        (Model identity folds in with Slice-4 model-digest pinning.)"""
+        if getattr(m, "policy", None) is None:
+            return ""
+        parts = [f"policy={m.policy.digest()}"]
+        if m.policy_refs:
+            parts.append("grants=" + ",".join(sorted(set(m.policy_refs))))
+        tenant = getattr(m, "tenant", "") or ""
+        if tenant:
+            parts.append(f"tenant={tenant}")
+        return ";".join(parts)
 
     def _set_state(self, m: Mission, state: MissionState) -> None:
         if m.state == state and state != MissionState.PLANNING:
