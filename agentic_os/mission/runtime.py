@@ -138,9 +138,16 @@ class MissionRuntime:
         policy_plane=None,
         learners=None,
         disambiguation_confidence: float = 0.75,
+        max_concurrency: int = 1,
     ):
         self.registry = registry
         self.executor = executor
+        # Execution concurrency: how many ready-wave nodes run at once. Default 1 = the historical serial
+        # drain (byte-identical behaviour); >1 dispatches independent ready nodes concurrently (bounded,
+        # per-operator limits honoured). Env AGENTIC_OS_MISSION_CONCURRENCY overrides. The plan fingerprint,
+        # node identity, idempotency and event-sourced replay are unaffected — only wall-clock changes.
+        import os as _os
+        self.max_concurrency = max(1, int(_os.getenv("AGENTIC_OS_MISSION_CONCURRENCY") or max_concurrency))
         # below this fused-belief confidence (or on conflict) an input is disambiguated, not trusted
         self.disambiguation_confidence = disambiguation_confidence
         self.store = store or EventStore()
@@ -181,14 +188,17 @@ class MissionRuntime:
     # ── create + plan + simulate ──────────────────────────────────────────────
     def create_mission(self, goal: str, *, constraints: list[str] | None = None,
                         policy_refs: list[str] | None = None, budget: Budget | None = None,
-                        template: str | None = None, verified_intent: Any = None) -> Mission:
+                        template: str | None = None, verified_intent: Any = None,
+                        policy: "MissionPolicy | None" = None) -> Mission:
         # v0.2.x Slice 1 — carry the Discovery seal across the boundary. ``verified_intent`` is an
         # optional sealed VerifiedIntent (duck-typed: a runtime_contracts.VerifiedIntent, or a dict, or
         # anything exposing ``content_hash``/``evidence``); its identity is recorded on the mission and
         # in MissionCreated so the exact evidence a decision used is resolvable at replay/EXPLAIN time.
+        # mission-policy/v1 — an optional named MissionPolicy is the mission's single pinned authority.
         identity = _intent_identity(verified_intent)
         m = Mission(goal=goal, constraints=constraints or [], policy_refs=policy_refs or [],
-                    budget=budget or Budget(), template=template, world_state_id=new_id("world"),
+                    policy=policy, budget=budget or Budget(), template=template,
+                    world_state_id=new_id("world"),
                     intent_content_hash=identity.get("intent_content_hash", ""),
                     evidence_refs=identity.get("evidence_refs", []))
         self._missions[m.id] = m
@@ -197,7 +207,11 @@ class MissionRuntime:
         # `rehydrate` had no choice but to invent an authority on restart.
         self.store.append("MissionCreated", m.id,
                           {"goal": goal, "template": template, "constraints": m.constraints,
-                           "policy_refs": list(m.policy_refs or []), **identity})
+                           "policy_refs": list(m.policy_refs or []),
+                           # mission-policy/v1 — pin the named policy identity onto mission creation
+                           "policy": (m.policy.ref if m.policy else None),
+                           "policy_digest": (m.policy.digest() if m.policy else None),
+                           **identity})
         self.lifecycle.dispatch(MissionStarted(mission_id=m.id, goal=goal, template=template))
         try:
             self._plan_and_gate(m)
@@ -275,7 +289,7 @@ class MissionRuntime:
         m.context_epoch_id = epoch.id
         # Fingerprint the deterministic structural identity (the capability signature); intent_id is
         # provenance and may be freshly minted per compile, so it is deliberately excluded.
-        fp = plan_fingerprint(sig)
+        fp = plan_fingerprint(sig, security=self._security_envelope(m))
         self.store.append("PlanCreated", m.id,
                           {"plan_id": plan.id, "revision": revision, "reason": reason,
                            "signature": sig, "projection": plan.projection,
@@ -337,16 +351,24 @@ class MissionRuntime:
                     runnable.append((n, None))            # a human already cleared this node
                     continue
                 decision = self.context.resolve(ContextIntent(kind=CHECK_POLICY, node=n, world=world, mission=m, graph=graph)).value
+                # mission-policy/v1 — every policy decision is a ledger event (the Decision Ledger),
+                # pinning the exact evaluated policy identity onto the mission history for replay.
+                if getattr(decision, "policy_digest", ""):
+                    self.store.append("PolicyEvaluated", m.id,
+                                      {"node_id": n.id, "capability": n.capability,
+                                       "policy": decision.policy_ref, "policy_digest": decision.policy_digest,
+                                       "effect": decision.explain.get("effect", "allow"),
+                                       "matched_rule": decision.explain.get("matched_rule", "")})
+                if getattr(decision, "denied", False):    # a policy DENY rule — hard block, no human gate
+                    self._block_denied(m, n, decision)
+                    return m
                 (gated if decision.required else runnable).append((n, decision))
 
-            for node, _ in runnable:
-                issue = self._belief_issue(node, world)
-                if issue is not None:                     # an input belief is conflicting/uncertain
-                    self._park_disambiguation(m, node, *issue)
-                    return m
-                res = self._execute(m, plan, world, node)
-                if res is False:                          # failure -> mission already failed/compensated
-                    return m
+            # Execute the ready wave: independent nodes run concurrently (bounded) when max_concurrency>1,
+            # serially when ==1; results commit in deterministic node order either way.
+            outcome = self._execute_wave(m, plan, world, [n for n, _ in runnable])
+            if outcome is False or outcome == "parked":   # a node failed/compensated, or an input needs disambiguation
+                return m
 
             if gated:
                 node, decision = gated[0]
@@ -357,18 +379,32 @@ class MissionRuntime:
                 return m
 
     def _execute(self, m: Mission, plan: ExecutionPlan, world: WorldState, node) -> bool:
+        """Serial node execution (the ``max_concurrency == 1`` route) — resolve inputs, invoke the
+        operator, apply the result. Behaviour is byte-identical to the historical path."""
         inputs = self._resolve_inputs(m, world, node)
         self.store.append("NodeDispatched", m.id, {"node_id": node.id, "capability": node.capability})
         try:
             result = self.executor.run(node, inputs)
         except Exception as e:  # noqa: BLE001
-            self.store.append("NodeFailed", m.id,
-                              {"node_id": node.id, "capability": node.capability, "error": str(e)})
-            self.learning.record_capability(node.capability, False)
-            self._observe_routing(node, False)
-            self._saga(m, plan, world)
-            self._fail(m, plan, reason=f"{node.capability}: {e}")
-            return False
+            return self._fail_node(m, plan, world, node, e)
+        return self._finish(m, plan, world, node, result)
+
+    def _fail_node(self, m: Mission, plan: ExecutionPlan, world: WorldState, node, e) -> bool:
+        """The operator raised — record, learn, compensate, fail. Shared by the serial and concurrent
+        paths so failure semantics are identical."""
+        self.store.append("NodeFailed", m.id,
+                          {"node_id": node.id, "capability": node.capability, "error": str(e)})
+        self.learning.record_capability(node.capability, False)
+        self._observe_routing(node, False)
+        self._saga(m, plan, world)
+        self._fail(m, plan, reason=f"{node.capability}: {e}")
+        return False
+
+    def _finish(self, m: Mission, plan: ExecutionPlan, world: WorldState, node, result) -> bool:
+        """Apply a successful operator result: verify before it becomes authoritative, commit to world
+        state, emit the success event. This mutates shared world/learning state, so the concurrent path
+        calls it SERIALLY in deterministic node order after the parallel operator invocations have joined
+        — the network wait overlaps, the state transition does not."""
         node.result = result
         # P7B: verify a consequential result BEFORE it becomes authoritative world state.
         if needs_verification(node) and node.id not in self._verify_ok(m.id):
@@ -409,6 +445,77 @@ class MissionRuntime:
         if node.produces:
             self.learners.routing.observe(node.produces, node.capability, ok)
 
+    def _execute_wave(self, m: Mission, plan: ExecutionPlan, world: WorldState, nodes: list):
+        """Run one ready wave. The nodes are independent (all deps already terminal), so their operator
+        invocations may overlap. Returns True (all committed), False (a node failed/parked → mission
+        stopped), or "parked" (a belief needs disambiguation before this wave runs).
+
+        Concurrency is bounded by ``self.max_concurrency`` and per-operator limits (``policy
+        .per_operator_limit``). max_concurrency==1 is the exact historical serial drain. Regardless of
+        concurrency, results are COMMITTED serially in deterministic node order, so world state, events and
+        the plan fingerprint are identical to a serial run — only the network waits overlap.
+        """
+        # Belief gate is a pre-execution check on independent inputs; park the mission if any node's input
+        # is conflicting/uncertain (same as the serial path, evaluated up-front for the whole wave).
+        for node in nodes:
+            issue = self._belief_issue(node, world)
+            if issue is not None:
+                self._park_disambiguation(m, node, *issue)
+                return "parked"
+
+        if self.max_concurrency <= 1 or len(nodes) <= 1:
+            for node in nodes:
+                if self._execute(m, plan, world, node) is False:
+                    return False
+            return True
+
+        # Concurrent path: resolve inputs from the current (stable) world snapshot and emit the dispatch
+        # events in node order, then invoke operators concurrently, then commit results in node order.
+        import concurrent.futures as _cf
+        prepared = []
+        for node in nodes:
+            inputs = self._resolve_inputs(m, world, node)
+            self.store.append("NodeDispatched", m.id, {"node_id": node.id, "capability": node.capability})
+            prepared.append((node, inputs))
+        sems = self._operator_semaphores([n.operator for n, _ in prepared])
+
+        def _call(node, inputs):
+            sem = sems.get(node.operator)
+            if sem is None:
+                return self.executor.run(node, inputs)
+            with sem:                                    # honour per-operator in-flight limits
+                return self.executor.run(node, inputs)
+
+        results: dict[str, tuple[str, object]] = {}
+        workers = min(self.max_concurrency, len(prepared))
+        with _cf.ThreadPoolExecutor(max_workers=workers) as pool:
+            futs = {pool.submit(_call, node, inputs): node.id for node, inputs in prepared}
+            for fut in _cf.as_completed(futs):           # JOIN BARRIER — all invocations complete here
+                nid = futs[fut]
+                try:
+                    results[nid] = ("ok", fut.result())
+                except Exception as e:  # noqa: BLE001
+                    results[nid] = ("err", e)
+
+        for node, _ in prepared:                         # commit serially, deterministic order
+            kind, payload = results[node.id]
+            ok = (self._fail_node(m, plan, world, node, payload) if kind == "err"
+                  else self._finish(m, plan, world, node, payload))
+            if ok is False:                              # first failure/park stops the mission (fail-fast)
+                return False
+        return True
+
+    def _operator_semaphores(self, operators) -> dict:
+        """A bounding Semaphore per operator that declares a per_operator_limit — so a wave never issues
+        more than the provider allows in flight, independent of the global concurrency cap."""
+        import threading
+        sems: dict[str, threading.Semaphore] = {}
+        for op in set(operators):
+            limit = self.policy.per_operator_limit.get(op)
+            if limit:
+                sems[op] = threading.Semaphore(limit)
+        return sems
+
     def _resolve_inputs(self, m: Mission, world: WorldState, node) -> dict:
         resolved: dict[str, Any] = {"_goal": m.goal, "_mission": m.id}
         for k, v in node.inputs.items():
@@ -440,6 +547,19 @@ class MissionRuntime:
                                           "options": task.options}})
         self.lifecycle.dispatch(GateReached(mission_id=m.id, node_id=node.id, capability=node.capability))
         self._set_state(m, MissionState.WAITING_HUMAN)
+
+    def _block_denied(self, m, node, decision) -> None:
+        """mission-policy/v1 — a DENY rule forbids this action outright. Unlike a gate, no human can
+        approve it; the mission blocks with the policy's actionable reason (deny always wins)."""
+        self.store.append("PolicyDenied", m.id,
+                          {"node_id": node.id, "capability": node.capability,
+                           "policy": decision.policy_ref, "policy_digest": decision.policy_digest,
+                           "explain": decision.explain})
+        m.outcome = {"blocked": "policy_denied", "node": node.id, "capability": node.capability,
+                     "policy": decision.policy_ref, "policy_digest": decision.policy_digest,
+                     "message": decision.explain.get("message", "")}
+        self.lifecycle.dispatch(GateReached(mission_id=m.id, node_id=node.id, capability=node.capability))
+        self._set_state(m, MissionState.FAILED)
 
     # ── belief-driven disambiguation (state estimation, Whitepaper v5 · P4) ──────
     def _belief_issue(self, node, world: WorldState):
@@ -918,7 +1038,7 @@ class MissionRuntime:
         # Verify exact replay reproduced the sealed plan + evidence identity (fail closed on drift).
         sealed = self._last_plan_meta(mission_id)
         if sealed:
-            got_fp = plan_fingerprint(self._signature(plan))
+            got_fp = plan_fingerprint(self._signature(plan), security=self._security_envelope(m))
             want_fp = sealed.get("plan_fingerprint", "")
             if want_fp and got_fp != want_fp:
                 self.store.append("ReplayDivergence", mission_id,
@@ -1068,6 +1188,22 @@ class MissionRuntime:
 
     def _signature(self, plan: ExecutionPlan) -> str:
         return "->".join(n.capability for n in plan.graph.nodes)
+
+    def _security_envelope(self, m: Mission) -> str:
+        """The mission's security posture folded into the plan fingerprint — but only when it opts into the
+        security plane by attaching a ``MissionPolicy``. Returns "" otherwise (fingerprint unchanged, so
+        existing sealed plans replay). When present it binds the pinned policy digest, the effective grants,
+        and the tenant, so a revoked grant / changed policy cannot EXACT-REPLAY a stale sealed plan.
+        (Model identity folds in with Slice-4 model-digest pinning.)"""
+        if getattr(m, "policy", None) is None:
+            return ""
+        parts = [f"policy={m.policy.digest()}"]
+        if m.policy_refs:
+            parts.append("grants=" + ",".join(sorted(set(m.policy_refs))))
+        tenant = getattr(m, "tenant", "") or ""
+        if tenant:
+            parts.append(f"tenant={tenant}")
+        return ";".join(parts)
 
     def _set_state(self, m: Mission, state: MissionState) -> None:
         if m.state == state and state != MissionState.PLANNING:

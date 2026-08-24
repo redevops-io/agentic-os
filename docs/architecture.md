@@ -15,7 +15,11 @@ Alongside this control-plane kernel, [`agentic_os/mission/`](../agentic_os/missi
 Runtime** — the operator + mission engine the [reference apps](../apps/README.md) run on (typed
 operators exposing capabilities/invoke, mission planes, and the compiler). The control plane
 orchestrates the fleet; the Mission Runtime executes governed missions on it (Go port in
-[`go/mission/`](../go/mission/)).
+[`go/mission/`](../go/mission/)). Within a mission, the executor dispatches each ready wave's
+independent nodes concurrently through a bounded pool and commits results serially in deterministic
+node order, so the event-sourced world and replay identity are unchanged — only wall-clock. It is
+opt-in and default-serial: env `AGENTIC_OS_MISSION_CONCURRENCY` (default 1 = the historical serial
+drain).
 
 **Evidence-native mission spine (v0.2.x).** A mission binds to a **ContextEpoch** — a content-addressed
 `ContextView` ([`mission/context_view.py`](../agentic_os/mission/context_view.py)) that pins the exact

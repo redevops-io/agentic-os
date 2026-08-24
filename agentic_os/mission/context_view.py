@@ -78,8 +78,18 @@ def epoch_from_refs(evidence_refs, pins=()) -> ContextView:
     return ContextView.materialize(handles, list(pins))
 
 
-def plan_fingerprint(signature: str, intent_id: str = "") -> str:
+def plan_fingerprint(signature: str, intent_id: str = "", *, security: str = "") -> str:
     """A stable content-address of a plan's structural identity (its capability signature + the intent
     it lowered from). Replay recompiles the plan and checks this matches the sealed value — proving the
-    historical decision path was reproduced, not silently replaced by a divergent plan."""
-    return content_hash(signature, intent_id)
+    historical decision path was reproduced, not silently replaced by a divergent plan.
+
+    ``security`` is the mission's security envelope (policy digest · effective grants · tenant · model),
+    folded in **only when a mission opts into the security plane** (a ``MissionPolicy`` is attached). It is
+    additive and empty by default, so a security-free mission's fingerprint is byte-identical to before
+    (existing sealed plans still replay). When present it binds the security posture into the seal, so a
+    revoked grant, changed policy, or swapped model can no longer EXACT-REPLAY a stale sealed plan — replay
+    fails closed on the mismatch instead of silently reusing a plan authorized under a different posture."""
+    parts = [signature, intent_id]
+    if security:
+        parts.append("sec:" + security)
+    return content_hash(*parts)
