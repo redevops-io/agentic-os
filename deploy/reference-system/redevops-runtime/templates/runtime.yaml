@@ -27,7 +27,13 @@ spec:
       {{- end }}
       containers:
         - name: runtime
+          {{- if and .Values.security.enabled .Values.security.image.repository }}
+          # Enterprise runtime image — bundles runtime-plugins-enterprise so the security/telemetry planes
+          # can be injected at boot (the public image cannot import the private package).
+          image: "{{ .Values.security.image.repository }}:{{ .Values.security.image.tag }}"
+          {{- else }}
           image: "{{ .Values.runtime.image.repository }}:{{ .Values.runtime.image.tag }}"
+          {{- end }}
           imagePullPolicy: {{ .Values.runtime.image.pullPolicy }}
           ports:
             - name: http
@@ -43,6 +49,37 @@ spec:
             - name: OPENAI_API_KEY
               valueFrom:
                 secretKeyRef: { name: {{ .Values.model.apiKeySecret }}, key: OPENAI_API_KEY }
+            {{- end }}
+            {{- if .Values.security.enabled }}
+            # v0.3.0 intrinsic-security plane (requires the enterprise image; see values.security). The
+            # planes are injected in-process — the enterprise boot path reads these to wire
+            # build_secured_executor(...) / the credential broker / the SIEM sink.
+            - name: RDO_SECURITY_ENABLED
+              value: "true"
+            {{- if .Values.security.sandbox.enabled }}
+            - name: RDO_SANDBOX_ENABLED
+              value: "true"
+            {{- end }}
+            {{- if .Values.security.vault.addr }}
+            - name: VAULT_ADDR
+              value: {{ .Values.security.vault.addr | quote }}
+            {{- if .Values.security.vault.roleSecret }}
+            - name: VAULT_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.security.vault.roleSecret }}, key: token }
+            {{- end }}
+            {{- end }}
+            {{- if .Values.security.siemEndpoint }}
+            - name: RDO_SIEM_ENDPOINT
+              value: {{ .Values.security.siemEndpoint | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.telemetry.otel.enabled }}
+            # Mission-native telemetry export — the TelemetryBridge's otel_sink points here.
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.telemetry.otel.endpoint | quote }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ .Values.telemetry.otel.serviceName | quote }}
             {{- end }}
           readinessProbe:
             httpGet: { path: /health, port: http }
