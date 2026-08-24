@@ -31,13 +31,23 @@ def capability(name: str, handler: Handler, *, provides: list[str] | None = None
                outputs: dict[str, str] | None = None, side_effecting: bool = False,
                approval_required: bool = False, undo: str | None = None,
                permissions: list[str] | None = None, deterministic: bool = True,
-               estimated_value: str = "medium", usd: float = 0.0, latency_ms: int = 0) -> Capability:
-    """Ergonomic builder for one capability + its handler."""
+               estimated_value: str = "medium", usd: float = 0.0, latency_ms: int = 0,
+               required_authority: list[str] | None = None, isolation_class: str = "",
+               network: list[str] | None = None,
+               data_classifications: list[str] | None = None) -> Capability:
+    """Ergonomic builder for one capability + its handler.
+
+    The security fields (v0.3.x, all optional) are the metadata the opt-in Executor security seams read:
+    `required_authority` feeds the delegated-authority gate (`authority_for`), `isolation_class` the
+    sandbox seam (`isolation_for`), and `network`/`data_classifications` the SecurityMonitor's
+    boundary telemetry. Declaring nothing leaves the capability unchanged."""
     spec = CapabilitySpec(
         name=name, operator=operator, provides=provides or [], inputs=inputs or {},
         outputs=outputs or {}, side_effecting=side_effecting, approval_required=approval_required,
         undo=undo, permissions=permissions or [], deterministic=deterministic,
         estimated_value=estimated_value, cost=NodeCost(usd=usd, latency_ms=latency_ms),
+        required_authority=required_authority or [], isolation_class=isolation_class,
+        network=network or [], data_classifications=data_classifications or [],
     )
     return Capability(spec=spec, handler=handler)
 
