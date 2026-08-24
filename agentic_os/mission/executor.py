@@ -46,12 +46,36 @@ class InMemoryOperatorClient:
         return result
 
 
+class Sandbox(Protocol):
+    """Opt-in isolation boundary. A capability that declares an isolation class runs its invoke through
+    this instead of in-process. Duck-typed so the (enterprise) sandbox implementation is injected, never
+    imported here."""
+    def invoke(self, operator: str, capability: str, inputs: dict, idempotency_key: str,
+               *, isolation: str) -> dict: ...
+
+
 class Executor:
-    def __init__(self, client: OperatorClient):
+    def __init__(self, client: OperatorClient, *, sandbox: "Sandbox | None" = None,
+                 isolation_for: "Callable[[Node], str] | None" = None):
         self.client = client
+        # Opt-in isolation seam. `isolation_for(node)` reports the isolation class a capability requires
+        # ("" | "in_process" | "sandbox" | "strict"), e.g. from its CapabilityDescriptor. When it requires
+        # confinement, execution routes through `sandbox`. Both default None → behaviour is unchanged.
+        self.sandbox = sandbox
+        self.isolation_for = isolation_for
 
     def run(self, node: Node, inputs: dict) -> dict:
         node.attempts += 1
+        isolation = self.isolation_for(node) if self.isolation_for else ""
+        if isolation in {"sandbox", "strict"}:
+            if self.sandbox is None:
+                # Fail closed: a capability that DECLARES isolation must not silently run in-process because
+                # a caller omitted the sandbox plane. Declaring isolation is the opt-in; enforcing it is not.
+                raise OperatorError(
+                    f"capability '{node.capability}' requires isolation '{isolation}' but no sandbox is "
+                    "wired — refusing to run it unconfined")
+            return self.sandbox.invoke(node.operator, node.capability, inputs, node.idempotency_key,
+                                       isolation=isolation)
         return self.client.invoke(node.operator, node.capability, inputs, node.idempotency_key)
 
     def compensate(self, node: Node) -> dict | None:
