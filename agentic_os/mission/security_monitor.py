@@ -24,11 +24,12 @@ from .types import Node
 class SecurityMonitor:
     def __init__(self, *, mission_id: str = "", planned_capabilities: tuple[str, ...] = (),
                  descriptor_for: "Callable[[str], Any] | None" = None):
-        from runtime_contracts import SecurityTrajectory   # noqa: PLC0415 — lazy: telemetry is opt-in
+        from runtime_contracts import Containment, SecurityTrajectory   # noqa: PLC0415 — lazy: opt-in
         self.mission_id = mission_id
         self.planned = tuple(planned_capabilities)
         self.descriptor_for = descriptor_for   # capability id -> CapabilityDescriptor (declared surface)
         self.trajectory = SecurityTrajectory()
+        self.containment = Containment()
         self._seq = 0
 
     def observe(self, node: Node, result: dict | None, *, isolation: str, error: str | None = None) -> None:
@@ -67,3 +68,11 @@ class SecurityMonitor:
         """Correlate the trajectory-so-far into (GovernanceDisposition, reasons)."""
         from runtime_contracts import correlate   # noqa: PLC0415
         return correlate(self.trajectory, planned_capabilities=self.planned, **thresholds)
+
+    def enforce(self, **thresholds):
+        """Correlate AND drive the containment state machine off the disposition. Returns
+        (GovernanceDisposition, reasons, ContainmentState) — the full runtime security loop:
+        action → telemetry → trajectory → correlation → disposition → containment."""
+        disp, reasons = self.disposition(**thresholds)
+        state = self.containment.on_disposition(disp)
+        return disp, reasons, state
