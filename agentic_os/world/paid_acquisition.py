@@ -32,6 +32,10 @@ from .trace_blocks import FIN, REV, RUN
 
 _CHANNEL = "reddit"
 _PILOT_VALUE_USD = 25000.0
+# Ads are top-of-funnel: most impressions never click, and cold ad clicks convert to enterprise pilots very
+# rarely. This single conservative factor (pilots per qualified impression) keeps a ~$600 placement at a
+# fraction of a pilot — a Reddit test is an awareness play, not a pilot firehose.
+_AD_PILOT_PER_QUALIFIED_IMPRESSION = 3e-6
 
 # Fixture communities (subreddits). `spend` = the promoted-placement budget; `cpm` sets expected reach.
 # A general-AI-news community is included to prove buyer density, not subscriber count, drives selection.
@@ -59,9 +63,9 @@ def _fit(community: Dict[str, Any]) -> float:
 
 
 def _placement_economics(community: Dict[str, Any], fit: float) -> Dict[str, Any]:
-    reach = int(community["spend"] / max(community["cpm"], 1.0) * 1000)
-    qualified = reach * fit
-    pilots = qualified * 0.5 * 0.006 * 0.025            # buyers -> visits -> pilots (same conservative funnel)
+    reach = int(community["spend"] / max(community["cpm"], 1.0) * 1000)   # impressions
+    qualified = reach * fit                                                # topic-matched impressions
+    pilots = qualified * _AD_PILOT_PER_QUALIFIED_IMPRESSION                # top-of-funnel: a fraction of a pilot
     value = pilots * _PILOT_VALUE_USD
     return {"spend": community["spend"], "expected_reach": reach,
             "expected_qualified_reach": round(qualified, 1), "expected_pilots": round(pilots, 2),
