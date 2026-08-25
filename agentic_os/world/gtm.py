@@ -226,9 +226,9 @@ class FindCompaniesRebuildingTheRuntime(WorldDefinition):
         verified_email, contact_first = top.get("verified_email", ""), "there"
         if os.environ.get("REDEVOPS_LIVE_CONNECTORS"):
             try:
-                from .enrichment import resolve_contact  # noqa: PLC0415
+                from .enrichment import resolve_contact, title_keywords  # noqa: PLC0415
                 domain = top.get("domain") or f"{top['account']}.com"
-                contact = resolve_contact(domain=domain, titles=list(enr["buying_group"]))
+                contact = resolve_contact(domain=domain, titles=title_keywords(enr["buying_group"]))
                 if contact.get("email") and contact.get("verified"):
                     verified_email = contact["email"]; contact_first = contact.get("first_name") or "there"
             except Exception:  # noqa: BLE001

@@ -94,16 +94,28 @@ class ApolloProvider:
         return {"status": "unknown", "score": 0.5, "verified": None}
 
     def search_people(self, *, domain: str, titles: "list[str]", limit: int = 3) -> "list[Dict[str, Any]]":
-        """Find the buying group by company + title (org domain + titles → people + emails). This is the
-        right resolution for GTM: from 'company + role' to 'named person + verified email'."""
-        r = _post("https://api.apollo.io/v1/mixed_people/search",
+        """Find the buying group by company + title (org domain + titles → candidate people). Apollo People
+        Search returns person *ids* + titles but LOCKS name/email; ``unlock_person`` reveals them (1 credit).
+        NB: ``mixed_people/search`` is deprecated for API callers (422) — the current endpoint is api_search;
+        and ``person_titles`` matches loosely, so pass keyword-style titles ("ai", "platform"), not "VP X"."""
+        r = _post("https://api.apollo.io/api/v1/mixed_people/api_search",
                   {"q_organization_domains": domain, "person_titles": titles, "per_page": limit}, self._h())
         out = []
-        for p in (r.get("people") or [])[:limit]:
-            out.append({"name": (p.get("name") or f"{p.get('first_name','')} {p.get('last_name','')}").strip(),
+        for p in ((r.get("people") or r.get("contacts")) or [])[:limit]:
+            out.append({"id": p.get("id"),
+                        "name": (p.get("name") or f"{p.get('first_name','')} {p.get('last_name','')}").strip() or None,
                         "first_name": p.get("first_name", ""), "title": p.get("title", ""),
                         "email": p.get("email"), "verified": p.get("email_status") == "verified"})
         return out
+
+    def unlock_person(self, person_id: str) -> Dict[str, Any]:
+        """Reveal a candidate's name + professional email via People Enrichment (spends 1 credit). Search
+        results have these locked; this is the second half of the GTM resolution."""
+        m = _post("https://api.apollo.io/api/v1/people/match",
+                  {"id": person_id, "reveal_professional_emails": True}, self._h())
+        p = m.get("person") or {}
+        return {"name": p.get("name"), "first_name": p.get("first_name", ""), "title": p.get("title", ""),
+                "email": p.get("email"), "verified": p.get("email_status") == "verified"}
 
 
 class ClearbitProvider:
@@ -129,6 +141,25 @@ class ClearbitProvider:
 
 
 _PROVIDERS = {"hunter": HunterProvider, "apollo": ApolloProvider, "clearbit": ClearbitProvider}
+
+# Apollo person_titles matches loosely: a full phrase like "VP Engineering" matches nobody, but the domain
+# keyword "engineering" matches many. Reduce human-readable buying-group roles to matchable keyword tokens.
+_TITLE_STOP = {"of", "the", "and", "&", "head", "vp", "vice", "president", "chief", "director", "officer",
+               "lead", "senior", "staff", "principal", "manager", "co", "founder", "cofounder", "svp", "evp"}
+
+
+def title_keywords(titles: "list[str]") -> "list[str]":
+    """['Head of AI Platform', 'VP Engineering'] -> ['ai', 'platform', 'engineering'] — the seniority words are
+    dropped and domain nouns kept, so Apollo People Search actually returns the buying group."""
+    seen: "set[str]" = set()
+    out: "list[str]" = []
+    for t in titles:
+        for w in str(t).replace("/", " ").replace("-", " ").split():
+            lw = w.strip().lower()
+            if len(lw) > 1 and lw not in _TITLE_STOP and lw not in seen:
+                seen.add(lw)
+                out.append(lw)
+    return out or [str(t).lower() for t in titles]
 
 
 def get_provider(name: Optional[str] = None):
@@ -176,14 +207,22 @@ def resolve_contact(*, domain: str, titles: "list[str]", provider: Optional[Any]
         return {"email": None, "verified": False, "provider": p.name, "reason": f"{p.name} has no people-search"}
     try:
         people = p.search_people(domain=domain, titles=titles)
-        for person in people:                       # prefer a verified email
-            if person.get("email") and person.get("verified"):
-                return {"name": person["name"], "first_name": person.get("first_name", ""),
-                        "email": person["email"], "verified": True, "provider": p.name}
-        for person in people:                       # else any email (unverified)
-            if person.get("email"):
-                return {"name": person["name"], "first_name": person.get("first_name", ""),
-                        "email": person["email"], "verified": False, "provider": p.name}
+        can_unlock = hasattr(p, "unlock_person")
+        best: Optional[Dict[str, Any]] = None       # first candidate with *any* email, kept as fallback
+        for person in people:
+            # Apollo locks email in search results — reveal it (1 credit), lazily, stopping at first verified.
+            if not person.get("email") and can_unlock and person.get("id"):
+                person = {**person, **p.unlock_person(person["id"])}
+            email = person.get("email")
+            if not email:
+                continue
+            if person.get("verified"):
+                return {"name": person.get("name"), "first_name": person.get("first_name", ""),
+                        "email": email, "verified": True, "provider": p.name}
+            best = best or person
+        if best:
+            return {"name": best.get("name"), "first_name": best.get("first_name", ""),
+                    "email": best["email"], "verified": False, "provider": p.name}
         return {"email": None, "verified": False, "provider": p.name, "reason": "no contact email found"}
     except EnrichmentError as e:
         return {"email": None, "verified": False, "provider": p.name, "reason": str(e)}

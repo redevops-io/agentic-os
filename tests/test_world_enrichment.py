@@ -29,14 +29,28 @@ def test_no_provider_configured_returns_no_email(monkeypatch):
 
 
 def test_apollo_people_search_resolves_verified_contact(monkeypatch):
+    # Apollo's real flow: api_search returns person *ids* with name/email LOCKED, then people/match unlocks
+    # the professional email (1 credit). resolve_contact must chain the two.
     def fake_post(url, payload, headers, timeout=10.0):
-        assert "mixed_people/search" in url and payload["q_organization_domains"] == "acme.com"
-        return {"people": [{"first_name": "Jordan", "last_name": "Lee", "name": "Jordan Lee",
-                            "title": "Head of AI Platform", "email": "jordan@acme.com",
-                            "email_status": "verified"}]}
+        if "mixed_people/api_search" in url:
+            assert payload["q_organization_domains"] == "acme.com"
+            return {"people": [{"id": "p-1", "title": "Head of AI Platform",
+                                "name": None, "email": None, "email_status": None}]}
+        if url.endswith("/people/match"):
+            assert payload["id"] == "p-1" and payload["reveal_professional_emails"] is True
+            return {"person": {"first_name": "Jordan", "name": "Jordan Lee", "title": "Head of AI Platform",
+                               "email": "jordan@acme.com", "email_status": "verified"}}
+        raise AssertionError("unexpected url " + url)
     monkeypatch.setattr(E, "_post", fake_post)
     r = resolve_contact(domain="acme.com", titles=["Head of AI Platform"], provider=ApolloProvider(key="k"))
     assert r["email"] == "jordan@acme.com" and r["verified"] is True and r["first_name"] == "Jordan"
+
+
+def test_title_keywords_makes_roles_apollo_matchable():
+    from agentic_os.world import title_keywords
+    # human-readable buying-group roles -> loose keyword tokens Apollo People Search actually matches
+    assert title_keywords(["Head of AI Platform", "VP Engineering"]) == ["ai", "platform", "engineering"]
+    assert title_keywords(["CTO"]) == ["cto"]                       # nothing to drop -> falls back to the token
 
 
 def test_verified_contact_unblocks_send(monkeypatch):
