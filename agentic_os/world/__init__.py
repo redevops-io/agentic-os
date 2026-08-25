@@ -26,6 +26,8 @@ from .enrichment import (get_provider, resolve_verified_email, resolve_contact, 
 from .optimizer import CandidateAction, CrossChannelOptimizer, Allocation, direct_email_action, sponsorship_action
 from .attention import (AttentionItem, AttentionKind, Autonomy, build_attention_queue, items_from_run,
                         summarize)
+from .budget_governor import BudgetGovernor, SpendAuthorization
+from .paid_acquisition import PaidAcquisitionWorld
 from .models import (
     BaselineResult,
     ExecutionMode,
@@ -46,6 +48,7 @@ ALL_WORLDS = {AfterHoursLeadWorld().world_id: AfterHoursLeadWorld(),
               FindCompaniesRebuildingTheRuntime().world_id: FindCompaniesRebuildingTheRuntime(),
               CreatorAcquisitionWorld().world_id: CreatorAcquisitionWorld(),
               GovernedSponsorshipWorld().world_id: GovernedSponsorshipWorld(),
+              PaidAcquisitionWorld().world_id: PaidAcquisitionWorld(),
               **_OTHER_WORLDS}
 
 __all__ = [
@@ -67,4 +70,5 @@ __all__ = [
     "ApolloProvider", "HunterProvider", "ClearbitProvider",
     "CandidateAction", "CrossChannelOptimizer", "Allocation", "direct_email_action", "sponsorship_action",
     "AttentionItem", "AttentionKind", "Autonomy", "build_attention_queue", "items_from_run", "summarize",
+    "BudgetGovernor", "SpendAuthorization", "PaidAcquisitionWorld",
 ]

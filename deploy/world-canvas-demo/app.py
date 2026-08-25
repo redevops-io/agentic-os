@@ -20,7 +20,8 @@ _ANSWERS = {"What is the roof pitch?": "6/12", "Approve invoice correction?": "y
             "POLICY_APPROVAL": "approve within ceiling"}     # governed sponsorship booking approval
 _SCOPES = ("read:crm", "read:geo", "write:quote", "write:crm", "read:secrets", "write:vendor", "write:billing")
 _SEEDS = {"after-hours-lead": "8842", "kyc-ownership": "clean", "finance-leakage": "4471",
-          "gtm-pilot-discovery": "c1", "creator-sponsorship": "s1", "sponsorship-booking": "s1"}
+          "gtm-pilot-discovery": "c1", "creator-sponsorship": "s1", "sponsorship-booking": "s1",
+          "paid-acquisition": "s1"}
 
 
 def _authority():
@@ -32,7 +33,8 @@ def run_world(world_id: str) -> dict:
     world = ALL_WORLDS[world_id]
     auth = _authority()
     seed = _SEEDS.get(world_id, "seed-0")
-    offline = world_id in ("gtm-pilot-discovery", "creator-sponsorship", "sponsorship-booking")  # deterministic + fast; fixture-labelled SYNTHETIC
+    offline = world_id in ("gtm-pilot-discovery", "creator-sponsorship", "sponsorship-booking",
+                           "paid-acquisition")  # deterministic + fast; fixture-labelled SYNTHETIC/SEEDED
     run = ScenarioOrchestrator().run(world, seed=seed, authority=auth, answers=_ANSWERS, offline=offline)
     card = BenchmarkRunner().run(world, seed=seed, authority=auth, answers=_ANSWERS, offline=offline)
     d = run.to_dict()

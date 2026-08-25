@@ -24,7 +24,7 @@ from .trace_blocks import CS, FIN, REV, RUN, SEC
 # Each world belongs to a business system, so the home groups by Revenue / Finance / Security etc. — not by
 # runtime internals (the plan's "Home is what needs my attention, not runtime names").
 _WORLD_BLOCK = {"sponsorship-booking": REV, "creator-sponsorship": REV, "gtm-pilot-discovery": REV,
-                "after-hours-lead": REV, "finance-leakage": FIN, "kyc-ownership": SEC}
+                "after-hours-lead": REV, "paid-acquisition": REV, "finance-leakage": FIN, "kyc-ownership": SEC}
 
 
 class AttentionKind:
