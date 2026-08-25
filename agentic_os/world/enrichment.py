@@ -19,12 +19,23 @@ class EnrichmentError(RuntimeError):
     pass
 
 
+def _err(url: str, e: Exception) -> "EnrichmentError":
+    import urllib.error  # noqa: PLC0415
+    if isinstance(e, urllib.error.HTTPError):
+        try:
+            msg = (json.loads(e.read().decode()).get("error") or "")[:140]
+        except Exception:  # noqa: BLE001
+            msg = ""
+        return EnrichmentError(f"{url.split('?')[0]} -> HTTP {e.code}" + (f": {msg}" if msg else ""))
+    return EnrichmentError(f"{url.split('?')[0]} -> {type(e).__name__}")
+
+
 def _get(url: str, headers: Optional[Dict[str, str]] = None, timeout: float = 10.0) -> Dict[str, Any]:
     req = urllib.request.Request(url, headers=headers or {"User-Agent": "redevops-gtm"})
     try:
         return json.loads(urllib.request.urlopen(req, timeout=timeout).read().decode())
     except Exception as e:  # noqa: BLE001
-        raise EnrichmentError(f"{url.split('?')[0]} -> {type(e).__name__}") from None
+        raise _err(url, e) from None
 
 
 def _post(url: str, payload: Dict[str, Any], headers: Dict[str, str], timeout: float = 10.0) -> Dict[str, Any]:
@@ -32,7 +43,7 @@ def _post(url: str, payload: Dict[str, Any], headers: Dict[str, str], timeout: f
     try:
         return json.loads(urllib.request.urlopen(req, timeout=timeout).read().decode())
     except Exception as e:  # noqa: BLE001
-        raise EnrichmentError(f"{url.split('?')[0]} -> {type(e).__name__}") from None
+        raise _err(url, e) from None
 
 
 class HunterProvider:
