@@ -14,6 +14,10 @@ from .fabric import CapabilityDenied, CapabilityFabric, CapabilityProvider, Invo
 from .flagship import AfterHoursLeadWorld
 from .gtm import FindCompaniesRebuildingTheRuntime
 from .sponsorship import CreatorAcquisitionWorld
+from .sponsorship_economics import (
+    GovernedSponsorshipWorld, SponsorshipQuote, NormalizedEconomics, normalize_quote,
+    PlacementProposal, SponsorshipApproval, BookingDecision, evaluate_booking,
+    Claim, CreativeBrief, build_creative_brief, CreatorAttribution, build_attribution)
 from .outreach import (OutreachContext, OutreachDecision, decide, render_email, send_outreach,
                        quality_gate, select_template, SuppressionLedger, handle_unsubscribe,
                        unsubscribe_url, unsubscribe_token)
@@ -39,6 +43,7 @@ from .worlds import ALL_WORLDS as _OTHER_WORLDS
 ALL_WORLDS = {AfterHoursLeadWorld().world_id: AfterHoursLeadWorld(),
               FindCompaniesRebuildingTheRuntime().world_id: FindCompaniesRebuildingTheRuntime(),
               CreatorAcquisitionWorld().world_id: CreatorAcquisitionWorld(),
+              GovernedSponsorshipWorld().world_id: GovernedSponsorshipWorld(),
               **_OTHER_WORLDS}
 
 __all__ = [
@@ -48,6 +53,9 @@ __all__ = [
     "ScenarioOrchestrator", "BenchmarkRunner",
     "ExecutionMode", "Perturbation", "PerturbationKind", "RunMetrics", "WorldRun", "BaselineResult", "Scorecard",
     "AfterHoursLeadWorld", "FindCompaniesRebuildingTheRuntime", "CreatorAcquisitionWorld",
+    "GovernedSponsorshipWorld", "SponsorshipQuote", "NormalizedEconomics", "normalize_quote",
+    "PlacementProposal", "SponsorshipApproval", "BookingDecision", "evaluate_booking",
+    "Claim", "CreativeBrief", "build_creative_brief", "CreatorAttribution", "build_attribution",
     "KycOnboardingWorld",
     "FinanceLeakageWorld", "ALL_WORLDS",
     "OutreachContext", "OutreachDecision", "decide", "render_email", "send_outreach",
