@@ -80,6 +80,73 @@ class HubSpotConnector:
     def delete_company(self, company_id: str) -> None:   # for cleaning up a test record
         _http("DELETE", f"https://api.hubapi.com/crm/v3/objects/companies/{company_id}", headers=self._h())
 
+    def lookup_contact(self, email: str) -> Optional[Dict[str, Any]]:
+        body = json.dumps({"filterGroups": [{"filters": [{"propertyName": "email", "operator": "EQ",
+                          "value": email}]}], "limit": 1}).encode()
+        r = _http("POST", "https://api.hubapi.com/crm/v3/objects/contacts/search", headers=self._h(), data=body)
+        res = r.get("results") or []
+        return res[0] if res else None
+
+    def upsert_contact(self, *, email: str, first_name: str = "", company: str = "",
+                       props: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        existing = self.lookup_contact(email)
+        payload = {"properties": {"email": email, "firstname": first_name, "company": company, **(props or {})}}
+        if existing:
+            r = _http("PATCH", f"https://api.hubapi.com/crm/v3/objects/contacts/{existing['id']}",
+                      headers=self._h(), data=json.dumps(payload).encode())
+            return {"id": r.get("id", existing["id"]), "created": False}
+        r = _http("POST", "https://api.hubapi.com/crm/v3/objects/contacts", headers=self._h(),
+                  data=json.dumps(payload).encode())
+        return {"id": r.get("id"), "created": True}
+
+    def delete_contact(self, contact_id: str) -> None:
+        _http("DELETE", f"https://api.hubapi.com/crm/v3/objects/contacts/{contact_id}", headers=self._h())
+
+
+class HubSpotSequenceSender:
+    """Cold-send via HubSpot Sales Sequences — 1:1 through your connected mailbox (your domain reputation),
+    the compliant path for B2B cold outreach. ``send()`` upserts the contact, writes the evidence into
+    contact properties (a sequence template renders them with tokens), and enrolls the contact in a
+    configured sequence.
+
+    REQUIRES: HubSpot **Sales Hub Enterprise**, a private-app **``sequences``** + ``crm.objects.owners.read``
+    scope, a created sequence (``HUBSPOT_SEQUENCE_ID``) and a connected-inbox sender
+    (``HUBSPOT_SENDER_ID``/``HUBSPOT_SENDER_EMAIL``). Contact upsert works today; enrollment 403s until the
+    scope/tier are in place — the sender reports that clearly instead of silently failing."""
+
+    def __init__(self, token: Optional[str] = None, *, sequence_id: Optional[str] = None,
+                 sender_id: Optional[str] = None) -> None:
+        self._hs = HubSpotConnector(token)
+        self._seq = sequence_id or os.environ.get("HUBSPOT_SEQUENCE_ID", "")
+        self._sender = sender_id or os.environ.get("HUBSPOT_SENDER_ID", "")
+
+    def available(self) -> Dict[str, Any]:
+        if not self._hs._token:
+            return {"available": False, "reason": "no HUBSPOT token"}
+        try:
+            _http("GET", "https://api.hubapi.com/automation/v4/sequences?limit=1", headers=self._hs._h())
+        except ConnectorError as e:
+            return {"available": False, "reason": f"sequences scope/tier missing ({e}); needs Sales Hub "
+                    "Enterprise + private-app 'sequences' scope"}
+        if not (self._seq and self._sender):
+            return {"available": False, "reason": "set HUBSPOT_SEQUENCE_ID + HUBSPOT_SENDER_ID"}
+        return {"available": True}
+
+    def send(self, *, to: str, subject: str, body: str, tag: str = "gtm") -> Dict[str, Any]:
+        """Upsert the contact (works today) + enroll in the sequence (needs the scope/tier). Returns a
+        Postmark-shaped result ({error_code, message_id}) so it's interchangeable in send_outreach."""
+        c = self._hs.upsert_contact(email=to, props={"redevops_outreach_note": body[:900]})
+        av = self.available()
+        if not av["available"]:
+            return {"error_code": 1, "reason": av["reason"], "contact_id": c["id"], "message_id": None}
+        try:
+            r = _http("POST", "https://api.hubapi.com/automation/v4/sequences/enrollments", headers=self._hs._h(),
+                      data=json.dumps({"sequenceId": self._seq, "contactId": c["id"],
+                                       "senderId": self._sender}).encode())
+            return {"error_code": 0, "message_id": r.get("id"), "contact_id": c["id"]}
+        except ConnectorError as e:
+            return {"error_code": 1, "reason": str(e), "contact_id": c["id"], "message_id": None}
+
 
 class SalesforceConnector:
     """Salesforce via the OAuth 2.0 client-credentials flow (env SALESFORCE_CONSUMER_KEY / _SECRET /
