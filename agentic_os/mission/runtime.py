@@ -139,9 +139,16 @@ class MissionRuntime:
         learners=None,
         disambiguation_confidence: float = 0.75,
         max_concurrency: int = 1,
+        secure_executor_for=None,
     ):
         self.registry = registry
         self.executor = executor
+        # Opt-in per-mission secured executor. When wired (by the enterprise boot path), `secure_executor_for(m)`
+        # returns a mission-scoped Executor carrying that mission's leased AuthorityContext + a boundary
+        # SecurityMonitor + the credential broker. Built lazily per mission and cached by id (so `_saga`,
+        # which runs outside `run()`, reuses the same one). None → the shared open executor, unchanged.
+        self._secure_executor_for = secure_executor_for
+        self._executors: dict[str, Executor] = {}
         # Execution concurrency: how many ready-wave nodes run at once. Default 1 = the historical serial
         # drain (byte-identical behaviour); >1 dispatches independent ready nodes concurrently (bounded,
         # per-operator limits honoured). Env AGENTIC_OS_MISSION_CONCURRENCY overrides. The plan fingerprint,
@@ -317,6 +324,17 @@ class MissionRuntime:
             self._set_state(m, MissionState.PLANNING)
 
     # ── run loop (resumable) ──────────────────────────────────────────────────
+    def _executor_for(self, m: Mission) -> Executor:
+        """The executor a mission runs on: its cached per-mission secured executor when the security planes
+        are wired, else the shared open executor. Cached by mission id so `run()` and `_saga()` agree."""
+        if self._secure_executor_for is None:
+            return self.executor
+        ex = self._executors.get(m.id)
+        if ex is None:
+            ex = self._secure_executor_for(m) or self.executor
+            self._executors[m.id] = ex
+        return ex
+
     def run(self, mission_id: str) -> Mission:
         m = self._missions[mission_id]
         if m.state == MissionState.FAILED:      # blocked in simulation
@@ -384,7 +402,7 @@ class MissionRuntime:
         inputs = self._resolve_inputs(m, world, node)
         self.store.append("NodeDispatched", m.id, {"node_id": node.id, "capability": node.capability})
         try:
-            result = self.executor.run(node, inputs)
+            result = self._executor_for(m).run(node, inputs)
         except Exception as e:  # noqa: BLE001
             return self._fail_node(m, plan, world, node, e)
         return self._finish(m, plan, world, node, result)
@@ -482,9 +500,9 @@ class MissionRuntime:
         def _call(node, inputs):
             sem = sems.get(node.operator)
             if sem is None:
-                return self.executor.run(node, inputs)
+                return self._executor_for(m).run(node, inputs)
             with sem:                                    # honour per-operator in-flight limits
-                return self.executor.run(node, inputs)
+                return self._executor_for(m).run(node, inputs)
 
         results: dict[str, tuple[str, object]] = {}
         workers = min(self.max_concurrency, len(prepared))
@@ -523,7 +541,22 @@ class MissionRuntime:
                 resolved[k] = world.get(v["$from_world"])
             else:
                 resolved[k] = v
+        # An approval gate can carry typed human-supplied data, not just yes/no: the `edit` passed to
+        # approve(...) is delivered to the resumed handler as `_approval`. Event-sourced (folded from
+        # ApprovalGranted), so it survives replay. Used by review verdicts / cut edits; ignored otherwise.
+        edit = self._approval_edit(m.id, node.id)
+        if edit is not None:
+            resolved["_approval"] = edit
         return resolved
+
+    def _approval_edit(self, mission_id: str, node_id: str) -> dict | None:
+        """The human `edit` payload from the latest ApprovalGranted for this node (None if there was
+        no approval, or it carried no edit)."""
+        edit = None
+        for e in self.store.for_mission(mission_id):
+            if e.type == "ApprovalGranted" and e.payload.get("node_id") == node_id:
+                edit = e.payload.get("edit")
+        return edit
 
     # ── human gates ────────────────────────────────────────────────────────────
     def _park(self, m: Mission, node, decision=None) -> None:
@@ -710,7 +743,7 @@ class MissionRuntime:
         status = self.repo.node_status(m.id)
         for node in reversed(plan.graph.nodes):
             if status.get(node.id) == NodeState.DONE and node.side_effecting and node.undo:
-                out = self.executor.compensate(node)
+                out = self._executor_for(m).compensate(node)
                 self.store.append("NodeCompensated", m.id,
                                   {"node_id": node.id, "undo": node.undo, "result": out})
 
