@@ -77,6 +77,9 @@ class HubSpotConnector:
                   data=json.dumps(payload).encode())
         return {"id": r.get("id"), "created": True}
 
+    def delete_company(self, company_id: str) -> None:   # for cleaning up a test record
+        _http("DELETE", f"https://api.hubapi.com/crm/v3/objects/companies/{company_id}", headers=self._h())
+
 
 class SalesforceConnector:
     """Salesforce via the OAuth 2.0 client-credentials flow (env SALESFORCE_CONSUMER_KEY / _SECRET /
