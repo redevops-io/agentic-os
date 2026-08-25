@@ -247,8 +247,13 @@ function renderPanels(){
 }
 (async()=>{
   const ws=(await (await fetch('/api/worlds')).json()).worlds;
-  document.getElementById('world').innerHTML=ws.map(w=>`<option value="${w.world_id}">${w.title}</option>`).join('');
-  document.getElementById('world').onchange=load;
+  const sel=document.getElementById('world');
+  sel.innerHTML=ws.map(w=>`<option value="${w.world_id}">${w.title}</option>`).join('');
+  sel.onchange=load;
+  // deep-link: /worlds?world=<id> (e.g. "see it run" from an Attention item) pre-selects + auto-plays it
+  const want=new URLSearchParams(location.search).get('world');
+  if(want && ws.some(w=>w.world_id===want)) sel.value=want;
   await load();
+  if(want) play();
 })();
 </script></div></body></html>"""

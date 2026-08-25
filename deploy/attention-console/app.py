@@ -99,6 +99,8 @@ font-size:20px;font-variant-numeric:tabular-nums;white-space:nowrap}
 button{font:600 12px "IBM Plex Sans",sans-serif;padding:7px 14px;border-radius:8px;border:1px solid var(--line);
 background:transparent;color:var(--ink);cursor:pointer}button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 button:disabled{opacity:.55;cursor:default}
+.run{font:600 12px "IBM Plex Sans",sans-serif;color:var(--accent);text-decoration:none;align-self:center;
+padding:7px 10px;border-radius:8px}.run:hover{background:var(--evidence-bg)}
 .foot{color:var(--muted);font-size:12.5px;margin-top:30px;border-top:1px solid var(--line);padding-top:14px}
 .foot code{font-family:"IBM Plex Mono",monospace;background:var(--review-bg);padding:1px 5px;border-radius:4px}
 </style></head><body><div class="wrap">
@@ -139,6 +141,7 @@ function cardHTML(it){
     <div class="meta"><span class="badge b-${it.kind}">${it.kind.replace("_"," ")}</span>
       <span class="pill">${esc(it.world_id)}</span><span class="pill">ladder: ${it.autonomy}</span>${rl}</div>
     <div class="act"><span class="s">${esc(it.suggested_action)}</span>
+      <a class="run" href="https://demo.redevops.io/worlds?world=${encodeURIComponent(it.world_id)}" target="_blank" rel="noopener">See it run →</a>
       ${it.kind==="APPROVAL"?'<button>Decline</button><button class="primary">Approve</button>':
         it.kind==="BLOCKED"?'<button class="primary">Unblock</button>':
         it.kind==="NEEDS_EVIDENCE"?'<button class="primary">Gather evidence</button>':'<button class="primary">Review</button>'}</div>
