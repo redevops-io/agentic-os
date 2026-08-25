@@ -15,10 +15,11 @@ from runtime_contracts import AuthorityContext, PrincipalRef
 from agentic_os.world import ALL_WORLDS, BenchmarkRunner, ScenarioOrchestrator
 
 _ANSWERS = {"What is the roof pitch?": "6/12", "Approve invoice correction?": "yes",
-            "Approve outreach to acme-ai-platform?": "yes"}
+            "Approve outreach to acme-ai-platform?": "yes",
+            "Approve sponsorship portfolio?": "yes"}
 _SCOPES = ("read:crm", "read:geo", "write:quote", "write:crm", "read:secrets", "write:vendor", "write:billing")
 _SEEDS = {"after-hours-lead": "8842", "kyc-ownership": "clean", "finance-leakage": "4471",
-          "gtm-pilot-discovery": "c1"}
+          "gtm-pilot-discovery": "c1", "creator-sponsorship": "s1"}
 
 
 def _authority():
@@ -30,7 +31,7 @@ def run_world(world_id: str) -> dict:
     world = ALL_WORLDS[world_id]
     auth = _authority()
     seed = _SEEDS.get(world_id, "seed-0")
-    offline = world_id == "gtm-pilot-discovery"          # deterministic + fast; fixture-labelled SYNTHETIC
+    offline = world_id in ("gtm-pilot-discovery", "creator-sponsorship")          # deterministic + fast; fixture-labelled SYNTHETIC
     run = ScenarioOrchestrator().run(world, seed=seed, authority=auth, answers=_ANSWERS, offline=offline)
     card = BenchmarkRunner().run(world, seed=seed, authority=auth, answers=_ANSWERS, offline=offline)
     d = run.to_dict()
