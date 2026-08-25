@@ -12,6 +12,7 @@ from .base import RuntimeContext, WorldDefinition
 from .baseline import BenchmarkRunner
 from .fabric import CapabilityDenied, CapabilityFabric, CapabilityProvider, Invocation, SideEffect
 from .flagship import AfterHoursLeadWorld
+from .gtm import FindCompaniesRebuildingTheRuntime
 from .models import (
     BaselineResult,
     ExecutionMode,
@@ -28,7 +29,9 @@ from .worlds import FinanceLeakageWorld, KycOnboardingWorld
 from .worlds import ALL_WORLDS as _OTHER_WORLDS
 
 #: every world the engine ships — the demo Dataset selector reads this (flagship first).
-ALL_WORLDS = {AfterHoursLeadWorld().world_id: AfterHoursLeadWorld(), **_OTHER_WORLDS}
+ALL_WORLDS = {AfterHoursLeadWorld().world_id: AfterHoursLeadWorld(),
+              FindCompaniesRebuildingTheRuntime().world_id: FindCompaniesRebuildingTheRuntime(),
+              **_OTHER_WORLDS}
 
 __all__ = [
     "WorldDefinition", "RuntimeContext",
@@ -36,5 +39,6 @@ __all__ = [
     "OutcomeSimulator", "SimArtifact", "ProjectionSeeder",
     "ScenarioOrchestrator", "BenchmarkRunner",
     "ExecutionMode", "Perturbation", "PerturbationKind", "RunMetrics", "WorldRun", "BaselineResult", "Scorecard",
-    "AfterHoursLeadWorld", "KycOnboardingWorld", "FinanceLeakageWorld", "ALL_WORLDS",
+    "AfterHoursLeadWorld", "FindCompaniesRebuildingTheRuntime", "KycOnboardingWorld",
+    "FinanceLeakageWorld", "ALL_WORLDS",
 ]
