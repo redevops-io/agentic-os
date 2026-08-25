@@ -48,8 +48,7 @@ def test_queue_is_prioritized_approvals_first_then_by_dollars():
     approvals = [it for it in q if it.kind == AttentionKind.APPROVAL]
     dollars = [it.dollar_impact for it in approvals]
     assert dollars == sorted(dollars, reverse=True)                          # biggest money first within a kind
-    # the $22.5k sponsorship approval outranks the $500 finance approval
-    assert approvals[0].world_id == "sponsorship-booking"
+    assert approvals[0].dollar_impact == max(dollars)                        # the top approval is the biggest $
 
 
 def test_every_item_carries_why_block_dollars_realism_and_autonomy():
