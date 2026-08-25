@@ -1,0 +1,13 @@
+# redevops.io/unsubscribe (via demo.redevops.io/unsubscribe) — monitored opt-out → persistent suppression ledger.
+services:
+  unsubscribe-api:
+    build: .
+    image: ${UNSUB_IMAGE:-unsubscribe-service:latest}
+    container_name: unsubscribe-api
+    restart: unless-stopped
+    ports:
+      - "${UNSUB_PORT:-8103}:8103"
+    volumes:
+      - /projects/gtm/suppression:/data      # persist opt-outs across restarts
+    security_opt:
+      - apparmor=docker-contextos
