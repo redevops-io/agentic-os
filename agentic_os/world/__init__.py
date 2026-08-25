@@ -18,7 +18,7 @@ from .outreach import (OutreachContext, OutreachDecision, decide, render_email, 
                        quality_gate, select_template, SuppressionLedger, handle_unsubscribe,
                        unsubscribe_url, unsubscribe_token)
 from .enrichment import (get_provider, resolve_verified_email, resolve_contact, title_keywords,
-                         ApolloProvider, HunterProvider, ClearbitProvider)
+                         source_apollo_list, ApolloProvider, HunterProvider, ClearbitProvider)
 from .optimizer import CandidateAction, CrossChannelOptimizer, Allocation, direct_email_action, sponsorship_action
 from .models import (
     BaselineResult,
@@ -53,7 +53,7 @@ __all__ = [
     "OutreachContext", "OutreachDecision", "decide", "render_email", "send_outreach",
     "quality_gate", "select_template", "SuppressionLedger", "handle_unsubscribe",
     "unsubscribe_url", "unsubscribe_token",
-    "get_provider", "resolve_verified_email", "resolve_contact", "title_keywords",
+    "get_provider", "resolve_verified_email", "resolve_contact", "title_keywords", "source_apollo_list",
     "ApolloProvider", "HunterProvider", "ClearbitProvider",
     "CandidateAction", "CrossChannelOptimizer", "Allocation", "direct_email_action", "sponsorship_action",
 ]
