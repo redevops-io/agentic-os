@@ -13,6 +13,7 @@ fixture fallback labelled SYNTHETIC, so the world runs offline.
 from __future__ import annotations
 
 import json
+import os
 import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
@@ -122,10 +123,23 @@ class FindCompaniesRebuildingTheRuntime(WorldDefinition):
                 "profile": f"https://github.com/{acct}"}
 
     def _reconcile(self, inputs, ctx) -> Dict[str, Any]:
-        # canonical dedup across the three CRMs — deterministic external ids, never a duplicate
+        """Canonical dedup across the three CRMs. With REDEVOPS_LIVE_CONNECTORS set, does a REAL read-only
+        HubSpot lookup (safe — no write); otherwise a deterministic simulated reconcile. Writes never happen
+        here; the outreach that follows is approval-gated regardless."""
         org = inputs.get("org_id", "")
+        if os.environ.get("REDEVOPS_LIVE_CONNECTORS"):
+            try:
+                from .connectors import HubSpotConnector  # noqa: PLC0415
+                domain = inputs.get("domain") or f"{org}.example.com"
+                hit = HubSpotConnector().lookup_company(domain)
+                return {"organization_id": org, "hubspot_id": (hit or {}).get("id"),
+                        "salesforce_id": None, "redevops_crm_id": f"rc-{org}",
+                        "duplicate": bool(hit), "source": "hubspot-live-read"}
+            except Exception as e:  # noqa: BLE001 - fall back to simulated on any connector error
+                return {"organization_id": org, "duplicate": False, "source": f"sim (live read failed: {e})",
+                        "salesforce_id": f"sf-{org}", "hubspot_id": f"hs-{org}", "redevops_crm_id": f"rc-{org}"}
         return {"organization_id": org, "salesforce_id": f"sf-{org}", "hubspot_id": f"hs-{org}",
-                "redevops_crm_id": f"rc-{org}", "duplicate": False}
+                "redevops_crm_id": f"rc-{org}", "duplicate": False, "source": "simulated"}
 
     # -- scoring (net-new: the pieces that were never built) --
     def _score(self, signal: Dict[str, Any]) -> Tuple[float, Tuple[str, ...], str]:
