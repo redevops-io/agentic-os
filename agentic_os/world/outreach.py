@@ -31,9 +31,65 @@ _FOUNDER_ROLES = ("founder", "cto", "co-founder", "chief technology")
 _PRIMARY_ROLES = ("head of ai", "vp engineering", "vp eng", "ai platform", "developer productivity",
                   "ml platform", "ai infrastructure", "head of engineering")
 
-_COMPLIANCE = ("\n\n—\nReDevOps · redevops.io\nYou're receiving this one-off note because of public, "
-               "work-related signals about {company}. Reply STOP or email unsubscribe@redevops.io to never "
-               "hear from me again.")
+#: CAN-SPAM: a valid physical postal address + a working, honored opt-out in every message.
+_ADDRESS = "ReDevOps.io LLC, 20200 West Dixie Highway, Suite 902, Miami, Florida 33180"
+_COMPLIANCE = ("\n\n—\nAlex · ReDevOps · redevops.io\n{address}\n"
+               "You're receiving this one-off note because of public, work-related signals about {company}. "
+               "Unsubscribe: {unsub_url}  (or reply STOP, or email unsubscribe@redevops.io) — honored within "
+               "10 business days.")
+
+
+def unsubscribe_token(email: str) -> str:
+    """A stable, non-reversible token for an unsubscribe URL (the raw address never rides in the link)."""
+    from runtime_contracts import content_hash  # noqa: PLC0415
+    return content_hash({"u": email.strip().lower()}).split(":", 1)[-1][:24]
+
+
+def unsubscribe_url(email: str) -> str:
+    return f"https://redevops.io/unsubscribe?u={unsubscribe_token(email)}"
+
+
+class SuppressionLedger:
+    """A persistent do-not-contact / opt-out ledger (CAN-SPAM). Keyed by unsubscribe token AND raw email/
+    domain so a monitored ``unsubscribe@redevops.io`` mailbox or the /unsubscribe endpoint can suppress by
+    either. File-backed (one entry per line) so suppression survives restarts and is auditable."""
+
+    def __init__(self, path: str = "") -> None:
+        self.path = path or os.environ.get("REDEVOPS_SUPPRESSION_FILE", "")
+        self._tokens: set = set()
+        self._addrs: set = set()
+        self._load()
+
+    def _load(self) -> None:
+        if self.path and os.path.exists(self.path):
+            for line in open(self.path, encoding="utf-8"):
+                v = line.strip().lower()
+                if v:
+                    (self._tokens if len(v) == 24 and "@" not in v else self._addrs).add(v)
+
+    def is_suppressed(self, email: str) -> bool:
+        e = (email or "").strip().lower()
+        if not e:
+            return False
+        domain = e.split("@")[-1]
+        return e in self._addrs or domain in self._addrs or unsubscribe_token(e) in self._tokens
+
+    def suppress(self, value: str, *, reason: str = "opt-out") -> None:
+        """Add an email, a domain, or an unsubscribe token to the ledger (idempotent, appended to file)."""
+        v = (value or "").strip().lower()
+        if not v:
+            return
+        (self._tokens if len(v) == 24 and "@" not in v else self._addrs).add(v)
+        if self.path:
+            os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+            with open(self.path, "a", encoding="utf-8") as fh:
+                fh.write(v + "\n")
+
+
+def handle_unsubscribe(token_or_email: str, ledger: SuppressionLedger) -> Dict[str, str]:
+    """What the monitored /unsubscribe endpoint (or mailbox processor) calls — suppress + confirm."""
+    ledger.suppress(token_or_email, reason="user_unsubscribe")
+    return {"status": "unsubscribed", "message": "You won't hear from us again."}
 
 _PRIMARY = """Subject: A question about your AI stack
 
@@ -135,15 +191,18 @@ def render_email(ctx: OutreachContext) -> Dict[str, str]:
         evidence_about_company=ctx.evidence_about_company or ctx.specific_evidence_sentence,
         specific_problem_or_workflow=ctx.specific_problem_or_workflow or "your production AI workflow")
     subject = filled.splitlines()[0].replace("Subject:", "").strip()
-    body = "\n".join(filled.splitlines()[1:]).strip() + _COMPLIANCE.format(company=ctx.company)
+    unsub = unsubscribe_url(ctx.verified_email) if ctx.verified_email else "https://redevops.io/unsubscribe"
+    footer = _COMPLIANCE.format(company=ctx.company, address=_ADDRESS, unsub_url=unsub)
+    body = "\n".join(filled.splitlines()[1:]).strip() + footer
     return {"subject": subject, "body": body}
 
 
-def decide(ctx: OutreachContext, *, auto_send: Optional[bool] = None) -> OutreachDecision:
+def decide(ctx: OutreachContext, *, auto_send: Optional[bool] = None,
+           ledger: "Optional[SuppressionLedger]" = None) -> OutreachDecision:
     """The governed outbound decision. Deny-wins: suppression → gate → email → auto/approval."""
-    if ctx.suppressed:
+    if ctx.suppressed or ctx.already_contacted:
         return OutreachDecision.SUPPRESSED
-    if ctx.already_contacted:
+    if ledger is not None and ctx.verified_email and ledger.is_suppressed(ctx.verified_email):
         return OutreachDecision.SUPPRESSED
     ok, _reason = quality_gate(ctx)
     if not ok:
@@ -159,10 +218,12 @@ def _valid_email(addr: str) -> bool:
 
 
 def send_outreach(ctx: OutreachContext, connector: Any, *, cap_remaining: int = 0,
-                  auto_send: Optional[bool] = None, tag: str = "gtm-outreach") -> Dict[str, Any]:
+                  auto_send: Optional[bool] = None, tag: str = "gtm-outreach",
+                  ledger: "Optional[SuppressionLedger]" = None) -> Dict[str, Any]:
     """Render + (governed) send. Returns the decision, the rendered email, and the send result if sent.
-    Never sends unless decide() == SEND, a verified email exists, and the frequency cap has room."""
-    decision = decide(ctx, auto_send=auto_send)
+    Never sends unless decide() == SEND, a verified email exists, the lead isn't suppressed, and the
+    frequency cap has room."""
+    decision = decide(ctx, auto_send=auto_send, ledger=ledger)
     email = render_email(ctx)
     result: Dict[str, Any] = {"decision": decision.value, "to": ctx.verified_email,
                               "subject": email["subject"], "sent": False}

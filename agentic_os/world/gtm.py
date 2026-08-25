@@ -222,14 +222,24 @@ class FindCompaniesRebuildingTheRuntime(WorldDefinition):
         # governed outreach decision (quality gate + verified-email + suppression). Discovery via GitHub/HN
         # yields NO verified business email, so a real send is blocked here — NEEDS_MORE_EVIDENCE / NO_EMAIL,
         # never a blast. Enrichment supplies the email; nothing is sent from the world's SIMULATE run.
-        from .outreach import OutreachContext, decide  # noqa: PLC0415
+        from .outreach import OutreachContext, SuppressionLedger, decide  # noqa: PLC0415
+        verified_email, contact_first = top.get("verified_email", ""), "there"
+        if os.environ.get("REDEVOPS_LIVE_CONNECTORS"):
+            try:
+                from .enrichment import resolve_contact  # noqa: PLC0415
+                domain = top.get("domain") or f"{top['account']}.com"
+                contact = resolve_contact(domain=domain, titles=list(enr["buying_group"]))
+                if contact.get("email") and contact.get("verified"):
+                    verified_email = contact["email"]; contact_first = contact.get("first_name") or "there"
+            except Exception:  # noqa: BLE001
+                pass
         octx = OutreachContext(
-            company=top["account"], role=", ".join(enr["buying_group"]),
+            company=top["account"], first_name=contact_first, role=", ".join(enr["buying_group"]),
             observed_activity="building runtime infrastructure", specific_evidence_sentence=top["evidence"],
-            runtime_problem="whether execution policy, context and permissions are implemented independently in each system",
+            runtime_problem="execution policy, context and permissions are implemented independently in each system",
             evidence_about_company=top["evidence"], specific_problem_or_workflow=top["pilot"],
-            verified_email=top.get("verified_email", ""))
-        outreach_decision = decide(octx).value
+            verified_email=verified_email)
+        outreach_decision = decide(octx, ledger=SuppressionLedger()).value
         rt.milestone(f"outreach decision — {outreach_decision}", kind="policy", block=RUN)
         rt.tick(2)
         rt.milestone("outbound held for founder approval (public-safe: nothing sent)", kind="needs_you",
