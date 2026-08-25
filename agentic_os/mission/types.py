@@ -97,6 +97,7 @@ class CapabilitySpec:
     isolation_class: str = ""                   # "" | "in_process" | "sandbox" | "strict" — executor confinement
     network: list[str] = field(default_factory=list)              # declared egress endpoints (finer than permissions)
     data_classifications: list[str] = field(default_factory=list)  # sensitivity of the data it touches (e.g. "pii")
+    secrets: list[str] = field(default_factory=list)             # named credential refs the broker issues JIT (never raw values)
 
     def key(self) -> str:
         return self.name
