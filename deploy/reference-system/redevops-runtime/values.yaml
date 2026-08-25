@@ -14,7 +14,7 @@ fullnameOverride: ""
 runtime:
   image:
     repository: ghcr.io/redevops-io/redevops-runtime
-    tag: v6
+    tag: "0.3.0"                   # matches Chart.appVersion; publish this tag before the one-click deploy
     pullPolicy: IfNotPresent
   replicas: 1
   http:
