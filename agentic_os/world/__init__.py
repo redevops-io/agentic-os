@@ -24,6 +24,8 @@ from .outreach import (OutreachContext, OutreachDecision, decide, render_email, 
 from .enrichment import (get_provider, resolve_verified_email, resolve_contact, title_keywords,
                          source_apollo_list, ApolloProvider, HunterProvider, ClearbitProvider)
 from .optimizer import CandidateAction, CrossChannelOptimizer, Allocation, direct_email_action, sponsorship_action
+from .attention import (AttentionItem, AttentionKind, Autonomy, build_attention_queue, items_from_run,
+                        summarize)
 from .models import (
     BaselineResult,
     ExecutionMode,
@@ -64,4 +66,5 @@ __all__ = [
     "get_provider", "resolve_verified_email", "resolve_contact", "title_keywords", "source_apollo_list",
     "ApolloProvider", "HunterProvider", "ClearbitProvider",
     "CandidateAction", "CrossChannelOptimizer", "Allocation", "direct_email_action", "sponsorship_action",
+    "AttentionItem", "AttentionKind", "Autonomy", "build_attention_queue", "items_from_run", "summarize",
 ]
