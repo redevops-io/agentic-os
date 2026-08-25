@@ -53,6 +53,31 @@ def test_title_keywords_makes_roles_apollo_matchable():
     assert title_keywords(["CTO"]) == ["cto"]                       # nothing to drop -> falls back to the token
 
 
+def test_source_apollo_list_reads_curated_prospects(monkeypatch):
+    # the Chrome-extension bridge: a human saves LinkedIn prospects into an Apollo List "GTM-Runtime";
+    # the pipeline reads that list via the API (no browser automation) and gets ready-to-govern contacts.
+    from agentic_os.world import source_apollo_list
+
+    def fake_get(url, headers=None, timeout=10.0):
+        assert url.endswith("/labels")
+        return {"labels": [{"id": "lst-9", "name": "GTM-Runtime"}, {"id": "lst-1", "name": "Other"}]}
+
+    def fake_post(url, payload, headers, timeout=10.0):
+        assert url.endswith("/contacts/search") and payload["label_ids"] == ["lst-9"]
+        return {"contacts": [{"name": "Sam Rivera", "first_name": "Sam", "title": "Head of Platform",
+                              "email": "sam@acme.dev", "email_status": "verified",
+                              "organization": {"name": "Acme", "primary_domain": "acme.dev"}}]}
+
+    monkeypatch.setattr(E, "_get", fake_get)
+    monkeypatch.setattr(E, "_post", fake_post)
+    people = source_apollo_list("GTM-Runtime", provider=ApolloProvider(key="k"))
+    assert len(people) == 1 and people[0]["email"] == "sam@acme.dev" and people[0]["verified"] is True
+    assert people[0]["company"] == "Acme" and people[0]["domain"] == "acme.dev"
+    # a missing list yields [] (never fabricates), so the pipeline simply has nothing to send
+    monkeypatch.setattr(E, "_get", lambda *a, **k: {"labels": []})
+    assert source_apollo_list("Nope", provider=ApolloProvider(key="k")) == []
+
+
 def test_verified_contact_unblocks_send(monkeypatch):
     # a lead with a verified email + grounded evidence + auto → SEND (the enrichment unblocks the gate)
     ctx = OutreachContext(company="Acme", first_name="Jordan", role="Head of AI",

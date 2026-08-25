@@ -108,6 +108,28 @@ class ApolloProvider:
                         "email": p.get("email"), "verified": p.get("email_status") == "verified"})
         return out
 
+    def list_contacts(self, label_name: str, limit: int = 50) -> "list[Dict[str, Any]]":
+        """Contacts saved into a named Apollo List/label — the bridge from MANUAL LinkedIn curation (via the
+        Apollo Chrome extension) to the governed pipeline. A prospect the founder saves while browsing lands
+        here already email-revealed; the pipeline then applies the SAME quality gate + outreach decision. No
+        browser automation, no LinkedIn scraping — the Apollo account is the only integration point."""
+        labels = _get("https://api.apollo.io/api/v1/labels", headers=self._h())
+        labels = labels if isinstance(labels, list) else (labels.get("labels") or [])
+        lid = next((l.get("id") for l in labels if (l.get("name") or "").lower() == label_name.lower()), None)
+        if not lid:
+            return []
+        r = _post("https://api.apollo.io/api/v1/contacts/search",
+                  {"label_ids": [lid], "per_page": limit}, self._h())
+        out = []
+        for c in (r.get("contacts") or [])[:limit]:
+            org = c.get("organization") or {}
+            out.append({"name": c.get("name"), "first_name": c.get("first_name", ""),
+                        "title": c.get("title", ""), "email": c.get("email"),
+                        "verified": c.get("email_status") == "verified",
+                        "domain": org.get("primary_domain") or org.get("website_url") or c.get("email", "").split("@")[-1],
+                        "company": org.get("name") or c.get("organization_name")})
+        return out
+
     def unlock_person(self, person_id: str) -> Dict[str, Any]:
         """Reveal a candidate's name + professional email via People Enrichment (spends 1 credit). Search
         results have these locked; this is the second half of the GTM resolution."""
@@ -194,6 +216,20 @@ def resolve_verified_email(*, domain: str, first_name: str, last_name: str,
                 "confidence": max(found.get("confidence", 0), ver.get("score", 0))}
     except EnrichmentError as e:
         return {"email": None, "verified": False, "provider": p.name, "reason": str(e)}
+
+
+def source_apollo_list(label_name: str, *, provider: Optional[Any] = None) -> "list[Dict[str, Any]]":
+    """Read prospects a human curated into a named Apollo List (via the Chrome extension while browsing
+    LinkedIn) so they can flow through the governed outreach pipeline. Returns [] when no Apollo provider is
+    configured, the list is empty, or the list doesn't exist — never fabricates. Each entry carries company,
+    domain, name and (usually already-revealed) email, ready for the quality gate + outreach decision."""
+    p = provider or get_provider()
+    if p is None or not hasattr(p, "list_contacts"):
+        return []
+    try:
+        return p.list_contacts(label_name)
+    except EnrichmentError:
+        return []
 
 
 def resolve_contact(*, domain: str, titles: "list[str]", provider: Optional[Any] = None) -> Dict[str, Any]:
