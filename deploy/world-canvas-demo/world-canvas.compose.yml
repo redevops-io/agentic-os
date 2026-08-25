@@ -1,0 +1,11 @@
+# demo.redevops.io/worlds — animated execution canvas over the world-runtime engine (standalone).
+services:
+  world-canvas-api:
+    build: .
+    image: ${WORLD_CANVAS_IMAGE:-world-canvas-demo:latest}
+    container_name: world-canvas-api
+    restart: unless-stopped
+    ports:
+      - "${WORLD_CANVAS_PORT:-8102}:8102"
+    security_opt:
+      - apparmor=docker-contextos
