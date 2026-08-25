@@ -74,3 +74,25 @@ def test_is_a_drop_in_sender_for_send_outreach(monkeypatch):
     sender = HubSpotSequenceSender(token="tok", sequence_id="s", sender_id="o")
     r = send_outreach(_grounded("jordan@acme.com"), sender, cap_remaining=5, auto_send=True)
     assert r["decision"] == "SEND" and r["sent"] is True    # HubSpot sender interchangeable with Postmark
+
+
+def test_apollo_sender_degrades_without_paid_setup(monkeypatch):
+    from agentic_os.world.connectors import ApolloSender
+    monkeypatch.setenv("APOLLO_API_KEY", "k")
+    monkeypatch.delenv("APOLLO_SEQUENCE_ID", raising=False)
+    monkeypatch.delenv("APOLLO_SENDER_ACCOUNT_ID", raising=False)
+    monkeypatch.setattr(C, "_http", lambda *a, **k: {"is_logged_in": True})
+    r = ApolloSender().send(to="a@b.com", subject="s", body="b")
+    assert r["error_code"] == 1 and "APOLLO_SEQUENCE_ID" in r["reason"]   # clear reason, no silent send
+
+
+def test_apollo_sender_sends_when_configured(monkeypatch):
+    from agentic_os.world.connectors import ApolloSender
+    def fake_http(method, url, *, headers, data=None, timeout=12.0):
+        if url.endswith("/auth/health"): return {"is_logged_in": True}
+        if url.endswith("/contacts"): return {"contact": {"id": "ac-1"}}
+        if "add_contact_ids" in url: return {"contacts": [{"id": "ac-1"}]}
+        return {}
+    monkeypatch.setattr(C, "_http", fake_http)
+    r = ApolloSender(key="k", sequence_id="seq-1", sender_account_id="acct-1").send(to="a@b.com", subject="s", body="b")
+    assert r["error_code"] == 0 and r["contact_id"] == "ac-1"

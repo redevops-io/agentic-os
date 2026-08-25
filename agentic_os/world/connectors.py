@@ -191,6 +191,60 @@ class SalesforceConnector:
         _http("DELETE", f"{self._instance}/services/data/{_SF_API}/sobjects/Account/{account_id}", headers=self._h())
 
 
+class ApolloSender:
+    """Cold-send via Apollo sequences (emailer campaigns) — 1:1 through a connected mailbox on a dedicated
+    sending domain, the compliant cold path. ``send()`` upserts the contact into Apollo (with the evidence
+    in custom fields a sequence template renders) and adds it to a configured sequence.
+
+    REQUIRES: a PAID Apollo plan (Free blocks all API — search/enrich/contacts 403), a connected sending
+    mailbox (``APOLLO_SENDER_ACCOUNT_ID``, ideally on ``APOLLO_SENDING_DOMAIN`` e.g. get.redevops.io) and a
+    created sequence (``APOLLO_SEQUENCE_ID``). Degrades with a clear reason instead of silently failing."""
+
+    def __init__(self, key: Optional[str] = None, *, sequence_id: Optional[str] = None,
+                 sender_account_id: Optional[str] = None) -> None:
+        self._key = key or os.environ.get("APOLLO_API_KEY", "")
+        self._seq = sequence_id or os.environ.get("APOLLO_SEQUENCE_ID", "")
+        self._sender = sender_account_id or os.environ.get("APOLLO_SENDER_ACCOUNT_ID", "")
+        self.sending_domain = os.environ.get("APOLLO_SENDING_DOMAIN", "")
+
+    def _h(self) -> Dict[str, str]:
+        return {"X-Api-Key": self._key, "Content-Type": "application/json", "Cache-Control": "no-cache"}
+
+    def available(self) -> Dict[str, Any]:
+        if not self._key:
+            return {"available": False, "reason": "no APOLLO_API_KEY"}
+        try:  # auth health does not consume credits
+            h = _http("GET", "https://api.apollo.io/v1/auth/health", headers=self._h())
+            if not h.get("is_logged_in"):
+                return {"available": False, "reason": "apollo auth not logged in"}
+        except ConnectorError as e:
+            return {"available": False, "reason": str(e)}
+        if not (self._seq and self._sender):
+            return {"available": False, "reason": "set APOLLO_SEQUENCE_ID + APOLLO_SENDER_ACCOUNT_ID "
+                    "(needs a PAID plan + a connected sending mailbox)"}
+        return {"available": True}
+
+    def send(self, *, to: str, subject: str, body: str, tag: str = "gtm") -> Dict[str, Any]:
+        av = self.available()
+        if not av["available"]:
+            return {"error_code": 1, "reason": av["reason"], "message_id": None}
+        try:
+            first = ""  # the sequence template personalizes; body carried as a custom note field
+            c = _http("POST", "https://api.apollo.io/v1/contacts", headers=self._h(),
+                      data=json.dumps({"email": to, "first_name": first,
+                                       "typed_custom_fields": {"redevops_note": body[:900]}}).encode())
+            cid = (c.get("contact") or {}).get("id")
+            r = _http("POST", f"https://api.apollo.io/v1/emailer_campaigns/{self._seq}/add_contact_ids",
+                      headers=self._h(),
+                      data=json.dumps({"contact_ids": [cid], "emailer_campaign_id": self._seq,
+                                       "send_email_from_email_account_id": self._sender,
+                                       "sequence_active": True}).encode())
+            return {"error_code": 0, "message_id": (r.get("contacts") or [{}])[0].get("id", cid),
+                    "contact_id": cid}
+        except ConnectorError as e:
+            return {"error_code": 1, "reason": str(e), "message_id": None}
+
+
 class PostmarkConnector:
     """Transactional email via Postmark. Uses a SERVER token (from Vault vibexgen/postmark/redevops), not the
     account token — the account token cannot send. ``from_addr`` must be on a verified sender signature."""
