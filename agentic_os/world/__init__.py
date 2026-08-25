@@ -14,6 +14,8 @@ from .fabric import CapabilityDenied, CapabilityFabric, CapabilityProvider, Invo
 from .flagship import AfterHoursLeadWorld
 from .gtm import FindCompaniesRebuildingTheRuntime
 from .sponsorship import CreatorAcquisitionWorld
+from .outreach import OutreachContext, OutreachDecision, decide, render_email, send_outreach, quality_gate, select_template
+from .optimizer import CandidateAction, CrossChannelOptimizer, Allocation, direct_email_action, sponsorship_action
 from .models import (
     BaselineResult,
     ExecutionMode,
@@ -44,4 +46,7 @@ __all__ = [
     "AfterHoursLeadWorld", "FindCompaniesRebuildingTheRuntime", "CreatorAcquisitionWorld",
     "KycOnboardingWorld",
     "FinanceLeakageWorld", "ALL_WORLDS",
+    "OutreachContext", "OutreachDecision", "decide", "render_email", "send_outreach",
+    "quality_gate", "select_template",
+    "CandidateAction", "CrossChannelOptimizer", "Allocation", "direct_email_action", "sponsorship_action",
 ]

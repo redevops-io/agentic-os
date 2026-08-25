@@ -218,6 +218,19 @@ class FindCompaniesRebuildingTheRuntime(WorldDefinition):
                                  "idempotency_key": f"{top['account']}:draft"})
         rt.milestone(f"outreach drafted — {top['pilot']} (grounded in evidence)", kind="action", node="crm",
                      block=REV, realism=RealismClass.SIMULATED.value)
+
+        # governed outreach decision (quality gate + verified-email + suppression). Discovery via GitHub/HN
+        # yields NO verified business email, so a real send is blocked here — NEEDS_MORE_EVIDENCE / NO_EMAIL,
+        # never a blast. Enrichment supplies the email; nothing is sent from the world's SIMULATE run.
+        from .outreach import OutreachContext, decide  # noqa: PLC0415
+        octx = OutreachContext(
+            company=top["account"], role=", ".join(enr["buying_group"]),
+            observed_activity="building runtime infrastructure", specific_evidence_sentence=top["evidence"],
+            runtime_problem="whether execution policy, context and permissions are implemented independently in each system",
+            evidence_about_company=top["evidence"], specific_problem_or_workflow=top["pilot"],
+            verified_email=top.get("verified_email", ""))
+        outreach_decision = decide(octx).value
+        rt.milestone(f"outreach decision — {outreach_decision}", kind="policy", block=RUN)
         rt.tick(2)
         rt.milestone("outbound held for founder approval (public-safe: nothing sent)", kind="needs_you",
                      block=RUN, needs_you="POLICY_APPROVAL")
@@ -237,6 +250,7 @@ class FindCompaniesRebuildingTheRuntime(WorldDefinition):
                                     "buying_group": enr["buying_group"], "crm": crm, "evidence": top["evidence"]},
                 "draft_id": draft.result.get("artifact_id"), "signals_realism": realism,
                 "attention": attention, "sent": bool(approved) and False,   # public-safe: never actually sent
+                "outreach_decision": outreach_decision,
                 "approval_gated": True, "verified": True}
 
     def check_ground_truth(self, outcome: Dict[str, Any], rt: RuntimeContext) -> Optional[bool]:
