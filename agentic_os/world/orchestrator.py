@@ -24,7 +24,8 @@ class ScenarioOrchestrator:
 
     def run(self, world: WorldDefinition, *, mode: ExecutionMode = ExecutionMode.SIMULATE,
             seed: str = "seed-0", authority: Any = None, answers: Optional[Dict[str, str]] = None,
-            perturbations: Optional[List[Perturbation]] = None, naive: bool = False) -> WorldRun:
+            perturbations: Optional[List[Perturbation]] = None, naive: bool = False,
+            offline: bool = False) -> WorldRun:
         perturbations = perturbations or []
         graph = IdentityGraph()
         simulator = OutcomeSimulator()
@@ -35,7 +36,7 @@ class ScenarioOrchestrator:
         trace = VisualTrace(mission_id=mission_id, world_id=world.world_id)
         rt = RuntimeContext(world_id=world.world_id, mission_id=mission_id, fabric=fabric,
                             simulator=simulator, graph=graph, trace=trace, mode=mode, authority=authority,
-                            answers=answers or {}, naive=naive)
+                            answers=answers or {}, naive=naive, offline=offline)
         run = WorldRun(world_id=world.world_id, mission_id=mission_id, mode=mode.value, trace=trace,
                        metrics=rt.metrics, perturbations=[f"{p.kind.value}:{p.target}" for p in perturbations])
 

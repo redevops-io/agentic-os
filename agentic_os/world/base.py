@@ -40,6 +40,7 @@ class RuntimeContext:
     needs_you: List[Dict[str, str]] = field(default_factory=list)
     clock_s: float = 0.0
     naive: bool = False                                       # baseline arm: guess instead of asking
+    offline: bool = False                                     # force fixtures instead of live network fetch
     _capsule: Optional[Capsule] = None
 
     def tick(self, dt: float) -> float:

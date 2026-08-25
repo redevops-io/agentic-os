@@ -22,17 +22,17 @@ class BenchmarkRunner:
         self._orch = orchestrator or ScenarioOrchestrator()
 
     def run(self, world: WorldDefinition, *, seed: str = "seed-0", authority: Any = None,
-            answers: "Dict[str, str] | None" = None) -> Scorecard:
+            answers: "Dict[str, str] | None" = None, offline: bool = False) -> Scorecard:
         card = Scorecard(world_id=world.world_id)
 
         # full runtime — asks for the missing fact, verifies
-        full = self._orch.run(world, seed=seed, authority=authority, answers=answers or {})
+        full = self._orch.run(world, seed=seed, authority=authority, answers=answers or {}, offline=offline)
         card.arms.append(BaselineResult("full_runtime", full.metrics, outcome_reached=full.metrics.verified,
                                         notes="governed cross-app mission; asked one question; verified"))
         card.ground_truth_met = world.check_ground_truth(full.outcome, _rt_of(full))
 
         # naive agent — guesses the missing fact instead of asking (naive=True), no grounding
-        naive = self._orch.run(world, seed=seed, authority=authority, answers={}, naive=True)
+        naive = self._orch.run(world, seed=seed, authority=authority, answers={}, naive=True, offline=offline)
         naive_gt = world.check_ground_truth(naive.outcome, _rt_of(naive))
         card.arms.append(BaselineResult("naive_agent", naive.metrics, outcome_reached=bool(naive_gt),
                                         notes=_note(world, "naive_agent",
