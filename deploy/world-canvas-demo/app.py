@@ -21,7 +21,7 @@ _ANSWERS = {"What is the roof pitch?": "6/12", "Approve invoice correction?": "y
 _SCOPES = ("read:crm", "read:geo", "write:quote", "write:crm", "read:secrets", "write:vendor", "write:billing")
 _SEEDS = {"after-hours-lead": "8842", "kyc-ownership": "clean", "finance-leakage": "4471",
           "gtm-pilot-discovery": "c1", "creator-sponsorship": "s1", "sponsorship-booking": "s1",
-          "paid-acquisition": "s1"}
+          "paid-acquisition": "s1", "contact-center": "c1"}
 
 
 def _authority():
