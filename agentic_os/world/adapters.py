@@ -1,0 +1,207 @@
+"""World Adapters — project a CanonicalObject into a real OSS-core app, or an in-memory demo store.
+
+This is the Business-OS core seam the plan calls net-new: "project one dataset into Twenty / Chatwoot / Lago
+/ ERPNext / Listmonk / Postiz". Every adapter implements the same tiny contract — ``accepts(kind)``,
+``available()``, ``upsert(obj) -> native_id``, ``get(native_id)`` — so the ProjectionSeeder can write a
+world's entities into whichever backend is registered per app. The default is an idempotent in-memory store
+(a demo runs with no core deployed), labelled SEEDED-DEMO; a configured + reachable real core is used instead
+and labelled REAL-LIVE. Crucially the realism is never faked: if the live Twenty isn't reachable the seeder
+falls back to in-memory and says so, rather than pretending a record landed in a system it didn't.
+"""
+from __future__ import annotations
+
+import json
+import os
+import urllib.request
+from typing import Any, Dict, Optional
+
+from runtime_contracts.world import RealismClass
+
+from .objects import APP_CATALOG, CanonicalObject
+
+
+class CoreUnavailable(RuntimeError):
+    """A real core adapter could not complete a write — the registry falls back to in-memory."""
+
+
+def _http_json(method: str, url: str, *, headers: Dict[str, str], payload: Optional[Dict[str, Any]] = None,
+               timeout: float = 4.0) -> Dict[str, Any]:
+    data = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(url, method=method, headers=headers, data=data)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        body = r.read().decode()
+    return json.loads(body) if body else {}
+
+
+class InMemoryAdapter:
+    """The default projection target: a deterministic in-memory record per (app, native_id). Idempotent, so
+    a re-seed of the same event is a no-op and replay is stable. Realism = SEEDED-DEMO."""
+
+    def __init__(self, app: str, store: Optional[Dict[str, Any]] = None) -> None:
+        self.app = app
+        self.name = f"{app}:in-memory"
+        self.realism = RealismClass.SEEDED_DEMO.value
+        self._store = store if store is not None else {}
+
+    def accepts(self, kind: str) -> bool:
+        return kind in APP_CATALOG.get(self.app, ())
+
+    def available(self) -> bool:
+        return True
+
+    def upsert(self, obj: CanonicalObject) -> str:
+        nid = obj.native_id(self.app)
+        key = f"{self.app}:{nid}"
+        if key not in self._store:
+            rec = obj.to_record(self.app, nid)
+            rec["projection_realism"] = self.realism
+            self._store[key] = rec
+        return nid
+
+    def get(self, native_id: str) -> Optional[Dict[str, Any]]:
+        return self._store.get(f"{self.app}:{native_id}")
+
+
+class HttpCoreAdapter:
+    """Base for a real OSS-core adapter. Reads a base URL + token from env; ``available()`` is true only when
+    both are set and the core answers a health probe. ``upsert`` performs the app-specific write; a failure
+    raises :class:`CoreUnavailable` so the registry degrades to in-memory rather than losing the record."""
+
+    app = ""
+    core = ""
+    base_env = ""
+    token_env = ""
+    health_path = "/"
+
+    def __init__(self) -> None:
+        self.name = f"{self.app}:{self.core}"
+        self.realism = RealismClass.REAL_LIVE.value
+        self.base = os.environ.get(self.base_env, "").rstrip("/")
+        self.token = os.environ.get(self.token_env, "")
+        self._mirror: Dict[str, Dict[str, Any]] = {}
+
+    def accepts(self, kind: str) -> bool:
+        return kind in APP_CATALOG.get(self.app, ())
+
+    def available(self) -> bool:
+        if not (self.base and self.token):
+            return False
+        try:
+            _http_json("GET", self.base + self.health_path, headers=self._headers(), timeout=2.0)
+            return True
+        except Exception:  # noqa: BLE001 — unreachable/unauthed core is simply "not available"
+            return False
+
+    def _headers(self) -> Dict[str, str]:
+        return {"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"}
+
+    def _remember(self, obj: CanonicalObject, native_id: str) -> str:
+        rec = obj.to_record(self.app, native_id)
+        rec["projection_realism"] = self.realism
+        self._mirror[native_id] = rec
+        return native_id
+
+    def get(self, native_id: str) -> Optional[Dict[str, Any]]:
+        return self._mirror.get(native_id)
+
+    def upsert(self, obj: CanonicalObject) -> str:  # pragma: no cover - overridden
+        raise NotImplementedError
+
+
+class LagoBillingAdapter(HttpCoreAdapter):
+    app = "lago"
+    core = "Lago"
+    base_env = "LAGO_API_URL"
+    token_env = "LAGO_API_KEY"
+    health_path = "/api/v1/customers?per_page=1"
+
+    def upsert(self, obj: CanonicalObject) -> str:
+        nid = obj.native_id(self.app)
+        try:
+            _http_json("POST", self.base + "/api/v1/customers", headers=self._headers(),
+                       payload={"customer": {"external_id": nid, "name": obj.label}})
+        except Exception as e:  # noqa: BLE001
+            raise CoreUnavailable(f"lago upsert failed: {type(e).__name__}") from None
+        return self._remember(obj, nid)
+
+
+class ChatwootAdapter(HttpCoreAdapter):
+    app = "chatwoot"
+    core = "Chatwoot"
+    base_env = "CHATWOOT_BASE_URL"
+    token_env = "CHATWOOT_API_TOKEN"
+
+    def _headers(self) -> Dict[str, str]:
+        return {"api_access_token": self.token, "Content-Type": "application/json"}
+
+    @property
+    def _account(self) -> str:
+        return os.environ.get("CHATWOOT_ACCOUNT_ID", "1")
+
+    def available(self) -> bool:
+        self.health_path = f"/api/v1/accounts/{self._account}/contacts?page=1"
+        return super().available()
+
+    def upsert(self, obj: CanonicalObject) -> str:
+        nid = obj.native_id(self.app)
+        try:
+            _http_json("POST", f"{self.base}/api/v1/accounts/{self._account}/contacts",
+                       headers=self._headers(), payload={"name": obj.label, "identifier": nid})
+        except Exception as e:  # noqa: BLE001
+            raise CoreUnavailable(f"chatwoot upsert failed: {type(e).__name__}") from None
+        return self._remember(obj, nid)
+
+
+class TwentyCrmAdapter(HttpCoreAdapter):
+    app = "twenty"
+    core = "Twenty CRM"
+    base_env = "TWENTY_BASE_URL"
+    token_env = "TWENTY_API_KEY"
+    health_path = "/rest/companies?limit=1"
+
+    def upsert(self, obj: CanonicalObject) -> str:
+        nid = obj.native_id(self.app)
+        # Twenty's REST surface: upsert a company keyed by our canonical id (idempotency handled app-side).
+        try:
+            _http_json("POST", self.base + "/rest/companies", headers=self._headers(),
+                       payload={"name": obj.label, "idempotencyKey": nid})
+        except Exception as e:  # noqa: BLE001
+            raise CoreUnavailable(f"twenty upsert failed: {type(e).__name__}") from None
+        return self._remember(obj, nid)
+
+
+#: real adapters the registry will prefer for an app when the core is configured + reachable.
+REAL_ADAPTERS = {"lago": LagoBillingAdapter, "chatwoot": ChatwootAdapter, "twenty": TwentyCrmAdapter}
+
+
+class AdapterRegistry:
+    """Resolves one adapter per app: an explicit override, else a configured + reachable real core, else the
+    in-memory default. Instances are cached so the in-memory store persists across a run. Honest by
+    construction — an app is only labelled REAL-LIVE when its core actually answered."""
+
+    def __init__(self, overrides: Optional[Dict[str, Any]] = None, store: Optional[Dict[str, Any]] = None,
+                 *, allow_real: bool = True) -> None:
+        self._overrides = overrides or {}
+        self._store = store if store is not None else {}
+        self._allow_real = allow_real
+        self._cache: Dict[str, Any] = {}
+
+    def for_app(self, app: str) -> Any:
+        if app in self._cache:
+            return self._cache[app]
+        adapter = self._resolve(app)
+        self._cache[app] = adapter
+        return adapter
+
+    def _resolve(self, app: str) -> Any:
+        if app in self._overrides:
+            return self._overrides[app]
+        if self._allow_real and app in REAL_ADAPTERS:
+            candidate = REAL_ADAPTERS[app]()
+            if candidate.available():
+                return candidate
+        return InMemoryAdapter(app, self._store)
+
+    def resolved(self) -> Dict[str, str]:
+        """Which adapter (+ realism) is in play per cached app — for the demo/console to show honestly."""
+        return {app: {"adapter": a.name, "realism": a.realism} for app, a in self._cache.items()}
