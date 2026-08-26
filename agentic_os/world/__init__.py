@@ -28,6 +28,7 @@ from .attention import (AttentionItem, AttentionKind, Autonomy, build_attention_
                         summarize)
 from .budget_governor import BudgetGovernor, SpendAuthorization
 from .paid_acquisition import PaidAcquisitionWorld
+from .contact_center import ContactCenterWorld
 from .models import (
     BaselineResult,
     ExecutionMode,
@@ -52,6 +53,7 @@ ALL_WORLDS = {AfterHoursLeadWorld().world_id: AfterHoursLeadWorld(),
               CreatorAcquisitionWorld().world_id: CreatorAcquisitionWorld(),
               GovernedSponsorshipWorld().world_id: GovernedSponsorshipWorld(),
               PaidAcquisitionWorld().world_id: PaidAcquisitionWorld(),
+              ContactCenterWorld().world_id: ContactCenterWorld(),
               **_OTHER_WORLDS}
 
 __all__ = [
@@ -73,7 +75,7 @@ __all__ = [
     "ApolloProvider", "HunterProvider", "ClearbitProvider",
     "CandidateAction", "CrossChannelOptimizer", "Allocation", "direct_email_action", "sponsorship_action",
     "AttentionItem", "AttentionKind", "Autonomy", "build_attention_queue", "items_from_run", "summarize",
-    "BudgetGovernor", "SpendAuthorization", "PaidAcquisitionWorld",
+    "BudgetGovernor", "SpendAuthorization", "PaidAcquisitionWorld", "ContactCenterWorld",
     "CanonicalObject", "canonical_from_entity", "APP_CATALOG", "APP_META",
     "AdapterRegistry", "InMemoryAdapter", "HttpCoreAdapter", "CoreUnavailable", "REAL_ADAPTERS",
     "LagoBillingAdapter", "ChatwootAdapter", "TwentyCrmAdapter",
