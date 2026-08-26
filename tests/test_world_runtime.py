@@ -113,6 +113,7 @@ def test_finance_leakage_recovers_and_reconciles():
 
 
 def test_all_worlds_registered():
-    assert set(ALL_WORLDS) == {"after-hours-lead", "gtm-pilot-discovery", "creator-sponsorship", "kyc-ownership", "finance-leakage"}
+    assert set(ALL_WORLDS) == {"after-hours-lead", "gtm-pilot-discovery", "creator-sponsorship",
+                               "sponsorship-booking", "paid-acquisition", "kyc-ownership", "finance-leakage"}
     for w in ALL_WORLDS.values():
         assert w.descriptor().world_id == w.world_id       # descriptor consistent

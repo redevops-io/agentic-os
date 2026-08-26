@@ -16,10 +16,12 @@ from agentic_os.world import ALL_WORLDS, BenchmarkRunner, ScenarioOrchestrator
 
 _ANSWERS = {"What is the roof pitch?": "6/12", "Approve invoice correction?": "yes",
             "Approve outreach to acme-ai-platform?": "yes",
-            "Approve sponsorship portfolio?": "yes"}
+            "Approve sponsorship portfolio?": "yes",
+            "POLICY_APPROVAL": "approve within ceiling"}     # governed sponsorship booking approval
 _SCOPES = ("read:crm", "read:geo", "write:quote", "write:crm", "read:secrets", "write:vendor", "write:billing")
 _SEEDS = {"after-hours-lead": "8842", "kyc-ownership": "clean", "finance-leakage": "4471",
-          "gtm-pilot-discovery": "c1", "creator-sponsorship": "s1"}
+          "gtm-pilot-discovery": "c1", "creator-sponsorship": "s1", "sponsorship-booking": "s1",
+          "paid-acquisition": "s1"}
 
 
 def _authority():
@@ -31,7 +33,8 @@ def run_world(world_id: str) -> dict:
     world = ALL_WORLDS[world_id]
     auth = _authority()
     seed = _SEEDS.get(world_id, "seed-0")
-    offline = world_id in ("gtm-pilot-discovery", "creator-sponsorship")          # deterministic + fast; fixture-labelled SYNTHETIC
+    offline = world_id in ("gtm-pilot-discovery", "creator-sponsorship", "sponsorship-booking",
+                           "paid-acquisition")  # deterministic + fast; fixture-labelled SYNTHETIC/SEEDED
     run = ScenarioOrchestrator().run(world, seed=seed, authority=auth, answers=_ANSWERS, offline=offline)
     card = BenchmarkRunner().run(world, seed=seed, authority=auth, answers=_ANSWERS, offline=offline)
     d = run.to_dict()
@@ -246,8 +249,13 @@ function renderPanels(){
 }
 (async()=>{
   const ws=(await (await fetch('/api/worlds')).json()).worlds;
-  document.getElementById('world').innerHTML=ws.map(w=>`<option value="${w.world_id}">${w.title}</option>`).join('');
-  document.getElementById('world').onchange=load;
+  const sel=document.getElementById('world');
+  sel.innerHTML=ws.map(w=>`<option value="${w.world_id}">${w.title}</option>`).join('');
+  sel.onchange=load;
+  // deep-link: /worlds?world=<id> (e.g. "see it run" from an Attention item) pre-selects + auto-plays it
+  const want=new URLSearchParams(location.search).get('world');
+  if(want && ws.some(w=>w.world_id===want)) sel.value=want;
   await load();
+  if(want) play();
 })();
 </script></div></body></html>"""
