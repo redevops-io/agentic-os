@@ -14,12 +14,20 @@ from .fabric import CapabilityDenied, CapabilityFabric, CapabilityProvider, Invo
 from .flagship import AfterHoursLeadWorld
 from .gtm import FindCompaniesRebuildingTheRuntime
 from .sponsorship import CreatorAcquisitionWorld
+from .sponsorship_economics import (
+    GovernedSponsorshipWorld, SponsorshipQuote, NormalizedEconomics, normalize_quote,
+    PlacementProposal, SponsorshipApproval, BookingDecision, evaluate_booking,
+    Claim, CreativeBrief, build_creative_brief, CreatorAttribution, build_attribution)
 from .outreach import (OutreachContext, OutreachDecision, decide, render_email, send_outreach,
                        quality_gate, select_template, SuppressionLedger, handle_unsubscribe,
                        unsubscribe_url, unsubscribe_token)
 from .enrichment import (get_provider, resolve_verified_email, resolve_contact, title_keywords,
                          source_apollo_list, ApolloProvider, HunterProvider, ClearbitProvider)
 from .optimizer import CandidateAction, CrossChannelOptimizer, Allocation, direct_email_action, sponsorship_action
+from .attention import (AttentionItem, AttentionKind, Autonomy, build_attention_queue, items_from_run,
+                        summarize)
+from .budget_governor import BudgetGovernor, SpendAuthorization
+from .paid_acquisition import PaidAcquisitionWorld
 from .models import (
     BaselineResult,
     ExecutionMode,
@@ -39,6 +47,8 @@ from .worlds import ALL_WORLDS as _OTHER_WORLDS
 ALL_WORLDS = {AfterHoursLeadWorld().world_id: AfterHoursLeadWorld(),
               FindCompaniesRebuildingTheRuntime().world_id: FindCompaniesRebuildingTheRuntime(),
               CreatorAcquisitionWorld().world_id: CreatorAcquisitionWorld(),
+              GovernedSponsorshipWorld().world_id: GovernedSponsorshipWorld(),
+              PaidAcquisitionWorld().world_id: PaidAcquisitionWorld(),
               **_OTHER_WORLDS}
 
 __all__ = [
@@ -48,6 +58,9 @@ __all__ = [
     "ScenarioOrchestrator", "BenchmarkRunner",
     "ExecutionMode", "Perturbation", "PerturbationKind", "RunMetrics", "WorldRun", "BaselineResult", "Scorecard",
     "AfterHoursLeadWorld", "FindCompaniesRebuildingTheRuntime", "CreatorAcquisitionWorld",
+    "GovernedSponsorshipWorld", "SponsorshipQuote", "NormalizedEconomics", "normalize_quote",
+    "PlacementProposal", "SponsorshipApproval", "BookingDecision", "evaluate_booking",
+    "Claim", "CreativeBrief", "build_creative_brief", "CreatorAttribution", "build_attribution",
     "KycOnboardingWorld",
     "FinanceLeakageWorld", "ALL_WORLDS",
     "OutreachContext", "OutreachDecision", "decide", "render_email", "send_outreach",
@@ -56,4 +69,6 @@ __all__ = [
     "get_provider", "resolve_verified_email", "resolve_contact", "title_keywords", "source_apollo_list",
     "ApolloProvider", "HunterProvider", "ClearbitProvider",
     "CandidateAction", "CrossChannelOptimizer", "Allocation", "direct_email_action", "sponsorship_action",
+    "AttentionItem", "AttentionKind", "Autonomy", "build_attention_queue", "items_from_run", "summarize",
+    "BudgetGovernor", "SpendAuthorization", "PaidAcquisitionWorld",
 ]

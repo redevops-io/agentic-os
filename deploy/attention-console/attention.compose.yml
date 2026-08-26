@@ -1,0 +1,11 @@
+# demo.redevops.io/attention — Founder Attention Queue (the Business-OS home) over the world-runtime engine.
+services:
+  attention-api:
+    build: .
+    image: ${ATTENTION_IMAGE:-attention-console:latest}
+    container_name: attention-api
+    restart: unless-stopped
+    ports:
+      - "${ATTENTION_PORT:-8104}:8104"
+    security_opt:
+      - apparmor=docker-contextos
