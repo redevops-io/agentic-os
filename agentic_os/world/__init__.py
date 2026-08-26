@@ -28,6 +28,8 @@ from .attention import (AttentionItem, AttentionKind, Autonomy, build_attention_
                         summarize)
 from .budget_governor import BudgetGovernor, SpendAuthorization
 from .paid_acquisition import PaidAcquisitionWorld
+from .contact_center import ContactCenterWorld
+from .admin import build_admin_snapshot, core_status
 from .models import (
     BaselineResult,
     ExecutionMode,
@@ -39,6 +41,9 @@ from .models import (
 )
 from .orchestrator import ScenarioOrchestrator
 from .seeder import ProjectionSeeder
+from .objects import (APP_CATALOG, APP_META, CanonicalObject, canonical_from_entity)
+from .adapters import (AdapterRegistry, ChatwootAdapter, CoreUnavailable, HttpCoreAdapter, InMemoryAdapter,
+                       LagoBillingAdapter, REAL_ADAPTERS, TwentyCrmAdapter)
 from .simulator import OutcomeSimulator, SimArtifact
 from .worlds import FinanceLeakageWorld, KycOnboardingWorld
 from .worlds import ALL_WORLDS as _OTHER_WORLDS
@@ -49,6 +54,7 @@ ALL_WORLDS = {AfterHoursLeadWorld().world_id: AfterHoursLeadWorld(),
               CreatorAcquisitionWorld().world_id: CreatorAcquisitionWorld(),
               GovernedSponsorshipWorld().world_id: GovernedSponsorshipWorld(),
               PaidAcquisitionWorld().world_id: PaidAcquisitionWorld(),
+              ContactCenterWorld().world_id: ContactCenterWorld(),
               **_OTHER_WORLDS}
 
 __all__ = [
@@ -70,5 +76,9 @@ __all__ = [
     "ApolloProvider", "HunterProvider", "ClearbitProvider",
     "CandidateAction", "CrossChannelOptimizer", "Allocation", "direct_email_action", "sponsorship_action",
     "AttentionItem", "AttentionKind", "Autonomy", "build_attention_queue", "items_from_run", "summarize",
-    "BudgetGovernor", "SpendAuthorization", "PaidAcquisitionWorld",
+    "BudgetGovernor", "SpendAuthorization", "PaidAcquisitionWorld", "ContactCenterWorld",
+    "CanonicalObject", "canonical_from_entity", "APP_CATALOG", "APP_META",
+    "AdapterRegistry", "InMemoryAdapter", "HttpCoreAdapter", "CoreUnavailable", "REAL_ADAPTERS",
+    "LagoBillingAdapter", "ChatwootAdapter", "TwentyCrmAdapter",
+    "build_admin_snapshot", "core_status",
 ]

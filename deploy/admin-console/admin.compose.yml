@@ -1,0 +1,19 @@
+# demo.redevops.io/admin — Business-OS Admin & Governance console over the world-runtime.
+services:
+  admin-api:
+    build: .
+    image: ${ADMIN_IMAGE:-admin-console:latest}
+    container_name: admin-api
+    restart: unless-stopped
+    environment:
+      # Wire the Lago adapter at the live reference billing core so one OSS core reads REAL-LIVE (the seam,
+      # proven end-to-end). Point these at a production Lago and nothing else changes.
+      - LAGO_API_URL=${LAGO_API_URL:-http://192.168.40.105:8106}
+      - LAGO_API_KEY=${LAGO_API_KEY:-refcore-dev-key}
+      # Twenty CRM wired LIVE when a host-only .env supplies these (never committed; empty -> stays SEEDED).
+      - TWENTY_BASE_URL=${TWENTY_BASE_URL:-}
+      - TWENTY_API_KEY=${TWENTY_API_KEY:-}
+    ports:
+      - "${ADMIN_PORT:-8105}:8105"
+    security_opt:
+      - apparmor=docker-contextos

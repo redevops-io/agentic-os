@@ -1,61 +1,60 @@
 """ProjectionSeeder — project one world's entities into the app cores, idempotently (docx TABLE 6).
 
-Turns a ``WorldEvent``'s canonical entities into records in the OSS-backed apps (Twenty, ERPNext, Chatwoot,
-Lago …) and registers the id mappings in the ``IdentityGraph`` so the same entity is visible as CRM
-context, support context, finance context and governance evidence. The default implementation is an
-in-memory demo store (idempotent, replay-stable); real adapters implement the same ``project_entity`` seam
-against a live core. The point is preserving source provenance while creating one coherent execution world.
+Turns a ``WorldEvent``'s canonical entities into `CanonicalObject`s and projects each into the OSS-backed apps
+(Twenty, ERPNext, Chatwoot, Lago, Listmonk, Postiz) via the World Adapter layer, registering the id mappings
+in the ``IdentityGraph`` so the same entity is visible as CRM context, support context, finance context and
+governance evidence. Each app resolves to a configured + reachable real core, or the in-memory demo store —
+and the seeder records which, with its realism, so the demo can show "projected into Twenty (SEEDED) / Lago
+(LIVE)" honestly. The point is preserving source provenance while creating one coherent execution world.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from runtime_contracts.world import EntityRef, IdentityGraph, WorldEvent
+from runtime_contracts.world import IdentityGraph, WorldEvent
+
+from .adapters import AdapterRegistry
+from .objects import APP_CATALOG, canonical_from_entity
 
 
 class ProjectionSeeder:
-    """Projects entities into a set of named apps. Subclass / inject ``adapters`` to hit real cores; the
-    base keeps an in-memory record per (app, native_id) so a demo runs with no OSS core deployed."""
+    """Projects entities into the apps whose catalog covers each kind, via the AdapterRegistry. Pass
+    ``adapters={app: adapter}`` to inject a core, or ``allow_real=False`` to force the in-memory demo store
+    (the default keeps a demo running with no OSS core deployed)."""
 
-    #: which canonical entity kinds each app should hold a record for (the projection plan)
-    DEFAULT_PLAN: Dict[str, Tuple[str, ...]] = {
-        "twenty": ("customer", "account", "contact", "opportunity", "vendor"),
-        "erpnext": ("customer", "invoice", "payment", "opportunity"),
-        "chatwoot": ("customer", "conversation", "ticket"),
-        "lago": ("customer", "subscription", "invoice"),
-    }
+    #: kept as a class attribute for back-compat; the live plan is the app catalog.
+    DEFAULT_PLAN: Dict[str, Tuple[str, ...]] = APP_CATALOG
 
-    def __init__(self, *, plan: "Dict[str, Tuple[str, ...]] | None" = None, adapters: "Dict[str, Any] | None" = None) -> None:
-        self._plan = plan or self.DEFAULT_PLAN
-        self._adapters = adapters or {}
-        self.store: Dict[str, Dict[str, Any]] = {}          # f"{app}:{native_id}" -> record
+    def __init__(self, *, plan: Optional[Dict[str, Tuple[str, ...]]] = None,
+                 adapters: Optional[Dict[str, Any]] = None, allow_real: bool = True) -> None:
+        self._plan = plan or APP_CATALOG
+        self.store: Dict[str, Any] = {}
+        self._registry = AdapterRegistry(overrides=adapters or {}, store=self.store, allow_real=allow_real)
+        self.projections: List[Dict[str, Any]] = []      # per-projection: app, native_id, adapter, realism
 
     def project(self, event: WorldEvent, graph: IdentityGraph) -> List[Tuple[str, str]]:
-        """Project every carried entity into each app whose plan covers its kind. Returns the (app,
+        """Project every carried entity into each app whose catalog covers its kind. Returns the (app,
         native_id) pairs created/confirmed. Idempotent — a re-seed of the same event is a no-op."""
         created: List[Tuple[str, str]] = []
         for ent in event.entity_ids:
-            for app, kinds in self._plan.items():
-                if ent.kind not in kinds:
+            obj = canonical_from_entity(ent, event)
+            for app in self._plan:
+                if not (obj.kind in self._plan.get(app, ()) ):
                     continue
-                native_id = self._project_entity(app, ent, event)
+                adapter = self._registry.for_app(app)
+                if not adapter.accepts(obj.kind):
+                    continue
+                native_id = adapter.upsert(obj)
                 graph.register(ent.entity_id, app, native_id)
                 created.append((app, native_id))
+                self.projections.append({"app": app, "native_id": native_id, "adapter": adapter.name,
+                                         "realism": adapter.realism, "kind": obj.kind,
+                                         "canonical_id": obj.canonical_id})
         return created
 
-    def _project_entity(self, app: str, ent: EntityRef, event: WorldEvent) -> str:
-        adapter = self._adapters.get(app)
-        if adapter is not None:                              # a real core adapter (duck-typed)
-            return adapter.upsert(ent, event)
-        # in-memory demo projection — deterministic id so replay is stable
-        native_id = f"{app}-{ent.kind}-{ent.entity_id}"
-        key = f"{app}:{native_id}"
-        self.store.setdefault(key, {"app": app, "native_id": native_id, "kind": ent.kind,
-                                    "entity_id": ent.entity_id, "label": ent.label,
-                                    "source_record_id": event.source_record_id,
-                                    "provenance": event.dataset_id, "realism": event.classification})
-        return native_id
+    def record(self, app: str, native_id: str) -> Optional[Dict[str, Any]]:
+        return self._registry.for_app(app).get(native_id)
 
-    def record(self, app: str, native_id: str) -> "Dict[str, Any] | None":
-        return self.store.get(f"{app}:{native_id}")
+    def adapters_in_use(self) -> Dict[str, Dict[str, str]]:
+        """Which adapter + realism each touched app resolved to — for the demo to label projections honestly."""
+        return self._registry.resolved()

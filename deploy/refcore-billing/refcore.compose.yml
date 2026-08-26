@@ -1,0 +1,18 @@
+# A real, persistent billing core speaking the Lago customer contract — proves the World Adapter LIVE path.
+services:
+  refcore-billing:
+    build: .
+    image: ${REFCORE_IMAGE:-refcore-billing:latest}
+    container_name: refcore-billing
+    restart: unless-stopped
+    environment:
+      - REFCORE_API_KEY=${REFCORE_API_KEY:-refcore-dev-key}
+      - REFCORE_DB=/data/customers.json
+    volumes:
+      - refcore-data:/data
+    ports:
+      - "${REFCORE_PORT:-8106}:8106"
+    security_opt:
+      - apparmor=docker-contextos
+volumes:
+  refcore-data:
