@@ -9,7 +9,7 @@ rsync -aH --exclude __pycache__ --exclude '*.pyc' "$AGENTIC/agentic_os" "$STAGE/
 rsync -aH --exclude __pycache__ --exclude '*.pyc' "$RC/runtime_contracts" "$STAGE/"
 cp "$SRC/app.py" "$SRC/Dockerfile" "$SRC/admin.compose.yml" "$STAGE/"
 ssh "root@$HOST" "mkdir -p $HOST_DIR"
-rsync -aH --delete --exclude '.git' "$STAGE"/ "root@$HOST:$HOST_DIR/"
+rsync -aH --delete --exclude '.git' --exclude '.env' "$STAGE"/ "root@$HOST:$HOST_DIR/"
 ssh "root@$HOST" AD_HOST_DIR="$HOST_DIR" 'bash -s' <<'REMOTE'
 set -e; cd "$AD_HOST_DIR"
 ADMIN_PORT=8105 docker compose -p admin-console -f admin.compose.yml up -d --build

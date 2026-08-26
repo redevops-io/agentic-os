@@ -82,6 +82,25 @@ def test_real_adapter_raises_core_unavailable_on_write_failure(monkeypatch):
         LagoBillingAdapter().upsert(_obj())                                    # so the seeder can degrade
 
 
+def test_twenty_adapter_search_then_create_is_idempotent(monkeypatch):
+    from agentic_os.world import TwentyCrmAdapter
+    monkeypatch.setenv("TWENTY_BASE_URL", "http://twenty"); monkeypatch.setenv("TWENTY_API_KEY", "k")
+    calls = {"GET": 0, "POST": 0}
+
+    def fake(method, url, *, headers, payload=None, timeout=4.0):
+        calls[method] = calls.get(method, 0) + 1
+        if method == "GET":
+            # first lookup finds nothing, second finds the just-created company (idempotency)
+            return {"data": {"companies": [] if calls["GET"] == 1 else [{"id": "cmp-9", "name": "Acme"}]}}
+        return {"data": {"createCompany": {"id": "cmp-9", "name": "Acme"}}}   # POST creates
+
+    monkeypatch.setattr(A, "_http_json", fake)
+    a = TwentyCrmAdapter()
+    assert a.upsert(_obj(kind="organization")) == "cmp-9"        # 1st: not found -> create
+    assert a.upsert(_obj(kind="organization")) == "cmp-9"        # 2nd: found -> no duplicate create
+    assert calls["POST"] == 1                                    # created exactly once (idempotent)
+
+
 def test_allow_real_false_forces_in_memory(monkeypatch):
     monkeypatch.setenv("LAGO_API_URL", "http://lago"); monkeypatch.setenv("LAGO_API_KEY", "k")
     assert AdapterRegistry(allow_real=False).for_app("lago").name == "lago:in-memory"
