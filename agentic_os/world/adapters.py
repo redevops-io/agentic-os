@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.parse
 import urllib.request
 from typing import Any, Dict, Optional
 
@@ -160,14 +161,23 @@ class TwentyCrmAdapter(HttpCoreAdapter):
     health_path = "/rest/companies?limit=1"
 
     def upsert(self, obj: CanonicalObject) -> str:
-        nid = obj.native_id(self.app)
-        # Twenty's REST surface: upsert a company keyed by our canonical id (idempotency handled app-side).
+        # Twenty's REST company has no external-id upsert and rejects unknown fields, so achieve idempotency
+        # with search-then-create: find a company by name, else create one with {name} only.
+        q = urllib.parse.quote(f"name[eq]:{obj.label}")
         try:
-            _http_json("POST", self.base + "/rest/companies", headers=self._headers(),
-                       payload={"name": obj.label, "idempotencyKey": nid})
+            found = _http_json("GET", f"{self.base}/rest/companies?filter={q}&limit=1", headers=self._headers())
+        except Exception:  # noqa: BLE001 — a failed lookup just means we fall through to create
+            found = {}
+        recs = ((found.get("data") or {}).get("companies")) or found.get("companies") or []
+        if recs and recs[0].get("id"):
+            return self._remember(obj, recs[0]["id"])
+        try:
+            r = _http_json("POST", f"{self.base}/rest/companies", headers=self._headers(),
+                           payload={"name": obj.label})
         except Exception as e:  # noqa: BLE001
             raise CoreUnavailable(f"twenty upsert failed: {type(e).__name__}") from None
-        return self._remember(obj, nid)
+        cid = ((r.get("data") or {}).get("createCompany") or {}).get("id") or r.get("id") or obj.native_id(self.app)
+        return self._remember(obj, cid)
 
 
 #: real adapters the registry will prefer for an app when the core is configured + reachable.
