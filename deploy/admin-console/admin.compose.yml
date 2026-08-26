@@ -1,0 +1,11 @@
+# demo.redevops.io/admin — Business-OS Admin & Governance console over the world-runtime.
+services:
+  admin-api:
+    build: .
+    image: ${ADMIN_IMAGE:-admin-console:latest}
+    container_name: admin-api
+    restart: unless-stopped
+    ports:
+      - "${ADMIN_PORT:-8105}:8105"
+    security_opt:
+      - apparmor=docker-contextos

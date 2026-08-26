@@ -29,6 +29,7 @@ from .attention import (AttentionItem, AttentionKind, Autonomy, build_attention_
 from .budget_governor import BudgetGovernor, SpendAuthorization
 from .paid_acquisition import PaidAcquisitionWorld
 from .contact_center import ContactCenterWorld
+from .admin import build_admin_snapshot, core_status
 from .models import (
     BaselineResult,
     ExecutionMode,
@@ -79,4 +80,5 @@ __all__ = [
     "CanonicalObject", "canonical_from_entity", "APP_CATALOG", "APP_META",
     "AdapterRegistry", "InMemoryAdapter", "HttpCoreAdapter", "CoreUnavailable", "REAL_ADAPTERS",
     "LagoBillingAdapter", "ChatwootAdapter", "TwentyCrmAdapter",
+    "build_admin_snapshot", "core_status",
 ]
