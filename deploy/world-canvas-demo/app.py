@@ -35,12 +35,19 @@ def run_world(world_id: str) -> dict:
     seed = _SEEDS.get(world_id, "seed-0")
     offline = world_id in ("gtm-pilot-discovery", "creator-sponsorship", "sponsorship-booking",
                            "paid-acquisition")  # deterministic + fast; fixture-labelled SYNTHETIC/SEEDED
-    run = ScenarioOrchestrator().run(world, seed=seed, authority=auth, answers=_ANSWERS, offline=offline)
+    orch = ScenarioOrchestrator()
+    run = orch.run(world, seed=seed, authority=auth, answers=_ANSWERS, offline=offline)
     card = BenchmarkRunner().run(world, seed=seed, authority=auth, answers=_ANSWERS, offline=offline)
     d = run.to_dict()
     d["descriptor"] = {"title": world.descriptor().title, "realism": world.descriptor().realism,
                        "datasources": list(world.descriptor().datasources)}
     d["scorecard"] = card.to_dict()
+    # which OSS-core apps this world's entities projected into, via which World Adapter + realism
+    seen, apps = set(), []
+    for p in orch._seeder.projections:
+        if p["app"] not in seen:
+            seen.add(p["app"]); apps.append({"app": p["app"], "adapter": p["adapter"], "realism": p["realism"]})
+    d["projections"] = apps
     return d
 
 
@@ -171,7 +178,8 @@ identity/evidence/policy capsule — never copied. Writes are <span class="badge
 <div class="panels">
   <div class="card"><h3>Outcome</h3>
     <div class="kpi" id="kpi"></div>
-    <div id="outcome" class="mono small" style="margin-top:10px"></div></div>
+    <div id="outcome" class="mono small" style="margin-top:10px"></div>
+    <div id="projections" class="mono small" style="margin-top:8px;color:var(--faint)"></div></div>
   <div class="card"><h3>Why the Runtime — counterfactual</h3>
     <div class="scroll" style="overflow-x:auto"><table id="score"><thead><tr><th>Arm</th><th>Outcome</th><th>To outcome</th><th>Guesses</th><th></th></tr></thead><tbody></tbody></table></div></div>
 </div>
@@ -240,6 +248,10 @@ function renderPanels(){
     ['human decisions', mt.human_decisions]
   ].map(([l,v])=>`<div><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
   document.getElementById('outcome').textContent=JSON.stringify(DATA.outcome);
+  const pr=DATA.projections||[];
+  document.getElementById('projections').innerHTML=pr.length
+    ? 'projected into '+pr.map(p=>p.app+' <span style="opacity:.65">['+p.realism+']</span>').join(' · ')
+    : '';
   const tb=document.querySelector('#score tbody');
   tb.innerHTML=DATA.scorecard.arms.map(a=>{
     const t=a.metrics.time_to_outcome_s; const tt=t>=3600?(Math.round(t/3600)+'h'):(t+'s');

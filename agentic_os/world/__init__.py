@@ -39,6 +39,9 @@ from .models import (
 )
 from .orchestrator import ScenarioOrchestrator
 from .seeder import ProjectionSeeder
+from .objects import (APP_CATALOG, APP_META, CanonicalObject, canonical_from_entity)
+from .adapters import (AdapterRegistry, ChatwootAdapter, CoreUnavailable, HttpCoreAdapter, InMemoryAdapter,
+                       LagoBillingAdapter, REAL_ADAPTERS, TwentyCrmAdapter)
 from .simulator import OutcomeSimulator, SimArtifact
 from .worlds import FinanceLeakageWorld, KycOnboardingWorld
 from .worlds import ALL_WORLDS as _OTHER_WORLDS
@@ -71,4 +74,7 @@ __all__ = [
     "CandidateAction", "CrossChannelOptimizer", "Allocation", "direct_email_action", "sponsorship_action",
     "AttentionItem", "AttentionKind", "Autonomy", "build_attention_queue", "items_from_run", "summarize",
     "BudgetGovernor", "SpendAuthorization", "PaidAcquisitionWorld",
+    "CanonicalObject", "canonical_from_entity", "APP_CATALOG", "APP_META",
+    "AdapterRegistry", "InMemoryAdapter", "HttpCoreAdapter", "CoreUnavailable", "REAL_ADAPTERS",
+    "LagoBillingAdapter", "ChatwootAdapter", "TwentyCrmAdapter",
 ]
