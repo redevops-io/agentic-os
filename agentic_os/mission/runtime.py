@@ -439,7 +439,15 @@ class MissionRuntime:
         """Make "why was this wave (not) parallel?" auditable (plan §14/§22). Records, per wave: the
         scheduler, the effective ceiling, how many nodes were eligible, how many were released to run
         concurrently (peak_parallel), and — for any held back — the resource/limit reason. Best-effort:
-        a scheduler without `explain` (or any error) simply skips telemetry, never blocks the run."""
+        a scheduler without `explain` (or any error) simply skips telemetry, never blocks the run.
+
+        Only runs when safe-parallel is actually enabled (effective concurrency > 1). In serial mode there
+        is no parallelism decision to explain — every node is held by the concurrency cap of 1, not by a
+        resource conflict — so the per-wave `explain()` would be pure overhead on the default path (it
+        measurably slowed the serial orchestration hot path). The one-shot SchedulerConfigured startup
+        record still fires in every mode, so serial runs remain fully observable at zero per-wave cost."""
+        if self.effective_max_concurrency <= 1:
+            return
         explain = getattr(self.scheduler, "explain", None)
         if explain is None:
             return
