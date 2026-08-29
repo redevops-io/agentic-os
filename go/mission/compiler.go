@@ -108,6 +108,11 @@ func CompileIntent(mission *Mission, intent ExecutionIntent, registry Registry,
 		node.Undo = cap.Undo
 		node.IdempotencyKey = idemKey(mission.ID, revision, step.Outcome)
 		node.Cost = cap.Cost
+		// carry the capability's declared concurrency safety semantics onto the node (additive)
+		node.ConcurrencyMode = cap.ConcurrencyMode
+		node.ConcurrencyKey = cap.ConcurrencyKey
+		node.ResourceKeys = append([]string(nil), cap.ResourceKeys...)
+		node.MaxParallelism = cap.MaxParallelism
 		node.IntentStepID = step.ID
 		node.Inputs = map[string]any{}
 		node.ID = nodeID(mission.ID, revision, step.Outcome) // deterministic (restart-safe)
