@@ -7,8 +7,11 @@ package mission
 
 import (
 	"fmt"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 )
 
 var businessValue = map[string]float64{"onboarding": 100.0, "invoice_recovery": 250.0}
@@ -25,6 +28,7 @@ type MissionRuntime struct {
 	planner                  Planner
 	scheduler                Scheduler
 	policy                   SchedulePolicy
+	maxConcurrency           int // executor pool size (default 1 = serial); opt-in parallel wave execution
 	learning                 *LearningRouter
 	repo                     *MissionRepository
 	evidence                 *EvidenceLog
@@ -49,6 +53,10 @@ func WithLearners(l *LearningStack) RuntimeOption {
 	return func(rt *MissionRuntime) { rt.learners = l }
 }
 func WithScheduler(s Scheduler) RuntimeOption { return func(rt *MissionRuntime) { rt.scheduler = s } }
+
+// WithMaxConcurrency opts into parallel wave execution: independent ready nodes' operator invocations run
+// concurrently (bounded by n), while the commit stays serial + deterministic. Default 1 = serial.
+func WithMaxConcurrency(n int) RuntimeOption { return func(rt *MissionRuntime) { rt.maxConcurrency = n } }
 func WithSchedulePolicy(p SchedulePolicy) RuntimeOption {
 	return func(rt *MissionRuntime) { rt.policy = p }
 }
@@ -75,6 +83,13 @@ func NewMissionRuntime(registry Registry, executor *Executor, opts ...RuntimeOpt
 	}
 	for _, o := range opts {
 		o(rt)
+	}
+	if rt.maxConcurrency < 1 { // default serial; env opts in (parity with Python/Kotlin)
+		if v, err := strconv.Atoi(os.Getenv("AGENTIC_OS_MISSION_CONCURRENCY")); err == nil && v > 0 {
+			rt.maxConcurrency = v
+		} else {
+			rt.maxConcurrency = 1
+		}
 	}
 	if rt.store == nil {
 		rt.store = NewEventStore("")
@@ -246,13 +261,25 @@ func (rt *MissionRuntime) Run(missionID string) *Mission {
 			}
 		}
 
-		for _, gn := range runnable {
-			if key, b, ok := rt.beliefIssue(gn.node, world); ok {
-				rt.parkDisambiguation(m, gn.node, key, b)
+		if rt.effectiveMaxConcurrency() > 1 && len(runnable) > 1 {
+			// Concurrent wave: independent nodes' I/O overlaps; commit stays serial + deterministic.
+			nodes := make([]*Node, len(runnable))
+			for i, gn := range runnable {
+				nodes[i] = gn.node
+			}
+			if !rt.executeWave(m, plan, world, nodes) {
 				return m
 			}
-			if !rt.execute(m, plan, world, gn.node) {
-				return m
+		} else {
+			// Serial path — byte-identical to the historical behaviour.
+			for _, gn := range runnable {
+				if key, b, ok := rt.beliefIssue(gn.node, world); ok {
+					rt.parkDisambiguation(m, gn.node, key, b)
+					return m
+				}
+				if !rt.execute(m, plan, world, gn.node) {
+					return m
+				}
 			}
 		}
 		if len(gated) > 0 {
@@ -270,10 +297,14 @@ func (rt *MissionRuntime) Run(missionID string) *Mission {
 // the scheduler's per-wave release cap — so this is policy.MaxConcurrency (mirrors Python's
 // min(pool, policy), where the executor pool is unbounded here). Surfaced so the limit is observable.
 func (rt *MissionRuntime) effectiveMaxConcurrency() int {
-	if rt.policy.MaxConcurrency < 1 {
+	e := rt.maxConcurrency // the executor pool
+	if rt.policy.MaxConcurrency < e {
+		e = rt.policy.MaxConcurrency // ...throttled by the scheduler's per-wave release cap
+	}
+	if e < 1 {
 		return 1
 	}
-	return rt.policy.MaxConcurrency
+	return e
 }
 
 // schedulerConfig is the effective scheduler configuration, recorded once at startup — the guard against a
@@ -291,10 +322,16 @@ func (rt *MissionRuntime) schedulerConfig() map[string]any {
 	if eff > 1 {
 		pol = "safe_parallel"
 	}
+	boundBy := "executor_pool"
+	if rt.policy.MaxConcurrency < rt.maxConcurrency {
+		boundBy = "schedule_policy"
+	}
 	return map[string]any{
 		"scheduler":                            "TopoScheduler",
+		"requested_concurrency":                rt.maxConcurrency,
 		"policy_max_concurrency":               rt.policy.MaxConcurrency,
 		"effective_max_concurrency":            eff,
+		"bound_by":                             boundBy,
 		"scheduler_policy":                     pol,
 		"capabilities_with_conflict_semantics": keyed,
 	}
@@ -345,17 +382,35 @@ func (rt *MissionRuntime) emitWaveTelemetry(m *Mission, graph *ExecutionGraph, d
 }
 
 func (rt *MissionRuntime) execute(m *Mission, plan *ExecutionPlan, world *WorldState, node *Node) bool {
+	result, err := rt.invoke(m, world, node)
+	if err != nil {
+		return rt.failNode(m, plan, node, err)
+	}
+	return rt.commit(m, plan, world, node, result)
+}
+
+// invoke — the PARALLELIZABLE phase: resolve inputs (reads world) + dispatch + run the operator (the I/O
+// wait). Mutates only the thread-safe store + client, so many invokes run at once under a wave.
+func (rt *MissionRuntime) invoke(m *Mission, world *WorldState, node *Node) (map[string]any, error) {
 	inputs := rt.resolveInputs(m, world, node)
 	rt.store.Append("NodeDispatched", m.ID, map[string]any{"node_id": node.ID, "capability": node.Capability})
-	result, err := rt.executor.Run(node, inputs)
-	if err != nil {
-		rt.store.Append("NodeFailed", m.ID, map[string]any{"node_id": node.ID, "capability": node.Capability, "error": err.Error()})
-		rt.learning.RecordCapability(node.Capability, false)
-		rt.observeRouting(node, false)
-		rt.saga(m, plan)
-		rt.fail(m, plan, node.Capability+": "+err.Error())
-		return false
-	}
+	return rt.executor.Run(node, inputs)
+}
+
+// failNode — the operator raised: record, learn, compensate, fail. Serial (mutates shared state).
+func (rt *MissionRuntime) failNode(m *Mission, plan *ExecutionPlan, node *Node, err error) bool {
+	rt.store.Append("NodeFailed", m.ID, map[string]any{"node_id": node.ID, "capability": node.Capability, "error": err.Error()})
+	rt.learning.RecordCapability(node.Capability, false)
+	rt.observeRouting(node, false)
+	rt.saga(m, plan)
+	rt.fail(m, plan, node.Capability+": "+err.Error())
+	return false
+}
+
+// commit — apply a successful result: verify before it becomes authoritative, mutate world, emit events.
+// SERIAL and in deterministic node order (the concurrent wave calls this after the parallel invokes join),
+// so world / learning / event state is identical to the serial path — only the I/O wait overlaps.
+func (rt *MissionRuntime) commit(m *Mission, plan *ExecutionPlan, world *WorldState, node *Node, result map[string]any) bool {
 	node.Result = result
 	// P7B: verify a consequential result BEFORE it becomes authoritative world state.
 	if needsVerification(node) && !rt.verifyOK(m.ID)[node.ID] {
@@ -396,6 +451,51 @@ func (rt *MissionRuntime) execute(m *Mission, plan *ExecutionPlan, world *WorldS
 	rt.store.Append("NodeSucceeded", m.ID, map[string]any{"node_id": node.ID, "capability": node.Capability, "result": result})
 	rt.learning.RecordCapability(node.Capability, true)
 	rt.observeRouting(node, true)
+	return true
+}
+
+// executeWave runs a ready wave with real parallelism (parity with the Python + Kotlin executors): the
+// operator invocations (the I/O wait) run concurrently, bounded by the effective concurrency, behind a
+// JOIN BARRIER; then results commit SERIALLY in deterministic node order. Plan fingerprint, node identity,
+// idempotency and replay are unaffected — only wall-clock changes. Returns false if the wave parked or
+// failed (state already set), mirroring the serial path's `if !execute { return }`.
+func (rt *MissionRuntime) executeWave(m *Mission, plan *ExecutionPlan, world *WorldState, wave []*Node) bool {
+	// belief-disambiguation gate (serial; reads world). Wave nodes are independent, so their inputs come
+	// from pre-wave world state — a disputed input parks before the wave runs.
+	for _, n := range wave {
+		if key, b, ok := rt.beliefIssue(n, world); ok {
+			rt.parkDisambiguation(m, n, key, b)
+			return false
+		}
+	}
+	// resolve inputs + dispatch serially in node order (deterministic log), then invoke concurrently.
+	inputs := make([]map[string]any, len(wave))
+	for i, n := range wave {
+		inputs[i] = rt.resolveInputs(m, world, n)
+		rt.store.Append("NodeDispatched", m.ID, map[string]any{"node_id": n.ID, "capability": n.Capability})
+	}
+	results := make([]map[string]any, len(wave))
+	errs := make([]error, len(wave))
+	sem := make(chan struct{}, rt.effectiveMaxConcurrency())
+	var wg sync.WaitGroup
+	for i := range wave {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			results[i], errs[i] = rt.executor.Run(wave[i], inputs[i])
+		}(i)
+	}
+	wg.Wait() // JOIN BARRIER — the network waits overlapped; the commit below does not
+	for i, n := range wave {
+		if errs[i] != nil {
+			return rt.failNode(m, plan, n, errs[i])
+		}
+		if !rt.commit(m, plan, world, n, results[i]) {
+			return false
+		}
+	}
 	return true
 }
 

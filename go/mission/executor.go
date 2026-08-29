@@ -1,5 +1,7 @@
 package mission
 
+import "sync"
+
 // Executor — runs ONE node durably by calling the owning operator's capability. In production a
 // node becomes a Dagster op that POSTs the operator's /invoke; here an injectable OperatorClient
 // runs it. Guarantees: exactly-once side effects (retries dedupe on idempotency_key) and sagas
@@ -25,6 +27,7 @@ type InMemoryOperatorClient struct {
 	handlers map[string]Handler
 	seen     map[string]map[string]any
 	Calls    [][2]string // (capability, idempotency_key) — for assertions
+	mu       sync.Mutex  // guards seen + Calls so the client is safe under a parallel wave
 }
 
 func NewInMemoryOperatorClient(handlers map[string]Handler) *InMemoryOperatorClient {
@@ -33,16 +36,21 @@ func NewInMemoryOperatorClient(handlers map[string]Handler) *InMemoryOperatorCli
 
 func (c *InMemoryOperatorClient) Invoke(operator, capability string, inputs map[string]any, idempotencyKey string) (map[string]any, error) {
 	if idempotencyKey != "" {
-		if r, ok := c.seen[idempotencyKey]; ok {
+		c.mu.Lock()
+		r, ok := c.seen[idempotencyKey]
+		c.mu.Unlock()
+		if ok {
 			return r, nil // exactly-once: return the prior result
 		}
 	}
+	c.mu.Lock()
 	c.Calls = append(c.Calls, [2]string{capability, idempotencyKey})
-	fn, ok := c.handlers[capability]
+	c.mu.Unlock()
+	fn, ok := c.handlers[capability] // handlers is read-only after construction
 	if !ok {
 		return nil, &OperatorError{Msg: "operator '" + operator + "' has no handler for '" + capability + "'"}
 	}
-	result, err := fn(inputs)
+	result, err := fn(inputs) // NOT under lock — this is the parallelizable work
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +58,9 @@ func (c *InMemoryOperatorClient) Invoke(operator, capability string, inputs map[
 		result = map[string]any{}
 	}
 	if idempotencyKey != "" {
+		c.mu.Lock()
 		c.seen[idempotencyKey] = result
+		c.mu.Unlock()
 	}
 	return result, nil
 }
