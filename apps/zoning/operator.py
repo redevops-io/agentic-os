@@ -30,6 +30,7 @@ def build_zoning_operator() -> Operator:
             outputs={"parcel_resolved": "canonical GeoRef identity for the parcel"},
             side_effecting=False, deterministic=True,
             permissions=["zoning:read"], estimated_value="medium", latency_ms=40,
+            concurrency_mode="read_only",   # concludes, never mutates
         ),
         capability(
             "zoning.acquire_evidence",
@@ -38,6 +39,7 @@ def build_zoning_operator() -> Operator:
             outputs={"zoning_evidence": "official base zoning, ordinance link and overlays for the parcel"},
             side_effecting=False, deterministic=True,
             permissions=["zoning:read"], estimated_value="medium", latency_ms=120,
+            concurrency_mode="read_only",
         ),
         capability(
             "zoning.evaluate_use",
@@ -46,6 +48,7 @@ def build_zoning_operator() -> Operator:
             outputs={"use_disposition": "PERMITTED | PROHIBITED | UNKNOWN — fail-safe, false-permit=0"},
             side_effecting=False, deterministic=True,
             permissions=["zoning:read"], estimated_value="high", latency_ms=15,
+            concurrency_mode="read_only",
         ),
         capability(
             "zoning.search_parcels",
@@ -54,5 +57,6 @@ def build_zoning_operator() -> Operator:
             outputs={"compatible_parcels": "parcels a use is not prohibited on, with dispositions"},
             side_effecting=False, deterministic=True,
             permissions=["zoning:read"], estimated_value="high", latency_ms=60,
+            concurrency_mode="read_only",
         ),
     ])
