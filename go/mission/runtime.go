@@ -183,6 +183,11 @@ func (rt *MissionRuntime) Run(missionID string) *Mission {
 	graph := plan.Graph
 	world := rt.world(missionID)
 	rt.setState(m, MissionRunning)
+	// Record the effective scheduler config ONCE per mission (startup telemetry) — if this says serial when
+	// you expected parallel, the ceiling is the reason, on the record.
+	if !rt.hasEvent(missionID, "SchedulerConfigured") {
+		rt.store.Append("SchedulerConfigured", m.ID, rt.schedulerConfig())
+	}
 
 	for {
 		status := rt.repo.NodeStatus(missionID)
@@ -213,6 +218,7 @@ func (rt *MissionRuntime) Run(missionID string) *Mission {
 			}
 		}
 		batch = filtered
+		rt.emitWaveTelemetry(m, graph, done, batch)
 		if len(batch) == 0 {
 			if rt.repo.PendingHuman(missionID) != nil {
 				rt.setState(m, MissionWaitingHuman)
@@ -258,6 +264,84 @@ func (rt *MissionRuntime) Run(missionID string) *Mission {
 			return m
 		}
 	}
+}
+
+// effectiveMaxConcurrency is the limit that actually binds. The public Go runtime has a single ceiling —
+// the scheduler's per-wave release cap — so this is policy.MaxConcurrency (mirrors Python's
+// min(pool, policy), where the executor pool is unbounded here). Surfaced so the limit is observable.
+func (rt *MissionRuntime) effectiveMaxConcurrency() int {
+	if rt.policy.MaxConcurrency < 1 {
+		return 1
+	}
+	return rt.policy.MaxConcurrency
+}
+
+// schedulerConfig is the effective scheduler configuration, recorded once at startup — the guard against a
+// silently-serial runtime (Go port of MissionRuntime.scheduler_config).
+func (rt *MissionRuntime) schedulerConfig() map[string]any {
+	var keyed []string
+	for _, c := range rt.registry.All() {
+		if c.ConcurrencyKey != "" || len(c.ResourceKeys) > 0 || c.MaxParallelism > 0 || c.ConcurrencyMode != "" {
+			keyed = append(keyed, c.Name)
+		}
+	}
+	sort.Strings(keyed)
+	eff := rt.effectiveMaxConcurrency()
+	pol := "serial"
+	if eff > 1 {
+		pol = "safe_parallel"
+	}
+	return map[string]any{
+		"scheduler":                            "TopoScheduler",
+		"policy_max_concurrency":               rt.policy.MaxConcurrency,
+		"effective_max_concurrency":            eff,
+		"scheduler_policy":                     pol,
+		"capabilities_with_conflict_semantics": keyed,
+	}
+}
+
+func (rt *MissionRuntime) hasEvent(missionID, typ string) bool {
+	for _, e := range rt.repo.Timeline(missionID) {
+		if e["type"] == typ {
+			return true
+		}
+	}
+	return false
+}
+
+// emitWaveTelemetry makes "why was this wave (not) parallel?" auditable (plan §14/§22). Only runs when
+// safe-parallel is enabled (effective concurrency > 1): in serial mode every node is held by the cap of 1,
+// not a resource conflict, so the per-wave Explain would be pure overhead. Best-effort.
+func (rt *MissionRuntime) emitWaveTelemetry(m *Mission, graph *ExecutionGraph, done map[string]bool, batch []*Node) {
+	if rt.effectiveMaxConcurrency() <= 1 {
+		return
+	}
+	ex, ok := rt.scheduler.(interface {
+		Explain(*ExecutionGraph, map[string]bool, map[string]bool, SchedulePolicy) []ExplainRow
+	})
+	if !ok {
+		return
+	}
+	rows := ex.Explain(graph, done, map[string]bool{}, rt.policy)
+	if len(rows) == 0 {
+		return
+	}
+	var serialized []string
+	reasons := map[string]any{}
+	for _, r := range rows {
+		if r.Decision == "serialized" {
+			serialized = append(serialized, r.Node)
+			reasons[r.Node] = r.Reason
+		}
+	}
+	rt.store.Append("WaveScheduled", m.ID, map[string]any{
+		"runtime_scheduler":    "TopoScheduler",
+		"max_parallelism":      rt.effectiveMaxConcurrency(),
+		"eligible_nodes":       len(rows),
+		"peak_parallel_nodes":  len(batch),
+		"serialized_nodes":     serialized,
+		"serialization_reason": reasons,
+	})
 }
 
 func (rt *MissionRuntime) execute(m *Mission, plan *ExecutionPlan, world *WorldState, node *Node) bool {
