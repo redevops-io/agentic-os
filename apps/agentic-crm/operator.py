@@ -24,6 +24,7 @@ from . import core
 
 
 def build_crm_operator() -> Operator:
+    LEAD = "crm:lead:{lead}"   # one writer per Lead: different leads parallelize, same lead serializes
     return Operator("agentic-crm", [
         capability(
             "crm.score_lead",
@@ -32,6 +33,7 @@ def build_crm_operator() -> Operator:
             outputs={"lead_score": "0-100 fit score + rationale written back to the Lead (Comment + lead_score)"},
             side_effecting=True,
             permissions=["crm:write"], estimated_value="high", latency_ms=1500,
+            concurrency_mode="exclusive", concurrency_key=LEAD,
         ),
         capability(
             "crm.research",
@@ -40,6 +42,7 @@ def build_crm_operator() -> Operator:
             outputs={"lead_research": "firmographic + buying-signal enrichment brief saved as a Lead Comment"},
             side_effecting=True,
             permissions=["crm:write"], estimated_value="medium", latency_ms=1800,
+            concurrency_mode="exclusive", concurrency_key=LEAD,
         ),
         capability(
             "crm.draft_outreach",
@@ -48,6 +51,7 @@ def build_crm_operator() -> Operator:
             outputs={"outreach_draft": "personalised first-touch email drafted + saved for human review (never auto-sent)"},
             side_effecting=True,
             permissions=["crm:write"], estimated_value="high", latency_ms=1500,
+            concurrency_mode="exclusive", concurrency_key=LEAD,
         ),
         capability(
             "crm.qualify",
@@ -56,5 +60,6 @@ def build_crm_operator() -> Operator:
             outputs={"lead_qualified": "Lead status advanced (pipeline progression)"},
             side_effecting=True,
             permissions=["crm:write"], estimated_value="medium", latency_ms=800,
+            concurrency_mode="exclusive", concurrency_key=LEAD,
         ),
     ])

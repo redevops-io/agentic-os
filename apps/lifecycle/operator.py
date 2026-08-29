@@ -32,6 +32,7 @@ def build_lifecycle_operator() -> Operator:
             outputs={"campaign_drafted": "a Listmonk campaign DRAFT created for human review + send"},
             side_effecting=True, approval_required=False,
             permissions=["lifecycle:write"], estimated_value="high", deterministic=False, latency_ms=1200,
+            concurrency_key="provider:listmonk", max_parallelism=2,  # independent DRAFT campaigns, bounded
         ),
         capability(
             "lifecycle.segment",
@@ -39,6 +40,7 @@ def build_lifecycle_operator() -> Operator:
             provides=["segment_proposed"],
             outputs={"segment_proposed": "a Listmonk advanced SQL subscriber query (advisory)"},
             estimated_value="medium", deterministic=False, latency_ms=600,
+            concurrency_mode="read_only",
         ),
         capability(
             "lifecycle.suggest_flow",
@@ -46,5 +48,6 @@ def build_lifecycle_operator() -> Operator:
             provides=["flow_suggested"],
             outputs={"flow_suggested": "a multi-step lifecycle flow outline with per-step copy (advisory)"},
             estimated_value="medium", deterministic=False, latency_ms=800,
+            concurrency_mode="read_only",
         ),
     ])

@@ -162,6 +162,9 @@ class MissionRuntime:
         self.scheduler = scheduler or TopoScheduler()
         self.policy = policy or SchedulePolicy()
         self.learning = learning or LearningRouter(registry)
+        # The EFFECTIVE per-wave concurrency is bounded by BOTH the executor pool (max_concurrency) and how
+        # many the scheduler releases at once (policy.max_concurrency). Surfacing the min makes the two
+        # ceilings observable so they can never silently diverge (e.g. pool 8 throttled to 4 by policy).
         self.repo = MissionRepository(self.store)
         # P7: the evidence + verification plane — a result must pass acceptance before it becomes
         # authoritative world state (the observed → verified → committed gate).
@@ -335,6 +338,37 @@ class MissionRuntime:
             self._executors[m.id] = ex
         return ex
 
+    @property
+    def effective_max_concurrency(self) -> int:
+        """The concurrency limit that actually binds — min of the executor pool and the scheduler's
+        per-wave release cap. Report this in telemetry/EXPLAIN so the two ceilings can never silently
+        diverge (a pool of 8 quietly throttled to 4 by policy is visible, not hidden)."""
+        return max(1, min(self.max_concurrency, self.policy.max_concurrency))
+
+    def scheduler_config(self) -> dict:
+        """The effective scheduler configuration, recorded at startup and available for EXPLAIN — so a
+        runtime that is silently serial (pool defaulted to 1, or a policy cap throttling the pool) is
+        VISIBLE, never a guess. This is the guard against another 'implemented but effectively disabled'
+        regression: requested vs effective concurrency, the deciding ceiling, and which capabilities carry
+        their own conflict semantics are all on the record."""
+        pool = self.max_concurrency
+        policy_cap = self.policy.max_concurrency
+        effective = self.effective_max_concurrency
+        keyed = [c.name for c in self.registry.all()
+                 if getattr(c, "concurrency_key", "") or getattr(c, "resource_keys", [])
+                 or getattr(c, "max_parallelism", None) is not None
+                 or getattr(c, "concurrency_mode", "")]
+        return {
+            "scheduler": type(self.scheduler).__name__,
+            "requested_concurrency": pool,           # the executor pool the SDK/env asked for
+            "policy_max_concurrency": policy_cap,     # the scheduler's per-wave release cap
+            "effective_max_concurrency": effective,   # min(pool, policy) — the limit that actually binds
+            "bound_by": ("executor_pool" if pool <= policy_cap else "schedule_policy"),
+            "scheduler_policy": ("safe_parallel" if effective > 1 else "serial"),
+            "per_operator_limit": dict(self.policy.per_operator_limit),
+            "capabilities_with_conflict_semantics": sorted(keyed),
+        }
+
     def run(self, mission_id: str) -> Mission:
         m = self._missions[mission_id]
         if m.state == MissionState.FAILED:      # blocked in simulation
@@ -343,6 +377,10 @@ class MissionRuntime:
         graph = plan.graph
         world = self._world(mission_id)
         self._set_state(m, MissionState.RUNNING)
+        # Record the effective scheduler config ONCE per mission (startup telemetry). If this says
+        # scheduler_policy=serial when you expected parallel, the ceilings are the reason — on the record.
+        if not any(e.get("type") == "SchedulerConfigured" for e in self.repo.timeline(mission_id)):
+            self.store.append("SchedulerConfigured", m.id, self.scheduler_config())
 
         while True:
             status = self.repo.node_status(mission_id)
@@ -354,6 +392,7 @@ class MissionRuntime:
 
             batch = self.scheduler.ready(graph, done, running=set(), policy=self.policy)
             batch = [n for n in batch if n.id not in done and status.get(n.id) != NodeState.FAILED]
+            self._emit_wave_telemetry(m, graph, done, batch)
             if not batch:
                 if self.repo.pending_human(mission_id):
                     self._set_state(m, MissionState.WAITING_HUMAN)
@@ -395,6 +434,31 @@ class MissionRuntime:
             if not runnable:
                 self._set_state(m, MissionState.FAILED)
                 return m
+
+    def _emit_wave_telemetry(self, m: Mission, graph, done: set[str], batch: list) -> None:
+        """Make "why was this wave (not) parallel?" auditable (plan §14/§22). Records, per wave: the
+        scheduler, the effective ceiling, how many nodes were eligible, how many were released to run
+        concurrently (peak_parallel), and — for any held back — the resource/limit reason. Best-effort:
+        a scheduler without `explain` (or any error) simply skips telemetry, never blocks the run."""
+        explain = getattr(self.scheduler, "explain", None)
+        if explain is None:
+            return
+        try:
+            rows = explain(graph, done, running=set(), policy=self.policy)
+        except Exception:  # noqa: BLE001 — telemetry must never break execution
+            return
+        if not rows:
+            return
+        serialized = [r for r in rows if r.get("decision") == "serialized"]
+        self.store.append("WaveScheduled", m.id, {
+            "runtime_scheduler": type(self.scheduler).__name__,
+            "max_parallelism": self.effective_max_concurrency,
+            "eligible_nodes": len(rows),
+            "peak_parallel_nodes": len(batch),
+            "serialized_nodes": [r["node"] for r in serialized],
+            "serialization_reason": {r["node"]: r["reason"] for r in serialized},
+            "explain": rows,
+        })
 
     def _execute(self, m: Mission, plan: ExecutionPlan, world: WorldState, node) -> bool:
         """Serial node execution (the ``max_concurrency == 1`` route) — resolve inputs, invoke the

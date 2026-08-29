@@ -92,6 +92,12 @@ def compile_intent(
             idempotency_key=_idem(mission.id, revision, step.outcome),
             cost=NodeCost(usd=cap.cost.usd, latency_ms=cap.cost.latency_ms,
                           tokens=cap.cost.tokens, human_minutes=cap.cost.human_minutes),
+            # carry the capability's declared concurrency safety semantics onto the node so the scheduler
+            # can detect resource conflicts (additive — empty on caps that declare nothing)
+            concurrency_mode=getattr(cap, "concurrency_mode", "") or "",
+            concurrency_key=getattr(cap, "concurrency_key", "") or "",
+            resource_keys=list(getattr(cap, "resource_keys", []) or []),
+            max_parallelism=getattr(cap, "max_parallelism", None),
             intent_step_id=step.id,
         )
         node.id = _node_id(mission.id, revision, step.outcome)   # deterministic (restart-safe)

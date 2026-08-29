@@ -30,6 +30,7 @@ def build_control_tower_operator() -> Operator:
             provides=["bi_activity"],
             outputs={"bi_activity": "KPI scorecards + revenue trend + service breakdown from the live Metabase core"},
             permissions=["bi:read"], estimated_value="low", deterministic=False, latency_ms=400,
+            concurrency_mode="read_only",   # read-only analytics — never blocks another query
         ),
         capability(
             "bi.ask",
@@ -37,6 +38,7 @@ def build_control_tower_operator() -> Operator:
             provides=["bi_answer"],
             outputs={"bi_answer": "answer + rows + viz spec from a pre-written SQL template (never model-authored SQL)"},
             permissions=["bi:read"], estimated_value="medium", deterministic=False, latency_ms=800,
+            concurrency_mode="read_only",
         ),
         capability(
             "bi.refresh",
@@ -44,5 +46,6 @@ def build_control_tower_operator() -> Operator:
             provides=["bi_activity"],
             outputs={"bi_activity": "dashboard queries re-run against Metabase (cache busted)"},
             permissions=["bi:read"], estimated_value="low", deterministic=False, latency_ms=1200,
+            concurrency_mode="read_only",   # cache-bust re-query; no core mutation
         ),
     ])
