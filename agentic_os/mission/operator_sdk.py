@@ -34,7 +34,10 @@ def capability(name: str, handler: Handler, *, provides: list[str] | None = None
                estimated_value: str = "medium", usd: float = 0.0, latency_ms: int = 0,
                required_authority: list[str] | None = None, isolation_class: str = "",
                network: list[str] | None = None,
-               data_classifications: list[str] | None = None) -> Capability:
+               data_classifications: list[str] | None = None,
+               concurrency_mode: str = "", concurrency_key: str = "",
+               resource_keys: list[str] | None = None,
+               max_parallelism: int | None = None) -> Capability:
     """Ergonomic builder for one capability + its handler.
 
     The security fields (v0.3.x, all optional) are the metadata the opt-in Executor security seams read:
@@ -48,6 +51,8 @@ def capability(name: str, handler: Handler, *, provides: list[str] | None = None
         estimated_value=estimated_value, cost=NodeCost(usd=usd, latency_ms=latency_ms),
         required_authority=required_authority or [], isolation_class=isolation_class,
         network=network or [], data_classifications=data_classifications or [],
+        concurrency_mode=concurrency_mode, concurrency_key=concurrency_key,
+        resource_keys=resource_keys or [], max_parallelism=max_parallelism,
     )
     return Capability(spec=spec, handler=handler)
 

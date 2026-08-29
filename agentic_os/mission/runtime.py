@@ -364,6 +364,7 @@ class MissionRuntime:
 
             batch = self.scheduler.ready(graph, done, running=set(), policy=self.policy)
             batch = [n for n in batch if n.id not in done and status.get(n.id) != NodeState.FAILED]
+            self._emit_wave_telemetry(m, graph, done, batch)
             if not batch:
                 if self.repo.pending_human(mission_id):
                     self._set_state(m, MissionState.WAITING_HUMAN)
@@ -405,6 +406,31 @@ class MissionRuntime:
             if not runnable:
                 self._set_state(m, MissionState.FAILED)
                 return m
+
+    def _emit_wave_telemetry(self, m: Mission, graph, done: set[str], batch: list) -> None:
+        """Make "why was this wave (not) parallel?" auditable (plan §14/§22). Records, per wave: the
+        scheduler, the effective ceiling, how many nodes were eligible, how many were released to run
+        concurrently (peak_parallel), and — for any held back — the resource/limit reason. Best-effort:
+        a scheduler without `explain` (or any error) simply skips telemetry, never blocks the run."""
+        explain = getattr(self.scheduler, "explain", None)
+        if explain is None:
+            return
+        try:
+            rows = explain(graph, done, running=set(), policy=self.policy)
+        except Exception:  # noqa: BLE001 — telemetry must never break execution
+            return
+        if not rows:
+            return
+        serialized = [r for r in rows if r.get("decision") == "serialized"]
+        self.store.append("WaveScheduled", m.id, {
+            "runtime_scheduler": type(self.scheduler).__name__,
+            "max_parallelism": self.effective_max_concurrency,
+            "eligible_nodes": len(rows),
+            "peak_parallel_nodes": len(batch),
+            "serialized_nodes": [r["node"] for r in serialized],
+            "serialization_reason": {r["node"]: r["reason"] for r in serialized},
+            "explain": rows,
+        })
 
     def _execute(self, m: Mission, plan: ExecutionPlan, world: WorldState, node) -> bool:
         """Serial node execution (the ``max_concurrency == 1`` route) — resolve inputs, invoke the
