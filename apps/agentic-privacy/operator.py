@@ -32,6 +32,7 @@ def build_privacy_operator() -> Operator:
             outputs={"dsar_opened": "DSAR recorded + identity-verification email sent"},
             side_effecting=True, permissions=["privacy:write"],
             estimated_value="medium", deterministic=False, latency_ms=800,
+            concurrency_mode="exclusive", concurrency_key="privacy:subject:{email}",
         ),
         capability(
             "privacy.access",
@@ -39,7 +40,7 @@ def build_privacy_operator() -> Operator:
             provides=["subject_data"],
             outputs={"subject_data": "personal data gathered across every live system"},
             permissions=["privacy:read"], estimated_value="medium",
-            deterministic=False, latency_ms=1500,
+            deterministic=False, latency_ms=1500, concurrency_mode="read_only",
         ),
         capability(
             "privacy.delete",
@@ -49,6 +50,7 @@ def build_privacy_operator() -> Operator:
             side_effecting=True, approval_required=True,
             permissions=["privacy:write", "privacy:erase"],
             estimated_value="high", deterministic=False, latency_ms=2500,
+            concurrency_mode="exclusive", concurrency_key="privacy:subject:{email}",
         ),
         capability(
             "privacy.retention",
@@ -56,6 +58,6 @@ def build_privacy_operator() -> Operator:
             provides=["retention_report"],
             outputs={"retention_report": "PII past the retention window (dry-run policy check)"},
             permissions=["privacy:read"], estimated_value="low",
-            deterministic=False, latency_ms=1000,
+            deterministic=False, latency_ms=1000, concurrency_mode="read_only",
         ),
     ])

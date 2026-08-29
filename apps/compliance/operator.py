@@ -32,6 +32,7 @@ def build_compliance_operator() -> Operator:
             provides=["compliance_scan"],
             outputs={"compliance_scan": "updated pass rate + pass/fail counts from a fresh oscap scan"},
             estimated_value="medium", deterministic=False, latency_ms=2000,
+            concurrency_mode="read_only",
         ),
         capability(
             "compliance.explain",
@@ -39,6 +40,7 @@ def build_compliance_operator() -> Operator:
             provides=["control_explanation"],
             outputs={"control_explanation": "plain-English explanation + remediation for a failing CIS rule"},
             estimated_value="low", latency_ms=300,
+            concurrency_mode="read_only",
         ),
         capability(
             "compliance.remediate",
@@ -47,6 +49,7 @@ def build_compliance_operator() -> Operator:
             outputs={"remediation_staged": "host fix staged for human approval (policy_change)"},
             side_effecting=True, approval_required=True,
             permissions=["compliance:write"], estimated_value="high", latency_ms=500,
+            concurrency_mode="exclusive", resource_keys=["compliance:host-config"],  # one host fix at a time
         ),
         capability(
             "compliance.file_consent",
@@ -55,5 +58,6 @@ def build_compliance_operator() -> Operator:
             outputs={"consent_filed": "customer consent/GDPR record appended to the append-only evidence ledger"},
             side_effecting=True, approval_required=True,
             permissions=["compliance:write"], estimated_value="high", latency_ms=200,
+            concurrency_mode="exclusive", resource_keys=["compliance:evidence-ledger"],  # serialize appends (commutative merge is future work)
         ),
     ])
