@@ -36,6 +36,7 @@ def build_growth_assistant_operator() -> Operator:
             provides=["growth_playbook"],
             outputs={"growth_playbook": "4-pillar zero-to-traction playbook (saved asset)"},
             estimated_value="high", deterministic=False, latency_ms=1500,
+            concurrency_mode="read_only",
         ),
         capability(
             "assistant.subreddit_plan",
@@ -43,6 +44,7 @@ def build_growth_assistant_operator() -> Operator:
             provides=["subreddit_plan"],
             outputs={"subreddit_plan": "brand-subreddit incubation plan + seed threads"},
             estimated_value="medium", deterministic=False, latency_ms=1600,
+            concurrency_mode="read_only",
         ),
         capability(
             "assistant.founder_content",
@@ -51,6 +53,7 @@ def build_growth_assistant_operator() -> Operator:
             outputs={"founder_content": "founder-voice posts; push=true drafts them to Postiz"},
             side_effecting=True, permissions=["postiz:write"],
             estimated_value="high", deterministic=False, latency_ms=1600,
+            concurrency_key="provider:postiz", max_parallelism=2,
         ),
         capability(
             "assistant.community_blueprint",
@@ -59,6 +62,7 @@ def build_growth_assistant_operator() -> Operator:
             outputs={"community_blueprint": "lead-magnet community blueprint; push=true creates a Listmonk list"},
             side_effecting=True, permissions=["listmonk:write"],
             estimated_value="medium", deterministic=False, latency_ms=1200,
+            concurrency_key="provider:listmonk", max_parallelism=2,
         ),
         capability(
             "assistant.cold_outreach",
@@ -67,6 +71,7 @@ def build_growth_assistant_operator() -> Operator:
             outputs={"cold_outreach_kit": "audit-Loom outreach kit; push=true creates ERPNext Leads"},
             side_effecting=True, permissions=["erpnext:write"],
             estimated_value="high", deterministic=False, latency_ms=1500,
+            concurrency_key="provider:erpnext", max_parallelism=2,
         ),
         capability(
             "assistant.hire_brief",
@@ -74,6 +79,7 @@ def build_growth_assistant_operator() -> Operator:
             provides=["hire_brief"],
             outputs={"hire_brief": "freelancer JD + vetting scorecard + freelancer search links"},
             estimated_value="medium", deterministic=False, latency_ms=1100,
+            concurrency_mode="read_only",
         ),
         capability(
             "assistant.ask",
@@ -81,5 +87,6 @@ def build_growth_assistant_operator() -> Operator:
             provides=["growth_answer"],
             outputs={"growth_answer": "NL answer over the saved assets + core connectivity"},
             estimated_value="low", deterministic=False, latency_ms=500,
+            concurrency_mode="read_only",
         ),
     ])
