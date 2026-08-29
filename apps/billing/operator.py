@@ -29,6 +29,7 @@ def build_billing_operator() -> Operator:
             provides=["billing_activity"],
             outputs={"billing_activity": "KPIs + overdue invoices from the live Lago core"},
             estimated_value="low", deterministic=False, latency_ms=300,
+            concurrency_mode="read_only",
         ),
         capability(
             "billing.dunning",
@@ -37,6 +38,7 @@ def build_billing_operator() -> Operator:
             outputs={"dunning_attempted": "retry_payment issued across all overdue invoices"},
             side_effecting=True, approval_required=True,
             permissions=["billing:write"], estimated_value="high", latency_ms=1500,
+            concurrency_mode="exclusive", resource_keys=["billing:dunning"],  # one dunning run at a time
         ),
         capability(
             "billing.refund",
@@ -45,6 +47,7 @@ def build_billing_operator() -> Operator:
             outputs={"refund_staged": "refund credit-note staged for human approval"},
             side_effecting=True, approval_required=True,
             permissions=["billing:write"], estimated_value="medium", latency_ms=500,
+            concurrency_mode="exclusive", concurrency_key="billing:invoice:{invoice}",
         ),
         capability(
             "billing.create_subscription",
@@ -53,6 +56,7 @@ def build_billing_operator() -> Operator:
             outputs={"subscription": "paid subscription created on the live Lago core"},
             side_effecting=True, undo="billing.cancel_subscription",
             permissions=["billing:write"], estimated_value="high", latency_ms=1200,
+            concurrency_mode="exclusive", concurrency_key="billing:customer:{customer}",
         ),
         capability(
             "billing.cancel_subscription",
@@ -61,5 +65,6 @@ def build_billing_operator() -> Operator:
             outputs={"subscription_cancelled": "subscription terminated (saga compensation)"},
             side_effecting=True,
             permissions=["billing:write"], estimated_value="medium", latency_ms=800,
+            concurrency_mode="exclusive", concurrency_key="billing:customer:{customer}",
         ),
     ])
