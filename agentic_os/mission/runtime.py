@@ -345,6 +345,30 @@ class MissionRuntime:
         diverge (a pool of 8 quietly throttled to 4 by policy is visible, not hidden)."""
         return max(1, min(self.max_concurrency, self.policy.max_concurrency))
 
+    def scheduler_config(self) -> dict:
+        """The effective scheduler configuration, recorded at startup and available for EXPLAIN — so a
+        runtime that is silently serial (pool defaulted to 1, or a policy cap throttling the pool) is
+        VISIBLE, never a guess. This is the guard against another 'implemented but effectively disabled'
+        regression: requested vs effective concurrency, the deciding ceiling, and which capabilities carry
+        their own conflict semantics are all on the record."""
+        pool = self.max_concurrency
+        policy_cap = self.policy.max_concurrency
+        effective = self.effective_max_concurrency
+        keyed = [c.name for c in self.registry.all()
+                 if getattr(c, "concurrency_key", "") or getattr(c, "resource_keys", [])
+                 or getattr(c, "max_parallelism", None) is not None
+                 or getattr(c, "concurrency_mode", "")]
+        return {
+            "scheduler": type(self.scheduler).__name__,
+            "requested_concurrency": pool,           # the executor pool the SDK/env asked for
+            "policy_max_concurrency": policy_cap,     # the scheduler's per-wave release cap
+            "effective_max_concurrency": effective,   # min(pool, policy) — the limit that actually binds
+            "bound_by": ("executor_pool" if pool <= policy_cap else "schedule_policy"),
+            "scheduler_policy": ("safe_parallel" if effective > 1 else "serial"),
+            "per_operator_limit": dict(self.policy.per_operator_limit),
+            "capabilities_with_conflict_semantics": sorted(keyed),
+        }
+
     def run(self, mission_id: str) -> Mission:
         m = self._missions[mission_id]
         if m.state == MissionState.FAILED:      # blocked in simulation
@@ -353,6 +377,10 @@ class MissionRuntime:
         graph = plan.graph
         world = self._world(mission_id)
         self._set_state(m, MissionState.RUNNING)
+        # Record the effective scheduler config ONCE per mission (startup telemetry). If this says
+        # scheduler_policy=serial when you expected parallel, the ceilings are the reason — on the record.
+        if not any(e.get("type") == "SchedulerConfigured" for e in self.repo.timeline(mission_id)):
+            self.store.append("SchedulerConfigured", m.id, self.scheduler_config())
 
         while True:
             status = self.repo.node_status(mission_id)
