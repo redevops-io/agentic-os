@@ -162,6 +162,9 @@ class MissionRuntime:
         self.scheduler = scheduler or TopoScheduler()
         self.policy = policy or SchedulePolicy()
         self.learning = learning or LearningRouter(registry)
+        # The EFFECTIVE per-wave concurrency is bounded by BOTH the executor pool (max_concurrency) and how
+        # many the scheduler releases at once (policy.max_concurrency). Surfacing the min makes the two
+        # ceilings observable so they can never silently diverge (e.g. pool 8 throttled to 4 by policy).
         self.repo = MissionRepository(self.store)
         # P7: the evidence + verification plane — a result must pass acceptance before it becomes
         # authoritative world state (the observed → verified → committed gate).
@@ -334,6 +337,13 @@ class MissionRuntime:
             ex = self._secure_executor_for(m) or self.executor
             self._executors[m.id] = ex
         return ex
+
+    @property
+    def effective_max_concurrency(self) -> int:
+        """The concurrency limit that actually binds — min of the executor pool and the scheduler's
+        per-wave release cap. Report this in telemetry/EXPLAIN so the two ceilings can never silently
+        diverge (a pool of 8 quietly throttled to 4 by policy is visible, not hidden)."""
+        return max(1, min(self.max_concurrency, self.policy.max_concurrency))
 
     def run(self, mission_id: str) -> Mission:
         m = self._missions[mission_id]
