@@ -32,6 +32,10 @@ func ApprovalRequired() CapOption     { return func(s *CapabilitySpec) { s.Appro
 func WithUndo(u string) CapOption     { return func(s *CapabilitySpec) { s.Undo = u } }
 func WithValue(v string) CapOption    { return func(s *CapabilitySpec) { s.EstimatedValue = v } }
 func WithOperator(o string) CapOption { return func(s *CapabilitySpec) { s.Operator = o } }
+func WithConcurrencyMode(m string) CapOption { return func(s *CapabilitySpec) { s.ConcurrencyMode = m } }
+func WithConcurrencyKey(k string) CapOption  { return func(s *CapabilitySpec) { s.ConcurrencyKey = k } }
+func WithResourceKeys(k ...string) CapOption { return func(s *CapabilitySpec) { s.ResourceKeys = k } }
+func WithMaxParallelism(n int) CapOption     { return func(s *CapabilitySpec) { s.MaxParallelism = n } }
 func WithCost(usd float64, latencyMs int) CapOption {
 	return func(s *CapabilitySpec) { s.Cost = NodeCost{USD: usd, LatencyMs: latencyMs} }
 }
