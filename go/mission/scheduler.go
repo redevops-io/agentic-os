@@ -35,7 +35,9 @@ type Scheduler interface {
 // TopoScheduler emits the ready frontier, highest-value nodes first, honouring policy.
 type TopoScheduler struct{}
 
-func (TopoScheduler) Ready(graph *ExecutionGraph, done, running map[string]bool, policy SchedulePolicy) []*Node {
+// frontier is the causally-ready, value-sorted candidate set (Phase A) — shared by Ready and Explain so
+// both reason about the exact same ordered nodes.
+func (TopoScheduler) frontier(graph *ExecutionGraph, done, running map[string]bool, policy SchedulePolicy) []*Node {
 	var frontier []*Node
 	for i := range graph.Nodes {
 		n := &graph.Nodes[i]
@@ -80,10 +82,28 @@ func (TopoScheduler) Ready(graph *ExecutionGraph, done, running map[string]bool,
 	sort.SliceStable(frontier, func(i, j int) bool {
 		return schedValue(frontier[i]) > schedValue(frontier[j])
 	})
+	return frontier
+}
 
+func (t TopoScheduler) Ready(graph *ExecutionGraph, done, running map[string]bool, policy SchedulePolicy) []*Node {
+	released, _ := t.release(t.frontier(graph, done, running, policy), graph, running, policy)
+	return released
+}
+
+// release — Phase C: dispatch the maximal SAFE subset of the ready frontier. A node is held (and its
+// reason recorded) when it would exceed the global cap, a per-operator limit, OR a resource-conflict key
+// already in flight (nodes sharing an exclusive key serialize). held maps a held node id → the reason.
+func (TopoScheduler) release(frontier []*Node, graph *ExecutionGraph, running map[string]bool, policy SchedulePolicy) ([]*Node, map[string]string) {
+	held := map[string]string{}
 	opInflight := map[string]int{}
 	for _, op := range runningOps(graph, running) {
 		opInflight[op]++
+	}
+	keyInflight := map[string]int{}
+	for i := range graph.Nodes {
+		if running[graph.Nodes[i].ID] {
+			acquire(&graph.Nodes[i], keyInflight)
+		}
 	}
 	capacity := policy.MaxConcurrency - len(running)
 	if capacity < 0 {
@@ -92,15 +112,63 @@ func (TopoScheduler) Ready(graph *ExecutionGraph, done, running map[string]bool,
 	var released []*Node
 	for _, n := range frontier {
 		if len(released) >= capacity {
-			break
+			if _, ok := held[n.ID]; !ok {
+				held[n.ID] = "concurrency cap " + itoa(policy.MaxConcurrency) + " reached"
+			}
+			continue
 		}
 		if limit, ok := policy.PerOperatorLimit[n.Operator]; ok && opInflight[n.Operator] >= limit {
+			held[n.ID] = "operator '" + n.Operator + "' at limit " + itoa(limit)
+			continue
+		}
+		if reason := conflict(n, keyInflight); reason != "" {
+			held[n.ID] = reason
 			continue
 		}
 		released = append(released, n)
 		opInflight[n.Operator]++
+		acquire(n, keyInflight)
 	}
-	return released
+	return released, held
+}
+
+// ExplainRow is one node's scheduling decision this wave (the parallelism EXPLAIN surface).
+type ExplainRow struct {
+	Node         string   `json:"node"`
+	Capability   string   `json:"capability"`
+	Decision     string   `json:"decision"` // "parallelized" | "serialized"
+	Reason       string   `json:"reason"`
+	ResourceKeys []string `json:"resource_keys"`
+}
+
+// Explain returns, per ready node, whether it was released to run concurrently this wave or serialized,
+// and why — turning scheduler behaviour into auditable runtime behaviour without changing what runs.
+func (t TopoScheduler) Explain(graph *ExecutionGraph, done, running map[string]bool, policy SchedulePolicy) []ExplainRow {
+	frontier := t.frontier(graph, done, running, policy)
+	released, held := t.release(frontier, graph, running, policy)
+	releasedIDs := map[string]bool{}
+	for _, n := range released {
+		releasedIDs[n.ID] = true
+	}
+	rows := make([]ExplainRow, 0, len(frontier))
+	for _, n := range frontier {
+		if releasedIDs[n.ID] {
+			reason := "independent dependencies, no resource conflict"
+			if n.ConcurrencyMode == ModeReadOnly {
+				reason = "read-only capability"
+			}
+			rows = append(rows, ExplainRow{Node: n.ID, Capability: n.Capability, Decision: "parallelized",
+				Reason: reason, ResourceKeys: resourceKeys(n)})
+		} else {
+			reason := held[n.ID]
+			if reason == "" {
+				reason = "held this wave"
+			}
+			rows = append(rows, ExplainRow{Node: n.ID, Capability: n.Capability, Decision: "serialized",
+				Reason: reason, ResourceKeys: resourceKeys(n)})
+		}
+	}
+	return rows
 }
 
 // schedValue: cheaper + non-approval nodes float up (real value comes from the cost model).

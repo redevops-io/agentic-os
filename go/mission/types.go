@@ -91,6 +91,12 @@ type CapabilitySpec struct {
 	Provides         []string          `json:"provides"`
 	Embedding        []float64         `json:"embedding"`
 	Source           string            `json:"source"` // provenance/origin ("plugin:<name>"); "" = built-in/trusted
+	// Concurrency surface (v0.3.x, additive) — canonical safety semantics the scheduler reads to decide
+	// which ready nodes may run together. Describes SAFETY, not mechanism. Empty ⇒ today's behaviour.
+	ConcurrencyMode string   `json:"concurrency_mode"` // "" | "read_only" | "idempotent" | "side_effecting" | "exclusive"
+	ConcurrencyKey  string   `json:"concurrency_key"`  // resource-key template resolved from inputs, e.g. "crm:account:{account_id}"
+	ResourceKeys    []string `json:"resource_keys"`    // static conflict keys held while running
+	MaxParallelism  int      `json:"max_parallelism"`  // max concurrent holders of this cap's key(s); 0 ⇒ mode default (exclusive=1)
 }
 
 // NewCapabilitySpec applies the Python defaults (deterministic, confidence 0.9, medium value).
@@ -154,6 +160,12 @@ type Node struct {
 	IdempotencyKey   string           `json:"idempotency_key"`
 	Result           map[string]any   `json:"result"`
 	Cost             NodeCost         `json:"cost"`
+	// Concurrency surface (carried from the bound capability by the compiler) — resolved by the scheduler
+	// into the conflict keys this node holds while running (see concurrency.go).
+	ConcurrencyMode  string           `json:"concurrency_mode"`
+	ConcurrencyKey   string           `json:"concurrency_key"`
+	ResourceKeys     []string         `json:"resource_keys"`
+	MaxParallelism   int              `json:"max_parallelism"`
 	Assertions       []StateAssertion `json:"assertions"` // P7 state-transition checks
 	ID               string           `json:"id"`
 	IntentStepID     string           `json:"intent_step_id"`
