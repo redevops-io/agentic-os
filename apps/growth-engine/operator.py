@@ -28,6 +28,7 @@ def build_growth_operator() -> Operator:
             provides=["growth_attribution"],
             outputs={"growth_attribution": "lead-source attribution + shift recommendation from the live Umami core"},
             estimated_value="medium", deterministic=False, latency_ms=400,
+            concurrency_mode="read_only",
         ),
         capability(
             "growth.reallocate_budget",
@@ -36,5 +37,8 @@ def build_growth_operator() -> Operator:
             outputs={"budget_change_staged": "ad-budget shift staged for human approval (budget_change gate)"},
             side_effecting=True, approval_required=True,
             permissions=["growth:write"], estimated_value="high", latency_ms=500,
+            # money-moving budget changes serialize on a single ad-budget resource — never two concurrent
+            # reallocations racing the same spend envelope (already approval-gated on top).
+            concurrency_mode="exclusive", resource_keys=["growth:ad-budget"],
         ),
     ])

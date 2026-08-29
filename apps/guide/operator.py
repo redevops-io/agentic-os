@@ -27,6 +27,7 @@ def build_guide_operator() -> Operator:
             provides=["guide_answer"],
             outputs={"guide_answer": "RBAC-scoped answer + cited apps from the redevops-rag corpus"},
             estimated_value="medium", deterministic=True, latency_ms=200,
+            concurrency_mode="read_only",   # retrieval only — never blocks
         ),
         capability(
             "guide.walkthrough",
@@ -36,5 +37,6 @@ def build_guide_operator() -> Operator:
             provides=["guide_walkthrough"],
             outputs={"guide_walkthrough": "structured per-app onboarding walkthrough"},
             estimated_value="medium", deterministic=True, latency_ms=100,
+            concurrency_mode="read_only",
         ),
     ])
