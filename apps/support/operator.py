@@ -30,6 +30,7 @@ def build_support_operator() -> Operator:
             outputs={"reply_drafted": "reply drafted + posted as a private note for human review"},
             side_effecting=True, permissions=["support:write"],
             estimated_value="high", latency_ms=1200,
+            concurrency_mode="exclusive", concurrency_key="support:conversation:{conversation_id}",
         ),
         capability(
             "support.resolve",
@@ -38,6 +39,7 @@ def build_support_operator() -> Operator:
             outputs={"ticket_resolved": "conversation status toggled to resolved in Chatwoot"},
             side_effecting=True, permissions=["support:write"],
             estimated_value="medium", latency_ms=600,
+            concurrency_mode="exclusive", concurrency_key="support:conversation:{conversation_id}",
         ),
         capability(
             "support.escalate",
@@ -46,6 +48,7 @@ def build_support_operator() -> Operator:
             outputs={"ticket_escalated": "priority set to urgent + assigned to an agent"},
             side_effecting=True, permissions=["support:write"],
             estimated_value="high", latency_ms=900,
+            concurrency_mode="exclusive", concurrency_key="support:conversation:{conversation_id}",
         ),
         capability(
             "support.send_onboarding",
@@ -54,5 +57,6 @@ def build_support_operator() -> Operator:
             outputs={"onboarding_sent": "welcome message delivered to the new customer in Chatwoot"},
             side_effecting=True, permissions=["support:write"],
             estimated_value="medium", latency_ms=1000,
+            concurrency_key="provider:chatwoot", max_parallelism=3,  # creates a new conversation; bounded
         ),
     ])

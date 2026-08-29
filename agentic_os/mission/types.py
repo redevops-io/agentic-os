@@ -98,6 +98,14 @@ class CapabilitySpec:
     network: list[str] = field(default_factory=list)              # declared egress endpoints (finer than permissions)
     data_classifications: list[str] = field(default_factory=list)  # sensitivity of the data it touches (e.g. "pii")
     secrets: list[str] = field(default_factory=list)             # named credential refs the broker issues JIT (never raw values)
+    # ── concurrency surface (v0.3.x, additive) — canonical safety semantics the scheduler reads to decide
+    # which ready nodes may run together. Describes SAFETY, not mechanism (no thread/async concepts leak in).
+    # A capability that declares nothing keeps today's behaviour: no resource lock, bounded only by the
+    # global concurrency cap. See mission/concurrency.py + scheduler Phase C.
+    concurrency_mode: str = ""       # "" | "read_only" | "idempotent" | "side_effecting" | "exclusive"
+    concurrency_key: str = ""        # resource-key template resolved from inputs, e.g. "crm:account:{account_id}"
+    resource_keys: list[str] = field(default_factory=list)   # static conflict keys held while running (e.g. "k8s:cluster:prod")
+    max_parallelism: int | None = None   # max concurrent holders of this cap's key(s); None -> mode default (exclusive=1)
 
     def key(self) -> str:
         return self.name
@@ -164,6 +172,12 @@ class Node:
     cosmetic_inputs: list[str] = field(default_factory=list)  # $from_world inputs whose disagreement is non-material
     result: dict[str, Any] | None = None
     cost: NodeCost = field(default_factory=NodeCost)
+    # ── concurrency surface (carried from the bound capability by the compiler) — the scheduler resolves
+    # these into the conflict keys this node holds while running (see mission/concurrency.py).
+    concurrency_mode: str = ""
+    concurrency_key: str = ""
+    resource_keys: list[str] = field(default_factory=list)
+    max_parallelism: int | None = None
     assertions: list["StateAssertion"] = field(default_factory=list)  # P7: state-transition checks
     id: str = field(default_factory=lambda: new_id("node"))
     intent_step_id: str | None = None

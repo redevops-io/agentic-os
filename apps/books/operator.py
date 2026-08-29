@@ -23,6 +23,7 @@ from . import core
 
 
 def build_books_operator() -> Operator:
+    LEDGER = "books:ledger"   # serialize journal posts (double-entry integrity); reads run free
     return Operator("books", [
         capability(
             "books.categorize",
@@ -31,6 +32,7 @@ def build_books_operator() -> Operator:
             outputs={"transaction_categorized": "next uncategorized bank transaction tagged to an account in ERPNext"},
             side_effecting=True,
             permissions=["books:write"], estimated_value="medium", latency_ms=1200,
+            concurrency_mode="exclusive", resource_keys=[LEDGER],
         ),
         capability(
             "books.reconcile",
@@ -38,6 +40,7 @@ def build_books_operator() -> Operator:
             provides=["reconciliation_staged"],
             outputs={"reconciliation_staged": "deposit↔invoice amount match staged for posting"},
             estimated_value="medium", latency_ms=800,
+            concurrency_mode="read_only",
         ),
         capability(
             "books.close",
@@ -46,6 +49,7 @@ def build_books_operator() -> Operator:
             outputs={"close_staged": "month-end close (Period Closing Voucher) staged for human approval"},
             side_effecting=True, approval_required=True,
             permissions=["books:write"], estimated_value="high", latency_ms=500,
+            concurrency_mode="exclusive", resource_keys=[LEDGER],
         ),
         capability(
             "books.record_revenue",
@@ -54,6 +58,7 @@ def build_books_operator() -> Operator:
             outputs={"revenue_recorded": "onboarding subscription revenue posted as an ERPNext Journal Entry"},
             side_effecting=True, undo="books.reverse_entry",
             permissions=["books:write"], estimated_value="medium", latency_ms=900,
+            concurrency_mode="exclusive", resource_keys=[LEDGER],
         ),
         capability(
             "books.reverse_entry",
@@ -62,5 +67,6 @@ def build_books_operator() -> Operator:
             outputs={"revenue_reversed": "the revenue Journal Entry cancelled (compensating saga undo)"},
             side_effecting=True,
             permissions=["books:write"], estimated_value="medium", latency_ms=700,
+            concurrency_mode="exclusive", resource_keys=[LEDGER],
         ),
     ])

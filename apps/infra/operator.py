@@ -69,19 +69,33 @@ def build_infra_operator(*, run=None, http_get=None) -> Operator:
         return core.drift(_cloud(i), check_playbook=i.get("check_playbook"),
                           inventory=i.get("inventory"), run=run)
 
+    # Concurrency safety (v0.3.x): a terraform apply/destroy holds the state lock for its cloud/workspace,
+    # an ansible rollout holds its inventory/host — so writes to the SAME target serialize, writes to
+    # INDEPENDENT targets run concurrently. Keys resolve from the step's `cloud`/`inventory` inputs; when a
+    # mission doesn't carry them (env-driven demo), the template stays unresolved and same-cap writes
+    # serialize conservatively (one terraform state → one apply at a time). Plan/verify/drift are read-only
+    # (they take the state lock in shared mode at most) so they never block each other.
+    TF_STATE = "tf:state:{cloud}"            # terraform backend/workspace lock (per cloud)
+    ANSIBLE_HOST = "ansible:inventory:{inventory}"   # ansible target lock (per inventory/host)
     return Operator("infra", [
         capability("infra.plan", _plan, provides=["infra_planned"],
-                   permissions=["infra:read"], estimated_value="medium", latency_ms=3000),
+                   permissions=["infra:read"], estimated_value="medium", latency_ms=3000,
+                   concurrency_mode="read_only"),
         capability("infra.provision", _provision, provides=["infra_provisioned"],
                    side_effecting=True, approval_required=True, undo="infra.destroy_delta",
-                   permissions=["infra:write"], estimated_value="high", latency_ms=60000),
+                   permissions=["infra:write"], estimated_value="high", latency_ms=60000,
+                   concurrency_mode="exclusive", concurrency_key=TF_STATE),
         capability("infra.configure", _configure, provides=["app_configured"],
                    side_effecting=True, undo="infra.rollback_release",
-                   permissions=["infra:write"], estimated_value="high", latency_ms=45000),
+                   permissions=["infra:write"], estimated_value="high", latency_ms=45000,
+                   concurrency_mode="exclusive", concurrency_key=ANSIBLE_HOST),
         capability("infra.verify", _verify, provides=["deploy_verified"],
-                   permissions=["infra:read"], latency_ms=5000),
+                   permissions=["infra:read"], latency_ms=5000, concurrency_mode="read_only"),
         capability("infra.drift", _drift, provides=["drift_report"],
-                   permissions=["infra:read"], estimated_value="medium", latency_ms=4000),
-        capability("infra.destroy_delta", _destroy, side_effecting=True, permissions=["infra:write"]),
-        capability("infra.rollback_release", _rollback, side_effecting=True, permissions=["infra:write"]),
+                   permissions=["infra:read"], estimated_value="medium", latency_ms=4000,
+                   concurrency_mode="read_only"),
+        capability("infra.destroy_delta", _destroy, side_effecting=True, permissions=["infra:write"],
+                   concurrency_mode="exclusive", concurrency_key=TF_STATE),
+        capability("infra.rollback_release", _rollback, side_effecting=True, permissions=["infra:write"],
+                   concurrency_mode="exclusive", concurrency_key=ANSIBLE_HOST),
     ])

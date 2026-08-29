@@ -33,6 +33,7 @@ def build_social_operator() -> Operator:
             outputs={"draft_staged": "post copy generated and staged as a DRAFT in Postiz"},
             side_effecting=True,
             permissions=["social:write"], estimated_value="medium", latency_ms=1200,
+            concurrency_key="provider:postiz", max_parallelism=3,  # bounded Postiz writes; drafts are independent
         ),
         capability(
             "social.publish",
@@ -41,5 +42,6 @@ def build_social_operator() -> Operator:
             outputs={"publish_staged": "post staged for human approval before it goes live"},
             side_effecting=True, approval_required=True,
             permissions=["social:write"], estimated_value="high", latency_ms=800,
+            concurrency_mode="exclusive", concurrency_key="social:post:{id}",  # never double-publish one post
         ),
     ])

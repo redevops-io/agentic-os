@@ -30,6 +30,9 @@ def build_market_radar_operator() -> Operator:
             outputs={"watch": "a new changedetection.io watch monitoring a competitor/price page"},
             side_effecting=True,
             permissions=["market-radar:write"], estimated_value="medium", latency_ms=1200,
+            # one watch per target URL: adding DIFFERENT watches runs concurrently, the same URL
+            # serializes (pairs with the idempotency-key dedupe). Unresolved url → serialize conservatively.
+            concurrency_mode="exclusive", concurrency_key="market-radar:watch:{url}",
         ),
         capability(
             "radar.brief",
@@ -37,5 +40,6 @@ def build_market_radar_operator() -> Operator:
             provides=["market_brief"],
             outputs={"market_brief": "read-only summary of what changed across the tracked watches"},
             estimated_value="high", deterministic=False, latency_ms=800,
+            concurrency_mode="read_only",
         ),
     ])

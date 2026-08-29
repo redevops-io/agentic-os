@@ -28,6 +28,7 @@ def build_outreach_operator() -> Operator:
             provides=["outreach_pipeline"],
             outputs={"outreach_pipeline": "ranked accounts + drafted openers rebuilt from live signals"},
             estimated_value="low", deterministic=False, latency_ms=1200,
+            concurrency_mode="read_only",   # rebuilds pipeline, no CRM write
         ),
         capability(
             "outreach.approve",
@@ -36,6 +37,7 @@ def build_outreach_operator() -> Operator:
             outputs={"lead_synced": "approved lead synced to Twenty (Company + Person + Opportunity)"},
             side_effecting=True,
             permissions=["outreach:write"], estimated_value="high", latency_ms=1500,
+            concurrency_mode="exclusive", concurrency_key="outreach:account:{account}",
         ),
         capability(
             "outreach.send_all",
@@ -44,5 +46,6 @@ def build_outreach_operator() -> Operator:
             outputs={"sequences_sent": "approved outreach sequences dispatched to prospects"},
             side_effecting=True, approval_required=True,
             permissions=["outreach:write"], estimated_value="high", latency_ms=800,
+            concurrency_mode="exclusive", resource_keys=["outreach:send"],  # one dispatch run at a time
         ),
     ])
