@@ -146,23 +146,30 @@ class LocalContainmentSandbox:
     #: environment, so process secrets (AWS_SECRET_ACCESS_KEY, …) are invisible to it.
     env_passthrough: tuple = ()
 
-    def invoke(self, operator: str, capability: str, inputs: dict, idempotency_key: str,
-               *, isolation: str = "sandbox", grants: "list | None" = None) -> dict:
+    def run_contained(self, operator: str, capability: str, inputs: dict,
+                      idempotency_key: str, *, constraint: ExecutionConstraint) -> dict:
+        """The core rootless mechanism, driven by an explicit :class:`ExecutionConstraint`.
+
+        Split out from :meth:`invoke` so a hardened wrapper (e.g. the Enterprise
+        ``SubprocessSandbox``, which adds network namespaces / privilege-drop / secret
+        redaction) can *compose* this as its runner — the canonical containment spec is the
+        one ``ExecutionConstraint``, enforced here; the wrapper adds policy on top.
+        """
         scrubbed = {k: os.environ[k] for k in self.env_passthrough if k in os.environ}
         scrubbed.setdefault("PATH", "/usr/bin:/bin")
         # Import paths are not secrets — preserve them so the capability resolves, while
         # ambient credential env vars stay scrubbed (that is the property under test).
         scrubbed["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
-        # Redeemed credential material for `grants` would be injected here — inside the
+        # Redeemed credential material for grants would be injected here — inside the
         # boundary only — never returned to or visible from the caller/agent.
         with tempfile.TemporaryDirectory(prefix="membrane-") as cwd:
-            timeout = self.constraint.max_duration_seconds or None
+            timeout = constraint.max_duration_seconds or None
             try:
                 proc = subprocess.run(
                     [sys.executable, "-c", _RUNNER],
                     input=json.dumps({"capability": capability, "inputs": inputs}),
                     text=True, capture_output=True, cwd=cwd, env=scrubbed,
-                    preexec_fn=_limits(self.constraint), timeout=timeout,
+                    preexec_fn=_limits(constraint), timeout=timeout,
                 )
             except subprocess.TimeoutExpired:
                 raise ContainmentError("duration_exceeded")
@@ -171,6 +178,12 @@ class LocalContainmentSandbox:
             raise ContainmentError(
                 f"contained_failure(rc={proc.returncode}): {proc.stderr.strip()[:200]}")
         return json.loads(proc.stdout)["result"]
+
+    def invoke(self, operator: str, capability: str, inputs: dict, idempotency_key: str,
+               *, isolation: str = "sandbox", grants: "list | None" = None) -> dict:
+        """``executor.Sandbox`` entrypoint — runs against this instance's default constraint."""
+        return self.run_contained(operator, capability, inputs, idempotency_key,
+                                  constraint=self.constraint)
 
     def receipt(self, envelope: ExecutionEnvelope, result: dict,
                 *, started: float, finished: float) -> ExecutionReceipt:
