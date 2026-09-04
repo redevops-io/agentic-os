@@ -28,17 +28,17 @@ from agentic_os.mission.operators import HTTPOperatorClient
 
 # ── a fake ERPNext CRM core (one open lead + one open opportunity) ───────────
 LEAD = {
-    "name": "CRM-LEAD-0001", "lead_name": "Dana Rivera", "company_name": "Northwind Roofing",
-    "status": "Open", "source": "Website", "email_id": "dana@northwind.example",
-    "designation": "Facilities Director", "industry": "Construction", "territory": "West",
+    "name": "CRM-LEAD-0001", "lead_name": "Dana Rivera", "company_name": "Whitfield Family Trust",
+    "status": "Open", "source": "Website", "email_id": "dana@whitfield.example",
+    "designation": "Trustee", "industry": "Private Wealth", "territory": "West",
     "creation": "2026-06-01 09:00:00",
 }
 OPP = {
-    "name": "OPP-0001", "party_name": "Northwind Roofing", "customer_name": "Northwind Roofing",
+    "name": "OPP-0001", "party_name": "Whitfield Family Trust", "customer_name": "Whitfield Family Trust",
     "status": "Open", "opportunity_amount": 42000, "sales_stage": "Prospecting",
     "creation": "2026-06-02 09:00:00",
 }
-CUSTOMER = {"name": "Acme Roofing"}
+CUSTOMER = {"name": "Okonkwo Holdings"}
 
 
 class _Resp:

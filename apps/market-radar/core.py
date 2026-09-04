@@ -32,7 +32,7 @@ CD_API_URL = os.environ.get("CD_API_URL", "http://localhost:5001").rstrip("/")
 CD_API_KEY = os.environ.get("CD_API_KEY", "")
 CD_FRONT_URL = os.environ.get("CD_FRONT_URL", "http://localhost:5001").rstrip("/")
 
-TENANT = "Summit Roofing Co."
+TENANT = "Meridian Wealth Management"
 SUBTITLE = ("Watch every competitor and get briefed before they move — competitive "
             "intelligence on a real changedetection.io core, with the human in the loop.")
 
@@ -275,9 +275,9 @@ def brief(body: dict, blurb: Callable[[str], str | None] | None = None) -> dict:
         f"last change {i['last_change']}" for i in items
     ) or "no watches"
     reasoning = blurb(
-        "You are a competitive-intelligence analyst for a roofing contractor (Summit "
-        "Roofing Co.). In ONE short paragraph, brief the owner on the current state of "
-        f"these competitor/price/permit web monitors: {detail}. Be concrete; if nothing "
+        "You are a competitive-intelligence analyst for a wealth management firm (Meridian "
+        "Wealth Management). In ONE short paragraph, brief the principal on the current state of "
+        f"these competitor/fee/regulatory web monitors: {detail}. Be concrete; if nothing "
         "has changed yet, say what is being watched and why it matters. Final answer only."
     ) if blurb else None
     if reasoning:

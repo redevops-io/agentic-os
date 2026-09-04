@@ -11,15 +11,15 @@
 
 # agentic-market-radar — agent layer + dashboard over a real changedetection.io core
 
-A competitive-intelligence module (Crayon/Klue style) for a roofing SME, built on the
+A competitive-intelligence module (Crayon/Klue style) for a wealth-management firm, built on the
 **agentic-billing** reference pattern. It wraps the running self-hosted
 **changedetection.io** instance (the open-source website-change-monitoring core) with:
 
 - an **agent layer** that reads REAL watch data over its REST API, and
 - an **MD3 dashboard** rendered from that live data (no mock data),
 
-for the demo tenant **Summit Roofing Co.** (a roofing contractor). Every watch is a
-competitor page, a price/pricing page, or a permits feed; the agent surfaces what
+for the demo tenant **Meridian Wealth Management** (a wealth-management / RIA firm). Every watch is a
+competitor RIA page, a fee-schedule page, or a regulatory/SEC feed; the agent surfaces what
 changed and can spin up new monitors.
 
 ```
@@ -32,7 +32,7 @@ changedetection.io (OSS core, :5001) ──REST /api/v1──▶ app.py (FastAPI
 
 | File | Purpose |
 |------|---------|
-| `seed.py` | Reads the api token from the container datastore, confirms via `GET /api/v1/systeminfo`, creates 5 roofing competitor/price/permit watches over REST (idempotent), writes `.env`. |
+| `seed.py` | Reads the api token from the container datastore, confirms via `GET /api/v1/systeminfo`, creates 5 wealth-management competitor/fee/regulatory watches over REST (idempotent), writes `.env`. |
 | `app.py` | FastAPI service (port 8204): `/health`, `/api/activity`, `/` dashboard, `/agent/run`. |
 | `requirements.txt` | fastapi, uvicorn, httpx. |
 | `Dockerfile` | slim-python image running `uvicorn app:app --port 8204`. |
@@ -118,7 +118,7 @@ docker run --rm -p 8204:8204 \
   unread changes) + the full watch list with title/tags/last_checked/last_changed/state,
   all derived from changedetection REST. Cached 15s.
 - `GET /` → the MD3 market-radar dashboard rendered from the live watches. Header shows
-  "Market Radar" + "Summit Roofing Co.", a green
+  "Market Radar" + "Meridian Wealth Management", a green
   "agent active · core: changedetection connected" pill, a "data: live from
   changedetection" badge, and an **"Open in changedetection ↗"** button. Layout: KPI
   tiles, a competitor "watch" card grid with last-change pills, and a change-feed table.

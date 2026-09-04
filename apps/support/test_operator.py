@@ -26,7 +26,7 @@ CONV = {
     "id": 1,
     "meta": {"sender": {"name": "Dana Smith"}, "channel": "Channel::WebWidget"},
     "additional_attributes": {"source": "Web"},
-    "messages": [{"message_type": 0, "content": "My roof is leaking after the storm."}],
+    "messages": [{"message_type": 0, "content": "I'm locked out of the client portal and can't download my latest statement."}],
     "status": "open",
     "priority": None,
     "created_at": 1700000000,

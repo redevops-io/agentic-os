@@ -41,7 +41,7 @@ if _ENV_FILE.exists():
 POSTIZ_FRONT_URL = os.environ.get("POSTIZ_FRONT_URL", "http://localhost:4200").rstrip("/")
 PG_USER = os.environ.get("POSTIZ_PG_USER", "postiz")
 PG_DB = os.environ.get("POSTIZ_PG_DB", "postiz")
-ORG_ID = os.environ.get("POSTIZ_ORG_ID", "summit-roofing-org")
+ORG_ID = os.environ.get("POSTIZ_ORG_ID", "meridian-wealth-org")
 # Postgres connection over TCP. In a container we cannot `docker exec` into the Postiz
 # postgres, so we talk to it over the wire instead. The agent container is attached to the
 # Postiz docker network, so the postgres container hostname resolves (default host below).
@@ -51,7 +51,7 @@ PG_PASSWORD = os.environ.get("POSTIZ_PG_PASSWORD", "postiz")
 # Optional REST base — used only for the connectivity probe / future API reads.
 POSTIZ_API_URL = os.environ.get("POSTIZ_API_URL", "http://localhost:4200").rstrip("/")
 
-TENANT = "Summit Roofing Co."
+TENANT = "Meridian Wealth Management"
 SUBTITLE = ("Create, schedule, and engage across social on a real Postiz core — "
             "with a human in the loop before anything publishes.")
 
@@ -257,9 +257,10 @@ def fetch_activity(force: bool = False) -> dict:
 
 # ── agentic actions (deterministic Postiz work) ──────────────────────────────
 def _template_copy(topic: str) -> str:
-    t = topic.strip() or "roofing tips"
-    return (f"{t[0].upper() + t[1:]}: Summit Roofing Co. has you covered. "
-            "Book a free inspection today and roof with confidence. #Roofing #SummitRoofing")
+    t = topic.strip() or "market commentary"
+    return (f"{t[0].upper() + t[1:]}: insights from the team at Meridian Wealth Management. "
+            "Schedule a portfolio review to see what it means for your plan. "
+            "#WealthManagement #MeridianWealth")
 
 
 def draft(body: dict, copy: Callable[[str], str | None] | None = None) -> dict:
@@ -271,7 +272,7 @@ def draft(body: dict, copy: Callable[[str], str | None] | None = None) -> dict:
 
     `copy` is an optional narration callback (the LLM copywriter lives in app.py); the action
     itself is fully deterministic and works with copy=None (a template fallback)."""
-    topic = (body.get("topic") or "5 signs you need a new roof").strip()
+    topic = (body.get("topic") or "5 questions to ask before year-end").strip()
     llm = copy(topic) if copy else None
     text = llm or _template_copy(topic)
 

@@ -23,7 +23,7 @@ Endpoints:
 
 Config (env; seed.py writes agents/growth-engine/.env automatically):
   UMAMI_URL          REST base, default http://localhost:3002
-  WEBSITE_ID         the Summit Roofing website id (captured by seed.py)
+  WEBSITE_ID         the Meridian Wealth website id (captured by seed.py)
   UMAMI_ADMIN_USER   login user, default admin
   UMAMI_ADMIN_PASS   login pass, default umami
   UMAMI_FRONT_URL    Umami UI link for the "Open in Umami" button
@@ -71,7 +71,7 @@ from .core import (  # noqa: E402
 
 PORT = int(os.environ.get("PORT", "8205"))
 
-app = FastAPI(title="agentic-growth-engine (Summit Roofing Co. · core: Umami)")
+app = FastAPI(title="agentic-growth-engine (Meridian Wealth Management · core: Umami)")
 
 
 # --- MD3 styling (BASE_CSS reused verbatim from deploy/module_service.py) -----
@@ -387,9 +387,9 @@ BOUNCE RATE is the share of sessions where the visitor viewed only one page and 
 
 A REFERRER is the site a visitor came from (the previous URL). Traffic SOURCES / CHANNELS group referrers into buckets: ORGANIC (search engines like Google), DIRECT (typed the URL or no referrer), REFERRAL (a link on another site), SOCIAL (Facebook, Instagram), and PAID (ad clicks). Knowing your channel mix tells you where to spend and where you're exposed.
 
-UTM PARAMETERS are tags you add to a link — utm_source (e.g. google), utm_medium (e.g. cpc, email), utm_campaign (e.g. spring-roofing) — so Umami can attribute a visit to a specific campaign. Always tag ad and email links with UTMs; otherwise that traffic lands in "direct" and you can't tell what worked.
+UTM PARAMETERS are tags you add to a link — utm_source (e.g. google), utm_medium (e.g. cpc, email), utm_campaign (e.g. retirement-planning) — so Umami can attribute a visit to a specific campaign. Always tag ad and email links with UTMs; otherwise that traffic lands in "direct" and you can't tell what worked.
 
-An EVENT is a custom action you track beyond a pageview — a "Request a quote" button click, a form submit, a phone tap. Events are how you measure CONVERSIONS (the actions that make money), not just traffic. In Umami you fire an event with data-umami-event on the element or track() in code.
+An EVENT is a custom action you track beyond a pageview — a "Schedule a consultation" button click, a form submit, a phone tap. Events are how you measure CONVERSIONS (the actions that make money), not just traffic. In Umami you fire an event with data-umami-event on the element or track() in code.
 
 To READ THE DASHBOARD: start with visitors and pageviews for the volume, check bounce rate for engagement quality, then open referrers / UTM sources to see which channels drive the visits. "Why is my bounce rate high?" usually means traffic from the wrong audience or a slow/irrelevant landing page. "Where is my traffic coming from?" is answered by the top referrers and UTM sources — that's your channel mix."""
 

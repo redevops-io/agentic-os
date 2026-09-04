@@ -118,7 +118,7 @@ def module_shell(*, name: str, group: str, repo: str, switcher: list[dict]) -> s
     <a class="src" href="{src_url}" target="_blank" rel="noopener">source &#8599;</a>
   </nav>
   <div class="demo-banner" id="demoBanner">
-    Demo data for <b>Summit Roofing Co.</b>, a fictional tenant — not a real customer's account.
+    Demo data for <b>Meridian Wealth Management</b>, a fictional tenant — not a real customer's account.
     <button onclick="document.getElementById('demoBanner').remove()">dismiss</button>
   </div>
   <div class="frame-wrap">
@@ -309,7 +309,7 @@ def overview_page(*, groups: dict, has_agent: set, module_meta: dict, workflows:
   assistants that carry out tasks for you — on a server you own. Each module is built on a proven
   open-source tool and adds agents on top; the kernel coordinates them, sends every task to the
   cheapest capable AI model, and pauses anything risky for your one-click approval. Everything below
-  is running live on demo data for a fictional tenant, <b>Summit Roofing Co.</b></p>
+  is running live on demo data for a fictional tenant, <b>Meridian Wealth Management</b></p>
 
   <div class="flow">
     <span class="node">You</span><span class="arr">→</span>

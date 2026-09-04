@@ -46,7 +46,7 @@ CROWDSEC_FRONT_URL = os.environ.get("CROWDSEC_FRONT_URL", "http://localhost:8086
 # (no sudo). Override via env.
 DOCKER_CMD = os.environ.get("DOCKER_CMD", "sudo docker").split()
 
-TENANT = "Summit Roofing Co."
+TENANT = "Meridian Wealth Management"
 SUBTITLE = "Network security & systems, triaged and explained by an agent — on a real CrowdSec core, with a human in the loop before any block."
 
 
@@ -356,7 +356,7 @@ def triage(blurb: Callable[[str], str | None] | None = None) -> dict:
         "summary": summary,
     }
     reasoning = blurb(
-        "You are a SOC analyst agent for a small roofing contractor's network. In ONE sentence, "
+        "You are a SOC analyst agent for a wealth-management firm's network. In ONE sentence, "
         f"triage these active CrowdSec block decisions and recommend a next step: {detail}. "
         "Be concrete and professional. Final answer only, no preamble."
     ) if blurb else None

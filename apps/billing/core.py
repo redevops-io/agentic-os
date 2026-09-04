@@ -32,7 +32,7 @@ LAGO_API_URL = os.environ.get("LAGO_API_URL", "http://localhost:3000").rstrip("/
 LAGO_API_KEY = os.environ.get("LAGO_API_KEY", "")
 LAGO_FRONT_URL = os.environ.get("LAGO_FRONT_URL", "http://localhost:80").rstrip("/")
 
-TENANT = "Summit Roofing Co."
+TENANT = "Meridian Wealth Management"
 SUBTITLE = "Checkout to reconciliation on a real Lago core — with a human in the loop when money moves."
 
 
@@ -226,7 +226,7 @@ def chase_overdue(blurb: Callable[[str], str | None] | None = None) -> dict:
 
     detail = "; ".join(f"{i['customer']} {i['amount']} ({i['days_overdue']}d)" for i in overdue)
     reasoning = blurb(
-        "You are a billing collections agent for a roofing contractor. In ONE sentence, "
+        "You are a billing collections agent for a wealth-management firm. In ONE sentence, "
         f"summarize sending dunning reminders / retrying payment on these {len(overdue)} overdue "
         f"invoices: {detail}. Be concrete and professional. Final answer only, no preamble."
     ) if (blurb and overdue) else None

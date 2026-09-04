@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Repeatable seeder for the Summit Roofing Co. demo tenant on self-hosted
+"""Repeatable seeder for the Meridian Wealth Management demo tenant on self-hosted
 changedetection.io.
 
 Bootstrap method (the reliable one for changedetection): the REST API key is NOT
@@ -11,7 +11,7 @@ datastore. We read it back, then create the demo watches over the REST API.
        sudo docker exec <container> cat /datastore/changedetection.json (0.45+)
      -> settings.application.api_access_token
   2. Confirm with GET /api/v1/systeminfo using header `x-api-key: <token>`.
-  3. POST /api/v1/watch for ~5 roofing-SME competitor / price / permit pages
+  3. POST /api/v1/watch for ~5 wealth-management competitor / fee / regulatory / market-data pages
      (idempotent: existing watches with the same URL are skipped).
   4. Write agents/market-radar/.env so app.py picks up CD_API_KEY automatically.
 
@@ -53,20 +53,20 @@ DATASTORE_FILES = [
     "/datastore/url-watches.json",
 ]
 
-# 5 roofing-SME competitive-intelligence watches. tag is a comma-separated string of
+# 5 wealth-management competitive-intelligence watches. tag is a comma-separated string of
 # tag titles (changedetection auto-creates the tags). Stable public URLs so the
 # watches actually fetch on this host.
 WATCHES = [
-    {"title": "Apex Roofing — pricing", "tag": "competitor,pricing",
-     "url": "https://www.gaf.com/en-us/roofing-materials/residential-roofing-products/shingles"},
-    {"title": "Peak Exteriors — services", "tag": "competitor",
-     "url": "https://www.owenscorning.com/en-us/roofing/shingles"},
-    {"title": "Ridgeline Contractors — metal roofs", "tag": "competitor",
-     "url": "https://www.certainteed.com/residential-roofing/"},
-    {"title": "Asphalt shingle price index", "tag": "pricing",
-     "url": "https://www.homedepot.com/b/Building-Materials-Roofing-Roof-Shingles/N-5yc1vZc4mw"},
-    {"title": "Local building permits", "tag": "permits",
-     "url": "https://www.permits.performance.gov/"},
+    {"title": "Vanguard Personal Advisor — fees", "tag": "competitor,pricing",
+     "url": "https://investor.vanguard.com/advice/personal-advisor"},
+    {"title": "Fisher Investments — services", "tag": "competitor",
+     "url": "https://www.fisherinvestments.com/en-us"},
+    {"title": "Betterment — pricing", "tag": "competitor,pricing",
+     "url": "https://www.betterment.com/pricing"},
+    {"title": "Custodian fee schedule index", "tag": "pricing",
+     "url": "https://www.schwab.com/pricing"},
+    {"title": "SEC investment-adviser updates", "tag": "regulatory",
+     "url": "https://www.sec.gov/newsroom/press-releases"},
 ]
 
 

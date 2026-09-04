@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Repeatable seeder for the Summit Roofing Co. demo tenant on self-hosted Umami v2.
+"""Repeatable seeder for the Meridian Wealth Management demo tenant on self-hosted Umami v2.
 
 Bootstrap (the reliable path for self-hosted Umami):
   1. POST /api/auth/login {admin/umami}  -> bearer token.
@@ -19,9 +19,9 @@ Seeding strategy — REAL analytics rows over RECENT days:
 
   ~60 pageviews across 4 lead channels over the last 8 days:
     google / cpc          (paid search)
-    facebook / cpc        (paid social)
-    yardsign-qr / referral(offline QR codes on yard signs -> a referral domain)
-    (direct) / organic    (brand / word-of-mouth, no referrer)
+    linkedin / cpc        (paid social)
+    seminar-qr / referral (offline QR codes at retirement seminars -> a referral domain)
+    (direct) / organic    (brand / word-of-mouth / referral, no referrer)
 
 The script writes agents/growth-engine/.env so app.py picks up UMAMI_URL + WEBSITE_ID with
 no manual copy/paste.
@@ -54,33 +54,33 @@ DB_CONTAINER = os.environ.get("UMAMI_DB_CONTAINER", "agentic-cores-umami-db-1")
 ADMIN_USER = os.environ.get("UMAMI_ADMIN_USER", "admin")
 ADMIN_PASS = os.environ.get("UMAMI_ADMIN_PASS", "umami")
 
-SITE_NAME = "Summit Roofing"
-SITE_DOMAIN = "summitroofing.test"
+SITE_NAME = "Meridian Wealth"
+SITE_DOMAIN = "meridianwealth.test"
 
 # `sudo` is required to talk to the docker socket on this host.
 DOCKER = ["sudo", "docker"]
 
-# --- channel mix: realistic roofing-contractor lead sources ------------------
+# --- channel mix: realistic wealth-management lead sources --------------------
 # weight = relative share of the ~60 events; the rest of the tuple is what the
 # Umami columns get set to so /metrics reports clean channel names.
 CHANNELS = [
     # label          weight referrer_domain        utm_source    utm_medium  utm_campaign
-    ("Google Ads",      22, "google.com",          "google",     "cpc",      "spring-reroof"),
-    ("Facebook",        12, "facebook.com",        "facebook",   "cpc",      "storm-damage"),
-    ("Yard sign QR",    14, "yardsign-qr.test",    "yardsign-qr","referral", "neighborhood"),
+    ("Google Ads",      22, "google.com",          "google",     "cpc",      "retirement-planning"),
+    ("LinkedIn",        12, "linkedin.com",        "linkedin",   "cpc",      "market-commentary"),
+    ("Seminar QR",      14, "seminar-qr.test",     "seminar-qr", "referral", "retirement-webinar"),
     ("Organic / Direct",13, "",                    "",           "organic",  ""),
 ]
 
 PAGES = [
-    ("/", "Summit Roofing — Roof Repair & Replacement"),
-    ("/services/roof-replacement", "Roof Replacement | Summit Roofing"),
-    ("/free-estimate", "Free Estimate | Summit Roofing"),
-    ("/services/storm-damage", "Storm Damage Repair | Summit Roofing"),
-    ("/gallery", "Project Gallery | Summit Roofing"),
-    ("/contact", "Contact Us | Summit Roofing"),
+    ("/", "Meridian Wealth Management — Financial Planning & Investment Management"),
+    ("/services/wealth-management", "Wealth Management | Meridian Wealth"),
+    ("/schedule-consultation", "Schedule a Consultation | Meridian Wealth"),
+    ("/services/retirement-planning", "Retirement Planning | Meridian Wealth"),
+    ("/insights", "Market Insights | Meridian Wealth"),
+    ("/contact", "Contact Us | Meridian Wealth"),
 ]
-# Pages that count as a "conversion" (lead form / estimate request) for the funnel.
-CONVERSION_PATHS = {"/free-estimate", "/contact"}
+# Pages that count as a "conversion" (lead form / consultation request) for the funnel.
+CONVERSION_PATHS = {"/schedule-consultation", "/contact"}
 
 BROWSERS = ["chrome", "safari", "firefox", "edge"]
 OSES = ["Windows", "Mac OS", "iOS", "Android"]
@@ -107,7 +107,7 @@ def login() -> str:
 
 
 def get_or_create_website(token: str) -> str:
-    """Idempotent: reuse the Summit Roofing website if it already exists, else create it."""
+    """Idempotent: reuse the Meridian Wealth website if it already exists, else create it."""
     h = {"Authorization": f"Bearer {token}"}
     with httpx.Client(timeout=15.0) as c:
         r = c.get(f"{UMAMI_URL}/api/websites", headers=h, params={"pageSize": 100})
@@ -192,7 +192,7 @@ def seed_rows(website_id: str) -> dict:
                 f"{('NULL' if not us else chr(39)+_esc(us)+chr(39))},"
                 f"{('NULL' if not um else chr(39)+_esc(um)+chr(39))},"
                 f"{('NULL' if not uc else chr(39)+_esc(uc)+chr(39))},"
-                f"'{_esc(title)}',1,'summitroofing.test')"
+                f"'{_esc(title)}',1,'meridianwealth.test')"
             )
             total_events += 1
             if path in CONVERSION_PATHS:
@@ -226,8 +226,8 @@ def exercise_public_ingest(website_id: str) -> bool:
     ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
           "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")
     samples = [
-        ("/?utm_source=google&utm_medium=cpc&utm_campaign=spring-reroof", "https://www.google.com/"),
-        ("/free-estimate?utm_source=facebook&utm_medium=cpc&utm_campaign=storm-damage", "https://www.facebook.com/"),
+        ("/?utm_source=google&utm_medium=cpc&utm_campaign=retirement-planning", "https://www.google.com/"),
+        ("/schedule-consultation?utm_source=linkedin&utm_medium=cpc&utm_campaign=market-commentary", "https://www.linkedin.com/"),
     ]
     with httpx.Client(timeout=15.0) as c:
         for url, ref in samples:
@@ -236,7 +236,7 @@ def exercise_public_ingest(website_id: str) -> bool:
                            headers={"User-Agent": ua, "Content-Type": "application/json"},
                            json={"type": "event", "payload": {
                                "website": website_id, "hostname": SITE_DOMAIN,
-                               "url": url, "referrer": ref, "title": "Summit Roofing",
+                               "url": url, "referrer": ref, "title": "Meridian Wealth",
                                "language": "en-US", "screen": "1920x1080"}})
                 if r.status_code == 200:
                     ok += 1

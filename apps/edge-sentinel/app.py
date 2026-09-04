@@ -82,7 +82,7 @@ from .core import (  # noqa: E402
 
 PORT = int(os.environ.get("PORT", "8203"))
 
-app = FastAPI(title="edge-sentinel (Summit Roofing Co. · core: CrowdSec)")
+app = FastAPI(title="edge-sentinel (Meridian Wealth Management · core: CrowdSec)")
 
 
 # --- MD3 styling (BASE_CSS reused verbatim from deploy/module_service.py) -----

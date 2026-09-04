@@ -22,22 +22,22 @@ from agentic_os.mission.operators import HTTPOperatorClient
 
 # ── a fake ERPNext core (one open invoice + one matching deposit) ─────────────
 SALES_INVOICES = [{
-    "name": "ACC-SINV-001", "customer": "Acme Roofing", "grand_total": 4500,
+    "name": "ACC-SINV-001", "customer": "Whitfield Family Trust", "grand_total": 4500,
     "outstanding_amount": 4500, "status": "Unpaid",
 }]
-PURCHASE_INVOICES = [{"name": "ACC-PINV-001", "supplier": "Beam Supply", "outstanding_amount": 1200}]
+PURCHASE_INVOICES = [{"name": "ACC-PINV-001", "supplier": "Bloomberg Data Services", "outstanding_amount": 1200}]
 ACCOUNTS = [
-    {"name": "Sales - SR", "root_type": "Income", "account_type": "Income Account"},
-    {"name": "COGS - SR", "root_type": "Expense", "account_type": "Cost of Goods Sold"},
-    {"name": "Bank - SR", "root_type": "Asset", "account_type": "Bank"},
+    {"name": "Sales - MWM", "root_type": "Income", "account_type": "Income Account"},
+    {"name": "COGS - MWM", "root_type": "Expense", "account_type": "Cost of Goods Sold"},
+    {"name": "Bank - MWM", "root_type": "Asset", "account_type": "Bank"},
 ]
 GL_ENTRIES = [
-    {"account": "Sales - SR", "debit": 0, "credit": 10000},
-    {"account": "COGS - SR", "debit": 4000, "credit": 0},
-    {"account": "Bank - SR", "debit": 6000, "credit": 0},
+    {"account": "Sales - MWM", "debit": 0, "credit": 10000},
+    {"account": "COGS - MWM", "debit": 4000, "credit": 0},
+    {"account": "Bank - MWM", "debit": 6000, "credit": 0},
 ]
 BANK_TXNS = [{
-    "name": "ACC-BTN-001", "description": "Roofing job payment | seedtag",
+    "name": "ACC-BTN-001", "description": "Advisory fee payment | seedtag",
     "deposit": 4500, "withdrawal": 0, "status": "Unreconciled",
     "unallocated_amount": 4500, "date": "2026-06-20", "docstatus": 1,
 }]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Register the Summit Roofing Postgres datasource in Metabase, sync it, and create the saved
+"""Register the Meridian Wealth Postgres datasource in Metabase, sync it, and create the saved
 cards + dashboard the owner cares about — idempotent, stdlib-only.
 
 The operational data lives in control-tower-db (Postgres, seeded from roofing.sql). This script
@@ -26,9 +26,9 @@ import urllib.error
 import urllib.request
 
 API = os.environ.get("METABASE_API_URL", "http://localhost:3001").rstrip("/")
-ADMIN_EMAIL = os.environ.get("METABASE_ADMIN_EMAIL", "admin@summitroofing.test")
-ADMIN_PASSWORD = os.environ.get("METABASE_ADMIN_PASSWORD", "SummitRoof!2026")
-DB_NAME = "Summit Roofing"
+ADMIN_EMAIL = os.environ.get("METABASE_ADMIN_EMAIL", "admin@meridianwealth.test")
+ADMIN_PASSWORD = os.environ.get("METABASE_ADMIN_PASSWORD", "MeridianWealth!2026")
+DB_NAME = "Meridian Wealth"
 PG = {
     "host": os.environ.get("PGHOST", "control-tower-db"),
     "port": int(os.environ.get("PGPORT", "5432")),
@@ -69,9 +69,9 @@ def get_session() -> str:
         sys.exit(f"cannot log in and no setup-token available (status {st}); set METABASE_SESSION")
     st, body = api("POST", "/api/setup", body={
         "token": token,
-        "user": {"first_name": "Summit", "last_name": "Admin", "email": ADMIN_EMAIL,
-                 "password": ADMIN_PASSWORD, "site_name": "Summit Roofing Co."},
-        "prefs": {"site_name": "Summit Roofing Co.", "allow_tracking": False},
+        "user": {"first_name": "Meridian", "last_name": "Admin", "email": ADMIN_EMAIL,
+                 "password": ADMIN_PASSWORD, "site_name": "Meridian Wealth Management"},
+        "prefs": {"site_name": "Meridian Wealth Management", "allow_tracking": False},
     })
     if st in (200, 201) and body.get("id"):
         return body["id"]
@@ -121,15 +121,15 @@ CARDS = [
      "SELECT service_type, round(sum(invoiced_amount)) AS revenue, "
      "round(100*(sum(invoiced_amount)-sum(material_cost)-sum(labor_cost))/nullif(sum(invoiced_amount),0)) AS margin_pct "
      "FROM jobs WHERE status='Completed' GROUP BY 1 ORDER BY margin_pct DESC"),
-    ("Revenue & win-rate by lead source", "table",
+    ("Revenue & win-rate by referral source", "table",
      "SELECT lead_source, count(*) FILTER (WHERE status!='Lost') AS won, count(*) AS quotes, "
      "round(100.0*count(*) FILTER (WHERE status!='Lost')/count(*)) AS win_pct, "
      "round(sum(invoiced_amount)) AS revenue FROM jobs GROUP BY 1 ORDER BY revenue DESC"),
-    ("Quote-to-job conversion by month", "line",
+    ("Proposal-to-client conversion by month", "line",
      "SELECT to_char(quote_date,'YYYY-MM') AS month, "
      "round(100.0*count(*) FILTER (WHERE status!='Lost')/count(*)) AS conversion_pct "
      "FROM jobs WHERE quote_date >= (CURRENT_DATE - INTERVAL '18 months') GROUP BY 1 ORDER BY 1"),
-    ("Accounts receivable aging", "table",
+    ("Advisory-fee receivable aging", "table",
      "SELECT CASE WHEN CURRENT_DATE<=due_date THEN '0 current' "
      "WHEN CURRENT_DATE-due_date<=30 THEN '1-30' WHEN CURRENT_DATE-due_date<=60 THEN '31-60' "
      "WHEN CURRENT_DATE-due_date<=90 THEN '61-90' ELSE '90+' END AS bucket, "
@@ -152,7 +152,7 @@ def create_cards_and_dashboard(token: str, db_id: int):
             print(f"  card FAIL {name}: {st} {str(body)[:140]}")
     if not card_ids:
         return None
-    st, dash = api("POST", "/api/dashboard", token, {"name": "Summit Roofing - Control Tower"})
+    st, dash = api("POST", "/api/dashboard", token, {"name": "Meridian Wealth - Control Tower"})
     if st not in (200, 201) or not dash.get("id"):
         print(f"  dashboard create failed: {st} {dash}")
         return None

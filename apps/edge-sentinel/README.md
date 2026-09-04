@@ -19,7 +19,7 @@ detection & decision engine) with:
   API + alerts via `cscli ... -o json`, and
 - an **MD3 SOC dashboard** rendered from that live data (no mock data),
 
-for the demo tenant **Summit Roofing Co.** (a roofing contractor).
+for the demo tenant **Meridian Wealth Management** (a wealth-management firm).
 
 ```
 CrowdSec (OSS core, LAPI :8086) ──GET /v1/decisions (X-Api-Key)──┐
@@ -36,7 +36,7 @@ CrowdSec (OSS core, LAPI :8086) ──GET /v1/decisions (X-Api-Key)──┐
 
 | File | Purpose |
 |------|---------|
-| `seed.py` | Bootstrap + seed via `cscli` (docker exec): adds the `summit-agent` bouncer, captures its API key, injects 6 varied decisions/alerts, writes `.env`. Idempotent. |
+| `seed.py` | Bootstrap + seed via `cscli` (docker exec): adds the `meridian-agent` bouncer, captures its API key, injects 6 varied decisions/alerts, writes `.env`. Idempotent. |
 | `app.py` | FastAPI service (port 8203): `/health`, `/api/activity`, `/` SOC dashboard, `/agent/run`. |
 | `requirements.txt` | fastapi, uvicorn, httpx. |
 | `Dockerfile` | slim-python image running `uvicorn app:app --port 8203`. |
@@ -50,7 +50,7 @@ paths, both driven from the running container `agentic-cores-crowdsec-1`:
 1. **Decisions** — the bouncer/LAPI path. Create a bouncer credential and read live
    decisions over the Local API:
    ```bash
-   KEY=$(sudo docker exec agentic-cores-crowdsec-1 cscli bouncers add summit-agent -o raw)
+   KEY=$(sudo docker exec agentic-cores-crowdsec-1 cscli bouncers add meridian-agent -o raw)
    curl -s -H "X-Api-Key: $KEY" http://localhost:8086/v1/decisions
    ```
 2. **Alerts** — LAPI alert auth needs a machine login, so the simplest reliable path is
@@ -79,7 +79,7 @@ cd apps/edge-sentinel
 # 1. Bootstrap + seed CrowdSec (idempotent — writes .env with the live bouncer key)
 python3 seed.py
 #   → BOUNCER_KEY=<key>
-#   → SEED_OK bouncer=summit-agent added=6 decisions=6 alerts=6
+#   → SEED_OK bouncer=meridian-agent added=6 decisions=6 alerts=6
 #   → Wrote .env
 
 # 2. Install deps + run the service
@@ -116,7 +116,7 @@ docker run --rm -p 8203:8203 \
 - `GET /` → the MD3 SOC dashboard from the live data: a **status banner** first (green
   "All systems normal" / red when there are active threats), **KPI tiles**, an
   **alert feed grouped by severity** with color pills, a **scenario bar meter**, and an
-  **attack-sources / active-decisions table**. Header shows "Summit Roofing Co.", a green
+  **attack-sources / active-decisions table**. Header shows "Meridian Wealth Management", a green
   "agent active · core: CrowdSec connected" pill, and an "Open CrowdSec metrics ↗" link.
 - `POST /agent/run` with `{"action": ...}`:
   - `"block_ip"` `{ip}` → the **approval-gated** sensitive action. Returns

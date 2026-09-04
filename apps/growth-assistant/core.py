@@ -35,7 +35,7 @@ if _ENV_FILE.exists():
             _k, _v = _line.split("=", 1)
             os.environ.setdefault(_k.strip(), _v.strip())
 
-TENANT = os.environ.get("GROWTH_TENANT", "Summit Roofing Co.")
+TENANT = os.environ.get("GROWTH_TENANT", "Meridian Wealth Management")
 DATA_DIR = Path(os.environ.get("GROWTH_DATA_DIR", "/data"))
 ASSET_DIR = DATA_DIR / "assets"
 try:  # best-effort at import (prod: /data exists); tests / read-only FS must not crash import

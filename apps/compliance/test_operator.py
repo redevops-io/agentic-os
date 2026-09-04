@@ -142,7 +142,7 @@ def test_idempotency_dedupes_invocation(client):
 
 def test_invoke_file_consent_appends_to_ledger(client):
     body = {"capability": "compliance.file_consent",
-            "inputs": {"customer": "Summit Roofing Co.", "subscription": "pro-annual"}}
+            "inputs": {"customer": "Whitfield Family Trust", "subscription": "pro-annual"}}
     res = client.post("/invoke", json=body).json()["result"]
     assert res["status"] == "done"
     assert res["action"] == "file_consent"
@@ -155,7 +155,7 @@ def test_invoke_file_consent_appends_to_ledger(client):
     rec = json.loads(lines[0])
     assert rec == {
         "kind": "consent",
-        "customer": "Summit Roofing Co.",
+        "customer": "Whitfield Family Trust",
         "subscription": "pro-annual",
         "consent_id": res["consent_id"],
         "filed": True,
@@ -165,7 +165,7 @@ def test_invoke_file_consent_appends_to_ledger(client):
 def test_file_consent_is_idempotent(client):
     """Re-filing the same customer/subscription dedupes — the ledger keeps ONE record."""
     body = {"capability": "compliance.file_consent",
-            "inputs": {"customer": "Summit Roofing Co.", "subscription": "pro-annual"}}
+            "inputs": {"customer": "Whitfield Family Trust", "subscription": "pro-annual"}}
     first = client.post("/invoke", json=body).json()["result"]
     second = client.post("/invoke", json=body).json()["result"]
     # deterministic consent_id → the second file is a no-op append
@@ -176,7 +176,7 @@ def test_file_consent_is_idempotent(client):
 
     # a DIFFERENT subscription is a distinct consent record → a second line appends
     other = {"capability": "compliance.file_consent",
-             "inputs": {"customer": "Summit Roofing Co.", "subscription": "enterprise"}}
+             "inputs": {"customer": "Whitfield Family Trust", "subscription": "enterprise"}}
     res = client.post("/invoke", json=other).json()["result"]
     assert res["consent_id"] != first["consent_id"]
     lines = [l for l in core.CONSENT_LEDGER.read_text().splitlines() if l.strip()]

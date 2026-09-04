@@ -29,9 +29,9 @@ build_social_operator = importlib.import_module("social-autopilot.operator").bui
 from agentic_os.mission.operators import HTTPOperatorClient
 
 # ── a fake Postiz core (one channel + one queued post) ───────────────────────
-_CHANNEL_ROW = "int-1\x1fSummit Instagram\x1finstagram\x1f{\"followers\": 1200}\x1ff"
+_CHANNEL_ROW = "int-1\x1fMeridian Instagram\x1finstagram\x1f{\"followers\": 1200}\x1ff"
 _POST_ROW = ("post-1\x1fQUEUE\x1f2026-07-15 10:00:00\x1fint-1\x1f"
-             "[{\"content\": \"New metal roof install — book a free inspection! #Roofing\"}]")
+             "[{\"content\": \"Q3 market commentary is live — read our take. Not investment advice. #MarketCommentary\"}]")
 
 
 class _Done:
@@ -97,7 +97,7 @@ def test_capabilities_manifest(client):
 
 def test_invoke_draft_stages_to_postiz(client):
     r = client.post("/invoke", json={
-        "capability": "social.draft", "inputs": {"topic": "storm damage inspections"},
+        "capability": "social.draft", "inputs": {"topic": "tax-loss harvesting"},
     }).json()
     res = r["result"]
     assert res["status"] == "done" and res["action"] == "draft"
@@ -120,7 +120,7 @@ def test_invoke_publish_is_gated_and_writes_nothing(client):
 
 
 def test_idempotency_dedupes_side_effect(client):
-    body = {"capability": "social.draft", "inputs": {"topic": "gutter guards"},
+    body = {"capability": "social.draft", "inputs": {"topic": "retirement income"},
             "idempotency_key": "k-1"}
     first = client.post("/invoke", json=body).json()["result"]
     second = client.post("/invoke", json=body).json()["result"]
@@ -134,7 +134,7 @@ def test_mission_runtime_httpclient_drives_operator(client):
         return client.post(urlparse(url).path, json=body, headers=headers or {}).json()
 
     oc = HTTPOperatorClient(resolve={"social-autopilot": "http://social"}, transport=_transport)
-    drafted = oc.invoke("social-autopilot", "social.draft", {"topic": "metal roofs"},
+    drafted = oc.invoke("social-autopilot", "social.draft", {"topic": "market outlook"},
                         idempotency_key="m-1")
     assert drafted["status"] == "done" and drafted["staged_as_draft"] is True
 

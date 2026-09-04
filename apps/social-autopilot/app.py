@@ -97,7 +97,7 @@ def _reel_start() -> dict:
             "note": "the UI agent is recording a ~45s walkthrough: chat → planner → benchmarks"}
 
 
-app = FastAPI(title="agentic-social-autopilot (Summit Roofing Co. · core: Postiz)")
+app = FastAPI(title="agentic-social-autopilot (Meridian Wealth Management · core: Postiz)")
 
 
 # --- MD3 styling (BASE_CSS reused verbatim from deploy/module_service.py) -----
@@ -410,7 +410,7 @@ def _vibex_panel() -> str:
         "<span id='vibex-mode' class='vibex-mode demo'>vibexgen</span></div>"
         "<div class='reel-card'>"
         "<div class='reel-controls'>"
-        "<input id='vibex-topic' class='vibex-input' placeholder='Topic — e.g. storm damage, metal roofs, gutter guards'>"
+        "<input id='vibex-topic' class='vibex-input' placeholder='Topic — e.g. tax-loss harvesting, retirement income, market outlook'>"
         "<button id='vibex-go' class='btn' type='button'>Find trends</button>"
         "<span id='vibex-status' class='reel-status'></span>"
         "</div>"
@@ -484,7 +484,8 @@ def _llm_copy(topic: str) -> str | None:
     """Draft post copy with Claude, or None if no key / any error. Optional by design —
     the template fallback always produces usable copy."""
     prompt = (
-        "You write social posts for a roofing contractor (Summit Roofing Co.). "
+        "You write compliant social posts for a wealth-management firm (Meridian Wealth Management). "
+        "Avoid performance promises, guarantees, or client testimonials. "
         f"Write ONE short, friendly social post about: {topic}. "
         "Include 1-2 relevant hashtags. Output only the post text, no preamble."
     )
@@ -535,7 +536,8 @@ def _llm_copy(topic: str) -> str | None:
                 "model": "claude-opus-4-8",
                 "max_tokens": 200,
                 "messages": [{"role": "user", "content": (
-                    "You write social posts for a roofing contractor (Summit Roofing Co.). "
+                    "You write compliant social posts for a wealth-management firm (Meridian Wealth Management). "
+                    "Avoid performance promises, guarantees, or client testimonials. "
                     f"Write ONE short, friendly social post about: {topic}. "
                     "Include 1-2 relevant hashtags. Output only the post text, no preamble."
                 )}],
@@ -720,7 +722,7 @@ async def api_vibex_generate(request: Request) -> JSONResponse:
 async def api_vibex_draft(request: Request) -> JSONResponse:
     """Draft a post FROM a vibexgen trend angle — reuses the app's Postiz draft path."""
     body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
-    hook = (body or {}).get("hook") or (body or {}).get("topic") or "a trending roofing angle"
+    hook = (body or {}).get("hook") or (body or {}).get("topic") or "a trending wealth-management angle"
     return JSONResponse(_draft({"topic": hook}))
 
 
