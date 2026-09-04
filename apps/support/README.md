@@ -19,7 +19,7 @@ core) with:
 - an **MD3 dashboard** (Zendesk/Intercom-style: KPI tiles, channel-breakdown bars, a
   live ticket queue with priority pills + age) rendered from that live data — no mock data,
 
-for the demo tenant **Summit Roofing Co.** (a roofing contractor).
+for the demo tenant **Meridian Wealth Management** (a registered investment advisory firm).
 
 ```
 Chatwoot (OSS core, :3003) ──REST──▶ app.py (FastAPI, :8207) ──▶ MD3 dashboard + /api/activity + /agent/run
@@ -32,7 +32,7 @@ Chatwoot (OSS core, :3003) ──REST──▶ app.py (FastAPI, :8207) ──▶
 | File | Purpose |
 |------|---------|
 | `../../cores/chatwoot.compose.yml` | The Chatwoot core: `rails` (web, host 3003→3000), `sidekiq` (1 worker), `postgres` (`pgvector/pgvector:pg16`), `redis`. `seccomp=unconfined, apparmor=unconfined` on each. |
-| `seed.rb` | Idempotent Ruby seed run via `rails runner` inside the Chatwoot rails container. Creates the super-admin user, account, API inbox, 2 contacts, 7 roofing conversations across open/pending/resolved, and reads the agent access token back. |
+| `seed.rb` | Idempotent Ruby seed run via `rails runner` inside the Chatwoot rails container. Creates the super-admin user, account, API inbox, 2 contacts, 7 client-service conversations across open/pending/resolved, and reads the agent access token back. |
 | `seed.py` | Repeatable wrapper: copies `seed.rb` into the container, runs it, captures `ACCESS_TOKEN` + `ACCOUNT_ID`, writes `.env`. |
 | `app.py` | FastAPI service (port 8207): `/health`, `/api/activity`, `/` dashboard, `/agent/run`. |
 | `requirements.txt` | fastapi, uvicorn, httpx. |
@@ -63,7 +63,7 @@ Key facts discovered while bringing it up:
   prints `ACCESS_TOKEN=<value>` and writes it to `.env`; or read it directly:
   ```bash
   sudo docker exec agentic-chatwoot-rails-1 bundle exec rails runner \
-    'puts User.find_by(email: "admin@summitroofing.test").access_token.token'
+    'puts User.find_by(email: "admin@meridianwealth.com").access_token.token'
   ```
   In the UI it lives under **Profile Settings → Access Token**.
 - Conversations are listed per account and **filtered by status** with
@@ -72,19 +72,19 @@ Key facts discovered while bringing it up:
 - A conversation's opening customer message is the message with `message_type == 0`
   (incoming); `message_type == 1` is outgoing, `2` is an activity event.
 
-## Seeded data — "Summit Roofing Co." (account 1, inbox 1)
+## Seeded data — "Meridian Wealth Management" (account 1, inbox 1)
 
-7 roofing-support conversations across 2 contacts (Dana Henderson, Marcus Webb):
+7 client-service conversations across 2 contacts (Whitfield Family Trust, Okonkwo Holdings):
 
 | # | Priority | Status | Channel | Ticket |
 |---|----------|--------|---------|--------|
-| 6 | urgent | open | Phone | Emergency — storm tore shingles off, water in bedroom |
-| 3 | high | pending | Email | Warranty — ridge leak after storm (Oak Park job) |
-| 1 | medium | open | Website | Quote request — 2,200 sqft asphalt re-roof |
-| 5 | medium | open | Website | New-roof estimate — new 24×24 garage |
-| 4 | medium | pending | Email | Invoice question — $300 tear-off line item |
-| 2 | low | open | Phone | Reschedule — rain delay, Tue → Thu |
-| 7 | low | resolved | Facebook | Gutter guards — do you install them? |
+| 6 | urgent | open | Phone | Account access — unrecognized login alert, locked out |
+| 3 | high | pending | Email | Beneficiary update — change on the trust accounts |
+| 1 | medium | open | Website | Statement access — can't log in to download quarterly statement |
+| 5 | medium | open | Website | Performance report — YTD returns request |
+| 4 | medium | pending | Email | Advisory-fee question — fee higher than last quarter |
+| 2 | low | open | Phone | ACAT transfer — status of incoming account transfer |
+| 7 | low | resolved | Facebook | Tax documents — when will 1099s be available? |
 
 → `SEED_OK account=1 inbox=1 contacts=2 conversations=7 open=4 pending=2 resolved=1`
 (re-run reports `new=0` — fully idempotent).
@@ -118,7 +118,7 @@ docker run --rm -p 8207:8207 \
 |-----|---------|---------|
 | `CHATWOOT_API_URL` | `http://localhost:3003` | Chatwoot REST base. |
 | `CHATWOOT_API_TOKEN` | _(from .env)_ | Agent access token — sent as the `api_access_token` header. |
-| `CHATWOOT_ACCOUNT_ID` | `1` | The account id (Summit Roofing Co.). |
+| `CHATWOOT_ACCOUNT_ID` | `1` | The account id (Meridian Wealth Management). |
 | `CHATWOOT_FRONT_URL` | `http://localhost:3003` | Chatwoot UI link for the "Open in Chatwoot ↗" button (the hybrid / human-operable path). |
 | `PORT` | `8207` | uvicorn bind port. |
 | `ANTHROPIC_API_KEY` | _(optional)_ | If set, `draft_reply` writes the draft with Claude (`claude-opus-4-8`); otherwise a deterministic template is used. Either way the draft is posted as a private note. |
@@ -130,7 +130,7 @@ docker run --rm -p 8207:8207 \
 - `GET /api/activity` → live KPIs (open tickets, first-response %, resolved, CSAT) +
   channel breakdown + the ticket queue, all derived from Chatwoot REST. Cached 15s.
 - `GET /` → the MD3 support dashboard rendered from the live conversations. Header shows
-  "Summit Roofing Co.", a green "agent active · core: Chatwoot connected" pill, a
+  "Meridian Wealth Management", a green "agent active · core: Chatwoot connected" pill, a
   "data: live from Chatwoot" badge, and an **"Open in Chatwoot ↗"** button. An escalation
   banner appears whenever there's an urgent/high open ticket.
 - `POST /agent/run` with `{"action": ..., "conversation_id": N}`:

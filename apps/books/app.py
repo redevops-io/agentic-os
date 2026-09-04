@@ -19,7 +19,7 @@ Config (env; seed.py writes agents/books/.env automatically):
   ERPNEXT_API_KEY     Administrator API key
   ERPNEXT_API_SECRET  Administrator API secret  (Authorization: token key:secret)
   ERPNEXT_FRONT_URL   ERPNext UI link for the "Open in ERPNext" button
-  COMPANY             the books company, default "Summit Roofing Co."
+  COMPANY             the books company, default "Meridian Wealth Management"
   PORT                uvicorn port, default 8209
   REDEVOPS_LLM_BASE_URL / REDEVOPS_LLM_MODEL  OPTIONAL local LLM for /agent/run narration
   ANTHROPIC_API_KEY   OPTIONAL fallback for the narration blurb
@@ -57,7 +57,7 @@ from .core import (  # noqa: E402
 
 PORT = int(os.environ.get("PORT", "8209"))
 
-app = FastAPI(title="agentic-books (Summit Roofing Co. · core: ERPNext)")
+app = FastAPI(title="agentic-books (Meridian Wealth Management · core: ERPNext)")
 
 
 # --- MD3 styling (BASE_CSS reused verbatim from deploy/module_service.py) -----

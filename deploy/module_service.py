@@ -1,9 +1,9 @@
-"""Per-module live activity dashboard for the Summit Roofing Co. demo tenant.
+"""Per-module live activity dashboard for the Meridian Wealth Management demo tenant.
 
 This is the demo stand-in service that every module gets so the control-plane fleet
 lights up green. Instead of a bare placeholder page, each module renders a RICH,
 self-contained dark-themed activity dashboard for ONE fictional tenant —
-"Summit Roofing Co.", a ~12-person local roofing contractor. All data is mock data
+"Meridian Wealth Management", a ~12-person local roofing contractor. All data is mock data
 driven from the MODULE_DATA dict keyed by MODULE_NAME.
 
 The whole UI is a hand-coded dark Material Design 3 system (see deploy/dashboard-design-spec.md):
@@ -39,15 +39,15 @@ NAME = os.environ.get("MODULE_NAME", "module")
 PAIN = os.environ.get("MODULE_PAIN", "")
 AGENTS = [a.strip() for a in os.environ.get("MODULE_AGENTS", "").split(",") if a.strip()]
 
-TENANT = "Summit Roofing Co."
+TENANT = "Meridian Wealth Management"
 TENANT_SUB = "demo tenant"
 
-app = FastAPI(title=f"{NAME} (Summit Roofing Co. demo)")
+app = FastAPI(title=f"{NAME} (Meridian Wealth Management demo)")
 
 
 # --- per-module mock data ----------------------------------------------------
 # Every module's dashboard is driven from this dict. Each entry describes a
-# believable slice of Summit Roofing Co.'s day-to-day, agent-run operations.
+# believable slice of Meridian Wealth Management's day-to-day, agent-run operations.
 MODULE_DATA: dict[str, dict] = {
     "edge-sentinel": {
         "display": "Edge Sentinel",
@@ -260,7 +260,7 @@ MODULE_DATA: dict[str, dict] = {
             "rows": [
                 ["Apex Roofing", "Asphalt $4.10/sqft", "↓ from $4.45"],
                 ["Peak Exteriors", "NEW competitor 3mi away", "just opened"],
-                ["Summit Roofing", "Rank #2 on 'roofing <town>'", "Apex is #1"],
+                ["Meridian Wealth Management", "Rank #2 on 'roofing <town>'", "Apex is #1"],
                 ["Ridgeline Contractors", "Now offering metal roofs", "new service"],
                 ["BlueSky Exteriors", "Running 10% spring promo", "ends Jun 30"],
             ],
@@ -357,7 +357,7 @@ def _data() -> dict:
     agents = ", ".join(AGENTS) or "agents"
     return {
         "display": NAME.replace("-", " ").title(),
-        "subtitle": PAIN or "Agent-run module for Summit Roofing Co.",
+        "subtitle": PAIN or "Agent-run module for Meridian Wealth Management",
         "kpis": [
             {"label": "Status", "value": "Active", "note": "agent online"},
             {"label": "Agents", "value": str(len(AGENTS) or 1), "note": agents},

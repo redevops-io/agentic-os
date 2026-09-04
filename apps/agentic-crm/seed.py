@@ -12,12 +12,12 @@ SEC = os.environ.get("ERPNEXT_API_SECRET", "")
 H = {"Authorization": f"token {KEY}:{SEC}", "Content-Type": "application/json"}
 
 DEMO_LEADS = [
-    {"lead_name": "Dana Whitfield", "company_name": "Northwind Logistics", "status": "Open",
-     "source": "Website", "email_id": "dana@northwind.example", "industry": "Transportation"},
-    {"lead_name": "Marcus Lee", "company_name": "Brightline Dental Group", "status": "Open",
-     "source": "Referral", "email_id": "marcus@brightline.example", "industry": "Healthcare"},
-    {"lead_name": "Priya Anand", "company_name": "Helios Solar Co-op", "status": "Replied",
-     "source": "Campaign", "email_id": "priya@helios.example", "industry": "Energy"},
+    {"lead_name": "Dana Whitfield", "company_name": "Whitfield Family Trust", "status": "Open",
+     "source": "Website", "email_id": "dana@whitfield.example", "industry": "Private Wealth"},
+    {"lead_name": "Chidi Okonkwo", "company_name": "Okonkwo Holdings", "status": "Open",
+     "source": "Referral", "email_id": "chidi@okonkwo.example", "industry": "Family Office"},
+    {"lead_name": "Rosa Delgado", "company_name": "Delgado Retirement", "status": "Replied",
+     "source": "Retirement-planning webinar", "email_id": "rosa@delgado.example", "industry": "Retirement Planning"},
 ]
 
 def post(doctype, doc):

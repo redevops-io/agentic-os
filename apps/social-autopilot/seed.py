@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Repeatable seeder for the Summit Roofing Co. demo tenant on self-hosted Postiz.
+"""Repeatable seeder for the Meridian Wealth Management demo tenant on self-hosted Postiz.
 
 Why we seed the database directly (and not the REST API):
     This Postiz build (ghcr.io/gitroomhq/postiz-app:latest) boots a NestJS backend
@@ -17,14 +17,14 @@ Why we seed the database directly (and not the REST API):
     is fully met: the agent (app.py) reads these rows straight from postgres.
 
 What it creates (idempotent — safe to re-run):
-    * 1 Organization  "Summit Roofing Co." (with a stable apiKey)
-    * 1 User          agent@summitroofing.co / SummitRoof!2026  (bcrypt, can log in
+    * 1 Organization  "Meridian Wealth Management" (with a stable apiKey)
+    * 1 User          agent@meridianwealth.com / MeridianWealth!2026  (bcrypt, can log in
                       via the Postiz UI once a Temporal server is added to the stack)
     * 1 UserOrganization (role SUPERADMIN)
     * 3 Integrations  Instagram / Facebook / Google Business Profile (modelled as
                       connected channels; tokens are placeholders since no real social
                       account is linked) with follower counts in `audience`/profile
-    * 5 Posts         the roofing-SME content calendar (QUEUE / DRAFT states), spread
+    * 5 Posts         the wealth-management content calendar (QUEUE / DRAFT states), spread
                       across the next 7 days + one PUBLISHED
 
 Usage:
@@ -52,18 +52,18 @@ PG_DB = os.environ.get("PG_DB", "postiz")
 POSTIZ_FRONT_URL = os.environ.get("POSTIZ_FRONT_URL", "http://localhost:4200")
 
 # Stable identifiers so re-runs upsert the same rows.
-ORG_ID = "summit-roofing-org"
+ORG_ID = "meridian-wealth-org"
 ORG_API_KEY = os.environ.get("POSTIZ_API_KEY", "changeme-set-POSTIZ_API_KEY-in-env")
-USER_ID = "summit-roofing-user"
-USER_EMAIL = "agent@summitroofing.co"
+USER_ID = "meridian-wealth-user"
+USER_EMAIL = "agent@meridianwealth.com"
 USER_PASSWORD = os.environ.get("POSTIZ_USER_PASSWORD", "changeme-set-in-env")
-UORG_ID = "summit-roofing-uorg"
+UORG_ID = "meridian-wealth-uorg"
 
 # (id, name, providerIdentifier, followers) — modelled channels.
 INTEGRATIONS = [
-    ("summit-ig", "Summit Roofing · Instagram", "instagram", 3120),
-    ("summit-fb", "Summit Roofing · Facebook", "facebook", 4850),
-    ("summit-gbp", "Summit Roofing · Google Business", "google", 980),
+    ("meridian-ig", "Meridian Wealth · Instagram", "instagram", 3120),
+    ("meridian-fb", "Meridian Wealth · Facebook", "facebook", 4850),
+    ("meridian-gbp", "Meridian Wealth · Google Business", "google", 980),
 ]
 
 
@@ -98,7 +98,7 @@ def content_json(text: str) -> str:
 
 
 def posts() -> list[dict]:
-    """The roofing-SME content calendar — real rows the dashboard renders."""
+    """The wealth-management content calendar — real rows the dashboard renders."""
     now = datetime.now(timezone.utc).replace(microsecond=0)
 
     def at(days: float, hour: int) -> str:
@@ -106,25 +106,25 @@ def posts() -> list[dict]:
         return d.strftime("%Y-%m-%d %H:%M:%S")
 
     return [
-        {"id": "summit-post-1", "int": "summit-ig", "state": "QUEUE",
+        {"id": "meridian-post-1", "int": "meridian-ig", "state": "QUEUE",
          "publish": at(1, 9),
-         "text": "Completed: Victorian restoration in Oak Park 📸 Slate roof brought back to life — swipe for the before/after. #OakPark #RoofingDoneRight"},
-        {"id": "summit-post-2", "int": "summit-fb", "state": "QUEUE",
+         "text": "Our Q3 market commentary is live 📊 What moved markets this quarter — and what we're watching into year-end. Read our take (link in bio). Not investment advice. #MarketCommentary"},
+        {"id": "meridian-post-2", "int": "meridian-fb", "state": "QUEUE",
          "publish": at(2, 8),
-         "text": "5 signs you need a new roof: curling shingles, granules in the gutters, daylight in the attic, sagging, and a roof past 20 years. Book a free inspection."},
-        {"id": "summit-post-3", "int": "summit-fb", "state": "QUEUE",
+         "text": "5 questions to ask before year-end: Have you maxed your retirement contributions, reviewed your beneficiaries, rebalanced, harvested any losses, and checked your RMD? Schedule a portfolio review."},
+        {"id": "meridian-post-3", "int": "meridian-fb", "state": "QUEUE",
          "publish": at(4, 8),
-         "text": "Storm season is coming. Prep tips: clear gutters, trim overhanging branches, check flashing, and schedule a pre-storm inspection. Stay dry, Summit."},
-        {"id": "summit-post-4", "int": "summit-ig", "state": "DRAFT",
+         "text": "Tax-loss harvesting season is here. Offsetting realized gains with losses before year-end may help lower your tax bill — ask your advisor whether it fits your plan. Not tax advice."},
+        {"id": "meridian-post-4", "int": "meridian-ig", "state": "DRAFT",
          "publish": at(5, 10),
-         "text": "Before / After: a tired asphalt roof in Maplewood, transformed in 3 days. Which side is your favourite? 🏠✨ (carousel)"},
-        {"id": "summit-post-5", "int": "summit-gbp", "state": "QUEUE",
+         "text": "Our Q4 outlook in 5 slides: rates, earnings, and why we stay diversified. Swipe through 📈 (carousel) — for education, not a recommendation."},
+        {"id": "meridian-post-5", "int": "meridian-gbp", "state": "QUEUE",
          "publish": at(6, 12),
-         "text": "Loved your new roof? A quick Google review helps your neighbours find us — and means the world to our crew. Thank you! ⭐⭐⭐⭐⭐"},
+         "text": "Free webinar: Building a retirement income plan — Thursday 12pm ET. Reserve your spot (link in bio). An educational session; nothing is sold. ⭐"},
         # One already-published post so the feed shows a 'live' item too.
-        {"id": "summit-post-6", "int": "summit-ig", "state": "PUBLISHED",
+        {"id": "meridian-post-6", "int": "meridian-ig", "state": "PUBLISHED",
          "publish": at(-2, 9),
-         "text": "Crew spotlight: meet foreman Dave — 14 years keeping Summit roofs watertight. 👷"},
+         "text": "Meet your advisor: say hello to Dana, CFP® — 14 years helping families plan with confidence. 👋"},
     ]
 
 
@@ -135,13 +135,13 @@ def build_sql(pw_hash: str) -> str:
     # Organization
     parts.append(
         f'INSERT INTO "Organization" (id, name, description, "apiKey", "createdAt", "updatedAt", "allowTrial", "isTrailing", shortlink) '
-        f"VALUES ({q(ORG_ID)}, {q('Summit Roofing Co.')}, {q('Roofing SME — agentic social on Postiz')}, {q(ORG_API_KEY)}, {q(now)}, {q(now)}, false, false, 'ASK') "
+        f"VALUES ({q(ORG_ID)}, {q('Meridian Wealth Management')}, {q('Wealth-management firm — agentic social on Postiz')}, {q(ORG_API_KEY)}, {q(now)}, {q(now)}, false, false, 'ASK') "
         'ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, "apiKey"=EXCLUDED."apiKey", "updatedAt"=EXCLUDED."updatedAt";'
     )
     # User (real bcrypt password, SUPERADMIN, audience = headline follower count)
     parts.append(
         f'INSERT INTO "User" (id, email, password, "providerName", name, "isSuperAdmin", audience, timezone, "createdAt", "updatedAt", "lastReadNotifications", activated, "connectedAccount", "lastOnline") '
-        f"VALUES ({q(USER_ID)}, {q(USER_EMAIL)}, {q(pw_hash)}, 'LOCAL', {q('Summit Social Agent')}, true, 8950, 0, {q(now)}, {q(now)}, {q(now)}, true, false, {q(now)}) "
+        f"VALUES ({q(USER_ID)}, {q(USER_EMAIL)}, {q(pw_hash)}, 'LOCAL', {q('Meridian Social Agent')}, true, 8950, 0, {q(now)}, {q(now)}, {q(now)}, true, false, {q(now)}) "
         'ON CONFLICT (id) DO UPDATE SET email=EXCLUDED.email, password=EXCLUDED.password, "updatedAt"=EXCLUDED."updatedAt";'
     )
     # Membership
@@ -195,7 +195,7 @@ def main() -> int:
         "(SELECT count(*) FROM \"Post\" WHERE state IN ('QUEUE','DRAFT')), "
         '(SELECT count(*) FROM "Post");'
     )
-    print("Seeded Postiz postgres for Summit Roofing Co.")
+    print("Seeded Postiz postgres for Meridian Wealth Management.")
     print("  counts (user, org, integrations, scheduled+draft posts, total posts):")
     print("  " + counts.stdout.strip().splitlines()[2].strip())
     print(f"SEED_OK org={ORG_ID} user={USER_EMAIL} integrations={len(INTEGRATIONS)} posts={len(posts())}")

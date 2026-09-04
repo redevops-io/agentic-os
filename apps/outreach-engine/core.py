@@ -29,10 +29,10 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 TWENTY_PUBLIC_URL = os.environ.get("TWENTY_PUBLIC_URL", "https://crm.redevops.io").rstrip("/")
 
 # ── tenant / product framing — configurable so the CRM agent works for ANY workspace. Defaults to
-# Summit Roofing Co. (the demo company used across the agentic apps).
-TENANT = os.environ.get("OUTREACH_TENANT", "Summit Roofing Co.")
+# Meridian Wealth Management (the demo company used across the agentic apps).
+TENANT = os.environ.get("OUTREACH_TENANT", "Meridian Wealth Management")
 PITCH = os.environ.get("OUTREACH_PITCH",
-    "we handle roof replacements, storm-damage repair and inspections — with fast quotes and a crew that shows up on time")
+    "we offer fee-only financial planning, portfolio management and tax-aware retirement investing — a fiduciary advisory team that puts your goals first")
 
 # ── the learned policy (what the Context Runtime bandit converges to per account bucket) ──
 PLAY = {"tech_pain": "video · artifact", "funding": "multi · artifact", "hiring": "multi · artifact",
@@ -46,12 +46,12 @@ HOOK = {"tech_pain": "saw {a} is deep in production RAG",
 
 # ── canned prospect signals (offline default; refresh pulls live GitHub+HN) ──
 DEMO = [
-    {"account": "Front Range Property Management", "signal": "cold", "source": "manual",
-     "evidence": "manages 40+ commercial properties across the metro — recurring roof maintenance + storm response"},
-    {"account": "Cornerstone Commercial Realty", "signal": "cold", "source": "manual",
-     "evidence": "owns 8 retail centers; recent hail event in the service area"},
-    {"account": "Summit Ridge HOA", "signal": "cold", "source": "manual",
-     "evidence": "120-home community with several roofs aging past 20 years"},
+    {"account": "Whitfield Family Trust", "signal": "cold", "source": "manual",
+     "evidence": "manages a multi-generational trust across several accounts — ongoing portfolio oversight and estate planning"},
+    {"account": "Okonkwo Holdings", "signal": "cold", "source": "manual",
+     "evidence": "founder with a concentrated stock position after a recent liquidity event — exploring diversification and tax-aware planning"},
+    {"account": "Delgado Retirement", "signal": "cold", "source": "manual",
+     "evidence": "household nearing retirement with a $2M 401(k) rollover and RMD planning ahead"},
 ]
 
 _STATE = {"accounts": [], "approved": set()}   # in-memory pipeline + approval set
@@ -106,7 +106,7 @@ def score(s: dict) -> float:
 def teardown(s: dict) -> dict:
     a = s["account"]
     body = ("Hi — I came across " + a + " and wanted to reach out. At " + TENANT + ", " + PITCH + ".\n\n"
-            "If " + a + " is weighing options, I'd be glad to put together a quick, no-obligation quote and "
+            "If " + a + " is weighing options, I'd be glad to put together a complimentary, no-obligation portfolio review and "
             "answer any questions.\n\nWorth a short call this week?")
     return {"subject": a + ": a quick note from " + TENANT, "body": body}
 

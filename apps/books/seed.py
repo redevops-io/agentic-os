@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Repeatable seeder for the Summit Roofing Co. books on self-hosted ERPNext (v15/16).
+"""Repeatable seeder for the Meridian Wealth Management books on self-hosted ERPNext (v15/16).
 
 Bootstrap method (the reliable one for this frappe_docker install): copy
 seed_erpnext.py into the running ERPNext backend container and run it with the bench
@@ -135,7 +135,7 @@ def main() -> int:
         f"ERPNEXT_API_KEY={keys['api_key']}\n"
         f"ERPNEXT_API_SECRET={keys['api_secret']}\n"
         f"ERPNEXT_FRONT_URL={ERPNEXT_FRONT_URL}\n"
-        f"COMPANY=Summit Roofing Co.\n"
+        f"COMPANY=Meridian Wealth Management\n"
     )
     print(f"API_KEY={keys['api_key']}")
     print(f"Wrote {ENV_OUT} (ERPNEXT_URL, ERPNEXT_API_KEY, ERPNEXT_API_SECRET, ERPNEXT_FRONT_URL, COMPANY)")

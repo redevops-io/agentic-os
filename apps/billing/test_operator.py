@@ -22,11 +22,11 @@ from agentic_os.mission.operators import HTTPOperatorClient
 
 # ── a fake Lago core (one overdue invoice) ───────────────────────────────────
 INVOICES = [{
-    "number": "INV-001", "customer": {"name": "Acme Roofing"}, "total_amount_cents": 45000,
+    "number": "INV-001", "customer": {"name": "Whitfield Family Trust"}, "total_amount_cents": 45000,
     "status": "finalized", "payment_status": "failed", "payment_overdue": True,
     "payment_due_date": "2026-06-01", "lago_id": "lago-1", "issuing_date": "2026-05-15",
 }]
-CUSTOMERS = [{"name": "Acme Roofing"}]
+CUSTOMERS = [{"name": "Whitfield Family Trust"}]
 
 
 class _Resp:
@@ -121,7 +121,7 @@ def test_capabilities_manifest(client):
 def test_invoke_create_subscription_posts_to_lago(client):
     r = client.post("/invoke", json={
         "capability": "billing.create_subscription",
-        "inputs": {"customer": "Acme Roofing", "plan_code": "starter_monthly"},
+        "inputs": {"customer": "Whitfield Family Trust", "plan_code": "starter_monthly"},
     }).json()
     res = r["result"]
     assert res["status"] == "done" and res["action"] == "create_subscription"
@@ -133,7 +133,7 @@ def test_invoke_create_subscription_posts_to_lago(client):
 def test_invoke_cancel_subscription_deletes_it(client):
     r = client.post("/invoke", json={
         "capability": "billing.cancel_subscription",
-        "inputs": {"customer": "Acme Roofing", "plan_code": "starter_monthly"},
+        "inputs": {"customer": "Whitfield Family Trust", "plan_code": "starter_monthly"},
     }).json()
     res = r["result"]
     assert res["status"] == "done" and res["cancelled"] is True

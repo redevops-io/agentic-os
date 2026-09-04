@@ -62,7 +62,7 @@ from .core import (  # noqa: E402
 
 PORT = int(os.environ.get("PORT", "8201"))
 
-app = FastAPI(title="agentic-billing (Summit Roofing Co. · core: Lago)")
+app = FastAPI(title="agentic-billing (Meridian Wealth Management · core: Lago)")
 
 
 # --- MD3 styling (BASE_CSS reused verbatim from deploy/module_service.py) -----
@@ -487,10 +487,10 @@ except Exception:  # noqa: BLE001
         return "general"
 
 _CR_SYNTH = [
-    'ACME Corp overdue 45 days',
-    'Globex subscription at churn risk',
-    'Initech paid early last quarter',
-    'Umbrella invoices past due',
+    'Whitfield Family Trust advisory fee overdue 45 days',
+    'Okonkwo Holdings retainer at renewal risk',
+    'Delgado Retirement paid early last quarter',
+    'Petrov Family Office invoices past due',
 ]
 
 

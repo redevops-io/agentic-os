@@ -43,7 +43,7 @@ if _ENV_FILE.exists():
             _k, _v = _line.split("=", 1)
             os.environ.setdefault(_k.strip(), _v.strip())
 
-TENANT = os.environ.get("PRIVACY_TENANT", "Summit Roofing Co.")
+TENANT = os.environ.get("PRIVACY_TENANT", "Meridian Wealth Management")
 DATA_DIR = os.environ.get("PRIVACY_DATA_DIR", "/data")
 SLA_DAYS = int(os.environ.get("PRIVACY_SLA_DAYS", "30"))  # GDPR 30 / CCPA 45
 

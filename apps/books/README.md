@@ -13,8 +13,7 @@
 
 The **9th** agentic module, built to the same reference pattern as
 [`agentic-billing`](../billing) (Lago) but wrapping the running self-hosted **ERPNext**
-core (the open-source accounting/ERP platform). It gives the demo tenant **Summit Roofing
-Co.** a QuickBooks/Xero-style books experience:
+core (the open-source accounting/ERP platform). It gives the demo tenant **Meridian Wealth Management** a QuickBooks/Xero-style books experience:
 
 - an **agent layer** that reads REAL ERPNext data over its REST API, and
 - an **MD3 dashboard** rendered from that live data (no mock data),
@@ -31,7 +30,7 @@ ERPNext (OSS core, :8092) ──REST──▶ app.py (FastAPI, :8209) ──▶ 
 
 | File | Purpose |
 |------|---------|
-| `seed_erpnext.py` | Idempotent frappe seed run **inside** the ERPNext backend container via the bench virtualenv python. Creates Fiscal Years, the Company "Summit Roofing Co." (builds the standard Chart of Accounts), 5 customers, 4 suppliers, an item, ~7 Sales Invoices (some paid → A/R), 4 Purchase Invoices (→ A/P), 2 Journal Entries (payroll + depreciation), Payment Entries, and 7 unreconciled Bank Transactions. |
+| `seed_erpnext.py` | Idempotent frappe seed run **inside** the ERPNext backend container via the bench virtualenv python. Creates Fiscal Years, the Company "Meridian Wealth Management" (builds the standard Chart of Accounts), 5 customers, 4 suppliers, an item, ~7 Sales Invoices (some paid → A/R), 4 Purchase Invoices (→ A/P), 2 Journal Entries (payroll + depreciation), Payment Entries, and 7 unreconciled Bank Transactions. |
 | `seed.py` | Host wrapper: copies `seed_erpnext.py` into the container, runs it over an optional `ssh` host + `docker`, (re)generates the Administrator API key/secret, writes `.env`. |
 | `app.py` | FastAPI service (port 8209): `/health`, `/api/activity`, `/` dashboard, `/agent/run`. |
 | `requirements.txt` | fastapi, uvicorn, httpx. |
@@ -84,7 +83,7 @@ cd apps/books
 
 # 1. Seed ERPNext (idempotent — safe to re-run; writes .env with live API keys)
 python3 seed.py
-#   → SEED_OK company=Summit Roofing Co. revenue_mtd=148200 ar=55500 ap=58600 uncategorized=7
+#   → SEED_OK company=Meridian Wealth Management revenue_mtd=148200 ar=55500 ap=58600 uncategorized=7
 #   → API_KEY=<key>   (key + secret written to .env)
 
 # 2. Install deps + run the service
@@ -98,7 +97,7 @@ docker run --rm -p 8209:8209 \
   -e ERPNEXT_URL=http://host.docker.internal:8092 \
   -e ERPNEXT_API_KEY=<key> -e ERPNEXT_API_SECRET=<secret> \
   -e ERPNEXT_FRONT_URL=http://localhost:8092 \
-  -e COMPANY="Summit Roofing Co." \
+  -e COMPANY="Meridian Wealth Management" \
   agentic-books
 ```
 
@@ -110,7 +109,7 @@ docker run --rm -p 8209:8209 \
 | `ERPNEXT_API_KEY` | _(from .env)_ | Administrator API key. |
 | `ERPNEXT_API_SECRET` | _(from .env)_ | Administrator API secret (`Authorization: token key:secret`). |
 | `ERPNEXT_FRONT_URL` | `http://localhost:8092` | ERPNext UI link for the "Open in ERPNext ↗" button. |
-| `COMPANY` | `Summit Roofing Co.` | The books company. |
+| `COMPANY` | `Meridian Wealth Management` | The books company. |
 | `PORT` | `8209` | uvicorn bind port. |
 | `REDEVOPS_LLM_BASE_URL` / `REDEVOPS_LLM_MODEL` | _(optional)_ | Local OpenAI-compatible LLM (DeepSeek) for `/agent/run` narration. Fully guarded — actions are deterministic ERPNext API calls and work without it. |
 | `ANTHROPIC_API_KEY` | _(optional)_ | Fallback narration via Claude (`claude-opus-4-8`). |
@@ -123,8 +122,7 @@ docker run --rm -p 8209:8209 \
   Sales Invoices, A/P from outstanding Purchase Invoices) + the uncategorized Bank
   Transaction queue + the month-end close checklist/progress, all derived from ERPNext.
   Cached 15s.
-- `GET /` → the MD3 books dashboard rendered from the live data. Header shows "Summit
-  Roofing Co.", a green "agent active · core: ERPNext connected" pill, a "data: live from
+- `GET /` → the MD3 books dashboard rendered from the live data. Header shows "Meridian Wealth Management", a green "agent active · core: ERPNext connected" pill, a "data: live from
   ERPNext" badge, and an "Open in ERPNext ↗" button. An approval banner appears while the
   month-end close is pending.
 - `POST /agent/run` with `{"action": ...}`:

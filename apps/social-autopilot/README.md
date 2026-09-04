@@ -17,7 +17,7 @@ running self-hosted **Postiz** instance (the open-source social-scheduling core)
 - an **agent layer** that reads REAL Postiz data (scheduled posts, channels, followers), and
 - an **MD3 dashboard** rendered from that live data (no mock data),
 
-for the demo tenant **Summit Roofing Co.** (a roofing contractor).
+for the demo tenant **Meridian Wealth Management** (a wealth-management firm).
 
 ```
 Postiz (OSS core) ──▶ app.py (FastAPI, :8206) ──▶ MD3 dashboard + /api/activity + /agent/run
@@ -73,18 +73,18 @@ facts discovered by inspecting the running DB (Prisma-managed):
 
 ## What gets seeded
 
-- **Org** `Summit Roofing Co.` (stable `apiKey`).
-- **User** `agent@summitroofing.co` / `$POSTIZ_USER_PASSWORD` (bcrypt, `SUPERADMIN`).
+- **Org** `Meridian Wealth Management` (stable `apiKey`).
+- **User** `agent@meridianwealth.com` / `$POSTIZ_USER_PASSWORD` (bcrypt, `SUPERADMIN`).
 - **3 channels** (Integrations): Instagram (3,120), Facebook (4,850), Google Business
   (980 followers). No real social account is linked — they're modelled channels with
   placeholder tokens, exactly as the task allows.
-- **6 posts**: the roofing-SME content calendar —
-  1. Instagram · *Completed: Victorian restoration in Oak Park 📸* (scheduled)
-  2. Facebook · *5 signs you need a new roof* (scheduled)
-  3. Facebook · *Storm season prep tips* (scheduled)
-  4. Instagram · *Before/After carousel* (draft)
-  5. Google Business · *Google-review request* (scheduled)
-  6. Instagram · *Crew spotlight* (published — so the feed shows a live item)
+- **6 posts**: the wealth-management content calendar —
+  1. Instagram · *Q3 market commentary* (scheduled)
+  2. Facebook · *5 year-end planning questions* (scheduled)
+  3. Facebook · *Tax-loss harvesting reminder* (scheduled)
+  4. Instagram · *Q4 outlook carousel* (draft)
+  5. Google Business · *Retirement-planning webinar invite* (scheduled)
+  6. Instagram · *Meet your advisor* (published — so the feed shows a live item)
 
 ## Seed + run
 
@@ -93,7 +93,7 @@ cd apps/social-autopilot
 
 # 1. Seed Postiz postgres (idempotent — safe to re-run; writes .env)
 python3 seed.py
-#   → SEED_OK org=summit-roofing-org user=agent@summitroofing.co integrations=3 posts=6
+#   → SEED_OK org=meridian-wealth-org user=agent@meridianwealth.com integrations=3 posts=6
 
 # 2. Install deps + run the service
 pip install -r requirements.txt          # add --break-system-packages on PEP-668 hosts
@@ -113,7 +113,7 @@ python3 -m uvicorn app:app --host 0.0.0.0 --port 8206
 | `POSTIZ_FRONT_URL` | `http://localhost:4200` | Postiz UI link for the "Open in Postiz ↗" button. |
 | `POSTIZ_PG_CONTAINER` | `agentic-postiz-postiz-postgres-1` | postgres container the agent reads. |
 | `POSTIZ_PG_USER` / `POSTIZ_PG_DB` | `postiz` / `postiz` | postgres creds. |
-| `POSTIZ_ORG_ID` | `summit-roofing-org` | org id reads are scoped to. |
+| `POSTIZ_ORG_ID` | `meridian-wealth-org` | org id reads are scoped to. |
 | `POSTIZ_API_URL` | `http://localhost:4200` | REST base — used only for the connectivity probe / future API reads. |
 | `PORT` | `8206` | uvicorn bind port. |
 | `ANTHROPIC_API_KEY` | _(optional)_ | If set, `/agent/run` `"draft"` writes copy with Claude (`claude-opus-4-8`); a deterministic template is always the fallback. |
@@ -128,7 +128,7 @@ python3 -m uvicorn app:app --host 0.0.0.0 --port 8206
   counts (so they track the seeded data rather than being hard-coded). Cached 15s.
 - `GET /` → the MD3 social dashboard (Hootsuite/Buffer style: KPI tiles, a next-7-days
   publishing queue feed, an engagement-by-network bar list, a per-network stats table).
-  Header shows "Summit Roofing Co.", a green "agent active · core: Postiz connected" pill,
+  Header shows "Meridian Wealth Management", a green "agent active · core: Postiz connected" pill,
   a "data: live from Postiz" badge, and an **"Open in Postiz ↗"** button. An approval
   banner shows the next post the agent could publish.
 - `POST /agent/run` with `{"action": ...}`:

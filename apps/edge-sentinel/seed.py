@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Repeatable seeder + bootstrap for the Summit Roofing Co. SOC demo on CrowdSec.
+"""Repeatable seeder + bootstrap for the Meridian Wealth Management SOC demo on CrowdSec.
 
 Bootstrap method (the reliable one for self-hosted CrowdSec): everything is driven
 through `cscli` inside the running CrowdSec container via `sudo docker exec`.
 
-  1. Create a bouncer credential — `cscli bouncers add summit-agent -o raw` — and
+  1. Create a bouncer credential — `cscli bouncers add meridian-agent -o raw` — and
      capture the API key. app.py reads live decisions with it over the LAPI
      (GET /v1/decisions, header X-Api-Key). Idempotent: if the bouncer already
      exists we delete + re-add to recover a usable key.
-  2. Inject believable Summit Roofing security activity with `cscli decisions add`
+  2. Inject believable Meridian Wealth security activity with `cscli decisions add`
      (each also creates an alert): SSH bruteforce, port scans against the office NVR,
      a web path-traversal probe, WordPress login bruteforce, an nmap SYN scan, and a
      credential-stuffing botnet range — varied scenarios + severities + durations.
@@ -23,7 +23,7 @@ Env knobs:
     CROWDSEC_CONTAINER  docker container name (default: agentic-cores-crowdsec-1)
     CROWDSEC_LAPI_URL   LAPI base for the .env (default: http://localhost:8086)
     CROWDSEC_FRONT_URL  metrics/LAPI link baked into the .env (default: http://localhost:8086)
-    BOUNCER_NAME        bouncer credential name (default: summit-agent)
+    BOUNCER_NAME        bouncer credential name (default: meridian-agent)
 """
 from __future__ import annotations
 
@@ -39,12 +39,12 @@ ENV_OUT = HERE / ".env"
 CONTAINER = os.environ.get("CROWDSEC_CONTAINER", "agentic-cores-crowdsec-1")
 CROWDSEC_LAPI_URL = os.environ.get("CROWDSEC_LAPI_URL", "http://localhost:8086")
 CROWDSEC_FRONT_URL = os.environ.get("CROWDSEC_FRONT_URL", "http://localhost:8086")
-BOUNCER_NAME = os.environ.get("BOUNCER_NAME", "summit-agent")
+BOUNCER_NAME = os.environ.get("BOUNCER_NAME", "meridian-agent")
 
 # `sudo` is required to talk to the docker socket on this host.
 DOCKER = ["sudo", "docker"]
 
-# Varied, believable Summit Roofing edge-security activity.
+# Varied, believable Meridian Wealth edge-security activity.
 # (ip|range, duration, reason incl. crowdsecurity/<scenario> token, type)
 SEED_DECISIONS = [
     ("--ip", "45.143.200.14", "4h", "ssh bruteforce (crowdsecurity/ssh-bf)"),

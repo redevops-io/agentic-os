@@ -42,7 +42,7 @@ _FALLBACK_DB_ID = int(os.environ.get("METABASE_DB_ID", "1"))
 METABASE_FRONT_URL = os.environ.get("METABASE_FRONT_URL", "http://localhost:3001").rstrip("/")
 _DB_ID_CACHE: dict = {"id": None}   # resolved Metabase datasource id (looked up by name), cached
 
-TENANT = "Summit Roofing Co."
+TENANT = "Meridian Wealth Management"
 SUBTITLE = "The owner's single pane — ask your business anything, in plain language, on a real Metabase core."
 
 
@@ -110,7 +110,7 @@ def resolve_db_id() -> int:
 
 
 def run_query(sql: str) -> dict:
-    """Run native SQL against the Summit Roofing datasource via POST /api/dataset.
+    """Run native SQL against the Meridian Wealth datasource via POST /api/dataset.
 
     Returns {"cols": [...], "rows": [[...]], "error": <str|None>} — the REAL query
     result from Metabase. The single place that talks to the core, errors surfaced
@@ -137,8 +137,8 @@ def run_query(sql: str) -> dict:
 
 
 # --- query templates (deterministic; the "ask" router maps NL -> one of these) ---
-# Every query is REAL native Postgres SQL against the Summit Roofing operational DB
-# (jobs / customers / invoices), relative to CURRENT_DATE so the demo is always current.
+# Every query is REAL native Postgres SQL against the Meridian Wealth operational DB
+# (engagements / clients / invoices), relative to CURRENT_DATE so the demo is always current.
 def _q_revenue_by_month() -> str:
     return ("SELECT to_char(completed_date,'YYYY-MM') AS month, count(*) AS jobs, "
             "round(sum(invoiced_amount))::float AS revenue FROM jobs "
@@ -227,72 +227,75 @@ QUESTION_TEMPLATES = [
     {
         "key": "margin_by_service",
         "match": ["margin", "profit", "profitable", "most money", "makes money", "gross margin",
-                  "which work", "which service line makes"],
+                  "most profitable service", "which service line makes"],
         "title": "Gross margin by service line",
         "sql": _q_margin_by_service,
     },
     {
         "key": "lead_source",
         "match": ["lead source", "leads", "where do", "marketing", "channel", "referral",
-                  "google ads", "storm", "which source", "roi", "advertising"],
-        "title": "Revenue & win-rate by lead source",
+                  "seminar", "webinar", "which source", "roi", "advertising"],
+        "title": "Revenue & win-rate by referral source",
         "sql": _q_lead_source,
     },
     {
         "key": "conversion",
-        "match": ["conversion", "win rate", "win-rate", "close rate", "quotes", "bids",
-                  "quote to job", "winning", "convert"],
-        "title": "Quote-to-job conversion by month",
+        "match": ["conversion", "win rate", "win-rate", "close rate", "proposals", "new clients",
+                  "proposal to client", "winning", "convert"],
+        "title": "Proposal-to-client conversion by month",
         "sql": _q_conversion_by_month,
     },
     {
         "key": "ar_aging",
         "match": ["receivable", "owe", "owed", "unpaid", "outstanding", "aging", "collect",
-                  "overdue", "invoices open", "who owes"],
-        "title": "Accounts receivable aging",
+                  "overdue", "invoices open", "who owes", "fees outstanding"],
+        "title": "Advisory-fee receivable aging",
         "sql": _q_ar_aging,
     },
     {
         "key": "revenue_by_service",
         "match": ["service line", "service type", "by service", "revenue by service",
-                  "roof replacement", "repair vs", "breakdown by service"],
+                  "portfolio management", "planning vs", "breakdown by service"],
         "title": "Revenue by service line",
         "sql": _q_revenue_by_service,
     },
     {
         "key": "revenue_by_region",
-        "match": ["region", "area", "territory", "by location", "which region", "geography"],
+        "match": ["region", "area", "territory", "by location", "which region", "geography", "by office"],
         "title": "Revenue by region",
         "sql": _q_revenue_by_region,
     },
     {
         "key": "top_customers",
-        "match": ["top customer", "best customer", "biggest customer", "who spends", "which customers"],
-        "title": "Top customers by revenue",
+        "match": ["top client", "best client", "biggest client", "top customer", "best customer",
+                  "who pays the most", "which clients", "which households", "who spends"],
+        "title": "Top clients by revenue",
         "sql": _q_top_customers,
     },
     {
         "key": "by_crew",
-        "match": ["crew", "team", "by crew", "crew utilization", "which crew"],
-        "title": "Revenue by crew",
+        "match": ["advisor", "team", "by advisor", "advisor productivity", "which advisor",
+                  "advisory team"],
+        "title": "Revenue by advisor",
         "sql": _q_by_crew,
     },
     {
         "key": "backlog",
         "match": ["backlog", "pipeline", "scheduled", "upcoming", "booked", "in progress", "future work"],
-        "title": "Backlog & pipeline (scheduled / in-progress)",
+        "title": "Pipeline (scheduled / in-progress)",
         "sql": _q_backlog,
     },
     {
         "key": "avg_job",
-        "match": ["average job", "avg job", "job value", "ticket size", "average ticket"],
-        "title": "Average job value by month",
+        "match": ["average engagement", "avg engagement", "engagement value", "fee per client",
+                  "average fee", "average revenue per client"],
+        "title": "Average engagement value by month",
         "sql": _q_avg_job_by_month,
     },
     {
         "key": "revenue_by_month",
         "match": ["revenue by month", "revenue trend", "monthly revenue", "sales by month",
-                  "revenue over time", "jobs by month", "how much revenue", "how are we doing"],
+                  "revenue over time", "engagements by month", "how much revenue", "how are we doing"],
         "title": "Revenue by month",
         "sql": _q_revenue_by_month,
     },
@@ -382,25 +385,25 @@ def fetch_activity(force: bool = False) -> dict:
     margin_pct, ar_out, conv_pct, backlog = (list(ex) + [None] * 4)[:4]
 
     kpis = [
-        {"label": "Revenue (this month)", "value": _money(curr["revenue"]),
+        {"label": "Advisory-fee revenue (this month)", "value": _money(curr["revenue"]),
          "note": "month to date", "spark": revenues},
-        {"label": "Jobs completed (MTD)", "value": f"{curr['jobs']:,}",
+        {"label": "Reviews completed (MTD)", "value": f"{curr['jobs']:,}",
          "note": "completed this month", "spark": [s["jobs"] for s in series]},
-        {"label": "Revenue (6 mo)", "value": _money(rev6),
-         "note": f"{jobs6:,} jobs completed", "spark": [s["revenue"] for s in last6]},
-        {"label": "Avg job value", "value": _money(avg_job),
+        {"label": "Advisory-fee revenue (6 mo)", "value": _money(rev6),
+         "note": f"{jobs6:,} reviews completed", "spark": [s["revenue"] for s in last6]},
+        {"label": "Avg engagement value", "value": _money(avg_job),
          "note": "completed, 6 mo", "spark": [s["revenue"] / max(s["jobs"], 1) for s in series]},
         {"label": "Gross margin", "value": (f"{int(margin_pct)}%" if margin_pct is not None else "—"),
-         "note": "after labor + material, 6 mo", "spark": revenues},
-        {"label": "Outstanding A/R", "value": _money(ar_out or 0),
-         "note": (f"{int(conv_pct)}% quote win-rate" if conv_pct is not None else "open invoices"),
+         "note": "after servicing + platform cost, 6 mo", "spark": revenues},
+        {"label": "Outstanding fees", "value": _money(ar_out or 0),
+         "note": (f"{int(conv_pct)}% proposal win-rate" if conv_pct is not None else "open fee invoices"),
          "spark": revenues},
     ]
 
     svc_total = sum(float(r[2]) for r in svc["rows"]) if svc["rows"] else 0.0
     breakdown = {
         "title": "Revenue by service line (live)",
-        "head": ["Service line", "Jobs", "Revenue", "Share"],
+        "head": ["Service line", "Engagements", "Revenue", "Share"],
         "rows": [[r[0], f"{int(r[1]):,}", _money(r[2]),
                   f"{round(100 * float(r[2]) / svc_total) if svc_total else 0}%"] for r in svc["rows"]],
     }
@@ -414,7 +417,7 @@ def fetch_activity(force: bool = False) -> dict:
         "as_of": time.strftime("%Y-%m"),
         "ask": "Which service line makes the most margin, and where are my best leads coming from?",
         "kpis": kpis,
-        "bars": {"title": f"Completed-job revenue, last {len(bars)} months (live query)", "items": bars},
+        "bars": {"title": f"Advisory-fee revenue, last {len(bars)} months (live query)", "items": bars},
         "table": breakdown,
         "series": series,
         "counts": {"months": len(series), "service_lines": len(svc["rows"]),
@@ -495,7 +498,7 @@ def ask(question: str, pick: Callable[[str], str | None] | None = None,
         answer = f"Query error: {result['error']}"
 
     reasoning = blurb(
-        f"You are a BI analyst for a roofing contractor. In ONE sentence, summarize this "
+        f"You are a BI analyst for a wealth-management firm (RIA). In ONE sentence, summarize this "
         f"'{tpl['title']}' result for the owner: {rows[:6]}. Be concrete. Final answer only."
     ) if (blurb and rows) else None
 

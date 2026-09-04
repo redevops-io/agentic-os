@@ -59,7 +59,7 @@ from .core import (  # noqa: E402
 
 PORT = int(os.environ.get("PORT", "8207"))
 
-app = FastAPI(title="agentic-support (Summit Roofing Co. · core: Chatwoot)")
+app = FastAPI(title="agentic-support (Meridian Wealth Management · core: Chatwoot)")
 
 
 # --- MD3 styling (BASE_CSS reused verbatim from deploy/module_service.py) -----
@@ -418,17 +418,17 @@ def _t_draft_reply(a: dict) -> dict:
         contact = _contact_name(conv)
         subject = _first_inbound(conv)
         channel = _channel(conv)
-        return {"text": f"Draft a friendly, professional support reply for Summit Roofing Co. to "
+        return {"text": f"Draft a friendly, professional client-service reply for Meridian Wealth Management to "
                 f"{contact} on #{conv_id} ({channel}). Their message: \"{subject}\". Keep it 3-5 "
-                f"sentences, set a next step, do not invent prices or firm dates. This is a suggestion "
+                f"sentences, set a next step, do not invent specific returns, figures, or firm dates. This is a suggestion "
                 f"only — a human reviews it before it reaches the customer.",
                 "data": {"conversation_id": int(conv_id), "contact": contact, "subject": _truncate(subject)}}
     topic = (a.get("topic") or "").strip()
     if not topic:
         return {"text": "What should the reply be about? Give me a topic or a conversation id.", "data": None}
-    return {"text": f"Draft a friendly, professional support reply for Summit Roofing Co. about: \"{topic}\". "
-            f"Keep it 3-5 sentences, warm and concrete, set a clear next step, and do not invent prices or "
-            f"firm dates. This is a suggested draft only — a human reviews it before it is sent.",
+    return {"text": f"Draft a friendly, professional client-service reply for Meridian Wealth Management about: \"{topic}\". "
+            f"Keep it 3-5 sentences, warm and concrete, set a clear next step, and do not invent specific returns, "
+            f"figures, or firm dates. This is a suggested draft only — a human reviews it before it is sent.",
             "data": {"topic": topic}}
 
 
