@@ -34,7 +34,7 @@ CHATWOOT_API_TOKEN = os.environ.get("CHATWOOT_API_TOKEN", "")
 CHATWOOT_ACCOUNT_ID = os.environ.get("CHATWOOT_ACCOUNT_ID", "1")
 CHATWOOT_FRONT_URL = os.environ.get("CHATWOOT_FRONT_URL", "http://localhost:3003").rstrip("/")
 
-TENANT = "Summit Roofing Co."
+TENANT = "Meridian Wealth Management"
 SUBTITLE = "Front-line support that drafts, resolves, and escalates on a real Chatwoot core — a human reviews any public reply before it reaches the customer."
 
 
@@ -268,9 +268,9 @@ def draft_reply(body: dict, blurb: Callable[[str], str | None] | None = None) ->
 
     # LLM draft (optional) → deterministic fallback.
     llm = blurb(
-        "You are a friendly, professional support agent for Summit Roofing Co., a local "
-        "roofing contractor. Draft a concise reply (3-5 sentences) to this customer message. "
-        "Be concrete, set a next step, and do not invent prices or firm dates. "
+        "You are a friendly, professional client-service agent for Meridian Wealth Management, a "
+        "registered investment advisory firm. Draft a concise reply (3-5 sentences) to this client message. "
+        "Be concrete, set a next step, and do not invent specific returns, figures, or firm dates. "
         f"Customer: {contact}. Channel: {channel}. Message: \"{subject}\". "
         "Return ONLY the reply text, no preamble."
     ) if blurb else None
@@ -280,7 +280,7 @@ def draft_reply(body: dict, blurb: Callable[[str], str | None] | None = None) ->
     else:
         first = contact.split()[0] if contact and contact != "—" else "there"
         draft = (
-            f"Hi {first}, thanks for reaching out to Summit Roofing Co. — we've received your "
+            f"Hi {first}, thanks for reaching out to Meridian Wealth Management — we've received your "
             f"message and a team member is reviewing it now. We'll follow up shortly with next "
             f"steps; if this is time-sensitive, reply here or call our office and we'll prioritize it. "
             f"We appreciate your patience."
@@ -334,10 +334,10 @@ def _welcome_text(name: str, plan: str | None) -> str:
         f" You're all set on the {plan} plan." if plan else " Your account is all set up."
     )
     return (
-        f"Hi {first}, welcome to Summit Roofing Co.! 🎉{plan_line} "
-        "Your dedicated support team is here whenever you need us — just reply to this "
-        "message with any questions about scheduling, estimates, or your coverage, and "
-        "we'll take great care of you. Thanks for choosing Summit Roofing Co."
+        f"Hi {first}, welcome to Meridian Wealth Management! 🎉{plan_line} "
+        "Your dedicated client-service team is here whenever you need us — just reply to this "
+        "message with any questions about your statements, advisory fees, or your accounts, and "
+        "we'll take great care of you. Thanks for choosing Meridian Wealth Management."
     )
 
 

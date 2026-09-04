@@ -59,7 +59,7 @@ from .core import (  # noqa: E402
 
 PORT = int(os.environ.get("PORT", "8202"))
 
-app = FastAPI(title="agentic-control-tower (Summit Roofing Co. · core: Metabase)")
+app = FastAPI(title="agentic-control-tower (Meridian Wealth Management · core: Metabase)")
 
 
 # --- MD3 styling (BASE_CSS reused verbatim from deploy/module_service.py) ------
@@ -493,10 +493,10 @@ def api_ask(q: str = "") -> JSONResponse:
 # a few discoverable starter questions for the chatbox (title -> example prompt)
 ASK_SUGGESTIONS = [
     "Which service line makes the most margin?",
-    "Where are my best leads coming from?",
-    "Revenue by month",
-    "Who owes me money?",
-    "What's my quote-to-job conversion?",
+    "Where are my best client referrals coming from?",
+    "Advisory-fee revenue by month",
+    "Which fees are outstanding?",
+    "What's my proposal-to-client conversion?",
     "Revenue by region",
 ]
 
@@ -519,10 +519,10 @@ except Exception:  # noqa: BLE001
         return "general"
 
 _CR_SYNTH = [
-    "What's revenue this month?",
-    'Pipeline by stage',
-    'Ops throughput today',
-    'How much cash runway?',
+    "What's AUM this month?",
+    'Net flows by segment',
+    'Accounts needing review',
+    'Advisory-fee revenue this quarter',
 ]
 
 

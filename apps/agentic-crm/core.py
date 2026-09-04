@@ -36,7 +36,7 @@ ERPNEXT_API_KEY = os.environ.get("ERPNEXT_API_KEY", "")
 ERPNEXT_API_SECRET = os.environ.get("ERPNEXT_API_SECRET", "")
 ERPNEXT_FRONT_URL = os.environ.get("ERPNEXT_FRONT_URL", "http://localhost:8092").rstrip("/")
 
-TENANT = os.environ.get("CRM_TENANT", "Summit Roofing Co.")
+TENANT = os.environ.get("CRM_TENANT", "Meridian Wealth Management")
 SUBTITLE = ("Sales pipeline that scores, researches, drafts outreach, and answers questions "
             "on a real ERPNext CRM core — a human sends any outreach before it reaches a prospect.")
 

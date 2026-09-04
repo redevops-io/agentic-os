@@ -102,7 +102,7 @@ def test_capabilities_manifest(client):
 
 def test_invoke_compose_writes_draft_to_real_listmonk(client):
     r = client.post("/invoke", json={"capability": "lifecycle.compose_campaign",
-                                      "inputs": {"prompt": "spring roof-check reminder", "list_id": 3}}).json()
+                                      "inputs": {"prompt": "quarterly portfolio review reminder", "list_id": 3}}).json()
     res = r["result"]
     assert res["status"] == "done" and res["campaign_id"] == 42
     assert res["listmonk_status"] == "draft"  # never auto-sent — a human reviews + sends
@@ -112,7 +112,7 @@ def test_invoke_compose_writes_draft_to_real_listmonk(client):
 
 def test_segment_and_flow_are_readonly_advisory(client):
     seg = client.post("/invoke", json={"capability": "lifecycle.segment",
-                                        "inputs": {"goal": "win back lapsed customers"}}).json()["result"]
+                                        "inputs": {"goal": "win back lapsed clients"}}).json()["result"]
     assert seg["status"] == "done" and seg["action"] == "segment"
 
     flow = client.post("/invoke", json={"capability": "lifecycle.suggest_flow",
@@ -123,7 +123,7 @@ def test_segment_and_flow_are_readonly_advisory(client):
 
 def test_idempotency_dedupes_side_effect(client):
     body = {"capability": "lifecycle.compose_campaign",
-            "inputs": {"prompt": "spring roof-check reminder"}, "idempotency_key": "k-1"}
+            "inputs": {"prompt": "quarterly portfolio review reminder"}, "idempotency_key": "k-1"}
     first = client.post("/invoke", json=body).json()["result"]
     second = client.post("/invoke", json=body).json()["result"]
     assert first == second
@@ -140,5 +140,5 @@ def test_mission_runtime_httpclient_drives_operator(client):
     assert seg["status"] == "done" and seg["action"] == "segment"
 
     comp = oc.invoke("lifecycle", "lifecycle.compose_campaign",
-                     {"prompt": "quarterly roof inspection"}, idempotency_key="m-2")
+                     {"prompt": "annual account review"}, idempotency_key="m-2")
     assert comp["status"] == "done" and comp["campaign_id"] == 42

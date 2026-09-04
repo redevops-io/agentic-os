@@ -21,7 +21,7 @@ open-source BI core) and runs REAL analytical queries via `POST /api/dataset`:
   control-tower layout from `deploy/module_service.py`: an "Ask anything" pill bar, KPI
   scorecards with inline-SVG sparklines, a revenue/trend bar chart, and a breakdown table,
 
-for the demo tenant **Summit Roofing Co.**
+for the demo tenant **Meridian Wealth Management**
 
 ```
 Metabase (OSS BI core, :3001) ──POST /api/dataset──▶ app.py (FastAPI, :8202)
@@ -47,7 +47,7 @@ reliable bootstrap is **the setup API**, done by `seed.py`:
 
 1. `GET /api/session/properties` → read the one-time **`setup-token`**.
 2. `POST /api/setup` with `{token, user, prefs, database:null}` → creates the admin user
-   `admin@summitroofing.test` (password `$METABASE_ADMIN_PASSWORD`) and returns a **session id**
+   `admin@meridianwealth.test` (password `$METABASE_ADMIN_PASSWORD`) and returns a **session id**
    (the `X-Metabase-Session` token used for every later call).
 3. **Idempotency:** once a user exists, `/api/setup` returns `403 ("can only be used to
    create the first user")` — so `seed.py` falls back to `POST /api/session` (login with
@@ -109,7 +109,7 @@ docker run --rm -p 8202:8202 \
   with a sparkline series), a revenue trend series, and a category breakdown — all from live
   `/api/dataset` queries. Cached 15s.
 - `GET /` → the MD3 control-tower dashboard rendered from the live data. Header shows
-  "Summit Roofing Co.", a green "agent active · core: Metabase connected" pill, a
+  "Meridian Wealth Management", a green "agent active · core: Metabase connected" pill, a
   "data: live from Metabase" badge, and an **"Open in Metabase ↗"** button.
 - `POST /agent/run` with `{"action": ...}`:
   - `"ask"` + `"question"` → maps the natural-language question to a SQL template

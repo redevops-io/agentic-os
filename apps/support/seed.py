@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Repeatable seeder for the Summit Roofing Co. demo tenant on self-hosted Chatwoot.
+"""Repeatable seeder for the Meridian Wealth Management demo tenant on self-hosted Chatwoot.
 
 Bootstrap method (the reliable one for self-hosted Chatwoot, mirroring the Lago
 reference): run a Ruby script via `rails runner` inside the Chatwoot rails container.
 That creates/updates — idempotently — a super-admin user, the account
-"Summit Roofing Co.", an API inbox, a couple of contacts, and ~6-8 roofing-support
+"Meridian Wealth Management", an API inbox, a couple of contacts, and ~6-8 client-service
 conversations across open / pending / resolved.
 
 Chatwoot's API needs an agent **access token** (the `access_token.token` on a User).
@@ -40,7 +40,7 @@ CHATWOOT_FRONT_URL = os.environ.get("CHATWOOT_FRONT_URL", "http://localhost:3003
 
 # `sudo` is required to talk to the docker socket on this host.
 DOCKER = ["sudo", "docker"]
-IN_CONTAINER_PATH = "/tmp/summit_support_seed.rb"
+IN_CONTAINER_PATH = "/tmp/meridian_support_seed.rb"
 
 
 def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Repeatable seeder for the Summit Roofing Co. demo tenant on self-hosted Lago v1.48.
+"""Repeatable seeder for the Meridian Wealth Management demo tenant on self-hosted Lago v1.48.
 
 Bootstrap method (the reliable one for self-hosted Lago): copy seed.rb into the Lago
 API/Rails container and run it with `rails runner`. That creates/updates the org, a
@@ -35,7 +35,7 @@ LAGO_FRONT_URL = os.environ.get("LAGO_FRONT_URL", "http://localhost:80")
 
 # `sudo` is required to talk to the docker socket on this host.
 DOCKER = ["sudo", "docker"]
-IN_CONTAINER_PATH = "/tmp/summit_seed.rb"
+IN_CONTAINER_PATH = "/tmp/meridian_seed.rb"
 
 
 def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:

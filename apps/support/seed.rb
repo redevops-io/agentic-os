@@ -1,12 +1,12 @@
-# Idempotent seed for the Summit Roofing Co. demo tenant on self-hosted Chatwoot.
-# Run via:  rails runner /tmp/summit_support_seed.rb   (inside the chatwoot rails container)
+# Idempotent seed for the Meridian Wealth Management demo tenant on self-hosted Chatwoot.
+# Run via:  rails runner /tmp/meridian_support_seed.rb   (inside the chatwoot rails container)
 #
 # Creates / updates (all by stable natural keys, safe to re-run):
 #   * a super-admin User (the agent),
-#   * the Account "Summit Roofing Co.",
+#   * the Account "Meridian Wealth Management",
 #   * an API channel inbox,
 #   * 2 contacts,
-#   * ~7 roofing-support conversations across open / pending / resolved,
+#   * ~7 client-service conversations across open / pending / resolved,
 #   * an inbound message on each so the queue/feed has real subjects.
 #
 # Prints on success:
@@ -14,11 +14,11 @@
 #   ACCOUNT_ID=<id>
 #   ACCESS_TOKEN=<user.access_token.token>
 
-ADMIN_EMAIL    = 'admin@summitroofing.test'
-ADMIN_NAME     = 'Summit Support Agent'
-ADMIN_PASSWORD = 'SummitRoof!2026'
-ACCOUNT_NAME   = 'Summit Roofing Co.'
-INBOX_NAME     = 'Summit Roofing Support'
+ADMIN_EMAIL    = 'admin@meridianwealth.com'
+ADMIN_NAME     = 'Meridian Wealth Support Agent'
+ADMIN_PASSWORD = 'MeridianWealth!2026'
+ACCOUNT_NAME   = 'Meridian Wealth Management'
+INBOX_NAME     = 'Meridian Wealth Support'
 
 # --- 1. super-admin user (the agent we hand an access token to) --------------
 user = User.find_by(email: ADMIN_EMAIL)
@@ -64,33 +64,33 @@ def upsert_contact(account, name, email, phone)
   c
 end
 
-henderson = upsert_contact(account, 'Dana Henderson', 'dana.henderson@example.com', '+15125550142')
-maple     = upsert_contact(account, 'Marcus Webb',     'marcus.webb@example.com',    '+15125550199')
+henderson = upsert_contact(account, 'Whitfield Family Trust', 'whitfield.trust@example.com', '+15125550142')
+maple     = upsert_contact(account, 'Okonkwo Holdings',       'okonkwo.holdings@example.com', '+15125550199')
 
 # --- 5. conversations (idempotent by a deterministic identifier) -------------
 # Each entry: contact, status, priority, channel-ish source label, inbound text.
 TICKETS = [
-  { key: 'quote-2200-reroof', contact: :henderson, status: :open,     priority: :medium,
+  { key: 'statement-access',  contact: :henderson, status: :open,     priority: :medium,
     source: 'Website',
-    body: "Hi — I'd like a quote for a full re-roof on my 2,200 sqft house in Henderson. Existing is old asphalt shingle. What's your availability and ballpark cost?" },
-  { key: 'reschedule-rain',   contact: :maple,     status: :open,     priority: :low,
+    body: "Hi — I can't log in to the client portal to download my latest quarterly statement. Can you help me regain access to the Whitfield Family Trust account, or email the statement over?" },
+  { key: 'acat-transfer-status', contact: :maple,  status: :open,     priority: :low,
     source: 'Phone',
-    body: "It's supposed to rain Tuesday when your crew is scheduled. Can we push the install to Thursday instead?" },
-  { key: 'warranty-ridge-leak', contact: :henderson, status: :pending, priority: :high,
+    body: "I started moving my old brokerage account over to you a couple of weeks ago. Can you tell me the status of the ACAT transfer for Okonkwo Holdings?" },
+  { key: 'beneficiary-update', contact: :henderson, status: :pending, priority: :high,
     source: 'Email',
-    body: "We're seeing a small leak near the ridge after last week's storm — the Oak Park job you did in spring. I believe this is under warranty. Can someone come look?" },
-  { key: 'invoice-question',  contact: :maple,     status: :pending,  priority: :medium,
+    body: "We need to update the beneficiary designations on the Whitfield Family Trust accounts after a change in the family. What's the process, and can someone walk us through it?" },
+  { key: 'advisory-fee-question', contact: :maple, status: :pending,  priority: :medium,
     source: 'Email',
-    body: "Quick question on invoice #1048 — there's a $300 line item for 'tear-off disposal' I didn't expect. Can you explain what that covers?" },
-  { key: 'new-roof-estimate', contact: :maple,     status: :open,     priority: :medium,
+    body: "Quick question on the last fee invoice — there's an advisory-fee line item that's higher than last quarter. Can you explain how the advisory fee is calculated?" },
+  { key: 'performance-report-request', contact: :maple, status: :open, priority: :medium,
     source: 'Website',
-    body: "Building a new detached garage (24x24) and need a roof on it. Can you do new construction, and how do I get an estimate?" },
-  { key: 'emergency-storm',   contact: :henderson, status: :open,     priority: :urgent,
+    body: "Could you send a year-to-date performance report for the Okonkwo Holdings portfolio? I'd like to review returns before our next meeting." },
+  { key: 'account-access-locked', contact: :henderson, status: :open, priority: :urgent,
     source: 'Phone',
-    body: "EMERGENCY — last night's storm tore shingles off and there's water coming into the upstairs bedroom. We need someone out today if possible. Please call ASAP." },
-  { key: 'gutter-guards',     contact: :maple,     status: :resolved, priority: :low,
+    body: "URGENT — I got a login alert I don't recognize and now I'm locked out of my account. Please call ASAP so we can secure the Whitfield Family Trust accounts." },
+  { key: 'tax-document-timing', contact: :maple,    status: :resolved, priority: :low,
     source: 'Facebook',
-    body: "Do you install gutter guards? If so what brands and roughly what does it run?" },
+    body: "When will my 1099 and other tax documents be available for last year? My accountant is asking." },
 ]
 
 contacts = { henderson: henderson, maple: maple }
@@ -129,7 +129,7 @@ TICKETS.each do |t|
   # Normalize status + priority every run (idempotent).
   conv.update_columns(status: status_int(t[:status])) unless conv.status == t[:status].to_s
   conv.update!(priority: t[:priority]) unless conv.priority == t[:priority].to_s
-  # Assign the emergency + warranty (high/urgent) to our agent so escalation reads true.
+  # Assign the urgent access + beneficiary-update (high/urgent) to our agent so escalation reads true.
   if [:urgent, :high].include?(t[:priority]) && conv.assignee_id.nil?
     conv.update!(assignee: user)
   end

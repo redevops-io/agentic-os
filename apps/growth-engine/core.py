@@ -33,21 +33,21 @@ ADMIN_USER = os.environ.get("UMAMI_ADMIN_USER", "admin")
 ADMIN_PASS = os.environ.get("UMAMI_ADMIN_PASS", "umami")
 UMAMI_FRONT_URL = os.environ.get("UMAMI_FRONT_URL", "http://localhost:3002").rstrip("/")
 
-TENANT = "Summit Roofing Co."
+TENANT = "Meridian Wealth Management"
 SUBTITLE = ("Know what's working and put spend where it pays — lead-source attribution "
             "on a real Umami core, with a human in the loop before budget moves.")
 
 # Illustrative economics for the growth model. CPL/ROAS are derived from REAL Umami
 # traffic + conversions; the per-click spend rates and the lead value are static
 # planning assumptions (actual ad spend lives in Google/Meta Ads, not Umami).
-LEAD_VALUE = 850.0  # avg gross profit per booked roofing job, USD (planning assumption)
+LEAD_VALUE = 850.0  # avg first-year advisory revenue per new client, USD (planning assumption)
 # Static cost-per-click by paid channel (USD); organic / referral channels cost $0.
-CHANNEL_CPC = {"google": 4.10, "facebook": 2.30}
+CHANNEL_CPC = {"google": 4.10, "linkedin": 2.30}
 # Map a Umami utm_source / referrer to a display channel + whether it's paid.
 CHANNEL_LABELS = {
     "google": "Google Ads",
-    "facebook": "Facebook",
-    "yardsign-qr": "Yard sign QR",
+    "linkedin": "LinkedIn",
+    "seminar-qr": "Seminar QR",
     "(none)": "Organic / Direct",
 }
 
@@ -171,7 +171,7 @@ def fetch_activity(force: bool = False) -> dict:
     # --- conversions: estimate from REAL traffic. A booked-lead conversion rate is
     # applied to visits (illustrative); paid channels convert a touch better.
     def _conv(c: dict) -> int:
-        rate = 0.34 if c["paid"] else (0.28 if c["key"] == "yardsign-qr" else 0.22)
+        rate = 0.34 if c["paid"] else (0.28 if c["key"] == "seminar-qr" else 0.22)
         return max(round(c["leads"] * rate), 0)
 
     # --- per-channel spend / CPL / ROAS (illustrative economics on real volume) --
@@ -215,12 +215,12 @@ def fetch_activity(force: bool = False) -> dict:
     estimates = round(total_leads * 0.48)
     booked = total_conv
     funnel = {
-        "title": "Lead-to-job funnel (30d)",
+        "title": "Lead-to-client funnel (30d)",
         "items": [
             {"label": "Leads (sessions)", "pct": 100, "value": str(total_leads)},
             {"label": "Qualified", "pct": 70, "value": str(qualified)},
-            {"label": "Estimates sent", "pct": 48, "value": str(estimates)},
-            {"label": "Booked jobs", "pct": booked_rate, "value": str(booked)},
+            {"label": "Proposals sent", "pct": 48, "value": str(estimates)},
+            {"label": "New clients", "pct": booked_rate, "value": str(booked)},
         ],
     }
 
@@ -301,7 +301,7 @@ def analyze(blurb: Callable[[str], str | None] | None = None) -> dict:
                f"{'∞' if t['blended_roas'] is None else str(t['blended_roas'])+'x'}.")
 
     reasoning = blurb(
-        "You are a growth marketing agent for a roofing contractor. In ONE sentence, "
+        "You are a growth marketing agent for a wealth management firm. In ONE sentence, "
         f"advise on this REAL channel data: {findings}. Be concrete. Final answer only."
     ) if blurb else None
 
@@ -324,7 +324,7 @@ def reallocate_budget(body: dict) -> dict:
     Module declares approval_required:[budget_change]; we stage the change and return
     pending_approval so a human signs off in the Ads platform.
     """
-    src = body.get("from", "facebook")
+    src = body.get("from", "linkedin")
     dst = body.get("to", "google")
     amount = body.get("amount", 600)
     try:
