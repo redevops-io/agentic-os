@@ -7,8 +7,8 @@ Built on the agentic-billing reference pattern: wrap a running self-hosted OSS c
   * an MD3 dashboard (same design tokens as deploy/module_service.py, market-radar
     layout) rendered from that live data — no mock data.
 
-Competitive-intelligence (Crayon/Klue) for a roofing SME: every watch is a competitor
-or price/permit page; the agent surfaces what changed and can add new monitors.
+Competitive-intelligence (Crayon/Klue) for a wealth-management firm: every watch is a competitor
+RIA or fee/regulatory page; the agent surfaces what changed and can add new monitors.
 
 Endpoints:
   GET  /health        -> {"status","core":"changedetection","connected": <bool>}
@@ -70,7 +70,7 @@ from .core import (  # noqa: E402
 
 PORT = int(os.environ.get("PORT", "8204"))
 
-app = FastAPI(title="agentic-market-radar (Summit Roofing Co. · core: changedetection)")
+app = FastAPI(title="agentic-market-radar (Meridian Wealth Management · core: changedetection)")
 
 
 # --- MD3 styling (BASE_CSS reused verbatim from deploy/module_service.py) -----
@@ -392,7 +392,7 @@ try:
 except Exception:  # noqa: BLE001 — context-runtime absent → no console
     _AgentConsole = None
 
-_RADAR_PRIMER = """A WATCH is a single web page changedetection.io monitors for you. Add one under Watches → Add a new watch (paste the URL), or ask the agent to "watch example.com". Each watch is a competitor, supplier or price/permit page you want to be told about the moment it moves.
+_RADAR_PRIMER = """A WATCH is a single web page changedetection.io monitors for you. Add one under Watches → Add a new watch (paste the URL), or ask the agent to "watch example.com". Each watch is a competitor, custodian or fee/regulatory page you want to be told about the moment it moves.
 
 CHECK FREQUENCY is how often a watch is re-fetched — set per watch (e.g. every 3 hours, daily, weekly). Faster catches changes sooner but scrapes more; slower is cheaper. Tune it on the watch's Edit → "Time between check" so busy competitor pages are checked often and stable ones rarely.
 
@@ -406,7 +406,7 @@ PRICE / STOCK TRACKING is the classic use: watch a product or pricing page, add 
 
 WHY A CHANGE WASN'T DETECTED, common causes: the page renders its content with JavaScript (needs the browser/Playwright fetcher, not plain HTTP); a filter is too narrow and the change happened outside it; the check frequency hasn't elapsed yet; or the site blocks scrapers. Widen or remove the filter, switch the watch to the browser fetcher, or check more often.
 
-Every watch here is competitive intelligence for a roofing SME (Summit Roofing Co.): competitor pricing, supplier lead times, and permit/tender pages. The agent can summarize what changed, list what's being watched, and add a new watch on request."""
+Every watch here is competitive intelligence for a wealth-management firm (Meridian Wealth Management): competitor RIA fee schedules, custodian and market-data feeds, and regulatory/SEC pages. The agent can summarize what changed, list what's being watched, and add a new watch on request."""
 
 
 def _t_watch_summary(_a: dict) -> dict:

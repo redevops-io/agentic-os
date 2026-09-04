@@ -9,7 +9,7 @@ It is **config-driven and gracefully degrading**, exactly like the CRM / enrichm
   - Set VIBEXGEN_API_URL + an authenticated VIBEXGEN_API_KEY (+ optional VIBEXGEN_API_HOST for
     vhost routing) and calls go LIVE against the real platform. Live mode is key-gated on purpose
     so a public demo never rides the platform's unauthenticated internal path (see _LIVE below).
-  - No key (the public demo) / unreachable → a curated demo dataset for the Summit Roofing niche,
+  - No key (the public demo) / unreachable → a curated demo dataset for the Meridian Wealth niche,
     so the feature still works without the platform. `status()` reports which mode is active.
 
 In the demo we deliberately expose only two low-cost, read-mostly capabilities: trend discovery
@@ -28,7 +28,7 @@ VIBEXGEN_API_KEY = os.environ.get("VIBEXGEN_API_KEY", "")
 # nginx on the vibexgen host routes by Host header (e.g. api.vibexgen.io). When the URL is an
 # internal IP we still need the public vhost so the request lands on the right upstream.
 VIBEXGEN_API_HOST = os.environ.get("VIBEXGEN_API_HOST", "")
-NICHE = os.environ.get("VIBEXGEN_NICHE", "roofing & home improvement")
+NICHE = os.environ.get("VIBEXGEN_NICHE", "wealth management & financial planning")
 
 # Live mode is CONFIG-GATED and requires an AUTHENTICATED key. The vibexgen API also answers
 # unauthenticated calls on its internal network path — but a public demo must never ride that
@@ -39,18 +39,18 @@ VIBEXGEN_ALLOW_ANON = os.environ.get("VIBEXGEN_ALLOW_ANON", "") == "1"
 _LIVE = bool(VIBEXGEN_API_URL) and (bool(VIBEXGEN_API_KEY) or VIBEXGEN_ALLOW_ANON)
 
 # --- curated demo intelligence (used when vibexgen isn't connected) ----------
-_DEMO_HASHTAGS = ["#RoofTok", "#StormDamage", "#RoofReplacement", "#BeforeAndAfter",
-                  "#HomeImprovement", "#CurbAppeal", "#RoofingLife", "#DIYvsPro"]
+_DEMO_HASHTAGS = ["#WealthManagement", "#RetirementPlanning", "#TaxPlanning", "#MarketCommentary",
+                  "#FinancialPlanning", "#Investing", "#FiduciaryAdvice", "#PersonalFinance"]
 _DEMO_ANGLES = [
-    {"format": "Before / after time-lapse", "hook": "48 hours, one roof — watch it transform",
-     "why": "transformation reels over-index on saves + shares"},
-    {"format": "Storm-damage inspection POV", "hook": "What your roofer sees after a hailstorm",
-     "why": "POV + urgency drives comments and DMs"},
-    {"format": "Drone flyover reveal", "hook": "The satisfying drone shot of a finished install",
-     "why": "aerial B-roll = high watch-time, low words"},
-    {"format": "Cost-breakdown transparency", "hook": "What a $14k roof actually pays for",
-     "why": "price transparency builds trust + follows"},
-    {"format": "5 signs you need a new roof", "hook": "#3 surprises every homeowner",
+    {"format": "Weekly market recap explainer", "hook": "What moved markets this week — in 60 seconds",
+     "why": "timely explainers over-index on saves + shares"},
+    {"format": "Tax-loss harvesting walkthrough", "hook": "How to turn a down year into a tax break",
+     "why": "actionable how-tos drive comments and DMs"},
+    {"format": "Whiteboard: the power of compounding", "hook": "The chart that explains why starting early wins",
+     "why": "simple visuals = high watch-time, low words"},
+    {"format": "Fee-transparency explainer", "hook": "What our advisory fee actually pays for",
+     "why": "fee transparency builds trust + follows"},
+    {"format": "5 questions before you retire", "hook": "#3 surprises every pre-retiree",
      "why": "listicle hooks are the reliable reach play"},
 ]
 

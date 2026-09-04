@@ -33,9 +33,9 @@ ERPNEXT_URL = os.environ.get("ERPNEXT_URL", "http://localhost:8092").rstrip("/")
 ERPNEXT_API_KEY = os.environ.get("ERPNEXT_API_KEY", "")
 ERPNEXT_API_SECRET = os.environ.get("ERPNEXT_API_SECRET", "")
 ERPNEXT_FRONT_URL = os.environ.get("ERPNEXT_FRONT_URL", "http://localhost:8092").rstrip("/")
-COMPANY = os.environ.get("COMPANY", "Summit Roofing Co.")
+COMPANY = os.environ.get("COMPANY", "Meridian Wealth Management")
 
-TENANT = "Summit Roofing Co."
+TENANT = "Meridian Wealth Management"
 SUBTITLE = "Books that categorize, reconcile, and close themselves — on a real ERPNext core, with a human in the loop before the month-end close posts."
 
 # Module declares an approval gate on the close action (the only thing that posts a
@@ -237,7 +237,7 @@ def categorize(blurb: Callable[[str], str | None] | None = None) -> dict:
     We set the transaction's bank_party_type/account hints by writing the
     `bank_party_name` and updating a custom remark — the real, idempotent ERPNext
     write. For the demo we tag the first uncategorized deposit to its likely revenue
-    account (a roofing receipt → Sales). Deterministic; reports what it did.
+    account (a advisory-fee receipt → Sales). Deterministic; reports what it did.
     `blurb` is an optional narration callback (the LLM one-liner lives in app.py).
     """
     data = fetch_activity(force=True)
@@ -272,7 +272,7 @@ def categorize(blurb: Callable[[str], str | None] | None = None) -> dict:
         result["action"] = f"error: {e}"
 
     reasoning = blurb(
-        "You are a bookkeeping agent for a roofing contractor. In ONE sentence, "
+        "You are a bookkeeping agent for a wealth-management firm. In ONE sentence, "
         f"explain categorizing the bank transaction '{t['desc']}' ({t['amount']}) as "
         f"'{category}'. Be concrete and professional. Final answer only."
     ) if blurb else None
@@ -333,7 +333,7 @@ def close(blurb: Callable[[str], str | None] | None = None) -> dict:
     blocker = (f"{uncat} bank transaction(s) still need categorizing"
                if uncat else "all checks pass")
     reasoning = blurb(
-        "You are a bookkeeping agent for a roofing contractor. In ONE sentence, summarize "
+        "You are a bookkeeping agent for a wealth-management firm. In ONE sentence, summarize "
         f"that the June month-end close is {pct}% complete ({blocker}) and is staged for the "
         "owner's approval before the Period Closing Voucher is posted. Final answer only."
     ) if blurb else None
@@ -355,7 +355,7 @@ def close(blurb: Callable[[str], str | None] | None = None) -> dict:
 def _revenue_accounts() -> tuple[str, str]:
     """Pick a (cash/bank, income) account pair from the live chart of accounts.
 
-    Falls back to Summit's seeded account names if the lookup returns nothing, so the
+    Falls back to Meridian's seeded account names if the lookup returns nothing, so the
     Journal Entry payload is always structurally valid (debits/credits both reference an
     account). Same `_get_list` REST convention as the KPI code above.
     """
@@ -365,9 +365,9 @@ def _revenue_accounts() -> tuple[str, str]:
         filters=[["company", "=", COMPANY], ["is_group", "=", 0]],
     )
     income_acc = next((a["name"] for a in accts if a.get("root_type") == "Income"),
-                      "Sales - SR")
+                      "Sales - MWM")
     cash_acc = next((a["name"] for a in accts
-                     if a.get("account_type") in ("Bank", "Cash")), "Bank - SR")
+                     if a.get("account_type") in ("Bank", "Cash")), "Bank - MWM")
     return cash_acc, income_acc
 
 

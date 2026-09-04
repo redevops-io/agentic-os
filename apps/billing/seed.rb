@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 #
-# Idempotent seed for the "Summit Roofing Co." demo tenant on self-hosted Lago v1.48.
+# Idempotent seed for the "Meridian Wealth Management" demo tenant on self-hosted Lago v1.48.
 #
 # Run via the Lago API (Rails) container — this is the MOST RELIABLE bootstrap path on
 # self-hosted Lago because the org + API key can be created directly without going
@@ -21,14 +21,14 @@
 #   API_KEY=<value>
 # so the caller can capture the key the REST API needs (Authorization: Bearer <value>).
 
-ORG_NAME = "Summit Roofing Co."
+ORG_NAME = "Meridian Wealth Management"
 CURRENCY = "USD"
 
 # --- Organization ------------------------------------------------------------
 org = Organization.find_or_initialize_by(name: ORG_NAME)
 org.default_currency = CURRENCY
 org.country ||= "US"
-org.email ||= "billing@summitroofing.example"
+org.email ||= "billing@meridianwealth.com"
 org.save!  # validations on -> slug callback fires
 
 # --- Billing entity (required to attach invoices in v1.48) -------------------
@@ -37,7 +37,7 @@ entity = org.default_billing_entity || org.billing_entities.first
 if entity.nil?
   entity = org.billing_entities.create!(
     name: ORG_NAME,
-    code: "summit-roofing",
+    code: "meridian-wealth",
     default_currency: CURRENCY,
     country: "US"
   )
@@ -49,19 +49,19 @@ end
 # its generated value back — re-runs reuse the same key, keeping the value stable.
 api_key = org.api_keys.first
 if api_key.nil?
-  api_key = org.api_keys.new(name: "summit-demo")
+  api_key = org.api_keys.new(name: "meridian-demo")
   api_key.permissions ||= {}
   api_key.save!
 end
 
-# --- Customers ---------------------------------------------------------------
+# --- Customers (advisory clients / households) --------------------------------
 # external_id is the natural idempotency key in Lago's REST API.
 customers_spec = [
-  { external_id: "henderson-residence",    name: "Henderson Residence",     email: "owner@henderson.example",         type: "individual" },
-  { external_id: "oak-park-hoa",            name: "Oak Park HOA",            email: "board@oakparkhoa.example",        type: "company" },
-  { external_id: "maple-street-commercial", name: "Maple Street Commercial", email: "ap@maplestreet.example",          type: "company" },
-  { external_id: "riverside-apartments",    name: "Riverside Apartments",    email: "billing@riverside.example",       type: "company" },
-  { external_id: "downtown-retail-llc",     name: "Downtown Retail LLC",     email: "accounts@downtownretail.example", type: "company" }
+  { external_id: "whitfield-family-trust", name: "Whitfield Family Trust", email: "trustee@whitfieldtrust.example",    type: "company" },
+  { external_id: "okonkwo-holdings",       name: "Okonkwo Holdings",       email: "finance@okonkwoholdings.example",   type: "company" },
+  { external_id: "delgado-retirement",     name: "Delgado Retirement",     email: "office@delgado.example",            type: "individual" },
+  { external_id: "nakamura-foundation",    name: "Nakamura Foundation",    email: "office@nakamurafoundation.example", type: "company" },
+  { external_id: "petrov-family-office",   name: "Petrov Family Office",   email: "admin@petrovfamilyoffice.example",  type: "company" }
 ]
 
 customers = {}
@@ -80,51 +80,51 @@ end
 
 # --- Billable metric + plans -------------------------------------------------
 metric = BillableMetric.find_or_initialize_by(organization_id: org.id, code: "service_visits")
-metric.name = "Service Visits"
+metric.name = "Advisory Reviews"
 metric.aggregation_type ||= "count_agg"
 metric.recurring = false if metric.recurring.nil?
 metric.save!
 
-maint = Plan.find_or_initialize_by(organization_id: org.id, code: "roof-maintenance-monthly")
-maint.name = "Roof Maintenance Plan"
+maint = Plan.find_or_initialize_by(organization_id: org.id, code: "advisory-retainer-monthly")
+maint.name = "Advisory Retainer Plan"
 maint.interval = "monthly"
 maint.amount_cents = 29_900            # $299/mo
 maint.amount_currency = CURRENCY
 maint.save!
 
-jobs = Plan.find_or_initialize_by(organization_id: org.id, code: "roofing-jobs-oneoff")
-jobs.name = "Roofing Jobs (one-off)"
-jobs.interval = "monthly"               # interval required even for the one-off job template
+jobs = Plan.find_or_initialize_by(organization_id: org.id, code: "advisory-engagements-oneoff")
+jobs.name = "Advisory Engagements (one-off)"
+jobs.interval = "monthly"               # interval required even for the one-off engagement template
 jobs.amount_cents = 0
 jobs.amount_currency = CURRENCY
 jobs.save!
 
 # --- Invoices ----------------------------------------------------------------
 # `number` is the idempotency key. We hand-build finalized/paid, overdue, and a draft
-# so the agent layer has realistic states to act on. Amounts match a roofing SME
-# (jobs $2k-$15k+, ~$148k collected MTD).
+# so the agent layer has realistic states to act on. Amounts match a mid-size RIA
+# (advisory / management fees $2k-$38k+, ~$148k collected MTD).
 #
-# spec: [number, customer_key, label(job), total_dollars, status, payment_status,
+# spec: [number, customer_key, label(engagement), total_dollars, status, payment_status,
 #        overdue?, issued_days_ago, due_days_from_issue]
 today = Date.current
 invoices_spec = [
   # --- Finalized + PAID (collected MTD) ---
-  ["SUMMIT-1042", "henderson-residence",     "Henderson asphalt re-roof",           14_200, :finalized, :succeeded, false, 18, 30],
-  ["SUMMIT-1043", "oak-park-hoa",             "Oak Park HOA clubhouse re-roof",      38_500, :finalized, :succeeded, false, 16, 30],
-  ["SUMMIT-1044", "riverside-apartments",    "Riverside bldg C tear-off + shingle", 27_800, :finalized, :succeeded, false, 14, 30],
-  ["SUMMIT-1045", "downtown-retail-llc",      "Downtown Retail TPO flat-roof",       31_400, :finalized, :succeeded, false, 12, 30],
-  ["SUMMIT-1051", "maple-street-commercial",  "Commercial flat-roof deposit",         8_000, :finalized, :succeeded, false,  9, 30],
-  ["SUMMIT-1054", "henderson-residence",      "Henderson skylight flashing",          4_300, :finalized, :succeeded, false,  5, 30],
-  ["SUMMIT-1055", "oak-park-hoa",             "Oak Park gutter system replacement",  15_600, :finalized, :succeeded, false,  4, 30],
-  ["SUMMIT-1056", "riverside-apartments",    "Riverside emergency leak repair",       8_900, :finalized, :succeeded, false,  3, 30],
+  ["MWM-1042", "whitfield-family-trust",  "Whitfield Q2 advisory fee",               14_200, :finalized, :succeeded, false, 18, 30],
+  ["MWM-1043", "okonkwo-holdings",        "Okonkwo Holdings management fee (Q2)",    38_500, :finalized, :succeeded, false, 16, 30],
+  ["MWM-1044", "nakamura-foundation",     "Nakamura Foundation management fee (Q2)", 27_800, :finalized, :succeeded, false, 14, 30],
+  ["MWM-1045", "petrov-family-office",    "Petrov Family Office advisory fee (Q2)",  31_400, :finalized, :succeeded, false, 12, 30],
+  ["MWM-1051", "delgado-retirement",      "Delgado Retirement planning fee",          8_000, :finalized, :succeeded, false,  9, 30],
+  ["MWM-1054", "whitfield-family-trust",  "Whitfield financial-planning fee",         4_300, :finalized, :succeeded, false,  5, 30],
+  ["MWM-1055", "okonkwo-holdings",        "Okonkwo Holdings performance fee",        15_600, :finalized, :succeeded, false,  4, 30],
+  ["MWM-1056", "nakamura-foundation",     "Nakamura Foundation tax-loss review",      8_900, :finalized, :succeeded, false,  3, 30],
   # paid total = 14_200+38_500+27_800+31_400+8_000+4_300+15_600+8_900 = 148_700 collected MTD
 
   # --- OVERDUE (finalized, unpaid, past due) ---
-  ["SUMMIT-1048", "maple-street-commercial",  "Maple St gutters",                     2_300, :finalized, :pending,   true,  10, 4],  # ~6 days overdue
-  ["SUMMIT-1049", "downtown-retail-llc",      "Downtown storefront fascia repair",    5_100, :finalized, :pending,   true,  22, 15], # ~7 days overdue
+  ["MWM-1048", "delgado-retirement",      "Delgado Retirement advisory fee",          2_300, :finalized, :pending,   true,  10, 4],  # ~6 days overdue
+  ["MWM-1049", "petrov-family-office",    "Petrov Family Office management fee",       5_100, :finalized, :pending,   true,  22, 15], # ~7 days overdue
 
   # --- DRAFT / pending (not yet sent) ---
-  ["SUMMIT-1053", "riverside-apartments",     "Elm Ave tear-off + felt (estimate)",   6_750, :draft,     :pending,   false,  1, 30]
+  ["MWM-1053", "nakamura-foundation",     "Nakamura Foundation IPS proposal (draft)", 6_750, :draft,     :pending,   false,  1, 30]
 ]
 
 invoices_spec.each do |number, cust_key, _label, dollars, status, pay_status, overdue, issued_ago, due_in|

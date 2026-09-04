@@ -615,7 +615,7 @@ DASHBOARD_HTML = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>redevops.io — Context Runtime · Summit Roofing Co.</title>
+<title>redevops.io — Context Runtime · Meridian Wealth Management</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&family=Roboto+Mono:wght@400;500&display=swap">
@@ -725,7 +725,7 @@ DASHBOARD_HTML = """<!doctype html>
       <div>
         <h1><span class="accent">redevops.io</span> — Context Runtime <span style="display:inline-block;vertical-align:middle;margin-left:10px;font:600 11px/1 var(--font-sans);letter-spacing:.8px;text-transform:uppercase;color:var(--secondary);background:var(--secondary-container);border:1px solid var(--secondary);border-radius:var(--radius-pill);padding:5px 11px">Under development</span></h1>
         <div class="appbar__sub">The query planner for AI — <b>Context Runtime</b> decides what each agent sees before it acts. Here it runs billing, support, security &amp; growth on proven open-source cores, on hardware you own.</div>
-        <div class="appbar__tenant">Demo tenant: <b>Summit Roofing Co.</b> — a fictional roofing contractor running entirely on agents. Everything below is live on demo data.</div>
+        <div class="appbar__tenant">Demo tenant: <b>Meridian Wealth Management</b> — a fictional roofing contractor running entirely on agents. Everything below is live on demo data.</div>
       </div>
       <div style="display:flex;align-items:center;gap:var(--sp-3);flex-wrap:wrap">
         <a href="https://github.com/redevops-io/context-runtime" target="_blank" rel="noopener" style="font:500 14px/1 var(--font-sans);color:var(--on-primary);background:var(--primary);padding:9px 16px;border-radius:var(--radius-pill)">Get started &#8599;</a>
@@ -737,7 +737,7 @@ DASHBOARD_HTML = """<!doctype html>
   </header>
 
   <div class="demo-note" id="demoNote">
-    <span>Live demo on fictional <b>Summit Roofing Co.</b> data — real open-source cores, simulated business. Actions that move money or change infrastructure are gated and safe to explore.</span>
+    <span>Live demo on fictional <b>Meridian Wealth Management</b> data — real open-source cores, simulated business. Actions that move money or change infrastructure are gated and safe to explore.</span>
     <button onclick="document.getElementById('demoNote').remove()">dismiss</button>
   </div>
 

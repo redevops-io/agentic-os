@@ -2,7 +2,7 @@
 
 A conversational agent layer + MD3 dashboard over a real Twenty CRM: discover leads, draft follow-ups,
 summarize the pipeline, and explain the CRM — every action shows its work. Generic across workspaces
-(configure OUTREACH_TENANT / OUTREACH_PITCH / OUTREACH_VERTICALS); defaults to the Summit Roofing Co.
+(configure OUTREACH_TENANT / OUTREACH_PITCH / OUTREACH_VERTICALS); defaults to the Meridian Wealth Management
 demo tenant used across the agentic apps. Sends are approval-gated.
 
   GET  /health        -> {"status","core":"twenty","connected": <Twenty /healthz>}
@@ -379,7 +379,7 @@ def draft_followup(opp: dict) -> str:
     if out:
         return out.strip()
     return ("Hi — just following up on my earlier note. At " + TENANT + ", " + PITCH + ". "
-            "Happy to put together a quick, no-obligation quote or answer any questions — worth a short call this week?")
+            "Happy to put together a complimentary, no-obligation portfolio review or answer any questions — worth a short call this week?")
 
 
 def pipeline_summary() -> dict:

@@ -19,7 +19,7 @@ self-hosted **Umami** instance (the open-source web-analytics core) with:
   metrics) and turns it into **lead-source attribution** + growth KPIs, and
 - a GA4 / HubSpot-style **MD3 dashboard** rendered from that live data (no mock data),
 
-for the demo tenant **Summit Roofing Co.** (a roofing contractor).
+for the demo tenant **Meridian Wealth Management** (a wealth-management / RIA firm).
 
 ```
 Umami (OSS core, :3002) ──REST──▶ app.py (FastAPI, :8205) ──▶ MD3 dashboard + /api/activity + /agent/run
@@ -31,7 +31,7 @@ Umami (OSS core, :3002) ──REST──▶ app.py (FastAPI, :8205) ──▶ MD
 
 | File | Purpose |
 |------|---------|
-| `seed.py` | Idempotent seeder: logs in, creates/reuses the **Summit Roofing** website, then inserts REAL `session` + `website_event` rows (dated across the last 8 days, with `utm_source`/`utm_medium`/`utm_campaign`/`referrer_domain`) directly into the Umami Postgres, and fires a couple of `/api/send` events. Writes `.env`. |
+| `seed.py` | Idempotent seeder: logs in, creates/reuses the **Meridian Wealth** website, then inserts REAL `session` + `website_event` rows (dated across the last 8 days, with `utm_source`/`utm_medium`/`utm_campaign`/`referrer_domain`) directly into the Umami Postgres, and fires a couple of `/api/send` events. Writes `.env`. |
 | `app.py` | FastAPI service (port **8205**): `/health`, `/api/activity`, `/` dashboard, `/agent/run`. |
 | `requirements.txt` | fastapi, uvicorn, httpx. |
 | `Dockerfile` | slim-python image running `uvicorn app:app --port 8205`. |
@@ -44,7 +44,7 @@ Umami v2's REST API is ready out of the box; you just need an auth token + a web
 1. **Login** — `POST /api/auth/login {"username":"admin","password":"umami"}` → `{ "token": ... }`.
    Use it as `Authorization: Bearer <token>`. (`app.py` re-logs in automatically and caches
    the token for 10 minutes — no manual key handling.)
-2. **Create the website** — `POST /api/websites {"name":"Summit Roofing","domain":"summitroofing.test"}`
+2. **Create the website** — `POST /api/websites {"name":"Meridian Wealth","domain":"meridianwealth.test"}`
    → a website object whose **`id`** (a UUID) is captured and written to `.env` as `WEBSITE_ID`.
    `seed.py` looks the site up by name first, so re-runs reuse the same id (idempotent).
 
@@ -65,13 +65,13 @@ genuine traffic. A couple of `/api/send` calls are also fired so the public inge
 exercised end-to-end. The seed is deterministic (fixed RNG) and clears prior rows for the site
 first, so it's safe to re-run.
 
-Seeded mix (~60 pageviews / 37 sessions across 4 roofing lead channels):
+Seeded mix (~60 pageviews / 37 sessions across 4 wealth-management lead channels):
 
 | Channel | utm_source | utm_medium | referrer |
 |---------|-----------|-----------|----------|
 | Google Ads | `google` | `cpc` | google.com |
-| Facebook | `facebook` | `cpc` | facebook.com |
-| Yard sign QR | `yardsign-qr` | `referral` | yardsign-qr.test |
+| LinkedIn | `linkedin` | `cpc` | linkedin.com |
+| Seminar QR | `seminar-qr` | `referral` | seminar-qr.test |
 | Organic / Direct | — | `organic` | (none) |
 
 ### Reading attribution back (Umami metric types)
@@ -99,7 +99,7 @@ cd apps/growth-engine
 # 1. Seed Umami (idempotent — safe to re-run; writes .env with the website id)
 python3 seed.py
 #   → SEED_OK website_id=<uuid> sessions=36 events=58 conversions=12
-#       channels[Facebook=4 Google Ads=11 Organic / Direct=14 Yard sign QR=7] public_ingest=ok
+#       channels[Google Ads=11 LinkedIn=4 Organic / Direct=14 Seminar QR=7] public_ingest=ok
 
 # 2. Install deps + run the service
 pip install -r requirements.txt          # add --break-system-packages on PEP-668 hosts
@@ -120,7 +120,7 @@ docker run --rm -p 8205:8205 \
 | Var | Default | Meaning |
 |-----|---------|---------|
 | `UMAMI_URL` | `http://localhost:3002` | Umami REST base (`/api/...`). |
-| `WEBSITE_ID` | _(from .env)_ | The Summit Roofing website id captured by the seed. |
+| `WEBSITE_ID` | _(from .env)_ | The Meridian Wealth website id captured by the seed. |
 | `UMAMI_ADMIN_USER` / `UMAMI_ADMIN_PASS` | `admin` / `umami` | Login used to mint a bearer token. |
 | `UMAMI_FRONT_URL` | `http://localhost:3002` | Umami UI link for the "Open in Umami ↗" button (the human-operable path). |
 | `PORT` | `8205` | uvicorn bind port. |
@@ -133,8 +133,8 @@ docker run --rm -p 8205:8205 \
   attribution (real referrer / UTM), a conversion funnel, and a per-channel table with
   spend / CPL / ROAS — all derived from Umami REST. Cached 15s.
 - `GET /` → the MD3 growth dashboard rendered from the live data: KPI tiles, a lead-source
-  attribution bar breakdown, a lead-to-job conversion funnel, and a channel table with
-  spend / CPL / ROAS columns. Header shows "Summit Roofing Co.", a green
+  attribution bar breakdown, a lead-to-client conversion funnel, and a channel table with
+  spend / CPL / ROAS columns. Header shows "Meridian Wealth Management", a green
   "agent active · core: Umami connected" pill, a "data: live from Umami" badge, and an
   **"Open in Umami ↗"** button (→ `http://localhost:3002`). An approval banner appears
   recommending a budget shift between paid channels.

@@ -39,13 +39,13 @@ def _dataset(sql: str):
             [[38, 25000.0, 62, 90000.0]]
     if "ORDER BY margin_pct DESC" in sql:         # _q_margin_by_service
         return _cols(["service_line", "revenue", "margin_pct"]), \
-            [["Roof Replacement", 120000.0, 42], ["Repair", 40000.0, 30]]
+            [["Portfolio Management", 120000.0, 42], ["Financial Planning", 40000.0, 30]]
     if "AS month" in sql and "AS jobs" in sql and "AS revenue" in sql:  # _q_revenue_by_month
         return _cols(["month", "jobs", "revenue"]), \
             [["2026-06", 10, 50000.0], ["2026-07", 12, 60000.0]]
     if "service_type AS service_line" in sql:     # _q_revenue_by_service
         return _cols(["service_line", "jobs", "revenue"]), \
-            [["Roof Replacement", 20, 120000.0], ["Repair", 15, 40000.0]]
+            [["Portfolio Management", 20, 120000.0], ["Financial Planning", 15, 40000.0]]
     return _cols([]), []
 
 
@@ -139,7 +139,7 @@ def test_invoke_ask_routes_to_template_and_queries(client):
     # deterministic keyword routing (no LLM in the operator path) picked the margin template,
     assert r["matched_report"] == "margin_by_service"
     assert r["chart"] == "bar" and r["rows"]
-    assert r["answer"].startswith("Top service line: Roof Replacement")
+    assert r["answer"].startswith("Top service line: Portfolio Management")
     # and only the pre-written template SQL ran (never model-authored SQL).
     assert _FakeMetabase.dataset_posts == [core._q_margin_by_service()]
 

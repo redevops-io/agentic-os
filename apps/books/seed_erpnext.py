@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Idempotent in-container seeder for the Summit Roofing Co. books on ERPNext (v15/16).
+"""Idempotent in-container seeder for the Meridian Wealth Management books on ERPNext (v15/16).
 
 Run INSIDE the running ERPNext backend container via `bench --site frontend console`:
 
@@ -12,7 +12,7 @@ seed.py (the host wrapper) does exactly that and captures the SEED_OK line.
 
 What it creates (idempotently — safe to re-run; nothing duplicates):
   * Fiscal Year 2026 (Jan–Dec) if missing.
-  * Company "Summit Roofing Co." (builds the standard Chart of Accounts).
+  * Company "Meridian Wealth Management" (builds the standard Chart of Accounts).
   * Modes of payment + a company Bank + Bank Account (Operating).
   * 5 Customers, 4 Suppliers, an Item.
   * ~7 Sales Invoices (some paid -> A/R), revenue MTD ~$148k.
@@ -45,7 +45,7 @@ if not getattr(frappe.local, "site", None):
 
 from frappe.utils import nowdate, getdate, add_days
 
-COMPANY = "Summit Roofing Co."
+COMPANY = "Meridian Wealth Management"
 ABBR = "SRC"
 CURRENCY = "USD"
 TODAY = getdate(nowdate())
@@ -174,7 +174,7 @@ def income_account():
 
 
 def ensure_bank_account():
-    bank_name = "Summit Operating Bank"
+    bank_name = "Meridian Operating Bank"
     if not frappe.db.exists("Bank", bank_name):
         frappe.get_doc({"doctype": "Bank", "bank_name": bank_name}).insert(ignore_permissions=True)
     # a balance-sheet bank GL account
@@ -216,11 +216,11 @@ def ensure_supplier(name, group=None):
 
 
 def ensure_item():
-    code = "ROOF-SERVICE"
+    code = "ADVISORY-FEE"
     if not frappe.db.exists("Item", code):
         ig = "Services" if frappe.db.exists("Item Group", "Services") else "All Item Groups"
         frappe.get_doc({
-            "doctype": "Item", "item_code": code, "item_name": "Roofing Service",
+            "doctype": "Item", "item_code": code, "item_name": "Advisory Fee",
             "item_group": ig, "is_stock_item": 0, "is_sales_item": 1, "is_purchase_item": 1,
             "stock_uom": "Unit" if frappe.db.exists("UOM", "Unit") else "Nos",
         }).insert(ignore_permissions=True)
@@ -228,7 +228,7 @@ def ensure_item():
 
 
 # A stable tag in the remarks lets us find + skip our own docs on re-run (idempotency).
-TAG = "SEED:SummitBooks"
+TAG = "SEED:MeridianBooks"
 
 
 # The text field that carries our TAG differs per doctype.
@@ -249,13 +249,13 @@ def find_tagged(doctype):
 def seed_sales_invoices(item):
     # (customer, total, days_ago, paid?)  -> revenue MTD ~ $148.2k
     plan = [
-        ("Henderson Commercial Properties", 42200, 8, True),
-        ("Maple Street HOA", 18600, 6, True),
-        ("Cedar Ridge Apartments", 28400, 5, False),   # outstanding A/R
-        ("Lakeview Office Park", 21800, 4, True),
-        ("Northgate Retail LLC", 14200, 3, False),      # outstanding A/R
-        ("Henderson Commercial Properties", 12900, 2, False),  # outstanding A/R
-        ("Maple Street HOA", 10100, 1, True),
+        ("Whitfield Family Trust", 42200, 8, True),
+        ("Okonkwo Holdings", 18600, 6, True),
+        ("Delgado Retirement", 28400, 5, False),   # outstanding A/R
+        ("Nakamura Foundation", 21800, 4, True),
+        ("Petrov Family Office", 14200, 3, False),      # outstanding A/R
+        ("Whitfield Family Trust", 12900, 2, False),  # outstanding A/R
+        ("Okonkwo Holdings", 10100, 1, True),
     ]
     existing = find_tagged("Sales Invoice")
     made = 0
@@ -284,12 +284,12 @@ def seed_sales_invoices(item):
 
 
 def seed_purchase_invoices(item):
-    # materials ~ $52k across suppliers; one payroll-service vendor too
+    # vendor spend ~ $52k across custodians/data/compliance; one payroll-service vendor too
     plan = [
-        ("ABC Building Supply", 24500, 7, "materials"),
-        ("Metro Metal Roofing", 16800, 5, "materials"),
-        ("Felt & Underlayment Co", 10900, 3, "materials"),
-        ("FastEquip Rentals", 6400, 2, "overhead"),
+        ("Bloomberg Data Services", 24500, 7, "materials"),
+        ("Schwab Custody Services", 16800, 5, "materials"),
+        ("ACA Compliance Group", 10900, 3, "materials"),
+        ("Redtail CRM", 6400, 2, "overhead"),
     ]
     existing = find_tagged("Purchase Invoice")
     made = 0
@@ -313,7 +313,7 @@ def seed_purchase_invoices(item):
         pi.insert(ignore_permissions=True)
         pi.submit()
         made += 1
-    log(f"purchase invoices: +{made} (materials/overhead target ~$58k)")
+    log(f"purchase invoices: +{made} (vendor/overhead target ~$58k)")
 
 
 def pay_invoice(inv_doc, dtype, party, amount, posting):
@@ -346,10 +346,10 @@ def seed_journal_entries():
     made = 0
     # Payroll accrual ~$61k (debit payroll expense, credit a payable/wages account)
     entries = [
-        ("Payroll accrual — 12 crew + office (June)", 61000,
+        ("Payroll accrual — 12 advisors + office (June)", 61000,
          acc("Salary") or acc("Payroll") or acc("Indirect Expenses"),
          acc("Payroll Payable") or acc("Accounts Payable") or acc("Duties and Taxes")),
-        ("Depreciation — trucks & equipment (June)", 2100,
+        ("Depreciation — office equipment & software (June)", 2100,
          acc("Depreciation"), acc("Accumulated Depreciation") or acc("Plant and Machinery")),
     ]
     for i, (title, amt, dr, cr) in enumerate(entries, 1):
@@ -379,11 +379,11 @@ def seed_bank_transactions(bank_account):
     # Unreconciled/uncategorized deposits + withdrawals -> "uncategorized queue".
     # We DON'T set bank_party_* or allocate to a payment, so they stay unmatched.
     plan = [
-        ("Deposit — ACH SUMMIT CEDAR RIDGE", 28400, 0),
-        ("Deposit — CHECK 10482 NORTHGATE", 14200, 0),
-        ("Deposit — ZELLE HENDERSON 12900", 12900, 0),
-        ("POS DEBIT — HOME DEPOT #4471", 0, 1840),
-        ("ACH DEBIT — FUEL CARD WEX", 0, 920),
+        ("Deposit — ACH DELGADO RETIREMENT", 28400, 0),
+        ("Deposit — CHECK 10482 PETROV", 14200, 0),
+        ("Deposit — ZELLE WHITFIELD 12900", 12900, 0),
+        ("CARD — AWS CLOUD #4471", 0, 1840),
+        ("ACH DEBIT — MARKET DATA WEX", 0, 920),
         ("CHECK 2231 — INSURANCE PREMIUM", 0, 3100),
         ("CARD — OFFICE SUPPLIES STAPLES", 0, 410),
     ]

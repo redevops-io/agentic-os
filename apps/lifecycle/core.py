@@ -36,7 +36,7 @@ LISTMONK_API_URL = os.environ.get("LISTMONK_API_URL", "http://localhost:9000").r
 LISTMONK_API_USER = os.environ.get("LISTMONK_API_USER", "agentic")
 LISTMONK_API_TOKEN = os.environ.get("LISTMONK_API_TOKEN", "")
 LISTMONK_FRONT_URL = os.environ.get("LISTMONK_FRONT_URL", "http://localhost:9000").rstrip("/")
-TENANT = os.environ.get("LIFECYCLE_TENANT", "Summit Roofing Co.")
+TENANT = os.environ.get("LIFECYCLE_TENANT", "Meridian Wealth Management")
 SUBTITLE = ("Lifecycle email/SMS that composes campaigns, proposes segments, and drafts flows "
             "on a self-hosted Listmonk core — a human reviews + sends; nothing auto-blasts a list.")
 

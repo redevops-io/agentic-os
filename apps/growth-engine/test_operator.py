@@ -28,7 +28,7 @@ from agentic_os.mission.operators import HTTPOperatorClient
 
 # ── a fake Umami core (two paid sources → a real shift recommendation) ────────
 STATS = {"pageviews": 1000, "visitors": 400, "visits": 500, "bounces": 150}
-UTM_SOURCES = [{"x": "google", "y": 120}, {"x": "facebook", "y": 80}]
+UTM_SOURCES = [{"x": "google", "y": 120}, {"x": "linkedin", "y": 80}]
 
 
 class _Resp:
@@ -110,7 +110,7 @@ def test_invoke_analyze_reads_umami(client):
     assert res["status"] == "done" and res["action"] == "analyze"
     # attribution computed from the REAL core over the fake Umami traffic
     labels = {f["channel"] for f in res["findings"]}
-    assert "Google Ads" in labels and "Facebook" in labels
+    assert "Google Ads" in labels and "LinkedIn" in labels
     # two paid channels with different ROAS → a concrete shift recommendation
     assert res["recommendation"] and "reallocate_budget" in res["recommendation"]
     assert "Umami" in res["source"]
@@ -121,12 +121,12 @@ def test_invoke_analyze_reads_umami(client):
 def test_invoke_reallocate_budget_stages(client):
     r = client.post("/invoke", json={
         "capability": "growth.reallocate_budget",
-        "inputs": {"from": "facebook", "to": "google", "amount": 600},
+        "inputs": {"from": "linkedin", "to": "google", "amount": 600},
     }).json()
     res = r["result"]
     assert res["status"] == "pending_approval" and res["action"] == "reallocate_budget"
     assert res["approval_required"] == "budget_change"
-    assert res["from"] == "facebook" and res["to"] == "google" and res["amount"] == 600
+    assert res["from"] == "linkedin" and res["to"] == "google" and res["amount"] == 600
     # staging is pure: it touches NO Umami endpoint (ad spend lives in the Ads platform)
     assert _FakeUmami.gets == [] and _FakeUmami.posts == []
 
@@ -146,7 +146,7 @@ def test_idempotency_dedupes_side_effect(client, monkeypatch):
     c = TestClient(app)
 
     body = {"capability": "growth.reallocate_budget",
-            "inputs": {"from": "facebook", "to": "google", "amount": 600},
+            "inputs": {"from": "linkedin", "to": "google", "amount": 600},
             "idempotency_key": "k-1"}
     first = c.post("/invoke", json=body).json()["result"]
     second = c.post("/invoke", json=body).json()["result"]
@@ -164,5 +164,5 @@ def test_mission_runtime_httpclient_drives_operator(client):
     assert res["status"] == "done" and res["action"] == "analyze"
 
     staged = oc.invoke("growth-engine", "growth.reallocate_budget",
-                       {"from": "facebook", "to": "google", "amount": 600}, idempotency_key="m-2")
+                       {"from": "linkedin", "to": "google", "amount": 600}, idempotency_key="m-2")
     assert staged["status"] == "pending_approval" and staged["approval_required"] == "budget_change"

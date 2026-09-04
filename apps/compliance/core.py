@@ -50,21 +50,22 @@ CONSENT_LEDGER = Path(os.environ.get("COMPLIANCE_CONSENT_LEDGER", str(HERE / "ev
 
 XCCDF = "{http://checklists.nist.gov/xccdf/1.2}"
 
-TENANT = "Summit Roofing Co."
+TENANT = "Meridian Wealth Management"
 SUBTITLE = (
     "Continuous control monitoring on a real OpenSCAP core — CIS Ubuntu benchmark "
-    "scanned on Summit's server, with a human in the loop before any fix is applied."
+    "scanned on Meridian's server, with a human in the loop before any fix is applied."
 )
 # The framework the scanned profile maps to (shown as the primary framework card).
 FRAMEWORK = "CIS Ubuntu Linux 22.04 LTS — Level 1 Server"
 
-# SME compliance items layered in for the roofing context (license / insurance expiry).
+# SME compliance items layered in for the wealth-management (RIA) context
+# (regulatory registration / insurance expiry).
 # These sit alongside the REAL OpenSCAP technical controls in the failing/expiring queue.
 SME_ITEMS = [
-    {"item": "State contractor license", "kind": "license", "status": "ACTIVE", "expires": "2027-03-01"},
-    {"item": "General Liability insurance", "kind": "insurance", "status": "ACTIVE", "expires": "2026-09-08"},
-    {"item": "Workers' Comp insurance", "kind": "insurance", "status": "ACTIVE", "expires": "2026-12-15"},
-    {"item": "Commercial auto policy", "kind": "insurance", "status": "ACTIVE", "expires": "2027-01-20"},
+    {"item": "State RIA registration", "kind": "license", "status": "ACTIVE", "expires": "2027-03-01"},
+    {"item": "Errors & Omissions insurance", "kind": "insurance", "status": "ACTIVE", "expires": "2026-09-08"},
+    {"item": "Cyber liability insurance", "kind": "insurance", "status": "ACTIVE", "expires": "2026-12-15"},
+    {"item": "Fidelity bond", "kind": "insurance", "status": "ACTIVE", "expires": "2027-01-20"},
 ]
 
 
@@ -305,7 +306,7 @@ def explain(body: dict, blurb: Callable[[str], str | None] | None = None) -> dic
     )
 
     reasoning = blurb(
-        "You are a compliance engineer for a roofing contractor's IT. In 3-4 plain-English "
+        "You are a compliance engineer for a wealth-management firm's IT. In 3-4 plain-English "
         "sentences (no jargon, no preamble), explain this failing CIS server control to the "
         f"owner and how to fix it. Title: {meta['title']}. Description: {meta['description']}. "
         f"Rationale: {meta['rationale']}. Remediation: {meta['fix']}"

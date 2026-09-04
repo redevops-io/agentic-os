@@ -60,7 +60,7 @@ Usage: page bg `--surface`; section bands `--surface-container-low`; default car
 - Section header: small uppercase `.label-m` in `--primary` + thin divider, then the grid band.
 
 ## (C) Per-category layout (top→bottom)
-Each module dashboard: header (module name + "Summit Roofing Co." tenant + green "agent active" pill) → KPI summary row (4-6 tiles) → mid trends/breakdowns → bottom detail table/queue. Approval-gated modules show the `.banner` directly under the header.
+Each module dashboard: header (module name + "Meridian Wealth Management" tenant + green "agent active" pill) → KPI summary row (4-6 tiles) → mid trends/breakdowns → bottom detail table/queue. Approval-gated modules show the `.banner` directly under the header.
 1. **agentic-billing** (Stripe-style): KPIs collected/MRR · outstanding · success rate · active jobs. Mid: gross-volume sparkline + collected-vs-failed bars. Bottom: invoice table (status pills) + overdue queue.
 2. **agentic-books** (QuickBooks/Xero): KPIs cash position · net income · A/R · A/P. Mid: P&L summary (income/expense/net bars) + cash trend. Bottom: uncategorized-txn queue + month-end close checklist with progress bar.
 3. **agentic-support** (Zendesk/Intercom): KPIs open tickets · first-response vs SLA · resolution · CSAT. Mid: SLA pills + channel breakdown bars. Bottom: ticket queue table (priority pill, age, SLA countdown).

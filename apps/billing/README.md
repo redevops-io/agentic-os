@@ -18,7 +18,7 @@ pattern every other module copies. It wraps the running self-hosted **Lago** ins
 - an **agent layer** that reads REAL Lago data over its REST API, and
 - an **MD3 dashboard** rendered from that live data (no mock data),
 
-for the demo tenant **Summit Roofing Co.** (a roofing contractor).
+for the demo tenant **Meridian Wealth Management** (a wealth-management firm / RIA).
 
 ```
 Lago (OSS core, :3000) ──REST──▶ app.py (FastAPI, :8201) ──▶ MD3 dashboard + /api/activity + /agent/run
@@ -62,7 +62,7 @@ Key facts for Lago **v1.48** (discovered by inspecting the running models):
   to `.env`; or query directly:
   ```bash
   sudo docker exec lago-api bundle exec rails runner \
-    'puts Organization.find_by(name: "Summit Roofing Co.").api_keys.first.value'
+    'puts Organization.find_by(name: "Meridian Wealth Management").api_keys.first.value'
   ```
 - Invoice state is three fields: `status` (draft/finalized/voided…), `payment_status`
   (pending/succeeded/failed), and the `payment_overdue` boolean.
@@ -107,7 +107,7 @@ docker run --rm -p 8201:8201 \
 - `GET /api/activity` → live KPIs (collected MTD, outstanding, payment-success %, active
   customers) + recent invoices + overdue list, all derived from Lago REST. Cached 15s.
 - `GET /` → the MD3 billing dashboard rendered from the live data. Header shows
-  "Summit Roofing Co.", a green "agent active · core: Lago connected" pill, a
+  "Meridian Wealth Management", a green "agent active · core: Lago connected" pill, a
   "data: live from Lago" badge, and an "Open in Lago ↗" button. An approval banner
   appears whenever there's an overdue invoice.
 - `POST /agent/run` with `{"action": ...}`:

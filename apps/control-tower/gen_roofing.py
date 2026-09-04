@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Generate a realistic Summit Roofing Co. dataset as roofing.sql (Postgres).
+"""Generate a realistic Meridian Wealth Management dataset as roofing.sql (Postgres).
 
-Deterministic (seeded), current through TODAY, with roofing-real seasonality (spring/summer
-peak, winter trough, two storm spikes), a service mix with distinct margins, lead sources with
-distinct conversion + margin, regions, crews, and an invoices table for AR aging. Loaded into the
-control-tower-db Postgres on first boot (docker-entrypoint-initdb.d) and queried live by Metabase.
+Deterministic (seeded), current through TODAY, with wealth-management seasonality (mid-year
+reviews + year-end/tax-season peaks, summer trough, two market-event spikes), a service-line mix
+with distinct margins, referral sources with distinct conversion + margin, market regions,
+advisors, and an invoices table for advisory-fee AR aging. Loaded into the control-tower-db
+Postgres on first boot (docker-entrypoint-initdb.d) and queried live by Metabase.
 
     python3 gen_roofing.py > roofing.sql
 """
@@ -18,38 +19,38 @@ TODAY = date(2026, 7, 4)
 START = date(2024, 8, 1)                     # ~23 months of history
 
 REGIONS = ["North Metro", "West Suburbs", "Downtown", "East County", "Lakeside"]
-CREWS = ["Crew A", "Crew B", "Crew C", "Crew D"]
-# lead source -> (share of quotes, win-rate, margin multiplier). Storm chases high volume/low margin;
-# referrals & repeat customers convert best and hold margin.
+CREWS = ["Alex Rivera", "Jordan Chen", "Priya Nair", "Sam Okafor"]
+# referral source -> (share of proposals, win-rate, margin multiplier). Seminars/events chase high
+# volume/low margin; client referrals & existing clients convert best and hold margin.
 LEAD_SOURCES = {
-    "Referral":       (0.24, 0.58, 1.08),
-    "Repeat Customer":(0.14, 0.70, 1.12),
-    "Google Ads":     (0.22, 0.40, 0.96),
-    "Storm Response": (0.20, 0.52, 0.90),
-    "Nextdoor":       (0.10, 0.46, 1.00),
-    "Home Show":      (0.10, 0.44, 1.02),
+    "Referral":        (0.24, 0.58, 1.08),
+    "Existing Client": (0.14, 0.70, 1.12),
+    "Search / SEM":    (0.22, 0.40, 0.96),
+    "Seminar / Event": (0.20, 0.52, 0.90),
+    "LinkedIn":        (0.10, 0.46, 1.00),
+    "Webinar":         (0.10, 0.44, 1.02),
 }
-# service -> (share, price range, material%, labor%). Margin = 1 - material% - labor%.
+# service line -> (share, fee range, platform%, servicing%). Margin = 1 - platform% - servicing%.
 SERVICES = {
-    "Roof Replacement": (0.34, (8000, 28000), 0.40, 0.30),
-    "Storm Damage":     (0.18, (6000, 34000), 0.42, 0.29),
-    "Roof Repair":      (0.24, (450, 3800),   0.30, 0.34),
-    "Gutter Install":   (0.12, (700, 4200),   0.38, 0.30),
-    "Skylight":         (0.06, (1400, 5200),  0.44, 0.28),
-    "Inspection":       (0.06, (0, 450),      0.05, 0.60),   # loss-leader / lead-gen
+    "Portfolio Management":  (0.34, (8000, 28000), 0.40, 0.30),
+    "Tax-Loss Harvesting":   (0.18, (6000, 34000), 0.42, 0.29),
+    "Financial Planning":    (0.24, (450, 3800),   0.30, 0.34),
+    "Retirement Planning":   (0.12, (700, 4200),   0.38, 0.30),
+    "Estate Planning":       (0.06, (1400, 5200),  0.44, 0.28),
+    "Account Review":        (0.06, (0, 450),      0.05, 0.60),   # loss-leader / lead-gen
 }
-# month -> demand weight (1=Jan). Roofing peaks Apr-Sep; Nov-Feb slow.
+# month -> demand weight (1=Jan). Demo seasonality: mid-year reviews + year-end/tax-season busy.
 SEASON = {1: 0.55, 2: 0.60, 3: 0.85, 4: 1.15, 5: 1.30, 6: 1.35,
           7: 1.30, 8: 1.20, 9: 1.10, 10: 0.95, 11: 0.70, 12: 0.55}
-# storm spikes (extra Storm Response volume) in these year-months
+# market-volatility events (extra tax-loss-harvesting / event-driven volume) in these year-months
 STORMS = {(2025, 5), (2025, 6), (2026, 4)}
 
-FIRST = ["James", "Mary", "Robert", "Patricia", "John", "Jennifer", "Michael", "Linda", "David",
-         "Barbara", "William", "Susan", "Richard", "Karen", "Joseph", "Nancy", "Tom", "Lisa",
-         "Dan", "Betty", "Paul", "Sandra", "Mark", "Ashley", "Greg", "Donna", "Kyle", "Carol"]
-LAST = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez",
-        "Martinez", "Hernandez", "Lopez", "Wilson", "Anderson", "Thomas", "Taylor", "Moore", "Jackson",
-        "Martin", "Lee", "Perez", "Thompson", "White", "Harris", "Sanchez", "Clark", "Nguyen", "Hill"]
+# client households read as trusts / family offices / retirement accounts (RIA-style names).
+LAST = ["Whitfield", "Okonkwo", "Delgado", "Nakamura", "Petrov", "Haddad", "Lindqvist", "Sterling",
+        "Ashford", "Calderon", "Berenson", "Montoya", "Sinclair", "Halloran", "Rosenthal", "Vance",
+        "Kingsley", "Emerson", "Fairbanks", "Whitmore", "Castellano", "Bhattacharya", "Kowalski",
+        "Ferreira", "Larsson", "Abernathy", "Chatterjee", "Winslow"]
+CLIENT_SUFFIX = ["Family Trust", "Holdings", "Retirement", "Foundation", "Family Office", "Trust"]
 
 
 def weighted(d):
@@ -72,7 +73,7 @@ cust_id = job_id = inv_id = 0
 customer_pool: list[int] = []
 
 for (y, m) in month_iter(START, TODAY):
-    base = 44 * SEASON[m]                                # quotes this month
+    base = 44 * SEASON[m]                                # proposals this month
     if (y, m) in STORMS:
         base *= 1.7
     n_quotes = max(3, int(random.gauss(base, base * 0.15)))
@@ -81,23 +82,23 @@ for (y, m) in month_iter(START, TODAY):
         quote_date = date(y, m, day)
         if quote_date > TODAY:
             continue
-        # customer: ~30% repeat from the pool, else new
+        # client: ~30% existing from the pool, else new
         if customer_pool and random.random() < 0.30:
             c_id = random.choice(customer_pool)
-            lead = "Repeat Customer"
+            lead = "Existing Client"
         else:
             cust_id += 1
             c_id = cust_id
-            name = f"{random.choice(FIRST)} {random.choice(LAST)}"
+            name = f"{random.choice(LAST)} {random.choice(CLIENT_SUFFIX)}"
             region = random.choice(REGIONS)
-            seg = random.choices(["Residential", "Commercial", "Property Mgmt"],
+            seg = random.choices(["Mass Affluent", "High Net Worth", "Institutional"],
                                  weights=[0.72, 0.16, 0.12])[0]
             rows_customers.append((c_id, name, region, seg, quote_date))
             customer_pool.append(c_id)
             lead = weighted(LEAD_SOURCES)
-        # storms push Storm Response leads/services
+        # market events push event-driven referral sources / tax-loss-harvesting engagements
         if (y, m) in STORMS and random.random() < 0.5:
-            lead, service = "Storm Response", "Storm Damage"
+            lead, service = "Seminar / Event", "Tax-Loss Harvesting"
         else:
             service = weighted(SERVICES)
         region = random.choice(REGIONS)
@@ -107,7 +108,7 @@ for (y, m) in month_iter(START, TODAY):
         _, win, margin_mult = LEAD_SOURCES[lead]
         won = random.random() < win
         job_id += 1
-        # material/labor with a little noise; margin scaled by lead-source quality
+        # platform/servicing cost with a little noise; margin scaled by referral-source quality
         mat = round(quoted * mat_pct * random.uniform(0.92, 1.08), 2)
         lab = round(quoted * lab_pct * random.uniform(0.92, 1.08) / max(0.6, margin_mult), 2)
         if not won:
@@ -175,7 +176,7 @@ def emit(table, cols, rows):
         print(vals + ";")
 
 
-print("-- Summit Roofing Co. — generated by gen_roofing.py (deterministic). DO NOT EDIT BY HAND.")
+print("-- Meridian Wealth Management — generated by gen_roofing.py (deterministic). DO NOT EDIT BY HAND.")
 print("""
 DROP TABLE IF EXISTS invoices CASCADE;
 DROP TABLE IF EXISTS jobs CASCADE;

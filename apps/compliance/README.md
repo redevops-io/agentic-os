@@ -12,7 +12,7 @@
 # agentic-compliance — agent layer + dashboard over a real OpenSCAP core
 
 A sibling of [`apps/billing`](../billing/) (the reference pattern), built for the demo
-tenant **Summit Roofing Co.** Instead of wrapping a long-running server, the "core" here
+tenant **Meridian Wealth Management** Instead of wrapping a long-running server, the "core" here
 is the self-contained **OpenSCAP** scanner (`oscap`): it produces **REAL** XCCDF results
 (rule id, title, pass/fail/notapplicable, severity) from a **CIS Ubuntu 22.04 LTS Level 1
 - Server** benchmark, and the agent monitors / explains / stages remediations on them —
@@ -42,8 +42,8 @@ OpenSCAP (oscap + CIS SSG datastream)        app.py (FastAPI, :8208)
   - Ensure All World-Writable Directories Are Group-Owned (`file_permissions_ungroupowned`)
   - Verify permissions of log files (`permissions_local_var_log`)
 - The dashboard parses that file directly — **no mock data**. A couple of SME compliance
-  items (contractor license / insurance expiry) are layered in for the roofing context
-  and appear in the failing/expiring queue (e.g. General Liability insurance expiring).
+  items (regulatory registration / insurance expiry) are layered in for the wealth-management context
+  and appear in the failing/expiring queue (e.g. Errors & Omissions insurance expiring).
 
 ## Files
 
@@ -106,8 +106,8 @@ sudo docker run --rm \
   SME license/insurance items (with an `expiring` flag). Cached 15s; invalidated on re-scan.
 - `GET /` → the MD3 compliance dashboard (Vanta/Drata style) rendered from the real scan:
   KPI tiles (control pass rate / passing / failing / open findings), a framework-status card
-  with a progress bar, and a failing-&-expiring queue table. Header shows **Summit Roofing
-  Co.**, a green **"agent active · core: OpenSCAP connected"** pill, and an **"Open report ↗"**
+  with a progress bar, and a failing-&-expiring queue table. Header shows **Meridian Wealth
+  Management**, a green **"agent active · core: OpenSCAP connected"** pill, and an **"Open report ↗"**
   button linking to `/report`.
 - `GET /report` → the OpenSCAP-generated HTML report (the real ~2.8 MB `report.html`).
 - `POST /agent/run` with `{"action": ...}`:

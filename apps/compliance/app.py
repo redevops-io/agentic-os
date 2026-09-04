@@ -407,7 +407,7 @@ To READ A SCAN: start from the pass rate, then open the failing queue sorted by 
 
 To REMEDIATE a failed rule: apply its fix (bash or Ansible), then re-run the scan to confirm the rule now passes. Because a fix changes the host's configuration, this agent never applies fixes automatically — it stages the exact remediation and asks for human approval (policy_change) first.
 
-Beyond the technical OpenSCAP controls, this tenant also tracks SME compliance items — the contractor license and insurance policies — which appear in the queue as EXPIRING when they are within 90 days of their renewal date."""
+Beyond the technical OpenSCAP controls, this tenant also tracks SME compliance items — the firm's regulatory registrations and insurance policies — which appear in the queue as EXPIRING when they are within 90 days of their renewal date."""
 
 
 def _t_scan_summary(_a: dict) -> dict:
