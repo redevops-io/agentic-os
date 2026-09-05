@@ -92,3 +92,23 @@ python deploy/launcher/acceptance_check.py --live     # on a target with PAIR + 
 It emits `{acceptance_version, passed, platform, mode, steps{posture, inference_resolution,
 approval, local_ai_install, app_provisioning, first_mission, verification, restart_recovery,
 idempotency}}`.
+
+## Uninstall (Windows & macOS)
+Two layers — the stack, then the launcher app.
+
+**1. Remove the stack** (in the launcher, or by hand):
+- **Uninstall (keep my data)** → `docker compose down --remove-orphans` — removes containers, keeps
+  the data volumes and the on-device keys.
+- **Remove everything** → `docker compose down -v --remove-orphans` — also deletes the data volumes
+  (the UI confirms first). To also remove provisioned credentials + local AI, the governed
+  `agentic_os.mission.uninstall.uninstall(..., remove_data=True, remove_local_ai=True, confirmed=True)`
+  flow tears down modules, deletes the on-device secret files, and runs `PairRunner.uninstall()`.
+
+**2. Remove the launcher app:**
+- **Windows:** `winget uninstall ReDevOps.Launcher` (or Settings → Apps → ReDevOps Launcher → Uninstall).
+- **macOS:** drag **ReDevOps Launcher** from Applications to the Trash; remove leftovers with
+  `rm -rf ~/Library/Application\ Support/io.redevops.launcher` and, if present, the on-device secrets
+  at `~/.redevops/secrets`.
+
+Docker Desktop / WSL2 and any local AI (PAIR/Ollama) are left in place unless you chose the full
+wipe — they're general tools you may use for other things.
