@@ -38,7 +38,13 @@ def build_runtime(registry: CapabilityRegistry, *, operator_client=None, store_p
     client = operator_client or default_operator_client()
     if client is None:
         raise ValueError("no operator client: pass operator_client=, or set MISSION_OPERATOR_BASES")
-    store = EventStore(path=store_path or os.environ.get("MISSION_EVENT_LOG"))
+    # Default stays the zero-dependency in-memory/JSONL store; MISSION_EVENT_BACKEND=duckdb|postgres
+    # selects a durable/shared backend (same surface, so nothing downstream changes).
+    if os.environ.get("MISSION_EVENT_BACKEND"):
+        from .event_backends import open_event_store
+        store = open_event_store(path=store_path)
+    else:
+        store = EventStore(path=store_path or os.environ.get("MISSION_EVENT_LOG"))
     return MissionRuntime(
         registry, Executor(client), store=store,
         planner=planner or default_planner(),
