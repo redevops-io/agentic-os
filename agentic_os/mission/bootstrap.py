@@ -24,7 +24,10 @@ from .device_posture import DeviceFacts, DevicePosture, PostureBlocked, bootstra
 from .governed_install import (
     S_APPROVED, S_AWAITING, execute_install, install_status, request_install,
 )
+from .inference_posture import InferencePosture, Mode, NetworkTrust, derive_inference_posture
 from .installer import Deployer, InstallReceipt, default_has_credential
+from .pair import PairStatus, detect_pair
+from .pair_install import PairInstallProposal, propose_pair_install
 from .provisioning import InstallPlan, Topology, resolve
 from .types import CapabilityManifest
 from .util import Fetch
@@ -45,16 +48,27 @@ class BootstrapResult:
     receipt: Optional[InstallReceipt] = None
     install_id: str = ""
     notices: tuple = ()
+    inference_posture: Optional[InferencePosture] = None
+    #: a governed local-AI (PAIR) install to offer, when the device is capable but has no local AI
+    #: and no cloud creds. The UX approves it separately (propose→approve→execute_pair_install).
+    pair_proposal: Optional[PairInstallProposal] = None
 
     @property
     def ok(self) -> bool:
         return self.status == INSTALLED
 
 
-def _summary_lines(status: str, posture, llm, plan, receipt) -> List[str]:
+def _summary_lines(status: str, posture, llm, plan, receipt, pair_proposal=None) -> List[str]:
     """Plain-language notices for the user, richest-signal first."""
     out: List[str] = []
-    if llm is not None:
+    if pair_proposal is not None:
+        # capable device, no local AI yet, no cloud creds → offer local AI before a cloud signup
+        out.append("This computer can run AI locally — set up local AI to keep prompts on your "
+                   "device (no cloud account).")
+        out.append("  " + pair_proposal.as_notice().replace("\n", "\n  "))
+        if llm is not None and llm.source == "guided":
+            out.append(f"  Or use a cloud provider — {llm.message}")
+    elif llm is not None:
         if llm.source == "pair":
             out.append("✓ Local AI found on your devices — using it (private, on your devices; "
                        "no cloud account needed).")
@@ -85,9 +99,16 @@ def bootstrap(outcome: str, catalog: Iterable[CapabilityManifest], *, store, dep
               prober: Optional[Callable[[], DeviceFacts]] = None,
               env: Optional[Dict[str, str]] = None, fetch: Optional[Fetch] = None,
               has_credential: Callable[[str], bool] = default_has_credential,
+              network_trust: NetworkTrust = NetworkTrust.UNKNOWN, total_memory_mb: int = 0,
+              pair_detect: "Optional[Callable[[], PairStatus]]" = None,
               auto_approve: bool = False) -> BootstrapResult:
     """Run the full one-click bootstrap for one outcome. Never raises for a BLOCKED device —
-    it returns a BLOCKED result carrying the reasons, so the launcher can show them."""
+    it returns a BLOCKED result carrying the reasons, so the launcher can show them.
+
+    When the device has no cloud creds and no running local AI but is *capable* of it, the result
+    carries a governed ``pair_proposal`` (local AI — install PAIR + a model), offered before a
+    cloud signup. The UX approves it separately via pair_install.execute_pair_install.
+    """
     # 1) device trust — records the posture; a BLOCKED device stops here (no install attempted).
     try:
         posture = posture_bootstrap(store, prober=prober)
@@ -98,22 +119,36 @@ def bootstrap(outcome: str, catalog: Iterable[CapabilityManifest], *, store, dep
         return BootstrapResult(status=BLOCKED, posture=posture, llm=llm,
                                notices=tuple(_summary_lines(BLOCKED, posture, llm, None, None)))
 
-    # 2) an LLM for the first steps, even with no creds configured
-    llm = resolve_llm(env)
+    # 2) an LLM for the first steps, even with no creds configured. One PAIR probe is shared with
+    #    the inference posture below so both agree on whether local AI is present.
+    _pd = pair_detect or detect_pair
+    pair_status = _pd()
+    llm = resolve_llm(env, pair_detect=lambda: pair_status)
+
+    # 2b) inference posture — can this device run local AI, and should we offer to set it up?
+    infp = derive_inference_posture(posture.facts, pair=pair_status,
+                                    network_trust=network_trust, total_memory_mb=total_memory_mb)
+    proposal: Optional[PairInstallProposal] = None
+    if llm.source == "guided" and infp.recommended_mode is Mode.INSTALL_LOCAL_PAIR:
+        proposal = propose_pair_install(infp)   # a capable device with no creds → offer local AI
+
+    def _result(status, **kw):
+        notices = kw.pop("notices", None)
+        return BootstrapResult(status=status, posture=posture, llm=llm,
+                               inference_posture=infp, pair_proposal=proposal, notices=notices, **kw)
 
     # 3) resolve the outcome to a posture-gated plan
     plan = resolve(outcome, catalog, posture, topology=topology)
     if not plan.installable:
-        return BootstrapResult(status=BLOCKED, posture=posture, llm=llm, plan=plan,
-                               notices=tuple(_summary_lines(BLOCKED, posture, llm, plan, None)
-                                             + [f"blocked: {cap} — {why}" for cap, why in plan.blocked]))
+        return _result(BLOCKED, plan=plan,
+                       notices=tuple(_summary_lines(BLOCKED, posture, llm, plan, None, proposal)
+                                     + [f"blocked: {cap} — {why}" for cap, why in plan.blocked]))
 
     # 4) governed install — park for approval when the plan needs it
     req = request_install(store, plan)
     if req.status == S_AWAITING and not auto_approve:
-        return BootstrapResult(status=AWAITING_APPROVAL, posture=posture, llm=llm, plan=plan,
-                               install_id=req.install_id,
-                               notices=tuple(_summary_lines(AWAITING_APPROVAL, posture, llm, plan, None)))
+        return _result(AWAITING_APPROVAL, plan=plan, install_id=req.install_id,
+                       notices=tuple(_summary_lines(AWAITING_APPROVAL, posture, llm, plan, None, proposal)))
     if req.status == S_AWAITING and auto_approve:
         from .governed_install import approve_install
         approve_install(store, req.install_id, actor="bootstrap:auto")
@@ -123,9 +158,8 @@ def bootstrap(outcome: str, catalog: Iterable[CapabilityManifest], *, store, dep
                               has_credential=has_credential, provisioners=provisioners,
                               secret_dir=secret_dir)
     status = INSTALLED if receipt.ok else ROLLED_BACK
-    return BootstrapResult(status=status, posture=posture, llm=llm, plan=plan, receipt=receipt,
-                           install_id=req.install_id,
-                           notices=tuple(_summary_lines(status, posture, llm, plan, receipt)))
+    return _result(status, plan=plan, receipt=receipt, install_id=req.install_id,
+                   notices=tuple(_summary_lines(status, posture, llm, plan, receipt, proposal)))
 
 
 def render_summary(result: BootstrapResult) -> str:
