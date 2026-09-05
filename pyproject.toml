@@ -21,6 +21,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+# Durable event-store backends (the event log is also the audit log). Optional: the default
+# store is zero-dependency in-memory/JSONL. See agentic_os.mission.event_backends.
+duckdb = ["duckdb>=1.0"]         # embedded single-file ledger (standalone)
+postgres = ["psycopg[binary]>=3.1"]   # shared ledger for member/hub topology
 
 [project.scripts]
 agentic-os = "agentic_os.cli:main"
