@@ -45,7 +45,7 @@ fi
 qm set "$VMID" --net0 "e1000,bridge=vmbr0" >/dev/null
 # CDs: Win11 (ide2), VirtIO for the guest agent (ide3), autounattend (sata1)
 qm set "$VMID" --sata1 "local:iso/autounattend.iso,media=cdrom" >/dev/null
-qm set "$VMID" --boot "order=ide2;sata0" >/dev/null
+qm set "$VMID" --boot "order=sata0;ide2" >/dev/null
 echo "  VM reconfigured (SATA disk + e1000 + autounattend CD)"
 
 # 4) start + satisfy "Press any key to boot from CD" headlessly via sendkey
