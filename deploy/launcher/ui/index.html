@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ReDevOps</title>
+    <style>
+      :root { color-scheme: light dark; font: 15px/1.5 system-ui, sans-serif; }
+      body { margin: 0; padding: 24px; }
+      h1 { font-size: 18px; margin: 0 0 4px; }
+      p.sub { margin: 0 0 20px; opacity: .7; }
+      button { font: inherit; padding: 10px 16px; margin: 0 8px 8px 0; border-radius: 8px;
+               border: 1px solid rgba(128,128,128,.4); background: transparent; cursor: pointer; }
+      button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+      pre { white-space: pre-wrap; background: rgba(128,128,128,.12); padding: 14px;
+            border-radius: 8px; min-height: 80px; margin-top: 16px; }
+    </style>
+  </head>
+  <body>
+    <h1>ReDevOps</h1>
+    <p class="sub">One-click install for your agent environment.</p>
+    <button id="check">Check this device</button>
+    <button id="start" class="primary">Install / Start</button>
+    <button id="stop">Stop</button>
+    <pre id="out">Click “Check this device” to begin.</pre>
+    <script>
+      // Tauri v2 exposes the Rust commands under window.__TAURI__.core.invoke
+      const invoke = (name) => window.__TAURI__.core.invoke(name);
+      const out = document.getElementById("out");
+      const wrap = (name) => async () => {
+        out.textContent = "Working…";
+        try { out.textContent = await invoke(name); }
+        catch (e) { out.textContent = "Error:\n" + e; }
+      };
+      document.getElementById("check").onclick = wrap("device_report");
+      document.getElementById("start").onclick = wrap("stack_up");
+      document.getElementById("stop").onclick = wrap("stack_down");
+    </script>
+  </body>
+</html>
