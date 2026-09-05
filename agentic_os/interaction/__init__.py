@@ -18,6 +18,16 @@ from .service import HandoffPackage, InteractionService
 from .stubs import StubChannelAdapter, StubSpeechProvider
 from .operator import build_interaction_operator
 from .bridge import open_mission_for_conversation, sealed_intent_from_transcript
+from .harness import (
+    InteractionScenario,
+    KeywordIntentResolver,
+    ScenarioResult,
+    SuiteReport,
+    builtin_scenarios,
+    load_scenarios,
+    run_scenario,
+    run_suite,
+)
 
 __all__ = [
     "ConversationStore",
@@ -28,4 +38,12 @@ __all__ = [
     "build_interaction_operator",
     "open_mission_for_conversation",
     "sealed_intent_from_transcript",
+    "InteractionScenario",
+    "ScenarioResult",
+    "SuiteReport",
+    "KeywordIntentResolver",
+    "run_scenario",
+    "run_suite",
+    "builtin_scenarios",
+    "load_scenarios",
 ]
