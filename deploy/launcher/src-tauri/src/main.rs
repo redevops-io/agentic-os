@@ -44,7 +44,7 @@ fn stack_up() -> Result<String, String> {
         .args(["compose", "up", "-d"]))
 }
 
-/// "Stop" — bring the stack down.
+/// "Stop" — bring the stack down (containers only; data volumes kept).
 #[tauri::command]
 fn stack_down() -> Result<String, String> {
     run(Command::new("docker")
@@ -52,9 +52,26 @@ fn stack_down() -> Result<String, String> {
         .args(["compose", "down"]))
 }
 
+/// "Uninstall" — remove the stack, KEEPING your data (volumes + on-device keys stay).
+#[tauri::command]
+fn stack_uninstall() -> Result<String, String> {
+    run(Command::new("docker")
+        .current_dir(bundle_dir())
+        .args(["compose", "down", "--remove-orphans"]))
+}
+
+/// "Remove everything" — full wipe: also delete the data volumes. Destructive; the UI confirms.
+#[tauri::command]
+fn stack_purge() -> Result<String, String> {
+    run(Command::new("docker")
+        .current_dir(bundle_dir())
+        .args(["compose", "down", "-v", "--remove-orphans"]))
+}
+
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![device_report, stack_up, stack_down])
+        .invoke_handler(tauri::generate_handler![
+            device_report, stack_up, stack_down, stack_uninstall, stack_purge])
         .run(tauri::generate_context!())
         .expect("error while running the ReDevOps launcher");
 }

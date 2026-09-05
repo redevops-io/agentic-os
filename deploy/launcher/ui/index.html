@@ -12,6 +12,7 @@
       button { font: inherit; padding: 10px 16px; margin: 0 8px 8px 0; border-radius: 8px;
                border: 1px solid rgba(128,128,128,.4); background: transparent; cursor: pointer; }
       button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+      button.danger { color: #b91c1c; border-color: rgba(185,28,28,.5); }
       pre { white-space: pre-wrap; background: rgba(128,128,128,.12); padding: 14px;
             border-radius: 8px; min-height: 80px; margin-top: 16px; }
     </style>
@@ -22,6 +23,8 @@
     <button id="check">Check this device</button>
     <button id="start" class="primary">Install / Start</button>
     <button id="stop">Stop</button>
+    <button id="uninstall">Uninstall (keep my data)</button>
+    <button id="purge" class="danger">Remove everything</button>
     <pre id="out">Click “Check this device” to begin.</pre>
     <script>
       // Tauri v2 exposes the Rust commands under window.__TAURI__.core.invoke
@@ -35,6 +38,11 @@
       document.getElementById("check").onclick = wrap("device_report");
       document.getElementById("start").onclick = wrap("stack_up");
       document.getElementById("stop").onclick = wrap("stack_down");
+      document.getElementById("uninstall").onclick = wrap("stack_uninstall");
+      document.getElementById("purge").onclick = async () => {
+        if (!confirm("Remove everything, including your data (volumes)? This cannot be undone.")) return;
+        await wrap("stack_purge")();
+      };
     </script>
   </body>
 </html>
