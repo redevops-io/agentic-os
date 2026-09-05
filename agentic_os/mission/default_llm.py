@@ -60,7 +60,7 @@ _USER_KEY_ENVS = tuple(p.api_key_env for p in REGISTRY) + ("OPENAI_API_KEY",)
 
 @dataclass(frozen=True)
 class LLMChoice:
-    source: str                   # "user_creds" | "local" | "guided"
+    source: str                   # "user_creds" | "pair" | "local" | "guided"
     base_url: str = ""
     model: str = ""
     provider: str = ""
@@ -72,6 +72,12 @@ class LLMChoice:
     alternatives: Tuple[str, ...] = ()   # other provider ids the UX may offer
 
 
+def _detect_pair():
+    """Lazy PAIR probe (kept loosely coupled — imported only when reached)."""
+    from .pair import detect_pair   # noqa: PLC0415
+    return detect_pair()
+
+
 def _default_local_probe(env: Dict[str, str]) -> Optional[str]:
     """Return a reachable local model base URL, or None. Env-only by default (offline/testable);
     a launcher can inject a real reachability check."""
@@ -81,9 +87,12 @@ def _default_local_probe(env: Dict[str, str]) -> Optional[str]:
 
 def resolve_llm(env: Optional[Dict[str, str]] = None, *,
                 local_probe: Optional[Callable[[Dict[str, str]], Optional[str]]] = None,
+                pair_detect: "Optional[Callable[[], object]]" = None,
                 prefer: Tuple[str, ...] = ()) -> LLMChoice:
     """Pick the LLM for the first bootstrap steps. Never returns or embeds a key.
 
+    Order: user credentials → **NVIDIA PAIR** (local inference fabric) → a directly-reachable
+    local model → guided free tier. ``pair_detect``/``local_probe`` are injectable for tests.
     ``prefer`` may reorder the guided recommendation (e.g. the user picked a provider in the UI).
     """
     env = dict(os.environ if env is None else env)
@@ -106,14 +115,25 @@ def resolve_llm(env: Optional[Dict[str, str]] = None, *,
                          model="gpt-4o-mini", provider="openai", api_key_env="OPENAI_API_KEY",
                          message="using your OpenAI credentials")
 
-    # 2) a reachable local model
+    # 2) NVIDIA PAIR — a local inference fabric (this or another home machine's GPU). Loopback-only,
+    #    no key, private. PAIR routes to a node; we just use its OpenAI-compatible endpoint.
+    if env.get("RDO_DISABLE_PAIR") not in ("1", "true"):
+        detect = pair_detect or (lambda: _detect_pair())
+        status = detect()
+        if getattr(status, "available", False):
+            model = status.default_model or env.get("RDO_LOCAL_MODEL", "")
+            return LLMChoice(source="pair", base_url=status.base_url, model=model,
+                             provider="pair",
+                             message="using local AI via NVIDIA PAIR (private, on your devices)")
+
+    # 3) a directly-reachable local model (MODEL_ENDPOINT / raw Ollama, when PAIR isn't present)
     local = probe(env)
     if local:
         return LLMChoice(source="local", base_url=local,
                          model=env.get("MODEL_NAME", env.get("RDO_LOCAL_MODEL", "")),
                          provider="local", message="using the local model on this device")
 
-    # 3) guided free tier — recommend, do not fabricate a key
+    # 4) guided free tier — recommend, do not fabricate a key
     order = [p for pid in prefer for p in (_BY_ID.get(pid),) if p] + \
             [p for p in REGISTRY if p.id not in prefer]
     top = order[0]
