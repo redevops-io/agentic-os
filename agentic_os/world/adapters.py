@@ -180,8 +180,72 @@ class TwentyCrmAdapter(HttpCoreAdapter):
         return self._remember(obj, cid)
 
 
+class ErpNextAdapter(HttpCoreAdapter):
+    """ERPNext (Frappe REST) — the books/finance core. Frappe auth is a token pair sent as
+    ``Authorization: token <api_key>:<api_secret>``, so this adapter needs an api-secret in addition to
+    the base HttpCoreAdapter's key. Idempotency is search-then-create by the doctype's title field
+    (like Twenty), so a re-seed of the same customer/opportunity does not create a duplicate."""
+
+    app = "erpnext"
+    core = "ERPNext"
+    base_env = "ERPNEXT_BASE_URL"
+    token_env = "ERPNEXT_API_KEY"
+    secret_env = "ERPNEXT_API_SECRET"
+    health_path = "/api/resource/Customer?limit_page_length=1"
+
+    # canonical kind -> (Frappe doctype, the title field we search + create by)
+    _DOCTYPE = {
+        "customer": ("Customer", "customer_name"),
+        "opportunity": ("Opportunity", "title"),
+        "invoice": ("Sales Invoice", "title"),
+        "payment": ("Payment Entry", "title"),
+        "expense": ("Expense Claim", "title"),
+        "ledger_entry": ("Journal Entry", "title"),
+    }
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.secret = os.environ.get(self.secret_env, "")
+
+    def available(self) -> bool:
+        # the Frappe token pair is key AND secret; without the secret the call would 401
+        return bool(self.secret) and super().available()
+
+    def _headers(self) -> Dict[str, str]:
+        return {"Authorization": f"token {self.token}:{self.secret}", "Content-Type": "application/json"}
+
+    def _resource(self, doctype: str) -> str:
+        return f"{self.base}/api/resource/{urllib.parse.quote(doctype)}"
+
+    def _find(self, doctype: str, title_field: str, label: str) -> Optional[str]:
+        filters = urllib.parse.quote(json.dumps([[title_field, "=", label]]))
+        try:
+            r = _http_json("GET", f"{self._resource(doctype)}?filters={filters}&limit_page_length=1",
+                           headers=self._headers())
+        except Exception:  # noqa: BLE001 — a failed lookup just falls through to create
+            return None
+        rows = r.get("data") or []
+        return rows[0].get("name") if rows and isinstance(rows[0], dict) else None
+
+    def upsert(self, obj: CanonicalObject) -> str:
+        doctype, title_field = self._DOCTYPE.get(obj.kind, ("Customer", "customer_name"))
+        existing = self._find(doctype, title_field, obj.label)
+        if existing:
+            return self._remember(obj, existing)
+        payload: Dict[str, Any] = {title_field: obj.label}
+        if doctype == "Customer":
+            payload["customer_type"] = "Company"
+        try:
+            r = _http_json("POST", self._resource(doctype), headers=self._headers(), payload=payload)
+        except Exception as e:  # noqa: BLE001
+            raise CoreUnavailable(f"erpnext upsert failed: {type(e).__name__}") from None
+        name = (r.get("data") or {}).get("name") or r.get("name") or obj.native_id(self.app)
+        return self._remember(obj, name)
+
+
 #: real adapters the registry will prefer for an app when the core is configured + reachable.
-REAL_ADAPTERS = {"lago": LagoBillingAdapter, "chatwoot": ChatwootAdapter, "twenty": TwentyCrmAdapter}
+REAL_ADAPTERS = {"lago": LagoBillingAdapter, "chatwoot": ChatwootAdapter, "twenty": TwentyCrmAdapter,
+                 "erpnext": ErpNextAdapter}
 
 
 class AdapterRegistry:

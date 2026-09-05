@@ -25,7 +25,8 @@ import agentic_os.world.adapters as A  # noqa: E402
 SEEDED = RealismClass.SEEDED_DEMO.value
 LIVE = RealismClass.REAL_LIVE.value
 _CORE_ENV = ("LAGO_API_URL", "LAGO_API_KEY", "TWENTY_BASE_URL", "TWENTY_API_KEY",
-             "CHATWOOT_BASE_URL", "CHATWOOT_API_TOKEN")
+             "CHATWOOT_BASE_URL", "CHATWOOT_API_TOKEN",
+             "ERPNEXT_BASE_URL", "ERPNEXT_API_KEY", "ERPNEXT_API_SECRET")
 
 
 def _obj(kind="customer", cid="cust-acme"):
@@ -99,6 +100,87 @@ def test_twenty_adapter_search_then_create_is_idempotent(monkeypatch):
     assert a.upsert(_obj(kind="organization")) == "cmp-9"        # 1st: not found -> create
     assert a.upsert(_obj(kind="organization")) == "cmp-9"        # 2nd: found -> no duplicate create
     assert calls["POST"] == 1                                    # created exactly once (idempotent)
+
+
+def test_erpnext_registered_as_a_real_adapter():
+    assert A.REAL_ADAPTERS["erpnext"] is A.ErpNextAdapter
+
+
+def test_erpnext_needs_base_key_and_secret(monkeypatch):
+    for e in ("ERPNEXT_BASE_URL", "ERPNEXT_API_KEY", "ERPNEXT_API_SECRET"):
+        monkeypatch.delenv(e, raising=False)
+    monkeypatch.setenv("ERPNEXT_BASE_URL", "http://erp"); monkeypatch.setenv("ERPNEXT_API_KEY", "k")
+    # base+key but NO secret -> not available (a Frappe call would 401 without the token pair)
+    assert A.ErpNextAdapter().available() is False
+    monkeypatch.setenv("ERPNEXT_API_SECRET", "s")
+    monkeypatch.setattr(A, "_http_json", lambda *a, **k: {})   # health probe answers
+    assert A.ErpNextAdapter().available() is True
+
+
+def test_erpnext_uses_the_frappe_token_pair_header(monkeypatch):
+    monkeypatch.setenv("ERPNEXT_BASE_URL", "http://erp"); monkeypatch.setenv("ERPNEXT_API_KEY", "K")
+    monkeypatch.setenv("ERPNEXT_API_SECRET", "S")
+    assert A.ErpNextAdapter()._headers()["Authorization"] == "token K:S"
+
+
+def test_erpnext_customer_search_then_create_is_idempotent(monkeypatch):
+    monkeypatch.setenv("ERPNEXT_BASE_URL", "http://erp"); monkeypatch.setenv("ERPNEXT_API_KEY", "k")
+    monkeypatch.setenv("ERPNEXT_API_SECRET", "s")
+    calls = {"GET": 0, "POST": 0}
+    seen = {"created": False}
+
+    def fake(method, url, *, headers, payload=None, timeout=4.0):
+        calls[method] = calls.get(method, 0) + 1
+        if method == "GET":
+            return {"data": ([] if not seen["created"] else [{"name": "CUST-0009"}])}
+        seen["created"] = True                                  # POST creates the Customer
+        return {"data": {"name": "CUST-0009"}}
+
+    monkeypatch.setattr(A, "_http_json", fake)
+    a = A.ErpNextAdapter()
+    assert a.upsert(_obj(kind="customer")) == "CUST-0009"        # 1st: not found -> create
+    assert a.upsert(_obj(kind="customer")) == "CUST-0009"        # 2nd: found -> no duplicate
+    assert calls["POST"] == 1
+    assert a.get("CUST-0009")["entity_id"] == "cust-acme" and a.get("CUST-0009")["projection_realism"] == LIVE
+
+
+def test_erpnext_routes_kind_to_the_right_doctype(monkeypatch):
+    monkeypatch.setenv("ERPNEXT_BASE_URL", "http://erp"); monkeypatch.setenv("ERPNEXT_API_KEY", "k")
+    monkeypatch.setenv("ERPNEXT_API_SECRET", "s")
+    posted = {}
+
+    def fake(method, url, *, headers, payload=None, timeout=4.0):
+        if method == "GET":
+            return {"data": []}
+        posted["url"] = url; posted["payload"] = payload
+        return {"data": {"name": "OPP-1"}}
+
+    monkeypatch.setattr(A, "_http_json", fake)
+    A.ErpNextAdapter().upsert(_obj(kind="opportunity"))
+    assert posted["url"].endswith("/api/resource/Opportunity")   # doctype mapped
+    assert posted["payload"]["title"] == "Acme Inc"              # title field for a non-Customer doctype
+
+
+def test_erpnext_raises_core_unavailable_on_write_failure(monkeypatch):
+    monkeypatch.setenv("ERPNEXT_BASE_URL", "http://erp"); monkeypatch.setenv("ERPNEXT_API_KEY", "k")
+    monkeypatch.setenv("ERPNEXT_API_SECRET", "s")
+
+    def fake(method, url, *, headers, payload=None, timeout=4.0):
+        if method == "GET":
+            return {"data": []}
+        raise OSError("refused")
+
+    monkeypatch.setattr(A, "_http_json", fake)
+    with pytest.raises(CoreUnavailable):
+        A.ErpNextAdapter().upsert(_obj(kind="customer"))
+
+
+def test_registry_uses_erpnext_when_available(monkeypatch):
+    monkeypatch.setenv("ERPNEXT_BASE_URL", "http://erp"); monkeypatch.setenv("ERPNEXT_API_KEY", "k")
+    monkeypatch.setenv("ERPNEXT_API_SECRET", "s")
+    monkeypatch.setattr(A, "_http_json", lambda *a, **k: {"data": []})   # health probe answers
+    a = AdapterRegistry().for_app("erpnext")
+    assert a.name == "erpnext:ERPNext" and a.realism == LIVE
 
 
 def test_allow_real_false_forces_in_memory(monkeypatch):
