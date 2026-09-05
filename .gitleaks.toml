@@ -1,0 +1,22 @@
+# gitleaks configuration for redevops-io/agentic-os.
+#
+# This is an AGPL library that carries NO real credentials. Secrets are pulled from Vault /
+# the CredentialBroker at deploy time and are never committed. The only matches gitleaks can
+# find are FAKE, non-functional fixtures in the test suite (e.g. a stubbed Twenty API key used
+# to prove the installer stores a key on-device without ever logging its value).
+#
+# Convention: fake secrets in tests use an obvious placeholder — a "tok-<app>-" prefix, or a
+# "-DO-NOT-STORE" marker — and are allow-listed here so the history-wide scan stays green
+# without weakening detection of real, high-entropy leaks elsewhere.
+title = "agentic-os secret scan"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fake, non-functional secrets used only in test fixtures."
+regexTarget = "match"
+regexes = [
+  '''tok-twenty-[A-Za-z0-9-]+''',   # fake Twenty CRM keys (tests/test_onboarding.py, test_bootstrap.py)
+  '''[A-Za-z0-9_-]*-DO-NOT-STORE''', # explicit "this is fake" marker convention
+]
