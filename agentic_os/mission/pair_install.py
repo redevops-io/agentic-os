@@ -83,15 +83,18 @@ def propose_pair_install(posture: InferencePosture, *, model: str = DEFAULT_MODE
 
 
 class PairRunner(Protocol):
-    """Executes (and can compensate) the host install steps. Injected — the real one shells out to
-    the PAIR installer / package + Ollama; tests pass a stub."""
+    """The narrow physical contract ReDevOps needs from a local-AI fabric — nothing more. ReDevOps
+    owns the Mission, policy, approval, rollback and provider selection; PAIR owns its own inference
+    fabric. Injected: the real runner shells out to the PAIR installer + Ollama; tests pass a stub.
+    """
 
-    def install_router(self) -> None: ...
-    def ensure_engine(self, engine: str) -> None: ...
-    def pull_model(self, model: str) -> None: ...           # #3 guided model download
-    def verify(self) -> PairStatus: ...
-    def uninstall_router(self) -> None: ...
-    def remove_model(self, model: str) -> None: ...
+    def detect(self) -> PairStatus: ...            # already installed/serving here?
+    def install_pair(self) -> None: ...            # install the router
+    def install_ollama(self) -> None: ...          # install/adopt the engine
+    def ensure_model(self, model: str) -> None: ...  # download the model if absent
+    def start_services(self) -> None: ...          # start router + engine
+    def health(self) -> PairStatus: ...            # endpoint serving + model inventory
+    def uninstall(self) -> None: ...               # rollback everything this runner installed
 
 
 @dataclass
@@ -102,20 +105,24 @@ class StubPairRunner:
     models: Tuple[str, ...] = ("qwen2.5:7b",)
     steps: List[str] = field(default_factory=list)
     undone: List[str] = field(default_factory=list)
+    installed: bool = False       # detect() returns not-installed until we install
 
     def _do(self, step: str):
         self.steps.append(step)
         if step == self.fail_at:
             raise RuntimeError(f"{step} failed")
 
-    def install_router(self): self._do("install_router")
-    def ensure_engine(self, engine): self._do(f"ensure_engine:{engine}")
-    def pull_model(self, model): self._do(f"pull_model:{model}")
-    def verify(self):
-        self._do("verify")
-        return PairStatus(available=True, base_url="http://127.0.0.1:1234/v1", models=self.models)
-    def uninstall_router(self): self.undone.append("uninstall_router")
-    def remove_model(self, model): self.undone.append(f"remove_model:{model}")
+    def _status(self, available: bool) -> PairStatus:
+        return PairStatus(available=available, base_url="http://127.0.0.1:1234/v1",
+                          models=self.models if available else ())
+
+    def detect(self): return self._status(self.installed)
+    def install_pair(self): self._do("install_pair"); self.installed = True
+    def install_ollama(self): self._do("install_ollama")
+    def ensure_model(self, model): self._do(f"ensure_model:{model}")
+    def start_services(self): self._do("start_services")
+    def health(self): self._do("health"); return self._status(True)
+    def uninstall(self): self.undone.append("uninstall"); self.installed = False
 
 
 def request_pair_install(store, proposal: PairInstallProposal, *, install_id: Optional[str] = None):
@@ -147,8 +154,9 @@ def pair_install_status(store, install_id: str) -> str:
 
 def execute_pair_install(store, install_id: str, proposal: PairInstallProposal, *,
                          runner: PairRunner) -> PairStatus:
-    """Run the approved install as a saga: install router → ensure engine → pull model → verify.
-    On any failure, undo completed steps in reverse and record ROLLED_BACK."""
+    """Run the approved install as a saga: install pair → install ollama → ensure model →
+    start services → health. On any failure, roll back (runner.uninstall) and record ROLLED_BACK.
+    ReDevOps owns this ordering/approval/rollback; the runner only performs the physical steps."""
     status = pair_install_status(store, install_id)
     if status == S_COMPLETED:
         raise PairInstallNotApproved(f"{install_id} already completed")
@@ -157,20 +165,21 @@ def execute_pair_install(store, install_id: str, proposal: PairInstallProposal, 
 
     done: List[str] = []
     try:
-        runner.install_router(); done.append("router"); store.append(STEP_DONE, install_id, {"step": "install_router"})
-        runner.ensure_engine("ollama"); done.append("engine"); store.append(STEP_DONE, install_id, {"step": "ensure_engine"})
-        runner.pull_model(proposal.model); done.append("model"); store.append(STEP_DONE, install_id, {"step": "pull_model", "model": proposal.model})
-        result = runner.verify()
+        for step, call in (("install_pair", runner.install_pair),
+                           ("install_ollama", runner.install_ollama),
+                           ("ensure_model", lambda: runner.ensure_model(proposal.model)),
+                           ("start_services", runner.start_services)):
+            call()
+            done.append(step)
+            store.append(STEP_DONE, install_id, {"step": step})
+        result = runner.health()
         if not getattr(result, "available", False):
-            raise RuntimeError("verify: PAIR endpoint not available after install")
+            raise RuntimeError("health: PAIR endpoint not serving after install")
     except Exception as e:
-        # saga compensation — undo in reverse
-        if "model" in done:
-            try: runner.remove_model(proposal.model)
-            except Exception: pass
-        if "router" in done:
-            try: runner.uninstall_router()
-            except Exception: pass
+        try:
+            runner.uninstall()          # single rollback — the runner undoes what it installed
+        except Exception:
+            pass
         store.append(ROLLED_BACK, install_id, {"failed_after": done, "error": type(e).__name__})
         return PairStatus(available=False)
 
