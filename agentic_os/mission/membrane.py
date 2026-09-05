@@ -44,6 +44,7 @@ from runtime_contracts.models import (
     ExecutionEnvelope,
     ExecutionReceipt,
 )
+from .device_posture import DevicePosture, ExecutionClass, admit, PostureDenied
 
 # ── Envelope validation ────────────────────────────────────────────────────────
 
@@ -145,6 +146,11 @@ class LocalContainmentSandbox:
     #: Env vars explicitly allowed through. Default: none — the child inherits no ambient
     #: environment, so process secrets (AWS_SECRET_ACCESS_KEY, …) are invisible to it.
     env_passthrough: tuple = ()
+    #: Optional device posture. When set, the effective constraint is *clamped* to what this
+    #: device permits for :attr:`execution_class` before anything runs — and a class the
+    #: device DENYs is refused outright. None ⇒ unchanged behaviour (host is trusted as-is).
+    posture: "DevicePosture | None" = None
+    execution_class: ExecutionClass = ExecutionClass.LOCAL_CONTAINER
 
     def run_contained(self, operator: str, capability: str, inputs: dict,
                       idempotency_key: str, *, constraint: ExecutionConstraint) -> dict:
@@ -154,7 +160,17 @@ class LocalContainmentSandbox:
         ``SubprocessSandbox``, which adds network namespaces / privilege-drop / secret
         redaction) can *compose* this as its runner — the canonical containment spec is the
         one ``ExecutionConstraint``, enforced here; the wrapper adds policy on top.
+
+        When a :attr:`posture` is present, the requested constraint is narrowed to the
+        device's ceiling for :attr:`execution_class` (deny-by-default: never widened), and a
+        DENY'd class surfaces as a named :class:`ContainmentError` — the posture→containment
+        link, so an install can never exceed the trust its device was granted.
         """
+        if self.posture is not None:
+            try:
+                constraint = admit(self.posture, self.execution_class, constraint)
+            except PostureDenied as e:
+                raise ContainmentError(str(e))
         scrubbed = {k: os.environ[k] for k in self.env_passthrough if k in os.environ}
         scrubbed.setdefault("PATH", "/usr/bin:/bin")
         # Import paths are not secrets — preserve them so the capability resolves, while
