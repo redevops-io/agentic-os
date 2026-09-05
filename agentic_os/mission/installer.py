@@ -111,6 +111,8 @@ class InstallReceipt:
     installed: Tuple[ModuleOutcome, ...]
     skipped: Tuple[str, ...] = ()                  # already-installed modules (from the plan)
     modules_yaml: Dict[str, str] = field(default_factory=dict)   # operator → url for federation
+    provisioned: Tuple[str, ...] = ()              # credentials created + stored on-device
+    notices: Tuple[str, ...] = ()                  # human-facing messages (e.g. where a key is saved)
     contract_version: str = CONTRACT_VERSION
 
     def canonical_form(self) -> Dict[str, object]:
@@ -120,6 +122,8 @@ class InstallReceipt:
             "installed": [o.canonical_form() for o in sorted(self.installed, key=lambda o: o.module)],
             "skipped": sorted(self.skipped),
             "modules_yaml": dict(sorted(self.modules_yaml.items())),
+            "provisioned": sorted(self.provisioned),
+            "notices": sorted(self.notices),
         }
 
     @property
@@ -142,22 +146,51 @@ class InstallReceipt:
 def install(plan: InstallPlan, *, deployer: Deployer, store=None,
             fetch: Optional[Fetch] = None,
             has_credential: Callable[[str], bool] = default_has_credential,
+            provisioners: Optional[Dict[str, object]] = None, secret_dir: Optional[str] = None,
             scope: str = INSTALL_SCOPE, verify_timeout: float = 8.0) -> InstallReceipt:
-    """Execute ``plan``: deploy each to-install module, verify ``/capabilities``, check
-    credentials, register endpoints, and record events. Posture-gated at the door."""
+    """Execute ``plan``: deploy each to-install module, verify ``/capabilities``, resolve
+    credentials, register endpoints, and record events. Posture-gated at the door.
+
+    ``provisioners`` maps a secret name → a :class:`~.onboarding.CredentialProvisioner` that can
+    *create and store* that credential on the device (e.g. the Twenty API key), so a non-technical
+    user doesn't set it up by hand. Each provisioned credential adds a human notice (with its
+    on-device location) to the receipt.
+    """
     require_installable(plan)                       # refuse a plan the device may not run
+    provisioners = provisioners or {}
 
     secrets_by_module: Dict[str, set] = {}
     for rc in plan.resolved:
         secrets_by_module.setdefault(rc.module, set()).update(rc.secrets)
+
+    # Resolve every needed secret once: available if the store already has it, else try to
+    # provision it onto the device. Provisioned creds become available and carry a user notice.
+    all_secrets = sorted({s for ss in secrets_by_module.values() for s in ss})
+    available: set[str] = set()
+    provisioned: list[str] = []
+    notices: list[str] = []
+    for s in all_secrets:
+        if has_credential(s):
+            available.add(s)
+            continue
+        prov = provisioners.get(s)
+        if prov is not None:
+            pc = prov.provision(secret_dir=secret_dir)
+            if pc is not None:
+                available.add(s)
+                provisioned.append(s)
+                notices.append(pc.notice.human_text)
+                if store is not None:
+                    store.append("CredentialProvisioned", scope,
+                                 {"name": pc.name, "location": pc.location, "provider": pc.provider})
 
     outcomes: list[ModuleOutcome] = []
     yaml_map: Dict[str, str] = {}
 
     for module in plan.to_install:
         need = sorted(secrets_by_module.get(module, ()))
-        obtained = tuple(s for s in need if has_credential(s))
-        missing = tuple(s for s in need if not has_credential(s))
+        obtained = tuple(s for s in need if s in available)
+        missing = tuple(s for s in need if s not in available)
 
         try:
             base_url = deployer.deploy(module)
@@ -179,7 +212,8 @@ def install(plan: InstallPlan, *, deployer: Deployer, store=None,
         _emit(store, MODULE_EVENT, scope, outcome)
 
     receipt = InstallReceipt(plan_id=plan.plan_id, installed=tuple(outcomes),
-                             skipped=plan.already_installed, modules_yaml=yaml_map)
+                             skipped=plan.already_installed, modules_yaml=yaml_map,
+                             provisioned=tuple(provisioned), notices=tuple(notices))
     if store is not None:
         store.append(DONE_EVENT, scope, receipt.canonical_form())
     return receipt
