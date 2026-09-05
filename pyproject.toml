@@ -10,7 +10,7 @@ dependencies = [
     # tag: a branch can be rebased under a consumer, and a contract that moves
     # silently is not a contract. Importing it is why this repository carries
     # the Commons Clause — see LICENSE.md.
-    "runtime-contracts @ git+https://github.com/redevops-io/runtime-contracts.git@v0.3.2",
+    "runtime-contracts @ git+https://github.com/redevops-io/runtime-contracts.git@v0.3.3",
     "pyyaml>=6.0",
     "fastapi>=0.110",
     "uvicorn>=0.29",
