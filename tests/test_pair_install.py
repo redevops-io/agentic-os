@@ -48,8 +48,8 @@ def test_park_approve_execute_installs_with_model_pull():
     runner = StubPairRunner()
     result = execute_pair_install(store, iid, p, runner=runner)
     assert result.available
-    assert runner.steps == ["install_router", "ensure_engine:ollama",
-                            f"pull_model:{DEFAULT_MODEL}", "verify"]   # #3 model download ran
+    assert runner.steps == ["install_pair", "install_ollama",
+                            f"ensure_model:{DEFAULT_MODEL}", "start_services", "health"]
     assert pair_install_status(store, iid) == S_COMPLETED
 
 
@@ -67,8 +67,8 @@ def test_failure_rolls_back_in_reverse():
     p = propose_pair_install(_capable_posture())
     iid = request_pair_install(store, p)
     approve_pair_install(store, iid)
-    runner = StubPairRunner(fail_at=f"pull_model:{DEFAULT_MODEL}")   # model download fails
+    runner = StubPairRunner(fail_at=f"ensure_model:{DEFAULT_MODEL}")   # model download fails
     result = execute_pair_install(store, iid, p, runner=runner)
     assert not result.available
-    assert runner.undone == ["uninstall_router"]                 # router undone; model wasn't completed
+    assert runner.undone == ["uninstall"]                        # single rollback
     assert pair_install_status(store, iid) == S_ROLLED_BACK
