@@ -3,7 +3,7 @@ name = "agentic-os"
 version = "0.2.4"
 description = "The control plane for the redevops.io Agentic Business OS — run your business as a cost-aware fleet of agents."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "AGPL-3.0-or-later WITH Commons-Clause" }
 dependencies = [
     # The Discovery -> Mission boundary, owned by neither runtime. Pinned to a
