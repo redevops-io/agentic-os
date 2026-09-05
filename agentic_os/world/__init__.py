@@ -42,8 +42,8 @@ from .models import (
 from .orchestrator import ScenarioOrchestrator
 from .seeder import ProjectionSeeder
 from .objects import (APP_CATALOG, APP_META, CanonicalObject, canonical_from_entity)
-from .adapters import (AdapterRegistry, ChatwootAdapter, CoreUnavailable, HttpCoreAdapter, InMemoryAdapter,
-                       LagoBillingAdapter, REAL_ADAPTERS, TwentyCrmAdapter)
+from .adapters import (AdapterRegistry, ChatwootAdapter, CoreUnavailable, ErpNextAdapter, HttpCoreAdapter,
+                       InMemoryAdapter, LagoBillingAdapter, REAL_ADAPTERS, TwentyCrmAdapter)
 from .simulator import OutcomeSimulator, SimArtifact
 from .worlds import FinanceLeakageWorld, KycOnboardingWorld
 from .worlds import ALL_WORLDS as _OTHER_WORLDS
@@ -79,6 +79,6 @@ __all__ = [
     "BudgetGovernor", "SpendAuthorization", "PaidAcquisitionWorld", "ContactCenterWorld",
     "CanonicalObject", "canonical_from_entity", "APP_CATALOG", "APP_META",
     "AdapterRegistry", "InMemoryAdapter", "HttpCoreAdapter", "CoreUnavailable", "REAL_ADAPTERS",
-    "LagoBillingAdapter", "ChatwootAdapter", "TwentyCrmAdapter",
+    "LagoBillingAdapter", "ChatwootAdapter", "TwentyCrmAdapter", "ErpNextAdapter",
     "build_admin_snapshot", "core_status",
 ]
