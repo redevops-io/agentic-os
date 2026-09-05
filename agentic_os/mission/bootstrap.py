@@ -55,7 +55,12 @@ def _summary_lines(status: str, posture, llm, plan, receipt) -> List[str]:
     """Plain-language notices for the user, richest-signal first."""
     out: List[str] = []
     if llm is not None:
-        if llm.source == "guided":
+        if llm.source == "pair":
+            out.append("✓ Local AI found on your devices — using it (private, on your devices; "
+                       "no cloud account needed).")
+        elif llm.source == "local":
+            out.append("✓ Using the local AI model on this device (no cloud account needed).")
+        elif llm.source == "guided":
             out.append(f"LLM setup needed: {llm.message}")
         else:
             out.append(f"LLM: {llm.message}.")
