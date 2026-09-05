@@ -61,10 +61,34 @@ virtualization only on Apple hardware, and there is no supported iOS VM image �
 Xcode + the iOS Simulator on a Mac). Those targets use a **hosted/rented Mac**; a physical
 iPhone is only needed later for push/backgrounding/Keychain/real-network acceptance.
 
-## Status — SCAFFOLD (not built/validated in CI)
-These files are a correct starting point but have **not** been compiled or run here (no GUI / Rust
-+ Tauri toolchain in the build environment). Build/run them in the Win11 VM per ACCEPTANCE.md.
+## Status — precise
 
-The Python brain **is** covered by tests (`tests/test_bootstrap.py`, `test_device_posture.py`,
-`test_provisioning.py`, `test_installer.py`, `test_governed_install.py`, `test_onboarding.py`,
-`test_default_llm.py`); only the native shell in this directory is unverified.
+**Software vertical: COMPLETE** — posture → LLM/PAIR resolution → capability plan → governed
+install (park/approve/execute + saga) → on-device provisioning → durable ledger + telemetry →
+bootstrap. Fully unit-tested, and exercised end-to-end by
+[`acceptance_check.py`](acceptance_check.py) (`python deploy/launcher/acceptance_check.py` →
+all-PASS JSON artifact).
+
+**Physical validation:**
+- **PAIR / Ollama runner** (`agentic_os/mission/pair_real.py::RealPairRunner`): **IMPLEMENTED,
+  NOT HARDWARE-VALIDATED.** Shells to the PAIR installer + Ollama per the docs; structurally
+  wiring-tested (`tests/test_pair_real.py`), but never run against a real PAIR install. Validate
+  on a GPU/PAIR host before relying on it.
+- **Windows launcher** (this `src-tauri/` + `ui/`): **IMPLEMENTED / SCAFFOLDED, NOT
+  INTERACTIVE-VALIDATED.** Not compiled here (no Rust/Tauri toolchain, no GUI); build/run in the
+  Win11 VM per [ACCEPTANCE.md](ACCEPTANCE.md).
+- **iOS Mission client**: **NOT IMPLEMENTED.**
+
+"Complete" above means the *software* is complete and tested; it does **not** mean validated on
+target hardware. The three lines above are the source of truth for what has and hasn't been proven
+on a real machine.
+
+## Acceptance
+Run the single executable definition of "the installer works on a customer machine":
+```bash
+python deploy/launcher/acceptance_check.py            # simulated (stub runners) — CI-runnable
+python deploy/launcher/acceptance_check.py --live     # on a target with PAIR + Docker
+```
+It emits `{acceptance_version, passed, platform, mode, steps{posture, inference_resolution,
+approval, local_ai_install, app_provisioning, first_mission, verification, restart_recovery,
+idempotency}}`.
