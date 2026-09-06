@@ -31,6 +31,11 @@ from .harness import (
     run_suite,
 )
 from .nemo_eval import export_nemo_scenarios, write_jsonl
+from .providers_nemo import (
+    NeMoSession,
+    NeMoVoiceAgentProvider,
+    interaction_events_from_context,
+)
 
 __all__ = [
     "ConversationStore",
@@ -53,4 +58,7 @@ __all__ = [
     "coverage_report",
     "export_nemo_scenarios",
     "write_jsonl",
+    "NeMoVoiceAgentProvider",
+    "NeMoSession",
+    "interaction_events_from_context",
 ]
