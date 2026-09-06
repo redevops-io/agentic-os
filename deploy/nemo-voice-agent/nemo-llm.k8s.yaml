@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: nemo-llm, namespace: ml-services}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: nemo-llm}}
+  template:
+    metadata: {labels: {app: nemo-llm}}
+    spec:
+      runtimeClassName: nvidia
+      containers:
+      - name: vllm
+        image: vllm/vllm-openai:latest
+        args: ["--model","nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4","--served-model-name","nemotron","--trust-remote-code","--tensor-parallel-size","1","--enable-prefix-caching","--max-num-seqs","1","--gpu-memory-utilization","0.6","--max-model-len","16384","--enable-auto-tool-choice","--tool-call-parser","qwen3_coder","--reasoning-parser","nemotron_v3","--host","0.0.0.0","--port","8000"]
+        env:
+        - {name: NVIDIA_VISIBLE_DEVICES, value: GPU-d25f5101-05b0-0f66-5e5d-a159b3f7fca1}
+        - {name: NVIDIA_DRIVER_CAPABILITIES, value: compute,utility}
+        - {name: HF_HOME, value: /hf}
+        ports: [{containerPort: 8000}]
+        resources: {limits: {cpu: "10", memory: 40Gi}, requests: {cpu: "2", memory: 8Gi}}
+        volumeMounts:
+        - {name: hf, mountPath: /hf}
+        - {name: dshm, mountPath: /dev/shm}
+      volumes:
+      - {name: hf, hostPath: {path: /main/nemo/hf-cache, type: DirectoryOrCreate}}
+      - {name: dshm, emptyDir: {medium: Memory, sizeLimit: 8Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: nemo-llm, namespace: ml-services}
+spec:
+  type: NodePort
+  selector: {app: nemo-llm}
+  ports: [{port: 8000, targetPort: 8000, nodePort: 31800}]
