@@ -64,10 +64,10 @@ def test_jsonl_loader_parses_and_skips_malformed(tmp_path):
         json.dumps({"scenario_id": "x1", "domain": "airline", "turns": ["book a flight"],
                     "expected_objective": "book_flight", "channel": "web"}) + "\n"
         + "not json\n"
-        + json.dumps({"scenario_id": "x2", "domain": "retail"}) + "\n"   # missing expected_objective
+        + json.dumps({"turns": ["hi"]}) + "\n"                # missing scenario_id AND domain (required)
     )
     loaded = load_scenarios(str(p), source="test")
-    assert [s.scenario_id for s in loaded] == ["x1"]          # malformed + incomplete skipped
+    assert [s.scenario_id for s in loaded] == ["x1"]          # malformed + missing-required skipped
     assert loaded[0].channel is Channel.WEB and loaded[0].source == "test"
 
 

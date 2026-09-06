@@ -19,15 +19,18 @@ from .stubs import StubChannelAdapter, StubSpeechProvider
 from .operator import build_interaction_operator
 from .bridge import open_mission_for_conversation, sealed_intent_from_transcript
 from .harness import (
+    CoverageReport,
     InteractionScenario,
     KeywordIntentResolver,
     ScenarioResult,
     SuiteReport,
     builtin_scenarios,
+    coverage_report,
     load_scenarios,
     run_scenario,
     run_suite,
 )
+from .nemo_eval import export_nemo_scenarios, write_jsonl
 
 __all__ = [
     "ConversationStore",
@@ -46,4 +49,8 @@ __all__ = [
     "run_suite",
     "builtin_scenarios",
     "load_scenarios",
+    "CoverageReport",
+    "coverage_report",
+    "export_nemo_scenarios",
+    "write_jsonl",
 ]
