@@ -136,6 +136,41 @@ def run_suite(scenarios: Sequence[InteractionScenario], *, resolver: Resolver) -
     return SuiteReport(tuple(run_scenario(s, resolver=resolver) for s in scenarios))
 
 
+@dataclass(frozen=True)
+class CoverageReport:
+    """Reference-free reach of a resolver over UNLABELLED scenarios (the real NeMo corpus carries no
+    closed-vocab objective). Measures how often the resolver commits to an objective vs abstains — NOT
+    correctness, which needs the two-bot LLM-judged eval against the live agent. Honest by design: a
+    high coverage means the baseline *fires* often on real language, not that it is right."""
+
+    classified: int
+    total: int
+    per_domain: Dict[str, Tuple[int, int]]      # domain -> (classified, total)
+
+    @property
+    def rate(self) -> float:
+        return (self.classified / self.total) if self.total else 0.0
+
+    def summary(self) -> str:
+        parts = [f"{d}: {c}/{t}" for d, (c, t) in sorted(self.per_domain.items())]
+        return (f"resolver classified {self.classified}/{self.total} ({self.rate:.0%}) real utterances "
+                f"— " + "; ".join(parts) + " (coverage, not correctness)")
+
+
+def coverage_report(scenarios: Sequence[InteractionScenario], *, resolver: Resolver) -> CoverageReport:
+    """How many unlabelled scenarios the resolver classifies (non-abstain), overall + per domain."""
+    per: Dict[str, List[int]] = {}
+    classified = 0
+    for s in scenarios:
+        agg = per.setdefault(s.domain, [0, 0])
+        agg[1] += 1
+        if resolver(s.turns, s.domain) is not None:
+            agg[0] += 1
+            classified += 1
+    return CoverageReport(classified=classified, total=len(scenarios),
+                          per_domain={d: (c, t) for d, (c, t) in per.items()})
+
+
 # --- dataset loading -------------------------------------------------------------------------------
 
 def load_scenarios(path: str, *, source: str = "") -> List[InteractionScenario]:
@@ -152,7 +187,8 @@ def load_scenarios(path: str, *, source: str = "") -> List[InteractionScenario]:
                 d = json.loads(line)
                 out.append(InteractionScenario(
                     scenario_id=str(d["scenario_id"]), domain=str(d["domain"]),
-                    turns=tuple(d.get("turns", [])), expected_objective=str(d["expected_objective"]),
+                    turns=tuple(d.get("turns", [])),
+                    expected_objective=str(d.get("expected_objective", "")),  # real corpus is unlabelled
                     channel=Channel(d.get("channel", "phone")),
                     expected_fields=dict(d.get("expected_fields", {})),
                     source=source or "loaded",
