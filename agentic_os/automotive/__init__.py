@@ -12,6 +12,7 @@ from __future__ import annotations
 from .contracts import (
     Diagnosis,
     ConsistencyVerdict,
+    HandoffPacket,
     DiagnosticEvidenceRequest,
     DiagnosticObservation,
     EvidenceType,
@@ -38,6 +39,14 @@ from .planner import (
 )
 from .diagnose import Diagnoser, format_reply
 from .review import QuoteReviewer, format_second_opinion, looks_like_quote
+from .handoff import (
+    OutcomeExtractor,
+    build_handoff,
+    format_handoff,
+    format_outcome_ack,
+    looks_like_handoff,
+    looks_like_outcome,
+)
 from .obd import (
     ELM327Client,
     OBDSnapshot,
@@ -98,4 +107,11 @@ __all__ = [
     "split_dataset",
     "ingest_knowledge",
     "retrieval_eval",
+    "HandoffPacket",
+    "build_handoff",
+    "format_handoff",
+    "looks_like_handoff",
+    "OutcomeExtractor",
+    "format_outcome_ack",
+    "looks_like_outcome",
 ]
