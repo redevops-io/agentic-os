@@ -38,6 +38,15 @@ from .planner import (
 )
 from .diagnose import Diagnoser, format_reply
 from .review import QuoteReviewer, format_second_opinion, looks_like_quote
+from .obd import (
+    ELM327Client,
+    OBDSnapshot,
+    decode_dtc,
+    observations_from_snapshot,
+    parse_dtcs,
+    parse_pid,
+    parse_vin,
+)
 from .service import DiagnosisService
 
 __all__ = [
@@ -57,6 +66,13 @@ __all__ = [
     "QuoteReviewer",
     "format_second_opinion",
     "looks_like_quote",
+    "ELM327Client",
+    "OBDSnapshot",
+    "observations_from_snapshot",
+    "decode_dtc",
+    "parse_dtcs",
+    "parse_pid",
+    "parse_vin",
     "VehicleRef",
     "Powertrain",
     "DiagnosticObservation",

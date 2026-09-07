@@ -89,6 +89,28 @@ class DiagnosisService:
                 pass
         return case
 
+    def ingest_observations(self, case_id: str, observations) -> _Case:
+        """Feed OBD observations (DTCs/PIDs from an ELM327 snapshot, via an edge/companion reader) into
+        the SAME case as chat evidence — the scanner is an evidence upgrade, not a separate flow."""
+        case = self._case(case_id)
+        case.observations.extend(observations)
+        if self.store is not None:
+            for o in observations:
+                try:
+                    self.store.record_observation(case_id, o)
+                except Exception:  # noqa: BLE001
+                    pass
+        return case
+
+    def ingest_obd(self, case_id: str, client) -> _Case:
+        """Read a full OBD snapshot from an ELM327 client and fold it into the case (DTCs + PIDs + VIN)."""
+        from .obd import observations_from_snapshot
+        snap = client.snapshot()
+        case = self.ingest_observations(case_id, observations_from_snapshot(snap))
+        if snap.vin and not case.vehicle.vin:
+            case.vehicle = self.vin_decoder(snap.vin)
+        return case
+
     def diagnose_case(self, case: _Case) -> str:
         diag = self.diagnoser.diagnose(case_id=case.case_id, vehicle=case.vehicle,
                                        symptoms=case.symptoms, observations=case.observations)
