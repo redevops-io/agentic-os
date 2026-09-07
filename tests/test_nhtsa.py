@@ -79,8 +79,17 @@ def test_tsb_rows_filter_dedup_and_map():
     d = docs[0]
     assert d.source == "nhtsa-tsb" and d.dtc == "" and d.make == "Toyota" and d.model == "Camry"
     assert d.title == "P0420"                                    # leading topic before ": "
+    assert d.year == "2020"                                       # single year stays as-is
     assert "reflash the PCM" in d.body and "P0420" in d.embed_text()
     assert d.doc_id.startswith("nhtsa-tsb:")
+
+
+def test_tsb_year_scope_compacted_to_range():
+    rows = [_tsb_row("Y1", "FORD", "F-150", "2004,2005,2006,2007,2008,2009,2010,2011,2012,2013,2014",
+                     "many-year bulletin about the frame")]
+    docs = tsb_docs_from_rows(rows, makes=["FORD"])
+    assert docs[0].year == "2004-2014"                            # 20+ years → bounded min-max range
+    assert len(docs[0].year) <= 64
 
 
 def test_tsb_per_make_cap_prevents_swamping():
