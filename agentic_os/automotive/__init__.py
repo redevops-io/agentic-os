@@ -25,9 +25,28 @@ from .contracts import (
 )
 from .vin import decode_vin
 from .store_doris import DorisCaseStore
+from .planner import (
+    SafetyAssessment,
+    plan_next_evidence,
+    rank_evidence,
+    safety_gate,
+    should_stop_collecting,
+    is_confident,
+)
+from .diagnose import Diagnoser, format_reply
+from .service import DiagnosisService
 
 __all__ = [
     "DorisCaseStore",
+    "SafetyAssessment",
+    "plan_next_evidence",
+    "rank_evidence",
+    "safety_gate",
+    "should_stop_collecting",
+    "is_confident",
+    "Diagnoser",
+    "format_reply",
+    "DiagnosisService",
     "VehicleRef",
     "Powertrain",
     "DiagnosticObservation",
