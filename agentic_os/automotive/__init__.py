@@ -58,6 +58,7 @@ from .obd import (
 )
 from .knowledge import (
     KnowledgeDoc,
+    doris_retriever,
     ingest_knowledge,
     load_dtc_sqlite,
     retrieval_eval,
@@ -107,6 +108,7 @@ __all__ = [
     "split_dataset",
     "ingest_knowledge",
     "retrieval_eval",
+    "doris_retriever",
     "HandoffPacket",
     "build_handoff",
     "format_handoff",

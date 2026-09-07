@@ -189,13 +189,20 @@ def main() -> None:  # pragma: no cover - live loop
     channel = TelegramChannelAdapter()            # REDEVOPS_BOT_TOKEN
     speech = GrokSpeechProvider()                 # XAI_API_KEY
     llm = _grok_llm()
-    diagnoser = Diagnoser(llm=llm)
     reviewer = QuoteReviewer(llm=llm)
     outcome_extractor = OutcomeExtractor(llm=llm)
     store = None
+    retriever = None
     if os.environ.get("CAR_DORIS_HOST"):
         from .store_doris import DorisCaseStore
         store = DorisCaseStore()
+        try:
+            from .knowledge import doris_retriever, fastembed_embedder
+            retriever = doris_retriever(fastembed_embedder(), store)
+            print("RAG retriever wired to the Doris knowledge lake", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print("RAG retriever unavailable:", type(e).__name__, flush=True)
+    diagnoser = Diagnoser(llm=llm, retriever=retriever)
     svc = DiagnosisService(channel=channel, diagnoser=diagnoser, reviewer=reviewer,
                            outcome_extractor=outcome_extractor, speech=speech,
                            vision=_grok_vision(), store=store)
