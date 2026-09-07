@@ -64,7 +64,7 @@ from .knowledge import (
     retrieval_eval,
     split_dataset,
 )
-from .nhtsa import nhtsa_recall_docs, CONSUMER_MAKES
+from .nhtsa import nhtsa_recall_docs, tsb_docs_from_rows, iter_tsb_csv_rows, CONSUMER_MAKES
 from .service import DiagnosisService
 
 __all__ = [
@@ -111,6 +111,8 @@ __all__ = [
     "retrieval_eval",
     "doris_retriever",
     "nhtsa_recall_docs",
+    "tsb_docs_from_rows",
+    "iter_tsb_csv_rows",
     "CONSUMER_MAKES",
     "HandoffPacket",
     "build_handoff",

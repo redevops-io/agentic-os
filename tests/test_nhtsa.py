@@ -1,7 +1,12 @@
 """NHTSA recall crawler → KnowledgeDocs (offline, injectable fetch)."""
 from __future__ import annotations
 
-from agentic_os.automotive import CONSUMER_MAKES, KnowledgeDoc, nhtsa_recall_docs
+from agentic_os.automotive import (
+    CONSUMER_MAKES,
+    KnowledgeDoc,
+    nhtsa_recall_docs,
+    tsb_docs_from_rows,
+)
 
 
 def _fake_fetch(url: str):
@@ -52,3 +57,34 @@ def test_missing_campaign_skipped():
         if "recallsByVehicle" in url: return {"results": [{"Component": "no campaign id"}]}
         return {"results": []}
     assert nhtsa_recall_docs(fetch=fetch, years=[2020], makes=["FORD"]) == []
+
+
+# --- TSB / Manufacturer Communications loader (offline, dict rows) ---
+
+def _tsb_row(tsb_id, make, model, year, summary):
+    return {"TSB/Document ID": tsb_id, "Make": make, "Model": model, "Model Year": year,
+            "Concise Summary": summary}
+
+
+def test_tsb_rows_filter_dedup_and_map():
+    rows = [
+        _tsb_row("A1", "TOYOTA", "CAMRY", "2020", "P0420: catalytic converter efficiency below "
+                 "threshold - reflash the PCM before replacing the catalyst"),
+        _tsb_row("A1", "TOYOTA", "CAMRY", "2020", "dup same id/make/model/year"),   # dup → collapsed
+        _tsb_row("B2", "PORSCHE", "911", "2021", "coolant pipe weep — not a consumer make"),  # filtered
+        _tsb_row("C3", "TOYOTA", "", "", ""),                                        # empty summary → skip
+    ]
+    docs = tsb_docs_from_rows(rows, makes=["TOYOTA"])
+    assert len(docs) == 1
+    d = docs[0]
+    assert d.source == "nhtsa-tsb" and d.dtc == "" and d.make == "Toyota" and d.model == "Camry"
+    assert d.title == "P0420"                                    # leading topic before ": "
+    assert "reflash the PCM" in d.body and "P0420" in d.embed_text()
+    assert d.doc_id.startswith("nhtsa-tsb:")
+
+
+def test_tsb_per_make_cap_prevents_swamping():
+    rows = [_tsb_row(f"T{i}", "FORD", "F-150", "2022", f"bulletin number {i} about brakes")
+            for i in range(10)]
+    assert len(tsb_docs_from_rows(rows, makes=["FORD"], per_make_cap=3)) == 3
+    assert len(tsb_docs_from_rows(rows, makes=["FORD"], max_docs=5)) == 5
