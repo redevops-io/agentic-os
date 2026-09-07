@@ -123,6 +123,19 @@ def _tsb_title(summary: str) -> str:
     return (s[:100].rsplit(" ", 1)[0] + "…") if len(s) > 100 else s
 
 
+def _tsb_year(raw: str) -> str:
+    """Compact a TSB's model-year scope to a bounded ``YYYY`` or ``YYYY-YYYY`` range.
+
+    One TSB record can list 20+ model years (e.g. ``2004,2005,...,2023``), overflowing any sane
+    fixed-width column; the year is metadata only (never embedded), so the min-max range captures the
+    scope while staying short."""
+    years = [y for y in (t.strip() for t in raw.replace(",", " ").split()) if y.isdigit() and len(y) == 4]
+    if not years:
+        return raw.strip()[:64]
+    lo, hi = min(years), max(years)
+    return lo if lo == hi else f"{lo}-{hi}"
+
+
 def _tsb_doc(row: Dict[str, str], seen: set) -> Optional[KnowledgeDoc]:
     make = (row.get("Make") or "").strip()
     summary = " ".join((row.get("Concise Summary") or "").split())
@@ -137,7 +150,8 @@ def _tsb_doc(row: Dict[str, str], seen: set) -> Optional[KnowledgeDoc]:
         return None
     seen.add(doc_id)
     return KnowledgeDoc(doc_id=doc_id, source="nhtsa-tsb", dtc="", make=make.title(),
-                        model=model.title(), year=year, title=_tsb_title(summary), body=summary)
+                        model=model.title(), year=_tsb_year(year), title=_tsb_title(summary),
+                        body=summary)
 
 
 def tsb_docs_from_rows(rows: Iterable[Dict[str, str]], *, makes: Sequence[str] = CONSUMER_MAKES,
