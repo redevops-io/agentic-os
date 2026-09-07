@@ -101,6 +101,8 @@ def _have(observations: Sequence[DiagnosticObservation],
 @dataclass
 class Diagnoser:
     llm: LLM
+    retriever: Optional[Callable[[str, int], Sequence[dict]]] = None   # RAG: (query, k) -> knowledge docs
+    retrieve_k: int = 4
 
     def diagnose(self, *, case_id: str, vehicle: VehicleRef,
                  symptoms: Sequence[SymptomEvidence] = (),
@@ -134,8 +136,36 @@ class Diagnoser:
             if s.mileage:
                 desc += f" (mileage {s.mileage})"
             lines.append(f"Symptom: {desc}")
-        lines.append("Return the JSON described in the system prompt.")
+        refs = self._retrieve(dtcs, symptoms)
+        if refs:
+            lines.append("\nReference knowledge (known faults from the corpus — ground your hypotheses "
+                         "in these where relevant, but do not invent):")
+            lines += [f"  - {r.get('dtc','')}: {(r.get('title') or r.get('body') or '')[:90]}"
+                      for r in refs]
+        lines.append("\nReturn the JSON described in the system prompt.")
         return "\n".join(lines)
+
+    def _retrieve(self, dtcs: Sequence[str], symptoms: Sequence[SymptomEvidence]) -> list:
+        """RAG: pull the nearest corpus docs for the DTCs + symptom text (deduped by dtc+title)."""
+        if self.retriever is None:
+            return []
+        query = " ".join(list(dtcs) + [s.narrative for s in symptoms if s.narrative]).strip()
+        if not query:
+            return []
+        try:
+            hits = list(self.retriever(query, self.retrieve_k * 3))
+        except Exception:  # noqa: BLE001 — grounding is best-effort; never break a diagnosis
+            return []
+        seen, out = set(), []
+        for r in hits:
+            key = (r.get("dtc", ""), (r.get("title") or "")[:60])
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(r)
+            if len(out) >= self.retrieve_k:
+                break
+        return out
 
 
 def format_reply(diagnosis: Diagnosis) -> str:

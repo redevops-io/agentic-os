@@ -96,6 +96,13 @@ def retrieval_eval(store, test_docs: Sequence[KnowledgeDoc], embed: Embedder, *,
             f"recall@{k}": (hitk / total if total else 0.0)}
 
 
+def doris_retriever(embed: Embedder, store):
+    """Build a Diagnoser retriever over the Doris knowledge lake: (query, k) -> nearest docs."""
+    def retrieve(query: str, k: int):
+        return store.knowledge_search(embed([query])[0], k=k)
+    return retrieve
+
+
 def fastembed_embedder(model: str = "BAAI/bge-large-en-v1.5"):  # pragma: no cover - heavy/model download
     """A real local 1024-dim embedder via fastembed (ONNX, CPU). bge-large-en-v1.5 = 1024 dims."""
     from fastembed import TextEmbedding
