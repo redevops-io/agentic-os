@@ -267,6 +267,37 @@ class Hypothesis:
 
 
 @dataclass(frozen=True)
+class HandoffPacket:
+    """A structured diagnostic handoff a shop receives instead of a vague driver description (plan §6e).
+    Turns a case into a qualified, pre-diagnosed lead."""
+
+    case_id: str
+    vehicle: Optional["VehicleRef"] = None
+    mileage: str = ""
+    symptoms: Tuple[str, ...] = ()
+    dtcs: Tuple[str, ...] = ()
+    leading_hypothesis: str = ""
+    leading_confidence: str = "0"
+    safety_note: str = ""
+    requested_service: str = ""
+    created_at: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "leading_confidence", _dec(self.leading_confidence) or "0")
+
+    def canonical_form(self) -> Dict[str, Any]:
+        return {"case_id": self.case_id, "vehicle": self.vehicle.canonical_form() if self.vehicle else None,
+                "mileage": self.mileage, "symptoms": list(self.symptoms), "dtcs": sorted(self.dtcs),
+                "leading_hypothesis": self.leading_hypothesis, "leading_confidence": self.leading_confidence,
+                "safety_note": self.safety_note, "requested_service": self.requested_service,
+                "created_at": self.created_at}
+
+    @property
+    def packet_id(self) -> str:
+        return content_hash(self.canonical_form())
+
+
+@dataclass(frozen=True)
 class Diagnosis:
     """A ranked set of hypotheses for one case, with the safety-gate result and the planner's next ask.
     Content-addressed so a case's diagnoses are an auditable, replayable trail."""

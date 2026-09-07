@@ -17,6 +17,14 @@ from runtime_contracts import InteractionEvent, Modality
 from .contracts import Diagnosis, DiagnosticObservation, SymptomEvidence, VehicleRef, Powertrain
 from .diagnose import Diagnoser, format_reply
 from .review import QuoteReviewer, format_second_opinion, looks_like_quote
+from .handoff import (
+    OutcomeExtractor,
+    build_handoff,
+    format_handoff,
+    format_outcome_ack,
+    looks_like_handoff,
+    looks_like_outcome,
+)
 from .vin import decode_vin
 
 _DTC_RE = re.compile(r"\b([PBCU][0-9]{4})\b")
@@ -43,6 +51,7 @@ class DiagnosisService:
     vision: Optional[VisionFn] = None
     store: Any = None                 # DorisCaseStore; optional
     reviewer: Optional[QuoteReviewer] = None   # second-opinion on shop quotes; optional
+    outcome_extractor: Optional[OutcomeExtractor] = None   # repair-outcome capture; optional
     vin_decoder: Callable[[str], VehicleRef] = decode_vin
     _cases: Dict[str, _Case] = field(default_factory=dict)
 
@@ -111,6 +120,17 @@ class DiagnosisService:
             case.vehicle = self.vin_decoder(snap.vin)
         return case
 
+    def _record_outcome(self, case: _Case, repair) -> None:
+        """Persist a confirmed repair outcome to the flywheel (Doris outcomes)."""
+        if self.store is None:
+            return
+        diag_id = case.last_diagnosis.diagnosis_id if case.last_diagnosis else ""
+        outcome_id = f"{case.case_id}:outcome:{abs(hash((case.case_id, repair.procedure, repair.part))) & 0xffffffff:x}"
+        try:
+            self.store.record_outcome(outcome_id, case.case_id, diag_id, repair)
+        except Exception:  # noqa: BLE001
+            pass
+
     def diagnose_case(self, case: _Case) -> str:
         diag = self.diagnoser.diagnose(case_id=case.case_id, vehicle=case.vehicle,
                                        symptoms=case.symptoms, observations=case.observations)
@@ -131,7 +151,16 @@ class DiagnosisService:
         channel either way."""
         case = self.ingest(event)
         latest = case.symptoms[-1].narrative if case.symptoms else (event.text or "")
-        if self.reviewer is not None and looks_like_quote(latest):
+        if looks_like_handoff(latest):
+            packet = build_handoff(case_id=case.case_id, vehicle=case.vehicle,
+                                   symptoms=case.symptoms[:-1], observations=case.observations,
+                                   diagnosis=case.last_diagnosis, created_at=event.timestamp)
+            reply = format_handoff(packet)
+        elif self.outcome_extractor is not None and looks_like_outcome(latest):
+            repair = self.outcome_extractor.extract(latest)
+            self._record_outcome(case, repair)
+            reply = format_outcome_ack(repair)
+        elif self.reviewer is not None and looks_like_quote(latest):
             op = self.reviewer.review(case_id=case.case_id, vehicle=case.vehicle, quote_text=latest,
                                       symptoms=case.symptoms[:-1], observations=case.observations,
                                       diagnosis=case.last_diagnosis, created_at=event.timestamp)
@@ -162,11 +191,13 @@ def main() -> None:  # pragma: no cover - live loop
     llm = _grok_llm()
     diagnoser = Diagnoser(llm=llm)
     reviewer = QuoteReviewer(llm=llm)
+    outcome_extractor = OutcomeExtractor(llm=llm)
     store = None
     if os.environ.get("CAR_DORIS_HOST"):
         from .store_doris import DorisCaseStore
         store = DorisCaseStore()
-    svc = DiagnosisService(channel=channel, diagnoser=diagnoser, reviewer=reviewer, speech=speech,
+    svc = DiagnosisService(channel=channel, diagnoser=diagnoser, reviewer=reviewer,
+                           outcome_extractor=outcome_extractor, speech=speech,
                            vision=_grok_vision(), store=store)
     me = channel.get_me()
     print(f"diagnosis bot live as @{me.get('username')} — polling")
