@@ -36,6 +36,7 @@ from .providers_nemo import (
     NeMoVoiceAgentProvider,
     interaction_events_from_context,
 )
+from .providers_grok import GrokSpeechProvider, SpeechProviderError
 
 __all__ = [
     "ConversationStore",
@@ -61,4 +62,6 @@ __all__ = [
     "NeMoVoiceAgentProvider",
     "NeMoSession",
     "interaction_events_from_context",
+    "GrokSpeechProvider",
+    "SpeechProviderError",
 ]
