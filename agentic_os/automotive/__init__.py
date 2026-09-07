@@ -11,13 +11,16 @@ from __future__ import annotations
 
 from .contracts import (
     Diagnosis,
+    ConsistencyVerdict,
     DiagnosticEvidenceRequest,
     DiagnosticObservation,
     EvidenceType,
     Hypothesis,
     Powertrain,
+    ProposedRepair,
     RepairEvidence,
     SafetyEvidence,
+    SecondOpinion,
     Severity,
     SymptomEvidence,
     Urgency,
@@ -34,6 +37,7 @@ from .planner import (
     is_confident,
 )
 from .diagnose import Diagnoser, format_reply
+from .review import QuoteReviewer, format_second_opinion, looks_like_quote
 from .service import DiagnosisService
 
 __all__ = [
@@ -47,6 +51,12 @@ __all__ = [
     "Diagnoser",
     "format_reply",
     "DiagnosisService",
+    "ConsistencyVerdict",
+    "ProposedRepair",
+    "SecondOpinion",
+    "QuoteReviewer",
+    "format_second_opinion",
+    "looks_like_quote",
     "VehicleRef",
     "Powertrain",
     "DiagnosticObservation",
