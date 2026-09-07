@@ -24,8 +24,10 @@ from .contracts import (
     VehicleRef,
 )
 from .vin import decode_vin
+from .store_doris import DorisCaseStore
 
 __all__ = [
+    "DorisCaseStore",
     "VehicleRef",
     "Powertrain",
     "DiagnosticObservation",
