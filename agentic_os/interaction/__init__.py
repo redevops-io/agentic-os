@@ -37,6 +37,7 @@ from .providers_nemo import (
     interaction_events_from_context,
 )
 from .providers_grok import GrokSpeechProvider, SpeechProviderError
+from .channels_whatsapp import WhatsAppChannelAdapter, WhatsAppChannelError
 
 __all__ = [
     "ConversationStore",
@@ -64,4 +65,6 @@ __all__ = [
     "interaction_events_from_context",
     "GrokSpeechProvider",
     "SpeechProviderError",
+    "WhatsAppChannelAdapter",
+    "WhatsAppChannelError",
 ]
