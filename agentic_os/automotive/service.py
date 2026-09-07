@@ -121,8 +121,7 @@ class DiagnosisService:
 def main() -> None:  # pragma: no cover - live loop
     import os
     import time
-    from .channels_telegram import TelegramChannelAdapter  # noqa: WPS433
-    from .providers_grok import GrokSpeechProvider
+    from agentic_os.interaction import TelegramChannelAdapter, GrokSpeechProvider  # noqa: WPS433
 
     channel = TelegramChannelAdapter()            # REDEVOPS_BOT_TOKEN
     speech = GrokSpeechProvider()                 # XAI_API_KEY
@@ -181,3 +180,7 @@ def _grok_vision():  # pragma: no cover - live
             d = _json.loads(r.read())
         return d["choices"][0]["message"]["content"] or ""
     return describe
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
