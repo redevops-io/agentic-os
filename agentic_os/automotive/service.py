@@ -14,8 +14,9 @@ from typing import Any, Callable, Dict, List, Optional
 
 from runtime_contracts import InteractionEvent, Modality
 
-from .contracts import DiagnosticObservation, SymptomEvidence, VehicleRef, Powertrain
+from .contracts import Diagnosis, DiagnosticObservation, SymptomEvidence, VehicleRef, Powertrain
 from .diagnose import Diagnoser, format_reply
+from .review import QuoteReviewer, format_second_opinion, looks_like_quote
 from .vin import decode_vin
 
 _DTC_RE = re.compile(r"\b([PBCU][0-9]{4})\b")
@@ -31,6 +32,7 @@ class _Case:
     vehicle: VehicleRef = field(default_factory=VehicleRef)
     symptoms: List[SymptomEvidence] = field(default_factory=list)
     observations: List[DiagnosticObservation] = field(default_factory=list)
+    last_diagnosis: Optional[Diagnosis] = None
 
 
 @dataclass
@@ -40,6 +42,7 @@ class DiagnosisService:
     speech: Any = None                # GrokSpeechProvider (STT); optional
     vision: Optional[VisionFn] = None
     store: Any = None                 # DorisCaseStore; optional
+    reviewer: Optional[QuoteReviewer] = None   # second-opinion on shop quotes; optional
     vin_decoder: Callable[[str], VehicleRef] = decode_vin
     _cases: Dict[str, _Case] = field(default_factory=dict)
 
@@ -89,6 +92,7 @@ class DiagnosisService:
     def diagnose_case(self, case: _Case) -> str:
         diag = self.diagnoser.diagnose(case_id=case.case_id, vehicle=case.vehicle,
                                        symptoms=case.symptoms, observations=case.observations)
+        case.last_diagnosis = diag
         if self.store is not None:
             try:
                 if case.vehicle.vin:
@@ -101,9 +105,17 @@ class DiagnosisService:
         return format_reply(diag)
 
     def handle(self, event: InteractionEvent) -> str:
-        """Ingest one event, produce a diagnosis reply, and send it back on the channel."""
+        """Ingest one event; if it's a shop quote, give a second opinion, else diagnose. Reply on the
+        channel either way."""
         case = self.ingest(event)
-        reply = self.diagnose_case(case)
+        latest = case.symptoms[-1].narrative if case.symptoms else (event.text or "")
+        if self.reviewer is not None and looks_like_quote(latest):
+            op = self.reviewer.review(case_id=case.case_id, vehicle=case.vehicle, quote_text=latest,
+                                      symptoms=case.symptoms[:-1], observations=case.observations,
+                                      diagnosis=case.last_diagnosis, created_at=event.timestamp)
+            reply = format_second_opinion(op)
+        else:
+            reply = self.diagnose_case(case)
         try:
             self.channel.send_text(event.conversation_id, reply)
         except Exception:  # noqa: BLE001 — return the reply even if send fails (tests/telemetry)
@@ -125,12 +137,14 @@ def main() -> None:  # pragma: no cover - live loop
 
     channel = TelegramChannelAdapter()            # REDEVOPS_BOT_TOKEN
     speech = GrokSpeechProvider()                 # XAI_API_KEY
-    diagnoser = Diagnoser(llm=_grok_llm())
+    llm = _grok_llm()
+    diagnoser = Diagnoser(llm=llm)
+    reviewer = QuoteReviewer(llm=llm)
     store = None
     if os.environ.get("CAR_DORIS_HOST"):
         from .store_doris import DorisCaseStore
         store = DorisCaseStore()
-    svc = DiagnosisService(channel=channel, diagnoser=diagnoser, speech=speech,
+    svc = DiagnosisService(channel=channel, diagnoser=diagnoser, reviewer=reviewer, speech=speech,
                            vision=_grok_vision(), store=store)
     me = channel.get_me()
     print(f"diagnosis bot live as @{me.get('username')} — polling")
