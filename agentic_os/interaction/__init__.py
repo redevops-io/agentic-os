@@ -38,6 +38,7 @@ from .providers_nemo import (
 )
 from .providers_grok import GrokSpeechProvider, SpeechProviderError
 from .channels_whatsapp import WhatsAppChannelAdapter, WhatsAppChannelError
+from .channels_telegram import TelegramChannelAdapter, TelegramChannelError
 
 __all__ = [
     "ConversationStore",
@@ -67,4 +68,6 @@ __all__ = [
     "SpeechProviderError",
     "WhatsAppChannelAdapter",
     "WhatsAppChannelError",
+    "TelegramChannelAdapter",
+    "TelegramChannelError",
 ]
