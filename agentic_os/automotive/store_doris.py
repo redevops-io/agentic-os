@@ -91,6 +91,25 @@ class DorisCaseStore:
              (float(repair.labor_hours) if repair.labor_hours else None),
              (float(repair.cost) if repair.cost else None), repair.fixed, repair.provenance])
 
+    def record_knowledge_batch(self, rows) -> None:
+        """Bulk-insert evidence-lake docs with their embeddings. ``rows`` = [(KnowledgeDoc, vector)].
+        Vectors are inlined as Doris array literals (params can't carry ARRAY<FLOAT>); the scalar
+        fields are parameterized."""
+        if not rows:
+            return
+        values, params = [], []
+        for doc, vec in rows:
+            values.append("(%s,%s,%s,%s,%s,%s,%s,%s," + _vec_literal(vec) + ")")
+            params += [doc.doc_id, doc.source, doc.dtc, doc.make, doc.model, doc.year,
+                       doc.title, doc.body]
+        self._execute(
+            f"INSERT INTO {self.db}.knowledge "
+            "(doc_id,source,dtc,make,model,year,title,body,embedding) VALUES " + ",".join(values),
+            params)
+
+    def record_knowledge(self, doc, embedding) -> None:
+        self.record_knowledge_batch([(doc, embedding)])
+
     # ---- reads / analytics ----
 
     def timeline(self, case_id: str) -> List[Dict[str, Any]]:
