@@ -164,6 +164,51 @@ class RepairEvidence:
         object.__setattr__(self, "cost", _dec(self.cost))
 
 
+class ConsistencyVerdict(str, Enum):
+    """Does the shop's proposed repair line up with the evidence collected so far?"""
+
+    REASONABLE = "reasonable"        # consistent with symptoms/DTCs/our diagnosis
+    UNCLEAR = "unclear"              # not enough evidence to judge either way
+    INCONSISTENT = "inconsistent"    # proposes work the evidence doesn't support / skips the likely cause
+
+
+@dataclass(frozen=True)
+class ProposedRepair:
+    """A shop's quote/estimate/diagnosis the driver uploads for a second opinion (plan §6d)."""
+
+    description: str = ""
+    parts: Tuple[str, ...] = ()
+    labor_hours: Optional[str] = None
+    cost: Optional[str] = None
+    shop_name: str = ""
+    raw_text: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "labor_hours", _dec(self.labor_hours))
+        object.__setattr__(self, "cost", _dec(self.cost))
+
+
+@dataclass(frozen=True)
+class SecondOpinion:
+    """The consistency check of a ProposedRepair against a case's evidence + diagnosis."""
+
+    case_id: str
+    verdict: ConsistencyVerdict
+    reasons: Tuple[str, ...] = ()
+    questions: Tuple[str, ...] = ()          # what to ask the shop before authorizing
+    proposed: Optional[ProposedRepair] = None
+    created_at: str = ""
+
+    def canonical_form(self) -> Dict[str, Any]:
+        return {"case_id": self.case_id, "verdict": self.verdict.value,
+                "reasons": list(self.reasons), "questions": list(self.questions),
+                "created_at": self.created_at}
+
+    @property
+    def opinion_id(self) -> str:
+        return content_hash(self.canonical_form())
+
+
 @dataclass(frozen=True)
 class DiagnosticEvidenceRequest:
     """The evidence planner's proposal for the next observation to acquire (plan §6a). The runtime picks
