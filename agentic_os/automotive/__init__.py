@@ -47,6 +47,13 @@ from .obd import (
     parse_pid,
     parse_vin,
 )
+from .knowledge import (
+    KnowledgeDoc,
+    ingest_knowledge,
+    load_dtc_sqlite,
+    retrieval_eval,
+    split_dataset,
+)
 from .service import DiagnosisService
 
 __all__ = [
@@ -86,4 +93,9 @@ __all__ = [
     "Severity",
     "Urgency",
     "decode_vin",
+    "KnowledgeDoc",
+    "load_dtc_sqlite",
+    "split_dataset",
+    "ingest_knowledge",
+    "retrieval_eval",
 ]
