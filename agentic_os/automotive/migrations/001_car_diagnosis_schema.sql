@@ -50,7 +50,7 @@ PROPERTIES("replication_num"="1");
 -- evidence lake (NHTSA TSBs/complaints, MechanicDB) with a vector ANN index for RAG (dim=1024, bge-m3)
 CREATE TABLE IF NOT EXISTS car_diagnosis.knowledge (
   doc_id VARCHAR(96) NOT NULL, source VARCHAR(32), dtc VARCHAR(16),
-  make VARCHAR(64), model VARCHAR(128), year VARCHAR(8), title STRING, body STRING,
+  make VARCHAR(64), model VARCHAR(128), year VARCHAR(64), title STRING, body STRING,  -- year: TSBs are multi-year-scoped, e.g. "2016,2017"
   embedding ARRAY<FLOAT> NOT NULL,
   INDEX idx_emb (embedding) USING ANN PROPERTIES("index_type"="hnsw","metric_type"="l2_distance","dim"="1024")
 ) ENGINE=OLAP DUPLICATE KEY(doc_id) DISTRIBUTED BY HASH(doc_id) BUCKETS 4
