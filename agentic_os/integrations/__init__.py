@@ -24,8 +24,23 @@ from .contracts import (
     ConfirmedIntegrationIntent,
     IntegrationProposal,
 )
+from .connect_plan import (
+    COMPILE_VERSION,
+    PROVIDER_AUTH,
+    ConnectPlan,
+    ConnectStep,
+    InMemoryConnections,
+    MissionStep,
+    Resolution,
+    WorkspaceConnections,
+    compile_integration_intent,
+    resolve_capability,
+)
+from .reader import AUTHORITY_QUESTIONS, KeywordReader, Reader, ReaderResult, interpret
+from .wizard import confirm_from_request, plan_from_request
 
 __all__ = [
+    # W0 — contracts + manifest
     "Support",
     "CapabilityDimension",
     "IntegrationManifest",
@@ -34,4 +49,24 @@ __all__ = [
     "IntegrationProposal",
     "ConfirmedIntegrationIntent",
     "CONTRACT_VERSION",
+    # W1 — compile → ConnectPlan
+    "compile_integration_intent",
+    "resolve_capability",
+    "ConnectPlan",
+    "ConnectStep",
+    "MissionStep",
+    "Resolution",
+    "WorkspaceConnections",
+    "InMemoryConnections",
+    "PROVIDER_AUTH",
+    "COMPILE_VERSION",
+    # W2 — reader → proposal
+    "Reader",
+    "ReaderResult",
+    "KeywordReader",
+    "interpret",
+    "AUTHORITY_QUESTIONS",
+    # end-to-end
+    "plan_from_request",
+    "confirm_from_request",
 ]
