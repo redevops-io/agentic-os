@@ -38,6 +38,19 @@ from .connect_plan import (
 )
 from .reader import AUTHORITY_QUESTIONS, KeywordReader, Reader, ReaderResult, interpret
 from .wizard import confirm_from_request, plan_from_request
+from .execution import (
+    AdapterPort,
+    AdapterRegistry,
+    ConnectReceipt,
+    Explanation,
+    GovernedEnvelope,
+    MissionRun,
+    PlanNotConnectable,
+    StepRun,
+    connect_providers,
+    explain,
+    run_test_mission,
+)
 
 __all__ = [
     # W0 — contracts + manifest
@@ -69,4 +82,16 @@ __all__ = [
     # end-to-end
     "plan_from_request",
     "confirm_from_request",
+    # W4 — run the plan (connect + governed test Mission + EXPLAIN)
+    "AdapterPort",
+    "AdapterRegistry",
+    "GovernedEnvelope",
+    "ConnectReceipt",
+    "StepRun",
+    "MissionRun",
+    "connect_providers",
+    "run_test_mission",
+    "explain",
+    "Explanation",
+    "PlanNotConnectable",
 ]
