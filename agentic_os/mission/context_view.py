@@ -24,7 +24,14 @@ from hashlib import sha256
 
 def content_hash(*parts: str) -> str:
     """Content address for a working set: sha256 over the joined parts, truncated to 16 hex. Kept
-    byte-stable — a run's ContextView id is a function of its members, so replay must reproduce it."""
+    byte-stable — a run's ContextView id is a function of its members, so replay must reproduce it.
+
+    **Tier-2 domain-internal digest** (see runtime-contracts ``docs/RUNTIME_DIGEST.md``): this is the
+    anchor of exact-replay — a recompiled ``plan_fingerprint`` must reproduce the *sealed* value or
+    replay fails closed. It is deliberately NOT the ``rcv1`` cross-language contract identity: it has no
+    cross-runtime consumer, and 64 bits is sufficient at the per-mission scale. Changing this rule
+    (e.g. widening to full ``rcv1``) changes every sealed fingerprint, so it would be a **versioned
+    migration**, never an in-place edit — hence the truncation is documented here, not "fixed"."""
     return sha256("|".join(parts).encode()).hexdigest()[:16]
 
 
