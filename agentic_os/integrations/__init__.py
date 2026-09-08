@@ -51,6 +51,13 @@ from .execution import (
     explain,
     run_test_mission,
 )
+from .live import (
+    PROVIDER_TOKEN_ENV,
+    EnvSecretResolver,
+    default_adapter_factory,
+    go_live,
+    live_registry,
+)
 
 __all__ = [
     # W0 — contracts + manifest
@@ -94,4 +101,10 @@ __all__ = [
     "explain",
     "Explanation",
     "PlanNotConnectable",
+    # live wiring (optional connectors plugin)
+    "EnvSecretResolver",
+    "live_registry",
+    "go_live",
+    "default_adapter_factory",
+    "PROVIDER_TOKEN_ENV",
 ]
