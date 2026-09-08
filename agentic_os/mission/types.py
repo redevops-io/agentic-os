@@ -14,6 +14,8 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import Any
 
+from agentic_os.mission.runtime_meta import runtime_build_metadata
+
 #: Semantic version of the canonical cross-runtime plan contract — ``ExecutionPlan`` together with
 #: ``PlanAxes`` (the six logical planning dimensions), ``ExecutionGraph`` and ``GovernancePlan``. This is
 #: the object every runtime (Python spec, Go and Kotlin ports) speaks; Discovery and the planner build it
@@ -340,6 +342,9 @@ class ExecutionPlan:
                          if self.graph else None),
             "revision": self.revision,
             "reason": self.reason,
+            # the interpretation context: not just "this plan had hash X" but "…interpreted under
+            # runtime-contracts <v> / canonicalization rcv1 / schema Y" — what replay needs later.
+            "interpreted_under": runtime_build_metadata(),
         }
 
 
