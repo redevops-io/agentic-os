@@ -121,6 +121,13 @@ def build_cockpit_router(runtime: MissionRuntime):
     def inbox():
         return {"inbox": runtime.inbox()}
 
+    @router.get("/buildinfo")
+    def buildinfo():
+        """The interpretation context this runtime links against (contracts + canonicalization +
+        schema versions) — the same block stamped onto every plan's EXPLAIN."""
+        from agentic_os.mission.runtime_meta import runtime_build_metadata
+        return runtime_build_metadata()
+
     @router.get("/cockpit", response_class=HTMLResponse)
     def cockpit():
         return _COCKPIT_HTML
