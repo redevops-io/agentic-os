@@ -680,16 +680,33 @@ def _ui_dir() -> Optional["Path"]:
     return None
 
 
+def mounted_app(base_path: str = "", provider: Optional[ProjectionProvider] = None, **kw) -> FastAPI:
+    """Build the app, optionally under a base path (e.g. ``/projects``) so it can be fronted at
+    a URL sub-path — cloudflared routes ``demo.redevops.io/projects`` → this service without
+    stripping, so the app serves ``/projects/api`` + ``/projects/`` (the UI must be built with a
+    matching ``base``). Without ``base_path`` the app serves at the origin root."""
+    inner = create_app(provider, **kw)
+    base = (base_path or "").rstrip("/")
+    if not base:
+        return inner
+    outer = FastAPI(title="ReDevOps Projects", version="0.1.0")
+    outer.mount(base, inner)   # Starlette strips the prefix before the inner app sees it
+    return outer
+
+
 def main() -> None:
-    """Console entrypoint (``agentic-os-projects``): serve the Projects UI + API on one origin."""
+    """Console entrypoint (``agentic-os-projects``): serve the Projects UI + API on one origin,
+    optionally under ``$PROJECTS_BASE_PATH``."""
     import os
     import uvicorn
     host = os.environ.get("PROJECTS_HOST", "127.0.0.1")
     port = int(os.environ.get("PROJECTS_PORT", "8787"))
+    base = os.environ.get("PROJECTS_BASE_PATH", "")
     served = "UI + API" if _ui_dir() is not None else "API only (no UI bundle found)"
-    print(f"ReDevOps Projects — {served} on http://{host}:{port}")
-    uvicorn.run(create_app(), host=host, port=port)
+    print(f"ReDevOps Projects — {served} on http://{host}:{port}{base or ''}")
+    uvicorn.run(mounted_app(base), host=host, port=port)
 
 
-# Module-level app for `uvicorn agentic_os.projects_api:app`.
-app = create_app()
+# Module-level app for `uvicorn agentic_os.projects_api:app` (honours $PROJECTS_BASE_PATH).
+import os as _os
+app = mounted_app(_os.environ.get("PROJECTS_BASE_PATH", ""))

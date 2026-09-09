@@ -118,6 +118,16 @@ def test_hosted_callback_refuses_unknown_or_unconfigured():
     assert r.status_code == 400  # hosted not configured, or unknown state — either way refused
 
 
+def test_mounted_under_a_base_path_serves_ui_and_api_there():
+    from agentic_os.projects_api import mounted_app
+    sub = TestClient(mounted_app("/projects", SampleProjectionProvider()))
+    # both the API and the UI live under the base path (cloudflared routes the sub-path here)
+    assert sub.get("/projects/api/projects").status_code == 200
+    assert sub.get("/projects/").status_code == 200
+    # nothing at the origin root when mounted under a base
+    assert sub.get("/api/projects").status_code == 404
+
+
 def test_serves_the_bundled_projects_ui_at_one_origin():
     # `agentic-os-projects` serves the SPA and the API on the same origin (no CORS).
     root = client.get("/")
