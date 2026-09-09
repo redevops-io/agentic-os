@@ -123,6 +123,21 @@ class SourceHealth:
         return {"state": self.state.value, "detail": self.detail, "last_observed_at": self.last_observed_at}
 
 
+@dataclass(frozen=True)
+class EvidenceRef:
+    """A pointer to one piece of evidence a source exposes — what a Mission consumes and what
+    Projects shows under "Context used" (doc §11/§21). It is an addressable *reference* plus a
+    human summary, never the content itself, and never a secret."""
+
+    source_id: str
+    ref: str            # e.g. "postgres:support.tickets" or "file:policy.pdf"
+    kind: str           # "table" | "file" | "record" | …
+    summary: str = ""
+
+    def to_dict(self) -> Dict[str, object]:
+        return {"source_id": self.source_id, "ref": self.ref, "kind": self.kind, "summary": self.summary}
+
+
 # ── the durable source object (doc §9) ──────────────────────────────────────────
 @dataclass(frozen=True)
 class ContextSource:
