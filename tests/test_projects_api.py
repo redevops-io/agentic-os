@@ -99,6 +99,42 @@ def test_propose_and_confirm_sources_scans_a_real_folder(tmp_path):
     assert connected[0]["stats"]["indexed"] == 2 and connected[0]["health"]["state"] == "healthy"
 
 
+def test_confirm_routes_database_to_the_postgres_connector():
+    from agentic_os.projects_api import confirm_and_connect_sources
+    from agentic_os.sources import LocalFilesConnector, SourceConnectorRegistry
+    from agentic_os.sources_postgres import PostgresSourceConnector
+
+    catalog = [("support", "tickets", "id", "integer"), ("support", "tickets", "subject", "text")]
+
+    class _Cur:
+        def __init__(self): self.rows = []
+        def execute(self, sql, params=()): self.rows = catalog if "information_schema.columns" in sql else []
+        def fetchall(self): return self.rows
+        def close(self): pass
+
+    class _Conn:
+        def cursor(self): return _Cur()
+        def close(self): pass
+
+    class _Res:
+        def resolve(self, ref): return {"user": "u", "password": "pw-DO-NOT-STORE"}
+
+    reg = (SourceConnectorRegistry().register(LocalFilesConnector())
+           .register(PostgresSourceConnector(resolver=_Res(), connect=lambda _p: _Conn())))
+    out = confirm_and_connect_sources(
+        "p", [{"kind": "database", "location": "localhost/db", "allowed_schemas": ["support"]}],
+        "me", registry=reg)
+    assert out[0]["kind"] == "database" and out[0]["provider"] == "postgres"
+    assert out[0]["health"]["state"] == "healthy" and out[0]["stats"]["tables"] == 1
+
+
+def test_confirm_database_without_a_resolver_is_pending_not_a_crash():
+    out = client.post("/api/sources/confirm", json={
+        "project_id": "p", "confirmed_by": "me",
+        "sources": [{"kind": "database", "location": "localhost/db"}]}).json()
+    assert out[0]["kind"] == "database"  # a source is returned (pending), the demo never live-connects
+
+
 def test_propose_database_asks_which_tables():
     prop = client.post("/api/sources/propose",
                        json={"project_id": "p", "text": "use the postgres database as context"}).json()
