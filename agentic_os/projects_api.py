@@ -40,6 +40,9 @@ class ProjectionProvider(Protocol):
     def attention(self, project_id: str) -> List[dict]: ...
     def discovery(self, project_id: str) -> List[dict]: ...
     def apps(self, project_id: str) -> List[dict]: ...
+    def sources(self, project_id: str) -> List[dict]: ...
+    def runtime(self, project_id: str) -> dict: ...
+    def templates(self, project_id: str) -> List[dict]: ...
     def activity(self, project_id: str) -> List[dict]: ...
 
 
@@ -57,14 +60,16 @@ class SampleProjectionProvider:
 
     def missions(self, _pid: str) -> List[dict]:
         m = [
-            ("4821", "Refund Sarah Chen", "Customer Refunds", "needs", "4/7", "mission:4821"),
-            ("triage", "Daily support triage", "Support Triage", "running", "84%", "mission:triage"),
-            ("vti", "Review VTI exposure", "Portfolio Review", "completed", "Verified", "mission:vti"),
-            ("rel24", "Deploy release 2.4", "Release Workflow", "failed", "Verify step", "mission:rel24"),
-            ("prospect", "Weekly prospecting", "Prospecting", "scheduled", "—", "mission:prospect"),
+            ("4821", "Refund Sarah Chen", "Customer Refunds", "needs", "4/7", "mission:4821",
+             ["HubSpot customer record", "Support Postgres", "WhatsApp conversation", "Refund policy PDF"]),
+            ("triage", "Daily support triage", "Support Triage", "running", "84%", "mission:triage", []),
+            ("vti", "Review VTI exposure", "Portfolio Review", "completed", "Verified", "mission:vti", []),
+            ("rel24", "Deploy release 2.4", "Release Workflow", "failed", "Verify step", "mission:rel24", []),
+            ("prospect", "Weekly prospecting", "Prospecting", "scheduled", "—", "mission:prospect", []),
         ]
-        return [{"id": i, "title": t, "workflow": w, "state": s, "progress": p, **_prov("mission", r)}
-                for i, t, w, s, p, r in m]
+        return [{"id": i, "title": t, "workflow": w, "state": s, "progress": p,
+                 "context_used": ctx, **_prov("mission", r)}
+                for i, t, w, s, p, r, ctx in m]
 
     def workflows(self, _pid: str) -> List[dict]:
         return [
@@ -121,6 +126,15 @@ class SampleProjectionProvider:
     def apps(self, _pid: str) -> List[dict]:
         return _sample_apps()
 
+    def sources(self, _pid: str) -> List[dict]:
+        return _sample_sources()
+
+    def runtime(self, _pid: str) -> dict:
+        return _sample_runtime()
+
+    def templates(self, _pid: str) -> List[dict]:
+        return _sample_templates()
+
     def overview(self, project_id: str) -> dict:
         return {
             "project": self.projects()[0],
@@ -129,6 +143,8 @@ class SampleProjectionProvider:
             "workflows": self.workflows(project_id),
             "discovery": self.discovery(project_id),
             "apps": self.apps(project_id),
+            "sources": self.sources(project_id),
+            "runtime": self.runtime(project_id),
         }
 
 
@@ -156,6 +172,132 @@ def _sample_apps() -> List[dict]:
         _app("ayrshare", "Ayrshare", "Publish content to many venues in one call.",
              "NOT_CONNECTED", "mut", ["content.publish"]),
     ]
+
+
+def _source(source_id: str, name: str, kind: str, location: str, health_state: str, detail: str,
+            stats: Dict[str, Any], **extra: Any) -> Dict[str, Any]:
+    return {"source_id": source_id, "name": name, "kind": kind, "provider": extra.get("provider", ""),
+            "location": location, "access_mode": extra.get("access_mode", "read_only"),
+            "indexing_policy": extra.get("indexing_policy", "automatic"),
+            "refresh_policy": extra.get("refresh_policy", "on_change"),
+            "exposure_class": extra.get("exposure_class", "internal"),
+            "health": {"state": health_state, "detail": detail, "last_observed_at": extra.get("last", "")},
+            "stats": stats, "allowed_paths": extra.get("allowed_paths", []),
+            "allowed_schemas": extra.get("allowed_schemas", []), "allowed_tables": extra.get("allowed_tables", []),
+            "allowed_content_types": extra.get("allowed_content_types", []), "denied": extra.get("denied", []),
+            "last_verified": extra.get("last", ""), "source_fingerprint": extra.get("fp", ""),
+            **_prov("context", f"source:{source_id}")}
+
+
+def _sample_sources() -> List[dict]:
+    return [
+        _source("pdfs", "Customer policy docs", "files", "~/company-docs", "healthy",
+                "391 indexed", {"discovered": 428, "indexed": 391, "skipped": 37},
+                allowed_content_types=["pdf", "docx", "markdown"], last="2 min ago", fp="a1b2c3"),
+        _source("crm", "CRM database", "database", "postgres · localhost/customer_ops", "healthy",
+                "Live connection", {"schemas": 2, "tables": 42}, provider="postgres",
+                allowed_schemas=["public", "support"], denied=["billing.card_data", "hr.*"], last="live"),
+        _source("gdrive", "Google Drive", "cloud_files", "Drive · Policies", "healthy",
+                "Synced 4 min ago", {"files": 1842, "indexed": 1842}, provider="google_drive", last="4 min ago"),
+        _source("s3", "Support archive", "cloud_files", "s3://support-archive", "stale",
+                "Credentials expired · last sync 2 days ago", {"files": 12045}, provider="s3", last="2 days ago"),
+    ]
+
+
+def _sample_runtime() -> dict:
+    h = lambda name, state, detail: {"name": name, "state": state, "detail": detail}
+    return {
+        "runtimes": [h("Mission Runtime", "ok", "Healthy"), h("Context Runtime", "ok", "Healthy"),
+                     h("Discovery Runtime", "ok", "Healthy")],
+        "models": [{"name": "Local model", "role": "primary", "state": "ok"},
+                   {"name": "Cloud fallback", "role": "fallback", "state": "mut"}],
+        "security": {"credential_broker": "ok", "policy": "ok"},
+        "apps": [{"name": "WhatsApp", "state": "warn"}, {"name": "HubSpot", "state": "ok"},
+                 {"name": "Slack", "state": "ok"}, {"name": "Polar", "state": "ok"}],
+        "sources": [{"name": "Customer PDFs", "state": "ok"}, {"name": "CRM Postgres", "state": "ok"},
+                    {"name": "Google Drive", "state": "ok"}, {"name": "S3 archive", "state": "warn"}],
+        **_prov("project", "runtime:health"),
+    }
+
+
+def _sample_templates() -> List[dict]:
+    def tpl(tid, goal, caps, srcs, auth, wf, readiness):
+        return {"id": tid, "goal": goal, "required_capabilities": caps, "required_sources": srcs,
+                "authority_requirements": auth, "suggested_workflow": wf,
+                "readiness": [{"label": lbl, "ready": ok} for lbl, ok in readiness]}
+    return [
+        tpl("refunds", "Handle customer refunds",
+            ["chat.message.send", "crm.contact.upsert", "approval.request", "billing.refund.execute"],
+            ["Customer policy docs", "CRM database"], ["Approval required before refund"],
+            "Customer Refund Handling",
+            [("WhatsApp", True), ("HubSpot", True), ("Slack", True), ("Polar", True),
+             ("Customer policy docs", True), ("CRM database", True)]),
+        tpl("prospect", "Run weekly prospecting",
+            ["crm.contact.upsert", "email.message.send"], ["CRM database"], [],
+            "Weekly Prospecting", [("Apollo", True), ("Gmail", False), ("HubSpot", True)]),
+        tpl("triage", "Review support queue", ["chat.message.read", "crm.contact.upsert"],
+            ["Support Postgres"], [], "Daily Support Triage",
+            [("Slack", True), ("HubSpot", True), ("Support Postgres", True)]),
+        tpl("reconcile", "Reconcile CRM", ["crm.contact.upsert", "crm.note.create"], ["CRM database"], [],
+            "CRM Reconciliation", [("HubSpot", True), ("CRM database", True)]),
+    ]
+
+
+def propose_sources(project_id: str, text: str):
+    """Deterministic 'use X as context' interpreter → an editable SourceConnectionProposal.
+    Mirrors the integration wizard: infers reversible choices (read-only, content types),
+    asks only what can't be safely guessed (which tables). The real Sidekick uses an LLM read."""
+    from .sources import AccessMode, IndexingPolicy, ProposedSource, SourceConnectionProposal, SourceKind
+    import re
+
+    t = (text or "")
+    tl = t.lower()
+    proposed: List[Any] = []
+    assumptions: List[str] = []
+    questions: List[str] = []
+
+    for m in re.finditer(r"(~?/[\w./\-]+)", t):  # any unix-ish path
+        proposed.append(ProposedSource(kind=SourceKind.FILES, location=m.group(1),
+                                       access_mode=AccessMode.READ_ONLY, indexing_policy=IndexingPolicy.AUTOMATIC))
+        assumptions.append(f"{m.group(1)} — read-only, automatic indexing, common document types")
+    if "postgres" in tl or "database" in tl or "db " in tl:
+        loc = "localhost/customer_ops"
+        mm = re.search(r"database on ([\w.:/\-]+)", tl)
+        if mm:
+            loc = mm.group(1)
+        proposed.append(ProposedSource(kind=SourceKind.DATABASE, location=loc, provider="postgres",
+                                       access_mode=AccessMode.READ_ONLY))
+        assumptions.append(f"{loc} — read-only connection")
+        questions.append("Which schemas/tables may be used as context?")
+    if "google drive" in tl or "gdrive" in tl:
+        proposed.append(ProposedSource(kind=SourceKind.CLOUD_FILES, location="Google Drive",
+                                       provider="google_drive", access_mode=AccessMode.READ_ONLY))
+        assumptions.append("Google Drive — connect via provider OAuth, then pick folders")
+
+    return SourceConnectionProposal(project_id=project_id, sources=proposed,
+                                    assumptions=assumptions, questions=questions)
+
+
+def confirm_and_connect_sources(project_id: str, source_specs: List[dict], confirmed_by: str) -> List[dict]:
+    """Confirm an (already-answered) proposal and actually connect the sources. Files are
+    scanned for real by the stdlib LocalFilesConnector; other kinds report 'pending' until
+    their connector is bound. Returns ContextSource projections for the UI."""
+    from .sources import (AccessMode, ConfirmedSourceIntent, IndexingPolicy, ProposedSource,
+                          SourceConnectorRegistry, SourceKind)
+
+    specs = []
+    for s in source_specs:
+        specs.append(ProposedSource(
+            kind=SourceKind(s.get("kind", "files")), location=s.get("location", ""),
+            name=s.get("name", ""), provider=s.get("provider", ""),
+            access_mode=AccessMode(s.get("access_mode", "read_only")),
+            allowed_content_types=list(s.get("allowed_content_types", [])),
+            allowed_schemas=list(s.get("allowed_schemas", [])),
+            indexing_policy=IndexingPolicy(s.get("indexing_policy", "automatic")),
+        ))
+    intent = ConfirmedSourceIntent(project_id=project_id, sources=tuple(specs),
+                                   confirmed_by=confirmed_by, confirmed_at="")
+    return [cs.to_projection() for cs in SourceConnectorRegistry.default().connect(intent)]
 
 
 def apps_from_setup_guides() -> Optional[List[dict]]:
@@ -205,6 +347,17 @@ class _SidekickReq(BaseModel):
     text: str = ""
 
 
+class _ProposeSourcesReq(BaseModel):
+    project_id: str = "customer-ops"
+    text: str = ""
+
+
+class _ConfirmSourcesReq(BaseModel):
+    project_id: str = "customer-ops"
+    sources: List[Dict[str, Any]] = []
+    confirmed_by: str = ""
+
+
 def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: Optional[List[str]] = None) -> FastAPI:
     prov: ProjectionProvider = provider or SampleProjectionProvider()
     app = FastAPI(title="ReDevOps Projects API", version="0.1.0")
@@ -241,6 +394,18 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
         # Prefer the live Integration Plane guides when the connector plugin is installed.
         return apps_from_setup_guides() or prov.apps(project_id)
 
+    @app.get("/api/projects/{project_id}/sources")
+    def _sources(project_id: str) -> List[dict]:
+        return prov.sources(project_id)
+
+    @app.get("/api/projects/{project_id}/runtime")
+    def _runtime(project_id: str) -> dict:
+        return prov.runtime(project_id)
+
+    @app.get("/api/projects/{project_id}/templates")
+    def _templates(project_id: str) -> List[dict]:
+        return prov.templates(project_id)
+
     @app.get("/api/projects/{project_id}/activity")
     def _activity(project_id: str) -> List[dict]:
         return prov.activity(project_id)
@@ -248,6 +413,14 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     @app.post("/api/sidekick")
     def _sidekick(req: _SidekickReq) -> dict:
         return sidekick_reply(req.ctx, req.text)
+
+    @app.post("/api/sources/propose")
+    def _propose(req: _ProposeSourcesReq) -> dict:
+        return propose_sources(req.project_id, req.text).to_dict()
+
+    @app.post("/api/sources/confirm")
+    def _confirm(req: _ConfirmSourcesReq) -> List[dict]:
+        return confirm_and_connect_sources(req.project_id, req.sources, req.confirmed_by)
 
     return app
 
