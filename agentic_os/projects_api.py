@@ -354,10 +354,29 @@ def propose_sources(project_id: str, text: str):
                                     assumptions=assumptions, questions=questions)
 
 
-def confirm_and_connect_sources(project_id: str, source_specs: List[dict], confirmed_by: str) -> List[dict]:
-    """Confirm an (already-answered) proposal and actually connect the sources. Files are
-    scanned for real by the stdlib LocalFilesConnector; other kinds report 'pending' until
-    their connector is bound. Returns ContextSource projections for the UI."""
+def build_source_registry(resolver: Optional[Any] = None) -> Any:
+    """A registry routing each source kind to its real connector. Files are always real
+    (stdlib LocalFilesConnector). Database (PostgreSQL) and cloud files (Google Drive) are
+    registered — and connect for real — only when a credential ``resolver`` is provided (a
+    deployment binds its CredentialBroker here). Without one they stay 'pending' rather than
+    attempting a live connection during a demo."""
+    from .sources import SourceConnectorRegistry
+    reg = SourceConnectorRegistry.default()  # files
+    if resolver is not None:
+        from .sources_drive import GoogleDriveSourceConnector
+        from .sources_postgres import PostgresSourceConnector
+        reg.register(PostgresSourceConnector(resolver=resolver))
+        reg.register(GoogleDriveSourceConnector(resolver=resolver))
+    return reg
+
+
+def confirm_and_connect_sources(project_id: str, source_specs: List[dict], confirmed_by: str,
+                                registry: Optional[Any] = None) -> List[dict]:
+    """Confirm an (already-answered) proposal and actually connect the sources through the
+    right connector. Files are scanned for real by the stdlib LocalFilesConnector; database/
+    cloud route to PostgresSourceConnector/GoogleDriveSourceConnector when the ``registry``
+    carries them (see :func:`build_source_registry`), else report 'pending'. Returns
+    ContextSource projections for the UI."""
     from .sources import (AccessMode, ConfirmedSourceIntent, IndexingPolicy, ProposedSource,
                           SourceConnectorRegistry, SourceKind)
 
@@ -373,7 +392,8 @@ def confirm_and_connect_sources(project_id: str, source_specs: List[dict], confi
         ))
     intent = ConfirmedSourceIntent(project_id=project_id, sources=tuple(specs),
                                    confirmed_by=confirmed_by, confirmed_at="")
-    return [cs.to_projection() for cs in SourceConnectorRegistry.default().connect(intent)]
+    reg = registry if registry is not None else SourceConnectorRegistry.default()
+    return [cs.to_projection() for cs in reg.connect(intent)]
 
 
 def apps_from_setup_guides(connected: Optional[Set[str]] = None) -> Optional[List[dict]]:
