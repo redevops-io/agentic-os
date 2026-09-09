@@ -57,6 +57,24 @@ def test_sources_runtime_templates_endpoints():
     assert any(not r["ready"] and r["label"] == "Gmail" for r in prospect["readiness"])  # missing dep surfaced
 
 
+def test_mission_detail_carries_actions_and_evidence_with_why():
+    d = client.get("/api/projects/p/missions/4821").json()
+    assert d["summary"]["title"] == "Refund Sarah Chen"
+    # ACTIONS used, each with a provider + why (the EXPLAIN half)
+    refund = next(s for s in d["steps"] if s["capability"] == "billing.refund.execute")
+    assert refund["provider"] == "polar" and refund["tier"] == 4 and refund["why"]
+    # EVIDENCE used: query evidence (records + observed) vs file evidence (identity), each with why
+    ev = {c["source_id"]: c for c in d["context_used"]}
+    assert ev["crm"]["evidence_kind"] == "query" and ev["crm"]["retrieved"]["count"] == 3
+    assert ev["crm"]["retrieved"]["observed_at"] and ev["crm"]["why"]
+    assert ev["pdfs"]["evidence_kind"] == "file" and ev["pdfs"]["identity"]["fingerprint"]
+    assert d["context_plan_note"]
+
+
+def test_unknown_mission_detail_is_empty():
+    assert client.get("/api/projects/p/missions/nope").json() == {}
+
+
 def test_overview_includes_sources_and_runtime_for_the_stack_card():
     ov = client.get("/api/projects/customer-ops/overview").json()
     assert {"sources", "runtime"} <= set(ov)
