@@ -80,3 +80,71 @@ def test_enum_like_state_is_unwrapped_to_its_value():
                            build_adapter=lambda _r: object(),
                            verify=lambda _a: _Setup(_EnumLike(), True))
     assert out.state == "VERIFIED_READ"
+
+
+# ── hosted-callback session (served app: two HTTP steps, no loopback) ──
+class _FakeGrant:
+    def __init__(self, token, account_ref="T1", scopes=("chat:write",)):
+        self.access_token = token
+        self.account_ref = account_ref
+        self.scopes = scopes
+
+
+class _FakeFlow:
+    def authorize_url(self, *, state):
+        return f"https://provider/authorize?client_id=x&state={state}"
+
+    def exchange_code(self, code):
+        return _FakeGrant(f"tok-for-{code}")
+
+
+class _FakeBroker:
+    def __init__(self):
+        self.resolver = object()
+        self._n = 0
+
+    def store(self, provider, grant):
+        self._n += 1
+        return f"{provider}:oauth:{self._n}"
+
+
+def _session(state="S1"):
+    from agentic_os.integrations.connect import HostedConnectSession
+    return HostedConnectSession(
+        provider="slack", flow=_FakeFlow(), broker=_FakeBroker(),
+        build_adapter=lambda ref, resolver: ("adapter", ref),
+        verify=lambda _a: _Setup("VERIFIED_READ", True, "auth.test ok"),
+        state_factory=lambda: state,
+    )
+
+
+def test_hosted_start_returns_consent_url_with_state():
+    s = _session().start()
+    assert s["state"] == "S1" and "state=S1" in s["authorize_url"]
+
+
+def test_hosted_complete_verifies_and_returns_outcome():
+    sess = _session()
+    sess.start()
+    out = sess.complete("code123", "S1")
+    assert out.connected and out.state == "VERIFIED_READ"
+    assert out.credential_ref == "slack:oauth:1" and out.account_ref == "T1"
+
+
+def test_hosted_complete_refuses_state_mismatch():
+    sess = _session()
+    sess.start()
+    out = sess.complete("code123", "WRONG")
+    assert not out.connected and "state mismatch" in out.detail
+
+
+def test_hosted_complete_before_start_is_refused():
+    out = _session().complete("code123", "S1")  # no start() → no stored state
+    assert not out.connected and "state mismatch" in out.detail
+
+
+def test_hosted_complete_without_code_is_refused():
+    sess = _session()
+    sess.start()
+    out = sess.complete("", "S1")
+    assert not out.connected and "no authorization code" in out.detail
