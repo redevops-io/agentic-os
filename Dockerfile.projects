@@ -4,6 +4,10 @@
 # The UI bundle ships in the wheel (agentic_os/projects_ui), so no Node build is needed here.
 FROM python:3.12-slim
 WORKDIR /app
+# git is required at install time: runtime-contracts + redevops-connectors are git dependencies.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
 COPY . /app
 RUN pip install --no-cache-dir '.[projects]'
 ENV PROJECTS_HOST=0.0.0.0 PROJECTS_PORT=8787
