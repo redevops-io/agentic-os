@@ -95,6 +95,16 @@ def test_outreach_template_is_offered():
     assert any(t["id"] == "outreach" for t in tpls)
 
 
+def test_build_source_registry_use_rag_binds_the_live_indexer():
+    from agentic_os.projects_api import build_source_registry
+    from agentic_os.sources import CountingIndexer, SourceKind
+    from agentic_os.sources_rag import RagIndexer
+    files = build_source_registry(use_rag=True).connectors[SourceKind.FILES]
+    assert isinstance(files.indexer, RagIndexer)          # live RAG indexer bound
+    files_off = build_source_registry(use_rag=False).connectors[SourceKind.FILES]
+    assert isinstance(files_off.indexer, CountingIndexer)  # default stand-in otherwise
+
+
 def test_connect_start_falls_back_to_simulated_without_a_hosted_app():
     # No hosted OAuth app configured (no client creds in the test env) → simulated connect.
     r = client.post("/api/apps/gmail/connect/start").json()

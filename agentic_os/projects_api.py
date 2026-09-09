@@ -431,19 +431,35 @@ def propose_sources(project_id: str, text: str):
                                     assumptions=assumptions, questions=questions)
 
 
-def build_source_registry(resolver: Optional[Any] = None) -> Any:
+def build_source_registry(resolver: Optional[Any] = None, *, use_rag: Optional[bool] = None) -> Any:
     """A registry routing each source kind to its real connector. Files are always real
     (stdlib LocalFilesConnector). Database (PostgreSQL) and cloud files (Google Drive) are
     registered — and connect for real — only when a credential ``resolver`` is provided (a
     deployment binds its CredentialBroker here). Without one they stay 'pending' rather than
-    attempting a live connection during a demo."""
-    from .sources import SourceConnectorRegistry
-    reg = SourceConnectorRegistry.default()  # files
+    attempting a live connection during a demo.
+
+    ``use_rag`` (or ``$PROJECTS_RAG``) binds the live Context-Runtime/RAG indexer to the files
+    connector so file/drive content is actually indexed + retrievable — needs ``[rag]``."""
+    import os
+    from .sources import LocalFilesConnector, SourceConnectorRegistry
+    if use_rag is None:
+        use_rag = os.environ.get("PROJECTS_RAG", "").lower() in ("1", "true", "yes")
+
+    reg = SourceConnectorRegistry()
+    if use_rag:
+        from .sources_rag import RagIndexer
+        reg.register(LocalFilesConnector(indexer=RagIndexer()))  # real indexing + retrieval
+    else:
+        reg.register(LocalFilesConnector())  # stdlib scan (CountingIndexer)
     if resolver is not None:
         from .sources_drive import GoogleDriveSourceConnector
         from .sources_postgres import PostgresSourceConnector
+        indexer_kw = {}
+        if use_rag:
+            from .sources_rag import RagIndexer
+            indexer_kw = {"indexer": RagIndexer()}
         reg.register(PostgresSourceConnector(resolver=resolver))
-        reg.register(GoogleDriveSourceConnector(resolver=resolver))
+        reg.register(GoogleDriveSourceConnector(resolver=resolver, **indexer_kw))
     return reg
 
 
