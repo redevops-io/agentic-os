@@ -41,6 +41,52 @@ def test_apps_projection_has_the_provider_shape():
             "manual_steps", "credential_fields"} <= set(slack)
 
 
+def test_sources_runtime_templates_endpoints():
+    srcs = client.get("/api/projects/p/sources").json()
+    assert {"files", "database", "cloud_files"} <= {s["kind"] for s in srcs}
+    crm = next(s for s in srcs if s["kind"] == "database")
+    assert crm["access_mode"] == "read_only" and crm["source_runtime"] == "context"
+    assert "billing.card_data" in crm["denied"]  # context grant is scoped, separate from capability grant
+
+    rt = client.get("/api/projects/p/runtime").json()
+    assert {"runtimes", "models", "security", "apps", "sources"} <= set(rt)
+    assert any(r["name"] == "Context Runtime" for r in rt["runtimes"])
+
+    tpls = client.get("/api/projects/p/templates").json()
+    prospect = next(t for t in tpls if t["id"] == "prospect")
+    assert any(not r["ready"] and r["label"] == "Gmail" for r in prospect["readiness"])  # missing dep surfaced
+
+
+def test_overview_includes_sources_and_runtime_for_the_stack_card():
+    ov = client.get("/api/projects/customer-ops/overview").json()
+    assert {"sources", "runtime"} <= set(ov)
+
+
+def test_mission_carries_context_used():
+    m = next(x for x in client.get("/api/projects/p/missions").json() if x["id"] == "4821")
+    assert "HubSpot customer record" in m["context_used"]
+
+
+def test_propose_and_confirm_sources_scans_a_real_folder(tmp_path):
+    (tmp_path / "a.pdf").write_text("x")
+    (tmp_path / "b.md").write_text("y")
+    prop = client.post("/api/sources/propose",
+                       json={"project_id": "p", "text": f"use the files in {tmp_path} as context"}).json()
+    assert prop["sources"][0]["kind"] == "files"
+    assert prop["assumptions"]  # inferred read-only + content types
+    connected = client.post("/api/sources/confirm", json={
+        "project_id": "p", "confirmed_by": "alex",
+        "sources": [{"kind": "files", "location": str(tmp_path)}],
+    }).json()
+    assert connected[0]["stats"]["indexed"] == 2 and connected[0]["health"]["state"] == "healthy"
+
+
+def test_propose_database_asks_which_tables():
+    prop = client.post("/api/sources/propose",
+                       json={"project_id": "p", "text": "use the postgres database as context"}).json()
+    assert prop["questions"]  # can't safely guess which schemas/tables
+
+
 def test_sidekick_honours_the_context_contract():
     r = client.post("/api/sidekick", json={
         "ctx": {"projectId": "p", "section": "Workflows", "objectRef": "Customer Refund Handling"},
