@@ -59,7 +59,7 @@ class SampleProjectionProvider:
     #: providers currently connected — mutated by connect_app so apps() and template
     #: readiness reflect real connection state (seeded from the sample's connected apps).
     connected: Set[str] = field(
-        default_factory=lambda: {a["provider"] for a in _sample_apps() if a["state"] != "NOT_CONNECTED"} | {"polar"})
+        default_factory=lambda: {a["provider"] for a in _sample_apps() if a["state"] != "NOT_CONNECTED"} | {"polar", "apollo"})
 
     def projects(self) -> List[dict]:
         return [{"id": self.project_id, "name": self.project_name, "health": "ok"}]
@@ -72,6 +72,8 @@ class SampleProjectionProvider:
             ("vti", "Review VTI exposure", "Portfolio Review", "completed", "Verified", "mission:vti", []),
             ("rel24", "Deploy release 2.4", "Release Workflow", "failed", "Verify step", "mission:rel24", []),
             ("prospect", "Weekly prospecting", "Prospecting", "scheduled", "—", "mission:prospect", []),
+            ("outreach", "Outreach — Tasha at Nutrients.tech", "Cold Outreach", "needs", "5/8", "mission:outreach",
+             ["Generated copy", "Generated hero asset"]),
         ]
         return [{"id": i, "title": t, "workflow": w, "state": s, "progress": p,
                  "context_used": ctx, **_prov("mission", r)}
@@ -279,6 +281,11 @@ def _sample_templates() -> List[dict]:
             [("Slack", A, "slack"), ("HubSpot", A, "hubspot"), ("CRM database", S, "crm")]),
         tpl("reconcile", "Reconcile CRM", ["crm.contact.upsert", "crm.note.create"], ["CRM database"], [],
             "CRM Reconciliation", [("HubSpot", A, "hubspot"), ("CRM database", S, "crm")]),
+        tpl("outreach", "Run cold outreach for the agentic-apps stack",
+            ["generate.copy", "generate.asset", "outreach.sequence.configure", "outreach.enroll"],
+            [], ["Sequence activation is provider-UI-only (a human toggles it on)"],
+            "Cold Outreach",
+            [("Apollo", A, "apollo")]),
     ]
 
 
@@ -287,6 +294,8 @@ def _mission_evidence(mission_id: str) -> Dict[str, Any]:
     the Available/Used/Why symmetry (Available comes from /apps and /sources). Evidence
     distinguishes QUERY evidence (records retrieved live, with count + observed time) from
     CATALOG/FILE evidence (identity: fingerprint/version), matching sources_postgres."""
+    if mission_id == "outreach":
+        return _outreach_evidence()
     if mission_id != "4821":
         return {"steps": [], "context_used": [], "context_plan_note": ""}
     steps = [  # ACTIONS used · provider chosen · why (EXPLAIN)
@@ -317,6 +326,45 @@ def _mission_evidence(mission_id: str) -> Dict[str, Any]:
     return {"steps": steps, "context_used": context_used,
             "context_plan_note": "Sources define what evidence is available; Context Runtime chose SQL-in-place "
                                  "for the structured customer data and vector retrieval for the policy prose."}
+
+
+def _outreach_evidence() -> Dict[str, Any]:
+    """The outreach Mission (synthesis → configure → boundary → verify). Logical steps are
+    portable; the ACTIVATE_SEQUENCE step is a PHYSICAL capability result — Apollo activation is
+    provider-UI-only, so it waits on a human. Generated copy + hero image are the created
+    artifacts (creative asset is optional)."""
+    steps = [
+        {"n": 1, "capability": "prepare.outreach", "provider": "runtime", "tier": 0,
+         "status": "done", "why": "target Tasha · Nutrients.tech · cold outreach"},
+        {"n": 2, "capability": "generate.copy", "provider": "claude", "tier": 0,
+         "status": "done", "why": "grounded in a nutrition-tech ops example; subject prefixed [test]"},
+        {"n": 3, "capability": "generate.asset", "provider": "fal.ai", "tier": 0,
+         "status": "done", "why": "optional creative asset — multimodal composition"},
+        {"n": 4, "capability": "outreach.sequence.configure", "provider": "apollo", "tier": 3,
+         "status": "done", "why": "built the sequence step + email template (wait_mode day; template endpoint)"},
+        {"n": 5, "capability": "outreach.enroll", "provider": "apollo", "tier": 3,
+         "status": "done", "why": "enrolled tasha@nutrients.tech from the warmed mailbox"},
+        {"n": 6, "capability": "outreach.sequence.activate", "provider": "apollo", "tier": 4,
+         "status": "waiting", "why": "PROVIDER_UI_REQUIRED — Apollo activation is UI-only (capability advertises "
+                                     "automatable=false); a human flips the sequence on"},
+        {"n": 7, "capability": "outreach.observe", "provider": "apollo", "tier": 1,
+         "status": "todo", "why": "after activation, observe the send through the mailbox"},
+        {"n": 8, "capability": "verify.delivery", "provider": "apollo", "tier": 1,
+         "status": "todo", "why": "confirm delivery and produce an ExecutionReceipt"},
+    ]
+    context_used = [
+        {"source_id": "copy", "source_name": "Generated copy", "provider": "claude", "kind": "artifact",
+         "evidence_kind": "file", "retrieved": None, "identity": {"version": "v1"},
+         "refs": [{"ref": "artifact:copy", "summary": "[test] One governed system for Nutrients.tech's apps + data"}],
+         "why": "synthesized from the goal + target context"},
+        {"source_id": "asset", "source_name": "Generated hero asset", "provider": "fal.ai", "kind": "artifact",
+         "evidence_kind": "file", "retrieved": None, "identity": {"version": "v1"},
+         "refs": [{"ref": "artifact:hero", "summary": "conceptual hero — apps + DB + doc → one governed system"}],
+         "preview": "/hero.jpg", "why": "optional creative asset (copy is required; asset is not)"},
+    ]
+    return {"steps": steps, "context_used": context_used,
+            "context_plan_note": "Logical outreach workflow is provider-independent; activation is a physical "
+                                 "capability result — Apollo is provider-UI-only, so the Mission pauses for a human."}
 
 
 def propose_sources(project_id: str, text: str):

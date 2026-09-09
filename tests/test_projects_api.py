@@ -75,6 +75,26 @@ def test_unknown_mission_detail_is_empty():
     assert client.get("/api/projects/p/missions/nope").json() == {}
 
 
+def test_outreach_mission_detail_has_the_provider_ui_gate_and_artifacts():
+    d = client.get("/api/projects/p/missions/outreach").json()
+    assert d["summary"]["workflow"] == "Cold Outreach"
+    caps = {s["capability"]: s for s in d["steps"]}
+    # copy + asset are synthesized; the asset is optional but present here
+    assert caps["generate.copy"]["status"] == "done" and caps["generate.copy"]["provider"] == "claude"
+    assert caps["generate.asset"]["provider"] == "fal.ai"
+    # the activation boundary waits on a human because it's provider-UI-only (physical result)
+    act = caps["outreach.sequence.activate"]
+    assert act["status"] == "waiting" and "PROVIDER_UI_REQUIRED" in act["why"]
+    # created artifacts surface as context, hero carries an image preview
+    hero = next(c for c in d["context_used"] if c["source_id"] == "asset")
+    assert hero["preview"] == "/hero.jpg"
+
+
+def test_outreach_template_is_offered():
+    tpls = client.get("/api/projects/p/templates").json()
+    assert any(t["id"] == "outreach" for t in tpls)
+
+
 def test_template_readiness_reflects_real_connection_state():
     # a fresh provider: prospecting needs Gmail, which is NOT connected → surfaced as not-ready
     fresh = TestClient(create_app(SampleProjectionProvider()))
