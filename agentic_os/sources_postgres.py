@@ -15,8 +15,23 @@ drive a fake connection returning canned ``information_schema`` rows; production
 
 The credential (user/password) is resolved from a ``CredentialRef`` at the moment of use and
 never stored on the :class:`~agentic_os.sources.ContextSource` or in an
-:class:`~agentic_os.sources.EvidenceRef`. Actual embedding/index building over the discovered
-tables is Context Runtime / redevops-rag's job, reached through the ``Indexer`` seam.
+:class:`~agentic_os.sources.EvidenceRef`.
+
+**Two evidence shapes, and two separate concerns.**
+
+* :func:`catalog_evidence` = **catalog evidence** — schema *identity* (which tables/columns
+  exist, one ref per table). Provenance, not content.
+* :func:`retrieve_records` = **query evidence** — the actual records supporting a Mission,
+  retrieved through the path a Mission consumes (a scoped, read-only, identifier-validated
+  ``SELECT``), returned as a :class:`RetrievedEvidence` with a record count and observed-at.
+
+And this connector is deliberately only **source connectivity** — identify, authorize, scope,
+observe, and *retrieve*. It is NOT **context materialization/indexing** (deciding what to
+ingest/cache and in which representation — BM25 / vector / graph). That is Context Runtime's
+physical-plan choice, reached through the ``Indexer`` seam; for many Missions the right plan
+for a live database is *scoped SQL against the source* (this retrieve path), not ingesting the
+whole database into RAG — whereas PDFs from a drive are better indexed. Keeping the two apart
+is what lets Context Runtime own that decision per task.
 """
 from __future__ import annotations
 
@@ -50,7 +65,7 @@ _CATALOG_SQL = (
     "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
     "ORDER BY table_schema, table_name, ordinal_position"
 )
-_READ_ONLY_SQL = "SET default_transaction_read_only = on"
+_READ_ONLY_SQL = "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY"
 
 
 def _now() -> str:
@@ -90,6 +105,21 @@ def _select(conn: Any, sql: str, params: Sequence[Any] = ()) -> List[tuple]:
 
 
 def _enforce_read_only(conn: Any) -> None:
+    """Put the whole connection in read-only mode, enforced by the *server* for every
+    transaction — a live test proved that ``SET default_transaction_read_only`` alone does
+    not bind an already-open transaction, so a write could still slip through.
+
+    Prefer the driver's connection-level flag (psycopg3 ``read_only`` / psycopg2
+    ``set_session``), which makes the server begin every transaction READ ONLY; also issue
+    the SQL session characteristic as a belt-and-suspenders fallback. Called before any
+    query runs, so no transaction is open yet (a precondition for setting the flag)."""
+    try:
+        conn.read_only = True            # psycopg3
+    except Exception:
+        try:
+            conn.set_session(readonly=True)   # psycopg2
+        except Exception:
+            pass
     cur = conn.cursor()
     try:
         cur.execute(_READ_ONLY_SQL)
@@ -134,14 +164,76 @@ def discover_catalog(conn: Any, *, allowed_schemas: Sequence[str] = (),
 
 
 def catalog_evidence(source_id: str, catalog: Sequence[TableInfo]) -> List[EvidenceRef]:
-    """Turn the discovered catalog into structured EvidenceRefs a Mission can consume — one
-    per table, addressable and summarised, with no row content and no secret."""
+    """CATALOG evidence — schema identity. One EvidenceRef per table (``kind="table"``),
+    addressable and summarised, with no row content and no secret. This is *what exists*, not
+    *what supported a Mission*."""
     return [
         EvidenceRef(source_id=source_id, ref=f"postgres:{t.qualified}", kind="table",
                     summary=f"{t.qualified} ({len(t.columns)} columns: "
                             f"{', '.join(c for c, _ in t.columns[:6])}{'…' if len(t.columns) > 6 else ''})")
         for t in catalog
     ]
+
+
+@dataclass(frozen=True)
+class RetrievedEvidence:
+    """QUERY evidence — the actual records supporting a Mission, distinct from catalog
+    evidence (schema identity). Carries provenance (the exact query, how many rows, when
+    observed) so Projects' "Context used" can say "14 records retrieved · observed 10:41";
+    the rows are addressable :class:`EvidenceRef` (``kind="record"``), never dumped inline,
+    never a secret."""
+
+    source_id: str
+    table: str
+    query: str
+    record_count: int
+    observed_at: str
+    refs: Tuple[EvidenceRef, ...] = ()
+
+    def to_dict(self) -> Dict[str, object]:
+        return {"source_id": self.source_id, "table": self.table, "query": self.query,
+                "record_count": self.record_count, "observed_at": self.observed_at,
+                "refs": [r.to_dict() for r in self.refs]}
+
+
+def _ident(name: str) -> str:
+    # A double-quoted SQL identifier with embedded quotes escaped — used ONLY on names we've
+    # already validated against the live catalog, so this is defence in depth, not the gate.
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _row_summary(columns: Sequence[str], row: Sequence[Any]) -> str:
+    return " · ".join(f"{c}={row[i]}" for i, c in enumerate(columns[:3]) if i < len(row))
+
+
+def retrieve_records(conn: Any, table: TableInfo, *, source_id: str, columns: Sequence[str] = (),
+                     where_column: str = "", where_value: Any = None, limit: int = 50,
+                     clock: Callable[[], str] = _now) -> RetrievedEvidence:
+    """QUERY evidence: retrieve real rows from an *already-discovered, in-scope* table via a
+    scoped read-only SELECT, and return them as EvidenceRefs a Mission consumes.
+
+    Injection-safe by construction: column and filter identifiers are accepted only if they
+    appear in ``table.columns`` (the identifiers we discovered), the filter *value* is bound
+    as a parameter, a ``LIMIT`` is always applied, and the whole thing runs through
+    :func:`_select` (read-only). Passing an unknown column is ignored, not interpolated.
+    """
+    known = {c for c, _ in table.columns}
+    cols = [c for c in columns if c in known] or [c for c, _ in table.columns]
+    col_sql = ", ".join(_ident(c) for c in cols)
+    sql = f"SELECT {col_sql} FROM {_ident(table.schema)}.{_ident(table.name)}"
+    params: Tuple[Any, ...] = ()
+    if where_column and where_column in known:
+        sql += f" WHERE {_ident(where_column)} = %s"
+        params = (where_value,)
+    sql += f" LIMIT {int(limit)}"
+    rows = _select(conn, sql, params)
+    refs = tuple(
+        EvidenceRef(source_id=source_id, ref=f"postgres:{table.qualified}#{i}", kind="record",
+                    summary=_row_summary(cols, r))
+        for i, r in enumerate(rows)
+    )
+    return RetrievedEvidence(source_id=source_id, table=table.qualified, query=sql,
+                             record_count=len(rows), observed_at=clock(), refs=refs)
 
 
 def psycopg_connect(params: Dict[str, Any]) -> Any:  # pragma: no cover — needs a live DB + driver
