@@ -21,6 +21,13 @@ from agentic_os.integrations import (
 
 
 # ── env-backed credential resolution ────────────────────────────────────────────
+def test_token_env_map_covers_every_shipped_provider():
+    from agentic_os.integrations import PROVIDER_TOKEN_ENV
+    expected = {"slack", "gmail", "google_calendar", "hubspot", "stripe",
+                "klaviyo", "ayrshare", "blotato", "postiz", "whatsapp_business"}
+    assert expected <= set(PROVIDER_TOKEN_ENV)
+
+
 def test_env_resolver_reads_the_provider_token():
     r = EnvSecretResolver(env={"SLACK_BOT_TOKEN": "xoxb-real"})
     assert r.resolve("slack:token") == {"access_token": "xoxb-real"}

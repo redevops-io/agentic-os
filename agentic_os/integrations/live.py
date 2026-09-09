@@ -34,7 +34,12 @@ PROVIDER_TOKEN_ENV: Dict[str, str] = {
     "gmail": "GOOGLE_ACCESS_TOKEN",
     "google_calendar": "GOOGLE_ACCESS_TOKEN",
     "hubspot": "HUBSPOT_ACCESS_TOKEN",
-    "stripe": "STRIPE_ACCESS_TOKEN",
+    "stripe": "STRIPE_API_KEY",
+    "klaviyo": "KLAVIYO_API_KEY",
+    "ayrshare": "AYRSHARE_API_KEY",
+    "blotato": "BLOTATO_API_KEY",
+    "postiz": "POSTIZ_API_KEY",
+    "whatsapp_business": "WHATSAPP_ACCESS_TOKEN",
 }
 
 
@@ -69,14 +74,35 @@ def default_adapter_factory(resolver: Any, *, transport: Optional[object] = None
     if the ``[connectors]`` extra is not installed."""
     try:
         from redevops_connectors import UrllibTransport
-        from redevops_connectors.providers import SlackAdapter
+        from redevops_connectors.providers import (
+            AyrshareAdapter, BlotatoAdapter, GmailAdapter, GoogleCalendarAdapter,
+            HubSpotAdapter, KlaviyoAdapter, PostizAdapter, SlackAdapter, StripeAdapter,
+            WhatsAppAdapter,
+        )
     except ImportError as e:  # pragma: no cover — exercised only without the extra
         raise ImportError(
             "live provider adapters require the connector plugin: "
             "pip install 'agentic-os[connectors]'") from e
     tp = transport or UrllibTransport()
+
+    def _ref(provider: str) -> str:
+        return f"{provider}:token"
+
     return {
-        "slack": lambda: SlackAdapter(transport=tp, resolver=resolver, credential_ref="slack:token"),
+        "slack": lambda: SlackAdapter(transport=tp, resolver=resolver, credential_ref=_ref("slack")),
+        "klaviyo": lambda: KlaviyoAdapter(transport=tp, resolver=resolver, credential_ref=_ref("klaviyo")),
+        "ayrshare": lambda: AyrshareAdapter(transport=tp, resolver=resolver, credential_ref=_ref("ayrshare")),
+        "blotato": lambda: BlotatoAdapter(transport=tp, resolver=resolver, credential_ref=_ref("blotato")),
+        "postiz": lambda: PostizAdapter(transport=tp, resolver=resolver, credential_ref=_ref("postiz"),
+                                        base_url=os.environ.get("POSTIZ_BASE_URL") or None),
+        "gmail": lambda: GmailAdapter(transport=tp, resolver=resolver, credential_ref=_ref("gmail")),
+        "google_calendar": lambda: GoogleCalendarAdapter(
+            transport=tp, resolver=resolver, credential_ref=_ref("google_calendar")),
+        "whatsapp_business": lambda: WhatsAppAdapter(
+            transport=tp, resolver=resolver, credential_ref=_ref("whatsapp_business"),
+            phone_number_id=os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "")),
+        "hubspot": lambda: HubSpotAdapter(transport=tp, resolver=resolver, credential_ref=_ref("hubspot")),
+        "stripe": lambda: StripeAdapter(transport=tp, resolver=resolver, credential_ref=_ref("stripe")),
     }
 
 
