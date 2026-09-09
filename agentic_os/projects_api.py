@@ -36,6 +36,7 @@ class ProjectionProvider(Protocol):
     def projects(self) -> List[dict]: ...
     def overview(self, project_id: str) -> dict: ...
     def missions(self, project_id: str) -> List[dict]: ...
+    def mission_detail(self, project_id: str, mission_id: str) -> dict: ...
     def workflows(self, project_id: str) -> List[dict]: ...
     def attention(self, project_id: str) -> List[dict]: ...
     def discovery(self, project_id: str) -> List[dict]: ...
@@ -70,6 +71,12 @@ class SampleProjectionProvider:
         return [{"id": i, "title": t, "workflow": w, "state": s, "progress": p,
                  "context_used": ctx, **_prov("mission", r)}
                 for i, t, w, s, p, r, ctx in m]
+
+    def mission_detail(self, project_id: str, mission_id: str) -> dict:
+        summary = next((m for m in self.missions(project_id) if m["id"] == mission_id), None)
+        if summary is None:
+            return {}
+        return {"summary": summary, **_mission_evidence(mission_id)}
 
     def workflows(self, _pid: str) -> List[dict]:
         return [
@@ -243,6 +250,43 @@ def _sample_templates() -> List[dict]:
     ]
 
 
+def _mission_evidence(mission_id: str) -> Dict[str, Any]:
+    """The Mission's ACTIONS-used and EVIDENCE-used, each with a 'why' — the Used+Why half of
+    the Available/Used/Why symmetry (Available comes from /apps and /sources). Evidence
+    distinguishes QUERY evidence (records retrieved live, with count + observed time) from
+    CATALOG/FILE evidence (identity: fingerprint/version), matching sources_postgres."""
+    if mission_id != "4821":
+        return {"steps": [], "context_used": [], "context_plan_note": ""}
+    steps = [  # ACTIONS used · provider chosen · why (EXPLAIN)
+        {"n": 1, "capability": "chat.message.read", "provider": "whatsapp_business", "tier": 2,
+         "status": "done", "why": "inbound channel the request arrived on"},
+        {"n": 2, "capability": "crm.contact.upsert", "provider": "hubspot", "tier": 2,
+         "status": "done", "why": "named CRM; only connected contact store"},
+        {"n": 3, "capability": "billing.order.find", "provider": "polar", "tier": 1,
+         "status": "done", "why": "billing provider of record for this account"},
+        {"n": 4, "capability": "approval.request", "provider": "slack", "tier": 3,
+         "status": "waiting", "why": "policy requires human approval before a refund"},
+        {"n": 5, "capability": "billing.refund.execute", "provider": "polar", "tier": 4,
+         "status": "todo", "why": "moves money — runs only after approval, then verified"},
+    ]
+    context_used = [  # EVIDENCE used · how retrieved · why (Context Plan)
+        {"source_id": "crm", "source_name": "CRM database", "provider": "postgres", "kind": "database",
+         "evidence_kind": "query",
+         "retrieved": {"count": 3, "observed_at": "2026-09-09T11:31:00Z"}, "identity": None,
+         "refs": [{"ref": "postgres:customers#0", "summary": "id=8821 · email=sarah@…"},
+                  {"ref": "postgres:support.tickets#0", "summary": "subject=Billed twice · status=open"}],
+         "why": "scoped SQL against the live source — Context Runtime queried in place rather than ingesting the DB"},
+        {"source_id": "pdfs", "source_name": "Refund Policies", "provider": "google_drive", "kind": "cloud_files",
+         "evidence_kind": "file",
+         "retrieved": None, "identity": {"fingerprint": "a1b2c3", "version": "v19"},
+         "refs": [{"ref": "gdrive:f1", "summary": "Refund Policy.pdf"}],
+         "why": "vector retrieval over indexed policy PDFs — the right representation for prose"},
+    ]
+    return {"steps": steps, "context_used": context_used,
+            "context_plan_note": "Sources define what evidence is available; Context Runtime chose SQL-in-place "
+                                 "for the structured customer data and vector retrieval for the policy prose."}
+
+
 def propose_sources(project_id: str, text: str):
     """Deterministic 'use X as context' interpreter → an editable SourceConnectionProposal.
     Mirrors the integration wizard: infers reversible choices (read-only, content types),
@@ -376,6 +420,10 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     @app.get("/api/projects/{project_id}/missions")
     def _missions(project_id: str) -> List[dict]:
         return prov.missions(project_id)
+
+    @app.get("/api/projects/{project_id}/missions/{mission_id}")
+    def _mission_detail(project_id: str, mission_id: str) -> dict:
+        return prov.mission_detail(project_id, mission_id)
 
     @app.get("/api/projects/{project_id}/workflows")
     def _workflows(project_id: str) -> List[dict]:
