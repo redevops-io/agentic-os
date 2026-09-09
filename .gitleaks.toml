@@ -19,4 +19,7 @@ regexTarget = "match"
 regexes = [
   '''tok-twenty-[A-Za-z0-9-]+''',   # fake Twenty CRM keys (tests/test_onboarding.py, test_bootstrap.py)
   '''[A-Za-z0-9_-]*-DO-NOT-STORE''', # explicit "this is fake" marker convention
+  '''s3cret-never-logged''',        # fake Postgres test password baked into main@0bb05c4 (PR #98);
+                                    # superseded by the -DO-NOT-STORE convention above, but the commit
+                                    # is immutable so the history-wide scan needs it allow-listed.
 ]
