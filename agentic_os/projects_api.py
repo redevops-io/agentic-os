@@ -583,7 +583,42 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     def _confirm(req: _ConfirmSourcesReq) -> List[dict]:
         return confirm_and_connect_sources(req.project_id, req.sources, req.confirmed_by)
 
+    # Serve the bundled Projects UI at the SAME origin as the API (no CORS) — mounted LAST so
+    # the /api routes above always win. The UI is built with VITE_PROJECTS_API="/", so it calls
+    # this service's /api directly. `pip install 'agentic-os[projects]'` ships the bundle.
+    ui = _ui_dir()
+    if ui is not None:
+        from fastapi.staticfiles import StaticFiles
+        app.mount("/", StaticFiles(directory=str(ui), html=True), name="projects-ui")
+
     return app
+
+
+def _ui_dir() -> Optional["Path"]:
+    """The built Projects UI directory: ``$PROJECTS_UI_DIR`` if set, else the bundle vendored at
+    ``agentic_os/projects_ui/``. Returns None when no build is present (API-only)."""
+    import os
+    from pathlib import Path
+    candidates = []
+    env = os.environ.get("PROJECTS_UI_DIR")
+    if env:
+        candidates.append(Path(env))
+    candidates.append(Path(__file__).resolve().parent / "projects_ui")
+    for c in candidates:
+        if (c / "index.html").is_file():
+            return c
+    return None
+
+
+def main() -> None:
+    """Console entrypoint (``agentic-os-projects``): serve the Projects UI + API on one origin."""
+    import os
+    import uvicorn
+    host = os.environ.get("PROJECTS_HOST", "127.0.0.1")
+    port = int(os.environ.get("PROJECTS_PORT", "8787"))
+    served = "UI + API" if _ui_dir() is not None else "API only (no UI bundle found)"
+    print(f"ReDevOps Projects — {served} on http://{host}:{port}")
+    uvicorn.run(create_app(), host=host, port=port)
 
 
 # Module-level app for `uvicorn agentic_os.projects_api:app`.
