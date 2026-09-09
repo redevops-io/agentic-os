@@ -137,9 +137,10 @@ def test_read_only_session_is_set_before_discovery():
     PostgresSourceConnector(resolver=Resolver(), connect=connect,
                             clock=lambda: "t").connect_and_scan(spec, project_id="p", source_id="s")
     executed = conn_box["c"].executed
-    read_only_at = next(i for i, e in enumerate(executed) if "read_only = on" in e)
+    read_only_at = next(i for i, e in enumerate(executed) if "READ ONLY" in e.upper())
     discovery_at = next(i for i, e in enumerate(executed) if "information_schema.columns" in e)
     assert read_only_at < discovery_at  # read-only is enforced before any discovery query runs
+    assert conn_box["c"].read_only is True  # and the driver-level connection flag is set
 
 
 def test_connection_failure_is_error_health_not_a_crash():

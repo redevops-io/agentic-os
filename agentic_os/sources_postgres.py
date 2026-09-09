@@ -65,7 +65,7 @@ _CATALOG_SQL = (
     "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') "
     "ORDER BY table_schema, table_name, ordinal_position"
 )
-_READ_ONLY_SQL = "SET default_transaction_read_only = on"
+_READ_ONLY_SQL = "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY"
 
 
 def _now() -> str:
@@ -105,6 +105,21 @@ def _select(conn: Any, sql: str, params: Sequence[Any] = ()) -> List[tuple]:
 
 
 def _enforce_read_only(conn: Any) -> None:
+    """Put the whole connection in read-only mode, enforced by the *server* for every
+    transaction — a live test proved that ``SET default_transaction_read_only`` alone does
+    not bind an already-open transaction, so a write could still slip through.
+
+    Prefer the driver's connection-level flag (psycopg3 ``read_only`` / psycopg2
+    ``set_session``), which makes the server begin every transaction READ ONLY; also issue
+    the SQL session characteristic as a belt-and-suspenders fallback. Called before any
+    query runs, so no transaction is open yet (a precondition for setting the flag)."""
+    try:
+        conn.read_only = True            # psycopg3
+    except Exception:
+        try:
+            conn.set_session(readonly=True)   # psycopg2
+        except Exception:
+            pass
     cur = conn.cursor()
     try:
         cur.execute(_READ_ONLY_SQL)
