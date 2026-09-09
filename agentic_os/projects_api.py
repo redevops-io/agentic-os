@@ -31,6 +31,35 @@ def _prov(runtime: str, *refs: str) -> Dict[str, Any]:
     return {"source_runtime": runtime, "source_refs": list(refs)}
 
 
+# ── hosted OAuth (click-only Connect for the served deployment) ──────────────────
+_HOSTED: Any = None
+_HOSTED_TRIED = False
+
+
+def _get_hosted() -> Any:
+    """The deployment's :class:`HostedConnect`, built once from env. Returns None when the
+    connector plugin isn't installed or no OAuth app's client creds are set (Connect then falls
+    back to the simulated path)."""
+    global _HOSTED, _HOSTED_TRIED
+    if _HOSTED_TRIED:
+        return _HOSTED
+    _HOSTED_TRIED = True
+    import os
+    base = os.environ.get("PROJECTS_BASE_URL", "http://127.0.0.1:8787")
+    try:
+        from .integrations.hosted_oauth import HostedConnect, oauth_apps_from_env
+        if oauth_apps_from_env(base):           # any provider's client creds present?
+            _HOSTED = HostedConnect.from_env(base)
+    except Exception:
+        _HOSTED = None
+    return _HOSTED
+
+
+def _callback_page(body: str) -> str:
+    return ("<!doctype html><meta charset=utf-8><title>ReDevOps Connect</title>"
+            "<body style='font:16px system-ui;margin:4rem;text-align:center'>" + body + "</body>")
+
+
 # ── the projection contract ─────────────────────────────────────────────────────
 class ProjectionProvider(Protocol):
     def projects(self) -> List[dict]: ...
@@ -567,9 +596,34 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
 
     @app.post("/api/apps/{provider}/connect")
     def _connect_app(provider: str) -> dict:
-        # A served deployment binds a real HostedConnectSession here (start/callback); the
-        # sample simulates the CONNECTED outcome so Connect → readiness updates end to end.
+        # Simulated connect (no hosted OAuth app configured) — flips readiness for the demo.
         return prov.connect_app(provider)
+
+    @app.post("/api/apps/{provider}/connect/start")
+    def _connect_start(provider: str) -> dict:
+        """Begin hosted OAuth: return the provider consent URL the browser should open. Falls
+        back to the simulated connect when no ReDevOps OAuth app is registered for the provider."""
+        hosted = _get_hosted()
+        if hosted is not None and hosted.available(provider):
+            started = hosted.start(provider)
+            return {"hosted": True, "authorize_url": started["authorize_url"], "state": started["state"]}
+        return {"hosted": False, "authorize_url": None, "connected": prov.connect_app(provider)}
+
+    @app.get("/api/apps/connect/callback")
+    def _connect_callback(code: str = "", state: str = "") -> "HTMLResponse":
+        """The hosted redirect target: exchange the code, store the token, verify, and reflect
+        the connection in the projections. Returns a small page the user closes."""
+        from fastapi.responses import HTMLResponse
+        hosted = _get_hosted()
+        if hosted is None:
+            return HTMLResponse("<p>Hosted OAuth is not configured on this deployment.</p>", status_code=400)
+        outcome = hosted.callback(code, state)
+        if outcome.connected:
+            prov.connect_app(outcome.provider)  # reflect in /apps + template readiness
+            body = (f"<h2>&#10003; Connected {outcome.provider}</h2>"
+                    f"<p>{outcome.state} · you can close this tab and return to Projects.</p>")
+            return HTMLResponse(_callback_page(body))
+        return HTMLResponse(_callback_page(f"<h2>Couldn't connect</h2><p>{outcome.detail}</p>"), status_code=400)
 
     @app.get("/api/projects/{project_id}/sources")
     def _sources(project_id: str) -> List[dict]:

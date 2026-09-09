@@ -105,6 +105,19 @@ def test_build_source_registry_use_rag_binds_the_live_indexer():
     assert isinstance(files_off.indexer, CountingIndexer)  # default stand-in otherwise
 
 
+def test_connect_start_falls_back_to_simulated_without_a_hosted_app():
+    # No hosted OAuth app configured (no client creds in the test env) → simulated connect.
+    r = client.post("/api/apps/gmail/connect/start").json()
+    assert "hosted" in r
+    if not r["hosted"]:
+        assert r["authorize_url"] is None and r["connected"]["connected"] is True
+
+
+def test_hosted_callback_refuses_unknown_or_unconfigured():
+    r = client.get("/api/apps/connect/callback", params={"code": "x", "state": "bogus"})
+    assert r.status_code == 400  # hosted not configured, or unknown state — either way refused
+
+
 def test_serves_the_bundled_projects_ui_at_one_origin():
     # `agentic-os-projects` serves the SPA and the API on the same origin (no CORS).
     root = client.get("/")
