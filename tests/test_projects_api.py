@@ -95,6 +95,16 @@ def test_outreach_template_is_offered():
     assert any(t["id"] == "outreach" for t in tpls)
 
 
+def test_build_source_registry_use_rag_binds_the_live_indexer():
+    from agentic_os.projects_api import build_source_registry
+    from agentic_os.sources import CountingIndexer, SourceKind
+    from agentic_os.sources_rag import RagIndexer
+    files = build_source_registry(use_rag=True).connectors[SourceKind.FILES]
+    assert isinstance(files.indexer, RagIndexer)          # live RAG indexer bound
+    files_off = build_source_registry(use_rag=False).connectors[SourceKind.FILES]
+    assert isinstance(files_off.indexer, CountingIndexer)  # default stand-in otherwise
+
+
 def test_serves_the_bundled_projects_ui_at_one_origin():
     # `agentic-os-projects` serves the SPA and the API on the same origin (no CORS).
     root = client.get("/")
