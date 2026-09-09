@@ -16,8 +16,8 @@ use, and are they connected?" reflects the real Integration Plane when it's pres
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Protocol, Set
 
 try:
     from fastapi import FastAPI
@@ -41,6 +41,7 @@ class ProjectionProvider(Protocol):
     def attention(self, project_id: str) -> List[dict]: ...
     def discovery(self, project_id: str) -> List[dict]: ...
     def apps(self, project_id: str) -> List[dict]: ...
+    def connect_app(self, provider: str) -> dict: ...
     def sources(self, project_id: str) -> List[dict]: ...
     def runtime(self, project_id: str) -> dict: ...
     def templates(self, project_id: str) -> List[dict]: ...
@@ -55,6 +56,10 @@ class SampleProjectionProvider:
 
     project_id: str = "customer-ops"
     project_name: str = "Customer Operations"
+    #: providers currently connected — mutated by connect_app so apps() and template
+    #: readiness reflect real connection state (seeded from the sample's connected apps).
+    connected: Set[str] = field(
+        default_factory=lambda: {a["provider"] for a in _sample_apps() if a["state"] != "NOT_CONNECTED"} | {"polar"})
 
     def projects(self) -> List[dict]:
         return [{"id": self.project_id, "name": self.project_name, "health": "ok"}]
@@ -131,7 +136,21 @@ class SampleProjectionProvider:
         return [{"id": i, "time": t, "text": x, **_prov(rt)} for i, t, x, rt in rows]
 
     def apps(self, _pid: str) -> List[dict]:
-        return _sample_apps()
+        apps = _sample_apps()
+        for a in apps:  # reflect the live connection set
+            if a["provider"] in self.connected:
+                if a["state"] == "NOT_CONNECTED":
+                    a.update(state="VERIFIED_READ", health="ok", verified="Verified just now")
+            else:
+                a.update(state="NOT_CONNECTED", health="mut")
+        return apps
+
+    def connect_app(self, provider: str) -> dict:
+        """Mark a provider connected (a served-app deployment plugs a real HostedConnectSession
+        here; the sample simulates the outcome so Connect → readiness updates end to end)."""
+        self.connected.add(provider)
+        return {"provider": provider, "state": "VERIFIED_READ", "connected": True,
+                "detail": "connected (sample: simulated hosted OAuth)"}
 
     def sources(self, _pid: str) -> List[dict]:
         return _sample_sources()
@@ -140,7 +159,16 @@ class SampleProjectionProvider:
         return _sample_runtime()
 
     def templates(self, _pid: str) -> List[dict]:
-        return _sample_templates()
+        source_ids = {s["source_id"] for s in _sample_sources()}
+        out: List[dict] = []
+        for t in _sample_templates():
+            deps = t.pop("_deps")
+            t["readiness"] = [
+                {"label": lbl, "ready": (key in self.connected) if kind == "app" else (key in source_ids)}
+                for (lbl, kind, key) in deps
+            ]
+            out.append(t)
+        return out
 
     def overview(self, project_id: str) -> dict:
         return {
@@ -228,25 +256,29 @@ def _sample_runtime() -> dict:
 
 
 def _sample_templates() -> List[dict]:
-    def tpl(tid, goal, caps, srcs, auth, wf, readiness):
+    # deps are (label, kind, key): kind "app" keys a provider id, "source" keys a source id.
+    # readiness is computed against the live connection state in SampleProjectionProvider.templates.
+    A, S = "app", "source"
+
+    def tpl(tid, goal, caps, srcs, auth, wf, deps):
         return {"id": tid, "goal": goal, "required_capabilities": caps, "required_sources": srcs,
-                "authority_requirements": auth, "suggested_workflow": wf,
-                "readiness": [{"label": lbl, "ready": ok} for lbl, ok in readiness]}
+                "authority_requirements": auth, "suggested_workflow": wf, "_deps": deps}
     return [
         tpl("refunds", "Handle customer refunds",
             ["chat.message.send", "crm.contact.upsert", "approval.request", "billing.refund.execute"],
             ["Customer policy docs", "CRM database"], ["Approval required before refund"],
             "Customer Refund Handling",
-            [("WhatsApp", True), ("HubSpot", True), ("Slack", True), ("Polar", True),
-             ("Customer policy docs", True), ("CRM database", True)]),
+            [("WhatsApp", A, "whatsapp_business"), ("HubSpot", A, "hubspot"), ("Slack", A, "slack"),
+             ("Polar", A, "polar"), ("Customer policy docs", S, "pdfs"), ("CRM database", S, "crm")]),
         tpl("prospect", "Run weekly prospecting",
             ["crm.contact.upsert", "email.message.send"], ["CRM database"], [],
-            "Weekly Prospecting", [("Apollo", True), ("Gmail", False), ("HubSpot", True)]),
+            "Weekly Prospecting",
+            [("Apollo", A, "apollo"), ("Gmail", A, "gmail"), ("HubSpot", A, "hubspot"), ("CRM database", S, "crm")]),
         tpl("triage", "Review support queue", ["chat.message.read", "crm.contact.upsert"],
-            ["Support Postgres"], [], "Daily Support Triage",
-            [("Slack", True), ("HubSpot", True), ("Support Postgres", True)]),
+            ["CRM database"], [], "Daily Support Triage",
+            [("Slack", A, "slack"), ("HubSpot", A, "hubspot"), ("CRM database", S, "crm")]),
         tpl("reconcile", "Reconcile CRM", ["crm.contact.upsert", "crm.note.create"], ["CRM database"], [],
-            "CRM Reconciliation", [("HubSpot", True), ("CRM database", True)]),
+            "CRM Reconciliation", [("HubSpot", A, "hubspot"), ("CRM database", S, "crm")]),
     ]
 
 
@@ -344,19 +376,24 @@ def confirm_and_connect_sources(project_id: str, source_specs: List[dict], confi
     return [cs.to_projection() for cs in SourceConnectorRegistry.default().connect(intent)]
 
 
-def apps_from_setup_guides() -> Optional[List[dict]]:
+def apps_from_setup_guides(connected: Optional[Set[str]] = None) -> Optional[List[dict]]:
     """Build the apps projection from the live connector setup guides when the ``[connectors]``
     plugin is installed — so the UI shows the real Integration Plane's providers, capabilities
-    and setup steps. Returns ``None`` when the plugin is absent (caller uses the sample)."""
+    and setup steps. Connection *state* is not the guide's to know: it comes from ``connected``
+    (the provider's live set), so Connect flips a provider here too. Returns ``None`` when the
+    plugin is absent (caller uses the sample)."""
     try:
         from redevops_connectors import SETUP_GUIDES  # type: ignore
     except ImportError:
         return None
+    connected = connected or set()
     out: List[dict] = []
     for g in SETUP_GUIDES.values():
+        is_on = g.provider in connected
         out.append({
             "provider": g.provider, "display_name": g.display_name, "used_for": g.used_for,
-            "state": "NOT_CONNECTED", "health": "mut", "verified": "",
+            "state": "VERIFIED_READ" if is_on else "NOT_CONNECTED",
+            "health": "ok" if is_on else "mut", "verified": "Verified just now" if is_on else "",
             "capabilities": [], "setup_url": g.setup_url,
             "manual_steps": list(g.manual_steps), "required_scopes": list(g.required_scopes),
             "credential_fields": [{"name": c.name, "label": c.label, "secret": c.secret}
@@ -439,8 +476,16 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
 
     @app.get("/api/projects/{project_id}/apps")
     def _apps(project_id: str) -> List[dict]:
-        # Prefer the live Integration Plane guides when the connector plugin is installed.
-        return apps_from_setup_guides() or prov.apps(project_id)
+        # Prefer the live Integration Plane guides when the connector plugin is installed,
+        # overlaying the provider's live connection set; else the sample provider (also stateful).
+        guided = apps_from_setup_guides(getattr(prov, "connected", None))
+        return guided if guided is not None else prov.apps(project_id)
+
+    @app.post("/api/apps/{provider}/connect")
+    def _connect_app(provider: str) -> dict:
+        # A served deployment binds a real HostedConnectSession here (start/callback); the
+        # sample simulates the CONNECTED outcome so Connect → readiness updates end to end.
+        return prov.connect_app(provider)
 
     @app.get("/api/projects/{project_id}/sources")
     def _sources(project_id: str) -> List[dict]:

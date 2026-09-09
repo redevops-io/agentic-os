@@ -19,8 +19,9 @@ hosted-callback one but reach the same :class:`ConnectOutcome`.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Callable, Optional, Protocol, Tuple
+import secrets
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, Optional, Protocol, Tuple
 
 
 @dataclass(frozen=True)
@@ -122,3 +123,61 @@ def local_connect(*, provider: str, oauth_config: Any, client_secret_resolver: A
         build_adapter=lambda ref: adapter_builder(ref, resolver),
         verify=verify_setup,
     )
+
+
+@dataclass
+class _StaticRunner:
+    """A ConnectRunner whose authorization already happened (hosted callback) — it just
+    carries the stored credential ref forward into connect_provider's grading."""
+
+    credential_ref: str
+    account_ref: str = ""
+    scopes: Tuple[str, ...] = ()
+
+    def run(self) -> "_StaticRunner":
+        return self
+
+
+@dataclass
+class HostedConnectSession:
+    """The **served-app** Connect: two HTTP steps instead of a loopback, for the
+    ``HOSTED_REDEVOPS`` / ``REDEVOPS_BROKERED`` profiles where the browser is not on the box
+    running the agent.
+
+        start()  → the provider consent URL (the user's browser goes there)
+        …provider redirects to the hosted callback with ?code=&state=…
+        complete(code, state) → verify_setup → ConnectOutcome
+
+    Same ``ConnectOutcome`` as :class:`LoopbackConnect`; only the redirect differs. State is
+    generated in ``start`` and checked in ``complete`` (CSRF). Everything is injected (an
+    OAuthFlow-like ``flow``, a broker, an adapter builder, a verify callable), so it is tested
+    with no browser and no live provider.
+    """
+
+    provider: str
+    flow: Any                                   # OAuthFlow-like: authorize_url(state=), exchange_code(code)
+    broker: Any                                 # CredentialBroker-like: store(provider, grant) -> ref; .resolver
+    build_adapter: Callable[[str, Any], Any]    # (credential_ref, resolver) -> adapter
+    verify: VerifyFn
+    state_factory: Callable[[], str] = lambda: secrets.token_urlsafe(24)
+    _state: str = field(default="", init=False)
+
+    def start(self) -> Dict[str, str]:
+        self._state = self.state_factory()
+        return {"authorize_url": self.flow.authorize_url(state=self._state), "state": self._state}
+
+    def complete(self, code: str, state: str) -> ConnectOutcome:
+        if not code:
+            return ConnectOutcome(self.provider, "NOT_CONNECTED", False, detail="no authorization code")
+        if not self._state or state != self._state:
+            return ConnectOutcome(self.provider, "NOT_CONNECTED", False, detail="state mismatch — possible CSRF")
+        grant = self.flow.exchange_code(code)
+        ref = self.broker.store(self.provider, grant)
+        resolver = getattr(self.broker, "resolver", None)
+        return connect_provider(
+            self.provider,
+            runner=_StaticRunner(ref, getattr(grant, "account_ref", "") or "",
+                                 tuple(getattr(grant, "scopes", ()) or ())),
+            build_adapter=lambda r: self.build_adapter(r, resolver),
+            verify=self.verify,
+        )

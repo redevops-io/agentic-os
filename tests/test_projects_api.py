@@ -75,6 +75,29 @@ def test_unknown_mission_detail_is_empty():
     assert client.get("/api/projects/p/missions/nope").json() == {}
 
 
+def test_template_readiness_reflects_real_connection_state():
+    # a fresh provider: prospecting needs Gmail, which is NOT connected → surfaced as not-ready
+    fresh = TestClient(create_app(SampleProjectionProvider()))
+    tpls = fresh.get("/api/projects/p/templates").json()
+    prospect = next(t for t in tpls if t["id"] == "prospect")
+    gmail = next(r for r in prospect["readiness"] if r["label"] == "Gmail")
+    assert gmail["ready"] is False
+    # the refund template is fully ready (all its apps + sources connected/present)
+    refunds = next(t for t in tpls if t["id"] == "refunds")
+    assert all(r["ready"] for r in refunds["readiness"])
+
+
+def test_connect_app_flips_apps_and_template_readiness():
+    c = TestClient(create_app(SampleProjectionProvider()))
+    assert c.post("/api/apps/gmail/connect").json()["connected"] is True
+    # apps now shows gmail connected…
+    gmail_app = next(a for a in c.get("/api/projects/p/apps").json() if a["provider"] == "gmail")
+    assert gmail_app["state"] != "NOT_CONNECTED"
+    # …and the prospecting template's Gmail dependency is now ready
+    prospect = next(t for t in c.get("/api/projects/p/templates").json() if t["id"] == "prospect")
+    assert next(r for r in prospect["readiness"] if r["label"] == "Gmail")["ready"] is True
+
+
 def test_overview_includes_sources_and_runtime_for_the_stack_card():
     ov = client.get("/api/projects/customer-ops/overview").json()
     assert {"sources", "runtime"} <= set(ov)
