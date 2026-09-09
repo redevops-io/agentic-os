@@ -1,0 +1,11 @@
+# Self-hosted ReDevOps Projects — the Projects UI + API on one origin.
+#   docker build -f Dockerfile.projects -t redevops-projects .
+#   docker run -p 8787:8787 redevops-projects          # → http://localhost:8787
+# The UI bundle ships in the wheel (agentic_os/projects_ui), so no Node build is needed here.
+FROM python:3.12-slim
+WORKDIR /app
+COPY . /app
+RUN pip install --no-cache-dir '.[projects]'
+ENV PROJECTS_HOST=0.0.0.0 PROJECTS_PORT=8787
+EXPOSE 8787
+CMD ["agentic-os-projects"]

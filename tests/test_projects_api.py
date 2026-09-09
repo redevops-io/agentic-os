@@ -95,6 +95,17 @@ def test_outreach_template_is_offered():
     assert any(t["id"] == "outreach" for t in tpls)
 
 
+def test_serves_the_bundled_projects_ui_at_one_origin():
+    # `agentic-os-projects` serves the SPA and the API on the same origin (no CORS).
+    root = client.get("/")
+    assert root.status_code == 200 and "text/html" in root.headers.get("content-type", "")
+    assert "assets/" in root.text  # the built SPA shell references its bundle
+    # the API still wins for /api/* (mounted before the static catch-all)
+    assert client.get("/api/projects").status_code == 200
+    # a bundled asset (the generated hero) is served too
+    assert client.get("/hero.jpg").status_code == 200
+
+
 def test_template_readiness_reflects_real_connection_state():
     # a fresh provider: prospecting needs Gmail, which is NOT connected → surfaced as not-ready
     fresh = TestClient(create_app(SampleProjectionProvider()))

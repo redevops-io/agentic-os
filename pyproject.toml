@@ -30,9 +30,15 @@ postgres = ["psycopg[binary]>=3.1"]   # shared ledger for member/hub topology
 # this pulls the runtime plugin that actually connects/executes against SaaS providers.
 # See agentic_os.integrations.live.
 connectors = ["redevops-connectors @ git+https://github.com/redevops-io/redevops-connectors.git@main"]
+# The served Projects app (UI + API on one origin). fastapi/uvicorn are already base deps and
+# the UI bundle ships in the wheel, so serving needs nothing extra; this pulls the connector
+# plugin so the running app can actually connect apps and sources (live), not just render.
+projects = ["redevops-connectors @ git+https://github.com/redevops-io/redevops-connectors.git@main"]
 
 [project.scripts]
 agentic-os = "agentic_os.cli:main"
+# Bring up the Projects UI + API together: `pip install 'agentic-os[projects]'` then run this.
+agentic-os-projects = "agentic_os.projects_api:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -40,6 +46,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["agentic_os"]
+# The vendored Projects UI bundle is data, not Python — force-include it so the wheel ships it
+# regardless of VCS-ignore rules (so `pip install` serves the UI out of the box).
+artifacts = ["agentic_os/projects_ui/**"]
 
 [tool.hatch.metadata]
 # `runtime-contracts` is pinned by git tag, which hatchling calls a direct
