@@ -275,6 +275,20 @@ FILE_LIVE_CAPABILITIES: Tuple[str, ...] = (
     DocCapability.DOCUMENT_CREATE.value,
 )
 
+#: The logical capabilities the W4 LibreOffice App adapter (``agentic_os.integrations.libreoffice_app``)
+#: actually implements live — LOCAL, LOCAL_HEADLESS, no auth: it drives the headless ``soffice`` engine,
+#: whose reliable one-shot ``--convert-to`` fills exactly the authoring gaps W3's ``file`` deferred:
+#:   sheet.write      — author a real XLSX from CSV rows (the honest fix for file's deferred XLSX write),
+#:   document.create  — author DOCX or PDF from text/markdown/html input,
+#:   slides.render    — render an existing presentation/document to PDF (a non-mutating export).
+#: document.edit, cell-level sheet editing and slides.create/slides.read need the UNO scripting bridge
+#: (python-uno + a running soffice socket), not one-shot conversion — they stay PLANNED for libreoffice.
+LIBREOFFICE_LIVE_CAPABILITIES: Tuple[str, ...] = (
+    DocCapability.SHEET_WRITE.value,
+    DocCapability.DOCUMENT_CREATE.value,
+    DocCapability.SLIDES_RENDER.value,
+)
+
 PRODUCTIVITY_CATALOG: Tuple[ProductivityProvider, ...] = (
     ProductivityProvider(
         provider="google", display_name="Google Workspace",
@@ -308,7 +322,14 @@ PRODUCTIVITY_CATALOG: Tuple[ProductivityProvider, ...] = (
     ProductivityProvider(
         provider="libreoffice", display_name="LibreOffice (UNO / headless)",
         roles=(ProviderRole.APP,), strategy=PhysicalStrategy.LOCAL_HEADLESS,
-        app_capabilities=_ALL_DOC_CAPS, status=ProviderStatus.PLANNED,
+        app_capabilities=_ALL_DOC_CAPS,
+        # W4: libreoffice is (partly) LIVE as an APP — sheet.write (author XLSX from CSV),
+        # document.create (author DOCX/PDF from text/md/html) and slides.render (→ PDF) are wired by
+        # libreoffice_app.LibreOfficeAdapter (LOCAL_HEADLESS, no auth — it shells out to headless
+        # soffice). It fills exactly the authoring gaps W3's `file` deferred (XLSX write, DOCX/PDF).
+        # document.edit, cell-level sheet editing and slides.create/slides.read need the UNO bridge
+        # (python-uno + a running soffice socket) — they stay PLANNED (no UNO bridge yet).
+        status=ProviderStatus.LIVE, live_capabilities=LIBREOFFICE_LIVE_CAPABILITIES,
         # exact recalculation / render are the desktop engine's strength
         per_capability_strategy={DocCapability.SLIDES_RENDER.value: PhysicalStrategy.LOCAL_HEADLESS}),
     ProductivityProvider(
@@ -359,9 +380,23 @@ def file_provider() -> ProductivityProvider:
     return next(p for p in PRODUCTIVITY_CATALOG if p.provider == "file")
 
 
+def libreoffice_provider() -> ProductivityProvider:
+    """LibreOffice as the W4 (partly) LIVE provider — the catalog's ``libreoffice`` entry.
+
+    LIVE (as an APP) for ``sheet.write`` (author XLSX from CSV rows), ``document.create`` (author
+    DOCX/PDF from text/markdown/html input) and ``slides.render`` (render a presentation/document to
+    PDF) — fulfilled by :class:`~agentic_os.integrations.libreoffice_app.LibreOfficeAdapter`
+    (``LOCAL_HEADLESS``, no auth: it drives the headless ``soffice`` engine's ``--convert-to``). This
+    is the honest fix for the authoring gaps W3's ``file`` deferred (XLSX write, DOCX/PDF create).
+    ``document.edit``, cell-level sheet editing and ``slides.create``/``slides.read`` need the UNO
+    scripting bridge (python-uno + a running ``soffice`` socket) and stay planned — an APP-only,
+    LOCAL provider (no SOURCE role, no cloud, no auth)."""
+    return next(p for p in PRODUCTIVITY_CATALOG if p.provider == "libreoffice")
+
+
 def default_registry() -> ProductivityRegistry:
-    """The catalog as a registry (google W1-LIVE + microsoft W2-LIVE + file W3-LIVE for their
-    implemented caps)."""
+    """The catalog as a registry (google W1-LIVE + microsoft W2-LIVE + file W3-LIVE + libreoffice
+    W4-LIVE for their implemented caps)."""
     reg = ProductivityRegistry()
     for p in PRODUCTIVITY_CATALOG:
         reg.register(p)

@@ -7,6 +7,7 @@ from agentic_os.integrations.productivity import (
     GOOGLE_CONTEXT_READER,
     GOOGLE_LIVE_CAPABILITIES,
     GOOGLE_MINIMAL_EDITOR,
+    LIBREOFFICE_LIVE_CAPABILITIES,
     MICROSOFT_LIVE_CAPABILITIES,
     PRODUCTIVITY_CATALOG,
     CapabilityGrant,
@@ -18,6 +19,7 @@ from agentic_os.integrations.productivity import (
     default_registry,
     file_provider,
     google_provider,
+    libreoffice_provider,
     microsoft_provider,
 )
 
@@ -89,23 +91,29 @@ def test_registry_queries_by_capability_and_source_kind():
 def test_manifest_projection_reality_filter():
     reg = default_registry()
     m = reg.to_manifest()
-    # W1+W2+W3: google, microsoft AND file are LIVE for the caps their adapters implement → buildable …
-    assert set(m.buildable("sheet.write")) == {"google", "microsoft", "file"}
-    assert set(m.buildable("sheet.read")) == {"google", "microsoft", "file"}
-    assert set(m.buildable("document.create")) == {"google", "microsoft", "file"}
-    # W3 also flips document.read live for file (the cloud adapters do not implement it)
+    # W1+W2+W3+W4: google, microsoft, file AND libreoffice are LIVE for the caps their adapters
+    # implement → buildable. libreoffice (LOCAL_HEADLESS) adds sheet.write + document.create …
+    assert set(m.buildable("sheet.write")) == {"google", "microsoft", "file", "libreoffice"}
+    assert set(m.buildable("sheet.read")) == {"google", "microsoft", "file"}   # libreoffice sheet.read = UNO (planned)
+    assert set(m.buildable("document.create")) == {"google", "microsoft", "file", "libreoffice"}
+    # W3 flips document.read live for file (the cloud adapters do not implement it)
     assert set(m.buildable("document.read")) == {"file"}
+    # W4 is the ONLY provider that renders slides → PDF live (LOCAL_HEADLESS export)
+    assert set(m.buildable("slides.render")) == {"libreoffice"}
     assert m.decide("sheet.write", "google") is None            # runnable
     assert m.decide("sheet.write", "microsoft") is None         # runnable (W2)
     assert m.decide("sheet.write", "file") is None              # runnable (W3)
+    assert m.decide("sheet.write", "libreoffice") is None       # runnable (W4)
+    assert m.decide("slides.render", "libreoffice") is None     # runnable (W4)
     # … but the un-implemented caps stay planned (partial liveness), for every live provider
     assert m.buildable("document.edit") == ()                   # planned for everyone
-    assert m.buildable("slides.create") == ()
+    assert m.buildable("slides.create") == ()                   # UNO — planned even for libreoffice
+    assert m.buildable("slides.read") == ()
     assert m.decide("document.edit", "google") is not None       # planned → refused by name
     assert m.decide("document.edit", "microsoft") is not None    # planned → refused by name
     assert m.decide("document.edit", "file") is not None         # planned → refused by name (W3)
-    # a still-planned provider stays refused by name
-    assert m.decide("sheet.write", "libreoffice") is not None
+    assert m.decide("document.edit", "libreoffice") is not None  # planned → refused by name (W4, UNO)
+    assert m.decide("slides.create", "libreoffice") is not None  # planned → refused by name (W4, UNO)
 
 
 def test_w1_google_is_partly_live_with_both_roles_and_scope_profiles():
@@ -150,9 +158,10 @@ def test_w2_microsoft_is_partly_live_app_but_source_is_not_live():
 
 def test_manifest_now_makes_sheet_write_buildable_by_google_and_microsoft():
     m = default_registry().to_manifest()
-    assert set(m.buildable("sheet.write")) == {"google", "microsoft", "file"}
+    assert set(m.buildable("sheet.write")) == {"google", "microsoft", "file", "libreoffice"}
     assert m.decide("sheet.write", "microsoft") is None      # runnable (W2)
     assert m.decide("sheet.write", "file") is None           # runnable (W3)
+    assert m.decide("sheet.write", "libreoffice") is None    # runnable (W4)
 
 
 def test_w3_file_is_partly_live_local_no_auth():
@@ -170,3 +179,24 @@ def test_w3_file_is_partly_live_local_no_auth():
     assert f.strategy is PhysicalStrategy.FILE_NATIVE
     assert f.has_role(ProviderRole.APP) and not f.has_role(ProviderRole.SOURCE)
     assert f.scope_profiles == ()
+
+
+def test_w4_libreoffice_is_partly_live_local_headless_no_auth():
+    lo = libreoffice_provider()
+    # W4 flips libreoffice LIVE, but only for the caps its headless-conversion adapter implements —
+    # exactly the authoring gaps W3's `file` deferred (real XLSX write, DOCX/PDF create) + a PDF render
+    assert lo.status is ProviderStatus.LIVE
+    assert set(LIBREOFFICE_LIVE_CAPABILITIES) == {"sheet.write", "document.create", "slides.render"}
+    for cap in LIBREOFFICE_LIVE_CAPABILITIES:
+        assert lo.is_capability_live(cap)
+    # the UNO-bridge caps stay planned (partial liveness): document.edit, cell-level sheet editing
+    # (sheet.read here is UNO-only), slides.create/slides.read
+    for cap in ("document.edit", "sheet.read", "slides.create", "slides.read"):
+        assert not lo.is_capability_live(cap)
+    # libreoffice is a LOCAL, LOCAL_HEADLESS, APP-only provider (no SOURCE role, no cloud, no auth)
+    assert lo.strategy is PhysicalStrategy.LOCAL_HEADLESS
+    assert lo.strategy.requires_local_connector
+    assert lo.has_role(ProviderRole.APP) and not lo.has_role(ProviderRole.SOURCE)
+    assert lo.scope_profiles == ()
+    # slides.render is buildable by libreoffice ALONE (the only live PDF-render path)
+    assert set(default_registry().to_manifest().buildable("slides.render")) == {"libreoffice"}
