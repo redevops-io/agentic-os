@@ -76,12 +76,9 @@ class ProviderOAuthApp:
 #: profiles.
 #:
 #: ``authorize_params`` for Google (``access_type=offline`` + ``prompt=consent``) is what returns
-#: a *refresh* token. NOTE: the current ``redevops_connectors.OAuthFlow.authorize_url`` builds a
-#: fixed param set and ``OAuth2Config`` has no field for extra authorize params, so these are NOT
-#: yet threaded onto the live consent link — doing so needs a small redevops-connectors change
-#: (add ``extra_authorize_params`` to ``OAuth2Config`` and append them in ``authorize_url``). Until
-#: then the live hosted Google flow yields an *access* token only (short-lived; no refresh). See
-#: the PR's connector follow-up.
+#: a *refresh* token. These are threaded onto the live consent link via
+#: ``OAuth2Config.extra_authorize_params`` (redevops-connectors #11): ``from_env`` passes
+#: ``app.authorize_params`` through, so the hosted Google flow returns a durable refresh token.
 KNOWN_OAUTH: Dict[str, Dict[str, Any]] = {
     "slack": {
         "authorize_url": "https://slack.com/oauth/v2/authorize",
@@ -193,7 +190,8 @@ class HostedConnect:
             oauth = OAuth2Config(provider=provider, authorize_url=app.authorize_url,
                                  token_url=app.token_url, client_id=app.client_id,
                                  client_secret_ref=f"{provider}:client", scopes=app.scopes,
-                                 redirect_uri=app.redirect_uri)
+                                 redirect_uri=app.redirect_uri,
+                                 extra_authorize_params=dict(app.authorize_params))
             csr = _StaticResolver({f"{provider}:client": {"client_secret": app.client_secret}})
             flow = OAuthFlow(config=oauth, resolver=csr, transport=UrllibTransport())
 
