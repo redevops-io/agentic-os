@@ -134,6 +134,7 @@ class GoogleDriveSourceConnector:
     indexer: Indexer = field(default_factory=CountingIndexer)
     clock: Callable[[], str] = _now
     kind: SourceKind = SourceKind.CLOUD_FILES
+    provider: str = "google_drive"
     max_files: int = 5000
 
     def connect_and_scan(self, spec: ProposedSource, *, project_id: str, source_id: str,
