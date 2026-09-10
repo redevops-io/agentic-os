@@ -384,14 +384,21 @@ class LocalFilesConnector:
 
 @dataclass
 class SourceConnectorRegistry:
-    """kind → connector. Only ``files`` is real today; database/cloud bind here."""
+    """kind → connector, plus a provider → connector index so two connectors of the same kind
+    can coexist (e.g. two ``cloud_files`` providers, Google Drive and Microsoft OneDrive). A
+    spec's ``provider`` wins when it names a registered connector; otherwise routing falls back
+    to ``kind``. Only ``files`` is real by default; database/cloud bind here."""
 
     connectors: Dict[SourceKind, SourceConnector] = field(default_factory=dict)
+    by_provider: Dict[str, SourceConnector] = field(default_factory=dict)
     id_prefix: str = "src"
     _n: int = 0
 
     def register(self, connector: SourceConnector) -> "SourceConnectorRegistry":
         self.connectors[connector.kind] = connector
+        provider = getattr(connector, "provider", "")
+        if provider:
+            self.by_provider[provider] = connector
         return self
 
     @classmethod
@@ -401,7 +408,9 @@ class SourceConnectorRegistry:
     def connect(self, intent: ConfirmedSourceIntent) -> List[ContextSource]:
         out: List[ContextSource] = []
         for spec in intent.sources:
-            conn = self.connectors.get(spec.kind)
+            conn = self.by_provider.get(spec.provider) if spec.provider else None
+            if conn is None:
+                conn = self.connectors.get(spec.kind)
             self._n += 1
             sid = f"{self.id_prefix}-{self._n}"
             if conn is None:

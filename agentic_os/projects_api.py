@@ -448,6 +448,10 @@ def propose_sources(project_id: str, text: str):
         proposed.append(ProposedSource(kind=SourceKind.CLOUD_FILES, location="Google Drive",
                                        provider="google_drive", access_mode=AccessMode.READ_ONLY))
         assumptions.append("Google Drive — connect via provider OAuth, then pick folders")
+    if "onedrive" in tl or "sharepoint" in tl:
+        proposed.append(ProposedSource(kind=SourceKind.CLOUD_FILES, location="OneDrive",
+                                       provider="microsoft_onedrive", access_mode=AccessMode.READ_ONLY))
+        assumptions.append("Microsoft OneDrive/SharePoint — connect via Microsoft OAuth, then pick folders")
 
     return SourceConnectionProposal(project_id=project_id, sources=proposed,
                                     assumptions=assumptions, questions=questions)
@@ -475,13 +479,17 @@ def build_source_registry(resolver: Optional[Any] = None, *, use_rag: Optional[b
         reg.register(LocalFilesConnector())  # stdlib scan (CountingIndexer)
     if resolver is not None:
         from .sources_drive import GoogleDriveSourceConnector
+        from .sources_onedrive import MicrosoftGraphSourceConnector
         from .sources_postgres import PostgresSourceConnector
         indexer_kw = {}
         if use_rag:
             from .sources_rag import RagIndexer
             indexer_kw = {"indexer": RagIndexer()}
         reg.register(PostgresSourceConnector(resolver=resolver))
+        # Two cloud_files providers coexist via the registry's provider index (routing on the
+        # spec's ``provider``): Google Drive and Microsoft OneDrive/SharePoint.
         reg.register(GoogleDriveSourceConnector(resolver=resolver, **indexer_kw))
+        reg.register(MicrosoftGraphSourceConnector(resolver=resolver, **indexer_kw))
     return reg
 
 

@@ -302,10 +302,10 @@ PRODUCTIVITY_CATALOG: Tuple[ProductivityProvider, ...] = (
         roles=(ProviderRole.APP, ProviderRole.SOURCE), strategy=PhysicalStrategy.CLOUD_API,
         app_capabilities=_ALL_DOC_CAPS, source_kinds=("onedrive", "sharepoint", "outlook", "teams"),
         # W2: microsoft is (partly) LIVE as an APP — sheet.read/sheet.write/document.create are wired
-        # by microsoft_app.MicrosoftWorkbookDocsAdapter. Its SOURCE role is declared (source_kinds
-        # above) but NOT live: there is no OneDrive/SharePoint Source connector yet (unlike Google's
-        # sources_drive.py) — a follow-on. to_manifest() only projects the APP role, so declaring the
-        # SOURCE role here does not claim SOURCE liveness.
+        # by microsoft_app.MicrosoftWorkbookDocsAdapter. Its SOURCE role (source_kinds above) is now
+        # ALSO live for OneDrive/SharePoint via the read-only sources_onedrive.MicrosoftGraphSourceConnector
+        # (the mirror of Google's sources_drive.py) — outlook/teams stay a follow-on. to_manifest() only
+        # projects the APP role, so SOURCE liveness isn't tracked there regardless.
         status=ProviderStatus.LIVE, live_capabilities=MICROSOFT_LIVE_CAPABILITIES),
     ProductivityProvider(
         provider="file", display_name="File formats (Open XML / ODF / PDF / CSV / MD)",
@@ -364,8 +364,9 @@ def microsoft_provider() -> ProductivityProvider:
     LIVE (as an APP) for ``sheet.read`` / ``sheet.write`` / ``document.create`` (fulfilled by
     :class:`~agentic_os.integrations.microsoft_app.MicrosoftWorkbookDocsAdapter`); ``document.edit``
     and the ``slides.*`` family stay planned. The SOURCE role is declared over
-    ``onedrive``/``sharepoint``/``outlook``/``teams`` but is **not** yet live — no OneDrive/SharePoint
-    Source connector exists (a follow-on), unlike Google's ``GoogleDriveSourceConnector``."""
+    ``onedrive``/``sharepoint``/``outlook``/``teams`` and is now live for OneDrive/SharePoint via the
+    read-only :class:`~agentic_os.sources_onedrive.MicrosoftGraphSourceConnector` (the mirror of Google's
+    ``GoogleDriveSourceConnector``); ``outlook``/``teams`` stay a follow-on."""
     return next(p for p in PRODUCTIVITY_CATALOG if p.provider == "microsoft")
 
 
