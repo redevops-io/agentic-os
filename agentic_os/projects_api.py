@@ -555,7 +555,16 @@ def sidekick_reply(ctx: Dict[str, Any], text: str) -> Dict[str, Any]:
     if ("refund" in t and "whatsapp" in t) or "connect whatever" in t or "handle refund" in t:
         return {"text": "I'd wire WhatsApp → HubSpot → Stripe → Slack approval → refund → verify → reply. Slack/HubSpot/Stripe are connected; still needed: WhatsApp. Refund needs approval; Stripe test mode first.",
                 "actions": [{"label": "Set this up", "kind": "setup"}, {"label": "Change something", "kind": "edit"}]}
-    return {"text": "I can turn that into a governed Mission across your connected apps. Want me to propose the steps?"}
+    # Sidekick is also the stack's in-product expert: authoritative, curated answers about how
+    # credentials are handled, where data is processed (local vs cloud), and how execution is
+    # governed — so nobody has to read a manual. Consulted before the generic fallback.
+    from agentic_os.stack_knowledge import answer_stack_question
+    kb = answer_stack_question(text)
+    if kb is not None:
+        return {"text": kb.answer, "topic": kb.topic,
+                "actions": [{"label": "Where this is enforced", "kind": "explain", "ref": kb.source}]}
+    return {"text": "I can turn that into a governed Mission across your connected apps. Want me to propose the steps? "
+                    "You can also ask me how your credentials are handled or whether your data stays local."}
 
 
 class _SidekickReq(BaseModel):
@@ -669,6 +678,13 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     @app.post("/api/sidekick")
     def _sidekick(req: _SidekickReq) -> dict:
         return sidekick_reply(req.ctx, req.text)
+
+    @app.get("/api/sidekick/help")
+    def _sidekick_help() -> List[dict]:
+        # The canonical stack questions Sidekick can answer authoritatively — for a "what can I
+        # ask" surface (how creds are handled, is my data local/cloud, what can a connected app see…).
+        from agentic_os.stack_knowledge import help_questions
+        return list(help_questions())
 
     @app.post("/api/sources/propose")
     def _propose(req: _ProposeSourcesReq) -> dict:
