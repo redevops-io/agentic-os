@@ -4,6 +4,7 @@ from __future__ import annotations
 from agentic_os.integrations.manifest import Support
 from agentic_os.integrations.productivity import (
     GOOGLE_CONTEXT_READER,
+    GOOGLE_LIVE_CAPABILITIES,
     GOOGLE_MINIMAL_EDITOR,
     PRODUCTIVITY_CATALOG,
     CapabilityGrant,
@@ -13,6 +14,7 @@ from agentic_os.integrations.productivity import (
     ProviderRole,
     ProviderStatus,
     default_registry,
+    google_provider,
 )
 
 
@@ -83,14 +85,40 @@ def test_registry_queries_by_capability_and_source_kind():
 def test_manifest_projection_reality_filter():
     reg = default_registry()
     m = reg.to_manifest()
-    # nothing is EXECUTED yet (all PLANNED) → the reality filter suggests nothing to build
-    assert m.buildable("sheet.write") == ()
-    # flip one provider LIVE and it becomes buildable, others still NOT_MODELLED
+    # W1: google is LIVE for the capabilities its adapter implements → buildable by name …
+    assert m.buildable("sheet.write") == ("google",)
+    assert m.buildable("sheet.read") == ("google",)
+    assert m.buildable("document.create") == ("google",)
+    assert m.decide("sheet.write", "google") is None            # runnable
+    # … but google's un-implemented caps stay planned (partial liveness), as do other providers
+    assert m.buildable("document.edit") == ()                   # planned for everyone (incl. google)
+    assert m.buildable("slides.create") == ()
+    assert m.decide("document.edit", "google") is not None       # planned → refused by name
+    assert m.decide("sheet.write", "microsoft") is not None      # planned → refused by name
+    # flipping a second provider LIVE adds it alongside google
     reg.register(ProductivityProvider(
-        provider="google", display_name="Google Workspace",
+        provider="microsoft", display_name="Microsoft 365 (Graph)",
         roles=(ProviderRole.APP,), strategy=PhysicalStrategy.CLOUD_API,
         app_capabilities=("sheet.write",), status=ProviderStatus.LIVE))
     m2 = reg.to_manifest()
-    assert m2.buildable("sheet.write") == ("google",)
-    assert m2.decide("sheet.write", "google") is None            # runnable
-    assert m2.decide("sheet.write", "microsoft") is not None      # planned → refused by name
+    assert set(m2.buildable("sheet.write")) == {"google", "microsoft"}
+
+
+def test_w1_google_is_partly_live_with_both_roles_and_scope_profiles():
+    g = google_provider()
+    # W1 flips google LIVE, but only for the capabilities its adapter implements
+    assert g.status is ProviderStatus.LIVE
+    assert set(GOOGLE_LIVE_CAPABILITIES) == {"sheet.read", "sheet.write", "document.create"}
+    for cap in GOOGLE_LIVE_CAPABILITIES:
+        assert g.is_capability_live(cap)
+    # document.edit + slides.* stay planned (partial liveness)
+    for cap in ("document.edit", "slides.create", "slides.render", "slides.read"):
+        assert not g.is_capability_live(cap)
+    # both roles survive: APP (the new adapter) + SOURCE (the existing Drive connector) …
+    assert g.has_role(ProviderRole.APP) and g.has_role(ProviderRole.SOURCE)
+    assert "drive" in g.source_kinds
+    # … and the four GOOGLE_* scope profiles are carried
+    assert {p.name for p in g.scope_profiles} == {
+        "GOOGLE_MINIMAL_EDITOR", "GOOGLE_CONTEXT_READER", "GOOGLE_DOCS_EDITOR", "GOOGLE_SHEETS_EDITOR"}
+    # the registry still exposes google as a Source of drive
+    assert {p.provider for p in default_registry().sources_of("drive")} == {"google"}
