@@ -28,11 +28,33 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from .connect import ConnectOutcome
+from .productivity import GOOGLE_DOCS_EDITOR, GOOGLE_SHEETS_EDITOR
+
+
+def _dedup(scopes: Tuple[str, ...]) -> Tuple[str, ...]:
+    """Union of scope URLs, first-seen order preserved."""
+    seen: Dict[str, None] = {}
+    for s in scopes:
+        seen.setdefault(s, None)
+    return tuple(seen)
+
+
+#: The docs+sheets+drive.file union, taken verbatim from the W0 GOOGLE_* scope profiles so the
+#: hosted Connect and the plane's scope profiles never drift apart.
+_GOOGLE_DOCS_SHEETS_SCOPES: Tuple[str, ...] = _dedup(
+    GOOGLE_DOCS_EDITOR.scopes + GOOGLE_SHEETS_EDITOR.scopes)
 
 
 @dataclass(frozen=True)
 class ProviderOAuthApp:
-    """A ReDevOps-owned OAuth app for one provider — deployment config, never a user secret."""
+    """A ReDevOps-owned OAuth app for one provider — deployment config, never a user secret.
+
+    ``authorize_params`` are extra query params a provider needs on the *authorize* URL (e.g.
+    Google's ``access_type=offline`` + ``prompt=consent`` to receive a refresh token). They are
+    carried here as deployment intent; whether the live consent link actually includes them
+    depends on the connector's ``OAuthFlow`` supporting extra authorize params — see the note on
+    :data:`KNOWN_OAUTH`.
+    """
 
     provider: str
     client_id: str
@@ -41,10 +63,25 @@ class ProviderOAuthApp:
     token_url: str
     scopes: Tuple[str, ...]
     redirect_uri: str
+    authorize_params: Dict[str, str] = field(default_factory=dict)
 
 
 #: OAuth endpoints + the client-cred env var names for the providers ReDevOps can host. Scopes
 #: are the bot/read scopes the test Missions need; extend per provider as coverage grows.
+#:
+#: ``google`` scopes are a *tuple of individual scope URLs* — ``OAuthFlow.authorize_url``
+#: space-joins them, which is exactly the OAuth2 scope-delimiter Google wants (unlike Slack v2's
+#: single comma-joined element). The default union covers docs + sheets + ``drive.file`` (the
+#: least-privilege editor scope), matching the W0 ``GOOGLE_DOCS_EDITOR`` / ``GOOGLE_SHEETS_EDITOR``
+#: profiles.
+#:
+#: ``authorize_params`` for Google (``access_type=offline`` + ``prompt=consent``) is what returns
+#: a *refresh* token. NOTE: the current ``redevops_connectors.OAuthFlow.authorize_url`` builds a
+#: fixed param set and ``OAuth2Config`` has no field for extra authorize params, so these are NOT
+#: yet threaded onto the live consent link — doing so needs a small redevops-connectors change
+#: (add ``extra_authorize_params`` to ``OAuth2Config`` and append them in ``authorize_url``). Until
+#: then the live hosted Google flow yields an *access* token only (short-lived; no refresh). See
+#: the PR's connector follow-up.
 KNOWN_OAUTH: Dict[str, Dict[str, Any]] = {
     "slack": {
         "authorize_url": "https://slack.com/oauth/v2/authorize",
@@ -52,6 +89,16 @@ KNOWN_OAUTH: Dict[str, Dict[str, Any]] = {
         # one comma-joined element so OAuthFlow's space-join keeps Slack-v2 commas
         "scopes": ("chat:write,channels:history,users:read",),
         "env_id": "SLACK_CLIENT_ID", "env_secret": "SLACK_CLIENT_SECRET",
+    },
+    "google": {
+        "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url": "https://oauth2.googleapis.com/token",
+        # individual scope URLs — OAuthFlow space-joins them (the OAuth2 default). A sensible
+        # docs+sheets+drive.file union (imported from the W0 GOOGLE_* scope profiles).
+        "scopes": _GOOGLE_DOCS_SHEETS_SCOPES,
+        "env_id": "GOOGLE_CLIENT_ID", "env_secret": "GOOGLE_CLIENT_SECRET",
+        # needed for Google to return a refresh token (see the module note above)
+        "authorize_params": {"access_type": "offline", "prompt": "consent"},
     },
 }
 
@@ -69,7 +116,8 @@ def oauth_apps_from_env(base_url: str, env: Optional[Dict[str, str]] = None) -> 
             apps[provider] = ProviderOAuthApp(
                 provider=provider, client_id=cid, client_secret=secret,
                 authorize_url=spec["authorize_url"], token_url=spec["token_url"],
-                scopes=tuple(spec["scopes"]), redirect_uri=redirect)
+                scopes=tuple(spec["scopes"]), redirect_uri=redirect,
+                authorize_params=dict(spec.get("authorize_params", {})))
     return apps
 
 
