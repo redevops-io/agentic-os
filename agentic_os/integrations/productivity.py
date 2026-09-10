@@ -260,6 +260,21 @@ MICROSOFT_LIVE_CAPABILITIES: Tuple[str, ...] = (
     DocCapability.DOCUMENT_CREATE.value,
 )
 
+#: The logical capabilities the W3 file-format App adapter (``agentic_os.integrations.file_formats``)
+#: actually implements live — pure LOCAL, stdlib-only, FILE_NATIVE, no auth:
+#:   sheet.read      — CSV + XLSX,
+#:   sheet.write     — CSV (XLSX write deferred to a follow-on richer-format engine),
+#:   document.read   — .md/.txt + DOCX,
+#:   document.create — .md/.txt (DOCX create deferred to the follow-on engine).
+#: document.edit + the slides.* family stay planned for ``file``. XLSX-write, DOCX-create fidelity,
+#: PPTX and PDF are a follow-on behind an optional richer-format engine/extra.
+FILE_LIVE_CAPABILITIES: Tuple[str, ...] = (
+    DocCapability.SHEET_READ.value,
+    DocCapability.SHEET_WRITE.value,
+    DocCapability.DOCUMENT_READ.value,
+    DocCapability.DOCUMENT_CREATE.value,
+)
+
 PRODUCTIVITY_CATALOG: Tuple[ProductivityProvider, ...] = (
     ProductivityProvider(
         provider="google", display_name="Google Workspace",
@@ -285,7 +300,11 @@ PRODUCTIVITY_CATALOG: Tuple[ProductivityProvider, ...] = (
                           DocCapability.DOCUMENT_EDIT.value, DocCapability.SHEET_READ.value,
                           DocCapability.SHEET_WRITE.value, DocCapability.SLIDES_READ.value,
                           DocCapability.SLIDES_CREATE.value),
-        status=ProviderStatus.PLANNED),
+        # W3: file is (partly) LIVE as an APP — sheet.read (CSV+XLSX), sheet.write (CSV), document.read
+        # (.md/.txt+DOCX), document.create (.md/.txt) are wired by file_formats.FileFormatAdapter
+        # (stdlib-only, FILE_NATIVE, no auth). document.edit + slides.* stay planned. XLSX-write,
+        # DOCX-create fidelity, PPTX and PDF are a follow-on behind an optional richer-format engine.
+        status=ProviderStatus.LIVE, live_capabilities=FILE_LIVE_CAPABILITIES),
     ProductivityProvider(
         provider="libreoffice", display_name="LibreOffice (UNO / headless)",
         roles=(ProviderRole.APP,), strategy=PhysicalStrategy.LOCAL_HEADLESS,
@@ -329,8 +348,20 @@ def microsoft_provider() -> ProductivityProvider:
     return next(p for p in PRODUCTIVITY_CATALOG if p.provider == "microsoft")
 
 
+def file_provider() -> ProductivityProvider:
+    """The file-format family as the W3 (partly) LIVE provider — the catalog's ``file`` entry.
+
+    LIVE (as an APP) for ``sheet.read`` / ``sheet.write`` / ``document.read`` / ``document.create``
+    (fulfilled by :class:`~agentic_os.integrations.file_formats.FileFormatAdapter` — stdlib-only,
+    ``FILE_NATIVE``, no auth: CSV + XLSX sheet read, CSV sheet write, .md/.txt + DOCX document read,
+    .md/.txt document create). ``document.edit`` and the ``slides.*`` family stay planned. XLSX-write,
+    DOCX-create fidelity, PPTX and PDF are a follow-on behind an optional richer-format engine."""
+    return next(p for p in PRODUCTIVITY_CATALOG if p.provider == "file")
+
+
 def default_registry() -> ProductivityRegistry:
-    """The catalog as a registry (google W1-LIVE + microsoft W2-LIVE for their implemented caps)."""
+    """The catalog as a registry (google W1-LIVE + microsoft W2-LIVE + file W3-LIVE for their
+    implemented caps)."""
     reg = ProductivityRegistry()
     for p in PRODUCTIVITY_CATALOG:
         reg.register(p)
