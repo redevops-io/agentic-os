@@ -31,6 +31,27 @@ def _prov(runtime: str, *refs: str) -> Dict[str, Any]:
     return {"source_runtime": runtime, "source_refs": list(refs)}
 
 
+# ── enabled-app selection (a deployment offers only a subset of apps) ────────────
+def enabled_selection() -> Optional[Set[str]]:
+    """The set of enabled provider ids from ``$PROJECTS_APPS`` (comma-separated, e.g.
+    ``google,slack,stripe``). Empty or unset → ``None``, meaning *no filter* — every app is
+    offered, so the default behaviour is unchanged. Whitespace around ids is trimmed."""
+    import os
+    raw = os.environ.get("PROJECTS_APPS", "")
+    ids = {p.strip() for p in raw.split(",") if p.strip()}
+    return ids or None
+
+
+def enabled_apps(apps: List[dict], selection: Optional[Set[str]]) -> List[dict]:
+    """Filter an apps projection down to the enabled ``selection`` (matched on each app's
+    ``provider`` id). A falsy selection (``None``/empty) means no filter and returns the apps
+    unchanged. Ids in ``selection`` that match no app are ignored — the filter never invents
+    apps, it only removes the ones a deployment hasn't enabled."""
+    if not selection:
+        return list(apps)
+    return [a for a in apps if a.get("provider") in selection]
+
+
 # ── hosted OAuth (click-only Connect for the served deployment) ──────────────────
 _HOSTED: Any = None
 _HOSTED_TRIED = False
@@ -174,7 +195,8 @@ class SampleProjectionProvider:
                     a.update(state="VERIFIED_READ", health="ok", verified="Verified just now")
             else:
                 a.update(state="NOT_CONNECTED", health="mut")
-        return apps
+        # A deployment can offer only a subset of apps via $PROJECTS_APPS; unset = all.
+        return enabled_apps(apps, enabled_selection())
 
     def connect_app(self, provider: str) -> dict:
         """Mark a provider connected (a served-app deployment plugs a real HostedConnectSession
@@ -592,7 +614,10 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
         # Prefer the live Integration Plane guides when the connector plugin is installed,
         # overlaying the provider's live connection set; else the sample provider (also stateful).
         guided = apps_from_setup_guides(getattr(prov, "connected", None))
-        return guided if guided is not None else prov.apps(project_id)
+        apps = guided if guided is not None else prov.apps(project_id)
+        # Offer only the deployment's enabled apps ($PROJECTS_APPS); unset = all. Applies to the
+        # live-guide path too (prov.apps already filters, so the sample path stays idempotent).
+        return enabled_apps(apps, enabled_selection())
 
     @app.post("/api/apps/{provider}/connect")
     def _connect_app(provider: str) -> dict:
