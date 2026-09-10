@@ -44,6 +44,14 @@ def _dedup(scopes: Tuple[str, ...]) -> Tuple[str, ...]:
 _GOOGLE_DOCS_SHEETS_SCOPES: Tuple[str, ...] = _dedup(
     GOOGLE_DOCS_EDITOR.scopes + GOOGLE_SHEETS_EDITOR.scopes)
 
+#: Microsoft Graph **delegated** scopes for the W2 workbook/drive App adapter. ``Files.ReadWrite``
+#: covers the Excel workbook range + OneDrive file surfaces; ``User.Read`` lets the verify step
+#: read the connected identity. NOTE the MS-vs-Google refresh-token distinction: Google receives a
+#: refresh token via *authorize params* (``access_type=offline`` + ``prompt=consent``), whereas
+#: Microsoft receives one from the ``offline_access`` **scope** — so it lives in ``scopes`` below,
+#: not in ``authorize_params``.
+_MICROSOFT_GRAPH_SCOPES: Tuple[str, ...] = ("Files.ReadWrite", "offline_access", "User.Read")
+
 
 @dataclass(frozen=True)
 class ProviderOAuthApp:
@@ -96,6 +104,17 @@ KNOWN_OAUTH: Dict[str, Dict[str, Any]] = {
         "env_id": "GOOGLE_CLIENT_ID", "env_secret": "GOOGLE_CLIENT_SECRET",
         # needed for Google to return a refresh token (see the module note above)
         "authorize_params": {"access_type": "offline", "prompt": "consent"},
+    },
+    "microsoft": {
+        "authorize_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+        "token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+        # individual Graph delegated scopes — OAuthFlow space-joins them (the OAuth2 default).
+        "scopes": _MICROSOFT_GRAPH_SCOPES,
+        "env_id": "MICROSOFT_CLIENT_ID", "env_secret": "MICROSOFT_CLIENT_SECRET",
+        # MS-vs-Google refresh-token distinction: Google threads access_type=offline+prompt=consent
+        # as authorize *params*; Microsoft returns a refresh token from the ``offline_access``
+        # *scope* (already in scopes above), so authorize_params need only nudge account choice.
+        "authorize_params": {"prompt": "select_account"},
     },
 }
 

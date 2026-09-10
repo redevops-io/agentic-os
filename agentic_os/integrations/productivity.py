@@ -251,6 +251,15 @@ GOOGLE_LIVE_CAPABILITIES: Tuple[str, ...] = (
     DocCapability.DOCUMENT_CREATE.value,
 )
 
+#: The logical capabilities the W2 Microsoft App adapter (``agentic_os.integrations.microsoft_app``)
+#: actually implements live — the same three as Google (Excel workbook read/write + a OneDrive file
+#: create). document.edit + the slides.* family remain planned (a later wave).
+MICROSOFT_LIVE_CAPABILITIES: Tuple[str, ...] = (
+    DocCapability.SHEET_READ.value,
+    DocCapability.SHEET_WRITE.value,
+    DocCapability.DOCUMENT_CREATE.value,
+)
+
 PRODUCTIVITY_CATALOG: Tuple[ProductivityProvider, ...] = (
     ProductivityProvider(
         provider="google", display_name="Google Workspace",
@@ -263,7 +272,12 @@ PRODUCTIVITY_CATALOG: Tuple[ProductivityProvider, ...] = (
         provider="microsoft", display_name="Microsoft 365 (Graph)",
         roles=(ProviderRole.APP, ProviderRole.SOURCE), strategy=PhysicalStrategy.CLOUD_API,
         app_capabilities=_ALL_DOC_CAPS, source_kinds=("onedrive", "sharepoint", "outlook", "teams"),
-        status=ProviderStatus.PLANNED),
+        # W2: microsoft is (partly) LIVE as an APP — sheet.read/sheet.write/document.create are wired
+        # by microsoft_app.MicrosoftWorkbookDocsAdapter. Its SOURCE role is declared (source_kinds
+        # above) but NOT live: there is no OneDrive/SharePoint Source connector yet (unlike Google's
+        # sources_drive.py) — a follow-on. to_manifest() only projects the APP role, so declaring the
+        # SOURCE role here does not claim SOURCE liveness.
+        status=ProviderStatus.LIVE, live_capabilities=MICROSOFT_LIVE_CAPABILITIES),
     ProductivityProvider(
         provider="file", display_name="File formats (Open XML / ODF / PDF / CSV / MD)",
         roles=(ProviderRole.APP,), strategy=PhysicalStrategy.FILE_NATIVE,
@@ -304,8 +318,19 @@ def google_provider() -> ProductivityProvider:
     return next(p for p in PRODUCTIVITY_CATALOG if p.provider == "google")
 
 
+def microsoft_provider() -> ProductivityProvider:
+    """Microsoft 365 (Graph) as the W2 (partly) LIVE provider — the catalog's ``microsoft`` entry.
+
+    LIVE (as an APP) for ``sheet.read`` / ``sheet.write`` / ``document.create`` (fulfilled by
+    :class:`~agentic_os.integrations.microsoft_app.MicrosoftWorkbookDocsAdapter`); ``document.edit``
+    and the ``slides.*`` family stay planned. The SOURCE role is declared over
+    ``onedrive``/``sharepoint``/``outlook``/``teams`` but is **not** yet live — no OneDrive/SharePoint
+    Source connector exists (a follow-on), unlike Google's ``GoogleDriveSourceConnector``."""
+    return next(p for p in PRODUCTIVITY_CATALOG if p.provider == "microsoft")
+
+
 def default_registry() -> ProductivityRegistry:
-    """The catalog as a registry (google is W1-LIVE for its implemented capabilities)."""
+    """The catalog as a registry (google W1-LIVE + microsoft W2-LIVE for their implemented caps)."""
     reg = ProductivityRegistry()
     for p in PRODUCTIVITY_CATALOG:
         reg.register(p)
