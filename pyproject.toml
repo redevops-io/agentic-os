@@ -38,6 +38,15 @@ connectors = ["redevops-connectors @ git+https://github.com/redevops-io/redevops
 # the UI bundle ships in the wheel, so serving needs nothing extra; this pulls the connector
 # plugin so the running app can actually connect apps and sources (live), not just render.
 projects = ["redevops-connectors @ git+https://github.com/redevops-io/redevops-connectors.git@main"]
+# Per-app extras. The base install is already minimal — the connector plugin is stdlib-only
+# (urllib), so an app extra is about *selecting/enabling* an app, not shrinking a download.
+# Each pulls the `projects` plugin (the plane the app connects through); pair it with
+# PROJECTS_APPS=<ids> at runtime so the Projects UI offers only these apps. Composable and
+# self-referential (hatchling supports `agentic-os[...]`).
+google = ["agentic-os[projects]"]         # Gmail, Google Drive/Calendar (Google Workspace)
+microsoft = ["agentic-os[projects]"]      # Outlook, OneDrive, Teams (Microsoft 365)
+slack = ["agentic-os[projects]"]          # Slack notifications, approvals, threads
+office = ["agentic-os[google]", "agentic-os[microsoft]"]  # both productivity suites at once
 
 [project.scripts]
 agentic-os = "agentic_os.cli:main"
