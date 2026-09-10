@@ -143,6 +143,18 @@ class ProductivityProvider:
     scope_profiles: Tuple[ScopeProfile, ...] = ()
     status: ProviderStatus = ProviderStatus.PLANNED
     per_capability_strategy: Mapping[str, PhysicalStrategy] = field(default_factory=dict)
+    #: The capabilities that are actually LIVE (a real adapter fulfils them), when a provider is
+    #: only *partly* live — W1 Google is LIVE for sheet.read/sheet.write/document.create but its
+    #: document.edit + slides.* stay planned. Empty ⇒ the provider-level ``status`` governs every
+    #: capability uniformly (a fully-planned or fully-live suite).
+    live_capabilities: Tuple[str, ...] = ()
+
+    def is_capability_live(self, capability: str) -> bool:
+        """Whether one capability is backed by a live adapter. With ``live_capabilities`` set,
+        only those are live (partial liveness); otherwise the provider-level status decides."""
+        if self.live_capabilities:
+            return capability in self.live_capabilities
+        return self.status is ProviderStatus.LIVE
 
     def has_role(self, role: ProviderRole) -> bool:
         return role in self.roles
@@ -196,9 +208,10 @@ class ProductivityRegistry:
         for p in self.providers():
             if not p.has_role(ProviderRole.APP):
                 continue
-            support = Support.EXECUTED if p.status is ProviderStatus.LIVE else Support.NOT_MODELLED
             for cap in p.app_capabilities:
-                why = "" if support is Support.EXECUTED else f"{p.display_name} adapter not wired yet (planned)"
+                live = p.is_capability_live(cap)          # per-capability (supports partial liveness)
+                support = Support.EXECUTED if live else Support.NOT_MODELLED
+                why = "" if live else f"{p.display_name} adapter not wired yet (planned)"
                 dims.append(CapabilityDimension(capability=cap, provider=p.provider,
                                                 support=support, tier=_TIER.get(cap, 0), why=why))
         return IntegrationManifest(dimensions=tuple(dims))
@@ -230,12 +243,22 @@ GOOGLE_SCOPE_PROFILES: Tuple[ScopeProfile, ...] = (
 #    W1 flips 'google' to LIVE. Physical strategy is per-suite, with the documented overrides. ──
 _ALL_DOC_CAPS: Tuple[str, ...] = tuple(c.value for c in DocCapability)
 
+#: The logical capabilities the W1 Google App adapter (``agentic_os.integrations.google_app``)
+#: actually implements live. document.edit + the slides.* family remain planned (a later wave).
+GOOGLE_LIVE_CAPABILITIES: Tuple[str, ...] = (
+    DocCapability.SHEET_READ.value,
+    DocCapability.SHEET_WRITE.value,
+    DocCapability.DOCUMENT_CREATE.value,
+)
+
 PRODUCTIVITY_CATALOG: Tuple[ProductivityProvider, ...] = (
     ProductivityProvider(
         provider="google", display_name="Google Workspace",
         roles=(ProviderRole.APP, ProviderRole.SOURCE), strategy=PhysicalStrategy.CLOUD_API,
         app_capabilities=_ALL_DOC_CAPS, source_kinds=("drive", "gmail", "calendar"),
-        scope_profiles=GOOGLE_SCOPE_PROFILES, status=ProviderStatus.PLANNED),
+        scope_profiles=GOOGLE_SCOPE_PROFILES,
+        # W1: google is (partly) LIVE — sheet.read/sheet.write/document.create are wired.
+        status=ProviderStatus.LIVE, live_capabilities=GOOGLE_LIVE_CAPABILITIES),
     ProductivityProvider(
         provider="microsoft", display_name="Microsoft 365 (Graph)",
         roles=(ProviderRole.APP, ProviderRole.SOURCE), strategy=PhysicalStrategy.CLOUD_API,
@@ -270,8 +293,19 @@ PRODUCTIVITY_CATALOG: Tuple[ProductivityProvider, ...] = (
 )
 
 
+def google_provider() -> ProductivityProvider:
+    """Google Workspace as the W1 (partly) LIVE provider — the catalog's ``google`` entry.
+
+    LIVE for ``sheet.read`` / ``sheet.write`` / ``document.create`` (fulfilled by
+    :class:`~agentic_os.integrations.google_app.GoogleWorkspaceDocsAdapter`); ``document.edit`` and
+    the ``slides.*`` family stay planned. Both roles — APP (the adapter) and SOURCE (the existing
+    :class:`~agentic_os.sources_drive.GoogleDriveSourceConnector`) — with the four GOOGLE_* scope
+    profiles."""
+    return next(p for p in PRODUCTIVITY_CATALOG if p.provider == "google")
+
+
 def default_registry() -> ProductivityRegistry:
-    """The catalog as a registry."""
+    """The catalog as a registry (google is W1-LIVE for its implemented capabilities)."""
     reg = ProductivityRegistry()
     for p in PRODUCTIVITY_CATALOG:
         reg.register(p)
