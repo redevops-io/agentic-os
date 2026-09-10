@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from agentic_os.integrations.manifest import Support
 from agentic_os.integrations.productivity import (
+    FILE_LIVE_CAPABILITIES,
     GOOGLE_CONTEXT_READER,
     GOOGLE_LIVE_CAPABILITIES,
     GOOGLE_MINIMAL_EDITOR,
@@ -15,6 +16,7 @@ from agentic_os.integrations.productivity import (
     ProviderRole,
     ProviderStatus,
     default_registry,
+    file_provider,
     google_provider,
     microsoft_provider,
 )
@@ -87,17 +89,21 @@ def test_registry_queries_by_capability_and_source_kind():
 def test_manifest_projection_reality_filter():
     reg = default_registry()
     m = reg.to_manifest()
-    # W1+W2: google AND microsoft are LIVE for the caps their adapters implement → buildable by name …
-    assert set(m.buildable("sheet.write")) == {"google", "microsoft"}
-    assert set(m.buildable("sheet.read")) == {"google", "microsoft"}
-    assert set(m.buildable("document.create")) == {"google", "microsoft"}
+    # W1+W2+W3: google, microsoft AND file are LIVE for the caps their adapters implement → buildable …
+    assert set(m.buildable("sheet.write")) == {"google", "microsoft", "file"}
+    assert set(m.buildable("sheet.read")) == {"google", "microsoft", "file"}
+    assert set(m.buildable("document.create")) == {"google", "microsoft", "file"}
+    # W3 also flips document.read live for file (the cloud adapters do not implement it)
+    assert set(m.buildable("document.read")) == {"file"}
     assert m.decide("sheet.write", "google") is None            # runnable
     assert m.decide("sheet.write", "microsoft") is None         # runnable (W2)
-    # … but the un-implemented caps stay planned (partial liveness), for both live providers
+    assert m.decide("sheet.write", "file") is None              # runnable (W3)
+    # … but the un-implemented caps stay planned (partial liveness), for every live provider
     assert m.buildable("document.edit") == ()                   # planned for everyone
     assert m.buildable("slides.create") == ()
     assert m.decide("document.edit", "google") is not None       # planned → refused by name
     assert m.decide("document.edit", "microsoft") is not None    # planned → refused by name
+    assert m.decide("document.edit", "file") is not None         # planned → refused by name (W3)
     # a still-planned provider stays refused by name
     assert m.decide("sheet.write", "libreoffice") is not None
 
@@ -144,5 +150,23 @@ def test_w2_microsoft_is_partly_live_app_but_source_is_not_live():
 
 def test_manifest_now_makes_sheet_write_buildable_by_google_and_microsoft():
     m = default_registry().to_manifest()
-    assert set(m.buildable("sheet.write")) == {"google", "microsoft"}
+    assert set(m.buildable("sheet.write")) == {"google", "microsoft", "file"}
     assert m.decide("sheet.write", "microsoft") is None      # runnable (W2)
+    assert m.decide("sheet.write", "file") is None           # runnable (W3)
+
+
+def test_w3_file_is_partly_live_local_no_auth():
+    f = file_provider()
+    # W3 flips file LIVE, but only for the capabilities its stdlib adapter implements
+    assert f.status is ProviderStatus.LIVE
+    assert set(FILE_LIVE_CAPABILITIES) == {
+        "sheet.read", "sheet.write", "document.read", "document.create"}
+    for cap in FILE_LIVE_CAPABILITIES:
+        assert f.is_capability_live(cap)
+    # document.edit + slides.* stay planned (partial liveness)
+    for cap in ("document.edit", "slides.create", "slides.read"):
+        assert not f.is_capability_live(cap)
+    # file is a LOCAL, FILE_NATIVE, APP-only provider (no SOURCE role, no cloud, no auth)
+    assert f.strategy is PhysicalStrategy.FILE_NATIVE
+    assert f.has_role(ProviderRole.APP) and not f.has_role(ProviderRole.SOURCE)
+    assert f.scope_profiles == ()
