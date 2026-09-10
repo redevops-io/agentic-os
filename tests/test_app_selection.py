@@ -63,12 +63,14 @@ def test_enabled_selection_trims_and_splits(monkeypatch):
 # ── end to end through the API (overview + /apps) ────────────────────────────────
 def test_unset_projects_all_apps(monkeypatch):
     monkeypatch.delenv("PROJECTS_APPS", raising=False)
-    apps = client.get("/api/projects/p/apps").json()
-    providers = {a["provider"] for a in apps}
-    # the full sample surface is offered
+    providers = {a["provider"] for a in client.get("/api/projects/p/apps").json()}
+    # unset = no filter → the full app surface is offered
     assert {"slack", "stripe", "hubspot", "gmail"} <= providers
-    ov = client.get("/api/projects/customer-ops/overview").json()
-    assert {a["provider"] for a in ov["apps"]} == providers
+    # the overview's embedded apps are likewise unfiltered. NOTE they are a *different* projection:
+    # /apps prefers the live connector setup-guides when the [connectors] plugin is installed, while
+    # the overview uses the sample surface — so the overview apps are a subset of /apps, not equal.
+    ov = {a["provider"] for a in client.get("/api/projects/customer-ops/overview").json()["apps"]}
+    assert {"slack", "stripe", "hubspot"} <= ov <= providers
 
 
 def test_subset_projects_only_enabled_apps(monkeypatch):
