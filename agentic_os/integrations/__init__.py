@@ -58,6 +58,19 @@ from .live import (
     go_live,
     live_registry,
 )
+from .productivity import (
+    CapabilityGrant,
+    DocCapability,
+    GOOGLE_SCOPE_PROFILES,
+    PRODUCTIVITY_CATALOG,
+    PhysicalStrategy,
+    ProductivityProvider,
+    ProductivityRegistry,
+    ProviderRole,
+    ProviderStatus,
+    ScopeProfile,
+    default_registry,
+)
 
 __all__ = [
     # W0 — contracts + manifest
@@ -107,4 +120,16 @@ __all__ = [
     "go_live",
     "default_adapter_factory",
     "PROVIDER_TOKEN_ENV",
+    # Documents / Productivity capability plane (W0 contracts)
+    "PhysicalStrategy",
+    "ProviderRole",
+    "DocCapability",
+    "ScopeProfile",
+    "CapabilityGrant",
+    "ProductivityProvider",
+    "ProductivityRegistry",
+    "ProviderStatus",
+    "PRODUCTIVITY_CATALOG",
+    "GOOGLE_SCOPE_PROFILES",
+    "default_registry",
 ]
