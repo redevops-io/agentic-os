@@ -6,6 +6,7 @@ from agentic_os.integrations.productivity import (
     GOOGLE_CONTEXT_READER,
     GOOGLE_LIVE_CAPABILITIES,
     GOOGLE_MINIMAL_EDITOR,
+    MICROSOFT_LIVE_CAPABILITIES,
     PRODUCTIVITY_CATALOG,
     CapabilityGrant,
     DocCapability,
@@ -15,6 +16,7 @@ from agentic_os.integrations.productivity import (
     ProviderStatus,
     default_registry,
     google_provider,
+    microsoft_provider,
 )
 
 
@@ -85,23 +87,19 @@ def test_registry_queries_by_capability_and_source_kind():
 def test_manifest_projection_reality_filter():
     reg = default_registry()
     m = reg.to_manifest()
-    # W1: google is LIVE for the capabilities its adapter implements → buildable by name …
-    assert m.buildable("sheet.write") == ("google",)
-    assert m.buildable("sheet.read") == ("google",)
-    assert m.buildable("document.create") == ("google",)
+    # W1+W2: google AND microsoft are LIVE for the caps their adapters implement → buildable by name …
+    assert set(m.buildable("sheet.write")) == {"google", "microsoft"}
+    assert set(m.buildable("sheet.read")) == {"google", "microsoft"}
+    assert set(m.buildable("document.create")) == {"google", "microsoft"}
     assert m.decide("sheet.write", "google") is None            # runnable
-    # … but google's un-implemented caps stay planned (partial liveness), as do other providers
-    assert m.buildable("document.edit") == ()                   # planned for everyone (incl. google)
+    assert m.decide("sheet.write", "microsoft") is None         # runnable (W2)
+    # … but the un-implemented caps stay planned (partial liveness), for both live providers
+    assert m.buildable("document.edit") == ()                   # planned for everyone
     assert m.buildable("slides.create") == ()
     assert m.decide("document.edit", "google") is not None       # planned → refused by name
-    assert m.decide("sheet.write", "microsoft") is not None      # planned → refused by name
-    # flipping a second provider LIVE adds it alongside google
-    reg.register(ProductivityProvider(
-        provider="microsoft", display_name="Microsoft 365 (Graph)",
-        roles=(ProviderRole.APP,), strategy=PhysicalStrategy.CLOUD_API,
-        app_capabilities=("sheet.write",), status=ProviderStatus.LIVE))
-    m2 = reg.to_manifest()
-    assert set(m2.buildable("sheet.write")) == {"google", "microsoft"}
+    assert m.decide("document.edit", "microsoft") is not None    # planned → refused by name
+    # a still-planned provider stays refused by name
+    assert m.decide("sheet.write", "libreoffice") is not None
 
 
 def test_w1_google_is_partly_live_with_both_roles_and_scope_profiles():
@@ -122,3 +120,29 @@ def test_w1_google_is_partly_live_with_both_roles_and_scope_profiles():
         "GOOGLE_MINIMAL_EDITOR", "GOOGLE_CONTEXT_READER", "GOOGLE_DOCS_EDITOR", "GOOGLE_SHEETS_EDITOR"}
     # the registry still exposes google as a Source of drive
     assert {p.provider for p in default_registry().sources_of("drive")} == {"google"}
+
+
+def test_w2_microsoft_is_partly_live_app_but_source_is_not_live():
+    m = microsoft_provider()
+    # W2 flips microsoft LIVE, but only for the capabilities its adapter implements
+    assert m.status is ProviderStatus.LIVE
+    assert set(MICROSOFT_LIVE_CAPABILITIES) == {"sheet.read", "sheet.write", "document.create"}
+    for cap in MICROSOFT_LIVE_CAPABILITIES:
+        assert m.is_capability_live(cap)
+    # document.edit + slides.* stay planned (partial liveness)
+    for cap in ("document.edit", "slides.create", "slides.render", "slides.read"):
+        assert not m.is_capability_live(cap)
+    # both roles are declared — APP (the new adapter) + SOURCE — over the MS source kinds …
+    assert m.has_role(ProviderRole.APP) and m.has_role(ProviderRole.SOURCE)
+    assert set(m.source_kinds) == {"onedrive", "sharepoint", "outlook", "teams"}
+    # … but the SOURCE side is NOT wired: there is no OneDrive/SharePoint Source connector yet, so
+    # the manifest (APP-only projection) is what carries microsoft's liveness, buildable by name.
+    manifest = default_registry().to_manifest()
+    assert "microsoft" in manifest.buildable("sheet.write")
+    assert "microsoft" in manifest.buildable("document.create")
+
+
+def test_manifest_now_makes_sheet_write_buildable_by_google_and_microsoft():
+    m = default_registry().to_manifest()
+    assert set(m.buildable("sheet.write")) == {"google", "microsoft"}
+    assert m.decide("sheet.write", "microsoft") is None      # runnable (W2)
