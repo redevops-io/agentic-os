@@ -1,4 +1,4 @@
-"""The closed outcome loop, reachable through the Projects API: CRM/Outreach producers feed the
+"""The closed outcome loop, reachable through the Projects API. The CRM and Outreach producers feed the
 'what needs me?' surface via select_action, and recording outcomes (POST /api/outcomes) changes which
 action the surface selects next time — the loop, operable end-to-end (in simulation)."""
 from __future__ import annotations
