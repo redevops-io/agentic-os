@@ -626,6 +626,85 @@ class _ConfirmSourcesReq(BaseModel):
     confirmed_by: str = ""
 
 
+def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
+    """Expose a read-only, governed slice of this deployment to external agents over MCP + REST
+    (the Governed Agent Gateway). Opt-in: does nothing unless ``AGENT_GATEWAY_TOKEN`` is set — the
+    static bearer an external client presents (fine for a read-only surface over sample/scoped data;
+    production wires the OAuth 2.1 + PKCE AuthorizationServer instead). Returns True if mounted.
+
+    Only READ capabilities are wired (projects/missions/sources), each running the one governed path
+    with PolicyEgressEngine on the way out, so PII/secrets are redacted/denied and every call audits.
+    Writes, mission delegation and the sandbox are intentionally NOT exposed on this surface.
+    """
+    import os
+    token = os.environ.get("AGENT_GATEWAY_TOKEN", "").strip()
+    if not token:
+        return False
+    from fastapi import Body, Header, HTTPException
+    from agentic_os.overlays import Principal
+    from agentic_os.agent_gateway import (
+        AgentGateway, GatewayPrincipal, InMemoryAuditSink, MCPEndpoint, McpGatewayBridge,
+        PolicyEgressEngine, RestGatewayAdapter, build_read_registry)
+    from agentic_os.agent_gateway.auth import GatewayAuthError
+
+    default_pid = (prov.projects() or [{"id": "customer-ops"}])[0].get("id", "customer-ops")
+    _GRANTS = {"projects.read", "missions.read", "sources.read"}
+
+    class _Projections:
+        def projects(self): return prov.projects()
+        def overview(self, pid): return prov.overview(pid or default_pid)
+
+    class _Missions:
+        def list(self): return prov.missions(default_pid)
+        def get(self, mid): return prov.mission_detail(default_pid, mid)
+        def explain(self, mid): return prov.mission_detail(default_pid, mid)
+        def pending_approvals(self): return prov.attention(default_pid)
+
+    class _Sources:
+        def search(self, query, limit=10): return prov.sources(default_pid)[: int(limit)]
+
+    class _StaticVerifier:
+        """Maps the configured bearer to a read-only principal; anything else → None (deny)."""
+        def verify(self, t):
+            if t and t == token:
+                return GatewayPrincipal(Principal("external-agent", "service", (), "demo"),
+                                        client_id="external-agent", workspace="demo",
+                                        scopes=tuple(_GRANTS))
+            return None
+
+    registry = build_read_registry(projections=_Projections(), missions=_Missions(), sources=_Sources())
+    gateway = AgentGateway(registry=registry, authorize=lambda p, perm: perm in _GRANTS,
+                           egress=PolicyEgressEngine(), audit=InMemoryAuditSink())
+    verifier = _StaticVerifier()
+    rest = RestGatewayAdapter(gateway, verifier)
+    endpoint = MCPEndpoint(McpGatewayBridge(gateway, verifier))
+
+    @app.get("/api/agent-gateway/capabilities")
+    def _agw_caps(authorization: str = Header(default="")):
+        try:
+            return rest.list_capabilities(authorization)
+        except GatewayAuthError:
+            raise HTTPException(status_code=401, detail="unauthorized")
+
+    @app.post("/api/agent-gateway/capabilities/{name}/invoke")
+    def _agw_invoke(name: str, body: Dict[str, Any] = Body(default={}),
+                    authorization: str = Header(default="")):
+        try:
+            return rest.invoke(authorization, name, body or {})
+        except GatewayAuthError:
+            raise HTTPException(status_code=401, detail="unauthorized")
+
+    @app.post("/api/agent-gateway/mcp")
+    def _agw_mcp(body: Dict[str, Any] = Body(default={}), authorization: str = Header(default="")):
+        try:
+            return endpoint.handle(authorization, str((body or {}).get("method", "")),
+                                   (body or {}).get("params") or {})
+        except GatewayAuthError:
+            raise HTTPException(status_code=401, detail="unauthorized")
+
+    return True
+
+
 def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: Optional[List[str]] = None) -> FastAPI:
     prov: ProjectionProvider = provider or SampleProjectionProvider()
     app = FastAPI(title="ReDevOps Projects API", version="0.1.0")
@@ -736,6 +815,12 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     @app.post("/api/sources/confirm")
     def _confirm(req: _ConfirmSourcesReq) -> List[dict]:
         return confirm_and_connect_sources(req.project_id, req.sources, req.confirmed_by)
+
+    # Governed Agent Gateway — let an EXTERNAL agent (Claude/ChatGPT/Cursor) reach a read-only,
+    # governed slice of this deployment over MCP + REST. Opt-in: mounted only when
+    # AGENT_GATEWAY_TOKEN is set. Every call runs the one governed path (permissions → egress →
+    # audit); writes/mission-delegation are NOT exposed here (read-only surface).
+    mount_agent_gateway(app, prov)
 
     # Serve the bundled Projects UI at the SAME origin as the API (no CORS) — mounted LAST so
     # the /api routes above always win. The UI is built with VITE_PROJECTS_API="/", so it calls
