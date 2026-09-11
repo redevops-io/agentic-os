@@ -56,6 +56,25 @@ def enabled_apps(apps: List[dict], selection: Optional[Set[str]]) -> List[dict]:
 _HOSTED: Any = None
 _HOSTED_TRIED = False
 
+# ── Sidekick's grounded LLM fallback (out-of-KB questions; None when no model configured) ──
+_SIDEKICK: Any = None
+_SIDEKICK_TRIED = False
+
+
+def _get_sidekick_assistant() -> Any:
+    """The deployment's grounded Sidekick fallback, built once from env. Its model is None (a
+    no-op fallback) unless SIDEKICK_MODEL_BASE_URL points at an OpenAI-compatible endpoint."""
+    global _SIDEKICK, _SIDEKICK_TRIED
+    if _SIDEKICK_TRIED:
+        return _SIDEKICK
+    _SIDEKICK_TRIED = True
+    try:
+        from .sidekick_assistant import make_grounded_sidekick
+        _SIDEKICK = make_grounded_sidekick()
+    except Exception:
+        _SIDEKICK = None
+    return _SIDEKICK
+
 
 def _get_hosted() -> Any:
     """The deployment's :class:`HostedConnect`, built once from env. Returns None when the
@@ -569,8 +588,24 @@ def sidekick_reply(ctx: Dict[str, Any], text: str) -> Dict[str, Any]:
     from agentic_os.stack_knowledge import answer_stack_question
     kb = answer_stack_question(text)
     if kb is not None:
-        return {"text": kb.answer, "topic": kb.topic,
+        reply: Dict[str, Any] = {"text": kb.answer, "topic": kb.topic,
                 "actions": [{"label": "Where this is enforced", "kind": "explain", "ref": kb.source}]}
+        detail = getattr(kb, "detail", "")   # tiered topics (e.g. component explainers) carry a deeper tier
+        if detail:
+            reply["detail"] = detail
+        return reply
+    # No confident curated match. If a model is wired, answer STRICTLY GROUNDED on the KB corpus
+    # (it may cover paraphrases and the long tail, but only from verified facts, and it declines to
+    # the team when the facts don't cover the question). No model configured → generic fallback.
+    assistant = _get_sidekick_assistant()
+    if assistant is not None:
+        ga = assistant.answer(text, ctx)
+        if ga is not None:
+            reply: Dict[str, Any] = {"text": ga.text, "topic": "Sidekick", "grounded": True}
+            if ga.sources:
+                reply["actions"] = [{"label": "Where this is enforced", "kind": "explain",
+                                     "ref": ga.sources[0]}]
+            return reply
     return {"text": "I can turn that into a governed Mission across your connected apps. Want me to propose the steps? "
                     "You can also ask me how your credentials are handled or whether your data stays local."}
 
