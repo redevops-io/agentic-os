@@ -124,6 +124,77 @@ def test_every_entry_names_where_it_is_enforced():
     assert all(e.source for e in STACK_KNOWLEDGE)   # every claim points at its enforcement site
 
 
+def test_proactive_intelligence_topics_resolve_to_their_entry():
+    # Sidekick can guide users through the proactive-intelligence direction (the plan's features).
+    cases = {
+        "can you tell me what needs my attention today?": "proactive-overview",
+        "what is the priority engine and how does it rank things?": "priority-engine",
+        "what's the difference between an opportunity and an intervention?": "opportunity-vs-intervention",
+        "will the CRM tell me the next best action for a deal?": "crm-next-best-action",
+        "can support predict the likely resolution path?": "support-resolution-intelligence",
+        "will projects warn me about execution risk before a milestone slips?": "projects-execution-risk-radar",
+        "can it find emerging trends before they're saturated?": "growth-trend-intelligence",
+        "is there a semrush for content creators?": "creator-intelligence",
+        "who is worth contacting now for outreach?": "outreach-intent-radar",
+        "can it match me to jobs using a capability graph?": "recruiting-fit-engine",
+        "does research plan what to investigate to reduce uncertainty?": "research-info-gain-planner",
+        "can it find stale documents and knowledge gaps?": "knowledge-debt-radar",
+        "how would learnerbot decide the next concept to teach (knowledge frontier)?": "learnerbot-knowledge-frontier",
+        "will analytics explain why a metric changed?": "analytics-anomaly-action",
+        "would the wealth manager flag when my plan's assumptions drift?": "wealth-assumption-drift",
+        "if it acts on its own how is that governed and how do i know it works?": "proactive-governance-learning",
+    }
+    for q, expected in cases.items():
+        e = answer_stack_question(q)
+        assert e is not None and e.id == expected, f"{q!r} -> {e.id if e else None}, expected {expected}"
+        assert e.topic == "Proactive intelligence (roadmap)"
+
+
+def test_proactive_answers_are_status_honest_not_overclaiming():
+    # the load-bearing honesty guard: roadmap features must NOT read as shipped.
+    from agentic_os.stack_knowledge import STACK_KNOWLEDGE
+    proactive = {e.id: e for e in STACK_KNOWLEDGE if e.topic == "Proactive intelligence (roadmap)"}
+    assert len(proactive) >= 16
+    # pure-roadmap entries say so plainly (in the answer, where the user reads it)
+    for pid in ("priority-engine", "crm-next-best-action", "projects-execution-risk-radar",
+                "outreach-intent-radar", "recruiting-fit-engine", "research-info-gain-planner",
+                "knowledge-debt-radar", "learnerbot-knowledge-frontier", "analytics-anomaly-action",
+                "wealth-assumption-drift", "creator-intelligence"):
+        a = proactive[pid].answer.lower()
+        assert ("not shipped" in a or "roadmap" in a or "planned" in a or "not yet" in a), pid
+    # the Growth kernel is the one real piece — it must state it validates LOGIC on synthetic data,
+    # NOT real-world accuracy (matches the shipped PR #141 framing and the "abstain" constraint).
+    growth = proactive["growth-trend-intelligence"].answer.lower()
+    assert "synthetic" in growth and ("not real-world" in growth or "not real world" in growth
+                                      or "not real-world accuracy" in growth)
+    assert "kernel" in growth
+    # Support states its primitives ship today AND that the predictor is the extension
+    supp = proactive["support-resolution-intelligence"].answer.lower()
+    assert "ship" in supp and ("extension" in supp or "roadmap" in supp)
+
+
+def test_proactive_entries_disclose_status_in_their_source():
+    from agentic_os.stack_knowledge import STACK_KNOWLEDGE
+    for e in STACK_KNOWLEDGE:
+        if e.topic == "Proactive intelligence (roadmap)":
+            s = e.source.lower()
+            assert ("roadmap" in s or "shipped" in s or "not yet" in s), f"{e.id} source hides status"
+
+
+def test_proactive_keywords_do_not_hijack_real_mission_requests():
+    # the plan's own examples are literally real tasks — asking Sidekick to DO them must NOT route
+    # to a roadmap explainer, and neither must ordinary app work.
+    for q in ("contact Acme now",
+              "send Acme the deployment proposal",
+              "draft a cold outreach email to Tasha",
+              "refund Sarah Chen for the duplicate charge",
+              "apply a macro to the support ticket",       # 'macro' is near resolution-intelligence
+              "summarise the Q3 board deck into bullet points",
+              "create a spreadsheet of last week's signups",
+              "rebalance the portfolio to the target allocation"):
+        assert answer_stack_question(q) is None, f"{q!r} was hijacked to {answer_stack_question(q)}"
+
+
 def test_sidekick_reply_routes_stack_questions_to_the_expert():
     r = sidekick_reply({"section": "Overview"}, "where is my data processed, locally or in the cloud?")
     assert "cloud" in r["text"].lower() and r.get("topic") == "Data handling"
