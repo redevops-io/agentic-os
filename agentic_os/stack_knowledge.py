@@ -292,9 +292,10 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
     KnowledgeEntry(
         id="support-contact",
         topic="Getting started",
-        keywords=("contact", "support", "get help", "reach you", "reach the team", "talk to",
-                  "stuck", "help me", "who do i ask", "customer support", "slack channel",
-                  "join slack", "ask a human"),
+        keywords=("contact support", "contact a human", "contact the team", "contact you",
+                  "get help", "reach you", "reach the team", "reach support", "reach a human",
+                  "talk to a human", "i'm stuck", "im stuck", "who do i ask", "customer support",
+                  "slack channel", "join slack", "ask a human"),
         question="How do I get help or contact a human?",
         answer=(
             "Ask in #agentic-apps on the ReDevOps Slack, or email info@redevops.io — those are on "
@@ -497,6 +498,340 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
             "pre-drawn org chart — which is exactly why the Governance Plane watches the whole "
             "team's trajectory, not just single calls."),
         source="redevops.io/in-plain-english (Projects + Sidekick) · /in-plain-english-people-can-understand"),
+    # ── Proactive intelligence (the "what should happen next" direction). STATUS-HONEST: most of
+    #    this is the roadmap, NOT shipped — every answer says so plainly. One kernel ships today
+    #    (Growth trend scoring, synthetic-validated) and the Support primitives ship today; those
+    #    say so specifically. Grounds the LLM fallback too, so it inherits the same honest framing. ─
+    KnowledgeEntry(
+        id="proactive-overview",
+        topic="Proactive intelligence (roadmap)",
+        keywords=("what needs me", "needs my attention", "what should happen next",
+                  "what should i do next", "proactive", "proactively", "surface what matters",
+                  "tell me what to work on", "3 things need you", "three things need you",
+                  "attention layer"),
+        question="Can Sidekick tell me what needs my attention — what should I work on next?",
+        answer=(
+            "That's the direction the stack is moving, and it's mostly on the roadmap today (one "
+            "piece — Growth trend scoring — has an early, synthetic-validated kernel, and the "
+            "Support building blocks already ship). The plan: each app continuously observes its "
+            "own state, detects an opportunity, risk, anomaly or gap, proposes candidate actions, "
+            "estimates each one's value/confidence/urgency/cost/risk, and then acts, asks you to "
+            "approve, defers, or stays silent — while Sidekick gathers the ones worth your time into "
+            "a single 'what needs me' list and handles or defers the rest. The point isn't to run "
+            "more agents; it's to complete more useful work per unit of your attention, under your "
+            "policies. I can explain any specific app's version of this — just ask."),
+        detail=(
+            "The loop is: observe → detect opportunity/risk/anomaly → generate candidate "
+            "interventions → estimate expected value, confidence, urgency, execution cost, human-"
+            "attention cost and operational risk → a Context-Runtime optimiser chooses act / request-"
+            "approval / defer / abstain → an OutcomeEvent feeds learning. Human attention is treated "
+            "as a scarce resource alongside compute and tool cost. Shipping order on the roadmap: "
+            "Growth Opportunity Radar first (clear external data, low side-effect risk, strong "
+            "calibration), then CRM Next-Best-Action, then Projects Risk Radar, Research, LearnerBot, "
+            "and finally the cross-app Sidekick attention layer."),
+        source="Roadmap — Agentic Apps proactive-intelligence direction (mostly not yet shipped) · "
+               "Growth kernel: agentic_os/trend_intelligence.py · Support primitives: support_autonomy.py"),
+    KnowledgeEntry(
+        id="priority-engine",
+        topic="Proactive intelligence (roadmap)",
+        keywords=("priority engine", "attention runtime", "opportunity planner",
+                  "intervention planner", "how does it prioritize", "how does it prioritise",
+                  "how are things ranked", "intervention candidate", "priority score",
+                  "how does it decide what's important"),
+        question="What is the Priority Engine and how would it rank what matters?",
+        answer=(
+            "The Priority Engine is the planned shared primitive (not shipped yet) that every app "
+            "would use instead of each re-inventing its own alerting. Rather than emit a raw alert, "
+            "a detector produces an *intervention candidate* — a possible action with its subject, "
+            "the evidence behind it, an expected value, a confidence, an urgency, a cost, a risk, and "
+            "the capabilities/permissions/approval-tier it would need. Crucially it does NOT rank by "
+            "confidence alone: a very certain but low-value item can rightly lose to a less-certain "
+            "high-impact one. It's designed to live inside the existing Context Runtime, not as a new "
+            "microservice."),
+        detail=(
+            "Priority is a function of probability, expected upside/downside, urgency, reversibility, "
+            "execution cost, human-attention cost, operational risk and information value — the exact "
+            "objective stays app-specific behind a shared optimiser contract. Phase 0 of the roadmap "
+            "is just the shared contracts: Opportunity, InterventionCandidate, InterventionDecision, "
+            "OutcomeEvent extensions and PriorityScore/PriorityPolicy — deliberately no new service "
+            "boundary until scale or isolation demands one."),
+        source="Roadmap — Priority Engine primitive (Phase 0 shared contracts, not yet shipped)"),
+    KnowledgeEntry(
+        id="opportunity-vs-intervention",
+        topic="Proactive intelligence (roadmap)",
+        keywords=("opportunity vs intervention", "opportunity versus intervention",
+                  "difference between an opportunity", "what is an intervention",
+                  "do nothing", "do-nothing", "counterfactual", "over-act", "overact",
+                  "confidence is not", "confidence vs value", "rank by confidence"),
+        question="What's the difference between an opportunity and an intervention — and won't a proactive agent over-act?",
+        answer=(
+            "They're kept deliberately separate. An *opportunity* is something discovered ('Acme "
+            "looks ready for a technical follow-up'); an *intervention* is something the system could "
+            "do about it ('send Acme the deployment proposal'), and one opportunity can spawn several "
+            "candidate interventions that an optimiser chooses between. To stop over-acting, **doing "
+            "nothing is a first-class candidate** evaluated like any other — as is 'gather more "
+            "evidence first' and 'ask a human'. So the system has to justify acting against the "
+            "option of staying quiet, rather than acting by default. (This is the designed behaviour; "
+            "the machinery is on the roadmap.)"),
+        detail=(
+            "Where practical the planner compares do-nothing vs action A vs action B vs ask-human vs "
+            "acquire-evidence-E, so evidence acquisition can itself be the chosen move. The system "
+            "learns two separate things: whether its reading of the world was correct, and whether "
+            "the response it picked was effective — because a right diagnosis with the wrong action "
+            "is still a failure."),
+        source="Roadmap — opportunity/intervention split + counterfactual (do-nothing first-class) planning"),
+    KnowledgeEntry(
+        id="crm-next-best-action",
+        topic="Proactive intelligence (roadmap)",
+        keywords=("next best action", "next-best-action", "deal radar", "which deals need",
+                  "stalled deal", "neglected lead", "renewal risk", "expansion opportunity",
+                  "buying signal", "deal that needs attention", "crm proactive"),
+        question="Will the CRM tell me the next best action / which deals need attention (Deal Radar)?",
+        answer=(
+            "That's the planned CRM capability (not shipped yet): continuously work out which "
+            "customer or prospect deserves attention, why, and which action has the highest expected "
+            "value — neglected high-value leads, stalled deals, missing stakeholders, new buying "
+            "signals, unanswered technical concerns, follow-up windows, renewal risk, expansion. A "
+            "recommendation would come with its reason, the evidence, an expected value and "
+            "confidence, and — because it's an outbound action — an approval gate before anything is "
+            "sent. It would learn from replies, meetings, stage progression, conversions, losses and "
+            "from your edits or rejections, optimising the action, timing, channel and evidence, not "
+            "just a lead ranking."),
+        source="Roadmap — CRM Next-Best-Action / Deal Radar (Phase 2; not yet shipped)"),
+    KnowledgeEntry(
+        id="support-resolution-intelligence",
+        topic="Proactive intelligence (roadmap)",
+        keywords=("resolution intelligence", "resolution path", "likely resolution",
+                  "predict the resolution", "escalation prediction", "escalation probability",
+                  "duplicate incident", "macro recommendation", "resolution planner",
+                  "support proactive"),
+        question="Can Support predict the likely resolution before an agent works it out (Resolution Intelligence)?",
+        answer=(
+            "Partly today, more on the roadmap. What ships now are the Support building blocks: "
+            "opt-out detection, a follow-up policy that respects thread risk, lead qualification, a "
+            "self-improving knowledge base that learns from resolutions, and sentiment-based handoff "
+            "to a human. The planned extension is a resolution planner that predicts the likely issue "
+            "and resolution path up front — with confidence, the evidence (error signature, account "
+            "event, KB article, similar resolved cases) and an escalation probability — plus "
+            "similar-case retrieval, duplicate-incident detection, macro recommendation, KB-gap "
+            "detection and safe auto-resolution only where policy permits. It would learn from "
+            "resolution success, edits, draft-kept rate, FRT/TTR, reopen rate and CSAT."),
+        source="Shipped: agentic_os/support_autonomy.py (opt-out/follow-up/lead-scoring/self-improving "
+               "KB/handoff) · Roadmap: resolution-path predictor + escalation prediction"),
+    KnowledgeEntry(
+        id="projects-execution-risk-radar",
+        topic="Proactive intelligence (roadmap)",
+        keywords=("execution risk", "risk radar", "delivery risk", "milestone slip",
+                  "milestone slippage", "blocked dependency", "will the project slip",
+                  "project risk", "slip window", "execution intelligence", "owner overload"),
+        question="Can Projects warn me about execution risk before a milestone slips (Risk Radar)?",
+        answer=(
+            "That's the planned 'execution intelligence above your project system' (not shipped yet) "
+            "— the project-management equivalent of trend intelligence: spot emerging execution "
+            "failures before they become visible failures. From signals like dependencies, tasks, "
+            "commits, PRs, tests, deployments, messages, approvals, ownership and milestones, it "
+            "would flag milestone slippage, blocked dependencies, decisions going critical, "
+            "requirement ambiguity, owner overload, stale approvals and integration risk — with an "
+            "estimated slip window, a confidence, the primary cause, the evidence and a recommended "
+            "intervention. It's positioned as intelligence layered above your PM tool, not another "
+            "task manager."),
+        source="Roadmap — Projects Execution Risk Radar (Phase 3; not yet shipped)"),
+    KnowledgeEntry(
+        id="growth-trend-intelligence",
+        topic="Proactive intelligence (roadmap)",
+        keywords=("trend intelligence", "future trend", "emerging trend", "opportunity radar",
+                  "growth radar", "emerging topic", "before it's saturated", "before it is saturated",
+                  "trend forecast", "spot trends", "emerging-content", "will this trend"),
+        question="Can it find emerging trends before they're saturated (Growth Opportunity Radar)?",
+        answer=(
+            "This is the furthest-along piece — but be clear on what exists. The scoring KERNEL ships "
+            "today: it measures early emergence across independent sources, calibrates a confidence "
+            "against outcomes, and abstains when evidence is weak, rather than asking a model to "
+            "guess. It's been validated on a controlled synthetic replay (its logic beats simple "
+            "momentum / search-only baselines with useful lead time) — which proves the LOGIC, NOT "
+            "real-world accuracy. The live Growth radar over real Reddit/YouTube/search data, with "
+            "stored forecasts scored against what actually happened, is the next step on the roadmap. "
+            "By design it avoids 'nearly 100% accuracy' claims and reports calibration and precision-"
+            "at-threshold instead."),
+        detail=(
+            "The kernel scores velocity, acceleration, cross-source confirmation, source "
+            "independence, small-creator outliers, audience-question growth and geographic spread, "
+            "minus competition/saturation/manipulation penalties; an isotonic calibrator turns the "
+            "raw score into a probability; STRICT/BALANCED/EXPLORATORY modes abstain below threshold. "
+            "A candidate is meant to carry title, description, confidence, forecast horizon, "
+            "lifecycle state (weak signal → emerging → accelerating → mainstream → peaking → "
+            "saturated → declining), proof of early emergence/acceleration/low-competition, "
+            "counter-evidence and a recommended opportunity."),
+        source="Shipped kernel: agentic_os/trend_intelligence.py + trend_backtest.py "
+               "(synthetic-validated logic) · Roadmap: live-data Growth radar + stored-forecast calibration"),
+    KnowledgeEntry(
+        id="creator-intelligence",
+        topic="Proactive intelligence (roadmap)",
+        keywords=("creator intelligence", "semrush for", "for content creators", "rising topics",
+                  "small-creator outlier", "small creator outlier", "content portfolio",
+                  "youtuber", "underserved question", "pre-post analysis", "content ideas"),
+        question="Is there a 'Semrush for content creators' — rising topics, outliers, content ideas?",
+        answer=(
+            "It's the planned creator-facing specialisation of the Growth intelligence (not shipped "
+            "as a product yet; it shares the trend-scoring kernel that does exist). For YouTubers, "
+            "short-form creators, podcasters and newsletter publishers it would surface rising "
+            "topics/sounds/formats, underserved audience questions, low-competition/high-interest "
+            "concepts, and small-creator outliers — where an outlier is judged against that creator's "
+            "OWN expected performance, not absolute views. It would also do pre-post analysis (hook "
+            "strength, retention weak spots, topic demand, saturation, title/thumbnail fit) and a "
+            "portfolio optimiser over topic/format/platform/timing — always without presenting a "
+            "forecast as guaranteed performance."),
+        source="Roadmap — Creator Intelligence (a Growth/Social package over the trend kernel; not yet shipped)"),
+    KnowledgeEntry(
+        id="outreach-intent-radar",
+        topic="Proactive intelligence (roadmap)",
+        keywords=("intent radar", "timing radar", "who is worth contacting", "who to contact now",
+                  "outreach radar", "outreach intelligence", "who should i reach out to",
+                  "best time to contact", "do not contact before", "when to reach out"),
+        question="Can outreach tell me who's worth contacting now and when (Intent & Timing Radar)?",
+        answer=(
+            "That's the planned outreach capability (not shipped yet). The higher-value question "
+            "isn't 'what message do I send' but 'who is worth contacting now, and why now' — driven "
+            "by CRM history, prior outreach and responses, company events, hiring, funding, technical "
+            "changes and other permitted signals. A recommendation would name the trigger, the "
+            "proposition, the channel, a confidence, a 'why now', and a 'do not contact before' date, "
+            "and always require approval before an outbound send. Importantly its reward function "
+            "counts negative outcomes — unsubscribes and negative replies — so it can't just maximise "
+            "raw reply volume."),
+        source="Roadmap — Outreach Intent & Timing Radar (not yet shipped)"),
+    KnowledgeEntry(
+        id="recruiting-fit-engine",
+        topic="Proactive intelligence (roadmap)",
+        keywords=("opportunity fit", "fit engine", "job fit", "job-seeker", "job seeker mode",
+                  "capability graph", "tailor my resume", "job search workflow", "candidate fit",
+                  "recruiter mode", "apply to jobs"),
+        question="Can it match me to jobs and run the job-search workflow (Opportunity Fit Engine)?",
+        answer=(
+            "That's the planned recruiting capability (not shipped yet), mapping onto the intended "
+            "Sidekick-driven job search. In job-seeker mode it would compare a listing against your "
+            "resume, projects, portfolio and repos using a capability graph rather than keyword "
+            "overlap — giving a fit score, strong evidence, weak/missing areas and a differentiating "
+            "pitch. Sidekick would coordinate the chain: find listing → evaluate fit → research "
+            "employer → tailor resume → draft cover letter → request approval where required → submit "
+            "→ update the tracker → watch for a meaningful reply. Employer mode would rank "
+            "demonstrated capability the same way. It would learn from responses, screens, "
+            "interviews, progression, rejections and offers."),
+        source="Roadmap — Jobs/Recruiting Opportunity Fit Engine (not yet shipped)"),
+    KnowledgeEntry(
+        id="research-info-gain-planner",
+        topic="Proactive intelligence (roadmap)",
+        keywords=("information gain", "information-gain", "info-gain", "reduce uncertainty",
+                  "what should i investigate", "research planner", "evidence acquisition",
+                  "which investigation", "stopping rule", "belief state", "when to stop researching"),
+        question="Does research plan what to investigate next to reduce uncertainty (Information-Gain Planner)?",
+        answer=(
+            "That's the planned research capability (not shipped yet). Most research agents optimise "
+            "'what answers the question'; this planner would also ask 'what investigation would "
+            "reduce uncertainty the most'. From a belief/hypothesis state and the known "
+            "evidence/contradictions/unknowns, it would generate candidate investigations, estimate "
+            "each one's expected information gain versus cost, choose one, acquire the evidence, "
+            "update the belief, and repeat — stopping when confidence is sufficient, remaining gain "
+            "is low, the budget is spent, or the evidence is irreducibly ambiguous. Improvements here "
+            "feed back into the Context Runtime."),
+        source="Roadmap — Research Information-Gain Planner (Phase 4; not yet shipped)"),
+    KnowledgeEntry(
+        id="knowledge-debt-radar",
+        topic="Proactive intelligence (roadmap)",
+        keywords=("knowledge debt", "stale document", "stale docs", "knowledge gap",
+                  "contradiction", "duplicate document", "broken reference", "unanswered topic",
+                  "obsolete procedure", "knowledge quality", "out of date docs"),
+        question="Can it find stale/contradictory docs and knowledge gaps (Knowledge Debt Radar)?",
+        answer=(
+            "That's the planned Knowledge capability (not shipped yet): automatically detect stale "
+            "documents, contradictions, duplicates, unsupported claims, broken references, missing "
+            "provenance, frequently-searched-but-unanswered topics, knowledge trapped in "
+            "conversations and conflicting versions. Rather than just flagging debt, it's meant to "
+            "generate a proposed correction or a new KB article — with evidence lineage — and route "
+            "it through approval. For example: 'users asked variants of X 37 times, retrieval "
+            "confidence was low in 29, no authoritative doc covers it → draft an article covering "
+            "A/B/C.'"),
+        source="Roadmap — Knowledge Debt Radar (not yet shipped)"),
+    KnowledgeEntry(
+        id="learnerbot-knowledge-frontier",
+        topic="Proactive intelligence (roadmap)",
+        keywords=("knowledge frontier", "learnerbot", "learner bot", "socratic", "concept map",
+                  "what to learn next", "next concept", "mastery", "misconception",
+                  "learning frontier"),
+        question="How would LearnerBot decide what to teach next (Knowledge Frontier)?",
+        answer=(
+            "That's the planned LearnerBot direction (not shipped yet): build the map before "
+            "traversing every branch. Instead of long sequences of disconnected facts, it would model "
+            "understanding as a hierarchy (big picture → systems → concepts → mechanisms → detailed "
+            "facts) and track each concept's state — not encountered, exposed, probably understood, "
+            "demonstrated, uncertain, misconception, retention-at-risk or mastered. The Knowledge "
+            "Frontier would pick the next concept by structural importance, prerequisites, "
+            "uncertainty, misconception risk, expected information gain, retention need and your "
+            "objective — inside a Socratic loop that diagnoses, scaffolds and verifies. It optimises "
+            "demonstrated mastery and retention, not time-on-app."),
+        source="Roadmap — LearnerBot Knowledge Frontier (Phase 5; not yet shipped)"),
+    KnowledgeEntry(
+        id="analytics-anomaly-action",
+        topic="Proactive intelligence (roadmap)",
+        keywords=("anomaly", "why did the metric", "metric changed", "explain the metric",
+                  "anomaly explanation", "metric moved", "analytics proactive",
+                  "decision infrastructure", "root cause of the change"),
+        question="Will analytics explain why a metric changed and what to do (Anomaly → Explanation → Action)?",
+        answer=(
+            "That's the planned analytics direction (not shipped yet). A conventional dashboard says "
+            "'metric changed → alert'. The agentic version would decide whether the change matters, "
+            "investigate the probable cause, gather evidence, generate candidate interventions, "
+            "estimate each one's expected effect, recommend or (where policy allows) execute, and "
+            "then measure the result — turning analytics into decision infrastructure rather than an "
+            "automated dashboard narrator."),
+        source="Roadmap — Analytics Anomaly→Explanation→Action (not yet shipped)"),
+    KnowledgeEntry(
+        id="wealth-assumption-drift",
+        topic="Proactive intelligence (roadmap)",
+        keywords=("assumption drift", "assumptions drift", "drift monitor", "assumptions changed",
+                  "reconsider the plan", "portfolio drift", "strategy assumption", "plan assumption",
+                  "plan's assumptions", "re-evaluate allocation", "reevaluate allocation",
+                  "review my allocation"),
+        question="Would the wealth manager tell me when my plan's assumptions no longer hold (Drift Monitor)?",
+        answer=(
+            "That's the planned wealth-manager function (not shipped yet) — and note it's "
+            "deliberately NOT constant trading advice. It would watch for when reality has changed "
+            "enough that a prior plan's assumptions deserve reconsideration: portfolio drift, risk "
+            "exposure, cash flow, goals, market assumptions, tax constraints, horizon and material "
+            "evidence. The message is 'your strategy was based on assumption X; evidence Y has "
+            "materially changed; it's still within policy, but the assumption should be reviewed' — "
+            "with a recommendation to re-evaluate. Any financial action stays fully permissioned and "
+            "governed."),
+        source="Roadmap — Wealth Manager Decision/Assumption-Drift Monitor (not yet shipped)"),
+    KnowledgeEntry(
+        id="proactive-governance-learning",
+        topic="Proactive intelligence (roadmap)",
+        keywords=("act on its own", "acts on its own", "how is that governed", "how is it governed",
+                  "autonomy policy", "approve interventions", "how does it learn", "outcome telemetry",
+                  "how is it evaluated", "how do i know it works", "calibration", "100% accuracy",
+                  "does it improve over time", "who approves the action", "proactive governance"),
+        question="If it acts on its own, how is that governed — and how do I know it actually works?",
+        answer=(
+            "Two firm principles in the design. First, every proactive intervention enters the SAME "
+            "governance path as any other action regardless of which app raised it: permissions → "
+            "guardrails → risk/approval classification → execute or request-approval or deny → audit. "
+            "Low-risk work (retrieval, internal analysis, drafts) can run automatically; state "
+            "changes depend on policy; high-risk actions (external comms, submissions, financial or "
+            "production actions) need approval. Autonomy is a policy decision you set, never an "
+            "inherent property of an agent. Second, no self-improvement is claimed without evidence: "
+            "each capability must pass offline and online evaluation — precision, recall, false-"
+            "positive rate, CALIBRATION (predicted vs observed), precision-above-threshold and "
+            "acceptance/regret — and 'nearly 100% accuracy' claims are explicitly avoided. (The "
+            "governance path exists today; the proactive detectors that feed it are the roadmap.)"),
+        detail=(
+            "Every capability is meant to emit common telemetry — OpportunityDetected, "
+            "CandidateGenerated, CandidateScored, InterventionSelected, ApprovalRequested/Accepted/"
+            "Rejected/Edited, InterventionExecuted, OutcomeObserved, RewardAssigned — enabling "
+            "learning at detection, routing, retrieval, evidence acquisition, candidate generation, "
+            "ranking, timing, execution strategy and approval prediction, without blindly optimising "
+            "one reward. Learned policies are compared against static ones with controlled cohorts or "
+            "replay, and the runtime must explain why a learned strategy changed."),
+        source="Governance path shipped: integrations/execution.py GovernedEnvelope (tiers+approval+audit) · "
+               "Roadmap: common outcome telemetry + offline/online evaluation before any self-improvement claim"),
 )
 
 
