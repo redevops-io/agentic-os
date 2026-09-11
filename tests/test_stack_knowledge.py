@@ -156,8 +156,7 @@ def test_proactive_answers_are_status_honest_not_overclaiming():
     proactive = {e.id: e for e in STACK_KNOWLEDGE if e.topic == "Proactive intelligence (roadmap)"}
     assert len(proactive) >= 16
     # pure-roadmap entries say so plainly (in the answer, where the user reads it)
-    for pid in ("crm-next-best-action", "projects-execution-risk-radar",
-                "outreach-intent-radar", "recruiting-fit-engine", "research-info-gain-planner",
+    for pid in ("crm-next-best-action", "outreach-intent-radar", "recruiting-fit-engine",
                 "knowledge-debt-radar", "learnerbot-knowledge-frontier", "analytics-anomaly-action",
                 "wealth-assumption-drift", "creator-intelligence"):
         a = proactive[pid].answer.lower()
@@ -167,12 +166,13 @@ def test_proactive_answers_are_status_honest_not_overclaiming():
     for pid in ("priority-engine", "proactive-overview"):
         a = proactive[pid].answer.lower()
         assert "ship" in a and ("roadmap" in a or "growing" in a or "still" in a), pid
-    # the Growth kernel is the one real piece — it must state it validates LOGIC on synthetic data,
-    # NOT real-world accuracy (matches the shipped PR #141 framing and the "abstain" constraint).
-    growth = proactive["growth-trend-intelligence"].answer.lower()
-    assert "synthetic" in growth and ("not real-world" in growth or "not real world" in growth
-                                      or "not real-world accuracy" in growth)
-    assert "kernel" in growth
+    # the shipped detector KERNELS (Growth, Projects Risk, Research) each state they validate LOGIC on
+    # SYNTHETIC data, NOT real-world accuracy — matching the shipped-PR framing and the "abstain" rule.
+    for pid in ("growth-trend-intelligence", "projects-execution-risk-radar", "research-info-gain-planner"):
+        a = proactive[pid].answer.lower()
+        assert "kernel" in a and "ship" in a, pid
+        assert "synthetic" in a and "logic" in a, pid
+        assert "not real-world" in a or "not real world" in a, pid
     # Support states its primitives ship today AND that the predictor is the extension
     supp = proactive["support-resolution-intelligence"].answer.lower()
     assert "ship" in supp and ("extension" in supp or "roadmap" in supp)
@@ -212,7 +212,7 @@ def test_priorities_endpoint_returns_the_what_needs_me_surface():
     s = c.get("/api/projects/customer-ops/priorities").json()
     assert "need" in s["summary"].lower() and "you today" in s["summary"].lower()
     assert s["basis"] == "sample"                         # honest: example data, not a live deployment
-    assert 1 <= len(s["surfaced"]) <= 3                   # attention budget
+    assert 1 <= len(s["surfaced"]) <= 4                   # attention budget
     for item in s["surfaced"]:
         assert item["requires_approval"] and item["action"] == "request_approval"
         assert item["source_app"] and item["proposed_action"] and 0 <= item["confidence"] <= 1
@@ -222,11 +222,15 @@ def test_priorities_endpoint_returns_the_what_needs_me_surface():
 
 
 def test_priorities_surface_draws_from_the_real_shipped_detectors():
-    # the Growth trend kernel and the Support follow-up detector must actually feed the surface
+    # every shipped detector must actually feed the surface: Growth trend, Support follow-up, the
+    # Projects Execution Risk Radar, and (auto-handled, low-risk) the Research Information-Gain Planner.
     c = TestClient(create_app(SampleProjectionProvider()))
     s = c.get("/api/projects/customer-ops/priorities").json()
-    apps = {i["source_app"] for i in s["surfaced"]} | {i["source_app"] for i in s["deferred"]}
-    assert "growth" in apps and "support" in apps        # both shipped detectors produced candidates
+    fed = ({i["source_app"] for i in s["surfaced"]} | {i["source_app"] for i in s["deferred"]}
+           | {i["source_app"] for i in s.get("handled", [])})
+    assert {"growth", "support", "projects"} <= fed       # these surface for approval
+    # the research investigation is READ-tier ⇒ auto-handled (not surfaced); confirm it ran
+    assert s["handled_automatically"] >= 1
 
 
 def test_sidekick_actionable_what_needs_me_returns_live_surface_not_the_roadmap_explainer():

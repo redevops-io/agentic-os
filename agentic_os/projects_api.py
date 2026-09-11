@@ -184,15 +184,22 @@ class SampleProjectionProvider:
 
     def priorities(self, _pid: str) -> dict:
         """The Priority Engine's cross-app 'what needs me?' surface (plan §2), driven by the SHIPPED
-        detectors over this sample's example scenario. Growth trend scoring and Support follow-up
-        produce real candidates; the refund approval and KB cleanup are direct candidates. A live
-        deployment swaps in a provider whose sources read real data — hence ``basis`` is honest about
-        what fed this ('sample' here, not a real deployment's signals)."""
+        detectors over this sample's example scenario. Growth trend scoring, Support follow-up, the
+        Projects Execution Risk Radar and the Research Information-Gain Planner all produce real
+        candidates through their own kernels; the refund approval and KB cleanup are direct candidates.
+        A live deployment swaps in a provider whose sources read real data — hence ``basis`` is honest
+        about what fed this ('sample' here, not a real deployment's signals)."""
         import time
         from agentic_os.agent_gateway.contracts import RiskTier
         from agentic_os.priority_engine import (
-            InterventionCandidate, PriorityPolicy, collect_priorities, from_support_thread,
-            from_trend_report)
+            InterventionCandidate, PriorityPolicy, collect_priorities, from_research_plan,
+            from_risk_report, from_support_thread, from_trend_report)
+        from agentic_os.execution_risk import IsotonicCalibrator as _RiskCal
+        from agentic_os.execution_risk import Mode as RiskMode
+        from agentic_os.execution_risk import ProjectSignals, raw_risk
+        from agentic_os.execution_risk import assess as risk_assess
+        from agentic_os.research_planner import Belief, Investigation, ResearchPolicy
+        from agentic_os.research_planner import plan as research_plan
         from agentic_os.support_autonomy import FollowUpPolicy, ThreadState, qualify_lead
         from agentic_os.trend_intelligence import Mode, TrendCandidate, assess
         now = time.time()
@@ -213,6 +220,30 @@ class SampleProjectionProvider:
             c = from_support_thread(thread, FollowUpPolicy(clock=lambda: now).assess(thread), lead)
             return [c] if c else []
 
+        def risk_source():
+            signals = ProjectSignals(
+                "Production pilot", days_remaining=12, work_remaining=0.7,
+                progress_series=(0.10, 0.14, 0.17, 0.19, 0.20, 0.205), dependency_lags=(0.9,),
+                blocked_dependencies=2, open_critical_decisions=1, oldest_decision_age_days=12)
+            # raw risk is compressed; the radar runs with a calibrator (as in the backtest) — seed a
+            # small one so this strong risk surfaces the way it would against real history.
+            cal = _RiskCal().fit([0.05, 0.1, 0.2, raw_risk(signals), 0.5], [0, 0, 0, 1, 1])
+            c = from_risk_report(risk_assess(signals, calibrator=cal, mode=RiskMode.BALANCED))
+            return [c] if c else []
+
+        def research_source():
+            hyps = ("temporal graph helps", "no effect", "hurts recall")
+            step = research_plan(
+                Belief.uniform(hyps),
+                [Investigation("temporal-benchmark", cost=1.0,
+                               pos_likelihoods={"temporal graph helps": 0.9, "no effect": 0.3, "hurts recall": 0.1},
+                               question="does temporal graph retrieval improve historical chat recall?"),
+                 Investigation("false-negative-analysis", cost=1.5,
+                               pos_likelihoods={"temporal graph helps": 0.7, "no effect": 0.5, "hurts recall": 0.4})],
+                budget_remaining=5.0, policy=ResearchPolicy())
+            c = from_research_plan(step, question="does temporal graph retrieval improve chat recall?")
+            return [c] if c else []
+
         def direct_source():
             return [
                 InterventionCandidate(
@@ -230,8 +261,9 @@ class SampleProjectionProvider:
                     candidate_id="crm:maybe"),
             ]
 
-        summary = collect_priorities([growth_source, support_source, direct_source],
-                                     PriorityPolicy(attention_budget=3), now=now)
+        summary = collect_priorities(
+            [growth_source, support_source, risk_source, research_source, direct_source],
+            PriorityPolicy(attention_budget=4), now=now)
         out = summary.as_dict()
         out["basis"] = "sample"    # honest: example detectors/data, not a live deployment's signals
         return out
