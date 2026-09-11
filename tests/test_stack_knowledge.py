@@ -156,11 +156,15 @@ def test_proactive_answers_are_status_honest_not_overclaiming():
     proactive = {e.id: e for e in STACK_KNOWLEDGE if e.topic == "Proactive intelligence (roadmap)"}
     assert len(proactive) >= 16
     # pure-roadmap entries say so plainly (in the answer, where the user reads it)
-    for pid in ("crm-next-best-action", "outreach-intent-radar", "recruiting-fit-engine",
-                "knowledge-debt-radar", "analytics-anomaly-action",
+    for pid in ("recruiting-fit-engine", "knowledge-debt-radar", "analytics-anomaly-action",
                 "wealth-assumption-drift", "creator-intelligence"):
         a = proactive[pid].answer.lower()
         assert ("not shipped" in a or "roadmap" in a or "planned" in a or "not yet" in a), pid
+    # CRM + Outreach now SHIP as producers over the shared learning loop, validated IN SIMULATION —
+    # they must say the mechanism ships AND that it is not a real-world lift claim (no over-claiming).
+    for pid in ("crm-next-best-action", "outreach-intent-radar"):
+        a = proactive[pid].answer.lower()
+        assert "ship" in a and "simulation" in a and "not a real-world" in a, pid
     # the Priority Engine spine + the 'what needs me?' surface now SHIP — those two say so, honestly,
     # while still flagging that the detectors feeding them are growing (they must not over- OR under-claim).
     for pid in ("priority-engine", "proactive-overview"):
