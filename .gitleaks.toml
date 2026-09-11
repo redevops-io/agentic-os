@@ -22,4 +22,8 @@ regexes = [
   '''s3cret-never-logged''',        # fake Postgres test password baked into main@0bb05c4 (PR #98);
                                     # superseded by the -DO-NOT-STORE convention above, but the commit
                                     # is immutable so the history-wide scan needs it allow-listed.
+  '''API: CRM/Outreach''',          # PROSE false-positive: a test docstring said "…Projects API:
+                                    # CRM/Outreach producers…"; generic-api-key read "API:" + a slashy
+                                    # token as a key. Not a secret. HEAD is reworded; the merged
+                                    # commits (2fa1a0c/fa11b5d) are immutable, so allow-list the string.
 ]
