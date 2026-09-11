@@ -12,7 +12,7 @@ from .factory import default_planner
 from .operator_sdk import LocalOperatorClient
 from .planner import Planner
 from .runtime import MissionRuntime
-from .store import EventStore
+from .event_backends import build_event_store
 from . import pilots
 
 
@@ -20,7 +20,7 @@ def build_pilot_runtime(store_path: str | None = None, planner: Planner | None =
     operators = pilots.build_pilot_operators()
     registry = pilots.build_pilot_registry(operators)
     client = LocalOperatorClient(operators)
-    return MissionRuntime(registry, Executor(client), store=EventStore(path=store_path),
+    return MissionRuntime(registry, Executor(client), store=build_event_store(store_path),
                           planner=planner or default_planner())
 
 

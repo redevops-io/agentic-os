@@ -187,3 +187,40 @@ def open_event_store(backend: str | None = None, *, path: str | None = None,
             raise ValueError("postgres backend needs a DSN (MISSION_EVENT_DSN)")
         return PostgresEventStore(target)
     raise ValueError(f"unknown event backend: {backend!r}")
+
+
+def build_event_store(store_path: str | None = None):
+    """The dev/general store-selection (factory, pilot service).
+
+    Honours ``MISSION_EVENT_BACKEND`` (``duckdb`` | ``postgres`` | ``jsonl`` | ``memory``) so a durable,
+    queryable ledger is one env var away on any entrypoint; with the variable unset it stays the
+    zero-dependency **in-memory/JSONL** development default, so existing deployments are unchanged. This is
+    the permissive selector; the production assembler uses :func:`build_durable_event_store`, which fails
+    closed instead of defaulting.
+    """
+    if os.environ.get("MISSION_EVENT_BACKEND"):
+        return open_event_store(path=store_path)
+    return EventStore(path=store_path or os.environ.get("MISSION_EVENT_LOG"))
+
+
+_DURABLE_BACKENDS = ("duckdb", "postgres")
+
+
+def build_durable_event_store(store_path: str | None = None, dsn: str | None = None):
+    """Select a DURABLE event-store backend for a production assembler — **fail closed** if none is configured.
+
+    Production reproducibility demands an EXPLICIT choice: ``MISSION_EVENT_BACKEND`` must be ``duckdb``
+    (recommended single-node) or ``postgres`` (shared / HA). We deliberately never pick a backend from
+    whichever driver happens to be importable — *same code + different installed extras must not mean
+    different persistence semantics*, which would defeat deterministic replay. ``memory`` / ``jsonl`` are
+    development-only and are rejected here; inject an explicit ``store=`` for a test/embedded runtime.
+    """
+    raw = os.environ.get("MISSION_EVENT_BACKEND")
+    backend = (raw or "").lower()
+    if backend not in _DURABLE_BACKENDS:
+        got = repr(raw) if raw else "unset"
+        raise RuntimeError(
+            "a production runtime needs an explicit durable event-store backend: set "
+            "MISSION_EVENT_BACKEND=duckdb (recommended single-node) or MISSION_EVENT_BACKEND=postgres "
+            f"(shared / HA) [got {got}]. memory/jsonl are development-only; pass store= to inject one.")
+    return open_event_store(backend, path=store_path, dsn=dsn)
