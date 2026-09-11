@@ -156,12 +156,17 @@ def test_proactive_answers_are_status_honest_not_overclaiming():
     proactive = {e.id: e for e in STACK_KNOWLEDGE if e.topic == "Proactive intelligence (roadmap)"}
     assert len(proactive) >= 16
     # pure-roadmap entries say so plainly (in the answer, where the user reads it)
-    for pid in ("priority-engine", "crm-next-best-action", "projects-execution-risk-radar",
+    for pid in ("crm-next-best-action", "projects-execution-risk-radar",
                 "outreach-intent-radar", "recruiting-fit-engine", "research-info-gain-planner",
                 "knowledge-debt-radar", "learnerbot-knowledge-frontier", "analytics-anomaly-action",
                 "wealth-assumption-drift", "creator-intelligence"):
         a = proactive[pid].answer.lower()
         assert ("not shipped" in a or "roadmap" in a or "planned" in a or "not yet" in a), pid
+    # the Priority Engine spine + the 'what needs me?' surface now SHIP — those two say so, honestly,
+    # while still flagging that the detectors feeding them are growing (they must not over- OR under-claim).
+    for pid in ("priority-engine", "proactive-overview"):
+        a = proactive[pid].answer.lower()
+        assert "ship" in a and ("roadmap" in a or "growing" in a or "still" in a), pid
     # the Growth kernel is the one real piece — it must state it validates LOGIC on synthetic data,
     # NOT real-world accuracy (matches the shipped PR #141 framing and the "abstain" constraint).
     growth = proactive["growth-trend-intelligence"].answer.lower()
@@ -200,6 +205,45 @@ def test_sidekick_reply_routes_stack_questions_to_the_expert():
     assert "cloud" in r["text"].lower() and r.get("topic") == "Data handling"
     # and the existing governed-mission behaviour is untouched (tier-4 approval answer still wins)
     assert "tier-4" in sidekick_reply({"section": "Missions"}, "why does this need approval?")["text"].lower()
+
+
+def test_priorities_endpoint_returns_the_what_needs_me_surface():
+    c = TestClient(create_app(SampleProjectionProvider()))
+    s = c.get("/api/projects/customer-ops/priorities").json()
+    assert "need" in s["summary"].lower() and "you today" in s["summary"].lower()
+    assert s["basis"] == "sample"                         # honest: example data, not a live deployment
+    assert 1 <= len(s["surfaced"]) <= 3                   # attention budget
+    for item in s["surfaced"]:
+        assert item["requires_approval"] and item["action"] == "request_approval"
+        assert item["source_app"] and item["proposed_action"] and 0 <= item["confidence"] <= 1
+    # surfaced are highest-priority first
+    prios = [i["priority"] for i in s["surfaced"]]
+    assert prios == sorted(prios, reverse=True)
+
+
+def test_priorities_surface_draws_from_the_real_shipped_detectors():
+    # the Growth trend kernel and the Support follow-up detector must actually feed the surface
+    c = TestClient(create_app(SampleProjectionProvider()))
+    s = c.get("/api/projects/customer-ops/priorities").json()
+    apps = {i["source_app"] for i in s["surfaced"]} | {i["source_app"] for i in s["deferred"]}
+    assert "growth" in apps and "support" in apps        # both shipped detectors produced candidates
+
+
+def test_sidekick_actionable_what_needs_me_returns_live_surface_not_the_roadmap_explainer():
+    # with a provider wired, an ACTIONABLE 'what needs me?' returns the live Priority Engine surface…
+    c = TestClient(create_app(SampleProjectionProvider()))
+    r = c.post("/api/sidekick", json={"ctx": {}, "text": "what needs me today?"}).json()
+    assert r.get("topic") == "Priorities" and "you today" in r["text"].lower()
+    assert isinstance(r.get("items"), list) and r["items"]
+    # …but an EXPLANATORY question still gets the roadmap/how-it-works KB explainer, not the list
+    explain = c.post("/api/sidekick", json={"ctx": {}, "text": "how does the priority engine work?"}).json()
+    assert explain.get("topic") != "Priorities"
+
+
+def test_sidekick_reply_without_provider_falls_through_to_kb():
+    # the 2-arg call path (no provider) must not attempt the surface — KB roadmap explainer answers
+    r = sidekick_reply({"section": "Overview"}, "what needs my attention?")
+    assert r.get("topic") != "Priorities"                 # no provider ⇒ no live surface
 
 
 def test_sidekick_and_help_endpoints():
