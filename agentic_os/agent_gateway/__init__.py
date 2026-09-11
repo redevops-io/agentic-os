@@ -24,7 +24,11 @@ from .write_capabilities import WRITE_CAPABILITIES, build_write_registry
 from .egress import DEFAULT_EGRESS_RULES, EgressRule, PolicyEgressEngine, redact, tokenize
 from .oauth import (
     AuthorizationServer, DEFAULT_AUDIENCE, OAuthClient, OAuthError, TokenResponse, pkce_challenge)
-from .protocols import MCPEndpoint, McpGatewayBridge, mcp_tool_descriptors
+from .approvals import ApprovalRequest, InboxApprovalStore, UndoWindow
+from .sandbox import (
+    NullSandbox, SANDBOX_EXECUTE, SandboxAction, SandboxObservation, SandboxRuntime, SandboxSpec,
+    SubprocessSandbox, register_sandbox_capability)
+from .protocols import MCPEndpoint, McpGatewayBridge, RestGatewayAdapter, mcp_tool_descriptors
 
 __all__ = [
     "CONTRACT_VERSION",
@@ -50,4 +54,11 @@ __all__ = [
     # OAuth 2.1 + PKCE authorization server + MCP resource-server endpoint (Phase 1b)
     "AuthorizationServer", "OAuthClient", "OAuthError", "TokenResponse", "pkce_challenge",
     "DEFAULT_AUDIENCE", "MCPEndpoint",
+    # approval inbox + undo window (Phase 5)
+    "InboxApprovalStore", "ApprovalRequest", "UndoWindow",
+    # action sandbox (Phase 6)
+    "SandboxSpec", "SandboxAction", "SandboxObservation", "SandboxRuntime", "NullSandbox",
+    "SubprocessSandbox", "SANDBOX_EXECUTE", "register_sandbox_capability",
+    # REST adapter (Phase 7)
+    "RestGatewayAdapter",
 ]

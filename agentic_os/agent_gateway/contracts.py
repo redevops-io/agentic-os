@@ -102,6 +102,7 @@ class CapabilityManifest:
     cost_hint: str = ""
     idempotent: bool = False
     provider: str = ""                          # app/provider a DIRECT write maps to (for the envelope)
+    compensation: str = ""                      # capability that reverses this one (Phase 5 undo window)
 
     def __post_init__(self) -> None:
         if not self.name or " " in self.name:
