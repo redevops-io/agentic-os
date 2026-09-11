@@ -19,6 +19,7 @@ from .gateway import (
 from .registry import CapabilityHandler, CapabilityRegistry, HandlerResult
 from .auth import DevTokenVerifier, GatewayAuthError, TokenVerifier, bearer_token
 from .capabilities import READ_CAPABILITIES, build_read_registry
+from .write_capabilities import WRITE_CAPABILITIES, build_write_registry
 from .protocols import McpGatewayBridge, mcp_tool_descriptors
 
 __all__ = [
@@ -36,4 +37,6 @@ __all__ = [
     "TokenVerifier", "DevTokenVerifier", "GatewayAuthError", "bearer_token",
     # read capabilities + MCP adapter
     "build_read_registry", "READ_CAPABILITIES", "McpGatewayBridge", "mcp_tool_descriptors",
+    # governed write capabilities (Phase 3)
+    "build_write_registry", "WRITE_CAPABILITIES",
 ]
