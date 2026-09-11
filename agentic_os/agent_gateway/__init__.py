@@ -21,6 +21,7 @@ from .auth import DevTokenVerifier, GatewayAuthError, TokenVerifier, bearer_toke
 from .capabilities import READ_CAPABILITIES, build_read_registry, register_mission_capabilities
 from .mission_adapter import MissionRuntimeAdapter
 from .write_capabilities import WRITE_CAPABILITIES, build_write_registry
+from .egress import DEFAULT_EGRESS_RULES, EgressRule, PolicyEgressEngine, redact, tokenize
 from .protocols import McpGatewayBridge, mcp_tool_descriptors
 
 __all__ = [
@@ -42,4 +43,6 @@ __all__ = [
     "MissionRuntimeAdapter", "register_mission_capabilities",
     # governed write capabilities (Phase 3)
     "build_write_registry", "WRITE_CAPABILITIES",
+    # egress enforcement (Phase 4)
+    "PolicyEgressEngine", "EgressRule", "DEFAULT_EGRESS_RULES", "redact", "tokenize",
 ]
