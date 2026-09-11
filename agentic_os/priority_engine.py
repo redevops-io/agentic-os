@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
-from typing import List, Mapping, Optional, Sequence, Tuple
+from typing import Callable, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple, Union
 
 from agentic_os.agent_gateway.contracts import ApprovalPolicy, RiskTier
 
@@ -186,6 +186,14 @@ class AttentionSummary:
     def other_count(self) -> int:
         return len(self.handled_automatically) + len(self.deferred) + self.abstained
 
+    def as_dict(self) -> dict:
+        """JSON-safe projection for the Projects API / Sidekick surface."""
+        return {"summary": self.render(),
+                "surfaced": [_decision_dict(d) for d in self.surfaced],
+                "deferred": [_decision_dict(d) for d in self.deferred],
+                "handled_automatically": len(self.handled_automatically),
+                "abstained": self.abstained}
+
     def render(self) -> str:
         if not self.surfaced:
             head = "Nothing needs you right now."
@@ -204,6 +212,34 @@ class AttentionSummary:
                      f"{'s were' if self.other_count != 1 else ' was'} handled automatically, "
                      "deferred, or judged too low-value to interrupt you.")
         return head
+
+
+def _decision_dict(d: "InterventionDecision") -> dict:
+    c = d.candidate
+    return {"source_app": c.source_app, "subject": c.subject, "proposed_action": c.proposed_action,
+            "action": d.action.value, "rationale": d.rationale, "confidence": round(c.confidence, 2),
+            "priority": round(d.priority.total, 3), "risk_tier": c.risk_tier.name,
+            "requires_approval": d.requires_approval, "candidate_id": c.candidate_id}
+
+
+class PrioritySource(Protocol):
+    """A source of proactive candidates — one app / detector. The cross-app surface consumes many of
+    these (plan §2/§6). A plain ``Callable[[], Sequence[InterventionCandidate]]`` works too."""
+
+    def collect(self) -> Sequence[InterventionCandidate]: ...
+
+
+def collect_priorities(sources: Iterable[Union[PrioritySource, Callable[[], Sequence[InterventionCandidate]]]],
+                       policy: Optional[PriorityPolicy] = None, *, now: Optional[float] = None) -> AttentionSummary:
+    """Gather candidates from every registered source and reduce them to one prioritised surface —
+    the 'consume Priority Engine candidates from the entire stack' wiring (§2). A source may be an
+    object with ``.collect()`` or a zero-arg callable; either returns its candidates (``[]`` when it
+    has nothing right now, which is the honest empty state for an unconfigured detector)."""
+    candidates: List[InterventionCandidate] = []
+    for s in sources:
+        got = s.collect() if hasattr(s, "collect") else s()
+        candidates.extend(got or ())
+    return what_needs_me(candidates, policy, now=now)
 
 
 def what_needs_me(candidates: Sequence[InterventionCandidate],
