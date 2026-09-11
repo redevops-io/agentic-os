@@ -226,7 +226,8 @@ def _decision_dict(d: "InterventionDecision") -> dict:
     return {"source_app": c.source_app, "subject": c.subject, "proposed_action": c.proposed_action,
             "action": d.action.value, "rationale": d.rationale, "confidence": round(c.confidence, 2),
             "priority": round(d.priority.total, 3), "risk_tier": c.risk_tier.name,
-            "requires_approval": d.requires_approval, "candidate_id": c.candidate_id}
+            "requires_approval": d.requires_approval, "candidate_id": c.candidate_id,
+            "action_kind": c.action_kind}
 
 
 class PrioritySource(Protocol):
