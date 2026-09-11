@@ -22,7 +22,9 @@ from .capabilities import READ_CAPABILITIES, build_read_registry, register_missi
 from .mission_adapter import MissionRuntimeAdapter
 from .write_capabilities import WRITE_CAPABILITIES, build_write_registry
 from .egress import DEFAULT_EGRESS_RULES, EgressRule, PolicyEgressEngine, redact, tokenize
-from .protocols import McpGatewayBridge, mcp_tool_descriptors
+from .oauth import (
+    AuthorizationServer, DEFAULT_AUDIENCE, OAuthClient, OAuthError, TokenResponse, pkce_challenge)
+from .protocols import MCPEndpoint, McpGatewayBridge, mcp_tool_descriptors
 
 __all__ = [
     "CONTRACT_VERSION",
@@ -45,4 +47,7 @@ __all__ = [
     "build_write_registry", "WRITE_CAPABILITIES",
     # egress enforcement (Phase 4)
     "PolicyEgressEngine", "EgressRule", "DEFAULT_EGRESS_RULES", "redact", "tokenize",
+    # OAuth 2.1 + PKCE authorization server + MCP resource-server endpoint (Phase 1b)
+    "AuthorizationServer", "OAuthClient", "OAuthError", "TokenResponse", "pkce_challenge",
+    "DEFAULT_AUDIENCE", "MCPEndpoint",
 ]
