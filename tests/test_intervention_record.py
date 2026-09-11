@@ -4,7 +4,7 @@ from __future__ import annotations
 from agentic_os.agent_gateway.contracts import RiskTier
 from agentic_os.intervention_record import (
     FileInterventionStore, InMemoryInterventionStore, InterventionRecord, OutcomeLink,
-    record_from_selection)
+    record_from_selection, select_and_record)
 from agentic_os.priority_engine import DecisionOpportunity, InterventionCandidate, select_action
 
 
@@ -61,3 +61,38 @@ def test_file_store_skips_a_corrupt_tail_line(tmp_path):
     with open(path, "a", encoding="utf-8") as f:
         f.write("{ partial crash line\n")
     assert len(s.all()) == 1                                        # good record survives
+
+
+# ── record-before-surface boundary (PR2) ─────────────────────────────────────────────
+def _four_action_opp(**vals):
+    # the narrow first outreach decision: contact / investigate / wait / do_not_contact
+    defaults = {"contact": 0.8, "investigate": 0.5, "wait": 0.3, "do_not_contact": 0.1}
+    defaults.update(vals)
+    from agentic_os.agent_gateway.contracts import RiskTier
+    tiers = {"contact": RiskTier.CONSEQUENTIAL, "investigate": RiskTier.READ,
+             "wait": RiskTier.READ, "do_not_contact": RiskTier.READ}
+    cands = tuple(InterventionCandidate("outreach", "Prospect", f"{k}", ev, 0.8, action_kind=k,
+                                        risk_tier=tiers[k], candidate_id=f"outreach:Prospect:{k}")
+                  for k, ev in defaults.items())
+    return DecisionOpportunity(entity="Prospect", source_app="outreach",
+                               candidate_actions=cands, opportunity_id="outreach:Prospect")
+
+
+def test_select_and_record_persists_before_surface():
+    store = InMemoryInterventionStore()
+    sel, rec = select_and_record(_four_action_opp(), store, policy_version="p1", proposed_at=100.0,
+                                 id_fn=lambda: "iv-1", evidence_refs=("obs:1",))
+    assert store.all() == [rec]                                     # durable before the caller surfaces sel
+    assert rec.selected_action == sel.action.action_kind and rec.evidence_refs == ("obs:1",)
+    assert rec.intervention_id == "iv-1" and rec.opportunity_id == "outreach:Prospect"
+
+
+def test_a_wait_or_do_not_contact_recommendation_is_also_durable():
+    # even when the runtime chooses NOT to act, the recommendation is recorded (odt: WAIT/DO_NOT_CONTACT
+    # must be durable). Force it by making every outbound option net-negative so do-nothing/monitor wins.
+    store = InMemoryInterventionStore()
+    opp = _four_action_opp(contact=-0.4, investigate=-0.2, wait=0.05, do_not_contact=0.02)
+    sel, rec = select_and_record(opp, store, policy_version="p1", proposed_at=100.0, id_fn=lambda: "iv-2")
+    assert len(store.all()) == 1                                    # persisted regardless of the choice
+    assert rec.intervention_id == "iv-2"
+    assert rec.selected_action in ("wait", "do_not_contact", "do nothing")   # a non-contact recommendation

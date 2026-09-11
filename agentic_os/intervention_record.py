@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from dataclasses import dataclass, field
-from typing import List, Optional, Protocol, Tuple
+from typing import Callable, List, Optional, Protocol, Tuple
 
-from agentic_os.priority_engine import SelectedAction
+from agentic_os.priority_engine import (
+    DecisionOpportunity, PriorityPolicy, SelectedAction, UtilityFn, select_action)
 
 
 @dataclass(frozen=True)
@@ -167,3 +169,128 @@ class FileInterventionStore:
 
     def outcome_refs(self, intervention_id: str) -> List[str]:
         return [l.outcome_ref for l in self._read()[1] if l.intervention_id == intervention_id]
+
+
+_PG_SCHEMA = """
+CREATE TABLE IF NOT EXISTS interventions (
+  intervention_id  text PRIMARY KEY,
+  opportunity_id   text NOT NULL,
+  candidate_id     text NOT NULL,
+  selected_action  text NOT NULL,
+  alternatives     jsonb NOT NULL DEFAULT '[]'::jsonb,
+  evidence_refs    text[] NOT NULL DEFAULT '{}',
+  policy_version   text NOT NULL,
+  score            double precision NOT NULL,
+  proposed_at      double precision NOT NULL,
+  approved_at      double precision,
+  executed_at      double precision,
+  execution_ref    text NOT NULL DEFAULT '',
+  mission_id       text NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS outcome_links (
+  id                      bigserial PRIMARY KEY,
+  intervention_id         text NOT NULL REFERENCES interventions(intervention_id),
+  outcome_ref             text NOT NULL,
+  attribution_confidence  double precision NOT NULL,
+  linked_at               double precision NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_link_iv ON outcome_links(intervention_id);
+"""
+
+
+class PostgresInterventionStore:
+    """The operational, durable InterventionStore (Postgres). Records are IMMUTABLE — ``append`` uses
+    ON CONFLICT DO NOTHING, so a recommendation's decision context is never overwritten; correlation is
+    a separate append into ``outcome_links``. ``psycopg`` (v3) is imported lazily; DSN from
+    ``$OBS_DATABASE_URL`` (the same operational database that holds observations)."""
+
+    def __init__(self, dsn: Optional[str] = None, *, ensure_schema: bool = True) -> None:
+        from agentic_os.observation_store import observation_dsn
+        resolved = observation_dsn(dsn)
+        if not resolved:
+            raise ValueError("no Postgres DSN (pass dsn= or set OBS_DATABASE_URL)")
+        import psycopg
+        self._conn = psycopg.connect(resolved, autocommit=True)
+        if ensure_schema:
+            with self._conn.cursor() as cur:
+                cur.execute(_PG_SCHEMA)
+
+    def close(self) -> None:
+        self._conn.close()
+
+    def append(self, rec: InterventionRecord) -> None:
+        from psycopg.types.json import Jsonb
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO interventions
+                     (intervention_id, opportunity_id, candidate_id, selected_action, alternatives,
+                      evidence_refs, policy_version, score, proposed_at, approved_at, executed_at,
+                      execution_ref, mission_id)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (intervention_id) DO NOTHING""",   # immutable — never overwrite
+                (rec.intervention_id, rec.opportunity_id, rec.candidate_id, rec.selected_action,
+                 Jsonb([list(a) for a in rec.alternatives]), list(rec.evidence_refs),
+                 rec.policy_version, rec.score, rec.proposed_at, rec.approved_at, rec.executed_at,
+                 rec.execution_ref, rec.mission_id))
+
+    def link(self, link: OutcomeLink) -> None:
+        with self._conn.cursor() as cur:
+            cur.execute("INSERT INTO outcome_links (intervention_id, outcome_ref, attribution_confidence,"
+                        " linked_at) VALUES (%s,%s,%s,%s)",
+                        (link.intervention_id, link.outcome_ref, link.attribution_confidence, link.linked_at))
+
+    def get(self, intervention_id: str) -> Optional[InterventionRecord]:
+        with self._conn.cursor() as cur:
+            cur.execute(_SELECT_REC + " WHERE intervention_id = %s", (intervention_id,))
+            row = cur.fetchone()
+        return _pg_row_to_rec(row) if row else None
+
+    def all(self) -> List[InterventionRecord]:
+        with self._conn.cursor() as cur:
+            cur.execute(_SELECT_REC + " ORDER BY proposed_at, intervention_id")
+            return [_pg_row_to_rec(r) for r in cur.fetchall()]
+
+    def links(self) -> List[OutcomeLink]:
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT intervention_id, outcome_ref, attribution_confidence, linked_at "
+                        "FROM outcome_links ORDER BY id")
+            return [OutcomeLink(*r) for r in cur.fetchall()]
+
+    def outcome_refs(self, intervention_id: str) -> List[str]:
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT outcome_ref FROM outcome_links WHERE intervention_id = %s ORDER BY id",
+                        (intervention_id,))
+            return [r[0] for r in cur.fetchall()]
+
+
+_SELECT_REC = ("SELECT intervention_id, opportunity_id, candidate_id, selected_action, alternatives, "
+               "evidence_refs, policy_version, score, proposed_at, approved_at, executed_at, "
+               "execution_ref, mission_id FROM interventions")
+
+
+def _pg_row_to_rec(row) -> InterventionRecord:
+    (iid, oid, cid, act, alts, refs, pv, score, prop, appr, exe, exref, mid) = row
+    if isinstance(alts, str):
+        alts = json.loads(alts)
+    return InterventionRecord(
+        intervention_id=iid, opportunity_id=oid, candidate_id=cid, selected_action=act,
+        alternatives=tuple(tuple(a) for a in (alts or [])), evidence_refs=tuple(refs or ()),
+        policy_version=pv, score=float(score), proposed_at=float(prop),
+        approved_at=(float(appr) if appr is not None else None),
+        executed_at=(float(exe) if exe is not None else None), execution_ref=exref or "", mission_id=mid or "")
+
+
+def select_and_record(opportunity: DecisionOpportunity, store: "InterventionStore", *,
+                      policy_version: str, proposed_at: float, policy: Optional[PriorityPolicy] = None,
+                      utility_fn: Optional[UtilityFn] = None, evidence_refs: Tuple[str, ...] = (),
+                      id_fn: Optional[Callable[[], str]] = None) -> Tuple[SelectedAction, InterventionRecord]:
+    """Select an action for an opportunity AND persist the decision before it can be surfaced. This is
+    the boundary that makes 'every recommendation durable before it's shown' true — INCLUDING a WAIT or
+    a DO_NOT_CONTACT / abstain: the record is written for whatever was chosen, not only for actions
+    taken. Returns the selection and the immutable record now in the store."""
+    sel = select_action(opportunity, policy, utility_fn=utility_fn)
+    intervention_id = (id_fn or (lambda: uuid.uuid4().hex))()
+    rec = record_from_selection(sel, intervention_id=intervention_id, policy_version=policy_version,
+                                proposed_at=proposed_at, evidence_refs=evidence_refs)
+    store.append(rec)                                    # durable BEFORE the caller surfaces `sel`
+    return sel, rec
