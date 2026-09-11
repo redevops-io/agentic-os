@@ -27,7 +27,10 @@ def event_to_dict(ev: OutcomeEvent) -> dict:
             "accepted": ev.accepted, "edited": ev.edited, "observed_reward": ev.observed_reward,
             "note": ev.note, "action_kind": ev.action_kind,
             "reward_dimensions": dict(ev.reward_dimensions), "delay": ev.delay,
-            "attribution_confidence": ev.attribution_confidence}
+            "attribution_confidence": ev.attribution_confidence,
+            "source_observation_ids": list(ev.source_observation_ids),
+            "candidate_intervention_ids": list(ev.candidate_intervention_ids),
+            "selected_intervention_id": ev.selected_intervention_id}
 
 
 def event_from_dict(d: dict) -> OutcomeEvent:
@@ -38,7 +41,10 @@ def event_from_dict(d: dict) -> OutcomeEvent:
         edited=d.get("edited", False), observed_reward=d.get("observed_reward"),
         note=d.get("note", ""), action_kind=d.get("action_kind", ""),
         reward_dimensions=dict(d.get("reward_dimensions") or {}), delay=d.get("delay", 0.0),
-        attribution_confidence=d.get("attribution_confidence", 1.0))
+        attribution_confidence=d.get("attribution_confidence", 1.0),
+        source_observation_ids=tuple(d.get("source_observation_ids") or ()),
+        candidate_intervention_ids=tuple(d.get("candidate_intervention_ids") or ()),
+        selected_intervention_id=d.get("selected_intervention_id", ""))
 
 
 class OutcomeStore(Protocol):

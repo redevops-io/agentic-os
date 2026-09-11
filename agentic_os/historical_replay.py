@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Sequence
 
-from agentic_os.observation import Observation
+from agentic_os.observation import KnownAtQuality, Observation
 from agentic_os.priority_engine import (
     DecisionOpportunity, PriorityPolicy, UtilityFn, select_action)
 
@@ -33,12 +33,22 @@ def is_knowable_at(o: Observation, decision_time: float) -> bool:
     return o.valid_at <= decision_time and o.known_at <= decision_time
 
 
+def admissible_for_a0(o: Observation) -> bool:
+    """A0 may only use observations whose ``known_at`` is defensible (OBSERVED or RECONSTRUCTED).
+    UNKNOWN provenance FAILS CLOSED — it cannot enter a leakage-safe retrospective evaluation, so no
+    one can later weaken the gate by feeding in snapshots with an inferred known_at."""
+    return o.known_at_quality in (KnownAtQuality.OBSERVED, KnownAtQuality.RECONSTRUCTED)
+
+
 def as_of(observations: Sequence[Observation], decision_time: float, *,
-          subject: Optional[str] = None) -> List[Observation]:
+          subject: Optional[str] = None, require_quality: bool = True) -> List[Observation]:
     """The leakage-safe reconstruction: observations knowable at ``decision_time`` (optionally scoped to
-    one ``subject``). This is the ONLY set a decision at T may be built from."""
+    one ``subject``). This is the ONLY set a decision at T may be built from. With ``require_quality``
+    (the A0 default), observations whose ``known_at`` provenance is UNKNOWN are excluded (fail-closed)."""
     return [o for o in observations
-            if is_knowable_at(o, decision_time) and (subject is None or o.subject == subject)]
+            if is_knowable_at(o, decision_time)
+            and (subject is None or o.subject == subject)
+            and (not require_quality or admissible_for_a0(o))]
 
 
 def audit_leakage(observations: Sequence[Observation], decision_time: float) -> List[Observation]:
@@ -84,14 +94,15 @@ OpportunityBuilder = Callable[[str, List[Observation]], Optional[DecisionOpportu
 
 def replay(observations: Sequence[Observation], decision_points: Sequence[DecisionPoint],
            build_opportunity: OpportunityBuilder, *, policy: Optional[PriorityPolicy] = None,
-           utility_fn: Optional[UtilityFn] = None) -> ReplayReport:
+           utility_fn: Optional[UtilityFn] = None, require_quality: bool = True) -> ReplayReport:
     """Run the runtime over reconstructed history. For each decision point: reconstruct the as-of
-    evidence, ENFORCE the leakage gate, build the opportunity from that evidence only, select an action,
-    and compare to the expert's action. A builder that reaches past the as-of set trips the gate."""
+    evidence (A0-admissible only, by default), ENFORCE the leakage gate, build the opportunity from that
+    evidence only, select an action, and compare to the expert's action. A builder that reaches past the
+    as-of set trips the gate."""
     p = policy or PriorityPolicy()
     evaluated = agreement = broken = 0
     for dp in decision_points:
-        obs = as_of(observations, dp.decision_time, subject=dp.subject)
+        obs = as_of(observations, dp.decision_time, subject=dp.subject, require_quality=require_quality)
         assert_no_leakage(obs, dp.decision_time)          # the as-of set must be clean by construction
         opp = build_opportunity(dp.subject, obs)
         if opp is None or not opp.candidate_actions:
