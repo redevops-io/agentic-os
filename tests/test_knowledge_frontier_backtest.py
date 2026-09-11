@@ -67,3 +67,30 @@ def test_advantage_is_material_in_the_mean():
     f = [run_acceptance(s)["frontier"].mean_mastery for s in SEEDS]
     rnd = [run_acceptance(s)["random"].mean_mastery for s in SEEDS]
     assert statistics.mean(f) - statistics.mean(rnd) >= 0.15
+
+
+# ── ASSESS: verify-before-teaching pays off for an entity that may already know things ──
+def test_assess_reaches_more_true_mastery_than_teaching_blindly():
+    from agentic_os.knowledge_frontier_backtest import run_assess_acceptance
+    for seed in SEEDS:
+        r = run_assess_acceptance(seed)
+        on, off = r["assess_on"], r["assess_off"]
+        # probing (cheap) before teaching (expensive) reaches more TRUE mastery within the same budget
+        assert on.mean_true_mastery - off.mean_true_mastery >= 0.05, \
+            f"seed {seed}: assess_on {on.mean_true_mastery:.2f} vs assess_off {off.mean_true_mastery:.2f}"
+
+
+def test_assess_never_wastes_a_lesson_on_an_already_known_concept():
+    from agentic_os.knowledge_frontier_backtest import run_assess_acceptance
+    for seed in SEEDS:
+        r = run_assess_acceptance(seed)
+        # verify-first ⇒ discovers what's already known and skips teaching it; teach-blindly wastes lessons
+        assert r["assess_on"].mean_wasted_known_teaches <= 0.1, seed
+        assert r["assess_off"].mean_wasted_known_teaches >= 1.5, seed
+
+
+def test_assess_advantage_is_material_in_the_mean():
+    from agentic_os.knowledge_frontier_backtest import run_assess_acceptance
+    on = [run_assess_acceptance(s)["assess_on"].mean_true_mastery for s in SEEDS]
+    off = [run_assess_acceptance(s)["assess_off"].mean_true_mastery for s in SEEDS]
+    assert statistics.mean(on) - statistics.mean(off) >= 0.08

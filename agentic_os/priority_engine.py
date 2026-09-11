@@ -389,12 +389,12 @@ def _clamp_local(x: float) -> float:
 
 
 def from_frontier_choice(choice, *, source_app: str = "learning", subject_label: str = "") -> Optional[InterventionCandidate]:
-    """Knowledge Frontier → an intervention candidate. A TEACH/REVIEW choice becomes a low-risk
-    (READ-tier) candidate — recommending what to learn/teach next is safe and can run automatically;
-    a STOP yields none. ``information_value`` carries the frontier priority (structural gain)."""
+    """Knowledge Frontier → an intervention candidate. A TEACH/REVIEW/ASSESS choice becomes a low-risk
+    (READ-tier) candidate — recommending what to learn/teach/probe next is safe and can run
+    automatically; a STOP yields none. ``information_value`` carries the frontier priority."""
     action = getattr(getattr(choice, "action", None), "value", "")
     cid = getattr(choice, "concept_id", None)
-    if action not in ("teach", "review") or cid is None:
+    if action not in ("teach", "review", "assess") or cid is None:
         return None
     val = _clamp_local(float(getattr(choice, "priority", 0.0)))
     who = f" for {subject_label}" if subject_label else ""

@@ -11,7 +11,13 @@ body of concepts — a person being taught, a new hire onboarding, an agent buil
 closing a skill gap. (It is unrelated to, and shares no code with, the separate learnerbot.ai product.)
 
     concept graph + mastery state → eligible concepts (prerequisites met) → priority per concept
-      (importance · expected gain · uncertainty · misconception · retention) → TEACH / REVIEW / STOP
+      (importance · expected gain · uncertainty · misconception · retention) → TEACH / REVIEW / ASSESS / STOP
+
+ASSESS is the information-gathering move: a high *uncertainty* about a concept does not always mean
+'teach it' — when our belief is also UNVERIFIED, the cheaper, higher-value move is often to probe
+whether the entity already knows it, and only then decide to teach or move on. (For non-human domains
+this generalises to ACQUIRE_EVIDENCE — inspect docs, run a test, query an app, ask a human — where the
+frontier says WHAT is missing and the Mission/Context Runtime decides HOW to acquire it.)
 
 Deterministic and model-free. Whether this selection POLICY reaches mastery with fewer steps than naive
 orderings is decided by :mod:`agentic_os.knowledge_frontier_backtest` on controlled learners — not
@@ -48,11 +54,16 @@ class Concept:
 
 @dataclass(frozen=True)
 class Mastery:
-    """What we believe about a learner's grasp of one concept."""
-    prob: float = 0.0                             # P(mastered), 0..1
+    """What we believe about a learner's grasp of one concept.
+
+    ``prob`` is our BELIEF; ``assessed`` says whether that belief is grounded in an actual observation
+    (a probe / demonstration) rather than a prior guess. The two together are what lets the frontier
+    tell 'they half-know this, teach it' from 'we don't actually know what they know — go find out'."""
+    prob: float = 0.0                             # P(mastered), 0..1 (our belief)
     exposed: bool = False                         # has the concept been encountered at all?
     misconception: bool = False                   # an active wrong belief (worse than not knowing)
     staleness: float = 0.0                        # 'time' since last reinforced (retention decay proxy)
+    assessed: bool = False                        # has this belief been verified (vs a prior guess)?
 
 
 KnowledgeState = Mapping[str, Mastery]
@@ -144,7 +155,11 @@ def concept_state(graph: ConceptGraph, state: KnowledgeState, cid: str, *,
 class FrontierAction(Enum):
     TEACH = "teach"           # advance an eligible, not-yet-mastered concept
     REVIEW = "review"         # reinforce a mastered concept whose retention is at risk
+    ASSESS = "assess"         # probe an UNVERIFIED, uncertain belief before investing in teaching
     STOP = "stop"
+    # Planned extension for non-human domains (agents): ACQUIRE_EVIDENCE — when the frontier finds a
+    # capability gap, the *how* (read docs, run a test, query an app, ask a human) is a governed
+    # Mission/Context-Runtime concern, not a teaching step. Not implemented until a producer needs it.
 
 
 class StopReason(Enum):
@@ -163,6 +178,9 @@ class FrontierPolicy:
     w_uncertainty: float = 0.15
     w_misconception: float = 0.3      # a misconception is worth correcting before new material
     w_retention: float = 0.7          # reviewing an at-risk concept competes with teaching new ones
+    w_assess: float = 0.6             # probing an unverified, uncertain belief competes with teaching
+    assess_uncertainty: float = 0.4   # only probe when the belief is genuinely ambiguous
+    enable_assess: bool = True        # off ⇒ the pre-ASSESS behaviour (teach on belief alone)
 
 
 @dataclass(frozen=True)
@@ -207,6 +225,11 @@ def next_step(graph: ConceptGraph, state: KnowledgeState, *, objective: Optional
         unmastered_exists = True
         if prerequisites_met(graph, state, cid, p.prereq_threshold):
             candidates.append((_teach_priority(graph, state, cid, m, p), cid, FrontierAction.TEACH))
+            # ASSESS competes with TEACH: when the belief is uncertain AND unverified, it may be worth
+            # probing (cheap) to learn whether the entity already knows it before investing in teaching.
+            if p.enable_assess and not m.assessed and uncertainty(m) >= p.assess_uncertainty:
+                assess_prio = p.w_assess * uncertainty(m) * (0.5 + 0.5 * graph.importance(cid))
+                candidates.append((assess_prio, cid, FrontierAction.ASSESS))
         else:
             blocked_exists = True
 
@@ -220,7 +243,7 @@ def next_step(graph: ConceptGraph, state: KnowledgeState, *, objective: Optional
     prio, cid, action = max(candidates, key=lambda c: c[0])
     st = concept_state(graph, state, cid, mastery_threshold=p.mastery_threshold,
                        at_risk_staleness=p.at_risk_staleness)
-    verb = "Review" if action == FrontierAction.REVIEW else "Advance"
+    verb = {FrontierAction.REVIEW: "Review", FrontierAction.ASSESS: "Assess"}.get(action, "Advance")
     return FrontierChoice(action, concept_id=cid, state=st, priority=prio,
                           rationale=(f"{verb} '{cid}' (importance {graph.importance(cid):.2f}, "
                                      f"state {st.value})"))

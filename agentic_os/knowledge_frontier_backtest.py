@@ -75,23 +75,23 @@ def _teach(graph: ConceptGraph, state: Dict[str, Mastery], cid: str, rng) -> Dic
     ready = prerequisites_met(graph, state, cid, threshold=0.7)
     if ready and not m.misconception:
         gain = rng.uniform(0.45, 0.65)
-        new[cid] = Mastery(prob=min(1.0, m.prob + gain * (1.0 - m.prob)), exposed=True, staleness=0.0)
+        new[cid] = Mastery(prob=min(1.0, m.prob + gain * (1.0 - m.prob)), exposed=True, staleness=0.0, assessed=True)
     elif m.misconception:                        # a review after a misconception clears it slowly
-        new[cid] = Mastery(prob=m.prob, exposed=True, misconception=rng.random() > 0.5, staleness=0.0)
+        new[cid] = Mastery(prob=m.prob, exposed=True, misconception=rng.random() > 0.5, staleness=0.0, assessed=True)
     else:                                        # prereqs missing: little learned, may seed a misconception
         new[cid] = Mastery(prob=min(0.4, m.prob + rng.uniform(0.0, 0.1)), exposed=True,
-                           misconception=(rng.random() < 0.4), staleness=0.0)
+                           misconception=(rng.random() < 0.4), staleness=0.0, assessed=True)
     for other, om in new.items():                # retention decay for everything else
         if other != cid and om.prob > 0:
             new[other] = Mastery(prob=om.prob, exposed=om.exposed, misconception=om.misconception,
-                                 staleness=om.staleness + 1.0)
+                                 staleness=om.staleness + 1.0, assessed=om.assessed)
     return new
 
 
 def _review(state: Dict[str, Mastery], cid: str) -> Dict[str, Mastery]:
     new = dict(state)
     m = new.get(cid, Mastery())
-    new[cid] = Mastery(prob=min(1.0, m.prob + 0.1), exposed=True, misconception=False, staleness=0.0)
+    new[cid] = Mastery(prob=min(1.0, m.prob + 0.1), exposed=True, misconception=False, staleness=0.0, assessed=True)
     return new
 
 
@@ -155,10 +155,101 @@ def run_session(task: LearnerTask, selector: Callable, *, rng_seed: int = 0) -> 
         if action == FrontierAction.REVIEW:
             state = _review(state, cid)
             continue
+        if action == FrontierAction.ASSESS:                # doesn't arise in this scenario; be safe
+            m = state.get(cid, Mastery())
+            state = {**state, cid: Mastery(m.prob, True, m.misconception, m.staleness, True)}
+            continue
         if not prerequisites_met(task.graph, state, cid, threshold=0.7):
             wasted += 1
         state = _teach(task.graph, state, cid, rng)
     return _weighted_mastery(task.graph, state), wasted
+
+
+# ── ASSESS scenario: an experienced entity that MAY already know some concepts ───────
+# The value of ASSESS: our prior belief is unreliable (the entity might already know a concept), so
+# PROBING (cheap — a quick check) before TEACHING (expensive — a whole lesson) avoids sinking teaching
+# effort into what's already known. We track hidden TRUE competence separately from our belief: assess
+# only updates the belief (reveals the truth); teaching advances true competence. The metric is TRUE
+# mastery reached within a fixed effort budget — no belief inflation on either side.
+_ASSESS_COST = 1.0
+_TEACH_COST = 3.0          # a lesson costs far more than a probe (the realistic asymmetry)
+_TEACH_GAIN = 0.6          # from 0 competence, ~3 teaches to cross the 0.85 mastery bar
+_MASTERY = 0.85
+
+
+@dataclass(frozen=True)
+class PreKnowledgeTask:
+    graph: ConceptGraph
+    known: frozenset            # concepts the entity ALREADY truly knows (hidden ground truth)
+    effort_budget: float        # in effort units (assess is cheaper than teach)
+
+
+def make_preknowledge_benchmark(seed: int = 7, n: int = 120) -> List[PreKnowledgeTask]:
+    rng = random.Random(seed)
+    tasks = []
+    for _ in range(n):
+        k = rng.randint(8, 12)
+        concepts = {f"c{i}": Concept(f"c{i}") for i in range(k)}       # flat: isolate the ASSESS effect
+        graph = ConceptGraph(concepts)
+        known = frozenset(c for c in concepts if rng.random() < rng.uniform(0.5, 0.7))  # experienced entity
+        unknown = sum(1 for c in concepts if c not in known)
+        # a budget around what verify-first needs for full mastery (assess-all + teach the unknowns 3×),
+        # so a teach-blindly strategy — which burns lessons on already-known concepts — falls short.
+        budget = (_ASSESS_COST * k + _TEACH_COST * 3 * unknown) * rng.uniform(0.9, 1.0)
+        tasks.append(PreKnowledgeTask(graph, known, budget))
+    return tasks
+
+
+def run_preknowledge_session(task: PreKnowledgeTask, *, enable_assess: bool, rng_seed: int = 0) -> Tuple[float, int]:
+    """Returns (TRUE mastery fraction reached within the effort budget, wasted teaches on known concepts).
+    Belief starts genuinely unsure (prob 0.5, unverified) for every concept — the entity's history is
+    unknown. ASSESS reveals the truth into the belief (cheap, no competence change); TEACH advances true
+    competence (expensive) and is wasted on a concept the entity already knew."""
+    policy = FrontierPolicy(enable_assess=enable_assess)
+    true_comp: Dict[str, float] = {c: (0.97 if c in task.known else 0.0) for c in task.graph.concepts}
+    belief: Dict[str, Mastery] = {c: Mastery(prob=0.5, exposed=True, assessed=False) for c in task.graph.concepts}
+    effort = task.effort_budget
+    wasted = 0
+    while effort > 1e-9:
+        step = next_step(task.graph, belief, policy=policy)
+        if step.action == FrontierAction.STOP:
+            break
+        cid = step.concept_id
+        if step.action == FrontierAction.ASSESS:
+            if effort < _ASSESS_COST:
+                break
+            effort -= _ASSESS_COST
+            belief = {**belief, cid: Mastery(true_comp[cid], exposed=True, assessed=True)}  # reveal truth
+        else:                                                # TEACH (expensive)
+            if effort < _TEACH_COST:
+                break
+            effort -= _TEACH_COST
+            if true_comp[cid] >= _MASTERY:
+                wasted += 1                                  # taught a concept already truly mastered
+            true_comp[cid] = min(1.0, true_comp[cid] + _TEACH_GAIN * (1.0 - true_comp[cid]))
+            belief = {**belief, cid: Mastery(true_comp[cid], exposed=True, assessed=True)}   # teaching also reveals
+    mastered = sum(1 for c in task.graph.concepts if true_comp[c] >= _MASTERY)
+    return mastered / len(task.graph.concepts), wasted
+
+
+@dataclass(frozen=True)
+class AssessMetrics:
+    variant: str
+    mean_true_mastery: float
+    mean_wasted_known_teaches: float
+
+
+def run_assess_acceptance(seed: int = 7) -> Dict[str, AssessMetrics]:
+    """Compare the frontier WITH ASSESS against the same frontier WITHOUT it (teach-on-belief-alone)
+    on entities that may already know some concepts."""
+    tasks = make_preknowledge_benchmark(seed)
+    out: Dict[str, AssessMetrics] = {}
+    for name, flag in (("assess_on", True), ("assess_off", False)):
+        results = [run_preknowledge_session(t, enable_assess=flag, rng_seed=2000 + i)
+                   for i, t in enumerate(tasks)]
+        n = len(results)
+        out[name] = AssessMetrics(name, sum(r[0] for r in results) / n, sum(r[1] for r in results) / n)
+    return out
 
 
 def run_acceptance(seed: int = 7) -> Dict[str, StrategyMetrics]:
