@@ -133,6 +133,15 @@ class SampleProjectionProvider:
     #: recorded OutcomeEvents feeding the learning loop. A deployment persists these; the sample keeps
     #: them in memory so the demo can show cross-app action selection ADAPT as real outcomes arrive.
     outcome_events: List[Any] = field(default_factory=list)
+    #: optional durable backing for the outcome log ($OUTCOME_STORE_PATH). When set, recorded outcomes
+    #: are appended to a JSONL file and reloaded on start — so learned selection survives a restart.
+    persist_path: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        # rehydrate the in-memory working copy from durable storage, so learning resumes where it left off
+        if self.persist_path:
+            from agentic_os.outcome_store import FileOutcomeStore
+            self.outcome_events = list(FileOutcomeStore(self.persist_path).load())
 
     def projects(self) -> List[dict]:
         return [{"id": self.project_id, "name": self.project_name, "health": "ok"}]
@@ -303,11 +312,15 @@ class SampleProjectionProvider:
         """Record an observed outcome into the shared log — this is how a deployment closes the loop.
         Future :meth:`priorities` selections learn from it (governance is untouched)."""
         from agentic_os.priority_engine import OutcomeEvent
-        self.outcome_events.append(OutcomeEvent(
+        ev = OutcomeEvent(
             candidate_id=candidate_id, source_app=source_app, action_kind=action_kind,
             observed_reward=observed_reward, reward_dimensions=dict(reward_dimensions or {}),
-            attribution_confidence=attribution_confidence, delay=delay))
-        return {"recorded": len(self.outcome_events)}
+            attribution_confidence=attribution_confidence, delay=delay)
+        self.outcome_events.append(ev)
+        if self.persist_path:                       # durably append so it survives a restart
+            from agentic_os.outcome_store import FileOutcomeStore
+            FileOutcomeStore(self.persist_path).append(ev)
+        return {"recorded": len(self.outcome_events), "durable": bool(self.persist_path)}
 
     def discovery(self, _pid: str) -> List[dict]:
         return [
@@ -865,7 +878,10 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
 
 
 def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: Optional[List[str]] = None) -> FastAPI:
-    prov: ProjectionProvider = provider or SampleProjectionProvider()
+    # a deployment sets $OUTCOME_STORE_PATH to persist the learning loop's outcomes across restarts
+    import os as _os_env
+    prov: ProjectionProvider = provider or SampleProjectionProvider(
+        persist_path=(_os_env.environ.get("OUTCOME_STORE_PATH", "").strip() or None))
     app = FastAPI(title="ReDevOps Projects API", version="0.1.0")
     app.add_middleware(
         CORSMiddleware, allow_origins=allow_origins or ["*"],
