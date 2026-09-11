@@ -630,16 +630,19 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
                   "project risk", "slip window", "execution intelligence", "owner overload"),
         question="Can Projects warn me about execution risk before a milestone slips (Risk Radar)?",
         answer=(
-            "That's the planned 'execution intelligence above your project system' (not shipped yet) "
-            "— the project-management equivalent of trend intelligence: spot emerging execution "
-            "failures before they become visible failures. From signals like dependencies, tasks, "
-            "commits, PRs, tests, deployments, messages, approvals, ownership and milestones, it "
-            "would flag milestone slippage, blocked dependencies, decisions going critical, "
-            "requirement ambiguity, owner overload, stale approvals and integration risk — with an "
-            "estimated slip window, a confidence, the primary cause, the evidence and a recommended "
-            "intervention. It's positioned as intelligence layered above your PM tool, not another "
-            "task manager."),
-        source="Roadmap — Projects Execution Risk Radar (Phase 3; not yet shipped)"),
+            "The scoring kernel for this ships today (validated on a controlled synthetic replay, not "
+            "yet on live project data) and already feeds the 'what needs me?' surface — it's the "
+            "project-management equivalent of the trend kernel: spot emerging execution failures "
+            "before they become visible failures. From signals like schedule pace, dependency lag, "
+            "blocked dependencies, decision debt, requirement ambiguity, owner overload, stale "
+            "approvals and under-testing it flags a risk with an estimated slip window, a calibrated "
+            "confidence, the primary cause and a recommended mitigation (which parks on your "
+            "approval). On the synthetic benchmark it beats a naive burndown baseline — which MISSES "
+            "dependency-driven slips that look on-pace — with useful lead time. That proves the "
+            "scoring LOGIC, NOT real-world accuracy; the live-data version is the next step. It's "
+            "intelligence layered above your PM tool, not another task manager."),
+        source="Shipped kernel: agentic_os/execution_risk.py + execution_risk_backtest.py "
+               "(synthetic-validated) · Roadmap: live project-data validation"),
     KnowledgeEntry(
         id="growth-trend-intelligence",
         topic="Proactive intelligence (roadmap)",
@@ -729,15 +732,19 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
                   "which investigation", "stopping rule", "belief state", "when to stop researching"),
         question="Does research plan what to investigate next to reduce uncertainty (Information-Gain Planner)?",
         answer=(
-            "That's the planned research capability (not shipped yet). Most research agents optimise "
-            "'what answers the question'; this planner would also ask 'what investigation would "
-            "reduce uncertainty the most'. From a belief/hypothesis state and the known "
-            "evidence/contradictions/unknowns, it would generate candidate investigations, estimate "
-            "each one's expected information gain versus cost, choose one, acquire the evidence, "
-            "update the belief, and repeat — stopping when confidence is sufficient, remaining gain "
-            "is low, the budget is spent, or the evidence is irreducibly ambiguous. Improvements here "
-            "feed back into the Context Runtime."),
-        source="Roadmap — Research Information-Gain Planner (Phase 4; not yet shipped)"),
+            "The planner kernel ships today (validated on controlled synthetic tasks, not yet on real "
+            "research). Most research agents optimise 'what answers the question'; this one also asks "
+            "'what investigation reduces uncertainty the most per unit cost'. From a belief over "
+            "hypotheses it scores each candidate investigation's expected information gain (the "
+            "expected reduction in entropy), picks the best per cost, updates the belief with Bayes' "
+            "rule, and repeats — stopping when a hypothesis passes the decision threshold, remaining "
+            "gain is low, the budget is spent, or the evidence is irreducibly ambiguous. On the "
+            "synthetic benchmark, information-gain planning reaches confident, correct conclusions far "
+            "more often and more cheaply than naive (random / round-robin) investigation. That proves "
+            "the planning LOGIC, NOT real-world research skill; the live version feeds the Context "
+            "Runtime."),
+        source="Shipped kernel: agentic_os/research_planner.py + research_planner_backtest.py "
+               "(synthetic-validated) · Roadmap: real research questions/evidence/outcomes"),
     KnowledgeEntry(
         id="knowledge-debt-radar",
         topic="Proactive intelligence (roadmap)",
