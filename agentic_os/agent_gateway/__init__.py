@@ -1,0 +1,32 @@
+"""ReDevOps Governed Agent Gateway — the governed northbound path for external agents.
+
+Bring any agent (Claude, ChatGPT, Cursor, custom). ReDevOps governs what it can do inside your
+systems: every operation crosses one path — identity → permissions → risk → budget → approval →
+GovernedEnvelope → invoke (direct capability or Mission delegation) → egress policy → audit.
+
+Phase 0 (this module): the contracts, the policy-scoped capability registry, and the single
+governed invocation pipeline — protocol-agnostic and fully testable in-process. Protocol adapters
+(MCP over Streamable-HTTP with OAuth 2.1 + PKCE, then REST) plug in above :meth:`AgentGateway.invoke`
+in later phases; they add no new authority. See GOVERNED_AGENT_GATEWAY_IMPLEMENTATION_PLAN.md.
+"""
+from .contracts import (
+    CONTRACT_VERSION, ApprovalPolicy, AuditEvent, CapabilityKind, CapabilityManifest, DataClass,
+    EgressAction, GatewayDecision, GatewayPrincipal, GatewayRequest, GatewayResult, GatewayStatus,
+    RiskTier)
+from .gateway import (
+    AgentGateway, ApprovalStore, AuditSink, BudgetGuard, EgressPolicy, InMemoryAuditSink,
+    InMemoryIdempotencyStore, IdempotencyStore, MissionDelegation, MissionPort)
+from .registry import CapabilityHandler, CapabilityRegistry, HandlerResult
+
+__all__ = [
+    "CONTRACT_VERSION",
+    # contracts
+    "RiskTier", "ApprovalPolicy", "EgressAction", "DataClass", "CapabilityKind",
+    "CapabilityManifest", "GatewayPrincipal", "GatewayRequest", "GatewayDecision",
+    "GatewayResult", "GatewayStatus", "AuditEvent",
+    # registry
+    "CapabilityRegistry", "CapabilityHandler", "HandlerResult",
+    # gateway + seams
+    "AgentGateway", "MissionPort", "MissionDelegation", "EgressPolicy", "ApprovalStore",
+    "BudgetGuard", "AuditSink", "IdempotencyStore", "InMemoryAuditSink", "InMemoryIdempotencyStore",
+]
