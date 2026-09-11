@@ -9,11 +9,13 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from agentic_os.mission.operator_sdk import Operator, capability
 from agentic_os.mission.production import build_production_runtime, discover, operators_from_modules
+from agentic_os.mission.store import EventStore
 from agentic_os.mission.types import MissionState
 
 GRANTS = ["billing:write", "support:write", "books:write", "compliance:write"]
@@ -89,9 +91,17 @@ def test_operators_from_modules_yaml_shape():
     assert ops == {"agentic-billing": "http://10.0.0.5:8201", "agentic-support": "http://10.0.0.5:8202"}
 
 
+def test_production_requires_explicit_durable_backend(monkeypatch):
+    # fail closed: no opportunistic default — production persistence must be configured explicitly
+    monkeypatch.delenv("MISSION_EVENT_BACKEND", raising=False)
+    with pytest.raises(RuntimeError):
+        build_production_runtime({})                       # discovery of no operators is fine; store selection fails
+
+
 def test_production_runtime_runs_onboarding_over_http():
     operators, fetch, transport = _wire(_fleet())
-    rt = build_production_runtime(operators, fetch=fetch, transport=transport)
+    # explicit store injection is the test/embedded escape hatch (reproducible, no env dependence)
+    rt = build_production_runtime(operators, fetch=fetch, transport=transport, store=EventStore())
 
     m = rt.create_mission("Onboard a new customer", policy_refs=GRANTS, template="onboarding")
     rt.run(m.id)

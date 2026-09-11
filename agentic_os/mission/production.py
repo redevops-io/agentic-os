@@ -20,7 +20,7 @@ from .operators import HTTPOperatorClient
 from .planner import Planner
 from .registry import CapabilityRegistry
 from .runtime import MissionRuntime
-from .store import EventStore
+from .event_backends import build_durable_event_store
 from .types import CapabilityManifest, CapabilitySpec, NodeCost
 from .util import Fetch, Transport, get_json
 
@@ -84,9 +84,15 @@ def operators_from_modules(modules: list[dict], *, host: str = "localhost", sche
 
 def build_production_runtime(operators: dict[str, str], *, fetch: DiscoverFetch | None = None,
                              transport: Transport | None = None, planner: Planner | None = None,
-                             store_path: str | None = None) -> MissionRuntime:
-    """Assemble a MissionRuntime that plans over — and executes against — the live operator fleet."""
+                             store=None, store_path: str | None = None) -> MissionRuntime:
+    """Assemble a MissionRuntime that plans over — and executes against — the live operator fleet.
+
+    Persistence **fails closed**: production requires an explicit durable event-store backend
+    (``MISSION_EVENT_BACKEND=duckdb|postgres``) — never an opportunistic default — so a deployment's
+    persistence semantics are reproducible from its configuration alone. Pass ``store=`` to inject a
+    pre-built store explicitly (tests / embedded)."""
     registry, resolve = discover(operators, fetch=fetch)
     client = HTTPOperatorClient(resolve=resolve, transport=transport)
-    return MissionRuntime(registry, Executor(client), store=EventStore(path=store_path),
+    return MissionRuntime(registry, Executor(client),
+                          store=store or build_durable_event_store(store_path),
                           planner=planner or default_planner())
