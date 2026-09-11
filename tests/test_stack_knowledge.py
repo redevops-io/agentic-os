@@ -139,7 +139,7 @@ def test_proactive_intelligence_topics_resolve_to_their_entry():
         "can it match me to jobs using a capability graph?": "recruiting-fit-engine",
         "does research plan what to investigate to reduce uncertainty?": "research-info-gain-planner",
         "can it find stale documents and knowledge gaps?": "knowledge-debt-radar",
-        "how would learnerbot decide the next concept to teach (knowledge frontier)?": "learnerbot-knowledge-frontier",
+        "how does the stack decide what to learn next (knowledge frontier)?": "knowledge-frontier",
         "will analytics explain why a metric changed?": "analytics-anomaly-action",
         "would the wealth manager flag when my plan's assumptions drift?": "wealth-assumption-drift",
         "if it acts on its own how is that governed and how do i know it works?": "proactive-governance-learning",
@@ -157,7 +157,7 @@ def test_proactive_answers_are_status_honest_not_overclaiming():
     assert len(proactive) >= 16
     # pure-roadmap entries say so plainly (in the answer, where the user reads it)
     for pid in ("crm-next-best-action", "outreach-intent-radar", "recruiting-fit-engine",
-                "knowledge-debt-radar", "learnerbot-knowledge-frontier", "analytics-anomaly-action",
+                "knowledge-debt-radar", "analytics-anomaly-action",
                 "wealth-assumption-drift", "creator-intelligence"):
         a = proactive[pid].answer.lower()
         assert ("not shipped" in a or "roadmap" in a or "planned" in a or "not yet" in a), pid
@@ -168,7 +168,8 @@ def test_proactive_answers_are_status_honest_not_overclaiming():
         assert "ship" in a and ("roadmap" in a or "growing" in a or "still" in a), pid
     # the shipped detector KERNELS (Growth, Projects Risk, Research) each state they validate LOGIC on
     # SYNTHETIC data, NOT real-world accuracy — matching the shipped-PR framing and the "abstain" rule.
-    for pid in ("growth-trend-intelligence", "projects-execution-risk-radar", "research-info-gain-planner"):
+    for pid in ("growth-trend-intelligence", "projects-execution-risk-radar", "research-info-gain-planner",
+                "knowledge-frontier"):
         a = proactive[pid].answer.lower()
         assert "kernel" in a and "ship" in a, pid
         assert "synthetic" in a and "logic" in a, pid
