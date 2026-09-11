@@ -217,7 +217,7 @@ def test_priorities_endpoint_returns_the_what_needs_me_surface():
     s = c.get("/api/projects/customer-ops/priorities").json()
     assert "need" in s["summary"].lower() and "you today" in s["summary"].lower()
     assert s["basis"] == "sample"                         # honest: example data, not a live deployment
-    assert 1 <= len(s["surfaced"]) <= 4                   # attention budget
+    assert 1 <= len(s["surfaced"]) <= 5                   # attention budget
     for item in s["surfaced"]:
         assert item["requires_approval"] and item["action"] == "request_approval"
         assert item["source_app"] and item["proposed_action"] and 0 <= item["confidence"] <= 1

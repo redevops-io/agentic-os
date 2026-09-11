@@ -130,6 +130,9 @@ class SampleProjectionProvider:
     #: readiness reflect real connection state (seeded from the sample's connected apps).
     connected: Set[str] = field(
         default_factory=lambda: {a["provider"] for a in _sample_apps() if a["state"] != "NOT_CONNECTED"} | {"polar", "apollo"})
+    #: recorded OutcomeEvents feeding the learning loop. A deployment persists these; the sample keeps
+    #: them in memory so the demo can show cross-app action selection ADAPT as real outcomes arrive.
+    outcome_events: List[Any] = field(default_factory=list)
 
     def projects(self) -> List[dict]:
         return [{"id": self.project_id, "name": self.project_name, "health": "ok"}]
@@ -192,8 +195,11 @@ class SampleProjectionProvider:
         import time
         from agentic_os.agent_gateway.contracts import RiskTier
         from agentic_os.priority_engine import (
-            InterventionCandidate, PriorityPolicy, collect_priorities, from_research_plan,
-            from_risk_report, from_support_thread, from_trend_report)
+            InterventionCandidate, OutcomeLog, PriorityPolicy, collect_priorities, from_research_plan,
+            from_risk_report, from_support_thread, from_trend_report, select_action)
+        from agentic_os.outcome_learning import UtilityModel
+        from agentic_os.crm_nba import DealSignals, next_best_action
+        from agentic_os.outreach_nba import ProspectSignals, outreach_opportunity
         from agentic_os.execution_risk import IsotonicCalibrator as _RiskCal
         from agentic_os.execution_risk import Mode as RiskMode
         from agentic_os.execution_risk import ProjectSignals, raw_risk
@@ -203,6 +209,24 @@ class SampleProjectionProvider:
         from agentic_os.support_autonomy import FollowUpPolicy, ThreadState, qualify_lead
         from agentic_os.trend_intelligence import Mode, TrendCandidate, assess
         now = time.time()
+
+        # the shared learning loop: fit a utility model on whatever outcomes have been recorded, so
+        # CRM/Outreach action selection ADAPTS as outcomes arrive (empty log ⇒ static priors).
+        learn_fn = None
+        if self.outcome_events:
+            learn_fn = UtilityModel().fit(OutcomeLog(events=list(self.outcome_events))).as_utility_fn()
+
+        def crm_nba_source():
+            # CRM Next-Best-Action as a producer: the loop selects WHICH action for this deal, learning
+            # from recorded outcomes; the chosen (outbound) action then competes for attention.
+            opp = next_best_action(DealSignals("Acme", stage="engaged", buying_signal=True, engagement=0.6))
+            sel = select_action(opp, utility_fn=learn_fn)
+            return [] if sel.action.risk_tier == RiskTier.READ else [sel.action]
+
+        def outreach_source():
+            opp = outreach_opportunity(ProspectSignals("Tasha@Nutrients.tech", fresh_trigger=True))
+            sel = select_action(opp, utility_fn=learn_fn)
+            return [] if sel.action.risk_tier == RiskTier.READ else [sel.action]
 
         def growth_source():
             rising = [1, 1.5, 2.3, 3.6, 5.6, 8.7, 13.5, 21.0]
@@ -262,11 +286,28 @@ class SampleProjectionProvider:
             ]
 
         summary = collect_priorities(
-            [growth_source, support_source, risk_source, research_source, direct_source],
-            PriorityPolicy(attention_budget=4), now=now)
+            [growth_source, support_source, risk_source, research_source, crm_nba_source,
+             outreach_source, direct_source],
+            PriorityPolicy(attention_budget=5), now=now)
         out = summary.as_dict()
         out["basis"] = "sample"    # honest: example detectors/data, not a live deployment's signals
+        # the closed loop, honestly labelled: selection adapts to recorded outcomes (in simulation here)
+        out["learning"] = {"outcomes_recorded": len(self.outcome_events),
+                           "selection_adjusted": learn_fn is not None}
         return out
+
+    def record_outcome_event(self, *, source_app: str, action_kind: str, candidate_id: str = "",
+                             observed_reward: Optional[float] = None,
+                             reward_dimensions: Optional[Dict[str, float]] = None,
+                             attribution_confidence: float = 1.0, delay: float = 0.0) -> dict:
+        """Record an observed outcome into the shared log — this is how a deployment closes the loop.
+        Future :meth:`priorities` selections learn from it (governance is untouched)."""
+        from agentic_os.priority_engine import OutcomeEvent
+        self.outcome_events.append(OutcomeEvent(
+            candidate_id=candidate_id, source_app=source_app, action_kind=action_kind,
+            observed_reward=observed_reward, reward_dimensions=dict(reward_dimensions or {}),
+            attribution_confidence=attribution_confidence, delay=delay))
+        return {"recorded": len(self.outcome_events)}
 
     def discovery(self, _pid: str) -> List[dict]:
         return [
@@ -723,6 +764,16 @@ class _SidekickReq(BaseModel):
     text: str = ""
 
 
+class _OutcomeReq(BaseModel):
+    source_app: str = ""
+    action_kind: str = ""
+    candidate_id: str = ""
+    observed_reward: Optional[float] = None
+    reward_dimensions: Dict[str, float] = {}
+    attribution_confidence: float = 1.0
+    delay: float = 0.0
+
+
 class _ProposeSourcesReq(BaseModel):
     project_id: str = "customer-ops"
     text: str = ""
@@ -853,6 +904,18 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
             return {"summary": "Nothing needs you right now.", "surfaced": [], "deferred": [],
                     "handled_automatically": 0, "abstained": 0, "basis": "unavailable"}
         return fn(project_id)
+
+    @app.post("/api/outcomes")
+    def _record_outcome(req: _OutcomeReq) -> dict:
+        # Close the loop: record an observed outcome so future 'what needs me?' selections learn from
+        # it. Optional on the provider — returns supported=False if the deployment doesn't record.
+        fn = getattr(prov, "record_outcome_event", None)
+        if fn is None:
+            return {"recorded": 0, "supported": False}
+        return {**fn(source_app=req.source_app, action_kind=req.action_kind, candidate_id=req.candidate_id,
+                     observed_reward=req.observed_reward, reward_dimensions=req.reward_dimensions,
+                     attribution_confidence=req.attribution_confidence, delay=req.delay),
+                "supported": True}
 
     @app.get("/api/projects/{project_id}/discovery")
     def _discovery(project_id: str) -> List[dict]:
