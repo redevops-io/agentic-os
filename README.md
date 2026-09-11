@@ -6,7 +6,7 @@
 
 *Run your whole business as a fleet of agents — on hardware you own, with the cheapest model that's good enough for each task.*
 
-[![License: AGPL-3.0 + Commons Clause](https://img.shields.io/badge/License-AGPL--3.0%20%2B%20Commons%20Clause-blue.svg)](LICENSE.md) ![Python](https://img.shields.io/badge/Python-3.12%2B-3776AB.svg) ![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8.svg) [![NVIDIA Inception](https://img.shields.io/badge/NVIDIA-Inception%20Program%20Member-76B900.svg)](https://www.nvidia.com/en-us/startups/)
+[![License: AGPL-3.0 + Commons Clause](https://img.shields.io/badge/License-AGPL--3.0%20%2B%20Commons%20Clause-blue.svg)](LICENSE.md) ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg) ![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8.svg) [![NVIDIA Inception](https://img.shields.io/badge/NVIDIA-Inception%20Program%20Member-76B900.svg)](https://www.nvidia.com/en-us/startups/)
 &nbsp;·&nbsp; self-hosted &nbsp;·&nbsp; no lock-in &nbsp;·&nbsp; source-available
 
 </div>
@@ -46,6 +46,33 @@ premium API bill. `agentic-os` replaces that with **one fleet, your data, your h
 - **Fine-grained access control** — a permissions plane grants each app/role/user read/write on a database, table
   or corpus, sliced by **row scope** and **column mask**; set it up and preview it live at `/permissions` (grants
   AES-GCM–encrypted at rest, gated write API). See [docs/permissions.md](docs/permissions.md).
+
+## Beyond the fleet: Projects, Integrations, Sidekick & the Agent Gateway
+
+The fleet/router/control-plane above is the kernel. On top of it the current product surface adds:
+
+- **Projects + Sidekick** — a self-host web app ([`agentic_os/projects_api.py`](agentic_os/projects_api.py)
+  serves the UI + API on one origin). **Projects** is the control plane (missions · workflows · attention ·
+  approvals · audit); **Sidekick** is the conversational Mission Supervisor *and* an in-product Q&A expert that
+  answers, from a curated + sourced knowledge base with a grounded local-model fallback, how credentials are
+  handled, where data is processed, how execution is governed, and how the components work
+  ([`sidekick_assistant.py`](agentic_os/sidekick_assistant.py) ·
+  [`stack_knowledge.py`](agentic_os/stack_knowledge.py); `GET /api/sidekick/help`). A deployment can offer just a
+  subset of apps via `$PROJECTS_APPS`.
+- **Integration Plane + Connect Compiler** — describe an integration in plain language; the wizard interprets, you
+  confirm, the runtime compiles it into a governed connector ([`agentic_os/integrations/`](agentic_os/integrations/)).
+  Connector adapters live in [`redevops-connectors`](https://github.com/redevops-io/redevops-connectors) (HubSpot,
+  Stripe, Polar, Gmail, Google Calendar, Slack, WhatsApp Business, Klaviyo, Postiz, Ayrshare, Blotato). Credentials
+  follow a 3-owner boundary — the OAuth *app secret* stays in the connect layer, the end-user *token* lives in the
+  CredentialBroker, and a Mission/model only ever sees an opaque reference resolved at the moment of use.
+- **Productivity plane** — Google Workspace, Microsoft 365, LibreOffice, and raw file formats (CSV/MD/XLSX/DOCX)
+  behind one logical surface, with a 4-way physical strategy (cloud API vs local file / headless / desktop) so
+  local work stays on your machine. See [`PRODUCTIVITY_PLANE.md`](agentic_os/integrations/PRODUCTIVITY_PLANE.md).
+- **Governed Agent Gateway** — the governed *northbound* path that lets an external agent (Claude, ChatGPT, Cursor,
+  your own) invoke ReDevOps capabilities without an ungoverned backdoor ([`agentic_os/agent_gateway/`](agentic_os/agent_gateway/)).
+  MCP is its first protocol adapter — not the product. Every call runs the one path: identity → permissions → risk →
+  approval → GovernedEnvelope → invoke (a governed capability, or a delegated Mission) → egress policy → audit.
+  See [GOVERNED_AGENT_GATEWAY_IMPLEMENTATION_PLAN.md](GOVERNED_AGENT_GATEWAY_IMPLEMENTATION_PLAN.md).
 
 ## Architecture
 
@@ -98,6 +125,14 @@ docker compose up -d          # control plane on :8080
 curl localhost:8080/health
 ```
 
+Or self-host just the **Projects + Sidekick** app (UI + API on one origin — needs Python 3.11+ and Git):
+
+```bash
+pip install 'agentic-os[projects]'    # git-based deps resolve; add [office] for the productivity plane
+agentic-os-projects                   # serves the Projects UI + API on :8787
+# hosted reference: https://demo.redevops.io/projects
+```
+
 ## How model routing works (the cost engine)
 
 ```yaml
@@ -133,6 +168,12 @@ falls back up the tiers on failure — keeping >90% of work on local hardware.
 | [`agentic_os/context.py`](agentic_os/context.py) | shared business context + approvals/audit log |
 | [`agentic_os/control_plane.py`](agentic_os/control_plane.py) | FastAPI control plane |
 | [`agentic_os/mission/`](agentic_os/mission/) | Mission Runtime — the operator/mission engine the reference apps run on (operators, planes, compiler; Go port in [`go/mission/`](go/mission/)) |
+| [`agentic_os/integrations/`](agentic_os/integrations/) | Integration Plane + Connect Compiler contracts, hosted OAuth, the productivity plane, and adapter execution |
+| [`agentic_os/agent_gateway/`](agentic_os/agent_gateway/) | Governed Agent Gateway — the governed northbound path for external agents (MCP first) |
+| [`agentic_os/projects_api.py`](agentic_os/projects_api.py) | Projects UI + API (one origin) |
+| [`agentic_os/sidekick_assistant.py`](agentic_os/sidekick_assistant.py) · [`stack_knowledge.py`](agentic_os/stack_knowledge.py) | Sidekick's grounded LLM fallback + curated stack Q&A knowledge base |
+| [`agentic_os/sources.py`](agentic_os/sources.py) + `sources_*.py` | Source connectors (LocalFiles, Google Drive, OneDrive, Postgres, RAG) |
+| [`agentic_os/permissions.py`](agentic_os/permissions.py) | fine-grained access control (row scope + column mask) |
 | [`agentic_os/cli.py`](agentic_os/cli.py) | `agentic-os` CLI |
 | [`modules.yaml`](modules.yaml) | the module catalog |
 | [`docs/`](docs/) | architecture + operations |

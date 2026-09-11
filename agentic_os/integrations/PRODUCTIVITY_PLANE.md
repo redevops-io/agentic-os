@@ -90,7 +90,8 @@ there) and are the only strategies that can be human-gated.
 ### 4a · Cloud suites (`CLOUD_API`) — same OAuth+adapter flow as Slack/Gmail
 
 **Google Workspace** — OAuth 2.0 + Google APIs. Surfaces: Drive · Docs · Sheets · Slides · Gmail
-· Calendar. Add a `google` entry to `KNOWN_OAUTH` + a Google adapter satisfying `AdapterPort`.
+· Calendar. **Shipped:** `KNOWN_OAUTH` carries a `google` entry (offline-access refresh params) and
+`google_app.py` provides the adapter satisfying `AdapterPort`.
 
 Scopes are **use-case profiles** on `ProviderConnectDescriptor`, not one hard-coded set —
 `drive.file` is intentionally narrow (only files the app created or the user explicitly opened),
@@ -156,16 +157,19 @@ Microsoft 365
 
 ---
 
-## 6 · Implementation priority
+## 6 · Implementation status
 
 Broadest OS-independent value first, then local execution where cloud APIs can't reach:
 
-1. **Google Workspace** — Drive **as Source** · Gmail · Calendar · Docs/Sheets operations. (`CLOUD_API`)
-2. **Microsoft 365** — OneDrive/SharePoint **as Source** · Outlook Mail · Calendar · Excel. (`CLOUD_API`)
-3. **Generic file-format capabilities** — DOCX/XLSX/PPTX/ODF/PDF. (`FILE_NATIVE`)
-4. **LibreOffice local** — easiest broad desktop/headless coverage. (`LOCAL_HEADLESS`)
-5. **Windows Office desktop** — only where exact desktop behaviour matters. (`LOCAL_DESKTOP_AUTOMATION`)
-6. **Apple iWork** — useful, lowest leverage / most automation-specific. (`LOCAL_DESKTOP_AUTOMATION`)
+1. ✅ **Google Workspace** — Docs/Sheets operations + Drive **as Source**. (`CLOUD_API`) — `google_app.py`
+2. ✅ **Microsoft 365** — Excel workbook + OneDrive upload; OneDrive **as Source**. (`CLOUD_API`) — `microsoft_app.py`, `sources_onedrive.py`
+3. ✅ **Generic file-format capabilities** — CSV/MD read+write, XLSX/DOCX read. (`FILE_NATIVE`) — `file_formats.py`
+4. ✅ **LibreOffice local** — `soffice --convert-to` (CSV→XLSX, text→DOCX/PDF, →PDF). (`LOCAL_HEADLESS`) — `libreoffice_app.py`
+5. ⬜ **Windows Office desktop** — only where exact desktop behaviour matters. (`LOCAL_DESKTOP_AUTOMATION`) — not yet shipped
+6. ⬜ **Apple iWork** — useful, lowest leverage / most automation-specific. (`LOCAL_DESKTOP_AUTOMATION`) — not yet shipped
+
+Live capabilities are advertised per-provider via `live_capabilities` / `is_capability_live`, so the
+manifest reflects what actually runs (partial liveness), not the full catalog.
 
 ---
 
@@ -182,7 +186,12 @@ Broadest OS-independent value first, then local execution where cloud APIs can't
 | Human-gated op | `ActivationCapability{automatable, human_required, execution_strategy}` |
 | Credential refs | client secret in connect layer · token in `CredentialBroker` · Mission gets `CredentialRef` |
 
-**W0 (next):** a `productivity.py` contracts module — the `PhysicalStrategy` enum, the logical
-capability constants, the `ScopeProfile` type, an adapter-family/strategy registry seam, and a
-`ProductivityProvider` descriptor carrying its APP and/or SOURCE roles — plus a manifest of the
-six providers × strategies (status: planned/live) and tests. Then **W1 = Google Workspace**.
+**Shipped.** `productivity.py` provides the `PhysicalStrategy` enum, the logical `DocCapability`
+surface, `ScopeProfile` (+ `GOOGLE_*` profiles), `ProviderRole` (APP/SOURCE duality), `CapabilityGrant`
+(ref-only — the Mission gets a `credential_ref`, never a token), and `ProductivityProvider` /
+`ProductivityRegistry` projected into the reality-filter `IntegrationManifest` with partial liveness
+(`live_capabilities` / `is_capability_live`). The adapter families that followed — Google Workspace
+(`google_app.py`), Microsoft 365 (`microsoft_app.py`), file formats (`file_formats.py`), LibreOffice
+(`libreoffice_app.py`) — and the OneDrive Source connector (`sources_onedrive.py`) are all live.
+Remaining roadmap: Windows Office desktop + Apple iWork (`LOCAL_DESKTOP_AUTOMATION`) and richer
+file-format engines (openpyxl/python-docx/pypdf).

@@ -4,6 +4,10 @@ This brings up the **control plane** plus a stand-in service for nine of the
 `deploy: compose` modules, so those cards light up in the dashboard end-to-end —
 without depending on any individual module repo's own Dockerfile.
 
+> This is the **legacy compose fleet dashboard** (`:8080`). The current end-user UI is the
+> **Projects + Sidekick** app — `pip install 'agentic-os[projects]'` then `agentic-os-projects`
+> (served at `demo.redevops.io/projects`). See the repo [README](../README.md).
+
 ## Run
 
 From the repository root:
