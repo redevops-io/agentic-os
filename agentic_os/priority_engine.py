@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
-from typing import Callable, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple, Union
+from typing import Any, Callable, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple, Union
 
 from agentic_os.agent_gateway.contracts import ApprovalPolicy, RiskTier
 
@@ -70,9 +70,16 @@ class InterventionCandidate:
     approval_policy: Optional[ApprovalPolicy] = None   # None ⇒ default_for(risk_tier)
     expiry: Optional[float] = None               # epoch after which the candidate is stale
     candidate_id: str = ""
+    action_kind: str = ""                        # coarse action type (e.g. 'send_proposal', 'wait') —
+                                                 # the key the outcome learner groups reward by
 
     def effective_approval_policy(self) -> ApprovalPolicy:
         return self.approval_policy or ApprovalPolicy.default_for(self.risk_tier)
+
+    @property
+    def learn_key(self) -> Tuple[str, str]:
+        """The (source_app, action_kind) key the outcome learner attributes reward to."""
+        return (self.source_app, self.action_kind or self.proposed_action[:24])
 
 
 def do_nothing(subject: str, source_app: str = "") -> InterventionCandidate:
@@ -275,24 +282,127 @@ def what_needs_me(candidates: Sequence[InterventionCandidate],
 # ── learning telemetry contract (plan §20) — recorded, not yet learned from ──────────
 @dataclass(frozen=True)
 class OutcomeEvent:
-    """Common outcome telemetry every proactive capability should emit (§20). This is the CONTRACT a
-    future learning loop consumes; nothing here learns from it yet (stated honestly, per the plan's
-    'no self-improvement claim without evaluation')."""
+    """Common outcome telemetry every proactive capability emits (§20) — the record the learning loop
+    consumes to change future selection. Rewards are MULTI-DIMENSIONAL (a reply and an unsubscribe are
+    different axes, not one number), rewards are DELAYED (a conversion lands days after the action), and
+    attribution is uncertain (did the action cause the outcome, or would it have happened anyway?)."""
     candidate_id: str
     source_app: str
-    action: Action
+    action: Optional[Action] = None          # governance action it ran under, when known
     accepted: Optional[bool] = None          # human accepted / rejected the recommendation
     edited: bool = False                     # human kept it but edited it
-    observed_reward: Optional[float] = None  # measured business/operational outcome, when known
+    observed_reward: Optional[float] = None  # scalar summary, when a single number is meaningful
     note: str = ""
+    action_kind: str = ""                    # the action type, so the learner can group by it
+    reward_dimensions: Mapping[str, float] = field(default_factory=dict)  # e.g. {"reply":1,"unsub":0}
+    delay: float = 0.0                       # time between the action and the observed outcome
+    attribution_confidence: float = 1.0      # 0..1, how confidently the outcome is attributed to the action
+
+    def scalar_reward(self, weights: Optional[Mapping[str, float]] = None) -> float:
+        """Collapse the reward to a single attribution-weighted number for ranking/learning. Uses the
+        explicit ``observed_reward`` when set, else a (optionally weighted) sum of ``reward_dimensions``,
+        scaled by ``attribution_confidence`` so weakly-attributed outcomes teach the model less."""
+        if self.observed_reward is not None:
+            base = self.observed_reward
+        elif self.reward_dimensions:
+            w = weights or {}
+            base = sum((w.get(k, 1.0)) * v for k, v in self.reward_dimensions.items())
+        else:
+            base = 0.0
+        return base * _clamp_local(self.attribution_confidence)
 
 
 def record_outcome(decision: InterventionDecision, *, accepted: Optional[bool] = None,
-                   edited: bool = False, observed_reward: Optional[float] = None,
-                   note: str = "") -> OutcomeEvent:
+                   edited: bool = False, observed_reward: Optional[float] = None, note: str = "",
+                   reward_dimensions: Optional[Mapping[str, float]] = None, delay: float = 0.0,
+                   attribution_confidence: float = 1.0) -> OutcomeEvent:
     return OutcomeEvent(candidate_id=decision.candidate.candidate_id,
                         source_app=decision.candidate.source_app, action=decision.action,
-                        accepted=accepted, edited=edited, observed_reward=observed_reward, note=note)
+                        accepted=accepted, edited=edited, observed_reward=observed_reward, note=note,
+                        action_kind=decision.candidate.learn_key[1],
+                        reward_dimensions=dict(reward_dimensions or {}), delay=delay,
+                        attribution_confidence=attribution_confidence)
+
+
+# ── the common decision contract (§16/§17): one opportunity → many candidate actions → select ───
+UtilityFn = Callable[[InterventionCandidate, float], float]   # (candidate, base priority) → utility
+
+
+@dataclass(frozen=True)
+class DecisionOpportunity:
+    """Something discovered that admits SEVERAL possible responses (§16). A domain app produces these;
+    the shared runtime selects and (later) learns. ``uncertainty`` is epistemic — how unsure we are
+    about the opportunity as a whole — kept separate from each action's own confidence (§18)."""
+    entity: str
+    source_app: str
+    candidate_actions: Tuple[InterventionCandidate, ...]
+    evidence: Tuple[str, ...] = ()
+    constraints: Mapping[str, Any] = field(default_factory=dict)   # e.g. {"max_risk_tier": RiskTier.CONSEQUENTIAL}
+    uncertainty: float = 0.0
+    expires_at: Optional[float] = None
+    opportunity_id: str = ""
+
+
+@dataclass(frozen=True)
+class SelectedAction:
+    """The runtime's choice among an opportunity's candidate actions — explainable by construction:
+    it carries the governance decision, the expected utility, and the runner-up alternatives."""
+    opportunity_id: str
+    action: InterventionCandidate
+    decision: InterventionDecision
+    expected_utility: float
+    reason: str
+    alternatives: Tuple[Tuple[str, float], ...] = ()
+
+
+def _action_label(c: InterventionCandidate) -> str:
+    return c.action_kind or (c.proposed_action[:24] if c.proposed_action else c.candidate_id or "action")
+
+
+def select_action(opp: DecisionOpportunity, policy: Optional[PriorityPolicy] = None, *,
+                  utility_fn: Optional[UtilityFn] = None, now: Optional[float] = None) -> SelectedAction:
+    """Pick the highest-expected-utility action for an opportunity — with do-nothing always in the pool
+    (§17) and every candidate still routed through governance (§19). ``utility_fn`` is the OPTIONAL
+    learned adjustment (base priority → learned utility); with none, selection is the static priority.
+    Learning changes WHICH action is favoured, never whether governance applies."""
+    p = policy or PriorityPolicy()
+    pool: List[InterventionCandidate] = list(opp.candidate_actions)
+    if not any(c.candidate_id == "do-nothing" for c in pool):
+        pool.append(do_nothing(opp.entity, opp.source_app))          # do-nothing is first-class
+    max_tier = opp.constraints.get("max_risk_tier")
+
+    def utility(c: InterventionCandidate) -> float:
+        base = priority_score(c, p).total
+        return base if utility_fn is None else utility_fn(c, base)
+
+    scored: List[Tuple[float, InterventionCandidate]] = []
+    for c in pool:
+        if (max_tier is not None and c.candidate_id != "do-nothing"
+                and int(c.risk_tier) > int(max_tier)):
+            continue                                                 # constraint filters out too-risky actions
+        scored.append((utility(c), c))
+    scored.sort(key=lambda uc: (uc[0], uc[1].candidate_id), reverse=True)   # deterministic tie-break
+    best_u, best = scored[0]
+    decision = decide(best, p)
+    alts = tuple((_action_label(c), round(u, 3)) for u, c in scored[:4])
+    learned = "" if utility_fn is None else " (learned-adjusted)"
+    reason = (f"chose '{_action_label(best)}' — highest expected utility {best_u:.3f}{learned}; "
+              f"{decision.rationale}")
+    return SelectedAction(opp.opportunity_id, best, decision, best_u, reason, alts)
+
+
+@dataclass
+class OutcomeLog:
+    """The append-only record of what was selected and what happened — the substrate the learning loop
+    reads. In-memory here; a deployment persists it. Shared, durable telemetry, not per-run state."""
+    events: List[OutcomeEvent] = field(default_factory=list)
+
+    def record(self, ev: OutcomeEvent) -> OutcomeEvent:
+        self.events.append(ev)
+        return ev
+
+    def for_key(self, source_app: str, action_kind: str) -> List[OutcomeEvent]:
+        return [e for e in self.events if e.source_app == source_app and e.action_kind == action_kind]
 
 
 # ── adapters: turn ALREADY-SHIPPED deterministic signals into candidates ─────────────

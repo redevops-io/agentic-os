@@ -592,16 +592,17 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
                   "buying signal", "deal that needs attention", "crm proactive"),
         question="Will the CRM tell me the next best action / which deals need attention (Deal Radar)?",
         answer=(
-            "That's the planned CRM capability (not shipped yet): continuously work out which "
-            "customer or prospect deserves attention, why, and which action has the highest expected "
-            "value — neglected high-value leads, stalled deals, missing stakeholders, new buying "
-            "signals, unanswered technical concerns, follow-up windows, renewal risk, expansion. A "
-            "recommendation would come with its reason, the evidence, an expected value and "
-            "confidence, and — because it's an outbound action — an approval gate before anything is "
-            "sent. It would learn from replies, meetings, stage progression, conversions, losses and "
-            "from your edits or rejections, optimising the action, timing, channel and evidence, not "
-            "just a lead ranking."),
-        source="Roadmap — CRM Next-Best-Action / Deal Radar (Phase 2; not yet shipped)"),
+            "The mechanism ships: CRM is a producer for the shared decision/outcome loop. From a deal's "
+            "state it proposes several candidate actions (send proposal, schedule a call, nurture, "
+            "renewal outreach, or just monitor) with a predicted value and — because they're outbound "
+            "— an approval gate; the shared runtime selects the highest-utility one and LEARNS from "
+            "observed outcomes (reply → meeting → conversion → loss) which action actually works, "
+            "correcting its priors over time. Two honesty caveats: this is validated IN SIMULATION "
+            "(observing outcomes measurably improves selection on a controlled environment) — it is "
+            "NOT a real-world commercial-lift claim, which needs live deal outcomes; and the loop keeps "
+            "governance intact (a consequential send still needs approval) no matter what it learns."),
+        source="Shipped producer: agentic_os/crm_nba.py → shared loop (priority_engine select_action + "
+               "outcome_learning UtilityModel), simulation-validated · Roadmap: live commercial outcomes"),
     KnowledgeEntry(
         id="support-resolution-intelligence",
         topic="Proactive intelligence (roadmap)",
@@ -697,15 +698,17 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
                   "best time to contact", "do not contact before", "when to reach out"),
         question="Can outreach tell me who's worth contacting now and when (Intent & Timing Radar)?",
         answer=(
-            "That's the planned outreach capability (not shipped yet). The higher-value question "
-            "isn't 'what message do I send' but 'who is worth contacting now, and why now' — driven "
-            "by CRM history, prior outreach and responses, company events, hiring, funding, technical "
-            "changes and other permitted signals. A recommendation would name the trigger, the "
-            "proposition, the channel, a confidence, a 'why now', and a 'do not contact before' date, "
-            "and always require approval before an outbound send. Importantly its reward function "
-            "counts negative outcomes — unsubscribes and negative replies — so it can't just maximise "
-            "raw reply volume."),
-        source="Roadmap — Outreach Intent & Timing Radar (not yet shipped)"),
+            "The mechanism ships: like CRM, Outreach is a producer for the shared decision/outcome "
+            "loop. It answers 'who is worth contacting now, and why now' — proposing contact now, a "
+            "different channel, waiting for a stronger trigger, or just monitoring (an opted-out "
+            "prospect gets no outbound option at all), always with an approval gate on a send. Its "
+            "reward COUNTS the downside — unsubscribes and negative replies push utility down — so the "
+            "loop learns to stop contacting when outreach backfires rather than maximise send volume. "
+            "Honesty caveats: validated IN SIMULATION (the loop learns to prefer the actions that pay "
+            "off and to back off when they don't), NOT a real-world reply-rate claim (that needs live "
+            "outcomes); governance is preserved regardless of what it learns."),
+        source="Shipped producer: agentic_os/outreach_nba.py → shared loop (select_action + UtilityModel), "
+               "simulation-validated · Roadmap: live outreach outcomes"),
     KnowledgeEntry(
         id="recruiting-fit-engine",
         topic="Proactive intelligence (roadmap)",
@@ -839,8 +842,13 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
             "inherent property of an agent. Second, no self-improvement is claimed without evidence: "
             "each capability must pass offline and online evaluation — precision, recall, false-"
             "positive rate, CALIBRATION (predicted vs observed), precision-above-threshold and "
-            "acceptance/regret — and 'nearly 100% accuracy' claims are explicitly avoided. (The "
-            "governance path exists today; the proactive detectors that feed it are the roadmap.)"),
+            "acceptance/regret — and 'nearly 100% accuracy' claims are explicitly avoided. The "
+            "closed loop now ships: the runtime observes outcomes and changes future action selection "
+            "(a learned utility over the shared OutcomeLog), and — proven on a controlled environment "
+            "— this measurably improves selection and even learns to abstain when actions backfire, "
+            "while keeping approval gates intact, staying replayable (the model is a pure function of "
+            "the log) and explainable (it states the prior, the observed reward and the blend). Wiring "
+            "it to live production outcomes is the deployment step; no real-world lift is claimed yet.)"),
         detail=(
             "Every capability is meant to emit common telemetry — OpportunityDetected, "
             "CandidateGenerated, CandidateScored, InterventionSelected, ApprovalRequested/Accepted/"
