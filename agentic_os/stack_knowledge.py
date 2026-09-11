@@ -799,13 +799,17 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
                   "decision infrastructure", "root cause of the change"),
         question="Will analytics explain why a metric changed and what to do (Anomaly → Explanation → Action)?",
         answer=(
-            "That's the planned analytics direction (not shipped yet). A conventional dashboard says "
-            "'metric changed → alert'. The agentic version would decide whether the change matters, "
-            "investigate the probable cause, gather evidence, generate candidate interventions, "
-            "estimate each one's expected effect, recommend or (where policy allows) execute, and "
-            "then measure the result — turning analytics into decision infrastructure rather than an "
-            "automated dashboard narrator."),
-        source="Roadmap — Analytics Anomaly→Explanation→Action (not yet shipped)"),
+            "The mechanism ships: Analytics is a producer for the shared decision/outcome loop. Instead "
+            "of 'metric changed → alert', it decides whether the change MATTERS (a z-score against the "
+            "metric's own baseline — an immaterial wobble offers only 'monitor'), then proposes "
+            "candidate responses — investigate the cause, alert the owner, roll back a suspected change, "
+            "or adjust a lever — and the shared runtime selects and LEARNS from outcomes which response "
+            "actually recovers the metric (a false alarm counts against it). Rolling back or adjusting a "
+            "live lever is consequential, so it parks on approval. Honesty caveats: validated IN "
+            "SIMULATION (the loop learns to prefer what works and not over-react to noise), NOT a "
+            "real-world claim (that needs live metric outcomes); governance is preserved."),
+        source="Shipped producer: agentic_os/analytics_anomaly.py → shared loop (select_action + "
+               "UtilityModel), simulation-validated · Roadmap: live metric outcomes"),
     KnowledgeEntry(
         id="wealth-assumption-drift",
         topic="Proactive intelligence (roadmap)",
@@ -815,15 +819,17 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
                   "review my allocation"),
         question="Would the wealth manager tell me when my plan's assumptions no longer hold (Drift Monitor)?",
         answer=(
-            "That's the planned wealth-manager function (not shipped yet) — and note it's "
-            "deliberately NOT constant trading advice. It would watch for when reality has changed "
-            "enough that a prior plan's assumptions deserve reconsideration: portfolio drift, risk "
-            "exposure, cash flow, goals, market assumptions, tax constraints, horizon and material "
-            "evidence. The message is 'your strategy was based on assumption X; evidence Y has "
-            "materially changed; it's still within policy, but the assumption should be reviewed' — "
-            "with a recommendation to re-evaluate. Any financial action stays fully permissioned and "
-            "governed."),
-        source="Roadmap — Wealth Manager Decision/Assumption-Drift Monitor (not yet shipped)"),
+            "The mechanism ships as a producer for the shared loop — and it's deliberately NOT constant "
+            "trading advice. It watches for when an assumption has materially drifted (drift measured "
+            "against a tolerance; within tolerance it only monitors) and its primary move is to FLAG "
+            "THE ASSUMPTION FOR REVIEW — 'your strategy assumed X; the evidence has moved; still within "
+            "policy, but worth revisiting' — with an optional rebalance PROPOSAL that parks on approval. "
+            "No candidate ever executes a trade (financial execution is a CRITICAL, human-approved "
+            "action outside the producer). The loop learns to raise its hand only for genuine drift — a "
+            "needless flag counts against it. Honesty caveats: validated IN SIMULATION, NOT a "
+            "real-world claim (that needs live plan outcomes); financial actions stay fully governed."),
+        source="Shipped producer: agentic_os/wealth_drift.py → shared loop (select_action + "
+               "UtilityModel), simulation-validated · Roadmap: live plan outcomes"),
     KnowledgeEntry(
         id="proactive-governance-learning",
         topic="Proactive intelligence (roadmap)",
