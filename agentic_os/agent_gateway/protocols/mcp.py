@@ -15,7 +15,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from ..auth import GatewayAuthError, TokenVerifier
+from typing import Optional
+
+from ..auth import GatewayAuthError, TokenVerifier, bearer_token
 from ..contracts import GatewayRequest
 from ..gateway import AgentGateway
 
@@ -52,6 +54,30 @@ class McpGatewayBridge:
             GatewayRequest(gp, name, arguments or {}, protocol="mcp",
                            idempotency_key=(arguments or {}).get("idempotency_key")))
         return result.client_view()
+
+
+class MCPEndpoint:
+    """Transport-agnostic MCP resource-server boundary. A transport (Streamable-HTTP, stdio, an ASGI
+    handler) hands it the request's Authorization header + the MCP method/params; it extracts the
+    bearer token, and dispatches ``tools/list`` / ``tools/call`` through the bridge. This keeps the
+    OAuth-resource-server + governance boundary testable independently of any MCP server library."""
+
+    def __init__(self, bridge: McpGatewayBridge) -> None:
+        self.bridge = bridge
+
+    def handle(self, authorization: Optional[str], method: str, params: Optional[dict] = None) -> dict:
+        token = bearer_token(authorization)
+        if not token:
+            raise GatewayAuthError("missing bearer token")     # transport → 401
+        params = params or {}
+        if method == "tools/list":
+            return {"tools": self.bridge.list_tools(token)}
+        if method == "tools/call":
+            name = params.get("name")
+            if not name:
+                return {"error": {"code": "invalid_params", "message": "tool name required"}}
+            return self.bridge.call_tool(token, name, params.get("arguments") or {})
+        return {"error": {"code": "method_not_found", "message": f"unknown method {method}"}}
 
 
 def build_fastmcp_server(bridge: McpGatewayBridge, *, name: str = "redevops-agent-gateway"):
