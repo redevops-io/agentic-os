@@ -340,6 +340,29 @@ def from_support_thread(thread_state, follow_up, lead_score, *,
         candidate_id=f"support:{id(thread_state):x}:{n}")
 
 
+def from_risk_report(report, *, source_app: str = "projects") -> Optional[InterventionCandidate]:
+    """Projects Execution Risk Radar → an intervention candidate. Respects the risk kernel's abstain:
+    an abstained report (thin evidence / below threshold / already complete) yields no candidate.
+    Value reflects the calibrated slip probability (the schedule risk a mitigation would reduce);
+    urgency follows the risk level. Approving a mitigation changes the plan, so it parks on approval
+    (§19; plan §2 'Approval required for proposed mitigation')."""
+    if getattr(report, "abstained", False):
+        return None
+    level = getattr(getattr(report, "risk_level", None), "name", "")
+    urgency = {"CRITICAL": 0.9, "ELEVATED": 0.7, "EMERGING": 0.5}.get(level, 0.5)
+    lo, hi = getattr(report, "slip_window_days", (0.0, 0.0))
+    window = f"~{lo:g}–{hi:g}d slip" if hi > 0 else "slip risk"
+    return InterventionCandidate(
+        source_app=source_app, subject=f"milestone at risk: {report.milestone}",
+        proposed_action=(f"Review the emerging execution risk ({window}) — "
+                         f"{getattr(report, 'primary_cause', '')} — and approve a mitigation"),
+        expected_value=float(getattr(report, "confidence", 0.0)),
+        confidence=float(getattr(report, "confidence", 0.0)), urgency=urgency,
+        execution_cost=0.15, attention_cost=0.3, risk_tier=RiskTier.CONSEQUENTIAL, reversibility=0.6,
+        required_capabilities=("projects.mitigation.propose",),
+        candidate_id=f"projects:{report.milestone}")
+
+
 def _demo() -> str:
     """A runnable end-to-end example (real engine, EXAMPLE data). ``python -m agentic_os.priority_engine``."""
     hot = InterventionCandidate(
