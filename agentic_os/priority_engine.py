@@ -363,6 +363,31 @@ def from_risk_report(report, *, source_app: str = "projects") -> Optional[Interv
         candidate_id=f"projects:{report.milestone}")
 
 
+def from_research_plan(step, *, source_app: str = "research", question: str = "") -> Optional[InterventionCandidate]:
+    """Research Information-Gain Planner → an intervention candidate. Only an INVESTIGATE step yields
+    one (a STOP is a conclusion, not an action). Gathering evidence is low-risk, so it is a READ-tier
+    candidate that can run automatically — this is the plan's 'acquire evidence' as a first-class move
+    (§17). Its ``information_value`` carries the expected bits of uncertainty reduction."""
+    action = getattr(getattr(step, "action", None), "value", "")
+    inv = getattr(step, "investigation", None)
+    if action != "investigate" or inv is None:
+        return None
+    gain = float(getattr(step, "expected_gain", 0.0))
+    info = _clamp_local(gain)                      # bits → 0..1 information value (≥1 bit ⇒ maxed)
+    q = question or getattr(inv, "question", "") or step.decision or "the open question"
+    return InterventionCandidate(
+        source_app=source_app, subject=f"open question: {q}",
+        proposed_action=f"Run investigation '{inv.id}' to reduce uncertainty ({gain:.2f} bits)",
+        expected_value=info, confidence=0.8,       # a computed information gain is a reliable estimate
+        urgency=0.3, execution_cost=_clamp_local(getattr(inv, "cost", 0.0) / 10.0),
+        risk_tier=RiskTier.READ, information_value=info,
+        required_capabilities=("research.investigate",), candidate_id=f"research:{inv.id}")
+
+
+def _clamp_local(x: float) -> float:
+    return max(0.0, min(1.0, x))
+
+
 def _demo() -> str:
     """A runnable end-to-end example (real engine, EXAMPLE data). ``python -m agentic_os.priority_engine``."""
     hot = InterventionCandidate(
