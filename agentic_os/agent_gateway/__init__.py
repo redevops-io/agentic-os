@@ -18,7 +18,8 @@ from .gateway import (
     InMemoryIdempotencyStore, IdempotencyStore, MissionDelegation, MissionPort)
 from .registry import CapabilityHandler, CapabilityRegistry, HandlerResult
 from .auth import DevTokenVerifier, GatewayAuthError, TokenVerifier, bearer_token
-from .capabilities import READ_CAPABILITIES, build_read_registry
+from .capabilities import READ_CAPABILITIES, build_read_registry, register_mission_capabilities
+from .mission_adapter import MissionRuntimeAdapter
 from .protocols import McpGatewayBridge, mcp_tool_descriptors
 
 __all__ = [
@@ -36,4 +37,6 @@ __all__ = [
     "TokenVerifier", "DevTokenVerifier", "GatewayAuthError", "bearer_token",
     # read capabilities + MCP adapter
     "build_read_registry", "READ_CAPABILITIES", "McpGatewayBridge", "mcp_tool_descriptors",
+    # mission delegation (Phase 2)
+    "MissionRuntimeAdapter", "register_mission_capabilities",
 ]
