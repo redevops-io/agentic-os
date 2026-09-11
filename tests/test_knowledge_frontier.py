@@ -89,6 +89,43 @@ def test_frontier_advances_to_dependents_once_prereqs_met():
     assert step.action == FrontierAction.TEACH and step.concept_id in ("mid", "aside")
 
 
+def _flat():
+    # two independent concepts (no prereqs, no dependents ⇒ importance 0): the regime where the value
+    # of PROBING a maybe-known belief can exceed the value of teaching it outright.
+    return ConceptGraph({"x": Concept("x"), "y": Concept("y")})
+
+
+def test_frontier_assesses_an_uncertain_unverified_belief_before_teaching():
+    g = _flat()
+    # x is eligible, believed at 0.5 (ambiguous) and NOT verified ⇒ probe before investing in teaching
+    step = next_step(g, {"x": Mastery(prob=0.5, exposed=True, assessed=False),
+                         "y": Mastery(prob=0.95, exposed=True, assessed=True)})
+    assert step.action == FrontierAction.ASSESS and step.concept_id == "x"
+
+
+def test_frontier_teaches_once_the_belief_is_verified():
+    g = _flat()
+    # same ambiguous belief, but now VERIFIED (assessed) ⇒ no point probing again; teach it
+    step = next_step(g, {"x": Mastery(prob=0.5, exposed=True, assessed=True),
+                         "y": Mastery(prob=0.95, exposed=True, assessed=True)})
+    assert step.action == FrontierAction.TEACH and step.concept_id == "x"
+
+
+def test_frontier_does_not_assess_a_clearly_unknown_concept():
+    g = _flat()
+    # never encountered ⇒ low belief-uncertainty ⇒ just teach it, no probe needed
+    step = next_step(g, {"y": Mastery(prob=0.95, exposed=True, assessed=True)})
+    assert step.action == FrontierAction.TEACH and step.concept_id == "x"
+
+
+def test_assess_can_be_disabled_reverting_to_teach_on_belief():
+    g = _flat()
+    state = {"x": Mastery(prob=0.5, exposed=True, assessed=False),
+             "y": Mastery(prob=0.95, exposed=True, assessed=True)}
+    step = next_step(g, state, policy=FrontierPolicy(enable_assess=False))
+    assert step.action == FrontierAction.TEACH and step.concept_id == "x"
+
+
 def test_frontier_reviews_a_retention_at_risk_concept():
     g = _graph()
     # everything mastered, but base is stale (retention at risk) ⇒ review it
@@ -132,6 +169,18 @@ def test_frontier_adapter_builds_a_low_risk_auto_candidate():
     assert c is not None and c.risk_tier == RiskTier.READ and "base" in c.subject
     assert c.information_value > 0
     assert decide(c).action == Action.ACT             # recommending what to learn is low-risk ⇒ auto
+
+
+def test_frontier_adapter_handles_an_assess_choice():
+    from agentic_os.agent_gateway.contracts import RiskTier
+    from agentic_os.priority_engine import Action, decide, from_frontier_choice
+    from agentic_os.knowledge_frontier import FrontierAction
+    g = _flat()
+    step = next_step(g, {"x": Mastery(prob=0.5, exposed=True, assessed=False),
+                         "y": Mastery(prob=0.95, exposed=True, assessed=True)})
+    assert step.action == FrontierAction.ASSESS
+    c = from_frontier_choice(step)
+    assert c is not None and c.risk_tier == RiskTier.READ and decide(c).action == Action.ACT
 
 
 def test_frontier_adapter_returns_none_for_stop():

@@ -775,13 +775,17 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
             "map before traversing every branch': it models a body of knowledge as a prerequisite "
             "graph of concepts, tracks each concept's state (not-encountered, exposed, uncertain, "
             "probably-understood, misconception, retention-at-risk, mastered), and picks the next "
-            "concept to advance by structural importance, prerequisites met, uncertainty, "
-            "misconception risk and retention need — optimising demonstrated mastery, not content "
-            "consumed. On the synthetic benchmark it reaches far more mastery per teaching step than "
-            "naive orderings, chiefly by never wasting a step on a concept whose prerequisites aren't "
-            "ready. That proves the selection LOGIC, NOT real-world pedagogy. It's a 'learner'-neutral "
-            "primitive (a person, a new hire onboarding, an agent building competence, a team closing "
-            "a skill gap) and is unrelated to the separate learnerbot.ai product."),
+            "concept by structural importance, prerequisites met, uncertainty, misconception risk and "
+            "retention need — choosing to TEACH, REVIEW, ASSESS (probe an unverified belief before "
+            "investing in teaching) or STOP, and optimising demonstrated mastery, not content consumed. "
+            "On the synthetic benchmark it reaches far more mastery per teaching step than naive "
+            "orderings (never wasting a step on a prereq-blocked concept), and — for an entity that may "
+            "already know things — probing first reaches more true mastery per unit effort than "
+            "teaching blindly. That proves the selection LOGIC, NOT real-world pedagogy. It's a "
+            "'learner'-neutral primitive (a person, a new hire onboarding, an agent building "
+            "competence, a team closing a skill gap); for agents, ASSESS generalises to ACQUIRE_EVIDENCE "
+            "(inspect docs, run a test, query an app, ask a human) where a governed Mission decides HOW "
+            "to close the gap. It is unrelated to the separate learnerbot.ai product."),
         source="Shipped kernel: agentic_os/knowledge_frontier.py + knowledge_frontier_backtest.py "
                "(synthetic-validated) · domain-neutral, distinct from the separate learnerbot.ai product"),
     KnowledgeEntry(
