@@ -19,20 +19,38 @@ and dependency-free.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Callable, Dict, List, Mapping, Tuple
+
+
+class KnownAtQuality(Enum):
+    """How defensible an observation's ``known_at`` is — the guard against leakage-through-inference.
+    A0 retrospective evaluation may only use OBSERVED or RECONSTRUCTED; UNKNOWN fails closed, so nobody
+    can weaken the leakage gate later just to get more training data."""
+    OBSERVED = "observed"            # an exact source timestamp (webhook/delivery/received/created_at)
+    RECONSTRUCTED = "reconstructed"  # derived from immutable event/audit history (record the provenance)
+    UNKNOWN = "unknown"              # only valid_at / a current snapshot — exploratory ONLY, never A0
 
 
 @dataclass(frozen=True)
 class Observation:
-    """A canonical, bi-temporal observation of the world, produced from a connector event."""
+    """A canonical, bi-temporal observation of the world, produced from a connector event.
+
+    Three timestamps, three different meanings (all preserved):
+      ``valid_at``     — when the fact became true in the world
+      ``known_at``     — when the observing system could legitimately have known it (replay correctness)
+      ``ingested_at``  — when THIS deployment persisted it (operational provenance: latency/outages)
+    They differ: a reply at 10:01, a provider webhook at 10:02, our receipt at 10:04."""
     observation_id: str
     source: str                              # connector / app that produced it (e.g. "crm", "email")
     kind: str                                # e.g. "crm.reply", "pr.merged", "metric.moved"
     subject: str                             # the entity the observation is about
     valid_at: float                          # when the fact became true in the world
-    known_at: float                          # when we learned it (ingestion time)
+    known_at: float                          # when it could legitimately be known (drives replay safety)
     payload: Mapping[str, Any] = field(default_factory=dict)
     evidence_refs: Tuple[str, ...] = ()
+    ingested_at: float = 0.0                 # when this deployment persisted it (operational only)
+    known_at_quality: KnownAtQuality = KnownAtQuality.UNKNOWN  # provenance of known_at (A0 admissibility)
 
 
 @dataclass(frozen=True)

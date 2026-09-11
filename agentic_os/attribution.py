@@ -70,9 +70,10 @@ def temporal_proximity(delay_seconds: float, half_life_seconds: float) -> float:
 
 @dataclass(frozen=True)
 class Attribution:
-    intervention: InterventionRecord
+    intervention: InterventionRecord              # the one it's attributed to
     factors: AttributionFactors
     confidence: float
+    candidate_ids: Tuple[str, ...] = ()           # all in-window interventions considered (the graph edge)
 
 
 def correlate(observation: Observation, interventions: Sequence[InterventionRecord], *,
@@ -110,7 +111,8 @@ def correlate(observation: Observation, interventions: Sequence[InterventionReco
         causal_link_strength=causal_link_strength, competing_interventions=competing,
         explicit_correlation=explicit, outcome_specificity=outcome_specificity,
         observation_quality=observation_quality)
-    return Attribution(primary, factors, attribution_confidence(factors))
+    return Attribution(primary, factors, attribution_confidence(factors),
+                       candidate_ids=tuple(r.intervention_id for r in cands))
 
 
 def derive_outcome(observation: Observation, attribution: Attribution, *,
@@ -123,7 +125,10 @@ def derive_outcome(observation: Observation, attribution: Attribution, *,
         reward_dimensions=dict(reward_dimensions),
         delay=max(0.0, observation.valid_at - (r.executed_at if r.executed_at is not None else r.proposed_at)),
         attribution_confidence=attribution.confidence,
-        note=f"derived from observation {observation.observation_id} → intervention {r.intervention_id}")
+        note=f"derived from observation {observation.observation_id} → intervention {r.intervention_id}",
+        source_observation_ids=(observation.observation_id,),
+        candidate_intervention_ids=attribution.candidate_ids,
+        selected_intervention_id=r.intervention_id)
     link = OutcomeLink(intervention_id=r.intervention_id, outcome_ref=observation.observation_id,
                        attribution_confidence=attribution.confidence, linked_at=observation.known_at)
     return ev, link
