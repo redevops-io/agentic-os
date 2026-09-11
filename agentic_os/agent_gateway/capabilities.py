@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, List, Optional, Protocol
 
-from .contracts import CapabilityKind, CapabilityManifest, DataClass, RiskTier
+from .contracts import ApprovalPolicy, CapabilityKind, CapabilityManifest, DataClass, RiskTier
 from .registry import CapabilityRegistry, HandlerResult
 
 
@@ -120,3 +120,50 @@ def build_read_registry(*, projections: Optional[ProjectionsReadPort] = None,
 READ_CAPABILITIES = (
     PROJECTS_LIST, PROJECTS_GET_STATUS, MISSIONS_LIST, MISSIONS_GET, MISSIONS_EXPLAIN,
     MISSIONS_PENDING, SOURCES_SEARCH, CRM_LOOKUP)
+
+
+# ── Phase 2: mission delegation + control (plan §4) ────────────────────────────────
+#: The flagship. An external agent delegates a GOAL; the Mission Runtime plans and executes it and
+#: gates its own side effects — so this itself is only a bounded write (starting a governed run).
+MISSIONS_DELEGATE_GOAL = CapabilityManifest(
+    "missions.delegate_goal",
+    "Delegate a goal; ReDevOps plans and runs it as a governed mission and returns a mission id. "
+    "Side effects inside the mission still require human approval.",
+    CapabilityKind.MISSION, permissions=("missions.delegate",), risk_tier=RiskTier.BOUNDED_WRITE,
+    side_effecting=True, approval_policy=ApprovalPolicy.IF_POLICY,
+    input_schema={"type": "object",
+                  "properties": {"goal": {"type": "string"},
+                                 "constraints": {"type": "array", "items": {"type": "string"}}},
+                  "required": ["goal"]},
+    output_schema=_obj_schema(mission_id="string", state="string"))
+MISSIONS_PAUSE = CapabilityManifest(
+    "missions.pause", "Pause (suspend) a running mission.", CapabilityKind.DIRECT,
+    permissions=("missions.control",), risk_tier=RiskTier.BOUNDED_WRITE, side_effecting=True,
+    approval_policy=ApprovalPolicy.IF_POLICY, input_schema=_obj_schema(mission_id="string"))
+MISSIONS_RESUME = CapabilityManifest(
+    "missions.resume", "Resume a paused mission.", CapabilityKind.DIRECT,
+    permissions=("missions.control",), risk_tier=RiskTier.BOUNDED_WRITE, side_effecting=True,
+    approval_policy=ApprovalPolicy.IF_POLICY, input_schema=_obj_schema(mission_id="string"))
+
+
+def register_mission_capabilities(registry: CapabilityRegistry, adapter, *,
+                                  include_reads: bool = True) -> CapabilityRegistry:
+    """Register the mission capabilities backed by a MissionRuntimeAdapter.
+
+    NOTE: the caller must also wire the same adapter as the gateway's ``mission`` port (that is what
+    fulfils the MISSION-kind ``missions.delegate_goal``); the reads + pause/resume are DIRECT
+    handlers over the adapter. ``submit_approval`` is deliberately NOT here — approving a mission
+    gate is a human control-plane action (Phase 5), not something the external agent self-serves.
+    """
+    if include_reads:
+        build_read_registry(missions=adapter, registry=registry)
+    registry.register(MISSIONS_DELEGATE_GOAL)      # MISSION kind → routed to gateway.mission
+    registry.register(MISSIONS_PAUSE,
+                      lambda req, env: _ok(adapter.pause(str(req.arguments.get("mission_id", "")),
+                                                         actor=req.principal.subject),
+                                           (DataClass.INTERNAL,)))
+    registry.register(MISSIONS_RESUME,
+                      lambda req, env: _ok(adapter.resume(str(req.arguments.get("mission_id", "")),
+                                                          actor=req.principal.subject),
+                                           (DataClass.INTERNAL,)))
+    return registry
