@@ -200,6 +200,8 @@ class SampleProjectionProvider:
         from agentic_os.outcome_learning import UtilityModel
         from agentic_os.crm_nba import DealSignals, next_best_action
         from agentic_os.outreach_nba import ProspectSignals, outreach_opportunity
+        from agentic_os.analytics_anomaly import MetricAnomaly, anomaly_opportunity
+        from agentic_os.wealth_drift import PlanAssumption, drift_opportunity
         from agentic_os.execution_risk import IsotonicCalibrator as _RiskCal
         from agentic_os.execution_risk import Mode as RiskMode
         from agentic_os.execution_risk import ProjectSignals, raw_risk
@@ -225,6 +227,19 @@ class SampleProjectionProvider:
 
         def outreach_source():
             opp = outreach_opportunity(ProspectSignals("Tasha@Nutrients.tech", fresh_trigger=True))
+            sel = select_action(opp, utility_fn=learn_fn)
+            return [] if sel.action.risk_tier == RiskTier.READ else [sel.action]
+
+        def analytics_source():
+            # a material adverse drop in a good metric (activation rate)
+            opp = anomaly_opportunity(MetricAnomaly("activation_rate", observed=0.38, baseline_mean=0.52,
+                                                    baseline_std=0.04, higher_is_better=True))
+            sel = select_action(opp, utility_fn=learn_fn)
+            return [] if sel.action.risk_tier == RiskTier.READ else [sel.action]
+
+        def wealth_source():
+            opp = drift_opportunity(PlanAssumption("Retirement 2045", "long-run inflation ~2%",
+                                                   assumed_value=2.0, current_value=3.6, tolerance=0.8))
             sel = select_action(opp, utility_fn=learn_fn)
             return [] if sel.action.risk_tier == RiskTier.READ else [sel.action]
 
@@ -287,7 +302,7 @@ class SampleProjectionProvider:
 
         summary = collect_priorities(
             [growth_source, support_source, risk_source, research_source, crm_nba_source,
-             outreach_source, direct_source],
+             outreach_source, analytics_source, wealth_source, direct_source],
             PriorityPolicy(attention_budget=5), now=now)
         out = summary.as_dict()
         out["basis"] = "sample"    # honest: example detectors/data, not a live deployment's signals
