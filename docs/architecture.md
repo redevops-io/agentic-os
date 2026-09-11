@@ -30,6 +30,20 @@ evidence and verifies the sealed plan fingerprint + epoch, failing closed (`Repl
 `re_evaluate()` is the explicit re-planning against *current* evidence. A typed `EVIDENCE_CHANGE` event
 lets Governance correlate evidence deltas against action trajectories.
 
+## Planes on top of the kernel
+
+Beyond the control-plane kernel and Mission Runtime, several planes make up the current surface:
+
+| Plane | File(s) | Responsibility |
+|---|---|---|
+| Integration Plane + Connect Compiler | [`agentic_os/integrations/`](../agentic_os/integrations/) | NL "describe an integration → confirm → compile to a governed connector" wizard; capability manifest; hosted OAuth; the productivity plane (Google Workspace / Microsoft 365 / LibreOffice / file formats); adapter execution under a `GovernedEnvelope`. Connector adapters live in `redevops-connectors`. |
+| Governed Agent Gateway | [`agentic_os/agent_gateway/`](../agentic_os/agent_gateway/) | the governed **northbound** path for *external* agents (Claude/ChatGPT/Cursor/custom). MCP is the first protocol adapter. One path: identity → permissions → risk → approval → `GovernedEnvelope` → invoke (a governed capability, or a delegated Mission) → egress policy → audit. |
+| Projects + Sidekick | [`agentic_os/projects_api.py`](../agentic_os/projects_api.py), [`sidekick_assistant.py`](../agentic_os/sidekick_assistant.py), [`stack_knowledge.py`](../agentic_os/stack_knowledge.py) | the human control plane (missions/workflows/attention/approvals/audit) + the conversational Mission Supervisor and in-product Q&A expert (curated + sourced KB with a grounded local-model fallback). |
+| Sources | [`agentic_os/sources.py`](../agentic_os/sources.py) + `sources_*.py` | governed source connectors (LocalFiles, Google Drive, OneDrive, Postgres, RAG) — the read/ingest side of the Integration Plane. |
+| Permissions | [`agentic_os/permissions.py`](../agentic_os/permissions.py) | fine-grained access control (row scope + column mask); see [permissions.md](permissions.md). |
+
+The public-facing runtime taxonomy on redevops.io — **Discovery Runtime · Execution Planner · Mission Runtime · Context Runtime · Governance Plane · agent-harness · ReDevOps RAG** — is the same machinery described from the operator's point of view; the Mission Runtime + planner + context/router pieces above are where it lives in this repo.
+
 ## Request flow
 
 1. An event (new signup, security alert, scheduled tick) starts a **workflow** (`workflows.py`)

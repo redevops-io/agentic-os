@@ -1,4 +1,4 @@
-"""Mission Runtime — the kernel of the Agentic OS (Whitepaper v5).
+"""Mission Runtime — the kernel of the Agentic OS.
 
 Layered like a database engine (see docs/architecture.md):
 
