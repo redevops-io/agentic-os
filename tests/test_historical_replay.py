@@ -5,15 +5,17 @@ import pytest
 
 from agentic_os.agent_gateway.contracts import RiskTier
 from agentic_os.historical_replay import (
-    DecisionPoint, LeakageError, ReplayReport, as_of, assert_no_leakage, audit_leakage, is_knowable_at,
-    replay)
-from agentic_os.observation import Observation
+    DecisionPoint, LeakageError, ReplayReport, admissible_for_a0, as_of, assert_no_leakage,
+    audit_leakage, is_knowable_at, replay)
+from agentic_os.observation import KnownAtQuality, Observation
 from agentic_os.priority_engine import DecisionOpportunity, InterventionCandidate
 
+_OBSERVED = KnownAtQuality.OBSERVED
 
-def _obs(oid, subject, valid_at, known_at):
+
+def _obs(oid, subject, valid_at, known_at, quality=KnownAtQuality.OBSERVED):
     return Observation(observation_id=oid, source="crm", kind="crm.event", subject=subject,
-                       valid_at=valid_at, known_at=known_at)
+                       valid_at=valid_at, known_at=known_at, known_at_quality=quality)
 
 
 # ── the leakage gate (§4.1) ───────────────────────────────────────────────────────────
@@ -34,6 +36,19 @@ def test_assert_no_leakage_raises_on_a_future_feature():
     leaky = clean + [_obs("late", "Acme", valid_at=10, known_at=150)]
     with pytest.raises(LeakageError):
         assert_no_leakage(leaky, decision_time=100)
+
+
+def test_unknown_known_at_quality_fails_closed_for_a0():
+    obs = [
+        _obs("solid", "Acme", 10, 10, quality=KnownAtQuality.OBSERVED),
+        _obs("derived", "Acme", 10, 10, quality=KnownAtQuality.RECONSTRUCTED),
+        _obs("snapshot", "Acme", 10, 10, quality=KnownAtQuality.UNKNOWN),   # only valid_at defensible
+    ]
+    # A0 default (require_quality) admits OBSERVED + RECONSTRUCTED, EXCLUDES UNKNOWN (fail-closed)
+    assert {o.observation_id for o in as_of(obs, 100, subject="Acme")} == {"solid", "derived"}
+    assert not admissible_for_a0(obs[2])
+    # exploratory mode (require_quality=False) may include the snapshot — but that's never A0
+    assert len(as_of(obs, 100, subject="Acme", require_quality=False)) == 3
 
 
 def test_audit_leakage_reports_without_raising():
@@ -62,8 +77,8 @@ def _builder(subject, obs):
 
 def test_replay_scores_agreement_and_flags_broken_projections():
     obs = [
-        Observation("e1", "crm", "crm.engaged", "Acme", valid_at=10, known_at=10),
-        Observation("e2", "crm", "crm.engaged", "Beta", valid_at=10, known_at=10),
+        Observation("e1", "crm", "crm.engaged", "Acme", valid_at=10, known_at=10, known_at_quality=_OBSERVED),
+        Observation("e2", "crm", "crm.engaged", "Beta", valid_at=10, known_at=10, known_at_quality=_OBSERVED),
     ]
     points = [
         DecisionPoint(decision_time=50, subject="Acme", known_good_action="send_proposal"),
@@ -79,7 +94,7 @@ def test_replay_scores_agreement_and_flags_broken_projections():
 
 def test_replay_reconstructs_as_of_state_no_future_leaks_in():
     # 'engaged' becomes known only AFTER the decision → at T the opportunity must NOT fire
-    obs = [Observation("late", "crm", "crm.engaged", "Acme", valid_at=10, known_at=999)]
+    obs = [Observation("late", "crm", "crm.engaged", "Acme", valid_at=10, known_at=999, known_at_quality=_OBSERVED)]
     rep = replay(obs, [DecisionPoint(decision_time=50, subject="Acme", known_good_action="send_proposal")],
                  _builder)
     assert rep.broken_projections == 1 and rep.evaluated == 0      # the future signal was invisible as-of T

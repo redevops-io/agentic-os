@@ -298,6 +298,11 @@ class OutcomeEvent:
     reward_dimensions: Mapping[str, float] = field(default_factory=dict)  # e.g. {"reply":1,"unsub":0}
     delay: float = 0.0                       # time between the action and the observed outcome
     attribution_confidence: float = 1.0      # 0..1, how confidently the outcome is attributed to the action
+    # causal/evidence-graph edges (populated when an observation is correlated to interventions) — so a
+    # later EXPLAIN can trace WHY a learned utility moved, not just join two logs that share ids.
+    source_observation_ids: Tuple[str, ...] = ()      # the observation(s) this outcome was read from
+    candidate_intervention_ids: Tuple[str, ...] = ()  # interventions that could plausibly explain it
+    selected_intervention_id: str = ""                # the one it was attributed to
 
     def scalar_reward(self, weights: Optional[Mapping[str, float]] = None) -> float:
         """Collapse the reward to a single attribution-weighted number for ranking/learning. Uses the

@@ -88,3 +88,14 @@ def test_derive_outcome_builds_event_and_link():
     assert link.intervention_id == "iv1" and link.outcome_ref == "oc-1"
     # scalar reward is attribution-weighted
     assert ev.scalar_reward() == pytest.approx(1.0 * att.confidence)
+    # causal/evidence-graph edges are populated (not just shared ids)
+    assert ev.source_observation_ids == ("oc-1",)
+    assert ev.selected_intervention_id == "iv1" and "iv1" in ev.candidate_intervention_ids
+
+
+def test_causality_edges_record_competing_candidates():
+    interventions = [_rec("iv-old", "Acme", executed_at=0.0), _rec("iv-near", "Acme", executed_at=90 * 60)]
+    att = correlate(_obs("Acme", valid_at=91 * 60), interventions, half_life_seconds=2 * HOUR)
+    ev, _ = derive_outcome(_obs("Acme", valid_at=91 * 60), att, reward_dimensions={"reply": 1.0})
+    assert ev.selected_intervention_id == "iv-near"
+    assert set(ev.candidate_intervention_ids) == {"iv-near", "iv-old"}   # the competitor is on the graph

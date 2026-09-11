@@ -4,12 +4,14 @@ from __future__ import annotations
 import pytest
 
 from agentic_os.observation import (
-    EvidenceChange, Observation, ObservationIngestor, StateDelta)
+    EvidenceChange, KnownAtQuality, Observation, ObservationIngestor, StateDelta)
 
 
 def _crm_mapper(ev):
     o = Observation(observation_id=ev["id"], source="crm", kind="crm.reply", subject=ev["account"],
-                    valid_at=ev["valid_at"], known_at=ev["known_at"], payload=ev)
+                    valid_at=ev["valid_at"], known_at=ev["known_at"], payload=ev,
+                    ingested_at=ev.get("ingested_at", ev["known_at"]),
+                    known_at_quality=KnownAtQuality.OBSERVED)
     deltas = [StateDelta(entity=ev["account"], field="last_reply_at", old=None, new=ev["valid_at"],
                          valid_at=ev["valid_at"], known_at=ev["known_at"], source="crm")]
     changes = [EvidenceChange(entity=ev["account"], summary="customer replied",
@@ -25,9 +27,11 @@ def test_ingest_maps_once_and_fans_out_to_every_sink():
            .add_sink(lambda o, d, c: seen.append(("worldstate", len(d))))
            .add_sink(lambda o, d, c: seen.append(("attribution", o.subject))))
     obs, deltas, changes = ing.ingest("crm", {"id": "o1", "account": "Acme",
-                                              "valid_at": 100.0, "known_at": 101.0})
+                                              "valid_at": 100.0, "known_at": 101.0, "ingested_at": 104.0})
     assert obs.kind == "crm.reply" and obs.subject == "Acme"
     assert obs.valid_at == 100.0 and obs.known_at == 101.0          # bi-temporal preserved
+    assert obs.ingested_at == 104.0                                 # operational provenance distinct
+    assert obs.known_at_quality is KnownAtQuality.OBSERVED
     assert len(deltas) == 1 and len(changes) == 1
     assert seen == [("discovery", "crm.reply"), ("worldstate", 1), ("attribution", "Acme")]
 
