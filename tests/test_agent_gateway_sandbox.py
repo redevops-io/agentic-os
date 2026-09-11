@@ -1,74 +1,94 @@
-"""Action sandbox — Phase 6 (plan §8)."""
-from __future__ import annotations
+"""Action sandbox — Phase 6, on the canonical containment seam (plan §8).
 
-import sys
+The gateway's ``sandbox.execute`` routes to an ``agentic_os.mission.executor.Sandbox`` — the SAME
+contract the mission plane and the Enterprise SubprocessSandbox use — not a parallel sandbox. Tested
+two ways: the gateway wiring against a fake Sandbox, and a real run through the open
+LocalContainmentSandbox (which executes in a confined child, proving the containment path).
+"""
+from __future__ import annotations
 
 from agentic_os.overlays import Principal
 from agentic_os.agent_gateway import (
-    AgentGateway, GatewayPrincipal, GatewayRequest, GatewayStatus, NullSandbox, SandboxAction,
-    SandboxSpec, SubprocessSandbox, register_sandbox_capability)
+    AgentGateway, GatewayPrincipal, GatewayRequest, GatewayStatus, register_sandbox_capability)
 from agentic_os.agent_gateway.registry import CapabilityRegistry
 
 
-PY = sys.executable
+class _FakeSandbox:
+    """Satisfies executor.Sandbox by shape: invoke(operator, capability, inputs, key, *, isolation)."""
+    def __init__(self): self.calls = []
+    def invoke(self, operator, capability, inputs, idempotency_key, *, isolation="sandbox", grants=None):
+        self.calls.append({"operator": operator, "capability": capability, "inputs": inputs,
+                           "isolation": isolation})
+        return {"ran": capability, "inputs": inputs, "isolation": isolation}
 
 
-def test_null_sandbox_fails_closed():
-    obs = NullSandbox().execute(SandboxSpec(argv=(PY, "-c", "print(1)")), SandboxAction())
-    assert obs.ok is False and "no sandbox runtime configured" in obs.error
+class _Approve:
+    def is_satisfied(self, request, manifest): return True
 
 
-def test_subprocess_sandbox_denies_unallowlisted_commands():
-    sbx = SubprocessSandbox(allow_commands=frozenset())          # deny-all by default
-    obs = sbx.execute(SandboxSpec(argv=(PY, "-c", "print(1)")), SandboxAction())
-    assert obs.ok is False and "not allowlisted" in obs.error
+def _gp():
+    return GatewayPrincipal(Principal("agent", "service", (), "acme"))
 
 
-def test_subprocess_sandbox_runs_allowlisted_command():
-    sbx = SubprocessSandbox(allow_commands=frozenset({PY}))
-    obs = sbx.execute(SandboxSpec(argv=(PY, "-c", "print('hi')")), SandboxAction())
-    assert obs.ok and obs.exit_code == 0 and obs.stdout.strip() == "hi"
-    assert sbx.events[-1]["event"] == "executed"                 # complete event log
+def _gw(sandbox, *, approvals=None):
+    reg = register_sandbox_capability(CapabilityRegistry(), sandbox)
+    kw = {"registry": reg, "authorize": lambda p, perm: perm == "sandbox.execute"}
+    if approvals is not None:                         # else keep the gateway's deny-by-default store
+        kw["approvals"] = approvals
+    return AgentGateway(**kw)
 
 
-def test_subprocess_sandbox_has_no_ambient_environment():
-    sbx = SubprocessSandbox(allow_commands=frozenset({PY}))
-    obs = sbx.execute(SandboxSpec(argv=(PY, "-c", "import os;print(os.environ.get('HOME','none'))"),
-                                  env={}), SandboxAction())
-    assert obs.ok and obs.stdout.strip() == "none"               # HOME not injected ⇒ no ambient creds
+# ── the capability is the strictest gate ──────────────────────────────────────────
+def test_sandbox_execute_is_critical_and_mandatory_approval():
+    from agentic_os.agent_gateway.sandbox import SANDBOX_EXECUTE
+    from agentic_os.agent_gateway import RiskTier, ApprovalPolicy
+    assert SANDBOX_EXECUTE.risk_tier is RiskTier.CRITICAL
+    assert SANDBOX_EXECUTE.effective_approval_policy is ApprovalPolicy.MANDATORY
 
 
-def test_subprocess_sandbox_enforces_wall_time():
-    sbx = SubprocessSandbox(allow_commands=frozenset({PY}))
-    obs = sbx.execute(SandboxSpec(argv=(PY, "-c", "import time;time.sleep(5)"), wall_time_s=0.3),
-                      SandboxAction())
-    assert obs.ok is False and "wall_time exceeded" in obs.error
+def test_execute_gates_on_approval_before_running():
+    fake = _FakeSandbox()
+    gw = _gw(fake)                                    # no approvals
+    r = gw.invoke(GatewayRequest(_gp(), "sandbox.execute",
+                                 {"capability": "pkg.mod:fn", "inputs": {"a": 1}}))
+    assert r.status is GatewayStatus.PENDING_APPROVAL and fake.calls == []   # never ran
 
 
-def test_subprocess_sandbox_collects_declared_artifacts():
-    sbx = SubprocessSandbox(allow_commands=frozenset({PY}))
-    obs = sbx.execute(SandboxSpec(argv=(PY, "-c", "open('out.txt','w').write('result')")),
-                      SandboxAction(collect=("out.txt",)))
-    assert obs.ok and obs.artifacts["out.txt"] == "result"
+# ── routes through the canonical Sandbox.invoke ────────────────────────────────────
+def test_execute_routes_to_the_sandbox_invoke_contract():
+    fake = _FakeSandbox()
+    gw = _gw(fake, approvals=_Approve())
+    r = gw.invoke(GatewayRequest(_gp(), "sandbox.execute",
+                                 {"capability": "pkg.mod:fn", "inputs": {"a": 1}, "isolation": "strict"}))
+    assert r.status is GatewayStatus.OK
+    assert fake.calls and fake.calls[0]["capability"] == "pkg.mod:fn"
+    assert fake.calls[0]["inputs"] == {"a": 1} and fake.calls[0]["isolation"] == "strict"
 
 
-def test_input_file_path_escape_is_blocked():
-    sbx = SubprocessSandbox(allow_commands=frozenset({PY}))
-    obs = sbx.execute(SandboxSpec(argv=(PY, "-c", "print(1)")),
-                      SandboxAction(input_files={"../escape.txt": "x"}))
-    assert obs.ok is False and "path escape blocked" in obs.error
+def test_execute_requires_a_module_attr_target():
+    fake = _FakeSandbox()
+    gw = _gw(fake, approvals=_Approve())
+    r = gw.invoke(GatewayRequest(_gp(), "sandbox.execute", {"capability": "not-a-target"}))
+    assert r.status is GatewayStatus.ERROR and "module:attr" in r.error
+    assert fake.calls == []
 
 
-def test_sandbox_execute_capability_is_mandatory_gated():
-    gp = GatewayPrincipal(Principal("agent", "service", (), "acme"))
-    reg = register_sandbox_capability(CapabilityRegistry(), SubprocessSandbox(frozenset({PY})))
-    gw = AgentGateway(registry=reg, authorize=lambda p, perm: perm == "sandbox.execute")
-    # CRITICAL + MANDATORY approval ⇒ pending without approval, no execution
-    pending = gw.invoke(GatewayRequest(gp, "sandbox.execute", {"argv": [PY, "-c", "print(1)"]}))
-    assert pending.status is GatewayStatus.PENDING_APPROVAL
+def test_a_containment_failure_is_a_clean_error_not_a_crash():
+    class _Boom:
+        def invoke(self, *a, **k): raise RuntimeError("contained_failure(rc=137)")
+    gw = _gw(_Boom(), approvals=_Approve())
+    r = gw.invoke(GatewayRequest(_gp(), "sandbox.execute", {"capability": "pkg.mod:fn"}))
+    assert r.status is GatewayStatus.ERROR and "contained_failure" in r.error
 
-    class _Approve:
-        def is_satisfied(self, request, manifest): return True
-    gw.approvals = _Approve()
-    ok = gw.invoke(GatewayRequest(gp, "sandbox.execute", {"argv": [PY, "-c", "print('go')"]}))
-    assert ok.status is GatewayStatus.OK and ok.output["stdout"].strip() == "go"
+
+# ── a real run through the open LocalContainmentSandbox (default backend) ──────────
+def test_default_backend_runs_a_capability_in_real_containment():
+    # default sandbox = LocalContainmentSandbox; the target executes in a confined child (scrubbed
+    # env, rlimits), proving the gateway shares the runtime's actual containment path.
+    reg = register_sandbox_capability(CapabilityRegistry())      # no sandbox ⇒ the open default
+    gw = AgentGateway(registry=reg, authorize=lambda p, perm: perm == "sandbox.execute",
+                      approvals=_Approve())
+    r = gw.invoke(GatewayRequest(_gp(), "sandbox.execute",
+                                 {"capability": "agentic_os.agent_gateway.sandbox:echo_capability",
+                                  "inputs": {"x": 1}}))
+    assert r.status is GatewayStatus.OK and r.output == {"echo": {"x": 1}}
