@@ -17,6 +17,9 @@ from .gateway import (
     AgentGateway, ApprovalStore, AuditSink, BudgetGuard, EgressPolicy, InMemoryAuditSink,
     InMemoryIdempotencyStore, IdempotencyStore, MissionDelegation, MissionPort)
 from .registry import CapabilityHandler, CapabilityRegistry, HandlerResult
+from .auth import DevTokenVerifier, GatewayAuthError, TokenVerifier, bearer_token
+from .capabilities import READ_CAPABILITIES, build_read_registry
+from .protocols import McpGatewayBridge, mcp_tool_descriptors
 
 __all__ = [
     "CONTRACT_VERSION",
@@ -29,4 +32,8 @@ __all__ = [
     # gateway + seams
     "AgentGateway", "MissionPort", "MissionDelegation", "EgressPolicy", "ApprovalStore",
     "BudgetGuard", "AuditSink", "IdempotencyStore", "InMemoryAuditSink", "InMemoryIdempotencyStore",
+    # auth
+    "TokenVerifier", "DevTokenVerifier", "GatewayAuthError", "bearer_token",
+    # read capabilities + MCP adapter
+    "build_read_registry", "READ_CAPABILITIES", "McpGatewayBridge", "mcp_tool_descriptors",
 ]
