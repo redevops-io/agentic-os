@@ -28,7 +28,8 @@ from .approvals import ApprovalRequest, InboxApprovalStore, UndoWindow
 from .sandbox import (
     NullSandbox, SANDBOX_EXECUTE, SandboxAction, SandboxObservation, SandboxRuntime, SandboxSpec,
     SubprocessSandbox, register_sandbox_capability)
-from .protocols import MCPEndpoint, McpGatewayBridge, RestGatewayAdapter, mcp_tool_descriptors
+from .protocols import (
+    MCPEndpoint, McpGatewayBridge, RestGatewayAdapter, build_fastmcp_server, mcp_tool_descriptors)
 
 __all__ = [
     "CONTRACT_VERSION",
@@ -61,4 +62,6 @@ __all__ = [
     "SubprocessSandbox", "SANDBOX_EXECUTE", "register_sandbox_capability",
     # REST adapter (Phase 7)
     "RestGatewayAdapter",
+    # FastMCP Streamable-HTTP transport shell (optional [mcp] extra)
+    "build_fastmcp_server",
 ]

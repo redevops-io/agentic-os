@@ -47,6 +47,11 @@ google = ["agentic-os[projects]"]         # Gmail, Google Drive/Calendar (Google
 microsoft = ["agentic-os[projects]"]      # Outlook, OneDrive, Teams (Microsoft 365)
 slack = ["agentic-os[projects]"]          # Slack notifications, approvals, threads
 office = ["agentic-os[google]", "agentic-os[microsoft]"]  # both productivity suites at once
+# The Governed Agent Gateway's FastMCP Streamable-HTTP transport (external agents connect over
+# MCP + OAuth). Optional: the gateway core + its REST adapter + the transport-agnostic MCPEndpoint
+# need nothing extra; this pulls FastMCP for a turnkey Streamable-HTTP server. See
+# agentic_os.agent_gateway.protocols.mcp.build_fastmcp_server.
+mcp = ["fastmcp>=4.0"]
 
 [project.scripts]
 agentic-os = "agentic_os.cli:main"

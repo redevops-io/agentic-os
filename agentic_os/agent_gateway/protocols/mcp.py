@@ -80,13 +80,61 @@ class MCPEndpoint:
         return {"error": {"code": "method_not_found", "message": f"unknown method {method}"}}
 
 
-def build_fastmcp_server(bridge: McpGatewayBridge, *, name: str = "redevops-agent-gateway"):
-    """Optional: a FastMCP Streamable-HTTP server wired to the bridge. Imports ``fastmcp`` lazily —
-    call this only where that dependency is installed (it is not a core requirement). The server's
-    auth middleware must place the verified bearer token where ``token_getter`` can read it."""
-    from fastmcp import FastMCP  # noqa: F401  (lazy; optional dependency)
+def build_fastmcp_server(gateway: AgentGateway, verifier: TokenVerifier, *,
+                         name: str = "redevops-agent-gateway"):
+    """A FastMCP Streamable-HTTP server over the gateway (plan §10). Optional — imports ``fastmcp``
+    lazily (install the ``mcp`` extra); the core package needs no such dependency.
 
-    raise NotImplementedError(
-        "wire FastMCP's Streamable-HTTP transport + OAuth resource-server auth to bridge.list_tools/"
-        "call_tool in the deployment shell; Phase 1b provides the OAuth 2.1 + PKCE server. The pure "
-        "bridge above is the tested contract.")
+    Wiring: a FastMCP ``TokenVerifier`` wraps our :class:`TokenVerifier` (bearer → GatewayPrincipal),
+    so every request is authenticated; each registered capability is exposed as a tool that routes
+    through the gateway's one governed path; and a middleware filters ``tools/list`` to the
+    principal-visible set so a hidden capability is never enumerated. Serve it with
+    ``server.run(transport="http")`` (Streamable-HTTP) or ``run_async``.
+
+    Note: each tool takes a single ``arguments`` object (a dynamic gateway can't publish a static
+    per-field signature through FastMCP); the transport-agnostic :class:`MCPEndpoint` and the REST
+    adapter pass flat arguments. The dispatch + governance semantics are those of the (tested)
+    :class:`McpGatewayBridge` this delegates to.
+    """
+    from fastmcp import FastMCP
+    from fastmcp.server.auth import AccessToken, TokenVerifier as _FastMCPTokenVerifier
+    from fastmcp.server.dependencies import get_access_token
+    from fastmcp.server.middleware import Middleware
+    from fastmcp.tools import Tool
+
+    bridge = McpGatewayBridge(gateway, verifier)
+
+    class _Verifier(_FastMCPTokenVerifier):
+        async def verify_token(self, token: str):
+            gp = verifier.verify(token)
+            if gp is None:
+                return None
+            return AccessToken(token=token, client_id=gp.client_id, scopes=list(gp.scopes),
+                               subject=gp.subject,
+                               claims={"tenant": gp.tenant, "workspace": gp.effective_workspace})
+
+    server = FastMCP(name, auth=_Verifier())
+
+    def _make_tool(capability: str):
+        async def _tool(arguments: Optional[dict] = None):
+            at = get_access_token()
+            return bridge.call_tool(at.token if at else "", capability, arguments or {})
+        _tool.__name__ = capability.replace(".", "_")
+        return _tool
+
+    for manifest in gateway.registry.all():
+        server.add_tool(Tool.from_function(_make_tool(manifest.name), name=manifest.name,
+                                           description=manifest.description))
+
+    class _PrincipalFilter(Middleware):
+        async def on_list_tools(self, context, call_next):
+            tools = await call_next(context)
+            at = get_access_token()
+            gp = verifier.verify(at.token) if at else None
+            if gp is None:
+                return []
+            visible = {m.name for m in gateway.registry.visible_for(gp, gateway.authorize)}
+            return [t for t in tools if t.name in visible]
+
+    server.add_middleware(_PrincipalFilter())
+    return server
