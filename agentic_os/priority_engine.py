@@ -388,6 +388,24 @@ def _clamp_local(x: float) -> float:
     return max(0.0, min(1.0, x))
 
 
+def from_frontier_choice(choice, *, source_app: str = "learning", subject_label: str = "") -> Optional[InterventionCandidate]:
+    """Knowledge Frontier → an intervention candidate. A TEACH/REVIEW choice becomes a low-risk
+    (READ-tier) candidate — recommending what to learn/teach next is safe and can run automatically;
+    a STOP yields none. ``information_value`` carries the frontier priority (structural gain)."""
+    action = getattr(getattr(choice, "action", None), "value", "")
+    cid = getattr(choice, "concept_id", None)
+    if action not in ("teach", "review") or cid is None:
+        return None
+    val = _clamp_local(float(getattr(choice, "priority", 0.0)))
+    who = f" for {subject_label}" if subject_label else ""
+    return InterventionCandidate(
+        source_app=source_app, subject=f"next concept{who}: {cid}",
+        proposed_action=getattr(choice, "rationale", "") or f"{action.title()} '{cid}'",
+        expected_value=val, confidence=0.8, urgency=0.3, execution_cost=0.1,
+        risk_tier=RiskTier.READ, information_value=val,
+        required_capabilities=("learning.advance",), candidate_id=f"learning:{cid}")
+
+
 def _demo() -> str:
     """A runnable end-to-end example (real engine, EXAMPLE data). ``python -m agentic_os.priority_engine``."""
     hot = InterventionCandidate(

@@ -763,23 +763,27 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
             "A/B/C.'"),
         source="Roadmap — Knowledge Debt Radar (not yet shipped)"),
     KnowledgeEntry(
-        id="learnerbot-knowledge-frontier",
+        id="knowledge-frontier",
         topic="Proactive intelligence (roadmap)",
         keywords=("knowledge frontier", "learnerbot", "learner bot", "socratic", "concept map",
                   "what to learn next", "next concept", "mastery", "misconception",
-                  "learning frontier"),
-        question="How would LearnerBot decide what to teach next (Knowledge Frontier)?",
+                  "learning frontier", "what to teach next", "onboarding path", "skill gap"),
+        question="How does the stack decide what to learn or teach next (Knowledge Frontier)?",
         answer=(
-            "That's the planned LearnerBot direction (not shipped yet): build the map before "
-            "traversing every branch. Instead of long sequences of disconnected facts, it would model "
-            "understanding as a hierarchy (big picture → systems → concepts → mechanisms → detailed "
-            "facts) and track each concept's state — not encountered, exposed, probably understood, "
-            "demonstrated, uncertain, misconception, retention-at-risk or mastered. The Knowledge "
-            "Frontier would pick the next concept by structural importance, prerequisites, "
-            "uncertainty, misconception risk, expected information gain, retention need and your "
-            "objective — inside a Socratic loop that diagnoses, scaffolds and verifies. It optimises "
-            "demonstrated mastery and retention, not time-on-app."),
-        source="Roadmap — LearnerBot Knowledge Frontier (Phase 5; not yet shipped)"),
+            "The Knowledge Frontier kernel ships today (validated on controlled synthetic learners, "
+            "not yet on real ones) — a DOMAIN-NEUTRAL engine, not a tutoring product. 'Establish the "
+            "map before traversing every branch': it models a body of knowledge as a prerequisite "
+            "graph of concepts, tracks each concept's state (not-encountered, exposed, uncertain, "
+            "probably-understood, misconception, retention-at-risk, mastered), and picks the next "
+            "concept to advance by structural importance, prerequisites met, uncertainty, "
+            "misconception risk and retention need — optimising demonstrated mastery, not content "
+            "consumed. On the synthetic benchmark it reaches far more mastery per teaching step than "
+            "naive orderings, chiefly by never wasting a step on a concept whose prerequisites aren't "
+            "ready. That proves the selection LOGIC, NOT real-world pedagogy. It's a 'learner'-neutral "
+            "primitive (a person, a new hire onboarding, an agent building competence, a team closing "
+            "a skill gap) and is unrelated to the separate learnerbot.ai product."),
+        source="Shipped kernel: agentic_os/knowledge_frontier.py + knowledge_frontier_backtest.py "
+               "(synthetic-validated) · domain-neutral, distinct from the separate learnerbot.ai product"),
     KnowledgeEntry(
         id="analytics-anomaly-action",
         topic="Proactive intelligence (roadmap)",
