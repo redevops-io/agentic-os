@@ -108,6 +108,7 @@ class ProjectionProvider(Protocol):
     def mission_detail(self, project_id: str, mission_id: str) -> dict: ...
     def workflows(self, project_id: str) -> List[dict]: ...
     def attention(self, project_id: str) -> List[dict]: ...
+    def priorities(self, project_id: str) -> dict: ...
     def discovery(self, project_id: str) -> List[dict]: ...
     def apps(self, project_id: str) -> List[dict]: ...
     def connect_app(self, provider: str) -> dict: ...
@@ -180,6 +181,60 @@ class SampleProjectionProvider:
              "reason": "Stripe documentation", "consequence": "May affect the Customer Refund workflow",
              "available_actions": ["Review"], "priority": 60, **_prov("discovery", "finding:918")},
         ]
+
+    def priorities(self, _pid: str) -> dict:
+        """The Priority Engine's cross-app 'what needs me?' surface (plan §2), driven by the SHIPPED
+        detectors over this sample's example scenario. Growth trend scoring and Support follow-up
+        produce real candidates; the refund approval and KB cleanup are direct candidates. A live
+        deployment swaps in a provider whose sources read real data — hence ``basis`` is honest about
+        what fed this ('sample' here, not a real deployment's signals)."""
+        import time
+        from agentic_os.agent_gateway.contracts import RiskTier
+        from agentic_os.priority_engine import (
+            InterventionCandidate, PriorityPolicy, collect_priorities, from_support_thread,
+            from_trend_report)
+        from agentic_os.support_autonomy import FollowUpPolicy, ThreadState, qualify_lead
+        from agentic_os.trend_intelligence import Mode, TrendCandidate, assess
+        now = time.time()
+
+        def growth_source():
+            rising = [1, 1.5, 2.3, 3.6, 5.6, 8.7, 13.5, 21.0]
+            report = assess(TrendCandidate(
+                entity="agentic RAG for support",
+                series={s: list(rising) for s in ("reddit", "youtube", "search")},
+                creator_outliers=(8.0, 6.0), question_growth=1.0, geo_count=4), mode=Mode.EXPLORATORY)
+            c = from_trend_report(report)
+            return [c] if c else []
+
+        def support_source():
+            lead = qualify_lead(message="what's your pricing for the team plan?", has_email=True,
+                                has_company=True, message_count=3)
+            thread = ThreadState(last_inbound_at=now - 4000, status="awaiting_customer")
+            c = from_support_thread(thread, FollowUpPolicy(clock=lambda: now).assess(thread), lead)
+            return [c] if c else []
+
+        def direct_source():
+            return [
+                InterventionCandidate(
+                    source_app="CRM", subject="Sarah Chen — duplicate charge",
+                    proposed_action="Approve the $129 Stripe refund", expected_value=0.7,
+                    confidence=0.95, urgency=0.8, risk_tier=RiskTier.CRITICAL, reversibility=0.2,
+                    required_capabilities=("billing.refund.execute",), candidate_id="crm:refund:4821"),
+                InterventionCandidate(
+                    source_app="Knowledge", subject="Refund-policy article is stale",
+                    proposed_action="Draft a corrected KB article for review", expected_value=0.4,
+                    confidence=0.72, urgency=0.3, risk_tier=RiskTier.READ, candidate_id="kb:refund-policy"),
+                InterventionCandidate(
+                    source_app="CRM", subject="MaybeCorp — faint signal", proposed_action="Reach out",
+                    expected_value=0.5, confidence=0.3, risk_tier=RiskTier.CONSEQUENTIAL,
+                    candidate_id="crm:maybe"),
+            ]
+
+        summary = collect_priorities([growth_source, support_source, direct_source],
+                                     PriorityPolicy(attention_budget=3), now=now)
+        out = summary.as_dict()
+        out["basis"] = "sample"    # honest: example detectors/data, not a live deployment's signals
+        return out
 
     def discovery(self, _pid: str) -> List[dict]:
         return [
@@ -565,12 +620,33 @@ def apps_from_setup_guides(connected: Optional[Set[str]] = None) -> Optional[Lis
     return out
 
 
-def sidekick_reply(ctx: Dict[str, Any], text: str) -> Dict[str, Any]:
+def _is_priorities_query(t: str) -> bool:
+    """An ACTIONABLE 'what needs me?' — wants the live prioritised surface, not an explanation of the
+    feature. Explanatory phrasings ('how does…', 'what is…') fall through to the KB roadmap explainer."""
+    if any(x in t for x in ("how does", "how do", "what is", "what's the", "explain", "roadmap")):
+        return False
+    return any(k in t for k in (
+        "what needs me", "what needs my attention", "what should i work on", "what should i do next",
+        "on my plate", "anything need me", "anything need my attention", "what needs doing",
+        "what do i need to look at", "my priorities", "what needs approval", "what needs my sign"))
+
+
+def sidekick_reply(ctx: Dict[str, Any], text: str,
+                   provider: Optional["ProjectionProvider"] = None) -> Dict[str, Any]:
     """A governed conversational stand-in honouring the context contract — 'this' resolves to
     ``ctx.objectRef``. The real Sidekick compiles requests through the wizard + Mission Runtime;
     this keeps the surface live meanwhile."""
     t = (text or "").lower()
     obj = ctx.get("objectRef") or "this"
+    # Cross-app attention surface (plan §2): an actionable 'what needs me?' returns the live Priority
+    # Engine surface. Checked before the KB so the real list wins over the roadmap explainer.
+    if provider is not None and _is_priorities_query(t):
+        fn = getattr(provider, "priorities", None)
+        if fn is not None:
+            surf = fn(ctx.get("project") or "customer-ops")
+            return {"text": surf.get("summary", ""), "topic": "Priorities",
+                    "items": surf.get("surfaced", []),
+                    "actions": [{"label": "Open Projects", "kind": "navigate", "ref": "attention"}]}
     if "two approver" in t or "$500" in t:
         return {"text": f"Proposed on {obj}: refunds above $500 require two approvers. Governed policy change — confirm to commit.",
                 "actions": [{"label": "Confirm", "kind": "commit"}]}
@@ -736,6 +812,16 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     def _attention(project_id: str) -> List[dict]:
         return prov.attention(project_id)
 
+    @app.get("/api/projects/{project_id}/priorities")
+    def _priorities(project_id: str) -> dict:
+        # The Priority Engine's cross-app 'what needs me?' surface. Optional on the provider — a
+        # provider without it yields the honest empty state rather than an error.
+        fn = getattr(prov, "priorities", None)
+        if fn is None:
+            return {"summary": "Nothing needs you right now.", "surfaced": [], "deferred": [],
+                    "handled_automatically": 0, "abstained": 0, "basis": "unavailable"}
+        return fn(project_id)
+
     @app.get("/api/projects/{project_id}/discovery")
     def _discovery(project_id: str) -> List[dict]:
         return prov.discovery(project_id)
@@ -799,7 +885,7 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
 
     @app.post("/api/sidekick")
     def _sidekick(req: _SidekickReq) -> dict:
-        return sidekick_reply(req.ctx, req.text)
+        return sidekick_reply(req.ctx, req.text, prov)
 
     @app.get("/api/sidekick/help")
     def _sidekick_help() -> List[dict]:

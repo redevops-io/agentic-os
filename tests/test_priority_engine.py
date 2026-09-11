@@ -205,6 +205,35 @@ def test_support_adapter_respects_opt_out():
     assert from_support_thread(opted, pol.assess(opted), qualify_lead(message="hi")) is None
 
 
+def test_collect_priorities_gathers_from_many_sources_including_empty_ones():
+    from agentic_os.priority_engine import collect_priorities
+
+    def growth():
+        return [_cand(source_app="growth", subject="topic", expected_value=0.7, confidence=0.8,
+                      risk_tier=RiskTier.CONSEQUENTIAL, candidate_id="g1")]
+
+    def support():
+        return [_cand(source_app="support", subject="thread", expected_value=0.6, confidence=0.9,
+                      risk_tier=RiskTier.CONSEQUENTIAL, candidate_id="s1")]
+
+    def quiet():
+        return []                                          # an unconfigured detector — honest empty
+
+    s = collect_priorities([growth, support, quiet], PriorityPolicy(attention_budget=3))
+    assert {d.candidate.source_app for d in s.surfaced} == {"growth", "support"}
+
+
+def test_attention_summary_as_dict_is_json_safe_and_complete():
+    s = what_needs_me(_mixed_candidates(), PriorityPolicy(attention_budget=2))
+    d = s.as_dict()
+    assert set(d) == {"summary", "surfaced", "deferred", "handled_automatically", "abstained"}
+    assert isinstance(d["summary"], str) and isinstance(d["handled_automatically"], int)
+    item = d["surfaced"][0]
+    assert set(item) >= {"source_app", "subject", "proposed_action", "action", "rationale",
+                         "confidence", "priority", "risk_tier", "requires_approval", "candidate_id"}
+    assert item["action"] == "request_approval" and item["risk_tier"] == "CONSEQUENTIAL"
+
+
 def test_end_to_end_growth_and_support_into_one_surface():
     from agentic_os.trend_intelligence import TrendCandidate, assess, Mode
     from agentic_os.support_autonomy import FollowUpPolicy, ThreadState, qualify_lead

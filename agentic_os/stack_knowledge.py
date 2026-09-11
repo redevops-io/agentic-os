@@ -511,15 +511,16 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
                   "attention layer"),
         question="Can Sidekick tell me what needs my attention — what should I work on next?",
         answer=(
-            "That's the direction the stack is moving, and it's mostly on the roadmap today (one "
-            "piece — Growth trend scoring — has an early, synthetic-validated kernel, and the "
-            "Support building blocks already ship). The plan: each app continuously observes its "
-            "own state, detects an opportunity, risk, anomaly or gap, proposes candidate actions, "
-            "estimates each one's value/confidence/urgency/cost/risk, and then acts, asks you to "
-            "approve, defers, or stays silent — while Sidekick gathers the ones worth your time into "
-            "a single 'what needs me' list and handles or defers the rest. The point isn't to run "
-            "more agents; it's to complete more useful work per unit of your attention, under your "
-            "policies. I can explain any specific app's version of this — just ask."),
+            "Yes — the surface itself now ships: ask me 'what needs me?' and I return a live, "
+            "prioritised 'what needs you today' list built by the Priority Engine. What's still "
+            "growing is the set of detectors that feed it: Growth trend scoring has a "
+            "synthetic-validated kernel and the Support follow-up/lead signals ship today, while the "
+            "other apps' detectors (CRM, Projects, Research, …) are on the roadmap. The pattern: each "
+            "app observes its own state, detects an opportunity/risk/anomaly/gap, proposes candidate "
+            "actions, estimates each one's value/confidence/urgency/cost/risk, and then acts, asks you "
+            "to approve, defers, or stays silent — and the engine gathers the ones worth your time "
+            "into one list and handles or defers the rest. The point isn't to run more agents; it's to "
+            "complete more useful work per unit of your attention, under your policies."),
         detail=(
             "The loop is: observe → detect opportunity/risk/anomaly → generate candidate "
             "interventions → estimate expected value, confidence, urgency, execution cost, human-"
@@ -529,8 +530,8 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
             "Growth Opportunity Radar first (clear external data, low side-effect risk, strong "
             "calibration), then CRM Next-Best-Action, then Projects Risk Radar, Research, LearnerBot, "
             "and finally the cross-app Sidekick attention layer."),
-        source="Roadmap — Agentic Apps proactive-intelligence direction (mostly not yet shipped) · "
-               "Growth kernel: agentic_os/trend_intelligence.py · Support primitives: support_autonomy.py"),
+        source="Shipped: agentic_os/priority_engine.py (the decision spine + 'what needs me?' surface) · "
+               "Growth kernel: trend_intelligence.py · Support: support_autonomy.py · Roadmap: more detectors"),
     KnowledgeEntry(
         id="priority-engine",
         topic="Proactive intelligence (roadmap)",
@@ -540,22 +541,25 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
                   "how does it decide what's important"),
         question="What is the Priority Engine and how would it rank what matters?",
         answer=(
-            "The Priority Engine is the planned shared primitive (not shipped yet) that every app "
-            "would use instead of each re-inventing its own alerting. Rather than emit a raw alert, "
-            "a detector produces an *intervention candidate* — a possible action with its subject, "
-            "the evidence behind it, an expected value, a confidence, an urgency, a cost, a risk, and "
-            "the capabilities/permissions/approval-tier it would need. Crucially it does NOT rank by "
-            "confidence alone: a very certain but low-value item can rightly lose to a less-certain "
-            "high-impact one. It's designed to live inside the existing Context Runtime, not as a new "
-            "microservice."),
+            "The Priority Engine is the shared primitive that ranks what matters, and it now ships "
+            "(the decision spine — the detectors that feed it are still growing). Every app uses it "
+            "instead of re-inventing its own alerting: rather than emit a raw alert, a detector "
+            "produces an *intervention candidate* — a possible action with its subject, the evidence "
+            "behind it, an expected value, a confidence, an urgency, a cost, a risk, and the "
+            "capabilities/approval-tier it needs. Crucially it does NOT rank by confidence alone: a "
+            "very certain but low-value item rightly loses to a less-certain high-impact one. It runs "
+            "inside the existing orchestration, not as a new microservice."),
         detail=(
-            "Priority is a function of probability, expected upside/downside, urgency, reversibility, "
-            "execution cost, human-attention cost, operational risk and information value — the exact "
-            "objective stays app-specific behind a shared optimiser contract. Phase 0 of the roadmap "
-            "is just the shared contracts: Opportunity, InterventionCandidate, InterventionDecision, "
-            "OutcomeEvent extensions and PriorityScore/PriorityPolicy — deliberately no new service "
-            "boundary until scale or isolation demands one."),
-        source="Roadmap — Priority Engine primitive (Phase 0 shared contracts, not yet shipped)"),
+            "Priority is a transparent function of probability, expected upside/downside, urgency, "
+            "reversibility, execution cost, human-attention cost, operational risk and information "
+            "value — every term is explainable, and the objective stays app-specific behind a shared "
+            "contract. What ships: Opportunity, InterventionCandidate, InterventionDecision, "
+            "PriorityScore/PriorityPolicy and OutcomeEvent, plus the decision logic (do-nothing is a "
+            "first-class candidate, so it can't over-act) and the cross-app 'what needs me?' surface. "
+            "It's deterministic and tested; it makes no outcome-learning claim yet — OutcomeEvent is "
+            "the telemetry contract a future learning loop will consume."),
+        source="Shipped: agentic_os/priority_engine.py (contracts + optimiser + what_needs_me) · "
+               "reuses agent_gateway RiskTier/ApprovalPolicy for governance"),
     KnowledgeEntry(
         id="opportunity-vs-intervention",
         topic="Proactive intelligence (roadmap)",
