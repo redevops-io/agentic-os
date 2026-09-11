@@ -8,7 +8,7 @@ import pytest
 
 from agentic_os.mission.store import EventStore, MissionRepository
 from agentic_os.mission.event_backends import (
-    DuckDBEventStore, PostgresEventStore, open_event_store,
+    DuckDBEventStore, PostgresEventStore, build_durable_event_store, build_event_store, open_event_store,
 )
 
 duckdb = pytest.importorskip("duckdb")
@@ -78,3 +78,43 @@ def test_selector_rejects_unknown_and_missing_dsn():
         open_event_store("mystery")
     with pytest.raises(ValueError):
         open_event_store("postgres")                   # needs a DSN
+
+
+# ── selection wiring: every assembler honours the durable backend, not just the factory ──
+
+def test_build_event_store_default_unchanged(monkeypatch, tmp_path):
+    monkeypatch.delenv("MISSION_EVENT_BACKEND", raising=False)
+    monkeypatch.delenv("MISSION_EVENT_LOG", raising=False)
+    assert type(build_event_store()) is EventStore                      # zero-dep default preserved
+    assert type(build_event_store(str(tmp_path / "l.jsonl"))) is EventStore
+
+
+def test_build_event_store_selects_duckdb(monkeypatch, tmp_path):
+    monkeypatch.setenv("MISSION_EVENT_BACKEND", "duckdb")
+    assert isinstance(build_event_store(str(tmp_path / "e.duckdb")), DuckDBEventStore)
+
+
+def test_assemblers_honour_duckdb_backend(monkeypatch, tmp_path):
+    # the gap this closes: service/production selected JSONL directly, ignoring MISSION_EVENT_BACKEND
+    monkeypatch.setenv("MISSION_EVENT_BACKEND", "duckdb")
+    monkeypatch.setenv("MISSION_EVENT_PATH", str(tmp_path / "svc.duckdb"))
+    from agentic_os.mission.service import build_pilot_runtime
+    rt = build_pilot_runtime()
+    assert isinstance(rt.store, DuckDBEventStore)                       # durable ledger, from config alone
+
+
+# ── production selection fails closed: no opportunistic default (reproducible deployments) ──
+
+@pytest.mark.parametrize("bad", [None, "memory", "jsonl", "mystery"])
+def test_build_durable_fails_closed(monkeypatch, bad):
+    if bad is None:
+        monkeypatch.delenv("MISSION_EVENT_BACKEND", raising=False)
+    else:
+        monkeypatch.setenv("MISSION_EVENT_BACKEND", bad)
+    with pytest.raises(RuntimeError):                       # dev-only / unset / unknown → no silent default
+        build_durable_event_store()
+
+
+def test_build_durable_accepts_duckdb(monkeypatch, tmp_path):
+    monkeypatch.setenv("MISSION_EVENT_BACKEND", "duckdb")
+    assert isinstance(build_durable_event_store(str(tmp_path / "e.duckdb")), DuckDBEventStore)
