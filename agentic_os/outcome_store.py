@@ -93,6 +93,80 @@ class FileOutcomeStore:
         return out
 
 
+_PG_OUTCOME_SCHEMA = """
+CREATE TABLE IF NOT EXISTS outcome_events (
+  id                          bigserial PRIMARY KEY,
+  candidate_id                text NOT NULL,
+  source_app                  text NOT NULL,
+  action                      text,
+  action_kind                 text NOT NULL DEFAULT '',
+  observed_reward             double precision,
+  reward_dimensions           jsonb NOT NULL DEFAULT '{}'::jsonb,
+  delay                       double precision NOT NULL DEFAULT 0,
+  attribution_confidence      double precision NOT NULL DEFAULT 1,
+  source_observation_ids      text[] NOT NULL DEFAULT '{}',
+  candidate_intervention_ids  text[] NOT NULL DEFAULT '{}',
+  selected_intervention_id    text NOT NULL DEFAULT '',
+  note                        text NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS ix_oe_selected ON outcome_events(selected_intervention_id);
+CREATE INDEX IF NOT EXISTS ix_oe_key ON outcome_events(source_app, action_kind);
+"""
+
+
+class PostgresOutcomeStore:
+    """Durable, queryable outcome store (Postgres) — the operational home for DERIVED OutcomeEvents,
+    with the causal-graph edges (source_observation_ids / candidate_intervention_ids /
+    selected_intervention_id) kept as columns so EXPLAIN can trace them. Implements the OutcomeStore
+    contract (append + load). ``psycopg`` lazy; DSN from ``$OBS_DATABASE_URL``."""
+
+    def __init__(self, dsn: Optional[str] = None, *, ensure_schema: bool = True) -> None:
+        resolved = (dsn or os.environ.get("OBS_DATABASE_URL") or os.environ.get("DATABASE_URL") or None)
+        if not resolved:
+            raise ValueError("no Postgres DSN (pass dsn= or set OBS_DATABASE_URL)")
+        import psycopg
+        self._conn = psycopg.connect(resolved, autocommit=True)
+        if ensure_schema:
+            with self._conn.cursor() as cur:
+                cur.execute(_PG_OUTCOME_SCHEMA)
+
+    def close(self) -> None:
+        self._conn.close()
+
+    def append(self, ev: OutcomeEvent) -> None:
+        from psycopg.types.json import Jsonb
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO outcome_events
+                     (candidate_id, source_app, action, action_kind, observed_reward, reward_dimensions,
+                      delay, attribution_confidence, source_observation_ids, candidate_intervention_ids,
+                      selected_intervention_id, note)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (ev.candidate_id, ev.source_app, ev.action.value if ev.action is not None else None,
+                 ev.action_kind, ev.observed_reward, Jsonb(dict(ev.reward_dimensions)), ev.delay,
+                 ev.attribution_confidence, list(ev.source_observation_ids),
+                 list(ev.candidate_intervention_ids), ev.selected_intervention_id, ev.note))
+
+    def load(self) -> List[OutcomeEvent]:
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT candidate_id, source_app, action, action_kind, observed_reward, "
+                        "reward_dimensions, delay, attribution_confidence, source_observation_ids, "
+                        "candidate_intervention_ids, selected_intervention_id, note "
+                        "FROM outcome_events ORDER BY id")
+            rows = cur.fetchall()
+        out: List[OutcomeEvent] = []
+        for (cid, app, action, kind, reward, dims, delay, attr, sobs, cids, sel, note) in rows:
+            if isinstance(dims, str):
+                dims = json.loads(dims)
+            out.append(OutcomeEvent(
+                candidate_id=cid, source_app=app, action=Action(action) if action else None,
+                observed_reward=reward, note=note, action_kind=kind,
+                reward_dimensions=dict(dims or {}), delay=float(delay),
+                attribution_confidence=float(attr), source_observation_ids=tuple(sobs or ()),
+                candidate_intervention_ids=tuple(cids or ()), selected_intervention_id=sel or ""))
+        return out
+
+
 def load_outcome_log(store: OutcomeStore) -> OutcomeLog:
     """Materialise an OutcomeLog from a store — the loop's substrate, rebuilt from durable storage."""
     return OutcomeLog(events=store.load())
