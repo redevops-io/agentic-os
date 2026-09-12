@@ -16,10 +16,19 @@ import json
 import os
 import uuid
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Protocol, Tuple
+from enum import Enum
+from typing import Callable, Dict, List, Optional, Protocol, Tuple
 
 from agentic_os.priority_engine import (
     DecisionOpportunity, PriorityPolicy, SelectedAction, UtilityFn, select_action)
+
+
+class ActorType(Enum):
+    """Who took the intervention. Humans are capabilities, so a human's action is just an intervention
+    with a HUMAN actor — which lets Shadow mode compare the runtime's recommendation with what the
+    expert actually did (agreement / override), without treating either as absolute ground truth."""
+    RUNTIME = "runtime"
+    HUMAN = "human"
 
 
 @dataclass(frozen=True)
@@ -37,6 +46,7 @@ class InterventionRecord:
     executed_at: Optional[float] = None
     execution_ref: str = ""
     mission_id: str = ""
+    actor_type: "ActorType" = ActorType.RUNTIME   # RUNTIME by default; HUMAN for an observed human action
 
 
 @dataclass(frozen=True)
@@ -81,7 +91,8 @@ def _rec_to_dict(r: InterventionRecord) -> dict:
             "alternatives": [list(a) for a in r.alternatives], "evidence_refs": list(r.evidence_refs),
             "policy_version": r.policy_version, "score": r.score, "proposed_at": r.proposed_at,
             "approved_at": r.approved_at, "executed_at": r.executed_at,
-            "execution_ref": r.execution_ref, "mission_id": r.mission_id}
+            "execution_ref": r.execution_ref, "mission_id": r.mission_id,
+            "actor_type": r.actor_type.value}
 
 
 def _rec_from_dict(d: dict) -> InterventionRecord:
@@ -92,7 +103,8 @@ def _rec_from_dict(d: dict) -> InterventionRecord:
         evidence_refs=tuple(d.get("evidence_refs", [])), policy_version=d.get("policy_version", ""),
         score=d.get("score", 0.0), proposed_at=d.get("proposed_at", 0.0),
         approved_at=d.get("approved_at"), executed_at=d.get("executed_at"),
-        execution_ref=d.get("execution_ref", ""), mission_id=d.get("mission_id", ""))
+        execution_ref=d.get("execution_ref", ""), mission_id=d.get("mission_id", ""),
+        actor_type=ActorType(d.get("actor_type", "runtime")))
 
 
 def _link_to_dict(l: OutcomeLink) -> dict:
@@ -187,6 +199,7 @@ CREATE TABLE IF NOT EXISTS interventions (
   execution_ref    text NOT NULL DEFAULT '',
   mission_id       text NOT NULL DEFAULT ''
 );
+ALTER TABLE interventions ADD COLUMN IF NOT EXISTS actor_type text NOT NULL DEFAULT 'runtime';
 CREATE TABLE IF NOT EXISTS outcome_links (
   id                      bigserial PRIMARY KEY,
   intervention_id         text NOT NULL REFERENCES interventions(intervention_id),
@@ -225,13 +238,13 @@ class PostgresInterventionStore:
                 """INSERT INTO interventions
                      (intervention_id, opportunity_id, candidate_id, selected_action, alternatives,
                       evidence_refs, policy_version, score, proposed_at, approved_at, executed_at,
-                      execution_ref, mission_id)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                      execution_ref, mission_id, actor_type)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                    ON CONFLICT (intervention_id) DO NOTHING""",   # immutable — never overwrite
                 (rec.intervention_id, rec.opportunity_id, rec.candidate_id, rec.selected_action,
                  Jsonb([list(a) for a in rec.alternatives]), list(rec.evidence_refs),
                  rec.policy_version, rec.score, rec.proposed_at, rec.approved_at, rec.executed_at,
-                 rec.execution_ref, rec.mission_id))
+                 rec.execution_ref, rec.mission_id, rec.actor_type.value))
 
     def link(self, link: OutcomeLink) -> None:
         with self._conn.cursor() as cur:
@@ -265,11 +278,11 @@ class PostgresInterventionStore:
 
 _SELECT_REC = ("SELECT intervention_id, opportunity_id, candidate_id, selected_action, alternatives, "
                "evidence_refs, policy_version, score, proposed_at, approved_at, executed_at, "
-               "execution_ref, mission_id FROM interventions")
+               "execution_ref, mission_id, actor_type FROM interventions")
 
 
 def _pg_row_to_rec(row) -> InterventionRecord:
-    (iid, oid, cid, act, alts, refs, pv, score, prop, appr, exe, exref, mid) = row
+    (iid, oid, cid, act, alts, refs, pv, score, prop, appr, exe, exref, mid, actor) = row
     if isinstance(alts, str):
         alts = json.loads(alts)
     return InterventionRecord(
@@ -277,7 +290,8 @@ def _pg_row_to_rec(row) -> InterventionRecord:
         alternatives=tuple(tuple(a) for a in (alts or [])), evidence_refs=tuple(refs or ()),
         policy_version=pv, score=float(score), proposed_at=float(prop),
         approved_at=(float(appr) if appr is not None else None),
-        executed_at=(float(exe) if exe is not None else None), execution_ref=exref or "", mission_id=mid or "")
+        executed_at=(float(exe) if exe is not None else None), execution_ref=exref or "",
+        mission_id=mid or "", actor_type=ActorType(actor or "runtime"))
 
 
 def select_and_record(opportunity: DecisionOpportunity, store: "InterventionStore", *,
@@ -294,3 +308,71 @@ def select_and_record(opportunity: DecisionOpportunity, store: "InterventionStor
                                 proposed_at=proposed_at, evidence_refs=evidence_refs)
     store.append(rec)                                    # durable BEFORE the caller surfaces `sel`
     return sel, rec
+
+
+def record_human_action(store: "InterventionStore", *, opportunity_id: str, action_kind: str, at: float,
+                        intervention_id: Optional[str] = None, candidate_id: str = "",
+                        execution_ref: str = "", evidence_refs: Tuple[str, ...] = ()) -> InterventionRecord:
+    """Record what a human ACTUALLY did for an opportunity — an intervention with a HUMAN actor. In
+    Shadow mode this sits beside the runtime's recommendation for the same ``opportunity_id`` so the two
+    can be compared. It is an observation of expert behaviour, not treated as ground truth."""
+    rec = InterventionRecord(
+        intervention_id=(intervention_id or uuid.uuid4().hex), opportunity_id=opportunity_id,
+        candidate_id=candidate_id, selected_action=action_kind, alternatives=(),
+        evidence_refs=tuple(evidence_refs), policy_version="", score=0.0, proposed_at=at,
+        executed_at=at, execution_ref=execution_ref, actor_type=ActorType.HUMAN)
+    store.append(rec)
+    return rec
+
+
+@dataclass(frozen=True)
+class ShadowPair:
+    opportunity_id: str
+    runtime_action: Optional[str]
+    human_action: Optional[str]
+
+    @property
+    def agreed(self) -> Optional[bool]:
+        if self.runtime_action is None or self.human_action is None:
+            return None
+        return self.runtime_action == self.human_action
+
+
+@dataclass(frozen=True)
+class ShadowReport:
+    """Phase-A comparison of the runtime's recommendation vs. the human's actual choice, per opportunity."""
+    pairs: Tuple[ShadowPair, ...]
+
+    @property
+    def paired(self) -> int:
+        return sum(1 for p in self.pairs if p.agreed is not None)
+
+    @property
+    def agreements(self) -> int:
+        return sum(1 for p in self.pairs if p.agreed is True)
+
+    @property
+    def overrides(self) -> int:                          # the human chose differently
+        return sum(1 for p in self.pairs if p.agreed is False)
+
+    @property
+    def agreement_rate(self) -> float:
+        return self.agreements / self.paired if self.paired else 0.0
+
+    @property
+    def override_rate(self) -> float:
+        return self.overrides / self.paired if self.paired else 0.0
+
+
+def shadow_report(store: "InterventionStore") -> ShadowReport:
+    """Pair the runtime's recommendation with the human's action per opportunity → agreement / override.
+    (Outcome-conditioned metrics — outcome-after-agreement vs after-disagreement — come once outcomes
+    are correlated in later PRs; this establishes the agreement/override signal.)"""
+    runtime: Dict[str, str] = {}
+    human: Dict[str, str] = {}
+    for r in store.all():
+        bucket = human if r.actor_type == ActorType.HUMAN else runtime
+        bucket.setdefault(r.opportunity_id, r.selected_action)   # first recorded per actor per opportunity
+    pairs = [ShadowPair(opp, runtime.get(opp), human.get(opp))
+             for opp in sorted(set(runtime) | set(human))]
+    return ShadowReport(tuple(pairs))
