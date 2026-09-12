@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
 
 from agentic_os.observation import KnownAtQuality, Observation
@@ -43,6 +44,38 @@ CREATE INDEX IF NOT EXISTS ix_obs_asof ON observations(known_at, valid_at);
 def observation_dsn(dsn: Optional[str] = None) -> Optional[str]:
     """The operational Postgres DSN: the arg, else ``$OBS_DATABASE_URL`` (or ``$DATABASE_URL``)."""
     return dsn or os.environ.get("OBS_DATABASE_URL") or os.environ.get("DATABASE_URL") or None
+
+
+@dataclass
+class InMemoryObservationStore:
+    """Non-durable observation store with the SAME as-of semantics as the Postgres one — for tests and
+    single-process use. (Its as-of is the leakage-safe reconstruction: valid_at<=T AND known_at<=T,
+    OBSERVED/RECONSTRUCTED only by default.)"""
+    observations: List[Observation] = field(default_factory=list)
+
+    def append(self, obs: Observation) -> None:
+        if not any(o.observation_id == obs.observation_id for o in self.observations):
+            self.observations.append(obs)                # idempotent, like the PG ON CONFLICT
+
+    def get(self, observation_id: str) -> Optional[Observation]:
+        return next((o for o in self.observations if o.observation_id == observation_id), None)
+
+    def as_of(self, decision_time: float, *, subject: Optional[str] = None,
+              require_quality: bool = True) -> List[Observation]:
+        out = []
+        for o in self.observations:
+            if o.valid_at > decision_time or o.known_at > decision_time:
+                continue
+            if subject is not None and o.subject != subject:
+                continue
+            if require_quality and o.known_at_quality not in (
+                    KnownAtQuality.OBSERVED, KnownAtQuality.RECONSTRUCTED):
+                continue
+            out.append(o)
+        return sorted(out, key=lambda o: (o.valid_at, o.observation_id))
+
+    def count(self) -> int:
+        return len(self.observations)
 
 
 class PostgresObservationStore:
