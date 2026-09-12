@@ -57,13 +57,18 @@ class UtilityModel:
         wsum, csum = self._stats[key]
         return (wsum / csum if csum > 0 else 0.0, csum)
 
-    def utility(self, candidate: InterventionCandidate, base: float) -> float:
-        obs = self.observed(candidate.learn_key)
+    def predict_key(self, key: Tuple[str, str], base: float) -> float:
+        """Count-weighted shrinkage of ``base`` toward the observed mean for ``key`` — the single blend
+        used everywhere (selection utility AND held-out value prediction), so the two never drift."""
+        obs = self.observed(key)
         if obs is None:
             return base                                       # no data → trust the prior entirely
         mean, n = obs
         w = n / (n + self.prior_weight)                       # more evidence → trust the observed mean more
         return (1.0 - w) * base + w * mean
+
+    def utility(self, candidate: InterventionCandidate, base: float) -> float:
+        return self.predict_key(candidate.learn_key, base)
 
     def explain(self, candidate: InterventionCandidate, base: float) -> str:
         obs = self.observed(candidate.learn_key)
