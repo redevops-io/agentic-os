@@ -14,8 +14,8 @@ from agentic_os.priority_engine import DecisionOpportunity, InterventionCandidat
 
 pytest.importorskip("psycopg")
 from agentic_os.intervention_record import (  # noqa: E402
-    InterventionRecord, OutcomeLink, PostgresInterventionStore, record_from_selection,
-    select_and_record)
+    ActorType, InterventionRecord, OutcomeLink, PostgresInterventionStore, record_from_selection,
+    record_human_action, select_and_record, shadow_report)
 from agentic_os.observation_store import observation_dsn  # noqa: E402
 
 
@@ -76,3 +76,20 @@ def test_select_and_record_persists_a_wait_recommendation(store):
     sel, rec = select_and_record(opp, store, policy_version="p1", proposed_at=100.0, id_fn=lambda: iid)
     assert store.get(iid) is not None                              # a non-contact recommendation is durable
     assert store.get(iid).selected_action == rec.selected_action
+
+
+def test_human_action_and_shadow_pairing_persist(store):
+    opp_id = f"outreach:{uuid.uuid4().hex[:8]}"
+    # runtime recommends contact (durable), human overrides with schedule_meeting (durable, HUMAN actor)
+    cands = (InterventionCandidate("outreach", opp_id, "contact", 0.9, 0.8, action_kind="contact",
+                                   risk_tier=RiskTier.CONSEQUENTIAL, candidate_id=f"{opp_id}:contact"),)
+    opp = DecisionOpportunity(entity=opp_id, source_app="outreach", candidate_actions=cands,
+                              opportunity_id=opp_id)
+    select_and_record(opp, store, policy_version="p1", proposed_at=10.0, id_fn=lambda: f"r-{opp_id}")
+    hrec = record_human_action(store, opportunity_id=opp_id, action_kind="schedule_meeting", at=20.0,
+                               intervention_id=f"h-{opp_id}")
+    assert store.get(f"h-{opp_id}").actor_type is ActorType.HUMAN  # round-trips through Postgres
+
+    pair = {p.opportunity_id: p for p in shadow_report(store).pairs}[opp_id]
+    assert pair.runtime_action == "contact" and pair.human_action == "schedule_meeting"
+    assert pair.agreed is False                                    # an override, captured

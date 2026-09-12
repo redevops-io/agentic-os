@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from agentic_os.agent_gateway.contracts import RiskTier
 from agentic_os.intervention_record import (
-    FileInterventionStore, InMemoryInterventionStore, InterventionRecord, OutcomeLink,
-    record_from_selection, select_and_record)
+    ActorType, FileInterventionStore, InMemoryInterventionStore, InterventionRecord, OutcomeLink,
+    record_from_selection, record_human_action, select_and_record, shadow_report)
 from agentic_os.priority_engine import DecisionOpportunity, InterventionCandidate, select_action
 
 
@@ -96,3 +96,35 @@ def test_a_wait_or_do_not_contact_recommendation_is_also_durable():
     assert len(store.all()) == 1                                    # persisted regardless of the choice
     assert rec.intervention_id == "iv-2"
     assert rec.selected_action in ("wait", "do_not_contact", "do nothing")   # a non-contact recommendation
+
+
+# ── Shadow mode: the human counterfactual (PR3) ──────────────────────────────────────
+def test_human_action_is_an_intervention_with_a_human_actor():
+    store = InMemoryInterventionStore()
+    rec = record_human_action(store, opportunity_id="outreach:Prospect", action_kind="schedule_meeting",
+                              at=200.0, intervention_id="h1")
+    assert rec.actor_type is ActorType.HUMAN and rec.selected_action == "schedule_meeting"
+    assert rec.executed_at == 200.0 and store.all() == [rec]
+
+
+def test_shadow_report_pairs_runtime_recommendation_with_human_action():
+    store = InMemoryInterventionStore()
+    # opp A: runtime said contact, human also contacted → agreement
+    select_and_record(_four_action_opp(contact=0.9), store, policy_version="p1", proposed_at=10.0,
+                      id_fn=lambda: "r-A")            # opportunity_id = outreach:Prospect
+    record_human_action(store, opportunity_id="outreach:Prospect", action_kind="contact", at=20.0,
+                        intervention_id="h-A")
+    # opp B: runtime recommended WAIT, human overrode and contacted → override
+    optB = _four_action_opp(contact=-0.5, wait=0.1)
+    optB = DecisionOpportunity(entity="B", source_app="outreach",
+                               candidate_actions=optB.candidate_actions, opportunity_id="outreach:B")
+    select_and_record(optB, store, policy_version="p1", proposed_at=10.0, id_fn=lambda: "r-B")
+    record_human_action(store, opportunity_id="outreach:B", action_kind="contact", at=20.0,
+                        intervention_id="h-B")
+
+    rep = shadow_report(store)
+    assert rep.paired == 2 and rep.agreements == 1 and rep.overrides == 1
+    assert rep.agreement_rate == 0.5 and rep.override_rate == 0.5
+    by_opp = {p.opportunity_id: p for p in rep.pairs}
+    assert by_opp["outreach:Prospect"].agreed is True
+    assert by_opp["outreach:B"].agreed is False and by_opp["outreach:B"].human_action == "contact"
