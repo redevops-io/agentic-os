@@ -15,34 +15,62 @@
       button.danger { color: #b91c1c; border-color: rgba(185,28,28,.5); }
       pre { white-space: pre-wrap; background: rgba(128,128,128,.12); padding: 14px;
             border-radius: 8px; min-height: 80px; margin-top: 16px; }
+      .adv { margin-top: 20px; padding-top: 12px; border-top: 1px solid rgba(128,128,128,.25); }
+      .adv h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; opacity: .6; margin: 0 0 8px; }
+      .adv[hidden] { display: none; }
     </style>
   </head>
   <body>
     <h1>ReDevOps</h1>
-    <p class="sub">One-click install for your agent environment.</p>
+    <p class="sub">Your apps as one governed system — runs natively, no Docker required.</p>
+
     <button id="check">Check this device</button>
-    <button id="start" class="primary">Install / Start</button>
+    <button id="start" class="primary">Start &amp; open</button>
     <button id="stop">Stop</button>
-    <button id="uninstall">Uninstall (keep my data)</button>
-    <button id="purge" class="danger">Remove everything</button>
+
+    <div class="adv" id="advanced" hidden>
+      <h2>Advanced · local containers (optional)</h2>
+      <p class="sub">Adds the observability stack + the rootless sandbox for untrusted agent code. Not needed for normal use.</p>
+      <button id="docker-up">Enable local containers</button>
+      <button id="docker-down">Disable</button>
+      <button id="docker-purge" class="danger">Remove container data</button>
+    </div>
+
     <pre id="out">Click “Check this device” to begin.</pre>
+
     <script>
-      // Tauri v2 exposes the Rust commands under window.__TAURI__.core.invoke
-      const invoke = (name) => window.__TAURI__.core.invoke(name);
+      const invoke = (name, args) => window.__TAURI__.core.invoke(name, args || {});
       const out = document.getElementById("out");
-      const wrap = (name) => async () => {
-        out.textContent = "Working…";
-        try { out.textContent = await invoke(name); }
-        catch (e) { out.textContent = "Error:\n" + e; }
+      const say = (t) => (out.textContent = t);
+      const run = (name) => async () => {
+        say("Working…");
+        try { say(await invoke(name) || "Done."); }
+        catch (e) { say("Error:\n" + e); }
       };
-      document.getElementById("check").onclick = wrap("device_report");
-      document.getElementById("start").onclick = wrap("stack_up");
-      document.getElementById("stop").onclick = wrap("stack_down");
-      document.getElementById("uninstall").onclick = wrap("stack_uninstall");
-      document.getElementById("purge").onclick = async () => {
-        if (!confirm("Remove everything, including your data (volumes)? This cannot be undone.")) return;
-        await wrap("stack_purge")();
+
+      document.getElementById("check").onclick = run("device_report");
+
+      // Native-first: start the control plane from the frozen sidecar (no Docker), then open it.
+      document.getElementById("start").onclick = async () => {
+        say("Starting the control plane…");
+        try {
+          const url = await invoke("start_native");
+          await invoke("open_ui");
+          say("Running at " + url + " — opened in your browser.");
+        } catch (e) { say("Error:\n" + e); }
       };
+      document.getElementById("stop").onclick = run("stop_native");
+
+      // Advanced Docker controls appear only when Docker is actually present.
+      document.getElementById("docker-up").onclick = run("advanced_docker_up");
+      document.getElementById("docker-down").onclick = run("advanced_docker_down");
+      document.getElementById("docker-purge").onclick = async () => {
+        if (!confirm("Remove the container tier's data (volumes)? Native data is untouched.")) return;
+        await run("advanced_docker_purge")();
+      };
+      invoke("docker_available").then((ok) => {
+        if (ok) document.getElementById("advanced").hidden = false;
+      }).catch(() => {});
     </script>
   </body>
 </html>

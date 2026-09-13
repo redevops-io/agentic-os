@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "ReDevOps launcher — allow the main window to call the app commands.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
