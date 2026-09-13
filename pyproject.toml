@@ -11,6 +11,9 @@ dependencies = [
     # silently is not a contract. Importing it is why this repository carries
     # the Commons Clause — see LICENSE.md.
     "runtime-contracts @ git+https://github.com/redevops-io/runtime-contracts.git@v0.3.4",
+    # The domain-neutral learn/teach-next primitive, shared with learnerbot.ai. `agentic_os.
+    # knowledge_frontier` re-exports it; the apps-stack adapter stays in priority_engine.
+    "knowledge-frontier @ git+https://github.com/redevops-io/knowledge-frontier.git@v0.1.0",
     "pyyaml>=6.0",
     "fastapi>=0.110",
     "uvicorn>=0.29",
