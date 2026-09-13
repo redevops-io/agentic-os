@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=ReDevOps Projects
+Comment=Governed AI control plane — connect your apps, run missions
+Exec=redevops-projects
+Icon=${SNAP}/meta/gui/redevops-projects.png
+Terminal=false
+Type=Application
+Categories=Development;Utility;Network;
+Keywords=AI;agent;automation;governance;devops;mission;

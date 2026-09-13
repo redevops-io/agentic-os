@@ -1,0 +1,5 @@
+#!/bin/sh
+# Runs on install and on every `snap set redevops-projects …`. Restart the service so new
+# LLM config is picked up. (On first install the service may not exist yet — ignore that.)
+set -eu
+snapctl restart redevops-projects.projects 2>/dev/null || true

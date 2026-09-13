@@ -1,0 +1,64 @@
+name: redevops-projects
+title: ReDevOps Projects
+base: core24                       # Ubuntu 24.04 LTS runtime
+version: '0.1.0'                   # bump per release; or switch to adopt-info once tagged
+summary: Governed AI control plane — connect your apps, run missions
+description: |
+  ReDevOps Projects is a self-hostable control plane for governed AI work ACROSS your business
+  apps: one workflow can read an email, update the CRM, coordinate support and ask for approval
+  when it reaches something consequential — with a receipt for every action.
+
+  This snap runs the Projects control plane locally (a web UI at http://127.0.0.1:8787) so you can
+  try ReDevOps before deploying the full stack. Bring your own model — hosted or local:
+
+    Hosted:  snap set redevops-projects llm.api-key=sk-...
+    Local:   snap set redevops-projects llm.base-url=http://localhost:11434/v1   (Ollama/vLLM, no key)
+
+  Deploying the full Sidekick DevOps stack (Terraform/kubectl/monitoring) is separate — it drives
+  host infrastructure and lives in the Docker-Compose / Helm quickstart at redevops.io/projects/install.
+
+license: AGPL-3.0
+confinement: strict
+grade: stable                      # VERIFY with a real `snapcraft` (LXD) build before releasing to stable
+
+apps:
+  # Background service: serves the control plane on loopback. Auto-starts on install; the LLM
+  # features stay off until `snap set … llm.*` is configured (the UI still loads).
+  projects:
+    command: bin/launch.sh
+    daemon: simple
+    install-mode: enable
+    restart-condition: on-failure
+    plugs:
+      - network            # reach the model endpoint + connector APIs
+      - network-bind       # serve 127.0.0.1:8787
+      - home               # read user files a source/connector points at
+  # The desktop "app" action: open the running control plane in the browser.
+  redevops-projects:
+    command: bin/open-ui.sh
+    plugs:
+      - network
+      - desktop            # xdg-open the host browser via snapd's userd
+
+parts:
+  agentic-os:
+    plugin: python
+    source: .
+    build-packages:
+      - git                # a couple of dependencies install from git
+    # The python plugin installs the source package; we re-install with the [projects] extra so the
+    # UI bundle + connector plugin come along. VERIFY this recipe on snapcraft+LXD — the git deps,
+    # the extra, and bundling agentic_os/projects_ui are the parts most likely to need a tweak.
+    override-build: |
+      craftctl default
+      "${CRAFT_PART_INSTALL}/bin/pip" install --no-warn-script-location ".[projects]"
+
+  launchers:
+    plugin: dump
+    source: snap/local
+    organize:
+      launch.sh: bin/launch.sh
+      open-ui.sh: bin/open-ui.sh
+    override-build: |
+      craftctl default
+      chmod +x "${CRAFT_PART_INSTALL}/bin/launch.sh" "${CRAFT_PART_INSTALL}/bin/open-ui.sh"
