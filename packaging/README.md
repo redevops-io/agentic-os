@@ -36,9 +36,10 @@ CI runs exactly this across ubuntu/windows/macos: `.github/workflows/native-pack
 | **Task 6 — CI matrix** | ✍️ workflow authored; Windows/macOS build the identical recipe (unsigned until signing staged in, decision 4) |
 
 Verified end-to-end on **evo-x2 (Ubuntu 26.04)** with Rust 1.98.1 + WebKitGTK 4.1 + tauri-cli 2.11.4
-+ CPython 3.12. Windows/macOS use the identical wheelhouse→sidecar→Tauri recipe; only signing +
-per-OS `.icns`/`.ico` + winget/Homebrew wiring remain (P2). Known nit: the `.deb` package name slugs
-to `re-dev-ops` from the productName — cosmetic; polish before store submission.
++ CPython 3.12. Product/package name is **`agentic-apps`** (display "Agentic Apps"); the full icon set
+(`.ico` + `.icns` + PNGs) is generated. Windows/macOS use the identical recipe on their build hosts —
+see **`BUILD-hosts.md`** (Ubuntu → evo-x2 ✅, Windows → Proxmox Win11 image via `build-windows.ps1`,
+macOS → AWS EC2 Mac dedicated host). Only signing/notarization + winget/Homebrew wiring remain (P2).
 
 ## Notes
 - **Bundle target = CPython 3.12** (`$PYTHON_VERSION` overrides). The wheelhouse/lock pin exact versions.
