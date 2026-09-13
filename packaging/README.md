@@ -28,16 +28,17 @@ CI runs exactly this across ubuntu/windows/macos: `.github/workflows/native-pack
 
 | Piece | Status |
 |---|---|
-| **Task 1 — wheelhouse / offline install / git+https gone** | ✅ **verified here** — 24 wheels, fresh `--no-index` install of `agentic-os[projects,duckdb]`, `import projects_api + bootstrap` OK, **0 VCS-origin dists** |
-| **Task 2 — PyInstaller sidecar** | ✅ **verified here** — frozen `redevops-sidecar` builds on Linux/py3.12 and runs the `bootstrap` brain (device report + LLM) |
-| **Task 3 — native-first launcher** (Rust) | ✍️ authored; needs `cargo tauri build` on a Rust+GUI host (no toolchain here) |
-| **Task 4 — .deb / installers** (Tauri) | ✍️ config authored (`deb,appimage,msi,nsis,dmg`); build on a host per OS |
-| **Task 5 — Ubuntu acceptance** | ✍️ `ACCEPTANCE-ubuntu.md` + `acceptance-ubuntu.sh` (CI-runnable slice); full journey on a VM |
-| **Task 6 — CI matrix** | ✍️ workflow authored; runs on push of a tag / dispatch |
+| **Task 1 — wheelhouse / offline install / git+https gone** | ✅ **verified** — 24 wheels, fresh `--no-index` install of `agentic-os[projects,duckdb]`, `import projects_api + bootstrap` OK, **0 VCS-origin dists** |
+| **Task 2 — PyInstaller sidecar** | ✅ **verified** — frozen `redevops-sidecar` builds (py3.12), runs the `bootstrap` brain AND `serve` (served the real UI `<title>Projects & Sidekick</title>`) |
+| **Task 3 — native-first launcher** (Rust/Tauri) | ✅ **verified on evo-x2** — `cargo tauri build` compiles the native-first shell (Tauri 2.11.4) |
+| **Task 4 — .deb / AppImage** (Tauri) | ✅ **verified on evo-x2 (Ubuntu 26.04)** — built `ReDevOps_0.1.0_amd64.deb` (49 MB) + `.AppImage` (125 MB), each bundling `redevops-launcher` + `redevops-sidecar` + icon + `.desktop` |
+| **Task 5 — Ubuntu acceptance** | ✅ **install→serve verified** — `.deb` installs (`/usr/bin/redevops-sidecar`), serves the control plane natively (no Docker/Python/Git), removes cleanly. Full journey (OAuth→Mission→approve→reboot) still on a VM snapshot. |
+| **Task 6 — CI matrix** | ✍️ workflow authored; Windows/macOS build the identical recipe (unsigned until signing staged in, decision 4) |
 
-Rust/Tauri and PyInstaller aren't installed in the authoring environment, so anything past Task 2
-is authored + syntax/JSON-validated, not build-run here. Ubuntu is the proving OS (no signing);
-Windows/macOS build the identical recipe unsigned until signing is staged in (decision 4).
+Verified end-to-end on **evo-x2 (Ubuntu 26.04)** with Rust 1.98.1 + WebKitGTK 4.1 + tauri-cli 2.11.4
++ CPython 3.12. Windows/macOS use the identical wheelhouse→sidecar→Tauri recipe; only signing +
+per-OS `.icns`/`.ico` + winget/Homebrew wiring remain (P2). Known nit: the `.deb` package name slugs
+to `re-dev-ops` from the productName — cosmetic; polish before store submission.
 
 ## Notes
 - **Bundle target = CPython 3.12** (`$PYTHON_VERSION` overrides). The wheelhouse/lock pin exact versions.

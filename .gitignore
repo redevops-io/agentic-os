@@ -11,3 +11,7 @@ node_modules/
 packaging/wheelhouse/
 packaging/build/
 packaging/dist/
+# Tauri launcher build artifacts
+deploy/launcher/src-tauri/target/
+deploy/launcher/src-tauri/binaries/
+deploy/launcher/src-tauri/gen/

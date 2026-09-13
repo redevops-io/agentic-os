@@ -11,11 +11,12 @@ DEB="${1:?usage: acceptance-ubuntu.sh <path-to-.deb>}"
 echo "== install the suite from the .deb =="
 sudo apt-get install -y "./$DEB" 2>/dev/null || sudo dpkg -i "$DEB" || { sudo apt-get -f install -y; sudo dpkg -i "$DEB"; }
 
-echo "== prove no runtime deps leaked into the user path =="
-command -v git    >/dev/null && echo "note: git present on runner (ok — we assert the app doesn't NEED it)"
-# The installed app must not shell out to python/git to run; the sidecar is self-contained.
-SIDE="$(dpkg -L redevops 2>/dev/null | grep -E 'redevops-sidecar$' | head -1 || true)"
-[ -n "$SIDE" ] || SIDE="/usr/lib/redevops/redevops-sidecar"
+echo "== locate the installed frozen sidecar (self-contained: no python/git needed to run) =="
+# Tauri installs the externalBin beside the launcher; the package name slugs from productName
+# (currently 're-dev-ops'), so find the binary by path, not by a guessed package name.
+SIDE="/usr/bin/redevops-sidecar"
+[ -f "$SIDE" ] || SIDE="$(command -v redevops-sidecar || true)"
+[ -f "$SIDE" ] || { echo "FAIL: redevops-sidecar not found after install"; exit 1; }
 echo "sidecar: $SIDE"
 
 echo "== start the control plane NATIVELY (no Docker) =="
