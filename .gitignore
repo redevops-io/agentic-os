@@ -7,3 +7,16 @@ __pycache__/
 node_modules/
 # Claude Code local session dir
 .claude/
+# native-packaging build artifacts (rebuilt by packaging/build-wheelhouse.sh + build-sidecar.sh)
+packaging/wheelhouse/
+packaging/build/
+packaging/dist/
+# Tauri launcher build artifacts
+deploy/launcher/src-tauri/target/
+deploy/launcher/src-tauri/binaries/
+deploy/launcher/src-tauri/gen/
+deploy/launcher/src-tauri/icons/android/
+deploy/launcher/src-tauri/icons/ios/
+deploy/launcher/src-tauri/icons/Square*Logo.png
+deploy/launcher/src-tauri/icons/StoreLogo.png
+deploy/launcher/src-tauri/icons/64x64.png

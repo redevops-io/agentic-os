@@ -1,0 +1,83 @@
+# Task 6 — cross-platform native installers from ONE reproducible recipe.
+# Ubuntu is the proving ground (needs no signing); Windows/macOS build the SAME
+# wheelhouse+sidecar+Tauri bundle from day one (unsigned) so the recipe stays portable.
+# Signing/notarization + winget/Homebrew wiring switch on per-OS in P2 (gated on secrets).
+name: native-packaging
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+    paths: ["packaging/**", "deploy/launcher/**", ".github/workflows/native-packaging.yml"]
+
+jobs:
+  bundle:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest    # → .deb + AppImage   (release target now)
+          - os: windows-latest   # → .msi / .nsis      (unsigned until P2)
+          - os: macos-14         # → .dmg (arm64)       (unsigned/un-notarized until P2)
+          - os: macos-13         # → .dmg (x86_64)      (unsigned/un-notarized until P2)
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv (drives the Python 3.12 bundle build)
+        uses: astral-sh/setup-uv@v5
+
+      - name: Rust toolchain (Tauri)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Linux bundle deps (Tauri needs GTK/WebKit; only on Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libayatana-appindicator3-dev patchelf rsync
+
+      - name: Task 1 — reproducible wheelhouse (kills git+https from the user path)
+        shell: bash
+        run: ./packaging/build-wheelhouse.sh
+
+      - name: Task 2 — freeze the Python sidecar
+        shell: bash
+        run: ./packaging/build-sidecar.sh
+
+      - name: Stage sidecar for Tauri externalBin
+        shell: bash
+        run: ./packaging/stage-sidecar.sh
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Task 4 — build the native installer(s)
+        working-directory: deploy/launcher
+        run: cargo tauri build
+
+      # --- Signing / notarization: staged (decision 4). Enabled per-OS in P2 when secrets exist. ---
+      # - name: Sign & notarize (macOS)   if: runner.os == 'macOS' && secrets.APPLE_ID ...
+      # - name: Sign (Windows)            if: runner.os == 'Windows' && secrets.WIN_CERT ...
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: redevops-${{ matrix.os }}
+          path: |
+            deploy/launcher/src-tauri/target/release/bundle/**/*.deb
+            deploy/launcher/src-tauri/target/release/bundle/**/*.AppImage
+            deploy/launcher/src-tauri/target/release/bundle/**/*.msi
+            deploy/launcher/src-tauri/target/release/bundle/**/*.exe
+            deploy/launcher/src-tauri/target/release/bundle/**/*.dmg
+          if-no-files-found: warn
+
+  acceptance-ubuntu:
+    needs: bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: redevops-ubuntu-latest, path: dist }
+      - name: Clean-machine acceptance (install the .deb, reach a served control plane, no Docker)
+        run: ./packaging/acceptance-ubuntu.sh "$(find dist -name '*.deb' | head -1)"
