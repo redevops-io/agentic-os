@@ -50,7 +50,7 @@ security:
   enabled: false
   image:
     repository: ""                # e.g. ghcr.io/redevops-io/redevops-runtime-enterprise (bundles the plugins)
-    tag: "0.3.0"
+    tag: "0.3.1"
   sandbox:
     enabled: true                 # route isolation-declaring capabilities through the SubprocessSandbox (fail-closed)
   # ── authority-scoped credential brokerage (runtime-contracts SecretStore/CredentialBroker seams) ──
