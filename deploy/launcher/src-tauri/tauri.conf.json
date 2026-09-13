@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ReDevOps Launcher",
+  "productName": "ReDevOps",
   "version": "0.1.0",
-  "identifier": "io.redevops.launcher",
+  "identifier": "io.redevops.suite",
   "build": {
     "frontendDist": "../ui"
   },
@@ -21,7 +21,16 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["dmg", "msi"],
-    "icon": ["icons/icon.png"]
+    "targets": ["deb", "appimage", "msi", "nsis", "dmg", "app"],
+    "icon": ["icons/icon.png"],
+    "category": "DeveloperTool",
+    "shortDescription": "Governed AI control plane — your apps as one system",
+    "longDescription": "ReDevOps runs your business apps as one governed agentic system: connect apps, run missions across them, approve the consequential steps. One suite installer, native, bring your own model (hosted or local). No Docker required.",
+    "externalBin": ["binaries/redevops-sidecar"],
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    }
   }
 }

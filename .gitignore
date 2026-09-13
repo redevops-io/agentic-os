@@ -7,3 +7,7 @@ __pycache__/
 node_modules/
 # Claude Code local session dir
 .claude/
+# native-packaging build artifacts (rebuilt by packaging/build-wheelhouse.sh + build-sidecar.sh)
+packaging/wheelhouse/
+packaging/build/
+packaging/dist/
