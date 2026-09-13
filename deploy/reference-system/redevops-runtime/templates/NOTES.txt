@@ -16,7 +16,7 @@ Cockpit UI:        kubectl -n {{ .Release.Namespace }} port-forward svc/{{ inclu
 
 Smoke it:
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "rr.fullname" . }} {{ .Values.runtime.http.port }}:{{ .Values.runtime.http.port }} &
-  curl localhost:{{ .Values.runtime.http.port }}/readyz
+  curl localhost:{{ .Values.runtime.http.port }}/health
 
 What makes this a Reference System and not just a chart: execution inside the stack is deterministic,
 replayable and provenance-carrying (deny-by-default grants, an event-sourced ledger, verification on),
