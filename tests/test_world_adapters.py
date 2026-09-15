@@ -102,6 +102,43 @@ def test_twenty_adapter_search_then_create_is_idempotent(monkeypatch):
     assert calls["POST"] == 1                                    # created exactly once (idempotent)
 
 
+def test_http_adapter_accepts_injected_credentials(monkeypatch):
+    """Credentials may be injected (e.g. resolved through a CredentialBroker) instead of read from env —
+    so a secret never has to live in a caller's own config. Env stays the fallback when nothing is passed."""
+    from agentic_os.world import TwentyCrmAdapter
+    for e in _CORE_ENV:
+        monkeypatch.delenv(e, raising=False)
+    a = TwentyCrmAdapter(base="http://injected:3000/", token="inj-tok")
+    assert a.base == "http://injected:3000" and a.token == "inj-tok"      # injected, trailing slash trimmed
+    assert a._headers()["Authorization"] == "Bearer inj-tok"
+    # env fallback still works when nothing is injected
+    monkeypatch.setenv("TWENTY_BASE_URL", "http://env:3000"); monkeypatch.setenv("TWENTY_API_KEY", "env-tok")
+    b = TwentyCrmAdapter()
+    assert b.base == "http://env:3000" and b.token == "env-tok"
+
+
+def test_twenty_opportunity_kind_routes_to_opportunities(monkeypatch):
+    """An ``opportunity`` canonical object hits /rest/opportunities (search-then-create, stage carried),
+    not /rest/companies."""
+    from agentic_os.world import TwentyCrmAdapter
+    seen = {"urls": [], "payloads": []}
+
+    def fake(method, url, *, headers, payload=None, timeout=4.0):
+        seen["urls"].append(url)
+        if method == "GET":
+            return {"data": {"opportunities": []}}          # not found -> create
+        seen["payloads"].append(payload)
+        return {"data": {"createOpportunity": {"id": "opp-7"}}}
+
+    monkeypatch.setattr(A, "_http_json", fake)
+    a = TwentyCrmAdapter(base="http://twenty", token="k")
+    obj = CanonicalObject(canonical_id="acme", kind="opportunity", label="Pilot — Acme",
+                          attributes={"stage": "NEW"}, provenance="revenue-agent", realism=LIVE)
+    assert a.upsert(obj) == "opp-7"
+    assert all("/rest/opportunities" in u for u in seen["urls"])          # never touched /rest/companies
+    assert seen["payloads"][0] == {"name": "Pilot — Acme", "stage": "NEW"}
+
+
 def test_erpnext_registered_as_a_real_adapter():
     assert A.REAL_ADAPTERS["erpnext"] is A.ErpNextAdapter
 
