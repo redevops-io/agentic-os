@@ -26,6 +26,14 @@ _STORE = os.environ.get("UNIFIED_STORE") or os.path.join(tempfile.gettempdir(), 
 _RT, _ = build_unified_runtime(_STORE)
 _MISSIONS: List[str] = []
 
+# The deployed agents the bridge reaches (same URL map the console uses). Empty in local/demo mode → the
+# bridge simply finds no deployed capabilities; set these to point one Sidekick UI at all deployed apps.
+_AGENT_URLS: Dict[str, str] = {k: v for k, v in {
+    "revenue": os.environ.get("REVENUE_URL", ""), "intelligence": os.environ.get("INTEL_URL", ""),
+    "content": os.environ.get("CONTENT_URL", ""), "security": os.environ.get("SEC_URL", ""),
+    "finance": os.environ.get("FINANCE_URL", ""), "customer-success": os.environ.get("CS_URL", ""),
+}.items() if v}
+
 
 def _mission_head(mid: str) -> Dict[str, Any]:
     state = _RT.repo.state(mid)
@@ -112,6 +120,27 @@ def _build_app():
         body = await request.json()
         _RT.approve(mid, body.get("node_id"), body.get("decision", "approve"))
         return _mission_head(mid)
+
+    # ── bridge: one control surface over the DEPLOYED agents (their /capabilities + /invoke) ──────────
+    @app.get("/api/bridge/capabilities")
+    def bridge_capabilities():
+        """List every capability the deployed agents publish — so the UI shows all apps' commands at once."""
+        from .bridge import discover_capabilities
+        caps, _bases = discover_capabilities(_AGENT_URLS)
+        return {"agents": sorted(set(_AGENT_URLS)), "capabilities": [c.as_dict() for c in caps]}
+
+    @app.post("/api/bridge/invoke")
+    async def bridge_invoke(request: Request):
+        """Issue a real command to a deployed agent (credential-free — the agent resolves its own creds)."""
+        from .bridge import BridgeError, build_bridge
+        body = await request.json()
+        _caps, client = build_bridge(_AGENT_URLS)
+        try:
+            result = client.invoke(str(body.get("operator", "")), str(body.get("capability", "")),
+                                   body.get("inputs") or {}, str(body.get("idempotency_key", "")))
+        except BridgeError as e:
+            raise HTTPException(502, str(e))
+        return {"result": result}
 
     @app.get("/", response_class=HTMLResponse)
     def shell():
