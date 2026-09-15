@@ -162,7 +162,66 @@ class ClearbitProvider:
         return {"status": "unknown", "score": 0.5, "verified": None}
 
 
-_PROVIDERS = {"hunter": HunterProvider, "apollo": ApolloProvider, "clearbit": ClearbitProvider}
+class PeopleDataLabsProvider:
+    """People Data Labs — the API-first data provider (self-serve key, REST, usage-priced). First-class here
+    so PDL is a connector, not just inline code in one app. NB: on the free tier PDL returns contact fields
+    (work_email/emails) as boolean presence flags, not values — ``_email`` returns None for those, so a free
+    key yields candidates without deliverable emails until the plan has contact-data access (Pro)."""
+
+    name = "pdl"
+
+    def __init__(self, key: Optional[str] = None) -> None:
+        self._key = key or os.environ.get("PDL_API_KEY", "")
+
+    def configured(self) -> bool:
+        return bool(self._key)
+
+    def _h(self) -> Dict[str, str]:
+        return {"X-Api-Key": self._key, "Content-Type": "application/json"}
+
+    @staticmethod
+    def _email(rec: Dict[str, Any]) -> Optional[str]:
+        # Guard the free-tier bool flags: only a real string address counts.
+        v = rec.get("work_email") or rec.get("email")
+        if isinstance(v, str) and "@" in v:
+            return v
+        ems = rec.get("emails")
+        if isinstance(ems, list):
+            for e in ems:
+                a = e.get("address") if isinstance(e, dict) else e
+                if isinstance(a, str) and "@" in a:
+                    return a
+        return None
+
+    def find_email(self, *, domain: str, first_name: str, last_name: str) -> Dict[str, Any]:
+        r = _post("https://api.peopledatalabs.com/v5/person/enrich",
+                  {"first_name": first_name, "last_name": last_name, "company": domain, "min_likelihood": 6},
+                  self._h())
+        data = r.get("data") or {}
+        email = self._email(data)
+        return {"email": email, "confidence": (r.get("likelihood") or 0) / 10.0 if email else 0.0,
+                "verified": None}
+
+    def verify_email(self, email: str) -> Dict[str, Any]:
+        # PDL is a data provider, not a deliverability verifier.
+        return {"status": "unknown", "score": 0.5, "verified": None}
+
+    def search_people(self, *, domain: str, titles: "list[str]", limit: int = 3) -> "list[Dict[str, Any]]":
+        """ICP person-search by company domain + titles → candidates (work_email as VALUES on a paid tier).
+        Uses PDL's SQL form (``size``, no LIMIT); returns the same shape as ApolloProvider.search_people."""
+        title_or = " OR ".join(f"job_title LIKE '%{t}%'" for t in titles) or "TRUE"
+        sql = f"SELECT * FROM person WHERE job_company_website = '{domain}' AND ({title_or})"
+        r = _post("https://api.peopledatalabs.com/v5/person/search", {"sql": sql, "size": limit}, self._h())
+        out = []
+        for p in (r.get("data") or [])[:limit]:
+            name = p.get("full_name") or f"{p.get('first_name', '')} {p.get('last_name', '')}".strip() or None
+            out.append({"id": p.get("id"), "name": name, "first_name": p.get("first_name", ""),
+                        "title": p.get("job_title", ""), "email": self._email(p), "verified": None})
+        return out
+
+
+_PROVIDERS = {"hunter": HunterProvider, "apollo": ApolloProvider, "clearbit": ClearbitProvider,
+              "pdl": PeopleDataLabsProvider}
 
 # Apollo person_titles matches loosely: a full phrase like "VP Engineering" matches nobody, but the domain
 # keyword "engineering" matches many. Reduce human-readable buying-group roles to matchable keyword tokens.
