@@ -69,14 +69,23 @@ class Operator:
         self._seen: dict[str, dict] = {}       # idempotency_key -> first result (exactly-once)
         self.calls: list[tuple[str, str]] = []  # (capability, idempotency_key) — for assertions
 
-    def invoke(self, capability: str, inputs: dict, idempotency_key: str = "") -> dict:
+    def invoke(self, capability: str, inputs: dict, idempotency_key: str = "",
+               *, secrets: "dict | None" = None) -> dict:
         if idempotency_key and idempotency_key in self._seen:
             return self._seen[idempotency_key]
         fn = self._handlers.get(capability)
         if fn is None:
             raise KeyError(f"operator '{self.name}' has no capability '{capability}'")
         self.calls.append((capability, idempotency_key))
-        result = fn(inputs) or {}
+        # A handler that declares a second parameter receives the ephemeral redeemed credential material
+        # (mirrors InMemoryOperatorClient). `secrets` is never persisted — the dedupe cache holds the
+        # result only — so a capability can use a broker-issued credential without it entering any log.
+        import inspect  # noqa: PLC0415
+        try:
+            arity = len(inspect.signature(fn).parameters)
+        except (TypeError, ValueError):
+            arity = 1
+        result = (fn(inputs, secrets or {}) if arity >= 2 else fn(inputs)) or {}
         if idempotency_key:
             self._seen[idempotency_key] = result
         return result
@@ -117,8 +126,9 @@ class LocalOperatorClient:
     def __init__(self, operators: dict[str, Operator]):
         self._ops = operators
 
-    def invoke(self, operator: str, capability: str, inputs: dict, idempotency_key: str) -> dict:
+    def invoke(self, operator: str, capability: str, inputs: dict, idempotency_key: str,
+               *, secrets: "dict | None" = None) -> dict:
         op = self._ops.get(operator)
         if op is None:
             raise KeyError(f"no operator '{operator}' registered")
-        return op.invoke(capability, inputs, idempotency_key)
+        return op.invoke(capability, inputs, idempotency_key, secrets=secrets)
