@@ -74,11 +74,14 @@ class HttpCoreAdapter:
     token_env = ""
     health_path = "/"
 
-    def __init__(self) -> None:
+    def __init__(self, *, base: Optional[str] = None, token: Optional[str] = None) -> None:
         self.name = f"{self.app}:{self.core}"
         self.realism = RealismClass.REAL_LIVE.value
-        self.base = os.environ.get(self.base_env, "").rstrip("/")
-        self.token = os.environ.get(self.token_env, "")
+        # Credentials may be INJECTED (e.g. resolved through a CredentialBroker at the capability boundary,
+        # so the secret never has to live in a caller's own config surface) or, for local dev/demo, read
+        # from the environment. Injection is preferred; env is the fallback.
+        self.base = (base if base is not None else os.environ.get(self.base_env, "")).rstrip("/")
+        self.token = token if token is not None else os.environ.get(self.token_env, "")
         self._mirror: Dict[str, Dict[str, Any]] = {}
 
     def accepts(self, kind: str) -> bool:
@@ -161,6 +164,8 @@ class TwentyCrmAdapter(HttpCoreAdapter):
     health_path = "/rest/companies?limit=1"
 
     def upsert(self, obj: CanonicalObject) -> str:
+        if obj.kind == "opportunity":
+            return self._upsert_opportunity(obj)
         # Twenty's REST company has no external-id upsert and rejects unknown fields, so achieve idempotency
         # with search-then-create: find a company by name, else create one with {name} only.
         q = urllib.parse.quote(f"name[eq]:{obj.label}")
@@ -178,6 +183,28 @@ class TwentyCrmAdapter(HttpCoreAdapter):
             raise CoreUnavailable(f"twenty upsert failed: {type(e).__name__}") from None
         cid = ((r.get("data") or {}).get("createCompany") or {}).get("id") or r.get("id") or obj.native_id(self.app)
         return self._remember(obj, cid)
+
+    def _upsert_opportunity(self, obj: CanonicalObject) -> str:
+        # Same idempotent search-then-create as companies, on the opportunities resource. The canonical
+        # object's ``stage`` attribute (if any) sets the opportunity stage; Twenty defaults it otherwise.
+        q = urllib.parse.quote(f"name[eq]:{obj.label}")
+        try:
+            found = _http_json("GET", f"{self.base}/rest/opportunities?filter={q}&limit=1", headers=self._headers())
+        except Exception:  # noqa: BLE001 — a failed lookup just falls through to create
+            found = {}
+        recs = ((found.get("data") or {}).get("opportunities")) or found.get("opportunities") or []
+        if recs and recs[0].get("id"):
+            return self._remember(obj, recs[0]["id"])
+        payload: Dict[str, Any] = {"name": obj.label}
+        stage = obj.attributes.get("stage")
+        if stage:
+            payload["stage"] = str(stage)
+        try:
+            r = _http_json("POST", f"{self.base}/rest/opportunities", headers=self._headers(), payload=payload)
+        except Exception as e:  # noqa: BLE001
+            raise CoreUnavailable(f"twenty opportunity upsert failed: {type(e).__name__}") from None
+        oid = ((r.get("data") or {}).get("createOpportunity") or {}).get("id") or r.get("id") or obj.native_id(self.app)
+        return self._remember(obj, oid)
 
 
 class ErpNextAdapter(HttpCoreAdapter):
@@ -203,9 +230,10 @@ class ErpNextAdapter(HttpCoreAdapter):
         "ledger_entry": ("Journal Entry", "title"),
     }
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.secret = os.environ.get(self.secret_env, "")
+    def __init__(self, *, base: Optional[str] = None, token: Optional[str] = None,
+                 secret: Optional[str] = None) -> None:
+        super().__init__(base=base, token=token)
+        self.secret = secret if secret is not None else os.environ.get(self.secret_env, "")
 
     def available(self) -> bool:
         # the Frappe token pair is key AND secret; without the secret the call would 401
