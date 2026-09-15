@@ -152,7 +152,13 @@ def build_unified_runtime(store_path: str, *, tenant: str = "Meridian Wealth Man
         authority_id="unified-demo",
         principal=PrincipalRef(id="unified-demo", kind="service", tenant=tenant),
         purpose="cross-domain-pilot", scope=("crm:read", "support:write"))
-    broker = LocalCredentialBroker(EnvironmentSecretStore())
+    # Select the secret backend via REDEVOPS_SECRET_BACKEND (env|encrypted-file|keyring|vault) through the
+    # P3 factory — nothing else in the mission changes with the store. Dev falls back to the env store.
+    try:
+        from agentic_os.secrets import build_credential_broker
+        _store, broker = build_credential_broker()
+    except Exception:  # noqa: BLE001 — P3 stores absent -> dev env store + dev broker
+        broker = LocalCredentialBroker(EnvironmentSecretStore())
     executor = Executor(LocalOperatorClient(operators), authority=authority, broker=broker,
                         credentials_for=_credentials_for, authority_for=_authority_for)
     store = EventStore(path=store_path)
