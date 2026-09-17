@@ -67,7 +67,11 @@ print("   sanitized direct-URL deps in pyproject.toml")
 PY
 
 echo "== 3/4 build wheels for the sanitized suite (resolves the git deps from the wheelhouse) =="
-"$PIP" wheel --wheel-dir "$WH" --find-links "$WH" "$TMP/src[$EXTRAS]"
+# On Windows git-bash the native pip.exe can't read the MSYS "/tmp/..[extras]" path (git-bash won't
+# auto-convert an arg with [brackets]); hand pip a real Windows path via cygpath there. POSIX unchanged.
+SRC="$TMP/src"
+command -v cygpath >/dev/null 2>&1 && SRC="$(cygpath -m "$TMP/src")"
+"$PIP" wheel --wheel-dir "$WH" --find-links "$WH" "${SRC}[$EXTRAS]"
 
 echo "== 4/4 PROVE a fully offline install (no index, no git) + lock =="
 uv venv --seed --python "$PYV" "$TMP/verify" >/dev/null
