@@ -81,3 +81,39 @@ jobs:
         with: { name: redevops-ubuntu-latest, path: dist }
       - name: Clean-machine acceptance (install the .deb, reach a served control plane, no Docker)
         run: ./packaging/acceptance-ubuntu.sh "$(find dist -name '*.deb' | head -1)"
+
+  # On a version tag, collect every OS's installers and publish them as GitHub Release
+  # assets — the public download page for the desktop app. (Unsigned until signing secrets
+  # are wired in P2; the release notes flag the Gatekeeper/SmartScreen workaround.)
+  release:
+    needs: [bundle, acceptance-ubuntu]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all OS installer artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Flatten installer files
+        run: |
+          mkdir -p release
+          find dist -type f \( -name '*.deb' -o -name '*.AppImage' -o -name '*.msi' \
+            -o -name '*.exe' -o -name '*.dmg' \) -exec cp {} release/ \;
+          ls -la release/
+      - name: Publish installers to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          fail_on_unmatched_files: false
+          generate_release_notes: true
+          body: |
+            **ReDevOps Agentic Apps — desktop control surface.** Native installers for Linux, Windows and macOS.
+
+            These builds are **not yet code-signed/notarized**:
+            - **macOS**: right-click the app → **Open** (once) to bypass Gatekeeper.
+            - **Windows**: SmartScreen → **More info → Run anyway**.
+
+            The desktop app is the control surface; the Runtime/app services deploy separately (see
+            https://redevops.io/projects/apps-install).
