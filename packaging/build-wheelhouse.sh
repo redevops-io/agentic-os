@@ -14,10 +14,9 @@ PYV="${PYTHON_VERSION:-3.12}"
 # The suite the native installer ships: Projects control plane + connectors + an embedded (DuckDB)
 # durable ledger so missions survive a reboot with no external service. (rag/postgres/mcp excluded.)
 EXTRAS="projects,duckdb"
-GIT_DEPS=(
-  "runtime-contracts @ git+https://github.com/redevops-io/runtime-contracts.git@v0.3.4"
-  "redevops-connectors @ git+https://github.com/redevops-io/redevops-connectors.git@main"
-)
+# GIT_DEPS is derived from pyproject after the build venv exists (below) — every git+https
+# direct-URL dep in the core deps + the built EXTRAS — so the list can't drift out of sync
+# (this is exactly what stranded `knowledge-frontier`: a core git dep added after a hardcoded list).
 
 rm -rf "$WH"; mkdir -p "$WH"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -25,6 +24,24 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 echo "== build venv (seeded, python $PYV) =="
 uv venv --seed --python "$PYV" "$TMP/build" >/dev/null
 PIP="$TMP/build/bin/pip"
+
+echo "== derive git deps from pyproject (core + EXTRAS: $EXTRAS) =="
+mapfile -t GIT_DEPS < <("$TMP/build/bin/python" - "$ROOT/pyproject.toml" "$EXTRAS" <<'PY'
+import sys, tomllib
+d = tomllib.load(open(sys.argv[1], "rb"))
+extras = [e for e in sys.argv[2].split(",") if e]
+proj = d["project"]
+deps = list(proj.get("dependencies", []))
+opt = proj.get("optional-dependencies", {})
+for e in extras:
+    deps += opt.get(e, [])
+seen = set()
+for x in deps:
+    if "git+" in x and x not in seen:   # a git direct-URL dep the wheelhouse must pre-build
+        seen.add(x); print(x)
+PY
+)
+printf '   %s\n' "${GIT_DEPS[@]}"
 
 echo "== 1/4 build wheels for the git-pinned deps (they become normal versioned wheels) =="
 "$PIP" wheel --wheel-dir "$WH" "${GIT_DEPS[@]}"
