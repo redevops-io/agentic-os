@@ -2,13 +2,17 @@
 # Ubuntu is the proving ground (needs no signing); Windows/macOS build the SAME
 # wheelhouse+sidecar+Tauri bundle from day one (unsigned) so the recipe stays portable.
 # Signing/notarization + winget/Homebrew wiring switch on per-OS in P2 (gated on secrets).
+#
+# The desktop launcher ("Agentic Apps") is versioned as its OWN product line, INDEPENDENT of
+# the stack's v* git tags (the stack is at v0.3.x; the app is at v0.2.0). Release it with an
+# `apps-v*` tag (e.g. `apps-v0.2.0`) so a stack tag never piggyback-triggers a desktop build,
+# and the app version in deploy/launcher/src-tauri/tauri.conf.json matches the tag.
 name: native-packaging
 
 on:
   workflow_dispatch:
   push:
-    tags: ["v*"]
-    paths: ["packaging/**", "deploy/launcher/**", ".github/workflows/native-packaging.yml"]
+    tags: ["apps-v*"]   # desktop-launcher release line only (no `paths` filter: a release tag always builds)
 
 jobs:
   bundle:
@@ -19,8 +23,10 @@ jobs:
           - os: ubuntu-latest    # → .deb + AppImage   (release target now)
           - os: windows-latest   # → .msi / .nsis      (unsigned until P2)
           - os: macos-14         # → .dmg (arm64)       (unsigned/un-notarized until P2)
-          # macos-13 (Intel/x86_64) dropped — GitHub is retiring the Intel runners and jobs queue
-          # indefinitely. Ship arm64 macOS for now; add Intel via a universal2 build later.
+          # macos-13 (Intel/x86_64) dropped for good — current macOS (26/Tahoe+) no longer runs on
+          # Intel Macs and Rosetta is being retired, so an x86_64 slice would target machines that
+          # can't run the OS anyway. arm64 is the only macOS build. (GitHub is also retiring the
+          # Intel runners, which queued the leg indefinitely and blocked the release.)
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -83,12 +89,12 @@ jobs:
       - name: Clean-machine acceptance (install the .deb, reach a served control plane, no Docker)
         run: ./packaging/acceptance-ubuntu.sh "$(find dist -name '*.deb' | head -1)"
 
-  # On a version tag, collect every OS's installers and publish them as GitHub Release
+  # On an `apps-v*` tag, collect every OS's installers and publish them as GitHub Release
   # assets — the public download page for the desktop app. (Unsigned until signing secrets
   # are wired in P2; the release notes flag the Gatekeeper/SmartScreen workaround.)
   release:
     needs: [bundle, acceptance-ubuntu]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/apps-v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
