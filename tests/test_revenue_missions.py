@@ -122,3 +122,38 @@ def test_invariant_semantics():
     o.next_action = ""
     o.disposition = Disposition.WON
     assert next_action_invariant(o)                            # terminal disposition is a valid end
+
+
+# ── collector layer: sources → dedup → opportunities → governed missions ──
+def test_collector_dedup_and_open_missions():
+    from agentic_os.revenue import (
+        InMemorySource, RevenueSignal, SamGovSource, collect, open_missions,
+    )
+
+    sig = RevenueSignal(source="ai_voice", external_id="call-9", type=OpportunityType.INBOUND_LEAD,
+                        summary="Emergency HVAC lead", contact_name="Sarah", channel="whatsapp",
+                        priority=Priority.P0)
+    dup = RevenueSignal(source="ai_voice", external_id="call-9", type=OpportunityType.INBOUND_LEAD,
+                        summary="Emergency HVAC lead (again)")           # same source id → deduped
+    other = RevenueSignal(source="web_form", external_id="wf-3", type=OpportunityType.INBOUND_LEAD,
+                          summary="Quote request", company="ACME")
+    src = InMemorySource("mixed", [sig, dup, other])
+
+    opps = collect([src, SamGovSource()])                               # SAM.gov yields nothing offline
+    assert len(opps) == 2                                                # duplicate collapsed
+    ids = {o.opportunity_id for o in opps}
+    assert ids == {"ai_voice:call-9", "web_form:wf-3"}
+
+    runs = open_missions(opps, owner="Alex", channel_factory=RecordingChannel)
+    assert len(runs) == 2
+    for run in runs:                                                     # each parked at its send gate
+        assert run.state is MissionState.WAITING_HUMAN
+        run.resolve(AutoFollowupPolicy(owner="Alex"), "inquiry_acknowledgement")
+        run.owner("APPROVE_AND_SEND")
+        assert run.finalize().invariant_ok
+
+
+def test_samgov_source_offline_is_empty_but_enabled_with_key():
+    from agentic_os.revenue import SamGovSource
+    assert SamGovSource().poll() == []                                  # no key → framework still runs
+    assert SamGovSource(api_key="x").enabled is True
