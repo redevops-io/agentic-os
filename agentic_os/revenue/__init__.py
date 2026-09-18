@@ -17,3 +17,7 @@ from .gateway import (  # noqa: F401
 )
 from .fleet import revenue_fleet  # noqa: F401
 from .runner import RevenueMissionResult, RevenueMissionRun  # noqa: F401
+from .sources import (  # noqa: F401
+    InMemorySource, RevenueSignal, RevenueSignalSource, SamGovSource, collect, open_missions,
+    signal_to_opportunity,
+)
