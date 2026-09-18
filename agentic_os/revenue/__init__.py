@@ -21,3 +21,7 @@ from .sources import (  # noqa: F401
     InMemorySource, RevenueSignal, RevenueSignalSource, SamGovSource, collect, open_missions,
     signal_to_opportunity,
 )
+from .discovery_bridge import (  # noqa: F401
+    HANDOFF_CONTRACT_VERSION, IngestAction, IngestResult, MissionRegistry, QualifiedOpportunity,
+    opportunity_digest, should_open, to_revenue_opportunity,
+)
