@@ -23,5 +23,5 @@ from .sources import (  # noqa: F401
 )
 from .discovery_bridge import (  # noqa: F401
     HANDOFF_CONTRACT_VERSION, IngestAction, IngestResult, MissionRegistry, QualifiedOpportunity,
-    opportunity_digest, should_open, to_revenue_opportunity,
+    drain_outbox, opportunity_digest, should_open, to_revenue_opportunity,
 )
