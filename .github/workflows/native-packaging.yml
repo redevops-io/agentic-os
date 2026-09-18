@@ -19,7 +19,8 @@ jobs:
           - os: ubuntu-latest    # → .deb + AppImage   (release target now)
           - os: windows-latest   # → .msi / .nsis      (unsigned until P2)
           - os: macos-14         # → .dmg (arm64)       (unsigned/un-notarized until P2)
-          - os: macos-13         # → .dmg (x86_64)      (unsigned/un-notarized until P2)
+          # macos-13 (Intel/x86_64) dropped — GitHub is retiring the Intel runners and jobs queue
+          # indefinitely. Ship arm64 macOS for now; add Intel via a universal2 build later.
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
