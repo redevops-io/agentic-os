@@ -80,12 +80,18 @@ class RevenueOpportunity:
     # discovery lineage — preserved for discovered (e.g. government) opportunities so the whole chain
     # stays replayable from evidence rather than an opaque summary.
     issuing_entity: str = ""
+    department: str = ""                      # issuing department/business unit (from detail enrichment)
+    status: str = ""                          # source-declared lifecycle status (e.g. "Posted")
     jurisdiction: str = ""
     source_url: str = ""
     geographic_distance_miles: Optional[float] = None
     qualification_reasons: tuple[str, ...] = ()
     confidence: Optional[float] = None
     discovery_digest: str = ""               # material-content hash for idempotent re-ingest
+    # forecast ↔ solicitation linkage (GOV_FORECAST → the formal GOV_SOLICITATION that opens for it)
+    correlation_key: str = ""
+    linked_opportunity_id: str = ""          # the counterpart (forecast's solicitation, or vice versa)
+    forecast_lead_days: Optional[int] = None  # days the forecast preceded the formal solicitation
 
     def is_active(self) -> bool:
         return self.disposition is Disposition.OPEN
