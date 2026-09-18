@@ -185,6 +185,28 @@ def sky_deploy(mission_id: str) -> ExecutionIntent:
                            steps=[s_check, s_opt, s_launch, s_verify])
 
 
+def inbound_lead(mission_id: str) -> ExecutionIntent:
+    """Inbound Lead Watch — a revenue signal → owned next action (agentic_os.revenue).
+
+    capture → CRM opportunity → draft response → [customer-contact gate: human/policy approval] → send
+    → log activity → schedule the next action. The send is the money/contact step, so it carries the
+    approval gate; everything downstream folds the outcome back into CRM + a scheduled follow-up so the
+    opportunity always ends with an owner and a next action (the Revenue Missions invariant)."""
+    s_crm = IntentStep(outcome="opportunity_recorded", value_hint="high",
+                       need="create or update the CRM opportunity for the lead")
+    s_draft = IntentStep(outcome="response_drafted", inputs_from=["opportunity_recorded"], value_hint="high",
+                         need="prepare a draft follow-up response to the customer")
+    s_send = IntentStep(outcome="followup_sent", inputs_from=["response_drafted"], value_hint="high",
+                        need="send the approved follow-up message to the customer",
+                        constraints=["customer contact — requires human approval"])
+    s_log = IntentStep(outcome="activity_logged", inputs_from=["followup_sent"], value_hint="medium",
+                       need="log the follow-up activity in the CRM")
+    s_next = IntentStep(outcome="next_action_scheduled", inputs_from=["activity_logged"], value_hint="medium",
+                        need="schedule the next follow-up action or callback")
+    return ExecutionIntent(mission_id=mission_id, rationale="inbound-lead template",
+                           steps=[s_crm, s_draft, s_send, s_log, s_next])
+
+
 TEMPLATES = {
     "onboarding": onboarding,
     "invoice_recovery": invoice_recovery,
@@ -194,6 +216,7 @@ TEMPLATES = {
     "revenue_rescue": revenue_rescue,
     "product_launch": product_launch,
     "sky_deploy": sky_deploy,
+    "inbound_lead": inbound_lead,
 }
 
 

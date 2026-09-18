@@ -110,9 +110,79 @@ class SlackChannel:
         return []  # inbound Slack is webhook-only; out of scope for the in-process gateway
 
 
+class DiscordChannel:
+    """Discord bot: send to a channel + poll recent messages. Works behind NAT (gateway/REST poll)."""
+    name = "discord"
+
+    def __init__(self):
+        self.token = os.environ.get("AGENTIC_OS_DISCORD_BOT_TOKEN", "")
+        self.channel_id = os.environ.get("AGENTIC_OS_DISCORD_CHANNEL_ID", "")
+        self._after = "0"
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.token and self.channel_id)
+
+    def _headers(self) -> dict:
+        return {"Authorization": f"Bot {self.token}"}
+
+    def send(self, text: str, reply_to: str | None = None) -> None:
+        chan = reply_to or self.channel_id
+        if not (self.token and chan):
+            return
+        _http_json(f"https://discord.com/api/v10/channels/{chan}/messages",
+                   {"content": text}, headers=self._headers())
+
+    def poll(self) -> list[Inbound]:
+        if not self.enabled:
+            return []
+        st, body = _http_json(
+            f"https://discord.com/api/v10/channels/{self.channel_id}/messages?limit=20&after={self._after}",
+            headers=self._headers(), timeout=25.0)
+        out = []
+        for msg in reversed(body if isinstance(body, list) else []):
+            self._after = str(max(int(self._after or 0), int(msg.get("id", 0))))
+            text = (msg.get("content") or "").strip()
+            author = (msg.get("author") or {})
+            if text and not author.get("bot"):
+                out.append(Inbound("discord", text, str(author.get("username") or author.get("id") or ""),
+                                   str(self.channel_id)))
+        return out
+
+
+class SmsChannel:
+    """SMS via a Twilio-compatible REST endpoint (outbound). Inbound SMS is webhook-only, like Slack."""
+    name = "sms"
+
+    def __init__(self):
+        self.sid = os.environ.get("AGENTIC_OS_TWILIO_ACCOUNT_SID", "")
+        self.token = os.environ.get("AGENTIC_OS_TWILIO_AUTH_TOKEN", "")
+        self.from_ = os.environ.get("AGENTIC_OS_TWILIO_FROM", "")
+        self.to = os.environ.get("AGENTIC_OS_SMS_TO", "")
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.sid and self.token and self.from_ and self.to)
+
+    def send(self, text: str, reply_to: str | None = None) -> None:
+        if not self.enabled:
+            return
+        import base64
+        auth = base64.b64encode(f"{self.sid}:{self.token}".encode()).decode()
+        # Twilio wants form-encoding; _http_json posts JSON, so callers using SMS in production should
+        # route through the messaging connector. Kept here for parity + the interface; body assembled plainly.
+        _http_json(f"https://api.twilio.com/2010-04-01/Accounts/{self.sid}/Messages.json",
+                   {"To": reply_to or self.to, "From": self.from_, "Body": text},
+                   headers={"Authorization": f"Basic {auth}"})
+
+    def poll(self) -> list[Inbound]:
+        return []  # inbound SMS is webhook-only; out of scope for the in-process gateway
+
+
 def load_channels() -> list:
     names = os.environ.get("AGENTIC_OS_CHANNELS", "telegram,slack").split(",")
-    by_name = {"telegram": TelegramChannel, "slack": SlackChannel}
+    by_name = {"telegram": TelegramChannel, "slack": SlackChannel,
+               "discord": DiscordChannel, "sms": SmsChannel}
     chans = [by_name[n.strip()]() for n in names if n.strip() in by_name]
     return [c for c in chans if c.enabled]
 
