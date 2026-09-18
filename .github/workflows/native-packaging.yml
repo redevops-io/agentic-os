@@ -19,8 +19,10 @@ jobs:
           - os: ubuntu-latest    # → .deb + AppImage   (release target now)
           - os: windows-latest   # → .msi / .nsis      (unsigned until P2)
           - os: macos-14         # → .dmg (arm64)       (unsigned/un-notarized until P2)
-          # macos-13 (Intel/x86_64) dropped — GitHub is retiring the Intel runners and jobs queue
-          # indefinitely. Ship arm64 macOS for now; add Intel via a universal2 build later.
+          # macos-13 (Intel/x86_64) dropped for good — current macOS (26/Tahoe+) no longer runs on
+          # Intel Macs and Rosetta is being retired, so an x86_64 slice would target machines that
+          # can't run the OS anyway. arm64 is the only macOS build. (GitHub is also retiring the
+          # Intel runners, which queued the leg indefinitely and blocked the release.)
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
