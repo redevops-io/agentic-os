@@ -75,8 +75,17 @@ class RevenueOpportunity:
     waiting_condition: str = ""              # … or an explicit wait …
     disposition: Disposition = Disposition.OPEN   # … or a terminal disposition
     mission_id: str = ""
-    evidence_ids: tuple[str, ...] = ()
+    evidence_ids: tuple[str, ...] = ()       # REFERENCES to the originating Discovery evidence (not copies)
     proposed_response: str = ""              # the drafted follow-up the owner approves
+    # discovery lineage — preserved for discovered (e.g. government) opportunities so the whole chain
+    # stays replayable from evidence rather than an opaque summary.
+    issuing_entity: str = ""
+    jurisdiction: str = ""
+    source_url: str = ""
+    geographic_distance_miles: Optional[float] = None
+    qualification_reasons: tuple[str, ...] = ()
+    confidence: Optional[float] = None
+    discovery_digest: str = ""               # material-content hash for idempotent re-ingest
 
     def is_active(self) -> bool:
         return self.disposition is Disposition.OPEN
