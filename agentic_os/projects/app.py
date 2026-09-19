@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Optional
 
 from .content_service import ProjectsContentService
+from .contracts import WorkflowDefinition
 
 
 class ProjectsServer:
@@ -17,10 +18,16 @@ class ProjectsServer:
         self.project_id = project_id
         self.project_name = project_name
         self.services: dict[str, ProjectsContentService] = {}
+        # learned/authored workflows for this project (Workflow-Teaching plan §11)
+        self.workflows: dict[str, WorkflowDefinition] = {}
 
     def add(self, svc: ProjectsContentService) -> ProjectsContentService:
         self.services[svc.mission_id] = svc
         return svc
+
+    def add_workflow(self, wf: WorkflowDefinition) -> WorkflowDefinition:
+        self.workflows[wf.workflow_id] = wf
+        return wf
 
     def missions(self) -> list[dict]:
         out = []
@@ -28,6 +35,15 @@ class ProjectsServer:
             v = s.mission_view()
             out.append({**v["mission"], "counts": v["mission"]["summary"]})
         return out
+
+    def workflow_rows(self) -> list[dict]:
+        """§11 workflow list: title, status, trigger, versions, gate/unresolved counts."""
+        rows = []
+        for w in self.workflows.values():
+            rows.append({"id": w.workflow_id, "title": w.title, "status": w.status.value,
+                         "trigger": w.trigger, "version": w.version, "rules": len(w.rules),
+                         "gates": len(w.human_gates), "unresolved": len(w.unresolved_questions)})
+        return rows
 
 
 def create_projects_app(server: ProjectsServer):
@@ -59,6 +75,17 @@ def create_projects_app(server: ProjectsServer):
         action = (body or {}).get("action", "approve")
         selected = tuple((body or {}).get("selected_ids", []))
         return s.decide((body or {}).get("actor", "owner"), action, selected)
+
+    @app.get("/api/workflows")
+    def _workflows():
+        return server.workflow_rows()
+
+    @app.get("/api/workflows/{wid}")
+    def _workflow(wid: str):
+        w = server.workflows.get(wid)
+        if not w:
+            raise HTTPException(404, "workflow not found")
+        return w.to_dict()
 
     @app.get("/", response_class=HTMLResponse)
     def _index():
@@ -113,10 +140,22 @@ border:1px solid var(--line2);background:var(--panel);color:var(--ink);cursor:po
 .rcpt{font-family:var(--mono);font-size:12px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px}
 .rcpt a{color:var(--accent)}.ev{font-family:var(--mono);font-size:12px;color:var(--muted)}
 .empty{color:var(--faint);font-size:14px}
+.prov{display:inline-block;font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.04em;
+padding:2px 7px;border-radius:6px;margin-right:8px;vertical-align:middle}
+.prov.OBSERVED{background:var(--oksoft);color:var(--ok)}
+.prov.HUMAN_CONFIRMED{background:var(--oksoft);color:var(--ok)}
+.prov.POLICY_DEFINED{background:var(--accentsoft);color:var(--accent)}
+.prov.INFERRED{background:var(--warnsoft);color:var(--warn)}
+.prov.UNKNOWN{background:#fdecea;color:var(--bad)}
+.rule{border:1px solid var(--line);border-radius:10px;padding:11px 14px;margin-bottom:9px;background:var(--panel)}
+.rule .st{font-size:14px}.rule .m{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:4px}
+.q{border:1px solid var(--line2);border-left:3px solid var(--warn);border-radius:8px;background:var(--warnsoft);
+color:var(--warn);padding:9px 12px;font-size:13px;margin-bottom:8px}
 </style></head><body>
 <div class=top><b>ReDevOps Projects</b><span class=mono id=projname></span><span class=mono style="margin-left:auto" id=note></span></div>
 <div class=wrap>
-  <div class=side><h3>Missions</h3><div id=mlist></div></div>
+  <div class=side><h3>Missions</h3><div id=mlist></div>
+    <h3 style="margin-top:22px">Workflows</h3><div id=wlist></div></div>
   <div class=main id=main><p class=empty>Select a mission.</p></div>
 </div>
 <script>
@@ -124,7 +163,23 @@ let CUR=null;
 const j=(u,o)=>fetch(u,o).then(r=>r.json());
 const pill=s=>{const m={READY:'ready',HELD:'held',PUBLISHED:'pub',SENT:'pub',FAILED:'fail',REJECTED:'fail',EXECUTING:'ready'};
   return `<span class="pill ${m[s]||''}">${s}</span>`;};
-async function boot(){const p=await j('/api/projects');document.getElementById('projname').textContent='· '+(p[0]?.name||'');loadList();}
+async function boot(){const p=await j('/api/projects');document.getElementById('projname').textContent='· '+(p[0]?.name||'');loadList();loadWf();}
+async function loadWf(){const ws=await j('/api/workflows');const el=document.getElementById('wlist');
+  if(!ws.length){el.innerHTML='<p class=empty>No workflows yet. Teach one by demonstrating it.</p>';return;}
+  el.innerHTML=ws.map(w=>`<div class="mrow ${w.id===CUR?'sel':''}" onclick="openWf('${w.id}')">
+    <div class=t>${w.title}</div><div class=s>${w.status} · v${w.version} · ${w.rules} rules${w.unresolved?` · ⚠ ${w.unresolved} open`:''}</div></div>`).join('');}
+async function openWf(wid){CUR=wid;loadList();loadWf();const w=await j('/api/workflows/'+wid);renderWf(w);}
+function renderWf(w){
+  const rules=(w.rules||[]).map(r=>`<div class=rule><div class=st><span class="prov ${r.provenance}">${r.provenance}</span>${r.statement}</div>
+    <div class=m>${r.intent}${r.gate&&r.gate!=='G0'?' · gate '+r.gate:''}${r.confidence?' · conf '+r.confidence.toFixed(2):''}</div></div>`).join('')||'<span class=empty>no rules</span>';
+  const qs=(w.unresolved_questions||[]).map(q=>`<div class=q>? ${q}</div>`).join('');
+  const lf=w.learned_from||{};const src=[].concat(lf.recording_refs||[],lf.mission_refs||[],lf.decision_refs||[]).length;
+  document.getElementById('main').innerHTML=
+    `<p class=hgoal>${w.title}</p><p class=hsub>${w.trigger||''}</p>
+     <div>${pill(w.status)} <span class=ev>v${w.version}${w.parent_version_id?' · from '+w.parent_version_id:''}${src?' · learned from '+src+' source(s)':''}</span></div>
+     <div class=lab>Steps &amp; rules — what is observed, inferred, confirmed</div>${rules}
+     ${qs?`<div class=lab>Unresolved — needs your answer before it can run</div>${qs}`:''}`;
+}
 async function loadList(){const ms=await j('/api/missions');const el=document.getElementById('mlist');
   if(!ms.length){el.innerHTML='<p class=empty>No missions.</p>';return;}
   el.innerHTML=ms.map(m=>`<div class="mrow ${m.id===CUR?'sel':''}" onclick="open_('${m.id}')"><div class=t>${m.title}</div><div class=s>${m.summary}</div></div>`).join('');}
