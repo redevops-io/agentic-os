@@ -99,3 +99,20 @@ def test_http_app_serves_ui_and_decision(monkeypatch):
     r = client.post(f"/api/missions/{svc.mission_id}/decide",
                     json={"actor": "owner", "action": "approve", "selected_ids": [x.artifact_id]}).json()
     assert next(a for a in r["artifacts"] if a["subtype"] == "x")["status"] == "PUBLISHED"
+
+
+def test_no_gate_when_nothing_ready():
+    """A mission whose every channel is already published out-of-band (manual_receipts) and whose only
+    other output is HELD has nothing to authorize — it must NOT present a vacuous approval gate."""
+    class _NoImageGen(FakeGenerator):
+        def generate_image(self, brief, concept):
+            return {}
+    brief = ContentBrief(campaign_id="blog-001", subject="Blog", angle="a",
+                         key_message="k", channels=(Channel.X, Channel.LINKEDIN))
+    svc = ProjectsContentService(brief, owner="Alex", generator=_NoImageGen(),
+                                 include_video=True, video_held=True,
+                                 manual_receipts={"x": "http://x/1", "linkedin": "http://li/1"})
+    v = svc.mission_view()
+    statuses = sorted(a["status"] for a in v["artifacts"])
+    assert statuses == ["HELD", "PUBLISHED", "PUBLISHED"]          # X+LinkedIn published, video held
+    assert v["needs_decision"] is None                            # nothing READY → no gate

@@ -116,11 +116,16 @@ class ProjectsContentService:
         cons = f"Posts publicly to the connected {channels} account(s) — irreversible."
         if held:
             cons += " Held output(s) — " + ", ".join(a.subtype for a in held) + " — are NOT authorized."
-        return HumanRequest(
+        req = HumanRequest(
             mission_id=self.mission_id, type=HumanRequestType.AUTHORIZE_EXTERNAL_ACTION,
             gate=HumanGate.G4_EXTERNAL_COMMS, artifact_ids=tuple(ready_ids),
             prompt=f"Approve & publish the ready outputs ({ready_labels}).",
             consequences=cons)
+        # nothing READY → nothing to authorize (e.g. every channel already published out-of-band). Don't
+        # present a vacuous approval gate; mission_view surfaces needs_decision only while status is OPEN.
+        if not ready:
+            req.status = "CLOSED"
+        return req
 
     # ── the governed decision (§4/§14): selective, binds exact versions ──
     def decide(self, actor: str, action: str, selected_ids: tuple[str, ...] = ()) -> dict:
