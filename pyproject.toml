@@ -11,6 +11,12 @@ dependencies = [
     # silently is not a contract. Importing it is why this repository carries
     # the Commons Clause — see LICENSE.md.
     "runtime-contracts @ git+https://github.com/redevops-io/runtime-contracts.git@v0.3.4",
+    # The generic experience→lesson Learn engine ("a correction is not a rule"), consumed by
+    # agentic_os.projects.workflow_learning. Pinned to the exact commit that merged the learn contract
+    # (PR #5) rather than a tag: discovery-runtime's release line is mid-reconciliation (in-dev 0.1.10
+    # while v0.1.11/v0.1.12 tags already exist), so a commit SHA is the immutable, honest pin until a
+    # clean tag is cut. A contract that moves silently is not a contract.
+    "discovery-runtime @ git+https://github.com/redevops-io/discovery-runtime.git@6e48db4",
     # The domain-neutral learn/teach-next primitive, shared with learnerbot.ai. `agentic_os.
     # knowledge_frontier` re-exports it; the apps-stack adapter stays in priority_engine.
     "knowledge-frontier @ git+https://github.com/redevops-io/knowledge-frontier.git@v0.1.0",
