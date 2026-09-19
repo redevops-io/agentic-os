@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import urllib.error
 import urllib.request
 from typing import Optional, Protocol
 
@@ -92,6 +93,18 @@ def _http_json(url: str, *, method: str = "GET", headers: dict, body: Optional[d
                 return getattr(r, "status", 200), json.loads(txt)
             except (json.JSONDecodeError, ValueError):
                 return getattr(r, "status", 200), {"raw": txt}
+    except urllib.error.HTTPError as e:
+        # an HTTP error carries the provider's real message in its body (X's "detail"/"title", the
+        # LinkedIn error). Surface it instead of a bare "<HTTPError 403>" so a failed receipt is diagnosable.
+        try:
+            payload = json.loads(e.read().decode("utf-8", "ignore"))
+        except Exception:  # noqa: BLE001
+            payload = {}
+        msg = (payload.get("detail") or payload.get("title") or payload.get("message")
+               or payload.get("error") or f"HTTP {e.code}")
+        if payload.get("detail") and payload.get("title") and payload["title"] not in msg:
+            msg = f"{payload['title']}: {payload['detail']}"
+        return e.code, {"error": msg, **({"body": payload} if payload else {})}
     except Exception as e:  # noqa: BLE001
         return 0, {"error": repr(e)}
 
@@ -254,9 +267,14 @@ class XPublisher:
         import re as _re
         ck = os.environ.get(f"{prefix}_CONSUMER_KEY", "")
         cs = os.environ.get(f"{prefix}_CONSUMER_SECRET", "")
-        # the env names X_ACCESS_KEY / X_ACCESS_TOKEN are ambiguous; the real access TOKEN starts with
+        # canonical, unambiguous pair (matches the exported creds): access TOKEN + access SECRET.
+        at = os.environ.get(f"{prefix}_ACCESS_TOKEN", "")
+        ats = os.environ.get(f"{prefix}_ACCESS_SECRET", "")
+        if at and ats:
+            return cls(ck, cs, at, ats)
+        # legacy/ambiguous names X_ACCESS_KEY / X_ACCESS_TOKEN: the real access TOKEN starts with
         # "<digits>-", the access SECRET does not — detect rather than guess the mapping.
-        a, b = os.environ.get(f"{prefix}_ACCESS_KEY", ""), os.environ.get(f"{prefix}_ACCESS_TOKEN", "")
+        a, b = os.environ.get(f"{prefix}_ACCESS_KEY", ""), at
         if _re.match(r"^\d+-", a):
             at, ats = a, b
         elif _re.match(r"^\d+-", b):

@@ -29,13 +29,17 @@ class ProjectsContentService:
                  generator: Optional[Generator] = None, publisher: Optional[Publisher] = None,
                  project_id: str = "content-studio", project_name: str = "Content Studio",
                  video_held: bool = False,
-                 video_hold_reason: str = "narration off-brand — re-render with scenario detalization"):
+                 video_hold_reason: str = "narration off-brand — re-render with scenario detalization",
+                 include_video: bool = True, manual_receipts: Optional[dict] = None):
         self.project_id = project_id
         self.project_name = project_name
         self.owner = owner
         self.brief = brief
         self._video_held = video_held
         self._video_hold_reason = video_hold_reason
+        self._include_video = include_video
+        # channels already posted out-of-band (e.g. a LinkedIn post published manually): {channel: post_url}
+        self._manual_receipts = manual_receipts or {}
         self._publisher = publisher or FakePublisher(publishable=brief.channels)
         # generate + park at the gate; the mission's own publish gate uses a no-op (we publish selectively)
         self.run = ContentMissionRun(brief, owner=owner, generator=generator or FakeGenerator(),
@@ -56,13 +60,22 @@ class ProjectsContentService:
             if ch not in {c.value for c in self.brief.channels}:
                 continue
             text = (by_channel.get(ch) or {}).get("text", "")
+            prepub = ch in self._manual_receipts          # already posted out-of-band (e.g. manual LinkedIn)
             a = Artifact(
                 mission_id=self.mission_id, app_id="content", type="SocialPost", subtype=ch,
                 project_id=self.project_id, title=label, summary=text[:90], content=text,
-                mime_type="text/plain", status=ArtifactStatus.READY,
-                lifecycle_class=LifecycleClass.REVIEWABLE, allowed_actions=("Edit", "Approve"),
+                mime_type="text/plain",
+                status=ArtifactStatus.PUBLISHED if prepub else ArtifactStatus.READY,
+                lifecycle_class=LifecycleClass.REVIEWABLE,
+                allowed_actions=() if prepub else ("Edit", "Approve"),
+                content_ref=self._manual_receipts.get(ch, "") if prepub else "",
                 evidence_refs=lineage, lineage_refs=lineage)
             self.artifacts[a.artifact_id] = a
+            if prepub:
+                self.receipts.append(ActionReceipt(
+                    artifact_id=a.artifact_id, capability=f"social.publish.{ch}", provider=ch,
+                    status="SUCCEEDED", external_url=self._manual_receipts.get(ch, ""),
+                    error="posted manually (out-of-band)"))
         # optional generated hero image (viewable) — an Image artifact when one was produced
         if pv.get("image_url"):
             img = Artifact(
@@ -73,31 +86,41 @@ class ProjectsContentService:
                 allowed_actions=("Edit", "Approve", "Regenerate"), evidence_refs=lineage, lineage_refs=lineage)
             self.artifacts[img.artifact_id] = img
         # video: viewable when a presigned preview exists. Without a preview it MUST be HELD (can't publish
-        # invisible media); an explicit video_held (e.g. off-brand narration) also holds it (§11).
-        preview = pv.get("reel_preview_url", "")
-        held = self._video_held or not preview
-        video = Artifact(
-            mission_id=self.mission_id, app_id="content", type="Video", subtype="short_video",
-            project_id=self.project_id, title="Short video (9:16)",
-            summary="seedance · 3/3 rendered", content="", preview_ref=preview, mime_type="video/mp4",
-            status=ArtifactStatus.HELD if held else ArtifactStatus.READY,
-            lifecycle_class=LifecycleClass.REVIEWABLE,
-            allowed_actions=("Edit brief", "Regenerate") if held else ("Edit", "Approve"),
-            hold_reason=(self._video_hold_reason if self._video_held else
-                         ("no viewable preview yet" if not preview else "")),
-            evidence_refs=lineage, lineage_refs=lineage)
-        self.artifacts[video.artifact_id] = video
-        self._video_id = video.artifact_id
+        # invisible media); an explicit video_held (e.g. off-brand narration) also holds it (§11). A campaign
+        # with no video component (include_video=False, e.g. the text-only blog announcement) skips it.
+        self._video_id = ""
+        if self._include_video:
+            preview = pv.get("reel_preview_url", "")
+            held = self._video_held or not preview
+            video = Artifact(
+                mission_id=self.mission_id, app_id="content", type="Video", subtype="short_video",
+                project_id=self.project_id, title="Short video (9:16)",
+                summary="seedance · 3/3 rendered", content="", preview_ref=preview, mime_type="video/mp4",
+                status=ArtifactStatus.HELD if held else ArtifactStatus.READY,
+                lifecycle_class=LifecycleClass.REVIEWABLE,
+                allowed_actions=("Edit brief", "Regenerate") if held else ("Edit", "Approve"),
+                hold_reason=(self._video_hold_reason if self._video_held else
+                             ("no viewable preview yet" if not preview else "")),
+                evidence_refs=lineage, lineage_refs=lineage)
+            self.artifacts[video.artifact_id] = video
+            self._video_id = video.artifact_id
 
     def _build_request(self) -> HumanRequest:
-        ready = [a.artifact_id for a in self.artifacts.values() if a.status is ArtifactStatus.READY]
-        ready_labels = ", ".join(self.artifacts[i].subtype for i in ready)
+        # the consequence text is shown BEFORE an irreversible action — it must describe THIS mission's
+        # actual ready/held outputs, not a generic template (§11).
+        ready = [a for a in self.artifacts.values() if a.status is ArtifactStatus.READY]
+        ready_ids = [a.artifact_id for a in ready]
+        ready_labels = ", ".join(a.subtype for a in ready) or "none"
+        channels = ", ".join(dict.fromkeys(a.subtype for a in ready)) or "the selected channels"
+        held = [a for a in self.artifacts.values() if a.status is ArtifactStatus.HELD]
+        cons = f"Posts publicly to the connected {channels} account(s) — irreversible."
+        if held:
+            cons += " Held output(s) — " + ", ".join(a.subtype for a in held) + " — are NOT authorized."
         return HumanRequest(
             mission_id=self.mission_id, type=HumanRequestType.AUTHORIZE_EXTERNAL_ACTION,
-            gate=HumanGate.G4_EXTERNAL_COMMS, artifact_ids=tuple(ready),
+            gate=HumanGate.G4_EXTERNAL_COMMS, artifact_ids=tuple(ready_ids),
             prompt=f"Approve & publish the ready outputs ({ready_labels}).",
-            consequences="Posts publicly to the connected X and LinkedIn accounts — irreversible. "
-                         "The held video is not authorized.")
+            consequences=cons)
 
     # ── the governed decision (§4/§14): selective, binds exact versions ──
     def decide(self, actor: str, action: str, selected_ids: tuple[str, ...] = ()) -> dict:
