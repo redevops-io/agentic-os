@@ -38,9 +38,22 @@ def test_oauth1_is_deterministic_per_nonce_and_body_independent():
     assert a == b and a != c                                  # stable per nonce; changes with nonce
 
 
+def test_from_env_canonical_token_secret(monkeypatch):
+    # the exported creds use the canonical, unambiguous pair X_ACCESS_TOKEN + X_ACCESS_SECRET
+    monkeypatch.setenv("X_CONSUMER_KEY", "ck")
+    monkeypatch.setenv("X_CONSUMER_SECRET", "cs")
+    monkeypatch.delenv("X_ACCESS_KEY", raising=False)
+    monkeypatch.setenv("X_ACCESS_TOKEN", "1526228120-AbCdEfGh")
+    monkeypatch.setenv("X_ACCESS_SECRET", "plain45charsecretstring")
+    p = XPublisher.from_env()
+    assert p._at == "1526228120-AbCdEfGh" and p._ats == "plain45charsecretstring"
+    assert p.can_publish(Channel.X)
+
+
 def test_from_env_detects_access_token_vs_secret(monkeypatch):
     monkeypatch.setenv("X_CONSUMER_KEY", "ck")
     monkeypatch.setenv("X_CONSUMER_SECRET", "cs")
+    monkeypatch.delenv("X_ACCESS_SECRET", raising=False)   # force the legacy ambiguous path
     # real access token starts with "<digits>-"; the secret does not — mapping detected either way
     monkeypatch.setenv("X_ACCESS_KEY", "1526228120-AbCdEfGh")
     monkeypatch.setenv("X_ACCESS_TOKEN", "plain45charsecretstring")
@@ -55,6 +68,6 @@ def test_from_env_detects_access_token_vs_secret(monkeypatch):
 
 
 def test_cannot_publish_without_full_quartet(monkeypatch):
-    for v in ("X_CONSUMER_KEY", "X_CONSUMER_SECRET", "X_ACCESS_KEY", "X_ACCESS_TOKEN"):
+    for v in ("X_CONSUMER_KEY", "X_CONSUMER_SECRET", "X_ACCESS_KEY", "X_ACCESS_TOKEN", "X_ACCESS_SECRET"):
         monkeypatch.delenv(v, raising=False)
     assert not XPublisher.from_env().can_publish(Channel.X)
