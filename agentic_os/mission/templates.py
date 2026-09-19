@@ -118,6 +118,33 @@ def product_launch(mission_id: str) -> ExecutionIntent:
                            steps=[research, announce, blog, social, email, leads, support, publish, track])
 
 
+def content_distribution(mission_id: str) -> ExecutionIntent:
+    """Content distribution as ONE governed mission: generate a concept + per-channel drafts and media,
+    then [APPROVAL] publish across channels, then track. The publish node is the single side-effecting,
+    human-gated step — nothing reaches a live social account until the owner approves it in the UI.
+
+        concept_generated → (fan out) reel_rendered · x_thread_drafted · linkedin_drafted
+                                    ↓
+                    [APPROVAL] content_published → performance_tracked
+    """
+    concept = IntentStep(outcome="concept_generated", value_hint="high",
+                         need="generate the content concept + hook for the campaign angle")
+    reel = IntentStep(outcome="reel_rendered", inputs_from=["concept_generated"], value_hint="high",
+                      need="render the short-form vertical video for the concept")
+    x_thread = IntentStep(outcome="x_thread_drafted", inputs_from=["concept_generated"],
+                          need="draft the X/Twitter post or thread for the concept")
+    linkedin = IntentStep(outcome="linkedin_drafted", inputs_from=["concept_generated"],
+                          need="draft the LinkedIn post for the concept")
+    publish = IntentStep(outcome="content_published", value_hint="high",
+                         inputs_from=["reel_rendered", "x_thread_drafted", "linkedin_drafted"],
+                         need="publish the approved content across the selected channels",
+                         constraints=["public posting — requires human approval before it goes live"])
+    track = IntentStep(outcome="performance_tracked", inputs_from=["content_published"],
+                       need="track engagement/performance of the published content")
+    return ExecutionIntent(mission_id=mission_id, rationale="content-distribution template",
+                           steps=[concept, reel, x_thread, linkedin, publish, track])
+
+
 def teardown_app(mission_id: str) -> ExecutionIntent:
     """Tear-down as a governed mission (v6 Phase 6.1) — the inverse of deploy_app, so you stop
     paying for a deployment you're done with. Roll the release back, then [approval] destroy the
@@ -215,6 +242,7 @@ TEMPLATES = {
     "cost_audit": cost_audit,
     "revenue_rescue": revenue_rescue,
     "product_launch": product_launch,
+    "content_distribution": content_distribution,
     "sky_deploy": sky_deploy,
     "inbound_lead": inbound_lead,
 }

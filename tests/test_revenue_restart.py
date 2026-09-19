@@ -85,3 +85,20 @@ def test_restart_detects_amendment(tmp_path):
     res = reg2.ingest(QualifiedOpportunity.from_dict(amended))
     assert res.action is IngestAction.AMENDED             # recognized as the SAME tender, amended
     assert res.run is not None and res.run.opp.deadline == "2026-09-14"
+
+
+def test_drain_outbox_is_idempotent(tmp_path):
+    # the soak (collection side) writes handoffs to a JSONL outbox; the Mission side drains it
+    from agentic_os.revenue import drain_outbox
+    import json
+    outbox = tmp_path / "handoffs.jsonl"
+    outbox.write_text(json.dumps(HANDOFF) + "\n")
+
+    reg = _registry(tmp_path)
+    first = drain_outbox(str(outbox), reg)
+    assert first.get("CREATED") == 1                      # opened one mission
+
+    # re-draining the SAME outbox (e.g. next scheduled tick) opens no duplicate — idempotent seam
+    reg2 = _registry(tmp_path)
+    again = drain_outbox(str(outbox), reg2)
+    assert again.get("UNCHANGED") == 1 and "CREATED" not in again
