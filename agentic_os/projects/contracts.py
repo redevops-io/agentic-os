@@ -206,6 +206,122 @@ class WorkflowDefinition:
         return d
 
 
+class ObservationKind(str, Enum):
+    """§6 — what a recorded observation is. Evidence priority runs browser action → network/API →
+    DOM/state → screenshot → model judgment; the higher-priority kinds carry more weight in discovery."""
+    NAVIGATION = "NAVIGATION"; CLICK = "CLICK"; INPUT = "INPUT"; SELECTION = "SELECTION"
+    SUBMIT = "SUBMIT"; NETWORK = "NETWORK"; READ = "READ"; WRITE = "WRITE"; DECISION = "DECISION"
+    WAIT = "WAIT"; RESULT = "RESULT"; UPLOAD = "UPLOAD"; DOWNLOAD = "DOWNLOAD"
+
+
+@dataclass
+class DemonstrationObservation:
+    """§6/Phase 1 — one immutable observed step in a recording. Ordered by ``seq``. Carries a SEMANTIC
+    label (``intent``/``target``) alongside raw evidence refs, and references captured values
+    (``value_ref``) rather than storing them — sensitive data is never persisted here (§19)."""
+    session_id: str
+    seq: int
+    kind: ObservationKind
+    app_id: str = ""
+    intent: str = ""               # semantic label when known ("search company"), not a raw selector
+    target: str = ""               # semantic target (entity/field)
+    value_ref: str = ""            # reference to a captured value — NEVER the raw secret (§19)
+    fields_read: tuple[str, ...] = ()
+    fields_written: tuple[str, ...] = ()
+    api_ref: str = ""              # network/API evidence when available (outranks DOM)
+    alternatives: tuple[str, ...] = ()   # for SELECTION/DECISION: the options NOT taken (§9)
+    evidence_refs: tuple[str, ...] = ()
+    obs_id: str = field(default_factory=lambda: _id("obs"))
+    observed_at: str = field(default_factory=_now)
+
+    def to_dict(self) -> dict:
+        d = self.__dict__.copy()
+        d["kind"] = self.kind.value
+        for k in ("fields_read", "fields_written", "alternatives", "evidence_refs"):
+            d[k] = list(getattr(self, k))
+        return d
+
+
+@dataclass
+class DemonstrationSession:
+    """Phase 1 — an immutable recording of how work was done once. A demonstration is EVIDENCE, not
+    authorization (§3/§25.1): no observation here is ever replayed automatically."""
+    project_id: str
+    title: str
+    app_ids: tuple[str, ...] = ()
+    observations: tuple[DemonstrationObservation, ...] = ()
+    observation_only: bool = True
+    masked: bool = True            # sensitive fields masked at capture (§19)
+    session_id: str = field(default_factory=lambda: _id("demo"))
+    created_at: str = field(default_factory=_now)
+
+    def to_dict(self) -> dict:
+        d = self.__dict__.copy()
+        d["app_ids"] = list(self.app_ids)
+        d["observations"] = [o.to_dict() for o in self.observations]
+        return d
+
+
+@dataclass
+class WorkflowStep:
+    """§5 — a semantic step lifted from observations, NOT a brittle click script. Preserves API-first
+    execution with UI fallback (§8): a demonstrated SaaS UI interaction resolves to a provider API when
+    one exists, with the governed UI Agent as fallback."""
+    intent: str
+    description: str = ""
+    preferred_capability: str = ""
+    fallback_capabilities: tuple[str, ...] = ()
+    preconditions: tuple[str, ...] = ()
+    postconditions: tuple[str, ...] = ()
+    decision_rule: str = ""        # §9 — a hidden choice lifted into a candidate rule
+    human_gate: HumanGate = HumanGate.G0_NONE
+    provenance: RuleProvenance = RuleProvenance.OBSERVED
+    observation_refs: tuple[str, ...] = ()
+    confidence: float = 0.0
+    step_id: str = field(default_factory=lambda: _id("step"))
+
+    def to_dict(self) -> dict:
+        d = self.__dict__.copy()
+        d["human_gate"] = self.human_gate.value
+        d["provenance"] = self.provenance.value
+        for k in ("fallback_capabilities", "preconditions", "postconditions", "observation_refs"):
+            d[k] = list(getattr(self, k))
+        return d
+
+
+@dataclass
+class WorkflowCandidate:
+    """§7 — the output of workflow discovery, DISTINCT from an activated WorkflowDefinition. It exposes
+    what is observed vs inferred vs unknown (§7/§14), the capabilities matched, the human gates it thinks
+    are needed, and — crucially — its assumptions, ambiguities and unresolved questions. A candidate is
+    never executable on its own (§3): it must be reviewed, clarified and shadow-tested first."""
+    project_id: str
+    session_id: str
+    proposed_trigger: str = ""
+    proposed_inputs: tuple[str, ...] = ()
+    steps: tuple[WorkflowStep, ...] = ()
+    proposed_outputs: tuple[str, ...] = ()
+    capability_matches: tuple[str, ...] = ()
+    proposed_human_gates: tuple[HumanGate, ...] = ()
+    assumptions: tuple[str, ...] = ()
+    ambiguities: tuple[str, ...] = ()
+    unsupported_steps: tuple[str, ...] = ()
+    unresolved_questions: tuple[str, ...] = ()
+    evidence_refs: tuple[str, ...] = ()
+    confidence_by_component: dict = field(default_factory=dict)
+    candidate_id: str = field(default_factory=lambda: _id("cand"))
+    created_at: str = field(default_factory=_now)
+
+    def to_dict(self) -> dict:
+        d = self.__dict__.copy()
+        d["steps"] = [s.to_dict() for s in self.steps]
+        d["proposed_human_gates"] = [g.value for g in self.proposed_human_gates]
+        for k in ("proposed_inputs", "proposed_outputs", "capability_matches", "assumptions",
+                  "ambiguities", "unsupported_steps", "unresolved_questions", "evidence_refs"):
+            d[k] = list(getattr(self, k))
+        return d
+
+
 @dataclass
 class WorkflowLearningCandidate:
     """§10 — a proposed workflow change awaiting validation. Serializable (no engine handle): it records
