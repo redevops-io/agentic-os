@@ -26,4 +26,8 @@ regexes = [
                                     # CRM/Outreach producers…"; generic-api-key read "API:" + a slashy
                                     # token as a key. Not a secret. HEAD is reworded; the merged
                                     # commits (2fa1a0c/fa11b5d) are immutable, so allow-list the string.
+  '''1526228120-AbCdEfGh''',        # fake X/Twitter OAuth1 access-token fixture (tests/test_x_oauth1.py).
+                                    # Shaped like a real "<digits>-token" ONLY to prove from_env() maps
+                                    # access-key vs secret by that shape; non-functional. Committed in
+                                    # ab3f486 (PR #184), immutable, so the history-wide scan needs it.
 ]
