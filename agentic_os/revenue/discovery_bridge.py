@@ -63,6 +63,7 @@ class QualifiedOpportunity:
     discovered_at: str = ""
     geographic_reasoning: tuple[str, ...] = ()
     confidence: Optional[float] = None
+    qualification_version: str = ""
     contract_version: str = HANDOFF_CONTRACT_VERSION
 
     @classmethod
@@ -93,7 +94,8 @@ class QualifiedOpportunity:
             detail_observed=bool(d.get("detail_observed", False)),
             discovered_at=d.get("discovered_at", ""),
             geographic_reasoning=tuple(d.get("geographic_reasoning", ())),
-            confidence=d.get("confidence"), contract_version=ver or HANDOFF_CONTRACT_VERSION)
+            confidence=d.get("confidence"), qualification_version=d.get("qualification_version", ""),
+            contract_version=ver or HANDOFF_CONTRACT_VERSION)
 
 
 def should_open(qo: QualifiedOpportunity) -> bool:
@@ -176,6 +178,7 @@ def to_revenue_opportunity(qo: QualifiedOpportunity, *, owner: str = "") -> Reve
         confidence=qo.confidence,
         discovery_digest=opportunity_digest(qo),
         correlation_key=qo.correlation_key,
+        qualification_version=qo.qualification_version,
     )
 
 
@@ -394,3 +397,25 @@ class MissionRegistry:
         return {"linked_opportunity_id": rec.opportunity.linked_opportunity_id,
                 "forecast_lead_days": rec.opportunity.forecast_lead_days,
                 "correlation_key": rec.correlation_key}
+
+
+def drain_outbox(outbox_path: str, registry: "MissionRegistry") -> dict:
+    """Idempotently ingest a handoff outbox — a JSONL of revenue-handoff/v1 records written by the
+    collection side (the soak) — into a MissionRegistry.
+
+    This is the decoupled seam in operation: the collection repo writes JSON, this reads JSON; neither
+    imports the other. Safe to re-run over the whole file: the registry is idempotent on opportunity_id,
+    so a handoff already seen is UNCHANGED, never a duplicate lead. Returns per-action counts."""
+    import os
+    from collections import Counter
+    counts: Counter = Counter()
+    if not os.path.exists(outbox_path):
+        return {}
+    with open(outbox_path) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            res = registry.ingest(QualifiedOpportunity.from_dict(json.loads(line)))
+            counts[res.action.value] += 1
+    return dict(counts)

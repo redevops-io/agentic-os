@@ -88,6 +88,7 @@ class RevenueOpportunity:
     qualification_reasons: tuple[str, ...] = ()
     confidence: Optional[float] = None
     discovery_digest: str = ""               # material-content hash for idempotent re-ingest
+    qualification_version: str = ""          # rules+profile version the decision was made under
     # forecast ↔ solicitation linkage (GOV_FORECAST → the formal GOV_SOLICITATION that opens for it)
     correlation_key: str = ""
     linked_opportunity_id: str = ""          # the counterpart (forecast's solicitation, or vice versa)
