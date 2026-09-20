@@ -36,16 +36,16 @@ postgres = ["psycopg[binary]>=3.1"]   # shared ledger for member/hub topology
 # The live Context-Runtime / RAG indexer for file & cloud sources (hybrid BM25 + embeddings
 # over DuckDB). Optional: without it, file sources scan but content isn't indexed/retrievable.
 # Pulls sentence-transformers. See agentic_os.sources_rag.
-rag = ["redevops-rag @ git+https://github.com/redevops-io/redevops-rag.git@main"]
+rag = ["redevops-rag @ git+https://github.com/redevops-io/redevops-rag.git@v0.4.0"]
 # Live provider adapters for the Integration Plane. Optional by design: the base install
 # reasons about integrations (manifest, wizard, ConnectPlan) with no connector dependency;
 # this pulls the runtime plugin that actually connects/executes against SaaS providers.
 # See agentic_os.integrations.live.
-connectors = ["redevops-connectors @ git+https://github.com/redevops-io/redevops-connectors.git@main"]
+connectors = ["redevops-connectors @ git+https://github.com/redevops-io/redevops-connectors.git@v0.1.0"]
 # The served Projects app (UI + API on one origin). fastapi/uvicorn are already base deps and
 # the UI bundle ships in the wheel, so serving needs nothing extra; this pulls the connector
 # plugin so the running app can actually connect apps and sources (live), not just render.
-projects = ["redevops-connectors @ git+https://github.com/redevops-io/redevops-connectors.git@main"]
+projects = ["redevops-connectors @ git+https://github.com/redevops-io/redevops-connectors.git@v0.1.0"]
 # Per-app extras. The base install is already minimal — the connector plugin is stdlib-only
 # (urllib), so an app extra is about *selecting/enabling* an app, not shrinking a download.
 # Each pulls the `projects` plugin (the plane the app connects through); pair it with
