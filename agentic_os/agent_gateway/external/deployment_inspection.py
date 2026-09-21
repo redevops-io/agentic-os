@@ -24,7 +24,7 @@ from .approval_bridge import ExternalApprovalBridge
 from .contracts import AgentIdentity, AgentPermissionScope, AgentTaskRequest
 from .fake_adapter import FakeExternalAgentAdapter
 from .operator import ExternalAgentOperator
-from .projections import external_action_view
+from .projections import external_action_view, inspection_mission_view
 
 SENTINEL_READ_ENDPOINTS: Tuple[str, ...] = (
     "/health", "/api/activity", "/api/backups/status", "/api/network/review")
@@ -158,11 +158,10 @@ def demo_inspection_mission(base_url: str = "https://sentinel.redevops.io", *,
     → project it for Projects/Sidekick. The remediation runs through a fake adapter (never touches live
     infra) but exercises the real approval → Decision → operator → receipt → verification path."""
     report = run_inspection(base_url, fetch=fetch)
-    result: dict = {"inspection": report.view(), "governed_action": None}
-
+    live = fetch is None
     finding = report.top_finding
     if finding is None:
-        return result
+        return inspection_mission_view(report.view(), None, live=live)
 
     principal = Principal(id="user:operator", kind="user", roles=("operator",), tenant="redevops")
     request = build_remediation_request(finding, principal=principal, project_id=project_id,
@@ -177,7 +176,7 @@ def demo_inspection_mission(base_url: str = "https://sentinel.redevops.io", *,
     out = operator.operator.invoke(request.capability,
                                    {"_outcome": "succeed", "decision_id": authz.decision_id,
                                     "mission_id": mission_id}, request.idempotency_key)
-    result["governed_action"] = external_action_view(
-        request, decision_id=decision.decision_id, receipt=out["receipt"],
+    governed = external_action_view(
+        request, approval_state="authorized", decision_id=decision.decision_id, receipt=out["receipt"],
         verification=out.get("verification", ""), task_state=out.get("state", ""))
-    return result
+    return inspection_mission_view(report.view(), governed, live=live)

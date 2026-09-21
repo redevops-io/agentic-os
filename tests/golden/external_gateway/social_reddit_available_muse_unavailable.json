@@ -1,0 +1,186 @@
+{
+  "market_signals": 2,
+  "mission": "Social Intelligence",
+  "observations": 6,
+  "opportunities": {
+    "commercial_intent_evidence": 1,
+    "problem_signals": 5,
+    "solution_seeking": 4,
+    "total": 6,
+    "unknown_commercial_intent": 5
+  },
+  "opportunity_cards": [
+    {
+      "components": {
+        "commercial_intent": 0.0,
+        "evidence_quality": 1.0,
+        "freshness": 0.9804,
+        "problem_relevance": 1.0,
+        "product_fit": 1.0,
+        "solution_seeking": 1.0,
+        "specificity": 0.705
+      },
+      "confidence": 0.8333,
+      "evidence_refs": [
+        "soev:4be27ac5a6568eb7"
+      ],
+      "freshness_seconds": 1728.0,
+      "opportunity_id": "<id>",
+      "problem": "problem markers: trying to, forgetting, forget",
+      "proposed_actions": [
+        "review_as_lead_candidate",
+        "propose_useful_response"
+      ],
+      "provider": "fake-social",
+      "unknown_dimensions": [
+        "commercial_intent"
+      ]
+    },
+    {
+      "components": {
+        "commercial_intent": 0.0,
+        "evidence_quality": 1.0,
+        "freshness": 0.6667,
+        "problem_relevance": 1.0,
+        "product_fit": 1.0,
+        "solution_seeking": 0.0,
+        "specificity": 0.305
+      },
+      "confidence": 0.5819,
+      "evidence_refs": [
+        "soev:a4ec2439eda4f1f2"
+      ],
+      "freshness_seconds": 43200.0,
+      "opportunity_id": "<id>",
+      "problem": "problem markers: frustrating, garbage, again",
+      "proposed_actions": [
+        "add_to_market_signal_cluster"
+      ],
+      "provider": "fake-social",
+      "unknown_dimensions": [
+        "solution_seeking",
+        "commercial_intent"
+      ]
+    },
+    {
+      "components": {
+        "commercial_intent": 1.0,
+        "evidence_quality": 1.0,
+        "freshness": 0.9091,
+        "problem_relevance": 0.4,
+        "product_fit": 0.3,
+        "solution_seeking": 1.0,
+        "specificity": 0.565
+      },
+      "confidence": 0.6792,
+      "evidence_refs": [
+        "soev:685ff04204c87c5a"
+      ],
+      "freshness_seconds": 8640.0,
+      "opportunity_id": "<id>",
+      "problem": "question without explicit problem markers",
+      "proposed_actions": [
+        "review_as_lead_candidate",
+        "propose_useful_response"
+      ],
+      "provider": "fake-social",
+      "unknown_dimensions": [
+        "product_fit",
+        "evidence_sufficiency"
+      ]
+    },
+    {
+      "components": {
+        "commercial_intent": 0.0,
+        "evidence_quality": 1.0,
+        "freshness": 0.9709,
+        "problem_relevance": 1.0,
+        "product_fit": 1.0,
+        "solution_seeking": 1.0,
+        "specificity": 0.705
+      },
+      "confidence": 0.8323,
+      "evidence_refs": [
+        "soev:123146212b1d2a95"
+      ],
+      "freshness_seconds": 2592.0,
+      "opportunity_id": "<id>",
+      "problem": "problem markers: trying to, forgetting, forget",
+      "proposed_actions": [
+        "review_as_lead_candidate",
+        "propose_useful_response"
+      ],
+      "provider": "fake-social",
+      "unknown_dimensions": [
+        "commercial_intent"
+      ]
+    },
+    {
+      "components": {
+        "commercial_intent": 0.0,
+        "evidence_quality": 1.0,
+        "freshness": 0.0323,
+        "problem_relevance": 1.0,
+        "product_fit": 1.0,
+        "solution_seeking": 1.0,
+        "specificity": 0.29
+      },
+      "confidence": 0.7177,
+      "evidence_refs": [
+        "soev:6c1a21cdae5f9ccd"
+      ],
+      "freshness_seconds": 2592000.0,
+      "opportunity_id": "<id>",
+      "problem": "problem markers: losing, keeps",
+      "proposed_actions": [
+        "review_as_lead_candidate",
+        "propose_useful_response"
+      ],
+      "provider": "fake-social",
+      "unknown_dimensions": [
+        "commercial_intent"
+      ]
+    },
+    {
+      "components": {
+        "commercial_intent": 0.0,
+        "evidence_quality": 1.0,
+        "freshness": 0.8333,
+        "problem_relevance": 1.0,
+        "product_fit": 1.0,
+        "solution_seeking": 0.0,
+        "specificity": 0.57
+      },
+      "confidence": 0.6118,
+      "evidence_refs": [
+        "soev:2ddb7c4ad1aea2ba"
+      ],
+      "freshness_seconds": 17280.0,
+      "opportunity_id": "<id>",
+      "problem": "problem markers: loses",
+      "proposed_actions": [
+        "add_to_market_signal_cluster"
+      ],
+      "provider": "fake-social",
+      "unknown_dimensions": [
+        "solution_seeking",
+        "commercial_intent"
+      ]
+    }
+  ],
+  "proposed_actions": [
+    "Draft response",
+    "Create content mission",
+    "Track topic"
+  ],
+  "sources": [
+    {
+      "source": "Reddit",
+      "status": "AVAILABLE / policy-scoped"
+    },
+    {
+      "source": "Meta/Muse",
+      "status": "UNAVAILABLE \u2014 unknown"
+    }
+  ]
+}
