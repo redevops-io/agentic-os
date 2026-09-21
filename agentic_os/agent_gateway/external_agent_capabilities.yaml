@@ -1,0 +1,96 @@
+# External Agent Gateway — Provider Capability Audit (Phase 0)
+#
+# Plan §10 / §20: "Do not infer that model API access implies control of a user's Muse agent."
+# Every capability starts UNKNOWN and may ONLY be promoted to VERIFIED with a source-evidence
+# reference to a supported, documented provider interface. Nothing here is enabled by a provider's
+# marketing claims. The gateway reads this file to decide which provider capabilities may be wired;
+# an UNKNOWN/UNSUPPORTED/PROHIBITED capability fails closed (never falls back to scraping/automation).
+#
+# Status vocabulary:
+#   VERIFIED           supported, documented interface confirmed (evidence ref required)
+#   UNVERIFIED         a candidate interface exists but has not been confirmed against docs/terms
+#   UNKNOWN            no evidence either way (the safe default; treated as unavailable)
+#   UNSUPPORTED        provider does not expose this
+#   CONTRACT_REQUIRED  available only under a signed developer/data agreement not yet in place
+#   POLICY_SCOPED      available but constrained by provider policy (rate/purpose/attribution)
+#   PROHIBITED         provider terms forbid this use
+#
+# Only VERIFIED (and POLICY_SCOPED within its recorded policy) may be enabled in code.
+
+contract_version: agent-gateway/v1
+audited_at: "2026-09-21"
+audited_by: redevops@redevops.io
+
+providers:
+
+  # ── The reference adapter used for all conformance/adversarial tests. It is the ONLY provider
+  #    that is VERIFIED today, because it is deterministic and in-repo (no external dependency). ──
+  fake-external-agent:
+    kind: test-fixture
+    orchestration:
+      remote_task_submission: VERIFIED       # FakeExternalAgentAdapter.submit_task
+      stable_task_identity: VERIFIED
+      task_status: VERIFIED
+      task_cancellation: VERIFIED
+      provide_input: VERIFIED                 # WAITING_FOR_INPUT resumption
+      structured_result_return: VERIFIED
+      background_execution: VERIFIED
+      approval_callback: VERIFIED             # provider-side approval is surfaced, never trusted
+      principal_attestation: VERIFIED         # deterministic signed principal for tests
+    evidence: "in-repo: agentic_os/agent_gateway/external/fake_adapter.py"
+
+  # ── Meta Muse: candidate first REAL adapter. Meta describes Muse as able to connect to Instagram
+  #    and other apps, run a persistent browser, and work in the background. That is NOT proof of a
+  #    supported third-party orchestration API. Everything stays UNKNOWN until Phase 8 verification. ──
+  meta-muse:
+    kind: personal-agent
+    orchestration:
+      remote_task_submission: UNKNOWN
+      stable_task_identity: UNKNOWN
+      task_status: UNKNOWN
+      task_cancellation: UNKNOWN
+      provide_input: UNKNOWN
+      structured_result_return: UNKNOWN
+      background_monitoring: UNKNOWN
+      scheduled_task_execution: UNKNOWN
+      connector_scoped_permissions: UNKNOWN
+      approval_callbacks: UNKNOWN
+      audit_export: UNKNOWN
+      principal_attestation: UNKNOWN
+    browser_execution:
+      persistent_browser: UNVERIFIED          # Meta states this; unverified as a third-party interface
+    social:
+      instagram:
+        connected_content_read: UNKNOWN
+        public_search: UNKNOWN
+        comment_read: UNKNOWN
+        publish: UNKNOWN
+        reply: UNKNOWN
+      facebook:
+        public_search: UNKNOWN
+        page_read: UNKNOWN
+        publish: UNKNOWN
+        reply: UNKNOWN
+      threads:
+        public_search: UNKNOWN
+        publish: UNKNOWN
+        reply: UNKNOWN
+    note: >
+      If Muse exposes only user-driven interaction and no third-party orchestration interface, do NOT
+      fake an integration (plan §30). Keep the generic gateway and use a supported Meta API or another
+      execution provider. No MetaMuseAdapter ships until this table has VERIFIED rows with evidence.
+
+  # ── Reddit: a distinct provider-policy surface, NOT "another website to scrape" (plan §29). ──
+  reddit:
+    kind: social-data
+    social:
+      search_public: CONTRACT_REQUIRED        # supported Reddit developer/data access only
+      fetch_thread: CONTRACT_REQUIRED
+      publish: POLICY_SCOPED                  # permitted only within Reddit policy + attribution
+      reply: POLICY_SCOPED
+      unsolicited_dm: PROHIBITED
+      training_use: PROHIBITED                # no model training on Reddit content unless permitted
+    commercial_use: CONTRACT_REQUIRED         # lead-gen use requires explicit contractual permission
+    note: >
+      If commercial access is not authorized, the capability MUST fail closed rather than falling back
+      to browser scraping. See providers/reddit/POLICY.md before enabling any row.

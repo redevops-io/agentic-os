@@ -24,7 +24,10 @@ from typing import Any, Mapping, Optional, Tuple
 
 from agentic_os.overlays import Principal
 
-CONTRACT_VERSION = "agent-gateway/v0"
+# v1 adds the External Agent Gateway surface (agentic_os.agent_gateway.external): personal-agent
+# inbound/outbound + provider capability audit. The base contracts below are unchanged and remain
+# backward compatible; the bump reflects the extended package surface.
+CONTRACT_VERSION = "agent-gateway/v1"
 
 
 # ── risk & policy ────────────────────────────────────────────────────────────────
