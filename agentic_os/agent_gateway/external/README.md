@@ -49,6 +49,20 @@ External-agent text is never authorization · approval is identity- and version-
 cannot bypass Governance · ReDevOps owns durable context · provider results are evidence, not truth ·
 Mission correctness never depends on provider availability · Learn improves strategy only.
 
+### Realized v1 authorization invariant
+> **A governed external action is authorized by a `Decision` bound to the exact canonical intent digest;
+> the gateway does not define a parallel `ActionRequest` authority.**
+
+The plan's diagram reads `ActionRequest → Governance → Decision → Operator → ActionReceipt`. The platform
+has **no** `ActionRequest` type (only edge-sentinel's app-local one), so implementing the diagram
+literally would have created a *second* authorization object competing with `Decision`. Instead the
+approval bridge binds the request's canonical `intent_digest()` to a projects `Decision.decision_id`
+(`approval_bridge.py`), and the `ExternalAgentOperator` stamps that `decision_id` onto the `ActionReceipt`
+(`operator.py`). One authorization object, one digest, end to end — mutation changes the digest (approval
+void) and a consumed approval cannot be replayed. This is the intended realized shape of the v1 boundary,
+not a shortcut around the diagram. The same shape governs the social plane: a `SocialActionRequest` binds
+its content digest to a `Decision`, and an edited draft (new digest) voids the approval.
+
 ## Tests
 `PYTHONPATH=/mnt/backup/projects/discovery-runtime .venv/bin/python -m pytest tests/test_external_agent_gateway.py`
 (the core path needs only `.venv`; `discovery_runtime` is used by the social/Learn phases).
