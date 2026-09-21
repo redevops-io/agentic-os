@@ -28,6 +28,9 @@ from .approvals import ApprovalRequest, InboxApprovalStore, UndoWindow
 from .sandbox import SANDBOX_EXECUTE, echo_capability, register_sandbox_capability
 from .protocols import (
     MCPEndpoint, McpGatewayBridge, RestGatewayAdapter, build_fastmcp_server, mcp_tool_descriptors)
+# agent-gateway/v1 adds the External Agent Gateway at ``agentic_os.agent_gateway.external`` (personal
+# agents + provider capability audit). It is imported explicitly, not eagerly, so the base gateway stays
+# free of the external extension's heavier platform imports (projects/Decision -> discovery_runtime).
 
 __all__ = [
     "CONTRACT_VERSION",
