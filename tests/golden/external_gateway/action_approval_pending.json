@@ -1,0 +1,29 @@
+{
+  "adapter_version": "v1",
+  "approval": {
+    "authorized": false,
+    "decision_id": "",
+    "required": true,
+    "state": "pending"
+  },
+  "capability": "personal_agent.connected_app_action",
+  "evidence_refs": [
+    "dpev:fixed01"
+  ],
+  "failed": false,
+  "goal": "open a remediation ticket: broad_policy \u2014 over-broad rule",
+  "intent_digest": "sha256:8fa88b0181571e8a62635de0d99eadb762144df2a9c5ef71909961b51a6200a0",
+  "mission_id": "mission:inspect-deployments",
+  "origin": "external-agent",
+  "principal": "user:operator",
+  "project_id": "proj:redevops-demo",
+  "provider": "fake-external-agent",
+  "receipt": {
+    "decision_id": "",
+    "provider_post_id": "",
+    "receipt_id": "",
+    "status": ""
+  },
+  "task_state": "",
+  "verification": ""
+}

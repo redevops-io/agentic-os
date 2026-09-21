@@ -732,6 +732,25 @@ def _is_priorities_query(t: str) -> bool:
         "what do i need to look at", "my priorities", "what needs approval", "what needs my sign"))
 
 
+def _is_inspect_deployments_query(t: str) -> bool:
+    """Resolves the goal 'inspect current ReDevOps demo deployments' (and close paraphrases) to the
+    Deployment Inspection Mission. Explanatory phrasings fall through to the KB."""
+    if any(x in t for x in ("how does", "what is", "what's the", "explain")):
+        return False
+    return ("inspect" in t or "check" in t or "review" in t or "audit" in t) and (
+        "deployment" in t or "deployments" in t or "demo" in t or "infrastructure" in t or "infra" in t)
+
+
+def _is_social_intel_query(t: str) -> bool:
+    """Resolves 'social intelligence' / 'find discussions where … struggling' to the Social Mission."""
+    if any(x in t for x in ("how does", "what is", "explain")):
+        return False
+    if "social intelligence" in t or "market signal" in t or "lead discovery" in t:
+        return True
+    return ("find" in t or "discussions" in t or "posts" in t) and (
+        "social" in t or "reddit" in t or "complaint" in t or "struggling" in t or "market" in t)
+
+
 def sidekick_reply(ctx: Dict[str, Any], text: str,
                    provider: Optional["ProjectionProvider"] = None) -> Dict[str, Any]:
     """A governed conversational stand-in honouring the context contract — 'this' resolves to
@@ -748,6 +767,21 @@ def sidekick_reply(ctx: Dict[str, Any], text: str,
             return {"text": surf.get("summary", ""), "topic": "Priorities",
                     "items": surf.get("surfaced", []),
                     "actions": [{"label": "Open Projects", "kind": "navigate", "ref": "attention"}]}
+    # External Agent Gateway entry points (Phase 9). Sidekick RESOLVES the intent to the existing demo
+    # Mission and hands off via a navigate action — it does not contain the inspection/social workflow,
+    # so a button, an API call or an external agent are equivalent entrances to the same Mission.
+    if _is_inspect_deployments_query(t):
+        return {"text": "Starting 'Inspect current ReDevOps demo deployments' — Edge Sentinel examines the "
+                        "live deployment read-only; any remediation is governed (approval → decision → "
+                        "receipt → verification) and simulated, so the live SOC is never changed.",
+                "topic": "Deployment Inspection",
+                "actions": [{"label": "Open inspection", "kind": "navigate", "ref": "inspection"}]}
+    if _is_social_intel_query(t):
+        return {"text": "Opening Social Intelligence — evidence-backed opportunities and market signals "
+                        "from permitted sources. Providers are shown with their real availability "
+                        "(Reddit policy-scoped; Meta/Muse unverified).",
+                "topic": "Social Intelligence",
+                "actions": [{"label": "Open social intelligence", "kind": "navigate", "ref": "social"}]}
     if "two approver" in t or "$500" in t:
         return {"text": f"Proposed on {obj}: refunds above $500 require two approvers. Governed policy change — confirm to commit.",
                 "actions": [{"label": "Confirm", "kind": "commit"}]}
@@ -917,6 +951,23 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     @app.get("/api/projects/{project_id}/missions/{mission_id}")
     def _mission_detail(project_id: str, mission_id: str) -> dict:
         return prov.mission_detail(project_id, mission_id)
+
+    # ── External Agent Gateway demo missions (Phase 9): projection-driven cards. The UI renders these
+    #    verbatim (severity/provider/approval/verification are decided here, not client-side). ──
+    @app.get("/api/projects/{project_id}/deployment-inspection")
+    def _deployment_inspection(project_id: str) -> dict:
+        """Inspect the live Edge Sentinel (read-only) + a governed, simulated remediation. Degrades to
+        connected:false with no findings if the SOC is unreachable."""
+        from agentic_os.agent_gateway.external.deployment_inspection import demo_inspection_mission
+        import os as _o
+        return demo_inspection_mission(_o.environ.get("SENTINEL_URL", "https://sentinel.redevops.io"),
+                                       project_id=project_id)
+
+    @app.get("/api/projects/{project_id}/social-intelligence")
+    def _social_intelligence(project_id: str) -> dict:
+        """The Social Intelligence Mission surface — provider boundary + evidence-backed opportunities."""
+        from agentic_os.agent_gateway.social.demo import demo_social_mission
+        return demo_social_mission()
 
     @app.get("/api/projects/{project_id}/workflows")
     def _workflows(project_id: str) -> List[dict]:

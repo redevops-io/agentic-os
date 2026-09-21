@@ -1,0 +1,15 @@
+{
+  "boundary": {
+    "inspection": "fixture",
+    "remediation": "simulated (governed fake adapter \u2014 the live SOC is never mutated)"
+  },
+  "connected": true,
+  "finding_count": 0,
+  "findings": [],
+  "findings_by_severity": {},
+  "governed_action": null,
+  "kpis": [],
+  "mission": "Deployment Inspection",
+  "proposed_actions": [],
+  "target": "https://sentinel.redevops.io"
+}
