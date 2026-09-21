@@ -18,11 +18,26 @@ from .contracts import AgentCapabilities, AgentTaskRequest
 
 
 # ── external-agent action projection ─────────────────────────────────────────────────
-def external_action_view(request: AgentTaskRequest, *, decision_id: str = "",
-                         receipt: Optional[Mapping[str, Any]] = None,
+def _evidence_list(bounded_context: Mapping[str, Any]) -> list:
+    fe = bounded_context.get("finding_evidence")
+    if isinstance(fe, list):
+        return list(fe)
+    return [fe] if fe else []
+
+
+def external_action_view(request: AgentTaskRequest, *, approval_state: str = "pending",
+                         decision_id: str = "", receipt: Optional[Mapping[str, Any]] = None,
                          verification: str = "", task_state: str = "") -> dict:
-    """A governed external action as Projects should show it — provenance + governance, no secrets."""
+    """A governed external action as Projects should show it — provenance + governance, no secrets.
+
+    ``approval_state`` is one of ``pending`` | ``authorized`` | ``denied`` and is rendered VERBATIM; the
+    UI must not re-derive it. ``verification`` is passed through unchanged (``verified`` | ``abstained`` |
+    ``refuted`` | ``n/a`` | ``""``) so UNKNOWN/abstention survives to the screen instead of collapsing to
+    a boolean. ``failed`` is a convenience flag, but the UI should show ``receipt.status`` /
+    ``verification`` literally rather than reconstructing pass/fail."""
     r = dict(receipt or {})
+    if approval_state not in ("pending", "authorized", "denied"):
+        raise ValueError(f"approval_state must be pending|authorized|denied, got {approval_state!r}")
     return {
         "origin": "external-agent",
         "provider": request.identity.provider,
@@ -33,15 +48,43 @@ def external_action_view(request: AgentTaskRequest, *, decision_id: str = "",
         "capability": request.capability,
         "goal": request.goal,
         "intent_digest": request.intent_digest(),
-        "approval": {"required": True, "decision_id": decision_id, "authorized": bool(decision_id)},
-        "evidence_refs": list(request.bounded_context.get("finding_evidence", []) if isinstance(
-            request.bounded_context.get("finding_evidence"), list) else
-            ([request.bounded_context["finding_evidence"]] if request.bounded_context.get("finding_evidence") else [])),
+        "approval": {"required": True, "state": approval_state, "decision_id": decision_id,
+                     "authorized": approval_state == "authorized"},
+        "evidence_refs": _evidence_list(request.bounded_context),
         "task_state": task_state,
         "receipt": {"status": r.get("status", ""), "provider_post_id": r.get("external_id", ""),
                     "receipt_id": r.get("receipt_id", ""), "decision_id": r.get("decision_id", "")},
         "verification": verification,
         "failed": r.get("status") in ("FAILED", "HELD"),
+    }
+
+
+def inspection_mission_view(inspection: Mapping[str, Any], governed_action: Optional[Mapping[str, Any]],
+                            *, live: bool = True) -> dict:
+    """The full "Inspect current ReDevOps demo deployments" card. Groups findings by severity for the UI
+    (still rendering the projection's own severity strings — no client-side reconstruction) and states
+    the boundary explicitly so 'receipt SUCCEEDED → verified' is never read as having changed the live
+    SOC: live infrastructure is inspected read-only; the remediation is simulated through the governed
+    fake adapter."""
+    findings = list(inspection.get("findings", []))
+    by_sev: dict = {}
+    for f in findings:
+        by_sev.setdefault(f.get("severity", "unknown"), []).append(f)
+    return {
+        "mission": "Deployment Inspection",
+        "target": inspection.get("target", ""),
+        "connected": inspection.get("connected", False),
+        "boundary": {
+            "inspection": "live" if live else "fixture",
+            "remediation": "simulated (governed fake adapter — the live SOC is never mutated)",
+        },
+        "kpis": list(inspection.get("kpis", [])),
+        "findings": findings,
+        "findings_by_severity": {sev: by_sev.get(sev, []) for sev in ("critical", "high", "medium", "low")
+                                 if sev in by_sev},
+        "finding_count": len(findings),
+        "proposed_actions": list(inspection.get("proposed_actions", [])),
+        "governed_action": dict(governed_action) if governed_action else None,
     }
 
 

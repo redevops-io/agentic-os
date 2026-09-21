@@ -1,0 +1,128 @@
+{
+  "boundary": {
+    "inspection": "fixture",
+    "remediation": "simulated (governed fake adapter \u2014 the live SOC is never mutated)"
+  },
+  "connected": true,
+  "finding_count": 5,
+  "findings": [
+    {
+      "detail": "policy Default allows All->All",
+      "evidence_ref": "dpev:b1b95ac2e79cc9bf",
+      "kind": "broad_policy",
+      "severity": "high",
+      "source": "network"
+    },
+    {
+      "detail": "peer laptop-alex login expired",
+      "evidence_ref": "dpev:9c3be898ed66b22d",
+      "kind": "login_expired",
+      "severity": "medium",
+      "source": "network"
+    },
+    {
+      "detail": "listmonk has never been backed up",
+      "evidence_ref": "dpev:e46e275e0da092cb",
+      "kind": "no_backup",
+      "severity": "high",
+      "source": "backups"
+    },
+    {
+      "detail": "lago has no offsite copy",
+      "evidence_ref": "dpev:b224bfb2101909db",
+      "kind": "no_offsite",
+      "severity": "medium",
+      "source": "backups"
+    },
+    {
+      "detail": "2 active CrowdSec decision(s) enforced against live sources",
+      "evidence_ref": "dpev:d1b2cec0c46bb356",
+      "kind": "active_threats",
+      "severity": "medium",
+      "source": "crowdsec"
+    }
+  ],
+  "findings_by_severity": {
+    "high": [
+      {
+        "detail": "policy Default allows All->All",
+        "evidence_ref": "dpev:b1b95ac2e79cc9bf",
+        "kind": "broad_policy",
+        "severity": "high",
+        "source": "network"
+      },
+      {
+        "detail": "listmonk has never been backed up",
+        "evidence_ref": "dpev:e46e275e0da092cb",
+        "kind": "no_backup",
+        "severity": "high",
+        "source": "backups"
+      }
+    ],
+    "medium": [
+      {
+        "detail": "peer laptop-alex login expired",
+        "evidence_ref": "dpev:9c3be898ed66b22d",
+        "kind": "login_expired",
+        "severity": "medium",
+        "source": "network"
+      },
+      {
+        "detail": "lago has no offsite copy",
+        "evidence_ref": "dpev:b224bfb2101909db",
+        "kind": "no_offsite",
+        "severity": "medium",
+        "source": "backups"
+      },
+      {
+        "detail": "2 active CrowdSec decision(s) enforced against live sources",
+        "evidence_ref": "dpev:d1b2cec0c46bb356",
+        "kind": "active_threats",
+        "severity": "medium",
+        "source": "crowdsec"
+      }
+    ]
+  },
+  "governed_action": {
+    "adapter_version": "v1",
+    "approval": {
+      "authorized": true,
+      "decision_id": "<id>",
+      "required": true,
+      "state": "authorized"
+    },
+    "capability": "personal_agent.connected_app_action",
+    "evidence_refs": [
+      "dpev:b1b95ac2e79cc9bf"
+    ],
+    "failed": false,
+    "goal": "open a remediation ticket: broad_policy \u2014 policy Default allows All->All",
+    "intent_digest": "sha256:41a09b36f553d3ff257e60fa4d5a8f2f4a77b318cc9b3841dd93bb87e07e1ca9",
+    "mission_id": "mission:inspect-deployments",
+    "origin": "external-agent",
+    "principal": "user:operator",
+    "project_id": "proj:redevops-demo",
+    "provider": "fake-external-agent",
+    "receipt": {
+      "decision_id": "<id>",
+      "provider_post_id": "fake-external-agent:task:1",
+      "receipt_id": "<id>",
+      "status": "SUCCEEDED"
+    },
+    "task_state": "succeeded",
+    "verification": "verified"
+  },
+  "kpis": [
+    {
+      "label": "Threats blocked",
+      "value": "5"
+    }
+  ],
+  "mission": "Deployment Inspection",
+  "proposed_actions": [
+    "Open remediation ticket for the top finding",
+    "Track deployment posture",
+    "Draft an operator briefing"
+  ],
+  "target": "https://sentinel.redevops.io"
+}

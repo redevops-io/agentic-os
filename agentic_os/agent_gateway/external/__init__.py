@@ -33,7 +33,7 @@ from .observation import ExternalAgentObserver
 from .evaluation import (
     ADVERSARIAL_CORPUS, LEARN_FORBIDDEN_FIELDS, LEARN_STRATEGY_FIELDS, LearnBoundaryError,
     assert_strategy_only, run_adversarial_corpus)
-from .projections import external_action_view, social_mission_view
+from .projections import external_action_view, inspection_mission_view, social_mission_view
 from .deployment_inspection import (
     DeploymentFinding, InspectionReport, build_remediation_request, demo_inspection_mission,
     derive_findings, run_inspection)
@@ -62,6 +62,7 @@ __all__ = [
     "run_adversarial_corpus", "ADVERSARIAL_CORPUS", "assert_strategy_only", "LearnBoundaryError",
     "LEARN_STRATEGY_FIELDS", "LEARN_FORBIDDEN_FIELDS",
     # Projects/Sidekick projections + live deployment-inspection mission (Phase 9)
-    "external_action_view", "social_mission_view", "run_inspection", "demo_inspection_mission",
-    "derive_findings", "build_remediation_request", "DeploymentFinding", "InspectionReport",
+    "external_action_view", "inspection_mission_view", "social_mission_view", "run_inspection",
+    "demo_inspection_mission", "derive_findings", "build_remediation_request", "DeploymentFinding",
+    "InspectionReport",
 ]
