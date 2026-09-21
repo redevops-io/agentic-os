@@ -86,10 +86,23 @@ def test_clean_sequence_opens_a_case_with_no_findings():
 
 
 def test_consumes_the_real_runtime_event_contract():
-    """Guard: the adapter reads the real runtime-event/v10 fields. If the contract moves, this fails."""
+    """Guard: the adapter reads the real runtime-event/v10 fields, and the PIN tracks the platform. If the
+    platform bumps its schema, this fails loudly — forcing a deliberate Edge Sentinel update."""
     from agentic_os.mission.events import SCHEMA_VERSION
     assert SCHEMA_VERSION == "runtime-event/v10"
+    assert ai_security.EXPECTED_RUNTIME_EVENT_SCHEMA == SCHEMA_VERSION   # the pin must track the platform
     evt = capability_event("a", 1, "cap")
     proj = ai_security.security_projection(evt)
     assert set(proj) == {"actor", "event_type", "capability_id", "result_status",
                          "mission_id", "source_runtime", "policy_context"}
+
+
+def test_observer_rejects_a_mismatched_schema_loudly():
+    """Fail closed: an event whose schema is not the pinned contract is REJECTED at runtime, not silently
+    mis-parsed — proving the runtime-event dependency is enforced, not accidental compatibility."""
+    import pytest
+    s = CaseStore()
+    evt = capability_event("agent://x", 1, "cap")
+    object.__setattr__(evt, "schema_version", "runtime-event/v11")      # simulate an upstream schema bump
+    with pytest.raises(ai_security.ContractError):
+        observation_from_runtime_event(s, evt)

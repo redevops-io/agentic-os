@@ -19,6 +19,17 @@ from __future__ import annotations
 
 from agentic_os.mission.events import EventType, ResultStatus, RuntimeEvent
 
+#: The runtime-event contract Edge Sentinel was written against, PINNED here. It is intentionally not read
+#: live from the platform: if the platform bumps its schema, a mismatched event is rejected at runtime
+#: (see :func:`observation_from_runtime_event`) and the guard test below fails loudly — forcing a
+#: DELIBERATE update of Edge Sentinel rather than silent, accidental compatibility.
+EXPECTED_RUNTIME_EVENT_SCHEMA = "runtime-event/v10"
+
+
+class ContractError(Exception):
+    """Raised when a runtime event's schema is not the one Edge Sentinel is pinned to understand."""
+
+
 from .evidence import (
     CaseStatus,
     CaseType,
@@ -59,7 +70,13 @@ def _has_injection(payload: dict) -> bool:
 
 
 def observation_from_runtime_event(store, evt: RuntimeEvent) -> SecurityObservation:
-    """Instrument one runtime event as an immutable-evidence-backed SecurityObservation."""
+    """Instrument one runtime event as an immutable-evidence-backed SecurityObservation. Rejects an event
+    whose schema is not the pinned contract — Edge Sentinel refuses to observe an event it cannot be sure it
+    understands (fail closed), rather than silently mis-parsing a changed contract."""
+    if evt.schema_version != EXPECTED_RUNTIME_EVENT_SCHEMA:
+        raise ContractError(
+            f"runtime-event schema {evt.schema_version!r} != pinned {EXPECTED_RUNTIME_EVENT_SCHEMA!r}; "
+            "refusing to observe — update Edge Sentinel deliberately for the new contract")
     raw = evt.to_ndjson()          # the runtime-event/v10 canonical serialization (sorted-key JSON string)
     ev = store.put_evidence(
         EvidenceArtifact.of_raw("runtime_event", evt.source_runtime or "runtime", raw,
