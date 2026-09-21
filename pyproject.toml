@@ -15,7 +15,7 @@ dependencies = [
     # agentic_os.projects.workflow_learning. Pinned by tag like the other contracts — a branch can be
     # rebased under a consumer, and a contract that moves silently is not a contract. v0.1.13 is the
     # clean forward line carrying the learn contract (above the stray v0.1.11/v0.1.12).
-    "discovery-runtime @ git+https://github.com/redevops-io/discovery-runtime.git@v0.1.13",
+    "discovery-runtime @ git+https://github.com/redevops-io/discovery-runtime.git@v0.1.14",
     # The domain-neutral learn/teach-next primitive, shared with learnerbot.ai. `agentic_os.
     # knowledge_frontier` re-exports it; the apps-stack adapter stays in priority_engine.
     "knowledge-frontier @ git+https://github.com/redevops-io/knowledge-frontier.git@v0.1.0",
