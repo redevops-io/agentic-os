@@ -1,0 +1,62 @@
+{
+  "S1_native": {
+    "accuracy": 0.51,
+    "extra": {
+      "call_rate": 0.2233,
+      "close_lost_rate": 0.0283,
+      "dead_correctly_closed": 0.0273,
+      "mean_touches_used": 0.555,
+      "ready_abandoned": 0.0155,
+      "request_timeline_rate": 0.135
+    },
+    "mean_regret": 31103.42
+  },
+  "S2_zero_shot_transfer": {
+    "accuracy": 0.0767,
+    "extra": {
+      "call_rate": 0.0,
+      "close_lost_rate": 0.0,
+      "dead_correctly_closed": 0.0,
+      "mean_touches_used": 0.7067,
+      "ready_abandoned": 0.0,
+      "request_timeline_rate": 0.0
+    },
+    "mean_regret": 75189.98
+  },
+  "S3_transfer_adapt": {
+    "accuracy": 0.5117,
+    "extra": {
+      "call_rate": 0.1767,
+      "close_lost_rate": 0.0283,
+      "dead_correctly_closed": 0.0273,
+      "mean_touches_used": 0.51,
+      "ready_abandoned": 0.0155,
+      "request_timeline_rate": 0.135
+    },
+    "mean_regret": 31675.41
+  },
+  "baseline": {
+    "accuracy": 0.0767,
+    "extra": {
+      "call_rate": 0.5117,
+      "close_lost_rate": 0.0,
+      "dead_correctly_closed": 0.0,
+      "mean_touches_used": 1.0,
+      "ready_abandoned": 0.0,
+      "request_timeline_rate": 0.0
+    },
+    "mean_regret": 78014.53
+  },
+  "literal_transfer_control": {
+    "accuracy": 0.2667,
+    "extra": {
+      "call_rate": 0.0,
+      "close_lost_rate": 0.0,
+      "dead_correctly_closed": 0.0,
+      "mean_touches_used": 0.1183,
+      "ready_abandoned": 0.0,
+      "request_timeline_rate": 0.0
+    },
+    "mean_regret": 53244.33
+  }
+}

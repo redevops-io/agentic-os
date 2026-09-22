@@ -1,0 +1,41 @@
+{
+  "arms": {
+    "A_control": {
+      "accuracy": 0.5675,
+      "extra": {
+        "approval_rate": 0.4975,
+        "false_decline_rate": 0.0762,
+        "fraud_loss_rate": 0.1186,
+        "manual_review_rate": 0.0,
+        "verification_rate": 0.35
+      },
+      "mean_net_value": 7594.8,
+      "mean_regret": 2197.76,
+      "missed_intervention_rate": 0.0,
+      "total_regret": 879105.0,
+      "unnecessary_intervention_rate": 0.0
+    },
+    "GH_learned": {
+      "accuracy": 0.37,
+      "extra": {
+        "approval_rate": 0.33,
+        "false_decline_rate": 0.0205,
+        "fraud_loss_rate": 0.1186,
+        "manual_review_rate": 0.34,
+        "verification_rate": 0.2375
+      },
+      "mean_net_value": 8731.42,
+      "mean_regret": 1061.14,
+      "missed_intervention_rate": 0.0175,
+      "total_regret": 424456.25,
+      "unnecessary_intervention_rate": 0.0
+    }
+  },
+  "benchmark_version": "business-sim-lab/v1",
+  "corpus_digest": "2fd2d9b9398253e67b214b839b8b9f8eed97a979dc6423572132af0836b53c78",
+  "model_identity": null,
+  "n_eval": 400,
+  "seed": 7,
+  "shift": 0.0,
+  "world_id": "fraud_order_review/v1"
+}
