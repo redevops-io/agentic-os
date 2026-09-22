@@ -24,6 +24,8 @@ from .capabilities import (
 from .receipts import VerificationState, receipt_for_step, to_action_receipt, verify_step
 from .runner import (
     GovernedMissionResult, GovernedStep, canonical_evidence, govern_run, receipts_for_run)
+from .missions import (
+    FollowupProposal, ReceivableCandidate, investigate_receivables, propose_followups)
 
 __all__ = [
     # contracts
@@ -39,4 +41,6 @@ __all__ = [
     "VerificationState", "verify_step", "to_action_receipt", "receipt_for_step",
     # governed run → canonical evidence + receipts (Phase B)
     "canonical_evidence", "receipts_for_run", "govern_run", "GovernedMissionResult", "GovernedStep",
+    # cross-app Receivables Mission (Phase C)
+    "investigate_receivables", "propose_followups", "ReceivableCandidate", "FollowupProposal",
 ]
