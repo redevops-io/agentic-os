@@ -1,0 +1,128 @@
+# Business-connector capability registry (plan §5) — the counterpart to the external-agent capability
+# audit, for the redevops-connectors business SaaS adapters.
+#
+# "Never claim an integration merely because an API exists." Status vocabulary:
+#   VERIFIED             the capability is confirmed — here, contract-verified by the connector's
+#                        conformance suite + fixtures (advertise-only-implemented, envelope-gating,
+#                        idempotency, observe-roundtrip, no-credential-leak). `verification: contract`.
+#   AVAILABLE_UNVERIFIED an adapter path exists but is not covered by the conformance/fixture suite.
+#   UNKNOWN              no evidence either way (the safe default; treated as unavailable).
+#   UNSUPPORTED          the provider/capability is not implemented.
+#   POLICY_BLOCKED       available but blocked by policy (e.g. commercial-use / provider terms).
+#
+# `verification: contract` means the CONTRACT is proven against fixtures, NOT that a live provider
+# account has been exercised — that is a per-connection fact (redevops_connectors SetupState:
+# VERIFIED_READ / VERIFIED_WRITE), recorded at connect time, not here.
+#
+# Each capability: {status, tier (0-4), write (bool), auth}. This file is generated to match the
+# adapters' advertised capabilities; tests/test_integration_business.py asserts it does not drift.
+
+contract_version: connector-capability/v1
+audited_at: "2026-09-22"
+
+providers:
+
+  slack:
+    auth: oauth
+    capabilities:
+      chat.message.read:   {status: VERIFIED, tier: 1, write: false, verification: contract}
+      identity.read:       {status: VERIFIED, tier: 1, write: false, verification: contract}
+      chat.message.send:   {status: VERIFIED, tier: 3, write: true,  verification: contract}
+      approval.request:    {status: VERIFIED, tier: 3, write: true,  verification: contract}
+
+  gmail:
+    auth: oauth
+    capabilities:
+      email.message.read:  {status: VERIFIED, tier: 1, write: false, verification: contract}
+      email.message.send:  {status: VERIFIED, tier: 3, write: true,  verification: contract}
+
+  google_calendar:
+    auth: oauth
+    capabilities:
+      calendar.availability.read: {status: VERIFIED, tier: 1, write: false, verification: contract}
+      calendar.event.create:      {status: VERIFIED, tier: 3, write: true,  verification: contract}
+
+  hubspot:
+    auth: oauth
+    capabilities:
+      crm.contact.upsert:  {status: VERIFIED, tier: 2, write: true,  verification: contract}
+      crm.note.create:     {status: VERIFIED, tier: 2, write: true,  verification: contract}
+
+  stripe:
+    auth: api_key
+    capabilities:
+      billing.charge.find:    {status: VERIFIED, tier: 1, write: false, verification: contract}
+      billing.refund.execute: {status: VERIFIED, tier: 4, write: true,  verification: contract}
+
+  polar:
+    auth: api_key
+    capabilities:
+      billing.order.find:     {status: VERIFIED, tier: 1, write: false, verification: contract}
+      billing.refund.execute: {status: VERIFIED, tier: 4, write: true,  verification: contract}
+
+  apollo:
+    auth: api_key
+    capabilities:
+      outreach.observe:            {status: VERIFIED, tier: 1, write: false, verification: contract}
+      contact.enrich:              {status: VERIFIED, tier: 1, write: false, verification: contract}
+      company.enrich:              {status: VERIFIED, tier: 1, write: false, verification: contract}
+      contact.upsert:              {status: VERIFIED, tier: 2, write: true,  verification: contract}
+      outreach.sequence.configure: {status: VERIFIED, tier: 3, write: true,  verification: contract}
+      outreach.enroll:             {status: VERIFIED, tier: 3, write: true,  verification: contract}
+      outreach.sequence.activate:  {status: VERIFIED, tier: 4, write: true,  verification: contract, human_required: true}
+
+  klaviyo:
+    auth: api_key
+    capabilities:
+      contact.upsert:      {status: VERIFIED, tier: 2, write: true,  verification: contract}
+      email.event.track:   {status: VERIFIED, tier: 3, write: true,  verification: contract}
+
+  postiz:
+    auth: api_key
+    capabilities:
+      content.publish:     {status: VERIFIED, tier: 3, write: true,  verification: contract}
+
+  ayrshare:
+    auth: api_key
+    capabilities:
+      content.status:      {status: VERIFIED, tier: 1, write: false, verification: contract}
+      content.publish:     {status: VERIFIED, tier: 3, write: true,  verification: contract}
+
+  blotato:
+    auth: api_key
+    capabilities:
+      content.status:      {status: VERIFIED, tier: 1, write: false, verification: contract}
+      content.publish:     {status: VERIFIED, tier: 3, write: true,  verification: contract}
+
+  whatsapp_business:
+    auth: api_key
+    capabilities:
+      chat.message.send:   {status: VERIFIED, tier: 3, write: true,  verification: contract}
+
+  whatsapp_waha:
+    auth: api_key
+    capabilities:
+      chat.message.read:   {status: VERIFIED, tier: 1, write: false, verification: contract}
+      session.status:      {status: VERIFIED, tier: 1, write: false, verification: contract}
+      chat.message.send:   {status: VERIFIED, tier: 3, write: true,  verification: contract}
+
+  web:
+    auth: none
+    capabilities:
+      web.fetch:           {status: VERIFIED, tier: 1, write: false, verification: contract}
+      web.search:          {status: VERIFIED, tier: 1, write: false, verification: contract}
+
+# Plan-priority providers with NO adapter yet — declared UNSUPPORTED so nothing over-claims them.
+unsupported_priority_providers:
+  - salesforce
+  - microsoft_graph      # Outlook / Teams / Graph contacts
+  - quickbooks
+  - xero
+  - shopify
+  - woocommerce
+  - zendesk
+  - freshdesk
+  - intercom
+  - twilio
+  - docusign
+  - google_contacts

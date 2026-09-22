@@ -92,6 +92,8 @@ class StepRun:
     provider_object_id: str = ""
     reconciled: Optional[bool] = None  # None ⇒ not observable
     error: str = ""
+    data: Mapping[str, Any] = field(default_factory=dict)  # the provider payload (evidence to normalize)
+    write: bool = False                 # a governed write (ran under an envelope) vs a read
 
 
 @dataclass(frozen=True)
@@ -170,6 +172,7 @@ def run_test_mission(
         ok = bool(getattr(result, "ok", False))
         oid = str(getattr(result, "provider_object_id", ""))
         err = str(getattr(result, "error", ""))
+        data = dict(getattr(result, "data", {}) or {})   # provider payload → evidence to normalize
         reconciled: Optional[bool] = None
         if ok and oid:
             try:
@@ -177,7 +180,8 @@ def run_test_mission(
                 reconciled = bool(getattr(obs, "found", False))
             except Exception:  # noqa: BLE001 — an adapter that can't observe leaves it UNKNOWN
                 reconciled = None
-        steps.append(StepRun(ms.capability, ms.provider, tier, ok, oid, reconciled, err))
+        steps.append(StepRun(ms.capability, ms.provider, tier, ok, oid, reconciled, err, data,
+                             envelope is not None))
     return MissionRun(plan.intent_hash, tuple(steps))
 
 
