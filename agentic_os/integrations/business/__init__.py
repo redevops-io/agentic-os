@@ -30,6 +30,9 @@ from .decisions import (
     AccountFeatures, Candidate, CandidateSet, DecisionContext, DecisionExperience, DecisionPoint,
     DecisionProposal, DecisionRecord, DeterministicReceivablesModel, InterventionKind, Outcome,
     ReceivablesDecisionModel, ReceivablesDecisionTrail, decide_receivable, features_for)
+from .receivables_lab import (
+    ArmReport, LatentAccount, LearnBoundaryError, LearnedModel, NaiveModel, assert_strategy_only,
+    evaluate_arm, make_corpus, net_value, optimal_action, run_experiment)
 
 __all__ = [
     # contracts
@@ -52,4 +55,7 @@ __all__ = [
     "CandidateSet", "DecisionProposal", "DecisionRecord", "Outcome", "DecisionExperience",
     "ReceivablesDecisionModel", "DeterministicReceivablesModel", "ReceivablesDecisionTrail",
     "features_for", "decide_receivable",
+    # decision-learning experiment / ablation (Phase E, synthetic + honestly labeled)
+    "run_experiment", "evaluate_arm", "make_corpus", "optimal_action", "net_value", "LatentAccount",
+    "ArmReport", "NaiveModel", "LearnedModel", "assert_strategy_only", "LearnBoundaryError",
 ]
