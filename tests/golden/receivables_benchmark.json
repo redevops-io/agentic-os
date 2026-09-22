@@ -1,0 +1,87 @@
+{
+  "arms": [
+    {
+      "arm": "A",
+      "label": "deterministic control (expert)",
+      "mean_net_value_cents": 239594.6,
+      "mean_regret_cents": 33903.4,
+      "missed_collection_rate": 0.0,
+      "unnecessary_intervention_rate": 0.305
+    },
+    {
+      "arm": "B",
+      "label": "frozen model, no experience",
+      "mean_net_value_cents": 211525.6,
+      "mean_regret_cents": 61972.4,
+      "missed_collection_rate": 0.0,
+      "unnecessary_intervention_rate": 0.475
+    },
+    {
+      "arm": "C",
+      "label": "+ prior-history retrieval",
+      "mean_net_value_cents": 211619.1,
+      "mean_regret_cents": 61878.9,
+      "missed_collection_rate": 0.0,
+      "unnecessary_intervention_rate": 0.435
+    },
+    {
+      "arm": "D",
+      "label": "+ Context Runtime",
+      "mean_net_value_cents": 264876.8,
+      "mean_regret_cents": 8621.2,
+      "missed_collection_rate": 0.0,
+      "unnecessary_intervention_rate": 0.305
+    },
+    {
+      "arm": "E",
+      "label": "+ Planner",
+      "mean_net_value_cents": 264891.0,
+      "mean_regret_cents": 8606.9,
+      "missed_collection_rate": 0.0,
+      "unnecessary_intervention_rate": 0.305
+    },
+    {
+      "arm": "F",
+      "label": "+ Mission state",
+      "mean_net_value_cents": 264891.0,
+      "mean_regret_cents": 8606.9,
+      "missed_collection_rate": 0.0,
+      "unnecessary_intervention_rate": 0.305
+    },
+    {
+      "arm": "G",
+      "label": "+ verified Experience/Learn",
+      "mean_net_value_cents": 263885.0,
+      "mean_regret_cents": 9613.0,
+      "missed_collection_rate": 0.015,
+      "unnecessary_intervention_rate": 0.23
+    },
+    {
+      "arm": "H",
+      "label": "full Runtime",
+      "mean_net_value_cents": 263885.0,
+      "mean_regret_cents": 9613.0,
+      "missed_collection_rate": 0.015,
+      "unnecessary_intervention_rate": 0.23
+    }
+  ],
+  "benchmark": "receivables-decision/v1",
+  "headline": {
+    "largest_single_gain_layer": "D",
+    "lowest_over_intervention_layer": "G",
+    "worst_arm": "B"
+  },
+  "kind": "synthetic (honestly labeled) \u2014 harness + metric offline; real data/model is the next gate",
+  "metric": "net_value = amount_recovered - intervention_cost - relationship_damage; regret = optimal - chosen; unnecessary = intervened when HOLD/human-review was optimal",
+  "n": 400,
+  "optimal_action_mix": {
+    "direct_reminder": 45,
+    "escalation": 58,
+    "hold": 116,
+    "human_review": 68,
+    "payment_plan": 15,
+    "soft_reminder": 98
+  },
+  "seed": 11,
+  "split": 0.5
+}
