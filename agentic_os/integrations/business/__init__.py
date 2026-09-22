@@ -33,6 +33,7 @@ from .decisions import (
 from .receivables_lab import (
     ArmReport, LatentAccount, LearnBoundaryError, LearnedModel, NaiveModel, assert_strategy_only,
     evaluate_arm, make_corpus, net_value, optimal_action, run_experiment)
+from .receivables_benchmark import BENCHMARK_VERSION, benchmark_report, run_ladder
 
 __all__ = [
     # contracts
@@ -58,4 +59,6 @@ __all__ = [
     # decision-learning experiment / ablation (Phase E, synthetic + honestly labeled)
     "run_experiment", "evaluate_arm", "make_corpus", "optimal_action", "net_value", "LatentAccount",
     "ArmReport", "NaiveModel", "LearnedModel", "assert_strategy_only", "LearnBoundaryError",
+    # full A→H ladder + frozen benchmark artifact (Phase F/G)
+    "run_ladder", "benchmark_report", "BENCHMARK_VERSION",
 ]
