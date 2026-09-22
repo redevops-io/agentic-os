@@ -759,6 +759,26 @@ def sidekick_reply(ctx: Dict[str, Any], text: str,
     if ("refund" in t and "whatsapp" in t) or "connect whatever" in t or "handle refund" in t:
         return {"text": "I'd wire WhatsApp → HubSpot → Stripe → Slack approval → refund → verify → reply. Slack/HubSpot/Stripe are connected; still needed: WhatsApp. Refund needs approval; Stripe test mode first.",
                 "actions": [{"label": "Set this up", "kind": "setup"}, {"label": "Change something", "kind": "edit"}]}
+    # Sidekick → a REAL Mission: an actionable goal (not a question) becomes durable Mission state instead
+    # of a scripted reply, WHEN the deployment binds a Mission Runtime (provider.mission_runtime). Creating
+    # the mission is planning — its consequential steps stay approval-gated; prose never authorizes
+    # execution (mission.from_sidekick / from_intent). No runtime bound ⇒ this is skipped and the demo is
+    # unchanged.
+    runtime = getattr(provider, "mission_runtime", None) if provider is not None else None
+    if runtime is not None:
+        from agentic_os.mission.from_sidekick import SidekickMissionBridge, is_actionable_goal
+        if is_actionable_goal(text):
+            try:
+                m = SidekickMissionBridge(runtime).compile(
+                    text, actor=str(ctx.get("actor", "")), project_id=str(ctx.get("project", "")))
+                tail = " It's waiting on your approval before any consequential step." if m.needs_approval \
+                    else f" It's {m.state.lower()}."
+                return {"text": f"I turned that into a governed Mission ({m.kind.replace('_', ' ')}).{tail}",
+                        "topic": "Mission", "mission_id": m.mission_id,
+                        "actions": [{"label": "Open Mission", "kind": "navigate", "ref": "missions"}]}
+            except Exception:
+                pass   # any runtime error → fall through to the curated KB / fallback, never a hard failure
+
     # Sidekick is also the stack's in-product expert: authoritative, curated answers about how
     # credentials are handled, where data is processed (local vs cloud), and how execution is
     # governed — so nobody has to read a manual. Consulted before the generic fallback.
