@@ -22,6 +22,8 @@ from .normalize import normalize, register_normalizer
 from .capabilities import (
     ConnectorCapabilityStatus, connector_capability, load_connector_capabilities, provider_capabilities)
 from .receipts import VerificationState, receipt_for_step, to_action_receipt, verify_step
+from .runner import (
+    GovernedMissionResult, GovernedStep, canonical_evidence, govern_run, receipts_for_run)
 
 __all__ = [
     # contracts
@@ -35,4 +37,6 @@ __all__ = [
     "provider_capabilities",
     # receipts + verification
     "VerificationState", "verify_step", "to_action_receipt", "receipt_for_step",
+    # governed run → canonical evidence + receipts (Phase B)
+    "canonical_evidence", "receipts_for_run", "govern_run", "GovernedMissionResult", "GovernedStep",
 ]
