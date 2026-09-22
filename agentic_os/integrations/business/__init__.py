@@ -26,6 +26,10 @@ from .runner import (
     GovernedMissionResult, GovernedStep, canonical_evidence, govern_run, receipts_for_run)
 from .missions import (
     FollowupProposal, ReceivableCandidate, investigate_receivables, propose_followups)
+from .decisions import (
+    AccountFeatures, Candidate, CandidateSet, DecisionContext, DecisionExperience, DecisionPoint,
+    DecisionProposal, DecisionRecord, DeterministicReceivablesModel, InterventionKind, Outcome,
+    ReceivablesDecisionModel, ReceivablesDecisionTrail, decide_receivable, features_for)
 
 __all__ = [
     # contracts
@@ -43,4 +47,9 @@ __all__ = [
     "canonical_evidence", "receipts_for_run", "govern_run", "GovernedMissionResult", "GovernedStep",
     # cross-app Receivables Mission (Phase C)
     "investigate_receivables", "propose_followups", "ReceivableCandidate", "FollowupProposal",
+    # decision-learning instrumentation (Phase D)
+    "DecisionPoint", "InterventionKind", "AccountFeatures", "DecisionContext", "Candidate",
+    "CandidateSet", "DecisionProposal", "DecisionRecord", "Outcome", "DecisionExperience",
+    "ReceivablesDecisionModel", "DeterministicReceivablesModel", "ReceivablesDecisionTrail",
+    "features_for", "decide_receivable",
 ]
