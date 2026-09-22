@@ -34,6 +34,9 @@ from .receivables_lab import (
     ArmReport, LatentAccount, LearnBoundaryError, LearnedModel, NaiveModel, assert_strategy_only,
     evaluate_arm, make_corpus, net_value, optimal_action, run_experiment)
 from .receivables_benchmark import BENCHMARK_VERSION, benchmark_report, run_ladder
+from .transitions import (
+    AccountState, Admissibility, TransitionResult, VerifiedExperience, apply_transition,
+    experience_from_transition)
 
 __all__ = [
     # contracts
@@ -61,4 +64,7 @@ __all__ = [
     "ArmReport", "NaiveModel", "LearnedModel", "assert_strategy_only", "LearnBoundaryError",
     # full A→H ladder + frozen benchmark artifact (Phase F/G)
     "run_ladder", "benchmark_report", "BENCHMARK_VERSION",
+    # verified-transition kernel (self-learning doc §2)
+    "AccountState", "Admissibility", "TransitionResult", "apply_transition", "VerifiedExperience",
+    "experience_from_transition",
 ]
