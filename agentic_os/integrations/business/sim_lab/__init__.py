@@ -24,6 +24,13 @@ from .fraud_world import (
     BEHAVIORAL_OBSERVABLE_KEYS, FraudWorld, PROTECTED_TRAITS_NEVER_USED)
 from .model_arm import (
     FrozenChatModel, build_experience, endpoint_reachable, run_model_experiment)
+from .abstract import (
+    AbstractFeatures, Posture, PostureModel, Readiness, Stakes)
+from .stale_quote_world import StaleQuoteWorld
+from .transfer import (
+    learn_receivables_posture_policy, literal_transfer_arm, run_transfer_experiment,
+    sample_efficiency_curve, transfer_adapt_arm, zero_shot_transfer_arm)
+from .stale_quote_model_arm import run_s0_to_s3
 
 __all__ = [
     # Phase 0 shared contracts
@@ -35,4 +42,8 @@ __all__ = [
     "FraudWorld", "BEHAVIORAL_OBSERVABLE_KEYS", "PROTECTED_TRAITS_NEVER_USED",
     # real frozen-model arm (second-family same-model gate)
     "FrozenChatModel", "build_experience", "run_model_experiment", "endpoint_reachable",
+    # World 2 — Stale-Quote (contractor family) + cross-domain transfer
+    "StaleQuoteWorld", "AbstractFeatures", "Posture", "PostureModel", "Readiness", "Stakes",
+    "learn_receivables_posture_policy", "zero_shot_transfer_arm", "transfer_adapt_arm",
+    "literal_transfer_arm", "run_transfer_experiment", "sample_efficiency_curve", "run_s0_to_s3",
 ]
