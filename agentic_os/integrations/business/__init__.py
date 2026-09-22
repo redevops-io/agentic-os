@@ -34,6 +34,7 @@ from .receivables_lab import (
     ArmReport, LatentAccount, LearnBoundaryError, LearnedModel, NaiveModel, assert_strategy_only,
     evaluate_arm, make_corpus, net_value, optimal_action, run_experiment)
 from .receivables_benchmark import BENCHMARK_VERSION, benchmark_report, run_ladder
+from .receivables_model_arm import FrozenModel, endpoint_reachable, run_model_experiment
 from .transitions import (
     AccountState, Admissibility, TransitionResult, VerifiedExperience, apply_transition,
     experience_from_transition)
@@ -67,4 +68,6 @@ __all__ = [
     # verified-transition kernel (self-learning doc §2)
     "AccountState", "Admissibility", "TransitionResult", "apply_transition", "VerifiedExperience",
     "experience_from_transition",
+    # real-frozen-model benchmark arm (same-model decision-quality gate)
+    "run_model_experiment", "FrozenModel", "endpoint_reachable",
 ]
