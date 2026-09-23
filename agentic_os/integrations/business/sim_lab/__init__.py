@@ -30,6 +30,9 @@ from .misalignment import (
 from .lessons import RECEIVABLES_INTERVENTION_LESSON, Lesson, extract_lesson
 from .supplier_invoice_world import OBSERVABLE_KEYS as SUPPLIER_OBSERVABLE_KEYS
 from .supplier_invoice_world import SupplierInvoiceWorld
+from .confirmation_battery import (
+    BATTERY_VERSION, BatterySpec, WorldBatteryResult, deterministic_battery, gate_verdict,
+    run_world_battery)
 from .model_arm import (
     FrozenChatModel, build_experience, endpoint_reachable, run_model_experiment)
 from .abstract import (
@@ -55,6 +58,9 @@ __all__ = [
     "evidence_floor_regret", "bucket_oracle_policy", "measure_misalignment", "profile_world",
     "PriorMisalignment", "WorldLearnProfile", "predict_learn_opportunity", "reveal_learn_outcome",
     "ProspectiveHResult",
+    # prospective-H confirmation battery (frozen manifest + gate)
+    "BatterySpec", "BATTERY_VERSION", "WorldBatteryResult", "run_world_battery", "gate_verdict",
+    "deterministic_battery",
     # Lesson object (principle transfers, policy regenerates)
     "Lesson", "extract_lesson", "RECEIVABLES_INTERVENTION_LESSON",
     # real frozen-model arm (second-family same-model gate)
