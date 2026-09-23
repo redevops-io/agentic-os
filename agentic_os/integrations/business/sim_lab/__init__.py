@@ -35,6 +35,9 @@ from .confirmation_battery import (
     run_world_battery)
 from .confirmation_battery_v2 import (
     BATTERY_V2_VERSION, WorldV2Result, case_stakes, gate_v2, run_world_v2)
+from .safe_learn import (
+    AbstentionGuard, BucketReliability, arm_metrics, diagnose_losses, evaluate_s2, lesson_reliability,
+    risk_coverage, s2_normalized_regret, select_tau)
 from .model_arm import (
     FrozenChatModel, build_experience, endpoint_reachable, run_model_experiment)
 from .abstract import (
@@ -65,6 +68,9 @@ __all__ = [
     "deterministic_battery",
     # v2 — paired stakes-normalized, safety-aware
     "BATTERY_V2_VERSION", "WorldV2Result", "run_world_v2", "gate_v2", "case_stakes",
+    # safe-Learn (S2) — auditable abstention guard
+    "AbstentionGuard", "BucketReliability", "lesson_reliability", "risk_coverage", "select_tau",
+    "evaluate_s2", "diagnose_losses", "s2_normalized_regret", "arm_metrics",
     # Lesson object (principle transfers, policy regenerates)
     "Lesson", "extract_lesson", "RECEIVABLES_INTERVENTION_LESSON",
     # real frozen-model arm (second-family same-model gate)
