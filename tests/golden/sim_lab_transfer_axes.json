@@ -1,0 +1,100 @@
+{
+  "fraud_A_to_B": {
+    "A_to_B_adapt": {
+      "extra": {
+        "approval_rate": 0.0063,
+        "false_decline_rate": 0.0237,
+        "fraud_loss_rate": 0.0159,
+        "manual_review_rate": 0.4512,
+        "verification_rate": 0.5
+      },
+      "mean_regret": 1171.41
+    },
+    "A_to_B_direct": {
+      "extra": {
+        "approval_rate": 0.195,
+        "false_decline_rate": 0.0401,
+        "fraud_loss_rate": 0.1389,
+        "manual_review_rate": 0.3337,
+        "verification_rate": 0.3563
+      },
+      "mean_regret": 1321.33
+    },
+    "B_baseline": {
+      "extra": {
+        "approval_rate": 0.27,
+        "false_decline_rate": 0.208,
+        "fraud_loss_rate": 0.127,
+        "manual_review_rate": 0.0,
+        "verification_rate": 0.42
+      },
+      "mean_regret": 4588.62
+    },
+    "B_native": {
+      "extra": {
+        "approval_rate": 0.0063,
+        "false_decline_rate": 0.0237,
+        "fraud_loss_rate": 0.0159,
+        "manual_review_rate": 0.4512,
+        "verification_rate": 0.5
+      },
+      "mean_regret": 1171.41
+    }
+  },
+  "profiles": {
+    "fraud_order_review/marketplace-digital/v1": {
+      "baseline_misalignment": {
+        "evidence_floor_regret": 499.15,
+        "learnable_share": 0.8918,
+        "over_intervention_rate": 0.0,
+        "prior_label": "baseline",
+        "prior_regret": 4615.29,
+        "restraint_optimal_rate": 0.0,
+        "systematic_misalignment": 4116.14,
+        "world_id": "fraud_order_review/marketplace-digital/v1"
+      },
+      "baseline_regret": 4615.29,
+      "deterministic_learn_lift": 3300.66,
+      "deterministic_learn_lift_share": 0.7152,
+      "evidence_floor_regret": 499.15,
+      "learned_regret": 1314.62,
+      "world_id": "fraud_order_review/marketplace-digital/v1"
+    },
+    "fraud_order_review/v1": {
+      "baseline_misalignment": {
+        "evidence_floor_regret": 483.07,
+        "learnable_share": 0.7786,
+        "over_intervention_rate": 0.0,
+        "prior_label": "baseline",
+        "prior_regret": 2181.75,
+        "restraint_optimal_rate": 0.0,
+        "systematic_misalignment": 1698.68,
+        "world_id": "fraud_order_review/v1"
+      },
+      "baseline_regret": 2181.75,
+      "deterministic_learn_lift": 1009.87,
+      "deterministic_learn_lift_share": 0.4629,
+      "evidence_floor_regret": 483.07,
+      "learned_regret": 1171.88,
+      "world_id": "fraud_order_review/v1"
+    },
+    "stale_quote_followup/v1": {
+      "baseline_misalignment": {
+        "evidence_floor_regret": 11923.68,
+        "learnable_share": 0.8472,
+        "over_intervention_rate": 1.0,
+        "prior_label": "baseline",
+        "prior_regret": 78014.53,
+        "restraint_optimal_rate": 0.3017,
+        "systematic_misalignment": 66090.85,
+        "world_id": "stale_quote_followup/v1"
+      },
+      "baseline_regret": 78014.53,
+      "deterministic_learn_lift": 48288.02,
+      "deterministic_learn_lift_share": 0.619,
+      "evidence_floor_regret": 11923.68,
+      "learned_regret": 29726.51,
+      "world_id": "stale_quote_followup/v1"
+    }
+  }
+}

@@ -21,7 +21,13 @@ from .harness import (
     ArmReport, CaseOutcome, DecisionCase, KernelResult, Proposal, RunManifest, World, apply_kernel,
     control_arm, digest, evaluate, learned_arm, run_world)
 from .fraud_world import (
-    BEHAVIORAL_OBSERVABLE_KEYS, FraudWorld, PROTECTED_TRAITS_NEVER_USED)
+    BEHAVIORAL_OBSERVABLE_KEYS, FRAUD_A, FRAUD_B, FraudProfile, FraudWorld,
+    PROTECTED_TRAITS_NEVER_USED, fraud_world_a, fraud_world_b)
+from .fraud_transfer import run_fraud_transfer
+from .misalignment import (
+    PriorMisalignment, WorldLearnProfile, bucket_oracle_policy, evidence_floor_regret,
+    measure_misalignment, profile_world)
+from .lessons import RECEIVABLES_INTERVENTION_LESSON, Lesson, extract_lesson
 from .model_arm import (
     FrozenChatModel, build_experience, endpoint_reachable, run_model_experiment)
 from .abstract import (
@@ -38,8 +44,14 @@ __all__ = [
     "KernelResult", "apply_kernel", "digest",
     # evaluator + arms + runner
     "evaluate", "control_arm", "learned_arm", "run_world",
-    # World 4 — Fraud family
-    "FraudWorld", "BEHAVIORAL_OBSERVABLE_KEYS", "PROTECTED_TRAITS_NEVER_USED",
+    # World 4 — Fraud family (profile-driven: A e-commerce, B digital marketplace) + A→B transfer
+    "FraudWorld", "FraudProfile", "FRAUD_A", "FRAUD_B", "fraud_world_a", "fraud_world_b",
+    "BEHAVIORAL_OBSERVABLE_KEYS", "PROTECTED_TRAITS_NEVER_USED", "run_fraud_transfer",
+    # prior-misalignment instrument (H) + evidence floor (evidence-insufficiency vs learning-failure)
+    "evidence_floor_regret", "bucket_oracle_policy", "measure_misalignment", "profile_world",
+    "PriorMisalignment", "WorldLearnProfile",
+    # Lesson object (principle transfers, policy regenerates)
+    "Lesson", "extract_lesson", "RECEIVABLES_INTERVENTION_LESSON",
     # real frozen-model arm (second-family same-model gate)
     "FrozenChatModel", "build_experience", "run_model_experiment", "endpoint_reachable",
     # World 2 — Stale-Quote (contractor family) + cross-domain transfer
