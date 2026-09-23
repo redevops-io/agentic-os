@@ -25,9 +25,11 @@ from .fraud_world import (
     PROTECTED_TRAITS_NEVER_USED, fraud_world_a, fraud_world_b)
 from .fraud_transfer import run_fraud_transfer
 from .misalignment import (
-    PriorMisalignment, WorldLearnProfile, bucket_oracle_policy, evidence_floor_regret,
-    measure_misalignment, profile_world)
+    PriorMisalignment, ProspectiveHResult, WorldLearnProfile, bucket_oracle_policy, evidence_floor_regret,
+    measure_misalignment, predict_learn_opportunity, profile_world, reveal_learn_outcome)
 from .lessons import RECEIVABLES_INTERVENTION_LESSON, Lesson, extract_lesson
+from .supplier_invoice_world import OBSERVABLE_KEYS as SUPPLIER_OBSERVABLE_KEYS
+from .supplier_invoice_world import SupplierInvoiceWorld
 from .model_arm import (
     FrozenChatModel, build_experience, endpoint_reachable, run_model_experiment)
 from .abstract import (
@@ -47,9 +49,12 @@ __all__ = [
     # World 4 — Fraud family (profile-driven: A e-commerce, B digital marketplace) + A→B transfer
     "FraudWorld", "FraudProfile", "FRAUD_A", "FRAUD_B", "fraud_world_a", "fraud_world_b",
     "BEHAVIORAL_OBSERVABLE_KEYS", "PROTECTED_TRAITS_NEVER_USED", "run_fraud_transfer",
-    # prior-misalignment instrument (H) + evidence floor (evidence-insufficiency vs learning-failure)
+    # RECONCILIATION axis — Supplier Invoice Control
+    "SupplierInvoiceWorld", "SUPPLIER_OBSERVABLE_KEYS",
+    # prior-misalignment instrument (H) + evidence floor + PROSPECTIVE H test
     "evidence_floor_regret", "bucket_oracle_policy", "measure_misalignment", "profile_world",
-    "PriorMisalignment", "WorldLearnProfile",
+    "PriorMisalignment", "WorldLearnProfile", "predict_learn_opportunity", "reveal_learn_outcome",
+    "ProspectiveHResult",
     # Lesson object (principle transfers, policy regenerates)
     "Lesson", "extract_lesson", "RECEIVABLES_INTERVENTION_LESSON",
     # real frozen-model arm (second-family same-model gate)
