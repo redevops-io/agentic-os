@@ -1,0 +1,18 @@
+{
+  "baseline_misalignment": {
+    "evidence_floor_regret": 100.25,
+    "learnable_share": 0.49,
+    "over_intervention_rate": 0.4834,
+    "prior_label": "baseline",
+    "prior_regret": 196.56,
+    "restraint_optimal_rate": 0.6388,
+    "systematic_misalignment": 96.31,
+    "world_id": "supplier_invoice_control/v1"
+  },
+  "baseline_regret": 196.56,
+  "deterministic_learn_lift": 88.06,
+  "deterministic_learn_lift_share": 0.448,
+  "evidence_floor_regret": 100.25,
+  "learned_regret": 108.5,
+  "world_id": "supplier_invoice_control/v1"
+}
