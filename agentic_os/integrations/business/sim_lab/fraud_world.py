@@ -1,27 +1,32 @@
-"""World 4 — Order-fraud review (plan §5, Fraud family).
+"""World 4 — Order-fraud review (plan §5, Fraud family), now profile-driven for A→B transfer.
 
 The decision is NOT "score this order's risk". It is: for this order, do we APPROVE, delay (HOLD), ask the
 customer to step up (REQUEST_VERIFICATION), send it to a human (MANUAL_REVIEW), or DECLINE — under
-false-positive economics where declining a good customer is a real, costed loss. This is deliberately a
-different decision shape from receivables follow-up: the expensive mistake runs in *both* directions
-(fraud loss vs false decline), and the robust middle actions (verify / review) exist precisely because
-neither approve-all nor decline-all is good.
+false-positive economics where declining a good customer is a real, costed loss. The expensive mistake runs
+in *both* directions (fraud loss vs false decline), which is what makes verify / review the robust middle.
 
-Ground truth (``latent``) is the order's true ``kind`` (legit / fraud) and amount. An arm never sees that;
-it sees only *behavioral* signals (velocity, address/AVS mismatch, account age, order value band, reship).
-Those signals are noisy: legit orders sometimes trip them (that is where false declines come from) and some
-fraud slips through clean. No protected trait (name, geography, gender, age, ethnicity) is ever an input —
-:data:`PROTECTED_TRAITS_NEVER_USED` documents the exclusion and the fraud-safety test enforces it.
+Ground truth (``latent``) is the order's true ``kind`` (legit / fraud) and amount. An arm sees only
+*behavioral* signals (velocity, address/AVS mismatch, account age, order value band, reship). No protected
+trait is ever an input (:data:`PROTECTED_TRAITS_NEVER_USED`, enforced by test).
 
-The learnable structure: in high-risk observable buckets, REQUEST_VERIFICATION / MANUAL_REVIEW dominate both
-APPROVE (which eats chargebacks) and DECLINE (which false-declines the legit fraction), because fraud
-abandons a step-up while most legit customers complete it. Verified Experience discovers this per bucket;
-the naive baseline (decline on any flag) does not.
+A :class:`FraudProfile` captures one *business*: its economics, fraud base rate, order sizes, and — crucially
+— how separable its signals are. Two profiles ship:
+
+  * ``FRAUD_A`` — card-not-present e-commerce (physical goods): moderate fraud rate, fairly discriminative
+    signals. (Identical numerics to the original world, so its golden is unchanged.)
+  * ``FRAUD_B`` — digital-goods marketplace: higher fraud rate, instant delivery (a hold rarely stops fraud),
+    thinner margins-of-error and **noisier signals** (sophisticated fraud looks more like legit) → a higher
+    irreducible evidence floor.
+
+Same decision family, different data-generating distribution: exactly the ``Fraud A → Fraud B`` transfer axis
+(same structure, different business) that complements Receivables→Stale-Quote (different task, shared
+structure). See ``fraud_transfer``.
 """
 from __future__ import annotations
 
 import random
-from typing import Any, Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any, Mapping, Sequence, Tuple
 
 from .harness import CaseOutcome, DecisionCase
 
@@ -31,65 +36,96 @@ REQUEST_VERIFICATION = "request_verification"
 MANUAL_REVIEW = "manual_review"
 DECLINE = "decline"
 
-# The ONLY inputs an arm may read. Behavioral / transactional signals — no identity or protected traits.
 BEHAVIORAL_OBSERVABLE_KEYS = frozenset({
     "amount_band", "velocity_flag", "mismatch_flag", "new_account_flag", "high_value_flag", "reship_flag"})
 PROTECTED_TRAITS_NEVER_USED = frozenset({
     "name", "gender", "age", "ethnicity", "country", "zip", "email_domain", "ip_geo"})
 
-# Economics, in integer cents. Margin is what a fulfilled legit sale earns; a fulfilled fraud order loses the
-# goods + amount + a chargeback fee; a false decline loses the margin plus goodwill; verify/review cost real
-# money and shed a fraction of legit customers to friction.
-_MARGIN_RATE = 0.35
-_CHARGEBACK_FEE = 2_500
-_REVIEW_COST = 900
-_VERIFY_COST = 200
-_GOODWILL = 1_500
-_STEP_UP_ABANDON_LEGIT = 0.10          # legit customers who give up at a step-up
-_HOLD_ABANDON_LEGIT = 0.15             # legit customers lost to a delay
-_HOLD_COMPLETE_FRAUD = 0.20            # fraud that still completes despite a hold
+_FLAG_KEYS = ("velocity_flag", "mismatch_flag", "new_account_flag", "reship_flag")
+
+
+@dataclass(frozen=True)
+class FraudProfile:
+    """One business's fraud environment. All money in integer cents."""
+    world_id: str
+    margin_rate: float
+    chargeback_fee: int
+    review_cost: int
+    verify_cost: int
+    goodwill: int
+    step_up_abandon_legit: float     # legit customers who give up at a step-up
+    hold_abandon_legit: float        # legit customers lost to a delay
+    hold_complete_fraud: float       # fraud that still completes despite a hold
+    base_fraud_rate: float
+    amounts: Tuple[int, ...]
+    mid_threshold: int               # amount_band m boundary
+    high_value_threshold: int        # high_value flag / band l boundary
+    xl_threshold: int
+    signal_probs: Tuple[Tuple[str, float, float], ...]  # (flag_key, p_if_fraud, p_if_legit), fixed order
+
+
+FRAUD_A = FraudProfile(
+    world_id="fraud_order_review/v1", margin_rate=0.35, chargeback_fee=2_500, review_cost=900,
+    verify_cost=200, goodwill=1_500, step_up_abandon_legit=0.10, hold_abandon_legit=0.15,
+    hold_complete_fraud=0.20, base_fraud_rate=0.18,
+    amounts=(3_500, 8_000, 15_000, 40_000, 90_000), mid_threshold=8_000, high_value_threshold=40_000,
+    xl_threshold=90_000,
+    signal_probs=(("velocity_flag", 0.55, 0.10), ("mismatch_flag", 0.50, 0.12),
+                  ("new_account_flag", 0.60, 0.25), ("reship_flag", 0.35, 0.05)))
+
+# Digital-goods marketplace: more fraud, instant delivery (hold barely helps), thinner margins for error and
+# markedly noisier signals — fraud and legit overlap far more, raising the irreducible evidence floor.
+FRAUD_B = FraudProfile(
+    world_id="fraud_order_review/marketplace-digital/v1", margin_rate=0.70, chargeback_fee=2_500,
+    review_cost=600, verify_cost=150, goodwill=800, step_up_abandon_legit=0.15, hold_abandon_legit=0.25,
+    hold_complete_fraud=0.35, base_fraud_rate=0.30,
+    amounts=(1_500, 4_000, 9_000, 20_000, 45_000), mid_threshold=4_000, high_value_threshold=20_000,
+    xl_threshold=45_000,
+    signal_probs=(("velocity_flag", 0.45, 0.22), ("mismatch_flag", 0.38, 0.20),
+                  ("new_account_flag", 0.52, 0.38), ("reship_flag", 0.20, 0.10)))
 
 
 class FraudWorld:
-    world_id = "fraud_order_review/v1"
+    def __init__(self, profile: FraudProfile = FRAUD_A):
+        self.profile = profile
+        self.world_id = profile.world_id
 
     def actions(self) -> tuple[str, ...]:
         return (APPROVE, HOLD, REQUEST_VERIFICATION, MANUAL_REVIEW, DECLINE)
 
     def hold_actions(self) -> frozenset[str]:
-        # "no active, customer-facing intervention beyond letting it sit" — HOLD only. verify/review/decline
-        # are all real interventions with cost, and DECLINE is the strongest one.
-        return frozenset({HOLD})
+        return frozenset({HOLD})     # verify/review/decline are all real, costed interventions
 
     def default_hold(self) -> str:
         return HOLD
 
     # ---- oracle (reads latent only) -------------------------------------------------
     def net_value(self, latent: Mapping[str, Any], action: str) -> float:
+        p = self.profile
         amount = latent["amount_cents"]
-        margin = amount * _MARGIN_RATE
+        margin = amount * p.margin_rate
         if latent["kind"] == "legit":
             if action == APPROVE:
                 return margin
             if action == REQUEST_VERIFICATION:
-                return margin * (1 - _STEP_UP_ABANDON_LEGIT) - _VERIFY_COST
+                return margin * (1 - p.step_up_abandon_legit) - p.verify_cost
             if action == MANUAL_REVIEW:
-                return margin - _REVIEW_COST
+                return margin - p.review_cost
             if action == HOLD:
-                return margin * (1 - _HOLD_ABANDON_LEGIT)
+                return margin * (1 - p.hold_abandon_legit)
             if action == DECLINE:
-                return -( margin + _GOODWILL )              # lost sale + goodwill damage
+                return -(margin + p.goodwill)
         else:  # fraud
             if action == APPROVE:
-                return -(amount + _CHARGEBACK_FEE)          # goods gone + chargeback
+                return -(amount + p.chargeback_fee)
             if action == REQUEST_VERIFICATION:
-                return -_VERIFY_COST                         # fraud abandons the step-up; loss avoided
+                return -p.verify_cost
             if action == MANUAL_REVIEW:
-                return -_REVIEW_COST                         # caught by a human; loss avoided, analyst paid
+                return -p.review_cost
             if action == HOLD:
-                return -_HOLD_COMPLETE_FRAUD * (amount + _CHARGEBACK_FEE)
+                return -p.hold_complete_fraud * (amount + p.chargeback_fee)
             if action == DECLINE:
-                return 0.0                                   # avoided cleanly
+                return 0.0
         raise ValueError(action)
 
     def optimal(self, latent: Mapping[str, Any]) -> str:
@@ -97,8 +133,6 @@ class FraudWorld:
 
     # ---- feasibility (reads observable only) ----------------------------------------
     def admissible_action(self, observable: Mapping[str, Any], action: str) -> bool:
-        # manual review is a scarce human resource: only feasible on genuinely ambiguous / high-value orders,
-        # not on every order (a benchmark that let every order go to a human would be unrealistic).
         if action == MANUAL_REVIEW:
             return bool(observable.get("high_value_flag") or observable.get("mismatch_flag"))
         return True
@@ -111,54 +145,55 @@ class FraudWorld:
 
     # ---- arm A baseline: the common naive rule — decline on any risk flag ------------
     def baseline_action(self, observable: Mapping[str, Any]) -> str:
-        risk = sum(1 for k in ("velocity_flag", "mismatch_flag", "new_account_flag", "reship_flag")
-                   if observable.get(k))
+        risk = sum(1 for k in _FLAG_KEYS if observable.get(k))
         if risk >= 2:
             return DECLINE
         if risk == 1:
             return REQUEST_VERIFICATION
         return APPROVE
 
-    # ---- corpus (§5 reset/observe) --------------------------------------------------
+    # ---- corpus ---------------------------------------------------------------------
     def cases(self, *, seed: int, n: int, shift: float = 0.0) -> tuple[DecisionCase, ...]:
+        p = self.profile
         rng = random.Random(seed)
-        base_fraud_rate = min(0.6, max(0.02, 0.18 + shift))   # covariate/base-rate shift on eval only
+        base_fraud_rate = min(0.7, max(0.02, p.base_fraud_rate + shift))
         out: list[DecisionCase] = []
         for i in range(n):
             is_fraud = rng.random() < base_fraud_rate
-            amount = rng.choice([3_500, 8_000, 15_000, 40_000, 90_000])
-            high_value = amount >= 40_000
-            # signal model: fraud lights up flags more often, but neither side is separable.
-            def flag(p_fraud: float, p_legit: float) -> bool:
-                return rng.random() < (p_fraud if is_fraud else p_legit)
-            velocity = flag(0.55, 0.10)
-            mismatch = flag(0.50, 0.12)
-            new_acct = flag(0.60, 0.25)
-            reship = flag(0.35, 0.05)
+            amount = rng.choice(p.amounts)
+            high_value = amount >= p.high_value_threshold
+            flags = {}
+            for key, p_fraud, p_legit in p.signal_probs:      # fixed order → deterministic
+                flags[key] = rng.random() < (p_fraud if is_fraud else p_legit)
             observable = {
-                "amount_band": ("xl" if amount >= 90_000 else "l" if high_value else
-                                "m" if amount >= 8_000 else "s"),
-                "velocity_flag": velocity, "mismatch_flag": mismatch, "new_account_flag": new_acct,
-                "high_value_flag": high_value, "reship_flag": reship}
+                "amount_band": ("xl" if amount >= p.xl_threshold else "l" if high_value else
+                                "m" if amount >= p.mid_threshold else "s"),
+                "high_value_flag": high_value, **flags}
             latent = {"kind": "fraud" if is_fraud else "legit", "amount_cents": amount}
             out.append(DecisionCase(
                 case_id=f"{self.world_id}:{seed}:{i}", world_id=self.world_id,
                 observable=observable, latent=latent, known_at=i))
         return tuple(out)
 
-    # ---- operational metrics the reframe wants surfaced -----------------------------
+    # ---- operational metrics --------------------------------------------------------
     def extra_metrics(self, outcomes: Sequence[CaseOutcome],
                       cases: Sequence[DecisionCase]) -> Mapping[str, float]:
         by_id = {c.case_id: c for c in cases}
         legit = [o for o in outcomes if by_id[o.case_id].latent["kind"] == "legit"]
         fraud = [o for o in outcomes if by_id[o.case_id].latent["kind"] == "fraud"]
         n = len(outcomes) or 1
-        false_declines = sum(1 for o in legit if o.effective == DECLINE)
-        fraud_approved = sum(1 for o in fraud if o.effective == APPROVE)
         return {
-            "false_decline_rate": false_declines / (len(legit) or 1),   # good customers we turned away
-            "fraud_loss_rate": fraud_approved / (len(fraud) or 1),       # fraud we let through
+            "false_decline_rate": sum(1 for o in legit if o.effective == DECLINE) / (len(legit) or 1),
+            "fraud_loss_rate": sum(1 for o in fraud if o.effective == APPROVE) / (len(fraud) or 1),
             "manual_review_rate": sum(1 for o in outcomes if o.effective == MANUAL_REVIEW) / n,
             "verification_rate": sum(1 for o in outcomes if o.effective == REQUEST_VERIFICATION) / n,
             "approval_rate": sum(1 for o in outcomes if o.effective == APPROVE) / n,
         }
+
+
+def fraud_world_a() -> FraudWorld:
+    return FraudWorld(FRAUD_A)
+
+
+def fraud_world_b() -> FraudWorld:
+    return FraudWorld(FRAUD_B)
