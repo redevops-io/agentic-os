@@ -38,6 +38,7 @@ from .confirmation_battery_v2 import (
 from .safe_learn import (
     AbstentionGuard, BucketReliability, arm_metrics, diagnose_losses, evaluate_s2, lesson_reliability,
     risk_coverage, s2_normalized_regret, select_tau)
+from .adherence import AdherenceReport, classify_adherence
 from .model_arm import (
     FrozenChatModel, build_experience, endpoint_reachable, run_model_experiment)
 from .abstract import (
@@ -71,6 +72,8 @@ __all__ = [
     # safe-Learn (S2) — auditable abstention guard
     "AbstentionGuard", "BucketReliability", "lesson_reliability", "risk_coverage", "select_tau",
     "evaluate_s2", "diagnose_losses", "s2_normalized_regret", "arm_metrics",
+    # adherence diagnosis (ACTION_MISMATCH: will the model follow a supported lesson?)
+    "AdherenceReport", "classify_adherence",
     # Lesson object (principle transfers, policy regenerates)
     "Lesson", "extract_lesson", "RECEIVABLES_INTERVENTION_LESSON",
     # real frozen-model arm (second-family same-model gate)
