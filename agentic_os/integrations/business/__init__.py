@@ -1,19 +1,16 @@
-"""Integration Plane — canonical business contracts (Phase A of the Agentic Apps competitive-gaps plan).
+"""Integration Plane — canonical business contracts + the governed-Runtime substrate (PUBLIC).
 
-Extends the Integration Plane (not a new top-level package, not the external Agent Gateway) with the
-plan's §20 shared business objects so Mission logic reasons about canonical business records rather than
-provider JSON. Raw provider payloads stay as evidence; each canonical object retains its provider ref,
-evidence refs, and bitemporal timestamps (observed_at / known_at).
+This package answers *what contracts does a decision Runtime obey?* — canonical business objects, connector
+normalization, a capability registry, governed writes into the platform's ``ActionReceipt`` + verification,
+and cross-app governed missions. Raw provider payloads stay as evidence; each canonical object retains its
+provider ref, evidence refs, and bitemporal timestamps.
 
-Layers added here:
-  * ``contracts``   — typed canonical objects (identity/customer · crm · communications · invoice ·
-                      payment · support · commerce), money as integer minor units.
-  * ``normalize``   — connector ``ProviderResult``/``Observation`` data → canonical objects.
-  * ``capabilities``— the business-connector capability registry (VERIFIED / AVAILABLE_UNVERIFIED / … ),
-                      the §5 counterpart to the external-agent capability audit, for business SaaS.
-  * ``receipts``    — a governed connector write → the canonical ``projects.ActionReceipt`` + an
-                      independent verification state (§22 / Strength 5). This wires connector execution
-                      into the same receipt/verification the rest of the platform uses.
+It does **not** contain the proprietary answer to *how does ReDevOps turn verified operational experience
+into better future decisions?* — the decision-learning engine (experience attribution, pattern/lesson
+induction, applicability, safe-Learn abstention, policy optimization, cross-domain transfer, the benchmark
+worlds and their goldens) lives in the private ``decision-intelligence`` package, behind the
+:class:`DecisionIntelligence` interface defined here. Public depends only on that interface; the private
+engine depends on these public contracts, never the reverse.
 """
 from .contracts import (
     Account, BusinessObject, Charge, Contact, Customer, Invoice, InvoiceLine, Lead, Message, Opportunity,
@@ -26,18 +23,9 @@ from .runner import (
     GovernedMissionResult, GovernedStep, canonical_evidence, govern_run, receipts_for_run)
 from .missions import (
     FollowupProposal, ReceivableCandidate, investigate_receivables, propose_followups)
-from .decisions import (
-    AccountFeatures, Candidate, CandidateSet, DecisionContext, DecisionExperience, DecisionPoint,
-    DecisionProposal, DecisionRecord, DeterministicReceivablesModel, InterventionKind, Outcome,
-    ReceivablesDecisionModel, ReceivablesDecisionTrail, decide_receivable, features_for)
-from .receivables_lab import (
-    ArmReport, LatentAccount, LearnBoundaryError, LearnedModel, NaiveModel, assert_strategy_only,
-    evaluate_arm, make_corpus, net_value, optimal_action, run_experiment)
-from .receivables_benchmark import BENCHMARK_VERSION, benchmark_report, run_ladder
-from .receivables_model_arm import FrozenModel, endpoint_reachable, run_model_experiment
-from .transitions import (
-    AccountState, Admissibility, TransitionResult, VerifiedExperience, apply_transition,
-    experience_from_transition)
+from .decision_intelligence import (
+    Admissibility, DecisionIntelligence, DeterministicDecisionIntelligence, NoLearningDecisionIntelligence,
+    experience_eligible)
 
 __all__ = [
     # contracts
@@ -51,23 +39,11 @@ __all__ = [
     "provider_capabilities",
     # receipts + verification
     "VerificationState", "verify_step", "to_action_receipt", "receipt_for_step",
-    # governed run → canonical evidence + receipts (Phase B)
+    # governed run → canonical evidence + receipts
     "canonical_evidence", "receipts_for_run", "govern_run", "GovernedMissionResult", "GovernedStep",
-    # cross-app Receivables Mission (Phase C)
+    # cross-app governed Receivables Mission (deterministic; public example)
     "investigate_receivables", "propose_followups", "ReceivableCandidate", "FollowupProposal",
-    # decision-learning instrumentation (Phase D)
-    "DecisionPoint", "InterventionKind", "AccountFeatures", "DecisionContext", "Candidate",
-    "CandidateSet", "DecisionProposal", "DecisionRecord", "Outcome", "DecisionExperience",
-    "ReceivablesDecisionModel", "DeterministicReceivablesModel", "ReceivablesDecisionTrail",
-    "features_for", "decide_receivable",
-    # decision-learning experiment / ablation (Phase E, synthetic + honestly labeled)
-    "run_experiment", "evaluate_arm", "make_corpus", "optimal_action", "net_value", "LatentAccount",
-    "ArmReport", "NaiveModel", "LearnedModel", "assert_strategy_only", "LearnBoundaryError",
-    # full A→H ladder + frozen benchmark artifact (Phase F/G)
-    "run_ladder", "benchmark_report", "BENCHMARK_VERSION",
-    # verified-transition kernel (self-learning doc §2)
-    "AccountState", "Admissibility", "TransitionResult", "apply_transition", "VerifiedExperience",
-    "experience_from_transition",
-    # real-frozen-model benchmark arm (same-model decision-quality gate)
-    "run_model_experiment", "FrozenModel", "endpoint_reachable",
+    # Decision Intelligence interface boundary (implementations are private)
+    "DecisionIntelligence", "NoLearningDecisionIntelligence", "DeterministicDecisionIntelligence",
+    "Admissibility", "experience_eligible",
 ]
