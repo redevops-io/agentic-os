@@ -33,6 +33,8 @@ from .supplier_invoice_world import SupplierInvoiceWorld
 from .confirmation_battery import (
     BATTERY_VERSION, BatterySpec, WorldBatteryResult, deterministic_battery, gate_verdict,
     run_world_battery)
+from .confirmation_battery_v2 import (
+    BATTERY_V2_VERSION, WorldV2Result, case_stakes, gate_v2, run_world_v2)
 from .model_arm import (
     FrozenChatModel, build_experience, endpoint_reachable, run_model_experiment)
 from .abstract import (
@@ -58,9 +60,11 @@ __all__ = [
     "evidence_floor_regret", "bucket_oracle_policy", "measure_misalignment", "profile_world",
     "PriorMisalignment", "WorldLearnProfile", "predict_learn_opportunity", "reveal_learn_outcome",
     "ProspectiveHResult",
-    # prospective-H confirmation battery (frozen manifest + gate)
+    # prospective-H confirmation battery v1 (frozen manifest + gate; failed, immutable)
     "BatterySpec", "BATTERY_VERSION", "WorldBatteryResult", "run_world_battery", "gate_verdict",
     "deterministic_battery",
+    # v2 — paired stakes-normalized, safety-aware
+    "BATTERY_V2_VERSION", "WorldV2Result", "run_world_v2", "gate_v2", "case_stakes",
     # Lesson object (principle transfers, policy regenerates)
     "Lesson", "extract_lesson", "RECEIVABLES_INTERVENTION_LESSON",
     # real frozen-model arm (second-family same-model gate)
