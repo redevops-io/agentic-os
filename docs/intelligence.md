@@ -58,6 +58,15 @@ baseline is never affected.
 | Security TI | Cloudflare TI (needs `account_id`), VirusTotal (**enforces** a commercial license — refuses the free API), Microsoft Defender TI | |
 | Legal (Professional) | LexisNexis, Thomson Reuters CoCounsel | preserve authority/jurisdiction/citations |
 | Email delivery (execution) | Postmark, Amazon SES | see [Email delivery](#email-delivery-execution) |
+| P2 entity / risk (on demand) | ZoomInfo, LSEG Risk Intelligence, LexisNexis Risk Solutions, Moody's | `register_p2_providers(...)`; screening providers treat a clean screen as evidence |
+| P2 vuln scanners (on demand) | Tenable, Qualys, Rapid7 | customer-owned scanners feeding `VULNERABILITY_EXPLOITABILITY` (+ threat intel) |
+
+**P2 providers are on-demand** (§6 P2): they're built ready-to-wire but registered only when a pilot/customer
+supplies credentials, via `register_p2_providers`. They reuse existing capabilities, so a customer's own scanner or
+screening feed competes on cost/value in the evidence-value ledger like any other provider. **Not built:** tax
+determination and bank/account-aggregation providers — they'd need new contract capabilities and are determination /
+highly-sensitive-flavored, so per §6 P2 they wait for a concrete customer evidence requirement (as `EMAIL_DELIVERY`
+did before its contract).
 
 Wiring paid providers is one call:
 

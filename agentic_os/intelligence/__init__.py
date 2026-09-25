@@ -12,8 +12,14 @@ from .adapters.gtm import (
 )
 from .adapters.payments import StripeRadarProvider
 from .adapters.security_ti import CloudflareTiProvider, DefenderTiProvider, VirusTotalProvider
+from .adapters.entity_risk import (
+    LexisNexisRiskProvider, LsegRiskProvider, MoodysProvider, ZoomInfoProvider,
+)
+from .adapters.vuln_scanners import QualysProvider, Rapid7Provider, TenableProvider
 from .apps import AppProfile, app_capabilities, app_profile, request_for
-from .discovery_bridge import acquire_for_decision, default_registry, register_paid_providers
+from .discovery_bridge import (
+    acquire_for_decision, default_registry, register_p2_providers, register_paid_providers,
+)
 from .evaluation import ProviderEvaluation, evaluate, report
 from .imports import (
     HistoricalOutcome, from_intercom, from_klaviyo, from_zendesk, seed_value_store,
@@ -35,9 +41,18 @@ __all__ = [
     "CloudflareTiProvider",
     "VirusTotalProvider",
     "DefenderTiProvider",
+    # P2 customer-driven enterprise providers (on-demand)
+    "ZoomInfoProvider",
+    "LsegRiskProvider",
+    "LexisNexisRiskProvider",
+    "MoodysProvider",
+    "TenableProvider",
+    "QualysProvider",
+    "Rapid7Provider",
     # registry + bridge + accounting
     "default_registry",
     "register_paid_providers",
+    "register_p2_providers",
     "acquire_for_decision",
     "EvidenceValueStore",
     # per-app capability wiring (§4.1, §7)
