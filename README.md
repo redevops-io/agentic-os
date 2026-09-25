@@ -169,6 +169,7 @@ falls back up the tiers on failure — keeping >90% of work on local hardware.
 | [`agentic_os/control_plane.py`](agentic_os/control_plane.py) | FastAPI control plane |
 | [`agentic_os/mission/`](agentic_os/mission/) | Mission Runtime — the operator/mission engine the reference apps run on (operators, planes, compiler; Go port in [`go/mission/`](go/mission/)) |
 | [`agentic_os/integrations/`](agentic_os/integrations/) | Integration Plane + Connect Compiler contracts, hosted OAuth, the productivity plane, and adapter execution |
+| [`agentic_os/intelligence/`](agentic_os/intelligence/) · [`agentic_os/legal/`](agentic_os/legal/) | External & Professional Intelligence layer — apps ask for a **capability**, a gate decides whether to acquire, adapters (open + BYO paid + legal + email) serve it, and value accounting learns what's worth buying ([docs/intelligence.md](docs/intelligence.md)) |
 | [`agentic_os/agent_gateway/`](agentic_os/agent_gateway/) | Governed Agent Gateway — the governed northbound path for external agents (MCP first) |
 | [`agentic_os/projects_api.py`](agentic_os/projects_api.py) | Projects UI + API (one origin) |
 | [`agentic_os/sidekick_assistant.py`](agentic_os/sidekick_assistant.py) · [`stack_knowledge.py`](agentic_os/stack_knowledge.py) | Sidekick's grounded LLM fallback + curated stack Q&A knowledge base |
