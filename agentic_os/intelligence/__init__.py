@@ -7,14 +7,32 @@ open adapters (GLEIF/OpenSanctions/OpenCorporates); paid providers register on t
 from .adapters.gleif import GleifProvider
 from .adapters.opencorporates import OpenCorporatesProvider
 from .adapters.opensanctions import OpenSanctionsProvider
-from .discovery_bridge import acquire_for_decision, default_registry
+from .adapters.gtm import (
+    ApolloProvider, BrandwatchProvider, DnbProvider, SemrushProvider, SimilarwebProvider,
+)
+from .adapters.payments import StripeRadarProvider
+from .adapters.security_ti import CloudflareTiProvider, DefenderTiProvider, VirusTotalProvider
+from .discovery_bridge import acquire_for_decision, default_registry, register_paid_providers
 from .value_store import EvidenceValueStore
 
 __all__ = [
+    # open providers
     "GleifProvider",
     "OpenSanctionsProvider",
     "OpenCorporatesProvider",
+    # paid BYO providers
+    "ApolloProvider",
+    "SimilarwebProvider",
+    "SemrushProvider",
+    "DnbProvider",
+    "BrandwatchProvider",
+    "StripeRadarProvider",
+    "CloudflareTiProvider",
+    "VirusTotalProvider",
+    "DefenderTiProvider",
+    # registry + bridge + accounting
     "default_registry",
+    "register_paid_providers",
     "acquire_for_decision",
     "EvidenceValueStore",
 ]
