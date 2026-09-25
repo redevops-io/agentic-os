@@ -16,10 +16,14 @@ from .adapters.gleif import GleifProvider
 from .adapters.gtm import (
     ApolloProvider, BrandwatchProvider, DnbProvider, SemrushProvider, SimilarwebProvider,
 )
+from .adapters.entity_risk import (
+    LexisNexisRiskProvider, LsegRiskProvider, MoodysProvider, ZoomInfoProvider,
+)
 from .adapters.opencorporates import OpenCorporatesProvider
 from .adapters.opensanctions import OpenSanctionsProvider
 from .adapters.payments import StripeRadarProvider
 from .adapters.security_ti import CloudflareTiProvider, DefenderTiProvider, VirusTotalProvider
+from .adapters.vuln_scanners import QualysProvider, Rapid7Provider, TenableProvider
 from .value_store import EvidenceValueStore
 
 
@@ -63,6 +67,33 @@ def register_paid_providers(
         registry.register(VirusTotalProvider(credential=virustotal_key, commercial=virustotal_commercial))
     if defender_token:
         registry.register(DefenderTiProvider(credential=defender_token))
+    return registry
+
+
+def register_p2_providers(
+    registry: IntelligenceRegistry, *,
+    zoominfo_key: str = "", lseg_risk_token: str = "", lexisnexis_risk_token: str = "", moodys_token: str = "",
+    tenable_key: str = "", qualys_token: str = "", rapid7_key: str = "",
+) -> IntelligenceRegistry:
+    """Register the P2 customer-driven enterprise adapters a tenant has entitled (moat §6 P2). These are on-demand:
+    built ready-to-wire, registered only when a pilot/customer supplies credentials. Anything left blank is not
+    registered, so the open baseline and P0/P1 providers are unaffected. They reuse existing capabilities, so the
+    registry picks the cheapest entitled provider for each — a customer's own scanner/screening data competes on
+    cost/value in the evidence-value ledger like any other provider."""
+    if zoominfo_key:
+        registry.register(ZoomInfoProvider(credential=zoominfo_key))
+    if lseg_risk_token:
+        registry.register(LsegRiskProvider(credential=lseg_risk_token))
+    if lexisnexis_risk_token:
+        registry.register(LexisNexisRiskProvider(credential=lexisnexis_risk_token))
+    if moodys_token:
+        registry.register(MoodysProvider(credential=moodys_token))
+    if tenable_key:
+        registry.register(TenableProvider(credential=tenable_key))
+    if qualys_token:
+        registry.register(QualysProvider(credential=qualys_token))
+    if rapid7_key:
+        registry.register(Rapid7Provider(credential=rapid7_key))
     return registry
 
 
