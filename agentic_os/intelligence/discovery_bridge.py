@@ -13,8 +13,13 @@ from runtime_contracts.protocol import (
 )
 
 from .adapters.gleif import GleifProvider
+from .adapters.gtm import (
+    ApolloProvider, BrandwatchProvider, DnbProvider, SemrushProvider, SimilarwebProvider,
+)
 from .adapters.opencorporates import OpenCorporatesProvider
 from .adapters.opensanctions import OpenSanctionsProvider
+from .adapters.payments import StripeRadarProvider
+from .adapters.security_ti import CloudflareTiProvider, DefenderTiProvider, VirusTotalProvider
 from .value_store import EvidenceValueStore
 
 
@@ -30,6 +35,35 @@ def default_registry(*, opensanctions_key: str = "", opensanctions_base: str = "
     reg.register(OpenSanctionsProvider(**os_kwargs))
     reg.register(OpenCorporatesProvider(api_token=opencorporates_token))
     return reg
+
+
+def register_paid_providers(
+    registry: IntelligenceRegistry, *,
+    apollo_key: str = "", similarweb_key: str = "", semrush_key: str = "", stripe_key: str = "",
+    cloudflare_token: str = "", cloudflare_account: str = "", dnb_token: str = "", brandwatch_token: str = "",
+    virustotal_key: str = "", virustotal_commercial: bool = False, defender_token: str = "",
+) -> IntelligenceRegistry:
+    """Register the paid BYO providers whose credentials the tenant supplied. Anything left blank is simply not
+    registered, so the open baseline still works. VirusTotal additionally needs an explicit commercial license."""
+    if apollo_key:
+        registry.register(ApolloProvider(credential=apollo_key))
+    if similarweb_key:
+        registry.register(SimilarwebProvider(credential=similarweb_key))
+    if semrush_key:
+        registry.register(SemrushProvider(credential=semrush_key))
+    if stripe_key:
+        registry.register(StripeRadarProvider(credential=stripe_key))
+    if cloudflare_token and cloudflare_account:
+        registry.register(CloudflareTiProvider(credential=cloudflare_token, account_id=cloudflare_account))
+    if dnb_token:
+        registry.register(DnbProvider(credential=dnb_token))
+    if brandwatch_token:
+        registry.register(BrandwatchProvider(credential=brandwatch_token))
+    if virustotal_key:
+        registry.register(VirusTotalProvider(credential=virustotal_key, commercial=virustotal_commercial))
+    if defender_token:
+        registry.register(DefenderTiProvider(credential=defender_token))
+    return registry
 
 
 def acquire_for_decision(
