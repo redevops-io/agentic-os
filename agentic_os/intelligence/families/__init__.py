@@ -11,10 +11,22 @@ from .supplier import (
     confirmation_reliability,
     delivery_reliability,
 )
+from .supplier_broker import (
+    InMemorySupplyEvents,
+    SupplierMetricsProvider,
+    SupplyEventSource,
+    supplier_registry,
+    supplier_synthesize,
+)
 
 __all__ = [
     "DeliveryReliability",
     "ConfirmationReliability",
     "delivery_reliability",
     "confirmation_reliability",
+    "SupplyEventSource",
+    "InMemorySupplyEvents",
+    "SupplierMetricsProvider",
+    "supplier_registry",
+    "supplier_synthesize",
 ]
