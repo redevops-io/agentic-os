@@ -18,6 +18,14 @@ from .supplier_broker import (
     supplier_registry,
     supplier_synthesize,
 )
+from .order import (
+    Blocker,
+    InMemoryOrderGraph,
+    LineageNode,
+    OrderLineage,
+    order_blockers,
+    order_lineage,
+)
 
 __all__ = [
     "DeliveryReliability",
@@ -29,4 +37,10 @@ __all__ = [
     "SupplierMetricsProvider",
     "supplier_registry",
     "supplier_synthesize",
+    "OrderLineage",
+    "LineageNode",
+    "Blocker",
+    "InMemoryOrderGraph",
+    "order_lineage",
+    "order_blockers",
 ]
