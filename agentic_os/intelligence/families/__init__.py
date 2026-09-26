@@ -29,6 +29,14 @@ from .order import (
     promise_feasibility,
 )
 from .order_broker import OrderIntelligenceProvider, order_registry, order_synthesize
+from .supplier_resolution import (
+    GleifSupplierResolver,
+    InternalSupplierResolver,
+    SupplierResolution,
+    resolve_supplier,
+    supplier_resolution_registry,
+    supplier_resolution_synthesize,
+)
 
 __all__ = [
     "DeliveryReliability",
@@ -51,4 +59,10 @@ __all__ = [
     "OrderIntelligenceProvider",
     "order_registry",
     "order_synthesize",
+    "SupplierResolution",
+    "resolve_supplier",
+    "InternalSupplierResolver",
+    "GleifSupplierResolver",
+    "supplier_resolution_registry",
+    "supplier_resolution_synthesize",
 ]
