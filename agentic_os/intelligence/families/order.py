@@ -10,11 +10,12 @@ leakage-safe (scope the graph with `as_of_ms`), so an answer reconstructs as-of 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
-from typing import Iterable, Optional
+from datetime import date, timedelta
+from typing import Optional
 
 from ...integrations.business.order import SalesOrder, SalesOrderLine, Shipment
 from ...integrations.business.supply import GoodsReceipt, PurchaseOrder, SupplierCommitment
+from .supplier import delivery_reliability
 
 
 # ── result types ────────────────────────────────────────────────────────────────────────────────────────
@@ -164,3 +165,77 @@ def order_blockers(order_ref: str, g: InMemoryOrderGraph) -> list[Blocker]:
             f"order {order_ref} is fully received but not yet shipped", (order_ref,)))
     blockers.sort(key=lambda b: -b.severity)
     return blockers
+
+
+# ── promise feasibility ─────────────────────────────────────────────────────────────────────────────────
+@dataclass(frozen=True)
+class PromiseFeasibility:
+    order_ref: str
+    p_on_time: float               # [0,1] probability the customer promise is met
+    earliest_credible_date: str    # ISO date material can credibly be ready to ship ("" = unbounded)
+    drivers: tuple[str, ...]       # the main reasons behind the estimate
+    confidence: float
+
+
+def promise_feasibility(order_ref: str, g: InMemoryOrderGraph, supply_source=None, *,
+                        ship_lead_days: int = 3) -> PromiseFeasibility:
+    """P(on-time) for the customer promise, from the current commitment/receipt state and — when a supply
+    event source is given — the suppliers' observed on-time rate (the weakest link governs). Deterministic
+    and explainable: a commitment that already lands after the promise makes the promise structurally
+    unlikely regardless of reliability; an unconfirmed PO leaves the completion date unbounded."""
+    so = g.sales_order(order_ref)
+    if so is None:
+        return PromiseFeasibility(order_ref, 0.0, "", ("unknown order",), 0.0)
+    promised = _parse_date(so.promised_date)
+
+    sh = g.shipment(order_ref)
+    if sh is not None:
+        shipped = _parse_date(sh.shipped_date)
+        on_time = bool(promised and shipped and shipped <= promised)
+        return PromiseFeasibility(order_ref, 1.0 if on_time else 0.0, sh.shipped_date,
+                                  (f"already shipped {'on time' if on_time else 'late'}",), 1.0)
+
+    # material-ready date = latest per-line completion; None if any dependency is unbounded (unconfirmed PO).
+    line_ready: list[Optional[date]] = []
+    suppliers: set[str] = set()
+    for ln in g.lines(order_ref):
+        po_dates: list[Optional[date]] = []
+        for po_ref in ln.po_refs:
+            po = g.po(po_ref)
+            if po is not None:
+                suppliers.add(po.supplier_ref)
+            recs = g.receipts(po_ref)
+            if recs:
+                po_dates.append(max(_parse_date(r.received_date) for r in recs))
+            else:
+                commits = g.commitments(po_ref)
+                po_dates.append(_parse_date(commits[0].confirmed_date) if commits else None)
+        line_ready.append(None if (not ln.po_refs or any(d is None for d in po_dates)) else max(po_dates))
+
+    if not line_ready or any(d is None for d in line_ready):
+        earliest, feasible = "", False
+    else:
+        ready = max(d for d in line_ready if d is not None)
+        earliest_dt = ready + timedelta(days=ship_lead_days)
+        earliest = earliest_dt.isoformat()
+        feasible = bool(promised and earliest_dt <= promised)
+
+    # supplier prior: weakest supplier's observed on-time rate; a default when we have no history.
+    base, confidence = 0.7, 0.5
+    if supply_source is not None and suppliers:
+        rates, confs = [], []
+        for s in suppliers:
+            d = delivery_reliability(supply_source.orders(s), supply_source.receipts(s), supplier_ref=s)
+            if d.n:
+                rates.append(d.on_time_rate)
+                confs.append(d.confidence)
+        if rates:
+            base, confidence = min(rates), min(confs)
+
+    if earliest == "":
+        p, drivers = round(0.1 * base, 4), ("an unconfirmed purchase order leaves the completion date unbounded",)
+    elif feasible:
+        p, drivers = round(base, 4), (f"on track: material ready {earliest} ≤ promised {so.promised_date}",)
+    else:
+        p, drivers = round(0.1 * base, 4), (f"commitments complete {earliest}, after promised {so.promised_date}",)
+    return PromiseFeasibility(order_ref, p, earliest, drivers, round(confidence, 4))

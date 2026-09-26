@@ -23,9 +23,12 @@ from .order import (
     InMemoryOrderGraph,
     LineageNode,
     OrderLineage,
+    PromiseFeasibility,
     order_blockers,
     order_lineage,
+    promise_feasibility,
 )
+from .order_broker import OrderIntelligenceProvider, order_registry, order_synthesize
 
 __all__ = [
     "DeliveryReliability",
@@ -40,7 +43,12 @@ __all__ = [
     "OrderLineage",
     "LineageNode",
     "Blocker",
+    "PromiseFeasibility",
     "InMemoryOrderGraph",
     "order_lineage",
     "order_blockers",
+    "promise_feasibility",
+    "OrderIntelligenceProvider",
+    "order_registry",
+    "order_synthesize",
 ]
