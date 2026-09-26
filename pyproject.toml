@@ -10,7 +10,7 @@ dependencies = [
     # tag: a branch can be rebased under a consumer, and a contract that moves
     # silently is not a contract. Importing it is why this repository carries
     # the Commons Clause — see LICENSE.md.
-    "runtime-contracts @ git+https://github.com/redevops-io/runtime-contracts.git@v0.3.6",
+    "runtime-contracts @ git+https://github.com/redevops-io/runtime-contracts.git@v0.3.7",
     # The generic experience→lesson Learn engine ("a correction is not a rule"), consumed by
     # agentic_os.projects.workflow_learning. Pinned by tag like the other contracts — a branch can be
     # rebased under a consumer, and a contract that moves silently is not a contract. v0.1.13 is the
