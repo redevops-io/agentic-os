@@ -20,6 +20,7 @@ from .apps import AppProfile, app_capabilities, app_profile, request_for
 from .discovery_bridge import (
     acquire_for_decision, default_registry, register_p2_providers, register_paid_providers,
 )
+from .decision_resolver import Synthesis, Synthesizer, default_synthesize, resolve_decision_need
 from .evaluation import ProviderEvaluation, evaluate, report
 from .imports import (
     HistoricalOutcome, from_intercom, from_klaviyo, from_zendesk, seed_value_store,
@@ -54,6 +55,10 @@ __all__ = [
     "register_paid_providers",
     "register_p2_providers",
     "acquire_for_decision",
+    "resolve_decision_need",
+    "default_synthesize",
+    "Synthesis",
+    "Synthesizer",
     "EvidenceValueStore",
     # per-app capability wiring (§4.1, §7)
     "AppProfile",
