@@ -54,6 +54,24 @@ from .supply import (
     substitute_availability,
 )
 from .supply_broker import SupplyGraph, SupplyIntelligenceProvider, supply_registry, supply_synthesize
+from .process import (
+    Anomaly,
+    Bottleneck,
+    CycleBenchmark,
+    NextEvent,
+    WhyStuck,
+    anomaly,
+    bottlenecks,
+    cycle_benchmark,
+    next_event,
+    why_stuck,
+)
+from .process_broker import (
+    ProcessEventLog,
+    ProcessIntelligenceProvider,
+    process_registry,
+    process_synthesize,
+)
 
 __all__ = [
     "DeliveryReliability",
@@ -100,4 +118,18 @@ __all__ = [
     "SupplyIntelligenceProvider",
     "supply_registry",
     "supply_synthesize",
+    "Bottleneck",
+    "CycleBenchmark",
+    "NextEvent",
+    "WhyStuck",
+    "Anomaly",
+    "bottlenecks",
+    "cycle_benchmark",
+    "next_event",
+    "why_stuck",
+    "anomaly",
+    "ProcessEventLog",
+    "ProcessIntelligenceProvider",
+    "process_registry",
+    "process_synthesize",
 ]
