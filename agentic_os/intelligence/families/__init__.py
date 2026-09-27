@@ -39,12 +39,21 @@ from .supplier_resolution import (
 )
 from .supply import (
     BomComponent,
+    BomImpact,
     RequiredByFeasibility,
+    SafetyStockRecommendation,
     ShortageProjection,
+    StockoutConsequence,
+    SubstituteOption,
     bom_closure,
+    bom_impact,
     required_by_feasibility,
+    safety_stock,
     shortage_risk,
+    stockout_consequence,
+    substitute_availability,
 )
+from .supply_broker import SupplyGraph, SupplyIntelligenceProvider, supply_registry, supply_synthesize
 
 __all__ = [
     "DeliveryReliability",
@@ -76,7 +85,19 @@ __all__ = [
     "BomComponent",
     "RequiredByFeasibility",
     "ShortageProjection",
+    "BomImpact",
+    "SubstituteOption",
+    "StockoutConsequence",
+    "SafetyStockRecommendation",
     "bom_closure",
     "required_by_feasibility",
     "shortage_risk",
+    "bom_impact",
+    "substitute_availability",
+    "stockout_consequence",
+    "safety_stock",
+    "SupplyGraph",
+    "SupplyIntelligenceProvider",
+    "supply_registry",
+    "supply_synthesize",
 ]
