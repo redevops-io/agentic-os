@@ -72,6 +72,16 @@ from .process_broker import (
     process_registry,
     process_synthesize,
 )
+from .counterparty import (
+    CounterpartyProvider,
+    CounterpartyRecords,
+    PaymentBehavior,
+    RelationshipGraph,
+    counterparty_registry,
+    counterparty_synthesize,
+    payment_behavior,
+    relationship_graph,
+)
 
 __all__ = [
     "DeliveryReliability",
@@ -132,4 +142,12 @@ __all__ = [
     "ProcessIntelligenceProvider",
     "process_registry",
     "process_synthesize",
+    "PaymentBehavior",
+    "RelationshipGraph",
+    "payment_behavior",
+    "relationship_graph",
+    "CounterpartyRecords",
+    "CounterpartyProvider",
+    "counterparty_registry",
+    "counterparty_synthesize",
 ]
