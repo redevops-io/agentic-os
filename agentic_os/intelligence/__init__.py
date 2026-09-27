@@ -28,6 +28,16 @@ from .imports import (
 from .value_store import EvidenceValueStore
 from .provider_value import ProviderValuePrior, learn_priors, routing_report, value_fn_from_store
 from .service import IntelligenceService, Quote
+from .api import build_router
+from .temporal_graph import (
+    GraphEntity,
+    GraphRelationship,
+    GraphSnapshot,
+    LifecycleEvent,
+    TemporalGraph,
+    project_kyc_ownership,
+    screen_ownership,
+)
 
 __all__ = [
     # open providers
@@ -68,6 +78,14 @@ __all__ = [
     "routing_report",
     "IntelligenceService",
     "Quote",
+    "build_router",
+    "TemporalGraph",
+    "GraphEntity",
+    "GraphRelationship",
+    "GraphSnapshot",
+    "LifecycleEvent",
+    "project_kyc_ownership",
+    "screen_ownership",
     # per-app capability wiring (§4.1, §7)
     "AppProfile",
     "app_profile",

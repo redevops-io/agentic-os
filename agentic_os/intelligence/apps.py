@@ -42,12 +42,43 @@ _PROFILES: dict[str, AppProfile] = {
         C.CORPORATE_HIERARCHY: "crm account hierarchy mapping",
         C.SANCTIONS_RISK: "crm counterparty screening",
     }),
-    "erpnext": AppProfile("erpnext", {                                  # ERP / finance / books
+    "erpnext": AppProfile("erpnext", {                                  # ERP / finance / books / ops
+        # counterparty identity + screening
         C.COMPANY_IDENTITY: "supplier/customer identity resolution",
         C.CORPORATE_HIERARCHY: "counterparty hierarchy for exposure",
         C.BENEFICIAL_OWNERSHIP: "counterparty beneficial-ownership diligence",
         C.SANCTIONS_RISK: "supplier/customer sanctions screening",
         C.PAYMENT_FRAUD_SCORE: "receivables/credit decision",
+        C.PAYMENT_BEHAVIOR: "counterparty payment-behaviour assessment",
+        C.RELATIONSHIP_GRAPH: "counterparty cross-system relationship review",
+        # supplier (procurement)
+        C.SUPPLIER_RESOLUTION: "supplier master-data resolution",
+        C.DELIVERY_RELIABILITY: "supplier OTIF assessment before award",
+        C.CONFIRMATION_RELIABILITY: "supplier confirmation-reliability assessment",
+        # order fulfilment
+        C.ORDER_LINEAGE: "trace an order end-to-end",
+        C.ORDER_BLOCKERS: "identify what blocks an order",
+        C.PROMISE_FEASIBILITY: "can we keep the customer promise?",
+        # supply / materials
+        C.SHORTAGE_RISK: "material shortage projection",
+        C.REQUIRED_BY_FEASIBILITY: "can we source a part by a date?",
+        C.BOM_IMPACT: "blast radius of a part change/shortage",
+        C.SUBSTITUTE_AVAILABILITY: "approved substitute availability",
+        C.STOCKOUT_CONSEQUENCE: "downstream consequence of a stockout",
+        C.SAFETY_STOCK: "safety-stock recommendation",
+        # process (over ERP workflow events)
+        C.WHY_STUCK: "why an order/ticket is stuck",
+        C.BOTTLENECKS: "process bottleneck decomposition",
+        C.CYCLE_BENCHMARK: "cycle-time benchmark vs cohort",
+        C.PROCESS_ANOMALY: "process anomaly detection",
+        C.NEXT_EVENT: "expected next process step",
+        # asset / maintenance
+        C.ASSET_IDENTITY: "asset + component identification",
+        C.SERVICE_HISTORY: "asset service history",
+        C.FAILURE_RISK: "asset failure-risk forecast",
+        C.MAINTENANCE_RISK: "can planned maintenance complete on time?",
+        C.PARTS_RISK: "critical-spare exposure",
+        C.REPLACEMENT_COMPATIBILITY: "compatible replacement parts",
     }),
     "metabase": AppProfile("metabase", {                               # BI / ask-anything
         C.WEB_TRAFFIC_INTELLIGENCE: "external market context for a metric",
