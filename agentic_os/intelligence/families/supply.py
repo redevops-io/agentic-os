@@ -12,11 +12,14 @@ canonical graph, leakage-safe as-of a decision time (filter the inputs by `as_of
 """
 from __future__ import annotations
 
+import math
+import statistics
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
 from typing import Iterable, Optional
 
+from ...integrations.business.order import SalesOrder, SalesOrderLine
 from ...integrations.business.supply import (
     BOMLine, DemandRequirement, InventoryPosition, PurchaseOrder,
 )
@@ -185,3 +188,146 @@ def shortage_risk(part: str, site: str, inventory: Iterable[InventoryPosition],
     first = shortages[0][0] if shortages else ""
     return ShortageProjection(part=part, site=site, first_shortage_date=first,
                               min_projected_balance=min_balance, shortages=tuple(shortages))
+
+
+# ── where-used (reverse BOM) + BOM impact ─────────────────────────────────────────────────────────────────
+def _where_used(part: str, bom_lines: Iterable[BOMLine], as_of_ms: int) -> set[str]:
+    """Every assembly that transitively uses `part` (reverse-reachability over primary BOM edges)."""
+    parents: dict[str, set[str]] = defaultdict(set)
+    for l in bom_lines:
+        if _knowable(l, as_of_ms) and not l.is_substitute:
+            parents[l.component_part].add(l.parent_part)
+    seen: set[str] = set()
+    stack = [part]
+    while stack:
+        p = stack.pop()
+        for par in parents.get(p, ()):
+            if par not in seen:
+                seen.add(par)
+                stack.append(par)
+    return seen
+
+
+@dataclass(frozen=True)
+class BomImpact:
+    changed_part: str
+    affected_assemblies: tuple[str, ...]   # parents transitively using the part (all levels up)
+    affected_orders: tuple[str, ...]       # open order refs whose part is the changed part or an assembly
+
+
+def bom_impact(changed_part: str, bom_lines: Iterable[BOMLine],
+               order_lines: Iterable[SalesOrderLine] = (), *, as_of_ms: int = 0) -> BomImpact:
+    """What a change to `changed_part` (shortage or ECO) reaches: the assemblies that use it (reverse BOM
+    closure) and the open orders building those assemblies."""
+    assemblies = _where_used(changed_part, bom_lines, as_of_ms)
+    impacted = assemblies | {changed_part}
+    orders: list[str] = []
+    seen: set[str] = set()
+    for ln in order_lines:
+        if _knowable(ln, as_of_ms) and ln.part in impacted and ln.order_ref and ln.order_ref not in seen:
+            seen.add(ln.order_ref)
+            orders.append(ln.order_ref)
+    return BomImpact(changed_part, tuple(sorted(assemblies)), tuple(orders))
+
+
+# ── substitute availability ─────────────────────────────────────────────────────────────────────────────
+@dataclass(frozen=True)
+class SubstituteOption:
+    part: str            # the approved substitute component
+    substitute_for: str
+    on_hand: float       # net available at the site
+    qualified: bool      # an is_substitute BOM line is an engineering/quality-approved alternate
+
+
+def substitute_availability(part: str, bom_lines: Iterable[BOMLine], inventory: Iterable[InventoryPosition],
+                            *, site: str = "", as_of_ms: int = 0) -> list[SubstituteOption]:
+    """Approved substitutes for `part` (BOM alternate lines), each with its net on-hand, best stock first."""
+    net: dict[str, float] = defaultdict(float)
+    for i in inventory:
+        if _knowable(i, as_of_ms) and (not site or i.site == site):
+            net[i.part] += i.on_hand - i.allocated
+    opts = [SubstituteOption(l.component_part, part, round(net.get(l.component_part, 0.0), 6), True)
+            for l in bom_lines
+            if _knowable(l, as_of_ms) and l.is_substitute and l.substitute_for == part]
+    return sorted(opts, key=lambda o: -o.on_hand)
+
+
+# ── stockout consequence ────────────────────────────────────────────────────────────────────────────────
+@dataclass(frozen=True)
+class StockoutConsequence:
+    part: str
+    affected_orders: tuple[str, ...]
+    orders_delayed: int
+    earliest_impact_date: str            # soonest customer promise among the affected orders ("" if none)
+
+
+def stockout_consequence(part: str, bom_lines: Iterable[BOMLine], order_lines: Iterable[SalesOrderLine],
+                         sales_orders: Iterable[SalesOrder] = (), *, as_of_ms: int = 0) -> StockoutConsequence:
+    """The downstream consequence of a stockout: the customer orders it delays (part → where-used → order)
+    and the soonest promise date at risk."""
+    imp = bom_impact(part, bom_lines, order_lines, as_of_ms=as_of_ms)
+    so_by_ref = {s.prov.provider_ref: s for s in sales_orders if _knowable(s, as_of_ms)}
+    dates = [d for o in imp.affected_orders
+             if (d := _parse_date(so_by_ref[o].promised_date)) is not None] if so_by_ref else []
+    earliest = min(dates).isoformat() if dates else ""
+    return StockoutConsequence(part, imp.affected_orders, len(imp.affected_orders), earliest)
+
+
+# ── safety stock (FORECAST — kept separate from the deterministic facts, §6) ──────────────────────────────
+_Z_TABLE = {0.5: 0.0, 0.8: 0.8416, 0.9: 1.2816, 0.95: 1.6449, 0.975: 1.96, 0.99: 2.3263, 0.995: 2.5758}
+
+
+def _z(service_level: float) -> float:
+    """Standard-normal quantile for a service level; tabled common values, Acklam approximation otherwise."""
+    key = round(service_level, 3)
+    if key in _Z_TABLE:
+        return _Z_TABLE[key]
+    p = min(max(service_level, 1e-6), 1 - 1e-6)
+    a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
+         1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00]
+    b = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
+         6.680131188771972e+01, -1.328068155288572e+01]
+    c = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00,
+         -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00]
+    d = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00, 3.754408661907416e+00]
+    plow, phigh = 0.02425, 1 - 0.02425
+    if p < plow:
+        q = math.sqrt(-2 * math.log(p))
+        return (((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1)
+    if p <= phigh:
+        q = p - 0.5
+        r = q * q
+        return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5])*q / (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1)
+    q = math.sqrt(-2 * math.log(1 - p))
+    return -(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) / ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1)
+
+
+@dataclass(frozen=True)
+class SafetyStockRecommendation:
+    part: str
+    site: str
+    n: int
+    mean_demand: float          # per demand-period observation
+    demand_std: float
+    lead_time_days: float
+    service_level: float
+    recommended_safety_stock: float
+    assumptions: tuple[str, ...]
+
+
+def safety_stock(part: str, site: str, demand_history: Iterable[DemandRequirement], *,
+                 lead_time_days: float, service_level: float = 0.95) -> SafetyStockRecommendation:
+    """A buffer recommendation — the one genuinely FORECAST capability, kept apart from the hard facts:
+    SS = z(service level) · σ_demand · √lead_time. Its assumptions are stated; it recommends, never asserts."""
+    qtys = [d.quantity for d in demand_history if d.part == part and (not site or d.site == site)]
+    n = len(qtys)
+    if n < 2:
+        return SafetyStockRecommendation(part, site, n, round(qtys[0], 4) if qtys else 0.0, 0.0,
+                                         float(lead_time_days), service_level, 0.0,
+                                         ("insufficient demand history (<2 observations)",))
+    mean, std = statistics.fmean(qtys), statistics.stdev(qtys)
+    ss = round(_z(service_level) * std * math.sqrt(max(lead_time_days, 0.0)), 4)
+    return SafetyStockRecommendation(
+        part, site, n, round(mean, 4), round(std, 4), float(lead_time_days), service_level, ss,
+        ("FORECAST estimate — a recommendation, not a hard fact (§6)",
+         "each demand line treated as one period; σ scaled by √lead_time; normal demand assumed"))
