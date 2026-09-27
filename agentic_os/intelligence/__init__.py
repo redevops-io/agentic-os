@@ -26,6 +26,7 @@ from .imports import (
     HistoricalOutcome, from_intercom, from_klaviyo, from_zendesk, seed_value_store,
 )
 from .value_store import EvidenceValueStore
+from .provider_value import ProviderValuePrior, learn_priors, routing_report, value_fn_from_store
 
 __all__ = [
     # open providers
@@ -60,6 +61,10 @@ __all__ = [
     "Synthesis",
     "Synthesizer",
     "EvidenceValueStore",
+    "ProviderValuePrior",
+    "learn_priors",
+    "value_fn_from_store",
+    "routing_report",
     # per-app capability wiring (§4.1, §7)
     "AppProfile",
     "app_profile",
