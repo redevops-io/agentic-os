@@ -82,6 +82,10 @@ from .counterparty import (
     payment_behavior,
     relationship_graph,
 )
+from .asset import (
+    asset_identity, failure_risk, maintenance_risk, parts_risk, replacement_compatibility, service_history,
+)
+from .asset_broker import AssetGraph, AssetIntelligenceProvider, asset_registry, asset_synthesize
 
 __all__ = [
     "DeliveryReliability",
@@ -150,4 +154,14 @@ __all__ = [
     "CounterpartyProvider",
     "counterparty_registry",
     "counterparty_synthesize",
+    "asset_identity",
+    "service_history",
+    "failure_risk",
+    "maintenance_risk",
+    "parts_risk",
+    "replacement_compatibility",
+    "AssetGraph",
+    "AssetIntelligenceProvider",
+    "asset_registry",
+    "asset_synthesize",
 ]
