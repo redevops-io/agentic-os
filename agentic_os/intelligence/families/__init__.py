@@ -53,6 +53,7 @@ from .supply import (
     stockout_consequence,
     substitute_availability,
 )
+from .supply_broker import SupplyGraph, SupplyIntelligenceProvider, supply_registry, supply_synthesize
 
 __all__ = [
     "DeliveryReliability",
@@ -95,4 +96,8 @@ __all__ = [
     "substitute_availability",
     "stockout_consequence",
     "safety_stock",
+    "SupplyGraph",
+    "SupplyIntelligenceProvider",
+    "supply_registry",
+    "supply_synthesize",
 ]
