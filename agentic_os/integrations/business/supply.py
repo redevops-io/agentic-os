@@ -58,3 +58,46 @@ class GoodsReceipt(BusinessObject):
     received_date: str = ""        # ISO date goods were received
     quantity: float = 0.0
     quality_ok: bool = True
+
+
+# ── bill of materials / inventory / demand (Supply Intelligence — §11) ────────────────────────────────────
+@dataclass(frozen=True)
+class BOM(BusinessObject):
+    """A bill-of-materials header: a revision of how a parent part is built from components."""
+    KIND: ClassVar[str] = "supply.bom"
+    parent_part: str = ""
+    revision: str = ""
+    status: str = ""               # active | draft | obsolete
+
+
+@dataclass(frozen=True)
+class BOMLine(BusinessObject):
+    """One component of a parent part, with the quantity required per unit of the parent. A component may
+    itself be a parent (multi-level BOM). `is_substitute` marks an approved alternate for `component_part`."""
+    KIND: ClassVar[str] = "supply.bom_line"
+    parent_part: str = ""
+    component_part: str = ""
+    quantity_per: float = 1.0
+    is_substitute: bool = False
+    substitute_for: str = ""       # the primary component this is an approved alternate to
+
+
+@dataclass(frozen=True)
+class InventoryPosition(BusinessObject):
+    """On-hand stock of a part at a site. `allocated` is already committed to other demand."""
+    KIND: ClassVar[str] = "supply.inventory"
+    part: str = ""
+    site: str = ""
+    on_hand: float = 0.0
+    allocated: float = 0.0
+
+
+@dataclass(frozen=True)
+class DemandRequirement(BusinessObject):
+    """A dated demand for a part (a line of the demand plan) — what must be available, where and when."""
+    KIND: ClassVar[str] = "supply.demand"
+    part: str = ""
+    site: str = ""
+    need_date: str = ""            # ISO date the quantity is required by
+    quantity: float = 0.0
+    source_ref: str = ""           # e.g. the sales-order line driving this demand

@@ -37,6 +37,14 @@ from .supplier_resolution import (
     supplier_resolution_registry,
     supplier_resolution_synthesize,
 )
+from .supply import (
+    BomComponent,
+    RequiredByFeasibility,
+    ShortageProjection,
+    bom_closure,
+    required_by_feasibility,
+    shortage_risk,
+)
 
 __all__ = [
     "DeliveryReliability",
@@ -65,4 +73,10 @@ __all__ = [
     "GleifSupplierResolver",
     "supplier_resolution_registry",
     "supplier_resolution_synthesize",
+    "BomComponent",
+    "RequiredByFeasibility",
+    "ShortageProjection",
+    "bom_closure",
+    "required_by_feasibility",
+    "shortage_risk",
 ]
