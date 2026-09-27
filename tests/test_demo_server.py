@@ -18,6 +18,16 @@ def test_index_lists_capabilities_and_endpoints():
     assert any("kyc/screen" in e for e in body["endpoints"])
 
 
+def test_index_serves_html_landing_to_browsers():
+    c = _client()
+    html = c.get("/", headers={"accept": "text/html"})
+    assert html.status_code == 200 and html.headers["content-type"].startswith("text/html")
+    # the landing carries the interactive KYC widget + a real served capability chip
+    assert 'id="applicant"' in html.text and "order_lineage" in html.text
+    # API clients still get the machine-readable index
+    assert "capabilities" in c.get("/", headers={"accept": "application/json"}).json()
+
+
 def test_shortage_risk_resolves_over_the_demo_data():
     r = _client().post("/v1/intelligence/supply/shortage_risk", json={"subject_refs": ["Rim", "A"], "tenant": "t"})
     assert r.status_code == 200 and r.json()["capability"] == "shortage_risk"
