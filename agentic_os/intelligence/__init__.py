@@ -27,6 +27,7 @@ from .imports import (
 )
 from .value_store import EvidenceValueStore
 from .provider_value import ProviderValuePrior, learn_priors, routing_report, value_fn_from_store
+from .service import IntelligenceService, Quote
 
 __all__ = [
     # open providers
@@ -65,6 +66,8 @@ __all__ = [
     "learn_priors",
     "value_fn_from_store",
     "routing_report",
+    "IntelligenceService",
+    "Quote",
     # per-app capability wiring (§4.1, §7)
     "AppProfile",
     "app_profile",

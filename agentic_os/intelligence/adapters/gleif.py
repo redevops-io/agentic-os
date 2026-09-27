@@ -10,7 +10,7 @@ from urllib.parse import quote
 
 from runtime_contracts.protocol import (
     AcquisitionFailure, AcquisitionResult, Capability, CostEstimate, EvidenceArtifact, EvidenceRef,
-    EvidenceRequest, ProviderFamily, content_hash,
+    EvidenceRequest, HealthStatus, ProviderFamily, ProviderHealth, content_hash,
 )
 
 from ._http import Fetch, http_get_json
@@ -32,6 +32,11 @@ class GleifProvider:
 
     def check_entitlement(self, tenant: str, capability: Capability) -> bool:
         return capability in self.capabilities()  # open provider — always entitled
+
+    def health(self) -> ProviderHealth:
+        """Implements the optional SupportsHealth seam so the broker can route around an outage. GLEIF is
+        open/keyless, so it reports OK unless a probe is wired; a real deployment can ping the base URL."""
+        return ProviderHealth(self.provider_id, HealthStatus.OK)
 
     def acquire(self, request: EvidenceRequest) -> AcquisitionResult:
         name = (request.subject_refs or ("",))[0]
