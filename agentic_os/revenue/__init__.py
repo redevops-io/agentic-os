@@ -33,3 +33,5 @@ from .leakage import (  # noqa: F401
 from .quote import (  # noqa: F401
     CatalogItem, QuoteFeasibility, QuoteLine, QuoteLineResult, assess_quote_feasibility,
 )
+from .intent import CommercialIntent, IntentClassification, classify_intent  # noqa: F401
+from .flagship import QuotePlan, plan_quote_from_request  # noqa: F401
