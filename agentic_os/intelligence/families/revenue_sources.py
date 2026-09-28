@@ -22,6 +22,7 @@ from typing import List, Optional
 
 from runtime_contracts.protocol import IntelligenceRegistry
 
+from ...integrations.chatwoot import ChatwootClient, scan_unanswered_quotes
 from ...integrations.erpnext import ErpnextClient
 from ...integrations.twenty import TwentyClient, scan_stalled
 from ...revenue.leakage import RevenueLeakage
@@ -60,6 +61,78 @@ def twenty_revenue_registry(client: TwentyClient, *, scope_ref: str, now_ms: int
     reg = IntelligenceRegistry()
     reg.register(RevenueIntelligenceProvider(
         TwentyLeakageState(client, scope_ref=scope_ref, now_ms=now_ms, stale_days=stale_days, limit=limit)))
+    return reg
+
+
+@dataclass
+class ChatwootLeakageState:
+    """A `RevenueStateSource` backed by the live Chatwoot core. It answers REVENUE_LEAKAGE for one scope ref
+    by scanning open conversations for QUOTE_REQUESTs with no matching open quotation (§6
+    UNANSWERED_QUOTE_INTENT); any other subject is a NO_MATCH. `has_open_quote` cross-references the quoting
+    system (ERPNext) so an already-quoted request isn't re-flagged. Read-only; QUOTE_FEASIBILITY needs no
+    Chatwoot data, so `quote_inputs` returns None."""
+    client: ChatwootClient
+    scope_ref: str
+    now_ms: int
+    has_open_quote: Optional[object] = None       # Callable[[str], bool]
+    min_confidence: float = 0.6
+    _scan: Optional[List[RevenueLeakage]] = field(default=None, repr=False)
+
+    def _leakages_scan(self) -> List[RevenueLeakage]:
+        if self._scan is None:
+            self._scan = scan_unanswered_quotes(self.client, now_ms=self.now_ms,
+                                                has_open_quote=self.has_open_quote,  # type: ignore[arg-type]
+                                                min_confidence=self.min_confidence)
+        return self._scan
+
+    def quote_inputs(self, subject_ref: str) -> Optional[QuoteInputs]:
+        return None
+
+    def leakages(self, subject_ref: str) -> Optional[List[RevenueLeakage]]:
+        return list(self._leakages_scan()) if subject_ref == self.scope_ref else None
+
+
+def chatwoot_revenue_registry(client: ChatwootClient, *, scope_ref: str, now_ms: int,
+                              has_open_quote: Optional[object] = None,
+                              min_confidence: float = 0.6) -> IntelligenceRegistry:
+    """A broker registry whose REVENUE_LEAKAGE resolves against live Chatwoot conversations (read-only)."""
+    reg = IntelligenceRegistry()
+    reg.register(RevenueIntelligenceProvider(ChatwootLeakageState(
+        client, scope_ref=scope_ref, now_ms=now_ms, has_open_quote=has_open_quote,
+        min_confidence=min_confidence)))
+    return reg
+
+
+@dataclass
+class CompositeRevenueState:
+    """Fans a subject across several `RevenueStateSource`s (e.g. Twenty stalled-opps + Chatwoot unanswered
+    quotes) under one scope. `leakages` concatenates every source that knows the subject (None only when NONE
+    do); `quote_inputs` returns the first source that can price it. This is how one REVENUE_LEAKAGE need sees
+    the whole recoverable picture across systems of record."""
+    sources: List[object]                          # List[RevenueStateSource]
+
+    def quote_inputs(self, subject_ref: str) -> Optional[QuoteInputs]:
+        for s in self.sources:
+            qi = s.quote_inputs(subject_ref)
+            if qi is not None:
+                return qi
+        return None
+
+    def leakages(self, subject_ref: str) -> Optional[List[RevenueLeakage]]:
+        merged: List[RevenueLeakage] = []
+        any_known = False
+        for s in self.sources:
+            leaks = s.leakages(subject_ref)
+            if leaks is not None:
+                any_known = True
+                merged.extend(leaks)
+        return merged if any_known else None
+
+
+def composite_revenue_registry(sources: List[object]) -> IntelligenceRegistry:
+    """A broker registry over several RevenueStateSources merged into one (leakage across all systems)."""
+    reg = IntelligenceRegistry()
+    reg.register(RevenueIntelligenceProvider(CompositeRevenueState(sources)))
     return reg
 
 
