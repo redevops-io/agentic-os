@@ -22,8 +22,10 @@ from typing import List, Optional
 
 from runtime_contracts.protocol import IntelligenceRegistry
 
+from ...integrations.erpnext import ErpnextClient
 from ...integrations.twenty import TwentyClient, scan_stalled
 from ...revenue.leakage import RevenueLeakage
+from ...revenue.quote import QuoteLine
 from .revenue_broker import QuoteInputs, RevenueIntelligenceProvider
 
 
@@ -58,4 +60,47 @@ def twenty_revenue_registry(client: TwentyClient, *, scope_ref: str, now_ms: int
     reg = IntelligenceRegistry()
     reg.register(RevenueIntelligenceProvider(
         TwentyLeakageState(client, scope_ref=scope_ref, now_ms=now_ms, stale_days=stale_days, limit=limit)))
+    return reg
+
+
+@dataclass
+class ErpnextCatalogState:
+    """A `RevenueStateSource` backed by the live ERPNext catalog. It answers QUOTE_FEASIBILITY for a set of
+    requested quotes (subject → the lines a customer asked for), resolving each request's catalog — price,
+    unit cost, on-hand, lead time — LIVE from ERPNext at assessment time; an unknown subject is a NO_MATCH.
+
+    The requested lines model the demand side (from a Chatwoot/email intent in a later sensor slice); the
+    catalog models the supply side (ERPNext). Read-only — a quotation is drafted by the approval-gated
+    execution adapter, never here. REVENUE_LEAKAGE needs no ERPNext data, so `leakages` returns None."""
+    client: ErpnextClient
+    requests: Dict[str, List[QuoteLine]]
+    now_ms: int
+    currency: str = "USD"
+    min_margin_pct: float = 0.2
+    approval_over_cents: int = 2_000_000
+    customer_discount_pct: float = 0.0
+
+    def quote_inputs(self, subject_ref: str) -> Optional[QuoteInputs]:
+        lines = self.requests.get(subject_ref)
+        if not lines:
+            return None
+        catalog = self.client.catalog([ln.item_ref for ln in lines])
+        return QuoteInputs(lines=list(lines), catalog=catalog, now_ms=self.now_ms, currency=self.currency,
+                           min_margin_pct=self.min_margin_pct, approval_over_cents=self.approval_over_cents,
+                           customer_discount_pct=self.customer_discount_pct)
+
+    def leakages(self, subject_ref: str) -> Optional[List[RevenueLeakage]]:
+        return None
+
+
+def erpnext_quote_registry(client: ErpnextClient, requests: Dict[str, List[QuoteLine]], *, now_ms: int,
+                           currency: str = "USD", min_margin_pct: float = 0.2,
+                           approval_over_cents: int = 2_000_000,
+                           customer_discount_pct: float = 0.0) -> IntelligenceRegistry:
+    """A broker registry whose QUOTE_FEASIBILITY resolves each requested quote against the live ERPNext
+    catalog (read-only)."""
+    reg = IntelligenceRegistry()
+    reg.register(RevenueIntelligenceProvider(ErpnextCatalogState(
+        client, requests, now_ms=now_ms, currency=currency, min_margin_pct=min_margin_pct,
+        approval_over_cents=approval_over_cents, customer_discount_pct=customer_discount_pct)))
     return reg
