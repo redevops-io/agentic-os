@@ -11,8 +11,9 @@ tenant's own graphs instead.
 """
 from .apps import app_capabilities
 from .families import (
-    CounterpartyRecords, InMemoryOrderGraph, SupplyGraph, counterparty_registry, counterparty_synthesize,
-    order_registry, order_synthesize, supply_registry, supply_synthesize,
+    CounterpartyRecords, InMemoryOrderGraph, InMemoryRevenueState, QuoteInputs, SupplyGraph,
+    counterparty_registry, counterparty_synthesize, order_registry, order_synthesize, revenue_registry,
+    revenue_synthesize, supply_registry, supply_synthesize,
 )
 from .service import IntelligenceService
 from .temporal_graph import project_kyc_ownership, screen_ownership
@@ -32,6 +33,8 @@ def build_service() -> IntelligenceService:
     """An IntelligenceService bound with compact demo data for the counterparty / supply / order families."""
     from ..integrations.business.contracts import Invoice, Provenance, Receivable
     from ..integrations.business.supply import InventoryPosition, PurchaseOrder
+    from ..revenue.leakage import stalled_opportunity
+    from ..revenue.quote import CatalogItem, QuoteLine
 
     def pr(ref):
         return Provenance(provider="demo", provider_ref=ref)
@@ -48,10 +51,30 @@ def build_service() -> IntelligenceService:
         receivables=[Receivable(prov=pr("r1"), customer_ref="cust:acme", amount_outstanding_cents=0,
                                 currency="USD", days_overdue=0)])
 
+    # Revenue Intelligence — a feasible requested quote + a stalled-opportunity leakage, both computed from
+    # the tenant's own resolved state (a real deploy binds the Twenty/ERPNext clients instead).
+    import types
+
+    _NOW = 1_774_000_000_000
+    catalog = {
+        "rim": CatalogItem("rim", "Rim", list_price_cents=40_000, unit_cost_cents=24_000, on_hand_qty=50.0),
+        "hub": CatalogItem("hub", "Hub", list_price_cents=60_000, unit_cost_cents=39_000, on_hand_qty=0.0,
+                           lead_time_days=10),
+    }
+    opp = types.SimpleNamespace(name="ACME expansion", stage="proposal", amount_cents=3_200_000,
+                                prov=pr("opp:acme"))
+    leak = stalled_opportunity(opp, last_activity_at_ms=_NOW - 40 * 86_400_000, has_future_activity=False,
+                               now_ms=_NOW)
+    revenue = InMemoryRevenueState()
+    revenue.add_quote("cust:acme", QuoteInputs(
+        lines=[QuoteLine("rim", 10.0), QuoteLine("hub", 2.0)], catalog=catalog, now_ms=_NOW))
+    revenue.set_leakages("cust:acme", [leak] if leak else [])
+
     svc = IntelligenceService()
     svc.bind(supply_registry(supply), supply_synthesize)
     svc.bind(order_registry(order), order_synthesize)
     svc.bind(counterparty_registry(counterparty), counterparty_synthesize)
+    svc.bind(revenue_registry(revenue), revenue_synthesize)
     return svc
 
 

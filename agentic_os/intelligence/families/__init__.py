@@ -86,6 +86,14 @@ from .asset import (
     asset_identity, failure_risk, maintenance_risk, parts_risk, replacement_compatibility, service_history,
 )
 from .asset_broker import AssetGraph, AssetIntelligenceProvider, asset_registry, asset_synthesize
+from .revenue_broker import (
+    InMemoryRevenueState,
+    QuoteInputs,
+    RevenueIntelligenceProvider,
+    RevenueStateSource,
+    revenue_registry,
+    revenue_synthesize,
+)
 
 __all__ = [
     "DeliveryReliability",
@@ -164,4 +172,10 @@ __all__ = [
     "AssetIntelligenceProvider",
     "asset_registry",
     "asset_synthesize",
+    "QuoteInputs",
+    "RevenueStateSource",
+    "InMemoryRevenueState",
+    "RevenueIntelligenceProvider",
+    "revenue_registry",
+    "revenue_synthesize",
 ]
