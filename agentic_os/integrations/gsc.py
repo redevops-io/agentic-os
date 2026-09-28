@@ -122,6 +122,17 @@ def search_signals_from_observations(observations: List[SearchObservation], *,
     return out
 
 
+def property_for_domain(client: GscClient, domain: str) -> str:
+    """Resolve the GSC property that matches a bare domain — a domain property (`sc-domain:<domain>`) or a
+    URL-prefix property (`https://<domain>/`). Empty when the account has no property for it."""
+    props = set(client.sites())
+    for cand in (f"sc-domain:{domain}", f"https://{domain}/", f"http://{domain}/",
+                 f"https://{domain}", f"http://{domain}"):
+        if cand in props:
+            return cand
+    return ""
+
+
 def gsc_from_env() -> Optional[GscClient]:
     key = os.environ.get("GSC_SA_KEY_FILE") or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
     return GscClient(key_file=key) if key else None
