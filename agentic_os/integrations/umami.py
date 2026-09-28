@@ -16,6 +16,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+# umami.redevops.io sits behind Cloudflare, which 403s (error 1010) a bare client; a normal browser
+# User-Agent clears the bot check. Harmless against a plain Umami too.
+_UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+       "Chrome/124.0 Safari/537.36")
+
 
 @dataclass(frozen=True)
 class AnalyticsObservation:
@@ -44,7 +49,8 @@ class UmamiClient:
     def connected(self) -> bool:
         import httpx
         try:
-            return httpx.get(f"{self.base_url}/api/heartbeat", timeout=3.0).status_code < 400
+            return httpx.get(f"{self.base_url}/api/heartbeat", headers={"User-Agent": _UA},
+                             timeout=3.0).status_code < 400
         except Exception:  # noqa: BLE001
             return False
 
@@ -53,7 +59,7 @@ class UmamiClient:
             return self._token
         import httpx
         try:
-            r = httpx.post(f"{self.base_url}/api/auth/login",
+            r = httpx.post(f"{self.base_url}/api/auth/login", headers={"User-Agent": _UA},
                            json={"username": self.username, "password": self.password}, timeout=self.timeout)
             if r.status_code < 400:
                 self._token = r.json().get("token")
@@ -63,21 +69,52 @@ class UmamiClient:
 
     def _headers(self) -> Dict[str, str]:
         tok = self.token()
-        return {"Authorization": f"Bearer {tok}"} if tok else {}
+        h = {"User-Agent": _UA}
+        if tok:
+            h["Authorization"] = f"Bearer {tok}"
+        return h
+
+    def websites(self) -> List[Dict[str, object]]:
+        """All websites the account can see: [{"id", "name", "domain", …}, …]. Empty on failure."""
+        import httpx
+        if not self.token():
+            return []
+        try:
+            r = httpx.get(f"{self.base_url}/api/websites", params={"pageSize": 200},
+                          headers=self._headers(), timeout=self.timeout)
+            if r.status_code >= 400:
+                return []
+            data = r.json()
+            return (data.get("data") if isinstance(data, dict) else data) or []
+        except Exception:  # noqa: BLE001
+            return []
+
+    def website_id_for(self, domain: str) -> str:
+        """Resolve a website id by its domain (so a caller can scan a site without hard-coding an id)."""
+        for w in self.websites():
+            if str(w.get("domain", "")).lower() == domain.lower():
+                return str(w.get("id", ""))
+        return ""
 
     def top_pages(self, *, days: int = 30, limit: int = 50) -> List[Dict[str, object]]:
-        """Umami's URL metric: [{"x": "/path", "y": <pageviews>}, …]. Empty on any failure (self-skip)."""
+        """Umami's top-pages metric: [{"x": "/path", "y": <pageviews>}, …]. Empty on any failure (self-skip).
+        The metric type is ``path`` on current Umami and ``url`` on older builds, so try both."""
         import httpx
         if not self.website_id or not self.token():
             return []
         start, end = _range_ms(days)
-        try:
-            r = httpx.get(f"{self.base_url}/api/websites/{self.website_id}/metrics",
-                          params={"type": "url", "startAt": start, "endAt": end}, headers=self._headers(),
-                          timeout=self.timeout)
-            return r.json()[:limit] if r.status_code < 400 else []
-        except Exception:  # noqa: BLE001
-            return []
+        for metric_type in ("path", "url"):
+            try:
+                r = httpx.get(f"{self.base_url}/api/websites/{self.website_id}/metrics",
+                              params={"type": metric_type, "startAt": start, "endAt": end},
+                              headers=self._headers(), timeout=self.timeout)
+                if r.status_code < 400:
+                    rows = r.json()
+                    if rows:
+                        return rows[:limit]
+            except Exception:  # noqa: BLE001
+                continue
+        return []
 
     def stats(self, *, days: int = 30) -> Dict[str, object]:
         import httpx
@@ -95,12 +132,13 @@ class UmamiClient:
 def umami_from_env() -> Optional[UmamiClient]:
     """Build a client from the environment. Returns None when the core/site aren't configured."""
     url = os.environ.get("UMAMI_URL", "").rstrip("/")
-    site = os.environ.get("WEBSITE_ID", "")
-    if not url or not site:
+    if not url:
         return None
-    return UmamiClient(base_url=url, website_id=site,
-                       username=os.environ.get("UMAMI_ADMIN_USER", "admin"),
-                       password=os.environ.get("UMAMI_ADMIN_PASS", ""))
+    # website id is optional now — a caller can resolve it by domain (website_id_for)
+    return UmamiClient(
+        base_url=url, website_id=os.environ.get("WEBSITE_ID", ""),
+        username=os.environ.get("UMAMI_USERNAME") or os.environ.get("UMAMI_ADMIN_USER", "admin"),
+        password=os.environ.get("UMAMI_PASSWORD") or os.environ.get("UMAMI_ADMIN_PASS", ""))
 
 
 def collect_page_behavior(client: object, *, days: int = 30, limit: int = 50,
