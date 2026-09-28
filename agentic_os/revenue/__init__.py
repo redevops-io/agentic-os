@@ -35,3 +35,6 @@ from .quote import (  # noqa: F401
 )
 from .intent import CommercialIntent, IntentClassification, classify_intent  # noqa: F401
 from .flagship import QuotePlan, plan_quote_from_request  # noqa: F401
+from .loop import (  # noqa: F401
+    ExecutionReceipt, InMemoryExecutor, QuoteExecutor, execute_quote_plan, line_items_from_text,
+)
