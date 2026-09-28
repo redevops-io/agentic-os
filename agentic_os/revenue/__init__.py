@@ -35,6 +35,11 @@ from .quote import (  # noqa: F401
 )
 from .intent import CommercialIntent, IntentClassification, classify_intent  # noqa: F401
 from .flagship import QuotePlan, plan_quote_from_request  # noqa: F401
+from .interventions import (  # noqa: F401
+    decision_view,
+    intervention_queue,
+    plan_leakage_interventions,
+)
 # NOTE: flagship_live is deliberately NOT re-exported here — it imports the integrations clients
 # (twenty/erpnext), which import back into revenue.*, so eager import would be circular. Import it by
 # module path: `from agentic_os.revenue.flagship_live import plan_quote_from_request_live`.
