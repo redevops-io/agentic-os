@@ -25,3 +25,8 @@ from .discovery_bridge import (  # noqa: F401
     HANDOFF_CONTRACT_VERSION, IngestAction, IngestResult, MissionRegistry, QualifiedOpportunity,
     drain_outbox, opportunity_digest, should_open, to_revenue_opportunity,
 )
+from .leakage import (  # noqa: F401
+    LeakageType, RevenueLeakage, account_reengagement, expansion_opportunity, from_leakage,
+    quote_followup_gap, renewal_risk, resolved_blocker_not_acted_on, stalled_opportunity,
+    unanswered_quote_intent,
+)
