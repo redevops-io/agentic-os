@@ -95,8 +95,12 @@ from .revenue_broker import (
     revenue_synthesize,
 )
 from .revenue_sources import (
+    ChatwootLeakageState,
+    CompositeRevenueState,
     ErpnextCatalogState,
     TwentyLeakageState,
+    chatwoot_revenue_registry,
+    composite_revenue_registry,
     erpnext_quote_registry,
     twenty_revenue_registry,
 )
@@ -188,4 +192,8 @@ __all__ = [
     "twenty_revenue_registry",
     "ErpnextCatalogState",
     "erpnext_quote_registry",
+    "ChatwootLeakageState",
+    "chatwoot_revenue_registry",
+    "CompositeRevenueState",
+    "composite_revenue_registry",
 ]
