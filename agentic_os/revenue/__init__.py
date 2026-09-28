@@ -30,3 +30,6 @@ from .leakage import (  # noqa: F401
     quote_followup_gap, renewal_risk, resolved_blocker_not_acted_on, stalled_opportunity,
     unanswered_quote_intent,
 )
+from .quote import (  # noqa: F401
+    CatalogItem, QuoteFeasibility, QuoteLine, QuoteLineResult, assess_quote_feasibility,
+)
