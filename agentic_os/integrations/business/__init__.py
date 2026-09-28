@@ -26,6 +26,8 @@ from .missions import (
 from .decision_intelligence import (
     Admissibility, DecisionIntelligence, DeterministicDecisionIntelligence, NoLearningDecisionIntelligence,
     experience_eligible)
+from .entity_resolution import (
+    EntityMatch, EntityQuery, ResolutionState, Thresholds, resolve_entity)
 
 __all__ = [
     # contracts
@@ -46,4 +48,6 @@ __all__ = [
     # Decision Intelligence interface boundary (implementations are private)
     "DecisionIntelligence", "NoLearningDecisionIntelligence", "DeterministicDecisionIntelligence",
     "Admissibility", "experience_eligible",
+    # generic cross-system entity resolution (RESOLVED/PROBABLE/AMBIGUOUS/UNRESOLVED)
+    "resolve_entity", "EntityQuery", "EntityMatch", "ResolutionState", "Thresholds",
 ]
