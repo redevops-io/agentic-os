@@ -24,6 +24,7 @@ from runtime_contracts.protocol import IntelligenceRegistry
 
 from ...integrations.chatwoot import ChatwootClient, scan_unanswered_quotes
 from ...integrations.erpnext import ErpnextClient
+from ...integrations.lago import LagoClient, scan_expansion
 from ...integrations.twenty import TwentyClient, scan_stalled
 from ...revenue.leakage import RevenueLeakage
 from ...revenue.quote import QuoteLine
@@ -100,6 +101,40 @@ def chatwoot_revenue_registry(client: ChatwootClient, *, scope_ref: str, now_ms:
     reg.register(RevenueIntelligenceProvider(ChatwootLeakageState(
         client, scope_ref=scope_ref, now_ms=now_ms, has_open_quote=has_open_quote,
         min_confidence=min_confidence)))
+    return reg
+
+
+@dataclass
+class LagoExpansionState:
+    """A `RevenueStateSource` backed by the live Lago core. It answers REVENUE_LEAKAGE for one scope ref by
+    scanning active subscriptions for usage approaching the plan boundary (§6 EXPANSION_OPPORTUNITY); any
+    other subject is a NO_MATCH. `account_healthy` gates on account health (e.g. no overdue invoices).
+    Read-only; QUOTE_FEASIBILITY needs no Lago data, so `quote_inputs` returns None."""
+    client: LagoClient
+    scope_ref: str
+    ratio_threshold: float = 0.8
+    account_healthy: Optional[object] = None       # Callable[[str], bool]
+    _scan: Optional[List[RevenueLeakage]] = field(default=None, repr=False)
+
+    def _leakages_scan(self) -> List[RevenueLeakage]:
+        if self._scan is None:
+            self._scan = scan_expansion(self.client, ratio_threshold=self.ratio_threshold,
+                                        account_healthy=self.account_healthy)  # type: ignore[arg-type]
+        return self._scan
+
+    def quote_inputs(self, subject_ref: str) -> Optional[QuoteInputs]:
+        return None
+
+    def leakages(self, subject_ref: str) -> Optional[List[RevenueLeakage]]:
+        return list(self._leakages_scan()) if subject_ref == self.scope_ref else None
+
+
+def lago_revenue_registry(client: LagoClient, *, scope_ref: str, ratio_threshold: float = 0.8,
+                          account_healthy: Optional[object] = None) -> IntelligenceRegistry:
+    """A broker registry whose REVENUE_LEAKAGE resolves against live Lago usage-vs-plan (read-only)."""
+    reg = IntelligenceRegistry()
+    reg.register(RevenueIntelligenceProvider(LagoExpansionState(
+        client, scope_ref=scope_ref, ratio_threshold=ratio_threshold, account_healthy=account_healthy)))
     return reg
 
 

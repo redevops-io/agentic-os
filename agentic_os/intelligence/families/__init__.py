@@ -98,10 +98,12 @@ from .revenue_sources import (
     ChatwootLeakageState,
     CompositeRevenueState,
     ErpnextCatalogState,
+    LagoExpansionState,
     TwentyLeakageState,
     chatwoot_revenue_registry,
     composite_revenue_registry,
     erpnext_quote_registry,
+    lago_revenue_registry,
     twenty_revenue_registry,
 )
 
@@ -196,4 +198,6 @@ __all__ = [
     "chatwoot_revenue_registry",
     "CompositeRevenueState",
     "composite_revenue_registry",
+    "LagoExpansionState",
+    "lago_revenue_registry",
 ]
