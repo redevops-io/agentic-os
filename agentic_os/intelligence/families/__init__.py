@@ -94,7 +94,12 @@ from .revenue_broker import (
     revenue_registry,
     revenue_synthesize,
 )
-from .revenue_sources import TwentyLeakageState, twenty_revenue_registry
+from .revenue_sources import (
+    ErpnextCatalogState,
+    TwentyLeakageState,
+    erpnext_quote_registry,
+    twenty_revenue_registry,
+)
 
 __all__ = [
     "DeliveryReliability",
@@ -181,4 +186,6 @@ __all__ = [
     "revenue_synthesize",
     "TwentyLeakageState",
     "twenty_revenue_registry",
+    "ErpnextCatalogState",
+    "erpnext_quote_registry",
 ]
