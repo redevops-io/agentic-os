@@ -1,0 +1,22 @@
+# ReDevOps Business Apps — front door.
+#
+# Default: serve everything on :80 (mapped to HTTP_PORT on the host) with the
+# operating console at /. To put it on a public hostname with automatic HTTPS,
+# replace the `:80` line with your domain (e.g. `apps.example.com`) and Caddy
+# provisions a Let's Encrypt certificate on its own.
+
+:80 {
+	encode zstd gzip
+
+	# The operating console — the demo.redevops.io/demo surface.
+	reverse_proxy projects-console:8240
+
+	# Direct access to an individual agent's own dashboard, if you want it:
+	#   redirect /apps/* to the matching service. Uncomment as needed.
+	# handle_path /revenue/*   { reverse_proxy revenue-agent:8220 }
+	# handle_path /intel/*     { reverse_proxy intelligence-agent:8221 }
+	# handle_path /content/*   { reverse_proxy content-agent:8222 }
+	# handle_path /security/*  { reverse_proxy security-compliance:8230 }
+	# handle_path /finance/*   { reverse_proxy finance-agent:8231 }
+	# handle_path /cs/*        { reverse_proxy customer-success:8232 }
+}

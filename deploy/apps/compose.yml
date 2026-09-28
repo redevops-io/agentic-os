@@ -1,0 +1,248 @@
+# ReDevOps Business Apps — portable enterprise deployment
+# ---------------------------------------------------------------------------
+# The four-business-systems agentic suite: 6 governed domain agents + the
+# operating console, over real OSS cores (Twenty · Metabase · Postiz).
+#
+#   Revenue   → Twenty CRM          Intelligence → Metabase (BI)
+#   Finance   → books/billing ops   Customer Success → support/guide/lifecycle
+#   Content   → Postiz              Security & Compliance → KYC / controls
+#
+# This is the SAME stack that runs at demo.redevops.io/demo, packaged to run on
+# any single Docker host (self-host or a cloud VM) — no cloudflared, no host
+# networking, no local registry. Everything is pulled from public GHCR.
+#
+# The 6 domain agents + the console (the app layer, with the learning + discovery
+# engine) are PUBLIC images on GHCR — no login required. The OSS cores are public
+# Docker Hub images.
+#
+#   1. cp .env.example .env   &&   edit .env   (LLM endpoint, tenant, secrets)
+#   2. docker compose up -d
+#   3. open  http://localhost:8080   (the operating console)
+#
+# Requires a host with >= 32 GB RAM (Twenty + Metabase + Postiz + Postgres are heavy).
+# ---------------------------------------------------------------------------
+
+x-agent: &agent
+  restart: unless-stopped
+  networks: [apps]
+
+services:
+  # =========================================================================
+  # Front door — one URL for the whole suite
+  # =========================================================================
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [projects-console]
+    networks: [apps]
+    ports:
+      - "${HTTP_PORT:-8080}:80"      # http://<host>:8080  → operating console
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  # =========================================================================
+  # Operating console — the demo.redevops.io/demo surface (ENTERPRISE, private)
+  # Fans out to the 6 domain agents by service name; degrades one tile per down agent.
+  # =========================================================================
+  projects-console:
+    <<: *agent
+    image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-projects-console:${APPS_TAG:-v0.2.0}
+    environment:
+      - PORT=8240
+      - CONSOLE_TENANT=${TENANT:-Summit Roofing Co.}
+      - REVENUE_URL=http://revenue-agent:8220
+      - INTEL_URL=http://intelligence-agent:8221
+      - CONTENT_URL=http://content-agent:8222
+      - SEC_URL=http://security-compliance:8230
+      - FINANCE_URL=http://finance-agent:8231
+      - CS_URL=http://customer-success:8232
+      - REDEVOPS_LLM_BASE_URL=${REDEVOPS_LLM_BASE_URL:-http://host.docker.internal:8000/v1}
+      - REDEVOPS_LLM_MODEL=${REDEVOPS_LLM_MODEL:-qwen3.8-27b}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-EMPTY}
+    depends_on:
+      - revenue-agent
+      - intelligence-agent
+      - content-agent
+      - security-compliance
+      - finance-agent
+      - customer-success
+
+  # =========================================================================
+  # The 6 governed domain agents (ENTERPRISE, private) — learning + discovery
+  # =========================================================================
+  revenue-agent:            # prospecting + next-best-action over Twenty CRM
+    <<: *agent
+    image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-revenue-agent:${APPS_TAG:-v0.2.0}
+    environment:
+      - PORT=8220
+      - TWENTY_URL=http://twenty:3000
+      - TWENTY_API_KEY=${TWENTY_API_KEY:-}
+      - REVENUE_TENANT=${TENANT:-Summit Roofing Co.}
+      - REVENUE_SHADOW=${SHADOW_MODE:-true}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      # cold outreach via Apollo (enroll → warmed sequence; activation stays a human click in the Apollo UI)
+      - APOLLO_API_KEY=${APOLLO_API_KEY:-}
+      - APOLLO_SEQUENCE_ID=${APOLLO_SEQUENCE_ID:-}
+      - APOLLO_SENDER_ACCOUNT_ID=${APOLLO_SENDER_ACCOUNT_ID:-}
+      # governed Gmail send (SA impersonation of OUTREACH_FROM_EMAIL; shadow unless OUTREACH_SEND_ENABLED=true)
+      - GMAIL_SA_JSON_B64=${GMAIL_SA_JSON_B64:-}
+      - OUTREACH_FROM_EMAIL=${OUTREACH_FROM_EMAIL:-}
+      - OUTREACH_SEND_ENABLED=${OUTREACH_SEND_ENABLED:-false}
+      - OUTREACH_DAILY_CAP=${OUTREACH_DAILY_CAP:-20}
+      - OUTREACH_SEND_WINDOW=${OUTREACH_SEND_WINDOW:-0-23}
+    depends_on: [twenty]
+
+  intelligence-agent:       # growth + BI + market-radar over Metabase
+    <<: *agent
+    image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-intelligence-agent:${APPS_TAG:-v0.2.0}
+    environment:
+      - PORT=8221
+      - METABASE_API_URL=http://metabase:3000
+      - INTEL_TENANT=${TENANT:-Summit Roofing Co.}
+      - DEMO_SAFE_SEND=${SHADOW_MODE:-true}
+    depends_on: [metabase]
+
+  content-agent:            # content engine over Postiz
+    <<: *agent
+    image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-content-agent:${APPS_TAG:-v0.2.0}
+    environment:
+      - PORT=8222
+      - POSTIZ_URL=http://postiz:5000
+      - CONTENT_TENANT=${TENANT:-Summit Roofing Co.}
+      - CONTENT_SHADOW=${SHADOW_MODE:-true}
+    depends_on: [postiz]
+
+  finance-agent:            # billing + books financial-ops loop
+    <<: *agent
+    image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-finance-agent:${APPS_TAG:-v0.2.0}
+    environment:
+      - PORT=8231
+      - METABASE_API_URL=http://metabase:3000
+      - FIN_TENANT=${TENANT:-Summit Roofing Co.}
+      - FIN_SHADOW=${SHADOW_MODE:-true}
+
+  customer-success:         # support + guide + lifecycle missions
+    <<: *agent
+    image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-customer-success:${APPS_TAG:-v0.2.0}
+    environment:
+      - PORT=8232
+      - CS_TENANT=${TENANT:-Summit Roofing Co.}
+      - CS_SHADOW=${SHADOW_MODE:-true}
+
+  security-compliance:      # multi-representation KYC + controls
+    <<: *agent
+    image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-security-compliance:${APPS_TAG:-v0.2.0}
+    environment:
+      - PORT=8230
+      - SEC_TENANT=${TENANT:-Summit Roofing Co.}
+      - SEC_SHADOW=${SHADOW_MODE:-true}
+
+  # =========================================================================
+  # OSS cores (public Docker Hub images) — the systems the agents act through
+  # =========================================================================
+  # --- Twenty CRM ---------------------------------------------------------
+  twenty:
+    image: twentycrm/twenty:latest
+    restart: unless-stopped
+    networks: [apps]
+    depends_on: [twenty-db, twenty-redis]
+    ports: ["${TWENTY_PORT:-3010}:3000"]
+    environment:
+      - SERVER_URL=${TWENTY_SERVER_URL:-http://localhost:3010}
+      - PG_DATABASE_URL=postgres://postgres:${TWENTY_DB_PASSWORD:-twenty}@twenty-db:5432/default
+      - REDIS_URL=redis://twenty-redis:6379
+      - APP_SECRET=${TWENTY_APP_SECRET:?set TWENTY_APP_SECRET in .env (>=32 bytes)}
+      - STORAGE_TYPE=local
+      - DISABLE_DB_MIGRATIONS=false
+    volumes:
+      - twenty_data:/app/packages/twenty-server/.local-storage
+  twenty-db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    networks: [apps]
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${TWENTY_DB_PASSWORD:-twenty}
+      - POSTGRES_DB=default
+    volumes:
+      - twenty_db:/var/lib/postgresql/data
+  twenty-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks: [apps]
+
+  # --- Metabase (BI) ------------------------------------------------------
+  metabase:
+    image: metabase/metabase:latest
+    restart: unless-stopped
+    networks: [apps]
+    depends_on: [metabase-db]
+    ports: ["${METABASE_PORT:-3001}:3000"]
+    environment:
+      - MB_DB_TYPE=postgres
+      - MB_DB_DBNAME=metabase
+      - MB_DB_PORT=5432
+      - MB_DB_USER=metabase
+      - MB_DB_PASS=${METABASE_DB_PASSWORD:-metabase}
+      - MB_DB_HOST=metabase-db
+  metabase-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    networks: [apps]
+    environment:
+      - POSTGRES_USER=metabase
+      - POSTGRES_PASSWORD=${METABASE_DB_PASSWORD:-metabase}
+      - POSTGRES_DB=metabase
+    volumes:
+      - metabase_db:/var/lib/postgresql/data
+
+  # --- Postiz (social) ----------------------------------------------------
+  postiz:
+    image: ghcr.io/gitroomhq/postiz-app:latest
+    restart: unless-stopped
+    networks: [apps]
+    depends_on: [postiz-db, postiz-redis]
+    ports: ["${POSTIZ_PORT:-4200}:5000"]
+    environment:
+      - MAIN_URL=${POSTIZ_MAIN_URL:-http://localhost:4200}
+      - FRONTEND_URL=${POSTIZ_MAIN_URL:-http://localhost:4200}
+      - NEXT_PUBLIC_BACKEND_URL=${POSTIZ_MAIN_URL:-http://localhost:4200}/api
+      - JWT_SECRET=${POSTIZ_JWT_SECRET:?set POSTIZ_JWT_SECRET in .env}
+      - DATABASE_URL=postgresql://postiz:${POSTIZ_DB_PASSWORD:-postiz}@postiz-db:5432/postiz
+      - REDIS_URL=redis://postiz-redis:6379
+      - BACKEND_INTERNAL_URL=http://localhost:3000
+      - IS_GENERAL=true
+      - STORAGE_PROVIDER=local
+    volumes:
+      - postiz_config:/config
+      - postiz_uploads:/uploads
+  postiz-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    networks: [apps]
+    environment:
+      - POSTGRES_USER=postiz
+      - POSTGRES_PASSWORD=${POSTIZ_DB_PASSWORD:-postiz}
+      - POSTGRES_DB=postiz
+    volumes:
+      - postiz_db:/var/lib/postgresql/data
+  postiz-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks: [apps]
+
+networks:
+  apps:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:
+  twenty_db:
+  twenty_data:
+  metabase_db:
+  postiz_db:
+  postiz_config:
+  postiz_uploads:
