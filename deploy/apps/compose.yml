@@ -48,7 +48,7 @@ services:
   # =========================================================================
   projects-console:
     <<: *agent
-    image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-projects-console:${APPS_TAG:-v0.2.0}
+    image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-projects-console:${APPS_TAG:-stable}
     environment:
       - PORT=8240
       - CONSOLE_TENANT=${TENANT:-Summit Roofing Co.}
@@ -74,7 +74,7 @@ services:
   # =========================================================================
   revenue-agent:            # prospecting + next-best-action over Twenty CRM
     <<: *agent
-    image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-revenue-agent:${APPS_TAG:-v0.2.0}
+    image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-revenue-agent:${APPS_TAG:-stable}
     environment:
       - PORT=8220
       - TWENTY_URL=http://twenty:3000
@@ -96,7 +96,7 @@ services:
 
   intelligence-agent:       # growth + BI + market-radar over Metabase
     <<: *agent
-    image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-intelligence-agent:${APPS_TAG:-v0.2.0}
+    image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-intelligence-agent:${APPS_TAG:-stable}
     environment:
       - PORT=8221
       - METABASE_API_URL=http://metabase:3000
@@ -106,7 +106,7 @@ services:
 
   content-agent:            # content engine over Postiz
     <<: *agent
-    image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-content-agent:${APPS_TAG:-v0.2.0}
+    image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-content-agent:${APPS_TAG:-stable}
     environment:
       - PORT=8222
       - POSTIZ_URL=http://postiz:5000
@@ -116,7 +116,7 @@ services:
 
   finance-agent:            # billing + books financial-ops loop
     <<: *agent
-    image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-finance-agent:${APPS_TAG:-v0.2.0}
+    image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-finance-agent:${APPS_TAG:-stable}
     environment:
       - PORT=8231
       - METABASE_API_URL=http://metabase:3000
@@ -125,7 +125,7 @@ services:
 
   customer-success:         # support + guide + lifecycle missions
     <<: *agent
-    image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-customer-success:${APPS_TAG:-v0.2.0}
+    image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-customer-success:${APPS_TAG:-stable}
     environment:
       - PORT=8232
       - CS_TENANT=${TENANT:-Summit Roofing Co.}
@@ -133,7 +133,7 @@ services:
 
   security-compliance:      # multi-representation KYC + controls
     <<: *agent
-    image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-security-compliance:${APPS_TAG:-v0.2.0}
+    image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-security-compliance:${APPS_TAG:-stable}
     environment:
       - PORT=8230
       - SEC_TENANT=${TENANT:-Summit Roofing Co.}
