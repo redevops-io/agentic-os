@@ -16,6 +16,7 @@ from .contracts import (
     Account, BusinessObject, Charge, Contact, Customer, Invoice, InvoiceLine, Lead, Message, Opportunity,
     Order, Party, Payment, Provenance, Receivable, Refund, Ticket, now_ms)
 from .normalize import normalize, register_normalizer
+from .operational import ConnectorRegistry, OperationalConnector, OperationalEvents
 from .capabilities import (
     ConnectorCapabilityStatus, connector_capability, load_connector_capabilities, provider_capabilities)
 from .receipts import VerificationState, receipt_for_step, to_action_receipt, verify_step
@@ -36,6 +37,8 @@ __all__ = [
     "now_ms",
     # normalization
     "normalize", "register_normalizer",
+    # operational-connector SDK (systems of record → canonical operational events)
+    "OperationalEvents", "OperationalConnector", "ConnectorRegistry",
     # capability registry
     "ConnectorCapabilityStatus", "load_connector_capabilities", "connector_capability",
     "provider_capabilities",
