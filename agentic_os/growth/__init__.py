@@ -14,3 +14,4 @@ from .visitor_intelligence import (  # noqa: F401
     VisitorSignal, from_visitor_signal, lead_intent_pages, plan_visitor_interventions,
 )
 from .loop import gather_growth_decisions, growth_report  # noqa: F401
+from .monitor import GrowthDiff, diff_reports, monitor_tick  # noqa: F401
