@@ -17,6 +17,7 @@ from .contracts import (
     Opportunity, PageSnapshot, Provenance, FormObservation, TrackedCompany)
 from .adapters import (
     FunnelResolver, MarketSourceAdapter, MarketSourceRegistry, MediaAnalyzer, SimpleFunnelResolver)
+from .observe import DEFAULT_PATHS, FetchedPage, HttpPageFetcher, PageFetcher, WebsiteSourceAdapter
 
 __all__ = [
     # evidence contracts
@@ -24,4 +25,6 @@ __all__ = [
     "FunnelStep", "Funnel", "MarketPattern", "Opportunity", "MarketObservations", "Provenance",
     # seams
     "MarketSourceAdapter", "MediaAnalyzer", "FunnelResolver", "MarketSourceRegistry", "SimpleFunnelResolver",
+    # website/funnel observation (Phase 1)
+    "WebsiteSourceAdapter", "PageFetcher", "HttpPageFetcher", "FetchedPage", "DEFAULT_PATHS",
 ]
