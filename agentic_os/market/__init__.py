@@ -13,14 +13,17 @@ experiments are separately governed by the Mission Runtime, and first-party meas
 competitor imitation as the primary learning signal.
 """
 from .contracts import (
-    CTA, Funnel, FunnelStep, MarketObservations, MarketPattern, MediaAnalysis, MediaArtifact, Offer,
-    Opportunity, PageSnapshot, Provenance, FormObservation, TrackedCompany)
+    CTA, Experiment, ExperimentOutcome, Funnel, FunnelStep, MarketObservations, MarketPattern, MediaAnalysis,
+    MediaArtifact, Offer, Opportunity, PageSnapshot, Provenance, FormObservation, TrackedCompany)
 from .adapters import (
     FunnelResolver, MarketSourceAdapter, MarketSourceRegistry, MediaAnalyzer, SimpleFunnelResolver)
 from .observe import DEFAULT_PATHS, FetchedPage, HttpPageFetcher, PageFetcher, WebsiteSourceAdapter
 from .media import OpenAICompatVisionModel, VisionMediaAnalyzer, VisionModel, analyze_media
 from .patterns import detect_patterns
 from .opportunities import match_opportunities
+from .experiments import ChangeWriter, plan_experiments, proposed
+from .execution import DryRunExecutor, ExecutionResult, ExperimentExecutor, ExperimentQueue
+from .learning import PatternPrior, learn_priors, reweight_opportunities
 
 __all__ = [
     # evidence contracts
@@ -36,4 +39,8 @@ __all__ = [
     "detect_patterns",
     # pattern -> first-party gap matching (Phase 4)
     "match_opportunities",
+    # experiment planning / execution / learning (Phase 5-7)
+    "Experiment", "ExperimentOutcome", "plan_experiments", "proposed", "ChangeWriter",
+    "ExperimentQueue", "ExperimentExecutor", "DryRunExecutor", "ExecutionResult",
+    "learn_priors", "reweight_opportunities", "PatternPrior",
 ]

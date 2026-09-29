@@ -30,7 +30,7 @@ from ..integrations.business.contracts import BusinessObject, Provenance, now_ms
 __all__ = [
     "Provenance", "TrackedCompany", "PageSnapshot", "MediaArtifact", "MediaAnalysis",
     "CTA", "Offer", "FormObservation", "FunnelStep", "Funnel", "MarketPattern", "Opportunity",
-    "MarketObservations",
+    "MarketObservations", "Experiment", "ExperimentOutcome",
 ]
 
 
@@ -162,6 +162,39 @@ class Opportunity(BusinessObject):
     reversibility: str = "reversible"  # reversible | hard_to_reverse
     evidence_refs: Tuple[str, ...] = ()
     confidence: float = 0.0
+
+
+# ── experiment planning + outcomes (Phase 5 / 7) ──────────────────────────────────────────────────────────
+@dataclass(frozen=True)
+class Experiment(BusinessObject):
+    """A planned, governed experiment derived from an :class:`Opportunity` (plan §5/§11). `decision` is the
+    planner's call — ``proposed`` (worth running, pending approval) or ``no_change`` (a valid, explicit
+    outcome when evidence/value is thin). `explain` states the reasoning; nothing here executes."""
+    KIND: ClassVar[str] = "market.experiment"
+    opportunity_ref: str = ""
+    site: str = ""
+    hypothesis: str = ""
+    change: str = ""                   # the concrete proposed change
+    decision: str = "proposed"         # proposed | no_change
+    cost: float = 0.0
+    reversibility: str = "reversible"
+    expected_value: float = 0.0
+    confidence: float = 0.0
+    explain: str = ""
+    evidence_refs: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ExperimentOutcome(BusinessObject):
+    """The measured result of a run experiment — the first-party evidence that supersedes imitation (plan §13).
+    `result` is the qualitative verdict; `metric_delta` the observed change (e.g. +0.4pp signup rate)."""
+    KIND: ClassVar[str] = "market.experiment_outcome"
+    experiment_ref: str = ""
+    pattern_ref: str = ""
+    site: str = ""
+    result: str = "no_effect"          # improved | no_effect | worse
+    metric: str = ""
+    metric_delta: float = 0.0
 
 
 # ── the observation bundle (one adapter's output, mergeable across sources) ────────────────────────────────
