@@ -6,6 +6,7 @@ ranks the top opportunities across the whole set. Unknown sites resolve to an em
 from __future__ import annotations
 
 from agentic_os.content.portfolio import Site, scan_portfolio, scan_site, sites_from_umami
+from agentic_os.integrations.gsc import GscClient
 from agentic_os.integrations.umami import UmamiClient
 
 # canned Umami: two sites, one with a clear top page, one flat
@@ -71,3 +72,36 @@ def test_flat_site_yields_no_actions():
     # quantify.club is flat (all 50) → no leverage/underperformer signals → honest empty queue
     r = scan_site(_StubUmami(), Site("quantify.club", "quantify.club"), min_median=1.0)
     assert r["pages"] == 3 and r["queue"]["count"] == 0
+
+
+class _StubGsc(GscClient):
+    def __init__(self):
+        super().__init__(key_file="/dev/null")
+
+    def _bearer(self):
+        return "t"
+
+    def sites(self):
+        return ["sc-domain:redevops.io"]
+
+    def search_analytics(self, site_url, *, days=28, row_limit=1000, dimensions=("query", "page")):
+        # a strong ranking with CTR far under baseline → CTR_OPPORTUNITY
+        return [{"keys": ["governed runtime", "https://redevops.io/runtime"], "clicks": 10,
+                 "impressions": 800, "ctr": 0.0125, "position": 3.0}]
+
+
+def test_scan_site_merges_behavior_and_search_signals():
+    r = scan_site(_StubUmami(), Site("redevops.io", "redevops.io"), min_median=1.0, gsc=_StubGsc())
+    assert r["gsc_property"] == "sc-domain:redevops.io" and r["resolved"] is True
+    signals = {d["signal"] for d in r["queue"]["decisions"]}
+    assert "CTR_OPPORTUNITY" in signals               # from GSC
+    assert "HIGH_TRAFFIC_LEVERAGE" in signals          # from Umami behavior — one merged queue
+    assert r["queue"]["requires_approval"] == r["queue"]["count"]
+
+
+def test_site_with_only_gsc_resolves_without_umami():
+    # a domain GSC knows but Umami doesn't → still resolved, search signals only
+    r = scan_site(_StubUmami(), Site("redevops.io", "notinumami.example"), gsc=_StubGsc())
+    assert r["pages"] == 0
+    # notinumami.example has no GSC property either → empty but self-skips cleanly
+    assert r["resolved"] is False and r["queue"]["count"] == 0

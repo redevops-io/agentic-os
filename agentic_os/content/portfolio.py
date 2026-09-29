@@ -44,26 +44,47 @@ def sites_from_umami(client) -> List[Site]:
     return out
 
 
+def _gsc_signals(gsc, site: Site, *, days: int) -> tuple:
+    """(search signals, property) for a site from GSC, or ([], "") when unavailable/unmatched. Self-skips."""
+    if gsc is None:
+        return [], ""
+    from agentic_os.integrations.gsc import (
+        collect_search_observations, property_for_domain, search_signals_from_observations,
+    )
+    prop = property_for_domain(gsc, site.domain)
+    if not prop:
+        return [], ""
+    obs = collect_search_observations(gsc, prop, days=days, site_id=site.site_id)
+    return search_signals_from_observations(obs), prop
+
+
 def scan_site(client, site: Site, *, days: int = 30, min_median: float = 20.0,
-              policy: Optional[PriorityPolicy] = None) -> Dict[str, Any]:
-    """Scan ONE site in isolation → its governed content queue. Resolves the Umami website by domain, reads its
-    own page behavior, and scopes the interventions to this site."""
+              policy: Optional[PriorityPolicy] = None, gsc=None) -> Dict[str, Any]:
+    """Scan ONE site in isolation → its governed content queue, merging Umami **behavior** signals with (when
+    a GSC client is supplied) Google Search Console **search** signals for the property. Scoped to this site;
+    resolves the Umami website by domain. Both sensors are read-only and self-skip."""
+    search_sigs, gsc_property = _gsc_signals(gsc, site, days=days)
     wid = client.website_id_for(site.domain)
-    if not wid:
-        empty = {"count": 0, "requires_approval": 0, "auto": 0, "watching": 0, "decisions": []}
-        return {"site": site.site_id, "domain": site.domain, "pages": 0, "resolved": False, "queue": empty}
-    client.website_id = wid
-    obs = collect_page_behavior(client, days=days, origin=site.resolved_origin(), site_id=site.site_id)
+    behavior_sigs: list = []
+    pages = 0
+    if wid:
+        client.website_id = wid
+        obs = collect_page_behavior(client, days=days, origin=site.resolved_origin(), site_id=site.site_id)
+        pages = len(obs)
+        behavior_sigs = scan_behavior(obs, min_median=min_median)
+    resolved = bool(wid) or bool(gsc_property)
     queue = content_intervention_queue(
-        scan_behavior(obs, min_median=min_median), policy=policy, source_app=f"content:{site.site_id}")
-    return {"site": site.site_id, "domain": site.domain, "pages": len(obs), "resolved": True, "queue": queue}
+        list(behavior_sigs) + list(search_sigs), policy=policy, source_app=f"content:{site.site_id}")
+    return {"site": site.site_id, "domain": site.domain, "pages": pages, "resolved": resolved,
+            "gsc_property": gsc_property, "queue": queue}
 
 
 def scan_portfolio(client, sites: List[Site], *, days: int = 30, min_median: float = 20.0,
-                   policy: Optional[PriorityPolicy] = None, top_n: int = 10) -> Dict[str, Any]:
+                   policy: Optional[PriorityPolicy] = None, top_n: int = 10, gsc=None) -> Dict[str, Any]:
     """Scan every site in isolation and aggregate into a portfolio rollup: totals, a per-site table, and the
-    top opportunities across the whole portfolio (ranked by priority). Serializable for a dashboard."""
-    per_site = [scan_site(client, s, days=days, min_median=min_median, policy=policy) for s in sites]
+    top opportunities across the whole portfolio (ranked by priority). When a GSC client is supplied, each
+    site's queue merges Umami behavior + Search Console signals. Serializable for a dashboard."""
+    per_site = [scan_site(client, s, days=days, min_median=min_median, policy=policy, gsc=gsc) for s in sites]
 
     top: List[Dict[str, Any]] = []
     for r in per_site:
