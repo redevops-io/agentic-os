@@ -20,6 +20,7 @@ from .adapters import (
 from .observe import DEFAULT_PATHS, FetchedPage, HttpPageFetcher, PageFetcher, WebsiteSourceAdapter
 from .media import OpenAICompatVisionModel, VisionMediaAnalyzer, VisionModel, analyze_media
 from .patterns import detect_patterns
+from .opportunities import match_opportunities
 
 __all__ = [
     # evidence contracts
@@ -33,4 +34,6 @@ __all__ = [
     "VisionMediaAnalyzer", "VisionModel", "OpenAICompatVisionModel", "analyze_media",
     # cross-competitor pattern detection (Phase 3)
     "detect_patterns",
+    # pattern -> first-party gap matching (Phase 4)
+    "match_opportunities",
 ]
