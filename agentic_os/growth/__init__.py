@@ -15,3 +15,6 @@ from .visitor_intelligence import (  # noqa: F401
 )
 from .loop import gather_growth_decisions, growth_report  # noqa: F401
 from .monitor import GrowthDiff, diff_reports, monitor_tick  # noqa: F401
+from .outcomes import (  # noqa: F401
+    Decision, InMemoryOutcomeLedger, Outcome, OutcomeLedger, Result, apply_weights, scope_weights,
+)
