@@ -17,6 +17,10 @@ import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+from agentic_os.integrations.business.contracts import Provenance
+from agentic_os.integrations.business.normalize import normalize, register_normalizer
+from agentic_os.integrations.business.operational import OperationalEvents
+from agentic_os.integrations.business.supply import GoodsReceipt, PurchaseOrder, Supplier
 from agentic_os.revenue.quote import CatalogItem
 
 
@@ -34,6 +38,8 @@ class ErpnextClient:
     api_key: str
     api_secret: str
     timeout: float = 12.0
+
+    provider = "erpnext"          # OperationalConnector id (no annotation → not a dataclass field)
 
     def _headers(self) -> dict:
         return {"Authorization": f"token {self.api_key}:{self.api_secret}", "Content-Type": "application/json"}
@@ -99,6 +105,89 @@ class ErpnextClient:
                 on_hand_qty=onhand_by_code.get(code, 0.0),
                 lead_time_days=int(it.get("lead_time_days") or 0))
         return out
+
+    # ── operational events (Supplier / Order Intelligence — plan §5, §7) ──────────────────────────────────
+    def operational_events(self, *, supplier: str = "", limit: int = 200) -> OperationalEvents:
+        """Fetch purchase orders + goods receipts as canonical operational objects, so the Supplier / Order
+        families run on real ERPNext promise-vs-receipt history. Read-only, self-skips to empty. `supplier`
+        scopes to one supplier; `limit` caps rows per doctype (0 ⇒ ERPNext default). Purchase-order lines are
+        collapsed to the first item (one canonical PO per ERPNext PO) — a conservative first cut."""
+        if not self.connected():
+            return OperationalEvents()
+        po_filter = [["supplier", "=", supplier]] if supplier else None
+        po_rows = self.get_list("Purchase Order",
+                                ["name", "supplier", "transaction_date", "schedule_date", "status",
+                                 "set_warehouse"], filters=po_filter, limit=limit)
+        po_names = [r["name"] for r in po_rows if r.get("name")]
+        items = self.get_list("Purchase Order Item", ["parent", "item_code", "qty", "uom"],
+                              filters=[["parent", "in", po_names]]) if po_names else []
+        first_item: Dict[str, dict] = {}
+        for it in items:
+            first_item.setdefault(str(it.get("parent", "")), it)
+
+        pos: List[PurchaseOrder] = []
+        for r in po_rows:
+            name = r.get("name")
+            if not name:
+                continue
+            it = first_item.get(name, {})
+            merged = {**r, "part": it.get("item_code", ""), "quantity": it.get("qty", 0),
+                      "unit": it.get("uom", "")}
+            obj = normalize("erpnext", merged, object_type="purchase_order", provider_ref=str(name))
+            if obj is not None:
+                pos.append(obj)
+
+        pr_filter = [["supplier", "=", supplier]] if supplier else None
+        pr_rows = self.get_list("Purchase Receipt", ["name", "supplier", "posting_date", "status", "is_return"],
+                                filters=pr_filter, limit=limit)
+        pr_index = {r["name"]: r for r in pr_rows if r.get("name")}
+        pr_items = self.get_list("Purchase Receipt Item",
+                                 ["parent", "purchase_order", "item_code", "received_qty", "qty"],
+                                 filters=[["parent", "in", list(pr_index)]]) if pr_index else []
+        receipts: List[GoodsReceipt] = []
+        for it in pr_items:
+            head = pr_index.get(it.get("parent"), {})
+            merged = {"purchase_order": it.get("purchase_order", ""), "supplier": head.get("supplier", ""),
+                      "posting_date": head.get("posting_date", ""),
+                      "received_qty": it.get("received_qty") or it.get("qty") or 0,
+                      "is_return": head.get("is_return")}
+            obj = normalize("erpnext", merged, object_type="goods_receipt", provider_ref=str(it.get("parent", "")))
+            if obj is not None:
+                receipts.append(obj)
+
+        names = {p.supplier_ref for p in pos} | {r.supplier_ref for r in receipts}
+        suppliers = tuple(Supplier(prov=Provenance("erpnext", s), name=s) for s in sorted(names) if s)
+        return OperationalEvents(suppliers=suppliers, purchase_orders=tuple(pos),
+                                 goods_receipts=tuple(receipts))
+
+    def fetch(self) -> OperationalEvents:
+        """OperationalConnector entry point — the current operational state as canonical objects."""
+        return self.operational_events()
+
+
+# ── canonical normalizers: ERPNext payload → canonical supply objects (plan §4) ───────────────────────────
+_PO_STATUS = {"completed": "received", "closed": "cancelled", "cancelled": "cancelled",
+              "to receive": "confirmed", "to receive and bill": "confirmed"}
+
+
+def _erpnext_purchase_order(d: dict, prov: Provenance) -> PurchaseOrder:
+    return PurchaseOrder(
+        prov=prov, supplier_ref=str(d.get("supplier", "") or ""), site=str(d.get("set_warehouse", "") or ""),
+        part=str(d.get("part", "") or ""), quantity=float(d.get("quantity") or 0),
+        unit=str(d.get("unit", "") or ""), promised_date=str(d.get("schedule_date", "") or ""),
+        ordered_at=str(d.get("transaction_date", "") or ""),
+        status=_PO_STATUS.get(str(d.get("status", "")).strip().lower(), "open"))
+
+
+def _erpnext_goods_receipt(d: dict, prov: Provenance) -> GoodsReceipt:
+    return GoodsReceipt(
+        prov=prov, po_ref=str(d.get("purchase_order", "") or ""), supplier_ref=str(d.get("supplier", "") or ""),
+        received_date=str(d.get("posting_date", "") or ""), quantity=float(d.get("received_qty") or 0),
+        quality_ok=not bool(d.get("is_return")))
+
+
+register_normalizer("erpnext", "purchase_order", _erpnext_purchase_order)
+register_normalizer("erpnext", "goods_receipt", _erpnext_goods_receipt)
 
 
 def erpnext_from_env() -> Optional[ErpnextClient]:

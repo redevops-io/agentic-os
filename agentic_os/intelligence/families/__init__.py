@@ -86,6 +86,8 @@ from .asset import (
     asset_identity, failure_risk, maintenance_risk, parts_risk, replacement_compatibility, service_history,
 )
 from .asset_broker import AssetGraph, AssetIntelligenceProvider, asset_registry, asset_synthesize
+from .sources import (
+    asset_graph, operational_bindings, order_graph, supply_events, supply_graph)
 from .revenue_broker import (
     InMemoryRevenueState,
     QuoteInputs,
@@ -184,6 +186,12 @@ __all__ = [
     "AssetIntelligenceProvider",
     "asset_registry",
     "asset_synthesize",
+    # operational-connector bridge (OperationalEvents → family sources / bindings)
+    "supply_events",
+    "order_graph",
+    "supply_graph",
+    "asset_graph",
+    "operational_bindings",
     "QuoteInputs",
     "RevenueStateSource",
     "InMemoryRevenueState",
