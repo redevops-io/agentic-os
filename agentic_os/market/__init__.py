@@ -18,6 +18,7 @@ from .contracts import (
 from .adapters import (
     FunnelResolver, MarketSourceAdapter, MarketSourceRegistry, MediaAnalyzer, SimpleFunnelResolver)
 from .observe import DEFAULT_PATHS, FetchedPage, HttpPageFetcher, PageFetcher, WebsiteSourceAdapter
+from .media import OpenAICompatVisionModel, VisionMediaAnalyzer, VisionModel, analyze_media
 
 __all__ = [
     # evidence contracts
@@ -27,4 +28,6 @@ __all__ = [
     "MarketSourceAdapter", "MediaAnalyzer", "FunnelResolver", "MarketSourceRegistry", "SimpleFunnelResolver",
     # website/funnel observation (Phase 1)
     "WebsiteSourceAdapter", "PageFetcher", "HttpPageFetcher", "FetchedPage", "DEFAULT_PATHS",
+    # multimodal creative intelligence (Phase 2)
+    "VisionMediaAnalyzer", "VisionModel", "OpenAICompatVisionModel", "analyze_media",
 ]
