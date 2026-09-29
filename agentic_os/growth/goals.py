@@ -17,18 +17,36 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-# action kinds (content signal types / lead signal types) that advance each goal
+# action kinds (content signal types / lead signal types) that advance each goal — the standard SEO/growth
+# objectives, general-purpose (a deployment picks which goals it pursues; targets/subjects are config).
 _ADVANCES: Dict[str, frozenset] = {
+    # rank higher for target subjects
     "SEARCH_VISIBILITY": frozenset({
         "NEAR_WIN", "CTR_OPPORTUNITY", "MISSING_PAGE", "CANNIBALIZATION", "TOPIC_EXPANSION",
         "EXISTING_INTENT", "HIGH_TRAFFIC_LEVERAGE", "UNDERPERFORMING_PAGE"}),
+    # earn more clicks from the rankings you already hold
+    "CTR_IMPROVEMENT": frozenset({"CTR_OPPORTUNITY"}),
+    # cover the intents you're missing (create the canonical pages)
+    "CONTENT_COVERAGE": frozenset({"MISSING_PAGE", "TOPIC_EXPANSION", "EXISTING_INTENT", "NEAR_WIN"}),
+    # stop pages competing with each other for the same intent
+    "CANNIBALIZATION_RESOLUTION": frozenset({"CANNIBALIZATION"}),
+    # turn visitors into leads
     "LEAD_GENERATION": frozenset({"LEAD_INTENT", "ACCOUNT_REENGAGEMENT_SIGNAL"}),
+    # turn traffic into conversions (compound proven pages + capture intent)
+    "CONVERSION": frozenset({"HIGH_TRAFFIC_LEVERAGE", "LEAD_INTENT"}),
+    # get more out of the traffic you have (fix weak pages, compound strong ones)
+    "ENGAGEMENT": frozenset({"HIGH_TRAFFIC_LEVERAGE", "UNDERPERFORMING_PAGE"}),
 }
 
 
 class GoalKind(str, Enum):
-    SEARCH_VISIBILITY = "SEARCH_VISIBILITY"
-    LEAD_GENERATION = "LEAD_GENERATION"
+    SEARCH_VISIBILITY = "SEARCH_VISIBILITY"          # avg Google position over target subjects
+    CTR_IMPROVEMENT = "CTR_IMPROVEMENT"              # click-through of ranking pages
+    CONTENT_COVERAGE = "CONTENT_COVERAGE"            # share of target subjects with a ranking page
+    CANNIBALIZATION_RESOLUTION = "CANNIBALIZATION_RESOLUTION"  # competing-page count (lower = better)
+    LEAD_GENERATION = "LEAD_GENERATION"              # leads captured
+    CONVERSION = "CONVERSION"                        # conversions from traffic
+    ENGAGEMENT = "ENGAGEMENT"                        # engagement of existing traffic
 
 
 @dataclass(frozen=True)
@@ -119,9 +137,88 @@ def measure_search_visibility(goal: Goal, observations: Iterable[Any]) -> GoalPr
                         f"avg position {avg_pos} over {len(rows)} target query-pages, {impressions} impressions")
 
 
+def measure_ctr_improvement(goal: Goal, observations: Iterable[Any]) -> GoalProgress:
+    """Average click-through of the ranking pages (position ≤ 10) for the target subjects. on_track when the
+    average CTR meets target_value (a fraction, e.g. 0.05)."""
+    rows = [o for o in observations
+            if _matches_query(getattr(o, "query", ""), goal.target_queries)
+            and 0 < float(getattr(o, "position", 0.0) or 0.0) <= 10.0]
+    if not rows:
+        return GoalProgress(goal.goal_id, goal.kind, "avg_ctr", 0.0, goal.target_value, False,
+                            "no ranking pages yet for the target subjects")
+    avg_ctr = round(sum(float(getattr(o, "ctr", 0.0) or 0.0) for o in rows) / len(rows), 4)
+    return GoalProgress(goal.goal_id, goal.kind, "avg_ctr", avg_ctr, goal.target_value,
+                        avg_ctr >= goal.target_value > 0,
+                        f"avg CTR {avg_ctr:.1%} over {len(rows)} ranking query-pages")
+
+
+def measure_content_coverage(goal: Goal, observations: Iterable[Any]) -> GoalProgress:
+    """Share of the target subjects that already have a ranking page. on_track when coverage ≥ target_value
+    (a 0..1 fraction). Needs target_queries to mean anything."""
+    if not goal.target_queries:
+        return GoalProgress(goal.goal_id, goal.kind, "coverage", 0.0, goal.target_value, False,
+                            "no target subjects configured")
+    seen = {q for q in goal.target_queries
+            for o in observations if q.lower() in (getattr(o, "query", "") or "").lower()}
+    coverage = round(len(seen) / len(goal.target_queries), 3)
+    return GoalProgress(goal.goal_id, goal.kind, "coverage", coverage, goal.target_value,
+                        coverage >= goal.target_value > 0,
+                        f"{len(seen)}/{len(goal.target_queries)} target subjects have a ranking page")
+
+
+def measure_cannibalization(goal: Goal, observations: Iterable[Any]) -> GoalProgress:
+    """Number of subjects served by 2+ competing pages (lower is better). on_track when ≤ target_value."""
+    by_q: Dict[str, set] = {}
+    for o in observations:
+        q = (getattr(o, "query", "") or "").lower()
+        if q and _matches_query(q, goal.target_queries):
+            by_q.setdefault(q, set()).add(getattr(o, "page_url", ""))
+    competing = sum(1 for pages in by_q.values() if len(pages) >= 2)
+    return GoalProgress(goal.goal_id, goal.kind, "cannibalized_subjects", float(competing), goal.target_value,
+                        competing <= goal.target_value,
+                        f"{competing} subject(s) with competing pages")
+
+
 def measure_lead_generation(goal: Goal, leads: int) -> GoalProgress:
     """Progress toward the lead target: leads captured this period vs the target."""
     current = float(leads)
-    on_track = current >= goal.target_value
-    return GoalProgress(goal.goal_id, goal.kind, "leads", current, goal.target_value, on_track,
+    return GoalProgress(goal.goal_id, goal.kind, "leads", current, goal.target_value,
+                        current >= goal.target_value,
                         f"{leads} leads vs target {goal.target_value:g}")
+
+
+def measure_conversion(goal: Goal, *, conversions: int, sessions: int = 0) -> GoalProgress:
+    """Conversion rate (conversions / sessions) when sessions are known, else the conversion count.
+    on_track when the measured value meets target_value."""
+    if sessions > 0:
+        rate = round(conversions / sessions, 4)
+        return GoalProgress(goal.goal_id, goal.kind, "conversion_rate", rate, goal.target_value,
+                            rate >= goal.target_value > 0, f"{conversions}/{sessions} = {rate:.1%}")
+    return GoalProgress(goal.goal_id, goal.kind, "conversions", float(conversions), goal.target_value,
+                        conversions >= goal.target_value, f"{conversions} conversions vs target {goal.target_value:g}")
+
+
+def measure_engagement(goal: Goal, *, engagement: float) -> GoalProgress:
+    """A supplied engagement metric (0..1 — e.g. 1 − bounce rate, or normalized dwell). on_track when ≥ target."""
+    return GoalProgress(goal.goal_id, goal.kind, "engagement", round(float(engagement), 4), goal.target_value,
+                        engagement >= goal.target_value > 0, f"engagement {engagement:.2f} vs target {goal.target_value:g}")
+
+
+def measure_goal(goal: Goal, *, search_observations: Optional[Iterable[Any]] = None, leads: int = 0,
+                 conversions: int = 0, sessions: int = 0, engagement: float = 0.0) -> GoalProgress:
+    """Dispatch to the right measurement for a goal's kind, from whatever evidence is supplied."""
+    obs = list(search_observations or [])
+    k = goal.kind
+    if k is GoalKind.SEARCH_VISIBILITY:
+        return measure_search_visibility(goal, obs)
+    if k is GoalKind.CTR_IMPROVEMENT:
+        return measure_ctr_improvement(goal, obs)
+    if k is GoalKind.CONTENT_COVERAGE:
+        return measure_content_coverage(goal, obs)
+    if k is GoalKind.CANNIBALIZATION_RESOLUTION:
+        return measure_cannibalization(goal, obs)
+    if k is GoalKind.LEAD_GENERATION:
+        return measure_lead_generation(goal, leads)
+    if k is GoalKind.CONVERSION:
+        return measure_conversion(goal, conversions=conversions, sessions=sessions)
+    return measure_engagement(goal, engagement=engagement)

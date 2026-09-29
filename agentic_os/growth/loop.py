@@ -12,9 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from agentic_os.growth.goals import (
-    Goal, GoalKind, goal_ranked, measure_lead_generation, measure_search_visibility,
-)
+from agentic_os.growth.goals import Goal, goal_ranked, measure_goal
 
 
 def _gsc_property(gsc, domain: str) -> str:
@@ -28,15 +26,14 @@ def _gsc_property(gsc, domain: str) -> str:
 
 
 def growth_report(decisions: List[Any], goals: List[Goal], *, search_observations: Optional[List[Any]] = None,
-                  leads: int = 0) -> Dict[str, Any]:
-    """The tick's output: goal progress + a goal-ranked approval queue + a summary. Pure over its inputs."""
-    obs = search_observations or []
-    progress = []
-    for g in goals:
-        if g.kind is GoalKind.SEARCH_VISIBILITY:
-            progress.append(measure_search_visibility(g, obs).as_dict())
-        elif g.kind is GoalKind.LEAD_GENERATION:
-            progress.append(measure_lead_generation(g, leads).as_dict())
+                  leads: int = 0, conversions: int = 0, sessions: int = 0,
+                  engagement: float = 0.0) -> Dict[str, Any]:
+    """The tick's output: goal progress + a goal-ranked approval queue + a summary. Pure over its inputs.
+    Each goal is measured by its kind (SEO visibility/CTR/coverage/cannibalization, leads, conversion,
+    engagement) from whatever evidence is supplied."""
+    obs = list(search_observations or [])
+    progress = [measure_goal(g, search_observations=obs, leads=leads, conversions=conversions,
+                             sessions=sessions, engagement=engagement).as_dict() for g in goals]
 
     queue = goal_ranked(decisions, goals)
     return {
