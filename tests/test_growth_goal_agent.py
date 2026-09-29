@@ -74,6 +74,46 @@ def test_search_visibility_progress():
     assert p.current == 4.0 and p.on_track is True                      # only the matching query counts, pos 4 ≤ 5
 
 
+def test_seo_goal_library_measurements():
+    obs = [
+        SearchObservation(query="agentic runtime", page_url="https://s/a", impressions=500, clicks=5,
+                          ctr=0.01, position=4.0),                       # ranks, low CTR
+        SearchObservation(query="agentic runtime", page_url="https://s/b", impressions=200, clicks=2,
+                          ctr=0.01, position=7.0),                       # 2nd page for same subject → cannibalization
+        SearchObservation(query="devops governance", page_url="https://s/c", impressions=80, clicks=6,
+                          ctr=0.075, position=3.0),
+    ]
+    subjects = ("agentic runtime", "devops governance", "mission runtime")   # 3 target subjects
+    from agentic_os.growth.goals import (
+        measure_cannibalization, measure_content_coverage, measure_conversion, measure_ctr_improvement,
+    )
+    cov = measure_content_coverage(Goal("cov", GoalKind.CONTENT_COVERAGE, target_queries=subjects,
+                                        target_value=0.9), obs)
+    assert cov.current == round(2 / 3, 3) and cov.on_track is False       # 2 of 3 subjects covered
+
+    can = measure_cannibalization(Goal("can", GoalKind.CANNIBALIZATION_RESOLUTION, target_queries=subjects,
+                                       target_value=0.0), obs)
+    assert can.current == 1.0 and can.on_track is False                  # "agentic runtime" has 2 pages
+
+    ctr = measure_ctr_improvement(Goal("ctr", GoalKind.CTR_IMPROVEMENT, target_queries=subjects,
+                                       target_value=0.05), obs)
+    assert ctr.metric == "avg_ctr" and ctr.on_track is False             # avg CTR well under 5%
+
+    conv = measure_conversion(Goal("conv", GoalKind.CONVERSION, target_value=0.02), conversions=6, sessions=200)
+    assert conv.current == 0.03 and conv.on_track is True                # 3% ≥ 2% target
+
+
+def test_new_goals_advance_the_right_actions():
+    ctr_goal = Goal("g", GoalKind.CTR_IMPROVEMENT, target_value=0.05)
+    d = plan_content_interventions([_content_signal(SignalType.CTR_OPPORTUNITY, "https://s/p")],
+                                   source_app="content:s")[0]
+    assert goals_advanced_by(d, [ctr_goal]) == (ctr_goal,)               # CTR_OPPORTUNITY advances CTR goal
+    cov_goal = Goal("c", GoalKind.CONTENT_COVERAGE, target_value=0.9)
+    d2 = plan_content_interventions([_content_signal(SignalType.CTR_OPPORTUNITY, "https://s/p")],
+                                    source_app="content:s")[0]
+    assert goals_advanced_by(d2, [cov_goal]) == ()                       # CTR action doesn't advance coverage
+
+
 def test_growth_report_ranks_and_measures():
     viz = Goal("viz", GoalKind.SEARCH_VISIBILITY, target_queries=("agentic",), target_value=5.0)
     lead = Goal("leads", GoalKind.LEAD_GENERATION, target_value=10.0)
