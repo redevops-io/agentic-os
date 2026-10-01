@@ -24,8 +24,12 @@ from typing import Callable
 
 from . import core
 from .case_store import CaseStore
-from .evidence import ActionState, CaseStatus
+from .evidence import ActionReceipt, ActionRequest, ActionState, CaseStatus, SecurityDecision
 from .incident import ingest_crowdsec_alert, record_response, replay_case
+
+
+class ExecutionError(Exception):
+    """Raised when execution is requested for an action that has not been approved."""
 
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
@@ -67,12 +71,24 @@ def sync_cases(st: CaseStore | None = None, *, alerts_fn: Callable[[], list[dict
     return ids
 
 
-def _pending_action(st: CaseStore, case) -> dict | None:
+def _open_action(st: CaseStore, case) -> dict | None:
+    """The action still in the operator's hands: AWAITING_APPROVAL (needs a demo approve) or APPROVED
+    (approved, awaiting the authenticated execution step). Drives which buttons the case panel shows."""
     for rid in case.action_refs:
         a = st.actions.get(rid)
-        if a is not None and a.state == ActionState.AWAITING_APPROVAL:
-            return {"request_id": rid, "capability": a.capability, "parameters": dict(a.parameters)}
+        if a is not None and a.state in (ActionState.AWAITING_APPROVAL, ActionState.APPROVED):
+            return {"request_id": rid, "capability": a.capability,
+                    "parameters": dict(a.parameters), "state": a.state.value}
     return None
+
+
+def _approving_decision_id(st: CaseStore, case, request_id: str) -> str:
+    """The id of the most recent APPROVED decision on this request — for receipt linkage at execution time."""
+    for did in reversed(case.decision_refs):
+        d = st.decisions.get(did)
+        if d is not None and d.request_id == request_id and d.approved:
+            return did
+    return ""
 
 
 def case_summaries(st: CaseStore | None = None) -> list[dict]:
@@ -93,7 +109,7 @@ def case_summaries(st: CaseStore | None = None) -> list[dict]:
                 "actions": len(c.action_refs),
                 "decisions": len(c.decision_refs),
             },
-            "pending_action": _pending_action(st, c),
+            "open_action": _open_action(st, c),
         })
     rows.sort(key=lambda r: (_SEVERITY_ORDER.get(r["severity"], 9), r["created_at"]), reverse=False)
     rows.sort(key=lambda r: _SEVERITY_ORDER.get(r["severity"], 9))
@@ -129,43 +145,106 @@ def case_detail(case_id: str, st: CaseStore | None = None) -> dict | None:
     return bundle
 
 
-def respond(case_id: str, request_id: str, *, approved: bool, actor: str,
-            st: CaseStore | None = None, operator=None) -> dict:
-    """The governed response. Reject records the human decision and stops — the edge is never touched.
-    Approve binds the request to the REAL operator capability, executes only on the approved decision,
-    records a receipt (execution proof) and then verifies (a separate read-only check that the ban landed).
+def decide(case_id: str, request_id: str, *, approved: bool, actor: str,
+           st: CaseStore | None = None) -> dict:
+    """The DEMO-FACING decision step — OPEN (no authentication) and with NO edge effect.
 
-    Returns the decision/receipt/verification trail. Raises KeyError for an unknown case/request so the
-    HTTP layer can answer 404; GovernanceError (from response.propose_response) surfaces a refusal to
-    propose an ungoverned side-effecting action."""
+    Reject records the human rejection and stops. Approve records the approval and advances the action to
+    APPROVED (staged) — it does NOT touch the edge. The real kick-off is a SEPARATE, AUTHENTICATED step
+    (:func:`execute`), mirroring the Growth/Partners 'approve in the demo, execute for real behind auth'
+    split. Raises KeyError for an unknown case/request (→ 404)."""
     st = st or store()
     case = st.cases[case_id]       # KeyError → 404
     req = st.actions[request_id]   # KeyError → 404
 
     if not approved:
         decision, _ = record_response(st, case, request_id, actor=actor, approved=False)
-        return {"approved": False, "decision": decision.to_dict(), "receipt": None,
+        return {"approved": False, "awaiting_execution": False, "decision": decision.to_dict(),
+                "case_status": case.status.value}
+
+    # stage the approval: decision recorded + action advanced to APPROVED, but nothing executed and the edge
+    # is untouched. Execution requires the authenticated execute() step.
+    decision = st.put_decision(SecurityDecision(request_id=request_id, actor=actor, approved=True,
+                                                rationale="approved (staged for authenticated execution)"))
+    case.decision_refs = tuple(dict.fromkeys(case.decision_refs + (decision.decision_id,)))
+    st.put_action(ActionRequest(capability=req.capability, parameters=req.parameters,
+                                finding_refs=req.finding_refs, evidence_refs=req.evidence_refs,
+                                approval_required=req.approval_required, state=ActionState.APPROVED))
+    st.put_case(case)
+    return {"approved": True, "awaiting_execution": True, "decision": decision.to_dict(),
+            "case_status": case.status.value}
+
+
+def execute(case_id: str, request_id: str, *, actor: str, st: CaseStore | None = None,
+            operator=None, enabled: bool | None = None) -> dict:
+    """The AUTHENTICATED execution step — the real kick-off. Call this ONLY from the auth-gated endpoint.
+
+    Preconditions: the action must already be APPROVED (ExecutionError otherwise). Dry-run unless
+    SENTINEL_BLOCK_ENABLED (so the public demo never mutates the live edge by default) — a dry-run records a
+    DRY_RUN receipt and changes nothing. When enabled, it executes through the REAL Mission Runtime operator
+    (propose→execute→verify); if the kernel (agentic_os) is absent it falls back to the direct CrowdSec core
+    effect. Either way it records a receipt (execution proof) and a DISTINCT verification, and moves the case
+    to CONTAINED on success. Raises KeyError for an unknown case/request (→ 404)."""
+    st = st or store()
+    case = st.cases[case_id]       # KeyError → 404
+    req = st.actions[request_id]   # KeyError → 404
+    if req.state != ActionState.APPROVED:
+        raise ExecutionError(f"action {request_id} is {req.state.value}, not APPROVED — approve it first")
+
+    if enabled is None:
+        from .auth import block_enabled
+        enabled = block_enabled()
+    decision_id = _approving_decision_id(st, case, request_id)
+
+    if not enabled:
+        receipt = st.put_receipt(ActionReceipt(
+            request_id=request_id, decision_id=decision_id, status="DRY_RUN", external_ref="dry-run",
+            error="SENTINEL_BLOCK_ENABLED not set — edge not touched"))
+        return {"executed": False, "dry_run": True, "receipt": receipt.to_dict(),
                 "verification": None, "case_status": case.status.value}
 
-    # lazy: the governed-execution path needs the Mission Runtime operator SDK
-    from .evidence import SecurityDecision
-    from .response import execute_response, propose_response, verify_response
+    ext = err = vdetail = ""
+    verified = False
+    op = None
+    try:
+        from .response import execute_response, propose_response, verify_response
+        op = operator or _operator()
+    except Exception:  # noqa: BLE001 — kernel (agentic_os) absent → direct core effect below
+        op = None
 
-    op = operator or _operator()
-    proposal = propose_response(op, req, case_id=case_id)  # enforces the governed-response invariant
-    decision_obj = SecurityDecision(request_id=request_id, actor=actor, approved=True, rationale="approved")
-    receipt_real = execute_response(op, proposal, decision=decision_obj)  # the REAL ban, only now
+    if op is not None:
+        proposal = propose_response(op, req, case_id=case_id)  # governed-response invariant
+        dec = SecurityDecision(request_id=request_id, actor=actor, approved=True, rationale="operator execute")
+        rr = execute_response(op, proposal, decision=dec)      # the REAL ban via the operator
+        ext, err = rr.external_ref, rr.error
+        ver = verify_response(op, proposal, rr)                # distinct read-only re-check
+        verified, vdetail = ver.verified, ver.detail
+    else:
+        try:
+            result = core.block_ip(dict(req.parameters)) or {}
+            if result.get("status") == "error":
+                err = result.get("error", "block failed")
+            else:
+                ext = str(result.get("id") or result.get("decision_id") or "")
+            ip = req.parameters.get("ip", "")
+            posture = core.triage() if not err else {}
+            verified = bool(ip) and ip in repr(posture)
+            vdetail = ("ban present" if verified else "ban not observed") + f" for {ip}"
+        except Exception as e:  # noqa: BLE001
+            err = f"{type(e).__name__}: {e}"
 
-    # record the trail with the tested helper; same (request_id, actor, approved) ⇒ same decision id,
-    # so this does not duplicate the decision — it carries the real operator's external_ref/error onto it.
-    decision, receipt = record_response(
-        st, case, request_id, actor=actor, approved=True,
-        external_ref=receipt_real.external_ref, error=receipt_real.error)
-
-    verification = verify_response(op, proposal, receipt_real)  # distinct from the receipt
-    return {"approved": True, "decision": decision.to_dict(),
-            "receipt": receipt.to_dict() if receipt else None,
-            "verification": verification.to_dict(), "case_status": case.status.value}
+    status = "SUCCEEDED" if not err else "FAILED"
+    receipt = st.put_receipt(ActionReceipt(request_id=request_id, decision_id=decision_id, status=status,
+                                           external_ref=ext, error=err))
+    st.put_action(ActionRequest(capability=req.capability, parameters=req.parameters,
+                                finding_refs=req.finding_refs, evidence_refs=req.evidence_refs,
+                                approval_required=req.approval_required,
+                                state=ActionState.EXECUTED if status == "SUCCEEDED" else ActionState.FAILED))
+    if status == "SUCCEEDED":
+        case.status = CaseStatus.CONTAINED
+    st.put_case(case)
+    return {"executed": status == "SUCCEEDED", "dry_run": False, "receipt": receipt.to_dict(),
+            "verification": {"verified": verified, "detail": vdetail}, "case_status": case.status.value}
 
 
 def _operator():

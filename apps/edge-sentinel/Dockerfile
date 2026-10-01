@@ -26,7 +26,12 @@ RUN apt-get update \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py .
+# Copy ALL python modules into an importable PACKAGE. app.py uses package-relative imports
+# (`from . import core`, live, auth, netbird, portabase, deploy_scan, permissions_ui, operator, …),
+# so a flat `app:app` cannot resolve them; and the source dir name (apps/edge-sentinel) has a
+# hyphen, which is not a valid module name. Re-home the modules under a valid package name.
+COPY *.py ./edge_sentinel/
+RUN touch edge_sentinel/__init__.py
 
 # Live data config is injected at runtime (compose env or --env-file the seed .env):
 #   CROWDSEC_LAPI_URL, CROWDSEC_BOUNCER_KEY, CROWDSEC_CONTAINER, CROWDSEC_FRONT_URL
@@ -36,7 +41,7 @@ COPY app.py .
 #   * The `triage`/`approve_block`/alerts path shells out to `cscli` via the docker
 #     socket; to use it from a container, mount /var/run/docker.sock. Decisions are
 #     read purely over the LAPI bouncer key and need no socket.
-ENV PORT=8203
+ENV PORT=8203 PYTHONPATH=/app
 EXPOSE 8203
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8203"]
+CMD ["uvicorn", "edge_sentinel.app:app", "--host", "0.0.0.0", "--port", "8203"]

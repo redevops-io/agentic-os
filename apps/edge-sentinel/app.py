@@ -59,7 +59,7 @@ try:
 except Exception:  # pragma: no cover - context-runtime optional
     OpenAICompatibleModel = None
     ModelRequest = None
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 _BLURB_MODEL = None
@@ -77,6 +77,14 @@ else:
 # tested against a fake CrowdSec. Import config + core helpers from there; core loads .env.
 from . import core
 from . import live  # noqa: E402 — wires the SOC app to the Security Intelligence Core (real cases)
+from . import auth  # noqa: E402 — the HTTP-Basic operator gate for real execution
+# Self-contained security planes — each degrades gracefully + ships labelled SAMPLE until its token
+# is set (netbird/portabase) or reports unavailable until wired (deploy_scan). Their panels reuse the
+# page chrome below via a deferred import, so there is no import cycle.
+from . import netbird  # noqa: E402 — NetBird zero-trust access review
+from . import portabase  # noqa: E402 — Portabase backup/continuity coverage
+from . import deploy_scan  # noqa: E402 — runtime-DAST proxy to the deploy-scan MCP service
+from . import permissions_ui  # noqa: E402 — live vuln-DB permissions demo
 from .core import (  # noqa: E402
     TENANT, SUBTITLE, crowdsec_connected, fetch_activity, _severity,
 )
@@ -320,6 +328,49 @@ def _decisions_table(data: dict) -> str:
     )
 
 
+# ─── generic server-rendered panel chrome (shared by the NetBird / Portabase plane panels) ───
+# Reusable UI utilities — siblings of `_esc`/`_sev_pill`. The plane modules (netbird.py /
+# portabase.py) call these via a deferred `from . import app`, so a full page renders with the
+# same MD3 tokens as the SOC dashboard without duplicating CSS or creating an import cycle.
+def _panel_shell(title: str, subtitle: str, body: str) -> str:
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{_esc(title)} — {_esc(TENANT)}</title>{FONT_LINK}
+<style>{BASE_CSS}{PAGE_CSS}</style></head>
+<body class="page"><div class="shell">
+<header class="appbar"><div class="appbar__row"><h1>{_esc(title)}</h1><span class="spacer"></span>
+<a class="btn" href="/">&#8592; SOC dashboard</a></div>
+<div class="appbar__tenant"><b>{_esc(TENANT)}</b></div>
+<div class="appbar__sub">{_esc(subtitle)}</div></header>
+{body}
+<footer class="footer">edge-sentinel · redevops.io Agentic Business OS</footer>
+</div></body></html>"""
+
+
+def _live_badge(is_live: bool, hint: str) -> str:
+    if is_live:
+        return "<span style='background:#0d1f1c;color:#4fd1c5;border:1px solid #4fd1c5;border-radius:5px;padding:2px 9px;font-size:11px;font-weight:700'>LIVE</span>"
+    return f"<span style='background:#241f14;color:#e0b000;border:1px solid #6b5a1e;border-radius:5px;padding:2px 9px;font-size:11px;font-weight:700'>SAMPLE — {_esc(hint)}</span>"
+
+
+def _tbl(headers: list[str], rows: list[list[str]]) -> str:
+    h = "".join(f"<th style='text-align:left;padding:7px 10px;color:#9b99a1;font-weight:600;border-bottom:1px solid #2f2f33'>{_esc(x)}</th>" for x in headers)
+    body = "".join("<tr>" + "".join(f"<td style='padding:7px 10px;border-bottom:1px solid #1f1f22'>{c}</td>" for c in r) + "</tr>" for r in rows)
+    return f"<table style='width:100%;border-collapse:collapse;font-size:13px'><thead><tr>{h}</tr></thead><tbody>{body}</tbody></table>"
+
+
+def _risk_list(risks: list[dict]) -> str:
+    if not risks:
+        return "<p style='color:#4fd1c5;margin:8px 0'>&#10003; No risks found — least-privilege holds.</p>"
+    items = "".join(f"<li style='margin:6px 0'>{_sev_pill(r['severity'])} {_esc(r['detail'])}</li>" for r in risks)
+    return f"<ul style='list-style:none;padding:0;margin:8px 0'>{items}</ul>"
+
+
+def _card(title: str, inner: str) -> str:
+    return (f"<section class='shell' style='margin-top:var(--sp-4)'><div class='section-label'>{_esc(title)}</div>"
+            f"<div style='background:#151517;border:1px solid #2f2f33;border-radius:12px;padding:14px;overflow-x:auto'>{inner}</div></section>")
+
+
 def render(data: dict) -> str:
     connected = data["connected"]
     conn_txt = "core: CrowdSec connected" if connected else "core: CrowdSec UNREACHABLE"
@@ -397,14 +448,21 @@ def _cases_panel(summaries: list[dict]) -> str:
     SecurityCase derived from immutable CrowdSec evidence — never a canned scenario."""
     rows = ""
     for s in summaries:
-        pend = s.get("pending_action")
-        if pend:
-            rid = pend["request_id"]
-            ip = pend.get("parameters", {}).get("ip", "")
+        act = s.get("open_action")
+        if act and act.get("state") == "AWAITING_APPROVAL":
+            rid = act["request_id"]
+            ip = act.get("parameters", {}).get("ip", "")
             action = (
                 f"<button class='btn' onclick=\"esRespond('{_esc(s['case_id'])}','{_esc(rid)}',true)\">"
                 f"Approve block {_esc(ip)}</button> "
                 f"<button class='btn btn--ghost' onclick=\"esRespond('{_esc(s['case_id'])}','{_esc(rid)}',false)\">Reject</button>"
+            )
+        elif act and act.get("state") == "APPROVED":
+            rid = act["request_id"]
+            action = (
+                "<span class='pill pill--warn'><span class='pill__dot'></span>approved · awaiting operator</span> "
+                f"<button class='btn' onclick=\"esExecute('{_esc(s['case_id'])}','{_esc(rid)}')\">"
+                "Execute (operator) &#128274;</button>"
             )
         else:
             action = "<span class='mono' style='color:#9b99a1'>—</span>"
@@ -429,8 +487,9 @@ def _cases_panel(summaries: list[dict]) -> str:
         "<span class='pill pill--info'><span class='pill__dot'></span>GET /api/cases</span></div>"
         "<div class='body-m' style='color:#9b99a1;margin:-4px 0 10px'>Each row is a replayable "
         "<span class='mono'>SecurityCase</span> built from immutable evidence — raw alert &rarr; observation "
-        "&rarr; finding &rarr; approval-gated action. A block executes only on human approval; the edge is "
-        "never touched on reject.</div>"
+        "&rarr; finding &rarr; approval-gated action. <b>Approve is open</b> (it only stages the action); the "
+        "<b>real kick-off is operator-authenticated</b> and dry-run by default — the edge is never touched on "
+        "approve or reject.</div>"
         "<table class='table'><thead><tr>"
         "<th>Severity</th><th>Case</th><th>Status</th><th>Evidence</th><th>Replay</th><th>Response</th>"
         "</tr></thead>"
@@ -439,11 +498,24 @@ def _cases_panel(summaries: list[dict]) -> str:
         "async function esRespond(cid,rid,approve){\n"
         "  const r = await fetch(`/api/cases/${cid}/respond`,{method:'POST',"
         "headers:{'Content-Type':'application/json'},"
-        "body:JSON.stringify({request_id:rid,approved:approve,actor:'soc-analyst'})});\n"
+        "body:JSON.stringify({request_id:rid,approved:approve,actor:'demo-approver'})});\n"
         "  const j = await r.json();\n"
-        "  if(approve){alert('Response receipt: '+(j.receipt?j.receipt.status:'(none)')+"
-        "' · verified='+(j.verification?j.verification.verified:'n/a'));}\n"
+        "  if(approve){alert('Approved and staged. Real execution needs an authenticated operator — "
+        "click \\u201cExecute (operator)\\u201d.');}\n"
         "  else{alert('Rejected — the edge was not touched.');}\n"
+        "  location.reload();\n"
+        "}\n"
+        "async function esExecute(cid,rid){\n"
+        "  // Browser issues the HTTP Basic challenge; operator creds gate the REAL kick-off.\n"
+        "  const r = await fetch(`/api/cases/${cid}/execute`,{method:'POST',"
+        "headers:{'Content-Type':'application/json'},"
+        "body:JSON.stringify({request_id:rid})});\n"
+        "  if(r.status===401){alert('Operator authentication required (HTTP Basic).');return;}\n"
+        "  if(r.status===503){alert('Operator approval is not configured on this deployment.');return;}\n"
+        "  const j = await r.json();\n"
+        "  alert(j.dry_run ? 'DRY-RUN: edge not touched (SENTINEL_BLOCK_ENABLED unset). Receipt: '+"
+        "(j.receipt?j.receipt.status:'(none)') : 'Executed. Receipt: '+(j.receipt?j.receipt.status:'(none)')+"
+        "' · verified='+(j.verification?j.verification.verified:'n/a'));\n"
         "  location.reload();\n"
         "}\n"
         "</script>"
@@ -504,10 +576,17 @@ def _block_ip(body: dict) -> dict:
 
 
 def _approve_block(body: dict) -> dict:
-    """The approved path: actually enforce the ban decision on the real CrowdSec core.
+    """The approved path: enforce the ban decision on the real CrowdSec core — but only when
+    SENTINEL_BLOCK_ENABLED is set. Default is dry-run, so an approval in the public demo never mutates the
+    live edge by accident (the same safety flag the case-execute path honors).
 
     Thin wrapper over core.block_ip (POST /v1/decisions) — core stays context-runtime-free.
     """
+    ip = ((body or {}).get("ip") or "").strip()
+    if not auth.block_enabled():
+        return {"status": "dry_run", "action": "approve_block", "ip": ip,
+                "summary": f"DRY-RUN: would block {ip}",
+                "detail": "SENTINEL_BLOCK_ENABLED not set — the edge was not touched."}
     return core.block_ip(body or {})
 
 
@@ -544,7 +623,13 @@ A WHITELIST tells CrowdSec to never block certain trusted IPs (your office, your
 
 Should you worry? A handful of brute-force or probing alerts from random internet IPs is normal background noise — CrowdSec blocked them, nothing to do. Worry when you see many events from one source, repeated attempts on the same account, or an exploit/RCE scenario — those deserve a closer look. edge-sentinel never auto-blocks: sensitive blocks are staged and wait for your approval.
 
-Beyond the network, edge-sentinel also inspects the SOFTWARE SUPPLY CHAIN — the open-source libraries and images this platform installs — BEFORE they run for clients. A supply-chain SCAN (Trivy) checks every dependency, container image and config for known VULNERABILITIES (CVEs), leaked SECRETS and MISCONFIGURATIONS, and builds an SBOM (a Software Bill of Materials: the full list of components). Each CVE names the package, its SEVERITY (critical/high/medium/low), and the FIXED VERSION to upgrade to — the "patched pin" to move to. This is the PRE-DEPLOYMENT half of security; the network monitoring above is the RUNTIME half. Ask edge-sentinel to "scan our dependencies", list the vulnerabilities, explain a CVE, or produce an SBOM — it inspects the software before you trust it."""
+Beyond the network, edge-sentinel also inspects the SOFTWARE SUPPLY CHAIN — the open-source libraries and images this platform installs — BEFORE they run for clients. A supply-chain SCAN (Trivy) checks every dependency, container image and config for known VULNERABILITIES (CVEs), leaked SECRETS and MISCONFIGURATIONS, and builds an SBOM (a Software Bill of Materials: the full list of components). Each CVE names the package, its SEVERITY (critical/high/medium/low), and the FIXED VERSION to upgrade to — the "patched pin" to move to. This is the PRE-DEPLOYMENT half of security; the network monitoring above is the RUNTIME half. Ask edge-sentinel to "scan our dependencies", list the vulnerabilities, explain a CVE, or produce an SBOM — it inspects the software before you trust it.
+
+NETWORK ACCESS (NetBird) is the "who can reach what" half of security — a private WireGuard network with central policies, single sign-on and device checks. CrowdSec guards the perimeter; NetBird controls internal access. edge-sentinel can REVIEW it — ask "review network access" or "check device posture" and it lists the peers (devices) and policies, flagging any over-broad "All-to-All" rule that lets everything reach everything (that breaks least-privilege), plus posture issues like expired logins or unapproved devices. It can also PROPOSE a tighter policy, but like a block it is staged for your approval and only applied when you approve it. HOW TO ENABLE LIVE DATA: create a NetBird personal-access token and set NETBIRD_API_TOKEN (for a self-hosted NetBird also set NETBIRD_API_URL to https://your-netbird-host/api). Until a token is set the review shows clearly-labelled SAMPLE data so you can see the shape; once set it reads your real peers and policies.
+
+BACKUPS / CONTINUITY (Portabase) answer "is every database safely backed up, and could we recover?". Portabase is a self-hosted backup control plane: small agents sit next to each database, take an ENCRYPTED dump, and ship it to one or more STORAGE DESTINATIONS — a local disk for a fast restore, and an OFFSITE S3 bucket (AWS S3 or MinIO) for durability if a whole host is lost. edge-sentinel reports COVERAGE — ask "are the databases backed up?" and it says which cores have a recent, encrypted, offsite backup and where the gaps are (no backup at all, local-only with no offsite copy, or unencrypted). HOW TO SET UP OFFSITE S3 BACKUPS: bring up the backup control plane, add each database as a source and an S3 storage destination (keep the real keys in Vault), enrol the backup agent, then set PORTABASE_API_TOKEN so edge-sentinel can read coverage. Tip: add BOTH a local and an S3 destination and fan each backup out to both. Until a token is set, coverage shows clearly-labelled SAMPLE data.
+
+RUNTIME EXPOSURE (deploy-scan) is the complement of the supply-chain scan: it actively scans a LIVE deployment (a host or URL) for exploitable weakness using nmap / nuclei / ZAP. Supply-chain scanning inspects code & packages BEFORE deploy; this is the RUNTIME half. Because it sends probe traffic it is destructive, so starting a scan is staged for your approval, and scope is fail-closed to an allowlist on the deploy-scan side. Ask to "scan a running deployment for exposure"; it is available once DEPLOY_SCAN_MCP_URL points at the deploy-scan service."""
 
 
 def _t_threat_summary(_a: dict) -> dict:
@@ -842,8 +927,105 @@ def _t_list_apps(_a: dict) -> dict:
     cores = [c["name"] for c in conts if not c["name"].startswith("agentic-os-stack-")]
     short = [a.replace("agentic-os-stack-", "").replace("-1", "") for a in apps]
     return {"text": f"{len(apps)} agentic app(s) and {len(cores)} core container(s) can be scanned for open-source "
-            f"vulnerabilities. Apps: {', '.join(short[:24])}. Ask me to \"scan the <app>\" and I'll list its CVEs "
-            f"and the fixes to apply.", "data": {"apps": apps, "cores": cores}}
+            f"vulnerabilities. Apps: {', '.join(short[:24])}. Ask me to \"scan the <app>\" (or \"scan all apps\") "
+            f"and I'll list the CVEs and the fixes to apply.", "data": {"apps": apps, "cores": cores}}
+
+
+# Ecosystem inference for scan_apps: a Trivy Finding has no explicit ecosystem field, so we match on
+# the target (lockfile/path) + os/lang class. Best-effort — enough to answer "which apps have npm CVEs".
+_ECO_ALIASES = {
+    "npm": ("node", "package-lock", "package.json", "yarn", "pnpm", "npm", "javascript"),
+    "node": ("node", "package-lock", "package.json", "yarn", "pnpm", "npm"),
+    "pypi": ("python", "requirement", "poetry", "pipfile", "site-packages", ".egg", "pip"),
+    "python": ("python", "requirement", "poetry", "pipfile", "site-packages", ".egg", "pip"),
+    "pip": ("python", "requirement", "poetry", "pipfile", "site-packages", ".egg", "pip"),
+    "maven": ("pom.xml", "gradle", ".jar", "java", "maven"),
+    "java": ("pom.xml", "gradle", ".jar", "java", "maven"),
+    "go": ("go.sum", "go.mod", "gobinary", "golang"),
+    "golang": ("go.sum", "go.mod", "gobinary", "golang"),
+    "ruby": ("gemfile", ".gem", "ruby", "bundler"),
+    "rust": ("cargo", ".crate", "rust"),
+}
+_SEV_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "UNKNOWN": 4}
+
+
+def _short_cont(name: str) -> str:
+    return name.replace("agentic-os-stack-", "").replace("-1", "")
+
+
+def _eco_match(f, eco: str) -> bool:
+    if not eco:
+        return True
+    if eco in ("os", "system", "debian", "alpine", "ubuntu", "base"):
+        return getattr(f, "cls", "") == "os"
+    hints = _ECO_ALIASES.get(eco)
+    t = (getattr(f, "target", "") or "").lower()
+    if hints:
+        return any(h in t for h in hints)
+    return eco in t or eco in (getattr(f, "title", "") or "").lower()
+
+
+def _t_scan_apps(a: dict) -> dict:
+    """Scan MANY app containers at once and roll up the CVEs, optionally filtered to one ecosystem.
+    This is the 'scan all apps' / 'which apps have npm CVEs' capability."""
+    if _SCAN is None:
+        return {"text": "Supply-chain scanning is unavailable (context-runtime missing).", "data": {}}
+    a = a or {}
+    eco = str(a.get("ecosystem") or a.get("filter") or a.get("type") or "").strip().lower()
+    try:
+        limit = int(a.get("limit") or 0)
+    except Exception:  # noqa: BLE001
+        limit = 0
+    limit = limit if limit > 0 else 8
+
+    conts = _SCAN.list_scannable_containers("agentic-os-stack")
+    names = [c["name"] for c in conts if c["name"].startswith("agentic-os-stack-")]
+    wanted = a.get("apps") or a.get("targets")
+    if isinstance(wanted, str):
+        wanted = [w.strip() for w in re.split(r"[,\s]+", wanted) if w.strip()]
+    if wanted:
+        picked = [_resolve_app_container(w) for w in wanted]
+        names = [n for n in dict.fromkeys(picked) if n]
+
+    scanned = names[:limit]
+    truncated = max(0, len(names) - len(scanned))
+    per_app: list[dict] = []
+    fixes: dict[str, tuple] = {}
+    total = 0
+    matched_apps = 0
+    for cont in scanned:
+        r = _SCAN.scan_container(cont)
+        if not r.ok:
+            per_app.append({"app": _short_cont(cont), "ok": False, "note": r.note})
+            continue
+        finds = [f for f in r.findings if _eco_match(f, eco)]
+        total += len(finds)
+        if finds:
+            matched_apps += 1
+        by_sev: dict[str, int] = {}
+        for f in finds:
+            by_sev[f.severity] = by_sev.get(f.severity, 0) + 1
+            if f.fixed and f.id not in fixes:
+                fixes[f.id] = (f.severity, f"upgrade {f.pkg} → {f.fixed} in {_short_cont(cont)}")
+        per_app.append({"app": _short_cont(cont), "ok": True, "cves": len(finds), "by_severity": by_sev})
+
+    ok = sorted((p for p in per_app if p.get("ok")), key=lambda p: -p.get("cves", 0))
+    label = f"{eco}-ecosystem " if eco else ""
+    head = f"Scanned {len(scanned)} app(s) for {label}vulnerabilities"
+    if truncated:
+        head += f" (of {len(names)} — raise `limit` or scan a specific app for the rest)"
+    per_lines = [
+        f"  • {p['app']}: {p['cves']} CVE(s)"
+        + (f" ({', '.join(f'{k.lower()} {v}' for k, v in sorted(p['by_severity'].items(), key=lambda kv: _SEV_RANK.get(kv[0], 9)))})" if p["cves"] else "")
+        for p in ok
+    ] or ["  • none"]
+    top = sorted(fixes.items(), key=lambda kv: _SEV_RANK.get(kv[1][0], 9))[:8]
+    fix_lines = "\n".join(f"  • {act}  ({sev} · {cid})" for cid, (sev, act) in top) or "  • no fixable CVEs found"
+    body = (f"{head}. {matched_apps} app(s) carry {label}CVEs — {total} finding(s) total.\n\n"
+            f"Per app (worst first):\n" + "\n".join(per_lines) + f"\n\nTop fixes:\n{fix_lines}")
+    return {"text": body, "data": {"ecosystem": eco or None, "scanned": [_short_cont(c) for c in scanned],
+            "truncated": truncated, "apps_with_findings": matched_apps, "total": total, "per_app": ok,
+            "fixes": [{"id": cid, "severity": sev, "action": act} for cid, (sev, act) in top]}}
 
 
 # ─── Consume the shared NVD/OSV vuln-DB (Doris) — look up advisories + demo the permissioning ───
@@ -896,18 +1078,39 @@ if _AgentConsole is not None:
                     parameters={"type": "object", "properties": {"id": {"type": "string", "description": "a CVE id from the scan"}}}),
             _crtool("scan_app", "scan a SPECIFIC agentic app's container image for open-source (CVE) vulnerabilities and suggest the fixes to apply", _t_scan_app,
                     parameters={"type": "object", "properties": {"app": {"type": "string", "description": "the app to scan, e.g. billing, compliance, market-radar, books"}}}),
+            _crtool("scan_apps", "scan MANY agentic apps/containers at once for open-source (CVE) vulnerabilities and roll up the results — optionally filtered to ONE package ecosystem (npm, pypi, maven, go, os). Use this for 'scan all apps', 'which apps have npm modules/CVEs', 'scan the npm apps'.", _t_scan_apps,
+                    parameters={"type": "object", "properties": {
+                        "ecosystem": {"type": "string", "description": "restrict findings to one ecosystem: npm | pypi | maven | go | os (optional)"},
+                        "apps": {"type": "string", "description": "comma-separated app names to scan (optional; default: all agentic apps)"},
+                        "limit": {"type": "integer", "description": "max apps to scan in one call (default 8)"}}}),
             _crtool("list_scannable_apps", "list every agentic app + core container whose open-source dependencies can be scanned", _t_list_apps),
             _crtool("vuln_db_lookup", "look up a package or CVE in our own NVD/OSV vulnerability database (advisories + patched versions)", _t_vuln_lookup,
                     parameters={"type": "object", "properties": {"package": {"type": "string"}, "cve": {"type": "string", "description": "a CVE id"}}}),
             _crtool("vuln_db_permissions", "demonstrate the vuln-DB access policy: the same query returns different rows/columns per principal (row scope + column masking)", _t_vuln_db_permissions),
             _crtool("sbom", "generate the software bill of materials (component inventory) for the stack", _sc_sbom),
             _crtool("scanner_status", "which supply-chain scanners are installed (trivy/syft/cosign) and the last scan result", _sc_status),
+            # runtime-DAST (post-deploy) tools — scan a LIVE deployment via the deploy-scan service
+            _crtool("scan_deployment", "actively scan a RUNNING deployment (host or URL) for exploitable exposure with nmap/nuclei/ZAP — the RUNTIME half of security, complementing the supply-chain scan. Destructive: sends probe traffic, so it is staged for human approval. profile: recon (nmap surface) | web-baseline (nuclei + ZAP passive) | web-active (ZAP attack traffic) | full", deploy_scan.scan, side_effecting=True,
+                    parameters={"type": "object", "properties": {
+                        "target": {"type": "string", "description": "host or URL to scan (must be in the deploy-scan allowlist)"},
+                        "profile": {"type": "string", "description": "recon | web-baseline | web-active | full (default web-baseline)"}}}),
+            _crtool("scan_status", "check the progress of a running deployment scan by its job id", deploy_scan.status,
+                    parameters={"type": "object", "properties": {"job_id": {"type": "string"}}}),
+            _crtool("scan_results", "fetch the findings + severity summary of a finished deployment scan by its job id", deploy_scan.results,
+                    parameters={"type": "object", "properties": {"job_id": {"type": "string"}}}),
             # runtime data plane
             _crtool("malware_scan", "scan the stack's files for malware/viruses with ClamAV", _t_malware_scan,
                     parameters={"type": "object", "properties": {"path": {"type": "string", "description": "path to scan (default: the whole stack)"}}}),
             _crtool("wazuh_status", "report the Wazuh SIEM/XDR hub — connected agents and what it monitors (malware, compliance, FIM, vulns)", _t_wazuh_status),
+            # network access plane (NetBird / zero-trust) — the "who can reach what" half
+            _crtool("network_access_review", "review zero-trust network access (NetBird): peers, groups and policies, flagging over-broad All-to-All access that breaks least-privilege", netbird.access_review),
+            _crtool("network_posture", "check device posture on the network (NetBird): peers with expired logins, pending/unapproved devices, or broad SSH access", netbird.posture),
+            _crtool("propose_network_policy", "draft a tighter NetBird access policy to replace an over-broad one (destructive — staged for human approval, applied only via approve_network_policy)", netbird.propose, side_effecting=True,
+                    parameters={"type": "object", "properties": {"policy": {"type": "string", "description": "name of the over-broad policy to tighten (optional; default: the first one found)"}}}),
+            # continuity plane (Portabase / backups) — is every core safely backed up offsite?
+            _crtool("backup_status", "report backup coverage (Portabase): which of the stack's databases have a recent, encrypted, offsite (S3) backup — and the gaps", portabase.backup_status),
         ],
-        suggestions=["Any threats today?", "Scan the billing app for vulnerabilities", "Which apps can you scan?", "What does the SIEM show?"],
+        suggestions=["Any threats today?", "Scan the billing app for vulnerabilities", "Scan a running deployment for exposure", "Review network access"],
         subtitle="Ask me to scan any app's open-source dependencies, check the network/SIEM, or explain a finding.",
         allow_side_effects=[],  # ban_ip stays gated → the harness asks for human approval before blocking
     )
@@ -937,6 +1140,43 @@ def activity() -> JSONResponse:
     return JSONResponse(fetch_activity())
 
 
+@app.post("/api/permissions/query")
+async def permissions_query(request: Request) -> JSONResponse:
+    """Run the vuln query as full-access (left) and the posted scoped grant (right)."""
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    return JSONResponse(permissions_ui.query(body or {}))
+
+
+@app.get("/api/permissions/ui", response_class=HTMLResponse)
+def permissions_ui_page() -> str:
+    return permissions_ui.PERM_PAGE
+
+
+@app.get("/api/network/review")
+def network_review() -> JSONResponse:
+    """Zero-trust network access review over NetBird (live when configured, else sample)."""
+    return JSONResponse(netbird.access_review({})["data"])
+
+
+@app.get("/api/network/ui", response_class=HTMLResponse)
+def network_ui() -> str:
+    return netbird.panel()
+
+
+@app.get("/api/backups/status")
+def backups_status() -> JSONResponse:
+    """Backup coverage over Portabase (live when configured, else sample)."""
+    return JSONResponse(portabase.backup_status({})["data"])
+
+
+@app.get("/api/backups/ui", response_class=HTMLResponse)
+def backups_ui() -> str:
+    return portabase.panel()
+
+
 @app.get("/api/cases")
 def api_cases() -> JSONResponse:
     """List live investigation cases, worst severity first. Syncs the latest CrowdSec alerts into cases first
@@ -957,9 +1197,9 @@ def api_case(case_id: str) -> JSONResponse:
 
 @app.post("/api/cases/{case_id}/respond")
 async def api_case_respond(case_id: str, request: Request) -> JSONResponse:
-    """Governed response. Reject records the human decision and stops. Approve binds the request to the REAL
-    Mission Runtime operator, executes the block only on the approved decision, and returns the receipt
-    (execution proof) plus a distinct verification. The edge is never touched without approval."""
+    """DEMO-FACING decision — OPEN, no auth, NO edge effect. Reject records the rejection and stops; approve
+    stages the action as APPROVED (awaiting the authenticated execute step). The edge is never touched here —
+    the real kick-off is POST /api/cases/{id}/execute, which is operator-authenticated."""
     try:
         body = await request.json()
     except Exception:  # noqa: BLE001
@@ -968,17 +1208,41 @@ async def api_case_respond(case_id: str, request: Request) -> JSONResponse:
     if not request_id:
         return JSONResponse({"error": "missing 'request_id'"}, status_code=400)
     try:
-        out = live.respond(case_id, request_id,
-                           approved=bool((body or {}).get("approved")),
-                           actor=(body or {}).get("actor", "operator"))
+        out = live.decide(case_id, request_id,
+                          approved=bool((body or {}).get("approved")),
+                          actor=(body or {}).get("actor", "demo-approver"))
     except KeyError:
         return JSONResponse({"error": f"unknown case or request ({case_id}/{request_id})"}, status_code=404)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=400)
+    return JSONResponse(out)
+
+
+@app.post("/api/cases/{case_id}/execute")
+async def api_case_execute(case_id: str, request: Request,
+                           operator: str = Depends(auth.require_operator)) -> JSONResponse:
+    """AUTHENTICATED execution — the real kick-off. HTTP-Basic operator gate (503 if unconfigured, 401 if not
+    authenticated). Only an already-APPROVED action runs; dry-run unless SENTINEL_BLOCK_ENABLED, so the public
+    demo never mutates the live edge by default. Returns the receipt (execution proof) + a distinct verification."""
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    request_id = (body or {}).get("request_id", "")
+    if not request_id:
+        return JSONResponse({"error": "missing 'request_id'"}, status_code=400)
+    try:
+        out = live.execute(case_id, request_id, actor=f"operator:{operator}")
+    except KeyError:
+        return JSONResponse({"error": f"unknown case or request ({case_id}/{request_id})"}, status_code=404)
+    except live.ExecutionError as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
     except Exception as e:  # noqa: BLE001 — e.g. GovernanceError refusing an ungoverned action
         return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=400)
     return JSONResponse(out)
 
 
-_CR_BANNER = """<div style="position:sticky;top:0;z-index:9998;background:linear-gradient(90deg,#10201d,#17171a);border-bottom:1px solid #2f2f33;color:#e4e2e6;font:13px/1.4 Roboto,system-ui,sans-serif;padding:9px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">CONTEXT RUNTIME</span><span style="background:#2f2f33;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">DEMO</span><span style="color:#9b99a1">This app runs on <b style="color:#e4e2e6">Context Runtime</b>, which powers the investigation assistant, supply-chain/vuln scanners and the permissions plane here. Its Edge-Sentinel tenant learns the cheapest alert-source bundle that still reaches the right verdict (0.900 vs 0.800, measured offline). <a href="https://github.com/redevops-io/context-runtime" style="color:#4fd1c5;text-decoration:none">learn more \u2192</a></span></div>"""
+_CR_BANNER = """<div style="position:sticky;top:0;z-index:9998;background:linear-gradient(90deg,#10201d,#17171a);border-bottom:1px solid #2f2f33;color:#e4e2e6;font:13px/1.4 Roboto,system-ui,sans-serif;padding:9px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">CONTEXT RUNTIME</span><span style="background:#2f2f33;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">DEMO</span><span style="color:#9b99a1">This app runs on <b style="color:#e4e2e6">Context Runtime</b>, which powers the investigation assistant, supply-chain/vuln scanners and the permissions plane here. Its Edge-Sentinel tenant learns the cheapest alert-source bundle that still reaches the right verdict (0.900 vs 0.800, measured offline). <a href="https://github.com/redevops-io/context-runtime" style="color:#4fd1c5;text-decoration:none">learn more \u2192</a></span><span style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap"><a href="api/network/ui" style="background:#1b2b28;color:#4fd1c5;border:1px solid #2f6f66;font-weight:700;border-radius:6px;padding:5px 11px;font-size:12px;text-decoration:none;white-space:nowrap">\U0001F310 Network access \u2192</a><a href="api/backups/ui" style="background:#1b2b28;color:#4fd1c5;border:1px solid #2f6f66;font-weight:700;border-radius:6px;padding:5px 11px;font-size:12px;text-decoration:none;white-space:nowrap">\U0001F5C4 Backups \u2192</a><a href="api/permissions/ui" style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:6px;padding:5px 11px;font-size:12px;text-decoration:none;white-space:nowrap">\U0001F512 Permissions demo \u2192</a></span></div>"""
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1010,15 +1274,32 @@ async def agent_run(request: Request) -> JSONResponse:
         body = {}
     action = (body or {}).get("action", "")
 
+    # Real kick-off actions are operator-authenticated (HTTP Basic); propose/block-stage/triage stay open.
+    if action in ("approve_block", "approve_network_policy"):
+        try:
+            auth.require_operator(request)
+        except HTTPException as e:
+            return JSONResponse({"error": e.detail}, status_code=e.status_code,
+                                headers=dict(e.headers or {}))
+
     if action == "block_ip":
         return JSONResponse(_block_ip(body or {}))
     if action == "approve_block":
         return JSONResponse(_approve_block(body or {}))
     if action == "triage":
         return JSONResponse(_triage(body or {}))
+    # NetBird — propose a tighter policy (staged) then apply it on approval
+    if action == "propose_network_policy":
+        return JSONResponse(netbird.propose(body or {}))
+    if action == "approve_network_policy":
+        if not auth.block_enabled():
+            return JSONResponse({"status": "dry_run", "action": "approve_network_policy",
+                                 "summary": "DRY-RUN: policy change not applied",
+                                 "detail": "SENTINEL_BLOCK_ENABLED not set — NetBird was not modified."})
+        return JSONResponse(netbird.approve(body or {}))
     return JSONResponse(
         {"status": "error", "error": f"unknown action '{action}'",
-         "supported": ["block_ip", "approve_block", "triage"]},
+         "supported": ["block_ip", "approve_block", "triage", "propose_network_policy", "approve_network_policy"]},
         status_code=400,
     )
 
