@@ -76,6 +76,7 @@ else:
 # context-runtime deps) so the Mission Runtime operator can invoke them and they can be
 # tested against a fake CrowdSec. Import config + core helpers from there; core loads .env.
 from . import core
+from . import live  # noqa: E402 — wires the SOC app to the Security Intelligence Core (real cases)
 from .core import (  # noqa: E402
     TENANT, SUBTITLE, crowdsec_connected, fetch_activity, _severity,
 )
@@ -377,6 +378,77 @@ def render(data: dict) -> str:
 </div>
 </body>
 </html>"""
+
+
+# --- investigation cases (the REAL case/evidence workspace, built from live alerts) ----------
+_CASE_STATUS_PILL = {
+    "CONTAINED": "pill--success", "RESOLVED": "pill--success", "AWAITING_APPROVAL": "pill--warn",
+    "INVESTIGATING": "pill--info", "OPEN": "pill--neutral", "CLOSED": "pill--neutral",
+}
+
+
+def _case_status_pill(status: str) -> str:
+    cls = _CASE_STATUS_PILL.get(status, "pill--neutral")
+    return f"<span class='pill {cls}'><span class='pill__dot'></span>{_esc(status)}</span>"
+
+
+def _cases_panel(summaries: list[dict]) -> str:
+    """Render the live investigation cases as a real case/evidence workspace. Every row is a replayable
+    SecurityCase derived from immutable CrowdSec evidence — never a canned scenario."""
+    rows = ""
+    for s in summaries:
+        pend = s.get("pending_action")
+        if pend:
+            rid = pend["request_id"]
+            ip = pend.get("parameters", {}).get("ip", "")
+            action = (
+                f"<button class='btn' onclick=\"esRespond('{_esc(s['case_id'])}','{_esc(rid)}',true)\">"
+                f"Approve block {_esc(ip)}</button> "
+                f"<button class='btn btn--ghost' onclick=\"esRespond('{_esc(s['case_id'])}','{_esc(rid)}',false)\">Reject</button>"
+            )
+        else:
+            action = "<span class='mono' style='color:#9b99a1'>—</span>"
+        c = s["counts"]
+        rows += (
+            "<tr>"
+            f"<td>{_sev_pill(s['severity'])}</td>"
+            f"<td><a class='mono' href='/api/cases/{_esc(s['case_id'])}' target='_blank' rel='noopener' "
+            f"title='the full evidence→observation→finding→action bundle'>{_esc(s['title'])}</a></td>"
+            f"<td>{_case_status_pill(s['status'])}</td>"
+            f"<td class='mono'>{c['evidence']}e · {c['findings']}f · {c['decisions']}d</td>"
+            "<td><span class='pill pill--success'><span class='pill__dot'></span>replayable</span></td>"
+            f"<td>{action}</td>"
+            "</tr>"
+        )
+    if not rows:
+        rows = ("<tr><td colspan='6'>No investigation cases yet — a case is opened from each live CrowdSec "
+                "alert as it arrives. Nothing here is canned.</td></tr>")
+    return (
+        "<div class='card'>"
+        "<div class='card__head'><h2 class='card__title'>Investigation cases · evidence workspace</h2>"
+        "<span class='pill pill--info'><span class='pill__dot'></span>GET /api/cases</span></div>"
+        "<div class='body-m' style='color:#9b99a1;margin:-4px 0 10px'>Each row is a replayable "
+        "<span class='mono'>SecurityCase</span> built from immutable evidence — raw alert &rarr; observation "
+        "&rarr; finding &rarr; approval-gated action. A block executes only on human approval; the edge is "
+        "never touched on reject.</div>"
+        "<table class='table'><thead><tr>"
+        "<th>Severity</th><th>Case</th><th>Status</th><th>Evidence</th><th>Replay</th><th>Response</th>"
+        "</tr></thead>"
+        f"<tbody>{rows}</tbody></table>"
+        "<script>\n"
+        "async function esRespond(cid,rid,approve){\n"
+        "  const r = await fetch(`/api/cases/${cid}/respond`,{method:'POST',"
+        "headers:{'Content-Type':'application/json'},"
+        "body:JSON.stringify({request_id:rid,approved:approve,actor:'soc-analyst'})});\n"
+        "  const j = await r.json();\n"
+        "  if(approve){alert('Response receipt: '+(j.receipt?j.receipt.status:'(none)')+"
+        "' · verified='+(j.verification?j.verification.verified:'n/a'));}\n"
+        "  else{alert('Rejected — the edge was not touched.');}\n"
+        "  location.reload();\n"
+        "}\n"
+        "</script>"
+        "</div>"
+    )
 
 
 # --- optional LLM reasoning blurb (guarded: works without any API key) -------
@@ -865,16 +937,65 @@ def activity() -> JSONResponse:
     return JSONResponse(fetch_activity())
 
 
-_CR_BANNER = """<div style="position:sticky;top:0;z-index:9998;background:linear-gradient(90deg,#10201d,#17171a);border-bottom:1px solid #2f2f33;color:#e4e2e6;font:13px/1.4 Roboto,system-ui,sans-serif;padding:9px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">CONTEXT RUNTIME</span><span style="background:#2f2f33;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">DEMO</span><span style="color:#9b99a1">This demo app is plugged into <b style="color:#e4e2e6">Context Runtime</b>, which optimizes which alert sources to pull per incident — correct verdict vs cost (0.900 vs 0.800); tool-using + approval-gated. <a href="https://github.com/redevops-io/context-runtime" style="color:#4fd1c5;text-decoration:none">learn more \u2192</a></span></div>"""
+@app.get("/api/cases")
+def api_cases() -> JSONResponse:
+    """List live investigation cases, worst severity first. Syncs the latest CrowdSec alerts into cases first
+    (idempotent), so the list reflects real detections — never a canned scenario."""
+    live.sync_cases()
+    return JSONResponse({"cases": live.case_summaries()})
+
+
+@app.get("/api/cases/{case_id}")
+def api_case(case_id: str) -> JSONResponse:
+    """Full resolved bundle for one case (evidence/observations/findings/actions/decisions/receipts) plus
+    the replay proof that the case id is reproducible from its immutable evidence."""
+    detail = live.case_detail(case_id)
+    if detail is None:
+        return JSONResponse({"error": f"unknown case '{case_id}'"}, status_code=404)
+    return JSONResponse(detail)
+
+
+@app.post("/api/cases/{case_id}/respond")
+async def api_case_respond(case_id: str, request: Request) -> JSONResponse:
+    """Governed response. Reject records the human decision and stops. Approve binds the request to the REAL
+    Mission Runtime operator, executes the block only on the approved decision, and returns the receipt
+    (execution proof) plus a distinct verification. The edge is never touched without approval."""
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    request_id = (body or {}).get("request_id", "")
+    if not request_id:
+        return JSONResponse({"error": "missing 'request_id'"}, status_code=400)
+    try:
+        out = live.respond(case_id, request_id,
+                           approved=bool((body or {}).get("approved")),
+                           actor=(body or {}).get("actor", "operator"))
+    except KeyError:
+        return JSONResponse({"error": f"unknown case or request ({case_id}/{request_id})"}, status_code=404)
+    except Exception as e:  # noqa: BLE001 — e.g. GovernanceError refusing an ungoverned action
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=400)
+    return JSONResponse(out)
+
+
+_CR_BANNER = """<div style="position:sticky;top:0;z-index:9998;background:linear-gradient(90deg,#10201d,#17171a);border-bottom:1px solid #2f2f33;color:#e4e2e6;font:13px/1.4 Roboto,system-ui,sans-serif;padding:9px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">CONTEXT RUNTIME</span><span style="background:#2f2f33;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">DEMO</span><span style="color:#9b99a1">This app runs on <b style="color:#e4e2e6">Context Runtime</b>, which powers the investigation assistant, supply-chain/vuln scanners and the permissions plane here. Its Edge-Sentinel tenant learns the cheapest alert-source bundle that still reaches the right verdict (0.900 vs 0.800, measured offline). <a href="https://github.com/redevops-io/context-runtime" style="color:#4fd1c5;text-decoration:none">learn more \u2192</a></span></div>"""
 
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     import re as _cr_re
     page = render(fetch_activity())
+    blocks = ""
+    try:
+        live.sync_cases()
+        blocks += ("<section class='shell' style='margin-top:var(--sp-4)'>"
+                   + _cases_panel(live.case_summaries()) + "</section>")
+    except Exception:  # noqa: BLE001 — the case workspace is additive; never break the dashboard
+        pass
     if _SENTINEL_CONSOLE is not None:
-        panel = "<section class='shell' style='margin-top:var(--sp-4)'>" + _SENTINEL_CONSOLE.panel_html("sentinel") + "</section>"
-        page = page.replace("<footer", panel + "<footer", 1)
+        blocks += "<section class='shell' style='margin-top:var(--sp-4)'>" + _SENTINEL_CONSOLE.panel_html("sentinel") + "</section>"
+    if blocks:
+        page = page.replace("<footer", blocks + "<footer", 1)
     page = _cr_re.sub(r"(<body[^>]*>)", lambda m: m.group(1) + _CR_BANNER, page, count=1)
     if "_CR_BANNER" not in page:
         page = _CR_BANNER + page
