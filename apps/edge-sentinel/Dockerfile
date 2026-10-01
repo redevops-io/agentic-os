@@ -8,7 +8,7 @@ WORKDIR /app
 # the LAPI and need none of this — alerts just degrade gracefully if the socket is absent.
 ARG DOCKER_CLI_VERSION=27.3.1
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && apt-get install -y --no-install-recommends curl ca-certificates git \
     && curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz" \
        | tar -xz -C /tmp \
     && mv /tmp/docker/docker /usr/local/bin/docker \
