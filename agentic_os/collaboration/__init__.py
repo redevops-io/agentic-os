@@ -8,9 +8,11 @@ go through one interface. Each adapter is credential-gated and offline-testable 
 from .contracts import (
     Attachment, CollaborationProvider, InboundEvent, InteractionResult, OutboundMessage,
 )
+from .google_chat import GoogleChatCollaborationProvider
+from .msteams import TeamsCollaborationProvider
 from .slack import SlackCollaborationProvider
 
 __all__ = [
     "CollaborationProvider", "InboundEvent", "OutboundMessage", "InteractionResult", "Attachment",
-    "SlackCollaborationProvider",
+    "SlackCollaborationProvider", "TeamsCollaborationProvider", "GoogleChatCollaborationProvider",
 ]
