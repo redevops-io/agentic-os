@@ -50,6 +50,12 @@ def default_registry() -> Dict[str, ProviderSpec]:
         ProviderSpec("xero", "accounting", "Xero", IC.UI_BOUND),
         # ── Marketing / social + lifecycle ──
         ProviderSpec("postiz", "social", "Postiz", IC.AGENT_NATIVE, env_key="POSTIZ_API_KEY", bundled_oss=True),
+        # Direct Meta Graph publishing (complements Postiz scheduling). No official Meta "Muse" MCP exists —
+        # Muse uses Meta's Connector system and reads, not publishes; the Graph API is the supported path.
+        ProviderSpec("facebook", "social", "Facebook Pages", IC.OAUTH_NATIVE,
+                     scopes=("pages_manage_posts", "pages_read_engagement")),
+        ProviderSpec("instagram", "social", "Instagram", IC.OAUTH_NATIVE,
+                     scopes=("instagram_basic", "instagram_content_publish")),
         ProviderSpec("klaviyo", "lifecycle", "Klaviyo", IC.AGENT_NATIVE, env_key="KLAVIYO_API_KEY"),
         # ── Calendar / scheduling ──
         ProviderSpec("calcom", "calendar", "Cal.com", IC.AGENT_NATIVE, env_key="CALCOM_API_KEY"),
@@ -69,6 +75,9 @@ def default_registry() -> Dict[str, ProviderSpec]:
                      scopes=("ChannelMessage.Send", "ChannelMessage.Read.All", "Chat.ReadWrite")),
         ProviderSpec("google_chat", "collaboration", "Google Chat", IC.OAUTH_NATIVE,
                      scopes=("chat.messages", "chat.spaces.readonly")),
+        # WhatsApp Business Cloud API (Meta Graph) — messaging surface on the CollaborationProvider contract.
+        ProviderSpec("whatsapp", "collaboration", "WhatsApp Business", IC.OAUTH_NATIVE,
+                     scopes=("whatsapp_business_messaging", "whatsapp_business_management")),
         # ── Analytics ──
         ProviderSpec("posthog", "analytics", "PostHog", IC.AGENT_NATIVE, env_key="POSTHOG_API_KEY"),
     ]
