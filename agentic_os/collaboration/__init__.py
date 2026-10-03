@@ -11,8 +11,10 @@ from .contracts import (
 from .google_chat import GoogleChatCollaborationProvider
 from .msteams import TeamsCollaborationProvider
 from .slack import SlackCollaborationProvider
+from .whatsapp import WhatsAppCollaborationProvider
 
 __all__ = [
     "CollaborationProvider", "InboundEvent", "OutboundMessage", "InteractionResult", "Attachment",
     "SlackCollaborationProvider", "TeamsCollaborationProvider", "GoogleChatCollaborationProvider",
+    "WhatsAppCollaborationProvider",
 ]
