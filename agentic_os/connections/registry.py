@@ -59,6 +59,16 @@ def default_registry() -> Dict[str, ProviderSpec]:
                      bundled_oss=True),
         # ── SMS / messaging ──
         ProviderSpec("twilio", "sms", "Twilio", IC.AGENT_NATIVE, env_key="TWILIO_AUTH_TOKEN"),
+        # ── Collaboration / chat surfaces (event + conversation + action, not "send message") ──
+        # Slack was previously only a Projects UI template label; registered here as a first-class provider.
+        ProviderSpec("slack", "collaboration", "Slack", IC.OAUTH_NATIVE, env_key="SLACK_BOT_TOKEN",
+                     scopes=("chat:write", "channels:history", "channels:read", "reactions:write",
+                             "files:write", "users:read")),
+        # Teams rides Microsoft Graph / the M365 Agents SDK (A2A + remote MCP) — messaging is the baseline.
+        ProviderSpec("msteams", "collaboration", "Microsoft Teams", IC.OAUTH_NATIVE,
+                     scopes=("ChannelMessage.Send", "ChannelMessage.Read.All", "Chat.ReadWrite")),
+        ProviderSpec("google_chat", "collaboration", "Google Chat", IC.OAUTH_NATIVE,
+                     scopes=("chat.messages", "chat.spaces.readonly")),
         # ── Analytics ──
         ProviderSpec("posthog", "analytics", "PostHog", IC.AGENT_NATIVE, env_key="POSTHOG_API_KEY"),
     ]
