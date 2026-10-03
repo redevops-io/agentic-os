@@ -6,9 +6,13 @@ the OPEN adapters (GLEIF/OpenSanctions/OpenCorporates) and the own-data families
 their credentialed wiring, and provider-value / paid-spend routing live in the private metered gateway
 (``intelligence-gateway``), which composes this framework — that is the monetization boundary.
 """
+from .adapters.companies_house import CompaniesHouseProvider
 from .adapters.gleif import GleifProvider
+from .adapters.open_ownership import OpenOwnershipProvider
 from .adapters.opencorporates import OpenCorporatesProvider
+from .adapters.openfigi import OpenFigiProvider
 from .adapters.opensanctions import OpenSanctionsProvider
+from .adapters.sec_edgar import SecEdgarProvider
 from .apps import AppProfile, app_capabilities, app_profile, request_for
 from .discovery_bridge import acquire_for_decision, default_registry
 from .decision_resolver import Synthesis, Synthesizer, default_synthesize, resolve_decision_need
@@ -34,6 +38,10 @@ __all__ = [
     "GleifProvider",
     "OpenSanctionsProvider",
     "OpenCorporatesProvider",
+    "OpenFigiProvider",
+    "SecEdgarProvider",
+    "CompaniesHouseProvider",
+    "OpenOwnershipProvider",
     # registry + bridge + accounting
     "default_registry",
     "acquire_for_decision",

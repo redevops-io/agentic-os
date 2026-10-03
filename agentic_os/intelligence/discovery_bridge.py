@@ -12,9 +12,13 @@ from runtime_contracts.protocol import (
     AcquisitionResult, EvidenceRequest, EvidenceValueRecord, IntelligenceRegistry, gated_acquire,
 )
 
+from .adapters.companies_house import CompaniesHouseProvider
 from .adapters.gleif import GleifProvider
+from .adapters.open_ownership import OpenOwnershipProvider
 from .adapters.opencorporates import OpenCorporatesProvider
+from .adapters.openfigi import OpenFigiProvider
 from .adapters.opensanctions import OpenSanctionsProvider
+from .adapters.sec_edgar import SecEdgarProvider
 from .value_store import EvidenceValueStore
 
 # NOTE: the MANAGED paid providers + their credentialed registration (register_managed_providers /
@@ -23,16 +27,27 @@ from .value_store import EvidenceValueStore
 
 
 def default_registry(*, opensanctions_key: str = "", opensanctions_base: str = "",
-                     opencorporates_token: str = "") -> IntelligenceRegistry:
-    """The open baseline registry: GLEIF (open) + OpenSanctions (open via yente, or keyed hosted) +
-    OpenCorporates (BYO token). The private gateway registers managed paid providers on top of this."""
+                     opencorporates_token: str = "", openfigi_key: str = "", sec_edgar_ua: str = "",
+                     companies_house_key: str = "", open_ownership_token: str = "",
+                     open_ownership_base: str = "") -> IntelligenceRegistry:
+    """The open baseline registry (Counterparty + Asset identity / ownership). Open, free-to-resell providers:
+    GLEIF, SEC EDGAR, OpenFIGI, Open Ownership (always entitled); OpenSanctions (open via yente, or keyed hosted);
+    OpenCorporates + UK Companies House (BYO — free keys, entitled only when configured). The private gateway
+    registers managed paid providers on top of this via ``managed_registry(open_baseline=True, **kwargs)``."""
     reg = IntelligenceRegistry()
     reg.register(GleifProvider())
+    reg.register(SecEdgarProvider(user_agent=sec_edgar_ua))
+    reg.register(OpenFigiProvider(api_key=openfigi_key))
+    oo_kwargs = {"api_token": open_ownership_token}
+    if open_ownership_base:
+        oo_kwargs["base_url"] = open_ownership_base
+    reg.register(OpenOwnershipProvider(**oo_kwargs))
     os_kwargs = {"api_key": opensanctions_key}
     if opensanctions_base:
         os_kwargs["base_url"] = opensanctions_base
     reg.register(OpenSanctionsProvider(**os_kwargs))
     reg.register(OpenCorporatesProvider(api_token=opencorporates_token))
+    reg.register(CompaniesHouseProvider(api_key=companies_house_key))
     return reg
 
 

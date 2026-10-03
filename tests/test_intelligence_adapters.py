@@ -126,3 +126,102 @@ def test_default_registry_composition():
     assert reg.match(_req(cap=Capability.SANCTIONS_RISK)) == ()    # no entitled sanctions provider without a key
     keyed = default_registry(opensanctions_base="http://yente.local")
     assert keyed.match(_req(cap=Capability.SANCTIONS_RISK))[0].provider_id == "opensanctions"
+
+
+# ── OpenFIGI (open, POST seam, ASSET_IDENTITY) ───────────────────────────────────────────────────────────
+from agentic_os.intelligence.adapters.companies_house import CompaniesHouseProvider  # noqa: E402
+from agentic_os.intelligence.adapters.open_ownership import OpenOwnershipProvider  # noqa: E402
+from agentic_os.intelligence.adapters.openfigi import OpenFigiProvider  # noqa: E402
+from agentic_os.intelligence.adapters.sec_edgar import SecEdgarProvider  # noqa: E402
+
+
+def _fetch_post(status, body):
+    return lambda method, url, headers=None, body_json=None: (status, body)
+
+
+def test_openfigi_open_and_normalizes():
+    body = {"data": [{"figi": "BBG000B9XRY4", "name": "APPLE INC", "ticker": "AAPL", "exchCode": "US",
+                      "securityType": "Common Stock", "marketSector": "Equity", "compositeFIGI": "BBG000B9XVV8"}]}
+    p = OpenFigiProvider(fetch=_fetch_post(200, body))
+    assert p.check_entitlement("t", Capability.ASSET_IDENTITY)  # open — always entitled
+    res = p.acquire(_req(cap=Capability.ASSET_IDENTITY, subject_refs=("Apple",)))
+    assert res.ok
+    a = res.artifacts[0]
+    assert a.provider == "openfigi" and a.observations[0]["figi"] == "BBG000B9XRY4" and a.cost == 0.0
+    assert a.has_provenance() and "OpenFIGI" in a.license_scope
+
+
+def test_openfigi_no_match_and_rate_limit():
+    assert OpenFigiProvider(fetch=_fetch_post(200, {"data": []})).acquire(
+        _req(cap=Capability.ASSET_IDENTITY)).failure == AcquisitionFailure.NO_MATCH
+    assert OpenFigiProvider(fetch=_fetch_post(429, {})).acquire(
+        _req(cap=Capability.ASSET_IDENTITY)).failure == AcquisitionFailure.RATE_LIMITED
+
+
+# ── SEC EDGAR (open, COMPANY_IDENTITY) ───────────────────────────────────────────────────────────────────
+def test_sec_edgar_open_and_collapses_to_filers():
+    body = {"hits": {"hits": [
+        {"_source": {"ciks": ["0000320193"], "display_names": ["Apple Inc. (AAPL) (CIK 0000320193)"],
+                     "file_date": "2026-01-15", "root_forms": "10-K"}},
+        {"_source": {"ciks": ["0000320193"], "display_names": ["Apple Inc. (AAPL) (CIK 0000320193)"],
+                     "file_date": "2025-10-30", "root_forms": "10-Q"}}]}}
+    p = SecEdgarProvider(fetch=_fetch(200, body))
+    assert p.check_entitlement("t", Capability.COMPANY_IDENTITY)  # open
+    res = p.acquire(_req(subject_refs=("Apple Inc",)))
+    assert res.ok
+    a = res.artifacts[0]
+    assert len(a.observations) == 1 and a.observations[0]["cik"] == "0000320193"  # two filings → one filer
+    assert a.cost == 0.0 and "EDGAR" in a.license_scope
+
+
+def test_sec_edgar_no_match():
+    assert SecEdgarProvider(fetch=_fetch(200, {"hits": {"hits": []}})).acquire(
+        _req()).failure == AcquisitionFailure.NO_MATCH
+
+
+# ── UK Companies House (BYO free key; identity + beneficial ownership) ────────────────────────────────────
+def test_companies_house_requires_key():
+    p = CompaniesHouseProvider()  # no key
+    assert not p.check_entitlement("t", Capability.COMPANY_IDENTITY)
+    assert p.acquire(_req()).failure == AcquisitionFailure.NOT_ENTITLED
+
+
+def test_companies_house_identity_and_psc():
+    search = {"items": [{"title": "MONZO BANK LIMITED", "company_number": "09446231",
+                         "company_status": "active", "company_type": "ltd", "date_of_creation": "2015-02-06"}]}
+    ident = CompaniesHouseProvider(api_key="k", fetch=_fetch(200, search))
+    assert ident.check_entitlement("t", Capability.COMPANY_IDENTITY)
+    r1 = ident.acquire(_req(subject_refs=("Monzo",)))
+    assert r1.ok and r1.artifacts[0].observations[0]["company_number"] == "09446231"
+    assert r1.artifacts[0].capability == Capability.COMPANY_IDENTITY
+
+    psc = {"items": [{"name": "Mr Tom Blomfield", "kind": "individual-person-with-significant-control",
+                      "natures_of_control": ["ownership-of-shares-25-to-50-percent"], "nationality": "British"}]}
+    bo = CompaniesHouseProvider(api_key="k", fetch=_fetch(200, psc))
+    r2 = bo.acquire(_req(cap=Capability.BENEFICIAL_OWNERSHIP, subject_refs=("09446231",)))
+    assert r2.ok and r2.artifacts[0].capability == Capability.BENEFICIAL_OWNERSHIP
+    assert r2.artifacts[0].observations[0]["name"] == "Mr Tom Blomfield"
+
+
+# ── Open Ownership (open, BENEFICIAL_OWNERSHIP) ──────────────────────────────────────────────────────────
+def test_open_ownership_open_and_normalizes():
+    body = {"results": [{"statementID": "oo-stmt-1", "name": "Globex Holdings", "statementType": "entityStatement",
+                         "interests": [{"type": "shareholding", "share": {"exact": 75}}], "jurisdiction": "gb"}]}
+    p = OpenOwnershipProvider(fetch=_fetch(200, body))
+    assert p.check_entitlement("t", Capability.BENEFICIAL_OWNERSHIP)  # open
+    res = p.acquire(_req(cap=Capability.BENEFICIAL_OWNERSHIP, subject_refs=("Globex",)))
+    assert res.ok and res.artifacts[0].observations[0]["statement_id"] == "oo-stmt-1"
+    assert res.artifacts[0].cost == 0.0 and "Open Ownership" in res.artifacts[0].license_scope
+
+
+# ── default_registry now carries the free Counterparty/Asset baseline ────────────────────────────────────
+def test_default_registry_includes_free_counterparty_providers():
+    reg = default_registry()  # no keys
+    assert reg.match(_req(cap=Capability.ASSET_IDENTITY))[0].provider_id == "openfigi"        # open, free
+    assert reg.match(_req(cap=Capability.BENEFICIAL_OWNERSHIP))[0].provider_id == "open_ownership"  # open, free
+    ids = {p.provider_id for p in reg.all()}
+    assert {"gleif", "sec_edgar", "openfigi", "open_ownership"} <= ids
+    # Companies House is BYO (keyed) → beneficial-ownership still resolves to the open provider without a key
+    keyed = default_registry(companies_house_key="k")
+    ch = [p.provider_id for p in keyed.match(_req(cap=Capability.BENEFICIAL_OWNERSHIP))]
+    assert "companies_house" in ch and "open_ownership" in ch
