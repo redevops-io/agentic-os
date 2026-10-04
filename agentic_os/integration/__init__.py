@@ -9,6 +9,7 @@ from .contracts import (
     Obligation, ObligationStatus, ReconciliationItem, Resource, ResolutionStatus, RetryPolicy, SyncState,
 )
 from .obligations import DischargeResult, ObligationEngine
+from .reconciliation import BalanceTxn, ReconciliationResult, reconcile
 from .provider import (
     CAPABILITIES, ActionResult, InMemoryIntegrationProvider, IntegrationError, IntegrationErrorCode,
     IntegrationProvider, ProviderHealth, is_known_capability,
@@ -24,4 +25,6 @@ __all__ = [
     "ActionResult", "ProviderHealth", "CAPABILITIES", "is_known_capability",
     # engine
     "ObligationEngine", "DischargeResult",
+    # reconciliation
+    "reconcile", "ReconciliationResult", "BalanceTxn",
 ]
