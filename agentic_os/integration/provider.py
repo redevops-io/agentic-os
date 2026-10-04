@@ -153,8 +153,10 @@ class InMemoryIntegrationProvider:
         res = ActionResult(ok=True, external_id=external_id, fields=dict(fields), idempotency_key=idempotency_key)
         if not self._drop:                                     # drop_writes → the silent failure
             self._store.setdefault(object_type, {})[external_id] = dict(fields)
-        if idempotency_key:
-            self._seen[idempotency_key] = res
+            # Only register the idempotency key when the effect actually LANDED. A correct idempotent endpoint
+            # does the same — so a replay after a silent drop re-attempts instead of returning a cached no-op.
+            if idempotency_key:
+                self._seen[idempotency_key] = res
         return res
 
     def create_object(self, object_type: str, fields: dict, *, idempotency_key: str = "") -> ActionResult:

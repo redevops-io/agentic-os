@@ -8,6 +8,11 @@ from .contracts import (
     CanonicalEntity, EntityType, ExceptionCategory, IntegrationException, IntegrationReceipt, Observation,
     Obligation, ObligationStatus, ReconciliationItem, Resource, ResolutionStatus, RetryPolicy, SyncState,
 )
+from .cursors import CursorState, CursorStore, detect_missed_events
+from .dlq import ExceptionStore, priority_score
+from .events import (
+    EventInbox, EventRejected, NormalizedEvent, RawEvent, hmac_signature, verify_hmac,
+)
 from .obligations import DischargeResult, ObligationEngine
 from .reconciliation import BalanceTxn, ReconciliationResult, reconcile
 from .provider import (
@@ -27,4 +32,8 @@ __all__ = [
     "ObligationEngine", "DischargeResult",
     # reconciliation
     "reconcile", "ReconciliationResult", "BalanceTxn",
+    # durable event ingestion (Phase 1)
+    "EventInbox", "RawEvent", "NormalizedEvent", "EventRejected", "hmac_signature", "verify_hmac",
+    "CursorStore", "CursorState", "detect_missed_events",
+    "ExceptionStore", "priority_score",
 ]
