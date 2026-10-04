@@ -1,0 +1,28 @@
+# Projects + Sidekick orchestration node — Projects UI + Sidekick + the parallel-workflow composer and
+# A2A/MCP external-agent interop, in ONE public image. No cores, no fleet, no database required.
+#
+#   docker compose up -d
+#   # Projects UI      → http://localhost:8290/
+#   # Workflows console → http://localhost:8290/workflows
+#
+# The image is public (GHCR); the enterprise overlay source is private (only the AGPL kernel is open).
+# Bring your own model endpoint (local or cloud) and only the external-agent / channel credentials you use.
+services:
+  projects-sidekick:
+    image: ghcr.io/redevops-io/agentic-projects-sidekick:${IMAGE_TAG:-stable}
+    pull_policy: always
+    ports:
+      - "${HTTP_PORT:-8290}:8290"
+    environment:
+      # ── BYO model (the one real dependency) — a local engine OR a cloud endpoint ──
+      - REDEVOPS_LLM_BASE_URL=${REDEVOPS_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      - REDEVOPS_LLM_MODEL=${REDEVOPS_LLM_MODEL:-qwen3.5}
+      # Optional cloud keys (e.g. for multi-vendor agent dispatch). Leave blank to stay fully local.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # ── Optional: external-agent endpoints + channel credentials, as needed ──
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+      - WHATSAPP_ACCESS_TOKEN=${WHATSAPP_ACCESS_TOKEN:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # lets the container reach a model on the host (ollama/llama.cpp)
+    restart: unless-stopped
