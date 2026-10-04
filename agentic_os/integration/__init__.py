@@ -13,8 +13,13 @@ from .dlq import ExceptionStore, priority_score
 from .events import (
     EventInbox, EventRejected, NormalizedEvent, RawEvent, hmac_signature, verify_hmac,
 )
+from .identity import EntityResolutionPlane, LineageEvent, Match, MergeRefused, resolve, search_matches
 from .obligations import DischargeResult, ObligationEngine
 from .reconciliation import BalanceTxn, ReconciliationResult, reconcile
+from .semantics import (
+    MetricDefinition, MetricMapping, MetricReading, SemanticRegistry, default_revenue_registry,
+    explain_metric_delta,
+)
 from .provider import (
     CAPABILITIES, ActionResult, InMemoryIntegrationProvider, IntegrationError, IntegrationErrorCode,
     IntegrationProvider, ProviderHealth, is_known_capability,
@@ -36,4 +41,9 @@ __all__ = [
     "EventInbox", "RawEvent", "NormalizedEvent", "EventRejected", "hmac_signature", "verify_hmac",
     "CursorStore", "CursorState", "detect_missed_events",
     "ExceptionStore", "priority_score",
+    # entity resolution (Phase 2)
+    "EntityResolutionPlane", "LineageEvent", "MergeRefused", "Match", "resolve", "search_matches",
+    # semantic registry (Phase 2)
+    "SemanticRegistry", "MetricDefinition", "MetricMapping", "MetricReading", "explain_metric_delta",
+    "default_revenue_registry",
 ]
