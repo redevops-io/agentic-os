@@ -78,3 +78,37 @@ def seed_providers(fixture: PayoutFixture) -> "tuple[InMemoryIntegrationProvider
     bank.create_object("deposit", {"id": f"dep_{fixture.payout_id}", "amount": fixture.bank_deposit,
                                     "currency": fixture.currency, "payout_ref": fixture.payout_id})
     return stripe, bank, accounting
+
+
+@dataclass
+class SupportCaseFixture:
+    ticket_id: str
+    email: str
+    zendesk: "InMemoryIntegrationProvider"
+    crm: "InMemoryIntegrationProvider"
+    billing: "InMemoryIntegrationProvider"
+    jira: "InMemoryIntegrationProvider"
+
+
+def synthetic_support_case(seed: int = 0, *, conflict: bool = False, email: str = "") -> SupportCaseFixture:
+    """A support ticket whose requester resolves to a CRM account + billing customer by email. ``conflict=True``
+    seeds TWO CRM contacts for the same email (should resolve CONFLICTED, not merge)."""
+    email = email or f"ops{seed}@acme.example"
+    zendesk = InMemoryIntegrationProvider("zendesk", capabilities=("support.ticket.read", "support.ticket.update"))
+    crm = InMemoryIntegrationProvider("salesforce", capabilities=("crm.contact.read",))
+    billing = InMemoryIntegrationProvider("stripe", capabilities=("billing.payment.read",))
+    jira = InMemoryIntegrationProvider("jira", capabilities=("object.create", "object.read"))
+
+    tid = f"tkt_{seed:04d}"
+    zendesk.create_object("ticket", {"id": tid, "requester_email": email, "status": "open",
+                                     "subject": "Export fails with 500", "priority": "high",
+                                     "description": "Nightly export 500s since the API upgrade."})
+    crm.create_object("contact", {"id": f"con_{seed}", "email": email, "name": "Dana Ops",
+                                  "account_id": f"acc_{seed}", "account_name": "ACME Inc", "tier": "enterprise",
+                                  "arr": 200000})
+    if conflict:
+        crm.create_object("contact", {"id": f"con_{seed}_dup", "email": email, "name": "D. Ops (dup)",
+                                      "account_id": f"acc_{seed}_other", "tier": "smb", "arr": 1200})
+    billing.create_object("customer", {"id": f"cus_{seed}", "email": email, "status": "active", "mrr": 5000,
+                                       "past_due": False})
+    return SupportCaseFixture(ticket_id=tid, email=email, zendesk=zendesk, crm=crm, billing=billing, jira=jira)
