@@ -171,6 +171,11 @@ class Node:
     status: NodeState = NodeState.PENDING
     attempts: int = 0
     idempotency_key: str = ""
+    # Resource-boundary tenancy (Phase 3): the id of the resource this node acts on, resolved through the
+    # kernel ResourceRegistry to its owning tenant. "" = no named resource → single-tenant default (owner
+    # authority); a resource owned by another tenant runs only under an explicit delegation. Carried from the
+    # bound capability by the compiler where set; the tenancy overlay (enterprise) enforces it at dispatch.
+    resource: str = ""
     cosmetic_inputs: list[str] = field(default_factory=list)  # $from_world inputs whose disagreement is non-material
     result: dict[str, Any] | None = None
     cost: NodeCost = field(default_factory=NodeCost)
@@ -418,6 +423,11 @@ class Mission:
     intent_content_hash: str = ""
     evidence_refs: list[str] = field(default_factory=list)
     context_epoch_id: str = ""              # the ContextEpoch (ContextView) this mission's plan is pinned to
+    # Identity / tenancy (Phase 3, optional): the IdentityPlane Principal this mission runs as, and the tenant
+    # isolation boundary for its checks. None/"" = legacy policy_refs behaviour; the tenancy overlay (enterprise)
+    # reads these. Optional kernel fields so one Mission contract serves both the single- and multi-tenant planes.
+    principal: Any | None = None
+    tenant: str = ""
     id: str = field(default_factory=lambda: new_id("mission"))
     created_at: float = field(default_factory=now)
     updated_at: float = field(default_factory=now)
