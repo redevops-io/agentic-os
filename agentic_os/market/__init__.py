@@ -32,6 +32,10 @@ from .resolution import (
     MatchRelationship, MatchThresholds, NormalizedPrice, PriceComponents, PricePosition, ProductAttributes,
     ProductMatch, normalize_price, price_position, resolve_listings, resolve_product,
 )
+from .marketplace import (
+    CompetitorOffer, InMemoryMarketObservationProvider, MarketObservationProvider, PriceRecommendation,
+    PricingContext, RelativePosition, recommend_price_response, relative_position,
+)
 
 __all__ = [
     # evidence contracts
@@ -57,4 +61,7 @@ __all__ = [
     # product/offer resolution + unit-economics normalization (Phase 2)
     "ProductAttributes", "ProductMatch", "MatchRelationship", "MatchThresholds", "resolve_product",
     "resolve_listings", "PriceComponents", "NormalizedPrice", "normalize_price", "PricePosition", "price_position",
+    # marketplace observation + relative position + recommend-only price response (Phase 3)
+    "MarketObservationProvider", "InMemoryMarketObservationProvider", "RelativePosition", "relative_position",
+    "PricingContext", "CompetitorOffer", "PriceRecommendation", "recommend_price_response",
 ]
