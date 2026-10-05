@@ -40,6 +40,7 @@ from .strategy import (
     PRIMITIVE_TYPES, SIGNIFICANCE_ORDER, CrossCompetitorStrategy, StrategyPrimitive, SurvivalMetrics,
     classify_change, cross_competitor_strategies, extract_primitives, survival_metrics,
 )
+from .funnel import FunnelChange, FunnelHistory, diff_funnels
 
 __all__ = [
     # evidence contracts
@@ -71,4 +72,6 @@ __all__ = [
     # strategy primitives + survival/weak-signal metrics over history (Phase 4)
     "StrategyPrimitive", "PRIMITIVE_TYPES", "extract_primitives", "classify_change", "SIGNIFICANCE_ORDER",
     "SurvivalMetrics", "survival_metrics", "CrossCompetitorStrategy", "cross_competitor_strategies",
+    # funnel versioning + path-change detection (Phase 5)
+    "FunnelChange", "FunnelHistory", "diff_funnels",
 ]
