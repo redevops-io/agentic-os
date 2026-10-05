@@ -44,6 +44,9 @@ from .funnel import FunnelChange, FunnelHistory, diff_funnels
 from .experiment_design import (
     CommercialExperiment, CommercialHypothesis, ExperimentEvaluation, evaluate, freeze_experiment,
 )
+from .outcomes_join import (
+    FirstPartyLedger, FirstPartyMetric, MeasuredOutcome, conversion_delta, measure_experiment,
+)
 
 __all__ = [
     # evidence contracts
@@ -79,4 +82,6 @@ __all__ = [
     "FunnelChange", "FunnelHistory", "diff_funnels",
     # commercial hypothesis + frozen-evidence A/B experiment (Phase 6)
     "CommercialHypothesis", "CommercialExperiment", "freeze_experiment", "evaluate", "ExperimentEvaluation",
+    # first-party outcome join — our metrics decide (Phase 7)
+    "FirstPartyMetric", "FirstPartyLedger", "MeasuredOutcome", "measure_experiment", "conversion_delta",
 ]
