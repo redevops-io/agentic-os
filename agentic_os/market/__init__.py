@@ -50,6 +50,7 @@ from .outcomes_join import (
 from .execution_governed import (
     CommerceSurfaceProvider, PriceChangeResult, PricingPolicy, apply_price_change,
 )
+from .strategy_memory import StrategyBelief, StrategyMemory
 
 __all__ = [
     # evidence contracts
@@ -89,4 +90,6 @@ __all__ = [
     "FirstPartyMetric", "FirstPartyLedger", "MeasuredOutcome", "measure_experiment", "conversion_delta",
     # governed commerce execution — recommend→approve→execute→verify (Phase 8)
     "CommerceSurfaceProvider", "PricingPolicy", "PriceChangeResult", "apply_price_change",
+    # strategy → outcome learning memory; B1/B2/B3 kept separate (Phase 9)
+    "StrategyBelief", "StrategyMemory",
 ]
