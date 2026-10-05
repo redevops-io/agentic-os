@@ -1,5 +1,12 @@
 """Mission Runtime — the kernel of the Agentic OS.
 
+CANONICAL KERNEL (reconciliation 2026-10-05): this public module is the single source of truth for the Mission
+kernel. An enterprise copy (``agentic_os_enterprise.mission``) had forked and drifted — equal on most modules,
+ahead here on the execution breadth (runtime/executor/merge/compiler), ahead there only on multi-tenancy. The
+contract is unified by making THIS ``Node`` the superset (it carries both ``cosmetic_inputs`` and the Phase-3
+``resource`` tenancy field), so both planes share one ``types``; the enterprise side re-exports this kernel and
+keeps only its tenancy overlay (``tenant_runtime``). Change the contract here, not there.
+
 Layered like a database engine (see docs/architecture.md):
 
     Mission Planner   (what should happen?)   -> ExecutionIntent   [LLM, logical]
