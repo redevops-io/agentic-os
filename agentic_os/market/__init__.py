@@ -36,6 +36,10 @@ from .marketplace import (
     CompetitorOffer, InMemoryMarketObservationProvider, MarketObservationProvider, PriceRecommendation,
     PricingContext, RelativePosition, recommend_price_response, relative_position,
 )
+from .strategy import (
+    PRIMITIVE_TYPES, SIGNIFICANCE_ORDER, CrossCompetitorStrategy, StrategyPrimitive, SurvivalMetrics,
+    classify_change, cross_competitor_strategies, extract_primitives, survival_metrics,
+)
 
 __all__ = [
     # evidence contracts
@@ -64,4 +68,7 @@ __all__ = [
     # marketplace observation + relative position + recommend-only price response (Phase 3)
     "MarketObservationProvider", "InMemoryMarketObservationProvider", "RelativePosition", "relative_position",
     "PricingContext", "CompetitorOffer", "PriceRecommendation", "recommend_price_response",
+    # strategy primitives + survival/weak-signal metrics over history (Phase 4)
+    "StrategyPrimitive", "PRIMITIVE_TYPES", "extract_primitives", "classify_change", "SIGNIFICANCE_ORDER",
+    "SurvivalMetrics", "survival_metrics", "CrossCompetitorStrategy", "cross_competitor_strategies",
 ]
