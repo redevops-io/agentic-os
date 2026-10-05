@@ -62,6 +62,7 @@ class ExceptionCategory(str, Enum):
     ACTION_FAILED = "action_failed"                     # the write itself errored
     IDENTITY_CONFLICT = "identity_conflict"
     RECONCILIATION_VARIANCE = "reconciliation_variance"
+    SYNC_CONFLICT = "sync_conflict"                     # systems disagree on a field; no safe convergent value
 
 
 # ── resource + evidence ──────────────────────────────────────────────────────────────────────────────────

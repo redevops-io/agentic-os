@@ -16,6 +16,7 @@ from .events import (
 from .identity import EntityResolutionPlane, LineageEvent, Match, MergeRefused, resolve, search_matches
 from .obligations import DischargeResult, ObligationEngine
 from .reconciliation import BalanceTxn, ReconciliationResult, reconcile
+from .sync import ConvergeTarget, Report, SyncDecision, converge, plan_sync
 from .semantics import (
     MetricDefinition, MetricMapping, MetricReading, SemanticRegistry, default_revenue_registry,
     explain_metric_delta,
@@ -37,6 +38,8 @@ __all__ = [
     "ObligationEngine", "DischargeResult",
     # reconciliation
     "reconcile", "ReconciliationResult", "BalanceTxn",
+    # bidirectional sync (§10)
+    "plan_sync", "converge", "Report", "SyncDecision", "ConvergeTarget",
     # durable event ingestion (Phase 1)
     "EventInbox", "RawEvent", "NormalizedEvent", "EventRejected", "hmac_signature", "verify_hmac",
     "CursorStore", "CursorState", "detect_missed_events",
