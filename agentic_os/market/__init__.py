@@ -28,6 +28,10 @@ from .history import (
     ENTITY_TYPES, SURFACE_TYPES, FunnelObservation, MarketChange, MarketEntity, MarketObservation,
     MarketSurface, ObservationHistory, OfferObservation, diff_state,
 )
+from .resolution import (
+    MatchRelationship, MatchThresholds, NormalizedPrice, PriceComponents, PricePosition, ProductAttributes,
+    ProductMatch, normalize_price, price_position, resolve_listings, resolve_product,
+)
 
 __all__ = [
     # evidence contracts
@@ -50,4 +54,7 @@ __all__ = [
     # persistent immutable market model (Market & Funnel Intelligence, Phase 1)
     "MarketEntity", "MarketSurface", "MarketObservation", "OfferObservation", "FunnelObservation",
     "MarketChange", "ObservationHistory", "diff_state", "ENTITY_TYPES", "SURFACE_TYPES",
+    # product/offer resolution + unit-economics normalization (Phase 2)
+    "ProductAttributes", "ProductMatch", "MatchRelationship", "MatchThresholds", "resolve_product",
+    "resolve_listings", "PriceComponents", "NormalizedPrice", "normalize_price", "PricePosition", "price_position",
 ]
