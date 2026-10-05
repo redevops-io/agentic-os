@@ -41,6 +41,9 @@ from .strategy import (
     classify_change, cross_competitor_strategies, extract_primitives, survival_metrics,
 )
 from .funnel import FunnelChange, FunnelHistory, diff_funnels
+from .experiment_design import (
+    CommercialExperiment, CommercialHypothesis, ExperimentEvaluation, evaluate, freeze_experiment,
+)
 
 __all__ = [
     # evidence contracts
@@ -74,4 +77,6 @@ __all__ = [
     "SurvivalMetrics", "survival_metrics", "CrossCompetitorStrategy", "cross_competitor_strategies",
     # funnel versioning + path-change detection (Phase 5)
     "FunnelChange", "FunnelHistory", "diff_funnels",
+    # commercial hypothesis + frozen-evidence A/B experiment (Phase 6)
+    "CommercialHypothesis", "CommercialExperiment", "freeze_experiment", "evaluate", "ExperimentEvaluation",
 ]
