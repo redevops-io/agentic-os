@@ -24,6 +24,10 @@ from .opportunities import match_opportunities
 from .experiments import ChangeWriter, plan_experiments, proposed
 from .execution import DryRunExecutor, ExecutionResult, ExperimentExecutor, ExperimentQueue
 from .learning import PatternPrior, learn_priors, reweight_opportunities
+from .history import (
+    ENTITY_TYPES, SURFACE_TYPES, FunnelObservation, MarketChange, MarketEntity, MarketObservation,
+    MarketSurface, ObservationHistory, OfferObservation, diff_state,
+)
 
 __all__ = [
     # evidence contracts
@@ -43,4 +47,7 @@ __all__ = [
     "Experiment", "ExperimentOutcome", "plan_experiments", "proposed", "ChangeWriter",
     "ExperimentQueue", "ExperimentExecutor", "DryRunExecutor", "ExecutionResult",
     "learn_priors", "reweight_opportunities", "PatternPrior",
+    # persistent immutable market model (Market & Funnel Intelligence, Phase 1)
+    "MarketEntity", "MarketSurface", "MarketObservation", "OfferObservation", "FunnelObservation",
+    "MarketChange", "ObservationHistory", "diff_state", "ENTITY_TYPES", "SURFACE_TYPES",
 ]
