@@ -16,6 +16,7 @@ _PRIORITY: dict[ExceptionCategory, int] = {
     ExceptionCategory.RECONCILIATION_VARIANCE: 100,
     ExceptionCategory.OBLIGATION_OVERDUE: 90,
     ExceptionCategory.OBLIGATION_UNSATISFIED: 80,
+    ExceptionCategory.SYNC_CONFLICT: 75,
     ExceptionCategory.OBLIGATION_CONFLICT: 70,
     ExceptionCategory.IDENTITY_CONFLICT: 60,
     ExceptionCategory.ACTION_FAILED: 50,
