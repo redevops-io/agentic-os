@@ -47,6 +47,9 @@ from .experiment_design import (
 from .outcomes_join import (
     FirstPartyLedger, FirstPartyMetric, MeasuredOutcome, conversion_delta, measure_experiment,
 )
+from .execution_governed import (
+    CommerceSurfaceProvider, PriceChangeResult, PricingPolicy, apply_price_change,
+)
 
 __all__ = [
     # evidence contracts
@@ -84,4 +87,6 @@ __all__ = [
     "CommercialHypothesis", "CommercialExperiment", "freeze_experiment", "evaluate", "ExperimentEvaluation",
     # first-party outcome join — our metrics decide (Phase 7)
     "FirstPartyMetric", "FirstPartyLedger", "MeasuredOutcome", "measure_experiment", "conversion_delta",
+    # governed commerce execution — recommend→approve→execute→verify (Phase 8)
+    "CommerceSurfaceProvider", "PricingPolicy", "PriceChangeResult", "apply_price_change",
 ]
