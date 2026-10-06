@@ -24,6 +24,8 @@ from .methodology import (
     states_from_conditions, validate_methodology,
 )
 from .library import builtin_names, get_methodology, meddicc, spiced
+from .blockers import Blocker, BlockerType, InterventionKind, infer_blockers
+from .hypotheses import ClosingHypothesis, hypothesis_for, plan_hypotheses
 
 __all__ = [
     "Claim", "ClaimStatus",
@@ -34,4 +36,6 @@ __all__ = [
     "ClosingMethodology", "ConditionSpec", "MethodologyReadiness",
     "compile_methodology", "validate_methodology", "assess_methodology", "states_from_conditions",
     "meddicc", "spiced", "get_methodology", "builtin_names",
+    "Blocker", "BlockerType", "InterventionKind", "infer_blockers",
+    "ClosingHypothesis", "hypothesis_for", "plan_hypotheses",
 ]
