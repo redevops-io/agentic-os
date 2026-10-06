@@ -17,6 +17,7 @@ from .score import (
     to_priority_candidate,
 )
 from .sweep import SweepChange, SweepResult, diff_sweeps, render_brief, run_sweep
+from .learn import DiscoveryPriors, ValidationOutcome, apply_priors, calibrate, result_from_usage
 from .validate import ValidationError, ValidationMission, approve, plan_validation, reject
 from .dedup import IndependenceReport, assess_independence
 from .extract import extract_pain
@@ -34,5 +35,6 @@ __all__ = [
     "to_priority_candidate", "capability_leverage",
     "run_sweep", "SweepResult", "diff_sweeps", "SweepChange", "render_brief",
     "plan_validation", "ValidationMission", "approve", "reject", "ValidationError",
+    "ValidationOutcome", "result_from_usage", "calibrate", "DiscoveryPriors", "apply_priors",
     "SearchUniverse", "DEFAULT_UNIVERSE", "APPLICATION_VOCAB", "WORKFLOW_VERBS", "PAIN_MARKERS",
 ]
