@@ -19,6 +19,11 @@ from .conditions import (
     ConditionState, DealCondition, DEFAULT_MAX_AGE_MS, EvidenceSignal, NORMALIZED_CONDITIONS,
     assess_condition, derive_state,
 )
+from .methodology import (
+    ClosingMethodology, ConditionSpec, MethodologyReadiness, assess_methodology, compile_methodology,
+    states_from_conditions, validate_methodology,
+)
+from .library import builtin_names, get_methodology, meddicc, spiced
 
 __all__ = [
     "Claim", "ClaimStatus",
@@ -26,4 +31,7 @@ __all__ = [
     "CommitteeRole", "RoleStatus", "CommitteeMember", "BuyingCommittee",
     "ConditionState", "DealCondition", "EvidenceSignal", "NORMALIZED_CONDITIONS", "DEFAULT_MAX_AGE_MS",
     "assess_condition", "derive_state",
+    "ClosingMethodology", "ConditionSpec", "MethodologyReadiness",
+    "compile_methodology", "validate_methodology", "assess_methodology", "states_from_conditions",
+    "meddicc", "spiced", "get_methodology", "builtin_names",
 ]
