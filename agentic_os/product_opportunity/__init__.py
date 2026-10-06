@@ -8,6 +8,7 @@ sweeps, validation and outcome-learning are later phases; live source clients ar
 consume the existing ``agent_gateway.social`` provider seam (official-API / permitted access only).
 """
 from .contracts import AUTOMATION_FIT, SOURCES, PainObservation, WorkflowPain
+from .cluster import WorkflowCluster, cluster_pains, workflow_signature
 from .dedup import IndependenceReport, assess_independence
 from .extract import extract_pain
 from .vocabulary import (
@@ -18,5 +19,6 @@ __all__ = [
     "PainObservation", "WorkflowPain", "SOURCES", "AUTOMATION_FIT",
     "extract_pain",
     "assess_independence", "IndependenceReport",
+    "cluster_pains", "WorkflowCluster", "workflow_signature",
     "SearchUniverse", "DEFAULT_UNIVERSE", "APPLICATION_VOCAB", "WORKFLOW_VERBS", "PAIN_MARKERS",
 ]
