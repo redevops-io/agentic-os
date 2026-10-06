@@ -29,6 +29,7 @@ PAIN_MARKERS: Tuple[str, ...] = (
     "spends hours", "spend hours", "we built a spreadsheet", "keeps breaking", "how do you keep", "in sync",
     "we have to check", "nobody remembers", "fall through the cracks", "i wish", "we pay someone", "we built our own",
     "by hand", "tedious", "repetitive", "copy-paste", "copy paste", "double entry", "duplicate entry",
+    "manual", "hours", "nightmare", "painful", "waste of time", "re-key", "rekey",
 )
 
 FREQUENCY_MARKERS = {

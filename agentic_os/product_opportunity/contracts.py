@@ -53,6 +53,7 @@ class PainObservation(BusinessObject):
     willingness_to_pay_signal: bool = False
     cross_app: bool = False              # carries state/context across ≥2 apps (the core signal)
 
+    text_tokens: Tuple[str, ...] = ()    # normalized RAW-text tokens — for repost/near-duplicate detection
     evidence_strength: float = 0.0       # 0..1, honest proxy (first-person + specificity + frequency + workaround)
     extraction_confidence: float = 0.0
     extraction_version: str = "1"
