@@ -25,6 +25,10 @@ spec:
             - { name: POSTGRES_USER, value: redevops }
             - { name: POSTGRES_PASSWORD, value: redevops }
             - { name: POSTGRES_DB, value: redevops_rag }
+            # Point PGDATA at a SUBDIRECTORY of the mounted volume. Most dynamically-provisioned PVs are
+            # ext4-formatted and ship a lost+found at the mount root, which makes `initdb` refuse to use the
+            # mount root directly ("directory exists but is not empty"). initdb into an empty subdir instead.
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
           ports:
             - { name: postgres, containerPort: 5432 }
           readinessProbe:
