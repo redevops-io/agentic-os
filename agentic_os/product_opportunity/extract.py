@@ -18,8 +18,8 @@ from ..agent_gateway.social.contracts import SocialObservation
 from ..integrations.business.contracts import Provenance
 from .contracts import PainObservation
 from .vocabulary import (
-    CROSS_APP_MARKERS, FREQUENCY_MARKERS, PAIN_MARKERS, SearchUniverse, WORKAROUND_MARKERS, WORKFLOW_VERBS,
-    WTP_MARKERS, DEFAULT_UNIVERSE,
+    ACTOR_MARKERS, CONSEQUENCE_MARKERS, CROSS_APP_MARKERS, FREQUENCY_MARKERS, PAIN_MARKERS, SearchUniverse,
+    WORKAROUND_MARKERS, WORKFLOW_VERBS, WTP_MARKERS, DEFAULT_UNIVERSE,
 )
 
 _FIRST_PERSON = ("i ", "i'", "we ", "we'", "our team", "our ", "my ")
@@ -57,6 +57,8 @@ def extract_pain(obs: SocialObservation, *, universe: SearchUniverse = DEFAULT_U
     frequency = _frequency(text)
     workaround = next((w for w in WORKAROUND_MARKERS if w in text), "")
     wtp = any(m in text for m in WTP_MARKERS)
+    actor = next((role for role, markers in ACTOR_MARKERS.items() if any(m in text for m in markers)), "")
+    consequence = tuple(c for c, markers in CONSEQUENCE_MARKERS.items() if any(m in text for m in markers))
 
     strength = min(1.0, round(
         0.3 * first_person + 0.2 * min(1, len(apps)) + 0.15 * cross_app + 0.15 * bool(frequency)
@@ -68,7 +70,7 @@ def extract_pain(obs: SocialObservation, *, universe: SearchUniverse = DEFAULT_U
     return PainObservation(
         prov=prov, source=obs.provider, source_id=obs.source_ref, source_url=obs.provider_fields.get("url", ""),
         author_hash=_author_hash(obs.author_ref), community_or_topic=obs.provider_fields.get("community", ""),
-        published_at=obs.published_at,
+        published_at=obs.published_at, actor=actor, consequence=consequence,
         applications_mentioned=apps, current_workflow=verbs,
         manual_steps=tuple(p for p in pains if p in ("manually", "by hand", "copy-paste", "copy paste")),
         failure_or_pain=pains[0] if pains else "", workaround=workaround, frequency_hint=frequency,

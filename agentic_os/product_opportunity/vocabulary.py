@@ -45,6 +45,28 @@ WTP_MARKERS = ("we pay", "paying for", "pay someone", "hired", "subscription", "
 # "carrying state across apps" phrasing — the cross-app friction signal even when only one app is named
 CROSS_APP_MARKERS = ("from", "into", "between", "sync", "copy", "export", "import", "re-key", "rekey", "match")
 
+# actor inference — the role doing the work (first match wins); keeps the opportunity grounded in WHO hurts
+ACTOR_MARKERS = {
+    "ecommerce_operator": ("amazon seller", "shopify", "ecommerce", "e-commerce", "store owner", "seller", "marketplace"),
+    "bookkeeper": ("bookkeeper", "accountant", "accounting", "bookkeeping"),
+    "sales_ops": ("sales ops", "sales operations", "pipeline", "crm admin", "revops"),
+    "support_agent": ("support team", "helpdesk", "support tickets", "customer support", "csm"),
+    "marketer": ("marketing team", "campaign", "marketing ops", "ad account"),
+    "it_admin": ("it admin", "sysadmin", "it team", "msp", "provisioning"),
+    "developer": ("developer", "engineer", "devops", "our dev"),
+    "founder": ("founder", "solopreneur", "small business owner", "running my business"),
+}
+
+# business consequence markers (all matching are recorded)
+CONSEQUENCE_MARKERS = {
+    "lost_sales": ("lost sales", "lose sales", "losing sales", "missed sales", "lost revenue", "fall through the cracks"),
+    "margin_pressure": ("margin", "undercut", "too expensive"),
+    "churn": ("churn", "cancel", "lost customer", "customers leave"),
+    "compliance_risk": ("compliance", "audit", "gdpr", "regulat"),
+    "errors": ("error", "mistake", "wrong", "mismatch", "inconsistent"),
+    "time_cost": ("hours", "time-consuming", "slow", "all day", "takes forever"),
+}
+
 
 @dataclass(frozen=True)
 class SearchUniverse:
