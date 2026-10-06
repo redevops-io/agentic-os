@@ -17,6 +17,7 @@ from .score import (
     to_priority_candidate,
 )
 from .sweep import SweepChange, SweepResult, diff_sweeps, render_brief, run_sweep
+from .validate import ValidationError, ValidationMission, approve, plan_validation, reject
 from .dedup import IndependenceReport, assess_independence
 from .extract import extract_pain
 from .vocabulary import (
@@ -32,5 +33,6 @@ __all__ = [
     "score_opportunity", "OpportunityScore", "build_opportunity", "ProductOpportunity",
     "to_priority_candidate", "capability_leverage",
     "run_sweep", "SweepResult", "diff_sweeps", "SweepChange", "render_brief",
+    "plan_validation", "ValidationMission", "approve", "reject", "ValidationError",
     "SearchUniverse", "DEFAULT_UNIVERSE", "APPLICATION_VOCAB", "WORKFLOW_VERBS", "PAIN_MARKERS",
 ]
