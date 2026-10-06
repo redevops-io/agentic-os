@@ -41,6 +41,7 @@ from .learn import (
 from .pilot import (
     DealEvaluation, LabeledDeal, PilotScorecard, evaluate_deal, render_scorecard, run_pilot,
 )
+from .automation import AutomationBounds, AutomationDecision, AutomationGovernor, DEFAULT_ALLOWED
 
 __all__ = [
     "Claim", "ClaimStatus",
@@ -61,4 +62,5 @@ __all__ = [
     "AttributionRung", "ClosingInterventionOutcome", "classify_rung", "attribution_strength",
     "ClosingPriors", "calibrate", "apply_priors", "InterventionLedger",
     "LabeledDeal", "DealEvaluation", "PilotScorecard", "evaluate_deal", "run_pilot", "render_scorecard",
+    "AutomationBounds", "AutomationDecision", "AutomationGovernor", "DEFAULT_ALLOWED",
 ]
