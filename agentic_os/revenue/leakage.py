@@ -29,6 +29,7 @@ class LeakageType(str, Enum):
     EXPANSION_OPPORTUNITY = "EXPANSION_OPPORTUNITY"
     ACCOUNT_REENGAGEMENT_SIGNAL = "ACCOUNT_REENGAGEMENT_SIGNAL"
     RENEWAL_RISK = "RENEWAL_RISK"
+    AR_AGING = "AR_AGING"
 
 
 @dataclass(frozen=True)
@@ -173,6 +174,42 @@ def renewal_risk(subject: str, *, factors, min_factors: int = 2, days_to_renewal
         proposed_action="Open a renewal-risk mitigation (multiple churn factors present)",
         required_capability="revenue.renewal.mitigate", amount_cents=amount_cents,
         detail="factors: " + ", ".join(sorted(present)), observation_refs=observation_refs)
+
+
+def _aging_band(days: float) -> str:
+    """Standard AR aging buckets."""
+    if days <= 30:
+        return "1-30"
+    if days <= 60:
+        return "31-60"
+    if days <= 90:
+        return "61-90"
+    return "90+"
+
+
+def ar_aging(subject: str, *, due_at_ms: int, now_ms: int, amount_cents: int, paid: bool,
+             dunning_scheduled: bool, grace_days: int = 1,
+             observation_refs: Tuple[str, ...] = ()) -> Optional[RevenueLeakage]:
+    """§30 adjacent opportunity (post-close receivables): an invoice that is past due, unpaid, and has no
+    dunning / collection step scheduled is recoverable revenue leaking. Abstains on a paid invoice, one not
+    yet past the grace window, or one a collection step already covers — so it never double-duns. Urgency and
+    confidence rise with the aging bucket; a hard ledger fact, so confidence starts high."""
+    if paid or dunning_scheduled:
+        return None
+    age_days = (now_ms - due_at_ms) / _DAY_MS
+    if age_days <= grace_days:
+        return None
+    band = _aging_band(age_days)
+    # older buckets are both more urgent and (empirically) less collectable but more clearly a real leak
+    urgency = round(min(1.0, 0.4 + 0.2 * ("1-30 31-60 61-90 90+".split().index(band))), 3)
+    return RevenueLeakage(
+        LeakageType.AR_AGING, subject=subject, expected_value=_value(amount_cents),
+        confidence=round(min(0.95, 0.8 + 0.05 * "1-30 31-60 61-90 90+".split().index(band)), 3),
+        urgency=urgency,
+        proposed_action=f"Initiate collection / dunning on the overdue invoice ({int(age_days)}d, {band} bucket)",
+        required_capability="billing.dunning.schedule", amount_cents=amount_cents,
+        detail=f"invoice {int(age_days)}d overdue ({band} aging bucket), unpaid, no dunning scheduled",
+        observation_refs=observation_refs)
 
 
 def from_leakage(leak: RevenueLeakage, *, source_app: str = "revenue") -> InterventionCandidate:
