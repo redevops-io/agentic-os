@@ -79,6 +79,8 @@ class ClosingHypothesis(BusinessObject):
     mechanism: str = ""
     expected_consequence: str = ""
     confidence: float = 0.0
+    impact: float = 0.0                           # carried from the blocker (0..1, threat to the close)
+    urgency: float = 0.0                          # carried from the blocker (0..1, time-sensitivity)
     supporting_evidence: Tuple[str, ...] = ()
     contradicting_evidence: Tuple[str, ...] = ()
     candidate_interventions: Tuple[InterventionKind, ...] = ()
@@ -109,7 +111,8 @@ def hypothesis_for(blocker: Blocker, *, provider: str = "deal_closing") -> Closi
         deal_ref=blocker.deal_ref, blocker_type=blocker.blocker_type, subject=blocker.subject,
         observation=blocker.detail or f"{blocker.subject} is blocking",
         inferred_cause=blocker.blocker_type.value, mechanism=mechanism, expected_consequence=consequence,
-        confidence=round(confidence, 4), supporting_evidence=blocker.supporting_evidence,
+        confidence=round(confidence, 4), impact=blocker.impact, urgency=blocker.urgency,
+        supporting_evidence=blocker.supporting_evidence,
         contradicting_evidence=contra, candidate_interventions=blocker.candidate_interventions,
         verification=verification)
 
