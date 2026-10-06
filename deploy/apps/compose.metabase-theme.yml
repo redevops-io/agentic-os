@@ -1,0 +1,28 @@
+# Opt-in overlay: front Metabase with the ReDevOps accessibility + brand theme proxy.
+#
+#   docker compose -f compose.yml -f compose.metabase-theme.yml up -d
+#
+# Metabase's native whitelabel / custom-CSS is an Enterprise-only feature, so the OSS image we ship can't be
+# themed through the product. This overlay injects a small stylesheet at the edge: an nginx sidecar proxies
+# Metabase and rewrites its HTML shell to load metabase-theme/theme.css (ReDevOps teal accent + the WCAG fixes
+# the UI audit flagged on the sign-in screen). The published Metabase port is served THROUGH the proxy; drop
+# the overlay and the stack is byte-for-byte the default again.
+services:
+  metabase:
+    # stop publishing Metabase directly on the host — reach it via the theme proxy instead.
+    # `!reset` is required: a plain `ports: []` is MERGED with the base list (a no-op), so without
+    # this both services would try to bind the same host port.
+    ports: !reset []
+
+  metabase-theme:
+    image: nginx:alpine
+    restart: unless-stopped
+    networks: [apps]
+    depends_on: [metabase]
+    environment:
+      - MB_UPSTREAM=metabase:3000
+    ports:
+      - "${METABASE_PORT:-3001}:3000"      # the same host port users already expect, now themed
+    volumes:
+      - ./metabase-theme/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./metabase-theme/theme.css:/theme/theme.css:ro
