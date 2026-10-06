@@ -38,6 +38,9 @@ from .learn import (
     AttributionRung, ClosingInterventionOutcome, ClosingPriors, InterventionLedger, apply_priors,
     attribution_strength, calibrate, classify_rung,
 )
+from .pilot import (
+    DealEvaluation, LabeledDeal, PilotScorecard, evaluate_deal, render_scorecard, run_pilot,
+)
 
 __all__ = [
     "Claim", "ClaimStatus",
@@ -57,4 +60,5 @@ __all__ = [
     "ClosePlanMissionSpec", "to_mission_spec", "handoff",
     "AttributionRung", "ClosingInterventionOutcome", "classify_rung", "attribution_strength",
     "ClosingPriors", "calibrate", "apply_priors", "InterventionLedger",
+    "LabeledDeal", "DealEvaluation", "PilotScorecard", "evaluate_deal", "run_pilot", "render_scorecard",
 ]
