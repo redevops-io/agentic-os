@@ -26,6 +26,14 @@ from .methodology import (
 from .library import builtin_names, get_methodology, meddicc, spiced
 from .blockers import Blocker, BlockerType, InterventionKind, infer_blockers
 from .hypotheses import ClosingHypothesis, hypothesis_for, plan_hypotheses
+from .autonomy import ActionDisposition, AutonomyLevel, disposition, risk_tier_for
+from .candidates import (
+    CandidateAction, ScoredAction, best_action, candidates_from_hypothesis, no_action, score_actions,
+    to_priority_candidate,
+)
+from .close_plan import (
+    ClosePlanMissionSpec, DealClosePlan, PlannedStep, compile_close_plan, handoff, to_mission_spec,
+)
 
 __all__ = [
     "Claim", "ClaimStatus",
@@ -38,4 +46,9 @@ __all__ = [
     "meddicc", "spiced", "get_methodology", "builtin_names",
     "Blocker", "BlockerType", "InterventionKind", "infer_blockers",
     "ClosingHypothesis", "hypothesis_for", "plan_hypotheses",
+    "AutonomyLevel", "ActionDisposition", "disposition", "risk_tier_for",
+    "CandidateAction", "ScoredAction", "no_action", "candidates_from_hypothesis",
+    "to_priority_candidate", "score_actions", "best_action",
+    "DealClosePlan", "PlannedStep", "compile_close_plan",
+    "ClosePlanMissionSpec", "to_mission_spec", "handoff",
 ]
