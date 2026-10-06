@@ -16,6 +16,7 @@ from .score import (
     OpportunityScore, ProductOpportunity, build_opportunity, capability_leverage, score_opportunity,
     to_priority_candidate,
 )
+from .sweep import SweepChange, SweepResult, diff_sweeps, render_brief, run_sweep
 from .dedup import IndependenceReport, assess_independence
 from .extract import extract_pain
 from .vocabulary import (
@@ -30,5 +31,6 @@ __all__ = [
     "map_coverage", "CapabilityCoverage", "CapabilityCatalog", "WorkflowTemplate", "default_catalog",
     "score_opportunity", "OpportunityScore", "build_opportunity", "ProductOpportunity",
     "to_priority_candidate", "capability_leverage",
+    "run_sweep", "SweepResult", "diff_sweeps", "SweepChange", "render_brief",
     "SearchUniverse", "DEFAULT_UNIVERSE", "APPLICATION_VOCAB", "WORKFLOW_VERBS", "PAIN_MARKERS",
 ]

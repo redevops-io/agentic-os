@@ -12,6 +12,7 @@ our own validation.
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Optional
 
 from ..agent_gateway.social.contracts import SocialObservation
@@ -75,5 +76,6 @@ def extract_pain(obs: SocialObservation, *, universe: SearchUniverse = DEFAULT_U
         manual_steps=tuple(p for p in pains if p in ("manually", "by hand", "copy-paste", "copy paste")),
         failure_or_pain=pains[0] if pains else "", workaround=workaround, frequency_hint=frequency,
         willingness_to_pay_signal=wtp, cross_app=cross_app,
+        text_tokens=tuple(sorted(set(re.sub(r"[^a-z0-9 ]", " ", text).split()))),
         evidence_strength=strength, extraction_confidence=round(0.4 + 0.5 * first_person + 0.1 * bool(apps), 4),
         extraction_version=extraction_version)

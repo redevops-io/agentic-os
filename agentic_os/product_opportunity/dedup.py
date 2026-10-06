@@ -71,18 +71,15 @@ def assess_independence(observations: Sequence[PainObservation], *,
     obs = list(observations)
     n = len(obs)
     uf = _UnionFind()
-    toks = [_tokens(o.failure_or_pain + " " + " ".join(o.applications_mentioned) + " "
-                     + " ".join(o.current_workflow)) for o in obs]
-    # richer near-dup over the raw text when present in provenance evidence is out of scope here; we dedup on the
-    # extracted signal + explicit identity links (author / url / thread), which is deterministic and sufficient.
+    # near-dup is over the RAW TEXT (reposts / quotes / copy-paste), NOT the extracted signal — independent
+    # operators describing the same workflow in different words are independent evidence, not duplicates.
+    toks = [frozenset(o.text_tokens) for o in obs]
     for i in range(n):
         uf.find(i)
         for j in range(i + 1, n):
             same_author = bool(obs[i].author_hash) and obs[i].author_hash == obs[j].author_hash
             same_url = bool(obs[i].source_url) and obs[i].source_url == obs[j].source_url
-            same_thread = bool(obs[i].community_or_topic) and obs[i].source_id and \
-                obs[i].community_or_topic == obs[j].community_or_topic and _near_duplicate(toks[i], toks[j], near_dup_threshold)
-            if same_author or same_url or _near_duplicate(toks[i], toks[j], near_dup_threshold) or same_thread:
+            if same_author or same_url or _near_duplicate(toks[i], toks[j], near_dup_threshold):
                 uf.union(i, j)
 
     groups: Dict[int, List[int]] = {}
