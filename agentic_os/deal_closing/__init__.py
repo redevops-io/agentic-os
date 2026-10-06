@@ -34,6 +34,10 @@ from .candidates import (
 from .close_plan import (
     ClosePlanMissionSpec, DealClosePlan, PlannedStep, compile_close_plan, handoff, to_mission_spec,
 )
+from .learn import (
+    AttributionRung, ClosingInterventionOutcome, ClosingPriors, InterventionLedger, apply_priors,
+    attribution_strength, calibrate, classify_rung,
+)
 
 __all__ = [
     "Claim", "ClaimStatus",
@@ -51,4 +55,6 @@ __all__ = [
     "to_priority_candidate", "score_actions", "best_action",
     "DealClosePlan", "PlannedStep", "compile_close_plan",
     "ClosePlanMissionSpec", "to_mission_spec", "handoff",
+    "AttributionRung", "ClosingInterventionOutcome", "classify_rung", "attribution_strength",
+    "ClosingPriors", "calibrate", "apply_priors", "InterventionLedger",
 ]
