@@ -71,3 +71,37 @@ def test_from_leakage_is_consequential_candidate() -> None:
     assert c.action_kind == "UNANSWERED_QUOTE_INTENT"
     assert c.required_capabilities == ("erp.quotation.create",)
     assert c.expected_value == r.expected_value and c.confidence == r.confidence
+
+
+# ── AR aging / dunning (§30 adjacent — post-close receivables) ───────────────────────────────────────
+def test_ar_aging_fires_on_overdue_unpaid_no_dunning() -> None:
+    r = lk.ar_aging("INV-100", due_at_ms=_NOW - 45 * _DAY, now_ms=_NOW, amount_cents=1_000_000,
+                    paid=False, dunning_scheduled=False, observation_refs=("inv_ev",))
+    assert r and r.leakage_type is lk.LeakageType.AR_AGING
+    assert "31-60" in r.detail                       # 45 days → 31-60 bucket
+    assert r.required_capability == "billing.dunning.schedule"
+    assert r.observation_refs == ("inv_ev",) and 0 < r.urgency <= 1
+
+
+def test_ar_aging_abstains_when_paid_or_covered_or_within_grace() -> None:
+    base = dict(due_at_ms=_NOW - 45 * _DAY, now_ms=_NOW, amount_cents=1_000_000)
+    assert lk.ar_aging("INV-1", paid=True, dunning_scheduled=False, **base) is None
+    assert lk.ar_aging("INV-2", paid=False, dunning_scheduled=True, **base) is None   # already being chased
+    assert lk.ar_aging("INV-3", due_at_ms=_NOW, now_ms=_NOW, amount_cents=10,
+                       paid=False, dunning_scheduled=False) is None                   # not yet past due
+
+
+def test_ar_aging_older_bucket_is_more_urgent_and_confident() -> None:
+    young = lk.ar_aging("INV-y", due_at_ms=_NOW - 10 * _DAY, now_ms=_NOW, amount_cents=500_000,
+                        paid=False, dunning_scheduled=False)
+    old = lk.ar_aging("INV-o", due_at_ms=_NOW - 120 * _DAY, now_ms=_NOW, amount_cents=500_000,
+                      paid=False, dunning_scheduled=False)
+    assert young and old
+    assert "90+" in old.detail and old.urgency > young.urgency and old.confidence >= young.confidence
+
+
+def test_ar_aging_lifts_to_consequential_candidate() -> None:
+    r = lk.ar_aging("INV-200", due_at_ms=_NOW - 20 * _DAY, now_ms=_NOW, amount_cents=2_000_000,
+                    paid=False, dunning_scheduled=False)
+    cand = lk.from_leakage(r)
+    assert cand.risk_tier is RiskTier.CONSEQUENTIAL and cand.action_kind == "AR_AGING"
