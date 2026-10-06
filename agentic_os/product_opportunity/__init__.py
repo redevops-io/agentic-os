@@ -12,6 +12,10 @@ from .capability_map import (
     CapabilityCatalog, CapabilityCoverage, WorkflowTemplate, default_catalog, map_coverage,
 )
 from .cluster import WorkflowCluster, cluster_pains, workflow_signature
+from .score import (
+    OpportunityScore, ProductOpportunity, build_opportunity, capability_leverage, score_opportunity,
+    to_priority_candidate,
+)
 from .dedup import IndependenceReport, assess_independence
 from .extract import extract_pain
 from .vocabulary import (
@@ -24,5 +28,7 @@ __all__ = [
     "assess_independence", "IndependenceReport",
     "cluster_pains", "WorkflowCluster", "workflow_signature",
     "map_coverage", "CapabilityCoverage", "CapabilityCatalog", "WorkflowTemplate", "default_catalog",
+    "score_opportunity", "OpportunityScore", "build_opportunity", "ProductOpportunity",
+    "to_priority_candidate", "capability_leverage",
     "SearchUniverse", "DEFAULT_UNIVERSE", "APPLICATION_VOCAB", "WORKFLOW_VERBS", "PAIN_MARKERS",
 ]
