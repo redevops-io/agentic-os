@@ -158,6 +158,9 @@ type Node struct {
 	Status           NodeState        `json:"status"`
 	Attempts         int              `json:"attempts"`
 	IdempotencyKey   string           `json:"idempotency_key"`
+	// Resource-boundary tenancy (Phase 3, parity with Python Node.resource): the id of the resource this node
+	// acts on, resolved through the kernel ResourceRegistry to its owning tenant. "" ⇒ single-tenant default.
+	Resource         string           `json:"resource"`
 	Result           map[string]any   `json:"result"`
 	Cost             NodeCost         `json:"cost"`
 	// Concurrency surface (carried from the bound capability by the compiler) — resolved by the scheduler
@@ -273,6 +276,10 @@ type Mission struct {
 	ActivePlanID string         `json:"active_plan_id"`
 	Outcome      map[string]any `json:"outcome"`
 	Template     string         `json:"template"`
+	// Identity / tenancy (parity with Python Mission.principal/tenant): the principal ref this mission runs as
+	// and the tenant isolation boundary. "" ⇒ legacy policy_refs behaviour.
+	Principal    string         `json:"principal"`
+	Tenant       string         `json:"tenant"`
 	ID           string         `json:"id"`
 	CreatedAt    float64        `json:"created_at"`
 	UpdatedAt    float64        `json:"updated_at"`

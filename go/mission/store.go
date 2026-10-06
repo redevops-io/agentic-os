@@ -348,3 +348,86 @@ func (r *MissionRepository) ListMissions() []map[string]any {
 	}
 	return out
 }
+
+// EventStoreIface is the append-only event-log interface actors can type against (parity with Python
+// store.py:EventStoreProtocol). Both the durable EventStore and the in-memory MemoryEventStore satisfy it,
+// so a backend is interchangeable so long as append/fold semantics match.
+type EventStoreIface interface {
+	Append(typ, missionID string, payload map[string]any) *Event
+	Subscribe(cb func(*Event))
+	ForMission(missionID string) []*Event
+	All() []*Event
+	MissionIDs() []string
+}
+
+var _ EventStoreIface = (*EventStore)(nil)
+var _ EventStoreIface = (*MemoryEventStore)(nil)
+
+// MemoryEventStore is an in-memory EventStore with identical append/fold semantics to the durable store but
+// no persistence sink — for fast, isolated replay in tests and ephemeral runs (parity with Python
+// store.py:MemoryEventStore). Same event sequence → same folded state + order.
+type MemoryEventStore struct {
+	mu          sync.Mutex
+	events      []*Event
+	seq         int
+	subscribers []func(*Event)
+}
+
+// NewMemoryEventStore builds an empty in-memory store.
+func NewMemoryEventStore() *MemoryEventStore { return &MemoryEventStore{} }
+
+// Append records an event and notifies subscribers; a subscriber panic never breaks the log.
+func (s *MemoryEventStore) Append(typ, missionID string, payload map[string]any) *Event {
+	s.mu.Lock()
+	s.seq++
+	ev := &Event{Type: typ, MissionID: missionID, Payload: payload, Seq: s.seq, Ts: now()}
+	s.events = append(s.events, ev)
+	subs := append([]func(*Event){}, s.subscribers...)
+	s.mu.Unlock()
+	for _, cb := range subs {
+		func() { defer func() { _ = recover() }(); cb(ev) }()
+	}
+	return ev
+}
+
+// Subscribe registers a callback invoked on each append.
+func (s *MemoryEventStore) Subscribe(cb func(*Event)) {
+	s.mu.Lock()
+	s.subscribers = append(s.subscribers, cb)
+	s.mu.Unlock()
+}
+
+// ForMission returns the events for one mission, in order.
+func (s *MemoryEventStore) ForMission(missionID string) []*Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := []*Event{}
+	for _, e := range s.events {
+		if e.MissionID == missionID {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// All returns every event, in order.
+func (s *MemoryEventStore) All() []*Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]*Event{}, s.events...)
+}
+
+// MissionIDs returns the distinct mission ids seen, in first-seen order.
+func (s *MemoryEventStore) MissionIDs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	seen := map[string]bool{}
+	out := []string{}
+	for _, e := range s.events {
+		if e.MissionID != "" && !seen[e.MissionID] {
+			seen[e.MissionID] = true
+			out = append(out, e.MissionID)
+		}
+	}
+	return out
+}
