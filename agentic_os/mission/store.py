@@ -11,12 +11,26 @@ import json
 import os
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Protocol, runtime_checkable
 
 from .types import (
     Mission, MissionState, ExecutionPlan, ExecutionGraph, Node, NodeState,
     Belief, HumanTask, now, new_id, to_jsonable,
 )
+
+
+@runtime_checkable
+class EventStoreProtocol(Protocol):
+    """The append-only event-log interface the kernel depends on. Implementations are interchangeable so long
+    as append/fold semantics match: ``EventStore`` (a.k.a. ``JsonlEventStore``) for a durable log (in-memory +
+    optional JSONL sink, Postgres in production), ``MemoryEventStore`` for fast, isolated in-memory replay in
+    tests. Runtime actors type their dependency as this Protocol, never a concrete backend."""
+
+    def append(self, type: str, mission_id: str, payload: dict[str, Any]) -> "Event": ...
+    def subscribe(self, cb: Callable[["Event"], None]) -> None: ...
+    def for_mission(self, mission_id: str) -> list["Event"]: ...
+    def all(self) -> list["Event"]: ...
+    def mission_ids(self) -> list[str]: ...
 
 
 @dataclass
@@ -87,6 +101,50 @@ class EventStore:
 
 
 # ─── world state (the blackboard) ────────────────────────────────────────────
+class MemoryEventStore:
+    """In-memory EventStore with identical append/fold semantics to the durable store but no persistence sink —
+    for fast, isolated replay in tests and ephemeral runs. Same event sequence → same folded state + order."""
+
+    def __init__(self) -> None:
+        self._events: list[Event] = []
+        self._seq = 0
+        self._lock = threading.Lock()
+        self._subscribers: list[Callable[[Event], None]] = []
+
+    def append(self, type: str, mission_id: str, payload: dict[str, Any]) -> Event:
+        with self._lock:
+            self._seq += 1
+            ev = Event(type=type, mission_id=mission_id, payload=to_jsonable(payload), seq=self._seq)
+            self._events.append(ev)
+        for cb in list(self._subscribers):
+            try:
+                cb(ev)
+            except Exception:  # noqa: BLE001 - a subscriber must never break the log
+                pass
+        return ev
+
+    def subscribe(self, cb: Callable[[Event], None]) -> None:
+        self._subscribers.append(cb)
+
+    def for_mission(self, mission_id: str) -> list[Event]:
+        return [e for e in self._events if e.mission_id == mission_id]
+
+    def all(self) -> list[Event]:
+        return list(self._events)
+
+    def mission_ids(self) -> list[str]:
+        seen: list[str] = []
+        for e in self._events:
+            if e.mission_id and e.mission_id not in seen:
+                seen.append(e.mission_id)
+        return seen
+
+
+# Durable store names: ``EventStore`` is the canonical durable (JSONL-backed) implementation; ``JsonlEventStore``
+# is an alias so either name resolves to the same backend across the kernel and its overlays.
+JsonlEventStore = EventStore
+
+
 class WorldState:
     """An event-sourced blackboard for one mission. Capabilities read facts and write
     OBSERVATIONS; observations are fused into confidence-weighted BELIEFS (see belief.py)
