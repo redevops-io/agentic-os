@@ -46,3 +46,23 @@ def test_funnel_observation_uses_injected_client():
             return {"/": 1000, "/pricing": 600, "/demo": 150}
     conv = _P(_FakeClient()).stage_conversion(_funnel())
     assert conv["pricing"] == round(150 / 600, 4)
+
+
+def test_funnel_observation_resolves_website_by_domain():
+    from agentic_os.commercial import funnel_observation
+
+    class _FakeClient:
+        website_id = ""
+        def website_id_for(self, domain):
+            return "w1" if domain == "site.com" else ""
+        def top_pages(self, *, days=30, limit=50):
+            return [{"x": "/", "y": 1000}, {"x": "/pricing", "y": 600}, {"x": "/demo", "y": 150}]
+
+    f = ConversionFunnel(funnel_id="x", stages=(
+        ConversionStage("visit", resource_ref="/"),
+        ConversionStage("pricing", resource_ref="/pricing"),
+        ConversionStage("demo", resource_ref="/demo")))
+    conv = funnel_observation(f, client=_FakeClient(), domain="site.com", days=365)
+    assert conv is not None and conv["pricing"] == round(150 / 600, 4)
+    # unknown domain → no website → None (caller falls back to synthetic)
+    assert funnel_observation(f, client=_FakeClient(), domain="nope.com") is None
