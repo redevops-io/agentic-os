@@ -1,0 +1,31 @@
+/* ReDevOps accessibility + brand overlay for Metabase (OSS edition).
+ *
+ * Metabase's native whitelabel / custom-CSS is an Enterprise-only feature, so the open-source image we ship
+ * can't be themed through the product. This stylesheet is injected by the `metabase-theme` nginx sidecar
+ * (sub_filter adds a <link> to it) and themes the OSS edition two honest ways: (1) Metabase's OWN public CSS
+ * custom property `--mb-color-brand`, and (2) stable element selectors. It exists to fix the concrete WCAG
+ * issues the UI audit flagged on the sign-in / setup screen, while re-skinning the accent to ReDevOps teal.
+ */
+
+:root {
+  /* Metabase's default brand (#509EE2 ≈ hsla(208,72%,60%)) is ~2.6:1 on white — it FAILS WCAG 1.4.3 for the
+   * h1 and the in-text links that inherit it. ReDevOps teal #0E7490 is ~4.7:1 on white (passes AA for normal
+   * and large text). Metabase derives headings, links and primary buttons from this token, so one override
+   * lifts all of them. */
+  --mb-color-brand: #0E7490 !important;
+  --mb-color-brand-light: #0E7490 !important;
+}
+
+/* WCAG 1.4.1 (use of colour): in-text links must be distinguishable without relying on colour alone.
+ * Metabase renders them with text-decoration:none, so add an underline. Scope to real anchors, not the
+ * button-styled links / role=button controls. */
+a:not([role="button"]):not([class*="Button"]) {
+  text-decoration: underline !important;
+}
+
+/* WCAG 2.5.8 (target size): give short in-text links a >=24px vertical target. (These inline links also
+ * qualify for the spec's "inline in a sentence" exception, but clearing 24px removes the axe flag outright.) */
+a:not([role="button"]):not([class*="Button"]) {
+  display: inline-block;
+  min-height: 24px;
+}

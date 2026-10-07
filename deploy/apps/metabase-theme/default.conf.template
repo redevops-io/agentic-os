@@ -1,0 +1,37 @@
+# metabase-theme sidecar — fronts Metabase and injects the ReDevOps a11y/brand stylesheet.
+#
+# Metabase OSS has no custom-CSS hook, so we inject one at the edge: proxy every request to Metabase and
+# rewrite the HTML shell to add <link rel="stylesheet" href="/mb-theme.css"> before </head>. sub_filter only
+# rewrites uncompressed bodies, so we clear Accept-Encoding to the upstream. Everything else passes through
+# untouched (the SPA, its API, websockets).
+server {
+    listen 3000;
+    server_name _;
+
+    # Serve the injected stylesheet from the sidecar itself.
+    location = /mb-theme.css {
+        alias /theme/theme.css;
+        default_type text/css;
+        add_header Cache-Control "public, max-age=300";
+    }
+
+    location / {
+        proxy_pass http://${MB_UPSTREAM};
+        proxy_set_header Host               $host;
+        proxy_set_header X-Real-IP          $remote_addr;
+        proxy_set_header X-Forwarded-For    $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto  $scheme;
+        proxy_set_header Accept-Encoding    "";          # let sub_filter see the HTML
+
+        # websocket upgrade passthrough
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        # inject the stylesheet into the HTML shell
+        sub_filter '</head>' '<link rel="stylesheet" href="/mb-theme.css"></head>';
+        sub_filter_once on;
+    }
+}
+
+map $http_upgrade $connection_upgrade { default upgrade; '' close; }
