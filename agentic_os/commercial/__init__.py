@@ -7,5 +7,13 @@ reward loop. Additive and non-breaking — no existing type changes.
 """
 from .identity import CanonicalOrganization, CanonicalPerson
 from .outcome import CommercialOutcome, record_commercial_outcome
+from .capture import (
+    CRMProjection, CaptureChannel, CaptureEvent, CaptureExtraction, CaptureGateway, ChangeProposal,
+    CommercialActivity, CommercialCaptureProvider, ProjectionPolicy, classify_change,
+)
 
-__all__ = ["CanonicalPerson", "CanonicalOrganization", "CommercialOutcome", "record_commercial_outcome"]
+__all__ = [
+    "CanonicalPerson", "CanonicalOrganization", "CommercialOutcome", "record_commercial_outcome",
+    "CaptureChannel", "ProjectionPolicy", "CaptureEvent", "CommercialActivity", "ChangeProposal",
+    "CRMProjection", "CaptureExtraction", "CommercialCaptureProvider", "CaptureGateway", "classify_change",
+]
