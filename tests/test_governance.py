@@ -92,3 +92,79 @@ def test_receipt_crossed_boundary_and_audit_count():
     bad = InferenceReceipt("x", "external", EB.EXTERNAL, DC.CUSTOMER_RESTRICTED, external_data_processor=True)
     assert bad.crossed_boundary
     assert private_records_to_external([priv, ext_ok, bad]) == 1
+
+
+# ── privacy modes (STRICT_PRIVATE / PRIVATE_WITH_ENGINEERING_ASSIST / OPEN) ──────────────────────────
+from agentic_os.governance import PrivacyMode, privacy_mode_from_env, privacy_notice  # noqa: E402
+
+
+def test_open_mode_allows_private_to_external_but_flags_it():
+    r = GovernedModelRouter([
+        ModelEndpoint("frontier", "external", EB.EXTERNAL, accepts=DC.SECRET, capabilities=("reasoning",)),
+    ], mode=PrivacyMode.OPEN)
+    d = r.route(ModelRequest("analyze Acme", TaskClass.BUSINESS_REASONING,
+                             classifications=(DC.CUSTOMER_RESTRICTED,), required_capabilities=("reasoning",)))
+    assert d.permitted and d.endpoint.boundary is EB.EXTERNAL
+    assert d.privacy_preserved is False                     # the consequence is visible
+    assert "NOT guaranteed" in d.reason
+
+
+def test_strict_private_never_uses_external():
+    r = GovernedModelRouter([
+        ModelEndpoint("foundry", "azure", EB.IN_BOUNDARY, capabilities=("coding",)),
+        ModelEndpoint("frontier", "external", EB.EXTERNAL, accepts=DC.ENGINEERING, capabilities=("coding",)),
+    ], mode=PrivacyMode.STRICT_PRIVATE)
+    # even engineering coding routes in-boundary; external is never eligible
+    d = r.route(ModelRequest("fix", TaskClass.CODING, classifications=(DC.ENGINEERING,),
+                             required_capabilities=("coding",)))
+    assert d.permitted and d.endpoint.boundary is EB.IN_BOUNDARY
+    # with ONLY an external endpoint, strict-private fails closed
+    r2 = GovernedModelRouter([ModelEndpoint("frontier", "external", EB.EXTERNAL, capabilities=("coding",))],
+                             mode=PrivacyMode.STRICT_PRIVATE)
+    assert not r2.route(ModelRequest("fix", TaskClass.CODING, classifications=(DC.ENGINEERING,),
+                                     required_capabilities=("coding",))).permitted
+
+
+def test_open_mode_single_key_handles_everything_privacy_preserved_true_for_public():
+    # the "local BYO: one external key for everything" case; engineering/public stays privacy_preserved=True
+    r = GovernedModelRouter([ModelEndpoint("byo", "openai", EB.EXTERNAL, accepts=DC.SECRET,
+                                           capabilities=("reasoning", "coding"))], mode=PrivacyMode.OPEN)
+    pub = r.route(ModelRequest("qa", TaskClass.PUBLIC_QA, classifications=(DC.PUBLIC,)))
+    assert pub.permitted and pub.privacy_preserved is True   # public data externally is fine
+    biz = r.route(ModelRequest("analyze", TaskClass.BUSINESS_REASONING, classifications=(DC.CUSTOMER_CONFIDENTIAL,)))
+    assert biz.permitted and biz.privacy_preserved is False  # business data externally → flagged
+
+
+def test_default_mode_is_engineering_assist_and_notice_text():
+    assert privacy_mode_from_env() is PrivacyMode.PRIVATE_WITH_ENGINEERING_ASSIST
+    assert "NOT GUARANTEED" in privacy_notice(PrivacyMode.OPEN)
+    assert "not used at all" in privacy_notice(PrivacyMode.STRICT_PRIVATE)
+
+
+def test_privacy_mode_from_env(monkeypatch):
+    monkeypatch.setenv("REDEVOPS_PRIVACY_MODE", "open")
+    assert privacy_mode_from_env() is PrivacyMode.OPEN
+    monkeypatch.setenv("REDEVOPS_PRIVACY_MODE", "bogus")   # unknown → safe default, never more permissive
+    assert privacy_mode_from_env() is PrivacyMode.PRIVATE_WITH_ENGINEERING_ASSIST
+
+
+# ── worker-pool separation (§7) ──────────────────────────────────────────────────────────────────────
+from agentic_os.governance import (  # noqa: E402
+    ENGINEERING_POOL, PRIVATE_POOL, WorkerPoolKind, pool_for, worker_may_handle,
+)
+
+
+def test_pool_assignment_by_data():
+    assert pool_for(DC.PUBLIC) is WorkerPoolKind.ENGINEERING_WORKER_POOL
+    assert pool_for(DC.ENGINEERING) is WorkerPoolKind.ENGINEERING_WORKER_POOL
+    assert pool_for(DC.CUSTOMER_CONFIDENTIAL) is WorkerPoolKind.PRIVATE_WORKER_POOL
+    assert pool_for(DC.SECRET) is WorkerPoolKind.PRIVATE_WORKER_POOL
+
+
+def test_engineering_pool_cannot_touch_private_data():
+    assert worker_may_handle(ENGINEERING_POOL, DC.ENGINEERING)
+    assert not worker_may_handle(ENGINEERING_POOL, DC.CUSTOMER_RESTRICTED)
+    assert worker_may_handle(PRIVATE_POOL, DC.SECRET)
+    # the engineering pool has no private creds and no-egress is the private pool's property
+    assert ENGINEERING_POOL.allows_external_egress and not ENGINEERING_POOL.private_credentials
+    assert not PRIVATE_POOL.allows_external_egress and PRIVATE_POOL.private_credentials
