@@ -16,6 +16,8 @@ from .contracts import DISPLAY_ALIASES, DisplayType, VizCard, VizResult, VizSpec
 from .compile import card_payload, dashboard_payload, dashcards_payload
 from .client import HttpMetabaseWriter, InMemoryMetabaseWriter, MetabaseWriter
 from .workspace import MetabaseWorkspaceProvider
+from .embed import decode_embed_token, embed_url, sign_embed_token
+from .surface import MetabaseSurfaceAdapter
 from .nl import (
     METRIC_LIBRARY, MetricTemplate, annotate_with_semantics, available_metrics, default_semantic_registry,
     interpret, resolve_metric,
@@ -29,6 +31,7 @@ __all__ = [
     "DisplayType", "DISPLAY_ALIASES", "VizSpec", "VizCard", "VizResult",
     "card_payload", "dashboard_payload", "dashcards_payload",
     "MetabaseWriter", "InMemoryMetabaseWriter", "HttpMetabaseWriter", "MetabaseWorkspaceProvider",
+    "sign_embed_token", "embed_url", "decode_embed_token", "MetabaseSurfaceAdapter",
     "interpret", "available_metrics", "METRIC_LIBRARY", "MetricTemplate",
     "default_semantic_registry", "resolve_metric", "annotate_with_semantics",
     "propose", "VizProposal", "InMemoryVizApprovals", "create_visualization", "apply_if_approved",
