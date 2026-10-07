@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Iterable, Optional, Sequence, Tuple
 
 from .classification import DataClassification, EXTERNAL_MAX, externally_shareable, max_classification
+from .policy import DEFAULT_MODE, PrivacyMode, privacy_notice
 
 
 class ExecutionBoundary(str, Enum):
@@ -66,14 +67,18 @@ class RoutingDecision:
     endpoint: Optional[ModelEndpoint]
     max_classification: DataClassification
     reason: str
+    privacy_preserved: bool = True     # False iff private data was routed to an external processor (OPEN mode only)
     considered: int = 0
 
 
 class GovernedModelRouter:
-    """Routes a ModelRequest to a compliant endpoint, or refuses (fail-closed)."""
+    """Routes a ModelRequest to a compliant endpoint, or refuses (fail-closed). ``mode`` gates whether external
+    providers may receive data: STRICT_PRIVATE (never), PRIVATE_WITH_ENGINEERING_ASSIST (only ENGINEERING/PUBLIC),
+    OPEN (anything — privacy NOT guaranteed, an explicit deliberate choice)."""
 
-    def __init__(self, endpoints: Iterable[ModelEndpoint] = ()) -> None:
+    def __init__(self, endpoints: Iterable[ModelEndpoint] = (), *, mode: PrivacyMode = DEFAULT_MODE) -> None:
         self._endpoints: list[ModelEndpoint] = list(endpoints)
+        self.mode = mode
 
     def register(self, endpoint: ModelEndpoint) -> None:
         self._endpoints.append(endpoint)
@@ -89,12 +94,12 @@ class GovernedModelRouter:
                 continue
             if maxc.rank > e.accepts.rank:                       # endpoint may not receive this classification
                 continue
-            if e.boundary is ExecutionBoundary.EXTERNAL and not externally_shareable(maxc):
-                continue                                         # private data can never leave the boundary
-            # business reasoning over anything above ENGINEERING must stay in-boundary
-            if (req.task_class is TaskClass.BUSINESS_REASONING and maxc.rank > EXTERNAL_MAX.rank
-                    and e.boundary is ExecutionBoundary.EXTERNAL):
-                continue
+            if e.boundary is ExecutionBoundary.EXTERNAL:
+                if self.mode is PrivacyMode.STRICT_PRIVATE:
+                    continue                                     # no external at all
+                if self.mode is PrivacyMode.PRIVATE_WITH_ENGINEERING_ASSIST and not externally_shareable(maxc):
+                    continue                                     # private data can never leave the boundary
+                # OPEN: external permitted for ANY classification (privacy not guaranteed) — see route() flag
             out.append(e)
         # deterministic preference: in-boundary first (safest), then by model_id
         out.sort(key=lambda e: (0 if e.boundary is ExecutionBoundary.IN_BOUNDARY else 1, e.model_id))
@@ -106,12 +111,16 @@ class GovernedModelRouter:
         if not eligible:
             return RoutingDecision(permitted=False, endpoint=None, max_classification=maxc,
                                    reason=f"no compliant route for task_class={req.task_class.value} at "
-                                          f"classification={maxc.value} (fail-closed; no public fallback)",
+                                          f"classification={maxc.value} in mode={self.mode.value} "
+                                          f"(fail-closed; no public fallback)",
                                    considered=len(self._endpoints))
         chosen = eligible[0]
+        preserved = chosen.boundary is ExecutionBoundary.IN_BOUNDARY or externally_shareable(maxc)
+        reason = f"routed to {chosen.model_id} ({chosen.boundary.value}) for {maxc.value} in mode={self.mode.value}"
+        if not preserved:
+            reason += " — WARNING: private data sent to an external provider; data privacy is NOT guaranteed (OPEN mode)"
         return RoutingDecision(permitted=True, endpoint=chosen, max_classification=maxc,
-                               reason=f"routed to {chosen.model_id} ({chosen.boundary.value}) for {maxc.value}",
-                               considered=len(self._endpoints))
+                               reason=reason, privacy_preserved=preserved, considered=len(self._endpoints))
 
     def require_route(self, req: ModelRequest) -> ModelEndpoint:
         """Return the chosen endpoint or raise RoutingRefused — for callers that must fail closed."""
