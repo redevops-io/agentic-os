@@ -15,6 +15,7 @@ from .contracts import (
 from .session import InMemorySessionStore, SidekickSession
 from .analytics import AnalyticsContext, analytics_from_surface
 from .twenty import TwentySurfaceAdapter
+from .surfaces import ChatwootSurfaceAdapter, ERPNextSurfaceAdapter, PostizSurfaceAdapter, SessionStore
 from .capability import (
     CapabilityDomain, CapabilityMatch, CapabilityRegistry, Maturity, SidekickCapability,
     default_registry, register_capability,
@@ -30,7 +31,8 @@ __all__ = [
     "SidekickRequest", "SidekickResponse", "SidekickSurfaceAdapter",
     "SidekickSession", "InMemorySessionStore",
     "AnalyticsContext", "analytics_from_surface",
-    "TwentySurfaceAdapter",
+    "TwentySurfaceAdapter", "ChatwootSurfaceAdapter", "ERPNextSurfaceAdapter",
+    "PostizSurfaceAdapter", "SessionStore",
     "CapabilityDomain", "Maturity", "SidekickCapability", "CapabilityMatch", "CapabilityRegistry",
     "default_registry", "register_capability", "register_builtin_capabilities",
     "WorkerResultType", "MergePolicy", "Claim", "SidekickWorkerContext", "SidekickWorkerResult",
