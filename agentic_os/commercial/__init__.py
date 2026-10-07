@@ -21,6 +21,10 @@ from .campaign import CampaignHypothesis, CampaignPlan, build_campaign_plan
 from .deal_state import FieldReadback, produce_verified_deal
 from .bindings import bind_commercial_capabilities
 from .order import ORDER_STAGES, OrderExecution, OrderLine, evaluate_order, order_expected_transitions
+from .service import (
+    SERVICE_STAGES, ServiceFeasibility, ServicePlan, ServiceRequirement, ServiceResource,
+    assess_service_feasibility, plan_service, service_expected_transitions,
+)
 
 __all__ = [
     "CanonicalPerson", "CanonicalOrganization", "CommercialOutcome", "record_commercial_outcome",
@@ -33,4 +37,6 @@ __all__ = [
     "CampaignHypothesis", "CampaignPlan", "build_campaign_plan",
     "FieldReadback", "produce_verified_deal", "bind_commercial_capabilities",
     "ORDER_STAGES", "OrderExecution", "OrderLine", "evaluate_order", "order_expected_transitions",
+    "SERVICE_STAGES", "ServiceRequirement", "ServiceResource", "ServiceFeasibility", "ServicePlan",
+    "assess_service_feasibility", "plan_service", "service_expected_transitions",
 ]
