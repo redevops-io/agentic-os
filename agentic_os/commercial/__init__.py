@@ -9,6 +9,7 @@ from .identity import CanonicalOrganization, CanonicalPerson
 from .outcome import CommercialOutcome, record_commercial_outcome
 from .learning import learn, learn_many
 from .funnel_providers import UmamiFunnelProvider, funnel_observation, stage_conversion_from_pageviews
+from .deal_providers import reported_deal_from_opp, reported_deal_from_twenty, verified_deal_from_env
 from .capture import (
     CRMProjection, CaptureChannel, CaptureEvent, CaptureExtraction, CaptureGateway, ChangeProposal,
     CommercialActivity, CommercialCaptureProvider, ProjectionPolicy, classify_change,
@@ -36,6 +37,7 @@ __all__ = [
     "CanonicalPerson", "CanonicalOrganization", "CommercialOutcome", "record_commercial_outcome",
     "learn", "learn_many",
     "UmamiFunnelProvider", "funnel_observation", "stage_conversion_from_pageviews",
+    "reported_deal_from_opp", "reported_deal_from_twenty", "verified_deal_from_env",
     "CaptureChannel", "ProjectionPolicy", "CaptureEvent", "CommercialActivity", "ChangeProposal",
     "CRMProjection", "CaptureExtraction", "CommercialCaptureProvider", "CaptureGateway", "classify_change",
     "SurfaceType", "FunnelAction", "ConversionStage", "ConversionFunnel", "FunnelIntervention",
