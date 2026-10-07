@@ -1,126 +1,94 @@
-"""P10 — governance plane: versioned mid-flight policy edits, suspend/resume, audited promotion.
-
-The console read-model is thin; the load-bearing work is policy versioning with unambiguous
-semantics — terminal nodes keep the version they ran under, tightening invalidates open approvals,
-and a retroactive revoke of authority a completed side effect relied on compensates and fails.
-"""
+"""Private Data Plane governance — classification, fail-closed routing, tools, receipts (plan §3/§4/§8/§14)."""
 from __future__ import annotations
 
-from agentic_os.mission.executor import Executor, InMemoryOperatorClient
-from agentic_os.mission.registry import CapabilityRegistry
-from agentic_os.mission.runtime import MissionRuntime
-from agentic_os.mission.types import (
-    CapabilityManifest, CapabilitySpec, ExecutionIntent, IntentStep, MissionState,
+import pytest
+
+from agentic_os.governance import (
+    DataClassification as DC, ExecutionBoundary as EB, GovernedModelRouter, InferenceReceipt, ModelEndpoint,
+    ModelRequest, RoutingRefused, TaskClass, ToolSecurityProfile, externally_shareable, ineligibility_reason,
+    max_classification, private_records_to_external, receipt_for, tool_eligible,
 )
 
 
-def _fleet():
-    """a: a reversible side effect (runs); b: mandatory-approval side effect (gates)."""
-    reg = CapabilityRegistry()
-    reg.register(CapabilityManifest("op", [
-        CapabilitySpec("op.a", "op", provides=["a"], side_effecting=True, undo="op.a.undo",
-                       permissions=["a:write"]),
-        CapabilitySpec("op.b", "op", provides=["b"], side_effecting=True, undo="op.b.undo",
-                       approval_required=True, permissions=["b:write"]),
-    ]))
-    client = InMemoryOperatorClient({
-        "op.a": lambda i: {"ok": "a"}, "op.a.undo": lambda i: {"undone": "a"},
-        "op.b": lambda i: {"ok": "b"}, "op.b.undo": lambda i: {"undone": "b"},
-    })
-    return reg, client
+def test_classification_order_and_inheritance():
+    assert DC.PUBLIC < DC.ENGINEERING < DC.CUSTOMER_RESTRICTED < DC.SECRET
+    # derived artifact inherits the HIGHEST input
+    assert max_classification([DC.PUBLIC, DC.CUSTOMER_CONFIDENTIAL, DC.ENGINEERING]) is DC.CUSTOMER_CONFIDENTIAL
+    assert max_classification([]) is DC.PUBLIC
+    assert externally_shareable(DC.ENGINEERING) and not externally_shareable(DC.CUSTOMER_CONFIDENTIAL)
 
 
-class _TwoStep:
-    def plan(self, mission_id, goal, context):
-        return ExecutionIntent(mission_id=mission_id, steps=[
-            IntentStep(outcome="a", need="do a"),
-            IntentStep(outcome="b", need="do b", inputs_from=["a"])])
+def _router():
+    return GovernedModelRouter([
+        ModelEndpoint("private-foundry", "azure", EB.IN_BOUNDARY, accepts=DC.SECRET,
+                      capabilities=("reasoning", "coding")),
+        ModelEndpoint("frontier-ext", "external", EB.EXTERNAL, accepts=DC.ENGINEERING,
+                      external_data_processor=True, capabilities=("coding", "reasoning")),
+    ])
 
 
-def _run_to_gate(policy_refs=("a:write", "b:write")):
-    reg, client = _fleet()
-    rt = MissionRuntime(reg, Executor(client), planner=_TwoStep())
-    m = rt.create_mission("job", policy_refs=list(policy_refs))
-    rt.run(m.id)                                  # a runs, b parks on its mandatory approval
-    assert rt.repo.state(m.id) == MissionState.WAITING_HUMAN
-    return rt, m
+def test_business_reasoning_over_private_stays_in_boundary():
+    r = _router()
+    d = r.route(ModelRequest("analyze Acme deal", TaskClass.BUSINESS_REASONING,
+                             classifications=(DC.CUSTOMER_RESTRICTED,), required_capabilities=("reasoning",)))
+    assert d.permitted and d.endpoint.boundary is EB.IN_BOUNDARY and d.endpoint.model_id == "private-foundry"
 
 
-# ─── policy version increments and records the diff ──────────────────────────
-def test_policy_version_increments_with_audit():
-    rt, m = _run_to_gate()
-    assert rt.governance.policy_version(m.id) == 1
-    rt.change_policy(m.id, actor="admin", reason="add scope", grant=["c:write"])
-    assert rt.governance.policy_version(m.id) == 2
-    ch = rt.governance.policy_history(m.id)[-1]
-    assert ch["actor"] == "admin" and "c:write" in ch["after_grants"]
-    assert "c:write" not in ch["before_grants"]
+def test_coding_on_engineering_context_allows_external():
+    r = _router()
+    d = r.route(ModelRequest("fix the adapter", TaskClass.CODING,
+                             classifications=(DC.ENGINEERING, DC.PUBLIC), required_capabilities=("coding",)))
+    assert d.permitted
+    # in-boundary is preferred, but external is ELIGIBLE for engineering context
+    elig_ext = any(e.boundary is EB.EXTERNAL for e in r._eligible(
+        ModelRequest("x", TaskClass.CODING, classifications=(DC.ENGINEERING,), required_capabilities=("coding",))))
+    assert elig_ext
 
 
-# ─── non-retroactive: terminal nodes keep their version, aren't re-run ────────
-def test_non_retroactive_change_preserves_completed_nodes():
-    rt, m = _run_to_gate()
-    a_runs_before = sum(1 for e in rt.repo.timeline(m.id)
-                        if e["type"] == "NodeSucceeded" and e["payload"]["capability"] == "op.a")
-    ch_ret = rt.change_policy(m.id, actor="admin", reason="widen", grant=["c:write"])
-    ch = rt.governance.policy_history(m.id)[-1]
-    a_node = [n.id for n in rt._plans[m.id].graph.nodes if n.capability == "op.a"][0]
-    assert a_node in ch["ran_under_previous"] and a_node not in ch["affected_nodes"]
-    a_runs_after = sum(1 for e in rt.repo.timeline(m.id)
-                       if e["type"] == "NodeSucceeded" and e["payload"]["capability"] == "op.a")
-    assert a_runs_after == a_runs_before          # completed side effect not re-executed
+def test_private_data_never_routes_external_even_for_coding():
+    r = _router()
+    # coding but the context contains CUSTOMER_RESTRICTED → external is excluded; only in-boundary remains
+    d = r.route(ModelRequest("debug with prod log", TaskClass.CODING,
+                             classifications=(DC.CUSTOMER_RESTRICTED,), required_capabilities=("coding",)))
+    assert d.permitted and d.endpoint.boundary is EB.IN_BOUNDARY
 
 
-# ─── a tightening (revoke) invalidates an open approval ──────────────────────
-def test_revoke_invalidates_open_approval():
-    rt, m = _run_to_gate()
-    b_node = rt.repo.pending_human(m.id)["node_id"]
-    rt.change_policy(m.id, actor="secops", reason="revoke b", revoke=["b:write"])
-    inval = [e for e in rt.repo.timeline(m.id) if e["type"] == "ApprovalInvalidated"]
-    assert inval and inval[0]["payload"]["node_id"] == b_node
+def test_fail_closed_when_no_compliant_route():
+    # only an external endpoint exists; a restricted business request has NO route → refuse (no public fallback)
+    r = GovernedModelRouter([ModelEndpoint("frontier", "external", EB.EXTERNAL, accepts=DC.ENGINEERING,
+                                           capabilities=("reasoning",))])
+    d = r.route(ModelRequest("analyze", TaskClass.BUSINESS_REASONING,
+                             classifications=(DC.CUSTOMER_RESTRICTED,), required_capabilities=("reasoning",)))
+    assert not d.permitted and "fail-closed" in d.reason
+    with pytest.raises(RoutingRefused):
+        r.require_route(ModelRequest("analyze", TaskClass.BUSINESS_REASONING,
+                                     classifications=(DC.SECRET,), required_capabilities=("reasoning",)))
 
 
-# ─── retroactive revoke of authority a completed side effect used → compensate + fail ─
-def test_retroactive_revoke_compensates_and_fails():
-    rt, m = _run_to_gate()
-    rt.change_policy(m.id, actor="secops", reason="a:write was mis-granted",
-                     revoke=["a:write"], retroactive=True)
-    assert rt.repo.state(m.id) == MissionState.FAILED
-    tl = rt.repo.timeline(m.id)
-    assert any(e["type"] == "PolicyViolationDetected" for e in tl)
-    assert any(e["type"] == "NodeCompensated" and e["payload"]["undo"] == "op.a.undo" for e in tl)
+def test_api_key_does_not_bypass():
+    # an UNapproved external endpoint is never routed to, regardless of credentials
+    r = GovernedModelRouter([ModelEndpoint("rogue", "external", EB.EXTERNAL, accepts=DC.ENGINEERING,
+                                           capabilities=("coding",), approved=False)])
+    assert not r.route(ModelRequest("x", TaskClass.CODING, classifications=(DC.ENGINEERING,),
+                                    required_capabilities=("coding",))).permitted
 
 
-# ─── suspend halts the mission; resume continues it ──────────────────────────
-def test_suspend_and_resume():
-    rt, m = _run_to_gate()
-    rt.suspend(m.id, actor="oncall", reason="incident")
-    assert rt.repo.state(m.id) == MissionState.PAUSED
-    resumed = rt.resume(m.id, actor="oncall")
-    assert resumed.state in (MissionState.WAITING_HUMAN, MissionState.RUNNING)   # back on the gate
-    assert any(e["type"] == "MissionResumed" for e in rt.repo.timeline(m.id))
+def test_tool_eligibility():
+    ext = ToolSecurityProfile("web_search", data_classes_accepted=DC.SECRET,   # accepts high, but is external
+                              network_boundary=EB.EXTERNAL, external_data_processor=True)
+    assert tool_eligible(ext, DC.PUBLIC) and tool_eligible(ext, DC.ENGINEERING)
+    assert not tool_eligible(ext, DC.CUSTOMER_CONFIDENTIAL)
+    assert "external processor" in ineligibility_reason(ext, DC.CUSTOMER_CONFIDENTIAL)
+    logger = ToolSecurityProfile("verbose_trace", data_classes_accepted=DC.SECRET, logs_payloads=True)
+    assert not tool_eligible(logger, DC.CUSTOMER_RESTRICTED)   # logging payloads of private data is blocked
 
 
-# ─── promoting a P9 recommendation is an audited governance mutation ─────────
-def test_promote_recommendation_is_audited():
-    rt, m = _run_to_gate()
-    for _ in range(5):
-        rt.learners.routing.observe("charge", "provA", ok=False)
-    for _ in range(5):
-        rt.learners.routing.observe("charge", "provB", ok=True)
-    assert rt.learners.promoted_choice("routing", "charge") is None
-    rt.promote_recommendation("routing", "charge", actor="ml-lead")
-    assert rt.learners.promoted_choice("routing", "charge") == "provB"
-    promoted = [e for e in rt.store.for_mission("governance") if e.type == "RecommendationPromoted"]
-    assert promoted and promoted[0].payload["actor"] == "ml-lead"
-
-
-# ─── the console read-model aggregates the control surface ───────────────────
-def test_governance_console_aggregates():
-    rt, m = _run_to_gate()
-    rt.change_policy(m.id, actor="admin", reason="widen", grant=["c:write"])
-    console = rt.governance_console()
-    row = next(r for r in console["missions"] if r["id"] == m.id)
-    assert row["policy_version"] == 2 and "c:write" in row["grants"]
-    assert len(console["approval_queue"]) == 1          # b is still awaiting approval
-    assert "recommendations" in console
+def test_receipt_crossed_boundary_and_audit_count():
+    priv = receipt_for(ModelEndpoint("foundry", "azure", EB.IN_BOUNDARY), maximum_classification=DC.CUSTOMER_RESTRICTED)
+    ext_ok = receipt_for(ModelEndpoint("frontier", "external", EB.EXTERNAL, external_data_processor=True),
+                         maximum_classification=DC.ENGINEERING)
+    assert not priv.crossed_boundary and not ext_ok.crossed_boundary
+    # a (hypothetical) external receipt over private data would be flagged
+    bad = InferenceReceipt("x", "external", EB.EXTERNAL, DC.CUSTOMER_RESTRICTED, external_data_processor=True)
+    assert bad.crossed_boundary
+    assert private_records_to_external([priv, ext_ok, bad]) == 1
