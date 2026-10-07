@@ -91,3 +91,41 @@ def test_dashboard_pinning():
     create_visualization(propose(spec), writer, approved=True, dashboard_name="My Board")
     # the dashboard was created and the card placed on it
     assert any(d["name"] == "My Board" and d["dashcards"] == [1] for d in writer._dashboards.values())
+
+
+# ── typed workspace provider CRUD (governed mutations) ────────────────────────────────────────────
+def test_in_memory_satisfies_workspace_provider():
+    from agentic_os.visualization import MetabaseWorkspaceProvider
+    assert isinstance(InMemoryMetabaseWriter(), MetabaseWorkspaceProvider)   # runtime_checkable Protocol
+
+
+def test_governed_update_card_gated():
+    from agentic_os.visualization import create_visualization, update_card
+    w = InMemoryMetabaseWriter()
+    create_visualization(propose(interpret("revenue by month", database_id=1)), w, approved=True)
+    assert update_card(w, 1, {"name": "Renamed"}, approved=False)["ok"] is False   # refused
+    assert w.get_card(1)["name"] == "Revenue by month"                               # unchanged
+    r = update_card(w, 1, {"name": "Renamed"}, approved=True)
+    assert r["ok"] and w.get_card(1)["name"] == "Renamed"
+
+
+def test_governed_add_card_to_existing_dashboard():
+    from agentic_os.visualization import add_card_to_dashboard
+    w = InMemoryMetabaseWriter()
+    w.create_card({"name": "A"}); w.create_card({"name": "B"})
+    dash = w.create_dashboard("Board"); w.add_dashcards(dash["id"], [1])
+    assert add_card_to_dashboard(w, dash["id"], 2, approved=False)["ok"] is False    # gated
+    assert w.get_dashboard(dash["id"])["dashcards"] == [1]
+    assert add_card_to_dashboard(w, dash["id"], 2, approved=True)["ok"] is True
+    assert w.get_dashboard(dash["id"])["dashcards"] == [1, 2]                         # appended, not replaced
+
+
+def test_governed_archive_card_and_list():
+    from agentic_os.visualization import archive_card
+    w = InMemoryMetabaseWriter()
+    w.create_card({"name": "Keep"}); w.create_card({"name": "Drop"})
+    assert archive_card(w, 2, approved=False)["ok"] is False
+    assert len(w.list_cards()) == 2
+    assert archive_card(w, 2, approved=True)["ok"] is True
+    names = [c["name"] for c in w.list_cards()]
+    assert names == ["Keep"]                                                          # archived card excluded

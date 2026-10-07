@@ -53,6 +53,50 @@ class InMemoryMetabaseWriter:
     def get_card(self, card_id: int) -> Optional[Dict[str, Any]]:
         return self._cards.get(card_id)
 
+    # ── workspace CRUD (MetabaseWorkspaceProvider) ──
+    def update_card(self, card_id: int, changes: Dict[str, Any]) -> Dict[str, Any]:
+        rec = self._cards.get(card_id)
+        if rec is None:
+            return {}
+        rec.update({k: v for k, v in changes.items() if k != "id"})
+        return rec
+
+    def archive_card(self, card_id: int) -> bool:
+        rec = self._cards.get(card_id)
+        if rec is None:
+            return False
+        rec["archived"] = True
+        return True
+
+    def list_cards(self) -> list:
+        return [c for c in self._cards.values() if not c.get("archived")]
+
+    def get_dashboard(self, dashboard_id: int) -> Optional[Dict[str, Any]]:
+        return self._dashboards.get(dashboard_id)
+
+    def update_dashboard(self, dashboard_id: int, changes: Dict[str, Any]) -> Dict[str, Any]:
+        d = self._dashboards.get(dashboard_id)
+        if d is None:
+            return {}
+        d.update({k: v for k, v in changes.items() if k != "id"})
+        return d
+
+    def archive_dashboard(self, dashboard_id: int) -> bool:
+        d = self._dashboards.get(dashboard_id)
+        if d is None:
+            return False
+        d["archived"] = True
+        return True
+
+    def add_card_to_dashboard(self, dashboard_id: int, card_id: int, *, size_x: int = 12, size_y: int = 4) -> bool:
+        d = self._dashboards.get(dashboard_id)
+        if d is None:
+            return False
+        cards = d.setdefault("dashcards", [])
+        if card_id not in cards:
+            cards.append(card_id)
+        return True
+
 
 @dataclass
 class HttpMetabaseWriter:
@@ -107,6 +151,54 @@ class HttpMetabaseWriter:
         with self._client() as c:
             r = self._req(c, "GET", f"/api/card/{card_id}")
             return r.json() if r.status_code == 200 else None
+
+    # ── workspace CRUD (MetabaseWorkspaceProvider) ──
+    def update_card(self, card_id: int, changes: Dict[str, Any]) -> Dict[str, Any]:
+        with self._client() as c:
+            r = self._req(c, "PUT", f"/api/card/{card_id}", json=changes)
+            r.raise_for_status()
+            return r.json()
+
+    def archive_card(self, card_id: int) -> bool:
+        with self._client() as c:                            # Metabase soft-deletes via the archived flag
+            r = self._req(c, "PUT", f"/api/card/{card_id}", json={"archived": True})
+            return r.status_code in (200, 201)
+
+    def list_cards(self) -> list:
+        with self._client() as c:
+            r = self._req(c, "GET", "/api/card")
+            return r.json() if r.status_code == 200 else []
+
+    def get_dashboard(self, dashboard_id: int) -> Optional[Dict[str, Any]]:
+        with self._client() as c:
+            r = self._req(c, "GET", f"/api/dashboard/{dashboard_id}")
+            return r.json() if r.status_code == 200 else None
+
+    def update_dashboard(self, dashboard_id: int, changes: Dict[str, Any]) -> Dict[str, Any]:
+        with self._client() as c:
+            r = self._req(c, "PUT", f"/api/dashboard/{dashboard_id}", json=changes)
+            r.raise_for_status()
+            return r.json()
+
+    def archive_dashboard(self, dashboard_id: int) -> bool:
+        with self._client() as c:
+            r = self._req(c, "PUT", f"/api/dashboard/{dashboard_id}", json={"archived": True})
+            return r.status_code in (200, 201)
+
+    def add_card_to_dashboard(self, dashboard_id: int, card_id: int, *, size_x: int = 12, size_y: int = 4) -> bool:
+        """Append a card to an EXISTING dashboard, preserving its current dashcards (Metabase replaces the whole
+        dashcards set on PUT, so we read-modify-write)."""
+        with self._client() as c:
+            cur = self._req(c, "GET", f"/api/dashboard/{dashboard_id}")
+            if cur.status_code != 200:
+                return False
+            existing = cur.json().get("dashcards", []) or []
+            row = (len(existing) // 2) * size_y
+            col = (len(existing) % 2) * size_x
+            new = {"id": -(len(existing) + 1), "card_id": card_id, "row": row, "col": col,
+                   "size_x": size_x, "size_y": size_y}
+            r = self._req(c, "PUT", f"/api/dashboard/{dashboard_id}", json={"dashcards": existing + [new]})
+            return r.status_code in (200, 201)
 
 
 __all__ = ["MetabaseWriter", "InMemoryMetabaseWriter", "HttpMetabaseWriter"]
