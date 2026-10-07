@@ -14,10 +14,12 @@ from .contracts import (
 )
 from .session import InMemorySessionStore, SidekickSession
 from .analytics import AnalyticsContext, analytics_from_surface
+from .twenty import TwentySurfaceAdapter
 
 __all__ = [
     "SidekickMode", "SurfaceContext", "SurfaceRef", "ArtifactLink", "SurfaceHandoff",
     "SidekickRequest", "SidekickResponse", "SidekickSurfaceAdapter",
     "SidekickSession", "InMemorySessionStore",
     "AnalyticsContext", "analytics_from_surface",
+    "TwentySurfaceAdapter",
 ]
