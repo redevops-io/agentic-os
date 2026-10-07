@@ -129,3 +129,30 @@ def test_governed_archive_card_and_list():
     assert archive_card(w, 2, approved=True)["ok"] is True
     names = [c["name"] for c in w.list_cards()]
     assert names == ["Keep"]                                                          # archived card excluded
+
+
+# ── semantic registry wiring (which 'revenue' did we mean?) ───────────────────────────────────────
+def test_interpret_tags_spec_with_metric_id():
+    from agentic_os.visualization import interpret
+    assert interpret("revenue by month", database_id=1).metric_id == "revenue.invoiced"
+    assert interpret("gross margin by service line", database_id=1).metric_id == "margin.gross"
+    assert interpret("receivable aging", database_id=1).metric_id == "receivable.outstanding"
+
+
+def test_annotate_with_semantics_records_definition_on_artifact():
+    from agentic_os.visualization import annotate_with_semantics, default_semantic_registry, interpret, resolve_metric
+    reg = default_semantic_registry()
+    spec = interpret("revenue by month", database_id=1)
+    defn = resolve_metric(spec, reg)
+    assert defn is not None and defn.metric_id == "revenue.invoiced" and defn.timing_semantics
+    annotated = annotate_with_semantics(spec, reg)
+    assert "revenue.invoiced" in annotated.description and "job completion" in annotated.description
+    assert annotated.sql == spec.sql and annotated.fingerprint() == spec.fingerprint()   # SQL/fingerprint unchanged
+
+
+def test_annotate_is_noop_for_untagged_or_unknown_metric():
+    from agentic_os.visualization import VizSpec, annotate_with_semantics, default_semantic_registry, resolve_metric
+    reg = default_semantic_registry()
+    bare = VizSpec(title="X", sql="SELECT 1", database_id=1)       # no metric_id
+    assert resolve_metric(bare, reg) is None
+    assert annotate_with_semantics(bare, reg) is bare or annotate_with_semantics(bare, reg).description == bare.description

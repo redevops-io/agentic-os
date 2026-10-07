@@ -52,6 +52,7 @@ class VizSpec:
     visualization_settings: Mapping[str, Any] = field(default_factory=dict)
     description: str = ""
     source: str = "template"             # template | nl | llm
+    metric_id: str = ""                  # Semantic Registry id (which 'revenue' etc.) recorded on the artifact
 
     def fingerprint(self) -> str:
         """Content hash over exactly the fields a human reviews — so an approval binds to this exact chart and
