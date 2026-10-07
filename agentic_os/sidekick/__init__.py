@@ -21,8 +21,8 @@ from .capability import (
 )
 from .catalog import register_builtin_capabilities
 from .workers import (
-    Claim, ClaimConflict, DEFAULT_POLICIES, MergePolicy, MergeReceipt, MergedSidekickResult,
-    SidekickWorkerContext, SidekickWorkerResult, WorkerResultType, merge_worker_results,
+    Claim, ClaimConflict, DEFAULT_POLICIES, MERGE_POLICY_ALIASES, MergePolicy, MergeReceipt, MergedSidekickResult,
+    SidekickWorkerContext, SidekickWorkerResult, WorkerResultType, coerce_merge_policy, merge_worker_results,
 )
 
 __all__ = [
@@ -35,4 +35,5 @@ __all__ = [
     "default_registry", "register_capability", "register_builtin_capabilities",
     "WorkerResultType", "MergePolicy", "Claim", "SidekickWorkerContext", "SidekickWorkerResult",
     "ClaimConflict", "MergeReceipt", "MergedSidekickResult", "DEFAULT_POLICIES", "merge_worker_results",
+    "MERGE_POLICY_ALIASES", "coerce_merge_policy",
 ]
