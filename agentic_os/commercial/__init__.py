@@ -18,6 +18,8 @@ from .funnel import (
 )
 from .offer import Offer, OfferConstraints, OfferDecision, decide_offer
 from .campaign import CampaignHypothesis, CampaignPlan, build_campaign_plan
+from .deal_state import FieldReadback, produce_verified_deal
+from .bindings import bind_commercial_capabilities
 
 __all__ = [
     "CanonicalPerson", "CanonicalOrganization", "CommercialOutcome", "record_commercial_outcome",
@@ -28,4 +30,5 @@ __all__ = [
     "diagnose_funnel", "action_for_gap", "intervention_from_opportunity",
     "Offer", "OfferConstraints", "OfferDecision", "decide_offer",
     "CampaignHypothesis", "CampaignPlan", "build_campaign_plan",
+    "FieldReadback", "produce_verified_deal", "bind_commercial_capabilities",
 ]
