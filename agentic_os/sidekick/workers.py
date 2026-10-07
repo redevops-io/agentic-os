@@ -154,6 +154,38 @@ class MergedSidekickResult:
     receipt: Optional[MergeReceipt] = None
 
 
+# --- merge-policy vocabulary reconciliation (P1C) ---------------------------------------------------------------
+# `MergePolicy` (field-level result reduction) is the canonical vocabulary. The enterprise Projects-workflow join
+# declares its own names at the SAME granularity; this maps them onto the canonical set so both speak one language.
+# NOTE: the Mission-run `mission.merge.MergeStrategy` is a DIFFERENT concept (how a merge *mission* executes:
+# DIRECT/HIERARCHICAL/HUMAN_GATED/…) — deliberately NOT folded in here. And "model_synthesis" is a post-merge
+# presentation step, not a field policy, so it has no reduction equivalent.
+MERGE_POLICY_ALIASES: Mapping[str, MergePolicy] = {
+    "concatenate": MergePolicy.SET_UNION,
+    "schema_merge": MergePolicy.KEYED_MERGE,
+    "ranked_evidence": MergePolicy.HIGHEST_EVIDENCE,
+    "consensus": MergePolicy.REQUIRE_AGREEMENT,
+    "contradiction_first": MergePolicy.KEEP_CONTRADICTIONS,
+    "choose_best": MergePolicy.RANK_CANDIDATES,
+    "custom": MergePolicy.CUSTOM_DOMAIN_REDUCER,
+}
+
+
+def coerce_merge_policy(value: Any) -> MergePolicy:
+    """Resolve a MergePolicy from a MergePolicy, its canonical value, or a known alias (e.g. the Projects-workflow
+    vocabulary). Raises on an unknown name or on ``model_synthesis`` (a synthesis step, not a field policy)."""
+    if isinstance(value, MergePolicy):
+        return value
+    k = str(getattr(value, "value", value)).strip().lower()
+    if k in MergePolicy._value2member_map_:
+        return MergePolicy(k)
+    if k in MERGE_POLICY_ALIASES:
+        return MERGE_POLICY_ALIASES[k]
+    if k == "model_synthesis":
+        raise ValueError("model_synthesis is a post-merge synthesis step, not a field reduction policy")
+    raise ValueError(f"unknown merge policy: {value!r}")
+
+
 DEFAULT_POLICIES: Mapping[str, MergePolicy] = {
     "claims": MergePolicy.KEEP_CONTRADICTIONS,
     "evidence": MergePolicy.SET_UNION,
@@ -319,4 +351,5 @@ def merge_worker_results(
 __all__ = [
     "WorkerResultType", "MergePolicy", "Claim", "SidekickWorkerContext", "SidekickWorkerResult",
     "ClaimConflict", "MergeReceipt", "MergedSidekickResult", "DEFAULT_POLICIES", "merge_worker_results",
+    "MERGE_POLICY_ALIASES", "coerce_merge_policy",
 ]
