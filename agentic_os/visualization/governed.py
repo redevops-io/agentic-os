@@ -94,5 +94,36 @@ def apply_if_approved(proposal: VizProposal, writer: MetabaseWriter, approvals: 
     return create_visualization(proposal, writer, approved=approvals.is_approved(proposal.fingerprint), **kw)
 
 
+# ── governed MUTATIONS (update / archive / add-to-existing-dashboard) ────────────────────────────────
+# Every workspace mutation is an external write to a shared tool → approval-gated exactly like create. These
+# refuse (no side effect) unless ``approved`` and return a small result dict for the caller/audit trail.
+def update_card(provider, card_id: int, changes: Dict, *, approved: bool) -> dict:
+    if not approved:
+        return {"ok": False, "detail": "refused: updating a Metabase card requires approval"}
+    rec = provider.update_card(card_id, changes)
+    return {"ok": bool(rec), "card": rec, "detail": "updated" if rec else "card not found"}
+
+
+def add_card_to_dashboard(provider, dashboard_id: int, card_id: int, *, approved: bool,
+                          size_x: int = 12, size_y: int = 4) -> dict:
+    if not approved:
+        return {"ok": False, "detail": "refused: modifying a Metabase dashboard requires approval"}
+    ok = provider.add_card_to_dashboard(dashboard_id, card_id, size_x=size_x, size_y=size_y)
+    return {"ok": ok, "detail": "card added to dashboard" if ok else "dashboard not found"}
+
+
+def archive_card(provider, card_id: int, *, approved: bool) -> dict:
+    if not approved:
+        return {"ok": False, "detail": "refused: archiving a Metabase card requires approval"}
+    return {"ok": provider.archive_card(card_id), "detail": "archived"}
+
+
+def archive_dashboard(provider, dashboard_id: int, *, approved: bool) -> dict:
+    if not approved:
+        return {"ok": False, "detail": "refused: archiving a Metabase dashboard requires approval"}
+    return {"ok": provider.archive_dashboard(dashboard_id), "detail": "archived"}
+
+
 __all__ = ["VIZ_RISK_TIER", "VizProposal", "propose", "InMemoryVizApprovals",
-           "create_visualization", "apply_if_approved"]
+           "create_visualization", "apply_if_approved",
+           "update_card", "add_card_to_dashboard", "archive_card", "archive_dashboard"]

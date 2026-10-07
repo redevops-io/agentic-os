@@ -15,16 +15,19 @@ offline against the in-memory writer (fake-until-credentialed).
 from .contracts import DISPLAY_ALIASES, DisplayType, VizCard, VizResult, VizSpec
 from .compile import card_payload, dashboard_payload, dashcards_payload
 from .client import HttpMetabaseWriter, InMemoryMetabaseWriter, MetabaseWriter
+from .workspace import MetabaseWorkspaceProvider
 from .nl import METRIC_LIBRARY, MetricTemplate, available_metrics, interpret
 from .governed import (
-    VIZ_RISK_TIER, InMemoryVizApprovals, VizProposal, apply_if_approved, create_visualization, propose,
+    VIZ_RISK_TIER, InMemoryVizApprovals, VizProposal, add_card_to_dashboard, apply_if_approved, archive_card,
+    archive_dashboard, create_visualization, propose, update_card,
 )
 
 __all__ = [
     "DisplayType", "DISPLAY_ALIASES", "VizSpec", "VizCard", "VizResult",
     "card_payload", "dashboard_payload", "dashcards_payload",
-    "MetabaseWriter", "InMemoryMetabaseWriter", "HttpMetabaseWriter",
+    "MetabaseWriter", "InMemoryMetabaseWriter", "HttpMetabaseWriter", "MetabaseWorkspaceProvider",
     "interpret", "available_metrics", "METRIC_LIBRARY", "MetricTemplate",
     "propose", "VizProposal", "InMemoryVizApprovals", "create_visualization", "apply_if_approved",
+    "update_card", "add_card_to_dashboard", "archive_card", "archive_dashboard",
     "VIZ_RISK_TIER",
 ]
