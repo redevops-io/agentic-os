@@ -78,3 +78,26 @@ def test_request_carries_session_and_context_not_bare_string():
 
 def test_non_metabase_surface_has_no_analytics():
     assert analytics_from_surface(SurfaceContext(app_id="twenty")) is None
+
+
+# ── Twenty as a Sidekick surface (same model as Metabase) ─────────────────────────────────────────
+def test_twenty_surface_adapter_record_context():
+    from agentic_os.sidekick import TwentySurfaceAdapter
+    ad = TwentySurfaceAdapter(base_url="https://crm.redevops.io", object_type="opportunity",
+                              object_id="acme", view="record")
+    ctx = ad.context()
+    assert ctx.app_id == "twenty" and ctx.object_type == "opportunity"
+    assert ctx.object_ids == ("acme",) and ctx.route == "/object/opportunities/acme"
+    assert "crm.activity.write" in ctx.native_capabilities and ctx.view_state == {"view": "record"}
+    assert ad.deep_link("opportunity", "acme") == "https://crm.redevops.io/object/opportunities/acme"
+
+
+def test_twenty_surface_adapter_selection_from_table():
+    from agentic_os.sidekick import TwentySurfaceAdapter
+    ad = TwentySurfaceAdapter(base_url="https://crm.redevops.io", object_type="opportunity",
+                              selection=("op1", "op2", "op3"), view="table")
+    ctx = ad.context()
+    assert ctx.selection == ("op1", "op2", "op3")            # a Kanban/table multi-select becomes Sidekick input
+    assert ctx.route == "/objects/opportunities"
+    link = ad.artifact_link("opportunity", "op1", project_id="P", session_id="sk_1")
+    assert link.provider == "twenty" and link.native_url.endswith("/object/opportunities/op1")
