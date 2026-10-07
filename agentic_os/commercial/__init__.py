@@ -11,9 +11,17 @@ from .capture import (
     CRMProjection, CaptureChannel, CaptureEvent, CaptureExtraction, CaptureGateway, ChangeProposal,
     CommercialActivity, CommercialCaptureProvider, ProjectionPolicy, classify_change,
 )
+from .funnel import (
+    ConversionFunnel, ConversionStage, FunnelAction, FunnelDiagnosis, FunnelExecutionProvider,
+    FunnelIntervention, FunnelObservationProvider, FunnelPlan, SurfaceType, action_for_gap,
+    diagnose_funnel, intervention_from_opportunity,
+)
 
 __all__ = [
     "CanonicalPerson", "CanonicalOrganization", "CommercialOutcome", "record_commercial_outcome",
     "CaptureChannel", "ProjectionPolicy", "CaptureEvent", "CommercialActivity", "ChangeProposal",
     "CRMProjection", "CaptureExtraction", "CommercialCaptureProvider", "CaptureGateway", "classify_change",
+    "SurfaceType", "FunnelAction", "ConversionStage", "ConversionFunnel", "FunnelIntervention",
+    "FunnelDiagnosis", "FunnelPlan", "FunnelObservationProvider", "FunnelExecutionProvider",
+    "diagnose_funnel", "action_for_gap", "intervention_from_opportunity",
 ]
