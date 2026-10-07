@@ -52,14 +52,23 @@ class UmamiFunnelProvider:
 
 
 def funnel_observation(funnel: ConversionFunnel, *, client: Optional[UmamiClient] = None,
-                       days: int = 30) -> Optional[Dict[str, float]]:
-    """Return per-stage conversion for a funnel from a live source, or None if no source is configured / reachable
-    (so the caller can fall back to synthetic). Uses ``client`` if given, else ``umami_from_env()``."""
+                       domain: str = "", days: int = 30) -> Optional[Dict[str, float]]:
+    """Return per-stage conversion for a funnel from a live source, or None if no source is configured / reachable /
+    has no data (so the caller can fall back to synthetic). Uses ``client`` if given, else ``umami_from_env()``. If
+    the client has no ``website_id``, resolves it from ``domain`` (so callers need only a domain, not an id)."""
     c = client or umami_from_env()
     if c is None:
         return None
+    if not getattr(c, "website_id", "") and domain:
+        try:
+            wid = c.website_id_for(domain)
+        except Exception:  # noqa: BLE001
+            wid = ""
+        if not wid:
+            return None
+        c.website_id = wid
     conv = UmamiFunnelProvider(c).stage_conversion(funnel, days=days)
-    # all-zero (empty Umami / unreachable) → treat as no observation
+    # all non-terminal stages zero (empty Umami / paths don't match) → treat as no observation
     return conv if any(v for k, v in conv.items() if k != funnel.stages[-1].stage_id) else None
 
 
