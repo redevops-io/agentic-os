@@ -20,6 +20,10 @@ from .capability import (
     default_registry, register_capability,
 )
 from .catalog import register_builtin_capabilities
+from .workers import (
+    Claim, ClaimConflict, DEFAULT_POLICIES, MergePolicy, MergeReceipt, MergedSidekickResult,
+    SidekickWorkerContext, SidekickWorkerResult, WorkerResultType, merge_worker_results,
+)
 
 __all__ = [
     "SidekickMode", "SurfaceContext", "SurfaceRef", "ArtifactLink", "SurfaceHandoff",
@@ -29,4 +33,6 @@ __all__ = [
     "TwentySurfaceAdapter",
     "CapabilityDomain", "Maturity", "SidekickCapability", "CapabilityMatch", "CapabilityRegistry",
     "default_registry", "register_capability", "register_builtin_capabilities",
+    "WorkerResultType", "MergePolicy", "Claim", "SidekickWorkerContext", "SidekickWorkerResult",
+    "ClaimConflict", "MergeReceipt", "MergedSidekickResult", "DEFAULT_POLICIES", "merge_worker_results",
 ]
