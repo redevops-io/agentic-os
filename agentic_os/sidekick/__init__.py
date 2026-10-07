@@ -15,6 +15,11 @@ from .contracts import (
 from .session import InMemorySessionStore, SidekickSession
 from .analytics import AnalyticsContext, analytics_from_surface
 from .twenty import TwentySurfaceAdapter
+from .capability import (
+    CapabilityDomain, CapabilityMatch, CapabilityRegistry, Maturity, SidekickCapability,
+    default_registry, register_capability,
+)
+from .catalog import register_builtin_capabilities
 
 __all__ = [
     "SidekickMode", "SurfaceContext", "SurfaceRef", "ArtifactLink", "SurfaceHandoff",
@@ -22,4 +27,6 @@ __all__ = [
     "SidekickSession", "InMemorySessionStore",
     "AnalyticsContext", "analytics_from_surface",
     "TwentySurfaceAdapter",
+    "CapabilityDomain", "Maturity", "SidekickCapability", "CapabilityMatch", "CapabilityRegistry",
+    "default_registry", "register_capability", "register_builtin_capabilities",
 ]
