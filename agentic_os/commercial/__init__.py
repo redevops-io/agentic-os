@@ -16,6 +16,8 @@ from .funnel import (
     FunnelIntervention, FunnelObservationProvider, FunnelPlan, SurfaceType, action_for_gap,
     diagnose_funnel, intervention_from_opportunity,
 )
+from .offer import Offer, OfferConstraints, OfferDecision, decide_offer
+from .campaign import CampaignHypothesis, CampaignPlan, build_campaign_plan
 
 __all__ = [
     "CanonicalPerson", "CanonicalOrganization", "CommercialOutcome", "record_commercial_outcome",
@@ -24,4 +26,6 @@ __all__ = [
     "SurfaceType", "FunnelAction", "ConversionStage", "ConversionFunnel", "FunnelIntervention",
     "FunnelDiagnosis", "FunnelPlan", "FunnelObservationProvider", "FunnelExecutionProvider",
     "diagnose_funnel", "action_for_gap", "intervention_from_opportunity",
+    "Offer", "OfferConstraints", "OfferDecision", "decide_offer",
+    "CampaignHypothesis", "CampaignPlan", "build_campaign_plan",
 ]
