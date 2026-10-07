@@ -7,6 +7,7 @@ reward loop. Additive and non-breaking — no existing type changes.
 """
 from .identity import CanonicalOrganization, CanonicalPerson
 from .outcome import CommercialOutcome, record_commercial_outcome
+from .learning import learn, learn_many
 from .capture import (
     CRMProjection, CaptureChannel, CaptureEvent, CaptureExtraction, CaptureGateway, ChangeProposal,
     CommercialActivity, CommercialCaptureProvider, ProjectionPolicy, classify_change,
@@ -32,6 +33,7 @@ from .receivables import (
 
 __all__ = [
     "CanonicalPerson", "CanonicalOrganization", "CommercialOutcome", "record_commercial_outcome",
+    "learn", "learn_many",
     "CaptureChannel", "ProjectionPolicy", "CaptureEvent", "CommercialActivity", "ChangeProposal",
     "CRMProjection", "CaptureExtraction", "CommercialCaptureProvider", "CaptureGateway", "classify_change",
     "SurfaceType", "FunnelAction", "ConversionStage", "ConversionFunnel", "FunnelIntervention",
