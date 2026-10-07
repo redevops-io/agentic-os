@@ -16,6 +16,7 @@ from .session import InMemorySessionStore, SidekickSession
 from .analytics import AnalyticsContext, analytics_from_surface
 from .twenty import TwentySurfaceAdapter
 from .surfaces import ChatwootSurfaceAdapter, ERPNextSurfaceAdapter, PostizSurfaceAdapter, SessionStore
+from .orchestrator import CapabilityResult, CapabilityUnavailable, SidekickOrchestrator
 from .capability import (
     CapabilityDomain, CapabilityMatch, CapabilityRegistry, Maturity, SidekickCapability,
     default_registry, register_capability,
@@ -38,4 +39,5 @@ __all__ = [
     "WorkerResultType", "MergePolicy", "Claim", "SidekickWorkerContext", "SidekickWorkerResult",
     "ClaimConflict", "MergeReceipt", "MergedSidekickResult", "DEFAULT_POLICIES", "merge_worker_results",
     "MERGE_POLICY_ALIASES", "coerce_merge_policy",
+    "SidekickOrchestrator", "CapabilityResult", "CapabilityUnavailable",
 ]
