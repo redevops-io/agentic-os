@@ -96,3 +96,18 @@ def test_sky_deploy_template_shape():
     intent = TEMPLATES["sky_deploy"]("m1")
     outcomes = [s.outcome for s in intent.steps]
     assert outcomes == ["clouds_enabled", "placement_ranked", "cluster_launched", "deploy_verified"]
+
+
+def test_launch_pins_to_chosen_and_rewards_actual_placement():
+    """sky.launch pins to the approved candidate (so SkyPilot provisions EXACTLY the ranked placement,
+    not a fresh re-optimization), and the reward keys to the placement that ACTUALLY launched."""
+    run = _stub({"sky launch": (0, "Launching on GCP g2-standard-4\nEndpoint: http://34.1.2.3:8000\n", "")})
+    op = build_sky_operator(run=run)
+    chosen = {"cloud": "GCP", "region": "us-central1", "instance": "g2-standard-4"}
+    res = op.invoke("sky.launch", {"spec": {"gpus": "L4:1", "name": "demo"}, "chosen": chosen})
+    launch_argv = run.calls[0]
+    assert "--cloud" in launch_argv and "GCP" in launch_argv            # pinned to the chosen cloud
+    assert "--region" in launch_argv and "us-central1" in launch_argv   # pinned to the chosen region
+    assert "--instance-type" in launch_argv and "g2-standard-4" in launch_argv
+    assert res["cloud"] == "GCP" and res["region"] == "us-central1"
+    assert isinstance(res["reward"], float)                             # reward recorded for the actual placement
