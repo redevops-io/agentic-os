@@ -86,3 +86,20 @@ def test_mission_api_end_to_end():
     assert done["state"] == "succeeded"
     explain = c.get(f"/missions/{mid}/explain").json()
     assert explain["state"] == "succeeded" and len(explain["steps"]) >= 4
+
+
+def test_invoke_wraps_result_under_declared_output_key():
+    """Read-back contract (N4): when a handler returns a dict that lacks the capability's declared
+    output key, invoke() wraps it under that key so the verifier can read it back — rather than the
+    side effect being REJECTED after it committed. A result that already carries the key is untouched."""
+    op = Operator("acct", [
+        capability("acct.refund", lambda i: {"status": "staged", "amount": 10},
+                   provides=["refund_staged"], outputs={"refund_staged": "the staged refund"},
+                   side_effecting=True),
+        capability("acct.read", lambda i: {"refund_staged": True, "extra": 1},
+                   provides=["refund_staged"], outputs={"refund_staged": "already present"}),
+    ])
+    wrapped = op.invoke("acct.refund", {})
+    assert "refund_staged" in wrapped and wrapped["refund_staged"] == {"status": "staged", "amount": 10}
+    untouched = op.invoke("acct.read", {})
+    assert untouched == {"refund_staged": True, "extra": 1}      # key already present → not re-wrapped

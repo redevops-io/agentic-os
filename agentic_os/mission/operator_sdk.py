@@ -66,6 +66,7 @@ class Operator:
             c.spec.operator = c.spec.operator or name
         self.manifest = CapabilityManifest(operator=name, capabilities=[c.spec for c in capabilities])
         self._handlers: dict[str, Handler] = {c.spec.name: c.handler for c in capabilities}
+        self._specs: dict[str, CapabilitySpec] = {c.spec.name: c.spec for c in capabilities}
         self._seen: dict[str, dict] = {}       # idempotency_key -> first result (exactly-once)
         self.calls: list[tuple[str, str]] = []  # (capability, idempotency_key) — for assertions
 
@@ -86,6 +87,14 @@ class Operator:
         except (TypeError, ValueError):
             arity = 1
         result = (fn(inputs, secrets or {}) if arity >= 2 else fn(inputs)) or {}
+        # Read-back contract (N4): the result must carry the capability's declared output keys so the
+        # Mission verifier (mission.verify) can read them back — otherwise a side effect is REJECTED after
+        # it has already committed. A handler that returns an operational dict without the declared
+        # semantic key has its result wrapped under that key, so the manifest's output contract is true.
+        spec = self._specs.get(capability)
+        outs = list((getattr(spec, "outputs", None) or {}).keys()) if spec else []
+        if isinstance(result, dict) and outs and not any(k in result for k in outs):
+            result = {outs[0]: result} if len(outs) == 1 else {k: result for k in outs}
         if idempotency_key:
             self._seen[idempotency_key] = result
         return result
