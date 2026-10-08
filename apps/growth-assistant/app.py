@@ -77,35 +77,17 @@ app = FastAPI(title=f"growth-assistant ({TENANT})")
 
 # --- the agent brain (DeepSeek-V4-Flash; Claude fallback) --------------------
 def _llm_text(prompt: str, max_tokens: int = 900, temperature: float = 0.5) -> str | None:
-    base = os.environ.get("REDEVOPS_LLM_BASE_URL")
-    if base:
-        try:
-            r = httpx.post(base.rstrip("/") + "/chat/completions",
-                           json={"model": os.environ.get("REDEVOPS_LLM_MODEL", "DeepSeek-V4-Flash"),
-                                 "messages": [{"role": "user", "content": prompt}],
-                                 "max_tokens": max_tokens, "temperature": temperature},
-                           timeout=180.0)
-            if r.status_code == 200:
-                txt = (r.json().get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
-                if txt:
-                    return txt
-        except Exception:
-            pass
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if not key:
-        return None
+    # N7: route through the governed LLM (classification-gated, fail-closed). Growth evidence is customer
+    # business data (CUSTOMER_CONFIDENTIAL), so it can only reach the in-boundary model — the previous
+    # direct api.anthropic.com fallback would have sent that data to an external provider ungoverned.
+    # Degrades to None (no inference) when the kernel/model is absent; never an external fallback.
     try:
-        r = httpx.post("https://api.anthropic.com/v1/messages",
-                       headers={"x-api-key": key, "anthropic-version": "2023-06-01",
-                                "content-type": "application/json"},
-                       json={"model": "claude-opus-4-8", "max_tokens": max_tokens,
-                             "messages": [{"role": "user", "content": prompt}]},
-                       timeout=60.0)
-        r.raise_for_status()
-        return "".join(b.get("text", "") for b in r.json().get("content", [])
-                       if b.get("type") == "text").strip() or None
+        from agentic_os.app.llm import governed_text
+        from agentic_os.governance.classification import DataClassification
     except Exception:
         return None
+    return governed_text(prompt, classifications=(DataClassification.CUSTOMER_CONFIDENTIAL,),
+                         max_tokens=max_tokens, temperature=temperature)
 
 
 def _llm_json(prompt: str, max_tokens: int = 1500) -> dict | list | None:
@@ -147,22 +129,19 @@ def _chat_brain(messages: list[dict], max_tokens: int = 700, temperature: float 
                     return txt, label
         except Exception:
             continue
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if key:
-        try:
-            prompt = "\n\n".join(m.get("content", "") for m in messages)
-            r = httpx.post("https://api.anthropic.com/v1/messages",
-                           headers={"x-api-key": key, "anthropic-version": "2023-06-01",
-                                    "content-type": "application/json"},
-                           json={"model": "claude-opus-4-8", "max_tokens": max_tokens,
-                                 "messages": [{"role": "user", "content": prompt}]}, timeout=60.0)
-            r.raise_for_status()
-            txt = "".join(b.get("text", "") for b in r.json().get("content", [])
-                          if b.get("type") == "text").strip()
-            if txt:
-                return txt, "claude"
-        except Exception:
-            pass
+    # N7: no external-provider fallback. If no in-boundary candidate answered, try the governed LLM, which
+    # routes fail-closed to the in-boundary model — the previous api.anthropic.com fallback sent chat
+    # context (customer business data) to an external provider ungoverned.
+    try:
+        from agentic_os.app.llm import governed_text
+        from agentic_os.governance.classification import DataClassification
+        prompt = "\n\n".join(m.get("content", "") for m in messages)
+        txt = governed_text(prompt, classifications=(DataClassification.CUSTOMER_CONFIDENTIAL,),
+                            max_tokens=max_tokens)
+        if txt:
+            return txt, "governed"
+    except Exception:
+        pass
     return None, "none"
 
 

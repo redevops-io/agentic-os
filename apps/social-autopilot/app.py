@@ -481,75 +481,20 @@ def render(data: dict) -> str:
 
 # --- optional LLM copywriting (guarded: works without any API key) -----------
 def _llm_copy(topic: str) -> str | None:
-    """Draft post copy with Claude, or None if no key / any error. Optional by design —
-    the template fallback always produces usable copy."""
+    """Draft post copy via the GOVERNED LLM, or None. Optional by design — the template fallback always
+    produces usable copy. N7: routed fail-closed to the in-boundary model; the previous direct OpenAI and
+    api.anthropic.com calls sent the firm's content prompts to external providers ungoverned."""
+    try:
+        from agentic_os.app.llm import governed_text
+    except Exception:
+        return None
     prompt = (
         "You write compliant social posts for a wealth-management firm (Meridian Wealth Management). "
         "Avoid performance promises, guarantees, or client testimonials. "
         f"Write ONE short, friendly social post about: {topic}. "
         "Include 1-2 relevant hashtags. Output only the post text, no preamble."
     )
-    # Preferred: OpenAI gpt-5.5 (set OPENAI_API_KEY). Falls back to the self-hosted model,
-    # then Claude, then the deterministic template — so the demo works with or without a key.
-    okey = os.environ.get("OPENAI_API_KEY")
-    if okey:
-        try:
-            r = httpx.post(
-                os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/") + "/chat/completions",
-                headers={"Authorization": f"Bearer {okey}"},
-                json={"model": os.environ.get("SOCIAL_LLM_MODEL", "gpt-5.5"),
-                      "messages": [{"role": "user", "content": prompt}],
-                      "max_completion_tokens": 220},   # GPT-5 family uses max_completion_tokens
-                timeout=30.0,
-            )
-            if r.status_code == 200:
-                txt = (r.json().get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
-                if txt:
-                    return txt
-        except Exception:
-            pass
-    base = os.environ.get("REDEVOPS_LLM_BASE_URL")
-    if base:
-        try:
-            r = httpx.post(
-                base.rstrip("/") + "/chat/completions",
-                json={"model": os.environ.get("REDEVOPS_LLM_MODEL", "DeepSeek-V4-Flash"),
-                      "messages": [{"role": "user", "content": prompt}],
-                      "max_tokens": 220, "temperature": 0.3},
-                timeout=90.0,   # DeepSeek runs on CPU (~15 tok/s) — be patient
-            )
-            if r.status_code == 200:
-                txt = (r.json().get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
-                if txt:
-                    return txt
-        except Exception:
-            pass
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if not key:
-        return None
-    try:
-        r = httpx.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-            json={
-                # claude-opus-4-8 is Anthropic's current Opus-tier model id.
-                "model": "claude-opus-4-8",
-                "max_tokens": 200,
-                "messages": [{"role": "user", "content": (
-                    "You write compliant social posts for a wealth-management firm (Meridian Wealth Management). "
-                    "Avoid performance promises, guarantees, or client testimonials. "
-                    f"Write ONE short, friendly social post about: {topic}. "
-                    "Include 1-2 relevant hashtags. Output only the post text, no preamble."
-                )}],
-            },
-            timeout=15.0,
-        )
-        r.raise_for_status()
-        return "".join(
-            b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text"
-        ).strip() or None
-    except Exception:
-        return None
+    return governed_text(prompt, max_tokens=220, temperature=0.3)
 
 
 # --- agentic actions (thin wrappers over core; core stays context-runtime-free) ---

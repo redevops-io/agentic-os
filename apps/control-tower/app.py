@@ -379,76 +379,34 @@ def render(data: dict) -> str:
 
 # --- optional LLM assist (guarded: works without any API key) -----------------
 def _llm_pick_template(question: str) -> str | None:
-    """Use Claude to pick a template key, or None if no key / any error.
-
-    Optional by design — keyword routing below always works. The LLM only chooses
-    among PRE-WRITTEN SQL templates; it never authors SQL.
-    """
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if not key or not question:
+    """Pick a template key via the GOVERNED LLM, or None. Optional — keyword routing below always works.
+    The LLM only chooses among PRE-WRITTEN SQL templates; it never authors SQL. N7: the business question
+    (CUSTOMER_CONFIDENTIAL) is routed fail-closed to the in-boundary model, never to api.anthropic.com."""
+    if not question:
         return None
-    keys = ", ".join(t["key"] for t in QUESTION_TEMPLATES)
     try:
-        r = httpx.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-            json={
-                # claude-opus-4-8 is Anthropic's current Opus-tier model id.
-                "model": "claude-opus-4-8",
-                "max_tokens": 20,
-                "messages": [{
-                    "role": "user",
-                    "content": f"Pick the single best report key for this business question. "
-                               f"Reply with ONLY the key, nothing else.\nKeys: {keys}\nQuestion: {question}",
-                }],
-            },
-            timeout=12.0,
-        )
-        r.raise_for_status()
-        txt = "".join(b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text").strip()
-        return txt if txt in {t["key"] for t in QUESTION_TEMPLATES} else None
+        from agentic_os.app.llm import governed_text
+        from agentic_os.governance.classification import DataClassification
     except Exception:
         return None
+    keys = ", ".join(t["key"] for t in QUESTION_TEMPLATES)
+    txt = (governed_text(
+        f"Pick the single best report key for this business question. Reply with ONLY the key, nothing "
+        f"else.\nKeys: {keys}\nQuestion: {question}",
+        classifications=(DataClassification.CUSTOMER_CONFIDENTIAL,), max_tokens=20, temperature=0.0) or "").strip()
+    return txt if txt in {t["key"] for t in QUESTION_TEMPLATES} else None
 
 
 def _llm_blurb(prompt: str) -> str | None:
-    """Return a one-line reasoning blurb from Claude, or None if no key / any error."""
-    base = os.environ.get("REDEVOPS_LLM_BASE_URL")
-    if base:
-        try:
-            r = httpx.post(
-                base.rstrip("/") + "/chat/completions",
-                json={"model": os.environ.get("REDEVOPS_LLM_MODEL", "DeepSeek-V4-Flash"),
-                      "messages": [{"role": "user", "content": prompt}],
-                      "max_tokens": 220, "temperature": 0.3},
-                timeout=90.0,   # DeepSeek runs on CPU (~15 tok/s) — be patient
-            )
-            if r.status_code == 200:
-                txt = (r.json().get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
-                if txt:
-                    return txt
-        except Exception:
-            pass
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if not key:
-        return None
+    """A one-line reasoning blurb from the GOVERNED in-boundary LLM, or None. N7: fail-closed to the
+    in-boundary model — no api.anthropic.com fallback."""
     try:
-        r = httpx.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-            json={
-                "model": "claude-opus-4-8",
-                "max_tokens": 200,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=15.0,
-        )
-        r.raise_for_status()
-        return "".join(
-            b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text"
-        ).strip() or None
+        from agentic_os.app.llm import governed_text
+        from agentic_os.governance.classification import DataClassification
     except Exception:
         return None
+    return governed_text(prompt, classifications=(DataClassification.CUSTOMER_CONFIDENTIAL,),
+                         max_tokens=220, temperature=0.3)
 
 
 # --- agentic actions (thin wrappers over core; core stays context-runtime/LLM-free) ---

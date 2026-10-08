@@ -127,10 +127,52 @@ class GovernedLLM:
                          routing_reason=routed.routing_reason)
 
 
+def default_in_boundary_endpoint() -> "ModelEndpoint | None":
+    """The app's self-hosted in-boundary model, from ``REDEVOPS_LLM_BASE_URL`` — or ``None`` when unset.
+    Declaring it IN_BOUNDARY means anything it receives stays inside the boundary. Returns ``None`` when no
+    model is configured, so a caller degrades (no inference) instead of reaching an external provider."""
+    import os
+    from agentic_os.governance.routing import ExecutionBoundary
+    base = os.environ.get("REDEVOPS_LLM_BASE_URL", "") or ""
+    if not base:
+        return None
+    return ModelEndpoint(model_id=os.environ.get("REDEVOPS_LLM_MODEL", "DeepSeek-V4-Flash"),
+                         provider="self-hosted", boundary=ExecutionBoundary.IN_BOUNDARY,
+                         accepts=DataClassification.SECRET, network_route=base)
+
+
+def governed_text(prompt: str, *, classifications: Tuple[DataClassification, ...] = (),
+                  task_class: TaskClass = TaskClass.BUSINESS_REASONING,
+                  max_tokens: int = 900, temperature: float = 0.5, system: str = "") -> "str | None":
+    """One-call governed inference for an app (the N7 replacement for an ad-hoc ``_llm_*`` helper that
+    posted to api.anthropic.com on its own): route the prompt through the GovernedLLM to the configured
+    in-boundary model and return the text, or ``None`` if no compliant route exists — fail-closed, so the
+    app degrades and NEVER silently falls back to an external provider.
+
+    Business/customer evidence is ``CUSTOMER_CONFIDENTIAL`` by default, so in strict-private mode it can
+    only reach the in-boundary endpoint; an external route is refused.
+    """
+    from agentic_os.app.transports import OpenAICompatibleTransport
+    ep = default_in_boundary_endpoint()
+    if ep is None:
+        return None
+    gov = GovernedLLM.from_env(endpoints=(ep,), transport=OpenAICompatibleTransport.from_env())
+    try:
+        res = gov.complete(prompt, task_class=task_class,
+                           classifications=classifications or (DEFAULT_UNCLASSIFIED_AS,),
+                           system=system, max_tokens=max_tokens, temperature=temperature)
+    except Exception:
+        return None       # RoutingRefused (no compliant endpoint) / transport error → degrade, don't leak
+    txt = (res.text or "").strip()
+    return txt or None
+
+
 __all__ = [
     "APP_LLM_CONTRACT_VERSION",
     "DEFAULT_UNCLASSIFIED_AS",
     "Transport",
     "LLMResult",
     "GovernedLLM",
+    "default_in_boundary_endpoint",
+    "governed_text",
 ]

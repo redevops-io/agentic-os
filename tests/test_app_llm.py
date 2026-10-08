@@ -111,3 +111,21 @@ def test_route_only_does_not_generate():
     res = llm.route_only("x", classifications=(DataClassification.INTERNAL,))
     assert res.text == ""
     assert t.calls == []
+
+
+def test_governed_text_degrades_to_none_without_a_model(monkeypatch):
+    """governed_text never falls back to an external provider: with no in-boundary model configured it
+    returns None (the app degrades), and default_in_boundary_endpoint is None."""
+    from agentic_os.app.llm import governed_text, default_in_boundary_endpoint
+    monkeypatch.delenv("REDEVOPS_LLM_BASE_URL", raising=False)
+    assert default_in_boundary_endpoint() is None
+    assert governed_text("summarize this account") is None
+
+
+def test_governed_text_builds_in_boundary_endpoint(monkeypatch):
+    from agentic_os.app.llm import default_in_boundary_endpoint
+    from agentic_os.governance.routing import ExecutionBoundary
+    monkeypatch.setenv("REDEVOPS_LLM_BASE_URL", "http://model.internal/v1")
+    ep = default_in_boundary_endpoint()
+    assert ep is not None and ep.boundary is ExecutionBoundary.IN_BOUNDARY
+    assert ep.network_route == "http://model.internal/v1"
