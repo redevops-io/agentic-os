@@ -89,11 +89,13 @@ class Operator:
         result = (fn(inputs, secrets or {}) if arity >= 2 else fn(inputs)) or {}
         # Read-back contract (N4): the result must carry the capability's declared output keys so the
         # Mission verifier (mission.verify) can read them back — otherwise a side effect is REJECTED after
-        # it has already committed. A handler that returns an operational dict without the declared
+        # it has already committed. A handler that returns a NON-EMPTY operational dict without the declared
         # semantic key has its result wrapped under that key, so the manifest's output contract is true.
+        # An EMPTY result is left as-is so a handler that produced nothing still FAILS read-back (the N4
+        # guarantee): wrapping {} would make the check vacuous.
         spec = self._specs.get(capability)
         outs = list((getattr(spec, "outputs", None) or {}).keys()) if spec else []
-        if isinstance(result, dict) and outs and not any(k in result for k in outs):
+        if isinstance(result, dict) and result and outs and not any(k in result for k in outs):
             result = {outs[0]: result} if len(outs) == 1 else {k: result for k in outs}
         if idempotency_key:
             self._seen[idempotency_key] = result
