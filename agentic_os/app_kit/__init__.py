@@ -20,6 +20,16 @@ from .manifest import (
     ProducerRef,
     VerifierRef,
 )
+from .decision_bridge import (
+    BRIDGE_CONTRACT_VERSION,
+    BridgeError,
+    BridgeOutcome,
+    BridgeResult,
+    MissionLauncher,
+    MissionRequest,
+    bridge_selection,
+    build_request,
+)
 from .registry import AppRegistry, ManifestError, RegisteredApp
 
 __all__ = [
@@ -40,4 +50,12 @@ __all__ = [
     "check_registration",
     "blocking_findings",
     "summarize",
+    "BRIDGE_CONTRACT_VERSION",
+    "BridgeError",
+    "BridgeOutcome",
+    "BridgeResult",
+    "MissionRequest",
+    "MissionLauncher",
+    "bridge_selection",
+    "build_request",
 ]
