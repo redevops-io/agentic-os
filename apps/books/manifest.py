@@ -1,9 +1,8 @@
-"""books AppManifest — runtime-native registration contract (plan §3.2).
+"""books AppManifest — runtime-native registration contract (plan §3.2/§3.4).
 
-Registers books's governed capability surface with the App Kit: its operator capabilities, a
-read-back verifier for each side-effecting one (N4, derived from the specs), the core it wraps at
-its integration level, and its data/privacy profile. ``register`` fails closed on any conformance
-violation. Decision-spine producer wiring (N1) is a follow-up slice where a producer maps cleanly.
+Registers books's governed capability surface (capabilities + a read-back verifier per side-effecting
+capability, from the operator specs), its decision producer (see ``producers``), the core it wraps at
+its integration level, and its data/privacy profile. ``register`` fails closed on any violation.
 """
 from __future__ import annotations
 
@@ -11,12 +10,14 @@ from agentic_os.app_kit import (
     CoreRequirement,
     IntegrationLevel,
     PrivacyProfile,
+    ProducerRef,
     manifest_from_operator,
 )
 from agentic_os.governance.classification import DataClassification
 from agentic_os.governance.routing import ExecutionBoundary
 
 from . import operator as _operator
+from . import producers
 
 
 def default_operator():
@@ -28,6 +29,8 @@ def build_manifest(operator):
         operator,
         name="books",
         version="0.1.0",
+        producers=(ProducerRef("books_state", opportunity_kinds=("books_opportunity",),
+                               emits_capabilities=producers.EMITTED_CAPABILITIES),),
         required_cores=(CoreRequirement("erpnext", IntegrationLevel.L1_EXTENSION),),
         privacy=PrivacyProfile(
             data_classes=(DataClassification.CUSTOMER_CONFIDENTIAL,),
