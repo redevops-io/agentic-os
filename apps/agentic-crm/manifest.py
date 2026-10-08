@@ -69,13 +69,16 @@ MANIFEST = AppManifest(
 )
 
 
+def default_operator():
+    """The live agentic-crm operator (uniform manifest API, used by the suite server + boot)."""
+    from . import operator as operator_module
+    return operator_module.build_crm_operator()
+
+
 def register(registry, operator=None):
     """Register agentic-crm with an ``AppRegistry`` (fails closed if non-conformant). Builds the live
     operator via ``build_crm_operator`` when one is not supplied."""
-    if operator is None:
-        from . import operator as operator_module
-        operator = operator_module.build_crm_operator()
-    return registry.register(MANIFEST, operator)
+    return registry.register(MANIFEST, operator or default_operator())
 
 
-__all__ = ["MANIFEST", "register"]
+__all__ = ["MANIFEST", "default_operator", "register"]
