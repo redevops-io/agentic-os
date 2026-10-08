@@ -555,10 +555,6 @@ def _cr_decide(text: str) -> dict:
                 arm = _CR.choose(text, bucket=bucket)
             except TypeError:
                 arm = _CR.choose(text)
-            try:
-                _CR.record_outcome(text, 5.0)
-            except Exception:  # noqa: BLE001
-                pass
             return {"bucket": str(bucket), "bundle": getattr(arm, "key", str(arm))}
         except Exception:  # noqa: BLE001
             pass
