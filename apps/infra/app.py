@@ -20,6 +20,10 @@ def health() -> dict:
 try:
     from .operator import build_infra_operator
     app.include_router(build_infra_operator().router())
+    # Runtime-native: register this app's governed contract at boot (guarded with the mount above).
+    from agentic_os.app_kit.boot import register_app_manifest as _register_runtime_native
+    from . import manifest as _runtime_native_manifest
+    _register_runtime_native(_runtime_native_manifest)
 except Exception:  # noqa: BLE001
     pass
 
