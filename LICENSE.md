@@ -98,6 +98,19 @@ AGPL's network obligation and the Commons Clause's restriction on selling. A
 third party wanting the semantics without the terms has to write their own
 implementation.
 
+### The applications under `apps/` are an exception — AGPL-3.0-only
+
+The reference applications in `apps/` are deliberately licensed **AGPL-3.0-only,
+WITHOUT the Commons Clause** — each carries its own `apps/<name>/LICENSE` (the
+standard GNU AGPLv3 text), so the apps are open source and sellable, unlike the
+kernel. The paragraph above would otherwise extend the Commons Clause onto them
+because they import the Commons-Clause kernel. Reconciling the two requires an
+AGPL §7 **additional permission** granting the apps the right to import the
+kernel without inheriting the Commons Clause; that legal text is being finalized
+separately and will be added here. Until then, each app's own `AGPL-3.0-only`
+LICENSE is authoritative for that app, and the kernel's Commons Clause is not
+intended to attach to the `apps/` tree.
+
 `runtime-contracts/LICENSE.md` records the one case still open: `mission-sdk`
 is Apache-2.0 deliberately, and becomes a work based on a Commons-Clause
 package the moment it adapts the canonical `MissionProgram`. That question is
