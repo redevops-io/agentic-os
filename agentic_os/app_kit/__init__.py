@@ -20,6 +20,7 @@ from .manifest import (
     ProducerRef,
     VerifierRef,
 )
+from .derive import manifest_from_operator
 from .decision_bridge import (
     BRIDGE_CONTRACT_VERSION,
     BridgeError,
@@ -61,4 +62,5 @@ __all__ = [
     "build_request",
     "MissionRuntimeLauncher",
     "drive",
+    "manifest_from_operator",
 ]
