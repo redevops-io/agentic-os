@@ -137,7 +137,7 @@ def plan_search(instruction: str) -> dict:
             '"verticals":[relevant industry/segment tags], "count":int}. Instruction: ' + instruction, 300)))
         if j.get("keywords"):
             plan.update(keywords=[str(k) for k in j["keywords"]][:8], verticals=j.get("verticals") or verts,
-                        count=min(int(j.get("count", count)), 10), how="planned by gpt-5.5")
+                        count=min(int(j.get("count", count)), 10), how="llm-planned")
     except Exception:
         pass
     return plan

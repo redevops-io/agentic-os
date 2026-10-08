@@ -171,11 +171,10 @@ def fetch_activity(force: bool = False) -> dict:
     replied = sum(1 for c in all_c if (c.get("first_reply_created_at") or 0))
     fr_pct = round(100 * replied / total_ct) if total_ct else 0
 
-    # CSAT placeholder derived from resolution rate (Chatwoot CSAT survey is off by
-    # default on a fresh install; we derive a believable score from resolved share so
-    # the tile is never fabricated out of thin air — it's a function of real counts).
+    # Resolution rate — a REAL ratio of measured counts. (We do NOT synthesize a CSAT score: Chatwoot's
+    # CSAT survey is off by default on a fresh install, so there is no satisfaction data to report, and a
+    # "believable" derived score would be a fabricated metric. Show the measured resolution rate instead.)
     resolved_rate = (resolved_ct / total_ct) if total_ct else 0
-    csat = round(4.2 + 0.8 * resolved_rate, 1)
 
     # --- channel breakdown (real, from additional_attributes.source / channel) ---
     chan_counts: dict[str, int] = {}
@@ -220,8 +219,8 @@ def fetch_activity(force: bool = False) -> dict:
              "note": f"{replied}/{total_ct} replied · SLA 30m"},
             {"label": "Resolved", "value": str(resolved_ct),
              "note": f"of {total_ct} total tickets"},
-            {"label": "CSAT", "value": f"{csat}",
-             "note": f"of 5.0 · {int(resolved_rate * 100)}% resolved"},
+            {"label": "Resolution rate", "value": f"{int(resolved_rate * 100)}%",
+             "note": f"{resolved_ct}/{total_ct} tickets resolved"},
         ],
         "channels": channels,
         "queue": queue,

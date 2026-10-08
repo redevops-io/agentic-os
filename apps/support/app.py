@@ -382,7 +382,8 @@ def _t_inbox_summary(_a: dict) -> dict:
         wait = (f" Oldest waiting: #{oldest['id']} {oldest['contact']} — "
                 f"\"{oldest['subject']}\" ({oldest['age']} old, {oldest['priority']}).")
     return {"text": f"{c['open']} open · {c['pending']} pending · {c['resolved']} resolved "
-            f"({c['total']} total). First response {k.get('First response')}, CSAT {k.get('CSAT')}.{wait}",
+            f"({c['total']} total). First response {k.get('First response')}, "
+            f"resolution rate {k.get('Resolution rate')}.{wait}",
             "data": {"counts": c, "oldest_waiting": oldest}}
 
 
