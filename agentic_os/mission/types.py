@@ -428,6 +428,10 @@ class Mission:
     # reads these. Optional kernel fields so one Mission contract serves both the single- and multi-tenant planes.
     principal: Any | None = None
     tenant: str = ""
+    # Structured arguments the delegating decision/agent handed in (the candidate's inputs) — carried on
+    # the mission so a node/planner can resolve them and EXPLAIN/replay can see what was requested, rather
+    # than being dropped at the delegation hop. Optional; legacy callers leave it empty.
+    inputs: dict[str, Any] = field(default_factory=dict)
     id: str = field(default_factory=lambda: new_id("mission"))
     created_at: float = field(default_factory=now)
     updated_at: float = field(default_factory=now)

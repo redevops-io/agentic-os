@@ -199,7 +199,9 @@ class MissionRuntime:
     def create_mission(self, goal: str, *, constraints: list[str] | None = None,
                         policy_refs: list[str] | None = None, budget: Budget | None = None,
                         template: str | None = None, verified_intent: Any = None,
-                        policy: "MissionPolicy | None" = None) -> Mission:
+                        policy: "MissionPolicy | None" = None,
+                        principal: Any = None, tenant: str = "",
+                        inputs: dict | None = None) -> Mission:
         # v0.2.x Slice 1 — carry the Discovery seal across the boundary. ``verified_intent`` is an
         # optional sealed VerifiedIntent (duck-typed: a runtime_contracts.VerifiedIntent, or a dict, or
         # anything exposing ``content_hash``/``evidence``); its identity is recorded on the mission and
@@ -209,6 +211,7 @@ class MissionRuntime:
         m = Mission(goal=goal, constraints=constraints or [], policy_refs=policy_refs or [],
                     policy=policy, budget=budget or Budget(), template=template,
                     world_state_id=new_id("world"),
+                    principal=principal, tenant=tenant, inputs=dict(inputs or {}),
                     intent_content_hash=identity.get("intent_content_hash", ""),
                     evidence_refs=identity.get("evidence_refs", []))
         self._missions[m.id] = m
@@ -218,6 +221,12 @@ class MissionRuntime:
         self.store.append("MissionCreated", m.id,
                           {"goal": goal, "template": template, "constraints": m.constraints,
                            "policy_refs": list(m.policy_refs or []),
+                           # Carry the delegating identity + which argument keys were supplied (keys, not
+                           # values, so sensitive inputs don't land in the ledger) so a delegated mission
+                           # records who asked and what it was handed, instead of only a goal string.
+                           "principal": getattr(m.principal, "id", m.principal) if m.principal else None,
+                           "tenant": m.tenant or None,
+                           "input_keys": sorted(m.inputs.keys()) if m.inputs else [],
                            # mission-policy/v1 — pin the named policy identity onto mission creation
                            "policy": (m.policy.ref if m.policy else None),
                            "policy_digest": (m.policy.digest() if m.policy else None),
