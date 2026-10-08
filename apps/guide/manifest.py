@@ -1,16 +1,12 @@
-"""guide AppManifest — runtime-native registration contract (plan §3.2).
-
-Registers guide's governed capability surface with the App Kit (capabilities + a read-back verifier
-per side-effecting capability, derived from the operator specs; data/privacy profile; no OSS core).
-``register`` fails closed on any conformance violation. Decision-spine producer wiring (N1) follows.
-"""
+"""guide AppManifest — runtime-native registration contract (plan §3.2/§3.4)."""
 from __future__ import annotations
 
-from agentic_os.app_kit import PrivacyProfile, manifest_from_operator
+from agentic_os.app_kit import PrivacyProfile, ProducerRef, manifest_from_operator
 from agentic_os.governance.classification import DataClassification
 from agentic_os.governance.routing import ExecutionBoundary
 
 from . import operator as _operator
+from . import producers
 
 
 def default_operator():
@@ -22,6 +18,8 @@ def build_manifest(operator):
         operator,
         name="guide",
         version="0.1.0",
+        producers=(ProducerRef("guide_state", opportunity_kinds=("guide_opportunity",),
+                               emits_capabilities=producers.EMITTED_CAPABILITIES),),
         privacy=PrivacyProfile(
             data_classes=(DataClassification.ENGINEERING,),
             execution_boundary=ExecutionBoundary.IN_BOUNDARY,

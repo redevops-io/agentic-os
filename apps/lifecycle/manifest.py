@@ -1,22 +1,13 @@
-"""lifecycle AppManifest — runtime-native registration contract (plan §3.2).
-
-Registers lifecycle's governed capability surface with the App Kit: its operator capabilities, a
-read-back verifier for each side-effecting one (N4, derived from the specs), the core it wraps at
-its integration level, and its data/privacy profile. ``register`` fails closed on any conformance
-violation. Decision-spine producer wiring (N1) is a follow-up slice where a producer maps cleanly.
-"""
+"""lifecycle AppManifest — runtime-native registration contract (plan §3.2/§3.4)."""
 from __future__ import annotations
 
-from agentic_os.app_kit import (
-    CoreRequirement,
-    IntegrationLevel,
-    PrivacyProfile,
-    manifest_from_operator,
-)
+from agentic_os.app_kit import PrivacyProfile, ProducerRef, manifest_from_operator
 from agentic_os.governance.classification import DataClassification
 from agentic_os.governance.routing import ExecutionBoundary
+from agentic_os.app_kit import CoreRequirement, IntegrationLevel
 
 from . import operator as _operator
+from . import producers
 
 
 def default_operator():
@@ -28,6 +19,8 @@ def build_manifest(operator):
         operator,
         name="lifecycle",
         version="0.1.0",
+        producers=(ProducerRef("lifecycle_state", opportunity_kinds=("lifecycle_opportunity",),
+                               emits_capabilities=producers.EMITTED_CAPABILITIES),),
         required_cores=(CoreRequirement("listmonk", IntegrationLevel.L2_GOVERNED_FORK),),
         privacy=PrivacyProfile(
             data_classes=(DataClassification.CUSTOMER_CONFIDENTIAL,),
