@@ -110,16 +110,31 @@ def launch(spec: dict, *, run: Runner = _run) -> dict:
     placement outcome (cloud, cost, spot) — the reward the placement optimizer learns from."""
     import time
     name = spec.get("name", "sk-app")
-    argv = ["sky", "launch", "--yes", "-c", name] + _spec_args(spec)
+    # Pin to the approved placement: the candidate sky.optimize ranked (threaded in as spec["chosen"])
+    # overrides the open spec, so launch provisions EXACTLY what was ranked + approved rather than letting
+    # SkyPilot re-optimize at launch time against prices/capacity that moved since approval. Without a
+    # chosen candidate this is an open launch (the ungated path).
+    chosen = spec.get("chosen") or {}
+    pinned = dict(spec)
+    if chosen.get("cloud"):
+        pinned["cloud"] = chosen["cloud"]
+    if chosen.get("region"):
+        pinned["region"] = chosen["region"]
+    argv = ["sky", "launch", "--yes", "-c", name] + _spec_args(pinned)
+    if chosen.get("instance"):
+        argv += ["--instance-type", str(chosen["instance"])]
     if y := spec.get("task_yaml"):
         argv += [y]
     elif cmd := spec.get("run"):
         argv += ["--", cmd]
     t0 = time.monotonic()
     rc, out, err = run(argv)
+    # The placement that ACTUALLY launched — cloud parsed from the output (reveals a capacity failover to a
+    # different cloud than pinned), region/instance from the pinned placement. The reward loop keys to THIS.
     return {
         "status": "done" if rc == 0 else "error", "action": "launch", "cluster": name,
-        "cloud": _grep(out, r"Launching on ([A-Za-z][\w-]*)") or spec.get("cloud"),
+        "cloud": _grep(out, r"Launching on ([A-Za-z][\w-]*)") or pinned.get("cloud"),
+        "region": pinned.get("region"), "instance": chosen.get("instance"),
         "endpoint": _grep(out, r"(https?://\S+)"), "spot": bool(spec.get("spot")),
         # measured signal for the placement reward loop (see learn.PlacementLedger)
         "time_to_ready_s": round(time.monotonic() - t0, 1),

@@ -35,18 +35,23 @@ def build_sky_operator(*, run=None, ledger: "PlacementLedger | None" = None) -> 
 
     def _launch(i):
         spec = i.get("spec") or i
+        chosen = i.get("chosen") or spec.get("chosen")
+        if chosen:
+            spec = {**spec, "chosen": chosen}          # PIN launch to the approved/ranked placement
         res = core.launch(spec, run=run)
         outcome = {"launched": res.get("status") == "done",
                    "had_capacity": not res.get("failed_over", False),
                    "preemption_rate": float(res.get("preemption_rate", 0.0) or 0.0),
                    "time_to_ready_s": res.get("time_to_ready_s", 0)}
-        # attribute the reward to the candidate sky.optimize chose (passed through the mission), so
-        # the learned value keys to the SAME cloud/region/instance the optimizer ranked; fall back to
-        # a coarse candidate parsed from the launch output when no chosen candidate was threaded in.
-        cand = i.get("chosen") or {"cloud": res.get("cloud") or spec.get("cloud"),
-                                   "region": spec.get("region", "?"), "instance": res.get("instance", "?")}
+        # Attribute the reward to the placement that ACTUALLY launched (from the launch result), not merely
+        # the one that was intended — so a capacity failover credits the REAL placement, not a candidate
+        # that never ran. Because launch is now pinned to `chosen`, the two coincide unless a failover moved
+        # it, which is exactly when the distinction matters.
+        actual = {"cloud": res.get("cloud") or (chosen or {}).get("cloud") or spec.get("cloud"),
+                  "region": res.get("region") or (chosen or {}).get("region") or spec.get("region", "?"),
+                  "instance": res.get("instance") or (chosen or {}).get("instance", "?")}
         res["outcome"] = outcome
-        res["reward"] = ledger.record(spec, cand, outcome)  # feed the measured outcome back
+        res["reward"] = ledger.record(spec, actual, outcome)  # feed the measured outcome back
         return res
 
     def _serve(i):
