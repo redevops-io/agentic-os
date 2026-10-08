@@ -21,4 +21,4 @@ COPY apps ./apps
 ENV PYTHONPATH=/app/apps PORT=8300 SUITE=revenue HOST=0.0.0.0
 EXPOSE 8300
 # sh -c so $PORT/$SUITE expand at runtime (parity with the other app images).
-CMD ["sh", "-c", "python -m agentic_os.app_kit.suite_server"]
+CMD ["sh", "-c", "python apps/_suite-server/serve.py"]
