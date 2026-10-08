@@ -72,8 +72,12 @@ class Fleet:
         return ModuleStatus(m.name, deployed=True, agents=m.agents, detail=f"compose up @ {path}")
 
     def _ensure_checkout(self, m: Module) -> Path:
+        # In-monorepo apps have no separate repo url — their source lives at <monorepo>/<m.path>; only a
+        # module with a real GitHub url (external repo) is cloned into the workdir.
+        if m.path:
+            return (Path(__file__).resolve().parent.parent / m.path)
         path = self.workdir / m.name
-        if not path.exists() and shutil.which("git"):
+        if not path.exists() and m.url and shutil.which("git"):
             subprocess.run(["git", "clone", "--depth", "1", m.url, str(path)], check=False,
                            capture_output=True)
         return path
