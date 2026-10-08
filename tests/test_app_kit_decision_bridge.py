@@ -23,7 +23,7 @@ class FakeStore:
     def __init__(self):
         self.records = []
 
-    def record(self, r):
+    def append(self, r):
         self.records.append(r)
 
 

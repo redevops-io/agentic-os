@@ -127,7 +127,7 @@ def bridge_selection(sel: SelectedAction, *, store, policy_version: str,
                      now: Optional[float] = None) -> BridgeResult:
     """Bridge one Priority-Engine selection to a mission (or to nothing), always writing a record.
 
-    ``store`` is an ``InterventionStore`` (``.record(InterventionRecord)``). ``launcher`` is optional:
+    ``store`` is an ``InterventionStore`` (``.append(InterventionRecord)``). ``launcher`` is optional:
     with one, an actionable selection is launched and the ``mission_id`` captured; without one, the
     bridge is plan-only (record written with an empty mission_id, request returned).
     """
@@ -142,14 +142,14 @@ def bridge_selection(sel: SelectedAction, *, store, policy_version: str,
                    else BridgeOutcome.ABSTAINED)
         record = record_from_selection(sel, intervention_id=iid, policy_version=policy_version,
                                         proposed_at=ts, evidence_refs=refs)
-        store.record(record)
+        store.append(record)
         return BridgeResult(outcome=outcome, record=record)
 
     request = build_request(sel, intervention_id=iid, inputs=inputs, evidence_refs=refs)
     mission_id = launcher.launch(request) if launcher is not None else ""
     record = record_from_selection(sel, intervention_id=iid, policy_version=policy_version,
                                     proposed_at=ts, evidence_refs=refs, mission_id=mission_id)
-    store.record(record)
+    store.append(record)
     outcome = BridgeOutcome.LAUNCHED_GATED if request.gated else BridgeOutcome.LAUNCHED
     return BridgeResult(outcome=outcome, record=record, mission_id=mission_id, request=request)
 
