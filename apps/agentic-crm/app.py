@@ -433,5 +433,8 @@ try:
     from agentic_os.app_kit.boot import register_app_manifest as _register_runtime_native
     from . import manifest as _runtime_native_manifest
     _register_runtime_native(_runtime_native_manifest)
-except Exception:  # noqa: BLE001 — agentic_os absent → no operator surface
-    pass
+except Exception as _op_exc:  # agentic_os absent / operator build failed — surface it, do not hide it
+    import logging as _logging
+    _logging.getLogger("agentic_os.app").error(
+        "%s: operator/capability surface NOT mounted (%s: %s) — /invoke + /capabilities are unavailable",
+        __name__, type(_op_exc).__name__, _op_exc)
