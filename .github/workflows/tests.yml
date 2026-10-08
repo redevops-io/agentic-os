@@ -1,0 +1,39 @@
+name: tests
+
+# Runs the N-invariant conformance gate + the core unit tests on every push/PR. Scoped to the
+# dependency-light, service-free tests so the gate is meaningful AND green; the broader suite
+# (sandbox/containment, the `world_*` integration tests) needs Docker and external services and is run
+# out of band. Expand `TESTS` below as more of the suite becomes CI-portable.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the kernel + its deps + pytest
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Conformance gate + core unit tests
+        env:
+          PYTHONPATH: apps
+        run: |
+          pytest -q -p no:cacheprovider \
+            tests/conformance \
+            tests/test_registry.py \
+            tests/test_operator_sdk.py \
+            tests/test_app_llm.py \
+            tests/test_app_transport.py \
+            tests/test_verification.py \
+            tests/test_governance.py
