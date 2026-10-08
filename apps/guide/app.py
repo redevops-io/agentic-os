@@ -155,5 +155,9 @@ async function walk(a){{const r=await fetch('api/walkthrough?role='+ROLE+'&app='
 try:
     from .operator import build_guide_operator
     app.include_router(build_guide_operator().router())
+    # Runtime-native: register this app's governed contract at boot (guarded with the mount above).
+    from agentic_os.app_kit.boot import register_app_manifest as _register_runtime_native
+    from . import manifest as _runtime_native_manifest
+    _register_runtime_native(_runtime_native_manifest)
 except Exception:  # noqa: BLE001 — agentic_os absent → no operator surface
     pass
