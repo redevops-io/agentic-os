@@ -34,7 +34,16 @@ class MissionRuntimeAdapter:
     # ── MissionPort ────────────────────────────────────────────────────────────
     def delegate(self, goal: str, *, constraints, principal: GatewayPrincipal,
                  arguments: dict) -> MissionDelegation:
-        mission = self.rt.create_mission(goal, constraints=list(constraints or ()))
+        # Thread the delegating principal and the handed-in arguments onto the mission instead of
+        # dropping them: the mission now records WHO asked (authorization + audit) and carries the
+        # structured inputs for its nodes, not just the goal string. create_mission ignores unknown
+        # kwargs gracefully only if it accepts them, so pass them positionally-safe via try for older
+        # runtimes.
+        try:
+            mission = self.rt.create_mission(goal, constraints=list(constraints or ()),
+                                             principal=principal, inputs=dict(arguments or {}))
+        except TypeError:                       # a runtime without principal/inputs kwargs (older kernel)
+            mission = self.rt.create_mission(goal, constraints=list(constraints or ()))
         state = _state_name(mission)
         if self.auto_run and state != "FAILED":
             # run() drives the governed graph and RETURNS parked at a human gate (WAITING_HUMAN),
