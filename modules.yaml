@@ -1,83 +1,83 @@
 # The redevops.io Agentic Business OS — module catalog.
 # agentic-os reads this to deploy modules and give each one its fleet of agents.
-# Each module is a separate repo under github.com/redevops-io; licensing varies
-# per repo. This control plane is AGPL-3.0-or-later WITH Commons Clause, which
-# is source-available rather than open source — do not infer either from here.
+# App source lives in the agentic-os monorepo under apps/<name> (these are NOT separate repos);
+# sidekick is the one genuinely separate repo. Licensing: this control plane is AGPL-3.0-or-later
+# WITH Commons Clause (source-available, not open source). `port` is the in-cluster service port.
 
 modules:
   - name: edge-sentinel
-    repo: redevops-io/edge-sentinel
+    source: apps/edge-sentinel
     pain: network security & systems handled
     deploy: compose            # how the module is stood up
-    port: 8101
+    port: 8203
     tagline: "Your firewall, triaged and explained by an agent."
     agents: [triage, remediation]
     approval_required: [remediation]   # auto-writing firewall rules pauses for a human
 
   - name: agentic-support
-    repo: redevops-io/agentic-support
+    source: apps/agentic-support
     pain: customer support
     deploy: compose
-    port: 8102
+    port: 8207
     tagline: "Front-line support that answers, escalates, and never sleeps."
     agents: [responder, escalation]
     approval_required: []
 
   - name: agentic-billing
-    repo: redevops-io/agentic-billing
+    source: apps/agentic-billing
     pain: payments & reconciliation
     deploy: compose
-    port: 8103
+    port: 8201
     tagline: "Checkout to reconciliation, with humans in the loop when money moves."
     agents: [checkout, reconciliation, dunning]
     approval_required: [refund, dunning]   # money moves -> human-in-the-loop
 
   - name: agentic-books
-    repo: redevops-io/agentic-books
+    source: apps/agentic-books
     pain: bookkeeping & close
     deploy: compose
-    port: 8104
+    port: 8209
     tagline: "Books that categorize, reconcile, and close themselves."
     agents: [categorize, reconcile, close]
     approval_required: [close]
 
   - name: agentic-compliance
-    repo: redevops-io/agentic-compliance
+    source: apps/agentic-compliance
     pain: data privacy & regulations
     deploy: compose
-    port: 8105
+    port: 8208
     tagline: "Continuous compliance monitoring with audit-ready evidence."
     agents: [monitor, evidence]
     approval_required: [policy_change]
 
   - name: control-tower
-    repo: redevops-io/control-tower
+    source: apps/control-tower
     pain: business performance visibility
     deploy: compose
-    port: 8106
+    port: 8202
     tagline: "Ask your business anything, in plain language."
     agents: [analyst]          # the natural-language analytics agent
     approval_required: []
 
   - name: market-radar
-    repo: redevops-io/market-radar
+    source: apps/market-radar
     pain: competitor intelligence
     deploy: compose
-    port: 8107
+    port: 8204
     tagline: "Watch every competitor and get briefed before they move."
     agents: [watcher, briefer]
     approval_required: []
 
   - name: growth-engine
-    repo: redevops-io/growth-engine
+    source: apps/growth-engine
     pain: marketing attribution
     deploy: compose
-    port: 8108
+    port: 8205
     tagline: "Know what's working and put spend where it pays."
     agents: [attribution, channel_optimizer]
     approval_required: [budget_change]   # reallocating ad spend pauses for a human
   - name: outreach-engine
-    repo: redevops-io/outreach-engine
+    source: apps/outreach-engine
     pain: pilot outreach & pipeline
     deploy: compose
     port: 8214
@@ -86,10 +86,10 @@ modules:
     approval_required: [send_sequence]   # nothing sends without a human sign-off
 
   - name: social-autopilot
-    repo: redevops-io/social-autopilot
+    source: apps/social-autopilot
     pain: social media growth
     deploy: compose
-    port: 8109
+    port: 8206
     tagline: "Create, schedule, and engage across social — on autopilot."
     agents: [content, engagement]
     approval_required: [publish]
@@ -101,7 +101,7 @@ modules:
     agents: [coder]
     approval_required: []
   - name: guide
-    repo: redevops-io/context-runtime
+    source: apps/guide
     pain: onboarding & help
     deploy: compose
     port: 8215
@@ -110,7 +110,7 @@ modules:
     approval_required: []
 
   - name: agentic-crm
-    repo: redevops-io/agentic-os-stack
+    source: apps/agentic-crm
     pain: sales pipeline & CRM
     deploy: compose
     port: 8210
@@ -119,7 +119,7 @@ modules:
     approval_required: [send]   # a human sends any outreach before it reaches a prospect
 
   - name: lifecycle
-    repo: redevops-io/agentic-os-stack
+    source: apps/lifecycle
     pain: lifecycle email & SMS marketing
     deploy: compose
     port: 8211
@@ -128,7 +128,7 @@ modules:
     approval_required: [send]
 
   - name: agentic-privacy
-    repo: redevops-io/agentic-os-stack
+    source: apps/agentic-privacy
     pain: GDPR/CCPA data-subject requests
     deploy: compose
     port: 8212
@@ -137,10 +137,29 @@ modules:
     approval_required: [delete]   # erasure is dry-run until a human confirms
 
   - name: growth-assistant
-    repo: redevops-io/agentic-os-stack
+    source: apps/growth-assistant
     pain: founder growth & traction
     deploy: compose
     port: 8213
     tagline: "Strategic traction for first-time founders — and the freelancers to execute it."
     agents: [strategy, content, outreach, hiring]
     approval_required: []
+
+  # Operator-only apps — governed Mission operators that run as part of a mission, not long-running
+  # HTTP services, so they carry no `port` (the runtime skips port-less entries). Source under apps/<name>.
+  - name: infra
+    source: apps/infra
+    pain: infrastructure provisioning & drift (operator)
+    deploy: operator
+  - name: sky
+    source: apps/sky
+    pain: multi-cloud operator
+    deploy: operator
+  - name: video-ad
+    source: apps/video-ad
+    pain: video-ad generation (operator)
+    deploy: operator
+  - name: zoning
+    source: apps/zoning
+    pain: zoning / governance operator
+    deploy: operator
