@@ -1,17 +1,13 @@
-"""compliance AppManifest — runtime-native registration contract (plan §3.2).
-
-Registers compliance's governed capability surface with the App Kit (capabilities + a read-back verifier
-per side-effecting capability, derived from the operator specs; data/privacy profile; wraps openscap at L0_ADAPTER).
-``register`` fails closed on any conformance violation. Decision-spine producer wiring (N1) follows.
-"""
+"""compliance AppManifest — runtime-native registration contract (plan §3.2/§3.4)."""
 from __future__ import annotations
 
-from agentic_os.app_kit import PrivacyProfile, manifest_from_operator
+from agentic_os.app_kit import PrivacyProfile, ProducerRef, manifest_from_operator
 from agentic_os.governance.classification import DataClassification
 from agentic_os.governance.routing import ExecutionBoundary
 from agentic_os.app_kit import CoreRequirement, IntegrationLevel
 
 from . import operator as _operator
+from . import producers
 
 
 def default_operator():
@@ -23,6 +19,8 @@ def build_manifest(operator):
         operator,
         name="compliance",
         version="0.1.0",
+        producers=(ProducerRef("compliance_state", opportunity_kinds=("compliance_opportunity",),
+                               emits_capabilities=producers.EMITTED_CAPABILITIES),),
         required_cores=(CoreRequirement("openscap", IntegrationLevel.L0_ADAPTER),),
         privacy=PrivacyProfile(
             data_classes=(DataClassification.INTERNAL,),
