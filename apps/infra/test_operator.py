@@ -42,8 +42,11 @@ def test_provision_runs_terraform_apply_parameterised():
     assert res["outputs"] == {"host": "1.2.3.4"}                 # terraform output captured
     argv = " ".join(calls[0])
     assert calls[0][0] == "terraform" and "-chdir=" in argv and "envs/aws" in argv
-    assert "apply" in calls[0] and "-auto-approve" in calls[0]
-    assert "-var" in calls[0] and "name=acme" in calls[0]
+    # provision applies the SAVED approved plan verbatim — pinned, not a fresh `-auto-approve` re-plan,
+    # and vars are baked into the plan (passing -var with a plan file is an error).
+    assert "apply" in calls[0] and "redevops-approved.tfplan" in calls[0]
+    assert "-auto-approve" not in calls[0]
+    assert "-var" not in calls[0]
 
 
 def test_plan_configure_verify():
@@ -52,6 +55,7 @@ def test_plan_configure_verify():
 
     p = op.invoke("infra.plan", {"cloud": "digitalocean"})
     assert p["action"] == "plan" and "plan" in calls[-1] and "envs/digitalocean" in " ".join(calls[-1])
+    assert "-out=redevops-approved.tfplan" in calls[-1] and p["plan_file"] == "redevops-approved.tfplan"
 
     c = op.invoke("infra.configure", {"playbook": "playbooks/deploy-app.yml",
                                       "extra_vars": {"app": "billing"}})

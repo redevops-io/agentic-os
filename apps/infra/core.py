@@ -70,17 +70,29 @@ def _err_summary(err: str) -> str:
 
 
 # ── Terraform ────────────────────────────────────────────────────────────────
+# The approved plan is SAVED here by `plan` and applied VERBATIM by `provision`, so a deploy executes
+# exactly what a human approved — never a fresh plan computed against state that drifted after approval
+# (the classic `apply -auto-approve` TOCTOU). The file name is relative to the env dir (terraform -chdir).
+_PLAN_FILE = "redevops-approved.tfplan"
+
+
 def terraform_plan(cloud: str, tf_vars: "dict | None" = None, *, run: Runner = _run) -> dict:
-    argv = ["terraform", f"-chdir={_env_dir(cloud)}", "plan", "-input=false", "-no-color"] + _var_args(tf_vars)
+    # `-out` writes the plan to disk so `provision` can apply exactly this plan (and nothing else).
+    argv = ["terraform", f"-chdir={_env_dir(cloud)}", "plan", "-input=false", "-no-color",
+            f"-out={_PLAN_FILE}"] + _var_args(tf_vars)
     rc, out, err = run(argv, None)
     return {"status": "done" if rc == 0 else "error", "action": "plan", "cloud": cloud,
-            "rc": rc, "summary": _last_line(out) if rc == 0 else _err_summary(err),
+            "rc": rc, "plan_file": _PLAN_FILE if rc == 0 else None,
+            "summary": _last_line(out) if rc == 0 else _err_summary(err),
             "stdout": out[-4000:], "stderr": err[-3000:]}
 
 
 def terraform_apply(cloud: str, tf_vars: "dict | None" = None, *, run: Runner = _run) -> dict:
-    argv = ["terraform", f"-chdir={_env_dir(cloud)}", "apply", "-input=false",
-            "-auto-approve", "-no-color"] + _var_args(tf_vars)
+    # Apply the SAVED, approved plan verbatim — NOT a fresh `-auto-approve` plan. `tf_vars` are already
+    # baked into the saved plan (passing `-var` with a plan file is an error), so they're intentionally
+    # ignored here. terraform refuses a missing or stale saved plan, so if state drifted since approval the
+    # apply fails closed instead of applying something the human never saw.
+    argv = ["terraform", f"-chdir={_env_dir(cloud)}", "apply", "-input=false", "-no-color", _PLAN_FILE]
     rc, out, err = run(argv, None)
     return {"status": "done" if rc == 0 else "error", "action": "provision", "cloud": cloud,
             "rc": rc, "outputs": terraform_outputs(cloud, run=run) if rc == 0 else {},
