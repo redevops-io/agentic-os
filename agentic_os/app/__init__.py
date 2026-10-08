@@ -6,6 +6,7 @@ later slice.
 """
 from __future__ import annotations
 
+from .context import APP_CONTEXT_CONTRACT_VERSION, ContextResult, GroundedContext, RetrievalRefused
 from .llm import (
     APP_LLM_CONTRACT_VERSION,
     DEFAULT_UNCLASSIFIED_AS,
@@ -20,4 +21,8 @@ __all__ = [
     "GovernedLLM",
     "LLMResult",
     "Transport",
+    "APP_CONTEXT_CONTRACT_VERSION",
+    "ContextResult",
+    "GroundedContext",
+    "RetrievalRefused",
 ]
