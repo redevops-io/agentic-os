@@ -21,6 +21,7 @@ from .manifest import (
     VerifierRef,
     DeploySpec,
 )
+from .boot import default_registry, register_app_manifest, reset_default_registry
 from .catalog import CATALOG_HEADER, module_entry, render_modules_yaml
 from .derive import manifest_from_operator
 from .decision_bridge import (
@@ -69,4 +70,7 @@ __all__ = [
     "CATALOG_HEADER",
     "module_entry",
     "render_modules_yaml",
+    "default_registry",
+    "register_app_manifest",
+    "reset_default_registry",
 ]

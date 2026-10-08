@@ -43,6 +43,13 @@ class AppRegistry:
         self._apps[manifest.name] = app
         return app
 
+    def ensure(self, manifest: AppManifest, operator) -> RegisteredApp:
+        """Idempotent register: register the app if absent, else return the existing registration.
+        For boot-time registration where an app may be imported more than once in a process."""
+        if manifest.name in self._apps:
+            return self._apps[manifest.name]
+        return self.register(manifest, operator)
+
     def check(self, manifest: AppManifest, operator) -> List[Finding]:
         """Run the checks without registering (for a conformance report / dry run)."""
         return check_registration(manifest, operator)
