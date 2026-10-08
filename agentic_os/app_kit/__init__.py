@@ -30,6 +30,7 @@ from .decision_bridge import (
     bridge_selection,
     build_request,
 )
+from .mission_launcher import MissionRuntimeLauncher, drive
 from .registry import AppRegistry, ManifestError, RegisteredApp
 
 __all__ = [
@@ -58,4 +59,6 @@ __all__ = [
     "MissionLauncher",
     "bridge_selection",
     "build_request",
+    "MissionRuntimeLauncher",
+    "drive",
 ]
