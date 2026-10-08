@@ -21,6 +21,7 @@ from .manifest import (
     VerifierRef,
     DeploySpec,
 )
+from .suite import RegisteredSuite, Suite, SuiteError, SuiteRegistry, SUITE_CONTRACT_VERSION
 from .boot import default_registry, register_app_manifest, reset_default_registry
 from .catalog import CATALOG_HEADER, module_entry, render_modules_yaml
 from .derive import manifest_from_operator
@@ -73,4 +74,9 @@ __all__ = [
     "default_registry",
     "register_app_manifest",
     "reset_default_registry",
+    "Suite",
+    "SuiteRegistry",
+    "RegisteredSuite",
+    "SuiteError",
+    "SUITE_CONTRACT_VERSION",
 ]
