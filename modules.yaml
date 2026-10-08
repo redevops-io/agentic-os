@@ -1,165 +1,192 @@
-# The redevops.io Agentic Business OS — module catalog.
-# agentic-os reads this to deploy modules and give each one its fleet of agents.
-# App source lives in the agentic-os monorepo under apps/<name> (these are NOT separate repos);
-# sidekick is the one genuinely separate repo. Licensing: this control plane is AGPL-3.0-or-later
-# WITH Commons Clause (source-available, not open source). `port` is the in-cluster service port.
-
+# Agentic apps module catalog.
+# GENERATED from the app manifests' deploy blocks (agentic_os.app_kit.catalog). Do not hand-edit
+# the app entries — change the app's manifest.py deploy=DeploySpec(...) and regenerate.
+# App source lives in the agentic-os monorepo under apps/<name>.
 modules:
-  - name: edge-sentinel
-    source: apps/edge-sentinel
-    pain: network security & systems handled
-    deploy: compose            # how the module is stood up
-    port: 8203
-    tagline: "Your firewall, triaged and explained by an agent."
-    agents: [triage, remediation]
-    approval_required: [remediation]   # auto-writing firewall rules pauses for a human
-
-  - name: agentic-support
-    source: apps/agentic-support
-    pain: customer support
-    deploy: compose
-    port: 8207
-    tagline: "Front-line support that answers, escalates, and never sleeps."
-    agents: [responder, escalation]
-    approval_required: []
-
-  - name: agentic-billing
-    source: apps/agentic-billing
-    pain: payments & reconciliation
-    deploy: compose
-    port: 8201
-    tagline: "Checkout to reconciliation, with humans in the loop when money moves."
-    agents: [checkout, reconciliation, dunning]
-    approval_required: [refund, dunning]   # money moves -> human-in-the-loop
-
-  - name: agentic-books
-    source: apps/agentic-books
-    pain: bookkeeping & close
-    deploy: compose
-    port: 8209
-    tagline: "Books that categorize, reconcile, and close themselves."
-    agents: [categorize, reconcile, close]
-    approval_required: [close]
-
-  - name: agentic-compliance
-    source: apps/agentic-compliance
-    pain: data privacy & regulations
-    deploy: compose
-    port: 8208
-    tagline: "Continuous compliance monitoring with audit-ready evidence."
-    agents: [monitor, evidence]
-    approval_required: [policy_change]
-
-  - name: control-tower
-    source: apps/control-tower
-    pain: business performance visibility
-    deploy: compose
-    port: 8202
-    tagline: "Ask your business anything, in plain language."
-    agents: [analyst]          # the natural-language analytics agent
-    approval_required: []
-
-  - name: market-radar
-    source: apps/market-radar
-    pain: competitor intelligence
-    deploy: compose
-    port: 8204
-    tagline: "Watch every competitor and get briefed before they move."
-    agents: [watcher, briefer]
-    approval_required: []
-
-  - name: growth-engine
-    source: apps/growth-engine
-    pain: marketing attribution
-    deploy: compose
-    port: 8205
-    tagline: "Know what's working and put spend where it pays."
-    agents: [attribution, channel_optimizer]
-    approval_required: [budget_change]   # reallocating ad spend pauses for a human
-  - name: outreach-engine
-    source: apps/outreach-engine
-    pain: pilot outreach & pipeline
-    deploy: compose
-    port: 8214
-    tagline: "Lands pilots — learns which outreach play converts per account signal."
-    agents: [sourcer, personalizer, sequencer]
-    approval_required: [send_sequence]   # nothing sends without a human sign-off
-
-  - name: social-autopilot
-    source: apps/social-autopilot
-    pain: social media growth
-    deploy: compose
-    port: 8206
-    tagline: "Create, schedule, and engage across social — on autopilot."
-    agents: [content, engagement]
-    approval_required: [publish]
-
-  - name: sidekick
-    repo: redevops-io/sidekick
-    pain: build & automate (ship fast, cheap)
-    deploy: tool               # a CLI tool, not a long-running service
-    agents: [coder]
-    approval_required: []
-  - name: guide
-    source: apps/guide
-    pain: onboarding & help
-    deploy: compose
-    port: 8215
-    tagline: "Ask how to use any app — RAG over the stack's docs, RBAC-scoped."
-    agents: [retriever, walkthrough]
-    approval_required: []
-
-  - name: agentic-crm
-    source: apps/agentic-crm
-    pain: sales pipeline & CRM
-    deploy: compose
-    port: 8210
-    tagline: "A pipeline that scores, researches, and drafts outreach on a real CRM."
-    agents: [score, research, draft, qualify]
-    approval_required: [send]   # a human sends any outreach before it reaches a prospect
-
-  - name: lifecycle
-    source: apps/lifecycle
-    pain: lifecycle email & SMS marketing
-    deploy: compose
-    port: 8211
-    tagline: "Klaviyo-style lifecycle marketing on a self-hosted Listmonk core."
-    agents: [segment, campaign, automation]
-    approval_required: [send]
-
-  - name: agentic-privacy
-    source: apps/agentic-privacy
-    pain: GDPR/CCPA data-subject requests
-    deploy: compose
-    port: 8212
-    tagline: "DSAR intake, fulfillment, and a tamper-evident audit trail."
-    agents: [intake, access, delete, retention]
-    approval_required: [delete]   # erasure is dry-run until a human confirms
-
-  - name: growth-assistant
-    source: apps/growth-assistant
-    pain: founder growth & traction
-    deploy: compose
-    port: 8213
-    tagline: "Strategic traction for first-time founders — and the freelancers to execute it."
-    agents: [strategy, content, outreach, hiring]
-    approval_required: []
-
-  # Operator-only apps — governed Mission operators that run as part of a mission, not long-running
-  # HTTP services, so they carry no `port` (the runtime skips port-less entries). Source under apps/<name>.
-  - name: infra
-    source: apps/infra
-    pain: infrastructure provisioning & drift (operator)
-    deploy: operator
-  - name: sky
-    source: apps/sky
-    pain: multi-cloud operator
-    deploy: operator
-  - name: video-ad
-    source: apps/video-ad
-    pain: video-ad generation (operator)
-    deploy: operator
-  - name: zoning
-    source: apps/zoning
-    pain: zoning / governance operator
-    deploy: operator
+- name: edge-sentinel
+  source: apps/edge-sentinel
+  pain: network security & systems handled
+  deploy: compose
+  port: 8203
+  tagline: Your firewall, triaged and explained by an agent.
+  agents:
+  - triage
+  - remediation
+  approval_required:
+  - remediation
+- name: agentic-support
+  source: apps/support
+  pain: customer support
+  deploy: compose
+  port: 8207
+  tagline: Front-line support that answers, escalates, and never sleeps.
+  agents:
+  - responder
+  - escalation
+- name: agentic-billing
+  source: apps/billing
+  pain: payments & reconciliation
+  deploy: compose
+  port: 8201
+  tagline: Checkout to reconciliation, with humans in the loop when money moves.
+  agents:
+  - checkout
+  - reconciliation
+  - dunning
+  approval_required:
+  - refund
+  - dunning
+- name: agentic-books
+  source: apps/books
+  pain: bookkeeping & close
+  deploy: compose
+  port: 8209
+  tagline: Books that categorize, reconcile, and close themselves.
+  agents:
+  - categorize
+  - reconcile
+  - close
+  approval_required:
+  - close
+- name: agentic-compliance
+  source: apps/compliance
+  pain: data privacy & regulations
+  deploy: compose
+  port: 8208
+  tagline: Continuous compliance monitoring with audit-ready evidence.
+  agents:
+  - monitor
+  - evidence
+  approval_required:
+  - policy_change
+- name: control-tower
+  source: apps/control-tower
+  pain: business performance visibility
+  deploy: compose
+  port: 8202
+  tagline: Ask your business anything, in plain language.
+  agents:
+  - analyst
+- name: market-radar
+  source: apps/market-radar
+  pain: competitor intelligence
+  deploy: compose
+  port: 8204
+  tagline: Watch every competitor and get briefed before they move.
+  agents:
+  - watcher
+  - briefer
+- name: growth-engine
+  source: apps/growth-engine
+  pain: marketing attribution
+  deploy: compose
+  port: 8205
+  tagline: Know what's working and put spend where it pays.
+  agents:
+  - attribution
+  - channel_optimizer
+  approval_required:
+  - budget_change
+- name: outreach-engine
+  source: apps/outreach-engine
+  pain: pilot outreach & pipeline
+  deploy: compose
+  port: 8214
+  tagline: Lands pilots — learns which outreach play converts per account signal.
+  agents:
+  - sourcer
+  - personalizer
+  - sequencer
+  approval_required:
+  - send_sequence
+- name: social-autopilot
+  source: apps/social-autopilot
+  pain: social media growth
+  deploy: compose
+  port: 8206
+  tagline: Create, schedule, and engage across social — on autopilot.
+  agents:
+  - content
+  - engagement
+  approval_required:
+  - publish
+- name: guide
+  source: apps/guide
+  pain: onboarding & help
+  deploy: compose
+  port: 8215
+  tagline: Ask how to use any app — RAG over the stack's docs, RBAC-scoped.
+  agents:
+  - retriever
+  - walkthrough
+- name: agentic-crm
+  source: apps/agentic-crm
+  pain: sales pipeline & CRM
+  deploy: compose
+  port: 8210
+  tagline: A pipeline that scores, researches, and drafts outreach on a real CRM.
+  agents:
+  - score
+  - research
+  - draft
+  - qualify
+  approval_required:
+  - send
+- name: lifecycle
+  source: apps/lifecycle
+  pain: lifecycle email & SMS marketing
+  deploy: compose
+  port: 8211
+  tagline: Klaviyo-style lifecycle marketing on a self-hosted Listmonk core.
+  agents:
+  - segment
+  - campaign
+  - automation
+  approval_required:
+  - send
+- name: agentic-privacy
+  source: apps/agentic-privacy
+  pain: GDPR/CCPA data-subject requests
+  deploy: compose
+  port: 8212
+  tagline: DSAR intake, fulfillment, and a tamper-evident audit trail.
+  agents:
+  - intake
+  - access
+  - delete
+  - retention
+  approval_required:
+  - delete
+- name: growth-assistant
+  source: apps/growth-assistant
+  pain: founder growth & traction
+  deploy: compose
+  port: 8213
+  tagline: Strategic traction for first-time founders — and the freelancers to execute it.
+  agents:
+  - strategy
+  - content
+  - outreach
+  - hiring
+- name: infra
+  source: apps/infra
+  pain: infrastructure provisioning & drift (operator)
+  deploy: operator
+- name: sky
+  source: apps/sky
+  pain: multi-cloud operator
+  deploy: operator
+- name: sidekick
+  source: null
+  pain: build & automate (ship fast, cheap)
+  deploy: tool
+  agents:
+  - coder
+- name: video-ad
+  source: apps/video-ad
+  pain: video-ad generation (operator)
+  deploy: operator
+- name: zoning
+  source: apps/zoning
+  pain: zoning / governance operator
+  deploy: operator
