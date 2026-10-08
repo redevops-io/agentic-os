@@ -103,3 +103,11 @@ def test_invoke_wraps_result_under_declared_output_key():
     assert "refund_staged" in wrapped and wrapped["refund_staged"] == {"status": "staged", "amount": 10}
     untouched = op.invoke("acct.read", {})
     assert untouched == {"refund_staged": True, "extra": 1}      # key already present → not re-wrapped
+
+
+def test_invoke_does_not_wrap_an_empty_result():
+    """An EMPTY result is left empty so a handler that produced nothing still FAILS read-back (N4):
+    wrapping {} under the declared key would make the syntactic verifier vacuous."""
+    op = Operator("ref", [capability("ref.badwrite", lambda i: {},
+                                     provides=["result"], outputs={"result": "str"}, side_effecting=True)])
+    assert op.invoke("ref.badwrite", {}) == {}                   # not wrapped → "result" absent → verifier rejects
