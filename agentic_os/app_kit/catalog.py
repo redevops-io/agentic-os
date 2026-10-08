@@ -40,16 +40,52 @@ def module_entry(manifest: AppManifest) -> dict:
     return entry
 
 
+def _scalar(value) -> str:
+    """Render a YAML scalar. Quote strings with characters the catalog's lightweight parsers choke on
+    (':', '#', leading/trailing space, or a leading list/flow marker); everything else stays bare."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    s = str(value)
+    if s == "" or s != s.strip() or any(c in s for c in (":", "#", "[", "]", "{", "}", "\"", "'")) \
+            or s[0] in "-?&*!|>%@`":
+        return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return s
+
+
+def _entry_lines(entry: Mapping) -> List[str]:
+    """One module as the catalog's canonical text: 2-space indented block scalars + INLINE arrays
+    (``agents: [a, b]``), matching the format the website's sync/check-modules parsers expect."""
+    lines = [f"  - name: {_scalar(entry['name'])}"]
+    # source may be explicitly null (an external tool like sidekick)
+    src = entry.get("source", "")
+    lines.append(f"    source: {_scalar(src)}" if src else "    source:")
+    lines.append(f"    pain: {_scalar(entry.get('pain', ''))}")
+    lines.append(f"    deploy: {_scalar(entry.get('deploy', 'compose'))}")
+    if entry.get("port") is not None:
+        lines.append(f"    port: {entry['port']}")
+    if entry.get("tagline"):
+        lines.append(f"    tagline: {_scalar(entry['tagline'])}")
+    if entry.get("agents"):
+        lines.append(f"    agents: [{', '.join(entry['agents'])}]")
+    if entry.get("approval_required"):
+        lines.append(f"    approval_required: [{', '.join(entry['approval_required'])}]")
+    return lines
+
+
 def render_modules_yaml(manifests: Iterable[AppManifest], *,
                         extras: Iterable[Mapping] = (), header: str = CATALOG_HEADER) -> str:
-    """Render the full modules.yaml document (header + ``modules:`` list) from manifests + extras."""
-    import yaml
-
+    """Render the full modules.yaml document (header + ``modules:`` list) from manifests + extras, in
+    the catalog's canonical format (inline agents/approval arrays) so the website parsers read it."""
     entries: List[dict] = [module_entry(m) for m in manifests]
     entries += [dict(e) for e in extras]
-    body = yaml.safe_dump({"modules": entries}, sort_keys=False, default_flow_style=False,
-                          allow_unicode=True, width=100)
-    return f"{header}{body}"
+    out = [header.rstrip("\n"), "", "modules:"]
+    for entry in entries:
+        out.extend(_entry_lines(entry))
+    return "\n".join(out) + "\n"
 
 
 __all__ = ["CATALOG_HEADER", "module_entry", "render_modules_yaml"]
