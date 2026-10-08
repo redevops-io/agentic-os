@@ -116,6 +116,21 @@ class CoreRequirement:
 
 
 @dataclass(frozen=True)
+class DeploySpec:
+    """The catalog/deploy metadata the app owns so ``modules.yaml`` can be GENERATED from the
+    manifests (plan §3.2). ``catalog_name`` is the module's display name when it differs from the app
+    name; the generated ``source`` is always ``apps/<app-name>`` (fixing the historical path drift)."""
+
+    catalog_name: str = ""          # modules.yaml display name if != manifest.name
+    port: Optional[int] = None      # published host/service port (None for operator/tool-only apps)
+    pain: str = ""                  # the customer pain the app addresses
+    tagline: str = ""
+    agents: Tuple[str, ...] = ()    # the catalog's human-facing agent roles
+    approval: Tuple[str, ...] = ()  # the catalog's approval-gated action labels
+    deploy: str = "compose"         # compose | operator | tool
+
+
+@dataclass(frozen=True)
 class AppManifest:
     """The runtime-native registration contract for one app."""
 
@@ -131,6 +146,7 @@ class AppManifest:
     required_cores: Tuple[CoreRequirement, ...] = ()
     data_classifications: Tuple[DataClassification, ...] = ()
     enterprise: EnterpriseRequirement = EnterpriseRequirement.OPTIONAL
+    deploy: Optional["DeploySpec"] = None
     contract_version: str = MANIFEST_CONTRACT_VERSION
 
     def capability_names(self) -> frozenset[str]:
@@ -154,5 +170,6 @@ __all__ = [
     "VerifierRef",
     "OutcomeKind",
     "CoreRequirement",
+    "DeploySpec",
     "AppManifest",
 ]

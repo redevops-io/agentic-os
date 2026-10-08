@@ -1,6 +1,8 @@
 """growth-assistant AppManifest — runtime-native registration contract (plan §3.2/§3.4)."""
 from __future__ import annotations
 
+from agentic_os.app_kit import DeploySpec
+
 from agentic_os.app_kit import PrivacyProfile, ProducerRef, manifest_from_operator
 from agentic_os.governance.classification import DataClassification
 from agentic_os.governance.routing import ExecutionBoundary
@@ -27,6 +29,13 @@ def build_manifest(operator):
             execution_boundary=ExecutionBoundary.IN_BOUNDARY,
         ),
         data_classifications=(DataClassification.CUSTOMER_CONFIDENTIAL,),
+        deploy=DeploySpec(
+            port=8213,
+            pain='founder growth & traction',
+            tagline='Strategic traction for first-time founders — and the freelancers to execute it.',
+            agents=('strategy', 'content', 'outreach', 'hiring'),
+            deploy='compose',
+        ),
     )
 
 

@@ -8,6 +8,8 @@ to the live operator through the ``AppRegistry``, which fails closed on any conf
 """
 from __future__ import annotations
 
+from agentic_os.app_kit import DeploySpec
+
 from agentic_os.agent_gateway.contracts import RiskTier
 from agentic_os.app_kit import (
     AppManifest,
@@ -56,6 +58,14 @@ MANIFEST = AppManifest(
         execution_boundary=ExecutionBoundary.IN_BOUNDARY,
     ),
     data_classifications=(DataClassification.CUSTOMER_CONFIDENTIAL,),
+    deploy=DeploySpec(
+        port=8210,
+        pain='sales pipeline & CRM',
+        tagline='A pipeline that scores, researches, and drafts outreach on a real CRM.',
+        agents=('score', 'research', 'draft', 'qualify'),
+        approval=('send',),
+        deploy='compose',
+    ),
 )
 
 

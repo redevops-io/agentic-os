@@ -17,6 +17,7 @@ from .manifest import (
     AppManifest,
     CapabilityRef,
     CoreRequirement,
+    DeploySpec,
     EnterpriseRequirement,
     OutcomeKind,
     PrivacyProfile,
@@ -50,6 +51,7 @@ def manifest_from_operator(
     data_classifications: Sequence = (),
     enterprise: EnterpriseRequirement = EnterpriseRequirement.OPTIONAL,
     risk_tiers: Optional[Mapping[str, RiskTier]] = None,
+    deploy: Optional[DeploySpec] = None,
 ) -> AppManifest:
     """Build an ``AppManifest`` whose capabilities and verifiers come from ``operator``'s specs.
 
@@ -82,6 +84,7 @@ def manifest_from_operator(
         required_cores=tuple(required_cores),
         data_classifications=tuple(data_classifications),
         enterprise=enterprise,
+        deploy=deploy,
     )
 
 

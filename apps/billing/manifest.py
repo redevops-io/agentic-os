@@ -6,6 +6,8 @@ its integration level, and its data/privacy profile. ``register`` fails closed o
 """
 from __future__ import annotations
 
+from agentic_os.app_kit import DeploySpec
+
 from agentic_os.app_kit import (
     CoreRequirement,
     IntegrationLevel,
@@ -37,6 +39,15 @@ def build_manifest(operator):
             execution_boundary=ExecutionBoundary.IN_BOUNDARY,
         ),
         data_classifications=(DataClassification.CUSTOMER_CONFIDENTIAL,),
+        deploy=DeploySpec(
+            catalog_name='agentic-billing',
+            port=8201,
+            pain='payments & reconciliation',
+            tagline='Checkout to reconciliation, with humans in the loop when money moves.',
+            agents=('checkout', 'reconciliation', 'dunning'),
+            approval=('refund', 'dunning'),
+            deploy='compose',
+        ),
     )
 
 

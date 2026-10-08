@@ -19,7 +19,9 @@ from .manifest import (
     PrivacyProfile,
     ProducerRef,
     VerifierRef,
+    DeploySpec,
 )
+from .catalog import CATALOG_HEADER, module_entry, render_modules_yaml
 from .derive import manifest_from_operator
 from .decision_bridge import (
     BRIDGE_CONTRACT_VERSION,
@@ -63,4 +65,8 @@ __all__ = [
     "MissionRuntimeLauncher",
     "drive",
     "manifest_from_operator",
+    "DeploySpec",
+    "CATALOG_HEADER",
+    "module_entry",
+    "render_modules_yaml",
 ]
