@@ -6,6 +6,7 @@ later slice.
 """
 from __future__ import annotations
 
+from .transports import OpenAICompatibleTransport
 from .context import APP_CONTEXT_CONTRACT_VERSION, ContextResult, GroundedContext, RetrievalRefused
 from .llm import (
     APP_LLM_CONTRACT_VERSION,
@@ -25,4 +26,5 @@ __all__ = [
     "ContextResult",
     "GroundedContext",
     "RetrievalRefused",
+    "OpenAICompatibleTransport",
 ]
