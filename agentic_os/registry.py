@@ -9,14 +9,20 @@ import yaml
 
 DEFAULT_CATALOG = Path(__file__).resolve().parent.parent / "modules.yaml"
 
-_VALID_DEPLOY = {"compose", "tool"}
+# Must match DeploySpec.deploy in app_kit.manifest (compose | operator | tool), the source the catalog
+# generates modules.yaml from — the loader can't be stricter than the generator or it rejects valid catalogs.
+_VALID_DEPLOY = {"compose", "operator", "tool"}
 
 
 @dataclass(frozen=True)
 class Module:
     name: str
-    repo: str
     pain: str
+    # Apps live in the agentic-os monorepo under ``source`` (apps/<name>), which is what the catalog
+    # (app_kit.catalog) emits. ``repo`` is the legacy GitHub-slug form, kept as an alias for external
+    # tools that really are separate repositories; one of the two must be present.
+    source: str = ""
+    repo: str = ""
     deploy: str = "compose"
     port: int = 0
     tagline: str = ""
@@ -25,7 +31,13 @@ class Module:
 
     @property
     def url(self) -> str:
-        return f"https://github.com/{self.repo}"
+        """GitHub URL for a separate-repo module; empty for an in-monorepo app (use ``path``)."""
+        return f"https://github.com/{self.repo}" if self.repo else ""
+
+    @property
+    def path(self) -> str:
+        """In-monorepo source path (apps/<name>), or empty for a separate-repo module."""
+        return self.source
 
     @property
     def service(self) -> str:
@@ -51,14 +63,17 @@ class Registry:
 
     @staticmethod
     def _parse(raw: dict) -> Module:
-        missing = [k for k in ("name", "repo", "pain") if not raw.get(k)]
+        missing = [k for k in ("name", "pain") if not raw.get(k)]
+        # source (monorepo path) / repo (github slug) are both optional: an external tool like sidekick
+        # has neither (deploy: tool). The catalog identifies a module by name + pain.
+        source, repo = raw.get("source") or "", raw.get("repo") or ""
         if missing:
             raise ValueError(f"module {raw.get('name', '?')} missing required keys: {missing}")
         deploy = raw.get("deploy", "compose")
         if deploy not in _VALID_DEPLOY:
             raise ValueError(f"module {raw['name']}: deploy must be one of {_VALID_DEPLOY}, got {deploy!r}")
         return Module(
-            name=raw["name"], repo=raw["repo"], pain=raw["pain"], deploy=deploy,
+            name=raw["name"], pain=raw["pain"], source=source, repo=repo, deploy=deploy,
             port=int(raw.get("port", 0) or 0),
             tagline=str(raw.get("tagline", "") or ""),
             agents=tuple(raw.get("agents", []) or []),
