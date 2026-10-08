@@ -99,3 +99,9 @@ def serve(suite_name: str = "revenue", *, host: str = "0.0.0.0", port: int = 830
 
 
 __all__ = ["operators_for_suite", "build_suite_app", "serve"]
+
+
+if __name__ == "__main__":  # pragma: no cover
+    import os as _os
+    serve(_os.environ.get("SUITE", "revenue"),
+          host=_os.environ.get("HOST", "0.0.0.0"), port=int(_os.environ.get("PORT", "8300")))
