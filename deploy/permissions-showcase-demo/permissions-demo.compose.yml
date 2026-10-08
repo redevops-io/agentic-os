@@ -1,0 +1,29 @@
+# demo.redevops.io/permissions — data-access permissions plane showcase (standalone, v6-native).
+#   permissions-api :8109 (FastAPI) runs the REAL agentic_os.permissions GrantStore over seeded grants.
+#   cloudflared: demo.redevops.io /^(permissions|api/permissions)/ -> 192.168.40.105:8109
+#   Replaces the /permissions plane that lived in the retired v3 control-plane (:8091); depends ONLY on
+#   the public kernel's permissions module — does NOT resurrect the control-plane.
+services:
+  permissions-api:
+    build: .
+    image: ${PERM_API_IMAGE:-permissions-demo:latest}
+    container_name: permissions-api
+    restart: unless-stopped
+    # host networking: binds :8109 directly on the host (cloudflared -> 192.168.40.105:8109). The host's
+    # default bridge address pools are exhausted (33+ networks from ephemeral deploys), so we avoid
+    # creating a new per-project network entirely. The app binds 0.0.0.0:8109.
+    network_mode: host
+    environment:
+      # Set PERMISSIONS_ADMIN_KEY (or AGENTIC_OS_API_KEY) to gate grant writes; left open for the demo.
+      - PERMISSIONS_ADMIN_KEY=${PERMISSIONS_ADMIN_KEY:-}
+      - PERMISSIONS_DIR=/data/permissions
+    volumes:
+      - permissions_data:/data/permissions
+    # This host's default AppArmor/seccomp blocks socketpair(), which breaks asyncio's self-pipe
+    # (uvicorn won't start). Opt out, same as the rest of the demo stack.
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+
+volumes:
+  permissions_data:
