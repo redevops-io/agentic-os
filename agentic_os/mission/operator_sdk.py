@@ -96,7 +96,17 @@ class Operator:
         # is left as-is so a handler that produced nothing still FAILS read-back (the N4 guarantee).
         spec = self._specs.get(capability)
         outs = list((getattr(spec, "outputs", None) or {}).keys()) if spec else []
-        if isinstance(result, dict) and result and outs and not any(k in result for k in outs):
+        # Markers are synthesised ONLY for a SUCCESSFUL side effect. A result that signals failure / denial /
+        # pending (an `error`, `executed: False`, `ok: False`, or a non-success `status`) is left as-is, so the
+        # Mission verifier reads the declared output key back as ABSENT and REJECTS — a LAPI 403 or a failed
+        # call can no longer be minted into `{key: True}` and read back as success. (Markers stay a fallback;
+        # the real N4 fix is a verifier that reads the core's state, tracked separately.)
+        _failed = isinstance(result, dict) and (
+            bool(result.get("error")) or result.get("executed") is False or result.get("ok") is False
+            or str(result.get("status", "")).lower() in {
+                "error", "failed", "failure", "denied", "rejected", "pending_approval",
+                "awaiting_approval", "awaiting_connector", "unverifiable", "blocked"})
+        if isinstance(result, dict) and result and outs and not _failed and not any(k in result for k in outs):
             result = {**result, **{k: True for k in outs}}
         if idempotency_key:
             self._seen[idempotency_key] = result
