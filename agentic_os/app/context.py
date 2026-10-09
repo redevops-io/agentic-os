@@ -240,6 +240,35 @@ class GroundedContext:
                              context_version=cv, receipt=receipt, withheld=withheld)
 
 
+def merge_context(parts: "List[ContextResult]") -> ContextResult:
+    """Merge several retrieved contexts into one, propagating classification CONSERVATIVELY: the merged
+    classification is the MAX across parts and egress is permitted only if EVERY part is egress-permitted —
+    so combining a public and a confidential context yields a confidential, non-egress-able context (N6:
+    classification propagates through merging, never downgraded by combination). The merged context_version
+    binds the union of sources, so a decision over the combined evidence is still replayable."""
+    parts = [p for p in parts if p is not None]
+    if not parts:
+        return ContextResult(results=[], engine="", reason="empty merge")
+    results: List[dict] = []
+    sources: List[SourceRef] = []
+    seen: set = set()
+    for p in parts:
+        results.extend(p.results)
+        for s in p.sources:
+            key = (s.source_id, s.content_hash)
+            if key not in seen:
+                seen.add(key)
+                sources.append(s)
+    maxc = max_classification(tuple(s.classification for s in sources)) if sources \
+        else max_classification(tuple(p.max_classification for p in parts))
+    egress_ok = all(p.egress_permitted for p in parts) and externally_shareable(maxc)
+    cv = _h("|".join(sorted(f"{s.source_id}:{s.content_hash}" for s in sources)))
+    return ContextResult(results=results, engine="+".join(sorted({p.engine for p in parts if p.engine})),
+                         reason="merged", sources=sources, max_classification=maxc,
+                         egress_permitted=egress_ok, context_version=cv,
+                         withheld=sum(p.withheld for p in parts))
+
+
 __all__ = [
     "APP_CONTEXT_CONTRACT_VERSION",
     "DEFAULT_ITEM_CLASSIFICATION",
@@ -249,4 +278,5 @@ __all__ = [
     "RetrievalReceipt",
     "ContextResult",
     "GroundedContext",
+    "merge_context",
 ]
