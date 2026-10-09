@@ -125,6 +125,12 @@ class UnrecoverableAuthority(RuntimeError):
 
 
 class MissionRuntime:
+    #: Capability marker: this runtime invokes the ``_pre_exec_ok`` node-admission hook (and ``_meter``)
+    #: on every dispatch. An overlay that enforces governance by overriding ``_pre_exec_ok`` checks this
+    #: before trusting the seam — so running against a kernel too old to call it fails loudly instead of
+    #: silently bypassing the gates. Bump only if the seam contract changes incompatibly.
+    SUPPORTS_ADMISSION_SEAM = 1
+
     def __init__(
         self,
         registry: CapabilityRegistry,
@@ -477,9 +483,29 @@ class MissionRuntime:
             "explain": rows,
         })
 
+    def _pre_exec_ok(self, m: Mission, plan: ExecutionPlan, node) -> bool:
+        """Node-admission seam, evaluated BEFORE dispatch (no operator has run, nothing to compensate).
+
+        The open-core default admits every node (``return True``), so the kernel's behaviour is unchanged.
+        An overlay (the enterprise runtime) overrides this to enforce deny-by-default gates at the syscall
+        boundary — identity/authz, resource-tenancy, metering budget — and, when it refuses a node, to record
+        its own governance event(s) and call ``self._fail(m, plan, reason=...)`` before returning False, so a
+        denied node fails the mission fail-closed. It runs ahead of ``_resolve_inputs`` in BOTH the serial and
+        concurrent paths, so a refusal costs no network and no partial side effect."""
+        return True
+
+    def _meter(self, m: Mission, node, outcome: str) -> None:
+        """Per-node usage seam, called once for every node that reached dispatch — ``outcome`` is ``"ok"`` on
+        a committed result and ``"error"`` on a failed one. The open-core default is a no-op; an overlay
+        overrides it to record a tenant-scoped usage/metering event. Placed so the serial and concurrent
+        paths meter identically."""
+
     def _execute(self, m: Mission, plan: ExecutionPlan, world: WorldState, node) -> bool:
-        """Serial node execution (the ``max_concurrency == 1`` route) — resolve inputs, invoke the
-        operator, apply the result. Behaviour is byte-identical to the historical path."""
+        """Serial node execution (the ``max_concurrency == 1`` route) — admit, resolve inputs, invoke the
+        operator, apply the result. Behaviour is byte-identical to the historical path (``_pre_exec_ok``
+        admits every node by default)."""
+        if not self._pre_exec_ok(m, plan, node):
+            return False
         inputs = self._resolve_inputs(m, world, node)
         self.store.append("NodeDispatched", m.id, {"node_id": node.id, "capability": node.capability})
         try:
@@ -493,6 +519,7 @@ class MissionRuntime:
         paths so failure semantics are identical."""
         self.store.append("NodeFailed", m.id,
                           {"node_id": node.id, "capability": node.capability, "error": str(e)})
+        self._meter(m, node, "error")
         self.learning.record_capability(node.capability, False)
         self._observe_routing(node, False)
         self._saga(m, plan, world)
@@ -534,6 +561,7 @@ class MissionRuntime:
                           source_ref=obs.get("source_ref", ""))
         self.store.append("NodeSucceeded", m.id,
                           {"node_id": node.id, "capability": node.capability, "result": result})
+        self._meter(m, node, "ok")              # one usage event per executed node (overlay hook; no-op by default)
         self.learning.record_capability(node.capability, True)
         self._observe_routing(node, True)
         return True
@@ -573,6 +601,8 @@ class MissionRuntime:
         import concurrent.futures as _cf
         prepared = []
         for node in nodes:
+            if not self._pre_exec_ok(m, plan, node):     # admit (fail-closed) before any dispatch, like serial
+                return False
             inputs = self._resolve_inputs(m, world, node)
             self.store.append("NodeDispatched", m.id, {"node_id": node.id, "capability": node.capability})
             prepared.append((node, inputs))
