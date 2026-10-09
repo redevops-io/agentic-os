@@ -23,12 +23,19 @@ import json
 import os
 import secrets
 import smtplib
+import threading
 import time
 import urllib.parse
+from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Callable
+
+try:
+    import fcntl          # POSIX: cross-process file lock for the file-backed store
+except ImportError:       # non-POSIX dev host
+    fcntl = None
 
 import httpx
 
@@ -89,6 +96,35 @@ def _store_path(name: str) -> str:
     return os.path.join(DATA_DIR, name)
 
 
+# Concurrent DSARs must not corrupt the file-backed store: the requests read-modify-write would lose an
+# update and the audit chain would FORK (two rows sharing one `prev`) if two intakes appended at once. Serialize
+# every store mutation — in-process threads via a threading.Lock, cross-process workers via an flock when
+# POSIX file locking is available (the store lives on a shared mounted volume).
+_STORE_LOCK = threading.Lock()
+
+
+@contextmanager
+def _store_mutation():
+    with _STORE_LOCK:
+        if fcntl is None:
+            yield
+            return
+        fh = open(_store_path(".store.lock"), "w")
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+            fh.close()
+
+
+def _new_dsar_id() -> str:
+    """A unique DSAR id. A bare second-granularity timestamp COLLIDED for two requests in the same second,
+    and `_persist` dedupes by id — so a colliding request silently overwrote the earlier one (a lost DSAR).
+    The random suffix makes every id unique."""
+    return f"DSAR-{int(time.time())}-{secrets.token_hex(4)}"
+
+
 def _load_requests() -> list[dict]:
     try:
         return json.loads(Path(_store_path("requests.json")).read_text())
@@ -101,10 +137,11 @@ def _save_requests(reqs: list[dict]) -> None:
 
 
 def _persist(record: dict) -> None:
-    reqs = _load_requests()
-    reqs = [r for r in reqs if r.get("id") != record["id"]]
-    reqs.insert(0, record)
-    _save_requests(reqs[:500])
+    with _store_mutation():                       # atomic read-modify-write: no lost DSAR under concurrency
+        reqs = _load_requests()
+        reqs = [r for r in reqs if r.get("id") != record["id"]]
+        reqs.insert(0, record)
+        _save_requests(reqs[:500])
 
 
 def _last_audit_hash() -> str:
@@ -125,13 +162,14 @@ def _last_audit_hash() -> str:
 def _audit(entry: dict) -> None:
     """Append a tamper-evident audit entry: each row carries the prev hash + its own
     sha256 over (prev + the row), so any edit/removal breaks the chain (see verify_audit_chain)."""
-    e = {"ts": datetime.now(timezone.utc).isoformat(), **entry, "prev": _last_audit_hash()}
-    e["hash"] = hashlib.sha256(json.dumps(e, sort_keys=True).encode()).hexdigest()
-    try:
-        with open(_store_path("audit.jsonl"), "a") as fh:
-            fh.write(json.dumps(e) + "\n")
-    except Exception:
-        pass
+    with _store_mutation():                       # read head + append atomically → the chain never forks
+        e = {"ts": datetime.now(timezone.utc).isoformat(), **entry, "prev": _last_audit_hash()}
+        e["hash"] = hashlib.sha256(json.dumps(e, sort_keys=True).encode()).hexdigest()
+        try:
+            with open(_store_path("audit.jsonl"), "a") as fh:
+                fh.write(json.dumps(e) + "\n")
+        except Exception:
+            pass
 
 
 def verify_audit_chain() -> dict:
@@ -573,7 +611,7 @@ def intake(email: str, rtype: str = "access", base_url: str = "") -> dict:
     rtype = (rtype or "access").lower()
     if not email or "@" not in email:
         return {"status": "error", "error": "a valid email is required"}
-    req_id = f"DSAR-{int(time.time())}"
+    req_id = _new_dsar_id()
     now = datetime.now(timezone.utc)
     token, channel, link = _send_verification(req_id, email, rtype, base_url)
     rec = {"id": req_id, "type": rtype, "email": email, "verified": False, "verify_token": token,
@@ -600,7 +638,7 @@ def access(email: str, summarize: Callable[[str], str | None] | None = None) -> 
     email = (email or "").strip().lower()
     if not email:
         return {"status": "error", "error": "email required"}
-    req_id = f"DSAR-{int(time.time())}"
+    req_id = _new_dsar_id()
     now = datetime.now(timezone.utc)
     record = {"id": req_id, "type": "access", "email": email, "created_at": now.isoformat(),
               "due_at": (now + timedelta(days=SLA_DAYS)).isoformat(), "status": "open"}
@@ -630,7 +668,7 @@ def delete(email: str, confirm: bool = False) -> dict:
     email = (email or "").strip().lower()
     if not email:
         return {"status": "error", "error": "email required"}
-    req_id = f"DSAR-{int(time.time())}"
+    req_id = _new_dsar_id()
     now = datetime.now(timezone.utc)
     record = {"id": req_id, "type": "delete", "email": email, "created_at": now.isoformat(),
               "due_at": (now + timedelta(days=SLA_DAYS)).isoformat(), "status": "open"}
@@ -658,7 +696,7 @@ def opt_out(email: str) -> dict:
     email = (email or "").strip().lower()
     if not email:
         return {"status": "error", "error": "email required"}
-    req_id = f"DSAR-{int(time.time())}"
+    req_id = _new_dsar_id()
     now = datetime.now(timezone.utc)
     record = {"id": req_id, "type": "opt_out", "email": email, "created_at": now.isoformat(),
               "due_at": (now + timedelta(days=SLA_DAYS)).isoformat(), "status": "fulfilled"}
@@ -678,7 +716,7 @@ def correct(email: str, corrections: dict, verified: bool = False) -> dict:
         return {"status": "error", "error": "corrections object required, e.g. {\"name\":\"New Name\"}"}
     if not verified:
         return {"status": "error", "error": "correction requires verified=true (identity gate)"}
-    req_id = f"DSAR-{int(time.time())}"
+    req_id = _new_dsar_id()
     now = datetime.now(timezone.utc)
     record = {"id": req_id, "type": "correct", "email": email, "created_at": now.isoformat(),
               "due_at": (now + timedelta(days=SLA_DAYS)).isoformat(), "status": "fulfilled"}
