@@ -37,3 +37,15 @@ jobs:
             tests/test_app_transport.py \
             tests/test_verification.py \
             tests/test_governance.py
+      # The per-app operator / runtime-native / concurrency tests drive the app ↔ operator wiring with
+      # fake runners (no services). They were NOT in CI, which is how the #370 read-back-wrap regression
+      # (nested results broke every /invoke consumer) slipped through. --import-mode=importlib lets the
+      # many same-named `test_operator.py` files coexist in one run.
+      - name: App operator / runtime-native tests
+        env:
+          PYTHONPATH: apps
+        run: |
+          pytest -q -p no:cacheprovider --import-mode=importlib \
+            apps/*/test_operator.py \
+            apps/*/test_runtime_native.py \
+            apps/*/test_*concurrency.py
