@@ -34,6 +34,7 @@ jobs:
             tests/test_registry.py \
             tests/test_operator_sdk.py \
             tests/test_app_llm.py \
+            tests/test_app_context.py \
             tests/test_app_transport.py \
             tests/test_verification.py \
             tests/test_governance.py
