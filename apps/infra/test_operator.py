@@ -8,6 +8,10 @@ Run: PYTHONPATH=<repo-root>:<repo-root>/apps python -m pytest \
 """
 from __future__ import annotations
 
+import hashlib
+import os
+
+from infra import core
 from infra.operator import build_infra_operator
 
 
@@ -47,6 +51,54 @@ def test_provision_runs_terraform_apply_parameterised():
     assert "apply" in calls[0] and "redevops-approved.tfplan" in calls[0]
     assert "-auto-approve" not in calls[0]
     assert "-var" not in calls[0]
+
+
+def test_provision_refuses_when_plan_swapped_after_approval(tmp_path, monkeypatch):
+    """#6 TOCTOU: the approval binds the plan digest; if the saved plan is overwritten between approval and
+    apply, provision refuses (fail closed) and never runs terraform apply."""
+    env = tmp_path / "terraform" / "envs" / "aws"
+    env.mkdir(parents=True)
+    monkeypatch.setattr(core, "TF_ROOT", str(tmp_path / "terraform"))
+    plan = env / core._PLAN_FILE
+    plan.write_bytes(b"PLAN-A: create 1 instance")
+    approved = hashlib.sha256(b"PLAN-A: create 1 instance").hexdigest()
+    assert core.plan_digest("aws") == approved
+
+    run, calls = _fake_runner()
+    op = build_infra_operator(run=run)
+
+    # matching digest → applies
+    ok = op.invoke("infra.provision", {"cloud": "aws", "plan_digest": approved, "_approval": {"approved": True}})
+    assert ok["status"] == "done" and ok["applied"] is True
+    assert any("apply" in c for c in calls)
+
+    # someone overwrites the saved plan AFTER approval (TOCTOU) → refuse, no apply
+    plan.write_bytes(b"PLAN-B: delete the database")
+    calls.clear()
+    bad = op.invoke("infra.provision", {"cloud": "aws", "plan_digest": approved, "_approval": {"approved": True}})
+    assert bad["status"] == "error" and bad["error"] == "plan_digest_mismatch" and bad["applied"] is False
+    assert not any("apply" in c for c in calls)        # terraform apply was NEVER invoked
+
+    # plan removed entirely → also refuse
+    os.remove(plan)
+    gone = op.invoke("infra.provision", {"cloud": "aws", "plan_digest": approved, "_approval": {"approved": True}})
+    assert gone["status"] == "error" and gone["error"] == "plan_digest_mismatch"
+
+
+def test_plan_emits_digest_binding(tmp_path, monkeypatch):
+    """infra.plan reports the plan_digest so the approval can bind it."""
+    env = tmp_path / "terraform" / "envs" / "aws"
+    env.mkdir(parents=True)
+    monkeypatch.setattr(core, "TF_ROOT", str(tmp_path / "terraform"))
+
+    def run(argv, cwd=None):
+        if "plan" in argv:
+            (env / core._PLAN_FILE).write_bytes(b"PLAN-A")     # terraform -out writes the plan
+        return 0, "Plan: 1 to add, 0 to change, 0 to destroy.", ""
+
+    op = build_infra_operator(run=run)
+    p = op.invoke("infra.plan", {"cloud": "aws"})
+    assert p["plan_digest"] == hashlib.sha256(b"PLAN-A").hexdigest()
 
 
 def test_plan_configure_verify():
