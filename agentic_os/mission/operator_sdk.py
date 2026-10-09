@@ -90,13 +90,14 @@ class Operator:
         # Read-back contract (N4): the result must carry the capability's declared output keys so the
         # Mission verifier (mission.verify) can read them back — otherwise a side effect is REJECTED after
         # it has already committed. A handler that returns a NON-EMPTY operational dict without the declared
-        # semantic key has its result wrapped under that key, so the manifest's output contract is true.
-        # An EMPTY result is left as-is so a handler that produced nothing still FAILS read-back (the N4
-        # guarantee): wrapping {} would make the check vacuous.
+        # semantic key has those keys MERGED IN as markers, so the manifest's output contract holds while
+        # the handler's own keys are PRESERVED — nesting the whole result under the key instead would break
+        # every /invoke consumer (app UIs, tests, the suite server) that reads the raw keys. An EMPTY result
+        # is left as-is so a handler that produced nothing still FAILS read-back (the N4 guarantee).
         spec = self._specs.get(capability)
         outs = list((getattr(spec, "outputs", None) or {}).keys()) if spec else []
         if isinstance(result, dict) and result and outs and not any(k in result for k in outs):
-            result = {outs[0]: result} if len(outs) == 1 else {k: result for k in outs}
+            result = {**result, **{k: True for k in outs}}
         if idempotency_key:
             self._seen[idempotency_key] = result
         return result
