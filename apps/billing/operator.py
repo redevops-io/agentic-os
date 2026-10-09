@@ -16,7 +16,7 @@ runtime parks them as HumanTasks before execution.
 """
 from __future__ import annotations
 
-from agentic_os.mission.operator_sdk import Operator, capability
+from agentic_os.mission.operator_sdk import Operator, capability, pending_approval
 
 from . import core
 
@@ -33,7 +33,8 @@ def build_billing_operator() -> Operator:
         ),
         capability(
             "billing.dunning",
-            lambda inp: core.chase_overdue(),
+            lambda inp: (core.chase_overdue() if inp.get("_approval")
+                        else pending_approval("billing.dunning", dunning_attempted=False)),
             provides=["dunning_attempted"],
             outputs={"dunning_attempted": "retry_payment issued across all overdue invoices"},
             side_effecting=True, approval_required=True,

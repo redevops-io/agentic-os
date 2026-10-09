@@ -147,11 +147,13 @@ def test_invoke_cancel_subscription_deletes_it(client):
     assert _FakeClient.posted == []  # cancel does not POST
 
 
-def test_invoke_dunning_hits_real_lago(client):
-    r = client.post("/invoke", json={"capability": "billing.dunning", "inputs": {}}).json()
-    res = r["result"]
+def test_dunning_stages_on_open_path_executes_on_trusted_approval(client):
+    # the open HTTP path STAGES even the gated cap — no money moves
+    staged = client.post("/invoke", json={"capability": "billing.dunning", "inputs": {}}).json()["result"]
+    assert staged["status"] == "pending_approval" and _FakeClient.posted == []
+    # trusted in-process path (runtime-delivered approval) issues the real retry_payment
+    res = build_billing_operator().invoke("billing.dunning", {"_approval": {"approved": True}})
     assert res["status"] == "done" and res["overdue_count"] == 1
-    # the REAL core issued a retry_payment against the (fake) Lago for the overdue invoice
     assert _FakeClient.posted == ["http://localhost:3000/api/v1/invoices/lago-1/retry_payment"]
 
 
@@ -162,9 +164,10 @@ def test_summary_is_readonly_and_computes_kpis(client):
 
 
 def test_idempotency_dedupes_side_effect(client):
-    body = {"capability": "billing.dunning", "inputs": {}, "idempotency_key": "k-1"}
-    first = client.post("/invoke", json=body).json()["result"]
-    second = client.post("/invoke", json=body).json()["result"]
+    op = build_billing_operator()
+    appr = {"_approval": {"approved": True}}
+    first = op.invoke("billing.dunning", appr, "k-1")
+    second = op.invoke("billing.dunning", appr, "k-1")
     assert first == second
     assert _FakeClient.posted == ["http://localhost:3000/api/v1/invoices/lago-1/retry_payment"]  # once
 
@@ -179,7 +182,7 @@ def test_mission_runtime_httpclient_drives_operator(client):
     assert res["core"] == "lago" and res["counts"]["overdue"] == 1
 
     dun = oc.invoke("billing", "billing.dunning", {}, idempotency_key="m-2")
-    assert dun["status"] == "done" and dun["overdue_count"] == 1
+    assert dun["status"] == "pending_approval"   # gated cap stages over the untrusted HTTP channel
 
 
 def test_refund_stages_without_approval_then_executes_on_approval(client):

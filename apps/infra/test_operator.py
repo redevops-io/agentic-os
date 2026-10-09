@@ -37,7 +37,7 @@ def test_manifest_matches_deploy_app_template_with_gates():
 def test_provision_runs_terraform_apply_parameterised():
     run, calls = _fake_runner()
     op = build_infra_operator(run=run)
-    res = op.invoke("infra.provision", {"cloud": "aws", "vars": {"name": "acme"}})
+    res = op.invoke("infra.provision", {"cloud": "aws", "vars": {"name": "acme"}, "_approval": {"approved": True}})
     assert res["status"] == "done" and res["action"] == "provision"
     assert res["outputs"] == {"host": "1.2.3.4"}                 # terraform output captured
     argv = " ".join(calls[0])

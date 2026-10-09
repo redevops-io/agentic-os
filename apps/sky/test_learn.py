@@ -79,6 +79,6 @@ def test_optimize_reranks_by_learning_and_launch_records(tmp_path):
     assert aws_row["learned_reward"] and aws_row["learned_reward"] < 0.5   # AWS demoted by preemption
 
     # launch records the measured outcome against the CHOSEN candidate (keys match the optimizer)
-    lr = op.invoke("sky.launch", {"spec": spec, "chosen": r1["chosen"]})
+    lr = op.invoke("sky.launch", {"spec": spec, "chosen": r1["chosen"], "_approval": {"approved": True}})
     assert lr["reward"] == 1.0 and lr["outcome"]["launched"] is True
     assert led.value(spec, r1["chosen"]) is not None

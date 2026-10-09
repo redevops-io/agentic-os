@@ -14,7 +14,7 @@ a placement decision is an ordinary mission — gated, evidence-backed, and roll
 """
 from __future__ import annotations
 
-from agentic_os.mission.operator_sdk import Operator, capability
+from agentic_os.mission.operator_sdk import Operator, capability, pending_approval
 
 from . import core
 from .learn import PlacementLedger
@@ -35,6 +35,9 @@ def build_sky_operator(*, run=None, ledger: "PlacementLedger | None" = None) -> 
 
     def _launch(i):
         spec = i.get("spec") or i
+        if not i.get("_approval"):           # consequential: launch a real cluster only on a runtime approval
+            return pending_approval("sky.launch", chosen=i.get("chosen") or spec.get("chosen"),
+                                    cluster_launched=False)
         chosen = i.get("chosen") or spec.get("chosen")
         if chosen:
             spec = {**spec, "chosen": chosen}          # PIN launch to the approved/ranked placement

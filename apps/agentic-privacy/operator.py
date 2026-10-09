@@ -17,7 +17,7 @@ cannot be reversed); the dry-run preview (core.delete(confirm=False)) is the saf
 """
 from __future__ import annotations
 
-from agentic_os.mission.operator_sdk import Operator, capability
+from agentic_os.mission.operator_sdk import Operator, capability, pending_approval
 
 from . import core
 
@@ -44,7 +44,8 @@ def build_privacy_operator() -> Operator:
         ),
         capability(
             "privacy.delete",
-            lambda inp: core.delete(inp.get("email", ""), confirm=True),
+            lambda inp: (core.delete(inp.get("email", ""), confirm=True) if inp.get("_approval")
+                        else pending_approval("privacy.delete", email=inp.get("email", ""), erasure=False)),
             provides=["erasure"],
             outputs={"erasure": "subject erased across every live connector (confirmed)"},
             side_effecting=True, approval_required=True,

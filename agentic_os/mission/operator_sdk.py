@@ -57,6 +57,15 @@ def capability(name: str, handler: Handler, *, provides: list[str] | None = None
     return Capability(spec=spec, handler=handler)
 
 
+def pending_approval(action: str, **preview) -> dict:
+    """The uniform 'staged, awaiting approval' result a side-effecting handler returns when it is invoked
+    WITHOUT a runtime-delivered ``_approval``. A consequential capability must perform its real side effect
+    ONLY after a genuine approval (the resumed Mission node carries ``_approval``; the open HTTP /invoke
+    strips forged markers), so on the ungoverned path it stages this instead of acting. ``preview`` carries
+    the declared-output marker set to a falsey value (so the N4 read-back still fails) plus any safe context."""
+    return {"status": "pending_approval", "action": action, "executed": False, **preview}
+
+
 class Operator:
     """One app's capability operator: manifest + handlers + idempotency dedupe."""
 
