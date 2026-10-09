@@ -175,3 +175,11 @@ def test_publish_stages_then_schedules_on_approval_binding_content_hash(client):
     bad = client.post("/invoke", json={"capability": "social.publish",
                                        "inputs": {"id": "post-1", "_approval": {"approved": True, "content_hash": "stale0000"}}}).json()["result"]
     assert bad["status"] == "error" and bad["publish_executed"] is False and _FakePsql.updates == []
+
+    # #7 fail-closed: an approval that carries NO content hash is NOT bound to any content → refuse, don't
+    # publish whatever is currently in Postiz (the old behaviour skipped the check when the hash was absent).
+    _FakePsql.updates = []
+    unbound = client.post("/invoke", json={"capability": "social.publish",
+                                           "inputs": {"id": "post-1", "_approval": {"approved": True}}}).json()["result"]
+    assert unbound["status"] == "error" and unbound["publish_executed"] is False and _FakePsql.updates == []
+    assert "not bound" in unbound["summary"]

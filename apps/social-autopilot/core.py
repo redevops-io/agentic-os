@@ -391,12 +391,17 @@ def publish(body: dict) -> dict:
     if not _valid_post_id(pid) or cur is None:
         return {"status": "error", "action": "publish", "id": pid, "publish_staged": True,
                 "publish_executed": False, "summary": f"post {pid} not found to publish."}
+    # Fail CLOSED on the content binding (#7): the approval MUST commit to the exact content hash that was
+    # staged, and it must still match what Postiz holds now. A missing hash (approval not bound to content)
+    # or a changed hash (content swapped after staging) both refuse — never publish content the approver
+    # didn't see. Previously a missing hash skipped the check, so a post edited after approval still shipped.
     approved_hash = (body.get("_approval") or {}).get("content_hash")
-    if approved_hash and approved_hash != content_hash:
+    if not approved_hash or approved_hash != content_hash:
+        changed = "changed since approval" if approved_hash else "not bound to the approved hash"
         return {"status": "error", "action": "publish", "id": pid, "publish_staged": True,
                 "publish_executed": False,
-                "summary": "post content changed since approval — refusing to publish (content is bound to "
-                           "the approved hash)."}
+                "summary": f"post content {changed} — refusing to publish (content is bound to the "
+                           "approved hash)."}
     if (cur.get("state") or "").upper() == "PUBLISHED":          # idempotent: already live
         v = verify_publish({"id": pid})
         return {"status": "done", "action": "publish", "id": pid, "publish_staged": True,
