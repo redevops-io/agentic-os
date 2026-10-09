@@ -62,6 +62,8 @@ class _FakeClient:
             return _Resp(200, {"invoices": INVOICES, "meta": {"total_pages": 1}})
         if url.endswith("/api/v1/customers"):
             return _Resp(200, {"customers": CUSTOMERS, "meta": {"total_pages": 1}})
+        if "/api/v1/invoices/lago-1" in url:                    # invoice detail (fees) for a refund
+            return _Resp(200, {"invoice": {"fees": [{"lago_id": "fee-1", "amount_cents": 45000}]}})
         return _Resp(200, {})
 
     def post(self, url, headers=None, json=None):
@@ -70,6 +72,8 @@ class _FakeClient:
             sub = (json or {}).get("subscription", {})
             return _Resp(200, {"subscription": {"lago_id": "lago-sub-1",
                                                 "external_id": sub.get("external_id")}})
+        if url.endswith("/api/v1/credit_notes"):               # a real refund credit note
+            return _Resp(200, {"credit_note": {"lago_id": "cn-1"}})
         return _Resp(200)
 
     def delete(self, url, headers=None):
@@ -176,3 +180,19 @@ def test_mission_runtime_httpclient_drives_operator(client):
 
     dun = oc.invoke("billing", "billing.dunning", {}, idempotency_key="m-2")
     assert dun["status"] == "done" and dun["overdue_count"] == 1
+
+
+def test_refund_stages_without_approval_then_executes_on_approval(client):
+    """N3: billing.refund only STAGES on the ungoverned path (no _approval); on a governed approval it
+    EXECUTES a real Lago refund credit note."""
+    staged = client.post("/invoke", json={"capability": "billing.refund",
+                                           "inputs": {"invoice": "INV-001", "amount": "$450"}}).json()["result"]
+    assert staged["status"] == "pending_approval" and staged["refund_executed"] is False \
+        if "refund_executed" in staged else staged["status"] == "pending_approval"
+    assert not any(u.endswith("/api/v1/credit_notes") for u in _FakeClient.posted)   # nothing moved
+
+    done = client.post("/invoke", json={"capability": "billing.refund",
+                                         "inputs": {"invoice": "INV-001", "_approval": {"approved": True}}}).json()["result"]
+    assert done["status"] == "done" and done["refund_executed"] is True
+    assert done["credit_note_id"] == "cn-1" and done["refunded_cents"] == 45000
+    assert any(u.endswith("/api/v1/credit_notes") for u in _FakeClient.posted)       # the real refund fired
