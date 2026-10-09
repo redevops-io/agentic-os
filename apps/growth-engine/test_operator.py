@@ -126,9 +126,23 @@ def test_invoke_reallocate_budget_stages(client):
     res = r["result"]
     assert res["status"] == "pending_approval" and res["action"] == "reallocate_budget"
     assert res["approval_required"] == "budget_change"
-    assert res["from"] == "linkedin" and res["to"] == "google" and res["amount"] == 600
+    assert res["from_campaign"] == "linkedin" and res["to_campaign"] == "google" and res["amount"] == 600
     # staging is pure: it touches NO Umami endpoint (ad spend lives in the Ads platform)
     assert _FakeUmami.gets == [] and _FakeUmami.posts == []
+
+
+def test_reallocate_budget_approved_stops_at_awaiting_connector(monkeypatch):
+    """On approval WITHOUT an advertising connector configured, the allocation is a governed recommendation
+    that stops at AWAITING_CONNECTOR — NEVER a write to Umami (analytics) or a mock presented as real."""
+    monkeypatch.delenv("GROWTH_ADS_PROVIDER", raising=False)
+    _FakeUmami.gets = []
+    _FakeUmami.posts = []
+    res = core.reallocate_budget({"from_campaign": "linkedin", "to_campaign": "google", "amount": 600,
+                                  "daily_limit": 50, "effective_period": "2026-07",
+                                  "_approval": {"approved": True}})
+    assert res["status"] == "AWAITING_CONNECTOR" and res["applied"] is False
+    assert res["recommendation"]["from_campaign"] == "linkedin"
+    assert _FakeUmami.gets == [] and _FakeUmami.posts == []     # NO ad write, NO analytics write
 
 
 def test_idempotency_dedupes_side_effect(client, monkeypatch):

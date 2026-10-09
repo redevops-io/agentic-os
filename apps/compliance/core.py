@@ -327,35 +327,63 @@ def explain(body: dict, blurb: Callable[[str], str | None] | None = None) -> dic
     return out
 
 
-def remediate(body: dict) -> dict:
-    """Applying a system fix changes the host configuration — never auto-executed.
+def _open_ticket(base: str, ticket: dict) -> tuple[str, bool]:
+    """Open a remediation ticket through a provider-neutral ticketing connector (POST), then read it back by
+    id to verify it exists. Returns (ticket_id, verified)."""
+    import httpx
+    base = base.rstrip("/")
+    with httpx.Client(timeout=10.0) as client:
+        r = client.post(base, json={"title": f"[{ticket['severity']}] {ticket['title']}",
+                                     "body": ticket["remediation"], "rule_id": ticket["rule_id"]})
+        if r.status_code >= 400:
+            raise RuntimeError(f"ticketing {r.status_code}: {r.text[:200]}")
+        tid = ((r.json() or {}).get("id") or (r.json() or {}).get("ticket_id") or "")
+        if not tid:
+            return "", False
+        rb = client.get(f"{base}/{tid}")
+        return str(tid), rb.status_code < 400
 
-    The module declares approval_required:[policy_change], so this stages the fix and
-    returns pending_approval with the exact remediation that *would* run.
-    """
+
+def remediate(body: dict) -> dict:
+    """Open a remediation TICKET for a failing control — the safe, verifiable first compliance action.
+
+    It NEVER applies a host-level fix or runs a shell command. Applying a host fix is a SEPARATE, explicitly
+    gated capability that must require a configured agent, a specific target identity, an allowlisted
+    operation, a rollback plan and a postcondition verifier — not this one. Stages the ticket proposal for
+    approval (binding the exact rule + remediation); on approval it opens the ticket through a configured
+    ticketing connector, else stops at AWAITING_CONNECTOR (a governed recommendation, no change)."""
     rule_id = body.get("rule_id") or body.get("rule") or ""
     meta = _resolve_rule(rule_id)
     if not meta:
         data = fetch_activity()
-        return {
-            "status": "error", "action": "remediate",
-            "error": f"unknown rule '{rule_id}'",
-            "available": [f["id"] for f in data["failing"]][:10],
-        }
+        return {"status": "error", "action": "open_remediation_ticket", "error": f"unknown rule '{rule_id}'",
+                "available": [f["id"] for f in data["failing"]][:10]}
     fix = meta["fix"] or "Apply the CIS-recommended configuration for this control."
-    return {
-        "status": "pending_approval",
-        "action": "remediate",
-        "approval": "policy_change",
-        "requires": "human approval",
-        "rule_id": meta["id"],
-        "title": meta["title"],
-        "severity": meta["severity"],
-        "proposed_remediation": fix,
-        "summary": f"Remediation for '{meta['title']}' is staged and awaiting human approval. "
-                   "System fixes are never auto-applied by the agent (policy_change is "
-                   "approval-gated).",
-    }
+    ticket = {"rule_id": meta["id"], "title": meta["title"], "severity": meta["severity"], "remediation": fix}
+    provider = os.environ.get("COMPLIANCE_TICKETING_URL", "")
+
+    if not body.get("_approval"):
+        return {"status": "pending_approval", "action": "open_remediation_ticket", "approval": "policy_change",
+                "requires": "human approval", **ticket,
+                "summary": f"A remediation TICKET for '{meta['title']}' ({meta['severity']}) is staged for "
+                           "approval. The agent opens a ticket — it never applies a host fix itself."}
+
+    if not provider:
+        return {"status": "AWAITING_CONNECTOR", "action": "open_remediation_ticket", "approved": True,
+                "ticket_opened": False, "recommendation": ticket,
+                "summary": (f"Approved remediation ticket for '{meta['title']}' recorded as a governed "
+                            "recommendation. No ticketing connector is configured (set "
+                            "COMPLIANCE_TICKETING_URL), so NO ticket was opened and NO host change was made.")}
+    try:
+        tid, verified = _open_ticket(provider, ticket)
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "action": "open_remediation_ticket", "approved": True,
+                "ticket_opened": False, "error": str(e), **ticket,
+                "summary": f"Approved but ticket NOT opened: {e}"}
+    return {"status": "done" if verified else "error", "action": "open_remediation_ticket", "approved": True,
+            "ticket_opened": bool(tid), "ticket_id": tid, "verified": verified, **ticket,
+            "summary": (f"Remediation ticket {tid} opened for '{meta['title']}'" +
+                        (" and verified by read-back." if verified else " but read-back verification FAILED."))}
 
 
 def _consent_id(customer: str, subscription: str) -> str:

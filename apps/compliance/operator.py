@@ -8,7 +8,7 @@ the wire.
 Capabilities (syscalls):
   compliance.scan          — re-run the oscap scan, return updated pass rate (read-only)
   compliance.explain       — plain-English explanation + fix for a failing rule (read-only)
-  compliance.remediate     — stage a host fix for approval   [approval gate: policy_change]
+  compliance.remediate     — open a remediation TICKET for approval (never a host fix) [gate: policy_change]
   compliance.file_consent  — file the customer's consent record  [approval gate: onboarding]
 
 Applying a system fix changes the host, so compliance.remediate carries
@@ -46,7 +46,7 @@ def build_compliance_operator() -> Operator:
             "compliance.remediate",
             lambda inp: core.remediate(inp),
             provides=["remediation_staged"],
-            outputs={"remediation_staged": "host fix staged for human approval (policy_change)"},
+            outputs={"remediation_staged": "a remediation ticket staged for human approval (policy_change); never a host fix"},
             side_effecting=True, approval_required=True,
             permissions=["compliance:write"], estimated_value="high", latency_ms=500,
             concurrency_mode="exclusive", resource_keys=["compliance:host-config"],  # one host fix at a time

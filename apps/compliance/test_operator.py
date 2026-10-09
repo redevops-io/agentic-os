@@ -129,7 +129,17 @@ def test_invoke_remediate_is_pending_approval(client):
     assert res["status"] == "pending_approval"
     assert res["approval"] == "policy_change"
     assert res["rule_id"] == UMASK_RULE
-    assert "umask 027" in res["proposed_remediation"]
+    assert "umask 027" in res["remediation"]
+
+
+def test_remediate_on_approval_opens_ticket_not_host_fix(client, monkeypatch):
+    """N3: on approval with NO ticketing connector, remediate records a governed remediation ticket and
+    stops at AWAITING_CONNECTOR — it NEVER applies a host fix or runs a shell command."""
+    monkeypatch.delenv("COMPLIANCE_TICKETING_URL", raising=False)
+    res = client.post("/invoke", json={"capability": "compliance.remediate",
+                                       "inputs": {"rule_id": UMASK_RULE, "_approval": {"approved": True}}}).json()["result"]
+    assert res["status"] == "AWAITING_CONNECTOR" and res["action"] == "open_remediation_ticket"
+    assert res["ticket_opened"] is False and res["recommendation"]["rule_id"] == UMASK_RULE
 
 
 def test_idempotency_dedupes_invocation(client):
