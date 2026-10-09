@@ -1192,7 +1192,24 @@ class MissionRuntime:
                     f"replay could not reproduce the sealed ContextEpoch for {mission_id}: "
                     f"{got_epoch} != {want_epoch}")
             m.context_epoch_id = want_epoch or got_epoch
+        m.outcome = self._outcome_from_log(m)
         return m
+
+    def _outcome_from_log(self, m: Mission) -> dict | None:
+        """A terminal mission's outcome, rebuilt from the log on rehydrate — the same shape `_succeed`/`_fail`
+        set on the live run (the world is folded from the same ObservationWritten events). Without this a
+        resumed process sees `state=succeeded` with `outcome=None` and has to re-derive results itself.
+        Non-terminal missions keep `None` (they have no outcome yet)."""
+        if m.state is MissionState.SUCCEEDED:
+            return {"success": True, "world": {k: (b.value if b else None)
+                                               for k, b in self._world(m.id).snapshot().items()}}
+        if m.state is MissionState.FAILED:
+            why = next((e for e in reversed(self.store.for_mission(m.id))
+                        if e.type in ("NodeFailed", "ApprovalRejected", "VerificationRejected", "MissionBlocked")),
+                       None)
+            reason = (why.payload.get("reason") or why.payload.get("error") or why.type) if why else "failed"
+            return {"success": False, "reason": reason}
+        return None
 
     def _last_plan_meta(self, mission_id: str) -> dict | None:
         """The latest PlanCreated payload for a mission (the sealed plan identity to replay against)."""
