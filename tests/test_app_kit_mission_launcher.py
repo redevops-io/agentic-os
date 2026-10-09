@@ -112,3 +112,34 @@ def test_drive_auto_approves_gate():
                            launcher=MissionRuntimeLauncher(rt))
     mission = drive(rt, res.mission_id)                     # auto-approves the gate
     assert mission.state is MissionState.SUCCEEDED
+
+
+def test_launch_carries_inputs_and_refuses_a_mis_bound_capability():
+    """The launcher must (1) carry the decision's inputs onto the mission and (2) refuse to run a mission
+    whose compiled plan bound a DIFFERENT capability than the decision selected — so an ambiguous goal can
+    never resolve a gated `send_proposal` to an ungated `delete_all` and sidestep the gate."""
+    import types
+    import pytest
+    from agentic_os.app_kit.decision_bridge import MissionRequest, BridgeError
+
+    req = MissionRequest(goal="send the proposal", capability="demo.send_proposal",
+                         required_capabilities=("demo.send_proposal",), inputs={"account": "A1"},
+                         gated=True, intervention_id="iv-1", opportunity_id="op-1",
+                         action_kind="send", subject="ACME")
+
+    class _Stub:
+        def __init__(self, bound):
+            self._bound, self._plans, self.got_inputs = bound, {}, None
+        def create_mission(self, goal, *, policy_refs=None, inputs=None, **kw):
+            self.got_inputs = inputs
+            self._plans["m-1"] = types.SimpleNamespace(
+                graph=types.SimpleNamespace(nodes=[types.SimpleNamespace(capability=c) for c in self._bound]))
+            return types.SimpleNamespace(id="m-1")
+
+    ok = _Stub(["demo.send_proposal"])
+    assert MissionRuntimeLauncher(ok).launch(req) == "m-1"
+    assert ok.got_inputs == {"account": "A1"}                       # inputs are no longer dropped
+
+    wrong = _Stub(["demo.delete_all"])                              # discovery bound an unrelated capability
+    with pytest.raises(BridgeError):
+        MissionRuntimeLauncher(wrong).launch(req)                   # refused, not run
