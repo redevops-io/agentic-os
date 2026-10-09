@@ -112,3 +112,24 @@ def test_invoke_does_not_wrap_an_empty_result():
     op = Operator("ref", [capability("ref.badwrite", lambda i: {},
                                      provides=["result"], outputs={"result": "str"}, side_effecting=True)])
     assert op.invoke("ref.badwrite", {}) == {}                   # not wrapped → "result" absent → verifier rejects
+
+
+def test_invoke_does_not_mint_a_marker_for_a_failed_result():
+    """A FAILED side effect must not be minted into `{key: True}` and read back as success. A handler that
+    returns a non-empty error result (a LAPI 403, `executed: False`, a failure status) keeps its declared
+    output key ABSENT, so the Mission verifier rejects — closing the 'verification always satisfied' hole."""
+    op = Operator("sec", [
+        capability("sec.block", lambda i: {"error": "lapi 403", "executed": False},
+                   provides=["ip_blocked"], outputs={"ip_blocked": "the ban"}, side_effecting=True),
+        capability("bill.refund", lambda i: {"executed": False, "error": "invoice not found"},
+                   provides=["refunded"], outputs={"refunded": "cents"}, side_effecting=True),
+        capability("op.denied", lambda i: {"status": "denied", "reason": "no grant"},
+                   provides=["done"], outputs={"done": "bool"}, side_effecting=True),
+    ])
+    assert "ip_blocked" not in op.invoke("sec.block", {})        # 403 no longer reads back as a ban
+    assert "refunded" not in op.invoke("bill.refund", {})        # failed refund never asserts an amount
+    assert "done" not in op.invoke("op.denied", {})              # denied call never asserts completion
+    # a SUCCESSFUL non-terminal state (e.g. "staged") still gets its marker — success path unchanged
+    op2 = Operator("ok", [capability("ok.stage", lambda i: {"status": "staged", "amount": 10},
+                          provides=["staged"], outputs={"staged": "x"}, side_effecting=True)])
+    assert op2.invoke("ok.stage", {})["staged"] is True
