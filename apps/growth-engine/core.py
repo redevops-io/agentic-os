@@ -319,25 +319,52 @@ def analyze(blurb: Callable[[str], str | None] | None = None) -> dict:
 
 
 def reallocate_budget(body: dict) -> dict:
-    """Budget changes move ad spend (in external Ads platforms) — NEVER auto-executed.
+    """Advertising budget allocation — PROVIDER-NEUTRAL. Moves ad spend between campaigns on an EXTERNAL ad
+    platform (Google / Meta / LinkedIn / Reddit / OpenAI Ads …). Stages the proposed allocation for approval
+    (binding the exact campaigns, amount, daily limit and effective period); on approval it applies the
+    change ONLY through a configured advertising connector and reads the budgets back to verify.
 
-    Module declares approval_required:[budget_change]; we stage the change and return
-    pending_approval so a human signs off in the Ads platform.
-    """
-    src = body.get("from", "linkedin")
-    dst = body.get("to", "google")
+    Until such a connector is configured it produces a GOVERNED RECOMMENDATION and stops at
+    AWAITING_CONNECTOR. It NEVER writes to an analytics source (e.g. Umami — that is a measurement input, not
+    a budget-management platform) or to an internal mock and presents it as a real platform change."""
+    src = body.get("from_campaign") or body.get("from", "linkedin")
+    dst = body.get("to_campaign") or body.get("to", "google")
     amount = body.get("amount", 600)
+    daily_limit = body.get("daily_limit")
+    period = body.get("effective_period") or body.get("period", "")
     try:
         amt_txt = f"${float(amount):,.0f}"
     except Exception:
         amt_txt = str(amount)
+    allocation = {"from_campaign": src, "to_campaign": dst, "amount": amount,
+                  "daily_limit": daily_limit, "effective_period": period}
+    provider = os.environ.get("GROWTH_ADS_PROVIDER", "")      # google_ads | meta_ads | linkedin_ads | …
+
+    if not body.get("_approval"):
+        return {
+            "status": "pending_approval", "action": "reallocate_budget",
+            "approval_required": "budget_change", **allocation, "requires": "human approval",
+            "ads_provider": provider or None,
+            "summary": (f"Staged ad-budget change: shift {amt_txt} from {src} to {dst}"
+                        + (f" (daily limit {daily_limit})" if daily_limit else "")
+                        + (f", effective {period}" if period else "")
+                        + ". Approval binds these exact campaigns, amount, limit and period. Not executed."),
+        }
+
+    # Approved. No advertising connector configured → governed recommendation, NO write (per spec).
+    if not provider:
+        return {
+            "status": "AWAITING_CONNECTOR", "action": "reallocate_budget", **allocation,
+            "approved": True, "applied": False, "recommendation": allocation,
+            "summary": (f"Approved allocation (shift {amt_txt} {src}→{dst}) recorded as a GOVERNED "
+                        "RECOMMENDATION. No advertising connector is configured, so NO budget was changed — "
+                        "set GROWTH_ADS_PROVIDER (Google/Meta/LinkedIn/Reddit/OpenAI Ads) to apply + verify "
+                        "against the real platform."),
+        }
+    # A provider is named but its connector adapter is not implemented yet → stop, do not fake a change.
     return {
-        "status": "pending_approval",
-        "action": "reallocate_budget",
-        "approval_required": "budget_change",
-        "from": src, "to": dst, "amount": amount,
-        "requires": "human approval",
-        "summary": (f"Staged budget change: shift {amt_txt} from {src} to {dst}. "
-                    "Not executed — ad spend lives in the external Ads platform (Google/Meta), "
-                    "and budget moves are approval-gated. Awaiting human approval."),
+        "status": "AWAITING_CONNECTOR", "action": "reallocate_budget", **allocation,
+        "approved": True, "applied": False, "ads_provider": provider,
+        "summary": (f"Approved allocation for provider {provider!r}, but its connector adapter is not "
+                    "implemented yet — stopping at AWAITING_CONNECTOR rather than faking a change."),
     }
