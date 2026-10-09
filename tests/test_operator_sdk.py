@@ -99,10 +99,11 @@ def test_invoke_wraps_result_under_declared_output_key():
         capability("acct.read", lambda i: {"refund_staged": True, "extra": 1},
                    provides=["refund_staged"], outputs={"refund_staged": "already present"}),
     ])
-    wrapped = op.invoke("acct.refund", {})
-    assert "refund_staged" in wrapped and wrapped["refund_staged"] == {"status": "staged", "amount": 10}
+    merged = op.invoke("acct.refund", {})
+    assert merged["refund_staged"] is True                       # declared key MERGED in as a marker
+    assert merged["status"] == "staged" and merged["amount"] == 10   # handler's own keys PRESERVED (not nested)
     untouched = op.invoke("acct.read", {})
-    assert untouched == {"refund_staged": True, "extra": 1}      # key already present → not re-wrapped
+    assert untouched == {"refund_staged": True, "extra": 1}      # key already present → not touched
 
 
 def test_invoke_does_not_wrap_an_empty_result():
