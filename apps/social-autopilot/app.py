@@ -519,7 +519,7 @@ def activity() -> JSONResponse:
     return JSONResponse(fetch_activity())
 
 
-# --- Context Runtime: live decisions over a synthetic goal stream ----------
+# --- Context Runtime: decisions over a synthetic goal stream (sample, not live traffic) ----------
 import asyncio as _cr_asyncio
 import json as _cr_json
 from datetime import datetime as _cr_dt, timezone as _cr_tz
@@ -562,7 +562,7 @@ def _cr_decide(text: str) -> dict:
 
 _CR_LIVE_FEED = """
 <div id="cr-live" style="position:fixed;right:16px;bottom:16px;width:340px;max-height:58vh;overflow:auto;background:#17171a;border:1px solid #2f2f33;border-radius:12px;padding:12px;font:13px/1.45 Roboto,system-ui,sans-serif;color:#e4e2e6;z-index:9999;box-shadow:0 10px 34px rgba(0,0,0,.45)">
-  <div style="color:#4fd1c5;font-weight:600;margin-bottom:8px">Context Runtime — live decisions</div>
+  <div style="color:#4fd1c5;font-weight:600;margin-bottom:8px">Context Runtime — decisions (sample stream)</div>
   <div id="cr-feed" style="color:#9b99a1">connecting…</div>
 </div>
 <script>
