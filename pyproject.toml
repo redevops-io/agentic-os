@@ -18,7 +18,7 @@ dependencies = [
     "discovery-runtime @ git+https://github.com/redevops-io/discovery-runtime.git@v0.1.17",
     # The domain-neutral learn/teach-next primitive, shared with learnerbot.ai. `agentic_os.
     # knowledge_frontier` re-exports it; the apps-stack adapter stays in priority_engine.
-    "knowledge-frontier @ git+https://github.com/redevops-io/knowledge-frontier.git@v0.1.0",
+    "knowledge-frontier @ git+https://github.com/redevops-io/knowledge-frontier.git@v0.2.0",
     "pyyaml>=6.0",
     "fastapi>=0.110",
     "uvicorn>=0.29",

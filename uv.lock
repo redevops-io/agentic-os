@@ -76,7 +76,7 @@ requires-dist = [
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=4.0" },
     { name = "google-auth", marker = "extra == 'gsc'", specifier = ">=2.0" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "knowledge-frontier", git = "https://github.com/redevops-io/knowledge-frontier.git?rev=v0.1.0" },
+    { name = "knowledge-frontier", git = "https://github.com/redevops-io/knowledge-frontier.git?rev=v0.2.0" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.1" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
@@ -1155,8 +1155,8 @@ wheels = [
 
 [[package]]
 name = "knowledge-frontier"
-version = "0.1.0"
-source = { git = "https://github.com/redevops-io/knowledge-frontier.git?rev=v0.1.0#d6a78ca3d1474cd06fd84c5f4547fdf381231cfb" }
+version = "0.2.0"
+source = { git = "https://github.com/redevops-io/knowledge-frontier.git?rev=v0.2.0#057258ae51e19ed6d3d69834093a794457fa4ffd" }
 
 [[package]]
 name = "markdown-it-py"
