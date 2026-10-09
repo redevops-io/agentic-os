@@ -246,3 +246,62 @@ def test_mission_runtime_httpclient_drives_operator(client):
 
     clo = oc.invoke("books", "books.close", {}, idempotency_key="m-2")
     assert clo["status"] == "pending_approval" and clo["close_pct"] == 50
+
+
+def test_close_executes_verifies_idempotent_and_rejects_inconsistent(monkeypatch):
+    """N3+N4: books.close stages the PCV proposal without approval; on approval it SUBMITS a real ERPNext
+    Period Closing Voucher, READS IT BACK to verify (submitted + company/FY + closing GL entry), is
+    idempotent on retry, and REFUSES an inconsistent re-close of an already-closed period."""
+    import json as _J
+    state = {"pcv": None}
+
+    class _PCVFake:
+        posts: list = []
+        puts: list = []
+
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+        def get(self, url, headers=None, params=None):
+            if "/api/resource/Account" in url:
+                return _Resp(200, {"data": [{"name": "Retained Earnings - MWM"}]})
+            if "/api/resource/Period%20Closing%20Voucher" in url:
+                return _Resp(200, {"data": [state["pcv"]] if state["pcv"] else []})
+            if "/api/resource/GL%20Entry" in url:
+                return _Resp(200, {"data": [{"name": "GL-PCV-1"}] if state["pcv"] else []})
+            return _Resp(200, {"data": []})
+
+        def post(self, url, headers=None, json=None):
+            _PCVFake.posts.append(url)
+            return _Resp(200, {"data": {"name": "ACC-PCV-2026-001"}})
+
+        def put(self, url, headers=None, json=None):
+            _PCVFake.puts.append((url, json or {}))
+            if (json or {}).get("docstatus") == 1 and url.endswith("ACC-PCV-2026-001"):
+                state["pcv"] = {"name": "ACC-PCV-2026-001", "company": "Meridian Wealth Management",
+                                "fiscal_year": "2026", "posting_date": "2026-06-30", "docstatus": 1}
+            return _Resp(200, {"data": {}})
+
+    _PCVFake.posts, _PCVFake.puts = [], []
+    monkeypatch.setattr(core, "ERPNEXT_API_KEY", "test-key")
+    monkeypatch.setattr(core, "httpx",
+                        types.SimpleNamespace(get=_fake_get, Client=lambda timeout=None: _PCVFake()))
+    core._CACHE.update(ts=0.0, data=None)
+
+    base = {"company": "Meridian Wealth Management", "fiscal_year": "2026",
+            "period_end": "2026-06-30", "closing_account": "Retained Earnings - MWM"}
+
+    staged = core.close(dict(base))
+    assert staged["status"] == "pending_approval" and not _PCVFake.posts           # nothing posted
+
+    done = core.close({**base, "_approval": {"approved": True}})
+    assert done["status"] == "done" and done["close_executed"] and done["verified"] is True
+    assert done["voucher"] == "ACC-PCV-2026-001" and done["idempotent"] is False
+    assert _PCVFake.posts and any(j.get("docstatus") == 1 for _, j in _PCVFake.puts)   # created + submitted
+
+    n = len(_PCVFake.posts)
+    again = core.close({**base, "_approval": {"approved": True}})
+    assert again["status"] == "done" and again["idempotent"] is True and len(_PCVFake.posts) == n  # no 2nd post
+
+    bad = core.close({**base, "period_end": "2026-12-31", "_approval": {"approved": True}})
+    assert bad["status"] == "error" and "inconsistent" in (bad.get("error") or "")

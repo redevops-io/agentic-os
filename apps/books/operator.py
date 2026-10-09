@@ -44,7 +44,7 @@ def build_books_operator() -> Operator:
         ),
         capability(
             "books.close",
-            lambda inp: core.close(),
+            lambda inp: core.close(inp or {}),
             provides=["close_staged"],
             outputs={"close_staged": "month-end close (Period Closing Voucher) staged for human approval"},
             side_effecting=True, approval_required=True,
