@@ -25,8 +25,27 @@ class MissionRuntimeLauncher:
     policy_refs: Sequence[str] = field(default_factory=lambda: ("*",))
 
     def launch(self, request: MissionRequest) -> str:
-        mission = self.runtime.create_mission(request.goal, policy_refs=list(self.policy_refs))
-        return getattr(mission, "id", "") or getattr(mission, "mission_id", "")
+        # Carry the decision's INPUTS onto the mission (they were being dropped), so the bound node runs with
+        # the evidence/parameters the decision was made on.
+        mission = self.runtime.create_mission(
+            request.goal, policy_refs=list(self.policy_refs), inputs=dict(request.inputs or {}))
+        mid = getattr(mission, "id", "") or getattr(mission, "mission_id", "")
+        # Safety (plan §3.4): the compiled plan must bind the capability the DECISION selected. An ambiguous
+        # goal can otherwise let discovery bind a DIFFERENT capability — a gated `send_email` decision
+        # resolving to an ungated `delete_all` — which would sidestep the gate. If the selected capability is
+        # not in the plan, REFUSE the mission rather than run it. Best-effort: enforced only when the runtime
+        # exposes its compiled plan (``_plans``); a launcher over a runtime that doesn't is left unchanged.
+        if request.capability and mid:
+            plans = getattr(self.runtime, "_plans", None)
+            plan = plans.get(mid) if isinstance(plans, dict) else None
+            graph = getattr(plan, "graph", None)
+            bound = {getattr(n, "capability", "") for n in getattr(graph, "nodes", ())} if graph else set()
+            if bound and request.capability not in bound:
+                from .decision_bridge import BridgeError
+                raise BridgeError(
+                    f"planner bound {sorted(bound)} but the decision selected {request.capability!r}; "
+                    "refusing to run a mission that does not bind the selected capability")
+        return mid
 
 
 # An approver decides a parked gate: (mission_id, node_id) -> "approve" | "reject".
