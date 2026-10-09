@@ -68,7 +68,7 @@ def test_optimize_no_cloud_pin_lets_optimizer_rank_all():
 def test_launch_uses_spot_and_reports_placement():
     run = _stub({"sky launch": (0, "Launching on GCP g2-standard-4\nEndpoint: http://34.1.2.3:8000\n", "")})
     op = build_sky_operator(run=run)
-    res = op.invoke("sky.launch", {"spec": {"gpus": "L4:1", "spot": True, "name": "demo"}})
+    res = op.invoke("sky.launch", {"spec": {"gpus": "L4:1", "spot": True, "name": "demo"}, "_approval": {"approved": True}})
     assert res["status"] == "done" and res["cluster"] == "demo"
     assert res["cloud"] == "GCP" and res["endpoint"] == "http://34.1.2.3:8000"
     assert res["spot"] is True
@@ -104,7 +104,7 @@ def test_launch_pins_to_chosen_and_rewards_actual_placement():
     run = _stub({"sky launch": (0, "Launching on GCP g2-standard-4\nEndpoint: http://34.1.2.3:8000\n", "")})
     op = build_sky_operator(run=run)
     chosen = {"cloud": "GCP", "region": "us-central1", "instance": "g2-standard-4"}
-    res = op.invoke("sky.launch", {"spec": {"gpus": "L4:1", "name": "demo"}, "chosen": chosen})
+    res = op.invoke("sky.launch", {"spec": {"gpus": "L4:1", "name": "demo"}, "chosen": chosen, "_approval": {"approved": True}})
     launch_argv = run.calls[0]
     assert "--cloud" in launch_argv and "GCP" in launch_argv            # pinned to the chosen cloud
     assert "--region" in launch_argv and "us-central1" in launch_argv   # pinned to the chosen region

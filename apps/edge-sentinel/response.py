@@ -80,7 +80,14 @@ def execute_response(operator: Operator, proposal: GovernedResponseProposal, *,
     if proposal.approval_required and not (decision and decision.approved):
         raise GovernanceError(f"{proposal.capability_name} requires approval; no approved decision supplied")
     try:
-        result = operator.invoke(proposal.capability_name, proposal.inputs,
+        # This is the TRUSTED governance path: an approved decision delivers the `_approval` marker to the
+        # gated handler so it performs its real side effect (the open HTTP /invoke strips forged markers, so
+        # a consequential capability executes ONLY here, after a genuine approval).
+        inputs = proposal.inputs
+        if decision and decision.approved:
+            inputs = {**inputs, "_approval": {"approved": True, "decision_id": decision.decision_id,
+                                              "actor": decision.actor}}
+        result = operator.invoke(proposal.capability_name, inputs,
                                  idempotency_key=idempotency_key or proposal.proposal_id)
         return ActionReceipt(request_id=proposal.proposal_id, decision_id=decision.decision_id,
                              status="SUCCEEDED", external_ref=str(result.get("id") or result.get("decision_id") or ""))

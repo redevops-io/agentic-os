@@ -138,14 +138,15 @@ def test_triage_is_readonly_and_reads_alerts(client):
 
 
 def test_block_ip_posts_a_decision(client):
-    r = client.post("/invoke", json={
-        "capability": "sentinel.block_ip",
-        "inputs": {"ip": "198.51.100.23", "duration": "6h"},
-    }).json()
-    res = r["result"]
+    # the open HTTP path STAGES the ban — nothing is enforced without a real approval
+    staged = client.post("/invoke", json={
+        "capability": "sentinel.block_ip", "inputs": {"ip": "198.51.100.23", "duration": "6h"}}).json()["result"]
+    assert staged["status"] == "pending_approval" and _FakeClient.posted == []
+    # trusted in-process path (runtime-delivered approval) enforces the real ban at the LAPI
+    res = build_edge_sentinel_operator().invoke(
+        "sentinel.block_ip", {"ip": "198.51.100.23", "duration": "6h", "_approval": {"approved": True}})
     assert res["status"] == "done" and res["enforced"] is True
     assert res["ip"] == "198.51.100.23" and res["duration"] == "6h"
-    # the REAL core POSTed a ban decision to the LAPI decisions endpoint
     assert len(_FakeClient.posted) == 1
     url, payload = _FakeClient.posted[0]
     assert url == "http://localhost:8086/v1/decisions"
@@ -165,10 +166,10 @@ def test_unblock_ip_deletes_the_decision(client):
 
 
 def test_idempotency_dedupes_the_ban(client):
-    body = {"capability": "sentinel.block_ip",
-            "inputs": {"ip": "198.51.100.23"}, "idempotency_key": "k-1"}
-    first = client.post("/invoke", json=body).json()["result"]
-    second = client.post("/invoke", json=body).json()["result"]
+    op = build_edge_sentinel_operator()
+    appr = {"ip": "198.51.100.23", "_approval": {"approved": True}}
+    first = op.invoke("sentinel.block_ip", appr, "k-1")
+    second = op.invoke("sentinel.block_ip", appr, "k-1")
     assert first == second
     assert len(_FakeClient.posted) == 1  # side effect enforced exactly once
 
@@ -183,4 +184,4 @@ def test_mission_runtime_httpclient_drives_operator(client):
     assert tri["action"] == "triage" and tri["active_decisions"] == 1
 
     blk = oc.invoke("edge-sentinel", "sentinel.block_ip", {"ip": "198.51.100.23"}, idempotency_key="m-2")
-    assert blk["status"] == "done" and blk["enforced"] is True
+    assert blk["status"] == "pending_approval"   # the ban stages over the untrusted HTTP channel

@@ -11,6 +11,7 @@ Layout it drives (written by the deploy tree):
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -76,26 +77,59 @@ def _err_summary(err: str) -> str:
 _PLAN_FILE = "redevops-approved.tfplan"
 
 
+def _plan_path(cloud: str) -> str:
+    return os.path.join(_env_dir(cloud), _PLAN_FILE)
+
+
+def plan_digest(cloud: str) -> str:
+    """sha256 of the SAVED plan file's bytes (empty string if no plan is on disk). This is the identity a
+    human approves; `terraform_apply` re-hashes the file at apply time and refuses on mismatch, so the plan
+    cannot be swapped between approval and apply (TOCTOU)."""
+    try:
+        with open(_plan_path(cloud), "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+    except OSError:
+        return ""
+
+
 def terraform_plan(cloud: str, tf_vars: "dict | None" = None, *, run: Runner = _run) -> dict:
     # `-out` writes the plan to disk so `provision` can apply exactly this plan (and nothing else).
     argv = ["terraform", f"-chdir={_env_dir(cloud)}", "plan", "-input=false", "-no-color",
             f"-out={_PLAN_FILE}"] + _var_args(tf_vars)
     rc, out, err = run(argv, None)
+    # The digest of the just-written plan is the approval identity (#6): it travels with the approval and is
+    # re-checked at apply, so a human approves THIS exact plan — not whatever is on disk at apply time.
     return {"status": "done" if rc == 0 else "error", "action": "plan", "cloud": cloud,
             "rc": rc, "plan_file": _PLAN_FILE if rc == 0 else None,
+            "plan_digest": plan_digest(cloud) if rc == 0 else None,
             "summary": _last_line(out) if rc == 0 else _err_summary(err),
             "stdout": out[-4000:], "stderr": err[-3000:]}
 
 
-def terraform_apply(cloud: str, tf_vars: "dict | None" = None, *, run: Runner = _run) -> dict:
+def terraform_apply(cloud: str, tf_vars: "dict | None" = None, *, approved_digest: "str | None" = None,
+                    run: Runner = _run) -> dict:
     # Apply the SAVED, approved plan verbatim — NOT a fresh `-auto-approve` plan. `tf_vars` are already
     # baked into the saved plan (passing `-var` with a plan file is an error), so they're intentionally
     # ignored here. terraform refuses a missing or stale saved plan, so if state drifted since approval the
     # apply fails closed instead of applying something the human never saw.
+    #
+    # TOCTOU bind (#6): when the approval carried a plan digest, re-hash the on-disk plan NOW and refuse if it
+    # differs — the plan file could have been overwritten between approval and apply. Fail closed: a mismatch
+    # (or a missing plan where a digest was expected) never applies.
+    if approved_digest:
+        on_disk = plan_digest(cloud)
+        if on_disk != approved_digest:
+            return {"status": "error", "action": "provision", "cloud": cloud, "rc": None,
+                    "error": "plan_digest_mismatch", "applied": False,
+                    "approved_digest": approved_digest, "on_disk_digest": on_disk,
+                    "summary": ("saved plan was overwritten since approval (digest mismatch) — refusing to "
+                                "apply a plan the human never approved." if on_disk else
+                                "approved plan is no longer on disk — refusing to apply.")}
     argv = ["terraform", f"-chdir={_env_dir(cloud)}", "apply", "-input=false", "-no-color", _PLAN_FILE]
     rc, out, err = run(argv, None)
     return {"status": "done" if rc == 0 else "error", "action": "provision", "cloud": cloud,
             "rc": rc, "outputs": terraform_outputs(cloud, run=run) if rc == 0 else {},
+            "applied": rc == 0,
             "summary": _last_line(out) if rc == 0 else _err_summary(err),
             "stdout": out[-4000:], "stderr": err[-3000:]}
 

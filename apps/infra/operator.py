@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import os
 
-from agentic_os.mission.operator_sdk import Operator, capability
+from agentic_os.mission.operator_sdk import Operator, capability, pending_approval
 
 from . import core
 
@@ -49,7 +49,14 @@ def build_infra_operator(*, run=None, http_get=None) -> Operator:
         return core.terraform_plan(_cloud(i), _vars(i), run=run)
 
     def _provision(i):
-        return core.terraform_apply(_cloud(i), _vars(i), run=run)
+        if not i.get("_approval"):           # consequential: apply real infra only on a runtime approval
+            return pending_approval("infra.provision", cloud=_cloud(i), infra_provisioned=False)
+        # Bind the approved plan digest (#6): the plan step emits `plan_digest`, the approval carries it
+        # forward (as a step input or inside `_approval`), and apply re-checks it against the on-disk plan so
+        # a plan swapped between approval and apply is refused. Absent a digest, apply stays back-compatible.
+        approved = (i.get("plan_digest") or i.get("approved_digest")
+                    or (i.get("_approval") or {}).get("plan_digest"))
+        return core.terraform_apply(_cloud(i), _vars(i), approved_digest=approved, run=run)
 
     def _configure(i):
         return core.ansible_playbook(i.get("playbook", "playbooks/deploy-app.yml"),

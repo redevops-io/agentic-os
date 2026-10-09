@@ -158,10 +158,13 @@ def test_access_gathers_across_live_systems_readonly(client):
 
 
 def test_delete_fans_out_the_erasure(client):
-    res = client.post("/invoke", json={
+    # the open HTTP path STAGES the (irreversible) erasure — nothing is deleted without a real approval
+    staged = client.post("/invoke", json={
         "capability": "privacy.delete", "inputs": {"email": SUBJECT}}).json()["result"]
+    assert staged["status"] == "pending_approval" and _FakeClient.deleted == []
+    # trusted in-process path (runtime-delivered approval) fans the erasure out across the live connectors
+    res = operator.build_privacy_operator().invoke("privacy.delete", {"email": SUBJECT, "_approval": {"approved": True}})
     assert res["status"] == "done" and res["type"] == "delete"
-    # erased across all three live connectors (Lead + subscriber + contact)
     assert res["deleted_count"] == 3
     assert len(_FakeClient.deleted) == 3
     assert any("/api/resource/Lead/LEAD-1" in u for u in _FakeClient.deleted)
@@ -189,9 +192,10 @@ def test_retention_is_a_dryrun_report(client):
 
 
 def test_idempotency_dedupes_the_erasure(client):
-    body = {"capability": "privacy.delete", "inputs": {"email": SUBJECT}, "idempotency_key": "k-1"}
-    first = client.post("/invoke", json=body).json()["result"]
-    second = client.post("/invoke", json=body).json()["result"]
+    op = operator.build_privacy_operator()
+    appr = {"email": SUBJECT, "_approval": {"approved": True}}
+    first = op.invoke("privacy.delete", appr, "k-1")
+    second = op.invoke("privacy.delete", appr, "k-1")
     assert first == second
     # replaying the same key must NOT erase twice — three DELETEs total, not six
     assert len(_FakeClient.deleted) == 3
@@ -207,4 +211,4 @@ def test_mission_runtime_httpclient_drives_operator(client):
     assert acc["status"] == "done" and acc["record_count"] == 3
 
     dele = oc.invoke("agentic-privacy", "privacy.delete", {"email": SUBJECT}, idempotency_key="m-2")
-    assert dele["status"] == "done" and dele["deleted_count"] == 3
+    assert dele["status"] == "pending_approval"   # irreversible erasure stages over the untrusted HTTP channel

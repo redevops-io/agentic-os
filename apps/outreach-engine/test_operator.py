@@ -131,13 +131,23 @@ def test_invoke_approve_syncs_pilot_to_twenty(client):
     assert any("/rest/opportunities" in u for u in _Twenty.posts)
 
 
-def test_invoke_send_all_dispatches_approved(client):
+def test_send_all_stages_on_open_path_then_executes_in_process(client):
+    """N3: outreach.send_all STAGES on the open /invoke path (no runtime approval) and only dispatches
+    through the trusted in-process path on an approval. It never claims to have sent what it didn't — no
+    live sender is wired, so the send is honestly reported UNEXECUTED (never read back as a real send)."""
     _result(client, "outreach.refresh", {})
     acct = core.DEMO[0]["account"]
     _result(client, "outreach.approve", {"account": acct})
-    res = _result(client, "outreach.send_all", {})
-    assert res["ok"] is True and res["action"] == "send_all"
-    assert res["sent"] == [acct]               # only the approved sequence goes out
+
+    staged = _result(client, "outreach.send_all", {})          # open path → stage only, never auto-send
+    assert staged["status"] == "pending_approval" and staged["executed"] is False
+    assert staged.get("sequences_sent") is False
+
+    # the trusted in-process path (approval present) dispatches the approved sequences — honestly reported
+    done = operator.build_outreach_operator().invoke("outreach.send_all", {"_approval": {"approved": True}})
+    assert done["action"] == "send_all" and done["executed"] is False     # no sender wired → honest no-op
+    assert done["staged"] == [acct] and done["sender_configured"] is False
+    assert done.get("sequences_sent") is False                 # N4: never read back as a successful send
 
 
 def test_idempotency_dedupes_side_effect(client):

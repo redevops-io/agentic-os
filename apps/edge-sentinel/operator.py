@@ -18,7 +18,7 @@ read-only and ungated.
 """
 from __future__ import annotations
 
-from agentic_os.mission.operator_sdk import Operator, capability
+from agentic_os.mission.operator_sdk import Operator, capability, pending_approval
 
 from . import core
 
@@ -35,7 +35,8 @@ def build_edge_sentinel_operator() -> Operator:
         ),
         capability(
             "sentinel.block_ip",
-            lambda inp: core.block_ip(inp),
+            lambda inp: (core.block_ip(inp) if inp.get("_approval")
+                        else pending_approval("sentinel.block_ip", ip=(inp.get("ip") or "").strip(), ip_blocked=False)),
             provides=["ip_blocked"],
             outputs={"ip_blocked": "ban decision enforced at the CrowdSec edge"},
             side_effecting=True, approval_required=True, undo="sentinel.unblock_ip",
