@@ -315,21 +315,106 @@ def draft(body: dict, copy: Callable[[str], str | None] | None = None) -> dict:
     }
 
 
-def publish(body: dict) -> dict:
-    """Publishing moves content OUT to the public — never auto-executed. Approval-gated.
+def _content_hash(text: str) -> str:
+    import hashlib
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:16]
 
-    The module declares approval_required:["publish"]; this action always returns
-    pending_approval and performs NO write/publish."""
+
+def _valid_post_id(pid: str) -> bool:
+    # Postiz ids are cuids (alphanumeric). Validate before interpolating into SQL (the _psql path).
+    import re
+    return bool(pid) and bool(re.fullmatch(r"[A-Za-z0-9_-]{1,64}", str(pid)))
+
+
+def _read_post(pid: str) -> dict | None:
+    """Read ONE post's current state + content + integration straight from Postiz postgres (the read-back
+    source of truth — never the publish response)."""
+    if not _valid_post_id(pid):
+        return None
+    try:
+        rows = _psql('SELECT p.id, p.state, p."integrationId", p.content '
+                     f'FROM "Post" p WHERE p.id = \'{pid}\' AND p."deletedAt" IS NULL;')
+    except Exception:
+        return None
+    if not rows:
+        return None
+    r = rows[0]
+    return {"id": r[0], "state": r[1], "integration_id": r[2], "content": _post_text(r[3])}
+
+
+def verify_publish(body: dict) -> dict:
+    """N4 read-back: re-read the post from Postiz and report the STRONGEST status the connector can
+    independently observe. PUBLISHED → verified; QUEUE/scheduled → VERIFICATION_PENDING (a scheduled post is
+    NOT a published post); ERROR → failed. The external social-network post id is reported when Postiz
+    recorded one, else the publication is UNVERIFIABLE (we never call a scheduled post a success)."""
+    pid = (body or {}).get("id")
+    post = _read_post(pid)
+    if post is None:
+        return {"verification": "UNVERIFIABLE", "verified": False, "reason": "post not readable", "id": pid}
+    state = (post.get("state") or "").upper()
+    ext_id = post.get("external_post_id") or None          # Postiz exposes this only once the network confirms
+    if state == "PUBLISHED":
+        return {"verification": "VERIFIED" if ext_id else "UNVERIFIABLE", "verified": bool(ext_id),
+                "state": state, "external_post_id": ext_id, "id": pid,
+                "reason": "" if ext_id else "published in Postiz but no external network id to confirm"}
+    if state in ("QUEUE", "DRAFT"):
+        return {"verification": "VERIFICATION_PENDING", "verified": False, "state": state, "id": pid,
+                "reason": "scheduled/queued — not yet published (a scheduled post is not a published post)"}
+    return {"verification": "FAILED", "verified": False, "state": state, "id": pid,
+            "reason": f"post state {state!r}"}
+
+
+def publish(body: dict) -> dict:
+    """Publishing moves content OUT to the public. On the ungoverned/pre-approval path it only STAGES
+    (pending_approval), binding the approval to the EXACT post id, destination (integration) and the
+    CONTENT HASH. On a governed approval (resumed node carries ``_approval``) it submits the approved post
+    to Postiz for publication (schedule now), AFTER confirming the content still matches the approved hash
+    (immutable content bound to approval), then reads BACK the publication status (N4). Scheduling is NOT
+    publication — the read-back reports VERIFICATION_PENDING until the network confirms."""
     data = fetch_activity(force=True)
     pid = body.get("id") or (data["queue"][0]["id"] if data["queue"] else "—")
     target = next((p for p in data["queue"] if p["id"] == pid), None)
-    where = (f" on {target['network']} (“{target['text'][:60]}…”)"
-             if target else "")
+    cur = _read_post(pid) if _valid_post_id(pid) else None
+    content_hash = _content_hash((cur or {}).get("content", "") or (target or {}).get("text", ""))
+    where = f" on {target['network']} (“{target['text'][:60]}…”)" if target else ""
+
+    if not body.get("_approval"):
+        return {
+            "status": "pending_approval", "action": "publish", "id": pid, "requires": "human approval",
+            "publish_staged": True,
+            "approval_binding": {"post_id": pid, "integration_id": (cur or {}).get("integration_id"),
+                                 "content_hash": content_hash},
+            "summary": (f"Publishing post {pid}{where} is staged and awaiting human approval "
+                        f"(content hash {content_hash}). The agent never auto-publishes."),
+        }
+
+    if not _valid_post_id(pid) or cur is None:
+        return {"status": "error", "action": "publish", "id": pid, "publish_staged": True,
+                "publish_executed": False, "summary": f"post {pid} not found to publish."}
+    approved_hash = (body.get("_approval") or {}).get("content_hash")
+    if approved_hash and approved_hash != content_hash:
+        return {"status": "error", "action": "publish", "id": pid, "publish_staged": True,
+                "publish_executed": False,
+                "summary": "post content changed since approval — refusing to publish (content is bound to "
+                           "the approved hash)."}
+    if (cur.get("state") or "").upper() == "PUBLISHED":          # idempotent: already live
+        v = verify_publish({"id": pid})
+        return {"status": "done", "action": "publish", "id": pid, "publish_staged": True,
+                "publish_executed": True, "idempotent": True, **v, "summary": f"post {pid} already published."}
+    try:
+        _psql(f'UPDATE "Post" SET state = \'QUEUE\', "publishDate" = NOW() '
+              f'WHERE id = \'{pid}\' AND "deletedAt" IS NULL AND state <> \'PUBLISHED\';')
+        submitted = True
+    except Exception as e:  # noqa: BLE001
+        submitted = False
+        err = str(e)
+    if not submitted:
+        return {"status": "error", "action": "publish", "id": pid, "publish_staged": True,
+                "publish_executed": False, "summary": f"approved but NOT submitted to Postiz: {err}"}
+    v = verify_publish({"id": pid})
     return {
-        "status": "pending_approval",
-        "action": "publish",
-        "id": pid,
-        "requires": "human approval",
-        "summary": (f"Publishing post {pid}{where} is staged and awaiting human approval. "
-                    "The agent never auto-publishes — a person clicks publish in Postiz."),
+        "status": "done", "action": "publish", "id": pid, "publish_staged": True, "publish_executed": True,
+        "content_hash": content_hash, **v,
+        "summary": (f"Post {pid}{where} submitted to Postiz for publication ({v.get('verification')}). "
+                    "Scheduling is not publication — the read-back confirms the external status."),
     }

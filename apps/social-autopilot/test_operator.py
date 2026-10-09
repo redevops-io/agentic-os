@@ -42,9 +42,15 @@ class _Done:
         self.stderr = ""
 
 
+# one post's content, shared by the id-scoped read-back and the queue row, so the content hash is stable
+_POST_CONTENT = '[{"content": "Q3 market commentary is live — read our take. Not investment advice. #MarketCommentary"}]'
+_POST_ROW_BY_ID = f"post-1\x1fQUEUE\x1fint-1\x1f{_POST_CONTENT}"   # id, state, integrationId, content (4 cols)
+
+
 class _FakePsql:
-    """Stands in for subprocess.run — answers the Postiz reads, records the INSERT writes."""
+    """Stands in for subprocess.run — answers the Postiz reads, records the INSERT + UPDATE writes."""
     inserts: list[str] = []
+    updates: list[str] = []
     queries: list[str] = []
 
     @classmethod
@@ -54,6 +60,11 @@ class _FakePsql:
         if 'INSERT INTO "Post"' in sql:
             cls.inserts.append(sql)
             return _Done("")
+        if 'UPDATE "Post"' in sql:                            # publish: schedule the approved post
+            cls.updates.append(sql)
+            return _Done("")
+        if 'FROM "Post"' in sql and "WHERE p.id" in sql:      # _read_post (id-scoped, 4 cols)
+            return _Done(_POST_ROW_BY_ID + "\n")
         if 'FROM "Post"' in sql:
             return _Done(_POST_ROW + "\n")
         if 'FROM "Integration"' in sql and "LIMIT 1" in sql:  # draft's first-channel lookup
@@ -66,6 +77,7 @@ class _FakePsql:
 @pytest.fixture(autouse=True)
 def _fake_postiz(monkeypatch):
     _FakePsql.inserts = []
+    _FakePsql.updates = []
     _FakePsql.queries = []
     core._CACHE.update(ts=0.0, data=None)  # no cache bleed between tests
     monkeypatch.setattr(core.subprocess, "run", _FakePsql.run)
@@ -140,3 +152,26 @@ def test_mission_runtime_httpclient_drives_operator(client):
 
     pub = oc.invoke("social-autopilot", "social.publish", {}, idempotency_key="m-2")
     assert pub["status"] == "pending_approval" and pub["id"] == "post-1"
+
+
+def test_publish_stages_then_schedules_on_approval_binding_content_hash(client):
+    """N3+N4: social.publish STAGES (no write) without approval, binding the content hash; on approval it
+    submits the post to Postiz (an UPDATE to QUEUE) ONLY if the content still matches the approved hash, then
+    reads back the status — a scheduled post reports VERIFICATION_PENDING, never 'published'."""
+    staged = client.post("/invoke", json={"capability": "social.publish",
+                                           "inputs": {"id": "post-1"}}).json()["result"]
+    assert staged["status"] == "pending_approval" and _FakePsql.updates == []        # nothing written
+    h = staged["approval_binding"]["content_hash"]
+    assert staged["approval_binding"]["post_id"] == "post-1" and h
+
+    done = client.post("/invoke", json={"capability": "social.publish",
+                                        "inputs": {"id": "post-1", "_approval": {"approved": True, "content_hash": h}}}).json()["result"]
+    assert done["status"] == "done" and done["publish_executed"] is True
+    assert any('UPDATE "Post"' in u for u in _FakePsql.updates)                       # submitted to Postiz
+    assert done["verification"] == "VERIFICATION_PENDING" and done["verified"] is False   # scheduled ≠ published
+
+    # content changed since approval → refuse (content is bound to the approved hash)
+    _FakePsql.updates = []
+    bad = client.post("/invoke", json={"capability": "social.publish",
+                                       "inputs": {"id": "post-1", "_approval": {"approved": True, "content_hash": "stale0000"}}}).json()["result"]
+    assert bad["status"] == "error" and bad["publish_executed"] is False and _FakePsql.updates == []
