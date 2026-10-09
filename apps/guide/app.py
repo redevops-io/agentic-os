@@ -70,18 +70,18 @@ def health():
 @app.post("/api/ask")
 async def api_ask(req: Request):
     b = await req.json()
-    return JSONResponse(answer(b.get("question", ""), b.get("role", "admin")))
+    return JSONResponse(answer(b.get("question", ""), b.get("role", "viewer")))
 
 
 @app.get("/api/walkthrough")
-def api_walkthrough(app: str, role: str = "admin"):
+def api_walkthrough(app: str, role: str = "viewer"):
     if app not in visible_apps(role):
         return JSONResponse({"error": f"'{app}' is not visible to role '{role}'"}, status_code=403)
     return JSONResponse(walkthrough(app))
 
 
 @app.get("/", response_class=HTMLResponse)
-def dashboard(role: str = "admin"):
+def dashboard(role: str = "viewer"):
     return HTMLResponse(render(role))
 
 

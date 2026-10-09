@@ -153,7 +153,15 @@ class GroundedContext:
 
     # ── authorization (runs BEFORE evidence is returned) ─────────────────────────
     def _authorize(self, scope: Optional[RetrievalScope], principal: Any) -> None:
-        if self._identity is not None and principal is not None and self._require_capability:
+        if self._identity is not None and self._require_capability:
+            # Fail CLOSED (N6): once an identity provider + a required capability are configured, a retrieval
+            # with NO principal is UNAUTHENTICATED and must be refused — never silently admitted. Previously a
+            # ``principal is None`` short-circuited the whole check, so an unauthenticated caller bypassed
+            # authorization entirely (fail-open). Authenticate first, then authorize.
+            if principal is None:
+                raise RetrievalRefused(
+                    f"retrieval requires an authenticated principal for {self._require_capability!r} "
+                    "(none supplied → fail closed)")
             if not self._identity.authorize(principal, self._require_capability):
                 raise RetrievalRefused(
                     f"principal {getattr(principal, 'id', principal)!r} not authorized for "
