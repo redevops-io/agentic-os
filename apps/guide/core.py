@@ -47,8 +47,10 @@ ROLES: dict[str, list[str]] = {
 
 
 def visible_apps(role: str) -> list[str]:
-    """The apps this principal may see — v-next RBAC plugs its grants in here."""
-    return ROLES.get(role, ROLES["admin"])
+    """The apps this principal may see — v-next RBAC plugs its grants in here. An unknown, empty or missing
+    role is NOT treated as admin (that was fail-open RBAC): it falls back to the least-privilege ``viewer``
+    grant, so a spoofed or absent role can never see more than the most restricted real role."""
+    return ROLES.get(role or "", ROLES["viewer"])
 
 
 def doc_text(name: str) -> str:

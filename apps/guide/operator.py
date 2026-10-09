@@ -23,7 +23,7 @@ def build_guide_operator() -> Operator:
     return Operator("guide", [
         capability(
             "guide.retrieve",
-            lambda inp: core.answer(inp.get("question", ""), inp.get("role", "admin")),
+            lambda inp: core.answer(inp.get("question", ""), inp.get("role", "viewer")),
             provides=["guide_answer"],
             outputs={"guide_answer": "RBAC-scoped answer + cited apps from the redevops-rag corpus"},
             estimated_value="medium", deterministic=True, latency_ms=200,

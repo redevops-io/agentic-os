@@ -129,3 +129,17 @@ def test_n6_guide_grounds_through_context_runtime_with_rbac_and_receipt():
     assert rc["context_version"] == a["context_version"] and rc["query_hash"]
     # the raw query phrase is never stored — only its hash (source ids like "agentic-books" are fine)
     assert "how do i close" not in str(rc).lower()
+
+
+def test_n6_unknown_role_is_least_privilege_not_admin():
+    """N6 fail-closed RBAC: an unknown / empty / missing role must NOT default to admin (which would see
+    every app). It falls back to the most-restricted real role (``viewer``), so a spoofed or absent role can
+    never see more than the least-privileged principal."""
+    assert core.visible_apps("admin") == list(core.APP_DOCS.keys())      # a real admin still sees all
+    for bogus in ("", "wizard", "root", "superuser", None):
+        vis = core.visible_apps(bogus)
+        assert vis == core.ROLES["viewer"], f"role {bogus!r} leaked {set(vis) - set(core.ROLES['viewer'])}"
+        assert "agentic-billing" not in vis and "edge-sentinel" not in vis   # privileged apps never leak
+    # the retrieval path honours it too: an unknown role never surfaces a privileged app card
+    hits = [n for n, _ in core.retrieve("billing dunning edge sentinel block ip", "wizard", k=8)]
+    assert all(n in core.ROLES["viewer"] for n in hits)

@@ -46,6 +46,15 @@ def test_permission_scoping_allows_granted_principal():
     assert not res.empty
 
 
+def test_permission_scoping_missing_principal_fails_closed():
+    """N6 fail-closed: with an identity provider + required capability configured, a retrieval that supplies
+    NO principal is UNAUTHENTICATED and must be refused — not silently admitted (the old fail-open)."""
+    identity = LocalIdentity(principal=Principal(id="u1"), grants={"context.retrieve"})
+    ctx = GroundedContext(retrievers={"vector": KeywordRetriever(_CORPUS)}, identity=identity)
+    with pytest.raises(RetrievalRefused):
+        ctx.retrieve("mission runtime")                       # no principal → refuse, don't return evidence
+
+
 def test_no_identity_is_open():
     ctx = GroundedContext(retrievers={"vector": KeywordRetriever(_CORPUS)})
     res = ctx.retrieve("cat mat", principal=Principal(id="u1"))   # no identity provider -> not gated
