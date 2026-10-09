@@ -111,3 +111,21 @@ def test_mission_runtime_httpclient_drives_operator(client):
 
     walk = oc.invoke("guide", "guide.walkthrough", {"app": "agentic-billing"}, idempotency_key="m-2")
     assert walk["app"] == "agentic-billing" and walk["core"] == "Lago"
+
+
+def test_n6_guide_grounds_through_context_runtime_with_rbac_and_receipt():
+    """N6: Guide retrieval is grounded through app.context, RBAC-scoped (the role's visible apps are the
+    scope's cross-app grants, so an unauthorized app never comes back), and answer() exposes a reproducible
+    retrieval receipt + the immutable context_version — no raw query in the receipt."""
+    # RBAC enforced in the scope: a sales role never sees finance-only apps (even when the query names them)
+    sales = [n for n, _ in core.retrieve("billing dunning refund books close", "sales", k=8)]
+    assert "agentic-billing" not in sales and "agentic-books" not in sales
+    assert all(n in core.ROLES["sales"] for n in sales)
+
+    a = core.answer("how do I close the books?", "finance")
+    assert a["cited"] and all(n in core.ROLES["finance"] for n in a["cited"])
+    assert a.get("context_version") and "retrieval_receipt" in a
+    rc = a["retrieval_receipt"]
+    assert rc["context_version"] == a["context_version"] and rc["query_hash"]
+    # the raw query phrase is never stored — only its hash (source ids like "agentic-books" are fine)
+    assert "how do i close" not in str(rc).lower()

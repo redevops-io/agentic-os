@@ -57,12 +57,50 @@ def doc_text(name: str) -> str:
             f"Actions: {', '.join(d['actions'])}. Settings: {d['settings']}")
 
 
-# ── retrieval (the redevops-rag pattern: score docs by query overlap, RBAC-filtered) ──
+# ── retrieval: grounded through the Context Runtime (app.context), RBAC-scoped (N6) ──
 def _tokens(s: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", s.lower())
 
 
-def retrieve(query: str, role: str, k: int = 4) -> list[tuple[str, float]]:
+_GUIDE_CTX = None   # lazily-built GroundedContext over the app cards (None = kernel absent → local fallback)
+
+
+def _guide_context():
+    global _GUIDE_CTX
+    if _GUIDE_CTX is None:
+        try:
+            from agentic_os.app.context import GroundedContext
+            from agentic_os.mission.context import KeywordRetriever
+            # Each app card is PUBLIC product doc, tagged with the app's own id so RBAC visibility is an
+            # EXPLICIT per-app grant on the scope (not inferred). Name is repeated so a query naming an app
+            # scores it highly (the old name-hit boost, now via token overlap).
+            docs = [{"id": name, "app_id": name, "classification": "PUBLIC",
+                     "text": f"{name.replace('-', ' ')} {name} {doc_text(name)}"} for name in APP_DOCS]
+            _GUIDE_CTX = GroundedContext(retrievers={"vector": KeywordRetriever(docs)})
+        except Exception:  # noqa: BLE001
+            _GUIDE_CTX = False
+    return _GUIDE_CTX or None
+
+
+def _retrieve_ctx(query: str, role: str, k: int = 4):
+    """Ground app recommendations through the Context Runtime, RBAC-scoped: the role's visible apps are the
+    scope's EXPLICIT cross-app grants, so unauthorized apps are never returned (authorization before the
+    evidence comes back). Returns (hits, ContextResult|None); falls back to local token-overlap without the
+    kernel."""
+    ctx = _guide_context()
+    if ctx is not None:
+        try:
+            from agentic_os.app.context import RetrievalScope
+            res = ctx.retrieve(query, k=len(APP_DOCS), representation="vector",
+                               scope=RetrievalScope(app_id="guide", principal_id=role,
+                                                    purpose="onboarding-guide",
+                                                    cross_app_grants=tuple(visible_apps(role))))
+            hits = sorted(((s.source_id, round(float(it.get("score", 0.0)), 2))
+                           for it, s in zip(res.results, res.sources)), key=lambda x: -x[1])[:k]
+            return (hits or [(n, 0.0) for n in visible_apps(role)[:k]]), res
+        except Exception:  # noqa: BLE001
+            pass
+    # fallback: local token-overlap over the RBAC-visible apps (kernel not available)
     q = set(t for t in _tokens(query) if len(t) > 2)
     scored = []
     for name in visible_apps(role):
@@ -73,7 +111,13 @@ def retrieve(query: str, role: str, k: int = 4) -> list[tuple[str, float]]:
         if s > 0:
             scored.append((name, round(s, 2)))
     scored.sort(key=lambda x: -x[1])
-    return scored[:k] or [(n, 0.0) for n in visible_apps(role)[:k]]
+    return (scored[:k] or [(n, 0.0) for n in visible_apps(role)[:k]]), None
+
+
+def retrieve(query: str, role: str, k: int = 4) -> list[tuple[str, float]]:
+    """App recommendations for a question, RBAC-scoped — grounded through app.context (the Context Runtime)
+    with a local fallback. Returns [(app_name, score)]."""
+    return _retrieve_ctx(query, role, k)[0]
 
 
 def walkthrough(name: str) -> dict:
@@ -97,7 +141,7 @@ def answer(question: str, role: str, llm: Callable[[str], str | None] | None = N
     action itself is fully deterministic and works with llm=None — it falls back to a
     retrieved summary of the top app.
     """
-    hits = retrieve(question, role, k=4)
+    hits, ctx = _retrieve_ctx(question, role, k=4)
     cited = [n for n, _ in hits]
     context = "\n".join(f"- {doc_text(n)}" for n in cited)
     prompt = (f"You are the onboarding guide for the redevops agentic-apps stack. Answer the user's "
@@ -109,4 +153,14 @@ def answer(question: str, role: str, llm: Callable[[str], str | None] | None = N
         d = APP_DOCS[top]
         text = (f"For that, use **{top}** ({d['g']}, core {d['core']}). {d['what']} "
                 f"Open it at {DEMO}/m/{top}. Related: {', '.join(cited[1:3])}.")
-    return {"question": question, "role": role, "answer": text, "cited": cited}
+    out = {"question": question, "role": role, "answer": text, "cited": cited,
+           "citations": [{"app": n, "dashboard": f"{DEMO}/m/{n}"} for n in cited]}
+    if ctx is not None:                    # N6: the evidence snapshot + a reproducible retrieval receipt
+        out["context_version"] = ctx.context_version
+        rc = ctx.receipt
+        if rc is not None:
+            out["retrieval_receipt"] = {"receipt_id": rc.receipt_id, "query_hash": rc.query_hash,
+                                        "engine": rc.engine, "source_ids": list(rc.source_ids),
+                                        "context_version": rc.context_version,
+                                        "max_classification": rc.max_classification}
+    return out
