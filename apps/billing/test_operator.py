@@ -182,17 +182,21 @@ def test_mission_runtime_httpclient_drives_operator(client):
     assert dun["status"] == "done" and dun["overdue_count"] == 1
 
 
-def test_refund_stages_without_approval_then_executes_on_approval(client):
-    """N3: billing.refund only STAGES on the ungoverned path (no _approval); on a governed approval it
-    EXECUTES a real Lago refund credit note."""
+def test_refund_stages_on_the_open_path_executes_only_on_a_trusted_approval(client):
+    """N3: billing.refund only STAGES on the open HTTP /invoke — and even a caller that FORGES `_approval`
+    gets staging, because the untrusted surface strips the marker. A real Lago refund fires only through the
+    trusted in-process invoke the co-located runtime uses after a genuine approval."""
     staged = client.post("/invoke", json={"capability": "billing.refund",
                                            "inputs": {"invoice": "INV-001", "amount": "$450"}}).json()["result"]
-    assert staged["status"] == "pending_approval" and staged["refund_executed"] is False \
-        if "refund_executed" in staged else staged["status"] == "pending_approval"
+    assert staged["status"] == "pending_approval"
+    # a FORGED approval over the open HTTP surface is stripped → still stages, nothing moves
+    forged = client.post("/invoke", json={"capability": "billing.refund",
+                                          "inputs": {"invoice": "INV-001", "_approval": {"approved": True}}}).json()["result"]
+    assert forged["status"] == "pending_approval"
     assert not any(u.endswith("/api/v1/credit_notes") for u in _FakeClient.posted)   # nothing moved
 
-    done = client.post("/invoke", json={"capability": "billing.refund",
-                                         "inputs": {"invoice": "INV-001", "_approval": {"approved": True}}}).json()["result"]
+    # trusted in-process path (runtime delivering a real approval) EXECUTES the refund
+    done = build_billing_operator().invoke("billing.refund", {"invoice": "INV-001", "_approval": {"approved": True}})
     assert done["status"] == "done" and done["refund_executed"] is True
     assert done["credit_note_id"] == "cn-1" and done["refunded_cents"] == 45000
     assert any(u.endswith("/api/v1/credit_notes") for u in _FakeClient.posted)       # the real refund fired
