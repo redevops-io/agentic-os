@@ -44,3 +44,37 @@ def test_writes_on_different_subjects_parallelize():
 def test_reads_are_read_only():
     assert _SPECS["privacy.access"].concurrency_mode == "read_only"
     assert _SPECS["privacy.retention"].concurrency_mode == "read_only"
+
+
+def test_concurrent_intakes_dont_collide_or_fork_the_audit_chain(tmp_path, monkeypatch):
+    """Data-integrity under real thread concurrency: many intakes in the same second must each persist with a
+    UNIQUE id (no silent overwrite via the _persist dedupe) and the tamper-evident audit hash-chain must stay
+    LINEAR (no fork — two rows sharing one `prev`). This exercises the file-store lock + unique-id fix."""
+    import threading
+    core = importlib.import_module("agentic-privacy.core")
+    monkeypatch.setattr(core, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(core, "POSTMARK_TOKEN", "")        # hermetic: force the log-only email channel
+    monkeypatch.setattr(core, "SMTP_HOST", "")
+
+    N = 40
+    errs: list = []
+
+    def _do(i):
+        try:
+            core.intake(f"user{i}@example.com", "access")
+        except Exception as e:  # noqa: BLE001
+            errs.append(e)
+
+    threads = [threading.Thread(target=_do, args=(i,)) for i in range(N)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errs, errs
+    reqs = core._load_requests()
+    assert len({r["email"] for r in reqs}) == N        # no subject lost
+    assert len({r["id"] for r in reqs}) == N           # every id unique — no collision overwrote a request
+    chain = core.verify_audit_chain()
+    assert chain["intact"] is True                     # linear, un-forked hash chain
+    assert chain["verified_rows"] >= N
