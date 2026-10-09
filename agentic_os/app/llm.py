@@ -127,14 +127,41 @@ class GovernedLLM:
                          routing_reason=routed.routing_reason)
 
 
+def _is_in_boundary_host(base: str) -> bool:
+    """Whether ``base`` is actually INSIDE the trust boundary — a CHECKED property, not the operator's word.
+    True only for loopback, a private/LAN/link-local address, an internal-suffix name (``.local``,
+    ``.internal``, ``.svc``, ``.cluster.local``), or a host explicitly allowlisted in
+    ``REDEVOPS_LLM_IN_BOUNDARY_HOSTS`` (comma-separated). A public host (``api.openai.com``, …) is NOT
+    in-boundary no matter what ``REDEVOPS_LLM_BASE_URL`` is set to, so the receipt can never claim it is."""
+    import os
+    import ipaddress
+    from urllib.parse import urlparse
+    host = (urlparse(base).hostname or "").lower()
+    if not host:
+        return False
+    allow = {h.strip().lower() for h in os.environ.get("REDEVOPS_LLM_IN_BOUNDARY_HOSTS", "").split(",") if h.strip()}
+    if host in allow:
+        return True
+    if host == "localhost" or host.endswith((".local", ".internal", ".svc", ".cluster.local")):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+        return ip.is_private or ip.is_loopback or ip.is_link_local
+    except ValueError:
+        return False   # a public DNS name is not trusted as in-boundary unless explicitly allowlisted
+
+
 def default_in_boundary_endpoint() -> "ModelEndpoint | None":
-    """The app's self-hosted in-boundary model, from ``REDEVOPS_LLM_BASE_URL`` — or ``None`` when unset.
-    Declaring it IN_BOUNDARY means anything it receives stays inside the boundary. Returns ``None`` when no
-    model is configured, so a caller degrades (no inference) instead of reaching an external provider."""
+    """The app's self-hosted in-boundary model, from ``REDEVOPS_LLM_BASE_URL`` — or ``None`` when unset OR
+    when the configured host is NOT actually inside the boundary. Labelling an endpoint IN_BOUNDARY means
+    anything it receives (up to SECRET) stays inside the boundary, so that label must be verified, not taken
+    from config: if ``REDEVOPS_LLM_BASE_URL`` points at a public host, this returns ``None`` (fail-closed —
+    no in-boundary model) rather than mint an endpoint whose receipt would falsely claim in-boundary. An
+    operator whose in-boundary model has a public DNS name allowlists it via ``REDEVOPS_LLM_IN_BOUNDARY_HOSTS``."""
     import os
     from agentic_os.governance.routing import ExecutionBoundary
     base = os.environ.get("REDEVOPS_LLM_BASE_URL", "") or ""
-    if not base:
+    if not base or not _is_in_boundary_host(base):
         return None
     return ModelEndpoint(model_id=os.environ.get("REDEVOPS_LLM_MODEL", "DeepSeek-V4-Flash"),
                          provider="self-hosted", boundary=ExecutionBoundary.IN_BOUNDARY,
