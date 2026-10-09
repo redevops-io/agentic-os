@@ -14,7 +14,11 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py scan.sh ./
+# Copy ALL python modules into an importable PACKAGE — app.py uses package-relative
+# imports (`from . import core`, …) that a flat `app:app` cannot resolve, and the source
+# dir name (apps/compliance) has a hyphen, not a valid module name. Re-home under a valid pkg.
+COPY *.py ./compliance/
+RUN touch compliance/__init__.py
 # Bake in the real scan artifacts + SCAP content so the image is self-contained.
 COPY results/ ./results/
 COPY content/ ./content/
@@ -22,7 +26,8 @@ COPY content/ ./content/
 # Point app.py at the baked-in results (override via env / mount for a live host path).
 ENV SCAP_RESULTS=/app/results/scan-results.xml \
     SCAP_REPORT=/app/results/report.html \
-    PORT=8208
+    PORT=8208 \
+    PYTHONPATH=/app
 EXPOSE 8208
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8208"]
+CMD ["uvicorn", "compliance.app:app", "--host", "0.0.0.0", "--port", "8208"]
