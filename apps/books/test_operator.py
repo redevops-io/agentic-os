@@ -75,6 +75,7 @@ class _FakeClient:
     """Stands in for httpx.Client — serves doctype lists on GET, records PUTs (categorize /
     journal-entry cancel) and POSTs (journal-entry create), returning a doc with a `name`."""
     puts: list[str] = []
+    put_bodies: list = []
     posts: list[tuple[str, dict]] = []
 
     def __enter__(self):
@@ -91,6 +92,7 @@ class _FakeClient:
 
     def put(self, url, headers=None, json=None):
         _FakeClient.puts.append(url)
+        _FakeClient.put_bodies.append((url, json or {}))
         return _Resp(200, {"data": {}})
 
     def post(self, url, headers=None, json=None):
@@ -102,6 +104,7 @@ class _FakeClient:
 @pytest.fixture(autouse=True)
 def _fake_erpnext(monkeypatch):
     _FakeClient.puts = []
+    _FakeClient.put_bodies = []
     _FakeClient.posts = []
     core._CACHE.update(ts=0.0, data=None)  # no cache bleed between tests
     monkeypatch.setattr(core, "ERPNEXT_API_KEY", "test-key")
@@ -158,6 +161,9 @@ def test_invoke_record_revenue_posts_journal_entry(client):
     debit = sum(a["debit_in_account_currency"] for a in payload["accounts"])
     credit = sum(a["credit_in_account_currency"] for a in payload["accounts"])
     assert debit == credit == 250
+    # ...and it is SUBMITTED (docstatus=1) so it actually posts to the GL — a draft records nothing.
+    submit_url = "http://localhost:8092/api/resource/Journal%20Entry/ACC-JV-2026-00001"
+    assert (submit_url, {"docstatus": 1}) in _FakeClient.put_bodies
 
 
 def test_invoke_reverse_entry_cancels_journal_entry(client):
@@ -188,9 +194,12 @@ def test_record_revenue_then_reverse_is_a_saga(client):
         json={"capability": "books.reverse_entry", "inputs": {"entry": entry}},
     ).json()["result"]
     assert rev["reversed"] is True
-    assert _FakeClient.puts == [
-        f"http://localhost:8092/api/resource/Journal%20Entry/{entry}"
-    ]
+    # record_revenue SUBMITTED the entry (docstatus=1, posts to GL) then reverse_entry CANCELLED it
+    # (docstatus=2) — two PUTs to the same voucher, the full saga round-trip.
+    url = f"http://localhost:8092/api/resource/Journal%20Entry/{entry}"
+    assert _FakeClient.puts == [url, url]
+    assert _FakeClient.put_bodies[0][1] == {"docstatus": 1}   # submit (record)
+    assert _FakeClient.put_bodies[1][1] == {"docstatus": 2}   # cancel (reverse)
 
 
 def test_invoke_categorize_hits_real_erpnext(client):

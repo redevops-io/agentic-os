@@ -398,6 +398,7 @@ def record_revenue(body: dict | None = None) -> dict:
     }
     entry = None
     erpnext_status = None
+    submitted = False
     try:
         with httpx.Client(timeout=12.0) as client:
             resp = client.post(
@@ -407,18 +408,32 @@ def record_revenue(body: dict | None = None) -> dict:
             erpnext_status = resp.status_code
             doc = (resp.json() or {}).get("data", {}) if resp.status_code < 400 else {}
             entry = doc.get("name")
+            # SUBMIT it (docstatus=1) so it actually POSTS TO THE GENERAL LEDGER. A Journal Entry created
+            # via the resource API is a DRAFT (docstatus=0) and records NOTHING in the GL — so without this
+            # the revenue was never booked, and the saga's cancel (docstatus=2) can't cancel a draft either.
+            # Same PUT-docstatus convention reverse_entry uses.
+            if entry:
+                sub = client.put(
+                    f"{ERPNEXT_URL}/api/resource/Journal%20Entry/{entry}",
+                    headers=_headers(), json={"docstatus": 1},   # 1 = Submitted → posts to the GL
+                )
+                erpnext_status = sub.status_code
+                submitted = sub.status_code < 400
     except Exception as e:  # network / auth hiccup — surface, don't crash the saga
         erpnext_status = f"error: {e}"
 
     return {
         "status": "done",
         "action": "record_revenue",
-        "revenue_recorded": True,
+        "revenue_recorded": submitted,            # true only if the JE was actually SUBMITTED (posted)
         "entry": entry,
         "erpnext_status": erpnext_status,
-        "summary": f"Recorded {_money(amount)} subscription revenue for '{subscription}' "
-                   f"as Journal Entry {entry or '(pending)'} "
-                   f"(debit {cash_acc} / credit {income_acc}).",
+        "summary": (f"Recorded {_money(amount)} subscription revenue for '{subscription}' "
+                    f"as Journal Entry {entry or '(pending)'} "
+                    f"(debit {cash_acc} / credit {income_acc})."
+                    if submitted else
+                    f"Could NOT post subscription revenue for '{subscription}' "
+                    f"(entry {entry or '(not created)'} not submitted to the GL)."),
     }
 
 
