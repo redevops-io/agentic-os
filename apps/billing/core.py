@@ -242,17 +242,61 @@ def chase_overdue(blurb: Callable[[str], str | None] | None = None) -> dict:
     return out
 
 
+def _execute_refund(invoice_number: str) -> dict:
+    """Issue a real Lago refund credit note for the invoice — the money-back action, built from the
+    invoice's fees. Returns the created credit note id + refunded amount, or an error (surfaced, never
+    silently swallowed). Only reached on a governed approval."""
+    if not (lago_connected() and LAGO_API_KEY):
+        return {"executed": False, "error": "lago not reachable"}
+    inv = next((i for i in _get_all("/api/v1/invoices", "invoices")
+                if i.get("number") == invoice_number or i.get("lago_id") == invoice_number), None)
+    if not inv:
+        return {"executed": False, "error": f"invoice {invoice_number!r} not found"}
+    lago_id = inv.get("lago_id")
+    with httpx.Client(timeout=10.0) as client:
+        detail = client.get(f"{LAGO_API_URL}/api/v1/invoices/{lago_id}", headers=_headers())
+        fees = ((detail.json() or {}).get("invoice", {}) or {}).get("fees", []) if detail.status_code < 400 else []
+        items = [{"fee_id": f.get("lago_id"), "amount_cents": int(f.get("amount_cents") or 0)}
+                 for f in fees if f.get("lago_id") and int(f.get("amount_cents") or 0) > 0]
+        total = sum(it["amount_cents"] for it in items)
+        if not items or total <= 0:
+            return {"executed": False, "error": "invoice has no refundable fees"}
+        payload = {"credit_note": {"invoice_id": lago_id, "reason": "other",
+                                   "credit_amount_cents": 0, "refund_amount_cents": total, "items": items}}
+        r = client.post(f"{LAGO_API_URL}/api/v1/credit_notes", headers=_headers(), json=payload)
+        if r.status_code >= 400:
+            return {"executed": False, "error": f"lago {r.status_code}: {r.text[:200]}"}
+        cn = (r.json() or {}).get("credit_note", {})
+        return {"executed": True, "credit_note_id": cn.get("lago_id"), "refunded_cents": total}
+
+
 def stage_refund(body: dict) -> dict:
-    """Refunds move money OUT — never auto-executed. Stage for human approval only."""
+    """Refunds move money OUT. On the ungoverned/pre-approval path they are only STAGED for a human. On a
+    governed approval (the resumed Mission node carries ``_approval``) the refund is EXECUTED — a real Lago
+    refund credit note — because a human has cleared THIS action (N3: approval executes)."""
     data = fetch_activity(force=True)
     target = body.get("invoice") or (data["recent"][0]["number"] if data["recent"] else "—")
     amount = body.get("amount", "$450")
+    if not body.get("_approval"):
+        return {
+            "status": "pending_approval",
+            "action": "refund",
+            "requires": "human approval",
+            "refund_staged": True,
+            "summary": f"Refund of {amount} on invoice {target} is staged and awaiting human approval. "
+                       "Refunds are never auto-executed by the agent.",
+        }
+    ex = _execute_refund(target)
+    ok = bool(ex.get("executed"))
     return {
-        "status": "pending_approval",
+        "status": "done" if ok else "error",
         "action": "refund",
-        "requires": "human approval",
-        "summary": f"Refund of {amount} on invoice {target} is staged and awaiting human approval. "
-                   "Refunds are never auto-executed by the agent.",
+        "refund_staged": True,
+        "refund_executed": ok,
+        **{k: v for k, v in ex.items() if k != "executed"},
+        "summary": (f"Refund on invoice {target} EXECUTED after approval "
+                    f"(Lago credit note {ex.get('credit_note_id')})." if ok
+                    else f"Refund on invoice {target} approved but NOT executed: {ex.get('error')}."),
     }
 
 
