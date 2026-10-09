@@ -133,3 +133,22 @@ def test_invoke_does_not_mint_a_marker_for_a_failed_result():
     op2 = Operator("ok", [capability("ok.stage", lambda i: {"status": "staged", "amount": 10},
                           provides=["staged"], outputs={"staged": "x"}, side_effecting=True)])
     assert op2.invoke("ok.stage", {})["staged"] is True
+
+
+def test_http_invoke_strips_a_forged_approval_marker():
+    """The open HTTP /invoke is the untrusted 'try' surface: a direct caller must NOT be able to forge
+    `_approval` to drive a consequential handler. The marker is stripped on the wire, so an external
+    `{"_approval": true}` stages / stays pending — while the in-process (trusted) invoke the co-located
+    runtime uses still executes on a real runtime-delivered approval."""
+    def _refund(inputs):           # mirrors the real apps: execute only on an approval, else stage
+        return {"status": "done", "executed": True} if inputs.get("_approval") else {"status": "pending_approval"}
+    op = Operator("bill", [capability("bill.refund", _refund, provides=["refund"],
+                                      outputs={"refund": "r"}, side_effecting=True)])
+    app = FastAPI(); app.include_router(op.router()); client = TestClient(app)
+
+    forged = client.post("/invoke", json={"capability": "bill.refund",
+                                          "inputs": {"_approval": True, "amount": 999}}).json()["result"]
+    assert forged["status"] == "pending_approval"                # forged approval stripped → no execution
+    assert "executed" not in forged
+    # the trusted in-process path (what a co-located runtime uses) still executes on a real approval
+    assert op.invoke("bill.refund", {"_approval": {"approved": True}})["executed"] is True

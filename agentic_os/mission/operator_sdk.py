@@ -133,8 +133,15 @@ class Operator:
         @router.post("/invoke")
         def invoke(body: InvokeBody, idempotency_key: str | None = Header(default=None)):
             key = body.idempotency_key or idempotency_key or ""
+            # The HTTP /invoke is the UNTRUSTED "try" surface, so strip runtime-only approval markers a caller
+            # could forge to bypass a gate: a direct POST of `{"_approval": true}` must NOT make a consequential
+            # handler execute (it stages / stays pending instead). The runtime delivers a real approval through
+            # the trusted in-process invoke (co-located) or an authenticated internal channel — never this open
+            # endpoint — so legitimate approval flows are unaffected.
+            inputs = {k: v for k, v in (body.inputs or {}).items()
+                      if not (k == "_approval" or k.startswith("_approval"))}
             try:
-                return {"result": self.invoke(body.capability, body.inputs, key)}
+                return {"result": self.invoke(body.capability, inputs, key)}
             except KeyError as e:
                 raise HTTPException(404, str(e))
 

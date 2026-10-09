@@ -136,8 +136,13 @@ def test_remediate_on_approval_opens_ticket_not_host_fix(client, monkeypatch):
     """N3: on approval with NO ticketing connector, remediate records a governed remediation ticket and
     stops at AWAITING_CONNECTOR — it NEVER applies a host fix or runs a shell command."""
     monkeypatch.delenv("COMPLIANCE_TICKETING_URL", raising=False)
-    res = client.post("/invoke", json={"capability": "compliance.remediate",
-                                       "inputs": {"rule_id": UMASK_RULE, "_approval": {"approved": True}}}).json()["result"]
+    # a forged approval over the open HTTP surface is stripped → stages (no remediation); execution is in-process
+    forged = client.post("/invoke", json={"capability": "compliance.remediate",
+                                          "inputs": {"rule_id": UMASK_RULE, "_approval": {"approved": True}}}).json()["result"]
+    assert forged["status"] == "pending_approval"
+    # trusted in-process path (runtime-delivered approval): opens a ticket, never a host fix
+    res = build_compliance_operator().invoke("compliance.remediate",
+                                             {"rule_id": UMASK_RULE, "_approval": {"approved": True}})
     assert res["status"] == "AWAITING_CONNECTOR" and res["action"] == "open_remediation_ticket"
     assert res["ticket_opened"] is False and res["recommendation"]["rule_id"] == UMASK_RULE
 
