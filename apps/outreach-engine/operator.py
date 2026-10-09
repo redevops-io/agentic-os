@@ -15,7 +15,7 @@ runtime parks it as a HumanTask before execution.
 """
 from __future__ import annotations
 
-from agentic_os.mission.operator_sdk import Operator, capability
+from agentic_os.mission.operator_sdk import Operator, capability, pending_approval
 
 from . import core
 
@@ -41,7 +41,11 @@ def build_outreach_operator() -> Operator:
         ),
         capability(
             "outreach.send_all",
-            lambda inp: core.send_all(inp),
+            # Consequential: reach prospects ONLY on a runtime approval. The open /invoke path stages
+            # (pending_approval) instead of auto-sending — matching the gate the manifest declares.
+            lambda inp: (core.send_all(inp) if inp.get("_approval")
+                         else pending_approval("outreach.send_all",
+                                               staged=sorted(core._STATE["approved"]), sequences_sent=False)),
             provides=["sequences_sent"],
             outputs={"sequences_sent": "approved outreach sequences dispatched to prospects"},
             side_effecting=True, approval_required=True,

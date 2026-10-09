@@ -288,6 +288,14 @@ def approve(body: dict | None = None) -> dict:
 
 
 def send_all(body: dict | None = None) -> dict:
-    """Dispatch every approved outreach sequence to its prospect (the human-gated send)."""
-    return {"ok": True, "action": "send_all", "sent": sorted(_STATE["approved"]),
-            "note": "approved sequences dispatched (wire your sender to go live)"}
+    """Dispatch every approved outreach sequence to its prospect (the human-gated send).
+
+    HONEST no-op: no live sender (SMTP/provider) is wired in the demo, so nothing actually reaches a
+    prospect. This reports the approved sequences as STAGED and the send as UNEXECUTED — it never claims to
+    have sent what it didn't. `sequences_sent: False` is set explicitly so the operator SDK's output-marker
+    merge can't read this back as a successful send (N4). Wire a real sender to set it True."""
+    approved = sorted(_STATE["approved"])
+    return {"ok": False, "action": "send_all", "executed": False, "sequences_sent": False,
+            "dispatched": 0, "staged": approved, "sender_configured": False,
+            "note": "no live sender configured — approved sequences are staged, not sent. "
+                    "Wire a sender (SMTP/provider) to actually dispatch."}
