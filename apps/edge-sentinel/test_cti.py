@@ -99,6 +99,16 @@ def test_attack_mapping_is_explainable():
     assert attack.map_scenario_to_techniques("nothing-here") == []
 
 
+def test_attack_mapping_matches_tokens_not_substrings():
+    """A short token like 'rce' must NOT match inside 'bruteforce' — otherwise a brute-force attack gets
+    mislabeled as Exploit-Public-Facing-Application (T1190) + Command Execution (T1059)."""
+    techs = [t for t, _ in attack.map_scenario_to_techniques("crowdsecurity/ssh-bruteforce")]
+    assert techs == ["T1110"]                                  # brute force only — no T1190/T1059
+    # a genuine RCE scenario still maps (rce as a delimited token)
+    rce = [t for t, _ in attack.map_scenario_to_techniques("web-rce")]
+    assert "T1190" in rce and "T1059" in rce
+
+
 def test_taxii_offline_ingest():
     """A TAXII bundle ingests into the graph; the read seam is offline/testable."""
     _, indicator = normalize_ioc("198.51.100.9")

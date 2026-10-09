@@ -13,6 +13,8 @@ are explainable.
 """
 from __future__ import annotations
 
+import re
+
 from .stix import Provenance, StixObject
 
 # Pinned identity so a case records which ATT&CK version its mapping came from (acceptance: version identity).
@@ -76,7 +78,10 @@ def map_scenario_to_techniques(scenario: str) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
     for token, techniques in _SCENARIO_MAP:
-        if token in s:
+        # Match the token as a DELIMITED unit (bounded by non-alphanumerics), not a raw substring, so a
+        # short token like "rce" does not match inside "bruteforce"/"force"/"source" and mislabel a
+        # brute-force attack as Exploit-Public-Facing-Application (T1190) + Command Execution (T1059).
+        if re.search(r"(?<![a-z0-9])" + re.escape(token) + r"(?![a-z0-9])", s):
             for t in techniques:
                 if t not in seen:
                     seen.add(t)
