@@ -56,6 +56,28 @@ def test_n3_approved_gated_node_executes():
     assert "committed" in str(rt._world(res.mission_id).snapshot())           # executed on approval
 
 
+def test_n3_resumed_handler_receives_approval_marker():
+    """The resumed handler of an approved gated node receives an ``_approval`` marker in its inputs — even
+    on a plain yes/no approval with no typed edit. That marker is a gated handler's cue to EXECUTE the real
+    side effect on approval instead of re-staging it forever; it is ABSENT on the ungoverned/pre-approval
+    path, so a handler called directly still stages."""
+    seen: dict = {}
+
+    def handler(i):
+        seen["approval"] = i.get("_approval")
+        return {"did": "it"}
+
+    op = Operator("ref", [capability("ref.act", handler, provides=["did"], outputs={"did": "str"},
+                                     side_effecting=True, approval_required=True)])
+    rt = _runtime(op)
+    res = _launch(rt, _candidate("ref.act", "act", risk=RiskTier.CONSEQUENTIAL, approval=ApprovalPolicy.REQUIRED))
+    rt.run(res.mission_id)
+    assert seen.get("approval") is None                                       # parked — handler not yet run
+    drive(rt, res.mission_id)                                                 # approve (no typed edit)
+    assert rt._missions[res.mission_id].state is MissionState.SUCCEEDED
+    assert seen["approval"] and seen["approval"].get("approved") is True      # handler saw the approval marker
+
+
 # ── N4: a side-effecting node whose read-back fails does NOT commit ──────────
 
 def test_n4_failed_verifier_blocks_commit():

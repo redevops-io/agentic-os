@@ -622,12 +622,14 @@ class MissionRuntime:
                 resolved[k] = world.get(v["$from_world"])
             else:
                 resolved[k] = v
-        # An approval gate can carry typed human-supplied data, not just yes/no: the `edit` passed to
-        # approve(...) is delivered to the resumed handler as `_approval`. Event-sourced (folded from
-        # ApprovalGranted), so it survives replay. Used by review verdicts / cut edits; ignored otherwise.
-        edit = self._approval_edit(m.id, node.id)
-        if edit is not None:
-            resolved["_approval"] = edit
+        # The approval signal delivered to a resumed handler as `_approval`: a truthy marker that a human
+        # cleared THIS node — the handler's cue to EXECUTE the real side effect instead of re-staging it
+        # (N3) — merged with any typed `edit` the approver supplied. Event-sourced (folded from
+        # ApprovalGranted), so it survives replay. Absent on the ungoverned/pre-approval path, so a handler
+        # invoked directly (e.g. /agent/run) still stages rather than acts.
+        approval = self._approval_marker(m.id, node.id)
+        if approval is not None:
+            resolved["_approval"] = approval
         return resolved
 
     def _approval_edit(self, mission_id: str, node_id: str) -> dict | None:
@@ -638,6 +640,26 @@ class MissionRuntime:
             if e.type == "ApprovalGranted" and e.payload.get("node_id") == node_id:
                 edit = e.payload.get("edit")
         return edit
+
+    def _approval_marker(self, mission_id: str, node_id: str) -> dict | None:
+        """The `_approval` signal for a resumed node: a truthy marker that a human CLEARED this node,
+        merged with any typed `edit` — so a gated handler executes the real side effect on approval (N3)
+        rather than returning pending forever. ``None`` when the node was never approved."""
+        granted = False
+        edit = None
+        for e in self.store.for_mission(mission_id):
+            if e.type == "ApprovalGranted" and e.payload.get("node_id") == node_id:
+                granted = True
+                if e.payload.get("edit") is not None:
+                    edit = e.payload.get("edit")
+        if not granted:
+            return None
+        marker: dict = {"approved": True}
+        if isinstance(edit, dict):
+            marker.update(edit)
+        elif edit is not None:
+            marker["edit"] = edit
+        return marker
 
     # ── human gates ────────────────────────────────────────────────────────────
     def _park(self, m: Mission, node, decision=None) -> None:
