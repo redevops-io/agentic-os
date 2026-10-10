@@ -57,7 +57,8 @@ _BUILTINS = (
         required_inputs=("deal_ref",), optional_inputs=("as_of",),
         produced_artifacts=("Deal", "Claim", "DealCondition"),
         verification_contract="reported-vs-verified claims, never auto-reconciled; conservative probability",
-        maturity=M.L1_INTERNAL, status="INTERNAL_ONLY", code_ref="agentic_os/deal_closing/contracts.py"),
+        maturity=M.L2_GENERALIZED, status="COMPLETE",
+        code_ref="agentic_os/commercial/{deal_state,bindings}.py (bound; projected by the orchestrator)"),
     SidekickCapability(
         capability_id="sales.deal_close", domain=D.SALES,
         summary="Identify blockers, form a closing hypothesis, score candidate actions, compile a close-plan Mission.",
@@ -103,8 +104,8 @@ _BUILTINS = (
         candidate_actions=("draft_followup", "raise_dispute", "escalate", "WAIT"),
         authority_requirements=("content_digest_approval",),
         verification_contract="execute+verify through integration runner (dunning send)",
-        maturity=M.L1_INTERNAL, status="PARTIAL (TEST_ONLY)",
-        code_ref="agentic_os/integrations/business/missions.py"),
+        maturity=M.L2_GENERALIZED, status="COMPLETE",
+        code_ref="agentic_os/commercial/receivables.py (bound; real Lago/ERPNext AR read binds in the overlay)"),
     SidekickCapability(
         capability_id="acquisition.design_partner_outreach", domain=D.ACQUISITION,
         summary="Run a governed design-partner cold-outreach campaign: find/verify prospects (brokered data "

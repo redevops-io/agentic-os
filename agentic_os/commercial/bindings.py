@@ -15,6 +15,9 @@ from .campaign import build_campaign_plan
 from .deal_state import produce_verified_deal
 from .funnel import diagnose_funnel
 from .offer import decide_offer
+from .order import evaluate_order
+from .receivables import assess_receivable
+from .service import plan_service
 
 
 def _offer_handler(*, subject, eligible_offers, constraints, expected_value=None):
@@ -31,6 +34,22 @@ def _funnel_handler(*, funnel, stage_conversion, **kw):
 
 def _deal_state_handler(*, reported, readbacks, reported_source=""):
     return produce_verified_deal(reported, readbacks, reported_source=reported_source)
+
+
+def _order_execute_handler(*, order, observed_stage_states, now, stage_deadlines=None):
+    """Detect missed/overdue/diverged order transitions (read-only intelligence). Returns the incident tuple;
+    remediation Missions are proposed as candidate_actions and stay authority-gated through the Runtime."""
+    return evaluate_order(order, observed_stage_states=observed_stage_states, now=now, stage_deadlines=stage_deadlines)
+
+
+def _service_plan_handler(*, customer_commitment, requested_service, requirements, resources,
+                          required_by=0, location="", sla=""):
+    return plan_service(customer_commitment, requested_service, requirements, resources,
+                        required_by=required_by, location=location, sla=sla)
+
+
+def _receivables_handler(*, case):
+    return assess_receivable(case)
 
 
 # descriptors for the P4 capabilities not in the seed catalog
@@ -50,6 +69,29 @@ _NEW_DESCRIPTORS = (
         required_inputs=("hypothesis",), produced_artifacts=("CampaignPlan",),
         candidate_actions=("draft_campaign", "request_approval"), authority_requirements=("brand_policy",),
         maturity=M.L2_GENERALIZED, status="COMPLETE", code_ref="agentic_os/commercial/campaign.py"),
+    SidekickCapability(
+        capability_id="operations.order_execute", domain=D.OPERATIONS,
+        summary="Monitor an order across its fulfillment chain (received→…→verified) and detect missed/overdue/"
+                "diverged transitions, proposing authority-gated remediation.",
+        intents=("is this order on track", "why is this order stuck", "track this order",
+                 "order fulfillment status", "order execution status", "is this order delayed"),
+        required_inputs=("order", "observed_stage_states", "now"), optional_inputs=("stage_deadlines",),
+        produced_artifacts=("ReliabilityIncident",),
+        candidate_actions=("remediate_transition", "NO_ACTION"),
+        verification_contract="generic expected-transition monitor; remediation stays authority-gated",
+        maturity=M.L2_GENERALIZED, status="COMPLETE", code_ref="agentic_os/commercial/order.py"),
+    SidekickCapability(
+        capability_id="operations.service_plan", domain=D.OPERATIONS,
+        summary="Plan a delivered service and check feasibility (skills/capacity vs deadline), returning the "
+                "assignment and resourcing risks.",
+        intents=("can we deliver this service", "plan this service", "service feasibility",
+                 "do we have capacity for", "can we staff this job", "schedule a service"),
+        required_inputs=("customer_commitment", "requested_service", "requirements", "resources"),
+        optional_inputs=("required_by", "location", "sla"),
+        produced_artifacts=("ServicePlan", "ServiceFeasibility"),
+        candidate_actions=("schedule_service", "resolve_resourcing", "NO_ACTION"),
+        verification_contract="deterministic greedy skill-capacity match over resolved facts",
+        maturity=M.L2_GENERALIZED, status="COMPLETE", code_ref="agentic_os/commercial/service.py"),
 )
 
 _HANDLERS = {
@@ -57,6 +99,9 @@ _HANDLERS = {
     "acquisition.campaign_plan": _campaign_handler,
     "acquisition.funnel_optimize": _funnel_handler,
     "sales.deal_state": _deal_state_handler,
+    "operations.order_execute": _order_execute_handler,
+    "operations.service_plan": _service_plan_handler,
+    "finance.receivables": _receivables_handler,
 }
 
 
