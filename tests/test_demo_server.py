@@ -52,3 +52,36 @@ def test_quote_endpoint_available():
     r = _client().post("/v1/intelligence/quote",
                        json={"capability": "payment_behavior", "subject_refs": ["cust:acme"], "tenant": "t"})
     assert r.status_code == 200 and r.json()["available"] is True
+
+
+def _quote_source(svc):
+    """The RevenueStateSource currently bound to QUOTE_FEASIBILITY."""
+    from runtime_contracts.protocol import Capability
+    binding = svc._bindings[Capability.QUOTE_FEASIBILITY]
+    return next(iter(binding.registry.all())).source
+
+
+def test_quote_feasibility_stays_synthetic_without_erpnext(monkeypatch):
+    """No ERPNext env → the open demo (grc:8814) binds the synthetic in-memory quote source, unchanged."""
+    from agentic_os.integrations import erpnext as erp_mod
+    from agentic_os.intelligence.demo_server import build_service
+    from agentic_os.intelligence.families import InMemoryRevenueState
+    monkeypatch.setattr(erp_mod, "erpnext_from_env", lambda: None)
+    assert isinstance(_quote_source(build_service()), InMemoryRevenueState)
+
+
+def test_quote_feasibility_binds_live_erpnext_when_configured(monkeypatch):
+    """ERPNext configured → QUOTE_FEASIBILITY resolves against the live catalog (ErpnextCatalogState)."""
+    from agentic_os.integrations import erpnext as erp_mod
+    from agentic_os.integrations.erpnext import ErpnextClient
+    from agentic_os.intelligence.demo_server import build_service
+    from agentic_os.intelligence.families import ErpnextCatalogState
+
+    class _StubErpnext(ErpnextClient):
+        def __init__(self):
+            super().__init__(base_url="http://stub", api_key="k", api_secret="s")
+
+    monkeypatch.setattr(erp_mod, "erpnext_from_env", lambda: _StubErpnext())
+    src = _quote_source(build_service())
+    assert isinstance(src, ErpnextCatalogState)
+    assert "cust:acme" in src.requests        # the demo subject is wired to the live catalog

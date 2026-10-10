@@ -75,6 +75,22 @@ def build_service() -> IntelligenceService:
     svc.bind(order_registry(order), order_synthesize)
     svc.bind(counterparty_registry(counterparty), counterparty_synthesize)
     svc.bind(revenue_registry(revenue), revenue_synthesize)
+
+    # When ERPNext is configured (ERPNEXT_URL/API_KEY/API_SECRET), resolve QUOTE_FEASIBILITY against the LIVE
+    # catalog instead of the synthetic one — the audit's "flip to real" for quote feasibility. This bind shadows
+    # the synthetic revenue family (quote feasibility becomes live; the ERPNext source returns no leakage, so a
+    # real deploy serves no synthetic leakage rather than fake ones — bind a real leakage source to restore it).
+    # erpnext_from_env() returns None when unconfigured, so the open demo (grc:8814) is byte-for-byte unchanged.
+    try:
+        from ..integrations.erpnext import erpnext_from_env
+        from .families import erpnext_quote_registry
+        _erp = erpnext_from_env()
+        if _erp is not None:
+            svc.bind(erpnext_quote_registry(
+                _erp, {"cust:acme": [QuoteLine("rim", 10.0), QuoteLine("hub", 2.0)]}, now_ms=_NOW),
+                revenue_synthesize)
+    except Exception:  # noqa: BLE001 — any ERPNext/import failure → keep the synthetic quote source, never 500
+        pass
     return svc
 
 
