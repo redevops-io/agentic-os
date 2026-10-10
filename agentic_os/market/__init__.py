@@ -21,6 +21,7 @@ from .observe import DEFAULT_PATHS, FetchedPage, HttpPageFetcher, PageFetcher, W
 from .media import OpenAICompatVisionModel, VisionMediaAnalyzer, VisionModel, analyze_media
 from .patterns import detect_patterns
 from .opportunities import match_opportunities
+from .scan import MarketScan, scan_market
 from .experiments import ChangeWriter, plan_experiments, proposed
 from .execution import DryRunExecutor, ExecutionResult, ExperimentExecutor, ExperimentQueue
 from .learning import PatternPrior, learn_priors, reweight_opportunities
@@ -66,6 +67,8 @@ __all__ = [
     "detect_patterns",
     # pattern -> first-party gap matching (Phase 4)
     "match_opportunities",
+    # observe -> detect -> match composition (one callable for the Sidekick market_observe capability)
+    "MarketScan", "scan_market",
     # experiment planning / execution / learning (Phase 5-7)
     "Experiment", "ExperimentOutcome", "plan_experiments", "proposed", "ChangeWriter",
     "ExperimentQueue", "ExperimentExecutor", "DryRunExecutor", "ExecutionResult",

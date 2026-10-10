@@ -136,9 +136,41 @@ def _project_segment(raw: Any) -> dict:
             "confidence": 1.0}
 
 
+def _project_market_observe(raw: Any) -> dict:
+    """raw = MarketScan (observations + patterns + opportunities)."""
+    opps = tuple(getattr(raw, "opportunities", ()))
+    pats = tuple(getattr(raw, "patterns", ()))
+    obs = getattr(raw, "observations", None)
+    counts = obs.counts() if obs is not None and hasattr(obs, "counts") else {}
+    answer = (f"Observed {counts.get('companies', 0)} company(ies); detected {len(pats)} pattern(s); "
+              f"matched {len(opps)} opportunity(ies).")
+    actions = tuple({"action": "flag_opportunity", "gap": o.gap, "site": o.site,
+                     "expected_value": o.expected_value} for o in opps)
+    evidence = tuple(f"pattern: {p.kind} — {p.description} (confidence {p.confidence})" for p in pats)
+    confidence = max((o.confidence for o in opps), default=0.0) if opps else (1.0 if pats or counts else 0.0)
+    return {"answer": answer, "evidence": evidence, "candidate_actions": actions, "confidence": confidence}
+
+
+def _project_content_create(raw: Any) -> dict:
+    """raw = ContentMissionRun.preview() dict (drafts produced, publish still gated)."""
+    data = raw if isinstance(raw, dict) else {}
+    drafts = data.get("drafts", [])
+    channels = data.get("channels", [])
+    concept = data.get("concept") or {}
+    hook = concept.get("hook", "") if isinstance(concept, dict) else ""
+    answer = (f"Drafted content for {len(drafts)} channel(s): {', '.join(channels)}."
+              + (f" Hook: {hook}" if hook else ""))
+    actions = ({"action": "request_publish_approval", "channels": channels},) if data.get("awaiting_approval") else ()
+    evidence = tuple(f"{d.get('channel')}: {(d.get('text') or '')[:80]}" for d in drafts)
+    return {"answer": answer, "evidence": evidence, "candidate_actions": actions,
+            "confidence": 1.0 if drafts else 0.0}
+
+
 _PROJECTORS: Mapping[str, Callable[[Any], dict]] = {
     "acquisition.offer_decide": _project_offer,
     "acquisition.funnel_optimize": _project_funnel,
+    "acquisition.market_observe": _project_market_observe,
+    "acquisition.content_create": _project_content_create,
     "acquisition.campaign_plan": _project_campaign,
     "sales.deal_state": _project_deal_state,
     "operations.order_execute": _project_order_execute,

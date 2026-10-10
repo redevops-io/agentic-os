@@ -62,6 +62,22 @@ def _segment_handler(*, accounts, signals=None, confidence_floor=0.5):
     return segment_accounts(accounts, signals=signals, confidence_floor=confidence_floor)
 
 
+def _market_observe_handler(*, watch_list, fetcher=None, own=None, site="", segment="",
+                            min_companies=2, min_confidence=0.0):
+    """Observe a competitor watch_list → detect patterns → match opportunities. READ-ONLY; with no fetcher the
+    scan is empty (never raises). Lazy import keeps the commercial bindings module light."""
+    from ..market import scan_market
+    return scan_market(watch_list, fetcher=fetcher, own=own, site=site,
+                       min_companies=min_companies, min_confidence=min_confidence)
+
+
+def _content_create_handler(*, brief, generator=None, publisher=None, owner="", **kw):
+    """Draft channel content from a brief and park at the publish gate (drafts produced, NOT published — publishing
+    is the gated, consequential step and stays human-approved). Returns the review preview. Lazy import."""
+    from ..content import ContentMissionRun
+    return ContentMissionRun(brief, owner=owner, generator=generator, publisher=publisher).preview()
+
+
 # descriptors for the P4 capabilities not in the seed catalog
 _NEW_DESCRIPTORS = (
     SidekickCapability(
@@ -134,6 +150,8 @@ _HANDLERS = {
     "finance.receivables": _receivables_handler,
     "commercial.forecast": _forecast_handler,
     "commercial.segment": _segment_handler,
+    "acquisition.market_observe": _market_observe_handler,
+    "acquisition.content_create": _content_create_handler,
 }
 
 
