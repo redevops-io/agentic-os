@@ -45,3 +45,26 @@ def test_dockerfile_boots_as_a_package(name, dockerfile):
 def test_there_are_apps_under_test():
     # guard against the discovery silently finding nothing (e.g. a layout change)
     assert list(_apps_with_relative_import_dashboard()), "no app dashboards discovered"
+
+
+def _dockerfiles_that_install_the_kernel():
+    for d in sorted(APPS.iterdir()):
+        df = d / "Dockerfile"
+        if df.exists() and "agentic-os" in df.read_text():
+            yield d.name, df
+
+
+@pytest.mark.parametrize("name,dockerfile",
+                         list(_dockerfiles_that_install_the_kernel()),
+                         ids=lambda v: v if isinstance(v, str) else "")
+def test_kernel_pin_is_single_sourced_via_arg(name, dockerfile):
+    """The agentic-os kernel version must be pinned in ONE overridable place — the Dockerfile `ARG
+    KERNEL_REF` — not duplicated as a stale commit in requirements.txt (which made the images lag the tested
+    kernel). Guards both halves: the ARG + ref-based install exist, and requirements.txt no longer pins it."""
+    txt = dockerfile.read_text()
+    assert re.search(r"^ARG\s+KERNEL_REF=", txt, re.M), f"{name}: Dockerfile must declare ARG KERNEL_REF"
+    assert "${KERNEL_REF}" in txt, f"{name}: agentic-os must be installed from ${{KERNEL_REF}}, not a fixed ref"
+    req = dockerfile.parent / "requirements.txt"
+    if req.exists():
+        assert not re.search(r"^agentic-os @", req.read_text(), re.M), \
+            f"{name}: requirements.txt must NOT pin agentic-os — the kernel ref lives only in ARG KERNEL_REF"
