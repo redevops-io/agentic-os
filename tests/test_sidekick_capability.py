@@ -114,3 +114,18 @@ def test_builtin_catalog_seeds_real_capabilities():
 def test_default_registry_is_preseeded_on_import():
     from agentic_os.sidekick import default_registry
     assert default_registry.get("sales.deal_close") is not None
+
+
+def test_design_partner_outreach_capability_is_catalogued_and_discoverable():
+    """The design-partner cold-outreach capability is a registered, intent-discoverable descriptor — and
+    metadata-only (the enterprise revenue-agent binds the executable handler, never the public kernel)."""
+    reg = CapabilityRegistry()
+    register_builtin_capabilities(reg)
+    cap = reg.get("acquisition.design_partner_outreach")
+    assert cap is not None and cap.domain is CapabilityDomain.ACQUISITION
+    assert cap.bound is False                                   # metadata-only in the kernel
+    assert "outreach.send.approved" in cap.authority_requirements   # sends stay approval-gated
+    for intent in ("run the design partner campaign", "recruit design partners",
+                   "find prospects and draft outreach"):
+        ms = reg.discover(intent=intent, limit=1)
+        assert ms and ms[0].capability.capability_id == "acquisition.design_partner_outreach"

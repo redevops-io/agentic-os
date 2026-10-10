@@ -105,6 +105,25 @@ _BUILTINS = (
         verification_contract="execute+verify through integration runner (dunning send)",
         maturity=M.L1_INTERNAL, status="PARTIAL (TEST_ONLY)",
         code_ref="agentic_os/integrations/business/missions.py"),
+    SidekickCapability(
+        capability_id="acquisition.design_partner_outreach", domain=D.ACQUISITION,
+        summary="Run a governed design-partner cold-outreach campaign: find/verify prospects (brokered data "
+                "providers), draft personalized emails grounded in verified facts, and stage them for human "
+                "approval. Sending stays approval-gated; EU/CAN-SPAM compliance is enforced.",
+        intents=("run the design partner campaign", "find prospects and draft outreach",
+                 "start cold outreach for design partners", "recruit design partners",
+                 "draft outreach emails for these prospects"),
+        required_inputs=(), optional_inputs=("prospects", "criteria", "segment", "tenant", "limit"),
+        required_provider_capabilities=("data.enrich", "email.send"),
+        produced_artifacts=("OutreachDraft", "ApprovalQueue"),
+        candidate_actions=("draft_outreach", "request_send_approval", "WAIT"),
+        authority_requirements=("outreach.send.approved",),
+        verification_contract="reply/bounce read-back → outcome; sends approval-gated; EU/CAN-SPAM gate; "
+                              "verified-fact-vs-hypothesis guard on every draft",
+        learning_contract="bandit reward on VERIFIED outcomes (reply/meeting/pilot), never opens",
+        maturity=M.L2_GENERALIZED, status="COMPLETE",
+        code_ref="agentic-os-enterprise apps/revenue-agent/campaign.py (handler bound by the enterprise "
+                 "sidekick outreach binding)"),
 )
 
 
