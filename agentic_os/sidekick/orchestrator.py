@@ -112,6 +112,30 @@ def _project_receivables(raw: Any) -> dict:
             "confidence": 1.0}
 
 
+def _project_forecast(raw: Any) -> dict:
+    """raw = PipelineForecast. Propose verifying the deals whose committed value is capped below reported."""
+    deals = tuple(getattr(raw, "deals", ()))
+    flagged = tuple(d for d in deals if d.flags)
+    actions = tuple({"action": "verify_deal", "opportunity_ref": d.opportunity_ref,
+                     "at_risk_cents": d.reported_ev_cents - d.committed_ev_cents} for d in flagged)
+    return {"answer": getattr(raw, "explanation", ""),
+            "evidence": tuple(
+                f"{d.opportunity_ref}: committed {d.committed_ev_cents}c of reported {d.reported_ev_cents}c"
+                + (f" [{', '.join(d.flags)}]" if d.flags else "") for d in deals),
+            "candidate_actions": actions, "confidence": 1.0}
+
+
+def _project_segment(raw: Any) -> dict:
+    """raw = SegmentationResult."""
+    assignments = tuple(getattr(raw, "assignments", ()))
+    return {"answer": getattr(raw, "explanation", ""),
+            "evidence": tuple(f"{a.entity_id} ({a.display_name or 'n/a'}) -> {a.tier.value}"
+                              + (f" [{', '.join(a.flags)}]" if a.flags else "") for a in assignments),
+            "candidate_actions": tuple({"action": "assign_segment", "entity_id": a.entity_id, "tier": a.tier.value}
+                                       for a in assignments),
+            "confidence": 1.0}
+
+
 _PROJECTORS: Mapping[str, Callable[[Any], dict]] = {
     "acquisition.offer_decide": _project_offer,
     "acquisition.funnel_optimize": _project_funnel,
@@ -120,6 +144,8 @@ _PROJECTORS: Mapping[str, Callable[[Any], dict]] = {
     "operations.order_execute": _project_order_execute,
     "operations.service_plan": _project_service_plan,
     "finance.receivables": _project_receivables,
+    "commercial.forecast": _project_forecast,
+    "commercial.segment": _project_segment,
 }
 
 

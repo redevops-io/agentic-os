@@ -32,6 +32,8 @@ from .receivables import (
     COLLECTION_STAGES, DeliveryState, DisputeState, PaymentState, ReceivableAction, ReceivableAssessment,
     ReceivableCase, SupportState, assess_receivable, collection_expected_transitions,
 )
+from .forecast import DealForecast, PipelineForecast, forecast_pipeline
+from .segment import AccountSegment, AccountSignal, Segment, SegmentationResult, segment_accounts
 
 __all__ = [
     "CanonicalPerson", "CanonicalOrganization", "CommercialOutcome", "record_commercial_outcome",
@@ -52,4 +54,6 @@ __all__ = [
     "PaymentState", "DeliveryState", "DisputeState", "SupportState", "ReceivableAction",
     "ReceivableCase", "ReceivableAssessment", "assess_receivable", "COLLECTION_STAGES",
     "collection_expected_transitions",
+    "DealForecast", "PipelineForecast", "forecast_pipeline",
+    "Segment", "AccountSignal", "AccountSegment", "SegmentationResult", "segment_accounts",
 ]

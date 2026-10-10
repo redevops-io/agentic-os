@@ -7,11 +7,13 @@ offer/campaign/funnel/deal_state capabilities actually run via registry.get(id).
 from __future__ import annotations
 
 from agentic_os.commercial import (
-    CampaignHypothesis, DeliveryState, FieldReadback, Offer, OfferConstraints, OfferDecision, OrderExecution,
-    OrderLine, PaymentState, ReceivableAction, ReceivableCase, ServiceRequirement, ServiceResource,
-    bind_commercial_capabilities, produce_verified_deal,
+    AccountSignal, CampaignHypothesis, DeliveryState, FieldReadback, Offer, OfferConstraints, OfferDecision,
+    OrderExecution, OrderLine, PaymentState, ReceivableAction, ReceivableCase, Segment, ServiceRequirement,
+    ServiceResource, bind_commercial_capabilities, produce_verified_deal,
 )
+from agentic_os.commercial.identity import CanonicalOrganization
 from agentic_os.deal_closing.contracts import ClaimStatus, Deal, Provenance
+from agentic_os.integration.contracts import ResolutionStatus
 from agentic_os.sidekick import CapabilityRegistry, SidekickOrchestrator, register_builtin_capabilities
 
 
@@ -132,3 +134,28 @@ def test_receivables_runs_and_projects_action():
                                          payment_state=PaymentState.OVERDUE, delivery_state=DeliveryState.PARTIAL))
     assert ReceivableAction.RESOLVE_DELIVERY.value in res.answer
     assert res.candidate_actions[0]["action"] == ReceivableAction.RESOLVE_DELIVERY.value
+
+
+def test_commercial_forecast_and_segment_are_bound_and_project():
+    """The net-new commercial.forecast + commercial.segment capabilities bind, run through the orchestrator, and
+    project a real answer (closes the two MISSING capabilities the wiring-maturity audit flagged)."""
+    reg = CapabilityRegistry()
+    register_builtin_capabilities(reg)
+    bound = bind_commercial_capabilities(reg)
+    assert "commercial.forecast" in bound and "commercial.segment" in bound
+    orc = SidekickOrchestrator(registry=reg)
+
+    # forecast: an unverified high-probability deal is capped in the committed total, surfaced as a verify action
+    deal = Deal(prov=Provenance(provider="sf"), opportunity_ref="opp:acme", reported_stage="proposal",
+                reported_amount_cents=1_000_000, reported_probability=0.9, source_systems=("sf",))
+    fres = orc.invoke("commercial.forecast", deals=[deal])
+    assert "committed" in fres.answer and fres.candidate_actions[0]["action"] == "verify_deal"
+
+    # segment: a resolved high-value account → STRATEGIC; assign_segment proposal carries the tier
+    acct = CanonicalOrganization.build(name="Acme", resolution_status=ResolutionStatus.RESOLVED,
+                                       confidence=0.9, entity_id="acme")
+    sres = orc.invoke("commercial.segment", accounts=[acct],
+                      signals={"acme": AccountSignal(annual_value_cents=12_000_000, health=0.9)})
+    assert "Segmented 1 account" in sres.answer
+    assert sres.candidate_actions[0] == {"action": "assign_segment", "entity_id": "acme",
+                                         "tier": Segment.STRATEGIC.value}

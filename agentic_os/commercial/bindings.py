@@ -13,10 +13,12 @@ from typing import Optional
 from ..sidekick.capability import CapabilityDomain as D, CapabilityRegistry, Maturity as M, SidekickCapability, default_registry
 from .campaign import build_campaign_plan
 from .deal_state import produce_verified_deal
+from .forecast import forecast_pipeline
 from .funnel import diagnose_funnel
 from .offer import decide_offer
 from .order import evaluate_order
 from .receivables import assess_receivable
+from .segment import segment_accounts
 from .service import plan_service
 
 
@@ -50,6 +52,14 @@ def _service_plan_handler(*, customer_commitment, requested_service, requirement
 
 def _receivables_handler(*, case):
     return assess_receivable(case)
+
+
+def _forecast_handler(*, deals, now=None, unsupported_probability_cap=0.5):
+    return forecast_pipeline(deals, now=now, unsupported_probability_cap=unsupported_probability_cap)
+
+
+def _segment_handler(*, accounts, signals=None, confidence_floor=0.5):
+    return segment_accounts(accounts, signals=signals, confidence_floor=confidence_floor)
 
 
 # descriptors for the P4 capabilities not in the seed catalog
@@ -92,6 +102,26 @@ _NEW_DESCRIPTORS = (
         candidate_actions=("schedule_service", "resolve_resourcing", "NO_ACTION"),
         verification_contract="deterministic greedy skill-capacity match over resolved facts",
         maturity=M.L2_GENERALIZED, status="COMPLETE", code_ref="agentic_os/commercial/service.py"),
+    SidekickCapability(
+        capability_id="commercial.forecast", domain=D.COMMERCIAL,
+        summary="Weighted sales-pipeline forecast that separates CRM-reported optimism from the runtime-VERIFIED "
+                "committed total, surfacing the at-risk gap.",
+        intents=("forecast the pipeline", "what's the forecast", "revenue forecast", "weighted pipeline",
+                 "what will we close", "pipeline forecast"),
+        required_inputs=("deals",), optional_inputs=("now", "unsupported_probability_cap"),
+        produced_artifacts=("PipelineForecast",), candidate_actions=("verify_deal", "NO_ACTION"),
+        verification_contract="committed EV caps unverified high probabilities; conflicted deals contribute 0",
+        maturity=M.L2_GENERALIZED, status="COMPLETE", code_ref="agentic_os/commercial/forecast.py"),
+    SidekickCapability(
+        capability_id="commercial.segment", domain=D.COMMERCIAL,
+        summary="Segment accounts into value tiers from resolved identity + value/health signals; never high-tiers "
+                "an unresolved identity.",
+        intents=("segment our accounts", "which accounts are strategic", "account segmentation",
+                 "tier our customers", "segment customers"),
+        required_inputs=("accounts",), optional_inputs=("signals", "confidence_floor"),
+        produced_artifacts=("SegmentationResult",), candidate_actions=("assign_segment", "NO_ACTION"),
+        verification_contract="unresolved/low-confidence identities are flagged UNVERIFIED, never high-tiered",
+        maturity=M.L2_GENERALIZED, status="COMPLETE", code_ref="agentic_os/commercial/segment.py"),
 )
 
 _HANDLERS = {
@@ -102,6 +132,8 @@ _HANDLERS = {
     "operations.order_execute": _order_execute_handler,
     "operations.service_plan": _service_plan_handler,
     "finance.receivables": _receivables_handler,
+    "commercial.forecast": _forecast_handler,
+    "commercial.segment": _segment_handler,
 }
 
 
