@@ -66,11 +66,60 @@ def _project_deal_state(raw: Any) -> dict:
             "evidence": tuple(e for c in claims for e in getattr(c, "evidence_refs", ()))}
 
 
+def _project_order_execute(raw: Any) -> dict:
+    """raw = Tuple[ReliabilityIncident]. Empty means every observed transition is healthy."""
+    incidents = tuple(raw or ())
+    if not incidents:
+        return {"answer": "Order on track: no missed, overdue, or diverged transitions detected.",
+                "candidate_actions": (), "confidence": 1.0}
+    subjects = ", ".join(i.transition.subject for i in incidents)
+    actions = tuple({"action": (i.transition.remediation_policy or "remediate"),
+                     "subject": i.transition.subject, "failure": i.failure_type.value,
+                     "status": i.status.value, "impact": i.impact} for i in incidents)
+    return {"answer": f"{len(incidents)} order transition(s) at risk: {subjects}.",
+            "evidence": tuple(f"{i.transition.subject}: observed={i.observed_state or 'none'}, "
+                              f"{i.failure_type.value}/{i.status.value}" for i in incidents),
+            "candidate_actions": actions,
+            "confidence": 1.0}
+
+
+def _project_service_plan(raw: Any) -> dict:
+    """raw = ServicePlan."""
+    svc = getattr(raw, "requested_service", "") or "service"
+    feasible = bool(getattr(raw, "feasible", False))
+    assigned = tuple(getattr(raw, "assigned", ()))
+    risks = tuple(getattr(raw, "risks", ()))
+    if feasible:
+        answer = f"Service plan for '{svc}': feasible — {len(assigned)} assignment(s)."
+        actions = ({"action": "schedule_service", "service": svc},)
+    else:
+        answer = f"Service plan for '{svc}': NOT feasible — {'; '.join(risks) or 'under-resourced'}."
+        actions = ({"action": "resolve_resourcing", "service": svc},)
+    return {"answer": answer,
+            "evidence": tuple(f"{skill}->{rid}" for skill, rid in assigned),
+            "candidate_actions": actions, "confidence": 1.0 if feasible else 0.0}
+
+
+def _project_receivables(raw: Any) -> dict:
+    """raw = ReceivableAssessment."""
+    cause = getattr(raw, "probable_cause", "")
+    action = getattr(raw, "next_action", None)
+    action_val = getattr(action, "value", str(action) if action is not None else "none")
+    rationale = getattr(raw, "rationale", "")
+    materiality = getattr(raw, "materiality", 0.0)
+    return {"answer": f"Probable cause: {cause}; next action: {action_val} — {rationale}.",
+            "candidate_actions": ({"action": action_val, "materiality": materiality},),
+            "confidence": 1.0}
+
+
 _PROJECTORS: Mapping[str, Callable[[Any], dict]] = {
     "acquisition.offer_decide": _project_offer,
     "acquisition.funnel_optimize": _project_funnel,
     "acquisition.campaign_plan": _project_campaign,
     "sales.deal_state": _project_deal_state,
+    "operations.order_execute": _project_order_execute,
+    "operations.service_plan": _project_service_plan,
+    "finance.receivables": _project_receivables,
 }
 
 
