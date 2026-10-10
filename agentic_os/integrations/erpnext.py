@@ -106,6 +106,31 @@ class ErpnextClient:
                 lead_time_days=int(it.get("lead_time_days") or 0))
         return out
 
+    def open_receivables(self, *, limit: int = 200) -> List[dict]:
+        """Read open (unpaid/overdue) Sales Invoices from live ERPNext — the accounts-receivable feed for
+        dunning. READ-ONLY; normalized rows carry integer-cent amounts. Empty on any failure (self-skip)."""
+        rows = self.get_list(
+            "Sales Invoice",
+            ["name", "customer", "outstanding_amount", "grand_total", "due_date", "status", "posting_date"],
+            filters=[["outstanding_amount", ">", 0],
+                     ["status", "in", ["Overdue", "Unpaid", "Unpaid and Discounted",
+                                       "Partly Paid", "Partly Paid and Discounted"]]],
+            limit=limit)
+        out: List[dict] = []
+        for r in rows:
+            name = r.get("name")
+            if not name:
+                continue
+            out.append({
+                "invoice_id": str(name),
+                "customer": str(r.get("customer", "") or ""),
+                "outstanding_cents": _cents(r.get("outstanding_amount")),
+                "grand_total_cents": _cents(r.get("grand_total")),
+                "due_date": str(r.get("due_date", "") or ""),          # ISO date (YYYY-MM-DD) or ""
+                "status": str(r.get("status", "") or ""),
+                "posting_date": str(r.get("posting_date", "") or "")})
+        return out
+
     # ── operational events (Supplier / Order Intelligence — plan §5, §7) ──────────────────────────────────
     def operational_events(self, *, supplier: str = "", limit: int = 200) -> OperationalEvents:
         """Fetch purchase orders + goods receipts as canonical operational objects, so the Supplier / Order

@@ -32,6 +32,7 @@ from .receivables import (
     COLLECTION_STAGES, DeliveryState, DisputeState, PaymentState, ReceivableAction, ReceivableAssessment,
     ReceivableCase, SupportState, assess_receivable, collection_expected_transitions,
 )
+from .receivables_sources import receivable_cases_from_erpnext
 from .forecast import DealForecast, PipelineForecast, forecast_pipeline
 from .segment import AccountSegment, AccountSignal, Segment, SegmentationResult, segment_accounts
 
@@ -53,7 +54,7 @@ __all__ = [
     "assess_service_feasibility", "plan_service", "service_expected_transitions",
     "PaymentState", "DeliveryState", "DisputeState", "SupportState", "ReceivableAction",
     "ReceivableCase", "ReceivableAssessment", "assess_receivable", "COLLECTION_STAGES",
-    "collection_expected_transitions",
+    "collection_expected_transitions", "receivable_cases_from_erpnext",
     "DealForecast", "PipelineForecast", "forecast_pipeline",
     "Segment", "AccountSignal", "AccountSegment", "SegmentationResult", "segment_accounts",
 ]
