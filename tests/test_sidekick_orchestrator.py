@@ -62,3 +62,28 @@ def test_run_parallel_fans_out_and_merges():
     assert set(merged.contributing_workers) == {"acquisition.offer_decide", "acquisition.funnel_optimize"}
     assert merged.receipt is not None
     assert len(merged.candidate_actions) >= 1
+
+
+def test_receivables_holds_a_collection_while_a_dispute_is_open():
+    """Governance invariant, end-to-end through the orchestrator: an open dispute must NOT yield a collection —
+    the Sidekick proposes resolving the dispute instead. This is the decision the cross-app benchmark scores."""
+    from agentic_os.commercial import DisputeState, PaymentState, ReceivableCase
+    orc = _orc()
+    disputed = ReceivableCase(customer="acme", invoice_id="INV-9", amount_cents=480000, days_overdue=20,
+                              payment_state=PaymentState.OVERDUE, dispute_state=DisputeState.OPEN)
+    res = orc.invoke("finance.receivables", case=disputed)
+    actions = {a.get("action") for a in res.candidate_actions}
+    assert "collect" not in actions and "request_approval" not in actions   # never dun while disputed
+    assert actions == {"resolve_dispute"}
+
+
+def test_receivables_collect_is_proposed_behind_approval_when_unblocked():
+    """With no blocker a genuinely-overdue invoice yields `collect` — but as a consequential action it is proposed
+    behind request_approval, never as a directly-actionable step."""
+    from agentic_os.commercial import PaymentState, ReceivableCase
+    orc = _orc()
+    overdue = ReceivableCase(customer="acme", invoice_id="INV-9", amount_cents=480000, days_overdue=20,
+                             payment_state=PaymentState.OVERDUE)
+    res = orc.invoke("finance.receivables", case=overdue)
+    assert [a["action"] for a in res.candidate_actions] == ["request_approval"]
+    assert res.candidate_actions[0]["what"] == "collect"

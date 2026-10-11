@@ -101,15 +101,24 @@ def _project_service_plan(raw: Any) -> dict:
 
 
 def _project_receivables(raw: Any) -> dict:
-    """raw = ReceivableAssessment."""
+    """raw = ReceivableAssessment. `collect` is consequential (it dunns a customer), so it is proposed behind
+    `request_approval` — never emitted as a directly-actionable step — matching the other consequential
+    capabilities. Non-consequential next actions (resolve_dispute/resolve_delivery/wait/escalate/…) are proposed
+    as-is. This keeps the governance explicit in the runnable path: when a blocker (e.g. an open dispute) is
+    present, assess_receivable never returns `collect`, so no collection is ever proposed while disputed."""
     cause = getattr(raw, "probable_cause", "")
     action = getattr(raw, "next_action", None)
     action_val = getattr(action, "value", str(action) if action is not None else "none")
     rationale = getattr(raw, "rationale", "")
     materiality = getattr(raw, "materiality", 0.0)
+    if action_val == "collect":
+        actions: tuple = ({"action": "request_approval", "what": "collect", "materiality": materiality},)
+    elif action_val in ("none", ""):
+        actions = ()
+    else:
+        actions = ({"action": action_val, "materiality": materiality},)
     return {"answer": f"Probable cause: {cause}; next action: {action_val} — {rationale}.",
-            "candidate_actions": ({"action": action_val, "materiality": materiality},),
-            "confidence": 1.0}
+            "candidate_actions": actions, "confidence": 1.0}
 
 
 def _project_forecast(raw: Any) -> dict:
