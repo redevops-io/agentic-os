@@ -39,6 +39,13 @@ class ComparabilityStatus(str, Enum):
     NOT_COMPARABLE = "NOT_COMPARABLE"
 
 
+class ErratumStatus(str, Enum):
+    OPEN = "OPEN"
+    SUPERSEDED = "SUPERSEDED"
+    CORRECTED = "CORRECTED"
+    RETRACTED = "RETRACTED"
+
+
 @dataclass(frozen=True)
 class EvaluationMethodology:
     """Versioned rules for interpreting a benchmark result.
@@ -277,6 +284,98 @@ class ComparabilityVerdict:
         }
 
 
+@dataclass(frozen=True)
+class PublicationErratum:
+    """Versioned correction record for a published or reviewable artifact."""
+
+    erratum_id: str
+    status: ErratumStatus | str
+    discovered_at: str
+    affected_artifacts: tuple[str, ...]
+    reason: str
+    correction_summary: str
+    replacement_refs: tuple[str, ...] = ()
+    supersedes_digest: str = ""
+    severity: str = "info"
+
+    def validation_errors(self) -> tuple[str, ...]:
+        errors: list[str] = []
+        for name in ("erratum_id", "discovered_at", "reason", "correction_summary", "severity"):
+            if not getattr(self, name):
+                errors.append(f"{name} is required")
+        try:
+            status = ErratumStatus(_enum_value(self.status))
+        except ValueError:
+            errors.append(f"unknown erratum status {self.status!r}")
+            status = None
+        if not self.affected_artifacts:
+            errors.append("affected_artifacts are required")
+        if len(set(self.affected_artifacts)) != len(self.affected_artifacts):
+            errors.append("affected_artifacts contains duplicates")
+        if status in (ErratumStatus.SUPERSEDED, ErratumStatus.CORRECTED) and not self.replacement_refs:
+            errors.append("replacement_refs are required for corrected or superseded errata")
+        if status is ErratumStatus.RETRACTED and not self.supersedes_digest:
+            errors.append("supersedes_digest is required for retracted errata")
+        if self.severity not in {"info", "low", "medium", "high", "critical"}:
+            errors.append(f"unknown erratum severity {self.severity!r}")
+        return tuple(errors)
+
+    def canonical_payload(self) -> Mapping[str, object]:
+        return {
+            "contract_version": CONTRACT_VERSION,
+            "erratum_id": self.erratum_id,
+            "status": _enum_value(self.status),
+            "discovered_at": self.discovered_at,
+            "affected_artifacts": sorted(self.affected_artifacts),
+            "reason": self.reason,
+            "correction_summary": self.correction_summary,
+            "replacement_refs": sorted(self.replacement_refs),
+            "supersedes_digest": self.supersedes_digest,
+            "severity": self.severity,
+        }
+
+    def digest(self) -> str:
+        payload = json.dumps(self.canonical_payload(), sort_keys=True, separators=(",", ":"))
+        return content_hash(payload)
+
+
+@dataclass(frozen=True)
+class ErrataRegister:
+    """Append-only errata register for a benchmark publication surface."""
+
+    suite_id: str
+    suite_version: str
+    surface: str
+    entries: tuple[PublicationErratum, ...] = ()
+
+    def validation_errors(self) -> tuple[str, ...]:
+        errors: list[str] = []
+        for name in ("suite_id", "suite_version", "surface"):
+            if not getattr(self, name):
+                errors.append(f"{name} is required")
+        ids = [entry.erratum_id for entry in self.entries]
+        if len(set(ids)) != len(ids):
+            errors.append("entries contain duplicate erratum ids")
+        for entry in self.entries:
+            errors.extend(f"erratum {entry.erratum_id}: {err}" for err in entry.validation_errors())
+        return tuple(errors)
+
+    def canonical_payload(self) -> Mapping[str, object]:
+        return {
+            "schema_version": 1,
+            "contract_version": CONTRACT_VERSION,
+            "suite_id": self.suite_id,
+            "suite_version": self.suite_version,
+            "surface": self.surface,
+            "entry_count": len(self.entries),
+            "entries": [entry.canonical_payload() for entry in sorted(self.entries, key=lambda e: e.erratum_id)],
+        }
+
+    def digest(self) -> str:
+        payload = json.dumps(self.canonical_payload(), sort_keys=True, separators=(",", ":"))
+        return content_hash(payload)
+
+
 def comparability_verdict(left: Assessment, right: Assessment) -> ComparabilityVerdict:
     blockers: list[str] = []
     if left.methodology_hash != right.methodology_hash:
@@ -317,8 +416,11 @@ __all__ = [
     "Assessment",
     "ComparabilityStatus",
     "ComparabilityVerdict",
+    "ErrataRegister",
+    "ErratumStatus",
     "EvaluationMethodology",
     "PublicationDecision",
+    "PublicationErratum",
     "PublicationDecisionValue",
     "PublicationGate",
     "PublicationGateStatus",

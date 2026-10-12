@@ -2,7 +2,10 @@ import math
 
 from agentic_os.mission.assessment import (
     Assessment,
+    ErrataRegister,
+    ErratumStatus,
     EvaluationMethodology,
+    PublicationErratum,
     PublicationGate,
     PublicationGateStatus,
     comparability_verdict,
@@ -136,3 +139,50 @@ def test_publication_decision_is_derived_from_gates_not_assessment_metrics():
     assert payload["publishable_static_bundle"] is True
     assert payload["publishable_full_benchmark_claim"] is False
     assert payload["pending"] == ["cross_platform"]
+
+
+def test_errata_register_allows_clean_register_and_stable_digest():
+    register = ErrataRegister(
+        suite_id="crossapp-lane-a",
+        suite_version="2026.10",
+        surface="reliability-lab",
+    )
+
+    assert register.validation_errors() == ()
+    assert register.canonical_payload()["entry_count"] == 0
+    assert register.digest() == ErrataRegister(
+        suite_id="crossapp-lane-a",
+        suite_version="2026.10",
+        surface="reliability-lab",
+    ).digest()
+
+
+def test_erratum_requires_affected_artifacts_and_correction_lineage():
+    corrected = PublicationErratum(
+        erratum_id="erratum-1",
+        status=ErratumStatus.CORRECTED,
+        discovered_at="2026-10-12T00:00:00Z",
+        affected_artifacts=("assessment.json",),
+        reason="Metric label was wrong.",
+        correction_summary="Renamed metric without changing values.",
+        replacement_refs=("assessment.json@sha256:new",),
+    )
+    bad = PublicationErratum(
+        erratum_id="erratum-2",
+        status=ErratumStatus.SUPERSEDED,
+        discovered_at="2026-10-12T00:00:00Z",
+        affected_artifacts=(),
+        reason="",
+        correction_summary="",
+        severity="weird",
+    )
+
+    assert corrected.validation_errors() == ()
+    assert corrected.canonical_payload()["contract_version"] == "assessment-publication/v1"
+    assert bad.validation_errors() == (
+        "reason is required",
+        "correction_summary is required",
+        "affected_artifacts are required",
+        "replacement_refs are required for corrected or superseded errata",
+        "unknown erratum severity 'weird'",
+    )

@@ -49,9 +49,12 @@ from .assessment import (
     Assessment,
     ComparabilityStatus,
     ComparabilityVerdict,
+    ErrataRegister,
+    ErratumStatus,
     EvaluationMethodology,
     PublicationDecision,
     PublicationDecisionValue,
+    PublicationErratum,
     PublicationGate,
     PublicationGateStatus,
     comparability_verdict,
@@ -97,7 +100,8 @@ __all__ = [
     "DECISION_PROVIDER_CONTRACT_VERSION", "DecisionEpisode", "DECISION_EPISODE_CONTRACT_VERSION",
     # assessment-publication/v1 — RAAAL-style facts, comparability and surface publication gates
     "Assessment", "ComparabilityStatus", "ComparabilityVerdict", "EvaluationMethodology",
-    "PublicationDecision", "PublicationDecisionValue", "PublicationGate", "PublicationGateStatus",
+    "ErrataRegister", "ErratumStatus", "PublicationDecision", "PublicationDecisionValue",
+    "PublicationErratum", "PublicationGate", "PublicationGateStatus",
     "comparability_verdict", "publication_decision_from_gates", "ASSESSMENT_PUBLICATION_CONTRACT_VERSION",
     # policy-promotion/v1 — shadow learning promotion and rollback gates
     "PolicyCandidate", "PolicyCandidateState", "PolicyPromotionDecision", "PolicyPromotionEvidence",
