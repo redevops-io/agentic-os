@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://redevops.io/schemas/decision-episode.schema.json",
+  "title": "Decision Episode",
+  "description": "Immutable decision/action/readback/outcome record for benchmark learning and evaluation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "episode_id",
+    "scenario_id",
+    "decision_id",
+    "tenant_id",
+    "request_digest",
+    "result_digest",
+    "eligible_options",
+    "selected_option",
+    "abstained",
+    "behavior_policy_id",
+    "behavior_policy_pin",
+    "propensity",
+    "policy_seed_digest",
+    "approval_ref",
+    "execution_ref",
+    "readback_ref",
+    "oracle_verdict",
+    "outcome_ref",
+    "reward",
+    "censored",
+    "censor_reason",
+    "as_of",
+    "known_at",
+    "decision_time",
+    "execution_time",
+    "observation_time",
+    "evaluation_cutoff",
+    "metadata"
+  ],
+  "properties": {
+    "contract_version": { "const": "decision-episode/v1" },
+    "episode_id": { "type": "string", "minLength": 1 },
+    "scenario_id": { "type": "string", "minLength": 1 },
+    "decision_id": { "type": "string", "minLength": 1 },
+    "tenant_id": { "type": "string", "minLength": 1 },
+    "request_digest": { "type": "string", "minLength": 1 },
+    "result_digest": { "type": "string", "minLength": 1 },
+    "eligible_options": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "selected_option": { "type": ["string", "null"] },
+    "abstained": { "type": "boolean" },
+    "behavior_policy_id": { "type": "string", "minLength": 1 },
+    "behavior_policy_pin": { "type": "string", "minLength": 1 },
+    "propensity": {
+      "type": ["number", "null"],
+      "exclusiveMinimum": 0,
+      "maximum": 1
+    },
+    "policy_seed_digest": { "type": "string" },
+    "approval_ref": { "type": "string" },
+    "execution_ref": { "type": "string" },
+    "readback_ref": { "type": "string" },
+    "oracle_verdict": {
+      "type": "string",
+      "enum": [
+        "VERIFIED_SUCCESS",
+        "CORRECT_HOLD",
+        "VERIFIED_FAILURE",
+        "UNRESOLVED",
+        "UNSUPPORTED"
+      ]
+    },
+    "outcome_ref": { "type": "string" },
+    "reward": {
+      "type": "object",
+      "additionalProperties": { "type": "number" }
+    },
+    "censored": { "type": "boolean" },
+    "censor_reason": { "type": "string" },
+    "as_of": { "type": "string", "minLength": 1 },
+    "known_at": { "type": "string", "minLength": 1 },
+    "decision_time": { "type": "string", "minLength": 1 },
+    "execution_time": { "type": "string" },
+    "observation_time": { "type": "string" },
+    "evaluation_cutoff": { "type": "string" },
+    "metadata": { "type": "object" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "abstained": { "const": true } } },
+      "then": { "properties": { "selected_option": { "type": "null" } } }
+    },
+    {
+      "if": {
+        "properties": {
+          "oracle_verdict": {
+            "enum": ["VERIFIED_SUCCESS", "CORRECT_HOLD", "VERIFIED_FAILURE"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "outcome_ref": { "type": "string", "minLength": 1 },
+          "observation_time": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "censored": { "const": true } } },
+      "then": { "properties": { "censor_reason": { "type": "string", "minLength": 1 } } }
+    }
+  ]
+}
