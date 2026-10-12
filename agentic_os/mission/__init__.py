@@ -58,6 +58,16 @@ from .assessment import (
     publication_decision_from_gates,
     CONTRACT_VERSION as ASSESSMENT_PUBLICATION_CONTRACT_VERSION,
 )
+from .policy_promotion import (
+    PolicyCandidate,
+    PolicyCandidateState,
+    PolicyPromotionDecision,
+    PolicyPromotionEvidence,
+    PolicyPromotionGate,
+    PolicyPromotionStatus,
+    decide_policy_promotion,
+    CONTRACT_VERSION as POLICY_PROMOTION_CONTRACT_VERSION,
+)
 from .apps_e2e_runner import (
     AppExecutionOutcome,
     AppsE2EBenchmarkReport,
@@ -89,6 +99,10 @@ __all__ = [
     "Assessment", "ComparabilityStatus", "ComparabilityVerdict", "EvaluationMethodology",
     "PublicationDecision", "PublicationDecisionValue", "PublicationGate", "PublicationGateStatus",
     "comparability_verdict", "publication_decision_from_gates", "ASSESSMENT_PUBLICATION_CONTRACT_VERSION",
+    # policy-promotion/v1 — shadow learning promotion and rollback gates
+    "PolicyCandidate", "PolicyCandidateState", "PolicyPromotionDecision", "PolicyPromotionEvidence",
+    "PolicyPromotionGate", "PolicyPromotionStatus", "decide_policy_promotion",
+    "POLICY_PROMOTION_CONTRACT_VERSION",
     # apps-e2e-runner/v1 — scenario/provider/oracle adapter onto decision episodes + Evaluation Runtime
     "AppExecutionOutcome", "AppsE2EBenchmarkReport", "EpisodeAppendReceipt", "EpisodeEvidenceBundle",
     "InMemoryEpisodeStore", "JsonlEpisodeStore", "ScenarioRun", "evaluation_program_for_suite",
