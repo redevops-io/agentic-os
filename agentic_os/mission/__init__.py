@@ -45,6 +45,19 @@ from .decision_provider import (
     validate_decision,
     CONTRACT_VERSION as DECISION_PROVIDER_CONTRACT_VERSION,
 )
+from .assessment import (
+    Assessment,
+    ComparabilityStatus,
+    ComparabilityVerdict,
+    EvaluationMethodology,
+    PublicationDecision,
+    PublicationDecisionValue,
+    PublicationGate,
+    PublicationGateStatus,
+    comparability_verdict,
+    publication_decision_from_gates,
+    CONTRACT_VERSION as ASSESSMENT_PUBLICATION_CONTRACT_VERSION,
+)
 from .apps_e2e_runner import (
     AppExecutionOutcome,
     AppsE2EBenchmarkReport,
@@ -72,6 +85,10 @@ __all__ = [
     # decision-provider/v1 and decision-episode/v1 — bounded model decisions and learning records
     "DecisionProvider", "DecisionRequest", "DecisionResult", "StaticDecisionProvider", "validate_decision",
     "DECISION_PROVIDER_CONTRACT_VERSION", "DecisionEpisode", "DECISION_EPISODE_CONTRACT_VERSION",
+    # assessment-publication/v1 — RAAAL-style facts, comparability and surface publication gates
+    "Assessment", "ComparabilityStatus", "ComparabilityVerdict", "EvaluationMethodology",
+    "PublicationDecision", "PublicationDecisionValue", "PublicationGate", "PublicationGateStatus",
+    "comparability_verdict", "publication_decision_from_gates", "ASSESSMENT_PUBLICATION_CONTRACT_VERSION",
     # apps-e2e-runner/v1 — scenario/provider/oracle adapter onto decision episodes + Evaluation Runtime
     "AppExecutionOutcome", "AppsE2EBenchmarkReport", "EpisodeAppendReceipt", "EpisodeEvidenceBundle",
     "InMemoryEpisodeStore", "JsonlEpisodeStore", "ScenarioRun", "evaluation_program_for_suite",
