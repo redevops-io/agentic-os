@@ -13,6 +13,9 @@ missing package metadata entry must never break a mission.
 from __future__ import annotations
 
 from functools import lru_cache
+import os
+from pathlib import Path
+import subprocess
 
 try:  # the canonicalization + schema version constants are the source of truth
     from runtime_contracts import (
@@ -36,6 +39,39 @@ def _installed_version(dist: str) -> str:
         return "unknown"
 
 
+def _source_commit() -> str:
+    for key in ("REDEVOPS_SOURCE_COMMIT", "SOURCE_COMMIT", "GIT_COMMIT", "GIT_SHA"):
+        val = os.environ.get(key, "").strip()
+        if val:
+            return val
+    try:
+        root = Path(__file__).resolve().parents[2]
+        return subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "--short=12", "HEAD"],
+            text=True, stderr=subprocess.DEVNULL, timeout=2.0,
+        ).strip() or "unknown"
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+def _runtime_build_manifest(rc_pkg: str) -> dict:
+    contract_matrix = {
+        "runtime-contracts": rc_pkg,
+        "canonicalization": CANONICALIZATION_VERSION,
+        "contract-schema": CONTRACT_VERSION,
+        "seal": SEAL_CONTRACT_VERSION,
+    }
+    return {
+        "component": "agentic-os",
+        "package_version": _installed_version("agentic-os"),
+        "source_commit": _source_commit(),
+        "image_digest": os.environ.get("REDEVOPS_IMAGE_DIGEST", os.environ.get("IMAGE_DIGEST", "")).strip(),
+        "contract_matrix": contract_matrix,
+        "adapter_versions": (),
+        "contract_version": "runtime-build-manifest/v1",
+    }
+
+
 @lru_cache(maxsize=1)
 def runtime_build_metadata() -> dict:
     """The interpretation context stamped onto EXPLAIN / build info. ``runtime_contracts_version`` is
@@ -48,9 +84,12 @@ def runtime_build_metadata() -> dict:
             rc_pkg = getattr(runtime_contracts, "__version__", "unknown")
         except Exception:  # noqa: BLE001
             rc_pkg = "unknown"
+    manifest = _runtime_build_manifest(rc_pkg)
     return {
         "runtime_contracts_version": rc_pkg,
         "canonicalization_version": CANONICALIZATION_VERSION,   # "rcv1"
         "contract_schema_version": CONTRACT_VERSION,
         "seal_contract_version": SEAL_CONTRACT_VERSION,
+        "source_commit": manifest["source_commit"],
+        "runtime_build_manifest": manifest,
     }

@@ -7,11 +7,16 @@ from agentic_os.mission.runtime_meta import runtime_build_metadata
 def test_build_metadata_carries_the_interpretation_context():
     m = runtime_build_metadata()
     assert set(m) == {"runtime_contracts_version", "canonicalization_version",
-                      "contract_schema_version", "seal_contract_version"}
+                      "contract_schema_version", "seal_contract_version",
+                      "source_commit", "runtime_build_manifest"}
     # canonicalization is the cross-language anchor; must be the real rcv1 constant, never "unknown"
     assert m["canonicalization_version"] == "rcv1"
     assert m["contract_schema_version"] and m["contract_schema_version"] != "unknown"
     assert isinstance(m["runtime_contracts_version"], str) and m["runtime_contracts_version"]
+    assert isinstance(m["source_commit"], str) and m["source_commit"]
+    assert m["runtime_build_manifest"]["component"] == "agentic-os"
+    assert m["runtime_build_manifest"]["source_commit"] == m["source_commit"]
+    assert "runtime-contracts" in m["runtime_build_manifest"]["contract_matrix"]
 
 
 def test_plan_explain_records_how_it_was_interpreted():

@@ -88,10 +88,12 @@ def test_mission_api_end_to_end():
     assert explain["state"] == "succeeded" and len(explain["steps"]) >= 4
 
 
-def test_invoke_wraps_result_under_declared_output_key():
-    """Read-back contract (N4): when a handler returns a dict that lacks the capability's declared
-    output key, invoke() wraps it under that key so the verifier can read it back — rather than the
-    side effect being REJECTED after it committed. A result that already carries the key is untouched."""
+def test_invoke_wraps_only_non_side_effecting_result_under_declared_output_key():
+    """Read-back contract (N4): compatibility markers are only synthesized for read tools.
+
+    Consequential capabilities must return their declared output keys as real handler/read-back facts;
+    otherwise the Mission verifier can reject them instead of trusting an SDK-minted success marker.
+    A result that already carries the key is untouched."""
     op = Operator("acct", [
         capability("acct.refund", lambda i: {"status": "staged", "amount": 10},
                    provides=["refund_staged"], outputs={"refund_staged": "the staged refund"},
@@ -99,9 +101,9 @@ def test_invoke_wraps_result_under_declared_output_key():
         capability("acct.read", lambda i: {"refund_staged": True, "extra": 1},
                    provides=["refund_staged"], outputs={"refund_staged": "already present"}),
     ])
-    merged = op.invoke("acct.refund", {})
-    assert merged["refund_staged"] is True                       # declared key MERGED in as a marker
-    assert merged["status"] == "staged" and merged["amount"] == 10   # handler's own keys PRESERVED (not nested)
+    write_result = op.invoke("acct.refund", {})
+    assert "refund_staged" not in write_result                   # no marker for consequential writes
+    assert write_result["status"] == "staged" and write_result["amount"] == 10
     untouched = op.invoke("acct.read", {})
     assert untouched == {"refund_staged": True, "extra": 1}      # key already present → not touched
 
@@ -129,10 +131,13 @@ def test_invoke_does_not_mint_a_marker_for_a_failed_result():
     assert "ip_blocked" not in op.invoke("sec.block", {})        # 403 no longer reads back as a ban
     assert "refunded" not in op.invoke("bill.refund", {})        # failed refund never asserts an amount
     assert "done" not in op.invoke("op.denied", {})              # denied call never asserts completion
-    # a SUCCESSFUL non-terminal state (e.g. "staged") still gets its marker — success path unchanged
+    # A non-terminal side-effecting state (e.g. "staged") must still return a real declared output fact
+    # from the handler/read-back path; the SDK must not mint one on its behalf.
     op2 = Operator("ok", [capability("ok.stage", lambda i: {"status": "staged", "amount": 10},
                           provides=["staged"], outputs={"staged": "x"}, side_effecting=True)])
-    assert op2.invoke("ok.stage", {})["staged"] is True
+    staged = op2.invoke("ok.stage", {})
+    assert "staged" not in staged
+    assert staged["status"] == "staged"
 
 
 def test_http_invoke_strips_a_forged_approval_marker():
