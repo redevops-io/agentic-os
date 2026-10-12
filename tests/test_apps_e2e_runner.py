@@ -9,8 +9,11 @@ from agentic_os.mission.apps_e2e import (
 )
 from agentic_os.mission.apps_e2e_runner import (
     AppExecutionOutcome,
+    InMemoryEpisodeStore,
+    JsonlEpisodeStore,
     evaluation_program_for_suite,
     run_scenario,
+    scenario_run_from_payload,
     summarize_runs,
 )
 from agentic_os.mission.decision_provider import DecisionRequest, StaticDecisionProvider
@@ -95,6 +98,63 @@ def test_run_scenario_records_learning_eligible_decision_episode():
     assert run.request_digest == request.digest()
     assert run.result_digest
     assert run.episode.learning_eligible()
+
+
+def test_scenario_run_payload_round_trips_with_digest_checks():
+    scenario = _scenario()
+    request = _request()
+    provider = StaticDecisionProvider("static", "static@1")
+    run = run_scenario(
+        scenario,
+        request,
+        provider,
+        lambda s, r: _outcome(),
+        tenant_id="tenant-a",
+        behavior_policy_id="benchmark-router",
+        behavior_policy_pin="router@sha256:abc",
+        propensity=1.0,
+        decision_time="2026-01-01T00:00:01Z",
+    )
+
+    restored = scenario_run_from_payload(run.canonical_payload())
+    assert restored.digest() == run.digest()
+    assert restored.episode.digest() == run.episode.digest()
+
+    tampered = dict(run.canonical_payload())
+    tampered["episode_digest"] = "sha256:wrong"
+    with pytest.raises(ValueError, match="episode_digest"):
+        scenario_run_from_payload(tampered)
+
+
+def test_episode_stores_are_append_only_and_replayable(tmp_path):
+    scenario = _scenario()
+    request = _request()
+    provider = StaticDecisionProvider("static", "static@1")
+    run = run_scenario(
+        scenario,
+        request,
+        provider,
+        lambda s, r: _outcome(),
+        tenant_id="tenant-a",
+        behavior_policy_id="benchmark-router",
+        behavior_policy_pin="router@sha256:abc",
+        propensity=1.0,
+        decision_time="2026-01-01T00:00:01Z",
+    )
+
+    mem = InMemoryEpisodeStore("bench-memory")
+    receipt = mem.append(run)
+    assert receipt.sequence == 1
+    assert receipt.run_digest == run.digest()
+    assert mem.bundle().run_count == 1
+    assert mem.bundle().episode_digests == (run.episode.digest(),)
+
+    path = str(tmp_path / "episodes" / "runs.jsonl")
+    file_store = JsonlEpisodeStore(path, store_id="bench-jsonl")
+    file_store.append(run)
+    reopened = JsonlEpisodeStore(path, store_id="bench-jsonl")
+    assert reopened.bundle().digest() == file_store.bundle().digest()
+    assert reopened.runs()[0].digest() == run.digest()
 
 
 def test_run_scenario_enforces_declared_decision_lane():

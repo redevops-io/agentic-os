@@ -48,9 +48,14 @@ from .decision_provider import (
 from .apps_e2e_runner import (
     AppExecutionOutcome,
     AppsE2EBenchmarkReport,
+    EpisodeAppendReceipt,
+    EpisodeEvidenceBundle,
+    InMemoryEpisodeStore,
+    JsonlEpisodeStore,
     ScenarioRun,
     evaluation_program_for_suite,
     run_scenario,
+    scenario_run_from_payload,
     summarize_runs,
     CONTRACT_VERSION as APPS_E2E_RUNNER_CONTRACT_VERSION,
 )
@@ -68,6 +73,7 @@ __all__ = [
     "DecisionProvider", "DecisionRequest", "DecisionResult", "StaticDecisionProvider", "validate_decision",
     "DECISION_PROVIDER_CONTRACT_VERSION", "DecisionEpisode", "DECISION_EPISODE_CONTRACT_VERSION",
     # apps-e2e-runner/v1 — scenario/provider/oracle adapter onto decision episodes + Evaluation Runtime
-    "AppExecutionOutcome", "AppsE2EBenchmarkReport", "ScenarioRun", "evaluation_program_for_suite",
-    "run_scenario", "summarize_runs", "APPS_E2E_RUNNER_CONTRACT_VERSION",
+    "AppExecutionOutcome", "AppsE2EBenchmarkReport", "EpisodeAppendReceipt", "EpisodeEvidenceBundle",
+    "InMemoryEpisodeStore", "JsonlEpisodeStore", "ScenarioRun", "evaluation_program_for_suite",
+    "run_scenario", "scenario_run_from_payload", "summarize_runs", "APPS_E2E_RUNNER_CONTRACT_VERSION",
 ]

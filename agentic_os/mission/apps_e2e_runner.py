@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 import json
+import os
 from typing import Callable, Mapping
 
 from agentic_os.mission.apps_e2e import AppsE2EScenario, CoverageMatrix, OracleVerdict, coverage_matrix
@@ -49,6 +50,99 @@ class ScenarioRun:
     result_digest: str
     episode: DecisionEpisode
 
+    def canonical_payload(self) -> Mapping[str, object]:
+        return {
+            "contract_version": CONTRACT_VERSION,
+            "scenario_id": self.scenario_id,
+            "scenario_digest": self.scenario_digest,
+            "request_digest": self.request_digest,
+            "result_digest": self.result_digest,
+            "episode_digest": self.episode.digest(),
+            "episode": self.episode.canonical_payload(),
+        }
+
+    def digest(self) -> str:
+        payload = json.dumps(self.canonical_payload(), sort_keys=True, separators=(",", ":"))
+        return content_hash(payload)
+
+
+@dataclass(frozen=True)
+class EpisodeAppendReceipt:
+    store_id: str
+    sequence: int
+    run_digest: str
+    episode_digest: str
+
+
+@dataclass(frozen=True)
+class EpisodeEvidenceBundle:
+    """Immutable summary of an append-only episode store for publication and replay."""
+
+    store_id: str
+    contract_version: str
+    run_count: int
+    run_digests: tuple[str, ...]
+    episode_digests: tuple[str, ...]
+
+    def digest(self) -> str:
+        payload = {
+            "store_id": self.store_id,
+            "contract_version": self.contract_version,
+            "run_count": self.run_count,
+            "run_digests": list(self.run_digests),
+            "episode_digests": list(self.episode_digests),
+        }
+        return content_hash(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+
+
+class InMemoryEpisodeStore:
+    """Append-only decision episode store for tests and local benchmark runs."""
+
+    def __init__(self, store_id: str = "memory") -> None:
+        self.store_id = store_id
+        self._runs: list[ScenarioRun] = []
+
+    def append(self, run: ScenarioRun) -> EpisodeAppendReceipt:
+        _validate_run_payload(run.canonical_payload())
+        self._runs.append(run)
+        return EpisodeAppendReceipt(self.store_id, len(self._runs), run.digest(), run.episode.digest())
+
+    def runs(self) -> tuple[ScenarioRun, ...]:
+        return tuple(self._runs)
+
+    def bundle(self) -> EpisodeEvidenceBundle:
+        runs = self.runs()
+        return EpisodeEvidenceBundle(
+            store_id=self.store_id,
+            contract_version=CONTRACT_VERSION,
+            run_count=len(runs),
+            run_digests=tuple(run.digest() for run in runs),
+            episode_digests=tuple(run.episode.digest() for run in runs),
+        )
+
+
+class JsonlEpisodeStore(InMemoryEpisodeStore):
+    """Append-only JSONL episode store; reopens by validating stored run and episode digests."""
+
+    def __init__(self, path: str, store_id: str = "jsonl") -> None:
+        self.path = path
+        super().__init__(store_id=store_id)
+        if os.path.exists(path):
+            with open(path, "r") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        self._runs.append(scenario_run_from_payload(json.loads(line)))
+
+    def append(self, run: ScenarioRun) -> EpisodeAppendReceipt:
+        receipt = super().append(run)
+        parent = os.path.dirname(self.path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(self.path, "a") as fh:
+            fh.write(json.dumps(run.canonical_payload(), sort_keys=True) + "\n")
+        return receipt
+
 
 @dataclass(frozen=True)
 class AppsE2EBenchmarkReport:
@@ -79,6 +173,52 @@ class AppsE2EBenchmarkReport:
             "verdict_counts": dict(sorted(self.verdict_counts.items())),
         }
         return content_hash(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+
+
+def _validate_run_payload(payload: Mapping[str, object]) -> None:
+    if payload.get("contract_version") != CONTRACT_VERSION:
+        raise ValueError("scenario run payload contract_version mismatch")
+    episode_payload = payload.get("episode")
+    if not isinstance(episode_payload, Mapping):
+        raise ValueError("scenario run payload missing episode")
+    episode = _episode_from_payload(episode_payload)
+    episode_digest = payload.get("episode_digest")
+    if episode_digest != episode.digest():
+        raise ValueError("episode_digest does not match episode payload")
+    expected = {
+        "scenario_id": episode.scenario_id,
+        "request_digest": episode.request_digest,
+        "result_digest": episode.result_digest,
+    }
+    for key, value in expected.items():
+        if payload.get(key) != value:
+            raise ValueError(f"{key} does not match episode payload")
+    if episode.validation_errors():
+        raise ValueError("; ".join(episode.validation_errors()))
+
+
+def _episode_from_payload(payload: Mapping[str, object]) -> DecisionEpisode:
+    data = dict(payload)
+    data.pop("contract_version", None)
+    data["eligible_options"] = tuple(data.get("eligible_options", ()))
+    data["reward"] = dict(data.get("reward", {}))
+    data["metadata"] = dict(data.get("metadata", {}))
+    return DecisionEpisode(**data)
+
+
+def scenario_run_from_payload(payload: Mapping[str, object]) -> ScenarioRun:
+    _validate_run_payload(payload)
+    episode = _episode_from_payload(payload["episode"])  # type: ignore[index]
+    run = ScenarioRun(
+        scenario_id=str(payload["scenario_id"]),
+        scenario_digest=str(payload["scenario_digest"]),
+        request_digest=str(payload["request_digest"]),
+        result_digest=str(payload["result_digest"]),
+        episode=episode,
+    )
+    if payload.get("episode_digest") != run.episode.digest():
+        raise ValueError("episode_digest does not match reconstructed episode")
+    return run
 
 
 def _suite_digest(scenarios: tuple[AppsE2EScenario, ...]) -> str:
@@ -229,8 +369,13 @@ __all__ = [
     "CONTRACT_VERSION",
     "AppExecutionOutcome",
     "AppsE2EBenchmarkReport",
+    "EpisodeAppendReceipt",
+    "EpisodeEvidenceBundle",
+    "InMemoryEpisodeStore",
+    "JsonlEpisodeStore",
     "ScenarioRun",
     "evaluation_program_for_suite",
     "run_scenario",
+    "scenario_run_from_payload",
     "summarize_runs",
 ]
