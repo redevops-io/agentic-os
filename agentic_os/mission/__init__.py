@@ -33,6 +33,18 @@ from .policy import (
     MissionPolicy, PolicyRule, Effect, NodeContext, PolicyOutcome, from_constraints,
     CONTRACT_VERSION as MISSION_POLICY_CONTRACT_VERSION,
 )
+from .decision_episode import (
+    DecisionEpisode,
+    CONTRACT_VERSION as DECISION_EPISODE_CONTRACT_VERSION,
+)
+from .decision_provider import (
+    DecisionProvider,
+    DecisionRequest,
+    DecisionResult,
+    StaticDecisionProvider,
+    validate_decision,
+    CONTRACT_VERSION as DECISION_PROVIDER_CONTRACT_VERSION,
+)
 
 __all__ = [
     "Mission", "MissionState", "ExecutionIntent", "IntentStep", "ExecutionPlan", "PlanAxes",
@@ -43,4 +55,7 @@ __all__ = [
     # mission-policy/v1 — policy as a first-class, versioned, digest-pinned object
     "MissionPolicy", "PolicyRule", "Effect", "NodeContext", "PolicyOutcome", "from_constraints",
     "MISSION_POLICY_CONTRACT_VERSION",
+    # decision-provider/v1 and decision-episode/v1 — bounded model decisions and learning records
+    "DecisionProvider", "DecisionRequest", "DecisionResult", "StaticDecisionProvider", "validate_decision",
+    "DECISION_PROVIDER_CONTRACT_VERSION", "DecisionEpisode", "DECISION_EPISODE_CONTRACT_VERSION",
 ]
