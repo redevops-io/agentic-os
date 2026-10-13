@@ -32,10 +32,15 @@ def _reason(*ns):
     return len(_S.ready(g, set(), set(), _W)), (ser[0]["reason"] if ser else "")
 
 
-def test_advisory_caps_are_read_only_and_never_block():
+def test_advisory_caps_never_block():
+    # Only `ask` is truly read-only. playbook / subreddit_plan / hire_brief WRITE a local asset JSON (unique
+    # per-call id), so they are side_effecting (not read_only) but hold no resource key -> never serialize.
     ro = [n for n, s in _SPECS.items() if s.concurrency_mode == "read_only"]
-    assert set(ro) == {"assistant.playbook", "assistant.subreddit_plan", "assistant.hire_brief", "assistant.ask"}
-    assert len(_released(*[_node(f"n{i}", c) for i, c in enumerate(ro)])) == len(ro)
+    assert set(ro) == {"assistant.ask"}
+    writers = ["assistant.playbook", "assistant.subreddit_plan", "assistant.hire_brief"]
+    assert all(_SPECS[n].side_effecting and not _SPECS[n].approval_required for n in writers)
+    advisory = ro + writers
+    assert len(_released(*[_node(f"n{i}", c) for i, c in enumerate(advisory)])) == len(advisory)
 
 
 def test_pushes_to_different_providers_parallelize():
