@@ -31,3 +31,15 @@ inputs, so an approved retry is not served a cached staged result. Identical ret
 - `/agent/run` and other app endpoints that bypass `/invoke` (handled in apps).
 - Unauthenticated read capabilities on `/invoke`/`/capabilities`; this adds no caller authentication.
 - Secret rotation, and a leaked secret (it can mint any approval); a token is not bound to a caller identity.
+
+## Saga compensation (rollback) and gated undo capabilities
+
+An undo capability can itself be approval-gated (e.g. `unblock_ip`, `cancel_subscription`, `destroy_delta`).
+`Executor.compensate` therefore invokes the undo with a runtime `_approval` marker (`{"approved": True,
+"compensation": True}`) plus `_node`/`_mission`: an undo is part of the scope of the action it reverses, and
+before handlers were gated these undos ran unconditionally. Over HTTP the client mints the signed token from
+that marker like any other approval, so it needs the same `AGENTIC_OS_APPROVAL_SECRET`. Without the secret the
+undo stages (fails closed) and the `NodeCompensated` event carries the staged result.
+
+Known gap: `MissionRuntime._saga` still records `NodeCompensated` whatever the undo returned. A follow-up
+should record a compensation failure when the result says `executed: False` / `pending_approval`.

@@ -175,3 +175,70 @@ def test_e2e_http_approval_without_secret_stays_staged(monkeypatch):
     rt.approve(m.id, rt.repo.pending_human(m.id)["node_id"], "approve")
     assert ran["executed"] == 0                          # fail closed: never executes without a secret
     assert rt._missions[m.id].state != MissionState.SUCCEEDED
+
+
+# ─── saga rollback: a GATED undo must execute during compensation, not stage ──
+class _SagaPlanner:
+    def plan(self, mission_id, goal, context):
+        from agentic_os.mission.types import ExecutionIntent, IntentStep
+        return ExecutionIntent(mission_id=mission_id, steps=[
+            IntentStep(outcome="charged", need="charge the customer"),
+            IntentStep(outcome="notified", need="notify the customer", inputs_from=["charged"]),
+        ])
+
+
+def _saga_http(monkeypatch, secret):
+    if secret:
+        monkeypatch.setenv("AGENTIC_OS_APPROVAL_SECRET", S)
+    else:
+        monkeypatch.delenv("AGENTIC_OS_APPROVAL_SECRET", raising=False)
+    seen = {"refund_executed": 0, "refund_staged": 0}
+
+    def refund(i):                                        # the UNDO is itself approval-gated
+        if i.get("_approval"):
+            seen["refund_executed"] += 1
+            return {"refunded": True, "executed": True}
+        seen["refund_staged"] += 1
+        return {"status": "pending_approval", "executed": False}
+
+    def notify(i):
+        raise RuntimeError("smtp down")                   # the later step fails -> saga unwinds
+    operators = {
+        "billing": Operator("billing", [
+            capability("charge", lambda i: {"charge_id": "ch_1"}, provides=["charged"],
+                       side_effecting=True, undo="refund", permissions=["*"]),
+            capability("refund", refund, side_effecting=True, approval_required=True, permissions=["*"])]),
+        "email": Operator("email", [
+            capability("notify", notify, provides=["notified"], side_effecting=True, permissions=["*"])]),
+    }
+    clients = {}
+    for name, op in operators.items():
+        app = FastAPI(); app.include_router(op.router())
+        clients[f"http://{name}"] = TestClient(app, raise_server_exceptions=False)
+
+    def transport(url, body, headers, timeout):
+        base = next(b for b in clients if url.startswith(b))
+        r = clients[base].post(url[len(base):], json=body, headers=headers)
+        if r.status_code >= 500:
+            raise RuntimeError(f"operator error {r.status_code}")
+        return r.json()
+    client = HTTPOperatorClient({n: f"http://{n}" for n in operators}, transport=transport)
+    rt = MissionRuntime(pilots.build_pilot_registry(operators), Executor(client), planner=_SagaPlanner())
+    m = rt.create_mission("charge and notify", policy_refs=["*"])
+    rt.run(m.id)
+    return rt, m, seen
+
+
+def test_e2e_http_saga_gated_undo_executes(monkeypatch):
+    rt, m, seen = _saga_http(monkeypatch, secret=True)
+    assert m.state == MissionState.FAILED
+    assert seen == {"refund_executed": 1, "refund_staged": 0}      # rolled back for real over HTTP
+    comp = [e for e in rt.repo.timeline(m.id) if e["type"] == "NodeCompensated"]
+    assert len(comp) == 1 and comp[0]["payload"]["result"].get("executed") is True
+
+
+def test_e2e_http_saga_gated_undo_without_secret_stays_visibly_unexecuted(monkeypatch):
+    rt, m, seen = _saga_http(monkeypatch, secret=False)
+    assert seen["refund_executed"] == 0                             # fail closed: no secret, no execution
+    comp = [e for e in rt.repo.timeline(m.id) if e["type"] == "NodeCompensated"]
+    assert comp and comp[0]["payload"]["result"].get("executed") is False   # the staged result is visible

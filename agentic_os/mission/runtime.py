@@ -877,7 +877,7 @@ class MissionRuntime:
         status = self.repo.node_status(m.id)
         for node in reversed(plan.graph.nodes):
             if status.get(node.id) == NodeState.DONE and node.side_effecting and node.undo:
-                out = self._executor_for(m).compensate(node)
+                out = self._executor_for(m).compensate(node, mission_id=m.id)
                 self.store.append("NodeCompensated", m.id,
                                   {"node_id": node.id, "undo": node.undo, "result": out})
 
