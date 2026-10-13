@@ -34,6 +34,8 @@ def _delete(inp: dict) -> dict:
     res = core.execute_erasure(rid, email, actor="runtime-approval")
     if res.get("status") == "refused":
         return staged(res.get("reason"))
+    # belt-and-braces for the kernel verifier: a partial erasure can never carry a truthy erasure_verified
+    res["erasure_verified"] = bool(res.get("erasure_verified")) and res.get("residual") == 0
     return res
 
 

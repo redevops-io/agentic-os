@@ -41,6 +41,8 @@ SSG_URL="https://github.com/ComplianceAsCode/content/releases/download/v${SSG_VE
 
 SSG_HASH_FILE="${SSG_HASH_FILE:-$HERE/env/ssg-${SSG_VERSION}.sha256}"
 
+SSG_VERIFIED_FILE="$CONTENT_DIR/ssg-verified.json"   # what the datastream's source tarball was verified against
+
 mkdir -p "$CONTENT_DIR" "$RESULTS_DIR"
 
 # 1. Ensure the real SCAP content (datastream) is present. Fetch the official
@@ -50,6 +52,7 @@ if [[ ! -f "$DS" ]]; then
   TMP="$(mktemp -d)"
   curl -fsSL -o "$TMP/ssg.tar.gz" "$SSG_URL"
   EXPECTED=""
+  SSG_STATE="unpinned"; ACTUAL="$(sha256sum "$TMP/ssg.tar.gz" | awk '{print $1}')"
   [[ -f "$SSG_HASH_FILE" ]] && EXPECTED="$(grep -vE '^\s*#' "$SSG_HASH_FILE" | awk 'NF{print $1; exit}')"
   if [[ -z "$EXPECTED" ]]; then
     if [[ "${COMPLIANCE_ALLOW_UNPINNED_SSG:-}" == "true" ]]; then
@@ -59,8 +62,9 @@ if [[ ! -f "$DS" ]]; then
       rm -rf "$TMP"; exit 3
     fi
   else
-    ACTUAL="$(sha256sum "$TMP/ssg.tar.gz" | awk '{print $1}')"
+    SSG_STATE="verified"
     if [[ "$ACTUAL" != "$EXPECTED" ]]; then
+      SSG_STATE="mismatch-overridden"
       if [[ "${COMPLIANCE_ALLOW_UNPINNED_SSG:-}" == "true" ]]; then
         echo "[scan] WARNING: SSG sha256 mismatch (expected $EXPECTED got $ACTUAL); continuing (COMPLIANCE_ALLOW_UNPINNED_SSG=true)" >&2
       else
@@ -71,21 +75,28 @@ if [[ ! -f "$DS" ]]; then
   fi
   tar xzf "$TMP/ssg.tar.gz" -C "$TMP" "scap-security-guide-${SSG_VERSION}/ssg-ubuntu2204-ds.xml"
   cp "$TMP/scap-security-guide-${SSG_VERSION}/ssg-ubuntu2204-ds.xml" "$DS"
+  printf '{"ssg_version":"%s","ssg_tarball_sha256":"%s","ssg_hash_status":"%s"}\n' \
+    "$SSG_VERSION" "$ACTUAL" "$SSG_STATE" > "$SSG_VERIFIED_FILE"
   rm -rf "$TMP"
 fi
 echo "[scan] datastream: $DS ($(du -h "$DS" | cut -f1))"
 echo "[scan] profile:    $SCAP_PROFILE"
+
+# What SSG source was verified (recorded at fetch time; "unknown" if the datastream was supplied by other means).
+SSG_JSON='{"ssg_version":"unknown","ssg_tarball_sha256":null,"ssg_hash_status":"unknown"}'
+[[ -s "$SSG_VERIFIED_FILE" ]] && SSG_JSON="$(tr -d '\n' < "$SSG_VERIFIED_FILE")"
+SSG_FIELDS="${SSG_JSON#\{}"; SSG_FIELDS="${SSG_FIELDS%\}}"
 
 # 2. Run the real oscap scan. oscap exit codes: 0 = all rules pass, 2 = scan ran but some rules failed
 #    (a valid scan WITH findings), 1 = error, anything else = error.
 set +e
 rm -f "$RESULTS_DIR/scan-results.xml" "$RESULTS_DIR/report.html"
 if [[ "$SCAN_MODE" == "host" ]]; then
-  TARGET_JSON="{\"target\":\"host\",\"host_scanned\":true,\"hostname\":\"$(hostname)\"}"
+  TARGET_JSON="{\"target\":\"host\",\"host_scanned\":true,\"hostname\":\"$(hostname)\",${SSG_FIELDS}}"
   oscap xccdf eval --profile "$SCAP_PROFILE" --results "$RESULTS_DIR/scan-results.xml" \
     --report "$RESULTS_DIR/report.html" "$DS"
 else
-  TARGET_JSON="{\"target\":\"container-image\",\"image\":\"$SCAP_IMAGE\",\"host_scanned\":false}"
+  TARGET_JSON="{\"target\":\"container-image\",\"image\":\"$SCAP_IMAGE\",\"host_scanned\":false,${SSG_FIELDS}}"
   # Evaluates the pristine image in a disposable container - NOT the host this runs on.
   $DOCKER run --rm \
     -v "$CONTENT_DIR":/content:ro \

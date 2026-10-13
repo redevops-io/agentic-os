@@ -59,6 +59,9 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "POSTMARK_TOKEN", "pm")
     monkeypatch.setattr(core, "_send_email", lambda to, subj, body: sent.append((to, subj, body)) or "postmark")
     st.sent = sent
+    appmod._reset_rate_limits()
+    monkeypatch.setattr(appmod, "RATE_BURST", 10_000)               # rate-limit behaviour has its own tests
+    monkeypatch.setenv("PRIVACY_INTAKE_PER_EMAIL_HOUR", "10000")
     st.client = TestClient(appmod.app)
     return st
 
@@ -78,7 +81,8 @@ def _file(st, rtype):
 
 
 def _verify(st, rid, tok):
-    return st.client.get(f"/verify?id={rid}&token={tok}")
+    """Redeem like the confirm-page button does: POST the form."""
+    return st.client.post("/verify", data={"id": rid, "token": tok})
 
 
 # ── /request: forged flags do nothing ───────────────────────────────────────
@@ -371,3 +375,134 @@ def test_demo_mode_flow_runs_on_synthetic_data_only(env, monkeypatch):
     r = env.client.post("/request", json={"type": "delete", "email": "demo@example.com",
                                           "verified": True, "confirm": True}).json()
     assert r["status"] == "erased" and r["demo"] is True and core._DEMO_STORE == {}
+
+
+# ── GET /verify is a no-op confirm page (link scanners must not burn the token) ──
+def test_get_verify_does_not_consume_token_post_does(env):
+    r = env.client.post("/intake", json={"email": SUBJECT, "type": "access"}).json()
+    rid, tok = [x for x in _token(env).groups() if x]
+    for _ in range(3):                                       # a scanner / prefetcher hitting the emailed link
+        page = env.client.get(f"/verify?id={rid}&token={tok}")
+        assert page.status_code == 200 and "<form method='post' action='/verify'" in page.text
+        assert f"value='{tok}'" in page.text and "Identity verified" not in page.text
+    assert core._get_request(rid)["verified"] is False
+    assert "verify_token_hash" in core._get_request(rid)
+    assert "Identity verified" in env.client.post("/verify", data={"id": rid, "token": tok}).text
+    assert core._get_request(rid)["verified"] is True
+    assert "invalid" in env.client.post("/verify", data={"id": rid, "token": tok}).text   # single use
+
+
+def test_post_verify_json_variant_and_email_link_points_at_confirm_page(env):
+    env.client.post("/intake", json={"email": SUBJECT, "type": "access"})
+    rid, tok = [x for x in _token(env).groups() if x]
+    assert "confirm" in [m for m in env.sent if "Verify" in m[1]][-1][2]
+    r = env.client.post("/verify", json={"id": rid, "token": tok})
+    assert "Identity verified" in r.text
+
+
+# ── rate limiting ───────────────────────────────────────────────────────────
+def test_ip_token_bucket_429_with_retry_after(env, monkeypatch):
+    monkeypatch.setattr(appmod, "RATE_BURST", 10)
+    monkeypatch.setenv("PRIVACY_RATE_PER_MIN", "6")
+    appmod._reset_rate_limits()
+    codes = [env.client.get("/export?id=x&token=y").status_code for _ in range(12)]
+    assert codes[:10] == [403] * 10 and codes[10:] == [429, 429]
+    r = env.client.get("/export?id=x&token=y")
+    assert r.status_code == 429 and int(r.headers["Retry-After"]) >= 1
+    # every public endpoint shares the same per-IP bucket
+    assert env.client.post("/intake", json={"email": SUBJECT}).status_code == 429
+    assert env.client.post("/request", json={}).status_code == 429
+    assert env.client.post("/verify", data={"id": "a", "token": "b"}).status_code == 429
+    assert env.client.get("/verify?id=a&token=b").status_code == 429
+
+
+def test_bucket_refills_over_time():
+    appmod._reset_rate_limits()
+    import os
+    os.environ["PRIVACY_RATE_PER_MIN"] = "60"
+    try:
+        for _ in range(appmod.RATE_BURST):
+            assert appmod._take("ip", now=100.0) == 0.0
+        assert appmod._take("ip", now=100.0) > 0
+        assert appmod._take("ip", now=102.0) == 0.0         # 1 token/s => refilled
+    finally:
+        os.environ.pop("PRIVACY_RATE_PER_MIN")
+
+
+def test_trust_proxy_uses_forwarded_for_only_when_enabled(env, monkeypatch):
+    monkeypatch.setattr(appmod, "RATE_BURST", 1)
+    monkeypatch.setenv("PRIVACY_RATE_PER_MIN", "0.0001")
+    appmod._reset_rate_limits()
+    h1, h2 = {"X-Forwarded-For": "1.1.1.1"}, {"X-Forwarded-For": "2.2.2.2"}
+    assert env.client.get("/export", headers=h1).status_code == 403
+    assert env.client.get("/export", headers=h2).status_code == 429     # header ignored: same socket peer
+    monkeypatch.setenv("PRIVACY_TRUST_PROXY", "true")
+    appmod._reset_rate_limits()
+    assert env.client.get("/export", headers=h1).status_code == 403
+    assert env.client.get("/export", headers=h2).status_code == 403     # distinct clients
+    assert env.client.get("/export", headers=h1).status_code == 429
+
+
+def test_per_email_intake_cap_stops_mail_bombing(env, monkeypatch):
+    monkeypatch.setenv("PRIVACY_INTAKE_PER_EMAIL_HOUR", "5")
+    appmod._reset_rate_limits()
+    # different IPs (trusted proxy) so only the per-email cap can stop it
+    monkeypatch.setenv("PRIVACY_TRUST_PROXY", "true")
+    codes = [env.client.post("/intake", json={"email": SUBJECT, "type": "access"},
+                             headers={"X-Forwarded-For": f"9.9.9.{i}"}).status_code for i in range(7)]
+    assert codes == [200] * 5 + [429, 429]
+    assert len([m for m in env.sent if "Verify" in m[1]]) == 5          # no more than 5 emails sent
+    assert env.client.post("/intake", json={"email": SUBJECT.upper()},
+                           headers={"X-Forwarded-For": "9.9.9.99"}).status_code == 429   # case-insensitive
+    assert env.client.post("/intake", json={"email": "other@example.com"},
+                           headers={"X-Forwarded-For": "9.9.9.98"}).status_code == 200
+    assert appmod._email_cap(SUBJECT, now=1e9 + 4000) == 0.0            # window slides after an hour
+
+
+# ── mission-level: a partial erasure FAILS the node; a clean one commits ────
+def _erasure_mission(env, name):
+    from agentic_os.mission import sdk
+    from agentic_os.mission.executor import Executor
+    from agentic_os.mission.operator_sdk import LocalOperatorClient
+    from agentic_os.mission.registry import CapabilityRegistry
+    from agentic_os.mission.runtime import MissionRuntime
+
+    rid = _verified(env)
+
+    class _Client(LocalOperatorClient):                 # template steps carry no literal inputs: inject the target
+        def invoke(self, op, cap, inputs, key, *, secrets=None):
+            return super().invoke(op, cap, {**inputs, "request_id": rid, "email": SUBJECT}, key, secrets=secrets)
+
+    @sdk.template(name)
+    def _t(_mid):
+        return [sdk.step("erasure", "erase the verified data subject across all systems")]
+
+    op = operator.build_privacy_operator()
+    reg = CapabilityRegistry()
+    reg.register(op.manifest)
+    rt = MissionRuntime(reg, Executor(_Client({op.name: op})))
+    m = rt.create_mission("erase jane", policy_refs=["privacy:write", "privacy:erase"], template=name)
+    rt.run(m.id)
+    pending = rt.repo.pending_human(m.id)
+    assert pending and pending["capability"] == "privacy.delete"      # irreversible => parked for a human first
+    assert len(env.data["crm"]) == 1                                  # nothing erased before approval
+    rt.approve(m.id, pending["node_id"], "approve")
+    return rt, m, rid
+
+
+def test_mission_partial_erasure_fails_the_node(env):
+    from agentic_os.mission.types import MissionState
+    env.stubborn.add("mail")
+    rt, m, rid = _erasure_mission(env, "privacy_erase_partial")
+    assert rt._missions[m.id].state == MissionState.FAILED
+    assert "erasure" not in rt._world(m.id).snapshot()                # never minted into success
+    assert core._get_request(rid)["status"] == "partial_erasure"
+
+
+def test_mission_clean_erasure_commits(env):
+    from agentic_os.mission.types import MissionState
+    rt, m, rid = _erasure_mission(env, "privacy_erase_clean")
+    assert rt._missions[m.id].state == MissionState.SUCCEEDED
+    assert "erasure" in rt._world(m.id).snapshot()
+    assert core._get_request(rid)["status"] == "erased"
+    assert env.data["crm"] == [] and env.data["mail"] == []

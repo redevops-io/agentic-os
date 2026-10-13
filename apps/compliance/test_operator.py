@@ -294,3 +294,19 @@ def test_ledger_concurrent_appends_keep_chain_valid(client):
     with ThreadPoolExecutor(8) as ex:
         list(ex.map(_consent, range(24)))
     assert core.verify_chain() == {"ok": True, "entries": 24, "legacy": 0}
+
+
+def test_scan_records_which_ssg_hash_was_verified(client, tmp_path, monkeypatch):
+    t = tmp_path / "target.json"
+    t.write_text('{"target":"container-image","image":"ubuntu:22.04","host_scanned":false,'
+                 '"ssg_version":"0.1.81","ssg_tarball_sha256":"5aff","ssg_hash_status":"verified"}')
+    monkeypatch.setattr(core, "SCAP_TARGET_FILE", t)
+    res = core.scan()
+    assert res["ssg"] == {"version": "0.1.81", "tarball_sha256": "5aff", "hash_status": "verified"}
+    t.write_text('{"target":"container-image","image":"x","host_scanned":false}')    # legacy / not recorded
+    assert core.scan()["ssg"]["hash_status"] == "unknown"
+
+
+def test_scan_sh_records_ssg_hash_in_scan_target():
+    sh = (Path(__file__).parent / "scan.sh").read_text()
+    assert "ssg_tarball_sha256" in sh and "ssg_hash_status" in sh and "${SSG_FIELDS}" in sh

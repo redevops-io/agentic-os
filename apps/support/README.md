@@ -38,6 +38,7 @@ Chatwoot (OSS core, :3003) ──REST──▶ app.py (FastAPI, :8207) ──▶
 | `requirements.txt` | fastapi, uvicorn, httpx. |
 | `Dockerfile` | slim-python image running `uvicorn app:app --port 8207`. |
 | `.env` | Written by `seed.py`: `CHATWOOT_API_URL`, `CHATWOOT_API_TOKEN`, `CHATWOOT_ACCOUNT_ID`, `CHATWOOT_FRONT_URL`. |
+| `CHATWOOT_INBOX_ID` / `CHATWOOT_SOURCE_ID` | Env (or `inbox_id` / `source_id` params) required by `support.send_onboarding` to create a welcome conversation; absent => `status: config_error`, nothing sent. Not needed when `conversation_id` is supplied. |
 
 ## Chatwoot bootstrap method (the one that worked)
 
