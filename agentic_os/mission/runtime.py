@@ -660,6 +660,7 @@ class MissionRuntime:
         approval = self._approval_marker(m.id, node.id)
         if approval is not None:
             resolved["_approval"] = approval
+            resolved["_node"] = node.id   # lets HTTPOperatorClient bind a signed approval token to this node
         return resolved
 
     def _approval_edit(self, mission_id: str, node_id: str) -> dict | None:
