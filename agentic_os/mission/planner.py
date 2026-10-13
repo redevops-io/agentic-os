@@ -72,6 +72,39 @@ class TemplatePlanner:
         return None
 
 
+class ExplicitCapabilityPlanner:
+    """Plan a single-step mission bound DIRECTLY to a named capability — no goal-text matching.
+
+    The outcome is the capability's ``provides`` (exactly one is required: more is ambiguous, none cannot
+    be planned), and the intent carries ``bind={outcome: capability}`` so the compiler binds that capability
+    even when other providers of the outcome exist. ``registry`` is anything with ``get(name)``; pass the
+    policy-scoped view so a capability the principal may not use is unplannable (``CompileError``)."""
+
+    def __init__(self, registry):
+        self.registry = registry
+
+    def resolve(self, capability: str):
+        """The CapabilitySpec for ``capability`` and its single outcome, or raise CompileError."""
+        from .compiler import CompileError
+        cap = self.registry.get(capability) if capability else None
+        if cap is None:
+            raise CompileError(f"explicit capability {capability!r} is not registered (or not permitted)")
+        provides = list(getattr(cap, "provides", None) or [])
+        if len(provides) != 1:
+            raise CompileError(f"explicit capability {capability!r} provides {provides!r}; "
+                               "exactly one outcome is required to plan it unambiguously")
+        return cap, provides[0]
+
+    def plan(self, mission_id: str, goal: str, context: dict) -> ExecutionIntent:
+        capability = (context or {}).get("capability") or ""
+        cap, outcome = self.resolve(capability)
+        return ExecutionIntent(
+            mission_id=mission_id, rationale=f"explicit capability: {cap.name}",
+            steps=[IntentStep(outcome=outcome, need=goal or cap.name,
+                              value_hint=getattr(cap, "estimated_value", "") or "medium")],
+            bind={outcome: cap.name})
+
+
 class ModelPlanner:
     """Ask an injected thinking model for the intent as JSON, then validate into ExecutionIntent.
     Falls back to TemplatePlanner if the model output can't be parsed (planning must not crash)."""

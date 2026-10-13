@@ -33,7 +33,9 @@ class MissionRuntimeLauncher:
         after compilation and BEFORE anything runs; the launch is refused (:class:`LaunchRefused`, the
         mission is created-and-cancelled with a ``MissionCancelled`` event, nothing executes) unless the
         plan binds the selected capability AND binds no side-effecting capability the decision did not
-        select. Read-only extras are allowed. Fail-closed: a runtime whose plan cannot be inspected is
+        select. Read-only extras are allowed. When the request names a capability the registry resolves
+        unambiguously, the mission is planned DIRECTLY onto it (``ExplicitCapabilityPlanner``) instead of by
+        goal text; the decision's ``inputs`` are delivered to that capability's node only. Fail-closed: a runtime whose plan cannot be inspected is
         refused. The delegating principal and ``intervention_id`` are carried onto the mission."""
         import inspect
 
@@ -48,6 +50,12 @@ class MissionRuntimeLauncher:
         for key, val in (("principal", principal), ("intervention_id", request.intervention_id)):
             if val and (key in accepted or has_var_kw):
                 kwargs[key] = val
+        explicit = False
+        if request.capability and (("selected_capability" in accepted) or has_var_kw):
+            kwargs["selected_capability"] = request.capability
+            explicit = self._explicit_binding(request) and ("bind_selected" in accepted or has_var_kw)
+            if explicit:
+                kwargs["bind_selected"] = True
         mission = self.runtime.create_mission(request.goal, **kwargs)
         mid = getattr(mission, "id", "") or getattr(mission, "mission_id", "")
         if request.capability:
@@ -56,6 +64,22 @@ class MissionRuntimeLauncher:
                 self._cancel(mid, problem)
                 raise LaunchRefused(problem)
         return mid
+
+    def _explicit_binding(self, request: MissionRequest) -> bool:
+        """May this request be planned by capability instead of by goal text? When the runtime exposes a
+        registry the named capability must resolve to exactly one outcome, else the launch is REFUSED before
+        any mission exists. A runtime without an inspectable registry keeps the goal-text path (and the
+        post-compilation plan inspection remains the fail-closed guard)."""
+        registry = getattr(self.runtime, "registry", None)
+        if registry is None or not hasattr(registry, "get"):
+            return False
+        from agentic_os.mission.compiler import CompileError
+        from agentic_os.mission.planner import ExplicitCapabilityPlanner
+        try:
+            ExplicitCapabilityPlanner(registry).resolve(request.capability)
+        except CompileError as e:
+            raise LaunchRefused(f"cannot plan selected capability {request.capability!r}: {e}") from e
+        return True
 
     def _plan_problem(self, mid: str, request: MissionRequest) -> str:
         plans = getattr(self.runtime, "_plans", None)

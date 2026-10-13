@@ -87,3 +87,7 @@ Copy the secrets file (or the Vault path) to an encrypted location; do not commi
 - **401 on console real actions**: missing/stale `OUTREACH_BASIC_AUTH`. Send
   `agentic-os secrets get OUTREACH_BASIC_AUTH --as-header`'s header and make sure the container received the variable.
 - **Vault errors**: `init` never falls back to local storage; fix `VAULT_ADDR`/`VAULT_TOKEN` or pass `--backend file`.
+
+## Mission input values and the ledger
+
+`MissionCreated` records a launcher-selected mission's input KEYS and an `inputs_sha256` digest, never the values (inputs may hold customer data, and the ledger is append-only). `MissionRuntime.rehydrate(mission_id, inputs=...)` must be re-supplied the values and verifies them against the digest (mismatch raises `ReplayError`); without them the selected node fails with `inputs_unavailable` rather than running with partial scope. Setting `AGENTIC_OS_RECORD_MISSION_INPUT_VALUES=1` records the values in the immutable ledger instead (replay becomes self-contained, but the values can no longer be erased and appear in anything that projects the ledger); enable it only for non-personal inputs.

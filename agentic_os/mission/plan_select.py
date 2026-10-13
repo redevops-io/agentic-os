@@ -82,6 +82,8 @@ class ActivePlanner:
         single outcome to a non-default admissible provider. One-swap, not the cross-product."""
         prefers: list[tuple[str, dict]] = [("default", {})]
         for step in intent.steps:
+            if step.outcome in (getattr(intent, "bind", None) or {}):
+                continue                          # explicitly bound: no alternative providers
             ranked = costmod.rank_candidates(self.registry.providing(step.outcome))
             for alt in ranked[1:]:                    # skip the default (rank-best) provider
                 prefers.append((f"{step.outcome}={alt.name}", {step.outcome: alt.name}))
