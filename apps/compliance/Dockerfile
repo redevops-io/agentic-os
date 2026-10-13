@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # The agentic-os KERNEL is pinned HERE (single source, overridable) rather than in requirements.txt, so
 # the image tracks a known kernel tag instead of a stale commit. Override at build time, e.g.
 #   docker build --build-arg KERNEL_REF=main .   (or a newer release tag)
-ARG KERNEL_REF=v0.3.24
+ARG KERNEL_REF=v0.3.25
 RUN apt-get update && apt-get install -y --no-install-recommends git \
  && pip install --no-cache-dir "agentic-os @ https://github.com/redevops-io/agentic-os/archive/${KERNEL_REF}.tar.gz" \
  && apt-get purge -y git && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
@@ -26,9 +26,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 # dir name (apps/compliance) has a hyphen, not a valid module name. Re-home under a valid pkg.
 COPY *.py ./compliance/
 RUN touch compliance/__init__.py
-# Bake in the real scan artifacts + SCAP content so the image is self-contained.
-COPY results/ ./results/
-COPY content/ ./content/
+# results/, content/ and evidence/ are gitignored / runtime-written (absent on a clean checkout), so they
+# are created here rather than COPY'd; mount or seed them at runtime (SCAP_RESULTS points at results/).
+RUN mkdir -p results content evidence
 
 # Point app.py at the baked-in results (override via env / mount for a live host path).
 ENV SCAP_RESULTS=/app/results/scan-results.xml \
