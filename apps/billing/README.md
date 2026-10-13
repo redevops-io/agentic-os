@@ -169,3 +169,19 @@ missing `payment_due_date`, absent `payment_overdue` flag (derived), unavailable
 Limits: overcharge detection is not derivable from Lago invoices (always false, so refunds are not proposed by the loop);
 the runtime and parked missions are in-memory (a restart loses a parked approval; intervention/outcome/observation
 stores survive with `BILLING_STATE_DIR`); Lago has no `paid_at`, so a payment is dated by when we observed it.
+
+## Operating notes (approval gating, durability)
+
+- **Approval gate lives in `core`.** `chase_overdue`, `chase_invoices`, `create_subscription`, `cancel_subscription`
+  and `stage_refund` stage a `pending_approval` preview unless handed a runtime-delivered `_approval`. The app's own
+  routes (`/agent/run`) obtain an approval only when the request carries valid operator Basic auth
+  (`OPERATOR_BASIC_AUTH=user:pass`, or `OUTREACH_BASIC_AUTH`); unset => nobody is the operator (fail closed).
+  Console/LLM tool calls never carry the marker.
+- `billing.dunning` requires `account_id` (+ optional `invoice_ids`); unscoped calls are refused `scope_required`
+  unless `all_accounts: true` and an approval are present. Every executed path reads the invoices back from Lago.
+- **Durable closed loop.** Set `BILLING_STATE_DIR` to persist interventions, outcomes, observations, promoted
+  policies and the mission event log (`missions.jsonl`); parked missions are rehydrated at startup so
+  `POST /api/decide/{mission_id}/approve` works after a restart.
+- `POST /api/outcomes/observe` and `POST /api/policy/refit` (operator auth). `BILLING_OUTCOME_INTERVAL_S=<seconds>`
+  enables a background outcome observer (default off). Refit always goes through the promotion gate.
+- Narration uses `agentic_os.app.llm.governed_text` (CUSTOMER_CONFIDENTIAL, fail closed to deterministic text).

@@ -12,6 +12,10 @@
                                   + OutcomeLink.
     refit_policy                  the ONLY way the utility model is refit: policy_promotion's held-out gate,
                                   apply=True required. Never called per request.
+    resume_parked                 after a restart, rehydrate the missions parked on a human gate from the durable
+                                  mission event log (BILLING_STATE_DIR/missions.jsonl), re-supplying each
+                                  mission's scope inputs from this app's own intervention store (the ledger holds
+                                  only an inputs digest, which rehydrate verifies) so ``approve`` keeps working.
 """
 from __future__ import annotations
 
@@ -30,10 +34,11 @@ from agentic_os.mission.operator_sdk import LocalOperatorClient
 from agentic_os.mission.planner import TemplatePlanner
 from agentic_os.mission.registry import CapabilityRegistry
 from agentic_os.mission.runtime import MissionRuntime
-from agentic_os.mission.types import ExecutionIntent, IntentStep
+from agentic_os.mission.store import EventStore
+from agentic_os.mission.types import ExecutionIntent, IntentStep, MissionState
 from agentic_os.outcome_derivation import derive_and_persist
 from agentic_os.outcome_store import FileOutcomeStore, InMemoryOutcomeStore
-from agentic_os.policy_promotion import (STATIC_POLICY, PolicyRegistry, PolicyVersion, PromotionGate,
+from agentic_os.policy_promotion import (STATIC_POLICY, FilePolicyStore, PolicyRegistry, PolicyVersion, PromotionGate,
                                          PromotionReport, run_promotion_cycle)
 from agentic_os.priority_engine import PriorityPolicy, SelectedAction, select_action
 
@@ -107,36 +112,92 @@ class ClosedLoop:
     clock: Callable[[], float] = time.time
     launched: Dict[str, dict] = field(default_factory=dict)          # mission_id -> {intervention_id, account, ...}
     dunning_results: Dict[str, dict] = field(default_factory=dict)   # mission_id -> core.chase_invoices result
+    state_dir: str = ""
+    resumed: Dict[str, Any] = field(default_factory=dict)            # last resume_parked() report
+    lock: Any = field(default_factory=threading.RLock)               # serialises observe/refit (scheduler vs HTTP)
 
 
-def build_billing_runtime(on_dunning=None):
-    """(MissionRuntime, BillingPlanner) built from this app's operator via the in-process LocalOperatorClient."""
+def build_billing_runtime(on_dunning=None, store=None):
+    """(MissionRuntime, BillingPlanner) built from this app's operator via the in-process LocalOperatorClient.
+    ``store`` is the mission EventStore (durable JSONL when given, so parked missions survive a restart)."""
     op = build_billing_operator(on_dunning=on_dunning)
     registry = CapabilityRegistry()
     registry.register(op.manifest)
     planner = BillingPlanner()
-    rt = MissionRuntime(registry, Executor(LocalOperatorClient({op.name: op})), planner=planner)
+    rt = MissionRuntime(registry, Executor(LocalOperatorClient({op.name: op})), store=store, planner=planner)
     return rt, planner
 
 
-def build_loop(state_dir: Optional[str] = None, *, clock: Callable[[], float] = time.time) -> ClosedLoop:
-    """Wire a ClosedLoop. ``state_dir`` (or $BILLING_STATE_DIR) => durable JSONL stores; else in-memory."""
+def build_loop(state_dir: Optional[str] = None, *, clock: Callable[[], float] = time.time,
+               resume: bool = True) -> ClosedLoop:
+    """Wire a ClosedLoop. ``state_dir`` (or $BILLING_STATE_DIR) => durable JSONL stores for interventions,
+    outcomes, observations, promoted policies AND the mission event log (so a restart can still approve a
+    parked mission); else everything is in-memory. With a state dir and ``resume`` the parked missions are
+    rehydrated before the loop is returned (see :func:`resume_parked`)."""
     state_dir = state_dir if state_dir is not None else os.environ.get("BILLING_STATE_DIR", "")
     results: Dict[str, dict] = {}
-    rt, planner = build_billing_runtime(on_dunning=lambda mid, res: results.__setitem__(str(mid), res))
+    mission_store = None
+    if state_dir:
+        os.makedirs(state_dir, exist_ok=True)
+        mission_store = EventStore(path=os.path.join(state_dir, "missions.jsonl"))
+    rt, planner = build_billing_runtime(on_dunning=lambda mid, res: results.__setitem__(str(mid), res),
+                                        store=mission_store)
     launcher = ScopedLauncher(rt)
     launcher.planner = planner
+    policies = PolicyRegistry()
     if state_dir:
         interventions = FileInterventionStore(os.path.join(state_dir, "interventions.jsonl"))
         outcomes = FileOutcomeStore(os.path.join(state_dir, "outcomes.jsonl"))
         observations = observe.FileObservationStore(os.path.join(state_dir, "observations.jsonl"))
+        policies = PolicyRegistry(store=FilePolicyStore(os.path.join(state_dir, "policies.jsonl")))
     else:
         from agentic_os.observation_store import InMemoryObservationStore
         interventions, outcomes, observations = (InMemoryInterventionStore(), InMemoryOutcomeStore(),
                                                  InMemoryObservationStore())
-    return ClosedLoop(runtime=rt, launcher=launcher, interventions=interventions, outcomes=outcomes,
-                      observations=observations, ingestor=observe.build_ingestor(observations),
-                      clock=clock, dunning_results=results)
+    lp = ClosedLoop(runtime=rt, launcher=launcher, interventions=interventions, outcomes=outcomes,
+                    observations=observations, ingestor=observe.build_ingestor(observations),
+                    policies=policies, clock=clock, dunning_results=results, state_dir=state_dir)
+    if state_dir and resume:
+        lp.resumed = resume_parked(lp)
+    return lp
+
+
+def _scope_inputs(rec: InterventionRecord) -> dict:
+    """The mission inputs a decision launched with, rebuilt from the app's OWN intervention record (the
+    mission ledger stores only their digest): the account (``billing:<account>``) and, for dunning, exactly the
+    ``invoice:<id>`` evidence refs in their original order. ``rehydrate`` verifies the digest, so a record that
+    no longer matches is refused rather than replayed with different scope."""
+    account = rec.opportunity_id.split(":", 1)[1]
+    if rec.selected_action == "dunning":
+        return {"account_id": account,
+                "invoice_ids": [r.split(":", 1)[1] for r in rec.evidence_refs if r.startswith("invoice:")]}
+    return {"account_id": account}
+
+
+def resume_parked(loop: ClosedLoop) -> Dict[str, Any]:
+    """Rehydrate every mission still PARKED on a human gate (``WAITING_HUMAN``) from the durable mission log so
+    ``approve_mission`` works after a restart. Returns ``{"resumed": [mission_ids], "skipped": {id: reason}}``;
+    a mission that cannot be replayed faithfully (digest mismatch, plan drift, ...) is skipped with the reason,
+    never run with different scope. Safe to call repeatedly (already-loaded missions are left alone)."""
+    report: Dict[str, Any] = {"resumed": [], "skipped": {}}
+    repo = loop.runtime.repo
+    for rec in latest_records(loop.interventions):
+        mid = rec.mission_id
+        if not mid or rec.executed_at is not None or mid in loop.launched:
+            continue
+        if repo.state(mid) is not MissionState.WAITING_HUMAN or not repo.pending_human(mid):
+            continue
+        inputs = _scope_inputs(rec)
+        try:
+            with loop.launcher.planner.scoped(inputs):
+                loop.runtime.rehydrate(mid, inputs=inputs)
+        except Exception as e:  # noqa: BLE001 — ReplayError / ReplayDivergence / UnrecoverableAuthority ...
+            report["skipped"][mid] = f"{type(e).__name__}: {e}"
+            continue
+        loop.launched[mid] = {"intervention_id": rec.intervention_id, "account": inputs["account_id"],
+                              "inputs": dict(inputs)}
+        report["resumed"].append(mid)
+    return report
 
 
 # ── interventions: latest-wins projection over the append-only store ───────────────────────────────────
@@ -342,6 +403,6 @@ def describe_cycle(c: DecisionCycle) -> dict:
             "inputs": dict(c.inputs) if c.mission_id else None}
 
 
-__all__ = ["BillingPlanner", "ClosedLoop", "DecisionCycle", "approve_mission", "billing_reward_map",
+__all__ = ["resume_parked", "BillingPlanner", "ClosedLoop", "DecisionCycle", "approve_mission", "billing_reward_map",
            "build_billing_runtime", "build_loop", "describe_cycle", "latest_records", "mark_executed",
            "observe_outcomes", "refit_policy", "run_decision_cycle"]

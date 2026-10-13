@@ -132,3 +132,7 @@ docker run --rm -p 8209:8209 \
   - `"close"` → **approval-gated** (`approval_required: ["close"]`); returns
     `{"status":"pending_approval", ...}` and never posts the Period Closing Voucher without
     a human sign-off (mirrors the billing `refund` gate).
+
+## Operating notes
+
+Writes are approval-gated in `core`; the app's routes execute them only for requests with valid operator Basic auth (`OPERATOR_BASIC_AUTH=user:pass`, fail closed when unset). Narration goes through `agentic_os.app.llm.governed_text` (fail closed).
