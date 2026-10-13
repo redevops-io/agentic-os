@@ -93,6 +93,8 @@ class _FakeClient:
     def put(self, url, headers=None, json=None):
         _FakeClient.puts.append(url)
         _FakeClient.put_bodies.append((url, json or {}))
+        if "Journal%20Entry" in url:        # ERPNext echoes the document with its new docstatus
+            return _Resp(200, {"data": {"docstatus": (json or {}).get("docstatus")}})
         return _Resp(200, {"data": {}})
 
     def post(self, url, headers=None, json=None):
@@ -132,22 +134,68 @@ def test_capabilities_manifest(client):
     assert "close_staged" in caps["books.close"]["provides"]
 
     # onboarding: record_revenue provides revenue_recorded, has a compensating undo,
-    # is NOT approval-gated (the saga backs it out rather than gating it).
+    # is approval-gated (it posts to the GL) and the saga can still back it out.
     rr = caps["books.record_revenue"]
     assert "revenue_recorded" in rr["provides"]
     assert rr["undo"] == "books.reverse_entry"
-    assert rr["approval_required"] is False
+    assert rr["approval_required"] is True
     assert rr["side_effecting"] is True
-    # the compensating action is present too.
+    # the compensating action is present too, and gated.
     assert caps["books.reverse_entry"]["side_effecting"] is True
+    assert caps["books.reverse_entry"]["approval_required"] is True
+
+
+APPR = {"_approval": {"approved": True}}
+
+
+def _op(cap, inputs):
+    """Trusted in-process path: the runtime delivers `_approval` on a resumed, approved node."""
+    return build_books_operator().invoke(cap, {**inputs, **APPR})
+
+
+BOOKS_GATED = {"books.record_revenue": {"subscription": "Pro plan", "amount": 250},
+               "books.reverse_entry": {"entry": "ACC-JV-2026-00001"}}
+
+
+@pytest.mark.parametrize("cap", sorted(BOOKS_GATED))
+def test_books_gated_stage_without_approval_in_process_and_forged_http(client, cap):
+    assert build_books_operator().invoke(cap, dict(BOOKS_GATED[cap]))["status"] == "pending_approval"
+    for extra in ({}, APPR):
+        res = client.post("/invoke", json={"capability": cap, "inputs": {**BOOKS_GATED[cap], **extra}}).json()["result"]
+        assert res["status"] == "pending_approval" and res["executed"] is False
+    assert _FakeClient.posts == [] and _FakeClient.puts == []        # ERPNext never written
+
+
+def test_reverse_entry_only_claims_reversed_when_doc_transitions(monkeypatch):
+    # non-2xx -> error, not reversed
+    monkeypatch.setattr(_FakeClient, "put", lambda self, url, headers=None, json=None: _Resp(417, {}))
+    res = _op("books.reverse_entry", {"entry": "X"})
+    assert res["status"] == "error" and res["reversed"] is False
+    # 2xx but the document did not become Cancelled (docstatus still 1) -> not reversed
+    monkeypatch.setattr(_FakeClient, "put",
+                        lambda self, url, headers=None, json=None: _Resp(200, {"data": {"docstatus": 1}}))
+    res = _op("books.reverse_entry", {"entry": "X"})
+    assert res["status"] == "error" and res["reversed"] is False
+    # 2xx with no docstatus echoed, doc re-read shows Cancelled -> reversed
+    monkeypatch.setattr(_FakeClient, "put", lambda self, url, headers=None, json=None: _Resp(200, {"data": {}}))
+    monkeypatch.setattr(_FakeClient, "get", lambda self, url, headers=None, params=None: _Resp(200, {"data": {"docstatus": 2}}))
+    assert _op("books.reverse_entry", {"entry": "X"})["reversed"] is True
+
+
+def test_record_revenue_reports_error_when_submit_fails(monkeypatch):
+    monkeypatch.setattr(_FakeClient, "put", lambda self, url, headers=None, json=None: _Resp(500, {}))
+    res = _op("books.record_revenue", {"amount": 5})
+    assert res["status"] == "error" and res["revenue_recorded"] is False
+
+
+def test_categorize_reports_error_on_failed_put(monkeypatch):
+    monkeypatch.setattr(_FakeClient, "put", lambda self, url, headers=None, json=None: _Resp(403, {}))
+    res = build_books_operator().invoke("books.categorize", {})
+    assert res["status"] == "error" and res["result"]["erpnext_status"] == 403
 
 
 def test_invoke_record_revenue_posts_journal_entry(client):
-    res = client.post(
-        "/invoke",
-        json={"capability": "books.record_revenue",
-              "inputs": {"subscription": "Pro plan", "amount": 250}},
-    ).json()["result"]
+    res = _op("books.record_revenue", {"subscription": "Pro plan", "amount": 250})
     assert res["status"] == "done" and res["action"] == "record_revenue"
     assert res["revenue_recorded"] is True
     assert res["entry"] == "ACC-JV-2026-00001"  # name echoed back from the created doc
@@ -167,11 +215,7 @@ def test_invoke_record_revenue_posts_journal_entry(client):
 
 
 def test_invoke_reverse_entry_cancels_journal_entry(client):
-    res = client.post(
-        "/invoke",
-        json={"capability": "books.reverse_entry",
-              "inputs": {"entry": "ACC-JV-2026-00001"}},
-    ).json()["result"]
+    res = _op("books.reverse_entry", {"entry": "ACC-JV-2026-00001"})
     assert res["status"] == "done" and res["action"] == "reverse_entry"
     assert res["reversed"] is True
     # the compensating action issued a cancel PUT against that Journal Entry.
@@ -182,17 +226,11 @@ def test_invoke_reverse_entry_cancels_journal_entry(client):
 
 def test_record_revenue_then_reverse_is_a_saga(client):
     """The onboarding mission's happy path then its compensating undo, end to end."""
-    rec = client.post(
-        "/invoke",
-        json={"capability": "books.record_revenue", "inputs": {"amount": 99}},
-    ).json()["result"]
+    rec = _op("books.record_revenue", {"amount": 99})
     entry = rec["entry"]
     assert len(_FakeClient.posts) == 1 and entry
 
-    rev = client.post(
-        "/invoke",
-        json={"capability": "books.reverse_entry", "inputs": {"entry": entry}},
-    ).json()["result"]
+    rev = _op("books.reverse_entry", {"entry": entry})
     assert rev["reversed"] is True
     # record_revenue SUBMITTED the entry (docstatus=1, posts to GL) then reverse_entry CANCELLED it
     # (docstatus=2) — two PUTs to the same voucher, the full saga round-trip.

@@ -256,6 +256,7 @@ def categorize(blurb: Callable[[str], str | None] | None = None) -> dict:
     payload = {"reference_number": f"CATEGORIZED:{category}"}
     if t["direction"] == "in":
         payload["party_type"] = "Customer"
+    put_ok = False
     try:
         with httpx.Client(timeout=12.0) as client:
             resp = client.put(
@@ -263,13 +264,19 @@ def categorize(blurb: Callable[[str], str | None] | None = None) -> dict:
                 headers=_headers(), json=payload,
             )
             result["erpnext_status"] = resp.status_code
+            put_ok = 200 <= resp.status_code < 300
             result["action"] = (
                 f"categorized {t['name']} → {category}"
-                if resp.status_code == 200
+                if put_ok
                 else f"update returned {resp.status_code}"
             )
     except Exception as e:
         result["action"] = f"error: {e}"
+        result["error"] = str(e)
+    if not put_ok:                      # never report "done" for a failed ERPNext write
+        return {"status": "error", "action": "categorize", "result": result,
+                "error": result.get("error") or f"ERPNext returned HTTP {result.get('erpnext_status')}",
+                "summary": f"Could NOT categorize {t['name']} ({t['desc']}): {result['action']}."}
 
     reasoning = blurb(
         "You are a bookkeeping agent for a wealth-management firm. In ONE sentence, "
@@ -506,7 +513,7 @@ def record_revenue(body: dict | None = None) -> dict:
                 headers=_headers(), json=payload,
             )
             erpnext_status = resp.status_code
-            doc = (resp.json() or {}).get("data", {}) if resp.status_code < 400 else {}
+            doc = (resp.json() or {}).get("data", {}) if 200 <= resp.status_code < 300 else {}
             entry = doc.get("name")
             # SUBMIT it (docstatus=1) so it actually POSTS TO THE GENERAL LEDGER. A Journal Entry created
             # via the resource API is a DRAFT (docstatus=0) and records NOTHING in the GL — so without this
@@ -518,12 +525,12 @@ def record_revenue(body: dict | None = None) -> dict:
                     headers=_headers(), json={"docstatus": 1},   # 1 = Submitted → posts to the GL
                 )
                 erpnext_status = sub.status_code
-                submitted = sub.status_code < 400
+                submitted = 200 <= sub.status_code < 300
     except Exception as e:  # network / auth hiccup — surface, don't crash the saga
         erpnext_status = f"error: {e}"
 
     return {
-        "status": "done",
+        "status": "done" if submitted else "error",
         "action": "record_revenue",
         "revenue_recorded": submitted,            # true only if the JE was actually SUBMITTED (posted)
         "entry": entry,
@@ -548,23 +555,36 @@ def reverse_entry(body: dict | None = None) -> dict:
     body = body or {}
     name = body.get("entry") or body.get("name")
     erpnext_status = None
+    reversed_ok = False
     if name:
         try:
             with httpx.Client(timeout=12.0) as client:
-                resp = client.put(
-                    f"{ERPNEXT_URL}/api/resource/Journal%20Entry/{name}",
-                    headers=_headers(), json={"docstatus": 2},  # 2 = Cancelled
-                )
+                url = f"{ERPNEXT_URL}/api/resource/Journal%20Entry/{name}"
+                resp = client.put(url, headers=_headers(), json={"docstatus": 2})  # 2 = Cancelled
                 erpnext_status = resp.status_code
+                if 200 <= resp.status_code < 300:
+                    # Claim `reversed` only if the document ACTUALLY transitioned to Cancelled: read the
+                    # docstatus off the PUT response, else re-read the doc.
+                    def _ds(r):
+                        try:
+                            return ((r.json() or {}).get("data") or {}).get("docstatus")
+                        except Exception:  # noqa: BLE001
+                            return None
+                    ds = _ds(resp)
+                    if ds is None:
+                        ds = _ds(client.get(url, headers=_headers()))
+                    reversed_ok = ds == 2
         except Exception as e:  # noqa: BLE001
             erpnext_status = f"error: {e}"
 
     return {
-        "status": "done",
+        "status": "done" if reversed_ok else "error",
         "action": "reverse_entry",
-        "reversed": True,
+        "reversed": reversed_ok,
         "entry": name,
         "erpnext_status": erpnext_status,
-        "summary": f"Reversed revenue Journal Entry {name or '(none supplied)'} "
-                   "— subscription revenue backed out.",
+        "summary": (f"Reversed revenue Journal Entry {name} — subscription revenue backed out."
+                    if reversed_ok else
+                    f"Could NOT reverse Journal Entry {name or '(none supplied)'} "
+                    f"(ERPNext status {erpnext_status}; document not confirmed Cancelled)."),
     }
