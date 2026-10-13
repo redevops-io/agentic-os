@@ -71,6 +71,12 @@ def scan_target() -> dict:
             "note": "scan target not recorded; do not assume the host was scanned"}
 
 
+def _ssg_verification(t: dict) -> dict:
+    """Which SSG source the datastream came from and whether its tarball hash was verified (recorded by scan.sh)."""
+    return {"version": t.get("ssg_version", "unknown"), "tarball_sha256": t.get("ssg_tarball_sha256"),
+            "hash_status": t.get("ssg_hash_status", "unknown")}
+
+
 def _target_phrase(t: dict) -> str:
     if t.get("target") == "host":
         return f"host {t.get('hostname', '')}".strip()
@@ -284,6 +290,7 @@ def scan() -> dict:
         "action": "scan",
         "rc": rc,
         "target": scan_target(),
+        "ssg": _ssg_verification(scan_target()),
         "pass_rate": data["kpis"][0]["value"],
         "passing": c["pass"],
         "failing": c["fail"],

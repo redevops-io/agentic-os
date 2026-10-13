@@ -18,7 +18,8 @@ imports config + actions from there and keeps the FastAPI surface + the optional
 Endpoints:
   POST /request   {"type":"access|delete|correct|opt_out","email":"..."}
                   -> opens a PENDING request (same as /intake); body `verified`/`confirm` are ignored.
-  GET  /verify?id=&token=   redeem the emailed single-use token (the ONLY identity proof)
+  GET  /verify?id=&token=   confirm page for the emailed link (NO state change: scanners can't burn the token)
+  POST /verify    id+token (form or JSON) redeem the single-use token (the ONLY identity proof)
   GET  /export?id=&token=   single-use, short-TTL access export (when no mailer delivered it)
   POST /fulfil/{id}         operator Basic auth: execute a VERIFIED delete/correct (verify-after-act)
   GET  /          MD3 dashboard: open/closed requests, SLA timers, per-system coverage
@@ -71,6 +72,94 @@ def _strip_approval(obj):
 
 
 app = FastAPI(title=f"agentic-privacy ({TENANT})")
+
+
+# --- rate limiting (in-memory; per replica) -----------------------------------
+# Per-client-IP token bucket on the public endpoints + a per-email hourly cap on /intake (stops mail-bombing a
+# victim's address with verification emails). The client IP comes from the socket peer unless PRIVACY_TRUST_PROXY
+# is true, in which case the first X-Forwarded-For hop is used (set it ONLY behind a proxy that overwrites it).
+import threading as _threading
+import time as _time
+from collections import deque as _deque
+
+RATE_BURST = 10
+
+
+def _rate_per_min() -> float:
+    try:
+        return float(os.environ.get("PRIVACY_RATE_PER_MIN", "20"))
+    except ValueError:
+        return 20.0
+
+
+def _intake_per_hour() -> int:
+    try:
+        return int(os.environ.get("PRIVACY_INTAKE_PER_EMAIL_HOUR", "5"))
+    except ValueError:
+        return 5
+
+
+_RL_LOCK = _threading.Lock()
+_BUCKETS: dict[str, list] = {}          # ip -> [tokens, last_ts]
+_EMAIL_HITS: dict[str, "_deque[float]"] = {}
+_RL_MAX_KEYS = 50_000
+
+
+def _reset_rate_limits() -> None:
+    with _RL_LOCK:
+        _BUCKETS.clear()
+        _EMAIL_HITS.clear()
+
+
+def _client_ip(request: Request) -> str:
+    if core._truthy("PRIVACY_TRUST_PROXY"):
+        xff = request.headers.get("x-forwarded-for", "")
+        if xff.split(",")[0].strip():
+            return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _take(key: str, now: float | None = None) -> float:
+    """Take one token for `key`; return 0.0 if allowed else the seconds until a token is available."""
+    now = _time.monotonic() if now is None else now
+    rate = _rate_per_min() / 60.0
+    with _RL_LOCK:
+        if len(_BUCKETS) > _RL_MAX_KEYS:
+            _BUCKETS.clear()
+        tokens, last = _BUCKETS.get(key, [float(RATE_BURST), now])
+        tokens = min(float(RATE_BURST), tokens + (now - last) * rate)
+        if tokens >= 1.0:
+            _BUCKETS[key] = [tokens - 1.0, now]
+            return 0.0
+        _BUCKETS[key] = [tokens, now]
+        return (1.0 - tokens) / rate if rate > 0 else 60.0
+
+
+def _limited(retry_after: float, what: str = "rate limit exceeded") -> JSONResponse:
+    secs = max(1, int(retry_after + 0.999))
+    return JSONResponse({"status": "error", "error": what, "retry_after": secs}, status_code=429,
+                        headers={"Retry-After": str(secs), "Cache-Control": "no-store"})
+
+
+def _rate_check(request: Request) -> JSONResponse | None:
+    wait = _take(_client_ip(request))
+    return _limited(wait) if wait else None
+
+
+def _email_cap(email: str, now: float | None = None) -> float:
+    """Per-email intake cap per rolling hour. Returns 0.0 if allowed (and records the hit) else seconds to wait."""
+    now = _time.monotonic() if now is None else now
+    cap = _intake_per_hour()
+    with _RL_LOCK:
+        if len(_EMAIL_HITS) > _RL_MAX_KEYS:
+            _EMAIL_HITS.clear()
+        q = _EMAIL_HITS.setdefault(email, _deque())
+        while q and now - q[0] >= 3600:
+            q.popleft()
+        if len(q) >= cap:
+            return 3600 - (now - q[0])
+        q.append(now)
+        return 0.0
 SUBTITLE = ("Data-subject / consumer requests (GDPR access & erasure, CCPA/CPRA delete & "
             "opt-out) fulfilled across every system — verified, audited, on the clock.")
 
@@ -306,6 +395,8 @@ def _public(resp: dict) -> dict:
 
 @app.post("/request")
 async def request_route(request: Request) -> JSONResponse:
+    if (limited := _rate_check(request)) is not None:
+        return limited
     try:
         body = _strip_approval(await request.json())
     except Exception:
@@ -368,6 +459,8 @@ def intake_form() -> str:
 
 @app.post("/intake")
 async def intake_submit(request: Request) -> JSONResponse:
+    if (limited := _rate_check(request)) is not None:
+        return limited
     try:
         body = _strip_approval(await request.json())
     except Exception:
@@ -376,6 +469,8 @@ async def intake_submit(request: Request) -> JSONResponse:
     rtype = (body.get("type") or "access").lower()
     if not email or "@" not in email:
         return JSONResponse({"status": "error", "error": "a valid email is required"}, status_code=400)
+    if (wait := _email_cap(email)):
+        return _limited(wait, "too many requests for this address; try again later")
     # intake agent (core): opens the DSAR, sends the verification email, audits + persists.
     return JSONResponse(_public(core.intake(email, rtype, str(request.base_url))))
 
@@ -403,24 +498,56 @@ def _do_verify(id: str, token: str) -> str:
     return _verify_page(msg, True)
 
 
-@app.get("/verify", response_class=HTMLResponse)
-def verify(id: str = "", token: str = "") -> str:
-    """Redeem the emailed single-use token (request id + token). The only way identity is proven."""
-    return _do_verify(id, token)
+_PAGE_HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
 
 
-@app.post("/verify", response_class=HTMLResponse)
-async def verify_post(request: Request) -> str:
-    try:
-        body = _strip_approval(await request.json())
-    except Exception:  # noqa: BLE001
+def _confirm_page(id: str, token: str) -> str:
+    """GET /verify: a confirm page ONLY — no state change, so an email link-scanner / prefetcher cannot burn the
+    single-use token. The human clicks the button, which POSTs the id+token (hidden fields, unguessable secret =
+    CSRF-safe: a cross-site form cannot know the token)."""
+    form = ("<form method='post' action='/verify' style='margin:0'>"
+            f"<input type='hidden' name='id' value='{html.escape(id)}'>"
+            f"<input type='hidden' name='token' value='{html.escape(token)}'>"
+            "<button type='submit' style='padding:12px 18px;border-radius:12px;border:none;cursor:pointer;"
+            "background:var(--primary-container);color:var(--on-primary-container);font:500 15px var(--font-sans)'>"
+            "Confirm this is my request</button></form>")
+    return _verify_page("Please confirm that you made this privacy request." + "</p>" + form + "<p>", True, raw=True)
+
+
+@app.get("/verify")
+def verify(request: Request, id: str = "", token: str = "") -> HTMLResponse:
+    """Show the confirm page for the emailed link. Does NOT consume the token (see POST /verify)."""
+    if (limited := _rate_check(request)) is not None:
+        return limited
+    return HTMLResponse(_confirm_page(id, token), headers=_PAGE_HEADERS)
+
+
+@app.post("/verify")
+async def verify_post(request: Request) -> HTMLResponse:
+    """Redeem the emailed single-use token (request id + token). The only way identity is proven.
+    Accepts the confirm-page form (application/x-www-form-urlencoded) or JSON {"id","token"}."""
+    if (limited := _rate_check(request)) is not None:
+        return limited
+    raw = await request.body()
+    body: dict = {}
+    if "json" in request.headers.get("content-type", "").lower():
+        try:
+            body = _strip_approval(__import__("json").loads(raw or b"{}"))
+        except Exception:  # noqa: BLE001
+            body = {}
+    else:
+        from urllib.parse import parse_qs
+        body = {k: v[0] for k, v in parse_qs(raw.decode("utf-8", "replace")).items() if v}
+    if not isinstance(body, dict):
         body = {}
-    return _do_verify(str((body or {}).get("id", "")), str((body or {}).get("token", "")))
+    return HTMLResponse(_do_verify(str(body.get("id", "")), str(body.get("token", ""))), headers=_PAGE_HEADERS)
 
 
 @app.get("/export")
-def export(id: str = "", token: str = "") -> JSONResponse:
+def export(request: Request, id: str = "", token: str = "") -> JSONResponse:
     """Single-use, short-TTL access export, protected by request id + export token (issued only after /verify)."""
+    if (limited := _rate_check(request)) is not None:
+        return limited
     res = core.redeem_export(id, token)
     if not res.get("ok"):
         return JSONResponse({"status": "error", "error": "invalid, used, or expired"}, status_code=403,

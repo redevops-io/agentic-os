@@ -54,6 +54,7 @@ OpenSCAP (oscap + CIS SSG datastream)        app.py (FastAPI, :8208)
 | `app.py` | FastAPI service (port 8208): `/health`, `/api/activity`, `/` dashboard, `/report`, `/agent/run`. |
 | `requirements.txt` | fastapi, uvicorn, httpx. |
 | `Dockerfile` | slim-python image; bakes in `results/` + `content/`, serves on 8208. |
+| `env/ssg-0.1.81.sha256`, `env/README` | Pinned sha256 of the SSG release tarball (scan.sh fails closed on mismatch) and the exact steps to verify it. Both are COPY'd into the image next to `scan.sh`. |
 | `content/ssg-ubuntu2204-ds.xml` | The real SCAP Security Guide datastream (CIS Ubuntu 22.04). |
 | `results/scan-results.xml`, `results/report.html` | The real oscap output (cached scan + HTML report). |
 | `.env` | Written by `seed.py`: `SCAP_RESULTS`, `SCAP_REPORT`, `SCAP_PROFILE`. |
@@ -123,3 +124,13 @@ sudo docker run --rm \
 
 `content/` and `results/` (SCAP datastreams + scan output) are **fetched/generated at deploy time**, not
 vendored — they are multi-MB OpenSCAP artifacts. See the Dockerfile.
+
+## SSG hash provenance
+
+The pinned sha256 in `env/ssg-0.1.81.sha256` came from a **first download** of the release asset (trust on first
+use). It was cross-checked against the checksum the upstream release publishes (`...tar.gz.sha512` on
+https://github.com/ComplianceAsCode/content/releases, v0.1.81) and the GitHub asset digest, but that is the same
+release origin, not an independent signature. Re-verify with the steps in `env/README` whenever the version is
+bumped. Each scan records which hash was verified: the `compliance.scan` result carries
+`ssg: {version, tarball_sha256, hash_status}` (`verified` | `unpinned` | `mismatch-overridden` | `unknown`),
+written by `scan.sh` into `results/scan-target.json` when it fetches the datastream.

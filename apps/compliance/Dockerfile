@@ -26,6 +26,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 # dir name (apps/compliance) has a hyphen, not a valid module name. Re-home under a valid pkg.
 COPY *.py ./compliance/
 RUN touch compliance/__init__.py
+# POST /agent/run {"action":"scan"} shells out to scan.sh (core.SCAP_SCAN_SCRIPT = <pkg>/scan.sh), which fails
+# closed unless the pinned SSG hash file (env/ssg-<ver>.sha256, resolved relative to scan.sh) is present.
+COPY scan.sh ./compliance/scan.sh
+COPY env/ ./compliance/env/
+# scan.sh fetches the pinned SSG tarball with curl (python:3.12-slim ships without it).
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 # results/, content/ and evidence/ are gitignored / runtime-written (absent on a clean checkout), so they
 # are created here rather than COPY'd; mount or seed them at runtime (SCAP_RESULTS points at results/).
 RUN mkdir -p results content evidence

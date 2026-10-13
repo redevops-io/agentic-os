@@ -155,16 +155,38 @@ def compose_campaign(body: dict, llm: Llm | None = None) -> dict:
                "lists": [int(list_id)] if list_id else [], "type": "regular",
                "content_type": "html", "body": html_body, "messenger": "email"}
     created = {}
+    fetched: dict = {}
     try:
         with httpx.Client(timeout=20.0) as c:
             r = c.post(LISTMONK_API_URL + "/api/campaigns", headers=_headers(), json=payload)
             created = r.json().get("data", {}) if r.status_code in (200, 201) else {"_err": r.text[:200]}
+            # READ BACK by id: the create response is not proof of what Listmonk now holds.
+            if created.get("id"):
+                try:
+                    g = c.get(f"{LISTMONK_API_URL}/api/campaigns/{created['id']}", headers=_headers())
+                    fetched = (g.json().get("data") or {}) if g.status_code == 200 else {"_err": f"read-back HTTP {g.status_code}"}
+                except Exception as e:  # noqa: BLE001
+                    fetched = {"_err": f"read-back failed: {e}"}
     except Exception as e:
         created = {"_err": str(e)}
-    return {"status": "done" if created.get("id") else "partial", "action": "compose_campaign",
-            "campaign_id": created.get("id"), "name": payload["name"], "subject": payload["subject"],
-            "listmonk_status": created.get("status"), "requires": "human review + send in Listmonk",
-            "error": created.get("_err")}
+    out = {"action": "compose_campaign", "campaign_id": created.get("id"), "name": payload["name"],
+           "subject": payload["subject"], "requires": "human review + send in Listmonk"}
+    if not created.get("id"):
+        return {**out, "status": "partial", "campaign_verified": False, "campaign_drafted": False,
+                "listmonk_status": created.get("status"), "error": created.get("_err")}
+    real_status = fetched.get("status")
+    verified = (not fetched.get("_err") and str(fetched.get("id")) == str(created["id"]) and bool(real_status)
+                and (created.get("status") in (None, real_status)))
+    drafted = bool(verified and real_status == "draft")
+    err = None
+    if not verified:
+        err = (fetched.get("_err") or f"read-back disagrees with create response (created id={created.get('id')} "
+               f"status={created.get('status')!r}; fetched id={fetched.get('id')} status={real_status!r})")
+    elif not drafted:
+        err = f"campaign exists with status {real_status!r}, not 'draft' -- review it in Listmonk before anything sends"
+    return {**out, "status": "done" if drafted else "error", "campaign_verified": verified,
+            "campaign_drafted": drafted, "listmonk_status": real_status if verified else created.get("status"),
+            "error": err}
 
 
 def segment(body: dict, llm: Llm | None = None) -> dict:

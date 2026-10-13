@@ -40,11 +40,11 @@ def _dataset(sql: str):
     if "ORDER BY margin_pct DESC" in sql:         # _q_margin_by_service
         return _cols(["service_line", "revenue", "margin_pct"]), \
             [["Portfolio Management", 120000.0, 42], ["Financial Planning", 40000.0, 30]]
-    if "AS month" in sql and "AS jobs" in sql and "AS revenue" in sql:  # _q_revenue_by_month
-        return _cols(["month", "jobs", "revenue"]), \
+    if "AS month" in sql and "AS engagements" in sql and "AS revenue" in sql:  # _q_revenue_by_month
+        return _cols(["month", "engagements", "revenue"]), \
             [["2026-06", 10, 50000.0], ["2026-07", 12, 60000.0]]
     if "service_type AS service_line" in sql:     # _q_revenue_by_service
-        return _cols(["service_line", "jobs", "revenue"]), \
+        return _cols(["service_line", "engagements", "revenue"]), \
             [["Portfolio Management", 20, 120000.0], ["Financial Planning", 15, 40000.0]]
     return _cols([]), []
 
@@ -189,3 +189,6 @@ def test_answers_and_subtitle_label_data_as_synthetic(client):
     r = client.post("/invoke", json={"capability": "bi.ask",
                                      "inputs": {"question": "which service line makes the most margin?"}}).json()["result"]
     assert "synthetic" in r["data_note"]
+    assert r["demo_dataset"]["real_client_data"] is False and r["demo_dataset"]["kind"] == "synthetic"
+    r2 = client.post("/invoke", json={"capability": "bi.ask", "inputs": {"question": "revenue by service line"}}).json()["result"]
+    assert "AS jobs" not in r2["sql"] and "AS engagements" in r2["sql"]
