@@ -92,6 +92,17 @@ def test_n4_failed_verifier_blocks_commit():
     assert "result" not in str(rt._world(res.mission_id).snapshot())
 
 
+def test_n4_side_effecting_handler_must_return_declared_output_not_sdk_marker():
+    op = Operator("ref", [capability("ref.marker_only", lambda i: {"provider_receipt": "ok"},
+                                     provides=["result"], outputs={"result": "str"},
+                                     side_effecting=True)])
+    rt = _runtime(op)
+    res = _launch(rt, _candidate("ref.marker_only", "marker_only"))
+    mission = drive(rt, res.mission_id, approver=auto_approve_for_tests)
+    assert mission.state is not MissionState.SUCCEEDED          # no synthesised marker for a write
+    assert "provider_receipt" not in str(rt._world(res.mission_id).snapshot())
+
+
 def test_n4_passing_verifier_commits():
     op = Operator("ref", [capability("ref.goodwrite", lambda i: {"result": "ok"},
                                      provides=["result"], outputs={"result": "str"},

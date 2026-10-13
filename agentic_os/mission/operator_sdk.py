@@ -106,25 +106,21 @@ class Operator:
         except (TypeError, ValueError):
             arity = 1
         result = (fn(inputs, secrets or {}) if arity >= 2 else fn(inputs)) or {}
-        # Read-back contract (N4): the result must carry the capability's declared output keys so the
-        # Mission verifier (mission.verify) can read them back — otherwise a side effect is REJECTED after
-        # it has already committed. A handler that returns a NON-EMPTY operational dict without the declared
-        # semantic key has those keys MERGED IN as markers, so the manifest's output contract holds while
-        # the handler's own keys are PRESERVED — nesting the whole result under the key instead would break
-        # every /invoke consumer (app UIs, tests, the suite server) that reads the raw keys. An EMPTY result
-        # is left as-is so a handler that produced nothing still FAILS read-back (the N4 guarantee).
+        # Read-back contract (N4) — see below.
         spec = self._specs.get(capability)
         outs = list((getattr(spec, "outputs", None) or {}).keys()) if spec else []
-        # Markers are synthesised ONLY for a SUCCESSFUL side effect. A result that signals failure / denial /
-        # pending (an `error`, `executed: False`, `ok: False`, or a non-success `status`) is left as-is, so the
-        # Mission verifier reads the declared output key back as ABSENT and REJECTS — a LAPI 403 or a failed
-        # call can no longer be minted into `{key: True}` and read back as success. (Markers stay a fallback;
-        # the real N4 fix is a verifier that reads the core's state, tracked separately.)
-        # The classifier is shared with the Mission verifier (mission.verify.result_failed) so the two can
-        # never disagree about what a failure looks like.
+        # Compatibility markers are synthesised ONLY for successful NON-side-effecting reads. A side-effecting
+        # capability never receives a synthesised output key: it must return its own proof of the write (a real
+        # read-back), otherwise the Mission verifier reads the declared key back as ABSENT and REJECTS. A result
+        # that signals failure / denial / pending is likewise left as-is, so a LAPI 403 or a failed write can
+        # never be minted into `{key: True}` and read back as success.
+        # The failure classifier is shared with the Mission verifier (mission.verify.result_failed) so the two
+        # can never disagree about what a failure looks like.
         from .verify import result_failed  # noqa: PLC0415
         _failed = isinstance(result, dict) and result_failed(result)[0]
-        if isinstance(result, dict) and result and outs and not _failed and not any(k in result for k in outs):
+        can_synthesize_marker = bool(spec and not getattr(spec, "side_effecting", False))
+        if (can_synthesize_marker and isinstance(result, dict) and result and outs
+                and not _failed and not any(k in result for k in outs)):
             result = {**result, **{k: True for k in outs}}
         if idempotency_key and _dk is not None:
             self._seen[_dk] = result
