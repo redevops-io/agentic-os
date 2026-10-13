@@ -71,7 +71,7 @@ def test_kernel_pin_is_single_sourced_via_arg(name, dockerfile):
 
 
 # ---- kernel pin hardening ------------------------------------------------------------------------------
-MIN_KERNEL = (0, 3, 26)  # signed approval tokens + fail-closed verification (and pending_approval)
+MIN_KERNEL = (0, 3, 27)  # signed approval tokens + fail-closed verification (and pending_approval)
 REPO = Path(__file__).resolve().parents[1]
 
 
