@@ -48,6 +48,8 @@ class _FakeClient:
     and records every DELETE so we can prove the erasure fan-out ran (exactly once under a key)."""
     deleted: list[str] = []
     put: list[str] = []
+    gone: set = set()          # which fake records have been erased (find reflects it → real read-back)
+    stubborn: set = set()      # records whose DELETE "succeeds" but the record persists (residual)
 
     def __enter__(self):
         return self
@@ -56,12 +58,18 @@ class _FakeClient:
         return False
 
     def get(self, url, headers=None, params=None):
-        if "/api/resource/Lead" in url:
+        if "/api/resource/Lead" in url and "lead" not in _FakeClient.gone:
             return _Resp(200, {"data": [{"name": "LEAD-1", "lead_name": "Jane",
                                          "company_name": "Acme", "status": "Open",
                                          "email_id": SUBJECT}]})
         if "/api/resource/Contact" in url or "/api/resource/Communication" in url:
             return _Resp(200, {"data": []})
+        if "/api/resource/Lead" in url:
+            return _Resp(200, {"data": []})
+        if "/api/subscribers?query=" in url and "sub" in _FakeClient.gone:
+            return _Resp(200, {"data": {"results": []}})
+        if "/contacts/search" in url and "contact" in _FakeClient.gone:
+            return _Resp(200, {"payload": []})
         if "/api/subscribers?query=" in url:
             return _Resp(200, {"data": {"results": [
                 {"id": 7, "email": SUBJECT, "name": "Jane", "lists": [], "status": "enabled"}]}})
@@ -72,6 +80,9 @@ class _FakeClient:
 
     def delete(self, url, headers=None):
         _FakeClient.deleted.append(url)
+        for frag, key in (("/api/resource/Lead/", "lead"), ("/api/subscribers/", "sub"), ("/contacts/", "contact")):
+            if frag in url and key not in _FakeClient.stubborn:
+                _FakeClient.gone.add(key)
         return _Resp(204 if "/contacts/" in url else 200)
 
     def put(self, url, headers=None, json=None):  # noqa: A003 - mirror httpx api
@@ -91,6 +102,8 @@ class _FakeClient:
 def _fake_cores(monkeypatch, tmp_path):
     _FakeClient.deleted = []
     _FakeClient.put = []
+    _FakeClient.gone = set()
+    _FakeClient.stubborn = set()
     # redirect the file-backed store to a temp dir (persist/audit)
     monkeypatch.setattr(core, "DATA_DIR", str(tmp_path))
     # no real email sender in tests → intake verification degrades to log-only
@@ -113,6 +126,16 @@ def _fake_cores(monkeypatch, tmp_path):
         post=lambda *a, **k: _Resp(200, {}),
     ))
     yield
+
+
+def _verified_request(rtype="delete", email=SUBJECT):
+    """File a request and redeem its emailed token (the only identity proof) — returns the request id."""
+    rid = core.intake(email, rtype)["request_id"]
+    rec = core._get_request(rid)
+    rec.update(verified=True, status="verified")      # == what a successful /verify leaves behind
+    rec.pop("verify_token_hash", None)
+    core._persist(rec)
+    return rid
 
 
 @pytest.fixture()
@@ -138,34 +161,43 @@ def test_capabilities_manifest(client):
     # intake writes (opens a DSAR) but is NOT the gated capability
     assert caps["privacy.intake"]["side_effecting"] is True
     assert caps["privacy.intake"]["approval_required"] is False
-    # access + retention are read-only reports, never gated
-    assert caps["privacy.access"]["side_effecting"] is False
+    # access delivers an export (a side effect) but is not approval-gated; retention is a read-only report
+    assert caps["privacy.access"]["side_effecting"] is True
     assert caps["privacy.access"]["approval_required"] is False
     assert caps["privacy.retention"]["approval_required"] is False
     assert "subject_data" in caps["privacy.access"]["provides"]
     assert "retention_report" in caps["privacy.retention"]["provides"]
+    # the closed-loop capability declares HONEST outputs: verified-erasure + residual, not a generic marker
+    assert set(d["outputs"]) == {"erasure_verified", "residual"}
 
 
-def test_access_gathers_across_live_systems_readonly(client):
-    res = client.post("/invoke", json={
-        "capability": "privacy.access", "inputs": {"email": SUBJECT}}).json()["result"]
-    assert res["status"] == "done" and res["type"] == "access"
-    # ERPNext(1 Lead) + Listmonk(1) + Chatwoot(1) = 3; unconfigured cores contribute nothing
-    assert res["record_count"] == 3
-    systems = {s["system"]: s for s in res["systems"]}
-    assert systems["erpnext"]["ok"] and systems["billing"]["ok"] is False
-    assert _FakeClient.deleted == []  # read-only: access never deletes
+def test_access_requires_a_verified_request_and_returns_counts_only(client, monkeypatch):
+    # a bare email gathers NOTHING any more
+    bare = client.post("/invoke", json={"capability": "privacy.access", "inputs": {"email": SUBJECT}}).json()["result"]
+    assert bare["status"] == "pending_approval" and "systems" not in bare
+    rid = _verified_request("access")
+    sent = []
+    monkeypatch.setattr(core, "POSTMARK_TOKEN", "pm")
+    monkeypatch.setattr(core, "_send_email", lambda to, subj, body: sent.append((to, body)) or "postmark")
+    res = client.post("/invoke", json={"capability": "privacy.access",
+                                       "inputs": {"request_id": rid, "email": SUBJECT}}).json()["result"]
+    assert res["status"] == "done" and res["record_count"] == 3
+    assert all(set(s) == {"system", "ok", "count"} for s in res["systems"])   # counts only, no records
+    assert sent and sent[0][0] == SUBJECT                                    # the export went to the subject's mailbox
+    assert _FakeClient.deleted == []  # read-only against the cores: access never deletes
 
 
 def test_delete_fans_out_the_erasure(client):
+    rid = _verified_request()
     # the open HTTP path STAGES the (irreversible) erasure — nothing is deleted without a real approval
     staged = client.post("/invoke", json={
-        "capability": "privacy.delete", "inputs": {"email": SUBJECT}}).json()["result"]
+        "capability": "privacy.delete", "inputs": {"request_id": rid, "email": SUBJECT}}).json()["result"]
     assert staged["status"] == "pending_approval" and _FakeClient.deleted == []
     # trusted in-process path (runtime-delivered approval) fans the erasure out across the live connectors
-    res = operator.build_privacy_operator().invoke("privacy.delete", {"email": SUBJECT, "_approval": {"approved": True}})
-    assert res["status"] == "done" and res["type"] == "delete"
-    assert res["deleted_count"] == 3
+    res = operator.build_privacy_operator().invoke(
+        "privacy.delete", {"request_id": rid, "email": SUBJECT, "_approval": {"approved": True}})
+    assert res["status"] == "erased" and res["type"] == "delete"
+    assert res["deleted_count"] == 3 and res["erasure_verified"] is True and res["residual"] == 0
     assert len(_FakeClient.deleted) == 3
     assert any("/api/resource/Lead/LEAD-1" in u for u in _FakeClient.deleted)
     assert any("/api/subscribers/7" in u for u in _FakeClient.deleted)
@@ -177,7 +209,8 @@ def test_intake_opens_a_dsar(client):
         "capability": "privacy.intake",
         "inputs": {"email": SUBJECT, "type": "delete"}}).json()["result"]
     assert res["status"] == "received" and res["type"] == "delete"
-    assert res["verification"] == "logged"  # no email sender configured in tests
+    assert res["delivery"] == "undeliverable"  # no email sender configured in tests — and no self-verify link
+    assert "verify_url" not in res and "dev_note" not in res
     assert res["request_id"].startswith("DSAR-")
     assert _FakeClient.deleted == []  # opening a request erases nothing
 
@@ -193,7 +226,7 @@ def test_retention_is_a_dryrun_report(client):
 
 def test_idempotency_dedupes_the_erasure(client):
     op = operator.build_privacy_operator()
-    appr = {"email": SUBJECT, "_approval": {"approved": True}}
+    appr = {"request_id": _verified_request(), "email": SUBJECT, "_approval": {"approved": True}}
     first = op.invoke("privacy.delete", appr, "k-1")
     second = op.invoke("privacy.delete", appr, "k-1")
     assert first == second
@@ -201,14 +234,19 @@ def test_idempotency_dedupes_the_erasure(client):
     assert len(_FakeClient.deleted) == 3
 
 
-def test_mission_runtime_httpclient_drives_operator(client):
+def test_mission_runtime_httpclient_drives_operator(client, monkeypatch):
     """The runtime's own HTTPOperatorClient speaks the operator's /invoke contract."""
     def _transport(url, body, headers, timeout):
         return client.post(urlparse(url).path, json=body, headers=headers or {}).json()
 
     oc = HTTPOperatorClient(resolve={"agentic-privacy": "http://privacy"}, transport=_transport)
-    acc = oc.invoke("agentic-privacy", "privacy.access", {"email": SUBJECT}, idempotency_key="m-1")
+    rid = _verified_request()
+    monkeypatch.setattr(core, "POSTMARK_TOKEN", "pm")
+    monkeypatch.setattr(core, "_send_email", lambda *a: "postmark")
+    acc = oc.invoke("agentic-privacy", "privacy.access", {"request_id": _verified_request("access"), "email": SUBJECT},
+                    idempotency_key="m-1")
     assert acc["status"] == "done" and acc["record_count"] == 3
 
-    dele = oc.invoke("agentic-privacy", "privacy.delete", {"email": SUBJECT}, idempotency_key="m-2")
+    dele = oc.invoke("agentic-privacy", "privacy.delete", {"request_id": rid, "email": SUBJECT},
+                     idempotency_key="m-2")
     assert dele["status"] == "pending_approval"   # irreversible erasure stages over the untrusted HTTP channel

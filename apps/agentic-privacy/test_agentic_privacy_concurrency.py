@@ -42,7 +42,7 @@ def test_writes_on_different_subjects_parallelize():
 
 
 def test_reads_are_read_only():
-    assert _SPECS["privacy.access"].concurrency_mode == "read_only"
+    assert _SPECS["privacy.access"].concurrency_mode == "exclusive"   # delivers an export + mutates the request
     assert _SPECS["privacy.retention"].concurrency_mode == "read_only"
 
 
@@ -53,7 +53,7 @@ def test_concurrent_intakes_dont_collide_or_fork_the_audit_chain(tmp_path, monke
     import threading
     core = importlib.import_module("agentic-privacy.core")
     monkeypatch.setattr(core, "DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(core, "POSTMARK_TOKEN", "")        # hermetic: force the log-only email channel
+    monkeypatch.setattr(core, "POSTMARK_TOKEN", "")        # hermetic: no mailer: intake stays pending/undeliverable
     monkeypatch.setattr(core, "SMTP_HOST", "")
 
     N = 40
