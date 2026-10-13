@@ -243,6 +243,99 @@ def chase_overdue(blurb: Callable[[str], str | None] | None = None) -> dict:
     return out
 
 
+# ── scoped dunning with a real read-back (closed loop: Act + Verify) ─────────
+VERIFY_ATTEMPTS = int(os.environ.get("BILLING_VERIFY_ATTEMPTS", "3"))
+VERIFY_INTERVAL_S = float(os.environ.get("BILLING_VERIFY_INTERVAL_S", "2.0"))
+_sleep = time.sleep           # seam: tests inject a no-op
+
+
+def invoice_account(inv: dict) -> str:
+    """The account an invoice belongs to: the Lago customer's external_id, else its name, else its id."""
+    c = inv.get("customer") or {}
+    return str(c.get("external_id") or c.get("name") or c.get("lago_id") or "")
+
+
+def invoice_in_account(inv: dict, account_id: str) -> bool:
+    c = inv.get("customer") or {}
+    return bool(account_id) and account_id in {str(c.get(k)) for k in ("external_id", "name", "lago_id")
+                                               if c.get(k)}
+
+
+def fetch_invoice(lago_id: str) -> dict | None:
+    """GET /api/v1/invoices/{lago_id} — the read-back. None when Lago cannot be read (never guesses)."""
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            r = client.get(f"{LAGO_API_URL}/api/v1/invoices/{lago_id}", headers=_headers())
+        if r.status_code >= 400:
+            return None
+        return (r.json() or {}).get("invoice") or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def chase_invoices(account_id: str, invoice_ids=None) -> dict:
+    """Dunning scoped to ONE account: retry payment only on that account's currently-overdue invoices (and,
+    when ``invoice_ids`` is given, only those). Then READ EACH INVOICE BACK from Lago and report, per
+    invoice, ``retried`` / ``payment_status_after`` / ``settled``. The result declares ``dunning_verified``
+    (True only when every chased invoice settled and at least one was chased), ``settled_count`` and
+    ``failed_count``; a partial result is ``status='partial'`` -- never success. Only reached on approval."""
+    base = {"action": "dunning", "account_id": account_id, "dunning_attempted": False,
+            "dunning_verified": False, "settled_count": 0, "failed_count": 0, "results": [], "skipped": []}
+    if not account_id:
+        return {**base, "status": "error", "error": "account_id required for scoped dunning"}
+    if not (lago_connected() and LAGO_API_KEY):
+        return {**base, "status": "error", "error": "lago not reachable"}
+    try:
+        invoices = _get_all("/api/v1/invoices", "invoices")
+    except Exception as e:  # noqa: BLE001
+        return {**base, "status": "error", "error": f"lago read failed: {e}"}
+    want = None if invoice_ids is None else {str(i) for i in invoice_ids}
+    chosen, skipped = [], []
+    for inv in invoices:
+        if not invoice_in_account(inv, account_id):
+            continue
+        lid = str(inv.get("lago_id"))
+        if want is not None and lid not in want:
+            continue
+        (chosen if inv.get("payment_overdue") else skipped).append(inv)
+    base["skipped"] = [str(i.get("lago_id")) for i in skipped]
+    if want is not None:
+        base["skipped"] += sorted(want - {str(i.get("lago_id")) for i in chosen + skipped})
+    results = []
+    with httpx.Client(timeout=10.0) as client:
+        for inv in chosen:
+            lid = inv.get("lago_id")
+            row = {"invoice": inv.get("number"), "lago_id": lid, "retried": False,
+                   "payment_status_after": None, "settled": False}
+            try:
+                resp = client.post(f"{LAGO_API_URL}/api/v1/invoices/{lid}/retry_payment", headers=_headers())
+                row["retried"] = resp.status_code in (200, 202)
+                row["retry_http"] = resp.status_code
+            except Exception as e:  # noqa: BLE001
+                row["error"] = str(e)
+            results.append(row)
+    for _ in range(max(1, VERIFY_ATTEMPTS)):          # read-back (bounded wait: Lago settles asynchronously)
+        for row in results:
+            if row["retried"] and not row["settled"]:
+                after = fetch_invoice(row["lago_id"])
+                row["payment_status_after"] = (after or {}).get("payment_status")
+                row["settled"] = row["payment_status_after"] == "succeeded"
+        if all(r["settled"] or not r["retried"] for r in results):
+            break
+        _sleep(VERIFY_INTERVAL_S)
+    settled = sum(1 for r in results if r["settled"])
+    failed = len(results) - settled
+    verified = settled > 0 and failed == 0
+    status = "done" if verified else ("partial" if settled > 0 else "error")
+    out = {**base, "status": status, "results": results, "dunning_attempted": any(r["retried"] for r in results),
+           "dunning_verified": verified, "settled_count": settled, "failed_count": failed,
+           "summary": f"Dunning for {account_id}: {settled} of {len(results)} invoice(s) settled after retry."}
+    if status != "done":
+        out["error"] = ("no overdue invoice in scope" if not results else
+                        f"{failed} of {len(results)} chased invoice(s) not settled on read-back")
+    return out
+
+
 def parse_amount_cents(value) -> int:
     """Parse a requested refund amount to integer cents. Strings are DOLLARS ("$10", "10.00", "1,000.50");
     an int is CENTS (1000 == $10.00). Floats/bools/None/garbage and non-positive values raise ValueError."""
