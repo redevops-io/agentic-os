@@ -3,8 +3,8 @@
   sky.optimize   rank {cloud × region × instance × spot} by live price + availability (evidence)
   sky.launch     provision the chosen candidate        [approval gate]  undo=sky.down (saga)
   sky.serve      autoscaled service (SkyServe)          [approval gate]  undo=sky.serve_down
-  sky.down       tear down / idle-teardown (autostop) — also the saga compensation for launch
-  sky.serve_down tear down a service — the saga compensation for serve
+  sky.down       tear down / idle-teardown (autostop) — also the saga compensation for launch  [approval gate]
+  sky.serve_down tear down a service — the saga compensation for serve  [approval gate]
   sky.status     cluster/service status (the monitor's utilization/idle read)
   sky.check      per-cloud preflight (creds/quota enabled) — evidence before a launch
 
@@ -58,12 +58,20 @@ def build_sky_operator(*, run=None, ledger: "PlacementLedger | None" = None) -> 
         return res
 
     def _serve(i):
+        if not i.get("_approval"):           # consequential: start a real autoscaled service only on approval
+            return pending_approval("sky.serve", service_up=False)
         return core.serve(i.get("spec") or i, run=run)
 
     def _down(i):
+        if not i.get("_approval"):           # tears down real infrastructure: approval-gated
+            return pending_approval("sky.down", target=i.get("target") or i.get("cluster") or "sk-app",
+                                    cluster_down=False)
         return core.down(i.get("target") or i.get("cluster") or "sk-app", serve=bool(i.get("serve")), run=run)
 
     def _serve_down(i):
+        if not i.get("_approval"):
+            return pending_approval("sky.serve_down", target=i.get("target") or i.get("service") or "sk-svc",
+                                    service_down=False)
         return core.down(i.get("target") or i.get("service") or "sk-svc", serve=True, run=run)
 
     def _status(i):
@@ -84,10 +92,10 @@ def build_sky_operator(*, run=None, ledger: "PlacementLedger | None" = None) -> 
                    side_effecting=True, approval_required=True, undo="sky.serve_down",
                    permissions=["infra:write"], estimated_value="high", latency_ms=120000,
                    concurrency_mode="exclusive", concurrency_key="sky:service:{service}"),
-        capability("sky.down", _down, side_effecting=True,
+        capability("sky.down", _down, side_effecting=True, approval_required=True,
                    permissions=["infra:write"], latency_ms=30000,
                    concurrency_mode="exclusive", concurrency_key="sky:cluster:{cluster}"),
-        capability("sky.serve_down", _serve_down, side_effecting=True,
+        capability("sky.serve_down", _serve_down, side_effecting=True, approval_required=True,
                    permissions=["infra:write"], latency_ms=30000,
                    concurrency_mode="exclusive", concurrency_key="sky:service:{service}"),
         capability("sky.status", _status, provides=["sky_status"],

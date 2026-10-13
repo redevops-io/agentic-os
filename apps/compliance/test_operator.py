@@ -155,10 +155,25 @@ def test_idempotency_dedupes_invocation(client):
     assert first == second and first["status"] == "pending_approval"
 
 
+def _approved(cap, inputs):
+    """Trusted in-process path: the runtime delivers `_approval` on a resumed, approved node."""
+    return build_compliance_operator().invoke(cap, {**inputs, "_approval": {"approved": True}})
+
+
+def test_file_consent_stages_without_approval_and_never_writes_ledger(client):
+    inp = {"customer": "Whitfield Family Trust", "subscription": "pro-annual"}
+    for extra in ({}, {"_approval": {"approved": True}}, {"_approval_id": "x"}):   # HTTP strips forged markers
+        res = client.post("/invoke", json={"capability": "compliance.file_consent",
+                                           "inputs": {**inp, **extra}}).json()["result"]
+        assert res["status"] == "pending_approval" and res["executed"] is False
+    direct = build_compliance_operator().invoke("compliance.file_consent", dict(inp))
+    assert direct["status"] == "pending_approval" and direct["consent_filed"] is False
+    assert not core.CONSENT_LEDGER.exists()
+
+
 def test_invoke_file_consent_appends_to_ledger(client):
-    body = {"capability": "compliance.file_consent",
-            "inputs": {"customer": "Whitfield Family Trust", "subscription": "pro-annual"}}
-    res = client.post("/invoke", json=body).json()["result"]
+    res = _approved("compliance.file_consent",
+                    {"customer": "Whitfield Family Trust", "subscription": "pro-annual"})
     assert res["status"] == "done"
     assert res["action"] == "file_consent"
     assert res["consent_filed"] is True
@@ -179,10 +194,9 @@ def test_invoke_file_consent_appends_to_ledger(client):
 
 def test_file_consent_is_idempotent(client):
     """Re-filing the same customer/subscription dedupes — the ledger keeps ONE record."""
-    body = {"capability": "compliance.file_consent",
-            "inputs": {"customer": "Whitfield Family Trust", "subscription": "pro-annual"}}
-    first = client.post("/invoke", json=body).json()["result"]
-    second = client.post("/invoke", json=body).json()["result"]
+    inp = {"customer": "Whitfield Family Trust", "subscription": "pro-annual"}
+    first = _approved("compliance.file_consent", inp)
+    second = _approved("compliance.file_consent", inp)
     # deterministic consent_id → the second file is a no-op append
     assert first["consent_id"] == second["consent_id"]
     assert second["consent_filed"] is True
@@ -190,9 +204,8 @@ def test_file_consent_is_idempotent(client):
     assert len(lines) == 1  # deduped, not appended twice
 
     # a DIFFERENT subscription is a distinct consent record → a second line appends
-    other = {"capability": "compliance.file_consent",
-             "inputs": {"customer": "Whitfield Family Trust", "subscription": "enterprise"}}
-    res = client.post("/invoke", json=other).json()["result"]
+    res = _approved("compliance.file_consent",
+                    {"customer": "Whitfield Family Trust", "subscription": "enterprise"})
     assert res["consent_id"] != first["consent_id"]
     lines = [l for l in core.CONSENT_LEDGER.read_text().splitlines() if l.strip()]
     assert len(lines) == 2
