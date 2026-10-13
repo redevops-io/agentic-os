@@ -14,7 +14,7 @@ services:
     # creating a new per-project network entirely. The app binds 0.0.0.0:8109.
     network_mode: host
     environment:
-      # Set PERMISSIONS_ADMIN_KEY (or AGENTIC_OS_API_KEY) to gate grant writes; left open for the demo.
+      # Valid PERMISSIONS_ADMIN_KEY persists grant writes; unset/invalid => writes are simulated per visitor (never persisted).
       - PERMISSIONS_ADMIN_KEY=${PERMISSIONS_ADMIN_KEY:-}
       - PERMISSIONS_DIR=/data/permissions
     volumes:

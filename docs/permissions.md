@@ -41,8 +41,24 @@ verify-only design (server holds only the public key; signing happens off-box).
 
 `POST`/`DELETE /api/permissions/grants` are gated by **`PERMISSIONS_ADMIN_KEY`** (its own key, so it
 is independent of the fleet-ops `AGENTIC_OS_API_KEY`; falls back to it if unset). Reads/preview are
-open. The UI has an admin-key field (stored in `localStorage`, sent as `X-API-Key`). This is a
-**separate layer** from at-rest encryption: it protects the network write path, not the file.
+open. The UI has an admin-key field (stored in `localStorage`, sent as `X-API-Key`; HTTP Basic with the
+key as password is also accepted; compared with `hmac.compare_digest`). This is a **separate layer**
+from at-rest encryption: it protects the network write path, not the file.
+
+### Public demo: simulated writes (fail closed)
+
+The standalone showcase (`deploy/permissions-showcase-demo`, demo.redevops.io/permissions) stays
+anonymous and interactive but visitors can never mutate the shared, persistent store. **An unset key is
+never "open"**: with no key configured, or a missing/invalid key on the request, grant writes are
+*simulated* in an in-memory per-session overlay (`agentic_os/permissions_overlay.py`):
+
+- keyed by the `perm_demo_sid` cookie (HttpOnly, SameSite=Lax); responses carry `X-Demo-Simulated: 1`
+  and the normal success shape, so the page works unchanged;
+- never persisted, invisible to other visitors; `GET grants`, `status`, `preview` and `authorize`
+  evaluate against base grants + that session's overlay;
+- capped (25 simulated adds / 50 removals per session, 500 sessions, oldest evicted) and expires after
+  30 minutes idle; over-cap writes return 429;
+- a valid admin key persists writes exactly as before. At-rest encryption is unchanged.
 
 ## Endpoints
 
