@@ -155,15 +155,27 @@ def test_invoke_resolve_toggles_status(client):
     ]
 
 
-def test_invoke_escalate_sets_priority_and_assigns(client):
-    res = build_support_operator().invoke("support.escalate", {"conversation_id": 1, "_approval": {"approved": True}})
+def test_invoke_escalate_assigns_explicit_assignee(client):
+    res = build_support_operator().invoke("support.escalate", {"conversation_id": 1, "assignee_id": 9,
+                                                              "_approval": {"approved": True}})
     assert res["status"] == "done"
-    assert res["results"]["assignee_id"] == 7
-    # priority toggled + assignment posted (agents fetched in between via GET)
+    assert res["results"]["assignee_id"] == 9          # the caller's choice, not agents[0] (7)
     assert _FakeClient.posted == [
         "http://localhost:3003/api/v1/accounts/1/conversations/1/toggle_priority",
         "http://localhost:3003/api/v1/accounts/1/conversations/1/assignments",
     ]
+
+
+def test_escalate_to_team(client):
+    res = build_support_operator().invoke("support.escalate", {"conversation_id": 1, "team_id": 3,
+                                                              "_approval": {"approved": True}})
+    assert res["status"] == "done" and res["results"]["team_id"] == 3 and "assignee_id" not in res["results"]
+
+
+def test_escalate_requires_explicit_assignee_and_writes_nothing(client):
+    res = build_support_operator().invoke("support.escalate", {"conversation_id": 1, "_approval": {"approved": True}})
+    assert res["status"] == "error" and res["error"] == "assignee_required"
+    assert _FakeClient.posted == []
 
 
 def test_idempotency_dedupes_side_effect(client):
@@ -195,7 +207,7 @@ def test_mission_runtime_httpclient_drives_operator(client):
 
 GATED = {
     "support.resolve": {"conversation_id": 1},
-    "support.escalate": {"conversation_id": 1},
+    "support.escalate": {"conversation_id": 1, "assignee_id": 7},
     "support.send_onboarding": {"customer": {"name": "Dana Smith"}, "subscription": {"plan": "Pro"}},
 }
 

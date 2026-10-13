@@ -434,13 +434,22 @@ def resolve(body: dict) -> dict:
 
 
 def escalate(body: dict) -> dict:
-    """Escalate: set priority urgent + assign to the agent. Real Chatwoot calls:
+    """Escalate: set priority urgent + assign. Real Chatwoot calls:
       POST /conversations/{id}/toggle_priority
-      POST /conversations/{id}/assignments
+      POST /conversations/{id}/assignments   ({"assignee_id": N} or {"team_id": N})
+    An explicit ``assignee_id`` (agent) or ``team_id`` (Chatwoot team, which does its own routing) is REQUIRED:
+    we never guess an assignee (the old code assigned agents[0]). Missing → error, nothing is written.
     """
     conv_id = body.get("conversation_id")
     if not conv_id:
         return {"status": "error", "error": "conversation_id required", "action": "escalate"}
+    assignee_id, team_id = body.get("assignee_id"), body.get("team_id")
+    if not assignee_id and not team_id:
+        return {"status": "error", "action": "escalate", "error": "assignee_required",
+                "message": "escalate needs an explicit assignee_id (agent) or team_id (Chatwoot team); "
+                           "no default assignee is chosen. Nothing was changed.",
+                "conversation_id": int(conv_id)}
+    assignment = {"assignee_id": assignee_id} if assignee_id else {"team_id": team_id}
     results = {}
     try:
         with httpx.Client(timeout=10.0) as client:
@@ -449,28 +458,25 @@ def escalate(body: dict) -> dict:
                 headers=_headers(), json={"priority": "urgent"},
             )
             results["priority_status"] = rp.status_code
-            # Assign to the first available agent (self — the seeded super-admin).
-            agents = client.get(f"{_acct_base()}/agents", headers=_headers())
-            assignee_id = None
-            if agents.status_code == 200 and agents.json():
-                assignee_id = agents.json()[0].get("id")
-            if assignee_id:
-                ra = client.post(
-                    f"{_acct_base()}/conversations/{conv_id}/assignments",
-                    headers=_headers(), json={"assignee_id": assignee_id},
-                )
-                results["assign_status"] = ra.status_code
-                results["assignee_id"] = assignee_id
+            ra = client.post(
+                f"{_acct_base()}/conversations/{conv_id}/assignments",
+                headers=_headers(), json=assignment,
+            )
+            results["assign_status"] = ra.status_code
+            if 200 <= ra.status_code < 300:
+                results.update(assignment)
     except Exception as e:
         return {"status": "error", "error": str(e), "action": "escalate"}
-    ok = results.get("priority_status") in (200, 201)
+    ok = results.get("priority_status") in (200, 201) and results.get("assign_status") in (200, 201)
+    who = (f"agent #{results['assignee_id']}" if results.get("assignee_id")
+           else f"team #{results['team_id']}" if results.get("team_id") else None)
     return {
         "status": "done" if ok else "error",
         "action": "escalate",
         "conversation_id": int(conv_id),
         "results": results,
         "summary": (
-            f"Escalated ticket #{conv_id}: priority set to URGENT"
-            + (f" and assigned to agent #{results.get('assignee_id')}." if results.get("assignee_id") else ".")
+            f"Escalated ticket #{conv_id}: priority set to URGENT" + (f" and assigned to {who}." if who else
+                                                                      " but the assignment FAILED.")
         ),
     }
