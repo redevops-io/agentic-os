@@ -190,3 +190,10 @@ from it. That is the part redevops.io reserves.
 Releases up to and including `v0.1.0` remain available under AGPL-3.0-or-later
 alone; this is not retroactive. See [LICENSE.md](LICENSE.md) for the reasoning,
 the effective commit, and what it means for anything depending on this package.
+
+## Control-plane security
+
+Mutating control endpoints (`/up`, `/down`, `/dispatch`, approvals, `/api/bridge/invoke`, mission approve) require
+`Authorization: Bearer $AGENTIC_OS_CONTROL_TOKEN` and return 503 when it is unset; read-only endpoints stay open.
+The Projects API is same-origin by default (`PROJECTS_CORS_ORIGINS` opts in). See
+[docs/CONTROL_PLANE_SECURITY.md](docs/CONTROL_PLANE_SECURITY.md).

@@ -39,11 +39,33 @@ def is_staged(result) -> bool:
     return isinstance(result, dict) and str(result.get("status", "")).strip().lower() in STAGED_STATUSES
 
 
-def result_failed(result) -> "tuple[bool, str]":
-    """The ONE shared classifier of failure-shaped results, used both when the operator mints N4 read-back
-    markers and when the verifier decides whether a result may commit. Returns ``(failed, reason)``."""
-    if not isinstance(result, dict):
-        return True, "result is not a dict"
+_HTTP_ERROR_DETAILS = frozenset({
+    "forbidden", "unauthorized", "not found", "not authenticated", "bad request", "method not allowed",
+    "conflict", "unprocessable entity", "too many requests", "internal server error", "bad gateway",
+    "service unavailable", "gateway timeout", "request timeout", "payment required", "invalid token",
+    "could not validate credentials", "authentication failed", "permission denied", "access denied"})
+_NESTED_KEYS = ("results", "items")
+_MAX_DEPTH = 3
+
+
+def _as_count(v) -> int:
+    if isinstance(v, bool):
+        return 0
+    if isinstance(v, (int, float)):
+        return int(v)
+    if isinstance(v, str) and v.strip().lstrip("-").isdigit():
+        return int(v.strip())
+    return 0
+
+
+def _http_error_value(k: str, v) -> bool:
+    """`500` or the string `"500"` under a status-code-ish key."""
+    if isinstance(v, str) and v.strip().isdigit():
+        v = int(v.strip())
+    return _is_http_error(k, v)
+
+
+def _classify(result: dict, depth: int) -> "tuple[bool, str]":
     st = result.get("status")
     if isinstance(st, str) and st.strip().lower() in FAILED_STATUSES:
         return True, f"status={st.strip().lower()}"
@@ -53,13 +75,43 @@ def result_failed(result) -> "tuple[bool, str]":
         return True, "success is False"
     if result.get("executed") is False:
         return True, "executed is False"
+    if result.get("verified") is False:
+        return True, "verified is False"
     for k in ("error", "errors"):
         if result.get(k):
             return True, f"{k} present"
+    if _as_count(result.get("failed_count")) > 0:
+        return True, f"failed_count={result.get('failed_count')}"
+    if result.get("failures"):
+        return True, "failures present"
+    d = result.get("detail")
+    if isinstance(d, str) and d.strip().lower().rstrip(".") in _HTTP_ERROR_DETAILS:
+        return True, f"detail={d.strip()!r} (HTTP-style error body)"
     for k, v in result.items():
-        if isinstance(k, str) and _is_http_error(k, v):
+        if isinstance(k, str) and _http_error_value(k, v):
             return True, f"{k}={v}"
+    if depth < _MAX_DEPTH:
+        for nk in _NESTED_KEYS:
+            seq = result.get(nk)
+            if isinstance(seq, list):
+                for i, el in enumerate(seq):
+                    if isinstance(el, dict):
+                        bad, why = _classify(el, depth + 1)
+                        if bad:
+                            return True, f"{nk}[{i}]: {why}"
     return False, ""
+
+
+def result_failed(result, *, side_effecting: bool = False, declares_outputs: bool = True) -> "tuple[bool, str]":
+    """The ONE shared classifier of failure-shaped results, used both when the operator mints N4 read-back
+    markers / decides whether to idempotency-cache, and when the verifier decides whether a result may commit.
+    Returns ``(failed, reason)``. A side-effecting capability that declares no outputs (``declares_outputs=
+    False``) must report SOMETHING: an empty result is a failure (a write that proves nothing)."""
+    if not isinstance(result, dict):
+        return True, "result is not a dict"
+    if side_effecting and not declares_outputs and not result:
+        return True, "side-effecting capability returned an empty result"
+    return _classify(result, 0)
 
 
 def _bool_ish(type_name) -> bool:
@@ -100,7 +152,8 @@ class CompositeVerifier:
 
         # 1b. outcome — the declared output VALUES must read back as success (a present-but-False marker is
         # a failure), and a result the shared classifier calls failed never commits regardless of its keys.
-        failed, why = result_failed(result)
+        side = bool(getattr(cap, "side_effecting", False) or getattr(node, "side_effecting", False))
+        failed, why = result_failed(result, side_effecting=side, declares_outputs=bool(outs))
         if not failed and cap is not None and isinstance(result, dict):
             types_ = cap.outputs or {}
             bad = [k for k in outs if k in result and _output_value_failed(result[k], types_.get(k))]

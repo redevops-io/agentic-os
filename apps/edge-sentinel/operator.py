@@ -38,7 +38,7 @@ def build_edge_sentinel_operator() -> Operator:
             lambda inp: (core.block_ip(inp) if inp.get("_approval")
                         else pending_approval("sentinel.block_ip", ip=(inp.get("ip") or "").strip(), ip_blocked=False)),
             provides=["ip_blocked"],
-            outputs={"ip_blocked": "ban decision enforced at the CrowdSec edge"},
+            outputs={"ip_blocked": "True ONLY if a read-back of the LAPI decisions for the IP (parsed IP equality) shows an active ban; a 2xx POST alone is not enough"},
             side_effecting=True, approval_required=True, undo="sentinel.unblock_ip",
             permissions=["sentinel:write"], estimated_value="high", latency_ms=1200,
             concurrency_mode="exclusive", concurrency_key="sentinel:ip:{ip}",

@@ -45,7 +45,6 @@ except Exception:  # noqa: BLE001
     def _req_principal(request=None):
         return None
 
-import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
@@ -166,27 +165,21 @@ SUBTITLE = ("Data-subject / consumer requests (GDPR access & erasure, CCPA/CPRA 
 
 # --- the brain (drafts the export / subject response) ------------------------
 def _llm_text(prompt: str, max_tokens: int = 500) -> str | None:
-    """Optional LLM narration blurb — None if no endpoint configured / any error.
+    """Optional LLM narration blurb via the GOVERNED router (N7) — None if no compliant route / any error.
 
     The prompt it receives is built by core (counts + category labels ONLY, never record content or the
-    subject's email). It is not wired into any route unless PRIVACY_LLM_SUMMARY=true.
+    subject's email). It is not wired into any route unless PRIVACY_LLM_SUMMARY=true (opt-in).
 
-    Optional by design — every core action is deterministic fan-out work; the LLM only
-    narrates the access export. Absence of REDEVOPS_LLM_BASE_URL never breaks a request.
+    Classified CUSTOMER_RESTRICTED (personal-data context) so it can only ever reach a verified in-boundary
+    endpoint; fail-closed to the deterministic summary otherwise. No direct-HTTP / external fallback.
     """
-    base = os.environ.get("REDEVOPS_LLM_BASE_URL")
-    if not base:
-        return None
     try:
-        r = httpx.post(base.rstrip("/") + "/chat/completions",
-                       json={"model": os.environ.get("REDEVOPS_LLM_MODEL", "DeepSeek-V4-Flash"),
-                             "messages": [{"role": "user", "content": prompt}],
-                             "max_tokens": max_tokens, "temperature": 0.2}, timeout=120.0)
-        if r.status_code == 200:
-            return (r.json().get("choices") or [{}])[0].get("message", {}).get("content", "").strip() or None
-    except Exception:
-        pass
-    return None
+        from agentic_os.app.llm import governed_text
+        from agentic_os.governance.classification import DataClassification
+    except Exception:  # noqa: BLE001
+        return None
+    return governed_text(prompt, classifications=(DataClassification.CUSTOMER_RESTRICTED,),
+                         max_tokens=max_tokens, temperature=0.2)
 
 
 if core._truthy("PRIVACY_LLM_SUMMARY"):
@@ -317,6 +310,28 @@ def _t_data_map(_a: dict) -> dict:
     return {"text": "Personal-data systems:\n" + "\n".join(lines), "data": cov}
 
 
+class _GovernedConsoleModel:
+    """The conversational console's model object: every ``complete`` goes through ``governed_text`` with an
+    explicit classification. Raises when there is no compliant route so the console drops to its
+    deterministic keyword/primer fallbacks (it never reaches a model on its own)."""
+
+    def complete(self, req):
+        from types import SimpleNamespace
+        from agentic_os.app.llm import governed_text
+        from agentic_os.governance.classification import DataClassification
+        prompt = "\n\n".join(str(m.get("content", "")) for m in req.messages)
+        txt = governed_text(prompt, classifications=(DataClassification.CUSTOMER_RESTRICTED,), system=req.system or "",
+                            max_tokens=int(req.max_tokens or 600), temperature=0.2)
+        if not txt:
+            raise RuntimeError("no compliant in-boundary model route")
+        return SimpleNamespace(text=txt, model="in-boundary", tier="in_boundary", prompt_tokens=0,
+                               completion_tokens=0, est_cost_usd=0.0, cache_hit=False, models_used=())
+
+    def info(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(name="governed-in-boundary")
+
+
 if _AgentConsole is not None:
     _PRIVACY_CONSOLE = _AgentConsole(
         f"{TENANT} Privacy", _PRIVACY_PRIMER,
@@ -327,6 +342,7 @@ if _AgentConsole is not None:
         ],
         suggestions=["Any overdue requests?", "Show open requests", "How do I verify a requester?", "What is the DSAR SLA?"],
         subtitle="Ask about DSAR requests, the data map, verification and SLAs.",
+        model=_GovernedConsoleModel(),
         allow_side_effects=[],
     )
 else:
