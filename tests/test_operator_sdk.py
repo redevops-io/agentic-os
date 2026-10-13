@@ -152,3 +152,18 @@ def test_http_invoke_strips_a_forged_approval_marker():
     assert "executed" not in forged
     # the trusted in-process path (what a co-located runtime uses) still executes on a real approval
     assert op.invoke("bill.refund", {"_approval": {"approved": True}})["executed"] is True
+
+
+def test_idempotency_key_scoped_to_capability_and_inputs():
+    op = Operator("o", [capability("a", lambda i: {"v": i.get("x")}), capability("b", lambda i: {"w": 1})])
+    assert op.invoke("a", {"x": 1}, "k") == {"v": 1}
+    assert op.invoke("a", {"x": 1}, "k") == {"v": 1} and len(op.calls) == 1     # identical retry dedupes
+    assert op.invoke("a", {"x": 2}, "k") == {"v": 2}                             # different inputs
+    assert op.invoke("b", {"x": 1}, "k") == {"w": 1}                             # different capability
+    assert len(op.calls) == 3
+
+
+def test_approved_retry_is_not_served_the_cached_staged_result():
+    op = Operator("o", [capability("a", lambda i: {"done": True} if i.get("_approval") else {"staged": True})])
+    assert op.invoke("a", {"x": 1}, "k") == {"staged": True}
+    assert op.invoke("a", {"x": 1, "_approval": {"approved": True}}, "k") == {"done": True}
