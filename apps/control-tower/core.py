@@ -45,6 +45,12 @@ _DB_ID_CACHE: dict = {"id": None}   # resolved Metabase datasource id (looked up
 TENANT = "Meridian Wealth Management"
 SUBTITLE = ("The owner's single pane — ask your business anything, in plain language, on a real Metabase core. "
             "Demo data: SYNTHETIC (a generated sample schema relabelled as wealth management), not real client figures.")
+# Machine-readable provenance of the demo data, surfaced in every `ask` response next to `data_note`.
+# The Postgres schema is a generated roofing dataset (tables `jobs`/`customers`/`invoices`, `crew`, ...) that was
+# relabelled as wealth management. The schema itself is NOT renamed; only the user-facing OUTPUT column
+# aliases are honest (`jobs` is presented as `engagements`) -- the executed SQL still reads `FROM jobs`.
+DEMO_DATASET = {"kind": "synthetic", "origin": "generated roofing sample schema relabelled as wealth management",
+                "real_client_data": False, "schema_note": "table `jobs` = engagements; `crew` = advisory team"}
 DATA_NOTE = "synthetic demo data - generated sample schema relabelled as wealth management; not real client figures"
 
 
@@ -142,14 +148,14 @@ def run_query(sql: str) -> dict:
 # Every query is REAL native Postgres SQL against the Meridian Wealth operational DB
 # (engagements / clients / invoices), relative to CURRENT_DATE so the demo is always current.
 def _q_revenue_by_month() -> str:
-    return ("SELECT to_char(completed_date,'YYYY-MM') AS month, count(*) AS jobs, "
+    return ("SELECT to_char(completed_date,'YYYY-MM') AS month, count(*) AS engagements, "
             "round(sum(invoiced_amount))::float AS revenue FROM jobs "
             "WHERE status='Completed' AND completed_date >= (CURRENT_DATE - INTERVAL '12 months') "
             "GROUP BY 1 ORDER BY 1")
 
 
 def _q_revenue_by_service() -> str:
-    return ("SELECT service_type AS service_line, count(*) AS jobs, "
+    return ("SELECT service_type AS service_line, count(*) AS engagements, "
             "round(sum(invoiced_amount))::float AS revenue "
             "FROM jobs WHERE status='Completed' GROUP BY 1 ORDER BY revenue DESC")
 
@@ -183,30 +189,30 @@ def _q_ar_aging() -> str:
 
 
 def _q_revenue_by_region() -> str:
-    return ("SELECT region, count(*) AS jobs, round(sum(invoiced_amount))::float AS revenue "
+    return ("SELECT region, count(*) AS engagements, round(sum(invoiced_amount))::float AS revenue "
             "FROM jobs WHERE status='Completed' GROUP BY 1 ORDER BY revenue DESC")
 
 
 def _q_top_customers() -> str:
-    return ("SELECT c.name AS customer, count(*) AS jobs, round(sum(j.invoiced_amount))::float AS revenue "
+    return ("SELECT c.name AS customer, count(*) AS engagements, round(sum(j.invoiced_amount))::float AS revenue "
             "FROM jobs j JOIN customers c ON j.customer_id=c.id WHERE j.status='Completed' "
             "GROUP BY 1 ORDER BY revenue DESC LIMIT 10")
 
 
 def _q_by_crew() -> str:
-    return ("SELECT crew, count(*) AS jobs, round(sum(invoiced_amount))::float AS revenue, "
-            "round(avg(invoiced_amount))::float AS avg_job FROM jobs WHERE status='Completed' "
+    return ("SELECT crew, count(*) AS engagements, round(sum(invoiced_amount))::float AS revenue, "
+            "round(avg(invoiced_amount))::float AS avg_engagement FROM jobs WHERE status='Completed' "
             "GROUP BY 1 ORDER BY revenue DESC")
 
 
 def _q_backlog() -> str:
-    return ("SELECT status, count(*) AS jobs, round(sum(quoted_amount))::float AS pipeline_value "
+    return ("SELECT status, count(*) AS engagements, round(sum(quoted_amount))::float AS pipeline_value "
             "FROM jobs WHERE status IN ('Scheduled','In Progress') GROUP BY 1 ORDER BY pipeline_value DESC")
 
 
 def _q_avg_job_by_month() -> str:
     return ("SELECT to_char(completed_date,'YYYY-MM') AS month, "
-            "round(avg(invoiced_amount))::float AS avg_job FROM jobs "
+            "round(avg(invoiced_amount))::float AS avg_engagement FROM jobs "
             "WHERE status='Completed' AND completed_date >= (CURRENT_DATE - INTERVAL '12 months') "
             "GROUP BY 1 ORDER BY 1")
 
@@ -435,7 +441,7 @@ def fetch_activity(force: bool = False) -> dict:
 # render as a table; single-metric ones as a bar (categorical) or line (monthly).
 VIZ = {
     "revenue_by_month":   ("line", "month", "revenue", "money"),
-    "avg_job":            ("line", "month", "avg_job", "money"),
+    "avg_job":            ("line", "month", "avg_engagement", "money"),
     "conversion":         ("line", "month", "conversion_pct", "pct"),
     "revenue_by_service": ("bar", "service_line", "revenue", "money"),
     "margin_by_service":  ("bar", "service_line", "margin_pct", "pct"),
@@ -488,7 +494,7 @@ def ask(question: str, pick: Callable[[str], str | None] | None = None,
             "title": "Clarification needed", "sql": "", "columns": [], "rows": [],
             "answer": "I can answer these: " + ", ".join(names) + ". Please rephrase your question around one of them.",
             "available_questions": names, "chart": "table", "x_i": 0, "y_i": 0, "yfmt": "num",
-            "data_note": DATA_NOTE,
+            "data_note": DATA_NOTE, "demo_dataset": DEMO_DATASET,
             "approval": "not required — read-only analytics (no destructive action)",
         }
     sql = tpl["sql"]()
@@ -521,7 +527,7 @@ def ask(question: str, pick: Callable[[str], str | None] | None = None,
         "answer": answer, "columns": cols, "rows": rows,
         "chart": chart, "x_i": x_i, "y_i": y_i, "yfmt": yfmt,
         "approval": "not required — read-only analytics (no destructive action)",
-        "data_note": DATA_NOTE,
+        "data_note": DATA_NOTE, "demo_dataset": DEMO_DATASET,
     }
     if reasoning:
         out["reasoning"] = reasoning

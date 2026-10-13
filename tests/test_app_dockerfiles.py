@@ -71,7 +71,7 @@ def test_kernel_pin_is_single_sourced_via_arg(name, dockerfile):
 
 
 # ---- kernel pin hardening ------------------------------------------------------------------------------
-MIN_KERNEL = (0, 3, 25)  # first release whose operator_sdk exports pending_approval
+MIN_KERNEL = (0, 3, 26)  # signed approval tokens + fail-closed verification (and pending_approval)
 REPO = Path(__file__).resolve().parents[1]
 
 
@@ -154,3 +154,49 @@ def test_every_app_has_identical_license():
     for d in sorted(APPS.iterdir()):
         if (d / "Dockerfile").exists():
             assert (d / "LICENSE").read_bytes() == ref, f"{d.name}: LICENSE missing or differs"
+
+
+def test_compliance_dockerfile_copies_every_file_the_app_reads_at_runtime():
+    """apps/compliance shells out to scan.sh (core.SCAP_SCAN_SCRIPT = HERE/'scan.sh') and scan.sh reads the pinned
+    SSG hash file relative to itself (env/ssg-<ver>.sha256). The image only copied *.py, so the pinned-hash scan
+    could not run in the container. Every file read at runtime must be in the Dockerfile's COPY set."""
+    app = APPS / "compliance"
+    df = (app / "Dockerfile").read_text()
+    # container path of everything COPY'd into the package dir (workdir /app, package ./compliance/)
+    copied_files, copied_dirs, copied_globs = set(), set(), set()
+    for m in re.finditer(r"^COPY\s+(?:--\S+\s+)*(.+?)\s+(\S+)\s*$", df, re.M):
+        srcs, dest = m.group(1).split(), m.group(2)
+        if not dest.rstrip("/").endswith("compliance") and "compliance/" not in dest:
+            continue
+        for s in srcs:
+            if "*" in s:
+                copied_globs.add(s)
+            elif s.endswith("/"):
+                copied_dirs.add(s.rstrip("/"))
+            else:
+                copied_files.add(s)
+
+    def in_copy_set(rel: str) -> bool:
+        return (rel in copied_files or any(rel.startswith(d + "/") for d in copied_dirs)
+                or any(Path(rel).match(g) and "/" not in rel for g in copied_globs))
+
+    needed = set()
+    # 1. files the python modules reference as HERE / "<name>" (existing in the repo; runtime-written dirs excluded)
+    for py in app.glob("*.py"):
+        if py.name.startswith("test_"):
+            continue
+        for m in re.finditer(r'HERE\s*/\s*"([^"]+)"', py.read_text()):
+            rel = m.group(1)
+            if (app / rel).exists():
+                needed.add(rel)
+    # 2. files scan.sh reads relative to itself: $HERE/<path> (the hash file is named per SSG_VERSION)
+    sh = (app / "scan.sh").read_text()
+    ver = re.search(r'^SSG_VERSION="([^"]+)"', sh, re.M).group(1)
+    for m in re.finditer(r'\$HERE/([\w./${}-]+)', sh):
+        rel = m.group(1).replace("${SSG_VERSION}", ver).rstrip("}")
+        if (app / rel).is_file():
+            needed.add(rel)
+    assert "scan.sh" in needed, "discovery broke: core.py should reference scan.sh"
+    assert f"env/ssg-{ver}.sha256" in needed, "discovery broke: scan.sh should reference the pinned hash file"
+    missing = sorted(r for r in needed if not in_copy_set(r))
+    assert not missing, f"compliance Dockerfile does not COPY runtime files: {missing}"

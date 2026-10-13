@@ -123,7 +123,8 @@ def test_invoke_draft_reply_posts_private_note(client):
     ]
 
 
-def test_invoke_send_onboarding_posts_welcome(client):
+def test_invoke_send_onboarding_posts_welcome(client, monkeypatch):
+    monkeypatch.setenv("CHATWOOT_INBOX_ID", "5")
     res = build_support_operator().invoke("support.send_onboarding", {
         "customer": {"name": "Dana Smith"}, "subscription": {"plan": "Pro"}, "_approval": {"approved": True}})
     assert res["status"] == "done"
@@ -208,7 +209,7 @@ def test_mission_runtime_httpclient_drives_operator(client):
 GATED = {
     "support.resolve": {"conversation_id": 1},
     "support.escalate": {"conversation_id": 1, "assignee_id": 7},
-    "support.send_onboarding": {"customer": {"name": "Dana Smith"}, "subscription": {"plan": "Pro"}},
+    "support.send_onboarding": {"customer": {"name": "Dana Smith"}, "subscription": {"plan": "Pro"}, "inbox_id": 5},
 }
 
 
@@ -231,3 +232,35 @@ def test_gated_capability_stages_in_process_without_approval(cap):
 def test_gated_capability_executes_with_runtime_approval(cap):
     res = build_support_operator().invoke(cap, {**GATED[cap], "_approval": {"approved": True}})
     assert res["status"] == "done" and _FakeClient.posted
+
+
+def test_send_onboarding_without_inbox_is_a_config_error_and_writes_nothing(monkeypatch):
+    monkeypatch.delenv("CHATWOOT_INBOX_ID", raising=False)
+    res = build_support_operator().invoke("support.send_onboarding", {
+        "customer": {"name": "Dana Smith"}, "_approval": {"approved": True}})
+    assert res["status"] == "config_error" and "inbox_id" in res["error"] and res["onboarding_sent"] is False
+    assert _FakeClient.posted == []                       # no malformed create attempted
+
+
+def test_send_onboarding_passes_inbox_and_source_id(monkeypatch):
+    sent = {}
+    orig = _FakeClient.post
+    monkeypatch.setattr(_FakeClient, "post", lambda self, url, headers=None, json=None:
+                        (sent.setdefault(url, json), orig(self, url, headers, json))[1])
+    monkeypatch.setenv("CHATWOOT_INBOX_ID", "5")
+    monkeypatch.setenv("CHATWOOT_SOURCE_ID", "src-env")
+    r = build_support_operator().invoke("support.send_onboarding", {"customer": "A", "_approval": {"approved": True}})
+    create = sent["http://localhost:3003/api/v1/accounts/1/conversations"]
+    assert r["status"] == "done" and create["inbox_id"] == 5 and create["source_id"] == "src-env"
+    sent.clear()
+    build_support_operator().invoke("support.send_onboarding", {
+        "customer": "A", "inbox_id": 9, "source_id": "s2", "_approval": {"approved": True}})
+    create = sent["http://localhost:3003/api/v1/accounts/1/conversations"]
+    assert create["inbox_id"] == 9 and create["source_id"] == "s2"        # explicit params win
+
+
+def test_send_onboarding_with_existing_conversation_needs_no_inbox(monkeypatch):
+    monkeypatch.delenv("CHATWOOT_INBOX_ID", raising=False)
+    res = build_support_operator().invoke("support.send_onboarding", {
+        "conversation_id": 1, "customer": "A", "_approval": {"approved": True}})
+    assert res["status"] == "done"

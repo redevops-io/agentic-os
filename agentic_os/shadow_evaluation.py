@@ -26,10 +26,12 @@ from typing import Dict, List, Optional, Tuple
 
 from agentic_os.intervention_record import (
     ActorType, InterventionRecord, record_human_action, select_and_record)
-from agentic_os.priority_engine import DecisionOpportunity, PriorityPolicy, SelectedAction, UtilityFn
+from agentic_os.priority_engine import (
+    DO_NOTHING, DecisionOpportunity, PriorityPolicy, SelectedAction, UtilityFn, normalize_action_label)
 
-#: action labels that mean "the runtime chose NOT to intervene".
-NON_ACTION = {"wait", "do_not_contact", "monitor", "do nothing", "abstain"}
+#: action labels that mean "the runtime chose NOT to intervene". ``DO_NOTHING`` is the canonical
+#: do-nothing label; the legacy spellings are kept so old records still classify as non-actions.
+NON_ACTION = {"wait", "do_not_contact", "monitor", DO_NOTHING, "do nothing", "abstain"}
 
 
 def run_shadow_step(opportunity: DecisionOpportunity, intervention_store, *, human_action: str,
@@ -40,10 +42,23 @@ def run_shadow_step(opportunity: DecisionOpportunity, intervention_store, *, hum
     actual action for the same opportunity. Returns (selection, runtime_record, human_record)."""
     sel, runtime_rec = select_and_record(opportunity, intervention_store, policy_version=policy_version,
                                          proposed_at=proposed_at, policy=policy, utility_fn=utility_fn,
-                                         evidence_refs=evidence_refs)
+                                         evidence_refs=evidence_refs, shadow=True)
     human_rec = record_human_action(intervention_store, opportunity_id=opportunity.opportunity_id,
                                     action_kind=human_action, at=human_at)
     return sel, runtime_rec, human_rec
+
+
+def pair_actions(intervention_store) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, set]]:
+    """The single pairing step shared by :func:`evaluate_shadow` and
+    :func:`agentic_os.intervention_record.shadow_report`: the FIRST recorded action per actor per
+    opportunity, plus the intervention ids per opportunity. Returns (runtime, human, iids_by_opp)."""
+    runtime: Dict[str, str] = {}
+    human: Dict[str, str] = {}
+    iids_by_opp: Dict[str, set] = {}
+    for r in intervention_store.all():
+        iids_by_opp.setdefault(r.opportunity_id, set()).add(r.intervention_id)
+        (human if r.actor_type == ActorType.HUMAN else runtime).setdefault(r.opportunity_id, r.selected_action)
+    return runtime, human, iids_by_opp
 
 
 @dataclass(frozen=True)
@@ -55,7 +70,7 @@ class ShadowOutcome:
 
     @property
     def agreed(self) -> bool:
-        return self.runtime_action == self.human_action
+        return normalize_action_label(self.runtime_action) == normalize_action_label(self.human_action)
 
 
 @dataclass(frozen=True)
@@ -99,12 +114,7 @@ def evaluate_shadow(intervention_store, outcome_store) -> ShadowEvaluationReport
     """Join runtime recommendation + human action + realized outcome per opportunity. The opportunity's
     reward is the attribution-weighted reward of the outcomes attributed to ANY of its interventions
     (in Shadow, that's the human's action)."""
-    runtime: Dict[str, str] = {}
-    human: Dict[str, str] = {}
-    iids_by_opp: Dict[str, set] = {}
-    for r in intervention_store.all():
-        iids_by_opp.setdefault(r.opportunity_id, set()).add(r.intervention_id)
-        (human if r.actor_type == ActorType.HUMAN else runtime).setdefault(r.opportunity_id, r.selected_action)
+    runtime, human, iids_by_opp = pair_actions(intervention_store)
 
     reward_by_iid: Dict[str, float] = {}
     for ev in outcome_store.load():

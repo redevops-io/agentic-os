@@ -17,7 +17,7 @@ use, and are they connected?" reflects the real Integration Plane when it's pres
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Protocol, Set
+from typing import Any, Callable, Dict, List, Optional, Protocol, Set, Tuple
 
 try:
     from fastapi import FastAPI
@@ -118,6 +118,37 @@ class ProjectionProvider(Protocol):
     def activity(self, project_id: str) -> List[dict]: ...
 
 
+# ── live producer sources + provider selection ─────────────────────────────────────
+#: (app name, producer name) -> a zero-arg callable returning this producer's LIVE decision output: a list
+#: of InterventionCandidates, or a DecisionOpportunity (the loop then selects among its actions). An app
+#: registers its manifest producers' live-state sources here at boot, beside
+#: ``agentic_os.app_kit.boot.register_app_manifest``.
+LIVE_PRODUCER_SOURCES: Dict[Tuple[str, str], Callable[[], Any]] = {}
+
+
+def register_live_producer_source(app: str, producer: str, source: Callable[[], Any]) -> None:
+    LIVE_PRODUCER_SOURCES[(app, producer)] = source
+
+
+def unregister_live_producer_source(app: str, producer: str) -> None:
+    LIVE_PRODUCER_SOURCES.pop((app, producer), None)
+
+
+def registered_live_sources(registry: Any = None) -> List[Tuple[str, str, Callable[[], Any]]]:
+    """Live-state sources for producers DECLARED in apps registered with the app_kit boot registry. A
+    producer in a manifest with no registered source contributes nothing (it has no live state)."""
+    if registry is None:
+        from agentic_os.app_kit.boot import default_registry
+        registry = default_registry()
+    out = []
+    for reg_app in registry:
+        for prod in reg_app.manifest.producers:
+            fn = LIVE_PRODUCER_SOURCES.get((reg_app.manifest.name, prod.name))
+            if fn is not None:
+                out.append((reg_app.manifest.name, prod.name, fn))
+    return out
+
+
 @dataclass
 class SampleProjectionProvider:
     """Deterministic projections matching the UI's shapes — the API runs end-to-end with no
@@ -136,8 +167,17 @@ class SampleProjectionProvider:
     #: optional durable backing for the outcome log ($OUTCOME_STORE_PATH). When set, recorded outcomes
     #: are appended to a JSONL file and reloaded on start — so learned selection survives a restart.
     persist_path: Optional[str] = None
+    #: the PolicyRegistry the request path consults for the PROMOTED policy. Selection never refits a
+    #: model from the raw outcome log: the only way the active policy changes is
+    #: :meth:`run_promotion_cycle` (``apply=True`` AND a passed gate). Default: persistent when
+    #: ``policy_store_path`` / ``$POLICY_STORE_PATH`` / ``$AOS_DATA_DIR`` configure a store, else in-memory.
+    policy_registry: Any = None
+    policy_store_path: Optional[str] = None
 
     def __post_init__(self) -> None:
+        if self.policy_registry is None:
+            from agentic_os.policy_promotion import PolicyRegistry, open_policy_store
+            self.policy_registry = PolicyRegistry(store=open_policy_store(self.policy_store_path))
         # rehydrate the in-memory working copy from durable storage, so learning resumes where it left off
         if self.persist_path:
             from agentic_os.outcome_store import FileOutcomeStore
@@ -206,7 +246,6 @@ class SampleProjectionProvider:
         from agentic_os.priority_engine import (
             InterventionCandidate, OutcomeLog, PriorityPolicy, collect_priorities, from_research_plan,
             from_risk_report, from_support_thread, from_trend_report, select_action)
-        from agentic_os.outcome_learning import UtilityModel
         from agentic_os.crm_nba import DealSignals, next_best_action
         from agentic_os.outreach_nba import ProspectSignals, outreach_opportunity
         from agentic_os.analytics_anomaly import MetricAnomaly, anomaly_opportunity
@@ -221,11 +260,9 @@ class SampleProjectionProvider:
         from agentic_os.trend_intelligence import Mode, TrendCandidate, assess
         now = time.time()
 
-        # the shared learning loop: fit a utility model on whatever outcomes have been recorded, so
-        # CRM/Outreach action selection ADAPTS as outcomes arrive (empty log ⇒ static priors).
-        learn_fn = None
-        if self.outcome_events:
-            learn_fn = UtilityModel().fit(OutcomeLog(events=list(self.outcome_events))).as_utility_fn()
+        # the shared learning loop, GATED: selection reads the registry's PROMOTED policy (static prior until
+        # a promotion cycle has passed the gate). It does NOT refit from the raw log per request.
+        learn_fn = self._learn_fn()
 
         def crm_nba_source():
             # CRM Next-Best-Action as a producer: the loop selects WHICH action for this deal, learning
@@ -316,16 +353,38 @@ class SampleProjectionProvider:
         out = summary.as_dict()
         out["basis"] = "sample"    # honest: example detectors/data, not a live deployment's signals
         # the closed loop, honestly labelled: selection adapts to recorded outcomes (in simulation here)
-        out["learning"] = {"outcomes_recorded": len(self.outcome_events),
-                           "selection_adjusted": learn_fn is not None}
+        out["learning"] = self._learning_status(learn_fn)
         return out
+
+    def _learn_fn(self):
+        """The utility_fn of the registry's PROMOTED policy (None ⇒ static producer priors)."""
+        reg = self.policy_registry
+        reg.refresh()                       # see a promotion made by another process / a restart
+        return reg.active.utility_fn()
+
+    def _learning_status(self, learn_fn) -> dict:
+        reg = self.policy_registry
+        return {"outcomes_recorded": len(self.outcome_events), "selection_adjusted": learn_fn is not None,
+                "policy_version": reg.active.version, "policy_kind": reg.active.kind}
+
+    def run_promotion_cycle(self, *, apply: bool = False, gate=None, **kwargs):
+        """The ONLY path that changes the learned policy: collect → evaluate (held-out) → promote through
+        the gate. ``apply=False`` is a dry run (returns the report, changes nothing). Wraps
+        :func:`agentic_os.policy_promotion.run_promotion_cycle` over this provider's outcomes + registry."""
+        from agentic_os.outcome_store import InMemoryOutcomeStore
+        from agentic_os.policy_promotion import run_promotion_cycle
+        store = InMemoryOutcomeStore()
+        for ev in self.outcome_events:
+            store.append(ev)
+        return run_promotion_cycle(store, gate=gate, registry=self.policy_registry, apply=apply, **kwargs)
 
     def record_outcome_event(self, *, source_app: str, action_kind: str, candidate_id: str = "",
                              observed_reward: Optional[float] = None,
                              reward_dimensions: Optional[Dict[str, float]] = None,
                              attribution_confidence: float = 1.0, delay: float = 0.0) -> dict:
         """Record an observed outcome into the shared log — this is how a deployment closes the loop.
-        Future :meth:`priorities` selections learn from it (governance is untouched)."""
+        ``delay`` is in SECONDS. The outcome feeds the NEXT promotion cycle (:meth:`run_promotion_cycle`); it
+        does not change selection by itself (governance is untouched)."""
         from agentic_os.priority_engine import OutcomeEvent
         ev = OutcomeEvent(
             candidate_id=candidate_id, source_app=source_app, action_kind=action_kind,
@@ -819,7 +878,7 @@ class _OutcomeReq(BaseModel):
     observed_reward: Optional[float] = None
     reward_dimensions: Dict[str, float] = {}
     attribution_confidence: float = 1.0
-    delay: float = 0.0
+    delay: float = 0.0               # SECONDS between the action and the outcome
 
 
 class _ProposeSourcesReq(BaseModel):
@@ -912,11 +971,64 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     return True
 
 
+@dataclass
+class RegisteredProducersProvider(SampleProjectionProvider):
+    """A provider whose 'what needs me?' surface aggregates the producers registered through the app_kit
+    boot registry (those with a live-state source — see :func:`register_live_producer_source`), selecting
+    with the PROMOTED policy. Every other projection is inherited. When no registered producer has a live
+    source it falls back to the sample surface WITH the ``basis: "sample"`` label — never silently."""
+
+    registry: Any = None
+
+    def priorities(self, project_id: str) -> dict:
+        import time
+        from agentic_os.priority_engine import (
+            DecisionOpportunity, PriorityPolicy, collect_priorities, select_action)
+        from agentic_os.agent_gateway.contracts import RiskTier
+        live = registered_live_sources(self.registry)
+        if not live:
+            return super().priorities(project_id)           # basis "sample", honestly labelled
+        learn_fn = self._learn_fn()
+
+        def _wrap(fn):
+            def _source():
+                got = fn()
+                if isinstance(got, DecisionOpportunity):
+                    sel = select_action(got, utility_fn=learn_fn)
+                    return [] if sel.action.risk_tier == RiskTier.READ else [sel.action]
+                return list(got or [])
+            return _source
+
+        summary = collect_priorities([_wrap(fn) for _, _, fn in live], PriorityPolicy(attention_budget=5),
+                                     now=time.time())
+        out = summary.as_dict()
+        out["basis"] = "registered"
+        out["producers"] = [f"{a}/{p}" for a, p, _ in live]
+        out["learning"] = self._learning_status(learn_fn)
+        return out
+
+
+def select_provider(*, persist_path: Optional[str] = None) -> ProjectionProvider:
+    """Choose the default provider explicitly. ``$PROJECTS_PROVIDER``: ``sample`` -> the sample provider;
+    ``registered`` -> the registered-producers provider; unset/``auto`` -> registered when some registered
+    producer has a live-state source, else the sample provider (whose surface is labelled ``basis: "sample"``)."""
+    import os as _os
+    choice = _os.environ.get("PROJECTS_PROVIDER", "").strip().lower()
+    if choice == "sample":
+        return SampleProjectionProvider(persist_path=persist_path)
+    if choice not in ("", "auto", "registered"):
+        raise ValueError(f"PROJECTS_PROVIDER must be 'sample', 'registered' or unset (got {choice!r})")
+    if choice == "registered" or registered_live_sources():
+        return RegisteredProducersProvider(persist_path=persist_path)
+    return SampleProjectionProvider(persist_path=persist_path)
+
+
 def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: Optional[List[str]] = None) -> FastAPI:
     # a deployment sets $OUTCOME_STORE_PATH to persist the learning loop's outcomes across restarts
     import os as _os_env
-    prov: ProjectionProvider = provider or SampleProjectionProvider(
+    prov: ProjectionProvider = provider or select_provider(
         persist_path=(_os_env.environ.get("OUTCOME_STORE_PATH", "").strip() or None))
+    from fastapi import Body
     app = FastAPI(title="ReDevOps Projects API", version="0.1.0")
     app.add_middleware(
         CORSMiddleware, allow_origins=allow_origins or ["*"],
@@ -967,6 +1079,24 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
                      observed_reward=req.observed_reward, reward_dimensions=req.reward_dimensions,
                      attribution_confidence=req.attribution_confidence, delay=req.delay),
                 "supported": True}
+
+    @app.post("/api/projects/{project_id}/policy/promotion-cycle")
+    def _promotion_cycle(project_id: str, body: Dict[str, Any] = Body(default={})) -> dict:
+        # Evaluate the candidate policy against the held-out outcomes. DRY RUN by default; the active
+        # policy changes only when the caller asks apply=true AND the deployment allows it
+        # ($PROJECTS_ALLOW_POLICY_APPLY) AND the gate passes.
+        fn = getattr(prov, "run_promotion_cycle", None)
+        if fn is None:
+            return {"supported": False}
+        import os as _os
+        allowed = _os.environ.get("PROJECTS_ALLOW_POLICY_APPLY", "").lower() in ("1", "true", "yes")
+        want = bool((body or {}).get("apply", False))
+        rep = fn(apply=bool(want and allowed))
+        return {"supported": True, "promote": rep.decision.promote, "reasons": list(rep.decision.reasons),
+                "promoted": rep.promoted, "apply_requested": want, "apply_allowed": allowed,
+                "active_version": rep.active.version, "candidate_version": rep.candidate.version,
+                "n_test": rep.result.n_test, "relative_improvement": rep.result.relative_improvement,
+                "baseline": rep.result.baseline}
 
     @app.get("/api/projects/{project_id}/discovery")
     def _discovery(project_id: str) -> List[dict]:

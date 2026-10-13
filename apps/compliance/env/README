@@ -1,0 +1,31 @@
+Pinned SCAP Security Guide (SSG) tarball hash
+=============================================
+
+ssg-<version>.sha256 pins the sha256 of scap-security-guide-<version>.tar.gz. scan.sh fails closed (exit 3)
+unless the downloaded tarball matches it (override only with COMPLIANCE_ALLOW_UNPINNED_SSG=true, which is
+recorded as ssg_hash_status "unpinned"/"mismatch-overridden" in results/scan-target.json).
+
+PROVENANCE: the v0.1.81 pin was computed from a FIRST DOWNLOAD of the release asset (trust-on-first-use).
+It was then cross-checked (2026-10-13) against the artifacts the upstream release publishes:
+  * the release asset's `scap-security-guide-0.1.81.tar.gz.sha512` file: sha512 matched
+    (b5b54150e1ae0cdf2777c41c4e1cd0234aea2ce3a2079f4b0701e93edfc30cab58852655a90bd140b99f9804f36f4ab63811b138709a3ab00373ecb99c02aada)
+  * the GitHub API asset digest for the tarball: sha256 matched 5affb4b3...bf152080
+The release publishes sha512 (not sha256) checksum files. Both checks are anchored on the same GitHub release,
+so they detect corruption/CDN tampering but not a compromised release; there is no detached signature here.
+
+HOW TO VERIFY (also when bumping the version)
+  1. Download the release asset into an EMPTY scratch dir (do not extract it):
+       mkdir -p /tmp/ssg && cd /tmp/ssg
+       V=0.1.81
+       B=https://github.com/ComplianceAsCode/content/releases/download/v$V
+       curl -fsSLO $B/scap-security-guide-$V.tar.gz
+       curl -fsSLO $B/scap-security-guide-$V.tar.gz.sha512
+  2. Compare against the checksum published on
+       https://github.com/ComplianceAsCode/content/releases  (release v$V, "Assets"):
+       sha512sum -c scap-security-guide-$V.tar.gz.sha512        # must print: ...tar.gz: OK
+  3. Compute the sha256 and compare it with the pin and with the GitHub asset digest
+     (`curl -s https://api.github.com/repos/ComplianceAsCode/content/releases/tags/v$V`, assets[].digest):
+       sha256sum scap-security-guide-$V.tar.gz
+       cat apps/compliance/env/ssg-$V.sha256
+  4. When bumping, also change SSG_VERSION in scan.sh and add env/ssg-<new>.sha256 in the same format
+     (a '#' comment header, then "<sha256>  scap-security-guide-<new>.tar.gz").

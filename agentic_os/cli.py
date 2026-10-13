@@ -7,7 +7,7 @@
     agentic-os approvals          list pending approvals
     agentic-os approve <id>       approve a pending action
     agentic-os reject <id>        reject a pending action
-    agentic-os secrets init|list|get|rotate|where   platform secrets (docs/SECRETS.md)
+    agentic-os secrets init|list|get|rotate|push|where   platform secrets (docs/SECRETS.md)
 """
 
 from __future__ import annotations
@@ -87,12 +87,34 @@ def _secrets_cmd(args, b=None, stdin_tty=None) -> int:
                     return 2
             b.rotate(args.name)
             print(f"  {args.name} rotated. Read it with: agentic-os secrets get {args.name}")
+        elif args.scmd == "push":
+            if not b.vault_configured():
+                print("  error: push needs Vault (VAULT_ADDR + VAULT_TOKEN); no local fallback.", file=sys.stderr)
+                return 1
+            plan = b.push(args.only, dry_run=True)
+            print(f"  target: {plan['location']}")
+            for n in plan["added"]:
+                print(f"  {n:26} {'would-add' if args.dry_run else 'will-add'}")
+            for n in plan["skipped_present"]:
+                print(f"  {n:26} skipped (already in Vault, not overwritten)")
+            for n in plan["missing_local"]:
+                print(f"  {n:26} skipped (not set locally)")
+            if args.dry_run or not plan["added"]:
+                print("  (dry-run, nothing written)" if args.dry_run else "  nothing to push")
+                return 0
+            tty = sys.stdin.isatty() if stdin_tty is None else stdin_tty
+            if not args.yes:
+                if not tty or input(f"  Add {len(plan['added'])} key(s) to Vault? [y/N] ").strip().lower() not in ("y", "yes"):
+                    print("  not pushed (pass --yes to confirm)", file=sys.stderr)
+                    return 2
+            r = b.push(args.only)
+            print(f"  pushed {len(r['added'])} key(s) to {r['location']}: {', '.join(r['added']) or '-'}")
         elif args.scmd == "where":
             f = b.file
             print(f"  secrets file : {f}   (compose: --env-file {f})")
             print(f"  read it      : grep '^NAME=' {f}" if b.plat != "windows" else
                   f"  read it      : Select-String '^NAME=' {f}  |  [Environment]::GetEnvironmentVariable('NAME','User')")
-            print("  vault        : vault kv get -field=NAME <mount>/<REDEVOPS_VAULT_PATH>  (default secret/vibexgen/agentic-os/stack)")
+            print("  vault        : vault kv get -field=NAME <mount>/<REDEVOPS_VAULT_PATH>  (default vibexgen/agentic-os/stack; VAULT_MOUNT=vibexgen)")
             if b.plat == "macos":
                 print("  keychain     : security find-generic-password -s redevops -a NAME -w")
             if b.plat == "windows":
@@ -131,6 +153,11 @@ def main(argv: list[str] | None = None) -> int:
     sr = ss.add_parser("rotate", help="generate a new value")
     sr.add_argument("name")
     sr.add_argument("--yes", action="store_true")
+    sp_ = ss.add_parser("push", help="copy local secrets into Vault, adding only missing keys")
+    sp_.add_argument("--to", choices=["vault"], default="vault")
+    sp_.add_argument("--only", nargs="+", metavar="NAME")
+    sp_.add_argument("--dry-run", action="store_true")
+    sp_.add_argument("--yes", action="store_true")
     ss.add_parser("where", help="platform locations and fetch commands")
     args = p.parse_args(argv)
 

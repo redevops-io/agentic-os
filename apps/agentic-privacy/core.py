@@ -278,7 +278,8 @@ def _send_verification(req_id: str, email: str, rtype: str, base: str) -> tuple[
     label = {"access": "access your data", "delete": "delete your data",
              "opt_out": "opt out of sale/sharing", "correct": "correct your data"}.get(rtype, "process your request")
     body = (f"<p>We received a request to <strong>{html.escape(label)}</strong> tied to this email "
-            f"address ({html.escape(email)}).</p><p>To verify it was you and let us proceed, click:</p>"
+            f"address ({html.escape(email)}).</p><p>To verify it was you and let us proceed, open the link below and press the "
+            f"confirm button:</p>"
             f"<p><a href=\"{html.escape(link)}\">Verify this privacy request</a></p>"
             f"<p>If you didn't make this request, ignore this email — nothing happens without verification.</p>")
     channel = _send_email(email, "Verify your privacy request", body)

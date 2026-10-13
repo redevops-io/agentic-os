@@ -48,6 +48,8 @@ def _fake_get(url, timeout=None, headers=None, params=None):
 class _FakeClient:
     """Stands in for httpx.Client — records campaign-draft POSTs."""
     posted: list[str] = []
+    fetched: list[str] = []
+    real_status = "draft"
 
     def __enter__(self):
         return self
@@ -60,6 +62,9 @@ class _FakeClient:
             return _Resp(200, {"data": {"results": LISTS}})
         if url.endswith("/api/campaigns"):
             return _Resp(200, {"data": {"results": CAMPAIGNS}})
+        if "/api/campaigns/" in url:
+            _FakeClient.fetched.append(url)
+            return _Resp(200, {"data": {"id": int(url.rsplit("/", 1)[1]), "status": _FakeClient.real_status}})
         if url.endswith("/api/subscribers"):
             return _Resp(200, {"data": {"total": 1200}})
         return _Resp(200, {"data": {}})
@@ -73,6 +78,8 @@ class _FakeClient:
 @pytest.fixture(autouse=True)
 def _fake_listmonk(monkeypatch):
     _FakeClient.posted = []
+    _FakeClient.fetched = []
+    _FakeClient.real_status = "draft"
     core._CACHE.update(ts=0.0, data=None)  # no cache bleed between tests
     monkeypatch.setattr(core, "LISTMONK_API_TOKEN", "test-key")
     monkeypatch.setattr(core, "httpx",
@@ -119,16 +126,51 @@ def test_compose_errors_instead_of_creating_empty_body_campaign(client):
     assert _FakeClient.posted == []
 
 
-def test_listmonk_status_is_read_from_response_not_hardcoded(monkeypatch):
+def _compose(prompt="x"):
+    return build_lifecycle_operator().invoke("lifecycle.compose_campaign", {"prompt": prompt, "body_html": "<p>x</p>"})
+
+
+def test_compose_reads_campaign_back_by_id():
+    res = _compose()
+    assert _FakeClient.fetched == [core.LISTMONK_API_URL + "/api/campaigns/42"]
+    assert res["status"] == "done" and res["campaign_verified"] is True and res["campaign_drafted"] is True
+    assert res["listmonk_status"] == "draft"
+
+
+def test_readback_status_wins_over_create_response(monkeypatch):
+    """Create says draft, Listmonk actually holds 'scheduled' => never reported as a verified draft."""
+    _FakeClient.real_status = "scheduled"
+    res = _compose()
+    assert res["status"] == "error" and res["campaign_verified"] is False and res["campaign_drafted"] is False
+    assert "disagrees" in res["error"]
+
+
+def test_non_draft_status_consistently_reported_is_an_error(monkeypatch):
     monkeypatch.setattr(_FakeClient, "post",
                         lambda self, url, headers=None, json=None: _Resp(201, {"data": {"id": 7, "status": "scheduled"}}))
-    res = build_lifecycle_operator().invoke("lifecycle.compose_campaign",
-                                            {"prompt": "x", "body_html": "<p>x</p>"})
-    assert res["listmonk_status"] == "scheduled"           # surfaced, not claimed to be "draft"
+    _FakeClient.real_status = "scheduled"
+    res = _compose()
+    assert res["campaign_verified"] is True and res["campaign_drafted"] is False
+    assert res["status"] == "error" and res["listmonk_status"] == "scheduled" and "not 'draft'" in res["error"]
+
+
+def test_missing_status_in_create_response_uses_readback(monkeypatch):
     monkeypatch.setattr(_FakeClient, "post", lambda self, url, headers=None, json=None: _Resp(201, {"data": {"id": 8}}))
-    res = build_lifecycle_operator().invoke("lifecycle.compose_campaign",
-                                            {"prompt": "y", "body_html": "<p>y</p>"})
-    assert res["listmonk_status"] is None
+    res = _compose("y")
+    assert res["listmonk_status"] == "draft" and res["campaign_verified"] is True
+
+
+def test_readback_failure_is_not_verified(monkeypatch):
+    real_get = _FakeClient.get
+    monkeypatch.setattr(_FakeClient, "get", lambda self, url, headers=None, params=None:
+                        _Resp(404, {}) if "/api/campaigns/" in url else real_get(self, url, headers, params))
+    res = _compose()
+    assert res["status"] == "error" and res["campaign_verified"] is False and res["campaign_id"] == 42
+
+
+def test_declared_outputs_include_readback_marker():
+    caps = {c.name: c for c in build_lifecycle_operator().manifest.capabilities}
+    assert {"campaign_drafted", "campaign_verified"} <= set(caps["lifecycle.compose_campaign"].outputs)
 
 
 def test_segment_and_flow_without_llm_report_llm_unavailable(client):

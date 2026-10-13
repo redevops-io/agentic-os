@@ -11,12 +11,30 @@ This is the seam that turns `agents/<app>` (today: an AgentConsole) into a Missi
 operator without changing how the app runs standalone.
 """
 
+import logging
 from dataclasses import dataclass, field
 from typing import Callable
 
 from .types import CapabilityManifest, CapabilitySpec, NodeCost, to_jsonable
 
 Handler = Callable[[dict], dict]
+
+
+_log = logging.getLogger("agentic_os.operator")
+
+
+def _warn_if_no_approval_secret(operator: str) -> None:
+    """One startup warning (router mount time) when approved actions cannot be verified."""
+    try:
+        from .approval import _secret_bytes  # noqa: PLC0415
+        if _secret_bytes():
+            return
+    except Exception:  # noqa: BLE001
+        return
+    _log.warning(
+        "operator %s: AGENTIC_OS_APPROVAL_SECRET is not set, so approval tokens cannot be verified and approved "
+        "actions will stay staged (fail closed). Run `agentic-os secrets init` (see docs/SECRETS.md) and give "
+        "the same value to the mission runtime and every HTTP operator.", operator)
 
 
 @dataclass
@@ -131,6 +149,7 @@ class Operator:
         from fastapi import APIRouter, Header, HTTPException
         from pydantic import BaseModel
 
+        _warn_if_no_approval_secret(self.name)
         router = APIRouter(tags=[f"operator:{self.name}"])
 
         class InvokeBody(BaseModel):

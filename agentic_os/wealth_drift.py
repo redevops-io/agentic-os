@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from agentic_os.agent_gateway.contracts import RiskTier
+from agentic_os.attribution import HOUR_SECONDS, delay_attribution
 from agentic_os.priority_engine import DecisionOpportunity, InterventionCandidate, OutcomeEvent
 
 
@@ -83,7 +84,10 @@ def wealth_outcome(action: InterventionCandidate, *, assumption_confirmed_stale:
         dims["needless_flag"] = -1.0
     weights = {"confirmed_stale": 0.6, "plan_improved": 1.0, "needless_flag": 0.8}
     raw = sum(weights.get(k, 1.0) * v for k, v in dims.items())
-    attribution = 0.7 if delay_hours <= 168 else 0.5      # plan outcomes are slow + hard to attribute
+    delay_s = delay_hours * HOUR_SECONDS     # OutcomeEvent.delay is SECONDS everywhere
+    attribution = delay_attribution(delay_s, half_life_seconds=30 * 24 * HOUR_SECONDS,
+                                    causal_link_strength=0.5, outcome_specificity=0.5,
+                                    observation_quality=0.7)      # plan outcomes are slow + hard to attribute
     return OutcomeEvent(candidate_id=action.candidate_id, source_app="wealth",
                         action_kind=action.action_kind, observed_reward=raw, reward_dimensions=dims,
-                        delay=delay_hours, attribution_confidence=attribution)
+                        delay=delay_s, attribution_confidence=attribution)

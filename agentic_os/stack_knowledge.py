@@ -878,7 +878,7 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
             "managed block in ~/.bashrc. macOS: the same file, loaded from ~/.zshrc, plus the Keychain. "
             "Windows: %APPDATA%\\redevops\\secrets.env plus user-level environment variables and Credential "
             "Manager. With VAULT_ADDR and VAULT_TOKEN set they go to Vault KV v2 at "
-            "secret/vibexgen/agentic-os/stack instead (REDEVOPS_VAULT_PATH to change). Containers: pass "
+            "KV v2 mount vibexgen, path agentic-os/stack instead (VAULT_MOUNT / REDEVOPS_VAULT_PATH to change); `agentic-os secrets push` copies locally exported secrets into it (add-only). Containers: pass "
             "`docker compose --env-file ~/.config/redevops/secrets.env up -d`. Run `agentic-os secrets where` "
             "to see the exact paths on this machine."),
         source="docs/SECRETS.md · agentic_os/secrets/bootstrap.py"),
@@ -893,7 +893,7 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
             "Use `agentic-os secrets get NAME` (add `--decode` to base64-decode *_B64 values or to split "
             "OUTREACH_BASIC_AUTH into user and password; `--as-header` prints the Authorization: Basic header). "
             "Raw equivalents: Linux/macOS `grep '^NAME=' ~/.config/redevops/secrets.env`; Vault "
-            "`vault kv get -field=NAME secret/vibexgen/agentic-os/stack`; macOS Keychain "
+            "`vault kv get -mount=vibexgen -field=NAME agentic-os/stack`; macOS Keychain "
             "`security find-generic-password -s redevops -a NAME -w`; Windows PowerShell "
             "`[Environment]::GetEnvironmentVariable('NAME','User')` or Credential Manager (service redevops). "
             "Treat the output as sensitive: do not paste it into chats or tickets."),
@@ -908,7 +908,7 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
             "Either export it before the first start (a secret already in your environment is respected and "
             "never replaced), or edit the NAME=value line in your secrets file (Linux/macOS "
             "~/.config/redevops/secrets.env; Windows %APPDATA%\\redevops\\secrets.env; Vault: "
-            "`vault kv patch secret/vibexgen/agentic-os/stack NAME=value`). Requirements: approval and Twenty "
+            "`vault kv patch -mount=vibexgen agentic-os/stack NAME=value`). Requirements: approval and Twenty "
             "secrets at least 32 characters (Twenty must not contain 'demo-only'); OUTREACH_BASIC_AUTH as "
             "user:password with a 20+ character password. Then restart the services that use it. "
             "`agentic-os secrets list` shows whether your value is accepted."),

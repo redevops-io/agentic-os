@@ -20,7 +20,7 @@ Read precedence: process env > secrets file > OS keyring > Vault (if configured)
 | Linux | `~/.config/redevops/secrets.env` (dir 0700, file 0600) | managed block in `~/.bashrc` that *sources* the file | Secret Service keyring mirror (if `keyring` installed) |
 | macOS | same path | managed block in `~/.zshrc` (and `~/.bash_profile` if present) | Keychain mirror |
 | Windows | `%APPDATA%\redevops\secrets.env` (ACL: current user) | user-level environment variables | Credential Manager mirror |
-| Vault / cloud | KV v2 `secret/vibexgen/agentic-os/stack` (`VAULT_MOUNT`, `REDEVOPS_VAULT_PATH`) | fetch at deploy time | selected when `VAULT_ADDR` + `VAULT_TOKEN` are set, or `--backend vault`; only missing keys are added, other keys are kept; if Vault is unreachable `init` fails (no local fallback) |
+| Vault / cloud | KV v2 mount `vibexgen`, path `agentic-os/stack` (overrides `VAULT_MOUNT`, `REDEVOPS_VAULT_PATH`) | fetch at deploy time | selected when `VAULT_ADDR` + `VAULT_TOKEN` are set, or `--backend vault`; only missing keys are added, other keys are kept; if Vault is unreachable `init` fails (no local fallback) |
 | Containers | pass the file: `docker compose --env-file ~/.config/redevops/secrets.env up -d` | never generated inside a container | every operator needs the same approval secret |
 
 Override the file location with `REDEVOPS_SECRETS_FILE`. The rc block is bounded by
@@ -34,6 +34,7 @@ agentic-os secrets init [--backend auto|file|vault] [--dry-run] [--no-shell-prof
 agentic-os secrets list                 # name, present, where, valid / weak reason (no values)
 agentic-os secrets get NAME [--decode] [--as-header]
 agentic-os secrets rotate NAME [--yes]
+agentic-os secrets push [--to vault] [--only NAME ...] [--dry-run] [--yes]
 agentic-os secrets where
 ```
 
@@ -43,15 +44,25 @@ agentic-os secrets where
 - `agentic-os secrets get OUTREACH_BASIC_AUTH --decode` prints `user` and `password`; `--as-header` prints
   `Authorization: Basic <base64>`. `--decode` also base64-decodes names ending in `_B64`.
 - Raw equivalents: Linux/macOS `grep '^NAME=' ~/.config/redevops/secrets.env`; Vault
-  `vault kv get -field=NAME secret/vibexgen/agentic-os/stack`; macOS
+  `vault kv get -mount=vibexgen -field=NAME agentic-os/stack`; macOS
   `security find-generic-password -s redevops -a NAME -w`; Windows PowerShell
   `[Environment]::GetEnvironmentVariable('NAME','User')` or Credential Manager (service `redevops`).
 
 ## Override with your own value
 
 Export it before the first start (env is respected, never replaced), or edit the `NAME=value` line in the secrets
-file, or `vault kv patch secret/vibexgen/agentic-os/stack NAME=value`. Then restart the services using it and check
+file, or `vault kv patch -mount=vibexgen agentic-os/stack NAME=value`. Then restart the services using it and check
 `agentic-os secrets list` (it flags values that are too short or contain `demo-only`).
+
+## Push local secrets to Vault
+
+`agentic-os secrets push` copies managed secrets that exist locally (env, secrets file, keyring) into the Vault
+bundle (mount `vibexgen`, path `agentic-os/stack`; needs `VAULT_ADDR` + `VAULT_TOKEN`). It adds ONLY keys missing
+in Vault: it reads the bundle, merges, and writes with check-and-set on the version read (a concurrent change is
+re-read and retried, never overwritten). Existing Vault values and unrelated keys are untouched and reported as
+skipped. If Vault is unreachable or denies access it fails with no local fallback. Values are never printed.
+Use `--dry-run` to preview and `--only NAME ...` to limit; it prompts unless `--yes`. To reuse an exported
+approval secret: `export AGENTIC_OS_APPROVAL_SECRET=...; agentic-os secrets push --only AGENTIC_OS_APPROVAL_SECRET`.
 
 ## Rotate
 

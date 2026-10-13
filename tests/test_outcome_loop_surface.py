@@ -5,7 +5,12 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from agentic_os.policy_promotion import PromotionGate
 from agentic_os.projects_api import SampleProjectionProvider, create_app
+
+
+#: a permissive gate for the small simulated logs below (the production default needs 30 held-out events)
+_GATE = PromotionGate(min_test_events=5, min_keys_covered=2, min_relative_improvement=0.0)
 
 
 def _crm_action(surface):
@@ -40,6 +45,12 @@ def test_recording_outcomes_changes_the_selected_action():
         c.post("/api/outcomes", json={"source_app": "crm", "action_kind": "schedule_call",
                                       "observed_reward": 0.9, "attribution_confidence": 0.9})
 
+    # recording outcomes alone does NOT change selection: only a gated promotion cycle does
+    unpromoted = c.get("/api/projects/customer-ops/priorities").json()
+    assert unpromoted["learning"]["selection_adjusted"] is False and _crm_action(unpromoted) == "send_proposal"
+    assert prov.run_promotion_cycle(apply=False, gate=_GATE).promoted is False      # dry run changes nothing
+    assert prov.run_promotion_cycle(apply=True, gate=_GATE).promoted is True
+
     after_surface = c.get("/api/projects/customer-ops/priorities").json()
     assert after_surface["learning"]["selection_adjusted"] is True
     assert _crm_action(after_surface) == "schedule_call"    # selection changed from observed outcomes
@@ -52,6 +63,7 @@ def test_selection_stays_governed_after_learning():
     for _ in range(20):
         c.post("/api/outcomes", json={"source_app": "crm", "action_kind": "schedule_call",
                                       "observed_reward": 0.9})
+    prov.run_promotion_cycle(apply=True, gate=_GATE)
     s = c.get("/api/projects/customer-ops/priorities").json()
     crm_items = [it for it in s["surfaced"] + s["deferred"]
                  if it["source_app"] == "crm" and it["candidate_id"].startswith("crm:Acme:")]

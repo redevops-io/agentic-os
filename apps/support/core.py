@@ -361,6 +361,29 @@ def send_onboarding(body: dict) -> dict:
     welcome = _welcome_text(str(name), plan if plan is None else str(plan))
 
     conv_id = body.get("conversation_id")
+    create_payload: dict = {}
+    if not conv_id:
+        # Chatwoot's POST /conversations REQUIRES an inbox (and the contact's source_id in it). Never attempt a
+        # malformed create: fail with a clear config_error before any write.
+        inbox_id = body.get("inbox_id") or os.environ.get("CHATWOOT_INBOX_ID", "").strip()
+        source_id = body.get("source_id") or os.environ.get("CHATWOOT_SOURCE_ID", "").strip()
+        if not inbox_id:
+            return {"status": "config_error", "action": "send_onboarding", "onboarding_sent": False,
+                    "error": "inbox_id required to create an onboarding conversation: pass `inbox_id` (and "
+                             "optionally `source_id`/`contact_id`) or set CHATWOOT_INBOX_ID (and "
+                             "CHATWOOT_SOURCE_ID). Nothing was sent.",
+                    "missing": ["inbox_id"]}
+        try:
+            inbox_id = int(inbox_id)
+        except (TypeError, ValueError):
+            return {"status": "config_error", "action": "send_onboarding", "onboarding_sent": False,
+                    "error": f"inbox_id must be an integer, got {inbox_id!r}. Nothing was sent.",
+                    "missing": ["inbox_id"]}
+        create_payload = {"inbox_id": inbox_id, "additional_attributes": {"source": "onboarding"}}
+        if source_id:
+            create_payload["source_id"] = str(source_id)
+        if body.get("contact_id"):
+            create_payload["contact_id"] = body["contact_id"]
     try:
         with httpx.Client(timeout=15.0) as client:
             # Create a welcome conversation unless the caller supplied one.
@@ -368,7 +391,7 @@ def send_onboarding(body: dict) -> dict:
                 rc = client.post(
                     f"{_acct_base()}/conversations",
                     headers=_headers(),
-                    json={"additional_attributes": {"source": "onboarding"}},
+                    json=create_payload,
                 )
                 if rc.status_code not in (200, 201):
                     return {"status": "error", "action": "send_onboarding",

@@ -82,11 +82,37 @@ class InterventionCandidate:
         return (self.source_app, self.action_kind or self.proposed_action[:24])
 
 
+#: The ONE canonical label for "do not intervene". The always-present baseline candidate carries it as
+#: its ``action_kind``; replay / A0 / shadow compare on it (via :func:`normalize_action_label`), so an
+#: abstention can agree with a human who also chose to do nothing.
+DO_NOTHING = "do_nothing"
+_DO_NOTHING_ALIASES = frozenset({"do_nothing", "do nothing", "do-nothing", "donothing", "nothing", "abstain",
+                                 "noop", "no_op", "no-op", "no action", "no_action"})
+
+
+def normalize_action_label(label: Optional[str]) -> str:
+    """Canonicalise an action label for comparison: case/whitespace-insensitive, and every spelling of
+    'do nothing' ('do nothing', 'do-nothing', 'abstain', …) collapses to :data:`DO_NOTHING`."""
+    t = (label or "").strip().lower()
+    if t in _DO_NOTHING_ALIASES:
+        return DO_NOTHING
+    return t
+
+
+def canonical_action_label(c: "InterventionCandidate") -> str:
+    """The label a candidate is compared under: the do-nothing baseline -> DO_NOTHING; otherwise its
+    (normalised) ``learn_key`` action kind — the same kind the outcome learner groups by."""
+    if c.candidate_id == "do-nothing":
+        return DO_NOTHING
+    return normalize_action_label(c.action_kind or c.proposed_action[:24] or c.candidate_id)
+
+
 def do_nothing(subject: str, source_app: str = "") -> InterventionCandidate:
     """The always-present baseline candidate (§17). Zero value, zero cost, zero risk — every real
     candidate must beat it, which is what stops the system acting by default."""
     return InterventionCandidate(source_app=source_app, subject=subject, proposed_action="do nothing",
-                                 expected_value=0.0, confidence=1.0, candidate_id="do-nothing")
+                                 expected_value=0.0, confidence=1.0, candidate_id="do-nothing",
+                                 action_kind=DO_NOTHING)
 
 
 class Action(enum.Enum):
@@ -296,13 +322,16 @@ class OutcomeEvent:
     note: str = ""
     action_kind: str = ""                    # the action type, so the learner can group by it
     reward_dimensions: Mapping[str, float] = field(default_factory=dict)  # e.g. {"reply":1,"unsub":0}
-    delay: float = 0.0                       # time between the action and the observed outcome
+    delay: float = 0.0                       # SECONDS between the action and the observed outcome (never hours)
     attribution_confidence: float = 1.0      # 0..1, how confidently the outcome is attributed to the action
     # causal/evidence-graph edges (populated when an observation is correlated to interventions) — so a
     # later EXPLAIN can trace WHY a learned utility moved, not just join two logs that share ids.
     source_observation_ids: Tuple[str, ...] = ()      # the observation(s) this outcome was read from
     candidate_intervention_ids: Tuple[str, ...] = ()  # interventions that could plausibly explain it
     selected_intervention_id: str = ""                # the one it was attributed to
+    # the producer prior (base priority, BEFORE any learned adjustment) the selection was made on — lets
+    # the promotion gate evaluate against what was actually used at selection. None = not recorded.
+    prior_utility: Optional[float] = None
 
     def scalar_reward(self, weights: Optional[Mapping[str, float]] = None) -> float:
         """Collapse the reward to a single attribution-weighted number for ranking/learning. Uses the
