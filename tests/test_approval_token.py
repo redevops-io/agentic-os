@@ -240,5 +240,8 @@ def test_e2e_http_saga_gated_undo_executes(monkeypatch):
 def test_e2e_http_saga_gated_undo_without_secret_stays_visibly_unexecuted(monkeypatch):
     rt, m, seen = _saga_http(monkeypatch, secret=False)
     assert seen["refund_executed"] == 0                             # fail closed: no secret, no execution
-    comp = [e for e in rt.repo.timeline(m.id) if e["type"] == "NodeCompensated"]
+    tl = rt.repo.timeline(m.id)
+    assert not [e for e in tl if e["type"] == "NodeCompensated"]            # a staged undo is NOT "compensated"
+    comp = [e for e in tl if e["type"] == "NodeCompensationFailed"]
     assert comp and comp[0]["payload"]["result"].get("executed") is False   # the staged result is visible
+    assert m.outcome["compensation_incomplete"] is True

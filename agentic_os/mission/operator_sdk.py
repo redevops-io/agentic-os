@@ -120,11 +120,10 @@ class Operator:
         # Mission verifier reads the declared output key back as ABSENT and REJECTS — a LAPI 403 or a failed
         # call can no longer be minted into `{key: True}` and read back as success. (Markers stay a fallback;
         # the real N4 fix is a verifier that reads the core's state, tracked separately.)
-        _failed = isinstance(result, dict) and (
-            bool(result.get("error")) or result.get("executed") is False or result.get("ok") is False
-            or str(result.get("status", "")).lower() in {
-                "error", "failed", "failure", "denied", "rejected", "pending_approval",
-                "awaiting_approval", "awaiting_connector", "unverifiable", "blocked"})
+        # The classifier is shared with the Mission verifier (mission.verify.result_failed) so the two can
+        # never disagree about what a failure looks like.
+        from .verify import result_failed  # noqa: PLC0415
+        _failed = isinstance(result, dict) and result_failed(result)[0]
         if isinstance(result, dict) and result and outs and not _failed and not any(k in result for k in outs):
             result = {**result, **{k: True for k in outs}}
         if idempotency_key and _dk is not None:

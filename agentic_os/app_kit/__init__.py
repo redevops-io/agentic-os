@@ -29,6 +29,7 @@ from .derive import manifest_from_operator
 from .decision_bridge import (
     BRIDGE_CONTRACT_VERSION,
     BridgeError,
+    LaunchRefused,
     BridgeOutcome,
     BridgeResult,
     MissionLauncher,
@@ -36,7 +37,7 @@ from .decision_bridge import (
     bridge_selection,
     build_request,
 )
-from .mission_launcher import MissionRuntimeLauncher, drive
+from .mission_launcher import MissionRuntimeLauncher, auto_approve_for_tests, drive
 from .registry import AppRegistry, ManifestError, RegisteredApp
 
 __all__ = [
@@ -66,6 +67,8 @@ __all__ = [
     "bridge_selection",
     "build_request",
     "MissionRuntimeLauncher",
+    "auto_approve_for_tests",
+    "LaunchRefused",
     "drive",
     "manifest_from_operator",
     "DeploySpec",

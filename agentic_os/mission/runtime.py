@@ -37,7 +37,7 @@ from .registry import CapabilityRegistry, PolicyScopedRegistry
 from .scheduler import TopoScheduler, SchedulePolicy
 from .simulator import simulate
 from .store import EventStore, WorldState, MissionRepository
-from .verify import CompositeVerifier, needs_verification
+from .verify import CompositeVerifier, is_staged, needs_verification, result_failed
 from .types import (
     Mission, MissionState, ExecutionPlan, HumanTask, MissionOutcomeEvent, NodeState,
     VerificationDecision, Budget, new_id, now, to_jsonable,
@@ -207,7 +207,7 @@ class MissionRuntime:
                         template: str | None = None, verified_intent: Any = None,
                         policy: "MissionPolicy | None" = None,
                         principal: Any = None, tenant: str = "",
-                        inputs: dict | None = None) -> Mission:
+                        inputs: dict | None = None, intervention_id: str = "") -> Mission:
         # v0.2.x Slice 1 — carry the Discovery seal across the boundary. ``verified_intent`` is an
         # optional sealed VerifiedIntent (duck-typed: a runtime_contracts.VerifiedIntent, or a dict, or
         # anything exposing ``content_hash``/``evidence``); its identity is recorded on the mission and
@@ -218,6 +218,7 @@ class MissionRuntime:
                     policy=policy, budget=budget or Budget(), template=template,
                     world_state_id=new_id("world"),
                     principal=principal, tenant=tenant, inputs=dict(inputs or {}),
+                    intervention_id=intervention_id or "",
                     intent_content_hash=identity.get("intent_content_hash", ""),
                     evidence_refs=identity.get("evidence_refs", []))
         self._missions[m.id] = m
@@ -232,6 +233,8 @@ class MissionRuntime:
                            # records who asked and what it was handed, instead of only a goal string.
                            "principal": getattr(m.principal, "id", m.principal) if m.principal else None,
                            "tenant": m.tenant or None,
+                           # the Decision↔Mission link, mission side (the InterventionRecord holds the other)
+                           "intervention_id": m.intervention_id or None,
                            "input_keys": sorted(m.inputs.keys()) if m.inputs else [],
                            # mission-policy/v1 — pin the named policy identity onto mission creation
                            "policy": (m.policy.ref if m.policy else None),
@@ -244,6 +247,14 @@ class MissionRuntime:
             # stage-1 scoping left no permitted way to achieve an outcome — fail closed, don't crash
             self._set_state(m, MissionState.FAILED)
             self.store.append("MissionBlocked", m.id, {"reason": "no_permitted_plan", "detail": str(e)})
+        return m
+
+    def cancel_mission(self, mission_id: str, reason: str = "") -> Mission:
+        """Cancel a mission that has not executed anything (e.g. a launch the launcher refused after
+        inspecting the compiled plan). Records ``MissionCancelled`` so the refusal is on the ledger."""
+        m = self._missions[mission_id]
+        self._set_state(m, MissionState.CANCELLED)
+        self.store.append("MissionCancelled", m.id, {"reason": reason})
         return m
 
     def create_mission_from_intent(self, intent, *, policy_refs: list[str] | None = None,
@@ -532,6 +543,25 @@ class MissionRuntime:
         calls it SERIALLY in deterministic node order after the parallel operator invocations have joined
         — the network wait overlaps, the state transition does not."""
         node.result = result
+        # A capability that ran WITHOUT a runtime approval and answered "staged / awaiting approval" did NOT
+        # execute: it must not be committed as a success (the hole where an ungated node's
+        # ``pending_approval()`` preview was minted into world state). The ungoverned HTTP path still returns
+        # that dict to its caller unchanged — only mission verification treats it as not-committed. The node
+        # fails closed (``staged_not_executed``) rather than re-parking: the planner/policy chose NOT to gate
+        # it, so there is no human task to resume, and failing keeps the gated flows (which park BEFORE
+        # dispatch and then run with ``_approval``) untouched.
+        if is_staged(result) and self._approval_marker(m.id, node.id) is None:
+            self.store.append("NodeFailed", m.id,
+                              {"node_id": node.id, "capability": node.capability,
+                               "reason": "staged_not_executed",
+                               "error": f"{node.capability} returned a staged result "
+                                        f"({result.get('status')}) without a runtime approval; not executed"})
+            self._meter(m, node, "error")
+            self.learning.record_capability(node.capability, False)
+            self._observe_routing(node, False)
+            self._saga(m, plan, world)
+            self._fail(m, plan, reason=f"{node.capability}: staged_not_executed")
+            return False
         # P7B: verify a consequential result BEFORE it becomes authoritative world state.
         if needs_verification(node) and node.id not in self._verify_ok(m.id):
             vr = self.verifier.verify(node, result, world, m)
@@ -875,15 +905,37 @@ class MissionRuntime:
     # ── sagas / failure / success ──────────────────────────────────────────────
     def _saga(self, m: Mission, plan: ExecutionPlan, world: WorldState) -> None:
         status = self.repo.node_status(m.id)
+        remaining: list[str] = []
         for node in reversed(plan.graph.nodes):
             if status.get(node.id) == NodeState.DONE and node.side_effecting and node.undo:
-                out = self._executor_for(m).compensate(node, mission_id=m.id)
-                self.store.append("NodeCompensated", m.id,
-                                  {"node_id": node.id, "undo": node.undo, "result": out})
+                reason = ""
+                try:
+                    out = self._executor_for(m).compensate(node, mission_id=m.id)
+                except Exception as e:  # noqa: BLE001 — best effort; never raise past the caller
+                    out, reason = {"undo_error": str(e)}, f"undo raised: {e}"
+                if not reason:
+                    if isinstance(out, dict) and out.get("undo_error"):
+                        reason = f"undo raised: {out['undo_error']}"
+                    else:
+                        failed, why = result_failed(out) if out is not None else (True, "undo returned nothing")
+                        reason = why if failed else ""
+                if reason:
+                    # The undo staged / errored / raised — the forward side effect REMAINS. Never report it
+                    # as compensated.
+                    remaining.append(node.id)
+                    self.store.append("NodeCompensationFailed", m.id,
+                                      {"node_id": node.id, "undo": node.undo, "reason": reason, "result": out})
+                else:
+                    self.store.append("NodeCompensated", m.id,
+                                      {"node_id": node.id, "undo": node.undo, "result": out})
+        if remaining:
+            m.outcome = {**(m.outcome or {}), "compensation_incomplete": True,
+                         "compensation_remaining": remaining}
 
     def _fail(self, m: Mission, plan: ExecutionPlan, reason: str) -> None:
         self._set_state(m, MissionState.FAILED)
-        m.outcome = {"success": False, "reason": reason}
+        keep = {k: v for k, v in (m.outcome or {}).items() if k.startswith("compensation_")}
+        m.outcome = {"success": False, "reason": reason, **keep}
         self._emit_outcome(m, plan, success=False)
         self._reflect(m)
 
@@ -1100,11 +1152,18 @@ class MissionRuntime:
         state, what's waiting on a human, and what the loops have learned."""
         tl = self.repo.timeline(mission_id)
         steps = [e for e in tl if e["type"] in ("NodeSucceeded", "NodeParked", "NodeFailed",
-                                                "NodeCompensated", "BeliefDisputed", "BeliefResolved",
+                                                "NodeCompensated", "NodeCompensationFailed", "BeliefDisputed", "BeliefResolved",
                                                 "VerificationFailed")]
         world = {k: (b.value if b else None) for k, b in self._world(mission_id).snapshot().items()}
         st = self.repo.state(mission_id)
+        comp_failed: dict[str, str] = {}
+        for e in tl:                     # derived from the log, so it survives restart/rehydrate
+            if e["type"] == "NodeCompensationFailed":
+                comp_failed[e["payload"]["node_id"]] = e["payload"].get("reason", "")
+            elif e["type"] == "NodeCompensated":
+                comp_failed.pop(e["payload"]["node_id"], None)
         return {"mission_id": mission_id, "goal": self.repo.goal(mission_id),
+                "compensation_incomplete": bool(comp_failed), "compensation_remaining": comp_failed,
                 "state": st.value if st else None, "steps": steps, "world_state": world,
                 "pending_human": self.repo.pending_human(mission_id),
                 "evidence": self.evidence.ledger(mission_id),

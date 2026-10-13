@@ -57,6 +57,12 @@ class MissionRequest:
     action_kind: str
     subject: str
     evidence_refs: Tuple[str, ...] = ()
+    principal: Any = None                            # the delegating identity (carried onto the mission)
+
+
+class LaunchRefused(BridgeError):
+    """The launcher refused to run a mission: its compiled plan does not bind exactly the selected
+    capability (it misses it, or adds an unselected side-effecting one). No node is ever executed."""
 
 
 class MissionLauncher(Protocol):
@@ -96,7 +102,8 @@ def _goal_for(sel: SelectedAction) -> str:
 
 def build_request(sel: SelectedAction, *, intervention_id: str,
                   inputs: Optional[Mapping[str, Any]] = None,
-                  evidence_refs: Tuple[str, ...] = ()) -> MissionRequest:
+                  evidence_refs: Tuple[str, ...] = (),
+                  principal: Any = None) -> MissionRequest:
     """Build the MissionRequest for an actionable selection. Raises BridgeError if the candidate
     carries no capability (a phantom actionable candidate the plan wants eliminated)."""
     c = sel.action
@@ -116,6 +123,7 @@ def build_request(sel: SelectedAction, *, intervention_id: str,
         action_kind=c.action_kind or c.proposed_action[:40],
         subject=c.subject,
         evidence_refs=tuple(evidence_refs),
+        principal=principal,
     )
 
 
@@ -124,6 +132,7 @@ def bridge_selection(sel: SelectedAction, *, store, policy_version: str,
                      inputs: Optional[Mapping[str, Any]] = None,
                      evidence_refs: Tuple[str, ...] = (),
                      intervention_id: Optional[str] = None,
+                     principal: Any = None,
                      now: Optional[float] = None) -> BridgeResult:
     """Bridge one Priority-Engine selection to a mission (or to nothing), always writing a record.
 
@@ -145,7 +154,8 @@ def bridge_selection(sel: SelectedAction, *, store, policy_version: str,
         store.append(record)
         return BridgeResult(outcome=outcome, record=record)
 
-    request = build_request(sel, intervention_id=iid, inputs=inputs, evidence_refs=refs)
+    request = build_request(sel, intervention_id=iid, inputs=inputs, evidence_refs=refs,
+                            principal=principal)
     mission_id = launcher.launch(request) if launcher is not None else ""
     record = record_from_selection(sel, intervention_id=iid, policy_version=policy_version,
                                     proposed_at=ts, evidence_refs=refs, mission_id=mission_id)
@@ -157,6 +167,7 @@ def bridge_selection(sel: SelectedAction, *, store, policy_version: str,
 __all__ = [
     "BRIDGE_CONTRACT_VERSION",
     "BridgeError",
+    "LaunchRefused",
     "BridgeOutcome",
     "MissionRequest",
     "MissionLauncher",

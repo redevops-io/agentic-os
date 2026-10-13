@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from agentic_os.agent_gateway.contracts import ApprovalPolicy, RiskTier
 from agentic_os.app_kit import bridge_selection
-from agentic_os.app_kit.mission_launcher import MissionRuntimeLauncher, drive
+from agentic_os.app_kit.mission_launcher import MissionRuntimeLauncher, auto_approve_for_tests, drive
 from agentic_os.intervention_record import InMemoryInterventionStore
 from agentic_os.mission.executor import Executor
 from agentic_os.mission.operator_sdk import LocalOperatorClient, Operator, capability
@@ -51,7 +51,7 @@ def test_n3_approved_gated_node_executes():
     rt.run(res.mission_id)
     assert rt._missions[res.mission_id].state is MissionState.WAITING_HUMAN   # parked (nothing done)
     assert "committed" not in str(rt._world(res.mission_id).snapshot())
-    drive(rt, res.mission_id)                                                 # approve
+    drive(rt, res.mission_id, approver=auto_approve_for_tests)                                                 # approve
     assert rt._missions[res.mission_id].state is MissionState.SUCCEEDED
     assert "committed" in str(rt._world(res.mission_id).snapshot())           # executed on approval
 
@@ -73,7 +73,7 @@ def test_n3_resumed_handler_receives_approval_marker():
     res = _launch(rt, _candidate("ref.act", "act", risk=RiskTier.CONSEQUENTIAL, approval=ApprovalPolicy.REQUIRED))
     rt.run(res.mission_id)
     assert seen.get("approval") is None                                       # parked — handler not yet run
-    drive(rt, res.mission_id)                                                 # approve (no typed edit)
+    drive(rt, res.mission_id, approver=auto_approve_for_tests)                                                 # approve (no typed edit)
     assert rt._missions[res.mission_id].state is MissionState.SUCCEEDED
     assert seen["approval"] and seen["approval"].get("approved") is True      # handler saw the approval marker
 
@@ -87,7 +87,7 @@ def test_n4_failed_verifier_blocks_commit():
                                      side_effecting=True)])
     rt = _runtime(op)
     res = _launch(rt, _candidate("ref.badwrite", "badwrite"))
-    mission = drive(rt, res.mission_id)
+    mission = drive(rt, res.mission_id, approver=auto_approve_for_tests)
     assert mission.state is not MissionState.SUCCEEDED          # verification blocked the commit
     assert "result" not in str(rt._world(res.mission_id).snapshot())
 
@@ -98,6 +98,6 @@ def test_n4_passing_verifier_commits():
                                      side_effecting=True)])
     rt = _runtime(op)
     res = _launch(rt, _candidate("ref.goodwrite", "goodwrite"))
-    mission = drive(rt, res.mission_id)
+    mission = drive(rt, res.mission_id, approver=auto_approve_for_tests)
     assert mission.state is MissionState.SUCCEEDED
     assert "ok" in str(rt._world(res.mission_id).snapshot())

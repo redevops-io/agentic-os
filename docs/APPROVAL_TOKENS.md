@@ -39,7 +39,10 @@ An undo capability can itself be approval-gated (e.g. `unblock_ip`, `cancel_subs
 "compensation": True}`) plus `_node`/`_mission`: an undo is part of the scope of the action it reverses, and
 before handlers were gated these undos ran unconditionally. Over HTTP the client mints the signed token from
 that marker like any other approval, so it needs the same `AGENTIC_OS_APPROVAL_SECRET`. Without the secret the
-undo stages (fails closed) and the `NodeCompensated` event carries the staged result.
+undo stages (fails closed) and the `NodeCompensationFailed` event carries the staged result.
 
-Known gap: `MissionRuntime._saga` still records `NodeCompensated` whatever the undo returned. A follow-up
-should record a compensation failure when the result says `executed: False` / `pending_approval`.
+Compensation reporting (formerly a known gap, now closed): `MissionRuntime._saga` records `NodeCompensated`
+only when the undo actually succeeded. An undo that staged (`pending_approval` / `executed: False`), errored,
+or raised is recorded as `NodeCompensationFailed` (with a `reason` and the raw result), the mission's
+`outcome` carries `compensation_incomplete: true` plus `compensation_remaining` (the nodes whose side effects
+remain), and `explain()` surfaces both. The saga stays best-effort and never raises past its caller.
