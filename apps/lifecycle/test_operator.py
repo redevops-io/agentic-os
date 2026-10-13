@@ -66,7 +66,8 @@ class _FakeClient:
 
     def post(self, url, headers=None, json=None):
         _FakeClient.posted.append(url)
-        return _Resp(201, {"data": {"id": 42}})
+        _FakeClient.last_payload = json
+        return _Resp(201, {"data": {"id": 42, "status": "draft"}})
 
 
 @pytest.fixture(autouse=True)
@@ -102,12 +103,32 @@ def test_capabilities_manifest(client):
 
 def test_invoke_compose_writes_draft_to_real_listmonk(client):
     r = client.post("/invoke", json={"capability": "lifecycle.compose_campaign",
-                                      "inputs": {"prompt": "quarterly portfolio review reminder", "list_id": 3}}).json()
+                                      "inputs": {"prompt": "quarterly portfolio review reminder", "list_id": 3,
+                                                 "body_html": "<p>Hi</p>"}}).json()
     res = r["result"]
     assert res["status"] == "done" and res["campaign_id"] == 42
     assert res["listmonk_status"] == "draft"  # never auto-sent — a human reviews + sends
     # the REAL core issued the draft-create POST against the (fake) Listmonk core
     assert _FakeClient.posted == [core.LISTMONK_API_URL + "/api/campaigns"]
+
+
+def test_compose_errors_instead_of_creating_empty_body_campaign(client):
+    res = client.post("/invoke", json={"capability": "lifecycle.compose_campaign",
+                                       "inputs": {"prompt": "no body, no llm"}}).json()["result"]
+    assert res["status"] == "error" and "body" in res["error"]
+    assert _FakeClient.posted == []
+
+
+def test_listmonk_status_is_read_from_response_not_hardcoded(monkeypatch):
+    monkeypatch.setattr(_FakeClient, "post",
+                        lambda self, url, headers=None, json=None: _Resp(201, {"data": {"id": 7, "status": "scheduled"}}))
+    res = build_lifecycle_operator().invoke("lifecycle.compose_campaign",
+                                            {"prompt": "x", "body_html": "<p>x</p>"})
+    assert res["listmonk_status"] == "scheduled"           # surfaced, not claimed to be "draft"
+    monkeypatch.setattr(_FakeClient, "post", lambda self, url, headers=None, json=None: _Resp(201, {"data": {"id": 8}}))
+    res = build_lifecycle_operator().invoke("lifecycle.compose_campaign",
+                                            {"prompt": "y", "body_html": "<p>y</p>"})
+    assert res["listmonk_status"] is None
 
 
 def test_segment_and_flow_are_readonly_advisory(client):
@@ -123,7 +144,8 @@ def test_segment_and_flow_are_readonly_advisory(client):
 
 def test_idempotency_dedupes_side_effect(client):
     body = {"capability": "lifecycle.compose_campaign",
-            "inputs": {"prompt": "quarterly portfolio review reminder"}, "idempotency_key": "k-1"}
+            "inputs": {"prompt": "quarterly portfolio review reminder", "body_html": "<p>Hi</p>"},
+            "idempotency_key": "k-1"}
     first = client.post("/invoke", json=body).json()["result"]
     second = client.post("/invoke", json=body).json()["result"]
     assert first == second
@@ -140,5 +162,5 @@ def test_mission_runtime_httpclient_drives_operator(client):
     assert seg["status"] == "done" and seg["action"] == "segment"
 
     comp = oc.invoke("lifecycle", "lifecycle.compose_campaign",
-                     {"prompt": "annual account review"}, idempotency_key="m-2")
+                     {"prompt": "annual account review", "body_html": "<p>Hi</p>"}, idempotency_key="m-2")
     assert comp["status"] == "done" and comp["campaign_id"] == 42

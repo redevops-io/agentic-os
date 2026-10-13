@@ -142,9 +142,18 @@ def compose_campaign(body: dict, llm: Llm | None = None) -> dict:
             camp = json.loads(out[out.find("{"): out.rfind("}") + 1])
         except Exception:
             camp = {"name": prompt[:60], "subject": prompt[:60], "body_html": f"<p>{html.escape(out)[:2000]}</p>"}
-    payload = {"name": camp.get("name", prompt[:60]), "subject": camp.get("subject", prompt[:60]),
+    # A caller may supply the finished HTML (`body_html` / `body`); otherwise it must come from the LLM.
+    # Never create a campaign with an EMPTY body (no brain wired + no caller body) -- error instead.
+    supplied = body.get("body_html") or body.get("body")
+    html_body = camp.get("body_html") or (str(supplied) if supplied else "")
+    if not html_body.strip():
+        return {"status": "error", "action": "compose_campaign", "campaign_id": None,
+                "error": "no campaign body: no LLM available and no `body_html` supplied -- "
+                         "refusing to create an empty-body campaign"}
+    payload = {"name": camp.get("name") or body.get("name") or prompt[:60],
+               "subject": camp.get("subject") or body.get("subject") or prompt[:60],
                "lists": [int(list_id)] if list_id else [], "type": "regular",
-               "content_type": "html", "body": camp.get("body_html", ""), "messenger": "email"}
+               "content_type": "html", "body": html_body, "messenger": "email"}
     created = {}
     try:
         with httpx.Client(timeout=20.0) as c:
@@ -154,7 +163,7 @@ def compose_campaign(body: dict, llm: Llm | None = None) -> dict:
         created = {"_err": str(e)}
     return {"status": "done" if created.get("id") else "partial", "action": "compose_campaign",
             "campaign_id": created.get("id"), "name": payload["name"], "subject": payload["subject"],
-            "listmonk_status": "draft", "requires": "human review + send in Listmonk",
+            "listmonk_status": created.get("status"), "requires": "human review + send in Listmonk",
             "error": created.get("_err")}
 
 
