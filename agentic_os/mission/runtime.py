@@ -19,6 +19,7 @@ execute. To plan against *current* evidence instead, use the explicit `re_evalua
 from __future__ import annotations
 
 import copy
+import os
 from typing import Any
 
 from .approval import is_approval_key, strip_approval_keys
@@ -291,8 +292,7 @@ class MissionRuntime:
                            "input_keys": sorted(m.inputs.keys()) if m.inputs else [],
                            # Event-sourced delivery: only a mission that names its selected capability records
                            # the (approval-stripped) input VALUES, because replay must re-deliver them.
-                           **({"selected_capability": m.selected_capability, "bind_selected": m.bind_selected,
-                               "inputs": to_jsonable(m.inputs)} if m.selected_capability else {}),
+                           **self._selected_record(m),
                            # mission-policy/v1 — pin the named policy identity onto mission creation
                            "policy": (m.policy.ref if m.policy else None),
                            "policy_digest": (m.policy.digest() if m.policy else None),
@@ -305,6 +305,31 @@ class MissionRuntime:
             self._set_state(m, MissionState.FAILED)
             self.store.append("MissionBlocked", m.id, {"reason": "no_permitted_plan", "detail": str(e)})
         return m
+
+    @staticmethod
+    def _inputs_digest(inputs: dict) -> str:
+        """sha256 of the canonical JSON of the approval-stripped inputs (values never leave memory)."""
+        import hashlib
+        from .approval import canonical
+        return hashlib.sha256(canonical(strip_approval_keys(dict(inputs or {})))).hexdigest()
+
+    def _selected_record(self, m: Mission) -> dict:
+        """What ``MissionCreated`` records about a launcher-selected capability and its inputs.
+
+        PRIVACY: the ledger is append-only and hash-chained, and decision inputs may hold customer data
+        (an erasure request carries the subject's email). By default only the input KEYS and a SHA-256
+        digest are recorded, never values; rehydrate must be re-supplied the values and verifies them
+        against the digest. Setting ``AGENTIC_OS_RECORD_MISSION_INPUT_VALUES=1`` records the values in the
+        immutable ledger so replay is self-contained; that is a deliberate privacy trade-off (the values
+        cannot be erased later and are visible to anything that projects the ledger), so enable it only
+        where inputs are non-personal or the deployment accepts that."""
+        if not m.selected_capability:
+            return {}
+        rec = {"selected_capability": m.selected_capability, "bind_selected": m.bind_selected,
+               "inputs_sha256": self._inputs_digest(m.inputs)}
+        if os.environ.get("AGENTIC_OS_RECORD_MISSION_INPUT_VALUES", "").strip().lower() in ("1", "true", "yes"):
+            rec["inputs"] = to_jsonable(m.inputs)
+        return rec
 
     def cancel_mission(self, mission_id: str, reason: str = "") -> Mission:
         """Cancel a mission that has not executed anything (e.g. a launch the launcher refused after
@@ -596,6 +621,19 @@ class MissionRuntime:
         concurrent paths, so a refusal costs no network and no partial side effect."""
         return True
 
+    def _inputs_unavailable(self, m: Mission, plan: ExecutionPlan, node) -> bool:
+        """True (and the mission is failed with a clear reason) when the selected capability's node would run
+        without the scope its decision supplied: the mission was rehydrated from a ledger that records only an
+        inputs digest and the caller did not re-supply the values. Never run with partial scope."""
+        if m.inputs_unavailable and node.capability == m.selected_capability:
+            reason = (f"inputs_unavailable: {node.capability} needs the decision inputs "
+                      "(not stored in the ledger); rehydrate(mission_id, inputs=...)")
+            self.store.append("NodeFailed", m.id, {"node_id": node.id, "capability": node.capability,
+                                                   "reason": "inputs_unavailable", "error": reason})
+            self._fail(m, plan, reason=reason)
+            return True
+        return False
+
     def _meter(self, m: Mission, node, outcome: str) -> None:
         """Per-node usage seam, called once for every node that reached dispatch — ``outcome`` is ``"ok"`` on
         a committed result and ``"error"`` on a failed one. The open-core default is a no-op; an overlay
@@ -606,6 +644,8 @@ class MissionRuntime:
         """Serial node execution (the ``max_concurrency == 1`` route) — admit, resolve inputs, invoke the
         operator, apply the result. Behaviour is byte-identical to the historical path (``_pre_exec_ok``
         admits every node by default)."""
+        if self._inputs_unavailable(m, plan, node):
+            return False
         if not self._pre_exec_ok(m, plan, node):
             return False
         inputs = self._resolve_inputs(m, world, node)
@@ -722,6 +762,8 @@ class MissionRuntime:
         import concurrent.futures as _cf
         prepared = []
         for node in nodes:
+            if self._inputs_unavailable(m, plan, node):
+                return False
             if not self._pre_exec_ok(m, plan, node):     # admit (fail-closed) before any dispatch, like serial
                 return False
             inputs = self._resolve_inputs(m, world, node)
@@ -1271,7 +1313,8 @@ class MissionRuntime:
                 "recommendations": [to_jsonable(r) for r in self.learners.recommendations()]}
 
     # ── restart / rehydrate ────────────────────────────────────────────────────
-    def rehydrate(self, mission_id: str, policy_refs: list[str] | None = None) -> Mission:
+    def rehydrate(self, mission_id: str, policy_refs: list[str] | None = None,
+                  inputs: dict | None = None) -> Mission:
         """EXACT REPLAY — rebuild a mission from the event log after a restart and reproduce the SEALED
         decision path: recompile the deterministic plan pinned to the ORIGINAL evidence identity, verify
         it reproduces the sealed plan signature/fingerprint + ContextEpoch, and fail closed
@@ -1318,11 +1361,26 @@ class MissionRuntime:
         template = (active or {}).get("template") or created.payload.get("template")
 
         sel = created.payload.get("selected_capability") or ""
+        digest = created.payload.get("inputs_sha256") or ""
+        recorded_inputs = created.payload.get("inputs")
+        # Input VALUES are not in the ledger by default: they must be re-supplied and are verified against the
+        # recorded digest (fail closed). Without them the selected node is not run (see _inputs_unavailable).
+        if sel and inputs is not None:
+            supplied = strip_approval_keys(dict(inputs))
+            if digest and self._inputs_digest(supplied) != digest:
+                raise ReplayError(f"{mission_id}: supplied inputs do not match the recorded inputs_sha256; "
+                                  "refusing to replay with different inputs")
+            restored = supplied
+        elif sel and recorded_inputs is not None:
+            restored = strip_approval_keys(dict(recorded_inputs))
+        else:
+            restored = {}
+        unavailable = bool(sel and digest and inputs is None and recorded_inputs is None)
         m = Mission(goal=goal or "", template=template,
                     constraints=created.payload.get("constraints", []),
                     selected_capability=sel,
                     bind_selected=bool(sel and created.payload.get("bind_selected")),
-                    inputs=strip_approval_keys(dict(created.payload.get("inputs") or {})) if sel else {},
+                    inputs=restored, inputs_unavailable=unavailable,
                     intervention_id=created.payload.get("intervention_id") or "",
                     policy_refs=list(policy_refs if policy_refs is not None else recorded),
                     # v0.2.x: replay carries the original evidence identity back, so the rehydrated

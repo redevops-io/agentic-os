@@ -442,6 +442,7 @@ class Mission:
     # True when the plan was authored by ExplicitCapabilityPlanner (single step bound to selected_capability)
     # rather than by text matching; replay and re-planning must use the same path.
     bind_selected: bool = False
+    inputs_unavailable: bool = False   # rehydrated without the (unrecorded) input values; selected node must not run
     id: str = field(default_factory=lambda: new_id("mission"))
     created_at: float = field(default_factory=now)
     updated_at: float = field(default_factory=now)

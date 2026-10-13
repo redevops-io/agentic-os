@@ -124,19 +124,83 @@ def test_explicit_node_inputs_not_overridden():
     assert out["account_id"] == "EXPLICIT" and out["k"] == 1
 
 
-def test_rehydrate_restores_inputs_and_delivery():
+EMAIL = "subject.person@example.test"
+
+
+def _gated_launch(rt, **extra):
+    req = _req(inputs={"account_id": "A1", "email": EMAIL, **extra})
+    mid = MissionRuntimeLauncher(rt).launch(req)
+    rt.run(mid)
+    return mid
+
+
+def _ledger_text(rt, mid):
+    import json
+    return json.dumps([{"t": e.type, "p": e.payload} for e in rt.store.for_mission(mid)], default=str)
+
+
+def test_ledger_has_no_input_values_by_default_but_keys_and_digest(monkeypatch):
+    monkeypatch.delenv("AGENTIC_OS_RECORD_MISSION_INPUT_VALUES", raising=False)
+    rt = _rt(_op())
+    mid = _gated_launch(rt)
+    rt.approve(mid, rt.repo.pending_human(mid)["node_id"], "approve")
+    assert EMAIL not in _ledger_text(rt, mid)
+    created = rt.repo.created(mid)
+    assert created["selected_capability"] == "billing.dunning" and created["bind_selected"] is True
+    assert created["input_keys"] == ["account_id", "email"] and "inputs" not in created
+    assert created["inputs_sha256"] == rt._inputs_digest({"account_id": "A1", "email": EMAIL})
+    assert EMAIL not in str(rt.repo.timeline(mid)) if hasattr(rt.repo, "timeline") else True
+
+
+def test_rehydrate_with_correct_inputs_delivers_them(monkeypatch):
+    monkeypatch.delenv("AGENTIC_OS_RECORD_MISSION_INPUT_VALUES", raising=False)
     op = _op()
     rt = _rt(op)
-    mid = MissionRuntimeLauncher(rt).launch(_req())
-    rt.run(mid)
+    mid = _gated_launch(rt)
     rt2 = _rt(op, store=rt.store)
-    m = rt2.rehydrate(mid)
-    assert m.selected_capability == "billing.dunning" and m.bind_selected
-    assert m.inputs == {"account_id": "A1", "invoice_ids": ["i1"]}
-    assert m.intervention_id == "iv-1"
+    m = rt2.rehydrate(mid, inputs={"account_id": "A1", "email": EMAIL, "_approval": True})
+    assert m.selected_capability == "billing.dunning" and m.bind_selected and m.intervention_id == "iv-1"
+    assert m.inputs == {"account_id": "A1", "email": EMAIL}
     rt2.approve(mid, rt2.repo.pending_human(mid)["node_id"], "approve")
     (_, got), = seen
-    assert got["account_id"] == "A1"
+    assert got["account_id"] == "A1" and got["email"] == EMAIL
+
+
+def test_rehydrate_with_wrong_inputs_fails_closed(monkeypatch):
+    from agentic_os.mission.runtime import ReplayError
+    monkeypatch.delenv("AGENTIC_OS_RECORD_MISSION_INPUT_VALUES", raising=False)
+    op = _op()
+    rt = _rt(op)
+    mid = _gated_launch(rt)
+    with pytest.raises(ReplayError):
+        _rt(op, store=rt.store).rehydrate(mid, inputs={"account_id": "A2", "email": EMAIL})
+
+
+def test_rehydrate_without_inputs_never_runs_handler_with_partial_scope(monkeypatch):
+    monkeypatch.delenv("AGENTIC_OS_RECORD_MISSION_INPUT_VALUES", raising=False)
+    op = _op()
+    rt = _rt(op)
+    mid = _gated_launch(rt)
+    rt2 = _rt(op, store=rt.store)
+    m = rt2.rehydrate(mid)
+    assert m.inputs == {} and m.inputs_unavailable
+    rt2.approve(mid, rt2.repo.pending_human(mid)["node_id"], "approve")
+    assert seen == []
+    assert rt2._missions[mid].state is MissionState.FAILED
+    assert "inputs_unavailable" in _ledger_text(rt2, mid)
+
+
+def test_opt_in_records_values_and_restores_from_log(monkeypatch):
+    monkeypatch.setenv("AGENTIC_OS_RECORD_MISSION_INPUT_VALUES", "1")
+    op = _op()
+    rt = _rt(op)
+    mid = _gated_launch(rt)
+    assert EMAIL in _ledger_text(rt, mid)
+    rt2 = _rt(op, store=rt.store)
+    m = rt2.rehydrate(mid)
+    assert m.inputs == {"account_id": "A1", "email": EMAIL} and not m.inputs_unavailable
+    rt2.approve(mid, rt2.repo.pending_human(mid)["node_id"], "approve")
+    assert seen[-1][1]["email"] == EMAIL
 
 
 def test_ambiguous_or_missing_capability_refused():
