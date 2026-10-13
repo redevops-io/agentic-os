@@ -147,7 +147,7 @@ def compose_campaign(body: dict, llm: Llm | None = None) -> dict:
     supplied = body.get("body_html") or body.get("body")
     html_body = camp.get("body_html") or (str(supplied) if supplied else "")
     if not html_body.strip():
-        return {"status": "error", "action": "compose_campaign", "campaign_id": None,
+        return {"status": "llm_unavailable", "action": "compose_campaign", "campaign_id": None,
                 "error": "no campaign body: no LLM available and no `body_html` supplied -- "
                          "refusing to create an empty-body campaign"}
     payload = {"name": camp.get("name") or body.get("name") or prompt[:60],
@@ -170,8 +170,8 @@ def compose_campaign(body: dict, llm: Llm | None = None) -> dict:
 def segment(body: dict, llm: Llm | None = None) -> dict:
     """Advisory: propose a Listmonk advanced SQL subscriber query for a targeting goal.
 
-    Read-only — no Listmonk write. `llm` drafts the query; without it the skeleton is
-    returned so a human can paste + materialise the segment in Listmonk.
+    Read-only — no Listmonk write. `llm` drafts the query; without it the result is
+    `llm_unavailable` (no empty/None payload is presented as an answer).
     """
     goal = (body.get("goal") or "").strip()
     if not goal:
@@ -181,6 +181,9 @@ def segment(body: dict, llm: Llm | None = None) -> dict:
         "advanced SQL subscriber query (the WHERE expression over `subscribers`, `subscribers.attribs` "
         "JSONB, and subscriber_lists). Return STRICT JSON: {\"name\":\"...\",\"query\":\"<SQL WHERE>\","
         "\"rationale\":\"...\"}.\n\nGOAL: " + goal, 400) if llm else None
+    if not out:
+        return {"status": "llm_unavailable", "action": "segment", "name": None, "query": None,
+                "error": "no LLM available to propose a segment; nothing was produced"}
     seg = {}
     if out:
         try:
@@ -195,8 +198,8 @@ def segment(body: dict, llm: Llm | None = None) -> dict:
 def suggest_flow(body: dict, llm: Llm | None = None) -> dict:
     """Advisory: outline a multi-step lifecycle flow and sketch each message.
 
-    Read-only — no Listmonk write. `llm` designs the steps; without it the skeleton is
-    returned for a human to implement as templates + a scheduler.
+    Read-only — no Listmonk write. `llm` designs the steps; without it the result is
+    `llm_unavailable`.
     """
     trigger = (body.get("trigger") or "welcome").strip()
     out = llm(
@@ -204,6 +207,9 @@ def suggest_flow(body: dict, llm: Llm | None = None) -> dict:
         "3-5 steps with timing, goal per step, subject line, and a 2-sentence body sketch. "
         "Return STRICT JSON: {\"flow\":\"...\",\"steps\":[{\"delay\":\"...\",\"goal\":\"...\","
         "\"subject\":\"...\",\"body\":\"...\"}]}.", 800) if llm else None
+    if not out:
+        return {"status": "llm_unavailable", "action": "suggest_flow", "trigger": trigger, "steps": [],
+                "error": "no LLM available to design a flow; nothing was produced"}
     flow = {}
     if out:
         try:
