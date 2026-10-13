@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import re
 import time
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Callable
 
@@ -242,10 +243,44 @@ def chase_overdue(blurb: Callable[[str], str | None] | None = None) -> dict:
     return out
 
 
-def _execute_refund(invoice_number: str) -> dict:
-    """Issue a real Lago refund credit note for the invoice — the money-back action, built from the
-    invoice's fees. Returns the created credit note id + refunded amount, or an error (surfaced, never
-    silently swallowed). Only reached on a governed approval."""
+def parse_amount_cents(value) -> int:
+    """Parse a requested refund amount to integer cents. Strings are DOLLARS ("$10", "10.00", "1,000.50");
+    an int is CENTS (1000 == $10.00). Floats/bools/None/garbage and non-positive values raise ValueError."""
+    if isinstance(value, bool) or value is None or isinstance(value, float):
+        raise ValueError(f"invalid refund amount {value!r}")
+    if isinstance(value, int):
+        cents = value
+    elif isinstance(value, str):
+        txt = value.strip().replace(",", "")
+        if txt.startswith("$"):
+            txt = txt[1:].strip()
+        try:
+            d = Decimal(txt)
+        except InvalidOperation:
+            raise ValueError(f"invalid refund amount {value!r}") from None
+        if not d.is_finite():
+            raise ValueError(f"invalid refund amount {value!r}")
+        cents = int((d * 100).to_integral_value(rounding=ROUND_HALF_UP))
+    else:
+        raise ValueError(f"invalid refund amount {value!r}")
+    if cents <= 0:
+        raise ValueError(f"refund amount must be positive, got {value!r}")
+    return cents
+
+
+def _execute_refund(invoice_number: str, amount=None, full_refund: bool = False) -> dict:
+    """Issue a real Lago refund credit note for the invoice — the money-back action. Refunds exactly the
+    requested ``amount`` (capped at the invoice's refundable total; the actual cents are reported), or the
+    whole refundable total only when ``full_refund`` is explicitly true. With neither, it errors. Errors are
+    surfaced, never silently swallowed. Only reached on a governed approval."""
+    want = None
+    if not full_refund:
+        if amount is None:
+            return {"executed": False, "error": "refund amount required (or pass full_refund: true)"}
+        try:
+            want = parse_amount_cents(amount)
+        except ValueError as e:
+            return {"executed": False, "error": str(e)}
     if not (lago_connected() and LAGO_API_KEY):
         return {"executed": False, "error": "lago not reachable"}
     inv = next((i for i in _get_all("/api/v1/invoices", "invoices")
@@ -256,18 +291,27 @@ def _execute_refund(invoice_number: str) -> dict:
     with httpx.Client(timeout=10.0) as client:
         detail = client.get(f"{LAGO_API_URL}/api/v1/invoices/{lago_id}", headers=_headers())
         fees = ((detail.json() or {}).get("invoice", {}) or {}).get("fees", []) if detail.status_code < 400 else []
-        items = [{"fee_id": f.get("lago_id"), "amount_cents": int(f.get("amount_cents") or 0)}
+        avail = [{"fee_id": f.get("lago_id"), "amount_cents": int(f.get("amount_cents") or 0)}
                  for f in fees if f.get("lago_id") and int(f.get("amount_cents") or 0) > 0]
-        total = sum(it["amount_cents"] for it in items)
-        if not items or total <= 0:
+        refundable = sum(it["amount_cents"] for it in avail)
+        if not avail or refundable <= 0:
             return {"executed": False, "error": "invoice has no refundable fees"}
+        target = refundable if want is None else min(want, refundable)
+        items, left = [], target
+        for it in avail:                      # allocate the refund across fees until the target is met
+            if left <= 0:
+                break
+            take = min(it["amount_cents"], left)
+            items.append({"fee_id": it["fee_id"], "amount_cents": take})
+            left -= take
         payload = {"credit_note": {"invoice_id": lago_id, "reason": "other",
-                                   "credit_amount_cents": 0, "refund_amount_cents": total, "items": items}}
+                                   "credit_amount_cents": 0, "refund_amount_cents": target, "items": items}}
         r = client.post(f"{LAGO_API_URL}/api/v1/credit_notes", headers=_headers(), json=payload)
         if r.status_code >= 400:
             return {"executed": False, "error": f"lago {r.status_code}: {r.text[:200]}"}
         cn = (r.json() or {}).get("credit_note", {})
-        return {"executed": True, "credit_note_id": cn.get("lago_id"), "refunded_cents": total}
+        return {"executed": True, "credit_note_id": cn.get("lago_id"), "refunded_cents": target,
+                "requested_cents": want, "capped": want is not None and want > refundable}
 
 
 def stage_refund(body: dict) -> dict:
@@ -276,7 +320,8 @@ def stage_refund(body: dict) -> dict:
     refund credit note — because a human has cleared THIS action (N3: approval executes)."""
     data = fetch_activity(force=True)
     target = body.get("invoice") or (data["recent"][0]["number"] if data["recent"] else "—")
-    amount = body.get("amount", "$450")
+    amount = body.get("amount") or ("the full invoice" if body.get("full_refund") is True
+                                    else "an UNSPECIFIED amount (an amount is required to execute)")
     if not body.get("_approval"):
         return {
             "status": "pending_approval",
@@ -286,7 +331,7 @@ def stage_refund(body: dict) -> dict:
             "summary": f"Refund of {amount} on invoice {target} is staged and awaiting human approval. "
                        "Refunds are never auto-executed by the agent.",
         }
-    ex = _execute_refund(target)
+    ex = _execute_refund(target, body.get("amount"), full_refund=body.get("full_refund") is True)
     ok = bool(ex.get("executed"))
     return {
         "status": "done" if ok else "error",

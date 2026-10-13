@@ -97,6 +97,20 @@ def _reel_start() -> dict:
             "note": "the UI agent is recording a ~45s walkthrough: chat → planner → benchmarks"}
 
 
+def _strip_approval(obj):
+    """Drop every caller-supplied ``_approval*`` / ``__approval*`` key (any case), recursively.
+
+    ``_approval`` is the Mission runtime's marker for a human-approved resume and is injected IN-PROCESS by the
+    operator. A raw HTTP body must never be able to set it, or a caller could skip the staging/approval gate.
+    """
+    if isinstance(obj, dict):
+        return {k: _strip_approval(v) for k, v in obj.items()
+                if not (isinstance(k, str) and k.lstrip("_").lower().startswith("approval"))}
+    if isinstance(obj, list):
+        return [_strip_approval(v) for v in obj]
+    return obj
+
+
 app = FastAPI(title="agentic-social-autopilot (Meridian Wealth Management · core: Postiz)")
 
 
@@ -649,20 +663,20 @@ def api_vibex_status() -> JSONResponse:
 
 @app.post("/api/vibex/trends")
 async def api_vibex_trends(request: Request) -> JSONResponse:
-    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    body = _strip_approval(await request.json()) if request.headers.get("content-type", "").startswith("application/json") else {}
     return JSONResponse(vibex.trends((body or {}).get("topic", "")))
 
 
 @app.post("/api/vibex/generate")
 async def api_vibex_generate(request: Request) -> JSONResponse:
-    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    body = _strip_approval(await request.json()) if request.headers.get("content-type", "").startswith("application/json") else {}
     return JSONResponse(vibex.generate((body or {}).get("prompt", ""), (body or {}).get("kind", "clip")))
 
 
 @app.post("/api/vibex/draft")
 async def api_vibex_draft(request: Request) -> JSONResponse:
     """Draft a post FROM a vibexgen trend angle — reuses the app's Postiz draft path."""
-    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    body = _strip_approval(await request.json()) if request.headers.get("content-type", "").startswith("application/json") else {}
     hook = (body or {}).get("hook") or (body or {}).get("topic") or "a trending wealth-management angle"
     return JSONResponse(_draft({"topic": hook}))
 
@@ -670,7 +684,7 @@ async def api_vibex_draft(request: Request) -> JSONResponse:
 @app.post("/agent/run")
 async def agent_run(request: Request) -> JSONResponse:
     try:
-        body = await request.json()
+        body = _strip_approval(await request.json())
     except Exception:
         body = {}
     action = (body or {}).get("action", "")

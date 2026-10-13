@@ -199,7 +199,7 @@ def test_refund_stages_on_the_open_path_executes_only_on_a_trusted_approval(clie
     assert not any(u.endswith("/api/v1/credit_notes") for u in _FakeClient.posted)   # nothing moved
 
     # trusted in-process path (runtime delivering a real approval) EXECUTES the refund
-    done = build_billing_operator().invoke("billing.refund", {"invoice": "INV-001", "_approval": {"approved": True}})
+    done = build_billing_operator().invoke("billing.refund", {"invoice": "INV-001", "amount": "$450", "_approval": {"approved": True}})
     assert done["status"] == "done" and done["refund_executed"] is True
     assert done["credit_note_id"] == "cn-1" and done["refunded_cents"] == 45000
     assert any(u.endswith("/api/v1/credit_notes") for u in _FakeClient.posted)       # the real refund fired
