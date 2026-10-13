@@ -1,9 +1,9 @@
 name: tests
 
-# Runs the N-invariant conformance gate + the core unit tests on every push/PR. Scoped to the
-# dependency-light, service-free tests so the gate is meaningful AND green; the broader suite
-# (sandbox/containment, the `world_*` integration tests) needs Docker and external services and is run
-# out of band. Expand `TESTS` below as more of the suite becomes CI-portable.
+# Merge gate. The single required check is the `pytest` job: it runs the FULL kernel suite (tests/, which
+# includes the N-invariant conformance gate in tests/conformance/), then every app's own suite, then verifies the
+# run left the working tree untouched. See docs/CONFORMANCE.md (incl. the `gh api` commands that make `pytest`
+# a required status check on main -- that is a repo setting, not something this file can enforce).
 on:
   push:
     branches: [main]
@@ -12,41 +12,55 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   pytest:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install the kernel + its deps + pytest
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install the kernel + dev + duckdb extra
+        # duckdb: two durable-ledger tests need the optional DuckDB event store; without it they fail.
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-      - name: Conformance gate + core unit tests
+          pip install -e ".[dev,duckdb]"
+      - name: Fetch real connector fixtures (public repo) for the normalization tests
+        run: git clone --depth 1 https://github.com/redevops-io/redevops-connectors "$RUNNER_TEMP/redevops-connectors"
+      - name: Full kernel suite (tests/, incl. tests/conformance)
         env:
-          PYTHONPATH: apps
-        run: |
-          pytest -q -p no:cacheprovider \
-            tests/conformance \
-            tests/test_registry.py \
-            tests/test_operator_sdk.py \
-            tests/test_app_llm.py \
-            tests/test_app_context.py \
-            tests/test_app_transport.py \
-            tests/test_verification.py \
-            tests/test_governance.py
-      # The per-app operator / runtime-native / concurrency tests drive the app ↔ operator wiring with
-      # fake runners (no services). They were NOT in CI, which is how the #370 read-back-wrap regression
-      # (nested results broke every /invoke consumer) slipped through. --import-mode=importlib lets the
-      # many same-named `test_operator.py` files coexist in one run.
-      - name: App operator / runtime-native tests
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/apps
+          REDEVOPS_CONNECTORS_FIXTURES: ${{ runner.temp }}/redevops-connectors/fixtures
+        run: pytest -q -p no:cacheprovider tests
+      - name: Per-app suites
+        # One run per app: several apps share test file basenames (test_operator.py, ...), and each app is its own
+        # deployable. (apps/pytest.ini also makes a single `pytest apps` work via importlib import mode.)
         env:
-          PYTHONPATH: apps
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/apps
         run: |
-          pytest -q -p no:cacheprovider --import-mode=importlib \
-            apps/*/test_operator.py \
-            apps/*/test_runtime_native.py \
-            apps/*/test_*concurrency.py
+          fail=0
+          for d in apps/*/; do
+            ls "$d" | grep -q '^test_.*\.py$' || continue
+            echo "::group::pytest $d"
+            pytest -q -p no:cacheprovider "$d" && rc=0 || rc=$?
+            # exit 5 = "no tests collected": an import-level skip (e.g. video-ad needs the external `reel`
+            # package) is not a failure; any other non-zero exit is.
+            [ "$rc" -eq 0 ] || [ "$rc" -eq 5 ] || fail=1
+            echo "::endgroup::"
+          done
+          exit $fail
+      - name: Tests must not dirty the working tree
+        # Guards test hygiene: no test/fixture may rewrite tracked files (e.g. the vendored agentic_os/projects_ui)
+        # or leave stray untracked files behind.
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=all)" || { git status --short; echo "untracked files left by tests"; exit 1; }

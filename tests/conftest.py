@@ -18,6 +18,38 @@ def _no_live_cores(monkeypatch):
     yield
 
 
+# ── hygiene guard: the suite must never rewrite the vendored UI bundle ─────────────────────────────────────────
+# `agentic_os/projects_ui/` is a TRACKED, vendored build artefact (scripts/build_projects_ui.sh regenerates it).
+# Tests only read it. If any test/fixture starts building into it, fail the run loudly instead of silently
+# dirtying `git status` (CI also runs `git diff --exit-code` + an untracked-files check as a second guard).
+import hashlib  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+_UI_DIR = Path(__file__).resolve().parents[1] / "agentic_os" / "projects_ui"
+
+
+def _tree_digest(root: Path) -> str:
+    h = hashlib.sha256()
+    if root.is_dir():
+        for p in sorted(root.rglob("*")):
+            if p.is_file():
+                h.update(p.relative_to(root).as_posix().encode())
+                h.update(p.read_bytes())
+    return h.hexdigest()
+
+
+def pytest_sessionstart(session):
+    session.config._ui_digest_before = _tree_digest(_UI_DIR)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    before = getattr(session.config, "_ui_digest_before", None)
+    if before is not None and _tree_digest(_UI_DIR) != before:
+        print("\nHYGIENE FAILURE: the test run modified agentic_os/projects_ui/ (tracked vendored UI). "
+              "Tests must write to tmp dirs; rebuild the UI only via scripts/build_projects_ui.sh.")
+        session.exitstatus = 1
+
+
 @pytest.fixture(autouse=True)
 def _isolate_platform_secrets(monkeypatch, tmp_path):
     """Never read/write the developer's real secrets file, rc files or keyring (docs/SECRETS.md)."""
