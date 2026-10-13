@@ -131,5 +131,8 @@ class LearningStack:
         return rec
 
     def promoted_choice(self, kind: str, subject: str) -> str | None:
-        """The promoted option for a (kind, subject), if any — how the compiler/router reads a promotion."""
+        """The promoted option for a (kind, subject), if any. Reader: ``MissionRuntime._apply_promoted_choice``
+        (plan selection) consumes ``plan_policy`` and ``routing`` promotions. ``model_selection`` has NO reader
+        yet — the runtime has no model-tier selection point to hook — so that learner stays observe/recommend
+        only until one exists."""
         return self._promoted.get((kind, subject))

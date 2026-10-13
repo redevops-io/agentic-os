@@ -30,7 +30,8 @@ def event_to_dict(ev: OutcomeEvent) -> dict:
             "attribution_confidence": ev.attribution_confidence,
             "source_observation_ids": list(ev.source_observation_ids),
             "candidate_intervention_ids": list(ev.candidate_intervention_ids),
-            "selected_intervention_id": ev.selected_intervention_id}
+            "selected_intervention_id": ev.selected_intervention_id,
+            "prior_utility": ev.prior_utility}
 
 
 def event_from_dict(d: dict) -> OutcomeEvent:
@@ -44,7 +45,8 @@ def event_from_dict(d: dict) -> OutcomeEvent:
         attribution_confidence=d.get("attribution_confidence", 1.0),
         source_observation_ids=tuple(d.get("source_observation_ids") or ()),
         candidate_intervention_ids=tuple(d.get("candidate_intervention_ids") or ()),
-        selected_intervention_id=d.get("selected_intervention_id", ""))
+        selected_intervention_id=d.get("selected_intervention_id", ""),
+        prior_utility=d.get("prior_utility"))
 
 
 class OutcomeStore(Protocol):
@@ -109,6 +111,7 @@ CREATE TABLE IF NOT EXISTS outcome_events (
   selected_intervention_id    text NOT NULL DEFAULT '',
   note                        text NOT NULL DEFAULT ''
 );
+ALTER TABLE outcome_events ADD COLUMN IF NOT EXISTS prior_utility double precision;
 CREATE INDEX IF NOT EXISTS ix_oe_selected ON outcome_events(selected_intervention_id);
 CREATE INDEX IF NOT EXISTS ix_oe_key ON outcome_events(source_app, action_kind);
 """
@@ -140,22 +143,22 @@ class PostgresOutcomeStore:
                 """INSERT INTO outcome_events
                      (candidate_id, source_app, action, action_kind, observed_reward, reward_dimensions,
                       delay, attribution_confidence, source_observation_ids, candidate_intervention_ids,
-                      selected_intervention_id, note)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                      selected_intervention_id, note, prior_utility)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (ev.candidate_id, ev.source_app, ev.action.value if ev.action is not None else None,
                  ev.action_kind, ev.observed_reward, Jsonb(dict(ev.reward_dimensions)), ev.delay,
                  ev.attribution_confidence, list(ev.source_observation_ids),
-                 list(ev.candidate_intervention_ids), ev.selected_intervention_id, ev.note))
+                 list(ev.candidate_intervention_ids), ev.selected_intervention_id, ev.note, ev.prior_utility))
 
     def load(self) -> List[OutcomeEvent]:
         with self._conn.cursor() as cur:
             cur.execute("SELECT candidate_id, source_app, action, action_kind, observed_reward, "
                         "reward_dimensions, delay, attribution_confidence, source_observation_ids, "
-                        "candidate_intervention_ids, selected_intervention_id, note "
+                        "candidate_intervention_ids, selected_intervention_id, note, prior_utility "
                         "FROM outcome_events ORDER BY id")
             rows = cur.fetchall()
         out: List[OutcomeEvent] = []
-        for (cid, app, action, kind, reward, dims, delay, attr, sobs, cids, sel, note) in rows:
+        for (cid, app, action, kind, reward, dims, delay, attr, sobs, cids, sel, note, prior) in rows:
             if isinstance(dims, str):
                 dims = json.loads(dims)
             out.append(OutcomeEvent(
@@ -163,7 +166,8 @@ class PostgresOutcomeStore:
                 observed_reward=reward, note=note, action_kind=kind,
                 reward_dimensions=dict(dims or {}), delay=float(delay),
                 attribution_confidence=float(attr), source_observation_ids=tuple(sobs or ()),
-                candidate_intervention_ids=tuple(cids or ()), selected_intervention_id=sel or ""))
+                candidate_intervention_ids=tuple(cids or ()), selected_intervention_id=sel or "",
+                prior_utility=(float(prior) if prior is not None else None)))
         return out
 
 

@@ -50,6 +50,17 @@ class UtilityModel:
         self._stats = stats
         return self
 
+    def to_dict(self) -> dict:
+        """JSON-safe snapshot (for the persistent PolicyRegistry): hyper-parameters + per-key stats."""
+        return {"prior_weight": self.prior_weight, "reward_weights": dict(self.reward_weights),
+                "stats": [[k[0], k[1], v[0], v[1]] for k, v in sorted(self._stats.items())]}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "UtilityModel":
+        m = cls(prior_weight=float(d.get("prior_weight", 5.0)), reward_weights=dict(d.get("reward_weights") or {}))
+        m._stats = {(a, b): (float(w), float(c)) for a, b, w, c in d.get("stats", [])}
+        return m
+
     def observed(self, key: Tuple[str, str]) -> Optional[Tuple[float, float]]:
         """(mean reward, effective count) for a key, or None when there's no history yet."""
         if key not in self._stats:

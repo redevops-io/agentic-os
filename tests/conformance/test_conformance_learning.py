@@ -2,9 +2,12 @@
 policy does so. Pure — no runtime needed."""
 from __future__ import annotations
 
+import pytest
+
 from agentic_os.agent_gateway.contracts import ApprovalPolicy, RiskTier
 from agentic_os.outcome_learning import UtilityModel
-from agentic_os.policy_promotion import STATIC_POLICY, PolicyRegistry, build_candidate
+from agentic_os.policy_promotion import (
+    STATIC_POLICY, PolicyRegistry, PromotionDecision, PromotionRefused, build_candidate)
 from agentic_os.priority_engine import (
     DecisionOpportunity,
     InterventionCandidate,
@@ -57,7 +60,10 @@ def test_selection_only_changes_through_a_promoted_policy():
     assert sel_before.action.action_kind == "a"
 
     candidate = build_candidate(_log_favouring_b().events)
-    registry.promote(candidate)                   # promotion is the ONLY way the policy changes
+    with pytest.raises(PromotionRefused):         # no gate result ⇒ refused (promotion is never unconditional)
+        registry.promote(candidate)
+    assert registry.active is STATIC_POLICY
+    registry.promote(candidate, PromotionDecision(True, ("gate passed",)))   # the ONLY way the policy changes
     sel_after = select_action(opp, utility_fn=registry.active.utility_fn())
     assert sel_after.action.action_kind == "b"
     assert registry.active.kind == "learned"
