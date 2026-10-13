@@ -50,6 +50,7 @@ class _FakeClient:
     """Stands in for httpx.Client — records retry_payment/subscription POSTs + DELETEs."""
     posted: list[str] = []
     deleted: list[str] = []
+    settle_on_retry = False
 
     def __enter__(self):
         return self
@@ -63,7 +64,11 @@ class _FakeClient:
         if url.endswith("/api/v1/customers"):
             return _Resp(200, {"customers": CUSTOMERS, "meta": {"total_pages": 1}})
         if "/api/v1/invoices/lago-1" in url:                    # invoice detail (fees) for a refund
-            return _Resp(200, {"invoice": {"fees": [{"lago_id": "fee-1", "amount_cents": 45000}]}})
+            retried = any(u.endswith("/lago-1/retry_payment") for u in _FakeClient.posted)
+            detail = {"fees": [{"lago_id": "fee-1", "amount_cents": 45000}]}
+            if _FakeClient.settle_on_retry and retried:        # opt-in: a retry that really settles
+                detail["payment_status"] = "succeeded"
+            return _Resp(200, {"invoice": detail})
         return _Resp(200, {})
 
     def post(self, url, headers=None, json=None):
@@ -85,6 +90,7 @@ class _FakeClient:
 def _fake_lago(monkeypatch):
     _FakeClient.posted = []
     _FakeClient.deleted = []
+    _FakeClient.settle_on_retry = False
     core._CACHE.update(ts=0.0, data=None)  # no cache bleed between tests
     monkeypatch.setattr(core, "LAGO_API_KEY", "test-key")
     monkeypatch.setattr(core, "_sleep", lambda s: None)
@@ -185,6 +191,8 @@ def test_summary_is_readonly_and_computes_kpis(client):
 
 
 def test_idempotency_dedupes_side_effect(client):
+    # a failed (unsettled) result is deliberately NOT cached, so dedupe is asserted on a settled retry
+    _FakeClient.settle_on_retry = True
     op = build_billing_operator()
     appr = {"account_id": "Whitfield Family Trust", "_approval": {"approved": True}}
     first = op.invoke("billing.dunning", appr, "k-1")
