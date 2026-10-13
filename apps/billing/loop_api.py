@@ -6,6 +6,11 @@
                                               approval marker and billing.dunning retries ONLY the chosen
                                               invoices, read back from Lago. Body ``{"decision": "approve|reject"}``.
 
+    POST /api/outcomes/observe                LEARN: attribute payment/no-payment to executed dunning interventions
+                                              older than ``after_days`` (default 7), once each. Idempotent.
+    POST /api/policy/refit                    refit the utility model -- ONLY through policy_promotion's held-out
+                                              gate (``{"apply": true}`` to promote when the gate passes).
+
 Both are authored as mission operations (the runtime launches/drives the mission), never as direct core
 calls. Auth: HTTP Basic from OPERATOR_BASIC_AUTH_USER/_PASS or ``user:pass`` in OPERATOR_BASIC_AUTH /
 OUTREACH_BASIC_AUTH; with none configured every route fails closed (503). Request bodies are stripped of any
@@ -13,9 +18,9 @@ caller-supplied approval keys and never carry invoice ids -- scope comes only fr
 """
 from __future__ import annotations
 
-import base64
+import logging
 import os
-import secrets
+import threading
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -23,7 +28,7 @@ from fastapi.responses import JSONResponse
 
 from agentic_os.mission.approval import strip_approval_keys
 
-from . import decision, observe
+from . import decision, gate, observe
 
 _strip_approval = strip_approval_keys
 router = APIRouter()
@@ -43,28 +48,11 @@ def set_loop(loop: Optional[decision.ClosedLoop]) -> None:
     _LOOP = loop
 
 
-def _operator_credential() -> tuple[str, str]:
-    user = os.environ.get("OPERATOR_BASIC_AUTH_USER", "")
-    pw = os.environ.get("OPERATOR_BASIC_AUTH_PASS", "")
-    if not (user and pw):
-        combo = os.environ.get("OPERATOR_BASIC_AUTH") or os.environ.get("OUTREACH_BASIC_AUTH") or ""
-        user, _, pw = combo.partition(":")
-    return user, pw
-
-
 def require_operator(request: Request) -> None:
-    user, pw = _operator_credential()
+    user, pw = gate.operator_credential()
     if not (user and pw):
         raise HTTPException(503, "operator confirmation is not configured (set OPERATOR_BASIC_AUTH_USER/_PASS)")
-    header = request.headers.get("authorization", "")
-    ok = False
-    if header.startswith("Basic "):
-        try:
-            gu, _, gp = base64.b64decode(header[6:]).decode("utf-8", "replace").partition(":")
-            ok = secrets.compare_digest(gu, user) and secrets.compare_digest(gp, pw)
-        except Exception:  # noqa: BLE001
-            ok = False
-    if not ok:
+    if not gate.is_operator(request):
         raise HTTPException(401, "operator authentication required",
                             headers={"WWW-Authenticate": 'Basic realm="agentic-billing operator"'})
 
@@ -75,6 +63,113 @@ async def _body(request: Request) -> dict:
     except Exception:  # noqa: BLE001
         return {}
     return body if isinstance(body, dict) else {}
+
+
+def run_observe(loop: decision.ClosedLoop, *, after_days: float = 7.0) -> list:
+    """Observe outcomes for executed dunning older than ``after_days`` (single-flight under ``loop.lock``)."""
+    with loop.lock:
+        return decision.observe_outcomes(interventions=loop.interventions, outcomes=loop.outcomes,
+                                         ingestor=loop.ingestor, now=loop.clock(), after_days=after_days)
+
+
+def run_refit(loop: decision.ClosedLoop, *, apply: bool = False) -> dict:
+    """Refit the utility model. The ONLY path is ``decision.refit_policy`` -> the promotion gate: a candidate
+    becomes active only when ``apply`` is true AND the held-out gate passes."""
+    with loop.lock:
+        rep = decision.refit_policy(loop.outcomes, loop.policies, apply=apply)
+        return {"promoted": bool(rep.promoted), "gate_passed": bool(rep.decision.promote),
+                "reasons": list(rep.decision.reasons), "candidate_policy": rep.candidate.version,
+                "active_policy": loop.policies.active.version}
+
+
+@router.post("/api/outcomes/observe")
+async def api_outcomes_observe(request: Request) -> JSONResponse:
+    require_operator(request)
+    body = await _body(request)
+    try:
+        after = float(body.get("after_days", 7.0))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "after_days must be a number")
+    if after < 0:
+        raise HTTPException(400, "after_days must be >= 0")
+    try:
+        rows = run_observe(get_loop(), after_days=after)
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+    return JSONResponse({"observed": rows, "count": len(rows)})
+
+
+@router.post("/api/policy/refit")
+async def api_policy_refit(request: Request) -> JSONResponse:
+    require_operator(request)
+    body = await _body(request)
+    return JSONResponse(run_refit(get_loop(), apply=body.get("apply") is True))
+
+
+# ── optional background outcome observation (BILLING_OUTCOME_INTERVAL_S; default OFF) ─────────────────────
+_log = logging.getLogger("agentic_os.app")
+_SCHED: dict = {"thread": None, "stop": None}
+
+
+def scheduler_interval() -> float:
+    try:
+        v = float(os.environ.get("BILLING_OUTCOME_INTERVAL_S", "0") or 0)
+    except ValueError:
+        return 0.0
+    return v if v > 0 else 0.0
+
+
+def scheduler_tick(loop: decision.ClosedLoop) -> dict:
+    """One scheduled pass: observe due outcomes. Skips (``busy``) rather than queue if another run holds the
+    lock. Refit is deliberately NOT scheduled here: promotion is an explicit operator call to /api/policy/refit
+    (and, when called, still goes through the gate)."""
+    if not loop.lock.acquire(blocking=False):
+        return {"skipped": "busy"}
+    try:
+        return {"observed": len(run_observe(loop))}
+    except Exception as e:  # noqa: BLE001 — a Lago blip must not kill the scheduler
+        _log.warning("billing outcome scheduler tick failed: %s: %s", type(e).__name__, e)
+        return {"error": f"{type(e).__name__}: {e}"}
+    finally:
+        loop.lock.release()
+
+
+def start_scheduler(loop: Optional[decision.ClosedLoop]):
+    """Start the background observer when BILLING_OUTCOME_INTERVAL_S > 0 (default off). Returns the thread."""
+    interval = scheduler_interval()
+    if interval <= 0 or loop is None:
+        return None
+    stop_scheduler()
+    stop = threading.Event()
+
+    def _run():
+        while not stop.wait(interval):
+            scheduler_tick(loop)
+    th = threading.Thread(target=_run, name="billing-outcome-scheduler", daemon=True)
+    _SCHED.update(thread=th, stop=stop)
+    th.start()
+    return th
+
+
+def stop_scheduler() -> None:
+    th, stop = _SCHED.get("thread"), _SCHED.get("stop")
+    if stop is not None:
+        stop.set()
+    if th is not None and th.is_alive():
+        th.join(timeout=5)
+    _SCHED.update(thread=None, stop=None)
+
+
+@router.on_event("startup")
+def _startup() -> None:
+    """Rehydrate parked missions (build_loop does it for a durable state dir) and start the optional observer."""
+    if os.environ.get("BILLING_STATE_DIR") or scheduler_interval() > 0:
+        start_scheduler(get_loop()) if scheduler_interval() > 0 else get_loop()
+
+
+@router.on_event("shutdown")
+def _shutdown() -> None:
+    stop_scheduler()
 
 
 @router.post("/api/decide")

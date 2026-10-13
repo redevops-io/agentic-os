@@ -17,7 +17,7 @@ before execution.
 """
 from __future__ import annotations
 
-from agentic_os.mission.operator_sdk import Operator, capability, pending_approval
+from agentic_os.mission.operator_sdk import Operator, capability
 
 from . import core
 
@@ -55,9 +55,7 @@ def build_books_operator() -> Operator:
         ),
         capability(
             "books.record_revenue",
-            lambda inp: (core.record_revenue(inp or {}) if (inp or {}).get("_approval")
-                         else pending_approval("books.record_revenue", amount=(inp or {}).get("amount"),
-                                               revenue_recorded=False)),
+            lambda inp: core.record_revenue(inp or {}),    # approval gate lives in core (_approval)
             provides=["revenue_recorded"],
             outputs={"revenue_recorded": "onboarding subscription revenue posted as an ERPNext Journal Entry"},
             side_effecting=True, approval_required=True, undo="books.reverse_entry",
@@ -66,10 +64,7 @@ def build_books_operator() -> Operator:
         ),
         capability(
             "books.reverse_entry",
-            lambda inp: (core.reverse_entry(inp or {}) if (inp or {}).get("_approval")
-                         else pending_approval("books.reverse_entry",
-                                               entry=(inp or {}).get("entry") or (inp or {}).get("name"),
-                                               revenue_reversed=False)),
+            lambda inp: core.reverse_entry(inp or {}),     # approval gate lives in core (_approval)
             provides=["revenue_reversed"],
             outputs={"revenue_reversed": "the revenue Journal Entry cancelled (compensating saga undo)"},
             side_effecting=True, approval_required=True,

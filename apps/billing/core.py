@@ -18,6 +18,8 @@ from typing import Callable
 
 import httpx
 
+from agentic_os.mission.operator_sdk import pending_approval
+
 # ── config (env; seed.py writes agents/billing/.env) ─────────────────────────
 # Idempotent .env load so this module is self-sufficient when imported by the operator
 # (i.e. without the FastAPI app having run its own loader first).
@@ -195,8 +197,12 @@ def fetch_activity(force: bool = False) -> dict:
 
 
 # ── agentic actions (deterministic Lago API work) ────────────────────────────
-def chase_overdue(blurb: Callable[[str], str | None] | None = None) -> dict:
+def chase_overdue(blurb: Callable[[str], str | None] | None = None, *, approval=None) -> dict:
     """For each overdue invoice, trigger Lago's payment retry (the dunning action).
+
+    APPROVAL-GATED IN CORE: without ``approval`` (the runtime-delivered ``_approval`` marker, or the
+    route's server-side operator marker) this only STAGES a preview -- nothing is sent to Lago -- so
+    every caller (operator, HTTP route, console tool) is covered by the one gate.
 
     POST /api/v1/invoices/{lago_id}/retry_payment is the real, idempotent Lago call.
     `blurb` is an optional narration callback (the LLM one-liner lives in app.py); the
@@ -204,6 +210,12 @@ def chase_overdue(blurb: Callable[[str], str | None] | None = None) -> dict:
     """
     data = fetch_activity(force=True)
     overdue = data.get("overdue", [])
+    if not approval:
+        return pending_approval(
+            "chase_overdue", dunning_attempted=False, overdue_count=len(overdue),
+            requires="human approval",
+            summary=f"Dunning on {len(overdue)} overdue invoice(s) is staged and awaiting human approval; "
+                    "nothing was sent to Lago.")
     actions = []
     with httpx.Client(timeout=10.0) as client:
         for inv in overdue:
@@ -273,16 +285,27 @@ def fetch_invoice(lago_id: str) -> dict | None:
         return None
 
 
-def chase_invoices(account_id: str, invoice_ids=None) -> dict:
+def chase_invoices(account_id: str, invoice_ids=None, *, approval=None, all_accounts: bool = False) -> dict:
     """Dunning scoped to ONE account: retry payment only on that account's currently-overdue invoices (and,
     when ``invoice_ids`` is given, only those). Then READ EACH INVOICE BACK from Lago and report, per
     invoice, ``retried`` / ``payment_status_after`` / ``settled``. The result declares ``dunning_verified``
     (True only when every chased invoice settled and at least one was chased), ``settled_count`` and
-    ``failed_count``; a partial result is ``status='partial'`` -- never success. Only reached on approval."""
+    ``failed_count``; a partial result is ``status='partial'`` -- never success.
+
+    Scope is REQUIRED: ``account_id`` (optionally narrowed by ``invoice_ids``). An unscoped call is refused
+    with ``scope_required`` unless ``all_accounts=True`` (every account's overdue invoices -- still read back
+    and still declaring the same outputs). APPROVAL-GATED IN CORE: without ``approval`` it stages only."""
     base = {"action": "dunning", "account_id": account_id, "dunning_attempted": False,
             "dunning_verified": False, "settled_count": 0, "failed_count": 0, "results": [], "skipped": []}
-    if not account_id:
-        return {**base, "status": "error", "error": "account_id required for scoped dunning"}
+    if not account_id and not all_accounts:
+        return {**base, "status": "error", "error": "scope_required",
+                "reason": "billing.dunning needs account_id (and optional invoice_ids); "
+                          "pass all_accounts=true with approval to chase every account"}
+    if not approval:
+        return {**pending_approval("billing.dunning", dunning_attempted=False, dunning_verified=False,
+                                   account_id=account_id, all_accounts=bool(all_accounts and not account_id),
+                                   requires="human approval"),
+                "settled_count": 0, "failed_count": 0}
     if not (lago_connected() and LAGO_API_KEY):
         return {**base, "status": "error", "error": "lago not reachable"}
     try:
@@ -292,7 +315,7 @@ def chase_invoices(account_id: str, invoice_ids=None) -> dict:
     want = None if invoice_ids is None else {str(i) for i in invoice_ids}
     chosen, skipped = [], []
     for inv in invoices:
-        if not invoice_in_account(inv, account_id):
+        if account_id and not invoice_in_account(inv, account_id):
             continue
         lid = str(inv.get("lago_id"))
         if want is not None and lid not in want:
@@ -329,7 +352,7 @@ def chase_invoices(account_id: str, invoice_ids=None) -> dict:
     status = "done" if verified else ("partial" if settled > 0 else "error")
     out = {**base, "status": status, "results": results, "dunning_attempted": any(r["retried"] for r in results),
            "dunning_verified": verified, "settled_count": settled, "failed_count": failed,
-           "summary": f"Dunning for {account_id}: {settled} of {len(results)} invoice(s) settled after retry."}
+           "summary": f"Dunning for {account_id or 'ALL accounts'}: {settled} of {len(results)} invoice(s) settled after retry."}
     if status != "done":
         out["error"] = ("no overdue invoice in scope" if not results else
                         f"{failed} of {len(results)} chased invoice(s) not settled on read-back")
@@ -461,6 +484,9 @@ def create_subscription(body: dict) -> dict:
     """
     customer = body.get("customer") or "new-customer"
     plan = body.get("plan_code") or DEFAULT_PLAN_CODE
+    if not body.get("_approval"):             # gate in CORE: every caller is covered
+        return pending_approval("billing.create_subscription", customer=customer, plan_code=plan,
+                                subscription=False)
     external_id = _subscription_external_id(customer, plan)
     lago_id = None
     status_code = 0
@@ -504,6 +530,8 @@ def cancel_subscription(body: dict) -> dict:
     """
     customer = body.get("customer") or "new-customer"
     plan = body.get("plan_code") or DEFAULT_PLAN_CODE
+    if not body.get("_approval"):             # gate in CORE: every caller is covered
+        return pending_approval("billing.cancel_subscription", customer=customer, subscription_cancelled=False)
     external_id = body.get("subscription_id") or _subscription_external_id(customer, plan)
     with httpx.Client(timeout=10.0) as client:
         resp = client.delete(f"{LAGO_API_URL}/api/v1/subscriptions/{external_id}", headers=_headers())

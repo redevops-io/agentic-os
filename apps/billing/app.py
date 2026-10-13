@@ -25,8 +25,10 @@ Config (env; seed.py writes agents/billing/.env automatically):
   LAGO_API_KEY    Bearer token (the ApiKey value from the seed)
   LAGO_FRONT_URL  Lago UI link for the hybrid/human-operable "Open in Lago" button
   PORT            uvicorn port, default 8201
-  ANTHROPIC_API_KEY  OPTIONAL — if set, /agent/run adds an LLM reasoning blurb;
-                     the endpoint works fully without it.
+  REDEVOPS_LLM_BASE_URL  OPTIONAL in-boundary model for the narration blurb (agentic_os.app.llm.governed_text,
+                     CUSTOMER_CONFIDENTIAL, fail-closed); the endpoint works fully without it.
+  OPERATOR_BASIC_AUTH  ``user:pass`` -- a request carrying these Basic credentials is the operator's approval
+                     for /agent/run actions; everything else only gets a staged preview.
 """
 from __future__ import annotations
 
@@ -44,17 +46,15 @@ except Exception:  # noqa: BLE001
 import time
 from pathlib import Path
 
-import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-from context_runtime.adapters.model_openai import OpenAICompatibleModel
-from context_runtime.types import ModelRequest
 
 # --- config ------------------------------------------------------------------
 # The Lago REST client, KPIs and agentic actions live in core.py (pure — no web /
 # context-runtime deps) so the Mission Runtime operator can invoke them and they can be
 # tested against a fake Lago. Import config + core helpers from there; core loads .env.
 from . import core
+from .gate import operator_approval
 from .core import (  # noqa: E402
     LAGO_API_URL, LAGO_API_KEY, LAGO_FRONT_URL, TENANT, SUBTITLE,
     _headers, lago_connected, _get_all, _money, _invoice_state, _days_overdue, fetch_activity,
@@ -315,77 +315,63 @@ def render(data: dict) -> str:
 </html>"""
 
 
-# --- optional LLM reasoning blurb (guarded: works without any API key) -------
-_BLURB_MODEL = OpenAICompatibleModel.from_env()
-
+# --- optional LLM reasoning blurb (governed; works without any model) --------
 def _llm_blurb(prompt: str) -> str | None:
-    """Return a one-line reasoning blurb from Claude, or None if no key / any error.
+    """A one-line narration from the GOVERNED in-boundary model, or None.
 
-    Optional by design — every agentic action below is deterministic Lago API work;
-    the LLM only narrates. Absence of ANTHROPIC_API_KEY must never break the endpoint.
-    """
-
-    def _fallback() -> str | None:
-        base = os.environ.get("REDEVOPS_LLM_BASE_URL")
-        if base:
-            try:
-                r = httpx.post(
-                    base.rstrip("/") + "/chat/completions",
-                    json={"model": os.environ.get("REDEVOPS_LLM_MODEL", "DeepSeek-V4-Flash"),
-                          "messages": [{"role": "user", "content": prompt}],
-                          "max_tokens": 220, "temperature": 0.3},
-                    timeout=90.0,   # DeepSeek runs on CPU (~15 tok/s) — be patient
-                )
-                if r.status_code == 200:
-                    txt = (r.json().get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
-                    if txt:
-                        return txt
-            except Exception:
-                pass
-        return None
-
-    if _BLURB_MODEL is None:
-        return _fallback()
+    N7: the prompt carries customer names and amounts, so it is classified CUSTOMER_CONFIDENTIAL and routed
+    by ``agentic_os.app.llm.governed_text`` -- fail closed (None) when the router refuses or no in-boundary
+    endpoint is configured; there is no direct-HTTP fallback. Every action is deterministic Lago API work;
+    the model only narrates."""
+    from .assistant import governed_answer
     try:
-        res = _BLURB_MODEL.complete(
-            ModelRequest(
-                messages=(
-                    {"role": "user", "content": prompt},
-                ),
-                max_tokens=220,
-            )
-        )
-        return res.text
-    except Exception:
-        return _fallback()
+        from agentic_os.governance.classification import DataClassification
+    except Exception:  # noqa: BLE001
+        return None
+    return governed_answer(prompt, (DataClassification.CUSTOMER_CONFIDENTIAL,), max_tokens=220, temperature=0.3)
 
 
-# --- agentic actions (thin wrappers over core; core stays context-runtime-free) ---
-def _chase_overdue() -> dict:
-    """Dunning over the real Lago core, with the optional LLM narration blurb."""
-    return core.chase_overdue(blurb=_llm_blurb)
+def _with_approval(body: dict, approval) -> dict:
+    """The core call's body: every caller-supplied ``_approval*`` key is stripped (an LLM-chosen tool argument
+    is as untrusted as an HTTP body), then the route's server-side marker -- if any -- is set."""
+    clean = _strip_approval(body or {})
+    return {**clean, "_approval": approval} if approval else clean
 
 
-def _refund(body: dict) -> dict:
-    """Stage a refund for human approval (never auto-executed)."""
-    return core.stage_refund(body)
+# --- agentic actions (thin wrappers over core; the approval gate lives IN core) ---
+# ``approval`` is None for every caller except a route that proved operator Basic auth (see gate.py): the
+# console/LLM tools below never pass one, so they can only ever stage a preview.
+def _chase_overdue(approval=None) -> dict:
+    """Dunning over the real Lago core (staged unless approved), with the optional governed narration."""
+    return core.chase_overdue(blurb=_llm_blurb, approval=approval)
 
 
-def _create_subscription(body: dict) -> dict:
-    """Onboard a customer onto a paid plan on the real Lago core."""
-    return core.create_subscription(body)
+def _refund(body: dict, approval=None) -> dict:
+    """Refund: staged unless approved (never auto-executed)."""
+    return core.stage_refund(_with_approval(body, approval))
 
 
-def _cancel_subscription(body: dict) -> dict:
-    """Compensating action (saga undo) for _create_subscription — terminate the subscription."""
-    return core.cancel_subscription(body)
+def _create_subscription(body: dict, approval=None) -> dict:
+    """Onboard a customer onto a paid plan on the real Lago core (staged unless approved)."""
+    return core.create_subscription(_with_approval(body, approval))
+
+
+def _cancel_subscription(body: dict, approval=None) -> dict:
+    """Compensating action (saga undo) for _create_subscription (staged unless approved)."""
+    return core.cancel_subscription(_with_approval(body, approval))
+
+
+#: every /agent/run action -> handler(body, approval). The route is the ONLY place the operator marker enters.
+ACTIONS = {
+    "chase_overdue": lambda body, approval: _chase_overdue(approval),
+    "refund": _refund,
+    "create_subscription": _create_subscription,
+    "cancel_subscription": _cancel_subscription,
+}
 
 
 # ──────── conversational agent · Context Runtime (LLM) + redevops-rag (grounding) + agent-harness (tools) ────────
-try:
-    from context_runtime.integrations.agent_console import AgentConsole as _AgentConsole, tool as _crtool
-except Exception:  # noqa: BLE001 — context-runtime absent → no console
-    _AgentConsole = None
+from .assistant import Assistant as _Assistant, Tool as _Tool
 
 _BILLING_PRIMER = """A CUSTOMER is who you bill. Create one under Customers → Add customer (name, email, billing address).
 
@@ -418,7 +404,10 @@ def _t_overdue(_a: dict) -> dict:
 
 
 def _t_find_customer(a: dict) -> dict:
+    import re as _re
     q = (a.get("name") or a.get("customer") or "").lower().strip()
+    if not q and a.get("message"):        # console free text: "find customer Acme" / "invoices for Acme"
+        q = _re.sub(r"\b(find|customer|invoices?|for|of|show|me|the)\b", " ", a["message"].lower()).strip(" ?.!")
     if not q:
         return {"text": "Which customer? Give me a name.", "data": []}
     d = fetch_activity()
@@ -441,24 +430,28 @@ def _t_refund(a: dict) -> dict:
     return {"text": r.get("summary", "Refund staged for human approval."), "data": r}
 
 
-if _AgentConsole is not None:
-    _BILL_CONSOLE = _AgentConsole(
-        f"{TENANT} Billing", _BILLING_PRIMER,
-        tools=[
-            _crtool("billing_summary", "current billing KPIs — collected, outstanding, payment success, customers", _t_summary),
-            _crtool("list_overdue", "list overdue invoices: who owes, how much, how many days", _t_overdue),
-            _crtool("find_customer", "find a customer's invoices by name", _t_find_customer,
-                    parameters={"type": "object", "properties": {"name": {"type": "string"}}}),
-            _crtool("chase_overdue", "retry payment on all overdue invoices (Lago dunning; idempotent)", _t_chase, side_effecting=True),
-            _crtool("refund", "stage a refund/credit note on an invoice for human approval", _t_refund, side_effecting=True,
-                    parameters={"type": "object", "properties": {"invoice": {"type": "string"}, "amount": {"type": "string"}}}),
-        ],
-        suggestions=["Who's overdue?", "How do I create a plan?", "Chase overdue invoices", "What is dunning?"],
-        subtitle="Ask about invoices, plans and dunning — or run a collection.",
-        allow_side_effects=["chase_overdue"],  # refund stays gated → the harness asks for human approval
-    )
-else:
-    _BILL_CONSOLE = None
+try:
+    from agentic_os.governance.classification import DataClassification as _DC
+    _CLS = (_DC.CUSTOMER_CONFIDENTIAL,)
+except Exception:  # noqa: BLE001
+    _CLS = ()
+
+# Console tools NEVER receive an approval marker: chase_overdue/refund only stage a preview from here.
+_BILL_CONSOLE = _Assistant(
+    f"{TENANT} Billing", _BILLING_PRIMER,
+    tools=[
+        _Tool("billing_summary", "current billing KPIs", _t_summary, keywords=("kpi", "summary", "collected", "outstanding", "billing")),
+        _Tool("list_overdue", "list overdue invoices", _t_overdue, keywords=("overdue", "owes", "owe", "late")),
+        _Tool("find_customer", "find a customer's invoices by name", _t_find_customer, keywords=("find customer", "invoices for")),
+        _Tool("chase_overdue", "stage dunning on all overdue invoices (needs operator approval)", _t_chase,
+              keywords=("chase", "dunning run", "collect"), side_effecting=True),
+        _Tool("refund", "stage a refund/credit note for human approval", _t_refund, keywords=("refund", "credit note"),
+              side_effecting=True),
+    ],
+    suggestions=["Who's overdue?", "How do I create a plan?", "Chase overdue invoices", "What is dunning?"],
+    subtitle="Ask about invoices, plans and dunning. Money-moving actions are staged for operator approval.",
+    classifications=_CLS,
+)
 
 
 # --- routes ------------------------------------------------------------------
@@ -473,8 +466,6 @@ async def api_agent(request: Request) -> JSONResponse:
         body = _strip_approval(await request.json())
     except Exception:  # noqa: BLE001
         body = {}
-    if _BILL_CONSOLE is None:
-        return JSONResponse({"intent": "help", "text": "The assistant is offline (context-runtime unavailable).", "evidence": []})
     return JSONResponse(_BILL_CONSOLE.respond((body or {}).get("message", ""), principal=_req_principal(request)))
 
 
@@ -483,101 +474,13 @@ def activity() -> JSONResponse:
     return JSONResponse(fetch_activity())
 
 
-# --- Context Runtime: decisions over a synthetic account stream (sample, not live traffic) ----------
-import asyncio as _cr_asyncio
-import json as _cr_json
-from datetime import datetime as _cr_dt, timezone as _cr_tz
-from fastapi.responses import StreamingResponse as _CRStreamingResponse
-
-try:
-    from context_runtime.integrations.agentic_billing import (  # type: ignore
-        AgenticBillingTenant as _CRTenant, agentic_billing_bucket as _cr_bucket,
-    )
-    _CR = _CRTenant(epsilon=0.15)
-except Exception:  # noqa: BLE001
-    _CR = None
-
-    def _cr_bucket(_t):  # type: ignore
-        return "general"
-
-_CR_SYNTH = [
-    'Whitfield Family Trust advisory fee overdue 45 days',
-    'Okonkwo Holdings retainer at renewal risk',
-    'Delgado Retirement paid early last quarter',
-    'Petrov Family Office invoices past due',
-]
-
-
-def _cr_decide(text: str) -> dict:
-    try:
-        bucket = _cr_bucket(text)
-    except Exception:  # noqa: BLE001
-        bucket = "general"
-    if _CR is not None:
-        try:
-            try:
-                arm = _CR.choose(text, bucket=bucket)
-            except TypeError:
-                arm = _CR.choose(text)
-            return {"bucket": str(bucket), "bundle": getattr(arm, "key", str(arm))}
-        except Exception:  # noqa: BLE001
-            pass
-    return {"bucket": str(bucket), "bundle": "(context runtime offline)"}
-
-_CR_LIVE_FEED = """
-<div id="cr-live" style="position:fixed;right:16px;bottom:16px;width:340px;max-height:58vh;overflow:auto;background:#17171a;border:1px solid #2f2f33;border-radius:12px;padding:12px;font:13px/1.45 Roboto,system-ui,sans-serif;color:#e4e2e6;z-index:9999;box-shadow:0 10px 34px rgba(0,0,0,.45)">
-  <div style="color:#4fd1c5;font-weight:600;margin-bottom:8px">Context Runtime — decisions (sample stream)</div>
-  <div id="cr-feed" style="color:#9b99a1">connecting…</div>
-</div>
-<script>
-(function(){
-  var feed=document.getElementById('cr-feed');var first=true;
-  try{
-    var es=new EventSource('api/stream');
-    es.onmessage=function(e){
-      if(first){feed.innerHTML='';first=false;}
-      var d=JSON.parse(e.data);var row=document.createElement('div');
-      row.style.cssText='border-top:1px solid #2f2f33;padding:7px 0';
-      row.innerHTML='<div style="color:#9b99a1;font-size:11px">'+d.ts+' \u00b7 <b style="color:#c7c5ca">'+d.bucket+'</b></div>'+'<div style="margin:2px 0">'+d.input+'</div>'+'<div style="color:#4fd1c5">\u2192 pulled context: <b>'+d.bundle+'</b></div>';
-      feed.insertBefore(row,feed.firstChild);
-      while(feed.children.length>8) feed.removeChild(feed.lastChild);
-    };
-    es.onerror=function(){ if(first){feed.textContent='(live stream unavailable)';} };
-  }catch(err){feed.textContent='(live stream unavailable)';}
-})();
-</script>
-"""
-
-
-@app.get("/api/stream")
-async def cr_stream() -> _CRStreamingResponse:
-    async def _gen():
-        i = 0
-        while True:
-            text = _CR_SYNTH[i % len(_CR_SYNTH)]
-            i += 1
-            d = _cr_decide(text)
-            evt = {"input": text, "ts": _cr_dt.now(_cr_tz.utc).strftime("%H:%M:%S"), **d}
-            yield f"data: {_cr_json.dumps(evt)}\n\n"
-            await _cr_asyncio.sleep(2.5)
-    return _CRStreamingResponse(_gen(), media_type="text/event-stream")
-
-
-_CR_BANNER = """<div style="position:sticky;top:0;z-index:9998;background:linear-gradient(90deg,#10201d,#17171a);border-bottom:1px solid #2f2f33;color:#e4e2e6;font:13px/1.4 Roboto,system-ui,sans-serif;padding:9px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">CONTEXT RUNTIME</span><span style="background:#2f2f33;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">DEMO</span><span style="color:#9b99a1">This demo app is plugged into <b style="color:#e4e2e6">Context Runtime</b>, which optimizes which billing signals to pull — right collections action vs data cost (4.12 vs 2.44). <a href="https://github.com/redevops-io/context-runtime" style="color:#4fd1c5;text-decoration:none">learn more \u2192</a></span></div>"""
-
-
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
-    import re as _cr_re
     page = render(fetch_activity())
     if _BILL_CONSOLE is not None:
         panel = "<section class='shell' style='margin-top:var(--sp-4)'>" + _BILL_CONSOLE.panel_html("bill") + "</section>"
         page = page.replace("<footer", panel + "<footer", 1)
-    page = _cr_re.sub(r"(<body[^>]*>)", lambda m: m.group(1) + _CR_BANNER, page, count=1)
-    if "_CR_BANNER" not in page and "cr-live" not in page:  # no <body> matched → prepend
-        page = _CR_BANNER + page
-    return (page.replace("</body>", _CR_LIVE_FEED + "</body>")
-            if "</body>" in page else page + _CR_LIVE_FEED)
+    return page
 
 
 @app.post("/agent/run")
@@ -587,20 +490,14 @@ async def agent_run(request: Request) -> JSONResponse:
     except Exception:
         body = {}
     action = (body or {}).get("action", "")
-
-    if action == "chase_overdue":
-        return JSONResponse(_chase_overdue())
-    if action == "refund":
-        return JSONResponse(_refund(body or {}))
-    if action == "create_subscription":
-        return JSONResponse(_create_subscription(body or {}))
-    if action == "cancel_subscription":
-        return JSONResponse(_cancel_subscription(body or {}))
-    return JSONResponse(
-        {"status": "error", "error": f"unknown action '{action}'",
-         "supported": ["chase_overdue", "refund", "create_subscription", "cancel_subscription"]},
-        status_code=400,
-    )
+    handler = ACTIONS.get(action) if isinstance(action, str) else None
+    if handler is None:
+        return JSONResponse(
+            {"status": "error", "error": f"unknown action '{action}'", "supported": sorted(ACTIONS)},
+            status_code=400,
+        )
+    # Server-side only: valid operator Basic auth => the route injects the approval marker; else staged preview.
+    return JSONResponse(handler(body or {}, operator_approval(request)))
 
 
 if __name__ == "__main__":  # pragma: no cover

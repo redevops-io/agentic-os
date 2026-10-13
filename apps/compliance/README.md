@@ -134,3 +134,7 @@ release origin, not an independent signature. Re-verify with the steps in `env/R
 bumped. Each scan records which hash was verified: the `compliance.scan` result carries
 `ssg: {version, tarball_sha256, hash_status}` (`verified` | `unpinned` | `mismatch-overridden` | `unknown`),
 written by `scan.sh` into `results/scan-target.json` when it fetches the datastream.
+
+## Operating notes
+
+Writes are approval-gated in `core`; the app's routes execute them only for requests with valid operator Basic auth (`OPERATOR_BASIC_AUTH=user:pass`, fail closed when unset). Narration goes through `agentic_os.app.llm.governed_text` (fail closed).
