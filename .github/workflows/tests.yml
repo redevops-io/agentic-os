@@ -34,9 +34,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev,duckdb]"
+      - name: Fetch real connector fixtures (public repo) for the normalization tests
+        run: git clone --depth 1 https://github.com/redevops-io/redevops-connectors "$RUNNER_TEMP/redevops-connectors"
       - name: Full kernel suite (tests/, incl. tests/conformance)
         env:
           PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/apps
+          REDEVOPS_CONNECTORS_FIXTURES: ${{ runner.temp }}/redevops-connectors/fixtures
         run: pytest -q -p no:cacheprovider tests
       - name: Per-app suites
         # One run per app: several apps share test file basenames (test_operator.py, ...), and each app is its own

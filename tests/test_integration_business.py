@@ -15,7 +15,25 @@ from agentic_os.integrations.business import (
     receipt_for_step, to_action_receipt, verify_step)
 from agentic_os.integrations.business.contracts import Invoice, Receivable, now_ms
 
-_FIX = Path("/mnt/backup/projects/redevops-connectors/fixtures")
+def _fixtures_dir() -> Path:
+    """Real connector fixtures live in the public redevops-connectors repo. Resolve: $REDEVOPS_CONNECTORS_FIXTURES,
+    then a sibling checkout, then the installed package's repo; SKIP (never fail) when none exists so the suite is
+    hermetic. CI clones the repo and sets the env var, so the coverage is real there."""
+    import os
+    cands = [os.environ.get("REDEVOPS_CONNECTORS_FIXTURES", ""),
+             str(Path(__file__).resolve().parents[2] / "redevops-connectors" / "fixtures")]
+    try:
+        import redevops_connectors  # noqa: PLC0415
+        cands.append(str(Path(redevops_connectors.__file__).resolve().parents[1] / "fixtures"))
+    except Exception:  # noqa: BLE001
+        pass
+    for c in cands:
+        if c and Path(c).is_dir():
+            return Path(c)
+    return Path("")
+
+
+_FIX = _fixtures_dir()
 
 
 # ── contracts ──────────────────────────────────────────────────────────────────────
@@ -49,6 +67,8 @@ def test_receivable_bitemporal_defaults():
 
 # ── normalization (from real connector fixtures) ─────────────────────────────────────
 def _fix(provider, name):
+    if not _FIX or not (_FIX / provider / name).exists():
+        pytest.skip("redevops-connectors fixtures not available (set REDEVOPS_CONNECTORS_FIXTURES)")
     return json.loads((_FIX / provider / name).read_text())
 
 

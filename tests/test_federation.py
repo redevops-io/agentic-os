@@ -26,7 +26,9 @@ from apps.infra.operator import build_infra_operator  # noqa: E402
 
 def _service():
     app = FastAPI()
-    app.include_router(build_infra_operator().router())
+    # Inject a stub runner: the test proves the federation/HTTP contract, not terraform (which CI doesn't have).
+    stub = lambda argv, cwd=None: (0, "No changes. Infrastructure is up-to-date.", "")  # noqa: E731
+    app.include_router(build_infra_operator(run=stub).router())
     return TestClient(app)
 
 
