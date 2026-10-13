@@ -51,6 +51,8 @@ services:
     image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-projects-console:${APPS_TAG:-stable}
     environment:
       - PORT=8240
+      - AGENTIC_OS_APPROVAL_SECRET=${AGENTIC_OS_APPROVAL_SECRET:-}
+      - OUTREACH_BASIC_AUTH=${OUTREACH_BASIC_AUTH:-}
       - CONSOLE_TENANT=${TENANT:-Summit Roofing Co.}
       - REVENUE_URL=http://revenue-agent:8220
       - INTEL_URL=http://intelligence-agent:8221
@@ -77,6 +79,8 @@ services:
     image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-revenue-agent:${APPS_TAG:-stable}
     environment:
       - PORT=8220
+      - AGENTIC_OS_APPROVAL_SECRET=${AGENTIC_OS_APPROVAL_SECRET:-}
+      - OUTREACH_BASIC_AUTH=${OUTREACH_BASIC_AUTH:-}
       - TWENTY_URL=http://twenty:3000
       - TWENTY_API_KEY=${TWENTY_API_KEY:-}
       - REVENUE_TENANT=${TENANT:-Summit Roofing Co.}

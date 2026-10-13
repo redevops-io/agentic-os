@@ -169,12 +169,34 @@ class Operator:
                                                replay_guard=self.replay_guard)
                 if marker is not None:
                     inputs["_approval"] = marker
+                else:
+                    _warn_unverified_approval()
             try:
                 return {"result": self.invoke(body.capability, inputs, key)}
             except KeyError as e:
                 raise HTTPException(404, str(e))
 
         return router
+
+
+_WARN_AT: dict = {}
+
+
+def _warn_unverified_approval() -> None:
+    """Rate-limited (1/min per reason) WARNING: an approval_token did not verify, so approved actions stay
+    staged. Never logs the token or the secret."""
+    import logging, time  # noqa: PLC0415
+    from .approval import ENV_SECRET, _secret_bytes  # noqa: PLC0415
+    reason = "mismatch" if _secret_bytes() else "no-secret"
+    now = time.monotonic()
+    if now - _WARN_AT.get(reason, -1e9) < 60:
+        return
+    _WARN_AT[reason] = now
+    why = ("approval token failed verification (secret mismatch, expired, replayed or tampered)"
+           if reason == "mismatch" else f"{ENV_SECRET} is not configured on this operator")
+    logging.getLogger("agentic_os.operator").warning(
+        "%s; approved actions will stay staged. Run `agentic-os secrets init` and use the SAME "
+        "%s on the runtime and every operator (docs/SECRETS.md).", why, ENV_SECRET)
 
 
 class LocalOperatorClient:

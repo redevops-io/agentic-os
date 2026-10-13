@@ -865,6 +865,96 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
             "replay, and the runtime must explain why a learned strategy changed."),
         source="Governance path shipped: integrations/execution.py GovernedEnvelope (tiers+approval+audit) · "
                "Roadmap: common outcome telemetry + offline/online evaluation before any self-improvement claim"),
+    KnowledgeEntry(
+        id="secrets-where",
+        topic="Platform secrets",
+        keywords=("where are my secrets", "where is my secret", "where are the secrets", "secrets file",
+                  "secrets.env", "where is the approval secret", "platform secrets", "generated secret"),
+        question="Where are my platform secrets stored?",
+        answer=(
+            "The platform auto-generates the secrets it needs (AGENTIC_OS_APPROVAL_SECRET, TWENTY_APP_SECRET, "
+            "OUTREACH_BASIC_AUTH) the first time you start it (or run `agentic-os secrets init`) and never "
+            "overwrites a value you set yourself. Linux: ~/.config/redevops/secrets.env (0600), loaded by a "
+            "managed block in ~/.bashrc. macOS: the same file, loaded from ~/.zshrc, plus the Keychain. "
+            "Windows: %APPDATA%\\redevops\\secrets.env plus user-level environment variables and Credential "
+            "Manager. With VAULT_ADDR and VAULT_TOKEN set they go to Vault KV v2 at "
+            "secret/vibexgen/agentic-os/stack instead (REDEVOPS_VAULT_PATH to change). Containers: pass "
+            "`docker compose --env-file ~/.config/redevops/secrets.env up -d`. Run `agentic-os secrets where` "
+            "to see the exact paths on this machine."),
+        source="docs/SECRETS.md · agentic_os/secrets/bootstrap.py"),
+    KnowledgeEntry(
+        id="secrets-fetch",
+        topic="Platform secrets",
+        keywords=("fetch a secret", "fetch secret", "get a secret", "read a secret", "decode a secret",
+                  "decode secret", "show my secret", "print the secret", "how do i fetch", "base64 decode",
+                  "secrets get"),
+        question="How do I fetch or decode a secret?",
+        answer=(
+            "Use `agentic-os secrets get NAME` (add `--decode` to base64-decode *_B64 values or to split "
+            "OUTREACH_BASIC_AUTH into user and password; `--as-header` prints the Authorization: Basic header). "
+            "Raw equivalents: Linux/macOS `grep '^NAME=' ~/.config/redevops/secrets.env`; Vault "
+            "`vault kv get -field=NAME secret/vibexgen/agentic-os/stack`; macOS Keychain "
+            "`security find-generic-password -s redevops -a NAME -w`; Windows PowerShell "
+            "`[Environment]::GetEnvironmentVariable('NAME','User')` or Credential Manager (service redevops). "
+            "Treat the output as sensitive: do not paste it into chats or tickets."),
+        source="docs/SECRETS.md#fetch-and-decode"),
+    KnowledgeEntry(
+        id="secrets-override",
+        topic="Platform secrets",
+        keywords=("set my own secret", "my own value", "own secret", "override a secret", "override the secret",
+                  "use my own password", "choose my own secret", "custom secret", "bring my own secret"),
+        question="How do I set my own secret value instead of the generated one?",
+        answer=(
+            "Either export it before the first start (a secret already in your environment is respected and "
+            "never replaced), or edit the NAME=value line in your secrets file (Linux/macOS "
+            "~/.config/redevops/secrets.env; Windows %APPDATA%\\redevops\\secrets.env; Vault: "
+            "`vault kv patch secret/vibexgen/agentic-os/stack NAME=value`). Requirements: approval and Twenty "
+            "secrets at least 32 characters (Twenty must not contain 'demo-only'); OUTREACH_BASIC_AUTH as "
+            "user:password with a 20+ character password. Then restart the services that use it. "
+            "`agentic-os secrets list` shows whether your value is accepted."),
+        source="docs/SECRETS.md#override-with-your-own-value"),
+    KnowledgeEntry(
+        id="secrets-rotate",
+        topic="Platform secrets",
+        keywords=("rotate a secret", "rotate the secret", "rotate secret", "rotate my secret", "secrets rotate",
+                  "change the approval secret", "regenerate the secret", "rotate the password"),
+        question="How do I rotate a secret?",
+        answer=(
+            "Run `agentic-os secrets rotate NAME` (it prints the consequences and asks for confirmation, or "
+            "pass --yes). Rotating TWENTY_APP_SECRET logs everyone out of Twenty and invalidates its API keys "
+            "(recreate TWENTY_API_KEY). AGENTIC_OS_APPROVAL_SECRET must stay identical on the mission runtime "
+            "and every HTTP operator: restart them all afterwards; pending approval tokens become invalid. "
+            "OUTREACH_BASIC_AUTH: update every caller of the console real actions, then restart the "
+            "revenue-agent and console. Back up the secrets file first."),
+        source="docs/SECRETS.md#rotate"),
+    KnowledgeEntry(
+        id="approvals-stay-pending",
+        topic="Platform secrets",
+        keywords=("approved actions stay", "stay pending", "stays pending", "still pending", "approval not executing",
+                  "approved but nothing", "approved but not executed", "stay staged", "stays staged",
+                  "approval secret", "approvals are not executing", "approved action did not run"),
+        question="Why do approved actions stay pending or staged?",
+        answer=(
+            "Over HTTP the runtime proves a human approval with a token signed using "
+            "AGENTIC_OS_APPROVAL_SECRET. If the secret is missing on the runtime or any operator, or differs "
+            "between them, the operator ignores the token and the action stays staged (the operator logs a "
+            "warning). Fix: run `agentic-os secrets init` once, start every service with the same value "
+            "(`docker compose --env-file ~/.config/redevops/secrets.env up -d`, or export it from the secrets "
+            "file), and restart the runtime and operators. Check with `agentic-os secrets list`."),
+        source="docs/SECRETS.md#troubleshooting · docs/APPROVAL_TOKENS.md"),
+    KnowledgeEntry(
+        id="outreach-real-send-gate",
+        topic="Platform secrets",
+        keywords=("real send", "outreach real", "real sends", "outreach_basic_auth", "basic auth", "basic-auth",
+                  "send gate", "revenue agent real", "401 on the console", "console real action"),
+        question="What do I need to set for the revenue/outreach real send gate?",
+        answer=(
+            "Real sends are protected by HTTP Basic auth. OUTREACH_BASIC_AUTH (format operator:password, "
+            "password 20+ characters) is generated for you by `agentic-os secrets init` and must be passed to "
+            "the revenue-agent and console containers (compose does this with --env-file). Callers send "
+            "`agentic-os secrets get OUTREACH_BASIC_AUTH --as-header`'s header; a 401 means a missing or stale "
+            "credential. Real sends additionally require the usual human approval and AGENTIC_OS_APPROVAL_SECRET."),
+        source="docs/SECRETS.md#outreach_basic_auth"),
 )
 
 

@@ -48,3 +48,14 @@ def pytest_sessionfinish(session, exitstatus):
         print("\nHYGIENE FAILURE: the test run modified agentic_os/projects_ui/ (tracked vendored UI). "
               "Tests must write to tmp dirs; rebuild the UI only via scripts/build_projects_ui.sh.")
         session.exitstatus = 1
+
+
+@pytest.fixture(autouse=True)
+def _isolate_platform_secrets(monkeypatch, tmp_path):
+    """Never read/write the developer's real secrets file, rc files or keyring (docs/SECRETS.md)."""
+    monkeypatch.setenv("REDEVOPS_SECRETS_AUTO", "0")
+    monkeypatch.setenv("REDEVOPS_SECRETS_FILE", str(tmp_path / "no-such-dir" / "secrets.env"))
+    monkeypatch.setenv("REDEVOPS_SECRETS_NO_KEYRING", "1")
+    for e in ("VAULT_ADDR", "VAULT_TOKEN", "AGENTIC_OS_APPROVAL_SECRET"):
+        monkeypatch.delenv(e, raising=False)
+    yield
