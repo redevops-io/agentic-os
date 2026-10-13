@@ -22,10 +22,16 @@ log = logging.getLogger("agentic_os.secrets")
 BEGIN = "# >>> redevops secrets (managed) >>>"
 END = "# <<< redevops secrets (managed) <<<"
 KEYRING_SERVICE = "redevops"
-DEFAULT_VAULT_PATH = "vibexgen/agentic-os/stack"
+# Live bundle: KV v2 mount `vibexgen`, path `agentic-os/stack` (API path vibexgen/data/agentic-os/stack).
+DEFAULT_VAULT_MOUNT = "vibexgen"
+DEFAULT_VAULT_PATH = "agentic-os/stack"
 
 
 class SecretsError(RuntimeError):
+    pass
+
+
+class VaultCasConflict(SecretsError):
     pass
 
 
@@ -170,10 +176,34 @@ class VaultBundle:
                                f"({type(e).__name__}); not falling back to local storage.") from None
         return {str(k): str(v) for k, v in (((resp or {}).get("data") or {}).get("data") or {}).items()}
 
-    def write(self, merged: Mapping[str, str]) -> None:
-        import json
+    def read_versioned(self) -> Tuple[Dict[str, str], int]:
+        """(data, current KV v2 version); version 0 means the secret does not exist yet (CAS create-only)."""
         try:
-            self._t("POST", self.url, self._h(), json.dumps({"data": dict(merged)}).encode())
+            resp = self._t("GET", self.url, self._h(), None)
+        except Exception as e:  # noqa: BLE001
+            if getattr(e, "code", None) == 404:
+                return {}, 0
+            raise SecretsError(f"Vault is configured ({self.addr}) but unreachable or denied read "
+                               f"({type(e).__name__}); not falling back to local storage.") from None
+        d = (resp or {}).get("data") or {}
+        try:
+            ver = int((d.get("metadata") or {}).get("version") or 0)
+        except (TypeError, ValueError):
+            ver = 0
+        return {str(k): str(v) for k, v in (d.get("data") or {}).items()}, ver
+
+    def write(self, merged: Mapping[str, str], cas: Optional[int] = None) -> None:
+        import json
+        body: Dict[str, Any] = {"data": dict(merged)}
+        if cas is not None:
+            body["options"] = {"cas": cas}
+        try:
+            self._t("POST", self.url, self._h(), json.dumps(body).encode())
+        except VaultCasConflict:
+            raise
+        except Exception as e:  # noqa: BLE001
+            if cas is not None and getattr(e, "code", None) == 400:
+                raise VaultCasConflict("Vault bundle changed since it was read (check-and-set mismatch)") from None
         except Exception as e:  # noqa: BLE001
             raise SecretsError(f"Vault write failed ({type(e).__name__}); nothing was stored locally.") from None
 
@@ -229,7 +259,7 @@ class Bootstrap:
 
     def vault(self) -> VaultBundle:
         return VaultBundle(self.environ["VAULT_ADDR"], self.environ["VAULT_TOKEN"],
-                           self.environ.get("VAULT_MOUNT", "secret"),
+                           self.environ.get("VAULT_MOUNT", DEFAULT_VAULT_MOUNT),
                            self.environ.get("REDEVOPS_VAULT_PATH", DEFAULT_VAULT_PATH), self.vault_transport)
 
     def vault_location(self) -> str:
@@ -330,6 +360,44 @@ class Bootstrap:
                 self.keyring.set_password(KEYRING_SERVICE, k, v)
             except Exception:  # noqa: BLE001
                 log.debug("keyring mirror skipped for %s", k)
+
+    # -- push (local -> Vault, add-only)
+    def push(self, only=None, dry_run: bool = False, attempts: int = 3) -> Dict[str, Any]:
+        """Copy managed secrets that exist locally (env/file/keyring) into Vault, adding ONLY keys missing
+        there. Read-merge-write with check-and-set on the version read; never overwrites or drops keys."""
+        if not self.vault_configured():
+            raise SecretsError("push needs Vault: set VAULT_ADDR and VAULT_TOKEN (no local fallback).")
+        names = list(only) if only else list(MANAGED)
+        unknown = [n for n in names if n not in MANAGED]
+        if unknown:
+            raise SecretsError(f"unknown managed secret(s): {', '.join(unknown)}; known: {', '.join(MANAGED)}")
+        b = self.vault()
+        for attempt in range(attempts):
+            vdata, ver = b.read_versioned()
+            local = self.locate(names)
+            added: List[str] = []
+            skipped_present: List[str] = []
+            missing_local: List[str] = []
+            merged = dict(vdata)
+            for n in names:
+                if vdata.get(n):
+                    skipped_present.append(n)
+                elif local[n]:
+                    merged[n] = local[n][0][1]
+                    added.append(n)
+                else:
+                    missing_local.append(n)
+            if not added or dry_run:
+                break
+            try:
+                b.write(merged, cas=ver)
+                break
+            except VaultCasConflict:
+                if attempt == attempts - 1:
+                    raise SecretsError("Vault bundle kept changing (check-and-set conflict); nothing was "
+                                       "overwritten. Re-run push.") from None
+        return {"location": self.vault_location(), "added": added, "skipped_present": skipped_present,
+                "missing_local": missing_local, "dry_run": dry_run}
 
     # -- rotate
     def rotate(self, name: str) -> str:
