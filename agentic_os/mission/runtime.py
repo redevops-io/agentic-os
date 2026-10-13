@@ -660,6 +660,7 @@ class MissionRuntime:
         approval = self._approval_marker(m.id, node.id)
         if approval is not None:
             resolved["_approval"] = approval
+            resolved["_node"] = node.id   # lets HTTPOperatorClient bind a signed approval token to this node
         return resolved
 
     def _approval_edit(self, mission_id: str, node_id: str) -> dict | None:
@@ -876,7 +877,7 @@ class MissionRuntime:
         status = self.repo.node_status(m.id)
         for node in reversed(plan.graph.nodes):
             if status.get(node.id) == NodeState.DONE and node.side_effecting and node.undo:
-                out = self._executor_for(m).compensate(node)
+                out = self._executor_for(m).compensate(node, mission_id=m.id)
                 self.store.append("NodeCompensated", m.id,
                                   {"node_id": node.id, "undo": node.undo, "result": out})
 

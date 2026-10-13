@@ -76,13 +76,23 @@ class Operator:
         self.manifest = CapabilityManifest(operator=name, capabilities=[c.spec for c in capabilities])
         self._handlers: dict[str, Handler] = {c.spec.name: c.handler for c in capabilities}
         self._specs: dict[str, CapabilitySpec] = {c.spec.name: c.spec for c in capabilities}
-        self._seen: dict[str, dict] = {}       # idempotency_key -> first result (exactly-once)
+        self._seen: dict[tuple, dict] = {}     # (capability, inputs-hash, idem key) -> first result (exactly-once)
+        from .approval import ReplayGuard  # noqa: PLC0415
+        self.replay_guard = ReplayGuard()      # SEAM: per-process; multi-replica deployments need a shared store
         self.calls: list[tuple[str, str]] = []  # (capability, idempotency_key) — for assertions
 
     def invoke(self, capability: str, inputs: dict, idempotency_key: str = "",
                *, secrets: "dict | None" = None) -> dict:
-        if idempotency_key and idempotency_key in self._seen:
-            return self._seen[idempotency_key]
+        from .approval import canonical  # noqa: PLC0415
+        # Dedupe on (capability, canonical inputs, key): the same key with different capability/inputs is a
+        # different call. `_approval` stays IN the hash so an approved retry is never served the staged result.
+        try:
+            _dk = (capability, canonical({k: v for k, v in (inputs or {}).items()
+                                          if k not in {"_mission", "_goal", "_node"}}), idempotency_key)
+        except Exception:  # noqa: BLE001
+            _dk = None
+        if idempotency_key and _dk is not None and _dk in self._seen:
+            return self._seen[_dk]
         fn = self._handlers.get(capability)
         if fn is None:
             raise KeyError(f"operator '{self.name}' has no capability '{capability}'")
@@ -117,8 +127,8 @@ class Operator:
                 "awaiting_approval", "awaiting_connector", "unverifiable", "blocked"})
         if isinstance(result, dict) and result and outs and not _failed and not any(k in result for k in outs):
             result = {**result, **{k: True for k in outs}}
-        if idempotency_key:
-            self._seen[idempotency_key] = result
+        if idempotency_key and _dk is not None:
+            self._seen[_dk] = result
         return result
 
     # ── HTTP surface (mount into the app's FastAPI) ──────────────────────────
@@ -134,6 +144,7 @@ class Operator:
             idempotency_key: str = ""
             mission_id: str | None = None
             node_id: str | None = None
+            approval_token: str | None = None
 
         @router.get("/capabilities")
         def capabilities():
@@ -147,8 +158,17 @@ class Operator:
             # handler execute (it stages / stays pending instead). The runtime delivers a real approval through
             # the trusted in-process invoke (co-located) or an authenticated internal channel — never this open
             # endpoint — so legitimate approval flows are unaffected.
-            inputs = {k: v for k, v in (body.inputs or {}).items()
-                      if not (k == "_approval" or k.startswith("_approval"))}
+            from .approval import strip_approval_keys, verify_approval_token  # noqa: PLC0415
+            inputs = strip_approval_keys(body.inputs or {})
+            # A runtime-delivered approval arrives ONLY as a signed, operator/capability/inputs-bound,
+            # single-use token. Verified => inject the marker AFTER the strip. Anything else => ignored (stages).
+            if body.approval_token:
+                marker = verify_approval_token(None, body.approval_token, operator=self.name,
+                                               capability=body.capability, inputs=inputs,
+                                               mission_id=body.mission_id, node_id=body.node_id,
+                                               replay_guard=self.replay_guard)
+                if marker is not None:
+                    inputs["_approval"] = marker
             try:
                 return {"result": self.invoke(body.capability, inputs, key)}
             except KeyError as e:

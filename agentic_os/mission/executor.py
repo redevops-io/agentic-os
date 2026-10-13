@@ -241,13 +241,22 @@ class Executor:
             self.monitor.observe(node, result, isolation=isolation)
         return result
 
-    def compensate(self, node: Node) -> dict | None:
-        """Run the node's undo capability (saga) — best effort; never raises past the caller."""
+    def compensate(self, node: Node, *, mission_id: str | None = None) -> dict | None:
+        """Run the node's undo capability (saga) — best effort; never raises past the caller.
+
+        An undo is part of the scope of the action it reverses, so it carries the runtime's approval marker
+        (``compensation``): an undo capability that is itself approval-gated (unblock_ip, cancel_subscription,
+        destroy_delta, ...) must EXECUTE during rollback rather than stage — otherwise a failed mission would
+        record ``NodeCompensated`` while leaving the forward side effect in place. Over HTTP the client mints
+        the signed approval token from this marker, so it cannot be forged by a caller."""
         if not node.undo:
             return None
+        inputs: dict = {"undo_of": node.capability, "result": node.result, "_node": node.id,
+                        "_approval": {"approved": True, "compensation": True}}
+        if mission_id:
+            inputs["_mission"] = mission_id
         try:
-            return self.client.invoke(node.operator, node.undo,
-                                      {"undo_of": node.capability, "result": node.result},
+            return self.client.invoke(node.operator, node.undo, inputs,
                                       f"{node.idempotency_key}:undo")
         except Exception as e:  # noqa: BLE001
             return {"undo_error": str(e)}
