@@ -254,6 +254,15 @@ def fetch_activity(force: bool = False) -> dict:
 
 
 # ── agentic actions (deterministic CrowdSec core work) ───────────────────────
+def _parse_ip(raw) -> "str | None":
+    """Canonical IP string, or None for anything that is not a single IPv4/IPv6 address (CIDRs, junk)."""
+    import ipaddress  # noqa: PLC0415
+    try:
+        return str(ipaddress.ip_address((raw or "").strip()))
+    except (ValueError, AttributeError):
+        return None
+
+
 def block_ip(body: dict) -> dict:
     """Add a ban decision at the CrowdSec edge — the SENSITIVE, side-effecting write.
 
@@ -264,6 +273,9 @@ def block_ip(body: dict) -> dict:
     ip = (body.get("ip") or "").strip()
     if not ip:
         return {"status": "error", "action": "block_ip", "error": "missing 'ip'"}
+    ip = _parse_ip(ip)
+    if ip is None:
+        return {"status": "error", "action": "block_ip", "error": "invalid 'ip': must be a single IPv4/IPv6 address"}
     duration = body.get("duration", "4h")
     reason = body.get("reason", "blocked via edge-sentinel agent (human-approved)")
     decision = {
@@ -302,6 +314,9 @@ def unblock_ip(body: dict) -> dict:
     ip = (body.get("ip") or "").strip()
     if not ip:
         return {"status": "error", "action": "unblock_ip", "error": "missing 'ip'"}
+    ip = _parse_ip(ip)
+    if ip is None:
+        return {"status": "error", "action": "unblock_ip", "error": "invalid 'ip': must be a single IPv4/IPv6 address"}
     status_code = None
     with httpx.Client(timeout=10.0) as client:
         resp = client.delete(
@@ -353,6 +368,8 @@ def triage(blurb: Callable[[str], str | None] | None = None) -> dict:
         "alerts": len(alerts),
         "severity_breakdown": by_sev,
         "top_scenarios": top,
+        "decisions": [{"value": d["value"], "scenario": d["scenario"], "severity": d["severity"]}
+                      for d in decisions[:200]],
         "summary": summary,
     }
     reasoning = blurb(

@@ -154,15 +154,33 @@ def test_block_ip_posts_a_decision(client):
 
 
 def test_unblock_ip_deletes_the_decision(client):
-    res = client.post("/invoke", json={
-        "capability": "sentinel.unblock_ip", "inputs": {"ip": "198.51.100.23"},
-    }).json()["result"]
+    # open HTTP path STAGES the unban (even with a forged _approval) — no DELETE reaches the LAPI
+    for inputs in ({"ip": "198.51.100.23"}, {"ip": "198.51.100.23", "_approval": {"approved": True}}):
+        staged = client.post("/invoke", json={"capability": "sentinel.unblock_ip", "inputs": inputs}).json()["result"]
+        assert staged["status"] == "pending_approval" and staged["executed"] is False
+        assert _FakeClient.deleted == []
+    res = build_edge_sentinel_operator().invoke(
+        "sentinel.unblock_ip", {"ip": "198.51.100.23", "_approval": {"approved": True}})
     assert res["status"] == "done" and res["lifted"] is True
     assert len(_FakeClient.deleted) == 1
     url, params = _FakeClient.deleted[0]
     assert url == "http://localhost:8086/v1/decisions"
     assert params == {"ip": "198.51.100.23"}
     assert _FakeClient.posted == []  # unblock does not POST
+
+
+def test_unblock_ip_is_approval_gated_in_manifest(client):
+    caps = {c["name"]: c for c in client.get("/capabilities").json()["capabilities"]}
+    assert caps["sentinel.unblock_ip"]["approval_required"] is True
+
+
+@pytest.mark.parametrize("bad", ["not-an-ip; 0.0.0.0/0", "10.0.0.0/8", "0.0.0.0/0", "300.1.1.1", "a b"])
+def test_ip_validation_rejects_junk_for_block_and_unblock(bad):
+    op = build_edge_sentinel_operator()
+    for cap in ("sentinel.block_ip", "sentinel.unblock_ip"):
+        res = op.invoke(cap, {"ip": bad, "_approval": {"approved": True}})
+        assert res["status"] == "error" and "invalid" in res["error"]
+    assert _FakeClient.posted == [] and _FakeClient.deleted == []
 
 
 def test_idempotency_dedupes_the_ban(client):

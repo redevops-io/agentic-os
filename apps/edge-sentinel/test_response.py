@@ -118,3 +118,29 @@ def test_cacao_export_is_interop_only_and_round_trips():
     assert action["commands"][0]["type"] == "manual"
     parsed = from_cacao(playbook)
     assert parsed["capability"] == "sentinel.block_ip" and parsed["approval_required"] is True
+
+
+def _prop(ip):
+    return response.GovernedResponseProposal(
+        case_id="c", finding_id="f", capability_name="sentinel.block_ip", inputs={"ip": ip},
+        approval_required=True, side_effecting=True, undo=None, permissions=())
+
+
+@pytest.mark.parametrize("result", [{"status": "error", "error": "lapi 500"},
+                                    {"status": "pending_approval", "executed": False}])
+def test_execute_response_records_failed_when_handler_did_not_execute(result):
+    op = Operator("edge-sentinel", [capability(
+        "sentinel.block_ip", lambda i: dict(result), side_effecting=True, approval_required=True)])
+    prop = _prop("10.0.0.1")
+    dec = SecurityDecision(request_id=prop.proposal_id, actor="soc", approved=True)
+    receipt = execute_response(op, prop, decision=dec)
+    assert receipt.status == "FAILED" and receipt.error
+
+
+def test_verify_uses_ip_equality_not_substring():
+    op = Operator("edge-sentinel", [capability(
+        "sentinel.triage", lambda i: {"decisions": [{"value": "10.0.0.15"}]}, concurrency_mode="read_only")])
+    prop = _prop("10.0.0.1")
+    receipt = evidence.ActionReceipt(request_id=prop.proposal_id, decision_id="d", status="SUCCEEDED")
+    assert verify_response(op, prop, receipt).verified is False
+    assert verify_response(op, _prop("10.0.0.15"), receipt).verified is True
