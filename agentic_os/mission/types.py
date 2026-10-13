@@ -146,6 +146,9 @@ class ExecutionIntent:
     compiler substring-matches constraints for "human"/"review" to decide
     whether a node needs approval — so a *value* containing either would add an
     unrequested gate. Data must not be able to steer an authority decision."""
+    bind: dict[str, str] = field(default_factory=dict)
+    """Explicit ``{outcome: capability}`` bindings the compiler MUST honour (they win over ranking and over
+    active-plan alternatives). Empty for every text/template-planned intent."""
     template: str | None = None
     """Which template produced these steps, once the planner has decided.
 
@@ -433,6 +436,12 @@ class Mission:
     # than being dropped at the delegation hop. Optional; legacy callers leave it empty.
     inputs: dict[str, Any] = field(default_factory=dict)
     intervention_id: str = ""               # the Decision (InterventionRecord) that delegated this mission
+    # The capability the delegating decision SELECTED (set by the launcher). ``inputs`` are delivered ONLY to
+    # nodes bound to this capability; empty = deliver to nothing (the historical behaviour).
+    selected_capability: str = ""
+    # True when the plan was authored by ExplicitCapabilityPlanner (single step bound to selected_capability)
+    # rather than by text matching; replay and re-planning must use the same path.
+    bind_selected: bool = False
     id: str = field(default_factory=lambda: new_id("mission"))
     created_at: float = field(default_factory=now)
     updated_at: float = field(default_factory=now)

@@ -60,7 +60,8 @@ def compile_intent(
         from .context import LocalContextRuntime
         context = LocalContextRuntime(context)
     granted = _granted(mission)
-    prefer = prefer or {}
+    # an intent's explicit bindings win over any caller/active-planner preference
+    prefer = {**(prefer or {}), **(getattr(intent, "bind", None) or {})}
     graph = ExecutionGraph()
     outcome_to_node: dict[str, str] = {}
 

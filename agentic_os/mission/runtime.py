@@ -18,8 +18,10 @@ execute. To plan against *current* evidence instead, use the explicit `re_evalua
 """
 from __future__ import annotations
 
+import copy
 from typing import Any
 
+from .approval import is_approval_key, strip_approval_keys
 from . import belief, cost as costmod
 from .compiler import compile_intent, CompileError
 from .context import LocalContextRuntime, ContextIntent, CHECK_POLICY, RESOLVE_BELIEF
@@ -164,6 +166,10 @@ class UnrecoverableAuthority(RuntimeError):
     """
 
 
+#: keys the runtime owns in a node's resolved inputs; mission inputs can never set them.
+_RESERVED_INPUT_KEYS = frozenset({"_goal", "_mission", "_node"})
+
+
 class MissionRuntime:
     #: Capability marker: this runtime invokes the ``_pre_exec_ok`` node-admission hook (and ``_meter``)
     #: on every dispatch. An overlay that enforces governance by overriding ``_pre_exec_ok`` checks this
@@ -249,7 +255,8 @@ class MissionRuntime:
                         template: str | None = None, verified_intent: Any = None,
                         policy: "MissionPolicy | None" = None,
                         principal: Any = None, tenant: str = "",
-                        inputs: dict | None = None, intervention_id: str = "") -> Mission:
+                        inputs: dict | None = None, intervention_id: str = "",
+                        selected_capability: str = "", bind_selected: bool = False) -> Mission:
         # v0.2.x Slice 1 — carry the Discovery seal across the boundary. ``verified_intent`` is an
         # optional sealed VerifiedIntent (duck-typed: a runtime_contracts.VerifiedIntent, or a dict, or
         # anything exposing ``content_hash``/``evidence``); its identity is recorded on the mission and
@@ -259,8 +266,12 @@ class MissionRuntime:
         m = Mission(goal=goal, constraints=constraints or [], policy_refs=policy_refs or [],
                     policy=policy, budget=budget or Budget(), template=template,
                     world_state_id=new_id("world"),
-                    principal=principal, tenant=tenant, inputs=dict(inputs or {}),
+                    principal=principal, tenant=tenant,
+                    # a decision must not be able to smuggle an approval marker through its inputs
+                    inputs=strip_approval_keys(dict(inputs or {})),
                     intervention_id=intervention_id or "",
+                    selected_capability=selected_capability or "",
+                    bind_selected=bool(bind_selected and selected_capability),
                     intent_content_hash=identity.get("intent_content_hash", ""),
                     evidence_refs=identity.get("evidence_refs", []))
         self._missions[m.id] = m
@@ -278,6 +289,10 @@ class MissionRuntime:
                            # the Decision↔Mission link, mission side (the InterventionRecord holds the other)
                            "intervention_id": m.intervention_id or None,
                            "input_keys": sorted(m.inputs.keys()) if m.inputs else [],
+                           # Event-sourced delivery: only a mission that names its selected capability records
+                           # the (approval-stripped) input VALUES, because replay must re-deliver them.
+                           **({"selected_capability": m.selected_capability, "bind_selected": m.bind_selected,
+                               "inputs": to_jsonable(m.inputs)} if m.selected_capability else {}),
                            # mission-policy/v1 — pin the named policy identity onto mission creation
                            "policy": (m.policy.ref if m.policy else None),
                            "policy_digest": (m.policy.digest() if m.policy else None),
@@ -350,6 +365,10 @@ class MissionRuntime:
     def _plan_and_gate(self, m: Mission, revision: int = 1, reason: str = "initial",
                        planner=None, context: dict | None = None) -> None:
         scoped = self._scoped(m)
+        if planner is None and m.bind_selected:
+            from .planner import ExplicitCapabilityPlanner
+            planner, context = ExplicitCapabilityPlanner(scoped), {"capability": m.selected_capability,
+                                                                  **(context or {})}
         planner = planner or self.planner
         intent = planner.plan(m.id, m.goal, {"template": m.template, **(context or {})})
         # P9a: active plan selection — generate bounded candidates, policy-prune, simulate, score,
@@ -759,6 +778,13 @@ class MissionRuntime:
         # (N3) — merged with any typed `edit` the approver supplied. Event-sourced (folded from
         # ApprovalGranted), so it survives replay. Absent on the ungoverned/pre-approval path, so a handler
         # invoked directly (e.g. /agent/run) still stages rather than acts.
+        # Mission.inputs reach ONLY the node bound to the launcher-selected capability, never over explicit
+        # node.inputs or runtime-reserved keys (approval keys were already stripped at mission creation).
+        if m.selected_capability and node.capability == m.selected_capability:
+            for k, v in (m.inputs or {}).items():
+                if k in resolved or k in _RESERVED_INPUT_KEYS or is_approval_key(k):
+                    continue
+                resolved[k] = copy.deepcopy(strip_approval_keys(v))
         approval = self._approval_marker(m.id, node.id)
         if approval is not None:
             resolved["_approval"] = approval
@@ -1291,8 +1317,13 @@ class MissionRuntime:
         # signature check is what stands between that and a silent swap.
         template = (active or {}).get("template") or created.payload.get("template")
 
+        sel = created.payload.get("selected_capability") or ""
         m = Mission(goal=goal or "", template=template,
                     constraints=created.payload.get("constraints", []),
+                    selected_capability=sel,
+                    bind_selected=bool(sel and created.payload.get("bind_selected")),
+                    inputs=strip_approval_keys(dict(created.payload.get("inputs") or {})) if sel else {},
+                    intervention_id=created.payload.get("intervention_id") or "",
                     policy_refs=list(policy_refs if policy_refs is not None else recorded),
                     # v0.2.x: replay carries the original evidence identity back, so the rehydrated
                     # mission resolves the SAME sealed intent + evidence it was created from.
@@ -1314,6 +1345,9 @@ class MissionRuntime:
 
             planner, context = IntentPlanner(), {
                 "verified_intent": intent_from_json(stored)}
+        elif m.bind_selected:
+            from .planner import ExplicitCapabilityPlanner
+            planner, context = ExplicitCapabilityPlanner(self._scoped(m)), {"capability": m.selected_capability}
         else:
             planner, context = self.planner, {}
 
