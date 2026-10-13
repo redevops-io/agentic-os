@@ -10,14 +10,17 @@ Capabilities (syscalls):
   crm.draft_outreach  — draft a first-touch email, saved as a Lead Comment for human review
   crm.qualify         — advance a Lead's status (pipeline progression)
 
-Gate: the (historic) modules.yaml gate was on SENDING outreach to a prospect. There is NO send capability
-here, so the manifest declares no approval. Inspecting the core: `draft_outreach` only DRAFTS (it saves a Comment; a human
-sends it — nothing here auto-emails a prospect), and none of the four actions send. So NO
-capability is `approval_required=True`. Every action writes to ERPNext, so all carry
-`side_effecting=True` and the runtime dedupes them exactly-once on the Idempotency-Key.
+Gate classification: NOTHING here sends to a prospect (`draft_outreach` only saves a Comment draft that a human
+sends). `crm.qualify` CHANGES A LEAD'S STATUS (a mutation of the customer record beyond a draft), so it is
+`approval_required=True` and the gate lives INSIDE `core.qualify` (stage `pending_approval` unless a
+runtime-delivered `_approval`), which also covers the app's HTTP routes. `score_lead` (agent-owned `lead_score` field
++ Comment), `research` and `draft_outreach` (Comment only) are annotations/drafts and stay ungated. Every action
+writes to ERPNext, so all carry `side_effecting=True` and the runtime dedupes them exactly-once on the
+Idempotency-Key.
 """
 from __future__ import annotations
 
+from agentic_os.approval_gate import gated
 from agentic_os.mission.operator_sdk import Operator, capability
 
 from . import core
@@ -55,10 +58,10 @@ def build_crm_operator() -> Operator:
         ),
         capability(
             "crm.qualify",
-            lambda inp: core.qualify(inp),
+            gated("crm.qualify", core.qualify, lead_qualified=False),
             provides=["lead_qualified"],
             outputs={"lead_qualified": "Lead status advanced (pipeline progression)"},
-            side_effecting=True,
+            side_effecting=True, approval_required=True,
             permissions=["crm:write"], estimated_value="medium", latency_ms=800,
             concurrency_mode="exclusive", concurrency_key=LEAD,
         ),

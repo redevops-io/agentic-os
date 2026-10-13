@@ -44,7 +44,7 @@ def build_manifest(operator):
             pain='pilot outreach & pipeline',
             tagline='Lands pilots — ranks accounts by signal and applies a fixed (not learned) outreach play.',
             agents=('sourcer', 'personalizer', 'sequencer'),
-            approval=('send_sequence',),
+            approval=('approve', 'send_sequence'),
             deploy='compose',
         ),
     )

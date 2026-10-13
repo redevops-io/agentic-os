@@ -25,7 +25,12 @@ Config (env; seed.py writes agents/lifecycle/.env):
   LISTMONK_FRONT_URL  Listmonk UI link for the "Open in Listmonk ↗" button
   PORT                uvicorn port, default 8211
   REDEVOPS_LLM_BASE_URL / REDEVOPS_LLM_MODEL   the agent brain (DeepSeek-V4-Flash)
-  ANTHROPIC_API_KEY   OPTIONAL — Claude fallback
+  (Models: the governed in-boundary endpoint only; no external provider fallback.)
+
+Gate classification: nothing here sends to a contact. compose_campaign creates a Listmonk DRAFT (read back and
+verified as `draft`; a human reviews + starts it in Listmonk), segment / suggest_flow are advisory. No action
+starts, schedules or changes the status of a campaign, so none is approval-gated; test_route_gating.py pins that
+the app never issues anything but the draft POST + read-back GET to Listmonk.
 """
 from __future__ import annotations
 
@@ -162,30 +167,23 @@ def render(data: dict) -> str:
 compose · segment · flows · redevops.io Agentic Business OS</footer></div></body></html>"""
 
 
-# Narration runs on the Context Runtime model plane (on-prem DeepSeek via REDEVOPS_LLM_*) — our stack, no raw provider SDK.
-try:
-    from context_runtime.adapters.model_openai import OpenAICompatibleModel as _BlurbModelCls
-    from context_runtime.types import ModelRequest as _BlurbReq
-    _BLURB_MODEL = _BlurbModelCls.from_env()
-except Exception:  # noqa: BLE001
-    _BLURB_MODEL = None
-    _BlurbReq = None
-
-
+# --- governed LLM (N7) -------------------------------------------------------
+# Brief/goal text (subscriber-targeting context) goes into these prompts, so every model call routes through the
+# GovernedModelRouter (agentic_os.app.llm.governed_text) as CUSTOMER_CONFIDENTIAL: only the configured IN-BOUNDARY
+# endpoint can receive it; None comes back -- never a public fallback -- when there is none or the router refuses.
 def _llm_text(prompt: str, max_tokens: int = 600) -> str | None:
-    """Narration via the Context Runtime model plane, or None (offline / any error)."""
-    if _BLURB_MODEL is None or _BlurbReq is None:
-        return None
     try:
-        res = _BLURB_MODEL.complete(_BlurbReq(messages=({"role": "user", "content": prompt},), max_tokens=max_tokens))
-        return res.text or None
+        from agentic_os.app.llm import governed_text
+        from agentic_os.governance.classification import DataClassification
     except Exception:  # noqa: BLE001
         return None
+    return governed_text(prompt, classifications=(DataClassification.CUSTOMER_CONFIDENTIAL,),
+                         max_tokens=max_tokens, temperature=0.5)
 
 
 # --- agentic actions (thin wrappers over core; core stays context-runtime-free) ---
 # The pure Listmonk work lives in core.py; app.py only injects the LLM copy callback
-# (`_llm_text`, on the Context Runtime model plane). With the callback absent core still
+# (`_llm_text`, the governed in-boundary router). With the callback absent core still
 # runs deterministically — compose posts a draft, segment/suggest_flow return skeletons.
 def _compose_campaign(body: dict) -> dict:
     """Compose a Listmonk campaign draft over the real core, with LLM-written copy."""
@@ -202,11 +200,10 @@ def _suggest_flow(body: dict) -> dict:
     return core.suggest_flow(body, llm=_llm_text)
 
 
-# ──────── conversational agent · Context Runtime + redevops-rag + agent-harness ────────
-try:
-    from context_runtime.integrations.agent_console import AgentConsole as _AgentConsole, tool as _crtool
-except Exception:  # noqa: BLE001
-    _AgentConsole = None
+_ACTIONS = {"compose_campaign": _compose_campaign, "segment": _segment, "suggest_flow": _suggest_flow}
+
+
+# ──────── conversational agent: governed LLM + read-only tools ────────
 
 _LIFECYCLE_PRIMER = """A SUBSCRIBER is a contact who can receive email/SMS. Subscribers live in one or more LISTS. Import them under Subscribers → Import, or add one manually.
 
@@ -244,20 +241,27 @@ def _t_list_segments(_a: dict) -> dict:
     return {"text": "\n".join(lines), "data": rows}
 
 
-if _AgentConsole is not None:
-    _LIFECYCLE_CONSOLE = _AgentConsole(
-        f"{TENANT} Lifecycle", _LIFECYCLE_PRIMER,
-        tools=[
-            _crtool("lifecycle_summary", "subscribers, lists, campaigns sent/running/drafts, total opens", _t_lifecycle_summary),
-            _crtool("list_campaigns", "recent campaigns with status, subject and opens", _t_list_campaigns),
-            _crtool("list_segments", "the audience lists and their subscriber counts", _t_list_segments),
-        ],
-        suggestions=["How's my email doing?", "Show recent campaigns", "How do I create a campaign?", "What is double opt-in?"],
-        subtitle="Ask about subscribers, campaigns and lists — or how lifecycle email works.",
-        allow_side_effects=[],
-    )
-else:
-    _LIFECYCLE_CONSOLE = None
+def _agent_reply(message: str) -> dict:
+    low = (message or "").lower()
+    if not low.strip():
+        return {"intent": "help", "text": "Ask about subscribers, campaigns and lists, or how lifecycle email works.", "evidence": []}
+    for words, fn, name in ((("campaign", "recent", "draft"), _t_list_campaigns, "list_campaigns"),
+                            (("list", "segment", "audience"), _t_list_segments, "list_segments"),
+                            (("email", "subscriber", "doing", "summary", "open"), _t_lifecycle_summary, "lifecycle_summary")):
+        if any(w in low for w in words):
+            return {"intent": name, "text": fn({})["text"], "evidence": []}
+    txt = _llm_text(_LIFECYCLE_PRIMER + "\n\nAnswer in 2-4 plain sentences.\nQuestion: " + message, 300)
+    return {"intent": "help", "text": txt or "The assistant model is offline (no in-boundary model configured).",
+            "evidence": []}
+
+
+_AGENT_PANEL = (
+    "<section class='shell' style='margin-top:16px'><h3>Assistant</h3>"
+    "<input id='agmsg' placeholder='Ask about campaigns and lists' style='width:70%'> "
+    "<button onclick=\"fetch('api/agent',{method:'POST',headers:{'Content-Type':'application/json'},"
+    "body:JSON.stringify({message:document.getElementById('agmsg').value})}).then(r=>r.json())"
+    ".then(d=>{document.getElementById('agout').textContent=d.text})\">Ask</button>"
+    "<pre id='agout' style='white-space:pre-wrap'></pre></section>")
 
 
 @app.get("/health")
@@ -271,9 +275,7 @@ async def api_agent(request: Request) -> JSONResponse:
         body = _strip_approval(await request.json())
     except Exception:  # noqa: BLE001
         body = {}
-    if _LIFECYCLE_CONSOLE is None:
-        return JSONResponse({"intent": "help", "text": "The assistant is offline (context-runtime unavailable).", "evidence": []})
-    return JSONResponse(_LIFECYCLE_CONSOLE.respond((body or {}).get("message", ""), principal=_req_principal(request)))
+    return JSONResponse(_agent_reply((body or {}).get("message", "")))
 
 
 @app.get("/api/activity")
@@ -284,10 +286,7 @@ def activity() -> JSONResponse:
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     page = render(fetch_activity())
-    if _LIFECYCLE_CONSOLE is not None:
-        panel = "<section class='shell' style='margin-top:16px'>" + _LIFECYCLE_CONSOLE.panel_html("lifecycle") + "</section>"
-        page = page.replace("<footer", panel + "<footer", 1)
-    return page
+    return page.replace("<footer", _AGENT_PANEL + "<footer", 1)
 
 
 @app.post("/agent/run")
@@ -297,11 +296,10 @@ async def agent_run(request: Request) -> JSONResponse:
     except Exception:
         body = {}
     action = (body or {}).get("action", "")
-    handlers = {"compose_campaign": _compose_campaign, "segment": _segment, "suggest_flow": _suggest_flow}
-    if action in handlers:
-        return JSONResponse(handlers[action](body or {}))
+    if action in _ACTIONS:
+        return JSONResponse(_ACTIONS[action](body or {}))
     return JSONResponse({"status": "error", "error": f"unknown action '{action}'",
-                         "supported": list(handlers)}, status_code=400)
+                         "supported": list(_ACTIONS)}, status_code=400)
 
 
 if __name__ == "__main__":  # pragma: no cover

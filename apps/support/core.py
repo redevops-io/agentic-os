@@ -6,10 +6,14 @@ capability handlers can be tested against a fake Chatwoot without booting the wh
 
 `draft_reply(body, blurb=...)` takes an optional narration callback — the LLM draft lives in
 `app.py` (context-runtime); the action itself is deterministic and works with blurb=None
-(a template fallback). agentic-support has NO approval gates (modules.yaml `approval_required: []`).
+(a template fallback). resolve / escalate / send_onboarding are APPROVAL-GATED INSIDE this module: without a runtime-delivered
+`_approval` they only stage a preview (`pending_approval`, executed False), whichever caller (operator, HTTP
+route, console tool) invoked them. draft_reply posts a private note and stays ungated.
 """
 from __future__ import annotations
 
+import base64
+import hmac
 import os
 import time
 from datetime import datetime, timezone
@@ -17,6 +21,8 @@ from pathlib import Path
 from typing import Callable
 
 import httpx
+
+from agentic_os.mission.operator_sdk import pending_approval
 
 # ── config (env; seed.py writes agents/support/.env) ─────────────────────────
 # Idempotent .env load so this module is self-sufficient when imported by the operator
@@ -36,6 +42,39 @@ CHATWOOT_FRONT_URL = os.environ.get("CHATWOOT_FRONT_URL", "http://localhost:3003
 
 TENANT = "Meridian Wealth Management"
 SUBTITLE = "Front-line support that drafts, resolves, and escalates on a real Chatwoot core — a human reviews any public reply before it reaches the customer."
+
+
+# ── operator gate (route level) ──────────────────────────────────────────────
+# The side-effecting core actions below STAGE (pending_approval, executed False) unless the input carries a
+# runtime-delivered ``_approval``. The unauthenticated HTTP routes strip any caller-supplied ``_approval*`` and
+# only INJECT one server-side when the request carries the valid operator Basic credential (env
+# OPERATOR_BASIC_AUTH, or OUTREACH_BASIC_AUTH, as ``user:pass``). Unset/malformed credential => nobody is the
+# operator (fail closed). LLM / console tool calls never pass through here, so they can never be approved.
+def _operator_credential() -> str:
+    combo = os.environ.get("OPERATOR_BASIC_AUTH") or os.environ.get("OUTREACH_BASIC_AUTH") or ""
+    user, sep, pw = combo.partition(":")
+    return combo if (sep and user and pw) else ""
+
+
+def operator_approval(authorization: "str | None") -> "dict | None":
+    """The ``_approval`` marker for a request whose ``Authorization`` header is the valid operator Basic
+    credential, else None (unauthenticated / wrong credential / no credential configured)."""
+    expected = _operator_credential()
+    if not expected or not authorization or authorization[:6].lower() != "basic ":
+        return None
+    try:
+        got = base64.b64decode(authorization[6:].strip(), validate=True).decode("utf-8")
+    except Exception:  # noqa: BLE001
+        return None
+    if hmac.compare_digest(got.encode("utf-8"), expected.encode("utf-8")):
+        return {"approved": True, "by": "operator-basic"}
+    return None
+
+
+def with_operator_approval(body: dict, authorization: "str | None") -> dict:
+    """``body`` plus the operator marker when (and only when) the credential is valid."""
+    appr = operator_approval(authorization)
+    return {**body, "_approval": appr} if appr else body
 
 
 # --- Chatwoot REST client ----------------------------------------------------
@@ -275,7 +314,7 @@ def draft_reply(body: dict, blurb: Callable[[str], str | None] | None = None) ->
     ) if blurb else None
     if llm:
         draft = llm
-        source = "claude (claude-opus-4-8)"
+        source = "governed in-boundary model"
     else:
         first = contact.split()[0] if contact and contact != "—" else "there"
         draft = (
@@ -350,6 +389,8 @@ def send_onboarding(body: dict) -> dict:
     of creating a new one. The welcome message is OUTGOING — this is a proactive
     onboarding touch, not a human-reviewed reply, so it goes straight to the customer.
     """
+    if not body.get("_approval"):
+        return pending_approval("support.send_onboarding", onboarding_sent=False)
     customer = body.get("customer") or {}
     subscription = body.get("subscription") or {}
     if isinstance(customer, str):
@@ -409,29 +450,63 @@ def send_onboarding(body: dict) -> dict:
             )
             posted = rm.status_code in (200, 201)
             cw_status = rm.status_code
+            verified = False
+            if posted:
+                msg_id = None
+                try:
+                    msg_id = (rm.json() or {}).get("id")
+                except Exception:  # noqa: BLE001
+                    pass
+                verified = _readback_outgoing(client, conv_id, welcome, msg_id)
     except Exception as e:
         return {"status": "error", "error": str(e), "action": "send_onboarding"}
 
-    return {
-        "status": "done" if posted else "error",
+    out = {
         "action": "send_onboarding",
-        "onboarding_sent": posted,
         "conversation_id": int(conv_id),
         "customer": str(name),
         "plan": (str(plan) if plan is not None else None),
         "chatwoot_status": cw_status,
         "message": welcome,
-        "summary": (
-            f"Sent an onboarding welcome message to {name} in Chatwoot "
-            f"(conversation #{conv_id})."
-        ),
+        "message_verified": verified,
     }
+    if not posted:
+        return {**out, "status": "error", "onboarding_sent": False}
+    if not verified:
+        return {**out, "status": "unverified", "onboarding_sent": False,
+                "error": "Chatwoot accepted the message POST but the read-back of the conversation did not show "
+                         "it as an outgoing, non-private message; not reporting it as sent."}
+    return {**out, "status": "done", "onboarding_sent": True,
+            "summary": (f"Welcome message to {name} is recorded in Chatwoot conversation #{conv_id} as an "
+                        "outgoing message (read back). Channel delivery itself is Chatwoot's async job.")}
+
+
+def _readback_outgoing(client, conv_id, content: str, msg_id=None) -> bool:
+    """GET the conversation's messages and confirm ours is there, outgoing and not private."""
+    try:
+        r = client.get(f"{_acct_base()}/conversations/{conv_id}/messages", headers=_headers())
+        if r.status_code != 200:
+            return False
+        data = r.json()
+        msgs = data.get("payload") if isinstance(data, dict) else data
+        for m in msgs or []:
+            if not isinstance(m, dict) or m.get("private"):
+                continue
+            if m.get("message_type") not in (1, "outgoing"):
+                continue
+            if (msg_id is not None and m.get("id") == msg_id) or (m.get("content") or "").strip() == content.strip():
+                return True
+    except Exception:  # noqa: BLE001
+        pass
+    return False
 
 
 def resolve(body: dict) -> dict:
     """Toggle a conversation's status (open ↔ resolved). Real Chatwoot call:
       POST /conversations/{id}/toggle_status
     """
+    if not body.get("_approval"):
+        return pending_approval("support.resolve", ticket_resolved=False)
     conv_id = body.get("conversation_id")
     if not conv_id:
         return {"status": "error", "error": "conversation_id required", "action": "resolve"}
@@ -463,6 +538,8 @@ def escalate(body: dict) -> dict:
     An explicit ``assignee_id`` (agent) or ``team_id`` (Chatwoot team, which does its own routing) is REQUIRED:
     we never guess an assignee (the old code assigned agents[0]). Missing → error, nothing is written.
     """
+    if not body.get("_approval"):
+        return pending_approval("support.escalate", ticket_escalated=False)
     conv_id = body.get("conversation_id")
     if not conv_id:
         return {"status": "error", "error": "conversation_id required", "action": "escalate"}

@@ -10,7 +10,9 @@ demo tenant used across the agentic apps. Sends are approval-gated.
   GET  /              -> MD3 dashboard (source, rank, draft, approve — the GUI)
   POST /agent/run     -> {"action":"refresh"|"approve"|"send_all", "account": "..."}
 
-Config (env): TWENTY_URL · TWENTY_API_KEY · OPENAI_API_KEY(gpt-5.5) · OUTREACH_TENANT/PITCH/VERTICALS ·
+Config (env): TWENTY_URL · TWENTY_API_KEY · REDEVOPS_LLM_BASE_URL (in-boundary model; none => deterministic) ·
+OPERATOR_BASIC_AUTH / OUTREACH_BASIC_AUTH (`user:pass`; approve / send_all execute only for the operator) ·
+OUTREACH_TENANT/PITCH/VERTICALS ·
 GITHUB_TOKEN · SAMGOV_KEY · ADZUNA_APP_ID/KEY (each source degrades gracefully when its key is absent).
 """
 from __future__ import annotations
@@ -73,18 +75,30 @@ def api_pipeline(live: int = 1):
     return JSONResponse({"accounts": build_pipeline(bool(live)), "connected": twenty_connected()})
 
 
+_ACTIONS = {"refresh": core.refresh,
+            "approve": core.approve,        # gated INSIDE core: staged unless `_approval` (human sign-off → Twenty sync)
+            "send_all": core.send_all}      # gated INSIDE core
+
+
+def _run_action(action: str, body: dict, authorization: "str | None") -> "dict | None":
+    """THE single route -> core entry point. The operator marker is injected server-side only when the request
+    carries the valid operator Basic credential; every other caller gets the core's staged preview."""
+    fn = _ACTIONS.get(action)
+    if fn is None:
+        return None
+    return fn(core.with_operator_approval(body, authorization))
+
+
 @app.post("/api/run")        # proxied path (control-plane forwards /m/<app>/api/* only)
 @app.post("/agent/run")      # kept for internal/control-plane callers
 async def agent_run(req: Request):
     body = _strip_approval(await req.json())
+    if not isinstance(body, dict):
+        body = {}
     action = body.get("action", "refresh")
-    # The action verbs live in core.py (pure, operator-invocable). This endpoint is a thin dispatch.
-    if action == "refresh":
-        return core.refresh(body)
-    if action == "approve":                      # human sign-off → queue + sync to Twenty
-        return core.approve(body)
-    if action == "send_all":
-        return core.send_all(body)
+    res = _run_action(action, body, req.headers.get("authorization"))
+    if res is not None:
+        return res
     return {"ok": False, "error": f"unknown action {action}"}
 
 
@@ -263,7 +277,10 @@ def run_discovery(plan: dict) -> tuple[list[dict], str]:
     return dedup, "; ".join(used)
 
 
-def do_discover(instruction: str) -> dict:
+def do_discover(instruction: str, approval: "dict | None" = None) -> dict:
+    """Plan + run discovery. Candidates are PERSISTED into the pipeline state only when ``approval`` is present (the
+    server-side operator marker); otherwise the result is a read-only preview and nothing is stored."""
+    persist = bool(approval)
     plan = plan_search(instruction)
     try:
         cands, sources = run_discovery(plan)
@@ -283,16 +300,19 @@ def do_discover(instruction: str) -> dict:
             skipped.append({"account": c["account"], "reason": "already in your pipeline / CRM"})
             continue
         # CANDIDATE ONLY: no auto-approval and no CRM write. A human approves via the gated `outreach.approve`.
-        _STATE["candidates"].append({**c, "candidate": True, "signal": c.get("signal") or "cold",
-                                     "source": c.get("source") or "manual"})
+        if persist:
+            _STATE["candidates"].append({**c, "candidate": True, "signal": c.get("signal") or "cold",
+                                         "source": c.get("source") or "manual"})
         existing.add(c["account"].lower())
         added.append({"account": c["account"], "evidence": c["evidence"], "signal": c.get("source"),
                       "amount": int(c.get("amount") or _pilot_amount(c)), "url": c.get("url"),
                       "status": "candidate"})
     return {"intent": "discover", "instruction": instruction, "plan": plan, "searched": sources,
-            "found": len(cands), "status": "candidate", "candidates": added, "added": added, "skipped": skipped,
+            "found": len(cands), "status": "candidate" if persist else "preview", "persisted": persist,
+            "candidates": added, "added": added if persist else [], "skipped": skipped,
             "crm_synced": False,
-            "note": ("Candidates only — nothing was synced to the CRM. Approve an account (outreach.approve) to "
+            "note": ("" if persist or not added else "Preview only (operator credential required to add candidates "
+                     "to the pipeline). ") + ("Candidates only — nothing was synced to the CRM. Approve an account (outreach.approve) to "
                      "sync it." if added else "Found candidates but added none — see the skipped reasons.")}
 
 
@@ -302,7 +322,7 @@ async def api_discover(req: Request):
     instruction = (body.get("instruction") or "").strip()
     if not instruction:
         return {"ok": False, "error": "Tell me what kind of leads you're after — e.g. “RAG eval startups with 200+ stars”."}
-    return {"ok": True, **do_discover(instruction)}
+    return {"ok": True, **do_discover(instruction, core.operator_approval(req.headers.get("authorization")))}
 
 
 # ──────────────── the conversational CRM agent: one box, many capabilities, all transparent ────────────────
@@ -318,25 +338,17 @@ def _json_slice(txt: str) -> str:
     return txt[a:b + 1] if a >= 0 and b > a else "{}"
 
 
-# The agent's LLM plane is Context Runtime's ModelPlugin (cost-tiered, accounted), not a
-# raw provider SDK — same stack every other agent runs on. Degrades to "" when no key.
-try:
-    from context_runtime.adapters.model_openai import OpenAICompatibleModel as _CRModel
-    from context_runtime.types import ModelRequest as _CRReq
-    _CR_LLM = _CRModel.from_env(default_model=os.environ.get("SOCIAL_LLM_MODEL", "gpt-5.5"))
-except Exception:  # noqa: BLE001 — context-runtime absent → offline
-    _CR_LLM = None
-    _CRReq = None
-
-
+# The agent's LLM plane is the GOVERNED router (N7): prompts carry prospect/CRM text, so every call is routed as
+# CUSTOMER_CONFIDENTIAL to the configured IN-BOUNDARY endpoint only. No in-boundary endpoint / router refusal =>
+# "" and every caller degrades to its deterministic path. No direct HTTP, no default model name here.
 def _llm(prompt: str, max_tokens: int = 400) -> str:
-    if _CR_LLM is None or _CRReq is None:
-        return ""
     try:
-        res = _CR_LLM.complete(_CRReq(messages=({"role": "user", "content": prompt},), max_tokens=max_tokens))
-        return res.text
+        from agentic_os.app.llm import governed_text
+        from agentic_os.governance.classification import DataClassification
     except Exception:  # noqa: BLE001
         return ""
+    return governed_text(prompt, classifications=(DataClassification.CUSTOMER_CONFIDENTIAL,),
+                         max_tokens=max_tokens, temperature=0.4) or ""
 
 
 def classify(message: str) -> dict:
@@ -428,87 +440,21 @@ def explain_crm(question: str) -> str:
     return out.strip() if out else _CRM_PRIMER
 
 
-# ──────── standardized in-app agent · Context Runtime AgentConsole (same as the other agentic apps) ────────
-# Wraps the CRM capabilities (pipeline / draft / discover) as tools behind the SHARED console, so outreach
-# gives the same conversational + grounded-support experience as support/billing/etc. Discovery is the only
-# side-effecting tool (it writes leads to Twenty); drafts + summaries are read-only. Falls back to the
-# built-in router if context-runtime is unavailable.
-try:
-    from context_runtime.integrations.agent_console import AgentConsole as _AgentConsole, tool as _crtool
-except Exception:  # noqa: BLE001
-    _AgentConsole = None
-
-
-def _t_pipeline(_a: dict) -> dict:
-    s = pipeline_summary()
-    stages = ", ".join(f"{k}: {v}" for k, v in s["by_stage"].items()) or "—"
-    top = "; ".join(f"{t['name']} (${t['amount']:,})" for t in s["top"]) or "none yet"
-    return {"text": f"{s['total']} opportunities worth ${s['value']:,} total. By stage: {stages}. Top: {top}.",
-            "data": s}
-
-
-def _t_draft_followup(a: dict) -> dict:
-    target = (a.get("target") or a.get("account") or a.get("opportunity") or "").strip()
-    if not target:
-        names = [t["name"] for t in pipeline_summary()["top"]]
-        return {"text": "Which opportunity? Current: " + (", ".join(names) or "none yet — run discovery first") + ".", "data": None}
-    opp = find_opportunity(target)
-    if not opp:
-        names = [t["name"] for t in pipeline_summary()["top"]]
-        return {"text": f"No opportunity matching “{target}”. Current: " + (", ".join(names) or "none") + ".", "data": None}
-    draft = draft_followup(opp)
-    return {"text": f"Drafted a follow-up for {opp.get('name')} — review, then send from Twenty:\n\n{draft}",
-            "data": {"opportunity": opp.get("name"), "draft": draft}}
-
-
-def _t_discover(a: dict) -> dict:
-    instruction = (a.get("instruction") or a.get("query") or a.get("what") or "").strip()
-    if not instruction:
-        return {"text": "What kind of leads? Name a vertical (healthcare, insurance, municipal finance…) or the records/data phrasing.", "data": None}
-    rep = do_discover(instruction)
-    n = len(rep.get("added", []))
-    if n:
-        accts = ", ".join(x["account"] for x in rep["added"])
-        return {"text": f"Found {n} candidate lead{'' if n == 1 else 's'}: {accts}. Nothing is synced to the CRM until "
-                        "you approve an account.", "data": rep}
-    return {"text": rep.get("note") or "Found candidates but added none — see the skipped reasons.", "data": rep}
-
-
-if _AgentConsole is not None:
-    _OUTREACH_CONSOLE = _AgentConsole(
-        f"{TENANT} Outreach", _CRM_PRIMER,
-        tools=[
-            _crtool("pipeline_summary", "summarize the CRM pipeline — total opportunities, value, by-stage, and the top accounts", _t_pipeline),
-            _crtool("draft_followup", "draft a 2nd-touch follow-up email for a named opportunity/account (read-only — a human sends it)", _t_draft_followup,
-                    parameters={"type": "object", "properties": {"target": {"type": "string", "description": "opportunity or company name"}}}),
-            _crtool("discover_leads", "find NEW leads from public signals (awards/news/RFPs/jobs) and add them to Twenty CRM", _t_discover,
-                    parameters={"type": "object", "properties": {"instruction": {"type": "string", "description": "what kind of leads to find"}}},
-                    side_effecting=True),
-        ],
-        suggestions=["Summarize my pipeline", "Find leads in municipal finance", "Draft a follow-up for the top account", "What is an opportunity?"],
-        subtitle="Ask how the CRM works, find leads, draft follow-ups, or check the pipeline — a human sends anything outbound.",
-        allow_side_effects=["discover_leads"],
-    )
-else:
-    _OUTREACH_CONSOLE = None
-
-
 @app.post("/api/agent")
 async def api_agent(req: Request):
-    """Conversational endpoint. Uses the standard Context Runtime AgentConsole (grounded support + CRM
-    tools) when available; falls back to the built-in intent router if context-runtime is absent."""
+    """Conversational endpoint: a built-in intent router over READ-ONLY tools (pipeline summary, follow-up draft,
+    discovery PREVIEW) with governed-LLM narration. It never receives the operator approval marker, so nothing it
+    does can approve an account, sync to Twenty or send."""
     body = _strip_approval(await req.json())
     message = (body.get("message") or "").strip()
-    if _OUTREACH_CONSOLE is not None:
-        return JSONResponse(_OUTREACH_CONSOLE.respond(message))
     if not message:
         return {"ok": False, "say": "Ask me to find leads, draft a follow-up, summarize your pipeline, or explain how the CRM works."}
     cls = classify(message)
     intent = cls["intent"]
     if intent == "discover":
-        rep = do_discover(message)
-        n = len(rep.get("added", []))
-        say = (("Found " + str(n) + " candidate lead" + ("" if n == 1 else "s") + " (not yet in your CRM — approve to sync).") if n
+        rep = do_discover(message)          # no approval => preview only, nothing persisted
+        n = len(rep.get("candidates", []))
+        say = (("Found " + str(n) + " candidate lead" + ("" if n == 1 else "s") + " (preview; not in your pipeline or CRM).") if n
                else (rep.get("note") or "No leads added."))
         return {"ok": True, "intent": "discover", "say": say, "report": rep}
     if intent == "followup":
@@ -539,14 +485,22 @@ def api_synced():
                          "crm_url": TWENTY_PUBLIC_URL})
 
 
+_AGENT_PANEL = (
+    '<div class="card"><div style="font:500 16px/1 var(--font)">Assistant</div>'
+    '<input id="agmsg" placeholder="Summarize my pipeline / draft a follow-up / find leads" style="width:70%"> '
+    '<button class="btn" onclick="fetch(\'api/agent\',{method:\'POST\',headers:{\'Content-Type\':\'application/json\'},'
+    'body:JSON.stringify({message:document.getElementById(\'agmsg\').value})}).then(r=>r.json())'
+    '.then(d=>{document.getElementById(\'agout\').textContent=(d.say||\'\')+(d.draft?\'\\n\\n\'+d.draft:\'\')})">Ask</button>'
+    '<pre id="agout" style="white-space:pre-wrap"></pre></div>')
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
     rows = _STATE["accounts"] or build_pipeline()
     conn = twenty_connected()
     page = render(rows, conn)
     # inject the standard Context Runtime agent console (same panel the other agentic apps use)
-    panel = (f'<div class="card">{_OUTREACH_CONSOLE.panel_html("outreach")}</div>'
-             if _OUTREACH_CONSOLE is not None else "")
+    panel = _AGENT_PANEL
     return HTMLResponse(page.replace("<!--AGENT_PANEL-->", panel))
 
 

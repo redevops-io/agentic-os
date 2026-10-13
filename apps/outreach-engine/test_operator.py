@@ -207,7 +207,7 @@ def test_discover_produces_candidates_only_no_approval_no_crm_write(monkeypatch)
     cands = [{"account": "Acme Health", "evidence": "RFP for records", "source": "usaspending", "amount": 20000}]
     monkeypatch.setattr(app, "plan_search", lambda i: {"count": 3})
     monkeypatch.setattr(app, "run_discovery", lambda plan: (cands, "test"))
-    rep = app.do_discover("find healthcare")
+    rep = app.do_discover("find healthcare", {"approved": True})
     assert rep["status"] == "candidate" and rep["crm_synced"] is False
     assert rep["candidates"][0]["status"] == "candidate"
     assert "Acme Health" not in core._STATE["approved"]
@@ -215,7 +215,7 @@ def test_discover_produces_candidates_only_no_approval_no_crm_write(monkeypatch)
     rows = core.build_pipeline(live=False)
     row = next(r for r in rows if r["account"] == "Acme Health")
     assert row["status"] == "candidate" and row["approved"] is False
-    assert app.do_discover("again")["candidates"] == []         # no duplicate candidate
+    assert app.do_discover("again", {"approved": True})["candidates"] == []         # no duplicate candidate
 
 
 def test_opener_depends_on_icp():

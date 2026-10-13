@@ -122,7 +122,8 @@ docker run --rm -p 8207:8207 \
 | `CHATWOOT_ACCOUNT_ID` | `1` | The account id (Meridian Wealth Management). |
 | `CHATWOOT_FRONT_URL` | `http://localhost:3003` | Chatwoot UI link for the "Open in Chatwoot ↗" button (the hybrid / human-operable path). |
 | `PORT` | `8207` | uvicorn bind port. |
-| `ANTHROPIC_API_KEY` | _(optional)_ | If set, `draft_reply` writes the draft with Claude (`claude-opus-4-8`); otherwise a deterministic template is used. Either way the draft is posted as a private note. |
+| `REDEVOPS_LLM_BASE_URL` | _(optional)_ | In-boundary model endpoint used (via the governed router, as CUSTOMER_CONFIDENTIAL) for `draft_reply`; unset or refused => a deterministic template. Either way the draft is posted as a private note. |
+| `OPERATOR_BASIC_AUTH` | _(unset => nobody is operator)_ | `user:pass`. `/agent/run` `resolve` / `escalate` / `send_onboarding` execute only with this Basic credential; everyone else gets a staged `pending_approval`. |
 
 ## Endpoints
 
@@ -135,7 +136,7 @@ docker run --rm -p 8207:8207 \
   "data: live from Chatwoot" badge, and an **"Open in Chatwoot ↗"** button. An escalation
   banner appears whenever there's an urgent/high open ticket.
 - `POST /agent/run` with `{"action": ..., "conversation_id": N}`:
-  - `"draft_reply"` → drafts a reply (Claude if `ANTHROPIC_API_KEY` is set, else a
+  - `"draft_reply"` → drafts a reply (governed in-boundary model if configured, else a
     deterministic template) and posts it as a **PRIVATE NOTE**
     (`POST /conversations/{id}/messages` with `message_type:"outgoing", private:true`).
     The customer never sees it — **sending a public reply is the human-reviewable step.**
