@@ -99,6 +99,11 @@ def test_social_mission_view_shows_provider_boundary_and_signal_counts():
 
 # ── live read-only smoke (skipped if unreachable) ────────────────────────────────────
 def test_live_sentinel_inspection_readonly():
+    # Opt-in only: the required CI gate must not depend on (or poke) a production host. Run it deliberately with
+    #   REDEVOPS_LIVE_TESTS=1 pytest tests/test_external_gateway_phase9.py -k live
+    import os
+    if os.environ.get("REDEVOPS_LIVE_TESTS") != "1":
+        pytest.skip("live smoke test: set REDEVOPS_LIVE_TESTS=1 to run against sentinel.redevops.io")
     httpx = pytest.importorskip("httpx")
     try:
         r = httpx.get("https://sentinel.redevops.io/health", timeout=8.0)
