@@ -5,7 +5,7 @@ the Mission Runtime can drive books as a capability operator — the same core E
 actions the console exposes at `/agent/run`, now discoverable + idempotent on the wire.
 
 Capabilities (syscalls):
-  books.categorize     — categorize the next uncategorized bank transaction in ERPNext
+  books.categorize     — tag the next uncategorized bank transaction (tag_only)  [approval-gated; stages a preview]
   books.reconcile      — stage a deposit↔invoice match (bank reconciliation)
   books.close          — stage the month-end close (Period Closing Voucher)  [approval gate: close]
   books.record_revenue — record onboarding subscription revenue (real Journal Entry)  [undo: reverse_entry]
@@ -27,10 +27,12 @@ def build_books_operator() -> Operator:
     return Operator("books", [
         capability(
             "books.categorize",
-            lambda inp: core.categorize(),
+            lambda inp: core.categorize(approval=(inp or {}).get("_approval")),
             provides=["transaction_categorized"],
-            outputs={"transaction_categorized": "next uncategorized bank transaction tagged to an account in ERPNext"},
-            side_effecting=True,
+            outputs={"transaction_categorized": "next uncategorized bank transaction tagged in ERPNext "
+                                                "(mode: tag_only - reference_number tag, no account allocation); "
+                                                "staged preview until approved"},
+            side_effecting=True, approval_required=True,
             permissions=["books:write"], estimated_value="medium", latency_ms=1200,
             concurrency_mode="exclusive", resource_keys=[LEDGER],
         ),

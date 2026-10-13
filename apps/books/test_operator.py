@@ -84,9 +84,16 @@ class _FakeClient:
     def __exit__(self, *a):
         return False
 
+    drafts: dict = {}   # frag -> draft rows served when the query filters docstatus = 0
+
     def get(self, url, headers=None, params=None):
-        for frag, rows in _RESOURCE.items():
+        import json as _j
+        flt = _j.loads((params or {}).get("filters") or "[]")
+        is_draft = ["docstatus", "=", 0] in flt
+        for frag, rows in {**_RESOURCE, "Journal%20Entry": []}.items():
             if url.endswith(f"/api/resource/{frag}"):
+                if is_draft:
+                    return _Resp(200, {"data": _FakeClient.drafts.get(frag, [])})
                 return _Resp(200, {"data": rows})
         return _Resp(200, {"data": []})
 
@@ -108,6 +115,7 @@ def _fake_erpnext(monkeypatch):
     _FakeClient.puts = []
     _FakeClient.put_bodies = []
     _FakeClient.posts = []
+    _FakeClient.drafts = {}
     core._CACHE.update(ts=0.0, data=None)  # no cache bleed between tests
     monkeypatch.setattr(core, "ERPNEXT_API_KEY", "test-key")
     monkeypatch.setattr(core, "httpx",
@@ -127,9 +135,9 @@ def test_capabilities_manifest(client):
     caps = {c["name"]: c for c in m["capabilities"]}
     assert set(caps) == {"books.categorize", "books.reconcile", "books.close",
                          "books.record_revenue", "books.reverse_entry"}
-    # only close is approval-gated (matches modules.yaml approval_required: [close])
+    # categorize (ERPNext write) and close are approval-gated
     assert caps["books.close"]["approval_required"] is True
-    assert caps["books.categorize"]["approval_required"] is False
+    assert caps["books.categorize"]["approval_required"] is True
     assert caps["books.reconcile"]["approval_required"] is False
     assert "close_staged" in caps["books.close"]["provides"]
 
@@ -188,9 +196,13 @@ def test_record_revenue_reports_error_when_submit_fails(monkeypatch):
     assert res["status"] == "error" and res["revenue_recorded"] is False
 
 
+def _approved_categorize():
+    return build_books_operator().invoke("books.categorize", {"_approval": {"approved": True}})
+
+
 def test_categorize_reports_error_on_failed_put(monkeypatch):
     monkeypatch.setattr(_FakeClient, "put", lambda self, url, headers=None, json=None: _Resp(403, {}))
-    res = build_books_operator().invoke("books.categorize", {})
+    res = _approved_categorize()
     assert res["status"] == "error" and res["result"]["erpnext_status"] == 403
 
 
@@ -240,11 +252,21 @@ def test_record_revenue_then_reverse_is_a_saga(client):
     assert _FakeClient.put_bodies[1][1] == {"docstatus": 2}   # cancel (reverse)
 
 
-def test_invoke_categorize_hits_real_erpnext(client):
-    res = client.post("/invoke", json={"capability": "books.categorize", "inputs": {}}).json()["result"]
-    assert res["status"] == "done" and res["action"] == "categorize"
-    assert res["result"]["transaction"] == "ACC-BTN-001"
-    # the REAL core issued a PUT against the (fake) ERPNext for the uncategorized txn
+def test_categorize_without_approval_stages_preview_and_writes_nothing(client):
+    res = client.post("/invoke", json={"capability": "books.categorize", "inputs": {"_approval": {"approved": True}}}
+                      ).json()["result"]     # open HTTP strips forged approval markers
+    assert res["status"] == "pending_approval" and res["categorize_executed"] is False
+    assert res["mode"] == "tag_only"
+    ch = res["proposed_changes"][0]
+    assert ch["name"] == "ACC-BTN-001" and ch["set"]["reference_number"].startswith("CATEGORIZED:")
+    assert _FakeClient.puts == []
+
+
+def test_categorize_with_runtime_approval_writes_tag_only():
+    res = _approved_categorize()
+    assert res["status"] == "done" and res["action"] == "categorize" and res["mode"] == "tag_only"
+    assert res["categorize_executed"] is True and res["result"]["transaction"] == "ACC-BTN-001"
+    assert "no account allocation" in res["note"]
     assert _FakeClient.puts == ["http://localhost:8092/api/resource/Bank%20Transaction/ACC-BTN-001"]
 
 
@@ -257,11 +279,40 @@ def test_reconcile_matches_deposit_to_invoice(client):
     assert _FakeClient.puts == []  # read-only: reconcile only stages the match
 
 
-def test_close_is_approval_gated(client):
+def test_close_refuses_to_stage_when_checks_fail(client):
     res = client.post("/invoke", json={"capability": "books.close", "inputs": {}}).json()["result"]
-    assert res["status"] == "pending_approval" and res["requires"] == "human approval"
-    assert res["close_pct"] == 50  # 3 of 6 checklist items done (1 txn still uncategorized)
-    assert _FakeClient.puts == []  # never posts the Period Closing Voucher
+    assert res["status"] == "not_ready" and res["close_staged"] is False
+    items = {c["item"] for c in res["failing_checks"]}
+    assert {"Bank transactions categorized", "Bank transactions reconciled"} <= items
+    assert _FakeClient.puts == [] and _FakeClient.posts == []
+
+
+def test_close_checklist_is_computed_not_constant():
+    d = core.fetch_activity(force=True)
+    done = {c["item"]: c["done"] for c in d["checklist"]}
+    assert done["Bank transactions categorized"] is False and done["No draft journal entries"] is True
+    _FakeClient.drafts = {"Journal%20Entry": [{"name": "JV-DRAFT-1"}]}
+    d = core.fetch_activity(force=True)
+    done = {c["item"]: c["done"] for c in d["checklist"]}
+    assert done["No draft journal entries"] is False
+    assert {"item": "No draft journal entries", "count": 1} in d["blocking_checks"]
+
+
+def test_close_stages_ready_when_all_checks_pass(monkeypatch):
+    monkeypatch.setattr(core, "COMPANY", "Meridian Wealth Management")
+    _RESOURCE_BAK = dict(_RESOURCE)
+    _RESOURCE["Bank%20Transaction"] = []
+    try:
+        res = core.close({"closing_account": "Retained Earnings - MWM"})
+    finally:
+        _RESOURCE.update(_RESOURCE_BAK)
+    assert res["status"] == "pending_approval" and res["close_staged"] is True
+
+
+def test_close_not_ready_when_erpnext_unavailable(monkeypatch):
+    monkeypatch.setattr(core, "erpnext_connected", lambda: False)
+    res = core.close({"closing_account": "x"})
+    assert res["status"] == "not_ready" and res["failing_checks"]
 
 
 def test_idempotency_dedupes_side_effect(client):
@@ -269,8 +320,7 @@ def test_idempotency_dedupes_side_effect(client):
     first = client.post("/invoke", json=body).json()["result"]
     second = client.post("/invoke", json=body).json()["result"]
     assert first == second
-    # exactly-once: the categorize PUT hit ERPNext a single time
-    assert _FakeClient.puts == ["http://localhost:8092/api/resource/Bank%20Transaction/ACC-BTN-001"]
+    assert _FakeClient.puts == []        # staged without approval: no write at all
 
 
 def test_mission_runtime_httpclient_drives_operator(client):
@@ -283,7 +333,7 @@ def test_mission_runtime_httpclient_drives_operator(client):
     assert rec["status"] == "done" and rec["match"]["invoice"] == "ACC-SINV-001"
 
     clo = oc.invoke("books", "books.close", {}, idempotency_key="m-2")
-    assert clo["status"] == "pending_approval" and clo["close_pct"] == 50
+    assert clo["status"] == "not_ready" and clo["failing_checks"]
 
 
 def test_close_executes_verifies_idempotent_and_rejects_inconsistent(monkeypatch):

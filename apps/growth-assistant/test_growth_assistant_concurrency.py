@@ -43,11 +43,13 @@ def test_advisory_caps_never_block():
     assert len(_released(*[_node(f"n{i}", c) for i, c in enumerate(advisory)])) == len(advisory)
 
 
-def test_pushes_to_different_providers_parallelize():
-    assert _released(_node("a", "assistant.founder_content"),
-                     _node("b", "assistant.community_blueprint")) == {"a", "b"}
+def test_generation_capabilities_are_unrestricted_and_ungated():
+    gens = ["assistant.founder_content", "assistant.community_blueprint", "assistant.cold_outreach"]
+    assert all(_SPECS[n].side_effecting and not _SPECS[n].approval_required for n in gens)
+    assert len(_released(*[_node(f"g{i}", gens[i % 3]) for i in range(6)])) == 6
 
 
-def test_same_provider_pushes_are_bounded():
-    ns = [_node(f"p{i}", "assistant.founder_content") for i in range(3)]
-    assert len(_released(*ns)) == 2   # provider:postiz max_parallelism=2
+def test_gated_push_capability_is_bounded():
+    assert _SPECS["assistant.push_assets"].approval_required
+    ns = [_node(f"p{i}", "assistant.push_assets") for i in range(3)]
+    assert len(_released(*ns)) == 2   # provider:push max_parallelism=2

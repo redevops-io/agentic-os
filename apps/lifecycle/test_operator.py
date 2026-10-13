@@ -115,7 +115,7 @@ def test_invoke_compose_writes_draft_to_real_listmonk(client):
 def test_compose_errors_instead_of_creating_empty_body_campaign(client):
     res = client.post("/invoke", json={"capability": "lifecycle.compose_campaign",
                                        "inputs": {"prompt": "no body, no llm"}}).json()["result"]
-    assert res["status"] == "error" and "body" in res["error"]
+    assert res["status"] == "llm_unavailable" and "body" in res["error"]
     assert _FakeClient.posted == []
 
 
@@ -131,15 +131,22 @@ def test_listmonk_status_is_read_from_response_not_hardcoded(monkeypatch):
     assert res["listmonk_status"] is None
 
 
-def test_segment_and_flow_are_readonly_advisory(client):
+def test_segment_and_flow_without_llm_report_llm_unavailable(client):
     seg = client.post("/invoke", json={"capability": "lifecycle.segment",
                                         "inputs": {"goal": "win back lapsed clients"}}).json()["result"]
-    assert seg["status"] == "done" and seg["action"] == "segment"
-
+    assert seg["status"] == "llm_unavailable" and seg["query"] is None
     flow = client.post("/invoke", json={"capability": "lifecycle.suggest_flow",
                                          "inputs": {"trigger": "welcome"}}).json()["result"]
-    assert flow["status"] == "done" and flow["trigger"] == "welcome"
+    assert flow["status"] == "llm_unavailable" and flow["steps"] == []
     assert _FakeClient.posted == []  # advisory: no writes to Listmonk
+
+
+def test_segment_and_flow_are_readonly_advisory_with_llm():
+    seg = core.segment({"goal": "g"}, llm=lambda p, n=400: '{"name":"n","query":"subscribers.status = \'enabled\'","rationale":"r"}')
+    assert seg["status"] == "done" and seg["query"]
+    flow = core.suggest_flow({"trigger": "welcome"}, llm=lambda p, n=800: '{"flow":"f","steps":[{"delay":"1d"}]}')
+    assert flow["status"] == "done" and flow["steps"]
+    assert _FakeClient.posted == []
 
 
 def test_idempotency_dedupes_side_effect(client):
@@ -159,7 +166,7 @@ def test_mission_runtime_httpclient_drives_operator(client):
 
     oc = HTTPOperatorClient(resolve={"lifecycle": "http://lifecycle"}, transport=_transport)
     seg = oc.invoke("lifecycle", "lifecycle.segment", {"goal": "high openers"}, idempotency_key="m-1")
-    assert seg["status"] == "done" and seg["action"] == "segment"
+    assert seg["status"] == "llm_unavailable" and seg["action"] == "segment"
 
     comp = oc.invoke("lifecycle", "lifecycle.compose_campaign",
                      {"prompt": "annual account review", "body_html": "<p>Hi</p>"}, idempotency_key="m-2")

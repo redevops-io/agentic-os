@@ -118,24 +118,21 @@ def test_capabilities_manifest(client):
     assert set(caps) == {
         "assistant.playbook", "assistant.subreddit_plan", "assistant.founder_content",
         "assistant.community_blueprint", "assistant.cold_outreach", "assistant.hire_brief",
-        "assistant.ask",
+        "assistant.ask", "assistant.push_assets",
     }
-    # the three push-capable capabilities are approval-gated (generation free, PUSH gated)
-    for n in ("founder_content", "community_blueprint", "cold_outreach"):
-        assert caps[f"assistant.{n}"]["approval_required"] is True
-    for n in ("playbook", "subreddit_plan", "hire_brief", "ask"):
+    # generation is ungated; only the separate push capability is approval-gated
+    for n in ("founder_content", "community_blueprint", "cold_outreach", "playbook", "subreddit_plan",
+              "hire_brief", "ask"):
         assert caps[f"assistant.{n}"]["approval_required"] is False
-    # core-writing capabilities AND local-asset writers (playbook/subreddit_plan/hire_brief) are side-effecting
-    assert caps["assistant.founder_content"]["side_effecting"] is True
-    assert caps["assistant.community_blueprint"]["side_effecting"] is True
-    assert caps["assistant.cold_outreach"]["side_effecting"] is True
-    assert caps["assistant.playbook"]["side_effecting"] is True      # writes an asset JSON
-    assert caps["assistant.subreddit_plan"]["side_effecting"] is True
-    assert caps["assistant.hire_brief"]["side_effecting"] is True
+    assert caps["assistant.push_assets"]["approval_required"] is True
+    assert caps["assistant.push_assets"]["side_effecting"] is True
+    for n in ("founder_content", "community_blueprint", "cold_outreach", "playbook", "subreddit_plan", "hire_brief"):
+        assert caps[f"assistant.{n}"]["side_effecting"] is True      # local asset file
     assert caps["assistant.ask"]["side_effecting"] is False
     # provides wiring is present for the planner to reason over
     assert "growth_playbook" in caps["assistant.playbook"]["provides"]
-    assert "erpnext:write" in caps["assistant.cold_outreach"]["permissions"]
+    assert "erpnext:write" in caps["assistant.push_assets"]["permissions"]
+    assert "erpnext:write" not in caps["assistant.cold_outreach"]["permissions"]
 
 
 def test_playbook_is_asset_only_no_core_write(client, http):
@@ -167,49 +164,77 @@ PUSH_CASES = {
 
 
 @pytest.mark.parametrize("cap", sorted(PUSH_CASES))
-def test_push_is_staged_without_approval_but_generation_still_runs(client, http, cap):
+def test_generation_with_push_true_never_pushes_and_returns_staged_preview(client, http, cap):
     op = build_growth_assistant_operator()
-    results = [op.invoke(cap, dict(PUSH_CASES[cap]))]
-    for extra in ({}, {"_approval": {"approved": True}}):      # open HTTP strips forged approval markers
+    results = [op.invoke(cap, dict(PUSH_CASES[cap])), op.invoke(cap, {**PUSH_CASES[cap], "_approval": {"approved": True}})]
+    for extra in ({}, {"_approval": {"approved": True}}):
         results.append(_invoke(client, cap, {**PUSH_CASES[cap], **extra}))
     for res in results:
         assert res["status"] == "done" and res["asset_id"]      # generation is free
         assert res["push_status"] == "pending_approval" and res["push_executed"] is False
         assert res["pushed"] == {}
+        assert res["staged_action"] == "assistant.push_assets"
+        assert res["asset_id"] in res["push_preview"]["instruction"]
     assert http.posts == []                                      # no core was written
 
 
+def test_generation_without_push_has_no_staged_block(client):
+    res = _invoke(client, "assistant.founder_content", {"startup": {"name": "X"}, "count": 2})
+    assert res["status"] == "done" and "push_status" not in res
+
+
+def _gen_and_push(cap, extra=None):
+    op = build_growth_assistant_operator()
+    asset = op.invoke(cap, {k: v for k, v in PUSH_CASES[cap].items() if k != "push"})
+    return op, asset["asset_id"]
+
+
 @pytest.mark.parametrize("cap", sorted(PUSH_CASES))
-def test_push_executes_with_runtime_approval(http, cap):
-    res = _approved(cap, PUSH_CASES[cap])
-    assert res["pushed"] and http.posts
+def test_push_assets_without_approval_stages_only(http, cap):
+    op, aid = _gen_and_push(cap)
+    res = op.invoke("assistant.push_assets", {"asset_id": aid})
+    assert res["status"] == "pending_approval" and res["push_executed"] is False and res["push_preview"]
+    assert http.posts == []
+
+
+@pytest.mark.parametrize("cap", sorted(PUSH_CASES))
+def test_push_assets_executes_with_runtime_approval(http, cap):
+    op, aid = _gen_and_push(cap)
+    res = op.invoke("assistant.push_assets", {"asset_id": aid, "_approval": {"approved": True}})
+    assert res["status"] == "done" and res["push_executed"] and res["pushed"] and http.posts
+
+
+def test_push_assets_unknown_or_unpushable_asset(http):
+    op = build_growth_assistant_operator()
+    assert op.invoke("assistant.push_assets", {"asset_id": "nope", "_approval": {"approved": True}})["error"] == "asset_not_found"
+    pb = op.invoke("assistant.playbook", {"startup": {"name": "X"}})
+    res = op.invoke("assistant.push_assets", {"asset_id": pb["asset_id"], "_approval": {"approved": True}})
+    assert res["status"] == "error" and http.posts == []
+
+
+def test_push_assets_open_http_cannot_forge_approval(client, http):
+    op, aid = _gen_and_push("assistant.community_blueprint")
+    res = _invoke(client, "assistant.push_assets", {"asset_id": aid, "_approval": {"approved": True}})
+    assert res.get("push_executed") is False and http.posts == []
 
 
 def test_cold_outreach_pushes_erpnext_leads(client, http):
-    res = _approved("assistant.cold_outreach", {
-        "startup": {"name": "CIWatch"}, "push": True,
-        "targets": [{"name": "Jane Founder", "handle": "@jane", "company": "Acme"}],
-    })
-    assert res["status"] == "done"
+    op, aid = _gen_and_push("assistant.cold_outreach")
+    res = op.invoke("assistant.push_assets", {"asset_id": aid, "_approval": {"approved": True}})
     assert res["pushed"]["erpnext"]["leads_created"] == ["CRM-LEAD-001"]
     assert http.posts == ["http://localhost:8092/api/resource/Lead"]
 
 
 def test_community_blueprint_pushes_listmonk_list(client, http):
-    res = _approved("assistant.community_blueprint", {
-        "startup": {"name": "CIWatch"}, "platform": "discord", "push": True,
-    })
-    assert res["status"] == "done"
+    op, aid = _gen_and_push("assistant.community_blueprint")
+    res = op.invoke("assistant.push_assets", {"asset_id": aid, "_approval": {"approved": True}})
     assert res["pushed"]["listmonk"] == {"ok": True, "listmonk_list_id": 42}
     assert http.posts == ["http://localhost:9000/api/lists"]
 
 
 def test_founder_content_pushes_postiz_drafts(client, http):
-    res = _approved("assistant.founder_content", {
-        "startup": {"name": "CIWatch"}, "platform": "x", "count": 3, "push": True,
-    })
-    assert res["status"] == "done" and res["platform"] == "x"
-    assert len(res["content"]["posts"]) == 3
+    op, aid = _gen_and_push("assistant.founder_content")
+    res = op.invoke("assistant.push_assets", {"asset_id": aid, "_approval": {"approved": True}})
     assert res["pushed"]["postiz"]["drafts_created"] == 3
     assert http.posts == ["http://postiz/public/v1/posts"] * 3
 
@@ -229,10 +254,10 @@ def test_ask_is_readonly(client, http):
 
 
 def test_idempotency_dedupes_side_effect(client, http):
-    op = build_growth_assistant_operator()
-    body = {"startup": {"name": "CIWatch"}, "platform": "discord", "push": True, "_approval": {"approved": True}}
-    first = op.invoke("assistant.community_blueprint", body, "k-1")
-    second = op.invoke("assistant.community_blueprint", body, "k-1")
+    op, aid = _gen_and_push("assistant.community_blueprint")
+    body = {"asset_id": aid, "_approval": {"approved": True}}
+    first = op.invoke("assistant.push_assets", body, "k-1")
+    second = op.invoke("assistant.push_assets", body, "k-1")
     assert first == second
     assert http.posts == ["http://localhost:9000/api/lists"]  # list created exactly once
 
@@ -249,3 +274,19 @@ def test_mission_runtime_httpclient_drives_operator(client):
 
     ask = oc.invoke("growth-assistant", "assistant.ask", {"q": "status?"}, idempotency_key="m-2")
     assert ask["status"] == "done" and ask["answer"]
+
+
+def test_push_assets_stages_before_validating_asset_id(monkeypatch):
+    """The approval gate comes first: with no `_approval` the capability ALWAYS stages (never
+    asset_not_found), so an unapproved caller can neither bypass the gate nor probe which asset ids exist."""
+    pushed = []
+    monkeypatch.setattr(core, "push_asset", lambda body: pushed.append(body) or {"status": "done"})
+    op = operator_mod.build_growth_assistant_operator()
+    for inputs in ({"asset_id": "no-such-asset"}, {}, {"asset_id": ""}):
+        res = op.invoke("assistant.push_assets", dict(inputs))
+        assert res["status"] == "pending_approval" and res["executed"] is False, res
+        assert res["asset_found"] is False and res["push_preview"] is None
+    assert pushed == []                                    # nothing was pushed
+    # a runtime-delivered approval (in-process, as the Mission runtime does) reaches the core
+    op.invoke("assistant.push_assets", {"asset_id": "x", "_approval": {"approved": True}})
+    assert len(pushed) == 1

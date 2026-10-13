@@ -45,7 +45,7 @@ def build_manifest(operator):
             pain='bookkeeping & close',
             tagline='Books that categorize, reconcile, and close themselves.',
             agents=('categorize', 'reconcile', 'close'),
-            approval=('close',),
+            approval=('categorize', 'close'),
             deploy='compose',
         ),
     )

@@ -13,10 +13,9 @@ Capabilities (syscalls):
   assistant.hire_brief           — freelancer JD + scorecard + search links
   assistant.ask                  — read-only Q&A over saved assets + core connectivity
 
-Generation is free; PUSHING is gated. The three capabilities that can WRITE to a core (Postiz /
-Listmonk / ERPNext) when `push` is set are side_effecting + approval_required: without a runtime-delivered
-`_approval` (the open HTTP /invoke strips forged markers) a `push:true` request still generates + saves the
-asset but STAGES the push (`push_status: "pending_approval"`, `push_executed: False`) and calls no core.
+Generation is free; PUSHING is gated. The generation capabilities only write a local asset file and NEVER call
+a core; a legacy `push:true` returns the asset plus a staged push preview. `assistant.push_assets` (taking an
+`asset_id`) is the only capability that writes to Postiz / Listmonk / ERPNext and is approval_required.
 playbook / subreddit_plan / hire_brief write a local asset JSON file, so they are side_effecting too (not
 read_only); `ask` only reads.
 
@@ -31,16 +30,29 @@ from agentic_os.mission.operator_sdk import Operator, capability
 from . import core
 
 
-def _push_gated(action: str, fn):
-    """Generation always runs; the `push` side effect (POST to Postiz/Listmonk/ERPNext) runs ONLY with `_approval`."""
+def _generate_only(fn, atype: str):
+    """Generation capabilities NEVER push. A legacy ``push:true`` returns the generated asset plus a staged push
+    preview telling the caller to invoke the approval-gated ``assistant.push_assets``."""
     def handler(inp: dict) -> dict:
-        if inp.get("push") and not inp.get("_approval"):
-            res = fn({**inp, "push": False})
-            res.update(push_requested=True, push_executed=False, push_status="pending_approval",
-                       pushed={}, staged_action=action)
-            return res
-        return fn(inp)
+        res = fn({**inp, "push": False})
+        if inp.get("push") and res.get("asset_id"):
+            res.update(core.staged_push(res["asset_id"], atype))
+        return res
     return handler
+
+
+def _push_assets(inp: dict) -> dict:
+    # Execution is only reachable with a runtime-delivered `_approval`; defence in depth for direct invoke.
+    if not inp.get("_approval"):
+        # The approval gate comes FIRST: an unapproved caller always gets a staged response (never a
+        # validation error), so the gate can't be bypassed or used to probe state. The preview is for the
+        # approver; execution re-validates the asset and returns asset_not_found if it is gone.
+        aid = str(inp.get("asset_id") or "")
+        a = core._find_asset(aid) if aid else None
+        return {"status": "pending_approval", "action": "push_assets", "executed": False,
+                "push_executed": False, "asset_id": aid, "asset_found": bool(a),
+                "push_preview": core.push_preview(a) if a else None}
+    return core.push_asset(inp)
 
 
 def build_growth_assistant_operator() -> Operator:
@@ -63,30 +75,38 @@ def build_growth_assistant_operator() -> Operator:
         ),
         capability(
             "assistant.founder_content",
-            _push_gated("assistant.founder_content", core.founder_content),
+            _generate_only(core.founder_content, "founder_content"),
             provides=["founder_content"],
-            outputs={"founder_content": "founder-voice posts; push=true drafts them to Postiz"},
-            side_effecting=True, approval_required=True, permissions=["postiz:write"],
+            outputs={"founder_content": "founder-voice posts; push=true only stages (see assistant.push_assets)"},
+            side_effecting=True,  # writes a local asset JSON; never pushes
             estimated_value="high", deterministic=False, latency_ms=1600,
-            concurrency_key="provider:postiz", max_parallelism=2,
         ),
         capability(
             "assistant.community_blueprint",
-            _push_gated("assistant.community_blueprint", core.community_blueprint),
+            _generate_only(core.community_blueprint, "community_blueprint"),
             provides=["community_blueprint"],
-            outputs={"community_blueprint": "lead-magnet community blueprint; push=true creates a Listmonk list"},
-            side_effecting=True, approval_required=True, permissions=["listmonk:write"],
+            outputs={"community_blueprint": "lead-magnet community blueprint; push=true only stages"},
+            side_effecting=True,  # writes a local asset JSON; never pushes
             estimated_value="medium", deterministic=False, latency_ms=1200,
-            concurrency_key="provider:listmonk", max_parallelism=2,
         ),
         capability(
             "assistant.cold_outreach",
-            _push_gated("assistant.cold_outreach", core.cold_outreach),
+            _generate_only(core.cold_outreach, "cold_outreach"),
             provides=["cold_outreach_kit"],
-            outputs={"cold_outreach_kit": "audit-Loom outreach kit; push=true creates ERPNext Leads"},
-            side_effecting=True, approval_required=True, permissions=["erpnext:write"],
+            outputs={"cold_outreach_kit": "audit-Loom outreach kit; push=true only stages"},
+            side_effecting=True,  # writes a local asset JSON; never pushes
             estimated_value="high", deterministic=False, latency_ms=1500,
-            concurrency_key="provider:erpnext", max_parallelism=2,
+        ),
+        capability(
+            "assistant.push_assets",
+            _push_assets,
+            provides=["asset_push"],
+            outputs={"asset_push": "pushes a saved founder_content/community_blueprint/cold_outreach asset to "
+                                   "Postiz / Listmonk / ERPNext (approval-gated)"},
+            side_effecting=True, approval_required=True,
+            permissions=["postiz:write", "listmonk:write", "erpnext:write"],
+            estimated_value="medium", deterministic=False, latency_ms=1500,
+            concurrency_key="provider:push", max_parallelism=2,
         ),
         capability(
             "assistant.hire_brief",

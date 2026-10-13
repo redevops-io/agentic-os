@@ -5,13 +5,13 @@ the Mission Runtime can drive CRM as a capability operator — the same core ERP
 actions the console exposes at `/agent/run`, now discoverable + idempotent on the wire.
 
 Capabilities (syscalls):
-  crm.score_lead      — LLM lead score 0-100, written back as a Lead Comment + lead_score
+  crm.score_lead      — lead score 0-100 (method llm|rules), written back as a Lead Comment + lead_score
   crm.research        — enrichment brief (optionally web-enriched), saved as a Lead Comment
   crm.draft_outreach  — draft a first-touch email, saved as a Lead Comment for human review
   crm.qualify         — advance a Lead's status (pipeline progression)
 
-Gate (modules.yaml `approval_required: [send]`): the gate is on SENDING outreach to a
-prospect. Inspecting the core: `draft_outreach` only DRAFTS (it saves a Comment; a human
+Gate: the (historic) modules.yaml gate was on SENDING outreach to a prospect. There is NO send capability
+here, so the manifest declares no approval. Inspecting the core: `draft_outreach` only DRAFTS (it saves a Comment; a human
 sends it — nothing here auto-emails a prospect), and none of the four actions send. So NO
 capability is `approval_required=True`. Every action writes to ERPNext, so all carry
 `side_effecting=True` and the runtime dedupes them exactly-once on the Idempotency-Key.

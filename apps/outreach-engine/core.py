@@ -34,7 +34,9 @@ TENANT = os.environ.get("OUTREACH_TENANT", "Meridian Wealth Management")
 PITCH = os.environ.get("OUTREACH_PITCH",
     "we offer fee-only financial planning, portfolio management and tax-aware retirement investing — a fiduciary advisory team that puts your goals first")
 
-# ── the learned policy (what the Context Runtime bandit converges to per account bucket) ──
+# ── the play policy: a FIXED, hand-set mapping (signal -> play). It is NOT learned from outcomes — there is no
+# bandit/feedback loop behind it. Surfaced in outputs as PLAY_POLICY so no text claims otherwise. ──
+PLAY_POLICY = "fixed policy (not learned)"
 PLAY = {"tech_pain": "video · artifact", "funding": "multi · artifact", "hiring": "multi · artifact",
         "leadership": "linkedin · company", "cold": "email · template"}
 SIGNAL_PRIORITY = {"tech_pain": 1.0, "funding": 0.9, "hiring": 0.8, "leadership": 0.7, "cold": 0.15}
@@ -54,7 +56,7 @@ DEMO = [
      "evidence": "household nearing retirement with a $2M 401(k) rollover and RMD planning ahead"},
 ]
 
-_STATE = {"accounts": [], "approved": set()}   # in-memory pipeline + approval set
+_STATE = {"accounts": [], "approved": set(), "candidates": []}   # in-memory pipeline, approval set, discovered candidates
 
 
 # ──────────────────────────── signals + scoring + teardown ────────────────────────────
@@ -103,12 +105,44 @@ def score(s: dict) -> float:
     return round(min(1.0, base), 3)
 
 
+_DEV_SOURCES = ("github", "hn", "hn_hiring")
+_FIN_WORDS = ("portfolio", "retire", "401", "wealth", "estate", "trust", "tax", "invest", "liquidity", "rmd")
+
+
+def icp_of(s: dict) -> str:
+    """Lead ICP: explicit ``icp`` wins; developer for GitHub/HN-sourced or tech-pain signals; finance for
+    finance-flavoured evidence; otherwise 'unknown' (neutral opener)."""
+    icp = str(s.get("icp") or "").lower()
+    if icp in ("developer", "finance"):
+        return icp
+    if s.get("source") in _DEV_SOURCES or s.get("signal") == "tech_pain":
+        return "developer"
+    ev = str(s.get("evidence") or "").lower()
+    if any(w in ev for w in _FIN_WORDS):
+        return "finance"
+    return "unknown"
+
+
+def neutral_followup(name: str = "") -> str:
+    return ("Hi — just following up on my earlier note" + (f" about {name}" if name else "") + ". "
+            "Happy to answer any questions or share more detail — would a short call this week be useful?")
+
+
 def teardown(s: dict) -> dict:
     a = s["account"]
-    body = ("Hi — I came across " + a + " and wanted to reach out. At " + TENANT + ", " + PITCH + ".\n\n"
-            "If " + a + " is weighing options, I'd be glad to put together a complimentary, no-obligation portfolio review and "
-            "answer any questions.\n\nWorth a short call this week?")
-    return {"subject": a + ": a quick note from " + TENANT, "body": body}
+    icp = icp_of(s)
+    if icp == "finance":
+        body = ("Hi — I came across " + a + " and wanted to reach out. At " + TENANT + ", " + PITCH + ".\n\n"
+                "If " + a + " is weighing options, I'd be glad to put together a complimentary, no-obligation portfolio review and "
+                "answer any questions.\n\nWorth a short call this week?")
+    elif icp == "developer":
+        hook = HOOK.get(s.get("signal"), HOOK["cold"]).format(a=a)
+        body = ("Hi — " + hook + ". I'm reaching out from " + TENANT + " with no pitch attached: if it would be "
+                "useful to compare notes, reply and I'll send a couple of times for a short call.")
+    else:
+        body = ("Hi — I came across " + a + " and wanted to reach out from " + TENANT + ". If it's relevant, I'd be "
+                "glad to share more and answer any questions.\n\nWould a short call this week be useful?")
+    return {"subject": a + ": a quick note from " + TENANT, "body": body, "icp": icp}
 
 
 _LIVE_CACHE = {"ts": 0.0, "rows": []}
@@ -127,6 +161,7 @@ def _cached_live() -> list[dict]:
 def build_pipeline(live: bool = True) -> list[dict]:
     # Real leads by default (live GitHub/HN); the canned DEMO set is only the offline fallback.
     raw = (_cached_live() or DEMO) if live else list(DEMO)
+    raw = list(raw) + list(_STATE["candidates"])      # discovered candidates stay in the pipeline until approved
     seen, rows = set(), []
     for s in sorted(raw, key=score, reverse=True):
         k = (s["account"].lower(), s["signal"])
@@ -134,7 +169,10 @@ def build_pipeline(live: bool = True) -> list[dict]:
             continue
         seen.add(k)
         rows.append({**s, "score": score(s), "play": PLAY.get(s["signal"], PLAY["cold"]),
-                     "draft": teardown(s), "approved": s["account"] in _STATE["approved"]})
+                     "draft": teardown(s), "approved": s["account"] in _STATE["approved"],
+                     "status": ("approved" if s["account"] in _STATE["approved"]
+                                else "candidate" if s.get("candidate") else "ranked"),
+                     "play_policy": PLAY_POLICY})
     _STATE["accounts"] = rows
     return rows
 
@@ -295,7 +333,8 @@ def send_all(body: dict | None = None) -> dict:
     have sent what it didn't. `sequences_sent: False` is set explicitly so the operator SDK's output-marker
     merge can't read this back as a successful send (N4). Wire a real sender to set it True."""
     approved = sorted(_STATE["approved"])
-    return {"ok": False, "action": "send_all", "executed": False, "sequences_sent": False,
-            "dispatched": 0, "staged": approved, "sender_configured": False,
+    return {"ok": False, "action": "send_all", "status": "not_configured", "executed": False,
+            "sequences_sent": False, "dispatched": 0, "staged": approved, "sender_configured": False,
+            "reason": "no sender (SMTP/provider) is wired into this deployment",
             "note": "no live sender configured — approved sequences are staged, not sent. "
                     "Wire a sender (SMTP/provider) to actually dispatch."}

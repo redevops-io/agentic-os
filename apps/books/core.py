@@ -43,6 +43,9 @@ SUBTITLE = "Books that categorize, reconcile, and close themselves — on a real
 APPROVAL_REQUIRED = ["close"]
 
 
+CATEGORY_TAG = "CATEGORIZED:"
+
+
 # ── ERPNext REST client ──────────────────────────────────────────────────────
 def _headers() -> dict:
     return {
@@ -132,8 +135,13 @@ def fetch_activity(force: bool = False) -> dict:
     error = None
     ar = ap = 0.0
     pl = {"income": 0.0, "expense": 0.0, "net": 0.0, "cash": 0.0}
-    uncategorized: list[dict] = []
+    uncategorized: list[dict] = []     # unreconciled AND not yet tagged by the categorizer
+    unreconciled: list[dict] = []      # every non-Reconciled bank transaction
+    draft_counts = {"sales_invoices": 0, "purchase_invoices": 0, "journal_entries": 0}
+    existing_pcv = None
+    fiscal_year = time.strftime("%Y")
     ar_rows: list[dict] = []
+    checks_available = False
 
     if connected and ERPNEXT_API_KEY:
         try:
@@ -169,7 +177,7 @@ def fetch_activity(force: bool = False) -> dict:
             bt = _get_list(
                 "Bank Transaction",
                 fields=["name", "description", "deposit", "withdrawal", "status",
-                        "unallocated_amount", "date"],
+                        "unallocated_amount", "date", "reference_number"],
                 filters=[["company", "=", COMPANY], ["status", "!=", "Reconciled"],
                          ["docstatus", "=", 1]],
             )
@@ -177,28 +185,49 @@ def fetch_activity(force: bool = False) -> dict:
                 dep = float(t.get("deposit") or 0)
                 wd = float(t.get("withdrawal") or 0)
                 desc = (t.get("description") or "").split(" | ")[0]  # strip seed tag
-                uncategorized.append({
+                row = {
                     "name": t["name"], "desc": desc,
                     "amount": _money(dep or wd),
                     "direction": "in" if dep else "out",
-                })
+                }
+                unreconciled.append(row)
+                if not str(t.get("reference_number") or "").startswith(CATEGORY_TAG):
+                    uncategorized.append(row)
+
+            # Close-readiness inputs: drafts that would be missed by the close, and an existing PCV.
+            for key, dt in (("sales_invoices", "Sales Invoice"), ("purchase_invoices", "Purchase Invoice"),
+                            ("journal_entries", "Journal Entry")):
+                draft_counts[key] = len(_get_list(dt, ["name"], filters=[["company", "=", COMPANY],
+                                                                         ["docstatus", "=", 0]]))
+            existing_pcv = _existing_pcv(COMPANY, fiscal_year)
+            checks_available = True
         except Exception as e:  # network / auth hiccup — surface, don't crash the page
             error = str(e)
 
-    # Month-end close checklist (state derived from the live data).
+    # Month-end close checklist: every item is computed from the data fetched above (no constants).
+    # When ERPNext data is unavailable no check may pass — we cannot claim the books are ready.
+    ok = checks_available
     checklist = [
-        {"item": "All sales invoices booked", "done": True},
-        {"item": "All bills (A/P) entered", "done": True},
-        {"item": "Payroll journal posted", "done": True},
-        {"item": "Bank transactions categorized",
-         "done": len(uncategorized) == 0},
-        {"item": "Bank reconciliation complete",
-         "done": len(uncategorized) == 0},
-        {"item": "Period Closing Voucher posted", "done": False},
+        {"item": "No draft sales invoices", "done": ok and draft_counts["sales_invoices"] == 0,
+         "count": draft_counts["sales_invoices"]},
+        {"item": "No draft purchase invoices (bills)", "done": ok and draft_counts["purchase_invoices"] == 0,
+         "count": draft_counts["purchase_invoices"]},
+        {"item": "No draft journal entries", "done": ok and draft_counts["journal_entries"] == 0,
+         "count": draft_counts["journal_entries"]},
+        {"item": "Bank transactions categorized", "done": ok and len(uncategorized) == 0,
+         "count": len(uncategorized)},
+        {"item": "Bank transactions reconciled", "done": ok and len(unreconciled) == 0,
+         "count": len(unreconciled)},
+        {"item": "Period Closing Voucher posted", "done": ok and existing_pcv is not None,
+         "count": 0 if existing_pcv else 1},
     ]
     done = sum(1 for c in checklist if c["done"])
     close_pct = round(100 * done / len(checklist))
     close_pending = not checklist[-1]["done"]
+    # Blocking = every check except the PCV itself (the PCV is the thing being closed).
+    blocking_checks = [{"item": c["item"], "count": c["count"]} for c in checklist[:-1] if not c["done"]]
+    if not checks_available:
+        blocking_checks = [{"item": "ERPNext data unavailable" + (f": {error}" if error else ""), "count": 0}]
 
     income = pl["income"] or 0.0
     expense = pl["expense"] or 0.0
@@ -222,40 +251,50 @@ def fetch_activity(force: bool = False) -> dict:
         "ar_rows": ar_rows,
         "uncategorized": uncategorized,
         "checklist": checklist,
+        "blocking_checks": blocking_checks,
+        "unreconciled": unreconciled,
         "close_pct": close_pct,
         "close_pending": close_pending,
-        "counts": {"ar": len(ar_rows), "uncategorized": len(uncategorized)},
+        "counts": {"ar": len(ar_rows), "uncategorized": len(uncategorized),
+                   "unreconciled": len(unreconciled), **{f"draft_{k}": v for k, v in draft_counts.items()}},
     }
     _CACHE.update(ts=now, data=data)
     return data
 
 
 # ── agentic actions (deterministic ERPNext API work) ─────────────────────────
-def categorize(blurb: Callable[[str], str | None] | None = None) -> dict:
-    """Categorize ONE uncategorized Bank Transaction by giving it an account.
+def categorize(blurb: Callable[[str], str | None] | None = None, approval=None) -> dict:
+    """Categorize ONE uncategorized Bank Transaction. APPROVAL-GATED: without ``approval`` (a runtime-delivered
+    ``_approval``) this only STAGES a preview of the proposed change and writes nothing to ERPNext.
 
-    We set the transaction's bank_party_type/account hints by writing the
-    `bank_party_name` and updating a custom remark — the real, idempotent ERPNext
-    write. For the demo we tag the first uncategorized deposit to its likely revenue
-    account (a advisory-fee receipt → Sales). Deterministic; reports what it did.
+    ERPNext's Bank Transaction has no account/category field and the existing client has no Payment Entry /
+    allocation support, so the write is a ``reference_number`` tag (plus ``party_type`` on deposits). Output says
+    so explicitly with ``mode: "tag_only"`` — it is NOT an accounting categorisation/allocation.
     `blurb` is an optional narration callback (the LLM one-liner lives in app.py).
     """
     data = fetch_activity(force=True)
     queue = data.get("uncategorized", [])
     if not queue:
-        return {"status": "done", "action": "categorize", "summary":
+        return {"status": "done", "action": "categorize", "mode": "tag_only", "summary":
                 "No uncategorized transactions — nothing to do."}
 
     t = queue[0]
     category = "Revenue · Sales" if t["direction"] == "in" else "Materials · COGS"
-    result = {"transaction": t["name"], "memo": t["desc"], "amount": t["amount"],
-              "categorized_to": category}
-    # `reference_number` is allow_on_submit on Bank Transaction, so this PUT succeeds on a
-    # submitted txn and is idempotent. For a deposit we also tag the party_type so it reads
-    # as a real categorization in ERPNext's Bank Reconciliation Tool.
-    payload = {"reference_number": f"CATEGORIZED:{category}"}
+    payload = {"reference_number": f"{CATEGORY_TAG}{category}"}
     if t["direction"] == "in":
         payload["party_type"] = "Customer"
+    result = {"transaction": t["name"], "memo": t["desc"], "amount": t["amount"],
+              "categorized_to": category}
+    note = ("tag only: sets reference_number (and party_type on deposits); no account allocation or "
+            "ledger posting is made")
+    if not approval:
+        return {"status": "pending_approval", "action": "categorize", "mode": "tag_only",
+                "categorize_executed": False, "requires": "human approval", "result": result,
+                "proposed_changes": [{"doctype": "Bank Transaction", "name": t["name"], "set": payload}],
+                "remaining_after": len(queue) - 1, "note": note,
+                "summary": f"Proposed: tag {t['name']} ({t['desc']}) → {category} ({note}). "
+                           "Staged for human approval; nothing was written to ERPNext."}
+
     put_ok = False
     try:
         with httpx.Client(timeout=12.0) as client:
@@ -266,7 +305,7 @@ def categorize(blurb: Callable[[str], str | None] | None = None) -> dict:
             result["erpnext_status"] = resp.status_code
             put_ok = 200 <= resp.status_code < 300
             result["action"] = (
-                f"categorized {t['name']} → {category}"
+                f"tagged {t['name']} → {category}"
                 if put_ok
                 else f"update returned {resp.status_code}"
             )
@@ -274,7 +313,7 @@ def categorize(blurb: Callable[[str], str | None] | None = None) -> dict:
         result["action"] = f"error: {e}"
         result["error"] = str(e)
     if not put_ok:                      # never report "done" for a failed ERPNext write
-        return {"status": "error", "action": "categorize", "result": result,
+        return {"status": "error", "action": "categorize", "mode": "tag_only", "result": result,
                 "error": result.get("error") or f"ERPNext returned HTTP {result.get('erpnext_status')}",
                 "summary": f"Could NOT categorize {t['name']} ({t['desc']}): {result['action']}."}
 
@@ -283,9 +322,10 @@ def categorize(blurb: Callable[[str], str | None] | None = None) -> dict:
         f"explain categorizing the bank transaction '{t['desc']}' ({t['amount']}) as "
         f"'{category}'. Be concrete and professional. Final answer only."
     ) if blurb else None
-    out = {"status": "done", "action": "categorize", "result": result,
-           "summary": f"Categorized 1 of {len(queue)} uncategorized bank transactions "
-                      f"({t['desc']} → {category})."}
+    out = {"status": "done", "action": "categorize", "mode": "tag_only", "categorize_executed": True,
+           "result": result, "note": note,
+           "summary": f"Tagged 1 of {len(queue)} uncategorized bank transactions "
+                      f"({t['desc']} → {category}); {note}."}
     if reasoning:
         out["reasoning"] = reasoning
     return out
@@ -300,7 +340,7 @@ def reconcile(blurb: Callable[[str], str | None] | None = None) -> dict:
     """
     data = fetch_activity(force=True)
     ar = data.get("ar_rows", [])
-    deposits = [t for t in data.get("uncategorized", []) if t["direction"] == "in"]
+    deposits = [t for t in data.get("unreconciled", data.get("uncategorized", [])) if t["direction"] == "in"]
     match = None
     for inv in ar:
         for dep in deposits:
@@ -355,6 +395,13 @@ def _existing_pcv(company: str, fy: str) -> dict | None:
     rows = _get_list("Period Closing Voucher", ["name", "fiscal_year", "company", "posting_date", "docstatus"],
                      filters=[["company", "=", company], ["fiscal_year", "=", fy]])
     return next((r for r in rows if int(r.get("docstatus") or 0) == 1), None)
+
+
+def _existing_pcv_safe(params: dict) -> dict | None:
+    try:
+        return _existing_pcv(params["company"], params["fiscal_year"])
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _execute_close(params: dict) -> dict:
@@ -421,11 +468,17 @@ def close(body: dict | None = None, blurb: Callable[[str], str | None] | None = 
     `blurb` narrates the staged proposal."""
     body = body or {}
     params = _close_params(body)
+    data = fetch_activity(force=True)
+    failing = data.get("blocking_checks", [])
+    if failing and _existing_pcv_safe(params) is None:
+        return {"status": "not_ready", "action": "close", "close_staged": False, "close_executed": False,
+                "close_pct": data.get("close_pct", 0), "failing_checks": failing,
+                "close_params": {k: params[k] for k in ("company", "fiscal_year", "period_end_date")},
+                "summary": "Close NOT staged: " + "; ".join(
+                    f"{c['item']} ({c['count']})" if c.get("count") else c["item"] for c in failing) + "."}
     if not body.get("_approval"):
-        data = fetch_activity(force=True)
         pct = data.get("close_pct", 0)
-        uncat = len(data.get("uncategorized", []))
-        blocker = (f"{uncat} bank transaction(s) still need categorizing" if uncat else "all checks pass")
+        blocker = "all checks pass"
         reasoning = blurb(
             "You are a bookkeeping agent for a wealth-management firm. In ONE sentence, summarize "
             f"that the June month-end close is {pct}% complete ({blocker}) and is staged for the "

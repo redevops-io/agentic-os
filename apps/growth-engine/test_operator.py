@@ -78,6 +78,8 @@ def _fake_umami(monkeypatch):
     core._CACHE.update(ts=0.0, data=None)      # no cache bleed between tests
     core._TOKEN.update(value=None, ts=0.0)     # force a fresh login each test
     monkeypatch.setattr(core, "WEBSITE_ID", "site-1")
+    monkeypatch.setattr(core, "ADMIN_PASS", "a-real-secret")
+    monkeypatch.delenv("APP_DEMO_MODE", raising=False)
     monkeypatch.setattr(core, "httpx",
                         types.SimpleNamespace(get=_FakeUmami.get, post=_FakeUmami.post))
     yield
@@ -180,3 +182,31 @@ def test_mission_runtime_httpclient_drives_operator(client):
     staged = oc.invoke("growth-engine", "growth.reallocate_budget",
                        {"from": "linkedin", "to": "google", "amount": 600}, idempotency_key="m-2")
     assert staged["status"] == "pending_approval" and staged["approval_required"] == "budget_change"
+
+
+def test_default_umami_password_refused_outside_demo_mode(monkeypatch):
+    monkeypatch.setattr(core, "ADMIN_PASS", "umami")
+    res = build_growth_operator().invoke("growth.analyze", {})
+    assert res["status"] == "config_error" and "UMAMI_ADMIN_PASS" in res["error"]
+    assert _FakeUmami.posts == []                         # never attempted a login with the default credential
+    assert core.fetch_activity(force=True)["config_error"]
+
+
+def test_default_umami_password_allowed_in_demo_mode(monkeypatch):
+    monkeypatch.setattr(core, "ADMIN_PASS", "umami")
+    monkeypatch.setenv("APP_DEMO_MODE", "true")
+    res = build_growth_operator().invoke("growth.analyze", {})
+    assert res["status"] == "done" and any("auth/login" in u for u in _FakeUmami.posts)
+
+
+def test_economics_are_labelled_modeled_estimate():
+    d = core.fetch_activity(force=True)
+    assert d["economics_basis"] == "modeled_estimate"
+    assert all("modeled" in k["label"].lower() for k in d["kpis"] if k["label"] in ("ROAS (modeled)", "Cost per lead (modeled)"))
+    assert {k["label"] for k in d["kpis"]} >= {"ROAS (modeled)", "Cost per lead (modeled)"}
+    assert d["table"]["basis"] == "modeled_estimate" and "modeled" in d["table"]["title"]
+    assert all(c["economics_basis"] == "modeled_estimate" for c in d["channels"])
+    res = core.analyze()
+    assert res["economics_basis"] == "modeled_estimate"
+    assert all(f["economics_basis"] == "modeled_estimate" for f in res["findings"])
+    assert "modeled_estimate" in res["summary"]

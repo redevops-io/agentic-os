@@ -75,6 +75,8 @@ async def api_ask(req: Request):
 
 @app.get("/api/walkthrough")
 def api_walkthrough(app: str, role: str = "viewer"):
+    if app not in APP_DOCS:
+        return JSONResponse(walkthrough(app), status_code=404)
     if app not in visible_apps(role):
         return JSONResponse({"error": f"'{app}' is not visible to role '{role}'"}, status_code=403)
     return JSONResponse(walkthrough(app))

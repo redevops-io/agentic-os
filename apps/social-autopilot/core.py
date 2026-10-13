@@ -17,6 +17,7 @@ deterministic (its template fallback always produces usable copy).
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import time
@@ -48,6 +49,25 @@ ORG_ID = os.environ.get("POSTIZ_ORG_ID", "meridian-wealth-org")
 PG_HOST = os.environ.get("POSTIZ_PG_HOST", "agentic-postiz-postiz-postgres-1")
 PG_PORT = os.environ.get("POSTIZ_PG_PORT", "5432")
 PG_PASSWORD = os.environ.get("POSTIZ_PG_PASSWORD", "postiz")
+_DEFAULT_PG_PASSWORD = "postiz"
+_log = logging.getLogger("social-autopilot")
+
+
+class ConfigError(RuntimeError):
+    """Raised instead of connecting with a default credential."""
+
+
+def _demo_mode() -> bool:
+    return os.environ.get("APP_DEMO_MODE", "").strip().lower() in ("1", "true", "yes")
+
+
+def credentials_error() -> str | None:
+    """Configuration error when the Postiz postgres password is still the well-known default and the
+    deployment is not an explicit demo (APP_DEMO_MODE=true). We never connect with a default credential."""
+    if PG_PASSWORD == _DEFAULT_PG_PASSWORD and not _demo_mode():
+        return ("POSTIZ_PG_PASSWORD is the default 'postiz': set POSTIZ_PG_PASSWORD to a real secret "
+                "(or APP_DEMO_MODE=true for a demo deployment)")
+    return None
 # Optional REST base — used only for the connectivity probe / future API reads.
 POSTIZ_API_URL = os.environ.get("POSTIZ_API_URL", "http://localhost:4200").rstrip("/")
 
@@ -62,6 +82,10 @@ def _psql(sql: str, timeout: float = 10.0) -> list[list[str]]:
     Uses tuples-only, field-separated output so we don't need a postgres driver.
     Connects with the local `psql` client to POSTIZ_PG_HOST:PORT (reachable because the
     agent container is on the Postiz docker network) — no `docker exec` required."""
+    err = credentials_error()
+    if err:
+        _log.error("refusing to connect to Postiz postgres: %s", err)
+        raise ConfigError(err)
     env = dict(os.environ)
     env["PGPASSWORD"] = PG_PASSWORD
     res = subprocess.run(
@@ -272,6 +296,10 @@ def draft(body: dict, copy: Callable[[str], str | None] | None = None) -> dict:
 
     `copy` is an optional narration callback (the LLM copywriter lives in app.py); the action
     itself is fully deterministic and works with copy=None (a template fallback)."""
+    err = credentials_error()
+    if err:
+        _log.error("draft refused: %s", err)
+        return {"status": "config_error", "action": "draft", "error": err}
     topic = (body.get("topic") or "5 questions to ask before year-end").strip()
     llm = copy(topic) if copy else None
     text = llm or _template_copy(topic)
@@ -371,6 +399,10 @@ def publish(body: dict) -> dict:
     to Postiz for publication (schedule now), AFTER confirming the content still matches the approved hash
     (immutable content bound to approval), then reads BACK the publication status (N4). Scheduling is NOT
     publication — the read-back reports VERIFICATION_PENDING until the network confirms."""
+    err = credentials_error()
+    if err:
+        _log.error("publish refused: %s", err)
+        return {"status": "config_error", "action": "publish", "publish_executed": False, "error": err}
     data = fetch_activity(force=True)
     pid = body.get("id") or (data["queue"][0]["id"] if data["queue"] else "—")
     target = next((p for p in data["queue"] if p["id"] == pid), None)

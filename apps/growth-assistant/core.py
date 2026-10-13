@@ -501,6 +501,74 @@ def cold_outreach(body: dict, gen: GenJson | None = None) -> dict:
     return result
 
 
+def _find_asset(aid: str) -> dict | None:
+    for a in _load_assets():
+        if a.get("id") == aid:
+            return a
+    return None
+
+
+PUSHABLE = {"founder_content": "postiz", "community_blueprint": "listmonk", "cold_outreach": "erpnext"}
+
+
+def push_preview(asset: dict) -> dict:
+    """What `push_asset` WOULD send for this saved asset (no core is called)."""
+    t, p = asset.get("type"), asset.get("payload") or {}
+    if t == "founder_content":
+        return {"target": "postiz", "drafts": len(p.get("posts") or [])}
+    if t == "community_blueprint":
+        return {"target": "listmonk", "list_name": p.get("community_name") or f"{asset.get('startup')} community"}
+    if t == "cold_outreach":
+        return {"target": "erpnext", "leads": [x.get("name") or x.get("handle") or "Prospect"
+                                               for x in (p.get("targets") or [])[:50]]}
+    return {}
+
+
+def staged_push(asset_id: str, atype: str) -> dict:
+    """Staged-push block returned by generation capabilities when the legacy ``push:true`` is sent."""
+    return {"push_requested": True, "push_executed": False, "push_status": "pending_approval", "pushed": {},
+            "staged_action": "assistant.push_assets",
+            "push_preview": {"asset_id": asset_id, "asset_type": atype,
+                             "instruction": "Generation never pushes. Invoke the approval-gated capability "
+                                            f"assistant.push_assets with {{\"asset_id\": \"{asset_id}\"}} to push."}}
+
+
+def push_asset(body: dict) -> dict:
+    """Push a previously generated asset to its core (Postiz / Listmonk / ERPNext). Caller gates on approval."""
+    aid = str(body.get("asset_id") or "")
+    asset = _find_asset(aid) if aid else None
+    if not asset:
+        return {"status": "error", "action": "push_assets", "error": "asset_not_found", "asset_id": aid}
+    t = asset.get("type")
+    if t not in PUSHABLE:
+        return {"status": "error", "action": "push_assets", "error": f"asset type {t!r} is not pushable",
+                "pushable": sorted(PUSHABLE)}
+    if GENERATION_ONLY:
+        return {"status": "blocked", "action": "push_assets", "asset_id": aid, "push_executed": False,
+                "error": "GENERATION_ONLY deployment: pushes disabled"}
+    p = asset.get("payload") or {}
+    if t == "founder_content":
+        drafts = [f"{x.get('hook', '')}\n\n{x.get('body', '')}".strip() for x in (p.get("posts") or [])]
+        push = {"postiz": postiz_create_drafts(drafts)}
+    elif t == "community_blueprint":
+        lid = listmonk_create_list(p.get("community_name") or f"{asset.get('startup')} community",
+                                   p.get("problem_promise", ""))
+        push = {"listmonk": {"ok": lid is not None, "listmonk_list_id": lid}}
+    else:
+        targets = p.get("targets") or []
+        created = []
+        for tg in targets[:50]:
+            nm = tg.get("name") or tg.get("handle") or "Prospect"
+            lead = erp_create_lead(nm, f"cold-outreach target ({tg.get('handle', '')} {tg.get('note', '')})",
+                                   company=tg.get("company", ""), email=tg.get("email", ""))
+            if lead:
+                created.append(lead)
+        push = {"erpnext": {"ok": bool(created), "leads_created": created, "of": len(targets)}}
+    _update_asset(aid, pushed=push)
+    return {"status": "done", "action": "push_assets", "asset_id": aid, "asset_type": t,
+            "push_executed": True, "pushed": push}
+
+
 def hire_brief(body: dict, gen: GenJson | None = None) -> dict:
     role = (body.get("role") or "reddit_specialist").lower()
     preset = ROLE_PRESETS.get(role)

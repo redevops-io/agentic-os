@@ -9,6 +9,7 @@ capability handlers can be tested against a fake Umami without booting the whole
 """
 from __future__ import annotations
 
+import logging
 import os
 import time
 from pathlib import Path
@@ -52,6 +53,27 @@ CHANNEL_LABELS = {
 }
 
 
+# Basis label carried by EVERY modeled economics field (spend / CPL / ROAS / downstream funnel rates).
+MODELED = "modeled_estimate"
+MODELED_NOTE = "modeled_estimate: illustrative until an ad connector is configured (static CPC x sessions/lead)"
+
+_DEFAULT_ADMIN_PASS = "umami"
+_log = logging.getLogger("growth-engine")
+
+
+def _demo_mode() -> bool:
+    return os.environ.get("APP_DEMO_MODE", "").strip().lower() in ("1", "true", "yes")
+
+
+def credentials_error() -> str | None:
+    """A configuration error when the Umami admin password is still the well-known default and the
+    deployment is not an explicit demo (APP_DEMO_MODE=true). Never connect with a default credential."""
+    if ADMIN_PASS == _DEFAULT_ADMIN_PASS and not _demo_mode():
+        return ("UMAMI_ADMIN_PASS is the default 'umami': set UMAMI_ADMIN_PASS to a real secret "
+                "(or APP_DEMO_MODE=true for a demo deployment)")
+    return None
+
+
 # --- Umami REST client -------------------------------------------------------
 _TOKEN: dict = {"value": None, "ts": 0.0}
 _TOKEN_TTL = 600.0  # re-login every 10 min
@@ -61,6 +83,10 @@ def _token() -> str | None:
     now = time.time()
     if _TOKEN["value"] and now - _TOKEN["ts"] < _TOKEN_TTL:
         return _TOKEN["value"]
+    err = credentials_error()
+    if err:
+        _log.error("refusing to log in to Umami: %s", err)
+        return None
     try:
         r = httpx.post(f"{UMAMI_URL}/api/auth/login",
                        json={"username": ADMIN_USER, "password": ADMIN_PASS}, timeout=8.0)
@@ -127,14 +153,17 @@ def fetch_activity(force: bool = False) -> dict:
     if not force and _CACHE["data"] is not None and now - _CACHE["ts"] < _CACHE_TTL:
         return _CACHE["data"]
 
-    connected = umami_connected()
+    cfg_error = credentials_error()
+    if cfg_error:
+        _log.error("growth-engine configuration error: %s", cfg_error)
+    connected = umami_connected() and not cfg_error
     start, end = _range_ms(30)
     stats: dict = {}
     referrers: list[dict] = []
     utm_sources: list[dict] = []
     utm_mediums: list[dict] = []
     utm_campaigns: list[dict] = []
-    error = None
+    error = f"configuration error: {cfg_error}" if cfg_error else None
     if connected and WEBSITE_ID:
         try:
             stats = _get_stats(start, end)
@@ -195,6 +224,7 @@ def fetch_activity(force: bool = False) -> dict:
         c["conv"] = conv
         c["cpl"] = cpl
         c["roas"] = roas
+        c["economics_basis"] = MODELED          # spend/CPL/ROAS are modeled, not ad-platform actuals
         bar_items.append({"label": c["label"], "pct": pct})
         table_rows.append([
             c["label"],
@@ -225,11 +255,11 @@ def fetch_activity(force: bool = False) -> dict:
     }
 
     kpis = [
-        {"label": "Cost per lead", "value": ("$0" if not blended_cpl else f"${blended_cpl:,.0f}"),
-         "note": "blended, paid channels"},
+        {"label": "Cost per lead (modeled)", "value": ("$0" if not blended_cpl else f"${blended_cpl:,.0f}"),
+         "note": "modeled_estimate · illustrative until an ad connector is configured", "basis": MODELED},
         {"label": "Leads (30d)", "value": str(total_leads), "note": f"{visitors} visitors · {pageviews} pageviews"},
-        {"label": "ROAS", "value": ("∞" if blended_roas is None else f"{blended_roas:,.1f}x"),
-         "note": "illustrative · blended"},
+        {"label": "ROAS (modeled)", "value": ("∞" if blended_roas is None else f"{blended_roas:,.1f}x"),
+         "note": "modeled_estimate · illustrative until an ad connector is configured", "basis": MODELED},
         {"label": "Booked rate", "value": f"{booked_rate}%", "note": f"top channel: {top_channel}"},
     ]
 
@@ -239,18 +269,21 @@ def fetch_activity(force: bool = False) -> dict:
         "connected": connected,
         "error": error,
         "front_url": UMAMI_FRONT_URL,
+        "config_error": cfg_error,
+        "economics_basis": MODELED, "economics_note": MODELED_NOTE,
         "kpis": kpis,
         "bars": {"title": "Leads by source (30d)", "items": bar_items},
         "funnel": funnel,
         "table": {
-            "title": "Channel performance · spend / CPL / ROAS",
-            "head": ["Channel", "Leads", "Spend", "Cost / lead", "ROAS"],
+            "title": "Channel performance · spend / CPL / ROAS (modeled_estimate)",
+            "head": ["Channel", "Leads", "Spend (modeled)", "Cost / lead (modeled)", "ROAS (modeled)"],
+            "basis": MODELED, "note": MODELED_NOTE,
             "rows": table_rows,
         },
         "channels": channels,
         "totals": {
             "pageviews": pageviews, "visitors": visitors, "visits": visits, "bounces": bounces,
-            "leads": total_leads, "conversions": total_conv, "spend": round(total_spend, 2),
+            "leads": total_leads, "conversions": total_conv, "spend": round(total_spend, 2), "spend_basis": MODELED,
             "blended_cpl": round(blended_cpl, 2),
             "blended_roas": (None if blended_roas is None else round(blended_roas, 2)),
             "booked_rate": booked_rate, "top_channel": top_channel,
@@ -273,6 +306,9 @@ def analyze(blurb: Callable[[str], str | None] | None = None) -> dict:
     the action itself is fully deterministic and works with blurb=None.
     """
     data = fetch_activity(force=True)
+    if data.get("config_error"):
+        return {"status": "config_error", "action": "analyze", "error": data["config_error"],
+                "summary": "growth-engine is misconfigured: " + data["config_error"]}
     channels = data.get("channels", [])
     findings = []
     for c in channels:
@@ -281,7 +317,7 @@ def analyze(blurb: Callable[[str], str | None] | None = None) -> dict:
         findings.append({
             "channel": c["label"], "leads": c["leads"], "share_pct": c.get("pct", 0),
             "spend": round(c.get("spend", 0.0), 2), "cost_per_lead": cpl, "roas": roas,
-            "paid": c.get("paid", False),
+            "paid": c.get("paid", False), "economics_basis": MODELED,
         })
 
     t = data["totals"]
@@ -290,15 +326,16 @@ def analyze(blurb: Callable[[str], str | None] | None = None) -> dict:
     worst = min(rated, key=lambda c: c["roas"]) if rated else None
     rec = None
     if best and worst and best["label"] != worst["label"]:
-        rec = (f"Shift budget from {worst['label']} (ROAS {worst['roas']:.1f}x) to "
-               f"{best['label']} (ROAS {best['roas']:.1f}x). Use action "
+        rec = (f"Shift budget from {worst['label']} (modeled ROAS {worst['roas']:.1f}x) to "
+               f"{best['label']} (modeled ROAS {best['roas']:.1f}x). Use action "
                "'reallocate_budget' — it is approval-gated.")
 
     summary = (f"Top channel is {t['top_channel']} by lead volume. "
                f"{t['leads']} leads / {t['visitors']} visitors over 30d, "
                f"{t['conversions']} est. conversions ({t['booked_rate']}% booked rate), "
                f"blended CPL ${t['blended_cpl']:,.0f}, blended ROAS "
-               f"{'∞' if t['blended_roas'] is None else str(t['blended_roas'])+'x'}.")
+               f"{'∞' if t['blended_roas'] is None else str(t['blended_roas'])+'x'} "
+               "(spend/CPL/ROAS are a modeled_estimate: illustrative until an ad connector is configured).")
 
     reasoning = blurb(
         "You are a growth marketing agent for a wealth management firm. In ONE sentence, "
@@ -312,6 +349,7 @@ def analyze(blurb: Callable[[str], str | None] | None = None) -> dict:
         "findings": findings,
         "recommendation": rec,
         "source": "real Umami stats + UTM/referrer metrics (30d)",
+        "economics_basis": MODELED, "economics_note": MODELED_NOTE,
     }
     if reasoning:
         out["reasoning"] = reasoning

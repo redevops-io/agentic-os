@@ -227,7 +227,10 @@ def _table_card(table: dict) -> str:
     return (
         "<div class='card'>"
         f"<div class='card__head'><h2 class='card__title'>{_esc(table['title'])}</h2>"
-        "<span class='pill pill--info'><span class='pill__dot'></span>data: live from Umami</span></div>"
+        "<span class='pill pill--info'><span class='pill__dot'></span>traffic: live from Umami</span>"
+        + ("<span class='pill pill--warn'><span class='pill__dot'></span>spend/CPL/ROAS: modeled_estimate</span>"
+           if table.get("basis") == "modeled_estimate" else "") + "</div>"
+        + (f"<p class='body-s'>{_esc(table['note'])}</p>" if table.get("note") else "") +
         f"<table class='table'><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
         "</div>"
     )
@@ -267,7 +270,8 @@ def _approval_banner(data: dict) -> str:
         "<span class='pill pill--warn'><span class='pill__dot'></span>1 approval</span>"
         "<span class='label-m' style='text-transform:uppercase;color:var(--warning)'>budget_change</span>"
         f"<span class='body-m'>Shift spend from {_esc(worst['label'])} "
-        f"(ROAS {worst['roas']:.1f}x) to {_esc(best['label'])} (ROAS {best['roas']:.1f}x) — "
+        f"(modeled ROAS {worst['roas']:.1f}x) to {_esc(best['label'])} (modeled ROAS {best['roas']:.1f}x; "
+        "modeled_estimate, illustrative until an ad connector is configured) — "
         f"{_esc(best['label'])} converts cheaper this month. Agent stages the change; "
         "ad spend lives in the external Ads platform, so a human approves before it moves.</span>"
         "</div>"

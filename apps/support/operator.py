@@ -7,7 +7,7 @@ actions the console exposes at `/agent/run`, now discoverable + idempotent on th
 Capabilities (syscalls):
   support.draft_reply     — draft a reply and post it as a PRIVATE NOTE (human-reviewable)
   support.resolve         — toggle a conversation to resolved
-  support.escalate        — set priority urgent + assign to an agent
+  support.escalate        — set priority urgent + assign to an explicit assignee_id or team_id
   support.send_onboarding — send a welcome message to a newly-onboarded customer
 
 resolve / escalate / send_onboarding are approval_required: resolve and escalate change a customer's

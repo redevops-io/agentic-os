@@ -182,9 +182,9 @@ def _approval_banner(data: dict) -> str:
     if not data.get("close_pending"):
         return ""
     pct = data.get("close_pct", 0)
-    uncat = len(data.get("uncategorized", []))
-    note = (f" {uncat} txn(s) still need categorizing before posting."
-            if uncat else " All checks pass — ready to post on your approval.")
+    blocking = data.get("blocking_checks", [])
+    note = (" Not ready: " + "; ".join(_esc(c["item"]) for c in blocking) + "."
+            if blocking else " All checks pass — ready to post on your approval.")
     return (
         "<div class='banner'>"
         f"<span class='pill pill--warn'><span class='pill__dot'></span>close {pct}%</span>"
@@ -482,10 +482,10 @@ def _t_find_party(a: dict) -> dict:
 def _t_close_status(_a: dict) -> dict:
     d = fetch_activity()
     pct = d["close_pct"]
-    uncat = d["counts"]["uncategorized"]
     todo = [c["item"] for c in d["checklist"] if not c["done"]]
-    blocker = (f"{uncat} bank txn(s) still need categorizing" if uncat
-               else "the Period Closing Voucher is staged for your approval")
+    blocking = d.get("blocking_checks", [])
+    blocker = ("blocked by: " + "; ".join(c["item"] for c in blocking) if blocking
+               else "all checks pass; the Period Closing Voucher can be staged for your approval")
     return {"text": f"Month-end close is {pct}% complete — {blocker}. "
             f"Remaining: {', '.join(todo) if todo else 'none'}. "
             "The agent never posts the closing voucher without human sign-off.",

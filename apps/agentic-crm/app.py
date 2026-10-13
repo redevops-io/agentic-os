@@ -30,7 +30,7 @@ Config (env; seed.py writes agents/agentic-crm/.env):
   ERPNEXT_API_KEY    /ERPNEXT_API_SECRET   token auth (same as agentic-books)
   ERPNEXT_FRONT_URL  ERPNext UI link for the "Open in ERPNext ↗" button
   PORT               uvicorn port, default 8210
-  REDEVOPS_LLM_BASE_URL / REDEVOPS_LLM_MODEL   the agent brain (DeepSeek-V4-Flash)
+  REDEVOPS_LLM_BASE_URL / REDEVOPS_LLM_MODEL   the agent brain (model from REDEVOPS_LLM_MODEL)
   DEERFLOW_URL       OPTIONAL — web-research gateway for real enrichment signals
   ANTHROPIC_API_KEY  OPTIONAL — Claude fallback for the brain
 """
@@ -236,8 +236,10 @@ def _llm_text(prompt: str, max_tokens: int = 400) -> str | None:
 # callback (_llm_text) so the console + /agent/run get reasoning while the operator drives
 # the same core deterministically.
 def _score_lead(body: dict) -> dict:
-    """LLM-score a lead over the real ERPNext core, with narration from _llm_text."""
-    return core.score_lead(body, llm=_llm_text)
+    """Score a lead over the real ERPNext core: LLM when it answers validly, else deterministic rules."""
+    model = (getattr(_BLURB_MODEL, "model", None) or getattr(_BLURB_MODEL, "model_name", None)
+             or os.environ.get("REDEVOPS_LLM_MODEL") or "") if _BLURB_MODEL is not None else ""
+    return core.score_lead(body, llm=_llm_text, model=str(model))
 
 
 def _research(body: dict) -> dict:
