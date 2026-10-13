@@ -412,7 +412,7 @@ def verify(id: str = "", token: str = "") -> str:
 @app.post("/verify", response_class=HTMLResponse)
 async def verify_post(request: Request) -> str:
     try:
-        body = await request.json()
+        body = _strip_approval(await request.json())
     except Exception:  # noqa: BLE001
         body = {}
     return _do_verify(str((body or {}).get("id", "")), str((body or {}).get("token", "")))
