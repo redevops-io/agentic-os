@@ -39,3 +39,10 @@ billing, s3, posthog** — each is one `find`/`delete` function away.
 > Identity verification is the `verified` flag — production must add a real emailed-
 > confirmation step before any erasure. This module never deletes without
 > `verified=true AND confirm=true`.
+
+## Identity, confirmation and env (hardened DSAR flow)
+
+- Identity is proven only by redeeming the emailed single-use token at `/verify?id=&token=`. `/request` and `/intake` only open PENDING requests.
+- Delete/correct execute only for a `verified` request id bound to the email, with operator confirmation: the runtime approval gate (`privacy.delete {request_id, email}`) or `POST /fulfil/{request_id}` with Basic auth. After acting, connectors are re-queried; status is `erased`/`corrected` only if the read-back is clean, else `partial_erasure`/`partial_correction`.
+- `POST /retention` is a counts-only dry run unless operator Basic auth AND `confirm:true`.
+- Env: `OPERATOR_BASIC_AUTH_USER`/`OPERATOR_BASIC_AUTH_PASS` (or `OPERATOR_BASIC_AUTH`/`OUTREACH_BASIC_AUTH` = `user:pass`; unset => fail closed), `PRIVACY_DEV_MODE` (expose verify link; default false), `PRIVACY_DEMO_MODE` (one-click flow on synthetic data; refuses to start with real connectors configured), `PRIVACY_VERIFY_TTL_SECONDS` (86400), `PRIVACY_EXPORT_TTL_SECONDS` (600), `PRIVACY_LLM_SUMMARY` (counts/categories-only narration; default off).

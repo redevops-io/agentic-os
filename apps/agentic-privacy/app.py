@@ -16,22 +16,24 @@ Mission Runtime operator can invoke it and it can be tested against fake cores. 
 imports config + actions from there and keeps the FastAPI surface + the optional LLM narration.
 
 Endpoints:
-  POST /request   {"type":"access|delete|correct|opt_out","email":"...",
-                   "verified":<bool>, "confirm":<bool>}
-                  -> orchestrates the fan-out. DELETE requires verified + confirm
-                     (otherwise a dry-run preview of what WOULD be erased). Every call
-                     is written to the audit log + the requests store (SLA tracking).
+  POST /request   {"type":"access|delete|correct|opt_out","email":"..."}
+                  -> opens a PENDING request (same as /intake); body `verified`/`confirm` are ignored.
+  GET  /verify?id=&token=   redeem the emailed single-use token (the ONLY identity proof)
+  GET  /export?id=&token=   single-use, short-TTL access export (when no mailer delivered it)
+  POST /fulfil/{id}         operator Basic auth: execute a VERIFIED delete/correct (verify-after-act)
   GET  /          MD3 dashboard: open/closed requests, SLA timers, per-system coverage
   GET  /api/activity   the same as JSON   ·   GET /health
 
-NOTE: identity verification is represented by the `verified` flag — production must add
-a real verification step (emailed confirmation link) before any erasure executes. This
-module never deletes without verified=true AND confirm=true.
+Identity is proven only by redeeming the emailed token; erasure/correction additionally need operator
+confirmation (runtime approval gate or Basic auth) and are read back (re-find) before reporting success.
+PRIVACY_DEV_MODE exposes the verify link; PRIVACY_DEMO_MODE runs the one-click flow on synthetic data only.
 """
 from __future__ import annotations
 
+import base64
 import html
 import os
+import secrets
 
 # ── enterprise permissions plane — gate tool/data access by (app, user) ──
 # No-op without the context_runtime_enterprise package or CR_PERMISSIONS=1 (open-core default).
@@ -43,14 +45,13 @@ except Exception:  # noqa: BLE001
         return None
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 # --- config + the pure DSAR engine (core.py — no web / context-runtime deps) --------
 from . import core
 from .core import (  # noqa: E402
-    TENANT, SLA_DAYS, CONNECTORS, activity, handle_request, retention_scan,
-    verify_audit_chain, _fan_out, _load_requests, _save_requests, _audit, _persist,
+    TENANT, SLA_DAYS, CONNECTORS, activity, handle_request, retention_scan, verify_audit_chain,
 )
 
 PORT = int(os.environ.get("PORT", "8212"))
@@ -78,6 +79,9 @@ SUBTITLE = ("Data-subject / consumer requests (GDPR access & erasure, CCPA/CPRA 
 def _llm_text(prompt: str, max_tokens: int = 500) -> str | None:
     """Optional LLM narration blurb — None if no endpoint configured / any error.
 
+    The prompt it receives is built by core (counts + category labels ONLY, never record content or the
+    subject's email). It is not wired into any route unless PRIVACY_LLM_SUMMARY=true.
+
     Optional by design — every core action is deterministic fan-out work; the LLM only
     narrates the access export. Absence of REDEVOPS_LLM_BASE_URL never breaks a request.
     """
@@ -94,6 +98,10 @@ def _llm_text(prompt: str, max_tokens: int = 500) -> str | None:
     except Exception:
         pass
     return None
+
+
+if core._truthy("PRIVACY_LLM_SUMMARY"):
+    core.SUMMARIZER = _llm_text
 
 
 # --- dashboard ---------------------------------------------------------------
@@ -256,13 +264,54 @@ def index() -> str:
     return page
 
 
+def _operator_credential() -> tuple[str, str]:
+    """Operator Basic credential. OPERATOR_BASIC_AUTH_USER/_PASS (or a single OPERATOR_BASIC_AUTH / OUTREACH_BASIC_AUTH
+    "user:pass"). Unset => ("","") => every operator route fails closed."""
+    user = os.environ.get("OPERATOR_BASIC_AUTH_USER", "")
+    pw = os.environ.get("OPERATOR_BASIC_AUTH_PASS", "")
+    if not (user and pw):
+        combo = os.environ.get("OPERATOR_BASIC_AUTH") or os.environ.get("OUTREACH_BASIC_AUTH") or ""
+        user, _, pw = combo.partition(":")
+    return user, pw
+
+
+def _operator_ok(request: Request) -> bool:
+    user, pw = _operator_credential()
+    header = request.headers.get("authorization", "")
+    if not (user and pw) or not header.startswith("Basic "):
+        return False
+    try:
+        got_user, _, got_pw = base64.b64decode(header[6:]).decode("utf-8", "replace").partition(":")
+    except Exception:  # noqa: BLE001
+        return False
+    return secrets.compare_digest(got_user, user) and secrets.compare_digest(got_pw, pw)
+
+
+def require_operator(request: Request) -> None:
+    """503 when no operator credential is configured (fail closed), 401 when missing/invalid."""
+    if not all(_operator_credential()):
+        raise HTTPException(503, "operator confirmation is not configured (set OPERATOR_BASIC_AUTH_USER/_PASS)")
+    if not _operator_ok(request):
+        raise HTTPException(401, "operator authentication required",
+                            headers={"WWW-Authenticate": 'Basic realm="agentic-privacy operator"'})
+
+
+def _public(resp: dict) -> dict:
+    """Public responses never carry the verification link outside PRIVACY_DEV_MODE (defence in depth)."""
+    if not core.DEV_MODE:
+        resp.pop("verify_url", None)
+        resp.pop("dev_note", None)
+    return resp
+
+
 @app.post("/request")
 async def request_route(request: Request) -> JSONResponse:
     try:
         body = _strip_approval(await request.json())
     except Exception:
         body = {}
-    return JSONResponse(handle_request(body or {}, summarize=_llm_text))
+    # Body flags (verified/confirm/_approval) are never trusted: this only opens a PENDING intake record.
+    return JSONResponse(_public(handle_request(body or {}, base_url=str(request.base_url))))
 
 
 # --- public intake form ------------------------------------------------------
@@ -328,49 +377,68 @@ async def intake_submit(request: Request) -> JSONResponse:
     if not email or "@" not in email:
         return JSONResponse({"status": "error", "error": "a valid email is required"}, status_code=400)
     # intake agent (core): opens the DSAR, sends the verification email, audits + persists.
-    return JSONResponse(core.intake(email, rtype, str(request.base_url)))
+    return JSONResponse(_public(core.intake(email, rtype, str(request.base_url))))
 
 
-def _verify_page(message: str, ok: bool) -> str:
+def _verify_page(message: str, ok: bool, raw: bool = False) -> str:
     color = "#5bd98a" if ok else "#f2544f"
     return (f"<!doctype html><html lang='en'><head><meta charset='utf-8'>"
             f"<meta name='viewport' content='width=device-width, initial-scale=1'>"
             f"<title>Privacy request — {html.escape(TENANT)}</title>{FONT}<style>{BASE_CSS}</style></head>"
             f"<body class='page'><div class='shell' style='max-width:560px;margin:12vh auto'>"
             f"<div class='card'><h1 style='margin:0;font:400 24px/32px var(--font-sans)'>Privacy request</h1>"
-            f"<p style='color:{color};font-size:15px'>{html.escape(message)}</p>"
+            f"<p style='color:{color};font-size:15px'>{message if raw else html.escape(message)}</p>"
             f"<p class='footer' style='text-align:left'>{html.escape(TENANT)} · GDPR / CCPA / CPRA</p>"
             f"</div></div></body></html>")
 
 
+def _do_verify(id: str, token: str) -> str:
+    res = core.verify_request(id, token)
+    if not res.get("ok"):
+        return _verify_page("This verification link is invalid, already used, or expired.", False)
+    msg = html.escape(res.get("message") or "Identity verified.")
+    if res.get("export_url"):
+        msg += f' <a href="{html.escape(res["export_url"])}">Download your export (single use)</a>'
+        return _verify_page(msg, True, raw=True)
+    return _verify_page(msg, True)
+
+
 @app.get("/verify", response_class=HTMLResponse)
 def verify(id: str = "", token: str = "") -> str:
-    reqs = _load_requests()
-    rec = next((r for r in reqs if r.get("id") == id), None)
-    if not (rec and token and rec.get("verify_token") == token and not rec.get("verified")):
-        return _verify_page("This verification link is invalid, already used, or expired.", False)
-    rec["verified"] = True
-    rec.pop("verify_token", None)
-    rtype = rec.get("type")
-    if rtype in ("access", "know"):
-        results = _fan_out(rec["email"], "find")
-        rec["status"] = "fulfilled"
-        rec["record_count"] = sum(r.get("count", 0) for r in results if r.get("ok"))
-        _audit({"req": id, "type": "access_fulfilled_after_verify", "email": rec["email"],
-                "count": rec["record_count"]})
-        msg = ("Identity verified. We've compiled the personal data we hold about you and will "
-               "deliver it to this email securely.")
-    elif rtype in ("opt_out", "opt-out", "do_not_sell"):
-        rec["status"] = "fulfilled"
-        _audit({"req": id, "type": "opt_out_verified", "email": rec["email"]})
-        msg = "Identity verified. Your opt-out of sale/sharing is recorded."
-    else:  # delete / correct → verified; erasure executes under the operator confirm gate
-        rec["status"] = "verified"
-        _audit({"req": id, "type": "verified", "request_type": rtype, "email": rec["email"]})
-        msg = ("Identity verified. Your erasure request will be actioned and you'll receive "
-               "confirmation when it's complete.")
-    _save_requests(reqs)
-    return _verify_page(msg, True)
+    """Redeem the emailed single-use token (request id + token). The only way identity is proven."""
+    return _do_verify(id, token)
+
+
+@app.post("/verify", response_class=HTMLResponse)
+async def verify_post(request: Request) -> str:
+    try:
+        body = _strip_approval(await request.json())
+    except Exception:  # noqa: BLE001
+        body = {}
+    return _do_verify(str((body or {}).get("id", "")), str((body or {}).get("token", "")))
+
+
+@app.get("/export")
+def export(id: str = "", token: str = "") -> JSONResponse:
+    """Single-use, short-TTL access export, protected by request id + export token (issued only after /verify)."""
+    res = core.redeem_export(id, token)
+    if not res.get("ok"):
+        return JSONResponse({"status": "error", "error": "invalid, used, or expired"}, status_code=403,
+                            headers={"Cache-Control": "no-store"})
+    return JSONResponse(res, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/fulfil/{request_id}")
+async def fulfil_route(request_id: str, request: Request) -> JSONResponse:
+    """Operator confirmation of a VERIFIED delete/correct request (Basic auth; fail-closed)."""
+    require_operator(request)
+    try:
+        body = _strip_approval(await request.json())
+    except Exception:  # noqa: BLE001
+        body = {}
+    res = core.fulfil(request_id, (body or {}).get("email"), (body or {}).get("corrections"),
+                      actor="operator-basic-auth")
+    return JSONResponse(res, status_code=409 if res.get("status") == "refused" else 200)
 
 
 @app.get("/audit/verify")
@@ -386,7 +454,15 @@ async def retention_route(request: Request) -> JSONResponse:
         body = _strip_approval(await request.json())
     except Exception:
         body = {}
-    return JSONResponse(retention_scan(confirm=bool((body or {}).get("confirm"))))
+    want_purge = bool((body or {}).get("confirm"))
+    # Unauthenticated callers (and any call without confirm:true) get a counts-only DRY RUN. A real purge needs
+    # operator Basic auth AND confirm:true.
+    if want_purge and _operator_ok(request):
+        return JSONResponse(retention_scan(confirm=True))
+    res = retention_scan(confirm=False)
+    if want_purge:
+        res["note"] = "DRY RUN — purge requires operator authentication."
+    return JSONResponse(res)
 
 
 if __name__ == "__main__":  # pragma: no cover

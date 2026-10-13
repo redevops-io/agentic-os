@@ -6,8 +6,8 @@ actions the console exposes at `/request`, now discoverable + idempotent on the 
 
 Capabilities (syscalls) — one per modules.yaml agent (intake · access · delete · retention):
   privacy.intake      — open a DSAR: verification email + audited request record
-  privacy.access      — gather the subject's data across every live system (read-only fan-out)
-  privacy.delete      — the cascading erasure across every system   [approval gate: delete]
+  privacy.access      — deliver the export of a VERIFIED access request (counts only in the result)
+  privacy.delete      — erasure of a VERIFIED request id [approval gate]; verify-after-act (erasure_verified, residual)
   privacy.retention   — policy check: PII past the retention window (dry-run report)
 
 Per modules.yaml the gate is `[delete]`: erasure moves personal data OUT permanently and is
@@ -22,6 +22,21 @@ from agentic_os.mission.operator_sdk import Operator, capability, pending_approv
 from . import core
 
 
+def _delete(inp: dict) -> dict:
+    """privacy.delete — executes ONLY with a runtime-delivered `_approval` AND a request id that is verified (the
+    emailed token was redeemed) and bound to this email. Anything else STAGES (nothing is erased)."""
+    rid, email = inp.get("request_id", ""), inp.get("email", "")
+    staged = lambda reason=None: pending_approval(  # noqa: E731
+        "privacy.delete", request_id=rid, email=email, erasure=False, erasure_verified=False,
+        residual=None, **({"reason": reason} if reason else {}))
+    if not inp.get("_approval"):
+        return staged()
+    res = core.execute_erasure(rid, email, actor="runtime-approval")
+    if res.get("status") == "refused":
+        return staged(res.get("reason"))
+    return res
+
+
 def build_privacy_operator() -> Operator:
     return Operator("agentic-privacy", [
         capability(
@@ -29,25 +44,28 @@ def build_privacy_operator() -> Operator:
             lambda inp: core.intake(inp.get("email", ""), inp.get("type", "access"),
                                     inp.get("base_url", "")),
             provides=["dsar_opened"],
-            outputs={"dsar_opened": "DSAR recorded + identity-verification email sent"},
+            outputs={"dsar_opened": "DSAR recorded as PENDING; identity-verification token emailed (not returned)"},
             side_effecting=True, permissions=["privacy:write"],
             estimated_value="medium", deterministic=False, latency_ms=800,
             concurrency_mode="exclusive", concurrency_key="privacy:subject:{email}",
         ),
         capability(
             "privacy.access",
-            lambda inp: core.access(inp.get("email", "")),
+            lambda inp: _access(inp),
             provides=["subject_data"],
-            outputs={"subject_data": "personal data gathered across every live system"},
-            permissions=["privacy:read"], estimated_value="medium",
-            deterministic=False, latency_ms=1500, concurrency_mode="read_only",
+            outputs={"subject_data": "export delivered to the verified subject (counts only here; no records)"},
+            inputs={"request_id": "a VERIFIED access request id", "email": "must match the request"},
+            side_effecting=True, permissions=["privacy:read"], estimated_value="medium",
+            deterministic=False, latency_ms=1500,
+            concurrency_mode="exclusive", concurrency_key="privacy:subject:{email}",
         ),
         capability(
             "privacy.delete",
-            lambda inp: (core.delete(inp.get("email", ""), confirm=True) if inp.get("_approval")
-                        else pending_approval("privacy.delete", email=inp.get("email", ""), erasure=False)),
+            _delete,
             provides=["erasure"],
-            outputs={"erasure": "subject erased across every live connector (confirmed)"},
+            inputs={"request_id": "a VERIFIED delete request id", "email": "must match the request"},
+            outputs={"erasure_verified": "True only if the post-erasure connector re-find found zero residual",
+                     "residual": "records still present across connectors after erasure (0 == verified)"},
             side_effecting=True, approval_required=True,
             permissions=["privacy:write", "privacy:erase"],
             estimated_value="high", deterministic=False, latency_ms=2500,
@@ -57,8 +75,15 @@ def build_privacy_operator() -> Operator:
             "privacy.retention",
             lambda inp: core.retention_scan(confirm=False),
             provides=["retention_report"],
-            outputs={"retention_report": "PII past the retention window (dry-run policy check)"},
+            outputs={"retention_report": "PII past the retention window (dry-run, counts only)"},
             permissions=["privacy:read"], estimated_value="low",
             deterministic=False, latency_ms=1000, concurrency_mode="read_only",
         ),
     ])
+
+
+def _access(inp: dict) -> dict:
+    res = core.access(inp.get("request_id", ""), inp.get("email", ""))
+    if res.get("status") == "refused":
+        return pending_approval("privacy.access", reason=res.get("reason"), subject_data=False)
+    return {**res, "subject_data": {"delivery": res.get("delivery"), "record_count": res.get("record_count")}}

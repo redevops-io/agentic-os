@@ -37,7 +37,11 @@ try:
 except ImportError:       # non-POSIX dev host
     fcntl = None
 
+import logging
+
 import httpx
+
+_log = logging.getLogger("agentic_os.privacy")
 
 # --- config (env; the FastAPI app / seed writes agents/agentic-privacy/.env) --------
 # Idempotent .env load so this module is self-sufficient when imported by the operator
@@ -88,6 +92,18 @@ SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_PASS = os.environ.get("SMTP_PASS", "")
 
 RETENTION_DAYS = int(os.environ.get("PRIVACY_RETENTION_DAYS", "730"))  # 2 years default
+
+
+def _truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# PRIVACY_DEV_MODE: the intake response may expose verify_url/dev_note (local testing ONLY). Default off.
+DEV_MODE = _truthy("PRIVACY_DEV_MODE")
+# PRIVACY_DEMO_MODE: the old one-click flow, ONLY against the built-in synthetic demo subject store.
+DEMO_MODE = _truthy("PRIVACY_DEMO_MODE")
+VERIFY_TTL_SECONDS = int(os.environ.get("PRIVACY_VERIFY_TTL_SECONDS", "86400"))
+EXPORT_TTL_SECONDS = int(os.environ.get("PRIVACY_EXPORT_TTL_SECONDS", "600"))
 
 
 # --- tiny JSON store (requests + audit), file-backed on a mounted volume -----
@@ -159,17 +175,29 @@ def _last_audit_hash() -> str:
     return "GENESIS"
 
 
-def _audit(entry: dict) -> None:
+class AuditWriteError(RuntimeError):
+    """The audit chain could not be appended. Destructive actions MUST refuse to proceed on this."""
+
+
+def _audit(entry: dict, strict: bool = False) -> bool:
     """Append a tamper-evident audit entry: each row carries the prev hash + its own
-    sha256 over (prev + the row), so any edit/removal breaks the chain (see verify_audit_chain)."""
-    with _store_mutation():                       # read head + append atomically → the chain never forks
-        e = {"ts": datetime.now(timezone.utc).isoformat(), **entry, "prev": _last_audit_hash()}
-        e["hash"] = hashlib.sha256(json.dumps(e, sort_keys=True).encode()).hexdigest()
-        try:
+    sha256 over (prev + the row), so any edit/removal breaks the chain (see verify_audit_chain).
+
+    Returns True on success. A failed append is never silent: ``strict=True`` raises AuditWriteError (used before
+    every destructive action — no audit, no erasure); otherwise it is logged and False is returned."""
+    try:
+        with _store_mutation():                   # read head + append atomically → the chain never forks
+            e = {"ts": datetime.now(timezone.utc).isoformat(), **entry, "prev": _last_audit_hash()}
+            e["hash"] = hashlib.sha256(json.dumps(e, sort_keys=True).encode()).hexdigest()
             with open(_store_path("audit.jsonl"), "a") as fh:
                 fh.write(json.dumps(e) + "\n")
-        except Exception:
-            pass
+                fh.flush()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        _log.error("agentic-privacy: audit append FAILED (%s: %s)", type(exc).__name__, exc)
+        if strict:
+            raise AuditWriteError(f"audit append failed: {type(exc).__name__}") from exc
+        return False
 
 
 def verify_audit_chain() -> dict:
@@ -200,8 +228,15 @@ def verify_audit_chain() -> dict:
 
 
 # --- verification email ------------------------------------------------------
+def _mailer_configured() -> bool:
+    return bool(POSTMARK_TOKEN or SMTP_HOST)
+
+
 def _send_email(to: str, subject: str, body_html: str) -> str:
-    """Send via Postmark, then SMTP, else log-only (dev). Returns the delivery channel."""
+    """Send via Postmark, then SMTP. Returns the delivery channel: "postmark" | "smtp" | "undeliverable".
+
+    "undeliverable" means NO channel delivered the message (none configured, or every configured one failed).
+    There is deliberately no log-only fallback that hands the token to the caller."""
     if POSTMARK_TOKEN:
         try:
             r = httpx.post("https://api.postmarkapp.com/email",
@@ -225,7 +260,11 @@ def _send_email(to: str, subject: str, body_html: str) -> str:
             return "smtp"
         except Exception:
             pass
-    return "logged"  # no sender configured — the verify link is logged / dev-exposed
+    return "undeliverable"
+
+
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def _verify_link(req_id: str, token: str, base: str) -> str:
@@ -589,6 +628,41 @@ CONNECTORS = {
 }
 
 
+# ---- synthetic demo subject store (PRIVACY_DEMO_MODE only; never real data) ------------
+_DEMO_SEED = {"demo@example.com": [
+    {"doctype": "Lead", "name": "DEMO-LEAD-1", "lead_name": "Demo Person"},
+    {"doctype": "Subscriber", "name": "DEMO-SUB-1", "email": "demo@example.com"}]}
+_DEMO_STORE: dict[str, list[dict]] = {k: [dict(r) for r in v] for k, v in _DEMO_SEED.items()}
+
+
+def demo_find(email: str) -> dict:
+    recs = [dict(r) for r in _DEMO_STORE.get(email, [])]
+    return {"system": "demo", "ok": True, "count": len(recs), "records": recs}
+
+
+def demo_delete(email: str) -> dict:
+    gone = _DEMO_STORE.pop(email, [])
+    return {"system": "demo", "ok": True, "deleted": len(gone), "details": [r["name"] for r in gone]}
+
+
+_REAL_CONNECTORS = CONNECTORS
+
+
+def validate_demo_mode(demo: bool, connectors: dict | None = None) -> None:
+    """Demo mode may run ONLY against the synthetic store: refuse to start when any real connector is configured."""
+    if not demo:
+        return
+    live = [s for s, (_f, _d, cfg) in (connectors or _REAL_CONNECTORS).items() if cfg()]
+    if live:
+        raise RuntimeError("PRIVACY_DEMO_MODE=true refused: real connectors are configured "
+                           f"({', '.join(live)}). Demo mode only runs against synthetic data.")
+
+
+validate_demo_mode(DEMO_MODE)
+if DEMO_MODE:
+    CONNECTORS = {"demo": (demo_find, demo_delete, lambda: True)}
+
+
 # --- orchestrator: fan-out across every connector ----------------------------
 def _fan_out(email: str, op: str) -> list[dict]:
     out = []
@@ -600,140 +674,433 @@ def _fan_out(email: str, op: str) -> list[dict]:
     return out
 
 
-# ── agent actions (deterministic core work; the four modules.yaml agents) ─────
-def intake(email: str, rtype: str = "access", base_url: str = "") -> dict:
-    """intake agent — open a DSAR: send an identity-verification email + record the request.
+def _snapshot(email: str) -> dict:
+    """{system: record_count | None} over every CONFIGURED connector (None = configured but find failed)."""
+    snap: dict = {}
+    for sys_name, (find, _d, cfg) in CONNECTORS.items():
+        if not cfg():
+            continue
+        try:
+            r = find(email)
+            snap[sys_name] = int(r.get("count", 0)) if r.get("ok") else None
+        except Exception:  # noqa: BLE001
+            snap[sys_name] = None
+    return snap
 
-    The request is PENDING (awaiting verification); it never returns or deletes anyone's data.
-    An operator (or the emailed link) promotes it to fulfilment. Audited + persisted.
-    """
-    email = (email or "").strip().lower()
+
+# Optional narration hook (counts/categories only). app.py sets it iff PRIVACY_LLM_SUMMARY=true.
+SUMMARIZER: Callable[[str], str | None] | None = None
+
+
+# --- request store helpers ---------------------------------------------------
+def _norm(email) -> str:
+    return (email or "").strip().lower()
+
+
+def _mutate_request(req_id: str, fn):
+    """Atomically load → fn(rec) → save one request. Returns (found, fn's return)."""
+    with _store_mutation():
+        reqs = _load_requests()
+        rec = next((r for r in reqs if r.get("id") == req_id), None)
+        if rec is None:
+            return False, None
+        out = fn(rec)
+        _save_requests(reqs)
+        return True, out
+
+
+def _get_request(req_id: str) -> dict | None:
+    return next((r for r in _load_requests() if r.get("id") == req_id), None)
+
+
+def _refused(reason: str, **kw) -> dict:
+    return {"status": "refused", "executed": False, "reason": reason, "erasure_verified": False, **kw}
+
+
+def _secs_from_now(n: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=n)).isoformat()
+
+
+def _expired(iso: str | None) -> bool:
+    try:
+        return not iso or datetime.fromisoformat(iso) < datetime.now(timezone.utc)
+    except Exception:  # noqa: BLE001
+        return True
+
+
+# ── agent actions ─────────────────────────────────────────────────────────────
+def intake(email: str, rtype: str = "access", base_url: str = "") -> dict:
+    """intake agent — open a PENDING DSAR and email a single-use verification token.
+
+    Never returns or deletes data. Identity is proven ONLY by redeeming the emailed token (verify_request).
+    If no channel can deliver the token the request stays pending and `delivery` is "undeliverable" — there is no
+    caller-visible self-verify path (verify_url/dev_note only appear under PRIVACY_DEV_MODE=true)."""
+    email = _norm(email)
     rtype = (rtype or "access").lower()
     if not email or "@" not in email:
         return {"status": "error", "error": "a valid email is required"}
     req_id = _new_dsar_id()
     now = datetime.now(timezone.utc)
     token, channel, link = _send_verification(req_id, email, rtype, base_url)
-    rec = {"id": req_id, "type": rtype, "email": email, "verified": False, "verify_token": token,
+    rec = {"id": req_id, "type": rtype, "email": email, "verified": False,
+           "verify_token_hash": _hash_token(token), "verify_expires_at": _secs_from_now(VERIFY_TTL_SECONDS),
            "created_at": now.isoformat(), "due_at": (now + timedelta(days=SLA_DAYS)).isoformat(),
-           "status": "awaiting_verification", "source": "intake"}
+           "status": "awaiting_verification", "source": "intake", "delivery": channel}
     _audit({"req": req_id, "type": "intake", "email": email, "request_type": rtype, "verification": channel})
     _persist(rec)
+    if channel == "undeliverable":
+        msg = ("Request received, but we could not send the verification email. It stays pending until "
+               "identity is verified; contact the privacy team.")
+    else:
+        msg = (f"Request received. Check {email} for a verification link, then we'll "
+               f"respond within {SLA_DAYS} days.")
     resp = {"status": "received", "request_id": req_id, "type": rtype, "email": email,
-            "verification": channel,
-            "message": f"Request received. Check {email} for a verification link, then we'll "
-                       f"respond within {SLA_DAYS} days."}
-    if channel == "logged":  # dev: no email sender configured — expose the link so it's testable
+            "delivery": channel, "verification": channel, "message": msg}
+    if DEV_MODE:
         resp["verify_url"] = link
-        resp["dev_note"] = "No email sender configured; verification link returned for testing only."
+        resp["dev_note"] = "PRIVACY_DEV_MODE: verification link returned for local testing only."
     return resp
 
 
-def access(email: str, summarize: Callable[[str], str | None] | None = None) -> dict:
-    """access agent — gather the subject's data across every live system (read-only fan-out).
+def verify_request(req_id: str, token: str) -> dict:
+    """Redeem the emailed token (request id + token). Single use, expiring. Returns {ok, ...} with no PII."""
+    token = token or ""
 
-    `summarize` is an optional narration callback (the LLM export blurb lives in app.py); the
-    action itself is fully deterministic and works with summarize=None.
-    """
-    email = (email or "").strip().lower()
-    if not email:
-        return {"status": "error", "error": "email required"}
-    req_id = _new_dsar_id()
-    now = datetime.now(timezone.utc)
-    record = {"id": req_id, "type": "access", "email": email, "created_at": now.isoformat(),
-              "due_at": (now + timedelta(days=SLA_DAYS)).isoformat(), "status": "open"}
+    def _redeem(rec):
+        h = rec.get("verify_token_hash")
+        if rec.get("verified") or not h or not token:
+            return "invalid"
+        if not secrets.compare_digest(h, _hash_token(token)):
+            return "invalid"
+        if _expired(rec.get("verify_expires_at")):
+            return "expired"
+        rec["verified"] = True
+        rec["verified_at"] = datetime.now(timezone.utc).isoformat()
+        rec.pop("verify_token_hash", None)
+        rec.pop("verify_expires_at", None)
+        rec["status"] = "fulfilled" if rec.get("type") in ("opt_out", "opt-out", "do_not_sell") else "verified"
+        return "ok"
+
+    found, outcome = _mutate_request(req_id, _redeem)
+    if not found or outcome != "ok":
+        return {"ok": False, "reason": outcome or "invalid"}
+    rec = _get_request(req_id) or {}
+    rtype = rec.get("type")
+    _audit({"req": req_id, "type": "verified", "request_type": rtype, "email": rec.get("email")})
+    if rtype in ("access", "know"):
+        d = fulfil_access(req_id)
+        return {"ok": True, "type": "access", "delivery": d.get("delivery"), "export_url": d.get("export_url"),
+                "message": d.get("message")}
+    if rtype in ("opt_out", "opt-out", "do_not_sell"):
+        _audit({"req": req_id, "type": "opt_out_verified", "email": rec.get("email")})
+        return {"ok": True, "type": "opt_out", "message": "Identity verified. Your opt-out of sale/sharing is recorded."}
+    return {"ok": True, "type": rtype,
+            "message": "Identity verified. Your request will be actioned after operator confirmation and "
+                       "you'll receive confirmation when it's complete."}
+
+
+# ---- access export -----------------------------------------------------------
+def _categories(results: list[dict]) -> list[str]:
+    cats = set()
+    for r in results:
+        for rec in r.get("records", []):
+            if rec.get("doctype"):
+                cats.add(str(rec["doctype"]))
+        if r.get("records"):
+            cats.add(str(r.get("system")))
+    return sorted(cats)
+
+
+def summarize_counts(results: list[dict]) -> str:
+    """Deterministic export summary: counts per system + categories. Contains NO record content."""
+    parts = []
+    for r in results:
+        if r.get("ok"):
+            parts.append(f"{r.get('system')}: {r.get('count', 0)} record(s)")
+        else:
+            parts.append(f"{r.get('system')}: {r.get('error', 'unavailable')}")
+    cats = _categories(results)
+    return "; ".join(parts) + (f". Categories: {', '.join(cats)}." if cats else ".")
+
+
+def _llm_prompt(results: list[dict]) -> str:
+    """The ONLY thing ever handed to an LLM: counts + category labels. No record content, no email."""
+    return ("You are a privacy officer. Write a short plain-language note for a data subject summarising what "
+            "kinds of data we hold, from these per-system counts only. Do not invent details.\n\n"
+            + json.dumps({"systems": [{"system": r.get("system"), "ok": bool(r.get("ok")),
+                                       "count": r.get("count", 0)} for r in results],
+                          "categories": _categories(results)}))
+
+
+def _export_email_html(email: str, results: list[dict], summary: str) -> str:
+    rows = "".join(f"<h3>{html.escape(str(r.get('system')))}</h3><pre>"
+                   f"{html.escape(json.dumps(r.get('records', []), indent=2, default=str))}</pre>"
+                   for r in results if r.get("ok") and r.get("records"))
+    return (f"<p>Your personal-data export for {html.escape(email)}.</p><p>{html.escape(summary)}</p>"
+            f"{rows or '<p>We hold no records tied to this address.</p>'}")
+
+
+def fulfil_access(req_id: str, summarize: Callable[[str], str | None] | None = None) -> dict:
+    """Deliver the access export for a VERIFIED access request: emailed to the verified address when a mailer is
+    configured, otherwise held behind a single-use short-TTL export token (fetched via GET /export).
+    Returns counts/summary only — never record content."""
+    rec = _get_request(req_id)
+    if not (rec and rec.get("verified") and rec.get("type") in ("access", "know")
+            and rec.get("status") in ("verified", "fulfilled")):
+        return {"status": "refused", "executed": False, "reason": "request not verified"}
+    email = rec["email"]
     results = _fan_out(email, "find")
     total = sum(r.get("count", 0) for r in results if r.get("ok"))
-    summary = None
+    summary = summarize_counts(results)
+    summarize = summarize or SUMMARIZER
     if summarize:
-        summary = summarize(
-            "You are a privacy officer assembling a GDPR/CCPA data-access response. "
-            f"Summarise, for the data subject {email}, what personal data we hold across our "
-            "systems based on this machine output, in plain language. Be factual; if a system "
-            f"is empty or unreachable, say so.\n\n{json.dumps(results)[:3500]}")
-    record.update(status="fulfilled", record_count=total)
-    _audit({"req": req_id, "type": "access", "email": email, "systems": [r["system"] for r in results]})
-    _persist(record)
-    return {"status": "done", "request_id": req_id, "type": "access", "email": email,
-            "record_count": total, "systems": results, "summary": summary}
+        summary = (summarize(_llm_prompt(results)) or summary)
+    channel = _send_email(email, "Your personal data export", _export_email_html(email, results, summary)) \
+        if _mailer_configured() else "undeliverable"
+    out = {"status": "done", "request_id": req_id, "type": "access", "record_count": total,
+           "systems": [{"system": r.get("system"), "ok": bool(r.get("ok")), "count": r.get("count", 0)}
+                       for r in results],
+           "summary": summary, "delivery": channel}
+    if channel in ("postmark", "smtp"):
+        def _done(r):
+            r.update(status="fulfilled", record_count=total, delivered_via=channel)
+            r.pop("export_hash", None)
+            r.pop("export_expires_at", None)
+        _mutate_request(req_id, _done)
+        out["message"] = ("Identity verified. We've emailed the personal data we hold about you "
+                          "to this address.")
+    else:
+        tok = secrets.token_urlsafe(24)
+
+        def _hold(r):
+            r.update(status="verified", record_count=total, export_hash=_hash_token(tok),
+                     export_expires_at=_secs_from_now(EXPORT_TTL_SECONDS))
+        _mutate_request(req_id, _hold)
+        out["export_url"] = f"/export?id={urllib.parse.quote(req_id)}&token={urllib.parse.quote(tok)}"
+        out["message"] = (f"Identity verified. Your export is available once, for the next "
+                          f"{EXPORT_TTL_SECONDS // 60} minutes, at the link below.")
+    _audit({"req": req_id, "type": "access_fulfilled", "email": email, "count": total, "delivery": channel,
+            "systems": [r.get("system") for r in results]})
+    return out
 
 
-def delete(email: str, confirm: bool = False) -> dict:
-    """delete agent — the erasure fan-out. Dry-run PREVIEW until confirm=True.
+def redeem_export(req_id: str, token: str) -> dict:
+    """Single-use, short-TTL fetch of the export for a verified access request (request id + export token)."""
+    token = token or ""
 
-    Erasure moves personal data OUT permanently, so it is the human-gated capability:
-    confirm=False returns what WOULD be erased; confirm=True executes the cascading erasure
-    across every live connector (the confirmed erasure the operator parks behind approval).
-    """
-    email = (email or "").strip().lower()
-    if not email:
-        return {"status": "error", "error": "email required"}
-    req_id = _new_dsar_id()
-    now = datetime.now(timezone.utc)
-    record = {"id": req_id, "type": "delete", "email": email, "created_at": now.isoformat(),
-              "due_at": (now + timedelta(days=SLA_DAYS)).isoformat(), "status": "open"}
-    if not confirm:
-        results = _fan_out(email, "find")
-        would = sum(r.get("count", 0) for r in results if r.get("ok"))
-        record.update(status="awaiting_verification")
-        _audit({"req": req_id, "type": "delete_preview", "email": email, "would_delete": would})
-        _persist(record)
-        return {"status": "preview", "request_id": req_id, "type": "delete", "email": email,
-                "dry_run": True, "would_delete": would, "systems": results,
-                "note": "DRY RUN — set confirm=true to execute the erasure."}
+    def _consume(rec):
+        h = rec.get("export_hash")
+        if not (rec.get("verified") and h and token) or not secrets.compare_digest(h, _hash_token(token)):
+            return "invalid"
+        exp = rec.get("export_expires_at")
+        rec.pop("export_hash", None)           # consumed either way (expired tokens are dead too)
+        rec.pop("export_expires_at", None)
+        if _expired(exp):
+            return "expired"
+        rec["status"] = "fulfilled"
+        rec["delivered_via"] = "export_token"
+        return rec["email"]
+
+    found, out = _mutate_request(req_id, _consume)
+    if not found or out in (None, "invalid", "expired"):
+        return {"ok": False, "reason": out or "invalid"}
+    results = _fan_out(out, "find")
+    _audit({"req": req_id, "type": "export_fetched", "email": out})
+    return {"ok": True, "request_id": req_id, "record_count": sum(r.get("count", 0) for r in results if r.get("ok")),
+            "summary": summarize_counts(results), "systems": results}
+
+
+def access(request_id: str, email: str, summarize: Callable[[str], str | None] | None = None) -> dict:
+    """access agent — (re)deliver the export for a VERIFIED access request id bound to this email.
+    The result carries counts only; the records go to the verified subject's mailbox."""
+    rec = _get_request(request_id or "")
+    if not (rec and rec.get("email") == _norm(email)):
+        return {"status": "refused", "executed": False, "reason": "unknown request or email mismatch"}
+    return fulfil_access(request_id, summarize=summarize)
+
+
+# ---- erasure with verify-after-act ---------------------------------------------
+def _claim(request_id: str, email: str, rtypes: tuple, running: str):
+    email = _norm(email)
+
+    def _c(rec):
+        if rec.get("type") not in rtypes:
+            return "wrong request type"
+        if rec.get("email") != email:
+            return "email does not match request"
+        if rec.get("status") in ("erased", "corrected"):
+            return "already_done"
+        if not rec.get("verified") or rec.get("status") not in ("verified", "partial_erasure", "partial_correction"):
+            return "request not verified"
+        rec["_prev_status"] = rec["status"]
+        rec["status"] = running
+        return "ok"
+    found, out = _mutate_request(request_id or "", _c)
+    return "unknown request" if not found else out
+
+
+def _release(request_id: str, running: str) -> None:
+    _mutate_request(request_id, lambda r: r.update(status=r.pop("_prev_status", "verified"))
+                    if r.get("status") == running else None)
+
+
+def execute_erasure(request_id: str, email: str, actor: str = "approval") -> dict:
+    """Cascading erasure for a VERIFIED delete request bound to `email`, then READ BACK.
+
+    Refuses unless: request exists, type delete, email matches, identity verified (token redeemed). Refuses
+    (before touching anything) if the audit append fails. After erasing, re-runs the connector find fan-out:
+    status `erased` only if residual == 0 (and nothing unverifiable), else `partial_erasure`."""
+    email = _norm(email)
+    claim = _claim(request_id, email, ("delete", "erase"), "erasing")
+    if claim == "already_done":
+        rec = _get_request(request_id) or {}
+        return {"status": "erased", "request_id": request_id, "type": "delete", "already_erased": True,
+                **(rec.get("erasure") or {}), "erasure_verified": True}
+    if claim != "ok":
+        return _refused(claim)
+    live = [s for s, (_f, _d, cfg) in CONNECTORS.items() if cfg()]
+    if not live:
+        _release(request_id, "erasing")
+        return _refused("no live connectors configured")
+    before = _snapshot(email)
+    try:
+        _audit({"req": request_id, "type": "erasure_started", "email": email, "actor": actor,
+                "before": before}, strict=True)
+    except AuditWriteError:
+        _release(request_id, "erasing")
+        return _refused("audit log unavailable — refusing to erase")
     results = _fan_out(email, "delete")
+    after = _snapshot(email)
+    retained = {r["system"]: r["retained"] for r in results if r.get("retained")}
+    residual_by_system = {s: n for s, n in after.items() if n and s not in retained}
+    residual = sum(residual_by_system.values())
+    unverified = sorted(s for s, n in after.items() if n is None)
+    verified = residual == 0 and not unverified
     deleted = sum(r.get("deleted", 0) for r in results if r.get("ok"))
-    record.update(status="fulfilled", deleted_count=deleted)
-    _audit({"req": req_id, "type": "delete_executed", "email": email,
-            "deleted": deleted, "systems": results})
-    _persist(record)
-    return {"status": "done", "request_id": req_id, "type": "delete", "email": email,
-            "deleted_count": deleted, "systems": results}
+    summary = {"deleted_count": deleted, "before": before, "after": after, "residual": residual,
+               "residual_by_system": residual_by_system, "retained": retained,
+               "unverified_systems": unverified, "erasure_verified": verified}
+
+    def _fin(rec):
+        rec.pop("_prev_status", None)
+        rec.update(status="erased" if verified else "partial_erasure", erasure=summary, deleted_count=deleted,
+                   completed_at=datetime.now(timezone.utc).isoformat())
+    _mutate_request(request_id, _fin)
+    audit_ok = _audit({"req": request_id, "type": "erasure_verified" if verified else "partial_erasure",
+                       "email": email, "actor": actor, **summary})
+    out = {"status": "erased" if verified else "partial_erasure", "request_id": request_id, "type": "delete",
+           "email": email, "actor": actor, **summary,
+           "systems": [{"system": r.get("system"), "ok": bool(r.get("ok")), "deleted": r.get("deleted", 0)}
+                       for r in results], "audit_ok": audit_ok}
+    if not verified:
+        out["ok"] = False        # the SDK treats ok:False as a failed side effect (never minted into success)
+    return out
+
+
+def _name_mismatch(email: str, name: str | None) -> int:
+    if not name:
+        return 0
+    n = 0
+    for r in _fan_out(email, "find"):
+        for rec in r.get("records", []):
+            have = rec.get("lead_name") if "lead_name" in rec else rec.get("name") if r.get("system") != "erpnext" else None
+            if have is not None and have != name:
+                n += 1
+    return n
+
+
+def execute_correction(request_id: str, email: str, corrections: dict, actor: str = "operator") -> dict:
+    """Rectification for a VERIFIED correct request: apply, then READ BACK (re-find) before reporting success."""
+    email = _norm(email)
+    if not corrections:
+        return {"status": "error", "error": "corrections object required, e.g. {\"name\":\"New Name\"}"}
+    claim = _claim(request_id, email, ("correct",), "correcting")
+    if claim == "already_done":
+        return {"status": "corrected", "request_id": request_id, "already_corrected": True,
+                "correction_verified": True}
+    if claim != "ok":
+        return {"status": "refused", "executed": False, "reason": claim, "correction_verified": False}
+    new_email = _norm(corrections.get("email")) or None
+    before = _snapshot(email)
+    try:
+        _audit({"req": request_id, "type": "correction_started", "email": email, "actor": actor,
+                "fields": sorted(corrections), "before": before}, strict=True)
+    except AuditWriteError:
+        _release(request_id, "correcting")
+        return {"status": "refused", "executed": False, "reason": "audit log unavailable — refusing to correct",
+                "correction_verified": False}
+    results = correct_apply(email, corrections)
+    if new_email:
+        old_after = _snapshot(email)
+        new_after = _snapshot(new_email)
+        mismatch = sum(n for n in old_after.values() if n) + sum(
+            max(0, (before.get(s) or 0) - (new_after.get(s) or 0)) for s in before)
+        unverified = sorted(s for s, n in {**old_after, **new_after}.items() if n is None)
+    else:
+        mismatch = _name_mismatch(email, corrections.get("name"))
+        unverified = sorted(s for s, n in _snapshot(email).items() if n is None)
+    verified = mismatch == 0 and not unverified
+    summary = {"mismatch": mismatch, "unverified_systems": unverified, "correction_verified": verified,
+               "fields": sorted(corrections)}
+
+    def _fin(rec):
+        rec.pop("_prev_status", None)
+        rec.update(status="corrected" if verified else "partial_correction", correction=summary,
+                   completed_at=datetime.now(timezone.utc).isoformat())
+        if verified and new_email:
+            rec["email"] = new_email
+    _mutate_request(request_id, _fin)
+    audit_ok = _audit({"req": request_id, "type": "correction_verified" if verified else "partial_correction",
+                       "email": email, "actor": actor, **summary})
+    out = {"status": "corrected" if verified else "partial_correction", "request_id": request_id,
+           "type": "correct", "actor": actor, "systems": results, "audit_ok": audit_ok, **summary}
+    if not verified:
+        out["ok"] = False
+    return out
+
+
+def fulfil(request_id: str, email: str | None = None, corrections: dict | None = None,
+           actor: str = "operator") -> dict:
+    """Operator-confirmed fulfilment (the /fulfil route): dispatch delete/correct for a verified request."""
+    rec = _get_request(request_id or "")
+    if not rec:
+        return _refused("unknown request")
+    email = _norm(email) or rec.get("email", "")
+    if rec.get("type") in ("delete", "erase"):
+        return execute_erasure(request_id, email, actor=actor)
+    if rec.get("type") == "correct":
+        return execute_correction(request_id, email, corrections or {}, actor=actor)
+    return _refused(f"request type '{rec.get('type')}' is not operator-fulfilled")
 
 
 def opt_out(email: str) -> dict:
-    """opt-out (Do Not Sell or Share) — record the opt-out; audited + persisted."""
-    email = (email or "").strip().lower()
+    """opt-out (Do Not Sell or Share) — demo mode only; real opt-outs are verified via intake."""
+    email = _norm(email)
     if not email:
         return {"status": "error", "error": "email required"}
     req_id = _new_dsar_id()
     now = datetime.now(timezone.utc)
     record = {"id": req_id, "type": "opt_out", "email": email, "created_at": now.isoformat(),
-              "due_at": (now + timedelta(days=SLA_DAYS)).isoformat(), "status": "fulfilled"}
+              "due_at": (now + timedelta(days=SLA_DAYS)).isoformat(), "status": "fulfilled", "verified": True}
     _audit({"req": req_id, "type": "opt_out", "email": email})
     _persist(record)
     return {"status": "done", "request_id": req_id, "type": "opt_out", "email": email,
-            "note": "Opt-out recorded. Marketing/sale-share is also governed by the site "
-                    "consent banner + Global Privacy Control."}
+            "note": "Opt-out recorded."}
 
 
-def correct(email: str, corrections: dict, verified: bool = False) -> dict:
-    """correct agent — rectification: update fields across every live connector (identity-gated)."""
-    email = (email or "").strip().lower()
-    if not email:
-        return {"status": "error", "error": "email required"}
-    if not corrections:
-        return {"status": "error", "error": "corrections object required, e.g. {\"name\":\"New Name\"}"}
-    if not verified:
-        return {"status": "error", "error": "correction requires verified=true (identity gate)"}
-    req_id = _new_dsar_id()
-    now = datetime.now(timezone.utc)
-    record = {"id": req_id, "type": "correct", "email": email, "created_at": now.isoformat(),
-              "due_at": (now + timedelta(days=SLA_DAYS)).isoformat(), "status": "fulfilled"}
-    results = correct_apply(email, corrections)
-    _audit({"req": req_id, "type": "correct", "email": email, "fields": list(corrections.keys()),
-            "systems": results})
-    _persist(record)
-    return {"status": "done", "request_id": req_id, "type": "correct", "email": email,
-            "corrections": corrections, "systems": results}
-
-
-# ---- retention enforcer (Phase 3) — purge PII past the retention window ---------------
+# ---- retention enforcer — purge PII past the retention window -------------------------
 def retention_scan(confirm: bool = False) -> dict:
-    """retention agent — find (and, with confirm=true, purge) personal data past the retention
-    window. Dry-run by default (a policy check). Extend per connector; ERPNext stale leads first."""
+    """retention agent — counts of personal data past the retention window. DRY-RUN by default and counts only
+    (no PII). confirm=True purges; callers MUST have authenticated an operator first (app.py does), and the
+    purge refuses if the audit append fails."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)).strftime("%Y-%m-%d")
     results = []
+    if confirm:
+        try:
+            _audit({"type": "retention_purge_started", "cutoff": cutoff}, strict=True)
+        except AuditWriteError:
+            return {"cutoff": cutoff, "dry_run": True, "error": "audit log unavailable — refusing to purge",
+                    "systems": []}
     if ERPNEXT_URL and ERPNEXT_KEY:
         stale = _erp_list("Lead", [["creation", "<", cutoff], ["status", "!=", "Converted"]],
                           ["name", "creation"])
@@ -750,44 +1117,71 @@ def retention_scan(confirm: bool = False) -> dict:
                         pass
         results.append({"system": "erpnext", "category": "uncontacted leads",
                         "stale": len(stale), "purged": len(purged)})
-    _audit({"type": "retention_scan", "cutoff": cutoff, "dry_run": not confirm,
-            "stale_total": sum(r["stale"] for r in results)})
+    if confirm:
+        _audit({"type": "retention_purged", "cutoff": cutoff,
+                "stale_total": sum(r["stale"] for r in results),
+                "purged_total": sum(r["purged"] for r in results)})
     return {"cutoff": cutoff, "retention_days": RETENTION_DAYS, "dry_run": not confirm,
             "systems": results,
-            "note": None if confirm else "DRY RUN — set confirm=true to purge."}
+            "note": None if confirm else "DRY RUN — counts only; a purge needs operator authentication + confirm=true."}
 
 
 # --- request dispatcher (the /request route) ---------------------------------
-def handle_request(body: dict, summarize: Callable[[str], str | None] | None = None) -> dict:
-    """Dispatch a DSAR by type over the agent actions above. `summarize` narrates the
-    access export (optional LLM callback threaded from app.py)."""
+_FORGEABLE = ("verified", "confirm", "confirmed", "approved")
+
+
+def handle_request(body: dict, summarize: Callable[[str], str | None] | None = None, base_url: str = "") -> dict:
+    """The public /request route. Body-supplied `verified`/`confirm` are IGNORED: this only opens a PENDING
+    request (identical to /intake) — no data returned, nothing erased. The exception is PRIVACY_DEMO_MODE, the
+    one-click flow against the synthetic demo store only."""
+    body = {k: v for k, v in (body or {}).items() if k not in _FORGEABLE} if not DEMO_MODE else dict(body or {})
     rtype = (body.get("type") or "access").lower()
-    email = (body.get("email") or "").strip().lower()
-    verified = bool(body.get("verified"))
-    confirm = bool(body.get("confirm"))
+    email = _norm(body.get("email"))
     if not email:
         return {"status": "error", "error": "email required"}
-
-    if rtype in ("access", "know"):
-        return access(email, summarize=summarize)
-    if rtype in ("delete", "erase"):
-        return delete(email, confirm=(verified and confirm))
+    if rtype not in ("access", "know", "delete", "erase", "opt_out", "opt-out", "do_not_sell", "correct"):
+        return {"status": "error", "error": f"unknown request type '{rtype}'",
+                "supported": ["access", "delete", "opt_out", "correct"]}
+    if not DEMO_MODE:
+        return intake(email, "delete" if rtype == "erase" else rtype, base_url)
+    # ---- demo mode (synthetic data only; validate_demo_mode guarantees no real connector is live) ----
     if rtype in ("opt_out", "opt-out", "do_not_sell"):
         return opt_out(email)
-    if rtype == "correct":
-        return correct(email, body.get("corrections") or {}, verified=verified)
-    return {"status": "error", "error": f"unknown request type '{rtype}'",
-            "supported": ["access", "delete", "opt_out", "correct"]}
+    if rtype in ("access", "know"):
+        results = _fan_out(email, "find")
+        return {"status": "done", "demo": True, "type": "access", "email": email,
+                "record_count": sum(r.get("count", 0) for r in results if r.get("ok")),
+                "systems": results, "summary": summarize_counts(results)}
+    if rtype in ("delete", "erase"):
+        if not (body.get("verified") and body.get("confirm")):
+            would = _snapshot(email)
+            return {"status": "preview", "demo": True, "dry_run": True, "would_delete": sum(v or 0 for v in would.values()),
+                    "note": "DEMO DRY RUN — set verified=true and confirm=true to erase the synthetic subject."}
+        req_id = _new_dsar_id()
+        now = datetime.now(timezone.utc)
+        _persist({"id": req_id, "type": "delete", "email": email, "verified": True, "status": "verified",
+                  "source": "demo", "created_at": now.isoformat(),
+                  "due_at": (now + timedelta(days=SLA_DAYS)).isoformat()})
+        return {"demo": True, **execute_erasure(req_id, email, actor="demo")}
+    return {"status": "error", "error": "correct is not available in demo mode"}
 
 
 # --- dashboard data ----------------------------------------------------------
+def _mask(email: str) -> str:
+    local, _, dom = (email or "").partition("@")
+    return (local[:1] + "***@" + dom) if dom else "***"
+
+
+_CLOSED = ("fulfilled", "erased", "corrected")
+
+
 def activity() -> dict:
     reqs = _load_requests()
     now = datetime.now(timezone.utc)
-    open_reqs = [r for r in reqs if r.get("status") not in ("fulfilled",)]
+    open_reqs = [r for r in reqs if r.get("status") not in _CLOSED]
     overdue = 0
-    for r in reqs:
-        if r.get("status") not in ("fulfilled",) and r.get("due_at"):
+    for r in open_reqs:
+        if r.get("due_at"):
             try:
                 if datetime.fromisoformat(r["due_at"]) < now:
                     overdue += 1
@@ -795,10 +1189,13 @@ def activity() -> dict:
                 pass
     coverage = [{"system": s, "configured": cfg()} for s, (_f, _d, cfg) in CONNECTORS.items()]
     live = sum(1 for c in coverage if c["configured"])
+    # unauthenticated surface: expose neither token material nor full subject emails
+    shown = [{k: v for k, v in r.items() if k in ("id", "type", "status", "created_at", "due_at", "verified")}
+             | {"email": _mask(r.get("email", ""))} for r in reqs[:25]]
     return {"tenant": TENANT, "kpis": [
         {"label": "Open requests", "value": str(len(open_reqs)), "note": f"{len(reqs)} total"},
         {"label": "Overdue (SLA)", "value": str(overdue), "note": f"{SLA_DAYS}-day clock"},
         {"label": "Connectors live", "value": f"{live}/{len(coverage)}", "note": "personal-data systems"},
-        {"label": "Fulfilled", "value": str(sum(1 for r in reqs if r.get('status') == 'fulfilled')),
+        {"label": "Fulfilled", "value": str(sum(1 for r in reqs if r.get('status') in _CLOSED)),
          "note": "access · delete · opt-out"},
-    ], "coverage": coverage, "requests": reqs[:25]}
+    ], "coverage": coverage, "requests": shown}
