@@ -16,7 +16,14 @@
 # Env knobs:
 #   SCAP_PROFILE   xccdf profile id (default: CIS Level 1 Server)
 #   SCAP_IMAGE     base image to scan/scan-from (default: ubuntu:22.04)
-#   DOCKER         docker invocation (default: "sudo docker")
+#   DOCKER         docker invocation (default: "docker"; if your user cannot reach the docker socket,
+#                  set DOCKER="sudo docker" yourself - this script never adds sudo on its own)
+#   SCAN_MODE      "container" (default): evaluate the pristine SCAP_IMAGE in a throwaway container. This
+#                  scans the IMAGE, NOT the host. "host": run the host's own oscap directly (needs oscap
+#                  installed; no container, no sudo) - only this mode scans the machine it runs on.
+#   COMPLIANCE_ALLOW_UNPINNED_SSG  "true" to skip SSG tarball hash verification (default: fail closed)
+#
+# Exit codes: 0 = scan passed, 2 = valid scan with failing rules, anything else = error (oscap 1 = error).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,10 +33,13 @@ DS="$CONTENT_DIR/ssg-ubuntu2204-ds.xml"
 
 SCAP_PROFILE="${SCAP_PROFILE:-xccdf_org.ssgproject.content_profile_cis_level1_server}"
 SCAP_IMAGE="${SCAP_IMAGE:-ubuntu:22.04}"
-DOCKER="${DOCKER:-sudo docker}"
+DOCKER="${DOCKER:-docker}"
+SCAN_MODE="${SCAN_MODE:-container}"
 
 SSG_VERSION="0.1.81"
 SSG_URL="https://github.com/ComplianceAsCode/content/releases/download/v${SSG_VERSION}/scap-security-guide-${SSG_VERSION}.tar.gz"
+
+SSG_HASH_FILE="${SSG_HASH_FILE:-$HERE/env/ssg-${SSG_VERSION}.sha256}"
 
 mkdir -p "$CONTENT_DIR" "$RESULTS_DIR"
 
@@ -38,7 +48,27 @@ mkdir -p "$CONTENT_DIR" "$RESULTS_DIR"
 if [[ ! -f "$DS" ]]; then
   echo "[scan] SCAP content missing — fetching ComplianceAsCode SSG ${SSG_VERSION}..."
   TMP="$(mktemp -d)"
-  curl -sL -o "$TMP/ssg.tar.gz" "$SSG_URL"
+  curl -fsSL -o "$TMP/ssg.tar.gz" "$SSG_URL"
+  EXPECTED=""
+  [[ -f "$SSG_HASH_FILE" ]] && EXPECTED="$(grep -vE '^\s*#' "$SSG_HASH_FILE" | awk 'NF{print $1; exit}')"
+  if [[ -z "$EXPECTED" ]]; then
+    if [[ "${COMPLIANCE_ALLOW_UNPINNED_SSG:-}" == "true" ]]; then
+      echo "[scan] WARNING: no pinned SSG hash at $SSG_HASH_FILE; continuing UNVERIFIED (COMPLIANCE_ALLOW_UNPINNED_SSG=true)" >&2
+    else
+      echo "[scan] ERROR: no pinned sha256 for the SSG tarball ($SSG_HASH_FILE); refusing to use unverified content. Set COMPLIANCE_ALLOW_UNPINNED_SSG=true to override." >&2
+      rm -rf "$TMP"; exit 3
+    fi
+  else
+    ACTUAL="$(sha256sum "$TMP/ssg.tar.gz" | awk '{print $1}')"
+    if [[ "$ACTUAL" != "$EXPECTED" ]]; then
+      if [[ "${COMPLIANCE_ALLOW_UNPINNED_SSG:-}" == "true" ]]; then
+        echo "[scan] WARNING: SSG sha256 mismatch (expected $EXPECTED got $ACTUAL); continuing (COMPLIANCE_ALLOW_UNPINNED_SSG=true)" >&2
+      else
+        echo "[scan] ERROR: SSG tarball sha256 mismatch (expected $EXPECTED, got $ACTUAL); refusing to use it." >&2
+        rm -rf "$TMP"; exit 3
+      fi
+    fi
+  fi
   tar xzf "$TMP/ssg.tar.gz" -C "$TMP" "scap-security-guide-${SSG_VERSION}/ssg-ubuntu2204-ds.xml"
   cp "$TMP/scap-security-guide-${SSG_VERSION}/ssg-ubuntu2204-ds.xml" "$DS"
   rm -rf "$TMP"
@@ -46,27 +76,35 @@ fi
 echo "[scan] datastream: $DS ($(du -h "$DS" | cut -f1))"
 echo "[scan] profile:    $SCAP_PROFILE"
 
-# 2. Run the real oscap scan inside a disposable container. oscap installs from
-#    Ubuntu's repos (libopenscap8 -> /usr/bin/oscap). Exit code 2 = scan ran but
-#    some rules failed (expected, not an error for us); 1 = real failure.
+# 2. Run the real oscap scan. oscap exit codes: 0 = all rules pass, 2 = scan ran but some rules failed
+#    (a valid scan WITH findings), 1 = error, anything else = error.
 set +e
-$DOCKER run --rm \
-  -v "$CONTENT_DIR":/content:ro \
-  -v "$RESULTS_DIR":/results \
-  "$SCAP_IMAGE" bash -lc "
-    apt-get update -qq >/dev/null 2>&1 &&
-    apt-get install -y -qq libopenscap8 >/dev/null 2>&1 &&
-    oscap xccdf eval \
-      --profile '$SCAP_PROFILE' \
-      --results /results/scan-results.xml \
-      --report  /results/report.html \
-      /content/ssg-ubuntu2204-ds.xml
-  "
+rm -f "$RESULTS_DIR/scan-results.xml" "$RESULTS_DIR/report.html"
+if [[ "$SCAN_MODE" == "host" ]]; then
+  TARGET_JSON="{\"target\":\"host\",\"host_scanned\":true,\"hostname\":\"$(hostname)\"}"
+  oscap xccdf eval --profile "$SCAP_PROFILE" --results "$RESULTS_DIR/scan-results.xml" \
+    --report "$RESULTS_DIR/report.html" "$DS"
+else
+  TARGET_JSON="{\"target\":\"container-image\",\"image\":\"$SCAP_IMAGE\",\"host_scanned\":false}"
+  # Evaluates the pristine image in a disposable container - NOT the host this runs on.
+  $DOCKER run --rm \
+    -v "$CONTENT_DIR":/content:ro \
+    -v "$RESULTS_DIR":/results \
+    "$SCAP_IMAGE" bash -lc "
+      apt-get update -qq >/dev/null 2>&1 &&
+      apt-get install -y -qq libopenscap8 >/dev/null 2>&1 &&
+      oscap xccdf eval \
+        --profile '$SCAP_PROFILE' \
+        --results /results/scan-results.xml \
+        --report  /results/report.html \
+        /content/ssg-ubuntu2204-ds.xml
+    "
+fi
 rc=$?
 set -e
 
-if [[ "$rc" -gt 2 ]]; then
-  echo "[scan] oscap failed (exit $rc)" >&2
+if [[ "$rc" -ne 0 && "$rc" -ne 2 ]]; then
+  echo "[scan] oscap failed (exit $rc; 1 = error, only 0 and 2 are valid scans)" >&2
   exit "$rc"
 fi
 
@@ -75,6 +113,8 @@ if [[ ! -s "$RESULTS_DIR/scan-results.xml" ]]; then
   exit 1
 fi
 
+echo "$TARGET_JSON" > "$RESULTS_DIR/scan-target.json"
+
 # 3. Quick summary from the real results.
 echo "[scan] done (oscap exit $rc). Results:"
 for r in pass fail notapplicable; do
@@ -82,3 +122,5 @@ for r in pass fail notapplicable; do
   printf "         %-14s %s\n" "$r" "$c"
 done
 echo "[scan] wrote $RESULTS_DIR/scan-results.xml + report.html"
+echo "[scan] target: $TARGET_JSON"
+exit "$rc"

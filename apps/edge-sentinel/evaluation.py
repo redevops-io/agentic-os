@@ -22,6 +22,7 @@ class LabelledExample:
     input: str
     expected: tuple[str, ...]        # the gold labels (e.g. expected ATT&CK technique ids)
     split: str = "test"
+    rationale: str = ""              # why this label (source / reasoning), written independently of the mapper
 
 
 @dataclass(frozen=True)
@@ -55,12 +56,54 @@ def score(pairs: list[tuple[tuple[str, ...], tuple[str, ...]]]) -> Metrics:
 
 # A FROZEN labelled corpus for ATT&CK mapping (the gold split doesn't move; changing it is a deliberate act).
 ATTACK_CORPUS: tuple[LabelledExample, ...] = (
-    LabelledExample("crowdsecurity/ssh-bf", ("T1110", "T1110.001")),
-    LabelledExample("crowdsecurity/http-bf", ("T1110",)),
-    LabelledExample("crowdsecurity/port-scan", ("T1046",)),
-    LabelledExample("crowdsecurity/http-probing", ("T1595",)),
-    LabelledExample("crowdsecurity/rce-attempt", ("T1190", "T1059")),
-    LabelledExample("crowdsecurity/unknown-noise", ()),      # nothing should map → abstain
+    LabelledExample('crowdsecurity/ssh-bf', ('T1110', 'T1110.001'), rationale='SSH password guessing; ATT&CK T1110.001'),
+    LabelledExample('crowdsecurity/ssh-slow-bf', ('T1110', 'T1110.001'), rationale='low-and-slow SSH password guessing, same technique'),
+    LabelledExample('crowdsecurity/ssh-cve-2024-6387', ('T1190',), rationale='regreSSHion: unauthenticated RCE in public-facing sshd (CVE-2024-6387)'),
+    LabelledExample('crowdsecurity/http-bf', ('T1110',), rationale='generic HTTP credential brute force'),
+    LabelledExample('crowdsecurity/http-wordpress_bf', ('T1110',), rationale='WordPress login brute force'),
+    LabelledExample('crowdsecurity/http-wordpress_bf_xmlrpc', ('T1110',), rationale='xmlrpc multicall credential brute force'),
+    LabelledExample('crowdsecurity/http-wordpress-scan', ('T1595',), rationale='scanning for WordPress paths/plugins'),
+    LabelledExample('crowdsecurity/http-generic-403-bf', ('T1595',), rationale='many 403s = forced browsing / wordlist enumeration, not credential guessing'),
+    LabelledExample('crowdsecurity/http-crawl-non_statics', ('T1595',), rationale='aggressive crawling of dynamic endpoints (enumeration)'),
+    LabelledExample('crowdsecurity/http-bad-user-agent', ('T1595',), rationale='known scanner/tool user-agents (Nikto, sqlmap, ...)'),
+    LabelledExample('crowdsecurity/http-probing', ('T1595',), rationale='probing for non-existent paths'),
+    LabelledExample('crowdsecurity/http-sensitive-files', ('T1595',), rationale='probing for .env/.git/config files'),
+    LabelledExample('crowdsecurity/http-backdoors-attempts', ('T1595',), rationale='requests for known webshell paths: reconnaissance, not confirmed exploit'),
+    LabelledExample('crowdsecurity/http-admin-interface-probing', ('T1595',), rationale='probing for admin consoles'),
+    LabelledExample('crowdsecurity/http-open-proxy', ('T1595',), rationale='probing for open proxies'),
+    LabelledExample('crowdsecurity/http-sqli-probing', ('T1190', 'T1595'), rationale='SQLi probes against a web app: exploitation attempt + scanning'),
+    LabelledExample('crowdsecurity/http-xss-probing', ('T1190', 'T1595'), rationale='XSS probes against a web app'),
+    LabelledExample('crowdsecurity/http-path-traversal-probing', ('T1190', 'T1595'), rationale='traversal probes against a web app'),
+    LabelledExample('crowdsecurity/http-cve-2021-41773', ('T1190',), rationale='Apache 2.4.49 path traversal/RCE, public-facing app (CVE-2021-41773)'),
+    LabelledExample('crowdsecurity/http-cve-2021-42013', ('T1190',), rationale='Apache 2.4.50 follow-up exploit'),
+    LabelledExample('crowdsecurity/http-cve-2022-26134', ('T1190', 'T1059'), rationale='Confluence OGNL injection -> command execution'),
+    LabelledExample('crowdsecurity/http-cve-2022-22965', ('T1190', 'T1059'), rationale='Spring4Shell -> RCE'),
+    LabelledExample('crowdsecurity/apache_log4j2_cve-2021-44228', ('T1190', 'T1059'), rationale='Log4Shell JNDI -> RCE'),
+    LabelledExample('crowdsecurity/grafana-cve-2021-43798', ('T1190',), rationale='Grafana path traversal in public app'),
+    LabelledExample('crowdsecurity/jira_cve-2021-26086', ('T1190',), rationale='Jira file read in public app'),
+    LabelledExample('crowdsecurity/f5-big-ip-cve-2020-5902', ('T1190',), rationale='F5 TMUI exploit on exposed management'),
+    LabelledExample('crowdsecurity/http-resource-abuse', ('T1499',), rationale='excess requests to expensive endpoints = endpoint DoS'),
+    LabelledExample('crowdsecurity/http-dos-swithcing-ua', ('T1499',), rationale='HTTP flood rotating UAs'),
+    LabelledExample('crowdsecurity/nginx-req-limit-exceeded', ('T1499',), rationale='request-rate limit exceeded'),
+    LabelledExample('crowdsecurity/port-scan', ('T1046',), rationale='TCP port sweep = network service discovery'),
+    LabelledExample('crowdsecurity/iptables-scan-multi_ports', ('T1046',), rationale='multi-port scan seen by firewall'),
+    LabelledExample('crowdsecurity/smb-bf', ('T1110',), rationale='SMB credential brute force'),
+    LabelledExample('crowdsecurity/mysql-bf', ('T1110',), rationale='MySQL credential brute force'),
+    LabelledExample('crowdsecurity/mssql-bf', ('T1110',), rationale='MSSQL credential brute force'),
+    LabelledExample('crowdsecurity/telnet-bf', ('T1110',), rationale='telnet credential brute force'),
+    LabelledExample('crowdsecurity/proftpd-bf', ('T1110',), rationale='FTP credential brute force'),
+    LabelledExample('crowdsecurity/pureftpd-bf', ('T1110',), rationale='FTP credential brute force'),
+    LabelledExample('acme/vpn-password-spray-bruteforce', ('T1110',), rationale='custom: brute force wording'),
+    LabelledExample('acme/ssh-brute', ('T1110',), rationale='custom: brute force wording'),
+    LabelledExample('acme/http-cve-2099-12345', ('T1190',), rationale='custom: unknown CVE on web service = exploitation of public-facing app'),
+    LabelledExample('acme/api-sql-injection', ('T1190',), rationale='custom: injection against a web app'),
+    LabelledExample('acme/web-rce', ('T1190', 'T1059'), rationale='custom: remote code execution via public app'),
+    LabelledExample('acme/nmap-fingerprint', ('T1046',), rationale='custom: nmap = service discovery'),
+    LabelledExample('acme/udp-flood', ('T1499',), rationale='custom: flooding'),
+    LabelledExample('crowdsecurity/postfix-spam', (), rationale='mail spam is not an ATT&CK intrusion technique here'),
+    LabelledExample('crowdsecurity/ssh-refused-conn', (), rationale='connection noise, no technique'),
+    LabelledExample('crowdsecurity/unknown-noise', (), rationale='nothing should map'),
+    LabelledExample('crowdsecurity/sshd-source-config', (), rationale="'source' must not trigger rce/force-style substrings"),
 )
 
 
@@ -74,10 +117,10 @@ def evaluate_attack_mapping(corpus=ATTACK_CORPUS) -> Metrics:
 
 
 #: The frozen baseline result for ATT&CK mapping — a regression tripwire, recorded from the ACTUAL mapper
-#: (not an aspiration). It honestly shows recall 1.0 but precision 0.875: the mapper over-tags
-#: `port-scan` with T1595 (Active Scanning) on top of T1046 — a real, minor finding the eval surfaces.
+#: (not an aspiration). Labels were written by hand with rationale, independently of the mapper; the hub-name
+#: entries are explicit table rows and the `acme/*` entries exercise the token fallback.
 #: Recompute deliberately when the mapper changes.
-ATTACK_BASELINE = {"n": 6, "precision": 0.875, "recall": 1.0, "accuracy": 0.833, "abstention_rate": 0.167}
+ATTACK_BASELINE = {"n": 48, "precision": 1.0, "recall": 1.0, "accuracy": 1.0, "abstention_rate": 0.083}
 
 
 # ──────────────────────────── bounded Learn (second) ────────────────────────────

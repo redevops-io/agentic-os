@@ -173,3 +173,19 @@ def test_mission_runtime_httpclient_drives_operator(client):
     answer = oc.invoke("control-tower", "bi.ask",
                        {"question": "where are my best leads coming from?"}, idempotency_key="m-2")
     assert answer["status"] == "done" and answer["matched_report"] == "lead_source"
+
+
+def test_unmatched_question_asks_for_clarification_not_a_different_answer(client):
+    r = client.post("/invoke", json={"capability": "bi.ask",
+                                     "inputs": {"question": "what is the weather on mars"}}).json()["result"]
+    assert r["matched_report"] is None and r["rows"] == []
+    assert r["answer"].startswith("I can answer these:") and "margin_by_service" in r["answer"]
+    assert set(r["available_questions"]) == {t["key"] for t in core.QUESTION_TEMPLATES}
+    assert _FakeMetabase.dataset_posts == []          # no query ran
+
+
+def test_answers_and_subtitle_label_data_as_synthetic(client):
+    assert "SYNTHETIC" in core.SUBTITLE
+    r = client.post("/invoke", json={"capability": "bi.ask",
+                                     "inputs": {"question": "which service line makes the most margin?"}}).json()["result"]
+    assert "synthetic" in r["data_note"]

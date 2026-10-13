@@ -75,3 +75,21 @@ def test_learn_only_alters_strategy_never_gates():
     assert not hasattr(evaluation, "learn_authorization")
     assert not hasattr(evaluation, "learn_gate")
     assert not hasattr(evaluation, "approve")
+
+
+def test_corpus_is_large_and_each_scenario_still_maps_as_labelled():
+    """Per-scenario regression guard: fails naming the scenario if any labelled mapping drifts."""
+    assert len(ATTACK_CORPUS) >= 40 and all(ex.rationale for ex in ATTACK_CORPUS)
+    attack = importlib.import_module("edge-sentinel.attack")
+    bad = {ex.input: (tuple(t for t, _ in attack.map_scenario_to_techniques(ex.input)), ex.expected)
+           for ex in ATTACK_CORPUS
+           if set(t for t, _ in attack.map_scenario_to_techniques(ex.input)) != set(ex.expected)}
+    assert bad == {}
+
+
+def test_previously_missed_hub_scenarios_now_map():
+    attack = importlib.import_module("edge-sentinel.attack")
+    for name in ("ssh-slow-bf", "http-cve-2021-41773", "ssh-cve-2024-6387", "http-generic-403-bf",
+                 "http-resource-abuse", "http-crawl-non_statics", "http-bad-user-agent"):
+        assert attack.map_scenario_to_techniques(f"crowdsecurity/{name}"), name
+    assert "T1190" in [t for t, _ in attack.map_scenario_to_techniques("crowdsecurity/http-sqli-probing")]
