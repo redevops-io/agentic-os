@@ -99,7 +99,7 @@ def _retrieve_ctx(query: str, role: str, k: int = 4):
                                                     cross_app_grants=tuple(visible_apps(role))))
             hits = sorted(((s.source_id, round(float(it.get("score", 0.0)), 2))
                            for it, s in zip(res.results, res.sources)), key=lambda x: -x[1])[:k]
-            return (hits or [(n, 0.0) for n in visible_apps(role)[:k]]), res
+            return [(n, sc) for n, sc in hits if sc > 0], res
         except Exception:  # noqa: BLE001
             pass
     # fallback: local token-overlap over the RBAC-visible apps (kernel not available)
@@ -113,16 +113,19 @@ def _retrieve_ctx(query: str, role: str, k: int = 4):
         if s > 0:
             scored.append((name, round(s, 2)))
     scored.sort(key=lambda x: -x[1])
-    return (scored[:k] or [(n, 0.0) for n in visible_apps(role)[:k]]), None
+    return scored[:k], None
 
 
 def retrieve(query: str, role: str, k: int = 4) -> list[tuple[str, float]]:
     """App recommendations for a question, RBAC-scoped — grounded through app.context (the Context Runtime)
-    with a local fallback. Returns [(app_name, score)]."""
+    with a local fallback. Returns [(app_name, score)] with score > 0 only (empty when nothing matches)."""
     return _retrieve_ctx(query, role, k)[0]
 
 
 def walkthrough(name: str) -> dict:
+    if name not in APP_DOCS:
+        return {"status": "error", "error": "unknown_app", "app": name, "http_status": 404,
+                "message": f"No app named {name!r}.", "known_apps": sorted(APP_DOCS)}
     d = APP_DOCS[name]
     approvals = [a for a in d["actions"] if "approval" in a]
     steps = [
@@ -144,7 +147,13 @@ def answer(question: str, role: str, llm: Callable[[str], str | None] | None = N
     retrieved summary of the top app.
     """
     hits, ctx = _retrieve_ctx(question, role, k=4)
+    hits = [(n, sc) for n, sc in hits if sc > 0]          # never cite an app with a zero relevance score
     cited = [n for n, _ in hits]
+    # `role` is asserted by the client (no authentication here). Unknown roles get the least-privilege grant.
+    meta = {"role_source": "client_asserted", "effective_role": role if role in ROLES else "viewer"}
+    if not cited:
+        return {"question": question, "role": role, **meta, "answer": "No matching document found for that "
+                "question among the apps visible to this role.", "cited": [], "citations": [], "no_match": True}
     context = "\n".join(f"- {doc_text(n)}" for n in cited)
     prompt = (f"You are the onboarding guide for the redevops agentic-apps stack. Answer the user's "
               f"question using ONLY the app cards below; be concrete and point them to the right app + "
@@ -155,7 +164,7 @@ def answer(question: str, role: str, llm: Callable[[str], str | None] | None = N
         d = APP_DOCS[top]
         text = (f"For that, use **{top}** ({d['g']}, core {d['core']}). {d['what']} "
                 f"Open it at {DEMO}/m/{top}. Related: {', '.join(cited[1:3])}.")
-    out = {"question": question, "role": role, "answer": text, "cited": cited,
+    out = {"question": question, "role": role, **meta, "answer": text, "cited": cited,
            "citations": [{"app": n, "dashboard": f"{DEMO}/m/{n}"} for n in cited]}
     if ctx is not None:                    # N6: the evidence snapshot + a reproducible retrieval receipt
         out["context_version"] = ctx.context_version

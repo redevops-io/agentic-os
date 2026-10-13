@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
+import importlib
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -143,3 +145,27 @@ def test_n6_unknown_role_is_least_privilege_not_admin():
     # the retrieval path honours it too: an unknown role never surfaces a privileged app card
     hits = [n for n, _ in core.retrieve("billing dunning edge sentinel block ip", "wizard", k=8)]
     assert all(n in core.ROLES["viewer"] for n in hits)
+
+
+def test_no_match_answers_honestly_and_cites_nothing():
+    a = core.answer("zzzz qqqq refundish", "viewer")
+    assert a["cited"] == [] and a["citations"] == [] and a["no_match"] is True
+    assert "No matching document" in a["answer"] and "control-tower" not in a["answer"]
+    a = core.answer("zzzz qqqq", "admin")
+    assert a["cited"] == []
+
+
+def test_citations_only_positive_scores_and_role_metadata():
+    assert all(sc > 0 for _, sc in core.retrieve("billing dunning invoice", "finance", k=8))
+    a = core.answer("billing", "finance")
+    assert a["role_source"] == "client_asserted" and a["effective_role"] == "finance"
+    b = core.answer("billing", "wizard")
+    assert b["role_source"] == "client_asserted" and b["effective_role"] == "viewer"
+
+
+def test_walkthrough_unknown_app_is_clean_error_and_404():
+    res = core.walkthrough("nope")
+    assert res["status"] == "error" and res["error"] == "unknown_app" and res["http_status"] == 404
+    app_mod = importlib.import_module("guide.app")
+    r = TestClient(app_mod.app).get("/api/walkthrough", params={"app": "nope", "role": "admin"})
+    assert r.status_code == 404 and r.json()["error"] == "unknown_app"
