@@ -177,7 +177,7 @@ falls back up the tiers on failure — keeping >90% of work on local hardware.
 | [`agentic_os/permissions.py`](agentic_os/permissions.py) | fine-grained access control (row scope + column mask) |
 | [`agentic_os/cli.py`](agentic_os/cli.py) | `agentic-os` CLI |
 | [`modules.yaml`](modules.yaml) | the module catalog |
-| [`docs/`](docs/) | architecture + operations |
+| [`docs/`](docs/) | architecture + operations; [platform secrets](docs/SECRETS.md) (auto-generated, `agentic-os secrets init`) |
 
 ## License
 

@@ -14,7 +14,8 @@ any key whose lowercased name starts with ``_approval`` (or ``__approval``), plu
 ``_node`` (top level only; nested dicts are hashed as-is). An approval for refund INV-1 $10 therefore cannot
 be replayed for INV-2 or $999.
 
-Secret: env ``AGENTIC_OS_APPROVAL_SECRET`` read at call time. Unset/empty => mint returns None and verify
+Secret: env ``AGENTIC_OS_APPROVAL_SECRET`` read at call time, else (read-only) the platform secrets file
+written by ``agentic-os secrets init`` (docs/SECRETS.md). Unset/empty => mint returns None and verify
 always returns None (fail closed: approved execution over HTTP is unavailable, never open).
 """
 from __future__ import annotations
@@ -32,8 +33,17 @@ ENV_SECRET = "AGENTIC_OS_APPROVAL_SECRET"
 _META_KEYS = {"_mission", "_goal", "_node"}
 
 
+def _file_secret() -> str:
+    """Read-only fallback: the platform secrets file (docs/SECRETS.md). Never generates, never raises."""
+    try:
+        from agentic_os.secrets.bootstrap import read_secrets_file  # noqa: PLC0415
+        return read_secrets_file().get(ENV_SECRET, "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _secret_bytes(secret: "bytes | str | None" = None) -> bytes:
-    s = os.environ.get(ENV_SECRET, "") if secret is None else secret
+    s = (os.environ.get(ENV_SECRET, "") or _file_secret()) if secret is None else secret
     return s.encode() if isinstance(s, str) else (s or b"")
 
 

@@ -32,10 +32,14 @@ git clone https://github.com/redevops-io/agentic-os.git
 cd agentic-os/deploy/apps
 
 cp .env.example .env
-# edit .env: set TWENTY_APP_SECRET and POSTIZ_JWT_SECRET (openssl rand -base64 32),
+# edit .env: set POSTIZ_JWT_SECRET (openssl rand -base64 32),
 # point REDEVOPS_LLM_BASE_URL at your model, set TENANT.
 
-docker compose up -d                 # public images — no login needed
+# Platform secrets (TWENTY_APP_SECRET, AGENTIC_OS_APPROVAL_SECRET, OUTREACH_BASIC_AUTH) are generated
+# for you, idempotently, into ~/.config/redevops/secrets.env (Windows: .\bootstrap-secrets.ps1):
+./bootstrap-secrets.sh               # or: make secrets
+docker compose --env-file .env --env-file ~/.config/redevops/secrets.env up -d   # public images — no login needed
+# (or simply: make up).  See docs/SECRETS.md.
 
 # watch it come up (first boot pulls images + runs DB migrations)
 docker compose ps

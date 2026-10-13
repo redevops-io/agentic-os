@@ -15,7 +15,7 @@ capability, mission_id, node_id, `inputs_sha256`, the marker, `exp`, random `non
 `_approval*`, `_mission`, `_goal`, `_node` (top level), so an approval for INV-1 $10 cannot be reused for
 INV-2 or $999. Comparison is constant-time.
 
-**Config.** `AGENTIC_OS_APPROVAL_SECRET` (read at call time) must be set to the same value on the runtime
+**Config.** (Auto-generated and stored per platform: see [SECRETS.md](SECRETS.md).) `AGENTIC_OS_APPROVAL_SECRET` (read at call time) must be set to the same value on the runtime
 **and** on every operator container. Unset/empty: minting returns None, verification always fails; approved
 actions stay staged (fail closed) and the client logs one WARNING. TTL defaults to 300 s.
 
