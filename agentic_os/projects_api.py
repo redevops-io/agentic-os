@@ -1100,6 +1100,8 @@ def main() -> None:
     optionally under ``$PROJECTS_BASE_PATH``."""
     import os
     import uvicorn
+    from agentic_os.secrets.bootstrap import ensure_secrets
+    ensure_secrets()  # non-fatal; generates missing platform secrets once (docs/SECRETS.md)
     host = os.environ.get("PROJECTS_HOST", "127.0.0.1")
     port = int(os.environ.get("PROJECTS_PORT", "8787"))
     base = os.environ.get("PROJECTS_BASE_PATH", "")
