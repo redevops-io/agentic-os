@@ -537,6 +537,16 @@ def ask(question: str, pick: Callable[[str], str | None] | None = None,
 def refresh() -> dict:
     """Re-run the dashboard queries (bust the cache) and report fresh KPIs."""
     data = fetch_activity(force=True)
+    if not data.get("connected") or data.get("error"):
+        # Honest degraded result: never report "done" with $0 KPIs / "0 months refreshed" when the core
+        # could not be queried.
+        return {
+            "status": "error",
+            "action": "refresh",
+            "error": f"Metabase unavailable — nothing was refreshed ({data.get('error') or 'not connected'})",
+            "connected": bool(data.get("connected")),
+            "approval": "not required — read-only analytics (no destructive action)",
+        }
     return {
         "status": "done",
         "action": "refresh",

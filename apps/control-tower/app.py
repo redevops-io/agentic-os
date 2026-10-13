@@ -473,87 +473,7 @@ ASK_SUGGESTIONS = [
 ]
 
 
-# --- Context Runtime: decisions over a synthetic question stream (sample, not live traffic) ----------
-import asyncio as _cr_asyncio
-import json as _cr_json
-from datetime import datetime as _cr_dt, timezone as _cr_tz
-from fastapi.responses import StreamingResponse as _CRStreamingResponse
-
-try:
-    from context_runtime.integrations.control_tower import (  # type: ignore
-        ControlTowerTenant as _CRTenant, control_tower_bucket as _cr_bucket,
-    )
-    _CR = _CRTenant(epsilon=0.15)
-except Exception:  # noqa: BLE001
-    _CR = None
-
-    def _cr_bucket(_t):  # type: ignore
-        return "general"
-
-_CR_SYNTH = [
-    "What's AUM this month?",
-    'Net flows by segment',
-    'Accounts needing review',
-    'Advisory-fee revenue this quarter',
-]
-
-
-def _cr_decide(text: str) -> dict:
-    try:
-        bucket = _cr_bucket(text)
-    except Exception:  # noqa: BLE001
-        bucket = "general"
-    if _CR is not None:
-        try:
-            try:
-                arm = _CR.choose(text, bucket=bucket)
-            except TypeError:
-                arm = _CR.choose(text)
-            return {"bucket": str(bucket), "bundle": getattr(arm, "key", str(arm))}
-        except Exception:  # noqa: BLE001
-            pass
-    return {"bucket": str(bucket), "bundle": "(context runtime offline)"}
-
-_CR_LIVE_FEED = """
-<div id="cr-live" style="position:fixed;right:16px;bottom:16px;width:340px;max-height:58vh;overflow:auto;background:#17171a;border:1px solid #2f2f33;border-radius:12px;padding:12px;font:13px/1.45 Roboto,system-ui,sans-serif;color:#e4e2e6;z-index:9999;box-shadow:0 10px 34px rgba(0,0,0,.45)">
-  <div style="color:#4fd1c5;font-weight:600;margin-bottom:8px">Context Runtime — decisions (sample stream)</div>
-  <div id="cr-feed" style="color:#9b99a1">connecting…</div>
-</div>
-<script>
-(function(){
-  var feed=document.getElementById('cr-feed');var first=true;
-  try{
-    var es=new EventSource('api/stream');
-    es.onmessage=function(e){
-      if(first){feed.innerHTML='';first=false;}
-      var d=JSON.parse(e.data);var row=document.createElement('div');
-      row.style.cssText='border-top:1px solid #2f2f33;padding:7px 0';
-      row.innerHTML='<div style="color:#9b99a1;font-size:11px">'+d.ts+' \u00b7 <b style="color:#c7c5ca">'+d.bucket+'</b></div>'+'<div style="margin:2px 0">'+d.input+'</div>'+'<div style="color:#4fd1c5">\u2192 pulled context: <b>'+d.bundle+'</b></div>';
-      feed.insertBefore(row,feed.firstChild);
-      while(feed.children.length>8) feed.removeChild(feed.lastChild);
-    };
-    es.onerror=function(){ if(first){feed.textContent='(live stream unavailable)';} };
-  }catch(err){feed.textContent='(live stream unavailable)';}
-})();
-</script>
-"""
-
-
-@app.get("/api/stream")
-async def cr_stream() -> _CRStreamingResponse:
-    async def _gen():
-        i = 0
-        while True:
-            text = _CR_SYNTH[i % len(_CR_SYNTH)]
-            i += 1
-            d = _cr_decide(text)
-            evt = {"input": text, "ts": _cr_dt.now(_cr_tz.utc).strftime("%H:%M:%S"), **d}
-            yield f"data: {_cr_json.dumps(evt)}\n\n"
-            await _cr_asyncio.sleep(2.5)
-    return _CRStreamingResponse(_gen(), media_type="text/event-stream")
-
-
-_CR_BANNER = """<div style="position:sticky;top:0;z-index:9998;background:linear-gradient(90deg,#10201d,#17171a);border-bottom:1px solid #2f2f33;color:#e4e2e6;font:13px/1.4 Roboto,system-ui,sans-serif;padding:9px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">CONTEXT RUNTIME</span><span style="background:#2f2f33;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">DEMO</span><span style="color:#9b99a1">This demo app is plugged into <b style="color:#e4e2e6">Context Runtime</b>, which optimizes which queries to run — answer correctness vs query cost (5.33 vs 1.64). <a href="https://github.com/redevops-io/context-runtime" style="color:#4fd1c5;text-decoration:none">learn more \u2192</a></span></div>"""
+_CR_BANNER = """<div style="position:sticky;top:0;z-index:9998;background:linear-gradient(90deg,#10201d,#17171a);border-bottom:1px solid #2f2f33;color:#e4e2e6;font:13px/1.4 Roboto,system-ui,sans-serif;padding:9px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">CONTEXT RUNTIME</span><span style="background:#2f2f33;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">DEMO</span><span style="color:#9b99a1">This demo app is plugged into <b style="color:#e4e2e6">Context Runtime</b>, which optimizes which queries to run — answer correctness vs query cost. <a href="https://github.com/redevops-io/context-runtime" style="color:#4fd1c5;text-decoration:none">learn more \u2192</a></span></div>"""
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -561,10 +481,9 @@ def index() -> str:
     import re as _cr_re
     page = render(fetch_activity())
     page = _cr_re.sub(r"(<body[^>]*>)", lambda m: m.group(1) + _CR_BANNER, page, count=1)
-    if "_CR_BANNER" not in page and "cr-live" not in page:  # no <body> matched → prepend
+    if "_CR_BANNER" not in page:  # no <body> matched → prepend
         page = _CR_BANNER + page
-    return (page.replace("</body>", _CR_LIVE_FEED + "</body>")
-            if "</body>" in page else page + _CR_LIVE_FEED)
+    return page
 
 
 @app.post("/agent/run")
@@ -578,7 +497,8 @@ async def agent_run(request: Request) -> JSONResponse:
     if action == "ask":
         return JSONResponse(_ask((body or {}).get("question", "")))
     if action == "refresh":
-        return JSONResponse(_refresh())
+        out = _refresh()
+        return JSONResponse(out, status_code=503 if out.get("status") == "error" else 200)
     return JSONResponse(
         {"status": "error", "error": f"unknown action '{action}'",
          "supported": ["ask", "refresh"]},

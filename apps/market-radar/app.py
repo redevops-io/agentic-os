@@ -22,8 +22,8 @@ Config (env; seed.py writes agents/market-radar/.env automatically):
                 sent as the `x-api-key` header
   CD_FRONT_URL  changedetection UI link for the "Open in changedetection" button
   PORT          uvicorn port, default 8204
-  ANTHROPIC_API_KEY  OPTIONAL — if set, the "brief" action adds an LLM summary;
-                     the endpoint works fully without it.
+  REDEVOPS_LLM_BASE_URL  OPTIONAL in-boundary model; if set (and actually in-boundary) the "brief" action
+                     adds an LLM summary via the governed router. Works fully without it.
 """
 from __future__ import annotations
 
@@ -42,20 +42,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-import httpx
-try:
-    from context_runtime.adapters.model_openai import OpenAICompatibleModel
-    from context_runtime.types import ModelRequest
-except Exception:  # pragma: no cover - context-runtime optional
-    OpenAICompatibleModel = None
-    ModelRequest = None
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-
-try:
-    _BLURB_MODEL = OpenAICompatibleModel.from_env() if OpenAICompatibleModel else None
-except Exception:
-    _BLURB_MODEL = None
 
 # --- config ------------------------------------------------------------------
 # The changedetection REST client, KPIs and agentic actions live in core.py (pure — no
@@ -335,58 +323,41 @@ def render(data: dict) -> str:
 </html>"""
 
 
-# --- optional LLM reasoning blurb (guarded: works without any API key) -------
+# --- governed LLM (N7): every model call routes through agentic_os.app.llm.governed_text ----------------
+# Fail-closed: with no in-boundary endpoint (REDEVOPS_LLM_BASE_URL unset / not actually in-boundary) or a
+# router refusal governed_text returns None and the caller degrades to deterministic output. There is no
+# direct-HTTP and no external-provider fallback.
 def _llm_blurb(prompt: str) -> str | None:
-    """Return a short summary from Claude, or None if no key / any error.
-
-    Optional by design — the "brief" action is fully functional from the real watch
-    data alone; the LLM only adds prose. Absence of ANTHROPIC_API_KEY must never
-    break the endpoint.
-    """
-    if _BLURB_MODEL is None:
-        base = os.environ.get("REDEVOPS_LLM_BASE_URL")
-        if base:
-            try:
-                r = httpx.post(
-                    base.rstrip("/") + "/chat/completions",
-                    json={"model": os.environ.get("REDEVOPS_LLM_MODEL", "DeepSeek-V4-Flash"),
-                          "messages": [{"role": "user", "content": prompt}],
-                          "max_tokens": 220, "temperature": 0.3},
-                    timeout=90.0,   # DeepSeek runs on CPU (~15 tok/s) — be patient
-                )
-                if r.status_code == 200:
-                    txt = (r.json().get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
-                    if txt:
-                        return txt
-            except Exception:
-                pass
-        return None
+    """A short reasoning blurb from the GOVERNED in-boundary model, or None (deterministic output stands)."""
     try:
-        res = _BLURB_MODEL.complete(
-            ModelRequest(
-                messages=({"role": "user", "content": prompt},),
-                max_tokens=220,
-            )
-        )
-        return res.text
-    except Exception:
-        base = os.environ.get("REDEVOPS_LLM_BASE_URL")
-        if base:
-            try:
-                r = httpx.post(
-                    base.rstrip("/") + "/chat/completions",
-                    json={"model": os.environ.get("REDEVOPS_LLM_MODEL", "DeepSeek-V4-Flash"),
-                          "messages": [{"role": "user", "content": prompt}],
-                          "max_tokens": 220, "temperature": 0.3},
-                    timeout=90.0,   # DeepSeek runs on CPU (~15 tok/s) — be patient
-                )
-                if r.status_code == 200:
-                    txt = (r.json().get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
-                    if txt:
-                        return txt
-            except Exception:
-                pass
+        from agentic_os.app.llm import governed_text
+        from agentic_os.governance.classification import DataClassification
+    except Exception:  # noqa: BLE001
         return None
+    return governed_text(prompt, classifications=(DataClassification.CUSTOMER_CONFIDENTIAL,),
+                         max_tokens=220, temperature=0.3)
+
+
+class _GovernedConsoleModel:
+    """The conversational console's model object: every ``complete`` goes through ``governed_text`` with an
+    explicit classification. Raises when there is no compliant route so the console drops to its
+    deterministic keyword/primer fallbacks (it never reaches a model on its own)."""
+
+    def complete(self, req):
+        from types import SimpleNamespace
+        from agentic_os.app.llm import governed_text
+        from agentic_os.governance.classification import DataClassification
+        prompt = "\n\n".join(str(m.get("content", "")) for m in req.messages)
+        txt = governed_text(prompt, classifications=(DataClassification.CUSTOMER_CONFIDENTIAL,), system=req.system or "",
+                            max_tokens=int(req.max_tokens or 600), temperature=0.2)
+        if not txt:
+            raise RuntimeError("no compliant in-boundary model route")
+        return SimpleNamespace(text=txt, model="in-boundary", tier="in_boundary", prompt_tokens=0,
+                               completion_tokens=0, est_cost_usd=0.0, cache_hit=False, models_used=())
+
+    def info(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(name="governed-in-boundary")
 
 
 # --- agentic actions (thin wrappers over core; core stays context-runtime-free) ---
@@ -472,6 +443,7 @@ if _AgentConsole is not None:
         suggestions=["What changed this week?", "Search the web for changedetection alternatives",
                      "How do I track just the price?", "What is a filter?"],
         subtitle="Ask what moved, search the web for competitor signals, or add a new monitor.",
+        model=_GovernedConsoleModel(),
         allow_side_effects=["add_watch"],  # adding a watch is safe/reversible → runs from chat
     )
 else:
@@ -513,87 +485,7 @@ def activity() -> JSONResponse:
     return JSONResponse(fetch_activity())
 
 
-# --- Context Runtime: decisions over a synthetic question stream (sample, not live traffic) ----------
-import asyncio as _cr_asyncio
-import json as _cr_json
-from datetime import datetime as _cr_dt, timezone as _cr_tz
-from fastapi.responses import StreamingResponse as _CRStreamingResponse
-
-try:
-    from context_runtime.integrations.market_radar import (  # type: ignore
-        MarketRadarTenant as _CRTenant, market_radar_bucket as _cr_bucket,
-    )
-    _CR = _CRTenant(epsilon=0.15)
-except Exception:  # noqa: BLE001
-    _CR = None
-
-    def _cr_bucket(_t):  # type: ignore
-        return "general"
-
-_CR_SYNTH = [
-    'Did a competitor change pricing?',
-    'Any new product release?',
-    'Is a competitor hiring aggressively?',
-    'Breaking market news?',
-]
-
-
-def _cr_decide(text: str) -> dict:
-    try:
-        bucket = _cr_bucket(text)
-    except Exception:  # noqa: BLE001
-        bucket = "general"
-    if _CR is not None:
-        try:
-            try:
-                arm = _CR.choose(text, bucket=bucket)
-            except TypeError:
-                arm = _CR.choose(text)
-            return {"bucket": str(bucket), "bundle": getattr(arm, "key", str(arm))}
-        except Exception:  # noqa: BLE001
-            pass
-    return {"bucket": str(bucket), "bundle": "(context runtime offline)"}
-
-_CR_LIVE_FEED = """
-<div id="cr-live" style="position:fixed;right:16px;bottom:16px;width:340px;max-height:58vh;overflow:auto;background:#17171a;border:1px solid #2f2f33;border-radius:12px;padding:12px;font:13px/1.45 Roboto,system-ui,sans-serif;color:#e4e2e6;z-index:9999;box-shadow:0 10px 34px rgba(0,0,0,.45)">
-  <div style="color:#4fd1c5;font-weight:600;margin-bottom:8px">Context Runtime — decisions (sample stream)</div>
-  <div id="cr-feed" style="color:#9b99a1">connecting…</div>
-</div>
-<script>
-(function(){
-  var feed=document.getElementById('cr-feed');var first=true;
-  try{
-    var es=new EventSource('api/stream');
-    es.onmessage=function(e){
-      if(first){feed.innerHTML='';first=false;}
-      var d=JSON.parse(e.data);var row=document.createElement('div');
-      row.style.cssText='border-top:1px solid #2f2f33;padding:7px 0';
-      row.innerHTML='<div style="color:#9b99a1;font-size:11px">'+d.ts+' \u00b7 <b style="color:#c7c5ca">'+d.bucket+'</b></div>'+'<div style="margin:2px 0">'+d.input+'</div>'+'<div style="color:#4fd1c5">\u2192 pulled context: <b>'+d.bundle+'</b></div>';
-      feed.insertBefore(row,feed.firstChild);
-      while(feed.children.length>8) feed.removeChild(feed.lastChild);
-    };
-    es.onerror=function(){ if(first){feed.textContent='(live stream unavailable)';} };
-  }catch(err){feed.textContent='(live stream unavailable)';}
-})();
-</script>
-"""
-
-
-@app.get("/api/stream")
-async def cr_stream() -> _CRStreamingResponse:
-    async def _gen():
-        i = 0
-        while True:
-            text = _CR_SYNTH[i % len(_CR_SYNTH)]
-            i += 1
-            d = _cr_decide(text)
-            evt = {"input": text, "ts": _cr_dt.now(_cr_tz.utc).strftime("%H:%M:%S"), **d}
-            yield f"data: {_cr_json.dumps(evt)}\n\n"
-            await _cr_asyncio.sleep(2.5)
-    return _CRStreamingResponse(_gen(), media_type="text/event-stream")
-
-
-_CR_BANNER = """<div style="position:sticky;top:0;z-index:9998;background:linear-gradient(90deg,#10201d,#17171a);border-bottom:1px solid #2f2f33;color:#e4e2e6;font:13px/1.4 Roboto,system-ui,sans-serif;padding:9px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">CONTEXT RUNTIME</span><span style="background:#2f2f33;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">DEMO</span><span style="color:#9b99a1">This demo app is plugged into <b style="color:#e4e2e6">Context Runtime</b>, which optimizes which competitor watches to sweep — catch rate vs scrape cost (3.61 vs 0.40). <a href="https://github.com/redevops-io/context-runtime" style="color:#4fd1c5;text-decoration:none">learn more \u2192</a></span></div>"""
+_CR_BANNER = """<div style="position:sticky;top:0;z-index:9998;background:linear-gradient(90deg,#10201d,#17171a);border-bottom:1px solid #2f2f33;color:#e4e2e6;font:13px/1.4 Roboto,system-ui,sans-serif;padding:9px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">CONTEXT RUNTIME</span><span style="background:#2f2f33;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">DEMO</span><span style="color:#9b99a1">This demo app is plugged into <b style="color:#e4e2e6">Context Runtime</b>, which optimizes which competitor watches to sweep — catch rate vs scrape cost. <a href="https://github.com/redevops-io/context-runtime" style="color:#4fd1c5;text-decoration:none">learn more \u2192</a></span></div>"""
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -604,10 +496,9 @@ def index() -> str:
         panel = "<section class='shell' style='margin-top:var(--sp-4)'>" + _RADAR_CONSOLE.panel_html("radar") + "</section>"
         page = page.replace("<footer", panel + "<footer", 1)
     page = _cr_re.sub(r"(<body[^>]*>)", lambda m: m.group(1) + _CR_BANNER, page, count=1)
-    if "_CR_BANNER" not in page and "cr-live" not in page:  # no <body> matched → prepend
+    if "_CR_BANNER" not in page:  # no <body> matched → prepend
         page = _CR_BANNER + page
-    return (page.replace("</body>", _CR_LIVE_FEED + "</body>")
-            if "</body>" in page else page + _CR_LIVE_FEED)
+    return page
 
 
 @app.post("/agent/run")

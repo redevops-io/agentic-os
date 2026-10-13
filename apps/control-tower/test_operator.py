@@ -192,3 +192,22 @@ def test_answers_and_subtitle_label_data_as_synthetic(client):
     assert r["demo_dataset"]["real_client_data"] is False and r["demo_dataset"]["kind"] == "synthetic"
     r2 = client.post("/invoke", json={"capability": "bi.ask", "inputs": {"question": "revenue by service line"}}).json()["result"]
     assert "AS jobs" not in r2["sql"] and "AS engagements" in r2["sql"]
+
+
+def test_refresh_with_metabase_down_is_an_honest_error_not_done(client, monkeypatch):
+    class _Down(_FakeMetabase):
+        @classmethod
+        def get(cls, url, headers=None, params=None, timeout=None):
+            raise RuntimeError("connection refused")
+
+        @classmethod
+        def post(cls, url, headers=None, json=None, timeout=None):
+            raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(core, "httpx", _Down)
+    monkeypatch.setitem(core._session, "token", None)
+    res = client.post("/invoke", json={"capability": "bi.refresh", "inputs": {}}).json()["result"]
+    assert res["status"] == "error" and res["action"] == "refresh"
+    assert "kpis" not in res and "months" not in res
+    assert "0 months" not in res.get("summary", "") and "$0" not in str(res)
+    assert res["connected"] is False
