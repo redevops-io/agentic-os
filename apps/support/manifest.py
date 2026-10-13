@@ -45,6 +45,7 @@ def build_manifest(operator):
             pain='customer support',
             tagline='Front-line support that answers, escalates, and never sleeps.',
             agents=('responder', 'escalation'),
+            approval=('resolve', 'escalate', 'send_onboarding'),
             deploy='compose',
         ),
     )

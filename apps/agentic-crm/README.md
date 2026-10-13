@@ -26,7 +26,7 @@ the live data. No mock data.
 ## Config (env)
 `ERPNEXT_URL`, `ERPNEXT_API_KEY`, `ERPNEXT_API_SECRET`, `ERPNEXT_FRONT_URL`,
 `REDEVOPS_LLM_BASE_URL` + `REDEVOPS_LLM_MODEL` (the brain, DeepSeek-V4-Flash),
-optional `DEERFLOW_URL` (real enrichment) and `ANTHROPIC_API_KEY` (Claude fallback).
+optional `DEERFLOW_URL` (real enrichment) (models: governed in-boundary endpoint only). `OPERATOR_BASIC_AUTH` (`user:pass`) is required for `qualify` to execute; otherwise it returns a staged `pending_approval`.
 
 ## Enrichment data (the #3 gap)
 There is **no open-source self-hosted B2B enrichment DB**; the market is proprietary

@@ -19,6 +19,7 @@ modules:
     port: 8207
     tagline: Front-line support that answers, escalates, and never sleeps.
     agents: [responder, escalation]
+    approval_required: [resolve, escalate, send_onboarding]
   - name: agentic-billing
     source: apps/billing
     pain: payments & reconciliation
@@ -72,7 +73,7 @@ modules:
     port: 8214
     tagline: Lands pilots — ranks accounts by signal and applies a fixed (not learned) outreach play.
     agents: [sourcer, personalizer, sequencer]
-    approval_required: [send_sequence]
+    approval_required: [approve, send_sequence]
   - name: social-autopilot
     source: apps/social-autopilot
     pain: social media growth
@@ -95,6 +96,7 @@ modules:
     port: 8210
     tagline: A pipeline that scores, researches, and drafts outreach on a real CRM.
     agents: [score, research, draft, qualify]
+    approval_required: [qualify]
   - name: lifecycle
     source: apps/lifecycle
     pain: lifecycle email & SMS marketing

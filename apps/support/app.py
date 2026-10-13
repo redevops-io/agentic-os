@@ -15,7 +15,7 @@ Endpoints:
                            {"action":"draft_reply","conversation_id":N}  -> posts a
                                PRIVATE NOTE (human-reviewable draft; never sent to the
                                customer without approval)
-                           {"action":"resolve","conversation_id":N}      -> toggle status
+                           {"action":"resolve","conversation_id":N}      -> toggle status (operator-gated)
                            {"action":"escalate","conversation_id":N}     -> assign + urgent
                            {"action":"send_onboarding","customer":{...}} -> welcome message
 
@@ -26,8 +26,10 @@ Config (env; seed.py writes agents/support/.env automatically):
   CHATWOOT_ACCOUNT_ID  numeric account id (default 1)
   CHATWOOT_FRONT_URL   Chatwoot UI link for the "Open in Chatwoot ↗" button
   PORT                 uvicorn port, default 8207
-  ANTHROPIC_API_KEY    OPTIONAL — if set, draft_reply uses Claude to write the draft;
-                       a deterministic template fallback runs without it.
+  REDEVOPS_LLM_BASE_URL  OPTIONAL in-boundary model endpoint; draft_reply uses it via the governed router.
+                       Unset => a deterministic template (no external provider is ever contacted).
+  OPERATOR_BASIC_AUTH  `user:pass` operator credential; /agent/run actions that change a ticket or message a
+                       customer execute only with it (else they return a staged pending_approval preview).
 """
 from __future__ import annotations
 
@@ -312,59 +314,58 @@ def render(data: dict) -> str:
 </html>"""
 
 
-# --- optional LLM reasoning (guarded: works without any API key) -------------
-# Narration runs on the Context Runtime model plane (on-prem DeepSeek via REDEVOPS_LLM_*,
-# or a configured provider) — same stack as the assistant, no raw provider SDK.
-try:
-    from context_runtime.adapters.model_openai import OpenAICompatibleModel as _BlurbModelCls
-    from context_runtime.types import ModelRequest as _BlurbReq
-    _BLURB_MODEL = _BlurbModelCls.from_env()
-except Exception:  # noqa: BLE001 — context-runtime absent → narration off
-    _BLURB_MODEL = None
-    _BlurbReq = None
-
-
+# --- governed LLM (N7) -------------------------------------------------------
+# Customer text goes into these prompts, so every model call routes through the GovernedModelRouter
+# (agentic_os.app.llm.governed_text) as CUSTOMER_CONFIDENTIAL: it can only reach the configured IN-BOUNDARY
+# endpoint (REDEVOPS_LLM_BASE_URL) and returns None -- never a public fallback -- when none is configured or
+# the router refuses. Callers then degrade to deterministic text.
 def _llm_text(prompt: str, max_tokens: int = 320) -> str | None:
-    """Return narration text via the Context Runtime model plane, or None (offline / any error).
-
-    Optional by design — draft_reply has a deterministic template fallback so the absence of a
-    model never breaks the endpoint.
-    """
-    if _BLURB_MODEL is None or _BlurbReq is None:
-        return None
     try:
-        res = _BLURB_MODEL.complete(_BlurbReq(messages=({"role": "user", "content": prompt},), max_tokens=max_tokens))
-        return res.text or None
+        from agentic_os.app.llm import governed_text
+        from agentic_os.governance.classification import DataClassification
     except Exception:  # noqa: BLE001
         return None
+    return governed_text(prompt, classifications=(DataClassification.CUSTOMER_CONFIDENTIAL,),
+                         max_tokens=max_tokens, temperature=0.4)
 
 
-# --- agentic actions (thin wrappers over core; core stays context-runtime-free) ---
+# --- agentic actions (thin wrappers over core) ---
+# The approval gate lives INSIDE core.resolve / escalate / send_onboarding (staged unless `_approval` is present).
 def _draft_reply(body: dict) -> dict:
-    """Draft a reply over the real Chatwoot core, with the optional LLM draft blurb."""
+    """Draft a reply over the real Chatwoot core, with the optional governed-LLM draft."""
     return core.draft_reply(body, blurb=_llm_text)
 
 
 def _resolve(body: dict) -> dict:
-    """Toggle a conversation to resolved via the real Chatwoot core."""
     return core.resolve(body)
 
 
 def _escalate(body: dict) -> dict:
-    """Set priority urgent + assign via the real Chatwoot core."""
     return core.escalate(body)
 
 
 def _send_onboarding(body: dict) -> dict:
-    """Send a welcome message to a newly-onboarded customer via the real Chatwoot core."""
     return core.send_onboarding(body)
 
 
-# ──────── conversational agent · Context Runtime (LLM) + redevops-rag (grounding) + agent-harness (tools) ────────
-try:
-    from context_runtime.integrations.agent_console import AgentConsole as _AgentConsole, tool as _crtool
-except Exception:  # noqa: BLE001 — context-runtime absent → no console
-    _AgentConsole = None
+_ACTIONS = {"draft_reply": _draft_reply, "resolve": _resolve, "escalate": _escalate,
+            "send_onboarding": _send_onboarding}
+
+
+def _supported_actions() -> list:
+    return sorted(_ACTIONS)
+
+
+def _run_action(action: str, body: dict, authorization: "str | None") -> "dict | None":
+    """THE single route -> core entry point. The operator marker is injected server-side only when the request
+    carries the valid operator Basic credential; any other caller gets a staged preview from the core gate."""
+    fn = _ACTIONS.get(action)
+    if fn is None:
+        return None
+    return fn(core.with_operator_approval(body, authorization))
+
+
+# ──────── conversational agent: governed LLM + read-only tools (no side-effecting tool, no operator marker) ────────
 
 _SUPPORT_PRIMER = """A CONVERSATION is one customer thread in Chatwoot. Its STATUS moves through OPEN (needs an agent), PENDING (waiting on the customer or a third party), SNOOZED (hidden until a set time), and RESOLVED (closed). Reopening a resolved thread sets it back to open. You resolve a conversation with the Resolve button (or by toggling status); resolving is what closes the ticket.
 
@@ -447,21 +448,37 @@ def _t_draft_reply(a: dict) -> dict:
             "data": {"topic": topic}}
 
 
-if _AgentConsole is not None:
-    _SUPPORT_CONSOLE = _AgentConsole(
-        f"{TENANT} Support", _SUPPORT_PRIMER,
-        tools=[
-            _crtool("inbox_summary", "queue health — open/pending/resolved counts, first-response, and the oldest waiting ticket", _t_inbox_summary),
-            _crtool("list_conversations", "list recent open/pending conversations with contact, channel and message snippet", _t_list_conversations),
-            _crtool("draft_reply", "gather context and suggest a support reply for a topic or a conversation id (read-only — never sent)", _t_draft_reply,
-                    parameters={"type": "object", "properties": {"topic": {"type": "string"}, "conversation": {"type": "string"}}}),
-        ],
-        suggestions=["What's in my inbox?", "Draft a reply about a refund", "How do I use canned responses?", "What does pending mean?"],
-        subtitle="Ask how Chatwoot works, check the queue, or have me draft a reply — a human sends anything public.",
-        allow_side_effects=[],  # everything here is read-only; no auto-send, no auto-resolve
-    )
-else:
-    _SUPPORT_CONSOLE = None
+
+
+def _agent_reply(message: str) -> dict:
+    """Answer a console message from READ-ONLY tools; the governed LLM only phrases/answers. Nothing here can
+    mutate Chatwoot and no approval marker is ever supplied."""
+    low = (message or "").lower()
+    if not low.strip():
+        return {"intent": "help", "text": "Ask about the queue, a conversation, or have me draft a reply.", "evidence": []}
+    if any(w in low for w in ("draft", "reply", "respond")):
+        t = _t_draft_reply({"topic": message})
+        txt = _llm_text(t["text"], 320) or ("No in-boundary model is configured, so I can't draft text; "
+                                            "use the draft_reply action for a deterministic template.")
+        return {"intent": "draft_reply", "text": txt, "evidence": []}
+    if any(w in low for w in ("list", "queue", "conversation", "ticket")):
+        t = _t_list_conversations({})
+        return {"intent": "list_conversations", "text": t["text"], "evidence": []}
+    if any(w in low for w in ("inbox", "summary", "open", "pending", "sla", "response")):
+        t = _t_inbox_summary({})
+        return {"intent": "inbox_summary", "text": t["text"], "evidence": []}
+    txt = _llm_text(_SUPPORT_PRIMER + "\n\nAnswer in 2-4 plain sentences.\nQuestion: " + message, 320)
+    return {"intent": "help", "text": txt or "The assistant model is offline (no in-boundary model configured).",
+            "evidence": []}
+
+
+_AGENT_PANEL = (
+    "<section class='shell' style='margin-top:var(--sp-4)'><h3>Assistant</h3>"
+    "<input id='agmsg' placeholder='Ask about the queue or a draft reply' style='width:70%'> "
+    "<button onclick=\"fetch('api/agent',{method:'POST',headers:{'Content-Type':'application/json'},"
+    "body:JSON.stringify({message:document.getElementById('agmsg').value})}).then(r=>r.json())"
+    ".then(d=>{document.getElementById('agout').textContent=d.text})\">Ask</button>"
+    "<pre id='agout' style='white-space:pre-wrap'></pre></section>")
 
 
 # --- routes ------------------------------------------------------------------
@@ -476,9 +493,7 @@ async def api_agent(request: Request) -> JSONResponse:
         body = _strip_approval(await request.json())
     except Exception:  # noqa: BLE001
         body = {}
-    if _SUPPORT_CONSOLE is None:
-        return JSONResponse({"intent": "help", "text": "The assistant is offline (context-runtime unavailable).", "evidence": []})
-    return JSONResponse(_SUPPORT_CONSOLE.respond((body or {}).get("message", ""), principal=_req_principal(request)))
+    return JSONResponse(_agent_reply((body or {}).get("message", "")))
 
 
 @app.get("/api/activity")
@@ -486,101 +501,10 @@ def activity() -> JSONResponse:
     return JSONResponse(fetch_activity())
 
 
-# --- Context Runtime: decisions over a synthetic ticket stream (sample, not live traffic) ----------
-import asyncio as _cr_asyncio
-import json as _cr_json
-from datetime import datetime as _cr_dt, timezone as _cr_tz
-from fastapi.responses import StreamingResponse as _CRStreamingResponse
-
-try:
-    from context_runtime.integrations.agentic_support import (  # type: ignore
-        AgenticSupportTenant as _CRTenant, agentic_support_bucket as _cr_bucket,
-    )
-    _CR = _CRTenant(epsilon=0.15)
-except Exception:  # noqa: BLE001
-    _CR = None
-
-    def _cr_bucket(_t):  # type: ignore
-        return "general"
-
-_CR_SYNTH = [
-    'How do I configure SSO?',
-    'Export throws a 500 error',
-    'Why was I charged twice?',
-    'Dashboard is down and unavailable',
-]
-
-
-def _cr_decide(text: str) -> dict:
-    try:
-        bucket = _cr_bucket(text)
-    except Exception:  # noqa: BLE001
-        bucket = "general"
-    if _CR is not None:
-        try:
-            try:
-                arm = _CR.choose(text, bucket=bucket)
-            except TypeError:
-                arm = _CR.choose(text)
-            return {"bucket": str(bucket), "bundle": getattr(arm, "key", str(arm))}
-        except Exception:  # noqa: BLE001
-            pass
-    return {"bucket": str(bucket), "bundle": "(context runtime offline)"}
-
-_CR_LIVE_FEED = """
-<div id="cr-live" style="position:fixed;right:16px;bottom:16px;width:340px;max-height:58vh;overflow:auto;background:#17171a;border:1px solid #2f2f33;border-radius:12px;padding:12px;font:13px/1.45 Roboto,system-ui,sans-serif;color:#e4e2e6;z-index:9999;box-shadow:0 10px 34px rgba(0,0,0,.45)">
-  <div style="color:#4fd1c5;font-weight:600;margin-bottom:8px">Context Runtime — decisions (sample stream)</div>
-  <div id="cr-feed" style="color:#9b99a1">connecting…</div>
-</div>
-<script>
-(function(){
-  var feed=document.getElementById('cr-feed');var first=true;
-  try{
-    var es=new EventSource('api/stream');
-    es.onmessage=function(e){
-      if(first){feed.innerHTML='';first=false;}
-      var d=JSON.parse(e.data);var row=document.createElement('div');
-      row.style.cssText='border-top:1px solid #2f2f33;padding:7px 0';
-      row.innerHTML='<div style="color:#9b99a1;font-size:11px">'+d.ts+' \u00b7 <b style="color:#c7c5ca">'+d.bucket+'</b></div>'+'<div style="margin:2px 0">'+d.input+'</div>'+'<div style="color:#4fd1c5">\u2192 pulled context: <b>'+d.bundle+'</b></div>';
-      feed.insertBefore(row,feed.firstChild);
-      while(feed.children.length>8) feed.removeChild(feed.lastChild);
-    };
-    es.onerror=function(){ if(first){feed.textContent='(live stream unavailable)';} };
-  }catch(err){feed.textContent='(live stream unavailable)';}
-})();
-</script>
-"""
-
-
-@app.get("/api/stream")
-async def cr_stream() -> _CRStreamingResponse:
-    async def _gen():
-        i = 0
-        while True:
-            text = _CR_SYNTH[i % len(_CR_SYNTH)]
-            i += 1
-            d = _cr_decide(text)
-            evt = {"input": text, "ts": _cr_dt.now(_cr_tz.utc).strftime("%H:%M:%S"), **d}
-            yield f"data: {_cr_json.dumps(evt)}\n\n"
-            await _cr_asyncio.sleep(2.5)
-    return _CRStreamingResponse(_gen(), media_type="text/event-stream")
-
-
-_CR_BANNER = """<div style="position:sticky;top:0;z-index:9998;background:linear-gradient(90deg,#10201d,#17171a);border-bottom:1px solid #2f2f33;color:#e4e2e6;font:13px/1.4 Roboto,system-ui,sans-serif;padding:9px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">CONTEXT RUNTIME</span><span style="background:#2f2f33;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">DEMO</span><span style="color:#9b99a1">This demo app is plugged into <b style="color:#e4e2e6">Context Runtime</b>, which optimizes which ticket context to retrieve — resolution quality vs retrieval cost (3.68 vs 2.39). <a href="https://github.com/redevops-io/context-runtime" style="color:#4fd1c5;text-decoration:none">learn more \u2192</a></span></div>"""
-
-
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
-    import re as _cr_re
     page = render(fetch_activity())
-    if _SUPPORT_CONSOLE is not None:
-        panel = "<section class='shell' style='margin-top:var(--sp-4)'>" + _SUPPORT_CONSOLE.panel_html("support") + "</section>"
-        page = page.replace("<footer", panel + "<footer", 1)
-    page = _cr_re.sub(r"(<body[^>]*>)", lambda m: m.group(1) + _CR_BANNER, page, count=1)
-    if "_CR_BANNER" not in page and "cr-live" not in page:  # no <body> matched → prepend
-        page = _CR_BANNER + page
-    return (page.replace("</body>", _CR_LIVE_FEED + "</body>")
-            if "</body>" in page else page + _CR_LIVE_FEED)
+    return page.replace("<footer", _AGENT_PANEL + "<footer", 1)
 
 
 @app.post("/agent/run")
@@ -589,21 +513,18 @@ async def agent_run(request: Request) -> JSONResponse:
         body = _strip_approval(await request.json())
     except Exception:
         body = {}
-    action = (body or {}).get("action", "")
-
-    if action == "draft_reply":
-        return JSONResponse(_draft_reply(body or {}))
-    if action == "resolve":
-        return JSONResponse(_resolve(body or {}))
-    if action == "escalate":
-        return JSONResponse(_escalate(body or {}))
-    if action == "send_onboarding":
-        return JSONResponse(_send_onboarding(body or {}))
+    if not isinstance(body, dict):
+        body = {}
+    action = body.get("action", "")
+    res = _run_action(action, body, request.headers.get("authorization"))
+    if res is not None:
+        return JSONResponse(res)
     return JSONResponse(
         {"status": "error", "error": f"unknown action '{action}'",
-         "supported": ["draft_reply", "resolve", "escalate", "send_onboarding"]},
+         "supported": _supported_actions()},
         status_code=400,
     )
+
 
 
 if __name__ == "__main__":  # pragma: no cover

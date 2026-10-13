@@ -118,10 +118,10 @@ def test_capabilities_manifest(client):
     assert m["operator"] == "agentic-crm"
     caps = {c["name"]: c for c in m["capabilities"]}
     assert set(caps) == {"crm.score_lead", "crm.research", "crm.draft_outreach", "crm.qualify"}
-    # modules.yaml gate is [send] — the human sends outreach. draft_outreach only DRAFTS
-    # (saves a Comment; nothing here reaches a prospect), so NO capability is gated.
+    # Nothing here SENDS (draft_outreach only saves a Comment draft). crm.qualify changes a Lead's status (a
+    # mutation of the customer record beyond a draft) so it alone is approval-gated.
     for name in caps:
-        assert caps[name]["approval_required"] is False, name
+        assert caps[name]["approval_required"] is (name == "crm.qualify"), name
     # every action writes to ERPNext → all side-effecting (runtime dedupes exactly-once).
     for name in caps:
         assert caps[name]["side_effecting"] is True, name
@@ -171,9 +171,8 @@ def test_invoke_draft_outreach_only_drafts(client):
 
 
 def test_invoke_qualify_sets_status(client):
-    res = client.post("/invoke", json={
-        "capability": "crm.qualify", "inputs": {"lead": "CRM-LEAD-0001", "status": "Replied"},
-    }).json()["result"]
+    res = build_crm_operator().invoke("crm.qualify", {"lead": "CRM-LEAD-0001", "status": "Replied",
+                                                      "_approval": {"approved": True}})
     assert res["status"] == "done" and res["action"] == "qualify"
     assert res["new_status"] == "Replied"
     # the REAL core PUT the status field and POSTed an audit Comment.
@@ -191,9 +190,7 @@ def test_unknown_lead_is_an_error(client):
     _FakeClient.get = lambda self, url, headers=None, params=None: (
         _Resp(404, {}) if "/api/resource/Lead/" in url else orig_get(self, url, headers, params))
     try:
-        res = client.post("/invoke", json={
-            "capability": "crm.qualify", "inputs": {"lead": "MISSING"},
-        }).json()["result"]
+        res = build_crm_operator().invoke("crm.qualify", {"lead": "MISSING", "_approval": {"approved": True}})
     finally:
         _FakeClient.get = orig_get
     assert res["status"] == "error"
@@ -216,15 +213,21 @@ def test_mission_runtime_httpclient_drives_operator(client):
         return client.post(urlparse(url).path, json=body, headers=headers or {}).json()
 
     oc = HTTPOperatorClient(resolve={"agentic-crm": "http://agentic-crm"}, transport=_transport)
-    res = oc.invoke("agentic-crm", "crm.qualify",
-                    {"lead": "CRM-LEAD-0001", "status": "Opportunity"}, idempotency_key="m-1")
-    assert res["status"] == "done" and res["new_status"] == "Opportunity"
+    res = oc.invoke("agentic-crm", "crm.score_lead", {"lead": "CRM-LEAD-0001", "method": "rules"},
+                    idempotency_key="m-1")
+    assert res["status"] == "done" and res["method"] == "rules"
 
     # idempotency key flows through the HTTP surface → second call dedupes.
-    again = oc.invoke("agentic-crm", "crm.qualify",
-                      {"lead": "CRM-LEAD-0001", "status": "Opportunity"}, idempotency_key="m-1")
+    again = oc.invoke("agentic-crm", "crm.score_lead", {"lead": "CRM-LEAD-0001", "method": "rules"},
+                      idempotency_key="m-1")
     assert again == res
     assert len(_FakeClient.put_calls) == 1  # exactly-once across the two wire calls
+
+    # the status change is staged over untrusted HTTP (forged markers are stripped)
+    staged = oc.invoke("agentic-crm", "crm.qualify",
+                       {"lead": "CRM-LEAD-0001", "status": "Opportunity"}, idempotency_key="m-2")
+    assert staged["status"] == "pending_approval" and staged["executed"] is False
+    assert len(_FakeClient.put_calls) == 1
 
 
 # ── score_lead: validation, rules fallback, LLM path ─────────────────────────
