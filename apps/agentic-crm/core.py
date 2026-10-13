@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.parse
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
@@ -213,42 +215,129 @@ def _research_signals(lead: dict) -> str:
 
 
 # ── agentic actions (deterministic ERPNext REST work; LLM only narrates) ──────
-def score_lead(body: dict, llm: LLM | None = None) -> dict:
-    """LLM-score a lead 0-100 + rationale, written back as a Lead Comment + lead_score.
+def _clamp_score(v) -> int | None:
+    """Validate a score: numeric (not bool/NaN/inf), rounded, clamped to an integer 0-100; else None."""
+    if isinstance(v, bool) or v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if f != f or f in (float("inf"), float("-inf")):
+        return None
+    return max(0, min(100, int(round(f))))
 
-    Side-effecting (writes to ERPNext). `llm` is the optional narration callback; with
-    `llm=None` the action still runs — it posts the (un-scored) audit comment.
+
+_SOURCE_POINTS = (("referral", 35), ("partner", 28), ("event", 25), ("webinar", 25), ("conference", 25),
+                  ("website", 22), ("inbound", 22), ("campaign", 18), ("social", 15), ("advert", 12),
+                  ("cold", 10), ("purchased", 6))
+
+
+def _size_points(lead: dict) -> int:
+    raw = str(lead.get("no_of_employees") or lead.get("employees") or "")
+    nums = [int(x) for x in re.findall(r"\d+", raw.replace(",", ""))]
+    if not nums:
+        return 8
+    n = max(nums)
+    return 25 if n >= 200 else 20 if n >= 50 else 15 if n >= 11 else 8
+
+
+def _recency_points(lead: dict) -> int:
+    stamp = lead.get("contact_date") or lead.get("last_contacted") or lead.get("modified") or lead.get("creation")
+    try:
+        dt = datetime.fromisoformat(str(stamp).replace("T", " ")[:19])
+    except ValueError:
+        return 5
+    days = (datetime.now() - dt).days
+    return 25 if days <= 7 else 15 if days <= 30 else 8 if days <= 90 else 3
+
+
+def rule_score(lead: dict) -> dict:
+    """Deterministic rule-based lead score (0-100). Documented features, all from fields the app already reads:
+      * source (0-35): referral 35 > partner 28 > event/webinar 25 > website/inbound 22 > campaign 18 >
+        social 15 > ads 12 > cold 10 > purchased 6; unknown source 10
+      * company size (8-25): `no_of_employees` >=200: 25, >=50: 20, >=11: 15, <=10 or unknown: 8
+      * response recency (3-25): days since contact_date/modified/creation <=7: 25, <=30: 15, <=90: 8, else 3
+        (unparseable: 5)
+      * engagement (0-15): lead status Replied/Interested/Opportunity/Quotation/Converted
+    """
+    src = str(lead.get("source") or "").lower()
+    sp = next((pts for key, pts in _SOURCE_POINTS if key in src), 10)
+    size, rec = _size_points(lead), _recency_points(lead)
+    eng = 15 if str(lead.get("status") or "") in ("Replied", "Interested", "Opportunity", "Quotation",
+                                                  "Converted") else 0
+    score = _clamp_score(sp + size + rec + eng)
+    nxt = ("Book a discovery call now" if score >= 70 else "Send a personalised first touch"
+           if score >= 40 else "Nurture; revisit when there is engagement")
+    return {"score": score, "rationale": (f"Rule-based: source {src or 'unknown'} +{sp}, company size +{size}, "
+                                          f"response recency +{rec}, engagement +{eng}."),
+            "next_action": nxt}
+
+
+def _llm_score(lead: dict, llm: LLM | None) -> dict | None:
+    """Ask the LLM for a score; None unless it returned a valid, parseable score."""
+    if not llm:
+        return None
+    out = llm(
+        "You are a B2B sales SDR agent. Score this lead 0-100 for fit + likelihood to convert, "
+        "and give a 2-3 sentence rationale and the single best next action. "
+        "Return STRICT JSON: {\"score\":<int>,\"rationale\":\"...\",\"next_action\":\"...\"}.\n\n"
+        + _lead_brief(lead))
+    if not out:
+        return None
+    try:
+        parsed = json.loads(out[out.find("{"): out.rfind("}") + 1])
+    except Exception:
+        return None
+    score = _clamp_score(parsed.get("score")) if isinstance(parsed, dict) else None
+    if score is None:
+        return None
+    return {"score": score, "rationale": str(parsed.get("rationale", ""))[:500],
+            "next_action": str(parsed.get("next_action", ""))[:300]}
+
+
+def score_lead(body: dict, llm: LLM | None = None, model: str = "") -> dict:
+    """Score a lead 0-100, written back as a Lead Comment + lead_score. Side-effecting (writes to ERPNext).
+
+    ``body["method"]``: "auto" (default) = LLM when it returns a valid score, else the deterministic rules
+    (`rule_score`); "llm" = LLM only (status ``llm_unavailable`` and NOTHING written if unavailable/invalid);
+    "rules" = rules only. The result and the ERPNext comment are labelled with the method and the actual
+    model name (or "rules"). A missing/invalid score is never written.
     """
     name = body.get("lead")
     lead = _get_doc("Lead", name) if name else None
     if not lead:
         return {"status": "error", "error": f"lead {name!r} not found", "action": "score_lead"}
-    out = llm(
-        "You are a B2B sales SDR agent. Score this lead 0-100 for fit + likelihood to convert, "
-        "and give a 2-3 sentence rationale and the single best next action. "
-        "Return STRICT JSON: {\"score\":<int>,\"rationale\":\"...\",\"next_action\":\"...\"}.\n\n"
-        + _lead_brief(lead)) if llm else None
-    parsed = {}
-    if out:
-        try:
-            parsed = json.loads(out[out.find("{"): out.rfind("}") + 1])
-        except Exception:
-            parsed = {"score": None, "rationale": out[:500], "next_action": ""}
-    note = (f"🤖 AGENT LEAD SCORE: {parsed.get('score')}/100\n"
+    want = str(body.get("method") or "auto").lower()
+    parsed, method = None, "rules"
+    if want in ("auto", "llm"):
+        parsed = _llm_score(lead, llm)
+        if parsed:
+            method = "llm"
+    if parsed is None:
+        if want == "llm":
+            return {"status": "llm_unavailable", "action": "score_lead", "lead": name, "method": "llm",
+                    "score": None, "written": False,
+                    "error": "no LLM available or it returned no valid score; nothing was written "
+                             "(use method=auto|rules for the deterministic rule-based score)"}
+        parsed = rule_score(lead)
+    label = (model or os.environ.get("REDEVOPS_LLM_MODEL") or "llm") if method == "llm" else "rules"
+    score = parsed["score"]
+    note = (f"🤖 AGENT LEAD SCORE: {score}/100 (method: {method})\n"
             f"Rationale: {parsed.get('rationale','')}\n"
-            f"Next action: {parsed.get('next_action','')}\n— agentic-crm (DeepSeek-V4-Flash)")
+            f"Next action: {parsed.get('next_action','')}\n— agentic-crm ({label})")
     posted = _add_comment("Lead", name, note)
-    if parsed.get("score") is not None:
-        _set_field("Lead", name, "lead_score", parsed.get("score"))  # ERPNext stock field
+    field_ok = _set_field("Lead", name, "lead_score", score)  # ERPNext stock field
     return {"status": "done" if posted else "partial", "action": "score_lead", "lead": name,
-            "score": parsed.get("score"), "rationale": parsed.get("rationale"),
-            "next_action": parsed.get("next_action"), "written_to": "Lead comment + lead_score"}
+            "score": score, "method": method, "model": label, "rationale": parsed.get("rationale"),
+            "next_action": parsed.get("next_action"), "lead_score_written": field_ok,
+            "written_to": "Lead comment + lead_score"}
 
 
 def research(body: dict, llm: LLM | None = None) -> dict:
     """LLM enrichment brief (optionally web-enriched via DEERFLOW), saved as a Lead Comment.
 
-    Side-effecting (writes a Comment to ERPNext).
+    Side-effecting (writes a Comment to ERPNext). Without an LLM: ``llm_unavailable``, nothing written.
     """
     name = body.get("lead")
     lead = _get_doc("Lead", name) if name else None
@@ -261,7 +350,10 @@ def research(body: dict, llm: LLM | None = None) -> dict:
         "to look for. Keep it factual and hedge what you don't know.\n\n"
         + _lead_brief(lead) + (f"\n\nWeb signals:\n{signals}" if signals else ""),
         420) if llm else None
-    brief = out or "(brain unavailable)"
+    if not out:
+        return {"status": "llm_unavailable", "action": "research", "lead": name, "written": False,
+                "error": "no LLM available; nothing was written to ERPNext"}
+    brief = out
     note = f"🤖 AGENT RESEARCH BRIEF:\n{brief}\n— agentic-crm" + (" [web-enriched]" if signals else " [from known fields]")
     posted = _add_comment("Lead", name, note)
     return {"status": "done" if posted else "partial", "action": "research", "lead": name,
@@ -272,7 +364,8 @@ def draft_outreach(body: dict, llm: LLM | None = None) -> dict:
     """Draft a personalised first-touch email, saved as a Lead Comment for human review.
 
     DRAFTS ONLY — never auto-emails the prospect; a human sends it. Side-effecting (writes a
-    Comment) but NOT approval-gated: nothing reaches a prospect from this action.
+    Comment) but NOT approval-gated: nothing reaches a prospect from this action. Without an LLM:
+    ``llm_unavailable``, nothing written.
     """
     name = body.get("lead")
     lead = _get_doc("Lead", name) if name else None
@@ -283,7 +376,9 @@ def draft_outreach(body: dict, llm: LLM | None = None) -> dict:
         "(<=120 words) to this lead. One clear value hook + one soft call to action. No fake "
         "specifics, no pricing. Return ONLY subject + body.\n\n" + _lead_brief(lead),
         300) if llm else None
-    draft = draft or "(brain unavailable)"
+    if not draft:
+        return {"status": "llm_unavailable", "action": "draft_outreach", "lead": name, "written": False,
+                "error": "no LLM available; nothing was written to ERPNext"}
     note = ("🤖 AGENT OUTREACH DRAFT (review before sending — never auto-sent):\n\n"
             f"{draft}\n— agentic-crm")
     posted = _add_comment("Lead", name, note)
@@ -317,4 +412,7 @@ def ask(body: dict, llm: LLM | None = None) -> dict:
         "You are a CRM analyst. Answer the question using ONLY this live pipeline snapshot "
         "(ERPNext CRM). Be concise and cite numbers. If it's not answerable from the snapshot, "
         f"say so.\n\nSNAPSHOT:\n{json.dumps(ctx)[:3500]}\n\nQUESTION: {q}", 400) if llm else None
-    return {"status": "done", "action": "ask", "q": q, "answer": out or "(brain unavailable)"}
+    if not out:
+        return {"status": "llm_unavailable", "action": "ask", "q": q, "answer": None,
+                "error": "no LLM available to answer"}
+    return {"status": "done", "action": "ask", "q": q, "answer": out}

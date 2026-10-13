@@ -62,6 +62,7 @@ class _FakeClient:
     """Stands in for httpx.Client — records Comment POSTs (writes) and field PUTs."""
     posted: list[str] = []
     put_calls: list[str] = []
+    comment_bodies: list[str] = []
 
     def __enter__(self):
         return self
@@ -83,6 +84,7 @@ class _FakeClient:
 
     def post(self, url, headers=None, json=None):
         _FakeClient.posted.append(url)
+        _FakeClient.comment_bodies.append((json or {}).get('content', ''))
         return _Resp(200, {})  # Comment created
 
     def put(self, url, headers=None, json=None):
@@ -94,6 +96,7 @@ class _FakeClient:
 def _fake_erpnext(monkeypatch):
     _FakeClient.posted = []
     _FakeClient.put_calls = []
+    _FakeClient.comment_bodies = []
     core._CACHE.update(ts=0.0, data=None)  # no cache bleed between tests
     monkeypatch.setattr(core, "ERPNEXT_API_KEY", "test-key")
     monkeypatch.setattr(core, "ERPNEXT_API_SECRET", "test-secret")
@@ -136,16 +139,21 @@ def test_invoke_score_lead_writes_comment(client):
     assert res["lead"] == "CRM-LEAD-0001"
     # the REAL core POSTed an auditable Comment to ERPNext for the scored lead.
     assert _FakeClient.posted == ["http://localhost:8092/api/resource/Comment"]
-    # no LLM injected by the operator → no score parsed → no lead_score PUT.
-    assert _FakeClient.put_calls == []
+    # no LLM injected by the operator → deterministic rules score, labelled, written as an int 0-100.
+    assert res["method"] == "rules" and res["model"] == "rules"
+    assert isinstance(res["score"], int) and 0 <= res["score"] <= 100
+    assert len(_FakeClient.put_calls) == 1 and "/Lead/CRM-LEAD-0001" in _FakeClient.put_calls[0]
+    assert "None/100" not in str(_FakeClient.comment_bodies) and "DeepSeek" not in str(_FakeClient.comment_bodies)
 
 
 def test_invoke_research_writes_comment(client):
     res = client.post("/invoke", json={
         "capability": "crm.research", "inputs": {"lead": "CRM-LEAD-0001"},
     }).json()["result"]
-    assert res["status"] == "done" and res["action"] == "research"
-    assert res["web_enriched"] is False  # DEERFLOW_URL unset → reasons over known fields
+    assert res["status"] == "llm_unavailable" and res["action"] == "research"   # no LLM: nothing written
+    assert _FakeClient.posted == []
+    res = core.research({"lead": "CRM-LEAD-0001"}, llm=lambda p, n=400: "A brief.")
+    assert res["status"] == "done" and res["web_enriched"] is False  # DEERFLOW_URL unset
     assert _FakeClient.posted == ["http://localhost:8092/api/resource/Comment"]
 
 
@@ -153,6 +161,8 @@ def test_invoke_draft_outreach_only_drafts(client):
     res = client.post("/invoke", json={
         "capability": "crm.draft_outreach", "inputs": {"lead": "CRM-LEAD-0001"},
     }).json()["result"]
+    assert res["status"] == "llm_unavailable" and _FakeClient.posted == []   # never writes "(brain unavailable)"
+    res = core.draft_outreach({"lead": "CRM-LEAD-0001"}, llm=lambda p, n=300: "Subject: hi\n\nbody")
     assert res["status"] == "done" and res["action"] == "draft_outreach"
     # draft is staged as a Lead Comment for a human — never auto-sent to the prospect.
     assert res["posted_as"] == "Lead comment"
@@ -215,3 +225,49 @@ def test_mission_runtime_httpclient_drives_operator(client):
                       {"lead": "CRM-LEAD-0001", "status": "Opportunity"}, idempotency_key="m-1")
     assert again == res
     assert len(_FakeClient.put_calls) == 1  # exactly-once across the two wire calls
+
+
+# ── score_lead: validation, rules fallback, LLM path ─────────────────────────
+def _llm(text):
+    return lambda prompt, max_tokens=400: text
+
+
+def test_score_clamped_and_labelled_llm():
+    res = core.score_lead({"lead": "CRM-LEAD-0001"}, llm=_llm('{"score": 250, "rationale": "r", "next_action": "n"}'),
+                          model="my-model-7b")
+    assert res["method"] == "llm" and res["score"] == 100 and res["model"] == "my-model-7b"
+    body = _FakeClient.comment_bodies[-1]
+    assert "100/100 (method: llm)" in body and "my-model-7b" in body and "DeepSeek" not in body
+
+
+@pytest.mark.parametrize("bad", ['{"score": null}', '{"score": "high"}', "not json", '{"score": true}', ""])
+def test_invalid_llm_score_never_written_when_method_llm(bad):
+    res = core.score_lead({"lead": "CRM-LEAD-0001", "method": "llm"}, llm=_llm(bad))
+    assert res["status"] == "llm_unavailable" and res["score"] is None
+    assert _FakeClient.posted == [] and _FakeClient.put_calls == []
+
+
+def test_method_llm_without_llm_writes_nothing():
+    res = core.score_lead({"lead": "CRM-LEAD-0001", "method": "llm"})
+    assert res["status"] == "llm_unavailable" and _FakeClient.posted == [] and _FakeClient.put_calls == []
+
+
+def test_auto_falls_back_to_rules_on_invalid_llm():
+    res = core.score_lead({"lead": "CRM-LEAD-0001"}, llm=_llm("garbage"))
+    assert res["status"] == "done" and res["method"] == "rules" and isinstance(res["score"], int)
+
+
+def test_rule_score_features_and_range():
+    base = {"source": "Referral", "no_of_employees": "201-500", "status": "Replied",
+            "modified": "2999-01-01 00:00:00"}
+    hi = core.rule_score(base)["score"]
+    lo = core.rule_score({"source": "Cold Calling", "no_of_employees": "1-10", "status": "Open",
+                          "modified": "2001-01-01 00:00:00"})["score"]
+    assert 0 <= lo < hi <= 100
+    assert hi == 100 and core.rule_score({})["score"] == 10 + 8 + 5
+    assert core.rule_score({"source": "Referral"})["score"] > core.rule_score({"source": "Cold Calling"})["score"]
+
+
+def test_manifest_declares_no_phantom_send_approval():
+    manifest = importlib.import_module("agentic-crm.manifest").MANIFEST
+    assert "send" not in tuple(manifest.deploy.approval)

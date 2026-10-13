@@ -63,7 +63,7 @@ MANIFEST = AppManifest(
         pain='sales pipeline & CRM',
         tagline='A pipeline that scores, researches, and drafts outreach on a real CRM.',
         agents=('score', 'research', 'draft', 'qualify'),
-        approval=('send',),
+        approval=(),   # no send capability exists; outreach is draft-only (a human sends it)
         deploy='compose',
     ),
 )
