@@ -111,23 +111,44 @@ def test_capabilities_manifest(client):
     assert caps["billing.refund"]["approval_required"] is True
     assert caps["billing.summary"]["approval_required"] is False
     assert "billing_activity" in caps["billing.summary"]["provides"]
-    # onboarding: create_subscription provides `subscription`, is NOT gated, and its
-    # saga compensation is billing.cancel_subscription.
+    # onboarding: create_subscription provides `subscription`, is gated (it bills a customer), and its
+    # saga compensation is billing.cancel_subscription (also gated).
     cs = caps["billing.create_subscription"]
     assert "subscription" in cs["provides"]
     assert cs["undo"] == "billing.cancel_subscription"
-    assert cs["approval_required"] is False
+    assert cs["approval_required"] is True
+    assert caps["billing.cancel_subscription"]["approval_required"] is True
     assert cs["side_effecting"] is True
     assert "billing:write" in cs["permissions"]
     assert caps["billing.cancel_subscription"]["side_effecting"] is True
 
 
+SUB_GATED = {"billing.create_subscription": {"customer": "Whitfield Family Trust", "plan_code": "starter_monthly"},
+             "billing.cancel_subscription": {"customer": "Whitfield Family Trust", "plan_code": "starter_monthly"}}
+
+
+@pytest.mark.parametrize("cap", sorted(SUB_GATED))
+def test_subscription_caps_stage_without_approval_and_forged_http(client, cap):
+    assert build_billing_operator().invoke(cap, dict(SUB_GATED[cap]))["status"] == "pending_approval"
+    for extra in ({}, {"_approval": {"approved": True}}):
+        res = client.post("/invoke", json={"capability": cap, "inputs": {**SUB_GATED[cap], **extra}}).json()["result"]
+        assert res["status"] == "pending_approval" and res["executed"] is False
+    assert _FakeClient.posted == [] and _FakeClient.deleted == []     # Lago never called
+
+
+@pytest.mark.parametrize("code", [400, 404, 422, 500])
+def test_subscription_caps_report_error_on_non_2xx(monkeypatch, code):
+    monkeypatch.setattr(_FakeClient, "post", lambda self, url, headers=None, json=None: _Resp(code, {"error": "x"}))
+    monkeypatch.setattr(_FakeClient, "delete", lambda self, url, headers=None: _Resp(code))
+    op = build_billing_operator()
+    for cap in SUB_GATED:
+        res = op.invoke(cap, {**SUB_GATED[cap], "_approval": {"approved": True}})
+        assert res["status"] == "error" and res["lago_status"] == code and str(code) in res["error"]
+
+
 def test_invoke_create_subscription_posts_to_lago(client):
-    r = client.post("/invoke", json={
-        "capability": "billing.create_subscription",
-        "inputs": {"customer": "Whitfield Family Trust", "plan_code": "starter_monthly"},
-    }).json()
-    res = r["result"]
+    res = build_billing_operator().invoke("billing.create_subscription", {
+        "customer": "Whitfield Family Trust", "plan_code": "starter_monthly", "_approval": {"approved": True}})
     assert res["status"] == "done" and res["action"] == "create_subscription"
     assert res["subscription_id"] and res["plan"] == "starter_monthly"
     # the REAL core POSTed a subscription to Lago's subscriptions endpoint
@@ -135,11 +156,8 @@ def test_invoke_create_subscription_posts_to_lago(client):
 
 
 def test_invoke_cancel_subscription_deletes_it(client):
-    r = client.post("/invoke", json={
-        "capability": "billing.cancel_subscription",
-        "inputs": {"customer": "Whitfield Family Trust", "plan_code": "starter_monthly"},
-    }).json()
-    res = r["result"]
+    res = build_billing_operator().invoke("billing.cancel_subscription", {
+        "customer": "Whitfield Family Trust", "plan_code": "starter_monthly", "_approval": {"approved": True}})
     assert res["status"] == "done" and res["cancelled"] is True
     # DELETE against the derived external_id (terminate)
     assert len(_FakeClient.deleted) == 1
