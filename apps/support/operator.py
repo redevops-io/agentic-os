@@ -10,12 +10,15 @@ Capabilities (syscalls):
   support.escalate        — set priority urgent + assign to an agent
   support.send_onboarding — send a welcome message to a newly-onboarded customer
 
-agentic-support has NO approval gates (modules.yaml `approval_required: []`), so none of
-the capabilities are approval_required. The write actions carry side_effecting=True so the
-runtime dedupes them exactly-once on the Idempotency-Key.
+resolve / escalate / send_onboarding are approval_required: resolve and escalate change a customer's
+ticket and send_onboarding sends a real outbound message to the customer, so on the ungoverned path they
+only STAGE (`pending_approval`, executed False) and act only on a runtime-delivered `_approval`.
+draft_reply posts a PRIVATE NOTE (human-reviewable, never customer-visible) and stays ungated. The write
+actions carry side_effecting=True so the runtime dedupes them exactly-once on the Idempotency-Key.
 """
 from __future__ import annotations
 
+from agentic_os.approval_gate import gated
 from agentic_os.mission.operator_sdk import Operator, capability
 
 from . import core
@@ -34,28 +37,28 @@ def build_support_operator() -> Operator:
         ),
         capability(
             "support.resolve",
-            lambda inp: core.resolve(inp),
+            gated("support.resolve", core.resolve, ticket_resolved=False),
             provides=["ticket_resolved"],
             outputs={"ticket_resolved": "conversation status toggled to resolved in Chatwoot"},
-            side_effecting=True, permissions=["support:write"],
+            side_effecting=True, approval_required=True, permissions=["support:write"],
             estimated_value="medium", latency_ms=600,
             concurrency_mode="exclusive", concurrency_key="support:conversation:{conversation_id}",
         ),
         capability(
             "support.escalate",
-            lambda inp: core.escalate(inp),
+            gated("support.escalate", core.escalate, ticket_escalated=False),
             provides=["ticket_escalated"],
             outputs={"ticket_escalated": "priority set to urgent + assigned to an agent"},
-            side_effecting=True, permissions=["support:write"],
+            side_effecting=True, approval_required=True, permissions=["support:write"],
             estimated_value="high", latency_ms=900,
             concurrency_mode="exclusive", concurrency_key="support:conversation:{conversation_id}",
         ),
         capability(
             "support.send_onboarding",
-            lambda inp: core.send_onboarding(inp),
+            gated("support.send_onboarding", core.send_onboarding, onboarding_sent=False),
             provides=["onboarding_sent"],
             outputs={"onboarding_sent": "welcome message delivered to the new customer in Chatwoot"},
-            side_effecting=True, permissions=["support:write"],
+            side_effecting=True, approval_required=True, permissions=["support:write"],
             estimated_value="medium", latency_ms=1000,
             concurrency_key="provider:chatwoot", max_parallelism=3,  # creates a new conversation; bounded
         ),
