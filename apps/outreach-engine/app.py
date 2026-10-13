@@ -273,7 +273,8 @@ def do_discover(instruction: str) -> dict:
     if not cands:
         return {"intent": "discover", "instruction": instruction, "plan": plan, "searched": sources, "found": 0, "added": [], "skipped": [],
                 "note": "No matching organizations found. Name a vertical (healthcare, insurance, real estate, municipal finance…) or broaden the records/data phrasing."}
-    existing = {a["account"].lower() for a in _STATE["accounts"]} | {a.lower() for a in _STATE["approved"]}
+    existing = ({a["account"].lower() for a in _STATE["accounts"]} | {a.lower() for a in _STATE["approved"]}
+                | {c["account"].lower() for c in _STATE["candidates"]})
     added, skipped = [], []
     for c in cands:
         if len(added) >= plan["count"]:
@@ -281,17 +282,18 @@ def do_discover(instruction: str) -> dict:
         if c["account"].lower() in existing:
             skipped.append({"account": c["account"], "reason": "already in your pipeline / CRM"})
             continue
-        if twenty_sync(c):
-            added.append({"account": c["account"], "evidence": c["evidence"], "signal": c.get("source"),
-                          "amount": int(c.get("amount") or _pilot_amount(c)), "url": c.get("url")})
-            _STATE["approved"].add(c["account"])
-            existing.add(c["account"].lower())
-        else:
-            skipped.append({"account": c["account"], "reason": "CRM write failed (Twenty API error)"})
+        # CANDIDATE ONLY: no auto-approval and no CRM write. A human approves via the gated `outreach.approve`.
+        _STATE["candidates"].append({**c, "candidate": True, "signal": c.get("signal") or "cold",
+                                     "source": c.get("source") or "manual"})
+        existing.add(c["account"].lower())
+        added.append({"account": c["account"], "evidence": c["evidence"], "signal": c.get("source"),
+                      "amount": int(c.get("amount") or _pilot_amount(c)), "url": c.get("url"),
+                      "status": "candidate"})
     return {"intent": "discover", "instruction": instruction, "plan": plan, "searched": sources,
-            "found": len(cands), "added": added, "skipped": skipped,
-            "note": None if added else "Found candidates but added none — see the skipped reasons."}
-
+            "found": len(cands), "status": "candidate", "candidates": added, "added": added, "skipped": skipped,
+            "crm_synced": False,
+            "note": ("Candidates only — nothing was synced to the CRM. Approve an account (outreach.approve) to "
+                     "sync it." if added else "Found candidates but added none — see the skipped reasons.")}
 
 
 @app.post("/api/discover")
@@ -392,8 +394,7 @@ def draft_followup(opp: dict) -> str:
                ". This is a polite nudge after a first note. Suggest a quick call. Output only the email body.", 260)
     if out:
         return out.strip()
-    return ("Hi — just following up on my earlier note. At " + TENANT + ", " + PITCH + ". "
-            "Happy to put together a complimentary, no-obligation portfolio review or answer any questions — worth a short call this week?")
+    return core.neutral_followup()
 
 
 def pipeline_summary() -> dict:
@@ -468,7 +469,8 @@ def _t_discover(a: dict) -> dict:
     n = len(rep.get("added", []))
     if n:
         accts = ", ".join(x["account"] for x in rep["added"])
-        return {"text": f"Added {n} lead{'' if n == 1 else 's'} to Twenty CRM: {accts}.", "data": rep}
+        return {"text": f"Found {n} candidate lead{'' if n == 1 else 's'}: {accts}. Nothing is synced to the CRM until "
+                        "you approve an account.", "data": rep}
     return {"text": rep.get("note") or "Found candidates but added none — see the skipped reasons.", "data": rep}
 
 
@@ -506,7 +508,7 @@ async def api_agent(req: Request):
     if intent == "discover":
         rep = do_discover(message)
         n = len(rep.get("added", []))
-        say = (("Added " + str(n) + " lead" + ("" if n == 1 else "s") + " to your CRM.") if n
+        say = (("Found " + str(n) + " candidate lead" + ("" if n == 1 else "s") + " (not yet in your CRM — approve to sync).") if n
                else (rep.get("note") or "No leads added."))
         return {"ok": True, "intent": "discover", "say": say, "report": rep}
     if intent == "followup":
@@ -607,7 +609,7 @@ def render(rows: list[dict], conn: bool) -> str:
         art = f' · <a href="{_esc(r["artifact"])}" target="_blank">artifact</a>' if r.get("artifact") else ""
         accts += (
             f'<div class="acct"><div class="arow"><span class="name">{_esc(r["account"])}</span>'
-            f'<span class="chip sig">{_esc(r["signal"])}</span><span class="chip play">play: {_esc(r["play"])}</span>'
+            f'<span class="chip sig">{_esc(r["signal"])}</span><span class="chip play">play: {_esc(r["play"])} (fixed policy, not learned)</span>'
             f'<span class="chip">{_esc(r["source"])}</span><span class="score">{r["score"]}</span></div>'
             f'<div class="ev">{_esc(r["evidence"])}{art}</div>'
             f'<div class="draft"><b>{_esc(d["subject"])}</b>\n\n{_esc(d["body"])}</div>'
@@ -623,7 +625,7 @@ def render(rows: list[dict], conn: bool) -> str:
 <div class=kpis>{kpi_html}</div>
 <!--AGENT_PANEL-->
 <div class=card><div style="font:500 16px/1 var(--font);margin-bottom:4px">Ranked accounts &amp; drafted outreach</div>
-<div class=foot style="margin-bottom:8px">Signal → ICP score → the play the runtime picked → the opener → your approval. Approving syncs a pilot opportunity to Twenty CRM.</div>
+<div class=foot style="margin-bottom:8px">Signal → ICP score → the fixed-policy play for that signal (not learned) → the opener → your approval. Approving syncs a pilot opportunity to Twenty CRM.</div>
 {accts}</div>
 <div class=card id=synced>
 <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">

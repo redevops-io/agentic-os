@@ -72,7 +72,7 @@ def _fake_urlopen(req, timeout=None):
 @pytest.fixture(autouse=True)
 def _fake_twenty(monkeypatch):
     _Twenty.posts = []
-    core._STATE.update(accounts=[], approved=set())     # no state bleed between tests
+    core._STATE.update(accounts=[], approved=set(), candidates=[])     # no state bleed between tests
     core._LIVE_CACHE.update(ts=0.0, rows=[])            # no cached live signals
     monkeypatch.setattr(core, "TWENTY_API_KEY", "test-key")
     monkeypatch.setattr(core.urllib.request, "urlopen", _fake_urlopen)
@@ -164,6 +164,7 @@ def test_send_all_stages_on_open_path_then_executes_in_process(client):
     # the trusted in-process path (approval present) dispatches the approved sequences — honestly reported
     done = operator.build_outreach_operator().invoke("outreach.send_all", {"_approval": {"approved": True}})
     assert done["action"] == "send_all" and done["executed"] is False     # no sender wired → honest no-op
+    assert done["status"] == "not_configured" and done["sequences_sent"] is False and done["reason"]
     assert done["staged"] == [acct] and done["sender_configured"] is False
     assert done.get("sequences_sent") is False                 # N4: never read back as a successful send
 
@@ -194,3 +195,40 @@ def test_mission_runtime_httpclient_drives_operator(client):
     approved = oc.invoke("outreach-engine", "outreach.approve", {"account": acct}, idempotency_key="m-2")
     assert approved["status"] == "pending_approval" and approved["executed"] is False   # staged over HTTP
     assert _Twenty.posts == [] and acct not in core._STATE["approved"]
+
+
+# ── discovery = candidates only; ICP-aware opener; fixed-policy labelling ────
+def _app():
+    return importlib.import_module("outreach-engine.app")
+
+
+def test_discover_produces_candidates_only_no_approval_no_crm_write(monkeypatch):
+    app = _app()
+    cands = [{"account": "Acme Health", "evidence": "RFP for records", "source": "usaspending", "amount": 20000}]
+    monkeypatch.setattr(app, "plan_search", lambda i: {"count": 3})
+    monkeypatch.setattr(app, "run_discovery", lambda plan: (cands, "test"))
+    rep = app.do_discover("find healthcare")
+    assert rep["status"] == "candidate" and rep["crm_synced"] is False
+    assert rep["candidates"][0]["status"] == "candidate"
+    assert "Acme Health" not in core._STATE["approved"]
+    assert _Twenty.posts == []                                  # nothing written to Twenty
+    rows = core.build_pipeline(live=False)
+    row = next(r for r in rows if r["account"] == "Acme Health")
+    assert row["status"] == "candidate" and row["approved"] is False
+    assert app.do_discover("again")["candidates"] == []         # no duplicate candidate
+
+
+def test_opener_depends_on_icp():
+    dev = core.teardown({"account": "rag-co", "signal": "tech_pain", "source": "github", "evidence": "builds RAG"})
+    fin = core.teardown({"account": "Delgado", "signal": "cold", "source": "manual",
+                         "evidence": "household nearing retirement with a 401(k) rollover"})
+    unk = core.teardown({"account": "Acme", "signal": "cold", "source": "usaspending", "evidence": "RFP"})
+    assert dev["icp"] == "developer" and "portfolio review" not in dev["body"]
+    assert fin["icp"] == "finance" and "portfolio review" in fin["body"]
+    assert unk["icp"] == "unknown" and "portfolio" not in unk["body"].lower()
+    assert "portfolio" not in core.neutral_followup("X").lower()
+
+
+def test_pipeline_rows_label_play_as_fixed_policy():
+    rows = core.build_pipeline(live=False)
+    assert rows and all(r["play_policy"] == "fixed policy (not learned)" for r in rows)
