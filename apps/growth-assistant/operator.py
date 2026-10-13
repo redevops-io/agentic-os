@@ -44,12 +44,14 @@ def _generate_only(fn, atype: str):
 def _push_assets(inp: dict) -> dict:
     # Execution is only reachable with a runtime-delivered `_approval`; defence in depth for direct invoke.
     if not inp.get("_approval"):
-        a = core._find_asset(str(inp.get("asset_id") or ""))
-        if not a:
-            return {"status": "error", "action": "push_assets", "error": "asset_not_found",
-                    "asset_id": inp.get("asset_id")}
-        return {"status": "pending_approval", "action": "push_assets", "push_executed": False,
-                "asset_id": a["id"], "push_preview": core.push_preview(a)}
+        # The approval gate comes FIRST: an unapproved caller always gets a staged response (never a
+        # validation error), so the gate can't be bypassed or used to probe state. The preview is for the
+        # approver; execution re-validates the asset and returns asset_not_found if it is gone.
+        aid = str(inp.get("asset_id") or "")
+        a = core._find_asset(aid) if aid else None
+        return {"status": "pending_approval", "action": "push_assets", "executed": False,
+                "push_executed": False, "asset_id": aid, "asset_found": bool(a),
+                "push_preview": core.push_preview(a) if a else None}
     return core.push_asset(inp)
 
 

@@ -274,3 +274,19 @@ def test_mission_runtime_httpclient_drives_operator(client):
 
     ask = oc.invoke("growth-assistant", "assistant.ask", {"q": "status?"}, idempotency_key="m-2")
     assert ask["status"] == "done" and ask["answer"]
+
+
+def test_push_assets_stages_before_validating_asset_id(monkeypatch):
+    """The approval gate comes first: with no `_approval` the capability ALWAYS stages (never
+    asset_not_found), so an unapproved caller can neither bypass the gate nor probe which asset ids exist."""
+    pushed = []
+    monkeypatch.setattr(core, "push_asset", lambda body: pushed.append(body) or {"status": "done"})
+    op = operator_mod.build_growth_assistant_operator()
+    for inputs in ({"asset_id": "no-such-asset"}, {}, {"asset_id": ""}):
+        res = op.invoke("assistant.push_assets", dict(inputs))
+        assert res["status"] == "pending_approval" and res["executed"] is False, res
+        assert res["asset_found"] is False and res["push_preview"] is None
+    assert pushed == []                                    # nothing was pushed
+    # a runtime-delivered approval (in-process, as the Mission runtime does) reaches the core
+    op.invoke("assistant.push_assets", {"asset_id": "x", "_approval": {"approved": True}})
+    assert len(pushed) == 1
