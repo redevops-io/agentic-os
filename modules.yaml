@@ -34,7 +34,7 @@ modules:
     port: 8209
     tagline: Books that categorize, reconcile, and close themselves.
     agents: [categorize, reconcile, close]
-    approval_required: [close]
+    approval_required: [categorize, close]
   - name: agentic-compliance
     source: apps/compliance
     pain: data privacy & regulations
@@ -70,7 +70,7 @@ modules:
     pain: pilot outreach & pipeline
     deploy: compose
     port: 8214
-    tagline: Lands pilots — learns which outreach play converts per account signal.
+    tagline: Lands pilots — ranks accounts by signal and applies a fixed (not learned) outreach play.
     agents: [sourcer, personalizer, sequencer]
     approval_required: [send_sequence]
   - name: social-autopilot
@@ -95,7 +95,6 @@ modules:
     port: 8210
     tagline: A pipeline that scores, researches, and drafts outreach on a real CRM.
     agents: [score, research, draft, qualify]
-    approval_required: [send]
   - name: lifecycle
     source: apps/lifecycle
     pain: lifecycle email & SMS marketing
