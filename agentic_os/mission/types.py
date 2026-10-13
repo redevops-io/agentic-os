@@ -432,6 +432,7 @@ class Mission:
     # the mission so a node/planner can resolve them and EXPLAIN/replay can see what was requested, rather
     # than being dropped at the delegation hop. Optional; legacy callers leave it empty.
     inputs: dict[str, Any] = field(default_factory=dict)
+    intervention_id: str = ""               # the Decision (InterventionRecord) that delegated this mission
     id: str = field(default_factory=lambda: new_id("mission"))
     created_at: float = field(default_factory=now)
     updated_at: float = field(default_factory=now)

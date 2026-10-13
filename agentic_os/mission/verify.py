@@ -17,6 +17,61 @@ from .registry import CapabilityRegistry
 from .types import StateAssertion, VerificationDecision, VerificationResult
 
 
+# Positive indicators of failure. A denylist by design: the verifier must never *mint* success from a result
+# that says (in any of the shapes real handlers use) that it did not succeed.
+FAILED_STATUSES = frozenset({
+    "error", "err", "failed", "failure", "forbidden", "unauthorized", "unavailable", "timeout", "conflict",
+    "denied", "rejected", "blocked", "invalid", "not_found", "unverifiable", "pending_approval",
+    "awaiting_approval", "awaiting_connector", "partial", "undeliverable", "not_configured"})
+STAGED_STATUSES = frozenset({"pending_approval", "awaiting_approval", "awaiting_connector"})
+_CODE_KEYS = frozenset({"status_code", "http_status", "http_code", "status"})
+
+
+def _is_http_error(k: str, v) -> bool:
+    if isinstance(v, bool) or not isinstance(v, int) or v < 400:
+        return False
+    k = k.lower()
+    return k in _CODE_KEYS or k.endswith("_status") or k.endswith("_status_code") or k.endswith("_http_status")
+
+
+def is_staged(result) -> bool:
+    """True when the result says 'staged / awaiting approval' (the ``pending_approval()`` shape)."""
+    return isinstance(result, dict) and str(result.get("status", "")).strip().lower() in STAGED_STATUSES
+
+
+def result_failed(result) -> "tuple[bool, str]":
+    """The ONE shared classifier of failure-shaped results, used both when the operator mints N4 read-back
+    markers and when the verifier decides whether a result may commit. Returns ``(failed, reason)``."""
+    if not isinstance(result, dict):
+        return True, "result is not a dict"
+    st = result.get("status")
+    if isinstance(st, str) and st.strip().lower() in FAILED_STATUSES:
+        return True, f"status={st.strip().lower()}"
+    if result.get("ok") is False:
+        return True, "ok is False"
+    if result.get("success") is False:
+        return True, "success is False"
+    if result.get("executed") is False:
+        return True, "executed is False"
+    for k in ("error", "errors"):
+        if result.get(k):
+            return True, f"{k} present"
+    for k, v in result.items():
+        if isinstance(k, str) and _is_http_error(k, v):
+            return True, f"{k}={v}"
+    return False, ""
+
+
+def _bool_ish(type_name) -> bool:
+    return str(type_name or "").strip().lower() in {"bool", "boolean"}
+
+
+def _output_value_failed(value, type_name) -> bool:
+    if value is None or value is False or (isinstance(value, str) and value == ""):
+        return True
+    return _bool_ish(type_name) and value == 0
+
+
 class Verifier(Protocol):
     def verify(self, node, result, world, mission) -> VerificationResult: ...
 
@@ -42,6 +97,18 @@ class CompositeVerifier:
         outs = list((cap.outputs or {}).keys()) if cap else []
         syn_ok = isinstance(result, dict) and all(k in result for k in outs)
         checks.append({"stage": "syntactic", "passed": syn_ok, "detail": f"expects outputs {outs}"})
+
+        # 1b. outcome — the declared output VALUES must read back as success (a present-but-False marker is
+        # a failure), and a result the shared classifier calls failed never commits regardless of its keys.
+        failed, why = result_failed(result)
+        if not failed and cap is not None and isinstance(result, dict):
+            types_ = cap.outputs or {}
+            bad = [k for k in outs if k in result and _output_value_failed(result[k], types_.get(k))]
+            if bad:
+                failed, why = True, f"declared output {bad} read back falsey"
+        checks.append({"stage": "outcome", "passed": not failed,
+                       "detail": why or "result carries no failure indicator"})
+        syn_ok = syn_ok and not failed
 
         # 2. policy — the capability's permissions still hold under the mission's grants
         granted = self.granted_of(mission)

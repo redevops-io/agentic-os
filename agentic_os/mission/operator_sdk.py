@@ -106,22 +106,18 @@ class Operator:
         except (TypeError, ValueError):
             arity = 1
         result = (fn(inputs, secrets or {}) if arity >= 2 else fn(inputs)) or {}
-        # Read-back contract (N4): consequential capabilities must carry their declared output keys as
-        # real handler/read-back facts. The SDK may still fill compatibility markers for non-side-effecting
-        # read tools, but a write that omits its declared output must stay unverifiable so Mission verification
-        # rejects it instead of accepting a synthesized success marker.
+        # Read-back contract (N4) — see below.
         spec = self._specs.get(capability)
         outs = list((getattr(spec, "outputs", None) or {}).keys()) if spec else []
-        # Compatibility markers are synthesized only for successful non-side-effecting reads. A result that
-        # signals failure / denial / pending (an `error`, `executed: False`, `ok: False`, or a non-success
-        # `status`) is left as-is, and side-effecting capabilities never receive synthesized output keys. A
-        # LAPI 403, failed write, or provider-only receipt can no longer be minted into `{key: True}` and read
-        # back as success.
-        _failed = isinstance(result, dict) and (
-            bool(result.get("error")) or result.get("executed") is False or result.get("ok") is False
-            or str(result.get("status", "")).lower() in {
-                "error", "failed", "failure", "denied", "rejected", "pending_approval",
-                "awaiting_approval", "awaiting_connector", "unverifiable", "blocked"})
+        # Compatibility markers are synthesised ONLY for successful NON-side-effecting reads. A side-effecting
+        # capability never receives a synthesised output key: it must return its own proof of the write (a real
+        # read-back), otherwise the Mission verifier reads the declared key back as ABSENT and REJECTS. A result
+        # that signals failure / denial / pending is likewise left as-is, so a LAPI 403 or a failed write can
+        # never be minted into `{key: True}` and read back as success.
+        # The failure classifier is shared with the Mission verifier (mission.verify.result_failed) so the two
+        # can never disagree about what a failure looks like.
+        from .verify import result_failed  # noqa: PLC0415
+        _failed = isinstance(result, dict) and result_failed(result)[0]
         can_synthesize_marker = bool(spec and not getattr(spec, "side_effecting", False))
         if (can_synthesize_marker and isinstance(result, dict) and result and outs
                 and not _failed and not any(k in result for k in outs)):

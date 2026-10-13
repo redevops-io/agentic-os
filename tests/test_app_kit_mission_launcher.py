@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from agentic_os.agent_gateway.contracts import ApprovalPolicy, RiskTier
 from agentic_os.app_kit import BridgeOutcome, bridge_selection
-from agentic_os.app_kit.mission_launcher import MissionRuntimeLauncher, drive
+from agentic_os.app_kit.mission_launcher import MissionRuntimeLauncher, auto_approve_for_tests, drive
 from agentic_os.intervention_record import InMemoryInterventionStore
 from agentic_os.mission.executor import Executor
 from agentic_os.mission.operator_sdk import LocalOperatorClient, Operator, capability
@@ -71,7 +71,7 @@ def test_ungated_action_runs_to_succeeded_end_to_end():
     assert res.mission_id                                   # a real mission id was minted
     assert res.record.mission_id == res.mission_id          # the record links to it
 
-    mission = drive(rt, res.mission_id)                     # run it
+    mission = drive(rt, res.mission_id, approver=auto_approve_for_tests)                     # run it
     assert mission.state is MissionState.SUCCEEDED
     assert "draft_outreach" in str(rt._world(res.mission_id).snapshot())  # capability output landed
 
@@ -110,7 +110,7 @@ def test_drive_auto_approves_gate():
                       risk=RiskTier.CONSEQUENTIAL, approval=ApprovalPolicy.REQUIRED)
     res = bridge_selection(_select(cand), store=store, policy_version="v",
                            launcher=MissionRuntimeLauncher(rt))
-    mission = drive(rt, res.mission_id)                     # auto-approves the gate
+    mission = drive(rt, res.mission_id, approver=auto_approve_for_tests)                     # auto-approves the gate
     assert mission.state is MissionState.SUCCEEDED
 
 
