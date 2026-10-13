@@ -14,14 +14,54 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Callable
 
-DEPLOY_ROOT = os.environ.get("INFRA_DEPLOY_ROOT",
-                             str(Path(__file__).resolve().parents[3] / "deploy"))
-TF_ROOT = os.path.join(DEPLOY_ROOT, "terraform")
-ANSIBLE_ROOT = os.path.join(DEPLOY_ROOT, "ansible")
+
+def _default_deploy_root() -> str:
+    """INFRA_DEPLOY_ROOT if set, else the repo's own ``deploy/`` dir (apps/infra/core.py -> parents[2]).
+    If neither exists the root is "" and every terraform/ansible path FAILS CLOSED with a clear error --
+    we never guess a directory outside the repo."""
+    env = os.environ.get("INFRA_DEPLOY_ROOT")
+    if env:
+        return env
+    repo_deploy = Path(__file__).resolve().parents[2] / "deploy"
+    return str(repo_deploy) if repo_deploy.is_dir() else ""
+
+
+DEPLOY_ROOT = _default_deploy_root()
+TF_ROOT = os.path.join(DEPLOY_ROOT, "terraform") if DEPLOY_ROOT else ""
+ANSIBLE_ROOT = os.path.join(DEPLOY_ROOT, "ansible") if DEPLOY_ROOT else ""
+
+
+class InfraInputError(ValueError):
+    """Rejected infra input (bad cloud / path escape / unsafe var). Handlers return it as an error result."""
+
+
+_CLOUD_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_VAR_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_FORBIDDEN_EXTRA_VARS = frozenset({"ansible_python_interpreter", "ansible_connection",
+                                   "ansible_shell_executable"})
+
+
+def _inside(root: str, path: str) -> bool:
+    r, p = os.path.realpath(root), os.path.realpath(path)
+    return p == r or p.startswith(r + os.sep)
+
+
+def _check_extra_vars(extra_vars: "dict | None") -> dict:
+    out: dict = {}
+    for k, v in (extra_vars or {}).items():
+        if not isinstance(k, str) or not _VAR_KEY_RE.match(k):
+            raise InfraInputError(f"extra_vars key {k!r} is not allowed (must match {_VAR_KEY_RE.pattern})")
+        if k in _FORBIDDEN_EXTRA_VARS:
+            raise InfraInputError(f"extra_vars key {k!r} is forbidden")
+        if str(v).lstrip().startswith("@"):
+            raise InfraInputError(f"extra_vars value for {k!r} may not start with '@' (file include)")
+        out[k] = v
+    return out
 
 Runner = Callable[[list, "str | None"], "tuple[int, str, str]"]   # (argv, cwd) -> (rc, stdout, stderr)
 HttpGet = Callable[[str], int]                                     # url -> status code
@@ -42,12 +82,40 @@ def _http_get(url: str) -> int:
 
 
 def _env_dir(cloud: str) -> str:
-    return os.path.join(TF_ROOT, "envs", cloud)
+    if not TF_ROOT:
+        raise InfraInputError("infra deploy root is not configured: set INFRA_DEPLOY_ROOT "
+                              "(no repo-relative deploy/ directory found) -- refusing to guess a path")
+    if not isinstance(cloud, str) or not _CLOUD_RE.match(cloud):
+        raise InfraInputError(f"invalid cloud {cloud!r}: must match {_CLOUD_RE.pattern}")
+    envs = os.path.join(TF_ROOT, "envs")
+    d = os.path.join(envs, cloud)
+    if not _inside(envs, d):
+        raise InfraInputError(f"cloud {cloud!r} resolves outside the deploy root")
+    return d
+
+
+def _guard(action: str, cloud: "str | None" = None):
+    """Decorator-free helper: turn an InfraInputError into the uniform error result."""
+    def wrap(fn):
+        def inner(*a, **kw):
+            try:
+                return fn(*a, **kw)
+            except InfraInputError as e:
+                r = {"status": "error", "action": action, "error": str(e), "rc": None}
+                if action == "provision":
+                    r["applied"] = False
+                return r
+        inner.__name__ = fn.__name__
+        inner.__doc__ = fn.__doc__
+        return inner
+    return wrap
 
 
 def _var_args(tf_vars: "dict | None") -> list:
     out: list = []
     for k, v in (tf_vars or {}).items():
+        if not isinstance(k, str) or not _VAR_KEY_RE.match(k):
+            raise InfraInputError(f"terraform var name {k!r} is not allowed")
         # Python bools stringify as "True"/"False"; terraform bool vars need lowercase true/false.
         if isinstance(v, bool):
             v = "true" if v else "false"
@@ -88,10 +156,11 @@ def plan_digest(cloud: str) -> str:
     try:
         with open(_plan_path(cloud), "rb") as fh:
             return hashlib.sha256(fh.read()).hexdigest()
-    except OSError:
+    except (OSError, InfraInputError):
         return ""
 
 
+@_guard("plan")
 def terraform_plan(cloud: str, tf_vars: "dict | None" = None, *, run: Runner = _run) -> dict:
     # `-out` writes the plan to disk so `provision` can apply exactly this plan (and nothing else).
     argv = ["terraform", f"-chdir={_env_dir(cloud)}", "plan", "-input=false", "-no-color",
@@ -106,6 +175,7 @@ def terraform_plan(cloud: str, tf_vars: "dict | None" = None, *, run: Runner = _
             "stdout": out[-4000:], "stderr": err[-3000:]}
 
 
+@_guard("provision")
 def terraform_apply(cloud: str, tf_vars: "dict | None" = None, *, approved_digest: "str | None" = None,
                     run: Runner = _run) -> dict:
     # Apply the SAVED, approved plan verbatim — NOT a fresh `-auto-approve` plan. `tf_vars` are already
@@ -116,6 +186,12 @@ def terraform_apply(cloud: str, tf_vars: "dict | None" = None, *, approved_diges
     # TOCTOU bind (#6): when the approval carried a plan digest, re-hash the on-disk plan NOW and refuse if it
     # differs — the plan file could have been overwritten between approval and apply. Fail closed: a mismatch
     # (or a missing plan where a digest was expected) never applies.
+    if not approved_digest:
+        return {"status": "error", "action": "provision", "cloud": cloud, "rc": None,
+                "error": "plan_digest_required", "applied": False,
+                "summary": ("terraform apply requires the approved plan digest (the `plan_digest` emitted by "
+                            "infra.plan and bound into the approval) -- refusing to apply whatever plan "
+                            "file happens to be on disk.")}
     if approved_digest:
         on_disk = plan_digest(cloud)
         if on_disk != approved_digest:
@@ -134,6 +210,7 @@ def terraform_apply(cloud: str, tf_vars: "dict | None" = None, *, approved_diges
             "stdout": out[-4000:], "stderr": err[-3000:]}
 
 
+@_guard("destroy_delta")
 def terraform_destroy(cloud: str, tf_vars: "dict | None" = None, *, run: Runner = _run) -> dict:
     """Saga compensation for a failed/rejected provision — tear down the just-applied delta."""
     argv = ["terraform", f"-chdir={_env_dir(cloud)}", "destroy", "-input=false",
@@ -153,9 +230,23 @@ def terraform_outputs(cloud: str, *, run: Runner = _run) -> dict:
 
 
 # ── Ansible ──────────────────────────────────────────────────────────────────
+def _resolve_playbook(playbook: str) -> str:
+    if not ANSIBLE_ROOT:
+        raise InfraInputError("infra deploy root is not configured: set INFRA_DEPLOY_ROOT "
+                              "(no repo-relative deploy/ directory found) -- refusing to guess a path")
+    if not isinstance(playbook, str) or not playbook.strip():
+        raise InfraInputError("playbook is required")
+    pb = playbook if os.path.isabs(playbook) else os.path.join(ANSIBLE_ROOT, playbook)
+    if not _inside(ANSIBLE_ROOT, pb):
+        raise InfraInputError(f"playbook {playbook!r} resolves outside the deploy root")
+    return pb
+
+
+@_guard("configure")
 def ansible_playbook(playbook: str, *, inventory: "str | None" = None,
                      extra_vars: "dict | None" = None, run: Runner = _run) -> dict:
-    pb = playbook if os.path.isabs(playbook) else os.path.join(ANSIBLE_ROOT, playbook)
+    pb = _resolve_playbook(playbook)
+    extra_vars = _check_extra_vars(extra_vars)
     argv = ["ansible-playbook", pb]
     if inventory:
         argv += ["-i", inventory]
@@ -181,6 +272,7 @@ def _ansible_changed(text: str) -> int:
     return sum(int(n) for n in re.findall(r"changed=(\d+)", text or ""))
 
 
+@_guard("drift")
 def drift(cloud: str, *, check_playbook: "str | None" = None, inventory: "str | None" = None,
           run: Runner = _run) -> dict:
     """Read-only drift check: `terraform plan -detailed-exitcode` (0=clean · 2=drift · 1=error) for
@@ -192,7 +284,7 @@ def drift(cloud: str, *, check_playbook: "str | None" = None, inventory: "str | 
              "summary": _last_line(out if rc in (0, 2) else err)}
     result = {"action": "drift", "cloud": cloud, "infrastructure": infra}
     if check_playbook:
-        argv = ["ansible-playbook", os.path.join(ANSIBLE_ROOT, check_playbook), "--check", "--diff"]
+        argv = ["ansible-playbook", _resolve_playbook(check_playbook), "--check", "--diff"]
         if inventory:
             argv += ["-i", inventory]
         crc, cout, cerr = run(argv, ANSIBLE_ROOT)
