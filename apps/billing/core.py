@@ -370,6 +370,7 @@ def create_subscription(body: dict) -> dict:
     plan = body.get("plan_code") or DEFAULT_PLAN_CODE
     external_id = _subscription_external_id(customer, plan)
     lago_id = None
+    status_code = 0
     with httpx.Client(timeout=10.0) as client:
         resp = client.post(
             f"{LAGO_API_URL}/api/v1/subscriptions",
@@ -380,15 +381,26 @@ def create_subscription(body: dict) -> dict:
                 "external_id": external_id,
             }},
         )
+        status_code = resp.status_code
         try:
             lago_id = (resp.json().get("subscription") or {}).get("lago_id")
         except Exception:  # noqa: BLE001 — non-JSON / error body: fall back to external_id
             lago_id = None
+    if not (200 <= status_code < 300):          # never report "done" for a rejected Lago call
+        return {
+            "status": "error",
+            "action": "create_subscription",
+            "error": f"Lago returned HTTP {status_code}",
+            "lago_status": status_code,
+            "subscription": False,
+            "plan": plan,
+        }
     return {
         "status": "done",
         "action": "create_subscription",
         "subscription_id": external_id or lago_id,
         "plan": plan,
+        "lago_status": status_code,
     }
 
 
@@ -401,9 +413,19 @@ def cancel_subscription(body: dict) -> dict:
     plan = body.get("plan_code") or DEFAULT_PLAN_CODE
     external_id = body.get("subscription_id") or _subscription_external_id(customer, plan)
     with httpx.Client(timeout=10.0) as client:
-        client.delete(f"{LAGO_API_URL}/api/v1/subscriptions/{external_id}", headers=_headers())
+        resp = client.delete(f"{LAGO_API_URL}/api/v1/subscriptions/{external_id}", headers=_headers())
+        status_code = resp.status_code
+    if not (200 <= status_code < 300):          # never report "done" for a rejected Lago call
+        return {
+            "status": "error",
+            "action": "cancel_subscription",
+            "error": f"Lago returned HTTP {status_code}",
+            "lago_status": status_code,
+            "cancelled": False,
+        }
     return {
         "status": "done",
         "action": "cancel_subscription",
         "cancelled": True,
+        "lago_status": status_code,
     }

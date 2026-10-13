@@ -120,15 +120,18 @@ def test_capabilities_manifest(client):
         "assistant.community_blueprint", "assistant.cold_outreach", "assistant.hire_brief",
         "assistant.ask",
     }
-    # modules.yaml declares approval_required: [] → NO capability is gated
-    assert all(c["approval_required"] is False for c in caps.values())
-    # only core-writing capabilities are side-effecting
+    # the three push-capable capabilities are approval-gated (generation free, PUSH gated)
+    for n in ("founder_content", "community_blueprint", "cold_outreach"):
+        assert caps[f"assistant.{n}"]["approval_required"] is True
+    for n in ("playbook", "subreddit_plan", "hire_brief", "ask"):
+        assert caps[f"assistant.{n}"]["approval_required"] is False
+    # core-writing capabilities AND local-asset writers (playbook/subreddit_plan/hire_brief) are side-effecting
     assert caps["assistant.founder_content"]["side_effecting"] is True
     assert caps["assistant.community_blueprint"]["side_effecting"] is True
     assert caps["assistant.cold_outreach"]["side_effecting"] is True
-    assert caps["assistant.playbook"]["side_effecting"] is False
-    assert caps["assistant.subreddit_plan"]["side_effecting"] is False
-    assert caps["assistant.hire_brief"]["side_effecting"] is False
+    assert caps["assistant.playbook"]["side_effecting"] is True      # writes an asset JSON
+    assert caps["assistant.subreddit_plan"]["side_effecting"] is True
+    assert caps["assistant.hire_brief"]["side_effecting"] is True
     assert caps["assistant.ask"]["side_effecting"] is False
     # provides wiring is present for the planner to reason over
     assert "growth_playbook" in caps["assistant.playbook"]["provides"]
@@ -150,8 +153,40 @@ def test_subreddit_plan_runs_template(client, http):
     assert http.posts == []
 
 
+def _approved(cap, inputs):
+    """Trusted in-process path: the runtime delivers `_approval` on a resumed, approved node."""
+    return build_growth_assistant_operator().invoke(cap, {**inputs, "_approval": {"approved": True}})
+
+
+PUSH_CASES = {
+    "assistant.cold_outreach": {"startup": {"name": "CIWatch"}, "push": True,
+                                "targets": [{"name": "Jane Founder", "handle": "@jane", "company": "Acme"}]},
+    "assistant.community_blueprint": {"startup": {"name": "CIWatch"}, "platform": "discord", "push": True},
+    "assistant.founder_content": {"startup": {"name": "CIWatch"}, "platform": "x", "count": 3, "push": True},
+}
+
+
+@pytest.mark.parametrize("cap", sorted(PUSH_CASES))
+def test_push_is_staged_without_approval_but_generation_still_runs(client, http, cap):
+    op = build_growth_assistant_operator()
+    results = [op.invoke(cap, dict(PUSH_CASES[cap]))]
+    for extra in ({}, {"_approval": {"approved": True}}):      # open HTTP strips forged approval markers
+        results.append(_invoke(client, cap, {**PUSH_CASES[cap], **extra}))
+    for res in results:
+        assert res["status"] == "done" and res["asset_id"]      # generation is free
+        assert res["push_status"] == "pending_approval" and res["push_executed"] is False
+        assert res["pushed"] == {}
+    assert http.posts == []                                      # no core was written
+
+
+@pytest.mark.parametrize("cap", sorted(PUSH_CASES))
+def test_push_executes_with_runtime_approval(http, cap):
+    res = _approved(cap, PUSH_CASES[cap])
+    assert res["pushed"] and http.posts
+
+
 def test_cold_outreach_pushes_erpnext_leads(client, http):
-    res = _invoke(client, "assistant.cold_outreach", {
+    res = _approved("assistant.cold_outreach", {
         "startup": {"name": "CIWatch"}, "push": True,
         "targets": [{"name": "Jane Founder", "handle": "@jane", "company": "Acme"}],
     })
@@ -161,7 +196,7 @@ def test_cold_outreach_pushes_erpnext_leads(client, http):
 
 
 def test_community_blueprint_pushes_listmonk_list(client, http):
-    res = _invoke(client, "assistant.community_blueprint", {
+    res = _approved("assistant.community_blueprint", {
         "startup": {"name": "CIWatch"}, "platform": "discord", "push": True,
     })
     assert res["status"] == "done"
@@ -170,7 +205,7 @@ def test_community_blueprint_pushes_listmonk_list(client, http):
 
 
 def test_founder_content_pushes_postiz_drafts(client, http):
-    res = _invoke(client, "assistant.founder_content", {
+    res = _approved("assistant.founder_content", {
         "startup": {"name": "CIWatch"}, "platform": "x", "count": 3, "push": True,
     })
     assert res["status"] == "done" and res["platform"] == "x"
@@ -194,9 +229,10 @@ def test_ask_is_readonly(client, http):
 
 
 def test_idempotency_dedupes_side_effect(client, http):
-    body = {"startup": {"name": "CIWatch"}, "platform": "discord", "push": True}
-    first = _invoke(client, "assistant.community_blueprint", body, idem="k-1")
-    second = _invoke(client, "assistant.community_blueprint", body, idem="k-1")
+    op = build_growth_assistant_operator()
+    body = {"startup": {"name": "CIWatch"}, "platform": "discord", "push": True, "_approval": {"approved": True}}
+    first = op.invoke("assistant.community_blueprint", body, "k-1")
+    second = op.invoke("assistant.community_blueprint", body, "k-1")
     assert first == second
     assert http.posts == ["http://localhost:9000/api/lists"]  # list created exactly once
 

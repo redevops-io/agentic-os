@@ -40,6 +40,8 @@ def test_manifest_gates_and_undos():
     assert caps["sky.launch"].undo == "sky.down"
     assert caps["sky.launch"].side_effecting is True
     assert caps["sky.serve"].undo == "sky.serve_down"
+    for n in ("sky.serve", "sky.down", "sky.serve_down"):
+        assert caps[n].approval_required is True
     # optimize + status + check are read-only (no approval, not side-effecting)
     for ro in ("sky.optimize", "sky.status", "sky.check"):
         assert caps[ro].approval_required is False
@@ -78,8 +80,8 @@ def test_launch_uses_spot_and_reports_placement():
 def test_down_saga_and_serve_down_target_right_command():
     run = _stub({"sky serve down": (0, "", ""), "sky down": (0, "", "")})
     op = build_sky_operator(run=run)
-    op.invoke("sky.down", {"cluster": "demo"})
-    op.invoke("sky.serve_down", {"service": "svc"})
+    op.invoke("sky.down", {"cluster": "demo", "_approval": {"approved": True}})
+    op.invoke("sky.serve_down", {"service": "svc", "_approval": {"approved": True}})
     assert run.calls[0][:3] == ["sky", "down", "--yes"] and run.calls[0][-1] == "demo"
     assert run.calls[1][:4] == ["sky", "serve", "down", "--yes"] and run.calls[1][-1] == "svc"
 
@@ -111,3 +113,37 @@ def test_launch_pins_to_chosen_and_rewards_actual_placement():
     assert "--instance-type" in launch_argv and "g2-standard-4" in launch_argv
     assert res["cloud"] == "GCP" and res["region"] == "us-central1"
     assert isinstance(res["reward"], float)                             # reward recorded for the actual placement
+
+
+SKY_GATED = {"sky.serve": {"spec": {"name": "svc"}}, "sky.down": {"cluster": "demo"},
+             "sky.serve_down": {"service": "svc"}}
+
+
+def _client(op):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    app.include_router(op.router())
+    return TestClient(app)
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("cap", sorted(SKY_GATED))
+def test_sky_gated_stages_without_approval_in_process_and_http_forged(cap):
+    run = _stub({})
+    op = build_sky_operator(run=run)
+    assert op.invoke(cap, dict(SKY_GATED[cap]))["status"] == "pending_approval"
+    c = _client(op)
+    for extra in ({}, {"_approval": {"approved": True}}):
+        res = c.post("/invoke", json={"capability": cap, "inputs": {**SKY_GATED[cap], **extra}}).json()["result"]
+        assert res["status"] == "pending_approval" and res["executed"] is False
+    assert run.calls == []                    # the sky CLI is never run
+
+
+@pytest.mark.parametrize("cap", sorted(SKY_GATED))
+def test_sky_gated_executes_with_runtime_approval(cap):
+    run = _stub({})
+    build_sky_operator(run=run).invoke(cap, {**SKY_GATED[cap], "_approval": {"approved": True}})
+    assert run.calls and run.calls[0][0] == "sky"

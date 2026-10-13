@@ -6,7 +6,7 @@ actions the console exposes at `/agent/run`, now discoverable + idempotent on th
 
 Capabilities (syscalls):
   outreach.refresh    — rebuild the ranked pipeline from live GitHub/HN signals (no CRM write)
-  outreach.approve    — human sign-off that syncs a real pilot to Twenty (Company+Person+Opportunity)
+  outreach.approve    — human sign-off that syncs a real pilot to Twenty (Company+Person+Opportunity)  [approval gate]
   outreach.send_all   — dispatch the approved outreach sequences to prospects  [approval gate: send_sequence]
 
 Per control-plane modules.yaml the gate is `approval_required: [send_sequence]` — nothing reaches a
@@ -32,10 +32,12 @@ def build_outreach_operator() -> Operator:
         ),
         capability(
             "outreach.approve",
-            lambda inp: core.approve(inp),
+            lambda inp: (core.approve(inp) if inp.get("_approval")
+                         else pending_approval("outreach.approve", account=inp.get("account", ""),
+                                               lead_synced=False)),
             provides=["lead_synced"],
             outputs={"lead_synced": "approved lead synced to Twenty (Company + Person + Opportunity)"},
-            side_effecting=True,
+            side_effecting=True, approval_required=True,
             permissions=["outreach:write"], estimated_value="high", latency_ms=1500,
             concurrency_mode="exclusive", concurrency_key="outreach:account:{account}",
         ),

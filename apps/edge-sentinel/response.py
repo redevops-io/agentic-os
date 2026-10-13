@@ -89,6 +89,11 @@ def execute_response(operator: Operator, proposal: GovernedResponseProposal, *,
                                               "actor": decision.actor}}
         result = operator.invoke(proposal.capability_name, inputs,
                                  idempotency_key=idempotency_key or proposal.proposal_id)
+        if (result.get("status") in ("error", "pending_approval")) or result.get("executed") is False:
+            return ActionReceipt(request_id=proposal.proposal_id, decision_id=decision.decision_id,
+                                 status="FAILED",
+                                 error=str(result.get("error") or result.get("summary")
+                                           or result.get("status") or "handler did not execute"))
         return ActionReceipt(request_id=proposal.proposal_id, decision_id=decision.decision_id,
                              status="SUCCEEDED", external_ref=str(result.get("id") or result.get("decision_id") or ""))
     except Exception as e:  # the operator/core failed — a FAILED receipt, still distinct from verification
@@ -109,6 +114,29 @@ class Verification:
         return self.__dict__.copy()
 
 
+def _ip_in_posture(ip: str, posture) -> bool:
+    """Parsed-IP EQUALITY against decision records (exact leaf values) — never a substring match, so
+    10.0.0.1 does not verify against 10.0.0.15."""
+    import ipaddress  # noqa: PLC0415
+    try:
+        want = ipaddress.ip_address(str(ip).strip())
+    except ValueError:
+        return False
+
+    def walk(o) -> bool:
+        if isinstance(o, str):
+            try:
+                return ipaddress.ip_address(o.strip()) == want
+            except ValueError:
+                return False
+        if isinstance(o, dict):
+            return any(walk(v) for v in o.values())
+        if isinstance(o, (list, tuple, set)):
+            return any(walk(v) for v in o)
+        return False
+    return walk(posture)
+
+
 def verify_response(operator: Operator, proposal: GovernedResponseProposal, receipt: ActionReceipt) -> Verification:
     """Re-check the world with a READ-ONLY capability (sentinel.triage) — did the ban actually land?
     Distinct from the receipt: a SUCCEEDED receipt with an unverified world is a real, reportable state."""
@@ -120,8 +148,7 @@ def verify_response(operator: Operator, proposal: GovernedResponseProposal, rece
         posture = operator.invoke("sentinel.triage", {}) or {}
     except Exception as e:
         return Verification(proposal.proposal_id, verified=False, method="sentinel.triage", detail=str(e))
-    blob = repr(posture)
-    present = bool(ip) and ip in blob
+    present = bool(ip) and _ip_in_posture(ip, posture)
     return Verification(proposal.proposal_id, verified=present, method="sentinel.triage",
                         detail=f"{'ban present' if present else 'ban NOT observed'} for {ip}")
 

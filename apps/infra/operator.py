@@ -4,10 +4,12 @@ Exposes the capabilities the `deploy_app` mission template composes, over Terraf
 
   infra.plan             — terraform plan (read-only; the diff as evidence)
   infra.provision        — terraform apply         [approval gate] undo=infra.destroy_delta
-  infra.configure        — ansible-playbook rollout                undo=infra.rollback_release
+  infra.configure        — ansible-playbook rollout [approval gate] undo=infra.rollback_release
   infra.verify           — /health + /capabilities smoke
-  infra.destroy_delta    — terraform destroy   (saga compensation)
-  infra.rollback_release — ansible redeploy prior release (saga compensation)
+  infra.destroy_delta    — terraform destroy   (saga compensation) [approval gate]
+  infra.rollback_release — ansible redeploy prior release (saga compensation) [approval gate]
+
+Every write capability stages (`pending_approval`, executed False) unless the runtime delivers `_approval`.
 
 `build_infra_operator(run=…, http_get=…)` injects the command runner + health probe so the operator
 is tested without terraform / ansible / network.
@@ -17,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 
+from agentic_os.approval_gate import gated
 from agentic_os.mission.operator_sdk import Operator, capability, pending_approval
 
 from . import core
@@ -92,8 +95,9 @@ def build_infra_operator(*, run=None, http_get=None) -> Operator:
                    side_effecting=True, approval_required=True, undo="infra.destroy_delta",
                    permissions=["infra:write"], estimated_value="high", latency_ms=60000,
                    concurrency_mode="exclusive", concurrency_key=TF_STATE),
-        capability("infra.configure", _configure, provides=["app_configured"],
-                   side_effecting=True, undo="infra.rollback_release",
+        capability("infra.configure", gated("infra.configure", _configure, app_configured=False),
+                   provides=["app_configured"],
+                   side_effecting=True, approval_required=True, undo="infra.rollback_release",
                    permissions=["infra:write"], estimated_value="high", latency_ms=45000,
                    concurrency_mode="exclusive", concurrency_key=ANSIBLE_HOST),
         capability("infra.verify", _verify, provides=["deploy_verified"],
@@ -101,8 +105,10 @@ def build_infra_operator(*, run=None, http_get=None) -> Operator:
         capability("infra.drift", _drift, provides=["drift_report"],
                    permissions=["infra:read"], estimated_value="medium", latency_ms=4000,
                    concurrency_mode="read_only"),
-        capability("infra.destroy_delta", _destroy, side_effecting=True, permissions=["infra:write"],
+        capability("infra.destroy_delta", gated("infra.destroy_delta", _destroy, destroyed=False),
+                   side_effecting=True, approval_required=True, permissions=["infra:write"],
                    concurrency_mode="exclusive", concurrency_key=TF_STATE),
-        capability("infra.rollback_release", _rollback, side_effecting=True, permissions=["infra:write"],
+        capability("infra.rollback_release", gated("infra.rollback_release", _rollback, rolled_back=False),
+                   side_effecting=True, approval_required=True, permissions=["infra:write"],
                    concurrency_mode="exclusive", concurrency_key=ANSIBLE_HOST),
     ])

@@ -17,7 +17,7 @@ before execution.
 """
 from __future__ import annotations
 
-from agentic_os.mission.operator_sdk import Operator, capability
+from agentic_os.mission.operator_sdk import Operator, capability, pending_approval
 
 from . import core
 
@@ -53,19 +53,24 @@ def build_books_operator() -> Operator:
         ),
         capability(
             "books.record_revenue",
-            lambda inp: core.record_revenue(inp or {}),
+            lambda inp: (core.record_revenue(inp or {}) if (inp or {}).get("_approval")
+                         else pending_approval("books.record_revenue", amount=(inp or {}).get("amount"),
+                                               revenue_recorded=False)),
             provides=["revenue_recorded"],
             outputs={"revenue_recorded": "onboarding subscription revenue posted as an ERPNext Journal Entry"},
-            side_effecting=True, undo="books.reverse_entry",
+            side_effecting=True, approval_required=True, undo="books.reverse_entry",
             permissions=["books:write"], estimated_value="medium", latency_ms=900,
             concurrency_mode="exclusive", resource_keys=[LEDGER],
         ),
         capability(
             "books.reverse_entry",
-            lambda inp: core.reverse_entry(inp or {}),
+            lambda inp: (core.reverse_entry(inp or {}) if (inp or {}).get("_approval")
+                         else pending_approval("books.reverse_entry",
+                                               entry=(inp or {}).get("entry") or (inp or {}).get("name"),
+                                               revenue_reversed=False)),
             provides=["revenue_reversed"],
             outputs={"revenue_reversed": "the revenue Journal Entry cancelled (compensating saga undo)"},
-            side_effecting=True,
+            side_effecting=True, approval_required=True,
             permissions=["books:write"], estimated_value="medium", latency_ms=700,
             concurrency_mode="exclusive", resource_keys=[LEDGER],
         ),

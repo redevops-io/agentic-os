@@ -92,6 +92,24 @@ def _result(client, capability, inputs=None, idempotency_key=""):
     }).json()["result"]
 
 
+def _approve(acct):
+    """Trusted in-process path: the runtime delivers `_approval` on a resumed, approved node."""
+    return operator.build_outreach_operator().invoke(
+        "outreach.approve", {"account": acct, "_approval": {"approved": True}})
+
+
+def test_approve_stages_without_approval_and_never_touches_twenty(client):
+    _result(client, "outreach.refresh", {})
+    acct = core.DEMO[0]["account"]
+    _Twenty.posts = []
+    for extra in ({}, {"_approval": {"approved": True}}, {"_approval_id": "x"}):   # HTTP strips forgeries
+        res = _result(client, "outreach.approve", {"account": acct, **extra})
+        assert res["status"] == "pending_approval" and res["executed"] is False
+    direct = operator.build_outreach_operator().invoke("outreach.approve", {"account": acct})
+    assert direct["status"] == "pending_approval" and direct["lead_synced"] is False
+    assert _Twenty.posts == [] and acct not in core._STATE["approved"]
+
+
 def test_capabilities_manifest(client):
     m = client.get("/capabilities").json()
     assert m["operator"] == "outreach-engine"
@@ -100,7 +118,7 @@ def test_capabilities_manifest(client):
     # the gate is modules.yaml `approval_required: [send_sequence]` — only the send is gated
     assert caps["outreach.send_all"]["approval_required"] is True
     assert caps["outreach.refresh"]["approval_required"] is False
-    assert caps["outreach.approve"]["approval_required"] is False
+    assert caps["outreach.approve"]["approval_required"] is True      # syncs a lead to Twenty -> gated
     # side_effecting = writes/sends: refresh only reads, approve + send_all mutate the world
     assert caps["outreach.refresh"]["side_effecting"] is False
     assert caps["outreach.approve"]["side_effecting"] is True
@@ -122,7 +140,7 @@ def test_invoke_refresh_builds_pipeline_no_write(client):
 def test_invoke_approve_syncs_pilot_to_twenty(client):
     _result(client, "outreach.refresh", {})    # populate the ranked pipeline first
     acct = core.DEMO[0]["account"]
-    res = _result(client, "outreach.approve", {"account": acct})
+    res = _approve(acct)
     assert res["ok"] is True and res["action"] == "approve" and res["account"] == acct
     assert res["twenty_synced"] is True
     assert acct in core._STATE["approved"]
@@ -137,7 +155,7 @@ def test_send_all_stages_on_open_path_then_executes_in_process(client):
     live sender is wired, so the send is honestly reported UNEXECUTED (never read back as a real send)."""
     _result(client, "outreach.refresh", {})
     acct = core.DEMO[0]["account"]
-    _result(client, "outreach.approve", {"account": acct})
+    _approve(acct)
 
     staged = _result(client, "outreach.send_all", {})          # open path → stage only, never auto-send
     assert staged["status"] == "pending_approval" and staged["executed"] is False
@@ -154,8 +172,10 @@ def test_idempotency_dedupes_side_effect(client):
     _result(client, "outreach.refresh", {})
     acct = core.DEMO[0]["account"]
     _Twenty.posts = []
-    first = _result(client, "outreach.approve", {"account": acct}, idempotency_key="k-1")
-    second = _result(client, "outreach.approve", {"account": acct}, idempotency_key="k-1")
+    op = operator.build_outreach_operator()
+    inp = {"account": acct, "_approval": {"approved": True}}
+    first = op.invoke("outreach.approve", inp, "k-1")
+    second = op.invoke("outreach.approve", inp, "k-1")
     assert first == second
     # exactly-once: the pilot is synced to Twenty only on the first invoke
     assert [u for u in _Twenty.posts if "/rest/companies" in u] == ["http://twenty:3000/rest/companies"]
@@ -172,4 +192,5 @@ def test_mission_runtime_httpclient_drives_operator(client):
 
     acct = core.DEMO[0]["account"]
     approved = oc.invoke("outreach-engine", "outreach.approve", {"account": acct}, idempotency_key="m-2")
-    assert approved["twenty_synced"] is True and approved["account"] == acct
+    assert approved["status"] == "pending_approval" and approved["executed"] is False   # staged over HTTP
+    assert _Twenty.posts == [] and acct not in core._STATE["approved"]

@@ -100,9 +100,9 @@ def test_capabilities_manifest(client):
     caps = {c["name"]: c for c in m["capabilities"]}
     assert set(caps) == {"support.draft_reply", "support.resolve", "support.escalate",
                          "support.send_onboarding"}
-    # agentic-support has NO approval gates (modules.yaml approval_required: []).
+    # resolve / escalate / send_onboarding are approval-gated; draft_reply is a private note (ungated).
     for name in caps:
-        assert caps[name]["approval_required"] is False
+        assert caps[name]["approval_required"] is (name != "support.draft_reply")
         assert caps[name]["side_effecting"] is True  # each writes to Chatwoot
     assert "reply_drafted" in caps["support.draft_reply"]["provides"]
     assert "ticket_resolved" in caps["support.resolve"]["provides"]
@@ -124,12 +124,8 @@ def test_invoke_draft_reply_posts_private_note(client):
 
 
 def test_invoke_send_onboarding_posts_welcome(client):
-    r = client.post("/invoke", json={
-        "capability": "support.send_onboarding",
-        "inputs": {"customer": {"name": "Dana Smith"},
-                   "subscription": {"plan": "Pro"}},
-    }).json()
-    res = r["result"]
+    res = build_support_operator().invoke("support.send_onboarding", {
+        "customer": {"name": "Dana Smith"}, "subscription": {"plan": "Pro"}, "_approval": {"approved": True}})
     assert res["status"] == "done"
     assert res["onboarding_sent"] is True
     assert res["conversation_id"] == 99  # id returned by the fake conversation-create
@@ -142,10 +138,8 @@ def test_invoke_send_onboarding_posts_welcome(client):
 
 def test_invoke_send_onboarding_reuses_conversation(client):
     """A supplied conversation_id skips the create call and posts straight to it."""
-    res = client.post("/invoke", json={
-        "capability": "support.send_onboarding",
-        "inputs": {"conversation_id": 1, "customer": "Dana Smith"},
-    }).json()["result"]
+    res = build_support_operator().invoke("support.send_onboarding", {
+        "conversation_id": 1, "customer": "Dana Smith", "_approval": {"approved": True}})
     assert res["status"] == "done" and res["onboarding_sent"] is True
     assert res["conversation_id"] == 1
     assert _FakeClient.posted == [
@@ -154,8 +148,7 @@ def test_invoke_send_onboarding_reuses_conversation(client):
 
 
 def test_invoke_resolve_toggles_status(client):
-    res = client.post("/invoke", json={"capability": "support.resolve",
-                                        "inputs": {"conversation_id": 1}}).json()["result"]
+    res = build_support_operator().invoke("support.resolve", {"conversation_id": 1, "_approval": {"approved": True}})
     assert res["status"] == "done" and res["new_status"] == "resolved"
     assert _FakeClient.posted == [
         "http://localhost:3003/api/v1/accounts/1/conversations/1/toggle_status"
@@ -163,8 +156,7 @@ def test_invoke_resolve_toggles_status(client):
 
 
 def test_invoke_escalate_sets_priority_and_assigns(client):
-    res = client.post("/invoke", json={"capability": "support.escalate",
-                                        "inputs": {"conversation_id": 1}}).json()["result"]
+    res = build_support_operator().invoke("support.escalate", {"conversation_id": 1, "_approval": {"approved": True}})
     assert res["status"] == "done"
     assert res["results"]["assignee_id"] == 7
     # priority toggled + assignment posted (agents fetched in between via GET)
@@ -175,10 +167,10 @@ def test_invoke_escalate_sets_priority_and_assigns(client):
 
 
 def test_idempotency_dedupes_side_effect(client):
-    body = {"capability": "support.resolve", "inputs": {"conversation_id": 1},
-            "idempotency_key": "k-1"}
-    first = client.post("/invoke", json=body).json()["result"]
-    second = client.post("/invoke", json=body).json()["result"]
+    op = build_support_operator()
+    inp = {"conversation_id": 1, "_approval": {"approved": True}}
+    first = op.invoke("support.resolve", inp, "k-1")
+    second = op.invoke("support.resolve", inp, "k-1")
     assert first == second
     # exactly-once: the toggle_status write happened a single time
     assert _FakeClient.posted == [
@@ -196,4 +188,34 @@ def test_mission_runtime_httpclient_drives_operator(client):
     assert dr["status"] == "done" and dr["posted_as"] == "private_note"
 
     esc = oc.invoke("support", "support.escalate", {"conversation_id": 1}, idempotency_key="m-2")
-    assert esc["status"] == "done" and esc["results"]["assignee_id"] == 7
+    assert esc["status"] == "pending_approval" and esc["executed"] is False  # staged over untrusted HTTP
+    assert _FakeClient.posted == [
+        "http://localhost:3003/api/v1/accounts/1/conversations/1/messages"]  # only the draft note
+
+
+GATED = {
+    "support.resolve": {"conversation_id": 1},
+    "support.escalate": {"conversation_id": 1},
+    "support.send_onboarding": {"customer": {"name": "Dana Smith"}, "subscription": {"plan": "Pro"}},
+}
+
+
+@pytest.mark.parametrize("cap", sorted(GATED))
+def test_gated_capability_stages_over_http_even_with_forged_approval(client, cap):
+    for extra in ({}, {"_approval": {"approved": True}}, {"_approval_id": "x"}):
+        res = client.post("/invoke", json={"capability": cap, "inputs": {**GATED[cap], **extra}}).json()["result"]
+        assert res["status"] == "pending_approval" and res["executed"] is False
+    assert _FakeClient.posted == []          # Chatwoot never called
+
+
+@pytest.mark.parametrize("cap", sorted(GATED))
+def test_gated_capability_stages_in_process_without_approval(cap):
+    res = build_support_operator().invoke(cap, dict(GATED[cap]))
+    assert res["status"] == "pending_approval" and res["executed"] is False
+    assert _FakeClient.posted == []
+
+
+@pytest.mark.parametrize("cap", sorted(GATED))
+def test_gated_capability_executes_with_runtime_approval(cap):
+    res = build_support_operator().invoke(cap, {**GATED[cap], "_approval": {"approved": True}})
+    assert res["status"] == "done" and _FakeClient.posted

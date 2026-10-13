@@ -19,7 +19,7 @@ human-reviewed, so it too carries approval_required=True.
 """
 from __future__ import annotations
 
-from agentic_os.mission.operator_sdk import Operator, capability
+from agentic_os.mission.operator_sdk import Operator, capability, pending_approval
 
 from . import core
 
@@ -53,7 +53,9 @@ def build_compliance_operator() -> Operator:
         ),
         capability(
             "compliance.file_consent",
-            lambda inp: core.file_consent(inp),
+            lambda inp: (core.file_consent(inp) if inp.get("_approval")
+                         else pending_approval("compliance.file_consent", customer=inp.get("customer"),
+                                               subscription=inp.get("subscription"), consent_filed=False)),
             provides=["consent_filed"],
             outputs={"consent_filed": "customer consent/GDPR record appended to the append-only evidence ledger"},
             side_effecting=True, approval_required=True,

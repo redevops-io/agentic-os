@@ -52,19 +52,23 @@ def build_billing_operator() -> Operator:
         ),
         capability(
             "billing.create_subscription",
-            lambda inp: core.create_subscription(inp),
+            lambda inp: (core.create_subscription(inp) if inp.get("_approval")
+                         else pending_approval("billing.create_subscription", customer=inp.get("customer"),
+                                               plan_code=inp.get("plan_code"), subscription=False)),
             provides=["subscription"],
             outputs={"subscription": "paid subscription created on the live Lago core"},
-            side_effecting=True, undo="billing.cancel_subscription",
+            side_effecting=True, approval_required=True, undo="billing.cancel_subscription",
             permissions=["billing:write"], estimated_value="high", latency_ms=1200,
             concurrency_mode="exclusive", concurrency_key="billing:customer:{customer}",
         ),
         capability(
             "billing.cancel_subscription",
-            lambda inp: core.cancel_subscription(inp),
+            lambda inp: (core.cancel_subscription(inp) if inp.get("_approval")
+                         else pending_approval("billing.cancel_subscription", customer=inp.get("customer"),
+                                               subscription_cancelled=False)),
             provides=["subscription_cancelled"],
             outputs={"subscription_cancelled": "subscription terminated (saga compensation)"},
-            side_effecting=True,
+            side_effecting=True, approval_required=True,
             permissions=["billing:write"], estimated_value="medium", latency_ms=800,
             concurrency_mode="exclusive", concurrency_key="billing:customer:{customer}",
         ),

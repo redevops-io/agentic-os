@@ -11,6 +11,10 @@ from __future__ import annotations
 import hashlib
 import os
 
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 from infra import core
 from infra.operator import build_infra_operator
 
@@ -38,10 +42,32 @@ def test_manifest_matches_deploy_app_template_with_gates():
     assert caps["infra.plan"].approval_required is False
 
 
+def _provision_ok(op, calls):
+    """Provision with a genuinely matching on-disk plan digest (the TOCTOU bind is now mandatory)."""
+    import tempfile
+    tmp = tempfile.mkdtemp()
+    env = os.path.join(tmp, "terraform", "envs", "aws")
+    os.makedirs(env)
+    with open(os.path.join(env, core._PLAN_FILE), "wb") as fh:
+        fh.write(b"PLAN")
+    old = core.TF_ROOT
+    core.TF_ROOT = os.path.join(tmp, "terraform")
+    try:
+        return op.invoke("infra.provision", {"cloud": "aws", "vars": {"name": "acme"},
+                                             "plan_digest": hashlib.sha256(b"PLAN").hexdigest(),
+                                             "_approval": {"approved": True}})
+    finally:
+        core.TF_ROOT = old
+
+
 def test_provision_runs_terraform_apply_parameterised():
     run, calls = _fake_runner()
     op = build_infra_operator(run=run)
-    res = op.invoke("infra.provision", {"cloud": "aws", "vars": {"name": "acme"}, "_approval": {"approved": True}})
+    res = op.invoke("infra.provision", {"cloud": "aws", "vars": {"name": "acme"}, "plan_digest": "abc",
+                                        "_approval": {"approved": True}})
+    assert res["error"] == "plan_digest_mismatch"            # no plan on disk for "abc"
+    assert not any("apply" in c for c in calls)
+    res = _provision_ok(op, calls)
     assert res["status"] == "done" and res["action"] == "provision"
     assert res["outputs"] == {"host": "1.2.3.4"}                 # terraform output captured
     argv = " ".join(calls[0])
@@ -110,7 +136,7 @@ def test_plan_configure_verify():
     assert "-out=redevops-approved.tfplan" in calls[-1] and p["plan_file"] == "redevops-approved.tfplan"
 
     c = op.invoke("infra.configure", {"playbook": "playbooks/deploy-app.yml",
-                                      "extra_vars": {"app": "billing"}})
+                                      "extra_vars": {"app": "billing"}, "_approval": {"approved": True}})
     assert c["action"] == "configure" and calls[-1][0] == "ansible-playbook"
     assert "-e" in calls[-1] and "app=billing" in calls[-1]
 
@@ -140,7 +166,103 @@ def test_drift_detects_and_clears():
 def test_saga_undos_call_destroy_and_rollback():
     run, calls = _fake_runner()
     op = build_infra_operator(run=run)
-    d = op.invoke("infra.destroy_delta", {"cloud": "aws"})
+    d = op.invoke("infra.destroy_delta", {"cloud": "aws", "_approval": {"approved": True}})
     assert d["action"] == "destroy_delta" and "destroy" in calls[-1] and "-auto-approve" in calls[-1]
-    r = op.invoke("infra.rollback_release", {"inventory": "inv.ini"})
+    r = op.invoke("infra.rollback_release", {"inventory": "inv.ini", "_approval": {"approved": True}})
     assert r["action"] == "configure" and calls[-1][0] == "ansible-playbook"
+
+
+# ── gating: configure / destroy_delta / rollback_release stage without approval ──────────────────────
+GATED = {"infra.configure": {"extra_vars": {"app": "x"}},
+         "infra.destroy_delta": {"cloud": "aws"},
+         "infra.rollback_release": {"inventory": "inv.ini"}}
+
+
+def _http(op):
+    app = FastAPI()
+    app.include_router(op.router())
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("cap", sorted(GATED))
+def test_gated_stages_in_process_and_over_http_even_forged(cap):
+    run, calls = _fake_runner()
+    op = build_infra_operator(run=run)
+    assert op.invoke(cap, dict(GATED[cap]))["status"] == "pending_approval"
+    c = _http(op)
+    for extra in ({}, {"_approval": {"approved": True}}):
+        res = c.post("/invoke", json={"capability": cap, "inputs": {**GATED[cap], **extra}}).json()["result"]
+        assert res["status"] == "pending_approval" and res["executed"] is False
+    assert calls == []                      # terraform / ansible never run
+
+
+@pytest.mark.parametrize("cap", sorted(GATED))
+def test_gated_executes_with_runtime_approval(cap):
+    run, calls = _fake_runner()
+    res = build_infra_operator(run=run).invoke(cap, {**GATED[cap], "_approval": {"approved": True}})
+    assert res["status"] == "done" and calls
+
+
+def test_manifest_gates_all_write_capabilities():
+    caps = {c.name: c for c in build_infra_operator().manifest.capabilities}
+    for n in ("infra.provision", "infra.configure", "infra.destroy_delta", "infra.rollback_release"):
+        assert caps[n].approval_required is True
+
+
+# ── input validation ─────────────────────────────────────────────────────────────────────────────────
+APPR = {"_approval": {"approved": True}}
+
+
+@pytest.mark.parametrize("cloud", ["../../etc", "aws/../x", "AWS", "-bad", "a b", "/abs"])
+def test_cloud_must_be_safe_name(cloud):
+    run, calls = _fake_runner()
+    op = build_infra_operator(run=run)
+    for cap, inp in (("infra.destroy_delta", {"cloud": cloud, **APPR}),
+                     ("infra.plan", {"cloud": cloud}),
+                     ("infra.provision", {"cloud": cloud, "plan_digest": "d", **APPR})):
+        res = op.invoke(cap, inp)
+        assert res["status"] == "error", (cap, cloud)
+    assert not any("destroy" in c or "apply" in c for c in calls)
+
+
+def test_playbook_must_stay_inside_deploy_root():
+    run, calls = _fake_runner()
+    op = build_infra_operator(run=run)
+    for bad in ("/etc/passwd", "../../evil.yml", "playbooks/../../../evil.yml"):
+        res = op.invoke("infra.configure", {"playbook": bad, **APPR})
+        assert res["status"] == "error" and "outside" in res["error"]
+    assert calls == []
+    ok = op.invoke("infra.configure", {"playbook": "playbooks/deploy-app.yml", **APPR})
+    assert ok["status"] == "done"
+
+
+@pytest.mark.parametrize("ev", [{"ansible_python_interpreter": "/bin/sh"}, {"ansible_connection": "local"},
+                                {"ansible_shell_executable": "/bin/sh"}, {"a": "@/etc/passwd"},
+                                {"a b": "1"}, {"1a": "1"}, {"a=b": "1"}])
+def test_extra_vars_rejected(ev):
+    run, calls = _fake_runner()
+    res = build_infra_operator(run=run).invoke("infra.configure", {"extra_vars": ev, **APPR})
+    assert res["status"] == "error" and calls == []
+
+
+def test_unconfigured_deploy_root_fails_closed(monkeypatch):
+    monkeypatch.setattr(core, "TF_ROOT", "")
+    monkeypatch.setattr(core, "ANSIBLE_ROOT", "")
+    run, calls = _fake_runner()
+    op = build_infra_operator(run=run)
+    assert "INFRA_DEPLOY_ROOT" in op.invoke("infra.plan", {"cloud": "aws"})["error"]
+    assert "INFRA_DEPLOY_ROOT" in op.invoke("infra.configure", APPR)["error"]
+    assert calls == []
+
+
+def test_default_deploy_root_is_inside_repo():
+    from pathlib import Path
+    root = core._default_deploy_root()
+    assert root == "" or Path(root).resolve().is_relative_to(Path(core.__file__).resolve().parents[2])
+
+
+def test_provision_requires_plan_digest():
+    run, calls = _fake_runner()
+    res = build_infra_operator(run=run).invoke("infra.provision", {"cloud": "aws", **APPR})
+    assert res["status"] == "error" and res["error"] == "plan_digest_required" and res["applied"] is False
+    assert not any("apply" in c for c in calls)
