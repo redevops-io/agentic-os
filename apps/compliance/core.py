@@ -52,9 +52,31 @@ XCCDF = "{http://checklists.nist.gov/xccdf/1.2}"
 
 TENANT = "Meridian Wealth Management"
 SUBTITLE = (
-    "Continuous control monitoring on a real OpenSCAP core — CIS Ubuntu benchmark "
-    "scanned on Meridian's server, with a human in the loop before any fix is applied."
+    "Continuous control monitoring on a real OpenSCAP core — CIS Ubuntu 22.04 benchmark evaluated against a "
+    "reference container image (ubuntu:22.04), not a live host, with a human in the loop before any fix is applied."
 )
+# Where scan.sh records what a scan actually evaluated (container image vs. host).
+SCAP_TARGET_FILE = Path(os.environ.get("SCAP_TARGET_FILE", str(HERE / "results" / "scan-target.json")))
+
+
+def scan_target() -> dict:
+    """What the cached results actually evaluated: a container image (host_scanned=False) or the host."""
+    try:
+        t = json.loads(Path(SCAP_TARGET_FILE).read_text())
+        if isinstance(t, dict) and "target" in t:
+            return t
+    except (OSError, ValueError):
+        pass
+    return {"target": "unknown", "host_scanned": False,
+            "note": "scan target not recorded; do not assume the host was scanned"}
+
+
+def _target_phrase(t: dict) -> str:
+    if t.get("target") == "host":
+        return f"host {t.get('hostname', '')}".strip()
+    if t.get("target") == "container-image":
+        return f"container-image {t.get('image', '')} (NOT the host)"
+    return "unrecorded target (not assumed to be the host)"
 # The framework the scanned profile maps to (shown as the primary framework card).
 FRAMEWORK = "CIS Ubuntu Linux 22.04 LTS — Level 1 Server"
 
@@ -231,6 +253,11 @@ def fetch_activity(force: bool = False) -> dict:
 
 
 # --- agentic actions (deterministic OpenSCAP work) ---------------------------
+def scan_rc_ok(rc: int) -> bool:
+    """oscap/scan.sh exit status -> was this a valid scan? 0 (all pass) and 2 (findings) only; 1 is an error."""
+    return rc in (0, 2)
+
+
 def scan() -> dict:
     """Re-run the REAL oscap scan via scan.sh, then return the updated pass rate.
 
@@ -246,8 +273,8 @@ def scan() -> dict:
             ["bash", str(script)], capture_output=True, text=True, timeout=600
         )
         rc = proc.returncode
-        # oscap exit 2 = scan ran with failing rules (normal); >2 is a real error.
-        if rc > 2:
+        # oscap exit codes: 0 = pass, 2 = valid scan with failing rules; 1 = ERROR; anything else = error.
+        if not scan_rc_ok(rc):
             return {"status": "error", "action": "scan", "rc": rc,
                     "summary": "oscap scan failed", "stderr": proc.stderr[-800:]}
     data = fetch_activity(force=True)
@@ -256,13 +283,14 @@ def scan() -> dict:
         "status": "done",
         "action": "scan",
         "rc": rc,
+        "target": scan_target(),
         "pass_rate": data["kpis"][0]["value"],
         "passing": c["pass"],
         "failing": c["fail"],
         "notapplicable": c["notapplicable"],
         "summary": f"Scan complete — {c['pass']} pass / {c['fail']} fail "
                    f"({data['kpis'][0]['value']} of {c['scored']} scored controls). "
-                   f"{summary}",
+                   f"{summary} Evaluated: {_target_phrase(scan_target())}.",
     }
 
 
@@ -392,6 +420,101 @@ def _consent_id(customer: str, subscription: str) -> str:
     return "consent-" + hashlib.sha256(seed).hexdigest()[:16]
 
 
+# --- tamper-evident consent ledger -------------------------------------------
+# Each entry carries timestamp, prev_hash and entry_hash = sha256(canonical JSON of the entry without
+# entry_hash). Editing, deleting or reordering any entry breaks the chain; verify_chain() reports where.
+# Unhashed lines written before chaining existed ("legacy") are tolerated only as a prefix; the first chained
+# entry commits to the hash of the last legacy line.
+GENESIS_HASH = "0" * 64
+
+
+def _canon(rec: dict) -> bytes:
+    body = {k: v for k, v in rec.items() if k != "entry_hash"}
+    return json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _entry_hash(rec: dict) -> str:
+    return hashlib.sha256(_canon(rec)).hexdigest()
+
+
+class _ledger_lock:
+    """Exclusive inter-process lock on a sidecar file: fcntl.flock on POSIX, msvcrt.locking on Windows."""
+
+    def __init__(self, ledger: Path):
+        self.path = Path(str(ledger) + ".lock")
+
+    def __enter__(self):
+        self.fh = open(self.path, "a+b")
+        try:
+            import fcntl
+            fcntl.flock(self.fh, fcntl.LOCK_EX)
+            self._unlock = lambda: fcntl.flock(self.fh, fcntl.LOCK_UN)
+        except ImportError:  # Windows
+            import msvcrt
+            self.fh.seek(0)
+            msvcrt.locking(self.fh.fileno(), msvcrt.LK_LOCK, 1)
+            self._unlock = lambda: (self.fh.seek(0), msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1))
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            self._unlock()
+        finally:
+            self.fh.close()
+
+
+def _read_ledger(ledger: Path) -> list[tuple[str, dict]]:
+    out: list[tuple[str, dict]] = []
+    if ledger.exists():
+        for line in ledger.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                rec = {"_corrupt": True}
+            out.append((line, rec))
+    return out
+
+
+def _append_chained(ledger: Path, record: dict, entries: list[tuple[str, dict]]) -> dict:
+    if entries:
+        last_line, last = entries[-1]
+        prev = last.get("entry_hash") or hashlib.sha256(last_line.strip().encode()).hexdigest()
+    else:
+        prev = GENESIS_HASH
+    rec = {**record, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "prev_hash": prev}
+    rec["entry_hash"] = _entry_hash(rec)
+    with ledger.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    return rec
+
+
+def verify_chain(ledger: Path | None = None) -> dict:
+    """Verify the consent ledger's hash chain. Returns {ok, entries, legacy, error?, broken_at?}."""
+    entries = _read_ledger(Path(ledger or CONSENT_LEDGER))
+    prev, legacy, chained = GENESIS_HASH, 0, 0
+    for i, (line, rec) in enumerate(entries):
+        if "entry_hash" not in rec:
+            if chained:
+                return {"ok": False, "entries": len(entries), "legacy": legacy, "broken_at": i,
+                        "error": "unhashed entry after chained entries"}
+            legacy += 1
+            prev = hashlib.sha256(line.strip().encode()).hexdigest()
+            continue
+        if rec.get("prev_hash") != prev:
+            return {"ok": False, "entries": len(entries), "legacy": legacy, "broken_at": i,
+                    "error": "prev_hash mismatch (entry removed, reordered or inserted)"}
+        if _entry_hash(rec) != rec["entry_hash"]:
+            return {"ok": False, "entries": len(entries), "legacy": legacy, "broken_at": i,
+                    "error": "entry_hash mismatch (entry modified)"}
+        prev = rec["entry_hash"]
+        chained += 1
+    return {"ok": True, "entries": len(entries), "legacy": legacy}
+
+
 def file_consent(body: dict) -> dict:
     """Append the customer's consent/GDPR record to the append-only evidence ledger.
 
@@ -408,31 +531,18 @@ def file_consent(body: dict) -> dict:
     consent_id = _consent_id(customer, subscription)
 
     ledger = Path(CONSENT_LEDGER)
-    already = False
-    if ledger.exists():
-        for line in ledger.read_text().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except Exception:
-                continue
-            if rec.get("consent_id") == consent_id:
-                already = True
-                break
-
-    if not already:
-        ledger.parent.mkdir(parents=True, exist_ok=True)
-        record = {
-            "kind": "consent",
-            "customer": customer,
-            "subscription": subscription,
-            "consent_id": consent_id,
-            "filed": True,
-        }
-        with ledger.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record) + "\n")
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    with _ledger_lock(ledger):
+        entries = _read_ledger(ledger)
+        if not any(rec.get("consent_id") == consent_id for _, rec in entries):
+            record = {
+                "kind": "consent",
+                "customer": customer,
+                "subscription": subscription,
+                "consent_id": consent_id,
+                "filed": True,
+            }
+            _append_chained(ledger, record, entries)
 
     return {
         "status": "done",

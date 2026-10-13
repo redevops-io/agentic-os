@@ -183,13 +183,16 @@ def test_invoke_file_consent_appends_to_ledger(client):
     lines = [l for l in core.CONSENT_LEDGER.read_text().splitlines() if l.strip()]
     assert len(lines) == 1
     rec = json.loads(lines[0])
-    assert rec == {
+    # the record's payload is unchanged; chain fields (timestamp/prev_hash/entry_hash) are added on top
+    chain = {"timestamp", "prev_hash", "entry_hash"}
+    assert {k: v for k, v in rec.items() if k not in chain} == {
         "kind": "consent",
         "customer": "Whitfield Family Trust",
         "subscription": "pro-annual",
         "consent_id": res["consent_id"],
         "filed": True,
     }
+    assert chain <= set(rec) and core.verify_chain()["ok"]
 
 
 def test_file_consent_is_idempotent(client):
@@ -222,3 +225,72 @@ def test_mission_runtime_httpclient_drives_operator(client):
 
     rem = oc.invoke("compliance", "compliance.remediate", {"rule_id": SSH_RULE}, idempotency_key="m-2")
     assert rem["status"] == "pending_approval" and rem["approval"] == "policy_change"
+
+
+# ── correctness fixes: oscap exit codes, scan target honesty, tamper-evident ledger ──
+import subprocess as _sp
+
+
+def _fake_script(tmp_path, rc):
+    f = tmp_path / "fake-scan.sh"; f.write_text(f"#!/bin/bash\nexit {rc}\n"); return f
+
+
+@pytest.mark.parametrize("rc,ok", [(0, True), (2, True), (1, False), (3, False), (127, False)])
+def test_scan_exit_codes(client, tmp_path, monkeypatch, rc, ok):
+    monkeypatch.setattr(core, "SCAP_SCAN_SCRIPT", _fake_script(tmp_path, rc))
+    res = core.scan()
+    assert (res["status"] == "done") is ok, res
+
+
+def test_scan_reports_what_was_scanned(client, tmp_path, monkeypatch):
+    t = tmp_path / "t.json"
+    t.write_text('{"target":"container-image","image":"ubuntu:22.04","host_scanned":false}')
+    monkeypatch.setattr(core, "SCAP_TARGET_FILE", t)
+    res = core.scan()
+    assert res["target"]["host_scanned"] is False and "NOT the host" in res["summary"]
+    assert "not a live host" in core.SUBTITLE and "scanned on Meridian's server" not in core.SUBTITLE
+
+
+def test_scan_sh_pins_hash_and_fails_closed():
+    import pathlib
+    sh = (pathlib.Path(core.__file__).parent / "scan.sh").read_text()
+    assert "curl -fsSL" in sh and "sha256sum" in sh and "COMPLIANCE_ALLOW_UNPINNED_SSG" in sh
+    assert 'DOCKER="${DOCKER:-docker}"' in sh
+    pin = (pathlib.Path(core.__file__).parent / "env" / "ssg-0.1.81.sha256").read_text()
+    assert len([l for l in pin.splitlines() if l and not l.startswith("#")][0].split()[0]) == 64
+
+
+def _consent(i):
+    return core.file_consent({"customer": f"c{i}", "subscription": "s"})
+
+
+def test_ledger_chain_verifies_and_detects_tampering(client):
+    for i in range(3):
+        _consent(i)
+    assert core.verify_chain()["ok"] is True
+    lines = core.CONSENT_LEDGER.read_text().splitlines()
+    # modify an entry
+    core.CONSENT_LEDGER.write_text("\n".join([lines[0], lines[1].replace('"c1"', '"evil"'), lines[2]]) + "\n")
+    v = core.verify_chain(); assert not v["ok"] and v["broken_at"] == 1
+    # delete the middle entry
+    core.CONSENT_LEDGER.write_text("\n".join([lines[0], lines[2]]) + "\n")
+    v = core.verify_chain(); assert not v["ok"] and v["broken_at"] == 1
+    # reorder
+    core.CONSENT_LEDGER.write_text("\n".join([lines[1], lines[0], lines[2]]) + "\n")
+    assert not core.verify_chain()["ok"]
+
+
+def test_ledger_entries_have_chain_fields_and_legacy_prefix_is_tolerated(client):
+    core.CONSENT_LEDGER.parent.mkdir(parents=True, exist_ok=True)
+    core.CONSENT_LEDGER.write_text('{"kind":"consent","consent_id":"old"}\n')
+    _consent(1)
+    rec = json.loads(core.CONSENT_LEDGER.read_text().splitlines()[-1])
+    assert {"prev_hash", "entry_hash", "timestamp"} <= set(rec)
+    assert core.verify_chain() == {"ok": True, "entries": 2, "legacy": 1}
+
+
+def test_ledger_concurrent_appends_keep_chain_valid(client):
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(8) as ex:
+        list(ex.map(_consent, range(24)))
+    assert core.verify_chain() == {"ok": True, "entries": 24, "legacy": 0}

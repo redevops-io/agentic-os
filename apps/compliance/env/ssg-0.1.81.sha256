@@ -1,0 +1,5 @@
+# Pinned sha256 of scap-security-guide-0.1.81.tar.gz (ComplianceAsCode release v0.1.81).
+# Computed from the GitHub release asset on 2026-10-13 (trust-on-first-download: cross-check against the
+# release page / signed checksums when bumping SSG_VERSION). scan.sh fails closed unless this matches,
+# or COMPLIANCE_ALLOW_UNPINNED_SSG=true is set explicitly.
+5affb4b375e887d9e3616a3d1e7e12b216ce1f63ceb96bd81e378885bf152080  scap-security-guide-0.1.81.tar.gz

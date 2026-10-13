@@ -12,6 +12,10 @@ evidence *optimization* is Context Runtime's job; this operator is the governed 
 """
 from __future__ import annotations
 
+import json
+import os
+import re
+
 from runtime_contracts import GeoRef, geometry_hash
 
 # Normalized target uses (a starter set; jurisdictions map their local rules onto these).
@@ -25,17 +29,71 @@ NEEDS_ORDINANCE = {"OFFICE", "RETAIL", "RESTAURANT", "HOTEL", "WAREHOUSE",
                    "LIGHT_INDUSTRIAL", "HEAVY_INDUSTRIAL"}
 
 
-def code_family(code: str) -> str:
-    """Coarse, honest family classifier from a real zoning-code prefix (per-jurisdiction taxonomies vary —
-    this is deliberately not a claim of full ordinance parsing)."""
+# ── fail-safe zoning-code classifier ──
+# Only ANCHORED, whole-code patterns map to a family. Anything else (RC-1, ROS, RI, RT, RPD, PD, overlays such
+# as "R-1/HD", free text, unknown) is "unknown" and never yields PERMITTED. Patterns are deliberately
+# conservative: a code that merely *starts* with R is NOT residential (RC = regional commercial, ROS = open
+# space, RI = research/institutional, ...).
+_NUM = r"(?:-?\d+(?:\.\d+)?[A-Z]?)"
+_RESIDENTIAL = [  # (pattern, density) — density 'sf' single-family oriented, 'mf' multi-family oriented, 'gen' generic R-n
+    (re.compile(rf"^R-?\d+(?:\.\d+)?[A-Z]?$"), "gen"),
+    (re.compile(rf"^(?:RS|RE|RR|SF|RSF){_NUM}?$"), "sf"),
+    (re.compile(rf"^(?:RM|RH|MF|RMF){_NUM}?$"), "mf"),
+]
+_COMMERCIAL = re.compile(rf"^(?:C|CB|CG|CN|CS|CC|CBD|NC|GC|TC|B){_NUM}?$")
+_INDUSTRIAL = re.compile(rf"^(?:I|M|IL|IG|IH|LI|HI|IND){_NUM}?$")
+_MIXED = re.compile(rf"^(?:MU|MX|MUD|NMU|MXD){_NUM}?$")
+
+#: Extension point: per-jurisdiction code tables. JSON file (path in $ZONING_CODE_TABLE) shaped
+#: {"<jurisdiction>": {"<CODE>": "residential|commercial|industrial|mixed|unknown"}}. Entries override patterns.
+def _load_code_table() -> dict:
+    path = os.environ.get("ZONING_CODE_TABLE", "")
+    if not path:
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+_FAMILIES = {"residential", "commercial", "industrial", "mixed", "unknown"}
+
+
+def classify_code(code: str, jurisdiction: str = "") -> tuple[str, str]:
+    """Return (family, density). family in residential|commercial|industrial|mixed|unknown."""
     c = (code or "").strip().upper()
-    if c.startswith(("R-", "RH", "RM", "RS", "RR", "RE")) or (c.startswith("R") and not c.startswith("RET")):
-        return "residential"
-    if c.startswith(("C-", "CB", "CG", "CN", "CS", "TC", "MU", "MX")) or c.startswith("C"):
-        return "commercial"
-    if c.startswith(("M-", "I-", "IL", "IG", "IND", "PI")) or c.startswith(("M", "I")):
-        return "industrial"
-    return "unknown"
+    if not c:
+        return "unknown", ""
+    table = _load_code_table().get(jurisdiction or "", {})
+    hit = table.get(c) if isinstance(table, dict) else None
+    if isinstance(hit, str) and hit.lower() in _FAMILIES:
+        return hit.lower(), "gen"
+    for pat, density in _RESIDENTIAL:
+        if pat.match(c):
+            return "residential", density
+    if _MIXED.match(c):
+        return "mixed", ""
+    if _COMMERCIAL.match(c):
+        return "commercial", ""
+    if _INDUSTRIAL.match(c):
+        return "industrial", ""
+    return "unknown", ""
+
+
+def code_family(code: str, jurisdiction: str = "") -> str:
+    """Coarse, fail-safe family classifier (see :func:`classify_code`). Ambiguous codes are 'unknown'."""
+    return classify_code(code, jurisdiction)[0]
+
+
+_FETCHERS: dict = {}
+
+
+def register_fetcher(name: str, fn) -> None:
+    """Register a real evidence fetcher (e.g. a GIS harvest). Only evidence it produces may be labelled with
+    its name as the source; otherwise evidence is `caller_supplied`."""
+    _FETCHERS[name] = fn
 
 
 def resolve_parcel(body: dict) -> dict:
@@ -61,40 +119,100 @@ def resolve_parcel(body: dict) -> dict:
 
 
 def acquire_evidence(body: dict) -> dict:
-    """Return the zoning evidence available for a parcel — the official base zoning code, ordinance link,
-    and overlays. In production this is where the cost-aware evidence bundle (zoning-sources-mcp harvest +
-    Context Runtime optimization) is acquired; here it reads what the caller already resolved. Read-only."""
+    """Return the zoning evidence available for a parcel. Without a registered fetcher this ECHOES what the
+    caller supplied and says so (`caller_supplied`) — provenance is never invented. A named, registered
+    fetcher (body["fetcher"]) may supply the zoning code, in which case its name is the source. Read-only."""
+    src = "caller_supplied"
+    code = body.get("zoning_code") or ""
+    overlays = list(body.get("overlays", []))
+    ordinance = body.get("ordinance_url", "")
+    fetcher = _FETCHERS.get(body.get("fetcher", ""))
+    if fetcher is not None:
+        got = fetcher(body) or {}
+        if got:
+            src = body["fetcher"]
+            code = got.get("zoning_code", code)
+            overlays = list(got.get("overlays", overlays))
+            ordinance = got.get("ordinance_url", ordinance)
+    jur = body.get("jurisdiction", "")
     return {
         "parcel_id": body.get("parcel_id", ""),
-        "base_zoning": (body.get("zoning_code") or "").strip(),
-        "code_family": code_family(body.get("zoning_code", "")),
-        "ordinance_url": body.get("ordinance_url", ""),
-        "overlays": list(body.get("overlays", [])),
-        "evidence_sources": ["official_gis"] + (["ordinance"] if body.get("ordinance_url") else []),
+        "base_zoning": code.strip(),
+        "code_family": code_family(code, jur),
+        "ordinance_url": ordinance,
+        "overlays": overlays,
+        "evidence_sources": [src] + ([f"{src}:ordinance_url"] if ordinance else []),
+        "verified": src != "caller_supplied",
     }
 
 
 def evaluate_use(body: dict) -> dict:
-    """Deterministic-first, fail-safe disposition for a use against a parcel's base zoning. Never returns a
-    confident PERMITTED without base compatibility — the false-permitted = 0 SLO."""
+    """Deterministic-first, fail-safe disposition for a use against a parcel's base zoning.
+
+    PERMITTED only for an unambiguous residential code with a residential use of compatible density, or a
+    mixed-use code where the caller supplies the use in `permitted_uses` (from the ordinance). Clear
+    cross-family conflicts are PROHIBITED; everything ambiguous (unknown codes, overlays, mixed, commercial
+    base with a non-commercial use) is UNKNOWN. `false_permit` is checked against an INDEPENDENT rule table
+    (`_never_permit`), not the classifier that produced the disposition."""
     use = body.get("use", "")
     code = body.get("base_zoning") or body.get("zoning_code", "")
-    fam = code_family(code)
-    if use not in USE_FAMILY:
+    jur = body.get("jurisdiction", "")
+    fam, density = classify_code(code, jur)
+    if body.get("overlays"):
+        fam, density = "unknown", ""   # overlays can restrict base rights; we have not parsed them
+    ufam = USE_FAMILY.get(use)
+    if ufam is None:
         disp, why = "UNKNOWN", f"use {use!r} is not in the normalized ontology"
     elif fam == "unknown":
-        disp, why = "UNKNOWN", "zoning-code family unrecognized — cannot conclude from base alone"
-    elif USE_FAMILY[use] != fam:
-        disp, why = "PROHIBITED", f"official base zoning {code} ({fam}) excludes a {USE_FAMILY[use]} use"
-    elif use in NEEDS_ORDINANCE:
-        disp, why = "UNKNOWN", "base-compatible, but permitted/conditional status needs the ordinance — verify"
+        disp, why = "UNKNOWN", "zoning code unrecognized/ambiguous (or overlay present) - verify against the ordinance"
+    elif fam == "mixed":
+        if use in (body.get("permitted_uses") or ()):
+            disp, why = "PERMITTED", f"mixed-use base {code}: use listed as permitted in the supplied ordinance table"
+        else:
+            disp, why = "UNKNOWN", f"mixed-use base {code}: permitted uses vary by district - verify"
+    elif fam == "residential":
+        if ufam == "residential":
+            ok = (use == "RESIDENTIAL_SINGLE_FAMILY" and density in ("gen", "sf")) or \
+                 (use == "RESIDENTIAL_MULTI_FAMILY" and density == "mf")
+            if ok:
+                disp, why = "PERMITTED", f"base zoning {code} (residential) permits {use.lower().replace('_', ' ')} by right"
+            else:
+                disp, why = "UNKNOWN", f"{code} is residential but density fit for {use} needs the ordinance - verify"
+        else:
+            disp, why = "PROHIBITED", f"base zoning {code} (residential) excludes a {ufam} use"
+    elif fam == "industrial" and ufam == "residential":
+        disp, why = "PROHIBITED", f"base zoning {code} (industrial) excludes a residential use"
+    elif fam == "commercial" and ufam == "industrial":
+        disp, why = "PROHIBITED", f"base zoning {code} (commercial) excludes an industrial use"
+    elif fam == ufam and use in NEEDS_ORDINANCE:
+        disp, why = "UNKNOWN", "base-compatible, but permitted/conditional status needs the ordinance - verify"
     else:
-        disp, why = "PERMITTED", f"official base zoning {code} permits {use.lower().replace('_', ' ')} by right"
-    # Fail-safe invariant, asserted at the boundary: PERMITTED implies base compatibility.
-    false_permit = disp == "PERMITTED" and (use not in USE_FAMILY or USE_FAMILY.get(use) != fam)
+        disp, why = "UNKNOWN", f"{code} ({fam}) vs {ufam} use: depends on the ordinance - verify"
     return {"parcel_id": body.get("parcel_id", ""), "use": use, "base_zoning": code,
             "disposition": disp, "reason": why, "ordinance_url": body.get("ordinance_url", ""),
-            "false_permit": false_permit}
+            "family": fam, "false_permit": _false_permit(disp, use, code, body)}
+
+
+# Independent tripwire: codes that must NEVER yield PERMITTED regardless of the classifier. Deliberately a
+# separate, literal rule (leading-token blocklist), so a classifier bug cannot cancel it out.
+_RES_OK = re.compile(r"^(?:R-?\d|RS|RE|RR|SF|RM|RH|MF)")
+
+
+def _false_permit(disp: str, use: str, code: str, body: dict) -> bool:
+    if disp != "PERMITTED":
+        return False
+    c = (code or "").strip().upper()
+    if use not in USE_FAMILY:
+        return True
+    if body.get("overlays"):
+        return True
+    if USE_FAMILY[use] == "residential" and c.startswith(("RC", "ROS", "RI", "RT", "RPD", "PD")):
+        return True
+    in_table = c in (_load_code_table().get(body.get("jurisdiction", ""), {}) or {})
+    if USE_FAMILY[use] == "residential" and not in_table and not _RES_OK.match(c) \
+            and use not in (body.get("permitted_uses") or ()):
+        return True
+    return False
 
 
 def search_parcels(body: dict) -> dict:

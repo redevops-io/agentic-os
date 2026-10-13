@@ -43,7 +43,9 @@ METABASE_FRONT_URL = os.environ.get("METABASE_FRONT_URL", "http://localhost:3001
 _DB_ID_CACHE: dict = {"id": None}   # resolved Metabase datasource id (looked up by name), cached
 
 TENANT = "Meridian Wealth Management"
-SUBTITLE = "The owner's single pane — ask your business anything, in plain language, on a real Metabase core."
+SUBTITLE = ("The owner's single pane — ask your business anything, in plain language, on a real Metabase core. "
+            "Demo data: SYNTHETIC (a generated sample schema relabelled as wealth management), not real client figures.")
+DATA_NOTE = "synthetic demo data - generated sample schema relabelled as wealth management; not real client figures"
 
 
 # --- Metabase REST client ----------------------------------------------------
@@ -302,13 +304,14 @@ QUESTION_TEMPLATES = [
 ]
 
 
-def route_question(question: str, pick: Callable[[str], str | None] | None = None) -> dict:
+def route_question(question: str, pick: Callable[[str], str | None] | None = None) -> dict | None:
     """Map a natural-language question to a query template (deterministic keyword routing).
 
     Optional `pick(question) -> key|None` is an injected LLM assist (the model lives in
     app.py): if it returns a known template key we use it — but we ALWAYS fall back to
     keyword routing, and we only ever run the pre-written SQL, never model-authored SQL.
-    Defaults to revenue_by_month.
+    Returns None when nothing matches (the caller asks the user to clarify) - it never silently
+    answers a different question.
     """
     q = (question or "").lower().strip()
 
@@ -325,7 +328,7 @@ def route_question(question: str, pick: Callable[[str], str | None] | None = Non
     for t in QUESTION_TEMPLATES:
         if any(m in q for m in t["match"]):
             return t
-    return QUESTION_TEMPLATES[0]  # revenue_by_month
+    return None
 
 
 # --- live data + KPIs (cached briefly) ---------------------------------------
@@ -478,6 +481,16 @@ def ask(question: str, pick: Callable[[str], str | None] | None = None,
     the action is fully deterministic with both set to None.
     """
     tpl = route_question(question, pick=pick)
+    if tpl is None:
+        names = [t["key"] for t in QUESTION_TEMPLATES]
+        return {
+            "status": "done", "action": "ask", "question": question, "matched_report": None,
+            "title": "Clarification needed", "sql": "", "columns": [], "rows": [],
+            "answer": "I can answer these: " + ", ".join(names) + ". Please rephrase your question around one of them.",
+            "available_questions": names, "chart": "table", "x_i": 0, "y_i": 0, "yfmt": "num",
+            "data_note": DATA_NOTE,
+            "approval": "not required — read-only analytics (no destructive action)",
+        }
     sql = tpl["sql"]()
     result = run_query(sql)
     rows, cols = result["rows"], result["cols"]
@@ -508,6 +521,7 @@ def ask(question: str, pick: Callable[[str], str | None] | None = None,
         "answer": answer, "columns": cols, "rows": rows,
         "chart": chart, "x_i": x_i, "y_i": y_i, "yfmt": yfmt,
         "approval": "not required — read-only analytics (no destructive action)",
+        "data_note": DATA_NOTE,
     }
     if reasoning:
         out["reasoning"] = reasoning

@@ -1,0 +1,434 @@
+{
+ "_doc": "Hand-written oracle labels. Expected dispositions are from the standard meaning of the district type and conservative ordinance-dependence; NOT derived from core.code_family.",
+ "cases": [
+  {
+   "code": "R-1",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "PERMITTED",
+   "note": "single-family residential district: SF home by right"
+  },
+  {
+   "code": "R-2",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "PERMITTED",
+   "note": "single-family residential district: SF home by right"
+  },
+  {
+   "code": "R-4",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "PERMITTED",
+   "note": "single-family residential district: SF home by right"
+  },
+  {
+   "code": "R1",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "PERMITTED",
+   "note": "single-family residential district: SF home by right"
+  },
+  {
+   "code": "R-1A",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "PERMITTED",
+   "note": "single-family residential district: SF home by right"
+  },
+  {
+   "code": "RS-6",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "PERMITTED",
+   "note": "single-family residential district: SF home by right"
+  },
+  {
+   "code": "RE",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "PERMITTED",
+   "note": "single-family residential district: SF home by right"
+  },
+  {
+   "code": "RR",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "PERMITTED",
+   "note": "single-family residential district: SF home by right"
+  },
+  {
+   "code": "SF-3",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "PERMITTED",
+   "note": "single-family residential district: SF home by right"
+  },
+  {
+   "code": "R-1",
+   "use": "WAREHOUSE",
+   "expected": "PROHIBITED",
+   "note": "warehouse in single-family district"
+  },
+  {
+   "code": "R-4",
+   "use": "HEAVY_INDUSTRIAL",
+   "expected": "PROHIBITED",
+   "note": "heavy industry in residential"
+  },
+  {
+   "code": "RS-6",
+   "use": "RETAIL",
+   "expected": "PROHIBITED",
+   "note": "retail in single-family district"
+  },
+  {
+   "code": "SF-3",
+   "use": "OFFICE",
+   "expected": "PROHIBITED",
+   "note": "office in SF district"
+  },
+  {
+   "code": "R-2",
+   "use": "RESIDENTIAL_MULTI_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "generic R-n: multifamily depends on ordinance"
+  },
+  {
+   "code": "RS-6",
+   "use": "RESIDENTIAL_MULTI_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "RS is single-family; MF needs ordinance (likely no) - verify"
+  },
+  {
+   "code": "RM-2",
+   "use": "RESIDENTIAL_MULTI_FAMILY",
+   "expected": "PERMITTED",
+   "note": "RM = residential multi-family"
+  },
+  {
+   "code": "RH-1",
+   "use": "RESIDENTIAL_MULTI_FAMILY",
+   "expected": "PERMITTED",
+   "note": "RH = high-density residential"
+  },
+  {
+   "code": "MF-2",
+   "use": "RESIDENTIAL_MULTI_FAMILY",
+   "expected": "PERMITTED",
+   "note": "MF = multifamily"
+  },
+  {
+   "code": "RM-2",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "SF in multifamily district is ordinance dependent"
+  },
+  {
+   "code": "RC-1",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "regional commercial: home not by right, verify"
+  },
+  {
+   "code": "ROS",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "recreation / open space: home not by right, verify"
+  },
+  {
+   "code": "RI",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "research / institutional: home not by right, verify"
+  },
+  {
+   "code": "RT-1",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "resort/ tourist: home not by right, verify"
+  },
+  {
+   "code": "RPD",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "residential planned development: negotiated: home not by right, verify"
+  },
+  {
+   "code": "RC-2",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "regional commercial: home not by right, verify"
+  },
+  {
+   "code": "ROS-1",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "open space: home not by right, verify"
+  },
+  {
+   "code": "RI-2",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "research/institutional: home not by right, verify"
+  },
+  {
+   "code": "RPD-5",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "planned development: home not by right, verify"
+  },
+  {
+   "code": "RC-1",
+   "use": "RETAIL",
+   "expected": "UNKNOWN",
+   "note": "regional commercial retail: needs ordinance"
+  },
+  {
+   "code": "RC-1",
+   "use": "RESIDENTIAL_MULTI_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "regional commercial: ambiguous"
+  },
+  {
+   "code": "ROS",
+   "use": "HEAVY_INDUSTRIAL",
+   "expected": "UNKNOWN",
+   "note": "open-space code, heavy industry cannot be assumed either way - conservative verify"
+  },
+  {
+   "code": "MU-1",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "mixed-use: residential ambiguous"
+  },
+  {
+   "code": "MU-1",
+   "use": "RESIDENTIAL_MULTI_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "mixed-use: MF often allowed, ordinance"
+  },
+  {
+   "code": "MU-1",
+   "use": "RETAIL",
+   "expected": "UNKNOWN",
+   "note": "mixed-use retail: verify"
+  },
+  {
+   "code": "MU-2",
+   "use": "OFFICE",
+   "expected": "UNKNOWN",
+   "note": "mixed-use office"
+  },
+  {
+   "code": "MX",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "mixed-use"
+  },
+  {
+   "code": "MU-1",
+   "use": "RESIDENTIAL_MULTI_FAMILY",
+   "expected": "PERMITTED",
+   "note": "mixed use with ordinance table listing MF",
+   "permitted_uses": [
+    "RESIDENTIAL_MULTI_FAMILY"
+   ]
+  },
+  {
+   "code": "MU-3",
+   "use": "WAREHOUSE",
+   "expected": "UNKNOWN",
+   "note": "mixed-use warehouse unclear"
+  },
+  {
+   "code": "C-2",
+   "use": "RETAIL",
+   "expected": "UNKNOWN",
+   "note": "commercial retail needs use table"
+  },
+  {
+   "code": "C-1",
+   "use": "OFFICE",
+   "expected": "UNKNOWN",
+   "note": "commercial office needs table"
+  },
+  {
+   "code": "CB",
+   "use": "HOTEL",
+   "expected": "UNKNOWN",
+   "note": "central business hotel"
+  },
+  {
+   "code": "C-2",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "SF in commercial district ambiguous"
+  },
+  {
+   "code": "C-2",
+   "use": "RESIDENTIAL_MULTI_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "upper-floor residential commonly allowed; verify"
+  },
+  {
+   "code": "CG",
+   "use": "HEAVY_INDUSTRIAL",
+   "expected": "PROHIBITED",
+   "note": "heavy industry in general commercial"
+  },
+  {
+   "code": "C-3",
+   "use": "LIGHT_INDUSTRIAL",
+   "expected": "PROHIBITED",
+   "note": "light industry in commercial: not by right in standard C districts"
+  },
+  {
+   "code": "CN",
+   "use": "RETAIL",
+   "expected": "UNKNOWN",
+   "note": "neighborhood commercial retail: table"
+  },
+  {
+   "code": "I-1",
+   "use": "WAREHOUSE",
+   "expected": "UNKNOWN",
+   "note": "industrial warehouse: table"
+  },
+  {
+   "code": "I-1",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "PROHIBITED",
+   "note": "home in industrial"
+  },
+  {
+   "code": "IL",
+   "use": "LIGHT_INDUSTRIAL",
+   "expected": "UNKNOWN",
+   "note": "light industrial in IL: table"
+  },
+  {
+   "code": "IG",
+   "use": "HEAVY_INDUSTRIAL",
+   "expected": "UNKNOWN",
+   "note": "heavy industry in general industrial: table"
+  },
+  {
+   "code": "M-1",
+   "use": "RESIDENTIAL_MULTI_FAMILY",
+   "expected": "PROHIBITED",
+   "note": "multifamily in manufacturing"
+  },
+  {
+   "code": "IL",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "PROHIBITED",
+   "note": "home in light industrial"
+  },
+  {
+   "code": "I-2",
+   "use": "RETAIL",
+   "expected": "UNKNOWN",
+   "note": "retail in industrial: ambiguous"
+  },
+  {
+   "code": "M-2",
+   "use": "HEAVY_INDUSTRIAL",
+   "expected": "UNKNOWN",
+   "note": "heavy manufacturing: table"
+  },
+  {
+   "code": "",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "unrecognized/ambiguous code"
+  },
+  {
+   "code": "XYZ",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "unrecognized/ambiguous code"
+  },
+  {
+   "code": "PD",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "unrecognized/ambiguous code"
+  },
+  {
+   "code": "PUD-4",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "unrecognized/ambiguous code"
+  },
+  {
+   "code": "A-1",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "unrecognized/ambiguous code"
+  },
+  {
+   "code": "AG",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "unrecognized/ambiguous code"
+  },
+  {
+   "code": "OS",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "unrecognized/ambiguous code"
+  },
+  {
+   "code": "HIST-1",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "unrecognized/ambiguous code"
+  },
+  {
+   "code": "R-1/HD",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "unrecognized/ambiguous code"
+  },
+  {
+   "code": "Z9",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "unrecognized/ambiguous code"
+  },
+  {
+   "code": "R-",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "unrecognized/ambiguous code"
+  },
+  {
+   "code": "Residential",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "unrecognized/ambiguous code"
+  },
+  {
+   "code": "R 1 (see map)",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "unrecognized/ambiguous code"
+  },
+  {
+   "code": "R-1",
+   "use": "RESIDENTIAL_SINGLE_FAMILY",
+   "expected": "UNKNOWN",
+   "note": "overlay present can restrict base rights",
+   "overlays": [
+    "historic district"
+   ]
+  },
+  {
+   "code": "C-2",
+   "use": "RETAIL",
+   "expected": "UNKNOWN",
+   "note": "overlay present",
+   "overlays": [
+    "flood"
+   ]
+  },
+  {
+   "code": "R-4",
+   "use": "CASINO",
+   "expected": "UNKNOWN",
+   "note": "use outside ontology"
+  }
+ ]
+}

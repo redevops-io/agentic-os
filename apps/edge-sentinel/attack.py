@@ -31,9 +31,62 @@ _CATALOG: dict[str, tuple[str, str]] = {
     "T1190": ("Exploit Public-Facing Application", "initial-access"),
     "T1059": ("Command and Scripting Interpreter", "execution"),
     "T1078": ("Valid Accounts", "defense-evasion"),
+    "T1499": ("Endpoint Denial of Service", "impact"),
 }
 
-# CrowdSec scenario substring -> technique ids (deterministic, inspectable)
+# Explicit CrowdSec hub scenario -> technique table (authoritative for these names; the namespace prefix, e.g.
+# "crowdsecurity/", is stripped before lookup). Rationale, by family:
+#   *-bf / *_bf            repeated credential attempts                         -> T1110 (+T1110.001 for ssh password guessing)
+#   *-cve-* on a service   exploitation of a public-facing service              -> T1190
+#   log4j / RCE CVEs       JNDI/command injection yields code execution         -> T1190 + T1059 (only where RCE is the CVE's impact)
+#   *-probing, scans,      reconnaissance of paths/files/UAs/hosts              -> T1595 (T1046 for port/service scans)
+#   crawl, bad-user-agent
+#   sqli/xss/traversal     injection probes against a web app                   -> T1190 (+T1595: they are probes, not confirmed exploitation)
+#   resource-abuse,        request flooding of an endpoint                      -> T1499
+#   req-limit-exceeded
+# Scenarios with no honest ATT&CK analogue (e.g. postfix-spam) are intentionally absent: abstain, don't guess.
+_SCENARIO_TABLE: dict[str, tuple[str, ...]] = {
+    "ssh-bf": ("T1110", "T1110.001"),
+    "ssh-slow-bf": ("T1110", "T1110.001"),
+    "ssh-cve-2024-6387": ("T1190",),
+    "http-bf": ("T1110",),
+    "http-bf-wordpress_bf": ("T1110",),
+    "http-wordpress_bf": ("T1110",),
+    "http-wordpress_bf_xmlrpc": ("T1110",),
+    "http-wordpress-scan": ("T1595",),
+    "http-generic-403-bf": ("T1595",),
+    "http-crawl-non_statics": ("T1595",),
+    "http-bad-user-agent": ("T1595",),
+    "http-probing": ("T1595",),
+    "http-sensitive-files": ("T1595",),
+    "http-backdoors-attempts": ("T1595",),
+    "http-admin-interface-probing": ("T1595",),
+    "http-open-proxy": ("T1595",),
+    "http-sqli-probing": ("T1190", "T1595"),
+    "http-xss-probing": ("T1190", "T1595"),
+    "http-path-traversal-probing": ("T1190", "T1595"),
+    "http-cve-2021-41773": ("T1190",),
+    "http-cve-2021-42013": ("T1190",),
+    "http-cve-2022-26134": ("T1190", "T1059"),
+    "http-cve-2022-22965": ("T1190", "T1059"),
+    "apache_log4j2_cve-2021-44228": ("T1190", "T1059"),
+    "grafana-cve-2021-43798": ("T1190",),
+    "jira_cve-2021-26086": ("T1190",),
+    "f5-big-ip-cve-2020-5902": ("T1190",),
+    "http-resource-abuse": ("T1499",),
+    "http-dos-swithcing-ua": ("T1499",),
+    "nginx-req-limit-exceeded": ("T1499",),
+    "port-scan": ("T1046",),
+    "iptables-scan-multi_ports": ("T1046",),
+    "smb-bf": ("T1110",),
+    "mysql-bf": ("T1110",),
+    "mssql-bf": ("T1110",),
+    "telnet-bf": ("T1110",),
+    "proftpd-bf": ("T1110",),
+    "pureftpd-bf": ("T1110",),
+}
+
+# Token fallback for scenario names not in the table (custom / newer hub scenarios). CrowdSec scenario substring -> technique ids (deterministic, inspectable)
 _SCENARIO_MAP: list[tuple[str, tuple[str, ...]]] = [
     ("ssh-bf", ("T1110", "T1110.001")),
     ("bruteforce", ("T1110",)),
@@ -44,6 +97,12 @@ _SCENARIO_MAP: list[tuple[str, tuple[str, ...]]] = [
     ("scan", ("T1595",)),
     ("nmap", ("T1046",)),
     ("probing", ("T1595",)),
+    ("sqli", ("T1190",)),
+    ("xss", ("T1190",)),
+    ("flood", ("T1499",)),
+    ("dos", ("T1499",)),
+    ("crawl", ("T1595",)),
+    ("user-agent", ("T1595",)),
     ("http-probing", ("T1595",)),
     ("exploit", ("T1190",)),
     ("rce", ("T1190", "T1059")),
@@ -77,6 +136,12 @@ def map_scenario_to_techniques(scenario: str) -> list[tuple[str, str]]:
     s = (scenario or "").lower()
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
+    name = s.rsplit("/", 1)[-1].strip()
+    if name in _SCENARIO_TABLE:                      # explicit table is authoritative for known hub names
+        return [(t, name) for t in _SCENARIO_TABLE[name]]
+    if re.search(r"(?<![a-z0-9])cve-\d{4}-\d{3,}", s):   # unknown CVE scenario: exploitation of a service
+        out.append(("T1190", "cve"))
+        seen.add("T1190")
     for token, techniques in _SCENARIO_MAP:
         # Match the token as a DELIMITED unit (bounded by non-alphanumerics), not a raw substring, so a
         # short token like "rce" does not match inside "bruteforce"/"force"/"source" and mislabel a
