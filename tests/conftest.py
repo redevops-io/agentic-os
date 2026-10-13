@@ -24,4 +24,6 @@ def _isolate_platform_secrets(monkeypatch, tmp_path):
     monkeypatch.setenv("REDEVOPS_SECRETS_AUTO", "0")
     monkeypatch.setenv("REDEVOPS_SECRETS_FILE", str(tmp_path / "no-such-dir" / "secrets.env"))
     monkeypatch.setenv("REDEVOPS_SECRETS_NO_KEYRING", "1")
+    for e in ("VAULT_ADDR", "VAULT_TOKEN", "AGENTIC_OS_APPROVAL_SECRET"):
+        monkeypatch.delenv(e, raising=False)
     yield

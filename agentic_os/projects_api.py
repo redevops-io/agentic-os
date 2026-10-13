@@ -751,7 +751,7 @@ def sidekick_reply(ctx: Dict[str, Any], text: str,
     if "two approver" in t or "$500" in t:
         return {"text": f"Proposed on {obj}: refunds above $500 require two approvers. Governed policy change — confirm to commit.",
                 "actions": [{"label": "Confirm", "kind": "commit"}]}
-    if "why" in t and "approv" in t:
+    if "why" in t and "approv" in t and not any(w in t for w in ("stay", "staged", "pending", "executing")):
         return {"text": "This is billing.refund.execute — a tier-4 action that moves money, so policy requires your approval. It runs under a GovernedEnvelope and is verified by re-reading the refund."}
     if "affected" in t or "which active mission" in t:
         return {"text": "The Stripe refund-API finding affects 1 workflow, 1 active Mission (#4821), and 4 scheduled Missions.",
