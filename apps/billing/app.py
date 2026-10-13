@@ -615,6 +615,8 @@ if __name__ == "__main__":  # pragma: no cover
 try:
     from .operator import build_billing_operator
     app.include_router(build_billing_operator().router())
+    from .loop_api import router as _loop_router   # closed loop: POST /api/decide (+ /{mission_id}/approve)
+    app.include_router(_loop_router)
     # Runtime-native: register this app's governed contract at boot (guarded with the mount above).
     from agentic_os.app_kit.boot import register_app_manifest as _register_runtime_native
     from . import manifest as _runtime_native_manifest

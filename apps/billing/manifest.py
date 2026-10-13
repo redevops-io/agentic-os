@@ -11,6 +11,7 @@ from agentic_os.app_kit import DeploySpec
 from agentic_os.app_kit import (
     CoreRequirement,
     IntegrationLevel,
+    OutcomeKind,
     PrivacyProfile,
     ProducerRef,
     manifest_from_operator,
@@ -30,7 +31,9 @@ def build_manifest(operator):
     return manifest_from_operator(
         operator,
         name="billing",
-        version="0.1.0",
+        version="0.2.0",
+        outcome_kinds=(OutcomeKind("dunning", unit="fraction_of_chased_amount_collected",
+                                   expected_delay_s=7 * 86400.0, reward_weights={"payment_collected": 1.0}),),
         producers=(ProducerRef("billing_signals", opportunity_kinds=("billing_opportunity",),
                                emits_capabilities=producers.EMITTED_CAPABILITIES),),
         required_cores=(CoreRequirement("lago", IntegrationLevel.L2_GOVERNED_FORK),),

@@ -6,7 +6,9 @@ actions the console exposes at `/agent/run`, now discoverable + idempotent on th
 
 Capabilities (syscalls):
   billing.summary              — read-only KPIs + overdue invoices (fact `billing_activity`)
-  billing.dunning              — retry payment across overdue invoices  [approval gate: dunning]
+  billing.dunning              — retry payment on overdue invoices  [approval gate: dunning]
+                                 scoped by ``account_id`` / ``invoice_ids`` (the closed-loop path: ONE account,
+                                 read-back verified); with no scope it keeps the legacy console behaviour
   billing.refund               — stage a refund credit-note              [approval gate: refund]
   billing.create_subscription  — onboard a customer onto a paid plan (undo: cancel_subscription)
   billing.cancel_subscription  — terminate a subscription (saga compensation)
@@ -21,7 +23,43 @@ from agentic_os.mission.operator_sdk import Operator, capability, pending_approv
 from . import core
 
 
-def build_billing_operator() -> Operator:
+def _split_ids(v):
+    if v is None:
+        return None
+    if isinstance(v, str):
+        return [x.strip() for x in v.split(",") if x.strip()]
+    return [str(x) for x in v]
+
+
+def _dunning_scope(inp: dict) -> tuple[str, list | None]:
+    """(account_id, invoice_ids) from the node inputs. The runtime delivers the decision's scope under
+    ``intent`` (string-valued, see decision.BillingPlanner); direct callers pass them flat."""
+    intent = inp.get("intent") if isinstance(inp.get("intent"), dict) else {}
+    account = inp.get("account_id") or intent.get("account_id") or ""
+    ids = _split_ids(inp.get("invoice_ids") if inp.get("invoice_ids") is not None else intent.get("invoice_ids"))
+    return str(account), ids
+
+
+def _make_dunning(on_dunning=None):
+    def _dunning(inp: dict):
+        if not inp.get("_approval"):          # the runtime-delivered approval marker; absent => stage only
+            return pending_approval("billing.dunning", dunning_attempted=False)
+        account, ids = _dunning_scope(inp)
+        if account or ids is not None:
+            res = core.chase_invoices(account, ids)
+        else:
+            res = core.chase_overdue()        # legacy unscoped console behaviour (no read-back)
+            res["dunning_attempted"] = bool(res.get("overdue_count"))
+        if on_dunning is not None:
+            try:
+                on_dunning(inp.get("_mission"), res)
+            except Exception:  # noqa: BLE001 — the ledger must never change the action's outcome
+                pass
+        return res
+    return _dunning
+
+
+def build_billing_operator(on_dunning=None) -> Operator:
     return Operator("billing", [
         capability(
             "billing.summary",
@@ -33,10 +71,12 @@ def build_billing_operator() -> Operator:
         ),
         capability(
             "billing.dunning",
-            lambda inp: (core.chase_overdue() if inp.get("_approval")
-                        else pending_approval("billing.dunning", dunning_attempted=False)),
+            _make_dunning(on_dunning),
             provides=["dunning_attempted"],
-            outputs={"dunning_attempted": "retry_payment issued across all overdue invoices"},
+            outputs={"dunning_attempted": "retry_payment issued on the in-scope overdue invoices",
+                     "dunning_verified": "bool: every chased invoice read back as settled (and >=1 chased)",
+                     "settled_count": "invoices read back as paid after the retry",
+                     "failed_count": "chased invoices rejected or not settled on read-back"},
             side_effecting=True, approval_required=True,
             permissions=["billing:write"], estimated_value="high", latency_ms=1500,
             concurrency_mode="exclusive", resource_keys=["billing:dunning"],  # one dunning run at a time

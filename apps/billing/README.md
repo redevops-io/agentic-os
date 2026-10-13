@@ -115,3 +115,57 @@ docker run --rm -p 8201:8201 \
     (Lago's real dunning/retry action) and report what it did per invoice.
   - `"refund"` → **never executed**; returns `{"status":"pending_approval", ...}` because
     refunds are human-approved.
+
+## Closed loop
+
+The overdue-invoice / dunning case runs as a real runtime-native loop. Nothing in it is sample data: signals
+are read from Lago, the action is a governed mission, and the outcome is read back from Lago again.
+
+```
+ observe.py          Lago invoices (+ payment_requests) -> BillingSignals -> bi-temporal Observation (known_at = our read, OBSERVED)
+ producers.py        BillingSignals -> DecisionOpportunity (value from overdue amount + payment history; confidence from
+                     data completeness; 24h dunning cooldown) -> priority_engine.select_action (do-nothing/abstain first-class)
+ decision.py         run_decision_cycle -> bridge_selection -> MissionRuntimeLauncher over a MissionRuntime built from THIS
+                     app's operator (LocalOperatorClient). Writes an InterventionRecord for every selection
+                     (opportunity_id=billing:<account>). billing.dunning is approval-gated: the mission PARKS.
+ approve_mission     drive(runtime, mission, approver=<explicit decision>) -> runtime delivers the approval marker ->
+                     billing.dunning retries ONLY the selected account's chosen invoices (core.chase_invoices)
+ verify              each invoice is GET back from Lago: retried / payment_status_after / settled. Declared outputs
+                     dunning_verified (bool), settled_count, failed_count. Nothing settled, a rejected retry or a
+                     partial result => status error/partial and the kernel verifier FAILS the node (never "success").
+ observe_outcomes    N days later (after_days, injected clock in tests) re-read the chased invoices, derive the outcome via
+                     outcome_derivation.derive_and_persist (competing executed interventions on the account discount the
+                     attribution confidence), persist OutcomeEvent (FileOutcomeStore) + OutcomeLink (intervention store).
+ refit_policy        the ONLY refit path: policy_promotion.run_promotion_cycle (held-out gate, apply=True required).
+                     Too little data => refused with reasons. Never invoked per request.
+```
+
+Endpoints (operator HTTP Basic; **fail closed** with 503 when no credential is configured, 401 otherwise):
+
+- `POST /api/decide` body `{"account": "<customer external_id>"}` (optional; default = account with the largest overdue
+  balance). Observes Lago, runs one decision cycle, returns `opportunities`, `selected` (action, governance decision,
+  utility, alternatives), `intervention_id`, `mission_id` and `mission_state` (`waiting_human` for dunning). Executes nothing.
+- `POST /api/decide/{mission_id}/approve` body `{"decision": "approve"|"reject"}` (default approve). Resolves the parked
+  gate; on approve the dunning runs and the response carries the per-invoice read-back (`dunning`) and the mission state
+  (`succeeded` or `failed`). Caller-supplied approval keys (`_approval`, any case/nesting) are stripped from every body,
+  and invoice scope never comes from the request - only from the observed state.
+
+Environment variables (in addition to the table above):
+
+| Var | Default | Meaning |
+|-----|---------|---------|
+| `OPERATOR_BASIC_AUTH_USER` / `_PASS` or `OPERATOR_BASIC_AUTH` / `OUTREACH_BASIC_AUTH` (`user:pass`) | _(unset => 503)_ | Operator credential for `/api/decide*`. |
+| `BILLING_STATE_DIR` | _(unset => in-memory)_ | Directory for durable `interventions.jsonl`, `outcomes.jsonl`, `observations.jsonl`. |
+| `BILLING_DUNNING_COOLDOWN_S` | `86400` | No second dunning on an account inside this window. |
+| `BILLING_REFERENCE_AMOUNT_CENTS` | `100000` | Overdue amount at which the dunning value saturates (a scale, not a prediction). |
+| `BILLING_VERIFY_ATTEMPTS` / `BILLING_VERIFY_INTERVAL_S` | `3` / `2.0` | Bounded read-back wait: Lago settles retried payments asynchronously. |
+
+`billing.dunning` accepts `account_id` / `invoice_ids` (only overdue invoices of that account, intersected with
+`invoice_ids`, are chased; anything else is reported as `skipped`). With no scope it keeps the legacy console behaviour
+(all overdue invoices, no read-back) - the loop never uses that form.
+
+Documented fallbacks (listed in `BillingSignals.fallbacks`, each lowers decision confidence, enough of them => abstain):
+missing `payment_due_date`, absent `payment_overdue` flag (derived), unavailable `payment_requests` (no last-dunning).
+Limits: overcharge detection is not derivable from Lago invoices (always false, so refunds are not proposed by the loop);
+the runtime and parked missions are in-memory (a restart loses a parked approval; intervention/outcome/observation
+stores survive with `BILLING_STATE_DIR`); Lago has no `paid_at`, so a payment is dated by when we observed it.
