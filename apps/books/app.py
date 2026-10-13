@@ -11,8 +11,9 @@ Endpoints:
   GET  /health        -> {"status","core":"erpnext","connected": <bool from a cheap call>}
   GET  /api/activity  -> live KPIs (cash, net income, A/R, A/P) + uncategorized txns + close
   GET  /              -> MD3 books dashboard rendered from the live data
-  POST /agent/run     -> {"action":"categorize"|"reconcile"|"close"}
-                         close is approval-gated (returns pending_approval).
+  POST /agent/run     -> {"action":"categorize"|"reconcile"|"close"|"record_revenue"|"reverse_entry"}
+                         every write is approval-gated IN core (returns pending_approval unless the route
+                         proved operator Basic auth).
 
 Config (env; seed.py writes agents/books/.env automatically):
   ERPNEXT_URL         REST base, default http://localhost:8092
@@ -21,8 +22,10 @@ Config (env; seed.py writes agents/books/.env automatically):
   ERPNEXT_FRONT_URL   ERPNext UI link for the "Open in ERPNext" button
   COMPANY             the books company, default "Meridian Wealth Management"
   PORT                uvicorn port, default 8209
-  REDEVOPS_LLM_BASE_URL / REDEVOPS_LLM_MODEL  OPTIONAL local LLM for /agent/run narration
-  ANTHROPIC_API_KEY   OPTIONAL fallback for the narration blurb
+  REDEVOPS_LLM_BASE_URL  OPTIONAL in-boundary model for /agent/run narration (agentic_os.app.llm.governed_text,
+                      CUSTOMER_CONFIDENTIAL, fail-closed; no external fallback)
+  OPERATOR_BASIC_AUTH ``user:pass`` -- a request carrying these Basic credentials is the operator's approval for
+                      /agent/run actions; everything else only gets a staged preview
 """
 from __future__ import annotations
 
@@ -38,9 +41,6 @@ except Exception:  # noqa: BLE001
     def _req_principal(request=None):
         return None
 
-import httpx
-from context_runtime.adapters.model_openai import OpenAICompatibleModel
-from context_runtime.types import ModelRequest
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
@@ -49,6 +49,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 # context-runtime deps) so the Mission Runtime operator can invoke them and they can be
 # tested against a fake ERPNext. Import config + core helpers from there; core loads .env.
 from . import core
+from .gate import operator_approval
 from .core import (  # noqa: E402
     ERPNEXT_URL, ERPNEXT_API_KEY, ERPNEXT_API_SECRET, ERPNEXT_FRONT_URL, COMPANY,
     TENANT, SUBTITLE, APPROVAL_REQUIRED,
@@ -353,77 +354,67 @@ def render(data: dict) -> str:
 </html>"""
 
 
-# --- optional LLM reasoning blurb (guarded: works without any API key) -------
-_BLURB_MODEL = OpenAICompatibleModel.from_env()
-
+# --- optional LLM reasoning blurb (governed; works without any model) --------
 def _llm_blurb(prompt: str) -> str | None:
-    """Return a one-line reasoning blurb from the local LLM (or Claude), or None.
+    """A one-line narration from the GOVERNED in-boundary model, or None.
 
-    Optional by design — every agentic action below is deterministic ERPNext API work;
-    the LLM only narrates. Absence of a key/endpoint must never break the endpoint.
-    """
-    base = os.environ.get("REDEVOPS_LLM_BASE_URL")
-    if base:
-        try:
-            r = httpx.post(
-                base.rstrip("/") + "/chat/completions",
-                json={"model": os.environ.get("REDEVOPS_LLM_MODEL", "DeepSeek-V4-Flash"),
-                      "messages": [{"role": "user", "content": prompt}],
-                      "max_tokens": 220, "temperature": 0.3},
-                timeout=90.0,   # DeepSeek runs on CPU (~15 tok/s) — be patient
-            )
-            if r.status_code == 200:
-                txt = (r.json().get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
-                if txt:
-                    return txt
-        except Exception:
-            pass
-    fallback = "We ran the playbook, with SAP-like controls at each step."
-    if _BLURB_MODEL is None:
-        return fallback
+    N7: the prompt carries customer/ledger data, so it is classified CUSTOMER_CONFIDENTIAL and routed by
+    ``agentic_os.app.llm.governed_text`` -- fail closed (None) when the router refuses or no in-boundary
+    endpoint is configured; there is no direct-HTTP fallback. The model only narrates."""
+    from .assistant import governed_answer
     try:
-        res = _BLURB_MODEL.complete(
-            ModelRequest(
-                messages=({"role": "user", "content": prompt},),
-                max_tokens=220,
-            )
-        )
-        return res.text
-    except Exception:
-        return fallback
+        from agentic_os.governance.classification import DataClassification
+    except Exception:  # noqa: BLE001
+        return None
+    return governed_answer(prompt, (DataClassification.CUSTOMER_CONFIDENTIAL,), max_tokens=220, temperature=0.3)
 
 
-# --- agentic actions (thin wrappers over core; core stays context-runtime-free) ---
-def _categorize() -> dict:
-    """Categorize the next uncategorized bank transaction, with optional LLM narration."""
-    return core.categorize(blurb=_llm_blurb)
+def _with_approval(body: dict, approval) -> dict:
+    """The core call's body: every caller-supplied ``_approval*`` key is stripped, then the route's
+    server-side marker -- if any -- is set."""
+    clean = _strip_approval(body or {})
+    return {**clean, "_approval": approval} if approval else clean
+
+
+# --- agentic actions (thin wrappers over core; the approval gate lives IN core) ---
+# ``approval`` is None for every caller except a route that proved operator Basic auth (see gate.py).
+def _categorize(approval=None) -> dict:
+    """Categorize the next uncategorized bank transaction (staged preview unless approved)."""
+    return core.categorize(blurb=_llm_blurb, approval=approval)
 
 
 def _reconcile() -> dict:
-    """Stage a deposit↔invoice match (bank reconciliation), with optional narration."""
+    """Stage a deposit↔invoice match (bank reconciliation, read-only), with optional narration."""
     return core.reconcile(blurb=_llm_blurb)
 
 
-def _close() -> dict:
-    """Month-end close — approval gated; never posts the Period Closing Voucher here."""
-    return core.close(blurb=_llm_blurb)
+def _close(approval=None) -> dict:
+    """Month-end close -- staged unless approved; an ERPNext outage returns a structured error."""
+    return core.close({"_approval": approval} if approval else {}, blurb=_llm_blurb)
 
 
-def _record_revenue(body: dict) -> dict:
-    """Onboarding: record subscription revenue as a real ERPNext Journal Entry."""
-    return core.record_revenue(body)
+def _record_revenue(body: dict, approval=None) -> dict:
+    """Onboarding: record subscription revenue as a real ERPNext Journal Entry (staged unless approved)."""
+    return core.record_revenue(_with_approval(body, approval))
 
 
-def _reverse_entry(body: dict) -> dict:
-    """Compensating saga undo: cancel the revenue Journal Entry."""
-    return core.reverse_entry(body)
+def _reverse_entry(body: dict, approval=None) -> dict:
+    """Compensating saga undo: cancel the revenue Journal Entry (staged unless approved)."""
+    return core.reverse_entry(_with_approval(body, approval))
+
+
+#: every /agent/run action -> handler(body, approval). The route is the ONLY place the operator marker enters.
+ACTIONS = {
+    "categorize": lambda body, approval: _categorize(approval),
+    "reconcile": lambda body, approval: _reconcile(),
+    "close": lambda body, approval: _close(approval),
+    "record_revenue": _record_revenue,
+    "reverse_entry": _reverse_entry,
+}
 
 
 # ──────── conversational agent · Context Runtime (LLM) + redevops-rag (grounding) + agent-harness (tools) ────────
-try:
-    from context_runtime.integrations.agent_console import AgentConsole as _AgentConsole, tool as _crtool
-except Exception:  # noqa: BLE001 — context-runtime absent → no console
-    _AgentConsole = None
+from .assistant import Assistant as _Assistant, Tool as _Tool
 
 _BOOKS_PRIMER = """A CUSTOMER is anyone you sell to; a SUPPLIER (vendor) is anyone you buy from. Create a customer under Accounts → Customer → New (name, group, territory); create a supplier under Accounts → Supplier → New. An ITEM is a product or service you sell or buy; add one under Stock → Item → New, and set its default income/expense accounts.
 
@@ -492,23 +483,26 @@ def _t_close_status(_a: dict) -> dict:
             "data": d["checklist"]}
 
 
-if _AgentConsole is not None:
-    _BOOKS_CONSOLE = _AgentConsole(
-        f"{TENANT} Books", _BOOKS_PRIMER,
-        tools=[
-            _crtool("financials_summary", "current books KPIs — cash position, net income, A/R and A/P outstanding, uncategorized count", _t_summary),
-            _crtool("list_unpaid_invoices", "list open receivables: who owes you, how much, and the invoice status", _t_unpaid),
-            _crtool("find_party", "look up a customer (or bank memo) by name from the live books", _t_find_party,
-                    parameters={"type": "object", "properties": {"name": {"type": "string"}}}),
-            _crtool("close_status", "month-end close progress and what still blocks it", _t_close_status),
-        ],
-        suggestions=["How do I record a customer payment?", "Who owes us money?",
-                     "What's our net income?", "How does month-end close work?"],
-        subtitle="Ask how to record invoices, payments and journal entries — or check A/R, A/P and the close.",
-        allow_side_effects=[],  # all tools are read-only; ERPNext writes need a human
-    )
-else:
-    _BOOKS_CONSOLE = None
+try:
+    from agentic_os.governance.classification import DataClassification as _DC
+    _CLS = (_DC.CUSTOMER_CONFIDENTIAL,)
+except Exception:  # noqa: BLE001
+    _CLS = ()
+
+# All console tools are read-only; ERPNext writes need an operator (see /agent/run + gate.py).
+_BOOKS_CONSOLE = _Assistant(
+    f"{TENANT} Books", _BOOKS_PRIMER,
+    tools=[
+        _Tool("financials_summary", "current books KPIs", _t_summary, keywords=("summary", "kpi", "cash", "net income", "financials")),
+        _Tool("list_unpaid_invoices", "open receivables", _t_unpaid, keywords=("unpaid", "owes", "owe", "receivable", "receivables")),
+        _Tool("find_party", "look up a customer by name", _t_find_party, keywords=("find customer", "look up")),
+        _Tool("close_status", "month-end close progress", _t_close_status, keywords=("close status", "month end", "close progress")),
+    ],
+    suggestions=["How do I record a customer payment?", "Who owes us money?",
+                 "What's our net income?", "How does month-end close work?"],
+    subtitle="Ask how to record invoices, payments and journal entries — or check A/R, A/P and the close.",
+    classifications=_CLS,
+)
 
 
 # --- routes ------------------------------------------------------------------
@@ -523,8 +517,6 @@ async def api_agent(request: Request) -> JSONResponse:
         body = _strip_approval(await request.json())
     except Exception:  # noqa: BLE001
         body = {}
-    if _BOOKS_CONSOLE is None:
-        return JSONResponse({"intent": "help", "text": "The assistant is offline (context-runtime unavailable).", "evidence": []})
     return JSONResponse(_BOOKS_CONSOLE.respond((body or {}).get("message", ""), principal=_req_principal(request)))
 
 
@@ -533,101 +525,13 @@ def activity() -> JSONResponse:
     return JSONResponse(fetch_activity())
 
 
-# --- Context Runtime: decisions over a synthetic question stream (sample, not live traffic) ----------
-import asyncio as _cr_asyncio
-import json as _cr_json
-from datetime import datetime as _cr_dt, timezone as _cr_tz
-from fastapi.responses import StreamingResponse as _CRStreamingResponse
-
-try:
-    from context_runtime.integrations.agentic_books import (  # type: ignore
-        AgenticBooksTenant as _CRTenant, agentic_books_bucket as _cr_bucket,
-    )
-    _CR = _CRTenant(epsilon=0.15)
-except Exception:  # noqa: BLE001
-    _CR = None
-
-    def _cr_bucket(_t):  # type: ignore
-        return "general"
-
-_CR_SYNTH = [
-    'Who owes us money right now?',
-    'Which vendor bills are due this week?',
-    'Sales tax liability this quarter?',
-    'Is the trial balance reconciled?',
-]
-
-
-def _cr_decide(text: str) -> dict:
-    try:
-        bucket = _cr_bucket(text)
-    except Exception:  # noqa: BLE001
-        bucket = "general"
-    if _CR is not None:
-        try:
-            try:
-                arm = _CR.choose(text, bucket=bucket)
-            except TypeError:
-                arm = _CR.choose(text)
-            return {"bucket": str(bucket), "bundle": getattr(arm, "key", str(arm))}
-        except Exception:  # noqa: BLE001
-            pass
-    return {"bucket": str(bucket), "bundle": "(context runtime offline)"}
-
-_CR_LIVE_FEED = """
-<div id="cr-live" style="position:fixed;right:16px;bottom:16px;width:340px;max-height:58vh;overflow:auto;background:#17171a;border:1px solid #2f2f33;border-radius:12px;padding:12px;font:13px/1.45 Roboto,system-ui,sans-serif;color:#e4e2e6;z-index:9999;box-shadow:0 10px 34px rgba(0,0,0,.45)">
-  <div style="color:#4fd1c5;font-weight:600;margin-bottom:8px">Context Runtime — decisions (sample stream)</div>
-  <div id="cr-feed" style="color:#9b99a1">connecting…</div>
-</div>
-<script>
-(function(){
-  var feed=document.getElementById('cr-feed');var first=true;
-  try{
-    var es=new EventSource('api/stream');
-    es.onmessage=function(e){
-      if(first){feed.innerHTML='';first=false;}
-      var d=JSON.parse(e.data);var row=document.createElement('div');
-      row.style.cssText='border-top:1px solid #2f2f33;padding:7px 0';
-      row.innerHTML='<div style="color:#9b99a1;font-size:11px">'+d.ts+' \u00b7 <b style="color:#c7c5ca">'+d.bucket+'</b></div>'+'<div style="margin:2px 0">'+d.input+'</div>'+'<div style="color:#4fd1c5">\u2192 pulled context: <b>'+d.bundle+'</b></div>';
-      feed.insertBefore(row,feed.firstChild);
-      while(feed.children.length>8) feed.removeChild(feed.lastChild);
-    };
-    es.onerror=function(){ if(first){feed.textContent='(live stream unavailable)';} };
-  }catch(err){feed.textContent='(live stream unavailable)';}
-})();
-</script>
-"""
-
-
-@app.get("/api/stream")
-async def cr_stream() -> _CRStreamingResponse:
-    async def _gen():
-        i = 0
-        while True:
-            text = _CR_SYNTH[i % len(_CR_SYNTH)]
-            i += 1
-            d = _cr_decide(text)
-            evt = {"input": text, "ts": _cr_dt.now(_cr_tz.utc).strftime("%H:%M:%S"), **d}
-            yield f"data: {_cr_json.dumps(evt)}\n\n"
-            await _cr_asyncio.sleep(2.5)
-    return _CRStreamingResponse(_gen(), media_type="text/event-stream")
-
-
-_CR_BANNER = """<div style="position:sticky;top:0;z-index:9998;background:linear-gradient(90deg,#10201d,#17171a);border-bottom:1px solid #2f2f33;color:#e4e2e6;font:13px/1.4 Roboto,system-ui,sans-serif;padding:9px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">CONTEXT RUNTIME</span><span style="background:#2f2f33;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">DEMO</span><span style="color:#9b99a1">This demo app is plugged into <b style="color:#e4e2e6">Context Runtime</b>, which optimizes which ledgers/reports to pull — correct answer vs pull cost (3.63 vs 2.43). <a href="https://github.com/redevops-io/context-runtime" style="color:#4fd1c5;text-decoration:none">learn more \u2192</a></span></div>"""
-
-
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
-    import re as _cr_re
     page = render(fetch_activity())
     if _BOOKS_CONSOLE is not None:
         panel = "<section class='shell' style='margin-top:var(--sp-4)'>" + _BOOKS_CONSOLE.panel_html("books") + "</section>"
         page = page.replace("<footer", panel + "<footer", 1)
-    page = _cr_re.sub(r"(<body[^>]*>)", lambda m: m.group(1) + _CR_BANNER, page, count=1)
-    if "_CR_BANNER" not in page and "cr-live" not in page:  # no <body> matched → prepend
-        page = _CR_BANNER + page
-    return (page.replace("</body>", _CR_LIVE_FEED + "</body>")
-            if "</body>" in page else page + _CR_LIVE_FEED)
+    return page
 
 
 @app.post("/agent/run")
@@ -637,24 +541,15 @@ async def agent_run(request: Request) -> JSONResponse:
     except Exception:
         body = {}
     action = (body or {}).get("action", "")
-
-    if action == "categorize":
-        return JSONResponse(_categorize())
-    if action == "reconcile":
-        return JSONResponse(_reconcile())
-    if action == "close":
-        return JSONResponse(_close())
-    if action == "record_revenue":
-        return JSONResponse(_record_revenue(body or {}))
-    if action == "reverse_entry":
-        return JSONResponse(_reverse_entry(body or {}))
-    return JSONResponse(
-        {"status": "error", "error": f"unknown action '{action}'",
-         "supported": ["categorize", "reconcile", "close",
-                       "record_revenue", "reverse_entry"],
-         "approval_required": APPROVAL_REQUIRED},
-        status_code=400,
-    )
+    handler = ACTIONS.get(action) if isinstance(action, str) else None
+    if handler is None:
+        return JSONResponse(
+            {"status": "error", "error": f"unknown action '{action}'", "supported": sorted(ACTIONS),
+             "approval_required": APPROVAL_REQUIRED},
+            status_code=400,
+        )
+    # Server-side only: valid operator Basic auth => the route injects the approval marker; else staged preview.
+    return JSONResponse(handler(body or {}, operator_approval(request)))
 
 
 if __name__ == "__main__":  # pragma: no cover

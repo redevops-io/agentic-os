@@ -7,8 +7,8 @@ actions the console exposes at `/agent/run`, now discoverable + idempotent on th
 Capabilities (syscalls):
   billing.summary              — read-only KPIs + overdue invoices (fact `billing_activity`)
   billing.dunning              — retry payment on overdue invoices  [approval gate: dunning]
-                                 scoped by ``account_id`` / ``invoice_ids`` (the closed-loop path: ONE account,
-                                 read-back verified); with no scope it keeps the legacy console behaviour
+                                 scoped by ``account_id`` / ``invoice_ids`` (ONE account, read-back verified);
+                                 unscoped calls are refused ``scope_required`` unless ``all_accounts`` is set
   billing.refund               — stage a refund credit-note              [approval gate: refund]
   billing.create_subscription  — onboard a customer onto a paid plan (undo: cancel_subscription)
   billing.cancel_subscription  — terminate a subscription (saga compensation)
@@ -18,7 +18,7 @@ runtime parks them as HumanTasks before execution.
 """
 from __future__ import annotations
 
-from agentic_os.mission.operator_sdk import Operator, capability, pending_approval
+from agentic_os.mission.operator_sdk import Operator, capability
 
 from . import core
 
@@ -40,17 +40,21 @@ def _dunning_scope(inp: dict) -> tuple[str, list | None]:
     return str(account), ids
 
 
+def _truthy(v) -> bool:
+    return v is True or (isinstance(v, str) and v.strip().lower() in ("1", "true", "yes"))
+
+
 def _make_dunning(on_dunning=None):
     def _dunning(inp: dict):
-        if not inp.get("_approval"):          # the runtime-delivered approval marker; absent => stage only
-            return pending_approval("billing.dunning", dunning_attempted=False)
+        """Scope is REQUIRED (``account_id`` [+ ``invoice_ids``]); an unscoped call is refused ``scope_required``
+        unless ``all_accounts`` is true AND the runtime-delivered ``_approval`` is present. Every executed path
+        reads each invoice back from Lago and returns the declared outputs. The gate itself lives in core."""
+        approval = inp.get("_approval")           # the runtime-delivered approval marker; absent => stage only
         account, ids = _dunning_scope(inp)
-        if account or ids is not None:
-            res = core.chase_invoices(account, ids)
-        else:
-            res = core.chase_overdue()        # legacy unscoped console behaviour (no read-back)
-            res["dunning_attempted"] = bool(res.get("overdue_count"))
-        if on_dunning is not None:
+        intent = inp.get("intent") if isinstance(inp.get("intent"), dict) else {}
+        all_accounts = _truthy(inp.get("all_accounts")) or _truthy(intent.get("all_accounts"))
+        res = core.chase_invoices(account, ids, approval=approval, all_accounts=all_accounts)
+        if approval and on_dunning is not None:
             try:
                 on_dunning(inp.get("_mission"), res)
             except Exception:  # noqa: BLE001 — the ledger must never change the action's outcome
@@ -92,9 +96,7 @@ def build_billing_operator(on_dunning=None) -> Operator:
         ),
         capability(
             "billing.create_subscription",
-            lambda inp: (core.create_subscription(inp) if inp.get("_approval")
-                         else pending_approval("billing.create_subscription", customer=inp.get("customer"),
-                                               plan_code=inp.get("plan_code"), subscription=False)),
+            lambda inp: core.create_subscription(inp),     # approval gate lives in core (_approval)
             provides=["subscription"],
             outputs={"subscription": "paid subscription created on the live Lago core"},
             side_effecting=True, approval_required=True, undo="billing.cancel_subscription",
@@ -103,9 +105,7 @@ def build_billing_operator(on_dunning=None) -> Operator:
         ),
         capability(
             "billing.cancel_subscription",
-            lambda inp: (core.cancel_subscription(inp) if inp.get("_approval")
-                         else pending_approval("billing.cancel_subscription", customer=inp.get("customer"),
-                                               subscription_cancelled=False)),
+            lambda inp: core.cancel_subscription(inp),     # approval gate lives in core (_approval)
             provides=["subscription_cancelled"],
             outputs={"subscription_cancelled": "subscription terminated (saga compensation)"},
             side_effecting=True, approval_required=True,

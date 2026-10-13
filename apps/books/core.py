@@ -18,6 +18,8 @@ from typing import Callable
 
 import httpx
 
+from agentic_os.mission.operator_sdk import pending_approval
+
 # ── config (env; seed.py writes agents/books/.env) ───────────────────────────
 # Idempotent .env load so this module is self-sufficient when imported by the operator
 # (i.e. without the FastAPI app having run its own loader first).
@@ -460,7 +462,23 @@ def verify_close(body: dict) -> dict:
             "reason": "" if gl else "voucher submitted but no closing GL entry read back"}
 
 
+def _unreachable(action: str, exc: Exception, **flags) -> dict:
+    """The structured result for an ERPNext outage: never an exception (a 500), always an error dict whose
+    declared-output flags are False so the value-aware verifier fails the node cleanly."""
+    return {"status": "error", "action": action, "error": "erpnext unreachable",
+            "reason": f"{type(exc).__name__}: {exc}", **flags}
+
+
 def close(body: dict | None = None, blurb: Callable[[str], str | None] | None = None) -> dict:
+    """Month-end close (approval-gated in core; an ERPNext outage returns a structured error, never raises).
+    See ``_close``."""
+    try:
+        return _close(body, blurb)
+    except Exception as e:  # noqa: BLE001 — httpx connect/timeout/HTTP errors from any ERPNext read or write
+        return _unreachable("close", e, close_staged=False, close_executed=False)
+
+
+def _close(body: dict | None = None, blurb: Callable[[str], str | None] | None = None) -> dict:
     """Month-end close. On the ungoverned/pre-approval path it only STAGES a Period Closing Voucher proposal
     (pending_approval) — the approval binds to the EXACT company, fiscal year and period parameters shown.
     On a governed approval (resumed node carries ``_approval``) it EXECUTES: creates + SUBMITS the PCV (posts
@@ -541,8 +559,18 @@ def record_revenue(body: dict | None = None) -> dict:
     """
     body = body or {}
     subscription = str(body.get("subscription") or "subscription")
-    amount = float(body.get("amount") or 0) or 100.0
-    cash_acc, income_acc = _revenue_accounts()
+    if not body.get("_approval"):             # gate in CORE: every caller (operator, route, console) is covered
+        return pending_approval("books.record_revenue", amount=body.get("amount"), revenue_recorded=False,
+                                subscription=subscription)
+    try:
+        amount = float(body.get("amount") or 0) or 100.0
+    except (TypeError, ValueError):
+        return {"status": "error", "action": "record_revenue", "revenue_recorded": False,
+                "error": f"invalid amount {body.get('amount')!r}"}
+    try:
+        cash_acc, income_acc = _revenue_accounts()
+    except Exception as e:  # noqa: BLE001 — ERPNext unreachable: structured error, not a 500
+        return _unreachable("record_revenue", e, revenue_recorded=False, entry=None)
     payload = {
         "doctype": "Journal Entry",
         "voucher_type": "Journal Entry",
@@ -607,6 +635,8 @@ def reverse_entry(body: dict | None = None) -> dict:
     """
     body = body or {}
     name = body.get("entry") or body.get("name")
+    if not body.get("_approval"):             # gate in CORE
+        return pending_approval("books.reverse_entry", entry=name, revenue_reversed=False)
     erpnext_status = None
     reversed_ok = False
     if name:

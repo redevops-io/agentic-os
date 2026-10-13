@@ -27,9 +27,11 @@ Config (env; seed.py writes agents/compliance/.env automatically):
   SCAP_REPORT    path to the real oscap HTML report   (default: results/report.html)
   SCAP_PROFILE   the xccdf profile id that was evaluated
   PORT           uvicorn port, default 8208
-  ANTHROPIC_API_KEY  OPTIONAL — if set, /agent/run "explain" adds an LLM rewrite; the
-                     endpoint works fully without it (deterministic fallback from the
-                     rule's own description/rationale/fix in the SCAP content).
+  REDEVOPS_LLM_BASE_URL  OPTIONAL in-boundary model for the "explain" rewrite (agentic_os.app.llm.governed_text,
+                     INTERNAL, fail-closed); the endpoint works fully without it (deterministic fallback from
+                     the rule's own description/rationale/fix in the SCAP content).
+  OPERATOR_BASIC_AUTH  ``user:pass`` -- a request carrying these Basic credentials is the operator's approval for
+                     remediate / file_consent; everything else only gets a staged preview.
 """
 from __future__ import annotations
 
@@ -44,24 +46,8 @@ try:
 except Exception:  # noqa: BLE001
     def _req_principal(request=None):
         return None
-import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
-
-try:  # optional model plane (context-runtime)
-    from context_runtime.adapters.model_openai import OpenAICompatibleModel
-    from context_runtime.types import ModelRequest
-except Exception:  # noqa: BLE001 — model plane optional
-    OpenAICompatibleModel = None  # type: ignore[assignment]
-    ModelRequest = None  # type: ignore[assignment]
-
-if OpenAICompatibleModel is not None:
-    try:
-        _BLURB_MODEL = OpenAICompatibleModel.from_env()
-    except Exception:  # noqa: BLE001
-        _BLURB_MODEL = None
-else:  # context-runtime not available → offline
-    _BLURB_MODEL = None
 
 # --- config ------------------------------------------------------------------
 # The OpenSCAP results parser, KPIs and agentic actions live in core.py (pure — no web /
@@ -69,6 +55,7 @@ else:  # context-runtime not available → offline
 # tested against a fixture results file. Import config + core helpers from there; core
 # loads .env.
 from . import core
+from .gate import operator_approval
 from .core import (  # noqa: E402
     SCAP_REPORT, SCAP_PROFILE, TENANT, SUBTITLE, FRAMEWORK,
     scap_connected, fetch_activity,
@@ -341,71 +328,61 @@ def render(data: dict) -> str:
 </html>"""
 
 
-# --- optional LLM rewrite (guarded: works without any API key) ---------------
+# --- optional LLM rewrite (governed; works without any model) ---------------
 def _llm_blurb(prompt: str) -> str | None:
-    """Return a plain-English rewrite from Claude, or None if no key / any error.
+    """A plain-English rewrite from the GOVERNED in-boundary model, or None.
 
-    Optional by design — `explain` already has a deterministic answer built from the
-    SCAP content's own description/rationale/fix. The LLM only rephrases it nicely.
-    Absence of ANTHROPIC_API_KEY must never break the endpoint.
-    """
-
-    def _fallback() -> str | None:
-        base = os.environ.get("REDEVOPS_LLM_BASE_URL")
-        if base:
-            try:
-                r = httpx.post(
-                    base.rstrip("/") + "/chat/completions",
-                    json={"model": os.environ.get("REDEVOPS_LLM_MODEL", "DeepSeek-V4-Flash"),
-                          "messages": [{"role": "user", "content": prompt}],
-                          "max_tokens": 220, "temperature": 0.3},
-                    timeout=90.0,   # DeepSeek runs on CPU (~15 tok/s) — be patient
-                )
-                if r.status_code == 200:
-                    txt = (r.json().get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
-                    if txt:
-                        return txt
-            except Exception:
-                pass
-        return None
-
-    if _BLURB_MODEL is None or ModelRequest is None:
-        return _fallback()
+    N7: the prompt is public CIS rule text plus this host's findings, classified INTERNAL and routed by
+    ``agentic_os.app.llm.governed_text`` -- fail closed (None) when the router refuses or no in-boundary
+    endpoint is configured; there is no direct-HTTP fallback. `explain` already has a deterministic answer."""
+    from .assistant import governed_answer
     try:
-        res = _BLURB_MODEL.complete(
-            ModelRequest(messages=({"role": "user", "content": prompt},), max_tokens=220)
-        )
-        return res.text
+        from agentic_os.governance.classification import DataClassification
     except Exception:  # noqa: BLE001
-        return _fallback()
+        return None
+    return governed_answer(prompt, (DataClassification.INTERNAL,), max_tokens=220, temperature=0.3)
 
 
-# --- agentic actions (thin wrappers over core; core stays context-runtime-free) ---
+def _with_approval(body: dict, approval) -> dict:
+    """The core call's body: every caller-supplied ``_approval*`` key is stripped, then the route's
+    server-side marker -- if any -- is set."""
+    clean = _strip_approval(body or {})
+    return {**clean, "_approval": approval} if approval else clean
+
+
+# --- agentic actions (thin wrappers over core; the approval gate lives IN core) ---
+# ``approval`` is None for every caller except a route that proved operator Basic auth (see gate.py).
 def _scan() -> dict:
-    """Re-run the real oscap scan over the core (deterministic; no LLM)."""
+    """Re-run the real oscap scan over the core (deterministic; no LLM; changes nothing on the host)."""
     return core.scan()
 
 
 def _explain(body: dict) -> dict:
-    """Explain a failing rule, with the optional LLM rewrite blurb layered on."""
-    return core.explain(body, blurb=_llm_blurb)
+    """Explain a failing rule, with the optional governed LLM rewrite blurb layered on."""
+    return core.explain(_strip_approval(body or {}), blurb=_llm_blurb)
 
 
-def _remediate(body: dict) -> dict:
-    """Stage a host fix for human approval (never auto-executed)."""
-    return core.remediate(body)
+def _remediate(body: dict, approval=None) -> dict:
+    """Open a remediation TICKET (staged unless approved; never a host fix)."""
+    return core.remediate(_with_approval(body, approval))
 
 
-def _file_consent(body: dict) -> dict:
-    """Onboarding gate — file the customer's consent record into the evidence ledger."""
-    return core.file_consent(body)
+def _file_consent(body: dict, approval=None) -> dict:
+    """Onboarding gate -- file the customer's consent record into the evidence ledger (staged unless approved)."""
+    return core.file_consent(_with_approval(body, approval))
+
+
+#: every /agent/run action -> handler(body, approval). The route is the ONLY place the operator marker enters.
+ACTIONS = {
+    "scan": lambda body, approval: _scan(),
+    "explain": lambda body, approval: _explain(body),
+    "remediate": _remediate,
+    "file_consent": _file_consent,
+}
 
 
 # ──────── conversational agent · Context Runtime (LLM) + redevops-rag (grounding) + agent-harness (tools) ────────
-try:
-    from context_runtime.integrations.agent_console import AgentConsole as _AgentConsole, tool as _crtool
-except Exception:  # noqa: BLE001 — context-runtime absent → no console
-    _AgentConsole = None
+from .assistant import Assistant as _Assistant, Tool as _Tool
 
 _COMPLIANCE_PRIMER = """SCAP (Security Content Automation Protocol) is the open standard OpenSCAP uses to check a system against a security baseline. A scan compares the machine's real configuration to a benchmark and marks every check pass or fail.
 
@@ -447,6 +424,10 @@ def _t_list_failures(_a: dict) -> dict:
 
 def _t_explain_finding(a: dict) -> dict:
     rule_id = a.get("rule_id") or a.get("rule") or a.get("id") or ""
+    if not rule_id and a.get("message"):        # console free text: "explain <rule id>"
+        import re as _re
+        m = _re.search(r"explain\s+(?:the\s+|rule\s+|control\s+|finding\s+)*([\w.\-]{6,})", a["message"], _re.I)
+        rule_id = m.group(1) if m else ""
     if not rule_id:
         fails = fetch_activity()["failing"]
         avail = "\n".join(f"- {f['short']}" for f in fails[:8])
@@ -459,26 +440,29 @@ def _t_explain_finding(a: dict) -> dict:
 
 
 def _t_run_scan(_a: dict) -> dict:
-    r = _scan()
-    return {"text": r.get("summary") or f"Scan {r.get('status', 'done')}.", "data": r}
+    # A fresh scan is long-running: it is run by the operator via /agent/run, not from the chat panel.
+    return _t_scan_summary(_a)
 
 
-if _AgentConsole is not None:
-    _COMP_CONSOLE = _AgentConsole(
-        f"{TENANT} Compliance", _COMPLIANCE_PRIMER,
-        tools=[
-            _crtool("scan_summary", "current compliance posture — pass rate, passing/failing/not-applicable control counts", _t_scan_summary),
-            _crtool("list_failures", "list the failing CIS controls, highest severity first", _t_list_failures),
-            _crtool("explain_finding", "explain a failing control and how to fix it, given its rule id", _t_explain_finding,
-                    parameters={"type": "object", "properties": {"rule_id": {"type": "string"}}}),
-            _crtool("run_scan", "re-run the OpenSCAP scan against the CIS benchmark (changes nothing on the host, but is long-running)", _t_run_scan, side_effecting=True),
-        ],
-        suggestions=["What's our compliance posture?", "Show the failing controls", "How do I remediate a failed rule?", "Which CIS profile should I use?"],
-        subtitle="Ask about SCAP findings and how to fix them — or kick off a fresh scan.",
-        allow_side_effects=[],  # run_scan stays gated → the harness asks for human approval
-    )
-else:
-    _COMP_CONSOLE = None
+try:
+    from agentic_os.governance.classification import DataClassification as _DC
+    _CLS = (_DC.INTERNAL,)
+except Exception:  # noqa: BLE001
+    _CLS = ()
+
+# Console tools never remediate or file consent; a fresh scan is run by the operator via /agent/run.
+_COMP_CONSOLE = _Assistant(
+    f"{TENANT} Compliance", _COMPLIANCE_PRIMER,
+    tools=[
+        _Tool("scan_summary", "current compliance posture", _t_scan_summary, keywords=("posture", "pass rate", "summary", "compliance")),
+        _Tool("list_failures", "list the failing CIS controls", _t_list_failures, keywords=("failing", "failures", "failed controls")),
+        _Tool("explain_finding", "explain a failing control", _t_explain_finding, keywords=("explain",)),
+        _Tool("run_scan", "latest scan results (a fresh scan is run by the operator)", _t_run_scan, keywords=("scan", "rescan")),
+    ],
+    suggestions=["What's our compliance posture?", "Show the failing controls", "How do I remediate a failed rule?", "Which CIS profile should I use?"],
+    subtitle="Ask about SCAP findings and how to fix them.",
+    classifications=_CLS,
+)
 
 
 # --- routes ------------------------------------------------------------------
@@ -493,8 +477,6 @@ async def api_agent(request: Request) -> JSONResponse:
         body = _strip_approval(await request.json())
     except Exception:  # noqa: BLE001
         body = {}
-    if _COMP_CONSOLE is None:
-        return JSONResponse({"intent": "help", "text": "The assistant is offline (context-runtime unavailable).", "evidence": []})
     return JSONResponse(_COMP_CONSOLE.respond((body or {}).get("message", ""), principal=_req_principal(request)))
 
 
@@ -503,112 +485,13 @@ def activity() -> JSONResponse:
     return JSONResponse(fetch_activity())
 
 
-# --- Context Runtime: decisions over a synthetic finding stream (sample, not live traffic) ----------
-import asyncio as _cr_asyncio
-import json as _cr_json
-from datetime import datetime as _cr_dt, timezone as _cr_tz
-from fastapi.responses import StreamingResponse as _CRStreamingResponse
-
-try:
-    from context_runtime.integrations.agentic_compliance import (  # type: ignore
-        AgenticComplianceTenant as _CRTenant, agentic_compliance_bucket as _cr_bucket,
-    )
-    _CR = _CRTenant(epsilon=0.15)
-except Exception:  # noqa: BLE001
-    _CR = None
-
-    def _cr_bucket(_t):  # type: ignore
-        return "general"
-
-_CR_SYNTH = [
-    'Weak password policy on login',
-    'TLS cipher suite is deprecated',
-    'Audit logging disabled',
-    'Outdated kernel, CVE pending',
-]
-
-
-def _cr_decide(text: str) -> dict:
-    try:
-        bucket = _cr_bucket(text)
-    except Exception:  # noqa: BLE001
-        bucket = "general"
-    if _CR is not None:
-        try:
-            try:
-                arm = _CR.choose(text, bucket=bucket)
-            except TypeError:
-                arm = _CR.choose(text)
-            return {"bucket": str(bucket), "bundle": getattr(arm, "key", str(arm))}
-        except Exception:  # noqa: BLE001
-            pass
-    return {"bucket": str(bucket), "bundle": "(context runtime offline)"}
-
-_CR_LIVE_FEED = """
-<div id="cr-live" style="position:fixed;right:16px;bottom:16px;width:340px;max-height:58vh;overflow:auto;background:#17171a;border:1px solid #2f2f33;border-radius:12px;padding:12px;font:13px/1.45 Roboto,system-ui,sans-serif;color:#e4e2e6;z-index:9999;box-shadow:0 10px 34px rgba(0,0,0,.45)">
-  <div style="color:#4fd1c5;font-weight:600;margin-bottom:8px">Context Runtime — decisions (sample stream)</div>
-  <div id="cr-feed" style="color:#9b99a1">connecting…</div>
-</div>
-<script>
-(function(){
-  var feed=document.getElementById('cr-feed');var first=true;
-  try{
-    var es=new EventSource('api/stream');
-    es.onmessage=function(e){
-      if(first){feed.innerHTML='';first=false;}
-      var d=JSON.parse(e.data);var row=document.createElement('div');
-      row.style.cssText='border-top:1px solid #2f2f33;padding:7px 0';
-      row.innerHTML='<div style="color:#9b99a1;font-size:11px">'+d.ts+' \u00b7 <b style="color:#c7c5ca">'+d.bucket+'</b></div>'+'<div style="margin:2px 0">'+d.input+'</div>'+'<div style="color:#4fd1c5">\u2192 pulled context: <b>'+d.bundle+'</b></div>';
-      feed.insertBefore(row,feed.firstChild);
-      while(feed.children.length>8) feed.removeChild(feed.lastChild);
-    };
-    es.onerror=function(){ if(first){feed.textContent='(live stream unavailable)';} };
-  }catch(err){feed.textContent='(live stream unavailable)';}
-})();
-</script>
-"""
-
-
-@app.get("/api/stream")
-async def cr_stream() -> _CRStreamingResponse:
-    async def _gen():
-        i = 0
-        while True:
-            text = _CR_SYNTH[i % len(_CR_SYNTH)]
-            i += 1
-            d = _cr_decide(text)
-            evt = {"input": text, "ts": _cr_dt.now(_cr_tz.utc).strftime("%H:%M:%S"), **d}
-            yield f"data: {_cr_json.dumps(evt)}\n\n"
-            await _cr_asyncio.sleep(2.5)
-    return _CRStreamingResponse(_gen(), media_type="text/event-stream")
-
-
-_CR_BANNER = """<div style="position:sticky;top:0;z-index:9998;background:linear-gradient(90deg,#10201d,#17171a);border-bottom:1px solid #2f2f33;color:#e4e2e6;font:13px/1.4 Roboto,system-ui,sans-serif;padding:9px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">CONTEXT RUNTIME</span><span style="background:#2f2f33;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">DEMO</span><span style="color:#9b99a1">This demo app is plugged into <b style="color:#e4e2e6">Context Runtime</b>, which optimizes which rule-family evidence to pull — correct remediation vs cost (3.56 vs 2.46). <a href="https://github.com/redevops-io/context-runtime" style="color:#4fd1c5;text-decoration:none">learn more \u2192</a></span></div>"""
-
-
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
-    import re as _cr_re
     page = render(fetch_activity())
     if _COMP_CONSOLE is not None:
         panel = "<section class='shell' style='margin-top:var(--sp-4)'>" + _COMP_CONSOLE.panel_html("comp") + "</section>"
         page = page.replace("<footer", panel + "<footer", 1)
-    page = _cr_re.sub(r"(<body[^>]*>)", lambda m: m.group(1) + _CR_BANNER, page, count=1)
-    if "_CR_BANNER" not in page and "cr-live" not in page:  # no <body> matched → prepend
-        page = _CR_BANNER + page
-    return (page.replace("</body>", _CR_LIVE_FEED + "</body>")
-            if "</body>" in page else page + _CR_LIVE_FEED)
-
-
-@app.get("/report")
-def report():
-    if SCAP_REPORT.exists():
-        return FileResponse(str(SCAP_REPORT), media_type="text/html")
-    return PlainTextResponse(
-        "No OpenSCAP report yet — run `python3 seed.py` (or POST /agent/run "
-        '{"action":"scan"}) to generate results/report.html.',
-        status_code=404,
-    )
+    return page
 
 
 @app.post("/agent/run")
@@ -618,20 +501,14 @@ async def agent_run(request: Request) -> JSONResponse:
     except Exception:
         body = {}
     action = (body or {}).get("action", "")
-
-    if action == "scan":
-        return JSONResponse(_scan())
-    if action == "explain":
-        return JSONResponse(_explain(body or {}))
-    if action == "remediate":
-        return JSONResponse(_remediate(body or {}))
-    if action == "file_consent":
-        return JSONResponse(_file_consent(body or {}))
-    return JSONResponse(
-        {"status": "error", "error": f"unknown action '{action}'",
-         "supported": ["scan", "explain", "remediate", "file_consent"]},
-        status_code=400,
-    )
+    handler = ACTIONS.get(action) if isinstance(action, str) else None
+    if handler is None:
+        return JSONResponse(
+            {"status": "error", "error": f"unknown action '{action}'", "supported": sorted(ACTIONS)},
+            status_code=400,
+        )
+    # Server-side only: valid operator Basic auth => the route injects the approval marker; else staged preview.
+    return JSONResponse(handler(body or {}, operator_approval(request)))
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -21,6 +21,8 @@ import time
 import xml.etree.ElementTree as ET
 from datetime import date
 from pathlib import Path
+
+from agentic_os.mission.operator_sdk import pending_approval
 from typing import Callable
 
 # ── config (env; seed.py writes agents/compliance/.env) ──────────────────────
@@ -535,6 +537,9 @@ def file_consent(body: dict) -> dict:
     """
     customer = body.get("customer") or "unknown"
     subscription = body.get("subscription") or "default"
+    if not body.get("_approval"):             # gate in CORE: every caller (operator, route, console) is covered
+        return pending_approval("compliance.file_consent", customer=customer, subscription=subscription,
+                                consent_filed=False)
     consent_id = _consent_id(customer, subscription)
 
     ledger = Path(CONSENT_LEDGER)

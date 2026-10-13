@@ -261,7 +261,7 @@ def test_scan_sh_pins_hash_and_fails_closed():
 
 
 def _consent(i):
-    return core.file_consent({"customer": f"c{i}", "subscription": "s"})
+    return core.file_consent({"customer": f"c{i}", "subscription": "s", "_approval": {"approved": True}})
 
 
 def test_ledger_chain_verifies_and_detects_tampering(client):

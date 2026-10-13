@@ -13,9 +13,6 @@ caller-supplied approval keys and never carry invoice ids -- scope comes only fr
 """
 from __future__ import annotations
 
-import base64
-import os
-import secrets
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -23,7 +20,7 @@ from fastapi.responses import JSONResponse
 
 from agentic_os.mission.approval import strip_approval_keys
 
-from . import decision, observe
+from . import decision, gate, observe
 
 _strip_approval = strip_approval_keys
 router = APIRouter()
@@ -43,28 +40,11 @@ def set_loop(loop: Optional[decision.ClosedLoop]) -> None:
     _LOOP = loop
 
 
-def _operator_credential() -> tuple[str, str]:
-    user = os.environ.get("OPERATOR_BASIC_AUTH_USER", "")
-    pw = os.environ.get("OPERATOR_BASIC_AUTH_PASS", "")
-    if not (user and pw):
-        combo = os.environ.get("OPERATOR_BASIC_AUTH") or os.environ.get("OUTREACH_BASIC_AUTH") or ""
-        user, _, pw = combo.partition(":")
-    return user, pw
-
-
 def require_operator(request: Request) -> None:
-    user, pw = _operator_credential()
+    user, pw = gate.operator_credential()
     if not (user and pw):
         raise HTTPException(503, "operator confirmation is not configured (set OPERATOR_BASIC_AUTH_USER/_PASS)")
-    header = request.headers.get("authorization", "")
-    ok = False
-    if header.startswith("Basic "):
-        try:
-            gu, _, gp = base64.b64decode(header[6:]).decode("utf-8", "replace").partition(":")
-            ok = secrets.compare_digest(gu, user) and secrets.compare_digest(gp, pw)
-        except Exception:  # noqa: BLE001
-            ok = False
-    if not ok:
+    if not gate.is_operator(request):
         raise HTTPException(401, "operator authentication required",
                             headers={"WWW-Authenticate": 'Basic realm="agentic-billing operator"'})
 

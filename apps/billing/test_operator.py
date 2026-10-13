@@ -87,6 +87,7 @@ def _fake_lago(monkeypatch):
     _FakeClient.deleted = []
     core._CACHE.update(ts=0.0, data=None)  # no cache bleed between tests
     monkeypatch.setattr(core, "LAGO_API_KEY", "test-key")
+    monkeypatch.setattr(core, "_sleep", lambda s: None)
     monkeypatch.setattr(core, "httpx",
                         types.SimpleNamespace(get=_fake_get, Client=lambda timeout=None: _FakeClient()))
     yield
@@ -167,11 +168,13 @@ def test_invoke_cancel_subscription_deletes_it(client):
 
 def test_dunning_stages_on_open_path_executes_on_trusted_approval(client):
     # the open HTTP path STAGES even the gated cap — no money moves
-    staged = client.post("/invoke", json={"capability": "billing.dunning", "inputs": {}}).json()["result"]
+    scope = {"account_id": "Whitfield Family Trust"}
+    staged = client.post("/invoke", json={"capability": "billing.dunning", "inputs": scope}).json()["result"]
     assert staged["status"] == "pending_approval" and _FakeClient.posted == []
-    # trusted in-process path (runtime-delivered approval) issues the real retry_payment
-    res = build_billing_operator().invoke("billing.dunning", {"_approval": {"approved": True}})
-    assert res["status"] == "done" and res["overdue_count"] == 1
+    # trusted in-process path (runtime-delivered approval) issues the real retry_payment, then reads it back
+    res = build_billing_operator().invoke("billing.dunning", {**scope, "_approval": {"approved": True}})
+    assert res["dunning_attempted"] is True and res["dunning_verified"] is False   # fake never settles it
+    assert res["failed_count"] == 1 and res["settled_count"] == 0 and res["status"] == "error"
     assert _FakeClient.posted == ["http://localhost:3000/api/v1/invoices/lago-1/retry_payment"]
 
 
@@ -183,7 +186,7 @@ def test_summary_is_readonly_and_computes_kpis(client):
 
 def test_idempotency_dedupes_side_effect(client):
     op = build_billing_operator()
-    appr = {"_approval": {"approved": True}}
+    appr = {"account_id": "Whitfield Family Trust", "_approval": {"approved": True}}
     first = op.invoke("billing.dunning", appr, "k-1")
     second = op.invoke("billing.dunning", appr, "k-1")
     assert first == second
@@ -199,7 +202,7 @@ def test_mission_runtime_httpclient_drives_operator(client):
     res = oc.invoke("billing", "billing.summary", {}, idempotency_key="m-1")
     assert res["core"] == "lago" and res["counts"]["overdue"] == 1
 
-    dun = oc.invoke("billing", "billing.dunning", {}, idempotency_key="m-2")
+    dun = oc.invoke("billing", "billing.dunning", {"account_id": "Whitfield Family Trust"}, idempotency_key="m-2")
     assert dun["status"] == "pending_approval"   # gated cap stages over the untrusted HTTP channel
 
 
@@ -221,3 +224,29 @@ def test_refund_stages_on_the_open_path_executes_only_on_a_trusted_approval(clie
     assert done["status"] == "done" and done["refund_executed"] is True
     assert done["credit_note_id"] == "cn-1" and done["refunded_cents"] == 45000
     assert any(u.endswith("/api/v1/credit_notes") for u in _FakeClient.posted)       # the real refund fired
+
+
+def test_unscoped_dunning_refused_even_with_approval_unless_all_accounts():
+    op = build_billing_operator()
+    for inp in ({}, {"_approval": {"approved": True}}, {"invoice_ids": "lago-1", "_approval": {"approved": True}}):
+        res = op.invoke("billing.dunning", inp)
+        assert res["status"] == "error" and res["error"] == "scope_required"
+        assert res["dunning_attempted"] is False and res["dunning_verified"] is False
+    assert _FakeClient.posted == []
+    staged = op.invoke("billing.dunning", {"all_accounts": True})           # all_accounts without approval
+    assert staged["status"] == "pending_approval" and _FakeClient.posted == []
+
+
+def test_all_accounts_dunning_reads_back_and_declares_outputs(monkeypatch):
+    seen = {"n": 0}
+
+    def _get(self, url, headers=None, params=None):
+        if url.endswith("/api/v1/invoices"):
+            return _Resp(200, {"invoices": INVOICES, "meta": {"total_pages": 1}})
+        seen["n"] += 1
+        return _Resp(200, {"invoice": {"payment_status": "succeeded"}})        # the read-back
+    monkeypatch.setattr(_FakeClient, "get", _get)
+    res = build_billing_operator().invoke("billing.dunning", {"all_accounts": True, "_approval": {"approved": True}})
+    assert res["status"] == "done" and res["dunning_verified"] is True
+    assert res["settled_count"] == 1 and res["failed_count"] == 0 and seen["n"] >= 1
+    assert _FakeClient.posted == ["http://localhost:3000/api/v1/invoices/lago-1/retry_payment"]
