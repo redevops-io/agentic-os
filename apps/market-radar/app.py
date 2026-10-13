@@ -70,6 +70,20 @@ from .core import (  # noqa: E402
 
 PORT = int(os.environ.get("PORT", "8204"))
 
+def _strip_approval(obj):
+    """Drop every caller-supplied ``_approval*`` / ``__approval*`` key (any case), recursively.
+
+    ``_approval`` is the Mission runtime's marker for a human-approved resume and is injected IN-PROCESS by the
+    operator. A raw HTTP body must never be able to set it, or a caller could skip the staging/approval gate.
+    """
+    if isinstance(obj, dict):
+        return {k: _strip_approval(v) for k, v in obj.items()
+                if not (isinstance(k, str) and k.lstrip("_").lower().startswith("approval"))}
+    if isinstance(obj, list):
+        return [_strip_approval(v) for v in obj]
+    return obj
+
+
 app = FastAPI(title="agentic-market-radar (Meridian Wealth Management · core: changedetection)")
 
 
@@ -486,7 +500,7 @@ def health() -> dict:
 @app.post("/api/agent")
 async def api_agent(request: Request) -> JSONResponse:
     try:
-        body = await request.json()
+        body = _strip_approval(await request.json())
     except Exception:  # noqa: BLE001
         body = {}
     if _RADAR_CONSOLE is None:
@@ -599,7 +613,7 @@ def index() -> str:
 @app.post("/agent/run")
 async def agent_run(request: Request) -> JSONResponse:
     try:
-        body = await request.json()
+        body = _strip_approval(await request.json())
     except Exception:
         body = {}
     action = (body or {}).get("action", "")

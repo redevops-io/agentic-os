@@ -46,6 +46,20 @@ DEFAULT_VERTICALS = [v.strip() for v in os.environ.get("OUTREACH_VERTICALS", "")
 
 # ──────────────────────────── app + endpoints ────────────────────────────
 
+def _strip_approval(obj):
+    """Drop every caller-supplied ``_approval*`` / ``__approval*`` key (any case), recursively.
+
+    ``_approval`` is the Mission runtime's marker for a human-approved resume and is injected IN-PROCESS by the
+    operator. A raw HTTP body must never be able to set it, or a caller could skip the staging/approval gate.
+    """
+    if isinstance(obj, dict):
+        return {k: _strip_approval(v) for k, v in obj.items()
+                if not (isinstance(k, str) and k.lstrip("_").lower().startswith("approval"))}
+    if isinstance(obj, list):
+        return [_strip_approval(v) for v in obj]
+    return obj
+
+
 app = FastAPI(title="agentic-outreach-engine (core: Twenty CRM)")
 
 
@@ -62,7 +76,7 @@ def api_pipeline(live: int = 1):
 @app.post("/api/run")        # proxied path (control-plane forwards /m/<app>/api/* only)
 @app.post("/agent/run")      # kept for internal/control-plane callers
 async def agent_run(req: Request):
-    body = await req.json()
+    body = _strip_approval(await req.json())
     action = body.get("action", "refresh")
     # The action verbs live in core.py (pure, operator-invocable). This endpoint is a thin dispatch.
     if action == "refresh":
@@ -282,7 +296,7 @@ def do_discover(instruction: str) -> dict:
 
 @app.post("/api/discover")
 async def api_discover(req: Request):
-    body = await req.json()
+    body = _strip_approval(await req.json())
     instruction = (body.get("instruction") or "").strip()
     if not instruction:
         return {"ok": False, "error": "Tell me what kind of leads you're after — e.g. “RAG eval startups with 200+ stars”."}
@@ -481,7 +495,7 @@ else:
 async def api_agent(req: Request):
     """Conversational endpoint. Uses the standard Context Runtime AgentConsole (grounded support + CRM
     tools) when available; falls back to the built-in intent router if context-runtime is absent."""
-    body = await req.json()
+    body = _strip_approval(await req.json())
     message = (body.get("message") or "").strip()
     if _OUTREACH_CONSOLE is not None:
         return JSONResponse(_OUTREACH_CONSOLE.respond(message))

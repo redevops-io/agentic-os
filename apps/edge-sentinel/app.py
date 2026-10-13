@@ -91,6 +91,20 @@ from .core import (  # noqa: E402
 
 PORT = int(os.environ.get("PORT", "8203"))
 
+def _strip_approval(obj):
+    """Drop every caller-supplied ``_approval*`` / ``__approval*`` key (any case), recursively.
+
+    ``_approval`` is the Mission runtime's marker for a human-approved resume and is injected IN-PROCESS by the
+    operator. A raw HTTP body must never be able to set it, or a caller could skip the staging/approval gate.
+    """
+    if isinstance(obj, dict):
+        return {k: _strip_approval(v) for k, v in obj.items()
+                if not (isinstance(k, str) and k.lstrip("_").lower().startswith("approval"))}
+    if isinstance(obj, list):
+        return [_strip_approval(v) for v in obj]
+    return obj
+
+
 app = FastAPI(title="edge-sentinel (Meridian Wealth Management · core: CrowdSec)")
 
 
@@ -1127,7 +1141,7 @@ def health() -> dict:
 @app.post("/api/agent")
 async def api_agent(request: Request) -> JSONResponse:
     try:
-        body = await request.json()
+        body = _strip_approval(await request.json())
     except Exception:  # noqa: BLE001
         body = {}
     if _SENTINEL_CONSOLE is None:
@@ -1144,7 +1158,7 @@ def activity() -> JSONResponse:
 async def permissions_query(request: Request) -> JSONResponse:
     """Run the vuln query as full-access (left) and the posted scoped grant (right)."""
     try:
-        body = await request.json()
+        body = _strip_approval(await request.json())
     except Exception:  # noqa: BLE001
         body = {}
     return JSONResponse(permissions_ui.query(body or {}))
@@ -1201,7 +1215,7 @@ async def api_case_respond(case_id: str, request: Request) -> JSONResponse:
     stages the action as APPROVED (awaiting the authenticated execute step). The edge is never touched here —
     the real kick-off is POST /api/cases/{id}/execute, which is operator-authenticated."""
     try:
-        body = await request.json()
+        body = _strip_approval(await request.json())
     except Exception:  # noqa: BLE001
         body = {}
     request_id = (body or {}).get("request_id", "")
@@ -1225,7 +1239,7 @@ async def api_case_execute(case_id: str, request: Request,
     authenticated). Only an already-APPROVED action runs; dry-run unless SENTINEL_BLOCK_ENABLED, so the public
     demo never mutates the live edge by default. Returns the receipt (execution proof) + a distinct verification."""
     try:
-        body = await request.json()
+        body = _strip_approval(await request.json())
     except Exception:  # noqa: BLE001
         body = {}
     request_id = (body or {}).get("request_id", "")
@@ -1269,7 +1283,7 @@ def index() -> str:
 @app.post("/agent/run")
 async def agent_run(request: Request) -> JSONResponse:
     try:
-        body = await request.json()
+        body = _strip_approval(await request.json())
     except Exception:
         body = {}
     action = (body or {}).get("action", "")
