@@ -18,9 +18,9 @@ from __future__ import annotations
 from typing import Callable, List, Optional, Sequence
 
 from agentic_os.historical_replay import (
-    DecisionPoint, LeakageError, OpportunityBuilder, ReplayReport, assert_no_leakage)
+    DecisionPoint, LeakageError, OpportunityBuilder, ReplayReport, assert_no_leakage, replay)
 from agentic_os.intervention_record import ActorType
-from agentic_os.priority_engine import PriorityPolicy, UtilityFn, select_action
+from agentic_os.priority_engine import PriorityPolicy, UtilityFn, normalize_action_label
 
 
 class ObservationSource:
@@ -56,29 +56,12 @@ def decision_points_from_interventions(intervention_store, *,
 
 def run_a0(observation_store: ObservationSource, decision_points: Sequence[DecisionPoint],
            build_opportunity: OpportunityBuilder, *, policy: Optional[PriorityPolicy] = None,
-           utility_fn: Optional[UtilityFn] = None, require_quality: bool = True) -> ReplayReport:
-    """Run leakage-safe A0 against a store. For each decision point: reconstruct the as-of evidence from
-    the store (leakage-safe + A0-admissible by default), build the opportunity from ONLY that evidence,
-    select an action, and compare to the expert's later action. A builder citing evidence outside the
-    as-of set trips a LeakageError."""
-    p = policy or PriorityPolicy()
-    evaluated = agreement = broken = 0
-    for dp in decision_points:
-        obs = observation_store.as_of(dp.decision_time, subject=dp.subject, require_quality=require_quality)
-        assert_no_leakage(obs, dp.decision_time)          # store guarantees it; assert the invariant
-        opp = build_opportunity(dp.subject, obs)
-        if opp is None or not opp.candidate_actions:
-            broken += 1
-            continue
-        as_of_ids = {o.observation_id for o in obs}
-        cited = {ref for c in opp.candidate_actions for ref in c.observation_refs}
-        if not cited.issubset(as_of_ids):
-            raise LeakageError(f"builder cited evidence outside the as-of set at T={dp.decision_time}: "
-                               f"{sorted(cited - as_of_ids)[:3]}")
-        sel = select_action(opp, p, utility_fn=utility_fn)
-        if dp.known_good_action is not None:
-            evaluated += 1
-            if sel.action.action_kind == dp.known_good_action:
-                agreement += 1
-    return ReplayReport(n_points=len(decision_points), evaluated=evaluated, agreement=agreement,
-                        broken_projections=broken, gate_violations=0)
+           utility_fn: Optional[UtilityFn] = None, require_quality: bool = True,
+           leakage: str = "raise") -> ReplayReport:
+    """Run leakage-safe A0 against a store: a thin wrapper over :func:`agentic_os.historical_replay.replay`
+    (the single replay loop), which reconstructs the as-of evidence from the store (leakage-safe +
+    A0-admissible by default), builds the opportunity from ONLY that evidence, selects an action, and
+    compares to the expert's later action. A builder citing evidence outside the as-of set trips a
+    LeakageError (``leakage="count"`` counts instead of raising)."""
+    return replay(observation_store, decision_points, build_opportunity, policy=policy,
+                  utility_fn=utility_fn, require_quality=require_quality, leakage=leakage)

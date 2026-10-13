@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from agentic_os.agent_gateway.contracts import RiskTier
+from agentic_os.attribution import HOUR_SECONDS, delay_attribution
 from agentic_os.priority_engine import DecisionOpportunity, InterventionCandidate, OutcomeEvent
 
 
@@ -77,7 +78,10 @@ def outreach_outcome(action: InterventionCandidate, *, positive_reply: bool = Fa
         dims["unsubscribe"] = -1.0
     weights = {"positive_reply": 0.6, "meeting": 1.0, "negative_reply": 0.5, "unsubscribe": 1.2}
     raw = sum(weights.get(k, 1.0) * v for k, v in dims.items())
-    attribution = 0.9 if delay_hours <= 24 else max(0.5, 0.9 - 0.01 * (delay_hours / 24.0))
+    delay_s = delay_hours * HOUR_SECONDS     # OutcomeEvent.delay is SECONDS everywhere
+    attribution = delay_attribution(delay_s, half_life_seconds=3 * 24 * HOUR_SECONDS,
+                                    causal_link_strength=0.8, outcome_specificity=0.7,
+                                    observation_quality=0.8)
     return OutcomeEvent(candidate_id=action.candidate_id, source_app="outreach",
                         action_kind=action.action_kind, observed_reward=raw, reward_dimensions=dims,
-                        delay=delay_hours, attribution_confidence=attribution)
+                        delay=delay_s, attribution_confidence=attribution)

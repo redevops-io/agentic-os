@@ -20,7 +20,8 @@ from enum import Enum
 from typing import Callable, Dict, List, Optional, Protocol, Tuple
 
 from agentic_os.priority_engine import (
-    DecisionOpportunity, PriorityPolicy, SelectedAction, UtilityFn, select_action)
+    DecisionOpportunity, PriorityPolicy, SelectedAction, UtilityFn, normalize_action_label, priority_score,
+    select_action)
 
 
 class ActorType(Enum):
@@ -47,6 +48,25 @@ class InterventionRecord:
     execution_ref: str = ""
     mission_id: str = ""
     actor_type: "ActorType" = ActorType.RUNTIME   # RUNTIME by default; HUMAN for an observed human action
+    # The producer's identity at selection time — what the outcome learner keys on. ``source_app`` is the
+    # PRODUCER app (the candidate's ``source_app``), NOT the connector that later observes the outcome.
+    # Records written before these fields existed leave them empty and fall back to the old behaviour.
+    source_app: str = ""
+    action_kind: str = ""                        # the candidate's learn_key action kind (== selected_action
+                                                 # for kinds <=24 chars; kept separately because
+                                                 # ``selected_action`` truncates free text at 40)
+    #: True for a SHADOW recommendation (recorded, never executed). It is a counterfactual, not an act in
+    #: the world, so it never competes with — or receives credit for — a real action in ``correlate``.
+    shadow: bool = False
+    #: the producer prior (base priority BEFORE learned adjustment) the selection was made on; ``None``
+    #: when not recorded. The promotion gate evaluates against this when present.
+    prior_score: Optional[float] = None
+
+    @property
+    def learn_key(self) -> Tuple[str, str]:
+        """The (source_app, action_kind) key the outcome learner attributes reward to — identical to the
+        selected candidate's ``learn_key``. Only meaningful when ``source_app`` was recorded."""
+        return (self.source_app, self.action_kind or self.selected_action)
 
 
 @dataclass(frozen=True)
@@ -62,9 +82,11 @@ class OutcomeLink:
 def record_from_selection(sel: SelectedAction, *, intervention_id: str, policy_version: str,
                           proposed_at: float, evidence_refs: Tuple[str, ...] = (),
                           approved_at: Optional[float] = None, executed_at: Optional[float] = None,
-                          execution_ref: str = "", mission_id: str = "") -> InterventionRecord:
+                          execution_ref: str = "", mission_id: str = "", shadow: bool = False,
+                          prior_score: Optional[float] = None) -> InterventionRecord:
     """Build the immutable record from a Priority-Engine SelectedAction — capturing the alternatives and
-    score so the decision is reconstructable later."""
+    score so the decision is reconstructable later. The producer's ``source_app`` and the candidate's
+    ``learn_key`` action kind are recorded so derived outcomes train the SAME key the selection read."""
     c = sel.action
     return InterventionRecord(
         intervention_id=intervention_id, opportunity_id=sel.opportunity_id,
@@ -72,7 +94,8 @@ def record_from_selection(sel: SelectedAction, *, intervention_id: str, policy_v
         alternatives=tuple(sel.alternatives), evidence_refs=tuple(evidence_refs),
         policy_version=policy_version, score=sel.expected_utility, proposed_at=proposed_at,
         approved_at=approved_at, executed_at=executed_at, execution_ref=execution_ref,
-        mission_id=mission_id)
+        mission_id=mission_id, source_app=c.source_app, action_kind=c.learn_key[1], shadow=shadow,
+        prior_score=prior_score)
 
 
 # ── stores (append-only; in-memory + durable JSONL, mirroring OutcomeStore) ──────────
@@ -92,7 +115,8 @@ def _rec_to_dict(r: InterventionRecord) -> dict:
             "policy_version": r.policy_version, "score": r.score, "proposed_at": r.proposed_at,
             "approved_at": r.approved_at, "executed_at": r.executed_at,
             "execution_ref": r.execution_ref, "mission_id": r.mission_id,
-            "actor_type": r.actor_type.value}
+            "actor_type": r.actor_type.value, "source_app": r.source_app, "action_kind": r.action_kind,
+            "shadow": r.shadow, "prior_score": r.prior_score}
 
 
 def _rec_from_dict(d: dict) -> InterventionRecord:
@@ -104,7 +128,9 @@ def _rec_from_dict(d: dict) -> InterventionRecord:
         score=d.get("score", 0.0), proposed_at=d.get("proposed_at", 0.0),
         approved_at=d.get("approved_at"), executed_at=d.get("executed_at"),
         execution_ref=d.get("execution_ref", ""), mission_id=d.get("mission_id", ""),
-        actor_type=ActorType(d.get("actor_type", "runtime")))
+        actor_type=ActorType(d.get("actor_type", "runtime")), source_app=d.get("source_app", "") or "",
+        action_kind=d.get("action_kind", "") or "", shadow=bool(d.get("shadow", False)),
+        prior_score=d.get("prior_score"))
 
 
 def _link_to_dict(l: OutcomeLink) -> dict:
@@ -200,6 +226,10 @@ CREATE TABLE IF NOT EXISTS interventions (
   mission_id       text NOT NULL DEFAULT ''
 );
 ALTER TABLE interventions ADD COLUMN IF NOT EXISTS actor_type text NOT NULL DEFAULT 'runtime';
+ALTER TABLE interventions ADD COLUMN IF NOT EXISTS source_app text NOT NULL DEFAULT '';
+ALTER TABLE interventions ADD COLUMN IF NOT EXISTS action_kind text NOT NULL DEFAULT '';
+ALTER TABLE interventions ADD COLUMN IF NOT EXISTS shadow boolean NOT NULL DEFAULT false;
+ALTER TABLE interventions ADD COLUMN IF NOT EXISTS prior_score double precision;
 CREATE TABLE IF NOT EXISTS outcome_links (
   id                      bigserial PRIMARY KEY,
   intervention_id         text NOT NULL REFERENCES interventions(intervention_id),
@@ -238,13 +268,14 @@ class PostgresInterventionStore:
                 """INSERT INTO interventions
                      (intervention_id, opportunity_id, candidate_id, selected_action, alternatives,
                       evidence_refs, policy_version, score, proposed_at, approved_at, executed_at,
-                      execution_ref, mission_id, actor_type)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                      execution_ref, mission_id, actor_type, source_app, action_kind, shadow, prior_score)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                    ON CONFLICT (intervention_id) DO NOTHING""",   # immutable — never overwrite
                 (rec.intervention_id, rec.opportunity_id, rec.candidate_id, rec.selected_action,
                  Jsonb([list(a) for a in rec.alternatives]), list(rec.evidence_refs),
                  rec.policy_version, rec.score, rec.proposed_at, rec.approved_at, rec.executed_at,
-                 rec.execution_ref, rec.mission_id, rec.actor_type.value))
+                 rec.execution_ref, rec.mission_id, rec.actor_type.value, rec.source_app, rec.action_kind,
+                 rec.shadow, rec.prior_score))
 
     def link(self, link: OutcomeLink) -> None:
         with self._conn.cursor() as cur:
@@ -278,11 +309,13 @@ class PostgresInterventionStore:
 
 _SELECT_REC = ("SELECT intervention_id, opportunity_id, candidate_id, selected_action, alternatives, "
                "evidence_refs, policy_version, score, proposed_at, approved_at, executed_at, "
-               "execution_ref, mission_id, actor_type FROM interventions")
+               "execution_ref, mission_id, actor_type, source_app, action_kind, shadow, prior_score "
+               "FROM interventions")
 
 
 def _pg_row_to_rec(row) -> InterventionRecord:
-    (iid, oid, cid, act, alts, refs, pv, score, prop, appr, exe, exref, mid, actor) = row
+    (iid, oid, cid, act, alts, refs, pv, score, prop, appr, exe, exref, mid, actor,
+     src, akind, shadow, pscore) = row
     if isinstance(alts, str):
         alts = json.loads(alts)
     return InterventionRecord(
@@ -291,28 +324,33 @@ def _pg_row_to_rec(row) -> InterventionRecord:
         policy_version=pv, score=float(score), proposed_at=float(prop),
         approved_at=(float(appr) if appr is not None else None),
         executed_at=(float(exe) if exe is not None else None), execution_ref=exref or "",
-        mission_id=mid or "", actor_type=ActorType(actor or "runtime"))
+        mission_id=mid or "", actor_type=ActorType(actor or "runtime"), source_app=src or "",
+        action_kind=akind or "", shadow=bool(shadow), prior_score=(float(pscore) if pscore is not None else None))
 
 
 def select_and_record(opportunity: DecisionOpportunity, store: "InterventionStore", *,
                       policy_version: str, proposed_at: float, policy: Optional[PriorityPolicy] = None,
                       utility_fn: Optional[UtilityFn] = None, evidence_refs: Tuple[str, ...] = (),
-                      id_fn: Optional[Callable[[], str]] = None) -> Tuple[SelectedAction, InterventionRecord]:
+                      id_fn: Optional[Callable[[], str]] = None,
+                      shadow: bool = False) -> Tuple[SelectedAction, InterventionRecord]:
     """Select an action for an opportunity AND persist the decision before it can be surfaced. This is
     the boundary that makes 'every recommendation durable before it's shown' true — INCLUDING a WAIT or
     a DO_NOT_CONTACT / abstain: the record is written for whatever was chosen, not only for actions
-    taken. Returns the selection and the immutable record now in the store."""
+    taken. Returns the selection and the immutable record now in the store. ``shadow=True`` tags the record
+    as a shadow recommendation (never executed), so attribution ignores it as a competing intervention."""
     sel = select_action(opportunity, policy, utility_fn=utility_fn)
     intervention_id = (id_fn or (lambda: uuid.uuid4().hex))()
     rec = record_from_selection(sel, intervention_id=intervention_id, policy_version=policy_version,
-                                proposed_at=proposed_at, evidence_refs=evidence_refs)
+                                proposed_at=proposed_at, evidence_refs=evidence_refs, shadow=shadow,
+                                prior_score=priority_score(sel.action, policy or PriorityPolicy()).total)
     store.append(rec)                                    # durable BEFORE the caller surfaces `sel`
     return sel, rec
 
 
 def record_human_action(store: "InterventionStore", *, opportunity_id: str, action_kind: str, at: float,
                         intervention_id: Optional[str] = None, candidate_id: str = "",
-                        execution_ref: str = "", evidence_refs: Tuple[str, ...] = ()) -> InterventionRecord:
+                        execution_ref: str = "", evidence_refs: Tuple[str, ...] = (),
+                        source_app: str = "") -> InterventionRecord:
     """Record what a human ACTUALLY did for an opportunity — an intervention with a HUMAN actor. In
     Shadow mode this sits beside the runtime's recommendation for the same ``opportunity_id`` so the two
     can be compared. It is an observation of expert behaviour, not treated as ground truth."""
@@ -320,7 +358,8 @@ def record_human_action(store: "InterventionStore", *, opportunity_id: str, acti
         intervention_id=(intervention_id or uuid.uuid4().hex), opportunity_id=opportunity_id,
         candidate_id=candidate_id, selected_action=action_kind, alternatives=(),
         evidence_refs=tuple(evidence_refs), policy_version="", score=0.0, proposed_at=at,
-        executed_at=at, execution_ref=execution_ref, actor_type=ActorType.HUMAN)
+        executed_at=at, execution_ref=execution_ref, actor_type=ActorType.HUMAN, source_app=source_app,
+        action_kind=(action_kind if source_app else ""))
     store.append(rec)
     return rec
 
@@ -335,7 +374,7 @@ class ShadowPair:
     def agreed(self) -> Optional[bool]:
         if self.runtime_action is None or self.human_action is None:
             return None
-        return self.runtime_action == self.human_action
+        return normalize_action_label(self.runtime_action) == normalize_action_label(self.human_action)
 
 
 @dataclass(frozen=True)
@@ -368,11 +407,8 @@ def shadow_report(store: "InterventionStore") -> ShadowReport:
     """Pair the runtime's recommendation with the human's action per opportunity → agreement / override.
     (Outcome-conditioned metrics — outcome-after-agreement vs after-disagreement — come once outcomes
     are correlated in later PRs; this establishes the agreement/override signal.)"""
-    runtime: Dict[str, str] = {}
-    human: Dict[str, str] = {}
-    for r in store.all():
-        bucket = human if r.actor_type == ActorType.HUMAN else runtime
-        bucket.setdefault(r.opportunity_id, r.selected_action)   # first recorded per actor per opportunity
+    from agentic_os.shadow_evaluation import pair_actions     # the ONE pairing implementation (lazy: cycle)
+    runtime, human, _ = pair_actions(store)
     pairs = [ShadowPair(opp, runtime.get(opp), human.get(opp))
              for opp in sorted(set(runtime) | set(human))]
     return ShadowReport(tuple(pairs))

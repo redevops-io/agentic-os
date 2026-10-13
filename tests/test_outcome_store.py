@@ -71,7 +71,9 @@ def test_recorded_outcomes_persist_and_learned_selection_survives_restart(tmp_pa
         return None
 
     # session 1: record outcomes that should shift CRM from its prior (send_proposal) to schedule_call
-    c1 = TestClient(create_app(SampleProjectionProvider(persist_path=path)))
+    policy_path = str(tmp_path / "policy.jsonl")
+    prov1 = SampleProjectionProvider(persist_path=path, policy_store_path=policy_path)
+    c1 = TestClient(create_app(prov1))
     assert crm_choice(c1) == "send_proposal"
     for _ in range(30):
         r = c1.post("/api/outcomes", json={"source_app": "crm", "action_kind": "send_proposal",
@@ -79,6 +81,11 @@ def test_recorded_outcomes_persist_and_learned_selection_survives_restart(tmp_pa
         assert r["durable"] is True
         c1.post("/api/outcomes", json={"source_app": "crm", "action_kind": "schedule_call",
                                        "observed_reward": 0.9})
+    # selection changes only through the gated promotion cycle (permissive gate for this small log)
+    assert crm_choice(c1) == "send_proposal"
+    from agentic_os.policy_promotion import PromotionGate
+    assert prov1.run_promotion_cycle(apply=True, gate=PromotionGate(
+        min_test_events=5, min_keys_covered=2, min_relative_improvement=0.0)).promoted
     assert crm_choice(c1) == "schedule_call"
 
     # a durable file now holds every outcome
@@ -86,7 +93,8 @@ def test_recorded_outcomes_persist_and_learned_selection_survives_restart(tmp_pa
 
     # session 2: a BRAND NEW app/provider on the same path — learned selection is already there,
     # no re-teaching needed. This is persistence closing the loop across a restart.
-    c2 = TestClient(create_app(SampleProjectionProvider(persist_path=path)))
+    c2 = TestClient(create_app(SampleProjectionProvider(
+        persist_path=path, policy_store_path=policy_path)))
     s2 = c2.get("/api/projects/customer-ops/priorities").json()
     assert s2["learning"]["outcomes_recorded"] == 60 and s2["learning"]["selection_adjusted"] is True
     assert crm_choice(c2) == "schedule_call"          # survived the restart

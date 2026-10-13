@@ -18,11 +18,12 @@ benchmarks accidentally become "extremely impressive and completely invalid."
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence, Tuple
 
 from agentic_os.observation import KnownAtQuality, Observation
 from agentic_os.priority_engine import (
-    DecisionOpportunity, PriorityPolicy, UtilityFn, select_action)
+    DecisionOpportunity, PriorityPolicy, UtilityFn, canonical_action_label, normalize_action_label,
+    select_action)
 
 
 class LeakageError(Exception):
@@ -81,7 +82,9 @@ class ReplayReport:
     evaluated: int                 # points with a known_good_action to compare against
     agreement: int                 # runtime chose the same action as the expert
     broken_projections: int        # points where the as-of state produced no candidate actions
-    gate_violations: int           # must be 0 — every decision was built from knowable evidence only
+    gate_violations: int           # points whose evidence tripped the leakage gate. 0 in the default
+                                   # fail-closed mode (a violation RAISES instead); counted in 'count' mode
+    leakage_details: Tuple[str, ...] = ()   # one message per counted violation ('count' mode only)
 
     @property
     def agreement_rate(self) -> float:
@@ -91,34 +94,64 @@ class ReplayReport:
 # builder: given a subject and the AS-OF observations, produce the opportunity (or None if not enough).
 OpportunityBuilder = Callable[[str, List[Observation]], Optional[DecisionOpportunity]]
 
+#: leakage handling. "raise" (default, production, fail-closed): the first violation raises LeakageError.
+#: "count": record the violation, skip that point, continue — for measuring how leaky a history is.
+LEAKAGE_RAISE = "raise"
+LEAKAGE_COUNT = "count"
 
-def replay(observations: Sequence[Observation], decision_points: Sequence[DecisionPoint],
+
+def replay(observations, decision_points: Sequence[DecisionPoint],
            build_opportunity: OpportunityBuilder, *, policy: Optional[PriorityPolicy] = None,
-           utility_fn: Optional[UtilityFn] = None, require_quality: bool = True) -> ReplayReport:
-    """Run the runtime over reconstructed history. For each decision point: reconstruct the as-of
-    evidence (A0-admissible only, by default), ENFORCE the leakage gate, build the opportunity from that
-    evidence only, select an action, and compare to the expert's action. A builder that reaches past the
-    as-of set trips the gate."""
+           utility_fn: Optional[UtilityFn] = None, require_quality: bool = True,
+           leakage: str = LEAKAGE_RAISE) -> ReplayReport:
+    """Run the runtime over reconstructed history — THE one replay loop (``a0_evaluation.run_a0`` is a
+    thin wrapper over this). ``observations`` is either a list of Observations or an object with
+    ``as_of(decision_time, *, subject, require_quality)`` (an operational observation store). For each
+    decision point: reconstruct the as-of evidence (A0-admissible only, by default), ENFORCE the leakage
+    gate, build the opportunity from that evidence only, select an action, and compare to the expert's
+    action under the canonical label (:func:`agentic_os.priority_engine.canonical_action_label`, so an
+    abstention agrees with a human 'do nothing'). A builder that reaches past the as-of set trips the gate:
+    ``leakage="raise"`` (default, fail-closed) raises :class:`LeakageError`; ``leakage="count"`` records the
+    violation in ``gate_violations``, skips the point and continues."""
+    if leakage not in (LEAKAGE_RAISE, LEAKAGE_COUNT):
+        raise ValueError(f"leakage must be '{LEAKAGE_RAISE}' or '{LEAKAGE_COUNT}'")
     p = policy or PriorityPolicy()
-    evaluated = agreement = broken = 0
+    is_store = hasattr(observations, "as_of")
+    evaluated = agreement = broken = violations = 0
+    details: List[str] = []
     for dp in decision_points:
-        obs = as_of(observations, dp.decision_time, subject=dp.subject, require_quality=require_quality)
-        assert_no_leakage(obs, dp.decision_time)          # the as-of set must be clean by construction
-        opp = build_opportunity(dp.subject, obs)
-        if opp is None or not opp.candidate_actions:
-            broken += 1
+        try:
+            if is_store:
+                obs = observations.as_of(dp.decision_time, subject=dp.subject, require_quality=require_quality)
+            else:
+                obs = as_of(observations, dp.decision_time, subject=dp.subject, require_quality=require_quality)
+            assert_no_leakage(obs, dp.decision_time)      # the as-of set must be clean by construction
+            opp = build_opportunity(dp.subject, obs)
+            if opp is None or not opp.candidate_actions:
+                broken += 1
+                continue
+            # guard the builder too: nothing it cited as evidence may post-date / fall outside the as-of set
+            cited = {ref for c in opp.candidate_actions for ref in c.observation_refs}
+            if cited:
+                as_of_ids = {o.observation_id for o in obs}
+                if is_store:
+                    outside = sorted(cited - as_of_ids)
+                else:
+                    outside = sorted(o.observation_id for o in observations
+                                     if o.observation_id in cited and not is_knowable_at(o, dp.decision_time))
+                if outside:
+                    raise LeakageError(f"builder cited evidence outside the as-of set at T={dp.decision_time}: "
+                                       f"{outside[:3]}")
+        except LeakageError as e:
+            if leakage == LEAKAGE_RAISE:
+                raise
+            violations += 1
+            details.append(str(e))
             continue
-        # guard the builder too: nothing it cited as evidence may post-date the decision
-        cited = {ref for c in opp.candidate_actions for ref in c.observation_refs}
-        if cited:
-            leaked = [o for o in observations if o.observation_id in cited and not is_knowable_at(o, dp.decision_time)]
-            if leaked:
-                raise LeakageError(f"builder cited future evidence at T={dp.decision_time}: "
-                                   f"{leaked[0].observation_id!r}")
         sel = select_action(opp, p, utility_fn=utility_fn)
         if dp.known_good_action is not None:
             evaluated += 1
-            if sel.action.action_kind == dp.known_good_action:
+            if canonical_action_label(sel.action) == normalize_action_label(dp.known_good_action):
                 agreement += 1
     return ReplayReport(n_points=len(decision_points), evaluated=evaluated, agreement=agreement,
-                        broken_projections=broken, gate_violations=0)
+                        broken_projections=broken, gate_violations=violations, leakage_details=tuple(details))

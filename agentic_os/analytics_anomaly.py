@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from agentic_os.agent_gateway.contracts import RiskTier
+from agentic_os.attribution import HOUR_SECONDS, delay_attribution
 from agentic_os.priority_engine import DecisionOpportunity, InterventionCandidate, OutcomeEvent
 
 
@@ -90,7 +91,10 @@ def analytics_outcome(action: InterventionCandidate, *, cause_found: bool = Fals
         dims["false_alarm"] = -1.0
     weights = {"cause_found": 0.3, "metric_recovered": 1.0, "false_alarm": 0.7}
     raw = sum(weights.get(k, 1.0) * v for k, v in dims.items())
-    attribution = 0.85 if delay_hours <= 24 else max(0.4, 0.85 - 0.01 * (delay_hours / 24.0))
+    delay_s = delay_hours * HOUR_SECONDS     # OutcomeEvent.delay is SECONDS everywhere
+    attribution = delay_attribution(delay_s, half_life_seconds=3 * 24 * HOUR_SECONDS,
+                                    causal_link_strength=0.7, outcome_specificity=0.7,
+                                    observation_quality=0.8)
     return OutcomeEvent(candidate_id=action.candidate_id, source_app="analytics",
                         action_kind=action.action_kind, observed_reward=raw, reward_dimensions=dims,
-                        delay=delay_hours, attribution_confidence=attribution)
+                        delay=delay_s, attribution_confidence=attribution)

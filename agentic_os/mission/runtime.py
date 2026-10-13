@@ -45,7 +45,47 @@ from .types import (
 from .context_view import epoch_from_refs, plan_fingerprint
 
 _TERMINAL = {NodeState.DONE, NodeState.SKIPPED, NodeState.COMPENSATED}
+#: DEFAULT business value (USD) per mission kind — the fallback only. The effective value is resolved by
+#: :func:`business_value_for` from, in order: the runtime's ``business_values`` map, the mission's own
+#: ``inputs["business_value_usd"]``, a registered app's ``OutcomeKind.value_usd`` (matching ``key``), the
+#: ``$AGENTIC_OS_BUSINESS_VALUE`` JSON config, and only then these constants.
 _BUSINESS_VALUE = {"onboarding": 100.0, "invoice_recovery": 250.0}
+
+
+def business_value_for(kind: str, mission=None, *, overrides=None, registry=None) -> float:
+    """Realized business value (USD) for a successfully completed mission of ``kind``. Metadata wins over
+    the hard-coded defaults; see :data:`_BUSINESS_VALUE` for the resolution order."""
+    import json as _json
+    import os as _os2
+
+    def _num(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+    if overrides and kind in overrides and _num(overrides[kind]) is not None:
+        return _num(overrides[kind])
+    inputs = getattr(mission, "inputs", None) or {}
+    if _num(inputs.get("business_value_usd")) is not None:
+        return _num(inputs["business_value_usd"])
+    try:                                   # app_kit OutcomeKind metadata (value_usd, when an app declares it)
+        from agentic_os.app_kit.boot import default_registry
+        for app in (registry if registry is not None else default_registry()):
+            for ok in app.manifest.outcome_kinds:
+                v = _num(getattr(ok, "value_usd", None))
+                if ok.key == kind and v is not None:
+                    return v
+    except Exception:                      # metadata is best-effort; never block outcome emission
+        pass
+    raw = _os2.environ.get("AGENTIC_OS_BUSINESS_VALUE", "").strip()
+    if raw:
+        try:
+            cfg = _json.loads(raw)
+            if isinstance(cfg, dict) and _num(cfg.get(kind)) is not None:
+                return _num(cfg[kind])
+        except ValueError:
+            pass
+    return _BUSINESS_VALUE.get(kind, 0.0)
 
 
 class ReplayError(Exception):
@@ -143,6 +183,7 @@ class MissionRuntime:
         verifier=None,
         policy_plane=None,
         learners=None,
+        business_values=None,
         disambiguation_confidence: float = 0.75,
         max_concurrency: int = 1,
         secure_executor_for=None,
@@ -188,6 +229,7 @@ class MissionRuntime:
         # P9b: three separate learners behind a promotion gate. They only RECOMMEND — nothing
         # mutates production routing until a policy promotes it (Observe→Recommend→Shadow→Promote).
         self.learners = learners or LearningStack()
+        self.business_values = dict(business_values or {})   # per-kind USD overrides (see business_value_for)
         # P10: governance read-model over the auditable event log (policy versions + interventions).
         self.governance = GovernanceLog(self.store)
         self._plans: dict[str, ExecutionPlan] = {}     # plan_id/mission_id -> plan (recompilable)
@@ -314,6 +356,7 @@ class MissionRuntime:
         # select. The default (rank-best) plan is kept unless a candidate clearly wins.
         selector = ActivePlanner(scoped, self.policy, self.learning)
         plan, candidates = selector.select(m, intent, revision=revision, reason=reason)
+        plan, promoted_choice = self._apply_promoted_choice(m, plan, candidates)
         plan.projection = plan.projection or simulate(plan, m, scoped, self.policy)
         self._plans[m.id] = plan
         m.active_plan_id = plan.id
@@ -343,7 +386,8 @@ class MissionRuntime:
                                                "expected_usd": c.projection.expected_usd,
                                                "expected_success": c.projection.expected_success,
                                                "within_budget": c.projection.within_budget,
-                                               "selected": c.selected} for c in candidates]})
+                                               "selected": c.selected} for c in candidates],
+                               "promoted_choice": promoted_choice})
         self.store.append("PlanActivated", m.id, {"plan_id": plan.id})
         if not plan.projection.within_budget:
             self._set_state(m, MissionState.FAILED)
@@ -351,6 +395,34 @@ class MissionRuntime:
                               {"reason": "over_budget", "notes": plan.projection.notes})
         else:
             self._set_state(m, MissionState.PLANNING)
+
+    def _apply_promoted_choice(self, m: Mission, plan: ExecutionPlan, candidates) -> tuple:
+        """The ONE reader of ``LearningStack.promoted_choice`` on the planning path. The learners only
+        RECOMMEND (shadow); once governance has PROMOTED a plan-policy choice (mission kind -> plan
+        signature) or a routing choice (outcome -> capability), the already policy-pruned, simulated and
+        within-budget candidate that embodies it is preferred over the rank-best default. Anything not
+        promoted, not among the admissible candidates, or over budget changes nothing (shadow-only).
+        Returns (plan, description-or-None)."""
+        kind = m.template or "mission"
+        wanted_sig = self.learners.promoted_choice("plan_policy", kind)
+        pick, why = None, None
+        for c in candidates:
+            if c.plan is plan or not c.projection.within_budget:
+                continue
+            if wanted_sig and self._signature(c.plan) == wanted_sig:
+                pick, why = c, f"plan_policy/{kind}={wanted_sig}"
+                break
+            if len(c.prefer) == 1:
+                outcome, cap = next(iter(c.prefer.items()))
+                if self.learners.promoted_choice("routing", outcome) == cap:
+                    pick, why = c, f"routing/{outcome}={cap}"
+                    break
+        if pick is None:
+            return plan, None
+        for c in candidates:
+            c.selected = c is pick
+        pick.plan.projection = pick.projection
+        return pick.plan, why
 
     # ── run loop (resumable) ──────────────────────────────────────────────────
     def _executor_for(self, m: Mission) -> Executor:
@@ -951,7 +1023,8 @@ class MissionRuntime:
         kind = m.template or "mission"
         ev = MissionOutcomeEvent(
             mission_id=m.id, kind=kind, success=success,
-            business_value=_BUSINESS_VALUE.get(kind, 0.0) if success else 0.0,
+            business_value=(business_value_for(kind, m, overrides=self.business_values)
+                            if success else 0.0),
             plan_signature=self._signature(plan),
         )
         self.learning.record(ev)

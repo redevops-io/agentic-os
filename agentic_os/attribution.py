@@ -59,6 +59,46 @@ def attribution_confidence(f: AttributionFactors, weights: Optional[Mapping[str,
     return _clamp(base * (1.0 - 0.7 * _clamp(f.competing_interventions)))
 
 
+HOUR_SECONDS = 3600.0
+
+
+def delay_attribution(delay_seconds: float, *, half_life_seconds: float, causal_link_strength: float = 0.6,
+                      outcome_specificity: float = 0.6, observation_quality: float = 0.8,
+                      competing_interventions: float = 0.0, explicit_correlation: float = 0.0) -> float:
+    """Attribution confidence for an outcome known only by its DELAY (the domain ``*_outcome`` mappers,
+    which see a result but not the observation graph). It is the SAME multi-factor function
+    :func:`correlate` uses — delay is one input (temporal proximity against the outcome's own half-life),
+    not a hand-rolled cut-off. ``delay_seconds`` is in SECONDS, like every delay in the kernel."""
+    return attribution_confidence(AttributionFactors(
+        temporal_proximity=temporal_proximity(delay_seconds, half_life_seconds),
+        causal_link_strength=causal_link_strength, competing_interventions=competing_interventions,
+        explicit_correlation=explicit_correlation, outcome_specificity=outcome_specificity,
+        observation_quality=observation_quality))
+
+
+def _norm_subject(x: str) -> str:
+    return " ".join(str(x or "").split()).casefold()
+
+
+def intervention_subjects(r: InterventionRecord) -> set:
+    """The normalised subject identities an intervention is ABOUT: its opportunity id, the id with the
+    producer namespace stripped ('crm:Acme' -> 'Acme'), and the candidate id's equivalents. Matching is
+    by EQUALITY on these (never substring), so 'Acme' never matches 'Acme Corp' / 'Acme-2'."""
+    out = set()
+    for ident in (r.opportunity_id, r.candidate_id):
+        if not ident:
+            continue
+        out.add(_norm_subject(ident))
+        if ":" in ident:
+            out.add(_norm_subject(ident.split(":", 1)[1]))
+            head = ident.rsplit(":", 1)[0]            # 'crm:Acme:send' -> 'crm:Acme'
+            if head != ident:
+                out.add(_norm_subject(head))
+                if ":" in head:
+                    out.add(_norm_subject(head.split(":", 1)[1]))
+    return out
+
+
 def temporal_proximity(delay_seconds: float, half_life_seconds: float) -> float:
     """A soft proximity in [0,1]: 1.0 at zero delay, 0.5 at one half-life, decaying after. The
     half-life is per outcome type — a reply's is hours; a renewal's is weeks — so 'delay' is
@@ -92,7 +132,10 @@ def correlate(observation: Observation, interventions: Sequence[InterventionReco
             continue
         if observation.valid_at - acted_at > window_seconds:
             continue
-        if observation.subject and observation.subject not in (r.opportunity_id + " " + r.candidate_id):
+        if r.shadow:
+            continue          # a shadow recommendation was never executed: it can neither cause an outcome
+                              # nor 'compete' for credit with the human's real action
+        if observation.subject and _norm_subject(observation.subject) not in intervention_subjects(r):
             continue
         cands.append(r)
     if not cands:
@@ -120,15 +163,18 @@ def derive_outcome(observation: Observation, attribution: Attribution, *,
     """Turn a correlated observation into an OutcomeEvent (for the learner) + an immutable OutcomeLink
     (for the intervention history). The reward dimensions come from the domain (the *_outcome mappers)."""
     r = attribution.intervention
+    # Key the outcome on the PRODUCER's learn_key recorded at selection (what UtilityModel reads), not on
+    # the observing connector. Records that predate ``source_app`` fall back to the old behaviour.
+    source_app, action_kind = (r.learn_key if r.source_app else (observation.source, r.selected_action))
     ev = OutcomeEvent(
-        candidate_id=r.candidate_id, source_app=observation.source, action_kind=r.selected_action,
+        candidate_id=r.candidate_id, source_app=source_app, action_kind=action_kind,
         reward_dimensions=dict(reward_dimensions),
         delay=max(0.0, observation.valid_at - (r.executed_at if r.executed_at is not None else r.proposed_at)),
         attribution_confidence=attribution.confidence,
         note=f"derived from observation {observation.observation_id} → intervention {r.intervention_id}",
         source_observation_ids=(observation.observation_id,),
         candidate_intervention_ids=attribution.candidate_ids,
-        selected_intervention_id=r.intervention_id)
+        selected_intervention_id=r.intervention_id, prior_utility=r.prior_score)
     link = OutcomeLink(intervention_id=r.intervention_id, outcome_ref=observation.observation_id,
                        attribution_confidence=attribution.confidence, linked_at=observation.known_at)
     return ev, link
