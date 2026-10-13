@@ -81,6 +81,8 @@ def _fake_postiz(monkeypatch):
     _FakePsql.queries = []
     core._CACHE.update(ts=0.0, data=None)  # no cache bleed between tests
     monkeypatch.setattr(core.subprocess, "run", _FakePsql.run)
+    monkeypatch.setattr(core, "PG_PASSWORD", "a-real-secret")
+    monkeypatch.delenv("APP_DEMO_MODE", raising=False)
     yield
 
 
@@ -189,3 +191,21 @@ def test_publish_stages_then_schedules_on_approval_binding_content_hash(client):
     unbound = op.invoke("social.publish", {"id": "post-1", "_approval": {"approved": True}})
     assert unbound["status"] == "error" and unbound["publish_executed"] is False and _FakePsql.updates == []
     assert "not bound" in unbound["summary"]
+
+
+def test_default_postiz_pg_password_refused_outside_demo_mode(monkeypatch):
+    monkeypatch.setattr(core, "PG_PASSWORD", "postiz")
+    ran = []
+    monkeypatch.setattr(core.subprocess, "run", lambda *a, **k: ran.append(a) or None)
+    with pytest.raises(core.ConfigError):
+        core._psql("SELECT 1;")
+    res = core.draft({"topic": "x"})
+    assert res["status"] == "config_error" and "POSTIZ_PG_PASSWORD" in res["error"]
+    assert core.publish({"id": "abc", "_approval": {"approved": True}})["status"] == "config_error"
+    assert ran == []                                       # never connected with the default credential
+
+
+def test_default_postiz_pg_password_allowed_in_demo_mode(monkeypatch):
+    monkeypatch.setattr(core, "PG_PASSWORD", "postiz")
+    monkeypatch.setenv("APP_DEMO_MODE", "true")
+    assert core.credentials_error() is None

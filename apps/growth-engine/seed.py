@@ -265,6 +265,7 @@ def main() -> int:
         f"UMAMI_ADMIN_USER={ADMIN_USER}\n"
         f"UMAMI_ADMIN_PASS={ADMIN_PASS}\n"
         f"UMAMI_FRONT_URL={UMAMI_FRONT_URL}\n"
+        "APP_DEMO_MODE=true\n"       # demo seed only: lets the app use the seeded default Umami admin password
     )
     print(f"Wrote {ENV_OUT} (UMAMI_URL, WEBSITE_ID, UMAMI_ADMIN_*, UMAMI_FRONT_URL)")
     return 0

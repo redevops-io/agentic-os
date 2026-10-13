@@ -14,6 +14,7 @@ operator = importlib.import_module("social-autopilot.operator")
 @pytest.fixture()
 def psql(monkeypatch):
     calls = []
+    monkeypatch.setattr(core, "PG_PASSWORD", "a-real-secret")     # default credential is refused outside demo mode
     monkeypatch.setattr(core, "fetch_activity",
                         lambda force=False: {"queue": [{"id": "p1", "network": "x", "text": "hello"}]})
     monkeypatch.setattr(core, "_read_post",

@@ -208,6 +208,7 @@ def main() -> int:
         f"POSTIZ_PG_DB={PG_DB}\n"
         f"POSTIZ_ORG_ID={ORG_ID}\n"
         f"POSTIZ_API_KEY={ORG_API_KEY}\n"
+        "APP_DEMO_MODE=true\n"        # demo seed only: allows the seeded default Postiz postgres password
     )
     print(f"Wrote {ENV_OUT}")
     return 0
