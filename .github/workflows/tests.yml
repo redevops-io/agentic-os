@@ -51,7 +51,10 @@ jobs:
           for d in apps/*/; do
             ls "$d" | grep -q '^test_.*\.py$' || continue
             echo "::group::pytest $d"
-            pytest -q -p no:cacheprovider "$d" || fail=1
+            pytest -q -p no:cacheprovider "$d" && rc=0 || rc=$?
+            # exit 5 = "no tests collected": an import-level skip (e.g. video-ad needs the external `reel`
+            # package) is not a failure; any other non-zero exit is.
+            [ "$rc" -eq 0 ] || [ "$rc" -eq 5 ] || fail=1
             echo "::endgroup::"
           done
           exit $fail
