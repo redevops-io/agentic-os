@@ -177,7 +177,7 @@ def test_vault_merge_adds_only_missing(tmp_path):
     assert v.data["OTHER"] == "1" and v.data[TWENTY] == keep
     assert set(v.data) == {"OTHER", *NAMES}
     assert not b.file.exists() and not (tmp_path / ".bashrc").exists()
-    assert v.calls[-1][1] == "http://v:8200/v1/secret/data/vibexgen/agentic-os/stack"
+    assert v.calls[-1][1] == "http://v:8200/v1/vibexgen/data/agentic-os/stack"
     before = dict(v.data)
     b.init()
     assert v.data == before and sum(c[0] == "POST" for c in v.calls) == 1
@@ -337,3 +337,134 @@ def test_shell_bootstrap_script_idempotent(tmp_path):
     vals = bs.parse_dotenv(first)
     assert all(MANAGED[n].validate(vals[n])[0] for n in NAMES)
     assert stat.S_IMODE(f.stat().st_mode) == 0o600
+
+
+# ── defaults + push ───────────────────────────────────────────────────────────────────────────────────
+
+def test_default_vault_location_is_live_bundle(tmp_path):
+    b = mk(tmp_path, VENV, vault_transport=FakeVault({}))
+    assert b.vault_location() == "vault:vibexgen/agentic-os/stack"
+    assert b.vault().url == "http://v:8200/v1/vibexgen/data/agentic-os/stack"
+
+
+class CasVault(FakeVault):
+    """KV v2 fake with versions + check-and-set; `race` mutates the secret once before the first POST."""
+
+    def __init__(self, data=None, race=None):
+        super().__init__(data)
+        self.version = 1 if data is not None else 0
+        self.race, self.bodies = race, []
+
+    def __call__(self, method, url, headers, body):
+        import json
+        if method == "GET":
+            r = super().__call__(method, url, headers, body)
+            r["data"]["metadata"] = {"version": self.version}
+            return r
+        if self.race:
+            self.data.update(self.race)
+            self.version += 1
+            self.race = None
+        req = json.loads(body)
+        self.bodies.append(req)
+        cas = (req.get("options") or {}).get("cas")
+        if cas is not None and cas != self.version:
+            e = Exception("check-and-set parameter did not match")
+            e.code = 400
+            raise e
+        self.calls.append((method, url))
+        self.data = req["data"]
+        self.version += 1
+        return {}
+
+
+def test_push_adds_only_missing_keeps_others(tmp_path):
+    sec = "a" * 64
+    v = CasVault({"OTHER": "1", TWENTY: "kept-" + "z" * 40})
+    b = mk(tmp_path, {**VENV, APPROVAL: sec, TWENTY: "different" + "y" * 40}, vault_transport=v)
+    r = b.push()
+    assert r["added"] == [APPROVAL] and r["skipped_present"] == [TWENTY]
+    assert v.data["OTHER"] == "1" and v.data[TWENTY] == "kept-" + "z" * 40 and v.data[APPROVAL] == sec
+    assert OUTREACH not in v.data and OUTREACH in r["missing_local"]
+    assert v.bodies[-1]["options"] == {"cas": 1}
+
+
+def test_push_creates_missing_bundle_with_cas_zero(tmp_path):
+    v = CasVault(None)
+    mk(tmp_path, {**VENV, APPROVAL: "a" * 64}, vault_transport=v).push()
+    assert v.bodies[-1]["options"] == {"cas": 0} and v.data == {APPROVAL: "a" * 64}
+
+
+def test_push_only_filter_and_unknown(tmp_path):
+    v = CasVault({})
+    b = mk(tmp_path, {**VENV, APPROVAL: "a" * 64, TWENTY: "t" * 64}, vault_transport=v)
+    assert b.push([TWENTY])["added"] == [TWENTY] and set(v.data) == {TWENTY}
+    with pytest.raises(bs.SecretsError, match="unknown"):
+        b.push(["NOPE"])
+
+
+def test_push_cas_conflict_rereads_and_never_overwrites(tmp_path):
+    v = CasVault({"OTHER": "1"}, race={APPROVAL: "winner" + "w" * 40})
+    b = mk(tmp_path, {**VENV, APPROVAL: "a" * 64, TWENTY: "t" * 64}, vault_transport=v)
+    r = b.push()
+    assert v.data[APPROVAL] == "winner" + "w" * 40 and v.data[TWENTY] == "t" * 64 and v.data["OTHER"] == "1"
+    assert r["added"] == [TWENTY] and APPROVAL in r["skipped_present"]
+
+
+def test_push_persistent_conflict_errors(tmp_path):
+    class Always(CasVault):
+        def __call__(self, method, url, headers, body):
+            if method == "POST":
+                e = Exception("cas")
+                e.code = 400
+                raise e
+            return super().__call__(method, url, headers, body)
+    b = mk(tmp_path, {**VENV, APPROVAL: "a" * 64}, vault_transport=Always({}))
+    with pytest.raises(bs.SecretsError, match="check-and-set"):
+        b.push()
+
+
+def test_push_dry_run_writes_nothing(tmp_path):
+    v = CasVault({"OTHER": "1"})
+    r = mk(tmp_path, {**VENV, APPROVAL: "a" * 64}, vault_transport=v).push(dry_run=True)
+    assert r["added"] == [APPROVAL] and v.bodies == [] and v.data == {"OTHER": "1"}
+
+
+def test_push_unreachable_or_unconfigured_clear_error(tmp_path):
+    with pytest.raises(bs.SecretsError, match="unreachable"):
+        mk(tmp_path, {**VENV, APPROVAL: "a" * 64}, vault_transport=FakeVault(fail=OSError("down"))).push()
+    with pytest.raises(bs.SecretsError, match="VAULT_ADDR"):
+        mk(tmp_path, {APPROVAL: "a" * 64}).push()
+
+
+def test_push_reads_secrets_file_and_never_prints_values(tmp_path, monkeypatch, capsys):
+    sec = "f" * 64
+    (tmp_path / "s.env").write_text(f"{APPROVAL}={sec}\n")
+    v = CasVault({})
+    monkeypatch.setattr(bs.Bootstrap, "vault",
+                        lambda self: bs.VaultBundle("http://v:8200", "t", "vibexgen", "agentic-os/stack", v))
+    monkeypatch.setattr(bs.Bootstrap, "vault_configured", lambda self: True)
+    rc, out = run(tmp_path, monkeypatch, ["secrets", "push", "--yes", "--only", APPROVAL], capsys)
+    assert rc == 0 and v.data == {APPROVAL: sec}
+    assert sec not in out.out + out.err and "pushed 1" in out.out
+    rc, out = run(tmp_path, monkeypatch, ["secrets", "push", "--dry-run"], capsys)
+    assert rc == 0 and "skipped (already in Vault" in out.out and sec not in out.out
+
+
+def test_push_cli_without_vault_fails(tmp_path, monkeypatch, capsys):
+    rc, out = run(tmp_path, monkeypatch, ["secrets", "push", "--yes"], capsys)
+    assert rc == 1 and "Vault" in out.err
+
+
+def test_operator_startup_warns_once_without_secret(monkeypatch, caplog, tmp_path):
+    pytest.importorskip("fastapi")
+    monkeypatch.delenv(APPROVAL, raising=False)
+    monkeypatch.setenv("REDEVOPS_SECRETS_FILE", str(tmp_path / "none.env"))
+    caplog.set_level(logging.WARNING, logger="agentic_os.operator")
+    operator_sdk.Operator("o", []).router()
+    msgs = [r.getMessage() for r in caplog.records]
+    assert len(msgs) == 1 and "agentic-os secrets init" in msgs[0] and "staged" in msgs[0]
+    caplog.clear()
+    monkeypatch.setenv(APPROVAL, "b" * 40)
+    operator_sdk.Operator("o", []).router()
+    assert not caplog.records
