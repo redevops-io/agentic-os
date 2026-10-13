@@ -1030,9 +1030,14 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
         persist_path=(_os_env.environ.get("OUTCOME_STORE_PATH", "").strip() or None))
     from fastapi import Body
     app = FastAPI(title="ReDevOps Projects API", version="0.1.0")
-    app.add_middleware(
-        CORSMiddleware, allow_origins=allow_origins or ["*"],
-        allow_methods=["*"], allow_headers=["*"])
+    # Same-origin only by default (the bundled UI is served from this app, so it needs no CORS). Cross-origin
+    # access is opt-in: `allow_origins=` or $PROJECTS_CORS_ORIGINS (comma-separated origins).
+    origins = allow_origins or [o.strip() for o in _os_env.environ.get("PROJECTS_CORS_ORIGINS", "").split(",")
+                                if o.strip()]
+    if origins:
+        app.add_middleware(
+            CORSMiddleware, allow_origins=origins,
+            allow_methods=["*"], allow_headers=["*"])
 
     @app.get("/api/projects")
     def _projects() -> List[dict]:
