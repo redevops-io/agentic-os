@@ -19,7 +19,13 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from agentic_os.mission import unified_server  # noqa: E402
 
-client = TestClient(unified_server.app)
+_TOKEN = "test-control-token"
+client = TestClient(unified_server.app, headers={"Authorization": f"Bearer {_TOKEN}"})
+
+
+@pytest.fixture(autouse=True)
+def _control_token(monkeypatch):
+    monkeypatch.setenv("AGENTIC_OS_CONTROL_TOKEN", _TOKEN)
 
 
 @pytest.fixture()

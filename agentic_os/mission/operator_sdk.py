@@ -9,9 +9,16 @@ An app declares its capabilities (syscalls) once and gets, for free:
 
 This is the seam that turns `agents/<app>` (today: an AgentConsole) into a Mission Runtime
 operator without changing how the app runs standalone.
+
+Idempotency cache: per-process, bounded LRU (AGENTIC_OS_IDEMPOTENCY_MAX, default 10000). Only results that
+are not failure-shaped (``mission.verify.result_failed``) are cached — a failed or raised call re-executes
+on retry (a side-effect-free staged ``pending_approval`` result is cached; the approved retry has its own key). With multiple replicas the cache is not shared (see ``approval.SharedStore``).
 """
 
 import logging
+import os
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -21,6 +28,14 @@ Handler = Callable[[dict], dict]
 
 
 _log = logging.getLogger("agentic_os.operator")
+
+
+def idempotency_max() -> int:
+    try:
+        n = int(os.environ.get("AGENTIC_OS_IDEMPOTENCY_MAX", "10000"))
+    except ValueError:
+        return 10000
+    return n if n > 0 else 10000
 
 
 def _warn_if_no_approval_secret(operator: str) -> None:
@@ -94,7 +109,9 @@ class Operator:
         self.manifest = CapabilityManifest(operator=name, capabilities=[c.spec for c in capabilities])
         self._handlers: dict[str, Handler] = {c.spec.name: c.handler for c in capabilities}
         self._specs: dict[str, CapabilitySpec] = {c.spec.name: c.spec for c in capabilities}
-        self._seen: dict[tuple, dict] = {}     # (capability, inputs-hash, idem key) -> first result (exactly-once)
+        # (capability, inputs-hash, idem key) -> first SUCCESSFUL result (exactly-once). PER-PROCESS, bounded LRU.
+        self._seen: "OrderedDict[tuple, dict]" = OrderedDict()
+        self._seen_lock = threading.Lock()
         from .approval import ReplayGuard  # noqa: PLC0415
         self.replay_guard = ReplayGuard()      # SEAM: per-process; multi-replica deployments need a shared store
         self.calls: list[tuple[str, str]] = []  # (capability, idempotency_key) — for assertions
@@ -109,8 +126,11 @@ class Operator:
                                           if k not in {"_mission", "_goal", "_node"}}), idempotency_key)
         except Exception:  # noqa: BLE001
             _dk = None
-        if idempotency_key and _dk is not None and _dk in self._seen:
-            return self._seen[_dk]
+        if idempotency_key and _dk is not None:
+            with self._seen_lock:
+                if _dk in self._seen:
+                    self._seen.move_to_end(_dk)
+                    return self._seen[_dk]
         fn = self._handlers.get(capability)
         if fn is None:
             raise KeyError(f"operator '{self.name}' has no capability '{capability}'")
@@ -135,13 +155,25 @@ class Operator:
         # The failure classifier is shared with the Mission verifier (mission.verify.result_failed) so the two
         # can never disagree about what a failure looks like.
         from .verify import result_failed  # noqa: PLC0415
-        _failed = isinstance(result, dict) and result_failed(result)[0]
+        _failed = result_failed(result, side_effecting=bool(getattr(spec, "side_effecting", False)),
+                                declares_outputs=bool(outs))[0]
         can_synthesize_marker = bool(spec and not getattr(spec, "side_effecting", False))
         if (can_synthesize_marker and isinstance(result, dict) and result and outs
                 and not _failed and not any(k in result for k in outs)):
             result = {**result, **{k: True for k in outs}}
-        if idempotency_key and _dk is not None:
-            self._seen[_dk] = result
+        # Cache ONLY successes: a failed / staged (pending_approval) / empty-write result must not pin the key,
+        # so a retry after the backend recovers (or after approval) re-executes.
+        # A staged ("pending_approval") result is side-effect-free and keyed WITHOUT `_approval`, so caching it
+        # cannot block the approved retry (which carries `_approval`, hence a different key) and keeps staging
+        # idempotent. Every other failure-shaped result is left uncached.
+        from .verify import is_staged  # noqa: PLC0415
+        if idempotency_key and _dk is not None and (not _failed or is_staged(result)):
+            cap = idempotency_max()
+            with self._seen_lock:
+                self._seen[_dk] = result
+                self._seen.move_to_end(_dk)
+                while len(self._seen) > cap:
+                    self._seen.popitem(last=False)
         return result
 
     # ── HTTP surface (mount into the app's FastAPI) ──────────────────────────

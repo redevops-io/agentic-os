@@ -28,6 +28,7 @@ import os
 import secrets as _secrets
 import threading
 import time
+from typing import Protocol, runtime_checkable
 
 ENV_SECRET = "AGENTIC_OS_APPROVAL_SECRET"
 _META_KEYS = {"_mission", "_goal", "_node"}
@@ -125,6 +126,34 @@ def verify_approval_token(secret: "bytes | str | None" = None, token: object = N
         return None
 
 
+@runtime_checkable
+class SharedStore(Protocol):
+    """SEAM for multi-replica deployments (no implementation shipped). ``ReplayGuard`` and the Operator
+    idempotency cache are PER-PROCESS; with N replicas a replayed approval token or a retried idempotency key
+    can land on a different replica and be accepted/re-executed. A shared backend (e.g. Redis ``SET key NX EX
+    ttl``) implementing this protocol is the intended fix: ``consume`` is an atomic set-if-absent that is True
+    only for the first caller; ``get``/``put`` hold idempotency results with a TTL. Until one is wired, run a
+    single replica (or sticky-route by operator) and set AGENTIC_OS_REPLICAS so a warning is logged."""
+
+    def consume(self, nonce: str, exp: float, *, now: "float | None" = None) -> bool: ...
+    def get(self, key: str) -> "dict | None": ...
+    def put(self, key: str, value: dict, ttl: float) -> None: ...
+
+
+def warn_if_replicated(component: str) -> None:
+    """One WARNING when AGENTIC_OS_REPLICAS>1 and a per-process in-memory store is in use."""
+    import logging, os  # noqa: PLC0415,E401
+    try:
+        n = int(os.environ.get("AGENTIC_OS_REPLICAS", "1") or "1")
+    except ValueError:
+        return
+    if n > 1:
+        logging.getLogger("agentic_os.operator").warning(
+            "AGENTIC_OS_REPLICAS=%d but %s is an in-memory, per-process store: replay protection / "
+            "exactly-once is NOT enforced across replicas. Run a single replica or provide a SharedStore "
+            "(see agentic_os.mission.approval.SharedStore).", n, component)
+
+
 class ReplayGuard:
     """Bounded in-memory set of used nonces, each kept until its token expires.
 
@@ -133,6 +162,7 @@ class ReplayGuard:
 
     def __init__(self, max_entries: int = 10_000):
         self.max_entries = max_entries
+        warn_if_replicated("ReplayGuard (and the Operator idempotency cache)")
         self._used: dict[str, float] = {}
         self._lock = threading.Lock()
 

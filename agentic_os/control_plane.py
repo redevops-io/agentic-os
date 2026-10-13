@@ -33,26 +33,38 @@ DEMO_READ_ONLY = os.environ.get("DEMO_READ_ONLY", "0") == "1"
 COCKPIT_URL = os.environ.get("COCKPIT_URL", "https://demo.redevops.io/cockpit")
 
 
-def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
-    """Auth dependency for mutating endpoints.
+def _authorize_mutation(x_api_key: str | None, authorization: str | None, *key_envs: str) -> None:
+    """Fail-closed auth for mutating routes. Accepts ``Authorization: Bearer $AGENTIC_OS_CONTROL_TOKEN`` or
+    ``X-API-Key`` matching the first set of ``key_envs`` (legacy AGENTIC_OS_API_KEY / PERMISSIONS_ADMIN_KEY).
+    Compared in constant time. If NOTHING is configured the route refuses (503) instead of running open."""
+    from .mission.control_auth import bearer_of, configured_token, token_matches  # noqa: PLC0415
+    legacy = next((os.environ[e] for e in key_envs if os.environ.get(e)), "")
+    token = configured_token()
+    if not token and not legacy:
+        raise HTTPException(503, "mutating endpoints are disabled: set AGENTIC_OS_CONTROL_TOKEN "
+                                 "(Authorization: Bearer) or AGENTIC_OS_API_KEY (X-API-Key) to enable them")
+    if token_matches(bearer_of(authorization), token) or token_matches(x_api_key or "", legacy):
+        return
+    raise HTTPException(401, "invalid or missing credentials (Bearer token or X-API-Key)",
+                        headers={"WWW-Authenticate": "Bearer"})
 
-    If ``AGENTIC_OS_API_KEY`` is set in the environment, every POST route requires
-    a matching ``X-API-Key`` header (401 otherwise). If it is unset, auth is
-    disabled — in that case the control plane MUST be bound to localhost only
-    (do not expose it on 0.0.0.0 without setting AGENTIC_OS_API_KEY).
-    """
-    expected = os.environ.get("AGENTIC_OS_API_KEY")
-    if expected and x_api_key != expected:
-        raise HTTPException(401, "invalid or missing X-API-Key")
+
+def require_api_key(x_api_key: str | None = Header(default=None),
+                    authorization: str | None = Header(default=None)) -> None:
+    """Auth dependency for mutating endpoints (deploy / start / stop / approve / dispatch).
+
+    Requires ``Authorization: Bearer <AGENTIC_OS_CONTROL_TOKEN>`` or ``X-API-Key: <AGENTIC_OS_API_KEY>``.
+    With neither configured the endpoint is disabled (503) — it never runs unauthenticated. Read-only
+    routes (/health, /status, /modules, /approvals, ...) stay open."""
+    _authorize_mutation(x_api_key, authorization, "AGENTIC_OS_API_KEY")
 
 
-def require_permissions_admin(x_api_key: str | None = Header(default=None)) -> None:
-    """Auth for the permissions WRITE path — its own key so gating grant edits is independent of the
-    fleet-ops key. Uses PERMISSIONS_ADMIN_KEY, falling back to AGENTIC_OS_API_KEY; open when neither
-    is set (bind to localhost / put behind your gateway in that case)."""
-    expected = os.environ.get("PERMISSIONS_ADMIN_KEY") or os.environ.get("AGENTIC_OS_API_KEY")
-    if expected and x_api_key != expected:
-        raise HTTPException(401, "invalid or missing X-API-Key")
+def require_permissions_admin(x_api_key: str | None = Header(default=None),
+                              authorization: str | None = Header(default=None)) -> None:
+    """Auth for the permissions WRITE path — gating grant edits independently of the fleet-ops key
+    (PERMISSIONS_ADMIN_KEY, falling back to AGENTIC_OS_API_KEY; the control token is also accepted).
+    Disabled (503) when nothing is configured."""
+    _authorize_mutation(x_api_key, authorization, "PERMISSIONS_ADMIN_KEY", "AGENTIC_OS_API_KEY")
 
 
 def _build() -> Fleet:
