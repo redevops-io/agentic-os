@@ -63,6 +63,9 @@ class _FakeClient:
     """Stands in for httpx.Client — records the ban POSTs + unban DELETEs to the LAPI."""
     posted: list[tuple] = []
     deleted: list[tuple] = []
+    live_bans: list[dict] = []        # what the fake LAPI would return on a read-back
+    post_status = 200
+    readback_raises = False
 
     def __enter__(self):
         return self
@@ -72,13 +75,20 @@ class _FakeClient:
 
     def post(self, url, headers=None, json=None):
         _FakeClient.posted.append((url, json))
-        return _Resp(200, {})
+        if _FakeClient.post_status < 300:
+            _FakeClient.live_bans.extend(json or [])
+        return _Resp(_FakeClient.post_status, {})
 
     def delete(self, url, headers=None, params=None):
         _FakeClient.deleted.append((url, params))
         return _Resp(200, {})
 
     def get(self, url, headers=None, params=None):
+        if _FakeClient.readback_raises:
+            raise RuntimeError("LAPI read-back failed")
+        if url.endswith("/v1/decisions"):
+            ip = (params or {}).get("ip")
+            return _Resp(200, [d for d in _FakeClient.live_bans if not ip or d.get("value") == ip] or None)
         return _Resp(200, {})
 
 
@@ -93,6 +103,9 @@ def _fake_cscli(args):
 def _fake_crowdsec(monkeypatch):
     _FakeClient.posted = []
     _FakeClient.deleted = []
+    _FakeClient.live_bans = []
+    _FakeClient.post_status = 200
+    _FakeClient.readback_raises = False
     core._CACHE.update(ts=0.0, data=None)  # no cache bleed between tests
     monkeypatch.setattr(core, "CROWDSEC_BOUNCER_KEY", "test-key")
     monkeypatch.setattr(core, "_cscli", _fake_cscli)
@@ -203,3 +216,46 @@ def test_mission_runtime_httpclient_drives_operator(client):
 
     blk = oc.invoke("edge-sentinel", "sentinel.block_ip", {"ip": "198.51.100.23"}, idempotency_key="m-2")
     assert blk["status"] == "pending_approval"   # the ban stages over the untrusted HTTP channel
+
+
+def _approved_block(ip="198.51.100.23"):
+    return build_edge_sentinel_operator().invoke("sentinel.block_ip", {"ip": ip, "_approval": {"approved": True}})
+
+
+def test_block_ip_declared_output_true_only_after_lapi_readback():
+    res = _approved_block()
+    assert res["status"] == "done" and res["enforced"] is True and res["ip_blocked"] is True
+
+
+def test_block_ip_post_accepted_but_not_active_on_readback_is_not_enforced(monkeypatch):
+    # LAPI says 200 to the POST but a read-back finds a DIFFERENT ip (10.0.0.1 vs 10.0.0.15 style) -> not verified
+    monkeypatch.setattr(_FakeClient, "post", lambda self, url, headers=None, json=None: (
+        _FakeClient.posted.append((url, json)) or _FakeClient.live_bans.append({"type": "ban", "scope": "Ip",
+                                                                                  "value": "198.51.100.230"}) or _Resp(200, {})))
+    res = _approved_block("198.51.100.23")
+    assert res["status"] == "error" and res["enforced"] is False and res["ip_blocked"] is False
+    assert "read-back" in res["summary"]
+
+
+def test_block_ip_readback_failure_is_fail_closed():
+    _FakeClient.readback_raises = True
+    res = _approved_block()
+    assert res["ip_blocked"] is False and res["status"] == "error"
+
+
+def test_block_ip_lapi_post_rejected_is_error():
+    _FakeClient.post_status = 500
+    res = _approved_block()
+    assert res["ip_blocked"] is False and res["status"] == "error" and res["lapi_status"] == 500
+
+
+def test_block_ip_lapi_unreachable_is_fail_closed(monkeypatch):
+    class _Boom:
+        def __enter__(self):
+            raise ConnectionError("lapi down")
+
+        def __exit__(self, *a):
+            return False
+    monkeypatch.setattr(core, "httpx", types.SimpleNamespace(get=_fake_get, Client=lambda timeout=None: _Boom()))
+    res = _approved_block()
+    assert res["status"] == "error" and res["ip_blocked"] is False and "unreachable" in res["summary"]

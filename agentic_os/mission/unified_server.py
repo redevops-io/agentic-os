@@ -7,7 +7,8 @@ NO business logic: state-changing work stays in the Mission Runtime; this is a r
 Credential invisibility is enforced here by omission — no endpoint returns a token or reads one into a
 response. The shell only ever learns "CRM — Connected" / "Support — Connected" via ``/api/connections``.
 
-Run:  uvicorn agentic_os.mission.unified_server:app  (needs TWENTY_API_KEY + CHATWOOT_API_TOKEN in env,
+Run:  python -m agentic_os.mission.unified_server  (binds 127.0.0.1; POST routes need AGENTIC_OS_CONTROL_TOKEN)
+      or uvicorn agentic_os.mission.unified_server:app  (needs TWENTY_API_KEY + CHATWOOT_API_TOKEN in env,
 resolved only through the broker; point *_BASE_URL at real cores or leave them for the in-memory projection).
 """
 # NB: no `from __future__ import annotations` — FastAPI must see real annotation objects (Request, path
@@ -16,6 +17,7 @@ import os
 import tempfile
 from typing import Any, Dict, List
 
+from .control_auth import require_control_token
 from .receipt import mission_receipt
 from .types import MissionState
 from .unified_demo import build_unified_runtime, connections_view, seed_mission
@@ -66,7 +68,7 @@ def _needs_you() -> List[Dict[str, Any]]:
 
 
 def _build_app():
-    from fastapi import FastAPI, HTTPException, Request
+    from fastapi import FastAPI, Header, HTTPException, Request
     from fastapi.responses import HTMLResponse
 
     app = FastAPI(title="ReDevOps Unified Desktop (P2 slice)")
@@ -114,7 +116,8 @@ def _build_app():
         return mission_receipt(_RT, mid)
 
     @app.post("/api/missions/{mid}/approve")
-    async def approve(mid: str, request: Request):
+    async def approve(mid: str, request: Request, authorization: str = Header(default=None)):
+        require_control_token(authorization)      # mutating: bearer token required (503 when unset)
         if _RT.repo.state(mid) is None:
             raise HTTPException(404, "unknown mission")
         body = await request.json()
@@ -130,7 +133,8 @@ def _build_app():
         return {"agents": sorted(set(_AGENT_URLS)), "capabilities": [c.as_dict() for c in caps]}
 
     @app.post("/api/bridge/invoke")
-    async def bridge_invoke(request: Request):
+    async def bridge_invoke(request: Request, authorization: str = Header(default=None)):
+        require_control_token(authorization)      # mutating: bearer token required (503 when unset)
         """Issue a real command to a deployed agent (credential-free — the agent resolves its own creds)."""
         from .bridge import BridgeError, build_bridge
         body = await request.json()
@@ -151,3 +155,14 @@ def _build_app():
 
 
 app = _build_app()
+
+
+def default_host() -> str:
+    """Loopback unless explicitly overridden (UNIFIED_HOST) — the mutating endpoints are token-gated, but
+    the desktop BFF should not listen on all interfaces by default."""
+    return os.environ.get("UNIFIED_HOST", "127.0.0.1")
+
+
+if __name__ == "__main__":  # python -m agentic_os.mission.unified_server
+    import uvicorn
+    uvicorn.run(app, host=default_host(), port=int(os.environ.get("UNIFIED_PORT", "8090")))

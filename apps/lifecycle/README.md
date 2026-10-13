@@ -20,7 +20,7 @@ the high-volume OSS sender/list core; this module adds the agent + an MD3 dashbo
 
 ## Config (env)
 `LISTMONK_API_URL`, `LISTMONK_API_USER`, `LISTMONK_API_TOKEN` (Basic auth), `LISTMONK_FRONT_URL`,
-`REDEVOPS_LLM_BASE_URL` + `REDEVOPS_LLM_MODEL`, optional `ANTHROPIC_API_KEY`.
+`REDEVOPS_LLM_BASE_URL` + `REDEVOPS_LLM_MODEL`. Model calls go through the governed in-boundary router only (no external fallback).
 
 ## The core
 Bring up Listmonk + its Postgres with `listmonk.compose.yml` (repo root), then create an

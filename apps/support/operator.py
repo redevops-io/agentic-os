@@ -12,7 +12,8 @@ Capabilities (syscalls):
 
 resolve / escalate / send_onboarding are approval_required: resolve and escalate change a customer's
 ticket and send_onboarding sends a real outbound message to the customer, so on the ungoverned path they
-only STAGE (`pending_approval`, executed False) and act only on a runtime-delivered `_approval`.
+only STAGE (`pending_approval`, executed False) and act only on a runtime-delivered `_approval`. The same gate
+lives INSIDE the core functions, so the app's HTTP routes are covered too (the `gated` wrapper is belt-and-braces).
 draft_reply posts a PRIVATE NOTE (human-reviewable, never customer-visible) and stays ungated. The write
 actions carry side_effecting=True so the runtime dedupes them exactly-once on the Idempotency-Key.
 """
@@ -57,7 +58,7 @@ def build_support_operator() -> Operator:
             "support.send_onboarding",
             gated("support.send_onboarding", core.send_onboarding, onboarding_sent=False),
             provides=["onboarding_sent"],
-            outputs={"onboarding_sent": "welcome message delivered to the new customer in Chatwoot"},
+            outputs={"onboarding_sent": "welcome message read back from the Chatwoot conversation as an outgoing, non-private message (True only after that read-back; channel delivery is Chatwoot's async job and is not confirmed)"},
             side_effecting=True, approval_required=True, permissions=["support:write"],
             estimated_value="medium", latency_ms=1000,
             concurrency_key="provider:chatwoot", max_parallelism=3,  # creates a new conversation; bounded

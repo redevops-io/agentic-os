@@ -5,12 +5,14 @@ core (Lead / Opportunity / Customer doctypes). This is the layer the FastAPI app
 from AND the Mission Runtime operator invokes, so the capability handlers can be tested
 against a fake ERPNext without booting the whole console.
 
-The LLM only NARRATES here — every action is deterministic ERPNext REST work. The brain
+`qualify` (a Lead status change) is approval-gated inside this module. The LLM only NARRATES here — every action is deterministic ERPNext REST work. The brain
 lives in `app.py` (context-runtime) and is injected as an optional `llm` callback
 (`llm(prompt, max_tokens) -> str | None`); the actions all work with `llm=None`.
 """
 from __future__ import annotations
 
+import base64
+import hmac
 import json
 import os
 import re
@@ -21,6 +23,8 @@ from pathlib import Path
 from typing import Callable
 
 import httpx
+
+from agentic_os.mission.operator_sdk import pending_approval
 
 # ── config (env; seed.py writes agents/agentic-crm/.env) ─────────────────────
 # Idempotent .env load so this module is self-sufficient when imported by the operator
@@ -44,6 +48,39 @@ SUBTITLE = ("Sales pipeline that scores, researches, drafts outreach, and answer
 
 # `llm(prompt, max_tokens) -> str | None` — the optional narration callback.
 LLM = Callable[..., "str | None"]
+
+
+# ── operator gate (route level) ──────────────────────────────────────────────
+# The side-effecting core actions below STAGE (pending_approval, executed False) unless the input carries a
+# runtime-delivered ``_approval``. The unauthenticated HTTP routes strip any caller-supplied ``_approval*`` and
+# only INJECT one server-side when the request carries the valid operator Basic credential (env
+# OPERATOR_BASIC_AUTH, or OUTREACH_BASIC_AUTH, as ``user:pass``). Unset/malformed credential => nobody is the
+# operator (fail closed). LLM / console tool calls never pass through here, so they can never be approved.
+def _operator_credential() -> str:
+    combo = os.environ.get("OPERATOR_BASIC_AUTH") or os.environ.get("OUTREACH_BASIC_AUTH") or ""
+    user, sep, pw = combo.partition(":")
+    return combo if (sep and user and pw) else ""
+
+
+def operator_approval(authorization: "str | None") -> "dict | None":
+    """The ``_approval`` marker for a request whose ``Authorization`` header is the valid operator Basic
+    credential, else None (unauthenticated / wrong credential / no credential configured)."""
+    expected = _operator_credential()
+    if not expected or not authorization or authorization[:6].lower() != "basic ":
+        return None
+    try:
+        got = base64.b64decode(authorization[6:].strip(), validate=True).decode("utf-8")
+    except Exception:  # noqa: BLE001
+        return None
+    if hmac.compare_digest(got.encode("utf-8"), expected.encode("utf-8")):
+        return {"approved": True, "by": "operator-basic"}
+    return None
+
+
+def with_operator_approval(body: dict, authorization: "str | None") -> dict:
+    """``body`` plus the operator marker when (and only when) the credential is valid."""
+    appr = operator_approval(authorization)
+    return {**body, "_approval": appr} if appr else body
 
 
 # ── ERPNext REST client ──────────────────────────────────────────────────────
@@ -388,7 +425,14 @@ def draft_outreach(body: dict, llm: LLM | None = None) -> dict:
 
 
 def qualify(body: dict) -> dict:
-    """Advance a Lead's status (pipeline progression). Side-effecting (writes the status field)."""
+    """Advance a Lead's status (pipeline progression). Mutates the customer record beyond a draft, so it is
+    APPROVAL-GATED: without a runtime-delivered `_approval` it only stages a `pending_approval` preview.
+
+    Classification of the other actions (ungated by design): score_lead writes an agent-owned `lead_score` field +
+    an auditable Comment, research / draft_outreach write only a Comment (a draft a human reads and sends); none
+    of them sends anything to a prospect or changes a pipeline status. `ask` is read-only."""
+    if not body.get("_approval"):    # gate INSIDE core: operator, routes and console tools are all covered
+        return pending_approval("crm.qualify", lead_qualified=False)
     name = body.get("lead")
     new_status = body.get("status", "Replied")
     lead = _get_doc("Lead", name) if name else None

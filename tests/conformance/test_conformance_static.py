@@ -35,16 +35,11 @@ def _rel(p: Path) -> str:
 # ── allowlists (shrink only; every entry: short reason + audit id) ─────────────────────────────────────────────
 _N7 = "direct model client in app (should route via the governed model gateway) -- round-4 audit N7"
 ALLOW_N7 = {("N7", f"apps/{a}"): _N7 for a in (
-    "agentic-crm/app.py", "agentic-privacy/app.py",
-    "edge-sentinel/app.py", "growth-assistant/app.py", "growth-engine/app.py", "guide/app.py",
-    "lifecycle/app.py", "market-radar/app.py", "outreach-engine/app.py", "support/app.py")}
+    "growth-assistant/app.py",)}
 _N9 = "hard-coded 'lift' benchmark banner in _CR_BANNER (must come from measured data) -- round-4 audit N9"
-ALLOW_N9 = {("N9", f"apps/{a}"): f"{_N9} [{v}]" for a, v in (
-    ("support/app.py", "3.68"),
-    ("control-tower/app.py", "5.33"), ("market-radar/app.py", "3.61"),
-    ("growth-engine/app.py", "7.85"), ("social-autopilot/app.py", "3.88"))}
+ALLOW_N9: dict[tuple[str, str], str] = {}          # all banners removed
 ALLOW_N5: dict[tuple[str, str], str] = {}          # no offenders today
-ALLOW_D1 = {("D1", "apps/guide/app.py"): "guide route reads request.json() without _strip_approval -- round-4 audit approval-forgery"}
+ALLOW_D1: dict[tuple[str, str], str] = {}
 ALLOW_D2: dict[tuple[str, str], str] = {}
 _F = "default credential literal in source (fail closed / require env) -- round-4 audit secrets"
 ALLOW_F = {("F", f"apps/{a}"): _F for a in (
@@ -130,9 +125,15 @@ def test_n8_allowlist_names_exist():
     'from context_runtime.adapters.model_openai import OpenAICompatibleModel',
     'm = mod.OpenAICompatibleModel.from_env()',
     'c = AgentConsole(tools=[])',
+    'c = _AgentConsole("T", "p", tools=[])',
 ])
 def test_lint_n7_bites(bad):
     assert L.lint_n7_direct_model_clients(bad)
+
+
+def test_lint_n7_agentconsole_with_governed_model_is_clean():
+    assert not L.lint_n7_direct_model_clients(
+        'from x import AgentConsole as _AgentConsole\nc = _AgentConsole("T", "p", model=_GovernedConsoleModel())\n')
 
 
 def test_lint_n7_clean():

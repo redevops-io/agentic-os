@@ -32,7 +32,9 @@ Config (env; seed.py writes agents/agentic-crm/.env):
   PORT               uvicorn port, default 8210
   REDEVOPS_LLM_BASE_URL / REDEVOPS_LLM_MODEL   the agent brain (model from REDEVOPS_LLM_MODEL)
   DEERFLOW_URL       OPTIONAL — web-research gateway for real enrichment signals
-  ANTHROPIC_API_KEY  OPTIONAL — Claude fallback for the brain
+  OPERATOR_BASIC_AUTH  `user:pass` operator credential; `qualify` (a Lead status change) executes only with it,
+                     otherwise /agent/run returns a staged pending_approval preview.
+  (Models: governed in-boundary endpoint only; no external provider fallback.)
 """
 from __future__ import annotations
 
@@ -209,37 +211,26 @@ def render(data: dict) -> str:
 </div></body></html>"""
 
 
-# --- the agent brain (DeepSeek-V4-Flash; Claude fallback) --------------------
-# Narration runs on the Context Runtime model plane (on-prem DeepSeek via REDEVOPS_LLM_*) — our stack, no raw provider SDK.
-try:
-    from context_runtime.adapters.model_openai import OpenAICompatibleModel as _BlurbModelCls
-    from context_runtime.types import ModelRequest as _BlurbReq
-    _BLURB_MODEL = _BlurbModelCls.from_env()
-except Exception:  # noqa: BLE001
-    _BLURB_MODEL = None
-    _BlurbReq = None
-
-
+# --- governed LLM (N7) -------------------------------------------------------
+# Lead/pipeline data goes into these prompts, so every model call routes through the GovernedModelRouter
+# (agentic_os.app.llm.governed_text) as CUSTOMER_CONFIDENTIAL: only the configured IN-BOUNDARY endpoint
+# (REDEVOPS_LLM_BASE_URL) can receive it, and None comes back -- never a public fallback -- when there is none or
+# the router refuses. core then degrades: rule-based score, `llm_unavailable` for research/draft/ask.
 def _llm_text(prompt: str, max_tokens: int = 400) -> str | None:
-    """Narration via the Context Runtime model plane, or None (offline / any error)."""
-    if _BLURB_MODEL is None or _BlurbReq is None:
-        return None
     try:
-        res = _BLURB_MODEL.complete(_BlurbReq(messages=({"role": "user", "content": prompt},), max_tokens=max_tokens))
-        return res.text or None
+        from agentic_os.app.llm import governed_text
+        from agentic_os.governance.classification import DataClassification
     except Exception:  # noqa: BLE001
         return None
+    return governed_text(prompt, classifications=(DataClassification.CUSTOMER_CONFIDENTIAL,),
+                         max_tokens=max_tokens, temperature=0.3)
 
 
 # --- agentic actions (thin wrappers over core; core stays context-runtime-free) ---
-# The pure ERPNext work lives in core.py; here we inject the optional LLM narration
-# callback (_llm_text) so the console + /agent/run get reasoning while the operator drives
-# the same core deterministically.
+# The approval gate for the one status-changing action lives INSIDE core.qualify.
 def _score_lead(body: dict) -> dict:
-    """Score a lead over the real ERPNext core: LLM when it answers validly, else deterministic rules."""
-    model = (getattr(_BLURB_MODEL, "model", None) or getattr(_BLURB_MODEL, "model_name", None)
-             or os.environ.get("REDEVOPS_LLM_MODEL") or "") if _BLURB_MODEL is not None else ""
-    return core.score_lead(body, llm=_llm_text, model=str(model))
+    """Score a lead over the real ERPNext core: governed LLM when it answers validly, else deterministic rules."""
+    return core.score_lead(body, llm=_llm_text, model=os.environ.get("REDEVOPS_LLM_MODEL", ""))
 
 
 def _research(body: dict) -> dict:
@@ -253,7 +244,7 @@ def _draft_outreach(body: dict) -> dict:
 
 
 def _qualify(body: dict) -> dict:
-    """Advance a Lead's status (pipeline progression) — deterministic, no LLM."""
+    """Advance a Lead's status (pipeline progression) — deterministic, no LLM; staged unless approved."""
     return core.qualify(body)
 
 
@@ -262,12 +253,24 @@ def _ask(body: dict) -> dict:
     return core.ask(body, llm=_llm_text)
 
 
-# --- conversational agent console (Context Runtime) --------------------------
-try:
-    from context_runtime.integrations.agent_console import AgentConsole as _AgentConsole, tool as _crtool
-except Exception:  # noqa: BLE001 — context-runtime absent → no console
-    _AgentConsole = None
+_ACTIONS = {"score_lead": _score_lead, "research": _research, "draft_outreach": _draft_outreach,
+            "qualify": _qualify, "ask": _ask}
 
+
+def _supported_actions() -> list:
+    return list(_ACTIONS)
+
+
+def _run_action(action: str, body: dict, authorization: "str | None") -> "dict | None":
+    """THE single route -> core entry point. The operator marker is injected server-side only when the request
+    carries the valid operator Basic credential; any other caller gets the core's staged preview."""
+    fn = _ACTIONS.get(action)
+    if fn is None:
+        return None
+    return fn(core.with_operator_approval(body, authorization))
+
+
+# --- conversational agent: governed LLM + read-only tools (no operator marker, no side-effecting tool) ---
 _CRM_PRIMER = """ERPNext CRM organizes your go-to-market work around core DocTypes. Leads capture marketing-sourced prospects, Contacts model the people you speak with, Customers store approved accounts, and Opportunities track revenue-bearing deals. Leads convert into Customers and Contacts when they're sales-ready, keeping unqualified data separate until the handoff is earned.
 
 Capture inbound leads from the CRM → Lead list: click New, populate Lead Name, Company Name, Source, and Email, and set a sensible Lead Owner. Use the "Get Contacts" helper when parsing inbound email threads, and map website forms to Lead DocType fields so submissions post straight into ERPNext without manual imports.
@@ -347,37 +350,29 @@ def _t_connection_status(_args: dict) -> dict:
     return {"text": text, "data": {"connected": connected, "front_url": front_url}}
 
 
-if _AgentConsole is not None:
-    _CRM_CONSOLE = _AgentConsole(
-        f"{TENANT} CRM",
-        _CRM_PRIMER,
-        tools=[
-            _crtool("pipeline_summary", "Pipeline KPIs and conversion snapshot", _t_pipeline_summary),
-            _crtool("stage_breakdown", "Opportunity coverage by stage and value", _t_stage_breakdown),
-            _crtool(
-                "lead_queue",
-                "Prioritised lead queue with status and contact",
-                _t_lead_queue,
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "limit": {"type": "integer", "minimum": 1, "maximum": 10},
-                    },
-                },
-            ),
-            _crtool("connection_status", "ERPNext availability and UI link", _t_connection_status),
-        ],
-        suggestions=[
-            "Show pipeline KPIs",
-            "Which stages are largest?",
-            "Who is next in the queue?",
-            "Is ERPNext online?",
-        ],
-        subtitle="Check live ERPNext CRM health and prioritise outreach.",
-        allow_side_effects=[],
-    )
-else:
-    _CRM_CONSOLE = None
+def _agent_reply(message: str) -> dict:
+    low = (message or "").lower()
+    if not low.strip():
+        return {"intent": "help", "text": "Ask about the pipeline KPIs, stages, the lead queue or ERPNext status.", "evidence": []}
+    for words, fn, name in ((("kpi", "pipeline", "win rate", "summary"), _t_pipeline_summary, "pipeline_summary"),
+                            (("stage", "coverage"), _t_stage_breakdown, "stage_breakdown"),
+                            (("queue", "lead", "next"), _t_lead_queue, "lead_queue"),
+                            (("online", "connect", "erpnext", "status"), _t_connection_status, "connection_status")):
+        if any(w in low for w in words):
+            return {"intent": name, "text": fn({})["text"], "evidence": []}
+    txt = _llm_text(_CRM_PRIMER + "\n\nAnswer in 2-4 plain sentences.\nQuestion: " + message, 300)
+    return {"intent": "help", "text": txt or "The assistant model is offline (no in-boundary model configured).",
+            "evidence": []}
+
+
+_AGENT_PANEL = (
+    "<section class='shell' style='margin-top:var(--sp-4)'><h3>Assistant</h3>"
+    "<input id='agmsg' placeholder='Ask about the pipeline' style='width:70%'> "
+    "<button onclick=\"fetch('api/agent',{method:'POST',headers:{'Content-Type':'application/json'},"
+    "body:JSON.stringify({message:document.getElementById('agmsg').value})}).then(r=>r.json())"
+    ".then(d=>{document.getElementById('agout').textContent=d.text})\">Ask</button>"
+    "<pre id='agout' style='white-space:pre-wrap'></pre></section>")
+
 
 # --- routes ------------------------------------------------------------------
 @app.get("/health")
@@ -391,14 +386,7 @@ async def api_agent(request: Request) -> JSONResponse:
         body = _strip_approval(await request.json())
     except Exception:  # noqa: BLE001
         body = {}
-    if _CRM_CONSOLE is None:
-        return JSONResponse({
-            "intent": "help",
-            "text": "The assistant is offline (context-runtime unavailable).",
-            "evidence": [],
-        })
-    message = (body or {}).get("message", "")
-    return JSONResponse(_CRM_CONSOLE.respond(message, principal=_req_principal(request)))
+    return JSONResponse(_agent_reply((body or {}).get("message", "")))
 
 
 @app.get("/api/activity")
@@ -409,14 +397,7 @@ def activity() -> JSONResponse:
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     page = render(fetch_activity())
-    if _CRM_CONSOLE is not None:
-        panel = (
-            "<section class='shell' style='margin-top:var(--sp-4)'>"
-            + _CRM_CONSOLE.panel_html("crm")
-            + "</section>"
-        )
-        page = page.replace("<footer", panel + "<footer", 1)
-    return page
+    return page.replace("<footer", _AGENT_PANEL + "<footer", 1)
 
 
 @app.post("/agent/run")
@@ -425,13 +406,14 @@ async def agent_run(request: Request) -> JSONResponse:
         body = _strip_approval(await request.json())
     except Exception:
         body = {}
-    action = (body or {}).get("action", "")
-    handlers = {"score_lead": _score_lead, "research": _research, "draft_outreach": _draft_outreach,
-                "qualify": _qualify, "ask": _ask}
-    if action in handlers:
-        return JSONResponse(handlers[action](body or {}))
+    if not isinstance(body, dict):
+        body = {}
+    action = body.get("action", "")
+    res = _run_action(action, body, request.headers.get("authorization"))
+    if res is not None:
+        return JSONResponse(res)
     return JSONResponse({"status": "error", "error": f"unknown action '{action}'",
-                         "supported": list(handlers)}, status_code=400)
+                         "supported": _supported_actions()}, status_code=400)
 
 
 if __name__ == "__main__":  # pragma: no cover

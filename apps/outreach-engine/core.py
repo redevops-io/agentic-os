@@ -5,19 +5,24 @@ core (plus the public GitHub/HN signal sources). This is the layer the FastAPI a
 from AND the Mission Runtime operator invokes, so the capability handlers can be tested
 against a fake Twenty without booting the whole console.
 
-The LLM-driven pieces (lead-discovery planning, follow-up drafting, the conversational
+`approve` and `send_all` are APPROVAL-GATED INSIDE this module (staged `pending_approval` unless a
+runtime-delivered `_approval` is present). The LLM-driven pieces (lead-discovery planning, follow-up drafting, the conversational
 router) stay in `app.py` — this module is dependency-light and deterministic so the three
 `/agent/run` actions (refresh / approve / send_all) run identically in-process, over HTTP,
 and under test.
 """
 from __future__ import annotations
 
+import base64
+import hmac
 import json
 import os
 import re
 import time
 import urllib.parse
 import urllib.request
+
+from agentic_os.mission.operator_sdk import pending_approval
 
 # ── config (env) ─────────────────────────────────────────────────────────────
 TWENTY_URL = os.environ.get("TWENTY_URL", "http://twenty:3000").rstrip("/")
@@ -57,6 +62,39 @@ DEMO = [
 ]
 
 _STATE = {"accounts": [], "approved": set(), "candidates": []}   # in-memory pipeline, approval set, discovered candidates
+
+
+# ── operator gate (route level) ──────────────────────────────────────────────
+# The side-effecting core actions below STAGE (pending_approval, executed False) unless the input carries a
+# runtime-delivered ``_approval``. The unauthenticated HTTP routes strip any caller-supplied ``_approval*`` and
+# only INJECT one server-side when the request carries the valid operator Basic credential (env
+# OPERATOR_BASIC_AUTH, or OUTREACH_BASIC_AUTH, as ``user:pass``). Unset/malformed credential => nobody is the
+# operator (fail closed). LLM / console tool calls never pass through here, so they can never be approved.
+def _operator_credential() -> str:
+    combo = os.environ.get("OPERATOR_BASIC_AUTH") or os.environ.get("OUTREACH_BASIC_AUTH") or ""
+    user, sep, pw = combo.partition(":")
+    return combo if (sep and user and pw) else ""
+
+
+def operator_approval(authorization: "str | None") -> "dict | None":
+    """The ``_approval`` marker for a request whose ``Authorization`` header is the valid operator Basic
+    credential, else None (unauthenticated / wrong credential / no credential configured)."""
+    expected = _operator_credential()
+    if not expected or not authorization or authorization[:6].lower() != "basic ":
+        return None
+    try:
+        got = base64.b64decode(authorization[6:].strip(), validate=True).decode("utf-8")
+    except Exception:  # noqa: BLE001
+        return None
+    if hmac.compare_digest(got.encode("utf-8"), expected.encode("utf-8")):
+        return {"approved": True, "by": "operator-basic"}
+    return None
+
+
+def with_operator_approval(body: dict, authorization: "str | None") -> dict:
+    """``body`` plus the operator marker when (and only when) the credential is valid."""
+    appr = operator_approval(authorization)
+    return {**body, "_approval": appr} if appr else body
 
 
 # ──────────────────────────── signals + scoring + teardown ────────────────────────────
@@ -318,7 +356,10 @@ def refresh(body: dict | None = None) -> dict:
 
 def approve(body: dict | None = None) -> dict:
     """Human sign-off on a ranked account → queue it AND sync a real pilot to Twenty CRM."""
-    acct = (body or {}).get("account", "")
+    body = body or {}
+    if not body.get("_approval"):          # the gate lives HERE so operator, routes and console tools are all covered
+        return pending_approval("outreach.approve", account=str(body.get("account", ""))[:200], lead_synced=False)
+    acct = body.get("account", "")
     _STATE["approved"].add(acct)
     row = next((r for r in _STATE["accounts"] if r["account"] == acct), None)
     synced = twenty_sync(row) if row else False
@@ -332,6 +373,8 @@ def send_all(body: dict | None = None) -> dict:
     prospect. This reports the approved sequences as STAGED and the send as UNEXECUTED — it never claims to
     have sent what it didn't. `sequences_sent: False` is set explicitly so the operator SDK's output-marker
     merge can't read this back as a successful send (N4). Wire a real sender to set it True."""
+    if not (body or {}).get("_approval"):
+        return pending_approval("outreach.send_all", staged=sorted(_STATE["approved"]), sequences_sent=False)
     approved = sorted(_STATE["approved"])
     return {"ok": False, "action": "send_all", "status": "not_configured", "executed": False,
             "sequences_sent": False, "dispatched": 0, "staged": approved, "sender_configured": False,

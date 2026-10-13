@@ -53,6 +53,8 @@ def _fake_get(url, timeout=None, headers=None, params=None):
 class _FakeClient:
     """Stands in for httpx.Client — records the write POSTs to Chatwoot."""
     posted: list[str] = []
+    messages: list[dict] = []     # outgoing messages "stored" by the fake, served back on GET .../messages
+    readback = True               # flip False to simulate Chatwoot not persisting the message
 
     def __enter__(self):
         return self
@@ -63,6 +65,8 @@ class _FakeClient:
     def get(self, url, headers=None, params=None):
         if url.endswith("/agents"):
             return _Resp(200, [{"id": 7, "name": "Seed Admin"}])
+        if url.endswith("/messages"):  # read-back of a conversation's messages
+            return _Resp(200, {"payload": list(_FakeClient.messages) if _FakeClient.readback else []})
         if "/conversations/" in url:  # single-conversation fetch (_get_conversation)
             return _Resp(200, CONV)
         if url.endswith("/conversations"):
@@ -71,6 +75,12 @@ class _FakeClient:
 
     def post(self, url, headers=None, json=None):
         _FakeClient.posted.append(url)
+        if url.endswith("/messages"):
+            m = {"id": 500 + len(_FakeClient.messages), "content": (json or {}).get("content"),
+                 "message_type": 0 if (json or {}).get("message_type") == "incoming" else 1,
+                 "private": bool((json or {}).get("private"))}
+            _FakeClient.messages.append(m)
+            return _Resp(200, m)
         if url.endswith("/toggle_status"):
             return _Resp(200, {"payload": {"current_status": "resolved"}})
         if url.endswith("/conversations"):  # onboarding: create a welcome conversation
@@ -81,6 +91,8 @@ class _FakeClient:
 @pytest.fixture(autouse=True)
 def _fake_chatwoot(monkeypatch):
     _FakeClient.posted = []
+    _FakeClient.messages = []
+    _FakeClient.readback = True
     core._CACHE.update(ts=0.0, data=None)  # no cache bleed between tests
     monkeypatch.setattr(core, "CHATWOOT_API_TOKEN", "test-key")
     monkeypatch.setattr(core, "httpx",
@@ -264,3 +276,16 @@ def test_send_onboarding_with_existing_conversation_needs_no_inbox(monkeypatch):
     res = build_support_operator().invoke("support.send_onboarding", {
         "conversation_id": 1, "customer": "A", "_approval": {"approved": True}})
     assert res["status"] == "done"
+
+
+def test_send_onboarding_reads_back_the_message_before_claiming_sent():
+    res = build_support_operator().invoke("support.send_onboarding", {
+        "conversation_id": 1, "customer": "Dana Smith", "_approval": {"approved": True}})
+    assert res["status"] == "done" and res["onboarding_sent"] is True and res["message_verified"] is True
+
+
+def test_send_onboarding_unverified_when_readback_does_not_show_the_message():
+    _FakeClient.readback = False
+    res = build_support_operator().invoke("support.send_onboarding", {
+        "conversation_id": 1, "customer": "Dana Smith", "_approval": {"approved": True}})
+    assert res["status"] == "unverified" and res["onboarding_sent"] is False and res["message_verified"] is False

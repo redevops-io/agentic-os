@@ -29,7 +29,8 @@ services:
     command: uvicorn agentic_os.control_plane:app --host 0.0.0.0 --port 8080
     ports: ["8080:8080"]
     environment:
-      # Optional: set AGENTIC_OS_API_KEY to require X-API-Key on mutating routes.
+      # Mutating routes are DISABLED (503) unless AGENTIC_OS_API_KEY (X-API-Key) or AGENTIC_OS_CONTROL_TOKEN (Bearer) is set.
+      - AGENTIC_OS_CONTROL_TOKEN=${AGENTIC_OS_CONTROL_TOKEN:-}
       - AGENTIC_OS_API_KEY=${AGENTIC_OS_API_KEY:-}
       - AGENTIC_OS_HOME=/data
     volumes:
