@@ -106,26 +106,25 @@ class Operator:
         except (TypeError, ValueError):
             arity = 1
         result = (fn(inputs, secrets or {}) if arity >= 2 else fn(inputs)) or {}
-        # Read-back contract (N4): the result must carry the capability's declared output keys so the
-        # Mission verifier (mission.verify) can read them back — otherwise a side effect is REJECTED after
-        # it has already committed. A handler that returns a NON-EMPTY operational dict without the declared
-        # semantic key has those keys MERGED IN as markers, so the manifest's output contract holds while
-        # the handler's own keys are PRESERVED — nesting the whole result under the key instead would break
-        # every /invoke consumer (app UIs, tests, the suite server) that reads the raw keys. An EMPTY result
-        # is left as-is so a handler that produced nothing still FAILS read-back (the N4 guarantee).
+        # Read-back contract (N4): consequential capabilities must carry their declared output keys as
+        # real handler/read-back facts. The SDK may still fill compatibility markers for non-side-effecting
+        # read tools, but a write that omits its declared output must stay unverifiable so Mission verification
+        # rejects it instead of accepting a synthesized success marker.
         spec = self._specs.get(capability)
         outs = list((getattr(spec, "outputs", None) or {}).keys()) if spec else []
-        # Markers are synthesised ONLY for a SUCCESSFUL side effect. A result that signals failure / denial /
-        # pending (an `error`, `executed: False`, `ok: False`, or a non-success `status`) is left as-is, so the
-        # Mission verifier reads the declared output key back as ABSENT and REJECTS — a LAPI 403 or a failed
-        # call can no longer be minted into `{key: True}` and read back as success. (Markers stay a fallback;
-        # the real N4 fix is a verifier that reads the core's state, tracked separately.)
+        # Compatibility markers are synthesized only for successful non-side-effecting reads. A result that
+        # signals failure / denial / pending (an `error`, `executed: False`, `ok: False`, or a non-success
+        # `status`) is left as-is, and side-effecting capabilities never receive synthesized output keys. A
+        # LAPI 403, failed write, or provider-only receipt can no longer be minted into `{key: True}` and read
+        # back as success.
         _failed = isinstance(result, dict) and (
             bool(result.get("error")) or result.get("executed") is False or result.get("ok") is False
             or str(result.get("status", "")).lower() in {
                 "error", "failed", "failure", "denied", "rejected", "pending_approval",
                 "awaiting_approval", "awaiting_connector", "unverifiable", "blocked"})
-        if isinstance(result, dict) and result and outs and not _failed and not any(k in result for k in outs):
+        can_synthesize_marker = bool(spec and not getattr(spec, "side_effecting", False))
+        if (can_synthesize_marker and isinstance(result, dict) and result and outs
+                and not _failed and not any(k in result for k in outs)):
             result = {**result, **{k: True for k in outs}}
         if idempotency_key and _dk is not None:
             self._seen[_dk] = result
