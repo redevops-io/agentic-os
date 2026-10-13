@@ -6,7 +6,7 @@ Runtime operator invokes, so the capability handlers can be tested without booti
 console.
 
 `answer(question, role, llm=...)` takes an optional narration callback — the LLM call
-lives in app.py (urllib to REDEVOPS_LLM_BASE_URL), keeping this module dependency-light
+lives in app.py (agentic_os.app.llm.governed_text, in-boundary only), keeping this module dependency-light
 and fully deterministic: with llm=None it falls back to a retrieved summary, so the
 operator drives it without any network.
 """
@@ -139,7 +139,8 @@ def walkthrough(name: str) -> dict:
     return {"app": name, "core": d["core"], "group": d["g"], "steps": steps}
 
 
-def answer(question: str, role: str, llm: Callable[[str], str | None] | None = None) -> dict:
+def answer(question: str, role: str, llm: Callable[[str], str | None] | None = None,
+           role_source: str = "client_asserted") -> dict:
     """Retrieve the RBAC-scoped app cards for `question` and answer over them.
 
     `llm` is an optional narration callback (the urllib LLM call lives in app.py); the
@@ -149,8 +150,9 @@ def answer(question: str, role: str, llm: Callable[[str], str | None] | None = N
     hits, ctx = _retrieve_ctx(question, role, k=4)
     hits = [(n, sc) for n, sc in hits if sc > 0]          # never cite an app with a zero relevance score
     cited = [n for n, _ in hits]
-    # `role` is asserted by the client (no authentication here). Unknown roles get the least-privilege grant.
-    meta = {"role_source": "client_asserted", "effective_role": role if role in ROLES else "viewer"}
+    # `role_source` says where `role` came from (the HTTP layer derives it server-side; the operator path,
+    # which has no HTTP principal, keeps the default). Unknown roles get the least-privilege grant.
+    meta = {"role_source": role_source, "effective_role": role if role in ROLES else "viewer"}
     if not cited:
         return {"question": question, "role": role, **meta, "answer": "No matching document found for that "
                 "question among the apps visible to this role.", "cited": [], "citations": [], "no_match": True}

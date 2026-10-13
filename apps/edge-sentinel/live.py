@@ -227,8 +227,7 @@ def execute(case_id: str, request_id: str, *, actor: str, st: CaseStore | None =
             else:
                 ext = str(result.get("id") or result.get("decision_id") or "")
             ip = req.parameters.get("ip", "")
-            posture = core.triage() if not err else {}
-            verified = bool(ip) and ip in repr(posture)
+            verified = (not err) and bool(result.get("ip_blocked"))   # LAPI read-back by parsed IP equality
             vdetail = ("ban present" if verified else "ban not observed") + f" for {ip}"
         except Exception as e:  # noqa: BLE001
             err = f"{type(e).__name__}: {e}"

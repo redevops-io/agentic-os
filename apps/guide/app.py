@@ -16,10 +16,10 @@ principal → same visibility here and in the fleet).
 """
 from __future__ import annotations
 
+import base64
+import hmac
 import html
-import json
 import os
-import urllib.request
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -35,28 +35,64 @@ from .core import (  # noqa: E402
 )
 
 PORT = int(os.environ.get("PORT", "8215"))
-LLM_BASE = os.environ.get("REDEVOPS_LLM_BASE_URL", "")
-LLM_MODEL = os.environ.get("REDEVOPS_LLM_MODEL", "")
+
+
+def _strip_approval(obj):
+    """Drop every caller-supplied ``_approval*`` / ``__approval*`` key (any case), recursively — the approval
+    marker is injected IN-PROCESS by the operator and must never be settable from a raw HTTP body."""
+    if isinstance(obj, dict):
+        return {k: _strip_approval(v) for k, v in obj.items()
+                if not (isinstance(k, str) and k.lstrip("_").lower().startswith("approval"))}
+    if isinstance(obj, list):
+        return [_strip_approval(v) for v in obj]
+    return obj
+
+
+# --- server-side role derivation (the request's `role` is only a REQUEST, never a credential) -------------
+def _operator_credential() -> str:
+    return os.environ.get("OPERATOR_BASIC_AUTH") or os.environ.get("OUTREACH_BASIC_AUTH") or ""
+
+
+def _is_operator(request: Request) -> bool:
+    """True only for a valid operator HTTP Basic credential (``user:pass`` in OPERATOR_BASIC_AUTH, falling
+    back to OUTREACH_BASIC_AUTH). Fails closed when no credential is configured."""
+    want = _operator_credential()
+    if not want or ":" not in want:
+        return False
+    hdr = request.headers.get("authorization", "")
+    if not hdr.lower().startswith("basic "):
+        return False
+    try:
+        got = base64.b64decode(hdr[6:].strip(), validate=True).decode("utf-8")
+    except Exception:  # noqa: BLE001 - malformed header
+        return False
+    return hmac.compare_digest(got.encode("utf-8"), want.encode("utf-8"))
+
+
+def effective_role(request: Request, requested) -> tuple[str, str]:
+    """(role, role_source). An authenticated operator may act as any KNOWN requested role; everyone else is
+    capped at the least-privilege ``viewer`` no matter what the body/query asks for."""
+    requested = requested if isinstance(requested, str) else "viewer"
+    if _is_operator(request):
+        return (requested if requested in ROLES else "viewer"), "operator_basic_auth"
+    return "viewer", "unauthenticated_capped"
 
 
 # --- optional LLM narration (guarded: works without any LLM configured) -------
 def _llm(prompt: str) -> str | None:
-    if not LLM_BASE:
-        return None
+    """N7: narration goes through the GOVERNED router (INTERNAL app-card context) to the in-boundary model
+    only; returns None (deterministic answer stands) when there is no compliant route. No direct HTTP."""
     try:
-        body = json.dumps({"model": LLM_MODEL or "default", "max_tokens": 500, "temperature": 0.3,
-                           "messages": [{"role": "user", "content": prompt}]}).encode()
-        req = urllib.request.Request(LLM_BASE.rstrip("/") + "/chat/completions", data=body,
-                                     headers={"content-type": "application/json"})
-        out = json.loads(urllib.request.urlopen(req, timeout=20).read().decode())
-        return out["choices"][0]["message"]["content"].strip()
-    except Exception:
+        from agentic_os.app.llm import governed_text
+        from agentic_os.governance.classification import DataClassification
+    except Exception:  # noqa: BLE001
         return None
+    return governed_text(prompt, classifications=(DataClassification.INTERNAL,), max_tokens=500, temperature=0.3)
 
 
-def answer(question: str, role: str) -> dict:
+def answer(question: str, role: str, role_source: str = "client_asserted") -> dict:
     """Answer over the redevops-rag corpus, with the optional LLM narration blurb."""
-    return core.answer(question, role, llm=_llm)
+    return core.answer(question, role, llm=_llm, role_source=role_source)
 
 
 app = FastAPI(title="agentic-guide (core: redevops-rag)")
@@ -69,12 +105,21 @@ def health():
 
 @app.post("/api/ask")
 async def api_ask(req: Request):
-    b = await req.json()
-    return JSONResponse(answer(b.get("question", ""), b.get("role", "viewer")))
+    try:
+        b = _strip_approval(await req.json())
+    except Exception:  # noqa: BLE001
+        b = {}
+    if not isinstance(b, dict):
+        b = {}
+    role, source = effective_role(req, b.get("role"))
+    out = answer(str(b.get("question", "")), role, role_source=source)
+    out["requested_role"] = b.get("role") if isinstance(b.get("role"), str) else None
+    return JSONResponse(out)
 
 
 @app.get("/api/walkthrough")
-def api_walkthrough(app: str, role: str = "viewer"):
+def api_walkthrough(request: Request, app: str, role: str = "viewer"):
+    role, _source = effective_role(request, role)
     if app not in APP_DOCS:
         return JSONResponse(walkthrough(app), status_code=404)
     if app not in visible_apps(role):
@@ -83,7 +128,8 @@ def api_walkthrough(app: str, role: str = "viewer"):
 
 
 @app.get("/", response_class=HTMLResponse)
-def dashboard(role: str = "viewer"):
+def dashboard(request: Request, role: str = "viewer"):
+    role, _source = effective_role(request, role)
     return HTMLResponse(render(role))
 
 

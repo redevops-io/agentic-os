@@ -48,7 +48,11 @@ def _snip(s: str, n: int = 70) -> str:
 
 # ── (a) N7: no direct model HTTP clients ────────────────────────────────────────────────────────────────────
 N7_STRINGS = ("/chat/completions", "api.openai.com", "api.anthropic.com")
-N7_NAMES = ("OpenAICompatibleModel", "AgentConsole")
+N7_NAMES = ("OpenAICompatibleModel",)
+# AgentConsole is allowed ONLY when it is handed an explicit ``model=`` (a governed model object that routes
+# through agentic_os.app.llm.governed_text). Left to its default it builds its own OpenAI-compatible client
+# straight from the environment -- an ungoverned model call.
+N7_CONSOLE = "AgentConsole"
 
 
 def lint_n7_direct_model_clients(src: str) -> list[Violation]:
@@ -71,6 +75,11 @@ def lint_n7_direct_model_clients(src: str) -> list[Violation]:
                     name = a.name.split(".")[-1]
         if name in N7_NAMES:
             out.append(Violation("N7", n.lineno, f"references {name}"))
+        elif isinstance(n, ast.Call):
+            fn = n.func
+            fname = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
+            if fname.lstrip("_") == N7_CONSOLE and not any(k.arg == "model" for k in n.keywords):
+                out.append(Violation("N7", n.lineno, f"{N7_CONSOLE}(...) without an explicit governed model="))
     return out
 
 

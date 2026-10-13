@@ -7,19 +7,34 @@ WORKDIR /app
 # container via the mounted /var/run/docker.sock. Decisions/health are read purely over
 # the LAPI and need none of this — alerts just degrade gracefully if the socket is absent.
 ARG DOCKER_CLI_VERSION=27.3.1
+ARG TRIVY_VERSION=0.75.0
+ARG TRIVY_SHA256=c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
+ARG SYFT_VERSION=1.54.1
+ARG SYFT_SHA256=c069905b391cc4c20a5ba65ad5c10be2a7ba074f8ea6ad203e24d14e303dad47
+ARG COSIGN_VERSION=3.1.3
+ARG COSIGN_SHA256=4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates git \
     && curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz" \
        | tar -xz -C /tmp \
     && mv /tmp/docker/docker /usr/local/bin/docker \
     && rm -rf /tmp/docker \
-    # Supply-chain inspection (Phase 2): Trivy (CVEs/secrets/IaC/SBOM) + Syft (SBOM). The
+    # Supply-chain inspection (Phase 2): Trivy (CVEs/secrets/IaC/SBOM) + Syft (SBOM) + Cosign. The
     # SupplyChainScanner shells out to these; Trivy's vuln DB downloads on first scan (cached in-container).
-    && curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin \
-    && curl -sfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin \
-    # Cosign — sign SBOMs/images (the Lightwell "attest at the pinned version" step)
-    && curl -sfL https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64 -o /usr/local/bin/cosign \
+    # PINNED release artifacts, each verified against a sha256 recorded HERE (no `curl | sh` from a moving
+    # `main`, no `latest`). To bump a tool: change the VERSION and SHA256 ARGs together (sha256 from the
+    # release's *_checksums.txt) -- a mismatch fails the build.
+    && curl -fsSL -o /tmp/trivy.tgz "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+    && echo "${TRIVY_SHA256}  /tmp/trivy.tgz" | sha256sum -c - \
+    && tar -xzf /tmp/trivy.tgz -C /usr/local/bin trivy \
+    && curl -fsSL -o /tmp/syft.tgz "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz" \
+    && echo "${SYFT_SHA256}  /tmp/syft.tgz" | sha256sum -c - \
+    && tar -xzf /tmp/syft.tgz -C /usr/local/bin syft \
+    # Cosign -- sign SBOMs/images (the Lightwell "attest at the pinned version" step)
+    && curl -fsSL -o /usr/local/bin/cosign "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64" \
+    && echo "${COSIGN_SHA256}  /usr/local/bin/cosign" | sha256sum -c - \
     && chmod +x /usr/local/bin/cosign \
+    && rm -f /tmp/trivy.tgz /tmp/syft.tgz \
     && apt-get purge -y curl && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 

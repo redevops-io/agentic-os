@@ -30,8 +30,8 @@ Config (env; seed.py writes agents/edge-sentinel/.env automatically):
   CROWDSEC_CONTAINER  docker container name, default agentic-cores-crowdsec-1
   CROWDSEC_FRONT_URL  link for the "Open CrowdSec metrics" button
   PORT                uvicorn port, default 8203
-  ANTHROPIC_API_KEY   OPTIONAL — if set, `triage` adds an LLM reasoning blurb;
-                      the endpoint works fully without it.
+  REDEVOPS_LLM_BASE_URL  OPTIONAL in-boundary model; if set (and actually in-boundary) `triage` adds an LLM
+                      blurb via the governed router. The endpoint works fully without it.
 """
 from __future__ import annotations
 
@@ -53,23 +53,8 @@ import time
 from pathlib import Path
 
 import httpx
-try:
-    from context_runtime.adapters.model_openai import OpenAICompatibleModel
-    from context_runtime.types import ModelRequest
-except Exception:  # pragma: no cover - context-runtime optional
-    OpenAICompatibleModel = None
-    ModelRequest = None
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-
-_BLURB_MODEL = None
-if OpenAICompatibleModel is not None:
-    try:
-        _BLURB_MODEL = OpenAICompatibleModel.from_env()
-    except Exception:  # pragma: no cover - env incomplete
-        _BLURB_MODEL = None
-else:
-    _BLURB_MODEL = None
 
 # --- config ------------------------------------------------------------------
 # The CrowdSec LAPI/cscli clients, KPIs and agentic actions live in core.py (pure — no web /
@@ -77,6 +62,7 @@ else:
 # tested against a fake CrowdSec. Import config + core helpers from there; core loads .env.
 from . import core
 from . import live  # noqa: E402 — wires the SOC app to the Security Intelligence Core (real cases)
+from . import ratelimit  # noqa: E402 — per-IP token bucket on the unauthenticated POST routes
 from . import auth  # noqa: E402 — the HTTP-Basic operator gate for real execution
 # Self-contained security planes — each degrades gracefully + ships labelled SAMPLE until its token
 # is set (netbird/portabase) or reports unavailable until wired (deploy_scan). Their panels reuse the
@@ -537,34 +523,42 @@ def _cases_panel(summaries: list[dict]) -> str:
     )
 
 
-# --- optional LLM reasoning blurb (guarded: works without any API key) -------
+# --- governed LLM (N7): every model call routes through agentic_os.app.llm.governed_text ----------------
+# Fail-closed: with no in-boundary endpoint (REDEVOPS_LLM_BASE_URL unset / not actually in-boundary) or a
+# router refusal governed_text returns None and the caller degrades to deterministic output. There is no
+# direct-HTTP and no external-provider fallback.
 def _llm_blurb(prompt: str) -> str | None:
-    """Return a one-line reasoning blurb from the model plane, or None on failure."""
-    def _fallback() -> str | None:
-        base = os.environ.get("REDEVOPS_LLM_BASE_URL")
-        if base:
-            try:
-                r = httpx.post(
-                    base.rstrip("/") + "/chat/completions",
-                    json={"model": os.environ.get("REDEVOPS_LLM_MODEL", "DeepSeek-V4-Flash"),
-                          "messages": [{"role": "user", "content": prompt}],
-                          "max_tokens": 220, "temperature": 0.3},
-                    timeout=90.0,   # DeepSeek runs on CPU (~15 tok/s) — be patient
-                )
-                if r.status_code == 200:
-                    txt = (r.json().get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
-                    if txt:
-                        return txt
-            except Exception:
-                pass
-        return None
-    if _BLURB_MODEL is None or ModelRequest is None:
-        return _fallback()
+    """A short reasoning blurb from the GOVERNED in-boundary model, or None (deterministic output stands)."""
     try:
-        res = _BLURB_MODEL.complete(ModelRequest(messages=({"role": "user", "content": prompt},), max_tokens=220))
-        return res.text
-    except Exception:
-        return _fallback()
+        from agentic_os.app.llm import governed_text
+        from agentic_os.governance.classification import DataClassification
+    except Exception:  # noqa: BLE001
+        return None
+    return governed_text(prompt, classifications=(DataClassification.CUSTOMER_CONFIDENTIAL,),
+                         max_tokens=220, temperature=0.3)
+
+
+class _GovernedConsoleModel:
+    """The conversational console's model object: every ``complete`` goes through ``governed_text`` with an
+    explicit classification. Raises when there is no compliant route so the console drops to its
+    deterministic keyword/primer fallbacks (it never reaches a model on its own)."""
+
+    def complete(self, req):
+        from types import SimpleNamespace
+        from agentic_os.app.llm import governed_text
+        from agentic_os.governance.classification import DataClassification
+        prompt = "\n\n".join(str(m.get("content", "")) for m in req.messages)
+        txt = governed_text(prompt, classifications=(DataClassification.CUSTOMER_CONFIDENTIAL,), system=req.system or "",
+                            max_tokens=int(req.max_tokens or 600), temperature=0.2)
+        if not txt:
+            raise RuntimeError("no compliant in-boundary model route")
+        return SimpleNamespace(text=txt, model="in-boundary", tier="in_boundary", prompt_tokens=0,
+                               completion_tokens=0, est_cost_usd=0.0, cache_hit=False, models_used=())
+
+    def info(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(name="governed-in-boundary")
+
 
 # --- agentic actions ---------------------------------------------------------
 def _block_ip(body: dict) -> dict:
@@ -834,9 +828,32 @@ def _clamd(cmd: str, timeout: float = 30.0) -> str:
     return b"".join(chunks).decode("utf-8", "ignore").strip()
 
 
+CLAMAV_SCAN_BASE = os.environ.get("CLAMAV_SCAN_BASE", "/scan")
+
+
+def _safe_scan_path(raw, base: str | None = None) -> str | None:
+    """Validate an LLM-supplied ClamAV scan path. The model's tool args are untrusted: the path must be an
+    absolute POSIX path that, once normalised (no ``..``), lies at or under the allow-listed base dir
+    (CLAMAV_SCAN_BASE, default ``/scan``), with no control characters (a newline would inject a second clamd
+    command). Returns the normalised path, or None when it is rejected."""
+    import posixpath
+    base = posixpath.normpath(base or CLAMAV_SCAN_BASE)
+    if raw in (None, ""):
+        return base
+    if not isinstance(raw, str) or len(raw) > 1024 or any(ord(c) < 32 or ord(c) == 127 for c in raw):
+        return None
+    if not raw.startswith("/") or ".." in raw.split("/"):
+        return None
+    p = posixpath.normpath(raw)
+    return p if (p == base or p.startswith(base.rstrip("/") + "/")) else None
+
+
 def _t_malware_scan(a: dict) -> dict:
     # clamd sees the stack at /scan (host /projects mounted read-only in the clamav container).
-    path = (a or {}).get("path") or "/scan"
+    path = _safe_scan_path((a or {}).get("path"))
+    if path is None:
+        return {"text": f"Refused: scan path must be an absolute path under {CLAMAV_SCAN_BASE}.",
+                "data": {"refused": True}}
     try:
         if _clamd("PING") != "PONG":
             return {"text": "ClamAV is not responding.", "data": {}}
@@ -1126,6 +1143,7 @@ if _AgentConsole is not None:
         ],
         suggestions=["Any threats today?", "Scan the billing app for vulnerabilities", "Scan a running deployment for exposure", "Review network access"],
         subtitle="Ask me to scan any app's open-source dependencies, check the network/SIEM, or explain a finding.",
+        model=_GovernedConsoleModel(),
         allow_side_effects=[],  # ban_ip stays gated → the harness asks for human approval before blocking
     )
 else:
@@ -1138,7 +1156,7 @@ def health() -> dict:
     return {"status": "ok", "core": "crowdsec", "connected": crowdsec_connected()}
 
 
-@app.post("/api/agent")
+@app.post("/api/agent", dependencies=[Depends(ratelimit.rate_limit)])
 async def api_agent(request: Request) -> JSONResponse:
     try:
         body = _strip_approval(await request.json())
@@ -1154,7 +1172,7 @@ def activity() -> JSONResponse:
     return JSONResponse(fetch_activity())
 
 
-@app.post("/api/permissions/query")
+@app.post("/api/permissions/query", dependencies=[Depends(ratelimit.rate_limit)])
 async def permissions_query(request: Request) -> JSONResponse:
     """Run the vuln query as full-access (left) and the posted scoped grant (right)."""
     try:
@@ -1209,7 +1227,7 @@ def api_case(case_id: str) -> JSONResponse:
     return JSONResponse(detail)
 
 
-@app.post("/api/cases/{case_id}/respond")
+@app.post("/api/cases/{case_id}/respond", dependencies=[Depends(ratelimit.rate_limit)])
 async def api_case_respond(case_id: str, request: Request) -> JSONResponse:
     """DEMO-FACING decision — OPEN, no auth, NO edge effect. Reject records the rejection and stops; approve
     stages the action as APPROVED (awaiting the authenticated execute step). The edge is never touched here —
@@ -1256,7 +1274,7 @@ async def api_case_execute(case_id: str, request: Request,
     return JSONResponse(out)
 
 
-_CR_BANNER = """<div style="position:sticky;top:0;z-index:9998;background:linear-gradient(90deg,#10201d,#17171a);border-bottom:1px solid #2f2f33;color:#e4e2e6;font:13px/1.4 Roboto,system-ui,sans-serif;padding:9px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">CONTEXT RUNTIME</span><span style="background:#2f2f33;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">DEMO</span><span style="color:#9b99a1">This app runs on <b style="color:#e4e2e6">Context Runtime</b>, which powers the investigation assistant, supply-chain/vuln scanners and the permissions plane here. Its Edge-Sentinel tenant learns the cheapest alert-source bundle that still reaches the right verdict (0.900 vs 0.800, measured offline). <a href="https://github.com/redevops-io/context-runtime" style="color:#4fd1c5;text-decoration:none">learn more \u2192</a></span><span style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap"><a href="api/network/ui" style="background:#1b2b28;color:#4fd1c5;border:1px solid #2f6f66;font-weight:700;border-radius:6px;padding:5px 11px;font-size:12px;text-decoration:none;white-space:nowrap">\U0001F310 Network access \u2192</a><a href="api/backups/ui" style="background:#1b2b28;color:#4fd1c5;border:1px solid #2f6f66;font-weight:700;border-radius:6px;padding:5px 11px;font-size:12px;text-decoration:none;white-space:nowrap">\U0001F5C4 Backups \u2192</a><a href="api/permissions/ui" style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:6px;padding:5px 11px;font-size:12px;text-decoration:none;white-space:nowrap">\U0001F512 Permissions demo \u2192</a></span></div>"""
+_CR_BANNER = """<div style="position:sticky;top:0;z-index:9998;background:linear-gradient(90deg,#10201d,#17171a);border-bottom:1px solid #2f2f33;color:#e4e2e6;font:13px/1.4 Roboto,system-ui,sans-serif;padding:9px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">CONTEXT RUNTIME</span><span style="background:#2f2f33;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">DEMO</span><span style="color:#9b99a1">This app runs on <b style="color:#e4e2e6">Context Runtime</b>, which powers the investigation assistant, supply-chain/vuln scanners and the permissions plane here. Its Edge-Sentinel tenant learns the cheapest alert-source bundle that still reaches the right verdict. <a href="https://github.com/redevops-io/context-runtime" style="color:#4fd1c5;text-decoration:none">learn more \u2192</a></span><span style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap"><a href="api/network/ui" style="background:#1b2b28;color:#4fd1c5;border:1px solid #2f6f66;font-weight:700;border-radius:6px;padding:5px 11px;font-size:12px;text-decoration:none;white-space:nowrap">\U0001F310 Network access \u2192</a><a href="api/backups/ui" style="background:#1b2b28;color:#4fd1c5;border:1px solid #2f6f66;font-weight:700;border-radius:6px;padding:5px 11px;font-size:12px;text-decoration:none;white-space:nowrap">\U0001F5C4 Backups \u2192</a><a href="api/permissions/ui" style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:6px;padding:5px 11px;font-size:12px;text-decoration:none;white-space:nowrap">\U0001F512 Permissions demo \u2192</a></span></div>"""
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1280,7 +1298,7 @@ def index() -> str:
     return page
 
 
-@app.post("/agent/run")
+@app.post("/agent/run", dependencies=[Depends(ratelimit.rate_limit)])
 async def agent_run(request: Request) -> JSONResponse:
     try:
         body = _strip_approval(await request.json())

@@ -283,27 +283,65 @@ def block_ip(body: dict) -> dict:
         "duration": duration, "origin": "cscli", "scenario": reason,
     }
     status_code = None
-    with httpx.Client(timeout=10.0) as client:
-        resp = client.post(
-            f"{CROWDSEC_LAPI_URL}/v1/decisions",
-            headers=_headers(),
-            json=[decision],
-        )
-        status_code = resp.status_code
-    ok = status_code in (200, 201, 202)
+    verified = False
+    read_back = None
+    err = None
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.post(
+                f"{CROWDSEC_LAPI_URL}/v1/decisions",
+                headers=_headers(),
+                json=[decision],
+            )
+            status_code = resp.status_code
+            if status_code in (200, 201, 202):
+                # Read-back: the POST status alone does not prove the ban is ACTIVE. Re-read the LAPI's
+                # decisions for this IP and require a parsed-equal active ban before claiming it is enforced.
+                verified, read_back = _ban_active(client, ip)
+    except Exception as e:  # noqa: BLE001 - LAPI unreachable / transport error: fail closed, nothing enforced
+        err = f"{type(e).__name__}: {e}"
+    posted = status_code in (200, 201, 202)
     fetch_activity(force=True)  # refresh the cache so the dashboard shows it immediately
+    if err:
+        summary = f"Failed to ban {ip}: LAPI unreachable ({err})."
+    elif not posted:
+        summary = f"Failed to ban {ip} (LAPI status {status_code})."
+    elif not verified:
+        summary = (f"LAPI accepted the ban for {ip} (status {status_code}) but the read-back did not find an "
+                   f"active ban decision for it — NOT reporting it as enforced.")
+    else:
+        summary = f"Banned {ip} for {duration} via CrowdSec (POST /v1/decisions); read-back confirmed the active ban."
     return {
-        "status": "done" if ok else "error",
+        "status": "done" if verified else "error",
         "action": "block_ip",
         "ip": ip,
         "duration": duration,
-        "enforced": ok,
+        "enforced": verified,
+        "ip_blocked": verified,            # the capability's declared output: True ONLY when read back
         "lapi_status": status_code,
-        "summary": (
-            f"Banned {ip} for {duration} via CrowdSec (POST /v1/decisions)." if ok
-            else f"Failed to ban {ip} (LAPI status {status_code})."
-        ),
+        "readback_decisions": read_back,
+        "summary": summary,
+        **({"error": err} if err else {}),
     }
+
+
+def _ban_active(client, ip: str) -> "tuple[bool, int | None]":
+    """Read the LAPI decisions for ``ip`` and report (is an active ban for exactly this IP present, how many
+    decisions were returned). Parsed equality (canonical IP), never substring; any failure -> (False, None)."""
+    try:
+        r = client.get(f"{CROWDSEC_LAPI_URL}/v1/decisions", headers={"X-Api-Key": CROWDSEC_BOUNCER_KEY},
+                       params={"ip": ip})
+        if getattr(r, "status_code", 200) != 200:
+            return False, None
+        rows = r.json() or []
+        if not isinstance(rows, list):
+            return False, None
+    except Exception:  # noqa: BLE001
+        return False, None
+    hit = any(isinstance(d, dict) and (d.get("type") or "ban") == "ban"
+              and str(d.get("scope") or "Ip").lower() == "ip" and _parse_ip(d.get("value")) == ip
+              for d in rows)
+    return hit, len(rows)
 
 
 def unblock_ip(body: dict) -> dict:

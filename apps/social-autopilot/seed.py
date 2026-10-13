@@ -53,10 +53,35 @@ POSTIZ_FRONT_URL = os.environ.get("POSTIZ_FRONT_URL", "http://localhost:4200")
 
 # Stable identifiers so re-runs upsert the same rows.
 ORG_ID = "meridian-wealth-org"
-ORG_API_KEY = os.environ.get("POSTIZ_API_KEY", "changeme-set-POSTIZ_API_KEY-in-env")
 USER_ID = "meridian-wealth-user"
 USER_EMAIL = "agent@meridianwealth.com"
-USER_PASSWORD = os.environ.get("POSTIZ_USER_PASSWORD", "changeme-set-in-env")
+
+
+def _demo_mode() -> bool:
+    return os.environ.get("APP_DEMO_MODE", "").strip().lower() in ("1", "true", "yes")
+
+
+_GENERATED: dict[str, str] = {}
+
+
+def _required_secret(name: str) -> str:
+    """The value of env ``name``. No literal fallback: unset is an error unless APP_DEMO_MODE=true, in which
+    case a random per-run value is generated (and persisted to the demo .env) instead of a known default."""
+    v = os.environ.get(name, "").strip()
+    if v:
+        return v
+    if not _demo_mode():
+        raise SystemExit(f"{name} is required (set it in the environment, or APP_DEMO_MODE=true for a demo seed)")
+    import secrets
+    return _GENERATED.setdefault(name, secrets.token_urlsafe(24))
+
+
+def ORG_API_KEY() -> str:  # noqa: N802 - kept uppercase: formerly a module constant
+    return _required_secret("POSTIZ_API_KEY")
+
+
+def USER_PASSWORD() -> str:  # noqa: N802
+    return _required_secret("POSTIZ_USER_PASSWORD")
 UORG_ID = "meridian-wealth-uorg"
 
 # (id, name, providerIdentifier, followers) — modelled channels.
@@ -135,7 +160,7 @@ def build_sql(pw_hash: str) -> str:
     # Organization
     parts.append(
         f'INSERT INTO "Organization" (id, name, description, "apiKey", "createdAt", "updatedAt", "allowTrial", "isTrailing", shortlink) '
-        f"VALUES ({q(ORG_ID)}, {q('Meridian Wealth Management')}, {q('Wealth-management firm — agentic social on Postiz')}, {q(ORG_API_KEY)}, {q(now)}, {q(now)}, false, false, 'ASK') "
+        f"VALUES ({q(ORG_ID)}, {q('Meridian Wealth Management')}, {q('Wealth-management firm — agentic social on Postiz')}, {q(ORG_API_KEY())}, {q(now)}, {q(now)}, false, false, 'ASK') "
         'ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, "apiKey"=EXCLUDED."apiKey", "updatedAt"=EXCLUDED."updatedAt";'
     )
     # User (real bcrypt password, SUPERADMIN, audience = headline follower count)
@@ -178,7 +203,7 @@ def main() -> int:
         return 1
 
     # 1. hash the password with the container's bcrypt (matches the backend).
-    pw_hash = bcrypt_hash(USER_PASSWORD)
+    pw_hash = bcrypt_hash(USER_PASSWORD())
 
     # 2. seed.
     res = psql(build_sql(pw_hash))
@@ -207,7 +232,9 @@ def main() -> int:
         f"POSTIZ_PG_USER={PG_USER}\n"
         f"POSTIZ_PG_DB={PG_DB}\n"
         f"POSTIZ_ORG_ID={ORG_ID}\n"
-        f"POSTIZ_API_KEY={ORG_API_KEY}\n"
+        f"POSTIZ_API_KEY={ORG_API_KEY()}\n"
+        + (f"POSTIZ_USER_PASSWORD={USER_PASSWORD()}\n" if "POSTIZ_USER_PASSWORD" in _GENERATED else "")
+        +
         "APP_DEMO_MODE=true\n"        # demo seed only: allows the seeded default Postiz postgres password
     )
     print(f"Wrote {ENV_OUT}")
