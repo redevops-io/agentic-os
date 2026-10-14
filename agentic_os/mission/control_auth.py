@@ -12,7 +12,8 @@ from dataclasses import dataclass
 
 ENV_TOKEN = "AGENTIC_OS_CONTROL_TOKEN"
 ENV_TENANT_TOKENS = "AGENTIC_OS_TENANT_TOKENS"   # "acme=<token>,globex=<token>" -> tenant-scoped callers
-ENV_GATE_READS = "AGENTIC_OS_GATE_READS"          # "1" -> sensitive GETs (events/explain/plans/inbox/...) need a token too
+ENV_APPROVER_TOKENS = "AGENTIC_OS_APPROVER_TOKENS"  # "acme=<token>" -> distinct approver credential per tenant (optional)
+ENV_GATE_READS = "AGENTIC_OS_GATE_READS"          # default ON; "0"/"false"/"off" opts OUT (unsafe off loopback)
 
 
 def configured_token() -> str:
@@ -42,43 +43,96 @@ def require_control_token(authorization: "str | None") -> None:
         raise HTTPException(401, "invalid or missing bearer token", headers={"WWW-Authenticate": "Bearer"})
 
 
+class ConfigError(ValueError):
+    """Misconfigured token env (duplicate / colliding tokens). Fail closed rather than make a token unreachable."""
+
+
 @dataclass(frozen=True)
 class Caller:
     """Who a valid token represents. ``tenant is None`` = the unscoped admin token (all tenants);
-    otherwise the caller may only see/act on missions whose ``tenant`` equals this value."""
+    otherwise the caller may only see/act on missions whose ``tenant`` equals this value.
+    ``role``: "admin" | "requester" (tenant token) | "approver" (AGENTIC_OS_APPROVER_TOKENS)."""
     tenant: "str | None" = None
+    role: str = "admin"
 
 
-def tenant_tokens() -> "dict[str, str]":
-    """Parse ``AGENTIC_OS_TENANT_TOKENS`` (``tenant=token`` pairs). Malformed / empty entries are ignored; a token
-    equal to the admin token is ignored (it would silently widen scope)."""
+def _parse_pairs(env: str) -> "dict[str, str]":
     out: dict[str, str] = {}
-    admin = configured_token()
-    for part in os.environ.get(ENV_TENANT_TOKENS, "").split(","):
+    for part in os.environ.get(env, "").split(","):
         tenant, sep, tok = part.strip().partition("=")
         tenant, tok = tenant.strip(), tok.strip()
-        if sep and tenant and tok and tok != admin:
+        if sep and tenant and tok:
+            if tenant in out:
+                raise ConfigError(f"{env}: tenant {tenant!r} listed twice")
             out[tenant] = tok
     return out
 
 
+def tenant_tokens() -> "dict[str, str]":
+    """Parse ``AGENTIC_OS_TENANT_TOKENS`` (``tenant=token`` pairs; malformed entries are ignored). Raises ConfigError
+    if a token is shared by two tenants or equals the admin token (it would silently widen or shadow scope)."""
+    out = _parse_pairs(ENV_TENANT_TOKENS)
+    admin = configured_token()
+    seen: dict[str, str] = {}
+    for tenant, tok in out.items():
+        if tok == admin:
+            raise ConfigError(f"{ENV_TENANT_TOKENS}: tenant {tenant!r} token equals {ENV_TOKEN}")
+        if tok in seen:
+            raise ConfigError(f"{ENV_TENANT_TOKENS}: tenants {seen[tok]!r} and {tenant!r} share the same token")
+        seen[tok] = tenant
+    return out
+
+
+def approver_tokens() -> "dict[str, str]":
+    """Parse ``AGENTIC_OS_APPROVER_TOKENS`` (same ``tenant=token`` shape). Approver tokens must be distinct from the
+    admin and tenant tokens and from each other."""
+    out = _parse_pairs(ENV_APPROVER_TOKENS)
+    taken = {configured_token(), *tenant_tokens().values()} - {""}
+    seen: set[str] = set()
+    for tenant, tok in out.items():
+        if tok in taken or tok in seen:
+            raise ConfigError(f"{ENV_APPROVER_TOKENS}: tenant {tenant!r} token is not distinct from the other tokens")
+        seen.add(tok)
+    return out
+
+
+def validate_config() -> None:
+    """Raise ConfigError on a bad token env. Called when the routers are mounted so a bad config fails at startup."""
+    tenant_tokens()
+    approver_tokens()
+
+
+def any_token_configured() -> bool:
+    try:
+        return bool(configured_token() or tenant_tokens() or approver_tokens())
+    except ConfigError:
+        return True      # misconfigured counts as configured: authenticate() will answer 503 with the reason
+
+
 def reads_gated() -> bool:
-    return os.environ.get(ENV_GATE_READS, "").strip().lower() in ("1", "true", "yes", "on")
+    """Reads are gated BY DEFAULT. Only an explicit 0/false/no/off opts out (local demos on loopback only)."""
+    return os.environ.get(ENV_GATE_READS, "").strip().lower() not in ("0", "false", "no", "off")
 
 
 def resolve_caller(authorization: "str | None") -> Caller:
-    """Authenticate ``Authorization: Bearer`` against the admin token and the tenant tokens (constant-time, no early
-    exit). 503 when NO token of either kind is configured; 401 when missing/wrong. Returns the Caller."""
+    """Authenticate ``Authorization: Bearer`` against the admin, tenant and approver tokens (constant-time, no early
+    exit). 503 when no token is configured (or the config is invalid); 401 when missing/wrong."""
     from fastapi import HTTPException  # noqa: PLC0415
-    admin, tenants = configured_token(), tenant_tokens()
-    if not admin and not tenants:
-        raise HTTPException(503, f"mutating endpoints are disabled: {ENV_TOKEN} (or {ENV_TENANT_TOKENS}) is not set. "
+    try:
+        admin, tenants, approvers = configured_token(), tenant_tokens(), approver_tokens()
+    except ConfigError as e:
+        raise HTTPException(503, f"endpoints disabled: invalid token configuration ({e})")
+    if not admin and not tenants and not approvers:
+        raise HTTPException(503, f"endpoints are disabled: {ENV_TOKEN} (or {ENV_TENANT_TOKENS}) is not set. "
                                  "Set a long random secret and send 'Authorization: Bearer <token>'.")
     presented = bearer_of(authorization)
-    found: "Caller | None" = Caller(None) if token_matches(presented, admin) else None
+    found: "Caller | None" = Caller(None, "admin") if token_matches(presented, admin) else None
     for tenant, tok in tenants.items():
         if token_matches(presented, tok) and found is None:
-            found = Caller(tenant)
+            found = Caller(tenant, "requester")
+    for tenant, tok in approvers.items():
+        if token_matches(presented, tok) and found is None:
+            found = Caller(tenant, "approver")
     if found is None:
         raise HTTPException(401, "invalid or missing bearer token", headers={"WWW-Authenticate": "Bearer"})
     return found

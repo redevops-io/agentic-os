@@ -47,7 +47,8 @@ def _fill(path):
 def env(monkeypatch):
     monkeypatch.setenv("AGENTIC_OS_CONTROL_TOKEN", ADMIN)
     monkeypatch.setenv("AGENTIC_OS_TENANT_TOKENS", f"acme={TOK_A},globex={TOK_B}")
-    monkeypatch.delenv("AGENTIC_OS_GATE_READS", raising=False)
+    monkeypatch.delenv("AGENTIC_OS_GATE_READS", raising=False)      # default = reads gated
+    monkeypatch.delenv("AGENTIC_OS_APPROVER_TOKENS", raising=False)
 
 
 @pytest.fixture
@@ -230,51 +231,159 @@ def test_tenant_cannot_touch_untenanted_admin_mission_and_lists_are_filtered(fx)
     assert c.post(f"/missions/{admin_m['id']}/approve", headers=H(TOK_A),
                   json={"node_id": admin_m["pending_human"]["node_id"], "decision": "approve"}).status_code == 404
     c_ = TestClient(c.app, headers=H(TOK_A))
-    # reads are open by default, so scope filtering only applies to presented tenant tokens
     ids = {m["id"] for m in c_.get("/missions").json()["missions"]}
     assert ids == {a_m["id"]}
     assert {i["mission_id"] for i in c_.get("/inbox").json()["inbox"]} == {a_m["id"]}
 
 
-# ── read gate ────────────────────────────────────────────────────────────────
+# ── read gate: DEFAULT-DENY ─────────────────────────────────────────────────
 READS = ["/missions", "/missions/m-x", "/missions/m-x/events", "/missions/m-x/explain", "/missions/m-x/plans",
          "/inbox", "/learning"]
+PUBLIC_READS = ["/capabilities", "/buildinfo", "/cockpit"]
 
 
 @pytest.mark.parametrize("path", READS)
-def test_sensitive_reads_gated_by_env_switch(fx, monkeypatch, path):
+def test_anonymous_and_bad_token_reads_are_401_by_default(fx, path):
     _, _, c = fx
-    assert c.get(path).status_code != 401                         # default: open (documented)
-    monkeypatch.setenv("AGENTIC_OS_GATE_READS", "1")
     assert c.get(path).status_code == 401
     assert c.get(path, headers=H("wrong")).status_code == 401
     assert c.get(path, headers=H(ADMIN)).status_code in (200, 404)
 
 
-@pytest.mark.parametrize("path", ["/capabilities", "/buildinfo", "/cockpit"])
-def test_public_allowlisted_reads_stay_open_even_when_gated(fx, monkeypatch, path):
+def test_anonymous_cannot_enumerate_tenant_missions(fx):
     _, _, c = fx
-    monkeypatch.setenv("AGENTIC_OS_GATE_READS", "1")
+    _onboard(c, TOK_A); _onboard(c, TOK_B)
+    assert c.get("/missions").status_code == 401
+    assert c.get("/missions", headers=H("garbage")).status_code == 401
+    assert [m["id"] for m in c.get("/missions", headers=H(TOK_A)).json()["missions"]].__len__() == 1
+
+
+@pytest.mark.parametrize("path", PUBLIC_READS)
+def test_public_allowlisted_reads_open_anonymously_but_bad_token_is_401(fx, path):
+    _, _, c = fx
     assert c.get(path).status_code == 200
+    assert c.get(path, headers=H("wrong")).status_code == 401           # presented-but-invalid never "unscoped"
+    assert c.get(path, headers=H(TOK_A)).status_code == 200
+
+
+@pytest.mark.parametrize("path", READS + PUBLIC_READS)
+def test_explicit_opt_out_still_rejects_invalid_presented_token(fx, monkeypatch, path):
+    _, _, c = fx
+    monkeypatch.setenv("AGENTIC_OS_GATE_READS", "0")
+    assert c.get(path, headers=H("wrong")).status_code == 401
+
+
+@pytest.mark.parametrize("val", ["0", "false", "off", "NO"])
+def test_opt_out_makes_reads_open_and_unscoped_anonymously(fx, monkeypatch, val):
+    _, _, c = fx
+    _onboard(c, TOK_A); _onboard(c, TOK_B)
+    monkeypatch.setenv("AGENTIC_OS_GATE_READS", val)
+    assert len(c.get("/missions").json()["missions"]) == 2                 # documented UNSAFE mode
+    assert len(c.get("/missions", headers=H(TOK_A)).json()["missions"]) == 1
+    assert c.post("/missions", json={"goal": "x"}).status_code == 401      # mutations stay gated
 
 
 def test_gated_reads_with_no_token_configured_is_503(monkeypatch):
     monkeypatch.delenv("AGENTIC_OS_CONTROL_TOKEN", raising=False)
     monkeypatch.delenv("AGENTIC_OS_TENANT_TOKENS", raising=False)
-    monkeypatch.setenv("AGENTIC_OS_GATE_READS", "1")
-    assert TestClient(build_mission_app()).get("/missions").status_code == 503
+    monkeypatch.delenv("AGENTIC_OS_GATE_READS", raising=False)
+    c = TestClient(build_mission_app())
+    assert c.get("/missions").status_code == 503
+    assert c.get("/cockpit").status_code == 200                              # shell stays reachable
 
 
-def test_gated_reads_are_tenant_scoped(fx, monkeypatch):
+def test_gated_reads_are_tenant_scoped(fx):
     _, _, c = fx
     a = _onboard(c, TOK_A)
-    monkeypatch.setenv("AGENTIC_OS_GATE_READS", "1")
     assert c.get(f"/missions/{a['id']}/events", headers=H(TOK_B)).status_code == 404
     assert c.get(f"/missions/{a['id']}/events", headers=H(TOK_A)).status_code == 200
+    assert c.get("/inbox", headers=H(TOK_B)).json()["inbox"] == []
 
 
-def test_tenant_token_equal_to_admin_token_is_ignored(monkeypatch):
+def test_learning_is_admin_only(fx, monkeypatch):
+    _, _, c = fx
+    assert c.get("/learning").status_code == 401
+    assert c.get("/learning", headers=H(TOK_A)).status_code == 403
+    assert c.get("/learning", headers=H(ADMIN)).status_code == 200
+    monkeypatch.setenv("AGENTIC_OS_GATE_READS", "0")
+    assert c.get("/learning", headers=H(TOK_A)).status_code == 403
+
+
+# ── separation of duty ──────────────────────────────────────────────────────
+def test_requester_can_approve_when_no_approver_tokens_configured(fx):
+    _, _, c = fx
+    m = _onboard(c, TOK_A)
+    r = c.post(f"/missions/{m['id']}/approve", headers=H(TOK_A),
+               json={"node_id": m["pending_human"]["node_id"], "decision": "approve"})
+    assert r.status_code == 200 and r.json()["state"] == "succeeded"
+
+
+def test_approver_tokens_block_requester_and_allow_approver(fx, monkeypatch):
+    _, rt, c = fx
+    monkeypatch.setenv("AGENTIC_OS_APPROVER_TOKENS", "acme=ap-acme,globex=ap-globex")
+    m = _onboard(c, TOK_A)
+    mid, node = m["id"], m["pending_human"]["node_id"]
+    before = _snapshot(rt, mid)
+    body = {"node_id": node, "decision": "approve"}
+    assert c.post(f"/missions/{mid}/approve", headers=H(TOK_A), json=body).status_code == 403
+    assert _snapshot(rt, mid) == before
+    assert c.post(f"/missions/{mid}/approve", headers=H("ap-globex"), json=body).status_code == 404   # cross-tenant
+    assert _snapshot(rt, mid) == before
+    assert c.post(f"/missions/{mid}/approve", headers=H("ap-acme"), json=body).json()["state"] == "succeeded"
+
+
+def test_approver_credential_cannot_create_or_simulate_but_can_read_own(fx, monkeypatch):
+    _, _, c = fx
+    monkeypatch.setenv("AGENTIC_OS_APPROVER_TOKENS", "acme=ap-acme")
+    m = _onboard(c, TOK_A)
+    assert c.post("/missions", headers=H("ap-acme"), json={"goal": "x"}).status_code == 403
+    assert c.post(f"/missions/{m['id']}/simulate", headers=H("ap-acme")).status_code == 403
+    assert c.get(f"/missions/{m['id']}", headers=H("ap-acme")).status_code == 200
+    assert c.get("/learning", headers=H("ap-acme")).status_code == 403
+
+
+def test_approver_only_configuration_is_not_503(monkeypatch):
+    monkeypatch.delenv("AGENTIC_OS_CONTROL_TOKEN", raising=False)
+    monkeypatch.delenv("AGENTIC_OS_TENANT_TOKENS", raising=False)
+    monkeypatch.setenv("AGENTIC_OS_APPROVER_TOKENS", "acme=ap")
+    assert TestClient(build_mission_app()).post("/missions", json={"goal": "x"}).status_code == 401
+
+
+# ── config validation + trailing slash ──────────────────────────────────────
+@pytest.mark.parametrize("env,val", [
+    ("AGENTIC_OS_TENANT_TOKENS", "a=ta,ab=ta"),
+    ("AGENTIC_OS_TENANT_TOKENS", "a=ta,a=tb"),
+    ("AGENTIC_OS_TENANT_TOKENS", "evil=admin-secret"),
+    ("AGENTIC_OS_APPROVER_TOKENS", "a=tok-tenant-a"),
+    ("AGENTIC_OS_APPROVER_TOKENS", "a=x,b=x"),
+])
+def test_colliding_tokens_fail_closed_with_clear_error(env, val, monkeypatch):
+    from fastapi import FastAPI
+    from agentic_os.mission.control_auth import ConfigError
+    monkeypatch.setenv("AGENTIC_OS_CONTROL_TOKEN", ADMIN)
+    monkeypatch.setenv("AGENTIC_OS_TENANT_TOKENS", f"acme={TOK_A}")
+    monkeypatch.setenv(env, val)
+    with pytest.raises(ConfigError):
+        mount(FastAPI(), build_pilot_runtime())
+    from agentic_os.mission.api import build_router
+    from fastapi import FastAPI as F
+    a = F(); a.include_router(build_router(build_pilot_runtime()))
+    r = TestClient(a).post("/missions", json={"goal": "x"}, headers=H(ADMIN))
+    assert r.status_code == 503 and "token" in r.json()["detail"]
+
+
+def test_malformed_pairs_ignored(monkeypatch):
     from agentic_os.mission.control_auth import tenant_tokens
     monkeypatch.setenv("AGENTIC_OS_CONTROL_TOKEN", "same")
-    monkeypatch.setenv("AGENTIC_OS_TENANT_TOKENS", "evil=same,ok=other, =x,bad")
+    monkeypatch.setenv("AGENTIC_OS_TENANT_TOKENS", "ok=other, =x,bad")
     assert tenant_tokens() == {"ok": "other"}
+
+
+def test_trailing_slash_redirect_target_is_still_gated(fx):
+    _, rt, c = fx
+    n = len(rt.store.mission_ids())
+    r = c.post("/missions/", json={"goal": "x"}, follow_redirects=False)
+    assert r.status_code in (307, 308) and len(rt.store.mission_ids()) == n
+    assert c.post("/missions/", json={"goal": "x"}, follow_redirects=True).status_code == 401
+    assert len(rt.store.mission_ids()) == n
+    assert c.post("/missions/", json={"goal": "x"}, headers=H(ADMIN), follow_redirects=True).status_code == 200

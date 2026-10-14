@@ -7,7 +7,8 @@ usable (and testable) without the web dependency.
 
 from typing import Any
 
-from .api_gate import GATE, caller_of, public
+from .api_gate import GATE, admin_only, caller_of, public
+from .control_auth import approver_tokens
 from .approval import strip_approval_keys
 from .runtime import MissionRuntime
 from .simulator import simulate
@@ -49,6 +50,11 @@ def build_router(runtime: MissionRuntime):
         if mid not in runtime._missions or not _visible(mid, request):
             raise HTTPException(404, "mission not found")
 
+    def _deny_approver(request: Request) -> None:
+        c = caller_of(request)
+        if c is not None and c.role == "approver":
+            raise HTTPException(403, "approver credentials may only approve")
+
     def _mission_view(mid: str) -> dict:
         m = runtime._missions.get(mid)
         if not m:
@@ -63,6 +69,7 @@ def build_router(runtime: MissionRuntime):
 
     @router.post("")
     def create(body: CreateMission, request: Request):
+        _deny_approver(request)
         c = caller_of(request)
         tenant = c.tenant if (c is not None and c.tenant is not None) else body.tenant
         budget = Budget(usd=body.budget_usd) if body.budget_usd else None
@@ -90,6 +97,7 @@ def build_router(runtime: MissionRuntime):
     @router.post("/{mid}/simulate")
     def resimulate(mid: str, request: Request):
         _authorize_mission(mid, request)
+        _deny_approver(request)
         m = runtime._missions.get(mid)
         plan = runtime._plans.get(mid)
         if not m or not plan:
@@ -100,6 +108,10 @@ def build_router(runtime: MissionRuntime):
     @router.post("/{mid}/approve")
     def approve(mid: str, body: Approve, request: Request):
         _authorize_mission(mid, request)
+        c = caller_of(request)
+        if c is not None and c.role == "requester" and approver_tokens():
+            # separation of duty: AGENTIC_OS_APPROVER_TOKENS is set, so the requester credential cannot approve
+            raise HTTPException(403, "approval requires an approver credential")
         if body.decision not in _DECISIONS:
             raise HTTPException(422, f"decision must be one of {sorted(_DECISIONS)}")
         # the client may never smuggle an approval marker (``_approval*``) through the edit payload: approval
@@ -136,6 +148,7 @@ def build_capabilities_router(runtime: MissionRuntime):
         return {"capabilities": [to_jsonable(c) for c in runtime.registry.all()]}
 
     @router.get("/learning")
+    @admin_only
     def learning():
         """What the four learning loops have learned so far (capability / planning / business)."""
         return runtime.learning.policy()
@@ -272,10 +285,15 @@ pre{white-space:pre-wrap;font-size:12px;color:#cfd0d8;margin:6px 0 0;background:
     <select id=tpl><option value="">no template</option><option value=product_launch>product_launch</option>
       <option value=revenue_rescue>revenue_rescue</option><option value=onboarding>onboarding</option>
       <option value=invoice_recovery>invoice_recovery</option></select>
-    <button onclick=launch()>Launch</button>
-    <button class="sec" onclick=refreshAll()>↻</button>
+    <button data-act=launch>Launch</button>
+    <button class="sec" data-act=refresh>↻</button>
   </div>
 </div>
+<form id=authbar hidden class=row style="padding:8px 20px;background:#271f13;border-bottom:1px solid var(--line)">
+  <span>Bearer token required (control or tenant token). Held in memory only.</span>
+  <input id=tokin type=password autocomplete=off placeholder="token" style="width:240px">
+  <button type=submit class=sm>Use token</button>
+</form>
 
 <div class=shell>
   <aside class=side>
@@ -284,21 +302,24 @@ pre{white-space:pre-wrap;font-size:12px;color:#cfd0d8;margin:6px 0 0;background:
   </aside>
   <main class=main id=main><div class=empty>Select a mission, or launch one above.</div></main>
 </div>
-<div class=backdrop id=backdrop onclick=closeNode()></div>
+<div class=backdrop id=backdrop data-act=close></div>
 <aside class=drawer id=drawer></aside>
 
 <script>
 const J=r=>r.json();
-// mutating calls need a bearer token (AGENTIC_OS_CONTROL_TOKEN or a tenant token); kept in sessionStorage only.
-const api=(u,o={})=>{const t=sessionStorage.getItem('aos_token');
-  if(t){o.headers=Object.assign({},o.headers||{},{authorization:'Bearer '+t});}
+// Bearer token lives in MEMORY only (never web storage); lost on reload by design.
+let TOKEN='';
+const api=(u,o={})=>{
+  if(TOKEN){o.headers=Object.assign({},o.headers||{},{authorization:'Bearer '+TOKEN});}
   return fetch(u,o).then(r=>{
-    if(r.status===401||r.status===503){const n=prompt('Bearer token required (AGENTIC_OS_CONTROL_TOKEN / tenant token):');
-      if(n){sessionStorage.setItem('aos_token',n.trim());}}
+    if(r.status===401||r.status===503){document.getElementById('authbar').hidden=false;}
     return J(r);});};
-const esc=s=>String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+// escape for BOTH text and quoted-attribute contexts
+const esc=s=>String(s==null?'':s).replace(/[&<>"'`]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'}[c]));
+// data-driven actions: no inline handlers are ever built from data
+const A=(act,...args)=>`data-act="${esc(act)}" data-args="${esc(JSON.stringify(args))}"`;
 const short=id=>String(id||'').replace(/^node[_-]?/,'').slice(0,6);
-function pill(s){return `<span class="pill st-${s}">${esc(s)}</span>`}
+function pill(s){return `<span class="pill st-${esc(s)}">${esc(s)}</span>`}
 let CUR=null, TAB='graph';
 
 async function launch(){
@@ -325,12 +346,12 @@ async function refreshAll(){
   document.getElementById('inbox').innerHTML = inb.length? inb.map(t=>{
     const ev=(t.evidence||[]).map(e=>`<div class="ev mut">· <code>${esc(e)}</code></div>`).join('');
     const ctl = t.kind==='disambiguation'
-      ? `<input id="v_${t.node_id}" placeholder="authoritative value" style="width:150px">
-         <button class=sm onclick="decide('${t.mission_id}','${t.node_id}','resolve','disambiguation')">Resolve</button>`
-      : `<button class=sm onclick="decide('${t.mission_id}','${t.node_id}','approve')">Approve</button>
-         <button class="sm red" onclick="decide('${t.mission_id}','${t.node_id}','reject')">Reject</button>`;
+      ? `<input id="v_${esc(t.node_id)}" placeholder="authoritative value" style="width:150px">
+         <button class=sm ${A('decide',t.mission_id,t.node_id,'resolve','disambiguation')}>Resolve</button>`
+      : `<button class=sm ${A('decide',t.mission_id,t.node_id,'approve')}>Approve</button>
+         <button class="sm red" ${A('decide',t.mission_id,t.node_id,'reject')}>Reject</button>`;
     return `<div class=packet><div class=row style="justify-content:space-between">
-        <b>${esc(t.kind)}</b><a onclick="openMission('${t.mission_id}')">open ↗</a></div>
+        <b>${esc(t.kind)}</b><a ${A('open',t.mission_id)}>open ↗</a></div>
       <div class="mut" style="font-size:12px">${esc(t.goal||'')}</div>
       <div style="margin:5px 0">${esc(t.prompt||'')}</div>${ev}
       <div class=row style="margin-top:8px">${ctl}</div></div>`;
@@ -339,7 +360,7 @@ async function refreshAll(){
   const ms=ml.missions||[];
   document.getElementById('ms_n').textContent=ms.length?`(${ms.length})`:'';
   document.getElementById('missions').innerHTML = ms.length? ms.slice().reverse().map(m=>
-    `<div class="mrow${m.id===CUR?' sel':''}" onclick="openMission('${m.id}')">
+    `<div class="mrow${m.id===CUR?' sel':''}" ${A('open',m.id)}>
       <div class=row style="justify-content:space-between">
         <span class=g>${esc(m.goal||m.id)}</span>${pill(m.state)}</div>
       <div class=dim style="font-size:12px">${esc(m.template||'—')}${m.awaiting_human?' · ⏳ needs you':''}</div></div>`
@@ -395,14 +416,14 @@ function openNode(id){
       <div class=kv>
         <span class=kk>chosen</span><span><code>${esc(dec.capability)}</code> · ${esc(dec.reason||'')}</span>
         <span class=kk>confidence</span><span>${dec.confidence!=null?Math.round(dec.confidence*100)+'%':'—'} <span class=dim>calibrated success rate</span></span>
-        <span class=kk>cost</span><span>$${(dec.cost_usd||0).toFixed(4)} · ${dec.latency_ms||0}ms · value ${esc(dec.estimated_value||'—')}</span></div>
+        <span class=kk>cost</span><span>$${Number(dec.cost_usd||0).toFixed(4)} · ${esc(dec.latency_ms||0)}ms · value ${esc(dec.estimated_value||'—')}</span></div>
       ${dec.confidence!=null?`<div class=bar style="margin-top:7px"><i style="width:${Math.round(dec.confidence*100)}%"></i></div>`:''}
       ${dec.alternatives&&dec.alternatives.length
         ?`<div class=dim style="font-size:12px;margin-top:10px">Candidates considered (ranked by confidence):</div>`
           +dec.alternatives.map(a=>`<div class=meta style="margin-top:3px">↳ <code>${esc(a.capability)}</code> <span class=dim>${esc(a.operator)}</span> · ${Math.round((a.confidence||0)*100)}%</div>`).join('')
         :`<div class=dim style="font-size:12px;margin-top:8px">Sole provider — no alternative capability could satisfy this step.</div>`}`:'';
   document.getElementById('drawer').innerHTML=`
-    <div class=dh><h3>${esc(n.capability)}</h3><button class="sec sm" onclick="closeNode()">✕ close</button></div>
+    <div class=dh><h3>${esc(n.capability)}</h3><button class="sec sm" data-act=close>✕ close</button></div>
     <div class=db>
       <div class=kv>
         <span class=kk>app</span><span>${esc(n.operator||'')}</span>
@@ -429,30 +450,30 @@ function renderDetail(){
   const nodes=(p&&p.graph&&p.graph.nodes)||[];
   const capOf={}; nodes.forEach(n=>capOf[n.id]=n.capability);
   const projStrip = proj? `<div class=proj>
-     <div class=stat><b>$${(proj.expected_usd||0).toFixed(2)}</b><span>est cost</span></div>
+     <div class=stat><b>$${Number(proj.expected_usd||0).toFixed(2)}</b><span>est cost</span></div>
      <div class=stat><b>${Math.round((proj.expected_success||0)*100)}%</b><span>success</span></div>
      <div class=stat><b>${Math.round((proj.expected_latency_ms||0)/1000)}s</b><span>latency</span></div>
-     <div class=stat><b>${proj.expected_approvals||0}</b><span>approvals</span></div></div>` : '';
+     <div class=stat><b>${esc(proj.expected_approvals||0)}</b><span>approvals</span></div></div>` : '';
 
   const tabs=['graph','world','timeline','explain'];
-  const tabbar=tabs.map(t=>`<div class="tab${t===TAB?' on':''}" onclick="TAB='${t}';renderDetail()">${t==='graph'?'Graph · Tasks':t[0].toUpperCase()+t.slice(1)}</div>`).join('');
+  const tabbar=tabs.map(t=>`<div class="tab${t===TAB?' on':''}" ${A('tab',t)}>${t==='graph'?'Graph · Tasks':t[0].toUpperCase()+t.slice(1)}</div>`).join('');
 
   let body='';
   if(TAB==='graph'){
     const counts={}; nodes.forEach(n=>counts[n.status]=(counts[n.status]||0)+1);
     const legend=Object.entries(counts).map(([s,c])=>`${pill(s)} ${c}`).join(' &nbsp; ')||'<span class=dim>no plan compiled</span>';
     body=`<div class=card><h2>Execution graph — ${nodes.length} node${nodes.length===1?'':'s'} ·
-        enforced depends_on <span class=dim>(rev ${p?p.revision:'—'}${p&&p.reason?' · '+esc(p.reason):''})</span></h2>
+        enforced depends_on <span class=dim>(rev ${esc(p?p.revision:'—')}${p&&p.reason?' · '+esc(p.reason):''})</span></h2>
       <div class=row style="margin-bottom:6px">${legend}</div>
       ${nodes.map(n=>{
         const deps=(n.depends_on||[]).map(d=>`<code>${esc(capOf[d]||short(d))}</code>`).join(', ');
         const flags=[n.approval_required?'<span class="flag gate">⛉ approval</span>':'',
           n.side_effecting?'<span class=flag>side-effect</span>':'',
           n.undo?`<span class="flag undo">↩ ${esc(n.undo)}</span>`:'',
-          n.cost&&n.cost.usd?`<span class=flag>$${n.cost.usd.toFixed(2)}</span>`:''].join('');
+          n.cost&&n.cost.usd?`<span class=flag>$${Number(n.cost.usd).toFixed(2)}</span>`:''].join('');
         const rchips = n.status==='done' ? resultChips(n.result) : '';
         const failLine = n.status==='failed' ? `<div class=rfail>✕ ${esc(failReason(n.id))}</div>` : '';
-        return `<div class="node n-${n.status}" onclick="openNode('${n.id}')" title="click for details, results and where to look">
+        return `<div class="node n-${esc(n.status)}" ${A('node',n.id)} title="click for details, results and where to look">
           <div style="flex:1">
             <div class=row style="justify-content:space-between"><span class=cap><code>${esc(n.capability)}</code></span>${pill(n.status)}</div>
             <div class=meta>${esc(n.operator||'')}${deps?' &nbsp;⇠ '+deps:''}${n.produces?' &nbsp;→ writes <code>'+esc(n.produces)+'</code>':''}</div>
@@ -460,7 +481,7 @@ function renderDetail(){
             ${rchips}${failLine}
           </div></div>`;
       }).join('')||'<div class=dim>No nodes yet — mission still planning.</div>'}
-      <div class=row style="margin-top:10px"><button class="sec sm" onclick="simulate('${m.id}')">Re-simulate</button></div></div>`;
+      <div class=row style="margin-top:10px"><button class="sec sm" ${A('simulate',m.id)}>Re-simulate</button></div></div>`;
   } else if(TAB==='world'){
     const ws=x.world_state||{};
     const chips=Object.entries(ws).map(([k,v])=>{
@@ -469,7 +490,7 @@ function renderDetail(){
         if('value'in v)val=v.value; if('confidence'in v)conf=v.confidence;
         conflict=!!v.conflict; state=v.state||null;
       }
-      const vs=typeof val==='object'?JSON.stringify(val):esc(val);
+      const vs=typeof val==='object'?esc(JSON.stringify(val)):esc(val);
       const bar=conf!=null?`<div class=bar><i style="width:${Math.round(conf*100)}%"></i></div>
          <div class=dim style="font-size:11px">${Math.round(conf*100)}% conf${state?' · '+esc(state):''}${conflict?' · ⚠ conflict':''}</div>`:'';
       return `<div class=chip><div class=k>${esc(k)}</div><div class=v>${vs}</div>${bar}</div>`;
@@ -501,6 +522,18 @@ function renderDetail(){
     ${body}`;
 }
 
+// one delegated listener; handlers are looked up by name, args come from escaped data-args JSON
+const ACTS={launch:()=>launch(),refresh:()=>refreshAll(),close:()=>closeNode(),
+  decide:(...a)=>decide(...a),open:id=>openMission(id),node:id=>openNode(id),simulate:id=>simulate(id),
+  tab:t=>{TAB=t;renderDetail();}};
+document.addEventListener('click',ev=>{
+  const el=ev.target.closest&&ev.target.closest('[data-act]'); if(!el) return;
+  const f=ACTS[el.getAttribute('data-act')]; if(!f) return;
+  let args=[]; try{args=JSON.parse(el.getAttribute('data-args')||'[]');}catch(e){}
+  f(...args);});
+document.getElementById('authbar').addEventListener('submit',ev=>{
+  ev.preventDefault(); TOKEN=document.getElementById('tokin').value.trim();
+  document.getElementById('tokin').value=''; document.getElementById('authbar').hidden=true; refreshAll();});
 refreshAll();
 setInterval(()=>{ refreshAll(); }, 5000);
 // Deep-link from /overview: /cockpit?template=<t>&goal=<g>[&run=1] pre-fills the launch form so a

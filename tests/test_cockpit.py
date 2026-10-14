@@ -48,7 +48,8 @@ def test_cockpit_runs_a_mission_end_to_end(monkeypatch):
     assert ex2["state"] == "succeeded" and set(ex2["world_state"]) >= {"subscription", "consent_filed"}
 
 
-def test_inbox_aggregates_approval_and_disambiguation():
+def test_inbox_aggregates_approval_and_disambiguation(monkeypatch):
+    monkeypatch.setenv("AGENTIC_OS_CONTROL_TOKEN", "t")
     # one runtime with two missions: an onboarding (approval gate) + a conflict (disambiguation gate)
     from agentic_os.mission import pilots
     operators = pilots.build_pilot_operators()
@@ -83,6 +84,6 @@ def test_inbox_aggregates_approval_and_disambiguation():
         rt.run(mid)
 
     app = FastAPI(); app.include_router(build_cockpit_router(rt))
-    inbox = TestClient(app).get("/inbox").json()["inbox"]
+    inbox = TestClient(app, headers={"Authorization": "Bearer t"}).get("/inbox").json()["inbox"]
     kinds = {i["kind"] for i in inbox}
     assert kinds == {"approval", "disambiguation"} and len(inbox) == 2
