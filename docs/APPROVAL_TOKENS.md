@@ -101,7 +101,15 @@ Limits operators/humans must know:
   undo twice: operators MUST honour the stable `{idempotency_key}:undo` key.
 - A forward success that crashes before `NodeSucceeded` is persisted gets NO undo and NO marker (fail-closed);
   the effect is left behind and must be reconciled by an operator/human.
-- The in-memory ledger (bounded LRU) is a fallback for executors without a probe and follows the same rules.
+- The in-memory ledger is a best-effort fallback for executors without a probe, bounded (LRU 4096): after
+  eviction (or a process restart) a completed step is NOT undone (fail-closed: `compensation_skipped` +
+  `NodeCompensationFailed` / `compensation_incomplete`). The probe path uses the durable log and has no such limit.
+- "Executed" is judged by the strict `verify.proves_execution`: empty `{}`, truthy `staged`, status in
+  pending_approval / staged / held / awaiting_* / pending / queued, `executed: False`, failure shapes, or any of
+  these nested under `result` / `results` / `items` all mean NOT executed (the commit-path classifiers are unchanged).
+- Production wiring: `MissionRuntime._executor_for` wires the probe and registry for every executor the runtime
+  uses. A custom executor that bypasses it has no registry, so its undo runs WITHOUT the marker (a gated undo
+  stages visibly).
 - One executor serves one runtime; binding a second runtime's event log raises.
 
 The Go port (`go/mission`) does not mirror this: its `Compensate` never mints an approval marker (it sends only

@@ -138,10 +138,8 @@ class Executor:
     @staticmethod
     def _executed_ok(result: Any) -> bool:
         """The forward result proves the effect happened: not staged, not failure-shaped, not executed=False."""
-        from .verify import result_failed, is_staged  # noqa: PLC0415
-        if not isinstance(result, dict) or is_staged(result) or result.get("executed") is False:
-            return False
-        return not result_failed(result)[0]
+        from .verify import proves_execution  # noqa: PLC0415
+        return proves_execution(result)
 
     @staticmethod
     def _input_hash(inputs: dict) -> str:

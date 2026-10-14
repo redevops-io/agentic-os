@@ -211,3 +211,29 @@ def test_executor_shared_by_two_runtimes_rejected():
     import pytest
     with pytest.raises(RuntimeError):
         r2._executor_for(m)
+
+
+import pytest
+
+_NOT_EXECUTED = [{}, {"staged": True}, {"status": "staged"}, {"status": "held"},
+                 {"result": {"status": "pending_approval"}}, {"result": {"staged": True}},
+                 {"status": "pending_approval", "executed": False}, {"executed": False}]
+
+
+@pytest.mark.parametrize("shape", _NOT_EXECUTED)
+def test_not_executed_shapes_ledger_and_probe(shape):
+    c = Rec(); c._handlers["do"] = lambda i, s=shape: dict(s)
+    ex = _ex(c); n = _node()
+    ex.run(n, {"_mission": "m1"})
+    assert ex.compensate(n, mission_id="m1")["compensation_skipped"]
+    store = EventStore()
+    _log(store, "m1", ("NodeSucceeded", {"node_id": "N", "capability": "do", "result": shape}))
+    n2 = _node(); n2.id = "N"
+    c2, ex2, _ = _rt(store)
+    assert ex2.compensate(n2, mission_id="m1")["compensation_skipped"]
+    assert c.undo_inputs == [] and c2.undo_inputs == []
+
+
+def test_real_result_still_proves_execution():
+    from agentic_os.mission.verify import proves_execution
+    assert proves_execution({"charge_id": "c1"}) and proves_execution({"ok": True, "result": {"id": 1}})
