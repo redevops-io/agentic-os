@@ -61,6 +61,8 @@ class InterventionRecord:
     #: the producer prior (base priority BEFORE learned adjustment) the selection was made on; ``None``
     #: when not recorded. The promotion gate evaluates against this when present.
     prior_score: Optional[float] = None
+    #: owning tenant (None = untenanted). An authoritative outcome may only reference a receipt of ITS tenant.
+    tenant_id: Optional[str] = None
 
     @property
     def learn_key(self) -> Tuple[str, str]:
@@ -83,7 +85,8 @@ def record_from_selection(sel: SelectedAction, *, intervention_id: str, policy_v
                           proposed_at: float, evidence_refs: Tuple[str, ...] = (),
                           approved_at: Optional[float] = None, executed_at: Optional[float] = None,
                           execution_ref: str = "", mission_id: str = "", shadow: bool = False,
-                          prior_score: Optional[float] = None) -> InterventionRecord:
+                          prior_score: Optional[float] = None,
+                          tenant_id: Optional[str] = None) -> InterventionRecord:
     """Build the immutable record from a Priority-Engine SelectedAction — capturing the alternatives and
     score so the decision is reconstructable later. The producer's ``source_app`` and the candidate's
     ``learn_key`` action kind are recorded so derived outcomes train the SAME key the selection read."""
@@ -95,7 +98,7 @@ def record_from_selection(sel: SelectedAction, *, intervention_id: str, policy_v
         policy_version=policy_version, score=sel.expected_utility, proposed_at=proposed_at,
         approved_at=approved_at, executed_at=executed_at, execution_ref=execution_ref,
         mission_id=mission_id, source_app=c.source_app, action_kind=c.learn_key[1], shadow=shadow,
-        prior_score=prior_score)
+        prior_score=prior_score, tenant_id=tenant_id)
 
 
 # ── stores (append-only; in-memory + durable JSONL, mirroring OutcomeStore) ──────────
@@ -116,7 +119,8 @@ def _rec_to_dict(r: InterventionRecord) -> dict:
             "approved_at": r.approved_at, "executed_at": r.executed_at,
             "execution_ref": r.execution_ref, "mission_id": r.mission_id,
             "actor_type": r.actor_type.value, "source_app": r.source_app, "action_kind": r.action_kind,
-            "shadow": r.shadow, "prior_score": r.prior_score}
+            "shadow": r.shadow, "prior_score": r.prior_score,
+            "tenant_id": r.tenant_id}
 
 
 def _rec_from_dict(d: dict) -> InterventionRecord:
@@ -130,7 +134,7 @@ def _rec_from_dict(d: dict) -> InterventionRecord:
         execution_ref=d.get("execution_ref", ""), mission_id=d.get("mission_id", ""),
         actor_type=ActorType(d.get("actor_type", "runtime")), source_app=d.get("source_app", "") or "",
         action_kind=d.get("action_kind", "") or "", shadow=bool(d.get("shadow", False)),
-        prior_score=d.get("prior_score"))
+        prior_score=d.get("prior_score"), tenant_id=d.get("tenant_id"))
 
 
 def _link_to_dict(l: OutcomeLink) -> dict:

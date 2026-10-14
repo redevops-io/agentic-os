@@ -149,19 +149,23 @@ def test_authoritative_bad_receipt_or_fields_rejected_no_append(env, override, c
 
 def test_authoritative_success_derives_identity_from_receipt_and_is_idempotent(env):
     prov, c, path = env
-    r1 = c.post("/api/outcomes", headers=AUTH, json=_body(tenant_id="acme", execution_ref="exec-1",
+    from dataclasses import replace
+    prov.intervention_store.append(replace(_rec("i-acme"), tenant_id="acme"))
+    prov.intervention_store.append(replace(_rec("i-beta"), tenant_id="beta"))
+    r1 = c.post("/api/outcomes", headers=AUTH, json=_body(intervention_id="i-acme", tenant_id="acme", execution_ref="exec-1",
                                                            mission_id="m1", source_app="crm"))
     assert r1.status_code == 200, r1.text
     j1 = r1.json()
     assert j1["authoritative"] is True and j1["demo"] is False and j1["recorded"] == 1
-    j2 = c.post("/api/outcomes", headers=AUTH, json=_body(tenant_id="acme", observed_reward=-5)).json()
+    j2 = c.post("/api/outcomes", headers=AUTH, json=_body(intervention_id="i-acme", tenant_id="acme")).json()
     assert j2["duplicate"] is True and j2["recorded"] == 1
     assert len(prov.outcome_events) == 1 and len(FileOutcomeStore(path).load()) == 1
     ev = prov.outcome_events[0]
     assert (ev.source_app, ev.action_kind, ev.candidate_id, ev.selected_intervention_id, ev.tenant_id) == \
         ("crm", "send_proposal", "cand", "i-ok", "acme")
-    # same key under another tenant is a different event
-    assert c.post("/api/outcomes", headers=AUTH, json=_body(tenant_id="beta")).json()["recorded"] == 2
+    # same key under another tenant (with that tenant's own receipt) is a different event
+    assert c.post("/api/outcomes", headers=AUTH,
+                  json=_body(intervention_id="i-beta", tenant_id="beta")).json()["recorded"] == 2
 
 
 # ── store-level dedupe, tenant round trip + isolation ────────────────────────────────
@@ -194,3 +198,181 @@ def test_promotion_cycle_is_tenant_scoped():
                                   tenant_id="A")
     assert prov.run_promotion_cycle(gate=GATE, tenant_id="A").result.n_test > 0
     assert prov.run_promotion_cycle(gate=GATE, tenant_id="B").result.n_test == 0
+
+
+# ═══ review round 2 ═══════════════════════════════════════════════════════════════
+import threading
+
+from agentic_os.intervention_record import FileInterventionStore
+
+
+def _tenant_env(monkeypatch, tmp_path, tenant):
+    monkeypatch.setenv("AGENTIC_OS_CONTROL_TOKEN", TOKEN)
+    ist = InMemoryInterventionStore()
+    r = _rec("i-t")
+    from dataclasses import replace
+    ist.append(replace(r, tenant_id=tenant))
+    prov = SampleProjectionProvider(intervention_store=ist)
+    return prov, TestClient(create_app(prov))
+
+
+# B1 tenant isolation
+@pytest.mark.parametrize("rec_tenant,req_tenant,ok", [
+    ("A", "A", True), ("A", "B", False), ("A", None, False), ("A", "", False), (None, "A", False),
+    (None, None, True), (None, "", True), ("", None, True), (None, "  ", True)])
+def test_receipt_tenant_must_equal_request_tenant(monkeypatch, tmp_path, rec_tenant, req_tenant, ok):
+    prov, c = _tenant_env(monkeypatch, tmp_path, rec_tenant)
+    r = c.post("/api/outcomes", headers=AUTH, json=_body(intervention_id="i-t", tenant_id=req_tenant))
+    assert (r.status_code == 200) == ok, r.text
+    assert len(prov.outcome_events) == (1 if ok else 0)
+    if not ok:
+        assert r.status_code == 409
+
+
+def test_same_receipt_cannot_mint_events_for_many_tenants(monkeypatch, tmp_path):
+    prov, c = _tenant_env(monkeypatch, tmp_path, "A")
+    for i, t in enumerate(["A", "B", None, ""]):
+        c.post("/api/outcomes", headers=AUTH, json=_body(intervention_id="i-t", tenant_id=t, idempotency_key=f"k{i}"))
+    assert [e.tenant_id for e in prov.outcome_events] == ["A"]
+
+
+def test_intervention_record_tenant_roundtrips_and_legacy_loads(tmp_path):
+    from dataclasses import replace
+    st = FileInterventionStore(str(tmp_path / "i.jsonl"))
+    st.append(replace(_rec("x"), tenant_id="A"))
+    assert st.all()[0].tenant_id == "A"
+    import json
+    line = json.loads(open(st.path).read())
+    del line["tenant_id"]
+    open(st.path, "w").write(json.dumps(line) + "\n")
+    assert st.all()[0].tenant_id is None
+
+
+# B2 wired from config, end to end through create_app
+def test_intervention_store_wired_from_env_end_to_end(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTIC_OS_CONTROL_TOKEN", TOKEN)
+    ipath, opath = str(tmp_path / "i.jsonl"), str(tmp_path / "o.jsonl")
+    monkeypatch.setenv("INTERVENTION_STORE_PATH", ipath)
+    monkeypatch.setenv("OUTCOME_STORE_PATH", opath)
+    monkeypatch.setenv("PROJECTS_PROVIDER", "sample")
+    c = TestClient(create_app())                           # no provider injected: select_provider wires it
+    assert c.post("/api/outcomes", headers=AUTH, json=_body()).status_code == 404     # no receipt yet
+    FileInterventionStore(ipath).append(_rec("i-ok"))      # trusted path writes the receipt
+    r = c.post("/api/outcomes", headers=AUTH, json=_body())
+    assert r.status_code == 200 and r.json()["recorded"] == 1
+    assert len(FileOutcomeStore(opath).load()) == 1
+
+
+def test_intervention_store_unset_stays_fail_closed(monkeypatch):
+    monkeypatch.setenv("AGENTIC_OS_CONTROL_TOKEN", TOKEN)
+    monkeypatch.delenv("INTERVENTION_STORE_PATH", raising=False)
+    monkeypatch.setenv("PROJECTS_PROVIDER", "sample")
+    monkeypatch.delenv("OUTCOME_STORE_PATH", raising=False)
+    assert TestClient(create_app()).post("/api/outcomes", headers=AUTH, json=_body()).status_code == 404
+
+
+# S1 idempotency payload hash
+def test_same_key_different_payload_is_409(env):
+    prov, c, _ = env
+    assert c.post("/api/outcomes", headers=AUTH, json=_body()).status_code == 200
+    r = c.post("/api/outcomes", headers=AUTH, json=_body(observed_reward=-0.9))
+    assert r.status_code == 409 and len(prov.outcome_events) == 1
+    r2 = c.post("/api/outcomes", headers=AUTH, json=_body())          # identical replay
+    assert r2.status_code == 200 and r2.json()["duplicate"] is True
+
+
+# S2 atomicity
+def test_concurrent_duplicate_appends_yield_one_event(tmp_path):
+    for st in (InMemoryOutcomeStore(), FileOutcomeStore(str(tmp_path / "c.jsonl"))):
+        n, barrier = 16, threading.Barrier(16)
+        def work():
+            barrier.wait()
+            st.append(OutcomeEvent(candidate_id="c", source_app="a", event_id="same"))
+        ts = [threading.Thread(target=work) for _ in range(n)]
+        [t.start() for t in ts]; [t.join() for t in ts]
+        assert len(st.load()) == 1
+
+
+def test_concurrent_http_duplicates_yield_one_event(env):
+    prov, c, path = env
+    barrier = threading.Barrier(8)
+    def work():
+        barrier.wait()
+        c.post("/api/outcomes", headers=AUTH, json=_body())
+    ts = [threading.Thread(target=work) for _ in range(8)]
+    [t.start() for t in ts]; [t.join() for t in ts]
+    assert len(prov.outcome_events) == 1 and len(FileOutcomeStore(path).load()) == 1
+
+
+# S3 numeric validation, both lanes
+BAD = [{"observed_reward": float("nan")}, {"observed_reward": 1e9}, {"observed_reward": -1e9},
+       {"reward_dimensions": {"a": 1e12}}, {"reward_dimensions": {f"k{i}": 1.0 for i in range(40)}},
+       {"reward_dimensions": {"k" * 200: 1.0}}, {"delay": -1.0}, {"delay": 1e12},
+       {"attribution_confidence": 2.0}, {"idempotency_key": "x" * 500}, {"source_app": "s" * 5000}]
+
+
+@pytest.mark.parametrize("bad", BAD)
+def test_bad_numbers_rejected_on_both_lanes(env, bad):
+    prov, c, _ = env
+    demo_bad = {k: v for k, v in bad.items() if k != "idempotency_key"}
+    import json as _j
+    raw = lambda d: _j.dumps(d, allow_nan=True)
+    h = {"Content-Type": "application/json"}
+    assert c.post("/api/outcomes", headers={**AUTH, **h}, content=raw(_body(**bad))).status_code == 422
+    assert prov.outcome_events == []
+    if demo_bad:
+        assert c.post("/api/outcomes", headers=h, content=raw({"observed_reward": 1, **demo_bad})).status_code == 422
+    assert all(sum(len(v) for v in [s]) == 0 for s in c.app.state.demo_outcomes._sessions.values())
+
+
+def test_oversized_body_rejected_413(env):
+    _, c, _ = env
+    r = c.post("/api/outcomes", json={"source_app": "x", "reward_dimensions": {f"k{i}": 1 for i in range(10)},
+                                      "note": "y" * 40000})
+    assert r.status_code == 413
+
+
+# S4 promotion route
+def test_promotion_route_apply_requires_token_and_tenant_scoped(env, monkeypatch):
+    prov, c, _ = env
+    monkeypatch.setenv("PROJECTS_ALLOW_POLICY_APPLY", "1")
+    url = "/api/projects/customer-ops/policy/promotion-cycle"
+    for _ in range(20):
+        prov.record_outcome_event(source_app="crm", action_kind="send_proposal", observed_reward=-0.6, tenant_id="A")
+        prov.record_outcome_event(source_app="crm", action_kind="schedule_call", observed_reward=0.9, tenant_id="A")
+    assert c.post(url, json={"apply": True}).status_code == 401
+    assert c.post(url, json={"tenant_id": "A"}).status_code == 401         # anonymous cannot read tenant A's evidence
+    assert c.post(url, json={}).json()["n_test"] == 0                      # anonymous dry run: untenanted only
+    assert c.post(url, headers=AUTH, json={"tenant_id": "B"}).json()["n_test"] == 0
+    assert c.post(url, headers=AUTH, json={"tenant_id": "A"}).json()["n_test"] > 0
+    monkeypatch.delenv("AGENTIC_OS_CONTROL_TOKEN")
+    assert c.post(url, json={"apply": True}).status_code == 503
+
+
+# S5 demo spoofing + global budget
+def test_rotating_session_header_does_not_widen_allowance(env):
+    _, c, _ = env
+    outs = [c.post("/api/outcomes", headers={"X-Demo-Session": f"s{i}"}, json={"observed_reward": 1}).json()
+            for i in range(130)]
+    assert sum(o["stored"] for o in outs) == 100                           # per-client cap, not per header
+
+
+def test_global_demo_budget():
+    sb = DemoOutcomeSandbox(cap_per_session=10, cap_per_group=10, global_cap=15, max_sessions=100)
+    got = sum(sb.add(f"s{i}", {}, group=f"ip{i // 2}")["stored"] for i in range(40) for _ in range(1))
+    assert got == 15 or got <= 15
+    for i in range(40):
+        sb.add(f"t{i}", {}, group=f"g{i}")
+    assert sum(len(sb.events(k)) for k in list(sb._sessions)) <= 15
+
+
+# S6 pinning derived dedupe
+def test_derived_outcome_dedupe_semantics_pinned():
+    st = InMemoryOutcomeStore()
+    mk = lambda r: OutcomeEvent(candidate_id="c", source_app="a", source_observation_ids=("ob",),
+                                selected_intervention_id="i", observed_reward=r)
+    st.append(mk(1.0)); st.append(mk(-1.0))     # same observation + same intervention => second is DROPPED
+    assert [e.observed_reward for e in st.load()] == [1.0]
+    st.append(OutcomeEvent(candidate_id="c", source_app="a", source_observation_ids=("ob",),
+                           selected_intervention_id="i2"))
+    assert len(st.load()) == 2

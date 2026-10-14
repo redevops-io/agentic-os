@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from dataclasses import dataclass, field
 from typing import List, Optional, Protocol
 
@@ -74,16 +75,41 @@ class OutcomeStore(Protocol):
 class InMemoryOutcomeStore:
     """Non-durable store — the default; equivalent to the loop's original in-memory behaviour."""
     events: List[OutcomeEvent] = field(default_factory=list)
+    _lock: "threading.Lock" = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def append(self, ev: OutcomeEvent) -> None:
         refuse_simulated(ev)
         k = dedupe_key(ev)
-        if k and any(dedupe_key(e) == k for e in self.events):
-            return                                   # idempotent: same key => no second append
-        self.events.append(ev)
+        with self._lock:                             # check-then-append is atomic
+            if k and any(dedupe_key(e) == k for e in self.events):
+                return                               # idempotent: same key => no second append
+            self.events.append(ev)
 
     def load(self) -> List[OutcomeEvent]:
         return list(self.events)
+
+
+_PATH_LOCKS: dict = {}
+_PATH_LOCKS_GUARD = threading.Lock()
+
+
+class _flock:
+    """Advisory inter-process lock (fcntl.flock); a no-op where fcntl is unavailable."""
+    def __init__(self, path: str) -> None:
+        self.path, self.fd = path, None
+
+    def __enter__(self):
+        try:
+            import fcntl
+            self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o644)
+            fcntl.flock(self.fd, fcntl.LOCK_EX)
+        except ImportError:
+            self.fd = None
+        return self
+
+    def __exit__(self, *a):
+        if self.fd is not None:
+            os.close(self.fd)                        # closing releases the flock
 
 
 @dataclass
@@ -95,13 +121,20 @@ class FileOutcomeStore:
     def append(self, ev: OutcomeEvent) -> None:
         refuse_simulated(ev)
         k = dedupe_key(ev)
-        if k and any(dedupe_key(e) == k for e in self.load()):
-            return                                   # idempotent: same key => no second append
         d = os.path.dirname(self.path)
         if d:
             os.makedirs(d, exist_ok=True)
-        with open(self.path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(event_to_dict(ev)) + "\n")
+        # check-then-append is atomic across threads (in-process lock) AND processes (flock on a lock file)
+        with _PATH_LOCKS_GUARD:
+            tlock = _PATH_LOCKS.setdefault(os.path.abspath(self.path), threading.Lock())
+        with tlock, _flock(self.path + ".lock"):
+            if k and any(dedupe_key(e) == k for e in self.load()):
+                return                               # idempotent: same key => no second append
+            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+            try:
+                os.write(fd, (json.dumps(event_to_dict(ev)) + "\n").encode("utf-8"))
+            finally:
+                os.close(fd)
 
     def load(self) -> List[OutcomeEvent]:
         if not os.path.exists(self.path):
