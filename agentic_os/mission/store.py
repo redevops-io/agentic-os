@@ -67,6 +67,26 @@ class EventStore:
                 self._events.append(ev)
                 self._seq = max(self._seq, ev.seq)
 
+    def refresh(self) -> int:
+        """Pick up events another process appended to the shared JSONL since this store last looked
+        (fork/join driver claims use it before deciding who may drive). Returns the number added."""
+        if not self._path or not os.path.exists(self._path):
+            return 0
+        added = 0
+        with self._lock:
+            with open(self._path, "r") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    d = json.loads(line)
+                    if d["seq"] > self._seq:
+                        self._events.append(Event(type=d["type"], mission_id=d["mission_id"],
+                                                  payload=d["payload"], seq=d["seq"], ts=d["ts"]))
+                        self._seq = d["seq"]
+                        added += 1
+        return added
+
     def append(self, type: str, mission_id: str, payload: dict[str, Any]) -> Event:
         with self._lock:
             self._seq += 1

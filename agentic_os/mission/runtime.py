@@ -256,6 +256,15 @@ class MissionRuntime:
         #: recorded information it never held.
         self._legacy_approvals: set[str] = set()
 
+    @property
+    def forks(self):
+        """Fork/join controller (docs/MISSION_FORK_JOIN.md): parallel branches inside a Mission."""
+        fc = getattr(self, "_forks", None)
+        if fc is None:
+            from .fork_join import ForkJoinController  # noqa: PLC0415 - lazy: forks are opt-in
+            fc = self._forks = ForkJoinController(self)
+        return fc
+
     # ── world state ──────────────────────────────────────────────────────────
     def _world(self, mission_id: str) -> WorldState:
         return WorldState(mission_id, self.store, belief.fuse)
@@ -541,8 +550,8 @@ class MissionRuntime:
                 granted, cap_ok = True, e.payload.get("capability")
             elif e.type == "ApprovalInvalidated":
                 granted = False
-            elif e.type == "NodeSucceeded":
-                cap = e.payload.get("capability")
+            elif e.type in ("NodeSucceeded", "BranchSucceeded") and not e.payload.get("late"):
+                cap = e.payload.get("capability") or (e.payload.get("receipt") or {}).get("capability")
                 res = e.payload.get("result")
                 # A staged / failure-shaped / executed=False result that reached NodeSucceeded (e.g. an
                 # approval marker let a staged preview through) is NOT proof the effect happened.
@@ -1078,6 +1087,9 @@ class MissionRuntime:
     def approve(self, mission_id: str, node_id: str, decision: str = "approve",
                 edit: dict | None = None, actor: str = "") -> Mission:
         m = self._missions[mission_id]
+        # fork-branch approvals are handled (and fail closed) by the fork controller, before the generic guards
+        if isinstance(node_id, str) and ":fork:" in node_id and self.forks.owns(mission_id, node_id):   # fork branch approvals
+            return self.forks.approve_branch(mission_id, node_id, decision, edit)
         # A terminal mission has nothing to approve: without this a bogus reject re-entered the saga of a
         # COMPENSATION_FAILED mission (consumed retry attempts, duplicate MissionOutcome). The node must also
         # be one that is actually awaiting a human.
