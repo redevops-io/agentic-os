@@ -10,6 +10,10 @@ executor is responsible for:
 """
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
+from collections import OrderedDict
 from typing import Any, Callable, Protocol
 
 from .types import Node
@@ -113,6 +117,39 @@ class Executor:
         # — then destroys the material and revokes the grant after use. Both None → behaviour unchanged.
         self.broker = broker
         self.credentials_for = credentials_for
+        # Compensation authorization. `evidence_probe(mission_id, node_id) -> dict` is wired by the runtime
+        # and reads the DURABLE event log (restart-safe): {"executed", "capability", "approved",
+        # "compensated_result"}. The in-memory ledger below is the fallback when no probe is wired.
+        self.evidence_probe: "Callable[[str, str], dict] | None" = None
+        # `undo_registry(capability) -> registered undo capability | None` is the TRUSTED declaration (the
+        # capability registry); the plan node's `undo` is planner-supplied and is only honoured when equal.
+        self.undo_registry: "Callable[[str], str | None] | None" = None
+        self._ledger: "OrderedDict[tuple, dict]" = OrderedDict()      # bounded (LRU)
+        self._compensated: "OrderedDict[tuple, dict]" = OrderedDict()  # bounded (LRU)
+
+    _LEDGER_CAP = 4096
+
+    def _bounded_put(self, d: "OrderedDict", k: tuple, v: dict) -> None:
+        d[k] = v
+        d.move_to_end(k)
+        while len(d) > self._LEDGER_CAP:
+            d.popitem(last=False)
+
+    @staticmethod
+    def _executed_ok(result: Any) -> bool:
+        """The forward result proves the effect happened: not staged, not failure-shaped, not executed=False."""
+        from .verify import proves_execution  # noqa: PLC0415
+        return proves_execution(result)
+
+    @staticmethod
+    def _input_hash(inputs: dict) -> str:
+        clean = {k: v for k, v in (inputs or {}).items() if not str(k).lstrip("_").startswith("approval")
+                 and k not in ("_mission", "_goal", "_node")}
+        try:
+            blob = json.dumps(clean, sort_keys=True, default=str)
+        except Exception:  # noqa: BLE001
+            blob = repr(sorted(map(str, clean)))
+        return hashlib.sha256(blob.encode()).hexdigest()
 
     def _mission_id(self) -> str:
         return getattr(self.monitor, "mission_id", "") or ""
@@ -239,24 +276,82 @@ class Executor:
                 self._release(node, grants, secrets)
         if self.monitor is not None:
             self.monitor.observe(node, result, isolation=isolation)
+        mid = str((inputs or {}).get("_mission") or "").strip()
+        if mid and node.capability and self._executed_ok(result):
+            appr = inputs.get("_approval")
+            self._bounded_put(self._ledger, (mid, node.id, node.capability, node.idempotency_key), {
+                "capability": node.capability, "input_sha256": self._input_hash(inputs),
+                "approved": isinstance(appr, dict) and appr.get("approved") is True,
+                "result": copy.deepcopy(result)})
         return result
+
+    def _skip(self, node: Node, reason: str) -> dict:
+        # Visible, non-executing outcome. `undo_error` makes the runtime record NodeCompensationFailed and
+        # set compensation_incomplete, so humans are told the forward effect remains.
+        return {"compensation_skipped": True, "status": "compensation_skipped", "executed": False,
+                "undo_error": f"compensation skipped for '{node.capability}': {reason}"}
+
+    def _evidence(self, node: Node, mission_id: str) -> dict:
+        if self.evidence_probe is not None:
+            return dict(self.evidence_probe(mission_id, node.id) or {})
+        led = self._ledger.get((mission_id, node.id, node.capability, node.idempotency_key))
+        if led is None:
+            return {"executed": False}
+        return {"executed": True, "capability": led["capability"], "approved": led["approved"],
+                "result": led["result"],
+                "compensated_result": self._compensated.get((mission_id, node.id, node.capability,
+                                                              node.idempotency_key))}
 
     def compensate(self, node: Node, *, mission_id: str | None = None) -> dict | None:
         """Run the node's undo capability (saga) — best effort; never raises past the caller.
 
-        An undo is part of the scope of the action it reverses, so it carries the runtime's approval marker
-        (``compensation``): an undo capability that is itself approval-gated (unblock_ip, cancel_subscription,
-        destroy_delta, ...) must EXECUTE during rollback rather than stage — otherwise a failed mission would
-        record ``NodeCompensated`` while leaving the forward side effect in place. Over HTTP the client mints
-        the signed approval token from this marker, so it cannot be forged by a caller."""
+        Fails closed (docs/APPROVAL_TOKENS.md, "Compensation authorization"). The undo is invoked only if
+        THIS node (mission + node id + capability) is shown to have EXECUTED in THIS mission: durable event
+        log via ``evidence_probe`` (restart-safe), else this executor's ledger (same rules). Otherwise no
+        operator call is made and a visible ``compensation_skipped`` result is returned. The signed
+        compensation marker is minted only when, in addition, ``node.undo`` equals the capability registry's
+        declared undo for the forward capability; a planner-attached undo is refused (``undo_not_registered``).
+        The undo's inputs come from the logged/ledgered forward result, never from plan-supplied fields.
+        Compensating twice returns the first outcome without a second undo call. Client-supplied
+        ``_approval*`` is never consulted."""
         if not node.undo:
             return None
-        inputs: dict = {"undo_of": node.capability, "result": node.result, "_node": node.id,
-                        "_approval": {"approved": True, "compensation": True}}
-        if mission_id:
-            inputs["_mission"] = mission_id
+        mid = (mission_id or "").strip()
+        if not mid:
+            return self._skip(node, "forward_not_executed: no mission id")
+        key = (mid, node.id, node.capability, node.idempotency_key)
         try:
-            return self.client.invoke(node.operator, node.undo, inputs,
-                                      f"{node.idempotency_key}:undo")
+            ev = self._evidence(node, mid)
+        except Exception as e:  # noqa: BLE001
+            return self._skip(node, f"forward_not_executed: evidence unavailable: {e}")
+        if not ev.get("executed"):
+            return self._skip(node, f"forward_not_executed: no record that node {node.id} executed in "
+                                    f"mission {mid}")
+        if not ev.get("capability") or ev.get("capability") != node.capability:
+            return self._skip(node, f"forward_not_executed: node {node.id} executed capability "
+                                    f"'{ev.get('capability')}', not '{node.capability}'")
+        prior = ev.get("compensated_result")
+        if prior is None:
+            prior = self._compensated.get(key)
+        if prior is not None:
+            return prior                      # idempotent: already compensated, no second undo call
+        registered = self.undo_registry(node.capability) if self.undo_registry is not None else None
+        if self.undo_registry is not None and registered != node.undo:
+            return self._skip(node, f"undo_not_registered: '{node.undo}' is not the registered undo of "
+                                    f"'{node.capability}'")
+        inputs: dict = {"undo_of": node.capability, "result": copy.deepcopy(ev.get("result")),
+                        "_node": node.id, "_mission": mid}
+        if self.undo_registry is not None:
+            # Trusted registry declares this undo and the forward step demonstrably executed: the undo is
+            # part of the scope of what ran, so it carries the compensation marker.
+            inputs["_approval"] = {"approved": True, "compensation": True}
+        try:
+            out = self.client.invoke(node.operator, node.undo, inputs,
+                                     f"{node.idempotency_key}:undo")
         except Exception as e:  # noqa: BLE001
             return {"undo_error": str(e)}
+        from .verify import result_failed, is_staged  # noqa: PLC0415
+        if isinstance(out, dict) and not out.get("undo_error") and not is_staged(out) \
+                and not result_failed(out)[0]:
+            self._bounded_put(self._compensated, key, out)
+        return out

@@ -72,3 +72,45 @@ only when the undo actually succeeded. An undo that staged (`pending_approval` /
 or raised is recorded as `NodeCompensationFailed` (with a `reason` and the raw result), the mission's
 `outcome` carries `compensation_incomplete: true` plus `compensation_remaining` (the nodes whose side effects
 remain), and `explain()` surfaces both. The saga stays best-effort and never raises past its caller.
+
+### Compensation authorization
+
+`Executor.compensate` is fail-closed. The compensation marker `{"approved": True, "compensation": True}` is
+minted only when ALL hold:
+
+1. **The forward step demonstrably executed in THIS mission**: non-blank mission id, matching node id, executed
+   capability and idempotency key; the logged `NodeSucceeded` result (or ledgered result) is not staged, not
+   failure-shaped, and not `executed: False`. Evidence is the durable event log through the `evidence_probe`
+   the runtime wires, so a restart (new executor, same log) still compensates. A staged preview that an
+   approval marker let reach `NodeSucceeded` does not count.
+2. **The undo is the registered one**: `node.undo` equals the capability registry's declared undo for the
+   forward capability (`undo_registry`, wired by the runtime). A planner-attached undo is refused with
+   `undo_not_registered`; with no registry wired no marker is ever minted.
+3. Undo inputs (`result`) come from the logged/ledgered forward result, never from plan node fields.
+
+Otherwise no operator call is made and `{"compensation_skipped": True, "undo_error": "<reason>"}` is returned
+(`forward_not_executed` / `undo_not_registered`); the saga records `NodeCompensationFailed` and
+`compensation_incomplete`. Under these conditions a forward step admitted by policy without a human gate
+(charge -> approval-gated refund) is rolled back with the marker; a human `ApprovalGranted` is recorded
+(`approved`) but is not required. `ApprovalInvalidated` does not block undoing a step that did execute; it never
+authorises undoing one that did not. Double compensation is idempotent (also across restarts via
+`NodeCompensated`). Client-supplied `_approval*` is never consulted.
+
+Limits operators/humans must know:
+- Multi-replica runtimes, or a crash between the undo call and `NodeCompensated` being persisted, can call the
+  undo twice: operators MUST honour the stable `{idempotency_key}:undo` key.
+- A forward success that crashes before `NodeSucceeded` is persisted gets NO undo and NO marker (fail-closed);
+  the effect is left behind and must be reconciled by an operator/human.
+- The in-memory ledger is a best-effort fallback for executors without a probe, bounded (LRU 4096): after
+  eviction (or a process restart) a completed step is NOT undone (fail-closed: `compensation_skipped` +
+  `NodeCompensationFailed` / `compensation_incomplete`). The probe path uses the durable log and has no such limit.
+- "Executed" is judged by the strict `verify.proves_execution`: empty `{}`, truthy `staged`, status in
+  pending_approval / awaiting_approval / awaiting_connector / staged / held / pending / queued (exact matches; other `awaiting_*` strings are not rejected), `executed: False`, failure shapes, or any of
+  these nested under `result` / `results` / `items` all mean NOT executed (the commit-path classifiers are unchanged).
+- Production wiring: `MissionRuntime._executor_for` wires the probe and registry for every executor the runtime
+  uses. A custom executor that bypasses it has no registry, so its undo runs WITHOUT the marker (a gated undo
+  stages visibly).
+- One executor serves one runtime; binding a second runtime's event log raises.
+
+The Go port (`go/mission`) does not mirror this: its `Compensate` never mints an approval marker (it sends only
+`undo_of`/`result`), so there is no unconditional-approval path to guard.

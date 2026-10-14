@@ -39,6 +39,35 @@ def is_staged(result) -> bool:
     return isinstance(result, dict) and str(result.get("status", "")).strip().lower() in STAGED_STATUSES
 
 
+_NOT_EXECUTED_STATUSES = STAGED_STATUSES | frozenset({"staged", "held", "pending", "queued"})
+
+
+def proves_execution(result, *, _depth: int = 0) -> bool:
+    """STRICT check used to authorise compensation: True only if ``result`` positively looks like an executed
+    effect. Stricter than ``is_staged``/``result_failed`` (which the commit path keeps unchanged): an empty
+    dict, a truthy ``staged``, a staged-like status (pending_approval/awaiting_approval/awaiting_connector/staged/held/pending/queued, matched exactly),
+    ``executed is False``, a failure shape, or any of those nested under ``result``/``results``/``items``
+    all mean NOT executed."""
+    if not isinstance(result, dict) or not result or _depth > _MAX_DEPTH:
+        return False
+    if result.get("staged") or result.get("executed") is False:
+        return False
+    if str(result.get("status", "")).strip().lower() in _NOT_EXECUTED_STATUSES:
+        return False
+    if is_staged(result) or result_failed(result)[0]:
+        return False
+    nested = result.get("result")
+    if isinstance(nested, dict) and not proves_execution(nested, _depth=_depth + 1):
+        return False
+    for nk in _NESTED_KEYS:
+        seq = result.get(nk)
+        if isinstance(seq, list):
+            for el in seq:
+                if isinstance(el, dict) and not proves_execution(el, _depth=_depth + 1):
+                    return False
+    return True
+
+
 _HTTP_ERROR_DETAILS = frozenset({
     "forbidden", "unauthorized", "not found", "not authenticated", "bad request", "method not allowed",
     "conflict", "unprocessable entity", "too many requests", "internal server error", "bad gateway",
