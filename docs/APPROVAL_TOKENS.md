@@ -105,7 +105,7 @@ Limits operators/humans must know:
   eviction (or a process restart) a completed step is NOT undone (fail-closed: `compensation_skipped` +
   `NodeCompensationFailed` / `compensation_incomplete`). The probe path uses the durable log and has no such limit.
 - "Executed" is judged by the strict `verify.proves_execution`: empty `{}`, truthy `staged`, status in
-  pending_approval / staged / held / awaiting_* / pending / queued, `executed: False`, failure shapes, or any of
+  pending_approval / awaiting_approval / awaiting_connector / staged / held / pending / queued (exact matches; other `awaiting_*` strings are not rejected), `executed: False`, failure shapes, or any of
   these nested under `result` / `results` / `items` all mean NOT executed (the commit-path classifiers are unchanged).
 - Production wiring: `MissionRuntime._executor_for` wires the probe and registry for every executor the runtime
   uses. A custom executor that bypasses it has no registry, so its undo runs WITHOUT the marker (a gated undo

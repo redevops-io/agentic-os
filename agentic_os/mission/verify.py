@@ -45,7 +45,7 @@ _NOT_EXECUTED_STATUSES = STAGED_STATUSES | frozenset({"staged", "held", "pending
 def proves_execution(result, *, _depth: int = 0) -> bool:
     """STRICT check used to authorise compensation: True only if ``result`` positively looks like an executed
     effect. Stricter than ``is_staged``/``result_failed`` (which the commit path keeps unchanged): an empty
-    dict, a truthy ``staged``, a staged-like status (pending_approval/staged/held/awaiting_*...),
+    dict, a truthy ``staged``, a staged-like status (pending_approval/awaiting_approval/awaiting_connector/staged/held/pending/queued, matched exactly),
     ``executed is False``, a failure shape, or any of those nested under ``result``/``results``/``items``
     all mean NOT executed."""
     if not isinstance(result, dict) or not result or _depth > _MAX_DEPTH:
