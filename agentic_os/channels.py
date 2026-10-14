@@ -17,18 +17,55 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
 
+_SECRET_RE = re.compile(r"(bot\d+:[A-Za-z0-9_-]+|Bearer\s+\S+|Basic\s+\S+|Bot\s+\S+|xox[a-z]-[\w-]+|AC[0-9a-fA-F]{32}|[0-9a-f]{32})")
+
+
+def redact(text: str) -> str:
+    """Strip anything token-shaped from an error string before it is stored or logged."""
+    return _SECRET_RE.sub("[redacted]", str(text))
+
+
+@dataclass
+class SendResult:
+    """Outcome of one channel send. ``permanent`` is only meaningful when ``ok`` is False: a 4xx (except 408/429)
+    or a provider-level rejection will not succeed on retry; 5xx / 429 / timeouts / network errors will."""
+    ok: bool
+    status: int = 0
+    message_id: str = ""
+    error: str = ""
+    permanent: bool = False
+
+
+def classify_status(status: int) -> bool:
+    """True when an HTTP status is a PERMANENT failure (do not retry)."""
+    if status == 0 or status in (408, 425, 429) or status >= 500:
+        return False
+    return 400 <= status < 500
+
+
 def _http_json(url: str, payload: dict | None = None, headers: dict | None = None,
-               timeout: float = 15.0) -> tuple[int, dict]:
-    """POST (or GET) JSON, never raising — returns (status, body|{"error":...})."""
-    data = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request(url, data=data, method="POST" if data else "GET",
-                                 headers={"Content-Type": "application/json", **(headers or {})})
+               timeout: float = 15.0, form: bool = False) -> tuple[int, dict]:
+    """POST (or GET) JSON — or form-urlencoded when ``form`` (Twilio) — never raising. Returns
+    (status, body|{"error":...}); status 0 means timeout/network failure. Error text is redacted."""
+    ctype = "application/json"
+    if payload is None:
+        data = None
+    elif form:
+        data = urllib.parse.urlencode(payload).encode()
+        ctype = "application/x-www-form-urlencoded"
+    else:
+        data = json.dumps(payload).encode()
+    req = urllib.request.Request(url, data=data, method="POST" if data is not None else "GET",
+                                 headers={"Content-Type": ctype, **(headers or {})})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             raw = r.read().decode("utf-8") or "{}"
@@ -36,8 +73,25 @@ def _http_json(url: str, payload: dict | None = None, headers: dict | None = Non
                 return r.status, json.loads(raw)
             except Exception:
                 return r.status, {"raw": raw}
-    except Exception as e:  # noqa: BLE001
-        return 0, {"error": str(e)}
+    except urllib.error.HTTPError as e:
+        try:
+            body = json.loads(e.read().decode("utf-8") or "{}")
+        except Exception:  # noqa: BLE001
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        body.setdefault("error", f"http {e.code}")
+        return e.code, body
+    except Exception as e:  # noqa: BLE001 - timeouts, DNS, TLS; never echo the URL (it can carry a token)
+        return 0, {"error": redact(type(e).__name__)}
+
+
+def _result(status: int, body: dict, id_of) -> SendResult:
+    """Normalise (status, body) into a SendResult; ``id_of(body)`` extracts the provider message id."""
+    if 200 <= status < 300:
+        return SendResult(True, status, str(id_of(body) or ""))
+    return SendResult(False, status, "", redact(str(body.get("error") or f"http {status}"))[:200],
+                      permanent=classify_status(status))
 
 
 @dataclass
@@ -61,12 +115,16 @@ class TelegramChannel:
     def enabled(self) -> bool:
         return bool(self.token)
 
-    def send(self, text: str, reply_to: str | None = None) -> None:
+    def send(self, text: str, reply_to: str | None = None) -> SendResult:
         to = reply_to or self.chat_id
         if not (self.token and to):
-            return
-        _http_json(f"https://api.telegram.org/bot{self.token}/sendMessage",
-                   {"chat_id": to, "text": text})
+            return SendResult(False, 0, error="not configured", permanent=True)
+        st, body = _http_json(f"https://api.telegram.org/bot{self.token}/sendMessage",
+                              {"chat_id": to, "text": text}, timeout=10.0)
+        r = _result(st, body, lambda b: (b.get("result") or {}).get("message_id"))
+        if r.ok and body.get("ok") is False:
+            return SendResult(False, st, error="telegram rejected", permanent=True)
+        return r
 
     def poll(self) -> list[Inbound]:
         if not self.token:
@@ -99,12 +157,17 @@ class SlackChannel:
     def enabled(self) -> bool:
         return bool(self.token and self.channel)
 
-    def send(self, text: str, reply_to: str | None = None) -> None:
+    def send(self, text: str, reply_to: str | None = None) -> SendResult:
         if not self.enabled:
-            return
-        _http_json("https://slack.com/api/chat.postMessage",
-                   {"channel": reply_to or self.channel, "text": text},
-                   headers={"Authorization": f"Bearer {self.token}"})
+            return SendResult(False, 0, error="not configured", permanent=True)
+        st, body = _http_json("https://slack.com/api/chat.postMessage",
+                              {"channel": reply_to or self.channel, "text": text},
+                              headers={"Authorization": f"Bearer {self.token}"}, timeout=10.0)
+        if 200 <= st < 300 and body.get("ok") is False:     # Slack reports most failures as 200 + ok:false
+            err = str(body.get("error") or "slack error")
+            transient = err in ("ratelimited", "internal_error", "service_unavailable", "fatal_error", "request_timeout")
+            return SendResult(False, st, error=redact(err)[:200], permanent=not transient)
+        return _result(st, body, lambda b: b.get("ts"))
 
     def poll(self) -> list[Inbound]:
         return []  # inbound Slack is webhook-only; out of scope for the in-process gateway
@@ -126,12 +189,13 @@ class DiscordChannel:
     def _headers(self) -> dict:
         return {"Authorization": f"Bot {self.token}"}
 
-    def send(self, text: str, reply_to: str | None = None) -> None:
+    def send(self, text: str, reply_to: str | None = None) -> SendResult:
         chan = reply_to or self.channel_id
         if not (self.token and chan):
-            return
-        _http_json(f"https://discord.com/api/v10/channels/{chan}/messages",
-                   {"content": text}, headers=self._headers())
+            return SendResult(False, 0, error="not configured", permanent=True)
+        st, body = _http_json(f"https://discord.com/api/v10/channels/{chan}/messages",
+                              {"content": text}, headers=self._headers(), timeout=10.0)
+        return _result(st, body, lambda b: b.get("id"))
 
     def poll(self) -> list[Inbound]:
         if not self.enabled:
@@ -164,16 +228,16 @@ class SmsChannel:
     def enabled(self) -> bool:
         return bool(self.sid and self.token and self.from_ and self.to)
 
-    def send(self, text: str, reply_to: str | None = None) -> None:
+    def send(self, text: str, reply_to: str | None = None) -> SendResult:
         if not self.enabled:
-            return
+            return SendResult(False, 0, error="not configured", permanent=True)
         import base64
         auth = base64.b64encode(f"{self.sid}:{self.token}".encode()).decode()
-        # Twilio wants form-encoding; _http_json posts JSON, so callers using SMS in production should
-        # route through the messaging connector. Kept here for parity + the interface; body assembled plainly.
-        _http_json(f"https://api.twilio.com/2010-04-01/Accounts/{self.sid}/Messages.json",
-                   {"To": reply_to or self.to, "From": self.from_, "Body": text},
-                   headers={"Authorization": f"Basic {auth}"})
+        # Twilio's Messages API takes application/x-www-form-urlencoded, not JSON.
+        st, body = _http_json(f"https://api.twilio.com/2010-04-01/Accounts/{self.sid}/Messages.json",
+                              {"To": reply_to or self.to, "From": self.from_, "Body": text},
+                              headers={"Authorization": f"Basic {auth}"}, timeout=10.0, form=True)
+        return _result(st, body, lambda b: b.get("sid"))
 
     def poll(self) -> list[Inbound]:
         return []  # inbound SMS is webhook-only; out of scope for the in-process gateway
@@ -208,8 +272,8 @@ class Notifier:
         line = f"⏳ approval needed · {ap.module}: {ap.summary} (id {ap.id})"
         if getattr(ap, "findings", None):
             line += f"\n⚠ safety: {'; '.join(ap.findings)}"
-        line += "\nreply: approve " + ap.id + "  |  reject " + ap.id
-        self.send(line)
+        line += "\nreview in the control plane (replying here does not approve)"
+        self.send(line)  # NB: replying does not approve anything — approval is only via the authenticated surface
 
     def approval_resolved(self, ap) -> None:
         mark = "✅" if ap.status == "approved" else "🚫"

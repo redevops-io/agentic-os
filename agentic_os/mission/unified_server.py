@@ -26,6 +26,8 @@ from .unified_demo import build_unified_runtime, connections_view, seed_mission
 # a running server just keeps the one runtime).
 _STORE = os.environ.get("UNIFIED_STORE") or os.path.join(tempfile.gettempdir(), "unified_desktop_events.jsonl")
 _RT, _ = build_unified_runtime(_STORE)
+from . import gate_notify as _gate_notify
+_gate_notify.install_from_env(_RT)      # opt-in (AGENTIC_OS_GATE_NOTIFY=1 + a recipient); a no-op otherwise
 _MISSIONS: List[str] = []
 
 # The deployed agents the bridge reaches (same URL map the console uses). Empty in local/demo mode → the
@@ -63,8 +65,17 @@ def _needs_you() -> List[Dict[str, Any]]:
             or "A consequential cross-domain action needs your sign-off.",
             "goal": _RT.repo.goal(mid), "decisions": ["approve", "reject"],
             "evidence": pend.get("evidence"),
+            "expired": bool(pend.get("expired")),     # stale: notified-and-timed-out, still awaiting a human
+            "notices": _notices(mid, pend.get("node_id")),
         })
     return items
+
+
+def _notices(mid: str, node_id: Any) -> List[Dict[str, Any]]:
+    """Read-only delivery receipts (delivered/failed/acknowledged) when gate notifications are enabled."""
+    from . import gate_notify
+    n = gate_notify.current()
+    return n.outbox.notices_for(mid, str(node_id)) if n else []
 
 
 def _build_app():
@@ -92,6 +103,35 @@ def _build_app():
                     "actions": [{"label": "Review approval", "kind": "open_needs_you"}]}
         return {"reply": "Try: \"sync the pilot account from revenue into support\".",
                 "mission_id": None, "actions": []}
+
+    @app.post("/api/gate-notify/callback")
+    async def gate_notify_callback(request: Request):
+        """Signed acknowledgement callback. Records 'seen' only; it can never approve (see GATE_NOTIFICATIONS.md)."""
+        from . import gate_notify
+        n = gate_notify.current()
+        secret = os.environ.get(gate_notify.ENV_CALLBACK_SECRET, "")
+        if n is None or not secret:
+            raise HTTPException(503, "gate notification callbacks are not enabled")
+        # Explicitly public-by-signature (no bearer): it can ONLY record 'acknowledged', never approve.
+        if "application/json" not in request.headers.get("content-type", "").lower():
+            raise HTTPException(415, "content-type must be application/json")
+        try:
+            declared = int(request.headers.get("content-length", "0") or 0)
+        except ValueError:
+            raise HTTPException(400, "bad content-length")
+        if declared > gate_notify.MAX_CALLBACK_BYTES:
+            raise HTTPException(413, "body too large")
+        raw = b""
+        async for chunk in request.stream():
+            raw += chunk
+            if len(raw) > gate_notify.MAX_CALLBACK_BYTES:
+                raise HTTPException(413, "body too large")
+        res = n.handle_callback(raw, request.headers.get("x-aos-timestamp", ""),
+                                request.headers.get("x-aos-signature", ""), secret)
+        if not res["ok"]:
+            raise HTTPException(401 if res["reason"] in ("bad signature", "stale timestamp", "replay", "bad timestamp") else 400,
+                                res["reason"])
+        return res
 
     @app.get("/api/needs-you")
     def needs_you():
