@@ -90,7 +90,7 @@ MODULE_DATA: dict[str, dict] = {
             {"label": "Open tickets", "value": "8", "note": "3 awaiting customer"},
             {"label": "Avg first response", "value": "4m", "note": "SLA 30m"},
             {"label": "Resolved this week", "value": "41", "note": "+12% WoW"},
-            {"label": "CSAT", "value": "4.8", "note": "of 5.0 · 96 ratings"},
+            {"label": "CSAT", "value": "unknown", "note": "no customer feedback collected", "csat_source": "unknown", "csat_n": 0},
         ],
         "approval": None,
         "feed": {

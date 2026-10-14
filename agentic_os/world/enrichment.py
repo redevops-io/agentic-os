@@ -64,7 +64,8 @@ class HunterProvider:
     def verify_email(self, email: str) -> Dict[str, Any]:
         d = _get(f"https://api.hunter.io/v2/email-verifier?{urllib.parse.urlencode({'email': email, 'api_key': self._key})}").get("data", {})
         status = d.get("status")
-        return {"status": status, "score": (d.get("score") or 0) / 100.0,
+        raw = d.get("score")
+        return {"status": status, "score": (raw / 100.0 if isinstance(raw, (int, float)) else None),
                 "verified": status in ("valid", "accept_all")}
 
 
