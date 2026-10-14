@@ -32,6 +32,32 @@ inputs, so an approved retry is not served a cached staged result. Identical ret
 - Unauthenticated read capabilities on `/invoke`/`/capabilities`; this adds no caller authentication.
 - Secret rotation, and a leaked secret (it can mint any approval); a token is not bound to a caller identity.
 
+## Mission / node binding semantics (fail closed)
+
+The signed payload carries `mission_id` and `node_id`. The verifier decides strictness from the **signed payload**,
+never from what the caller sends:
+
+- A dimension that is **non-null in the payload is bound**. The `/invoke` body must present a non-empty value
+  equal to it (constant-time compare, normalised to `str`). A missing, `null`, empty or whitespace-only value is a
+  mismatch, so the call stays staged (`pending_approval`). Omitting `mission_id`/`node_id` can no longer skip the check.
+- A dimension that is **null in the payload is unbound** (the minter had no mission/node, e.g. a direct operator
+  call outside a mission). Any presented value, or none, is accepted for that dimension. Blank ids are normalised to
+  null at mint time. An unbound token is valid for any mission/node and is only as safe as its other bindings
+  (operator, capability, input hash, 300s expiry, single use); a verifier cannot distinguish "attacker omitted"
+  from "legitimately unbound", which is exactly why binding is read from the signed payload.
+- Only the `mission_id` / `node_id` fields of the JSON body are consulted. `inputs._mission`, `inputs._node` and
+  HTTP headers are never trusted for binding.
+- Backward compatible: tokens minted by 0.3.29 already carry these fields, so they verify unchanged until expiry.
+  No new payload field is required. For approved nodes the runtime sets `_mission` and `_node`, and `HTTPOperatorClient` sends both as `mission_id` / `node_id` (`_node` is set only when an approval exists). Node inputs can never override the reserved runtime keys `_mission`, `_node`, `_goal` (ignored with a warning), and the client refuses to mint a token when an approval is present but `_mission` is missing or blank (the call stays staged), so the runtime cannot mint an unbound-mission token by accident. Non-string ids are coerced to `str`.
+- Replay protection and idempotency are unchanged.
+
+## Known limitation: per-process replay/idempotency state
+
+`ReplayGuard` (single-use nonces) and the Operator idempotency cache are in-memory and **per process**. With more
+than one replica a replayed token or retried idempotency key can land on another replica and be accepted or
+re-executed. Run a **single replica** per operator (or sticky-route by operator) until a shared store implementing
+`approval.SharedStore` is wired in; set `AGENTIC_OS_REPLICAS` so a warning is logged if that is violated.
+
 ## Saga compensation (rollback) and gated undo capabilities
 
 An undo capability can itself be approval-gated (e.g. `unblock_ip`, `cancel_subscription`, `destroy_delta`).

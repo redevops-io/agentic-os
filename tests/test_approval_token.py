@@ -24,7 +24,7 @@ def _mint(inputs=None, **o):
 
 
 def _verify(tok, inputs=None, secret=S, **o):
-    a = dict(operator="op", capability="refund")
+    a = dict(operator="op", capability="refund", mission_id="m1", node_id="n1")
     a.update(o)
     return verify_approval_token(secret, tok, inputs=inputs or {"inv": "INV-1", "amount": 10}, **a)
 
@@ -87,7 +87,8 @@ def test_no_secret_fails_closed(monkeypatch):
 def test_secret_read_at_call_time(monkeypatch):
     monkeypatch.setenv("AGENTIC_OS_APPROVAL_SECRET", "late")
     tok = mint_approval_token(None, **KW, inputs={}, marker=MARK)
-    assert tok and verify_approval_token(None, tok, operator="op", capability="refund", inputs={}) == MARK
+    assert tok and verify_approval_token(None, tok, operator="op", capability="refund", inputs={},
+                                         mission_id="m1", node_id="n1") == MARK
 
 
 # ─── /invoke forgery + token handling ────────────────────────────────────────
@@ -128,6 +129,118 @@ def test_valid_token_injects_marker_once_and_binds_inputs(monkeypatch):
     assert c.post("/invoke", json=body({"inv": "INV-1", "amount": 999}, tok, "k1")).json()["result"]["status"] == "pending_approval"
     assert c.post("/invoke", json=body(ins, tok, "k2")).json()["result"]["executed"] is True
     assert c.post("/invoke", json=body(ins, tok, "k3")).json()["result"]["status"] == "pending_approval"  # replay
+
+
+# ─── fail-closed mission/node binding (F1) ───────────────────────────────────
+INS = {"inv": "INV-1", "amount": 10}
+
+
+def _bound_op():
+    ran = {"executed": 0, "staged": 0}
+
+    def refund(i):
+        if i.get("_approval"):
+            ran["executed"] += 1
+            return {"status": "done", "executed": True}
+        ran["staged"] += 1
+        return {"status": "pending_approval", "executed": False}
+    op = Operator("op", [capability("refund", refund, side_effecting=True, outputs={"refunded": "x"})])
+    app = FastAPI(); app.include_router(op.router())
+    return TestClient(app), ran
+
+
+def _post(c, tok, key, headers=None, inputs=None, **extra):
+    return c.post("/invoke", headers=headers or {}, json={
+        "capability": "refund", "inputs": inputs if inputs is not None else dict(INS),
+        "approval_token": tok, "idempotency_key": key, **extra}).json()["result"]
+
+
+@pytest.mark.parametrize("extra", [
+    {},                                                    # mission_id omitted (node ok below)
+    {"mission_id": None}, {"mission_id": ""}, {"mission_id": "   "}, {"mission_id": "B"},
+])
+def test_f1_missing_or_wrong_mission_stays_staged(monkeypatch, extra):
+    monkeypatch.setenv("AGENTIC_OS_APPROVAL_SECRET", S)
+    c, ran = _bound_op()
+    tok = _mint()                                          # bound to m1 / n1
+    assert _post(c, tok, "k", node_id="n1", **extra)["status"] == "pending_approval"
+    assert ran["executed"] == 0
+
+
+@pytest.mark.parametrize("extra", [{}, {"node_id": None}, {"node_id": ""}, {"node_id": " \t"}, {"node_id": "n2"}])
+def test_f1_missing_or_wrong_node_stays_staged(monkeypatch, extra):
+    monkeypatch.setenv("AGENTIC_OS_APPROVAL_SECRET", S)
+    c, ran = _bound_op()
+    assert _post(c, _mint(), "k", mission_id="m1", **extra)["status"] == "pending_approval"
+    assert ran["executed"] == 0
+
+
+def test_f1_inputs_mission_and_header_smuggling_stay_staged(monkeypatch):
+    monkeypatch.setenv("AGENTIC_OS_APPROVAL_SECRET", S)
+    c, ran = _bound_op()
+    tok = _mint()
+    # no body mission_id/node_id, but _mission/_node smuggled through inputs and headers
+    smuggled = {**INS, "_mission": "m1", "_node": "n1"}
+    assert _post(c, tok, "k1", inputs=smuggled)["status"] == "pending_approval"
+    hdr = {"X-Mission-Id": "m1", "X-Node-Id": "n1", "Mission-Id": "m1", "Node-Id": "n1"}
+    assert _post(c, tok, "k2", headers=hdr)["status"] == "pending_approval"
+    assert ran["executed"] == 0
+
+
+def test_f1_positive_executes_exactly_once_via_router(monkeypatch):
+    monkeypatch.setenv("AGENTIC_OS_APPROVAL_SECRET", S)
+    c, ran = _bound_op()
+    tok = _mint()
+    ok = dict(mission_id="m1", node_id="n1")
+    assert _post(c, tok, "k1", **ok)["executed"] is True
+    assert _post(c, tok, "k2", **ok)["status"] == "pending_approval"      # replay unchanged
+    assert ran["executed"] == 1
+
+
+def test_f1_real_mint_code_via_http_client(monkeypatch):
+    """HTTPOperatorClient (real mint) -> Operator.router(): the 3 F1 cases stay staged, the normal call runs once."""
+    monkeypatch.setenv("AGENTIC_OS_APPROVAL_SECRET", S)
+    c, ran = _bound_op()
+    sent = []
+
+    def transport(mutate):
+        def t(url, body, headers, timeout):
+            sent.append(dict(body)); b = mutate(dict(body))
+            return c.post("/invoke", json=b, headers=headers).json()
+        return t
+    def call(mutate, key):
+        cl = HTTPOperatorClient({"op": "http://op"}, transport=transport(mutate))
+        return cl.invoke("op", "refund", {**INS, "_mission": "mA", "_node": "n1", "_approval": MARK}, key)
+    assert call(lambda b: {k: v for k, v in b.items() if k != "mission_id"}, "a")["status"] == "pending_approval"
+    assert call(lambda b: {**b, "mission_id": None, "inputs": {**b["inputs"], "_mission": "mB"}}, "b")["status"] == "pending_approval"
+    assert call(lambda b: {k: v for k, v in b.items() if k != "node_id"}, "c")["status"] == "pending_approval"
+    assert ran["executed"] == 0
+    assert call(lambda b: b, "d")["executed"] is True and ran["executed"] == 1
+    assert sent[-1]["mission_id"] == "mA" and sent[-1]["node_id"] == "n1"  # legit caller carries both
+
+
+def test_unbound_token_semantics(monkeypatch):
+    """A dimension the minter left null is unbound (any/no presented value ok); a bound one never is. Decided by
+    the SIGNED payload, so v0.3.29 tokens (null or set) keep verifying unchanged."""
+    unb = _mint(mission_id=None, node_id=None)
+    assert _verify(unb, mission_id=None, node_id=None) == MARK
+    assert _verify(unb, mission_id="B", node_id="n9") == MARK
+    half = _mint(mission_id="m1", node_id=None)
+    assert _verify(half, mission_id="m1", node_id=None) == MARK
+    assert _verify(half, mission_id=None) is None and _verify(half, mission_id="m2") is None
+    for blank in ("", "  "):                                # blank at mint time == unbound, never bound-to-blank
+        assert _verify(_mint(mission_id=blank, node_id=blank), mission_id=None, node_id=None) == MARK
+
+
+def test_legacy_v0_3_29_token_payload_still_verifies():
+    import base64, hashlib, hmac, json, time
+    pl = json.dumps({"operator": "op", "capability": "refund", "mission_id": "m1", "node_id": "n1",
+                     "inputs_sha256": inputs_hash(INS), "marker": MARK, "exp": time.time() + 60,
+                     "nonce": "abc"}, sort_keys=True, separators=(",", ":")).encode()
+    b = lambda x: base64.urlsafe_b64encode(x).rstrip(b"=").decode()
+    tok = b(pl) + "." + b(hmac.new(S.encode(), pl, hashlib.sha256).digest())
+    assert _verify(tok, mission_id="m1", node_id="n1") == MARK
+    assert _verify(tok, mission_id=None, node_id=None) is None
 
 
 # ─── end-to-end: mission over HTTPOperatorClient ─────────────────────────────
@@ -245,3 +358,50 @@ def test_e2e_http_saga_gated_undo_without_secret_stays_visibly_unexecuted(monkey
     comp = [e for e in tl if e["type"] == "NodeCompensationFailed"]
     assert comp and comp[0]["payload"]["result"].get("executed") is False   # the staged result is visible
     assert m.outcome["compensation_incomplete"] is True
+
+
+# ─── reserved keys + mint-side refusal of unbound-mission tokens ─────────────
+def _client_to(c):
+    return HTTPOperatorClient({"op": "http://op"}, transport=lambda url, body, h, t: c.post("/invoke", json=body, headers=h).json())
+
+
+@pytest.mark.parametrize("evil", [None, "", "mB", 7])
+def test_node_inputs_cannot_override_reserved_keys_end_to_end(monkeypatch, evil):
+    from types import SimpleNamespace
+    monkeypatch.setenv("AGENTIC_OS_APPROVAL_SECRET", S)
+    rt = MissionRuntime(pilots.build_pilot_registry(pilots.build_pilot_operators()), Executor(HTTPOperatorClient({})))
+    m = rt.create_mission("g", policy_refs=["*"])
+    node = SimpleNamespace(id="n1", capability="refund", inputs={**INS, "_mission": evil, "_node": evil, "_goal": evil},
+                           operator="op")
+    resolved = rt._resolve_inputs(m, rt._world(m.id), node)
+    assert resolved["_mission"] == m.id and resolved["_goal"] == m.goal and "_node" not in resolved
+    resolved.update(_approval=MARK, _node="n1")
+    c, ran = _bound_op()
+    cl = _client_to(c)
+    assert cl.invoke("op", "refund", resolved, "k")["executed"] is True and ran["executed"] == 1
+    # the minted token is bound to the real mission: cannot execute for another mission
+    sent = {}
+    cl2 = HTTPOperatorClient({"op": "http://op"}, transport=lambda u, b, h, t: sent.update(b) or {})
+    cl2.invoke("op", "refund", dict(resolved), "k2")
+    assert _post(c, sent["approval_token"], "k3", mission_id="other", node_id="n1")["status"] == "pending_approval"
+    assert ran["executed"] == 1
+
+
+@pytest.mark.parametrize("mid", [None, "", "  "])
+def test_client_refuses_to_mint_without_mission(monkeypatch, mid):
+    monkeypatch.setenv("AGENTIC_OS_APPROVAL_SECRET", S)
+    c, ran = _bound_op()
+    ins = {**INS, "_approval": MARK, "_node": "n1"}
+    if mid is not None:
+        ins["_mission"] = mid
+    sent = {}
+    HTTPOperatorClient({"op": "http://op"}, transport=lambda u, b, h, t: sent.update(b) or {}).invoke("op", "refund", ins, "k")
+    assert "approval_token" not in sent
+    assert _client_to(c).invoke("op", "refund", ins, "k")["status"] == "pending_approval" and ran["executed"] == 0
+
+
+def test_client_coerces_non_string_mission_id(monkeypatch):
+    monkeypatch.setenv("AGENTIC_OS_APPROVAL_SECRET", S)
+    c, ran = _bound_op()
+    r = _client_to(c).invoke("op", "refund", {**INS, "_mission": 42, "_approval": MARK, "_node": "n1"}, "k")
+    assert r["executed"] is True

@@ -78,6 +78,27 @@ def _unb64(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
+def _norm_id(v: object) -> "str | None":
+    """Normalise an id for binding: None/blank => None, else str."""
+    if v is None:
+        return None
+    v = v if isinstance(v, str) else str(v)
+    return v if v.strip() else None
+
+
+def _binding_ok(bound: object, presented: object) -> bool:
+    """True iff the signed-payload value ``bound`` is satisfied by the caller-presented value.
+    bound null/blank => unbound dimension (minter chose no binding) => anything is accepted.
+    bound set => presented must be present and equal (constant time); missing/empty/whitespace => False."""
+    b = _norm_id(bound)
+    if b is None:
+        return True
+    p = presented if isinstance(presented, str) else (None if presented is None else str(presented))
+    if p is None or p == "":
+        return False
+    return hmac.compare_digest(b.encode(), p.encode())
+
+
 def mint_approval_token(secret: "bytes | str | None" = None, *, operator: str, capability: str,
                         mission_id: "str | None", node_id: "str | None", inputs: dict, marker: dict,
                         ttl_s: int = 300, now: "float | None" = None) -> "str | None":
@@ -85,7 +106,8 @@ def mint_approval_token(secret: "bytes | str | None" = None, *, operator: str, c
     if not key:
         return None
     payload = canonical({
-        "operator": operator, "capability": capability, "mission_id": mission_id, "node_id": node_id,
+        "operator": operator, "capability": capability,
+        "mission_id": _norm_id(mission_id), "node_id": _norm_id(node_id),
         "inputs_sha256": inputs_hash(inputs), "marker": marker,
         "exp": (time.time() if now is None else now) + ttl_s, "nonce": _secrets.token_hex(16)})
     return _b64(payload) + "." + _b64(hmac.new(key, payload, hashlib.sha256).digest())
@@ -110,9 +132,10 @@ def verify_approval_token(secret: "bytes | str | None" = None, token: object = N
             return None
         if d["operator"] != operator or d["capability"] != capability:
             return None
-        if mission_id is not None and d.get("mission_id") != mission_id:
-            return None
-        if node_id is not None and d.get("node_id") != node_id:
+        # FAIL CLOSED binding: a dimension the token binds (non-null in the SIGNED payload) must be matched by a
+        # presented, non-empty value. A missing/None/empty presented value is a mismatch. Only a dimension the
+        # minter left null (unbound) is not checked.
+        if not _binding_ok(d.get("mission_id"), mission_id) or not _binding_ok(d.get("node_id"), node_id):
             return None
         if not hmac.compare_digest(str(d["inputs_sha256"]), inputs_hash(inputs)):
             return None

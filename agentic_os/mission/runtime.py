@@ -809,8 +809,13 @@ class MissionRuntime:
         return sems
 
     def _resolve_inputs(self, m: Mission, world: WorldState, node) -> dict:
-        resolved: dict[str, Any] = {"_goal": m.goal, "_mission": m.id}
+        resolved: dict[str, Any] = {"_goal": m.goal, "_mission": str(m.id)}
         for k, v in node.inputs.items():
+            if k in _RESERVED_INPUT_KEYS:   # a node must never override runtime-reserved keys (token binding)
+                import logging  # noqa: PLC0415
+                logging.getLogger("agentic_os.runtime").warning(
+                    "node %s tried to set reserved input %r; ignored", getattr(node, "id", "?"), k)
+                continue
             if isinstance(v, dict) and "$from_world" in v:
                 resolved[k] = world.get(v["$from_world"])
             else:
