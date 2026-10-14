@@ -473,12 +473,38 @@ class MissionRuntime:
         """The executor a mission runs on: its cached per-mission secured executor when the security planes
         are wired, else the shared open executor. Cached by mission id so `run()` and `_saga()` agree."""
         if self._secure_executor_for is None:
-            return self.executor
-        ex = self._executors.get(m.id)
-        if ex is None:
-            ex = self._secure_executor_for(m) or self.executor
-            self._executors[m.id] = ex
+            ex = self.executor
+        else:
+            ex = self._executors.get(m.id)
+            if ex is None:
+                ex = self._secure_executor_for(m) or self.executor
+                self._executors[m.id] = ex
+        if getattr(ex, "evidence_probe", None) is None and hasattr(ex, "evidence_probe"):
+            ex.evidence_probe = self._compensation_evidence   # durable, restart-safe compensation evidence
         return ex
+
+    def _compensation_evidence(self, mission_id: str, node_id: str) -> dict:
+        """Compensation authorization evidence, folded from the durable event log (never in-memory state).
+        ``approved`` = an ApprovalGranted for the node that had not been ApprovalInvalidated at the moment
+        its forward execution succeeded. An invalidation AFTER success does not revoke it (the effect ran
+        under a valid approval; undoing it is not a widening)."""
+        ev: dict = {"executed": False, "capability": None, "approved": False, "compensated_result": None}
+        granted, cap_ok = False, None
+        for e in self.store.for_mission(mission_id):
+            if e.payload.get("node_id") != node_id:
+                continue
+            if e.type == "ApprovalGranted":
+                granted, cap_ok = True, e.payload.get("capability")
+            elif e.type == "ApprovalInvalidated":
+                granted = False
+            elif e.type == "NodeSucceeded":
+                cap = e.payload.get("capability")
+                ev.update(executed=True, capability=cap,
+                          approved=bool(granted and (cap_ok is None or cap_ok == cap)))
+                ev["compensated_result"] = None
+            elif e.type == "NodeCompensated":
+                ev["compensated_result"] = e.payload.get("result") or {"compensated": True}
+        return ev
 
     @property
     def effective_max_concurrency(self) -> int:

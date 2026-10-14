@@ -72,3 +72,29 @@ only when the undo actually succeeded. An undo that staged (`pending_approval` /
 or raised is recorded as `NodeCompensationFailed` (with a `reason` and the raw result), the mission's
 `outcome` carries `compensation_incomplete: true` plus `compensation_remaining` (the nodes whose side effects
 remain), and `explain()` surfaces both. The saga stays best-effort and never raises past its caller.
+
+### Compensation authorization
+
+`Executor.compensate` is fail-closed. It mints the `{"approved": True, "compensation": True}` marker only
+after proving that THIS node executed successfully in THIS mission (keyed by mission id + node id; the executed
+capability must match the node's). Evidence is the durable event log (`NodeSucceeded`), read through the
+`evidence_probe` the runtime wires onto its executors, so a runtime restart (new executor, same log) still
+compensates legitimately completed steps. A standalone executor falls back to its in-memory ledger (mission,
+node, capability, input hash, approved flag recorded at `run()` time).
+
+Outcomes:
+- No evidence of execution (never ran, failed, other mission, other capability): no operator call, no marker;
+  returns `{"compensation_skipped": True, "undo_error": ...}` so the saga records `NodeCompensationFailed` and
+  `compensation_incomplete`.
+- Executed under a human approval, or admitted by policy without a gate (charge -> approval-gated refund): the
+  undo executes with the marker. A policy-admitted forward step is deliberately NOT stage-only on rollback,
+  otherwise a failed mission would leave a charge in place; the undo is part of the scope of what ran.
+- `ApprovalInvalidated`: evidence of execution is what counts, so a step that completed (before or after an
+  invalidation) remains compensable; invalidation prevents new execution (it re-parks the node) and is not a
+  grant to undo steps that never ran, which stay refused.
+- Double compensation is idempotent: the first outcome is returned (also across restarts, from `NodeCompensated`)
+  and the undo is not invoked again.
+- Client-supplied `_approval*` is never consulted; the marker is built only from this evidence.
+
+The Go port (`go/mission`) does not mirror this: its `Compensate` never mints an approval marker (it sends only
+`undo_of`/`result`), so there is no unconditional-approval path to guard.
