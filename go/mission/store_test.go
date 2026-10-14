@@ -91,3 +91,30 @@ func TestSubscribeReceivesEvents(t *testing.T) {
 		t.Fatalf("subscriber saw %v", got)
 	}
 }
+
+// Replay must tolerate the compensation vocabulary of the Python reference runtime (docs/COMPENSATION.md):
+// the Compensation* events are ignored by the node fold (only NodeCompensated moves a node), and the
+// compensation_failed mission state folds as-is.
+func TestReplayToleratesCompensationEvents(t *testing.T) {
+	s := NewEventStore("")
+	repo := NewMissionRepository(s)
+	s.Append("MissionCreated", "m1", map[string]any{"goal": "g"})
+	s.Append("NodeSucceeded", "m1", map[string]any{"node_id": "n1", "result": map[string]any{"executed": true}})
+	s.Append("CompensationRequested", "m1", map[string]any{"node_id": "n1", "undo": "op.undo"})
+	s.Append("CompensationAuthorized", "m1", map[string]any{"node_id": "n1"})
+	s.Append("CompensationExecuted", "m1", map[string]any{"node_id": "n1"})
+	s.Append("CompensationFailed", "m1", map[string]any{"node_id": "n1", "reason": "verification_failed"})
+	s.Append("NodeCompensationFailed", "m1", map[string]any{"node_id": "n1"})
+	s.Append("MissionStateChanged", "m1", map[string]any{"state": "compensation_failed"})
+	if st, ok := repo.State("m1"); !ok || st != MissionCompensationFailed {
+		t.Fatalf("state fold = %v,%v; want compensation_failed", st, ok)
+	}
+	if got := repo.NodeStatus("m1")["n1"]; got != NodeDone {
+		t.Fatalf("unverified/failed compensation must leave the node DONE (not compensated), got %v", got)
+	}
+	s.Append("CompensationVerified", "m1", map[string]any{"node_id": "n1"})
+	s.Append("NodeCompensated", "m1", map[string]any{"node_id": "n1"})
+	if got := repo.NodeStatus("m1")["n1"]; got != NodeCompensated {
+		t.Fatalf("verified compensation => compensated, got %v", got)
+	}
+}

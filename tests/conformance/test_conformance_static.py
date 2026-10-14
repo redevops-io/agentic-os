@@ -117,6 +117,71 @@ def test_n8_allowlist_names_exist():
         assert app in apps, f"N8 allowlist names unknown app {app}"
 
 
+# ── N10: every consequential (side_effecting) capability DECLARES compensation or irreversible=True ───────────
+# docs/COMPENSATION.md (explicit-only). The allowlist may only SHRINK: annotate a capability with
+# `compensation={...}` (or `irreversible=True`) and delete its entry; a stale entry only warns.
+_N10 = "side-effecting capability has not yet declared compensation/irreversible -- compensation audit N10"
+ALLOW_N10 = {k: _N10 for k in (
+    ("agentic-crm", "crm.score_lead"),
+    ("agentic-crm", "crm.research"),
+    ("agentic-crm", "crm.draft_outreach"),
+    ("agentic-crm", "crm.qualify"),
+    ("agentic-privacy", "privacy.intake"),
+    ("agentic-privacy", "privacy.access"),
+    ("books", "books.categorize"),
+    ("compliance", "compliance.remediate"),
+    ("compliance", "compliance.file_consent"),
+    ("edge-sentinel", "sentinel.unblock_ip"),
+    ("growth-assistant", "assistant.playbook"),
+    ("growth-assistant", "assistant.subreddit_plan"),
+    ("growth-assistant", "assistant.founder_content"),
+    ("growth-assistant", "assistant.community_blueprint"),
+    ("growth-assistant", "assistant.cold_outreach"),
+    ("growth-assistant", "assistant.hire_brief"),
+    ("growth-engine", "growth.reallocate_budget"),
+    ("lifecycle", "lifecycle.compose_campaign"),
+    ("market-radar", "radar.add_watch"),
+    ("outreach-engine", "outreach.approve"),
+    ("social-autopilot", "social.draft"),
+    ("support", "support.draft_reply"),
+    ("support", "support.resolve"),
+    ("support", "support.escalate"),
+)}
+
+
+@pytest.mark.parametrize("app", OPERATOR_APPS)
+def test_n10_consequential_capabilities_declare_compensation_or_irreversible(app):
+    from agentic_os.mission.compensation import dangling_undos, lint_capability
+    try:
+        op = build_operator(app)
+    except ImportError as e:
+        pytest.skip(f"{app}: operator needs an uninstalled package ({e})")
+    offenders = []
+    for name, spec in op._specs.items():
+        msg = lint_capability(spec)
+        if msg is None:
+            if (app, name) in ALLOW_N10:
+                warnings.warn(f"stale allowlist entry N10 ({app}, {name}): now declares -- remove it", StaleAllowlist)
+        elif (app, name) not in ALLOW_N10:
+            offenders.append(msg)
+    assert not offenders, f"{app}: undeclared consequential capabilities: {offenders}"
+    # a declared compensating capability must exist in the same operator (else it could never run)
+    assert not dangling_undos(op._specs.values(), op._specs.get), f"{app}: dangling compensating capability"
+
+
+def test_n10_allowlist_names_exist():
+    for app, cap in ALLOW_N10:
+        assert app in set(OPERATOR_APPS), f"N10 allowlist names unknown app {app}"
+
+
+def test_lint_n10_bites_on_an_undeclared_consequential_capability():
+    from agentic_os.mission.compensation import lint_capability
+    from agentic_os.mission.operator_sdk import capability
+    assert lint_capability(capability("x.send_email", lambda i: {}, side_effecting=True).spec)
+    assert lint_capability(capability("x.send_email", lambda i: {}, side_effecting=True, irreversible=True).spec) is None
+    assert lint_capability(capability("x.read", lambda i: {}).spec) is None
+
+
 # ── prove each lint bites: synthetic offending + clean sources ─────────────────────────────────────────────────
 @pytest.mark.parametrize("bad", [
     'URL = "http://x/v1/chat/completions"',

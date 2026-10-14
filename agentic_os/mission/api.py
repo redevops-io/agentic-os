@@ -220,7 +220,7 @@ button.sm{padding:4px 9px;font-size:12px}
 /* pills — mission + node status share one scale */
 .pill{font-size:10.5px;padding:2px 8px;border-radius:999px;font-weight:700;letter-spacing:.02em;white-space:nowrap}
 .st-done,.st-succeeded{background:#0e211d;color:var(--teal)}
-.st-failed{background:#271417;color:var(--red)}
+.st-failed,.st-compensation_failed{background:#271417;color:var(--red)}
 .st-waiting,.st-waiting_human{background:#271f13;color:var(--amber)}
 .st-running,.st-ready,.st-planning{background:#13202e;color:var(--blue)}
 .st-pending{background:#1d1e26;color:var(--dim)}

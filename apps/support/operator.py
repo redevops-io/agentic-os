@@ -59,7 +59,8 @@ def build_support_operator() -> Operator:
             gated("support.send_onboarding", core.send_onboarding, onboarding_sent=False),
             provides=["onboarding_sent"],
             outputs={"onboarding_sent": "welcome message read back from the Chatwoot conversation as an outgoing, non-private message (True only after that read-back; channel delivery is Chatwoot's async job and is not confirmed)"},
-            side_effecting=True, approval_required=True, permissions=["support:write"],
+            side_effecting=True,
+            compensation={"supported": False, "reversibility": "IRREVERSIBLE", "notes": "sent email cannot be recalled"}, approval_required=True, permissions=["support:write"],
             estimated_value="medium", latency_ms=1000,
             concurrency_key="provider:chatwoot", max_parallelism=3,  # creates a new conversation; bounded
         ),

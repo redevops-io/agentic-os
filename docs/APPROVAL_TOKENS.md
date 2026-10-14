@@ -75,6 +75,8 @@ remain), and `explain()` surfaces both. The saga stays best-effort and never rai
 
 ### Compensation authorization
 
+> Policy, events, verification and `requires_approval`: see [COMPENSATION.md](COMPENSATION.md).
+
 `Executor.compensate` is fail-closed. The compensation marker `{"approved": True, "compensation": True}` is
 minted only when ALL hold:
 

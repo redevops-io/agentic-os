@@ -31,6 +31,8 @@ def mission_receipt(rt, mission_id: str) -> Dict[str, Any]:
         elif t == "MissionOutcome":
             outcome = {"kind": p.get("kind"), "success": p.get("success"),
                        "business_value": p.get("business_value")}
+    from .compensation import fold_compensation, summarize  # noqa: PLC0415
+    folded = fold_compensation(rt.repo.timeline(mission_id))
     state = rt.repo.state(mission_id)
     ledger = rt.evidence.ledger(mission_id) or []
     return {
@@ -40,6 +42,7 @@ def mission_receipt(rt, mission_id: str) -> Dict[str, Any]:
         "outcome": outcome,
         "approvals": approvals,
         "steps": steps,
+        "compensation": {"nodes": folded, **summarize(folded)},   # own receipts; never inferred as rolled back
         "evidence_refs": [c.get("id") for c in ledger if isinstance(c, dict) and c.get("id")],
         "credential": "broker-mediated — values never logged",
     }

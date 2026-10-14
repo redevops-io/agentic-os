@@ -12,6 +12,7 @@ import hashlib
 import re
 
 from .context import BIND_CAPABILITY, ContextIntent, ContextRuntime
+from .compensation import Reversibility, declared_undo, reversibility_of
 from .types import (
     Mission, ExecutionIntent, ExecutionPlan, ExecutionGraph, Node, NodeCost, CapabilitySpec,
 )
@@ -82,7 +83,8 @@ def compile_intent(
                                              for c in step.constraints)
         node = Node(
             capability=cap.name, operator=cap.operator, produces=step.outcome,
-            approval_required=human, side_effecting=cap.side_effecting, undo=cap.undo,
+            approval_required=human, side_effecting=cap.side_effecting, undo=declared_undo(cap),
+            irreversible=reversibility_of(cap) is Reversibility.IRREVERSIBLE,
             # The sealed intent's verified fields, when there was one, under a
             # key of their own. Flat would collide: the second pass writes
             # `node.inputs[<upstream outcome>]`, so a field named after an

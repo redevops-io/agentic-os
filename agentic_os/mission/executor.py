@@ -124,6 +124,10 @@ class Executor:
         # `undo_registry(capability) -> registered undo capability | None` is the TRUSTED declaration (the
         # capability registry); the plan node's `undo` is planner-supplied and is only honoured when equal.
         self.undo_registry: "Callable[[str], str | None] | None" = None
+        # `compensation_requires_approval(capability) -> bool` (wired by the runtime from the registry's
+        # `compensation.requires_approval`). When True, the evidence-bound marker is minted only if the
+        # forward step itself ran under a human approval; otherwise compensation is refused (fail closed).
+        self.compensation_requires_approval: "Callable[[str], bool] | None" = None
         self._ledger: "OrderedDict[tuple, dict]" = OrderedDict()      # bounded (LRU)
         self._compensated: "OrderedDict[tuple, dict]" = OrderedDict()  # bounded (LRU)
 
@@ -339,6 +343,10 @@ class Executor:
         if self.undo_registry is not None and registered != node.undo:
             return self._skip(node, f"undo_not_registered: '{node.undo}' is not the registered undo of "
                                     f"'{node.capability}'")
+        if self.compensation_requires_approval is not None and self.compensation_requires_approval(node.capability) \
+                and not ev.get("approved"):
+            return self._skip(node, f"compensation_requires_approval: '{node.undo}' declares requires_approval and "
+                                    f"the forward step of '{node.capability}' did not run under a human approval")
         inputs: dict = {"undo_of": node.capability, "result": copy.deepcopy(ev.get("result")),
                         "_node": node.id, "_mission": mid}
         if self.undo_registry is not None:

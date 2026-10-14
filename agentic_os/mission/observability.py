@@ -80,6 +80,7 @@ def fleet_slos(rt) -> dict:
         "by_state": by_state,
         "success_rate": round(by_state.get("succeeded", 0) / total, 3) if total else 0.0,
         "failed": by_state.get("failed", 0),
+        "compensation_failed": by_state.get("compensation_failed", 0),   # attention: a forward effect remains
         "pending_approvals": pending_approvals,
         "latency_p50_ms": _percentile(latencies, 50),
         "latency_p95_ms": _percentile(latencies, 95),

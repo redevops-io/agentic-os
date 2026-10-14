@@ -55,7 +55,9 @@ def _mission_head(mid: str) -> Dict[str, Any]:
 def _needs_you() -> List[Dict[str, Any]]:
     """Fold every parked mission into one canonical attention list (source, mission, capability, decisions)."""
     items: List[Dict[str, Any]] = []
+    from .compensation_runner import attention_items  # noqa: PLC0415
     for mid in _MISSIONS:
+        items.extend(attention_items(_RT, mid))      # COMPENSATION_FAILED / unverified compensation: needs a human
         pend = _RT.repo.pending_human(mid)
         if not pend:
             continue

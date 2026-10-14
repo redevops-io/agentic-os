@@ -25,6 +25,7 @@ from typing import Any
 from .approval import is_approval_key, strip_approval_keys
 from . import belief, cost as costmod
 from .compiler import compile_intent, CompileError
+from .compensation import declared_undo, coerce as coerce_compensation, fold_compensation, summarize as _summ_comp, validate_plan_compensation
 from .context import LocalContextRuntime, ContextIntent, CHECK_POLICY, RESOLVE_BELIEF
 from .lifecycle import LifecycleRegistry, MissionStarted, GateReached, MissionFinished
 from .evidence import EvidenceLog
@@ -171,6 +172,11 @@ class UnrecoverableAuthority(RuntimeError):
 _RESERVED_INPUT_KEYS = frozenset({"_goal", "_mission", "_node"})
 
 
+def compensation_summary(events) -> dict:
+    """Verified / unverified / failed compensations folded from the log (replay-safe)."""
+    return _summ_comp(fold_compensation(events))
+
+
 class MissionRuntime:
     #: Capability marker: this runtime invokes the ``_pre_exec_ok`` node-admission hook (and ``_meter``)
     #: on every dispatch. An overlay that enforces governance by overriding ``_pre_exec_ok`` checks this
@@ -257,7 +263,8 @@ class MissionRuntime:
                         policy: "MissionPolicy | None" = None,
                         principal: Any = None, tenant: str = "",
                         inputs: dict | None = None, intervention_id: str = "",
-                        selected_capability: str = "", bind_selected: bool = False) -> Mission:
+                        selected_capability: str = "", bind_selected: bool = False,
+                        failure_policy: str = "") -> Mission:
         # v0.2.x Slice 1 — carry the Discovery seal across the boundary. ``verified_intent`` is an
         # optional sealed VerifiedIntent (duck-typed: a runtime_contracts.VerifiedIntent, or a dict, or
         # anything exposing ``content_hash``/``evidence``); its identity is recorded on the mission and
@@ -271,6 +278,7 @@ class MissionRuntime:
                     # a decision must not be able to smuggle an approval marker through its inputs
                     inputs=strip_approval_keys(dict(inputs or {})),
                     intervention_id=intervention_id or "",
+                    failure_policy=(failure_policy or "").upper(),
                     selected_capability=selected_capability or "",
                     bind_selected=bool(bind_selected and selected_capability),
                     intent_content_hash=identity.get("intent_content_hash", ""),
@@ -293,6 +301,7 @@ class MissionRuntime:
                            # Event-sourced delivery: only a mission that names its selected capability records
                            # the (approval-stripped) input VALUES, because replay must re-deliver them.
                            **self._selected_record(m),
+                           **({"failure_policy": m.failure_policy} if m.failure_policy else {}),
                            # mission-policy/v1 — pin the named policy identity onto mission creation
                            "policy": (m.policy.ref if m.policy else None),
                            "policy_digest": (m.policy.digest() if m.policy else None),
@@ -433,7 +442,11 @@ class MissionRuntime:
                                                "selected": c.selected} for c in candidates],
                                "promoted_choice": promoted_choice})
         self.store.append("PlanActivated", m.id, {"plan_id": plan.id})
-        if not plan.projection.within_budget:
+        comp_errors = validate_plan_compensation(plan.graph.nodes, self.registry.get)
+        if comp_errors:    # a node declares an undo the registry does not: refuse the plan, run nothing
+            self._set_state(m, MissionState.FAILED)
+            self.store.append("MissionBlocked", m.id, {"reason": "compensation_undeclared", "notes": comp_errors})
+        elif not plan.projection.within_budget:
             self._set_state(m, MissionState.FAILED)
             self.store.append("MissionBlocked", m.id,
                               {"reason": "over_budget", "notes": plan.projection.notes})
@@ -484,6 +497,7 @@ class MissionRuntime:
             if cur is None:
                 ex.evidence_probe = self._compensation_evidence   # durable, restart-safe evidence
                 ex.undo_registry = self._registered_undo
+                ex.compensation_requires_approval = self._compensation_requires_approval
             elif getattr(cur, "__self__", None) is not self:
                 raise RuntimeError("executor is already bound to another runtime's event log for "
                                    "compensation evidence; use one executor per runtime")
@@ -491,7 +505,12 @@ class MissionRuntime:
 
     def _registered_undo(self, capability: str) -> "str | None":
         spec = self.registry.get(capability)
-        return getattr(spec, "undo", None) if spec is not None else None
+        return declared_undo(spec) if spec is not None else None
+
+    def _compensation_requires_approval(self, capability: str) -> bool:
+        spec = self.registry.get(capability)
+        cs = coerce_compensation(getattr(spec, "compensation", None)) if spec is not None else None
+        return bool(cs and cs.requires_approval)
 
     def _compensation_evidence(self, mission_id: str, node_id: str) -> dict:
         """Compensation authorization evidence, folded from the durable event log (never in-memory state).
@@ -553,7 +572,7 @@ class MissionRuntime:
 
     def run(self, mission_id: str) -> Mission:
         m = self._missions[mission_id]
-        if m.state == MissionState.FAILED:      # blocked in simulation
+        if m.state in (MissionState.FAILED, MissionState.COMPENSATION_FAILED):      # blocked in simulation / needs a human
             return m
         plan = self._plans[mission_id]
         graph = plan.graph
@@ -1089,37 +1108,27 @@ class MissionRuntime:
 
     # ── sagas / failure / success ──────────────────────────────────────────────
     def _saga(self, m: Mission, plan: ExecutionPlan, world: WorldState) -> None:
-        status = self.repo.node_status(m.id)
-        remaining: list[str] = []
-        for node in reversed(plan.graph.nodes):
-            if status.get(node.id) == NodeState.DONE and node.side_effecting and node.undo:
-                reason = ""
-                try:
-                    out = self._executor_for(m).compensate(node, mission_id=m.id)
-                except Exception as e:  # noqa: BLE001 — best effort; never raise past the caller
-                    out, reason = {"undo_error": str(e)}, f"undo raised: {e}"
-                if not reason:
-                    if isinstance(out, dict) and out.get("undo_error"):
-                        reason = f"undo raised: {out['undo_error']}"
-                    else:
-                        failed, why = result_failed(out) if out is not None else (True, "undo returned nothing")
-                        reason = why if failed else ""
-                if reason:
-                    # The undo staged / errored / raised — the forward side effect REMAINS. Never report it
-                    # as compensated.
-                    remaining.append(node.id)
-                    self.store.append("NodeCompensationFailed", m.id,
-                                      {"node_id": node.id, "undo": node.undo, "reason": reason, "result": out})
-                else:
-                    self.store.append("NodeCompensated", m.id,
-                                      {"node_id": node.id, "undo": node.undo, "result": out})
-        if remaining:
-            m.outcome = {**(m.outcome or {}), "compensation_incomplete": True,
-                         "compensation_remaining": remaining}
+        """Explicit-only compensation (docs/COMPENSATION.md): see compensation_runner.run_saga."""
+        from .compensation_runner import run_saga  # noqa: PLC0415
+        run_saga(self, m, plan)
+
+    def retry_compensation(self, mission_id: str) -> Mission:
+        """Intervention for a COMPENSATION_FAILED mission: re-attempt only the compensations that failed
+        (each under its own `{idempotency_key}:undo` key). Back to FAILED only if none remain failed."""
+        m = self._missions[mission_id]
+        if m.state is not MissionState.COMPENSATION_FAILED:
+            return m
+        self._saga(m, self._plans[mission_id], self._world(mission_id))
+        if not (m.outcome or {}).get("compensation_incomplete"):
+            self._set_state(m, MissionState.FAILED)
+        return m
 
     def _fail(self, m: Mission, plan: ExecutionPlan, reason: str) -> None:
-        self._set_state(m, MissionState.FAILED)
-        keep = {k: v for k, v in (m.outcome or {}).items() if k.startswith("compensation_")}
+        from .compensation_runner import OUTCOME_KEYS  # noqa: PLC0415
+        keep = {k: v for k, v in (m.outcome or {}).items() if k in OUTCOME_KEYS or k.startswith("compensation_")}
+        # a failed compensation leaves a forward effect behind: attention state, never plain FAILED/"rolled back"
+        self._set_state(m, MissionState.COMPENSATION_FAILED if keep.get("compensation_incomplete")
+                        else MissionState.FAILED)
         m.outcome = {"success": False, "reason": reason, **keep}
         self._emit_outcome(m, plan, success=False)
         self._reflect(m)
@@ -1338,7 +1347,9 @@ class MissionRuntime:
         state, what's waiting on a human, and what the loops have learned."""
         tl = self.repo.timeline(mission_id)
         steps = [e for e in tl if e["type"] in ("NodeSucceeded", "NodeParked", "NodeFailed",
-                                                "NodeCompensated", "NodeCompensationFailed", "BeliefDisputed", "BeliefResolved",
+                                                "NodeCompensated", "NodeCompensationFailed", "CompensationRequested",
+                                                "CompensationAuthorized", "CompensationExecuted", "CompensationVerified",
+                                                "CompensationFailed", "BeliefDisputed", "BeliefResolved",
                                                 "VerificationFailed")]
         world = {k: (b.value if b else None) for k, b in self._world(mission_id).snapshot().items()}
         st = self.repo.state(mission_id)
@@ -1350,6 +1361,9 @@ class MissionRuntime:
                 comp_failed.pop(e["payload"]["node_id"], None)
         return {"mission_id": mission_id, "goal": self.repo.goal(mission_id),
                 "compensation_incomplete": bool(comp_failed), "compensation_remaining": comp_failed,
+                "compensation": compensation_summary(self.store.for_mission(mission_id)),
+                "not_reversible": ((self._missions.get(mission_id).outcome or {}).get("not_reversible", [])
+                                   if self._missions.get(mission_id) else []),
                 "state": st.value if st else None, "steps": steps, "world_state": world,
                 "pending_human": self.repo.pending_human(mission_id),
                 "evidence": self.evidence.ledger(mission_id),
@@ -1427,6 +1441,7 @@ class MissionRuntime:
                     bind_selected=bool(sel and created.payload.get("bind_selected")),
                     inputs=restored, inputs_unavailable=unavailable,
                     intervention_id=created.payload.get("intervention_id") or "",
+                    failure_policy=created.payload.get("failure_policy") or "",
                     policy_refs=list(policy_refs if policy_refs is not None else recorded),
                     # v0.2.x: replay carries the original evidence identity back, so the rehydrated
                     # mission resolves the SAME sealed intent + evidence it was created from.
@@ -1503,12 +1518,13 @@ class MissionRuntime:
         if m.state is MissionState.SUCCEEDED:
             return {"success": True, "world": {k: (b.value if b else None)
                                                for k, b in self._world(m.id).snapshot().items()}}
-        if m.state is MissionState.FAILED:
+        if m.state in (MissionState.FAILED, MissionState.COMPENSATION_FAILED):
             why = next((e for e in reversed(self.store.for_mission(m.id))
                         if e.type in ("NodeFailed", "ApprovalRejected", "VerificationRejected", "MissionBlocked")),
                        None)
             reason = (why.payload.get("reason") or why.payload.get("error") or why.type) if why else "failed"
-            return {"success": False, "reason": reason}
+            from .compensation_runner import outcome_from_log  # noqa: PLC0415
+            return {"success": False, "reason": reason, **outcome_from_log(self, m.id)}
         return None
 
     def _last_plan_meta(self, mission_id: str) -> dict | None:
@@ -1664,5 +1680,5 @@ class MissionRuntime:
         m.state = state
         m.updated_at = now()
         self.store.append("MissionStateChanged", m.id, {"state": state.value})
-        if state in (MissionState.SUCCEEDED, MissionState.FAILED):
+        if state in (MissionState.SUCCEEDED, MissionState.FAILED, MissionState.COMPENSATION_FAILED):
             self.lifecycle.dispatch(MissionFinished(mission_id=m.id, state=state.value))

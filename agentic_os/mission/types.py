@@ -43,6 +43,10 @@ class MissionState(str, Enum):
     FAILED = "failed"
     SUCCEEDED = "succeeded"
     CANCELLED = "cancelled"
+    # Terminal, ATTENTION state (docs/COMPENSATION.md): the mission failed AND at least one compensating
+    # action failed (or was refused) so a forward side effect REMAINS. Never reported as rolled back;
+    # needs a human (retry_compensation / manual remediation).
+    COMPENSATION_FAILED = "compensation_failed"
 
 
 class NodeState(str, Enum):
@@ -86,6 +90,12 @@ class CapabilitySpec:
     deterministic: bool = True                  # same input -> same output?
     side_effecting: bool = False                # touches the outside world?
     undo: str | None = None                     # compensating capability (sagas) or None
+    # Saga compensation contract (docs/COMPENSATION.md). ``compensation`` is a CompensationSpec (or its dict
+    # form) {supported, capability, reversibility, requires_approval, verify, notes}; ``irreversible`` is the
+    # explicit "this cannot be undone" declaration. A side-effecting capability that declares neither (nor a
+    # legacy ``undo``) is UNKNOWN and treated as irreversible; the conformance lint flags it.
+    compensation: Any = None
+    irreversible: bool = False
     approval_required: bool = False
     confidence: float = 0.9                     # learned success rate (Capability Learning)
     estimated_value: str = "medium"             # low|medium|high
@@ -171,6 +181,7 @@ class Node:
     approval_required: bool = False
     side_effecting: bool = False
     undo: str | None = None
+    irreversible: bool = False                  # carried from the capability's declaration (never inferred)
     status: NodeState = NodeState.PENDING
     attempts: int = 0
     idempotency_key: str = ""
@@ -416,6 +427,10 @@ class Mission:
     budget: Budget = field(default_factory=Budget)
     deadline: float | None = None
     state: MissionState = MissionState.PLANNING
+    # What to do when a step/branch fails: HALT_AND_REPORT | COMPENSATE_DECLARED | CONTINUE_SIBLINGS ("" =
+    # the default for the mission's topology: sequential -> COMPENSATE_DECLARED, fork branches ->
+    # HALT_AND_REPORT). See mission/compensation_policy.py and docs/COMPENSATION.md.
+    failure_policy: str = ""
     world_state_id: str = ""
     active_plan_id: str | None = None
     outcome: dict[str, Any] | None = None

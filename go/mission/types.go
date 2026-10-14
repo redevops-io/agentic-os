@@ -35,6 +35,9 @@ const (
 	MissionFailed       MissionState = "failed"
 	MissionSucceeded    MissionState = "succeeded"
 	MissionCancelled    MissionState = "cancelled"
+	// MissionCompensationFailed: terminal ATTENTION state set by the Python reference runtime when a
+	// compensating action failed (docs/COMPENSATION.md). The Go port only folds/replays it.
+	MissionCompensationFailed MissionState = "compensation_failed"
 )
 
 type NodeState string

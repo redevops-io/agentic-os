@@ -215,7 +215,8 @@ def _types(rt, m):
 ], ids=["staged", "errored", "raised"])
 def test_failed_undo_records_compensation_failed_and_incomplete_outcome(undo):
     rt, m = _saga_rt(undo)
-    assert m.state == MissionState.FAILED
+    assert m.state == MissionState.COMPENSATION_FAILED      # attention state, never plain FAILED / "rolled back"
+    assert m.outcome["rolled_back"] is False
     t = _types(rt, m)
     assert "NodeCompensationFailed" in t and "NodeCompensated" not in t
     assert m.outcome["compensation_incomplete"] is True
