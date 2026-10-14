@@ -24,8 +24,8 @@ from .types import NodeState
 from .verify import is_staged, result_failed
 
 OUTCOME_KEYS = ("compensation_incomplete", "compensation_remaining", "compensated", "compensated_unverified",
-                "compensation_acknowledged", "not_reversible", "not_compensated", "rolled_back",
-                "failure_policy")
+                "compensation_acknowledged", "compensation_skipped", "not_reversible", "not_compensated",
+                "rolled_back", "failure_policy", "partially_completed", "retained_effects", "incomplete_steps")
 APPROVAL_TTL_S = 3600
 
 _LOCKS: dict[tuple, threading.Lock] = {}
@@ -83,6 +83,34 @@ def _verify(rt, m, node, spec, forward_result, undo_result, attempt) -> "tuple[b
     return True, "readback", ""
 
 
+def _check_preconditions(rt, m, node, spec, forward_result, attempt, phase) -> str:
+    """'' when the declared ``compensation.preconditions`` read-back says reversing is safe NOW, else why not.
+    Fail closed: an unregistered / side-effecting / raising / unstaged / non-explicit check is "not safe". A
+    capability that declares no precondition is not evaluated here (``full_declaration_problems`` demands one
+    of every compensatable action an owner wants guarded)."""
+    cs = C.coerce(getattr(spec, "compensation", None)) if spec is not None else None
+    if cs is None or not cs.preconditions:
+        return ""
+    pcap = rt.registry.get(cs.preconditions)
+    if pcap is None or getattr(pcap, "side_effecting", False):
+        return f"precondition_unevaluable: '{cs.preconditions}' is not a registered read-only capability"
+    try:
+        out = rt._executor_for(m).client.invoke(
+            pcap.operator or node.operator, cs.preconditions,
+            {"precondition_for_undo_of": node.capability, "undo": node.undo, "result": forward_result,
+             "_node": f"{node.id}:undo:precondition", "_mission": m.id},
+            f"{node.idempotency_key}:undo:{attempt}:precondition:{phase}")
+    except Exception as e:  # noqa: BLE001
+        return f"precondition_unevaluable: check raised: {e}"
+    bad = _fail_reason(out)
+    if bad:
+        return f"precondition_unevaluable: {bad}"
+    if not isinstance(out, dict) or out.get("holds") is not True:
+        why = out.get("reason") if isinstance(out, dict) else ""
+        return f"precondition_not_met: {why or 'the check did not return an explicit `holds: true`'}"
+    return ""
+
+
 def run_saga(rt, m, plan) -> None:
     store = rt.store
     status = rt.repo.node_status(m.id)
@@ -103,8 +131,10 @@ def _compensate_node(rt, m, node, policy, forward_caps) -> None:
     if st and st["status"] in ("compensated", "executed_unverified", "acknowledged"):
         return                                               # compensate once: never a second time
     spec = rt.registry.get(node.capability)
+    if C.is_preserved(spec):
+        return                                               # PER-ACTION: this effect survives a failed workflow
     pending_approval = bool(st and st["status"] == "approval_required")
-    if st and st["status"] == "failed" and st["attempts"] >= C.max_attempts():
+    if st and st["status"] in ("failed", "skipped") and st["attempts"] >= C.max_attempts():
         return                                               # exhausted: only a human acknowledge clears it
     if pending_approval and not st.get("approval"):
         return                                               # parked, still waiting for the human
@@ -126,6 +156,12 @@ def _compensate_node(rt, m, node, policy, forward_caps) -> None:
             store.append(C.EV_UNDECLARED_TARGET, m.id, {
                 **base, "warning": f"declared undo '{node.undo}' is not a registered capability; it will not "
                                    "receive the compensation marker (sunset: see docs/COMPENSATION.md)"})
+        if ev.get("executed") and node.undo != node.capability and node.undo not in forward_caps:
+            # evaluate the declared compensation against CURRENT conditions BEFORE asking anyone to approve it
+            why = _check_preconditions(rt, m, node, spec, ev.get("result"), attempt, "plan")
+            if why:
+                store.append(C.EV_SKIPPED, m.id, {**base, "reason": why})
+                return                                       # NOT executed: the effect is retained and reported
         if requires and ev.get("executed") and node.undo != node.capability and node.undo not in forward_caps:
             inputs = C.undo_inputs(node, m.id, ev.get("result"))
             store.append(C.EV_APPROVAL_REQUIRED, m.id, {
@@ -133,6 +169,12 @@ def _compensate_node(rt, m, node, policy, forward_caps) -> None:
                 "message": f"approve compensation of {node.id}: run '{node.undo}' with exactly these inputs"})
             return                                           # PARK: needs its own human approval
     approval = st.get("approval") if pending_approval else None
+    if pending_approval and ev.get("executed") and node.undo not in forward_caps:
+        # the world may have changed while the approval was pending: re-check right before executing
+        why = _check_preconditions(rt, m, node, spec, ev.get("result"), attempt, "exec")
+        if why:
+            store.append(C.EV_SKIPPED, m.id, {**base, "reason": why})
+            return
     registered = rt._registered_undo(node.capability)
     if node.undo in forward_caps:
         out, reason = {"compensation_skipped": True, "undo_error": "compensation_target_is_forward_action"}, \
@@ -169,40 +211,100 @@ def _compensate_node(rt, m, node, policy, forward_caps) -> None:
 
 
 # ── outcome: ONE function used live (settle) and on rehydrate, so replay equals the live outcome ─────────────
+def _note(spec) -> str:
+    return C.irreversible_note(spec) if spec is not None else ""
+
+
 def compute_outcome(rt, m, plan) -> dict:
     status = rt.repo.node_status(m.id)
-    folded = C.fold_compensation(rt.store.for_mission(m.id))
+    events = rt.store.for_mission(m.id)
+    folded = C.fold_compensation(events)
     s = C.summarize(folded)
     policy = effective_policy(m, forked=is_forked(plan))
     not_reversible: list[dict] = []
     not_compensated: list[str] = []
+    retained: list[dict] = []       # EVERY consequential effect that is still in place, with why
     for node in reversed(plan.graph.nodes):
         if status.get(node.id) != NodeState.DONE or not node.side_effecting:
             continue
+        spec = rt.registry.get(node.capability)
+        preserved = C.is_preserved(spec)
+        st = folded.get(node.id, {})
         if not node.undo:
-            spec = rt.registry.get(node.capability)
             cls = C.reversibility_of(spec) if spec is not None else C.Reversibility.UNKNOWN
             if cls is C.Reversibility.NOT_APPLICABLE:
                 cls = C.Reversibility.UNKNOWN
             if getattr(node, "irreversible", False):
                 cls = C.Reversibility.IRREVERSIBLE
-            not_reversible.append({"node_id": node.id, "capability": node.capability, "reversibility": cls.value})
-        elif policy is not FailurePolicy.COMPENSATE_DECLARED:
+            entry = {"node_id": node.id, "capability": node.capability, "reversibility": cls.value}
+            if preserved:
+                entry["disposition"] = C.PRESERVE
+            not_reversible.append(entry)
+            retained.append({"node_id": node.id, "capability": node.capability,
+                             "reason": "preserved_by_declaration" if preserved else
+                             ("irreversible" if cls is C.Reversibility.IRREVERSIBLE else "undeclared_reversibility"),
+                             "detail": _note(spec)})
+            continue
+        if preserved or policy is not FailurePolicy.COMPENSATE_DECLARED:
             not_compensated.append(node.id)
+            retained.append({"node_id": node.id, "capability": node.capability,
+                             "reason": "preserved_by_declaration" if preserved else "left_by_policy",
+                             "detail": _note(spec) or policy.value})
+            continue
+        reason = {"skipped": "precondition_not_met", "failed": "compensation_failed",
+                  "approval_required": "awaiting_compensation_approval",
+                  "executed_unverified": "compensation_unverified", "acknowledged": "acknowledged"}.get(
+                      st.get("status", ""))
+        if reason:
+            retained.append({"node_id": node.id, "capability": node.capability, "reason": reason,
+                             "detail": st.get("reason") or st.get("ack_reason") or ""})
     remaining = list(s["compensation_failed"])
     # an exhausted (max attempts) failure is still "remaining": only an acknowledge clears it
     out: dict = {"failure_policy": policy.value, "compensated": s["compensated"],
                  "compensated_unverified": s["compensated_unverified"],
                  "compensation_acknowledged": s["compensation_acknowledged"],
                  "not_reversible": not_reversible, "not_compensated": not_compensated}
+    if s["compensation_skipped"]:
+        out["compensation_skipped"] = dict(s["compensation_skipped"])
     if remaining:
         out.update(compensation_incomplete=True, compensation_remaining=remaining)
+    # the workflow did not complete: which steps never finished (retry / escalate these), and what remains
+    incomplete = []
+    for node in plan.graph.nodes:
+        stt = status.get(node.id)
+        if stt in (NodeState.DONE, NodeState.COMPENSATED):
+            continue
+        err = next((e.payload.get("error") or e.payload.get("reason") for e in reversed(events)
+                    if e.type == "NodeFailed" and e.payload.get("node_id") == node.id), None)
+        incomplete.append({"node_id": node.id, "capability": node.capability,
+                           "status": getattr(stt, "value", None) or "not_run", **({"error": str(err)} if err else {})})
+    if retained:
+        out["retained_effects"] = retained
+        # PARTIALLY_COMPLETED: some effects remain after a workflow that did not finish. Never "rolled back".
+        out["partially_completed"] = bool(incomplete)
+        if incomplete:
+            out["incomplete_steps"] = incomplete
     # `rolled_back` only when every executed consequential effect was VERIFIED undone by a real read-back and
-    # nothing is left over (unverified, failed, acknowledged-as-remaining, irreversible, or left by policy).
+    # nothing is left over (unverified, failed, acknowledged-as-remaining, irreversible, preserved or left).
     out["rolled_back"] = bool(s["compensated"] and s["readback_only"]
                               and not (remaining or s["compensated_unverified"] or s["compensation_acknowledged"]
-                                       or not_reversible or not_compensated))
+                                       or not_reversible or not_compensated or retained))
     return out
+
+
+def _record_retained(rt, m, outcome: dict) -> None:
+    """Append the retained-effects record to the durable log (execution history) when it CHANGED, so the
+    history names every effect a failed workflow left behind and why, once per distinct state."""
+    retained = outcome.get("retained_effects") or []
+    if not retained:
+        return
+    last = next((e.payload for e in reversed(rt.store.for_mission(m.id)) if e.type == C.EV_RETAINED), None)
+    if last is not None and last.get("retained_effects") == retained and \
+            last.get("incomplete_steps") == outcome.get("incomplete_steps"):
+        return
+    rt.store.append(C.EV_RETAINED, m.id, {
+        "partially_completed": bool(outcome.get("partially_completed")), "retained_effects": retained,
+        "incomplete_steps": outcome.get("incomplete_steps") or [], "failure_policy": outcome.get("failure_policy")})
 
 
 def settle(rt, m, plan) -> None:
@@ -210,6 +312,7 @@ def settle(rt, m, plan) -> None:
     out = {k: v for k, v in (m.outcome or {}).items() if k not in OUTCOME_KEYS}
     out.update(compute_outcome(rt, m, plan))
     m.outcome = out
+    _record_retained(rt, m, out)
 
 
 def outcome_from_log(rt, mission_id: str) -> dict:
@@ -231,8 +334,8 @@ def intervene(rt, m, action: str, *, actor: str, reason: str = "", node_id: str 
     plan = rt._plans[m.id]
     now = time.time()
     if action == "retry":
-        retryable = [n for n, v in folded.items() if v["status"] == "failed" and v["attempts"] < C.max_attempts()
-                     and (node_id is None or n == node_id)]
+        retryable = [n for n, v in folded.items() if v["status"] in ("failed", "skipped")
+                     and v["attempts"] < C.max_attempts() and (node_id is None or n == node_id)]
         if not retryable:
             raise InterventionError("no failed compensation is retryable (none failed, or max attempts reached: "
                                     "acknowledge instead)")
@@ -263,7 +366,7 @@ def intervene(rt, m, action: str, *, actor: str, reason: str = "", node_id: str 
             "inputs_sha256": digest, "approver": actor, "reason": reason, "at": now, "exp": now + APPROVAL_TTL_S})
         run_saga(rt, m, plan)
     elif action in ("acknowledge", "verify_manually"):
-        want = ("failed", "approval_required", "executed_unverified") if action == "acknowledge" \
+        want = ("failed", "approval_required", "executed_unverified", "skipped") if action == "acknowledge" \
             else ("executed_unverified",)
         targets = [n for n, v in folded.items() if v["status"] in want and (node_id is None or n == node_id)]
         if not targets:
@@ -301,18 +404,26 @@ def attention_items(rt, mission_id: str) -> list[dict]:
             items.append({**base, "kind": "compensation_failed", "title": f"Compensation failed: {v.get('undo')}",
                           "why": v.get("reason", ""), "attempts": v["attempts"],
                           "decisions": ["acknowledge"] if exhausted else ["retry_compensation", "acknowledge"]})
+        elif v["status"] == "skipped":
+            items.append({**base, "kind": "compensation_skipped", "title": f"Compensation not safe now: {v.get('undo')}",
+                          "why": v.get("reason", ""), "decisions": ["retry_compensation", "acknowledge"]})
         elif v["status"] == "executed_unverified":
             items.append({**base, "kind": "compensation_unverified", "title": f"Verify compensation: {v.get('undo')}",
                           "why": "the compensating action ran but nothing proved the effect is gone",
                           "decisions": ["verify_manually", "acknowledge"]})
-    # HALT_AND_REPORT (or CONTINUE_SIBLINGS) on a FAILED mission silently kept reversible effects: surface them
+    # A FAILED mission that kept effects in place (policy left them, a declaration PRESERVEs them, a precondition
+    # held them back): surface them with the steps that never finished, so a human retries or escalates.
     m = rt._missions.get(mission_id)
     out = (m.outcome or {}) if m is not None else {}
     left = list(out.get("not_compensated") or [])
-    if m is not None and m.state.value == "failed" and left and not out.get("compensation_acknowledged"):
+    actionable = [r for r in (out.get("retained_effects") or [])
+                  if r.get("reason") in ("preserved_by_declaration", "precondition_not_met", "left_by_policy")]
+    if m is not None and m.state.value == "failed" and (left or actionable) and not out.get("compensation_acknowledged"):
         items.append({"mission_id": mission_id, "goal": goal, "kind": "effects_left_in_place",
-                      "title": f"Mission failed; {len(left)} reversible effect(s) were left in place",
-                      "why": f"failure policy {out.get('failure_policy')} compensates nothing automatically",
+                      "title": f"Mission partially completed; {len(left) or len(actionable)} effect(s) were left in place",
+                      "why": f"failure policy {out.get('failure_policy')}: succeeded effects are kept, not reversed",
                       "not_compensated": left, "not_reversible": list(out.get("not_reversible") or []),
-                      "decisions": ["manual_remediation"]})
+                      "retained_effects": list(out.get("retained_effects") or []),
+                      "incomplete_steps": list(out.get("incomplete_steps") or []),
+                      "decisions": ["manual_remediation", "escalate"]})
     return items

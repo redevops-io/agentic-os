@@ -50,6 +50,9 @@ Reference examples (kernel apps annotated where the capability exists):
 | publish externally | `IRREVERSIBLE` - not reliably reversible (`social.publish`, `assistant.push_assets`) |
 | ledger entry / subscription | `books.record_revenue`->`books.reverse_entry`, `billing.create_subscription`->`billing.cancel_subscription` (approval-gated) |
 
+Two optional per-action fields (section 9): `disposition: "PRESERVE"` (this effect survives a failed workflow;
+requires `supported: false`) and `preconditions: "<read-only capability>"` (is reversing still safe NOW?).
+
 A `compensation` dict is validated fail-closed (unknown keys, `supported` without `capability`, unknown
 `reversibility` raise); a malformed remote declaration is read as *undeclared* (=> irreversible).
 
@@ -255,3 +258,45 @@ Fixtures that declared an undo for a capability they never registered now regist
   compensated unless COMPENSATE_DECLARED). Still to port: declared-only filtering is by `Undo`, no
   verification/approval/events yet - it replays the Python events but does not emit them.
 * Consumers of `MissionState` / `m.state == FAILED` must also handle `COMPENSATION_FAILED`.
+
+## 9. Per-action selection, preconditions and the partially-completed outcome
+
+`failure_policy` decides whether a mission MAY compensate; it is deliberately coarse. A deployment that wants
+"a failed workflow does not imply its successful actions should be undone" selects PER ACTION on the capability
+(`CompensationSpec`), never per workflow:
+
+| `compensation` declaration | On a failed mission (policy `COMPENSATE_DECLARED`) | Listed as |
+|---|---|---|
+| `supported: true, capability, verify, preconditions, requires_approval: true` | reversal considered: preconditions evaluated, a human approves, undo runs, read-back verifies | `compensated` / `retained_effects` if it could not run |
+| `supported: false, disposition: "PRESERVE", notes: "..."` | **never reversed**, whatever the policy (completed beneficial / security / compliance actions) | `not_reversible` (+ `disposition`), `retained_effects[reason=preserved_by_declaration]` |
+| `irreversible="<note>"` / undeclared | never reversed | `not_reversible`, `retained_effects[reason=irreversible|undeclared_reversibility]` |
+
+Under the default `HALT_AND_REPORT` nothing is reversed and every effect is retained (`left_by_policy`).
+`PRESERVE` is checked inside the compensation runner itself, so it also holds for fork-branch compensation.
+A reversal of a preserved effect is a NEW decision (a separately authorized forward action), not an undo.
+
+**Preconditions** (`compensation.preconditions`): a registered, read-only capability. Before the reversal is
+offered for approval, and again right before it executes (the world can change while an approval is pending),
+the runner invokes it with `{precondition_for_undo_of, undo, result, _node: "{node}:undo:precondition"}`
+(idempotency key `{key}:undo:{attempt}:precondition:{plan|exec}`). Only an explicit `holds: true` proceeds.
+Anything else (`holds: false`, a failure-shaped result, a raise, an unregistered or side-effecting check) fails
+CLOSED: `CompensationSkipped{reason}`, nothing executed, the effect is retained. A skipped reversal is not a
+failed compensation: the mission ends `FAILED` (not `COMPENSATION_FAILED`) with a `compensation_skipped`
+needs-you item; `retry` re-evaluates it, `acknowledge` accepts it.
+
+**Full declaration.** `compensation.full_declaration_problems(cap)` lists what an owner can demand of every
+compensatable action: `compensation_capability` (`capability`), `preconditions`, `authorization_policy`
+(`requires_approval: true`), `verification_method` (`verify`). The `idempotency_key` is never author-supplied: the
+runner always derives `{node.idempotency_key}:undo:{attempt}` (read-back `...:verify`, precondition
+`...:precondition:{phase}`), so a retry never reuses a key and a duplicate delivery is deduplicated by the operator.
+
+**Partially completed.** When a mission did not finish and effects remain, the outcome carries
+`retained_effects` (`{node_id, capability, reason, detail}`; reasons: `preserved_by_declaration`, `left_by_policy`,
+`irreversible`, `undeclared_reversibility`, `precondition_not_met`, `compensation_failed`,
+`awaiting_compensation_approval`, `compensation_unverified`, `acknowledged`), `partially_completed: true` and
+`incomplete_steps` (`{node_id, capability, status, error}`: the steps that never finished, to retry or escalate).
+`rolled_back` is `false` whenever anything is retained. The same facts are appended to the durable log as
+`EffectsRetained` (once per distinct state), so the execution history names every effect left behind and why;
+`outcome_from_log` rebuilds the identical outcome on replay. The `effects_left_in_place` needs-you item carries them
+(`decisions: manual_remediation | escalate`) for preserved, precondition-held and policy-left effects. The failed
+step itself may have partly executed: its effect is unknown to the log and is not listed as retained.

@@ -34,8 +34,17 @@ EV_APPROVAL_REQUIRED = "CompensationApprovalRequired"   # parked: the compensati
 EV_APPROVED = "CompensationApproved"                     # who/when/what (undo, inputs hash, attempt) was approved
 EV_ACKNOWLEDGED = "CompensationAcknowledged"             # a human accepts that the forward effect remains
 EV_UNDECLARED_TARGET = "CompensationUndeclaredTarget"    # warning: declared undo is not a registered capability
+EV_SKIPPED = "CompensationSkipped"                       # declared precondition not met / not evaluable: NOT executed
+EV_RETAINED = "EffectsRetained"                          # mission-level record of every effect that remains
 COMPENSATION_EVENTS = (EV_REQUESTED, EV_AUTHORIZED, EV_EXECUTED, EV_VERIFIED, EV_FAILED, EV_APPROVAL_REQUIRED,
-                       EV_APPROVED, EV_ACKNOWLEDGED, EV_UNDECLARED_TARGET)
+                       EV_APPROVED, EV_ACKNOWLEDGED, EV_UNDECLARED_TARGET, EV_SKIPPED)
+
+#: Per-action disposition on failure (``CompensationSpec.disposition``). "" == COMPENSATE: a completed action that
+#: declares a compensation is eligible when the mission's failure policy is COMPENSATE_DECLARED. PRESERVE: this
+#: action's effect is KEPT on failure whatever the policy (completed beneficial / security / compliance actions);
+#: it is recorded as a retained effect and never reversed automatically.
+DISPOSITIONS = ("", "COMPENSATE", "PRESERVE")
+PRESERVE = "PRESERVE"
 
 ENV_MAX_ATTEMPTS = "AGENTIC_OS_COMPENSATION_MAX_ATTEMPTS"
 ENV_STRICT_TARGETS = "AGENTIC_OS_STRICT_UNDO_TARGETS"
@@ -77,6 +86,8 @@ class CompensationSpec:
     requires_approval: bool = False         # compensation needs a human approval of its own (see docs)
     verify: str | None = None               # read-back capability that proves the effect is gone
     notes: str = ""
+    disposition: str = ""                   # "" | COMPENSATE | PRESERVE (per-action; see DISPOSITIONS)
+    preconditions: str | None = None        # read-only capability: "is it still safe to reverse NOW?" -> {holds: bool}
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -102,8 +113,22 @@ def coerce(value: Any) -> CompensationSpec | None:
             raise ValueError("compensation.supported=False must not name a compensating capability")
         if spec.supported and spec.reversibility not in ("", "REVERSIBLE_EXPLICIT"):
             raise ValueError("compensation.supported=True requires reversibility REVERSIBLE_EXPLICIT")
+        if spec.disposition not in DISPOSITIONS:
+            raise ValueError(f"unknown compensation disposition {spec.disposition!r}")
+        if spec.disposition == PRESERVE and spec.supported:
+            raise ValueError("compensation.disposition=PRESERVE contradicts supported=True: a preserved effect is "
+                             "never automatically reversed, so declare supported=False (reversal is a new, "
+                             "separately authorized decision)")
+        if spec.preconditions and not spec.supported:
+            raise ValueError("compensation.preconditions requires supported=True")
         return spec
     raise TypeError(f"compensation must be a dict or CompensationSpec, got {type(value).__name__}")
+
+
+def is_preserved(cap: Any) -> bool:
+    """True when the capability declares ``disposition=PRESERVE`` (its effect survives a failed workflow)."""
+    spec = coerce(getattr(cap, "compensation", None))
+    return spec is not None and spec.disposition == PRESERVE
 
 
 def declared_undo(cap: Any) -> str | None:
@@ -146,6 +171,9 @@ def intrinsic_problems(cap: Any) -> list[str]:
     undo = declared_undo(cap)
     if undo and undo == name:
         out.append(f"{name}: compensation target is the capability itself (would re-run the forward action)")
+    if spec is not None and spec.preconditions and spec.preconditions in (name, undo, spec.verify):
+        out.append(f"{name}: preconditions '{spec.preconditions}' must be a read-only check distinct from the "
+                   "forward action, the compensating capability and the verify read-back")
     if spec is not None and spec.verify and spec.verify in (name, undo):
         out.append(f"{name}: verify '{spec.verify}' must be a read-back distinct from the forward action and "
                    "the compensating capability (verify == undo would run the undo twice)")
@@ -199,6 +227,38 @@ def registry_problems(caps: Iterable[Any], get_capability, *, require_verify: bo
                     out.append(f"{c.name}: verify '{spec.verify}' is not registered")
                 elif getattr(v, "side_effecting", False):
                     out.append(f"{c.name}: verify '{spec.verify}' is side-effecting (must be a read-only read-back)")
+            if spec.preconditions:
+                pc = get_capability(spec.preconditions)
+                if pc is None:
+                    out.append(f"{c.name}: preconditions '{spec.preconditions}' is not registered")
+                elif getattr(pc, "side_effecting", False):
+                    out.append(f"{c.name}: preconditions '{spec.preconditions}' is side-effecting (must be read-only)")
+    return out
+
+
+def full_declaration_problems(cap: Any) -> list[str]:
+    """The per-action declaration an owner can demand of every COMPENSATABLE action (``reversibility_of`` is
+    REVERSIBLE_EXPLICIT): ``compensation_capability`` (``compensation.capability``), ``preconditions``,
+    ``authorization_policy`` (``requires_approval``: a human approves each reversal), ``verification_method``
+    (``verify``). The ``idempotency_key`` is NOT author-supplied: it is always derived by the runner as
+    ``{node.idempotency_key}:undo:{attempt}`` (read-back ``...:verify``), so it cannot be forgotten or reused.
+    A legacy bare ``undo=`` has no spec and reports every item. Non-compensatable capabilities report nothing."""
+    if reversibility_of(cap) is not Reversibility.REVERSIBLE_EXPLICIT:
+        return []
+    spec = coerce(getattr(cap, "compensation", None))
+    name = getattr(cap, "name", "?")
+    if spec is None:
+        return [f"{name}: legacy undo= with no `compensation` declaration (capability, preconditions, "
+                "authorization, verification all missing)"]
+    out = []
+    if not spec.capability:
+        out.append(f"{name}: no compensation_capability")
+    if not spec.preconditions:
+        out.append(f"{name}: no preconditions (read-only check that reversing is still safe)")
+    if not spec.requires_approval:
+        out.append(f"{name}: no authorization_policy (requires_approval=True: a human approves each reversal)")
+    if not spec.verify:
+        out.append(f"{name}: no verification_method (verify read-back)")
     return out
 
 
@@ -254,7 +314,7 @@ def receipt_for(node_id: str, undo: str, idempotency_key: str, result: Any) -> d
 def fold_compensation(events: Iterable[Any]) -> dict[str, dict]:
     """Per-node compensation status folded from the durable log (events are objects with ``type``/``payload``
     or dicts). status: requested | approval_required | authorized | executed_unverified | compensated | failed
-    | acknowledged. ``attempts`` counts CompensationRequested; a later ``requested`` (retry) restarts the node.
+    | acknowledged | skipped (precondition not met: nothing was executed). ``attempts`` counts CompensationRequested; a later ``requested`` (retry) restarts the node.
     ``approval`` is the latest CompensationApproved for the CURRENT attempt. Unknown event types are ignored."""
     out: dict[str, dict] = {}
     for e in events:
@@ -296,6 +356,8 @@ def fold_compensation(events: Iterable[Any]) -> dict[str, dict]:
             cur.update(status="failed", reason=p.get("reason", ""))
         elif t == EV_ACKNOWLEDGED:
             cur.update(status="acknowledged", actor=p.get("actor"), ack_reason=p.get("reason", ""))
+        elif t == EV_SKIPPED:
+            cur.update(status="skipped", reason=p.get("reason", ""))
     for v in out.values():
         v.pop("_seen", None)
     return out
@@ -308,5 +370,6 @@ def summarize(folded: dict[str, dict]) -> dict:
             "compensation_failed": {n: v["reason"] for n, v in sorted(folded.items())
                                     if v["status"] in ("failed", "approval_required")},
             "compensation_acknowledged": by("acknowledged"),
+            "compensation_skipped": {n: v["reason"] for n, v in sorted(folded.items()) if v["status"] == "skipped"},
             "readback_only": all(v.get("method") == "readback" for v in folded.values()
                                  if v["status"] == "compensated")}
