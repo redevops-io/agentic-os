@@ -76,11 +76,9 @@ def test_recorded_outcomes_persist_and_learned_selection_survives_restart(tmp_pa
     c1 = TestClient(create_app(prov1))
     assert crm_choice(c1) == "send_proposal"
     for _ in range(30):
-        r = c1.post("/api/outcomes", json={"source_app": "crm", "action_kind": "send_proposal",
-                                           "observed_reward": -0.6}).json()
+        r = prov1.record_outcome_event(source_app="crm", action_kind="send_proposal", observed_reward=-0.6)
         assert r["durable"] is True
-        c1.post("/api/outcomes", json={"source_app": "crm", "action_kind": "schedule_call",
-                                       "observed_reward": 0.9})
+        prov1.record_outcome_event(source_app="crm", action_kind="schedule_call", observed_reward=0.9)
     # selection changes only through the gated promotion cycle (permissive gate for this small log)
     assert crm_choice(c1) == "send_proposal"
     from agentic_os.policy_promotion import PromotionGate

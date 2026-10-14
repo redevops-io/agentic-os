@@ -377,7 +377,8 @@ def run_promotion_cycle(outcome_store, *, gate: Optional[PromotionGate] = None,
     gate = gate or PromotionGate()
     registry = registry or PolicyRegistry()
     registry.refresh()                           # evaluate against what is ACTUALLY active (persisted)
-    events = outcome_store.load()
+    # synthetic (demo) events are never evidence, whatever store they leaked into
+    events = [e for e in outcome_store.load() if not getattr(e, "simulated", False)]
     result = evaluate_candidate(events, holdout_fraction=holdout_fraction, prior_weight=prior_weight,
                                 reward_weights=reward_weights)
     candidate = build_candidate(events, prior_weight=prior_weight, reward_weights=reward_weights)

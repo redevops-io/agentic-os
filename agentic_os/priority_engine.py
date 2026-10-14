@@ -332,6 +332,14 @@ class OutcomeEvent:
     # the producer prior (base priority, BEFORE any learned adjustment) the selection was made on — lets
     # the promotion gate evaluate against what was actually used at selection. None = not recorded.
     prior_utility: Optional[float] = None
+    #: owning tenant (None = single-tenant / unscoped). Promotion can be filtered by it, so one tenant's
+    #: evidence never trains another tenant's policy.
+    tenant_id: Optional[str] = None
+    #: idempotency / deterministic id. Stores append at most ONE event per non-empty ``event_id``.
+    event_id: str = ""
+    #: True for synthetic (demo) events. Stores REFUSE these and the promotion cycle excludes them: a
+    #: simulated event can never become learning evidence.
+    simulated: bool = False
 
     def scalar_reward(self, weights: Optional[Mapping[str, float]] = None) -> float:
         """Collapse the reward to a single attribution-weighted number for ranking/learning. Uses the

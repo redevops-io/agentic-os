@@ -31,7 +31,7 @@ def event_to_dict(ev: OutcomeEvent) -> dict:
             "source_observation_ids": list(ev.source_observation_ids),
             "candidate_intervention_ids": list(ev.candidate_intervention_ids),
             "selected_intervention_id": ev.selected_intervention_id,
-            "prior_utility": ev.prior_utility}
+            "prior_utility": ev.prior_utility, "tenant_id": ev.tenant_id, "event_id": ev.event_id}
 
 
 def event_from_dict(d: dict) -> OutcomeEvent:
@@ -46,7 +46,23 @@ def event_from_dict(d: dict) -> OutcomeEvent:
         source_observation_ids=tuple(d.get("source_observation_ids") or ()),
         candidate_intervention_ids=tuple(d.get("candidate_intervention_ids") or ()),
         selected_intervention_id=d.get("selected_intervention_id", ""),
-        prior_utility=d.get("prior_utility"))
+        prior_utility=d.get("prior_utility"), tenant_id=d.get("tenant_id"),
+        event_id=d.get("event_id", "") or "")
+
+
+def dedupe_key(ev: OutcomeEvent) -> str:
+    """Identity used to make ``append`` idempotent: the explicit ``event_id`` (tenant-scoped), else, for a
+    derived outcome, a deterministic id from (observation ids, selected intervention). '' = not dedupable."""
+    if ev.event_id:
+        return f"{ev.tenant_id or ''}|{ev.event_id}"
+    if ev.source_observation_ids and ev.selected_intervention_id:
+        return f"{ev.tenant_id or ''}|obs:{','.join(ev.source_observation_ids)}->{ev.selected_intervention_id}"
+    return ""
+
+
+def refuse_simulated(ev: OutcomeEvent) -> None:
+    if getattr(ev, "simulated", False):
+        raise ValueError("simulated/demo events can never enter an OutcomeStore (no evidence path)")
 
 
 class OutcomeStore(Protocol):
@@ -60,6 +76,10 @@ class InMemoryOutcomeStore:
     events: List[OutcomeEvent] = field(default_factory=list)
 
     def append(self, ev: OutcomeEvent) -> None:
+        refuse_simulated(ev)
+        k = dedupe_key(ev)
+        if k and any(dedupe_key(e) == k for e in self.events):
+            return                                   # idempotent: same key => no second append
         self.events.append(ev)
 
     def load(self) -> List[OutcomeEvent]:
@@ -73,6 +93,10 @@ class FileOutcomeStore:
     path: str
 
     def append(self, ev: OutcomeEvent) -> None:
+        refuse_simulated(ev)
+        k = dedupe_key(ev)
+        if k and any(dedupe_key(e) == k for e in self.load()):
+            return                                   # idempotent: same key => no second append
         d = os.path.dirname(self.path)
         if d:
             os.makedirs(d, exist_ok=True)
@@ -112,6 +136,9 @@ CREATE TABLE IF NOT EXISTS outcome_events (
   note                        text NOT NULL DEFAULT ''
 );
 ALTER TABLE outcome_events ADD COLUMN IF NOT EXISTS prior_utility double precision;
+ALTER TABLE outcome_events ADD COLUMN IF NOT EXISTS tenant_id text;
+ALTER TABLE outcome_events ADD COLUMN IF NOT EXISTS event_id text NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX IF NOT EXISTS ux_oe_event ON outcome_events(coalesce(tenant_id,''), event_id) WHERE event_id <> '';
 CREATE INDEX IF NOT EXISTS ix_oe_selected ON outcome_events(selected_intervention_id);
 CREATE INDEX IF NOT EXISTS ix_oe_key ON outcome_events(source_app, action_kind);
 """
@@ -138,27 +165,33 @@ class PostgresOutcomeStore:
 
     def append(self, ev: OutcomeEvent) -> None:
         from psycopg.types.json import Jsonb
+        refuse_simulated(ev)
+        eid = ev.event_id
+        if not eid:
+            k = dedupe_key(ev)
+            eid = k.split("|", 1)[1] if k else ""
         with self._conn.cursor() as cur:
             cur.execute(
                 """INSERT INTO outcome_events
                      (candidate_id, source_app, action, action_kind, observed_reward, reward_dimensions,
                       delay, attribution_confidence, source_observation_ids, candidate_intervention_ids,
-                      selected_intervention_id, note, prior_utility)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                      selected_intervention_id, note, prior_utility, tenant_id, event_id)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT DO NOTHING""",
                 (ev.candidate_id, ev.source_app, ev.action.value if ev.action is not None else None,
                  ev.action_kind, ev.observed_reward, Jsonb(dict(ev.reward_dimensions)), ev.delay,
                  ev.attribution_confidence, list(ev.source_observation_ids),
-                 list(ev.candidate_intervention_ids), ev.selected_intervention_id, ev.note, ev.prior_utility))
+                 list(ev.candidate_intervention_ids), ev.selected_intervention_id, ev.note, ev.prior_utility, ev.tenant_id, eid))
 
     def load(self) -> List[OutcomeEvent]:
         with self._conn.cursor() as cur:
             cur.execute("SELECT candidate_id, source_app, action, action_kind, observed_reward, "
                         "reward_dimensions, delay, attribution_confidence, source_observation_ids, "
-                        "candidate_intervention_ids, selected_intervention_id, note, prior_utility "
-                        "FROM outcome_events ORDER BY id")
+                        "candidate_intervention_ids, selected_intervention_id, note, prior_utility, "
+                        "tenant_id, event_id FROM outcome_events ORDER BY id")
             rows = cur.fetchall()
         out: List[OutcomeEvent] = []
-        for (cid, app, action, kind, reward, dims, delay, attr, sobs, cids, sel, note, prior) in rows:
+        for (cid, app, action, kind, reward, dims, delay, attr, sobs, cids, sel, note, prior, tenant, eid) in rows:
             if isinstance(dims, str):
                 dims = json.loads(dims)
             out.append(OutcomeEvent(
@@ -167,7 +200,8 @@ class PostgresOutcomeStore:
                 reward_dimensions=dict(dims or {}), delay=float(delay),
                 attribution_confidence=float(attr), source_observation_ids=tuple(sobs or ()),
                 candidate_intervention_ids=tuple(cids or ()), selected_intervention_id=sel or "",
-                prior_utility=(float(prior) if prior is not None else None)))
+                prior_utility=(float(prior) if prior is not None else None),
+                tenant_id=tenant, event_id=eid or ""))
         return out
 
 

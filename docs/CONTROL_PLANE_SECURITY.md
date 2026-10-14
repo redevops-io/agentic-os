@@ -31,3 +31,15 @@ One classifier (`result_failed`) serves the verifier, marker synthesis and the c
 
 ## Multiple replicas
 `ReplayGuard` (approval-token nonces) and the idempotency cache are in-memory and per-process. `agentic_os.mission.approval.SharedStore` is the protocol seam for a shared backend (e.g. Redis); none is shipped. Set `AGENTIC_OS_REPLICAS=<n>`; with n>1 a WARNING is logged at startup. Run one replica until a shared store exists.
+
+## Projects API `POST /api/outcomes` (learning evidence)
+The outcome log feeds `run_promotion_cycle`, so it is evidence, not telemetry. Two lanes:
+
+| Lane | Selected by | Auth | Effect |
+|---|---|---|---|
+| **Demo / simulated** (default) | no `Authorization` header and `authoritative` not true | none (public demo stays open) | Stored in an in-memory, per-session (`X-Demo-Session`, else client IP) sandbox: 50 events/session, 500 sessions, 1h TTL. Response is flagged `demo: true, simulated: true, namespace: "demo"`. Never written to `OutcomeStore`/`FileOutcomeStore`, never read by promotion, correlation or export. |
+| **Authoritative** | `Authorization` header or `authoritative: true` | `AGENTIC_OS_CONTROL_TOKEN` bearer: unset -> 503, wrong/missing -> 401 | Appends one `OutcomeEvent`, only if the request carries a receipt. |
+
+Authoritative requirements (4xx and **no append** otherwise): `intervention_id` (alias `decision_ref`) resolving to an **executed, non-shadow** `InterventionRecord` in the provider's `intervention_store` (404 unknown, 409 unexecuted / `execution_ref`, `mission_id`, `source_app`, `action_kind` mismatch); `idempotency_key` (same key + tenant => same result, no second append, `duplicate: true`); explicit `attribution_confidence` in [0, 1] (no default); `observed_reward` or `reward_dimensions`. `source_app` / `action_kind` / `candidate_id` are taken from the receipt, not the caller. Optional `tenant_id` is stored on the event; `run_promotion_cycle(tenant_id=...)` evaluates only that tenant's events.
+
+Defence in depth: `OutcomeEvent.simulated=True` is refused by every `OutcomeStore.append` and filtered by `policy_promotion.run_promotion_cycle`. `OutcomeStore.append` is idempotent on `event_id` (tenant-scoped) and, for derived outcomes, on (source observation ids, selected intervention). In-process app/connector code keeps using the trusted `record_outcome_event` / store `append` directly (e.g. `apps/billing`).

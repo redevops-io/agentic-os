@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Protocol, Set, Tuple
 
 try:
-    from fastapi import FastAPI
+    from fastapi import FastAPI, Header, HTTPException, Request
     from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel
 except ImportError as e:  # pragma: no cover
@@ -173,6 +173,9 @@ class SampleProjectionProvider:
     #: ``policy_store_path`` / ``$POLICY_STORE_PATH`` / ``$AOS_DATA_DIR`` configure a store, else in-memory.
     policy_registry: Any = None
     policy_store_path: Optional[str] = None
+    #: InterventionStore holding the executed-intervention receipts an AUTHORITATIVE outcome must link to.
+    #: None => no receipts resolvable => every authoritative write is rejected (fail closed).
+    intervention_store: Any = None
 
     def __post_init__(self) -> None:
         if self.policy_registry is None:
@@ -367,7 +370,7 @@ class SampleProjectionProvider:
         return {"outcomes_recorded": len(self.outcome_events), "selection_adjusted": learn_fn is not None,
                 "policy_version": reg.active.version, "policy_kind": reg.active.kind}
 
-    def run_promotion_cycle(self, *, apply: bool = False, gate=None, **kwargs):
+    def run_promotion_cycle(self, *, apply: bool = False, gate=None, tenant_id: Optional[str] = None, **kwargs):
         """The ONLY path that changes the learned policy: collect → evaluate (held-out) → promote through
         the gate. ``apply=False`` is a dry run (returns the report, changes nothing). Wraps
         :func:`agentic_os.policy_promotion.run_promotion_cycle` over this provider's outcomes + registry."""
@@ -375,26 +378,77 @@ class SampleProjectionProvider:
         from agentic_os.policy_promotion import run_promotion_cycle
         store = InMemoryOutcomeStore()
         for ev in self.outcome_events:
+            if getattr(ev, "simulated", False):       # defence in depth: synthetic data is never evidence
+                continue
+            if tenant_id is not None and ev.tenant_id != tenant_id:
+                continue                              # tenant isolation: only this tenant's evidence
             store.append(ev)
         return run_promotion_cycle(store, gate=gate, registry=self.policy_registry, apply=apply, **kwargs)
 
     def record_outcome_event(self, *, source_app: str, action_kind: str, candidate_id: str = "",
                              observed_reward: Optional[float] = None,
                              reward_dimensions: Optional[Dict[str, float]] = None,
-                             attribution_confidence: float = 1.0, delay: float = 0.0) -> dict:
-        """Record an observed outcome into the shared log — this is how a deployment closes the loop.
+                             attribution_confidence: float = 1.0, delay: float = 0.0,
+                             tenant_id: Optional[str] = None, event_id: str = "",
+                             selected_intervention_id: str = "") -> dict:
+        """TRUSTED in-process write (app/connector code). NOT reachable anonymously: the HTTP surface goes
+        through :meth:`record_authoritative_outcome` (token + receipt) or the demo sandbox.
+        Record an observed outcome into the shared log — this is how a deployment closes the loop.
         ``delay`` is in SECONDS. The outcome feeds the NEXT promotion cycle (:meth:`run_promotion_cycle`); it
         does not change selection by itself (governance is untouched)."""
         from agentic_os.priority_engine import OutcomeEvent
         ev = OutcomeEvent(
             candidate_id=candidate_id, source_app=source_app, action_kind=action_kind,
             observed_reward=observed_reward, reward_dimensions=dict(reward_dimensions or {}),
-            attribution_confidence=attribution_confidence, delay=delay)
+            attribution_confidence=attribution_confidence, delay=delay, tenant_id=tenant_id,
+            event_id=event_id, selected_intervention_id=selected_intervention_id)
+        from agentic_os.outcome_store import dedupe_key
+        k = dedupe_key(ev)
+        if k and any(dedupe_key(e) == k for e in self.outcome_events):
+            return {"recorded": len(self.outcome_events), "durable": bool(self.persist_path), "duplicate": True}
         self.outcome_events.append(ev)
         if self.persist_path:                       # durably append so it survives a restart
             from agentic_os.outcome_store import FileOutcomeStore
             FileOutcomeStore(self.persist_path).append(ev)
-        return {"recorded": len(self.outcome_events), "durable": bool(self.persist_path)}
+        return {"recorded": len(self.outcome_events), "durable": bool(self.persist_path), "duplicate": False}
+
+    def record_authoritative_outcome(self, *, intervention_id: str, idempotency_key: str,
+                                     attribution_confidence: Optional[float],
+                                     observed_reward: Optional[float] = None,
+                                     reward_dimensions: Optional[Dict[str, float]] = None,
+                                     delay: float = 0.0, tenant_id: Optional[str] = None,
+                                     execution_ref: str = "", mission_id: str = "",
+                                     source_app: str = "", action_kind: str = "") -> dict:
+        """Authenticated evidence write. The outcome must link to an EXECUTED InterventionRecord in
+        :attr:`intervention_store`; producer identity (source_app/action_kind/candidate) is taken from that
+        record, never from the caller. Raises :class:`OutcomeRejected` (4xx) and appends nothing otherwise."""
+        if not intervention_id:
+            raise OutcomeRejected(422, "intervention_id (decision_ref) is required")
+        if not idempotency_key:
+            raise OutcomeRejected(422, "idempotency_key is required")
+        if attribution_confidence is None or not (0.0 <= attribution_confidence <= 1.0):
+            raise OutcomeRejected(422, "attribution_confidence is required and must be within [0, 1]")
+        if observed_reward is None and not reward_dimensions:
+            raise OutcomeRejected(422, "observed_reward or reward_dimensions is required")
+        rec = None
+        if self.intervention_store is not None:
+            rec = next((r for r in self.intervention_store.all() if r.intervention_id == intervention_id), None)
+        if rec is None:
+            raise OutcomeRejected(404, f"unknown intervention {intervention_id!r}")
+        if rec.shadow or rec.executed_at is None or not rec.execution_ref:
+            raise OutcomeRejected(409, f"intervention {intervention_id!r} was not executed (no receipt)")
+        if execution_ref and execution_ref != rec.execution_ref:
+            raise OutcomeRejected(409, "execution_ref does not match the intervention receipt")
+        if mission_id and mission_id != rec.mission_id:
+            raise OutcomeRejected(409, "mission_id does not match the intervention receipt")
+        if (source_app and source_app != rec.source_app) or (
+                action_kind and action_kind != (rec.action_kind or rec.selected_action)):
+            raise OutcomeRejected(409, "source_app/action_kind do not match the intervention receipt")
+        return self.record_outcome_event(
+            source_app=rec.source_app, action_kind=rec.action_kind or rec.selected_action,
+            candidate_id=rec.candidate_id, observed_reward=observed_reward,
+            reward_dimensions=reward_dimensions, attribution_confidence=attribution_confidence, delay=delay,
+            tenant_id=tenant_id, event_id=f"idem:{idempotency_key}", selected_intervention_id=intervention_id)
 
     def discovery(self, _pid: str) -> List[dict]:
         return [
@@ -871,14 +925,63 @@ class _SidekickReq(BaseModel):
     text: str = ""
 
 
+class OutcomeRejected(Exception):
+    """An authoritative outcome write that fails validation/receipt resolution (maps to an HTTP 4xx)."""
+
+    def __init__(self, status: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status, self.detail = status, detail
+
+
 class _OutcomeReq(BaseModel):
     source_app: str = ""
     action_kind: str = ""
     candidate_id: str = ""
     observed_reward: Optional[float] = None
     reward_dimensions: Dict[str, float] = {}
-    attribution_confidence: float = 1.0
+    attribution_confidence: Optional[float] = None   # authoritative path: REQUIRED, within [0, 1]
     delay: float = 0.0               # SECONDS between the action and the outcome
+    # authoritative (operator) path only — requires a bearer token AND an executed-intervention receipt:
+    authoritative: bool = False
+    intervention_id: str = ""        # a.k.a. decision_ref
+    decision_ref: str = ""
+    execution_ref: str = ""
+    mission_id: str = ""
+    idempotency_key: str = ""
+    tenant_id: Optional[str] = None
+
+
+class DemoOutcomeSandbox:
+    """In-memory, per-session, bounded, TTL'd store for SYNTHETIC outcomes from anonymous callers
+    (namespace ``demo``). It holds plain dict records (never OutcomeEvents), is never persisted, and has no
+    reader in the promotion / correlation / export paths."""
+    NAMESPACE = "demo"
+
+    def __init__(self, *, cap_per_session: int = 50, max_sessions: int = 500, ttl_seconds: float = 3600.0,
+                 clock=None) -> None:
+        import time as _t
+        self.cap, self.max_sessions, self.ttl = cap_per_session, max_sessions, ttl_seconds
+        self._clock = clock or _t.time
+        self._sessions: Dict[str, List[dict]] = {}
+
+    def _expire(self) -> None:
+        now = self._clock()
+        for sid in [k for k, v in self._sessions.items() if not v or now - v[-1]["ts"] > self.ttl]:
+            del self._sessions[sid]
+
+    def add(self, session: str, record: dict) -> dict:
+        self._expire()
+        if session not in self._sessions and len(self._sessions) >= self.max_sessions:
+            return {"stored": False, "reason": "demo session capacity reached"}
+        evs = self._sessions.setdefault(session, [])
+        if len(evs) >= self.cap:
+            return {"stored": False, "reason": f"demo cap of {self.cap} events per session reached"}
+        evs.append({**record, "ts": self._clock(), "demo": True, "simulated": True, "namespace": self.NAMESPACE})
+        return {"stored": True, "count": len(evs)}
+
+    def events(self, session: str) -> List[dict]:
+        self._expire()
+        return [dict(e) for e in self._sessions.get(session, [])]
 
 
 class _ProposeSourcesReq(BaseModel):
@@ -1073,17 +1176,46 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
                     "handled_automatically": 0, "abstained": 0, "basis": "unavailable"}
         return fn(project_id)
 
+    demo_outcomes = DemoOutcomeSandbox()
+    app.state.demo_outcomes = demo_outcomes
+
     @app.post("/api/outcomes")
-    def _record_outcome(req: _OutcomeReq) -> dict:
-        # Close the loop: record an observed outcome so future 'what needs me?' selections learn from
-        # it. Optional on the provider — returns supported=False if the deployment doesn't record.
+    def _record_outcome(req: _OutcomeReq, request: Request,
+                        authorization: Optional[str] = Header(default=None),
+                        x_demo_session: Optional[str] = Header(default=None)) -> dict:
+        # Two lanes. AUTHORITATIVE (``Authorization`` header or ``authoritative: true``): bearer token
+        # (503 unset / 401 wrong) + executed-intervention receipt + idempotency key; the only HTTP path into
+        # the learning pipeline. Everything else is an anonymous DEMO write: sandboxed, labelled
+        # demo/simulated, in memory, bounded; it never reaches OutcomeStore or the promotion cycle.
         fn = getattr(prov, "record_outcome_event", None)
         if fn is None:
             return {"recorded": 0, "supported": False}
-        return {**fn(source_app=req.source_app, action_kind=req.action_kind, candidate_id=req.candidate_id,
-                     observed_reward=req.observed_reward, reward_dimensions=req.reward_dimensions,
-                     attribution_confidence=req.attribution_confidence, delay=req.delay),
-                "supported": True}
+        if authorization is not None or req.authoritative:
+            from agentic_os.mission.control_auth import require_control_token
+            require_control_token(authorization)
+            rec_fn = getattr(prov, "record_authoritative_outcome", None)
+            if rec_fn is None:
+                return {"recorded": 0, "supported": False}
+            try:
+                out = rec_fn(
+                    intervention_id=req.intervention_id or req.decision_ref,
+                    idempotency_key=req.idempotency_key, attribution_confidence=req.attribution_confidence,
+                    observed_reward=req.observed_reward, reward_dimensions=req.reward_dimensions,
+                    delay=req.delay, tenant_id=req.tenant_id, execution_ref=req.execution_ref,
+                    mission_id=req.mission_id, source_app=req.source_app, action_kind=req.action_kind)
+            except OutcomeRejected as e:
+                raise HTTPException(e.status, e.detail)
+            return {**out, "supported": True, "demo": False, "simulated": False, "authoritative": True}
+        conf = 0.5 if req.attribution_confidence is None else min(1.0, max(0.0, req.attribution_confidence))
+        session = (x_demo_session or "").strip()[:64] or (request.client.host if request.client else "anon")
+        res = demo_outcomes.add(session, {
+            "source_app": req.source_app, "action_kind": req.action_kind, "candidate_id": req.candidate_id,
+            "observed_reward": req.observed_reward, "reward_dimensions": dict(req.reward_dimensions),
+            "attribution_confidence": conf, "delay": req.delay})
+        return {"supported": True, "demo": True, "simulated": True, "namespace": "demo", "authoritative": False,
+                "durable": False, "recorded": res.get("count", 0), "stored": res["stored"],
+                "reason": res.get("reason", ""),
+                "note": "anonymous demo event: sandboxed per session, never used as learning evidence"}
 
     @app.post("/api/projects/{project_id}/policy/promotion-cycle")
     def _promotion_cycle(project_id: str, body: Dict[str, Any] = Body(default={})) -> dict:
