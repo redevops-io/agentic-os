@@ -10,6 +10,7 @@ A succeeded sibling is NEVER compensated unless the policy is COMPENSATE_DECLARE
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Iterable
@@ -38,16 +39,39 @@ class FailureAction:
     cancel_siblings: bool = True                  # stop running/pending siblings (False for CONTINUE_SIBLINGS)
 
 
-def effective_policy(mission: Any, *, forked: bool = False) -> FailurePolicy:
-    """The mission's declared policy, else the topology default. An unrecognised value fails SAFE to
-    HALT_AND_REPORT (it can never widen into compensation)."""
-    raw = (getattr(mission, "failure_policy", "") or "").strip()
-    if not raw:
-        return FailurePolicy.HALT_AND_REPORT if forked else FailurePolicy.COMPENSATE_DECLARED
+ENV_DEFAULT_POLICY = "AGENTIC_OS_DEFAULT_FAILURE_POLICY"
+
+
+def is_forked(plan_or_graph: Any) -> bool:
+    """Single source of truth for 'this plan has parallel fork branches' (ExecutionGraph.forks, set by the
+    fork/join executor). Used by run_saga; decide_on_branch_failure is forked by definition."""
+    g = getattr(plan_or_graph, "graph", plan_or_graph)
+    return bool(getattr(g, "forks", None))
+
+
+def _parse(raw: str) -> "FailurePolicy | None":
     try:
-        return FailurePolicy(raw.upper())
+        return FailurePolicy((raw or "").strip().upper()) if (raw or "").strip() else None
     except ValueError:
+        return FailurePolicy.HALT_AND_REPORT       # unrecognised: fail SAFE, never widen into compensation
+
+
+def effective_policy(mission: Any, *, forked: bool = False) -> FailurePolicy:
+    """Resolution order: the mission's own ``failure_policy`` (explicit opt-in), then its template's declared
+    default (``templates.TEMPLATE_FAILURE_POLICY``), then ``AGENTIC_OS_DEFAULT_FAILURE_POLICY`` (the
+    deployment-wide escape hatch), then HALT_AND_REPORT. Nothing compensates unless one of them says
+    COMPENSATE_DECLARED. Fork branches ignore the deployment/template default and use HALT_AND_REPORT unless
+    the mission itself opts in."""
+    own = _parse(getattr(mission, "failure_policy", ""))
+    if own is not None:
+        return own
+    if forked:
         return FailurePolicy.HALT_AND_REPORT
+    from .templates import TEMPLATE_FAILURE_POLICY  # noqa: PLC0415
+    tpl = _parse(TEMPLATE_FAILURE_POLICY.get(getattr(mission, "template", None) or "", ""))
+    if tpl is not None:
+        return tpl
+    return _parse(os.environ.get(ENV_DEFAULT_POLICY, "")) or FailurePolicy.HALT_AND_REPORT
 
 
 _OK = {"succeeded", "done", "success", "completed"}

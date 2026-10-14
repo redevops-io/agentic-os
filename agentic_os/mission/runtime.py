@@ -25,7 +25,7 @@ from typing import Any
 from .approval import is_approval_key, strip_approval_keys
 from . import belief, cost as costmod
 from .compiler import compile_intent, CompileError
-from .compensation import declared_undo, coerce as coerce_compensation, fold_compensation, summarize as _summ_comp, validate_plan_compensation
+from .compensation import declared_undo, coerce as coerce_compensation, fold_compensation, summarize as _summ_comp, strict_undo_targets, validate_plan_compensation
 from .context import LocalContextRuntime, ContextIntent, CHECK_POLICY, RESOLVE_BELIEF
 from .lifecycle import LifecycleRegistry, MissionStarted, GateReached, MissionFinished
 from .evidence import EvidenceLog
@@ -442,7 +442,8 @@ class MissionRuntime:
                                                "selected": c.selected} for c in candidates],
                                "promoted_choice": promoted_choice})
         self.store.append("PlanActivated", m.id, {"plan_id": plan.id})
-        comp_errors = validate_plan_compensation(plan.graph.nodes, self.registry.get)
+        comp_errors = validate_plan_compensation(plan.graph.nodes, self.registry.get,
+                                                 strict=strict_undo_targets())
         if comp_errors:    # a node declares an undo the registry does not: refuse the plan, run nothing
             self._set_state(m, MissionState.FAILED)
             self.store.append("MissionBlocked", m.id, {"reason": "compensation_undeclared", "notes": comp_errors})
@@ -505,7 +506,10 @@ class MissionRuntime:
 
     def _registered_undo(self, capability: str) -> "str | None":
         spec = self.registry.get(capability)
-        return declared_undo(spec) if spec is not None else None
+        undo = declared_undo(spec) if spec is not None else None
+        # an undo that names a capability nobody registered is NOT a registered undo: it never receives the
+        # evidence-bound compensation marker (CompensationUndeclaredTarget warns; see docs/COMPENSATION.md)
+        return undo if undo and self.registry.get(undo) is not None else None
 
     def _compensation_requires_approval(self, capability: str) -> bool:
         spec = self.registry.get(capability)
@@ -1112,15 +1116,19 @@ class MissionRuntime:
         from .compensation_runner import run_saga  # noqa: PLC0415
         run_saga(self, m, plan)
 
-    def retry_compensation(self, mission_id: str) -> Mission:
-        """Intervention for a COMPENSATION_FAILED mission: re-attempt only the compensations that failed
-        (each under its own `{idempotency_key}:undo` key). Back to FAILED only if none remain failed."""
+    def compensation_intervention(self, mission_id: str, action: str, *, actor: str, reason: str = "",
+                                  node_id: str | None = None) -> Mission:
+        """Guarded operator path for a mission that needs a human after compensation (retry | approve |
+        acknowledge | verify_manually). Reached ONLY via the authenticated /missions/{mid}/compensation/*
+        routes (control token + tenant check + approver rule); every call records who/when/why in the log.
+        Raises compensation_runner.InterventionError (-> 409) on a wrong state or nothing to do."""
+        from .compensation_runner import InterventionError, intervene  # noqa: PLC0415
         m = self._missions[mission_id]
-        if m.state is not MissionState.COMPENSATION_FAILED:
-            return m
-        self._saga(m, self._plans[mission_id], self._world(mission_id))
-        if not (m.outcome or {}).get("compensation_incomplete"):
-            self._set_state(m, MissionState.FAILED)
+        if m.state not in (MissionState.COMPENSATION_FAILED, MissionState.FAILED):
+            raise InterventionError(f"mission is {m.state.value}; compensation interventions apply to a failed mission")
+        intervene(self, m, action, actor=actor, reason=reason, node_id=node_id)
+        self._set_state(m, MissionState.COMPENSATION_FAILED if (m.outcome or {}).get("compensation_incomplete")
+                        else MissionState.FAILED)
         return m
 
     def _fail(self, m: Mission, plan: ExecutionPlan, reason: str) -> None:

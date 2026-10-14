@@ -96,6 +96,7 @@ class CapabilitySpec:
     # legacy ``undo``) is UNKNOWN and treated as irreversible; the conformance lint flags it.
     compensation: Any = None
     irreversible: bool = False
+    irreversible_note: str = ""                 # WHY it cannot be undone (required when irreversible; lint N10)
     approval_required: bool = False
     confidence: float = 0.9                     # learned success rate (Capability Learning)
     estimated_value: str = "medium"             # low|medium|high
@@ -210,6 +211,10 @@ class ExecutionGraph:
     (kept local so the kernel is runnable standalone; converge the two later)."""
     nodes: list[Node] = field(default_factory=list)
     id: str = field(default_factory=lambda: new_id("graph"))
+    # Parallel fork/join structure. Optional, default empty; the fork/join executor SETS it. A non-empty
+    # value makes the compensation failure policy default to HALT_AND_REPORT (compensation_policy.is_forked,
+    # the single source of truth for both run_saga and effective_policy(forked=...)).
+    forks: list = field(default_factory=list)
 
     def by_id(self, nid: str) -> Node | None:
         return next((n for n in self.nodes if n.id == nid), None)

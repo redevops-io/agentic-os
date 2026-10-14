@@ -127,6 +127,9 @@ type CreateOpts struct {
 	PolicyRefs  []string
 	Budget      *Budget
 	Template    string
+	// FailurePolicy opts the mission into COMPENSATE_DECLARED (docs/COMPENSATION.md). Default: nothing is
+	// compensated automatically.
+	FailurePolicy string
 }
 
 func (rt *MissionRuntime) CreateMission(goal string, opts CreateOpts) *Mission {
@@ -134,6 +137,7 @@ func (rt *MissionRuntime) CreateMission(goal string, opts CreateOpts) *Mission {
 	m.Constraints = opts.Constraints
 	m.PolicyRefs = opts.PolicyRefs
 	m.Template = opts.Template
+	m.FailurePolicy = strings.ToUpper(strings.TrimSpace(opts.FailurePolicy))
 	if opts.Budget != nil {
 		m.Budget = *opts.Budget
 	}
@@ -678,6 +682,11 @@ func (rt *MissionRuntime) assignee(node *Node) string { return "approver" }
 // node auto-compensates its OWN effect: the operator already ran and committed, but the result never
 // became authoritative world state, so the effect must be undone just like a prior stage's.
 func (rt *MissionRuntime) saga(m *Mission, plan *ExecutionPlan, rejected ...*Node) {
+	// COMPENSATION = EXPLICIT_ONLY (docs/COMPENSATION.md, parity with the Python reference runtime): nothing is
+	// undone unless the mission's effective policy is COMPENSATE_DECLARED.
+	if EffectiveFailurePolicy(m) != PolicyCompensateDeclared {
+		return
+	}
 	compensated := map[string]bool{}
 	for _, node := range rejected {
 		if node != nil && rt.compensateNode(m, node) {

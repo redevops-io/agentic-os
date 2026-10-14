@@ -117,41 +117,46 @@ def test_n8_allowlist_names_exist():
         assert app in apps, f"N8 allowlist names unknown app {app}"
 
 
-# ── N10: every consequential (side_effecting) capability DECLARES compensation or irreversible=True ───────────
-# docs/COMPENSATION.md (explicit-only). The allowlist may only SHRINK: annotate a capability with
-# `compensation={...}` (or `irreversible=True`) and delete its entry; a stale entry only warns.
-_N10 = "side-effecting capability has not yet declared compensation/irreversible -- compensation audit N10"
-ALLOW_N10 = {k: _N10 for k in (
-    ("agentic-crm", "crm.score_lead"),
-    ("agentic-crm", "crm.research"),
-    ("agentic-crm", "crm.draft_outreach"),
-    ("agentic-crm", "crm.qualify"),
-    ("agentic-privacy", "privacy.intake"),
-    ("agentic-privacy", "privacy.access"),
-    ("books", "books.categorize"),
-    ("compliance", "compliance.remediate"),
-    ("compliance", "compliance.file_consent"),
-    ("edge-sentinel", "sentinel.unblock_ip"),
-    ("growth-assistant", "assistant.playbook"),
-    ("growth-assistant", "assistant.subreddit_plan"),
-    ("growth-assistant", "assistant.founder_content"),
-    ("growth-assistant", "assistant.community_blueprint"),
-    ("growth-assistant", "assistant.cold_outreach"),
-    ("growth-assistant", "assistant.hire_brief"),
-    ("growth-engine", "growth.reallocate_budget"),
-    ("lifecycle", "lifecycle.compose_campaign"),
-    ("market-radar", "radar.add_watch"),
-    ("outreach-engine", "outreach.approve"),
-    ("social-autopilot", "social.draft"),
-    ("support", "support.draft_reply"),
-    ("support", "support.resolve"),
-    ("support", "support.escalate"),
-)}
+# ── N10: every consequential (side_effecting) capability DECLARES compensation or irreversible=<note> ──────────
+# docs/COMPENSATION.md (explicit-only). The allowlists may only SHRINK: annotate a capability and delete its
+# entry; a stale entry only warns. Every entry carries its own one-line justification.
+ALLOW_N10 = {
+    ("agentic-crm", "crm.score_lead"): "mislabelled: scoring is analysis, no external effect (follow-up: side_effecting=False)",
+    ("agentic-crm", "crm.research"): "mislabelled: read-only enrichment, no external effect (follow-up: side_effecting=False)",
+    ("agentic-crm", "crm.draft_outreach"): "draft kept internally; needs a delete-draft capability to declare compensation",
+    ("agentic-crm", "crm.qualify"): "updates an internal lead status; reversible by re-qualifying, declaration pending",
+    ("agentic-privacy", "privacy.intake"): "records an internal request row; no external effect (follow-up: declare cancel_request)",
+    ("agentic-privacy", "privacy.access"): "mislabelled: subject-access export is read-only (follow-up: side_effecting=False)",
+    ("books", "books.categorize"): "tag_only reference tag on a bank transaction; re-tag undoes it, declaration pending",
+    ("growth-assistant", "assistant.playbook"): "mislabelled: generates text, no external effect",
+    ("growth-assistant", "assistant.subreddit_plan"): "mislabelled: generates text, no external effect",
+    ("growth-assistant", "assistant.founder_content"): "draft asset saved internally; no external effect",
+    ("growth-assistant", "assistant.community_blueprint"): "draft asset saved internally; no external effect",
+    ("growth-assistant", "assistant.cold_outreach"): "draft asset saved internally; no external effect",
+    ("growth-assistant", "assistant.hire_brief"): "mislabelled: generates text, no external effect",
+    ("lifecycle", "lifecycle.compose_campaign"): "draft campaign composed internally; no send (follow-up: delete-draft)",
+    ("market-radar", "radar.add_watch"): "adds an internal watch row; remove_watch capability pending",
+    ("social-autopilot", "social.draft"): "draft kept internally; needs a delete-draft capability to declare compensation",
+    ("support", "support.draft_reply"): "draft kept internally; needs a delete-draft capability to declare compensation",
+}
+# reversible compensation without a `verify` read-back: no app ships read-back capabilities yet (follow-up)
+ALLOW_N10_VERIFY = {
+    ("billing", "billing.create_subscription"): "no subscription read-back capability yet",
+    ("books", "books.record_revenue"): "no journal-entry read-back capability yet",
+    ("edge-sentinel", "sentinel.block_ip"): "no decision read-back capability separate from the block itself",
+    ("infra", "infra.provision"): "no state read-back capability yet",
+    ("infra", "infra.configure"): "no release read-back capability yet",
+    ("sky", "sky.launch"): "no cluster-status read-back capability yet",
+    ("sky", "sky.serve"): "no service-status read-back capability yet",
+}
+# kernel fleets (not apps) that declare an undo capability nobody registered; shrink-only, see COMPENSATION.md
+ALLOW_DANGLING_FLEET_UNDOS = {"content.retract", "crm.retract_opportunity", "crm.delete_activity",
+                              "revenue.retract_followup"}
 
 
 @pytest.mark.parametrize("app", OPERATOR_APPS)
 def test_n10_consequential_capabilities_declare_compensation_or_irreversible(app):
-    from agentic_os.mission.compensation import dangling_undos, lint_capability
+    from agentic_os.mission.compensation import lint_capability, registry_problems
     try:
         op = build_operator(app)
     except ImportError as e:
@@ -165,8 +170,30 @@ def test_n10_consequential_capabilities_declare_compensation_or_irreversible(app
         elif (app, name) not in ALLOW_N10:
             offenders.append(msg)
     assert not offenders, f"{app}: undeclared consequential capabilities: {offenders}"
-    # a declared compensating capability must exist in the same operator (else it could never run)
-    assert not dangling_undos(op._specs.values(), op._specs.get), f"{app}: dangling compensating capability"
+    # cross-capability: target exists in the same operator, no cycles, verify registered + read-only
+    probs = []
+    for spec in op._specs.values():
+        for msg in registry_problems([spec], op._specs.get):
+            if "no `verify`" in msg and (app, spec.name) in ALLOW_N10_VERIFY:
+                continue
+            probs.append(msg)
+    assert not probs, f"{app}: {probs}"
+
+
+def test_n10_fleet_dangling_undos_only_shrink():
+    """Kernel fleets declare `undo="x"`; every such x must be a capability the fleet registers, except the
+    shrink-only allowlist (implement the capability, then delete the entry)."""
+    import re
+    root = Path(__file__).resolve().parents[2] / "agentic_os"
+    declared, registered = set(), set()
+    for f in (root / "content" / "fleet.py", root / "revenue" / "fleet.py"):
+        src = f.read_text()
+        declared |= set(re.findall(r'undo="([\w.]+)"', src))
+        registered |= set(re.findall(r'CapabilitySpec\(\s*"([\w.]+)"', src))
+    dangling = declared - registered
+    assert dangling <= ALLOW_DANGLING_FLEET_UNDOS, f"NEW dangling fleet undo(s): {dangling - ALLOW_DANGLING_FLEET_UNDOS}"
+    for stale in ALLOW_DANGLING_FLEET_UNDOS - dangling:
+        warnings.warn(f"stale allowlist entry {stale}: remove it", StaleAllowlist)
 
 
 def test_n10_allowlist_names_exist():
@@ -178,7 +205,10 @@ def test_lint_n10_bites_on_an_undeclared_consequential_capability():
     from agentic_os.mission.compensation import lint_capability
     from agentic_os.mission.operator_sdk import capability
     assert lint_capability(capability("x.send_email", lambda i: {}, side_effecting=True).spec)
-    assert lint_capability(capability("x.send_email", lambda i: {}, side_effecting=True, irreversible=True).spec) is None
+    assert lint_capability(capability("x.send_email", lambda i: {}, side_effecting=True,
+                                      irreversible="sent email cannot be recalled").spec) is None
+    assert "note" in lint_capability(capability("x.send_email", lambda i: {}, side_effecting=True,
+                                                irreversible=True).spec)          # a bare True has no note
     assert lint_capability(capability("x.read", lambda i: {}).spec) is None
 
 

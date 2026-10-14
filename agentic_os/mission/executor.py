@@ -306,7 +306,8 @@ class Executor:
                 "compensated_result": self._compensated.get((mission_id, node.id, node.capability,
                                                               node.idempotency_key))}
 
-    def compensate(self, node: Node, *, mission_id: str | None = None) -> dict | None:
+    def compensate(self, node: Node, *, mission_id: str | None = None, attempt: int = 1,
+                   approval: dict | None = None) -> dict | None:
         """Run the node's undo capability (saga) — best effort; never raises past the caller.
 
         Fails closed (docs/APPROVAL_TOKENS.md, "Compensation authorization"). The undo is invoked only if
@@ -317,7 +318,13 @@ class Executor:
         declared undo for the forward capability; a planner-attached undo is refused (``undo_not_registered``).
         The undo's inputs come from the logged/ledgered forward result, never from plan-supplied fields.
         Compensating twice returns the first outcome without a second undo call. Client-supplied
-        ``_approval*`` is never consulted."""
+        ``_approval*`` is never consulted.
+
+        docs/COMPENSATION.md: the dispatch is scoped to the compensation itself: idempotency key
+        ``{key}:undo:{attempt}``, ``_node`` = ``{node.id}:undo``. A target equal to the forward capability is
+        refused. When the registry declares ``requires_approval`` for the compensation, the evidence-bound
+        marker is NOT enough: ``approval`` (a ``CompensationApproved`` record) must match this mission, node,
+        attempt, undo and the exact input hash and be unexpired, and the marker then carries ``own_approval``."""
         if not node.undo:
             return None
         mid = (mission_id or "").strip()
@@ -339,23 +346,36 @@ class Executor:
             prior = self._compensated.get(key)
         if prior is not None:
             return prior                      # idempotent: already compensated, no second undo call
+        if node.undo == node.capability:
+            return self._skip(node, f"compensation_target_is_forward_action: '{node.undo}' is the forward "
+                                    "capability itself (would re-run it under the compensation marker)")
         registered = self.undo_registry(node.capability) if self.undo_registry is not None else None
         if self.undo_registry is not None and registered != node.undo:
             return self._skip(node, f"undo_not_registered: '{node.undo}' is not the registered undo of "
                                     f"'{node.capability}'")
-        if self.compensation_requires_approval is not None and self.compensation_requires_approval(node.capability) \
-                and not ev.get("approved"):
-            return self._skip(node, f"compensation_requires_approval: '{node.undo}' declares requires_approval and "
-                                    f"the forward step of '{node.capability}' did not run under a human approval")
-        inputs: dict = {"undo_of": node.capability, "result": copy.deepcopy(ev.get("result")),
-                        "_node": node.id, "_mission": mid}
+        from .compensation import undo_inputs  # noqa: PLC0415
+        from .approval import inputs_hash  # noqa: PLC0415
+        inputs: dict = undo_inputs(node, mid, ev.get("result"))
+        needs_own = bool(self.compensation_requires_approval is not None
+                         and self.compensation_requires_approval(node.capability))
+        if needs_own:
+            import time as _t  # noqa: PLC0415
+            a = approval or {}
+            if not (a and a.get("mission_id") == mid and a.get("node_id") == node.id and a.get("undo") == node.undo
+                    and int(a.get("attempt") or 0) == int(attempt)
+                    and a.get("inputs_sha256") == inputs_hash(inputs)
+                    and float(a.get("exp") or 0) > _t.time()):
+                return self._skip(node, f"compensation_requires_approval: '{node.undo}' needs its OWN human "
+                                        "approval for this attempt, undo and exact inputs (missing, expired, "
+                                        "or bound to different inputs/mission/attempt)")
         if self.undo_registry is not None:
             # Trusted registry declares this undo and the forward step demonstrably executed: the undo is
-            # part of the scope of what ran, so it carries the compensation marker.
-            inputs["_approval"] = {"approved": True, "compensation": True}
+            # part of the scope of what ran, so it carries the compensation marker (+ own_approval when the
+            # compensation required, and has, its own human approval).
+            inputs["_approval"] = {"approved": True, "compensation": True, **({"own_approval": True} if needs_own else {})}
         try:
             out = self.client.invoke(node.operator, node.undo, inputs,
-                                     f"{node.idempotency_key}:undo")
+                                     f"{node.idempotency_key}:undo:{int(attempt)}")
         except Exception as e:  # noqa: BLE001
             return {"undo_error": str(e)}
         from .verify import result_failed, is_staged  # noqa: PLC0415

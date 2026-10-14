@@ -9,6 +9,15 @@ from __future__ import annotations
 from .types import ExecutionIntent, IntentStep
 
 
+#: Template-level default failure policy (docs/COMPENSATION.md). Absent = HALT_AND_REPORT (nothing is undone
+#: automatically). A template listed here OPTS IN to undoing completed steps that declare a compensating
+#: capability; irreversible steps are still never compensated.
+TEMPLATE_FAILURE_POLICY: dict[str, str] = {
+    "onboarding": "COMPENSATE_DECLARED",
+    "deploy_app": "COMPENSATE_DECLARED",
+}
+
+
 # Each template is a function mission_id -> ExecutionIntent so step ids are fresh per mission.
 def onboarding(mission_id: str) -> ExecutionIntent:
     """New customer onboarding — the seed cross-app mission (was workflows.NEW_CUSTOMER_ONBOARDING).

@@ -120,6 +120,37 @@ def build_router(runtime: MissionRuntime):
         runtime.approve(mid, body.node_id, body.decision, edit)
         return _mission_view(mid)
 
+    class CompensationAction(BaseModel):
+        node_id: str | None = None
+        reason: str = ""
+
+    _COMP_ACTIONS = {"retry", "approve", "acknowledge", "verify_manually"}
+    _COMP_APPROVER_ACTIONS = {"approve", "acknowledge", "verify_manually"}   # consequential: approver credential
+
+    @router.post("/{mid}/compensation/{action}")
+    def compensation(mid: str, action: str, body: CompensationAction, request: Request):
+        """Operator path for COMPENSATION_FAILED (docs/COMPENSATION.md): retry | approve | acknowledge |
+        verify_manually. Behind the router-level gate; tenant-scoped (404 cross-tenant); approve/acknowledge/
+        verify_manually need the approver credential when AGENTIC_OS_APPROVER_TOKENS is set; retry is not
+        available to an approver-only credential. Who/when/why is recorded in the mission log."""
+        _authorize_mission(mid, request)
+        if action not in _COMP_ACTIONS:
+            raise HTTPException(404, "unknown compensation action")
+        c = caller_of(request)
+        if action in _COMP_APPROVER_ACTIONS:
+            if c is not None and c.role == "requester" and approver_tokens():
+                raise HTTPException(403, "this compensation action requires an approver credential")
+        else:
+            _deny_approver(request)
+        actor = "admin" if c is None or c.role == "admin" else f"{c.role}:{c.tenant}"
+        from .compensation_runner import InterventionError  # noqa: PLC0415
+        try:
+            runtime.compensation_intervention(mid, action, actor=actor, reason=(body.reason or "")[:500],
+                                              node_id=body.node_id)
+        except InterventionError as e:
+            raise HTTPException(409, str(e))
+        return _mission_view(mid)
+
     @router.get("/{mid}/events")
     def events(mid: str, request: Request):
         _authorize_mission(mid, request)

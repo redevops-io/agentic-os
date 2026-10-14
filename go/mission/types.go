@@ -279,6 +279,9 @@ type Mission struct {
 	ActivePlanID string         `json:"active_plan_id"`
 	Outcome      map[string]any `json:"outcome"`
 	Template     string         `json:"template"`
+	// FailurePolicy: HALT_AND_REPORT | COMPENSATE_DECLARED | CONTINUE_SIBLINGS ("" => template default, then
+	// AGENTIC_OS_DEFAULT_FAILURE_POLICY, then HALT_AND_REPORT). Parity with Python Mission.failure_policy.
+	FailurePolicy string `json:"failure_policy,omitempty"`
 	// Identity / tenancy (parity with Python Mission.principal/tenant): the principal ref this mission runs as
 	// and the tenant isolation boundary. "" ⇒ legacy policy_refs behaviour.
 	Principal    string         `json:"principal"`

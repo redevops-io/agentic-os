@@ -195,11 +195,13 @@ def _saga_rt(undo):
     reg.register(CapabilityManifest("billing", [CapabilitySpec(
         "charge", "billing", provides=["charged"], side_effecting=True, undo="refund", permissions=["*"])]))
     reg.register(CapabilityManifest("email", [CapabilitySpec(
-        "notify", "email", provides=["notified"], side_effecting=True, permissions=["*"])]))
+        "notify", "email", provides=["notified"], side_effecting=True, permissions=["*"]),
+        CapabilitySpec("refund", "email", side_effecting=True, irreversible=True,
+                       irreversible_note="test fixture", permissions=["*"])]))
     handlers = {"charge": lambda i: {"charge_id": "c1"},
                 "notify": lambda i: (_ for _ in ()).throw(RuntimeError("smtp down")), "refund": undo}
     rt = MissionRuntime(reg, Executor(InMemoryOperatorClient(handlers)), planner=_SagaPlanner())
-    m = rt.create_mission("charge and notify", policy_refs=["*"])
+    m = rt.create_mission("charge and notify", policy_refs=["*"], failure_policy="COMPENSATE_DECLARED")
     rt.run(m.id)
     return rt, m
 
@@ -228,5 +230,7 @@ def test_failed_undo_records_compensation_failed_and_incomplete_outcome(undo):
 
 def test_successful_undo_still_records_compensated():
     rt, m = _saga_rt(lambda i: {"refunded": True})
-    assert "NodeCompensated" in _types(rt, m) and "NodeCompensationFailed" not in _types(rt, m)
+    # executed, but with no declared read-back it is NOT reported as compensated (B1)
+    assert "CompensationExecuted" in _types(rt, m) and "NodeCompensationFailed" not in _types(rt, m)
+    assert "NodeCompensated" not in _types(rt, m) and m.outcome["rolled_back"] is False
     assert not (m.outcome or {}).get("compensation_incomplete")

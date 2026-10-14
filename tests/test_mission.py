@@ -177,10 +177,12 @@ def _saga_fleet():
     reg = CapabilityRegistry()
     reg.register(CapabilityManifest("billing", [
         CapabilitySpec("charge", "billing", provides=["charged"], side_effecting=True,
-                       undo="refund", permissions=["*"])]))
+                       undo="refund", permissions=["*"]),
+        CapabilitySpec("refund", "billing", side_effecting=True, irreversible=True, irreversible_note="test fixture", permissions=["*"])]))
     reg.register(CapabilityManifest("books", [
         CapabilitySpec("book", "books", provides=["booked"], side_effecting=True,
-                       undo="reverse", permissions=["*"])]))
+                       undo="reverse", permissions=["*"]),
+        CapabilitySpec("reverse", "books", side_effecting=True, irreversible=True, irreversible_note="test fixture", permissions=["*"])])) 
     reg.register(CapabilityManifest("email", [
         CapabilitySpec("notify", "email", provides=["notified"], side_effecting=True,
                        permissions=["*"])]))
@@ -198,12 +200,12 @@ def _saga_fleet():
 def test_saga_compensation_on_failure():
     reg, client, undone = _saga_fleet()
     rt = MissionRuntime(reg, Executor(client), planner=_FailPlanner())
-    m = rt.create_mission("charge and notify", policy_refs=["*"])
+    m = rt.create_mission("charge and notify", policy_refs=["*"], failure_policy="COMPENSATE_DECLARED")
     rt.run(m.id)
     assert m.state == MissionState.FAILED
     # both completed side-effecting nodes were compensated (reverse-order)
     assert set(undone) == {"refund", "reverse"}
-    comp = [e for e in rt.repo.timeline(m.id) if e["type"] == "NodeCompensated"]
+    comp = [e for e in rt.repo.timeline(m.id) if e["type"] == "CompensationExecuted"]
     assert len(comp) == 2
     refl = [e for e in rt.repo.timeline(m.id) if e["type"] == "ReflectionEmitted"][0]
     assert refl["payload"]["success"] is False
