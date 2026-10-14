@@ -9,13 +9,15 @@ dependencies = [
     # The Discovery -> Mission boundary, owned by neither runtime. Pinned to a
     # tag: a branch can be rebased under a consumer, and a contract that moves
     # silently is not a contract. Importing it is why this repository carries
-    # the Commons Clause — see LICENSE.md.
-    "runtime-contracts @ git+https://github.com/redevops-io/runtime-contracts.git@v0.3.13",
+    # the Commons Clause — see LICENSE.md. v0.3.14 is the first tag without the stale committed
+    # build/lib that earlier tags ship (pip could install it instead of the source from tarballs/COPY).
+    "runtime-contracts @ git+https://github.com/redevops-io/runtime-contracts.git@v0.3.14",
     # The generic experience→lesson Learn engine ("a correction is not a rule"), consumed by
     # agentic_os.projects.workflow_learning. Pinned by tag like the other contracts — a branch can be
     # rebased under a consumer, and a contract that moves silently is not a contract. v0.1.13 is the
-    # clean forward line carrying the learn contract (above the stray v0.1.11/v0.1.12).
-    "discovery-runtime @ git+https://github.com/redevops-io/discovery-runtime.git@v0.1.17",
+    # clean forward line carrying the learn contract (above the stray v0.1.11/v0.1.12). v0.1.19 pins
+    # runtime-contracts v0.3.14 (kept equal to the pin above: an exact mismatch makes pip reject the resolve).
+    "discovery-runtime @ git+https://github.com/redevops-io/discovery-runtime.git@v0.1.19",
     # The domain-neutral learn/teach-next primitive, shared with learnerbot.ai. `agentic_os.
     # knowledge_frontier` re-exports it; the apps-stack adapter stays in priority_engine.
     "knowledge-frontier @ git+https://github.com/redevops-io/knowledge-frontier.git@v0.2.0",
