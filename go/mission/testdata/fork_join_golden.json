@@ -1,0 +1,495 @@
+[
+ {
+  "events": [
+   {
+    "payload": {
+     "branches": [
+      {
+       "branch_id": "b0",
+       "capability": "w.write",
+       "node_id": "m:fork:f1:b0",
+       "operator": "w-op"
+      },
+      {
+       "branch_id": "b1",
+       "capability": "w.write",
+       "node_id": "m:fork:f1:b1",
+       "operator": "w-op"
+      }
+     ],
+     "fork_id": "f1",
+     "join": {
+      "k": null,
+      "mode": "all"
+     },
+     "spec_digest": "d"
+    },
+    "type": "ForkOpened"
+   },
+   {
+    "payload": {
+     "attempt": 1,
+     "branch_id": "b0",
+     "fork_id": "f1",
+     "idempotency_key": "k0"
+    },
+    "type": "BranchStarted"
+   },
+   {
+    "payload": {
+     "attempt": 1,
+     "branch_id": "b1",
+     "fork_id": "f1",
+     "idempotency_key": "k1"
+    },
+    "type": "BranchStarted"
+   },
+   {
+    "payload": {
+     "attempt": 1,
+     "branch_id": "b1",
+     "fork_id": "f1",
+     "receipt": {
+      "r": 1
+     },
+     "result": {
+      "x": 1
+     }
+    },
+    "type": "BranchSucceeded"
+   },
+   {
+    "payload": {
+     "attempt": 1,
+     "branch_id": "b0",
+     "fork_id": "f1",
+     "receipt": {
+      "r": 0
+     },
+     "result": {
+      "x": 0
+     }
+    },
+    "type": "BranchSucceeded"
+   },
+   {
+    "payload": {
+     "fork_id": "f1",
+     "partial": false,
+     "winners": [
+      "b0",
+      "b1"
+     ]
+    },
+    "type": "JoinSatisfied"
+   }
+  ],
+  "expected": {
+   "branches": [
+    {
+     "approval": null,
+     "attempt": 1,
+     "branch_id": "b0",
+     "capability": "w.write",
+     "idempotency_key": "k0",
+     "node_id": "m:fork:f1:b0",
+     "parked": false,
+     "ran": true,
+     "reason": "",
+     "receipt": {
+      "r": 0
+     },
+     "result": {
+      "x": 0
+     },
+     "status": "succeeded"
+    },
+    {
+     "approval": null,
+     "attempt": 1,
+     "branch_id": "b1",
+     "capability": "w.write",
+     "idempotency_key": "k1",
+     "node_id": "m:fork:f1:b1",
+     "parked": false,
+     "ran": true,
+     "reason": "",
+     "receipt": {
+      "r": 1
+     },
+     "result": {
+      "x": 1
+     },
+     "status": "succeeded"
+    }
+   ],
+   "close_payload": {
+    "fork_id": "f1",
+    "partial": false,
+    "winners": [
+     "b0",
+     "b1"
+    ]
+   },
+   "closed": "satisfied",
+   "fork_id": "f1",
+   "join": {
+    "k": null,
+    "mode": "all"
+   },
+   "late_results": [],
+   "opened": true,
+   "spec_digest": "d",
+   "success_order": [
+    "b1",
+    "b0"
+   ]
+  },
+  "fork_id": "f1",
+  "name": "all_satisfied"
+ },
+ {
+  "events": [
+   {
+    "payload": {
+     "branches": [
+      {
+       "branch_id": "b0",
+       "capability": "w.write",
+       "node_id": "m:fork:f2:b0",
+       "operator": "w-op"
+      },
+      {
+       "branch_id": "b1",
+       "capability": "w.write",
+       "node_id": "m:fork:f2:b1",
+       "operator": "w-op"
+      },
+      {
+       "branch_id": "b2",
+       "capability": "w.write",
+       "node_id": "m:fork:f2:b2",
+       "operator": "w-op"
+      }
+     ],
+     "fork_id": "f2",
+     "join": {
+      "k": 2,
+      "mode": "quorum"
+     },
+     "spec_digest": "d"
+    },
+    "type": "ForkOpened"
+   },
+   {
+    "payload": {
+     "attempt": 1,
+     "branch_id": "b0",
+     "fork_id": "f2",
+     "idempotency_key": "a"
+    },
+    "type": "BranchStarted"
+   },
+   {
+    "payload": {
+     "attempt": 1,
+     "branch_id": "b0",
+     "fork_id": "f2",
+     "ran": true,
+     "reason": "operator_error",
+     "will_retry": true
+    },
+    "type": "BranchFailed"
+   },
+   {
+    "payload": {
+     "attempt": 2,
+     "branch_id": "b0",
+     "fork_id": "f2",
+     "idempotency_key": "b"
+    },
+    "type": "BranchStarted"
+   },
+   {
+    "payload": {
+     "attempt": 2,
+     "branch_id": "b0",
+     "fork_id": "f2",
+     "receipt": {},
+     "result": {
+      "ok": 1
+     }
+    },
+    "type": "BranchSucceeded"
+   },
+   {
+    "payload": {
+     "attempt": 1,
+     "branch_id": "b1",
+     "fork_id": "f2",
+     "idempotency_key": "c"
+    },
+    "type": "BranchStarted"
+   },
+   {
+    "payload": {
+     "branch_id": "b1",
+     "fork_id": "f2",
+     "reason": "join_failed",
+     "was_running": true
+    },
+    "type": "BranchCancelled"
+   },
+   {
+    "payload": {
+     "attempt": 1,
+     "branch_id": "b2",
+     "fork_id": "f2",
+     "ran": false,
+     "reason": "budget_exceeded"
+    },
+    "type": "BranchFailed"
+   },
+   {
+    "payload": {
+     "decision": {
+      "action": "halt_and_report"
+     },
+     "fork_id": "f2",
+     "reason": "quorum"
+    },
+    "type": "JoinFailed"
+   },
+   {
+    "payload": {
+     "attempt": 1,
+     "branch_id": "b1",
+     "fork_id": "f2",
+     "late": true,
+     "receipt": {
+      "l": 1
+     },
+     "result": {
+      "late": 1
+     }
+    },
+    "type": "BranchSucceeded"
+   },
+   {
+    "payload": {
+     "attempt": 1,
+     "branch_id": "b2",
+     "fork_id": "f2",
+     "receipt": {},
+     "result": {}
+    },
+    "type": "BranchSucceeded"
+   }
+  ],
+  "expected": {
+   "branches": [
+    {
+     "approval": null,
+     "attempt": 2,
+     "branch_id": "b0",
+     "capability": "w.write",
+     "idempotency_key": "b",
+     "node_id": "m:fork:f2:b0",
+     "parked": false,
+     "ran": true,
+     "reason": "",
+     "receipt": {},
+     "result": {
+      "ok": 1
+     },
+     "status": "succeeded"
+    },
+    {
+     "approval": null,
+     "attempt": 1,
+     "branch_id": "b1",
+     "capability": "w.write",
+     "idempotency_key": "c",
+     "node_id": "m:fork:f2:b1",
+     "parked": false,
+     "ran": true,
+     "reason": "join_failed",
+     "receipt": null,
+     "result": null,
+     "status": "cancelled"
+    },
+    {
+     "approval": null,
+     "attempt": 0,
+     "branch_id": "b2",
+     "capability": "w.write",
+     "idempotency_key": "",
+     "node_id": "m:fork:f2:b2",
+     "parked": false,
+     "ran": false,
+     "reason": "budget_exceeded",
+     "receipt": null,
+     "result": null,
+     "status": "failed"
+    }
+   ],
+   "close_payload": {
+    "decision": {
+     "action": "halt_and_report"
+    },
+    "fork_id": "f2",
+    "reason": "quorum"
+   },
+   "closed": "failed",
+   "fork_id": "f2",
+   "join": {
+    "k": 2,
+    "mode": "quorum"
+   },
+   "late_results": [
+    {
+     "attempt": 1,
+     "branch_id": "b1",
+     "receipt": {
+      "l": 1
+     },
+     "result": {
+      "late": 1
+     }
+    },
+    {
+     "attempt": 1,
+     "branch_id": "b2",
+     "receipt": {},
+     "result": {}
+    }
+   ],
+   "opened": true,
+   "spec_digest": "d",
+   "success_order": [
+    "b0"
+   ]
+  },
+  "fork_id": "f2",
+  "name": "failed_with_late_and_retry"
+ },
+ {
+  "events": [
+   {
+    "payload": {
+     "branches": [
+      {
+       "branch_id": "b0",
+       "capability": "w.write",
+       "node_id": "m:fork:f3:b0",
+       "operator": "w-op"
+      },
+      {
+       "branch_id": "b1",
+       "capability": "w.write",
+       "node_id": "m:fork:f3:b1",
+       "operator": "w-op"
+      }
+     ],
+     "fork_id": "f3",
+     "join": {
+      "k": null,
+      "mode": "all"
+     },
+     "spec_digest": "d"
+    },
+    "type": "ForkOpened"
+   },
+   {
+    "payload": {
+     "capability": "w.write",
+     "node_id": "m:fork:f3:b0"
+    },
+    "type": "NodeParked"
+   },
+   {
+    "payload": {
+     "capability": "w.write",
+     "node_id": "m:fork:f3:b0"
+    },
+    "type": "ApprovalGranted"
+   },
+   {
+    "payload": {
+     "node_id": "m:fork:f3:b0"
+    },
+    "type": "NodeResumed"
+   },
+   {
+    "payload": {
+     "node_id": "m:fork:f3:b0"
+    },
+    "type": "ApprovalInvalidated"
+   },
+   {
+    "payload": {
+     "capability": "w.write",
+     "node_id": "m:fork:f3:b1"
+    },
+    "type": "NodeParked"
+   },
+   {
+    "payload": {
+     "node_id": "not-a-branch"
+    },
+    "type": "NodeParked"
+   },
+   {
+    "payload": {
+     "fork_id": "other"
+    },
+    "type": "JoinSatisfied"
+   }
+  ],
+  "expected": {
+   "branches": [
+    {
+     "approval": null,
+     "attempt": 0,
+     "branch_id": "b0",
+     "capability": "w.write",
+     "idempotency_key": "",
+     "node_id": "m:fork:f3:b0",
+     "parked": false,
+     "ran": false,
+     "reason": "",
+     "receipt": null,
+     "result": null,
+     "status": "pending"
+    },
+    {
+     "approval": null,
+     "attempt": 0,
+     "branch_id": "b1",
+     "capability": "w.write",
+     "idempotency_key": "",
+     "node_id": "m:fork:f3:b1",
+     "parked": true,
+     "ran": false,
+     "reason": "",
+     "receipt": null,
+     "result": null,
+     "status": "parked"
+    }
+   ],
+   "close_payload": {},
+   "closed": null,
+   "fork_id": "f3",
+   "join": {
+    "k": null,
+    "mode": "all"
+   },
+   "late_results": [],
+   "opened": true,
+   "spec_digest": "d",
+   "success_order": []
+  },
+  "fork_id": "f3",
+  "name": "approval_park_resume_invalidate"
+ }
+]

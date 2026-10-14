@@ -256,6 +256,15 @@ class MissionRuntime:
         #: recorded information it never held.
         self._legacy_approvals: set[str] = set()
 
+    @property
+    def forks(self):
+        """Fork/join controller (docs/MISSION_FORK_JOIN.md): parallel branches inside a Mission."""
+        fc = getattr(self, "_forks", None)
+        if fc is None:
+            from .fork_join import ForkJoinController  # noqa: PLC0415 - lazy: forks are opt-in
+            fc = self._forks = ForkJoinController(self)
+        return fc
+
     # ── world state ──────────────────────────────────────────────────────────
     def _world(self, mission_id: str) -> WorldState:
         return WorldState(mission_id, self.store, belief.fuse)
@@ -1087,6 +1096,8 @@ class MissionRuntime:
                                 "(use the compensation routes for a COMPENSATION_FAILED mission)")
         if node_id not in self._parked_nodes(mission_id):
             raise ApprovalError(f"node {node_id!r} has no pending approval")
+        if ":fork:" in node_id and self.forks.owns(mission_id, node_id):   # fork branch approvals
+            return self.forks.approve_branch(mission_id, node_id, decision, edit)
         pending = self.repo.pending_human(mission_id) or {}
         if pending.get("node_id") != node_id:
             pending = {}
