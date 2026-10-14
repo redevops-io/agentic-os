@@ -268,6 +268,15 @@ def fold_compensation(events: Iterable[Any]) -> dict[str, dict]:
         cur = out.setdefault(nid, {"status": "requested", "undo": p.get("undo"), "reason": "", "attempts": 0,
                                    "attempt": 0, "approval": None, "method": None})
         if t == EV_REQUESTED:
+            # a duplicated log record must not bump `attempts` (it would exhaust the cap): dedupe by the
+            # attempt number, else by event id for a legacy record that carries none
+            att = int(p.get("attempt") or 0)
+            eid = (e.get("id") if isinstance(e, dict) else getattr(e, "id", None)) if not att else None
+            dk = ("a", att) if att else ("e", eid)
+            if dk[1] and dk in cur.setdefault("_seen", set()):
+                continue
+            if dk[1]:
+                cur["_seen"].add(dk)
             cur.update(status="requested", undo=p.get("undo"), reason="", approval=None, method=None,
                        attempt=int(p.get("attempt") or cur["attempts"] + 1))
             cur["attempts"] += 1
@@ -287,6 +296,8 @@ def fold_compensation(events: Iterable[Any]) -> dict[str, dict]:
             cur.update(status="failed", reason=p.get("reason", ""))
         elif t == EV_ACKNOWLEDGED:
             cur.update(status="acknowledged", actor=p.get("actor"), ack_reason=p.get("reason", ""))
+    for v in out.values():
+        v.pop("_seen", None)
     return out
 
 

@@ -133,7 +133,13 @@ with `_node = {node}:undo` so a signed token is bound to the compensation, never
   not reused. The saga **parks** the compensation: `CompensationApprovalRequired` + a needs-you item "Approve
   compensation of <node>" showing the exact undo and inputs. A human approves through the authenticated route
   (approver credential when `AGENTIC_OS_APPROVER_TOKENS` is set); `CompensationApproved` binds mission, node,
-  UNDO capability, attempt and the SHA-256 of the exact inputs, with a 1-hour expiry. `Executor.compensate`
+  UNDO capability, attempt and the SHA-256 of the exact inputs, with a 1-hour expiry.
+  **Separation of duty:** with `AGENTIC_OS_APPROVER_TOKENS` set, a requester credential cannot approve (403). The
+  forward approver's identity is recorded on `ApprovalGranted.approver`; when MORE THAN ONE approver credential is
+  configured, that same identity is refused (409) when approving the compensation (identity granularity is
+  `role:tenant`, so this only separates distinct approver identities; `admin` is exempt). With approver tokens
+  UNSET there is no separation: any authenticated caller, including the requester, can approve - exactly as for
+  `/approve`. `Executor.compensate`
   refuses (no operator call) if any of those differ (replay on a later attempt, expired, other mission, other
   node/undo, modified inputs); the dispatch then carries a freshly signed token for the undo capability with
   marker `own_approval: true`. An approval is single-attempt: a retry needs a new approval.
@@ -152,7 +158,9 @@ After the compensating action succeeds, the runtime invokes the declared `compen
 (`{verify_undo_of, result, undo_result}` under `{key}:undo:{attempt}:verify`). It verifies ONLY if the result is
 not failure-shaped, contains an explicit `verified: true` AND echoes the observed state (`observed` or `digest`).
 Verify capabilities are trusted code owned by the same operator as the forward capability; a handler that lies
-cannot be detected generically. Outcomes:
+cannot be detected generically. **Trust limit:** `observed`/`digest` are checked for presence only. They are NOT
+compared with the logged forward-result digest or a declared expected state (no capability declares one yet), so
+`rolled_back: true` means "the operator's own read-back said so", not an independent audit. Outcomes:
 
 * read-back passes -> `CompensationVerified(method=readback)` + `NodeCompensated`; counted in `compensated`.
   This is the ONLY path to `rolled_back: true`.
@@ -170,7 +178,11 @@ which only `acknowledge` resolves the node.
 ## 6. Surface
 
 * needs-you (`/api/needs-you`): `compensation_approval`, `compensation_failed` and `compensation_unverified`
-  items per node (`compensation_runner.attention_items`).
+  items per node (`compensation_runner.attention_items`), plus `effects_left_in_place` for a FAILED mission whose
+  policy left reversible effects (`not_compensated`) or irreversible ones (`not_reversible`) behind.
+* `/approve` on a terminal mission or a node with no pending approval -> 409 (a bogus reject can no longer re-enter
+  the saga). `cancel_mission` is refused (409) while compensation is parked/failed: use `acknowledge` /
+  `verify_manually`, so the leftover effect and its needs-you item stay surfaced.
 * Routes (under the default-deny gate): `POST /missions/{mid}/compensation/{retry|approve|acknowledge|
   verify_manually}` with body `{node_id?, reason?}`. Unknown/other-tenant mission -> 404; `approve`,
   `acknowledge`, `verify_manually` need the approver credential when `AGENTIC_OS_APPROVER_TOKENS` is set (a
@@ -179,7 +191,9 @@ which only `acknowledge` resolves the node.
 * `explain()`: `compensation` (verified/unverified/failed fold), `not_reversible`, existing
   `compensation_incomplete`/`compensation_remaining`; the Compensation* events are in `steps`.
 * `mission_receipt`: `compensation` section; `observability`: `compensation_failed` count; cockpit state chip.
-* Replay/rehydrate: state, outcome (`outcome_from_log`) and `failure_policy` are rebuilt from the log.
+* Replay/rehydrate: state, outcome (`outcome_from_log`) and `failure_policy` are rebuilt from the log. The effective default (template/env/HALT) is frozen into
+  `MissionCreated.default_failure_policy` at creation, so a later env change never alters replay; a duplicated
+  `CompensationRequested` (same attempt) is ignored by the fold and cannot exhaust the attempt cap.
 * Go port (`go/mission`): folds `compensation_failed` and ignores `Compensation*` events (only `NodeCompensated`
   moves a node); the Go saga is unchanged (see migration notes).
 
@@ -201,7 +215,26 @@ keys are `{key}:undo:{attempt}`; (5) an undo naming an unregistered capability i
 **Explicit opt-ins added (so existing flows keep their saga):** templates `onboarding` and `deploy_app`
 (`TEMPLATE_FAILURE_POLICY`); tests `test_mission::test_saga_compensation_on_failure`,
 `test_kernel_verify_launcher_saga` (`_saga_rt`), `test_approval_token` (`_saga_http`); the Go port's `onboarding`
-and `deploy_app` templates and its two saga tests. Deployments that need the old behaviour everywhere set
+and `deploy_app` templates and its two saga tests. 
+**Workflows that now SILENTLY KEEP their effects on failure (HALT_AND_REPORT default) - decide each explicitly:**
+
+| Workflow / app | Effects kept on failure |
+| --- | --- |
+| `invoice_recovery`, `revenue_rescue` | `billing.cancel_subscription`, `books.reverse_entry` |
+| `product_launch`, `teardown_app`, `cost_audit` | their side-effecting steps (declare/verify undos first) |
+| `content_distribution`, `inbound_lead` | steps whose undo capability is unregistered (dangling) |
+| edge-sentinel | `block_ip` |
+| video | `video.unpublish` |
+| enterprise | `compliance.revert_fix`; enterprise demo/pilot missions |
+
+Opted in: `onboarding`, `deploy_app` and `sky_deploy` (`sky.launch`/`sky.serve` declare registered, reversible,
+approval-gated undos `sky.down`/`sky.serve_down`; opted in for consistency with `deploy_app`). **Recommendation:**
+make an explicit per-workflow decision - opt a template in (`TEMPLATE_FAILURE_POLICY` or `failure_policy=`) only
+once its undo capabilities are registered, declared reversible and have a `verify`; otherwise leave it on
+HALT_AND_REPORT. A FAILED mission that kept reversible effects lists them in `outcome.not_compensated`
+(plus `not_reversible`) and raises an `effects_left_in_place` needs-you item.
+
+Deployments that need the old behaviour everywhere set
 `AGENTIC_OS_DEFAULT_FAILURE_POLICY=COMPENSATE_DECLARED` (they still get `compensated_unverified` for bare undos).
 Fixtures that declared an undo for a capability they never registered now register it (`demo.build_fleet`,
 `test_mission._saga_fleet`, the kernel saga fixture).
@@ -209,7 +242,8 @@ Fixtures that declared an undo for a capability they never registered now regist
 * **Enterprise fork executor** (separate repo, not edited here): (a) honour the `undo_registry`,
   `compensation_requires_approval` hooks and the `attempt=`/`approval=` arguments of `Executor.compensate`, never
   mint a compensation marker for `requires_approval` capabilities without a `CompensationApproved` record;
-  (b) call `run_saga`/emit the Compensation* events instead of its own undo loop; (c) `replan.py:132` collapses
+  (b) the fork inherits the kernel `run_saga` (it has no separate undo loop) - confirm it does not override
+  `_saga`/`Executor.compensate`; (c) `replan.py:132` collapses
   `COMPENSATION_FAILED` to `'failed'` - map it to its own value (and treat it as terminal-with-attention);
   (d) `mission_ci.py` checks `state == MissionState.FAILED` only - use `state in (FAILED, COMPENSATION_FAILED)`;
   (e) treat `COMPENSATION_FAILED` as terminal in tenancy/lifecycle code (`MissionFinished`).

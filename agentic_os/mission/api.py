@@ -117,7 +117,13 @@ def build_router(runtime: MissionRuntime):
         # the client may never smuggle an approval marker (``_approval*``) through the edit payload: approval
         # authority is the authenticated decision above + the signed token the operator verifies at /invoke.
         edit = strip_approval_keys(dict(body.edit)) if body.edit else None
-        runtime.approve(mid, body.node_id, body.decision, edit)
+        c = caller_of(request)
+        actor = "admin" if c is None or c.role == "admin" else f"{c.role}:{c.tenant}"
+        from .runtime import ApprovalError  # noqa: PLC0415
+        try:
+            runtime.approve(mid, body.node_id, body.decision, edit, actor=actor)
+        except ApprovalError as e:
+            raise HTTPException(409, str(e))
         return _mission_view(mid)
 
     class CompensationAction(BaseModel):

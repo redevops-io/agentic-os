@@ -15,6 +15,9 @@ from .types import ExecutionIntent, IntentStep
 TEMPLATE_FAILURE_POLICY: dict[str, str] = {
     "onboarding": "COMPENSATE_DECLARED",
     "deploy_app": "COMPENSATE_DECLARED",
+    # sky.launch / sky.serve declare a REVERSIBLE_EXPLICIT undo (sky.down / sky.serve_down, registered in the
+    # same operator, requires_approval) - same shape as deploy_app, so the same opt-in.
+    "sky_deploy": "COMPENSATE_DECLARED",
 }
 
 

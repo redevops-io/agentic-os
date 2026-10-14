@@ -646,3 +646,76 @@ def test_route_enumeration_includes_the_compensation_route_behind_the_gate(monke
     comp = [r for r in routes if r.path == "/missions/{mid}/compensation/{action}"]
     assert comp and "POST" in comp[0].methods
     assert any(getattr(d, "dependency", None) for d in comp[0].dependencies)           # gate attached
+
+
+# ── re-verify fixes ──────────────────────────────────────────────────────────────────────────────────────────
+def _failed_comp_rt():
+    return _rt(_reserve_specs(), _h(lambda i: {"status": "error", "error": "gateway"}), ["reserved", "finished"])
+
+
+def test_generic_approve_on_a_terminal_mission_is_refused_and_does_not_reenter_the_saga():
+    from agentic_os.mission.runtime import ApprovalError
+    rt, m = _failed_comp_rt()
+    assert m.state == MissionState.COMPENSATION_FAILED
+    before = len(rt.repo.timeline(m.id))
+    for decision in ("reject", "approve"):
+        with pytest.raises(ApprovalError):
+            rt.approve(m.id, "bogus-node", decision)
+    assert len(rt.repo.timeline(m.id)) == before and m.state == MissionState.COMPENSATION_FAILED
+    assert _types(rt, m).count("MissionOutcome") == 1
+
+
+def test_approve_unknown_node_on_a_waiting_mission_is_refused():
+    from agentic_os.mission.runtime import ApprovalError
+    rt, m = _rt([_spec("a.do", "a", side_effecting=True, irreversible=True)], {"a.do": lambda i: {"a": 1, "executed": True}}, ["a"])
+    m2 = rt.create_mission("two", policy_refs=["*"])
+    rt.run(m2.id)
+    if m2.state == MissionState.WAITING_HUMAN:
+        with pytest.raises(ApprovalError):
+            rt.approve(m2.id, "not-the-pending-node", "reject")
+        assert m2.state == MissionState.WAITING_HUMAN
+
+
+def test_cancel_is_refused_while_compensation_is_parked_or_failed():
+    rt, m, box = _approval_rt()
+    assert m.state == MissionState.COMPENSATION_FAILED
+    with pytest.raises(InterventionError):
+        rt.cancel_mission(m.id, "oops")
+    assert m.state == MissionState.COMPENSATION_FAILED and attention_items(rt, m.id)
+    rt.compensation_intervention(m.id, "acknowledge", actor="admin", node_id=attention_items(rt, m.id)[0]["node_id"])
+
+
+def test_duplicated_compensation_requested_does_not_bump_attempts():
+    ev = [{"type": C.EV_REQUESTED, "payload": {"node_id": "n", "undo": "u", "attempt": 1}}] * 3
+    assert C.fold_compensation(ev)["n"]["attempts"] == 1
+    ev2 = ev + [{"type": C.EV_REQUESTED, "payload": {"node_id": "n", "undo": "u", "attempt": 2}}]
+    assert C.fold_compensation(ev2)["n"]["attempts"] == 2
+
+
+def test_default_failure_policy_is_frozen_at_creation(monkeypatch):
+    monkeypatch.setenv("AGENTIC_OS_DEFAULT_FAILURE_POLICY", "COMPENSATE_DECLARED")
+    box, rel = _calls()
+    rt, m = _rt(_reserve_specs(), _h(rel), ["reserved", "finished"], failure_policy="")
+    created = [e for e in rt.repo.timeline(m.id) if e["type"] == "MissionCreated"][0]["payload"]
+    assert created["default_failure_policy"] == "COMPENSATE_DECLARED"
+    monkeypatch.setenv("AGENTIC_OS_DEFAULT_FAILURE_POLICY", "HALT_AND_REPORT")
+    assert effective_policy(m) is FailurePolicy.COMPENSATE_DECLARED
+
+
+def test_failed_mission_with_kept_effects_raises_a_needs_you_item():
+    box, rel = _calls()
+    rt, m = _rt(_reserve_specs(verify="res.verify"), _h(rel, **{"res.verify": _readback}),
+                ["reserved", "finished"], failure_policy="HALT_AND_REPORT")
+    it = [i for i in attention_items(rt, m.id) if i["kind"] == "effects_left_in_place"]
+    assert it and it[0]["not_compensated"]
+
+
+def test_forward_approver_may_not_approve_compensation_when_several_approvers(monkeypatch):
+    monkeypatch.setenv("AGENTIC_OS_APPROVER_TOKENS", "acme=a1,globex=a2")
+    rt, m, box = _approval_rt()
+    nid = _nid(rt, m)
+    rt.store.append("ApprovalGranted", m.id, {"node_id": nid, "approver": "approver:acme"})
+    with pytest.raises(InterventionError):
+        rt.compensation_intervention(m.id, "approve", actor="approver:acme", node_id=nid)
+    rt.compensation_intervention(m.id, "approve", actor="approver:globex", node_id=nid)
+    assert box["n"] == 1

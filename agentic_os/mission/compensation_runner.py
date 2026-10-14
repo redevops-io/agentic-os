@@ -18,6 +18,7 @@ from typing import Any
 
 from . import compensation as C
 from .approval import inputs_hash
+from .control_auth import approver_tokens
 from .compensation_policy import FailurePolicy, effective_policy, is_forked
 from .types import NodeState
 from .verify import is_staged, result_failed
@@ -52,7 +53,12 @@ def _verify(rt, m, node, spec, forward_result, undo_result, attempt) -> "tuple[b
     """-> (verified, method, detail). Only a declared read-back that returns an explicit ``verified: true``
     PLUS the observed state (``observed``/``digest``) verifies. Anything else is unverified/failed. A bare
     operator ack of the undo is NOT verification. Verify capabilities are trusted code owned by the same
-    operator as the forward capability; a handler that lies cannot be detected generically."""
+    operator as the forward capability; a handler that lies cannot be detected generically.
+
+    TRUST LIMIT (docs/COMPENSATION.md): `observed`/`digest` are checked for PRESENCE only. They are not
+    compared with the logged forward-result digest or a declared expected state, because no capability
+    declares one yet; a verify capability that returns `verified: true` with any non-empty observation is
+    believed. Treat `rolled_back` as "the operator's own read-back said so", not an independent audit."""
     cs = C.coerce(getattr(spec, "compensation", None)) if spec is not None else None
     if cs is None or not cs.verify:
         return None, "", "compensation declares no `verify` read-back"
@@ -237,6 +243,15 @@ def intervene(rt, m, action: str, *, actor: str, reason: str = "", node_id: str 
         v = folded.get(node_id or "")
         if not v or v["status"] != "approval_required":
             raise InterventionError("that node has no compensation awaiting approval")
+        # separation of duty: with MORE THAN ONE approver credential configured, the identity that approved
+        # the forward step may not also approve its compensation. Identity granularity is role:tenant (or
+        # "admin"), so this bites only across distinct approver identities; admin is exempt (single operator).
+        if actor != "admin" and len(approver_tokens()) > 1:
+            fwd = next((e.payload.get("approver") for e in rt.store.for_mission(m.id)
+                        if e.type == "ApprovalGranted" and e.payload.get("node_id") == node_id), None)
+            if fwd and fwd == actor:
+                raise InterventionError("the approver of the forward step may not approve its compensation "
+                                        "(separation of duty); another approver identity must")
         node = plan.graph.by_id(node_id)
         ev = rt._compensation_evidence(m.id, node_id) or {}
         inputs = C.undo_inputs(node, m.id, ev.get("result"))
@@ -290,4 +305,14 @@ def attention_items(rt, mission_id: str) -> list[dict]:
             items.append({**base, "kind": "compensation_unverified", "title": f"Verify compensation: {v.get('undo')}",
                           "why": "the compensating action ran but nothing proved the effect is gone",
                           "decisions": ["verify_manually", "acknowledge"]})
+    # HALT_AND_REPORT (or CONTINUE_SIBLINGS) on a FAILED mission silently kept reversible effects: surface them
+    m = rt._missions.get(mission_id)
+    out = (m.outcome or {}) if m is not None else {}
+    left = list(out.get("not_compensated") or [])
+    if m is not None and m.state.value == "failed" and left and not out.get("compensation_acknowledged"):
+        items.append({"mission_id": mission_id, "goal": goal, "kind": "effects_left_in_place",
+                      "title": f"Mission failed; {len(left)} reversible effect(s) were left in place",
+                      "why": f"failure policy {out.get('failure_policy')} compensates nothing automatically",
+                      "not_compensated": left, "not_reversible": list(out.get("not_reversible") or []),
+                      "decisions": ["manual_remediation"]})
     return items

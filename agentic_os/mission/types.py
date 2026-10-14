@@ -436,6 +436,7 @@ class Mission:
     # the default for the mission's topology: sequential -> COMPENSATE_DECLARED, fork branches ->
     # HALT_AND_REPORT). See mission/compensation_policy.py and docs/COMPENSATION.md.
     failure_policy: str = ""
+    default_failure_policy: str = ""   # frozen at creation (template/env default); see compensation_policy.resolve_default
     world_state_id: str = ""
     active_plan_id: str | None = None
     outcome: dict[str, Any] | None = None

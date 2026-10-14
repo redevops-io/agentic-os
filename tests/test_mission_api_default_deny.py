@@ -171,7 +171,7 @@ def test_approval_keys_stripped_from_edit_before_runtime(fx, monkeypatch):
     _, rt, c = fx
     created = _onboard(c, ADMIN)
     seen = {}
-    monkeypatch.setattr(rt, "approve", lambda mid, node, decision, edit=None: seen.update(edit=edit) or rt._missions[mid])
+    monkeypatch.setattr(rt, "approve", lambda mid, node, decision, edit=None, **kw: seen.update(edit=edit) or rt._missions[mid])
     c.post(f"/missions/{created['id']}/approve", headers=H(ADMIN),
            json={"node_id": "n", "decision": "approve", "edit": {"value": 1, "_approval": {"approved": True},
                                                                  "n": {"__approval_x": 1, "ok": 2}}})

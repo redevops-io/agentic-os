@@ -92,6 +92,10 @@ def business_value_for(kind: str, mission=None, *, overrides=None, registry=None
     return _BUSINESS_VALUE.get(kind, 0.0)
 
 
+class ApprovalError(ValueError):
+    """/approve refused: terminal mission or a node that has no pending approval (routes map it to 409)."""
+
+
 class ReplayError(Exception):
     """Exact replay could not reproduce the sealed decision path — the recompiled plan's fingerprint or
     the rebuilt ContextEpoch does not match what was sealed at execution time (e.g. templates/registry
@@ -283,6 +287,8 @@ class MissionRuntime:
                     bind_selected=bool(bind_selected and selected_capability),
                     intent_content_hash=identity.get("intent_content_hash", ""),
                     evidence_refs=identity.get("evidence_refs", []))
+        from .compensation_policy import resolve_default  # noqa: PLC0415
+        m.default_failure_policy = resolve_default(template).value      # frozen: replay never reads the env
         self._missions[m.id] = m
         # `policy_refs` is part of the record, not only of the object. Without
         # it the log says what happened and cannot say why it was allowed, and
@@ -302,6 +308,7 @@ class MissionRuntime:
                            # the (approval-stripped) input VALUES, because replay must re-deliver them.
                            **self._selected_record(m),
                            **({"failure_policy": m.failure_policy} if m.failure_policy else {}),
+                           "default_failure_policy": m.default_failure_policy,
                            # mission-policy/v1 — pin the named policy identity onto mission creation
                            "policy": (m.policy.ref if m.policy else None),
                            "policy_digest": (m.policy.digest() if m.policy else None),
@@ -344,6 +351,10 @@ class MissionRuntime:
         """Cancel a mission that has not executed anything (e.g. a launch the launcher refused after
         inspecting the compiled plan). Records ``MissionCancelled`` so the refusal is on the ledger."""
         m = self._missions[mission_id]
+        if m.state is MissionState.COMPENSATION_FAILED or (m.outcome or {}).get("compensation_incomplete"):
+            from .compensation_runner import InterventionError  # noqa: PLC0415
+            raise InterventionError("mission has a forward effect awaiting compensation (parked/failed): cancel "
+                                    "would hide it; use the compensation routes (acknowledge / verify_manually)")
         self._set_state(m, MissionState.CANCELLED)
         self.store.append("MissionCancelled", m.id, {"reason": reason})
         return m
@@ -1054,10 +1065,31 @@ class MissionRuntime:
         return {e.payload["node_id"] for e in self.store.for_mission(mission_id)
                 if e.type == "VerificationOverridden"}
 
+    def _parked_nodes(self, mission_id: str) -> set:
+        """Node ids with an open human task (NodeParked minus NodeResumed/NodeSkipped)."""
+        parked: set = set()
+        for e in self.store.for_mission(mission_id):
+            if e.type == "NodeParked":
+                parked.add(e.payload["node_id"])
+            elif e.type in ("NodeResumed", "NodeSkipped"):
+                parked.discard(e.payload.get("node_id"))
+        return parked
+
     def approve(self, mission_id: str, node_id: str, decision: str = "approve",
-                edit: dict | None = None) -> Mission:
+                edit: dict | None = None, actor: str = "") -> Mission:
         m = self._missions[mission_id]
+        # A terminal mission has nothing to approve: without this a bogus reject re-entered the saga of a
+        # COMPENSATION_FAILED mission (consumed retry attempts, duplicate MissionOutcome). The node must also
+        # be one that is actually awaiting a human.
+        if m.state in (MissionState.SUCCEEDED, MissionState.FAILED, MissionState.COMPENSATION_FAILED,
+                       MissionState.CANCELLED):
+            raise ApprovalError(f"mission is {m.state.value}; nothing to approve "
+                                "(use the compensation routes for a COMPENSATION_FAILED mission)")
+        if node_id not in self._parked_nodes(mission_id):
+            raise ApprovalError(f"node {node_id!r} has no pending approval")
         pending = self.repo.pending_human(mission_id) or {}
+        if pending.get("node_id") != node_id:
+            pending = {}
         # a disambiguation gate resolves by an AUTHORITATIVE observation (dominates fusion), not a ban/approve
         if pending.get("kind") == "disambiguation" and pending.get("node_id") == node_id:
             key = pending.get("key")
@@ -1095,7 +1127,7 @@ class MissionRuntime:
             # swap is exactly when a human's yes should stop applying, because
             # what they approved is not what would run.
             self.store.append("ApprovalGranted", mission_id, {
-                "node_id": node_id, "edit": edit,
+                "node_id": node_id, "edit": edit, **({"approver": actor} if actor else {}),
                 "capability": self._capability_of(mission_id, node_id)})
             self.store.append("NodeResumed", mission_id, {"node_id": node_id})
             return self.run(mission_id)
@@ -1450,6 +1482,7 @@ class MissionRuntime:
                     inputs=restored, inputs_unavailable=unavailable,
                     intervention_id=created.payload.get("intervention_id") or "",
                     failure_policy=created.payload.get("failure_policy") or "",
+                    default_failure_policy=created.payload.get("default_failure_policy") or "",
                     policy_refs=list(policy_refs if policy_refs is not None else recorded),
                     # v0.2.x: replay carries the original evidence identity back, so the rehydrated
                     # mission resolves the SAME sealed intent + evidence it was created from.

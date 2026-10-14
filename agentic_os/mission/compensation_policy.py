@@ -56,22 +56,32 @@ def _parse(raw: str) -> "FailurePolicy | None":
         return FailurePolicy.HALT_AND_REPORT       # unrecognised: fail SAFE, never widen into compensation
 
 
+def resolve_default(template: "str | None") -> "FailurePolicy":
+    """The non-forked default for a template: template-declared default, then the deployment env, then
+    HALT_AND_REPORT. Resolved ONCE at mission creation and frozen into ``MissionCreated`` as
+    ``default_failure_policy`` so a later env/template change cannot alter how an old mission replays."""
+    from .templates import TEMPLATE_FAILURE_POLICY  # noqa: PLC0415
+    tpl = _parse(TEMPLATE_FAILURE_POLICY.get(template or "", ""))
+    if tpl is not None:
+        return tpl
+    return _parse(os.environ.get(ENV_DEFAULT_POLICY, "")) or FailurePolicy.HALT_AND_REPORT
+
+
 def effective_policy(mission: Any, *, forked: bool = False) -> FailurePolicy:
-    """Resolution order: the mission's own ``failure_policy`` (explicit opt-in), then its template's declared
-    default (``templates.TEMPLATE_FAILURE_POLICY``), then ``AGENTIC_OS_DEFAULT_FAILURE_POLICY`` (the
-    deployment-wide escape hatch), then HALT_AND_REPORT. Nothing compensates unless one of them says
-    COMPENSATE_DECLARED. Fork branches ignore the deployment/template default and use HALT_AND_REPORT unless
-    the mission itself opts in."""
+    """Resolution order: the mission's own ``failure_policy`` (explicit opt-in), then the default FROZEN at
+    creation (``mission.default_failure_policy``: template default, else ``AGENTIC_OS_DEFAULT_FAILURE_POLICY``,
+    else HALT_AND_REPORT), and only for a legacy mission without a frozen default the live template/env
+    resolution. Nothing compensates unless one of them says COMPENSATE_DECLARED. Fork branches ignore the
+    default and use HALT_AND_REPORT unless the mission itself opts in."""
     own = _parse(getattr(mission, "failure_policy", ""))
     if own is not None:
         return own
     if forked:
         return FailurePolicy.HALT_AND_REPORT
-    from .templates import TEMPLATE_FAILURE_POLICY  # noqa: PLC0415
-    tpl = _parse(TEMPLATE_FAILURE_POLICY.get(getattr(mission, "template", None) or "", ""))
-    if tpl is not None:
-        return tpl
-    return _parse(os.environ.get(ENV_DEFAULT_POLICY, "")) or FailurePolicy.HALT_AND_REPORT
+    frozen = _parse(getattr(mission, "default_failure_policy", ""))
+    if frozen is not None:
+        return frozen
+    return resolve_default(getattr(mission, "template", None))
 
 
 _OK = {"succeeded", "done", "success", "completed"}
