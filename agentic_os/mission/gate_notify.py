@@ -47,7 +47,7 @@ DEFAULTS = {"reminder_after": 900.0, "escalate_after": 1800.0, "expire_after": 8
             "rate_max": 5, "rate_per": 60.0, "link_base": "", "retention": 7 * 86400.0}
 CALLBACK_WINDOW = 300.0
 MAX_CALLBACK_BYTES = 16384
-_TS_RE = re.compile(r"^\d{1,12}(\.\d{1,6})?$")
+_TS_RE = re.compile(r"\d{1,12}(\.\d{1,6})?")
 _OUTBOX_COLS = frozenset({"key", "gate", "mission_id", "node_id", "gate_version", "recipient", "channel", "kind", "status", "ack_ref"})
 
 
@@ -89,13 +89,28 @@ class Outbox:
     def __init__(self, path: str = ":memory:"):
         self.path = path
         if path != ":memory:":
-            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        self._db = sqlite3.connect(path, check_same_thread=False, timeout=30.0)
+            d = os.path.dirname(os.path.abspath(path))
+            existed = os.path.isdir(d)
+            os.makedirs(d, mode=0o700, exist_ok=True)
+            if existed and os.stat(d).st_mode & 0o077:
+                warnings.warn(f"gate_notify DB directory {d} is accessible to other users (holds ack refs/addresses)",
+                              RuntimeWarning)
+            old = os.umask(0o077)               # new db/-wal/-shm files are created 0600
+            try:
+                self._db = sqlite3.connect(path, check_same_thread=False, timeout=30.0)
+                self._db.execute("PRAGMA busy_timeout=30000")
+                self._db.execute("PRAGMA journal_mode=WAL")
+            finally:
+                os.umask(old)
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.chmod(path + suffix, 0o600)
+                except OSError:
+                    pass
+        else:
+            self._db = sqlite3.connect(path, check_same_thread=False, timeout=30.0)
         self._lock = threading.RLock()
         with self._lock:
-            self._db.execute("PRAGMA busy_timeout=30000")
-            if path != ":memory:":
-                self._db.execute("PRAGMA journal_mode=WAL")
             self._db.executescript("""
             CREATE TABLE IF NOT EXISTS outbox(
               key TEXT PRIMARY KEY, gate TEXT, mission_id TEXT, node_id TEXT, gate_version TEXT,
@@ -364,7 +379,7 @@ class GateNotifier(LifecycleContributor):
             return {"ok": False, "reason": "callbacks disabled"}
         if len(body) > MAX_CALLBACK_BYTES:
             return {"ok": False, "reason": "body too large"}
-        if not isinstance(timestamp, str) or not _TS_RE.match(timestamp):
+        if not isinstance(timestamp, str) or not _TS_RE.fullmatch(timestamp):
             return {"ok": False, "reason": "bad timestamp"}
         ts = float(timestamp)
         if not math.isfinite(ts) or abs(now - ts) > CALLBACK_WINDOW:
@@ -451,7 +466,11 @@ def install_from_env(runtime, env: dict | None = None, start_thread: bool = True
     channels = {c.name: c for c in load_channels()}
     if not any(r["channel"] in channels for r in cfg["recipients"]):
         return None
-    n = GateNotifier(runtime.store, channels, cfg)
+    try:
+        n = GateNotifier(runtime.store, channels, cfg)
+    except (sqlite3.Error, OSError) as e:       # fail closed: the mission runtime is unaffected
+        warnings.warn(f"gate notifications disabled: outbox unavailable ({type(e).__name__})", RuntimeWarning)
+        return None
     runtime.lifecycle.install(n)
     if start_thread:
         n.start()

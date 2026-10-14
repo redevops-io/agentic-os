@@ -542,3 +542,37 @@ def test_install_idempotent_per_runtime(tmp_path, monkeypatch):
     rt = make_rt()
     a = gn.install_from_env(rt, env=env, start_thread=False)
     assert a is not None and gn.install_from_env(rt, env=env, start_thread=False) is a
+
+
+def test_db_permissions_private(tmp_path):
+    import os, stat
+    d = tmp_path / "state"; db = str(d / "g.db")
+    ob = gn.Outbox(db); ob.register_gate("m", "n", 1, "c", 1.0)
+    assert stat.S_IMODE(os.stat(d).st_mode) == 0o700
+    for suf in ("", "-wal", "-shm"):
+        if os.path.exists(db + suf):
+            assert stat.S_IMODE(os.stat(db + suf).st_mode) == 0o600
+    broad = tmp_path / "broad"; broad.mkdir(); os.chmod(broad, 0o755)
+    with pytest.warns(RuntimeWarning):
+        gn.Outbox(str(broad / "g.db"))
+
+
+def test_timestamp_trailing_newline_rejected():
+    rt, n, m, chan, clock = setup(); n.tick()
+    body = ack_body(chan.calls[0][0]); ts = str(int(clock())) + "\n"
+    assert n.handle_callback(body, ts, gn.sign_callback(SECRET, ts, body), SECRET)["reason"] == "bad timestamp"
+
+
+def test_unwritable_db_fails_closed(tmp_path, monkeypatch):
+    import os
+    if os.geteuid() == 0:
+        pytest.skip("root ignores directory modes")
+    ro = tmp_path / "ro"; ro.mkdir(); os.chmod(ro, 0o500)
+    monkeypatch.setattr(channels, "load_channels", lambda: [FakeChan()])
+    monkeypatch.setattr(gn, "_CURRENT", None)
+    env = {gn.ENV_ENABLE: "1", gn.ENV_RECIPIENTS: "a:slack:C1", gn.ENV_DB: str(ro / "sub" / "g.db")}
+    try:
+        with pytest.warns(RuntimeWarning):
+            assert gn.install_from_env(make_rt(), env=env, start_thread=False) is None
+    finally:
+        os.chmod(ro, 0o700)

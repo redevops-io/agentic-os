@@ -67,6 +67,9 @@ Twilio now form-encodes; 10 s timeouts; `send()` returns a `SendResult` (ok/stat
 the legacy approval text no longer promises "reply: approve <id>".
 
 ## Other notes
+The DB directory is created 0700 and the DB (and -wal/-shm) 0600; a pre-existing broader directory triggers a warning. If the outbox cannot be opened (read-only dir, unsupported WAL filesystem) `install_from_env` warns and installs nothing; missions are unaffected.
+Growth: the DB grows with long-open gates (rows are kept until resolved). `prune()` runs at the end of every `tick()` (the background thread, every 5 s by default) and removes resolved gates older than `retention` plus stale rate-limit samples; it can also be called directly.
+
 `time_to_decision()` is computed from the NodeParked and NodeResumed/NodeSkipped event timestamps (no tick
 needed; superseded and open gates excluded). Resolved gates and their rows are pruned after `retention` (7 days);
 unresolved rows are kept. Ids/capability in notice text are sanitized (no `@`, `<>`, markup) and URL-encoded in links.
