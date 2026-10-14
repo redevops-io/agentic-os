@@ -112,7 +112,21 @@ def _build_app():
         secret = os.environ.get(gate_notify.ENV_CALLBACK_SECRET, "")
         if n is None or not secret:
             raise HTTPException(503, "gate notification callbacks are not enabled")
-        res = n.handle_callback(await request.body(), request.headers.get("x-aos-timestamp", ""),
+        # Explicitly public-by-signature (no bearer): it can ONLY record 'acknowledged', never approve.
+        if "application/json" not in request.headers.get("content-type", "").lower():
+            raise HTTPException(415, "content-type must be application/json")
+        try:
+            declared = int(request.headers.get("content-length", "0") or 0)
+        except ValueError:
+            raise HTTPException(400, "bad content-length")
+        if declared > gate_notify.MAX_CALLBACK_BYTES:
+            raise HTTPException(413, "body too large")
+        raw = b""
+        async for chunk in request.stream():
+            raw += chunk
+            if len(raw) > gate_notify.MAX_CALLBACK_BYTES:
+                raise HTTPException(413, "body too large")
+        res = n.handle_callback(raw, request.headers.get("x-aos-timestamp", ""),
                                 request.headers.get("x-aos-signature", ""), secret)
         if not res["ok"]:
             raise HTTPException(401 if res["reason"] in ("bad signature", "stale timestamp", "replay", "bad timestamp") else 400,

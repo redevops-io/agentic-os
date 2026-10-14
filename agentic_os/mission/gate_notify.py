@@ -9,9 +9,10 @@ Opt-in (``AGENTIC_OS_GATE_NOTIFY=1`` + a configured recipient); otherwise nothin
 * ``tick(now)`` (also run by an optional daemon thread) sends due rows, retries with exponential backoff
   and a cap, sends ONE reminder and ONE escalation, and appends a ``GateExpired`` event after the TTL.
   It NEVER approves or rejects: the mission stays parked.
-* Transport is at-least-once; processing is idempotent. A row with a recorded receipt is never re-sent. If a
-  provider processes a message but the ack is lost (timeout), the retry produces a DUPLICATE external
-  message: that is possible and documented, not prevented.
+* Transport is at-least-once; processing is idempotent. A row with a recorded receipt is never re-sent, and
+  a due row is claimed with an atomic compare-and-swap so concurrent threads/processes cannot both send it.
+  DUPLICATE external messages remain possible when a provider processes a message but the ack is lost
+  (timeout) or the process crashes between a send and the receipt write: the retry sends again.
 * A notice carries only mission/capability and a link to the authenticated approval surface. Never the
   approval token, never a secret. Replies, link clicks and callbacks can only record "acknowledged".
 """
@@ -20,11 +21,15 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
+import re
+import secrets
 import sqlite3
 import threading
 import time
-from collections import deque
+import urllib.parse
+import warnings
 from typing import Any, Callable
 
 from .lifecycle import GateReached, LifecycleContributor
@@ -34,11 +39,27 @@ ENV_CONFIG = "AGENTIC_OS_GATE_NOTIFY_CONFIG"           # path to a JSON config f
 ENV_RECIPIENTS = "AGENTIC_OS_GATE_NOTIFY_RECIPIENTS"   # "name:channel[:address],..."
 ENV_ESCALATE = "AGENTIC_OS_GATE_NOTIFY_ESCALATE_TO"    # same syntax
 ENV_CALLBACK_SECRET = "AGENTIC_OS_GATE_NOTIFY_CALLBACK_SECRET"
+ENV_DB = "AGENTIC_OS_GATE_NOTIFY_DB"                   # durable outbox file (default: <state dir>/gate_notify.db)
+ENV_STATE_DIR = "AGENTIC_OS_STATE_DIR"
 
 DEFAULTS = {"reminder_after": 900.0, "escalate_after": 1800.0, "expire_after": 86400.0,
             "backoff_base": 5.0, "backoff_cap": 300.0, "max_attempts": 8,
-            "rate_max": 5, "rate_per": 60.0, "link_base": ""}
+            "rate_max": 5, "rate_per": 60.0, "link_base": "", "retention": 7 * 86400.0}
 CALLBACK_WINDOW = 300.0
+MAX_CALLBACK_BYTES = 16384
+_TS_RE = re.compile(r"^\d{1,12}(\.\d{1,6})?$")
+_OUTBOX_COLS = frozenset({"key", "gate", "mission_id", "node_id", "gate_version", "recipient", "channel", "kind", "status", "ack_ref"})
+
+
+def _safe(text: Any, limit: int = 80) -> str:
+    """Neutralise chat markup/mentions (@, <>, backticks, links) in values interpolated into a notice."""
+    return re.sub(r"[^\w.\-: /]", "_", str(text))[:limit]
+
+
+def default_db_path(env: dict | None = None) -> str:
+    env = os.environ if env is None else env
+    base = env.get(ENV_STATE_DIR) or os.path.join(os.path.expanduser("~"), ".agentic-os")
+    return os.path.join(base, "gate_notify.db")
 
 
 def notification_key(mission_id: str, node_id: str, gate_version: Any, recipient: str,
@@ -66,15 +87,21 @@ class Outbox:
     """Durable, idempotent notification outbox + gate registry (SQLite; ``:memory:`` for tests)."""
 
     def __init__(self, path: str = ":memory:"):
-        self._db = sqlite3.connect(path, check_same_thread=False)
+        self.path = path
+        if path != ":memory:":
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        self._db = sqlite3.connect(path, check_same_thread=False, timeout=30.0)
         self._lock = threading.RLock()
         with self._lock:
+            self._db.execute("PRAGMA busy_timeout=30000")
+            if path != ":memory:":
+                self._db.execute("PRAGMA journal_mode=WAL")
             self._db.executescript("""
             CREATE TABLE IF NOT EXISTS outbox(
               key TEXT PRIMARY KEY, gate TEXT, mission_id TEXT, node_id TEXT, gate_version TEXT,
               recipient TEXT, channel TEXT, address TEXT, kind TEXT, text TEXT,
               status TEXT, attempts INTEGER DEFAULT 0, next_attempt REAL, created_at REAL,
-              sent_at REAL, provider_msg_id TEXT, last_error TEXT, ack_at REAL);
+              sent_at REAL, provider_msg_id TEXT, last_error TEXT, ack_at REAL, ack_ref TEXT);
             CREATE TABLE IF NOT EXISTS gates(
               gate TEXT PRIMARY KEY, mission_id TEXT, node_id TEXT, gate_version TEXT, capability TEXT,
               created_at REAL, reminded INTEGER DEFAULT 0, escalated INTEGER DEFAULT 0,
@@ -100,16 +127,21 @@ class Outbox:
     def enqueue(self, *, mission_id, node_id, version, recipient, channel, address, kind, text, now) -> bool:
         """Insert-if-absent. Returns True only when a NEW row was created."""
         key = notification_key(mission_id, node_id, version, recipient, channel, kind)
+        ack_ref = secrets.token_urlsafe(18)       # opaque, random; NOT an approval token and not derived from one
+        text = text.replace("{ACK}", ack_ref)
         with self._lock:
             cur = self._db.execute(
                 "INSERT OR IGNORE INTO outbox(key,gate,mission_id,node_id,gate_version,recipient,channel,address,"
-                "kind,text,status,attempts,next_attempt,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "kind,text,status,attempts,next_attempt,created_at,ack_ref) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (key, _gate_id(mission_id, node_id, version), mission_id, node_id, str(version), recipient,
-                 channel, address, kind, text, "pending", 0, now, now))
+                 channel, address, kind, text, "pending", 0, now, now, ack_ref))
             self._db.commit()
             return cur.rowcount == 1
 
     def rows(self, **where) -> list[dict]:
+        bad = set(where) - _OUTBOX_COLS
+        if bad:
+            raise ValueError(f"unknown outbox column(s): {sorted(bad)}")
         clause = " AND ".join(f"{k}=?" for k in where) or "1=1"
         return self._q(f"SELECT * FROM outbox WHERE {clause} ORDER BY created_at, key", tuple(where.values()))
 
@@ -126,9 +158,11 @@ class Outbox:
                 for r in self._q("SELECT * FROM outbox WHERE mission_id=? AND node_id=? ORDER BY created_at",
                                  (mission_id, node_id))]
 
-    def acknowledge(self, key: str, now: float) -> bool:
+    def acknowledge(self, ack_ref: str, now: float) -> bool:
+        if not ack_ref:
+            return False
         with self._lock:
-            cur = self._db.execute("UPDATE outbox SET ack_at=COALESCE(ack_at,?) WHERE key=?", (now, key))
+            cur = self._db.execute("UPDATE outbox SET ack_at=COALESCE(ack_at,?) WHERE ack_ref=?", (now, ack_ref))
             self._db.commit()
             return cur.rowcount == 1
 
@@ -138,6 +172,27 @@ class Outbox:
             self._db.execute("DELETE FROM seen_sigs WHERE ts<?", (now - 2 * CALLBACK_WINDOW,))
             self._db.commit()
             return cur.rowcount == 0
+
+    def claim(self, key: str, attempts: int, now: float, lease: float) -> bool:
+        """Atomic compare-and-swap lease: exactly one worker (thread or process) wins a due row."""
+        with self._lock:
+            cur = self._db.execute(
+                "UPDATE outbox SET attempts=attempts+1, next_attempt=? WHERE key=? AND attempts=? "
+                "AND status IN ('pending','retrying') AND next_attempt<=? AND sent_at IS NULL",
+                (now + lease, key, attempts, now))
+            self._db.commit()
+            return cur.rowcount == 1
+
+    def prune(self, now: float, retention: float, rate_per: float) -> None:
+        """Drop rate-limit samples and RESOLVED gates (with their rows) past retention. Unresolved rows are kept."""
+        with self._lock:
+            self._db.execute("DELETE FROM sends WHERE ts<?", (now - max(rate_per, 1.0) * 2,))
+            old = [r[0] for r in self._db.execute(
+                "SELECT gate FROM gates WHERE resolved_at IS NOT NULL AND resolved_at<?", (now - retention,))]
+            for g in old:
+                self._db.execute("DELETE FROM outbox WHERE gate=? AND status NOT IN ('pending','retrying')", (g,))
+                self._db.execute("DELETE FROM gates WHERE gate=?", (g,))
+            self._db.commit()
 
 
 def _parse_recipients(spec: str, default_addr: Callable[[str], str] = lambda c: "") -> list[dict]:
@@ -165,6 +220,7 @@ def load_config(env: dict | None = None) -> dict | None:
     cfg.setdefault("recipients", _parse_recipients(env.get(ENV_RECIPIENTS, "")))
     cfg.setdefault("escalation", _parse_recipients(env.get(ENV_ESCALATE, "")))
     cfg.setdefault("link_base", env.get("AGENTIC_OS_GATE_NOTIFY_LINK_BASE", ""))
+    cfg["outbox"] = env.get(ENV_DB) or cfg.get("outbox") or default_db_path(env)
     return cfg if cfg.get("recipients") else None
 
 
@@ -176,6 +232,7 @@ class GateNotifier(LifecycleContributor):
         self.recipients = list(config.get("recipients") or [])
         self.escalation = list(config.get("escalation") or [])
         self.outbox = outbox or Outbox(config.get("outbox") or ":memory:")
+        self._tick_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
 
@@ -184,9 +241,10 @@ class GateNotifier(LifecycleContributor):
         head = {"initial": "Approval needed", "reminder": "Reminder: approval still pending",
                 "escalation": "Escalation: approval pending", "expired": "Approval gate expired (still parked)"}[kind]
         base = self.cfg["link_base"]
-        link = f"{base}{'&' if '?' in base else '?'}mission={mission_id}&node={node_id}" if base else f"mission {mission_id} node {node_id}"
-        return (f"{head}: '{capability}' in mission {mission_id}. Review and decide in the authenticated "
-                f"console: {link} . (Replying to this message does not approve anything.)")
+        q = urllib.parse.urlencode({"mission": mission_id, "node": node_id, "ack": "{ACK}"}, safe="{}")
+        link = f"{base}{'&' if '?' in base else '?'}{q}" if base else f"mission {_safe(mission_id)} node {_safe(node_id)} ack={{ACK}}"
+        return (f"{head}: '{_safe(capability)}' in mission {_safe(mission_id)}. Review and decide in the "
+                f"authenticated console: {link} . (Replying to this message does not approve anything.)")
 
     def _fanout(self, who: list[dict], kind: str, mission_id, node_id, version, capability, now) -> int:
         n = 0
@@ -208,11 +266,15 @@ class GateNotifier(LifecycleContributor):
 
     # ── sweep ──
     def tick(self, now: float | None = None) -> dict:
-        now = self.clock() if now is None else now
+        with self._tick_lock:                       # one sweep at a time per process; claim() covers other processes
+            return self._tick(self.clock() if now is None else now)
+
+    def _tick(self, now: float) -> dict:
         stats = {"sent": 0, "failed": 0, "retry": 0, "reminders": 0, "escalations": 0, "expired": 0, "deferred": 0}
         for g in self.outbox.gates():
             self._sweep_gate(g, now, stats)
         self._deliver_due(now, stats)
+        self.outbox.prune(now, self.cfg["retention"], self.cfg["rate_per"])
         return stats
 
     def _sweep_gate(self, g: dict, now: float, stats: dict) -> None:
@@ -271,10 +333,10 @@ class GateNotifier(LifecycleContributor):
                                (now + self.cfg["rate_per"] / max(1, self.cfg["rate_max"]), r["key"]))
                 stats["deferred"] += 1
                 continue
+            # atomic lease first: only one worker wins; a crash mid-send leaves the row retryable later
+            if not self.outbox.claim(r["key"], r["attempts"], now, max(self.cfg["backoff_base"], 1.0)):
+                continue
             attempts = r["attempts"] + 1
-            # lease first: a crash mid-send leaves the row retryable later, never hot-looping
-            self.outbox._q("UPDATE outbox SET attempts=?, next_attempt=? WHERE key=?",
-                           (attempts, now + self.cfg["backoff_base"], r["key"]))
             self.outbox._q("INSERT INTO sends(recipient,ts) VALUES(?,?)", (r["recipient"], now))
             res = self._send(r)
             if res.ok:
@@ -293,37 +355,56 @@ class GateNotifier(LifecycleContributor):
     # ── inbound: acknowledgement only ──
     def handle_callback(self, body: bytes, timestamp: str, signature: str, secret: str,
                         now: float | None = None) -> dict:
-        """Verify a provider/relay callback (HMAC-SHA256 over ``v0:<ts>:<body>``, 5-minute window, replay
-        protected) and record ACKNOWLEDGED. Any other action - approve included - is refused. Approval only
-        ever happens on the authenticated control path."""
+        """Verify a relay callback (HMAC-SHA256 over ``v0:<ts>:<body>``, 5-minute window, replay protected) and
+        record ACKNOWLEDGED for the opaque ``ref`` carried in the delivered notice. Any other action - approve
+        included - is refused. Approval only ever happens on the authenticated control path. The signature is
+        consumed only after the whole request validated."""
         now = self.clock() if now is None else now
         if not secret:
             return {"ok": False, "reason": "callbacks disabled"}
-        try:
-            ts = float(timestamp)
-        except (TypeError, ValueError):
+        if len(body) > MAX_CALLBACK_BYTES:
+            return {"ok": False, "reason": "body too large"}
+        if not isinstance(timestamp, str) or not _TS_RE.match(timestamp):
             return {"ok": False, "reason": "bad timestamp"}
-        if abs(now - ts) > CALLBACK_WINDOW:
+        ts = float(timestamp)
+        if not math.isfinite(ts) or abs(now - ts) > CALLBACK_WINDOW:
             return {"ok": False, "reason": "stale timestamp"}
         expect = sign_callback(secret, timestamp, body)
         if not hmac.compare_digest(expect, signature or ""):
             return {"ok": False, "reason": "bad signature"}
-        if self.outbox.sig_seen_or_record(expect, now):
-            return {"ok": False, "reason": "replay"}
         try:
             d = json.loads(body.decode("utf-8"))
         except ValueError:
             return {"ok": False, "reason": "bad body"}
-        if d.get("action") != "ack":
-            return {"ok": False, "reason": "only 'ack' is accepted; approval requires the authenticated console"}
-        if not self.outbox.acknowledge(str(d.get("key", "")), now):
+        if not isinstance(d, dict):
+            return {"ok": False, "reason": "bad body"}
+        if d.get("action") != "ack" or not isinstance(d.get("ref"), str) or not d["ref"]:
+            return {"ok": False, "reason": "only 'ack' with a ref is accepted; approval requires the authenticated console"}
+        if self.outbox.sig_seen_or_record(expect, now):
+            return {"ok": False, "reason": "replay"}
+        if not self.outbox.acknowledge(d["ref"], now):
             return {"ok": False, "reason": "unknown notification"}
-        return {"ok": True, "acknowledged": d["key"]}
+        return {"ok": True, "acknowledged": True}
 
     # ── metrics hooks ──
     def time_to_decision(self) -> list[dict]:
-        return [{"gate": g["gate"], "seconds": g["resolved_at"] - g["created_at"]}
-                for g in self.outbox.gates() if g["resolved_at"] is not None]
+        """Per notified gate: seconds from its NodeParked event to the human decision event
+        (NodeResumed/NodeSkipped), from the event log itself - no tick needed. Superseded gates (re-parked
+        before a decision) and still-open gates are excluded."""
+        out = []
+        for g in self.outbox.gates():
+            parked = None
+            for e in self.store.for_mission(g["mission_id"]):
+                if e.type == "NodeParked" and e.payload.get("node_id") == g["node_id"]:
+                    if parked is not None:
+                        break                                   # re-parked before a decision: superseded
+                    if str(e.seq) == g["gate_version"]:
+                        parked = e
+                elif parked is not None and e.type in ("NodeResumed", "NodeSkipped") \
+                        and e.payload.get("node_id") == g["node_id"]:
+                    out.append({"gate": g["gate"], "seconds": e.ts - parked.ts})
+                    break
+        return out
 
     # ── optional background sweep ──
     def start(self, interval: float = 5.0) -> threading.Thread:
@@ -353,11 +434,19 @@ def current() -> GateNotifier | None:
 
 
 def install_from_env(runtime, env: dict | None = None, start_thread: bool = True) -> GateNotifier | None:
-    """Opt-in wiring: returns None (and changes nothing) unless enabled AND a recipient is configured."""
+    """Opt-in wiring: returns None (and changes nothing) unless enabled AND a recipient is configured.
+
+    This is the hook ANY host (demo unified_server today; the production mission API later) calls once per
+    runtime: ``gate_notify.install_from_env(runtime)``. Idempotent per runtime. Refuses a non-durable outbox."""
     global _CURRENT
     cfg = load_config(env)
     if cfg is None:
         return None
+    if cfg.get("outbox") in (None, "", ":memory:"):
+        warnings.warn("gate notifications disabled: refusing a non-durable (:memory:) outbox", RuntimeWarning)
+        return None
+    if _CURRENT is not None and _CURRENT.store is runtime.store:
+        return _CURRENT
     from ..channels import load_channels
     channels = {c.name: c for c in load_channels()}
     if not any(r["channel"] in channels for r in cfg["recipients"]):

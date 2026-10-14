@@ -26,7 +26,7 @@ import urllib.request
 from dataclasses import dataclass
 
 
-_SECRET_RE = re.compile(r"(bot\d+:[A-Za-z0-9_-]+|Bearer\s+\S+|Basic\s+\S+|Bot\s+\S+)")
+_SECRET_RE = re.compile(r"(bot\d+:[A-Za-z0-9_-]+|Bearer\s+\S+|Basic\s+\S+|Bot\s+\S+|xox[a-z]-[\w-]+|AC[0-9a-fA-F]{32}|[0-9a-f]{32})")
 
 
 def redact(text: str) -> str:

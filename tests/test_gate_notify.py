@@ -18,6 +18,16 @@ from agentic_os.mission.types import CapabilityManifest, CapabilitySpec, Executi
 SECRET = "cb-secret"
 
 
+def ref_from(text):
+    """What a relay can do: parse the opaque ack ref out of the DELIVERED notice text only."""
+    import re
+    return re.search(r"(?:[?&]|\s)ack=([A-Za-z0-9_\-]+)", text).group(1)
+
+
+def ack_body(text):
+    return json.dumps({"action": "ack", "ref": ref_from(text)}).encode()
+
+
 class Clock:
     def __init__(self, t=1000.0): self.t = t
     def __call__(self): return self.t
@@ -73,8 +83,7 @@ def test_default_off_installs_nothing():
 def test_forged_unsigned_stale_replayed_callbacks_never_accepted():
     rt, n, m, chan, clock = setup()
     n.tick()
-    key = n.outbox.rows()[0]["key"]
-    body = json.dumps({"action": "ack", "key": key}).encode()
+    body = ack_body(chan.calls[0][0])
     ts = str(int(clock()))
     good = gn.sign_callback(SECRET, ts, body)
     accepted = 0
@@ -90,9 +99,9 @@ def test_forged_unsigned_stale_replayed_callbacks_never_accepted():
 def test_callback_can_never_approve():
     rt, n, m, chan, clock = setup()
     n.tick()
-    key = n.outbox.rows()[0]["key"]
+    key = ref_from(chan.calls[0][0])
     for action in ("approve", "reject", "APPROVE"):
-        body = json.dumps({"action": action, "key": key, "node_id": "x"}).encode()
+        body = json.dumps({"action": action, "ref": key, "node_id": "x"}).encode()
         ts = str(int(clock()))
         r = n.handle_callback(body, ts, gn.sign_callback(SECRET, ts, body), SECRET)
         assert r["ok"] is False
@@ -227,14 +236,14 @@ def test_decision_cancels_pending_reminders_and_records_time_to_decision():
     rt.approve(m.id, rt.repo.pending_human(m.id)["node_id"], "approve")
     clock.t += 500; n.tick(clock())
     assert [r["kind"] for r in n.outbox.rows()] == ["initial"]
-    assert n.time_to_decision()[0]["seconds"] == 500
+    assert n.time_to_decision()[0]["seconds"] >= 0           # from NodeParked->NodeResumed event ts, tick-independent
 
 
 def test_acknowledged_visible_and_suppresses_reminder():
     rt, n, m, chan, clock = setup(cfg={"reminder_after": 100})
     n.tick(clock())
     row = n.outbox.rows()[0]
-    body = json.dumps({"action": "ack", "key": row["key"]}).encode(); ts = str(int(clock()))
+    body = ack_body(chan.calls[0][0]); ts = str(int(clock()))
     assert n.handle_callback(body, ts, gn.sign_callback(SECRET, ts, body), SECRET)["ok"]
     clock.t += 200; n.tick(clock.t)
     notices = n.outbox.notices_for(m.id, row["node_id"])
@@ -352,3 +361,184 @@ def test_approval_text_no_longer_promises_reply_to_approve():
     class Ap: id = "a1"; module = "m"; summary = "s"; findings = []
     channels.Notifier([C()]).approval_requested(Ap())
     assert "reply: approve" not in sent[0]
+
+
+# ───────── review fixes (B1-B3, S1-S7, nits) ─────────
+import multiprocessing
+import threading
+
+
+def test_b3_ack_end_to_end_from_delivered_notice_only():
+    rt, n, m, chan, clock = setup()
+    n.tick(clock())
+    text = chan.calls[0][0]
+    ref = ref_from(text)
+    assert ref != n.outbox.rows()[0]["key"] and "TOPSECRET" not in text
+    ts = str(int(clock())); body = ack_body(text)
+    assert n.handle_callback(body, ts, gn.sign_callback(SECRET, ts, body), SECRET) == {"ok": True, "acknowledged": True}
+    assert n.outbox.notices_for(m.id, n.outbox.rows()[0]["node_id"])[0]["state"] == "acknowledged"
+    assert ref not in json.dumps(n.outbox.notices_for(m.id, n.outbox.rows()[0]["node_id"]))   # never exposed read-side
+    body2 = json.dumps({"action": "ack", "ref": "guess"}).encode()
+    assert n.handle_callback(body2, ts, gn.sign_callback(SECRET, ts, body2), SECRET)["reason"] == "unknown notification"
+    # the outbox key is no longer an accepted handle
+    body3 = json.dumps({"action": "ack", "key": n.outbox.rows()[0]["key"]}).encode()
+    assert n.handle_callback(body3, ts, gn.sign_callback(SECRET, ts, body3), SECRET)["ok"] is False
+
+
+@pytest.mark.parametrize("bad", ["nan", "NaN", "inf", "-1e9", "1e3", " 12", "0x10", ""])
+def test_s1_nonnumeric_or_nonfinite_timestamps_rejected(bad):
+    rt, n, m, chan, clock = setup(); n.tick()
+    body = ack_body(chan.calls[0][0])
+    assert n.handle_callback(body, bad, gn.sign_callback(SECRET, bad, body), SECRET)["ok"] is False
+
+
+def test_s2_non_object_body_rejected_without_consuming_signature():
+    rt, n, m, chan, clock = setup(); n.tick()
+    ts = str(int(clock()))
+    for raw in (b"[1]", b'"x"', b"null", b"{bad"):
+        r = n.handle_callback(raw, ts, gn.sign_callback(SECRET, ts, raw), SECRET)
+        assert r["ok"] is False and r["reason"] == "bad body"
+    assert n.outbox._q("SELECT COUNT(*) AS c FROM seen_sigs")[0]["c"] == 0
+
+
+def test_s3_body_cap():
+    rt, n, m, chan, clock = setup()
+    raw = b" " * (gn.MAX_CALLBACK_BYTES + 1); ts = str(int(clock()))
+    assert n.handle_callback(raw, ts, gn.sign_callback(SECRET, ts, raw), SECRET)["reason"] == "body too large"
+
+
+def test_s3_http_route_limits_and_only_ack(monkeypatch):
+    from fastapi.testclient import TestClient
+    from agentic_os.mission import unified_server as us
+    rt, n, m, chan, clock = setup(clock=Clock(__import__("time").time()))
+    n.tick()
+    monkeypatch.setattr(gn, "_CURRENT", n); monkeypatch.setenv(gn.ENV_CALLBACK_SECRET, SECRET)
+    c = TestClient(us.app)                                   # no bearer: public-by-signature
+    ts = str(int(__import__("time").time())); body = ack_body(chan.calls[0][0])
+    h = {"x-aos-timestamp": ts, "x-aos-signature": gn.sign_callback(SECRET, ts, body)}
+    assert c.post("/api/gate-notify/callback", content=body, headers={**h, "content-type": "text/plain"}).status_code == 415
+    big = b"x" * 20000
+    assert c.post("/api/gate-notify/callback", content=big, headers={"content-type": "application/json"}).status_code == 413
+    assert c.post("/api/gate-notify/callback", content=body, headers={**h, "content-type": "application/json"}).status_code == 200
+    assert c.post("/api/gate-notify/callback", content=body, headers={**h, "content-type": "application/json"}).status_code == 401
+    ab = json.dumps({"action": "approve", "ref": ref_from(chan.calls[0][0])}).encode()
+    h2 = {"x-aos-timestamp": ts, "x-aos-signature": gn.sign_callback(SECRET, ts, ab), "content-type": "application/json"}
+    assert c.post("/api/gate-notify/callback", content=ab, headers=h2).status_code == 400
+    assert rt.repo.pending_human(m.id) is not None
+
+
+def test_b1_concurrent_threads_one_send():
+    chan = FakeChan()
+    orig = chan.send
+    def slow(text, reply_to=None):
+        __import__("time").sleep(0.05); return orig(text, reply_to)
+    chan.send = slow
+    rt, n, m, _, clock = setup(chan=chan)
+    n2 = gn.GateNotifier(rt.store, {"slack": chan}, {"recipients": []}, outbox=n.outbox, clock=clock)
+    ts = [threading.Thread(target=x.tick) for x in (n, n2, n, n2)]
+    [t.start() for t in ts]; [t.join() for t in ts]
+    assert len(chan.calls) == 1
+
+
+def _proc(db, q):
+    from agentic_os.mission import gate_notify as g
+    class C:
+        name = "slack"
+        def send(self, text, reply_to=None):
+            q.put(1); return SendResult(True, 200, "m")
+    class S:  # store that says the gate is still open
+        def for_mission(self, mid):
+            class E: type = "NodeParked"; seq = 1; payload = {"node_id": "n"}
+            return [E()]
+    n = g.GateNotifier(S(), {"slack": C()}, {"recipients": [], "outbox": db}, clock=lambda: 5000.0)
+    n.tick(5000.0)
+
+
+def test_b1_multi_process_one_send(tmp_path):
+    db = str(tmp_path / "o.db")
+    ob = gn.Outbox(db)
+    ob.register_gate("m", "n", 1, "cap", 5000.0)
+    ob.enqueue(mission_id="m", node_id="n", version=1, recipient="a", channel="slack", address="C",
+               kind="initial", text="hi", now=5000.0)
+    ctx = multiprocessing.get_context("fork"); q = ctx.Queue()
+    ps = [ctx.Process(target=_proc, args=(db, q)) for _ in range(4)]
+    [p.start() for p in ps]; [p.join(30) for p in ps]
+    sent = 0
+    while not q.empty():
+        q.get(); sent += 1
+    assert sent == 1 and ob.rows()[0]["status"] == "sent"
+
+
+def test_b2_env_only_config_is_durable_and_memory_refused(tmp_path, monkeypatch):
+    env = {gn.ENV_ENABLE: "1", gn.ENV_RECIPIENTS: "a:slack:C1", gn.ENV_STATE_DIR: str(tmp_path)}
+    cfg = gn.load_config(env)
+    assert cfg["outbox"] == str(tmp_path / "gate_notify.db")
+    assert gn.load_config({**env, gn.ENV_DB: str(tmp_path / "x.db")})["outbox"] == str(tmp_path / "x.db")
+    monkeypatch.setattr(gn, "load_config", lambda e=None: {**cfg, "outbox": ":memory:"})
+    with pytest.warns(RuntimeWarning):
+        assert gn.install_from_env(make_rt(), env={}) is None
+
+
+def test_b2_restart_survives_pending_rows_and_callback_replay(tmp_path):
+    db = str(tmp_path / "o.db")
+    rt = make_rt(); clock = Clock(); chan = FakeChan(script=[SendResult(False, 503, error="x")])
+    cfg = {"recipients": [{"id": "a", "channel": "slack", "address": "C1"}], "outbox": db, "reminder_after": 1e9}
+    n = gn.GateNotifier(rt.store, {"slack": chan}, cfg, clock=clock); rt.lifecycle.install(n)
+    m = rt.create_mission("act", policy_refs=["*"]); rt.run(m.id)
+    n.tick(clock())                                          # attempt 1 fails -> pending retry persisted
+    ref = ref_from(n.outbox.rows()[0]["text"])
+    body = json.dumps({"action": "ack", "ref": ref}).encode(); ts = str(int(clock())); sig = gn.sign_callback(SECRET, ts, body)
+    assert n.handle_callback(body, ts, sig, SECRET)["ok"]
+    n2 = gn.GateNotifier(rt.store, {"slack": chan}, cfg, clock=clock)           # "restart"
+    assert n2.handle_callback(body, ts, sig, SECRET)["reason"] == "replay"
+    clock.t += 10; n2.tick(clock())
+    assert n2.outbox.rows()[0]["status"] == "sent" and n2.outbox.rows()[0]["attempts"] == 2
+
+
+def test_s4_prune_keeps_unresolved_drops_old_resolved():
+    rt, n, m, chan, clock = setup(cfg={"retention": 100, "reminder_after": 1e9})
+    n.tick(clock())
+    m2 = rt.create_mission("act", policy_refs=["*"]); rt.run(m2.id); n.tick(clock())
+    rt.approve(m.id, rt.repo.pending_human(m.id)["node_id"], "approve")
+    clock.t += 10; n.tick(clock())                           # resolved now, within retention
+    assert len(n.outbox.gates()) == 2
+    clock.t += 500; n.tick(clock())
+    assert [g["mission_id"] for g in n.outbox.gates()] == [m2.id]
+    assert {r["mission_id"] for r in n.outbox.rows()} == {m2.id}
+
+
+def test_s5_time_to_decision_uses_decision_event_not_tick():
+    rt, n, m, chan, clock = setup()
+    node = rt.repo.pending_human(m.id)["node_id"]
+    assert n.time_to_decision() == []                         # open gate excluded
+    rt.approve(m.id, node, "approve")                         # no tick at all
+    parked = next(e for e in rt.store.for_mission(m.id) if e.type == "NodeParked")
+    res = next(e for e in rt.store.for_mission(m.id) if e.type == "NodeResumed")
+    parked.ts, res.ts = 100.0, 142.0
+    assert n.time_to_decision()[0]["seconds"] == 42.0
+
+
+def test_s7_injection_neutralised():
+    rt = make_rt(); chan = FakeChan(); clock = Clock()
+    n = gn.GateNotifier(rt.store, {"slack": chan}, {"recipients": [{"id": "a", "channel": "slack"}],
+                                                   "link_base": "https://c/n"}, clock=clock)
+    t = n._text("initial", "m1>@channel <http://evil|x>", "n&x=1", "cap<!here> @everyone")
+    assert "@" not in t.split("Review")[0] and "<" not in t and "evil|" not in t
+    assert "%3E" in t or "%40" in t or "mission=m1" in t
+
+
+def test_nits_redaction_and_column_allowlist():
+    assert "xoxb-123-abc" not in channels.redact("err xoxb-123-abc")
+    assert "AC" + "a" * 32 not in channels.redact("sid AC" + "a" * 32)
+    ob = gn.Outbox()
+    with pytest.raises(ValueError):
+        ob.rows(**{"1=1 OR key": "x"})
+
+
+def test_install_idempotent_per_runtime(tmp_path, monkeypatch):
+    monkeypatch.setattr(channels, "load_channels", lambda: [FakeChan()])
+    monkeypatch.setattr(gn, "_CURRENT", None)
+    env = {gn.ENV_ENABLE: "1", gn.ENV_RECIPIENTS: "a:slack:C1", gn.ENV_DB: str(tmp_path / "d.db")}
+    rt = make_rt()
+    a = gn.install_from_env(rt, env=env, start_thread=False)
+    assert a is not None and gn.install_from_env(rt, env=env, start_thread=False) is a
