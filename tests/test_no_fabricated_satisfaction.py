@@ -46,13 +46,17 @@ def test_resolve_verified_email_handles_hunter_missing_score(monkeypatch):
 
 
 # ---- name-heuristic regression guard (NOT a proof) ---------------------------------------------
+# KNOWN LIMITATIONS (deliberately not chased): a generic helper called with a renamed variable;
+# sum()/mean() over a hardcoded list; a constant imported from another module; dict(zip(..)); values
+# loaded from json/files; function defaults; setattr(); positional constructor args; synonym keys.
+# A bare 0 / float(0) is treated as "no data", not as a score.
 # Flags satisfaction-like targets (csat/nps/satisfaction) that are assigned a literal number or an
 # expression built from numeric literals or from resolution/closure-proxy names. Covers: plain names,
 # attributes, subscripts, dict literals, kwargs, .update(), walrus, tuple-unpack, lambdas, helper returns.
 # Allow-listed labelled simulators are listed explicitly in ALLOW.
 import re as _re
 _SAT = _re.compile(r"(csat|\bnps\b|nps_|_nps|satisfaction)", _re.I)
-_META = _re.compile(r"(_n|_count|_source|_truncated|_responses|_kpi|_ttl|_pages|_cache)$", _re.I)
+_META = _re.compile(r"(_n|_count|_source|_truncated|_responses|_kpi|_ttl|_pages|_cache|_limit|_flag)$", _re.I)
 _PROXY = _re.compile(r"(resolv|resolution|ratio|_rate|rate_|done|closed|solved)", _re.I)
 _PASS = {"round", "float", "int", "max", "min", "abs"}
 
@@ -63,7 +67,10 @@ def _is_sat(name):
 
 def _num(v):
     if isinstance(v, ast.Constant):
-        return isinstance(v.value, (int, float)) and not isinstance(v.value, bool)
+        return isinstance(v.value, (int, float)) and not isinstance(v.value, bool) and v.value != 0
+    if isinstance(v, ast.Call) and getattr(v.func, "id", "") in ("float", "int") and v.args \
+            and isinstance(v.args[0], ast.Constant) and v.args[0].value == 0:
+        return False
     if isinstance(v, ast.UnaryOp): return _num(v.operand)
     if isinstance(v, ast.BinOp): return _num(v.left) or _num(v.right)
     if isinstance(v, ast.IfExp): return _num(v.body) or _num(v.orelse)
@@ -91,11 +98,27 @@ def _tname(t):
     return None
 
 
-def sat_violations(src):
+def _numlike(v):
+    if isinstance(v, ast.Constant):
+        if isinstance(v.value, str):
+            return bool(_re.fullmatch(r"[\s$+\-]*\d[\d,.]*\s*[%xX]?", v.value))
+        return isinstance(v.value, (int, float)) and not isinstance(v.value, bool)
+    return False
+
+
+def sat_violations(src, skip=()):
+    """`skip`: names of top-level assignments / functions whose bodies are an allow-listed simulator."""
+    tree = ast.parse(src)
+    skipped = []
+    for n in tree.body:
+        nm = n.name if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) else \
+            next((t.id for t in getattr(n, "targets", []) if isinstance(t, ast.Name)), None)
+        if nm in skip:
+            skipped.append((n.lineno, n.end_lineno))
     out = []
     def chk(name, val, line):
         if _is_sat(name) and _bad_value(val): out.append(line)
-    for n in ast.walk(ast.parse(src)):
+    for n in ast.walk(tree):
         if isinstance(n, ast.Assign):
             for t in n.targets:
                 if isinstance(t, (ast.Tuple, ast.List)) and isinstance(n.value, (ast.Tuple, ast.List)) \
@@ -112,12 +135,23 @@ def sat_violations(src):
         elif isinstance(n, ast.Dict):
             for k, v in zip(n.keys, n.values):
                 if isinstance(k, ast.Constant): chk(k.value, v, n.lineno)
+            # tile rule: {"label": "CSAT", "value": "4.8", ...}
+            d = {k.value: v for k, v in zip(n.keys, n.values) if isinstance(k, ast.Constant)}
+            lab = d.get("label")
+            if isinstance(lab, ast.Constant) and _is_sat(lab.value) and _numlike(d.get("value")):
+                out.append(n.lineno)
+        elif isinstance(n, ast.Tuple):
+            e = n.elts
+            if len(e) >= 2 and isinstance(e[0], ast.Constant) and _is_sat(e[0].value) \
+                    and any(_numlike(x) for x in e[1:]):
+                out.append(n.lineno)
         elif isinstance(n, ast.keyword):
             chk(n.arg, n.value, getattr(n.value, "lineno", 0))
         elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_sat(n.name):
             for r in ast.walk(n):
                 if isinstance(r, ast.Return) and _bad_value(r.value): out.append(r.lineno)
-    return sorted(set(out))
+    return sorted({l for l in out if not any(a <= l <= b for a, b in skipped)})
+
 
 
 ALLOW = set()   # labelled simulators allowed to carry satisfaction constants (repo-relative)
@@ -130,6 +164,11 @@ EVASIONS = {
     "dict_expr": "x = {'csat': 4 + 0.5 * y}", "kwarg": "f(csat=4.6)",
     "proxy_name": "nps = resolved_count / total", "proxy_unpack": "csat, n = compute(resolved_rate)",
 }
+
+@pytest.mark.parametrize("src", ["csat_rate_limit = 5", "csat = float(0)", "csat_resolved_flag = resolved",
+                                 "x = {'label': 'CSAT', 'value': 'unknown'}"])
+def test_guard_known_false_positives_fixed(src):
+    assert not sat_violations(src)
 
 
 @pytest.mark.parametrize("name", sorted(EVASIONS))
@@ -155,3 +194,20 @@ def test_guard_repo_clean():
 def test_module_service_csat_tile_is_unknown():
     src = (ROOT / "deploy" / "module_service.py").read_text()
     assert '"label": "CSAT", "value": "unknown"' in src and "4.8" not in src.split('"CSAT"')[1][:80]
+
+
+def test_module_service_every_numeric_tile_is_marked_demo():
+    pytest.importorskip("fastapi")
+    import importlib.util, re, sys
+    spec = importlib.util.spec_from_file_location("module_service_f3", ROOT / "deploy" / "module_service.py")
+    m = importlib.util.module_from_spec(spec); sys.modules["module_service_f3"] = m; spec.loader.exec_module(m)
+    assert m.MODULE_DATA
+    for name, d in m.MODULE_DATA.items():
+        html_ = m._kpi_tiles(d["kpis"])
+        tiles = re.findall(r"<div class='tile'[^>]*>.*?</div></div>", html_, flags=re.S)
+        assert len(tiles) == len(d["kpis"]), name
+        for t, k in zip(tiles, d["kpis"]):
+            if str(k["value"]).lower() != "unknown":
+                assert "data-simulated=\"true\"" in t and "DEMO DATA" in t, (name, k)
+        page = m.render(d)
+        assert "Illustrative demo data - not real measurements" in page
