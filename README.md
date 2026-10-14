@@ -195,5 +195,8 @@ the effective commit, and what it means for anything depending on this package.
 
 Mutating control endpoints (`/up`, `/down`, `/dispatch`, approvals, `/api/bridge/invoke`, mission approve) require
 `Authorization: Bearer $AGENTIC_OS_CONTROL_TOKEN` and return 503 when it is unset; read-only endpoints stay open.
+The `/missions` API is default-deny: every non-GET route AND every read except the static shell/catalogue needs a bearer
+token (optionally tenant-scoped via `AGENTIC_OS_TENANT_TOKENS`, optional distinct approvers via
+`AGENTIC_OS_APPROVER_TOKENS`; `AGENTIC_OS_GATE_READS=0` opts out of read gating, unsafe off loopback).
 The Projects API is same-origin by default (`PROJECTS_CORS_ORIGINS` opts in). See
 [docs/CONTROL_PLANE_SECURITY.md](docs/CONTROL_PLANE_SECURITY.md).

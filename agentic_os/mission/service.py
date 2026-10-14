@@ -25,6 +25,8 @@ def build_pilot_runtime(store_path: str | None = None, planner: Planner | None =
 
 
 def mount(app, runtime: MissionRuntime | None = None) -> MissionRuntime:
+    from .control_auth import validate_config
+    validate_config()                      # fail at startup on duplicate / colliding tokens
     rt = runtime or build_pilot_runtime()
     app.include_router(build_router(rt))
     app.include_router(build_capabilities_router(rt))

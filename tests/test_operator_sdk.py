@@ -68,8 +68,9 @@ def test_onboarding_mission_over_http_invoke_path():
 
 
 # ─── mission API end-to-end (control-plane mount) ────────────────────────────
-def test_mission_api_end_to_end():
-    c = TestClient(build_mission_app())
+def test_mission_api_end_to_end(monkeypatch):
+    monkeypatch.setenv("AGENTIC_OS_CONTROL_TOKEN", "t")
+    c = TestClient(build_mission_app(), headers={"Authorization": "Bearer t"})
     caps = c.get("/capabilities").json()["capabilities"]
     assert any(x["name"] == "compliance.file_consent" for x in caps)
     # discovery by need
