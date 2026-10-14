@@ -24,7 +24,7 @@ def _setup(policy="", cap_ok="w.write", failing=("w.flaky",)):
 
 
 def _undo_calls(op):
-    return sorted(k for k in op.calls if k.endswith(":undo"))
+    return sorted(k for k in op.calls if ":undo:" in k and not k.endswith(":verify"))
 
 
 def test_graph_forks_is_the_single_source_for_forked_topology():

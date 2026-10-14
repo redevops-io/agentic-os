@@ -36,6 +36,8 @@ class CountingOperator:
         self._fleet = build_fleet()[1]
 
     def invoke(self, operator, capability, inputs, idempotency_key, *, secrets=None):
+        if capability == "w.verify":
+            return {"verified": True, "observed": "gone", "digest": "d"}
         if not capability.startswith("w."):         # the demo fleet's own capabilities (plan nodes)
             return self._fleet.invoke(operator, capability, inputs, idempotency_key)
         tag = str(inputs.get("tag", ""))
@@ -74,7 +76,9 @@ def build_registry(extra_caps=()):
     reg, _ = build_fleet()
     caps = [
         CapabilitySpec("w.write", "w-op", provides=["w_out", "out0", "out1", "out2", "o0", "o2", "o_a", "o_b"], side_effecting=True, undo="w.undo",
+                       compensation={"supported": True, "capability": "w.undo", "verify": "w.verify"},
                        permissions=["w:write"], cost=NodeCost(usd=0.1)),
+        CapabilitySpec("w.verify", "w-op", permissions=["w:write"]),
         CapabilitySpec("w.undo", "w-op", permissions=["w:write"]),
         CapabilitySpec("w.gated", "w-op", side_effecting=True, approval_required=True,
                        permissions=["w:write"], cost=NodeCost(usd=0.1)),

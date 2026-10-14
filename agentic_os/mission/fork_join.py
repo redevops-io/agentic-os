@@ -404,6 +404,10 @@ class ForkResult:
         return {b.branch_id: b.result for b in self.state.ordered() if b.status == "succeeded"}
 
 
+class Superseded(ForkError):
+    """This driver's claim was superseded by a higher generation: it must stop dispatching and never close."""
+
+
 class SimulatedCrash(BaseException):
     """Raised by test harnesses to model a process crash; never swallowed by the controller."""
 
@@ -468,6 +472,7 @@ class ForkJoinController:
         self._tenant_slots: dict[str, int] = {}
         self._hook: Callable | None = None
         self._gen: dict = {}
+        self._own: dict = {}
         self._cancelled: set = set()
         self._tenants: dict[str, str] = {}
         runtime.store.subscribe(self._on_event)
@@ -528,7 +533,7 @@ class ForkJoinController:
         self._specs[(mission_id, spec.fork_id)] = spec
         gen, owner = self._claim(m, spec.fork_id)
         try:
-            return self._drive(m, spec, nodes, gen)
+            return self._drive(m, spec, nodes, gen, owner)
         finally:
             self._release(m, spec.fork_id, gen, owner)
 
@@ -559,9 +564,21 @@ class ForkJoinController:
             _LIVE_OWNERS.add(owner)
         return gen, owner
 
+    def _fence(self, m: Mission, fid: str, gen: int, owner: str) -> ForkState:
+        """Re-read the log and raise Superseded unless THIS driver (owner, generation) still holds the claim."""
+        refresh = getattr(self.rt.store, "refresh", None)
+        if refresh:
+            refresh()
+        st = self.state(m.id, fid)
+        if st.generation != gen or (st.claim or {}).get("owner") != owner:
+            raise Superseded(f"fork {fid}: driver {owner} (generation {gen}) was superseded by generation "
+                             f"{st.generation}; stopping without dispatching or closing")
+        return st
+
     def _renew(self, m: Mission, fid: str, gen: int, owner: str, state: ForkState) -> None:
-        exp = float((state.claim or {}).get("lease_expires_at", 0))
-        if state.claim.get("owner") == owner and exp - self.clock() < LEASE_S / 2:
+        if state.generation != gen or (state.claim or {}).get("owner") != owner:
+            raise Superseded(f"fork {fid}: cannot renew, superseded by generation {state.generation}")
+        if float(state.claim.get("lease_expires_at", 0)) - self.clock() < LEASE_S / 2:
             self.rt.store.append("ForkDriverClaimed", m.id, {
                 "fork_id": fid, "generation": gen, "owner": owner, "host": _HOST, "pid": os.getpid(),
                 "lease_expires_at": self.clock() + LEASE_S})
@@ -569,6 +586,9 @@ class ForkJoinController:
     def _release(self, m: Mission, fid: str, gen: int, owner: str) -> None:
         _LIVE_OWNERS.discard(owner)
         try:
+            cur = self.state(m.id, fid)
+            if cur.generation != gen or (cur.claim or {}).get("owner") != owner:
+                return                              # superseded: never touch the newer driver's claim
             self.rt.store.append("ForkDriverReleased", m.id, {"fork_id": fid, "generation": gen, "owner": owner})
         except BaseException:  # noqa: BLE001 - a dead store (crash) simply leaves the claim to lapse
             pass
@@ -750,7 +770,7 @@ class ForkJoinController:
         return usd, tok
 
     # ── drive ──
-    def _drive(self, m: Mission, spec: ForkSpec, nodes: dict, gen: int = 1, owner: str = "") -> ForkResult:
+    def _drive(self, m: Mission, spec: ForkSpec, nodes: dict, gen: int, owner: str) -> ForkResult:
         rt = self.rt
         fid = spec.fork_id
         key = (m.id, fid)
@@ -758,6 +778,7 @@ class ForkJoinController:
         with self._lock:
             self._driving.add(key)
             self._gen[key] = gen
+            self._own[key] = owner
         futs: dict[str, _cf.Future] = {}
         try:
             if m.state != MissionState.RUNNING:
@@ -767,7 +788,8 @@ class ForkJoinController:
                 if st.closed:
                     self._apply_close(m, st)
                     return ForkResult(st.closed, st)
-                self._renew(m, fid, gen, st.claim.get("owner", ""), st)
+                self._fence(m, fid, gen, owner)
+                self._renew(m, fid, gen, owner, self.state(m.id, fid))
                 self._harvest(m, st, spec, by_id, nodes, futs)
                 st = self.state(m.id, fid)
                 # forced cancellation: mission cancel / deadline
@@ -935,6 +957,7 @@ class ForkJoinController:
                             self._append_failed(m, st, bs, attempt, "budget_exceeded", ran=False)
                             started = True
                             continue
+                    self._fence(m, st.fork_id, gen, self._own[(m.id, st.fork_id)])   # no dispatch when stale
                     rt.store.append("BranchStarted", m.id, {
                         "fork_id": st.fork_id, "branch_id": bs.branch_id, "node_id": node.id,
                         "attempt": attempt, "idempotency_key": idem, "reserved": reserved,
@@ -1168,6 +1191,8 @@ class ForkJoinController:
         c = st.counts()
         brief = lambda ids: [self._brief(st.branches[i]) for i in ids]  # noqa: E731
         with self._lock:
+            key = (m.id, st.fork_id)
+            self._fence(m, st.fork_id, self._gen[key], self._own[key])   # a stale driver never closes a fork
             if self.state(m.id, st.fork_id).closed:
                 return
             if kind == "satisfied":
@@ -1268,8 +1293,16 @@ class ForkJoinController:
         # its effect; report it, never claim it was rolled back
         unknown = [{"node_id": b.node_id, "capability": b.capability, "reversibility": "UNKNOWN_EFFECT"}
                    for b in st.ordered() if b.status == "failed" and b.ran and getattr(self._caps_of(b), "side_effecting", False)]
-        _runner._finalize(rt, m, pol, list(dec.get("not_reversible") or []) + unknown,
-                          list(dec.get("not_compensated") or []))
+        _runner.settle(rt, m, plan)           # compensation facts for plan nodes + every folded compensation
+        out = dict(m.outcome or {})
+        extra_nr = list(dec.get("not_reversible") or []) + unknown
+        extra_nc = list(dec.get("not_compensated") or [])
+        out["not_reversible"] = list(out.get("not_reversible") or []) + extra_nr
+        out["not_compensated"] = list(out.get("not_compensated") or []) + extra_nc
+        out["failure_policy"] = pol.value
+        if extra_nr or extra_nc:
+            out["rolled_back"] = False        # branches left as-is / irreversible / unknown effect
+        m.outcome = out
         # NOTE: deliberately NOT rt._saga/run_saga — branches are compensated only as the policy decided above.
         rt._fail(m, plan, reason=f"fork {st.fork_id} join failed: {st.close_payload.get('reason')}")
         m.outcome = {**(m.outcome or {}), "fork": self.summary(m.id, st.fork_id), "failure_decision": decision}
@@ -1295,7 +1328,9 @@ class ForkJoinController:
             node = Node(capability=b.capability, operator=cap.operator, undo=undo, side_effecting=True,
                         idempotency_key=b.idempotency_key)
             node.id = nid
-            _runner._compensate_node(rt, m, node, cap, pol)
+            forward_caps = {n.capability for n in rt._plans[m.id].graph.nodes} | {x.capability for x in st.ordered()}
+            with _runner._lock(m.id, nid):
+                _runner._compensate_node(rt, m, node, pol, forward_caps)
 
     def summary(self, mission_id: str, fork_id: str) -> dict:
         st = self.state(mission_id, fork_id)

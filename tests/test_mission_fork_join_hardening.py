@@ -298,3 +298,59 @@ def test_from_env_survives_unicode_digits(monkeypatch):
     monkeypatch.setenv("AGENTIC_OS_FORK_MAX_CONCURRENT", "²")
     monkeypatch.setenv("AGENTIC_OS_FORK_MAX_BRANCHES", "abc")
     assert ForkLimits.from_env().max_concurrent_branches == 4 and ForkLimits.from_env().max_branches == 16
+
+
+# ───────────── fencing: a superseded driver stops ─────────────
+def _supersede(rt, mid, fid="f1", gen=2):
+    """A newer driver (other host, valid lease) claims the fork, as a reviewer/operator takeover would."""
+    rt.store.append("ForkDriverClaimed", mid, {
+        "fork_id": fid, "generation": gen, "owner": "other-host:1:abcd", "host": "other-host", "pid": 1,
+        "lease_expires_at": time.time() + 600})
+
+
+def test_superseded_driver_stops_dispatching_and_never_closes():
+    from agentic_os.mission.fork_join import Superseded
+    op = CountingOperator()
+    rt, _, m = build(op=op, concurrency=1)
+    op.gates["b0"] = threading.Event()
+    s = spec(n=4, max_concurrent=1)
+    errs = []
+
+    def go():
+        try:
+            rt.forks.run_fork(m.id, s)
+        except BaseException as e:  # noqa: BLE001
+            errs.append(e)
+    t = threading.Thread(target=go)
+    t.start()
+    for _ in range(500):
+        if len(_starts(rt, m.id)) == 1:
+            break
+        time.sleep(0.004)
+    _supersede(rt, m.id)                        # while b0 is mid-flight
+    op.gates["b0"].set()
+    t.join(10)
+    assert len(errs) == 1 and isinstance(errs[0], Superseded), errs
+    assert len(_starts(rt, m.id)) == 1                        # b1..b3 never dispatched
+    assert not {"JoinSatisfied", "JoinFailed"} & set(types(rt, m.id))
+    assert len(op.effects) == 1
+    # the newer driver's claim was not touched by the stale driver's release
+    from agentic_os.mission.fork_join import fold_fork
+    st = fold_fork(rt.store.for_mission(m.id), "f1")
+    assert st.generation == 2 and st.claim["owner"] == "other-host:1:abcd"
+
+
+def test_stale_driver_cannot_renew_or_restamp_a_newer_claim():
+    from agentic_os.mission.fork_join import Superseded
+    rt, op, m = build()
+    gen, owner = rt.forks._claim(m, "f1") if False else (None, None)
+    rt.forks._open(m, spec(n=1))
+    gen, owner = rt.forks._claim(m, "f1")
+    _supersede(rt, m.id, gen=gen + 1)
+    st = rt.forks.state(m.id, "f1")
+    n = len(rt.store.for_mission(m.id))
+    with pytest.raises(Superseded):
+        rt.forks._renew(m, "f1", gen, owner, st)
+    with pytest.raises(Superseded):
+        rt.forks._fence(m, "f1", gen, owner)
+    assert len(rt.store.for_mission(m.id)) == n                 # nothing re-stamped
