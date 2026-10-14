@@ -162,7 +162,7 @@ def test_authoritative_success_derives_identity_from_receipt_and_is_idempotent(e
     assert len(prov.outcome_events) == 1 and len(FileOutcomeStore(path).load()) == 1
     ev = prov.outcome_events[0]
     assert (ev.source_app, ev.action_kind, ev.candidate_id, ev.selected_intervention_id, ev.tenant_id) == \
-        ("crm", "send_proposal", "cand", "i-ok", "acme")
+        ("crm", "send_proposal", "cand", "i-acme", "acme")
     # same key under another tenant (with that tenant's own receipt) is a different event
     assert c.post("/api/outcomes", headers=AUTH,
                   json=_body(intervention_id="i-beta", tenant_id="beta")).json()["recorded"] == 2
