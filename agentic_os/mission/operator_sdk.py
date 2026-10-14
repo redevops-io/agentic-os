@@ -22,6 +22,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Callable
 
+from .compensation import CompensationSpec, coerce as coerce_compensation
 from .types import CapabilityManifest, CapabilitySpec, NodeCost, to_jsonable
 
 Handler = Callable[[dict], dict]
@@ -70,17 +71,31 @@ def capability(name: str, handler: Handler, *, provides: list[str] | None = None
                data_classifications: list[str] | None = None,
                concurrency_mode: str = "", concurrency_key: str = "",
                resource_keys: list[str] | None = None,
-               max_parallelism: int | None = None) -> Capability:
+               max_parallelism: int | None = None,
+               compensation: "dict | CompensationSpec | None" = None,
+               irreversible: "bool | str" = False) -> Capability:
     """Ergonomic builder for one capability + its handler.
+
+    Compensation (docs/COMPENSATION.md, explicit-only): a consequential capability DECLARES either
+    ``compensation={"supported": True, "capability": "<id>", "requires_approval": bool, "verify": "<id>",
+    "reversibility": "REVERSIBLE_EXPLICIT", "notes": "..."}`` (``undo=`` is the legacy shorthand) or
+    ``irreversible="<why it cannot be undone>"``. Nothing is assumed reversible; the conformance lint flags a side-effecting
+    capability that declares neither.
 
     The security fields (v0.3.x, all optional) are the metadata the opt-in Executor security seams read:
     `required_authority` feeds the delegated-authority gate (`authority_for`), `isolation_class` the
     sandbox seam (`isolation_for`), and `network`/`data_classifications` the SecurityMonitor's
     boundary telemetry. Declaring nothing leaves the capability unchanged."""
+    comp = coerce_compensation(compensation)
+    irr_note = irreversible.strip() if isinstance(irreversible, str) else ""
+    irreversible = bool(irreversible)       # `irreversible="why"` carries the mandatory note
+    if comp is not None and comp.supported and not undo:
+        undo = comp.capability        # one source of truth: the declared compensating capability
     spec = CapabilitySpec(
         name=name, operator=operator, provides=provides or [], inputs=inputs or {},
         outputs=outputs or {}, side_effecting=side_effecting, approval_required=approval_required,
-        undo=undo, permissions=permissions or [], deterministic=deterministic,
+        undo=undo, compensation=comp, irreversible=irreversible, irreversible_note=irr_note,
+        permissions=permissions or [], deterministic=deterministic,
         estimated_value=estimated_value, cost=NodeCost(usd=usd, latency_ms=latency_ms),
         required_authority=required_authority or [], isolation_class=isolation_class,
         network=network or [], data_classifications=data_classifications or [],

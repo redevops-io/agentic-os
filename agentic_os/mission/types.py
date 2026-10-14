@@ -43,6 +43,10 @@ class MissionState(str, Enum):
     FAILED = "failed"
     SUCCEEDED = "succeeded"
     CANCELLED = "cancelled"
+    # Terminal, ATTENTION state (docs/COMPENSATION.md): the mission failed AND at least one compensating
+    # action failed (or was refused) so a forward side effect REMAINS. Never reported as rolled back;
+    # needs a human (retry_compensation / manual remediation).
+    COMPENSATION_FAILED = "compensation_failed"
 
 
 class NodeState(str, Enum):
@@ -86,6 +90,13 @@ class CapabilitySpec:
     deterministic: bool = True                  # same input -> same output?
     side_effecting: bool = False                # touches the outside world?
     undo: str | None = None                     # compensating capability (sagas) or None
+    # Saga compensation contract (docs/COMPENSATION.md). ``compensation`` is a CompensationSpec (or its dict
+    # form) {supported, capability, reversibility, requires_approval, verify, notes}; ``irreversible`` is the
+    # explicit "this cannot be undone" declaration. A side-effecting capability that declares neither (nor a
+    # legacy ``undo``) is UNKNOWN and treated as irreversible; the conformance lint flags it.
+    compensation: Any = None
+    irreversible: bool = False
+    irreversible_note: str = ""                 # WHY it cannot be undone (required when irreversible; lint N10)
     approval_required: bool = False
     confidence: float = 0.9                     # learned success rate (Capability Learning)
     estimated_value: str = "medium"             # low|medium|high
@@ -171,6 +182,7 @@ class Node:
     approval_required: bool = False
     side_effecting: bool = False
     undo: str | None = None
+    irreversible: bool = False                  # carried from the capability's declaration (never inferred)
     status: NodeState = NodeState.PENDING
     attempts: int = 0
     idempotency_key: str = ""
@@ -199,6 +211,10 @@ class ExecutionGraph:
     (kept local so the kernel is runnable standalone; converge the two later)."""
     nodes: list[Node] = field(default_factory=list)
     id: str = field(default_factory=lambda: new_id("graph"))
+    # Parallel fork/join structure. Optional, default empty; the fork/join executor SETS it. A non-empty
+    # value makes the compensation failure policy default to HALT_AND_REPORT (compensation_policy.is_forked,
+    # the single source of truth for both run_saga and effective_policy(forked=...)).
+    forks: list = field(default_factory=list)
 
     def by_id(self, nid: str) -> Node | None:
         return next((n for n in self.nodes if n.id == nid), None)
@@ -416,6 +432,11 @@ class Mission:
     budget: Budget = field(default_factory=Budget)
     deadline: float | None = None
     state: MissionState = MissionState.PLANNING
+    # What to do when a step/branch fails: HALT_AND_REPORT | COMPENSATE_DECLARED | CONTINUE_SIBLINGS ("" =
+    # the default for the mission's topology: sequential -> COMPENSATE_DECLARED, fork branches ->
+    # HALT_AND_REPORT). See mission/compensation_policy.py and docs/COMPENSATION.md.
+    failure_policy: str = ""
+    default_failure_policy: str = ""   # frozen at creation (template/env default); see compensation_policy.resolve_default
     world_state_id: str = ""
     active_plan_id: str | None = None
     outcome: dict[str, Any] | None = None

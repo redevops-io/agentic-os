@@ -35,7 +35,8 @@ def build_growth_operator() -> Operator:
             lambda inp: core.reallocate_budget(inp),
             provides=["budget_change_staged"],
             outputs={"budget_change_staged": "ad-budget shift staged for human approval (budget_change gate)"},
-            side_effecting=True, approval_required=True,
+            side_effecting=True,
+            compensation={"supported": False, "reversibility": "IRREVERSIBLE", "notes": "moves money between channels: not automatically reversible"}, approval_required=True,
             permissions=["growth:write"], estimated_value="high", latency_ms=500,
             # money-moving budget changes serialize on a single ad-budget resource — never two concurrent
             # reallocations racing the same spend envelope (already approval-gated on top).

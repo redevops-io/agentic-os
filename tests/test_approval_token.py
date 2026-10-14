@@ -337,7 +337,7 @@ def _saga_http(monkeypatch, secret):
         return r.json()
     client = HTTPOperatorClient({n: f"http://{n}" for n in operators}, transport=transport)
     rt = MissionRuntime(pilots.build_pilot_registry(operators), Executor(client), planner=_SagaPlanner())
-    m = rt.create_mission("charge and notify", policy_refs=["*"])
+    m = rt.create_mission("charge and notify", policy_refs=["*"], failure_policy="COMPENSATE_DECLARED")
     rt.run(m.id)
     return rt, m, seen
 
@@ -346,7 +346,7 @@ def test_e2e_http_saga_gated_undo_executes(monkeypatch):
     rt, m, seen = _saga_http(monkeypatch, secret=True)
     assert m.state == MissionState.FAILED
     assert seen == {"refund_executed": 1, "refund_staged": 0}      # rolled back for real over HTTP
-    comp = [e for e in rt.repo.timeline(m.id) if e["type"] == "NodeCompensated"]
+    comp = [e for e in rt.repo.timeline(m.id) if e["type"] == "CompensationExecuted"]
     assert len(comp) == 1 and comp[0]["payload"]["result"].get("executed") is True
 
 
@@ -354,7 +354,7 @@ def test_e2e_http_saga_gated_undo_without_secret_stays_visibly_unexecuted(monkey
     rt, m, seen = _saga_http(monkeypatch, secret=False)
     assert seen["refund_executed"] == 0                             # fail closed: no secret, no execution
     tl = rt.repo.timeline(m.id)
-    assert not [e for e in tl if e["type"] == "NodeCompensated"]            # a staged undo is NOT "compensated"
+    assert not [e for e in tl if e["type"] == "CompensationExecuted"]            # a staged undo is NOT "compensated"
     comp = [e for e in tl if e["type"] == "NodeCompensationFailed"]
     assert comp and comp[0]["payload"]["result"].get("executed") is False   # the staged result is visible
     assert m.outcome["compensation_incomplete"] is True

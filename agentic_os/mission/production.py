@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import Callable
 
+from .compensation import coerce as coerce_compensation
 from .executor import Executor
 from .factory import default_planner
 from .operators import HTTPOperatorClient
@@ -27,6 +28,14 @@ from .util import Fetch, Transport, get_json
 DiscoverFetch = Callable[[str], dict]  # GET a URL -> parsed JSON
 
 
+def _compensation_from_json(d: dict):
+    """A remote operator's compensation declaration; malformed -> undeclared (UNKNOWN => irreversible)."""
+    try:
+        return coerce_compensation(d.get("compensation"))
+    except (ValueError, TypeError):
+        return None
+
+
 def _spec_from_json(d: dict) -> CapabilitySpec:
     c = d.get("cost") or {}
     return CapabilitySpec(
@@ -36,6 +45,7 @@ def _spec_from_json(d: dict) -> CapabilitySpec:
                       tokens=c.get("tokens", 0), human_minutes=c.get("human_minutes", 0.0)),
         permissions=d.get("permissions") or [], deterministic=d.get("deterministic", True),
         side_effecting=d.get("side_effecting", False), undo=d.get("undo"),
+        compensation=_compensation_from_json(d), irreversible=bool(d.get("irreversible", False)),
         approval_required=d.get("approval_required", False), confidence=d.get("confidence", 0.9),
         estimated_value=d.get("estimated_value", "medium"), provides=d.get("provides") or [],
         embedding=d.get("embedding") or [],

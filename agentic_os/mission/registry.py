@@ -54,7 +54,11 @@ class CapabilityRegistry:
         self._embedder = embedder or HashingEmbedder()
 
     def register(self, manifest: CapabilityManifest) -> None:
+        from .compensation import intrinsic_problems  # noqa: PLC0415
         for cap in manifest.capabilities:
+            probs = intrinsic_problems(cap)
+            if probs:      # self-compensation / verify==undo / contradictory declaration: reject at registration
+                raise ValueError("invalid compensation declaration: " + "; ".join(probs))
             cap.operator = cap.operator or manifest.operator
             if not cap.embedding:
                 cap.embedding = self._embedder.embed(f"{cap.name} {' '.join(cap.provides)} "

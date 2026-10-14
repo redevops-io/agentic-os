@@ -92,7 +92,7 @@ def test_failed_verify_rolls_the_deploy_back():
     assert rt._missions[m.id].state == MissionState.FAILED
     # the committed provision + configure are unwound newest-first via their undos
     assert set(undone) == {"infra.destroy_delta", "infra.rollback_release"}
-    comp = [e for e in rt.repo.timeline(m.id) if e["type"] == "NodeCompensated"]
+    comp = [e for e in rt.repo.timeline(m.id) if e["type"] == "CompensationExecuted"]
     assert len(comp) == 2
 
 

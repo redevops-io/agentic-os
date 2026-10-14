@@ -103,7 +103,8 @@ def build_growth_assistant_operator() -> Operator:
             provides=["asset_push"],
             outputs={"asset_push": "pushes a saved founder_content/community_blueprint/cold_outreach asset to "
                                    "Postiz / Listmonk / ERPNext (approval-gated)"},
-            side_effecting=True, approval_required=True,
+            side_effecting=True,
+            compensation={"supported": False, "reversibility": "IRREVERSIBLE", "notes": "pushing assets to an external channel is NOT reliably reversible"}, approval_required=True,
             permissions=["postiz:write", "listmonk:write", "erpnext:write"],
             estimated_value="medium", deterministic=False, latency_ms=1500,
             concurrency_key="provider:push", max_parallelism=2,

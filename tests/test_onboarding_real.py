@@ -92,7 +92,7 @@ def test_onboarding_reject_unwinds_committed_effects():
     assert rt._missions[m.id].state == MissionState.FAILED
     assert "consent_filed" not in rt._world(m.id).snapshot()
     assert set(undone) == {"billing.cancel_subscription", "books.reverse_entry"}
-    comp = [e for e in rt.repo.timeline(m.id) if e["type"] == "NodeCompensated"]
+    comp = [e for e in rt.repo.timeline(m.id) if e["type"] == "CompensationExecuted"]
     assert len(comp) == 2
 
 
@@ -109,5 +109,5 @@ def test_onboarding_failure_after_approval_compensates_committed_effects():
     assert rt._missions[m.id].state == MissionState.FAILED
     # billing.create_subscription + books.record_revenue are compensated via their undos
     assert set(undone) == {"billing.cancel_subscription", "books.reverse_entry"}
-    comp = [e for e in rt.repo.timeline(m.id) if e["type"] == "NodeCompensated"]
+    comp = [e for e in rt.repo.timeline(m.id) if e["type"] == "CompensationExecuted"]
     assert len(comp) == 2

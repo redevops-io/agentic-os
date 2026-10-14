@@ -79,7 +79,7 @@ func TestSagaCompensationOnFailure(t *testing.T) {
 		"op.b":      func(map[string]any) (map[string]any, error) { return nil, &OperatorError{"gateway down"} },
 	}
 	rt := NewMissionRuntime(reg, NewExecutor(NewInMemoryOperatorClient(handlers)))
-	m := rt.CreateMission("job", CreateOpts{PolicyRefs: []string{"*"}})
+	m := rt.CreateMission("job", CreateOpts{PolicyRefs: []string{"*"}, FailurePolicy: PolicyCompensateDeclared})
 	// hand-author an intent: a then b(depends on a). ("job" has no template → the default plan
 	// fails closed; inject a real plan and reset state so Run proceeds.)
 	rt.plans[m.ID] = mustCompile(t, m, reg, "a", "b")
@@ -116,7 +116,7 @@ func TestRejectedNodeCompensatesOwnEffect(t *testing.T) {
 	}
 	rt := NewMissionRuntime(reg, NewExecutor(NewInMemoryOperatorClient(handlers)),
 		WithVerifier(NewCompositeVerifier(reg, starGrants)))
-	m := rt.CreateMission("job", CreateOpts{PolicyRefs: []string{"*"}})
+	m := rt.CreateMission("job", CreateOpts{PolicyRefs: []string{"*"}, FailurePolicy: PolicyCompensateDeclared})
 	rt.plans[m.ID] = mustCompile(t, m, reg, "acted")
 	m.State = MissionPlanning
 	rt.Run(m.ID)
@@ -215,5 +215,44 @@ func TestRestartResumeFromEventLog(t *testing.T) {
 	rt2.Approve(m.ID, pend["node_id"].(string), "approve", nil)
 	if st, _ := rt2.repo.State(m.ID); st != MissionSucceeded {
 		t.Fatalf("resumed mission should complete, got %v", st)
+	}
+}
+
+// Default policy is HALT_AND_REPORT: a failing mission compensates NOTHING unless it opts in.
+func TestSagaDoesNotCompensateByDefault(t *testing.T) {
+	reg := NewCapabilityRegistry(nil)
+	a := NewCapabilitySpec("op.a", "op")
+	a.Provides = []string{"a"}
+	a.SideEffecting = true
+	a.Undo = "op.a_undo"
+	b := NewCapabilitySpec("op.b", "op")
+	b.Provides = []string{"b"}
+	b.SideEffecting = true
+	reg.Register(CapabilityManifest{Operator: "op", Capabilities: []CapabilitySpec{a, b}})
+	undone := 0
+	handlers := map[string]Handler{
+		"op.a":      func(map[string]any) (map[string]any, error) { return map[string]any{"ok": "a"}, nil },
+		"op.a_undo": func(map[string]any) (map[string]any, error) { undone++; return map[string]any{"undone": true}, nil },
+		"op.b":      func(map[string]any) (map[string]any, error) { return nil, &OperatorError{"gateway down"} },
+	}
+	rt := NewMissionRuntime(reg, NewExecutor(NewInMemoryOperatorClient(handlers)))
+	m := rt.CreateMission("job", CreateOpts{PolicyRefs: []string{"*"}})
+	rt.plans[m.ID] = mustCompile(t, m, reg, "a", "b")
+	m.State = MissionPlanning
+	rt.Run(m.ID)
+	if undone != 0 {
+		t.Fatalf("default policy must not auto-compensate, undo ran %d time(s)", undone)
+	}
+	for _, e := range rt.store.ForMission(m.ID) {
+		if e.Type == "NodeCompensated" {
+			t.Fatal("no NodeCompensated under the default policy")
+		}
+	}
+	t.Setenv("AGENTIC_OS_DEFAULT_FAILURE_POLICY", "COMPENSATE_DECLARED")
+	if EffectiveFailurePolicy(&Mission{}) != PolicyCompensateDeclared {
+		t.Fatal("deployment escape hatch not honoured")
+	}
+	if EffectiveFailurePolicy(&Mission{FailurePolicy: "ROLLBACK"}) != PolicyHaltAndReport {
+		t.Fatal("unknown policy must fail safe")
 	}
 }

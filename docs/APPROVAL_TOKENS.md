@@ -75,7 +75,9 @@ remain), and `explain()` surfaces both. The saga stays best-effort and never rai
 
 ### Compensation authorization
 
-`Executor.compensate` is fail-closed. The compensation marker `{"approved": True, "compensation": True}` is
+> Policy, events, verification and `requires_approval`: see [COMPENSATION.md](COMPENSATION.md).
+
+`Executor.compensate` is fail-closed. (For capabilities that declare `requires_approval`, the compensation needs its own human approval and a token bound to the undo capability: see COMPENSATION.md section 4.) The compensation marker `{"approved": True, "compensation": True}` is
 minted only when ALL hold:
 
 1. **The forward step demonstrably executed in THIS mission**: non-blank mission id, matching node id, executed
@@ -98,7 +100,7 @@ authorises undoing one that did not. Double compensation is idempotent (also acr
 
 Limits operators/humans must know:
 - Multi-replica runtimes, or a crash between the undo call and `NodeCompensated` being persisted, can call the
-  undo twice: operators MUST honour the stable `{idempotency_key}:undo` key.
+  undo twice: operators MUST honour the attempt-scoped `{idempotency_key}:undo:{attempt}` key.
 - A forward success that crashes before `NodeSucceeded` is persisted gets NO undo and NO marker (fail-closed);
   the effect is left behind and must be reconciled by an operator/human.
 - The in-memory ledger is a best-effort fallback for executors without a probe, bounded (LRU 4096): after

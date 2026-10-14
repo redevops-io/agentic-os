@@ -47,7 +47,8 @@ def build_compliance_operator() -> Operator:
             lambda inp: core.remediate(inp),
             provides=["remediation_staged"],
             outputs={"remediation_staged": "a remediation ticket staged for human approval (policy_change); never a host fix"},
-            side_effecting=True, approval_required=True,
+            side_effecting=True,
+            compensation={"supported": False, "reversibility": "IRREVERSIBLE", "notes": "remediation changes live systems; not automatically reversible"}, approval_required=True,
             permissions=["compliance:write"], estimated_value="high", latency_ms=500,
             concurrency_mode="exclusive", resource_keys=["compliance:host-config"],  # one host fix at a time
         ),
@@ -56,7 +57,8 @@ def build_compliance_operator() -> Operator:
             lambda inp: core.file_consent(inp),     # approval gate lives in core (_approval)
             provides=["consent_filed"],
             outputs={"consent_filed": "customer consent/GDPR record appended to the append-only evidence ledger"},
-            side_effecting=True, approval_required=True,
+            side_effecting=True,
+            compensation={"supported": False, "reversibility": "IRREVERSIBLE", "notes": "a filed consent record is a legal record; amend by a new filing, never delete"}, approval_required=True,
             permissions=["compliance:write"], estimated_value="high", latency_ms=200,
             concurrency_mode="exclusive", resource_keys=["compliance:evidence-ledger"],  # serialize appends (commutative merge is future work)
         ),

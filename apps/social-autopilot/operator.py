@@ -40,7 +40,8 @@ def build_social_operator() -> Operator:
             lambda inp: core.publish(inp),
             provides=["publish_staged"],
             outputs={"publish_staged": "post staged for human approval before it goes live"},
-            side_effecting=True, approval_required=True,
+            side_effecting=True,
+            compensation={"supported": False, "reversibility": "IRREVERSIBLE", "notes": "publishing externally is NOT reliably reversible"}, approval_required=True,
             permissions=["social:write"], estimated_value="high", latency_ms=800,
             concurrency_mode="exclusive", concurrency_key="social:post:{id}",  # never double-publish one post
         ),

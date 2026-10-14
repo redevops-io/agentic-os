@@ -69,7 +69,9 @@ class TestAnApprovalAuthorizesWhatItNamed:
 class TestAnApprovalIsScopedToItsNode:
     def test_approving_a_different_node_does_not_release_the_gate(self):
         runtime, mission, _, _ = _gated_mission()
-        runtime.approve(mission.id, "nd_somethingelse_1_paid", "approve")
+        from agentic_os.mission.runtime import ApprovalError
+        with pytest.raises(ApprovalError):          # a node with no pending approval is refused outright
+            runtime.approve(mission.id, "nd_somethingelse_1_paid", "approve")
         assert runtime._missions[mission.id].state != MissionState.SUCCEEDED
 
 

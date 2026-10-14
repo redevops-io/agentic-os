@@ -35,6 +35,9 @@ const (
 	MissionFailed       MissionState = "failed"
 	MissionSucceeded    MissionState = "succeeded"
 	MissionCancelled    MissionState = "cancelled"
+	// MissionCompensationFailed: terminal ATTENTION state set by the Python reference runtime when a
+	// compensating action failed (docs/COMPENSATION.md). The Go port only folds/replays it.
+	MissionCompensationFailed MissionState = "compensation_failed"
 )
 
 type NodeState string
@@ -276,6 +279,9 @@ type Mission struct {
 	ActivePlanID string         `json:"active_plan_id"`
 	Outcome      map[string]any `json:"outcome"`
 	Template     string         `json:"template"`
+	// FailurePolicy: HALT_AND_REPORT | COMPENSATE_DECLARED | CONTINUE_SIBLINGS ("" => template default, then
+	// AGENTIC_OS_DEFAULT_FAILURE_POLICY, then HALT_AND_REPORT). Parity with Python Mission.failure_policy.
+	FailurePolicy string `json:"failure_policy,omitempty"`
 	// Identity / tenancy (parity with Python Mission.principal/tenant): the principal ref this mission runs as
 	// and the tenant isolation boundary. "" ⇒ legacy policy_refs behaviour.
 	Principal    string         `json:"principal"`

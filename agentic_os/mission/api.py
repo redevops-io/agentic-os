@@ -117,7 +117,44 @@ def build_router(runtime: MissionRuntime):
         # the client may never smuggle an approval marker (``_approval*``) through the edit payload: approval
         # authority is the authenticated decision above + the signed token the operator verifies at /invoke.
         edit = strip_approval_keys(dict(body.edit)) if body.edit else None
-        runtime.approve(mid, body.node_id, body.decision, edit)
+        c = caller_of(request)
+        actor = "admin" if c is None or c.role == "admin" else f"{c.role}:{c.tenant}"
+        from .runtime import ApprovalError  # noqa: PLC0415
+        try:
+            runtime.approve(mid, body.node_id, body.decision, edit, actor=actor)
+        except ApprovalError as e:
+            raise HTTPException(409, str(e))
+        return _mission_view(mid)
+
+    class CompensationAction(BaseModel):
+        node_id: str | None = None
+        reason: str = ""
+
+    _COMP_ACTIONS = {"retry", "approve", "acknowledge", "verify_manually"}
+    _COMP_APPROVER_ACTIONS = {"approve", "acknowledge", "verify_manually"}   # consequential: approver credential
+
+    @router.post("/{mid}/compensation/{action}")
+    def compensation(mid: str, action: str, body: CompensationAction, request: Request):
+        """Operator path for COMPENSATION_FAILED (docs/COMPENSATION.md): retry | approve | acknowledge |
+        verify_manually. Behind the router-level gate; tenant-scoped (404 cross-tenant); approve/acknowledge/
+        verify_manually need the approver credential when AGENTIC_OS_APPROVER_TOKENS is set; retry is not
+        available to an approver-only credential. Who/when/why is recorded in the mission log."""
+        _authorize_mission(mid, request)
+        if action not in _COMP_ACTIONS:
+            raise HTTPException(404, "unknown compensation action")
+        c = caller_of(request)
+        if action in _COMP_APPROVER_ACTIONS:
+            if c is not None and c.role == "requester" and approver_tokens():
+                raise HTTPException(403, "this compensation action requires an approver credential")
+        else:
+            _deny_approver(request)
+        actor = "admin" if c is None or c.role == "admin" else f"{c.role}:{c.tenant}"
+        from .compensation_runner import InterventionError  # noqa: PLC0415
+        try:
+            runtime.compensation_intervention(mid, action, actor=actor, reason=(body.reason or "")[:500],
+                                              node_id=body.node_id)
+        except InterventionError as e:
+            raise HTTPException(409, str(e))
         return _mission_view(mid)
 
     @router.get("/{mid}/events")
@@ -220,7 +257,7 @@ button.sm{padding:4px 9px;font-size:12px}
 /* pills — mission + node status share one scale */
 .pill{font-size:10.5px;padding:2px 8px;border-radius:999px;font-weight:700;letter-spacing:.02em;white-space:nowrap}
 .st-done,.st-succeeded{background:#0e211d;color:var(--teal)}
-.st-failed{background:#271417;color:var(--red)}
+.st-failed,.st-compensation_failed{background:#271417;color:var(--red)}
 .st-waiting,.st-waiting_human{background:#271f13;color:var(--amber)}
 .st-running,.st-ready,.st-planning{background:#13202e;color:var(--blue)}
 .st-pending{background:#1d1e26;color:var(--dim)}

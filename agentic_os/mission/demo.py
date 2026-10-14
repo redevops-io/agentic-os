@@ -24,6 +24,9 @@ def build_fleet() -> tuple[CapabilityRegistry, InMemoryOperatorClient]:
                        outputs={"subscription_id": "string"}, side_effecting=True,
                        undo="billing.cancel_subscription", permissions=["billing:write"],
                        cost=NodeCost(usd=0.01, latency_ms=800), estimated_value="high"),
+        CapabilitySpec("billing.cancel_subscription", "agentic-billing", side_effecting=True,
+                       permissions=["billing:write"], irreversible=True,
+                       irreversible_note="demo: cancelling is a business decision"),
     ]))
     reg.register(CapabilityManifest("agentic-support", [
         CapabilitySpec("support.send_onboarding", "agentic-support", provides=["onboarding_sent"],
@@ -34,6 +37,9 @@ def build_fleet() -> tuple[CapabilityRegistry, InMemoryOperatorClient]:
         CapabilitySpec("books.record_revenue", "agentic-books", provides=["revenue_recorded"],
                        side_effecting=True, undo="books.reverse_entry", permissions=["books:write"],
                        cost=NodeCost(usd=0.001, latency_ms=400)),
+        CapabilitySpec("books.reverse_entry", "agentic-books", side_effecting=True, permissions=["books:write"],
+                       irreversible=True,
+                       irreversible_note="demo: a reversal is itself a ledger event"),
     ]))
     reg.register(CapabilityManifest("agentic-compliance", [
         CapabilitySpec("compliance.file_consent", "agentic-compliance", provides=["consent_filed"],
