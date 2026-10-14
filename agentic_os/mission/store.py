@@ -247,6 +247,11 @@ class MissionRepository:
             if e.type == "NodeParked":
                 parked[e.payload["node_id"]] = {"capability": e.payload.get("capability"),
                                                 **(e.payload.get("human_task") or {})}
+            elif e.type == "GateExpired":
+                # expiry is a notice-only staleness marker: the gate stays open, nothing is decided
+                if e.payload.get("node_id") in parked:
+                    parked[e.payload["node_id"]]["expired"] = True
+                    parked[e.payload["node_id"]]["expired_at"] = e.payload.get("expired_at")
             elif e.type in ("NodeResumed", "NodeSkipped"):
                 parked.pop(e.payload["node_id"], None)
         if not parked:
