@@ -48,7 +48,7 @@ never from what the caller sends:
 - Only the `mission_id` / `node_id` fields of the JSON body are consulted. `inputs._mission`, `inputs._node` and
   HTTP headers are never trusted for binding.
 - Backward compatible: tokens minted by 0.3.29 already carry these fields, so they verify unchanged until expiry.
-  No new payload field is required. Executor -> `HTTPOperatorClient` always sends both ids when a mission is running.
+  No new payload field is required. For approved nodes the runtime sets `_mission` and `_node`, and `HTTPOperatorClient` sends both as `mission_id` / `node_id` (`_node` is set only when an approval exists). Node inputs can never override the reserved runtime keys `_mission`, `_node`, `_goal` (ignored with a warning), and the client refuses to mint a token when an approval is present but `_mission` is missing or blank (the call stays staged), so the runtime cannot mint an unbound-mission token by accident. Non-string ids are coerced to `str`.
 - Replay protection and idempotency are unchanged.
 
 ## Known limitation: per-process replay/idempotency state

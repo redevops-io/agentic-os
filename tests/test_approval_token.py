@@ -358,3 +358,50 @@ def test_e2e_http_saga_gated_undo_without_secret_stays_visibly_unexecuted(monkey
     comp = [e for e in tl if e["type"] == "NodeCompensationFailed"]
     assert comp and comp[0]["payload"]["result"].get("executed") is False   # the staged result is visible
     assert m.outcome["compensation_incomplete"] is True
+
+
+# ─── reserved keys + mint-side refusal of unbound-mission tokens ─────────────
+def _client_to(c):
+    return HTTPOperatorClient({"op": "http://op"}, transport=lambda url, body, h, t: c.post("/invoke", json=body, headers=h).json())
+
+
+@pytest.mark.parametrize("evil", [None, "", "mB", 7])
+def test_node_inputs_cannot_override_reserved_keys_end_to_end(monkeypatch, evil):
+    from types import SimpleNamespace
+    monkeypatch.setenv("AGENTIC_OS_APPROVAL_SECRET", S)
+    rt = MissionRuntime(pilots.build_pilot_registry(pilots.build_pilot_operators()), Executor(HTTPOperatorClient({})))
+    m = rt.create_mission("g", policy_refs=["*"])
+    node = SimpleNamespace(id="n1", capability="refund", inputs={**INS, "_mission": evil, "_node": evil, "_goal": evil},
+                           operator="op")
+    resolved = rt._resolve_inputs(m, rt._world(m.id), node)
+    assert resolved["_mission"] == m.id and resolved["_goal"] == m.goal and "_node" not in resolved
+    resolved.update(_approval=MARK, _node="n1")
+    c, ran = _bound_op()
+    cl = _client_to(c)
+    assert cl.invoke("op", "refund", resolved, "k")["executed"] is True and ran["executed"] == 1
+    # the minted token is bound to the real mission: cannot execute for another mission
+    sent = {}
+    cl2 = HTTPOperatorClient({"op": "http://op"}, transport=lambda u, b, h, t: sent.update(b) or {})
+    cl2.invoke("op", "refund", dict(resolved), "k2")
+    assert _post(c, sent["approval_token"], "k3", mission_id="other", node_id="n1")["status"] == "pending_approval"
+    assert ran["executed"] == 1
+
+
+@pytest.mark.parametrize("mid", [None, "", "  "])
+def test_client_refuses_to_mint_without_mission(monkeypatch, mid):
+    monkeypatch.setenv("AGENTIC_OS_APPROVAL_SECRET", S)
+    c, ran = _bound_op()
+    ins = {**INS, "_approval": MARK, "_node": "n1"}
+    if mid is not None:
+        ins["_mission"] = mid
+    sent = {}
+    HTTPOperatorClient({"op": "http://op"}, transport=lambda u, b, h, t: sent.update(b) or {}).invoke("op", "refund", ins, "k")
+    assert "approval_token" not in sent
+    assert _client_to(c).invoke("op", "refund", ins, "k")["status"] == "pending_approval" and ran["executed"] == 0
+
+
+def test_client_coerces_non_string_mission_id(monkeypatch):
+    monkeypatch.setenv("AGENTIC_OS_APPROVAL_SECRET", S)
+    c, ran = _bound_op()
+    r = _client_to(c).invoke("op", "refund", {**INS, "_mission": 42, "_approval": MARK, "_node": "n1"}, "k")
+    assert r["executed"] is True

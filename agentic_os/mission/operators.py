@@ -52,7 +52,16 @@ class HTTPOperatorClient:
         body = {"capability": capability, "inputs": inputs,
                 "mission_id": inputs.get("_mission"), "node_id": node_id,
                 "idempotency_key": idempotency_key}
-        if isinstance(marker, dict) and marker:
+        mid = body["mission_id"]
+        if mid is not None and not isinstance(mid, str):
+            body["mission_id"] = mid = str(mid)
+        if isinstance(marker, dict) and marker and (mid is None or not mid.strip()):
+            # Never mint an UNBOUND-mission approval token: it would verify for any mission. Send no token, so
+            # the operator stages (fail closed).
+            import logging  # noqa: PLC0415
+            logging.getLogger("agentic_os.operator").warning(
+                "approval marker without _mission for %s/%s: not minting token (staged)", operator, capability)
+        elif isinstance(marker, dict) and marker:
             # The marker must not travel in `inputs` (the operator strips it as a forgery). Send it as a signed
             # token instead; with no secret configured nothing is sent and the handler stages (fail closed).
             token = mint_approval_token(None, operator=operator, capability=capability,
