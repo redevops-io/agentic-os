@@ -89,6 +89,7 @@ class InMemoryOutcomeStore:
         return list(self.events)
 
 
+_WARNED_NO_FCNTL = False
 _PATH_LOCKS: dict = {}
 _PATH_LOCKS_GUARD = threading.Lock()
 
@@ -105,6 +106,13 @@ class _flock:
             fcntl.flock(self.fd, fcntl.LOCK_EX)
         except ImportError:
             self.fd = None
+            global _WARNED_NO_FCNTL
+            if not _WARNED_NO_FCNTL:
+                _WARNED_NO_FCNTL = True
+                import logging
+                logging.getLogger(__name__).warning(
+                    "fcntl unavailable: FileOutcomeStore has no inter-process lock (single writer only; "
+                    "use the Postgres store for concurrent writers)")
         return self
 
     def __exit__(self, *a):

@@ -101,11 +101,12 @@ def test_demo_sandbox_cap_ttl_and_session_isolation():
     assert all(sb.add("a", {"x": i})["stored"] for i in range(3))
     assert sb.add("a", {"x": 9})["stored"] is False             # cap
     assert sb.add("b", {})["stored"] is True
-    assert sb.add("c", {})["stored"] is False                    # session capacity
+    assert sb.add("c", {})["stored"] is True                     # capacity: oldest session evicted, not refused
+    assert sb.events("a") == [] and len(sb._sessions) == 2
     assert all(e["demo"] and e["simulated"] and e["namespace"] == "demo" for e in sb.events("a"))
     assert sb.events("b") != sb.events("a")
-    t[0] = 11.0                                                  # TTL
-    assert sb.events("a") == [] and sb.add("c", {})["stored"] is True
+    t[0] = 20.0                                                  # TTL
+    assert sb.events("b") == [] and sb.add("d", {})["stored"] is True
 
 
 def test_demo_cap_via_http(env):
@@ -359,10 +360,8 @@ def test_rotating_session_header_does_not_widen_allowance(env):
 
 def test_global_demo_budget():
     sb = DemoOutcomeSandbox(cap_per_session=10, cap_per_group=10, global_cap=15, max_sessions=100)
-    got = sum(sb.add(f"s{i}", {}, group=f"ip{i // 2}")["stored"] for i in range(40) for _ in range(1))
-    assert got == 15 or got <= 15
     for i in range(40):
-        sb.add(f"t{i}", {}, group=f"g{i}")
+        assert sb.add(f"t{i}", {}, group=f"g{i}")["stored"]       # evicts oldest, never refuses newcomers
     assert sum(len(sb.events(k)) for k in list(sb._sessions)) <= 15
 
 
@@ -376,3 +375,74 @@ def test_derived_outcome_dedupe_semantics_pinned():
     st.append(OutcomeEvent(candidate_id="c", source_app="a", source_observation_ids=("ob",),
                            selected_intervention_id="i2"))
     assert len(st.load()) == 2
+
+
+# ═══ review round 3 ═══
+def test_streamed_body_without_content_length_aborts_early():
+    import asyncio
+    from agentic_os.projects_api import BodyLimitMiddleware
+    sent, pulled = [], [0]
+
+    async def inner(scope, receive, send):
+        while True:
+            m = await receive()
+            if not m.get("more_body"):
+                break
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    async def run(path):
+        sent.clear(); pulled[0] = 0
+
+        async def receive():
+            pulled[0] += 1
+            await asyncio.sleep(0)
+            return {"type": "http.request", "body": b"x" * 1024, "more_body": pulled[0] < 100000}
+        async def send(m): sent.append(m)
+        await BodyLimitMiddleware(inner, 16 * 1024)(
+            {"type": "http", "method": "POST", "path": path, "headers": []}, receive, send)
+    asyncio.run(run("/api/outcomes"))
+    assert sent[0]["status"] == 413 and pulled[0] <= 17          # stopped after ~16 KiB, not 100 MB
+    asyncio.run(run("/api/projects/p/policy/promotion-cycle"))
+    assert sent[0]["status"] == 413 and pulled[0] <= 17
+    asyncio.run(run("/api/other"))                               # unguarded path is untouched
+    assert sent[0]["status"] == 200 and pulled[0] == 100000
+
+
+def test_chunked_body_http_413(env):
+    _, c, _ = env
+    def gen():
+        for _ in range(100):
+            yield b"x" * 1024
+    assert c.post("/api/outcomes", content=gen()).status_code == 413
+
+
+def test_spoofed_forwarded_header_ignored_by_default_and_honoured_from_trusted_peer(env, monkeypatch):
+    _, c, _ = env
+    sb = c.app.state.demo_outcomes
+    h = {"X-Forwarded-For": "9.9.9.9", "CF-Connecting-IP": "8.8.8.8"}
+    c.post("/api/outcomes", headers=h, json={"observed_reward": 1})
+    assert not any(k.startswith(("9.9.9.9", "8.8.8.8")) for k in sb._sessions)       # default OFF
+    monkeypatch.setenv("OUTCOMES_TRUSTED_PROXY_HEADER", "x-forwarded-for")
+    c.post("/api/outcomes", headers=h, json={"observed_reward": 1})
+    assert not any(k.startswith("9.9.9.9") for k in sb._sessions)                    # peer not trusted
+    monkeypatch.setenv("OUTCOMES_TRUSTED_PROXY_IPS", "testclient")
+    c.post("/api/outcomes", headers={"X-Forwarded-For": "1.1.1.1, 9.9.9.9"}, json={"observed_reward": 1})
+    assert any(k.startswith("9.9.9.9|") for k in sb._sessions)                       # last (proxy-added) entry
+    monkeypatch.setenv("OUTCOMES_TRUSTED_PROXY_HEADER", "cf-connecting-ip")
+    c.post("/api/outcomes", headers=h, json={"observed_reward": 1})
+    assert any(k.startswith("8.8.8.8|") for k in sb._sessions)
+
+
+def test_global_budget_evicts_oldest_instead_of_refusing_everyone():
+    t = [0.0]
+    sb = DemoOutcomeSandbox(cap_per_session=10, cap_per_group=10, global_cap=5, clock=lambda: t[0])
+    for i in range(5):
+        t[0] += 1; assert sb.add(f"v{i}", {}, group=f"v{i}")["stored"]
+    t[0] += 1
+    assert sb.add("new", {}, group="new")["stored"] is True       # a newcomer is still served
+    assert sb.events("v0") == [] and sb.events("new")
+
+
+def test_default_demo_ttl_is_15_minutes():
+    assert DemoOutcomeSandbox().ttl == 900

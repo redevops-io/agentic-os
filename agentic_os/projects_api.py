@@ -67,6 +67,80 @@ def validate_outcome_numbers(*, observed_reward, reward_dimensions, delay, attri
         raise OutcomeRejected(422, "attribution_confidence must be finite and within [0, 1]")
 
 
+
+class BodyLimitMiddleware:
+    """Pure-ASGI request-body cap for the outcome / promotion routes. Counts bytes as they stream in and
+    aborts with 413 at ``limit`` (Content-Length is only a fast path), so a chunked body without a length
+    is never buffered beyond ~limit."""
+
+    def __init__(self, app, limit: int = 16 * 1024) -> None:
+        self.app, self.limit = app, limit
+
+    @staticmethod
+    def _guarded(path: str) -> bool:
+        return path == "/api/outcomes" or path.endswith("/policy/promotion-cycle")
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope.get("method") != "POST" or not self._guarded(scope.get("path", "")):
+            return await self.app(scope, receive, send)
+        started = False
+        rejected = False
+
+        async def _send(msg):
+            nonlocal started
+            if rejected:
+                return                      # the 413 is already out; drop whatever the app tries next
+            started = started or msg["type"] == "http.response.start"
+            await send(msg)
+
+        async def _reject():
+            nonlocal rejected
+            if started or rejected:
+                return
+            rejected = True
+            body = b'{"detail":"request body too large"}'
+            await send({"type": "http.response.start", "status": 413,
+                        "headers": [(b"content-type", b"application/json"),
+                                    (b"content-length", str(len(body)).encode())]})
+            await send({"type": "http.response.body", "body": body})
+
+        cl = dict(scope.get("headers") or []).get(b"content-length", b"")
+        if cl.isdigit() and int(cl) > self.limit:
+            return await _reject()
+        total = 0
+
+        async def _receive():
+            nonlocal total
+            msg = await receive()
+            if msg["type"] == "http.request":
+                total += len(msg.get("body", b""))
+                if total > self.limit:
+                    await _reject()         # answer 413 now, then tell the app the client is gone
+                    return {"type": "http.disconnect"}
+            return msg
+        try:
+            await self.app(scope, _receive, _send)
+        except _BodyTooLarge:
+            await _reject()
+
+
+def demo_client_key(request) -> str:
+    """The identity demo caps are keyed on. Default: the socket peer. ``OUTCOMES_TRUSTED_PROXY_HEADER``
+    (``cf-connecting-ip`` | ``x-forwarded-for``, default OFF) is honoured ONLY when the peer is listed in
+    ``OUTCOMES_TRUSTED_PROXY_IPS`` (comma-separated), so a direct caller cannot spoof it. For
+    ``x-forwarded-for`` the LAST entry (appended by the trusted proxy) is used."""
+    import os as _o
+    peer = request.client.host if request.client else "anon"
+    hdr = _o.environ.get("OUTCOMES_TRUSTED_PROXY_HEADER", "").strip().lower()
+    trusted = {x.strip() for x in _o.environ.get("OUTCOMES_TRUSTED_PROXY_IPS", "").split(",") if x.strip()}
+    if hdr in ("cf-connecting-ip", "x-forwarded-for") and peer in trusted:
+        v = request.headers.get(hdr, "")
+        v = v.split(",")[-1].strip() if hdr == "x-forwarded-for" else v.strip()
+        if v:
+            return v[:64]
+    return peer
+
+
 # ── enabled-app selection (a deployment offers only a subset of apps) ────────────
 def enabled_selection() -> Optional[Set[str]]:
     """The set of enabled provider ids from ``$PROJECTS_APPS`` (comma-separated, e.g.
@@ -1015,7 +1089,7 @@ class DemoOutcomeSandbox:
     GLOBAL event budget, so a caller cannot widen its allowance by rotating the session header."""
     NAMESPACE = "demo"
 
-    def __init__(self, *, cap_per_session: int = 50, max_sessions: int = 500, ttl_seconds: float = 3600.0,
+    def __init__(self, *, cap_per_session: int = 50, max_sessions: int = 500, ttl_seconds: float = 900.0,
                  cap_per_group: int = 100, global_cap: int = 5000, clock=None) -> None:
         import time as _t
         self.cap, self.max_sessions, self.ttl = cap_per_session, max_sessions, ttl_seconds
@@ -1035,10 +1109,16 @@ class DemoOutcomeSandbox:
     def add(self, session: str, record: dict, group: str = "") -> dict:
         with self._lock:
             self._expire()
-            if session not in self._sessions and len(self._sessions) >= self.max_sessions:
-                return {"stored": False, "reason": "demo session capacity reached"}
-            if sum(len(v) for v in self._sessions.values()) >= self.global_cap:
-                return {"stored": False, "reason": "global demo event budget reached"}
+            # graceful degradation: when sessions / the global budget are exhausted evict the OLDEST other
+            # sessions instead of refusing everyone, so one client cannot disable the sandbox for all.
+            while ((session not in self._sessions and len(self._sessions) >= self.max_sessions)
+                   or sum(len(v) for v in self._sessions.values()) >= self.global_cap):
+                others = [k for k in self._sessions if k != session]
+                if not others:
+                    return {"stored": False, "reason": "demo capacity reached"}
+                oldest = min(others, key=lambda k: self._sessions[k][-1]["ts"] if self._sessions[k] else 0)
+                del self._sessions[oldest]
+                self._group.pop(oldest, None)
             if group and sum(len(v) for k, v in self._sessions.items()
                              if self._group.get(k) == group) >= self.cap_per_group:
                 return {"stored": False, "reason": f"demo cap of {self.cap_per_group} events per client reached"}
@@ -1261,6 +1341,7 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
                     "handled_automatically": 0, "abstained": 0, "basis": "unavailable"}
         return fn(project_id)
 
+    app.add_middleware(BodyLimitMiddleware, limit=MAX_BODY_BYTES)
     demo_outcomes = DemoOutcomeSandbox()
     app.state.demo_outcomes = demo_outcomes
 
@@ -1310,7 +1391,7 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
         except OutcomeRejected as e:
             raise HTTPException(e.status, e.detail)
         conf = 0.5 if req.attribution_confidence is None else req.attribution_confidence
-        ip = request.client.host if request.client else "anon"      # primary key; header is only a sub-key
+        ip = demo_client_key(request)      # primary key; X-Demo-Session is only a sub-key
         sub = (x_demo_session or "").strip()[:32]
         res = demo_outcomes.add(f"{ip}|{sub}", group=ip, record={
             "source_app": req.source_app, "action_kind": req.action_kind, "candidate_id": req.candidate_id,
