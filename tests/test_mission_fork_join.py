@@ -710,6 +710,8 @@ def test_crash_at_every_event_boundary_resumes_without_duplicate_effects(tmp_pat
         except SimulatedCrash:
             crashed = True
         assert crashed or store.appended <= n      # event count varies with completion order
+        _wait_for(lambda: not any(t.name.startswith('branch-') for t in threading.enumerate()))   # a live (non-crashed) first process settles its late writes
+        time.sleep(0.02)
         # restart: brand-new runtime on the reloaded durable log; operator ledger (external system) persists
         store2 = EventStore(path)
         rt2, _, _ = build(store=store2, op=op, concurrency=2)
@@ -732,6 +734,8 @@ def test_crash_at_every_event_boundary_resumes_without_duplicate_effects(tmp_pat
         started = [(e.payload["branch_id"], e.payload["attempt"]) for e in store2.for_mission(m.id)
                    if e.type == "BranchStarted" and not e.payload.get("resumed")]
         assert len(started) == len(set(started))
+        _wait_for(lambda: not any(t.name.startswith('branch-') for t in threading.enumerate()))
+        time.sleep(0.02)                            # let cancelled stragglers' late receipts land first
         # fold of the recovered log equals itself after another full reload (replay equality)
         assert fold_forks(EventStore(path).for_mission(m.id))["f1"].to_dict() == fold_forks(
             store2.for_mission(m.id))["f1"].to_dict()

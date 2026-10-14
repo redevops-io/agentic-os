@@ -1087,6 +1087,9 @@ class MissionRuntime:
     def approve(self, mission_id: str, node_id: str, decision: str = "approve",
                 edit: dict | None = None, actor: str = "") -> Mission:
         m = self._missions[mission_id]
+        # fork-branch approvals are handled (and fail closed) by the fork controller, before the generic guards
+        if isinstance(node_id, str) and ":fork:" in node_id and self.forks.owns(mission_id, node_id):   # fork branch approvals
+            return self.forks.approve_branch(mission_id, node_id, decision, edit)
         # A terminal mission has nothing to approve: without this a bogus reject re-entered the saga of a
         # COMPENSATION_FAILED mission (consumed retry attempts, duplicate MissionOutcome). The node must also
         # be one that is actually awaiting a human.
@@ -1096,8 +1099,6 @@ class MissionRuntime:
                                 "(use the compensation routes for a COMPENSATION_FAILED mission)")
         if node_id not in self._parked_nodes(mission_id):
             raise ApprovalError(f"node {node_id!r} has no pending approval")
-        if isinstance(node_id, str) and ":fork:" in node_id and self.forks.owns(mission_id, node_id):   # fork branch approvals
-            return self.forks.approve_branch(mission_id, node_id, decision, edit)
         pending = self.repo.pending_human(mission_id) or {}
         if pending.get("node_id") != node_id:
             pending = {}

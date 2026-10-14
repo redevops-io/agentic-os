@@ -333,6 +333,10 @@ def test_superseded_driver_stops_dispatching_and_never_closes():
     assert len(errs) == 1 and isinstance(errs[0], Superseded), errs
     assert len(_starts(rt, m.id)) == 1                        # b1..b3 never dispatched
     assert not {"JoinSatisfied", "JoinFailed"} & set(types(rt, m.id))
+    for _ in range(500):                      # the in-flight b0 call still completes (cannot be killed)
+        if len(op.effects) == 1:
+            break
+        time.sleep(0.004)
     assert len(op.effects) == 1
     # the newer driver's claim was not touched by the stale driver's release
     from agentic_os.mission.fork_join import fold_fork
