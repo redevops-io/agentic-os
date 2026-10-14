@@ -90,7 +90,7 @@ MODULE_DATA: dict[str, dict] = {
             {"label": "Open tickets", "value": "8", "note": "3 awaiting customer"},
             {"label": "Avg first response", "value": "4m", "note": "SLA 30m"},
             {"label": "Resolved this week", "value": "41", "note": "+12% WoW"},
-            {"label": "CSAT", "value": "4.8", "note": "of 5.0 · 96 ratings"},
+            {"label": "CSAT", "value": "unknown", "note": "no customer feedback collected", "csat_source": "unknown", "csat_n": 0},
         ],
         "approval": None,
         "feed": {
@@ -490,6 +490,11 @@ def _status_pill_for(value: str) -> str:
     return "pill--neutral"
 
 
+DEMO_BANNER = ("<section class='shell' data-simulated='true'><div class='pill pill--warn' "
+               "style='padding:8px 12px'>Illustrative demo data - not real measurements. "
+               "Tiles marked DEMO DATA are simulated.</div></section>")
+
+
 def _kpi_tiles(kpis: list[dict]) -> str:
     cells = ""
     for k in kpis:
@@ -499,10 +504,14 @@ def _kpi_tiles(kpis: list[dict]) -> str:
             cls += " tile__delta--up"
         elif note.startswith("-") or "↓" in note:
             cls += " tile__delta--down"
+        demo = str(k.get("value", "")).strip().lower() != "unknown"
+        marker = ("<span class='tile__demo' style='font-size:10px;opacity:.8;letter-spacing:.06em'>"
+                  "DEMO DATA</span>") if demo else ""
+        sim_attr = ' data-simulated="true"' if demo else ""
         cells += (
-            "<div class='tile'>"
+            f"<div class='tile'{sim_attr}>"
             f"<div class='tile__label'>{_esc(k['label'])}</div>"
-            f"<div class='tile__value'>{_esc(k['value'])}</div>"
+            f"<div class='tile__value'>{_esc(k['value'])}</div>{marker}"
             f"<div class='{cls}'>{_esc(note)}</div>"
             "</div>"
         )
@@ -708,7 +717,8 @@ def render(d: dict) -> str:
         )
 
     body = (
-        _banner(d.get("approval"))
+        DEMO_BANNER
+        + _banner(d.get("approval"))
         + _kpi_tiles(d["kpis"])
         + ask_html
         + _mid_and_detail(d)
@@ -753,7 +763,7 @@ def info() -> dict:
 
 @app.get("/api/activity")
 def activity() -> JSONResponse:
-    return JSONResponse({"module": NAME, "tenant": TENANT, **_data()})
+    return JSONResponse({"module": NAME, "tenant": TENANT, "simulated": True, **_data()})
 
 
 @app.get("/", response_class=HTMLResponse)

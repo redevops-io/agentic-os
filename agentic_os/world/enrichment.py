@@ -64,7 +64,8 @@ class HunterProvider:
     def verify_email(self, email: str) -> Dict[str, Any]:
         d = _get(f"https://api.hunter.io/v2/email-verifier?{urllib.parse.urlencode({'email': email, 'api_key': self._key})}").get("data", {})
         status = d.get("status")
-        return {"status": status, "score": (d.get("score") or 0) / 100.0,
+        raw = d.get("score")
+        return {"status": status, "score": (raw / 100.0 if isinstance(raw, (int, float)) else None),
                 "verified": status in ("valid", "accept_all")}
 
 
@@ -91,7 +92,7 @@ class ApolloProvider:
 
     def verify_email(self, email: str) -> Dict[str, Any]:
         # Apollo returns email_status on match; a standalone verify isn't exposed the same way
-        return {"status": "unknown", "score": 0.5, "verified": None}
+        return {"status": "unknown", "score": None, "verified": None}
 
     def search_people(self, *, domain: str, titles: "list[str]", limit: int = 3) -> "list[Dict[str, Any]]":
         """Find the buying group by company + title (org domain + titles → candidate people). Apollo People
@@ -159,7 +160,7 @@ class ClearbitProvider:
         return {"email": email, "confidence": 0.6 if email else 0.0, "verified": None}
 
     def verify_email(self, email: str) -> Dict[str, Any]:
-        return {"status": "unknown", "score": 0.5, "verified": None}
+        return {"status": "unknown", "score": None, "verified": None}
 
 
 class PeopleDataLabsProvider:
@@ -204,7 +205,7 @@ class PeopleDataLabsProvider:
 
     def verify_email(self, email: str) -> Dict[str, Any]:
         # PDL is a data provider, not a deliverability verifier.
-        return {"status": "unknown", "score": 0.5, "verified": None}
+        return {"status": "unknown", "score": None, "verified": None}
 
     def search_people(self, *, domain: str, titles: "list[str]", limit: int = 3) -> "list[Dict[str, Any]]":
         """ICP person-search by company domain + titles → candidates (work_email as VALUES on a paid tier).
@@ -272,7 +273,7 @@ def resolve_verified_email(*, domain: str, first_name: str, last_name: str,
         ver = p.verify_email(email)
         verified = bool(ver.get("verified")) or (found.get("confidence", 0) >= 0.8)
         return {"email": email, "verified": verified, "provider": p.name,
-                "confidence": max(found.get("confidence", 0), ver.get("score", 0))}
+                "confidence": max(found.get("confidence", 0), ver.get("score") or 0)}
     except EnrichmentError as e:
         return {"email": None, "verified": False, "provider": p.name, "reason": str(e)}
 
