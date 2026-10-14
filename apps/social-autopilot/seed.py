@@ -178,9 +178,10 @@ def build_sql(pw_hash: str) -> str:
     # Integrations (channels). profile carries follower count for the agent to read.
     for iid, name, prov, followers in INTEGRATIONS:
         profile = json.dumps({"followers": followers, "username": iid})
+        posting_times = '[{"time":120},{"time":400},{"time":700}]'   # hoisted: no backslashes inside f-string expressions (py3.11)
         parts.append(
             f'INSERT INTO "Integration" (id, "internalId", "organizationId", name, "providerIdentifier", type, token, disabled, profile, "createdAt", "updatedAt", "inBetweenSteps", "refreshNeeded", "postingTimes") '
-            f"VALUES ({q(iid)}, {q(iid + '-internal')}, {q(ORG_ID)}, {q(name)}, {q(prov)}, 'social', {q('seed-placeholder-token')}, false, {q(profile)}, {q(now)}, {q(now)}, false, false, {q('[{\"time\":120},{\"time\":400},{\"time\":700}]')}) "
+            f"VALUES ({q(iid)}, {q(iid + '-internal')}, {q(ORG_ID)}, {q(name)}, {q(prov)}, 'social', {q('seed-placeholder-token')}, false, {q(profile)}, {q(now)}, {q(now)}, false, false, {q(posting_times)}) "
             'ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, profile=EXCLUDED.profile, "updatedAt"=EXCLUDED."updatedAt", disabled=false;'
         )
     # Posts (the content calendar)
