@@ -358,3 +358,77 @@ def test_stale_driver_cannot_renew_or_restamp_a_newer_claim():
     with pytest.raises(Superseded):
         rt.forks._fence(m, "f1", gen, owner)
     assert len(rt.store.for_mission(m.id)) == n                 # nothing re-stamped
+
+
+# ───────────── atomic fence + append ─────────────
+def test_takeover_between_fence_and_append_cannot_interleave_a_stale_event(tmp_path):
+    """The fence check and the append are one critical section (same flock a takeover needs): a takeover
+    attempted exactly between them is serialized AFTER the append, and the stale driver writes nothing after it."""
+    from agentic_os.mission.fork_join import Superseded, _FileLock
+    store = EventStore(str(tmp_path / "log.jsonl"))
+    op = CountingOperator()
+    rt, _, m = build(store=store, op=op, concurrency=1)
+    fired, takeover_seq = [], []
+
+    def takeover():
+        with _FileLock(store):
+            ev = store.append("ForkDriverClaimed", m.id, {
+                "fork_id": "f1", "generation": 2, "owner": "other-host:1:abcd", "host": "other-host", "pid": 1,
+                "lease_expires_at": time.time() + 600})
+            takeover_seq.append(ev.seq)
+
+    def hook():
+        if fired:
+            return
+        fired.append(1)
+        t = threading.Thread(target=takeover)
+        t.start()
+        time.sleep(0.15)                      # give the takeover every chance to slip in before the append
+        rt.forks._takeover_thread = t
+
+    rt.forks._between_fence_and_append = hook
+    from agentic_os.mission.fork_join import Superseded
+    with pytest.raises(Superseded):
+        rt.forks.run_fork(m.id, spec(n=3, max_concurrent=1))
+    rt.forks._takeover_thread.join(5)
+    claim_seq = takeover_seq[0]
+    late = [e for e in store.for_mission(m.id)
+            if e.seq > claim_seq and (e.type.startswith("Branch") or e.type.startswith("Join"))]
+    assert late == [], [e.type for e in late]
+    assert not {"JoinSatisfied", "JoinFailed"} & set(types(rt, m.id))
+    first = next(e for e in store.for_mission(m.id) if e.type == "BranchStarted")
+    assert first.seq < claim_seq                 # the in-flight critical section completed before the takeover
+
+
+# ───────────── branch approvals fail loudly like plain nodes ─────────────
+def test_branch_approval_errors_are_loud():
+    from agentic_os.mission.runtime import ApprovalError
+    rt, op, m = build()
+    s = ForkSpec("f1", [BranchSpec("g", "w.gated", inputs={"tag": "g"}), BranchSpec("ok", "w.write", inputs={"tag": "ok"})],
+                 JoinSpec("all"))
+    assert rt.forks.run_fork(m.id, s).status == "parked"
+    g, ok = branch_node_id(m.id, "f1", "g"), branch_node_id(m.id, "f1", "ok")
+    with pytest.raises(ApprovalError):                    # a branch that is not parked
+        rt.approve(m.id, ok, "approve")
+    with pytest.raises(ApprovalError):                    # an unowned :fork: id
+        rt.approve(m.id, "mission_x:fork:f9:nope", "approve")
+    with pytest.raises(ValueError):                       # bad decision / bad edit
+        rt.approve(m.id, g, "accept")
+    with pytest.raises(ValueError):
+        rt.approve(m.id, g, "approve", edit="not-a-dict")
+    assert "ApprovalGranted" not in types(rt, m.id) and rt.forks.state(m.id, "f1").ids("parked") == ["g"]
+    rt.approve(m.id, g, "approve")                        # the real one still works
+    assert rt.forks.state(m.id, "f1").closed == "satisfied"
+    with pytest.raises(ApprovalError):                    # already closed / terminal-ish fork
+        rt.approve(m.id, g, "approve")
+
+
+def test_branch_approval_on_a_cancelled_mission_is_refused():
+    from agentic_os.mission.runtime import ApprovalError
+    rt, op, m = build()
+    s = ForkSpec("f1", [BranchSpec("g", "w.gated", inputs={"tag": "g"})], JoinSpec())
+    rt.forks.run_fork(m.id, s)
+    rt.cancel_mission(m.id)
+    with pytest.raises(ApprovalError):
+        rt.approve(m.id, branch_node_id(m.id, "f1", "g"), "approve")
+    assert op.calls == {}

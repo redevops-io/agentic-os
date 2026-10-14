@@ -575,6 +575,22 @@ class ForkJoinController:
                              f"{st.generation}; stopping without dispatching or closing")
         return st
 
+    #: test seam: called between the fence check and the append (inside the critical section)
+    _between_fence_and_append = None
+
+    def _fenced(self, m: Mission, fid: str, type_: str, payload: dict):
+        """Fence + append ATOMICALLY (same cross-process flock + controller lock a takeover must take), so a
+        driver superseded at any instant cannot write one more event after the newer claim. Events from a
+        fork nobody is driving here (approvals, idle cancel) are plain appends."""
+        key = (m.id, fid)
+        if key not in self._driving or key not in self._own:
+            return self.rt.store.append(type_, m.id, payload)
+        with _FileLock(self.rt.store), self._lock:
+            self._fence(m, fid, self._gen[key], self._own[key])
+            if self._between_fence_and_append is not None:
+                self._between_fence_and_append()
+            return self.rt.store.append(type_, m.id, payload)
+
     def _renew(self, m: Mission, fid: str, gen: int, owner: str, state: ForkState) -> None:
         if state.generation != gen or (state.claim or {}).get("owner") != owner:
             raise Superseded(f"fork {fid}: cannot renew, superseded by generation {state.generation}")
@@ -958,7 +974,7 @@ class ForkJoinController:
                             started = True
                             continue
                     self._fence(m, st.fork_id, gen, self._own[(m.id, st.fork_id)])   # no dispatch when stale
-                    rt.store.append("BranchStarted", m.id, {
+                    self._fenced(m, st.fork_id, "BranchStarted", {
                         "fork_id": st.fork_id, "branch_id": bs.branch_id, "node_id": node.id,
                         "attempt": attempt, "idempotency_key": idem, "reserved": reserved,
                         "resumed": resumed, "generation": gen})
@@ -1031,16 +1047,26 @@ class ForkJoinController:
         rt = self.rt
         if decision not in ("approve", "reject"):
             raise ValueError(f"a fork branch accepts only 'approve' or 'reject', not {decision!r}")
+        from .runtime import ApprovalError  # noqa: PLC0415
+        if edit is not None and not isinstance(edit, dict):
+            raise ValueError("edit must be a dict or None")
         m = rt._missions[mission_id]
+        if m.state in (MissionState.SUCCEEDED, MissionState.FAILED, MissionState.COMPENSATION_FAILED,
+                       MissionState.CANCELLED):
+            raise ApprovalError(f"mission is {m.state.value}; nothing to approve")
         evs = rt.store.for_mission(mission_id)
         target = None
         for fid in fork_ids(evs):
             st = fold_fork(evs, fid)
             for b in st.ordered():
-                if b.node_id == node_id and st.closed is None:
+                if b.node_id == node_id:
                     target = (st, b)
-        if target is None or not target[1].parked:
-            return m                                 # not a parked branch of an open fork: no-op, fail closed
+        if target is None:
+            raise ApprovalError(f"node {node_id!r} is not a fork branch of this mission")
+        if target[0].closed is not None:
+            raise ApprovalError(f"fork {target[0].fork_id} is already {target[0].closed}; nothing to approve")
+        if not target[1].parked:
+            raise ApprovalError(f"branch {node_id!r} has no pending approval")
         st, b = target
         with self._lock:
             if decision == "approve":
@@ -1108,7 +1134,7 @@ class ForkJoinController:
                                     receipt=receipt, result=result)
                 return
         with self._lock:
-            rt.store.append("BranchSucceeded", m.id, {
+            self._fenced(m, st.fork_id, "BranchSucceeded", {
                 "fork_id": st.fork_id, "branch_id": bs.branch_id, "node_id": node.id, "attempt": attempt,
                 "result": result, "receipt": receipt})
         rt._meter(m, node, "ok")
@@ -1124,7 +1150,7 @@ class ForkJoinController:
         if result is not None:
             payload["result"] = result
         with self._lock:
-            self.rt.store.append("BranchFailed", m.id, payload)
+            self._fenced(m, st.fork_id, "BranchFailed", payload)
 
     # ── cancellation ──
     def cancel_branch(self, mission_id: str, fork_id: str, branch_id: str, reason: str = "cancelled") -> None:
@@ -1147,7 +1173,7 @@ class ForkJoinController:
     def _append_cancel(self, m, st, b: BranchState, reason: str) -> None:
         if b.parked:                                  # close the open human gate so needs-you is not stale
             self.rt.store.append("NodeSkipped", m.id, {"node_id": b.node_id, "reason": reason})
-        self.rt.store.append("BranchCancelled", m.id, {
+        self._fenced(m, st.fork_id, "BranchCancelled", {
             "fork_id": st.fork_id, "branch_id": b.branch_id, "node_id": b.node_id, "reason": reason,
             "was_running": b.status == "running"})
 
@@ -1196,7 +1222,7 @@ class ForkJoinController:
             if self.state(m.id, st.fork_id).closed:
                 return
             if kind == "satisfied":
-                rt.store.append("JoinSatisfied", m.id, {
+                self._fenced(m, st.fork_id, "JoinSatisfied", {
                     "fork_id": st.fork_id, "mode": st.join.get("mode"), "k": st.join.get("k"),
                     "winners": _winners(st), "failed": st.ids("failed"), "cancelled": st.ids("cancelled"),
                     "abandoned": [], "partial": partial, "reason": reason})
@@ -1207,7 +1233,7 @@ class ForkJoinController:
                     cancelled=brief(st.ids("cancelled")), tenant=self._tenant(m),
                     policy=st.failure_policy or "HALT_AND_REPORT")
                 decision = self._decide(m, st, ctx)
-                rt.store.append("JoinFailed", m.id, {
+                self._fenced(m, st.fork_id, "JoinFailed", {
                     "fork_id": st.fork_id, "mode": st.join.get("mode"), "k": st.join.get("k"),
                     "reason": reason, "succeeded": st.ids("succeeded"), "failed": st.ids("failed"),
                     "cancelled": st.ids("cancelled"), "failure_policy": ctx.policy,

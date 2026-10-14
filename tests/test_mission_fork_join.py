@@ -561,7 +561,9 @@ def test_no_pre_approval_of_an_unparked_branch():
     brs = [BranchSpec("g", "w.gated", inputs={"tag": "g"})]
     s = ForkSpec("f1", brs, JoinSpec())
     rt.forks._open(m, s)                                   # opened, nothing parked yet
-    rt.approve(m.id, branch_node_id(m.id, "f1", "g"), "approve")
+    from agentic_os.mission.runtime import ApprovalError
+    with pytest.raises(ApprovalError):
+        rt.approve(m.id, branch_node_id(m.id, "f1", "g"), "approve")
     assert "ApprovalGranted" not in types(rt, m.id)
     assert rt.forks.run_fork(m.id, s).status == "parked" and op.calls == {}
 
@@ -839,7 +841,6 @@ def _real_controller_case():
            BranchSpec("b2", "w.flaky", inputs={"tag": "b2"})]
     s = ForkSpec("f1", brs, JoinSpec("all"), max_concurrent=1)
     rt.forks.run_fork(m.id, s)
-    rt.approve(m.id, branch_node_id(m.id, "f1", "g"), "approve")
     raw = json.dumps([{"type": e.type, "payload": e.payload} for e in rt.store.for_mission(m.id)
                       if e.type in ("ForkOpened", "ForkDriverClaimed", "ForkDriverReleased", "BranchStarted",
                                     "BranchSucceeded", "BranchFailed", "BranchCancelled", "JoinSatisfied",
