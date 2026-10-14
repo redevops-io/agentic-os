@@ -46,6 +46,14 @@ COMPENSATION_EVENTS = (EV_REQUESTED, EV_AUTHORIZED, EV_EXECUTED, EV_VERIFIED, EV
 DISPOSITIONS = ("", "COMPENSATE", "PRESERVE")
 PRESERVE = "PRESERVE"
 
+#: Explicit ``authorization_policy`` of a compensation. HUMAN_APPROVAL == ``requires_approval=True`` (a human
+#: approves each reversal, bound to the exact inputs). EVIDENCE_BOUND == the evidence-bound marker alone (the
+#: forward step demonstrably ran in this mission and the undo is the registered one): for non-consequential,
+#: mission-owned artifacts only. Declaring one on purpose is what ``full_declaration_problems`` asks for.
+AUTH_HUMAN = "HUMAN_APPROVAL"
+AUTH_EVIDENCE = "EVIDENCE_BOUND"
+AUTH_POLICIES = ("", AUTH_HUMAN, AUTH_EVIDENCE)
+
 ENV_MAX_ATTEMPTS = "AGENTIC_OS_COMPENSATION_MAX_ATTEMPTS"
 ENV_STRICT_TARGETS = "AGENTIC_OS_STRICT_UNDO_TARGETS"
 #: After this date a plan whose node declares an undo capability that is not registered is REFUSED at plan time
@@ -88,6 +96,7 @@ class CompensationSpec:
     notes: str = ""
     disposition: str = ""                   # "" | COMPENSATE | PRESERVE (per-action; see DISPOSITIONS)
     preconditions: str | None = None        # read-only capability: "is it still safe to reverse NOW?" -> {holds: bool}
+    authorization_policy: str = ""          # "" | HUMAN_APPROVAL (== requires_approval) | EVIDENCE_BOUND
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -121,6 +130,12 @@ def coerce(value: Any) -> CompensationSpec | None:
                              "separately authorized decision)")
         if spec.preconditions and not spec.supported:
             raise ValueError("compensation.preconditions requires supported=True")
+        if spec.authorization_policy not in AUTH_POLICIES:
+            raise ValueError(f"unknown compensation authorization_policy {spec.authorization_policy!r}")
+        if spec.authorization_policy == AUTH_EVIDENCE and spec.requires_approval:
+            raise ValueError("compensation.authorization_policy=EVIDENCE_BOUND contradicts requires_approval=True")
+        if spec.authorization_policy == AUTH_HUMAN:
+            spec.requires_approval = True
         return spec
     raise TypeError(f"compensation must be a dict or CompensationSpec, got {type(value).__name__}")
 
@@ -255,8 +270,9 @@ def full_declaration_problems(cap: Any) -> list[str]:
         out.append(f"{name}: no compensation_capability")
     if not spec.preconditions:
         out.append(f"{name}: no preconditions (read-only check that reversing is still safe)")
-    if not spec.requires_approval:
-        out.append(f"{name}: no authorization_policy (requires_approval=True: a human approves each reversal)")
+    if not (spec.requires_approval or spec.authorization_policy):
+        out.append(f"{name}: no authorization_policy (HUMAN_APPROVAL, or EVIDENCE_BOUND for a non-consequential "
+                   "mission-owned artifact)")
     if not spec.verify:
         out.append(f"{name}: no verification_method (verify read-back)")
     return out

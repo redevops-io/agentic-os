@@ -267,7 +267,7 @@ Fixtures that declared an undo for a capability they never registered now regist
 
 | `compensation` declaration | On a failed mission (policy `COMPENSATE_DECLARED`) | Listed as |
 |---|---|---|
-| `supported: true, capability, verify, preconditions, requires_approval: true` | reversal considered: preconditions evaluated, a human approves, undo runs, read-back verifies | `compensated` / `retained_effects` if it could not run |
+| `supported: true, capability, verify, preconditions, authorization_policy` | reversal considered: preconditions evaluated, a human approves, undo runs, read-back verifies | `compensated` / `retained_effects` if it could not run |
 | `supported: false, disposition: "PRESERVE", notes: "..."` | **never reversed**, whatever the policy (completed beneficial / security / compliance actions) | `not_reversible` (+ `disposition`), `retained_effects[reason=preserved_by_declaration]` |
 | `irreversible="<note>"` / undeclared | never reversed | `not_reversible`, `retained_effects[reason=irreversible|undeclared_reversibility]` |
 
@@ -286,7 +286,9 @@ needs-you item; `retry` re-evaluates it, `acknowledge` accepts it.
 
 **Full declaration.** `compensation.full_declaration_problems(cap)` lists what an owner can demand of every
 compensatable action: `compensation_capability` (`capability`), `preconditions`, `authorization_policy`
-(`requires_approval: true`), `verification_method` (`verify`). The `idempotency_key` is never author-supplied: the
+(`HUMAN_APPROVAL`, which sets `requires_approval`; or an explicit `EVIDENCE_BOUND`, valid only for a
+non-consequential mission-owned artifact such as a temporary lock this mission created; the two contradict
+`requires_approval` the obvious way and are rejected), `verification_method` (`verify`). The `idempotency_key` is never author-supplied: the
 runner always derives `{node.idempotency_key}:undo:{attempt}` (read-back `...:verify`, precondition
 `...:precondition:{phase}`), so a retry never reuses a key and a duplicate delivery is deduplicated by the operator.
 

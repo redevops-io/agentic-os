@@ -18,7 +18,7 @@ OUTCOMES = ["locked", "fixed", "reported"]
 
 def _specs(*, lock_comp=None, fix_comp=None, report_irreversible=True):
     lock = {"supported": True, "capability": "lock.release", "verify": "lock.verify",
-            "preconditions": "lock.safe", "requires_approval": False, **(lock_comp or {})}
+            "preconditions": "lock.safe", "authorization_policy": "EVIDENCE_BOUND", **(lock_comp or {})}
     fix = fix_comp if fix_comp is not None else {"supported": False, "disposition": "PRESERVE",
                                                  "notes": "closed port stays closed"}
     return [_spec("lock.acquire", "locked", side_effecting=True, compensation=lock),
@@ -133,7 +133,7 @@ def test_unregistered_or_side_effecting_precondition_is_never_run_and_fails_clos
 
 
 def test_precondition_is_rechecked_after_the_human_approves_the_reversal():
-    fx = Fx(lock_comp={"requires_approval": True})
+    fx = Fx(lock_comp={"authorization_policy": "HUMAN_APPROVAL"})
     assert "lock.release" not in fx.calls and fx.m.state == MissionState.COMPENSATION_FAILED   # parked for approval
     assert "CompensationApprovalRequired" in _types(fx.rt, fx.m)
     fx.holds = False                                               # the world changed while it waited
@@ -168,6 +168,13 @@ def test_declaration_validation_fails_closed():
         C.coerce({"supported": False, "disposition": "SOMETIMES"})
     with pytest.raises(ValueError, match="preconditions"):
         C.coerce({"supported": False, "preconditions": "x.check"})
+    with pytest.raises(ValueError, match="authorization_policy"):
+        C.coerce({"supported": True, "capability": "x.undo", "authorization_policy": "TRUST_ME"})
+    with pytest.raises(ValueError, match="EVIDENCE_BOUND"):
+        C.coerce({"supported": True, "capability": "x.undo", "authorization_policy": "EVIDENCE_BOUND",
+                  "requires_approval": True})
+    assert C.coerce({"supported": True, "capability": "x.undo", "authorization_policy": "HUMAN_APPROVAL"}
+                    ).requires_approval is True
     assert C.coerce({"supported": False, "disposition": "PRESERVE", "notes": "kept"}).disposition == "PRESERVE"
 
 
@@ -195,6 +202,10 @@ def test_full_declaration_problems_lists_every_missing_item():
     full = _spec("a.do", "d", side_effecting=True, compensation={
         "supported": True, "capability": "a.undo", "requires_approval": True, "verify": "a.v", "preconditions": "a.p"})
     assert C.full_declaration_problems(full) == []
+    ev = _spec("a.do", "d", side_effecting=True, compensation={
+        "supported": True, "capability": "a.undo", "authorization_policy": "EVIDENCE_BOUND", "verify": "a.v",
+        "preconditions": "a.p"})
+    assert C.full_declaration_problems(ev) == []
     thin = _spec("a.do", "d", side_effecting=True, compensation={"supported": True, "capability": "a.undo"})
     msgs = " | ".join(C.full_declaration_problems(thin))
     for word in ("preconditions", "authorization_policy", "verification_method"):
