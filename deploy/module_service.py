@@ -507,8 +507,9 @@ def _kpi_tiles(kpis: list[dict]) -> str:
         demo = str(k.get("value", "")).strip().lower() != "unknown"
         marker = ("<span class='tile__demo' style='font-size:10px;opacity:.8;letter-spacing:.06em'>"
                   "DEMO DATA</span>") if demo else ""
+        sim_attr = ' data-simulated="true"' if demo else ""
         cells += (
-            f"<div class='tile'{' data-simulated=\"true\"' if demo else ''}>"
+            f"<div class='tile'{sim_attr}>"
             f"<div class='tile__label'>{_esc(k['label'])}</div>"
             f"<div class='tile__value'>{_esc(k['value'])}</div>{marker}"
             f"<div class='{cls}'>{_esc(note)}</div>"
