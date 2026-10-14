@@ -39,11 +39,12 @@ def test_recording_outcomes_changes_the_selected_action():
     assert before == "send_proposal"
 
     for _ in range(30):
-        r = c.post("/api/outcomes", json={"source_app": "crm", "action_kind": "send_proposal",
-                                          "observed_reward": -0.6, "attribution_confidence": 0.9}).json()
-        assert r["supported"] and r["recorded"] >= 1
-        c.post("/api/outcomes", json={"source_app": "crm", "action_kind": "schedule_call",
-                                      "observed_reward": 0.9, "attribution_confidence": 0.9})
+        # trusted in-process recorder (the anonymous HTTP route is demo-only; see test_outcomes_authoritative)
+        r = prov.record_outcome_event(source_app="crm", action_kind="send_proposal",
+                                      observed_reward=-0.6, attribution_confidence=0.9)
+        assert r["recorded"] >= 1
+        prov.record_outcome_event(source_app="crm", action_kind="schedule_call",
+                                  observed_reward=0.9, attribution_confidence=0.9)
 
     # recording outcomes alone does NOT change selection: only a gated promotion cycle does
     unpromoted = c.get("/api/projects/customer-ops/priorities").json()
@@ -61,8 +62,7 @@ def test_selection_stays_governed_after_learning():
     prov = SampleProjectionProvider()
     c = TestClient(create_app(prov))
     for _ in range(20):
-        c.post("/api/outcomes", json={"source_app": "crm", "action_kind": "schedule_call",
-                                      "observed_reward": 0.9})
+        prov.record_outcome_event(source_app="crm", action_kind="schedule_call", observed_reward=0.9)
     prov.run_promotion_cycle(apply=True, gate=_GATE)
     s = c.get("/api/projects/customer-ops/priorities").json()
     crm_items = [it for it in s["surfaced"] + s["deferred"]

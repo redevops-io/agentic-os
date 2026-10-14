@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from dataclasses import dataclass, field
 from typing import List, Optional, Protocol
 
@@ -31,7 +32,7 @@ def event_to_dict(ev: OutcomeEvent) -> dict:
             "source_observation_ids": list(ev.source_observation_ids),
             "candidate_intervention_ids": list(ev.candidate_intervention_ids),
             "selected_intervention_id": ev.selected_intervention_id,
-            "prior_utility": ev.prior_utility}
+            "prior_utility": ev.prior_utility, "tenant_id": ev.tenant_id, "event_id": ev.event_id}
 
 
 def event_from_dict(d: dict) -> OutcomeEvent:
@@ -46,7 +47,23 @@ def event_from_dict(d: dict) -> OutcomeEvent:
         source_observation_ids=tuple(d.get("source_observation_ids") or ()),
         candidate_intervention_ids=tuple(d.get("candidate_intervention_ids") or ()),
         selected_intervention_id=d.get("selected_intervention_id", ""),
-        prior_utility=d.get("prior_utility"))
+        prior_utility=d.get("prior_utility"), tenant_id=d.get("tenant_id"),
+        event_id=d.get("event_id", "") or "")
+
+
+def dedupe_key(ev: OutcomeEvent) -> str:
+    """Identity used to make ``append`` idempotent: the explicit ``event_id`` (tenant-scoped), else, for a
+    derived outcome, a deterministic id from (observation ids, selected intervention). '' = not dedupable."""
+    if ev.event_id:
+        return f"{ev.tenant_id or ''}|{ev.event_id}"
+    if ev.source_observation_ids and ev.selected_intervention_id:
+        return f"{ev.tenant_id or ''}|obs:{','.join(ev.source_observation_ids)}->{ev.selected_intervention_id}"
+    return ""
+
+
+def refuse_simulated(ev: OutcomeEvent) -> None:
+    if getattr(ev, "simulated", False):
+        raise ValueError("simulated/demo events can never enter an OutcomeStore (no evidence path)")
 
 
 class OutcomeStore(Protocol):
@@ -58,12 +75,49 @@ class OutcomeStore(Protocol):
 class InMemoryOutcomeStore:
     """Non-durable store — the default; equivalent to the loop's original in-memory behaviour."""
     events: List[OutcomeEvent] = field(default_factory=list)
+    _lock: "threading.Lock" = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def append(self, ev: OutcomeEvent) -> None:
-        self.events.append(ev)
+        refuse_simulated(ev)
+        k = dedupe_key(ev)
+        with self._lock:                             # check-then-append is atomic
+            if k and any(dedupe_key(e) == k for e in self.events):
+                return                               # idempotent: same key => no second append
+            self.events.append(ev)
 
     def load(self) -> List[OutcomeEvent]:
         return list(self.events)
+
+
+_WARNED_NO_FCNTL = False
+_PATH_LOCKS: dict = {}
+_PATH_LOCKS_GUARD = threading.Lock()
+
+
+class _flock:
+    """Advisory inter-process lock (fcntl.flock); a no-op where fcntl is unavailable."""
+    def __init__(self, path: str) -> None:
+        self.path, self.fd = path, None
+
+    def __enter__(self):
+        try:
+            import fcntl
+            self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o644)
+            fcntl.flock(self.fd, fcntl.LOCK_EX)
+        except ImportError:
+            self.fd = None
+            global _WARNED_NO_FCNTL
+            if not _WARNED_NO_FCNTL:
+                _WARNED_NO_FCNTL = True
+                import logging
+                logging.getLogger(__name__).warning(
+                    "fcntl unavailable: FileOutcomeStore has no inter-process lock (single writer only; "
+                    "use the Postgres store for concurrent writers)")
+        return self
+
+    def __exit__(self, *a):
+        if self.fd is not None:
+            os.close(self.fd)                        # closing releases the flock
 
 
 @dataclass
@@ -73,11 +127,22 @@ class FileOutcomeStore:
     path: str
 
     def append(self, ev: OutcomeEvent) -> None:
+        refuse_simulated(ev)
+        k = dedupe_key(ev)
         d = os.path.dirname(self.path)
         if d:
             os.makedirs(d, exist_ok=True)
-        with open(self.path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(event_to_dict(ev)) + "\n")
+        # check-then-append is atomic across threads (in-process lock) AND processes (flock on a lock file)
+        with _PATH_LOCKS_GUARD:
+            tlock = _PATH_LOCKS.setdefault(os.path.abspath(self.path), threading.Lock())
+        with tlock, _flock(self.path + ".lock"):
+            if k and any(dedupe_key(e) == k for e in self.load()):
+                return                               # idempotent: same key => no second append
+            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+            try:
+                os.write(fd, (json.dumps(event_to_dict(ev)) + "\n").encode("utf-8"))
+            finally:
+                os.close(fd)
 
     def load(self) -> List[OutcomeEvent]:
         if not os.path.exists(self.path):
@@ -112,6 +177,9 @@ CREATE TABLE IF NOT EXISTS outcome_events (
   note                        text NOT NULL DEFAULT ''
 );
 ALTER TABLE outcome_events ADD COLUMN IF NOT EXISTS prior_utility double precision;
+ALTER TABLE outcome_events ADD COLUMN IF NOT EXISTS tenant_id text;
+ALTER TABLE outcome_events ADD COLUMN IF NOT EXISTS event_id text NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX IF NOT EXISTS ux_oe_event ON outcome_events(coalesce(tenant_id,''), event_id) WHERE event_id <> '';
 CREATE INDEX IF NOT EXISTS ix_oe_selected ON outcome_events(selected_intervention_id);
 CREATE INDEX IF NOT EXISTS ix_oe_key ON outcome_events(source_app, action_kind);
 """
@@ -138,27 +206,33 @@ class PostgresOutcomeStore:
 
     def append(self, ev: OutcomeEvent) -> None:
         from psycopg.types.json import Jsonb
+        refuse_simulated(ev)
+        eid = ev.event_id
+        if not eid:
+            k = dedupe_key(ev)
+            eid = k.split("|", 1)[1] if k else ""
         with self._conn.cursor() as cur:
             cur.execute(
                 """INSERT INTO outcome_events
                      (candidate_id, source_app, action, action_kind, observed_reward, reward_dimensions,
                       delay, attribution_confidence, source_observation_ids, candidate_intervention_ids,
-                      selected_intervention_id, note, prior_utility)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                      selected_intervention_id, note, prior_utility, tenant_id, event_id)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT DO NOTHING""",
                 (ev.candidate_id, ev.source_app, ev.action.value if ev.action is not None else None,
                  ev.action_kind, ev.observed_reward, Jsonb(dict(ev.reward_dimensions)), ev.delay,
                  ev.attribution_confidence, list(ev.source_observation_ids),
-                 list(ev.candidate_intervention_ids), ev.selected_intervention_id, ev.note, ev.prior_utility))
+                 list(ev.candidate_intervention_ids), ev.selected_intervention_id, ev.note, ev.prior_utility, ev.tenant_id, eid))
 
     def load(self) -> List[OutcomeEvent]:
         with self._conn.cursor() as cur:
             cur.execute("SELECT candidate_id, source_app, action, action_kind, observed_reward, "
                         "reward_dimensions, delay, attribution_confidence, source_observation_ids, "
-                        "candidate_intervention_ids, selected_intervention_id, note, prior_utility "
-                        "FROM outcome_events ORDER BY id")
+                        "candidate_intervention_ids, selected_intervention_id, note, prior_utility, "
+                        "tenant_id, event_id FROM outcome_events ORDER BY id")
             rows = cur.fetchall()
         out: List[OutcomeEvent] = []
-        for (cid, app, action, kind, reward, dims, delay, attr, sobs, cids, sel, note, prior) in rows:
+        for (cid, app, action, kind, reward, dims, delay, attr, sobs, cids, sel, note, prior, tenant, eid) in rows:
             if isinstance(dims, str):
                 dims = json.loads(dims)
             out.append(OutcomeEvent(
@@ -167,7 +241,8 @@ class PostgresOutcomeStore:
                 reward_dimensions=dict(dims or {}), delay=float(delay),
                 attribution_confidence=float(attr), source_observation_ids=tuple(sobs or ()),
                 candidate_intervention_ids=tuple(cids or ()), selected_intervention_id=sel or "",
-                prior_utility=(float(prior) if prior is not None else None)))
+                prior_utility=(float(prior) if prior is not None else None),
+                tenant_id=tenant, event_id=eid or ""))
         return out
 
 
