@@ -10,8 +10,10 @@ executor is responsible for:
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
+from collections import OrderedDict
 from typing import Any, Callable, Protocol
 
 from .types import Node
@@ -119,8 +121,27 @@ class Executor:
         # and reads the DURABLE event log (restart-safe): {"executed", "capability", "approved",
         # "compensated_result"}. The in-memory ledger below is the fallback when no probe is wired.
         self.evidence_probe: "Callable[[str, str], dict] | None" = None
-        self._ledger: dict[tuple[str, str], dict] = {}
-        self._compensated: dict[tuple[str, str], dict] = {}
+        # `undo_registry(capability) -> registered undo capability | None` is the TRUSTED declaration (the
+        # capability registry); the plan node's `undo` is planner-supplied and is only honoured when equal.
+        self.undo_registry: "Callable[[str], str | None] | None" = None
+        self._ledger: "OrderedDict[tuple, dict]" = OrderedDict()      # bounded (LRU)
+        self._compensated: "OrderedDict[tuple, dict]" = OrderedDict()  # bounded (LRU)
+
+    _LEDGER_CAP = 4096
+
+    def _bounded_put(self, d: "OrderedDict", k: tuple, v: dict) -> None:
+        d[k] = v
+        d.move_to_end(k)
+        while len(d) > self._LEDGER_CAP:
+            d.popitem(last=False)
+
+    @staticmethod
+    def _executed_ok(result: Any) -> bool:
+        """The forward result proves the effect happened: not staged, not failure-shaped, not executed=False."""
+        from .verify import result_failed, is_staged  # noqa: PLC0415
+        if not isinstance(result, dict) or is_staged(result) or result.get("executed") is False:
+            return False
+        return not result_failed(result)[0]
 
     @staticmethod
     def _input_hash(inputs: dict) -> str:
@@ -257,10 +278,13 @@ class Executor:
                 self._release(node, grants, secrets)
         if self.monitor is not None:
             self.monitor.observe(node, result, isolation=isolation)
-        appr = inputs.get("_approval") if isinstance(inputs, dict) else None
-        self._ledger[(str((inputs or {}).get("_mission") or ""), node.id)] = {
-            "capability": node.capability, "input_sha256": self._input_hash(inputs),
-            "approved": isinstance(appr, dict) and appr.get("approved") is True}
+        mid = str((inputs or {}).get("_mission") or "").strip()
+        if mid and node.capability and self._executed_ok(result):
+            appr = inputs.get("_approval")
+            self._bounded_put(self._ledger, (mid, node.id, node.capability, node.idempotency_key), {
+                "capability": node.capability, "input_sha256": self._input_hash(inputs),
+                "approved": isinstance(appr, dict) and appr.get("approved") is True,
+                "result": copy.deepcopy(result)})
         return result
 
     def _skip(self, node: Node, reason: str) -> dict:
@@ -272,45 +296,57 @@ class Executor:
     def _evidence(self, node: Node, mission_id: str) -> dict:
         if self.evidence_probe is not None:
             return dict(self.evidence_probe(mission_id, node.id) or {})
-        led = self._ledger.get((mission_id, node.id))
+        led = self._ledger.get((mission_id, node.id, node.capability, node.idempotency_key))
         if led is None:
             return {"executed": False}
         return {"executed": True, "capability": led["capability"], "approved": led["approved"],
-                "compensated_result": self._compensated.get((mission_id, node.id))}
+                "result": led["result"],
+                "compensated_result": self._compensated.get((mission_id, node.id, node.capability,
+                                                              node.idempotency_key))}
 
     def compensate(self, node: Node, *, mission_id: str | None = None) -> dict | None:
         """Run the node's undo capability (saga) — best effort; never raises past the caller.
 
-        Fails closed (see docs/APPROVAL_TOKENS.md, "Compensation authorization"): the undo runs only if THIS
-        node is shown to have executed successfully in THIS mission (durable event log via ``evidence_probe``,
-        else this executor's ledger). Otherwise no operator call is made and a visible
-        ``compensation_skipped`` result is returned. The signed compensation approval marker is minted only
-        for a node with that evidence (never for unexecuted/foreign nodes). Compensating twice returns the first outcome without a second undo call. Any
-        client-supplied ``_approval*`` is irrelevant: the marker is built here from evidence only."""
+        Fails closed (docs/APPROVAL_TOKENS.md, "Compensation authorization"). The undo is invoked only if
+        THIS node (mission + node id + capability) is shown to have EXECUTED in THIS mission: durable event
+        log via ``evidence_probe`` (restart-safe), else this executor's ledger (same rules). Otherwise no
+        operator call is made and a visible ``compensation_skipped`` result is returned. The signed
+        compensation marker is minted only when, in addition, ``node.undo`` equals the capability registry's
+        declared undo for the forward capability; a planner-attached undo is refused (``undo_not_registered``).
+        The undo's inputs come from the logged/ledgered forward result, never from plan-supplied fields.
+        Compensating twice returns the first outcome without a second undo call. Client-supplied
+        ``_approval*`` is never consulted."""
         if not node.undo:
             return None
-        mid = mission_id or ""
-        key = (mid, node.id)
+        mid = (mission_id or "").strip()
+        if not mid:
+            return self._skip(node, "forward_not_executed: no mission id")
+        key = (mid, node.id, node.capability, node.idempotency_key)
         try:
             ev = self._evidence(node, mid)
         except Exception as e:  # noqa: BLE001
-            return self._skip(node, f"evidence unavailable: {e}")
+            return self._skip(node, f"forward_not_executed: evidence unavailable: {e}")
         if not ev.get("executed"):
-            return self._skip(node, f"no record that node {node.id} executed in mission {mid or '(none)'}")
-        if ev.get("capability") not in (None, node.capability):
-            return self._skip(node, f"node {node.id} executed capability '{ev.get('capability')}', "
-                                    f"not '{node.capability}'")
+            return self._skip(node, f"forward_not_executed: no record that node {node.id} executed in "
+                                    f"mission {mid}")
+        if not ev.get("capability") or ev.get("capability") != node.capability:
+            return self._skip(node, f"forward_not_executed: node {node.id} executed capability "
+                                    f"'{ev.get('capability')}', not '{node.capability}'")
         prior = ev.get("compensated_result")
         if prior is None:
             prior = self._compensated.get(key)
         if prior is not None:
             return prior                      # idempotent: already compensated, no second undo call
-        inputs: dict = {"undo_of": node.capability, "result": node.result, "_node": node.id}
-        # Executed in this mission => the forward step was admitted (by a human approval or by policy, which
-        # declined to gate it), and its undo is part of that scope (charge -> gated refund must roll back).
-        inputs["_approval"] = {"approved": True, "compensation": True}
-        if mission_id:
-            inputs["_mission"] = mission_id
+        registered = self.undo_registry(node.capability) if self.undo_registry is not None else None
+        if self.undo_registry is not None and registered != node.undo:
+            return self._skip(node, f"undo_not_registered: '{node.undo}' is not the registered undo of "
+                                    f"'{node.capability}'")
+        inputs: dict = {"undo_of": node.capability, "result": copy.deepcopy(ev.get("result")),
+                        "_node": node.id, "_mission": mid}
+        if self.undo_registry is not None:
+            # Trusted registry declares this undo and the forward step demonstrably executed: the undo is
+            # part of the scope of what ran, so it carries the compensation marker.
+            inputs["_approval"] = {"approved": True, "compensation": True}
         try:
             out = self.client.invoke(node.operator, node.undo, inputs,
                                      f"{node.idempotency_key}:undo")
@@ -319,5 +355,5 @@ class Executor:
         from .verify import result_failed, is_staged  # noqa: PLC0415
         if isinstance(out, dict) and not out.get("undo_error") and not is_staged(out) \
                 and not result_failed(out)[0]:
-            self._compensated[key] = out
+            self._bounded_put(self._compensated, key, out)
         return out

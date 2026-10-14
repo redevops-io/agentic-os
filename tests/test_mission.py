@@ -110,8 +110,8 @@ def test_executor_compensate_calls_undo():
     client = InMemoryOperatorClient({"do": lambda i: {"x": 1}, "undo": _undo})
     node = Node(capability="do", operator="o", undo="undo", side_effecting=True, idempotency_key="k")
     ex = Executor(client)
-    ex.run(node, {})
-    out = ex.compensate(node)
+    ex.run(node, {"_mission": "m1"})
+    out = ex.compensate(node, mission_id="m1")
     assert out == {"undone": True} and seen["undone"]
 
 

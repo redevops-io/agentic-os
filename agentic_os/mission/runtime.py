@@ -479,9 +479,19 @@ class MissionRuntime:
             if ex is None:
                 ex = self._secure_executor_for(m) or self.executor
                 self._executors[m.id] = ex
-        if getattr(ex, "evidence_probe", None) is None and hasattr(ex, "evidence_probe"):
-            ex.evidence_probe = self._compensation_evidence   # durable, restart-safe compensation evidence
+        if hasattr(ex, "evidence_probe"):
+            cur = ex.evidence_probe
+            if cur is None:
+                ex.evidence_probe = self._compensation_evidence   # durable, restart-safe evidence
+                ex.undo_registry = self._registered_undo
+            elif getattr(cur, "__self__", None) is not self:
+                raise RuntimeError("executor is already bound to another runtime's event log for "
+                                   "compensation evidence; use one executor per runtime")
         return ex
+
+    def _registered_undo(self, capability: str) -> "str | None":
+        spec = self.registry.get(capability)
+        return getattr(spec, "undo", None) if spec is not None else None
 
     def _compensation_evidence(self, mission_id: str, node_id: str) -> dict:
         """Compensation authorization evidence, folded from the durable event log (never in-memory state).
@@ -499,7 +509,11 @@ class MissionRuntime:
                 granted = False
             elif e.type == "NodeSucceeded":
                 cap = e.payload.get("capability")
-                ev.update(executed=True, capability=cap,
+                res = e.payload.get("result")
+                # A staged / failure-shaped / executed=False result that reached NodeSucceeded (e.g. an
+                # approval marker let a staged preview through) is NOT proof the effect happened.
+                ok = Executor._executed_ok(res)
+                ev.update(executed=ok, capability=cap, result=res if ok else None,
                           approved=bool(granted and (cap_ok is None or cap_ok == cap)))
                 ev["compensated_result"] = None
             elif e.type == "NodeCompensated":
