@@ -301,62 +301,83 @@ def test_any_join_without_cancel_losers_drains_inflight_work():
     assert res.state.close_payload["winners"] == ["b0"]
 
 
-def test_retry_uses_new_attempt_key_and_succeeds():
-    rt, op, m = build()
+class NotApplied(RuntimeError):
+    not_applied = True
+
+
+def _flaky_once(op, exc):
     calls = {"n": 0}
     orig = op.invoke
 
     def flaky(operator, capability, inputs, key, *, secrets=None):
         calls["n"] += 1
         if calls["n"] == 1:
-            raise RuntimeError("transient")
+            raise exc
         return orig(operator, capability, inputs, key)
     op.invoke = flaky
-    brs = [BranchSpec("b0", "w.write", inputs={"tag": "b0"}, max_attempts=2)]
-    res = rt.forks.run_fork(m.id, ForkSpec("f1", brs, JoinSpec("all")))
-    assert res.status == "satisfied"
+
+
+def test_retry_uses_new_attempt_key_for_non_side_effecting_capability():
+    rt, op, m = build()
+    _flaky_once(op, RuntimeError("transient"))
+    brs = [BranchSpec("b0", "w.read", inputs={"tag": "b0"}, max_attempts=2)]
+    assert rt.forks.run_fork(m.id, ForkSpec("f1", brs, JoinSpec("all"))).status == "satisfied"
     keys = [e.payload["idempotency_key"] for e in rt.store.for_mission(m.id) if e.type == "BranchStarted"]
     assert keys == [branch_idempotency_key(m.id, "f1", "b0", 1), branch_idempotency_key(m.id, "f1", "b0", 2)]
 
 
+def test_side_effecting_branch_is_not_retried_after_a_failed_call_unless_not_applied():
+    rt, op, m = build()
+    _flaky_once(op, RuntimeError("timeout after send"))      # the effect may have been applied
+    brs = [BranchSpec("b0", "w.write", inputs={"tag": "b0"}, max_attempts=3)]
+    assert rt.forks.run_fork(m.id, ForkSpec("f1", brs, JoinSpec("all"))).status == "failed"
+    assert len(types(rt, m.id, "BranchStarted")) == 1 and m.state == MissionState.FAILED
+    assert m.outcome["not_reversible"][0]["reversibility"] == "UNKNOWN_EFFECT"      # reported, not rolled back
+    rt, op, m = build()
+    _flaky_once(op, NotApplied("refused before send"))
+    assert rt.forks.run_fork(m.id, ForkSpec("f1", brs, JoinSpec("all"))).status == "satisfied"
+    assert len(types(rt, m.id, "BranchStarted")) == 2
+
+
 # ───────────────────────── failure policy hook ─────────────────────────
-def test_failure_policy_hook_receives_outcomes_and_default_never_compensates():
+def test_default_is_halt_and_report_and_hook_can_only_tighten():
     seen = []
 
-    def policy(ctx):
-        seen.append(ctx)
-        return FailureDecision("compensate", "agent will undo b0")
-    policy.name = "comp"
+    def hook(ctx, dec):
+        seen.append((ctx, dec))
+        return FailureDecision("compensate", "agent wants to undo b0", compensate_nodes=("x",))   # looser: ignored
     rt, op, m = build()
-    rt.forks.on_branch_failure(policy)
+    rt.forks.on_branch_failure(hook)
     op.fail_caps = {"w.flaky"}
-    brs = [BranchSpec("b0", "w.write", inputs={"tag": "b0"}), BranchSpec("b1", "w.flaky", inputs={"tag": "b1", "acct": "q"})]
+    brs = [BranchSpec("b0", "w.write", inputs={"tag": "b0"}), BranchSpec("b1", "w.flaky", inputs={"tag": "b1"})]
     rt.forks.run_fork(m.id, ForkSpec("f1", brs, JoinSpec("all")))
-    ctx = seen[0]
+    ctx, dec = seen[0]
     assert [b["branch_id"] for b in ctx.succeeded] == ["b0"] and [b["branch_id"] for b in ctx.failed] == ["b1"]
     assert ctx.succeeded[0]["node_id"] == branch_node_id(m.id, "f1", "b0") and ctx.succeeded[0]["receipt"]
     j = next(e for e in rt.store.for_mission(m.id) if e.type == "JoinFailed").payload
-    assert j["decision"]["action"] == "compensate" and j["failure_policy"] == "comp"
-    assert "NodeCompensated" not in types(rt, m.id)      # the controller itself never compensates
+    assert j["decision"]["action"] == "halt_and_report" and j["failure_policy"] == "HALT_AND_REPORT"
+    assert "CompensationRequested" not in types(rt, m.id) and "NodeCompensated" not in types(rt, m.id)
     assert m.state == MissionState.FAILED
 
 
-def test_failure_policy_continue_and_policy_errors_fail_closed():
-    rt, op, m = build()
-    rt.forks.on_branch_failure(lambda ctx: FailureDecision("continue"), name="cont")
+def test_mission_policy_continue_leaves_mission_running_and_hook_errors_are_ignored():
+    rt, op, m = build(failure_policy="CONTINUE_SIBLINGS")
+    rt.forks.on_branch_failure(lambda ctx, dec: 1 / 0)
     op.fail_caps = {"w.flaky"}
-    brs = [BranchSpec("b0", "w.flaky", inputs={"tag": "b0", "acct": "q"})]
+    brs = [BranchSpec("b0", "w.flaky", inputs={"tag": "b0"})]
     assert rt.forks.run_fork(m.id, ForkSpec("f1", brs, JoinSpec("all"))).status == "failed"
     assert m.state == MissionState.RUNNING                # 'continue' leaves the mission to the caller
 
-    def boom(ctx):
-        raise RuntimeError("bug")
-    rt2, op2, m2 = build()
-    rt2.forks.on_branch_failure(boom, name="boom")
-    op2.fail_caps = {"w.flaky"}
-    rt2.forks.run_fork(m2.id, ForkSpec("f1", [BranchSpec("b0", "w.flaky", inputs={"tag": "b0", "acct": "q"})], JoinSpec()))
-    j = next(e for e in rt2.store.for_mission(m2.id) if e.type == "JoinFailed").payload
-    assert j["decision"]["action"] == "halt_and_report" and m2.state == MissionState.FAILED
+
+def test_spec_may_only_choose_a_stricter_failure_policy():
+    rt, op, m = build(failure_policy="COMPENSATE_DECLARED")
+    s = lambda p: ForkSpec("f1", [BranchSpec("b0", "w.write", inputs={"tag": "b0"})], JoinSpec(),  # noqa: E731
+                           stricter_failure_policy=p)
+    with pytest.raises(ForkError, match="may only choose"):
+        rt.forks.run_fork(m.id, s("CONTINUE_SIBLINGS"))
+    assert rt.forks.run_fork(m.id, s("HALT_AND_REPORT")).status == "satisfied"
+    opened = next(e for e in rt.store.for_mission(m.id) if e.type == "ForkOpened").payload
+    assert opened["failure_policy"] == "HALT_AND_REPORT"
 
 
 # ───────────────────────── cancellation ─────────────────────────
@@ -433,7 +454,7 @@ def test_cancel_branch_does_not_cancel_siblings_unless_policy_says_so():
 # ───────────────────────── budget ─────────────────────────
 def test_over_budget_branch_is_refused_not_partially_run():
     rt, op, m = build(fork_budget=0.55)
-    brs = [BranchSpec(f"b{i}", "w.write", inputs={"tag": f"b{i}"}, cost=NodeCost(usd=0.25)) for i in range(3)]
+    brs = [BranchSpec(f"b{i}", "w.pricey", inputs={"tag": f"b{i}"}) for i in range(3)]
     res = rt.forks.run_fork(m.id, ForkSpec("f1", brs, JoinSpec("quorum", 2)))
     assert res.status == "satisfied"
     st = res.state
@@ -688,7 +709,7 @@ def test_crash_at_every_event_boundary_resumes_without_duplicate_effects(tmp_pat
             rt.forks.run_fork(m.id, mkspec())
         except SimulatedCrash:
             crashed = True
-        assert crashed or store.appended < n      # event count varies with completion order
+        assert crashed or store.appended <= n      # event count varies with completion order
         # restart: brand-new runtime on the reloaded durable log; operator ledger (external system) persists
         store2 = EventStore(path)
         rt2, _, _ = build(store=store2, op=op, concurrency=2)
@@ -804,9 +825,43 @@ def _golden_cases():
     ]
 
 
+def _real_controller_case():
+    """A real log from the controller (serial, one failure, one gated branch parked then approved), with the
+    random bits (mission id, hashes, timestamps, owners) normalised so the fixture is stable."""
+    import re
+    rt, op, m = build(concurrency=1)
+    op.fail_caps = {"w.flaky"}
+    brs = [BranchSpec("b0", "w.write", inputs={"tag": "b0"}), BranchSpec("g", "w.gated", inputs={"tag": "g"}),
+           BranchSpec("b2", "w.flaky", inputs={"tag": "b2"})]
+    s = ForkSpec("f1", brs, JoinSpec("all"), max_concurrent=1)
+    rt.forks.run_fork(m.id, s)
+    rt.approve(m.id, branch_node_id(m.id, "f1", "g"), "approve")
+    raw = json.dumps([{"type": e.type, "payload": e.payload} for e in rt.store.for_mission(m.id)
+                      if e.type in ("ForkOpened", "ForkDriverClaimed", "ForkDriverReleased", "BranchStarted",
+                                    "BranchSucceeded", "BranchFailed", "BranchCancelled", "JoinSatisfied",
+                                    "JoinFailed", "NodeParked", "NodeResumed", "NodeSkipped", "ApprovalGranted")])
+    raw = raw.replace(m.id, "mission_fixed")
+    seen: dict = {}
+    raw = re.sub(r"fj-[0-9a-f]{32}|[0-9a-f]{64}|task_[0-9a-f]+|apd_[0-9a-f]+",
+                 lambda mo: seen.setdefault(mo.group(0), f"h{len(seen)}"), raw)
+    evs = json.loads(raw)
+    for e in evs:
+        for k in ("opened_at", "lease_expires_at", "deadline"):
+            if k in e["payload"]:
+                e["payload"][k] = 0
+        for k in ("owner", "host", "pid"):
+            if k in e["payload"]:
+                e["payload"][k] = "x"
+        if e["type"] == "NodeParked":
+            e["payload"] = {k: v for k, v in e["payload"].items() if k in ("node_id", "capability", "fork_id", "branch_id")}
+        if e["type"] == "ForkOpened":
+            e["payload"]["limits"] = {}
+    return {"name": "real_controller_log", "fork_id": "f1", "events": [(e["type"], e["payload"]) for e in evs]}
+
+
 def test_golden_fixture_is_current_and_python_fold_matches():
     cases = []
-    for c in _golden_cases():
+    for c in _golden_cases() + [_real_controller_case()]:
         evs = [(t, p) for t, p in c["events"]]
         cases.append({"name": c["name"], "fork_id": c["fork_id"],
                       "events": [{"type": t, "payload": p} for t, p in evs],

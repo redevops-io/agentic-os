@@ -17,15 +17,20 @@ import concurrent.futures as _cf
 import copy
 import hashlib
 import json
+import math
 import os
 import re
+import socket
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
 from . import concurrency as conc
 from .approval import is_approval_key, strip_approval_keys
+from . import compensation as _comp
+from . import compensation_policy as _cpol
 from .context import CHECK_POLICY, ContextIntent
 from .lifecycle import GateReached
 from .types import HumanTask, Mission, MissionState, Node, NodeCost, NodeState, VerificationDecision
@@ -73,8 +78,7 @@ class BranchSpec:
     inputs: dict = field(default_factory=dict)
     requires: tuple = ()               # extra capabilities the branch may name; must be a subset of mission grants
     produces: str | None = None        # world key published (after the join) from this branch's result
-    max_attempts: int = 1
-    cost: NodeCost | None = None       # overrides the capability's declared cost for budget reservation
+    max_attempts: int = 1              # retries only for non-side-effecting capabilities (or not_applied failures)
 
 
 @dataclass
@@ -92,7 +96,7 @@ class ForkSpec:
     branches: list = field(default_factory=list)
     join: JoinSpec = field(default_factory=JoinSpec)
     max_concurrent: int | None = None
-    failure_policy: str | None = None
+    stricter_failure_policy: str | None = None   # may only be HALT_AND_REPORT or equal to the mission's policy
     cancel_siblings_on_branch_cancel: bool = False
 
     def digest(self) -> str:
@@ -100,10 +104,9 @@ class ForkSpec:
             "fork_id": self.fork_id,
             "branches": [{"id": b.branch_id, "cap": b.capability, "requires": sorted(b.requires),
                           "produces": b.produces, "inputs_sha256": _sha(b.inputs),
-                          "max_attempts": b.max_attempts,
-                          "cost": (vars(b.cost) if b.cost is not None else None)} for b in self.branches],
+                          "max_attempts": b.max_attempts} for b in self.branches],
             "join": vars(self.join), "max_concurrent": self.max_concurrent,
-            "failure_policy": self.failure_policy,
+            "stricter_failure_policy": self.stricter_failure_policy,
             "csbc": self.cancel_siblings_on_branch_cancel})
 
 
@@ -124,9 +127,12 @@ class ForkLimits:
         for key, env in (("max_concurrent_branches", "AGENTIC_OS_FORK_MAX_CONCURRENT"),
                          ("max_branches", "AGENTIC_OS_FORK_MAX_BRANCHES"),
                          ("max_open_forks", "AGENTIC_OS_FORK_MAX_OPEN")):
-            raw = os.environ.get(env, "").strip()
-            if raw.isdigit() and int(raw) > 0:
-                setattr(lim, key, int(raw))
+            try:
+                val = int(os.environ.get(env, "").strip())
+            except ValueError:
+                continue
+            if val > 0:
+                setattr(lim, key, val)
         raw = os.environ.get("AGENTIC_OS_FORK_TENANT_LIMITS", "").strip()
         if raw:
             try:
@@ -148,8 +154,22 @@ class ForkLimits:
 # ───────────────────────────── failure policy hook ─────────────────────────────
 @dataclass
 class FailureDecision:
+    """What the Mission's failure policy decided about a failed join (mapped explicitly from #450's
+    ``FailureAction``: HALT -> halt_and_report, COMPENSATE -> compensate, CONTINUE -> continue)."""
     action: str = "halt_and_report"    # halt_and_report | compensate | continue
     note: str = ""
+    policy: str = "HALT_AND_REPORT"
+    compensate_nodes: tuple = ()       # branch node ids whose DECLARED undo should run (reverse order)
+    not_reversible: tuple = ()         # succeeded consequential branches that cannot be undone
+    not_compensated: tuple = ()        # reversible succeeded branches left as-is by policy
+
+    def to_dict(self) -> dict:
+        return {"action": self.action, "note": self.note, "policy": self.policy,
+                "compensate_nodes": list(self.compensate_nodes), "not_reversible": list(self.not_reversible),
+                "not_compensated": list(self.not_compensated)}
+
+
+_ACTION_MAP = {"HALT": "halt_and_report", "COMPENSATE": "compensate", "CONTINUE": "continue"}
 
 
 @dataclass
@@ -162,16 +182,17 @@ class FailureContext:
     failed: list
     cancelled: list
     tenant: str = ""
+    policy: str = "HALT_AND_REPORT"
 
 
-class _HaltAndReport:
-    name = "halt_and_report"
+class _PolicyView:
+    """The mission-level failure policy as recorded in ForkOpened (replay-stable), as #450 expects it."""
 
-    def __call__(self, ctx: FailureContext) -> FailureDecision:
-        return FailureDecision("halt_and_report", "no auto-compensation; mission reports branch outcomes")
+    def __init__(self, failure_policy: str):
+        self.failure_policy = failure_policy
 
 
-HALT_AND_REPORT = _HaltAndReport()
+_STRICT_OK = "HALT_AND_REPORT"
 
 
 # ───────────────────────────── fold ─────────────────────────────
@@ -193,6 +214,7 @@ class BranchState:
     approval: str | None = None        # capability an unrevoked human approval is bound to
     parked: bool = False
     reserved: dict = field(default_factory=dict)
+    generation: int = 0
 
     def to_dict(self) -> dict:
         return {"branch_id": self.branch_id, "node_id": self.node_id, "capability": self.capability,
@@ -219,6 +241,8 @@ class ForkState:
     closed: str | None = None           # None | "satisfied" | "failed"
     close_payload: dict = field(default_factory=dict)
     rejected: str | None = None
+    claim: dict = field(default_factory=dict)   # the live driver claim, if any
+    generation: int = 0                 # highest ForkDriverClaimed generation (fencing token)
 
     def ordered(self) -> list:
         return [self.branches[b] for b in self.order]
@@ -267,6 +291,14 @@ def fold_fork(events: Iterable, fork_id: str) -> ForkState:
         if t == "ForkRejected" and p.get("fork_id") == fork_id:
             st.rejected = p.get("reason", "")
             continue
+        if t == "ForkDriverClaimed" and p.get("fork_id") == fork_id:
+            st.generation = max(st.generation, int(p.get("generation", 0) or 0))
+            st.claim = dict(p)
+            continue
+        if t == "ForkDriverReleased" and p.get("fork_id") == fork_id:
+            if st.claim and st.claim.get("owner") == p.get("owner"):
+                st.claim = {}
+            continue
         if not st.opened:
             continue
         if t in ("NodeParked", "NodeResumed", "NodeSkipped", "ApprovalGranted", "ApprovalInvalidated",
@@ -293,6 +325,7 @@ def fold_fork(events: Iterable, fork_id: str) -> ForkState:
                 continue
             b.status, b.attempt = "running", int(p.get("attempt", 1))
             b.idempotency_key, b.ran = p.get("idempotency_key", ""), True
+            b.generation = int(p.get("generation", 0) or 0)
             if p.get("reserved"):
                 b.reserved = dict(p["reserved"])
         elif t == "BranchSucceeded" and b is not None:
@@ -375,6 +408,53 @@ class SimulatedCrash(BaseException):
     """Raised by test harnesses to model a process crash; never swallowed by the controller."""
 
 
+_DRIVER_LOCKS: dict = {}
+_DRIVER_LOCKS_GUARD = threading.Lock()
+_LIVE_OWNERS: set = set()             # driver claims whose drive loop is running in THIS process
+LEASE_S = 60.0
+_HOST = socket.gethostname()
+
+
+def _driver_lock(store, mission_id: str, fork_id: str) -> threading.Lock:
+    """Process-wide single-driver lock per (log, mission, fork): two controllers/threads on one log serialize."""
+    path = getattr(store, "_path", None)
+    logkey = os.path.realpath(path) if path else id(store)
+    with _DRIVER_LOCKS_GUARD:
+        return _DRIVER_LOCKS.setdefault((logkey, mission_id, fork_id), threading.Lock())
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+
+
+class _FileLock:
+    """Cross-process mutex around claim/refresh (flock on a sidecar file) for file-backed logs."""
+
+    def __init__(self, store):
+        path = getattr(store, "_path", None)
+        self.path = (path + ".forklock") if path else None
+        self.fh = None
+
+    def __enter__(self):
+        if self.path:
+            import fcntl  # noqa: PLC0415
+            self.fh = open(self.path, "a+")
+            fcntl.flock(self.fh, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *a):
+        if self.fh:
+            import fcntl  # noqa: PLC0415
+            fcntl.flock(self.fh, fcntl.LOCK_UN)
+            self.fh.close()
+
+
 class ForkJoinController:
     def __init__(self, runtime, *, limits: ForkLimits | None = None, clock: Callable[[], float] = time.time,
                  poll_s: float = 0.005):
@@ -386,20 +466,29 @@ class ForkJoinController:
         self._specs: dict[tuple, ForkSpec] = {}
         self._driving: set = set()
         self._tenant_slots: dict[str, int] = {}
-        self._policies: dict[str, Callable] = {"halt_and_report": HALT_AND_REPORT}
-        self._default_policy = "halt_and_report"
+        self._hook: Callable | None = None
+        self._gen: dict = {}
         self._cancelled: set = set()
         self._tenants: dict[str, str] = {}
         runtime.store.subscribe(self._on_event)
 
     # ── public hooks ──
-    def on_branch_failure(self, policy: Callable, name: str | None = None) -> None:
-        """Plug a failure policy (e.g. the compensation agent's). ``policy(FailureContext) -> FailureDecision``.
-        Registered under ``name`` (default ``policy.name``) and made the default for forks that do not name
-        one. Without a call the default is HALT_AND_REPORT (no auto-compensation)."""
-        nm = name or getattr(policy, "name", None) or "custom"
-        self._policies[nm] = policy
-        self._default_policy = nm
+    def on_branch_failure(self, hook: Callable) -> None:
+        """Optional extra hook ``hook(FailureContext, FailureDecision) -> FailureDecision`` called after the
+        MISSION's failure policy (``compensation_policy.decide_on_branch_failure``) decided. It can only
+        TIGHTEN the decision (return halt_and_report, or the same action with a subset of compensate_nodes);
+        anything looser, an error, or a wrong type is ignored. The mission policy stays the single source."""
+        self._hook = hook
+
+    def register_spec(self, mission_id: str, spec: ForkSpec) -> None:
+        """After a restart the spec (inputs are not in the log) must be re-supplied; this validates it against
+        the logged ``spec_digest`` (spec_drift refused) so a later ``approve()`` can resume the fork."""
+        st = self.state(mission_id, spec.fork_id)
+        if not st.opened:
+            raise ForkError(f"fork {spec.fork_id} was never opened in mission {mission_id}")
+        if st.spec_digest != spec.digest():
+            raise ForkError(f"spec_drift: fork {spec.fork_id} spec differs from the recorded spec_digest")
+        self._specs[(mission_id, spec.fork_id)] = spec
 
     def state(self, mission_id: str, fork_id: str) -> ForkState:
         return fold_fork(self.rt.store.for_mission(mission_id), fork_id)
@@ -414,20 +503,75 @@ class ForkJoinController:
     # ── open / run ──
     def run_fork(self, mission_id: str, spec: ForkSpec) -> ForkResult:
         """Open (first call) or resume (any later call, e.g. after a restart) the fork and drive it until it
-        closes or parks on a human approval. Idempotent: a closed fork returns its stored result."""
+        closes or parks on a human approval. Idempotent: a closed fork returns its stored result. At most one
+        driver runs a fork: concurrent callers in this process serialize on a process-wide lock, and a driver
+        in another process is refused via a durable, fenced ``ForkDriverClaimed`` lease."""
+        with _driver_lock(self.rt.store, mission_id, str(getattr(spec, "fork_id", ""))):
+            return self._run_locked(mission_id, spec)
+
+    def _run_locked(self, mission_id: str, spec: ForkSpec) -> ForkResult:
         rt = self.rt
         m = rt._missions[mission_id]
+        refresh = getattr(rt.store, "refresh", None)
+        if refresh:
+            refresh()
         done = self.state(mission_id, spec.fork_id)
         if done.closed:                      # already decided: only re-apply the (idempotent) mission effects
             if done.spec_digest != spec.digest():
-                raise ForkError(f"fork {spec.fork_id} spec differs from the recorded spec_digest")
+                raise ForkError(f"spec_drift: fork {spec.fork_id} spec differs from the recorded spec_digest")
             self._apply_close(m, done)
             return ForkResult(done.closed, done)
-        if m.state in (MissionState.CANCELLED, MissionState.FAILED, MissionState.SUCCEEDED):
+        if m.state in (MissionState.CANCELLED, MissionState.FAILED, MissionState.SUCCEEDED,
+                       MissionState.COMPENSATION_FAILED):
             raise ForkError(f"mission {mission_id} is {m.state.value}; cannot run a fork")
-        self._specs[(mission_id, spec.fork_id)] = spec
         nodes = self._open(m, spec)
-        return self._drive(m, spec, nodes)
+        self._specs[(mission_id, spec.fork_id)] = spec
+        gen, owner = self._claim(m, spec.fork_id)
+        try:
+            return self._drive(m, spec, nodes, gen)
+        finally:
+            self._release(m, spec.fork_id, gen, owner)
+
+    # ── driver lease (fencing) ──
+    def _claim_live(self, c: dict) -> bool:
+        if c.get("owner") in _LIVE_OWNERS:
+            return True
+        if c.get("host") == _HOST:
+            if c.get("pid") == os.getpid():
+                return False                       # same process, drive loop gone: crashed/aborted driver
+            return _pid_alive(c.get("pid", -1)) and self.clock() < float(c.get("lease_expires_at", 0))
+        return self.clock() < float(c.get("lease_expires_at", 0))
+
+    def _claim(self, m: Mission, fid: str) -> tuple:
+        rt = self.rt
+        with _FileLock(rt.store):
+            refresh = getattr(rt.store, "refresh", None)
+            if refresh:
+                refresh()
+            st = self.state(m.id, fid)
+            if st.claim and self._claim_live(st.claim):
+                raise ForkError(f"fork {fid} is being driven by {st.claim.get('owner')}; refusing a second driver")
+            gen = st.generation + 1
+            owner = f"{_HOST}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+            rt.store.append("ForkDriverClaimed", m.id, {
+                "fork_id": fid, "generation": gen, "owner": owner, "host": _HOST, "pid": os.getpid(),
+                "lease_expires_at": self.clock() + LEASE_S})
+            _LIVE_OWNERS.add(owner)
+        return gen, owner
+
+    def _renew(self, m: Mission, fid: str, gen: int, owner: str, state: ForkState) -> None:
+        exp = float((state.claim or {}).get("lease_expires_at", 0))
+        if state.claim.get("owner") == owner and exp - self.clock() < LEASE_S / 2:
+            self.rt.store.append("ForkDriverClaimed", m.id, {
+                "fork_id": fid, "generation": gen, "owner": owner, "host": _HOST, "pid": os.getpid(),
+                "lease_expires_at": self.clock() + LEASE_S})
+
+    def _release(self, m: Mission, fid: str, gen: int, owner: str) -> None:
+        _LIVE_OWNERS.discard(owner)
+        try:
+            self.rt.store.append("ForkDriverReleased", m.id, {"fork_id": fid, "generation": gen, "owner": owner})
+        except BaseException:  # noqa: BLE001 - a dead store (crash) simply leaves the claim to lapse
+            pass
 
     resume_fork = run_fork
 
@@ -437,32 +581,64 @@ class ForkJoinController:
             t = self._tenants[m.id] = str(self.rt.repo.created(m.id).get("tenant") or "")
         return t
 
-    def _validate(self, m: Mission, spec: ForkSpec, lim: dict) -> None:
-        if not _ID_RE.match(spec.fork_id or ""):
+    @staticmethod
+    def _num_ok(v, *, positive=False) -> bool:
+        return (isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+                and (v > 0 if positive else v >= 0))
+
+    def _validate(self, m: Mission, spec: ForkSpec, lim: dict) -> str:
+        """Returns the effective failure policy name; raises ForkError for anything invalid."""
+        def fid_ok(v):
+            return isinstance(v, str) and _ID_RE.fullmatch(v) is not None
+        if not fid_ok(spec.fork_id):
             raise ForkError("invalid fork_id")
-        ids = [b.branch_id for b in spec.branches]
-        if not ids:
+        if not isinstance(spec.branches, (list, tuple)) or not spec.branches:
             raise ForkError("fork has no branches")
-        if any(not _ID_RE.match(i or "") for i in ids) or len(set(ids)) != len(ids):
+        if not all(isinstance(b, BranchSpec) for b in spec.branches):
+            raise ForkError("branches must be BranchSpec")
+        ids = [b.branch_id for b in spec.branches]
+        if not all(fid_ok(i) for i in ids) or len(set(ids)) != len(ids):
             raise ForkError("branch ids must be unique and match [A-Za-z0-9_.-]{1,64}")
         if len(ids) > lim["max_branches"]:
             raise ForkError(f"{len(ids)} branches exceeds max_branches={lim['max_branches']}")
         j = spec.join
-        if j.mode not in MODES:
-            raise ForkError(f"unknown join mode {j.mode!r}")
-        if j.mode == "quorum" and not (isinstance(j.k, int) and 1 <= j.k <= len(ids)):
-            raise ForkError("quorum requires 1 <= k <= number of branches")
-        if j.on_timeout not in ("fail", "partial"):
-            raise ForkError("on_timeout must be 'fail' or 'partial'")
-        if any(b.max_attempts < 1 for b in spec.branches):
-            raise ForkError("max_attempts must be >= 1")
+        if not isinstance(j, JoinSpec) or j.mode not in MODES:
+            raise ForkError(f"unknown join mode {getattr(j, 'mode', None)!r}")
+        if j.mode == "quorum" and not (type(j.k) is int and 1 <= j.k <= len(ids)):
+            raise ForkError("quorum requires an int 1 <= k <= number of branches")
+        if j.mode != "quorum" and j.k is not None:
+            raise ForkError("k is only valid for quorum joins")
+        if j.timeout_s is not None and not self._num_ok(j.timeout_s, positive=True):
+            raise ForkError("timeout_s must be a finite positive number")
+        if j.on_timeout not in ("fail", "partial") or not isinstance(j.cancel_losers, bool):
+            raise ForkError("on_timeout must be 'fail' or 'partial' and cancel_losers a bool")
+        if spec.max_concurrent is not None and not (type(spec.max_concurrent) is int and spec.max_concurrent > 0):
+            raise ForkError("max_concurrent must be a positive int")
+        if not isinstance(spec.cancel_siblings_on_branch_cancel, bool):
+            raise ForkError("cancel_siblings_on_branch_cancel must be a bool")
         scoped = self.rt._scoped(m)
         for b in spec.branches:
+            if not (type(b.max_attempts) is int and 1 <= b.max_attempts <= 10):
+                raise ForkError("max_attempts must be an int in 1..10")
+            if not isinstance(b.inputs, dict) or not isinstance(b.requires, (tuple, list)):
+                raise ForkError("branch inputs must be a dict and requires a list")
             for cap in (b.capability, *b.requires):
-                if scoped.get(cap) is None:
+                if not isinstance(cap, str) or scoped.get(cap) is None:
                     raise ForkError(f"capability {cap!r} is not granted to mission {m.id}")
-            if not set(b.requires) <= {b.capability} | set(b.requires):  # pragma: no cover - structural
-                raise ForkError("invalid requires")
+            cap = self.rt.registry.get(b.capability)
+            c = cap.cost
+            if not (self._num_ok(c.usd) and self._num_ok(c.tokens)):
+                raise ForkError(f"capability {b.capability!r} declares an invalid cost; refusing to reserve budget")
+            if b.produces is not None and b.produces not in (cap.provides or []):
+                raise ForkError(f"produces {b.produces!r} is not provided by capability {b.capability!r}")
+        mission_policy = _cpol.effective_policy(m, forked=True).value
+        want = spec.stricter_failure_policy
+        if want is None:
+            return mission_policy
+        if not isinstance(want, str) or want.upper() not in (mission_policy, _STRICT_OK):
+            raise ForkError(f"a fork may only choose {_STRICT_OK} or the mission's policy ({mission_policy}); "
+                            f"got {want!r}")
+        return want.upper()
 
     def _open(self, m: Mission, spec: ForkSpec) -> dict:
         rt = self.rt
@@ -472,16 +648,21 @@ class ForkJoinController:
             lim = self.limits.for_tenant(self._tenant(m))
             if existing.opened:
                 if existing.spec_digest != spec.digest():
-                    raise ForkError(f"fork {spec.fork_id} spec differs from the recorded spec_digest")
+                    raise ForkError(f"spec_drift: fork {spec.fork_id} spec differs from the recorded spec_digest")
+                policy_eff = existing.failure_policy
             else:
                 try:
-                    self._validate(m, spec, lim)
+                    policy_eff = self._validate(m, spec, lim)
                     open_forks = [f for f in fork_ids(evs) if fold_fork(evs, f).closed is None]
                     if len(open_forks) >= lim["max_open_forks"]:
                         raise ForkError(f"max_open_forks={lim['max_open_forks']} reached")
-                except ForkError as e:
-                    rt.store.append("ForkRejected", m.id, {"fork_id": spec.fork_id, "reason": str(e)})
-                    raise
+                except (ForkError, TypeError, ValueError, AttributeError) as e:
+                    reason = str(e) if isinstance(e, ForkError) else f"invalid spec: {type(e).__name__}"
+                    key = _sha([str(getattr(spec, "fork_id", "")), reason])
+                    if not any(x.type == "ForkRejected" and x.payload.get("key") == key for x in evs):
+                        rt.store.append("ForkRejected", m.id, {"fork_id": str(getattr(spec, "fork_id", ""))[:64],
+                                                              "reason": reason, "key": key})
+                    raise e if isinstance(e, ForkError) else ForkError(reason)
                 conc_req = spec.max_concurrent or lim["max_concurrent_branches"]
                 eff = max(1, min(conc_req, lim["max_concurrent_branches"], len(spec.branches)))
                 if rt.max_concurrency > 1:
@@ -498,25 +679,28 @@ class ForkJoinController:
                     brs.append({"branch_id": b.branch_id, "node_id": branch_node_id(m.id, spec.fork_id, b.branch_id),
                                 "capability": b.capability, "operator": cap.operator if cap else "",
                                 "produces": b.produces, "inputs_sha256": _sha(b.inputs),
-                                "max_attempts": b.max_attempts,
-                                "cost": vars(b.cost) if b.cost is not None else None})
+                                "max_attempts": b.max_attempts})
                 rt.store.append("ForkOpened", m.id, {
                     "fork_id": spec.fork_id, "spec_digest": spec.digest(), "branches": brs,
-                    "join": vars(spec.join), "failure_policy": spec.failure_policy,
+                    "join": vars(spec.join), "failure_policy": policy_eff,
                     "cancel_siblings_on_branch_cancel": spec.cancel_siblings_on_branch_cancel,
                     "limits": {**lim, "effective_concurrency": eff, "tenant": self._tenant(m),
                                "bound_by": ("tenant_limit" if lim["max_concurrent_branches"] <= conc_req
                                             else "fork_request")},
                     "opened_at": opened, "deadline": dl})
+        graph = rt._plans[m.id].graph
+        if spec.fork_id not in graph.forks:           # single source of "this mission is forked" (#450)
+            graph.forks.append(spec.fork_id)
         # branch Node objects (runtime-only; rebuilt identically on every resume)
         nodes: dict[str, Node] = {}
         for b in spec.branches:
             cap = rt.registry.get(b.capability)
             node = Node(capability=b.capability, operator=cap.operator, produces=b.produces,
                         approval_required=cap.approval_required, side_effecting=cap.side_effecting,
-                        undo=cap.undo, inputs={}, cost=b.cost or NodeCost(
-                            usd=cap.cost.usd, latency_ms=cap.cost.latency_ms, tokens=cap.cost.tokens,
-                            human_minutes=cap.cost.human_minutes),
+                        undo=_comp.declared_undo(cap), inputs={},
+                        irreversible=bool(getattr(cap, "irreversible", False)),
+                        cost=NodeCost(usd=cap.cost.usd, latency_ms=cap.cost.latency_ms, tokens=cap.cost.tokens,
+                                      human_minutes=cap.cost.human_minutes),
                         concurrency_mode=getattr(cap, "concurrency_mode", "") or "",
                         concurrency_key=getattr(cap, "concurrency_key", "") or "",
                         resource_keys=list(getattr(cap, "resource_keys", []) or []),
@@ -566,13 +750,14 @@ class ForkJoinController:
         return usd, tok
 
     # ── drive ──
-    def _drive(self, m: Mission, spec: ForkSpec, nodes: dict) -> ForkResult:
+    def _drive(self, m: Mission, spec: ForkSpec, nodes: dict, gen: int = 1, owner: str = "") -> ForkResult:
         rt = self.rt
         fid = spec.fork_id
         key = (m.id, fid)
         by_id = {b.branch_id: b for b in spec.branches}
         with self._lock:
             self._driving.add(key)
+            self._gen[key] = gen
         futs: dict[str, _cf.Future] = {}
         try:
             if m.state != MissionState.RUNNING:
@@ -582,6 +767,7 @@ class ForkJoinController:
                 if st.closed:
                     self._apply_close(m, st)
                     return ForkResult(st.closed, st)
+                self._renew(m, fid, gen, st.claim.get("owner", ""), st)
                 self._harvest(m, st, spec, by_id, nodes, futs)
                 st = self.state(m.id, fid)
                 # forced cancellation: mission cancel / deadline
@@ -688,8 +874,11 @@ class ForkJoinController:
         plan = rt._plans[m.id]
         world = rt._world(m.id)
         for bs in st.ordered():                      # plan order: deterministic
+            gen = self._gen.get((m.id, st.fork_id), 1)
+            # a 'running' branch not in OUR futures is re-dispatched only when it was started by an OLDER driver
+            # generation (a detected restart); never from a concurrent driver of the same generation.
             if bs.status not in ("pending", "retrying") and not (
-                    bs.status == "running" and bs.branch_id not in futs):
+                    bs.status == "running" and bs.branch_id not in futs and bs.generation < gen):
                 continue
             node = nodes[bs.branch_id]
             if len(futs) >= cap_fork:
@@ -731,27 +920,33 @@ class ForkJoinController:
                 continue
             if not self._acquire_slot(m, lim):
                 break
-            b_spec = by_id[bs.branch_id]
-            idem = branch_idempotency_key(m.id, st.fork_id, bs.branch_id, attempt)
-            with self._lock:                          # atomic: budget check + reservation + durable start
-                reserved = {} if resumed else {"usd": node.cost.usd, "tokens": node.cost.tokens}
-                if not resumed:
-                    usd, tok = self._spent(m)
-                    over = (usd + node.cost.usd > m.budget.usd + 1e-9
-                            or (node.cost.tokens and tok + node.cost.tokens > m.budget.tokens))
-                    if over:
-                        self._release_slot(m)
-                        self._append_failed(m, st, bs, attempt, "budget_exceeded", ran=False)
-                        started = True
-                        continue
-                rt.store.append("BranchStarted", m.id, {
-                    "fork_id": st.fork_id, "branch_id": bs.branch_id, "node_id": node.id,
-                    "attempt": attempt, "idempotency_key": idem, "reserved": reserved,
-                    "resumed": resumed})
-            node.idempotency_key = idem
-            inputs = self._inputs(m, b_spec, node, bs)
-            fut = self._submit(m, node, inputs)
-            fut.add_done_callback(lambda _f, mm=m: self._release_slot(mm))
+            submitted = False
+            try:                                      # the slot is released on EVERY non-submitting exit
+                b_spec = by_id[bs.branch_id]
+                idem = branch_idempotency_key(m.id, st.fork_id, bs.branch_id, attempt)
+                with self._lock:                      # atomic: budget check + reservation + durable start
+                    reserved = {} if resumed else {"usd": node.cost.usd, "tokens": node.cost.tokens}
+                    if not resumed:
+                        usd, tok = self._spent(m)
+                        # `not (x <= limit)` also refuses NaN; costs were validated finite and >= 0
+                        ok = (usd + node.cost.usd <= m.budget.usd + 1e-9
+                              and (not node.cost.tokens or tok + node.cost.tokens <= m.budget.tokens))
+                        if not ok:
+                            self._append_failed(m, st, bs, attempt, "budget_exceeded", ran=False)
+                            started = True
+                            continue
+                    rt.store.append("BranchStarted", m.id, {
+                        "fork_id": st.fork_id, "branch_id": bs.branch_id, "node_id": node.id,
+                        "attempt": attempt, "idempotency_key": idem, "reserved": reserved,
+                        "resumed": resumed, "generation": gen})
+                node.idempotency_key = idem
+                inputs = self._inputs(m, b_spec, node, bs)
+                fut = self._submit(m, node, inputs)
+                submitted = True
+                fut.add_done_callback(lambda _f, mm=m: self._release_slot(mm))
+            finally:
+                if not submitted:
+                    self._release_slot(m)
             futs[bs.branch_id] = fut
             conc.acquire(node, inflight)
             ops[node.operator] = ops.get(node.operator, 0) + 1
@@ -811,6 +1006,8 @@ class ForkJoinController:
         """Called by ``MissionRuntime.approve`` for a branch node id. Only a currently parked branch can be
         approved/rejected (no pre-approval). The approval is bound to the branch's capability."""
         rt = self.rt
+        if decision not in ("approve", "reject"):
+            raise ValueError(f"a fork branch accepts only 'approve' or 'reject', not {decision!r}")
         m = rt._missions[mission_id]
         evs = rt.store.for_mission(mission_id)
         target = None
@@ -857,8 +1054,11 @@ class ForkJoinController:
         if exc is not None:
             rt._meter(m, node, "error")
             rt.learning.record_capability(node.capability, False)
+            # A retry is a NEW idempotency key. After a real call failed, a side-effecting capability might have
+            # applied the effect, so it is retried only if the failure explicitly says nothing was applied.
+            safe = (not node.side_effecting) or bool(getattr(exc, "not_applied", False))
             self._append_failed(m, st, bs, attempt, "operator_error", ran=True, error=str(exc),
-                                will_retry=attempt < b_spec.max_attempts)
+                                will_retry=attempt < b_spec.max_attempts and safe)
             return
         result = fut.result()
         inputs_hash = _sha({k: v for k, v in b_spec.inputs.items() if not is_approval_key(k)})
@@ -979,21 +1179,56 @@ class ForkJoinController:
                 ctx = FailureContext(
                     mission_id=m.id, fork_id=st.fork_id, join_mode=st.join.get("mode", "all"), reason=reason,
                     succeeded=brief(st.ids("succeeded")), failed=brief(st.ids("failed")),
-                    cancelled=brief(st.ids("cancelled")), tenant=self._tenant(m))
-                pname = st.failure_policy or self._default_policy
-                policy = self._policies.get(pname, HALT_AND_REPORT)
-                try:
-                    decision = policy(ctx)
-                    if not isinstance(decision, FailureDecision) or decision.action not in (
-                            "halt_and_report", "compensate", "continue"):
-                        raise ValueError("invalid decision")
-                except Exception as e:  # noqa: BLE001 - fail closed to the safe default
-                    decision = FailureDecision("halt_and_report", f"policy error: {e}")
+                    cancelled=brief(st.ids("cancelled")), tenant=self._tenant(m),
+                    policy=st.failure_policy or "HALT_AND_REPORT")
+                decision = self._decide(m, st, ctx)
                 rt.store.append("JoinFailed", m.id, {
                     "fork_id": st.fork_id, "mode": st.join.get("mode"), "k": st.join.get("k"),
                     "reason": reason, "succeeded": st.ids("succeeded"), "failed": st.ids("failed"),
-                    "cancelled": st.ids("cancelled"), "failure_policy": pname,
-                    "decision": {"action": decision.action, "note": decision.note}})
+                    "cancelled": st.ids("cancelled"), "failure_policy": ctx.policy,
+                    "decision": decision.to_dict()})
+
+    def _caps_of(self, b: BranchState):
+        return self.rt.registry.get(b.capability)
+
+    def _decide(self, m: Mission, st: ForkState, ctx: FailureContext) -> FailureDecision:
+        """Map the MISSION's failure policy (compensation_policy.decide_on_branch_failure, #450) to a
+        FailureDecision. Pure; the fork never decides on its own."""
+        def view(b: BranchState, nodes: bool) -> dict:
+            cap = self._caps_of(b)
+            node = {"id": b.node_id, "capability": b.capability, "status": "done",
+                    "side_effecting": bool(getattr(cap, "side_effecting", False)),
+                    "undo": _comp.declared_undo(cap) if cap is not None else None,
+                    "irreversible": bool(getattr(cap, "irreversible", False))}
+            return {"id": b.branch_id, "status": b.status, "nodes": [node] if nodes else []}
+        ordered = st.ordered()
+        failed = next((b for b in ordered if b.status == "failed"),
+                      next((b for b in ordered if b.status != "succeeded"), None))
+        if failed is None:
+            return FailureDecision("halt_and_report", "no failed branch", ctx.policy)
+        sibs = [view(b, True) for b in ordered if b.status == "succeeded"]
+        try:
+            action = _cpol.decide_on_branch_failure(_PolicyView(ctx.policy), view(failed, False), sibs)
+            dec = FailureDecision(
+                _ACTION_MAP[action.kind.value], action.reason, action.policy.value,
+                tuple(action.compensate_nodes), tuple(action.not_reversible), tuple(action.not_compensated))
+        except Exception as e:  # noqa: BLE001 - fail closed
+            return FailureDecision("halt_and_report", f"policy error: {e}", "HALT_AND_REPORT")
+        if self._hook is not None:                    # may only tighten
+            try:
+                h = self._hook(ctx, dec)
+                if isinstance(h, FailureDecision):
+                    if h.action == "halt_and_report":
+                        dec = FailureDecision("halt_and_report", h.note or dec.note, dec.policy,
+                                              (), dec.not_reversible, tuple(
+                                                  list(dec.not_compensated) + list(dec.compensate_nodes)))
+                    elif h.action == dec.action:
+                        keep = tuple(n for n in dec.compensate_nodes if n in set(h.compensate_nodes))
+                        dec = FailureDecision(dec.action, h.note or dec.note, dec.policy, keep,
+                                              dec.not_reversible, dec.not_compensated)
+            except Exception:  # noqa: BLE001
+                pass
+        return dec
 
     @staticmethod
     def _brief(b: BranchState) -> dict:
@@ -1012,29 +1247,62 @@ class ForkJoinController:
                 ref = f"{b.node_id}"
                 if b.produces and ref not in published:
                     world.observe(b.produces, b.result, source=b.operator, confidence=1.0,
-                                  source_ref=ref)
+                                  source_type="fork_branch", source_ref=ref)
             if m.state == MissionState.WAITING_HUMAN:
                 rt._set_state(m, MissionState.RUNNING)
             return
-        decision = (st.close_payload.get("decision") or {}).get("action", "halt_and_report")
+        dec = st.close_payload.get("decision") or {}
+        decision = dec.get("action", "halt_and_report")
         if decision == "continue":
             if m.state == MissionState.WAITING_HUMAN:
                 rt._set_state(m, MissionState.RUNNING)
             return
-        if m.state in (MissionState.FAILED, MissionState.CANCELLED):
+        if m.state in (MissionState.FAILED, MissionState.CANCELLED, MissionState.COMPENSATION_FAILED):
             return
         plan = rt._plans[m.id]
-        # NOTE: deliberately NOT rt._saga — successful branches are never auto-compensated.
+        from . import compensation_runner as _runner  # noqa: PLC0415
+        pol = _cpol.FailurePolicy(dec.get("policy") or "HALT_AND_REPORT")
+        if decision == "compensate":
+            self._compensate_branches(m, st, dec, pol)
+        # unknown-effect branches: a failed call that actually ran on a consequential capability may have applied
+        # its effect; report it, never claim it was rolled back
+        unknown = [{"node_id": b.node_id, "capability": b.capability, "reversibility": "UNKNOWN_EFFECT"}
+                   for b in st.ordered() if b.status == "failed" and b.ran and getattr(self._caps_of(b), "side_effecting", False)]
+        _runner._finalize(rt, m, pol, list(dec.get("not_reversible") or []) + unknown,
+                          list(dec.get("not_compensated") or []))
+        # NOTE: deliberately NOT rt._saga/run_saga — branches are compensated only as the policy decided above.
         rt._fail(m, plan, reason=f"fork {st.fork_id} join failed: {st.close_payload.get('reason')}")
-        m.outcome = {**(m.outcome or {}), "fork": self.summary(m.id, st.fork_id),
-                     "failure_decision": decision}
+        m.outcome = {**(m.outcome or {}), "fork": self.summary(m.id, st.fork_id), "failure_decision": decision}
+
+    def _compensate_branches(self, m: Mission, st: ForkState, dec: dict, pol) -> None:
+        """Run the DECLARED undo of the succeeded branches the policy named (reverse order), each through the
+        compensation runner so every one gets its own request/authorization/execution/verification events and
+        receipt. Idempotent: a branch already compensated (per the log) is skipped."""
+        from . import compensation_runner as _runner  # noqa: PLC0415
+        rt = self.rt
+        by_node = {b.node_id: b for b in st.ordered()}
+        for nid in dec.get("compensate_nodes") or []:
+            b = by_node.get(nid)
+            if b is None or b.status != "succeeded":
+                continue
+            folded = _comp.fold_compensation(rt.store.for_mission(m.id))
+            if folded.get(nid, {}).get("status") in ("compensated", "executed_unverified"):
+                continue
+            cap = self._caps_of(b)
+            undo = _comp.declared_undo(cap) if cap is not None else None
+            if not undo:
+                continue
+            node = Node(capability=b.capability, operator=cap.operator, undo=undo, side_effecting=True,
+                        idempotency_key=b.idempotency_key)
+            node.id = nid
+            _runner._compensate_node(rt, m, node, cap, pol)
 
     def summary(self, mission_id: str, fork_id: str) -> dict:
         st = self.state(mission_id, fork_id)
         return {"fork_id": fork_id, "closed": st.closed, "join": st.join,
                 "succeeded": st.ids("succeeded"), "failed": st.ids("failed"),
                 "cancelled": st.ids("cancelled"), "parked": st.ids("parked"),
-                "late_results": len(st.late_results),
+                "late_results": len(st.late_results), "generation": st.generation,
                 "reasons": {b.branch_id: b.reason for b in st.ordered() if b.reason}}
 
     # ── subscriptions: cancellation + policy tightening (no runtime edits) ──

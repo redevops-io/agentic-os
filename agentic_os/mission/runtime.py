@@ -550,8 +550,8 @@ class MissionRuntime:
                 granted, cap_ok = True, e.payload.get("capability")
             elif e.type == "ApprovalInvalidated":
                 granted = False
-            elif e.type == "NodeSucceeded":
-                cap = e.payload.get("capability")
+            elif e.type in ("NodeSucceeded", "BranchSucceeded") and not e.payload.get("late"):
+                cap = e.payload.get("capability") or (e.payload.get("receipt") or {}).get("capability")
                 res = e.payload.get("result")
                 # A staged / failure-shaped / executed=False result that reached NodeSucceeded (e.g. an
                 # approval marker let a staged preview through) is NOT proof the effect happened.
@@ -1096,7 +1096,7 @@ class MissionRuntime:
                                 "(use the compensation routes for a COMPENSATION_FAILED mission)")
         if node_id not in self._parked_nodes(mission_id):
             raise ApprovalError(f"node {node_id!r} has no pending approval")
-        if ":fork:" in node_id and self.forks.owns(mission_id, node_id):   # fork branch approvals
+        if isinstance(node_id, str) and ":fork:" in node_id and self.forks.owns(mission_id, node_id):   # fork branch approvals
             return self.forks.approve_branch(mission_id, node_id, decision, edit)
         pending = self.repo.pending_human(mission_id) or {}
         if pending.get("node_id") != node_id:

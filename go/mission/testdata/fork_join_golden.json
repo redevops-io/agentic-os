@@ -491,5 +491,306 @@
   },
   "fork_id": "f3",
   "name": "approval_park_resume_invalidate"
+ },
+ {
+  "events": [
+   {
+    "payload": {
+     "branches": [
+      {
+       "branch_id": "b0",
+       "capability": "w.write",
+       "inputs_sha256": "h1",
+       "max_attempts": 1,
+       "node_id": "mission_fixed:fork:f1:b0",
+       "operator": "w-op",
+       "produces": null
+      },
+      {
+       "branch_id": "g",
+       "capability": "w.gated",
+       "inputs_sha256": "h2",
+       "max_attempts": 1,
+       "node_id": "mission_fixed:fork:f1:g",
+       "operator": "w-op",
+       "produces": null
+      },
+      {
+       "branch_id": "b2",
+       "capability": "w.flaky",
+       "inputs_sha256": "h3",
+       "max_attempts": 1,
+       "node_id": "mission_fixed:fork:f1:b2",
+       "operator": "w-op",
+       "produces": null
+      }
+     ],
+     "cancel_siblings_on_branch_cancel": false,
+     "deadline": 0,
+     "failure_policy": "HALT_AND_REPORT",
+     "fork_id": "f1",
+     "join": {
+      "cancel_losers": true,
+      "k": null,
+      "mode": "all",
+      "on_timeout": "fail",
+      "timeout_s": null
+     },
+     "limits": {},
+     "opened_at": 0,
+     "spec_digest": "h0"
+    },
+    "type": "ForkOpened"
+   },
+   {
+    "payload": {
+     "fork_id": "f1",
+     "generation": 1,
+     "host": "x",
+     "lease_expires_at": 0,
+     "owner": "x",
+     "pid": "x"
+    },
+    "type": "ForkDriverClaimed"
+   },
+   {
+    "payload": {
+     "attempt": 1,
+     "branch_id": "b0",
+     "fork_id": "f1",
+     "generation": 1,
+     "idempotency_key": "h4",
+     "node_id": "mission_fixed:fork:f1:b0",
+     "reserved": {
+      "tokens": 0,
+      "usd": 0.1
+     },
+     "resumed": false
+    },
+    "type": "BranchStarted"
+   },
+   {
+    "payload": {
+     "attempt": 1,
+     "branch_id": "b0",
+     "fork_id": "f1",
+     "node_id": "mission_fixed:fork:f1:b0",
+     "receipt": {
+      "approved": false,
+      "attempt": 1,
+      "branch_id": "b0",
+      "capability": "w.write",
+      "fork_id": "f1",
+      "idempotency_key": "h4",
+      "input_sha256": "h1",
+      "node_id": "mission_fixed:fork:f1:b0",
+      "operator": "w-op",
+      "result_sha256": "h5"
+     },
+     "result": {
+      "key": "h4",
+      "ok": true,
+      "tag": "b0"
+     }
+    },
+    "type": "BranchSucceeded"
+   },
+   {
+    "payload": {
+     "branch_id": "g",
+     "capability": "w.gated",
+     "fork_id": "f1",
+     "node_id": "mission_fixed:fork:f1:g"
+    },
+    "type": "NodeParked"
+   },
+   {
+    "payload": {
+     "attempt": 1,
+     "branch_id": "b2",
+     "fork_id": "f1",
+     "generation": 1,
+     "idempotency_key": "h7",
+     "node_id": "mission_fixed:fork:f1:b2",
+     "reserved": {
+      "tokens": 0,
+      "usd": 0.01
+     },
+     "resumed": false
+    },
+    "type": "BranchStarted"
+   },
+   {
+    "payload": {
+     "attempt": 1,
+     "branch_id": "b2",
+     "error": "w.flaky/b2 failed",
+     "fork_id": "f1",
+     "node_id": "mission_fixed:fork:f1:b2",
+     "ran": true,
+     "reason": "operator_error",
+     "will_retry": false
+    },
+    "type": "BranchFailed"
+   },
+   {
+    "payload": {
+     "node_id": "mission_fixed:fork:f1:g",
+     "reason": "join_failed"
+    },
+    "type": "NodeSkipped"
+   },
+   {
+    "payload": {
+     "branch_id": "g",
+     "fork_id": "f1",
+     "node_id": "mission_fixed:fork:f1:g",
+     "reason": "join_failed",
+     "was_running": false
+    },
+    "type": "BranchCancelled"
+   },
+   {
+    "payload": {
+     "cancelled": [
+      "g"
+     ],
+     "decision": {
+      "action": "halt_and_report",
+      "compensate_nodes": [],
+      "not_compensated": [
+       "mission_fixed:fork:f1:b0"
+      ],
+      "not_reversible": [],
+      "note": "branch b2 failed; policy HALT_AND_REPORT: succeeded effects are kept",
+      "policy": "HALT_AND_REPORT"
+     },
+     "failed": [
+      "b2"
+     ],
+     "failure_policy": "HALT_AND_REPORT",
+     "fork_id": "f1",
+     "k": null,
+     "mode": "all",
+     "reason": "all_join_unsatisfiable: g=join_failed, b2=operator_error",
+     "succeeded": [
+      "b0"
+     ]
+    },
+    "type": "JoinFailed"
+   },
+   {
+    "payload": {
+     "fork_id": "f1",
+     "generation": 1,
+     "owner": "x"
+    },
+    "type": "ForkDriverReleased"
+   }
+  ],
+  "expected": {
+   "branches": [
+    {
+     "approval": null,
+     "attempt": 1,
+     "branch_id": "b0",
+     "capability": "w.write",
+     "idempotency_key": "h4",
+     "node_id": "mission_fixed:fork:f1:b0",
+     "parked": false,
+     "ran": true,
+     "reason": "",
+     "receipt": {
+      "approved": false,
+      "attempt": 1,
+      "branch_id": "b0",
+      "capability": "w.write",
+      "fork_id": "f1",
+      "idempotency_key": "h4",
+      "input_sha256": "h1",
+      "node_id": "mission_fixed:fork:f1:b0",
+      "operator": "w-op",
+      "result_sha256": "h5"
+     },
+     "result": {
+      "key": "h4",
+      "ok": true,
+      "tag": "b0"
+     },
+     "status": "succeeded"
+    },
+    {
+     "approval": null,
+     "attempt": 0,
+     "branch_id": "g",
+     "capability": "w.gated",
+     "idempotency_key": "",
+     "node_id": "mission_fixed:fork:f1:g",
+     "parked": false,
+     "ran": false,
+     "reason": "join_failed",
+     "receipt": null,
+     "result": null,
+     "status": "cancelled"
+    },
+    {
+     "approval": null,
+     "attempt": 1,
+     "branch_id": "b2",
+     "capability": "w.flaky",
+     "idempotency_key": "h7",
+     "node_id": "mission_fixed:fork:f1:b2",
+     "parked": false,
+     "ran": true,
+     "reason": "operator_error",
+     "receipt": null,
+     "result": null,
+     "status": "failed"
+    }
+   ],
+   "close_payload": {
+    "cancelled": [
+     "g"
+    ],
+    "decision": {
+     "action": "halt_and_report",
+     "compensate_nodes": [],
+     "not_compensated": [
+      "mission_fixed:fork:f1:b0"
+     ],
+     "not_reversible": [],
+     "note": "branch b2 failed; policy HALT_AND_REPORT: succeeded effects are kept",
+     "policy": "HALT_AND_REPORT"
+    },
+    "failed": [
+     "b2"
+    ],
+    "failure_policy": "HALT_AND_REPORT",
+    "fork_id": "f1",
+    "k": null,
+    "mode": "all",
+    "reason": "all_join_unsatisfiable: g=join_failed, b2=operator_error",
+    "succeeded": [
+     "b0"
+    ]
+   },
+   "closed": "failed",
+   "fork_id": "f1",
+   "join": {
+    "cancel_losers": true,
+    "k": null,
+    "mode": "all",
+    "on_timeout": "fail",
+    "timeout_s": null
+   },
+   "late_results": [],
+   "opened": true,
+   "spec_digest": "h0",
+   "success_order": [
+    "b0"
+   ]
+  },
+  "fork_id": "f1",
+  "name": "real_controller_log"
  }
 ]

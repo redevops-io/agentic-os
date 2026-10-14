@@ -73,7 +73,7 @@ class CountingOperator:
 def build_registry(extra_caps=()):
     reg, _ = build_fleet()
     caps = [
-        CapabilitySpec("w.write", "w-op", provides=["w_out"], side_effecting=True, undo="w.undo",
+        CapabilitySpec("w.write", "w-op", provides=["w_out", "out0", "out1", "out2", "o0", "o2", "o_a", "o_b"], side_effecting=True, undo="w.undo",
                        permissions=["w:write"], cost=NodeCost(usd=0.1)),
         CapabilitySpec("w.undo", "w-op", permissions=["w:write"]),
         CapabilitySpec("w.gated", "w-op", side_effecting=True, approval_required=True,
@@ -82,6 +82,9 @@ def build_registry(extra_caps=()):
         CapabilitySpec("w.keyed", "w-op", side_effecting=True, permissions=["w:write"],
                        concurrency_mode="side_effecting", concurrency_key="acct:{acct}"),
         CapabilitySpec("w.flaky", "w-op", permissions=["w:write"], cost=NodeCost(usd=0.01)),
+        CapabilitySpec("w.pricey", "w-op", permissions=["w:write"], cost=NodeCost(usd=0.25)),
+        CapabilitySpec("w.irrev", "w-op", side_effecting=True, irreversible=True, permissions=["w:write"],
+                       cost=NodeCost(usd=0.01)),
         CapabilitySpec("w.nogrant", "w-op", permissions=["secret:admin"]),
         *extra_caps,
     ]
@@ -89,7 +92,14 @@ def build_registry(extra_caps=()):
     return reg
 
 
-def build(store=None, op=None, *, grants=None, budget=None, fork_budget=None, tenant="", concurrency=1, extra_caps=(),
+def make_rt(store, op, *, concurrency=1, extra_caps=(), poll_s=0.002):
+    """A runtime with no mission (for restart / second-process scenarios that rehydrate one from the log)."""
+    rt = MissionRuntime(build_registry(extra_caps), Executor(op), store=store, max_concurrency=concurrency)
+    rt.forks.poll_s = poll_s
+    return rt
+
+
+def build(store=None, op=None, *, grants=None, budget=None, fork_budget=None, tenant="", failure_policy="", concurrency=1, extra_caps=(),
           limits=None, clock=None, poll_s=0.002):
     reg = build_registry(extra_caps)
     op = op or CountingOperator()
@@ -100,7 +110,8 @@ def build(store=None, op=None, *, grants=None, budget=None, fork_budget=None, te
     else:
         rt.forks.poll_s = poll_s
     m = rt.create_mission("Onboard a new customer", policy_refs=grants or GRANTS, template="onboarding",
-                          budget=budget or Budget(usd=100.0), tenant=tenant)
+                          budget=budget or Budget(usd=100.0), tenant=tenant,
+                          failure_policy=failure_policy)
     if fork_budget is not None:               # the demo plan itself projects ~$1; tighten AFTER planning
         m.budget = Budget(usd=fork_budget)
     return rt, op, m

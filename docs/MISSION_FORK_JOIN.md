@@ -37,13 +37,17 @@ compensation module does not conflict.
 
 ```
 ForkSpec(fork_id, branches=[BranchSpec...], join=JoinSpec, max_concurrent=None,
-         failure_policy=None, cancel_siblings_on_branch_cancel=False)
-BranchSpec(branch_id, capability, inputs={}, requires=(), produces=None, max_attempts=1, cost=None)
+         stricter_failure_policy=None, cancel_siblings_on_branch_cancel=False)
+BranchSpec(branch_id, capability, inputs={}, requires=(), produces=None, max_attempts=1)
 JoinSpec(mode="all"|"any"|"quorum", k=None, timeout_s=None, on_timeout="fail"|"partial",
          cancel_losers=True)
 ```
 
-* `fork_id` and `branch_id` are caller-chosen stable identifiers (`[A-Za-z0-9_.-]{1,64}`), unique within the
+* `BranchSpec` has NO cost: the budget reservation is always the capability's declared cost (a spec cannot
+  lower it); a capability with a NaN/inf/negative cost is refused. `produces` must be exactly one of the
+  capability's `provides`, and the published observation carries `source_type=fork_branch` and
+  `source_ref=<branch node id>`.
+* `fork_id` and `branch_id` are caller-chosen stable identifiers (`[A-Za-z0-9_.-]{1,64}`, full match), unique within the
   mission / fork. Branch order is the order of `branches` and is the scheduling order.
 * **Branch node id** (token binding): `"{mission_id}:fork:{fork_id}:{branch_id}"`. It is a *real* `Node.id`
   (the executor, `_node` input and approval marker all key on it). Because the id embeds the mission, fork
@@ -61,14 +65,15 @@ All are mission-scoped (`mission_id` = parent). Payloads (additive; unknown keys
 
 | Event | Payload |
 |---|---|
-| `ForkOpened` | `fork_id, spec_digest, branches:[{branch_id,node_id,capability,operator,produces,inputs_sha256,max_attempts,cost}], join:{mode,k,timeout_s,on_timeout,cancel_losers}, failure_policy, limits:{max_branches,max_concurrent_branches,effective_concurrency,tenant}, opened_at, deadline` |
+| `ForkOpened` | `fork_id, spec_digest, branches:[{branch_id,node_id,capability,operator,produces,inputs_sha256,max_attempts}], join:{mode,k,timeout_s,on_timeout,cancel_losers}, failure_policy (effective mission policy), limits:{max_branches,max_concurrent_branches,effective_concurrency,tenant}, opened_at, deadline` |
 | `ForkRejected` | `fork_id, reason` (limit/validation/capability not granted; nothing ran) |
 | `BranchStarted` | `fork_id, branch_id, node_id, attempt, idempotency_key, reserved:{usd,tokens}, resumed:bool` |
 | `BranchSucceeded` | `fork_id, branch_id, node_id, attempt, result, receipt, late:bool` |
 | `BranchFailed` | `fork_id, branch_id, node_id, attempt, reason, error, ran:bool, receipt?` (`ran:false` = refused before dispatch: budget, policy, admission) |
 | `BranchCancelled` | `fork_id, branch_id, reason, was_running:bool` |
 | `JoinSatisfied` | `fork_id, mode, k, winners:[...], failed:[...], cancelled:[...], abandoned:[...], partial:bool, reason` |
-| `JoinFailed` | `fork_id, mode, k, reason, succeeded, failed, cancelled, failure_policy, decision:{action,note}` |
+| `JoinFailed` | `fork_id, mode, k, reason, succeeded, failed, cancelled, failure_policy, decision:{action,note,policy,compensate_nodes,not_reversible,not_compensated}` |
+| `ForkDriverClaimed` / `ForkDriverReleased` | `fork_id, generation, owner, host, pid, lease_expires_at` / `fork_id, generation, owner` (fencing; section 9) |
 
 `receipt` = `{fork_id, branch_id, node_id, capability, operator, attempt, idempotency_key, input_sha256,
 result_sha256, approved}`: it contains hashes only, never secrets or input values.
@@ -152,7 +157,7 @@ publishes nothing, and the successful work remains visible (not deleted, not com
 * Branch cancel (`cancel_branch`): only that branch, unless `cancel_siblings_on_branch_cancel` (join policy).
 * Budget: `Mission.budget` is the only budget. Remaining = `budget.usd` - cost of DONE plan nodes - reserved
   by all branches of the mission, evaluated and decremented atomically under one lock together with the
-  `BranchStarted` append. A branch whose estimated cost (spec cost, else capability cost) exceeds the
+  `BranchStarted` append. A branch whose estimated cost (the capability's declared cost) exceeds the
   remaining is refused: `BranchFailed(reason=budget_exceeded, ran=false)`, never partially run. A reservation
   is not refunded when the operator later fails (the spend is conservative). Tokens use the same mechanism.
 * Deadline: `Mission.deadline` bounds `timeout_s`; an expired mission deadline behaves like a timeout.
@@ -171,16 +176,30 @@ publishes nothing, and the successful work remains visible (not deleted, not com
   branch that is parked or approved-but-not-started; an already running branch is unaffected (change_policy
   is non-retroactive by design). A branch whose capability is no longer in the mission's scoped registry at
   start time fails with `policy_revoked`, `ran=false`.
-* Saga: `_saga` is untouched and does not see branches. Failure policy hook:
-  `ForkJoinController.on_branch_failure(policy)` registers `policy(ctx) -> FailureDecision`; `ctx` carries
-  `mission_id, fork_id, join_mode, reason, succeeded, failed, cancelled` (each branch with node id, capability,
-  receipt) so the compensation agent can compensate exactly what it chooses. The default `HALT_AND_REPORT`
-  returns `action="halt_and_report"`: the mission is failed through `_fail` (no saga), `outcome` lists
-  succeeded and failed branches, and nothing is compensated. The policy is consulted once, when the join
-  fails (after all outcomes are persisted). Actions: `halt_and_report` (default), `compensate` (controller
-  does nothing itself; the plugged policy performs/queues compensation and the mission is failed), `continue`
-  (mission left running for the caller; recorded in `JoinFailed.decision`). Policy exceptions fail closed to
-  `halt_and_report`.
+* Failure policy (single source = the MISSION): when a join fails the controller calls PR #450's
+  `compensation_policy.decide_on_branch_failure(mission_policy, failed_branch, succeeded_siblings)` with the
+  mission-level `failure_policy` recorded in `ForkOpened` (so replay is stable) and maps the `FailureAction`
+  explicitly: `HALT` -> `halt_and_report`, `COMPENSATE` -> `compensate`, `CONTINUE` -> `continue`. The default
+  for a forked mission is `HALT_AND_REPORT`. A `ForkSpec` may only choose `stricter_failure_policy`
+  (`HALT_AND_REPORT`, or equal to the mission's policy); anything looser is `ForkRejected`.
+  `on_branch_failure(hook)` is an optional extra hook that can only tighten the decision.
+  * `HALT_AND_REPORT`: stop starting branches, DRAIN in-flight siblings and keep their work, compensate
+    nothing, report succeeded branches as `not_compensated` and consequential ones without a declared undo as
+    `not_reversible`. (#450's `FailureAction.cancel_siblings` is not used to cancel completed or in-flight
+    work; completed work is never cancelled.)
+  * `COMPENSATE_DECLARED`: the controller runs `compensation_runner._compensate_node` for each succeeded
+    branch the policy named (reverse order), so every one gets its own `CompensationRequested/Authorized/
+    Executed/Verified|Failed` events and receipt, under `{branch idempotency key}:undo`, once (folded status
+    skips repeats, including after a crash). Authorization evidence for a branch node comes from
+    `BranchSucceeded` (non-late) via `MissionRuntime._compensation_evidence`. Irreversible/unknown branches are
+    reported `not_reversible`; a failing undo leaves the mission in `COMPENSATION_FAILED`; a failed call that
+    may have applied a consequential effect is reported `UNKNOWN_EFFECT`, never as rolled back.
+  * `CONTINUE_SIBLINGS`: mission left running for the caller; recorded in `JoinFailed.decision`.
+  The fork registers itself on `plan.graph.forks` (the single source for "forked" used by #450's
+  `run_saga`); `_saga` still only walks plan nodes.
+* Retries: a retry gets a new idempotency key, so after a failed real call a side-effecting capability is
+  retried only when the failure carries `not_applied=True` (exception attribute); otherwise the branch fails
+  and is reported (`UNKNOWN_EFFECT`).
 
 ## 9. Crash recovery
 
@@ -200,6 +219,22 @@ crash between `JoinSatisfied/JoinFailed` and those effects heals on restart; (c)
 not carry `tenant`, so the controller reads it from `MissionCreated`; (d) the original `ForkSpec` (inputs are
 not in the log, only hashes) must be re-supplied to resume; a branch approval recorded while no spec is
 registered resumes at the next `run_fork(spec)`.
+
+Single driver: `run_fork` holds a process-wide lock per (log, mission, fork) for the whole drive, and writes
+a durable `ForkDriverClaimed{generation, owner, host, pid, lease_expires_at}` (under an flock on
+`<log>.forklock` for file logs, after `EventStore.refresh()`); a second PROCESS gets `ForkError` while the claim
+is live (same-host pid alive and lease unexpired, or lease unexpired elsewhere; in-process claims are live
+only while their drive loop runs). `BranchStarted` carries the claim `generation`. A `running` branch not in
+this driver's futures is re-dispatched only if its generation is OLDER than the current claim (a detected
+restart), never from a concurrent driver. Leases are renewed in the drive loop; `ForkDriverReleased` is written
+on exit. Limitation: the fence is only as strong as the log (JSONL + flock on one host); a multi-host
+deployment needs a store with compare-and-set on the claim.
+
+Restart: the spec (inputs are not logged) must be re-supplied. `run_fork(spec)` or
+`register_spec(mission, spec)` validate it against the logged `spec_digest` (`spec_drift` refused);
+`approve()` resumes the fork only when a matching spec is registered. `MissionRuntime.run()` does NOT drive
+forks, and there is currently NO API route that opens or drives a fork: the #444 gate and tenant isolation are
+therefore N/A until one exists, and any future route MUST sit behind the gate.
 
 ## 10. Threat model
 
