@@ -13,8 +13,9 @@ from agentic_os.mission.api import build_cockpit_router
 from agentic_os.mission.types import CapabilityManifest, CapabilitySpec, ExecutionIntent, IntentStep
 
 
-def test_cockpit_runs_a_mission_end_to_end():
-    c = TestClient(build_mission_app())
+def test_cockpit_runs_a_mission_end_to_end(monkeypatch):
+    monkeypatch.setenv("AGENTIC_OS_CONTROL_TOKEN", "t")
+    c = TestClient(build_mission_app(), headers={"Authorization": "Bearer t"})
 
     assert c.get("/cockpit").status_code == 200                      # the shell renders
     assert "Mission Plane" in c.get("/cockpit").text

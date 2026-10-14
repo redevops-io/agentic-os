@@ -7,16 +7,19 @@ usable (and testable) without the web dependency.
 
 from typing import Any
 
+from .api_gate import GATE, caller_of, public
+from .approval import strip_approval_keys
 from .runtime import MissionRuntime
 from .simulator import simulate
 from .types import Budget, to_jsonable
 
 
 def build_router(runtime: MissionRuntime):
-    from fastapi import APIRouter, HTTPException
+    from fastapi import APIRouter, HTTPException, Request
     from pydantic import BaseModel
 
-    router = APIRouter(prefix="/missions", tags=["missions"])
+    # default-deny: the gate is router-level, so every route (incl. ones added later) is protected.
+    router = APIRouter(prefix="/missions", tags=["missions"], dependencies=[GATE])
 
     class CreateMission(BaseModel):
         goal: str
@@ -24,11 +27,27 @@ def build_router(runtime: MissionRuntime):
         policy_refs: list[str] = ["*"]
         template: str | None = None
         budget_usd: float | None = None
+        tenant: str = ""            # honoured ONLY for the unscoped admin token; a tenant token forces its own tenant
 
     class Approve(BaseModel):
         node_id: str
         decision: str = "approve"
         edit: dict[str, Any] | None = None
+
+    _DECISIONS = {"approve", "reject", "accept", "resolve"}
+
+    def _tenant_of(mid: str) -> str:
+        m = runtime._missions.get(mid)
+        return (getattr(m, "tenant", "") or "") if m else ""
+
+    def _visible(mid: str, request: Request) -> bool:
+        c = caller_of(request)
+        return c is None or c.tenant is None or _tenant_of(mid) == c.tenant
+
+    def _authorize_mission(mid: str, request: Request) -> None:
+        """404 for unknown AND for another tenant's mission (no existence leak)."""
+        if mid not in runtime._missions or not _visible(mid, request):
+            raise HTTPException(404, "mission not found")
 
     def _mission_view(mid: str) -> dict:
         m = runtime._missions.get(mid)
@@ -43,28 +62,34 @@ def build_router(runtime: MissionRuntime):
         }
 
     @router.post("")
-    def create(body: CreateMission):
+    def create(body: CreateMission, request: Request):
+        c = caller_of(request)
+        tenant = c.tenant if (c is not None and c.tenant is not None) else body.tenant
         budget = Budget(usd=body.budget_usd) if body.budget_usd else None
         m = runtime.create_mission(body.goal, constraints=body.constraints,
-                                   policy_refs=body.policy_refs, template=body.template, budget=budget)
+                                   policy_refs=body.policy_refs, template=body.template, budget=budget,
+                                   tenant=tenant)
         runtime.run(m.id)
         return _mission_view(m.id)
 
     @router.get("")
-    def list_missions():
-        return {"missions": runtime.missions()}
+    def list_missions(request: Request):
+        return {"missions": [r for r in runtime.missions() if _visible(r["id"], request)]}
 
     @router.get("/{mid}")
-    def get(mid: str):
+    def get(mid: str, request: Request):
+        _authorize_mission(mid, request)
         return _mission_view(mid)
 
     @router.get("/{mid}/plans")
-    def plans(mid: str):
+    def plans(mid: str, request: Request):
+        _authorize_mission(mid, request)
         plan = runtime._plans.get(mid)
         return {"plans": [to_jsonable(plan)] if plan else []}
 
     @router.post("/{mid}/simulate")
-    def resimulate(mid: str):
+    def resimulate(mid: str, request: Request):
+        _authorize_mission(mid, request)
         m = runtime._missions.get(mid)
         plan = runtime._plans.get(mid)
         if not m or not plan:
@@ -73,16 +98,24 @@ def build_router(runtime: MissionRuntime):
         return to_jsonable(plan.projection)
 
     @router.post("/{mid}/approve")
-    def approve(mid: str, body: Approve):
-        runtime.approve(mid, body.node_id, body.decision, body.edit)
+    def approve(mid: str, body: Approve, request: Request):
+        _authorize_mission(mid, request)
+        if body.decision not in _DECISIONS:
+            raise HTTPException(422, f"decision must be one of {sorted(_DECISIONS)}")
+        # the client may never smuggle an approval marker (``_approval*``) through the edit payload: approval
+        # authority is the authenticated decision above + the signed token the operator verifies at /invoke.
+        edit = strip_approval_keys(dict(body.edit)) if body.edit else None
+        runtime.approve(mid, body.node_id, body.decision, edit)
         return _mission_view(mid)
 
     @router.get("/{mid}/events")
-    def events(mid: str):
+    def events(mid: str, request: Request):
+        _authorize_mission(mid, request)
         return {"timeline": runtime.repo.timeline(mid)}
 
     @router.get("/{mid}/explain")
-    def explain(mid: str):
+    def explain(mid: str, request: Request):
+        _authorize_mission(mid, request)
         return runtime.explain(mid)
 
     return router
@@ -91,9 +124,10 @@ def build_router(runtime: MissionRuntime):
 def build_capabilities_router(runtime: MissionRuntime):
     from fastapi import APIRouter
 
-    router = APIRouter(tags=["capabilities"])
+    router = APIRouter(tags=["capabilities"], dependencies=[GATE])
 
     @router.get("/capabilities")
+    @public
     def capabilities(need: str | None = None, k: int = 5):
         if need:
             return {"need": need,
@@ -112,16 +146,22 @@ def build_capabilities_router(runtime: MissionRuntime):
 def build_cockpit_router(runtime: MissionRuntime):
     """P6 — the human-facing shell: an inbox of open human tasks + a one-page cockpit to launch,
     watch, approve/resolve and EXPLAIN a mission. No build step; vanilla JS over the JSON API."""
-    from fastapi import APIRouter
+    from fastapi import APIRouter, Request
     from fastapi.responses import HTMLResponse
 
-    router = APIRouter(tags=["cockpit"])
+    router = APIRouter(tags=["cockpit"], dependencies=[GATE])
 
     @router.get("/inbox")
-    def inbox():
-        return {"inbox": runtime.inbox()}
+    def inbox(request: Request):
+        c = caller_of(request)
+        rows = runtime.inbox()
+        if c is not None and c.tenant is not None:
+            rows = [r for r in rows
+                    if (getattr(runtime._missions.get(r["mission_id"]), "tenant", "") or "") == c.tenant]
+        return {"inbox": rows}
 
     @router.get("/buildinfo")
+    @public
     def buildinfo():
         """The interpretation context this runtime links against (contracts + canonicalization +
         schema versions) — the same block stamped onto every plan's EXPLAIN."""
@@ -129,6 +169,7 @@ def build_cockpit_router(runtime: MissionRuntime):
         return runtime_build_metadata()
 
     @router.get("/cockpit", response_class=HTMLResponse)
+    @public
     def cockpit():
         return _COCKPIT_HTML
 
@@ -247,7 +288,14 @@ pre{white-space:pre-wrap;font-size:12px;color:#cfd0d8;margin:6px 0 0;background:
 <aside class=drawer id=drawer></aside>
 
 <script>
-const J=r=>r.json(), api=(u,o)=>fetch(u,o).then(J);
+const J=r=>r.json();
+// mutating calls need a bearer token (AGENTIC_OS_CONTROL_TOKEN or a tenant token); kept in sessionStorage only.
+const api=(u,o={})=>{const t=sessionStorage.getItem('aos_token');
+  if(t){o.headers=Object.assign({},o.headers||{},{authorization:'Bearer '+t});}
+  return fetch(u,o).then(r=>{
+    if(r.status===401||r.status===503){const n=prompt('Bearer token required (AGENTIC_OS_CONTROL_TOKEN / tenant token):');
+      if(n){sessionStorage.setItem('aos_token',n.trim());}}
+    return J(r);});};
 const esc=s=>String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const short=id=>String(id||'').replace(/^node[_-]?/,'').slice(0,6);
 function pill(s){return `<span class="pill st-${s}">${esc(s)}</span>`}
