@@ -172,7 +172,8 @@ def test_mission_carries_context_used():
     assert "HubSpot customer record" in m["context_used"]
 
 
-def test_propose_and_confirm_sources_scans_a_real_folder(tmp_path):
+def test_propose_and_confirm_sources_scans_a_real_folder(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROJECTS_SOURCE_ROOTS", str(tmp_path))   # anonymous callers may only scan allow-listed roots
     (tmp_path / "a.pdf").write_text("x")
     (tmp_path / "b.md").write_text("y")
     prop = client.post("/api/sources/propose",
