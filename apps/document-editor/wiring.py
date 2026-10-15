@@ -14,12 +14,15 @@ from .backend import DocumentBackend, UnimplementedBackend
 from .config import ConnectorConfig, load_config
 from .content import ContentRegistry
 from .errors import ConfigError
+from .onlyoffice import OnlyOfficeConfig
+from .onlyoffice import OnlyOfficeBackend
 from .service import DocumentService
 from .store import LocalFSStore
 
 
 def build_backend(cfg: ConnectorConfig, content: ContentRegistry) -> DocumentBackend:
-    # No editor adapter yet in this layer: every provider fails closed.
+    if cfg.decl.provider == "onlyoffice":
+        return OnlyOfficeBackend(cfg.decl, OnlyOfficeConfig.from_env(zone=cfg.backend_zone), content)
     return UnimplementedBackend(cfg.decl)
 
 
