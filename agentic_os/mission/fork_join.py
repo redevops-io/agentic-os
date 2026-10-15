@@ -1250,7 +1250,8 @@ class ForkJoinController:
             node = {"id": b.node_id, "capability": b.capability, "status": "done",
                     "side_effecting": bool(getattr(cap, "side_effecting", False)),
                     "undo": _comp.declared_undo(cap) if cap is not None else None,
-                    "irreversible": bool(getattr(cap, "irreversible", False))}
+                    "irreversible": bool(getattr(cap, "irreversible", False)),
+                    "disposition": "PRESERVE" if (cap is not None and _comp.is_preserved(cap)) else ""}
             return {"id": b.branch_id, "status": b.status, "nodes": [node] if nodes else []}
         ordered = st.ordered()
         failed = next((b for b in ordered if b.status == "failed"),
@@ -1328,6 +1329,28 @@ class ForkJoinController:
         out["failure_policy"] = pol.value
         if extra_nr or extra_nc:
             out["rolled_back"] = False        # branches left as-is / irreversible / unknown effect
+            # K3: the same retained-effects record as the sequential path (outcome + EffectsRetained history)
+            have = {r["node_id"] for r in out.get("retained_effects") or []}
+            retained = list(out.get("retained_effects") or [])
+            for e in extra_nr:
+                if e.get("node_id") not in have:
+                    retained.append({"node_id": e.get("node_id"), "capability": e.get("capability"),
+                                     "reason": ("preserved_by_declaration" if e.get("disposition") == "PRESERVE"
+                                                else "unknown_effect" if e.get("reversibility") == "UNKNOWN_EFFECT"
+                                                else "irreversible"), "detail": ""})
+                    have.add(e.get("node_id"))
+            for nid in extra_nc:
+                if nid not in have:
+                    b = next((x for x in st.ordered() if x.node_id == nid), None)
+                    retained.append({"node_id": nid, "capability": getattr(b, "capability", ""),
+                                     "reason": "left_by_policy", "detail": pol.value})
+                    have.add(nid)
+            out["retained_effects"] = retained
+            out["partially_completed"] = True
+            out["incomplete_steps"] = list(out.get("incomplete_steps") or []) + [
+                {"node_id": b.node_id, "capability": b.capability, "status": "failed"}
+                for b in st.ordered() if b.status == "failed"]
+            _runner._record_retained(rt, m, out)
         m.outcome = out
         # NOTE: deliberately NOT rt._saga/run_saga — branches are compensated only as the policy decided above.
         rt._fail(m, plan, reason=f"fork {st.fork_id} join failed: {st.close_payload.get('reason')}")

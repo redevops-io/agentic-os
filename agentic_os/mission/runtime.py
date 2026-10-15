@@ -366,6 +366,13 @@ class MissionRuntime:
                                     "would hide it; use the compensation routes (acknowledge / verify_manually)")
         self._set_state(m, MissionState.CANCELLED)
         self.store.append("MissionCancelled", m.id, {"reason": reason})
+        plan = self._plans.get(mission_id)
+        status = self.repo.node_status(mission_id) if plan is not None else {}
+        if plan is not None and any(status.get(n.id) == NodeState.DONE and n.side_effecting
+                                    for n in plan.graph.nodes):
+            # a cancelled mission may have left effects (e.g. a held lock): record them, never lose them
+            from .compensation_runner import settle  # noqa: PLC0415
+            settle(self, m, plan)
         return m
 
     def create_mission_from_intent(self, intent, *, policy_refs: list[str] | None = None,
@@ -534,7 +541,15 @@ class MissionRuntime:
     def _compensation_requires_approval(self, capability: str) -> bool:
         spec = self.registry.get(capability)
         cs = coerce_compensation(getattr(spec, "compensation", None)) if spec is not None else None
-        return bool(cs and cs.requires_approval)
+        if cs is None:
+            return False
+        if cs.requires_approval:
+            return True
+        # belt and braces for K2 (registration already rejects it): EVIDENCE_BOUND over an approval-gated undo
+        # is never allowed to run without a human
+        t = self.registry.get(cs.capability) if (cs.supported and cs.capability) else None
+        return bool(cs.authorization_policy == "EVIDENCE_BOUND" and t is not None
+                    and getattr(t, "approval_required", False))
 
     def _compensation_evidence(self, mission_id: str, node_id: str) -> dict:
         """Compensation authorization evidence, folded from the durable event log (never in-memory state).

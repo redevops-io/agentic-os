@@ -54,11 +54,17 @@ class CapabilityRegistry:
         self._embedder = embedder or HashingEmbedder()
 
     def register(self, manifest: CapabilityManifest) -> None:
-        from .compensation import intrinsic_problems  # noqa: PLC0415
+        from .compensation import evidence_bound_conflicts, intrinsic_problems  # noqa: PLC0415
         for cap in manifest.capabilities:
             probs = intrinsic_problems(cap)
             if probs:      # self-compensation / verify==undo / contradictory declaration: reject at registration
                 raise ValueError("invalid compensation declaration: " + "; ".join(probs))
+        merged = {**self._caps, **{c.name: c for c in manifest.capabilities}}
+        # K2: an EVIDENCE_BOUND reversal can never target an approval-gated undo (in either registration order)
+        conflicts = evidence_bound_conflicts(merged.values(), merged.get)
+        if conflicts:
+            raise ValueError("invalid compensation declaration: " + "; ".join(conflicts))
+        for cap in manifest.capabilities:
             cap.operator = cap.operator or manifest.operator
             if not cap.embedding:
                 cap.embedding = self._embedder.embed(f"{cap.name} {' '.join(cap.provides)} "

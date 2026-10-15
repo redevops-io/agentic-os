@@ -94,14 +94,27 @@ def _check_preconditions(rt, m, node, spec, forward_result, attempt, phase) -> s
     pcap = rt.registry.get(cs.preconditions)
     if pcap is None or getattr(pcap, "side_effecting", False):
         return f"precondition_unevaluable: '{cs.preconditions}' is not a registered read-only capability"
-    try:
-        out = rt._executor_for(m).client.invoke(
-            pcap.operator or node.operator, cs.preconditions,
+    client = rt._executor_for(m).client
+    args = (pcap.operator or node.operator, cs.preconditions,
             {"precondition_for_undo_of": node.capability, "undo": node.undo, "result": forward_result,
              "_node": f"{node.id}:undo:precondition", "_mission": m.id},
             f"{node.idempotency_key}:undo:{attempt}:precondition:{phase}")
-    except Exception as e:  # noqa: BLE001
-        return f"precondition_unevaluable: check raised: {e}"
+    box: dict = {}
+
+    def _call() -> None:
+        try:
+            box["out"] = client.invoke(*args)
+        except Exception as e:  # noqa: BLE001
+            box["err"] = e
+
+    th = threading.Thread(target=_call, daemon=True)
+    th.start()
+    th.join(C.precondition_timeout_s())
+    if th.is_alive():          # a hung read-back must not hang the saga: fail CLOSED (effect retained)
+        return f"precondition_unevaluable: check timed out after {C.precondition_timeout_s():g}s"
+    if "err" in box:
+        return f"precondition_unevaluable: check raised: {box['err']}"
+    out = box.get("out")
     bad = _fail_reason(out)
     if bad:
         return f"precondition_unevaluable: {bad}"
@@ -148,7 +161,7 @@ def _compensate_node(rt, m, node, policy, forward_caps) -> None:
         ev = rt._compensation_evidence(m.id, node.id) or {}
     except Exception:  # noqa: BLE001
         pass
-    requires = bool(cs.requires_approval) if cs is not None else False
+    requires = bool(rt._compensation_requires_approval(node.capability)) if cs is not None else False
     if not pending_approval:
         store.append(C.EV_REQUESTED, m.id, {**base, "policy": policy.value,
                                             "reversibility": C.Reversibility.REVERSIBLE_EXPLICIT.value})
@@ -250,6 +263,13 @@ def compute_outcome(rt, m, plan) -> dict:
             retained.append({"node_id": node.id, "capability": node.capability,
                              "reason": "preserved_by_declaration" if preserved else "left_by_policy",
                              "detail": _note(spec) or policy.value})
+            continue
+        if not st:
+            # eligible (declares an undo, policy compensates) but NO compensation record exists (truncated log,
+            # saga not run, cancelled mission): the effect remains and must never read as rolled back
+            not_compensated.append(node.id)
+            retained.append({"node_id": node.id, "capability": node.capability, "reason": "not_yet_compensated",
+                             "detail": "eligible for compensation but no compensation was recorded"})
             continue
         reason = {"skipped": "precondition_not_met", "failed": "compensation_failed",
                   "approval_required": "awaiting_compensation_approval",

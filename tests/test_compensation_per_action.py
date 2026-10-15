@@ -17,8 +17,9 @@ OUTCOMES = ["locked", "fixed", "reported"]
 
 
 def _specs(*, lock_comp=None, fix_comp=None, report_irreversible=True):
-    lock = {"supported": True, "capability": "lock.release", "verify": "lock.verify",
-            "preconditions": "lock.safe", "authorization_policy": "EVIDENCE_BOUND", **(lock_comp or {})}
+    lock = lock_comp if isinstance(lock_comp, C.CompensationSpec) else {
+        "supported": True, "capability": "lock.release", "verify": "lock.verify",
+        "preconditions": "lock.safe", "authorization_policy": "EVIDENCE_BOUND", **(lock_comp or {})}
     fix = fix_comp if fix_comp is not None else {"supported": False, "disposition": "PRESERVE",
                                                  "notes": "closed port stays closed"}
     return [_spec("lock.acquire", "locked", side_effecting=True, compensation=lock),

@@ -302,3 +302,25 @@ runner always derives `{node.idempotency_key}:undo:{attempt}` (read-back `...:ve
 `outcome_from_log` rebuilds the identical outcome on replay. The `effects_left_in_place` needs-you item carries them
 (`decisions: manual_remediation | escalate`) for preserved, precondition-held and policy-left effects. The failed
 step itself may have partly executed: its effect is unknown to the log and is not listed as retained.
+
+**Review hardening (K1-K6).**
+* A hand-built `CompensationSpec` INSTANCE is validated and normalised exactly like a dict (`coerce` returns a normalised
+  copy): `authorization_policy="HUMAN_APPROVAL"` forces `requires_approval`; contradictory specs raise.
+* `EVIDENCE_BOUND` never fronts an approval-gated undo: `CapabilityRegistry.register` rejects it in either registration
+  order (and `registry_problems` lints it); the runtime additionally treats it as `requires_approval` (belt and braces).
+  A consequential, money-moving or external reversal can only be `HUMAN_APPROVAL`. Legacy bare `undo=` is unchanged.
+* `PRESERVE` wins over a stray legacy `undo=` (`declared_undo` is `None`; registration rejects the contradiction). The
+  fork path honours and reports it: `partially_completed`, `retained_effects`, `EffectsRetained`.
+* A remote (`/capabilities`) declaration that fails validation FAILS CLOSED: spec dropped, legacy `undo` ignored, the
+  capability is read as irreversible.
+* `outcome_from_log`: a node that is eligible for compensation but has no compensation record (truncated log, saga not
+  run) is `not_yet_compensated` and keeps `rolled_back` false. `cancel_mission` of a mission holding a done
+  side-effecting node settles the outcome and records `EffectsRetained`.
+* Precondition invocations are bounded by `AGENTIC_OS_PRECONDITION_TIMEOUT_S` (default 30s); a timeout fails closed.
+* Kernel apps: `sentinel.block_ip` (a completed security action) is now `PRESERVE`; lifting a block is the separate,
+  approved `sentinel.unblock_ip`. `infra.provision/configure`, `sky.launch/serve` stay reversible+approval-gated and the
+  kernel templates `onboarding`, `deploy_app`, `sky_deploy` keep their kernel opt-in (`TEMPLATE_FAILURE_POLICY`):
+  **changing kernel template defaults is out of scope here**. The enterprise overlay pulls all three back to
+  `HALT_AND_REPORT` (enterprise `docs/COMPENSATION_POLICY.md`); reconcile them in the kernel when the owner decides.
+* **Go port** (`go/mission`): ignores `disposition=PRESERVE`, `preconditions` and `authorization_policy`, and still
+  auto-compensates any node with `Undo`; do not rely on it for per-action selection.

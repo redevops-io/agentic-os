@@ -56,6 +56,15 @@ AUTH_POLICIES = ("", AUTH_HUMAN, AUTH_EVIDENCE)
 
 ENV_MAX_ATTEMPTS = "AGENTIC_OS_COMPENSATION_MAX_ATTEMPTS"
 ENV_STRICT_TARGETS = "AGENTIC_OS_STRICT_UNDO_TARGETS"
+ENV_PRECONDITION_TIMEOUT = "AGENTIC_OS_PRECONDITION_TIMEOUT_S"
+
+
+def precondition_timeout_s() -> float:
+    try:
+        return max(0.05, float(os.environ.get(ENV_PRECONDITION_TIMEOUT, "30")))
+    except ValueError:
+        return 30.0
+
 #: After this date a plan whose node declares an undo capability that is not registered is REFUSED at plan time
 #: by default (before it: allowed with a visible CompensationUndeclaredTarget warning when compensation is
 #: requested, and the unregistered target never receives the compensation marker). Override with the env flag.
@@ -104,8 +113,12 @@ class CompensationSpec:
 
 def coerce(value: Any) -> CompensationSpec | None:
     """dict | CompensationSpec | None -> CompensationSpec | None (unknown keys are rejected: fail closed)."""
-    if value is None or isinstance(value, CompensationSpec):
-        return value
+    if value is None:
+        return None
+    if isinstance(value, CompensationSpec):
+        # an INSTANCE is validated and normalised exactly like a dict (a hand-built spec must not bypass the
+        # checks, e.g. authorization_policy=HUMAN_APPROVAL with requires_approval=False). Returns a normalised copy.
+        value = asdict(value)
     if isinstance(value, dict):
         allowed = set(CompensationSpec.__dataclass_fields__)
         extra = set(value) - allowed
@@ -151,6 +164,8 @@ def declared_undo(cap: Any) -> str | None:
     spec = coerce(getattr(cap, "compensation", None))
     if spec is not None and spec.supported and spec.capability:
         return spec.capability
+    if spec is not None and spec.disposition == PRESERVE:
+        return None            # a PRESERVE declaration wins over a stray legacy ``undo=``: nothing is auto-undone
     return getattr(cap, "undo", None) or None
 
 
@@ -186,6 +201,8 @@ def intrinsic_problems(cap: Any) -> list[str]:
     undo = declared_undo(cap)
     if undo and undo == name:
         out.append(f"{name}: compensation target is the capability itself (would re-run the forward action)")
+    if spec is not None and spec.disposition == PRESERVE and getattr(cap, "undo", None):
+        out.append(f"{name}: declares disposition=PRESERVE and a legacy undo={cap.undo!r} (contradiction)")
     if spec is not None and spec.preconditions and spec.preconditions in (name, undo, spec.verify):
         out.append(f"{name}: preconditions '{spec.preconditions}' must be a read-only check distinct from the "
                    "forward action, the compensating capability and the verify read-back")
@@ -215,12 +232,29 @@ def lint_capability(cap: Any) -> str | None:
     return None
 
 
+def evidence_bound_conflicts(caps: Iterable[Any], get_capability) -> list[str]:
+    """K2: ``authorization_policy=EVIDENCE_BOUND`` means NO human decides this reversal, so it can never name a
+    compensating capability that itself requires approval (``approval_required``): that undo can only be
+    ``HUMAN_APPROVAL``. Rejected at registration (``CapabilityRegistry.register``) and by the lint."""
+    out: list[str] = []
+    for c in caps:
+        spec = coerce(getattr(c, "compensation", None))
+        if spec is None or not spec.supported or spec.authorization_policy != AUTH_EVIDENCE:
+            continue
+        t = get_capability(spec.capability)
+        if t is not None and getattr(t, "approval_required", False):
+            out.append(f"{c.name}: authorization_policy=EVIDENCE_BOUND but its compensating capability "
+                       f"'{spec.capability}' requires approval (declare HUMAN_APPROVAL)")
+    return out
+
+
 def registry_problems(caps: Iterable[Any], get_capability, *, require_verify: bool = True) -> list[str]:
     """Cross-capability checks for a set of capabilities (the lint; ``get_capability`` resolves a name):
     nonexistent compensating target, a target that is itself a forward action pointing back (cycle), a
     ``verify`` that is unregistered or side-effecting, and (``require_verify``) a reversible declaration with
     no ``verify`` read-back."""
-    out: list[str] = []
+    caps = list(caps)
+    out: list[str] = evidence_bound_conflicts(caps, get_capability)
     for c in caps:
         if not getattr(c, "side_effecting", False):
             continue
