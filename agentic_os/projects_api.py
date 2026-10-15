@@ -912,6 +912,33 @@ def build_source_registry(resolver: Optional[Any] = None, *, use_rag: Optional[b
     return reg
 
 
+ENV_SOURCE_ROOTS = "PROJECTS_SOURCE_ROOTS"   # os.pathsep-separated folders anonymous callers may confirm
+
+
+def _source_roots() -> List[str]:
+    import os
+    return [os.path.realpath(os.path.expanduser(r)) for r in
+            os.environ.get(ENV_SOURCE_ROOTS, "").split(os.pathsep) if r.strip()]
+
+
+def authorize_source_locations(source_specs: List[dict], authorization: Optional[str]) -> None:
+    """HTTP guard for ``confirm_and_connect_sources``: a ``files`` source is scanned from the SERVER's
+    filesystem, so every one must resolve (symlinks and ``..`` included) under ``$PROJECTS_SOURCE_ROOTS``;
+    otherwise the caller must present the control token (``require_control_token``: 503 unset, 401 wrong)."""
+    import os
+    roots = _source_roots()
+    for s in source_specs or []:
+        kind = str((s or {}).get("kind", "files") or "files").lower()
+        if kind not in ("files", "file", "folder"):
+            continue
+        loc = os.path.realpath(os.path.expanduser(str((s or {}).get("location", "") or "")))
+        if any(loc == r or loc.startswith(r.rstrip(os.sep) + os.sep) for r in roots):
+            continue
+        from agentic_os.mission.control_auth import require_control_token
+        require_control_token(authorization)
+        return
+
+
 def confirm_and_connect_sources(project_id: str, source_specs: List[dict], confirmed_by: str,
                                 registry: Optional[Any] = None) -> List[dict]:
     """Confirm an (already-answered) proposal and actually connect the sources through the
@@ -1503,7 +1530,11 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
         return propose_sources(req.project_id, req.text).to_dict()
 
     @app.post("/api/sources/confirm")
-    def _confirm(req: _ConfirmSourcesReq) -> List[dict]:
+    def _confirm(req: _ConfirmSourcesReq, authorization: Optional[str] = Header(default=None)) -> List[dict]:
+        # A ``files`` source makes THIS server walk a client-chosen path, so an anonymous caller may only
+        # confirm folders under an operator-allowed root ($PROJECTS_SOURCE_ROOTS); anything else needs the
+        # control token (fail closed: 503 when unset, 401 when wrong).
+        authorize_source_locations(req.sources, authorization)
         return confirm_and_connect_sources(req.project_id, req.sources, req.confirmed_by)
 
     # Governed Agent Gateway — let an EXTERNAL agent (Claude/ChatGPT/Cursor) reach a read-only,
