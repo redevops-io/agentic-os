@@ -1,0 +1,13 @@
+claim_id: aos_kernel_test_suite
+claim: "Kernel test suite passes: 3229 passed, 39 skipped (2026-10-15)."
+status: Internally reproduced
+code_commit: "2325dc8bcdf9a54f1da0b4c8379ee9562375fc58"
+dataset: "tests/ directory"
+protocol: "pip install -e '.[dev,duckdb]' && PYTHONPATH=$PWD:$PWD/apps pytest -p no:cacheprovider tests -q, Python 3.12, Linux x86_64, connector fixtures env var unset."
+model: "none (tests use fakes/stubs)"
+metrics: "3229 passed, 39 skipped, 7 warnings in 72s"
+baselines: "NOT_IN_REPO"
+reproduce: "see protocol"
+artifacts: "tests/, .github/workflows/tests.yml"
+limitations: "Run by the maintainers' tooling, not independently. Skips not itemised here. Per-app suites were not re-run. Tests passing is not evidence of fitness for any purpose."
+review: "none; no external review"

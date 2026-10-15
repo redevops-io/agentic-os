@@ -68,7 +68,8 @@ mcp = ["fastmcp>=4.0"]
 
 [project.scripts]
 agentic-os = "agentic_os.cli:main"
-# Bring up the Projects UI + API together: `pip install 'agentic-os[projects]'` then run this.
+# Bring up the Projects UI + API together: install from a git tag (agentic-os is not on PyPI), e.g.
+# `pip install 'agentic-os[projects] @ git+https://github.com/redevops-io/agentic-os.git@v0.3.34'`, then run this.
 agentic-os-projects = "agentic_os.projects_api:main"
 
 [build-system]

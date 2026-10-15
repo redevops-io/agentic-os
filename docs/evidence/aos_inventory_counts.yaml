@@ -1,0 +1,13 @@
+claim_id: aos_inventory_counts
+claim: "Counts used in READMEs: modules in the catalog and application directories."
+status: Internally reproduced
+code_commit: "2325dc8bcdf9a54f1da0b4c8379ee9562375fc58"
+dataset: "modules.yaml; apps/ directory listing"
+protocol: "python3 -c \"import yaml;print(len(yaml.safe_load(open('modules.yaml'))['modules']))\" -> 21; `ls -d apps/*/ | wc -l` -> 21 (includes helpers _suite-server, infra, sky, document-editor); `agentic-os modules` prints 21 rows. 2026-10-15."
+model: "none"
+metrics: "modules.yaml: 21; apps/ subdirectories: 21 (not all are business apps)"
+baselines: "NOT_IN_REPO"
+reproduce: "python3 -c \"import yaml;print(len(yaml.safe_load(open('modules.yaml'))['modules']))\" && ls -d apps/*/ | wc -l"
+artifacts: "modules.yaml, apps/"
+limitations: "Other documents say 15 (context-runtime README), 20 (earlier audit) or six domain agents (website). Counts of directories are not counts of deployed services; the '73 containers' figure appears nowhere in the four core repositories and no deployment manifest here supports it."
+review: "none; no external review"
