@@ -49,7 +49,8 @@ def test_capabilities_lists_the_contract_with_a_valid_token(client):
     assert r.status_code == 200
     names = {c["name"] for c in r.json()["capabilities"]}
     assert names == {"document.connect_check", "document.inspect", "document.open_session", "document.convert",
-                     "document.export", "document.propose_patch", "document.apply_patch", "document.publish"}
+                     "document.export", "document.propose_patch", "document.apply_patch", "document.publish",
+                     "document.set_label"}
 
 
 def test_unknown_capability_is_404(client):

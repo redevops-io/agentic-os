@@ -79,10 +79,13 @@ def sign_policy(payload: dict, key: "str | bytes") -> str:
     return hmac.new(k, _canon(payload), hashlib.sha256).hexdigest()
 
 
+MIN_POLICY_KEY_LEN = 32
+
+
 def verify_policy(payload: dict, signature: str, key: "str | bytes | None" = None, *, tenant: str,
                   now: Optional[float] = None) -> bool:
     key = key if key is not None else os.environ.get(ENV_POLICY_KEY, "")
-    if not key or not isinstance(signature, str) or payload.get("tenant") != tenant:
+    if not key or len(key) < MIN_POLICY_KEY_LEN or not isinstance(signature, str) or payload.get("tenant") != tenant:
         return False
     exp = payload.get("expires")
     if not isinstance(exp, (int, float)) or exp <= (time.time() if now is None else now):
@@ -141,6 +144,9 @@ class TenantPolicy:
         if policy:
             apply(policy, loosen_ok=False)
         if signed_policy:
+            k = signing_key if signing_key is not None else os.environ.get(ENV_POLICY_KEY, "")
+            if len(k) < MIN_POLICY_KEY_LEN:
+                raise ConfigError(f"{ENV_POLICY_KEY} must be at least {MIN_POLICY_KEY_LEN} characters")
             payload, sig = signed_policy.get("payload"), signed_policy.get("signature")
             if not isinstance(payload, Mapping) or not verify_policy(dict(payload), sig, signing_key, tenant=tenant,
                                                                       now=now):

@@ -198,4 +198,5 @@ class UnimplementedBackend(DocumentBackend):
         return "no adapter is shipped for this provider yet"
 
     def _do_health(self) -> dict:
-        return {"ok": False, "provider": self.provider, "detail": self._disabled_reason()}
+        raise UnsupportedCapability(f"{self.provider}: not implemented / unavailable: {self._disabled_reason()}",
+                                    provider=self.provider)

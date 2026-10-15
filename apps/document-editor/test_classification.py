@@ -128,26 +128,26 @@ def test_unsigned_loosening_is_rejected(C, mods, policy):
         pol(C, policy=policy)
 
 
-KEY = "policy-signing-key-for-tests"
+POLICY_SIGNER = "policy-signing-key-for-tests-0123456789"
 
 
-def signed(C, payload, key=KEY, tenant="acme", exp=None):
+def signed(C, payload, key=POLICY_SIGNER, tenant="acme", exp=None):
     payload = {"tenant": tenant, "expires": exp if exp is not None else time.time() + 3600, **payload}
     return {"payload": payload, "signature": C.sign_policy(payload, key)}
 
 
 def test_signed_policy_can_loosen(C):
     sp = signed(C, {"matrix": {"INTERNAL": {"zones": ["LOCAL", "PRIVATE_NETWORK", "EXTERNAL"]}}})
-    p = pol(C, "EXTERNAL", signed_policy=sp, signing_key=KEY)
+    p = pol(C, "EXTERNAL", signed_policy=sp, signing_key=POLICY_SIGNER)
     assert p.signed and decide(C, "INTERNAL", "EXTERNAL", policy=p).allowed
 
 
 def test_signed_policy_cannot_send_restricted_without_explicit_flag(C, mods):
     sp = signed(C, {"matrix": {"RESTRICTED": {"zones": ["LOCAL"], "needs_approval": True}}})
     with pytest.raises(mods.errors.ConfigError, match="allow_restricted"):
-        pol(C, signed_policy=sp, signing_key=KEY)
+        pol(C, signed_policy=sp, signing_key=POLICY_SIGNER)
     sp = signed(C, {"allow_restricted": True, "matrix": {"RESTRICTED": {"zones": ["LOCAL"], "needs_approval": True}}})
-    p = pol(C, "LOCAL", signed_policy=sp, signing_key=KEY)
+    p = pol(C, "LOCAL", signed_policy=sp, signing_key=POLICY_SIGNER)
     assert decide(C, "RESTRICTED", "LOCAL", policy=p).allowed is False        # still needs the bound approval
 
 
@@ -155,14 +155,14 @@ def test_signed_policy_cannot_send_restricted_without_explicit_flag(C, mods):
 def test_bad_signed_policies_are_rejected(C, mods, mut):
     sp = signed(C, {"matrix": {"INTERNAL": {"zones": ["LOCAL", "PRIVATE_NETWORK", "EXTERNAL"]}}},
                 tenant="globex" if mut == "other_tenant" else "acme", exp=1 if mut == "expired" else None,
-                key="a-different-key" if mut == "wrong_key" else KEY)
+                key="a-different-key" if mut == "wrong_key" else POLICY_SIGNER)
     if mut == "bad_sig":
         sp["signature"] = "0" * 64
     if mut == "tampered":
         sp["payload"]["matrix"]["INTERNAL"]["zones"].append("LOCAL")
         sp["payload"]["matrix"]["PUBLIC"] = {"zones": ["EXTERNAL"]}
     with pytest.raises(mods.errors.ConfigError):
-        pol(C, signed_policy=sp, signing_key=KEY)
+        pol(C, signed_policy=sp, signing_key=POLICY_SIGNER)
 
 
 def test_signed_policy_without_a_key_is_rejected(C, mods, monkeypatch):

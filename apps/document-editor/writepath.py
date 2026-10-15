@@ -118,6 +118,11 @@ class GovernedWriteMixin:
                 want.pop()
             if got != want:
                 problems.append("editor output text differs from the simulated result")
+            src = self.store.read(prop["tenant"], prop["doc_id"], prop["base_version"])[0]
+            if ooxml.docx_aux_texts(out_bytes) != ooxml.docx_aux_texts(src):
+                problems.append("headers / footers / comments / notes changed outside the requested patch")
+            if ooxml.external_targets(out_bytes) != ooxml.external_targets(src):
+                problems.append("external relationships (links) changed outside the requested patch")
             if prop["track_changes"]:
                 rev = ooxml.docx_revisions(out_bytes)
                 if rev["insertions"] + rev["deletions"] == 0:
@@ -141,6 +146,8 @@ class GovernedWriteMixin:
         # the approval covered exactly these four values: they must equal the stored proposal
         if backend != self.provider or prop["backend"] != backend:
             raise Conflict("approved backend does not match the proposal / configured backend")
+        if patchmod.patch_digest(prop["ops"], prop["track_changes"]) != prop["patch_digest"]:
+            raise Conflict("stored proposal does not match its patch digest (tampered or corrupt)")
         if prop["patch_digest"] != patch_digest or prop["base_hash"] != base_hash \
                 or prop["base_version"] != expected_version:
             raise Conflict("approved binding (patch digest / base hash / version) does not match the proposal")
@@ -150,6 +157,10 @@ class GovernedWriteMixin:
 
         # idempotency / recovery: look at what already happened under this key
         prior = [r for r in log.find(idempotency_key=idempotency_key)]
+        # one idempotency key == one proposal: reuse with a different payload is a conflict, never a false success
+        if any(r.get("proposal_id") not in (None, proposal_id) or r.get("patch_digest") not in (None, patch_digest)
+               for r in prior if r["kind"].startswith("apply_")):
+            raise Conflict("idempotency key was already used for a different proposal / patch")
         done = [r for r in prior if r["kind"] == "apply_committed"]
         if done:
             rec = done[-1]
@@ -182,8 +193,8 @@ class GovernedWriteMixin:
                               patch_digest=patch_digest, approval_ref=approval_ref, actor=actor, attempt=attempt)
         # THE write: exactly one backend call per attempt, never retried here.
         try:
-            out = self.backend.apply_edit(ref, prop["ops"], track_changes=prop["track_changes"],
-                                          idem_key=idempotency_key)
+            out = self._editor(tenant, self.backend.apply_edit, ref, prop["ops"],
+                               track_changes=prop["track_changes"], idem_key=idempotency_key)
         except OutcomeUnknown as e:
             self._receipt(tenant, "apply_outcome_unknown", idempotency_key=idempotency_key, proposal_id=proposal_id,
                           doc_id=doc_id, started=start["receipt_id"], detail=e.detail[:300], actor=actor)

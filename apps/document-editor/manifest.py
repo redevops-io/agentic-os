@@ -34,7 +34,7 @@ def build_manifest(operator):
             pain="governed document editing & conversion (operator)",
             tagline="Convert, review and edit documents through your own editor, with approval before any write.",
             agents=("converter", "reviewer", "editor"),
-            approval=("apply_patch", "publish"),
+            approval=("apply_patch", "publish", "set_label"),
             deploy="operator",
         ),
     )

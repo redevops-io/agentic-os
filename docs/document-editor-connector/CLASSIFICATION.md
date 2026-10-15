@@ -47,3 +47,16 @@ for that tenant (fail closed).
 
 `transmit_decision` records: allowed, reason, tenant, document id, document sha256, backend/destination, zone,
 declared and effective label, whether approval was needed, approver.
+
+## Setting labels
+
+`document.set_label` (always human-approved; the receipt records previous label, new label and whether it was a
+**downgrade**) is the production path for labels; until a document is labelled it is CONFIDENTIAL. The policy signing key
+(`DOCEDITOR_POLICY_SIGNING_KEY`) must be at least 32 characters or signed policies are refused.
+
+## Identity and trust zone details
+
+Document identity is the NFC, case-folded id, so `Secret.docx` and `secret.docx` share label, versions and lock on every
+OS; two directory entries differing only by case are refused as ambiguous. Zones are checked against the RESOLVED address:
+LOCAL hosts must resolve to loopback, PRIVATE_NETWORK hosts to RFC1918/ULA/CGNAT (a "private" host resolving to a public IP
+is refused), EXTERNAL hosts to global addresses only.

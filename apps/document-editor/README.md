@@ -19,7 +19,7 @@ and disabled. No undocumented endpoints, no headless-browser automation in any p
 ## Capabilities (`GET /capabilities`, authenticated)
 
 `document.connect_check`, `inspect`, `open_session` (view-only, signed, <=5 min), `convert`, `export`, `propose_patch`
-(no mutation), `apply_patch` (approval-gated, PRESERVE), `publish` (approval-gated, irreversible, allowlisted destinations).
+(no mutation), `apply_patch` (approval-gated, PRESERVE), `set_label` (approval-gated), `publish` (approval-gated, irreversible, allowlisted destinations).
 `connect_check` returns the **truthful capability report**: `{open, convert, inspect, tracked_changes, automated_edit,
 export}`, each `true` only if declared in config AND proven for that backend.
 
@@ -71,8 +71,8 @@ CI: `.github/workflows/document-editor.yml` runs the unit tests on ubuntu, macos
 
 ## Known gaps
 
-* The kernel's `HTTPOperatorClient` sends no `Authorization` header, so the Mission Runtime needs a transport that adds the
-  bearer token before it can call this (authenticated) operator over HTTP.
+* The kernel's `HTTPOperatorClient` sends no `Authorization` header: use `transport.bearer_transport(token)`
+  (`HTTPOperatorClient(urls, transport=bearer_transport(token))`) to call this authenticated operator.
 * Single replica only (per-process replay guard and content signing key unless `DOCEDITOR_CONTENT_SIGNING_SECRET` is set).
 * Stack integration (compose service, Ansible, drift allowlist, credential-inventory entries - see CREDENTIALS.md) is
   a follow-up in `agentic-os-stack`; no production deployment was made.

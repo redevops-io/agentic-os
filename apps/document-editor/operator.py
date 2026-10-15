@@ -140,6 +140,18 @@ def build_document_editor_operator(provider: Optional[ServiceProvider] = None) -
                                mission_ref={"mission_id": i.get("_mission")})
         return guarded("document.publish", go)(inp)
 
+    def label_handler(inp: dict) -> dict:
+        approval = inp.get("_approval")
+        if not approval:
+            return pending_approval("document.set_label", label_set=False, doc_id=str(inp.get("doc_id", "")),
+                                    label=str(inp.get("label", "")))
+
+        def go(svc, tenant, i):
+            return svc.set_label(tenant, _doc(i), str(i.get("label", "")),
+                                 approval=approval if isinstance(approval, dict) else {"approved": True},
+                                 actor=_actor_of(i), mission_ref={"mission_id": i.get("_mission")})
+        return guarded("document.set_label", go)(inp)
+
     common = dict(network=["document-editor (configured, allowlisted external editor)"], data_classifications=_CLS)
     return GatedOperator(OPERATOR_NAME, [
         capability(
@@ -192,6 +204,16 @@ def build_document_editor_operator(provider: Optional[ServiceProvider] = None) -
             permissions=["document:write"], required_authority=["document:approve_write"],
             isolation_class="external-editor", estimated_value="high", latency_ms=20000,
             concurrency_mode="exclusive", concurrency_key="document:{doc_id}", **common),
+        capability(
+            "document.set_label", label_handler, provides=["document_labelled"],
+            outputs={"verified": "bool: the label was read back from the sidecar manifest",
+                     "label": "classification label now in force"},
+            side_effecting=True, approval_required=True,
+            compensation={"supported": False, "disposition": "PRESERVE", "reversibility": "IRREVERSIBLE",
+                          "notes": "metadata only; the previous label is kept in the receipt ledger and a change back "
+                                   "is a new, separately approved call. Downgrades are flagged in the receipt."},
+            permissions=["document:classify"], required_authority=["document:approve_label"],
+            estimated_value="medium", concurrency_mode="exclusive", concurrency_key="document:{doc_id}", **common),
         capability(
             "document.publish", publish_handler, provides=["document_published"],
             outputs={"verified": "bool: the published copy was read back and matches the approved hash",

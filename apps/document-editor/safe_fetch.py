@@ -25,6 +25,7 @@ import ipaddress
 import re
 import socket
 import ssl
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Mapping, Optional
@@ -34,7 +35,8 @@ from .errors import BackendError, BackendUnavailable, ConfigError, SSRFBlocked
 
 ZONE_PUBLIC = "PUBLIC"
 ZONE_PRIVATE = "PRIVATE"
-ZONES = (ZONE_PUBLIC, ZONE_PRIVATE)
+ZONE_LOCAL = "LOCAL"                  # loopback only
+ZONES = (ZONE_PUBLIC, ZONE_PRIVATE, ZONE_LOCAL)
 
 REQUEST_HEADER_ALLOWLIST = frozenset({"accept", "content-type", "authorization", "user-agent", "idempotency-key"})
 RESPONSE_HEADER_ALLOWLIST = frozenset({"content-type", "content-length", "location", "etag", "last-modified"})
@@ -173,20 +175,21 @@ def ip_block_reason(ip, zone: str) -> Optional[str]:
         return "multicast address"
     if ip.is_link_local:
         return "link-local address"
-    if ip.is_loopback and zone == ZONE_PRIVATE:
+    if ip.is_loopback and zone in (ZONE_PRIVATE, ZONE_LOCAL):
         return None                 # (::1 sits inside the IPv6 "reserved" block, so test it before is_reserved)
     if ip.is_reserved:
         return "reserved address"
+    if zone == ZONE_LOCAL:
+        return "non-loopback address for a LOCAL host"
     if zone == ZONE_PUBLIC:
         if not ip.is_global:
             return "non-global address for a PUBLIC host"
         return None
-    # PRIVATE zone: RFC1918 / ULA / loopback / CGNAT are acceptable
-    if ip.is_private or ip.is_loopback or (isinstance(ip, ipaddress.IPv4Address) and ip in _CGNAT):
+    # PRIVATE zone: only RFC1918 / ULA / CGNAT. A host declared private that resolves to a PUBLIC address is
+    # refused: the declared trust zone must match where the host really is.
+    if ip.is_private or (isinstance(ip, ipaddress.IPv4Address) and ip in _CGNAT):
         return None
-    if ip.is_global:
-        return None      # a PRIVATE-declared host that resolves publicly is still the operator's explicit choice
-    return "address not allowed"
+    return "public address for a host declared PRIVATE"
 
 
 def default_resolver(host: str, port: int) -> "list[str]":
@@ -278,8 +281,8 @@ def parse_target(url: str, policy: FetchPolicy) -> Target:
     allowed_ports = rule.ports if rule.ports is not None else frozenset({443, 80})
     if port not in allowed_ports:
         raise SSRFBlocked(f"port {port} is not allowed for host {host!r}")
-    if scheme == "http" and rule.zone != ZONE_PRIVATE:
-        raise SSRFBlocked("plain http is only allowed for hosts explicitly allowlisted as PRIVATE")
+    if scheme == "http" and rule.zone == ZONE_PUBLIC:
+        raise SSRFBlocked("plain http is only allowed for hosts explicitly allowlisted as PRIVATE or LOCAL")
     path = sp.path or "/"
     target = path + (("?" + sp.query) if sp.query else "")
     return Target(scheme, host, port, target, rule, url)
@@ -329,11 +332,29 @@ def safe_fetch(url: str, *, policy: FetchPolicy, method: str = "GET", headers: O
         conn: http.client.HTTPConnection = _PinnedHTTPS(t.host, t.port, ip, tmo, ctx)
     else:
         conn = _PinnedHTTP(t.host, t.port, ip, tmo)
+    timer = None
+    expired = threading.Event()
+
+    def _abort():                      # hard deadline at SOCKET level: a slow-drip server cannot outlive it
+        expired.set()
+        sock = conn.sock
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                sock.close()
+            except OSError:
+                pass
     try:
         try:
             conn.connect()
         except (OSError, ssl.SSLError) as e:
             raise FetchUnavailable(f"cannot connect to {t.host}: {e}", request_sent=False) from None
+        timer = threading.Timer(max(0.01, deadline - time.monotonic()), _abort)
+        timer.daemon = True
+        timer.start()
         try:
             conn.request(method, t.target, body=body, headers={**hdrs, "Accept-Encoding": "identity"})
             resp = conn.getresponse()
@@ -352,17 +373,25 @@ def safe_fetch(url: str, *, policy: FetchPolicy, method: str = "GET", headers: O
             while method != "HEAD":
                 if time.monotonic() > deadline:
                     raise FetchUnavailable("response deadline exceeded", request_sent=True)
-                chunk = resp.read(65536)
+                chunk = resp.read1(65536)
                 if not chunk:
                     break
                 total += len(chunk)
                 if total > limit:
                     raise FetchTooLarge(f"response exceeds the {limit} byte limit")
                 chunks.append(chunk)
+            if expired.is_set():
+                raise FetchUnavailable("response deadline exceeded", request_sent=True)
+            if method != "HEAD" and declared and declared.isdigit() and total < int(declared):
+                raise FetchUnavailable("response body truncated", request_sent=True)
         except (OSError, http.client.HTTPException, ssl.SSLError) as e:
+            if expired.is_set():
+                raise FetchUnavailable("response deadline exceeded", request_sent=True) from None
             raise FetchUnavailable(f"transport failure talking to {t.host}: {type(e).__name__}: {e}",
                                    request_sent=True) from None
     finally:
+        if timer is not None:
+            timer.cancel()
         try:
             conn.close()
         except Exception:  # noqa: BLE001

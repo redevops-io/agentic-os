@@ -31,7 +31,7 @@ from .backend import BackendDecl, BackendFile, DocRef, DocumentBackend
 from .content import ContentRegistry
 from .errors import (BackendError, BackendUnavailable, ConfigError, InvalidInput, OutcomeUnknown,
                      UnsupportedCapability)
-from .safe_fetch import (FetchPolicy, FetchUnavailable, HostRule, ZONE_PRIVATE, ZONE_PUBLIC, default_resolver,
+from .safe_fetch import (FetchPolicy, FetchUnavailable, HostRule, ZONE_LOCAL, ZONE_PRIVATE, ZONE_PUBLIC, default_resolver,
                          normalize_host, safe_fetch)
 
 ENV_URL = "DOCEDITOR_ONLYOFFICE_URL"
@@ -83,7 +83,7 @@ class OnlyOfficeConfig:
 
     def fetch_policy(self) -> FetchPolicy:
         _, host, port = self.origin()
-        zone = ZONE_PUBLIC if self.zone == "EXTERNAL" else ZONE_PRIVATE
+        zone = {"EXTERNAL": ZONE_PUBLIC, "LOCAL": ZONE_LOCAL}.get(self.zone, ZONE_PRIVATE)
         return FetchPolicy.of([HostRule(host, zone, frozenset({port}))], max_bytes=self.max_result_bytes,
                               timeout_s=self.request_timeout_s)
 

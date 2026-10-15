@@ -147,4 +147,4 @@ modules:
     deploy: operator
     tagline: Convert, review and edit documents through your own editor, with approval before any write.
     agents: [converter, reviewer, editor]
-    approval_required: [apply_patch, publish]
+    approval_required: [apply_patch, publish, set_label]

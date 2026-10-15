@@ -14,15 +14,18 @@ Invariants (each has tests):
 """
 from __future__ import annotations
 
+import threading
 import time
+from contextlib import contextmanager
 from typing import Callable, Optional
 
 from . import ooxml
 from .backend import DocRef, DocumentBackend
-from .classification import decide_transmit, effective_label, require_transmit
+from .classification import LABELS, decide_transmit, effective_label, normalize_label, require_transmit
 from .config import ConnectorConfig
 from .content import ContentRegistry
-from .errors import DocEditorError, NotFound, TenantMismatch, VerificationFailed
+from .errors import (BackendUnavailable, DocEditorError, InvalidInput, NotFound, OutcomeUnknown, TenantMismatch,
+                     VerificationFailed)
 from .locking import atomic_write_bytes
 from .store import DocumentStore, sha256_hex, validate_tenant
 from .writepath import GovernedWriteMixin
@@ -35,6 +38,12 @@ class DocumentService(GovernedWriteMixin):
         self.replay_guard = replay_guard
         self.clock = clock
         self.provider = backend.provider
+        self.max_source_bytes = 32 * 1024 * 1024        # nothing larger is ever sent to an editor
+        self.max_concurrent_per_tenant = 2              # simultaneous editor calls per tenant
+        self.breaker_threshold, self.breaker_open_s = 3, 30.0
+        self._fails, self._open_until = 0, 0.0
+        self._slots: dict = {}
+        self._slots_lock = threading.Lock()
         (cfg.state_dir / "proposals").mkdir(parents=True, exist_ok=True)
         marker = cfg.state_dir / ".docedit-state"
         if not marker.exists():
@@ -64,9 +73,45 @@ class DocumentService(GovernedWriteMixin):
         ref = DocRef(doc_id=doc_id, tenant=tenant, version=info.version, sha256=info.sha256,
                      filename=doc_id.rsplit("/", 1)[-1])
         if with_url:
+            self._check_sendable(ref, data)
             ref.content_url = self.content.issue(kind="document", tenant=tenant, doc_id=doc_id, version=info.version,
                                                  sha256=info.sha256, backend=self.provider)
         return ref, data
+
+    def _check_sendable(self, ref: DocRef, data: bytes) -> None:
+        """Before ANY bytes are offered to an editor: size cap + structural validation (junk 'PK' bytes can hang or
+        crash a Document Server)."""
+        if not data:
+            raise InvalidInput("empty document")
+        if len(data) > self.max_source_bytes:
+            raise InvalidInput(f"document is larger than the {self.max_source_bytes} byte transmit limit")
+        ext = ooxml.ext_of(ref.filename)
+        if ext in ooxml.KIND_BY_EXT:
+            ooxml.validate_container(data, ext)
+
+    def _editor(self, tenant: str, fn, *a, **k):
+        """Every editor call: circuit breaker (repeated 502 / timeouts open it), per-tenant concurrency limit."""
+        now = self.clock()
+        if now < self._open_until:
+            raise BackendUnavailable("editor circuit is open after repeated failures; backing off",
+                                     retry_after_s=round(self._open_until - now, 1))
+        with self._slots_lock:
+            sem = self._slots.setdefault(tenant, threading.BoundedSemaphore(self.max_concurrent_per_tenant))
+        if not sem.acquire(blocking=False):
+            raise BackendUnavailable("too many concurrent editor calls for this tenant")
+        try:
+            out = fn(*a, **k)
+        except (BackendUnavailable, OutcomeUnknown):
+            self._fails += 1
+            if self._fails >= self.breaker_threshold:
+                self._open_until = self.clock() + self.breaker_open_s
+                self._fails = 0
+            raise
+        else:
+            self._fails = 0
+            return out
+        finally:
+            sem.release()
 
     def _gate(self, tenant: str, doc_id: str, sha: str, *, backend: Optional[str] = None,
               approval_token: Optional[str] = None, pre_approved: Optional[dict] = None, actor: str = "",
@@ -95,6 +140,7 @@ class DocumentService(GovernedWriteMixin):
         caps = self.backend.describe().report()
         try:
             h = self.backend.health()
+            self._fails, self._open_until = 0, 0.0
         except DocEditorError as e:
             self._receipt(tenant, "connect_check", ok=False, error=e.code, actor=actor)
             return {**e.to_result(), "backend_reachable": False, **caps}
@@ -116,7 +162,7 @@ class DocumentService(GovernedWriteMixin):
             return out
         self._gate(tenant, doc_id, ref.sha256, approval_token=transmit_approval, actor=actor, op="inspect")
         ref, _ = self._ref(tenant, doc_id, ref.version, with_url=True)
-        out["editor"] = self.backend.inspect(ref)
+        out["editor"] = self._editor(tenant, self.backend.inspect, ref)
         out["transmitted"] = True
         self._receipt(tenant, "inspect", doc_id=doc_id, version=ref.version, sha256=ref.sha256, actor=actor)
         return out
@@ -126,7 +172,8 @@ class DocumentService(GovernedWriteMixin):
         ref, _ = self._ref(tenant, doc_id)
         self._gate(tenant, doc_id, ref.sha256, approval_token=transmit_approval, actor=actor, op="open_session")
         ref, _ = self._ref(tenant, doc_id, ref.version, with_url=True)
-        s = self.backend.open_session(ref, user_id=user_id or actor or "anonymous", ttl_s=ttl_s, mode="view")
+        s = self._editor(tenant, self.backend.open_session, ref, user_id=user_id or actor or "anonymous", ttl_s=ttl_s,
+                         mode="view")
         r = self._receipt(tenant, "open_session", doc_id=doc_id, version=ref.version, sha256=ref.sha256, actor=actor,
                           expires_in_s=s["expires_in_s"])
         return {"status": "ok", "session": s, "receipt_id": r["receipt_id"], "doc_id": doc_id, "version": ref.version}
@@ -136,7 +183,7 @@ class DocumentService(GovernedWriteMixin):
         self._gate(tenant, doc_id, ref.sha256, approval_token=transmit_approval, actor=actor,
                    op="export" if export else "convert")
         ref, _ = self._ref(tenant, doc_id, ref.version, with_url=True)
-        out = (self.backend.export if export else self.backend.convert)(ref, fmt)
+        out = self._editor(tenant, self.backend.export if export else self.backend.convert, ref, fmt)
         if sha256_hex(out.content) != out.sha256:
             raise VerificationFailed("editor output hash mismatch")
         art_id = f"{'exports' if export else 'converted'}/{doc_id}.v{ref.version}.{fmt.lower()}"
@@ -183,3 +230,25 @@ class DocumentService(GovernedWriteMixin):
         if p["k"] == "document":
             self._receipt(p["t"], "content_served", doc_id=p["d"], version=p["v"], sha256=p["h"])
         return data, p.get("m", "application/octet-stream")
+
+    # ── classification labels ───────────────────────────────────────────────────────────────────────────────
+    def set_label(self, tenant: str, doc_id: str, label: str, *, approval: dict, actor: str = "",
+                  mission_ref: Optional[dict] = None) -> dict:
+        """Set a document's classification label. ALWAYS human-approved (the caller refuses without a verified
+        approval); a downgrade (looser effective label) is flagged in the receipt. Read back before success."""
+        lab = normalize_label(label)
+        if lab is None:
+            raise InvalidInput("label must be one of " + ", ".join(LABELS))
+        self._tenant(tenant)
+        info = self.store.head(tenant, doc_id)                       # registers the document, validates the id
+        prev = self.store.get_classification(tenant, doc_id)
+        self.store.set_classification(tenant, doc_id, lab)
+        if self.store.get_classification(tenant, doc_id) != lab:
+            raise VerificationFailed("label failed read-back")
+        down = LABELS.index(lab) < LABELS.index(effective_label(prev))
+        r = self._receipt(tenant, "set_label", doc_id=doc_id, version=info.version, sha256=info.sha256,
+                          previous_label=prev, label=lab, downgrade=down, actor=actor,
+                          approval_ref={"marker": {k: approval.get(k) for k in ("by", "approved") if k in approval},
+                                        "mission": (mission_ref or {}).get("mission_id")})
+        return {"status": "ok", "executed": True, "verified": True, "label": lab, "previous_label": prev,
+                "downgrade": down, "doc_id": doc_id, "receipt_id": r["receipt_id"]}

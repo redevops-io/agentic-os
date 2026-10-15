@@ -27,9 +27,10 @@ def test_registers_conformantly_with_a_verifier_per_side_effecting_capability(op
     m = reg.manifest
     assert m.name == "document-editor" and m.verified_capabilities() <= m.capability_names()
     side = {c.name for c in op.manifest.capabilities if c.side_effecting}
-    assert side == {"document.convert", "document.export", "document.apply_patch", "document.publish"}
+    assert side == {"document.convert", "document.export", "document.apply_patch", "document.publish",
+                    "document.set_label"}
     assert m.verified_capabilities() == side
-    assert m.deploy.approval == ("apply_patch", "publish")
+    assert m.deploy.approval == ("apply_patch", "publish", "set_label")
 
 
 def test_reads_do_not_have_side_effects_and_proposals_never_mutate(op):
@@ -39,7 +40,7 @@ def test_reads_do_not_have_side_effects_and_proposals_never_mutate(op):
 
 
 def test_writes_that_change_or_publish_a_document_require_human_approval(op):
-    for n in ("apply_patch", "publish"):
+    for n in ("apply_patch", "publish", "set_label"):
         s = spec(op, f"document.{n}")
         assert s.side_effecting and s.approval_required, n
         assert s.required_authority, n

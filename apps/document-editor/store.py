@@ -40,6 +40,7 @@ _BAD_CHARS = re.compile(r'[<>:"|?*\x00-\x1f\x7f\\]')
 _TILDE_ALIAS = re.compile(r"~[0-9]")
 MAX_SEGMENT, MAX_PATH = 255, 1024
 FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+MAX_FILE_BYTES = 64 * 1024 * 1024
 
 
 def sha256_hex(data: bytes) -> str:
@@ -83,11 +84,21 @@ def safe_rel_path(doc_id: str) -> str:
             raise InvalidPath("segments may not start with a space or end with a dot or space")
         if _BAD_CHARS.search(seg):
             raise InvalidPath("reserved characters in path segment")
-        if _WIN_RESERVED.match(seg):
+        if _WIN_RESERVED.match(seg.split(".", 1)[0].rstrip(" ")) or _WIN_RESERVED.match(seg):
             raise InvalidPath(f"reserved Windows device name {seg!r}")
         if _TILDE_ALIAS.search(seg):
             raise InvalidPath("8.3 short-name aliases are not allowed")
     return "/".join(segments)
+
+
+def canonical_id(doc_id: str) -> str:
+    """The ONE identity of a document: validated, NFC, case-folded. Windows/macOS file systems are case-insensitive,
+    so ``Secret.docx`` and ``secret.docx`` are the same document and must share label, versions and lock."""
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFC", safe_rel_path(doc_id)).casefold())
+
+
+def canonical_id_segment(name: str) -> str:
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFC", name).casefold())
 
 
 def _is_link_or_reparse(p: Path) -> bool:
@@ -149,7 +160,8 @@ class DocumentStore(ABC):
 
 
 class LocalFSStore(DocumentStore):
-    def __init__(self, root: "str | os.PathLike"):
+    def __init__(self, root: "str | os.PathLike", max_bytes: int = MAX_FILE_BYTES):
+        self.max_bytes = max_bytes
         self.root = Path(root)
         if not self.root.is_dir():
             raise NotFound(f"document root {self.root} is not a directory")
@@ -171,15 +183,32 @@ class LocalFSStore(DocumentStore):
             raise InvalidPath("path escapes the document root") from None
         return real
 
-    def _source_path(self, tenant: str, doc_id: str) -> Path:
+    def _resolve(self, tenant: str, doc_id: str) -> "tuple[Path, str]":
+        """Path of the real on-disk file plus its real-case relative id. Each segment is matched exactly, else
+        case-insensitively; two entries that differ only by case (or Unicode form) make the id AMBIGUOUS and are
+        refused (they would otherwise share one identity)."""
         rel = safe_rel_path(doc_id)
         cur = self._tenant_dir(tenant)
+        real: list = []
         for seg in rel.split("/"):
-            cur = cur / seg
+            want = canonical_id_segment(seg)
+            try:
+                names = os.listdir(cur)
+            except OSError:
+                names = []
+            hits = [n for n in names if canonical_id_segment(n) == want]
+            if len(hits) > 1:
+                raise InvalidPath("ambiguous document id: several entries differ only by case")
+            name = hits[0] if hits else seg
+            cur = cur / name
+            real.append(name)
             if _is_link_or_reparse(cur):
                 raise InvalidPath("symlinks / junctions inside the document tree are refused")
         self._contained(cur)
-        return cur
+        return cur, "/".join(real)
+
+    def _source_path(self, tenant: str, doc_id: str) -> Path:
+        return self._resolve(tenant, doc_id)[0]
 
     def _side(self, tenant: str) -> Path:
         d = self._tenant_dir(tenant) / SIDECAR
@@ -189,7 +218,7 @@ class LocalFSStore(DocumentStore):
 
     @staticmethod
     def _key(doc_id: str) -> str:
-        return sha256_hex(safe_rel_path(doc_id).encode("utf-8"))
+        return sha256_hex(canonical_id(doc_id).encode("utf-8"))
 
     def _manifest_path(self, tenant: str, doc_id: str) -> Path:
         return self._side(tenant) / "manifests" / (self._key(doc_id) + ".json")
@@ -227,8 +256,13 @@ class LocalFSStore(DocumentStore):
         p = self._source_path(tenant, doc_id)
         if not p.is_file():
             raise NotFound(f"document {doc_id!r} not found")
+        if p.stat().st_size > self.max_bytes:
+            raise InvalidPath(f"document exceeds the {self.max_bytes} byte store limit")
         with open(p, "rb") as f:
-            return f.read()
+            data = f.read(self.max_bytes + 1)
+        if len(data) > self.max_bytes:
+            raise InvalidPath(f"document exceeds the {self.max_bytes} byte store limit")
+        return data
 
     def _vi(self, tenant: str, doc_id: str, v: dict) -> VersionInfo:
         return VersionInfo(doc_id=doc_id, tenant=tenant, version=v["version"], sha256=v["sha256"], size=v["size"],
@@ -242,7 +276,7 @@ class LocalFSStore(DocumentStore):
         data = self._read_source_bytes(tenant, doc_id)
         sha = sha256_hex(data)
         if m is None:
-            m = {"doc_id": safe_rel_path(doc_id), "counter": 0, "origin_sha256": "", "versions": [],
+            m = {"doc_id": self._resolve(tenant, doc_id)[1], "counter": 0, "origin_sha256": "", "versions": [],
                  "classification": None}
         if m["origin_sha256"] != sha:
             self._write_blob(tenant, data)
@@ -277,7 +311,10 @@ class LocalFSStore(DocumentStore):
             (v for v in m["versions"] if v["version"] == version), None)
         if chosen is None:
             raise NotFound(f"version {version} of {doc_id!r} not found")
-        data = self._blob_path(tenant, chosen["sha256"]).read_bytes()
+        bp = self._blob_path(tenant, chosen["sha256"])
+        if bp.stat().st_size > self.max_bytes:
+            raise InvalidPath("stored version exceeds the store size limit")
+        data = bp.read_bytes()
         if sha256_hex(data) != chosen["sha256"]:
             raise Conflict(f"blob for {doc_id!r} v{chosen['version']} failed its hash check (corrupt store)")
         return data, self._vi(tenant, doc_id, chosen)

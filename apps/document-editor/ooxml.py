@@ -55,9 +55,24 @@ def _read_part(z: zipfile.ZipFile, name: str) -> bytes:
     return raw
 
 
+def _has_dtd(raw: bytes) -> bool:
+    """Scan the ENTIRE (size-capped) part, in its raw bytes and, for UTF-16/32 parts, in the decoded text."""
+    low = raw.lower()
+    if b"<!doctype" in low or b"<!entity" in low:
+        return True
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff") or raw[:4] in (b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff") or b"\x00" in raw[:64]:
+        for enc in ("utf-16", "utf-16-le", "utf-16-be", "utf-32"):
+            try:
+                t = raw.decode(enc, "ignore").lower()
+            except Exception:  # noqa: BLE001
+                continue
+            if "<!doctype" in t or "<!entity" in t:
+                return True
+    return False
+
+
 def _parse(raw: bytes) -> ET.Element:
-    head = raw[:4096].lower()
-    if b"<!doctype" in head or b"<!entity" in raw[:65536].lower():
+    if _has_dtd(raw):
         raise InvalidInput("XML with a DTD / entity declaration is refused")
     try:
         return ET.fromstring(raw)
@@ -178,3 +193,35 @@ def describe(data: bytes, filename: str) -> dict:
             paras = docx_paragraphs(data)
             info.update(paragraphs=len(paras), characters=sum(len(p) for p in paras), **docx_revisions(data))
     return info
+
+
+# ── out-of-scope parts: headers, footers, notes, comments, relationships ───────────────────────────────────────
+_AUX = re.compile(r"^word/(header|footer|comments|footnotes|endnotes)[^/]*\.xml$")
+REL = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+
+
+def docx_aux_texts(data: bytes) -> "list[str]":
+    """Sorted, non-empty texts of header/footer/comment/footnote/endnote parts (part names are not compared: an
+    editor may renumber them)."""
+    z = _zip(data)
+    out = []
+    for name in sorted(z.namelist()):
+        if _AUX.match(name):
+            root = _parse(_read_part(z, name))
+            t = "\n".join("".join(x.text or "" for x in p.iter(f"{W}t")) for p in root.iter(f"{W}p")).strip()
+            if t:
+                out.append(t)
+    return sorted(out)
+
+
+def external_targets(data: bytes) -> "list[str]":
+    """Every EXTERNAL relationship target (hyperlinks, linked images, remote templates...) in the package."""
+    z = _zip(data)
+    out = []
+    for name in z.namelist():
+        if name.endswith(".rels"):
+            root = _parse(_read_part(z, name))
+            for r in root.iter(f"{REL}Relationship"):
+                if (r.get("TargetMode") or "").lower() == "external":
+                    out.append(r.get("Target") or "")
+    return sorted(out)

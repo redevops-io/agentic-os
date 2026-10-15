@@ -22,6 +22,13 @@ editor's responses, any URL it returns, callers without a valid token.
 | 14 | Content-URL theft | HMAC-signed, document+version+hash+backend bound, <= 5 min, bytes re-hashed on every read; the URL is the one unavoidable bearer |
 | 15 | Uninstall damaging customer data | the connector contains no document deletion; uninstall removes only marker-guarded connector state (`test_injection_lifecycle`) |
 
+Additional controls (review of #458): case-folded document identity; sources are structurally validated and size-capped
+before every transmit; a circuit breaker and a per-tenant concurrency limit protect against editor hangs/crashes; the
+total request deadline is enforced at socket level; edit results are checked for out-of-scope changes (headers, footers,
+comments, notes, external links) and the patch digest is re-derived from the stored ops; idempotency keys are bound to one
+proposal. **Prompt-injection tests are structural**: the service contains no LLM, so they prove that no code path turns
+document text into a capability call, approval or destination - not that a downstream agent is immune.
+
 Known residual risks: per-process replay guard / content signing key (single replica, as for every operator);
 the content URL is a bearer for <= 5 minutes; XMLHttpRequest exists inside the editor's script runtime and the JWT-signed
 builder is network-privileged by design (only our fixed templates run); revision marks carry no author.
