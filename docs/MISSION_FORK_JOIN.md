@@ -187,6 +187,8 @@ publishes nothing, and the successful work remains visible (not deleted, not com
     nothing, report succeeded branches as `not_compensated` and consequential ones without a declared undo as
     `not_reversible`. (#450's `FailureAction.cancel_siblings` is not used to cancel completed or in-flight
     work; completed work is never cancelled.)
+  * `PRESERVE_ONLY`: like `HALT_AND_REPORT`, but succeeded branches whose capability declares `disposition=CLEANUP`
+    (temporary resources, with preconditions + authorization) are compensated; everything else is kept.
   * `COMPENSATE_DECLARED`: the controller runs `compensation_runner._compensate_node` for each succeeded
     branch the policy named (reverse order), so every one gets its own `CompensationRequested/Authorized/
     Executed/Verified|Failed` events and receipt, under `{branch idempotency key}:undo`, once (folded status

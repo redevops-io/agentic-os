@@ -1251,7 +1251,8 @@ class ForkJoinController:
                     "side_effecting": bool(getattr(cap, "side_effecting", False)),
                     "undo": _comp.declared_undo(cap) if cap is not None else None,
                     "irreversible": bool(getattr(cap, "irreversible", False)),
-                    "disposition": "PRESERVE" if (cap is not None and _comp.is_preserved(cap)) else ""}
+                    "disposition": "PRESERVE" if (cap is not None and _comp.is_preserved(cap))
+                    else "CLEANUP" if (cap is not None and _comp.is_cleanup(cap)) else ""}
             return {"id": b.branch_id, "status": b.status, "nodes": [node] if nodes else []}
         ordered = st.ordered()
         failed = next((b for b in ordered if b.status == "failed"),

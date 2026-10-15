@@ -136,6 +136,10 @@ def launch(spec: dict, *, run: Runner = _run) -> dict:
         "cloud": _grep(out, r"Launching on ([A-Za-z][\w-]*)") or pinned.get("cloud"),
         "region": pinned.get("region"), "instance": chosen.get("instance"),
         "endpoint": _grep(out, r"(https?://\S+)"), "spot": bool(spec.get("spot")),
+        # the sky.optimize ESTIMATE of the approved placement (None when launched without one): lets a failed
+        # mission report what the still-provisioned cluster costs; never a measured bill (see COMPENSATION.md)
+        "hourly_usd": chosen.get("hourly_usd"), "est_monthly_usd": chosen.get("est_monthly_usd"),
+        "cost_basis": "sky.optimize estimate of the approved placement" if chosen.get("hourly_usd") is not None else "",
         # measured signal for the placement reward loop (see learn.PlacementLedger)
         "time_to_ready_s": round(time.monotonic() - t0, 1),
         "failed_over": bool(re.search(r"fail(?:ing|ed)?\s+over|retrying on|trying next", out or "", re.I)),

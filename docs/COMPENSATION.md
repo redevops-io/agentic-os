@@ -63,12 +63,15 @@ A `compensation` dict is validated fail-closed (unknown keys, `supported` withou
 | Policy | Behaviour |
 |---|---|
 | `HALT_AND_REPORT` | stop; compensate nothing; succeeded effects are reported (`not_compensated`, `not_reversible`) |
+| `PRESERVE_ONLY` | `HALT_AND_REPORT` plus: ONLY capabilities that declare `disposition: "CLEANUP"` (a temporary lock/staging resource, with `preconditions` and an `authorization_policy`) are cleaned up; every other successful effect is kept (section 10). Default of the kernel templates `onboarding`, `deploy_app`, `sky_deploy` |
 | `COMPENSATE_DECLARED` | compensate completed steps that DECLARE a compensating capability, reverse order; irreversible steps are never "compensated", only listed |
 | `CONTINUE_SIBLINGS` | let sibling branches finish; compensate nothing automatically |
 
 Resolution (`effective_policy`): the mission's own `failure_policy` (`create_mission(failure_policy=...)`), then
-the template default (`templates.TEMPLATE_FAILURE_POLICY`), then the deployment-wide escape hatch
-`AGENTIC_OS_DEFAULT_FAILURE_POLICY`, then **`HALT_AND_REPORT`**. **Nothing is undone automatically by default**
+the deployment-wide `AGENTIC_OS_DEFAULT_FAILURE_POLICY` (an explicit deployment decision; it beats the template
+table, so `COMPENSATE_DECLARED` there opts every workflow back in and `HALT_AND_REPORT` there also disables the
+`PRESERVE_ONLY` cleanup), then the template default (`templates.TEMPLATE_FAILURE_POLICY`: the three kernel templates
+are `PRESERVE_ONLY`), then **`HALT_AND_REPORT`**. **Nothing is undone automatically by default**
 (sequential missions included); `COMPENSATE_DECLARED` is an explicit per-mission / per-template / per-deployment
 opt-in, and even then only steps that declare a compensating capability are touched. Fork branches ignore the
 template and deployment defaults (only the mission's own opt-in applies). An unrecognised value fails safe to
@@ -215,6 +218,9 @@ Behaviour changes in this PR: (1) sequential missions no longer undo anything by
 no longer "verified" (it is `compensated_unverified`); (3) `COMPENSATION_FAILED` is a new state; (4) idempotency
 keys are `{key}:undo:{attempt}`; (5) an undo naming an unregistered capability is not invoked.
 
+**Superseded by section 10:** the kernel templates `onboarding`, `deploy_app` and `sky_deploy` no longer opt in to
+`COMPENSATE_DECLARED`; they default to `PRESERVE_ONLY`. The paragraph below records the original 0.3.x opt-ins.
+
 **Explicit opt-ins added (so existing flows keep their saga):** templates `onboarding` and `deploy_app`
 (`TEMPLATE_FAILURE_POLICY`); tests `test_mission::test_saga_compensation_on_failure`,
 `test_kernel_verify_launcher_saga` (`_saga_rt`), `test_approval_token` (`_saga_http`); the Go port's `onboarding`
@@ -230,8 +236,7 @@ and `deploy_app` templates and its two saga tests.
 | video | `video.unpublish` |
 | enterprise | `compliance.revert_fix`; enterprise demo/pilot missions |
 
-Opted in: `onboarding`, `deploy_app` and `sky_deploy` (`sky.launch`/`sky.serve` declare registered, reversible,
-approval-gated undos `sky.down`/`sky.serve_down`; opted in for consistency with `deploy_app`). **Recommendation:**
+Opted in at the time (reversed in section 10): `onboarding`, `deploy_app` and `sky_deploy`. **Recommendation:**
 make an explicit per-workflow decision - opt a template in (`TEMPLATE_FAILURE_POLICY` or `failure_policy=`) only
 once its undo capabilities are registered, declared reversible and have a `verify`; otherwise leave it on
 HALT_AND_REPORT. A FAILED mission that kept reversible effects lists them in `outcome.not_compensated`
@@ -318,9 +323,67 @@ step itself may have partly executed: its effect is unknown to the log and is no
   side-effecting node settles the outcome and records `EffectsRetained`.
 * Precondition invocations are bounded by `AGENTIC_OS_PRECONDITION_TIMEOUT_S` (default 30s); a timeout fails closed.
 * Kernel apps: `sentinel.block_ip` (a completed security action) is now `PRESERVE`; lifting a block is the separate,
-  approved `sentinel.unblock_ip`. `infra.provision/configure`, `sky.launch/serve` stay reversible+approval-gated and the
-  kernel templates `onboarding`, `deploy_app`, `sky_deploy` keep their kernel opt-in (`TEMPLATE_FAILURE_POLICY`):
-  **changing kernel template defaults is out of scope here**. The enterprise overlay pulls all three back to
-  `HALT_AND_REPORT` (enterprise `docs/COMPENSATION_POLICY.md`); reconcile them in the kernel when the owner decides.
-* **Go port** (`go/mission`): ignores `disposition=PRESERVE`, `preconditions` and `authorization_policy`, and still
-  auto-compensates any node with `Undo`; do not rely on it for per-action selection.
+  approved `sentinel.unblock_ip`. `infra.provision/configure`, `sky.launch/serve` stay reversible+approval-gated. The
+  kernel template defaults were decided by the owner and are now `PRESERVE_ONLY` (section 10); the enterprise overlay
+  (`HALT_AND_REPORT`, enterprise `docs/COMPENSATION_POLICY.md`) remains stricter by also skipping the CLEANUP step.
+* **Go port** (`go/mission`): ignores `disposition=PRESERVE|CLEANUP`, `preconditions` and `authorization_policy`, and
+  still auto-compensates any node with `Undo` WHEN the policy is `COMPENSATE_DECLARED`; do not rely on it for per-action
+  selection. Its policy gate agrees with Python on the template defaults (section 10).
+
+## 10. Kernel template defaults: `PRESERVE_ONLY`
+
+Owner decision (after 0.3.32; version not bumped here): **a failed workflow does not imply its successful actions should be undone.**
+`templates.TEMPLATE_FAILURE_POLICY` sets `onboarding`, `deploy_app` and `sky_deploy` to `PRESERVE_ONLY`
+(previously `COMPENSATE_DECLARED`). Mirrored in `go/mission/compensation_policy.go` (`TemplateFailurePolicy`).
+
+**Behaviour on failure (no implicit rollback):**
+
+| Template | Preserved (never auto-reversed) | Reported |
+|---|---|---|
+| `onboarding` | created accounts/subscriptions, configurations, completed setup steps | incomplete onboarding: `incomplete_steps`, `recovery_actions` |
+| `deploy_app` | successfully applied/configured resources; a working deployment is NOT rolled back because verify (or a later step) fails | `retained_effects` (`left_by_policy`), `incomplete_steps` |
+| `sky_deploy` | provisioned clusters/services and successful steps | `retained_costs`: each still-provisioned resource with identifiers and the estimated cost, or `cost_known: false` / `null` (never an invented number) |
+
+**Cleanup of temporary resources stays possible.** `disposition: "CLEANUP"` (`CompensationSpec`) marks a preparatory
+action whose effect is a temporary resource the mission itself created (lock, staging file/dir). Under `PRESERVE_ONLY`
+only such actions are handed to the normal compensation runner, which still applies the per-action machinery: the
+declared `preconditions` (independently safe NOW, fail closed), the declared `authorization_policy` (`HUMAN_APPROVAL`
+parks for a human; `EVIDENCE_BOUND` only for a mission-owned artifact), its own idempotency key, receipt and
+verification. `CLEANUP` is rejected unless `supported`, `preconditions` and an authorization policy are declared, and it
+cannot be combined with `incurs_ongoing_cost`. A capability that declares nothing is never cleaned up. The kernel apps
+declare no CLEANUP actions today (their effects are the deliverable); the mechanism exists for fleets that stage
+temporary resources. `HALT_AND_REPORT` compensates nothing at all, CLEANUP included.
+
+**Partial completion is visible.** Besides `retained_effects`, `incomplete_steps` and `partially_completed`, the outcome
+(and the `EffectsRetained` log record and the `effects_left_in_place` needs-you item) now carries `completed_steps`
+(steps still DONE; a cleaned-up temporary step is listed under `compensated` instead), `recovery_actions`
+(`retry_or_resume_incomplete_steps`, `decide_explicit_compensation`, `manual_remediation_if_unwanted`) and, for
+capabilities declaring `compensation.incurs_ongoing_cost` (`infra.provision`, `sky.launch`, `sky.serve`),
+`retained_costs` = `{resources: [{node_id, capability, resource{cluster|service|...}, estimated_hourly_usd,
+estimated_monthly_usd, cost_known, cost_source, action_to_stop_cost}], estimated_hourly_usd, estimated_monthly_usd,
+unknown_cost_resources, complete}`. The estimate is read ONLY from the forward result (`sky.launch` echoes the
+`hourly_usd`/`est_monthly_usd` of the approved `chosen` candidate from `sky.optimize`; it is an estimate, not a bill).
+The kernel template flow does not thread `chosen` into `sky.launch`, so there the cost is reported as unknown unless a
+deployment's planner supplies it; totals sum only the known entries and `complete` says whether any is unknown.
+
+**Retries are idempotent.** A FAILED/COMPENSATION_FAILED mission is terminal for `run()` (no completed step is
+re-dispatched); a restarted runtime rehydrates `done` nodes from the log and resumes only the unfinished ones; every
+forward dispatch carries the node's stable idempotency key. Verified by counting-client tests outside the log
+(`tests/test_deploy_mission.py`, `tests/test_onboarding_real.py`, `apps/sky/test_sky_deploy_preserve.py`). There is no
+"retry a FAILED mission" entry point today: re-doing the unfinished work is a new, human-initiated mission.
+
+**Compensation stays opt-in.** `create_mission(failure_policy="COMPENSATE_DECLARED")` for one mission, or
+`AGENTIC_OS_DEFAULT_FAILURE_POLICY=COMPENSATE_DECLARED` for a deployment, restores the old behaviour, and each
+reversal still needs its own authorization (`requires_approval` parks it; `sky.down`/`infra.destroy_delta` are
+approval-gated).
+
+### Migration table (0.3.32 -> next)
+
+| Was | Now |
+|---|---|
+| `onboarding`/`deploy_app`/`sky_deploy` failure undid completed steps automatically (reverse order) | kept; reported as partially completed; undo only on explicit opt-in |
+| tests asserting `CompensationExecuted` for these templates | assert preservation + `retained_effects`/`completed_steps`/`incomplete_steps`; separate explicit-opt-in tests keep the old assertions |
+| env `AGENTIC_OS_DEFAULT_FAILURE_POLICY` lower priority than the template table | higher: it now also opts the kernel templates in (or out) |
+| outcome keys | + `completed_steps`, `recovery_actions`, `retained_costs`; `EffectsRetained` payload carries them |
+| `CompensationSpec` | + `disposition: CLEANUP`, + `incurs_ongoing_cost` |
+| Go port | `onboarding`, `deploy_app`, `sky_deploy` -> `PRESERVE_ONLY` (Go compensates only under `COMPENSATE_DECLARED`; CLEANUP/PRESERVE/preconditions still ignored) |

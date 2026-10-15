@@ -490,12 +490,17 @@ def test_unknown_policy_fails_safe_and_defaults_by_topology():
 def test_default_policy_env_template_and_mission_precedence(monkeypatch):
     class T(_M):
         template = "deploy_app"
-    assert effective_policy(T()) is FailurePolicy.COMPENSATE_DECLARED          # template-level opt-in
+    assert effective_policy(T()) is FailurePolicy.PRESERVE_ONLY                # kernel template default: preserve
+    for tpl in ("onboarding", "deploy_app", "sky_deploy"):
+        class K(_M):
+            template = tpl
+        assert effective_policy(K()) is FailurePolicy.PRESERVE_ONLY
     class U(_M):
         template = "invoice_recovery"
     assert effective_policy(U()) is FailurePolicy.HALT_AND_REPORT
     monkeypatch.setenv("AGENTIC_OS_DEFAULT_FAILURE_POLICY", "COMPENSATE_DECLARED")  # deployment escape hatch
     assert effective_policy(U()) is FailurePolicy.COMPENSATE_DECLARED
+    assert effective_policy(T()) is FailurePolicy.COMPENSATE_DECLARED          # explicit deployment opt-in beats the table
     assert effective_policy(U(), forked=True) is FailurePolicy.HALT_AND_REPORT     # forks never inherit it
     explicit = U()
     explicit.failure_policy = "HALT_AND_REPORT"

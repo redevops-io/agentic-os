@@ -25,7 +25,8 @@ from .verify import is_staged, result_failed
 
 OUTCOME_KEYS = ("compensation_incomplete", "compensation_remaining", "compensated", "compensated_unverified",
                 "compensation_acknowledged", "compensation_skipped", "not_reversible", "not_compensated",
-                "rolled_back", "failure_policy", "partially_completed", "retained_effects", "incomplete_steps")
+                "rolled_back", "failure_policy", "partially_completed", "retained_effects", "incomplete_steps",
+                "completed_steps", "recovery_actions", "retained_costs")
 APPROVAL_TTL_S = 3600
 
 _LOCKS: dict[tuple, threading.Lock] = {}
@@ -124,14 +125,25 @@ def _check_preconditions(rt, m, node, spec, forward_result, attempt, phase) -> s
     return ""
 
 
+def _policy_allows(policy, spec) -> bool:
+    """May this completed action be considered for compensation under ``policy``? COMPENSATE_DECLARED: any declared
+    undo. PRESERVE_ONLY: ONLY a capability that declares ``disposition=CLEANUP`` (a temporary resource; coerce()
+    guarantees it also declares preconditions + an authorization policy). Everything else is preserved."""
+    if policy is FailurePolicy.COMPENSATE_DECLARED:
+        return True
+    return policy is FailurePolicy.PRESERVE_ONLY and spec is not None and C.is_cleanup(spec)
+
+
 def run_saga(rt, m, plan) -> None:
     store = rt.store
     status = rt.repo.node_status(m.id)
     policy = effective_policy(m, forked=is_forked(plan))
     forward_caps = {n.capability for n in plan.graph.nodes}
-    if policy is FailurePolicy.COMPENSATE_DECLARED:
+    if policy in (FailurePolicy.COMPENSATE_DECLARED, FailurePolicy.PRESERVE_ONLY):
         for node in reversed(plan.graph.nodes):
             if status.get(node.id) != NodeState.DONE or not node.side_effecting or not node.undo:
+                continue
+            if not _policy_allows(policy, rt.registry.get(node.capability)):
                 continue
             with _lock(m.id, node.id):
                 _compensate_node(rt, m, node, policy, forward_caps)
@@ -258,7 +270,7 @@ def compute_outcome(rt, m, plan) -> dict:
                              ("irreversible" if cls is C.Reversibility.IRREVERSIBLE else "undeclared_reversibility"),
                              "detail": _note(spec)})
             continue
-        if preserved or policy is not FailurePolicy.COMPENSATE_DECLARED:
+        if preserved or not _policy_allows(policy, spec):
             not_compensated.append(node.id)
             retained.append({"node_id": node.id, "capability": node.capability,
                              "reason": "preserved_by_declaration" if preserved else "left_by_policy",
@@ -304,12 +316,85 @@ def compute_outcome(rt, m, plan) -> dict:
         out["partially_completed"] = bool(incomplete)
         if incomplete:
             out["incomplete_steps"] = incomplete
+            out["completed_steps"] = [{"node_id": n.id, "capability": n.capability,
+                                       "side_effecting": bool(n.side_effecting)}
+                                      for n in plan.graph.nodes if status.get(n.id) == NodeState.DONE]
+            out["recovery_actions"] = _recovery_actions(plan, incomplete, retained)
+        costs = _retained_costs(rt, m, plan, retained)
+        if costs:
+            out["retained_costs"] = costs
     # `rolled_back` only when every executed consequential effect was VERIFIED undone by a real read-back and
     # nothing is left over (unverified, failed, acknowledged-as-remaining, irreversible, preserved or left).
     out["rolled_back"] = bool(s["compensated"] and s["readback_only"]
                               and not (remaining or s["compensated_unverified"] or s["compensation_acknowledged"]
                                        or not_reversible or not_compensated or retained))
     return out
+
+
+_ID_KEYS = ("cluster", "service", "target", "resource_id", "resource", "instance_id", "stack", "name", "endpoint")
+_HOURLY_KEYS = ("hourly_usd", "estimated_hourly_usd")
+_MONTHLY_KEYS = ("est_monthly_usd", "estimated_monthly_usd")
+
+
+def _num(v) -> "float | None":
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0 else None
+
+
+def _retained_costs(rt, m, plan, retained: list[dict]) -> dict:
+    """Resources still provisioned (and costing money) after a failed mission: only for retained effects whose
+    capability declares ``compensation.incurs_ongoing_cost``. Cost comes ONLY from the forward result
+    (``hourly_usd`` / ``est_monthly_usd``, e.g. the sky.optimize estimate that was approved); when the result carries
+    none the cost is reported as UNKNOWN (``null`` + ``cost_known: false``) - a number is never invented."""
+    items: list[dict] = []
+    for r in retained:
+        node = plan.graph.by_id(r["node_id"])
+        spec = rt.registry.get(node.capability) if node is not None else None
+        if spec is None or not C.incurs_ongoing_cost(spec):
+            continue
+        try:
+            res = (rt._compensation_evidence(m.id, node.id) or {}).get("result")
+        except Exception:  # noqa: BLE001
+            res = None
+        res = res if isinstance(res, dict) else {}
+        ids = {k: res[k] for k in _ID_KEYS if res.get(k) not in (None, "", [], {})}
+        hourly = next((v for v in (_num(res.get(k)) for k in _HOURLY_KEYS) if v is not None), None)
+        monthly = next((v for v in (_num(res.get(k)) for k in _MONTHLY_KEYS) if v is not None), None)
+        if hourly is None and monthly is not None:
+            hourly = round(monthly / 730, 4)
+        if monthly is None and hourly is not None:
+            monthly = round(hourly * 730, 2)
+        items.append({"node_id": node.id, "capability": node.capability, "resource": ids,
+                      "estimated_hourly_usd": hourly, "estimated_monthly_usd": monthly,
+                      "cost_known": hourly is not None,
+                      "cost_source": "forward result (approved estimate)" if hourly is not None else "unknown",
+                      "action_to_stop_cost": node.undo or "",
+                      "note": "still provisioned; teardown is a separate, explicitly authorized action"})
+    if not items:
+        return {}
+    known = [i["estimated_hourly_usd"] for i in items if i["cost_known"]]
+    return {"resources": items,
+            "estimated_hourly_usd": round(sum(known), 4) if known else None,
+            "estimated_monthly_usd": round(sum(i["estimated_monthly_usd"] for i in items if i["cost_known"]), 2)
+            if known else None,
+            "unknown_cost_resources": [i["node_id"] for i in items if not i["cost_known"]],
+            "complete": all(i["cost_known"] for i in items)}
+
+
+def _recovery_actions(plan, incomplete: list[dict], retained: list[dict]) -> list[dict]:
+    """What a human/operator must decide next. Never a rollback: reversing a preserved effect is a NEW decision."""
+    acts = [{"action": "retry_or_resume_incomplete_steps", "steps": [i["node_id"] for i in incomplete],
+             "detail": "re-run only the steps that never finished; completed steps are not repeated"}]
+    reversible = [r["node_id"] for r in retained if r.get("reason") == "left_by_policy"]
+    if reversible:
+        acts.append({"action": "decide_explicit_compensation", "steps": reversible,
+                     "detail": "retained by policy; undoing them needs an explicit failure_policy opt-in "
+                               "(or a separate forward action) plus its own authorization"})
+    other = [r["node_id"] for r in retained if r.get("reason") in ("irreversible", "undeclared_reversibility",
+                                                                  "preserved_by_declaration")]
+    if other:
+        acts.append({"action": "manual_remediation_if_unwanted", "steps": other,
+                     "detail": "not reversible by the system, or declared PRESERVE"})
+    return acts
 
 
 def _record_retained(rt, m, outcome: dict) -> None:
@@ -320,11 +405,14 @@ def _record_retained(rt, m, outcome: dict) -> None:
         return
     last = next((e.payload for e in reversed(rt.store.for_mission(m.id)) if e.type == C.EV_RETAINED), None)
     if last is not None and last.get("retained_effects") == retained and \
-            last.get("incomplete_steps") == outcome.get("incomplete_steps"):
+            last.get("incomplete_steps") == outcome.get("incomplete_steps") and \
+            last.get("retained_costs") == (outcome.get("retained_costs") or {}):
         return
     rt.store.append(C.EV_RETAINED, m.id, {
         "partially_completed": bool(outcome.get("partially_completed")), "retained_effects": retained,
-        "incomplete_steps": outcome.get("incomplete_steps") or [], "failure_policy": outcome.get("failure_policy")})
+        "incomplete_steps": outcome.get("incomplete_steps") or [], "failure_policy": outcome.get("failure_policy"),
+        "completed_steps": outcome.get("completed_steps") or [], "recovery_actions": outcome.get("recovery_actions") or [],
+        "retained_costs": outcome.get("retained_costs") or {}})
 
 
 def settle(rt, m, plan) -> None:
@@ -445,5 +533,8 @@ def attention_items(rt, mission_id: str) -> list[dict]:
                       "not_compensated": left, "not_reversible": list(out.get("not_reversible") or []),
                       "retained_effects": list(out.get("retained_effects") or []),
                       "incomplete_steps": list(out.get("incomplete_steps") or []),
+                      "completed_steps": list(out.get("completed_steps") or []),
+                      "recovery_actions": list(out.get("recovery_actions") or []),
+                      "retained_costs": dict(out.get("retained_costs") or {}),
                       "decisions": ["manual_remediation", "escalate"]})
     return items

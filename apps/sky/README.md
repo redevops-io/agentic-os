@@ -16,7 +16,7 @@ decision is an ordinary mission — gated, evidence-backed, saga-rolled-back. It
 | `sky.status` | `sky status` | read-only — the monitor's utilization read |
 
 `build_sky_operator(run=…)` injects the command runner (wire the real `sky` CLI; the default calls it
-directly). The `sky_deploy` mission template runs check → optimize → **[approval]** → launch → verify.
+directly). The `sky_deploy` mission template runs check → optimize → **[approval]** → launch → verify. The template is `PRESERVE_ONLY`: a failed verify keeps the provisioned cluster and reports it with its estimated cost (or "unknown"); `sky.down` runs only on an explicit opt-in and its own approval (docs/COMPENSATION.md, section 10).
 
 **Self-learning:** `sky.launch` returns the *measured* placement outcome (real cost, capacity,
 preemption, time-to-ready) — recorded as the reward signal a future placement optimizer will learn from,

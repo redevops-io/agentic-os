@@ -102,3 +102,12 @@ def test_hook_cannot_widen_the_mission_policy_into_compensation():
     op.fail_caps = {"w.flaky"}
     rt.forks.run_fork(m.id, _fork())
     assert _undo_calls(op) == []
+
+
+def test_preserve_only_keeps_succeeded_branches_like_halt():
+    rt, op, m = _setup("PRESERVE_ONLY")
+    assert _undo_calls(op) == [] and m.state == MissionState.FAILED
+    assert not any(x.startswith("Compensation") or x == "NodeCompensated" for x in types(rt, m.id))
+    assert m.outcome["failure_policy"] == "PRESERVE_ONLY" and m.outcome["rolled_back"] is False
+    j = next(e for e in rt.store.for_mission(m.id) if e.type == "JoinFailed").payload
+    assert j["decision"]["action"] == "halt_and_report" and j["decision"]["policy"] == "PRESERVE_ONLY"

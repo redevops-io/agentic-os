@@ -266,3 +266,11 @@ def test_provision_requires_plan_digest():
     res = build_infra_operator(run=run).invoke("infra.provision", {"cloud": "aws", **APPR})
     assert res["status"] == "error" and res["error"] == "plan_digest_required" and res["applied"] is False
     assert not any("apply" in c for c in calls)
+
+
+def test_provision_declares_ongoing_cost_for_failure_reporting():
+    """A failed deploy_app mission PRESERVES the applied stack and reports it as cost-bearing (docs/COMPENSATION.md s10)."""
+    from agentic_os.mission import compensation as C
+    caps = {c.name: c for c in build_infra_operator().manifest.capabilities}
+    assert C.incurs_ongoing_cost(caps["infra.provision"])
+    assert not C.incurs_ongoing_cost(caps["infra.configure"])

@@ -9,15 +9,19 @@ from __future__ import annotations
 from .types import ExecutionIntent, IntentStep
 
 
-#: Template-level default failure policy (docs/COMPENSATION.md). Absent = HALT_AND_REPORT (nothing is undone
-#: automatically). A template listed here OPTS IN to undoing completed steps that declare a compensating
-#: capability; irreversible steps are still never compensated.
+#: Template-level default failure policy (docs/COMPENSATION.md). Absent = HALT_AND_REPORT. The kernel templates
+#: below default to PRESERVE_ONLY: a failed workflow NEVER auto-reverses a successful action (created accounts and
+#: completed setup, a working deployment, provisioned infrastructure are KEPT and reported as partially completed).
+#: Only temporary resources whose capability declares ``disposition=CLEANUP`` (+ preconditions + authorization) are
+#: cleaned up. Compensation is an explicit opt-in: ``create_mission(failure_policy="COMPENSATE_DECLARED")`` for one
+#: mission, or ``AGENTIC_OS_DEFAULT_FAILURE_POLICY=COMPENSATE_DECLARED`` for a deployment (the env beats this table);
+#: even then each undo still needs its own authorization.
 TEMPLATE_FAILURE_POLICY: dict[str, str] = {
-    "onboarding": "COMPENSATE_DECLARED",
-    "deploy_app": "COMPENSATE_DECLARED",
-    # sky.launch / sky.serve declare a REVERSIBLE_EXPLICIT undo (sky.down / sky.serve_down, registered in the
-    # same operator, requires_approval) - same shape as deploy_app, so the same opt-in.
-    "sky_deploy": "COMPENSATE_DECLARED",
+    "onboarding": "PRESERVE_ONLY",
+    "deploy_app": "PRESERVE_ONLY",
+    # sky.launch / sky.serve provision cost-bearing infrastructure: kept on failure, reported with resource ids and
+    # the estimated cost (or "unknown"); sky.down / sky.serve_down stay an explicit, approval-gated decision.
+    "sky_deploy": "PRESERVE_ONLY",
 }
 
 
@@ -56,8 +60,8 @@ def deploy_app(mission_id: str) -> ExecutionIntent:
 
     supply-chain scan → terraform plan → [approval] terraform apply → ansible configure → verify.
     The provision step is the highest-consequence capability in the fleet, so it carries the
-    approval gate; provision + configure carry saga undos (destroy-delta / rollback-release) so a
-    failed verify (or a rejected gate) rolls the deploy back instead of leaving a half-applied stack."""
+    approval gate; provision + configure declare undos (destroy-delta / rollback-release) but the template is
+    PRESERVE_ONLY: a failed verify never auto-rolls back a working deployment; it is reported as partially completed."""
     s_scan = IntentStep(outcome="image_scanned", value_hint="high",
                         need="supply-chain scan the app image (Trivy/SBOM) for CVEs, secrets and misconfigurations")
     s_plan = IntentStep(outcome="infra_planned", inputs_from=["image_scanned"], value_hint="medium",
@@ -207,7 +211,7 @@ def sky_deploy(mission_id: str) -> ExecutionIntent:
 
     check → optimize → [approval] launch → verify. ``sky.optimize``'s ranked cost/availability
     table is the evidence the approver sees; ``sky.launch`` is the highest-consequence step (the
-    approval gate) and fails over across clouds on capacity, with saga undo = ``sky.down``. The
+    approval gate) and fails over across clouds on capacity, with a declared (never automatic) undo = ``sky.down``. The
     measured launch outcome (real cost, capacity, spot preemption, time-to-ready) is the reward the
     placement optimizer learns from — the same measured-cost loop the decision engine already runs."""
     s_check = IntentStep(outcome="clouds_enabled", value_hint="medium",

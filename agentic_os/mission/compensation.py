@@ -43,8 +43,14 @@ COMPENSATION_EVENTS = (EV_REQUESTED, EV_AUTHORIZED, EV_EXECUTED, EV_VERIFIED, EV
 #: declares a compensation is eligible when the mission's failure policy is COMPENSATE_DECLARED. PRESERVE: this
 #: action's effect is KEPT on failure whatever the policy (completed beneficial / security / compliance actions);
 #: it is recorded as a retained effect and never reversed automatically.
-DISPOSITIONS = ("", "COMPENSATE", "PRESERVE")
+#: CLEANUP: a TEMPORARY resource this mission created (lock, staging file/dir, scratch resource) that is cleaned up on
+#: failure even under ``PRESERVE_ONLY``, because removing it never removes a successful, beneficial effect. A CLEANUP
+#: declaration must be fully guarded: ``supported`` + ``preconditions`` (independently safe NOW) + an explicit
+#: ``authorization_policy`` (authorized) - otherwise it does not validate. It goes through the same runner as any
+#: compensation (own approval/key/receipt/verification); only the POLICY gate differs.
+DISPOSITIONS = ("", "COMPENSATE", "PRESERVE", "CLEANUP")
 PRESERVE = "PRESERVE"
+CLEANUP = "CLEANUP"
 
 #: Explicit ``authorization_policy`` of a compensation. HUMAN_APPROVAL == ``requires_approval=True`` (a human
 #: approves each reversal, bound to the exact inputs). EVIDENCE_BOUND == the evidence-bound marker alone (the
@@ -106,6 +112,8 @@ class CompensationSpec:
     disposition: str = ""                   # "" | COMPENSATE | PRESERVE (per-action; see DISPOSITIONS)
     preconditions: str | None = None        # read-only capability: "is it still safe to reverse NOW?" -> {holds: bool}
     authorization_policy: str = ""          # "" | HUMAN_APPROVAL (== requires_approval) | EVIDENCE_BOUND
+    incurs_ongoing_cost: bool = False       # the retained effect keeps costing money (provisioned infrastructure):
+                                            # a failed mission REPORTS its resource ids + estimated cost (or "unknown")
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -143,6 +151,18 @@ def coerce(value: Any) -> CompensationSpec | None:
                              "separately authorized decision)")
         if spec.preconditions and not spec.supported:
             raise ValueError("compensation.preconditions requires supported=True")
+        if spec.disposition == CLEANUP:
+            if not spec.supported:
+                raise ValueError("compensation.disposition=CLEANUP requires supported=True and a compensating capability")
+            if not spec.preconditions:
+                raise ValueError("compensation.disposition=CLEANUP requires `preconditions` (a read-only check that "
+                                 "the cleanup is independently safe NOW)")
+            if not (spec.authorization_policy or spec.requires_approval):
+                raise ValueError("compensation.disposition=CLEANUP requires an explicit authorization_policy "
+                                 "(HUMAN_APPROVAL, or EVIDENCE_BOUND for a mission-owned temporary artifact)")
+            if spec.incurs_ongoing_cost:
+                raise ValueError("compensation.disposition=CLEANUP is for temporary resources: a cost-bearing "
+                                 "(incurs_ongoing_cost) effect is retained and reported, never auto-cleaned")
         if spec.authorization_policy not in AUTH_POLICIES:
             raise ValueError(f"unknown compensation authorization_policy {spec.authorization_policy!r}")
         if spec.authorization_policy == AUTH_EVIDENCE and spec.requires_approval:
@@ -157,6 +177,17 @@ def is_preserved(cap: Any) -> bool:
     """True when the capability declares ``disposition=PRESERVE`` (its effect survives a failed workflow)."""
     spec = coerce(getattr(cap, "compensation", None))
     return spec is not None and spec.disposition == PRESERVE
+
+
+def is_cleanup(cap: Any) -> bool:
+    """True when the capability declares ``disposition=CLEANUP`` (a temporary resource that PRESERVE_ONLY still cleans)."""
+    spec = coerce(getattr(cap, "compensation", None))
+    return spec is not None and spec.disposition == CLEANUP and bool(spec.supported)
+
+
+def incurs_ongoing_cost(cap: Any) -> bool:
+    spec = coerce(getattr(cap, "compensation", None))
+    return spec is not None and bool(spec.incurs_ongoing_cost)
 
 
 def declared_undo(cap: Any) -> str | None:

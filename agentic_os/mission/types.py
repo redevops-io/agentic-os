@@ -432,9 +432,9 @@ class Mission:
     budget: Budget = field(default_factory=Budget)
     deadline: float | None = None
     state: MissionState = MissionState.PLANNING
-    # What to do when a step/branch fails: HALT_AND_REPORT | COMPENSATE_DECLARED | CONTINUE_SIBLINGS ("" =
-    # the default for the mission's topology: sequential -> COMPENSATE_DECLARED, fork branches ->
-    # HALT_AND_REPORT). See mission/compensation_policy.py and docs/COMPENSATION.md.
+    # What to do when a step/branch fails: HALT_AND_REPORT | PRESERVE_ONLY | COMPENSATE_DECLARED | CONTINUE_SIBLINGS
+    # ("" = template default, then AGENTIC_OS_DEFAULT_FAILURE_POLICY, then HALT_AND_REPORT; nothing is compensated
+    # unless COMPENSATE_DECLARED is chosen explicitly). See mission/compensation_policy.py and docs/COMPENSATION.md.
     failure_policy: str = ""
     default_failure_policy: str = ""   # frozen at creation (template/env default); see compensation_policy.resolve_default
     world_state_id: str = ""

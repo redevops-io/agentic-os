@@ -1,6 +1,9 @@
 """Mission failure policy — WHAT to do when a step/branch fails (docs/COMPENSATION.md).
 
   HALT_AND_REPORT     stop, compensate nothing, report succeeded effects (default for fork branches)
+  PRESERVE_ONLY       HALT_AND_REPORT plus: only TEMPORARY resources a capability declares ``disposition=CLEANUP``
+                      (with preconditions + authorization) are cleaned up; every successful effect is preserved.
+                      Default of the kernel templates onboarding / deploy_app / sky_deploy.
   COMPENSATE_DECLARED undo completed steps that DECLARE a compensating capability (default for sequential
                       missions: reverse order); irreversible steps are never "compensated", only listed
   CONTINUE_SIBLINGS   let running/ready sibling branches finish; compensate nothing automatically
@@ -18,6 +21,7 @@ from typing import Any, Iterable
 
 class FailurePolicy(str, Enum):
     HALT_AND_REPORT = "HALT_AND_REPORT"
+    PRESERVE_ONLY = "PRESERVE_ONLY"
     COMPENSATE_DECLARED = "COMPENSATE_DECLARED"
     CONTINUE_SIBLINGS = "CONTINUE_SIBLINGS"
 
@@ -57,19 +61,20 @@ def _parse(raw: str) -> "FailurePolicy | None":
 
 
 def resolve_default(template: "str | None") -> "FailurePolicy":
-    """The non-forked default for a template: template-declared default, then the deployment env, then
-    HALT_AND_REPORT. Resolved ONCE at mission creation and frozen into ``MissionCreated`` as
+    """The non-forked default for a template: the deployment env (an explicit deployment decision, e.g.
+    ``AGENTIC_OS_DEFAULT_FAILURE_POLICY=COMPENSATE_DECLARED`` to opt every workflow back in to compensation), then the
+    template-declared default (kernel templates: PRESERVE_ONLY), then HALT_AND_REPORT. Resolved ONCE at mission creation and frozen into ``MissionCreated`` as
     ``default_failure_policy`` so a later env/template change cannot alter how an old mission replays."""
     from .templates import TEMPLATE_FAILURE_POLICY  # noqa: PLC0415
-    tpl = _parse(TEMPLATE_FAILURE_POLICY.get(template or "", ""))
-    if tpl is not None:
-        return tpl
-    return _parse(os.environ.get(ENV_DEFAULT_POLICY, "")) or FailurePolicy.HALT_AND_REPORT
+    env = _parse(os.environ.get(ENV_DEFAULT_POLICY, ""))
+    if env is not None:
+        return env
+    return _parse(TEMPLATE_FAILURE_POLICY.get(template or "", "")) or FailurePolicy.HALT_AND_REPORT
 
 
 def effective_policy(mission: Any, *, forked: bool = False) -> FailurePolicy:
     """Resolution order: the mission's own ``failure_policy`` (explicit opt-in), then the default FROZEN at
-    creation (``mission.default_failure_policy``: template default, else ``AGENTIC_OS_DEFAULT_FAILURE_POLICY``,
+    creation (``mission.default_failure_policy``: ``AGENTIC_OS_DEFAULT_FAILURE_POLICY``, else the template default,
     else HALT_AND_REPORT), and only for a legacy mission without a frozen default the live template/env
     resolution. Nothing compensates unless one of them says COMPENSATE_DECLARED. Fork branches ignore the
     default and use HALT_AND_REPORT unless the mission itself opts in."""
@@ -131,6 +136,18 @@ def decide_on_branch_failure(mission: Any, failed_branch: Any, siblings: Iterabl
                              for n in _nodes(b) if str(_get(n, "status", "done") or "done").lower() in _OK]
     rev, irrev, _ = classify_nodes(done_nodes)
     bid = _get(failed_branch, "id", "?")
+    if policy is FailurePolicy.PRESERVE_ONLY:
+        cleanup = [n for n in rev if _get(n, "disposition") == "CLEANUP"]
+        kept = [n for n in rev if n not in cleanup]
+        kept_ids = tuple(_get(n, "id") for n in reversed(kept))
+        if cleanup:
+            return FailureAction(ActionKind.COMPENSATE, policy,
+                                 f"branch {bid} failed; policy PRESERVE_ONLY cleans up declared temporary resources only",
+                                 compensate_nodes=tuple(_get(n, "id") for n in reversed(cleanup)),
+                                 not_reversible=tuple(irrev), not_compensated=kept_ids)
+        return FailureAction(ActionKind.HALT, policy,
+                             f"branch {bid} failed; policy PRESERVE_ONLY: succeeded effects are kept",
+                             not_reversible=tuple(irrev), not_compensated=kept_ids, cancel_siblings=True)
     if policy is FailurePolicy.COMPENSATE_DECLARED:
         ids = tuple(_get(n, "id") for n in reversed(rev))
         return FailureAction(ActionKind.COMPENSATE, policy, f"branch {bid} failed; policy compensates declared undos",
