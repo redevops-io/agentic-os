@@ -222,21 +222,60 @@ def external_targets(data: bytes) -> "list[str]":
         if name.endswith(".rels"):
             root = _parse(_read_part(z, name))
             for r in root.iter(f"{REL}Relationship"):
-                if (r.get("TargetMode") or "").lower() == "external":
-                    out.append(r.get("Target") or "")
+                if (r.get("TargetMode") or "").strip().lower() == "external":
+                    out.append((r.get("Target") or "").strip())
     return sorted(out)
 
 
-# ── package-level risk comparison (macros, OLE, fields, altChunk, external links) ─────────────────────────────
+# ── package-level risk comparison (macros, OLE, fields, links, external data) for docx / xlsx / pptx ───────────
 _DANGER_PARTS = {
-    "embedding": re.compile(r"(^|/)embeddings/|oleobject[^/]*$", re.I),
+    "embedding": re.compile(r"(^|/)embeddings/|oleobject[^/]*$|(^|/)ole[^/]*\.bin$", re.I),
     "macro": re.compile(r"vbaproject|vbadata|\.bin$", re.I),
     "activex": re.compile(r"(^|/)activex/", re.I),
     "customxml": re.compile(r"^customxml/", re.I),
     "altchunk": re.compile(r"afchunk|(^|/)chunk[^/]*$", re.I),
+    "external-link": re.compile(r"(^|/)externallinks/", re.I),
+    "data-connection": re.compile(r"(^|/)(connections\.xml|querytables/|pivotcache/|webpublish)", re.I),
 }
-_DANGER_CT = re.compile(r"macroenabled|vbaproject|oleobject|activex|oleobject", re.I)
-CT = "{http://schemas.openxmlformats.org/package/2006/content-types}"
+_DANGER_CT = re.compile(r"macroenabled|vbaproject|oleobject|activex|externallink|connections\+xml|querytable", re.I)
+_DANGER_REL = re.compile(r"oleobject|/package$|vbaproject|attachedtemplate|externallink|/connections|querytable|"
+                         r"/control$|activex|/aftchunk|/afchunk|/oleobject", re.I)
+_OLE_TAGS = frozenset({"OLEObject", "oleObj", "object", "control", "externalReference", "dataConn", "embeddedObject",
+                       "altChunk", "dde", "ddeLink", "oleLink", "oleItem"})
+_FLD = f"{W}fldChar"
+_WS = re.compile(r"\s+")
+
+
+def _local(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
+
+
+def _norm_instr(s: str) -> str:
+    return _WS.sub(" ", s).strip().upper()
+
+
+def _fields_in(root: ET.Element) -> "list[str]":
+    """Field instructions of one part, with complex fields (fldChar begin ... instrText runs ... end) REASSEMBLED
+    in document order, plus fldSimple/@instr, normalised (whitespace, case)."""
+    out: list = []
+    stack: list = []
+    for el in root.iter():
+        t = el.tag
+        if t == _FLD:
+            kind = el.get(f"{W}fldCharType")
+            if kind == "begin":
+                stack.append([])
+            elif kind == "end" and stack:
+                out.append(_norm_instr("".join(stack.pop())))
+        elif t == f"{W}instrText":
+            if stack:
+                stack[-1].append(el.text or "")
+            else:
+                out.append(_norm_instr(el.text or ""))
+        elif t == f"{W}fldSimple":
+            out.append(_norm_instr(el.get(f"{W}instr") or ""))
+    out.extend(_norm_instr("".join(s)) for s in stack)         # unterminated field
+    return [f for f in out if f]
 
 
 def package_risks(data: bytes) -> dict:
@@ -246,18 +285,47 @@ def package_risks(data: bytes) -> dict:
     cts: list = []
     if "[Content_Types].xml" in names:
         root = _parse(_read_part(z, "[Content_Types].xml"))
-        for e in root:
-            ct = e.get("ContentType") or ""
-            if _DANGER_CT.search(ct):
-                cts.append(ct)
+        cts = sorted((e.get("ContentType") or "") for e in root if _DANGER_CT.search(e.get("ContentType") or ""))
     fields: list = []
-    alt = 0
-    fldchars = 0
-    if "word/document.xml" in names:
-        root = _parse(_read_part(z, "word/document.xml"))
-        fields += [(t.text or "").strip() for t in root.iter(f"{W}instrText")]
-        fields += [(e.get(f"{W}instr") or "").strip() for e in root.iter(f"{W}fldSimple")]
-        alt = len(list(root.iter(f"{W}altChunk")))
-        fldchars = len(list(root.iter(f"{W}fldChar")))
-    return {"parts": parts, "content_types": sorted(cts), "fields": sorted(f for f in fields if f),
-            "altchunks": alt, "has_fields": fldchars > 0 or bool(fields)}
+    ole = 0
+    ext: list = []
+    reltypes: dict = {}
+    for n in names:
+        low = n.lower()
+        if n.endswith(".rels"):
+            for r in _parse(_read_part(z, n)).iter(f"{REL}Relationship"):
+                if (r.get("TargetMode") or "").strip().lower() == "external":
+                    ext.append((r.get("Target") or "").strip())
+                ty = (r.get("Type") or "").strip()
+                if _DANGER_REL.search(ty):
+                    reltypes[ty.lower()] = reltypes.get(ty.lower(), 0) + 1
+        elif low.endswith(".xml") and not low.startswith(("customxml/", "docprops/")) and low != "[content_types].xml":
+            root = _parse(_read_part(z, n))
+            fields += _fields_in(root)
+            ole += sum(1 for el in root.iter() if _local(el.tag) in _OLE_TAGS)
+    return {"parts": parts, "content_types": cts, "fields": sorted(fields), "ole": ole,
+            "external": sorted(ext), "reltypes": reltypes}
+
+
+def package_problems(base: bytes, result: bytes) -> "list[str]":
+    """Differences in ACTIVE / EXTERNAL content between the base document and an editor result. Anything the base
+    already had is tolerated unless it changed; anything new is refused. Works for docx, xlsx and pptx packages."""
+    rb, ra = package_risks(base), package_risks(result)
+    problems: list = []
+    for cat, n in ra["parts"].items():
+        if n > rb["parts"].get(cat, 0):
+            problems.append(f"editor output added {cat} parts (embedded objects / macros / ActiveX / external data) "
+                            "that the source did not have")
+    if set(ra["content_types"]) - set(rb["content_types"]):
+        problems.append("editor output introduced macro / OLE / ActiveX / external-data content types")
+    if ra["fields"] != rb["fields"]:
+        problems.append("field instructions (DDE / INCLUDETEXT / LINK / ...) changed outside the requested patch")
+    if ra["ole"] > rb["ole"]:
+        problems.append("editor output introduced OLE / object / altChunk / external-reference elements")
+    if ra["external"] != rb["external"]:
+        problems.append("external relationships (links) changed outside the requested patch")
+    for ty, n in ra["reltypes"].items():
+        if n > rb["reltypes"].get(ty, 0):
+            problems.append("editor output introduced a dangerous relationship type (OLE / package / external link)")
+            break
+    return problems
