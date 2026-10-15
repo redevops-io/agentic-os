@@ -1,0 +1,55 @@
+name: document-editor
+
+# Cross-OS gate for the Document Editor Connector (apps/document-editor): the connector's unit tests run on
+# Ubuntu, macOS and Windows. The integration suite (needs Docker + a throwaway ONLYOFFICE Document Server) is
+# excluded here (`-m "not integration"`) and is run locally via apps/document-editor/integration/run_throwaway.py.
+# The merge-gating `pytest` job in tests.yml also runs these tests on Ubuntu; this job adds the other two OSes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/document-editor/**"
+      - "apps/pytest.ini"
+      - "agentic_os/**"
+      - "pyproject.toml"
+      - ".github/workflows/document-editor.yml"
+  pull_request:
+    paths:
+      - "apps/document-editor/**"
+      - "apps/pytest.ini"
+      - "agentic_os/**"
+      - "pyproject.toml"
+      - ".github/workflows/document-editor.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: document-editor-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: connector unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install the kernel + dev extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Connector unit tests (no Docker, no network)
+        run: python -m pytest -q -p no:cacheprovider -m "not integration" apps/document-editor
