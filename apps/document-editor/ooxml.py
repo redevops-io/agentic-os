@@ -290,6 +290,7 @@ def package_risks(data: bytes) -> dict:
     ole = 0
     ext: list = []
     reltypes: dict = {}
+    unparseable = 0
     for n in names:
         low = n.lower()
         if n.endswith(".rels"):
@@ -300,11 +301,20 @@ def package_risks(data: bytes) -> dict:
                 if _DANGER_REL.search(ty):
                     reltypes[ty.lower()] = reltypes.get(ty.lower(), 0) + 1
         elif low.endswith(".xml") and not low.startswith(("customxml/", "docprops/")) and low != "[content_types].xml":
-            root = _parse(_read_part(z, n))
+            raw = _read_part(z, n)
+            if not raw.strip():
+                continue                                   # real editors emit empty parts
+            try:
+                root = _parse(raw)
+            except InvalidInput as e:
+                if "DTD" in str(e):
+                    raise                                  # hostile: always refused
+                unparseable += 1                           # tolerated only if the base had as many
+                continue
             fields += _fields_in(root)
             ole += sum(1 for el in root.iter() if _local(el.tag) in _OLE_TAGS)
     return {"parts": parts, "content_types": cts, "fields": sorted(fields), "ole": ole,
-            "external": sorted(ext), "reltypes": reltypes}
+            "external": sorted(ext), "reltypes": reltypes, "unparseable": unparseable}
 
 
 def package_problems(base: bytes, result: bytes) -> "list[str]":
@@ -324,6 +334,8 @@ def package_problems(base: bytes, result: bytes) -> "list[str]":
         problems.append("editor output introduced OLE / object / altChunk / external-reference elements")
     if ra["external"] != rb["external"]:
         problems.append("external relationships (links) changed outside the requested patch")
+    if ra["unparseable"] > rb["unparseable"]:
+        problems.append("editor output contains malformed XML parts the source did not have")
     for ty, n in ra["reltypes"].items():
         if n > rb["reltypes"].get(ty, 0):
             problems.append("editor output introduced a dangerous relationship type (OLE / package / external link)")

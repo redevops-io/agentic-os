@@ -186,3 +186,12 @@ def test_fields_are_reassembled_across_runs_and_normalised(mods, kit):
     assert mods.ooxml.package_risks(a)["fields"] == ["DDEAUTO C:\\\\X"]
     b = mutate(base, edit={"word/document.xml": lambda x: x.replace("</w:body>", '<w:p><w:fldSimple w:instr="  ddeauto   C:\\\\x "/></w:p></w:body>')})
     assert mods.ooxml.package_risks(b)["fields"] == mods.ooxml.package_risks(a)["fields"]
+
+
+def test_empty_parts_are_tolerated_but_new_malformed_parts_are_not(mods, kit):
+    """Found by the real-server run: ONLYOFFICE emits empty .xml parts."""
+    base = kit.make_docx(["x"])
+    assert mods.ooxml.package_problems(base, mutate(base, add={"word/empty.xml": b""})) == []
+    assert mods.ooxml.package_problems(base, mutate(base, add={"word/bad.xml": b"<a><b></a>"}))
+    with_bad = mutate(base, add={"word/bad.xml": b"<a><b></a>"})
+    assert mods.ooxml.package_problems(with_bad, with_bad) == []
