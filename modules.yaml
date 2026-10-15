@@ -141,3 +141,10 @@ modules:
     source: apps/zoning
     pain: zoning / governance operator
     deploy: operator
+  - name: agentic-document-editor
+    source: apps/document-editor
+    pain: governed document editing & conversion (operator)
+    deploy: operator
+    tagline: Convert, review and edit documents through your own editor, with approval before any write.
+    agents: [converter, reviewer, editor]
+    approval_required: [apply_patch, publish]

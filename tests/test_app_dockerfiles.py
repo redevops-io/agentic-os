@@ -94,11 +94,21 @@ def _tuple(ref):
     return tuple(int(x) for x in m.groups())
 
 
+#: Apps that legitimately pin a NEWER kernel than the fleet because they use a kernel feature the fleet pin lacks.
+#: app -> (minimum kernel, why). The rest of the fleet must still agree with each other.
+NEWER_THAN_FLEET = {
+    "document-editor": ((0, 3, 32), "declares per-action compensation disposition=PRESERVE (kernel >= 0.3.32)"),
+}
+
+
 def test_kernel_ref_is_release_tag_consistent_and_new_enough():
-    refs = _kernel_refs()
-    assert "_suite-server" in refs and len(refs) >= 10
+    all_refs = _kernel_refs()
+    assert "_suite-server" in all_refs and len(all_refs) >= 10
+    refs = {a: r for a, r in all_refs.items() if a not in NEWER_THAN_FLEET}
     assert len(set(refs.values())) == 1, f"app images pin different kernels: {refs}"
     assert _tuple(next(iter(refs.values()))) >= MIN_KERNEL
+    for app, (floor, why) in NEWER_THAN_FLEET.items():
+        assert _tuple(all_refs[app]) >= max(floor, _tuple(next(iter(refs.values())))), f"{app}: {why}"
 
 
 def test_requirements_txt_files_do_not_pin_old_kernel():
