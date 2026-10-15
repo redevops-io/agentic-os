@@ -8,7 +8,7 @@ on the wire.
 Capabilities (syscalls):
   sentinel.triage      — read-only threat posture: active decisions + alerts + severity mix
   sentinel.block_ip    — enforce a ban decision at the edge   [approval gate: remediation]
-                         (undo: sentinel.unblock_ip)
+                         (PRESERVE on failure; lifting it = sentinel.unblock_ip, a human decision)
   sentinel.unblock_ip  — lift a ban decision (saga compensation)  [approval gate]
 
 Per modules.yaml the gate is `approval_required:[remediation]` — writing a firewall
@@ -40,8 +40,9 @@ def build_edge_sentinel_operator() -> Operator:
             provides=["ip_blocked"],
             outputs={"ip_blocked": "True ONLY if a read-back of the LAPI decisions for the IP (parsed IP equality) shows an active ban; a 2xx POST alone is not enough"},
             side_effecting=True,
-            compensation={"supported": True, "capability": "sentinel.unblock_ip", "requires_approval": True,
-                          "reversibility": "REVERSIBLE_EXPLICIT", "notes": "temporary block -> remove block, subject to policy/approval"}, approval_required=True,
+            compensation={"supported": False, "disposition": "PRESERVE",
+                          "notes": "a completed security block is NOT auto-reversed by a failed workflow (the safer state "
+                                   "is kept); lifting it (sentinel.unblock_ip) is a separate, approved human decision"}, approval_required=True,
             permissions=["sentinel:write"], estimated_value="high", latency_ms=1200,
             concurrency_mode="exclusive", concurrency_key="sentinel:ip:{ip}",
         ),
@@ -52,7 +53,7 @@ def build_edge_sentinel_operator() -> Operator:
             provides=["ip_unblocked"],
             outputs={"ip_unblocked": "ban decision lifted (saga compensation)"},
             side_effecting=True,
-            compensation={"supported": False, "reversibility": "IRREVERSIBLE", "notes": "it is itself the compensation target of block_ip; re-blocking is a new forward action"}, approval_required=True,
+            compensation={"supported": False, "reversibility": "IRREVERSIBLE", "notes": "lifting a security block; re-blocking is a new forward action"}, approval_required=True,
             permissions=["sentinel:write"], estimated_value="medium", latency_ms=800,
             concurrency_mode="exclusive", concurrency_key="sentinel:ip:{ip}",
         ),

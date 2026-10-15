@@ -34,11 +34,37 @@ EV_APPROVAL_REQUIRED = "CompensationApprovalRequired"   # parked: the compensati
 EV_APPROVED = "CompensationApproved"                     # who/when/what (undo, inputs hash, attempt) was approved
 EV_ACKNOWLEDGED = "CompensationAcknowledged"             # a human accepts that the forward effect remains
 EV_UNDECLARED_TARGET = "CompensationUndeclaredTarget"    # warning: declared undo is not a registered capability
+EV_SKIPPED = "CompensationSkipped"                       # declared precondition not met / not evaluable: NOT executed
+EV_RETAINED = "EffectsRetained"                          # mission-level record of every effect that remains
 COMPENSATION_EVENTS = (EV_REQUESTED, EV_AUTHORIZED, EV_EXECUTED, EV_VERIFIED, EV_FAILED, EV_APPROVAL_REQUIRED,
-                       EV_APPROVED, EV_ACKNOWLEDGED, EV_UNDECLARED_TARGET)
+                       EV_APPROVED, EV_ACKNOWLEDGED, EV_UNDECLARED_TARGET, EV_SKIPPED)
+
+#: Per-action disposition on failure (``CompensationSpec.disposition``). "" == COMPENSATE: a completed action that
+#: declares a compensation is eligible when the mission's failure policy is COMPENSATE_DECLARED. PRESERVE: this
+#: action's effect is KEPT on failure whatever the policy (completed beneficial / security / compliance actions);
+#: it is recorded as a retained effect and never reversed automatically.
+DISPOSITIONS = ("", "COMPENSATE", "PRESERVE")
+PRESERVE = "PRESERVE"
+
+#: Explicit ``authorization_policy`` of a compensation. HUMAN_APPROVAL == ``requires_approval=True`` (a human
+#: approves each reversal, bound to the exact inputs). EVIDENCE_BOUND == the evidence-bound marker alone (the
+#: forward step demonstrably ran in this mission and the undo is the registered one): for non-consequential,
+#: mission-owned artifacts only. Declaring one on purpose is what ``full_declaration_problems`` asks for.
+AUTH_HUMAN = "HUMAN_APPROVAL"
+AUTH_EVIDENCE = "EVIDENCE_BOUND"
+AUTH_POLICIES = ("", AUTH_HUMAN, AUTH_EVIDENCE)
 
 ENV_MAX_ATTEMPTS = "AGENTIC_OS_COMPENSATION_MAX_ATTEMPTS"
 ENV_STRICT_TARGETS = "AGENTIC_OS_STRICT_UNDO_TARGETS"
+ENV_PRECONDITION_TIMEOUT = "AGENTIC_OS_PRECONDITION_TIMEOUT_S"
+
+
+def precondition_timeout_s() -> float:
+    try:
+        return max(0.05, float(os.environ.get(ENV_PRECONDITION_TIMEOUT, "30")))
+    except ValueError:
+        return 30.0
+
 #: After this date a plan whose node declares an undo capability that is not registered is REFUSED at plan time
 #: by default (before it: allowed with a visible CompensationUndeclaredTarget warning when compensation is
 #: requested, and the unregistered target never receives the compensation marker). Override with the env flag.
@@ -77,6 +103,9 @@ class CompensationSpec:
     requires_approval: bool = False         # compensation needs a human approval of its own (see docs)
     verify: str | None = None               # read-back capability that proves the effect is gone
     notes: str = ""
+    disposition: str = ""                   # "" | COMPENSATE | PRESERVE (per-action; see DISPOSITIONS)
+    preconditions: str | None = None        # read-only capability: "is it still safe to reverse NOW?" -> {holds: bool}
+    authorization_policy: str = ""          # "" | HUMAN_APPROVAL (== requires_approval) | EVIDENCE_BOUND
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -84,8 +113,12 @@ class CompensationSpec:
 
 def coerce(value: Any) -> CompensationSpec | None:
     """dict | CompensationSpec | None -> CompensationSpec | None (unknown keys are rejected: fail closed)."""
-    if value is None or isinstance(value, CompensationSpec):
-        return value
+    if value is None:
+        return None
+    if isinstance(value, CompensationSpec):
+        # an INSTANCE is validated and normalised exactly like a dict (a hand-built spec must not bypass the
+        # checks, e.g. authorization_policy=HUMAN_APPROVAL with requires_approval=False). Returns a normalised copy.
+        value = asdict(value)
     if isinstance(value, dict):
         allowed = set(CompensationSpec.__dataclass_fields__)
         extra = set(value) - allowed
@@ -102,8 +135,28 @@ def coerce(value: Any) -> CompensationSpec | None:
             raise ValueError("compensation.supported=False must not name a compensating capability")
         if spec.supported and spec.reversibility not in ("", "REVERSIBLE_EXPLICIT"):
             raise ValueError("compensation.supported=True requires reversibility REVERSIBLE_EXPLICIT")
+        if spec.disposition not in DISPOSITIONS:
+            raise ValueError(f"unknown compensation disposition {spec.disposition!r}")
+        if spec.disposition == PRESERVE and spec.supported:
+            raise ValueError("compensation.disposition=PRESERVE contradicts supported=True: a preserved effect is "
+                             "never automatically reversed, so declare supported=False (reversal is a new, "
+                             "separately authorized decision)")
+        if spec.preconditions and not spec.supported:
+            raise ValueError("compensation.preconditions requires supported=True")
+        if spec.authorization_policy not in AUTH_POLICIES:
+            raise ValueError(f"unknown compensation authorization_policy {spec.authorization_policy!r}")
+        if spec.authorization_policy == AUTH_EVIDENCE and spec.requires_approval:
+            raise ValueError("compensation.authorization_policy=EVIDENCE_BOUND contradicts requires_approval=True")
+        if spec.authorization_policy == AUTH_HUMAN:
+            spec.requires_approval = True
         return spec
     raise TypeError(f"compensation must be a dict or CompensationSpec, got {type(value).__name__}")
+
+
+def is_preserved(cap: Any) -> bool:
+    """True when the capability declares ``disposition=PRESERVE`` (its effect survives a failed workflow)."""
+    spec = coerce(getattr(cap, "compensation", None))
+    return spec is not None and spec.disposition == PRESERVE
 
 
 def declared_undo(cap: Any) -> str | None:
@@ -111,6 +164,8 @@ def declared_undo(cap: Any) -> str | None:
     spec = coerce(getattr(cap, "compensation", None))
     if spec is not None and spec.supported and spec.capability:
         return spec.capability
+    if spec is not None and spec.disposition == PRESERVE:
+        return None            # a PRESERVE declaration wins over a stray legacy ``undo=``: nothing is auto-undone
     return getattr(cap, "undo", None) or None
 
 
@@ -146,6 +201,11 @@ def intrinsic_problems(cap: Any) -> list[str]:
     undo = declared_undo(cap)
     if undo and undo == name:
         out.append(f"{name}: compensation target is the capability itself (would re-run the forward action)")
+    if spec is not None and spec.disposition == PRESERVE and getattr(cap, "undo", None):
+        out.append(f"{name}: declares disposition=PRESERVE and a legacy undo={cap.undo!r} (contradiction)")
+    if spec is not None and spec.preconditions and spec.preconditions in (name, undo, spec.verify):
+        out.append(f"{name}: preconditions '{spec.preconditions}' must be a read-only check distinct from the "
+                   "forward action, the compensating capability and the verify read-back")
     if spec is not None and spec.verify and spec.verify in (name, undo):
         out.append(f"{name}: verify '{spec.verify}' must be a read-back distinct from the forward action and "
                    "the compensating capability (verify == undo would run the undo twice)")
@@ -172,12 +232,29 @@ def lint_capability(cap: Any) -> str | None:
     return None
 
 
+def evidence_bound_conflicts(caps: Iterable[Any], get_capability) -> list[str]:
+    """K2: ``authorization_policy=EVIDENCE_BOUND`` means NO human decides this reversal, so it can never name a
+    compensating capability that itself requires approval (``approval_required``): that undo can only be
+    ``HUMAN_APPROVAL``. Rejected at registration (``CapabilityRegistry.register``) and by the lint."""
+    out: list[str] = []
+    for c in caps:
+        spec = coerce(getattr(c, "compensation", None))
+        if spec is None or not spec.supported or spec.authorization_policy != AUTH_EVIDENCE:
+            continue
+        t = get_capability(spec.capability)
+        if t is not None and getattr(t, "approval_required", False):
+            out.append(f"{c.name}: authorization_policy=EVIDENCE_BOUND but its compensating capability "
+                       f"'{spec.capability}' requires approval (declare HUMAN_APPROVAL)")
+    return out
+
+
 def registry_problems(caps: Iterable[Any], get_capability, *, require_verify: bool = True) -> list[str]:
     """Cross-capability checks for a set of capabilities (the lint; ``get_capability`` resolves a name):
     nonexistent compensating target, a target that is itself a forward action pointing back (cycle), a
     ``verify`` that is unregistered or side-effecting, and (``require_verify``) a reversible declaration with
     no ``verify`` read-back."""
-    out: list[str] = []
+    caps = list(caps)
+    out: list[str] = evidence_bound_conflicts(caps, get_capability)
     for c in caps:
         if not getattr(c, "side_effecting", False):
             continue
@@ -199,6 +276,39 @@ def registry_problems(caps: Iterable[Any], get_capability, *, require_verify: bo
                     out.append(f"{c.name}: verify '{spec.verify}' is not registered")
                 elif getattr(v, "side_effecting", False):
                     out.append(f"{c.name}: verify '{spec.verify}' is side-effecting (must be a read-only read-back)")
+            if spec.preconditions:
+                pc = get_capability(spec.preconditions)
+                if pc is None:
+                    out.append(f"{c.name}: preconditions '{spec.preconditions}' is not registered")
+                elif getattr(pc, "side_effecting", False):
+                    out.append(f"{c.name}: preconditions '{spec.preconditions}' is side-effecting (must be read-only)")
+    return out
+
+
+def full_declaration_problems(cap: Any) -> list[str]:
+    """The per-action declaration an owner can demand of every COMPENSATABLE action (``reversibility_of`` is
+    REVERSIBLE_EXPLICIT): ``compensation_capability`` (``compensation.capability``), ``preconditions``,
+    ``authorization_policy`` (``requires_approval``: a human approves each reversal), ``verification_method``
+    (``verify``). The ``idempotency_key`` is NOT author-supplied: it is always derived by the runner as
+    ``{node.idempotency_key}:undo:{attempt}`` (read-back ``...:verify``), so it cannot be forgotten or reused.
+    A legacy bare ``undo=`` has no spec and reports every item. Non-compensatable capabilities report nothing."""
+    if reversibility_of(cap) is not Reversibility.REVERSIBLE_EXPLICIT:
+        return []
+    spec = coerce(getattr(cap, "compensation", None))
+    name = getattr(cap, "name", "?")
+    if spec is None:
+        return [f"{name}: legacy undo= with no `compensation` declaration (capability, preconditions, "
+                "authorization, verification all missing)"]
+    out = []
+    if not spec.capability:
+        out.append(f"{name}: no compensation_capability")
+    if not spec.preconditions:
+        out.append(f"{name}: no preconditions (read-only check that reversing is still safe)")
+    if not (spec.requires_approval or spec.authorization_policy):
+        out.append(f"{name}: no authorization_policy (HUMAN_APPROVAL, or EVIDENCE_BOUND for a non-consequential "
+                   "mission-owned artifact)")
+    if not spec.verify:
+        out.append(f"{name}: no verification_method (verify read-back)")
     return out
 
 
@@ -254,7 +364,7 @@ def receipt_for(node_id: str, undo: str, idempotency_key: str, result: Any) -> d
 def fold_compensation(events: Iterable[Any]) -> dict[str, dict]:
     """Per-node compensation status folded from the durable log (events are objects with ``type``/``payload``
     or dicts). status: requested | approval_required | authorized | executed_unverified | compensated | failed
-    | acknowledged. ``attempts`` counts CompensationRequested; a later ``requested`` (retry) restarts the node.
+    | acknowledged | skipped (precondition not met: nothing was executed). ``attempts`` counts CompensationRequested; a later ``requested`` (retry) restarts the node.
     ``approval`` is the latest CompensationApproved for the CURRENT attempt. Unknown event types are ignored."""
     out: dict[str, dict] = {}
     for e in events:
@@ -296,6 +406,8 @@ def fold_compensation(events: Iterable[Any]) -> dict[str, dict]:
             cur.update(status="failed", reason=p.get("reason", ""))
         elif t == EV_ACKNOWLEDGED:
             cur.update(status="acknowledged", actor=p.get("actor"), ack_reason=p.get("reason", ""))
+        elif t == EV_SKIPPED:
+            cur.update(status="skipped", reason=p.get("reason", ""))
     for v in out.values():
         v.pop("_seen", None)
     return out
@@ -308,5 +420,6 @@ def summarize(folded: dict[str, dict]) -> dict:
             "compensation_failed": {n: v["reason"] for n, v in sorted(folded.items())
                                     if v["status"] in ("failed", "approval_required")},
             "compensation_acknowledged": by("acknowledged"),
+            "compensation_skipped": {n: v["reason"] for n, v in sorted(folded.items()) if v["status"] == "skipped"},
             "readback_only": all(v.get("method") == "readback" for v in folded.values()
                                  if v["status"] == "compensated")}

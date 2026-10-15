@@ -108,6 +108,9 @@ def classify_nodes(nodes: Iterable[Any]) -> tuple[list[Any], list[dict], list[An
     for n in nodes:
         if not _get(n, "side_effecting", False):
             inert.append(n)
+        elif _get(n, "disposition") == "PRESERVE":
+            irrev.append({"node_id": _get(n, "id"), "capability": _get(n, "capability"),
+                          "reversibility": "IRREVERSIBLE", "disposition": "PRESERVE"})
         elif _get(n, "undo"):
             rev.append(n)
         else:

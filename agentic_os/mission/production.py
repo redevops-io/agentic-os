@@ -29,23 +29,28 @@ DiscoverFetch = Callable[[str], dict]  # GET a URL -> parsed JSON
 
 
 def _compensation_from_json(d: dict):
-    """A remote operator's compensation declaration; malformed -> undeclared (UNKNOWN => irreversible)."""
+    """A remote operator's compensation declaration -> (spec, malformed). MALFORMED fails CLOSED: the spec is
+    dropped AND the legacy ``undo`` is ignored (``_spec_from_json``), so a bad declaration (e.g. PRESERVE with
+    supported:true) can never leave the action reversible."""
     try:
-        return coerce_compensation(d.get("compensation"))
-    except (ValueError, TypeError):
-        return None
+        return coerce_compensation(d.get("compensation")), False
+    except (TypeError, ValueError):
+        return None, True
 
 
 def _spec_from_json(d: dict) -> CapabilitySpec:
     c = d.get("cost") or {}
+    comp, malformed = _compensation_from_json(d)
     return CapabilitySpec(
         name=d["name"], operator=d.get("operator", ""),
         inputs=d.get("inputs") or {}, outputs=d.get("outputs") or {},
         cost=NodeCost(usd=c.get("usd", 0.0), latency_ms=c.get("latency_ms", 0),
                       tokens=c.get("tokens", 0), human_minutes=c.get("human_minutes", 0.0)),
         permissions=d.get("permissions") or [], deterministic=d.get("deterministic", True),
-        side_effecting=d.get("side_effecting", False), undo=d.get("undo"),
-        compensation=_compensation_from_json(d), irreversible=bool(d.get("irreversible", False)),
+        side_effecting=d.get("side_effecting", False), undo=None if malformed else d.get("undo"),
+        compensation=comp, irreversible=bool(d.get("irreversible", False)) or malformed,
+        irreversible_note=("malformed compensation declaration (failed closed)" if malformed
+                           else str(d.get("irreversible_note") or "")),
         approval_required=d.get("approval_required", False), confidence=d.get("confidence", 0.9),
         estimated_value=d.get("estimated_value", "medium"), provides=d.get("provides") or [],
         embedding=d.get("embedding") or [],

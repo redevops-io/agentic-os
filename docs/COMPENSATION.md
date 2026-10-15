@@ -50,6 +50,9 @@ Reference examples (kernel apps annotated where the capability exists):
 | publish externally | `IRREVERSIBLE` - not reliably reversible (`social.publish`, `assistant.push_assets`) |
 | ledger entry / subscription | `books.record_revenue`->`books.reverse_entry`, `billing.create_subscription`->`billing.cancel_subscription` (approval-gated) |
 
+Two optional per-action fields (section 9): `disposition: "PRESERVE"` (this effect survives a failed workflow;
+requires `supported: false`) and `preconditions: "<read-only capability>"` (is reversing still safe NOW?).
+
 A `compensation` dict is validated fail-closed (unknown keys, `supported` without `capability`, unknown
 `reversibility` raise); a malformed remote declaration is read as *undeclared* (=> irreversible).
 
@@ -255,3 +258,69 @@ Fixtures that declared an undo for a capability they never registered now regist
   compensated unless COMPENSATE_DECLARED). Still to port: declared-only filtering is by `Undo`, no
   verification/approval/events yet - it replays the Python events but does not emit them.
 * Consumers of `MissionState` / `m.state == FAILED` must also handle `COMPENSATION_FAILED`.
+
+## 9. Per-action selection, preconditions and the partially-completed outcome
+
+`failure_policy` decides whether a mission MAY compensate; it is deliberately coarse. A deployment that wants
+"a failed workflow does not imply its successful actions should be undone" selects PER ACTION on the capability
+(`CompensationSpec`), never per workflow:
+
+| `compensation` declaration | On a failed mission (policy `COMPENSATE_DECLARED`) | Listed as |
+|---|---|---|
+| `supported: true, capability, verify, preconditions, authorization_policy` | reversal considered: preconditions evaluated, a human approves, undo runs, read-back verifies | `compensated` / `retained_effects` if it could not run |
+| `supported: false, disposition: "PRESERVE", notes: "..."` | **never reversed**, whatever the policy (completed beneficial / security / compliance actions) | `not_reversible` (+ `disposition`), `retained_effects[reason=preserved_by_declaration]` |
+| `irreversible="<note>"` / undeclared | never reversed | `not_reversible`, `retained_effects[reason=irreversible|undeclared_reversibility]` |
+
+Under the default `HALT_AND_REPORT` nothing is reversed and every effect is retained (`left_by_policy`).
+`PRESERVE` is checked inside the compensation runner itself, so it also holds for fork-branch compensation.
+A reversal of a preserved effect is a NEW decision (a separately authorized forward action), not an undo.
+
+**Preconditions** (`compensation.preconditions`): a registered, read-only capability. Before the reversal is
+offered for approval, and again right before it executes (the world can change while an approval is pending),
+the runner invokes it with `{precondition_for_undo_of, undo, result, _node: "{node}:undo:precondition"}`
+(idempotency key `{key}:undo:{attempt}:precondition:{plan|exec}`). Only an explicit `holds: true` proceeds.
+Anything else (`holds: false`, a failure-shaped result, a raise, an unregistered or side-effecting check) fails
+CLOSED: `CompensationSkipped{reason}`, nothing executed, the effect is retained. A skipped reversal is not a
+failed compensation: the mission ends `FAILED` (not `COMPENSATION_FAILED`) with a `compensation_skipped`
+needs-you item; `retry` re-evaluates it, `acknowledge` accepts it.
+
+**Full declaration.** `compensation.full_declaration_problems(cap)` lists what an owner can demand of every
+compensatable action: `compensation_capability` (`capability`), `preconditions`, `authorization_policy`
+(`HUMAN_APPROVAL`, which sets `requires_approval`; or an explicit `EVIDENCE_BOUND`, valid only for a
+non-consequential mission-owned artifact such as a temporary lock this mission created; the two contradict
+`requires_approval` the obvious way and are rejected), `verification_method` (`verify`). The `idempotency_key` is never author-supplied: the
+runner always derives `{node.idempotency_key}:undo:{attempt}` (read-back `...:verify`, precondition
+`...:precondition:{phase}`), so a retry never reuses a key and a duplicate delivery is deduplicated by the operator.
+
+**Partially completed.** When a mission did not finish and effects remain, the outcome carries
+`retained_effects` (`{node_id, capability, reason, detail}`; reasons: `preserved_by_declaration`, `left_by_policy`,
+`irreversible`, `undeclared_reversibility`, `precondition_not_met`, `compensation_failed`,
+`awaiting_compensation_approval`, `compensation_unverified`, `acknowledged`), `partially_completed: true` and
+`incomplete_steps` (`{node_id, capability, status, error}`: the steps that never finished, to retry or escalate).
+`rolled_back` is `false` whenever anything is retained. The same facts are appended to the durable log as
+`EffectsRetained` (once per distinct state), so the execution history names every effect left behind and why;
+`outcome_from_log` rebuilds the identical outcome on replay. The `effects_left_in_place` needs-you item carries them
+(`decisions: manual_remediation | escalate`) for preserved, precondition-held and policy-left effects. The failed
+step itself may have partly executed: its effect is unknown to the log and is not listed as retained.
+
+**Review hardening (K1-K6).**
+* A hand-built `CompensationSpec` INSTANCE is validated and normalised exactly like a dict (`coerce` returns a normalised
+  copy): `authorization_policy="HUMAN_APPROVAL"` forces `requires_approval`; contradictory specs raise.
+* `EVIDENCE_BOUND` never fronts an approval-gated undo: `CapabilityRegistry.register` rejects it in either registration
+  order (and `registry_problems` lints it); the runtime additionally treats it as `requires_approval` (belt and braces).
+  A consequential, money-moving or external reversal can only be `HUMAN_APPROVAL`. Legacy bare `undo=` is unchanged.
+* `PRESERVE` wins over a stray legacy `undo=` (`declared_undo` is `None`; registration rejects the contradiction). The
+  fork path honours and reports it: `partially_completed`, `retained_effects`, `EffectsRetained`.
+* A remote (`/capabilities`) declaration that fails validation FAILS CLOSED: spec dropped, legacy `undo` ignored, the
+  capability is read as irreversible.
+* `outcome_from_log`: a node that is eligible for compensation but has no compensation record (truncated log, saga not
+  run) is `not_yet_compensated` and keeps `rolled_back` false. `cancel_mission` of a mission holding a done
+  side-effecting node settles the outcome and records `EffectsRetained`.
+* Precondition invocations are bounded by `AGENTIC_OS_PRECONDITION_TIMEOUT_S` (default 30s); a timeout fails closed.
+* Kernel apps: `sentinel.block_ip` (a completed security action) is now `PRESERVE`; lifting a block is the separate,
+  approved `sentinel.unblock_ip`. `infra.provision/configure`, `sky.launch/serve` stay reversible+approval-gated and the
+  kernel templates `onboarding`, `deploy_app`, `sky_deploy` keep their kernel opt-in (`TEMPLATE_FAILURE_POLICY`):
+  **changing kernel template defaults is out of scope here**. The enterprise overlay pulls all three back to
+  `HALT_AND_REPORT` (enterprise `docs/COMPENSATION_POLICY.md`); reconcile them in the kernel when the owner decides.
+* **Go port** (`go/mission`): ignores `disposition=PRESERVE`, `preconditions` and `authorization_policy`, and still
+  auto-compensates any node with `Undo`; do not rely on it for per-action selection.

@@ -48,11 +48,11 @@ def _request(ip="203.0.113.7") -> ActionRequest:
 
 def test_proposal_reads_governance_from_the_real_capability():
     """Edge Sentinel does not restate approval semantics — it reads them from the real sentinel.block_ip
-    capability (which is side_effecting + approval_required + undo=sentinel.unblock_ip)."""
+    capability (which is side_effecting + approval_required, PRESERVED on failure: no automatic undo)."""
     prop = propose_response(_operator(), _request(), case_id="case-1")
     assert prop.capability_name == "sentinel.block_ip"
     assert prop.approval_required is True and prop.side_effecting is True
-    assert prop.undo == "sentinel.unblock_ip" and "sentinel:write" in prop.permissions
+    assert not prop.undo and "sentinel:write" in prop.permissions
 
 
 def test_execution_refused_without_approval():
