@@ -126,11 +126,12 @@ def test_capabilities_manifest(client):
     caps = {c["name"]: c for c in m["capabilities"]}
     assert set(caps) == {"sentinel.triage", "sentinel.block_ip", "sentinel.unblock_ip"}
     # remediation gate (modules.yaml approval_required:[remediation]): block_ip WRITES a
-    # firewall ban → gated + side-effecting; its saga undo is sentinel.unblock_ip.
+    # firewall ban → gated + side-effecting; a completed security block is PRESERVED (no automatic undo; lifting
+    # it is the separate, approved sentinel.unblock_ip).
     bi = caps["sentinel.block_ip"]
     assert bi["approval_required"] is True
     assert bi["side_effecting"] is True
-    assert bi["undo"] == "sentinel.unblock_ip"
+    assert not bi.get("undo") and bi["compensation"]["disposition"] == "PRESERVE"
     assert "sentinel:write" in bi["permissions"]
     assert "ip_blocked" in bi["provides"]
     # triage reads alerts + explains → read-only, NOT gated.
