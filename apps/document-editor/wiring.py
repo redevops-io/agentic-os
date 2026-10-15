@@ -15,14 +15,14 @@ from .config import ConnectorConfig, load_config
 from .content import ContentRegistry
 from .errors import ConfigError
 from .onlyoffice import OnlyOfficeConfig
-from .onlyoffice import OnlyOfficeBackend
+from .onlyoffice_edit import OnlyOfficeEditBackend
 from .service import DocumentService
 from .store import LocalFSStore
 
 
 def build_backend(cfg: ConnectorConfig, content: ContentRegistry) -> DocumentBackend:
     if cfg.decl.provider == "onlyoffice":
-        return OnlyOfficeBackend(cfg.decl, OnlyOfficeConfig.from_env(zone=cfg.backend_zone), content)
+        return OnlyOfficeEditBackend(cfg.decl, OnlyOfficeConfig.from_env(zone=cfg.backend_zone), content)
     return UnimplementedBackend(cfg.decl)
 
 

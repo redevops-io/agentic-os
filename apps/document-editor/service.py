@@ -25,9 +25,10 @@ from .content import ContentRegistry
 from .errors import DocEditorError, NotFound, TenantMismatch, VerificationFailed
 from .locking import atomic_write_bytes
 from .store import DocumentStore, sha256_hex, validate_tenant
+from .writepath import GovernedWriteMixin
 
 
-class DocumentService:
+class DocumentService(GovernedWriteMixin):
     def __init__(self, cfg: ConnectorConfig, store: DocumentStore, backend: DocumentBackend,
                  content: ContentRegistry, *, replay_guard=None, clock: Callable[[], float] = time.time):
         self.cfg, self.store, self.backend, self.content = cfg, store, backend, content
@@ -182,10 +183,3 @@ class DocumentService:
         if p["k"] == "document":
             self._receipt(p["t"], "content_served", doc_id=p["d"], version=p["v"], sha256=p["h"])
         return data, p.get("m", "application/octet-stream")
-
-    # ── governed write path: arrives with ``writepath.GovernedWriteMixin`` (next layer) ──────────────────────────
-    def _write_path_disabled(self, *a, **k):
-        from .errors import UnsupportedCapability  # noqa: PLC0415
-        raise UnsupportedCapability("the governed write path is not available in this build (fail closed)")
-
-    propose_patch = apply_patch = publish = preview_apply = _write_path_disabled
