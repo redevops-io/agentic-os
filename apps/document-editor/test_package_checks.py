@@ -195,3 +195,107 @@ def test_empty_parts_are_tolerated_but_new_malformed_parts_are_not(mods, kit):
     assert mods.ooxml.package_problems(base, mutate(base, add={"word/bad.xml": b"<a><b></a>"}))
     with_bad = mutate(base, add={"word/bad.xml": b"<a><b></a>"})
     assert mods.ooxml.package_problems(with_bad, with_bad) == []
+
+
+# ── strict OOXML namespaces and duplicate archive entries ────────────────────────────────────────────────────────
+STRICT_W = 'xmlns:w="http://purl.oclc.org/ooxml/wordprocessingml/main"'
+
+
+def test_strict_namespace_field_codes_are_seen(mods, kit):
+    """[FAILS on c091e7d]: the scan hard-coded the transitional namespace."""
+    base = kit.make_docx(["x"])
+    strict = mutate(base, add={"word/header9.xml": f'<w:hdr {STRICT_W}><w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+                                                     f'<w:r><w:instrText>DDEAUTO c:\\\\x</w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:hdr>',
+                               "word/footer9.xml": f'<w:ftr {STRICT_W}><w:p><w:fldSimple w:instr="INCLUDETEXT f"/></w:p></w:ftr>'})
+    assert mods.ooxml.package_risks(strict)["fields"] == ["DDEAUTO C:\\\\X", "INCLUDETEXT F"]
+    assert mods.ooxml.package_problems(base, strict)
+
+
+@pytest.mark.parametrize("xml", [
+    '<x:sld xmlns:x="http://purl.oclc.org/ooxml/presentationml/main"><x:oleObj progId="Package"/></x:sld>',
+    '<w xmlns="http://purl.oclc.org/ooxml/spreadsheetml/main"><externalReferences><externalReference/></externalReferences></w>',
+    '<d:o xmlns:d="http://purl.oclc.org/ooxml/drawingml/main"><d:OLEObject/></d:o>',
+])
+def test_strict_namespace_ole_and_external_reference_elements_are_seen(mods, xml):
+    """REGRESSION GUARD (passed on c091e7d: element matching was already by local name)."""
+    base = make_pptx()
+    assert mods.ooxml.package_problems(base, mutate(base, add={"ppt/slides/slide2.xml": xml}))
+
+
+def test_strict_namespace_relationships_are_seen(mods):
+    base = make_pptx()
+    rels = '<Relationships xmlns="http://purl.oclc.org/ooxml/package/relationships"><Relationship Id="r" Type="t" Target="http://e/x" TargetMode="External"/></Relationships>'
+    assert mods.ooxml.package_risks(mutate(base, add={"ppt/slides/_rels/slide1.xml.rels": rels}))["external"] == ["http://e/x"]
+
+
+def dup_zip(first: bytes, last: bytes, name="word/document.xml", other="[Content_Types].xml") -> bytes:
+    b = io.BytesIO()
+    with zipfile.ZipFile(b, "w") as z:
+        z.writestr(other, '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+        z.writestr(name, first)
+        z.writestr(name, last)               # Python's zipfile reads THIS one (last wins)
+    return b.getvalue()
+
+
+@pytest.mark.parametrize("name2", ["word/document.xml", "WORD/Document.XML"])
+def test_duplicate_or_colliding_zip_entries_are_rejected_everywhere(mods, kit, name2):
+    """[FAILS on c091e7d]: a malicious first entry hidden behind a benign last one passed."""
+    import warnings
+    good = kit.make_docx(["ok"])
+    evil = f'<w:document {W}><w:body><w:p><w:r><w:instrText>DDEAUTO x</w:instrText></w:r></w:p></w:body></w:document>'
+    benign = f'<w:document {W}><w:body><w:p><w:r><w:t>ok</w:t></w:r></w:p></w:body></w:document>'
+    b = io.BytesIO()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with zipfile.ZipFile(b, "w") as z:
+            z.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+            z.writestr("word/document.xml", evil)
+            z.writestr(name2, benign)
+    data = b.getvalue()
+    O = mods.ooxml
+    for fn in (lambda: O.package_risks(data), lambda: O.package_problems(good, data), lambda: O.package_problems(data, good),
+               lambda: O.docx_paragraphs(data), lambda: O.validate_container(data, "docx"), lambda: O.describe(data, "a.docx")):
+        with pytest.raises(mods.errors.InvalidInput, match="duplicate"):
+            fn()
+
+
+def test_duplicate_entry_edit_result_is_refused_and_the_checked_bytes_are_the_stored_bytes(env, kit):
+    import warnings
+    env.put("acme", "a.docx", kit.make_docx(["Price 100 EUR"]), label="PUBLIC")
+    p = env.svc.propose_patch("acme", "a.docx", [{"type": "replace_text", "search": "100 EUR", "replace": "1 EUR"}])
+    real = env.backend._do_apply_edit
+
+    def dup(ref, ops, **k):
+        out = real(ref, ops, **k)
+        zin = zipfile.ZipFile(io.BytesIO(out.content))
+        b = io.BytesIO()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with zipfile.ZipFile(b, "w") as z:
+                for n in zin.namelist():
+                    z.writestr(n, zin.read(n))
+                z.writestr("word/document.xml", zin.read("word/document.xml"))
+        return env.mods.backend.BackendFile(content=b.getvalue(), filename="r", sha256=hashlib.sha256(b.getvalue()).hexdigest())
+    env.backend._do_apply_edit = dup
+    with pytest.raises(env.mods.errors.VerificationFailed):
+        env.svc.apply_patch("acme", proposal_id=p["proposal_id"], base_hash=p["base_hash"], backend=p["backend"],
+                            patch_digest=p["patch_digest"], expected_version=1, idempotency_key="idem-dupzip-0001",
+                            approval=APPROVAL)
+    assert env.store.head("acme", "a.docx").version == 1
+
+
+def test_checked_bytes_are_the_committed_bytes(env, kit):
+    """REGRESSION GUARD (passed on c091e7d): the verified buffer is the one hashed and stored (single read path)."""
+    env.put("acme", "a.docx", kit.make_docx(["Price 100 EUR"]), label="PUBLIC")
+    p = env.svc.propose_patch("acme", "a.docx", [{"type": "replace_text", "search": "100 EUR", "replace": "1 EUR"}])
+    seen = {}
+    real = env.svc._verify_output
+
+    def spy(prop, out_bytes):
+        seen["sha"] = hashlib.sha256(out_bytes).hexdigest()
+        return real(prop, out_bytes)
+    env.svc._verify_output = spy
+    r = env.svc.apply_patch("acme", proposal_id=p["proposal_id"], base_hash=p["base_hash"], backend=p["backend"],
+                            patch_digest=p["patch_digest"], expected_version=1, idempotency_key="idem-sameb-00001",
+                            approval=APPROVAL)
+    assert r["result_sha256"] == seen["sha"]

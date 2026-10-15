@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import re
+import unicodedata
 import zipfile
 import xml.etree.ElementTree as ET
 from typing import Optional
@@ -38,6 +39,12 @@ def _zip(data: bytes) -> zipfile.ZipFile:
         raise InvalidInput("not a valid OOXML (zip) container") from None
     if len(z.infolist()) > MAX_PARTS:
         raise InvalidInput("too many parts in container")
+    seen = set()
+    for zi in z.infolist():                       # duplicate / colliding entry names: Python reads the LAST one
+        key = unicodedata.normalize("NFC", zi.filename).casefold().rstrip("/")
+        if key in seen:
+            raise InvalidInput("container has duplicate or case/Unicode-colliding entry names")
+        seen.add(key)
     for zi in z.infolist():
         if zi.file_size > MAX_PART:
             raise InvalidInput("container part exceeds the size limit")
@@ -221,7 +228,7 @@ def external_targets(data: bytes) -> "list[str]":
     for name in z.namelist():
         if name.endswith(".rels"):
             root = _parse(_read_part(z, name))
-            for r in root.iter(f"{REL}Relationship"):
+            for r in (e for e in root.iter() if _local(e.tag) == "Relationship"):
                 if (r.get("TargetMode") or "").strip().lower() == "external":
                     out.append((r.get("Target") or "").strip())
     return sorted(out)
@@ -254,26 +261,34 @@ def _norm_instr(s: str) -> str:
     return _WS.sub(" ", s).strip().upper()
 
 
+def _attr(el: ET.Element, local: str) -> str:
+    for k, v in el.attrib.items():
+        if _local(k) == local:
+            return v
+    return ""
+
+
 def _fields_in(root: ET.Element) -> "list[str]":
-    """Field instructions of one part, with complex fields (fldChar begin ... instrText runs ... end) REASSEMBLED
-    in document order, plus fldSimple/@instr, normalised (whitespace, case)."""
+    """Field instructions of one part, matched by LOCAL name (transitional AND strict OOXML namespaces), with
+    complex fields (fldChar begin ... instrText runs ... end) reassembled in document order, plus fldSimple/@instr,
+    normalised (whitespace, case)."""
     out: list = []
     stack: list = []
     for el in root.iter():
-        t = el.tag
-        if t == _FLD:
-            kind = el.get(f"{W}fldCharType")
+        name = _local(el.tag)
+        if name == "fldChar":
+            kind = _attr(el, "fldCharType")
             if kind == "begin":
                 stack.append([])
             elif kind == "end" and stack:
                 out.append(_norm_instr("".join(stack.pop())))
-        elif t == f"{W}instrText":
+        elif name == "instrText":
             if stack:
                 stack[-1].append(el.text or "")
             else:
                 out.append(_norm_instr(el.text or ""))
-        elif t == f"{W}fldSimple":
-            out.append(_norm_instr(el.get(f"{W}instr") or ""))
+        elif name == "fldSimple":
+            out.append(_norm_instr(_attr(el, "instr")))
     out.extend(_norm_instr("".join(s)) for s in stack)         # unterminated field
     return [f for f in out if f]
 
@@ -294,7 +309,9 @@ def package_risks(data: bytes) -> dict:
     for n in names:
         low = n.lower()
         if n.endswith(".rels"):
-            for r in _parse(_read_part(z, n)).iter(f"{REL}Relationship"):
+            for r in _parse(_read_part(z, n)).iter():
+                if _local(r.tag) != "Relationship":
+                    continue
                 if (r.get("TargetMode") or "").strip().lower() == "external":
                     ext.append((r.get("Target") or "").strip())
                 ty = (r.get("Type") or "").strip()
