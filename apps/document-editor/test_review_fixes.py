@@ -485,6 +485,8 @@ def test_ambiguous_collision_locks_out_rather_than_leaking(env, kit):
     env.put("acme", "Strasse.docx", kit.make_docx(["attacker"]))
     if env.mods.store.canonical_id("Stra\u00dfe.docx") != env.mods.store.canonical_id("Strasse.docx"):
         pytest.skip("this casefold does not collide")
+    if len([n for n in os.listdir(env.root / "acme") if n.endswith(".docx")]) < 2:
+        pytest.skip("case-insensitive FS with full case folding (APFS): the two names are ONE file here")
     with pytest.raises(env.mods.errors.InvalidPath, match="ambiguous"):
         env.store.head("acme", "Strasse.docx")
 
