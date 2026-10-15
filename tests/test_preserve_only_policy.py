@@ -45,7 +45,7 @@ def test_explicit_opt_ins_beat_the_template_default(monkeypatch):
 
 # ── CLEANUP declaration is validated fail-closed ─────────────────────────────────────────────────────────────
 GOOD = {"supported": True, "capability": "tmp.release", "disposition": "CLEANUP", "preconditions": "tmp.safe",
-        "authorization_policy": "EVIDENCE_BOUND", "mission_owned_temporary": True, "verify": "tmp.verify"}
+        "authorization_policy": "EVIDENCE_BOUND", "verify": "tmp.verify"}
 
 
 def test_cleanup_declaration_validates():
@@ -54,7 +54,6 @@ def test_cleanup_declaration_validates():
     for bad, why in (({**GOOD, "supported": False, "capability": None, "preconditions": None}, "supported"),
                      ({k: v for k, v in GOOD.items() if k != "preconditions"}, "preconditions"),
                      ({k: v for k, v in GOOD.items() if k != "authorization_policy"}, "authorization"),
-                     ({**GOOD, "mission_owned_temporary": False}, "mission_owned_temporary"),   # no human, no marker
                      ({**GOOD, "incurs_ongoing_cost": True}, "cost")):
         with pytest.raises(ValueError, match=why):
             C.coerce(bad)
@@ -82,7 +81,7 @@ def test_preserve_only_decision_keeps_everything_except_declared_cleanup():
 class Fx:
     """stage (temporary lock, CLEANUP) -> deploy (successful, reversible, NOT cleanup) -> report (fails)."""
 
-    def __init__(self, policy="PRESERVE_ONLY", *, holds=True, cleanup=True, template=None, human_cleanup=False):
+    def __init__(self, policy="PRESERVE_ONLY", *, holds=True, cleanup=True, template=None, human_cleanup=False, marked=True, unmark_after_register=False):
         self.calls: list[str] = []
         self.holds = holds
         stage_comp = ({**{k: v for k, v in GOOD.items() if k != "mission_owned_temporary"},
@@ -104,13 +103,15 @@ class Fx:
             "report.submit": _boom,
         }
         specs = [_spec("tmp.acquire", "staged", side_effecting=True, compensation=stage_comp),
-                 _spec("tmp.release", None, side_effecting=True, irreversible=True),
+                 _spec("tmp.release", None, side_effecting=True, irreversible=True, mission_owned_temporary=(not human_cleanup) and marked),
                  _spec("tmp.verify", None), _spec("tmp.safe", None),
                  _spec("app.deploy", "deployed", side_effecting=True, undo="app.rollback"),
                  _spec("app.rollback", None, side_effecting=True, irreversible=True),
                  _spec("report.submit", "reported", side_effecting=True, irreversible=True)]
         reg = CapabilityRegistry()
         reg.register(CapabilityManifest("m", specs))
+        if unmark_after_register:                                  # simulate a registration bypass
+            reg.get("tmp.release").mission_owned_temporary = False
         self.rt = MissionRuntime(reg, Executor(InMemoryOperatorClient(handlers)), planner=_Planner(*OUTCOMES))
         self.m = self.rt.create_mission("go", policy_refs=["*"], template=template,
                                         **({"failure_policy": policy} if policy else {}))
@@ -185,29 +186,67 @@ def test_go_port_template_defaults_agree_with_python():
 
 
 # ── review fixes ─────────────────────────────────────────────────────────────────────────────────────────────
-def test_cleanup_without_human_requires_the_explicit_temporary_marker_and_is_rejected_at_registration():
-    destroy = {"supported": True, "capability": "infra.destroy_delta", "disposition": "CLEANUP",
-               "preconditions": "tmp.safe", "authorization_policy": "EVIDENCE_BOUND"}
-    with pytest.raises(ValueError, match="mission_owned_temporary"):
-        C.coerce(destroy)
-    with pytest.raises(ValueError, match="cost"):
-        C.coerce({**destroy, "mission_owned_temporary": True, "incurs_ongoing_cost": True})
-    with pytest.raises(ValueError, match="CLEANUP"):
-        C.coerce({**GOOD, "disposition": "", "mission_owned_temporary": True})
+def _reg(*specs):
     reg = CapabilityRegistry()
-    # an approval-gated (consequential) capability can never be marked temporary
+    reg.register(CapabilityManifest("m", list(specs)))
+    return reg
+
+
+def _fwd(**kw):
+    return _spec("x.make", "o", side_effecting=True, compensation=kw.pop("comp", dict(GOOD, capability="x.undo")), **kw)
+
+
+def test_no_human_cleanup_is_enforced_at_real_registration():
+    from agentic_os.mission.operator_sdk import capability
+    # (a) the undo is not marked temporary by its owner -> rejected, whatever the forward dict claims
+    with pytest.raises(ValueError, match="mission_owned_temporary"):
+        _reg(_fwd(), _spec("x.undo", None, side_effecting=True, irreversible=True))
+    # a marker smuggled inside the forward compensation dict is an unknown field: fail closed
+    with pytest.raises(ValueError, match="unknown compensation field"):
+        C.coerce(dict(GOOD, mission_owned_temporary=True))
+    # (b) a destructive, NON-approval-gated undo is only valid if its owner marked it; marking is rejected when it is
+    # approval-gated / cost-bearing / itself compensatable
     with pytest.raises(ValueError, match="temporary"):
-        reg.register(CapabilityManifest("m", [_spec("x.make", "o", side_effecting=True, approval_required=True,
-                                                    compensation=dict(GOOD))]))
-    # EVIDENCE_BOUND cleanup over an approval-gated destroy is rejected too (K2)
-    with pytest.raises(ValueError):
-        reg.register(CapabilityManifest("m", [
-            _spec("x.make", "o", side_effecting=True, compensation={**GOOD, "capability": "x.destroy"}),
-            _spec("x.destroy", None, side_effecting=True, approval_required=True, irreversible=True)]))
-    # a human-approved CLEANUP needs no marker
-    ok = C.coerce({**{k: v for k, v in GOOD.items() if k != "mission_owned_temporary"},
-                   "authorization_policy": "HUMAN_APPROVAL"})
-    assert ok.requires_approval and not ok.mission_owned_temporary
+        _reg(_fwd(), _spec("x.undo", None, side_effecting=True, irreversible=True, approval_required=True,
+                           mission_owned_temporary=True))
+    with pytest.raises(ValueError, match="temporary"):
+        _reg(_fwd(), _spec("x.undo", None, side_effecting=True, mission_owned_temporary=True,
+                           compensation={"supported": True, "capability": "x.make", "incurs_ongoing_cost": True}))
+    # (c) a consequential FORWARD action (approval-gated / cost-bearing) can never be cleaned up without a human
+    with pytest.raises(ValueError, match="HUMAN_APPROVAL"):
+        _reg(_fwd(approval_required=True), _spec("x.undo", None, side_effecting=True, irreversible=True,
+                                                 mission_owned_temporary=True))
+    # (d) valid: owner-marked undo through the builder (instance path) and through a plain dict
+    _reg(_fwd(), _spec("x.undo", None, side_effecting=True, irreversible=True, mission_owned_temporary=True))
+    cap = capability("x.undo", lambda i: {}, side_effecting=True, irreversible="a released lock", mission_owned_temporary=True)
+    assert cap.spec.mission_owned_temporary is True
+    _reg(_fwd(comp=C.CompensationSpec(**dict(GOOD, capability="x.undo"))), cap.spec)
+    # (e) a human-approved cleanup needs no marker
+    _reg(_fwd(comp=dict(GOOD, capability="x.undo", authorization_policy="HUMAN_APPROVAL")),
+         _spec("x.undo", None, side_effecting=True, irreversible=True))
+
+
+def test_remote_json_cannot_mark_temporary_or_skip_the_human():
+    from agentic_os.mission.production import _manifest_from_json
+    fwd = {"name": "x.make", "operator": "m", "side_effecting": True,
+           "compensation": dict(GOOD, capability="x.undo", mission_owned_temporary=True), "provides": ["o"]}
+    undo = {"name": "x.undo", "operator": "m", "side_effecting": True, "irreversible": True,
+            "mission_owned_temporary": True}
+    man = _manifest_from_json({"operator": "m", "capabilities": [fwd, undo]})
+    f, u = man.capabilities
+    assert f.compensation is None and f.irreversible is True        # malformed -> failed closed (irreversible)
+    assert u.mission_owned_temporary is False                        # never read from remote JSON
+    fwd2 = dict(fwd, compensation=dict(GOOD, capability="x.undo"))
+    reg = CapabilityRegistry()
+    with pytest.raises(ValueError, match="mission_owned_temporary"):   # remote EVIDENCE_BOUND cleanup is refused
+        reg.register(_manifest_from_json({"operator": "m", "capabilities": [fwd2, undo]}))
+
+
+def test_destructive_unmarked_capability_never_runs_without_a_human_at_runtime():
+    """Even if a spec slips past registration (e.g. registered before its undo), the runtime forces HUMAN approval."""
+    fx = Fx(unmark_after_register=True)
+    assert "tmp.release" not in fx.calls
+    assert any(i["kind"] == "compensation_approval" for i in attention_items(fx.rt, fx.m.id))
 
 
 def test_human_approved_cleanup_parks_with_a_cleanup_prompt_and_runs_only_after_approval():
@@ -254,9 +293,6 @@ class _Legacy:
 def test_in_flight_legacy_mission_keeps_its_frozen_policy_with_a_notice_and_an_opt_out(monkeypatch):
     from agentic_os.mission.compensation_policy import is_legacy_frozen
     assert is_legacy_frozen(_Legacy()) and effective_policy(_Legacy()) is FailurePolicy.COMPENSATE_DECLARED
-    monkeypatch.setenv("AGENTIC_OS_RERESOLVE_LEGACY_POLICY", "1")
-    assert effective_policy(_Legacy()) is FailurePolicy.PRESERVE_ONLY
-    monkeypatch.delenv("AGENTIC_OS_RERESOLVE_LEGACY_POLICY")
     new = _Legacy()
     new.default_policy_source = "env"                               # recorded => not legacy
     assert not is_legacy_frozen(new)
@@ -293,3 +329,20 @@ def test_default_policy_source_is_recorded_and_env_override_and_garbage_are_loud
     assert fx3.m.outcome["failure_policy"] == "HALT_AND_REPORT"
     own = Fx(template="sky_deploy", policy="PRESERVE_ONLY")
     assert own.m.outcome["default_policy_source"] == "mission"
+
+
+def test_reresolution_is_recorded_and_replays_deterministically(monkeypatch):
+    from agentic_os.mission.compensation_runner import run_saga
+    fx = Fx(template="deploy_app", policy="")
+    fx.m.default_failure_policy, fx.m.default_policy_source = "COMPENSATE_DECLARED", ""   # pre-upgrade freeze
+    monkeypatch.setenv("AGENTIC_OS_RERESOLVE_LEGACY_POLICY", "1")
+    run_saga(fx.rt, fx.m, fx.rt._plans[fx.m.id])
+    ev = [e for e in fx.rt.store.for_mission(fx.m.id) if e.type == "DefaultPolicyReresolved"]
+    assert len(ev) == 1 and ev[0].payload["to"] == "PRESERVE_ONLY"
+    assert effective_policy(fx.m) is FailurePolicy.PRESERVE_ONLY and "app.rollback" not in fx.calls
+    monkeypatch.delenv("AGENTIC_OS_RERESOLVE_LEGACY_POLICY")                    # flag gone: a rebuilt runtime agrees
+    rt2 = MissionRuntime(fx.rt.registry, fx.rt.executor, store=fx.rt.store, planner=_Planner(*OUTCOMES))
+    rt2.rehydrate(fx.m.id)
+    assert effective_policy(rt2._missions[fx.m.id]) is FailurePolicy.PRESERVE_ONLY
+    run_saga(fx.rt, fx.m, fx.rt._plans[fx.m.id])                                # idempotent: no second event
+    assert len([e for e in fx.rt.store.for_mission(fx.m.id) if e.type == "DefaultPolicyReresolved"]) == 1

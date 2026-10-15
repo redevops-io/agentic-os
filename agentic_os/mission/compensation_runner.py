@@ -151,8 +151,26 @@ def _legacy_notice(rt, m, policy) -> bool:
     return True
 
 
+def maybe_reresolve_legacy(rt, m) -> bool:
+    """Operator opt-in (``AGENTIC_OS_RERESOLVE_LEGACY_POLICY=1``) for an in-flight pre-PRESERVE_ONLY mission: re-resolve its
+    frozen default to today's. The decision is RECORDED as a ``DefaultPolicyReresolved`` event and re-applied by
+    ``rehydrate``, so replay is deterministic and does not depend on the flag being set later. Only a legacy
+    COMPENSATE_DECLARED default is touched and only toward the template default (it can never widen)."""
+    import os  # noqa: PLC0415
+    from .compensation_policy import ENV_RERESOLVE_LEGACY, is_legacy_frozen, resolve_default  # noqa: PLC0415
+    if os.environ.get(ENV_RERESOLVE_LEGACY, "").strip().lower() not in ("1", "true", "yes") or not is_legacy_frozen(m):
+        return False
+    from .templates import TEMPLATE_FAILURE_POLICY  # noqa: PLC0415
+    to = TEMPLATE_FAILURE_POLICY.get(m.template or "", "HALT_AND_REPORT")
+    rt.store.append("DefaultPolicyReresolved", m.id, {"template": m.template, "from": m.default_failure_policy,
+                                                       "to": to, "source": "AGENTIC_OS_RERESOLVE_LEGACY_POLICY"})
+    m.default_failure_policy, m.default_policy_source = to, "reresolved"
+    return True
+
+
 def run_saga(rt, m, plan) -> None:
     store = rt.store
+    maybe_reresolve_legacy(rt, m)
     status = rt.repo.node_status(m.id)
     policy = effective_policy(m, forked=is_forked(plan))
     forward_caps = {n.capability for n in plan.graph.nodes}

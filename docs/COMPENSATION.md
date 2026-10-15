@@ -351,11 +351,13 @@ declared `preconditions` (independently safe NOW, fail closed), the declared `au
 parks for a human; `EVIDENCE_BOUND` only for a mission-owned artifact), its own idempotency key, receipt and
 verification. `CLEANUP` is rejected at registration unless `supported`, `preconditions` and an authorization policy are declared,
 and it cannot be combined with `incurs_ongoing_cost`. **A human approves every cleanup** (`HUMAN_APPROVAL`; the
-approval prompt and needs-you item are titled "Approve CLEANUP of temporary resource ...") **unless** the capability
-carries the explicit marker `compensation.mission_owned_temporary: true` (default false: a non-consequential temporary
-artifact the mission itself created, e.g. a lock) together with `EVIDENCE_BOUND`. The marker is rejected on
-approval-gated or irreversible capabilities, on `incurs_ongoing_cost` effects, and `EVIDENCE_BOUND` over an
-approval-gated undo is still refused (K2), so a destroy can never be cleaned up without a human. The precondition
+approval prompt and needs-you item are titled "Approve CLEANUP of temporary resource ...") **unless** the UNDO
+capability is registered, in the same registry, with the owner-side marker `mission_owned_temporary=True`
+(`CapabilitySpec` / `capability(..., mission_owned_temporary=True)`, default false) and is itself not approval-gated,
+cost-bearing or compensatable, the forward action is neither approval-gated nor cost-bearing, and the declaration says
+`EVIDENCE_BOUND`. This is enforced in `CapabilityRegistry.register` (both orders; raises) and again at runtime (an
+unmarked CLEANUP is forced to HUMAN approval). The marker is never read from a forward `compensation` dict (unknown
+field: fail closed) nor from remote `/capabilities` JSON, so a remote operator's CLEANUP always needs a human. The precondition
 runs even when the log lacks execution evidence (fail closed). A capability that declares nothing is never cleaned up. The kernel apps
 declare no CLEANUP actions today (their effects are the deliverable); the mechanism exists for fleets that stage
 temporary resources. `HALT_AND_REPORT` compensates nothing at all, CLEANUP included.
@@ -383,7 +385,9 @@ carry `default_failure_policy=COMPENSATE_DECLARED` for these templates and there
 undo's own authorization) after the upgrade: this is deliberate, a running mission's rules do not change under it. The
 runtime appends a one-time `LegacyFailurePolicyNotice` event, and the outcome (`legacy_policy_notice`) and the
 `effects_left_in_place` item carry the note. An operator who wants them on the new default sets
-`AGENTIC_OS_RERESOLVE_LEGACY_POLICY=1` (re-resolves only missions with a frozen COMPENSATE_DECLARED, no recorded
+`AGENTIC_OS_RERESOLVE_LEGACY_POLICY=1`: the next saga run records a `DefaultPolicyReresolved` event and `rehydrate`
+re-applies it, so replay is deterministic and does not depend on the flag staying set; it only moves a mission toward
+the current template default (it re-resolves only missions with a frozen COMPENSATE_DECLARED, no recorded
 source and a PRESERVE_ONLY template today; a mission deliberately created with the env opt-in is indistinguishable).
 Replay is faithful: a node with a compensation record in the log is reported from that record (`compensated`, ...)
 whatever the current policy resolves to; only a node WITHOUT a record is `left_by_policy`.

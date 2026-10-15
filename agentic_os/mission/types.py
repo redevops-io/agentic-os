@@ -96,6 +96,10 @@ class CapabilitySpec:
     # legacy ``undo``) is UNKNOWN and treated as irreversible; the conformance lint flags it.
     compensation: Any = None
     irreversible: bool = False
+    # Owner-side marker on the UNDO capability of a temporary artifact (lock/staging file): the only thing that lets a
+    # CLEANUP run without a human (compensation.cleanup_without_human_problems). In-process builders only: it is never
+    # read from remote /capabilities JSON or from a forward action's compensation dict.
+    mission_owned_temporary: bool = False
     irreversible_note: str = ""                 # WHY it cannot be undone (required when irreversible; lint N10)
     approval_required: bool = False
     confidence: float = 0.9                     # learned success rate (Capability Learning)

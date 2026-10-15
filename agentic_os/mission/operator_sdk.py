@@ -73,7 +73,8 @@ def capability(name: str, handler: Handler, *, provides: list[str] | None = None
                resource_keys: list[str] | None = None,
                max_parallelism: int | None = None,
                compensation: "dict | CompensationSpec | None" = None,
-               irreversible: "bool | str" = False) -> Capability:
+               irreversible: "bool | str" = False,
+               mission_owned_temporary: bool = False) -> Capability:
     """Ergonomic builder for one capability + its handler.
 
     Compensation (docs/COMPENSATION.md, explicit-only): a consequential capability DECLARES either
@@ -95,6 +96,7 @@ def capability(name: str, handler: Handler, *, provides: list[str] | None = None
         name=name, operator=operator, provides=provides or [], inputs=inputs or {},
         outputs=outputs or {}, side_effecting=side_effecting, approval_required=approval_required,
         undo=undo, compensation=comp, irreversible=irreversible, irreversible_note=irr_note,
+        mission_owned_temporary=bool(mission_owned_temporary),
         permissions=permissions or [], deterministic=deterministic,
         estimated_value=estimated_value, cost=NodeCost(usd=usd, latency_ms=latency_ms),
         required_authority=required_authority or [], isolation_class=isolation_class,

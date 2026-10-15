@@ -25,7 +25,7 @@ from typing import Any
 from .approval import is_approval_key, strip_approval_keys
 from . import belief, cost as costmod
 from .compiler import compile_intent, CompileError
-from .compensation import declared_undo, coerce as coerce_compensation, fold_compensation, summarize as _summ_comp, strict_undo_targets, validate_plan_compensation
+from .compensation import cleanup_without_human_problems, declared_undo, coerce as coerce_compensation, fold_compensation, summarize as _summ_comp, strict_undo_targets, validate_plan_compensation
 from .context import LocalContextRuntime, ContextIntent, CHECK_POLICY, RESOLVE_BELIEF
 from .lifecycle import LifecycleRegistry, MissionStarted, GateReached, MissionFinished
 from .evidence import EvidenceLog
@@ -547,6 +547,9 @@ class MissionRuntime:
         if cs is None:
             return False
         if cs.requires_approval:
+            return True
+        # belt and braces for CLEANUP: without the owner-side temporary marker on the UNDO it is HUMAN-approved
+        if cs.disposition == "CLEANUP" and cleanup_without_human_problems(spec, self.registry.get):
             return True
         # belt and braces for K2 (registration already rejects it): EVIDENCE_BOUND over an approval-gated undo
         # is never allowed to run without a human
@@ -1521,6 +1524,9 @@ class MissionRuntime:
                     intent_content_hash=created.payload.get("intent_content_hash", ""),
                     evidence_refs=list(created.payload.get("evidence_refs", [])))
         m.id = mission_id
+        for _e in self.store.for_mission(mission_id):          # a recorded operator re-resolution is part of the history
+            if _e.type == "DefaultPolicyReresolved" and _e.payload.get("to"):
+                m.default_failure_policy, m.default_policy_source = _e.payload["to"], "reresolved"
         m.state = self.repo.state(mission_id) or MissionState.PLANNING
         self._missions[mission_id] = m
 

@@ -133,8 +133,6 @@ def effective_policy(mission: Any, *, forked: bool = False) -> FailurePolicy:
         return FailurePolicy.HALT_AND_REPORT
     frozen = _parse(getattr(mission, "default_failure_policy", ""))
     if frozen is not None:
-        if is_legacy_frozen(mission) and os.environ.get(ENV_RERESOLVE_LEGACY, "").strip().lower() in ("1", "true", "yes"):
-            return resolve_default(getattr(mission, "template", None))
         return frozen
     return resolve_default(getattr(mission, "template", None))
 
