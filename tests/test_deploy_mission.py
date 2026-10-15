@@ -82,18 +82,96 @@ def test_deploy_is_gated_on_provision_then_succeeds():
             "app_configured", "deploy_verified"} <= set(world)
 
 
-def test_failed_verify_rolls_the_deploy_back():
-    rt, undone = _runtime(verify_fails=True)
-    m = rt.create_mission("Deploy agentic-billing", policy_refs=GRANTS, template="deploy_app")
+def _failed_deploy(verify_fails=True, **create):
+    rt, undone = _runtime(verify_fails=verify_fails)
+    m = rt.create_mission("Deploy agentic-billing", policy_refs=GRANTS, template="deploy_app", **create)
     rt.run(m.id)
-    node_id = rt.repo.pending_human(m.id)["node_id"]
+    rt.approve(m.id, rt.repo.pending_human(m.id)["node_id"], "approve")   # provision + configure commit, verify fails
+    return rt, m, undone
 
-    rt.approve(m.id, node_id, "approve")   # provision + configure commit, then verify fails
+
+def test_failed_verify_preserves_the_working_deployment_and_reports_partial_completion():
+    """deploy_app is PRESERVE_ONLY: a failed verify must NOT auto-roll back a successfully applied/configured stack."""
+    from agentic_os.mission.compensation_runner import attention_items
+    rt, m, undone = _failed_deploy()
     assert rt._missions[m.id].state == MissionState.FAILED
-    # the committed provision + configure are unwound newest-first via their undos
+    assert undone == []                                                   # nothing was reversed
+    types = [e["type"] for e in rt.repo.timeline(m.id)]
+    assert not any(t.startswith("Compensation") or t == "NodeCompensated" for t in types)
+    out = rt._missions[m.id].outcome
+    assert out["failure_policy"] == "PRESERVE_ONLY" and out["rolled_back"] is False
+    assert out["partially_completed"] is True
+    assert [r["capability"] for r in out["retained_effects"]] == ["infra.configure", "infra.provision"]
+    assert {r["reason"] for r in out["retained_effects"]} == {"left_by_policy"}
+    assert [c["capability"] for c in out["completed_steps"]] == [
+        "edge-sentinel.supply_chain_scan", "infra.plan", "infra.provision", "infra.configure"]
+    assert [i["capability"] for i in out["incomplete_steps"]] == ["infra.verify"]
+    assert "health check failed" in out["incomplete_steps"][0]["error"]
+    assert {a["action"] for a in out["recovery_actions"]} >= {"start_new_mission_for_remaining_steps",
+                                                              "decide_explicit_compensation"}
+    assert "EffectsRetained" in types
+    item = [i for i in attention_items(rt, m.id) if i["kind"] == "effects_left_in_place"][0]
+    assert item["retained_effects"] and item["incomplete_steps"] and item["completed_steps"] and item["recovery_actions"]
+
+
+def test_failed_verify_rolls_the_deploy_back_only_when_compensation_is_explicitly_opted_in():
+    rt, m, undone = _failed_deploy(failure_policy="COMPENSATE_DECLARED")
+    assert rt._missions[m.id].state == MissionState.FAILED
+    # the committed provision + configure are unwound newest-first via their undos - on explicit opt-in only
     assert set(undone) == {"infra.destroy_delta", "infra.rollback_release"}
     comp = [e for e in rt.repo.timeline(m.id) if e["type"] == "CompensationExecuted"]
     assert len(comp) == 2
+
+
+def test_deployment_env_can_opt_in_to_compensation(monkeypatch):
+    monkeypatch.setenv("AGENTIC_OS_DEFAULT_FAILURE_POLICY", "COMPENSATE_DECLARED")
+    rt, m, undone = _failed_deploy()
+    assert set(undone) == {"infra.destroy_delta", "infra.rollback_release"}
+
+
+class CountingClient:
+    """Counts every dispatch OUTSIDE the event log and BELOW the operator's own idempotency cache, so a repeated
+    side-effecting call is seen even when the operator would have deduplicated it."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.counts: dict[str, int] = {}
+
+    def invoke(self, operator, capability, inputs, idempotency_key, **kw):
+        self.counts[capability] = self.counts.get(capability, 0) + 1
+        return self.inner.invoke(operator, capability, inputs, idempotency_key, **kw)
+
+
+def test_resume_after_restart_does_not_repeat_completed_consequential_steps():
+    reg, client, _ = build_deploy_fleet()
+    cc = CountingClient(client)
+    store = EventStore()
+    rt = MissionRuntime(reg, Executor(cc), store=store)
+    m = rt.create_mission("Deploy", policy_refs=GRANTS, template="deploy_app")
+    rt.run(m.id)                                                  # parks on the provision gate
+    rt2 = MissionRuntime(reg, Executor(cc), store=store)         # restart: brand-new runtime, same log
+    rt2.rehydrate(m.id)
+    rt2.approve(m.id, rt2.repo.pending_human(m.id)["node_id"], "approve")
+    assert rt2._missions[m.id].state == MissionState.SUCCEEDED
+    rt2.run(m.id)                                                 # a redundant resume is a no-op
+    for cap in ("edge-sentinel.supply_chain_scan", "infra.plan", "infra.provision", "infra.configure",
+                "infra.verify"):
+        assert cc.counts[cap] == 1, (cap, cc.counts)
+
+
+def test_failed_mission_is_terminal_and_a_second_run_repeats_nothing():
+    """After a PRESERVE_ONLY failure, run() does not re-dispatch the preserved provision/configure."""
+    reg, client, undone = build_deploy_fleet(verify_fails=True)
+    cc = CountingClient(client)
+    rt = MissionRuntime(reg, Executor(cc), store=EventStore())
+    m = rt.create_mission("Deploy", policy_refs=GRANTS, template="deploy_app")
+    rt.run(m.id)
+    rt.approve(m.id, rt.repo.pending_human(m.id)["node_id"], "approve")
+    before = dict(cc.counts)
+    rt.run(m.id)
+    rt.run(m.id)
+    assert cc.counts == before and before["infra.provision"] == 1 and before["infra.configure"] == 1
+    assert undone == []
 
 
 def test_deploy_needs_infra_grant():

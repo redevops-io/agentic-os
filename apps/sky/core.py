@@ -104,6 +104,16 @@ def optimize(spec: dict, *, run: Runner = _run) -> dict:
     }
 
 
+def _estimate(chosen: dict, pinned: dict, out: str) -> dict:
+    actual = _grep(out, r"Launching on ([A-Za-z][\w-]*)") or pinned.get("cloud")
+    failed_over = bool(re.search(r"fail(?:ing|ed)?\s+over|retrying on|trying next", out or "", re.I)) or bool(
+        chosen.get("cloud") and actual and str(actual).lower() != str(chosen["cloud"]).lower())
+    if chosen.get("hourly_usd") is None or failed_over:
+        return {"hourly_usd": None, "est_monthly_usd": None, "cost_basis": ""}
+    return {"hourly_usd": chosen.get("hourly_usd"), "est_monthly_usd": chosen.get("est_monthly_usd"),
+            "cost_basis": "sky.optimize estimate of the approved placement"}
+
+
 def launch(spec: dict, *, run: Runner = _run) -> dict:
     """Provision the chosen candidate (`sky launch`). SkyPilot fails over across regions/clouds on
     capacity/quota, so the mission's saga undo is `sky.down`. The result carries the *measured*
@@ -136,6 +146,10 @@ def launch(spec: dict, *, run: Runner = _run) -> dict:
         "cloud": _grep(out, r"Launching on ([A-Za-z][\w-]*)") or pinned.get("cloud"),
         "region": pinned.get("region"), "instance": chosen.get("instance"),
         "endpoint": _grep(out, r"(https?://\S+)"), "spot": bool(spec.get("spot")),
+        # the sky.optimize ESTIMATE of the approved placement (None when launched without one, or when the launch
+        # failed over to a different placement: the estimate then describes a cloud that did not run). Lets a failed
+        # mission report what the still-provisioned cluster costs; never a measured bill (docs/COMPENSATION.md)
+        **_estimate(chosen, pinned, out),
         # measured signal for the placement reward loop (see learn.PlacementLedger)
         "time_to_ready_s": round(time.monotonic() - t0, 1),
         "failed_over": bool(re.search(r"fail(?:ing|ed)?\s+over|retrying on|trying next", out or "", re.I)),

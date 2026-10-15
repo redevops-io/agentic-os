@@ -43,8 +43,14 @@ COMPENSATION_EVENTS = (EV_REQUESTED, EV_AUTHORIZED, EV_EXECUTED, EV_VERIFIED, EV
 #: declares a compensation is eligible when the mission's failure policy is COMPENSATE_DECLARED. PRESERVE: this
 #: action's effect is KEPT on failure whatever the policy (completed beneficial / security / compliance actions);
 #: it is recorded as a retained effect and never reversed automatically.
-DISPOSITIONS = ("", "COMPENSATE", "PRESERVE")
+#: CLEANUP: a TEMPORARY resource this mission created (lock, staging file/dir, scratch resource) that is cleaned up on
+#: failure even under ``PRESERVE_ONLY``, because removing it never removes a successful, beneficial effect. A CLEANUP
+#: declaration must be fully guarded: ``supported`` + ``preconditions`` (independently safe NOW) + an explicit
+#: ``authorization_policy`` (authorized) - otherwise it does not validate. It goes through the same runner as any
+#: compensation (own approval/key/receipt/verification); only the POLICY gate differs.
+DISPOSITIONS = ("", "COMPENSATE", "PRESERVE", "CLEANUP")
 PRESERVE = "PRESERVE"
+CLEANUP = "CLEANUP"
 
 #: Explicit ``authorization_policy`` of a compensation. HUMAN_APPROVAL == ``requires_approval=True`` (a human
 #: approves each reversal, bound to the exact inputs). EVIDENCE_BOUND == the evidence-bound marker alone (the
@@ -106,6 +112,8 @@ class CompensationSpec:
     disposition: str = ""                   # "" | COMPENSATE | PRESERVE (per-action; see DISPOSITIONS)
     preconditions: str | None = None        # read-only capability: "is it still safe to reverse NOW?" -> {holds: bool}
     authorization_policy: str = ""          # "" | HUMAN_APPROVAL (== requires_approval) | EVIDENCE_BOUND
+    incurs_ongoing_cost: bool = False       # the retained effect keeps costing money (provisioned infrastructure):
+                                            # a failed mission REPORTS its resource ids + estimated cost (or "unknown")
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -143,6 +151,19 @@ def coerce(value: Any) -> CompensationSpec | None:
                              "separately authorized decision)")
         if spec.preconditions and not spec.supported:
             raise ValueError("compensation.preconditions requires supported=True")
+        if spec.disposition == CLEANUP:
+            if not spec.supported:
+                raise ValueError("compensation.disposition=CLEANUP requires supported=True and a compensating capability")
+            if not spec.preconditions:
+                raise ValueError("compensation.disposition=CLEANUP requires `preconditions` (a read-only check that "
+                                 "the cleanup is independently safe NOW)")
+            if not (spec.authorization_policy or spec.requires_approval):
+                raise ValueError("compensation.disposition=CLEANUP requires an explicit authorization_policy "
+                                 "(HUMAN_APPROVAL, or EVIDENCE_BOUND when the UNDO capability is registered "
+                                 "mission_owned_temporary=True; enforced at registration)")
+            if spec.incurs_ongoing_cost:
+                raise ValueError("compensation.disposition=CLEANUP is for temporary resources: a cost-bearing "
+                                 "(incurs_ongoing_cost) effect is retained and reported, never auto-cleaned")
         if spec.authorization_policy not in AUTH_POLICIES:
             raise ValueError(f"unknown compensation authorization_policy {spec.authorization_policy!r}")
         if spec.authorization_policy == AUTH_EVIDENCE and spec.requires_approval:
@@ -157,6 +178,17 @@ def is_preserved(cap: Any) -> bool:
     """True when the capability declares ``disposition=PRESERVE`` (its effect survives a failed workflow)."""
     spec = coerce(getattr(cap, "compensation", None))
     return spec is not None and spec.disposition == PRESERVE
+
+
+def is_cleanup(cap: Any) -> bool:
+    """True when the capability declares ``disposition=CLEANUP`` (a temporary resource that PRESERVE_ONLY still cleans)."""
+    spec = coerce(getattr(cap, "compensation", None))
+    return spec is not None and spec.disposition == CLEANUP and bool(spec.supported)
+
+
+def incurs_ongoing_cost(cap: Any) -> bool:
+    spec = coerce(getattr(cap, "compensation", None))
+    return spec is not None and bool(spec.incurs_ongoing_cost)
 
 
 def declared_undo(cap: Any) -> str | None:
@@ -209,6 +241,11 @@ def intrinsic_problems(cap: Any) -> list[str]:
     if spec is not None and spec.verify and spec.verify in (name, undo):
         out.append(f"{name}: verify '{spec.verify}' must be a read-back distinct from the forward action and "
                    "the compensating capability (verify == undo would run the undo twice)")
+    if getattr(cap, "mission_owned_temporary", False):
+        ongoing = spec is not None and spec.incurs_ongoing_cost
+        if getattr(cap, "approval_required", False) or ongoing or reversibility_of(cap) is Reversibility.REVERSIBLE_EXPLICIT:
+            out.append(f"{name}: mission_owned_temporary is for the non-consequential undo of a temporary artifact: an "
+                       "approval-gated, cost-bearing or itself-compensatable capability can never be marked temporary")
     if spec is not None and spec.supported and getattr(cap, "irreversible", False):
         out.append(f"{name}: declares both compensation.supported and irreversible")
     if getattr(cap, "undo", None) and spec is not None and spec.supported and cap.undo != spec.capability:
@@ -232,11 +269,40 @@ def lint_capability(cap: Any) -> str | None:
     return None
 
 
+def cleanup_without_human_problems(cap: Any, get_capability) -> list[str]:
+    """A CLEANUP may run WITHOUT a human only when ALL hold (empty list = valid): the forward capability is not
+    approval-gated and not cost-bearing, and its UNDO capability is registered in the same registry with the owner-side
+    marker ``mission_owned_temporary=True`` and is itself not approval-gated, not cost-bearing and not compensatable. The
+    marker is NEVER read from the forward declaration, and remote (/capabilities JSON) manifests cannot set it."""
+    spec = coerce(getattr(cap, "compensation", None))
+    if spec is None or not spec.supported or spec.disposition != CLEANUP:
+        return []
+    if spec.requires_approval or spec.authorization_policy == AUTH_HUMAN:
+        return []
+    name = getattr(cap, "name", "?")
+    out: list[str] = []
+    if getattr(cap, "approval_required", False) or spec.incurs_ongoing_cost:
+        out.append(f"{name}: a consequential (approval-gated / cost-bearing) capability needs HUMAN_APPROVAL for its CLEANUP")
+    t = get_capability(spec.capability)
+    if t is None:
+        out.append(f"{name}: CLEANUP without a human needs its undo '{spec.capability}' registered with "
+                   "mission_owned_temporary=True")
+    elif not getattr(t, "mission_owned_temporary", False):
+        out.append(f"{name}: CLEANUP without a human requires the undo '{spec.capability}' to be registered with "
+                   "mission_owned_temporary=True (otherwise declare HUMAN_APPROVAL)")
+    elif getattr(t, "approval_required", False) or incurs_ongoing_cost(t):
+        out.append(f"{name}: undo '{spec.capability}' is approval-gated or cost-bearing: it can never be a no-human cleanup")
+    return out
+
+
 def evidence_bound_conflicts(caps: Iterable[Any], get_capability) -> list[str]:
     """K2: ``authorization_policy=EVIDENCE_BOUND`` means NO human decides this reversal, so it can never name a
     compensating capability that itself requires approval (``approval_required``): that undo can only be
     ``HUMAN_APPROVAL``. Rejected at registration (``CapabilityRegistry.register``) and by the lint."""
     out: list[str] = []
+    caps = list(caps)
+    for c in caps:
+        out.extend(cleanup_without_human_problems(c, get_capability))
     for c in caps:
         spec = coerce(getattr(c, "compensation", None))
         if spec is None or not spec.supported or spec.authorization_policy != AUTH_EVIDENCE:

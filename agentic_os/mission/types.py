@@ -96,6 +96,10 @@ class CapabilitySpec:
     # legacy ``undo``) is UNKNOWN and treated as irreversible; the conformance lint flags it.
     compensation: Any = None
     irreversible: bool = False
+    # Owner-side marker on the UNDO capability of a temporary artifact (lock/staging file): the only thing that lets a
+    # CLEANUP run without a human (compensation.cleanup_without_human_problems). In-process builders only: it is never
+    # read from remote /capabilities JSON or from a forward action's compensation dict.
+    mission_owned_temporary: bool = False
     irreversible_note: str = ""                 # WHY it cannot be undone (required when irreversible; lint N10)
     approval_required: bool = False
     confidence: float = 0.9                     # learned success rate (Capability Learning)
@@ -432,10 +436,12 @@ class Mission:
     budget: Budget = field(default_factory=Budget)
     deadline: float | None = None
     state: MissionState = MissionState.PLANNING
-    # What to do when a step/branch fails: HALT_AND_REPORT | COMPENSATE_DECLARED | CONTINUE_SIBLINGS ("" =
-    # the default for the mission's topology: sequential -> COMPENSATE_DECLARED, fork branches ->
-    # HALT_AND_REPORT). See mission/compensation_policy.py and docs/COMPENSATION.md.
+    # What to do when a step/branch fails: HALT_AND_REPORT | PRESERVE_ONLY | COMPENSATE_DECLARED | CONTINUE_SIBLINGS
+    # ("" = template default, then AGENTIC_OS_DEFAULT_FAILURE_POLICY, then HALT_AND_REPORT; nothing is compensated
+    # unless COMPENSATE_DECLARED is chosen explicitly). See mission/compensation_policy.py and docs/COMPENSATION.md.
     failure_policy: str = ""
+    default_policy_source: str = ""    # env | env_invalid | template | default ("" = created before this was recorded)
+    default_policy_warning: str = ""   # non-empty when the env overrode a template or was unrecognised
     default_failure_policy: str = ""   # frozen at creation (template/env default); see compensation_policy.resolve_default
     world_state_id: str = ""
     active_plan_id: str | None = None

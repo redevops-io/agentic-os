@@ -256,3 +256,51 @@ func TestSagaDoesNotCompensateByDefault(t *testing.T) {
 		t.Fatal("unknown policy must fail safe")
 	}
 }
+
+// The kernel templates default to PRESERVE_ONLY: a template mission compensates NOTHING on failure; compensation
+// needs an explicit failure_policy (or the deployment env). Go ignores per-action PRESERVE/CLEANUP declarations.
+func TestKernelTemplatesDefaultPreserveOnly(t *testing.T) {
+	for _, tpl := range []string{"onboarding", "deploy_app", "sky_deploy"} {
+		if got := EffectiveFailurePolicy(&Mission{Template: tpl}); got != PolicyPreserveOnly {
+			t.Fatalf("template %s default = %s, want PRESERVE_ONLY", tpl, got)
+		}
+		if got := EffectiveFailurePolicy(&Mission{Template: tpl, FailurePolicy: PolicyCompensateDeclared}); got != PolicyCompensateDeclared {
+			t.Fatalf("explicit opt-in on %s must win, got %s", tpl, got)
+		}
+	}
+	t.Setenv("AGENTIC_OS_DEFAULT_FAILURE_POLICY", "COMPENSATE_DECLARED")
+	// a deployment can explicitly opt every workflow back in via the env (it beats the template table)
+	if got := EffectiveFailurePolicy(&Mission{Template: "deploy_app"}); got != PolicyCompensateDeclared {
+		t.Fatalf("explicit deployment env opt-in must beat the template default, got %s", got)
+	}
+	t.Setenv("AGENTIC_OS_DEFAULT_FAILURE_POLICY", "")
+	if got := EffectiveFailurePolicy(&Mission{Template: "deploy_app"}); got != PolicyPreserveOnly {
+		t.Fatalf("template default, got %s", got)
+	}
+}
+
+func TestSagaPreserveOnlyCompensatesNothing(t *testing.T) {
+	reg := NewCapabilityRegistry(nil)
+	a := NewCapabilitySpec("op.a", "op")
+	a.Provides = []string{"a"}
+	a.SideEffecting = true
+	a.Undo = "op.a_undo"
+	b := NewCapabilitySpec("op.b", "op")
+	b.Provides = []string{"b"}
+	b.SideEffecting = true
+	reg.Register(CapabilityManifest{Operator: "op", Capabilities: []CapabilitySpec{a, b}})
+	undone := 0
+	handlers := map[string]Handler{
+		"op.a":      func(map[string]any) (map[string]any, error) { return map[string]any{"ok": "a"}, nil },
+		"op.a_undo": func(map[string]any) (map[string]any, error) { undone++; return map[string]any{"undone": true}, nil },
+		"op.b":      func(map[string]any) (map[string]any, error) { return nil, &OperatorError{"gateway down"} },
+	}
+	rt := NewMissionRuntime(reg, NewExecutor(NewInMemoryOperatorClient(handlers)))
+	m := rt.CreateMission("job", CreateOpts{PolicyRefs: []string{"*"}, FailurePolicy: PolicyPreserveOnly})
+	rt.plans[m.ID] = mustCompile(t, m, reg, "a", "b")
+	m.State = MissionPlanning
+	rt.Run(m.ID)
+	if undone != 0 {
+		t.Fatalf("PRESERVE_ONLY must not auto-compensate, undo ran %d time(s)", undone)
+	}
+}

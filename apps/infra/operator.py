@@ -94,6 +94,7 @@ def build_infra_operator(*, run=None, http_get=None) -> Operator:
         capability("infra.provision", _provision, provides=["infra_provisioned"],
                    side_effecting=True,
             compensation={"supported": True, "capability": "infra.destroy_delta", "requires_approval": True,
+                          "incurs_ongoing_cost": True,
                           "reversibility": "REVERSIBLE_EXPLICIT", "notes": "destroy only the resources this apply created"}, approval_required=True,
                    permissions=["infra:write"], estimated_value="high", latency_ms=60000,
                    concurrency_mode="exclusive", concurrency_key=TF_STATE),
