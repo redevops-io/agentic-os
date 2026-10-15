@@ -296,8 +296,9 @@ class MissionRuntime:
                     bind_selected=bool(bind_selected and selected_capability),
                     intent_content_hash=identity.get("intent_content_hash", ""),
                     evidence_refs=identity.get("evidence_refs", []))
-        from .compensation_policy import resolve_default  # noqa: PLC0415
-        m.default_failure_policy = resolve_default(template).value      # frozen: replay never reads the env
+        from .compensation_policy import resolve_default_detailed  # noqa: PLC0415
+        _dp, m.default_policy_source, m.default_policy_warning = resolve_default_detailed(template)
+        m.default_failure_policy = _dp.value                            # frozen: replay never reads the env
         self._missions[m.id] = m
         # `policy_refs` is part of the record, not only of the object. Without
         # it the log says what happened and cannot say why it was allowed, and
@@ -318,6 +319,8 @@ class MissionRuntime:
                            **self._selected_record(m),
                            **({"failure_policy": m.failure_policy} if m.failure_policy else {}),
                            "default_failure_policy": m.default_failure_policy,
+                           "default_policy_source": m.default_policy_source,
+                           **({"default_policy_warning": m.default_policy_warning} if m.default_policy_warning else {}),
                            # mission-policy/v1 — pin the named policy identity onto mission creation
                            "policy": (m.policy.ref if m.policy else None),
                            "policy_digest": (m.policy.digest() if m.policy else None),
@@ -1510,6 +1513,8 @@ class MissionRuntime:
                     intervention_id=created.payload.get("intervention_id") or "",
                     failure_policy=created.payload.get("failure_policy") or "",
                     default_failure_policy=created.payload.get("default_failure_policy") or "",
+                    default_policy_source=created.payload.get("default_policy_source") or "",
+                    default_policy_warning=created.payload.get("default_policy_warning") or "",
                     policy_refs=list(policy_refs if policy_refs is not None else recorded),
                     # v0.2.x: replay carries the original evidence identity back, so the rehydrated
                     # mission resolves the SAME sealed intent + evidence it was created from.

@@ -349,15 +349,21 @@ action whose effect is a temporary resource the mission itself created (lock, st
 only such actions are handed to the normal compensation runner, which still applies the per-action machinery: the
 declared `preconditions` (independently safe NOW, fail closed), the declared `authorization_policy` (`HUMAN_APPROVAL`
 parks for a human; `EVIDENCE_BOUND` only for a mission-owned artifact), its own idempotency key, receipt and
-verification. `CLEANUP` is rejected unless `supported`, `preconditions` and an authorization policy are declared, and it
-cannot be combined with `incurs_ongoing_cost`. A capability that declares nothing is never cleaned up. The kernel apps
+verification. `CLEANUP` is rejected at registration unless `supported`, `preconditions` and an authorization policy are declared,
+and it cannot be combined with `incurs_ongoing_cost`. **A human approves every cleanup** (`HUMAN_APPROVAL`; the
+approval prompt and needs-you item are titled "Approve CLEANUP of temporary resource ...") **unless** the capability
+carries the explicit marker `compensation.mission_owned_temporary: true` (default false: a non-consequential temporary
+artifact the mission itself created, e.g. a lock) together with `EVIDENCE_BOUND`. The marker is rejected on
+approval-gated or irreversible capabilities, on `incurs_ongoing_cost` effects, and `EVIDENCE_BOUND` over an
+approval-gated undo is still refused (K2), so a destroy can never be cleaned up without a human. The precondition
+runs even when the log lacks execution evidence (fail closed). A capability that declares nothing is never cleaned up. The kernel apps
 declare no CLEANUP actions today (their effects are the deliverable); the mechanism exists for fleets that stage
 temporary resources. `HALT_AND_REPORT` compensates nothing at all, CLEANUP included.
 
 **Partial completion is visible.** Besides `retained_effects`, `incomplete_steps` and `partially_completed`, the outcome
 (and the `EffectsRetained` log record and the `effects_left_in_place` needs-you item) now carries `completed_steps`
 (steps still DONE; a cleaned-up temporary step is listed under `compensated` instead), `recovery_actions`
-(`retry_or_resume_incomplete_steps`, `decide_explicit_compensation`, `manual_remediation_if_unwanted`) and, for
+(`start_new_mission_for_remaining_steps`, `decide_explicit_compensation`, `manual_remediation_if_unwanted`) and, for
 capabilities declaring `compensation.incurs_ongoing_cost` (`infra.provision`, `sky.launch`, `sky.serve`),
 `retained_costs` = `{resources: [{node_id, capability, resource{cluster|service|...}, estimated_hourly_usd,
 estimated_monthly_usd, cost_known, cost_source, action_to_stop_cost}], estimated_hourly_usd, estimated_monthly_usd,
@@ -366,11 +372,33 @@ unknown_cost_resources, complete}`. The estimate is read ONLY from the forward r
 The kernel template flow does not thread `chosen` into `sky.launch`, so there the cost is reported as unknown unless a
 deployment's planner supplies it; totals sum only the known entries and `complete` says whether any is unknown.
 
-**Retries are idempotent.** A FAILED/COMPENSATION_FAILED mission is terminal for `run()` (no completed step is
+**Policy source and loud overrides.** `MissionCreated` records `default_policy_source` (`env` | `env_invalid` |
+`template` | `default`; the outcome reports `mission` when the mission chose its own) and, when relevant,
+`default_policy_warning`; the outcome carries both. A startup/creation-time log warning is emitted when
+`AGENTIC_OS_DEFAULT_FAILURE_POLICY` is set and when it overrides a template default. An unrecognised env value is logged
+at ERROR, recorded as `env_invalid` and still fails safe to `HALT_AND_REPORT` (which also drops the CLEANUP step).
+
+**In-flight missions and replay.** The default is frozen into the mission at creation. Missions created on <= 0.3.32
+carry `default_failure_policy=COMPENSATE_DECLARED` for these templates and therefore KEEP auto-reversing (with each
+undo's own authorization) after the upgrade: this is deliberate, a running mission's rules do not change under it. The
+runtime appends a one-time `LegacyFailurePolicyNotice` event, and the outcome (`legacy_policy_notice`) and the
+`effects_left_in_place` item carry the note. An operator who wants them on the new default sets
+`AGENTIC_OS_RERESOLVE_LEGACY_POLICY=1` (re-resolves only missions with a frozen COMPENSATE_DECLARED, no recorded
+source and a PRESERVE_ONLY template today; a mission deliberately created with the env opt-in is indistinguishable).
+Replay is faithful: a node with a compensation record in the log is reported from that record (`compensated`, ...)
+whatever the current policy resolves to; only a node WITHOUT a record is `left_by_policy`.
+
+**Costs.** The needs-you item has a human-readable `cost_summary` (an explicit "COST UNKNOWN" line when unknown). The
+`sky.launch` estimate is withheld (unknown) when the launch failed over to another cloud. A FAILED or
+rejected-after-dispatch `sky.launch` / `infra.provision` is listed as `possibly_provisioned` with cost unknown and the
+identifiers its inputs carry.
+
+**Retries.** A FAILED/COMPENSATION_FAILED mission is terminal for `run()` (no completed step is
 re-dispatched); a restarted runtime rehydrates `done` nodes from the log and resumes only the unfinished ones; every
 forward dispatch carries the node's stable idempotency key. Verified by counting-client tests outside the log
 (`tests/test_deploy_mission.py`, `tests/test_onboarding_real.py`, `apps/sky/test_sky_deploy_preserve.py`). There is no
-"retry a FAILED mission" entry point today: re-doing the unfinished work is a new, human-initiated mission.
+resume route for a FAILED mission (it is terminal; `resume()` only continues PAUSED): the recovery action is honestly
+`start_new_mission_for_remaining_steps`, listing the remaining steps; completed steps are not repeated by the old mission.
 
 **Compensation stays opt-in.** `create_mission(failure_policy="COMPENSATE_DECLARED")` for one mission, or
 `AGENTIC_OS_DEFAULT_FAILURE_POLICY=COMPENSATE_DECLARED` for a deployment, restores the old behaviour, and each
@@ -383,7 +411,8 @@ approval-gated).
 |---|---|
 | `onboarding`/`deploy_app`/`sky_deploy` failure undid completed steps automatically (reverse order) | kept; reported as partially completed; undo only on explicit opt-in |
 | tests asserting `CompensationExecuted` for these templates | assert preservation + `retained_effects`/`completed_steps`/`incomplete_steps`; separate explicit-opt-in tests keep the old assertions |
-| env `AGENTIC_OS_DEFAULT_FAILURE_POLICY` lower priority than the template table | higher: it now also opts the kernel templates in (or out) |
+| env `AGENTIC_OS_DEFAULT_FAILURE_POLICY` lower priority than the template table | higher: it now also opts the kernel templates in (or out); source recorded, override warned |
+| in-flight missions frozen at COMPENSATE_DECLARED | unchanged behaviour + `LegacyFailurePolicyNotice`; `AGENTIC_OS_RERESOLVE_LEGACY_POLICY=1` to re-resolve |
 | outcome keys | + `completed_steps`, `recovery_actions`, `retained_costs`; `EffectsRetained` payload carries them |
 | `CompensationSpec` | + `disposition: CLEANUP`, + `incurs_ongoing_cost` |
 | Go port | `onboarding`, `deploy_app`, `sky_deploy` -> `PRESERVE_ONLY` (Go compensates only under `COMPENSATE_DECLARED`; CLEANUP/PRESERVE/preconditions still ignored) |

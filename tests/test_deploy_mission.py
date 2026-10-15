@@ -107,7 +107,7 @@ def test_failed_verify_preserves_the_working_deployment_and_reports_partial_comp
         "edge-sentinel.supply_chain_scan", "infra.plan", "infra.provision", "infra.configure"]
     assert [i["capability"] for i in out["incomplete_steps"]] == ["infra.verify"]
     assert "health check failed" in out["incomplete_steps"][0]["error"]
-    assert {a["action"] for a in out["recovery_actions"]} >= {"retry_or_resume_incomplete_steps",
+    assert {a["action"] for a in out["recovery_actions"]} >= {"start_new_mission_for_remaining_steps",
                                                               "decide_explicit_compensation"}
     assert "EffectsRetained" in types
     item = [i for i in attention_items(rt, m.id) if i["kind"] == "effects_left_in_place"][0]

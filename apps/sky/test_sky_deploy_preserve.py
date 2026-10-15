@@ -21,7 +21,7 @@ _DRYRUN = """\
 """
 
 
-def _fleet(*, dryrun=_DRYRUN):
+def _fleet(*, dryrun=_DRYRUN, launch=(0, "Launching on GCP g2-standard-4\nEndpoint: http://34.1.2.3:8000\n", "")):
     runs: list[list[str]] = []
 
     def run(argv, cwd=None):
@@ -32,7 +32,7 @@ def _fleet(*, dryrun=_DRYRUN):
         if "sky check" in j:
             return 0, "  GCP: enabled\n", ""
         if "sky launch" in j:
-            return 0, "Launching on GCP g2-standard-4\nEndpoint: http://34.1.2.3:8000\n", ""
+            return launch
         return 0, "", ""
 
     verifier = Operator("verifier", [capability(
@@ -55,8 +55,8 @@ class _Counting:
         return self.inner.invoke(operator, cap, inputs, key, **kw)
 
 
-def _fail_deploy(**create):
-    reg, client, runs = _fleet()
+def _fail_deploy(fleet_kw=None, **create):
+    reg, client, runs = _fleet(**(fleet_kw or {}))
     cc = _Counting(client)
     rt = MissionRuntime(reg, Executor(cc), store=EventStore())
     m = rt.create_mission("place a GPU job", policy_refs=["*"], template="sky_deploy", **create)
@@ -145,3 +145,32 @@ def test_restart_resume_does_not_relaunch_the_cluster():
     rt2.run(m.id)
     assert cc.counts == n and n["sky.launch"] == 1 and n["sky.check"] == 1 and n["sky.optimize"] == 1
     assert len([r for r in runs if r[:2] == ["sky", "launch"] and "--dryrun" not in r]) == 1
+
+
+def test_needs_you_item_states_unknown_cost_in_a_human_readable_line():
+    rt, m, _, _ = _fail_deploy()
+    item = [i for i in attention_items(rt, m.id) if i["kind"] == "effects_left_in_place"][0]
+    assert "COST UNKNOWN" in item["cost_summary"] and "sky.launch" in item["cost_summary"]
+    assert "cluster=sk-app" in item["cost_summary"] and "sky.down" in item["cost_summary"]
+
+
+def test_estimate_is_withheld_after_failover_to_another_cloud():
+    chosen = {"cloud": "GCP", "region": "r", "instance": "i", "hourly_usd": 0.85, "est_monthly_usd": 620.5}
+    reg, client, _ = _fleet(launch=(0, "Launching on AWS g5.xlarge\nfailed over from GCP\n", ""))
+    res = client.invoke("sky", "sky.launch", {"spec": {"name": "d"}, "chosen": chosen, "_approval": {"approved": True}}, "k")
+    assert res["hourly_usd"] is None and res["cost_basis"] == ""
+    from agentic_os.mission.compensation_runner import _retained_costs
+    rt, m, _, _ = _fail_deploy()
+    rt._compensation_evidence = lambda mid, nid: {"result": {"cluster": "c1", "hourly_usd": 0.85, "failed_over": True}}
+    (r,) = _retained_costs(rt, m, rt._plans[m.id], m.outcome["retained_effects"])["resources"]
+    assert r["cost_known"] is False and "failed over" in r["cost_source"]
+
+
+def test_a_failed_launch_is_reported_as_possibly_provisioned_with_unknown_cost():
+    rt, m, runs, _ = _fail_deploy({"launch": (1, "partial", "quota exceeded after creating head node")})
+    assert m.state == MissionState.FAILED and _downs(runs) == []
+    (r,) = m.outcome["retained_costs"]["resources"]
+    assert r["capability"] == "sky.launch" and r["possibly_provisioned"] is True and r["cost_known"] is False
+    assert "POSSIBLY provisioned" in m.outcome["retained_costs"]["summary"]
+    item = [i for i in attention_items(rt, m.id) if i["kind"] == "effects_left_in_place"][0]
+    assert "POSSIBLY" in item["cost_summary"]

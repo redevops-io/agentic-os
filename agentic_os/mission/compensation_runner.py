@@ -26,7 +26,8 @@ from .verify import is_staged, result_failed
 OUTCOME_KEYS = ("compensation_incomplete", "compensation_remaining", "compensated", "compensated_unverified",
                 "compensation_acknowledged", "compensation_skipped", "not_reversible", "not_compensated",
                 "rolled_back", "failure_policy", "partially_completed", "retained_effects", "incomplete_steps",
-                "completed_steps", "recovery_actions", "retained_costs")
+                "completed_steps", "recovery_actions", "retained_costs", "default_policy_source", "default_policy_warning",
+                "legacy_policy_notice")
 APPROVAL_TTL_S = 3600
 
 _LOCKS: dict[tuple, threading.Lock] = {}
@@ -134,11 +135,28 @@ def _policy_allows(policy, spec) -> bool:
     return policy is FailurePolicy.PRESERVE_ONLY and spec is not None and C.is_cleanup(spec)
 
 
+LEGACY_NOTICE = ("this mission was created before kernel templates defaulted to PRESERVE_ONLY: its frozen default is "
+                 "COMPENSATE_DECLARED, so a failure still auto-reverses declared undos (each still needs its own "
+                 "authorization). Set AGENTIC_OS_RERESOLVE_LEGACY_POLICY=1 to re-resolve it to the current default.")
+
+
+def _legacy_notice(rt, m, policy) -> bool:
+    """One-time EVENT (not a behaviour change) for an in-flight mission frozen under the pre-PRESERVE_ONLY default."""
+    from .compensation_policy import is_legacy_frozen  # noqa: PLC0415
+    if not (is_legacy_frozen(m) and policy is FailurePolicy.COMPENSATE_DECLARED):
+        return False
+    if not any(e.type == "LegacyFailurePolicyNotice" for e in rt.store.for_mission(m.id)):
+        rt.store.append("LegacyFailurePolicyNotice", m.id, {"template": m.template, "frozen_default": "COMPENSATE_DECLARED",
+                                                             "notice": LEGACY_NOTICE})
+    return True
+
+
 def run_saga(rt, m, plan) -> None:
     store = rt.store
     status = rt.repo.node_status(m.id)
     policy = effective_policy(m, forked=is_forked(plan))
     forward_caps = {n.capability for n in plan.graph.nodes}
+    _legacy_notice(rt, m, policy)
     if policy in (FailurePolicy.COMPENSATE_DECLARED, FailurePolicy.PRESERVE_ONLY):
         for node in reversed(plan.graph.nodes):
             if status.get(node.id) != NodeState.DONE or not node.side_effecting or not node.undo:
@@ -181,7 +199,7 @@ def _compensate_node(rt, m, node, policy, forward_caps) -> None:
             store.append(C.EV_UNDECLARED_TARGET, m.id, {
                 **base, "warning": f"declared undo '{node.undo}' is not a registered capability; it will not "
                                    "receive the compensation marker (sunset: see docs/COMPENSATION.md)"})
-        if ev.get("executed") and node.undo != node.capability and node.undo not in forward_caps:
+        if node.undo != node.capability and node.undo not in forward_caps:
             # evaluate the declared compensation against CURRENT conditions BEFORE asking anyone to approve it
             why = _check_preconditions(rt, m, node, spec, ev.get("result"), attempt, "plan")
             if why:
@@ -191,10 +209,13 @@ def _compensate_node(rt, m, node, policy, forward_caps) -> None:
             inputs = C.undo_inputs(node, m.id, ev.get("result"))
             store.append(C.EV_APPROVAL_REQUIRED, m.id, {
                 **base, "inputs_sha256": inputs_hash(inputs), "undo_inputs": inputs["result"],
-                "message": f"approve compensation of {node.id}: run '{node.undo}' with exactly these inputs"})
+                "cleanup": C.is_cleanup(spec),
+                "message": (f"approve CLEANUP of temporary resource {node.id}: run '{node.undo}' with exactly these "
+                            "inputs (the rest of the workflow's effects are preserved)") if C.is_cleanup(spec) else
+                           f"approve compensation of {node.id}: run '{node.undo}' with exactly these inputs"})
             return                                           # PARK: needs its own human approval
     approval = st.get("approval") if pending_approval else None
-    if pending_approval and ev.get("executed") and node.undo not in forward_caps:
+    if pending_approval and node.undo not in forward_caps:
         # the world may have changed while the approval was pending: re-check right before executing
         why = _check_preconditions(rt, m, node, spec, ev.get("result"), attempt, "exec")
         if why:
@@ -240,6 +261,12 @@ def _note(spec) -> str:
     return C.irreversible_note(spec) if spec is not None else ""
 
 
+def _policy_source(m) -> str:
+    if getattr(m, "failure_policy", ""):
+        return "mission"
+    return getattr(m, "default_policy_source", "") or "legacy_frozen"
+
+
 def compute_outcome(rt, m, plan) -> dict:
     status = rt.repo.node_status(m.id)
     events = rt.store.for_mission(m.id)
@@ -270,7 +297,9 @@ def compute_outcome(rt, m, plan) -> dict:
                              ("irreversible" if cls is C.Reversibility.IRREVERSIBLE else "undeclared_reversibility"),
                              "detail": _note(spec)})
             continue
-        if preserved or not _policy_allows(policy, spec):
+        # REPLAY: what actually happened is in the log. A node with a compensation record is reported from that record
+        # whatever the CURRENT policy resolves to (an old log's real compensation must not read as `left_by_policy`).
+        if preserved or (not st and not _policy_allows(policy, spec)):
             not_compensated.append(node.id)
             retained.append({"node_id": node.id, "capability": node.capability,
                              "reason": "preserved_by_declaration" if preserved else "left_by_policy",
@@ -292,10 +321,16 @@ def compute_outcome(rt, m, plan) -> dict:
                              "detail": st.get("reason") or st.get("ack_reason") or ""})
     remaining = list(s["compensation_failed"])
     # an exhausted (max attempts) failure is still "remaining": only an acknowledge clears it
-    out: dict = {"failure_policy": policy.value, "compensated": s["compensated"],
+    out: dict = {"failure_policy": policy.value, "default_policy_source": _policy_source(m),
+                 "compensated": s["compensated"],
                  "compensated_unverified": s["compensated_unverified"],
                  "compensation_acknowledged": s["compensation_acknowledged"],
                  "not_reversible": not_reversible, "not_compensated": not_compensated}
+    if getattr(m, "default_policy_warning", "") and not getattr(m, "failure_policy", ""):
+        out["default_policy_warning"] = m.default_policy_warning
+    from .compensation_policy import is_legacy_frozen  # noqa: PLC0415
+    if is_legacy_frozen(m) and policy is FailurePolicy.COMPENSATE_DECLARED:
+        out["legacy_policy_notice"] = LEGACY_NOTICE
     if s["compensation_skipped"]:
         out["compensation_skipped"] = dict(s["compensation_skipped"])
     if remaining:
@@ -320,9 +355,9 @@ def compute_outcome(rt, m, plan) -> dict:
                                        "side_effecting": bool(n.side_effecting)}
                                       for n in plan.graph.nodes if status.get(n.id) == NodeState.DONE]
             out["recovery_actions"] = _recovery_actions(plan, incomplete, retained)
-        costs = _retained_costs(rt, m, plan, retained)
-        if costs:
-            out["retained_costs"] = costs
+    costs = _retained_costs(rt, m, plan, retained, status)
+    if costs:
+        out["retained_costs"] = costs
     # `rolled_back` only when every executed consequential effect was VERIFIED undone by a real read-back and
     # nothing is left over (unverified, failed, acknowledged-as-remaining, irreversible, preserved or left).
     out["rolled_back"] = bool(s["compensated"] and s["readback_only"]
@@ -340,35 +375,66 @@ def _num(v) -> "float | None":
     return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0 else None
 
 
-def _retained_costs(rt, m, plan, retained: list[dict]) -> dict:
-    """Resources still provisioned (and costing money) after a failed mission: only for retained effects whose
-    capability declares ``compensation.incurs_ongoing_cost``. Cost comes ONLY from the forward result
-    (``hourly_usd`` / ``est_monthly_usd``, e.g. the sky.optimize estimate that was approved); when the result carries
-    none the cost is reported as UNKNOWN (``null`` + ``cost_known: false``) - a number is never invented."""
+def _cost_line(i: dict) -> str:
+    who = ", ".join(f"{k}={v}" for k, v in (i.get("resource") or {}).items()) or "identifiers unknown"
+    if i["cost_known"]:
+        return (f"{i['capability']} [{who}]: still provisioned, ~${i['estimated_hourly_usd']}/h "
+                f"(~${i['estimated_monthly_usd']}/month, {i['cost_source']}); stop with {i['action_to_stop_cost'] or 'a manual action'}")
+    state = "POSSIBLY provisioned (the step failed)" if i.get("possibly_provisioned") else "still provisioned"
+    return (f"{i['capability']} [{who}]: {state}, COST UNKNOWN ({i['cost_source']}); "
+            f"check the provider and stop with {i['action_to_stop_cost'] or 'a manual action'}")
+
+
+def _retained_costs(rt, m, plan, retained: list[dict], status: "dict | None" = None) -> dict:
+    """Resources still provisioned (and costing money) after a failed mission: for retained effects, and for a FAILED
+    step, whose capability declares ``compensation.incurs_ongoing_cost``. Cost comes ONLY from the forward result
+    (``hourly_usd`` / ``est_monthly_usd``, the sky.optimize estimate of the approved placement); with none - or when the
+    launch failed over to a different placement than the estimate describes - it is UNKNOWN (``null`` +
+    ``cost_known: false``). A number is never invented. A FAILED step may have partly created resources: it is listed as
+    ``possibly_provisioned`` with whatever identifiers its inputs carry."""
+    status = status if status is not None else rt.repo.node_status(m.id)
     items: list[dict] = []
-    for r in retained:
-        node = plan.graph.by_id(r["node_id"])
+    cands = [(plan.graph.by_id(r["node_id"]), False) for r in retained]
+    cands += [(n, True) for n in plan.graph.nodes if status.get(n.id) in (NodeState.FAILED, NodeState.RUNNING)]
+    for node, failed in cands:
         spec = rt.registry.get(node.capability) if node is not None else None
         if spec is None or not C.incurs_ongoing_cost(spec):
             continue
-        try:
-            res = (rt._compensation_evidence(m.id, node.id) or {}).get("result")
-        except Exception:  # noqa: BLE001
-            res = None
+        res: dict = {}
+        if not failed:
+            try:
+                res = (rt._compensation_evidence(m.id, node.id) or {}).get("result")
+            except Exception:  # noqa: BLE001
+                res = None
         res = res if isinstance(res, dict) else {}
+        src = dict(getattr(node, "inputs", None) or {})
+        if isinstance(src.get("spec"), dict):
+            src = {**src["spec"], **src}
         ids = {k: res[k] for k in _ID_KEYS if res.get(k) not in (None, "", [], {})}
-        hourly = next((v for v in (_num(res.get(k)) for k in _HOURLY_KEYS) if v is not None), None)
-        monthly = next((v for v in (_num(res.get(k)) for k in _MONTHLY_KEYS) if v is not None), None)
-        if hourly is None and monthly is not None:
-            hourly = round(monthly / 730, 4)
-        if monthly is None and hourly is not None:
-            monthly = round(hourly * 730, 2)
-        items.append({"node_id": node.id, "capability": node.capability, "resource": ids,
-                      "estimated_hourly_usd": hourly, "estimated_monthly_usd": monthly,
-                      "cost_known": hourly is not None,
-                      "cost_source": "forward result (approved estimate)" if hourly is not None else "unknown",
-                      "action_to_stop_cost": node.undo or "",
-                      "note": "still provisioned; teardown is a separate, explicitly authorized action"})
+        if failed:
+            ids = {k: src[k] for k in _ID_KEYS if isinstance(src.get(k), (str, int)) and src.get(k) != ""}
+        hourly = monthly = None
+        why = "unknown"
+        if failed:
+            why = "unknown: the step failed, resources may exist"
+        elif res.get("failed_over"):
+            why = "unknown: launch failed over, the approved estimate describes another placement"
+        else:
+            hourly = next((v for v in (_num(res.get(k)) for k in _HOURLY_KEYS) if v is not None), None)
+            monthly = next((v for v in (_num(res.get(k)) for k in _MONTHLY_KEYS) if v is not None), None)
+            if hourly is None and monthly is not None:
+                hourly = round(monthly / 730, 4)
+            if monthly is None and hourly is not None:
+                monthly = round(hourly * 730, 2)
+            if hourly is not None:
+                why = "forward result (approved estimate)"
+        it = {"node_id": node.id, "capability": node.capability, "resource": ids,
+              "estimated_hourly_usd": hourly, "estimated_monthly_usd": monthly,
+              "cost_known": hourly is not None, "cost_source": why, "possibly_provisioned": failed,
+              "action_to_stop_cost": node.undo or "",
+              "note": "teardown is a separate, explicitly authorized action"}
+        it["line"] = _cost_line(it)
+        items.append(it)
     if not items:
         return {}
     known = [i["estimated_hourly_usd"] for i in items if i["cost_known"]]
@@ -377,13 +443,16 @@ def _retained_costs(rt, m, plan, retained: list[dict]) -> dict:
             "estimated_monthly_usd": round(sum(i["estimated_monthly_usd"] for i in items if i["cost_known"]), 2)
             if known else None,
             "unknown_cost_resources": [i["node_id"] for i in items if not i["cost_known"]],
-            "complete": all(i["cost_known"] for i in items)}
+            "complete": all(i["cost_known"] for i in items),
+            "summary": "; ".join(i["line"] for i in items)}
 
 
 def _recovery_actions(plan, incomplete: list[dict], retained: list[dict]) -> list[dict]:
     """What a human/operator must decide next. Never a rollback: reversing a preserved effect is a NEW decision."""
-    acts = [{"action": "retry_or_resume_incomplete_steps", "steps": [i["node_id"] for i in incomplete],
-             "detail": "re-run only the steps that never finished; completed steps are not repeated"}]
+    acts = [{"action": "start_new_mission_for_remaining_steps", "steps": [i["node_id"] for i in incomplete],
+             "capabilities": [i.get("capability") for i in incomplete],
+             "detail": "a FAILED mission is terminal and cannot be resumed: start a NEW mission covering only these "
+                       "remaining steps (the completed steps listed in completed_steps are already in place)"}]
     reversible = [r["node_id"] for r in retained if r.get("reason") == "left_by_policy"]
     if reversible:
         acts.append({"action": "decide_explicit_compensation", "steps": reversible,
@@ -401,7 +470,7 @@ def _record_retained(rt, m, outcome: dict) -> None:
     """Append the retained-effects record to the durable log (execution history) when it CHANGED, so the
     history names every effect a failed workflow left behind and why, once per distinct state."""
     retained = outcome.get("retained_effects") or []
-    if not retained:
+    if not retained and not outcome.get("retained_costs"):
         return
     last = next((e.payload for e in reversed(rt.store.for_mission(m.id)) if e.type == C.EV_RETAINED), None)
     if last is not None and last.get("retained_effects") == retained and \
@@ -503,8 +572,12 @@ def attention_items(rt, mission_id: str) -> list[dict]:
             req = next((e for e in reversed(rt.store.for_mission(mission_id))
                         if e.type == C.EV_APPROVAL_REQUIRED and e.payload.get("node_id") == nid), None)
             p = req.payload if req else {}
-            items.append({**base, "kind": "compensation_approval", "title": f"Approve compensation of {nid}",
-                          "why": f"run '{v.get('undo')}' (attempt {v['attempt']}) with exactly these inputs",
+            cleanup = bool(p.get("cleanup"))
+            items.append({**base, "kind": "compensation_approval",
+                          "title": (f"Approve CLEANUP of temporary resource {nid}" if cleanup
+                                    else f"Approve compensation of {nid}"),
+                          "why": (f"CLEANUP of a temporary resource only (other effects are preserved): " if cleanup else "")
+                                 + f"run '{v.get('undo')}' (attempt {v['attempt']}) with exactly these inputs",
                           "undo": v.get("undo"), "inputs": p.get("undo_inputs"),
                           "inputs_sha256": p.get("inputs_sha256"), "decisions": ["approve_compensation", "acknowledge"]})
         elif v["status"] == "failed":
@@ -526,15 +599,19 @@ def attention_items(rt, mission_id: str) -> list[dict]:
     left = list(out.get("not_compensated") or [])
     actionable = [r for r in (out.get("retained_effects") or [])
                   if r.get("reason") in ("preserved_by_declaration", "precondition_not_met", "left_by_policy")]
-    if m is not None and m.state.value == "failed" and (left or actionable) and not out.get("compensation_acknowledged"):
+    costs = dict(out.get("retained_costs") or {})
+    if m is not None and m.state.value == "failed" and (left or actionable or costs) and not out.get("compensation_acknowledged"):
         items.append({"mission_id": mission_id, "goal": goal, "kind": "effects_left_in_place",
-                      "title": f"Mission partially completed; {len(left) or len(actionable)} effect(s) were left in place",
+                      "title": f"Mission partially completed; {len(left) or len(actionable) or len(costs.get('resources') or [])} effect(s) were left in place",
                       "why": f"failure policy {out.get('failure_policy')}: succeeded effects are kept, not reversed",
                       "not_compensated": left, "not_reversible": list(out.get("not_reversible") or []),
                       "retained_effects": list(out.get("retained_effects") or []),
                       "incomplete_steps": list(out.get("incomplete_steps") or []),
                       "completed_steps": list(out.get("completed_steps") or []),
                       "recovery_actions": list(out.get("recovery_actions") or []),
-                      "retained_costs": dict(out.get("retained_costs") or {}),
+                      "retained_costs": costs,
+                      "cost_summary": costs.get("summary") or "no cost-bearing resource among the retained effects",
+                      **({"legacy_policy_notice": out["legacy_policy_notice"]} if out.get("legacy_policy_notice") else {}),
+                      **({"default_policy_warning": out["default_policy_warning"]} if out.get("default_policy_warning") else {}),
                       "decisions": ["manual_remediation", "escalate"]})
     return items

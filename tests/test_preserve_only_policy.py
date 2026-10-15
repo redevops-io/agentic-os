@@ -45,7 +45,7 @@ def test_explicit_opt_ins_beat_the_template_default(monkeypatch):
 
 # ── CLEANUP declaration is validated fail-closed ─────────────────────────────────────────────────────────────
 GOOD = {"supported": True, "capability": "tmp.release", "disposition": "CLEANUP", "preconditions": "tmp.safe",
-        "authorization_policy": "EVIDENCE_BOUND", "verify": "tmp.verify"}
+        "authorization_policy": "EVIDENCE_BOUND", "mission_owned_temporary": True, "verify": "tmp.verify"}
 
 
 def test_cleanup_declaration_validates():
@@ -54,6 +54,7 @@ def test_cleanup_declaration_validates():
     for bad, why in (({**GOOD, "supported": False, "capability": None, "preconditions": None}, "supported"),
                      ({k: v for k, v in GOOD.items() if k != "preconditions"}, "preconditions"),
                      ({k: v for k, v in GOOD.items() if k != "authorization_policy"}, "authorization"),
+                     ({**GOOD, "mission_owned_temporary": False}, "mission_owned_temporary"),   # no human, no marker
                      ({**GOOD, "incurs_ongoing_cost": True}, "cost")):
         with pytest.raises(ValueError, match=why):
             C.coerce(bad)
@@ -81,10 +82,12 @@ def test_preserve_only_decision_keeps_everything_except_declared_cleanup():
 class Fx:
     """stage (temporary lock, CLEANUP) -> deploy (successful, reversible, NOT cleanup) -> report (fails)."""
 
-    def __init__(self, policy="PRESERVE_ONLY", *, holds=True, cleanup=True, template=None):
+    def __init__(self, policy="PRESERVE_ONLY", *, holds=True, cleanup=True, template=None, human_cleanup=False):
         self.calls: list[str] = []
         self.holds = holds
-        stage_comp = dict(GOOD) if cleanup else {**{k: v for k, v in GOOD.items() if k != "disposition"}}
+        stage_comp = ({**{k: v for k, v in GOOD.items() if k != "mission_owned_temporary"},
+                       "authorization_policy": "HUMAN_APPROVAL"} if human_cleanup else dict(GOOD)) if cleanup else \
+            {k: v for k, v in GOOD.items() if k not in ("disposition", "mission_owned_temporary")}
 
         def rec(name, out):
             def h(i):
@@ -128,7 +131,7 @@ def test_preserve_only_keeps_successful_effects_cleans_temp_resource_and_reports
     assert out["not_compensated"] and out["compensated"]
     assert [c["capability"] for c in out["completed_steps"]] == ["app.deploy"]   # the cleaned temp step is in `compensated`
     assert [i["capability"] for i in out["incomplete_steps"]] == ["report.submit"]
-    assert out["recovery_actions"][0]["action"] == "retry_or_resume_incomplete_steps"
+    assert out["recovery_actions"][0]["action"] == "start_new_mission_for_remaining_steps"
     assert [i for i in attention_items(fx.rt, fx.m.id) if i["kind"] == "effects_left_in_place"]
 
 
@@ -179,3 +182,114 @@ def test_go_port_template_defaults_agree_with_python():
     go = {k: consts[v] for k, v in re.findall(r'"(\w+)":\s*(Policy\w+)', block)}
     assert go == TEMPLATE_FAILURE_POLICY
     assert consts["PolicyPreserveOnly"] == FailurePolicy.PRESERVE_ONLY.value
+
+
+# ── review fixes ─────────────────────────────────────────────────────────────────────────────────────────────
+def test_cleanup_without_human_requires_the_explicit_temporary_marker_and_is_rejected_at_registration():
+    destroy = {"supported": True, "capability": "infra.destroy_delta", "disposition": "CLEANUP",
+               "preconditions": "tmp.safe", "authorization_policy": "EVIDENCE_BOUND"}
+    with pytest.raises(ValueError, match="mission_owned_temporary"):
+        C.coerce(destroy)
+    with pytest.raises(ValueError, match="cost"):
+        C.coerce({**destroy, "mission_owned_temporary": True, "incurs_ongoing_cost": True})
+    with pytest.raises(ValueError, match="CLEANUP"):
+        C.coerce({**GOOD, "disposition": "", "mission_owned_temporary": True})
+    reg = CapabilityRegistry()
+    # an approval-gated (consequential) capability can never be marked temporary
+    with pytest.raises(ValueError, match="temporary"):
+        reg.register(CapabilityManifest("m", [_spec("x.make", "o", side_effecting=True, approval_required=True,
+                                                    compensation=dict(GOOD))]))
+    # EVIDENCE_BOUND cleanup over an approval-gated destroy is rejected too (K2)
+    with pytest.raises(ValueError):
+        reg.register(CapabilityManifest("m", [
+            _spec("x.make", "o", side_effecting=True, compensation={**GOOD, "capability": "x.destroy"}),
+            _spec("x.destroy", None, side_effecting=True, approval_required=True, irreversible=True)]))
+    # a human-approved CLEANUP needs no marker
+    ok = C.coerce({**{k: v for k, v in GOOD.items() if k != "mission_owned_temporary"},
+                   "authorization_policy": "HUMAN_APPROVAL"})
+    assert ok.requires_approval and not ok.mission_owned_temporary
+
+
+def test_human_approved_cleanup_parks_with_a_cleanup_prompt_and_runs_only_after_approval():
+    fx = Fx(human_cleanup=True)
+    assert "tmp.release" not in fx.calls                            # parked, not executed
+    item = [i for i in attention_items(fx.rt, fx.m.id) if i["kind"] == "compensation_approval"][0]
+    assert "CLEANUP" in item["title"] and "temporary" in item["why"]
+    req = [e for e in fx.rt.store.for_mission(fx.m.id) if e.type == "CompensationApprovalRequired"][0]
+    assert req.payload["cleanup"] is True and "CLEANUP" in req.payload["message"]
+    fx.rt.compensation_intervention(fx.m.id, "approve", actor="admin", reason="ok", node_id=item["node_id"])
+    assert fx.calls.count("tmp.release") == 1 and "app.rollback" not in fx.calls
+
+
+def test_precondition_is_evaluated_even_when_forward_execution_evidence_is_missing():
+    """Fail closed: with no `executed` evidence the cleanup must not be considered safe merely because the evidence gate
+    was skipped; the precondition runs (and the Executor refuses the undo)."""
+    fx = Fx(holds=False)
+    pre = [c for c in fx.calls if c == "tmp.safe"]
+    assert pre                                                      # evaluated
+    assert "tmp.release" not in fx.calls
+
+
+def test_replay_reports_real_compensation_whatever_the_current_policy(monkeypatch):
+    from agentic_os.mission.compensation_runner import outcome_from_log
+    fx = Fx(policy="COMPENSATE_DECLARED")
+    assert fx.m.outcome["compensated"] and "app.rollback" in fx.calls
+    # the same log, replayed under a policy that would not have compensated
+    fx.m.failure_policy = ""
+    fx.m.default_failure_policy = "PRESERVE_ONLY"
+    out = outcome_from_log(fx.rt, fx.m.id)
+    live = fx.m.outcome
+    assert out["compensated"] == live["compensated"] and out["compensated_unverified"] == live["compensated_unverified"]
+    assert len(out["compensated"]) + len(out["compensated_unverified"]) == 2 and not out["not_compensated"]
+    assert not any(r["reason"] == "left_by_policy" for r in out.get("retained_effects", []))
+
+
+class _Legacy:
+    template = "deploy_app"
+    failure_policy = ""
+    default_failure_policy = "COMPENSATE_DECLARED"
+    default_policy_source = ""
+
+
+def test_in_flight_legacy_mission_keeps_its_frozen_policy_with_a_notice_and_an_opt_out(monkeypatch):
+    from agentic_os.mission.compensation_policy import is_legacy_frozen
+    assert is_legacy_frozen(_Legacy()) and effective_policy(_Legacy()) is FailurePolicy.COMPENSATE_DECLARED
+    monkeypatch.setenv("AGENTIC_OS_RERESOLVE_LEGACY_POLICY", "1")
+    assert effective_policy(_Legacy()) is FailurePolicy.PRESERVE_ONLY
+    monkeypatch.delenv("AGENTIC_OS_RERESOLVE_LEGACY_POLICY")
+    new = _Legacy()
+    new.default_policy_source = "env"                               # recorded => not legacy
+    assert not is_legacy_frozen(new)
+    # end to end: frozen COMPENSATE_DECLARED on a template mission -> notice event + outcome note + needs-you note
+    fx = Fx(template="deploy_app", policy="")
+    # (Fx default_failure_policy comes from today's resolution; simulate the pre-upgrade freeze and re-run the saga)
+    from agentic_os.mission.compensation_runner import run_saga
+    fx.m.default_failure_policy, fx.m.default_policy_source = "COMPENSATE_DECLARED", ""
+    run_saga(fx.rt, fx.m, fx.rt._plans[fx.m.id])
+    assert "LegacyFailurePolicyNotice" in _types(fx.rt, fx.m)
+    assert "COMPENSATE_DECLARED" in fx.m.outcome["legacy_policy_notice"]
+    assert "app.rollback" in fx.calls                               # old behaviour preserved for the in-flight mission
+
+
+def test_default_policy_source_is_recorded_and_env_override_and_garbage_are_loud(monkeypatch, caplog):
+    import logging
+    from agentic_os.mission import compensation_policy as P
+    P._WARNED.clear()
+    fx = Fx(template="sky_deploy", policy="")
+    assert fx.m.default_policy_source == "template" and fx.m.outcome["default_policy_source"] == "template"
+    created = next(e for e in fx.rt.store.for_mission(fx.m.id) if e.type == "MissionCreated").payload
+    assert created["default_policy_source"] == "template"
+    monkeypatch.setenv("AGENTIC_OS_DEFAULT_FAILURE_POLICY", "COMPENSATE_DECLARED")
+    with caplog.at_level(logging.WARNING):
+        fx2 = Fx(template="sky_deploy", policy="")
+    assert fx2.m.default_policy_source == "env" and "overrides the template default" in fx2.m.default_policy_warning
+    assert fx2.m.outcome["default_policy_warning"] and fx2.m.outcome["default_policy_source"] == "env"
+    assert any("overrides the template default" in r.message for r in caplog.records)
+    monkeypatch.setenv("AGENTIC_OS_DEFAULT_FAILURE_POLICY", "ROLLBACK_PLEASE")
+    with caplog.at_level(logging.ERROR):
+        fx3 = Fx(template="sky_deploy", policy="")
+    assert fx3.m.default_policy_source == "env_invalid" and "not a failure policy" in fx3.m.outcome["default_policy_warning"]
+    assert any(r.levelno == logging.ERROR for r in caplog.records)
+    assert fx3.m.outcome["failure_policy"] == "HALT_AND_REPORT"
+    own = Fx(template="sky_deploy", policy="PRESERVE_ONLY")
+    assert own.m.outcome["default_policy_source"] == "mission"

@@ -112,6 +112,8 @@ class CompensationSpec:
     disposition: str = ""                   # "" | COMPENSATE | PRESERVE (per-action; see DISPOSITIONS)
     preconditions: str | None = None        # read-only capability: "is it still safe to reverse NOW?" -> {holds: bool}
     authorization_policy: str = ""          # "" | HUMAN_APPROVAL (== requires_approval) | EVIDENCE_BOUND
+    mission_owned_temporary: bool = False   # explicit marker: the effect is a non-consequential TEMPORARY artifact this
+                                            # mission created (lock/staging file); the ONLY way CLEANUP may skip a human
     incurs_ongoing_cost: bool = False       # the retained effect keeps costing money (provisioned infrastructure):
                                             # a failed mission REPORTS its resource ids + estimated cost (or "unknown")
 
@@ -159,10 +161,17 @@ def coerce(value: Any) -> CompensationSpec | None:
                                  "the cleanup is independently safe NOW)")
             if not (spec.authorization_policy or spec.requires_approval):
                 raise ValueError("compensation.disposition=CLEANUP requires an explicit authorization_policy "
-                                 "(HUMAN_APPROVAL, or EVIDENCE_BOUND for a mission-owned temporary artifact)")
+                                 "(HUMAN_APPROVAL, or EVIDENCE_BOUND with mission_owned_temporary=True)")
+            if not (spec.requires_approval or spec.authorization_policy == AUTH_HUMAN) and not spec.mission_owned_temporary:
+                raise ValueError("compensation.disposition=CLEANUP without a human approval requires the explicit "
+                                 "capability-level marker mission_owned_temporary=True (a non-consequential temporary "
+                                 "artifact the mission created); otherwise declare HUMAN_APPROVAL")
             if spec.incurs_ongoing_cost:
                 raise ValueError("compensation.disposition=CLEANUP is for temporary resources: a cost-bearing "
                                  "(incurs_ongoing_cost) effect is retained and reported, never auto-cleaned")
+        if spec.mission_owned_temporary and (spec.disposition != CLEANUP or spec.incurs_ongoing_cost):
+            raise ValueError("compensation.mission_owned_temporary requires disposition=CLEANUP and cannot be combined "
+                             "with incurs_ongoing_cost (destructive / cost-bearing effects can never be marked temporary)")
         if spec.authorization_policy not in AUTH_POLICIES:
             raise ValueError(f"unknown compensation authorization_policy {spec.authorization_policy!r}")
         if spec.authorization_policy == AUTH_EVIDENCE and spec.requires_approval:
@@ -240,6 +249,10 @@ def intrinsic_problems(cap: Any) -> list[str]:
     if spec is not None and spec.verify and spec.verify in (name, undo):
         out.append(f"{name}: verify '{spec.verify}' must be a read-back distinct from the forward action and "
                    "the compensating capability (verify == undo would run the undo twice)")
+    if spec is not None and spec.mission_owned_temporary and (getattr(cap, "approval_required", False)
+                                                              or getattr(cap, "irreversible", False)):
+        out.append(f"{name}: mission_owned_temporary is for non-consequential artifacts: a capability that is "
+                   "approval-gated or irreversible can never be marked temporary")
     if spec is not None and spec.supported and getattr(cap, "irreversible", False):
         out.append(f"{name}: declares both compensation.supported and irreversible")
     if getattr(cap, "undo", None) and spec is not None and spec.supported and cap.undo != spec.capability:

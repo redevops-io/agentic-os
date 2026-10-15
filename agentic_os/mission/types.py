@@ -436,6 +436,8 @@ class Mission:
     # ("" = template default, then AGENTIC_OS_DEFAULT_FAILURE_POLICY, then HALT_AND_REPORT; nothing is compensated
     # unless COMPENSATE_DECLARED is chosen explicitly). See mission/compensation_policy.py and docs/COMPENSATION.md.
     failure_policy: str = ""
+    default_policy_source: str = ""    # env | env_invalid | template | default ("" = created before this was recorded)
+    default_policy_warning: str = ""   # non-empty when the env overrode a template or was unrecognised
     default_failure_policy: str = ""   # frozen at creation (template/env default); see compensation_policy.resolve_default
     world_state_id: str = ""
     active_plan_id: str | None = None
