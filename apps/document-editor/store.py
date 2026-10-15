@@ -278,6 +278,16 @@ class LocalFSStore(DocumentStore):
         if m is None:
             m = {"doc_id": self._resolve(tenant, doc_id)[1], "counter": 0, "origin_sha256": "", "versions": [],
                  "classification": None}
+        real_rel = self._resolve(tenant, doc_id)[1]
+        if m["origin_sha256"] != sha or (m.get("real_rel") not in (None, real_rel)):
+            if m["origin_sha256"] and sha != m["origin_sha256"]:
+                # The customer's file CHANGED outside the connector (or another file now sits at this case-folded
+                # path). It must never inherit a LOOSER label: PUBLIC / INTERNAL fall back to unlabeled
+                # (= CONFIDENTIAL) until a human re-labels it with document.set_label. CONFIDENTIAL / RESTRICTED stay.
+                old = m.get("classification")
+                if old not in ("CONFIDENTIAL", "RESTRICTED"):
+                    m["label_reset_from"] = old
+                    m["classification"] = None
         if m["origin_sha256"] != sha:
             self._write_blob(tenant, data)
             m["counter"] += 1
@@ -286,6 +296,10 @@ class LocalFSStore(DocumentStore):
                                   "kind": "import" if not m["versions"] else "external_edit",
                                   "parent_version": m["versions"][-1]["version"] if m["versions"] else 0})
             m["origin_sha256"] = sha
+            m["real_rel"] = real_rel
+            self._save(tenant, doc_id, m)
+        elif m.get("real_rel") != real_rel:
+            m["real_rel"] = real_rel
             self._save(tenant, doc_id, m)
         return m
 

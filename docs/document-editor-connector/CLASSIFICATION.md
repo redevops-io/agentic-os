@@ -60,3 +60,16 @@ Document identity is the NFC, case-folded id, so `Secret.docx` and `secret.docx`
 OS; two directory entries differing only by case are refused as ambiguous. Zones are checked against the RESOLVED address:
 LOCAL hosts must resolve to loopback, PRIVATE_NETWORK hosts to RFC1918/ULA/CGNAT (a "private" host resolving to a public IP
 is refused), EXTERNAL hosts to global addresses only.
+
+## Replaced files and the casefold limitation
+
+If a document's file changes outside the connector (or a different file now sits at the same case-folded path), a looser
+label (PUBLIC / INTERNAL) is dropped to unlabeled (= CONFIDENTIAL) until a human re-labels it with `document.set_label`;
+CONFIDENTIAL and RESTRICTED are kept. **Known limitation:** names that casefold together (`Straße`/`Strasse`, `ﬁ`/`fi`,
+Kelvin sign/`k`, `Σ`/`ς`) are one document identity; if both files exist the id is refused as ambiguous, so an author who can
+create files in a tenant's tree can lock a colliding document out (fail closed, no leak). Remove the duplicate to recover.
+
+## Transport notes
+
+`transport.bearer_transport` refuses `http://` for non-loopback hosts (use `https://`). `LOCAL` means loopback only: an editor
+reached over a docker bridge or LAN address must be declared `PRIVATE_NETWORK`.

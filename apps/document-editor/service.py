@@ -40,8 +40,9 @@ class DocumentService(GovernedWriteMixin):
         self.provider = backend.provider
         self.max_source_bytes = 32 * 1024 * 1024        # nothing larger is ever sent to an editor
         self.max_concurrent_per_tenant = 2              # simultaneous editor calls per tenant
-        self.breaker_threshold, self.breaker_open_s = 3, 30.0
-        self._fails, self._open_until = 0, 0.0
+        self.breaker_threshold, self.breaker_doc_threshold, self.breaker_open_s = 3, 2, 30.0
+        self._fails: dict = {}                          # breaker key -> consecutive failures
+        self._open_until: dict = {}                     # breaker key -> reopen time
         self._slots: dict = {}
         self._slots_lock = threading.Lock()
         (cfg.state_dir / "proposals").mkdir(parents=True, exist_ok=True)
@@ -90,11 +91,15 @@ class DocumentService(GovernedWriteMixin):
             ooxml.validate_container(data, ext)
 
     def _editor(self, tenant: str, fn, *a, **k):
-        """Every editor call: circuit breaker (repeated 502 / timeouts open it), per-tenant concurrency limit."""
+        """Every editor call: circuit breakers keyed per TENANT and per (tenant, document hash) so one tenant's (or one
+        malformed document's) failures can never block another tenant; per-tenant concurrency limit."""
+        sha = getattr(a[0], "sha256", "") if a else ""
+        keys = [(("t", tenant), self.breaker_threshold)] + ([(("d", tenant, sha), self.breaker_doc_threshold)] if sha else [])
         now = self.clock()
-        if now < self._open_until:
-            raise BackendUnavailable("editor circuit is open after repeated failures; backing off",
-                                     retry_after_s=round(self._open_until - now, 1))
+        for key, _ in keys:
+            if now < self._open_until.get(key, 0.0):
+                raise BackendUnavailable("editor circuit is open for this tenant/document after repeated failures; "
+                                         "backing off", retry_after_s=round(self._open_until[key] - now, 1))
         with self._slots_lock:
             sem = self._slots.setdefault(tenant, threading.BoundedSemaphore(self.max_concurrent_per_tenant))
         if not sem.acquire(blocking=False):
@@ -102,13 +107,15 @@ class DocumentService(GovernedWriteMixin):
         try:
             out = fn(*a, **k)
         except (BackendUnavailable, OutcomeUnknown):
-            self._fails += 1
-            if self._fails >= self.breaker_threshold:
-                self._open_until = self.clock() + self.breaker_open_s
-                self._fails = 0
+            for key, thr in keys:
+                self._fails[key] = self._fails.get(key, 0) + 1
+                if self._fails[key] >= thr:
+                    self._open_until[key] = self.clock() + self.breaker_open_s
+                    self._fails[key] = 0
             raise
         else:
-            self._fails = 0
+            for key, _ in keys:
+                self._fails.pop(key, None)
             return out
         finally:
             sem.release()
@@ -140,7 +147,6 @@ class DocumentService(GovernedWriteMixin):
         caps = self.backend.describe().report()
         try:
             h = self.backend.health()
-            self._fails, self._open_until = 0, 0.0
         except DocEditorError as e:
             self._receipt(tenant, "connect_check", ok=False, error=e.code, actor=actor)
             return {**e.to_result(), "backend_reachable": False, **caps}

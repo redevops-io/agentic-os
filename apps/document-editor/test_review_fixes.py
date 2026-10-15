@@ -100,6 +100,7 @@ def junk_pk():
 
 @pytest.mark.parametrize("op", ["convert", "export", "open", "inspect"])
 def test_junk_pk_bytes_never_reach_the_editor(env, op):
+    # NOTE: the "inspect" case also passed before the review fixes (inspect already validated); convert/export/open are new.
     env.put("acme", "j.docx", junk_pk(), label="PUBLIC")
     fn = {"convert": lambda: env.svc.convert("acme", "j.docx", "pdf"),
           "export": lambda: env.svc.export("acme", "j.docx", "pdf"),
@@ -131,13 +132,12 @@ def test_circuit_breaker_opens_after_repeated_editor_failures(env, kit):
     now = [1000.0]
     env.svc.clock = lambda: now[0]
     env.backend.mode = "unavailable"
-    for _ in range(3):
+    for _ in range(2):                                                    # the SAME document trips its breaker at 2
         with pytest.raises(env.mods.errors.BackendUnavailable):
             env.svc.convert("acme", "p.docx", "pdf")
-    assert env.backend.calls.count("convert") == 3
     with pytest.raises(env.mods.errors.BackendUnavailable, match="circuit"):
         env.svc.convert("acme", "p.docx", "pdf")
-    assert env.backend.calls.count("convert") == 3                       # not even attempted
+    assert env.backend.calls.count("convert") == 2                       # not even attempted
     now[0] += 31                                                          # back-off elapsed: one probe goes through
     env.backend.mode = None
     assert env.svc.convert("acme", "p.docx", "pdf")["verified"]
@@ -181,7 +181,8 @@ def test_local_host_must_resolve_to_loopback(mods):
     assert S.ip_block_reason("127.0.0.1", "LOCAL") is None and S.ip_block_reason("::1", "LOCAL") is None
 
 
-def test_public_host_resolving_private_follows_the_ssrf_rules(mods):
+def test_regression_guard_public_host_resolving_private_follows_the_ssrf_rules(mods):
+    """REGRESSION GUARD ONLY: passed before the review fixes too."""
     S = mods.safe_fetch
     pol = S.FetchPolicy.of([S.HostRule("editor.test", S.ZONE_PUBLIC, frozenset({443}))])
     for ip in ("10.0.0.5", "127.0.0.1", "169.254.169.254", "::ffff:10.0.0.1"):
@@ -352,3 +353,146 @@ def test_bearer_transport_adds_the_authorization_header(mods, server):
     assert srv.requests[0].headers["Authorization"] == "Bearer tok-123"
     with pytest.raises(ValueError):
         tr.bearer_transport("")
+
+
+# ── delta review: breaker isolation, package risks, label reset, transport ───────────────────────────────────
+def test_one_tenants_failures_never_block_another_tenant(env, kit):
+    """FAILS on the previous code: the breaker was service-global."""
+    for i in range(3):
+        env.put("acme", f"d{i}.docx", kit.make_docx([f"doc {i}"]), label="PUBLIC")
+    env.put("globex", "g.docx", kit.make_docx(["globex"]), label="PUBLIC")
+    env.backend.mode = "unavailable"
+    for i in range(3):                                           # acme trips its TENANT breaker with 3 different docs
+        with pytest.raises(env.mods.errors.BackendUnavailable):
+            env.svc.convert("acme", f"d{i}.docx", "pdf")
+    with pytest.raises(env.mods.errors.BackendUnavailable, match="circuit"):
+        env.svc.convert("acme", "d0.docx", "pdf")
+    env.backend.mode = None
+    assert env.svc.convert("globex", "g.docx", "pdf")["verified"]     # globex is unaffected
+    with pytest.raises(env.mods.errors.BackendUnavailable, match="circuit"):
+        env.svc.convert("acme", "d1.docx", "pdf")                    # acme still backed off
+
+
+def test_a_malformed_document_only_blocks_itself(env, kit):
+    env.put("acme", "bad.docx", kit.make_docx(["bad"]), label="PUBLIC")
+    env.put("acme", "ok.docx", kit.make_docx(["ok"]), label="PUBLIC")
+    env.backend.mode = "unavailable"
+    for _ in range(2):
+        with pytest.raises(env.mods.errors.BackendUnavailable):
+            env.svc.convert("acme", "bad.docx", "pdf")
+    env.backend.mode = None
+    assert env.svc.convert("acme", "ok.docx", "pdf")["verified"]
+    with pytest.raises(env.mods.errors.BackendUnavailable, match="circuit"):
+        env.svc.convert("acme", "bad.docx", "pdf")
+
+
+def _rewrite(data: bytes, doc_xml_edit=None, add: dict = None, ct_add: str = "") -> bytes:
+    zin = zipfile.ZipFile(io.BytesIO(data))
+    b = io.BytesIO()
+    with zipfile.ZipFile(b, "w") as z:
+        for n in zin.namelist():
+            c = zin.read(n)
+            if n == "word/document.xml" and doc_xml_edit:
+                c = doc_xml_edit(c.decode()).encode()
+            if n == "[Content_Types].xml" and ct_add:
+                c = c.decode().replace("</Types>", ct_add + "</Types>").encode()
+            z.writestr(n, c)
+        for n, c in (add or {}).items():
+            z.writestr(n, c)
+    return b.getvalue()
+
+
+W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+ATTACKS = {
+    "dde-instrText": dict(doc_xml_edit=lambda x: x.replace("</w:body>", '<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>DDEAUTO c:\\\\windows\\\\system32\\\\cmd.exe "/k calc"</w:instrText></w:r></w:p></w:body>')),
+    "fldSimple": dict(doc_xml_edit=lambda x: x.replace("</w:body>", '<w:p><w:fldSimple w:instr="INCLUDETEXT \'file:///etc/passwd\'"/></w:p></w:body>')),
+    "embedded-ole": dict(add={"word/embeddings/evil.bin": b"MZ\x90\x00"}),
+    "vba-macro": dict(add={"word/vbaProject.bin": b"\xd0\xcf\x11"},
+                      ct_add='<Override PartName="/word/vbaProject.bin" ContentType="application/vnd.ms-office.vbaProject"/>'),
+    "activex": dict(add={"word/activeX/activeX1.xml": "<ax/>"}),
+    "altChunk": dict(doc_xml_edit=lambda x: x.replace("</w:body>", '<w:altChunk r:id="rId9" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/></w:body>')),
+    "external-rel": dict(  # (already caught before; guard)
+        add={"word/_rels/document.xml.rels": '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="r9" Type="t" Target="http://evil.example/x" TargetMode="External"/></Relationships>'}),
+}
+
+
+@pytest.mark.parametrize("attack", sorted(ATTACKS))
+def test_doctored_editor_package_is_rejected_for_every_active_content_class(env, kit, attack):
+    """FAILS on the previous code for everything except external-rel: text compare ignored fields and extra parts."""
+    env.put("acme", "a.docx", kit.make_docx(["Price 100 EUR"]), label="PUBLIC")
+    p = env.svc.propose_patch("acme", "a.docx", [{"type": "replace_text", "search": "100 EUR", "replace": "1 EUR"}])
+    real = env.backend._do_apply_edit
+
+    def doctored(ref, ops, **k):
+        out = real(ref, ops, **k)
+        data = _rewrite(out.content, **ATTACKS[attack])
+        return env.mods.backend.BackendFile(content=data, filename="result.docx", sha256=hashlib.sha256(data).hexdigest())
+    env.backend._do_apply_edit = doctored
+    with pytest.raises(env.mods.errors.VerificationFailed):
+        env.svc.apply_patch("acme", proposal_id=p["proposal_id"], base_hash=p["base_hash"], backend=p["backend"],
+                            patch_digest=p["patch_digest"], expected_version=1, idempotency_key=f"idem-{attack}-001",
+                            approval=APPROVAL)
+    assert env.store.head("acme", "a.docx").version == 1
+
+
+def test_clean_edit_with_preexisting_fields_and_links_is_still_accepted(env, kit):
+    """REGRESSION GUARD (passed before too): the stricter package checks must not reject legitimate edits."""
+    base = _rewrite(kit.make_docx(["Price 100 EUR"]), doc_xml_edit=lambda x: x.replace(
+        "</w:body>", '<w:p><w:fldSimple w:instr="PAGE"/></w:p></w:body>'))
+    env.put("acme", "f.docx", base, label="PUBLIC")
+    p = env.svc.propose_patch("acme", "f.docx", [{"type": "replace_text", "search": "100 EUR", "replace": "1 EUR"}])
+    r = env.svc.apply_patch("acme", proposal_id=p["proposal_id"], base_hash=p["base_hash"], backend=p["backend"],
+                            patch_digest=p["patch_digest"], expected_version=1, idempotency_key="idem-fields-ok-01",
+                            approval=APPROVAL)
+    assert r["status"] == "ok"
+
+
+@pytest.mark.parametrize("old,expect", [("PUBLIC", None), ("INTERNAL", None), ("CONFIDENTIAL", "CONFIDENTIAL"),
+                                        ("RESTRICTED", "RESTRICTED")])
+def test_a_replaced_file_never_inherits_a_looser_label(env, kit, old, expect):
+    """FAILS on the previous code for PUBLIC/INTERNAL: the replacement kept the old label."""
+    env.put("acme", "v.docx", kit.make_docx(["victim"]), label=old)
+    env.put("acme", "v.docx", kit.make_docx(["completely different secret content"]))     # replaced in place
+    head = env.store.head("acme", "v.docx")
+    assert head.version == 2 and env.store.get_classification("acme", "v.docx") == expect
+    eff = env.mods.classification.effective_label(env.store.get_classification("acme", "v.docx"))
+    assert eff in ("CONFIDENTIAL", "RESTRICTED")
+    if old in ("PUBLIC", "INTERNAL"):                   # blocked until a human re-labels it
+        with pytest.raises(env.mods.errors.PolicyDenied):
+            env.svc.convert("acme", "v.docx", "pdf")
+        env.svc.set_label("acme", "v.docx", old, approval=APPROVAL)
+        assert env.svc.convert("acme", "v.docx", "pdf")["verified"]
+
+
+def test_unchanged_file_keeps_its_label(env, kit):
+    """REGRESSION GUARD (passed before too): only a CHANGED file loses a looser label."""
+    env.put("acme", "k.docx", kit.make_docx(["same"]), label="PUBLIC")
+    env.store.head("acme", "k.docx")
+    assert env.store.get_classification("acme", "k.docx") == "PUBLIC"
+
+
+@pytest.mark.parametrize("a,b", [("Stra\u00dfe.docx", "Strasse.docx"), ("\ufb01le.docx", "file.docx"),
+                                 ("\u212a.docx", "k.docx"), ("\u03a3.docx", "\u03c2.docx")])
+def test_casefold_collisions_fail_closed_and_share_identity(mods, a, b):
+    """REGRESSION GUARD (passed before too): colliding names are one document identity."""
+    assert mods.store.canonical_id(a) == mods.store.canonical_id(b)
+    assert mods.store.LocalFSStore._key(a) == mods.store.LocalFSStore._key(b)
+
+
+def test_ambiguous_collision_locks_out_rather_than_leaking(env, kit):
+    """REGRESSION GUARD (passed before too) documenting the known author lock-out limitation."""
+    env.put("acme", "Stra\u00dfe.docx", kit.make_docx(["victim"]), label="PUBLIC")
+    env.put("acme", "Strasse.docx", kit.make_docx(["attacker"]))
+    if env.mods.store.canonical_id("Stra\u00dfe.docx") != env.mods.store.canonical_id("Strasse.docx"):
+        pytest.skip("this casefold does not collide")
+    with pytest.raises(env.mods.errors.InvalidPath, match="ambiguous"):
+        env.store.head("acme", "Strasse.docx")
+
+
+def test_bearer_transport_refuses_plain_http_to_non_loopback(mods):
+    import importlib
+    tr = importlib.import_module("document-editor.transport").bearer_transport("tok")
+    with pytest.raises(ValueError, match="https"):
+        tr("http://docedit.internal:8216/invoke", {}, {}, 1)
+    with pytest.raises(ValueError, match="https"):
+        tr("http://10.0.0.5/invoke", {}, {}, 1)

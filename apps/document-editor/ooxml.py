@@ -225,3 +225,39 @@ def external_targets(data: bytes) -> "list[str]":
                 if (r.get("TargetMode") or "").lower() == "external":
                     out.append(r.get("Target") or "")
     return sorted(out)
+
+
+# ── package-level risk comparison (macros, OLE, fields, altChunk, external links) ─────────────────────────────
+_DANGER_PARTS = {
+    "embedding": re.compile(r"(^|/)embeddings/|oleobject[^/]*$", re.I),
+    "macro": re.compile(r"vbaproject|vbadata|\.bin$", re.I),
+    "activex": re.compile(r"(^|/)activex/", re.I),
+    "customxml": re.compile(r"^customxml/", re.I),
+    "altchunk": re.compile(r"afchunk|(^|/)chunk[^/]*$", re.I),
+}
+_DANGER_CT = re.compile(r"macroenabled|vbaproject|oleobject|activex|oleobject", re.I)
+CT = "{http://schemas.openxmlformats.org/package/2006/content-types}"
+
+
+def package_risks(data: bytes) -> dict:
+    z = _zip(data)
+    names = z.namelist()
+    parts = {k: sum(1 for n in names if rx.search(n)) for k, rx in _DANGER_PARTS.items()}
+    cts: list = []
+    if "[Content_Types].xml" in names:
+        root = _parse(_read_part(z, "[Content_Types].xml"))
+        for e in root:
+            ct = e.get("ContentType") or ""
+            if _DANGER_CT.search(ct):
+                cts.append(ct)
+    fields: list = []
+    alt = 0
+    fldchars = 0
+    if "word/document.xml" in names:
+        root = _parse(_read_part(z, "word/document.xml"))
+        fields += [(t.text or "").strip() for t in root.iter(f"{W}instrText")]
+        fields += [(e.get(f"{W}instr") or "").strip() for e in root.iter(f"{W}fldSimple")]
+        alt = len(list(root.iter(f"{W}altChunk")))
+        fldchars = len(list(root.iter(f"{W}fldChar")))
+    return {"parts": parts, "content_types": sorted(cts), "fields": sorted(f for f in fields if f),
+            "altchunks": alt, "has_fields": fldchars > 0 or bool(fields)}

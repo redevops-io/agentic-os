@@ -121,6 +121,19 @@ class GovernedWriteMixin:
             src = self.store.read(prop["tenant"], prop["doc_id"], prop["base_version"])[0]
             if ooxml.docx_aux_texts(out_bytes) != ooxml.docx_aux_texts(src):
                 problems.append("headers / footers / comments / notes changed outside the requested patch")
+            rb, ra = ooxml.package_risks(src), ooxml.package_risks(out_bytes)
+            for cat, n in ra["parts"].items():
+                if n > rb["parts"].get(cat, 0):
+                    problems.append(f"editor output added {cat} parts (embedded objects / macros / ActiveX) that the "
+                                    "source did not have")
+            if set(ra["content_types"]) - set(rb["content_types"]):
+                problems.append("editor output introduced macro / OLE / ActiveX content types")
+            if ra["fields"] != rb["fields"]:
+                problems.append("field instructions (instrText / fldSimple) changed outside the requested patch")
+            if ra["has_fields"] and not rb["has_fields"]:
+                problems.append("editor output introduced field codes")
+            if ra["altchunks"] > rb["altchunks"]:
+                problems.append("editor output introduced altChunk content")
             if ooxml.external_targets(out_bytes) != ooxml.external_targets(src):
                 problems.append("external relationships (links) changed outside the requested patch")
             if prop["track_changes"]:
