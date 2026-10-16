@@ -6,6 +6,7 @@ package mission
 // learning. Run() is RESUMABLE: all state lives in the event log. Go port of runtime.py.
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -142,7 +143,9 @@ func (rt *MissionRuntime) CreateMission(goal string, opts CreateOpts) *Mission {
 		m.Budget = *opts.Budget
 	}
 	rt.missions[m.ID] = m
-	rt.store.Append("MissionCreated", m.ID, map[string]any{"goal": goal, "template": m.Template, "constraints": m.Constraints})
+	// policy_refs is part of the record: rehydrate must restore the authority the mission was created under.
+	rt.store.Append("MissionCreated", m.ID, map[string]any{"goal": goal, "template": m.Template, "constraints": m.Constraints,
+		"policy_refs": append([]string{}, m.PolicyRefs...)})
 	if err := rt.planAndGate(m, 1, "initial"); err != nil {
 		if _, ok := err.(*CompileError); ok { // stage-1 scoping left no permitted plan — fail closed
 			rt.setState(m, MissionFailed)
@@ -1061,13 +1064,42 @@ func (rt *MissionRuntime) Explain(missionID string) map[string]any {
 		"evidence": rt.evidence.Ledger(missionID), "learning": rt.learning.Policy(), "recommendations": recsJSON}
 }
 
-// Rehydrate rebuilds a mission from the event log after a restart (fresh runtime, same store).
+// ErrUnrecoverableAuthority: the log records no policy_refs, so what the mission was permitted to do cannot be
+// reconstructed. Rehydrating it as a wildcard would fabricate authority nobody granted.
+var ErrUnrecoverableAuthority = errors.New("MissionCreated records no policy_refs: the mission's authority cannot be reconstructed")
+
+// RehydrateOpts: PolicyRefs, when non-nil, supplies the grants for a log written before policy_refs was recorded.
+type RehydrateOpts struct{ PolicyRefs []string }
+
+// Rehydrate rebuilds a mission from the event log after a restart (fresh runtime, same store). Authority is
+// restored, never invented: the grants recorded at creation are used; a log that recorded none restores with NO
+// grants (the narrowest authority: plans compile fail-closed). Use RehydrateStrict to get the error instead.
 func (rt *MissionRuntime) Rehydrate(missionID string) *Mission {
+	m, err := rt.RehydrateStrict(missionID, RehydrateOpts{})
+	if errors.Is(err, ErrUnrecoverableAuthority) {
+		m, _ = rt.RehydrateStrict(missionID, RehydrateOpts{PolicyRefs: []string{}}) // no grants, never "*"
+	}
+	return m
+}
+
+// RehydrateStrict is Rehydrate with the Python contract: it returns ErrUnrecoverableAuthority (and a nil mission)
+// when the log recorded no policy_refs and opts supplies none.
+func (rt *MissionRuntime) RehydrateStrict(missionID string, opts RehydrateOpts) (*Mission, error) {
 	var created *Event
 	for _, e := range rt.store.ForMission(missionID) {
 		if e.Type == "MissionCreated" {
 			created = e
 			break
+		}
+	}
+	var refs []string
+	if opts.PolicyRefs != nil {
+		refs = append([]string{}, opts.PolicyRefs...)
+	} else if created != nil {
+		if _, recorded := created.Payload["policy_refs"]; recorded {
+			refs = toStrSlice(created.Payload["policy_refs"])
+		} else {
+			return nil, ErrUnrecoverableAuthority
 		}
 	}
 	m := NewMission(rt.repo.Goal(missionID))
@@ -1076,7 +1108,7 @@ func (rt *MissionRuntime) Rehydrate(missionID string) *Mission {
 		m.Template, _ = created.Payload["template"].(string)
 		m.Constraints = toStrSlice(created.Payload["constraints"])
 	}
-	m.PolicyRefs = []string{"*"}
+	m.PolicyRefs = refs
 	if st, ok := rt.repo.State(missionID); ok {
 		m.State = st
 	} else {
@@ -1089,7 +1121,7 @@ func (rt *MissionRuntime) Rehydrate(missionID string) *Mission {
 		rt.plans[missionID] = plan
 		m.ActivePlanID = plan.ID
 	}
-	return m
+	return m, nil
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────

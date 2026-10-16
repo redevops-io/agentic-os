@@ -6,7 +6,7 @@ package mission
 
 import (
 	"bufio"
-	"encoding/json"
+	"fmt"
 	"os"
 	"sync"
 )
@@ -28,6 +28,9 @@ type EventStore struct {
 	seq         int
 	subscribers []func(*Event)
 	path        string
+	// persistFailures counts events kept in memory but not written; loadSkipped counts unreadable log lines.
+	persistFailures int
+	loadSkipped     int
 }
 
 // NewEventStore builds a store; if path is non-empty and exists, prior events are reloaded.
@@ -54,11 +57,12 @@ func (s *EventStore) load() {
 		if len(line) == 0 {
 			continue
 		}
-		var ev Event
-		if json.Unmarshal(line, &ev) != nil {
+		ev, ok := decodeEventLine(line)
+		if !ok {
+			s.loadSkipped++
 			continue
 		}
-		s.events = append(s.events, &ev)
+		s.events = append(s.events, ev)
 		if ev.Seq > s.seq {
 			s.seq = ev.Seq
 		}
@@ -74,8 +78,15 @@ func (s *EventStore) Append(typ, missionID string, payload map[string]any) *Even
 	s.events = append(s.events, ev)
 	if s.path != "" {
 		if fh, err := os.OpenFile(s.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
-			b, _ := json.Marshal(ev)
-			_, _ = fh.Write(append(b, '\n'))
+			// NaN/Inf are legal Python JSON (bare tokens); json.Marshal rejects them and the old `b, _ :=` wrote a
+			// blank line, silently losing the event on reload. encodeEventLine round-trips them, and any
+			// remaining encode failure is counted + logged, never swallowed.
+			if b, err := encodeEventLine(ev); err != nil {
+				s.persistFailures++
+				fmt.Fprintf(os.Stderr, "agentic-os: event %s seq %d not persisted: %v\n", ev.Type, ev.Seq, err)
+			} else {
+				_, _ = fh.Write(append(b, '\n'))
+			}
 			_ = fh.Close()
 		}
 	}
@@ -430,4 +441,18 @@ func (s *MemoryEventStore) MissionIDs() []string {
 		}
 	}
 	return out
+}
+
+// PersistFailures is the number of appended events that could not be written to the JSONL file.
+func (s *EventStore) PersistFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.persistFailures
+}
+
+// LoadSkipped is the number of non-empty log lines that could not be decoded on load.
+func (s *EventStore) LoadSkipped() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loadSkipped
 }
