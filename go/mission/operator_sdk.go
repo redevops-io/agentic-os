@@ -122,7 +122,12 @@ func dedupeKey(capability string, inputs map[string]any, key string) string {
 }
 
 func (o *Operator) Invoke(capability string, inputs map[string]any, idempotencyKey string) (map[string]any, error) {
-	dk := dedupeKey(capability, inputs, idempotencyKey)
+	return o.invokeKeyed(capability, inputs, idempotencyKey, dedupeKey(capability, inputs, idempotencyKey))
+}
+
+// invokeKeyed runs a capability under a precomputed dedupe key (the HTTP path derives it from the WIRE form of the
+// inputs, so two distinct integers that collapse to one float64 never share a key).
+func (o *Operator) invokeKeyed(capability string, inputs map[string]any, idempotencyKey, dk string) (map[string]any, error) {
 	if dk != "" {
 		o.mu.Lock()
 		r, ok := o.seen[dk]
@@ -196,8 +201,13 @@ func (o *Operator) HTTPHandler() http.Handler {
 				inputs["_approval"] = marker
 			}
 		}
-		inputs = numbersToFloat(inputs).(map[string]any) // handlers see ordinary JSON numbers (float64), as before
-		res, err := o.Invoke(body.Capability, inputs, key)
+		// handlers see ordinary JSON numbers (float64), as before; the idempotency key uses the wire form
+		handlerIn, nerr := numbersToFloatCopy(inputs)
+		if nerr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"detail": nerr.Error()}) // e.g. 1e999: out of range, as before
+			return
+		}
+		res, err := o.invokeKeyed(body.Capability, handlerIn.(map[string]any), key, dedupeKey(body.Capability, inputs, key))
 		if err != nil {
 			writeJSON(w, http.StatusNotFound, map[string]any{"detail": err.Error()})
 			return
@@ -229,22 +239,36 @@ func (c *LocalOperatorClient) Invoke(operator, capability string, inputs map[str
 	return op.Invoke(capability, inputs, idempotencyKey)
 }
 
-// numbersToFloat converts every json.Number in a decoded body to float64 (the form handlers have always received).
-func numbersToFloat(v any) any {
+// numbersToFloatCopy returns a copy of a decoded body with every json.Number converted to float64 (the form handlers
+// have always received); a number that does not fit a float64 is an error (the request is rejected, as before).
+func numbersToFloatCopy(v any) (any, error) {
 	switch x := v.(type) {
 	case json.Number:
-		if f, err := x.Float64(); err == nil {
-			return f
+		f, err := x.Float64()
+		if err != nil {
+			return nil, fmt.Errorf("number %s out of range", string(x))
 		}
-		return string(x)
+		return f, nil
 	case map[string]any:
+		out := make(map[string]any, len(x))
 		for k, e := range x {
-			x[k] = numbersToFloat(e)
+			c, err := numbersToFloatCopy(e)
+			if err != nil {
+				return nil, err
+			}
+			out[k] = c
 		}
+		return out, nil
 	case []any:
+		out := make([]any, len(x))
 		for i, e := range x {
-			x[i] = numbersToFloat(e)
+			c, err := numbersToFloatCopy(e)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = c
 		}
+		return out, nil
 	}
-	return v
+	return v, nil
 }

@@ -392,3 +392,33 @@ func TestCompensatedMemoryIsBounded(t *testing.T) {
 		t.Fatalf("compensated memory must stay bounded: %d/%d", len(ex.compensated), len(ex.compOrder))
 	}
 }
+
+// Wire-form idempotency: two distinct integers above 2^53 collapse to one float64 but are different requests;
+// an out-of-range number is rejected with 400 (as before the wire-form change), not passed on as a string.
+func TestOperatorDedupeUsesWireFormAndRejectsOutOfRangeNumbers(t *testing.T) {
+	calls := 0
+	op := NewOperator("x", []Capability{NewCapability("x.do", func(in map[string]any) (map[string]any, error) {
+		calls++
+		return map[string]any{"ok": true, "n": in["n"]}, nil
+	}, SideEffecting())})
+	srv := httptest.NewServer(op.HTTPHandler())
+	defer srv.Close()
+	post := func(body string) int {
+		resp, err := http.Post(srv.URL+"/invoke", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if post(`{"capability":"x.do","inputs":{"n":9007199254740993},"idempotency_key":"k"}`) != 200 ||
+		post(`{"capability":"x.do","inputs":{"n":9007199254740992},"idempotency_key":"k"}`) != 200 || calls != 2 {
+		t.Fatalf("distinct integers that collapse to one float64 must not share an idempotency key (calls=%d)", calls)
+	}
+	if post(`{"capability":"x.do","inputs":{"n":9007199254740993},"idempotency_key":"k"}`) != 200 || calls != 2 {
+		t.Fatalf("the same wire request must still dedupe (calls=%d)", calls)
+	}
+	if code := post(`{"capability":"x.do","inputs":{"n":1e999},"idempotency_key":"k2"}`); code != 400 || calls != 2 {
+		t.Fatalf("out-of-range number must be a 400 and never reach the handler: code=%d calls=%d", code, calls)
+	}
+}
