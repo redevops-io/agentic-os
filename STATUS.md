@@ -19,7 +19,7 @@ independently validated. "Production-ready" is not claimed.
 ## Proposed / not verified
 
 - `docker compose up -d` and the `agentic-os up ...` fleet path: **not run** for this change.
-- The hosted demo at demo.redevops.io: reachability only (HTTP 200 in the inventory); behaviour not verified.
+- The hosted demo at demo.redevops.io: reachability only (responds over HTTP); behaviour not verified.
 - Go port in [`go/mission/`](go/mission/): not run.
 - Wiring of classification-based model routing ([`governance/routing.py`](agentic_os/governance/routing.py)) into the default router: not audited.
 - Any figure for the share of work kept on local hardware (README design thesis only).
@@ -28,8 +28,8 @@ independently validated. "Production-ready" is not claimed.
 
 - Alpha API; many modules in `agentic_os/` and `apps/` are reference implementations with seed data.
 - Router example config is illustrative.
-- Licence: `LICENSE.md` is titled "source-available, not open source" (AGPL-3.0-or-later WITH Commons-Clause)
-  while GitHub's label reads "AGPL-3.0" and `apps/*/LICENSE` are plain AGPL text. Counsel item; nothing decided here.
+- Licence: `LICENSE.md` is titled "source-available, not open source" (AGPL-3.0-or-later WITH Commons-Clause);
+  `apps/*/LICENSE` are plain AGPL text.
 
 ## Known gaps
 

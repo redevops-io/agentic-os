@@ -1,7 +1,7 @@
 # Glossary
 
 One public product name: **ReDevOps Runtime**. This page is the canonical glossary for the core repositories;
-other READMEs link here instead of redefining terms. Wording follows the 2026-10-15 public-claim inventory.
+other READMEs link here instead of redefining terms.
 
 | Term | Use it for | Do not use it for |
 |---|---|---|

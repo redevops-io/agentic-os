@@ -252,8 +252,7 @@ target was ">90%"); that share has **not been measured**. See
 ## License
 
 **Source-available, not open source** (the wording of [LICENSE.md](LICENSE.md)): AGPL-3.0-or-later **WITH** the Commons
-Clause. GitHub's licence label for this repository reads "AGPL-3.0" because it detects the plain `LICENSE` file; where the
-two differ, `LICENSE.md` is what this README quotes. (Open question for counsel; not decided here.) Self-host freely, including inside a company for its own business. What
+Clause. `LICENSE.md` is the licence this README quotes. Self-host freely, including inside a company for its own business. What
 the Clause removes is the right to *sell it* — to charge third parties for the
 software, for hosting it, or for services whose value derives substantially
 from it. That is the part redevops.io reserves.
