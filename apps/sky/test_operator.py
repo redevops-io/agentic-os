@@ -236,6 +236,7 @@ def test_launch_sets_default_autostop_and_accepts_override(monkeypatch):
     op.invoke("sky.launch", {"spec": {"name": "demo"}, **_APPR})
     argv = _launch_argv(run)
     assert argv[argv.index("--idle-minutes-to-autostop") + 1] == "60"
+    assert "--down" in argv[:argv.index("--")] if "--" in argv else "--down" in argv
     run2 = _stub({})
     build_sky_operator(run=run2).invoke("sky.launch", {"spec": {"name": "demo", "autostop_minutes": 15}, **_APPR})
     argv = _launch_argv(run2)

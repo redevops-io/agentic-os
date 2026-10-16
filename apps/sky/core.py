@@ -213,7 +213,7 @@ def launch(spec: dict, *, run: Runner = _run) -> dict:
     if chosen.get("region"):
         pinned["region"] = chosen["region"]
     argv = ["sky", "launch", "--yes", "-c", name, "--idle-minutes-to-autostop",
-            _autostop_minutes(spec)] + _spec_args(pinned)
+            _autostop_minutes(spec), "--down"] + _spec_args(pinned)
     if chosen.get("instance"):
         argv += ["--instance-type", _check_val(chosen["instance"], _INSTANCE_RE, "instance")]
     if y := spec.get("task_yaml"):
