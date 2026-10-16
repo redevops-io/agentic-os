@@ -13,7 +13,7 @@ from billing.operator import build_billing_operator
 
 APPR = {"_approval": {"approved": True}}
 INVOICES = [{"number": "INV-001", "customer": {"name": "X"}, "total_amount_cents": 1000, "status": "finalized",
-             "payment_status": "failed", "payment_overdue": True, "lago_id": "lago-1",
+             "payment_status": "failed", "payment_overdue": True, "lago_id": "lago-1", "currency": "USD",
              "issuing_date": "2026-05-15"}]
 
 
@@ -205,3 +205,10 @@ def test_refund_currency_must_match_the_invoice(monkeypatch):
     assert _mutations() == []
     ok = rig_refund_inputs({"amount_cents": 100, "currency": "eur"})
     assert ok["status"] == "done" and ok["currency"] == "EUR"
+
+
+def test_refund_is_refused_when_the_invoice_currency_is_unknown(monkeypatch):
+    monkeypatch.delitem(INVOICES[0], "currency")
+    for extra in ({"amount_cents": 100}, {"amount_cents": 100, "currency": "USD"}):
+        assert rig_refund_inputs(extra)["status"] == "error"
+    assert _mutations() == []

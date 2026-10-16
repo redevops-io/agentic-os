@@ -52,6 +52,8 @@ class _Erp:
             return _Resp(200, {"data": _Erp.sales})
         if url.endswith("/api/resource/Journal%20Entry"):
             return _Resp(200, {"data": _Erp.journal})
+        if "/api/resource/Journal%20Entry/" in url and _Erp.posts:
+            return _Resp(200, {"data": {"accounts": _Erp.posts[-1][1]["accounts"]}})
         return _Resp(200, {"data": []})
 
     def put(self, url, headers=None, json=None):
@@ -156,10 +158,13 @@ def test_same_idempotency_key_posts_one_entry(rig):
     first = rig[0].invoke("books.record_revenue", dict(inp))
     assert first["status"] == "done" and len(_Erp.posts) == 1
     token = [w for w in _Erp.posts[0][1]["user_remark"].split() if w.startswith("[idem:")][0].strip("[]")
-    _Erp.journal = [{"name": first["entry"], "docstatus": 1}]
-    again = rig[0].invoke("books.record_revenue", {**inp, "amount": "51"})
+    _Erp.journal = [{"name": first["entry"], "docstatus": 1, "user_remark": _Erp.posts[0][1]["user_remark"]}]
+    again = rig[0].invoke("books.record_revenue", dict(inp))
     assert again["status"] == "done" and again["entry"] == first["entry"] and again["deduplicated"] is True
     assert len(_Erp.posts) == 1 and token.startswith("idem:")
+    # the same key with a different amount is a conflict, never a silent dedupe
+    other = rig[0].invoke("books.record_revenue", {**inp, "amount": "51"})
+    assert other["status"] == "error" and other["error_type"] == "idempotency_conflict" and len(_Erp.posts) == 1
     assert _verify(rig, "books.record_revenue", again).decision.name == "ACCEPT"
 
 
@@ -175,7 +180,10 @@ def test_failed_submit_retains_the_draft_without_claiming_success(rig):
     assert "entry" not in res and res["retained"]["name"] == "ACC-JV-1"
     assert [p for p in _Erp.puts if p[1] == {"docstatus": 2}] == []        # never auto-deleted/cancelled
     # a retry with the same key resumes the retained draft instead of posting a second one
-    _Erp.fail_submit, _Erp.journal = False, [{"name": "ACC-JV-1", "docstatus": 0}]
+    _Erp.fail_submit = False
+    _Erp.journal = [{"name": "ACC-JV-1", "docstatus": 0, "user_remark": _Erp.posts[0][1]["user_remark"]}]
+    changed = rig[0].invoke("books.record_revenue", {"amount": "7", "idempotency_key": "k", **APPR})
+    assert changed["error_type"] == "idempotency_conflict" and _Erp.puts == [(_Erp.puts[0][0], {"docstatus": 1})]
     retry = rig[0].invoke("books.record_revenue", {"amount": "5", "idempotency_key": "k", **APPR})
     assert retry["status"] == "done" and retry["entry"] == "ACC-JV-1" and len(_Erp.posts) == 1
 
@@ -185,3 +193,38 @@ def test_currency_must_match_the_ledger(rig):
     assert res["status"] == "error" and _Erp.posts == []
     assert rig[0].invoke("books.record_revenue", {"amount": "5", "currency": core.COMPANY_CURRENCY.lower(), **APPR}
                          )["status"] == "done"
+
+
+def test_resumed_draft_with_a_different_amount_is_not_submitted(rig):
+    _Erp.fail_submit = True
+    rig[0].invoke("books.record_revenue", {"amount": "7", "idempotency_key": "k2", **APPR})
+    remark = _Erp.posts[0][1]["user_remark"]
+    _Erp.fail_submit = False
+    _Erp.journal = [{"name": "ACC-JV-1", "docstatus": 0, "user_remark": remark}]
+    _Erp.posts[0][1]["accounts"][0]["debit_in_account_currency"] = 700.0      # draft edited out of band
+    _Erp.puts.clear()
+    res = rig[0].invoke("books.record_revenue", {"amount": "7", "idempotency_key": "k2", **APPR})
+    assert res["status"] == "error" and res["error_type"] == "idempotency_conflict" and _Erp.puts == []
+
+
+def test_keys_are_scoped_to_tenant(rig):
+    rig[0].invoke("books.record_revenue", {"amount": "5", "idempotency_key": "same", "_tenant": "a", **APPR})
+    rig[0].invoke("books.record_revenue", {"amount": "5", "idempotency_key": "same", "_tenant": "b", **APPR})
+    remarks = [p[1]["user_remark"] for p in _Erp.posts]
+    assert remarks[0] != remarks[1]
+
+
+def test_concurrent_duplicate_is_detected_after_create(rig):
+    _Erp.journal = []
+    orig = _Erp.post
+
+    def post(self, url, headers=None, json=None):
+        r = orig(self, url, headers, json)
+        _Erp.journal = [{"name": "ACC-JV-1"}, {"name": "ACC-JV-2"}]      # a racing writer created another
+        return r
+    _Erp.post = post
+    try:
+        res = rig[0].invoke("books.record_revenue", {"amount": "5", "idempotency_key": "r", **APPR})
+    finally:
+        _Erp.post = orig
+    assert res["status"] == "error" and res["error_type"] == "duplicate_entry" and _Erp.puts == []

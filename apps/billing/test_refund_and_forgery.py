@@ -11,7 +11,7 @@ from billing.operator import build_billing_operator
 
 INVOICES = [{"number": "INV-001", "customer": {"name": "X"}, "total_amount_cents": 45000, "status": "finalized",
              "payment_status": "failed", "payment_overdue": True, "payment_due_date": "2026-06-01",
-             "lago_id": "lago-1", "issuing_date": "2026-05-15"}]
+             "lago_id": "lago-1", "currency": "USD", "issuing_date": "2026-05-15"}]
 FEES = [{"lago_id": "fee-1", "amount_cents": 30000}, {"lago_id": "fee-2", "amount_cents": 15000}]
 
 

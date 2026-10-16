@@ -446,10 +446,12 @@ def _execute_refund(invoice_number: str, amount=None, full_refund: bool = False,
         return {"executed": False, "error": f"invoice {invoice_number!r} not found"}
     lago_id = inv.get("lago_id")
     inv_cur = str(inv.get("currency") or "").upper()
+    if not _CURRENCY_RE.match(inv_cur):        # fail closed: never move money in an unknown currency
+        return {"executed": False, "error": "invoice currency is unknown; refund refused"}
     if currency is not None:
         if not isinstance(currency, str) or not _CURRENCY_RE.match(currency.strip().upper()):
             return {"executed": False, "error": f"invalid currency {currency!r}"}
-        if inv_cur and currency.strip().upper() != inv_cur:
+        if currency.strip().upper() != inv_cur:
             return {"executed": False, "error": f"currency {currency!r} does not match the invoice currency {inv_cur}"}
     with httpx.Client(timeout=10.0) as client:
         detail = client.get(f"{LAGO_API_URL}/api/v1/invoices/{lago_id}", headers=_headers())
