@@ -590,7 +590,10 @@ def _approve_block(body: dict) -> dict:
 
     Thin wrapper over core.block_ip (POST /v1/decisions) — core stays context-runtime-free.
     """
-    ip = ((body or {}).get("ip") or "").strip()
+    ip = ((body or {}).get("ip") or "").strip() if isinstance((body or {}).get("ip"), str) else ""
+    _ip, _dur, _why, refusal = core.preflight_block(body or {})
+    if refusal:
+        return refusal
     if not auth.block_enabled():
         return {"status": "dry_run", "action": "approve_block", "ip": ip,
                 "summary": f"DRY-RUN: would block {ip}",
@@ -1242,9 +1245,11 @@ async def api_case_respond(case_id: str, request: Request) -> JSONResponse:
     try:
         out = live.decide(case_id, request_id,
                           approved=bool((body or {}).get("approved")),
-                          actor=(body or {}).get("actor", "demo-approver"))
+                          actor=live.DEMO_ACTOR)   # the open endpoint never trusts a body-supplied identity
     except KeyError:
         return JSONResponse({"error": f"unknown case or request ({case_id}/{request_id})"}, status_code=404)
+    except live.ExecutionError as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=400)
     return JSONResponse(out)

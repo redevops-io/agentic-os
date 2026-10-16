@@ -26,6 +26,8 @@ from typing import Callable
 
 import httpx
 
+from . import ipguard
+
 # ── config (env; seed.py writes agents/edge-sentinel/.env) ───────────────────
 # Idempotent .env load so this module is self-sufficient when imported by the operator
 # (i.e. without the FastAPI app having run its own loader first).
@@ -263,6 +265,24 @@ def _parse_ip(raw) -> "str | None":
         return None
 
 
+def preflight_block(body: dict) -> "tuple[str, str, str, dict | None]":
+    """Validate a ban request: (ip, duration, reason, None) when acceptable, else (.., .., .., error result)."""
+    raw_ip = (body or {}).get("ip")
+    ip = _parse_ip(raw_ip if isinstance(raw_ip, str) else "")
+    if ip is None:
+        return "", "", "", {"status": "error", "action": "block_ip", "ip_blocked": False,
+                            "error": "invalid 'ip': must be a single IPv4/IPv6 address"}
+    denied = ipguard.check_ip(ip, service_urls=(CROWDSEC_LAPI_URL, CROWDSEC_FRONT_URL))
+    if denied:
+        return ip, "", "", {"status": "error", "action": "block_ip", "ip": ip, "ip_blocked": False,
+                            "error": f"refused: {denied}"}
+    duration, derr = ipguard.parse_duration((body or {}).get("duration"))
+    if derr:
+        return ip, "", "", {"status": "error", "action": "block_ip", "ip": ip, "ip_blocked": False,
+                            "error": derr}
+    return ip, duration, ipguard.clean_reason((body or {}).get("reason")), None
+
+
 def block_ip(body: dict) -> dict:
     """Add a ban decision at the CrowdSec edge — the SENSITIVE, side-effecting write.
 
@@ -270,14 +290,9 @@ def block_ip(body: dict) -> dict:
     (approval_required=True), so the Mission Runtime parks it as a HumanTask before
     execution; its compensating action (saga undo) is `unblock_ip`.
     """
-    ip = (body.get("ip") or "").strip()
-    if not ip:
-        return {"status": "error", "action": "block_ip", "error": "missing 'ip'"}
-    ip = _parse_ip(ip)
-    if ip is None:
-        return {"status": "error", "action": "block_ip", "error": "invalid 'ip': must be a single IPv4/IPv6 address"}
-    duration = body.get("duration", "4h")
-    reason = body.get("reason", "blocked via edge-sentinel agent (human-approved)")
+    ip, duration, reason, refusal = preflight_block(body)
+    if refusal:
+        return refusal
     decision = {
         "type": "ban", "scope": "Ip", "value": ip,
         "duration": duration, "origin": "cscli", "scenario": reason,
@@ -356,20 +371,27 @@ def unblock_ip(body: dict) -> dict:
     if ip is None:
         return {"status": "error", "action": "unblock_ip", "error": "invalid 'ip': must be a single IPv4/IPv6 address"}
     status_code = None
-    with httpx.Client(timeout=10.0) as client:
-        resp = client.delete(
-            f"{CROWDSEC_LAPI_URL}/v1/decisions",
-            headers=_headers(),
-            params={"ip": ip},
-        )
-        status_code = resp.status_code
-    ok = status_code in (200, 204)
+    err = None
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.delete(
+                f"{CROWDSEC_LAPI_URL}/v1/decisions",
+                headers=_headers(),
+                params={"ip": ip},
+            )
+            status_code = resp.status_code
+            still_banned = status_code in (200, 204) and _ban_active(client, ip)[0]
+    except Exception as e:  # noqa: BLE001 - LAPI unreachable / transport error: report, never raise
+        err = f"{type(e).__name__}: {e}"
+        still_banned = False
+    ok = status_code in (200, 204) and not err and not still_banned   # read-back: no active ban remains
     fetch_activity(force=True)
     return {
         "status": "done" if ok else "error",
         "action": "unblock_ip",
         "ip": ip,
         "lifted": ok,
+        **({"error": err} if err else {}),
         "lapi_status": status_code,
         "summary": (
             f"Unbanned {ip} via CrowdSec (DELETE /v1/decisions)." if ok

@@ -29,7 +29,10 @@ from .incident import ingest_crowdsec_alert, record_response, replay_case
 
 
 class ExecutionError(Exception):
-    """Raised when execution is requested for an action that has not been approved."""
+    """Raised when a decision or execution is requested for an action in the wrong state."""
+
+
+DEMO_ACTOR = "demo-approver"
 
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
@@ -145,20 +148,38 @@ def case_detail(case_id: str, st: CaseStore | None = None) -> dict | None:
     return bundle
 
 
-def decide(case_id: str, request_id: str, *, approved: bool, actor: str,
-           st: CaseStore | None = None) -> dict:
-    """The DEMO-FACING decision step — OPEN (no authentication) and with NO edge effect.
+def _resolve(st: CaseStore, case_id: str, request_id: str):
+    """Case + action for a request, requiring that the case actually owns the action (KeyError -> 404)."""
+    case = st.cases[case_id]
+    if request_id not in case.action_refs:
+        raise KeyError(request_id)
+    return case, st.actions[request_id]
 
-    Reject records the human rejection and stops. Approve records the approval and advances the action to
-    APPROVED (staged) — it does NOT touch the edge. The real kick-off is a SEPARATE, AUTHENTICATED step
-    (:func:`execute`), mirroring the Growth/Partners 'approve in the demo, execute for real behind auth'
-    split. Raises KeyError for an unknown case/request (→ 404)."""
+
+def _set_state(st: CaseStore, req: ActionRequest, state: ActionState) -> None:
+    st.put_action(ActionRequest(capability=req.capability, parameters=req.parameters,
+                                finding_refs=req.finding_refs, evidence_refs=req.evidence_refs,
+                                approval_required=req.approval_required, state=state))
+
+
+def decide(case_id: str, request_id: str, *, approved: bool, actor: str = DEMO_ACTOR,
+           st: CaseStore | None = None) -> dict:
+    """The DEMO-FACING decision step - OPEN (no authentication) and with NO edge effect.
+
+    Only an action that is AWAITING_APPROVAL can be decided; anything else raises ExecutionError (-> 409).
+    The request must belong to the case. Reject records the human rejection and stops. Approve records the
+    approval and advances the action to APPROVED (staged) - it does NOT touch the edge. The real kick-off is
+    a SEPARATE, AUTHENTICATED step (:func:`execute`). The caller-supplied ``actor`` is not trusted: the
+    open endpoint always records the fixed demo identity. Raises KeyError for an unknown case/request (-> 404)."""
     st = st or store()
-    case = st.cases[case_id]       # KeyError → 404
-    req = st.actions[request_id]   # KeyError → 404
+    case, req = _resolve(st, case_id, request_id)
+    if req.state != ActionState.AWAITING_APPROVAL:
+        raise ExecutionError(f"action {request_id} is {req.state.value}, not AWAITING_APPROVAL")
+    actor = DEMO_ACTOR
 
     if not approved:
         decision, _ = record_response(st, case, request_id, actor=actor, approved=False)
+        _set_state(st, req, ActionState.REJECTED)
         return {"approved": False, "awaiting_execution": False, "decision": decision.to_dict(),
                 "case_status": case.status.value}
 
@@ -167,9 +188,7 @@ def decide(case_id: str, request_id: str, *, approved: bool, actor: str,
     decision = st.put_decision(SecurityDecision(request_id=request_id, actor=actor, approved=True,
                                                 rationale="approved (staged for authenticated execution)"))
     case.decision_refs = tuple(dict.fromkeys(case.decision_refs + (decision.decision_id,)))
-    st.put_action(ActionRequest(capability=req.capability, parameters=req.parameters,
-                                finding_refs=req.finding_refs, evidence_refs=req.evidence_refs,
-                                approval_required=req.approval_required, state=ActionState.APPROVED))
+    _set_state(st, req, ActionState.APPROVED)
     st.put_case(case)
     return {"approved": True, "awaiting_execution": True, "decision": decision.to_dict(),
             "case_status": case.status.value}
@@ -186,8 +205,7 @@ def execute(case_id: str, request_id: str, *, actor: str, st: CaseStore | None =
     effect. Either way it records a receipt (execution proof) and a DISTINCT verification, and moves the case
     to CONTAINED on success. Raises KeyError for an unknown case/request (→ 404)."""
     st = st or store()
-    case = st.cases[case_id]       # KeyError → 404
-    req = st.actions[request_id]   # KeyError → 404
+    case, req = _resolve(st, case_id, request_id)   # KeyError → 404 (also when the case does not own it)
     if req.state != ActionState.APPROVED:
         raise ExecutionError(f"action {request_id} is {req.state.value}, not APPROVED — approve it first")
 
@@ -195,6 +213,9 @@ def execute(case_id: str, request_id: str, *, actor: str, st: CaseStore | None =
         from .auth import block_enabled
         enabled = block_enabled()
     decision_id = _approving_decision_id(st, case, request_id)
+    recorded = st.decisions.get(decision_id)
+    if recorded is None or not recorded.approved:
+        raise ExecutionError(f"action {request_id} has no recorded approving decision")
 
     if not enabled:
         receipt = st.put_receipt(ActionReceipt(
@@ -214,8 +235,7 @@ def execute(case_id: str, request_id: str, *, actor: str, st: CaseStore | None =
 
     if op is not None:
         proposal = propose_response(op, req, case_id=case_id)  # governed-response invariant
-        dec = SecurityDecision(request_id=request_id, actor=actor, approved=True, rationale="operator execute")
-        rr = execute_response(op, proposal, decision=dec)      # the REAL ban via the operator
+        rr = execute_response(op, proposal, decision=recorded)  # the REAL ban, under the recorded decision
         ext, err = rr.external_ref, rr.error
         ver = verify_response(op, proposal, rr)                # distinct read-only re-check
         verified, vdetail = ver.verified, ver.detail

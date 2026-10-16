@@ -92,10 +92,12 @@ def ingest_crowdsec_alert(store, alert: dict) -> SecurityCase:
     action_refs = ()
     if "sentinel.block_ip" in finding.recommended_actions:
         ip = obs.normalized_fields["source_ip"]
-        req = store.put_action(ActionRequest(
+        proposed = ActionRequest(
             capability="sentinel.block_ip", parameters={"ip": ip},
             finding_refs=(finding.finding_id,), evidence_refs=(ev.artifact_id,),
-            approval_required=True, state=ActionState.AWAITING_APPROVAL))
+            approval_required=True, state=ActionState.AWAITING_APPROVAL)
+        # Re-ingesting the same alert must not rewind an action that has already moved on.
+        req = store.actions.get(proposed.request_id) or store.put_action(proposed)
         action_refs = (req.request_id,)
 
     case = SecurityCase(
@@ -105,7 +107,7 @@ def ingest_crowdsec_alert(store, alert: dict) -> SecurityCase:
         status=CaseStatus.AWAITING_APPROVAL if action_refs else CaseStatus.INVESTIGATING,
         observation_refs=(obs.id,), evidence_refs=(ev.artifact_id,),
         finding_refs=(finding.finding_id,), action_refs=action_refs)
-    return store.put_case(case)
+    return store.cases.get(case.case_id) or store.put_case(case)
 
 
 def record_response(store, case: SecurityCase, request_id: str, *, actor: str, approved: bool,
