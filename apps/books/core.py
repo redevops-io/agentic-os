@@ -12,11 +12,14 @@ from __future__ import annotations
 
 import json as _json
 import os
+import re
 import time
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Callable
 
 import httpx
+from urllib.parse import quote
 
 from agentic_os.mission.operator_sdk import pending_approval
 
@@ -97,6 +100,39 @@ def _money(amount) -> str:
     return "${:,.0f}".format(float(amount or 0))
 
 
+def _cents(amount) -> int:
+    """Exact integer cents for an ERPNext amount (half-up), so matching never depends on display rounding."""
+    try:
+        return int((Decimal(str(amount or 0)) * 100).to_integral_value(rounding=ROUND_HALF_UP))
+    except (InvalidOperation, ValueError):
+        return 0
+
+
+MAX_REVENUE = Decimal("1000000000")          # per-entry upper bound
+_DOC_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,139}$")
+
+
+def _valid_doc_name(name) -> bool:
+    return isinstance(name, str) and bool(_DOC_NAME.match(name)) and ".." not in name
+
+
+def parse_revenue_amount(value) -> Decimal:
+    """Strict positive amount for a journal entry: Decimal, finite, > 0, bounded, rounded to cents.
+    Missing/zero/negative/non-finite/garbage values raise ValueError (there is no default amount)."""
+    if value is None or isinstance(value, (bool, list, dict)):
+        raise ValueError(f"invalid amount {value!r}")
+    try:
+        d = Decimal(str(value).strip().replace(",", "").lstrip("$"))
+    except InvalidOperation:
+        raise ValueError(f"invalid amount {value!r}") from None
+    if not d.is_finite() or d <= 0 or d > MAX_REVENUE * 10:
+        raise ValueError(f"amount must be a finite positive number within range, got {value!r}")
+    d = d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if d <= 0 or d > MAX_REVENUE:
+        raise ValueError(f"amount out of range: {value!r}")
+    return d
+
+
 def _pl_and_cash() -> dict:
     """Net income (Income − Expense) + cash, computed from GL Entry against the
     company's Income/Expense and bank/cash accounts. Real ledger numbers."""
@@ -159,6 +195,7 @@ def fetch_activity(force: bool = False) -> dict:
                 {"number": i["name"], "customer": i.get("customer", "—"),
                  "amount": _money(i.get("outstanding_amount")),
                  "amount_val": float(i.get("outstanding_amount") or 0),
+                 "amount_cents": _cents(i.get("outstanding_amount")),
                  "status": i.get("status", "Unpaid")}
                 for i in sorted(si, key=lambda x: -float(x.get("outstanding_amount") or 0))[:8]
             ]
@@ -190,6 +227,7 @@ def fetch_activity(force: bool = False) -> dict:
                 row = {
                     "name": t["name"], "desc": desc,
                     "amount": _money(dep or wd),
+                    "amount_cents": _cents(dep or wd),
                     "direction": "in" if dep else "out",
                 }
                 unreconciled.append(row)
@@ -291,7 +329,7 @@ def categorize(blurb: Callable[[str], str | None] | None = None, approval=None) 
             "ledger posting is made")
     if not approval:
         return {"status": "pending_approval", "action": "categorize", "mode": "tag_only",
-                "categorize_executed": False, "requires": "human approval", "result": result,
+                "categorize_executed": False, "transaction_categorized": False, "requires": "human approval", "result": result,
                 "proposed_changes": [{"doctype": "Bank Transaction", "name": t["name"], "set": payload}],
                 "remaining_after": len(queue) - 1, "note": note,
                 "summary": f"Proposed: tag {t['name']} ({t['desc']}) → {category} ({note}). "
@@ -316,6 +354,7 @@ def categorize(blurb: Callable[[str], str | None] | None = None, approval=None) 
         result["error"] = str(e)
     if not put_ok:                      # never report "done" for a failed ERPNext write
         return {"status": "error", "action": "categorize", "mode": "tag_only", "result": result,
+                "transaction_categorized": False,
                 "error": result.get("error") or f"ERPNext returned HTTP {result.get('erpnext_status')}",
                 "summary": f"Could NOT categorize {t['name']} ({t['desc']}): {result['action']}."}
 
@@ -325,6 +364,7 @@ def categorize(blurb: Callable[[str], str | None] | None = None, approval=None) 
         f"'{category}'. Be concrete and professional. Final answer only."
     ) if blurb else None
     out = {"status": "done", "action": "categorize", "mode": "tag_only", "categorize_executed": True,
+           "transaction_categorized": True,
            "result": result, "note": note,
            "summary": f"Tagged 1 of {len(queue)} uncategorized bank transactions "
                       f"({t['desc']} → {category}); {note}."}
@@ -346,7 +386,7 @@ def reconcile(blurb: Callable[[str], str | None] | None = None) -> dict:
     match = None
     for inv in ar:
         for dep in deposits:
-            if inv["amount"] == dep["amount"]:
+            if inv.get("amount_cents") is not None and inv.get("amount_cents") == dep.get("amount_cents"):
                 match = {"invoice": inv["number"], "customer": inv["customer"],
                          "deposit": dep["name"], "amount": inv["amount"]}
                 break
@@ -563,10 +603,10 @@ def record_revenue(body: dict | None = None) -> dict:
         return pending_approval("books.record_revenue", amount=body.get("amount"), revenue_recorded=False,
                                 subscription=subscription)
     try:
-        amount = float(body.get("amount") or 0) or 100.0
-    except (TypeError, ValueError):
+        amount = parse_revenue_amount(body.get("amount"))
+    except ValueError as e:
         return {"status": "error", "action": "record_revenue", "revenue_recorded": False,
-                "error": f"invalid amount {body.get('amount')!r}"}
+                "error": str(e)}
     try:
         cash_acc, income_acc = _revenue_accounts()
     except Exception as e:  # noqa: BLE001 — ERPNext unreachable: structured error, not a 500
@@ -579,9 +619,9 @@ def record_revenue(body: dict | None = None) -> dict:
         "user_remark": f"Onboarding subscription revenue: {subscription}",
         "accounts": [
             {"account": cash_acc,
-             "debit_in_account_currency": amount, "credit_in_account_currency": 0},
+             "debit_in_account_currency": float(amount), "credit_in_account_currency": 0},
             {"account": income_acc,
-             "debit_in_account_currency": 0, "credit_in_account_currency": amount},
+             "debit_in_account_currency": 0, "credit_in_account_currency": float(amount)},
         ],
     }
     entry = None
@@ -602,7 +642,7 @@ def record_revenue(body: dict | None = None) -> dict:
             # Same PUT-docstatus convention reverse_entry uses.
             if entry:
                 sub = client.put(
-                    f"{ERPNEXT_URL}/api/resource/Journal%20Entry/{entry}",
+                    f"{ERPNEXT_URL}/api/resource/Journal%20Entry/{quote(str(entry), safe='')}",
                     headers=_headers(), json={"docstatus": 1},   # 1 = Submitted → posts to the GL
                 )
                 erpnext_status = sub.status_code
@@ -616,7 +656,7 @@ def record_revenue(body: dict | None = None) -> dict:
         "revenue_recorded": submitted,            # true only if the JE was actually SUBMITTED (posted)
         "entry": entry,
         "erpnext_status": erpnext_status,
-        "summary": (f"Recorded {_money(amount)} subscription revenue for '{subscription}' "
+        "summary": (f"Recorded {_money(float(amount))} subscription revenue for '{subscription}' "
                     f"as Journal Entry {entry or '(pending)'} "
                     f"(debit {cash_acc} / credit {income_acc})."
                     if submitted else
@@ -634,15 +674,20 @@ def reverse_entry(body: dict | None = None) -> dict:
     cancelled voucher is a no-op on ERPNext's side.
     """
     body = body or {}
-    name = body.get("entry") or body.get("name")
+    fwd = body.get("result") if isinstance(body.get("result"), dict) else {}   # saga undo nests the forward result
+    name = fwd.get("entry") or body.get("entry") or body.get("name")
     if not body.get("_approval"):             # gate in CORE
         return pending_approval("books.reverse_entry", entry=name, revenue_reversed=False)
+    if not _valid_doc_name(name):             # never guess a target: refuse when the entry id is missing/invalid
+        return {"status": "error", "action": "reverse_entry", "reversed": False, "revenue_reversed": False,
+                "entry": None, "error": "no valid journal entry id supplied; nothing was reversed",
+                "summary": "Could NOT reverse: no valid Journal Entry id supplied."}
     erpnext_status = None
     reversed_ok = False
     if name:
         try:
             with httpx.Client(timeout=12.0) as client:
-                url = f"{ERPNEXT_URL}/api/resource/Journal%20Entry/{name}"
+                url = f"{ERPNEXT_URL}/api/resource/Journal%20Entry/{quote(name, safe='')}"
                 resp = client.put(url, headers=_headers(), json={"docstatus": 2})  # 2 = Cancelled
                 erpnext_status = resp.status_code
                 if 200 <= resp.status_code < 300:
@@ -664,6 +709,7 @@ def reverse_entry(body: dict | None = None) -> dict:
         "status": "done" if reversed_ok else "error",
         "action": "reverse_entry",
         "reversed": reversed_ok,
+        "revenue_reversed": reversed_ok,
         "entry": name,
         "erpnext_status": erpnext_status,
         "summary": (f"Reversed revenue Journal Entry {name} — subscription revenue backed out."

@@ -185,7 +185,7 @@ def test_console_chase_never_gets_the_operator_marker(app_mod, client, lago):
     for tool in app_mod._BILL_CONSOLE.tools:
         if tool.side_effecting:
             assert tool.fn({"message": "x", "_approval": {"approved": True}}).get("data", {}).get("status") \
-                == "pending_approval"
+                in ("pending_approval", "error")
     assert lago.mutating == [] and r2
 
 

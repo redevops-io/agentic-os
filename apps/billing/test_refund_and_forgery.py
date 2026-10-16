@@ -68,7 +68,7 @@ def _approved(**inputs):
                                                               **inputs})
 
 
-@pytest.mark.parametrize("amount,cents", [("$10", 1000), ("10.00", 1000), (1000, 1000), ("1,000.50", 45000),
+@pytest.mark.parametrize("amount,cents", [("$10", 1000), ("10.00", 1000), (1000, 1000), ("$4.50", 450),
                                           ("$450", 45000), ("350", 35000)])
 def test_credit_note_equals_requested_amount_or_cap(amount, cents):
     r = _approved(amount=amount)
@@ -78,9 +78,16 @@ def test_credit_note_equals_requested_amount_or_cap(amount, cents):
     assert sum(i["amount_cents"] for i in cn["items"]) == cents
 
 
-def test_over_request_is_capped_and_reported():
+def test_over_request_is_rejected_without_a_credit_note():
     r = _approved(amount="$9999")
-    assert r["refunded_cents"] == 45000 and r["capped"] is True and r["requested_cents"] == 999900
+    assert r["status"] == "error" and not r["refund_executed"]
+    assert r["requested_cents"] == 999900 and r["refundable_cents"] == 45000
+    assert _Client.credit_notes == []
+
+
+def test_refund_requires_an_explicit_invoice():
+    r = build_billing_operator().invoke("billing.refund", {"amount": "$10", "_approval": {"approved": True}})
+    assert r["status"] == "error" and not r["refund_staged"] and _Client.credit_notes == []
 
 
 @pytest.mark.parametrize("bad", ["abc", "", "-5", "0", 0, -100, True, 10.5, None, "NaN", "$"])

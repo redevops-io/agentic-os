@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Callable
 
 import httpx
+from urllib.parse import quote
 
 from agentic_os.mission.operator_sdk import pending_approval
 
@@ -359,6 +360,14 @@ def chase_invoices(account_id: str, invoice_ids=None, *, approval=None, all_acco
     return out
 
 
+_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def valid_id(value) -> bool:
+    """A Lago identifier safe to place in a URL path: no separators, no dot-dot, bounded length."""
+    return isinstance(value, str) and bool(_ID_RE.match(value)) and ".." not in value
+
+
 def parse_amount_cents(value) -> int:
     """Parse a requested refund amount to integer cents. Strings are DOLLARS ("$10", "10.00", "1,000.50");
     an int is CENTS (1000 == $10.00). Floats/bools/None/garbage and non-positive values raise ValueError."""
@@ -412,7 +421,10 @@ def _execute_refund(invoice_number: str, amount=None, full_refund: bool = False)
         refundable = sum(it["amount_cents"] for it in avail)
         if not avail or refundable <= 0:
             return {"executed": False, "error": "invoice has no refundable fees"}
-        target = refundable if want is None else min(want, refundable)
+        if want is not None and want > refundable:
+            return {"executed": False, "requested_cents": want, "refundable_cents": refundable,
+                    "error": f"requested refund exceeds the refundable total ({refundable} cents)"}
+        target = refundable if want is None else want
         items, left = [], target
         for it in avail:                      # allocate the refund across fees until the target is met
             if left <= 0:
@@ -427,15 +439,19 @@ def _execute_refund(invoice_number: str, amount=None, full_refund: bool = False)
             return {"executed": False, "error": f"lago {r.status_code}: {r.text[:200]}"}
         cn = (r.json() or {}).get("credit_note", {})
         return {"executed": True, "credit_note_id": cn.get("lago_id"), "refunded_cents": target,
-                "requested_cents": want, "capped": want is not None and want > refundable}
+                "requested_cents": want}
 
 
 def stage_refund(body: dict) -> dict:
     """Refunds move money OUT. On the ungoverned/pre-approval path they are only STAGED for a human. On a
     governed approval (the resumed Mission node carries ``_approval``) the refund is EXECUTED — a real Lago
     refund credit note — because a human has cleared THIS action (N3: approval executes)."""
-    data = fetch_activity(force=True)
-    target = body.get("invoice") or (data["recent"][0]["number"] if data["recent"] else "—")
+    target = body.get("invoice")
+    if not isinstance(target, str) or not target.strip():
+        return {"status": "error", "action": "refund", "refund_staged": False, "refund_executed": False,
+                "error": "invoice is required for a refund (no default invoice is chosen)",
+                "summary": "Refund not staged: an invoice number is required."}
+    target = target.strip()
     amount = body.get("amount") or ("the full invoice" if body.get("full_refund") is True
                                     else "an UNSPECIFIED amount (an amount is required to execute)")
     if not body.get("_approval"):
@@ -517,6 +533,7 @@ def create_subscription(body: dict) -> dict:
     return {
         "status": "done",
         "action": "create_subscription",
+        "subscription": True,
         "subscription_id": external_id or lago_id,
         "plan": plan,
         "lago_status": status_code,
@@ -528,13 +545,21 @@ def cancel_subscription(body: dict) -> dict:
 
     DELETE /api/v1/subscriptions/{external_id} is Lago's terminate call.
     """
-    customer = body.get("customer") or "new-customer"
-    plan = body.get("plan_code") or DEFAULT_PLAN_CODE
+    fwd = body.get("result") if isinstance(body.get("result"), dict) else {}   # saga undo nests the forward result
+    customer = body.get("customer") or fwd.get("customer")
+    plan = body.get("plan_code") or fwd.get("plan_code") or fwd.get("plan")
+    external_id = fwd.get("subscription_id") or body.get("subscription_id")
+    if not external_id and customer and (body.get("plan_code") or fwd.get("plan_code") or fwd.get("plan")):
+        external_id = _subscription_external_id(customer, plan)
     if not body.get("_approval"):             # gate in CORE: every caller is covered
         return pending_approval("billing.cancel_subscription", customer=customer, subscription_cancelled=False)
-    external_id = body.get("subscription_id") or _subscription_external_id(customer, plan)
+    if not valid_id(external_id):             # never guess a target: refuse when the id is missing/invalid
+        return {"status": "error", "action": "cancel_subscription", "cancelled": False,
+                "subscription_cancelled": False,
+                "error": "no valid subscription id supplied; nothing was cancelled"}
     with httpx.Client(timeout=10.0) as client:
-        resp = client.delete(f"{LAGO_API_URL}/api/v1/subscriptions/{external_id}", headers=_headers())
+        resp = client.delete(f"{LAGO_API_URL}/api/v1/subscriptions/{quote(external_id, safe='')}",
+                             headers=_headers())
         status_code = resp.status_code
     if not (200 <= status_code < 300):          # never report "done" for a rejected Lago call
         return {
@@ -543,10 +568,13 @@ def cancel_subscription(body: dict) -> dict:
             "error": f"Lago returned HTTP {status_code}",
             "lago_status": status_code,
             "cancelled": False,
+            "subscription_cancelled": False,
         }
     return {
         "status": "done",
         "action": "cancel_subscription",
         "cancelled": True,
+        "subscription_cancelled": True,
+        "subscription_id": external_id,
         "lago_status": status_code,
     }

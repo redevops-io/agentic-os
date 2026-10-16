@@ -56,7 +56,7 @@ def main() -> int:
     else:
         print("Running real OpenSCAP scan via scan.sh ...")
         rc = run_scan()
-        if rc != 0 or not RESULTS.exists():
+        if rc not in (0, 2) or not RESULTS.exists():      # 2 = valid scan with findings
             print(f"Scan did not produce results (rc={rc}).", file=sys.stderr)
             return 1
 

@@ -33,6 +33,8 @@ def build_books_operator() -> Operator:
                                                 "(mode: tag_only - reference_number tag, no account allocation); "
                                                 "staged preview until approved"},
             side_effecting=True, approval_required=True,
+            compensation={"supported": False, "reversibility": "IRREVERSIBLE",
+                          "notes": "tag-only write on a bank transaction; changing the tag is a new forward action"},
             permissions=["books:write"], estimated_value="medium", latency_ms=1200,
             concurrency_mode="exclusive", resource_keys=[LEDGER],
         ),

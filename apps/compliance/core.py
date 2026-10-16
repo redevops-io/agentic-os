@@ -17,6 +17,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
 import xml.etree.ElementTree as ET
 from datetime import date
@@ -266,6 +267,9 @@ def scan_rc_ok(rc: int) -> bool:
     return rc in (0, 2)
 
 
+_SCAN_LOCK = threading.Lock()
+
+
 def scan() -> dict:
     """Re-run the REAL oscap scan via scan.sh, then return the updated pass rate.
 
@@ -277,9 +281,15 @@ def scan() -> dict:
     summary = "Re-ran the OpenSCAP scan."
     rc = None
     if script.exists():
-        proc = subprocess.run(
-            ["bash", str(script)], capture_output=True, text=True, timeout=600
-        )
+        if not _SCAN_LOCK.acquire(blocking=False):      # single-flight: a concurrent run would clobber the results
+            return {"status": "error", "action": "scan", "rc": None,
+                    "summary": "a scan is already running", "error": "scan already in progress"}
+        try:
+            proc = subprocess.run(
+                ["bash", str(script)], capture_output=True, text=True, timeout=600
+            )
+        finally:
+            _SCAN_LOCK.release()
         rc = proc.returncode
         # oscap exit codes: 0 = pass, 2 = valid scan with failing rules; 1 = ERROR; anything else = error.
         if not scan_rc_ok(rc):
@@ -393,7 +403,8 @@ def remediate(body: dict) -> dict:
     meta = _resolve_rule(rule_id)
     if not meta:
         data = fetch_activity()
-        return {"status": "error", "action": "open_remediation_ticket", "error": f"unknown rule '{rule_id}'",
+        return {"status": "error", "action": "open_remediation_ticket", "remediation_staged": False,
+                "error": f"unknown rule '{rule_id}'",
                 "available": [f["id"] for f in data["failing"]][:10]}
     fix = meta["fix"] or "Apply the CIS-recommended configuration for this control."
     ticket = {"rule_id": meta["id"], "title": meta["title"], "severity": meta["severity"], "remediation": fix}
@@ -407,7 +418,7 @@ def remediate(body: dict) -> dict:
 
     if not provider:
         return {"status": "AWAITING_CONNECTOR", "action": "open_remediation_ticket", "approved": True,
-                "ticket_opened": False, "recommendation": ticket,
+                "ticket_opened": False, "remediation_staged": True, "recommendation": ticket,
                 "summary": (f"Approved remediation ticket for '{meta['title']}' recorded as a governed "
                             "recommendation. No ticketing connector is configured (set "
                             "COMPLIANCE_TICKETING_URL), so NO ticket was opened and NO host change was made.")}
@@ -415,10 +426,10 @@ def remediate(body: dict) -> dict:
         tid, verified = _open_ticket(provider, ticket)
     except Exception as e:  # noqa: BLE001
         return {"status": "error", "action": "open_remediation_ticket", "approved": True,
-                "ticket_opened": False, "error": str(e), **ticket,
+                "ticket_opened": False, "remediation_staged": False, "error": str(e), **ticket,
                 "summary": f"Approved but ticket NOT opened: {e}"}
     return {"status": "done" if verified else "error", "action": "open_remediation_ticket", "approved": True,
-            "ticket_opened": bool(tid), "ticket_id": tid, "verified": verified, **ticket,
+            "ticket_opened": bool(tid), "remediation_staged": bool(tid), "ticket_id": tid, "verified": verified, **ticket,
             "summary": (f"Remediation ticket {tid} opened for '{meta['title']}'" +
                         (" and verified by read-back." if verified else " but read-back verification FAILED."))}
 
