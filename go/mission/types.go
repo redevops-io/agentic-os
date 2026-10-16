@@ -282,6 +282,10 @@ type Mission struct {
 	// FailurePolicy: HALT_AND_REPORT | PRESERVE_ONLY | COMPENSATE_DECLARED | CONTINUE_SIBLINGS ("" => template default, then
 	// AGENTIC_OS_DEFAULT_FAILURE_POLICY, then HALT_AND_REPORT). Parity with Python Mission.failure_policy.
 	FailurePolicy string `json:"failure_policy,omitempty"`
+	// Default resolved ONCE at creation and frozen into MissionCreated (replay never reads the env/template table).
+	DefaultFailurePolicy string `json:"default_failure_policy,omitempty"`
+	DefaultPolicySource  string `json:"default_policy_source,omitempty"`
+	DefaultPolicyWarning string `json:"default_policy_warning,omitempty"`
 	// Identity / tenancy (parity with Python Mission.principal/tenant): the principal ref this mission runs as
 	// and the tenant isolation boundary. "" ⇒ legacy policy_refs behaviour.
 	Principal    string         `json:"principal"`
