@@ -34,9 +34,23 @@ func TestExecutorRunAndCompensate(t *testing.T) {
 	if err != nil || res["charge_id"] != "ch1" || node.Attempts != 1 {
 		t.Fatalf("run = %v err=%v attempts=%d", res, err, node.Attempts)
 	}
-	comp := ex.Compensate(&node)
+	// fail closed: no mission / no evidence the forward step ran -> the undo is NOT invoked
+	if comp := ex.Compensate(&node); comp["compensation_skipped"] != true || len(c.CallsSnapshot()) != 1 {
+		t.Fatalf("legacy Compensate must refuse: %v", comp)
+	}
+	ex.EvidenceProbe = func(string, string) CompEvidence {
+		return CompEvidence{Executed: true, Capability: "b.charge", Result: map[string]any{"charge_id": "ch1"}}
+	}
+	ex.UndoRegistry = func(string) string { return "b.refund" }
+	comp := ex.CompensateFor(&node, "m1", 1, nil)
 	if comp["refunded"] != "b.charge" {
 		t.Fatalf("compensate = %v", comp)
+	}
+	if last := c.CallsSnapshot()[1]; last[1] != "idem1:undo:1" {
+		t.Fatalf("attempt-scoped idempotency key expected, got %v", last)
+	}
+	if again := ex.CompensateFor(&node, "m1", 2, nil); again["refunded"] != "b.charge" || len(c.CallsSnapshot()) != 2 {
+		t.Fatalf("a second compensation must return the first outcome without a second undo call: %v", again)
 	}
 	// a node with no undo compensates to nil
 	if ex.Compensate(&Node{Operator: "b", Capability: "b.charge"}) != nil {

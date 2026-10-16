@@ -17,6 +17,7 @@ type Event struct {
 	MissionID string         `json:"mission_id"`
 	Payload   map[string]any `json:"payload"`
 	Seq       int            `json:"seq"`
+	ID        string         `json:"id,omitempty"` // optional record id (legacy/imported logs); used only to dedupe replays
 	Ts        float64        `json:"ts"`
 }
 

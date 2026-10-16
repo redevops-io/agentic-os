@@ -36,7 +36,7 @@ var allOutcomes = []string{
 func everyMissionRuntime() *MissionRuntime {
 	reg := NewCapabilityRegistry(nil)
 	handlers := map[string]Handler{}
-	noop := func(map[string]any) (map[string]any, error) { return map[string]any{}, nil }
+	noop := func(map[string]any) (map[string]any, error) { return map[string]any{"ok": true}, nil } // a write must report something
 	var specs []CapabilitySpec
 	for _, o := range allOutcomes {
 		name := "mock." + o

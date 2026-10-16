@@ -1,0 +1,444 @@
+{
+ "cases": [
+  {
+   "failed": false,
+   "failed_side_effect_no_outputs": true,
+   "proves_execution": false,
+   "reason": "",
+   "result": {},
+   "staged": false
+  },
+  {
+   "failed": false,
+   "failed_side_effect_no_outputs": false,
+   "proves_execution": true,
+   "reason": "",
+   "result": {
+    "ok": true
+   },
+   "staged": false
+  },
+  {
+   "failed": false,
+   "failed_side_effect_no_outputs": false,
+   "proves_execution": true,
+   "reason": "",
+   "result": {
+    "executed": true,
+    "id": 1
+   },
+   "staged": false
+  },
+  {
+   "failed": true,
+   "failed_side_effect_no_outputs": true,
+   "proves_execution": false,
+   "reason": "executed is False",
+   "result": {
+    "executed": false
+   },
+   "staged": false
+  },
+  {
+   "failed": false,
+   "failed_side_effect_no_outputs": false,
+   "proves_execution": false,
+   "reason": "",
+   "result": {
+    "staged": true
+   },
+   "staged": false
+  },
+  {
+   "failed": false,
+   "failed_side_effect_no_outputs": false,
+   "proves_execution": true,
+   "reason": "",
+   "result": {
+    "id": 1,
+    "staged": false
+   },
+   "staged": false
+  },
+  {
+   "failed": true,
+   "failed_side_effect_no_outputs": true,
+   "proves_execution": false,
+   "reason": "status=pending_approval",
+   "result": {
+    "status": "pending_approval"
+   },
+   "staged": true
+  },
+  {
+   "failed": true,
+   "failed_side_effect_no_outputs": true,
+   "proves_execution": false,
+   "reason": "status=awaiting_approval",
+   "result": {
+    "status": " Awaiting_Approval "
+   },
+   "staged": true
+  },
+  {
+   "failed": false,
+   "failed_side_effect_no_outputs": false,
+   "proves_execution": false,
+   "reason": "",
+   "result": {
+    "status": "queued"
+   },
+   "staged": false
+  },
+  {
+   "failed": false,
+   "failed_side_effect_no_outputs": false,
+   "proves_execution": false,
+   "reason": "",
+   "result": {
+    "status": "held"
+   },
+   "staged": false
+  },
+  {
+   "failed": false,
+   "failed_side_effect_no_outputs": false,
+   "proves_execution": true,
+   "reason": "",
+   "result": {
+    "status": "ok"
+   },
+   "staged": false
+  },
+  {
+   "failed": true,
+   "failed_side_effect_no_outputs": true,
+   "proves_execution": false,
+   "reason": "status=failed",
+   "result": {
+    "status": "failed"
+   },
+   "staged": false
+  },
+  {
+   "failed": true,
+   "failed_side_effect_no_outputs": true,
+   "proves_execution": false,
+   "reason": "status=error",
+   "result": {
+    "status": "error"
+   },
+   "staged": false
+  },
+  {
+   "failed": true,
+   "failed_side_effect_no_outputs": true,
+   "proves_execution": false,
+   "reason": "status=partial",
+   "result": {
+    "status": "partial"
+   },
+   "staged": false
+  },
+  {
+   "failed": true,
+   "failed_side_effect_no_outputs": true,
+   "proves_execution": false,
+   "reason": "ok is False",
+   "result": {
+    "ok": false
+   },
+   "staged": false
+  },
+  {
+   "failed": true,
+   "failed_side_effect_no_outputs": true,
+   "proves_execution": false,
+   "reason": "success is False",
+   "result": {
+    "success": false
+   },
+   "staged": false
+  },
+  {
+   "failed": true,
+   "failed_side_effect_no_outputs": true,
+   "proves_execution": false,
+   "reason": "verified is False",
+   "result": {
+    "verified": false
+   },
+   "staged": false
+  },
+  {
+   "failed": true,
+   "failed_side_effect_no_outputs": true,
+   "proves_execution": false,
+   "reason": "error present",
+   "result": {
+    "error": "x"
+   },
+   "staged": false
+  },
+  {
+   "failed": false,
+   "failed_side_effect_no_outputs": false,
+   "proves_execution": true,
+   "reason": "",
+   "result": {
+    "error": ""
+   },
+   "staged": false
+  },
+  {
+   "failed": true,
+   "failed_side_effect_no_outputs": true,
+   "proves_execution": false,
+   "reason": "errors present",
+   "result": {
+    "errors": [
+     "a"
+    ]
+   },
+   "staged": false
+  },
+  {
+   "failed": false,
+   "failed_side_effect_no_outputs": false,
+   "proves_execution": true,
+   "reason": "",
+   "result": {
+    "errors": []
+   },
+   "staged": false
+  },
+  {
+   "failed": true,
+   "failed_side_effect_no_outputs": true,
+   "proves_execution": false,
+   "reason": "failed_count=2",
+   "result": {
+    "failed_count": 2
+   },
+   "staged": false
+  },
+  {
+   "failed": true,
+   "failed_side_effect_no_outputs": true,
+   "proves_execution": false,
+   "reason": "failed_count=3",
+   "result": {
+    "failed_count": "3"
+   },
+   "staged": false
+  },
+  {
+   "failed": false,
+   "failed_side_effect_no_outputs": false,
+   "proves_execution": true,
+   "reason": "",
+   "result": {
+    "failed_count": 0
+   },
+   "staged": false
+  },
+  {
+   "failed": true,
+   "failed_side_effect_no_outputs": true,
+   "proves_execution": false,
+   "reason": "failures present",
+   "result": {
+    "failures": [
+     1
+    ]
+   },
+   "staged": false
+  },
+  {
+   "failed": true,
+   "failed_side_effect_no_outputs": true,
+   "proves_execution": false,
+   "reason": "detail='Forbidden.' (HTTP-style error body)",
+   "result": {
+    "detail": "Forbidden."
+   },
+   "staged": false
+  },
+  {
+   "failed": false,
+   "failed_side_effect_no_outputs": false,
+   "proves_execution": true,
+   "reason": "",
+   "result": {
+    "detail": "fine"
+   },
+   "staged": false
+  },
+  {
+   "failed": true,
+   "failed_side_effect_no_outputs": true,
+   "proves_execution": false,
+   "reason": "status_code=500",
+   "result": {
+    "status_code": 500
+   },
+   "staged": false
+  },
+  {
+   "failed": true,
+   "failed_side_effect_no_outputs": true,
+   "proves_execution": false,
+   "reason": "http_status=404",
+   "result": {
+    "http_status": "404"
+   },
+   "staged": false
+  },
+  {
+   "failed": false,
+   "failed_side_effect_no_outputs": false,
+   "proves_execution": true,
+   "reason": "",
+   "result": {
+    "status_code": 200
+   },
+   "staged": false
+  },
+  {
+   "failed": true,
+   "failed_side_effect_no_outputs": true,
+   "proves_execution": false,
+   "reason": "upstream_status=502",
+   "result": {
+    "upstream_status": 502
+   },
+   "staged": false
+  },
+  {
+   "failed": false,
+   "failed_side_effect_no_outputs": false,
+   "proves_execution": true,
+   "reason": "",
+   "result": {
+    "count": 500
+   },
+   "staged": false
+  },
+  {
+   "failed": true,
+   "failed_side_effect_no_outputs": true,
+   "proves_execution": false,
+   "reason": "results[1]: error present",
+   "result": {
+    "results": [
+     {
+      "ok": true
+     },
+     {
+      "error": "x"
+     }
+    ]
+   },
+   "staged": false
+  },
+  {
+   "failed": false,
+   "failed_side_effect_no_outputs": false,
+   "proves_execution": false,
+   "reason": "",
+   "result": {
+    "items": [
+     {
+      "id": 1
+     },
+     {
+      "staged": true
+     }
+    ]
+   },
+   "staged": false
+  },
+  {
+   "failed": false,
+   "failed_side_effect_no_outputs": false,
+   "proves_execution": false,
+   "reason": "",
+   "result": {
+    "result": {
+     "executed": false
+    }
+   },
+   "staged": false
+  },
+  {
+   "failed": false,
+   "failed_side_effect_no_outputs": false,
+   "proves_execution": true,
+   "reason": "",
+   "result": {
+    "result": {
+     "id": 1
+    }
+   },
+   "staged": false
+  },
+  {
+   "failed": false,
+   "failed_side_effect_no_outputs": false,
+   "proves_execution": false,
+   "reason": "",
+   "result": {
+    "results": [
+     {
+      "results": [
+       {
+        "results": [
+         {
+          "results": [
+           {
+            "error": "deep"
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "staged": false
+  },
+  {
+   "failed": false,
+   "failed_side_effect_no_outputs": false,
+   "proves_execution": true,
+   "reason": "",
+   "result": {
+    "id": 1,
+    "paid": true
+   },
+   "staged": false
+  },
+  {
+   "failed": false,
+   "failed_side_effect_no_outputs": false,
+   "proves_execution": true,
+   "reason": "",
+   "result": {
+    "status": "success"
+   },
+   "staged": false
+  },
+  {
+   "failed": false,
+   "failed_side_effect_no_outputs": false,
+   "proves_execution": true,
+   "reason": "",
+   "result": {
+    "id": 7,
+    "status": "done"
+   },
+   "staged": false
+  }
+ ]
+}

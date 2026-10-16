@@ -111,6 +111,7 @@ func NewMissionRuntime(registry Registry, executor *Executor, opts ...RuntimeOpt
 	// resolves it (bind · policy · belief · model). Mirrors Python runtime.py self.context.
 	rt.context = NewLocalContextRuntime(registry)
 	rt.context.PolicyPlane = rt.policyPlane
+	rt.wireCompensation()
 	if rt.learners == nil {
 		rt.learners = NewLearningStack()
 	}
@@ -194,7 +195,11 @@ func (rt *MissionRuntime) planAndGate(m *Mission, revision int, reason string) e
 		rt.store.Append("PlanSelected", m.ID, map[string]any{"plan_id": plan.ID, "considered": len(candidates), "candidates": cands})
 	}
 	rt.store.Append("PlanActivated", m.ID, map[string]any{"plan_id": plan.ID})
-	if !plan.Projection.WithinBudget {
+	if compErrs := validatePlanCompensation(plan.Graph.Nodes, rt.registry.Get, strictUndoTargets()); len(compErrs) > 0 {
+		// a node declares an undo the registry does not: refuse the plan, run nothing
+		rt.setState(m, MissionFailed)
+		rt.store.Append("MissionBlocked", m.ID, map[string]any{"reason": "compensation_undeclared", "notes": strList(compErrs)})
+	} else if !plan.Projection.WithinBudget {
 		rt.setState(m, MissionFailed)
 		rt.store.Append("MissionBlocked", m.ID, map[string]any{"reason": "over_budget", "notes": plan.Projection.Notes})
 	} else {
@@ -688,45 +693,10 @@ func (rt *MissionRuntime) assignee(node *Node) string { return "approver" }
 
 // ── sagas / failure / success ──────────────────────────────────────────────────
 
-// saga unwinds committed side effects newest-first. It compensates every prior DONE side-effecting
-// node, PLUS any `rejected` node passed in — a node whose own result was rolled back (verification
-// REJECT, or a human reject after escalation). Per the v5 compensation rule a rejected side-effecting
-// node auto-compensates its OWN effect: the operator already ran and committed, but the result never
-// became authoritative world state, so the effect must be undone just like a prior stage's.
-func (rt *MissionRuntime) saga(m *Mission, plan *ExecutionPlan, rejected ...*Node) {
-	// COMPENSATION = EXPLICIT_ONLY (docs/COMPENSATION.md, parity with the Python reference runtime): nothing is
-	// undone unless the mission's effective policy is COMPENSATE_DECLARED.
-	if EffectiveFailurePolicy(m) != PolicyCompensateDeclared {
-		return
-	}
-	compensated := map[string]bool{}
-	for _, node := range rejected {
-		if node != nil && rt.compensateNode(m, node) {
-			compensated[node.ID] = true
-		}
-	}
-	status := rt.repo.NodeStatus(m.ID)
-	for i := len(plan.Graph.Nodes) - 1; i >= 0; i-- {
-		node := &plan.Graph.Nodes[i]
-		if compensated[node.ID] {
-			continue
-		}
-		if status[node.ID] == NodeDone {
-			rt.compensateNode(m, node)
-		}
-	}
-}
-
-// compensateNode undoes one node's committed side effect (its undo capability). Returns true if a
-// compensation ran. A non-side-effecting node, or one without an undo, is a no-op.
-func (rt *MissionRuntime) compensateNode(m *Mission, node *Node) bool {
-	if !node.SideEffecting || node.Undo == "" {
-		return false
-	}
-	out := rt.executor.Compensate(node)
-	rt.store.Append("NodeCompensated", m.ID, map[string]any{"node_id": node.ID, "undo": node.Undo, "result": out})
-	return true
-}
+// saga is explicit-only compensation (docs/COMPENSATION.md): see runSaga. Only nodes whose effect is recorded as DONE in
+// this mission are considered (a node whose result was rejected never became authoritative). The trailing nodes
+// argument is accepted for call-site compatibility and ignored (Python parity).
+func (rt *MissionRuntime) saga(m *Mission, plan *ExecutionPlan, _ ...*Node) { rt.runSaga(m, plan) }
 
 // nodeByID resolves a node pointer in a plan's graph (nil if absent).
 func (rt *MissionRuntime) nodeByID(plan *ExecutionPlan, id string) *Node {
@@ -742,8 +712,22 @@ func (rt *MissionRuntime) nodeByID(plan *ExecutionPlan, id string) *Node {
 }
 
 func (rt *MissionRuntime) fail(m *Mission, plan *ExecutionPlan, reason string) {
-	rt.setState(m, MissionFailed)
+	keep := map[string]any{}
+	for k, v := range m.Outcome {
+		if OutcomeKeys[k] || strings.HasPrefix(k, "compensation_") {
+			keep[k] = v
+		}
+	}
+	// a failed compensation leaves a forward effect behind: attention state, never plain FAILED/"rolled back"
+	if truthy(keep["compensation_incomplete"]) {
+		rt.setState(m, MissionCompensationFailed)
+	} else {
+		rt.setState(m, MissionFailed)
+	}
 	m.Outcome = map[string]any{"success": false, "reason": reason}
+	for k, v := range keep {
+		m.Outcome[k] = v
+	}
 	rt.emitOutcome(m, plan, false)
 	rt.reflect(m)
 }

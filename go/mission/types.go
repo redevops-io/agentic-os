@@ -88,6 +88,14 @@ type CapabilitySpec struct {
 	Deterministic    bool              `json:"deterministic"`
 	SideEffecting    bool              `json:"side_effecting"`
 	Undo             string            `json:"undo"` // "" ⇒ no compensating capability
+	// Saga compensation contract (docs/COMPENSATION.md). A side-effecting capability with neither a declared
+	// compensation nor irreversible=<note> is UNKNOWN and treated as irreversible.
+	Compensation     *CompensationSpec `json:"compensation,omitempty"`
+	Irreversible     bool              `json:"irreversible,omitempty"`
+	IrreversibleNote string            `json:"irreversible_note,omitempty"`
+	// MissionOwnedTemporary: owner-side marker on a temporary-artifact UNDO that may run in a no-human CLEANUP.
+	// In-process builders only: never read from remote /capabilities JSON or a forward action's declaration.
+	MissionOwnedTemporary bool `json:"-"`
 	ApprovalRequired bool              `json:"approval_required"`
 	Confidence       float64           `json:"confidence"`
 	EstimatedValue   string            `json:"estimated_value"` // low|medium|high
@@ -158,6 +166,7 @@ type Node struct {
 	ApprovalRequired bool             `json:"approval_required"`
 	SideEffecting    bool             `json:"side_effecting"`
 	Undo             string           `json:"undo"`
+	Irreversible     bool             `json:"irreversible,omitempty"` // carried from the capability's declaration
 	Status           NodeState        `json:"status"`
 	Attempts         int              `json:"attempts"`
 	IdempotencyKey   string           `json:"idempotency_key"`

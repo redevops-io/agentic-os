@@ -408,7 +408,10 @@ func pyJSON(v any) string {
 	return sb.String()
 }
 
-func writePyJSON(sb *strings.Builder, v any) {
+func writePyJSON(sb *strings.Builder, v any) { writePyJSONSep(sb, v, ", ", ": ") }
+
+// writePyJSONSep is writePyJSON with explicit separators (json.dumps separators=(item, key)).
+func writePyJSONSep(sb *strings.Builder, v any, itemSep, keySep string) {
 	switch x := v.(type) {
 	case nil:
 		sb.WriteString("null")
@@ -432,9 +435,9 @@ func writePyJSON(sb *strings.Builder, v any) {
 		sb.WriteByte('[')
 		for i, e := range x {
 			if i > 0 {
-				sb.WriteString(", ")
+				sb.WriteString(itemSep)
 			}
-			writePyJSON(sb, e)
+			writePyJSONSep(sb, e, itemSep, keySep)
 		}
 		sb.WriteByte(']')
 	case map[string]any:
@@ -446,11 +449,11 @@ func writePyJSON(sb *strings.Builder, v any) {
 		sb.WriteByte('{')
 		for i, k := range keys {
 			if i > 0 {
-				sb.WriteString(", ")
+				sb.WriteString(itemSep)
 			}
 			writePyString(sb, k)
-			sb.WriteString(": ")
-			writePyJSON(sb, x[k])
+			sb.WriteString(keySep)
+			writePyJSONSep(sb, x[k], itemSep, keySep)
 		}
 		sb.WriteByte('}')
 	default:
