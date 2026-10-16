@@ -13,6 +13,7 @@ from dataclasses import dataclass
 ENV_TOKEN = "AGENTIC_OS_CONTROL_TOKEN"
 ENV_TENANT_TOKENS = "AGENTIC_OS_TENANT_TOKENS"   # "acme=<token>,globex=<token>" -> tenant-scoped callers
 ENV_APPROVER_TOKENS = "AGENTIC_OS_APPROVER_TOKENS"  # "acme=<token>" -> distinct approver credential per tenant (optional)
+ENV_TENANT_LIMITS = "AGENTIC_OS_TENANT_LIMITS"    # JSON {"acme": {"policy_refs": ["crm:read"], "budget_usd": 25}}
 ENV_GATE_READS = "AGENTIC_OS_GATE_READS"          # default ON; "0"/"false"/"off" opts OUT (unsafe off loopback)
 
 
@@ -96,10 +97,41 @@ def approver_tokens() -> "dict[str, str]":
     return out
 
 
+def tenant_limits(tenant: str) -> "tuple[list[str], float | None]":
+    """Server-side ceiling for a tenant caller: (allowed grants, max budget USD or None = default cap).
+
+    Read from ``AGENTIC_OS_TENANT_LIMITS``. A tenant with no entry gets NO grants (fail closed), and a
+    wildcard grant in the config is ignored: grants are never a wildcard for a tenant caller.
+    """
+    import json  # noqa: PLC0415
+    import math  # noqa: PLC0415
+    raw = os.environ.get(ENV_TENANT_LIMITS, "").strip()
+    if not raw:
+        return [], None
+    try:
+        cfg = json.loads(raw)
+    except ValueError as e:
+        raise ConfigError(f"{ENV_TENANT_LIMITS}: not valid JSON") from e
+    if not isinstance(cfg, dict):
+        raise ConfigError(f"{ENV_TENANT_LIMITS}: expected an object keyed by tenant")
+    entry = cfg.get(tenant)
+    if not isinstance(entry, dict):
+        return [], None
+    refs = [r for r in (entry.get("policy_refs") or []) if isinstance(r, str) and r and r != "*"]
+    cap = entry.get("budget_usd")
+    if cap is not None:
+        if isinstance(cap, bool) or not isinstance(cap, (int, float)) or not math.isfinite(cap) or cap < 0:
+            raise ConfigError(f"{ENV_TENANT_LIMITS}: budget_usd for {tenant!r} must be a finite number >= 0")
+        cap = float(cap)
+    return refs, cap
+
+
 def validate_config() -> None:
     """Raise ConfigError on a bad token env. Called when the routers are mounted so a bad config fails at startup."""
     tenant_tokens()
     approver_tokens()
+    for t in tenant_tokens():
+        tenant_limits(t)
 
 
 def any_token_configured() -> bool:

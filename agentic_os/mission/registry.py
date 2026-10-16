@@ -59,6 +59,7 @@ class CapabilityRegistry:
             probs = intrinsic_problems(cap)
             if probs:      # self-compensation / verify==undo / contradictory declaration: reject at registration
                 raise ValueError("invalid compensation declaration: " + "; ".join(probs))
+        self._check_ownership_and_strictness(manifest)
         merged = {**self._caps, **{c.name: c for c in manifest.capabilities}}
         # K2: an EVIDENCE_BOUND reversal can never target an approval-gated undo (in either registration order)
         conflicts = evidence_bound_conflicts(merged.values(), merged.get)
@@ -70,6 +71,30 @@ class CapabilityRegistry:
                 cap.embedding = self._embedder.embed(f"{cap.name} {' '.join(cap.provides)} "
                                                       f"{' '.join(cap.inputs)} {' '.join(cap.outputs)}")
             self._caps[cap.name] = cap
+
+    def _check_ownership_and_strictness(self, manifest: CapabilityManifest) -> None:
+        """A name has one owner. A manifest may not claim another operator's capability, nor re-declare its own
+        with weaker approval / side-effect / permission / undo metadata than what is already registered."""
+        for cap in manifest.capabilities:
+            owner = cap.operator or manifest.operator
+            old = self._caps.get(cap.name)
+            if old is None:
+                continue
+            if old.operator != owner:
+                raise ValueError(f"capability {cap.name!r} is already registered by {old.operator!r}")
+            weaker = []
+            if old.approval_required and not cap.approval_required:
+                weaker.append("approval_required")
+            if old.side_effecting and not cap.side_effecting:
+                weaker.append("side_effecting")
+            if not set(old.permissions) <= set(cap.permissions):
+                weaker.append("permissions")
+            if old.irreversible and not cap.irreversible:
+                weaker.append("irreversible")
+            if old.undo and cap.undo and old.undo != cap.undo:
+                weaker.append("undo")
+            if weaker:
+                raise ValueError(f"capability {cap.name!r}: re-registration weakens {', '.join(weaker)}")
 
     def get(self, name: str) -> CapabilitySpec | None:
         return self._caps[name] if name in self._caps else None

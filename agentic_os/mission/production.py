@@ -58,8 +58,12 @@ def _spec_from_json(d: dict) -> CapabilitySpec:
 
 
 def _manifest_from_json(d: dict) -> CapabilityManifest:
-    return CapabilityManifest(operator=d["operator"],
-                              capabilities=[_spec_from_json(s) for s in d.get("capabilities", [])])
+    specs = [_spec_from_json(s) for s in d.get("capabilities", [])]
+    for sp in specs:   # a remote manifest can only speak for itself
+        if sp.operator and sp.operator != d["operator"]:
+            raise ValueError(f"capability {sp.name!r} declares operator {sp.operator!r} "
+                             f"inside the {d['operator']!r} manifest")
+    return CapabilityManifest(operator=d["operator"], capabilities=specs)
 
 
 def discover(operators: dict[str, str], *, fetch: DiscoverFetch | None = None,
