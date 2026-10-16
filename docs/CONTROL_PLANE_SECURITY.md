@@ -32,6 +32,7 @@ The main control plane still accepts the legacy `X-API-Key` (`AGENTIC_OS_API_KEY
 |---|---|
 | `AGENTIC_OS_CONTROL_TOKEN` | Admin token (same as the other control surfaces). Acts on all tenants. |
 | `AGENTIC_OS_TENANT_TOKENS` | Optional `tenantA=<tokA>,tenantB=<tokB>`. A tenant (requester) token can only create/read/approve/simulate missions whose `tenant` equals its own; the tenant comes from the token, never a header or body. Cross-tenant and untenanted missions return **404**, identical to "not found". Reads (list, inbox, events...) are filtered to the tenant. |
+| `AGENTIC_OS_TENANT_LIMITS` | Optional JSON `{"tenantA": {"policy_refs": ["x:read"], "budget_usd": 25}}`. A tenant caller's grants and spend ceiling come from here, never from the request: a wildcard grant is refused, requested grants are intersected with the list, and the budget is clamped. A tenant with no entry gets no grants. |
 | `AGENTIC_OS_APPROVER_TOKENS` | Optional `tenantA=<tokA2>`: separation of duty. When set (for any tenant), requester tokens get **403** on `/approve`; only the tenant's approver token (or the admin token) can approve. Approver tokens can read their tenant and approve but cannot create or simulate. **When unset, requester == approver** (the token that created a mission can approve its gates). |
 | `AGENTIC_OS_GATE_READS` | Default **on**. `0`/`false`/`no`/`off` opts out so reads are open and unscoped for anonymous callers. **Unsafe off loopback**: anyone can read every tenant's goals, inputs, events and evidence. Mutations stay gated either way. |
 

@@ -5,10 +5,11 @@ Thin: it delegates to a MissionRuntime. Mount into the existing control_plane.py
 usable (and testable) without the web dependency.
 """
 
+import math
 from typing import Any
 
 from .api_gate import GATE, admin_only, caller_of, public
-from .control_auth import approver_tokens
+from .control_auth import approver_tokens, tenant_limits
 from .approval import strip_approval_keys
 from .runtime import MissionRuntime
 from .simulator import simulate
@@ -17,15 +18,15 @@ from .types import Budget, to_jsonable
 
 def build_router(runtime: MissionRuntime):
     from fastapi import APIRouter, HTTPException, Request
-    from pydantic import BaseModel
+    from pydantic import BaseModel, Field
 
     # default-deny: the gate is router-level, so every route (incl. ones added later) is protected.
     router = APIRouter(prefix="/missions", tags=["missions"], dependencies=[GATE])
 
     class CreateMission(BaseModel):
-        goal: str
-        constraints: list[str] = []
-        policy_refs: list[str] = ["*"]
+        goal: str = Field(max_length=20_000)
+        constraints: list[str] = Field(default=[], max_length=100)
+        policy_refs: list[str] | None = Field(default=None, max_length=100)
         template: str | None = None
         budget_usd: float | None = None
         tenant: str = ""            # honoured ONLY for the unscoped admin token; a tenant token forces its own tenant
@@ -72,9 +73,23 @@ def build_router(runtime: MissionRuntime):
         _deny_approver(request)
         c = caller_of(request)
         tenant = c.tenant if (c is not None and c.tenant is not None) else body.tenant
-        budget = Budget(usd=body.budget_usd) if body.budget_usd else None
+        req_usd = body.budget_usd
+        if req_usd is not None and (not math.isfinite(req_usd) or req_usd < 0):
+            raise HTTPException(422, "budget_usd must be a finite number >= 0")
+        if c is not None and c.tenant is not None:
+            # a tenant caller never chooses its own authority: grants and the spend ceiling come from server config
+            allowed, cap = tenant_limits(c.tenant)
+            req_refs = body.policy_refs
+            if req_refs is not None and "*" in req_refs:
+                raise HTTPException(422, "wildcard policy_refs are not accepted")
+            policy_refs = list(allowed) if req_refs is None else [r for r in req_refs if r in set(allowed)]
+            ceiling = Budget().usd if cap is None else cap
+            req_usd = ceiling if req_usd is None else min(req_usd, ceiling)
+        else:
+            policy_refs = ["*"] if body.policy_refs is None else body.policy_refs
+        budget = Budget(usd=req_usd) if req_usd is not None else None
         m = runtime.create_mission(body.goal, constraints=body.constraints,
-                                   policy_refs=body.policy_refs, template=body.template, budget=budget,
+                                   policy_refs=policy_refs, template=body.template, budget=budget,
                                    tenant=tenant)
         runtime.run(m.id)
         return _mission_view(m.id)
@@ -363,7 +378,7 @@ async function launch(){
   const g=document.getElementById('goal').value.trim(); if(!g)return;
   const t=document.getElementById('tpl').value||null;
   const m=await api('/missions',{method:'POST',headers:{'content-type':'application/json'},
-    body:JSON.stringify({goal:g,template:t,policy_refs:['*']})});
+    body:JSON.stringify({goal:g,template:t})});
   document.getElementById('goal').value=''; CUR=m.id; await refreshAll(); openMission(m.id);
 }
 async function decide(mid,node,decision,kind){

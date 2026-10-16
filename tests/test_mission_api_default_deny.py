@@ -4,6 +4,8 @@ Every mutating route is discovered by introspecting the app, so a newly added un
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
@@ -47,6 +49,8 @@ def _fill(path):
 def env(monkeypatch):
     monkeypatch.setenv("AGENTIC_OS_CONTROL_TOKEN", ADMIN)
     monkeypatch.setenv("AGENTIC_OS_TENANT_TOKENS", f"acme={TOK_A},globex={TOK_B}")
+    grants = ["billing:write", "support:write", "books:write", "compliance:write"]
+    monkeypatch.setenv("AGENTIC_OS_TENANT_LIMITS", json.dumps({t: {"policy_refs": grants} for t in ("acme", "globex")}))
     monkeypatch.delenv("AGENTIC_OS_GATE_READS", raising=False)      # default = reads gated
     monkeypatch.delenv("AGENTIC_OS_APPROVER_TOKENS", raising=False)
 
@@ -58,8 +62,10 @@ def fx(env):
 
 
 def _onboard(c, token, **extra):
-    r = c.post("/missions", headers=H(token), json={"goal": "Onboard a new customer", "template": "onboarding",
-                                                    "policy_refs": ["*"], **extra})
+    body = {"goal": "Onboard a new customer", "template": "onboarding", **extra}
+    if token == ADMIN:
+        body["policy_refs"] = ["*"]
+    r = c.post("/missions", headers=H(token), json=body)
     assert r.status_code == 200, r.text
     return r.json()
 
