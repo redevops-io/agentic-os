@@ -75,15 +75,16 @@ def build_infra_operator(*, run=None, http_get=None) -> Operator:
         if not isinstance(fwd, dict):
             return None, None, "undo requires the forward provision result (inputs.result) -- refusing"
         cloud = fwd.get("cloud")
-        if fwd.get("action") != "provision" or fwd.get("applied") is not True:
-            return None, None, "forward result is not an applied provision -- nothing to destroy"
-        if not isinstance(cloud, str) or not core._CLOUD_RE.match(cloud):
+        if fwd.get("action") != "provision":
+            return None, None, "forward result is not a provision -- nothing to destroy"
+        if not isinstance(cloud, str) or not core._CLOUD_RE.fullmatch(cloud):
             return None, None, "forward result has no valid cloud"
         if i.get("cloud") and i["cloud"] != cloud:
             return None, None, "requested cloud does not match the forward resource"
         created = fwd.get("created_resources")
         if not isinstance(created, list) or not created:
-            return None, None, "forward result recorded no created resources -- refusing to destroy"
+            return None, None, (fwd.get("recovery") or
+                                "forward result recorded no created resources -- refusing to destroy")
         return cloud, created, None
 
     def _destroy(i):

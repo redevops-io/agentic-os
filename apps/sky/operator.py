@@ -63,12 +63,12 @@ def build_sky_operator(*, run=None, ledger: "PlacementLedger | None" = None) -> 
         return core.serve(i.get("spec") or i, run=run)
 
     def _resolve(i, field, action):
-        """Undo (inputs carry ``result``/``undo_of``) targets only the forward-recorded resource. A direct
-        call must name the resource explicitly; there is no default target. -> (target, error_result)."""
+        """Undo (inputs carry ``result``/``undo_of``) targets only the forward-recorded resource. A call with
+        neither is refused: there is no direct or default target. -> (target, error_result)."""
         try:
             if "result" in i or "undo_of" in i:
                 return core.undo_target(i, field, action, "created"), None
-            return core.check_name(i.get("target") or i.get(field), field), None
+            raise core.SkyInputError("teardown requires the forward result (result / undo_of) -- refusing")
         except core.SkyInputError as e:
             return None, {"status": "error", "action": "down", "error": str(e), "rc": None, "executed": False}
 

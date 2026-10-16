@@ -84,8 +84,8 @@ def test_launch_uses_spot_and_reports_placement():
 def test_down_saga_and_serve_down_target_right_command():
     run = _stub({"sky serve down": (0, "", ""), "sky down": (0, "", "")})
     op = build_sky_operator(run=run)
-    op.invoke("sky.down", {"cluster": "demo", "_approval": {"approved": True}})
-    op.invoke("sky.serve_down", {"service": "svc", "_approval": {"approved": True}})
+    op.invoke("sky.down", {**SKY_GATED["sky.down"], "_approval": {"approved": True}})
+    op.invoke("sky.serve_down", {**SKY_GATED["sky.serve_down"], "_approval": {"approved": True}})
     assert run.calls[0] == ["sky", "down", "--yes", "--", "demo"]
     assert run.calls[1] == ["sky", "serve", "down", "--yes", "--", "svc"]
 
@@ -119,8 +119,10 @@ def test_launch_pins_to_chosen_and_rewards_actual_placement():
     assert isinstance(res["reward"], float)                             # reward recorded for the actual placement
 
 
-SKY_GATED = {"sky.serve": {"spec": {"name": "svc"}}, "sky.down": {"cluster": "demo"},
-             "sky.serve_down": {"service": "svc"}}
+SKY_GATED = {"sky.serve": {"spec": {"name": "svc"}},
+             "sky.down": {"undo_of": "sky.launch", "result": {"action": "launch", "cluster": "demo", "created": True}},
+             "sky.serve_down": {"undo_of": "sky.serve",
+                                "result": {"action": "serve", "service": "svc", "created": True}}}
 
 
 def _client(op):
@@ -185,7 +187,9 @@ def test_undo_reads_forward_result_for_cluster_and_service():
     ("sky.down", {"result": _fwd_serve()}),                               # wrong forward action
     ("sky.down", {}),                                                     # no default target
     ("sky.down", {"target": "-a"}),
-    ("sky.down", {"cluster": "--help"}),
+    ("sky.down", {"cluster": "demo"}),                                    # neither result nor undo_of
+    ("sky.serve_down", {"service": "svc"}),
+    ("sky.down", {"result": {**_fwd_launch(), "cluster": "demo\n"}}),
     ("sky.serve_down", {}),
     ("sky.serve_down", {"result": {**_fwd_serve(), "created": False}}),
     ("sky.serve_down", {"result": _fwd_launch()}),
@@ -201,8 +205,8 @@ def test_undo_refuses_without_matching_forward_result(cap, inp):
 
 
 @_pytest.mark.parametrize("spec", [{"name": "-c"}, {"name": "--help"}, {"name": "A_b"}, {"name": "x" * 70},
-                                   {"gpus": "--evil"}, {"cpus": "4; id"}, {"region": "-r"},
-                                   {"cloud": "--x"}, {"task_yaml": "--evil"}, {"task_yaml": "../../etc/x"}])
+                                   {"gpus": "--bad"}, {"cpus": "4; id"}, {"region": "-r"},
+                                   {"cloud": "--x"}, {"task_yaml": "--bad"}, {"task_yaml": "../other.yaml"}, {"name": "demo\n"}])
 def test_launch_rejects_unsafe_values(spec):
     run = _stub({})
     res = build_sky_operator(run=run).invoke("sky.launch", {"spec": spec, **_APPR})
@@ -223,3 +227,27 @@ def test_launch_uses_separator_for_task_and_command():
     op.invoke("sky.launch", {"spec": {"name": "demo", "task_yaml": "task.yaml"}, **_APPR})
     argv = _launch_argv(run)
     assert argv[-2:] == ["--", "task.yaml"]
+
+
+def test_launch_sets_default_autostop_and_accepts_override(monkeypatch):
+    monkeypatch.delenv("SKY_DEFAULT_AUTOSTOP_MINUTES", raising=False)
+    run = _stub({})
+    op = build_sky_operator(run=run)
+    op.invoke("sky.launch", {"spec": {"name": "demo"}, **_APPR})
+    argv = _launch_argv(run)
+    assert argv[argv.index("--idle-minutes-to-autostop") + 1] == "60"
+    run2 = _stub({})
+    build_sky_operator(run=run2).invoke("sky.launch", {"spec": {"name": "demo", "autostop_minutes": 15}, **_APPR})
+    argv = _launch_argv(run2)
+    assert argv[argv.index("--idle-minutes-to-autostop") + 1] == "15"
+    monkeypatch.setenv("SKY_DEFAULT_AUTOSTOP_MINUTES", "x")
+    run3 = _stub({})
+    assert build_sky_operator(run=run3).invoke("sky.launch", {"spec": {"name": "demo"}, **_APPR})["status"] == "error"
+    assert run3.calls == []
+
+
+def test_launch_refuses_when_status_unreadable():
+    run = _stub({"sky status": (1, "", "boom")})
+    res = build_sky_operator(run=run).invoke("sky.launch", {"spec": {"name": "demo"}, **_APPR})
+    assert res["status"] == "error" and not any(c[:2] == ["sky", "launch"] for c in run.calls)
+    assert run.calls == [["sky", "status", "--", "demo"]]

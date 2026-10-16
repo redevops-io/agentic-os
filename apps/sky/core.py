@@ -12,6 +12,7 @@ ready) is what turns a one-shot estimate into a placement the runtime learns per
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from typing import Callable
@@ -23,25 +24,25 @@ class SkyInputError(ValueError):
     """Rejected sky input (bad name / flag value / missing undo target)."""
 
 
-_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
-_GPUS_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:+-]{0,31}$")
-_COUNT_RE = re.compile(r"^[0-9]+(\.[0-9]+)?\+?$")
-_REGION_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
-_INSTANCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-_YAML_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./-]{0,255}$")
+_NAME_RE = re.compile(r"[a-z][a-z0-9-]{0,62}")
+_GPUS_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:+-]{0,31}")
+_COUNT_RE = re.compile(r"[0-9]+(\.[0-9]+)?\+?")
+_REGION_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
+_INSTANCE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+_YAML_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,255}")
 _CLOUDS = frozenset({"aws", "gcp", "azure", "oci", "lambda", "runpod", "fluidstack", "paperspace", "cudo",
                      "ibm", "scp", "vsphere", "kubernetes", "do", "nebius", "vast"})
 
 
 def check_name(name, what: str = "name") -> str:
-    if not isinstance(name, str) or not _NAME_RE.match(name):
+    if not isinstance(name, str) or not _NAME_RE.fullmatch(name):
         raise SkyInputError(f"invalid {what} {name!r}: must match {_NAME_RE.pattern}")
     return name
 
 
 def _check_val(v, rx, what: str) -> str:
     sv = str(v)
-    if not rx.match(sv):
+    if not rx.fullmatch(sv) or ".." in sv:
         raise SkyInputError(f"invalid {what} {sv!r}")
     return sv
 
@@ -77,6 +78,16 @@ def _spec_args(spec: dict) -> list:
     return args
 
 
+def _autostop_minutes(spec: dict) -> str:
+    """Idle minutes before autostop: spec ``autostop_minutes`` overrides SKY_DEFAULT_AUTOSTOP_MINUTES (60).
+    Bounded 1..10080 so a cluster is never left running indefinitely by default."""
+    raw = spec.get("autostop_minutes", os.environ.get("SKY_DEFAULT_AUTOSTOP_MINUTES", "60"))
+    sv = str(raw)
+    if isinstance(raw, bool) or not re.fullmatch(r"[0-9]{1,5}", sv) or not 1 <= int(sv) <= 10080:
+        raise SkyInputError(f"invalid autostop minutes {sv!r} (1..10080)")
+    return str(int(sv))
+
+
 def _guarded(action: str):
     def wrap(fn):
         def inner(*a, **kw):
@@ -91,8 +102,11 @@ def _guarded(action: str):
 
 
 def _exists(argv: list, name: str, run: Runner) -> "bool | None":
-    """True/False whether `name` is a row in the status table; None when status could not be read."""
-    rc, out, _ = run(argv)
+    """Whether `name` exists: queries status for that one name (`--` so it is never a flag) and looks for a
+    row whose first column is exactly the name. None when status could not be read (non-zero exit).
+    Note: check-then-launch is not atomic; two concurrent launches of one name can still race. The mission
+    runtime serialises writers per cluster (concurrency_key), which is what closes that window."""
+    rc, out, _ = run(argv + ["--", name])
     if rc != 0:
         return None
     return any((ln.split() or [""])[0] == name for ln in (out or "").splitlines())
@@ -198,7 +212,8 @@ def launch(spec: dict, *, run: Runner = _run) -> dict:
         pinned["cloud"] = chosen["cloud"]
     if chosen.get("region"):
         pinned["region"] = chosen["region"]
-    argv = ["sky", "launch", "--yes", "-c", name] + _spec_args(pinned)
+    argv = ["sky", "launch", "--yes", "-c", name, "--idle-minutes-to-autostop",
+            _autostop_minutes(spec)] + _spec_args(pinned)
     if chosen.get("instance"):
         argv += ["--instance-type", _check_val(chosen["instance"], _INSTANCE_RE, "instance")]
     if y := spec.get("task_yaml"):

@@ -40,14 +40,17 @@ class InfraInputError(ValueError):
     """Rejected infra input (bad cloud / path escape / unsafe var). Handlers return it as an error result."""
 
 
-_CLOUD_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
-_VAR_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_CLOUD_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")
+_VAR_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _FORBIDDEN_EXTRA_VARS = frozenset({"ansible_python_interpreter", "ansible_connection",
                                    "ansible_shell_executable"})
 # Any connection/privilege/interpreter knob is reserved: extra_vars carry application values only.
 _RESERVED_VAR_PREFIXES = ("ansible_",)
-_ADDR_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.\-\[\]\"]{0,255}$")   # terraform resource address
-_HOST_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
+# terraform resource address: name(.name | [digits] | ["quoted key"])* -- quoted keys may hold any printable
+# text (for_each keys, CIDRs); argv is never shell-parsed and a leading letter rules out flags.
+_ADDR_RE = re.compile(r'[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*|\[(?:[0-9]+|"[^"\\\x00-\x1f\x7f]{0,200}")\])*')
+_HOST_RE = re.compile(r"[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?")
+_NUMERICISH_RE = re.compile(r"(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+))*", re.I)
 
 
 def _inside(root: str, path: str) -> bool:
@@ -58,7 +61,7 @@ def _inside(root: str, path: str) -> bool:
 def _check_extra_vars(extra_vars: "dict | None") -> dict:
     out: dict = {}
     for k, v in (extra_vars or {}).items():
-        if not isinstance(k, str) or not _VAR_KEY_RE.match(k):
+        if not isinstance(k, str) or not _VAR_KEY_RE.fullmatch(k):
             raise InfraInputError(f"extra_vars key {k!r} is not allowed (must match {_VAR_KEY_RE.pattern})")
         if k in _FORBIDDEN_EXTRA_VARS:
             raise InfraInputError(f"extra_vars key {k!r} is forbidden")
@@ -98,10 +101,21 @@ def _run(argv: list, cwd: "str | None" = None) -> "tuple[int, str, str]":
 
 
 def _http_get(url: str) -> int:
-    import urllib.request
+    """GET with the SSRF guard applied at connect time: resolve once, require every address to be allowed,
+    connect to the checked IP (pinned), never follow redirects, ignore proxy environment variables."""
+    import http.client
+    from urllib.parse import urlsplit
     try:
-        with urllib.request.urlopen(url, timeout=10) as r:
-            return int(getattr(r, "status", 0) or 0)
+        u = urlsplit(url)
+        host, port = u.hostname or "", u.port or 80
+        ips = _check_host(host, port)
+        conn = http.client.HTTPConnection(ips[0], port, timeout=10)     # IP pinned; no proxies in http.client
+        try:
+            conn.request("GET", (u.path or "/") + (f"?{u.query}" if u.query else ""),
+                         headers={"Host": u.netloc, "Connection": "close"})
+            return int(conn.getresponse().status)                          # a 3xx is reported, not followed
+        finally:
+            conn.close()
     except Exception:
         return 0
 
@@ -110,7 +124,7 @@ def _env_dir(cloud: str) -> str:
     if not TF_ROOT:
         raise InfraInputError("infra deploy root is not configured: set INFRA_DEPLOY_ROOT "
                               "(no repo-relative deploy/ directory found) -- refusing to guess a path")
-    if not isinstance(cloud, str) or not _CLOUD_RE.match(cloud):
+    if not isinstance(cloud, str) or not _CLOUD_RE.fullmatch(cloud):
         raise InfraInputError(f"invalid cloud {cloud!r}: must match {_CLOUD_RE.pattern}")
     envs = os.path.join(TF_ROOT, "envs")
     d = os.path.join(envs, cloud)
@@ -139,7 +153,7 @@ def _guard(action: str, cloud: "str | None" = None):
 def _var_args(tf_vars: "dict | None") -> list:
     out: list = []
     for k, v in (tf_vars or {}).items():
-        if not isinstance(k, str) or not _VAR_KEY_RE.match(k):
+        if not isinstance(k, str) or not _VAR_KEY_RE.fullmatch(k):
             raise InfraInputError(f"terraform var name {k!r} is not allowed")
         # Python bools stringify as "True"/"False"; terraform bool vars need lowercase true/false.
         if isinstance(v, bool):
@@ -232,17 +246,27 @@ def terraform_apply(cloud: str, tf_vars: "dict | None" = None, *, approved_diges
     # Record exactly which resources this apply added (state after minus state before) so the compensating
     # destroy can target only those. Unknown (state unreadable) is recorded as None: undo then refuses.
     after = _state_list(cloud, run)
-    created = sorted(set(after) - set(before)) if before is not None and after is not None else None
-    return {"status": "done" if rc == 0 else "error", "action": "provision", "cloud": cloud,
+    created = (sorted(a for a in set(after) - set(before) if not a.startswith("data.") and ".data." not in a)
+               if before is not None and after is not None else None)
+    recovery = ("" if rc == 0 or created else
+                "apply did not complete and no created resources could be recorded: inspect the terraform "
+                "state and remove any partial resources manually")
+    return {"status": "done" if rc == 0 else "error", "action": "provision", "cloud": cloud, "recovery": recovery,
             "rc": rc, "outputs": terraform_outputs(cloud, run=run) if rc == 0 else {},
             "applied": rc == 0, "created_resources": created,
             "summary": _last_line(out) if rc == 0 else _err_summary(err),
             "stdout": out[-4000:], "stderr": err[-3000:]}
 
 
+_DESTROY_PLAN = "redevops-destroy.tfplan"
+
+
 def _state_list(cloud: str, run: Runner) -> "list | None":
-    rc, out, _ = run(["terraform", f"-chdir={_env_dir(cloud)}", "state", "list"], None)
+    rc, out, err = run(["terraform", f"-chdir={_env_dir(cloud)}", "state", "list"], None)
     if rc != 0:
+        # terraform exits 1 with "No state file was found" before the first apply: that is an EMPTY state
+        if re.search(r"no state file|state file was not found|does not have any|no state", f"{err}\n{out}", re.I):
+            return []
         return None
     return [ln.strip() for ln in (out or "").splitlines() if ln.strip()]
 
@@ -255,10 +279,26 @@ def terraform_destroy(cloud: str, created: "list | None" = None, *, run: Runner 
     if not isinstance(created, list) or not created:
         raise InfraInputError("no created resources recorded by the forward apply -- refusing to destroy")
     for a in created:
-        if not isinstance(a, str) or not _ADDR_RE.match(a):
+        if not isinstance(a, str) or not _ADDR_RE.fullmatch(a):
             raise InfraInputError(f"recorded resource address {a!r} is not valid")
-    argv = ["terraform", f"-chdir={_env_dir(cloud)}", "destroy", "-input=false", "-auto-approve", "-no-color"]
-    argv += [f"-target={a}" for a in created]
+    chdir = f"-chdir={_env_dir(cloud)}"
+    targets = [f"-target={a}" for a in created]
+    # Preflight: terraform also destroys dependants of a target. Plan the destroy and refuse if it touches
+    # anything beyond the recorded resources.
+    prc, _, perr = run(["terraform", chdir, "plan", "-destroy", "-input=false", "-no-color",
+                        f"-out={_DESTROY_PLAN}"] + targets, None)
+    src, sout, _ = run(["terraform", chdir, "show", "-json", _DESTROY_PLAN], None) if prc == 0 else (1, "", "")
+    try:
+        planned = {c["address"] for c in json.loads(sout).get("resource_changes", [])
+                   if "delete" in (c.get("change") or {}).get("actions", [])}
+    except Exception:
+        planned = None
+    if prc != 0 or src != 0 or planned is None:
+        raise InfraInputError("could not verify the destroy plan -- refusing to destroy")
+    extra = sorted(planned - set(created))
+    if extra:
+        raise InfraInputError(f"destroy would also remove resources not created by this apply: {extra[:5]}")
+    argv = ["terraform", chdir, "destroy", "-input=false", "-auto-approve", "-no-color"] + targets
     rc, out, err = run(argv, None)
     return {"status": "done" if rc == 0 else "error", "action": "destroy_delta", "cloud": cloud, "rc": rc,
             "destroyed_resources": list(created) if rc == 0 else []}
@@ -305,30 +345,56 @@ def ansible_playbook(playbook: str, *, inventory: "str | None" = None,
 
 
 # ── verification ──────────────────────────────────────────────────────────────
-def _check_host(host) -> None:
-    """Reject malformed hosts and loopback, link-local (metadata), multicast, unspecified targets.
-    Private ranges are allowed only with INFRA_VERIFY_ALLOW_PRIVATE=1."""
+def _resolve_host(host: str, port: int) -> "list[str]":
+    import socket
+    return sorted({ai[4][0] for ai in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)})
+
+
+def _check_host(host, port: int = 80) -> "list[str]":
+    """Return the checked IPs to connect to. Rejects non-canonical numeric hosts (127.1, 0x7f.1, 2130706433),
+    localhost-style names, and any host with ANY resolved address that is loopback, link-local (incl. cloud
+    metadata), multicast, unspecified, reserved or (unless INFRA_VERIFY_ALLOW_PRIVATE=1) private/CGNAT."""
     import ipaddress
-    if not host:
-        return                                   # verify() reports unhealthy for an empty host
-    if not isinstance(host, str) or not _HOST_RE.match(host) or host.lower() == "localhost":
+    if not isinstance(host, str) or not _HOST_RE.fullmatch(host):
         raise InfraInputError(f"invalid host {host!r}")
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        return
-    if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified or ip.is_reserved:
+    low = host.lower().rstrip(".")
+    if low == "localhost" or low.endswith((".localhost", ".local", ".internal")):
         raise InfraInputError(f"host {host!r} is not an allowed verification target")
-    if ip.is_private and os.environ.get("INFRA_VERIFY_ALLOW_PRIVATE") != "1":
-        raise InfraInputError(f"host {host!r} is a private address (set INFRA_VERIFY_ALLOW_PRIVATE=1 to allow)")
+    if _NUMERICISH_RE.fullmatch(host):
+        try:
+            ipaddress.IPv4Address(host)                 # strict dotted quad only
+        except ValueError:
+            raise InfraInputError(f"host {host!r} is not a canonical address") from None
+        addrs = [host]
+    else:
+        try:
+            addrs = [str(ipaddress.ip_address(host))] if ":" in host else _resolve_host(host, port)
+        except OSError:
+            raise InfraInputError(f"host {host!r} does not resolve") from None
+    if not addrs:
+        raise InfraInputError(f"host {host!r} does not resolve")
+    allow_private = os.environ.get("INFRA_VERIFY_ALLOW_PRIVATE") == "1"
+    for a in addrs:
+        ip = ipaddress.ip_address(a)
+        if getattr(ip, "ipv4_mapped", None):
+            ip = ip.ipv4_mapped
+        if (ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified or ip.is_reserved
+                or str(ip) in ("169.254.169.254", "100.100.100.200", "192.0.0.192")):
+            raise InfraInputError(f"host {host!r} resolves to a disallowed address")
+        if not ip.is_global and not allow_private:
+            raise InfraInputError(f"host {host!r} resolves to a non-public address "
+                                  "(set INFRA_VERIFY_ALLOW_PRIVATE=1 to allow)")
+    return addrs
 
 
 @_guard("verify")
 def verify(host: str, *, port: int = 8000, endpoints: tuple = ("/health", "/capabilities"),
            http_get: HttpGet = _http_get) -> dict:
-    _check_host(host)
+    if not host:
+        return {"status": "error", "action": "verify", "host": host, "checks": {}, "healthy": False}
     if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
         raise InfraInputError("invalid port")
+    _check_host(host, port)
     checks = {ep: http_get(f"http://{host}:{port}{ep}") for ep in endpoints}
     healthy = bool(host) and all(code == 200 for code in checks.values())
     return {"status": "done" if healthy else "error", "action": "verify",
