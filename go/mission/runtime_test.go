@@ -67,16 +67,22 @@ func TestSagaCompensationOnFailure(t *testing.T) {
 	a := NewCapabilitySpec("op.a", "op")
 	a.Provides = []string{"a"}
 	a.SideEffecting = true
-	a.Undo = "op.a_undo"
+	a.Compensation = &CompensationSpec{Supported: true, Capability: "op.a_undo", Verify: "op.a_check"}
 	b := NewCapabilitySpec("op.b", "op")
 	b.Provides = []string{"b"}
 	b.SideEffecting = true
-	reg.Register(CapabilityManifest{Operator: "op", Capabilities: []CapabilitySpec{a, b}})
+	undo := NewCapabilitySpec("op.a_undo", "op")
+	undo.SideEffecting, undo.Irreversible, undo.IrreversibleNote = true, true, "undo of op.a"
+	check := NewCapabilitySpec("op.a_check", "op")
+	if err := reg.Register(CapabilityManifest{Operator: "op", Capabilities: []CapabilitySpec{a, b, undo, check}}); err != nil {
+		t.Fatal(err)
+	}
 
 	handlers := map[string]Handler{
-		"op.a":      func(map[string]any) (map[string]any, error) { return map[string]any{"ok": "a"}, nil },
-		"op.a_undo": func(map[string]any) (map[string]any, error) { return map[string]any{"undone": true}, nil },
-		"op.b":      func(map[string]any) (map[string]any, error) { return nil, &OperatorError{"gateway down"} },
+		"op.a":       func(map[string]any) (map[string]any, error) { return map[string]any{"ok": "a"}, nil },
+		"op.a_undo":  func(map[string]any) (map[string]any, error) { return map[string]any{"undone": true}, nil },
+		"op.a_check": func(map[string]any) (map[string]any, error) { return map[string]any{"verified": true, "observed": map[string]any{"a": nil}}, nil },
+		"op.b":       func(map[string]any) (map[string]any, error) { return nil, &OperatorError{"gateway down"} },
 	}
 	rt := NewMissionRuntime(reg, NewExecutor(NewInMemoryOperatorClient(handlers)))
 	m := rt.CreateMission("job", CreateOpts{PolicyRefs: []string{"*"}, FailurePolicy: PolicyCompensateDeclared})
@@ -99,20 +105,26 @@ func TestSagaCompensationOnFailure(t *testing.T) {
 	}
 }
 
-// v5: a side-effecting node whose OWN result is REJECTED compensates its own committed effect —
-// the operator ran (the effect happened) but the result never became authoritative world state.
-func TestRejectedNodeCompensatesOwnEffect(t *testing.T) {
+// Python parity: a side-effecting node whose OWN result is REJECTED never became authoritative world state and
+// has no execution evidence in the log, so it is NOT compensated (only DONE nodes are considered).
+func TestRejectedNodeIsNotCompensated(t *testing.T) {
 	reg := NewCapabilityRegistry(nil)
 	act := NewCapabilitySpec("op.act", "op")
 	act.Provides = []string{"acted"}
 	act.SideEffecting = true
-	act.Undo = "op.act_undo"
-	act.Outputs = map[string]string{"receipt": "string"} // a missing declared output → malformed → REJECT
-	reg.Register(CapabilityManifest{Operator: "op", Capabilities: []CapabilitySpec{act}})
-
+	act.Compensation = &CompensationSpec{Supported: true, Capability: "op.act_undo", Verify: "op.act_check"}
+	act.Outputs = map[string]string{"receipt": "string"} // a missing declared output -> malformed -> REJECT
+	undo := NewCapabilitySpec("op.act_undo", "op")
+	undo.SideEffecting, undo.Irreversible, undo.IrreversibleNote = true, true, "undo"
+	check := NewCapabilitySpec("op.act_check", "op")
+	if err := reg.Register(CapabilityManifest{Operator: "op", Capabilities: []CapabilitySpec{act, undo, check}}); err != nil {
+		t.Fatal(err)
+	}
+	undoCalls := 0
 	handlers := map[string]Handler{
-		"op.act":      func(map[string]any) (map[string]any, error) { return map[string]any{"did": "work"}, nil }, // no "receipt"
-		"op.act_undo": func(map[string]any) (map[string]any, error) { return map[string]any{"undone": true}, nil },
+		"op.act":       func(map[string]any) (map[string]any, error) { return map[string]any{"did": "work"}, nil }, // no "receipt"
+		"op.act_undo":  func(map[string]any) (map[string]any, error) { undoCalls++; return map[string]any{"undone": true}, nil },
+		"op.act_check": func(map[string]any) (map[string]any, error) { return map[string]any{"verified": true, "observed": 1}, nil },
 	}
 	rt := NewMissionRuntime(reg, NewExecutor(NewInMemoryOperatorClient(handlers)),
 		WithVerifier(NewCompositeVerifier(reg, starGrants)))
@@ -124,14 +136,11 @@ func TestRejectedNodeCompensatesOwnEffect(t *testing.T) {
 	if rt.repoState(t, m.ID) != MissionFailed {
 		t.Fatalf("a rejected node should fail the mission, got %v", rt.repoState(t, m.ID))
 	}
-	comp := false
-	for _, e := range rt.store.ForMission(m.ID) {
-		if e.Type == "NodeCompensated" && e.Payload["undo"] == "op.act_undo" {
-			comp = true
-		}
+	if undoCalls != 0 {
+		t.Fatal("the rejected node has no execution evidence: its undo must not run")
 	}
-	if !comp {
-		t.Fatal("the rejected side-effecting node op.act should compensate its OWN effect (v5)")
+	if m.Outcome["rolled_back"] != false {
+		t.Fatalf("never rolled_back: %v", m.Outcome)
 	}
 }
 

@@ -14,9 +14,8 @@ const (
 	PolicyHaltAndReport      = "HALT_AND_REPORT"
 	PolicyCompensateDeclared = "COMPENSATE_DECLARED"
 	PolicyContinueSiblings   = "CONTINUE_SIBLINGS"
-	// PolicyPreserveOnly: keep every successful effect on failure (report partial completion). The Python
-	// runtime additionally cleans up temporary resources that declare disposition=CLEANUP (+ preconditions +
-	// authorization); Go ignores per-action declarations, so for Go it is identical to HALT_AND_REPORT.
+	// PolicyPreserveOnly: keep every successful effect on failure (report partial completion); only a TEMPORARY
+	// resource whose capability declares disposition=CLEANUP (+ preconditions + authorization) is cleaned up.
 	PolicyPreserveOnly = "PRESERVE_ONLY"
 )
 
@@ -43,7 +42,7 @@ func parsePolicy(raw string) string {
 
 const (
 	EnvDefaultFailurePolicy = "AGENTIC_OS_DEFAULT_FAILURE_POLICY"
-	EnvReresolveLegacy     = "AGENTIC_OS_RERESOLVE_LEGACY_POLICY"
+	EnvReresolveLegacy      = "AGENTIC_OS_RERESOLVE_LEGACY_POLICY"
 
 	SrcEnv, SrcEnvInvalid, SrcTemplate, SrcDefault = "env", "env_invalid", "template", "default"
 )

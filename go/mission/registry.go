@@ -6,6 +6,7 @@ package mission
 // deterministically in-process. Go port of agentic_os/mission/registry.py.
 
 import (
+	"fmt"
 	"crypto/md5"
 	"math"
 	"math/big"
@@ -100,7 +101,40 @@ func NewCapabilityRegistry(embedder Embedder) *CapabilityRegistry {
 	return &CapabilityRegistry{caps: map[string]*CapabilitySpec{}, embedder: embedder}
 }
 
-func (r *CapabilityRegistry) Register(m CapabilityManifest) {
+// Register adds a manifest's capabilities. A contradictory or unsafe compensation declaration is REJECTED (nothing
+// from the manifest is registered): self-compensation, verify==undo, an EVIDENCE_BOUND reversal over an
+// approval-gated undo, a no-human CLEANUP without the owner-side temporary marker, and so on.
+func (r *CapabilityRegistry) Register(m CapabilityManifest) error {
+	for i := range m.Capabilities {
+		c := &m.Capabilities[i]
+		if c.Compensation != nil {
+			if _, err := c.Compensation.Coerce(); err != nil {
+				return err
+			}
+		}
+		if probs := intrinsicProblems(c); len(probs) > 0 {
+			return fmt.Errorf("invalid compensation declaration: %s", strings.Join(probs, "; "))
+		}
+	}
+	merged := map[string]*CapabilitySpec{}
+	var mergedList []*CapabilitySpec
+	for _, n := range r.order {
+		merged[n] = r.caps[n]
+	}
+	for i := range m.Capabilities {
+		merged[m.Capabilities[i].Name] = &m.Capabilities[i]
+	}
+	names := make([]string, 0, len(merged))
+	for n := range merged {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		mergedList = append(mergedList, merged[n])
+	}
+	if conflicts := evidenceBoundConflicts(mergedList, func(n string) *CapabilitySpec { return merged[n] }); len(conflicts) > 0 {
+		return fmt.Errorf("invalid compensation declaration: %s", strings.Join(conflicts, "; "))
+	}
 	for _, cap := range m.Capabilities {
 		c := cap // value copy — the registry owns its specs
 		if c.Operator == "" {
@@ -116,6 +150,7 @@ func (r *CapabilityRegistry) Register(m CapabilityManifest) {
 		stored := c
 		r.caps[c.Name] = &stored
 	}
+	return nil
 }
 
 func (r *CapabilityRegistry) Get(name string) *CapabilitySpec { return r.caps[name] }

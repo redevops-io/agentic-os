@@ -105,7 +105,8 @@ func CompileIntent(mission *Mission, intent ExecutionIntent, registry Registry,
 		node.Produces = step.Outcome
 		node.ApprovalRequired = human
 		node.SideEffecting = cap.SideEffecting
-		node.Undo = cap.Undo
+		node.Undo = declaredUndo(cap)
+		node.Irreversible = reversibilityOf(cap) == Irreversible
 		node.IdempotencyKey = idemKey(mission.ID, revision, step.Outcome)
 		node.Cost = cap.Cost
 		// carry the capability's declared concurrency safety semantics onto the node (additive)

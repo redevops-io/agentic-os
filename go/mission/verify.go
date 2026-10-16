@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"sort"
+	"strings"
 )
 
 // Verifier accepts, rejects or escalates a consequential result.
@@ -17,6 +19,31 @@ type Verifier interface {
 }
 
 // needsVerification: consequential = a side effect, or a node carrying explicit assertions.
+func outputValueFailed(v any, typeName string) bool {
+	switch x := v.(type) {
+	case nil:
+		return true
+	case bool:
+		if !x {
+			return true
+		}
+	case string:
+		if x == "" {
+			return true
+		}
+	}
+	t := strings.ToLower(strings.TrimSpace(typeName))
+	if t == "bool" || t == "boolean" {
+		switch x := v.(type) {
+		case float64:
+			return x == 0
+		case int:
+			return x == 0
+		}
+	}
+	return false
+}
+
 func needsVerification(node *Node) bool {
 	return node.SideEffecting || len(node.Assertions) > 0
 }
@@ -49,6 +76,29 @@ func (v *CompositeVerifier) Verify(node *Node, result map[string]any, world *Wor
 		}
 	}
 	checks = append(checks, map[string]any{"stage": "syntactic", "passed": synOK, "detail": fmt.Sprintf("expects outputs %v", outs)})
+
+	// 1b. outcome - the declared output VALUES must read back as success (a present-but-False marker is a failure),
+	// and a result the shared classifier calls failed never commits regardless of its keys (Python parity).
+	side := node.SideEffecting || (cap != nil && cap.SideEffecting)
+	failed, why := ResultFailed(result, side, len(outs) > 0)
+	if !failed && cap != nil && result != nil {
+		var bad []string
+		sort.Strings(outs)
+		for _, k := range outs {
+			if v, ok := result[k]; ok && outputValueFailed(v, cap.Outputs[k]) {
+				bad = append(bad, k)
+			}
+		}
+		if len(bad) > 0 {
+			failed, why = true, fmt.Sprintf("declared output %s read back falsey", pyStrList(bad))
+		}
+	}
+	detail := why
+	if detail == "" {
+		detail = "result carries no failure indicator"
+	}
+	checks = append(checks, map[string]any{"stage": "outcome", "passed": !failed, "detail": detail})
+	synOK = synOK && !failed
 
 	// 2. policy — the capability's permissions still hold under the mission's grants
 	granted := v.grantedOf(mission)
