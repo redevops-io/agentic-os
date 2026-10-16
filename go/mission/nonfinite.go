@@ -3,6 +3,7 @@ package mission
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -24,9 +25,40 @@ var jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
 // sanitizeNonFinite returns a JSON-able copy of v in which every non-finite float, at any depth and in any container
 // shape (maps, slices, arrays, pointers, structs with json tags), is replaced by a placeholder string. Values that
 // marshal themselves (json.Marshaler) and leaf kinds are passed through untouched.
-func sanitizeNonFinite(v any) any { return sanitizeValue(reflect.ValueOf(v)) }
+//
+// Cyclic payloads (a pointer/map/slice reachable from itself) and absurd nesting are an ordinary error, never a
+// stack overflow: containers on the current path are tracked by identity, and depth is capped.
+func sanitizeNonFinite(v any) (any, error) {
+	st := &sanitizeState{path: map[sanitizeKey]bool{}}
+	out := st.value(reflect.ValueOf(v), 0)
+	return out, st.err
+}
 
-func sanitizeValue(v reflect.Value) any {
+const sanitizeMaxDepth = 512
+
+type sanitizeKey struct {
+	ptr uintptr
+	len int
+	typ reflect.Type
+}
+
+type sanitizeState struct {
+	path map[sanitizeKey]bool
+	err  error
+}
+
+func (st *sanitizeState) value(v reflect.Value, depth int) any {
+	if st.err != nil {
+		return nil
+	}
+	return sanitizeValue(st, v, depth)
+}
+
+func sanitizeValue(st *sanitizeState, v reflect.Value, depth int) any {
+	if depth > sanitizeMaxDepth {
+		st.err = errors.New("event payload nested too deeply (or cyclic)")
+		return nil
+	}
 	if !v.IsValid() {
 		return nil
 	}
@@ -38,7 +70,16 @@ func sanitizeValue(v reflect.Value) any {
 		if v.IsNil() {
 			return nil
 		}
-		return sanitizeValue(v.Elem())
+		if v.Kind() == reflect.Ptr {
+			k := sanitizeKey{v.Pointer(), 0, v.Type()}
+			if st.path[k] {
+				st.err = errors.New("event payload is cyclic (pointer)")
+				return nil
+			}
+			st.path[k] = true
+			defer delete(st.path, k)
+		}
+		return sanitizeValue(st, v.Elem(), depth+1)
 	case reflect.Float32, reflect.Float64:
 		x := v.Float()
 		switch {
@@ -54,9 +95,16 @@ func sanitizeValue(v reflect.Value) any {
 		if v.IsNil() {
 			return nil
 		}
+		mk := sanitizeKey{v.Pointer(), v.Len(), v.Type()}
+		if st.path[mk] {
+			st.err = errors.New("event payload is cyclic (map)")
+			return nil
+		}
+		st.path[mk] = true
+		defer delete(st.path, mk)
 		out := make(map[string]any, v.Len())
 		for _, k := range v.MapKeys() {
-			out[fmt.Sprint(k.Interface())] = sanitizeValue(v.MapIndex(k))
+			out[fmt.Sprint(k.Interface())] = sanitizeValue(st, v.MapIndex(k), depth+1)
 		}
 		return out
 	case reflect.Slice, reflect.Array:
@@ -66,9 +114,18 @@ func sanitizeValue(v reflect.Value) any {
 		if v.Type().Elem().Kind() == reflect.Uint8 {
 			return v.Interface()
 		}
+		if v.Kind() == reflect.Slice && v.Len() > 0 {
+			sk := sanitizeKey{v.Pointer(), v.Len(), v.Type()}
+			if st.path[sk] {
+				st.err = errors.New("event payload is cyclic (slice)")
+				return nil
+			}
+			st.path[sk] = true
+			defer delete(st.path, sk)
+		}
 		out := make([]any, v.Len())
 		for i := range out {
-			out[i] = sanitizeValue(v.Index(i))
+			out[i] = sanitizeValue(st, v.Index(i), depth+1)
 		}
 		return out
 	case reflect.Struct:
@@ -96,7 +153,7 @@ func sanitizeValue(v reflect.Value) any {
 			if omit && fv.IsZero() {
 				continue
 			}
-			out[name] = sanitizeValue(fv)
+			out[name] = sanitizeValue(st, fv, depth+1)
 		}
 		return out
 	}
@@ -133,7 +190,11 @@ func encodeEventLine(ev *Event) ([]byte, error) {
 	}
 	cp := *ev
 	if cp.Payload != nil {
-		if m, ok := sanitizeNonFinite(cp.Payload).(map[string]any); ok {
+		clean, serr := sanitizeNonFinite(cp.Payload)
+		if serr != nil {
+			return nil, serr
+		}
+		if m, ok := clean.(map[string]any); ok {
 			cp.Payload = m
 		}
 	}

@@ -95,3 +95,49 @@ func TestNonFiniteEventsSurviveForEveryPayloadShape(t *testing.T) {
 		t.Fatalf("non-finite values not restored: %v", p)
 	}
 }
+
+type cyc struct {
+	V    float64
+	Next *cyc
+}
+
+// A cyclic payload (that also carries a NaN, so the sanitiser path is taken) must be an ordinary persist failure,
+// never a stack overflow.
+func TestCyclicPayloadsAreAnErrorNotACrash(t *testing.T) {
+	a := &cyc{V: math.NaN()}
+	a.Next = a
+	m := map[string]any{"nan": math.NaN()}
+	m["self"] = m
+	sl := []any{math.NaN(), nil}
+	sl[1] = sl
+	cases := map[string]map[string]any{
+		"cyclic *struct":      {"p": a},
+		"cyclic map via any":  {"m": m},
+		"self-referencing []": {"s": sl},
+	}
+	for name, payload := range cases {
+		path := filepath.Join(t.TempDir(), "c.jsonl")
+		s := NewEventStore(path)
+		s.Append("Cyc", "m", payload) // must not crash
+		s.Append("After", "m", map[string]any{"ok": true})
+		if s.PersistFailures() != 1 {
+			t.Errorf("%s: want exactly one counted persist failure, got %d", name, s.PersistFailures())
+		}
+		r := NewEventStore(path)
+		if got := r.ForMission("m"); len(got) != 1 || got[0].Type != "After" {
+			t.Errorf("%s: the following event must still persist: %v", name, got)
+		}
+	}
+	// shared (non-cyclic) references are fine
+	shared := map[string]any{"v": math.NaN()}
+	if _, err := sanitizeNonFinite(map[string]any{"a": shared, "b": shared}); err != nil {
+		t.Errorf("a shared sub-object is not a cycle: %v", err)
+	}
+	var deep any = math.NaN()
+	for i := 0; i < sanitizeMaxDepth+10; i++ {
+		deep = []any{deep}
+	}
+	if _, err := sanitizeNonFinite(map[string]any{"d": deep}); err == nil {
+		t.Error("absurd nesting must be refused")
+	}
+}
