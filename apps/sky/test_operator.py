@@ -67,6 +67,10 @@ def test_optimize_no_cloud_pin_lets_optimizer_rank_all():
     assert "--cloud" not in argv  # unpinned ⇒ optimizer considers every enabled cloud
 
 
+def _launch_argv(run):
+    return next(c for c in run.calls if c[:2] == ["sky", "launch"])
+
+
 def test_launch_uses_spot_and_reports_placement():
     run = _stub({"sky launch": (0, "Launching on GCP g2-standard-4\nEndpoint: http://34.1.2.3:8000\n", "")})
     op = build_sky_operator(run=run)
@@ -74,7 +78,7 @@ def test_launch_uses_spot_and_reports_placement():
     assert res["status"] == "done" and res["cluster"] == "demo"
     assert res["cloud"] == "GCP" and res["endpoint"] == "http://34.1.2.3:8000"
     assert res["spot"] is True
-    assert "--use-spot" in run.calls[0]
+    assert "--use-spot" in _launch_argv(run)
 
 
 def test_down_saga_and_serve_down_target_right_command():
@@ -82,8 +86,8 @@ def test_down_saga_and_serve_down_target_right_command():
     op = build_sky_operator(run=run)
     op.invoke("sky.down", {"cluster": "demo", "_approval": {"approved": True}})
     op.invoke("sky.serve_down", {"service": "svc", "_approval": {"approved": True}})
-    assert run.calls[0][:3] == ["sky", "down", "--yes"] and run.calls[0][-1] == "demo"
-    assert run.calls[1][:4] == ["sky", "serve", "down", "--yes"] and run.calls[1][-1] == "svc"
+    assert run.calls[0] == ["sky", "down", "--yes", "--", "demo"]
+    assert run.calls[1] == ["sky", "serve", "down", "--yes", "--", "svc"]
 
 
 def test_check_parses_enabled_clouds():
@@ -107,7 +111,7 @@ def test_launch_pins_to_chosen_and_rewards_actual_placement():
     op = build_sky_operator(run=run)
     chosen = {"cloud": "GCP", "region": "us-central1", "instance": "g2-standard-4"}
     res = op.invoke("sky.launch", {"spec": {"gpus": "L4:1", "name": "demo"}, "chosen": chosen, "_approval": {"approved": True}})
-    launch_argv = run.calls[0]
+    launch_argv = _launch_argv(run)
     assert "--cloud" in launch_argv and "GCP" in launch_argv            # pinned to the chosen cloud
     assert "--region" in launch_argv and "us-central1" in launch_argv   # pinned to the chosen region
     assert "--instance-type" in launch_argv and "g2-standard-4" in launch_argv
@@ -147,3 +151,75 @@ def test_sky_gated_executes_with_runtime_approval(cap):
     run = _stub({})
     build_sky_operator(run=run).invoke(cap, {**SKY_GATED[cap], "_approval": {"approved": True}})
     assert run.calls and run.calls[0][0] == "sky"
+
+
+# ── undo targets only what the forward result recorded ───────────────────────────────────────────────
+import pytest as _pytest  # noqa: E402
+
+_APPR = {"_approval": {"approved": True}}
+
+
+def _fwd_launch(name="my-gpu-cluster"):
+    return {"action": "launch", "cluster": name, "created": True, "status": "done"}
+
+
+def _fwd_serve(name="llm-svc"):
+    return {"action": "serve", "service": name, "created": True, "status": "done"}
+
+
+def test_undo_reads_forward_result_for_cluster_and_service():
+    run = _stub({})
+    op = build_sky_operator(run=run)
+    op.invoke("sky.down", {"undo_of": "sky.launch", "result": _fwd_launch(), **_APPR})
+    op.invoke("sky.serve_down", {"undo_of": "sky.serve", "result": _fwd_serve(), **_APPR})
+    assert run.calls == [["sky", "down", "--yes", "--", "my-gpu-cluster"],
+                         ["sky", "serve", "down", "--yes", "--", "llm-svc"]]
+
+
+@_pytest.mark.parametrize("cap,inp", [
+    ("sky.down", {"undo_of": "sky.launch"}),
+    ("sky.down", {"undo_of": "sky.launch", "result": {}}),
+    ("sky.down", {"result": {**_fwd_launch(), "created": False}}),        # launch did not create it
+    ("sky.down", {"result": {**_fwd_launch(), "cluster": "-a"}}),
+    ("sky.down", {"result": _fwd_launch(), "cluster": "other"}),          # differs from forward
+    ("sky.down", {"result": _fwd_serve()}),                               # wrong forward action
+    ("sky.down", {}),                                                     # no default target
+    ("sky.down", {"target": "-a"}),
+    ("sky.down", {"cluster": "--help"}),
+    ("sky.serve_down", {}),
+    ("sky.serve_down", {"result": {**_fwd_serve(), "created": False}}),
+    ("sky.serve_down", {"result": _fwd_launch()}),
+])
+def test_undo_refuses_without_matching_forward_result(cap, inp):
+    run = _stub({})
+    res = build_sky_operator(run=run).invoke(cap, {**inp, **_APPR})
+    assert res["status"] == "error" and run.calls == []
+    # without approval it only stages, and never with a defaulted target
+    res = build_sky_operator(run=run).invoke(cap, dict(inp))
+    assert res["status"] == "pending_approval" and res["target"] in (None, "my-gpu-cluster", "llm-svc") \
+        and run.calls == []
+
+
+@_pytest.mark.parametrize("spec", [{"name": "-c"}, {"name": "--help"}, {"name": "A_b"}, {"name": "x" * 70},
+                                   {"gpus": "--evil"}, {"cpus": "4; id"}, {"region": "-r"},
+                                   {"cloud": "--x"}, {"task_yaml": "--evil"}, {"task_yaml": "../../etc/x"}])
+def test_launch_rejects_unsafe_values(spec):
+    run = _stub({})
+    res = build_sky_operator(run=run).invoke("sky.launch", {"spec": spec, **_APPR})
+    assert res["status"] == "error" and run.calls == []
+
+
+def test_launch_refuses_existing_cluster_and_never_marks_it_created():
+    run = _stub({"sky status": (0, "NAME  STATUS\ndemo  UP\n", "")})
+    res = build_sky_operator(run=run).invoke("sky.launch", {"spec": {"name": "demo"}, **_APPR})
+    assert res["status"] == "error" and res["created"] is False
+    assert not any(c[:2] == ["sky", "launch"] for c in run.calls)
+    assert build_sky_operator(run=run).invoke("sky.down", {"result": res, **_APPR})["status"] == "error"
+
+
+def test_launch_uses_separator_for_task_and_command():
+    run = _stub({})
+    op = build_sky_operator(run=run)
+    op.invoke("sky.launch", {"spec": {"name": "demo", "task_yaml": "task.yaml"}, **_APPR})
+    argv = _launch_argv(run)
+    assert argv[-2:] == ["--", "task.yaml"]

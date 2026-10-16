@@ -68,8 +68,29 @@ def build_infra_operator(*, run=None, http_get=None) -> Operator:
     def _verify(i):
         return core.verify(i.get("host", ""), port=i.get("port", 8000), http_get=http_get)
 
+    def _destroy_target(i):
+        """(cloud, created_resources, error). Reads ONLY the forward result nested under ``result``; never
+        defaults the cloud. An explicit ``cloud`` input must equal the forward resource's cloud."""
+        fwd = i.get("result")
+        if not isinstance(fwd, dict):
+            return None, None, "undo requires the forward provision result (inputs.result) -- refusing"
+        cloud = fwd.get("cloud")
+        if fwd.get("action") != "provision" or fwd.get("applied") is not True:
+            return None, None, "forward result is not an applied provision -- nothing to destroy"
+        if not isinstance(cloud, str) or not core._CLOUD_RE.match(cloud):
+            return None, None, "forward result has no valid cloud"
+        if i.get("cloud") and i["cloud"] != cloud:
+            return None, None, "requested cloud does not match the forward resource"
+        created = fwd.get("created_resources")
+        if not isinstance(created, list) or not created:
+            return None, None, "forward result recorded no created resources -- refusing to destroy"
+        return cloud, created, None
+
     def _destroy(i):
-        return core.terraform_destroy(_cloud(i), _vars(i), run=run)
+        cloud, created, err = _destroy_target(i)
+        if err:
+            return {"status": "error", "action": "destroy_delta", "error": err, "rc": None, "executed": False}
+        return core.terraform_destroy(cloud, created, run=run)
 
     def _rollback(i):
         return core.ansible_playbook(i.get("rollback_playbook", "playbooks/rollback.yml"),
@@ -95,7 +116,7 @@ def build_infra_operator(*, run=None, http_get=None) -> Operator:
                    side_effecting=True,
             compensation={"supported": True, "capability": "infra.destroy_delta", "requires_approval": True,
                           "incurs_ongoing_cost": True,
-                          "reversibility": "REVERSIBLE_EXPLICIT", "notes": "destroy only the resources this apply created"}, approval_required=True,
+                          "reversibility": "REVERSIBLE_EXPLICIT", "notes": "destroy only the resources this apply created (recorded in created_resources)"}, approval_required=True,
                    permissions=["infra:write"], estimated_value="high", latency_ms=60000,
                    concurrency_mode="exclusive", concurrency_key=TF_STATE),
         capability("infra.configure", gated("infra.configure", _configure, app_configured=False),

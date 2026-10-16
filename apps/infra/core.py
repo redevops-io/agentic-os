@@ -44,6 +44,10 @@ _CLOUD_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _VAR_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _FORBIDDEN_EXTRA_VARS = frozenset({"ansible_python_interpreter", "ansible_connection",
                                    "ansible_shell_executable"})
+# Any connection/privilege/interpreter knob is reserved: extra_vars carry application values only.
+_RESERVED_VAR_PREFIXES = ("ansible_",)
+_ADDR_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.\-\[\]\"]{0,255}$")   # terraform resource address
+_HOST_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
 
 
 def _inside(root: str, path: str) -> bool:
@@ -58,10 +62,31 @@ def _check_extra_vars(extra_vars: "dict | None") -> dict:
             raise InfraInputError(f"extra_vars key {k!r} is not allowed (must match {_VAR_KEY_RE.pattern})")
         if k in _FORBIDDEN_EXTRA_VARS:
             raise InfraInputError(f"extra_vars key {k!r} is forbidden")
-        if str(v).lstrip().startswith("@"):
-            raise InfraInputError(f"extra_vars value for {k!r} may not start with '@' (file include)")
+        if k.lower().startswith(_RESERVED_VAR_PREFIXES):
+            raise InfraInputError(f"extra_vars key {k!r} is reserved")
+        sv = str(v)
+        if sv.lstrip().startswith(("@", "-")):
+            raise InfraInputError(f"extra_vars value for {k!r} may not start with '@' or '-'")
+        if "{{" in sv or "{%" in sv or "{#" in sv:
+            raise InfraInputError(f"extra_vars value for {k!r} may not contain template syntax")
         out[k] = v
     return out
+
+
+def _resolve_inventory(inventory: "str | None") -> "str | None":
+    """Inventory must be a plain (non-executable) file inside the ansible root."""
+    if not inventory:
+        return None
+    if not ANSIBLE_ROOT:
+        raise InfraInputError("infra deploy root is not configured")
+    if not isinstance(inventory, str) or inventory.startswith("-") or "," in inventory:
+        raise InfraInputError("invalid inventory")
+    inv = inventory if os.path.isabs(inventory) else os.path.join(ANSIBLE_ROOT, inventory)
+    if not _inside(ANSIBLE_ROOT, inv):
+        raise InfraInputError(f"inventory {inventory!r} resolves outside the deploy root")
+    if os.path.exists(inv) and (not os.path.isfile(inv) or os.access(inv, os.X_OK)):
+        raise InfraInputError("inventory must be a non-executable file")
+    return inv
 
 Runner = Callable[[list, "str | None"], "tuple[int, str, str]"]   # (argv, cwd) -> (rc, stdout, stderr)
 HttpGet = Callable[[str], int]                                     # url -> status code
@@ -202,21 +227,41 @@ def terraform_apply(cloud: str, tf_vars: "dict | None" = None, *, approved_diges
                                 "apply a plan the human never approved." if on_disk else
                                 "approved plan is no longer on disk — refusing to apply.")}
     argv = ["terraform", f"-chdir={_env_dir(cloud)}", "apply", "-input=false", "-no-color", _PLAN_FILE]
+    before = _state_list(cloud, run)
     rc, out, err = run(argv, None)
+    # Record exactly which resources this apply added (state after minus state before) so the compensating
+    # destroy can target only those. Unknown (state unreadable) is recorded as None: undo then refuses.
+    after = _state_list(cloud, run)
+    created = sorted(set(after) - set(before)) if before is not None and after is not None else None
     return {"status": "done" if rc == 0 else "error", "action": "provision", "cloud": cloud,
             "rc": rc, "outputs": terraform_outputs(cloud, run=run) if rc == 0 else {},
-            "applied": rc == 0,
+            "applied": rc == 0, "created_resources": created,
             "summary": _last_line(out) if rc == 0 else _err_summary(err),
             "stdout": out[-4000:], "stderr": err[-3000:]}
 
 
+def _state_list(cloud: str, run: Runner) -> "list | None":
+    rc, out, _ = run(["terraform", f"-chdir={_env_dir(cloud)}", "state", "list"], None)
+    if rc != 0:
+        return None
+    return [ln.strip() for ln in (out or "").splitlines() if ln.strip()]
+
+
 @_guard("destroy_delta")
-def terraform_destroy(cloud: str, tf_vars: "dict | None" = None, *, run: Runner = _run) -> dict:
-    """Saga compensation for a failed/rejected provision — tear down the just-applied delta."""
-    argv = ["terraform", f"-chdir={_env_dir(cloud)}", "destroy", "-input=false",
-            "-auto-approve", "-no-color"] + _var_args(tf_vars)
+def terraform_destroy(cloud: str, created: "list | None" = None, *, run: Runner = _run) -> dict:
+    """Saga compensation for a provision: destroy ONLY the resources the forward apply recorded as created
+    (`-target` each). With no recorded resources there is nothing safe to destroy, so it refuses."""
+    _env_dir(cloud)
+    if not isinstance(created, list) or not created:
+        raise InfraInputError("no created resources recorded by the forward apply -- refusing to destroy")
+    for a in created:
+        if not isinstance(a, str) or not _ADDR_RE.match(a):
+            raise InfraInputError(f"recorded resource address {a!r} is not valid")
+    argv = ["terraform", f"-chdir={_env_dir(cloud)}", "destroy", "-input=false", "-auto-approve", "-no-color"]
+    argv += [f"-target={a}" for a in created]
     rc, out, err = run(argv, None)
-    return {"status": "done" if rc == 0 else "error", "action": "destroy_delta", "cloud": cloud, "rc": rc}
+    return {"status": "done" if rc == 0 else "error", "action": "destroy_delta", "cloud": cloud, "rc": rc,
+            "destroyed_resources": list(created) if rc == 0 else []}
 
 
 def terraform_outputs(cloud: str, *, run: Runner = _run) -> dict:
@@ -247,19 +292,43 @@ def ansible_playbook(playbook: str, *, inventory: "str | None" = None,
                      extra_vars: "dict | None" = None, run: Runner = _run) -> dict:
     pb = _resolve_playbook(playbook)
     extra_vars = _check_extra_vars(extra_vars)
+    inventory = _resolve_inventory(inventory)
     argv = ["ansible-playbook", pb]
     if inventory:
         argv += ["-i", inventory]
-    for k, v in (extra_vars or {}).items():
-        argv += ["-e", f"{k}={v}"]
+    if extra_vars:
+        argv += ["-e", json.dumps({k: v if isinstance(v, (bool, int, float)) else str(v)
+                                   for k, v in extra_vars.items()})]
     rc, out, err = run(argv, ANSIBLE_ROOT)
     return {"status": "done" if rc == 0 else "error", "action": "configure",
             "playbook": playbook, "rc": rc, "summary": _last_line(out) if rc == 0 else _last_line(err)}
 
 
 # ── verification ──────────────────────────────────────────────────────────────
+def _check_host(host) -> None:
+    """Reject malformed hosts and loopback, link-local (metadata), multicast, unspecified targets.
+    Private ranges are allowed only with INFRA_VERIFY_ALLOW_PRIVATE=1."""
+    import ipaddress
+    if not host:
+        return                                   # verify() reports unhealthy for an empty host
+    if not isinstance(host, str) or not _HOST_RE.match(host) or host.lower() == "localhost":
+        raise InfraInputError(f"invalid host {host!r}")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return
+    if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified or ip.is_reserved:
+        raise InfraInputError(f"host {host!r} is not an allowed verification target")
+    if ip.is_private and os.environ.get("INFRA_VERIFY_ALLOW_PRIVATE") != "1":
+        raise InfraInputError(f"host {host!r} is a private address (set INFRA_VERIFY_ALLOW_PRIVATE=1 to allow)")
+
+
+@_guard("verify")
 def verify(host: str, *, port: int = 8000, endpoints: tuple = ("/health", "/capabilities"),
            http_get: HttpGet = _http_get) -> dict:
+    _check_host(host)
+    if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
+        raise InfraInputError("invalid port")
     checks = {ep: http_get(f"http://{host}:{port}{ep}") for ep in endpoints}
     healthy = bool(host) and all(code == 200 for code in checks.values())
     return {"status": "done" if healthy else "error", "action": "verify",
@@ -286,7 +355,7 @@ def drift(cloud: str, *, check_playbook: "str | None" = None, inventory: "str | 
     if check_playbook:
         argv = ["ansible-playbook", _resolve_playbook(check_playbook), "--check", "--diff"]
         if inventory:
-            argv += ["-i", inventory]
+            argv += ["-i", _resolve_inventory(inventory)]
         crc, cout, cerr = run(argv, ANSIBLE_ROOT)
         changed = _ansible_changed(cout)
         result["configuration"] = {"exit_code": crc, "drift": changed > 0, "changed": changed}

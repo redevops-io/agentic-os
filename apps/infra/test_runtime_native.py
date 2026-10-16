@@ -54,3 +54,10 @@ def test_decision_spine_authors_a_mission():
     assert len(store.records) == 1
     if res.outcome in (BridgeOutcome.LAUNCHED, BridgeOutcome.LAUNCHED_GATED):
         assert res.request.capability in _registered_caps()
+
+
+def test_capabilities_pass_compensation_lint():
+    from agentic_os.mission.compensation import lint_capability
+    op = _operator.build_infra_operator()
+    offenders = [m for m in (lint_capability(s) for s in op._specs.values()) if m]
+    assert not offenders, offenders
