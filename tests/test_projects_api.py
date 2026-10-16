@@ -242,3 +242,18 @@ def test_sidekick_reply_is_deterministic_and_pure():
     # the reply helper is usable without HTTP (unit-level)
     r = sidekick_reply({"section": "Missions"}, "why does this need approval?")
     assert "tier-4" in r["text"].lower()
+
+
+def test_openapi_document_builds():
+    r = client.get("/openapi.json")
+    assert r.status_code == 200
+    assert "/api/projects" in r.json()["paths"]
+    assert client.get("/docs").status_code == 200
+
+
+def test_mounted_openapi_document_builds():
+    from agentic_os.projects_api import mounted_app
+
+    mc = TestClient(mounted_app("/projects"))
+    assert mc.get("/projects/openapi.json").status_code == 200
+    assert mc.get("/projects/docs").status_code == 200
