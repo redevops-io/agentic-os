@@ -9,6 +9,7 @@ Run: PYTHONPATH=<repo-root>:<repo-root>/apps python -m pytest \
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 
 import pytest
@@ -19,11 +20,21 @@ from infra import core
 from infra.operator import build_infra_operator
 
 
-def _fake_runner():
+def _fake_runner(planned=("aws_instance.web",), no_state_exit=False):
     calls = []
+    state = {"applied": False}
 
     def run(argv, cwd=None):
         calls.append(argv)
+        if "show" in argv:                         # terraform show -json <destroy plan>
+            return 0, json.dumps({"resource_changes": [
+                {"address": a, "change": {"actions": ["delete"]}} for a in planned]}), ""
+        if no_state_exit and "state" in argv and not state["applied"]:
+            return 1, "", "No state file was found!"
+        if "apply" in argv:
+            state["applied"] = True
+        if "state" in argv and "list" in argv:     # terraform state list: empty before apply, one resource after
+            return 0, ("aws_instance.web\n" if state["applied"] else ""), ""
         if "output" in argv:                       # terraform output -json
             return 0, '{"host": {"value": "1.2.3.4"}}', ""
         return 0, "Apply complete! Resources: 1 added, 0 changed.", ""
@@ -70,6 +81,8 @@ def test_provision_runs_terraform_apply_parameterised():
     res = _provision_ok(op, calls)
     assert res["status"] == "done" and res["action"] == "provision"
     assert res["outputs"] == {"host": "1.2.3.4"}                 # terraform output captured
+    assert res["created_resources"] == ["aws_instance.web"]
+    calls = [c for c in calls if "state" not in c]
     argv = " ".join(calls[0])
     assert calls[0][0] == "terraform" and "-chdir=" in argv and "envs/aws" in argv
     # provision applies the SAVED approved plan verbatim — pinned, not a fresh `-auto-approve` re-plan,
@@ -138,7 +151,7 @@ def test_plan_configure_verify():
     c = op.invoke("infra.configure", {"playbook": "playbooks/deploy-app.yml",
                                       "extra_vars": {"app": "billing"}, "_approval": {"approved": True}})
     assert c["action"] == "configure" and calls[-1][0] == "ansible-playbook"
-    assert "-e" in calls[-1] and "app=billing" in calls[-1]
+    assert "-e" in calls[-1] and '{"app": "billing"}' in calls[-1]
 
     v = op.invoke("infra.verify", {"host": "1.2.3.4", "port": 8201})
     assert v["healthy"] is True and v["checks"]["/health"] == 200 and v["checks"]["/capabilities"] == 200
@@ -163,18 +176,22 @@ def test_drift_detects_and_clears():
     assert c["drift"] is False and c["infrastructure"]["exit_code"] == 0
 
 
+_FWD = {"action": "provision", "applied": True, "cloud": "gcp", "created_resources": ["aws_instance.web"]}
+
+
 def test_saga_undos_call_destroy_and_rollback():
     run, calls = _fake_runner()
     op = build_infra_operator(run=run)
-    d = op.invoke("infra.destroy_delta", {"cloud": "aws", "_approval": {"approved": True}})
-    assert d["action"] == "destroy_delta" and "destroy" in calls[-1] and "-auto-approve" in calls[-1]
+    d = op.invoke("infra.destroy_delta", {"result": _FWD, "_approval": {"approved": True}})
+    assert d["action"] == "destroy_delta" and "destroy" in calls[-1] and "-target=aws_instance.web" in calls[-1]
     r = op.invoke("infra.rollback_release", {"inventory": "inv.ini", "_approval": {"approved": True}})
     assert r["action"] == "configure" and calls[-1][0] == "ansible-playbook"
 
 
 # ── gating: configure / destroy_delta / rollback_release stage without approval ──────────────────────
 GATED = {"infra.configure": {"extra_vars": {"app": "x"}},
-         "infra.destroy_delta": {"cloud": "aws"},
+         "infra.destroy_delta": {"result": {"action": "provision", "applied": True, "cloud": "aws",
+                                           "created_resources": ["aws_instance.web"]}},
          "infra.rollback_release": {"inventory": "inv.ini"}}
 
 
@@ -217,7 +234,7 @@ APPR = {"_approval": {"approved": True}}
 def test_cloud_must_be_safe_name(cloud):
     run, calls = _fake_runner()
     op = build_infra_operator(run=run)
-    for cap, inp in (("infra.destroy_delta", {"cloud": cloud, **APPR}),
+    for cap, inp in (("infra.destroy_delta", {"cloud": cloud, "result": {**_FWD, "cloud": cloud}, **APPR}),
                      ("infra.plan", {"cloud": cloud}),
                      ("infra.provision", {"cloud": cloud, "plan_digest": "d", **APPR})):
         res = op.invoke(cap, inp)
@@ -228,7 +245,7 @@ def test_cloud_must_be_safe_name(cloud):
 def test_playbook_must_stay_inside_deploy_root():
     run, calls = _fake_runner()
     op = build_infra_operator(run=run)
-    for bad in ("/etc/passwd", "../../evil.yml", "playbooks/../../../evil.yml"):
+    for bad in ("/etc/passwd", "../../other.yml", "playbooks/../../../other.yml"):
         res = op.invoke("infra.configure", {"playbook": bad, **APPR})
         assert res["status"] == "error" and "outside" in res["error"]
     assert calls == []
@@ -274,3 +291,200 @@ def test_provision_declares_ongoing_cost_for_failure_reporting():
     caps = {c.name: c for c in build_infra_operator().manifest.capabilities}
     assert C.incurs_ongoing_cost(caps["infra.provision"])
     assert not C.incurs_ongoing_cost(caps["infra.configure"])
+
+
+# ── undo targets only what the forward result recorded ───────────────────────────────────────────────
+def _undo(inp, **kw):
+    run, calls = _fake_runner(**kw)
+    res = build_infra_operator(run=run).invoke("infra.destroy_delta", {**inp, **APPR})
+    return res, calls
+
+
+def test_undo_reads_forward_result_cloud_and_targets():
+    res, calls = _undo({"undo_of": "infra.provision", "result": _FWD})
+    assert res["status"] == "done" and res["cloud"] == "gcp"
+    calls = [c for c in calls if "destroy" in c and "plan" not in c and "show" not in c]
+    assert len(calls) == 1
+    assert calls[0] == ["terraform", f"-chdir={os.path.join(core.TF_ROOT, 'envs', 'gcp')}", "destroy",
+                        "-input=false", "-auto-approve", "-no-color", "-target=aws_instance.web"]
+
+
+@pytest.mark.parametrize("inp", [
+    {},                                                                  # no forward result
+    {"cloud": "aws"},                                                    # flat input, no result
+    {"undo_of": "infra.provision", "result": {}},
+    {"result": {**_FWD, "cloud": None}},                                 # missing cloud: no default
+    {"result": {**_FWD, "created_resources": []}},                       # nothing recorded: no whole-env destroy
+    {"result": {**_FWD, "created_resources": None}},
+    {"result": {**_FWD, "applied": False, "created_resources": [], "recovery": "inspect state"}},
+    {"result": {**_FWD, "created_resources": ["-var=x"]}},
+    {"cloud": "aws", "result": _FWD},                                    # requested target differs from forward
+])
+def test_undo_refuses_without_matching_forward_result(inp):
+    res, calls = _undo(inp)
+    assert res["status"] == "error"
+    assert not any("destroy" in c and "plan" not in c and "show" not in c for c in calls)
+
+
+def test_undo_refuses_when_destroy_plan_touches_other_resources():
+    res, calls = _undo({"result": _FWD}, planned=("aws_instance.web", "aws_eip.web"))
+    assert res["status"] == "error" and "aws_eip.web" in res["error"]
+    assert not any("destroy" in c and "-auto-approve" in c for c in calls)
+
+
+def test_undo_refuses_when_destroy_plan_unreadable():
+    def run(argv, cwd=None):
+        return (0, "not json", "")
+    res = build_infra_operator(run=run).invoke("infra.destroy_delta", {"result": _FWD, **APPR})
+    assert res["status"] == "error"
+
+
+def test_undo_accepts_real_address_forms():
+    fwd = {**_FWD, "created_resources": ['aws_subnet.s["10.0.0.0/24"]', 'aws_x.y["a b"]', 'module.m.aws_x.y[0]']}
+    res, calls = _undo({"result": fwd}, planned=tuple(fwd["created_resources"]))
+    assert res["status"] == "done"
+
+
+@pytest.mark.parametrize("addr", ["-var=x", "a b", "a;id", "a\n", "a.b\n", "$(id)", 'a["x\n"]', ""])
+def test_undo_rejects_malformed_addresses(addr):
+    res, calls = _undo({"result": {**_FWD, "created_resources": [addr]}})
+    assert res["status"] == "error"
+
+
+def test_first_apply_with_no_state_file_records_created_resources(tmp_path, monkeypatch):
+    env = tmp_path / "terraform" / "envs" / "aws"
+    env.mkdir(parents=True)
+    (env / core._PLAN_FILE).write_bytes(b"P")
+    monkeypatch.setattr(core, "TF_ROOT", str(tmp_path / "terraform"))
+    run, calls = _fake_runner(no_state_exit=True)
+    res = build_infra_operator(run=run).invoke(
+        "infra.provision", {"cloud": "aws", "plan_digest": hashlib.sha256(b"P").hexdigest(), **APPR})
+    assert res["created_resources"] == ["aws_instance.web"]
+
+
+def test_provision_excludes_data_sources(tmp_path, monkeypatch):
+    env = tmp_path / "terraform" / "envs" / "aws"
+    env.mkdir(parents=True)
+    (env / core._PLAN_FILE).write_bytes(b"P")
+    monkeypatch.setattr(core, "TF_ROOT", str(tmp_path / "terraform"))
+    seen = {"n": 0}
+
+    def run(argv, cwd=None):
+        if "state" in argv:
+            seen["n"] += 1
+            return 0, ("" if seen["n"] == 1 else "data.aws_ami.x\naws_instance.web\n"), ""
+        return 0, "{}", ""
+    res = build_infra_operator(run=run).invoke(
+        "infra.provision", {"cloud": "aws", "plan_digest": hashlib.sha256(b"P").hexdigest(), **APPR})
+    assert res["created_resources"] == ["aws_instance.web"]
+
+
+def test_failed_apply_without_recorded_resources_has_recovery_note(tmp_path, monkeypatch):
+    env = tmp_path / "terraform" / "envs" / "aws"
+    env.mkdir(parents=True)
+    (env / core._PLAN_FILE).write_bytes(b"P")
+    monkeypatch.setattr(core, "TF_ROOT", str(tmp_path / "terraform"))
+
+    def run(argv, cwd=None):
+        if "state" in argv:
+            return 0, "", ""
+        return (1, "", "Error: boom") if "apply" in argv else (0, "", "")
+    op = build_infra_operator(run=run)
+    res = op.invoke("infra.provision", {"cloud": "aws", "plan_digest": hashlib.sha256(b"P").hexdigest(), **APPR})
+    assert res["status"] == "error" and res["created_resources"] == [] and res["recovery"]
+    undo = op.invoke("infra.destroy_delta", {"result": res, **APPR})
+    assert undo["status"] == "error" and "inspect" in undo["error"]
+
+
+def test_provision_with_unreadable_state_records_no_resources():
+    def run(argv, cwd=None):
+        if "state" in argv:
+            return 1, "", "boom"
+        return 0, "ok", ""
+    op = build_infra_operator(run=run)
+    old = core.TF_ROOT
+    d = hashlib.sha256(b"P").hexdigest()
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        os.makedirs(os.path.join(tmp, "terraform", "envs", "aws"))
+        with open(os.path.join(tmp, "terraform", "envs", "aws", core._PLAN_FILE), "wb") as fh:
+            fh.write(b"P")
+        core.TF_ROOT = os.path.join(tmp, "terraform")
+        try:
+            res = op.invoke("infra.provision", {"cloud": "aws", "plan_digest": d, **APPR})
+        finally:
+            core.TF_ROOT = old
+    assert res["created_resources"] is None
+    assert op.invoke("infra.destroy_delta", {"result": res, **APPR})["status"] == "error"
+
+
+@pytest.mark.parametrize("ev", [{"ansible_ssh_common_args": "-o X"}, {"ansible_become_exe": "x"},
+                                {"a": "{{ lookup('pipe','id') }}"}, {"a": "{% if 1 %}"}, {"a": "-x"}])
+def test_extra_vars_reserved_and_template_rejected(ev):
+    run, calls = _fake_runner()
+    res = build_infra_operator(run=run).invoke("infra.configure", {"extra_vars": ev, **APPR})
+    assert res["status"] == "error" and calls == []
+
+
+@pytest.mark.parametrize("inv", ["/tmp/other.sh", "../../x", "-i", "h1,h2,"])
+def test_inventory_confined_to_deploy_root(inv):
+    run, calls = _fake_runner()
+    res = build_infra_operator(run=run).invoke("infra.configure", {"inventory": inv, **APPR})
+    assert res["status"] == "error" and calls == []
+
+
+@pytest.mark.parametrize("host", ["169.254.169.254", "127.0.0.1", "localhost", "a/b", "h:80", "0.0.0.0", "10.0.0.5",
+                                  "127.1", "0x7f.1", "0177.0.0.1", "2130706433", "127.0.0.1\n", "foo.localhost",
+                                  "1.2.3.4\n"])
+def test_verify_rejects_unsafe_hosts(host):
+    seen = []
+    op = build_infra_operator(run=_fake_runner()[0], http_get=lambda u: seen.append(u) or 200)
+    res = op.invoke("infra.verify", {"host": host})
+    assert res["status"] == "error" and seen == []
+
+
+@pytest.mark.parametrize("answers", [["127.0.0.1"], ["169.254.169.254"], ["8.8.8.8", "10.0.0.7"], ["::1"]])
+def test_verify_rejects_names_resolving_to_non_public_addresses(monkeypatch, answers):
+    monkeypatch.setattr(core, "_resolve_host", lambda h, p: answers)
+    seen = []
+    op = build_infra_operator(run=_fake_runner()[0], http_get=lambda u: seen.append(u) or 200)
+    res = op.invoke("infra.verify", {"host": "app.example.org"})
+    assert res["status"] == "error" and seen == []
+
+
+def test_verify_accepts_public_resolution_and_private_with_opt_in(monkeypatch):
+    monkeypatch.setattr(core, "_resolve_host", lambda h, p: ["8.8.8.8"])
+    op = build_infra_operator(run=_fake_runner()[0], http_get=lambda u: 200)
+    assert op.invoke("infra.verify", {"host": "app.example.org"})["healthy"] is True
+    monkeypatch.setattr(core, "_resolve_host", lambda h, p: ["10.0.0.7"])
+    assert op.invoke("infra.verify", {"host": "app.example.org"})["status"] == "error"
+    monkeypatch.setenv("INFRA_VERIFY_ALLOW_PRIVATE", "1")
+    assert op.invoke("infra.verify", {"host": "app.example.org"})["healthy"] is True
+
+
+def test_default_http_get_pins_checked_ip_and_does_not_follow_redirects(monkeypatch):
+    import http.client
+    captured = {}
+
+    class Conn:
+        def __init__(self, host, port, timeout=None):
+            captured["connect"] = (host, port)
+        def request(self, method, path, headers=None):
+            captured["headers"] = headers
+        def getresponse(self):
+            return type("R", (), {"status": 302})()
+        def close(self):
+            pass
+
+    monkeypatch.setattr(http.client, "HTTPConnection", Conn)
+    monkeypatch.setattr(core, "_resolve_host", lambda h, p: ["8.8.8.8"])
+    assert core._http_get("http://app.example.org:8000/health") == 302      # reported, not followed
+    assert captured["connect"] == ("8.8.8.8", 8000) and captured["headers"]["Host"] == "app.example.org:8000"
+    monkeypatch.setattr(core, "_resolve_host", lambda h, p: ["127.0.0.1"])
+    assert core._http_get("http://app.example.org:8000/health") == 0        # rebinding to loopback blocked
+
+
+def test_trailing_newline_rejected_by_name_patterns():
+    for rx in (core._CLOUD_RE, core._VAR_KEY_RE, core._HOST_RE):
+        assert rx.fullmatch("aws\n") is None
+    assert core._ADDR_RE.fullmatch("a.b\n") is None

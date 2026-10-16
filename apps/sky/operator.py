@@ -62,17 +62,27 @@ def build_sky_operator(*, run=None, ledger: "PlacementLedger | None" = None) -> 
             return pending_approval("sky.serve", service_up=False)
         return core.serve(i.get("spec") or i, run=run)
 
+    def _resolve(i, field, action):
+        """Undo (inputs carry ``result``/``undo_of``) targets only the forward-recorded resource. A call with
+        neither is refused: there is no direct or default target. -> (target, error_result)."""
+        try:
+            if "result" in i or "undo_of" in i:
+                return core.undo_target(i, field, action, "created"), None
+            raise core.SkyInputError("teardown requires the forward result (result / undo_of) -- refusing")
+        except core.SkyInputError as e:
+            return None, {"status": "error", "action": "down", "error": str(e), "rc": None, "executed": False}
+
     def _down(i):
+        target, err = _resolve(i, "cluster", "launch")
         if not i.get("_approval"):           # tears down real infrastructure: approval-gated
-            return pending_approval("sky.down", target=i.get("target") or i.get("cluster") or "sk-app",
-                                    cluster_down=False)
-        return core.down(i.get("target") or i.get("cluster") or "sk-app", serve=bool(i.get("serve")), run=run)
+            return pending_approval("sky.down", target=target, cluster_down=False)
+        return err or core.down(target, serve=False, run=run)
 
     def _serve_down(i):
+        target, err = _resolve(i, "service", "serve")
         if not i.get("_approval"):
-            return pending_approval("sky.serve_down", target=i.get("target") or i.get("service") or "sk-svc",
-                                    service_down=False)
-        return core.down(i.get("target") or i.get("service") or "sk-svc", serve=True, run=run)
+            return pending_approval("sky.serve_down", target=target, service_down=False)
+        return err or core.down(target, serve=True, run=run)
 
     def _status(i):
         return core.status(serve=bool(i.get("serve")), run=run)

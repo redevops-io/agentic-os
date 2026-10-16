@@ -12,11 +12,39 @@ ready) is what turns a one-shot estimate into a placement the runtime learns per
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from typing import Callable
 
 Runner = Callable[[list], tuple]  # argv -> (rc, stdout, stderr)
+
+
+class SkyInputError(ValueError):
+    """Rejected sky input (bad name / flag value / missing undo target)."""
+
+
+_NAME_RE = re.compile(r"[a-z][a-z0-9-]{0,62}")
+_GPUS_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:+-]{0,31}")
+_COUNT_RE = re.compile(r"[0-9]+(\.[0-9]+)?\+?")
+_REGION_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
+_INSTANCE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+_YAML_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,255}")
+_CLOUDS = frozenset({"aws", "gcp", "azure", "oci", "lambda", "runpod", "fluidstack", "paperspace", "cudo",
+                     "ibm", "scp", "vsphere", "kubernetes", "do", "nebius", "vast"})
+
+
+def check_name(name, what: str = "name") -> str:
+    if not isinstance(name, str) or not _NAME_RE.fullmatch(name):
+        raise SkyInputError(f"invalid {what} {name!r}: must match {_NAME_RE.pattern}")
+    return name
+
+
+def _check_val(v, rx, what: str) -> str:
+    sv = str(v)
+    if not rx.fullmatch(sv) or ".." in sv:
+        raise SkyInputError(f"invalid {what} {sv!r}")
+    return sv
 
 
 def _run(argv: list, cwd: "str | None" = None) -> "tuple[int, str, str]":
@@ -34,18 +62,70 @@ def _spec_args(spec: dict) -> list:
     optimizer ranks across every enabled cloud (that is the whole point)."""
     args: list = []
     if g := spec.get("gpus"):
-        args += ["--gpus", str(g)]
+        args += ["--gpus", _check_val(g, _GPUS_RE, "gpus")]
     if c := spec.get("cpus"):
-        args += ["--cpus", str(c)]
+        args += ["--cpus", _check_val(c, _COUNT_RE, "cpus")]
     if m := spec.get("memory"):
-        args += ["--memory", str(m)]
+        args += ["--memory", _check_val(m, _COUNT_RE, "memory")]
     if spec.get("spot"):
         args += ["--use-spot"]
     if r := spec.get("region"):
-        args += ["--region", str(r)]
+        args += ["--region", _check_val(r, _REGION_RE, "region")]
     if cl := spec.get("cloud"):  # optional pin; omit to optimize across all clouds
+        if str(cl).lower() not in _CLOUDS:
+            raise SkyInputError(f"invalid cloud {cl!r}")
         args += ["--cloud", str(cl)]
     return args
+
+
+def _autostop_minutes(spec: dict) -> str:
+    """Idle minutes before autostop: spec ``autostop_minutes`` overrides SKY_DEFAULT_AUTOSTOP_MINUTES (60).
+    Bounded 1..10080 so a cluster is never left running indefinitely by default."""
+    raw = spec.get("autostop_minutes", os.environ.get("SKY_DEFAULT_AUTOSTOP_MINUTES", "60"))
+    sv = str(raw)
+    if isinstance(raw, bool) or not re.fullmatch(r"[0-9]{1,5}", sv) or not 1 <= int(sv) <= 10080:
+        raise SkyInputError(f"invalid autostop minutes {sv!r} (1..10080)")
+    return str(int(sv))
+
+
+def _guarded(action: str):
+    def wrap(fn):
+        def inner(*a, **kw):
+            try:
+                return fn(*a, **kw)
+            except SkyInputError as e:
+                return {"status": "error", "action": action, "error": str(e), "rc": None}
+        inner.__name__ = fn.__name__
+        inner.__doc__ = fn.__doc__
+        return inner
+    return wrap
+
+
+def _exists(argv: list, name: str, run: Runner) -> "bool | None":
+    """Whether `name` exists: queries status for that one name (`--` so it is never a flag) and looks for a
+    row whose first column is exactly the name. None when status could not be read (non-zero exit).
+    Note: check-then-launch is not atomic; two concurrent launches of one name can still race. The mission
+    runtime serialises writers per cluster (concurrency_key), which is what closes that window."""
+    rc, out, _ = run(argv + ["--", name])
+    if rc != 0:
+        return None
+    return any((ln.split() or [""])[0] == name for ln in (out or "").splitlines())
+
+
+def undo_target(inp: dict, field: str, action: str, flag: str) -> str:
+    """The resource an undo may tear down: ONLY the one the forward result recorded (``inp['result']``).
+    No defaults; refuses when the forward result is missing, did not create the resource, or a requested
+    target differs from it."""
+    fwd = inp.get("result")
+    if not isinstance(fwd, dict):
+        raise SkyInputError("undo requires the forward result (inputs.result) -- refusing")
+    if fwd.get("action") != action or fwd.get(flag) is not True:
+        raise SkyInputError("forward result does not show this action created the resource -- refusing")
+    name = check_name(fwd.get(field), field)
+    asked = inp.get("target") or inp.get(field)
+    if asked and asked != name:
+        raise SkyInputError("requested target does not match the forward resource -- refusing")
+    return name
 
 
 # SkyPilot's `--dryrun` prints a "Considered resources" table; parse its rows into candidates.
@@ -86,10 +166,11 @@ def parse_optimizer(out: str) -> list:
     return candidates
 
 
+@_guarded("optimize")
 def optimize(spec: dict, *, run: Runner = _run) -> dict:
     """Rank {cloud × region × instance × spot} by live price + availability via `sky launch
     --dryrun`. The ranked table is the mission evidence presented at the approval gate."""
-    name = spec.get("name", "sk-app")
+    name = check_name(spec.get("name", "sk-app"), "cluster")
     argv = ["sky", "launch", "--dryrun", "--yes", "-c", name] + _spec_args(spec)
     if cmd := spec.get("run"):
         argv += ["--", cmd]
@@ -114,12 +195,13 @@ def _estimate(chosen: dict, pinned: dict, out: str) -> dict:
             "cost_basis": "sky.optimize estimate of the approved placement"}
 
 
+@_guarded("launch")
 def launch(spec: dict, *, run: Runner = _run) -> dict:
     """Provision the chosen candidate (`sky launch`). SkyPilot fails over across regions/clouds on
     capacity/quota, so the mission's saga undo is `sky.down`. The result carries the *measured*
     placement outcome (cloud, cost, spot) — the reward the placement optimizer learns from."""
     import time
-    name = spec.get("name", "sk-app")
+    name = check_name(spec.get("name", "sk-app"), "cluster")
     # Pin to the approved placement: the candidate sky.optimize ranked (threaded in as spec["chosen"])
     # overrides the open spec, so launch provisions EXACTLY what was ranked + approved rather than letting
     # SkyPilot re-optimize at launch time against prices/capacity that moved since approval. Without a
@@ -130,19 +212,27 @@ def launch(spec: dict, *, run: Runner = _run) -> dict:
         pinned["cloud"] = chosen["cloud"]
     if chosen.get("region"):
         pinned["region"] = chosen["region"]
-    argv = ["sky", "launch", "--yes", "-c", name] + _spec_args(pinned)
+    argv = ["sky", "launch", "--yes", "-c", name, "--idle-minutes-to-autostop",
+            _autostop_minutes(spec)] + _spec_args(pinned)
     if chosen.get("instance"):
-        argv += ["--instance-type", str(chosen["instance"])]
+        argv += ["--instance-type", _check_val(chosen["instance"], _INSTANCE_RE, "instance")]
     if y := spec.get("task_yaml"):
-        argv += [y]
+        argv += ["--", _check_val(y, _YAML_RE, "task_yaml")]
     elif cmd := spec.get("run"):
         argv += ["--", cmd]
+    # Only launch onto a cluster that does not exist: launching onto an existing name would reuse it, and the
+    # saga undo would then tear down something this launch never created.
+    present = _exists(["sky", "status"], name, run)
+    if present is not False:
+        why = "cluster already exists" if present else "could not confirm the cluster name is free"
+        return {"status": "error", "action": "launch", "cluster": name, "created": False, "rc": None,
+                "error": f"{why} -- refusing to launch", "summary": "", "cluster_preexisting": bool(present)}
     t0 = time.monotonic()
     rc, out, err = run(argv)
     # The placement that ACTUALLY launched — cloud parsed from the output (reveals a capacity failover to a
     # different cloud than pinned), region/instance from the pinned placement. The reward loop keys to THIS.
     return {
-        "status": "done" if rc == 0 else "error", "action": "launch", "cluster": name,
+        "status": "done" if rc == 0 else "error", "action": "launch", "cluster": name, "created": True,
         "cloud": _grep(out, r"Launching on ([A-Za-z][\w-]*)") or pinned.get("cloud"),
         "region": pinned.get("region"), "instance": chosen.get("instance"),
         "endpoint": _grep(out, r"(https?://\S+)"), "spot": bool(spec.get("spot")),
@@ -157,25 +247,34 @@ def launch(spec: dict, *, run: Runner = _run) -> dict:
     }
 
 
+@_guarded("serve")
 def serve(spec: dict, *, run: Runner = _run) -> dict:
     """Stand up an autoscaled service (SkyServe: `sky serve up`) — replicas, load balancing,
     readiness — across clouds/regions."""
-    name = spec.get("name", "sk-svc")
+    name = check_name(spec.get("name", "sk-svc"), "service")
     argv = ["sky", "serve", "up", "--yes", "-n", name]
     if y := spec.get("task_yaml"):
-        argv += [y]
+        argv += ["--", _check_val(y, _YAML_RE, "task_yaml")]
+    present = _exists(["sky", "serve", "status"], name, run)
+    if present is not False:
+        why = "service already exists" if present else "could not confirm the service name is free"
+        return {"status": "error", "action": "serve", "service": name, "created": False, "rc": None,
+                "error": f"{why} -- refusing to start", "summary": ""}
     rc, out, err = run(argv)
     return {
-        "status": "done" if rc == 0 else "error", "action": "serve", "service": name,
+        "status": "done" if rc == 0 else "error", "action": "serve", "service": name, "created": True,
         "endpoint": _grep(out, r"(https?://\S+)"), "rc": rc,
         "summary": _tail(out, 600), "error": _tail(err, 500) if rc else "",
     }
 
 
+@_guarded("down")
 def down(target: str, *, serve: bool = False, run: Runner = _run) -> dict:
     """Tear down a cluster (`sky down`) or service (`sky serve down`). Used both as the saga
     compensation for launch/serve AND as the gated idle-teardown (autostop)."""
-    argv = ["sky", "serve", "down", "--yes", target] if serve else ["sky", "down", "--yes", target]
+    check_name(target, "target")
+    # one named resource only: never `-a`/--all, and `--` so the name can never be parsed as a flag
+    argv = ["sky", "serve", "down", "--yes", "--", target] if serve else ["sky", "down", "--yes", "--", target]
     rc, out, err = run(argv)
     return {"status": "done" if rc == 0 else "error", "action": "down", "target": target,
             "serve": serve, "rc": rc, "error": _tail(err, 500) if rc else ""}
