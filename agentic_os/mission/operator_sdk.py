@@ -18,7 +18,7 @@ on retry (a side-effect-free staged ``pending_approval`` result is cached; the a
 import logging
 import os
 import threading
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -131,7 +131,8 @@ class Operator:
         self._seen_lock = threading.Lock()
         from .approval import ReplayGuard  # noqa: PLC0415
         self.replay_guard = ReplayGuard()      # SEAM: per-process; multi-replica deployments need a shared store
-        self.calls: list[tuple[str, str]] = []  # (capability, idempotency_key) — for assertions
+        self.calls: "deque[tuple[str, str]]" = deque(maxlen=10_000)  # (capability, idempotency_key) — recent, for assertions
+        self._inflight: dict[tuple, dict] = {}   # dedupe key -> {"done": Event, "result": ..., "ok": bool}
 
     def invoke(self, capability: str, inputs: dict, idempotency_key: str = "",
                *, secrets: "dict | None" = None) -> dict:
@@ -143,11 +144,34 @@ class Operator:
                                           if k not in {"_mission", "_goal", "_node"}}), idempotency_key)
         except Exception:  # noqa: BLE001
             _dk = None
-        if idempotency_key and _dk is not None:
+        if not (idempotency_key and _dk is not None):
+            return self._execute(capability, inputs, idempotency_key, _dk, secrets)
+        # Per-key in-flight claim: concurrent identical calls wait for the first and share its outcome, so the
+        # handler runs once. If the first call raised, waiters retry (a failure is never cached).
+        while True:
             with self._seen_lock:
                 if _dk in self._seen:
                     self._seen.move_to_end(_dk)
                     return self._seen[_dk]
+                slot = self._inflight.get(_dk)
+                leader = slot is None
+                if leader:
+                    slot = self._inflight[_dk] = {"done": threading.Event(), "ok": False, "result": None}
+            if leader:
+                break
+            slot["done"].wait()
+            if slot["ok"]:
+                return slot["result"]
+        try:
+            result = self._execute(capability, inputs, idempotency_key, _dk, secrets)
+            slot["result"], slot["ok"] = result, True
+            return result
+        finally:
+            with self._seen_lock:
+                self._inflight.pop(_dk, None)
+            slot["done"].set()
+
+    def _execute(self, capability: str, inputs: dict, idempotency_key: str, _dk, secrets: "dict | None") -> dict:
         fn = self._handlers.get(capability)
         if fn is None:
             raise KeyError(f"operator '{self.name}' has no capability '{capability}'")

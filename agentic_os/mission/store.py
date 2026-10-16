@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol, runtime_checkable
 
@@ -52,50 +53,78 @@ class EventStore:
         self._lock = threading.Lock()
         self._subscribers: list[Callable[[Event], None]] = []
         self._path = path
+        self._offset = 0            # bytes of the JSONL already folded into memory
         if path and os.path.exists(path):
-            self._load()
+            with self._lock:
+                self._read_tail()
+
+    def _read_tail(self) -> int:
+        """Fold complete lines written past ``_offset`` (by any process) into memory. A final line without a
+        newline is a torn write and is left alone. Caller holds ``_lock``."""
+        if not self._path or not os.path.exists(self._path):
+            return 0
+        added = 0
+        with open(self._path, "rb") as fh:
+            fh.seek(self._offset)
+            data = fh.read()
+        end = data.rfind(b"\n") + 1
+        for line in data[:end].splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            d = json.loads(line.decode("utf-8"))
+            self._events.append(Event(type=d["type"], mission_id=d["mission_id"], payload=d["payload"],
+                                      seq=d["seq"], ts=d["ts"]))
+            self._seq = max(self._seq, d["seq"])
+            added += 1
+        self._offset += end
+        return added
 
     def _load(self) -> None:
-        with open(self._path, "r") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                d = json.loads(line)
-                ev = Event(type=d["type"], mission_id=d["mission_id"], payload=d["payload"],
-                           seq=d["seq"], ts=d["ts"])
-                self._events.append(ev)
-                self._seq = max(self._seq, ev.seq)
+        with self._lock:
+            self._read_tail()
 
     def refresh(self) -> int:
         """Pick up events another process appended to the shared JSONL since this store last looked
         (fork/join driver claims use it before deciding who may drive). Returns the number added."""
-        if not self._path or not os.path.exists(self._path):
-            return 0
-        added = 0
         with self._lock:
-            with open(self._path, "r") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    d = json.loads(line)
-                    if d["seq"] > self._seq:
-                        self._events.append(Event(type=d["type"], mission_id=d["mission_id"],
-                                                  payload=d["payload"], seq=d["seq"], ts=d["ts"]))
-                        self._seq = d["seq"]
-                        added += 1
-        return added
+            return self._read_tail()
+
+    @contextmanager
+    def _file_lock(self):
+        """Inter-process exclusive lock on a sidecar file (no-op where ``fcntl`` is unavailable)."""
+        try:
+            import fcntl  # noqa: PLC0415
+        except ImportError:
+            yield
+            return
+        with open(self._path + ".lock", "a") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lk, fcntl.LOCK_UN)
 
     def append(self, type: str, mission_id: str, payload: dict[str, Any]) -> Event:
         with self._lock:
-            self._seq += 1
-            ev = Event(type=type, mission_id=mission_id, payload=to_jsonable(payload), seq=self._seq)
-            self._events.append(ev)
             if self._path:
-                with open(self._path, "a") as fh:
-                    fh.write(json.dumps({"seq": ev.seq, "ts": ev.ts, "type": ev.type,
-                                         "mission_id": ev.mission_id, "payload": ev.payload}) + "\n")
+                with self._file_lock():
+                    self._read_tail()                    # see other writers' events first, so seq is global
+                    self._trim_torn_tail()
+                    ev = Event(type=type, mission_id=mission_id, payload=to_jsonable(payload), seq=self._seq + 1)
+                    line = (json.dumps({"seq": ev.seq, "ts": ev.ts, "type": ev.type, "mission_id": ev.mission_id,
+                                        "payload": ev.payload}) + "\n").encode("utf-8")
+                    with open(self._path, "ab") as fh:     # a failed write leaves memory untouched
+                        fh.write(line)
+                        fh.flush()
+                        os.fsync(fh.fileno())
+                    self._offset += len(line)
+                    self._seq = ev.seq
+                    self._events.append(ev)
+            else:
+                self._seq += 1
+                ev = Event(type=type, mission_id=mission_id, payload=to_jsonable(payload), seq=self._seq)
+                self._events.append(ev)
         for cb in list(self._subscribers):
             try:
                 cb(ev)
@@ -103,45 +132,14 @@ class EventStore:
                 pass
         return ev
 
-    def subscribe(self, cb: Callable[[Event], None]) -> None:
-        self._subscribers.append(cb)
-
-    def for_mission(self, mission_id: str) -> list[Event]:
-        return [e for e in self._events if e.mission_id == mission_id]
-
-    def all(self) -> list[Event]:
-        return list(self._events)
-
-    def mission_ids(self) -> list[str]:
-        seen: list[str] = []
-        for e in self._events:
-            if e.mission_id and e.mission_id not in seen:
-                seen.append(e.mission_id)
-        return seen
-
-
-# ─── world state (the blackboard) ────────────────────────────────────────────
-class MemoryEventStore:
-    """In-memory EventStore with identical append/fold semantics to the durable store but no persistence sink —
-    for fast, isolated replay in tests and ephemeral runs. Same event sequence → same folded state + order."""
-
-    def __init__(self) -> None:
-        self._events: list[Event] = []
-        self._seq = 0
-        self._lock = threading.Lock()
-        self._subscribers: list[Callable[[Event], None]] = []
-
-    def append(self, type: str, mission_id: str, payload: dict[str, Any]) -> Event:
-        with self._lock:
-            self._seq += 1
-            ev = Event(type=type, mission_id=mission_id, payload=to_jsonable(payload), seq=self._seq)
-            self._events.append(ev)
-        for cb in list(self._subscribers):
-            try:
-                cb(ev)
-            except Exception:  # noqa: BLE001 - a subscriber must never break the log
-                pass
-        return ev
+    def _trim_torn_tail(self) -> None:
+        """Drop a partial last line left by a crashed writer (we hold the file lock, so nobody is mid-write)."""
+        if not os.path.exists(self._path):
+            return
+        size = os.path.getsize(self._path)
+        if size > self._offset:
+            with open(self._path, "r+b") as fh:
+                fh.truncate(self._offset)
 
     def subscribe(self, cb: Callable[[Event], None]) -> None:
         self._subscribers.append(cb)
