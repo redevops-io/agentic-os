@@ -19,6 +19,11 @@ from .types import (
 )
 
 
+def _fsync_enabled() -> bool:
+    """fsync after each append (default on). ``AGENTIC_OS_EVENT_FSYNC=0`` trades durability for speed (tests)."""
+    return os.environ.get("AGENTIC_OS_EVENT_FSYNC", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
 @runtime_checkable
 class EventStoreProtocol(Protocol):
     """The append-only event-log interface the kernel depends on. Implementations are interchangeable so long
@@ -52,56 +57,96 @@ class EventStore:
         self._lock = threading.Lock()
         self._subscribers: list[Callable[[Event], None]] = []
         self._path = path
+        self._offset = 0            # bytes of the JSONL already folded into memory
         if path and os.path.exists(path):
-            self._load()
+            with self._lock:
+                self._read_tail()
+
+    def _read_tail(self) -> int:
+        """Fold records written past ``_offset`` (by any process) into memory. A final line without a newline is
+        accepted when it is a complete record, and left alone when it is a torn write. Caller holds ``_lock``."""
+        if not self._path or not os.path.exists(self._path):
+            return 0
+        added = 0
+        with open(self._path, "rb") as fh:
+            fh.seek(self._offset)
+            data = fh.read()
+        end = data.rfind(b"\n") + 1
+        tail = data[end:]
+        chunks = list(data[:end].splitlines())
+        consumed = end
+        if tail.strip():
+            try:
+                json.loads(tail.decode("utf-8"))
+                chunks.append(tail)
+                consumed = len(data)
+            except ValueError:
+                pass                                    # torn write: ignored here, trimmed by the next append
+        for line in chunks:
+            line = line.strip()
+            if not line:
+                continue
+            d = json.loads(line.decode("utf-8"))
+            self._events.append(Event(type=d["type"], mission_id=d["mission_id"], payload=d["payload"],
+                                      seq=d["seq"], ts=d["ts"]))
+            self._seq = max(self._seq, d["seq"])
+            added += 1
+        self._offset += consumed
+        return added
 
     def _load(self) -> None:
-        with open(self._path, "r") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                d = json.loads(line)
-                ev = Event(type=d["type"], mission_id=d["mission_id"], payload=d["payload"],
-                           seq=d["seq"], ts=d["ts"])
-                self._events.append(ev)
-                self._seq = max(self._seq, ev.seq)
+        with self._lock:
+            self._read_tail()
 
     def refresh(self) -> int:
         """Pick up events another process appended to the shared JSONL since this store last looked
         (fork/join driver claims use it before deciding who may drive). Returns the number added."""
-        if not self._path or not os.path.exists(self._path):
-            return 0
-        added = 0
         with self._lock:
-            with open(self._path, "r") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    d = json.loads(line)
-                    if d["seq"] > self._seq:
-                        self._events.append(Event(type=d["type"], mission_id=d["mission_id"],
-                                                  payload=d["payload"], seq=d["seq"], ts=d["ts"]))
-                        self._seq = d["seq"]
-                        added += 1
-        return added
+            return self._read_tail()
 
     def append(self, type: str, mission_id: str, payload: dict[str, Any]) -> Event:
         with self._lock:
-            self._seq += 1
-            ev = Event(type=type, mission_id=mission_id, payload=to_jsonable(payload), seq=self._seq)
-            self._events.append(ev)
             if self._path:
-                with open(self._path, "a") as fh:
-                    fh.write(json.dumps({"seq": ev.seq, "ts": ev.ts, "type": ev.type,
-                                         "mission_id": ev.mission_id, "payload": ev.payload}) + "\n")
+                # The exclusive inter-process lock is taken on the log file itself (no sidecar file), so
+                # read-only parent directories and single-file bind mounts work.
+                with open(self._path, "ab") as fh:
+                    try:
+                        import fcntl  # noqa: PLC0415
+                        fcntl.flock(fh, fcntl.LOCK_EX)
+                    except ImportError:
+                        pass                               # no inter-process lock on this platform
+                    self._read_tail()                      # see other writers' events first, so seq is global
+                    size = os.fstat(fh.fileno()).st_size
+                    prefix = b""
+                    if size > self._offset:                # a torn partial record from a crashed writer
+                        os.ftruncate(fh.fileno(), self._offset)
+                    elif size and not self._ends_with_newline():
+                        prefix = b"\n"                     # a complete record that lacks its terminator
+                    ev = Event(type=type, mission_id=mission_id, payload=to_jsonable(payload), seq=self._seq + 1)
+                    line = prefix + (json.dumps({"seq": ev.seq, "ts": ev.ts, "type": ev.type,
+                                                 "mission_id": ev.mission_id, "payload": ev.payload}) + "\n").encode("utf-8")
+                    fh.write(line)                         # a failed write leaves memory untouched
+                    fh.flush()
+                    if _fsync_enabled():
+                        os.fsync(fh.fileno())
+                    self._offset += len(line)
+                    self._seq = ev.seq
+                    self._events.append(ev)
+            else:
+                self._seq += 1
+                ev = Event(type=type, mission_id=mission_id, payload=to_jsonable(payload), seq=self._seq)
+                self._events.append(ev)
         for cb in list(self._subscribers):
             try:
                 cb(ev)
             except Exception:  # a subscriber must never break the log
                 pass
         return ev
+
+    def _ends_with_newline(self) -> bool:
+        with open(self._path, "rb") as fh:
+            fh.seek(-1, os.SEEK_END)
+            return fh.read(1) == b"\n"
 
     def subscribe(self, cb: Callable[[Event], None]) -> None:
         self._subscribers.append(cb)
@@ -120,7 +165,11 @@ class EventStore:
         return seen
 
 
-# ─── world state (the blackboard) ────────────────────────────────────────────
+# Durable store names: ``EventStore`` is the canonical durable (JSONL-backed) implementation; ``JsonlEventStore``
+# is an alias so either name resolves to the same backend across the kernel and its overlays.
+JsonlEventStore = EventStore
+
+
 class MemoryEventStore:
     """In-memory EventStore with identical append/fold semantics to the durable store but no persistence sink —
     for fast, isolated replay in tests and ephemeral runs. Same event sequence → same folded state + order."""

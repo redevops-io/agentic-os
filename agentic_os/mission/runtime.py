@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import copy
 import os
+import threading
 from typing import Any
 
 from .approval import is_approval_key, strip_approval_keys
@@ -251,6 +252,8 @@ class MissionRuntime:
         self.governance = GovernanceLog(self.store)
         self._plans: dict[str, ExecutionPlan] = {}     # plan_id/mission_id -> plan (recompilable)
         self._missions: dict[str, Mission] = {}
+        self._run_locks: dict[str, threading.RLock] = {}
+        self._run_locks_guard = threading.Lock()
         #: Node ids whose approval predates capability scoping. Surfaced by
         #: `approval_scope` so replay evidence does not imply an old event
         #: recorded information it never held.
@@ -615,9 +618,24 @@ class MissionRuntime:
             "capabilities_with_conflict_semantics": sorted(keyed),
         }
 
+    def _run_lock(self, mission_id: str) -> "threading.RLock":
+        with self._run_locks_guard:
+            lk = self._run_locks.get(mission_id)
+            if lk is None:
+                lk = self._run_locks[mission_id] = threading.RLock()
+            return lk
+
     def run(self, mission_id: str) -> Mission:
+        """Drive the mission. One driver at a time per mission: concurrent callers queue and then observe the
+        folded state, so a ready node is dispatched once."""
+        with self._run_lock(mission_id):
+            return self._run_locked(mission_id)
+
+    def _run_locked(self, mission_id: str) -> Mission:
         m = self._missions[mission_id]
-        if m.state in (MissionState.FAILED, MissionState.COMPENSATION_FAILED):      # blocked in simulation / needs a human
+        # blocked in simulation / needs a human / already finished or cancelled
+        if m.state in (MissionState.FAILED, MissionState.COMPENSATION_FAILED,
+                       MissionState.SUCCEEDED, MissionState.CANCELLED):
             return m
         plan = self._plans[mission_id]
         graph = plan.graph
@@ -820,8 +838,14 @@ class MissionRuntime:
         # an operator may also REPORT world facts it learned, each with its own source + confidence
         # (this is how conflicting / low-confidence beliefs enter — see _belief_issue below)
         for obs in (result.get("_observations") if isinstance(result, dict) else None) or []:
+            if not isinstance(obs, dict) or not isinstance(obs.get("key"), str) or not obs["key"]:
+                continue                                        # malformed report: ignore it, never fail the node
+            try:
+                conf = min(1.0, max(0.0, float(obs.get("confidence", 1.0))))
+            except (TypeError, ValueError):
+                continue
             world.observe(obs["key"], obs.get("value"), obs.get("source", node.operator),
-                          float(obs.get("confidence", 1.0)),
+                          conf,
                           source_type=obs.get("source_type", "prior"),
                           source_ref=obs.get("source_ref", ""))
         self.store.append("NodeSucceeded", m.id,
@@ -1699,6 +1723,7 @@ class MissionRuntime:
         for e in self.store.for_mission(mission_id):
             if e.type == "ApprovalGranted":
                 granted[e.payload["node_id"]] = e.payload.get("capability")
+                invalidated.discard(e.payload["node_id"])      # a later grant supersedes an earlier invalidation
             elif e.type == "ApprovalInvalidated":
                 invalidated.add(e.payload["node_id"])
 

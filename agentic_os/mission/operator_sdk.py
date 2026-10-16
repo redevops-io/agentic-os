@@ -15,10 +15,11 @@ are not failure-shaped (``mission.verify.result_failed``) are cached — a faile
 on retry (a side-effect-free staged ``pending_approval`` result is cached; the approved retry has its own key). With multiple replicas the cache is not shared (see ``approval.SharedStore``).
 """
 
+import hashlib
 import logging
 import os
 import threading
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -116,6 +117,14 @@ def pending_approval(action: str, **preview) -> dict:
     return {"status": "pending_approval", "action": action, "executed": False, **preview}
 
 
+def idempotency_wait_s() -> float:
+    """How long a duplicate call waits for the in-flight one (``AGENTIC_OS_IDEMPOTENCY_WAIT_S``, default 300)."""
+    try:
+        return float(os.environ.get("AGENTIC_OS_IDEMPOTENCY_WAIT_S", "300"))
+    except ValueError:
+        return 300.0
+
+
 class Operator:
     """One app's capability operator: manifest + handlers + idempotency dedupe."""
 
@@ -131,7 +140,8 @@ class Operator:
         self._seen_lock = threading.Lock()
         from .approval import ReplayGuard  # noqa: PLC0415
         self.replay_guard = ReplayGuard()      # SEAM: per-process; multi-replica deployments need a shared store
-        self.calls: list[tuple[str, str]] = []  # (capability, idempotency_key) — for assertions
+        self.calls: "deque[tuple[str, str]]" = deque(maxlen=10_000)  # (capability, idempotency_key) — recent, for assertions
+        self._inflight: dict[tuple, dict] = {}   # dedupe key -> {"done": Event, "result": ..., "ok": bool}
 
     def invoke(self, capability: str, inputs: dict, idempotency_key: str = "",
                *, secrets: "dict | None" = None) -> dict:
@@ -139,15 +149,41 @@ class Operator:
         # Dedupe on (capability, canonical inputs, key): the same key with different capability/inputs is a
         # different call. `_approval` stays IN the hash so an approved retry is never served the staged result.
         try:
+            # the caller's ephemeral credential material scopes the key: two tenants never share a result
+            _ctx = hashlib.sha256(canonical(secrets or {})).hexdigest() if secrets else ""
             _dk = (capability, canonical({k: v for k, v in (inputs or {}).items()
-                                          if k not in {"_mission", "_goal", "_node"}}), idempotency_key)
+                                          if k not in {"_mission", "_goal", "_node"}}), idempotency_key, _ctx)
         except Exception:  # noqa: BLE001
             _dk = None
-        if idempotency_key and _dk is not None:
+        if not (idempotency_key and _dk is not None):
+            return self._execute(capability, inputs, idempotency_key, _dk, secrets)
+        # Per-key in-flight claim: concurrent identical calls wait for the first and share its outcome, so the
+        # handler runs once. If the first call raised, waiters retry (a failure is never cached).
+        while True:
             with self._seen_lock:
                 if _dk in self._seen:
                     self._seen.move_to_end(_dk)
                     return self._seen[_dk]
+                slot = self._inflight.get(_dk)
+                leader = slot is None
+                if leader:
+                    slot = self._inflight[_dk] = {"done": threading.Event(), "ok": False, "result": None}
+            if leader:
+                break
+            if not slot["done"].wait(idempotency_wait_s()):
+                raise TimeoutError(f"{capability}: an identical call is still in flight")
+            if slot["ok"]:
+                return slot["result"]
+        try:
+            result = self._execute(capability, inputs, idempotency_key, _dk, secrets)
+            slot["result"], slot["ok"] = result, True
+            return result
+        finally:
+            with self._seen_lock:
+                self._inflight.pop(_dk, None)
+            slot["done"].set()
+
+    def _execute(self, capability: str, inputs: dict, idempotency_key: str, _dk, secrets: "dict | None") -> dict:
         fn = self._handlers.get(capability)
         if fn is None:
             raise KeyError(f"operator '{self.name}' has no capability '{capability}'")
