@@ -1,5 +1,5 @@
-"""P0: POST /api/outcomes must never let an anonymous caller create learning evidence.
-Anonymous => sandboxed demo namespace; authoritative => bearer token + executed-intervention receipt."""
+"""POST /api/outcomes: unauthenticated callers write to a sandboxed demo namespace;
+authoritative outcomes require a bearer token and an executed-intervention receipt."""
 from __future__ import annotations
 
 import pytest
@@ -136,7 +136,7 @@ def test_authoritative_wrong_or_missing_token_is_401(env, hdr):
 @pytest.mark.parametrize("override,code", [
     ({"intervention_id": ""}, 422), ({"intervention_id": "ghost"}, 404),
     ({"intervention_id": "i-pending"}, 409), ({"intervention_id": "i-shadow"}, 409),
-    ({"execution_ref": "forged"}, 409), ({"mission_id": "other"}, 409), ({"source_app": "evil"}, 409),
+    ({"execution_ref": "forged"}, 409), ({"mission_id": "other"}, 409), ({"source_app": "other"}, 409),
     ({"idempotency_key": ""}, 422), ({"attribution_confidence": None}, 422),
     ({"attribution_confidence": 1.5}, 422), ({"attribution_confidence": -0.1}, 422),
     ({"observed_reward": None}, 422),

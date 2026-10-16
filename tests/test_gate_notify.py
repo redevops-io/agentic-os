@@ -1,4 +1,4 @@
-"""ER-07 gate notifications: negative cases first, then delivery, idempotency, expiry, and the harness."""
+"""Gate notifications: negative cases first, then delivery, idempotency, expiry, and the harness."""
 from __future__ import annotations
 
 import json
@@ -261,7 +261,7 @@ def test_needs_you_projection_exposes_receipts(monkeypatch):
     assert item["notices"][0]["state"] == "delivered" and item["expired"] is False
 
 
-# ───────── harness: the ER-07 targets ─────────
+# ───────── harness targets ─────────
 def test_harness_er07_targets():
     delivered = 0; N = 20
     for _ in range(N):
@@ -522,8 +522,8 @@ def test_s7_injection_neutralised():
     rt = make_rt(); chan = FakeChan(); clock = Clock()
     n = gn.GateNotifier(rt.store, {"slack": chan}, {"recipients": [{"id": "a", "channel": "slack"}],
                                                    "link_base": "https://c/n"}, clock=clock)
-    t = n._text("initial", "m1>@channel <http://evil|x>", "n&x=1", "cap<!here> @everyone")
-    assert "@" not in t.split("Review")[0] and "<" not in t and "evil|" not in t
+    t = n._text("initial", "m1>@channel <http://other|x>", "n&x=1", "cap<!here> @everyone")
+    assert "@" not in t.split("Review")[0] and "<" not in t and "other|" not in t
     assert "%3E" in t or "%40" in t or "mission=m1" in t
 
 

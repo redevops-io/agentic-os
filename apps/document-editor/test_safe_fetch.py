@@ -23,7 +23,7 @@ def res_to(ip):
 
 # ── scheme / host / URL syntax ───────────────────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("url", [
-    "ftp://editor.test/x", "file:///etc/passwd", "gopher://editor.test/", "javascript:alert(1)", "data:text/plain,hi",
+    "ftp://editor.test/x", "file:///tmp/outside.txt", "gopher://editor.test/", "javascript:alert(1)", "data:text/plain,hi",
     "//editor.test/x", "editor.test/x", "",
 ])
 def test_non_http_schemes_and_malformed_urls_are_refused(sf, url):
@@ -39,7 +39,7 @@ def test_plain_http_requires_an_explicit_private_host(sf):
 
 @pytest.mark.parametrize("url", [
     "http://user:pw@editor.test/x", "http://user@editor.test/x", "http://:pw@editor.test/x",
-    "https://editor.test@evil.test/x", "http://evil.test\\@editor.test/",
+    "https://editor.test@other.test/x", "http://other.test\\@editor.test/",
 ])
 def test_credentials_in_urls_and_authority_tricks_are_refused(sf, url):
     with pytest.raises(sf.SSRFBlocked):
@@ -56,7 +56,7 @@ def test_fragments_whitespace_control_chars_and_backslashes_are_refused(sf, url)
 def test_host_not_on_allowlist_is_refused_before_any_dns(sf):
     called = []
     with pytest.raises(sf.SSRFBlocked, match="allowlist"):
-        sf.safe_fetch("http://evil.test/", policy=policy(sf), resolver=lambda h, p: called.append(h) or ["10.0.0.5"])
+        sf.safe_fetch("http://other.test/", policy=policy(sf), resolver=lambda h, p: called.append(h) or ["10.0.0.5"])
     assert called == []                    # never even resolved
 
 
@@ -94,7 +94,7 @@ def test_numeric_ip_encodings_are_refused_even_if_someone_allowlists_them(sf, ho
     ("127.0.0.1", "PUBLIC", True), ("127.0.0.1", "PRIVATE", False), ("10.1.2.3", "PUBLIC", True),
     ("10.1.2.3", "PRIVATE", False), ("172.16.0.1", "PUBLIC", True), ("192.168.1.1", "PUBLIC", True),
     ("192.168.1.1", "PRIVATE", False), ("100.64.0.1", "PUBLIC", True), ("100.64.0.1", "PRIVATE", False),
-    ("169.254.169.254", "PUBLIC", True), ("169.254.169.254", "PRIVATE", True),       # metadata: always
+    ("169.254.169.254", "PUBLIC", True), ("169.254.169.254", "PRIVATE", True),       # link-local: always
     ("169.254.170.2", "PRIVATE", True), ("169.254.1.1", "PRIVATE", True),            # link-local: always
     ("100.100.100.200", "PRIVATE", True), ("192.0.0.192", "PRIVATE", True),
     ("0.0.0.0", "PRIVATE", True), ("224.0.0.1", "PRIVATE", True), ("255.255.255.255", "PRIVATE", True),
@@ -141,14 +141,14 @@ def test_public_host_resolving_to_loopback_is_blocked(sf):
 
 
 def test_any_bad_address_among_several_blocks_the_request(sf):
-    with pytest.raises(sf.SSRFBlocked, match="169.254.169.254"):
+    with pytest.raises(sf.SSRFBlocked, match="169.254.1.1"):
         sf.safe_fetch("https://editor.test/x", policy=policy(sf, zone="PUBLIC", port=443),
-                      resolver=lambda h, p: ["93.184.216.34", "169.254.169.254"])
+                      resolver=lambda h, p: ["93.184.216.34", "169.254.1.1"])
 
 
-def test_dns_rebinding_resolves_exactly_once_and_connects_to_the_checked_ip(sf, server):
+def test_resolution_is_done_exactly_once_and_connects_to_the_checked_ip(sf, server):
     srv = server(lambda r: (200, {}, b"first-answer"))
-    answers = iter([["127.0.0.1"], ["169.254.169.254"]])         # 2nd answer would be the rebinding payload
+    answers = iter([["127.0.0.1"], ["169.254.1.1"]])         # 2nd answer is a different, blocked address
     calls = []
 
     def resolver(host, port):
@@ -159,9 +159,9 @@ def test_dns_rebinding_resolves_exactly_once_and_connects_to_the_checked_ip(sf, 
     assert calls == ["editor.test"]                              # a second lookup never happens
 
 
-def test_rebinding_flip_to_metadata_on_first_lookup_is_blocked(sf):
+def test_resolution_change_to_blocked_address_on_first_lookup_is_blocked(sf):
     with pytest.raises(sf.SSRFBlocked):
-        sf.safe_fetch("http://editor.test/x", policy=policy(sf), resolver=res_to("169.254.169.254"))
+        sf.safe_fetch("http://editor.test/x", policy=policy(sf), resolver=res_to("169.254.1.1"))
 
 
 def test_unresolvable_host_is_a_typed_unavailable_not_sent(sf):
@@ -174,8 +174,8 @@ def test_unresolvable_host_is_a_typed_unavailable_not_sent(sf):
 
 # ── redirects ────────────────────────────────────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
-@pytest.mark.parametrize("loc", ["http://169.254.169.254/latest/meta-data/", "http://editor.test/other",
-                                 "http://evil.test/", "file:///etc/passwd", "/relative"])
+@pytest.mark.parametrize("loc", ["http://169.254.1.1/internal/path", "http://editor.test/other",
+                                 "http://other.test/", "file:///tmp/outside.txt", "/relative"])
 def test_redirects_are_never_followed(sf, server, status, loc):
     hits = server(lambda r: (200, {}, b"SHOULD NOT BE REQUESTED"))
     srv = server(lambda r: (status, {"Location": loc}, b""))
@@ -185,10 +185,10 @@ def test_redirects_are_never_followed(sf, server, status, loc):
     assert len(srv.requests) == 1 and hits.requests == []
 
 
-def test_redirect_to_metadata_ip_is_not_connected_to(sf, server):
+def test_redirect_to_blocked_ip_is_not_connected_to(sf, server):
     """Even if the target were reachable, the redirect target is never resolved or contacted."""
     contacted = []
-    srv = server(lambda r: (302, {"Location": "http://169.254.169.254/latest/meta-data/iam"}, b""))
+    srv = server(lambda r: (302, {"Location": "http://169.254.1.1/internal/path"}, b""))
 
     def resolver(host, port):
         contacted.append(host)

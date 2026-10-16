@@ -1,4 +1,4 @@
-"""The cockpit page must render attacker-controlled mission data inert and never touch web storage / prompt()."""
+"""The cockpit page must render untrusted mission data inert and never touch web storage / prompt()."""
 from __future__ import annotations
 
 import json

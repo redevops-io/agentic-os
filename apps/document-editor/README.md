@@ -10,7 +10,7 @@ and disabled. No undocumented endpoints, no headless-browser automation in any p
   unlabeled = CONFIDENTIAL, RESTRICTED never sent).
 * Edits are **proposed, approved by a human, applied as a NEW version, verified by read-back** - never in place.
 * Docs: [architecture](../../docs/document-editor-connector/ARCHITECTURE.md),
-  [edit API findings](../../docs/document-editor-connector/EDIT_API.md),
+  [edit API notes](../../docs/document-editor-connector/EDIT_API.md),
   [classification](../../docs/document-editor-connector/CLASSIFICATION.md),
   [threat model](../../docs/document-editor-connector/THREAT_MODEL.md),
   [OS support](../../docs/document-editor-connector/OS_SUPPORT.md),

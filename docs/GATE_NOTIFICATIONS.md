@@ -1,4 +1,4 @@
-# Gate notifications (ER-07)
+# Gate notifications
 
 Pushes a parked human-approval gate to people through the existing `channels.py` channels, durably and
 without pretending to be exactly-once. Implemented in `agentic_os/mission/gate_notify.py`. No new dependency

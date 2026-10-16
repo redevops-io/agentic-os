@@ -111,7 +111,7 @@ def test_validate_plan_compensation_dangling_and_strict_sunset(monkeypatch):
     reg = CapabilityRegistry()
     reg.register(CapabilityManifest("m", [_spec("a.do", "x", side_effecting=True, undo="a.undo")]))
     ok = Node(capability="a.do", operator="a", undo="a.undo")
-    bad = Node(capability="a.do", operator="a", undo="evil")
+    bad = Node(capability="a.do", operator="a", undo="other")
     assert C.validate_plan_compensation([ok], reg.get) == []                    # dangling tolerated before sunset
     assert C.validate_plan_compensation([ok], reg.get, strict=True)             # ...refused when strict
     assert C.validate_plan_compensation([bad], reg.get)

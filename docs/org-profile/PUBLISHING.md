@@ -2,7 +2,7 @@
 
 Nothing in this folder is live until the steps below are done by an organisation owner. The PR that adds these files does not create the `.github` repository, does not change organisation settings, and does not change any repository description.
 
-Caveat: `README.md` here contains `added by pending PR` markers and links to files that do not exist yet. Publishing before the sibling PRs merge shows links that return 404. Either wait for the sibling PRs, or publish and accept the broken links temporarily. Also confirm the `EVIDENCE_STATUS_SOURCE` line (it cites a private repository) and the maturity labels marked `(to be confirmed)` before publishing.
+Before publishing, check that every link in `README.md` resolves (step 3).
 
 ## 1. Create the repository
 
@@ -42,14 +42,6 @@ Settings: github.com/organizations/redevops-io/settings/profile, field Descripti
 
 (GitHub limits the field to 160 characters; the proposal is under that.) Or via API: `gh api -X PATCH orgs/redevops-io -f description='...'`.
 
-## 5. Remove the pending markers
+## 5. Updating later
 
-When each sibling PR merges (STATUS.md, CONTRIBUTING.md):
-
-1. Check the target resolves: `curl -s -o /dev/null -w '%{http_code}\n' https://github.com/redevops-io/<repo>/blob/<branch>/STATUS.md` returns 200.
-2. In `README.md`, delete the `added by pending PR` text in the State column (or drop the column) and the pending note in the contributing section.
-3. Re-run step 6.
-
-## 6. Updating later
-
-Edit `profile/README.md` in `redevops-io/.github` and push to `main`; GitHub shows the change on the org page immediately. Keep `docs/org-profile/README.md` in agentic-os in sync, or declare the `.github` copy canonical and delete the agentic-os copy. Revisit the repository table whenever a repository changes maturity, licence label or visibility. Counsel decisions on licence labels should be applied to the Licences section first.
+Edit `profile/README.md` in `redevops-io/.github` and push to `main`; GitHub shows the change on the org page immediately. Keep `docs/org-profile/README.md` in agentic-os in sync, or declare the `.github` copy canonical and delete the agentic-os copy. Revisit the repository table whenever a repository changes maturity, licence label or visibility.

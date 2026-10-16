@@ -353,7 +353,7 @@ def test_approver_only_configuration_is_not_503(monkeypatch):
 @pytest.mark.parametrize("env,val", [
     ("AGENTIC_OS_TENANT_TOKENS", "a=ta,ab=ta"),
     ("AGENTIC_OS_TENANT_TOKENS", "a=ta,a=tb"),
-    ("AGENTIC_OS_TENANT_TOKENS", "evil=admin-secret"),
+    ("AGENTIC_OS_TENANT_TOKENS", "other=admin-secret"),
     ("AGENTIC_OS_APPROVER_TOKENS", "a=tok-tenant-a"),
     ("AGENTIC_OS_APPROVER_TOKENS", "a=x,b=x"),
 ])

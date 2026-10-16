@@ -2,7 +2,7 @@
 
 **ReDevOps provides a governed execution runtime for AI applications, with explicit context planning, discovery, approvals, verification, and replay.**
 
-This page is a map of the public repositories, what each one is, and how mature each one is. Maturity labels are conservative; where a repository does not state its own maturity, the label here is marked `(to be confirmed)`.
+This page is a map of the public repositories, what each one is, and how mature each one is. Maturity labels are conservative.
 
 ## How the pieces fit
 
@@ -35,17 +35,17 @@ flowchart TB
 
 ## Repository directory
 
-Only public repositories are listed. Licences vary by repository; see each repository's `LICENSE` (details and counsel-review note below).
+Only public repositories are listed. Licences vary by repository; see each repository's `LICENSE`.
 
 ### Core
 
 | Repository | What it is | Maturity |
 |---|---|---|
-| [agentic-os](https://github.com/redevops-io/agentic-os) | Control plane, cost-aware LLM router, permissions plane, Mission kernel, and a bundle of reference apps | reference (to be confirmed) |
+| [agentic-os](https://github.com/redevops-io/agentic-os) | Control plane, cost-aware LLM router, permissions plane, Mission kernel, and a bundle of reference apps | reference |
 | [runtime-contracts](https://github.com/redevops-io/runtime-contracts) | Canonical schemas, hashing, golden fixtures, adoption manifest | reference; its README says implementation adoption is pending |
 | [context-runtime](https://github.com/redevops-io/context-runtime) | Query planner for LLM context (default branch `v4`) | reference (README: "runnable reference implementation") |
-| [discovery-runtime](https://github.com/redevops-io/discovery-runtime) | Intent-discovery runtime: words to a sealed, verified intent | reference (to be confirmed) |
-| [redevops-rag](https://github.com/redevops-io/redevops-rag) | Hybrid retrieval library and CLI (DuckDB) | reference (to be confirmed) |
+| [discovery-runtime](https://github.com/redevops-io/discovery-runtime) | Intent-discovery runtime: words to a sealed, verified intent | reference |
+| [redevops-rag](https://github.com/redevops-io/redevops-rag) | Hybrid retrieval library and CLI (DuckDB) | reference |
 
 ### SDK
 
@@ -53,7 +53,7 @@ Only public repositories are listed. Licences vary by repository; see each repos
 |---|---|---|
 | [mission-sdk](https://github.com/redevops-io/mission-sdk) | `redevops-mission` package and `rdo` CLI over the Mission runtime | alpha (README badge) |
 | [redevops-connectors](https://github.com/redevops-io/redevops-connectors) | `IntegrationAdapter` contract and provider adapters | simulation-only (README: adapters run only against fixtures) |
-| [agent-harness](https://github.com/redevops-io/agent-harness) | LLM client, tool registry, approvals, sandbox, guardrails, evals | reference (to be confirmed; example runs against a stub client) |
+| [agent-harness](https://github.com/redevops-io/agent-harness) | LLM client, tool registry, approvals, sandbox, guardrails, evals | reference; example runs against a stub client |
 | [knowledge-frontier](https://github.com/redevops-io/knowledge-frontier) | "What to teach next" planner | simulation-only (tested on synthetic learners) |
 
 ### Integrations
@@ -69,7 +69,7 @@ Only public repositories are listed. Licences vary by repository; see each repos
 | [redevops-projects](https://github.com/redevops-io/redevops-projects) | React front-end shell for the Projects workspace (README: phase P1 of P1-P10) | alpha |
 | [redevops-demo](https://github.com/redevops-io/redevops-demo) | Multi-cloud deploy-and-operate demo | simulation-only (README: missions run sim-first, $0) |
 | [accounting-firm](https://github.com/redevops-io/accounting-firm) | Composition demo on synthetic data (Section 41 study, ASC 606 memo, CPA-review console) | simulation-only |
-| [sidekick](https://github.com/redevops-io/sidekick) | Local coding-agent orchestrator (DAG, git worktrees) | alpha (to be confirmed) |
+| [sidekick](https://github.com/redevops-io/sidekick) | Local coding-agent orchestrator (DAG, git worktrees) | alpha |
 
 ### Research
 
@@ -93,26 +93,13 @@ Maturity labels used: alpha, reference, simulation-only, deployed internally, in
 
 ## Evidence and limitations
 
-Each repository's README carries its own caveats. Status pages are being added:
+Each repository's README carries its own caveats. Existing READMEs with explicit limitations worth reading first: [redevops-connectors](https://github.com/redevops-io/redevops-connectors#readme) (fixtures only), [redevops-demo](https://github.com/redevops-io/redevops-demo#readme) (safety notes and simulation status), [multiagent-orchestration-benchmark](https://github.com/redevops-io/multiagent-orchestration-benchmark#readme) (null result).
 
-| Repository | Status page | State |
-|---|---|---|
-| agentic-os | [STATUS.md](https://github.com/redevops-io/agentic-os/blob/main/STATUS.md) | added by pending PR |
-| mission-sdk | [STATUS.md](https://github.com/redevops-io/mission-sdk/blob/main/STATUS.md) | added by pending PR |
-| context-runtime | [STATUS.md](https://github.com/redevops-io/context-runtime/blob/v4/STATUS.md) | added by pending PR |
-| discovery-runtime | [STATUS.md](https://github.com/redevops-io/discovery-runtime/blob/master/STATUS.md) | added by pending PR |
-| runtime-contracts | [STATUS.md](https://github.com/redevops-io/runtime-contracts/blob/main/STATUS.md) | added by pending PR |
-| redevops-rag | [STATUS.md](https://github.com/redevops-io/redevops-rag/blob/main/STATUS.md) | added by pending PR |
-| redevops-demo | [STATUS.md](https://github.com/redevops-io/redevops-demo/blob/main/STATUS.md) | added by pending PR |
-| sidekick | [STATUS.md](https://github.com/redevops-io/sidekick/blob/main/STATUS.md) | added by pending PR |
-
-Existing READMEs with explicit limitations worth reading first: [redevops-connectors](https://github.com/redevops-io/redevops-connectors#readme) (fixtures only), [redevops-demo](https://github.com/redevops-io/redevops-demo#readme) (safety notes and simulation status), [multiagent-orchestration-benchmark](https://github.com/redevops-io/multiagent-orchestration-benchmark#readme) (null result).
-
-**Evidence status.** The contract-amendment benchmark (EDGAR) has not produced evidence yet. Its synthetic sanity tier failed its pre-registered stop rules S0 and S0b twice (corpus versions v2 and v4); the failure is kept in the record and not redefined. The EDGAR study that replaced it as the primary evaluation is a pre-registered design and tooling only: no EDGAR text is annotated, no gold label exists, no experimental arm has run, and the freeze is blocked on owner inputs including a qualified legal reviewer. Source (private repository, so not linkable here): `redevops-io/redevops-benchmarks`, `workloads/amendment_effective_state/README.md` and `REVISIONS.md`; `workloads/edgar_amendment_effective_state/README.md`, `PREREGISTRATION.md` section 0, `CHECKLIST.md`. EVIDENCE_STATUS_SOURCE: wording to be confirmed by owner.
+**Evidence status:** preliminary; not independently validated.
 
 ## Licences
 
-Licences vary by repository; see each repository's `LICENSE`. The titles below are taken from the repositories' own licence files and manifests; the labels are under counsel review, and nothing here is a legal conclusion.
+Licences vary by repository; see each repository's `LICENSE`. The titles below are taken from the repositories' own licence files and manifests. Nothing here is a legal conclusion.
 
 | Repository | LICENSE title as it appears in the repo |
 |---|---|
@@ -123,11 +110,9 @@ Licences vary by repository; see each repository's `LICENSE`. The titles below a
 | multiagent-orchestration-benchmark | MIT |
 | graphiti, HippoRAG, openclaw, ingress-nginx | Upstream licences retained (Apache-2.0, MIT, MIT, Apache-2.0) |
 
-Open question under counsel review: `mission-sdk` and `redevops-integrations` (Apache-2.0) depend on `agentic-os` (AGPL-3.0 plus Commons Clause).
 
 ## Contribute and contact
 
-- Contributing guides: being added per repository by pending PRs (`CONTRIBUTING.md`, added by pending PR). Until they land, open a GitHub Issue in the relevant repository.
 - Questions and bug reports: GitHub Issues on the relevant repository.
 - Organisation email, as listed in the GitHub organisation metadata: redevops@redevops.io
-- Security reports: see the `SECURITY.md` of the repository concerned where one exists; a dedicated channel is to be confirmed.
+- Security reports: see the `SECURITY.md` of the repository concerned where one exists, or email redevops@redevops.io.

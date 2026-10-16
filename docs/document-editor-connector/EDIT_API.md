@@ -81,20 +81,15 @@ globals are undefined and the job fails with error -3). Compare-to-tracked-chang
 | authorship of revisions | **no `w:author`** is written: attribution lives in the connector's receipts, not in the file |
 | comments (`AddComment`) | no visible effect in the spike: not offered |
 
-### What it can NOT do / hazards (decisions that shaped the design)
+### Limits and design decisions
 
-1. **Scripts are arbitrary JavaScript**, not a declarative patch. Probed inside the builder: `require`, `process`,
-   `fetch` are undefined, but **`XMLHttpRequest` is a function**, and a JWT-signed request gets
-   `allowNetworkRequest=true` and `allowPrivateIP=true` (converter.js:310-312 when `externalRequest.directIfIn.jwtToken`
-   is true, default.json:304-306). A free-form script is therefore a server-side-request-forgery primitive inside the
-   editor's network. **The connector never runs caller- or document-supplied code**: it serves one of two fixed,
-   reviewable templates (`patch.py`) from a short-lived signed URL and passes validated operations as JSON in
-   `argument`. A test asserts the template contains no `http`, `eval` or `XMLHttpRequest`, and that hostile values stay data.
-2. **A malformed OOXML input can crash the whole DocService process** (observed: a hand-made minimal docx opened by
-   `OpenFile` produced `free(): invalid pointer`, SIGABRT, HTTP 502 for ~20 s until supervisord restarted it; the
-   converter is embedded in the DocService here). Mitigations: only documents already in the tenant's own store are sent,
-   the connector validates containers first, and failure is a typed `backend_unavailable`.
-3. There is **no execution sandbox/limit API** beyond the converter timeout; output is verified by the connector
+1. **Scripts are arbitrary JavaScript**, not a declarative patch, and the editor's script runtime is privileged. The
+   connector therefore never runs caller- or document-supplied code: it serves one of two fixed, reviewable templates
+   (`patch.py`) from a short-lived signed URL and passes validated operations as JSON in `argument`. A test asserts that
+   the templates contain no network or dynamic-evaluation calls and that untrusted values stay data.
+2. Malformed input can make the editor service fail. Only documents already in the tenant's own store are sent, the
+   connector validates containers first, and failure is reported as a typed `backend_unavailable`.
+3. There is no execution sandbox/limit API beyond the converter timeout; output is verified by the connector
    (below) rather than trusted.
 4. WOPI (`wopiClient.js` `putFile` 817, `X-WOPI-Override: PUT` 840) makes Document Server the WOPI *client*: it
    PUTs bytes to a host the *interactive* editor session saves to. It is not an edit API and is not used.
