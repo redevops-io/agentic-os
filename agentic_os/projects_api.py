@@ -916,27 +916,56 @@ ENV_SOURCE_ROOTS = "PROJECTS_SOURCE_ROOTS"   # os.pathsep-separated folders anon
 
 
 def _source_roots() -> List[str]:
+    """The configured allow-list. Only absolute, non-filesystem-root folders count: a relative entry depends on the
+    process's working directory and ``/`` would allow everything, so both are ignored (and logged)."""
+    import logging
     import os
-    return [os.path.realpath(os.path.expanduser(r)) for r in
-            os.environ.get(ENV_SOURCE_ROOTS, "").split(os.pathsep) if r.strip()]
+    out: List[str] = []
+    for r in os.environ.get(ENV_SOURCE_ROOTS, "").split(os.pathsep):
+        if not r.strip():
+            continue
+        expanded = os.path.expanduser(r.strip())
+        if "\x00" in expanded or not os.path.isabs(expanded):
+            logging.getLogger(__name__).warning("%s: ignoring non-absolute entry", ENV_SOURCE_ROOTS)
+            continue
+        real = os.path.realpath(expanded)
+        if real == os.path.dirname(real):
+            logging.getLogger(__name__).warning("%s: ignoring filesystem root entry", ENV_SOURCE_ROOTS)
+            continue
+        out.append(real)
+    return out
 
 
-def authorize_source_locations(source_specs: List[dict], authorization: Optional[str]) -> None:
+def authorize_source_locations(source_specs: List[dict], authorization: Optional[str]) -> List[dict]:
     """HTTP guard for ``confirm_and_connect_sources``: a ``files`` source is scanned from the SERVER's
     filesystem, so every one must resolve (symlinks and ``..`` included) under ``$PROJECTS_SOURCE_ROOTS``;
-    otherwise the caller must present the control token (``require_control_token``: 503 unset, 401 wrong)."""
+    otherwise the caller must present the control token (``require_control_token``: 503 unset, 401 wrong).
+
+    Returns the specs with every file location replaced by the path that was checked (the realpath), so the
+    connector scans exactly what was authorised. A location containing a NUL byte is a 422."""
     import os
     roots = _source_roots()
+    resolved: List[dict] = []
+    token_checked = False
     for s in source_specs or []:
-        kind = str((s or {}).get("kind", "files") or "files").lower()
+        s = dict(s or {})
+        kind = str(s.get("kind", "files") or "files").lower()
         if kind not in ("files", "file", "folder"):
+            resolved.append(s)
             continue
-        loc = os.path.realpath(os.path.expanduser(str((s or {}).get("location", "") or "")))
+        raw = str(s.get("location", "") or "")
+        if "\x00" in raw:
+            raise HTTPException(422, "invalid location")
+        loc = os.path.realpath(os.path.expanduser(raw))
+        s["location"] = loc
+        resolved.append(s)
         if any(loc == r or loc.startswith(r.rstrip(os.sep) + os.sep) for r in roots):
             continue
-        from agentic_os.mission.control_auth import require_control_token
-        require_control_token(authorization)
-        return
+        if not token_checked:
+            from agentic_os.mission.control_auth import require_control_token
+            require_control_token(authorization)
+            token_checked = True
+    return resolved
 
 
 def confirm_and_connect_sources(project_id: str, source_specs: List[dict], confirmed_by: str,
@@ -1534,8 +1563,11 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
         # A ``files`` source makes THIS server walk a client-chosen path, so an anonymous caller may only
         # confirm folders under an operator-allowed root ($PROJECTS_SOURCE_ROOTS); anything else needs the
         # control token (fail closed: 503 when unset, 401 when wrong).
-        authorize_source_locations(req.sources, authorization)
-        return confirm_and_connect_sources(req.project_id, req.sources, req.confirmed_by)
+        specs = authorize_source_locations(req.sources, authorization)
+        try:
+            return confirm_and_connect_sources(req.project_id, specs, req.confirmed_by)
+        except ValueError as e:                       # unknown kind / access mode / embedded NUL: the caller's input
+            raise HTTPException(422, str(e))
 
     # Governed Agent Gateway — let an EXTERNAL agent (Claude/ChatGPT/Cursor) reach a read-only,
     # governed slice of this deployment over MCP + REST. Opt-in: mounted only when
