@@ -47,3 +47,7 @@ billing, s3, posthog** — each is one `find`/`delete` function away.
 - Rate limits (in-memory, per replica): `/intake`, `/request`, `/verify`, `/export` use a per-client-IP token bucket (`PRIVACY_RATE_PER_MIN` default 20, burst 10) and answer 429 + `Retry-After`; `/intake` additionally caps verification emails per address (`PRIVACY_INTAKE_PER_EMAIL_HOUR`, default 5/hour). The client IP is the socket peer unless `PRIVACY_TRUST_PROXY=true` (first `X-Forwarded-For` hop; enable ONLY behind a proxy that overwrites the header).
 - `POST /retention` is a counts-only dry run unless operator Basic auth AND `confirm:true`.
 - Env: `OPERATOR_BASIC_AUTH_USER`/`OPERATOR_BASIC_AUTH_PASS` (or `OPERATOR_BASIC_AUTH`/`OUTREACH_BASIC_AUTH` = `user:pass`; unset => fail closed), `PRIVACY_DEV_MODE` (expose verify link; default false), `PRIVACY_DEMO_MODE` (one-click flow on synthetic data; refuses to start with real connectors configured), `PRIVACY_VERIFY_TTL_SECONDS` (86400), `PRIVACY_EXPORT_TTL_SECONDS` (600), `PRIVACY_LLM_SUMMARY` (counts/categories-only narration; default off).
+
+## Upgrading
+
+The image runs as uid 10001. Re-own an existing `/data` volume once: `docker run --rm --user 0 -v <volume>:/data python:3.12-slim chown -R 10001:10001 /data`. See `apps/README.md`.

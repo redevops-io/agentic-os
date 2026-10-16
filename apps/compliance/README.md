@@ -138,3 +138,7 @@ written by `scan.sh` into `results/scan-target.json` when it fetches the datastr
 ## Operating notes
 
 Writes are approval-gated in `core`; the app's routes execute them only for requests with valid operator Basic auth (`OPERATOR_BASIC_AUTH=user:pass`, fail closed when unset). Narration goes through `agentic_os.app.llm.governed_text` (fail closed).
+
+## Docker socket access
+
+The image runs as uid 10001. If you mount `/var/run/docker.sock`, add the socket group to the container (compose `group_add: ["<gid>"]`, from `stat -c %g /var/run/docker.sock`). See `apps/README.md`.

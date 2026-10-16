@@ -28,3 +28,17 @@ The catalog that binds these to the fleet — repo, agents, and which tasks need
 `lifecycle` · `guide` · `agentic-crm` · `agentic-privacy` — plus `infra` (deploy / teardown /
 cost-audit / drift) and `sky` (SkyPilot elastic-compute), the operators that turn a deployment
 into a governed mission.
+
+## Upgrading images
+
+App images run as an unprivileged user (uid 10001). `/data` is owned by that user inside the image, and the
+container refuses to start with a clear message if `/data` is not writable.
+
+- Existing state volumes created by an earlier (root) image must be re-owned once. For a named volume
+  (agentic-privacy and growth-assistant keep state in `/data`; any other app given a state volume is the same):
+  `docker run --rm --user 0 -v <volume>:/data python:3.12-slim chown -R 10001:10001 /data`
+  Bind mounts need the same `chown` on the host path.
+- Apps that talk to the Docker socket need the socket's group added to the container, e.g. compose
+  `group_add: ["<docker gid>"]` (find it with `stat -c %g /var/run/docker.sock`):
+  - edge-sentinel (docker CLI used for `cscli`, Trivy/Syft/Cosign inspection)
+  - compliance (only when `scan.sh` runs in its docker mode)
