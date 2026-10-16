@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 )
 
 // Capability is a capability spec bound to its handler.
@@ -56,6 +57,14 @@ type Operator struct {
 	handlers map[string]Handler
 	seen     map[string]map[string]any
 	Calls    [][2]string // (capability, idempotency_key) — for assertions
+	mu       sync.Mutex  // guards seen + Calls
+}
+
+// CallsSnapshot returns a copy of the recorded calls, safe to read while Invoke runs concurrently.
+func (o *Operator) CallsSnapshot() [][2]string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([][2]string(nil), o.Calls...)
 }
 
 func NewOperator(name string, caps []Capability) *Operator {
@@ -76,7 +85,10 @@ func NewOperator(name string, caps []Capability) *Operator {
 
 func (o *Operator) Invoke(capability string, inputs map[string]any, idempotencyKey string) (map[string]any, error) {
 	if idempotencyKey != "" {
-		if r, ok := o.seen[idempotencyKey]; ok {
+		o.mu.Lock()
+		r, ok := o.seen[idempotencyKey]
+		o.mu.Unlock()
+		if ok {
 			return r, nil
 		}
 	}
@@ -84,7 +96,9 @@ func (o *Operator) Invoke(capability string, inputs map[string]any, idempotencyK
 	if !ok {
 		return nil, fmt.Errorf("operator %q has no capability %q", o.Name, capability)
 	}
+	o.mu.Lock()
 	o.Calls = append(o.Calls, [2]string{capability, idempotencyKey})
+	o.mu.Unlock()
 	result, err := fn(inputs)
 	if err != nil {
 		return nil, err
@@ -93,7 +107,9 @@ func (o *Operator) Invoke(capability string, inputs map[string]any, idempotencyK
 		result = map[string]any{}
 	}
 	if idempotencyKey != "" {
+		o.mu.Lock()
 		o.seen[idempotencyKey] = result
+		o.mu.Unlock()
 	}
 	return result, nil
 }

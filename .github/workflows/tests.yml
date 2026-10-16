@@ -64,3 +64,15 @@ jobs:
         run: |
           git diff --exit-code
           test -z "$(git status --porcelain --untracked-files=all)" || { git status --short; echo "untracked files left by tests"; exit 1; }
+
+  go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+      - name: Vet and race tests
+        working-directory: go
+        run: go vet ./... && go test -race ./...
