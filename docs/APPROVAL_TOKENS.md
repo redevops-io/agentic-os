@@ -29,7 +29,7 @@ inputs, so an approved retry is not served a cached staged result. Identical ret
 **Not covered.**
 - Per-handler gating: apps must still stage unless `_approval` (no generic block of `approval_required`).
 - `/agent/run` and other app endpoints that bypass `/invoke` (handled in apps).
-- Unauthenticated read capabilities on `/invoke`/`/capabilities`; this adds no caller authentication.
+- Unauthenticated read capabilities on `/invoke`/`/capabilities`; this adds no caller authentication (operator `/invoke` itself is bearer-authenticated, see README).
 - Secret rotation, and a leaked secret (it can mint any approval); a token is not bound to a caller identity.
 
 ## Mission / node binding semantics (fail closed)

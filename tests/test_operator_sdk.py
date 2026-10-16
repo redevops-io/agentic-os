@@ -173,3 +173,65 @@ def test_approved_retry_is_not_served_the_cached_staged_result():
     op = Operator("o", [capability("a", lambda i: {"done": True} if i.get("_approval") else {"staged": True})])
     assert op.invoke("a", {"x": 1}, "k") == {"staged": True}
     assert op.invoke("a", {"x": 1, "_approval": {"approved": True}}, "k") == {"done": True}
+
+
+# ── /invoke authentication ────────────────────────────────────────────────────────────────────────────────────
+def _auth_client(monkeypatch, **env):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from agentic_os.mission.operator_sdk import Operator
+    for k in ("AGENTIC_OS_CONTROL_TOKEN", "AGENTIC_OS_TENANT_TOKENS", "AGENTIC_OS_APPROVER_TOKENS",
+              "AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS"):
+        monkeypatch.delenv(k, raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    op = Operator("authop", [capability("t.ping", lambda i: {"pong": True}, provides=["pong"])])
+    app = FastAPI()
+    app.include_router(op.router())
+    return TestClient(app)
+
+
+_PING = {"capability": "t.ping", "inputs": {}}
+
+
+def test_invoke_allowed_with_valid_bearer(monkeypatch):
+    c = _auth_client(monkeypatch, AGENTIC_OS_CONTROL_TOKEN="s3cret-token")
+    r = c.post("/invoke", json=_PING, headers={"Authorization": "Bearer s3cret-token"})
+    assert r.status_code == 200 and r.json()["result"]["pong"] is True
+
+
+def test_invoke_allowed_with_tenant_token(monkeypatch):
+    c = _auth_client(monkeypatch, AGENTIC_OS_TENANT_TOKENS="acme=tenant-tok")
+    assert c.post("/invoke", json=_PING, headers={"Authorization": "Bearer tenant-tok"}).status_code == 200
+
+
+def test_invoke_denied_missing_or_wrong_credential(monkeypatch):
+    c = _auth_client(monkeypatch, AGENTIC_OS_CONTROL_TOKEN="s3cret-token")
+    assert c.post("/invoke", json=_PING).status_code == 401
+    assert c.post("/invoke", json=_PING, headers={"Authorization": "Bearer nope"}).status_code == 401
+
+
+def test_invoke_denied_for_approver_credential(monkeypatch):
+    c = _auth_client(monkeypatch, AGENTIC_OS_CONTROL_TOKEN="s3cret-token", AGENTIC_OS_APPROVER_TOKENS="acme=appr-tok")
+    assert c.post("/invoke", json=_PING, headers={"Authorization": "Bearer appr-tok"}).status_code == 403
+
+
+def test_invoke_fails_closed_without_configuration(monkeypatch):
+    c = _auth_client(monkeypatch)
+    assert c.post("/invoke", json=_PING).status_code == 503
+
+
+def test_invoke_dev_flag_opens_only_when_no_credential_configured(monkeypatch):
+    c = _auth_client(monkeypatch, AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS="1")
+    assert c.post("/invoke", json=_PING).status_code == 200
+    c = _auth_client(monkeypatch, AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS="1", AGENTIC_OS_CONTROL_TOKEN="s3cret-token")
+    assert c.post("/invoke", json=_PING).status_code == 401
+
+
+def test_runtime_http_client_sends_the_control_token(monkeypatch):
+    from agentic_os.mission.operators import HTTPOperatorClient
+    monkeypatch.setenv("AGENTIC_OS_CONTROL_TOKEN", "s3cret-token")
+    seen = {}
+    HTTPOperatorClient({"op": "http://op"}, transport=lambda u, b, h, t: seen.update(h=h) or {"result": {}}
+                       ).invoke("op", "t.ping", {}, "k")
+    assert seen["h"]["Authorization"] == "Bearer s3cret-token"

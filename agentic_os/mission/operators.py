@@ -72,6 +72,9 @@ class HTTPOperatorClient:
             else:
                 _warn_no_secret()
         headers = {"Idempotency-Key": idempotency_key} if idempotency_key else {}
+        from .control_auth import configured_token  # noqa: PLC0415
+        if configured_token():                      # operators require the same bearer credential as the runtime
+            headers["Authorization"] = f"Bearer {configured_token()}"
         data = post_json(f"{self._base(operator)}/invoke", body, headers, self.timeout, self.transport)
         # tolerate either {"result": {...}} or a bare result object
         return data.get("result", data) if isinstance(data, dict) else {"result": data}

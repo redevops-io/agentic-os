@@ -59,3 +59,11 @@ def _isolate_platform_secrets(monkeypatch, tmp_path):
     for e in ("VAULT_ADDR", "VAULT_TOKEN", "AGENTIC_OS_APPROVAL_SECRET"):
         monkeypatch.delenv(e, raising=False)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _operator_invoke_open_for_legacy_tests(monkeypatch):
+    """Operator /invoke fails closed without a credential; pre-existing handler tests exercise it directly, so
+    they opt into the documented dev flag. Auth tests clear it explicitly."""
+    monkeypatch.setenv("AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS", "1")
+    yield
