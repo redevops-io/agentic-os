@@ -24,6 +24,23 @@ def _fsync_enabled() -> bool:
     return os.environ.get("AGENTIC_OS_EVENT_FSYNC", "1").strip().lower() not in ("0", "false", "no", "off")
 
 
+def _mission_index(store) -> "dict[str, list[Event]]":
+    """Per-mission view of ``store._events``, built incrementally (each event is indexed once), so lookups and
+    ``mission_ids`` stay linear overall instead of rescanning the whole log per call."""
+    lock = store.__dict__.setdefault("_idx_lock", threading.Lock())
+    with lock:
+        idx = store.__dict__.setdefault("_idx", {})
+        n = store.__dict__.get("_idx_n", 0)
+        events = store._events
+        if n > len(events):                       # the log was replaced/truncated: rebuild
+            idx.clear()
+            n = 0
+        for e in events[n:]:
+            idx.setdefault(e.mission_id, []).append(e)
+        store._idx_n = len(events)
+        return idx
+
+
 @runtime_checkable
 class EventStoreProtocol(Protocol):
     """The append-only event-log interface the kernel depends on. Implementations are interchangeable so long
@@ -152,17 +169,13 @@ class EventStore:
         self._subscribers.append(cb)
 
     def for_mission(self, mission_id: str) -> list[Event]:
-        return [e for e in self._events if e.mission_id == mission_id]
+        return list(_mission_index(self).get(mission_id, ()))
 
     def all(self) -> list[Event]:
         return list(self._events)
 
     def mission_ids(self) -> list[str]:
-        seen: list[str] = []
-        for e in self._events:
-            if e.mission_id and e.mission_id not in seen:
-                seen.append(e.mission_id)
-        return seen
+        return [m for m in list(_mission_index(self)) if m]
 
 
 # Durable store names: ``EventStore`` is the canonical durable (JSONL-backed) implementation; ``JsonlEventStore``
@@ -196,17 +209,13 @@ class MemoryEventStore:
         self._subscribers.append(cb)
 
     def for_mission(self, mission_id: str) -> list[Event]:
-        return [e for e in self._events if e.mission_id == mission_id]
+        return list(_mission_index(self).get(mission_id, ()))
 
     def all(self) -> list[Event]:
         return list(self._events)
 
     def mission_ids(self) -> list[str]:
-        seen: list[str] = []
-        for e in self._events:
-            if e.mission_id and e.mission_id not in seen:
-                seen.append(e.mission_id)
-        return seen
+        return [m for m in list(_mission_index(self)) if m]
 
 
 # Durable store names: ``EventStore`` is the canonical durable (JSONL-backed) implementation; ``JsonlEventStore``
