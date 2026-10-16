@@ -136,3 +136,8 @@ python3 -m uvicorn app:app --host 0.0.0.0 --port 8206
     template) and **stages it as a real `DRAFT`** row in Postiz. Never publishes.
   - `"publish"` `{id}` → **approval-gated** (module declares `approval_required:["publish"]`).
     Returns `{"status":"pending_approval", ...}` and performs **no** write/publish.
+    The staging response carries `approval_binding` (`content_hash`, `request_id`); pass both as mission inputs so
+    the approval only covers that request. While a request is pending its content is fixed: staging the same post
+    again after an edit is refused. To pick up an edit, an authenticated operator calls publish with
+    `"restage": true`; this invalidates the old request, opens a new `request_id` for the current content, and any
+    approval for the old request stays refused. Anonymous callers cannot restage.

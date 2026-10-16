@@ -354,7 +354,7 @@ def _content_hash(text: str) -> str:
 # marker only says "a human cleared this node", so the hash the approver was shown is remembered here and the
 # publish step compares it with what Postiz holds now. In-memory: after a restart nothing is bound and a publish
 # fails closed until the post is staged again.
-_BINDINGS: "dict[str, tuple[str, float]]" = {}
+_BINDINGS: "dict[str, tuple[str, float, str]]" = {}
 _BINDINGS_LOCK = threading.Lock()
 _BINDINGS_MAX = 1000
 
@@ -363,8 +363,9 @@ _BINDING_TTL = 24 * 3600.0
 
 
 def _remember_binding(pid: str, content_hash: str) -> bool:
-    """Record the hash a post was staged with. First stager wins while the binding is live: a later call with
-    different content does not replace it (returns False); it can be re-staged after the TTL or a publish."""
+    """Record the hash (and a new request id) a post was staged with. First stager wins while the binding is
+    live: a later call with different content does not replace it (returns False). An authenticated restage
+    replaces it explicitly (see ``_restage``)."""
     if not (pid and content_hash):
         return False
     now = time.time()
@@ -372,11 +373,26 @@ def _remember_binding(pid: str, content_hash: str) -> bool:
         cur = _BINDINGS.get(pid)
         if cur and now - cur[1] < _BINDING_TTL and cur[0] != content_hash:
             return False
-        _BINDINGS.pop(pid, None)
-        _BINDINGS[pid] = (content_hash, cur[1] if cur and cur[0] == content_hash else now)
+        if cur and now - cur[1] < _BINDING_TTL:
+            return True
+        _BINDINGS[pid] = (content_hash, now, uuid.uuid4().hex[:12])
         while len(_BINDINGS) > _BINDINGS_MAX:
             _BINDINGS.pop(next(iter(_BINDINGS)))
     return True
+
+
+def _restage(pid: str, content_hash: str) -> str:
+    """Invalidate the old binding for ``pid`` and open a NEW request id for the current content."""
+    with _BINDINGS_LOCK:
+        _BINDINGS.pop(pid, None)
+    _remember_binding(pid, content_hash)
+    return _request_id(pid)
+
+
+def _request_id(pid: str) -> str:
+    with _BINDINGS_LOCK:
+        cur = _BINDINGS.get(pid)
+        return cur[2] if cur and time.time() - cur[1] < _BINDING_TTL else ""
 
 
 def _recorded_binding(pid: str) -> str:
@@ -452,6 +468,17 @@ def publish(body: dict) -> dict:
     content_hash = _content_hash((cur or {}).get("content", "") or (target or {}).get("text", ""))
     where = f" on {target['network']} (“{target['text'][:60]}…”)" if target else ""
 
+    if body.get("restage") is True and body.get("_approval") and cur is not None:
+        # Only a trusted (runtime-delivered / operator) call carries ``_approval``; the open HTTP surface strips it,
+        # so anonymous callers can never clear a binding.
+        rid = _restage(pid, content_hash)
+        return {"status": "pending_approval", "action": "publish", "id": pid, "requires": "human approval",
+                "publish_staged": True, "restaged": True,
+                "approval_binding": {"post_id": pid, "integration_id": cur.get("integration_id"),
+                                     "content_hash": content_hash, "request_id": rid},
+                "summary": f"Post {pid} re-staged with a new request (content hash {content_hash}); earlier "
+                           "approvals no longer apply."}
+
     if not body.get("_approval"):
         if cur is not None and not _remember_binding(pid, content_hash):
             return {"status": "error", "action": "publish", "id": pid, "publish_staged": False,
@@ -462,7 +489,7 @@ def publish(body: dict) -> dict:
             "status": "pending_approval", "action": "publish", "id": pid, "requires": "human approval",
             "publish_staged": True,
             "approval_binding": {"post_id": pid, "integration_id": (cur or {}).get("integration_id"),
-                                 "content_hash": content_hash},
+                                 "content_hash": content_hash, "request_id": _request_id(pid)},
             "summary": (f"Publishing post {pid}{where} is staged and awaiting human approval "
                         f"(content hash {content_hash}). The agent never auto-publishes."),
         }
@@ -478,6 +505,11 @@ def publish(body: dict) -> dict:
     # an approver-supplied value, then the hash recorded when this post was first staged.
     approved_hash = (body.get("content_hash") or (body.get("_approval") or {}).get("content_hash")
                      or _recorded_binding(pid))
+    want_req = body.get("request_id")
+    if want_req and want_req != _request_id(pid):
+        return {"status": "error", "action": "publish", "id": pid, "publish_staged": True,
+                "publish_executed": False,
+                "summary": "this approval belongs to a superseded request — refusing to publish."}
     if not approved_hash or approved_hash != content_hash:
         changed = "changed since approval" if approved_hash else "not bound to the approved hash"
         return {"status": "error", "action": "publish", "id": pid, "publish_staged": True,

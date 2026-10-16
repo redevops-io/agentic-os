@@ -11,6 +11,7 @@ from __future__ import annotations
 import ipaddress
 import re
 import socket
+import unicodedata
 import urllib.parse
 from typing import Callable, Iterable
 
@@ -20,6 +21,7 @@ _NUMERIC_LABEL = re.compile(r"^(0x[0-9a-f]*|[0-9]+)$")
 _NAT64 = ipaddress.ip_network("64:ff9b::/96")
 _SIXTO4 = ipaddress.ip_network("2002::/16")
 
+DEFAULT_PORTS = (80, 443)
 Resolver = Callable[[str], Iterable[str]]
 
 
@@ -40,15 +42,38 @@ def _addr_public(ip) -> bool:
     return ip.is_global and not ip.is_multicast
 
 
-def public_url_problem(url: str, resolver: "Resolver | None" = None) -> str:
+def url_host_raw(u) -> str:
+    """The host exactly as written (lowercased), to detect characters the parser would fold."""
+    netloc = u.netloc.rsplit("@", 1)[-1]
+    if netloc.startswith("["):
+        return netloc[1:].split("]")[0].lower()
+    return netloc.rsplit(":", 1)[0].lower() if netloc.count(":") == 1 else netloc.lower()
+
+
+def _script(ch: str) -> str:
+    n = unicodedata.name(ch, "")
+    for k in ("LATIN", "CYRILLIC", "GREEK"):
+        if n.startswith(k):
+            return k
+    return "other"
+
+
+def public_url_problem(url: str, resolver: "Resolver | None" = None,
+                       allowed_ports: "Iterable[int]" = DEFAULT_PORTS) -> str:
     if not isinstance(url, str) or not url or re.search(r"[\s\x00-\x1f\x7f]", url):
         return "invalid url"
     try:
         u = urllib.parse.urlsplit(url)
-        host = (u.hostname or "").lower().rstrip(".")
-        u.port  # noqa: B018 - raises on a malformed port
+        host = (u.hostname or "").lower()
+        port = u.port
     except ValueError:
         return "invalid url"
+    if not host.isascii() or host != url_host_raw(u):
+        return "host must be plain ASCII (use the punycode form)"
+    if port is not None and port not in set(allowed_ports):
+        return "port not allowed"
+    if (u.hostname or "").endswith("."):
+        return "trailing dot in host"
     if u.scheme not in ("http", "https") or not host:
         return "url must be http(s) with a host"
     if u.username is not None or u.password is not None:
@@ -60,6 +85,16 @@ def public_url_problem(url: str, resolver: "Resolver | None" = None) -> str:
     if ip is not None:
         return "" if _addr_public(ip) else "host must be a public address"
     labels = host.split(".")
+    if "" in labels:
+        return "invalid host"
+    for lab in labels:
+        if lab.startswith("xn--"):
+            try:
+                lab = lab.encode("ascii").decode("idna")
+            except UnicodeError:
+                return "invalid internationalised host"
+        if len({_script(c) for c in lab if c.isalpha()} - {"other"}) > 1:
+            return "mixed-script host label"
     if all(_NUMERIC_LABEL.match(x) for x in labels) or _NUMERIC_LABEL.match(labels[-1]):
         return "numeric host must be a canonical address"
     if len(labels) < 2 or host == "localhost" or any(host.endswith(s) for s in INTERNAL_SUFFIXES) \

@@ -102,3 +102,16 @@ def test_mission_input_hash_binds_the_approval_to_the_staged_content(monkeypatch
     rt = _runtime()
     _approve_publish(rt, content_hash=staged)
     assert _FakePsql.updates == []
+
+
+def test_restage_opens_a_new_request_and_old_approval_stays_refused(monkeypatch):
+    a = core.publish({"id": "post-1"})["approval_binding"]
+    _edit(monkeypatch, "version B")
+    assert core.publish({"id": "post-1"})["status"] == "error"          # anonymous cannot move the binding
+    assert core.publish({"id": "post-1", "restage": True})["status"] == "error"
+    new = core.publish({"id": "post-1", "restage": True, "_approval": {"approved": True}})["approval_binding"]
+    assert new["request_id"] != a["request_id"] and new["content_hash"] == core._content_hash("version B")
+    _approve_publish(_runtime(), content_hash=a["content_hash"], request_id=a["request_id"])
+    assert _FakePsql.updates == []                                       # old request: refused
+    _approve_publish(_runtime(), content_hash=new["content_hash"], request_id=new["request_id"])
+    assert len(_FakePsql.updates) == 1                                   # new request publishes version B

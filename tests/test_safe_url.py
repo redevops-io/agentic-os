@@ -34,3 +34,18 @@ def test_unresolvable_fails_closed():
 @pytest.mark.parametrize("url", ["https://example.com/pricing", "http://8.8.8.8/", "https://[2606:4700::1111]/"])
 def test_public_accepted(url):
     assert public_url_problem(url, PUB) == ""
+
+
+@pytest.mark.parametrize("url", [
+    "http://example.com./", "http://example.com:0/", "http://example.com:8080/", "http://example.com:22/",
+    "http://１２７.0.0.1/", "http://127.0.0.１/", "http://exаmple.com/", "http://ехample.com/", "http://exämple.com/",
+])
+def test_static_host_and_port_checks(url):
+    assert public_url_problem(url, PUB) != ""
+
+
+def test_ports_and_punycode():
+    assert public_url_problem("https://example.com:443/", PUB) == ""
+    assert public_url_problem("http://example.com:8080/", PUB, allowed_ports=(80, 8080)) == ""
+    assert public_url_problem("http://xn--bcher-kva.example.com/", PUB) == ""
+    assert public_url_problem("http://xn--exmple-cua.com/", PUB) == ""       # punycode form resolves normally
