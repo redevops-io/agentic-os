@@ -3,14 +3,14 @@
 # run from the canonical operators instead of a bespoke per-agent service. Pick the suite with SUITE=.
 #
 # Build context is the agentic-os repo ROOT (so the image can COPY apps/):
-#     docker build -f apps/_suite-server/Dockerfile --build-arg KERNEL_REF=v0.3.37 -t suite-server .
+#     docker build -f apps/_suite-server/Dockerfile --build-arg KERNEL_REF=v0.3.38 -t suite-server .
 #     docker run -e SUITE=revenue -p 8300:8300 suite-server
 #
 # The composed app operators are pure (httpx against their cores at invoke time — no web framework in
 # core.py), so only fastapi/uvicorn/httpx/pyyaml + the agentic_os kernel (app_kit) are required.
 FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
 # app_kit (incl. suite_server) is pinned to a kernel release tag (same tag as every app image); override to bump.
-ARG KERNEL_REF=v0.3.37
+ARG KERNEL_REF=v0.3.38
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git \
  && pip install --no-cache-dir "fastapi>=0.110" "uvicorn[standard]>=0.27" "httpx>=0.27" "pyyaml>=6.0" \
