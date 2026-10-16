@@ -31,7 +31,8 @@ def build_lifecycle_operator() -> Operator:
             provides=["campaign_drafted"],
             outputs={"campaign_drafted": "True only if the campaign was re-fetched from Listmonk by id and its real status is 'draft'",
                      "campaign_verified": "True only if the read-back GET /api/campaigns/{id} matched the create response"},
-            side_effecting=True, approval_required=False,
+            side_effecting=True,
+            compensation={"supported": False, "disposition": "PRESERVE", "notes": "a composed campaign draft is kept for review; it is never sent or auto-removed by a failed workflow"}, approval_required=False,
             permissions=["lifecycle:write"], estimated_value="high", deterministic=False, latency_ms=1200,
             concurrency_key="provider:listmonk", max_parallelism=2,  # independent DRAFT campaigns, bounded
         ),

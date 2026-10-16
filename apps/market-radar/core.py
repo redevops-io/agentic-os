@@ -186,6 +186,18 @@ def fetch_activity(force: bool = False) -> dict:
 
 
 # ── agentic actions (deterministic changedetection API work) ─────────────────
+def _watch_url_error(url: str) -> str:
+    """Why a watch URL is refused ('' when acceptable). Fails closed if the shared policy is unavailable.
+
+    The page is fetched by changedetection, not by this app, so the check here is point-in-time: that service
+    must also be deployed with an egress policy that blocks private, loopback and link-local destinations."""
+    try:
+        from agentic_os.safe_url import public_url_problem
+    except Exception:  # noqa: BLE001
+        return "url policy unavailable"
+    return public_url_problem(url)
+
+
 def add_watch(body: dict) -> dict:
     """Create a new monitor: POST /api/v1/watch. Adding a watch is non-destructive
     (it only starts observing a public page), so no human approval is required.
@@ -199,6 +211,9 @@ def add_watch(body: dict) -> dict:
     if not url:
         return {"status": "error", "action": "add_watch",
                 "error": "missing 'url'", "requires": "none"}
+    bad = _watch_url_error(url)
+    if bad:
+        return {"status": "error", "action": "add_watch", "error": bad, "requires": "none"}
     payload = {"url": url, "title": title or url, "tag": tag}
     try:
         with httpx.Client(timeout=10.0) as client:

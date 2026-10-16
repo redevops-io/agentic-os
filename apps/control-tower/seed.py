@@ -27,7 +27,7 @@ import urllib.request
 
 API = os.environ.get("METABASE_API_URL", "http://localhost:3001").rstrip("/")
 ADMIN_EMAIL = os.environ.get("METABASE_ADMIN_EMAIL", "admin@meridianwealth.test")
-ADMIN_PASSWORD = os.environ.get("METABASE_ADMIN_PASSWORD", "MeridianWealth!2026")
+ADMIN_PASSWORD = os.environ.get("METABASE_ADMIN_PASSWORD", "").strip()
 DB_NAME = "Meridian Wealth"
 PG = {
     "host": os.environ.get("PGHOST", "control-tower-db"),
@@ -169,6 +169,8 @@ def create_cards_and_dashboard(token: str, db_id: int):
 
 
 def main() -> int:
+    if not ADMIN_PASSWORD:
+        raise SystemExit("METABASE_ADMIN_PASSWORD is required (set it in the environment)")
     token = get_session()
     db_id = ensure_database(token)
     wait_for_tables(token, db_id)

@@ -571,6 +571,8 @@ async def agent_run(request: Request) -> JSONResponse:
         body = _strip_approval(await request.json())
     except Exception:
         body = {}
+    body = core.with_operator_approval(body if isinstance(body, dict) else {},
+                                       request.headers.get("authorization"))
     action = (body or {}).get("action", "")
     if action in ACTIONS:
         return JSONResponse(ACTIONS[action](body or {}))

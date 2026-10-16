@@ -63,7 +63,8 @@ def build_growth_assistant_operator() -> Operator:
             provides=["growth_playbook"],
             outputs={"growth_playbook": "4-pillar zero-to-traction playbook (saved asset)"},
             estimated_value="high", deterministic=False, latency_ms=1500,
-            side_effecting=True,  # writes a local asset JSON (not read_only)
+            side_effecting=True,
+            compensation={"supported": False, "disposition": "PRESERVE", "notes": "a generated local asset is kept for review; it is never pushed or auto-removed by a failed workflow"},  # writes a local asset JSON (not read_only)
         ),
         capability(
             "assistant.subreddit_plan",
@@ -71,14 +72,16 @@ def build_growth_assistant_operator() -> Operator:
             provides=["subreddit_plan"],
             outputs={"subreddit_plan": "brand-subreddit incubation plan + seed threads"},
             estimated_value="medium", deterministic=False, latency_ms=1600,
-            side_effecting=True,  # writes a local asset JSON (not read_only)
+            side_effecting=True,
+            compensation={"supported": False, "disposition": "PRESERVE", "notes": "a generated local asset is kept for review; it is never pushed or auto-removed by a failed workflow"},  # writes a local asset JSON (not read_only)
         ),
         capability(
             "assistant.founder_content",
             _generate_only(core.founder_content, "founder_content"),
             provides=["founder_content"],
             outputs={"founder_content": "founder-voice posts; push=true only stages (see assistant.push_assets)"},
-            side_effecting=True,  # writes a local asset JSON; never pushes
+            side_effecting=True,
+            compensation={"supported": False, "disposition": "PRESERVE", "notes": "a generated local asset is kept for review; it is never pushed or auto-removed by a failed workflow"},  # writes a local asset JSON; never pushes
             estimated_value="high", deterministic=False, latency_ms=1600,
         ),
         capability(
@@ -86,7 +89,8 @@ def build_growth_assistant_operator() -> Operator:
             _generate_only(core.community_blueprint, "community_blueprint"),
             provides=["community_blueprint"],
             outputs={"community_blueprint": "lead-magnet community blueprint; push=true only stages"},
-            side_effecting=True,  # writes a local asset JSON; never pushes
+            side_effecting=True,
+            compensation={"supported": False, "disposition": "PRESERVE", "notes": "a generated local asset is kept for review; it is never pushed or auto-removed by a failed workflow"},  # writes a local asset JSON; never pushes
             estimated_value="medium", deterministic=False, latency_ms=1200,
         ),
         capability(
@@ -94,7 +98,8 @@ def build_growth_assistant_operator() -> Operator:
             _generate_only(core.cold_outreach, "cold_outreach"),
             provides=["cold_outreach_kit"],
             outputs={"cold_outreach_kit": "audit-Loom outreach kit; push=true only stages"},
-            side_effecting=True,  # writes a local asset JSON; never pushes
+            side_effecting=True,
+            compensation={"supported": False, "disposition": "PRESERVE", "notes": "a generated local asset is kept for review; it is never pushed or auto-removed by a failed workflow"},  # writes a local asset JSON; never pushes
             estimated_value="high", deterministic=False, latency_ms=1500,
         ),
         capability(
@@ -115,7 +120,8 @@ def build_growth_assistant_operator() -> Operator:
             provides=["hire_brief"],
             outputs={"hire_brief": "freelancer JD + vetting scorecard + freelancer search links"},
             estimated_value="medium", deterministic=False, latency_ms=1100,
-            side_effecting=True,  # writes a local asset JSON (not read_only)
+            side_effecting=True,
+            compensation={"supported": False, "disposition": "PRESERVE", "notes": "a generated local asset is kept for review; it is never pushed or auto-removed by a failed workflow"},  # writes a local asset JSON (not read_only)
         ),
         capability(
             "assistant.ask",

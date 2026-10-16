@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import subprocess
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -325,6 +326,7 @@ def draft(body: dict, copy: Callable[[str], str | None] | None = None) -> dict:
                 f"'{post_id}-grp', '{now}', '{now}', 'UNKNOWN');"
             )
             staged = True
+            _remember_binding(post_id, _content_hash(text))
             fetch_activity(force=True)  # refresh cache so the dashboard shows the new draft
         except Exception as e:
             return {"status": "error", "action": "draft", "error": f"failed to stage draft: {e}"}
@@ -346,6 +348,62 @@ def draft(body: dict, copy: Callable[[str], str | None] | None = None) -> dict:
 def _content_hash(text: str) -> str:
     import hashlib
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:16]
+
+
+# post id -> content hash recorded when the post was drafted or staged for approval. The runtime's approval
+# marker only says "a human cleared this node", so the hash the approver was shown is remembered here and the
+# publish step compares it with what Postiz holds now. In-memory: after a restart nothing is bound and a publish
+# fails closed until the post is staged again.
+_BINDINGS: "dict[str, tuple[str, float, str]]" = {}
+_BINDINGS_LOCK = threading.Lock()
+_BINDINGS_MAX = 1000
+
+
+_BINDING_TTL = 24 * 3600.0
+
+
+def _remember_binding(pid: str, content_hash: str) -> bool:
+    """Record the hash (and a new request id) a post was staged with. First stager wins while the binding is
+    live: a later call with different content does not replace it (returns False). An authenticated restage
+    replaces it explicitly (see ``_restage``)."""
+    if not (pid and content_hash):
+        return False
+    now = time.time()
+    with _BINDINGS_LOCK:
+        cur = _BINDINGS.get(pid)
+        if cur and now - cur[1] < _BINDING_TTL and cur[0] != content_hash:
+            return False
+        if cur and now - cur[1] < _BINDING_TTL:
+            return True
+        _BINDINGS[pid] = (content_hash, now, uuid.uuid4().hex[:12])
+        while len(_BINDINGS) > _BINDINGS_MAX:
+            _BINDINGS.pop(next(iter(_BINDINGS)))
+    return True
+
+
+def _restage(pid: str, content_hash: str) -> str:
+    """Invalidate the old binding for ``pid`` and open a NEW request id for the current content."""
+    with _BINDINGS_LOCK:
+        _BINDINGS.pop(pid, None)
+    _remember_binding(pid, content_hash)
+    return _request_id(pid)
+
+
+def _request_id(pid: str) -> str:
+    with _BINDINGS_LOCK:
+        cur = _BINDINGS.get(pid)
+        return cur[2] if cur and time.time() - cur[1] < _BINDING_TTL else ""
+
+
+def _recorded_binding(pid: str) -> str:
+    with _BINDINGS_LOCK:
+        cur = _BINDINGS.get(pid)
+        return cur[0] if cur and time.time() - cur[1] < _BINDING_TTL else ""
+
+
+def _clear_binding(pid: str) -> None:
+    with _BINDINGS_LOCK:
+        _BINDINGS.pop(pid, None)
 
 
 def _valid_post_id(pid: str) -> bool:
@@ -410,12 +468,28 @@ def publish(body: dict) -> dict:
     content_hash = _content_hash((cur or {}).get("content", "") or (target or {}).get("text", ""))
     where = f" on {target['network']} (“{target['text'][:60]}…”)" if target else ""
 
+    if body.get("restage") is True and body.get("_approval") and cur is not None:
+        # Only a trusted (runtime-delivered / operator) call carries ``_approval``; the open HTTP surface strips it,
+        # so anonymous callers can never clear a binding.
+        rid = _restage(pid, content_hash)
+        return {"status": "pending_approval", "action": "publish", "id": pid, "requires": "human approval",
+                "publish_staged": True, "restaged": True,
+                "approval_binding": {"post_id": pid, "integration_id": cur.get("integration_id"),
+                                     "content_hash": content_hash, "request_id": rid},
+                "summary": f"Post {pid} re-staged with a new request (content hash {content_hash}); earlier "
+                           "approvals no longer apply."}
+
     if not body.get("_approval"):
+        if cur is not None and not _remember_binding(pid, content_hash):
+            return {"status": "error", "action": "publish", "id": pid, "publish_staged": False,
+                    "publish_executed": False,
+                    "summary": f"post {pid} changed since it was staged for approval; the pending request keeps "
+                               "its original content."}
         return {
             "status": "pending_approval", "action": "publish", "id": pid, "requires": "human approval",
             "publish_staged": True,
             "approval_binding": {"post_id": pid, "integration_id": (cur or {}).get("integration_id"),
-                                 "content_hash": content_hash},
+                                 "content_hash": content_hash, "request_id": _request_id(pid)},
             "summary": (f"Publishing post {pid}{where} is staged and awaiting human approval "
                         f"(content hash {content_hash}). The agent never auto-publishes."),
         }
@@ -427,7 +501,15 @@ def publish(body: dict) -> dict:
     # staged, and it must still match what Postiz holds now. A missing hash (approval not bound to content)
     # or a changed hash (content swapped after staging) both refuse — never publish content the approver
     # didn't see. Previously a missing hash skipped the check, so a post edited after approval still shipped.
-    approved_hash = (body.get("_approval") or {}).get("content_hash")
+    # Hash the approver cleared, strongest first: the mission input (covered by the approval's input binding),
+    # an approver-supplied value, then the hash recorded when this post was first staged.
+    approved_hash = (body.get("content_hash") or (body.get("_approval") or {}).get("content_hash")
+                     or _recorded_binding(pid))
+    want_req = body.get("request_id")
+    if want_req and want_req != _request_id(pid):
+        return {"status": "error", "action": "publish", "id": pid, "publish_staged": True,
+                "publish_executed": False,
+                "summary": "this approval belongs to a superseded request — refusing to publish."}
     if not approved_hash or approved_hash != content_hash:
         changed = "changed since approval" if approved_hash else "not bound to the approved hash"
         return {"status": "error", "action": "publish", "id": pid, "publish_staged": True,
@@ -448,6 +530,7 @@ def publish(body: dict) -> dict:
     if not submitted:
         return {"status": "error", "action": "publish", "id": pid, "publish_staged": True,
                 "publish_executed": False, "summary": f"approved but NOT submitted to Postiz: {err}"}
+    _clear_binding(pid)
     v = verify_publish({"id": pid})
     return {
         "status": "done", "action": "publish", "id": pid, "publish_staged": True, "publish_executed": True,
