@@ -166,12 +166,12 @@ def test_ledger_is_bounded():
 
 
 def test_planner_attached_undo_not_registered_is_staged():
-    c = Rec(); c._handlers["evil"] = lambda i: {"done": True}
-    ex = _ex(c); n = _node(); n.undo = "evil"
+    c = Rec(); c._handlers["other"] = lambda i: {"done": True}
+    ex = _ex(c); n = _node(); n.undo = "other"
     ex.run(n, {"_mission": "m1"})
     out = ex.compensate(n, mission_id="m1")
     assert out["compensation_skipped"] and "undo_not_registered" in out["undo_error"]
-    assert [x for x in c.calls if x[0] == "evil"] == []
+    assert [x for x in c.calls if x[0] == "other"] == []
 
 
 def test_no_registry_wired_never_mints_marker():

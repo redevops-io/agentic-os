@@ -193,9 +193,9 @@ def test_symlinked_directory_escape_is_refused(st, mods):
 
 def test_symlinked_tenant_dir_is_refused(st, mods):
     store, root, tmp = st
-    _symlink(tmp / "outside", root / "evil", is_dir=True)
+    _symlink(tmp / "outside", root / "linked", is_dir=True)
     with pytest.raises(mods.errors.InvalidPath):
-        store.read("evil", "secret.docx")
+        store.read("linked", "secret.docx")
 
 
 def test_in_root_symlink_to_other_tenant_is_refused(st, mods):

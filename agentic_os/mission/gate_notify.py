@@ -1,4 +1,4 @@
-"""Gate notifications — push a human-approval gate to people, durably and honestly (ER-07).
+"""Gate notifications — push a human-approval gate to people, durably and honestly.
 
 Opt-in (``AGENTIC_OS_GATE_NOTIFY=1`` + a configured recipient); otherwise nothing is installed.
 

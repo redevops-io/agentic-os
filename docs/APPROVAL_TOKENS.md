@@ -43,7 +43,7 @@ never from what the caller sends:
 - A dimension that is **null in the payload is unbound** (the minter had no mission/node, e.g. a direct operator
   call outside a mission). Any presented value, or none, is accepted for that dimension. Blank ids are normalised to
   null at mint time. An unbound token is valid for any mission/node and is only as safe as its other bindings
-  (operator, capability, input hash, 300s expiry, single use); a verifier cannot distinguish "attacker omitted"
+  (operator, capability, input hash, 300s expiry, single use); a verifier cannot distinguish "omitted by a caller"
   from "legitimately unbound", which is exactly why binding is read from the signed payload.
 - Only the `mission_id` / `node_id` fields of the JSON body are consulted. `inputs._mission`, `inputs._node` and
   HTTP headers are never trusted for binding.

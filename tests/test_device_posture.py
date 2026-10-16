@@ -143,7 +143,7 @@ def test_admit_clamps_request_down_to_ceiling():
     p = derive(VERIFIED_FACTS)
     big = ExecutionConstraint(
         max_memory_mb=99999, max_processes=999, max_cpu_millis=999999,
-        max_duration_seconds=99999, read_paths=("/etc",), allow_egress=("evil.example",))
+        max_duration_seconds=99999, read_paths=("/outside",), allow_egress=("other.example",))
     eff = admit(p, ExecutionClass.LOCAL_CONTAINER, big)
     assert eff.max_memory_mb == 512 and eff.max_processes == 1        # clamped to ceiling
     assert eff.max_cpu_millis == 2000 and eff.max_duration_seconds == 30

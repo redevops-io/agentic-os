@@ -80,8 +80,7 @@ class DocumentService(GovernedWriteMixin):
         return ref, data
 
     def _check_sendable(self, ref: DocRef, data: bytes) -> None:
-        """Before ANY bytes are offered to an editor: size cap + structural validation (junk 'PK' bytes can hang or
-        crash a Document Server)."""
+        """Before ANY bytes are offered to an editor: size cap + structural validation."""
         if not data:
             raise InvalidInput("empty document")
         if len(data) > self.max_source_bytes:

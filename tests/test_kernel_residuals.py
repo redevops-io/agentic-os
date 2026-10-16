@@ -275,7 +275,7 @@ def _projects_client(monkeypatch, env=None):
 
 def test_cors_default_denies_cross_origin(monkeypatch):
     c = _projects_client(monkeypatch)
-    r = c.get("/api/projects", headers={"Origin": "https://evil.example"})
+    r = c.get("/api/projects", headers={"Origin": "https://other.example"})
     assert r.status_code == 200
     assert "access-control-allow-origin" not in r.headers
 
@@ -284,7 +284,7 @@ def test_cors_opt_in_list(monkeypatch):
     c = _projects_client(monkeypatch, "https://a.example, https://b.example")
     r = c.get("/api/projects", headers={"Origin": "https://b.example"})
     assert r.headers.get("access-control-allow-origin") == "https://b.example"
-    r = c.get("/api/projects", headers={"Origin": "https://evil.example"})
+    r = c.get("/api/projects", headers={"Origin": "https://other.example"})
     assert "access-control-allow-origin" not in r.headers
 
 

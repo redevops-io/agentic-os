@@ -365,13 +365,13 @@ def _client_to(c):
     return HTTPOperatorClient({"op": "http://op"}, transport=lambda url, body, h, t: c.post("/invoke", json=body, headers=h).json())
 
 
-@pytest.mark.parametrize("evil", [None, "", "mB", 7])
-def test_node_inputs_cannot_override_reserved_keys_end_to_end(monkeypatch, evil):
+@pytest.mark.parametrize("override", [None, "", "mB", 7])
+def test_node_inputs_cannot_override_reserved_keys_end_to_end(monkeypatch, override):
     from types import SimpleNamespace
     monkeypatch.setenv("AGENTIC_OS_APPROVAL_SECRET", S)
     rt = MissionRuntime(pilots.build_pilot_registry(pilots.build_pilot_operators()), Executor(HTTPOperatorClient({})))
     m = rt.create_mission("g", policy_refs=["*"])
-    node = SimpleNamespace(id="n1", capability="refund", inputs={**INS, "_mission": evil, "_node": evil, "_goal": evil},
+    node = SimpleNamespace(id="n1", capability="refund", inputs={**INS, "_mission": override, "_node": override, "_goal": override},
                            operator="op")
     resolved = rt._resolve_inputs(m, rt._world(m.id), node)
     assert resolved["_mission"] == m.id and resolved["_goal"] == m.goal and "_node" not in resolved

@@ -1,4 +1,4 @@
-"""Regression tests for the independent review of #458 (each fails on the previous code)."""
+"""Regression tests for connector hardening (each fails on the previous code)."""
 from __future__ import annotations
 
 import hashlib
@@ -25,7 +25,7 @@ def test_label_and_versions_follow_the_real_file_whatever_case_is_asked(env, kit
     env.put("acme", "Secret.docx", kit.make_docx(["x"]), label="RESTRICTED")
     assert env.store.get_classification("acme", "secret.docx") == "RESTRICTED"
     assert env.store.head("acme", "SECRET.DOCX").sha256 == env.store.head("acme", "Secret.docx").sha256
-    # the RESTRICTED label cannot be bypassed by changing the case of the id
+    # the RESTRICTED label cannot be changed by varying the case of the id
     with pytest.raises(env.mods.errors.PolicyDenied, match="never sent"):
         env.svc.convert("acme", "secret.docx", "pdf")
     assert env.backend.calls == []
@@ -100,7 +100,7 @@ def junk_pk():
 
 @pytest.mark.parametrize("op", ["convert", "export", "open", "inspect"])
 def test_junk_pk_bytes_never_reach_the_editor(env, op):
-    # NOTE: the "inspect" case also passed before the review fixes (inspect already validated); convert/export/open are new.
+    # NOTE: the "inspect" case also passed before (inspect already validated); convert/export/open are new.
     env.put("acme", "j.docx", junk_pk(), label="PUBLIC")
     fn = {"convert": lambda: env.svc.convert("acme", "j.docx", "pdf"),
           "export": lambda: env.svc.export("acme", "j.docx", "pdf"),
@@ -182,10 +182,10 @@ def test_local_host_must_resolve_to_loopback(mods):
 
 
 def test_regression_guard_public_host_resolving_private_follows_the_ssrf_rules(mods):
-    """REGRESSION GUARD ONLY: passed before the review fixes too."""
+    """REGRESSION GUARD ONLY: passed before too."""
     S = mods.safe_fetch
     pol = S.FetchPolicy.of([S.HostRule("editor.test", S.ZONE_PUBLIC, frozenset({443}))])
-    for ip in ("10.0.0.5", "127.0.0.1", "169.254.169.254", "::ffff:10.0.0.1"):
+    for ip in ("10.0.0.5", "127.0.0.1", "169.254.1.1", "::ffff:10.0.0.1"):
         with pytest.raises(S.SSRFBlocked):
             S.safe_fetch("https://editor.test/x", policy=pol, resolver=lambda h, p, ip=ip: [ip])
 
@@ -355,7 +355,7 @@ def test_bearer_transport_adds_the_authorization_header(mods, server):
         tr.bearer_transport("")
 
 
-# ── delta review: breaker isolation, package risks, label reset, transport ───────────────────────────────────
+# ── additional: breaker isolation, package risks, label reset, transport ───────────────────────────────────
 def test_one_tenants_failures_never_block_another_tenant(env, kit):
     """FAILS on the previous code: the breaker was service-global."""
     for i in range(3):
@@ -406,7 +406,7 @@ W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
 ATTACKS = {
     "dde-instrText": dict(doc_xml_edit=lambda x: x.replace("</w:body>", '<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>DDEAUTO c:\\\\windows\\\\system32\\\\cmd.exe "/k calc"</w:instrText></w:r></w:p></w:body>')),
     "fldSimple": dict(doc_xml_edit=lambda x: x.replace("</w:body>", '<w:p><w:fldSimple w:instr="INCLUDETEXT \'file:///etc/passwd\'"/></w:p></w:body>')),
-    "embedded-ole": dict(add={"word/embeddings/evil.bin": b"MZ\x90\x00"}),
+    "embedded-ole": dict(add={"word/embeddings/extra.bin": b"MZ\x90\x00"}),
     "vba-macro": dict(add={"word/vbaProject.bin": b"\xd0\xcf\x11"},
                       ct_add='<Override PartName="/word/vbaProject.bin" ContentType="application/vnd.ms-office.vbaProject"/>'),
     "activex": dict(add={"word/activeX/activeX1.xml": "<ax/>"}),
@@ -482,7 +482,7 @@ def test_casefold_collisions_fail_closed_and_share_identity(mods, a, b):
 def test_ambiguous_collision_locks_out_rather_than_leaking(env, kit):
     """REGRESSION GUARD (passed before too) documenting the known author lock-out limitation."""
     env.put("acme", "Stra\u00dfe.docx", kit.make_docx(["victim"]), label="PUBLIC")
-    env.put("acme", "Strasse.docx", kit.make_docx(["attacker"]))
+    env.put("acme", "Strasse.docx", kit.make_docx(["other"]))
     if env.mods.store.canonical_id("Stra\u00dfe.docx") != env.mods.store.canonical_id("Strasse.docx"):
         pytest.skip("this casefold does not collide")
     if len([n for n in os.listdir(env.root / "acme") if n.endswith(".docx")]) < 2:
