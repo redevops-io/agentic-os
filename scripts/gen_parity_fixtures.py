@@ -231,6 +231,14 @@ def _scenarios() -> list:
     add("retained_cost_unknown_is_never_invented", sp, hd, ["launched", "failed"], {"template": "sky_deploy"})
     sp, hd = cost({"cluster": "c3", "hourly_usd": 0.5, "failed_over": True})
     add("retained_cost_failed_over_is_unknown", sp, hd, ["launched", "failed"], {"template": "sky_deploy"})
+    sp, hd = simple(_full("pay.refund", "pay.check"), **{"pay.refund": {"error": "always down"}})
+    add("max_attempts_env_override_caps_retries", sp, hd, po, opt, {"AGENTIC_OS_COMPENSATION_MAX_ATTEMPTS": "1"},
+        steps=[{"intervene": {"action": "retry", "actor": "a", "node": "pay.charge"}},
+               {"intervene": {"action": "acknowledge", "actor": "alice", "node": "pay.charge"}}])
+    add("max_attempts_env_garbage_defaults_to_three", sp, hd, po, opt, {"AGENTIC_OS_COMPENSATION_MAX_ATTEMPTS": "lots"},
+        steps=[{"intervene": {"action": "retry", "actor": "a", "node": "pay.charge"}},
+               {"intervene": {"action": "retry", "actor": "a", "node": "pay.charge"}},
+               {"intervene": {"action": "retry", "actor": "a", "node": "pay.charge"}}])
     sp = [_s("x.make", "made", side_effecting=True, compensation=_full("x.undo", "x.check")), _s("x.undo", side_effecting=True, irreversible=True, irreversible_note="n"),
           _s("x.check"), _s("y.fail", "failed", side_effecting=True, irreversible=True, irreversible_note="n")]
     add("forward_result_not_proving_execution_is_not_compensated", sp,
@@ -478,6 +486,9 @@ def approval_tokens() -> dict:
             {"u": "café ☃", "q": 'quote" back\\ slash', "n": 10.0, "i": 10, "neg": -0.0, "small": 1e-07},
             {"_approval": {"approved": True}, "__Approval_x": 1, "approvalFoo": 2, "keep": 1, "_mission": "m", "_goal": "g", "_node": "n"},
             {"nested": {"_approval": 1, "keep": {"APPROVAL": 1, "k": 2}}, "list": [{"_approval": 1, "v": 1}]},
+            # integers vs floats: the wire form decides the hash (5 != 5.0), big ints are exact
+            {"n": 10}, {"n": 2 ** 53 + 1}, {"n": -7}, {"n": 0}, {"n": 10.0, "i": 10}, {"big": 10 ** 20, "neg": -(2 ** 63)},
+            {"a": [1, 1.0, {"b": 2 ** 63}], "c": {"d": -0.0, "e": [0, 0.0]}}, {"x": 1e21, "y": 1.5e-07, "z": 123456789.125},
         ]
         hashes = [{"inputs": i, "inputs_sha256": A.inputs_hash(i), "canonical": A.canonical(i).decode(),
                    "stripped": A.strip_approval_keys(i)} for i in inputs_cases]
@@ -525,7 +536,20 @@ def approval_tokens() -> dict:
         tok2 = A.mint_approval_token(secret, now=1_800_000_000, ttl_s=300, **base)
         rt3 = A.verify_approval_token(secret, tok2, now=1_800_000_100, replay_guard=g, **ver())
         replay = {"wires": [tok, tok, tok2], "args": ver(), "now": 1_800_000_100, "markers": [rt1, rt2, rt3]}
-        return {"hmac_seed": secret, "hashes": hashes, "mints": mints, "verifies": verifies,
+        nan, inf = float("nan"), float("inf")
+        nonfinite = A.canonical({"a": nan, "b": -inf, "c": inf, "d": [nan]}).decode()
+        # integer-input requests exactly as a Python client would put them on the wire: the body text is kept verbatim
+        http_cases = []
+        for name, text in [("ints", '{"n": 5, "zero": 0, "neg": -3, "big": 9007199254740993}'),
+                           ("float_and_int", '{"f": 10.0, "i": 10, "s": "x"}'),
+                           ("nested_mixed", '{"a": [1, 2.0, {"b": 3}], "c": {"d": 9223372036854775808}}')]:
+            ins = json.loads(text)
+            t = A.mint_approval_token(secret, operator="billing", capability="billing.refund", mission_id="m-9", node_id="n-9",
+                                      inputs=ins, marker={"approved": True}, ttl_s=100_000_000_000, now=1_800_000_000)
+            body = ('{"capability": "billing.refund", "inputs": ' + text + ', "mission_id": "m-9", "node_id": "n-9", '
+                    '"idempotency_key": "k-' + name + '", "approval_token": "' + t + '"}')
+            http_cases.append({"name": name, "body": body})
+        return {"hmac_seed": secret, "nonfinite_canonical": nonfinite, "http_cases": http_cases, "hashes": hashes, "mints": mints, "verifies": verifies,
                 "wrong_secret_marker": other, "replay": replay}
     finally:
         A._secrets.token_hex = real

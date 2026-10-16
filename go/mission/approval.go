@@ -45,6 +45,24 @@ func StripApprovalKeys(v any) any {
 	return v
 }
 
+// normalizeNumbers round-trips a value through encoding/json with UseNumber, so a Go int/float64 hashes exactly as the
+// receiver (any language) sees the wire form: 5 -> 5, 10.0 -> 10.0 only if the token says so, big ints verbatim.
+// json.Number values (an already-decoded body) pass through unchanged. On a marshalling error the input is returned
+// as is (the caller could not have put it on the wire either).
+func normalizeNumbers(in map[string]any) map[string]any {
+	b, err := json.Marshal(in)
+	if err != nil {
+		return in
+	}
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.UseNumber()
+	var out map[string]any
+	if d.Decode(&out) != nil {
+		return in
+	}
+	return out
+}
+
 // canonicalJSON: json.dumps(obj, sort_keys=True, separators=(",", ":")) bytes.
 func canonicalJSON(v any) []byte {
 	var sb strings.Builder
@@ -54,6 +72,7 @@ func canonicalJSON(v any) []byte {
 
 // InputsHash: sha256 of the canonical JSON of the inputs minus approval keys and runtime-meta keys (top level only).
 func InputsHash(inputs map[string]any) string {
+	inputs = normalizeNumbers(inputs)
 	clean := map[string]any{}
 	for k, v := range inputs {
 		if !IsApprovalKey(k) && !approvalMetaKeys[k] {

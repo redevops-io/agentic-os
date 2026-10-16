@@ -2,11 +2,15 @@ package mission
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -59,7 +63,12 @@ func loadApproval(t *testing.T) (doc struct {
 		Now    float64        `json:"now"`
 		Marker map[string]any `json:"marker"`
 	} `json:"verifies"`
-	Wrong  map[string]any `json:"wrong_secret_marker"`
+	Wrong     map[string]any `json:"wrong_secret_marker"`
+	NonFinite string         `json:"nonfinite_canonical"`
+	HTTP      []struct {
+		Name string `json:"name"`
+		Body string `json:"body"`
+	} `json:"http_cases"`
 	Replay struct {
 		Tokens  []string         `json:"wires"`
 		Args    tokArgs          `json:"args"`
@@ -229,5 +238,157 @@ func TestOperatorDedupesOnInputsAndCachesOnlySuccesses(t *testing.T) {
 	}
 	if r, _ := op.Invoke("x.do", map[string]any{"v": 2}, "k"); r["v"] != float64(2) && r["v"] != 2 || calls != 3 {
 		t.Fatalf("same key with DIFFERENT inputs is a different call: %v calls=%d", r, calls)
+	}
+}
+
+// Python writes NaN / Infinity / -Infinity as bare tokens in canonical JSON (not "NaN.0" / "+Inf").
+func TestCanonicalNonFiniteMatchesPython(t *testing.T) {
+	d := loadApproval(t)
+	got := string(canonicalJSON(map[string]any{"a": math.NaN(), "b": math.Inf(-1), "c": math.Inf(1), "d": []any{math.NaN()}}))
+	if got != d.NonFinite {
+		t.Fatalf("go=%s python=%s", got, d.NonFinite)
+	}
+}
+
+// A Python client puts integers on the wire as integers; the Go operator must hash the wire form, not float64.
+func TestPythonMintedTokenWithIntegerInputsVerifiesOnGoOperator(t *testing.T) {
+	d := loadApproval(t)
+	t.Setenv(EnvApprovalSecret, d.Secret)
+	var got []map[string]any
+	op := NewOperator("billing", []Capability{NewCapability("billing.refund", func(in map[string]any) (map[string]any, error) {
+		got = append(got, in)
+		if in["_approval"] == nil {
+			return map[string]any{"status": "pending_approval", "executed": false}, nil
+		}
+		return map[string]any{"refunded": true, "executed": true}, nil
+	}, SideEffecting())})
+	srv := httptest.NewServer(op.HTTPHandler())
+	defer srv.Close()
+	if len(d.HTTP) < 3 {
+		t.Fatal("fixture truncated")
+	}
+	for _, c := range d.HTTP {
+		resp, err := http.Post(srv.URL+"/invoke", "application/json", strings.NewReader(c.Body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		resp.Body.Close()
+		if r, _ := out["result"].(map[string]any); r["refunded"] != true {
+			t.Errorf("%s: a Python-minted token over these inputs must verify on the Go operator: %v", c.Name, out)
+		}
+	}
+	// handlers still receive ordinary JSON numbers (float64)
+	if n, ok := got[0]["n"].(float64); !ok || n != 5 {
+		t.Errorf("handler input type changed: %T %v", got[0]["n"], got[0]["n"])
+	}
+}
+
+func TestInputsHashUsesTheWireForm(t *testing.T) {
+	num := func(s string) map[string]any { var m map[string]any; decodeNum(t, []byte(s), &m); return m }
+	same := []struct {
+		name string
+		goIn map[string]any
+		wire string
+	}{
+		{"int", map[string]any{"n": 5}, `{"n": 5}`},
+		{"float64 integral", map[string]any{"n": float64(5)}, `{"n": 5}`}, // Go marshals 5.0 as 5, so that is what Python receives
+		{"int64 above 2^53", map[string]any{"n": int64(9007199254740993)}, `{"n": 9007199254740993}`},
+		{"negative", map[string]any{"n": -7}, `{"n": -7}`},
+		{"zero", map[string]any{"n": 0}, `{"n": 0}`},
+		{"nested", map[string]any{"a": []any{1, 2.5, map[string]any{"b": int64(3)}}}, `{"a": [1, 2.5, {"b": 3}]}`},
+	}
+	for _, c := range same {
+		if InputsHash(c.goIn) != InputsHash(num(c.wire)) {
+			t.Errorf("%s: Go-side inputs hash differently from their wire form", c.name)
+		}
+	}
+	if InputsHash(num(`{"n": 5}`)) == InputsHash(num(`{"n": 5.0}`)) {
+		t.Error("5 and 5.0 are different wire values and must hash differently (as in Python)")
+	}
+}
+
+// End to end with integer inputs from the Go client.
+func TestGoClientIntegerInputsRoundTrip(t *testing.T) {
+	t.Setenv(EnvApprovalSecret, "ints-secret")
+	op := NewOperator("billing", []Capability{NewCapability("billing.refund", func(in map[string]any) (map[string]any, error) {
+		if in["_approval"] == nil {
+			return map[string]any{"status": "pending_approval", "executed": false}, nil
+		}
+		return map[string]any{"refunded": true, "executed": true}, nil
+	}, SideEffecting())})
+	srv := httptest.NewServer(op.HTTPHandler())
+	defer srv.Close()
+	client := NewHTTPOperatorClient(ResolverFromMap(map[string]string{"billing": srv.URL}))
+	res, err := client.Invoke("billing", "billing.refund", map[string]any{"count": 5, "big": int64(9007199254740993), "neg": -2, "zero": 0,
+		"f": 10.5, "_mission": "m-1", "_node": "n-1:undo", "_approval": map[string]any{"approved": true}}, "k-int")
+	if err != nil || res["refunded"] != true {
+		t.Fatalf("integer inputs must survive mint -> wire -> verify: %v %v", res, err)
+	}
+}
+
+// A token signed with an EMPTY key must never verify, whatever the verifier's key (and no key = fail closed).
+func TestForgedTokenUnderEmptyKeyIsRejected(t *testing.T) {
+	inputs := map[string]any{"x": 1}
+	payload := canonicalJSON(map[string]any{"operator": "o", "capability": "c", "mission_id": "m", "node_id": "n",
+		"inputs_sha256": InputsHash(inputs), "marker": map[string]any{"approved": true}, "exp": int64(4102444800), "nonce": "00"})
+	mac := hmac.New(sha256.New, []byte{})
+	mac.Write(payload)
+	forged := b64(payload) + "." + b64(mac.Sum(nil))
+	if VerifyApprovalToken([]byte("real-key"), forged, "o", "c", inputs, 1, "m", "n", nil) != nil {
+		t.Error("empty-key forgery verified under a real key")
+	}
+	t.Setenv(EnvApprovalSecret, "")
+	if VerifyApprovalToken(nil, forged, "o", "c", inputs, 1, "m", "n", nil) != nil {
+		t.Error("with NO key configured, an empty-key forgery must still be refused (fail closed)")
+	}
+	if VerifyApprovalToken([]byte{}, forged, "o", "c", inputs, 1, "m", "n", nil) != nil {
+		t.Error("explicit empty secret must refuse")
+	}
+}
+
+func TestReplayGuardFailsClosedWhenFullAndRecoversOnExpiry(t *testing.T) {
+	g := NewReplayGuard(4)
+	for i, n := range []string{"a", "b", "c", "d"} {
+		if !g.Consume(n, 1000, 10) {
+			t.Fatalf("nonce %d refused while there was room", i)
+		}
+	}
+	if g.Consume("e", 1000, 10) {
+		t.Error("a full table of unexpired nonces must refuse (fail closed), not evict")
+	}
+	if g.Consume("a", 1000, 10) {
+		t.Error("replay must be refused")
+	}
+	if !g.Consume("e", 2000, 1001) { // all earlier nonces expired
+		t.Error("expired entries must be purged to make room")
+	}
+}
+
+func TestCompensatedMemoryIsBounded(t *testing.T) {
+	old := compensatedCap
+	compensatedCap = 3
+	defer func() { compensatedCap = old }()
+	c := NewInMemoryOperatorClient(map[string]Handler{
+		"b.charge": func(map[string]any) (map[string]any, error) {
+			return map[string]any{"charge_id": "c", "executed": true}, nil
+		},
+		"b.refund": func(map[string]any) (map[string]any, error) {
+			return map[string]any{"refunded": true, "executed": true}, nil
+		},
+	})
+	ex := NewExecutor(c)
+	ex.EvidenceProbe = func(string, string) CompEvidence {
+		return CompEvidence{Executed: true, Capability: "b.charge", Result: map[string]any{"charge_id": "c"}}
+	}
+	ex.UndoRegistry = func(string) string { return "b.refund" }
+	for i := 0; i < 10; i++ {
+		n := NewNode("b.charge", "b")
+		n.ID, n.Undo, n.IdempotencyKey = "n"+strconv.Itoa(i), "b.refund", "k"+strconv.Itoa(i)
+		ex.CompensateFor(&n, "m", 1, nil)
+	}
+	if len(ex.compensated) != 3 || len(ex.compOrder) != 3 {
+		t.Fatalf("compensated memory must stay bounded: %d/%d", len(ex.compensated), len(ex.compOrder))
 	}
 }

@@ -123,9 +123,137 @@
      }
     }
    }
+  },
+  {
+   "canonical": "{\"n\":10}",
+   "inputs": {
+    "n": 10
+   },
+   "inputs_sha256": "3ff6698e101869f36e088516c6c0ca6495c40c0abdae72f6e4d124610dace7b0",
+   "stripped": {
+    "n": 10
+   }
+  },
+  {
+   "canonical": "{\"n\":9007199254740993}",
+   "inputs": {
+    "n": 9007199254740993
+   },
+   "inputs_sha256": "4ac8309cc76123ef6c5325ef925fc873e9b5856ec4f844ef1462f9303960378a",
+   "stripped": {
+    "n": 9007199254740993
+   }
+  },
+  {
+   "canonical": "{\"n\":-7}",
+   "inputs": {
+    "n": -7
+   },
+   "inputs_sha256": "bb4b8ce0247b48700fcc91e6175e2fd5fd53855a00db3847856881805c2ecfe3",
+   "stripped": {
+    "n": -7
+   }
+  },
+  {
+   "canonical": "{\"n\":0}",
+   "inputs": {
+    "n": 0
+   },
+   "inputs_sha256": "f3013f933b9fb80ab6d995e7ad9da36f683837ba1d81e950c943d40111eac2f0",
+   "stripped": {
+    "n": 0
+   }
+  },
+  {
+   "canonical": "{\"i\":10,\"n\":10.0}",
+   "inputs": {
+    "i": 10,
+    "n": 10.0
+   },
+   "inputs_sha256": "baba270997c9d909176a7ebbfc331185008c1d598c6b52aa4699c1946145c476",
+   "stripped": {
+    "i": 10,
+    "n": 10.0
+   }
+  },
+  {
+   "canonical": "{\"big\":100000000000000000000,\"neg\":-9223372036854775808}",
+   "inputs": {
+    "big": 100000000000000000000,
+    "neg": -9223372036854775808
+   },
+   "inputs_sha256": "685f6fe7a6b5a166150a898b920da7ace9053aac18b281ecc91c4feb48b9df0f",
+   "stripped": {
+    "big": 100000000000000000000,
+    "neg": -9223372036854775808
+   }
+  },
+  {
+   "canonical": "{\"a\":[1,1.0,{\"b\":9223372036854775808}],\"c\":{\"d\":-0.0,\"e\":[0,0.0]}}",
+   "inputs": {
+    "a": [
+     1,
+     1.0,
+     {
+      "b": 9223372036854775808
+     }
+    ],
+    "c": {
+     "d": -0.0,
+     "e": [
+      0,
+      0.0
+     ]
+    }
+   },
+   "inputs_sha256": "7bdbd9137f4097bd2b667ff1ac6a66a11099a627d7ab25ee8ea04d4b91b827c8",
+   "stripped": {
+    "a": [
+     1,
+     1.0,
+     {
+      "b": 9223372036854775808
+     }
+    ],
+    "c": {
+     "d": -0.0,
+     "e": [
+      0,
+      0.0
+     ]
+    }
+   }
+  },
+  {
+   "canonical": "{\"x\":1e+21,\"y\":1.5e-07,\"z\":123456789.125}",
+   "inputs": {
+    "x": 1e+21,
+    "y": 1.5e-07,
+    "z": 123456789.125
+   },
+   "inputs_sha256": "72159085bed587952e2f44f325403767b36d724de684e41e040180b1c3d23a28",
+   "stripped": {
+    "x": 1e+21,
+    "y": 1.5e-07,
+    "z": 123456789.125
+   }
   }
  ],
  "hmac_seed": "parity-test-secret",
+ "http_cases": [
+  {
+   "body": "{\"capability\": \"billing.refund\", \"inputs\": {\"n\": 5, \"zero\": 0, \"neg\": -3, \"big\": 9007199254740993}, \"mission_id\": \"m-9\", \"node_id\": \"n-9\", \"idempotency_key\": \"k-ints\", \"approval_token\": \"eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjEwMTgwMDAwMDAwMCwiaW5wdXRzX3NoYTI1NiI6ImU2YzQ0YzJhMTNhZTRjYzI1ZGYyN2FmMzUzOTRiOGUxNjFlZWIzMDc3MWE1NWM5OTFlNzBkNDRjMjVmMjI5ZDkiLCJtYXJrZXIiOnsiYXBwcm92ZWQiOnRydWV9LCJtaXNzaW9uX2lkIjoibS05Iiwibm9kZV9pZCI6Im4tOSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDkiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.hPDnDSXfeJ4rt9prhQoJ2NO6ufG2M6gY7ZXesKjx5ho\"}",
+   "name": "ints"
+  },
+  {
+   "body": "{\"capability\": \"billing.refund\", \"inputs\": {\"f\": 10.0, \"i\": 10, \"s\": \"x\"}, \"mission_id\": \"m-9\", \"node_id\": \"n-9\", \"idempotency_key\": \"k-float_and_int\", \"approval_token\": \"eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjEwMTgwMDAwMDAwMCwiaW5wdXRzX3NoYTI1NiI6IjI5ZWUyODZmZWIxNjk0ZjIzM2M3ZGUwYzQzMjUzODY4Yzc3NWVjODZmODMyYzEwNDg2NDY0N2IzOTk3YzRhMDYiLCJtYXJrZXIiOnsiYXBwcm92ZWQiOnRydWV9LCJtaXNzaW9uX2lkIjoibS05Iiwibm9kZV9pZCI6Im4tOSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMGEiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.dU9JKQ4TujMiBQGgGnJ_Z1D_jkvZRKTErtaxDBv7v4o\"}",
+   "name": "float_and_int"
+  },
+  {
+   "body": "{\"capability\": \"billing.refund\", \"inputs\": {\"a\": [1, 2.0, {\"b\": 3}], \"c\": {\"d\": 9223372036854775808}}, \"mission_id\": \"m-9\", \"node_id\": \"n-9\", \"idempotency_key\": \"k-nested_mixed\", \"approval_token\": \"eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjEwMTgwMDAwMDAwMCwiaW5wdXRzX3NoYTI1NiI6ImI0NDFkNzk1ZDlmYzJmNDQ3MzNiMTQzZWEyMTYwMzQ3ODc3OTlhNjAxMWIwN2FkMWY3OTYxZWViMTg3NzZmNmUiLCJtYXJrZXIiOnsiYXBwcm92ZWQiOnRydWV9LCJtaXNzaW9uX2lkIjoibS05Iiwibm9kZV9pZCI6Im4tOSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMGIiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.jygMw5bJa_CyNvYiVk3Ii-q90zwQmPRaNOpZCLGmCTs\"}",
+   "name": "nested_mixed"
+  }
+ ],
  "mints": [
   {
    "args": {
@@ -227,6 +355,7 @@
    "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiJmYzlmM2UyYTA4ZGYyYmZlNmI4NDlmY2MzYzY1NmQ4ZGFiNjRkNDFkNmFmNGViNWQ4NGY5ZDgzY2ExZWNhMjBmIiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6Im4tMSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDUiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.IRc2rZQE3ibNaLqnAMIZRb6dwsLVVJ6yj02Nqstl2r8"
   }
  ],
+ "nonfinite_canonical": "{\"a\":NaN,\"b\":-Infinity,\"c\":Infinity,\"d\":[NaN]}",
  "replay": {
   "args": {
    "capability": "billing.refund",

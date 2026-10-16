@@ -10206,6 +10206,1828 @@
    "steps": []
   },
   {
+   "env": {
+    "AGENTIC_OS_COMPENSATION_MAX_ATTEMPTS": "1"
+   },
+   "expected": [
+    {
+     "attention": [
+      {
+       "attempts": 1,
+       "decisions": [
+        "acknowledge"
+       ],
+       "goal": "go",
+       "kind": "compensation_failed",
+       "mission_id": "MID",
+       "node_id": "node:pay.charge",
+       "title": "Compensation failed: pay.refund",
+       "why": "undo raised: always down"
+      }
+     ],
+     "calls": [
+      "pay.charge",
+      "crm.fail",
+      "pay.refund"
+     ],
+     "events": [
+      {
+       "payload": {
+        "capability": "crm.fail",
+        "error": "downstream failed",
+        "node_id": "node:crm.fail"
+       },
+       "type": "NodeFailed"
+      },
+      {
+       "payload": {
+        "attempt": 1,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:1",
+        "node_id": "node:pay.charge",
+        "policy": "COMPENSATE_DECLARED",
+        "reversibility": "REVERSIBLE_EXPLICIT",
+        "undo": "pay.refund"
+       },
+       "type": "CompensationRequested"
+      },
+      {
+       "payload": {
+        "approved_by": null,
+        "attempt": 1,
+        "basis": "evidence_bound_marker",
+        "capability": "pay.charge",
+        "forward_approved": false,
+        "forward_executed": true,
+        "idempotency_key": "KEY:pay.charge:undo:1",
+        "node_id": "node:pay.charge",
+        "registered_undo": "pay.refund",
+        "requires_approval": false,
+        "undo": "pay.refund"
+       },
+       "type": "CompensationAuthorized"
+      },
+      {
+       "payload": {
+        "attempt": 1,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:1",
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "CompensationFailed"
+      },
+      {
+       "payload": {
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "NodeCompensationFailed"
+      },
+      {
+       "payload": {
+        "completed_steps": [
+         {
+          "capability": "pay.charge",
+          "node_id": "node:pay.charge",
+          "side_effecting": true
+         }
+        ],
+        "failure_policy": "COMPENSATE_DECLARED",
+        "incomplete_steps": [
+         {
+          "capability": "crm.fail",
+          "error": "downstream failed",
+          "node_id": "node:crm.fail",
+          "status": "failed"
+         }
+        ],
+        "partially_completed": true,
+        "recovery_actions": [
+         {
+          "action": "start_new_mission_for_remaining_steps",
+          "capabilities": [
+           "crm.fail"
+          ],
+          "detail": "a FAILED mission is terminal and cannot be resumed: start a NEW mission covering only these remaining steps (the completed steps listed in completed_steps are already in place)",
+          "steps": [
+           "node:crm.fail"
+          ]
+         }
+        ],
+        "retained_costs": {},
+        "retained_effects": [
+         {
+          "capability": "pay.charge",
+          "detail": "undo raised: always down",
+          "node_id": "node:pay.charge",
+          "reason": "compensation_failed"
+         }
+        ]
+       },
+       "type": "EffectsRetained"
+      }
+     ],
+     "label": "run",
+     "outcome": {
+      "compensated": [],
+      "compensated_unverified": [],
+      "compensation_acknowledged": [],
+      "compensation_incomplete": true,
+      "compensation_remaining": [
+       "node:pay.charge"
+      ],
+      "completed_steps": [
+       {
+        "capability": "pay.charge",
+        "node_id": "node:pay.charge",
+        "side_effecting": true
+       }
+      ],
+      "default_policy_source": "mission",
+      "failure_policy": "COMPENSATE_DECLARED",
+      "incomplete_steps": [
+       {
+        "capability": "crm.fail",
+        "error": "downstream failed",
+        "node_id": "node:crm.fail",
+        "status": "failed"
+       }
+      ],
+      "not_compensated": [],
+      "not_reversible": [],
+      "partially_completed": true,
+      "reason": "crm.fail: downstream failed",
+      "recovery_actions": [
+       {
+        "action": "start_new_mission_for_remaining_steps",
+        "capabilities": [
+         "crm.fail"
+        ],
+        "detail": "a FAILED mission is terminal and cannot be resumed: start a NEW mission covering only these remaining steps (the completed steps listed in completed_steps are already in place)",
+        "steps": [
+         "node:crm.fail"
+        ]
+       }
+      ],
+      "retained_effects": [
+       {
+        "capability": "pay.charge",
+        "detail": "undo raised: always down",
+        "node_id": "node:pay.charge",
+        "reason": "compensation_failed"
+       }
+      ],
+      "rolled_back": false,
+      "success": false
+     },
+     "state": "compensation_failed"
+    },
+    {
+     "attention": [
+      {
+       "attempts": 1,
+       "decisions": [
+        "acknowledge"
+       ],
+       "goal": "go",
+       "kind": "compensation_failed",
+       "mission_id": "MID",
+       "node_id": "node:pay.charge",
+       "title": "Compensation failed: pay.refund",
+       "why": "undo raised: always down"
+      }
+     ],
+     "calls": [
+      "pay.charge",
+      "crm.fail",
+      "pay.refund"
+     ],
+     "error": "no failed compensation is retryable (none failed, or max attempts reached: acknowledge instead)",
+     "events": [
+      {
+       "payload": {
+        "capability": "crm.fail",
+        "error": "downstream failed",
+        "node_id": "node:crm.fail"
+       },
+       "type": "NodeFailed"
+      },
+      {
+       "payload": {
+        "attempt": 1,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:1",
+        "node_id": "node:pay.charge",
+        "policy": "COMPENSATE_DECLARED",
+        "reversibility": "REVERSIBLE_EXPLICIT",
+        "undo": "pay.refund"
+       },
+       "type": "CompensationRequested"
+      },
+      {
+       "payload": {
+        "approved_by": null,
+        "attempt": 1,
+        "basis": "evidence_bound_marker",
+        "capability": "pay.charge",
+        "forward_approved": false,
+        "forward_executed": true,
+        "idempotency_key": "KEY:pay.charge:undo:1",
+        "node_id": "node:pay.charge",
+        "registered_undo": "pay.refund",
+        "requires_approval": false,
+        "undo": "pay.refund"
+       },
+       "type": "CompensationAuthorized"
+      },
+      {
+       "payload": {
+        "attempt": 1,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:1",
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "CompensationFailed"
+      },
+      {
+       "payload": {
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "NodeCompensationFailed"
+      },
+      {
+       "payload": {
+        "completed_steps": [
+         {
+          "capability": "pay.charge",
+          "node_id": "node:pay.charge",
+          "side_effecting": true
+         }
+        ],
+        "failure_policy": "COMPENSATE_DECLARED",
+        "incomplete_steps": [
+         {
+          "capability": "crm.fail",
+          "error": "downstream failed",
+          "node_id": "node:crm.fail",
+          "status": "failed"
+         }
+        ],
+        "partially_completed": true,
+        "recovery_actions": [
+         {
+          "action": "start_new_mission_for_remaining_steps",
+          "capabilities": [
+           "crm.fail"
+          ],
+          "detail": "a FAILED mission is terminal and cannot be resumed: start a NEW mission covering only these remaining steps (the completed steps listed in completed_steps are already in place)",
+          "steps": [
+           "node:crm.fail"
+          ]
+         }
+        ],
+        "retained_costs": {},
+        "retained_effects": [
+         {
+          "capability": "pay.charge",
+          "detail": "undo raised: always down",
+          "node_id": "node:pay.charge",
+          "reason": "compensation_failed"
+         }
+        ]
+       },
+       "type": "EffectsRetained"
+      }
+     ],
+     "label": "step0:retry",
+     "outcome": {
+      "compensated": [],
+      "compensated_unverified": [],
+      "compensation_acknowledged": [],
+      "compensation_incomplete": true,
+      "compensation_remaining": [
+       "node:pay.charge"
+      ],
+      "completed_steps": [
+       {
+        "capability": "pay.charge",
+        "node_id": "node:pay.charge",
+        "side_effecting": true
+       }
+      ],
+      "default_policy_source": "mission",
+      "failure_policy": "COMPENSATE_DECLARED",
+      "incomplete_steps": [
+       {
+        "capability": "crm.fail",
+        "error": "downstream failed",
+        "node_id": "node:crm.fail",
+        "status": "failed"
+       }
+      ],
+      "not_compensated": [],
+      "not_reversible": [],
+      "partially_completed": true,
+      "reason": "crm.fail: downstream failed",
+      "recovery_actions": [
+       {
+        "action": "start_new_mission_for_remaining_steps",
+        "capabilities": [
+         "crm.fail"
+        ],
+        "detail": "a FAILED mission is terminal and cannot be resumed: start a NEW mission covering only these remaining steps (the completed steps listed in completed_steps are already in place)",
+        "steps": [
+         "node:crm.fail"
+        ]
+       }
+      ],
+      "retained_effects": [
+       {
+        "capability": "pay.charge",
+        "detail": "undo raised: always down",
+        "node_id": "node:pay.charge",
+        "reason": "compensation_failed"
+       }
+      ],
+      "rolled_back": false,
+      "success": false
+     },
+     "state": "compensation_failed"
+    },
+    {
+     "attention": [],
+     "calls": [
+      "pay.charge",
+      "crm.fail",
+      "pay.refund"
+     ],
+     "error": "",
+     "events": [
+      {
+       "payload": {
+        "capability": "crm.fail",
+        "error": "downstream failed",
+        "node_id": "node:crm.fail"
+       },
+       "type": "NodeFailed"
+      },
+      {
+       "payload": {
+        "attempt": 1,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:1",
+        "node_id": "node:pay.charge",
+        "policy": "COMPENSATE_DECLARED",
+        "reversibility": "REVERSIBLE_EXPLICIT",
+        "undo": "pay.refund"
+       },
+       "type": "CompensationRequested"
+      },
+      {
+       "payload": {
+        "approved_by": null,
+        "attempt": 1,
+        "basis": "evidence_bound_marker",
+        "capability": "pay.charge",
+        "forward_approved": false,
+        "forward_executed": true,
+        "idempotency_key": "KEY:pay.charge:undo:1",
+        "node_id": "node:pay.charge",
+        "registered_undo": "pay.refund",
+        "requires_approval": false,
+        "undo": "pay.refund"
+       },
+       "type": "CompensationAuthorized"
+      },
+      {
+       "payload": {
+        "attempt": 1,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:1",
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "CompensationFailed"
+      },
+      {
+       "payload": {
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "NodeCompensationFailed"
+      },
+      {
+       "payload": {
+        "completed_steps": [
+         {
+          "capability": "pay.charge",
+          "node_id": "node:pay.charge",
+          "side_effecting": true
+         }
+        ],
+        "failure_policy": "COMPENSATE_DECLARED",
+        "incomplete_steps": [
+         {
+          "capability": "crm.fail",
+          "error": "downstream failed",
+          "node_id": "node:crm.fail",
+          "status": "failed"
+         }
+        ],
+        "partially_completed": true,
+        "recovery_actions": [
+         {
+          "action": "start_new_mission_for_remaining_steps",
+          "capabilities": [
+           "crm.fail"
+          ],
+          "detail": "a FAILED mission is terminal and cannot be resumed: start a NEW mission covering only these remaining steps (the completed steps listed in completed_steps are already in place)",
+          "steps": [
+           "node:crm.fail"
+          ]
+         }
+        ],
+        "retained_costs": {},
+        "retained_effects": [
+         {
+          "capability": "pay.charge",
+          "detail": "undo raised: always down",
+          "node_id": "node:pay.charge",
+          "reason": "compensation_failed"
+         }
+        ]
+       },
+       "type": "EffectsRetained"
+      },
+      {
+       "payload": {
+        "actor": "alice",
+        "node_id": "node:pay.charge",
+        "reason": "",
+        "undo": "pay.refund"
+       },
+       "type": "CompensationAcknowledged"
+      },
+      {
+       "payload": {
+        "completed_steps": [
+         {
+          "capability": "pay.charge",
+          "node_id": "node:pay.charge",
+          "side_effecting": true
+         }
+        ],
+        "failure_policy": "COMPENSATE_DECLARED",
+        "incomplete_steps": [
+         {
+          "capability": "crm.fail",
+          "error": "downstream failed",
+          "node_id": "node:crm.fail",
+          "status": "failed"
+         }
+        ],
+        "partially_completed": true,
+        "recovery_actions": [
+         {
+          "action": "start_new_mission_for_remaining_steps",
+          "capabilities": [
+           "crm.fail"
+          ],
+          "detail": "a FAILED mission is terminal and cannot be resumed: start a NEW mission covering only these remaining steps (the completed steps listed in completed_steps are already in place)",
+          "steps": [
+           "node:crm.fail"
+          ]
+         }
+        ],
+        "retained_costs": {},
+        "retained_effects": [
+         {
+          "capability": "pay.charge",
+          "detail": "undo raised: always down",
+          "node_id": "node:pay.charge",
+          "reason": "acknowledged"
+         }
+        ]
+       },
+       "type": "EffectsRetained"
+      }
+     ],
+     "label": "step1:acknowledge",
+     "outcome": {
+      "compensated": [],
+      "compensated_unverified": [],
+      "compensation_acknowledged": [
+       "node:pay.charge"
+      ],
+      "completed_steps": [
+       {
+        "capability": "pay.charge",
+        "node_id": "node:pay.charge",
+        "side_effecting": true
+       }
+      ],
+      "default_policy_source": "mission",
+      "failure_policy": "COMPENSATE_DECLARED",
+      "incomplete_steps": [
+       {
+        "capability": "crm.fail",
+        "error": "downstream failed",
+        "node_id": "node:crm.fail",
+        "status": "failed"
+       }
+      ],
+      "not_compensated": [],
+      "not_reversible": [],
+      "partially_completed": true,
+      "reason": "crm.fail: downstream failed",
+      "recovery_actions": [
+       {
+        "action": "start_new_mission_for_remaining_steps",
+        "capabilities": [
+         "crm.fail"
+        ],
+        "detail": "a FAILED mission is terminal and cannot be resumed: start a NEW mission covering only these remaining steps (the completed steps listed in completed_steps are already in place)",
+        "steps": [
+         "node:crm.fail"
+        ]
+       }
+      ],
+      "retained_effects": [
+       {
+        "capability": "pay.charge",
+        "detail": "undo raised: always down",
+        "node_id": "node:pay.charge",
+        "reason": "acknowledged"
+       }
+      ],
+      "rolled_back": false,
+      "success": false
+     },
+     "state": "failed"
+    }
+   ],
+   "handlers": {
+    "crm.fail": {
+     "error": "downstream failed"
+    },
+    "pay.charge": {
+     "result": {
+      "executed": true,
+      "paid": true
+     }
+    },
+    "pay.check": {
+     "result": {
+      "observed": {
+       "gone": true
+      },
+      "verified": true
+     }
+    },
+    "pay.refund": {
+     "error": "always down"
+    },
+    "pay.safe": {
+     "result": {
+      "holds": true
+     }
+    }
+   },
+   "mission": {
+    "failure_policy": "COMPENSATE_DECLARED"
+   },
+   "name": "max_attempts_env_override_caps_retries",
+   "outcomes": [
+    "paid",
+    "failed"
+   ],
+   "specs": [
+    {
+     "compensation": {
+      "capability": "pay.refund",
+      "supported": true,
+      "verify": "pay.check"
+     },
+     "name": "pay.charge",
+     "provides": "paid",
+     "side_effecting": true
+    },
+    {
+     "irreversible": true,
+     "irreversible_note": "refund",
+     "name": "pay.refund",
+     "provides": null,
+     "side_effecting": true
+    },
+    {
+     "name": "pay.check",
+     "provides": null
+    },
+    {
+     "name": "pay.safe",
+     "provides": null
+    },
+    {
+     "irreversible": true,
+     "irreversible_note": "n",
+     "name": "crm.fail",
+     "provides": "failed",
+     "side_effecting": true
+    }
+   ],
+   "steps": [
+    {
+     "intervene": {
+      "action": "retry",
+      "actor": "a",
+      "node": "pay.charge"
+     }
+    },
+    {
+     "intervene": {
+      "action": "acknowledge",
+      "actor": "alice",
+      "node": "pay.charge"
+     }
+    }
+   ]
+  },
+  {
+   "env": {
+    "AGENTIC_OS_COMPENSATION_MAX_ATTEMPTS": "lots"
+   },
+   "expected": [
+    {
+     "attention": [
+      {
+       "attempts": 1,
+       "decisions": [
+        "retry_compensation",
+        "acknowledge"
+       ],
+       "goal": "go",
+       "kind": "compensation_failed",
+       "mission_id": "MID",
+       "node_id": "node:pay.charge",
+       "title": "Compensation failed: pay.refund",
+       "why": "undo raised: always down"
+      }
+     ],
+     "calls": [
+      "pay.charge",
+      "crm.fail",
+      "pay.refund"
+     ],
+     "events": [
+      {
+       "payload": {
+        "capability": "crm.fail",
+        "error": "downstream failed",
+        "node_id": "node:crm.fail"
+       },
+       "type": "NodeFailed"
+      },
+      {
+       "payload": {
+        "attempt": 1,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:1",
+        "node_id": "node:pay.charge",
+        "policy": "COMPENSATE_DECLARED",
+        "reversibility": "REVERSIBLE_EXPLICIT",
+        "undo": "pay.refund"
+       },
+       "type": "CompensationRequested"
+      },
+      {
+       "payload": {
+        "approved_by": null,
+        "attempt": 1,
+        "basis": "evidence_bound_marker",
+        "capability": "pay.charge",
+        "forward_approved": false,
+        "forward_executed": true,
+        "idempotency_key": "KEY:pay.charge:undo:1",
+        "node_id": "node:pay.charge",
+        "registered_undo": "pay.refund",
+        "requires_approval": false,
+        "undo": "pay.refund"
+       },
+       "type": "CompensationAuthorized"
+      },
+      {
+       "payload": {
+        "attempt": 1,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:1",
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "CompensationFailed"
+      },
+      {
+       "payload": {
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "NodeCompensationFailed"
+      },
+      {
+       "payload": {
+        "completed_steps": [
+         {
+          "capability": "pay.charge",
+          "node_id": "node:pay.charge",
+          "side_effecting": true
+         }
+        ],
+        "failure_policy": "COMPENSATE_DECLARED",
+        "incomplete_steps": [
+         {
+          "capability": "crm.fail",
+          "error": "downstream failed",
+          "node_id": "node:crm.fail",
+          "status": "failed"
+         }
+        ],
+        "partially_completed": true,
+        "recovery_actions": [
+         {
+          "action": "start_new_mission_for_remaining_steps",
+          "capabilities": [
+           "crm.fail"
+          ],
+          "detail": "a FAILED mission is terminal and cannot be resumed: start a NEW mission covering only these remaining steps (the completed steps listed in completed_steps are already in place)",
+          "steps": [
+           "node:crm.fail"
+          ]
+         }
+        ],
+        "retained_costs": {},
+        "retained_effects": [
+         {
+          "capability": "pay.charge",
+          "detail": "undo raised: always down",
+          "node_id": "node:pay.charge",
+          "reason": "compensation_failed"
+         }
+        ]
+       },
+       "type": "EffectsRetained"
+      }
+     ],
+     "label": "run",
+     "outcome": {
+      "compensated": [],
+      "compensated_unverified": [],
+      "compensation_acknowledged": [],
+      "compensation_incomplete": true,
+      "compensation_remaining": [
+       "node:pay.charge"
+      ],
+      "completed_steps": [
+       {
+        "capability": "pay.charge",
+        "node_id": "node:pay.charge",
+        "side_effecting": true
+       }
+      ],
+      "default_policy_source": "mission",
+      "failure_policy": "COMPENSATE_DECLARED",
+      "incomplete_steps": [
+       {
+        "capability": "crm.fail",
+        "error": "downstream failed",
+        "node_id": "node:crm.fail",
+        "status": "failed"
+       }
+      ],
+      "not_compensated": [],
+      "not_reversible": [],
+      "partially_completed": true,
+      "reason": "crm.fail: downstream failed",
+      "recovery_actions": [
+       {
+        "action": "start_new_mission_for_remaining_steps",
+        "capabilities": [
+         "crm.fail"
+        ],
+        "detail": "a FAILED mission is terminal and cannot be resumed: start a NEW mission covering only these remaining steps (the completed steps listed in completed_steps are already in place)",
+        "steps": [
+         "node:crm.fail"
+        ]
+       }
+      ],
+      "retained_effects": [
+       {
+        "capability": "pay.charge",
+        "detail": "undo raised: always down",
+        "node_id": "node:pay.charge",
+        "reason": "compensation_failed"
+       }
+      ],
+      "rolled_back": false,
+      "success": false
+     },
+     "state": "compensation_failed"
+    },
+    {
+     "attention": [
+      {
+       "attempts": 2,
+       "decisions": [
+        "retry_compensation",
+        "acknowledge"
+       ],
+       "goal": "go",
+       "kind": "compensation_failed",
+       "mission_id": "MID",
+       "node_id": "node:pay.charge",
+       "title": "Compensation failed: pay.refund",
+       "why": "undo raised: always down"
+      }
+     ],
+     "calls": [
+      "pay.charge",
+      "crm.fail",
+      "pay.refund",
+      "pay.refund"
+     ],
+     "error": "",
+     "events": [
+      {
+       "payload": {
+        "capability": "crm.fail",
+        "error": "downstream failed",
+        "node_id": "node:crm.fail"
+       },
+       "type": "NodeFailed"
+      },
+      {
+       "payload": {
+        "attempt": 1,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:1",
+        "node_id": "node:pay.charge",
+        "policy": "COMPENSATE_DECLARED",
+        "reversibility": "REVERSIBLE_EXPLICIT",
+        "undo": "pay.refund"
+       },
+       "type": "CompensationRequested"
+      },
+      {
+       "payload": {
+        "approved_by": null,
+        "attempt": 1,
+        "basis": "evidence_bound_marker",
+        "capability": "pay.charge",
+        "forward_approved": false,
+        "forward_executed": true,
+        "idempotency_key": "KEY:pay.charge:undo:1",
+        "node_id": "node:pay.charge",
+        "registered_undo": "pay.refund",
+        "requires_approval": false,
+        "undo": "pay.refund"
+       },
+       "type": "CompensationAuthorized"
+      },
+      {
+       "payload": {
+        "attempt": 1,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:1",
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "CompensationFailed"
+      },
+      {
+       "payload": {
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "NodeCompensationFailed"
+      },
+      {
+       "payload": {
+        "completed_steps": [
+         {
+          "capability": "pay.charge",
+          "node_id": "node:pay.charge",
+          "side_effecting": true
+         }
+        ],
+        "failure_policy": "COMPENSATE_DECLARED",
+        "incomplete_steps": [
+         {
+          "capability": "crm.fail",
+          "error": "downstream failed",
+          "node_id": "node:crm.fail",
+          "status": "failed"
+         }
+        ],
+        "partially_completed": true,
+        "recovery_actions": [
+         {
+          "action": "start_new_mission_for_remaining_steps",
+          "capabilities": [
+           "crm.fail"
+          ],
+          "detail": "a FAILED mission is terminal and cannot be resumed: start a NEW mission covering only these remaining steps (the completed steps listed in completed_steps are already in place)",
+          "steps": [
+           "node:crm.fail"
+          ]
+         }
+        ],
+        "retained_costs": {},
+        "retained_effects": [
+         {
+          "capability": "pay.charge",
+          "detail": "undo raised: always down",
+          "node_id": "node:pay.charge",
+          "reason": "compensation_failed"
+         }
+        ]
+       },
+       "type": "EffectsRetained"
+      },
+      {
+       "payload": {
+        "actor": "a",
+        "node_ids": [
+         "node:pay.charge"
+        ],
+        "reason": ""
+       },
+       "type": "CompensationRetryRequested"
+      },
+      {
+       "payload": {
+        "attempt": 2,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:2",
+        "node_id": "node:pay.charge",
+        "policy": "COMPENSATE_DECLARED",
+        "reversibility": "REVERSIBLE_EXPLICIT",
+        "undo": "pay.refund"
+       },
+       "type": "CompensationRequested"
+      },
+      {
+       "payload": {
+        "approved_by": null,
+        "attempt": 2,
+        "basis": "evidence_bound_marker",
+        "capability": "pay.charge",
+        "forward_approved": false,
+        "forward_executed": true,
+        "idempotency_key": "KEY:pay.charge:undo:2",
+        "node_id": "node:pay.charge",
+        "registered_undo": "pay.refund",
+        "requires_approval": false,
+        "undo": "pay.refund"
+       },
+       "type": "CompensationAuthorized"
+      },
+      {
+       "payload": {
+        "attempt": 2,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:2",
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "CompensationFailed"
+      },
+      {
+       "payload": {
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "NodeCompensationFailed"
+      }
+     ],
+     "label": "step0:retry",
+     "outcome": {
+      "compensated": [],
+      "compensated_unverified": [],
+      "compensation_acknowledged": [],
+      "compensation_incomplete": true,
+      "compensation_remaining": [
+       "node:pay.charge"
+      ],
+      "completed_steps": [
+       {
+        "capability": "pay.charge",
+        "node_id": "node:pay.charge",
+        "side_effecting": true
+       }
+      ],
+      "default_policy_source": "mission",
+      "failure_policy": "COMPENSATE_DECLARED",
+      "incomplete_steps": [
+       {
+        "capability": "crm.fail",
+        "error": "downstream failed",
+        "node_id": "node:crm.fail",
+        "status": "failed"
+       }
+      ],
+      "not_compensated": [],
+      "not_reversible": [],
+      "partially_completed": true,
+      "reason": "crm.fail: downstream failed",
+      "recovery_actions": [
+       {
+        "action": "start_new_mission_for_remaining_steps",
+        "capabilities": [
+         "crm.fail"
+        ],
+        "detail": "a FAILED mission is terminal and cannot be resumed: start a NEW mission covering only these remaining steps (the completed steps listed in completed_steps are already in place)",
+        "steps": [
+         "node:crm.fail"
+        ]
+       }
+      ],
+      "retained_effects": [
+       {
+        "capability": "pay.charge",
+        "detail": "undo raised: always down",
+        "node_id": "node:pay.charge",
+        "reason": "compensation_failed"
+       }
+      ],
+      "rolled_back": false,
+      "success": false
+     },
+     "state": "compensation_failed"
+    },
+    {
+     "attention": [
+      {
+       "attempts": 3,
+       "decisions": [
+        "acknowledge"
+       ],
+       "goal": "go",
+       "kind": "compensation_failed",
+       "mission_id": "MID",
+       "node_id": "node:pay.charge",
+       "title": "Compensation failed: pay.refund",
+       "why": "undo raised: always down"
+      }
+     ],
+     "calls": [
+      "pay.charge",
+      "crm.fail",
+      "pay.refund",
+      "pay.refund",
+      "pay.refund"
+     ],
+     "error": "",
+     "events": [
+      {
+       "payload": {
+        "capability": "crm.fail",
+        "error": "downstream failed",
+        "node_id": "node:crm.fail"
+       },
+       "type": "NodeFailed"
+      },
+      {
+       "payload": {
+        "attempt": 1,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:1",
+        "node_id": "node:pay.charge",
+        "policy": "COMPENSATE_DECLARED",
+        "reversibility": "REVERSIBLE_EXPLICIT",
+        "undo": "pay.refund"
+       },
+       "type": "CompensationRequested"
+      },
+      {
+       "payload": {
+        "approved_by": null,
+        "attempt": 1,
+        "basis": "evidence_bound_marker",
+        "capability": "pay.charge",
+        "forward_approved": false,
+        "forward_executed": true,
+        "idempotency_key": "KEY:pay.charge:undo:1",
+        "node_id": "node:pay.charge",
+        "registered_undo": "pay.refund",
+        "requires_approval": false,
+        "undo": "pay.refund"
+       },
+       "type": "CompensationAuthorized"
+      },
+      {
+       "payload": {
+        "attempt": 1,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:1",
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "CompensationFailed"
+      },
+      {
+       "payload": {
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "NodeCompensationFailed"
+      },
+      {
+       "payload": {
+        "completed_steps": [
+         {
+          "capability": "pay.charge",
+          "node_id": "node:pay.charge",
+          "side_effecting": true
+         }
+        ],
+        "failure_policy": "COMPENSATE_DECLARED",
+        "incomplete_steps": [
+         {
+          "capability": "crm.fail",
+          "error": "downstream failed",
+          "node_id": "node:crm.fail",
+          "status": "failed"
+         }
+        ],
+        "partially_completed": true,
+        "recovery_actions": [
+         {
+          "action": "start_new_mission_for_remaining_steps",
+          "capabilities": [
+           "crm.fail"
+          ],
+          "detail": "a FAILED mission is terminal and cannot be resumed: start a NEW mission covering only these remaining steps (the completed steps listed in completed_steps are already in place)",
+          "steps": [
+           "node:crm.fail"
+          ]
+         }
+        ],
+        "retained_costs": {},
+        "retained_effects": [
+         {
+          "capability": "pay.charge",
+          "detail": "undo raised: always down",
+          "node_id": "node:pay.charge",
+          "reason": "compensation_failed"
+         }
+        ]
+       },
+       "type": "EffectsRetained"
+      },
+      {
+       "payload": {
+        "actor": "a",
+        "node_ids": [
+         "node:pay.charge"
+        ],
+        "reason": ""
+       },
+       "type": "CompensationRetryRequested"
+      },
+      {
+       "payload": {
+        "attempt": 2,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:2",
+        "node_id": "node:pay.charge",
+        "policy": "COMPENSATE_DECLARED",
+        "reversibility": "REVERSIBLE_EXPLICIT",
+        "undo": "pay.refund"
+       },
+       "type": "CompensationRequested"
+      },
+      {
+       "payload": {
+        "approved_by": null,
+        "attempt": 2,
+        "basis": "evidence_bound_marker",
+        "capability": "pay.charge",
+        "forward_approved": false,
+        "forward_executed": true,
+        "idempotency_key": "KEY:pay.charge:undo:2",
+        "node_id": "node:pay.charge",
+        "registered_undo": "pay.refund",
+        "requires_approval": false,
+        "undo": "pay.refund"
+       },
+       "type": "CompensationAuthorized"
+      },
+      {
+       "payload": {
+        "attempt": 2,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:2",
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "CompensationFailed"
+      },
+      {
+       "payload": {
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "NodeCompensationFailed"
+      },
+      {
+       "payload": {
+        "actor": "a",
+        "node_ids": [
+         "node:pay.charge"
+        ],
+        "reason": ""
+       },
+       "type": "CompensationRetryRequested"
+      },
+      {
+       "payload": {
+        "attempt": 3,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:3",
+        "node_id": "node:pay.charge",
+        "policy": "COMPENSATE_DECLARED",
+        "reversibility": "REVERSIBLE_EXPLICIT",
+        "undo": "pay.refund"
+       },
+       "type": "CompensationRequested"
+      },
+      {
+       "payload": {
+        "approved_by": null,
+        "attempt": 3,
+        "basis": "evidence_bound_marker",
+        "capability": "pay.charge",
+        "forward_approved": false,
+        "forward_executed": true,
+        "idempotency_key": "KEY:pay.charge:undo:3",
+        "node_id": "node:pay.charge",
+        "registered_undo": "pay.refund",
+        "requires_approval": false,
+        "undo": "pay.refund"
+       },
+       "type": "CompensationAuthorized"
+      },
+      {
+       "payload": {
+        "attempt": 3,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:3",
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "CompensationFailed"
+      },
+      {
+       "payload": {
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "NodeCompensationFailed"
+      }
+     ],
+     "label": "step1:retry",
+     "outcome": {
+      "compensated": [],
+      "compensated_unverified": [],
+      "compensation_acknowledged": [],
+      "compensation_incomplete": true,
+      "compensation_remaining": [
+       "node:pay.charge"
+      ],
+      "completed_steps": [
+       {
+        "capability": "pay.charge",
+        "node_id": "node:pay.charge",
+        "side_effecting": true
+       }
+      ],
+      "default_policy_source": "mission",
+      "failure_policy": "COMPENSATE_DECLARED",
+      "incomplete_steps": [
+       {
+        "capability": "crm.fail",
+        "error": "downstream failed",
+        "node_id": "node:crm.fail",
+        "status": "failed"
+       }
+      ],
+      "not_compensated": [],
+      "not_reversible": [],
+      "partially_completed": true,
+      "reason": "crm.fail: downstream failed",
+      "recovery_actions": [
+       {
+        "action": "start_new_mission_for_remaining_steps",
+        "capabilities": [
+         "crm.fail"
+        ],
+        "detail": "a FAILED mission is terminal and cannot be resumed: start a NEW mission covering only these remaining steps (the completed steps listed in completed_steps are already in place)",
+        "steps": [
+         "node:crm.fail"
+        ]
+       }
+      ],
+      "retained_effects": [
+       {
+        "capability": "pay.charge",
+        "detail": "undo raised: always down",
+        "node_id": "node:pay.charge",
+        "reason": "compensation_failed"
+       }
+      ],
+      "rolled_back": false,
+      "success": false
+     },
+     "state": "compensation_failed"
+    },
+    {
+     "attention": [
+      {
+       "attempts": 3,
+       "decisions": [
+        "acknowledge"
+       ],
+       "goal": "go",
+       "kind": "compensation_failed",
+       "mission_id": "MID",
+       "node_id": "node:pay.charge",
+       "title": "Compensation failed: pay.refund",
+       "why": "undo raised: always down"
+      }
+     ],
+     "calls": [
+      "pay.charge",
+      "crm.fail",
+      "pay.refund",
+      "pay.refund",
+      "pay.refund"
+     ],
+     "error": "no failed compensation is retryable (none failed, or max attempts reached: acknowledge instead)",
+     "events": [
+      {
+       "payload": {
+        "capability": "crm.fail",
+        "error": "downstream failed",
+        "node_id": "node:crm.fail"
+       },
+       "type": "NodeFailed"
+      },
+      {
+       "payload": {
+        "attempt": 1,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:1",
+        "node_id": "node:pay.charge",
+        "policy": "COMPENSATE_DECLARED",
+        "reversibility": "REVERSIBLE_EXPLICIT",
+        "undo": "pay.refund"
+       },
+       "type": "CompensationRequested"
+      },
+      {
+       "payload": {
+        "approved_by": null,
+        "attempt": 1,
+        "basis": "evidence_bound_marker",
+        "capability": "pay.charge",
+        "forward_approved": false,
+        "forward_executed": true,
+        "idempotency_key": "KEY:pay.charge:undo:1",
+        "node_id": "node:pay.charge",
+        "registered_undo": "pay.refund",
+        "requires_approval": false,
+        "undo": "pay.refund"
+       },
+       "type": "CompensationAuthorized"
+      },
+      {
+       "payload": {
+        "attempt": 1,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:1",
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "CompensationFailed"
+      },
+      {
+       "payload": {
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "NodeCompensationFailed"
+      },
+      {
+       "payload": {
+        "completed_steps": [
+         {
+          "capability": "pay.charge",
+          "node_id": "node:pay.charge",
+          "side_effecting": true
+         }
+        ],
+        "failure_policy": "COMPENSATE_DECLARED",
+        "incomplete_steps": [
+         {
+          "capability": "crm.fail",
+          "error": "downstream failed",
+          "node_id": "node:crm.fail",
+          "status": "failed"
+         }
+        ],
+        "partially_completed": true,
+        "recovery_actions": [
+         {
+          "action": "start_new_mission_for_remaining_steps",
+          "capabilities": [
+           "crm.fail"
+          ],
+          "detail": "a FAILED mission is terminal and cannot be resumed: start a NEW mission covering only these remaining steps (the completed steps listed in completed_steps are already in place)",
+          "steps": [
+           "node:crm.fail"
+          ]
+         }
+        ],
+        "retained_costs": {},
+        "retained_effects": [
+         {
+          "capability": "pay.charge",
+          "detail": "undo raised: always down",
+          "node_id": "node:pay.charge",
+          "reason": "compensation_failed"
+         }
+        ]
+       },
+       "type": "EffectsRetained"
+      },
+      {
+       "payload": {
+        "actor": "a",
+        "node_ids": [
+         "node:pay.charge"
+        ],
+        "reason": ""
+       },
+       "type": "CompensationRetryRequested"
+      },
+      {
+       "payload": {
+        "attempt": 2,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:2",
+        "node_id": "node:pay.charge",
+        "policy": "COMPENSATE_DECLARED",
+        "reversibility": "REVERSIBLE_EXPLICIT",
+        "undo": "pay.refund"
+       },
+       "type": "CompensationRequested"
+      },
+      {
+       "payload": {
+        "approved_by": null,
+        "attempt": 2,
+        "basis": "evidence_bound_marker",
+        "capability": "pay.charge",
+        "forward_approved": false,
+        "forward_executed": true,
+        "idempotency_key": "KEY:pay.charge:undo:2",
+        "node_id": "node:pay.charge",
+        "registered_undo": "pay.refund",
+        "requires_approval": false,
+        "undo": "pay.refund"
+       },
+       "type": "CompensationAuthorized"
+      },
+      {
+       "payload": {
+        "attempt": 2,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:2",
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "CompensationFailed"
+      },
+      {
+       "payload": {
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "NodeCompensationFailed"
+      },
+      {
+       "payload": {
+        "actor": "a",
+        "node_ids": [
+         "node:pay.charge"
+        ],
+        "reason": ""
+       },
+       "type": "CompensationRetryRequested"
+      },
+      {
+       "payload": {
+        "attempt": 3,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:3",
+        "node_id": "node:pay.charge",
+        "policy": "COMPENSATE_DECLARED",
+        "reversibility": "REVERSIBLE_EXPLICIT",
+        "undo": "pay.refund"
+       },
+       "type": "CompensationRequested"
+      },
+      {
+       "payload": {
+        "approved_by": null,
+        "attempt": 3,
+        "basis": "evidence_bound_marker",
+        "capability": "pay.charge",
+        "forward_approved": false,
+        "forward_executed": true,
+        "idempotency_key": "KEY:pay.charge:undo:3",
+        "node_id": "node:pay.charge",
+        "registered_undo": "pay.refund",
+        "requires_approval": false,
+        "undo": "pay.refund"
+       },
+       "type": "CompensationAuthorized"
+      },
+      {
+       "payload": {
+        "attempt": 3,
+        "capability": "pay.charge",
+        "idempotency_key": "KEY:pay.charge:undo:3",
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "CompensationFailed"
+      },
+      {
+       "payload": {
+        "node_id": "node:pay.charge",
+        "reason": "undo raised: always down",
+        "result": {
+         "undo_error": "always down"
+        },
+        "undo": "pay.refund"
+       },
+       "type": "NodeCompensationFailed"
+      }
+     ],
+     "label": "step2:retry",
+     "outcome": {
+      "compensated": [],
+      "compensated_unverified": [],
+      "compensation_acknowledged": [],
+      "compensation_incomplete": true,
+      "compensation_remaining": [
+       "node:pay.charge"
+      ],
+      "completed_steps": [
+       {
+        "capability": "pay.charge",
+        "node_id": "node:pay.charge",
+        "side_effecting": true
+       }
+      ],
+      "default_policy_source": "mission",
+      "failure_policy": "COMPENSATE_DECLARED",
+      "incomplete_steps": [
+       {
+        "capability": "crm.fail",
+        "error": "downstream failed",
+        "node_id": "node:crm.fail",
+        "status": "failed"
+       }
+      ],
+      "not_compensated": [],
+      "not_reversible": [],
+      "partially_completed": true,
+      "reason": "crm.fail: downstream failed",
+      "recovery_actions": [
+       {
+        "action": "start_new_mission_for_remaining_steps",
+        "capabilities": [
+         "crm.fail"
+        ],
+        "detail": "a FAILED mission is terminal and cannot be resumed: start a NEW mission covering only these remaining steps (the completed steps listed in completed_steps are already in place)",
+        "steps": [
+         "node:crm.fail"
+        ]
+       }
+      ],
+      "retained_effects": [
+       {
+        "capability": "pay.charge",
+        "detail": "undo raised: always down",
+        "node_id": "node:pay.charge",
+        "reason": "compensation_failed"
+       }
+      ],
+      "rolled_back": false,
+      "success": false
+     },
+     "state": "compensation_failed"
+    }
+   ],
+   "handlers": {
+    "crm.fail": {
+     "error": "downstream failed"
+    },
+    "pay.charge": {
+     "result": {
+      "executed": true,
+      "paid": true
+     }
+    },
+    "pay.check": {
+     "result": {
+      "observed": {
+       "gone": true
+      },
+      "verified": true
+     }
+    },
+    "pay.refund": {
+     "error": "always down"
+    },
+    "pay.safe": {
+     "result": {
+      "holds": true
+     }
+    }
+   },
+   "mission": {
+    "failure_policy": "COMPENSATE_DECLARED"
+   },
+   "name": "max_attempts_env_garbage_defaults_to_three",
+   "outcomes": [
+    "paid",
+    "failed"
+   ],
+   "specs": [
+    {
+     "compensation": {
+      "capability": "pay.refund",
+      "supported": true,
+      "verify": "pay.check"
+     },
+     "name": "pay.charge",
+     "provides": "paid",
+     "side_effecting": true
+    },
+    {
+     "irreversible": true,
+     "irreversible_note": "refund",
+     "name": "pay.refund",
+     "provides": null,
+     "side_effecting": true
+    },
+    {
+     "name": "pay.check",
+     "provides": null
+    },
+    {
+     "name": "pay.safe",
+     "provides": null
+    },
+    {
+     "irreversible": true,
+     "irreversible_note": "n",
+     "name": "crm.fail",
+     "provides": "failed",
+     "side_effecting": true
+    }
+   ],
+   "steps": [
+    {
+     "intervene": {
+      "action": "retry",
+      "actor": "a",
+      "node": "pay.charge"
+     }
+    },
+    {
+     "intervene": {
+      "action": "retry",
+      "actor": "a",
+      "node": "pay.charge"
+     }
+    },
+    {
+     "intervene": {
+      "action": "retry",
+      "actor": "a",
+      "node": "pay.charge"
+     }
+    }
+   ]
+  },
+  {
    "env": {},
    "expected": [
     {

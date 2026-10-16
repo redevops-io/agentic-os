@@ -173,7 +173,9 @@ func (o *Operator) HTTPHandler() http.Handler {
 			NodeID         string         `json:"node_id"`
 			ApprovalToken  string         `json:"approval_token"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		dec := json.NewDecoder(r.Body)
+		dec.UseNumber() // keep number tokens verbatim: the approval token binds the inputs hash computed from the wire form
+		if err := dec.Decode(&body); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"detail": err.Error()})
 			return
 		}
@@ -194,6 +196,7 @@ func (o *Operator) HTTPHandler() http.Handler {
 				inputs["_approval"] = marker
 			}
 		}
+		inputs = numbersToFloat(inputs).(map[string]any) // handlers see ordinary JSON numbers (float64), as before
 		res, err := o.Invoke(body.Capability, inputs, key)
 		if err != nil {
 			writeJSON(w, http.StatusNotFound, map[string]any{"detail": err.Error()})
@@ -224,4 +227,24 @@ func (c *LocalOperatorClient) Invoke(operator, capability string, inputs map[str
 		return nil, fmt.Errorf("no operator %q registered", operator)
 	}
 	return op.Invoke(capability, inputs, idempotencyKey)
+}
+
+// numbersToFloat converts every json.Number in a decoded body to float64 (the form handlers have always received).
+func numbersToFloat(v any) any {
+	switch x := v.(type) {
+	case json.Number:
+		if f, err := x.Float64(); err == nil {
+			return f
+		}
+		return string(x)
+	case map[string]any:
+		for k, e := range x {
+			x[k] = numbersToFloat(e)
+		}
+	case []any:
+		for i, e := range x {
+			x[i] = numbersToFloat(e)
+		}
+	}
+	return v
 }
