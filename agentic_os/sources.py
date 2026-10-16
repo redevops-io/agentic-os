@@ -337,7 +337,7 @@ class LocalFilesConnector:
         allowed = set(grant.content_types_or_default)
         root = os.path.expanduser(spec.location)
         now = self.clock()
-        if not os.path.isdir(root):
+        if os.path.islink(root) or not os.path.isdir(root):      # a root swapped for a link is refused, not followed
             return ContextSource(
                 source_id=source_id, project_id=project_id, name=spec.display_name(),
                 kind=SourceKind.FILES, location=spec.location, grant=grant,
@@ -350,6 +350,7 @@ class LocalFilesConnector:
         eligible: List[str] = []
         skipped = 0
         seen: List[Tuple[str, int]] = []
+        real_root = os.path.realpath(root)
         for dirpath, _dirs, files in os.walk(root, followlinks=False):
             for name in files:
                 discovered += 1
@@ -359,8 +360,16 @@ class LocalFilesConnector:
                 ctype = _EXT_TYPE.get(os.path.splitext(name)[1].lower())
                 if ctype and ctype in allowed:
                     try:
-                        size = os.path.getsize(full)
-                    except OSError:
+                        # never follow a link out of the folder: refuse symlinks and anything resolving outside it
+                        if os.path.islink(full) or os.path.commonpath([real_root, os.path.realpath(full)]) != real_root:
+                            skipped += 1
+                            continue
+                        fd = os.open(full, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                        try:
+                            size = os.fstat(fd).st_size
+                        finally:
+                            os.close(fd)
+                    except (OSError, ValueError):
                         skipped += 1
                         continue
                     eligible.append(full)

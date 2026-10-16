@@ -103,3 +103,35 @@ def test_connector_receives_the_resolved_path(cl, monkeypatch, tmp_path):
                         lambda pid, specs, by, registry=None: seen.append([s["location"] for s in specs]) or orig(pid, specs, by))
     assert cl.post("/api/sources/confirm", json=_body(tmp_path / "link")).status_code == 200
     assert seen == [[str(real.resolve())]]
+
+
+def test_symlinked_files_and_swapped_roots_are_not_read(cl, monkeypatch, tmp_path):
+    from agentic_os.sources import LocalFilesConnector, SourceConnectorRegistry
+
+    class Idx:
+        def __init__(self):
+            self.files = []
+
+        def index(self, project, source, files):
+            self.files.extend(files)
+            return len(files)
+
+    root, out = tmp_path / "root", tmp_path / "outside"
+    root.mkdir()
+    out.mkdir()
+    (out / "private.txt").write_text("x")
+    (root / "ok.md").write_text("y")
+    (root / "link.txt").symlink_to(out / "private.txt")
+    idx = Idx()
+    reg = SourceConnectorRegistry()
+    reg.register(LocalFilesConnector(indexer=idx))
+    specs = [{"kind": "files", "location": str(root)}]
+    pa.confirm_and_connect_sources("p", specs, "me", registry=reg)
+    assert [os.path.basename(f) for f in idx.files] == ["ok.md"]
+    # the authorised root is replaced by a link after the check
+    import shutil
+    shutil.rmtree(root)
+    root.symlink_to(out)
+    idx.files.clear()
+    out_proj = pa.confirm_and_connect_sources("p", specs, "me", registry=reg)
+    assert idx.files == [] and out_proj[0]["health"]["state"] != "healthy"
