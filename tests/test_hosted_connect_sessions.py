@@ -81,3 +81,33 @@ def test_configured_but_broken_does_not_fall_back_to_simulated(monkeypatch):
     monkeypatch.setattr(pa, "_HOSTED_BROKEN", True)
     r = TestClient(pa.create_app()).post("/api/apps/google/connect/start")
     assert r.status_code == 503
+
+
+def test_simulated_connect_is_refused_when_hosted_is_configured(hosted):
+    h, c = hosted
+    assert c.post("/api/apps/gmail/connect").status_code == 403
+    assert c.post("/api/apps/slack/connect/start").status_code == 403
+
+
+def test_simulated_connect_is_refused_when_hosted_is_broken(monkeypatch):
+    monkeypatch.setattr(pa, "_HOSTED", None)
+    monkeypatch.setattr(pa, "_HOSTED_TRIED", True)
+    monkeypatch.setattr(pa, "_HOSTED_BROKEN", True)
+    assert TestClient(pa.create_app()).post("/api/apps/gmail/connect").status_code == 403
+
+
+def test_simulated_connect_remains_when_nothing_is_configured(monkeypatch):
+    monkeypatch.setattr(pa, "_HOSTED", None)
+    monkeypatch.setattr(pa, "_HOSTED_TRIED", True)
+    monkeypatch.setattr(pa, "_HOSTED_BROKEN", False)
+    assert TestClient(pa.create_app()).post("/api/apps/gmail/connect").status_code == 200
+
+
+def test_one_initiator_cannot_use_every_slot():
+    h = HostedConnect(session_factory=lambda p: _Session(), providers=("google",), max_pending=10,
+                      max_per_principal=2)
+    h.start("google", principal="a")
+    h.start("google", principal="a")
+    with pytest.raises(RuntimeError):
+        h.start("google", principal="a")
+    assert h.start("google", principal="b")["state"]

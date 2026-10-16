@@ -1477,7 +1477,10 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
 
     @app.post("/api/apps/{provider}/connect")
     def _connect_app(provider: str) -> dict:
-        # Simulated connect (no hosted OAuth app configured) — flips readiness for the demo.
+        # Simulated connect (no hosted OAuth app configured) — flips readiness for the demo. Once hosted OAuth is
+        # configured (or was meant to be), the connected flag may only be set by the real flow.
+        if _get_hosted() is not None or _HOSTED_BROKEN:
+            raise HTTPException(403, "use the hosted connect flow")
         return prov.connect_app(provider)
 
     @app.post("/api/apps/{provider}/connect/start")
@@ -1492,10 +1495,13 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
             from agentic_os.mission.control_auth import require_control_token
             require_control_token(authorization)
             try:
-                started = hosted.start(provider)
+                import hashlib as _hl
+                started = hosted.start(provider, principal=_hl.sha256((authorization or "").encode()).hexdigest())
             except RuntimeError as e:
                 raise HTTPException(429, str(e))
             return {"hosted": True, "authorize_url": started["authorize_url"], "state": started["state"]}
+        if hosted is not None:
+            raise HTTPException(403, "use the hosted connect flow")
         return {"hosted": False, "authorize_url": None, "connected": prov.connect_app(provider)}
 
     @app.get("/api/apps/connect/callback", response_class=HTMLResponse)

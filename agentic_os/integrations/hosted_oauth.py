@@ -24,6 +24,7 @@ driven by the same start/callback with no code change.
 """
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional, Tuple
@@ -154,43 +155,52 @@ class HostedConnect:
 
     session_factory: SessionFactory
     providers: Tuple[str, ...] = ()
-    _sessions: Dict[str, Tuple[str, Any, float]] = field(default_factory=dict)   # state -> (provider, session, started_at)
+    _sessions: Dict[str, Tuple[str, Any, float, str]] = field(default_factory=dict)   # state -> (provider, session, started_at)
     ttl_s: float = 600.0                                                   # a pending Connect expires after this
+    max_per_principal: int = 8                                             # pending sessions one initiator may hold
     max_pending: int = 64                                                  # hard cap on concurrent pending sessions
     clock: Callable[[], float] = time.monotonic
+    _lock: Any = field(default_factory=threading.Lock)
     _connected: Dict[str, str] = field(default_factory=dict)              # provider -> credential_ref
     broker: Any = None                                                    # shared token store (for resolver)
 
     def available(self, provider: str) -> bool:
         return provider in self.providers
 
-    def start(self, provider: str) -> Dict[str, str]:
+    def start(self, provider: str, principal: str = "") -> Dict[str, str]:
+        """Begin a Connect. ``principal`` identifies the (authenticated) initiator for the per-initiator quota.
+        A UI must send the bearer token on this call; the later provider redirect carries only the one-shot state."""
         if not self.available(provider):
             raise KeyError(f"no hosted OAuth app registered for {provider!r} "
                            f"(set its client_id/secret in deployment secrets)")
-        self._expire()
-        if len(self._sessions) >= self.max_pending:
-            raise RuntimeError("too many pending Connect sessions; retry later")
-        session = self.session_factory(provider)
-        started = session.start()
-        self._sessions[started["state"]] = (provider, session, self.clock())
-        return started
+        with self._lock:
+            self._expire()
+            if len(self._sessions) >= self.max_pending:
+                raise RuntimeError("too many pending Connect sessions; retry later")
+            if sum(1 for e in self._sessions.values() if e[3] == principal) >= self.max_per_principal:
+                raise RuntimeError("too many pending Connect sessions for this caller; retry later")
+            session = self.session_factory(provider)
+            started = session.start()
+            self._sessions[started["state"]] = (provider, session, self.clock(), principal)
+            return started
 
     def _expire(self) -> None:
         cutoff = self.clock() - self.ttl_s
-        for st in [k for k, (_, _, t) in self._sessions.items() if t < cutoff]:
+        for st in [k for k, e in self._sessions.items() if e[2] < cutoff]:
             self._sessions.pop(st, None)
 
     def callback(self, code: str, state: str) -> ConnectOutcome:
         # A state exists only if an authenticated start minted it; it is one-shot and expires.
-        self._expire()
-        entry = self._sessions.pop(state, None)
+        with self._lock:
+            self._expire()
+            entry = self._sessions.pop(state, None)
         if entry is None:
             return ConnectOutcome("", "NOT_CONNECTED", False, detail="unknown or expired state")
-        provider, session, _ = entry
+        provider, session = entry[0], entry[1]
         outcome = session.complete(code, state)
         if outcome.connected and outcome.credential_ref:
-            self._connected[provider] = outcome.credential_ref
+            with self._lock:
+                self._connected[provider] = outcome.credential_ref
         return outcome
 
     def connected_providers(self) -> Tuple[str, ...]:
