@@ -336,6 +336,22 @@ async def module_proxy_raw(name: str) -> HTMLResponse:
     return HTMLResponse(content=resp.text, status_code=resp.status_code)
 
 
+def _safe_proxy_path(path: str) -> str:
+    """Validate the tail of a proxied path; return it or raise 400.
+
+    The tail must be plain relative segments: no separators or escapes, no empty/dot
+    segments, no control characters, so the target always stays under ``{base}/api/``.
+    """
+    if path == "":
+        return path
+    if path.startswith("/") or any(c in path for c in ("\\", "%", "\x00")) \
+            or any(ord(c) < 0x20 or ord(c) == 0x7f for c in path):
+        raise HTTPException(400, "invalid path")
+    if any(seg in ("", ".", "..") for seg in path.split("/")):
+        raise HTTPException(400, "invalid path")
+    return path
+
+
 @app.api_route("/m/{name}/api/{path:path}", methods=["GET", "POST"])
 async def module_api(name: str, path: str, request: Request) -> Response:
     """Forward /m/<name>/api/<path> to the module's /api/<path> (GET + POST).
@@ -362,6 +378,7 @@ async def module_api(name: str, path: str, request: Request) -> Response:
                  or (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
                  or (request.client.host if request.client else ""))
     body = await request.body()
+    path = _safe_proxy_path(path)
     url = f"{base}/api/{path}"
     fwd_headers = {"content-type": request.headers.get("content-type", "application/json"),
                    "x-forwarded-for": client_ip}
