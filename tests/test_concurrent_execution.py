@@ -198,3 +198,10 @@ def test_complete_last_record_without_newline_is_kept(tmp_path):
     assert len(s2.all()) == 1
     s2.append("Y", "m", {})
     assert [e.type for e in EventStore(str(p)).all()] == ["X", "Y"]
+
+
+def test_memory_store_keeps_append_semantics():
+    from agentic_os.mission.store import MemoryEventStore
+    s = MemoryEventStore()
+    s.append("X", "m", {})
+    assert [e.seq for e in s.all()] == [1] and len(s.for_mission("m")) == 1
