@@ -1324,6 +1324,7 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     prov: ProjectionProvider = provider or select_provider(
         persist_path=(_os_env.environ.get("OUTCOME_STORE_PATH", "").strip() or None))
     from fastapi import Body
+    from fastapi.responses import HTMLResponse
     app = FastAPI(title="ReDevOps Projects API", version="0.1.0")
     # Same-origin only by default (the bundled UI is served from this app, so it needs no CORS). Cross-origin
     # access is opt-in: `allow_origins=` or $PROJECTS_CORS_ORIGINS (comma-separated origins).
@@ -1482,11 +1483,10 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
             return {"hosted": True, "authorize_url": started["authorize_url"], "state": started["state"]}
         return {"hosted": False, "authorize_url": None, "connected": prov.connect_app(provider)}
 
-    @app.get("/api/apps/connect/callback")
-    def _connect_callback(code: str = "", state: str = "") -> "HTMLResponse":
+    @app.get("/api/apps/connect/callback", response_class=HTMLResponse)
+    def _connect_callback(code: str = "", state: str = ""):
         """The hosted redirect target: exchange the code, store the token, verify, and reflect
         the connection in the projections. Returns a small page the user closes."""
-        from fastapi.responses import HTMLResponse
         hosted = _get_hosted()
         if hosted is None:
             return HTMLResponse("<p>Hosted OAuth is not configured on this deployment.</p>", status_code=400)
