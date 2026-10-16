@@ -34,6 +34,8 @@ class _Erp:
     posts: list = []
     puts: list = []
     sales: list = []
+    journal: list = []          # rows served for Journal Entry lookups (idempotency)
+    fail_submit = False
 
     def __enter__(self):
         return self
@@ -48,10 +50,14 @@ class _Erp:
             return _Resp(200, {"data": BANK_TXNS})
         if url.endswith("/api/resource/Sales%20Invoice"):
             return _Resp(200, {"data": _Erp.sales})
+        if url.endswith("/api/resource/Journal%20Entry"):
+            return _Resp(200, {"data": _Erp.journal})
         return _Resp(200, {"data": []})
 
     def put(self, url, headers=None, json=None):
         _Erp.puts.append((url, json or {}))
+        if _Erp.fail_submit and (json or {}).get("docstatus") == 1:
+            return _Resp(500, {})
         return _Resp(200, {"data": {"docstatus": (json or {}).get("docstatus")}})
 
     def post(self, url, headers=None, json=None):
@@ -61,7 +67,7 @@ class _Erp:
 
 @pytest.fixture(autouse=True)
 def _erp(monkeypatch):
-    _Erp.posts, _Erp.puts, _Erp.sales = [], [], []
+    _Erp.posts, _Erp.puts, _Erp.sales, _Erp.journal, _Erp.fail_submit = [], [], [], [], False
     core._CACHE.update(ts=0.0, data=None)
     monkeypatch.setattr(core, "ERPNEXT_API_KEY", "k")
     monkeypatch.setattr(core, "httpx", types.SimpleNamespace(
@@ -99,7 +105,7 @@ def test_forward_verify_undo_round_trip_reverses_the_same_entry(rig):
     assert len(cancels) == 1 and cancels[0][0].endswith("/Journal%20Entry/" + fwd["entry"])
 
 
-@pytest.mark.parametrize("inputs", [{}, {"result": {}}, {"result": {"entry": ""}}, {"entry": "../Sales Invoice/X"},
+@pytest.mark.parametrize("inputs", [{}, {"result": {}}, {"result": {"entry": ""}}, {"entry": "X/../Y"},
                                     {"result": {"entry": "A/B"}}])
 def test_undo_refuses_without_a_valid_entry_id(rig, inputs):
     res = rig[0].invoke("books.reverse_entry", {**inputs, **APPR})
@@ -143,3 +149,39 @@ def test_capability_declarations_pass_lint(rig):
     by = {c.name: c for c in caps}
     assert reversibility_of(by["books.close"]) is Reversibility.IRREVERSIBLE
     assert by["books.record_revenue"].undo == "books.reverse_entry"
+
+
+def test_same_idempotency_key_posts_one_entry(rig):
+    inp = {"amount": "50", "idempotency_key": "m1:n1", **APPR}
+    first = rig[0].invoke("books.record_revenue", dict(inp))
+    assert first["status"] == "done" and len(_Erp.posts) == 1
+    token = [w for w in _Erp.posts[0][1]["user_remark"].split() if w.startswith("[idem:")][0].strip("[]")
+    _Erp.journal = [{"name": first["entry"], "docstatus": 1}]
+    again = rig[0].invoke("books.record_revenue", {**inp, "amount": "51"})
+    assert again["status"] == "done" and again["entry"] == first["entry"] and again["deduplicated"] is True
+    assert len(_Erp.posts) == 1 and token.startswith("idem:")
+    assert _verify(rig, "books.record_revenue", again).decision.name == "ACCEPT"
+
+
+def test_mission_and_node_derive_the_idempotency_key(rig):
+    rig[0].invoke("books.record_revenue", {"amount": "5", "_mission": "m1", "_node": "n1", **APPR})
+    assert "[idem:" in _Erp.posts[0][1]["user_remark"]
+
+
+def test_failed_submit_retains_the_draft_without_claiming_success(rig):
+    _Erp.fail_submit = True
+    res = rig[0].invoke("books.record_revenue", {"amount": "5", "idempotency_key": "k", **APPR})
+    assert res["status"] == "error" and res["executed"] is False and res["revenue_recorded"] is False
+    assert "entry" not in res and res["retained"]["name"] == "ACC-JV-1"
+    assert [p for p in _Erp.puts if p[1] == {"docstatus": 2}] == []        # never auto-deleted/cancelled
+    # a retry with the same key resumes the retained draft instead of posting a second one
+    _Erp.fail_submit, _Erp.journal = False, [{"name": "ACC-JV-1", "docstatus": 0}]
+    retry = rig[0].invoke("books.record_revenue", {"amount": "5", "idempotency_key": "k", **APPR})
+    assert retry["status"] == "done" and retry["entry"] == "ACC-JV-1" and len(_Erp.posts) == 1
+
+
+def test_currency_must_match_the_ledger(rig):
+    res = rig[0].invoke("books.record_revenue", {"amount": "5", "currency": "ZZZ", **APPR})
+    assert res["status"] == "error" and _Erp.posts == []
+    assert rig[0].invoke("books.record_revenue", {"amount": "5", "currency": core.COMPANY_CURRENCY.lower(), **APPR}
+                         )["status"] == "done"

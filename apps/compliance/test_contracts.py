@@ -6,7 +6,7 @@ import types
 
 import pytest
 
-from agentic_os.mission.compensation import Reversibility, lint_capability, registry_problems, reversibility_of
+from agentic_os.mission.compensation import Reversibility, is_preserved, lint_capability, registry_problems, reversibility_of
 from agentic_os.mission.registry import CapabilityRegistry
 from agentic_os.mission.verify import CompositeVerifier
 from compliance import core
@@ -93,6 +93,10 @@ def test_capability_declarations_pass_lint(rig):
     assert [lint_capability(c) for c in caps if lint_capability(c)] == []
     assert registry_problems(caps, reg.get, require_verify=False) == []
     by = {c.name: c for c in caps}
-    # remediation and consent filings are never auto-reversed
-    for name in ("compliance.remediate", "compliance.file_consent"):
-        assert reversibility_of(by[name]) is Reversibility.IRREVERSIBLE and not by[name].undo
+    # a remediation is PRESERVE (kept on a failed workflow, reversed only by a separate human decision);
+    # a consent filing is a legal record: irreversible. Neither has an automatic undo.
+    rem = by["compliance.remediate"]
+    assert rem.compensation.disposition == "PRESERVE" and not rem.compensation.supported and not rem.undo
+    assert is_preserved(rem)
+    assert reversibility_of(by["compliance.file_consent"]) is Reversibility.IRREVERSIBLE
+    assert not by["compliance.file_consent"].undo

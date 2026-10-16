@@ -111,7 +111,7 @@ def test_forward_verify_undo_round_trip_targets_the_created_subscription(rig):
 
 @pytest.mark.parametrize("inputs", [{}, {"result": {}}, {"result": {"subscription_id": ""}},
                                     {"customer": "acme"},
-                                    {"result": {"subscription_id": "../customers/C1"}},
+                                    {"result": {"subscription_id": "x/../other"}},
                                     {"subscription_id": "a/b"}])
 def test_undo_refuses_without_a_valid_subscription_id(rig, inputs):
     res = rig[0].invoke("billing.cancel_subscription", {**inputs, **APPR})
@@ -129,7 +129,7 @@ def test_declared_outputs_are_returned_on_failure_paths_too(rig, monkeypatch):
     assert res["status"] == "error" and res["subscription"] is False
 
 
-@pytest.mark.parametrize("sid", ["../customers/C1", "a/b", "a b", "..", ""])
+@pytest.mark.parametrize("sid", ["x/../other", "a/b", "a b", "..", ""])
 def test_valid_id_rejects_path_like_values(sid):
     assert core.valid_id(sid) is False
 
@@ -144,3 +144,64 @@ def test_capability_declarations_pass_lint(rig):
     for name in ("billing.dunning", "billing.refund", "billing.cancel_subscription"):
         assert reversibility_of(by[name]) is Reversibility.IRREVERSIBLE
     assert by["billing.create_subscription"].undo == "billing.cancel_subscription"
+
+
+@pytest.mark.parametrize("amount", ["1e999999", "-1e999999", "1E400", "9" * 40])
+def test_absurd_refund_amounts_are_rejected_not_raised(amount):
+    with pytest.raises(ValueError):
+        core.parse_amount_cents(amount)
+    r = rig_refund(amount)
+    assert r["status"] == "error" and _mutations() == []
+
+
+def rig_refund(amount):
+    return build_billing_operator().invoke("billing.refund", {"invoice": "INV-001", "amount": amount, **APPR})
+
+
+@pytest.mark.parametrize("bad", [{}, {"customer": "acme"}, {"plan_code": "pro"}, {"customer": {"a": 1}, "plan_code": "pro"},
+                                 {"customer": ["a"], "plan_code": "pro"}, {"customer": "acme", "plan_code": "a/b"},
+                                 {"customer": "", "plan_code": "pro"}])
+def test_create_subscription_requires_explicit_customer_and_plan(rig, bad):
+    res = rig[0].invoke("billing.create_subscription", {**bad, **APPR})
+    assert res["status"] == "error" and res["subscription"] is False
+    assert _mutations() == []
+
+
+def test_undo_never_cancels_a_subscription_that_already_existed(rig, monkeypatch):
+    class _Existing(_Lago):
+        def get(self, url, headers=None, params=None):
+            if "/api/v1/subscriptions/" in url:
+                return _Resp(200, {"subscription": {"external_id": "x"}})
+            return super().get(url, headers, params)
+    monkeypatch.setattr(core, "httpx", types.SimpleNamespace(get=lambda *a, **k: _Resp(200),
+                                                             Client=lambda timeout=None: _Existing()))
+    op = rig[0]
+    fwd = op.invoke("billing.create_subscription", {"customer": "acme", "plan_code": "pro", **APPR})
+    assert fwd["status"] == "done" and fwd["created"] is False and _mutations() == []
+    assert _verify(rig, "billing.create_subscription", fwd).decision.name == "ACCEPT"
+    undone = op.invoke("billing.cancel_subscription", {"undo_of": "billing.create_subscription", "result": fwd, **APPR})
+    assert undone["status"] == "error" and undone["cancelled"] is False
+    assert _mutations() == []
+
+
+def test_refund_amount_cents_is_explicit_and_checked():
+    ok = rig_refund_inputs({"amount_cents": 500})
+    assert ok["status"] == "done" and ok["refunded_cents"] == 500
+    assert rig_refund_inputs({"amount_cents": 500, "amount": "$5"})["status"] == "done"
+    for bad in ({"amount_cents": 500, "amount": "$6"}, {"amount_cents": "500"}, {"amount_cents": 5.5},
+                {"amount_cents": True}, {"amount_cents": 0}, {"amount_cents": -1}):
+        assert rig_refund_inputs(bad)["status"] == "error"
+    assert len(_mutations("POST")) == 2
+
+
+def rig_refund_inputs(extra):
+    return build_billing_operator().invoke("billing.refund", {"invoice": "INV-001", **extra, **APPR})
+
+
+def test_refund_currency_must_match_the_invoice(monkeypatch):
+    monkeypatch.setitem(INVOICES[0], "currency", "EUR")
+    assert rig_refund_inputs({"amount_cents": 100, "currency": "USD"})["status"] == "error"
+    assert rig_refund_inputs({"amount_cents": 100, "currency": "usd1"})["status"] == "error"
+    assert _mutations() == []
+    ok = rig_refund_inputs({"amount_cents": 100, "currency": "eur"})
+    assert ok["status"] == "done" and ok["currency"] == "EUR"

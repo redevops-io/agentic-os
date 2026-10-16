@@ -10,6 +10,7 @@ deterministic (every action works fully with blurb=None).
 """
 from __future__ import annotations
 
+import hashlib
 import json as _json
 import os
 import re
@@ -108,6 +109,7 @@ def _cents(amount) -> int:
         return 0
 
 
+COMPANY_CURRENCY = os.environ.get("BOOKS_CURRENCY", "USD").upper()   # the books' ledger currency
 MAX_REVENUE = Decimal("1000000000")          # per-entry upper bound
 _DOC_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,139}$")
 
@@ -123,11 +125,11 @@ def parse_revenue_amount(value) -> Decimal:
         raise ValueError(f"invalid amount {value!r}")
     try:
         d = Decimal(str(value).strip().replace(",", "").lstrip("$"))
-    except InvalidOperation:
+        if not d.is_finite() or d <= 0 or d > MAX_REVENUE * 10:
+            raise ValueError(f"amount must be a finite positive number within range, got {value!r}")
+        d = d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except ArithmeticError:
         raise ValueError(f"invalid amount {value!r}") from None
-    if not d.is_finite() or d <= 0 or d > MAX_REVENUE * 10:
-        raise ValueError(f"amount must be a finite positive number within range, got {value!r}")
-    d = d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     if d <= 0 or d > MAX_REVENUE:
         raise ValueError(f"amount out of range: {value!r}")
     return d
@@ -607,6 +609,25 @@ def record_revenue(body: dict | None = None) -> dict:
     except ValueError as e:
         return {"status": "error", "action": "record_revenue", "revenue_recorded": False,
                 "error": str(e)}
+    cur = body.get("currency")
+    if cur is not None and (not isinstance(cur, str) or cur.strip().upper() != COMPANY_CURRENCY):
+        return {"status": "error", "action": "record_revenue", "revenue_recorded": False,
+                "error": f"currency {cur!r} does not match the ledger currency {COMPANY_CURRENCY}"}
+    idem = body.get("idempotency_key") or (
+        f"{body['_mission']}:{body['_node']}" if body.get("_mission") and body.get("_node") else "")
+    token = "idem:" + hashlib.sha256(str(idem).encode()).hexdigest()[:24] if idem else ""
+    existing = None
+    if token:                                  # look up before create: a re-run must not post a second entry
+        try:
+            rows = _get_list("Journal Entry", fields=["name", "docstatus"],
+                             filters=[["user_remark", "like", f"%{token}%"], ["docstatus", "!=", 2]])
+        except Exception as e:  # noqa: BLE001
+            return _unreachable("record_revenue", e, revenue_recorded=False, entry=None)
+        existing = rows[0] if rows else None
+        if existing and existing.get("docstatus") == 1:
+            return {"status": "done", "action": "record_revenue", "revenue_recorded": True,
+                    "entry": existing.get("name"), "deduplicated": True, "currency": COMPANY_CURRENCY,
+                    "summary": f"Journal Entry {existing.get('name')} already posted for this request; nothing new written."}
     try:
         cash_acc, income_acc = _revenue_accounts()
     except Exception as e:  # noqa: BLE001 — ERPNext unreachable: structured error, not a 500
@@ -616,7 +637,7 @@ def record_revenue(body: dict | None = None) -> dict:
         "voucher_type": "Journal Entry",
         "posting_date": time.strftime("%Y-%m-%d"),
         "company": COMPANY,
-        "user_remark": f"Onboarding subscription revenue: {subscription}",
+        "user_remark": f"Onboarding subscription revenue: {subscription}" + (f" [{token}]" if token else ""),
         "accounts": [
             {"account": cash_acc,
              "debit_in_account_currency": float(amount), "credit_in_account_currency": 0},
@@ -629,13 +650,16 @@ def record_revenue(body: dict | None = None) -> dict:
     submitted = False
     try:
         with httpx.Client(timeout=12.0) as client:
-            resp = client.post(
-                f"{ERPNEXT_URL}/api/resource/Journal%20Entry",
-                headers=_headers(), json=payload,
-            )
-            erpnext_status = resp.status_code
-            doc = (resp.json() or {}).get("data", {}) if 200 <= resp.status_code < 300 else {}
-            entry = doc.get("name")
+            if existing:                       # resume a draft left by an earlier attempt
+                entry = existing.get("name")
+            else:
+                resp = client.post(
+                    f"{ERPNEXT_URL}/api/resource/Journal%20Entry",
+                    headers=_headers(), json=payload,
+                )
+                erpnext_status = resp.status_code
+                doc = (resp.json() or {}).get("data", {}) if 200 <= resp.status_code < 300 else {}
+                entry = doc.get("name")
             # SUBMIT it (docstatus=1) so it actually POSTS TO THE GENERAL LEDGER. A Journal Entry created
             # via the resource API is a DRAFT (docstatus=0) and records NOTHING in the GL — so without this
             # the revenue was never booked, and the saga's cancel (docstatus=2) can't cancel a draft either.
@@ -650,11 +674,21 @@ def record_revenue(body: dict | None = None) -> dict:
     except Exception as e:  # network / auth hiccup — surface, don't crash the saga
         erpnext_status = f"error: {e}"
 
+    if not submitted:
+        # Not posted: claim nothing. A draft that was created is RETAINED (never auto-deleted); its id is
+        # reported so a human or a retry with the same idempotency key can finish it.
+        return {"status": "error", "action": "record_revenue", "executed": False, "revenue_recorded": False,
+                "retained": ({"doctype": "Journal Entry", "name": entry, "docstatus": 0} if entry else None),
+                "erpnext_status": erpnext_status,
+                "error": "journal entry was not submitted to the ledger",
+                "summary": f"Could NOT post subscription revenue for '{subscription}' "
+                           f"(draft {entry or '(none created)'} retained, not submitted to the GL)."}
     return {
-        "status": "done" if submitted else "error",
+        "status": "done",
         "action": "record_revenue",
         "revenue_recorded": submitted,            # true only if the JE was actually SUBMITTED (posted)
         "entry": entry,
+        "currency": COMPANY_CURRENCY,
         "erpnext_status": erpnext_status,
         "summary": (f"Recorded {_money(float(amount))} subscription revenue for '{subscription}' "
                     f"as Journal Entry {entry or '(pending)'} "

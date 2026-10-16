@@ -13,6 +13,9 @@ Capabilities (syscalls):
   billing.create_subscription  — onboard a customer onto a paid plan (undo: cancel_subscription)
   billing.cancel_subscription  — terminate a subscription (saga compensation)
 
+Refund amounts: ``amount_cents`` (explicit positive int) is unambiguous; legacy ``amount`` is string=dollars,
+int=cents. An optional ``currency`` (ISO 4217) must match the invoice currency.
+
 Money-moving capabilities carry approval_required=True (matches modules.yaml gates), so the
 runtime parks them as HumanTasks before execution.
 """

@@ -360,6 +360,8 @@ def chase_invoices(account_id: str, invoice_ids=None, *, approval=None, all_acco
     return out
 
 
+_CUSTOMER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._@-]{0,127}$")
+_PLAN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
@@ -373,6 +375,13 @@ def parse_amount_cents(value) -> int:
     an int is CENTS (1000 == $10.00). Floats/bools/None/garbage and non-positive values raise ValueError."""
     if isinstance(value, bool) or value is None or isinstance(value, float):
         raise ValueError(f"invalid refund amount {value!r}")
+    try:
+        return _parse_amount_cents(value)
+    except ArithmeticError:                    # Overflow / InvalidOperation from absurd exponents
+        raise ValueError(f"invalid refund amount {value!r}") from None
+
+
+def _parse_amount_cents(value) -> int:
     if isinstance(value, int):
         cents = value
     elif isinstance(value, str):
@@ -385,6 +394,8 @@ def parse_amount_cents(value) -> int:
             raise ValueError(f"invalid refund amount {value!r}") from None
         if not d.is_finite():
             raise ValueError(f"invalid refund amount {value!r}")
+        if abs(d) > Decimal("1e12"):
+            raise ValueError(f"invalid refund amount {value!r}")
         cents = int((d * 100).to_integral_value(rounding=ROUND_HALF_UP))
     else:
         raise ValueError(f"invalid refund amount {value!r}")
@@ -393,7 +404,28 @@ def parse_amount_cents(value) -> int:
     return cents
 
 
-def _execute_refund(invoice_number: str, amount=None, full_refund: bool = False) -> dict:
+_CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
+
+
+def resolve_refund_amount(body: dict):
+    """Requested refund as integer cents, or None when absent. ``amount_cents`` (an explicit positive int) is the
+    unambiguous form; the legacy ``amount`` keeps its meaning (string = dollars, int = cents). When both are
+    given they must agree. Raises ValueError for anything invalid."""
+    raw_c = body.get("amount_cents")
+    cents = None
+    if raw_c is not None:
+        if isinstance(raw_c, bool) or not isinstance(raw_c, int) or raw_c <= 0:
+            raise ValueError(f"amount_cents must be a positive integer, got {raw_c!r}")
+        cents = raw_c
+    if body.get("amount") is not None:
+        legacy = parse_amount_cents(body.get("amount"))
+        if cents is not None and legacy != cents:
+            raise ValueError("amount and amount_cents disagree")
+        cents = legacy
+    return cents
+
+
+def _execute_refund(invoice_number: str, amount=None, full_refund: bool = False, currency=None) -> dict:
     """Issue a real Lago refund credit note for the invoice — the money-back action. Refunds exactly the
     requested ``amount`` (capped at the invoice's refundable total; the actual cents are reported), or the
     whole refundable total only when ``full_refund`` is explicitly true. With neither, it errors. Errors are
@@ -413,6 +445,12 @@ def _execute_refund(invoice_number: str, amount=None, full_refund: bool = False)
     if not inv:
         return {"executed": False, "error": f"invoice {invoice_number!r} not found"}
     lago_id = inv.get("lago_id")
+    inv_cur = str(inv.get("currency") or "").upper()
+    if currency is not None:
+        if not isinstance(currency, str) or not _CURRENCY_RE.match(currency.strip().upper()):
+            return {"executed": False, "error": f"invalid currency {currency!r}"}
+        if inv_cur and currency.strip().upper() != inv_cur:
+            return {"executed": False, "error": f"currency {currency!r} does not match the invoice currency {inv_cur}"}
     with httpx.Client(timeout=10.0) as client:
         detail = client.get(f"{LAGO_API_URL}/api/v1/invoices/{lago_id}", headers=_headers())
         fees = ((detail.json() or {}).get("invoice", {}) or {}).get("fees", []) if detail.status_code < 400 else []
@@ -439,6 +477,7 @@ def _execute_refund(invoice_number: str, amount=None, full_refund: bool = False)
             return {"executed": False, "error": f"lago {r.status_code}: {r.text[:200]}"}
         cn = (r.json() or {}).get("credit_note", {})
         return {"executed": True, "credit_note_id": cn.get("lago_id"), "refunded_cents": target,
+                "currency": inv_cur or None,
                 "requested_cents": want}
 
 
@@ -452,8 +491,14 @@ def stage_refund(body: dict) -> dict:
                 "error": "invoice is required for a refund (no default invoice is chosen)",
                 "summary": "Refund not staged: an invoice number is required."}
     target = target.strip()
-    amount = body.get("amount") or ("the full invoice" if body.get("full_refund") is True
-                                    else "an UNSPECIFIED amount (an amount is required to execute)")
+    try:
+        want_cents = resolve_refund_amount(body)
+    except ValueError as e:
+        return {"status": "error", "action": "refund", "refund_staged": False, "refund_executed": False,
+                "error": str(e), "summary": f"Refund not staged: {e}."}
+    amount = (f"{want_cents} cents" if want_cents is not None else
+              "the full invoice" if body.get("full_refund") is True
+              else "an UNSPECIFIED amount (an amount is required to execute)")
     if not body.get("_approval"):
         return {
             "status": "pending_approval",
@@ -463,7 +508,8 @@ def stage_refund(body: dict) -> dict:
             "summary": f"Refund of {amount} on invoice {target} is staged and awaiting human approval. "
                        "Refunds are never auto-executed by the agent.",
         }
-    ex = _execute_refund(target, body.get("amount"), full_refund=body.get("full_refund") is True)
+    ex = _execute_refund(target, want_cents, full_refund=body.get("full_refund") is True,
+                         currency=body.get("currency"))
     ok = bool(ex.get("executed"))
     return {
         "status": "done" if ok else "error",
@@ -498,8 +544,11 @@ def create_subscription(body: dict) -> dict:
     POST /api/v1/subscriptions is the real, idempotent Lago call (keyed on external_id).
     Side-effecting; its compensating action is `cancel_subscription` (saga undo).
     """
-    customer = body.get("customer") or "new-customer"
-    plan = body.get("plan_code") or DEFAULT_PLAN_CODE
+    customer, plan = body.get("customer"), body.get("plan_code")
+    if not (isinstance(customer, str) and _CUSTOMER_RE.match(customer)
+            and isinstance(plan, str) and _PLAN_RE.match(plan)):
+        return {"status": "error", "action": "create_subscription", "subscription": False, "created": False,
+                "error": "a customer id and a plan code (plain strings) are required; no defaults are assumed"}
     if not body.get("_approval"):             # gate in CORE: every caller is covered
         return pending_approval("billing.create_subscription", customer=customer, plan_code=plan,
                                 subscription=False)
@@ -507,6 +556,16 @@ def create_subscription(body: dict) -> dict:
     lago_id = None
     status_code = 0
     with httpx.Client(timeout=10.0) as client:
+        try:                                  # did this subscription already exist BEFORE this call?
+            pre = client.get(f"{LAGO_API_URL}/api/v1/subscriptions/{quote(external_id, safe='')}",
+                             headers=_headers())
+            pre_existing = pre.status_code == 200 and bool((pre.json() or {}).get("subscription"))
+        except Exception:  # noqa: BLE001 — cannot tell: treat as pre-existing so an undo never cancels it
+            pre_existing = True
+        if pre_existing:
+            return {"status": "done", "action": "create_subscription", "subscription": True, "created": False,
+                    "subscription_id": external_id, "plan": plan, "plan_code": plan, "customer": customer,
+                    "note": "subscription already existed; nothing was created"}
         resp = client.post(
             f"{LAGO_API_URL}/api/v1/subscriptions",
             headers=_headers(),
@@ -534,8 +593,11 @@ def create_subscription(body: dict) -> dict:
         "status": "done",
         "action": "create_subscription",
         "subscription": True,
+        "created": True,
         "subscription_id": external_id or lago_id,
+        "customer": customer,
         "plan": plan,
+        "plan_code": plan,
         "lago_status": status_code,
     }
 
@@ -553,6 +615,10 @@ def cancel_subscription(body: dict) -> dict:
         external_id = _subscription_external_id(customer, plan)
     if not body.get("_approval"):             # gate in CORE: every caller is covered
         return pending_approval("billing.cancel_subscription", customer=customer, subscription_cancelled=False)
+    if "result" in body and isinstance(body.get("result"), dict) and fwd.get("created") is not True:
+        return {"status": "error", "action": "cancel_subscription", "cancelled": False,
+                "subscription_cancelled": False,
+                "error": "the forward call did not create this subscription; nothing was cancelled"}
     if not valid_id(external_id):             # never guess a target: refuse when the id is missing/invalid
         return {"status": "error", "action": "cancel_subscription", "cancelled": False,
                 "subscription_cancelled": False,

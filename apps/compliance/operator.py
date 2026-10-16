@@ -11,6 +11,9 @@ Capabilities (syscalls):
   compliance.remediate     — open a remediation TICKET for approval (never a host fix) [gate: policy_change]
   compliance.file_consent  — file the customer's consent record  [approval gate: onboarding]
 
+Compensation: remediate is PRESERVE (a completed remediation is kept on a failed workflow and is only reversed by
+a separate, approved human decision); file_consent stays IRREVERSIBLE (a filed consent record is a legal record).
+
 Applying a system fix changes the host, so compliance.remediate carries
 approval_required=True (matches modules.yaml policy_change gate); the runtime parks it as
 a HumanTask before execution. compliance.file_consent is the onboarding mission's human
@@ -48,7 +51,9 @@ def build_compliance_operator() -> Operator:
             provides=["remediation_staged"],
             outputs={"remediation_staged": "a remediation ticket staged for human approval (policy_change); never a host fix"},
             side_effecting=True,
-            compensation={"supported": False, "reversibility": "IRREVERSIBLE", "notes": "remediation changes live systems; not automatically reversible"}, approval_required=True,
+            compensation={"supported": False, "disposition": "PRESERVE",
+                          "notes": "a compliance remediation is never auto-reversed by a failed workflow (the safer "
+                                   "state is kept); reversing it is a separate, approved human decision"}, approval_required=True,
             permissions=["compliance:write"], estimated_value="high", latency_ms=500,
             concurrency_mode="exclusive", resource_keys=["compliance:host-config"],  # one host fix at a time
         ),
