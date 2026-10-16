@@ -1557,6 +1557,17 @@ class MissionRuntime:
         recorded_budget = created.payload.get("budget")
         budget = Budget(**{k: v for k, v in recorded_budget.items() if k in Budget.__dataclass_fields__}) \
             if isinstance(recorded_budget, dict) else Budget()
+        tenant_id = created.payload.get("tenant") or ""
+        if not isinstance(recorded_budget, dict) and tenant_id:
+            # a log from before budgets were recorded: take the tighter of the default and the tenant's ceiling
+            from .control_auth import tenant_limits  # noqa: PLC0415
+            _refs, cap = tenant_limits(tenant_id)
+            if cap is not None and cap < budget.usd:
+                import logging  # noqa: PLC0415
+                logging.getLogger(__name__).warning("mission %s: no recorded budget; clamped to the tenant ceiling",
+                                                    mission_id)
+                budget = Budget(usd=cap, tokens=budget.tokens, human_minutes=budget.human_minutes,
+                                wall_clock_s=budget.wall_clock_s)
         active = self._active_plan_record(mission_id)
         # The resolved template, when the log has one. Falling back to
         # `MissionCreated` keeps pre-existing logs working — and those are

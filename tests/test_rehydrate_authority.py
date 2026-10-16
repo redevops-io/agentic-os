@@ -193,3 +193,19 @@ def test_late_replay_failure_leaves_no_live_mission(tmp_path, monkeypatch):
     assert mid not in [x["id"] for x in c.get("/missions", headers=H).json()["missions"]]
     assert mid not in [x["mission_id"] for x in c.get("/inbox", headers=H).json()["inbox"]]
     assert c.post(f"/missions/{mid}/approve", json={"node_id": node}, headers=H).status_code == 404
+
+
+def test_legacy_budget_is_clamped_to_the_tenant_ceiling(tmp_path, monkeypatch):
+    import json
+    monkeypatch.setenv("AGENTIC_OS_TENANT_LIMITS", json.dumps({"acme": {"policy_refs": ["x:read"], "budget_usd": 1.5}}))
+    p = tmp_path / "e.jsonl"
+    rt = _rt(p)
+    m = rt.create_mission("onboard customer", template="onboarding", policy_refs=["*"], tenant="acme",
+                          budget=Budget(usd=50.0))
+    rows = [json.loads(x) for x in open(p)]
+    for d in rows:
+        d["payload"].pop("budget", None) if d["type"] == "MissionCreated" else None
+    open(p, "w").write("".join(json.dumps(d) + "\n" for d in rows))
+    assert _rt(p).rehydrate(m.id).budget.usd == 1.5
+    monkeypatch.setenv("AGENTIC_OS_TENANT_LIMITS", json.dumps({"acme": {"budget_usd": 100}}))
+    assert _rt(p).rehydrate(m.id).budget.usd == 5.0          # never above the default
