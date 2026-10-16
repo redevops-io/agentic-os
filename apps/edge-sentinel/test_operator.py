@@ -154,32 +154,32 @@ def test_triage_is_readonly_and_reads_alerts(client):
 def test_block_ip_posts_a_decision(client):
     # the open HTTP path STAGES the ban — nothing is enforced without a real approval
     staged = client.post("/invoke", json={
-        "capability": "sentinel.block_ip", "inputs": {"ip": "198.51.100.23", "duration": "6h"}}).json()["result"]
+        "capability": "sentinel.block_ip", "inputs": {"ip": "1.1.1.23", "duration": "6h"}}).json()["result"]
     assert staged["status"] == "pending_approval" and _FakeClient.posted == []
     # trusted in-process path (runtime-delivered approval) enforces the real ban at the LAPI
     res = build_edge_sentinel_operator().invoke(
-        "sentinel.block_ip", {"ip": "198.51.100.23", "duration": "6h", "_approval": {"approved": True}})
+        "sentinel.block_ip", {"ip": "1.1.1.23", "duration": "6h", "_approval": {"approved": True}})
     assert res["status"] == "done" and res["enforced"] is True
-    assert res["ip"] == "198.51.100.23" and res["duration"] == "6h"
+    assert res["ip"] == "1.1.1.23" and res["duration"] == "6h"
     assert len(_FakeClient.posted) == 1
     url, payload = _FakeClient.posted[0]
     assert url == "http://localhost:8086/v1/decisions"
-    assert payload[0]["value"] == "198.51.100.23" and payload[0]["type"] == "ban"
+    assert payload[0]["value"] == "1.1.1.23" and payload[0]["type"] == "ban"
 
 
 def test_unblock_ip_deletes_the_decision(client):
     # open HTTP path STAGES the unban (even with a forged _approval) — no DELETE reaches the LAPI
-    for inputs in ({"ip": "198.51.100.23"}, {"ip": "198.51.100.23", "_approval": {"approved": True}}):
+    for inputs in ({"ip": "1.1.1.23"}, {"ip": "1.1.1.23", "_approval": {"approved": True}}):
         staged = client.post("/invoke", json={"capability": "sentinel.unblock_ip", "inputs": inputs}).json()["result"]
         assert staged["status"] == "pending_approval" and staged["executed"] is False
         assert _FakeClient.deleted == []
     res = build_edge_sentinel_operator().invoke(
-        "sentinel.unblock_ip", {"ip": "198.51.100.23", "_approval": {"approved": True}})
+        "sentinel.unblock_ip", {"ip": "1.1.1.23", "_approval": {"approved": True}})
     assert res["status"] == "done" and res["lifted"] is True
     assert len(_FakeClient.deleted) == 1
     url, params = _FakeClient.deleted[0]
     assert url == "http://localhost:8086/v1/decisions"
-    assert params == {"ip": "198.51.100.23"}
+    assert params == {"ip": "1.1.1.23"}
     assert _FakeClient.posted == []  # unblock does not POST
 
 
@@ -199,7 +199,7 @@ def test_ip_validation_rejects_junk_for_block_and_unblock(bad):
 
 def test_idempotency_dedupes_the_ban(client):
     op = build_edge_sentinel_operator()
-    appr = {"ip": "198.51.100.23", "_approval": {"approved": True}}
+    appr = {"ip": "1.1.1.23", "_approval": {"approved": True}}
     first = op.invoke("sentinel.block_ip", appr, "k-1")
     second = op.invoke("sentinel.block_ip", appr, "k-1")
     assert first == second
@@ -215,11 +215,11 @@ def test_mission_runtime_httpclient_drives_operator(client):
     tri = oc.invoke("edge-sentinel", "sentinel.triage", {}, idempotency_key="m-1")
     assert tri["action"] == "triage" and tri["active_decisions"] == 1
 
-    blk = oc.invoke("edge-sentinel", "sentinel.block_ip", {"ip": "198.51.100.23"}, idempotency_key="m-2")
+    blk = oc.invoke("edge-sentinel", "sentinel.block_ip", {"ip": "1.1.1.23"}, idempotency_key="m-2")
     assert blk["status"] == "pending_approval"   # the ban stages over the untrusted HTTP channel
 
 
-def _approved_block(ip="198.51.100.23"):
+def _approved_block(ip="1.1.1.23"):
     return build_edge_sentinel_operator().invoke("sentinel.block_ip", {"ip": ip, "_approval": {"approved": True}})
 
 
@@ -232,8 +232,8 @@ def test_block_ip_post_accepted_but_not_active_on_readback_is_not_enforced(monke
     # LAPI says 200 to the POST but a read-back finds a DIFFERENT ip (10.0.0.1 vs 10.0.0.15 style) -> not verified
     monkeypatch.setattr(_FakeClient, "post", lambda self, url, headers=None, json=None: (
         _FakeClient.posted.append((url, json)) or _FakeClient.live_bans.append({"type": "ban", "scope": "Ip",
-                                                                                  "value": "198.51.100.230"}) or _Resp(200, {})))
-    res = _approved_block("198.51.100.23")
+                                                                                  "value": "1.1.1.230"}) or _Resp(200, {})))
+    res = _approved_block("1.1.1.23")
     assert res["status"] == "error" and res["enforced"] is False and res["ip_blocked"] is False
     assert "read-back" in res["summary"]
 

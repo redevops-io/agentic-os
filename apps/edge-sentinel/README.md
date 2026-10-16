@@ -108,6 +108,20 @@ docker run --rm -p 8203:8203 \
 | `PORT` | `8203` | uvicorn bind port. |
 | `ANTHROPIC_API_KEY` | _(optional)_ | If set, `triage` adds an LLM reasoning blurb (model `claude-opus-4-8`). The endpoint works fully without it — actions are deterministic CrowdSec/cscli calls. |
 
+| `SENTINEL_PROTECTED_IPS`, `SENTINEL_HOST_IPS` | _(empty)_ | Comma-separated addresses/CIDRs that are never banned (in addition to this host, its gateway, the LAPI host and the requesting operator). |
+| `SENTINEL_BLOCK_ALLOW_NETWORKS` | _(empty)_ | CIDRs inside which private/reserved space may be banned. Loopback, link-local, multicast and unspecified space is never bannable. |
+| `SENTINEL_BLOCK_ALLOW_WIDE_CIDR` | _(off)_ | Allow ranges wider than /24 (IPv4) or /64 (IPv6). |
+| `SENTINEL_BLOCK_MAX_HOURS` | `168` | Cap for a ban duration. |
+| `SENTINEL_STATE_DIR` | _(unset)_ | Directory for the durable approval state (atomic, private file). Unset keeps state in memory only; an unreadable file makes decisions and executions fail closed. |
+
+### Approval workflow
+
+Anonymous visitors can preview a decision (`POST /api/cases/{id}/respond`): the result is simulated and nothing is recorded. A real decision needs the operator credentials, and the recorded actor is the authenticated principal. A request must belong to the case, an action can be decided only while awaiting approval (an approved action can still be withdrawn), and `POST /api/cases/{id}/execute` runs only an approved action, once. A failed execution can be retried with backoff up to five times; after that an operator re-approval resets the budget.
+
+### Deployment note
+
+The sentinel can also read alerts from the CrowdSec LAPI with a machine (watcher) login, which removes the need for docker access; that is a deployment-level option and is not implemented in this app, which still shells out to `cscli` for alerts. See `/health` for the state-store status.
+
 ## Endpoints
 
 - `GET /health` → `{"status":"ok","core":"crowdsec","connected": <bool>}`

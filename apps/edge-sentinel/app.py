@@ -63,6 +63,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from . import core
 from . import live  # noqa: E402 — wires the SOC app to the Security Intelligence Core (real cases)
 from . import ratelimit  # noqa: E402 — per-IP token bucket on the unauthenticated POST routes
+from . import ipguard  # noqa: E402 — ban-target validation
 from . import auth  # noqa: E402 — the HTTP-Basic operator gate for real execution
 # Self-contained security planes — each degrades gracefully + ships labelled SAMPLE until its token
 # is set (netbird/portabase) or reports unavailable until wired (deploy_scan). Their panels reuse the
@@ -457,12 +458,14 @@ def _cases_panel(summaries: list[dict]) -> str:
                 f"Approve block {_esc(ip)}</button> "
                 f"<button class='btn btn--ghost' onclick=\"esRespond('{_esc(s['case_id'])}','{_esc(rid)}',false)\">Reject</button>"
             )
-        elif act and act.get("state") == "APPROVED":
+        elif act and act.get("state") in ("APPROVED", "FAILED"):
             rid = act["request_id"]
+            failed = act.get("state") == "FAILED"
             action = (
-                "<span class='pill pill--warn'><span class='pill__dot'></span>approved · awaiting operator</span> "
+                "<span class='pill pill--warn'><span class='pill__dot'></span>"
+                f"{'last attempt failed · retry' if failed else 'approved · awaiting operator'}</span> "
                 f"<button class='btn' onclick=\"esExecute('{_esc(s['case_id'])}','{_esc(rid)}')\">"
-                "Execute (operator) &#128274;</button>"
+                f"{'Retry' if failed else 'Execute'} (operator) &#128274;</button>"
             )
         else:
             action = "<span class='mono' style='color:#9b99a1'>—</span>"
@@ -498,9 +501,10 @@ def _cases_panel(summaries: list[dict]) -> str:
         "async function esRespond(cid,rid,approve){\n"
         "  const r = await fetch(`/api/cases/${cid}/respond`,{method:'POST',"
         "headers:{'Content-Type':'application/json'},"
-        "body:JSON.stringify({request_id:rid,approved:approve,actor:'demo-approver'})});\n"
+        "body:JSON.stringify({request_id:rid,approved:approve})});\n"
         "  const j = await r.json();\n"
-        "  if(approve){alert('Approved and staged. Real execution needs an authenticated operator — "
+        "  if(j.simulated){alert('Demo: simulated - nothing was recorded. Sign in as the operator to record a real decision.');}\n"
+        "  else if(approve){alert('Approved and staged. Real execution needs an authenticated operator — "
         "click \\u201cExecute (operator)\\u201d.');}\n"
         "  else{alert('Rejected — the edge was not touched.');}\n"
         "  location.reload();\n"
@@ -567,9 +571,10 @@ def _block_ip(body: dict) -> dict:
     Mirrors the module's `approval_required:[remediation]`: stage the block and return
     pending_approval. The actual ban only happens via the `approve_block` action.
     """
-    ip = (body.get("ip") or "").strip()
-    if not ip:
-        return {"status": "error", "action": "block_ip", "error": "missing 'ip'"}
+    target, _dur, _why, refusal = core.preflight_block(body or {})   # refuse un-banable targets at staging time too
+    if refusal:
+        return refusal
+    ip = target.value
     return {
         "status": "pending_approval",
         "action": "block_ip",
@@ -590,7 +595,10 @@ def _approve_block(body: dict) -> dict:
 
     Thin wrapper over core.block_ip (POST /v1/decisions) — core stays context-runtime-free.
     """
-    ip = ((body or {}).get("ip") or "").strip()
+    target, _dur, _why, refusal = core.preflight_block(body or {})   # validate first, so a refusal shows in dry-run too
+    if refusal:
+        return refusal
+    ip = target.value
     if not auth.block_enabled():
         return {"status": "dry_run", "action": "approve_block", "ip": ip,
                 "summary": f"DRY-RUN: would block {ip}",
@@ -1153,7 +1161,9 @@ else:
 # --- routes ------------------------------------------------------------------
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "core": "crowdsec", "connected": crowdsec_connected()}
+    sh = live.state_health()
+    return {"status": "ok" if sh["ok"] else "degraded", "core": "crowdsec", "connected": crowdsec_connected(),
+            "state": sh}
 
 
 @app.post("/api/agent", dependencies=[Depends(ratelimit.rate_limit)])
@@ -1227,6 +1237,15 @@ def api_case(case_id: str) -> JSONResponse:
     return JSONResponse(detail)
 
 
+def _principal(request: Request) -> "str | None":
+    """The authenticated operator name, or None when the request carries no valid operator credentials.
+    Never derived from a request body."""
+    try:
+        return auth.require_operator(request)
+    except HTTPException:
+        return None
+
+
 @app.post("/api/cases/{case_id}/respond", dependencies=[Depends(ratelimit.rate_limit)])
 async def api_case_respond(case_id: str, request: Request) -> JSONResponse:
     """DEMO-FACING decision — OPEN, no auth, NO edge effect. Reject records the rejection and stops; approve
@@ -1240,11 +1259,16 @@ async def api_case_respond(case_id: str, request: Request) -> JSONResponse:
     if not request_id:
         return JSONResponse({"error": "missing 'request_id'"}, status_code=400)
     try:
-        out = live.decide(case_id, request_id,
-                          approved=bool((body or {}).get("approved")),
-                          actor=(body or {}).get("actor", "demo-approver"))
+        approved = bool((body or {}).get("approved"))
+        principal = _principal(request)
+        if principal is None:       # anonymous: simulated preview, nothing is recorded
+            out = live.preview_decide(case_id, request_id, approved=approved)
+        else:
+            out = live.decide(case_id, request_id, approved=approved, actor=f"operator:{principal}")
     except KeyError:
         return JSONResponse({"error": f"unknown case or request ({case_id}/{request_id})"}, status_code=404)
+    except live.ExecutionError as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=400)
     return JSONResponse(out)
@@ -1264,7 +1288,11 @@ async def api_case_execute(case_id: str, request: Request,
     if not request_id:
         return JSONResponse({"error": "missing 'request_id'"}, status_code=400)
     try:
-        out = live.execute(case_id, request_id, actor=f"operator:{operator}")
+        tok = ipguard.OPERATOR_IP.set(ratelimit.client_ip(request))   # never ban the operator's own address
+        try:
+            out = live.execute(case_id, request_id, actor=f"operator:{operator}")
+        finally:
+            ipguard.OPERATOR_IP.reset(tok)
     except KeyError:
         return JSONResponse({"error": f"unknown case or request ({case_id}/{request_id})"}, status_code=404)
     except live.ExecutionError as e:
@@ -1317,7 +1345,11 @@ async def agent_run(request: Request) -> JSONResponse:
     if action == "block_ip":
         return JSONResponse(_block_ip(body or {}))
     if action == "approve_block":
-        return JSONResponse(_approve_block(body or {}))
+        tok = ipguard.OPERATOR_IP.set(ratelimit.client_ip(request))
+        try:
+            return JSONResponse(_approve_block(body or {}))
+        finally:
+            ipguard.OPERATOR_IP.reset(tok)
     if action == "triage":
         return JSONResponse(_triage(body or {}))
     # NetBird — propose a tighter policy (staged) then apply it on approval

@@ -24,7 +24,11 @@ import time
 from pathlib import Path
 from typing import Callable
 
+import ipaddress
+
 import httpx
+
+from . import ipguard
 
 # ── config (env; seed.py writes agents/edge-sentinel/.env) ───────────────────
 # Idempotent .env load so this module is self-sufficient when imported by the operator
@@ -263,6 +267,26 @@ def _parse_ip(raw) -> "str | None":
         return None
 
 
+def preflight_block(body: dict, operator_ip=None) -> "tuple[ipguard.BlockTarget | None, str, str, dict | None]":
+    """Validate a ban request: (target, duration, reason, None) when acceptable, else (None, "", "", error result)."""
+    body = body or {}
+    raw = body.get("ip")
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None, "", "", {"status": "error", "action": "block_ip", "ip_blocked": False, "error": "missing 'ip'"}
+    try:
+        target = ipguard.check_target(raw, service_urls=(CROWDSEC_LAPI_URL, CROWDSEC_FRONT_URL),
+                                      operator_ip=operator_ip)
+    except ipguard.BlockRefused as e:
+        return None, "", "", {"status": "error", "action": "block_ip", "refused": True, "refusal": e.code,
+                              "ip_blocked": False, "enforced": False,
+                              "error": (f"invalid 'ip': {e.reason}" if e.code in ("malformed", "too_wide") else f"refused: {e.reason}")}
+    duration, derr = ipguard.parse_duration(body.get("duration"))
+    if derr:
+        return None, "", "", {"status": "error", "action": "block_ip", "ip": target.value, "ip_blocked": False,
+                              "enforced": False, "error": derr}
+    return target, duration, ipguard.clean_reason(body.get("reason")), None
+
+
 def block_ip(body: dict) -> dict:
     """Add a ban decision at the CrowdSec edge — the SENSITIVE, side-effecting write.
 
@@ -270,16 +294,12 @@ def block_ip(body: dict) -> dict:
     (approval_required=True), so the Mission Runtime parks it as a HumanTask before
     execution; its compensating action (saga undo) is `unblock_ip`.
     """
-    ip = (body.get("ip") or "").strip()
-    if not ip:
-        return {"status": "error", "action": "block_ip", "error": "missing 'ip'"}
-    ip = _parse_ip(ip)
-    if ip is None:
-        return {"status": "error", "action": "block_ip", "error": "invalid 'ip': must be a single IPv4/IPv6 address"}
-    duration = body.get("duration", "4h")
-    reason = body.get("reason", "blocked via edge-sentinel agent (human-approved)")
+    target, duration, reason, refusal = preflight_block(body)
+    if refusal:
+        return refusal
+    ip = target.value
     decision = {
-        "type": "ban", "scope": "Ip", "value": ip,
+        "type": "ban", "scope": target.scope, "value": ip,
         "duration": duration, "origin": "cscli", "scenario": reason,
     }
     status_code = None
@@ -297,7 +317,7 @@ def block_ip(body: dict) -> dict:
             if status_code in (200, 201, 202):
                 # Read-back: the POST status alone does not prove the ban is ACTIVE. Re-read the LAPI's
                 # decisions for this IP and require a parsed-equal active ban before claiming it is enforced.
-                verified, read_back = _ban_active(client, ip)
+                verified, read_back = _ban_active(client, ip, target.scope)
     except Exception as e:  # noqa: BLE001 - LAPI unreachable / transport error: fail closed, nothing enforced
         err = f"{type(e).__name__}: {e}"
     posted = status_code in (200, 201, 202)
@@ -325,12 +345,13 @@ def block_ip(body: dict) -> dict:
     }
 
 
-def _ban_active(client, ip: str) -> "tuple[bool, int | None]":
-    """Read the LAPI decisions for ``ip`` and report (is an active ban for exactly this IP present, how many
-    decisions were returned). Parsed equality (canonical IP), never substring; any failure -> (False, None)."""
+def _ban_active(client, value: str, scope: str = "Ip") -> "tuple[bool, int | None]":
+    """Read the LAPI decisions for ``value`` and report (is an active ban for exactly this target present, how many
+    decisions were returned). Parsed equality, never substring. Any failure -> (False, None): the count is None
+    exactly when the read-back itself failed, so callers can tell "no ban" from "could not check"."""
     try:
         r = client.get(f"{CROWDSEC_LAPI_URL}/v1/decisions", headers={"X-Api-Key": CROWDSEC_BOUNCER_KEY},
-                       params={"ip": ip})
+                       params={"range" if scope == "Range" else "ip": value})
         if getattr(r, "status_code", 200) != 200:
             return False, None
         rows = r.json() or []
@@ -338,10 +359,17 @@ def _ban_active(client, ip: str) -> "tuple[bool, int | None]":
             return False, None
     except Exception:  # noqa: BLE001
         return False, None
-    hit = any(isinstance(d, dict) and (d.get("type") or "ban") == "ban"
-              and str(d.get("scope") or "Ip").lower() == "ip" and _parse_ip(d.get("value")) == ip
-              for d in rows)
-    return hit, len(rows)
+
+    def same(d) -> bool:
+        if not (isinstance(d, dict) and (d.get("type") or "ban") == "ban"
+                and str(d.get("scope") or "Ip").lower() == scope.lower()):
+            return False
+        try:
+            return str(ipaddress.ip_network(str(d.get("value")).strip(), strict=False)) == \
+                str(ipaddress.ip_network(value, strict=False))
+        except ValueError:
+            return False
+    return any(same(d) for d in rows), len(rows)
 
 
 def unblock_ip(body: dict) -> dict:
@@ -349,31 +377,45 @@ def unblock_ip(body: dict) -> dict:
 
     DELETE /v1/decisions?ip=<ip> removes the active decision on the LAPI.
     """
-    ip = (body.get("ip") or "").strip()
-    if not ip:
+    raw = (body or {}).get("ip")
+    if not raw:
         return {"status": "error", "action": "unblock_ip", "error": "missing 'ip'"}
-    ip = _parse_ip(ip)
+    ip = _parse_ip(raw if isinstance(raw, str) else "")
     if ip is None:
         return {"status": "error", "action": "unblock_ip", "error": "invalid 'ip': must be a single IPv4/IPv6 address"}
     status_code = None
-    with httpx.Client(timeout=10.0) as client:
-        resp = client.delete(
-            f"{CROWDSEC_LAPI_URL}/v1/decisions",
-            headers=_headers(),
-            params={"ip": ip},
-        )
-        status_code = resp.status_code
-    ok = status_code in (200, 204)
+    err = None
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.delete(
+                f"{CROWDSEC_LAPI_URL}/v1/decisions",
+                headers=_headers(),
+                params={"ip": ip},
+            )
+            status_code = resp.status_code
+            still_banned, seen = (False, None)
+            if status_code in (200, 204):
+                still_banned, seen = _ban_active(client, ip)
+    except Exception as e:  # noqa: BLE001 - LAPI unreachable / transport error: report, never raise
+        err = f"{type(e).__name__}: {e}"
+        still_banned, seen = False, None
+    deleted = status_code in (200, 204) and not err
+    unknown = deleted and seen is None            # the read-back itself failed: never claim success
+    ok = deleted and not still_banned and not unknown
+    if unknown:
+        err = "unban not verified: the read-back of the LAPI decisions failed"
     fetch_activity(force=True)
     return {
         "status": "done" if ok else "error",
         "action": "unblock_ip",
         "ip": ip,
-        "lifted": ok,
+        "lifted": True if ok else (None if unknown else False),
+        **({"error": err} if err else {}),
         "lapi_status": status_code,
         "summary": (
             f"Unbanned {ip} via CrowdSec (DELETE /v1/decisions)." if ok
-            else f"Failed to unban {ip} (LAPI status {status_code})."
+            else (f"Could not verify that {ip} was unbanned (read-back failed)." if unknown
+                  else f"Failed to unban {ip} (LAPI status {status_code}).")
         ),
     }
 

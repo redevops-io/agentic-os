@@ -36,7 +36,7 @@ def build_edge_sentinel_operator() -> Operator:
         capability(
             "sentinel.block_ip",
             lambda inp: (core.block_ip(inp) if inp.get("_approval")
-                        else pending_approval("sentinel.block_ip", ip=(inp.get("ip") or "").strip(), ip_blocked=False)),
+                        else pending_approval("sentinel.block_ip", ip=str(inp.get("ip") or "").strip(), ip_blocked=False)),
             provides=["ip_blocked"],
             outputs={"ip_blocked": "True ONLY if a read-back of the LAPI decisions for the IP (parsed IP equality) shows an active ban; a 2xx POST alone is not enough"},
             side_effecting=True,
@@ -49,11 +49,11 @@ def build_edge_sentinel_operator() -> Operator:
         capability(
             "sentinel.unblock_ip",
             lambda inp: (core.unblock_ip(inp) if inp.get("_approval")
-                        else pending_approval("sentinel.unblock_ip", ip=(inp.get("ip") or "").strip(), ip_unblocked=False)),
+                        else pending_approval("sentinel.unblock_ip", ip=str(inp.get("ip") or "").strip(), ip_unblocked=False)),
             provides=["ip_unblocked"],
             outputs={"ip_unblocked": "ban decision lifted (saga compensation)"},
             side_effecting=True,
-            compensation={"supported": False, "reversibility": "IRREVERSIBLE", "notes": "lifting a security block; re-blocking is a new forward action"}, approval_required=True,
+            compensation={"supported": False, "disposition": "PRESERVE", "notes": "lifting a security block is verified by read-back; re-blocking is a new forward action"}, approval_required=True,
             permissions=["sentinel:write"], estimated_value="medium", latency_ms=800,
             concurrency_mode="exclusive", concurrency_key="sentinel:ip:{ip}",
         ),
