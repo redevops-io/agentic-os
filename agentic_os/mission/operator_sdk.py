@@ -15,6 +15,7 @@ are not failure-shaped (``mission.verify.result_failed``) are cached — a faile
 on retry (a side-effect-free staged ``pending_approval`` result is cached; the approved retry has its own key). With multiple replicas the cache is not shared (see ``approval.SharedStore``).
 """
 
+import hashlib
 import logging
 import os
 import threading
@@ -116,6 +117,14 @@ def pending_approval(action: str, **preview) -> dict:
     return {"status": "pending_approval", "action": action, "executed": False, **preview}
 
 
+def idempotency_wait_s() -> float:
+    """How long a duplicate call waits for the in-flight one (``AGENTIC_OS_IDEMPOTENCY_WAIT_S``, default 300)."""
+    try:
+        return float(os.environ.get("AGENTIC_OS_IDEMPOTENCY_WAIT_S", "300"))
+    except ValueError:
+        return 300.0
+
+
 class Operator:
     """One app's capability operator: manifest + handlers + idempotency dedupe."""
 
@@ -140,8 +149,10 @@ class Operator:
         # Dedupe on (capability, canonical inputs, key): the same key with different capability/inputs is a
         # different call. `_approval` stays IN the hash so an approved retry is never served the staged result.
         try:
+            # the caller's ephemeral credential material scopes the key: two tenants never share a result
+            _ctx = hashlib.sha256(canonical(secrets or {})).hexdigest() if secrets else ""
             _dk = (capability, canonical({k: v for k, v in (inputs or {}).items()
-                                          if k not in {"_mission", "_goal", "_node"}}), idempotency_key)
+                                          if k not in {"_mission", "_goal", "_node"}}), idempotency_key, _ctx)
         except Exception:  # noqa: BLE001
             _dk = None
         if not (idempotency_key and _dk is not None):
@@ -159,7 +170,8 @@ class Operator:
                     slot = self._inflight[_dk] = {"done": threading.Event(), "ok": False, "result": None}
             if leader:
                 break
-            slot["done"].wait()
+            if not slot["done"].wait(idempotency_wait_s()):
+                raise TimeoutError(f"{capability}: an identical call is still in flight")
             if slot["ok"]:
                 return slot["result"]
         try:

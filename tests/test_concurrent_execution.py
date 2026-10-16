@@ -132,3 +132,69 @@ def test_malformed_observation_is_ignored():
     m = rt.create_mission("g", policy_refs=["*"])
     rt.run(m.id)
     assert m.state == MissionState.SUCCEEDED
+
+
+def test_same_key_different_credentials_do_not_share_results():
+    ran = []
+
+    def h(inp, secrets):
+        ran.append(secrets["t"])
+        time.sleep(0.05)
+        return {"v": "for-" + secrets["t"]}
+
+    op = Operator("svc", [capability("get", h, outputs={"v": "string"})])
+    res = {}
+    ts = [threading.Thread(target=lambda t=t: res.__setitem__(t, op.invoke("get", {"id": 1}, "K", secrets={"t": t})))
+          for t in ("A", "B")]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert sorted(ran) == ["A", "B"]
+    assert res["A"]["v"] == "for-A" and res["B"]["v"] == "for-B"
+
+
+def test_waiter_times_out_on_a_hung_handler(monkeypatch):
+    monkeypatch.setenv("AGENTIC_OS_IDEMPOTENCY_WAIT_S", "0.2")
+    gate = threading.Event()
+    op = Operator("svc", [capability("act", lambda i: gate.wait(5) and {"ok": 1}, outputs={"ok": "bool"})])
+    t = threading.Thread(target=lambda: op.invoke("act", {}, "k"))
+    t.start()
+    time.sleep(0.05)
+    try:
+        op.invoke("act", {}, "k")
+        raise AssertionError("expected a timeout")
+    except TimeoutError:
+        pass
+    finally:
+        gate.set()
+        t.join()
+
+
+def test_log_in_read_only_directory_is_appendable(tmp_path):
+    import os
+    import pytest
+    d = tmp_path / "ro"
+    d.mkdir()
+    p = d / "e.jsonl"
+    p.write_text("")
+    d.chmod(0o555)
+    try:
+        if os.access(d, os.W_OK):
+            pytest.skip("directory permissions are not enforced for this user")
+        s = EventStore(str(p))
+        s.append("X", "m", {})
+        assert len(EventStore(str(p)).all()) == 1
+        assert not any(n.endswith(".lock") for n in os.listdir(d))
+    finally:
+        d.chmod(0o755)
+
+
+def test_complete_last_record_without_newline_is_kept(tmp_path):
+    p = tmp_path / "e.jsonl"
+    s = EventStore(str(p))
+    s.append("X", "m", {})
+    data = p.read_bytes()
+    p.write_bytes(data.rstrip(b"\n"))
+    s2 = EventStore(str(p))
+    assert len(s2.all()) == 1
+    s2.append("Y", "m", {})
+    assert [e.type for e in EventStore(str(p)).all()] == ["X", "Y"]

@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import os
 import threading
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol, runtime_checkable
 
@@ -18,6 +17,11 @@ from .types import (
     Mission, MissionState, ExecutionPlan, ExecutionGraph, Node, NodeState,
     Belief, HumanTask, now, new_id, to_jsonable,
 )
+
+
+def _fsync_enabled() -> bool:
+    """fsync after each append (default on). ``AGENTIC_OS_EVENT_FSYNC=0`` trades durability for speed (tests)."""
+    return os.environ.get("AGENTIC_OS_EVENT_FSYNC", "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 @runtime_checkable
@@ -59,8 +63,8 @@ class EventStore:
                 self._read_tail()
 
     def _read_tail(self) -> int:
-        """Fold complete lines written past ``_offset`` (by any process) into memory. A final line without a
-        newline is a torn write and is left alone. Caller holds ``_lock``."""
+        """Fold records written past ``_offset`` (by any process) into memory. A final line without a newline is
+        accepted when it is a complete record, and left alone when it is a torn write. Caller holds ``_lock``."""
         if not self._path or not os.path.exists(self._path):
             return 0
         added = 0
@@ -68,7 +72,17 @@ class EventStore:
             fh.seek(self._offset)
             data = fh.read()
         end = data.rfind(b"\n") + 1
-        for line in data[:end].splitlines():
+        tail = data[end:]
+        chunks = list(data[:end].splitlines())
+        consumed = end
+        if tail.strip():
+            try:
+                json.loads(tail.decode("utf-8"))
+                chunks.append(tail)
+                consumed = len(data)
+            except ValueError:
+                pass                                    # torn write: ignored here, trimmed by the next append
+        for line in chunks:
             line = line.strip()
             if not line:
                 continue
@@ -77,7 +91,7 @@ class EventStore:
                                       seq=d["seq"], ts=d["ts"]))
             self._seq = max(self._seq, d["seq"])
             added += 1
-        self._offset += end
+        self._offset += consumed
         return added
 
     def _load(self) -> None:
@@ -90,33 +104,30 @@ class EventStore:
         with self._lock:
             return self._read_tail()
 
-    @contextmanager
-    def _file_lock(self):
-        """Inter-process exclusive lock on a sidecar file (no-op where ``fcntl`` is unavailable)."""
-        try:
-            import fcntl  # noqa: PLC0415
-        except ImportError:
-            yield
-            return
-        with open(self._path + ".lock", "a") as lk:
-            fcntl.flock(lk, fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lk, fcntl.LOCK_UN)
-
     def append(self, type: str, mission_id: str, payload: dict[str, Any]) -> Event:
         with self._lock:
             if self._path:
-                with self._file_lock():
-                    self._read_tail()                    # see other writers' events first, so seq is global
-                    self._trim_torn_tail()
+                # The exclusive inter-process lock is taken on the log file itself (no sidecar file), so
+                # read-only parent directories and single-file bind mounts work.
+                with open(self._path, "ab") as fh:
+                    try:
+                        import fcntl  # noqa: PLC0415
+                        fcntl.flock(fh, fcntl.LOCK_EX)
+                    except ImportError:
+                        pass                               # no inter-process lock on this platform
+                    self._read_tail()                      # see other writers' events first, so seq is global
+                    size = os.fstat(fh.fileno()).st_size
+                    prefix = b""
+                    if size > self._offset:                # a torn partial record from a crashed writer
+                        os.ftruncate(fh.fileno(), self._offset)
+                    elif size and not self._ends_with_newline():
+                        prefix = b"\n"                     # a complete record that lacks its terminator
                     ev = Event(type=type, mission_id=mission_id, payload=to_jsonable(payload), seq=self._seq + 1)
-                    line = (json.dumps({"seq": ev.seq, "ts": ev.ts, "type": ev.type, "mission_id": ev.mission_id,
-                                        "payload": ev.payload}) + "\n").encode("utf-8")
-                    with open(self._path, "ab") as fh:     # a failed write leaves memory untouched
-                        fh.write(line)
-                        fh.flush()
+                    line = prefix + (json.dumps({"seq": ev.seq, "ts": ev.ts, "type": ev.type,
+                                                 "mission_id": ev.mission_id, "payload": ev.payload}) + "\n").encode("utf-8")
+                    fh.write(line)                         # a failed write leaves memory untouched
+                    fh.flush()
+                    if _fsync_enabled():
                         os.fsync(fh.fileno())
                     self._offset += len(line)
                     self._seq = ev.seq
@@ -132,14 +143,10 @@ class EventStore:
                 pass
         return ev
 
-    def _trim_torn_tail(self) -> None:
-        """Drop a partial last line left by a crashed writer (we hold the file lock, so nobody is mid-write)."""
-        if not os.path.exists(self._path):
-            return
-        size = os.path.getsize(self._path)
-        if size > self._offset:
-            with open(self._path, "r+b") as fh:
-                fh.truncate(self._offset)
+    def _ends_with_newline(self) -> bool:
+        with open(self._path, "rb") as fh:
+            fh.seek(-1, os.SEEK_END)
+            return fh.read(1) == b"\n"
 
     def subscribe(self, cb: Callable[[Event], None]) -> None:
         self._subscribers.append(cb)
