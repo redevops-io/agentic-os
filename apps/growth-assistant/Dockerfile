@@ -1,13 +1,13 @@
 # growth-assistant — FastAPI growth strategist + MD3 dashboard.
 # Generates 4-pillar traction assets and wires into ERPNext / Listmonk / Postiz.
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 # The agentic-os KERNEL is pinned HERE (single source, overridable) rather than in requirements.txt, so
 # the image tracks a known kernel tag instead of a stale commit. Override at build time, e.g.
 #   docker build --build-arg KERNEL_REF=main .   (or a newer release tag)
-ARG KERNEL_REF=v0.3.31
+ARG KERNEL_REF=v0.3.36
 RUN apt-get update && apt-get install -y --no-install-recommends git \
  && pip install --no-cache-dir "agentic-os @ https://github.com/redevops-io/agentic-os/archive/${KERNEL_REF}.tar.gz" \
  && apt-get purge -y git && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
@@ -22,6 +22,12 @@ RUN touch growth_assistant/__init__.py
 #   ERPNEXT_URL/_API_KEY/_API_SECRET, LISTMONK_API_URL/_API_USER/_API_TOKEN,
 #   POSTIZ_API_URL/_API_KEY, GROWTH_DATA_DIR, GROWTH_TENANT
 # From inside a container the core URLs should point at host.docker.internal:<port>.
+# Run as an unprivileged user; /app and /data are writable by it (state lives under $HOME or /data).
+RUN useradd --system --uid 10001 --create-home --home-dir /home/app app \
+ && mkdir -p /data && chown -R app:app /app /data
+USER app
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD python -c "import os,urllib.request as u; u.urlopen('http://127.0.0.1:%s/health' % os.environ['PORT'], timeout=3)"
 ENV PORT=8213 PYTHONPATH=/app
 EXPOSE 8213
 CMD ["uvicorn", "growth_assistant.app:app", "--host", "0.0.0.0", "--port", "8213"]

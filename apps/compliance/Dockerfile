@@ -7,7 +7,7 @@
 # To let POST /agent/run {"action":"scan"} re-run the scan from inside this container,
 # mount the docker socket and ensure `sudo docker` is available; otherwise run scans on
 # the host with scan.sh and the dashboard picks up the refreshed file automatically.
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
 
 WORKDIR /app
 
@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # The agentic-os KERNEL is pinned HERE (single source, overridable) rather than in requirements.txt, so
 # the image tracks a known kernel tag instead of a stale commit. Override at build time, e.g.
 #   docker build --build-arg KERNEL_REF=main .   (or a newer release tag)
-ARG KERNEL_REF=v0.3.31
+ARG KERNEL_REF=v0.3.36
 RUN apt-get update && apt-get install -y --no-install-recommends git \
  && pip install --no-cache-dir "agentic-os @ https://github.com/redevops-io/agentic-os/archive/${KERNEL_REF}.tar.gz" \
  && apt-get purge -y git && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
@@ -38,6 +38,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
 RUN mkdir -p results content evidence
 
 # Point app.py at the baked-in results (override via env / mount for a live host path).
+# Run as an unprivileged user; /app and /data are writable by it (state lives under $HOME or /data).
+RUN useradd --system --uid 10001 --create-home --home-dir /home/app app \
+ && mkdir -p /data && chown -R app:app /app /data
+USER app
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD python -c "import os,urllib.request as u; u.urlopen('http://127.0.0.1:%s/health' % os.environ['PORT'], timeout=3)"
 ENV SCAP_RESULTS=/app/results/scan-results.xml \
     SCAP_REPORT=/app/results/report.html \
     PORT=8208 \

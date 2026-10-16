@@ -210,3 +210,35 @@ def test_compliance_dockerfile_copies_every_file_the_app_reads_at_runtime():
     assert f"env/ssg-{ver}.sha256" in needed, "discovery broke: scan.sh should reference the pinned hash file"
     missing = sorted(r for r in needed if not in_copy_set(r))
     assert not missing, f"compliance Dockerfile does not COPY runtime files: {missing}"
+
+
+# ---- image hygiene: pinned base, non-root, healthcheck, kernel tag matches the repo ---------------------
+def _repo_version():
+    m = re.search(r'^version\s*=\s*"(\d+\.\d+\.\d+)"', (REPO / "pyproject.toml").read_text(), re.M)
+    assert m, "pyproject.toml version not found"
+    return tuple(int(x) for x in m.group(1).split("."))
+
+
+def test_kernel_ref_matches_repo_version_tag():
+    want = "v%d.%d.%d" % _repo_version()
+    refs = _kernel_refs()
+    assert set(refs.values()) == {want}, f"KERNEL_REF should be {want} in every app Dockerfile: {refs}"
+
+
+def test_infra_requirements_kernel_pin_matches_repo_version_tag():
+    req = (APPS / "infra/requirements.txt").read_text()
+    m = re.search(r"agentic-os\s*@\s*\S*?/(v\d+\.\d+\.\d+)\.tar\.gz", req)
+    assert m and m.group(1) == "v%d.%d.%d" % _repo_version()
+
+
+@pytest.mark.parametrize("df", _all_dockerfiles(), ids=lambda p: p.parent.name)
+def test_dockerfile_pins_base_digest_runs_non_root_and_has_healthcheck(df):
+    txt = df.read_text()
+    assert re.search(r"^FROM\s+python:3\.12-slim@sha256:[0-9a-f]{64}\s*$", txt, re.M), \
+        f"{df.parent.name}: base image must be pinned by digest"
+    users = re.findall(r"^USER\s+(\S+)", txt, re.M)
+    assert users and users[-1] not in ("root", "0"), f"{df.parent.name}: final USER must be non-root"
+    assert re.search(r"^HEALTHCHECK\s", txt, re.M), f"{df.parent.name}: HEALTHCHECK missing"
+    last_user = [m.start() for m in re.finditer(r"^USER\s", txt, re.M)][-1]
+    assert not re.search(r"^RUN\s+(apt-get|pip)", txt[last_user:], re.M), \
+        f"{df.parent.name}: package installs must precede USER"
