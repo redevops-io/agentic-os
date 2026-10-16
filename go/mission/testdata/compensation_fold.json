@@ -1,0 +1,764 @@
+{
+ "cases": [
+  {
+   "events": [
+    {
+     "payload": {
+      "attempt": 1,
+      "node_id": "n1",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "payload": {
+      "node_id": "n1"
+     },
+     "type": "CompensationAuthorized"
+    },
+    {
+     "payload": {
+      "node_id": "n1",
+      "receipt": {
+       "r": 1
+      }
+     },
+     "type": "CompensationExecuted"
+    },
+    {
+     "payload": {
+      "method": "readback",
+      "node_id": "n1"
+     },
+     "type": "CompensationVerified"
+    }
+   ],
+   "folded": {
+    "n1": {
+     "actor": null,
+     "approval": null,
+     "attempt": 1,
+     "attempts": 1,
+     "method": "readback",
+     "reason": "",
+     "receipt": {
+      "r": 1
+     },
+     "status": "compensated",
+     "undo": "u"
+    }
+   },
+   "name": "happy_path_readback",
+   "summary": {
+    "compensated": [
+     "n1"
+    ],
+    "compensated_unverified": [],
+    "compensation_acknowledged": [],
+    "compensation_failed": {},
+    "compensation_skipped": {},
+    "readback_only": true
+   }
+  },
+  {
+   "events": [
+    {
+     "payload": {
+      "attempt": 1,
+      "node_id": "n1",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "payload": {
+      "node_id": "n1"
+     },
+     "type": "CompensationExecuted"
+    },
+    {
+     "payload": {
+      "actor": "a",
+      "method": "manual",
+      "node_id": "n1"
+     },
+     "type": "CompensationVerified"
+    }
+   ],
+   "folded": {
+    "n1": {
+     "actor": "a",
+     "approval": null,
+     "attempt": 1,
+     "attempts": 1,
+     "method": "manual",
+     "reason": "",
+     "receipt": null,
+     "status": "compensated",
+     "undo": "u"
+    }
+   },
+   "name": "manual_verification_is_not_readback",
+   "summary": {
+    "compensated": [
+     "n1"
+    ],
+    "compensated_unverified": [],
+    "compensation_acknowledged": [],
+    "compensation_failed": {},
+    "compensation_skipped": {},
+    "readback_only": false
+   }
+  },
+  {
+   "events": [
+    {
+     "payload": {
+      "attempt": 1,
+      "node_id": "n1",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "payload": {
+      "attempt": 1,
+      "node_id": "n1",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "payload": {
+      "attempt": 1,
+      "node_id": "n1",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "payload": {
+      "node_id": "n1",
+      "reason": "x"
+     },
+     "type": "CompensationFailed"
+    }
+   ],
+   "folded": {
+    "n1": {
+     "approval": null,
+     "attempt": 1,
+     "attempts": 1,
+     "method": null,
+     "reason": "x",
+     "status": "failed",
+     "undo": "u"
+    }
+   },
+   "name": "duplicated_requested_same_attempt",
+   "summary": {
+    "compensated": [],
+    "compensated_unverified": [],
+    "compensation_acknowledged": [],
+    "compensation_failed": {
+     "n1": "x"
+    },
+    "compensation_skipped": {},
+    "readback_only": true
+   }
+  },
+  {
+   "events": [
+    {
+     "payload": {
+      "attempt": 1,
+      "node_id": "n1",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "payload": {
+      "attempt": 1,
+      "node_id": "n1",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "payload": {
+      "node_id": "n1",
+      "reason": "x"
+     },
+     "type": "CompensationFailed"
+    },
+    {
+     "payload": {
+      "attempt": 2,
+      "node_id": "n1",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "payload": {
+      "attempt": 2,
+      "node_id": "n1",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "payload": {
+      "attempt": 2,
+      "node_id": "n1",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "payload": {
+      "node_id": "n1",
+      "reason": "y"
+     },
+     "type": "CompensationFailed"
+    }
+   ],
+   "folded": {
+    "n1": {
+     "approval": null,
+     "attempt": 2,
+     "attempts": 2,
+     "method": null,
+     "reason": "y",
+     "status": "failed",
+     "undo": "u"
+    }
+   },
+   "name": "duplicated_requested_does_not_exhaust_attempts",
+   "summary": {
+    "compensated": [],
+    "compensated_unverified": [],
+    "compensation_acknowledged": [],
+    "compensation_failed": {
+     "n1": "y"
+    },
+    "compensation_skipped": {},
+    "readback_only": true
+   }
+  },
+  {
+   "events": [
+    {
+     "id": "e1",
+     "payload": {
+      "attempt": 0,
+      "node_id": "n1",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "id": "e1",
+     "payload": {
+      "attempt": 0,
+      "node_id": "n1",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "id": "e2",
+     "payload": {
+      "attempt": 0,
+      "node_id": "n1",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    }
+   ],
+   "folded": {
+    "n1": {
+     "approval": null,
+     "attempt": 2,
+     "attempts": 2,
+     "method": null,
+     "reason": "",
+     "status": "requested",
+     "undo": "u"
+    }
+   },
+   "name": "legacy_requested_without_attempt_dedupes_by_event_id",
+   "summary": {
+    "compensated": [],
+    "compensated_unverified": [],
+    "compensation_acknowledged": [],
+    "compensation_failed": {},
+    "compensation_skipped": {},
+    "readback_only": true
+   }
+  },
+  {
+   "events": [
+    {
+     "payload": {
+      "attempt": 0,
+      "node_id": "n1",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "payload": {
+      "attempt": 0,
+      "node_id": "n1",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    }
+   ],
+   "folded": {
+    "n1": {
+     "approval": null,
+     "attempt": 2,
+     "attempts": 2,
+     "method": null,
+     "reason": "",
+     "status": "requested",
+     "undo": "u"
+    }
+   },
+   "name": "legacy_requested_without_attempt_or_id_counts_each",
+   "summary": {
+    "compensated": [],
+    "compensated_unverified": [],
+    "compensation_acknowledged": [],
+    "compensation_failed": {},
+    "compensation_skipped": {},
+    "readback_only": true
+   }
+  },
+  {
+   "events": [
+    {
+     "payload": {
+      "attempt": 1,
+      "node_id": "n1",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "payload": {
+      "node_id": "n1",
+      "reason": "x"
+     },
+     "type": "CompensationFailed"
+    },
+    {
+     "payload": {
+      "attempt": 2,
+      "node_id": "n1",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "payload": {
+      "node_id": "n1"
+     },
+     "type": "CompensationExecuted"
+    }
+   ],
+   "folded": {
+    "n1": {
+     "approval": null,
+     "attempt": 2,
+     "attempts": 2,
+     "method": null,
+     "reason": "",
+     "receipt": null,
+     "status": "executed_unverified",
+     "undo": "u"
+    }
+   },
+   "name": "retry_restarts_the_node",
+   "summary": {
+    "compensated": [],
+    "compensated_unverified": [
+     "n1"
+    ],
+    "compensation_acknowledged": [],
+    "compensation_failed": {},
+    "compensation_skipped": {},
+    "readback_only": true
+   }
+  },
+  {
+   "events": [
+    {
+     "payload": {
+      "attempt": 1,
+      "node_id": "n1",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "payload": {
+      "inputs_sha256": "h",
+      "node_id": "n1"
+     },
+     "type": "CompensationApprovalRequired"
+    },
+    {
+     "payload": {
+      "approver": "z",
+      "attempt": 7,
+      "node_id": "n1"
+     },
+     "type": "CompensationApproved"
+    },
+    {
+     "payload": {
+      "approver": "alice",
+      "attempt": 1,
+      "node_id": "n1"
+     },
+     "type": "CompensationApproved"
+    }
+   ],
+   "folded": {
+    "n1": {
+     "approval": {
+      "approver": "alice",
+      "attempt": 1,
+      "node_id": "n1"
+     },
+     "attempt": 1,
+     "attempts": 1,
+     "inputs_sha256": "h",
+     "method": null,
+     "reason": "awaiting_compensation_approval",
+     "status": "approval_required",
+     "undo": "u"
+    }
+   },
+   "name": "approval_for_current_attempt_only",
+   "summary": {
+    "compensated": [],
+    "compensated_unverified": [],
+    "compensation_acknowledged": [],
+    "compensation_failed": {
+     "n1": "awaiting_compensation_approval"
+    },
+    "compensation_skipped": {},
+    "readback_only": true
+   }
+  },
+  {
+   "events": [
+    {
+     "payload": {
+      "attempt": 1,
+      "node_id": "n1",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "payload": {
+      "approver": "alice",
+      "attempt": 1,
+      "node_id": "n1"
+     },
+     "type": "CompensationApproved"
+    },
+    {
+     "payload": {
+      "attempt": 2,
+      "node_id": "n1",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    }
+   ],
+   "folded": {
+    "n1": {
+     "approval": null,
+     "attempt": 2,
+     "attempts": 2,
+     "method": null,
+     "reason": "",
+     "status": "requested",
+     "undo": "u"
+    }
+   },
+   "name": "approval_cleared_by_new_attempt",
+   "summary": {
+    "compensated": [],
+    "compensated_unverified": [],
+    "compensation_acknowledged": [],
+    "compensation_failed": {},
+    "compensation_skipped": {},
+    "readback_only": true
+   }
+  },
+  {
+   "events": [
+    {
+     "payload": {
+      "attempt": 1,
+      "node_id": "n1",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "payload": {
+      "node_id": "n1",
+      "reason": "x"
+     },
+     "type": "CompensationFailed"
+    },
+    {
+     "payload": {
+      "actor": "alice",
+      "node_id": "n1",
+      "reason": "by hand"
+     },
+     "type": "CompensationAcknowledged"
+    }
+   ],
+   "folded": {
+    "n1": {
+     "ack_reason": "by hand",
+     "actor": "alice",
+     "approval": null,
+     "attempt": 1,
+     "attempts": 1,
+     "method": null,
+     "reason": "x",
+     "status": "acknowledged",
+     "undo": "u"
+    }
+   },
+   "name": "acknowledged_after_failure",
+   "summary": {
+    "compensated": [],
+    "compensated_unverified": [],
+    "compensation_acknowledged": [
+     "n1"
+    ],
+    "compensation_failed": {},
+    "compensation_skipped": {},
+    "readback_only": true
+   }
+  },
+  {
+   "events": [
+    {
+     "payload": {
+      "attempt": 1,
+      "node_id": "n1",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "payload": {
+      "node_id": "n1",
+      "reason": "precondition_not_met: held"
+     },
+     "type": "CompensationSkipped"
+    }
+   ],
+   "folded": {
+    "n1": {
+     "approval": null,
+     "attempt": 1,
+     "attempts": 1,
+     "method": null,
+     "reason": "precondition_not_met: held",
+     "status": "skipped",
+     "undo": "u"
+    }
+   },
+   "name": "skipped_precondition",
+   "summary": {
+    "compensated": [],
+    "compensated_unverified": [],
+    "compensation_acknowledged": [],
+    "compensation_failed": {},
+    "compensation_skipped": {
+     "n1": "precondition_not_met: held"
+    },
+    "readback_only": true
+   }
+  },
+  {
+   "events": [
+    {
+     "payload": {
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "payload": {
+      "node_id": "n1"
+     },
+     "type": "SomethingElse"
+    },
+    {
+     "payload": {
+      "attempt": 1,
+      "node_id": "n2",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    }
+   ],
+   "folded": {
+    "n2": {
+     "approval": null,
+     "attempt": 1,
+     "attempts": 1,
+     "method": null,
+     "reason": "",
+     "status": "requested",
+     "undo": "u"
+    }
+   },
+   "name": "node_without_id_and_unknown_types_ignored",
+   "summary": {
+    "compensated": [],
+    "compensated_unverified": [],
+    "compensation_acknowledged": [],
+    "compensation_failed": {},
+    "compensation_skipped": {},
+    "readback_only": true
+   }
+  },
+  {
+   "events": [
+    {
+     "payload": {
+      "attempt": 1,
+      "node_id": "a",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "payload": {
+      "method": "readback",
+      "node_id": "a"
+     },
+     "type": "CompensationVerified"
+    },
+    {
+     "payload": {
+      "attempt": 1,
+      "node_id": "b",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "payload": {
+      "node_id": "b",
+      "reason": "r"
+     },
+     "type": "CompensationFailed"
+    },
+    {
+     "payload": {
+      "attempt": 1,
+      "node_id": "c",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "payload": {
+      "inputs_sha256": "h",
+      "node_id": "c"
+     },
+     "type": "CompensationApprovalRequired"
+    },
+    {
+     "payload": {
+      "attempt": 1,
+      "node_id": "d",
+      "undo": "u"
+     },
+     "type": "CompensationRequested"
+    },
+    {
+     "payload": {
+      "node_id": "d"
+     },
+     "type": "CompensationExecuted"
+    }
+   ],
+   "folded": {
+    "a": {
+     "actor": null,
+     "approval": null,
+     "attempt": 1,
+     "attempts": 1,
+     "method": "readback",
+     "reason": "",
+     "status": "compensated",
+     "undo": "u"
+    },
+    "b": {
+     "approval": null,
+     "attempt": 1,
+     "attempts": 1,
+     "method": null,
+     "reason": "r",
+     "status": "failed",
+     "undo": "u"
+    },
+    "c": {
+     "approval": null,
+     "attempt": 1,
+     "attempts": 1,
+     "inputs_sha256": "h",
+     "method": null,
+     "reason": "awaiting_compensation_approval",
+     "status": "approval_required",
+     "undo": "u"
+    },
+    "d": {
+     "approval": null,
+     "attempt": 1,
+     "attempts": 1,
+     "method": null,
+     "reason": "",
+     "receipt": null,
+     "status": "executed_unverified",
+     "undo": "u"
+    }
+   },
+   "name": "several_nodes_mixed",
+   "summary": {
+    "compensated": [
+     "a"
+    ],
+    "compensated_unverified": [
+     "d"
+    ],
+    "compensation_acknowledged": [],
+    "compensation_failed": {
+     "b": "r",
+     "c": "awaiting_compensation_approval"
+    },
+    "compensation_skipped": {},
+    "readback_only": true
+   }
+  }
+ ]
+}
