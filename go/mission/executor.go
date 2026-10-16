@@ -34,6 +34,13 @@ func NewInMemoryOperatorClient(handlers map[string]Handler) *InMemoryOperatorCli
 	return &InMemoryOperatorClient{handlers: handlers, seen: map[string]map[string]any{}}
 }
 
+// CallsSnapshot returns a copy of the recorded calls, safe to read while Invoke runs concurrently.
+func (c *InMemoryOperatorClient) CallsSnapshot() [][2]string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([][2]string(nil), c.Calls...)
+}
+
 func (c *InMemoryOperatorClient) Invoke(operator, capability string, inputs map[string]any, idempotencyKey string) (map[string]any, error) {
 	if idempotencyKey != "" {
 		c.mu.Lock()
