@@ -25,6 +25,8 @@ gh release list --repo redevops-io/agentic-os --limit 5
 1. Start from an up-to-date `main` with a green `tests` workflow.
 2. Pick the next version `X.Y.Z` (the tag will be `vX.Y.Z`; it must be greater than the latest existing tag).
 3. In a release PR, set `version = "X.Y.Z"` in `pyproject.toml` so it equals the tag you are about to create.
+   In the same PR set `ARG KERNEL_REF=vX.Y.Z` in every `apps/*/Dockerfile` and the pin in
+   `apps/infra/requirements.txt` (`tests/test_app_dockerfiles.py` enforces they equal the pyproject version).
    Merge it.
 4. Tag the merge commit and push the tag:
    ```bash

@@ -78,3 +78,7 @@ Part of `integrated.compose.yml`; deploy with the rest of the stack:
 ```
 make proxmox-agentic-os AGENTIC_SERVICES=growth-assistant
 ```
+
+## Upgrading
+
+The image runs as uid 10001. Re-own an existing `/data` volume once: `docker run --rm --user 0 -v <volume>:/data python:3.12-slim chown -R 10001:10001 /data`. See `apps/README.md`.

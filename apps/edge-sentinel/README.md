@@ -125,3 +125,7 @@ docker run --rm -p 8203:8203 \
     `cscli decisions add` to enforce the ban, then refreshes the dashboard cache.
   - `"triage"` → summarizes active decisions + alerts (severity mix, top scenarios);
     adds a one-line LLM reasoning blurb iff `ANTHROPIC_API_KEY` is set.
+
+## Docker socket access
+
+The image runs as uid 10001. If you mount `/var/run/docker.sock`, add the socket group to the container (compose `group_add: ["<gid>"]`, from `stat -c %g /var/run/docker.sock`). See `apps/README.md`.

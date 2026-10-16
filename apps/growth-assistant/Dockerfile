@@ -25,6 +25,9 @@ RUN touch growth_assistant/__init__.py
 # Run as an unprivileged user; /app and /data are writable by it (state lives under $HOME or /data).
 RUN useradd --system --uid 10001 --create-home --home-dir /home/app app \
  && mkdir -p /data && chown -R app:app /app /data
+RUN printf '#!/bin/sh\n[ -w /data ] || { echo "/data is not writable by uid 10001; see apps/README.md (Upgrading images)" >&2; exit 1; }\nexec "$@"\n' > /usr/local/bin/aos-entrypoint \
+ && chmod 755 /usr/local/bin/aos-entrypoint
+ENTRYPOINT ["aos-entrypoint"]
 USER app
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD python -c "import os,urllib.request as u; u.urlopen('http://127.0.0.1:%s/health' % os.environ['PORT'], timeout=3)"

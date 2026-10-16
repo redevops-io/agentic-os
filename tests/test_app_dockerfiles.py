@@ -222,7 +222,7 @@ def _repo_version():
 def test_kernel_ref_matches_repo_version_tag():
     want = "v%d.%d.%d" % _repo_version()
     refs = _kernel_refs()
-    assert set(refs.values()) == {want}, f"KERNEL_REF should be {want} in every app Dockerfile: {refs}"
+    assert set(refs.values()) == {want}, f"KERNEL_REF should be {want} in every app Dockerfile: {refs}. Release procedure: bump pyproject version and every Dockerfile KERNEL_REF (plus apps/infra/requirements.txt) together in the release PR, then tag after merge (docs/RELEASING.md)."
 
 
 def test_infra_requirements_kernel_pin_matches_repo_version_tag():
