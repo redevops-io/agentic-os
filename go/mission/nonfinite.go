@@ -3,7 +3,9 @@ package mission
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"math"
+	"reflect"
 	"strings"
 )
 
@@ -17,9 +19,28 @@ const (
 	phNegInf = "__aos_nonfinite_NegInf_7f3c9e1b__"
 )
 
-func sanitizeNonFinite(v any) any {
-	switch x := v.(type) {
-	case float64:
+var jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
+
+// sanitizeNonFinite returns a JSON-able copy of v in which every non-finite float, at any depth and in any container
+// shape (maps, slices, arrays, pointers, structs with json tags), is replaced by a placeholder string. Values that
+// marshal themselves (json.Marshaler) and leaf kinds are passed through untouched.
+func sanitizeNonFinite(v any) any { return sanitizeValue(reflect.ValueOf(v)) }
+
+func sanitizeValue(v reflect.Value) any {
+	if !v.IsValid() {
+		return nil
+	}
+	if v.Type().Implements(jsonMarshalerType) || (v.CanAddr() && reflect.PtrTo(v.Type()).Implements(jsonMarshalerType)) {
+		return v.Interface()
+	}
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface:
+		if v.IsNil() {
+			return nil
+		}
+		return sanitizeValue(v.Elem())
+	case reflect.Float32, reflect.Float64:
+		x := v.Float()
 		switch {
 		case math.IsNaN(x):
 			return phNaN
@@ -28,28 +49,58 @@ func sanitizeNonFinite(v any) any {
 		case math.IsInf(x, -1):
 			return phNegInf
 		}
-	case float32:
-		return sanitizeNonFinite(float64(x))
-	case map[string]any:
-		out := make(map[string]any, len(x))
-		for k, e := range x {
-			out[k] = sanitizeNonFinite(e)
+		return x
+	case reflect.Map:
+		if v.IsNil() {
+			return nil
+		}
+		out := make(map[string]any, v.Len())
+		for _, k := range v.MapKeys() {
+			out[fmt.Sprint(k.Interface())] = sanitizeValue(v.MapIndex(k))
 		}
 		return out
-	case []any:
-		out := make([]any, len(x))
-		for i, e := range x {
-			out[i] = sanitizeNonFinite(e)
+	case reflect.Slice, reflect.Array:
+		if v.Kind() == reflect.Slice && v.IsNil() {
+			return nil
+		}
+		if v.Type().Elem().Kind() == reflect.Uint8 {
+			return v.Interface()
+		}
+		out := make([]any, v.Len())
+		for i := range out {
+			out[i] = sanitizeValue(v.Index(i))
 		}
 		return out
-	case []float64:
-		out := make([]any, len(x))
-		for i, e := range x {
-			out[i] = sanitizeNonFinite(e)
+	case reflect.Struct:
+		out := map[string]any{}
+		t := v.Type()
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			if f.PkgPath != "" { // unexported
+				continue
+			}
+			name, omit := f.Name, false
+			if tag, ok := f.Tag.Lookup("json"); ok {
+				parts := strings.Split(tag, ",")
+				if parts[0] == "-" && len(parts) == 1 {
+					continue
+				}
+				if parts[0] != "" {
+					name = parts[0]
+				}
+				for _, o := range parts[1:] {
+					omit = omit || o == "omitempty"
+				}
+			}
+			fv := v.Field(i)
+			if omit && fv.IsZero() {
+				continue
+			}
+			out[name] = sanitizeValue(fv)
 		}
 		return out
 	}
-	return v
+	return v.Interface()
 }
 
 func restoreNonFinite(v any) any {
@@ -82,7 +133,9 @@ func encodeEventLine(ev *Event) ([]byte, error) {
 	}
 	cp := *ev
 	if cp.Payload != nil {
-		cp.Payload = sanitizeNonFinite(cp.Payload).(map[string]any)
+		if m, ok := sanitizeNonFinite(cp.Payload).(map[string]any); ok {
+			cp.Payload = m
+		}
 	}
 	b, err := json.Marshal(&cp)
 	if err != nil {

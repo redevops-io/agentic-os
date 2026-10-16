@@ -57,3 +57,41 @@ func TestUnencodableEventIsCountedNotSilent(t *testing.T) {
 		t.Fatalf("an unwritable event must be counted, got %d", s.PersistFailures())
 	}
 }
+
+// Every container shape must survive: the sanitiser is generic, not a type switch over a few shapes.
+func TestNonFiniteEventsSurviveForEveryPayloadShape(t *testing.T) {
+	type rec struct {
+		X    float64  `json:"x"`
+		P    *float64 `json:"p"`
+		Skip float64  `json:"-"`
+	}
+	nan, inf := math.NaN(), math.Inf(-1)
+	path := filepath.Join(t.TempDir(), "shapes.jsonl")
+	s := NewEventStore(path)
+	s.Append("Shapes", "m", map[string]any{
+		"maps":   []map[string]any{{"v": nan}, {"v": 2.5}},
+		"typed":  map[string]float64{"a": inf, "b": 1},
+		"struct": rec{X: nan, P: &inf},
+		"ptr":    &nan,
+		"floats": []float64{1, nan},
+		"arr":    [2]float64{inf, 0},
+		"strs":   []string{"ok"},
+	})
+	if s.PersistFailures() != 0 {
+		t.Fatalf("persist failures: %d", s.PersistFailures())
+	}
+	r := NewEventStore(path)
+	evs := r.ForMission("m")
+	if len(evs) != 1 || r.LoadSkipped() != 0 {
+		t.Fatalf("event lost: %d skipped=%d", len(evs), r.LoadSkipped())
+	}
+	p := evs[0].Payload
+	if !math.IsNaN(p["maps"].([]any)[0].(map[string]any)["v"].(float64)) ||
+		!math.IsInf(p["typed"].(map[string]any)["a"].(float64), -1) ||
+		!math.IsNaN(p["struct"].(map[string]any)["x"].(float64)) ||
+		!math.IsInf(p["struct"].(map[string]any)["p"].(float64), -1) ||
+		!math.IsNaN(p["ptr"].(float64)) || !math.IsNaN(p["floats"].([]any)[1].(float64)) ||
+		!math.IsInf(p["arr"].([]any)[0].(float64), -1) {
+		t.Fatalf("non-finite values not restored: %v", p)
+	}
+}
