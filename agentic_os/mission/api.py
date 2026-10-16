@@ -378,7 +378,7 @@ async function launch(){
   const g=document.getElementById('goal').value.trim(); if(!g)return;
   const t=document.getElementById('tpl').value||null;
   const m=await api('/missions',{method:'POST',headers:{'content-type':'application/json'},
-    body:JSON.stringify({goal:g,template:t,policy_refs:['*']})});
+    body:JSON.stringify({goal:g,template:t})});
   document.getElementById('goal').value=''; CUR=m.id; await refreshAll(); openMission(m.id);
 }
 async function decide(mid,node,decision,kind){

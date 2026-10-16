@@ -94,3 +94,40 @@ def test_remote_manifest_cannot_name_another_operator():
     docs = {"http://a": {"operator": "a", "capabilities": [{"name": "a.x", "operator": "b"}]}}
     with pytest.raises(ValueError):
         discover({"a": "http://a"}, fetch=lambda u: docs[u.rsplit("/capabilities", 1)[0]])
+
+
+def test_more_weakening_declarations_are_refused():
+    from agentic_os.mission.types import NodeCost
+    base = dict(cost=NodeCost(usd=1.0), required_authority=["a"], network=["x.example"], secrets=["s"],
+                inputs={"a": "str"}, outputs={"b": "str"}, undo="billing.reverse", concurrency_mode="exclusive")
+    reg = CapabilityRegistry()
+    reg.register(_manifest("billing", **base))
+    for change in ({"cost": NodeCost(usd=0.0)}, {"required_authority": []}, {"network": []}, {"secrets": []},
+                   {"inputs": {}}, {"outputs": {}}, {"undo": None}, {"concurrency_mode": ""},
+                   {"deterministic": False}):
+        with pytest.raises(ValueError):
+            reg.register(_manifest("billing", **{**base, **change}))
+
+
+def test_duplicate_names_in_one_manifest_are_refused():
+    spec = dict(name="x.a", operator="")
+    m = CapabilityManifest(operator="x", capabilities=[CapabilitySpec(**spec), CapabilitySpec(**spec)])
+    with pytest.raises(ValueError):
+        CapabilityRegistry().register(m)
+
+
+def test_discovery_binds_operator_name_to_configuration():
+    from agentic_os.mission.production import discover
+    docs = {"http://a": {"operator": "a", "capabilities": [{"name": "a.x"}]},
+            "http://b": {"operator": "a", "capabilities": [{"name": "a.y"}]}}
+    fetch = lambda u: docs[u.rsplit("/capabilities", 1)[0]]  # noqa: E731
+    with pytest.raises(ValueError):
+        discover({"a": "http://a", "b": "http://b"}, fetch=fetch)
+    reg, resolve = discover({"a": "http://a"}, fetch=fetch)
+    assert resolve == {"a": "http://a"}
+
+
+def test_cockpit_does_not_post_wildcard_grants():
+    from agentic_os.mission import api
+    import inspect
+    assert "policy_refs:['*']" not in inspect.getsource(api)

@@ -74,9 +74,14 @@ def discover(operators: dict[str, str], *, fetch: DiscoverFetch | None = None,
     _fetch: DiscoverFetch = fetch or (lambda url: get_json(url, timeout))
     reg = CapabilityRegistry()
     resolve: dict[str, str] = {}
-    for base in operators.values():
+    for key, base in operators.items():
         base = base.rstrip("/")
         manifest = _manifest_from_json(_fetch(f"{base}/capabilities"))
+        # the operator name is fixed by configuration, not by what the remote document says about itself
+        if manifest.operator != key:
+            raise ValueError(f"operator at {key!r} declares itself as {manifest.operator!r}")
+        if manifest.operator in resolve and resolve[manifest.operator] != base:
+            raise ValueError(f"operator {manifest.operator!r} is claimed by a second endpoint")
         reg.register(manifest)
         resolve[manifest.operator] = base
     return reg, resolve

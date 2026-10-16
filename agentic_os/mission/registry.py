@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+import threading
 from typing import Protocol
 
 from .types import CapabilityManifest, CapabilitySpec
@@ -51,9 +52,14 @@ def cosine(a: list[float], b: list[float]) -> float:
 class CapabilityRegistry:
     def __init__(self, embedder: Embedder | None = None):
         self._caps: dict[str, CapabilitySpec] = {}
+        self._lock = threading.RLock()
         self._embedder = embedder or HashingEmbedder()
 
     def register(self, manifest: CapabilityManifest) -> None:
+        with self._lock:
+            self._register(manifest)
+
+    def _register(self, manifest: CapabilityManifest) -> None:
         from .compensation import evidence_bound_conflicts, intrinsic_problems  # noqa: PLC0415
         for cap in manifest.capabilities:
             probs = intrinsic_problems(cap)
@@ -72,9 +78,46 @@ class CapabilityRegistry:
                                                       f"{' '.join(cap.inputs)} {' '.join(cap.outputs)}")
             self._caps[cap.name] = cap
 
+    @staticmethod
+    def _weakened(old: CapabilitySpec, new: CapabilitySpec) -> list[str]:
+        """The declared safety properties ``new`` gives up relative to ``old`` (empty = equal or stricter)."""
+        w: list[str] = []
+        if old.approval_required and not new.approval_required:
+            w.append("approval_required")
+        if old.side_effecting and not new.side_effecting:
+            w.append("side_effecting")
+        if old.irreversible and not new.irreversible:
+            w.append("irreversible")
+        if old.deterministic != new.deterministic:
+            w.append("deterministic")
+        if old.concurrency_mode != new.concurrency_mode:
+            w.append("concurrency_mode")
+        if (old.concurrency_key, list(old.resource_keys), old.max_parallelism) != \
+                (new.concurrency_key, list(new.resource_keys), new.max_parallelism):
+            w.append("concurrency")
+        for f in ("permissions", "required_authority", "network", "secrets", "data_classifications"):
+            if not set(getattr(old, f) or ()) <= set(getattr(new, f) or ()):
+                w.append(f)
+        if old.isolation_class and old.isolation_class != new.isolation_class:
+            w.append("isolation_class")
+        if dict(old.inputs) != dict(new.inputs) or dict(old.outputs) != dict(new.outputs):
+            w.append("schema")
+        oc, nc = old.cost, new.cost
+        if any(getattr(nc, k) < getattr(oc, k) for k in ("usd", "latency_ms", "tokens", "human_minutes")):
+            w.append("cost")
+        if old.undo and new.undo != old.undo:
+            w.append("undo")
+        if old.compensation is not None and new.compensation != old.compensation:
+            w.append("compensation")
+        return w
+
     def _check_ownership_and_strictness(self, manifest: CapabilityManifest) -> None:
         """A name has one owner. A manifest may not claim another operator's capability, nor re-declare its own
-        with weaker approval / side-effect / permission / undo metadata than what is already registered."""
+        with weaker approval / side-effect / authority / cost / schema / undo metadata than what is registered."""
+        names = [c.name for c in manifest.capabilities]
+        dup = sorted({n for n in names if names.count(n) > 1})
+        if dup:
+            raise ValueError(f"manifest {manifest.operator!r} declares {', '.join(dup)} more than once")
         for cap in manifest.capabilities:
             owner = cap.operator or manifest.operator
             old = self._caps.get(cap.name)
@@ -82,17 +125,7 @@ class CapabilityRegistry:
                 continue
             if old.operator != owner:
                 raise ValueError(f"capability {cap.name!r} is already registered by {old.operator!r}")
-            weaker = []
-            if old.approval_required and not cap.approval_required:
-                weaker.append("approval_required")
-            if old.side_effecting and not cap.side_effecting:
-                weaker.append("side_effecting")
-            if not set(old.permissions) <= set(cap.permissions):
-                weaker.append("permissions")
-            if old.irreversible and not cap.irreversible:
-                weaker.append("irreversible")
-            if old.undo and cap.undo and old.undo != cap.undo:
-                weaker.append("undo")
+            weaker = self._weakened(old, cap)
             if weaker:
                 raise ValueError(f"capability {cap.name!r}: re-registration weakens {', '.join(weaker)}")
 
