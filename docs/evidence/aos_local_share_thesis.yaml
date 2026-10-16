@@ -1,0 +1,13 @@
+claim_id: aos_local_share_thesis
+claim: "Design thesis (README, docs/architecture.md): the cost-aware router can keep more than 90% of agent work on local hardware."
+status: Illustrative/synthetic
+code_commit: "2325dc8bcdf9a54f1da0b4c8379ee9562375fc58"
+dataset: "NOT_IN_REPO (no workload trace or routing log is committed)"
+protocol: "None. No measurement exists. The statement is a design target, relabelled as a thesis in the README."
+model: "unknown"
+metrics: "unknown; the 90% figure is a target, not a result"
+baselines: "unknown"
+reproduce: "NOT_IN_REPO"
+artifacts: "agentic_os/router.py (the mechanism only)"
+limitations: "Not measured. Depends entirely on workload mix and on which local model is deployed. Do not cite as a result. The related '(hard 5%)' share is likewise a design assumption."
+review: "none; no external review"
