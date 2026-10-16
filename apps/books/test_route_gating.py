@@ -264,7 +264,7 @@ def test_core_mutators_check_approval_in_core():
     tree = ast.parse((HERE / "core.py").read_text())
     funcs = _funcs(tree)
     mutating = {n for n, f in funcs.items() if _calls_mutator(f)}
-    assert {"categorize", "_execute_close", "record_revenue", "reverse_entry"} <= mutating
+    assert {"categorize", "_execute_close", "_execute_record_revenue", "reverse_entry"} <= mutating
     for name in mutating:
         src = ast.unparse(funcs[name])
         if name.startswith("_execute"):           # only reachable from a caller that checked approval
