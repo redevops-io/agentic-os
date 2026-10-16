@@ -14,6 +14,7 @@ ENV_TOKEN = "AGENTIC_OS_CONTROL_TOKEN"
 ENV_TENANT_TOKENS = "AGENTIC_OS_TENANT_TOKENS"   # "acme=<token>,globex=<token>" -> tenant-scoped callers
 ENV_APPROVER_TOKENS = "AGENTIC_OS_APPROVER_TOKENS"  # "acme=<token>" -> distinct approver credential per tenant (optional)
 ENV_TENANT_LIMITS = "AGENTIC_OS_TENANT_LIMITS"    # JSON {"acme": {"policy_refs": ["crm:read"], "budget_usd": 25}}
+ENV_OPERATOR_ANON = "AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS"  # "1" = operator /invoke open when NO token is set (dev only)
 ENV_GATE_READS = "AGENTIC_OS_GATE_READS"          # default ON; "0"/"false"/"off" opts OUT (unsafe off loopback)
 
 
@@ -168,3 +169,20 @@ def resolve_caller(authorization: "str | None") -> Caller:
     if found is None:
         raise HTTPException(401, "invalid or missing bearer token", headers={"WWW-Authenticate": "Bearer"})
     return found
+
+
+def authorize_operator_invoke(authorization: "str | None") -> Caller:
+    """Gate for an operator's ``POST /invoke``. Same credentials as the other control routes (admin or tenant bearer
+    token); an approver-only token is refused (403). With NO token configured it fails closed (503) unless
+    ``AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS=1`` is set explicitly (local development only). Once any token is
+    configured the flag is ignored and a valid bearer token is always required."""
+    from fastapi import HTTPException  # noqa: PLC0415
+    if not any_token_configured():
+        if os.environ.get(ENV_OPERATOR_ANON, "").strip() == "1":
+            return Caller(None, "admin")
+        raise HTTPException(503, f"operator /invoke is disabled: {ENV_TOKEN} (or {ENV_TENANT_TOKENS}) is not set. "
+                                 "Set a long random secret and send 'Authorization: Bearer <token>'.")
+    caller = resolve_caller(authorization)
+    if caller.role == "approver":
+        raise HTTPException(403, "approver credentials cannot invoke capabilities")
+    return caller

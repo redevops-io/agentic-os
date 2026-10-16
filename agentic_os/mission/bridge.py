@@ -67,8 +67,11 @@ class HTTPOperatorClient:
         body = json.dumps({"capability": capability, "inputs": inputs or {},
                            "idempotency_key": idempotency_key or ""}).encode()
         try:
-            resp = self._t("POST", f"{base}/invoke", body,
-                           {"Content-Type": "application/json", "Idempotency-Key": idempotency_key or ""})
+            hdrs = {"Content-Type": "application/json", "Idempotency-Key": idempotency_key or ""}
+            from .control_auth import configured_token  # noqa: PLC0415
+            if configured_token():
+                hdrs["Authorization"] = f"Bearer {configured_token()}"
+            resp = self._t("POST", f"{base}/invoke", body, hdrs)
         except Exception as e:  # noqa: BLE001
             raise BridgeError(f"invoke {operator}.{capability} failed: {type(e).__name__}") from None
         # the agent's router returns {"result": {...}}; unwrap to the plain result

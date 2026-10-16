@@ -268,5 +268,8 @@ Mutating control endpoints (`/up`, `/down`, `/dispatch`, approvals, `/api/bridge
 The `/missions` API is default-deny: every non-GET route AND every read except the static shell/catalogue needs a bearer
 token (optionally tenant-scoped via `AGENTIC_OS_TENANT_TOKENS`, optional distinct approvers via
 `AGENTIC_OS_APPROVER_TOKENS`; `AGENTIC_OS_GATE_READS=0` opts out of read gating, unsafe off loopback).
+Operator `POST /invoke` takes the same bearer credentials (admin or tenant; approver tokens are refused) and returns 503
+when none is configured; `AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS=1` opens it for local development only (ignored once any
+token is set). The runtime's HTTP operator client sends `AGENTIC_OS_CONTROL_TOKEN` automatically.
 The Projects API is same-origin by default (`PROJECTS_CORS_ORIGINS` opts in). See
 [docs/CONTROL_PLANE_SECURITY.md](docs/CONTROL_PLANE_SECURITY.md).

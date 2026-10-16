@@ -250,7 +250,10 @@ class Operator:
             return to_jsonable(self.manifest)
 
         @router.post("/invoke")
-        def invoke(body: InvokeBody, idempotency_key: str | None = Header(default=None)):
+        def invoke(body: InvokeBody, idempotency_key: str | None = Header(default=None),
+                   authorization: str | None = Header(default=None)):
+            from .control_auth import authorize_operator_invoke  # noqa: PLC0415
+            authorize_operator_invoke(authorization)
             key = body.idempotency_key or idempotency_key or ""
             # The HTTP /invoke is the UNTRUSTED "try" surface, so strip runtime-only approval markers a caller
             # could forge to bypass a gate: a direct POST of `{"_approval": true}` must NOT make a consequential
