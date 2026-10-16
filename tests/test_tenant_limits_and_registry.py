@@ -131,3 +131,18 @@ def test_cockpit_does_not_post_wildcard_grants():
     from agentic_os.mission import api
     import inspect
     assert "policy_refs:['*']" not in inspect.getsource(api)
+
+
+def test_security_fields_cannot_be_relaxed():
+    base = dict(required_authority=["a", "b"], network=["x.example", "y.example"], secrets=["s"],
+                data_classifications=["pii"], isolation_class="sandbox")
+    reg = CapabilityRegistry()
+    reg.register(_manifest("billing", **base))
+    for change in ({"required_authority": ["a"]}, {"required_authority": []},
+                   {"network": ["x.example", "z.example"]}, {"network": []},
+                   {"secrets": []}, {"secrets": ["s", "t"]}, {"data_classifications": []},
+                   {"isolation_class": "in_process"}, {"isolation_class": ""}):
+        with pytest.raises(ValueError):
+            reg.register(_manifest("billing", **{**base, **change}))
+    reg.register(_manifest("billing", **{**base, "network": ["x.example"], "isolation_class": "strict",
+                                         "required_authority": ["a", "b", "c"]}))

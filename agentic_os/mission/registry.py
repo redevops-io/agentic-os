@@ -95,10 +95,17 @@ class CapabilityRegistry:
         if (old.concurrency_key, list(old.resource_keys), old.max_parallelism) != \
                 (new.concurrency_key, list(new.resource_keys), new.max_parallelism):
             w.append("concurrency")
-        for f in ("permissions", "required_authority", "network", "secrets", "data_classifications"):
-            if not set(getattr(old, f) or ()) <= set(getattr(new, f) or ()):
+        if not set(old.permissions or ()) <= set(new.permissions or ()):
+            w.append("permissions")
+        if not set(old.required_authority or ()) <= set(new.required_authority or ()):
+            w.append("required_authority")
+        if old.network and (not new.network or not set(new.network) <= set(old.network)):
+            w.append("network")                       # egress may only narrow, and never become undeclared
+        for f in ("secrets", "data_classifications"):
+            if getattr(old, f) and set(getattr(old, f)) != set(getattr(new, f) or ()):
                 w.append(f)
-        if old.isolation_class and old.isolation_class != new.isolation_class:
+        _rank = {"": 0, "in_process": 1, "sandbox": 2, "strict": 3}
+        if _rank.get(new.isolation_class, 0) < _rank.get(old.isolation_class, 0):
             w.append("isolation_class")
         if dict(old.inputs) != dict(new.inputs) or dict(old.outputs) != dict(new.outputs):
             w.append("schema")
