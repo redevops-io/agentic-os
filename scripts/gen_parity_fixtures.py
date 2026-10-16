@@ -462,7 +462,76 @@ def compensation_fold() -> dict:
     return {"cases": cases}
 
 
-FIXTURES = {"compensation_fold.json": compensation_fold, "result_classification.json": result_classification, "policy_resolution.json": policy_resolution, "compensation_scenarios.json": compensation_scenarios,
+def approval_tokens() -> dict:
+    """Canonical JSON / inputs hash / strip / signed approval tokens (mint + verify, incl. replay), computed by the
+    Python implementation. The nonce is made deterministic so the fixture is reproducible."""
+    import itertools
+    from agentic_os.mission import approval as A
+
+    counter = itertools.count(1)
+    real = A._secrets.token_hex
+    A._secrets.token_hex = lambda n=16: f"{next(counter):0{2 * n}x}"
+    try:
+        secret = "parity-test-secret"
+        inputs_cases = [
+            {}, {"a": 1}, {"b": 2, "a": [1, 2.5, "x", None, True], "c": {"z": 1, "y": {"k": 1e20}}},
+            {"u": "café ☃", "q": 'quote" back\\ slash', "n": 10.0, "i": 10, "neg": -0.0, "small": 1e-07},
+            {"_approval": {"approved": True}, "__Approval_x": 1, "approvalFoo": 2, "keep": 1, "_mission": "m", "_goal": "g", "_node": "n"},
+            {"nested": {"_approval": 1, "keep": {"APPROVAL": 1, "k": 2}}, "list": [{"_approval": 1, "v": 1}]},
+        ]
+        hashes = [{"inputs": i, "inputs_sha256": A.inputs_hash(i), "canonical": A.canonical(i).decode(),
+                   "stripped": A.strip_approval_keys(i)} for i in inputs_cases]
+
+        base = {"operator": "billing", "capability": "billing.refund", "mission_id": "m-1", "node_id": "n-1",
+                "inputs": {"invoice": "INV-1", "amount": 10}, "marker": {"approved": True, "compensation": True}}
+        mints = []
+        for name, over, now, ttl in [("full", {}, 1_800_000_000, 300), ("float_now", {}, 1_800_000_000.5, 300),
+                                     ("no_node", {"node_id": None}, 1_800_000_000, 60),
+                                     ("blank_mission", {"mission_id": "  "}, 1_800_000_000, 60),
+                                     ("unicode_inputs", {"inputs": {"who": "café"}}, 1_800_000_000, 300)]:
+            a = {**base, **over}
+            tok = A.mint_approval_token(secret, now=now, ttl_s=ttl, **a)
+            mints.append({"name": name, "args": a, "now": now, "ttl_s": ttl, "wire": tok})
+        tok = A.mint_approval_token(secret, now=1_800_000_000, ttl_s=300, **base)
+        unbound = A.mint_approval_token(secret, now=1_800_000_000, ttl_s=300, **{**base, "mission_id": None, "node_id": None})
+
+        def ver(**o):
+            return {"operator": base["operator"], "capability": base["capability"], "inputs": base["inputs"],
+                    "mission_id": base["mission_id"], "node_id": base["node_id"], **o}
+        vcases = [("ok", tok, ver(), 1_800_000_100),
+                  ("ok_extra_meta_keys_ignored", tok, ver(inputs={**base["inputs"], "_mission": "x", "_approval": 1}), 1_800_000_100),
+                  ("expired", tok, ver(), 1_800_000_301), ("exactly_at_expiry", tok, ver(), 1_800_000_300),
+                  ("wrong_operator", tok, ver(operator="crm"), 1_800_000_100),
+                  ("wrong_capability", tok, ver(capability="billing.charge"), 1_800_000_100),
+                  ("wrong_mission", tok, ver(mission_id="m-2"), 1_800_000_100),
+                  ("missing_mission", tok, ver(mission_id=None), 1_800_000_100),
+                  ("blank_mission_presented", tok, ver(mission_id=""), 1_800_000_100),
+                  ("wrong_node", tok, ver(node_id="n-2"), 1_800_000_100),
+                  ("missing_node", tok, ver(node_id=None), 1_800_000_100),
+                  ("tampered_amount", tok, ver(inputs={"invoice": "INV-1", "amount": 999}), 1_800_000_100),
+                  ("other_invoice", tok, ver(inputs={"invoice": "INV-2", "amount": 10}), 1_800_000_100),
+                  ("unbound_token_accepts_any_mission", unbound, ver(mission_id="whatever", node_id="whatever"), 1_800_000_100),
+                  ("bad_signature", tok[:-2] + ("AA" if tok[-2:] != "AA" else "BB"), ver(), 1_800_000_100),
+                  ("garbage", "not-a-token", ver(), 1_800_000_100), ("empty", "", ver(), 1_800_000_100),
+                  ("two_dots", tok + ".x", ver(), 1_800_000_100), ("payload_only", tok.split(".")[0], ver(), 1_800_000_100)]
+        verifies = []
+        for name, t, kw, now in vcases:
+            m = A.verify_approval_token(secret, t, now=now, **kw)
+            verifies.append({"name": name, "wire": t, "args": kw, "now": now, "marker": m})
+        other = A.verify_approval_token("different-secret", tok, now=1_800_000_100, **ver())
+        g = A.ReplayGuard()
+        rt1 = A.verify_approval_token(secret, tok, now=1_800_000_100, replay_guard=g, **ver())
+        rt2 = A.verify_approval_token(secret, tok, now=1_800_000_100, replay_guard=g, **ver())
+        tok2 = A.mint_approval_token(secret, now=1_800_000_000, ttl_s=300, **base)
+        rt3 = A.verify_approval_token(secret, tok2, now=1_800_000_100, replay_guard=g, **ver())
+        replay = {"wires": [tok, tok, tok2], "args": ver(), "now": 1_800_000_100, "markers": [rt1, rt2, rt3]}
+        return {"hmac_seed": secret, "hashes": hashes, "mints": mints, "verifies": verifies,
+                "wrong_secret_marker": other, "replay": replay}
+    finally:
+        A._secrets.token_hex = real
+
+
+FIXTURES = {"approval_tokens.json": approval_tokens, "compensation_fold.json": compensation_fold, "result_classification.json": result_classification, "policy_resolution.json": policy_resolution, "compensation_scenarios.json": compensation_scenarios,
             "compensation_registration.json": compensation_registration}
 
 

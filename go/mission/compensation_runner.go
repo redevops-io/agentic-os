@@ -865,21 +865,7 @@ func ptrVal(f *float64) float64 {
 }
 
 // pyNum renders a float like Python str(float): integral values keep ".0".
-func pyNum(f float64) string {
-	a := math.Abs(f)
-	if f != 0 && (a >= 1e16 || a < 1e-4) {
-		t := strconv.FormatFloat(f, 'e', -1, 64) // 1e+16 -> Python 1e+16, 1e-05 -> 1e-05
-		if i := strings.IndexByte(t, 'e'); i >= 0 && len(t) > i+2 && t[i+2:] != "" && len(t[i+2:]) < 2 {
-			t = t[:i+2] + "0" + t[i+2:]
-		}
-		return t
-	}
-	t := strconv.FormatFloat(f, 'f', -1, 64)
-	if !strings.Contains(t, ".") {
-		t += ".0"
-	}
-	return t
-}
+func pyNum(f float64) string { return pyFloat(f) }
 
 func recoveryActions(incomplete, retained []map[string]any) []any {
 	steps := []any{}

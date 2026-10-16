@@ -1,0 +1,577 @@
+{
+ "hashes": [
+  {
+   "canonical": "{}",
+   "inputs": {},
+   "inputs_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+   "stripped": {}
+  },
+  {
+   "canonical": "{\"a\":1}",
+   "inputs": {
+    "a": 1
+   },
+   "inputs_sha256": "015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862",
+   "stripped": {
+    "a": 1
+   }
+  },
+  {
+   "canonical": "{\"a\":[1,2.5,\"x\",null,true],\"b\":2,\"c\":{\"y\":{\"k\":1e+20},\"z\":1}}",
+   "inputs": {
+    "a": [
+     1,
+     2.5,
+     "x",
+     null,
+     true
+    ],
+    "b": 2,
+    "c": {
+     "y": {
+      "k": 1e+20
+     },
+     "z": 1
+    }
+   },
+   "inputs_sha256": "1bf8a8fe9749c65a32b9dcba0d9c780bf94e60c0559ccb9085fe3e782aef9e0b",
+   "stripped": {
+    "a": [
+     1,
+     2.5,
+     "x",
+     null,
+     true
+    ],
+    "b": 2,
+    "c": {
+     "y": {
+      "k": 1e+20
+     },
+     "z": 1
+    }
+   }
+  },
+  {
+   "canonical": "{\"i\":10,\"n\":10.0,\"neg\":-0.0,\"q\":\"quote\\\" back\\\\ slash\",\"small\":1e-07,\"u\":\"caf\\u00e9 \\u2603\"}",
+   "inputs": {
+    "i": 10,
+    "n": 10.0,
+    "neg": -0.0,
+    "q": "quote\" back\\ slash",
+    "small": 1e-07,
+    "u": "caf\u00e9 \u2603"
+   },
+   "inputs_sha256": "c776c98a44ddb77685018781b7b66cd8c63f4714b2bbae5818bf535efd59d7fe",
+   "stripped": {
+    "i": 10,
+    "n": 10.0,
+    "neg": -0.0,
+    "q": "quote\" back\\ slash",
+    "small": 1e-07,
+    "u": "caf\u00e9 \u2603"
+   }
+  },
+  {
+   "canonical": "{\"__Approval_x\":1,\"_approval\":{\"approved\":true},\"_goal\":\"g\",\"_mission\":\"m\",\"_node\":\"n\",\"approvalFoo\":2,\"keep\":1}",
+   "inputs": {
+    "__Approval_x": 1,
+    "_approval": {
+     "approved": true
+    },
+    "_goal": "g",
+    "_mission": "m",
+    "_node": "n",
+    "approvalFoo": 2,
+    "keep": 1
+   },
+   "inputs_sha256": "6675aa53127d6ad68fb4f47a8eeced07aebe9552f14b8d4795ca44de47eb56cd",
+   "stripped": {
+    "_goal": "g",
+    "_mission": "m",
+    "_node": "n",
+    "keep": 1
+   }
+  },
+  {
+   "canonical": "{\"list\":[{\"_approval\":1,\"v\":1}],\"nested\":{\"_approval\":1,\"keep\":{\"APPROVAL\":1,\"k\":2}}}",
+   "inputs": {
+    "list": [
+     {
+      "_approval": 1,
+      "v": 1
+     }
+    ],
+    "nested": {
+     "_approval": 1,
+     "keep": {
+      "APPROVAL": 1,
+      "k": 2
+     }
+    }
+   },
+   "inputs_sha256": "8891d2266f8b56ca066f082b8f4f4e380dbd633278874f90f17d79057eb4cf2e",
+   "stripped": {
+    "list": [
+     {
+      "v": 1
+     }
+    ],
+    "nested": {
+     "keep": {
+      "k": 2
+     }
+    }
+   }
+  }
+ ],
+ "hmac_seed": "parity-test-secret",
+ "mints": [
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "amount": 10,
+     "invoice": "INV-1"
+    },
+    "marker": {
+     "approved": true,
+     "compensation": true
+    },
+    "mission_id": "m-1",
+    "node_id": "n-1",
+    "operator": "billing"
+   },
+   "name": "full",
+   "now": 1800000000,
+   "ttl_s": 300,
+   "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6Im4tMSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDEiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.XyfeFgYgjFdHAEl3LG1ZUu-X1YwUrE0Yxksu4wyLfAE"
+  },
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "amount": 10,
+     "invoice": "INV-1"
+    },
+    "marker": {
+     "approved": true,
+     "compensation": true
+    },
+    "mission_id": "m-1",
+    "node_id": "n-1",
+    "operator": "billing"
+   },
+   "name": "float_now",
+   "now": 1800000000.5,
+   "ttl_s": 300,
+   "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAuNSwiaW5wdXRzX3NoYTI1NiI6IjE1NGViMmFiMzRlZDRkNTFmNTJkMjc5MDM2OGIyMWM0ZGU1NzBjMzcyYWY0ZWZiNTEyMWU2MjY4NTNmMzQzZjgiLCJtYXJrZXIiOnsiYXBwcm92ZWQiOnRydWUsImNvbXBlbnNhdGlvbiI6dHJ1ZX0sIm1pc3Npb25faWQiOiJtLTEiLCJub2RlX2lkIjoibi0xIiwibm9uY2UiOiIwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMiIsIm9wZXJhdG9yIjoiYmlsbGluZyJ9.SMujLR1gtHHaUXMHKBee3ulMAK4rc8YhODphCBWr00A"
+  },
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "amount": 10,
+     "invoice": "INV-1"
+    },
+    "marker": {
+     "approved": true,
+     "compensation": true
+    },
+    "mission_id": "m-1",
+    "node_id": null,
+    "operator": "billing"
+   },
+   "name": "no_node",
+   "now": 1800000000,
+   "ttl_s": 60,
+   "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAwNjAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6bnVsbCwibm9uY2UiOiIwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMyIsIm9wZXJhdG9yIjoiYmlsbGluZyJ9.nbd9vVjhLKI9B8WpQGnepXP_13rvFRpAfPeQAA6pEvc"
+  },
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "amount": 10,
+     "invoice": "INV-1"
+    },
+    "marker": {
+     "approved": true,
+     "compensation": true
+    },
+    "mission_id": "  ",
+    "node_id": "n-1",
+    "operator": "billing"
+   },
+   "name": "blank_mission",
+   "now": 1800000000,
+   "ttl_s": 60,
+   "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAwNjAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjpudWxsLCJub2RlX2lkIjoibi0xIiwibm9uY2UiOiIwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwNCIsIm9wZXJhdG9yIjoiYmlsbGluZyJ9.-j1vO4Y9-pnOWYSiAUEet2XYt6Kw5-9u4dbN-Oo4vsM"
+  },
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "who": "caf\u00e9"
+    },
+    "marker": {
+     "approved": true,
+     "compensation": true
+    },
+    "mission_id": "m-1",
+    "node_id": "n-1",
+    "operator": "billing"
+   },
+   "name": "unicode_inputs",
+   "now": 1800000000,
+   "ttl_s": 300,
+   "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiJmYzlmM2UyYTA4ZGYyYmZlNmI4NDlmY2MzYzY1NmQ4ZGFiNjRkNDFkNmFmNGViNWQ4NGY5ZDgzY2ExZWNhMjBmIiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6Im4tMSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDUiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.IRc2rZQE3ibNaLqnAMIZRb6dwsLVVJ6yj02Nqstl2r8"
+  }
+ ],
+ "replay": {
+  "args": {
+   "capability": "billing.refund",
+   "inputs": {
+    "amount": 10,
+    "invoice": "INV-1"
+   },
+   "mission_id": "m-1",
+   "node_id": "n-1",
+   "operator": "billing"
+  },
+  "markers": [
+   {
+    "approved": true,
+    "compensation": true
+   },
+   null,
+   {
+    "approved": true,
+    "compensation": true
+   }
+  ],
+  "now": 1800000100,
+  "wires": [
+   "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6Im4tMSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDYiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.Sg582hsTN88wPrvNZy8Zi_TBNUuEGbGDCv-MmHP5gkU",
+   "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6Im4tMSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDYiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.Sg582hsTN88wPrvNZy8Zi_TBNUuEGbGDCv-MmHP5gkU",
+   "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6Im4tMSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDgiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.djZj9C4ID1yxFKvZ5dEa38XnQEmb-t0wuYZJLejP0cY"
+  ]
+ },
+ "verifies": [
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "amount": 10,
+     "invoice": "INV-1"
+    },
+    "mission_id": "m-1",
+    "node_id": "n-1",
+    "operator": "billing"
+   },
+   "marker": {
+    "approved": true,
+    "compensation": true
+   },
+   "name": "ok",
+   "now": 1800000100,
+   "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6Im4tMSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDYiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.Sg582hsTN88wPrvNZy8Zi_TBNUuEGbGDCv-MmHP5gkU"
+  },
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "_approval": 1,
+     "_mission": "x",
+     "amount": 10,
+     "invoice": "INV-1"
+    },
+    "mission_id": "m-1",
+    "node_id": "n-1",
+    "operator": "billing"
+   },
+   "marker": {
+    "approved": true,
+    "compensation": true
+   },
+   "name": "ok_extra_meta_keys_ignored",
+   "now": 1800000100,
+   "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6Im4tMSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDYiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.Sg582hsTN88wPrvNZy8Zi_TBNUuEGbGDCv-MmHP5gkU"
+  },
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "amount": 10,
+     "invoice": "INV-1"
+    },
+    "mission_id": "m-1",
+    "node_id": "n-1",
+    "operator": "billing"
+   },
+   "marker": null,
+   "name": "expired",
+   "now": 1800000301,
+   "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6Im4tMSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDYiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.Sg582hsTN88wPrvNZy8Zi_TBNUuEGbGDCv-MmHP5gkU"
+  },
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "amount": 10,
+     "invoice": "INV-1"
+    },
+    "mission_id": "m-1",
+    "node_id": "n-1",
+    "operator": "billing"
+   },
+   "marker": null,
+   "name": "exactly_at_expiry",
+   "now": 1800000300,
+   "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6Im4tMSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDYiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.Sg582hsTN88wPrvNZy8Zi_TBNUuEGbGDCv-MmHP5gkU"
+  },
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "amount": 10,
+     "invoice": "INV-1"
+    },
+    "mission_id": "m-1",
+    "node_id": "n-1",
+    "operator": "crm"
+   },
+   "marker": null,
+   "name": "wrong_operator",
+   "now": 1800000100,
+   "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6Im4tMSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDYiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.Sg582hsTN88wPrvNZy8Zi_TBNUuEGbGDCv-MmHP5gkU"
+  },
+  {
+   "args": {
+    "capability": "billing.charge",
+    "inputs": {
+     "amount": 10,
+     "invoice": "INV-1"
+    },
+    "mission_id": "m-1",
+    "node_id": "n-1",
+    "operator": "billing"
+   },
+   "marker": null,
+   "name": "wrong_capability",
+   "now": 1800000100,
+   "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6Im4tMSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDYiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.Sg582hsTN88wPrvNZy8Zi_TBNUuEGbGDCv-MmHP5gkU"
+  },
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "amount": 10,
+     "invoice": "INV-1"
+    },
+    "mission_id": "m-2",
+    "node_id": "n-1",
+    "operator": "billing"
+   },
+   "marker": null,
+   "name": "wrong_mission",
+   "now": 1800000100,
+   "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6Im4tMSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDYiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.Sg582hsTN88wPrvNZy8Zi_TBNUuEGbGDCv-MmHP5gkU"
+  },
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "amount": 10,
+     "invoice": "INV-1"
+    },
+    "mission_id": null,
+    "node_id": "n-1",
+    "operator": "billing"
+   },
+   "marker": null,
+   "name": "missing_mission",
+   "now": 1800000100,
+   "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6Im4tMSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDYiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.Sg582hsTN88wPrvNZy8Zi_TBNUuEGbGDCv-MmHP5gkU"
+  },
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "amount": 10,
+     "invoice": "INV-1"
+    },
+    "mission_id": "",
+    "node_id": "n-1",
+    "operator": "billing"
+   },
+   "marker": null,
+   "name": "blank_mission_presented",
+   "now": 1800000100,
+   "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6Im4tMSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDYiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.Sg582hsTN88wPrvNZy8Zi_TBNUuEGbGDCv-MmHP5gkU"
+  },
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "amount": 10,
+     "invoice": "INV-1"
+    },
+    "mission_id": "m-1",
+    "node_id": "n-2",
+    "operator": "billing"
+   },
+   "marker": null,
+   "name": "wrong_node",
+   "now": 1800000100,
+   "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6Im4tMSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDYiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.Sg582hsTN88wPrvNZy8Zi_TBNUuEGbGDCv-MmHP5gkU"
+  },
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "amount": 10,
+     "invoice": "INV-1"
+    },
+    "mission_id": "m-1",
+    "node_id": null,
+    "operator": "billing"
+   },
+   "marker": null,
+   "name": "missing_node",
+   "now": 1800000100,
+   "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6Im4tMSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDYiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.Sg582hsTN88wPrvNZy8Zi_TBNUuEGbGDCv-MmHP5gkU"
+  },
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "amount": 999,
+     "invoice": "INV-1"
+    },
+    "mission_id": "m-1",
+    "node_id": "n-1",
+    "operator": "billing"
+   },
+   "marker": null,
+   "name": "tampered_amount",
+   "now": 1800000100,
+   "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6Im4tMSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDYiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.Sg582hsTN88wPrvNZy8Zi_TBNUuEGbGDCv-MmHP5gkU"
+  },
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "amount": 10,
+     "invoice": "INV-2"
+    },
+    "mission_id": "m-1",
+    "node_id": "n-1",
+    "operator": "billing"
+   },
+   "marker": null,
+   "name": "other_invoice",
+   "now": 1800000100,
+   "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6Im4tMSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDYiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.Sg582hsTN88wPrvNZy8Zi_TBNUuEGbGDCv-MmHP5gkU"
+  },
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "amount": 10,
+     "invoice": "INV-1"
+    },
+    "mission_id": "whatever",
+    "node_id": "whatever",
+    "operator": "billing"
+   },
+   "marker": {
+    "approved": true,
+    "compensation": true
+   },
+   "name": "unbound_token_accepts_any_mission",
+   "now": 1800000100,
+   "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjpudWxsLCJub2RlX2lkIjpudWxsLCJub25jZSI6IjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA3Iiwib3BlcmF0b3IiOiJiaWxsaW5nIn0.VYiqTyTmd5ExxRZvWsLnLnzuNljxQZvxJAmE63rL80w"
+  },
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "amount": 10,
+     "invoice": "INV-1"
+    },
+    "mission_id": "m-1",
+    "node_id": "n-1",
+    "operator": "billing"
+   },
+   "marker": null,
+   "name": "bad_signature",
+   "now": 1800000100,
+   "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6Im4tMSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDYiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.Sg582hsTN88wPrvNZy8Zi_TBNUuEGbGDCv-MmHP5gAA"
+  },
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "amount": 10,
+     "invoice": "INV-1"
+    },
+    "mission_id": "m-1",
+    "node_id": "n-1",
+    "operator": "billing"
+   },
+   "marker": null,
+   "name": "garbage",
+   "now": 1800000100,
+   "wire": "not-a-token"
+  },
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "amount": 10,
+     "invoice": "INV-1"
+    },
+    "mission_id": "m-1",
+    "node_id": "n-1",
+    "operator": "billing"
+   },
+   "marker": null,
+   "name": "empty",
+   "now": 1800000100,
+   "wire": ""
+  },
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "amount": 10,
+     "invoice": "INV-1"
+    },
+    "mission_id": "m-1",
+    "node_id": "n-1",
+    "operator": "billing"
+   },
+   "marker": null,
+   "name": "two_dots",
+   "now": 1800000100,
+   "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6Im4tMSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDYiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ.Sg582hsTN88wPrvNZy8Zi_TBNUuEGbGDCv-MmHP5gkU.x"
+  },
+  {
+   "args": {
+    "capability": "billing.refund",
+    "inputs": {
+     "amount": 10,
+     "invoice": "INV-1"
+    },
+    "mission_id": "m-1",
+    "node_id": "n-1",
+    "operator": "billing"
+   },
+   "marker": null,
+   "name": "payload_only",
+   "now": 1800000100,
+   "wire": "eyJjYXBhYmlsaXR5IjoiYmlsbGluZy5yZWZ1bmQiLCJleHAiOjE4MDAwMDAzMDAsImlucHV0c19zaGEyNTYiOiIxNTRlYjJhYjM0ZWQ0ZDUxZjUyZDI3OTAzNjhiMjFjNGRlNTcwYzM3MmFmNGVmYjUxMjFlNjI2ODUzZjM0M2Y4IiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlLCJjb21wZW5zYXRpb24iOnRydWV9LCJtaXNzaW9uX2lkIjoibS0xIiwibm9kZV9pZCI6Im4tMSIsIm5vbmNlIjoiMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDYiLCJvcGVyYXRvciI6ImJpbGxpbmcifQ"
+  }
+ ],
+ "wrong_secret_marker": null
+}

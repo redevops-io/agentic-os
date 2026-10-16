@@ -17,6 +17,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -506,7 +507,17 @@ func writePyString(sb *strings.Builder, s string) {
 // parity with CPython's float repr across all inputs is out of scope; event payloads are plain data
 // and rarely carry floats — integers, strings and nested maps dominate.
 func pyFloat(f float64) string {
-	return strconv.FormatFloat(f, 'g', -1, 64)
+	// Python repr(float): shortest round-trip, positional for 1e-4 <= |x| < 1e16 (integral values keep ".0"),
+	// exponent form otherwise.
+	a := math.Abs(f)
+	if f != 0 && (a >= 1e16 || a < 1e-4) {
+		return strconv.FormatFloat(f, 'e', -1, 64)
+	}
+	t := strconv.FormatFloat(f, 'f', -1, 64)
+	if !strings.Contains(t, ".") {
+		t += ".0"
+	}
+	return t
 }
 
 // pyListRepr reproduces Python's repr() of a list of strings: [] or ['a', 'b'] with single quotes,

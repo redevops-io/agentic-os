@@ -6,6 +6,7 @@ package mission
 
 import (
 	"fmt"
+	"log"
 	"strings"
 )
 
@@ -43,10 +44,44 @@ func (c *HTTPOperatorClient) Invoke(operator, capability string, inputs map[stri
 	if err != nil {
 		return nil, err
 	}
+	in := make(map[string]any, len(inputs))
+	for k, v := range inputs {
+		in[k] = v
+	}
+	marker, _ := in["_approval"].(map[string]any)
+	delete(in, "_approval")
+	nodeID, _ := in["_node"].(string)
+	delete(in, "_node")
+	var nodeAny, missionAny any
+	if nodeID != "" {
+		nodeAny = nodeID
+	}
+	mid := ""
+	if v, ok := in["_mission"]; ok && v != nil {
+		missionAny = v
+		if s, isStr := v.(string); isStr {
+			mid = s
+		} else {
+			mid = fmt.Sprint(v)
+			missionAny = mid
+		}
+	}
 	body := map[string]any{
-		"capability": capability, "inputs": inputs,
-		"mission_id": inputs["_mission"], "node_id": nil,
+		"capability": capability, "inputs": in,
+		"mission_id": missionAny, "node_id": nodeAny,
 		"idempotency_key": idempotencyKey,
+	}
+	if len(marker) > 0 {
+		// The marker must not travel in `inputs` (the operator strips it as a forgery): send it as a signed token.
+		// Never mint an UNBOUND-mission token (it would verify for any mission); with no secret nothing is sent and
+		// the operator stages (fail closed).
+		if strings.TrimSpace(mid) == "" {
+			log.Printf("approval marker without _mission for %s/%s: not minting token (staged)", operator, capability)
+		} else if tok := MintApprovalToken(nil, operator, capability, mid, nodeID, in, marker, 300); tok != "" {
+			body["approval_token"] = tok
+		} else {
+			log.Printf("%s is not set: approved actions stay staged (no approval token minted)", EnvApprovalSecret)
+		}
 	}
 	headers := map[string]string{}
 	if idempotencyKey != "" {
