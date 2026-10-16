@@ -71,10 +71,18 @@ def env(monkeypatch, tmp_path):
     return http, TestClient(ga_app.app)
 
 
-def test_generation_only_defaults_on():
-    import re
-    src = open(core.__file__).read()
-    assert re.search(r'environ\.get\("GENERATION_ONLY",\s*"true"\)', src)
+@pytest.mark.parametrize("raw,expected", [
+    (None, True), ("", True), ("true", True), ("true ", True), ("on", True), ("y", True), ("1", True), ("garbage", True),
+    ("false", False), ("False", False), ("0", False), ("no", False), ("off", False), (" off ", False),
+])
+def test_generation_only_is_on_unless_explicitly_false(raw, expected):
+    assert core._generation_only(raw) is expected
+
+
+@pytest.mark.parametrize("push,expected", [(True, True), ("true", True), ("1", True), (1, False), ("yes", False),
+                                           ("false", False), ([], False), (None, False), ({"x": 1}, False)])
+def test_push_flag_is_parsed_strictly(env, push, expected):
+    assert core._push_on({"push": push, "_approval": {"approved": True, "by": "operator-basic"}}) is expected
 
 
 @pytest.mark.parametrize("headers", [{}, _basic("operator:wrong"), {"Authorization": "Bearer x"}])

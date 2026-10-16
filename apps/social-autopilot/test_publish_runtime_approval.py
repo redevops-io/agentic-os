@@ -37,9 +37,9 @@ def _runtime():
     return MissionRuntime(reg, Executor(LocalOperatorClient({op.name: op})))
 
 
-def _approve_publish(rt):
+def _approve_publish(rt, **extra):
     req = MissionRequest(goal="publish the staged post", capability="social.publish",
-                         required_capabilities=("social.publish",), inputs={"id": "post-1"}, gated=True,
+                         required_capabilities=("social.publish",), inputs={"id": "post-1", **extra}, gated=True,
                          intervention_id="iv-1", opportunity_id="op-1", action_kind="publish", subject="post-1")
     mid = MissionRuntimeLauncher(rt).launch(req)
     rt.run(mid)
@@ -78,3 +78,27 @@ def test_drafted_post_is_bound_to_its_content():
     d = core.draft({"topic": "market notes"})
     assert d["post_id"] and core._recorded_binding(d["post_id"]) == core._content_hash(d["copy"])
 
+
+
+def _edit(monkeypatch, text):
+    monkeypatch.setattr(t_op, "_POST_ROW_BY_ID", "post-1\x1fQUEUE\x1fint-1\x1f" + '[{"content": "%s"}]' % text)
+
+
+def test_restaging_changed_content_does_not_replace_the_pending_binding(monkeypatch):
+    first = core.publish({"id": "post-1"})
+    _edit(monkeypatch, "version B")
+    again = core.publish({"id": "post-1"})                      # unapproved call after an edit
+    assert again["status"] == "error" and again["publish_executed"] is False
+    rt = _runtime()
+    mid = _approve_publish(rt)                                   # approving the original request
+    assert _FakePsql.updates == []                               # must not publish version B
+    assert first["approval_binding"]["content_hash"] != core._content_hash("version B")
+
+
+def test_mission_input_hash_binds_the_approval_to_the_staged_content(monkeypatch):
+    staged = core.publish({"id": "post-1"})["approval_binding"]["content_hash"]
+    core._BINDINGS.clear()
+    _edit(monkeypatch, "version B")
+    rt = _runtime()
+    _approve_publish(rt, content_hash=staged)
+    assert _FakePsql.updates == []

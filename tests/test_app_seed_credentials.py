@@ -7,7 +7,7 @@ from pathlib import Path
 APPS = Path(__file__).resolve().parent.parent / "apps"
 SEEDS = sorted(list(APPS.glob("*/seed.py")) + list(APPS.glob("*/seed.rb")))
 
-# A capitalised word, then a short suffix followed by "!" and digits: the shape of a shared demo password.
+# A fixed credential-shaped token: a word, then "!" and four digits.
 _SHAPED = re.compile(r"[A-Z][a-z]+[A-Za-z]*![0-9]{4}")
 # NAME_PASSWORD = "literal"  /  environ.get("..._PASSWORD", "literal")
 _ASSIGN = re.compile(r"""(?i)password\w*\s*=\s*(['"])[^'"\s]+\1""")
@@ -18,7 +18,7 @@ def test_seed_scripts_found():
     assert SEEDS
 
 
-def test_no_seed_contains_a_shared_password_literal():
+def test_seeds_require_env_credentials():
     for p in SEEDS:
         assert not _SHAPED.search(p.read_text()), p
 
@@ -30,7 +30,7 @@ def test_no_seed_assigns_or_defaults_a_password_literal():
         assert not _ENV_DEFAULT.search(text), p
 
 
-def test_no_app_source_embeds_a_shared_password_literal():
+def test_app_sources_embed_no_fixed_credentials():
     for p in APPS.rglob("*"):
         if p.suffix in (".py", ".rb", ".md", ".sh", ".yml", ".yaml") and p.is_file():
             assert not _SHAPED.search(p.read_text(errors="ignore")), p

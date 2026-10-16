@@ -186,30 +186,16 @@ def fetch_activity(force: bool = False) -> dict:
 
 
 # ── agentic actions (deterministic changedetection API work) ─────────────────
-_BLOCKED_HOST_SUFFIXES = (".local", ".internal", ".svc", ".cluster.local", ".localhost", ".lan", ".home.arpa")
-
-
 def _watch_url_error(url: str) -> str:
-    """Why a watch URL is refused ('' when acceptable): only http(s) pages on public-looking hosts."""
-    import ipaddress
-    import urllib.parse
+    """Why a watch URL is refused ('' when acceptable). Fails closed if the shared policy is unavailable.
+
+    The page is fetched by changedetection, not by this app, so the check here is point-in-time: that service
+    must also be deployed with an egress policy that blocks private, loopback and link-local destinations."""
     try:
-        u = urllib.parse.urlsplit(url)
-        host = (u.hostname or "").lower().rstrip(".")
-        u.port  # noqa: B018 - raises on a malformed port
-    except ValueError:
-        return "invalid url"
-    if u.scheme not in ("http", "https") or not host:
-        return "url must be http(s) with a host"
-    if u.username or u.password:
-        return "credentials in url are not allowed"
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        if "." not in host or host == "localhost" or host.endswith(_BLOCKED_HOST_SUFFIXES):
-            return "host must be a public name"
-        return ""
-    return "" if ip.is_global else "host must be a public address"
+        from agentic_os.safe_url import public_url_problem
+    except Exception:  # noqa: BLE001
+        return "url policy unavailable"
+    return public_url_problem(url)
 
 
 def add_watch(body: dict) -> dict:

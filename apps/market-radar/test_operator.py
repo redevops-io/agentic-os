@@ -88,6 +88,8 @@ class _FakeClient:
 
 @pytest.fixture(autouse=True)
 def _fake_cd(monkeypatch):
+    import agentic_os.safe_url as _su
+    monkeypatch.setattr(_su, "_default_resolver", lambda h: ["93.184.216.34"])
     _FakeClient.posted = []
     core._CACHE.update(ts=0.0, data=None)  # no cache bleed between tests
     monkeypatch.setattr(core, "CD_API_KEY", "test-key")
@@ -121,12 +123,12 @@ def test_capabilities_manifest(client):
 def test_invoke_add_watch_posts_to_changedetection(client):
     r = client.post("/invoke", json={
         "capability": "radar.add_watch",
-        "inputs": {"url": "https://rival.example/prices", "title": "Rival Prices", "tag": "pricing"},
+        "inputs": {"url": "https://rival.example.com/prices", "title": "Rival Prices", "tag": "pricing"},
     }).json()
     res = r["result"]
     assert res["status"] == "done" and res["action"] == "add_watch"
     assert res["watch"]["uuid"] == "new-watch-1"
-    assert res["watch"]["url"] == "https://rival.example/prices"
+    assert res["watch"]["url"] == "https://rival.example.com/prices"
     # the REAL core POSTed a watch to changedetection's /api/v1/watch endpoint
     assert _FakeClient.posted == ["http://localhost:5001/api/v1/watch"]
 
@@ -150,7 +152,7 @@ def test_brief_computes_kpis_off_live_watches(client):
 def test_idempotency_dedupes_add_watch(client):
     body = {
         "capability": "radar.add_watch",
-        "inputs": {"url": "https://rival.example/prices", "title": "Rival Prices"},
+        "inputs": {"url": "https://rival.example.com/prices", "title": "Rival Prices"},
         "idempotency_key": "k-1",
     }
     first = client.post("/invoke", json=body).json()["result"]
@@ -169,5 +171,5 @@ def test_mission_runtime_httpclient_drives_operator(client):
     assert brief["status"] == "done" and brief["watches_reviewed"] == 1
 
     added = oc.invoke("market-radar", "radar.add_watch",
-                      {"url": "https://new.example", "title": "New"}, idempotency_key="m-2")
+                      {"url": "https://new.example.com", "title": "New"}, idempotency_key="m-2")
     assert added["status"] == "done" and added["watch"]["uuid"] == "new-watch-1"

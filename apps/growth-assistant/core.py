@@ -69,7 +69,12 @@ POSTIZ_API_KEY = os.environ.get("POSTIZ_API_KEY", "")
 # Public-surface safety: when true, NO action pushes to ERPNext/Listmonk/Postiz
 # (the demo deployment behind demo.redevops.io sets this).
 # Defaults to ON: live pushes need an explicit GENERATION_ONLY=false AND an authenticated operator.
-GENERATION_ONLY = os.environ.get("GENERATION_ONLY", "true").lower() in ("1", "true", "yes")
+def _generation_only(raw: "str | None") -> bool:
+    """On unless the value is an explicit false ('0', 'false', 'no', 'off'); unset, blank or unknown => on."""
+    return (raw if raw is not None else "true").strip().lower() not in ("0", "false", "no", "off")
+
+
+GENERATION_ONLY = _generation_only(os.environ.get("GENERATION_ONLY"))
 
 SUBTITLE = ("Strategic traction for first-time founders — subreddit incubation, founder-led "
             "growth, lead-magnet communities, and cold outreach — plus vetted-freelancer "
@@ -114,7 +119,9 @@ def _push_on(body: dict) -> bool:
     and GENERATION_ONLY off. Anonymous requests only ever generate."""
     appr = body.get("_approval")
     approved = isinstance(appr, dict) and appr.get("approved") is True and appr.get("by") == "operator-basic"
-    return bool(body.get("push")) and approved and not GENERATION_ONLY
+    push = body.get("push")
+    explicit = push is True or (isinstance(push, str) and push.strip().lower() in ("true", "1"))
+    return explicit and approved and not GENERATION_ONLY
 
 
 # --- startup profile helper --------------------------------------------------

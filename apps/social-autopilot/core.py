@@ -354,24 +354,40 @@ def _content_hash(text: str) -> str:
 # marker only says "a human cleared this node", so the hash the approver was shown is remembered here and the
 # publish step compares it with what Postiz holds now. In-memory: after a restart nothing is bound and a publish
 # fails closed until the post is staged again.
-_BINDINGS: "dict[str, str]" = {}
+_BINDINGS: "dict[str, tuple[str, float]]" = {}
 _BINDINGS_LOCK = threading.Lock()
 _BINDINGS_MAX = 1000
 
 
-def _remember_binding(pid: str, content_hash: str) -> None:
+_BINDING_TTL = 24 * 3600.0
+
+
+def _remember_binding(pid: str, content_hash: str) -> bool:
+    """Record the hash a post was staged with. First stager wins while the binding is live: a later call with
+    different content does not replace it (returns False); it can be re-staged after the TTL or a publish."""
     if not (pid and content_hash):
-        return
+        return False
+    now = time.time()
     with _BINDINGS_LOCK:
+        cur = _BINDINGS.get(pid)
+        if cur and now - cur[1] < _BINDING_TTL and cur[0] != content_hash:
+            return False
         _BINDINGS.pop(pid, None)
-        _BINDINGS[pid] = content_hash
+        _BINDINGS[pid] = (content_hash, cur[1] if cur and cur[0] == content_hash else now)
         while len(_BINDINGS) > _BINDINGS_MAX:
             _BINDINGS.pop(next(iter(_BINDINGS)))
+    return True
 
 
 def _recorded_binding(pid: str) -> str:
     with _BINDINGS_LOCK:
-        return _BINDINGS.get(pid, "")
+        cur = _BINDINGS.get(pid)
+        return cur[0] if cur and time.time() - cur[1] < _BINDING_TTL else ""
+
+
+def _clear_binding(pid: str) -> None:
+    with _BINDINGS_LOCK:
+        _BINDINGS.pop(pid, None)
 
 
 def _valid_post_id(pid: str) -> bool:
@@ -437,8 +453,11 @@ def publish(body: dict) -> dict:
     where = f" on {target['network']} (“{target['text'][:60]}…”)" if target else ""
 
     if not body.get("_approval"):
-        if cur is not None:
-            _remember_binding(pid, content_hash)
+        if cur is not None and not _remember_binding(pid, content_hash):
+            return {"status": "error", "action": "publish", "id": pid, "publish_staged": False,
+                    "publish_executed": False,
+                    "summary": f"post {pid} changed since it was staged for approval; the pending request keeps "
+                               "its original content."}
         return {
             "status": "pending_approval", "action": "publish", "id": pid, "requires": "human approval",
             "publish_staged": True,
@@ -455,7 +474,10 @@ def publish(body: dict) -> dict:
     # staged, and it must still match what Postiz holds now. A missing hash (approval not bound to content)
     # or a changed hash (content swapped after staging) both refuse — never publish content the approver
     # didn't see. Previously a missing hash skipped the check, so a post edited after approval still shipped.
-    approved_hash = (body.get("_approval") or {}).get("content_hash") or _recorded_binding(pid)
+    # Hash the approver cleared, strongest first: the mission input (covered by the approval's input binding),
+    # an approver-supplied value, then the hash recorded when this post was first staged.
+    approved_hash = (body.get("content_hash") or (body.get("_approval") or {}).get("content_hash")
+                     or _recorded_binding(pid))
     if not approved_hash or approved_hash != content_hash:
         changed = "changed since approval" if approved_hash else "not bound to the approved hash"
         return {"status": "error", "action": "publish", "id": pid, "publish_staged": True,
@@ -476,6 +498,7 @@ def publish(body: dict) -> dict:
     if not submitted:
         return {"status": "error", "action": "publish", "id": pid, "publish_staged": True,
                 "publish_executed": False, "summary": f"approved but NOT submitted to Postiz: {err}"}
+    _clear_binding(pid)
     v = verify_publish({"id": pid})
     return {
         "status": "done", "action": "publish", "id": pid, "publish_staged": True, "publish_executed": True,
