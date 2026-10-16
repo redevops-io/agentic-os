@@ -24,6 +24,7 @@ driven by the same start/callback with no code change.
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -153,7 +154,10 @@ class HostedConnect:
 
     session_factory: SessionFactory
     providers: Tuple[str, ...] = ()
-    _sessions: Dict[str, Tuple[str, Any]] = field(default_factory=dict)   # state -> (provider, session)
+    _sessions: Dict[str, Tuple[str, Any, float]] = field(default_factory=dict)   # state -> (provider, session, started_at)
+    ttl_s: float = 600.0                                                   # a pending Connect expires after this
+    max_pending: int = 64                                                  # hard cap on concurrent pending sessions
+    clock: Callable[[], float] = time.monotonic
     _connected: Dict[str, str] = field(default_factory=dict)              # provider -> credential_ref
     broker: Any = None                                                    # shared token store (for resolver)
 
@@ -164,16 +168,26 @@ class HostedConnect:
         if not self.available(provider):
             raise KeyError(f"no hosted OAuth app registered for {provider!r} "
                            f"(set its client_id/secret in deployment secrets)")
+        self._expire()
+        if len(self._sessions) >= self.max_pending:
+            raise RuntimeError("too many pending Connect sessions; retry later")
         session = self.session_factory(provider)
         started = session.start()
-        self._sessions[started["state"]] = (provider, session)
+        self._sessions[started["state"]] = (provider, session, self.clock())
         return started
 
+    def _expire(self) -> None:
+        cutoff = self.clock() - self.ttl_s
+        for st in [k for k, (_, _, t) in self._sessions.items() if t < cutoff]:
+            self._sessions.pop(st, None)
+
     def callback(self, code: str, state: str) -> ConnectOutcome:
+        # A state exists only if an authenticated start minted it; it is one-shot and expires.
+        self._expire()
         entry = self._sessions.pop(state, None)
         if entry is None:
             return ConnectOutcome("", "NOT_CONNECTED", False, detail="unknown or expired state")
-        provider, session = entry
+        provider, session, _ = entry
         outcome = session.complete(code, state)
         if outcome.connected and outcome.credential_ref:
             self._connected[provider] = outcome.credential_ref

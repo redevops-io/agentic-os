@@ -16,6 +16,8 @@ use, and are they connected?" reflects the real Integration Plane when it's pres
 """
 from __future__ import annotations
 
+import html as _html
+
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Protocol, Set, Tuple
 
@@ -165,6 +167,7 @@ def enabled_apps(apps: List[dict], selection: Optional[Set[str]]) -> List[dict]:
 # ── hosted OAuth (click-only Connect for the served deployment) ──────────────────
 _HOSTED: Any = None
 _HOSTED_TRIED = False
+_HOSTED_BROKEN = False      # OAuth client credentials are present but the hosted flow could not be built
 
 # ── Sidekick's grounded LLM fallback (out-of-KB questions; None when no model configured) ──
 _SIDEKICK: Any = None
@@ -190,7 +193,7 @@ def _get_hosted() -> Any:
     """The deployment's :class:`HostedConnect`, built once from env. Returns None when the
     connector plugin isn't installed or no OAuth app's client creds are set (Connect then falls
     back to the simulated path)."""
-    global _HOSTED, _HOSTED_TRIED
+    global _HOSTED, _HOSTED_TRIED, _HOSTED_BROKEN
     if _HOSTED_TRIED:
         return _HOSTED
     _HOSTED_TRIED = True
@@ -202,6 +205,10 @@ def _get_hosted() -> Any:
             _HOSTED = HostedConnect.from_env(base)
     except Exception:
         _HOSTED = None
+        try:
+            _HOSTED_BROKEN = bool(oauth_apps_from_env(base))
+        except Exception:
+            _HOSTED_BROKEN = False
     return _HOSTED
 
 
@@ -1474,12 +1481,20 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
         return prov.connect_app(provider)
 
     @app.post("/api/apps/{provider}/connect/start")
-    def _connect_start(provider: str) -> dict:
+    def _connect_start(provider: str, authorization: Optional[str] = Header(default=None)) -> dict:
         """Begin hosted OAuth: return the provider consent URL the browser should open. Falls
         back to the simulated connect when no ReDevOps OAuth app is registered for the provider."""
         hosted = _get_hosted()
+        if hosted is None and _HOSTED_BROKEN:
+            # credentials are configured: never degrade to the simulated flag
+            raise HTTPException(503, "hosted OAuth is configured but unavailable")
         if hosted is not None and hosted.available(provider):
-            started = hosted.start(provider)
+            from agentic_os.mission.control_auth import require_control_token
+            require_control_token(authorization)
+            try:
+                started = hosted.start(provider)
+            except RuntimeError as e:
+                raise HTTPException(429, str(e))
             return {"hosted": True, "authorize_url": started["authorize_url"], "state": started["state"]}
         return {"hosted": False, "authorize_url": None, "connected": prov.connect_app(provider)}
 
@@ -1493,10 +1508,10 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
         outcome = hosted.callback(code, state)
         if outcome.connected:
             prov.connect_app(outcome.provider)  # reflect in /apps + template readiness
-            body = (f"<h2>&#10003; Connected {outcome.provider}</h2>"
-                    f"<p>{outcome.state} · you can close this tab and return to Projects.</p>")
+            body = (f"<h2>&#10003; Connected {_html.escape(str(outcome.provider))}</h2>"
+                    f"<p>{_html.escape(str(outcome.state))} · you can close this tab and return to Projects.</p>")
             return HTMLResponse(_callback_page(body))
-        return HTMLResponse(_callback_page(f"<h2>Couldn't connect</h2><p>{outcome.detail}</p>"), status_code=400)
+        return HTMLResponse(_callback_page(f"<h2>Couldn't connect</h2><p>{_html.escape(str(outcome.detail))}</p>"), status_code=400)
 
     @app.get("/api/projects/{project_id}/sources")
     def _sources(project_id: str) -> List[dict]:
