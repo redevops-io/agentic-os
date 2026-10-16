@@ -1123,7 +1123,51 @@ func (rt *MissionRuntime) RehydrateStrict(missionID string, opts RehydrateOpts) 
 		rt.plans[missionID] = plan
 		m.ActivePlanID = plan.ID
 	}
+	m.Outcome = rt.outcomeFromLogFor(m)
 	return m, nil
+}
+
+// outcomeFromLogFor: a terminal mission's outcome, rebuilt from the log on rehydrate - the same shape succeed/fail set
+// on the live run, so a resumed process sees the SAME outcome (compensation fields included: one function, live and
+// replay). Non-terminal missions have no outcome yet.
+func (rt *MissionRuntime) outcomeFromLogFor(m *Mission) map[string]any {
+	switch m.State {
+	case MissionSucceeded:
+		world := map[string]any{}
+		for k, b := range rt.world(m.ID).Snapshot() {
+			if b != nil {
+				world[k] = b.Value
+			} else {
+				world[k] = nil
+			}
+		}
+		return map[string]any{"success": true, "world": world}
+	case MissionFailed, MissionCompensationFailed:
+		events := rt.store.ForMission(m.ID)
+		reason := "failed"
+		for i := len(events) - 1; i >= 0; i-- {
+			e := events[i]
+			switch e.Type {
+			case "NodeFailed", "ApprovalRejected", "VerificationRejected", "MissionBlocked":
+				reason = payloadStr(e.Payload, "reason")
+				if reason == "" {
+					reason = payloadStr(e.Payload, "error")
+				}
+				if reason == "" {
+					reason = e.Type
+				}
+				i = -1
+			}
+		}
+		out := map[string]any{"success": false, "reason": reason}
+		if plan := rt.plans[m.ID]; plan != nil {
+			for k, v := range rt.computeOutcome(m, plan) {
+				out[k] = v
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────

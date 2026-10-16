@@ -422,7 +422,47 @@ def result_classification() -> dict:
     return {"cases": out}
 
 
-FIXTURES = {"result_classification.json": result_classification, "policy_resolution.json": policy_resolution, "compensation_scenarios.json": compensation_scenarios,
+def compensation_fold() -> dict:
+    """Event logs (hand-built, including duplicated / out-of-order records) -> fold_compensation + summarize."""
+    from agentic_os.mission import compensation as C
+
+    def ev(t, nid, i=None, **p):
+        d = {"type": t, "payload": {"node_id": nid, **p}}
+        if i is not None:
+            d["id"] = i
+        return d
+
+    req = lambda n, att, i=None: ev("CompensationRequested", n, i, undo="u", attempt=att)
+    logs = {
+        "happy_path_readback": [req("n1", 1), ev("CompensationAuthorized", "n1"), ev("CompensationExecuted", "n1", receipt={"r": 1}),
+                                ev("CompensationVerified", "n1", method="readback")],
+        "manual_verification_is_not_readback": [req("n1", 1), ev("CompensationExecuted", "n1"), ev("CompensationVerified", "n1", method="manual", actor="a")],
+        "duplicated_requested_same_attempt": [req("n1", 1), req("n1", 1), req("n1", 1), ev("CompensationFailed", "n1", reason="x")],
+        "duplicated_requested_does_not_exhaust_attempts": [req("n1", 1), req("n1", 1), ev("CompensationFailed", "n1", reason="x"),
+                                                           req("n1", 2), req("n1", 2), req("n1", 2), ev("CompensationFailed", "n1", reason="y")],
+        "legacy_requested_without_attempt_dedupes_by_event_id": [req("n1", 0, "e1"), req("n1", 0, "e1"), req("n1", 0, "e2")],
+        "legacy_requested_without_attempt_or_id_counts_each": [req("n1", 0), req("n1", 0)],
+        "retry_restarts_the_node": [req("n1", 1), ev("CompensationFailed", "n1", reason="x"), req("n1", 2), ev("CompensationExecuted", "n1")],
+        "approval_for_current_attempt_only": [req("n1", 1), ev("CompensationApprovalRequired", "n1", inputs_sha256="h"),
+                                              ev("CompensationApproved", "n1", attempt=7, approver="z"),
+                                              ev("CompensationApproved", "n1", attempt=1, approver="alice")],
+        "approval_cleared_by_new_attempt": [req("n1", 1), ev("CompensationApproved", "n1", attempt=1, approver="alice"), req("n1", 2)],
+        "acknowledged_after_failure": [req("n1", 1), ev("CompensationFailed", "n1", reason="x"),
+                                       ev("CompensationAcknowledged", "n1", actor="alice", reason="by hand")],
+        "skipped_precondition": [req("n1", 1), ev("CompensationSkipped", "n1", reason="precondition_not_met: held")],
+        "node_without_id_and_unknown_types_ignored": [{"type": "CompensationRequested", "payload": {"undo": "u"}},
+                                                      ev("SomethingElse", "n1"), req("n2", 1)],
+        "several_nodes_mixed": [req("a", 1), ev("CompensationVerified", "a", method="readback"), req("b", 1), ev("CompensationFailed", "b", reason="r"),
+                                req("c", 1), ev("CompensationApprovalRequired", "c", inputs_sha256="h"), req("d", 1), ev("CompensationExecuted", "d")],
+    }
+    cases = []
+    for name, events in logs.items():
+        folded = C.fold_compensation(events)
+        cases.append({"name": name, "events": events, "folded": folded, "summary": C.summarize(folded)})
+    return {"cases": cases}
+
+
+FIXTURES = {"compensation_fold.json": compensation_fold, "result_classification.json": result_classification, "policy_resolution.json": policy_resolution, "compensation_scenarios.json": compensation_scenarios,
             "compensation_registration.json": compensation_registration}
 
 

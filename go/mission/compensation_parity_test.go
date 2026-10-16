@@ -256,6 +256,26 @@ func TestCompensationScenariosMatchPython(t *testing.T) {
 					got = append(got, s)
 				}
 			}
+			// fold/rehydrate equality: a fresh runtime on the same log reports the same state and compensation outcome
+			rt2 := NewMissionRuntime(reg, NewExecutor(client), WithStore(rt.store), WithPlanner(chainPlanner{sc.Outcomes}))
+			m2, err := rt2.RehydrateStrict(m.ID, RehydrateOpts{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			pick := func(o map[string]any) map[string]any {
+				out := map[string]any{}
+				for k, v := range o {
+					if OutcomeKeys[k] {
+						out[k] = v
+					}
+				}
+				return normalizeJSON(out, names, m.ID).(map[string]any)
+			}
+			if m2.State != m.State || !reflect.DeepEqual(pick(m2.Outcome), pick(m.Outcome)) {
+				a, _ := json.MarshalIndent(pick(m.Outcome), "", " ")
+				b, _ := json.MarshalIndent(pick(m2.Outcome), "", " ")
+				t.Errorf("rehydrated mission differs from live (state %s vs %s)\n--- live\n%s\n--- rehydrated\n%s", m.State, m2.State, a, b)
+			}
 			if len(got) != len(sc.Expected) {
 				t.Fatalf("snapshots: go=%d python=%d", len(got), len(sc.Expected))
 			}
@@ -346,6 +366,77 @@ func TestResultClassifierMatchesPython(t *testing.T) {
 		}
 		if f, _ := ResultFailed(c.Result, true, false); f != c.FailedNoOutput {
 			t.Errorf("%v: side-effecting/no-outputs go=%v python=%v", c.Result, f, c.FailedNoOutput)
+		}
+	}
+}
+
+func TestCompensationFoldMatchesPython(t *testing.T) {
+	raw, err := os.ReadFile("testdata/compensation_fold.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Cases []struct {
+			Name   string                    `json:"name"`
+			Events []Event                   `json:"events"`
+			Folded map[string]map[string]any `json:"folded"`
+			Sum    map[string]any            `json:"summary"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	str := func(v any) string { s, _ := v.(string); return s }
+	for _, c := range doc.Cases {
+		var evs []*Event
+		for i := range c.Events {
+			evs = append(evs, &c.Events[i])
+		}
+		got := FoldCompensation(evs)
+		if len(got) != len(c.Folded) {
+			t.Errorf("%s: nodes go=%d python=%d", c.Name, len(got), len(c.Folded))
+		}
+		for nid, want := range c.Folded {
+			g := got[nid]
+			if g == nil {
+				t.Errorf("%s: node %s missing", c.Name, nid)
+				continue
+			}
+			if g.Status != want["status"] || g.Undo != str(want["undo"]) || g.Reason != str(want["reason"]) ||
+				float64(g.Attempts) != want["attempts"] || float64(g.Attempt) != want["attempt"] || g.Method != str(want["method"]) {
+				t.Errorf("%s/%s: go=%+v python=%v", c.Name, nid, *g, want)
+			}
+			if (g.Approval == nil) != (want["approval"] == nil) ||
+				(g.Approval != nil && str(g.Approval["approver"]) != str(want["approval"].(map[string]any)["approver"])) {
+				t.Errorf("%s/%s: approval go=%v python=%v", c.Name, nid, g.Approval, want["approval"])
+			}
+			for k, have := range map[string]string{"inputs_sha256": g.InputsSHA256, "actor": g.Actor, "ack_reason": g.AckReason} {
+				if w, ok := want[k]; ok && str(w) != have {
+					t.Errorf("%s/%s: %s go=%q python=%v", c.Name, nid, k, have, w)
+				}
+			}
+		}
+		s := SummarizeCompensation(got)
+		lst := func(v any) []string {
+			var o []string
+			for _, x := range v.([]any) {
+				o = append(o, x.(string))
+			}
+			return o
+		}
+		mp := func(v any) map[string]string {
+			o := map[string]string{}
+			for k, x := range v.(map[string]any) {
+				o[k] = x.(string)
+			}
+			return o
+		}
+		if !reflect.DeepEqual(append([]string{}, s.Compensated...), append([]string{}, lst(c.Sum["compensated"])...)) ||
+			!reflect.DeepEqual(append([]string{}, s.CompensatedUnverified...), append([]string{}, lst(c.Sum["compensated_unverified"])...)) ||
+			!reflect.DeepEqual(append([]string{}, s.CompensationAck...), append([]string{}, lst(c.Sum["compensation_acknowledged"])...)) ||
+			!reflect.DeepEqual(s.CompensationFailed, mp(c.Sum["compensation_failed"])) ||
+			!reflect.DeepEqual(s.CompensationSkipped, mp(c.Sum["compensation_skipped"])) || s.ReadbackOnly != c.Sum["readback_only"] {
+			t.Errorf("%s: summary go=%+v python=%v", c.Name, s, c.Sum)
 		}
 	}
 }
