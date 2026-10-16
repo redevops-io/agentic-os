@@ -17,6 +17,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -430,7 +431,14 @@ func writePyJSONSep(sb *strings.Builder, v any, itemSep, keySep string) {
 	case float64:
 		sb.WriteString(pyFloat(x))
 	case json.Number:
-		sb.WriteString(string(x)) // preserve the parsed token (int or fractional) verbatim
+		// integer tokens verbatim (Python ints are arbitrary precision); fractional/exponent tokens as Python's float repr
+		if strings.ContainsAny(string(x), ".eE") {
+			if f, err := x.Float64(); err == nil {
+				sb.WriteString(pyFloat(f))
+				break
+			}
+		}
+		sb.WriteString(string(x))
 	case []any:
 		sb.WriteByte('[')
 		for i, e := range x {
@@ -506,7 +514,25 @@ func writePyString(sb *strings.Builder, s string) {
 // parity with CPython's float repr across all inputs is out of scope; event payloads are plain data
 // and rarely carry floats — integers, strings and nested maps dominate.
 func pyFloat(f float64) string {
-	return strconv.FormatFloat(f, 'g', -1, 64)
+	// Python repr(float): shortest round-trip, positional for 1e-4 <= |x| < 1e16 (integral values keep ".0"),
+	// exponent form otherwise.
+	switch {
+	case math.IsNaN(f):
+		return "NaN" // json.dumps writes the bare tokens NaN / Infinity / -Infinity
+	case math.IsInf(f, 1):
+		return "Infinity"
+	case math.IsInf(f, -1):
+		return "-Infinity"
+	}
+	a := math.Abs(f)
+	if f != 0 && (a >= 1e16 || a < 1e-4) {
+		return strconv.FormatFloat(f, 'e', -1, 64)
+	}
+	t := strconv.FormatFloat(f, 'f', -1, 64)
+	if !strings.Contains(t, ".") {
+		t += ".0"
+	}
+	return t
 }
 
 // pyListRepr reproduces Python's repr() of a list of strings: [] or ['a', 'b'] with single quotes,

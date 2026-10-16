@@ -99,7 +99,12 @@ type Executor struct {
 
 	mu          sync.Mutex
 	compensated map[string]map[string]any
+	compOrder   []string // insertion order of `compensated`, so it stays bounded (oldest evicted first)
 }
+
+// compensatedCap bounds the per-executor idempotency memory of finished compensations (the durable log is the
+// authority; this only avoids a second undo call within a process). Var so tests can shrink it.
+var compensatedCap = 4096
 
 func NewExecutor(client OperatorClient) *Executor {
 	return &Executor{client: client, compensated: map[string]map[string]any{}}
@@ -195,7 +200,14 @@ func (e *Executor) CompensateFor(node *Node, missionID string, attempt int, appr
 	}
 	if failed, _ := ResultFailed(out, false, true); out != nil && out["undo_error"] == nil && !IsStaged(out) && !failed {
 		e.mu.Lock()
+		if _, seen := e.compensated[key]; !seen {
+			e.compOrder = append(e.compOrder, key)
+		}
 		e.compensated[key] = out
+		for len(e.compOrder) > compensatedCap {
+			delete(e.compensated, e.compOrder[0])
+			e.compOrder = e.compOrder[1:]
+		}
 		e.mu.Unlock()
 	}
 	return out

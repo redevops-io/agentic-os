@@ -231,6 +231,14 @@ def _scenarios() -> list:
     add("retained_cost_unknown_is_never_invented", sp, hd, ["launched", "failed"], {"template": "sky_deploy"})
     sp, hd = cost({"cluster": "c3", "hourly_usd": 0.5, "failed_over": True})
     add("retained_cost_failed_over_is_unknown", sp, hd, ["launched", "failed"], {"template": "sky_deploy"})
+    sp, hd = simple(_full("pay.refund", "pay.check"), **{"pay.refund": {"error": "always down"}})
+    add("max_attempts_env_override_caps_retries", sp, hd, po, opt, {"AGENTIC_OS_COMPENSATION_MAX_ATTEMPTS": "1"},
+        steps=[{"intervene": {"action": "retry", "actor": "a", "node": "pay.charge"}},
+               {"intervene": {"action": "acknowledge", "actor": "alice", "node": "pay.charge"}}])
+    add("max_attempts_env_garbage_defaults_to_three", sp, hd, po, opt, {"AGENTIC_OS_COMPENSATION_MAX_ATTEMPTS": "lots"},
+        steps=[{"intervene": {"action": "retry", "actor": "a", "node": "pay.charge"}},
+               {"intervene": {"action": "retry", "actor": "a", "node": "pay.charge"}},
+               {"intervene": {"action": "retry", "actor": "a", "node": "pay.charge"}}])
     sp = [_s("x.make", "made", side_effecting=True, compensation=_full("x.undo", "x.check")), _s("x.undo", side_effecting=True, irreversible=True, irreversible_note="n"),
           _s("x.check"), _s("y.fail", "failed", side_effecting=True, irreversible=True, irreversible_note="n")]
     add("forward_result_not_proving_execution_is_not_compensated", sp,
@@ -462,7 +470,92 @@ def compensation_fold() -> dict:
     return {"cases": cases}
 
 
-FIXTURES = {"compensation_fold.json": compensation_fold, "result_classification.json": result_classification, "policy_resolution.json": policy_resolution, "compensation_scenarios.json": compensation_scenarios,
+def approval_tokens() -> dict:
+    """Canonical JSON / inputs hash / strip / signed approval tokens (mint + verify, incl. replay), computed by the
+    Python implementation. The nonce is made deterministic so the fixture is reproducible."""
+    import itertools
+    from agentic_os.mission import approval as A
+
+    counter = itertools.count(1)
+    real = A._secrets.token_hex
+    A._secrets.token_hex = lambda n=16: f"{next(counter):0{2 * n}x}"
+    try:
+        secret = "parity-test-secret"
+        inputs_cases = [
+            {}, {"a": 1}, {"b": 2, "a": [1, 2.5, "x", None, True], "c": {"z": 1, "y": {"k": 1e20}}},
+            {"u": "café ☃", "q": 'quote" back\\ slash', "n": 10.0, "i": 10, "neg": -0.0, "small": 1e-07},
+            {"_approval": {"approved": True}, "__Approval_x": 1, "approvalFoo": 2, "keep": 1, "_mission": "m", "_goal": "g", "_node": "n"},
+            {"nested": {"_approval": 1, "keep": {"APPROVAL": 1, "k": 2}}, "list": [{"_approval": 1, "v": 1}]},
+            # integers vs floats: the wire form decides the hash (5 != 5.0), big ints are exact
+            {"n": 10}, {"n": 2 ** 53 + 1}, {"n": -7}, {"n": 0}, {"n": 10.0, "i": 10}, {"big": 10 ** 20, "neg": -(2 ** 63)},
+            {"a": [1, 1.0, {"b": 2 ** 63}], "c": {"d": -0.0, "e": [0, 0.0]}}, {"x": 1e21, "y": 1.5e-07, "z": 123456789.125},
+        ]
+        hashes = [{"inputs": i, "inputs_sha256": A.inputs_hash(i), "canonical": A.canonical(i).decode(),
+                   "stripped": A.strip_approval_keys(i)} for i in inputs_cases]
+
+        base = {"operator": "billing", "capability": "billing.refund", "mission_id": "m-1", "node_id": "n-1",
+                "inputs": {"invoice": "INV-1", "amount": 10}, "marker": {"approved": True, "compensation": True}}
+        mints = []
+        for name, over, now, ttl in [("full", {}, 1_800_000_000, 300), ("float_now", {}, 1_800_000_000.5, 300),
+                                     ("no_node", {"node_id": None}, 1_800_000_000, 60),
+                                     ("blank_mission", {"mission_id": "  "}, 1_800_000_000, 60),
+                                     ("unicode_inputs", {"inputs": {"who": "café"}}, 1_800_000_000, 300)]:
+            a = {**base, **over}
+            tok = A.mint_approval_token(secret, now=now, ttl_s=ttl, **a)
+            mints.append({"name": name, "args": a, "now": now, "ttl_s": ttl, "wire": tok})
+        tok = A.mint_approval_token(secret, now=1_800_000_000, ttl_s=300, **base)
+        unbound = A.mint_approval_token(secret, now=1_800_000_000, ttl_s=300, **{**base, "mission_id": None, "node_id": None})
+
+        def ver(**o):
+            return {"operator": base["operator"], "capability": base["capability"], "inputs": base["inputs"],
+                    "mission_id": base["mission_id"], "node_id": base["node_id"], **o}
+        vcases = [("ok", tok, ver(), 1_800_000_100),
+                  ("ok_extra_meta_keys_ignored", tok, ver(inputs={**base["inputs"], "_mission": "x", "_approval": 1}), 1_800_000_100),
+                  ("expired", tok, ver(), 1_800_000_301), ("exactly_at_expiry", tok, ver(), 1_800_000_300),
+                  ("wrong_operator", tok, ver(operator="crm"), 1_800_000_100),
+                  ("wrong_capability", tok, ver(capability="billing.charge"), 1_800_000_100),
+                  ("wrong_mission", tok, ver(mission_id="m-2"), 1_800_000_100),
+                  ("missing_mission", tok, ver(mission_id=None), 1_800_000_100),
+                  ("blank_mission_presented", tok, ver(mission_id=""), 1_800_000_100),
+                  ("wrong_node", tok, ver(node_id="n-2"), 1_800_000_100),
+                  ("missing_node", tok, ver(node_id=None), 1_800_000_100),
+                  ("tampered_amount", tok, ver(inputs={"invoice": "INV-1", "amount": 999}), 1_800_000_100),
+                  ("other_invoice", tok, ver(inputs={"invoice": "INV-2", "amount": 10}), 1_800_000_100),
+                  ("unbound_token_accepts_any_mission", unbound, ver(mission_id="whatever", node_id="whatever"), 1_800_000_100),
+                  ("bad_signature", tok[:-2] + ("AA" if tok[-2:] != "AA" else "BB"), ver(), 1_800_000_100),
+                  ("garbage", "not-a-token", ver(), 1_800_000_100), ("empty", "", ver(), 1_800_000_100),
+                  ("two_dots", tok + ".x", ver(), 1_800_000_100), ("payload_only", tok.split(".")[0], ver(), 1_800_000_100)]
+        verifies = []
+        for name, t, kw, now in vcases:
+            m = A.verify_approval_token(secret, t, now=now, **kw)
+            verifies.append({"name": name, "wire": t, "args": kw, "now": now, "marker": m})
+        other = A.verify_approval_token("different-secret", tok, now=1_800_000_100, **ver())
+        g = A.ReplayGuard()
+        rt1 = A.verify_approval_token(secret, tok, now=1_800_000_100, replay_guard=g, **ver())
+        rt2 = A.verify_approval_token(secret, tok, now=1_800_000_100, replay_guard=g, **ver())
+        tok2 = A.mint_approval_token(secret, now=1_800_000_000, ttl_s=300, **base)
+        rt3 = A.verify_approval_token(secret, tok2, now=1_800_000_100, replay_guard=g, **ver())
+        replay = {"wires": [tok, tok, tok2], "args": ver(), "now": 1_800_000_100, "markers": [rt1, rt2, rt3]}
+        nan, inf = float("nan"), float("inf")
+        nonfinite = A.canonical({"a": nan, "b": -inf, "c": inf, "d": [nan]}).decode()
+        # integer-input requests exactly as a Python client would put them on the wire: the body text is kept verbatim
+        http_cases = []
+        for name, text in [("ints", '{"n": 5, "zero": 0, "neg": -3, "big": 9007199254740993}'),
+                           ("float_and_int", '{"f": 10.0, "i": 10, "s": "x"}'),
+                           ("nested_mixed", '{"a": [1, 2.0, {"b": 3}], "c": {"d": 9223372036854775808}}')]:
+            ins = json.loads(text)
+            t = A.mint_approval_token(secret, operator="billing", capability="billing.refund", mission_id="m-9", node_id="n-9",
+                                      inputs=ins, marker={"approved": True}, ttl_s=100_000_000_000, now=1_800_000_000)
+            body = ('{"capability": "billing.refund", "inputs": ' + text + ', "mission_id": "m-9", "node_id": "n-9", '
+                    '"idempotency_key": "k-' + name + '", "approval_token": "' + t + '"}')
+            http_cases.append({"name": name, "body": body})
+        return {"hmac_seed": secret, "nonfinite_canonical": nonfinite, "http_cases": http_cases, "hashes": hashes, "mints": mints, "verifies": verifies,
+                "wrong_secret_marker": other, "replay": replay}
+    finally:
+        A._secrets.token_hex = real
+
+
+FIXTURES = {"approval_tokens.json": approval_tokens, "compensation_fold.json": compensation_fold, "result_classification.json": result_classification, "policy_resolution.json": policy_resolution, "compensation_scenarios.json": compensation_scenarios,
             "compensation_registration.json": compensation_registration}
 
 
