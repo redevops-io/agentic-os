@@ -274,7 +274,7 @@ def _state_list(cloud: str, run: Runner) -> "list | None":
 @_guard("destroy_delta")
 def terraform_destroy(cloud: str, created: "list | None" = None, *, run: Runner = _run) -> dict:
     """Saga compensation for a provision: destroy ONLY the resources the forward apply recorded as created
-    (`-target` each). With no recorded resources there is nothing safe to destroy, so it refuses."""
+    (a saved, verified `-target` destroy plan). With no recorded resources there is nothing safe to destroy, so it refuses."""
     _env_dir(cloud)
     if not isinstance(created, list) or not created:
         raise InfraInputError("no created resources recorded by the forward apply -- refusing to destroy")
@@ -298,7 +298,8 @@ def terraform_destroy(cloud: str, created: "list | None" = None, *, run: Runner 
     extra = sorted(planned - set(created))
     if extra:
         raise InfraInputError(f"destroy would also remove resources not created by this apply: {extra[:5]}")
-    argv = ["terraform", chdir, "destroy", "-input=false", "-auto-approve", "-no-color"] + targets
+    # Apply exactly the plan that was just verified (a saved plan takes no -target / -auto-approve).
+    argv = ["terraform", chdir, "apply", "-input=false", "-no-color", _DESTROY_PLAN]
     rc, out, err = run(argv, None)
     return {"status": "done" if rc == 0 else "error", "action": "destroy_delta", "cloud": cloud, "rc": rc,
             "destroyed_resources": list(created) if rc == 0 else []}
@@ -351,31 +352,41 @@ def _resolve_host(host: str, port: int) -> "list[str]":
 
 
 def _check_host(host, port: int = 80) -> "list[str]":
-    """Return the checked IPs to connect to. Rejects non-canonical numeric hosts (127.1, 0x7f.1, 2130706433),
-    localhost-style names, and any host with ANY resolved address that is loopback, link-local (incl. cloud
-    metadata), multicast, unspecified, reserved or (unless INFRA_VERIFY_ALLOW_PRIVATE=1) private/CGNAT."""
+    """Return the checked IPs to connect to. The name/address policy is the shared ``agentic_os.safe_url``
+    (canonical numeric hosts, no internal names, every resolved address public); the only relaxation is
+    INFRA_VERIFY_ALLOW_PRIVATE=1, which admits private/CGNAT ranges. Loopback, link-local (incl. cloud
+    metadata), multicast, unspecified and reserved addresses are always refused."""
     import ipaddress
     if not isinstance(host, str) or not _HOST_RE.fullmatch(host):
         raise InfraInputError(f"invalid host {host!r}")
-    low = host.lower().rstrip(".")
-    if low == "localhost" or low.endswith((".localhost", ".local", ".internal")):
-        raise InfraInputError(f"host {host!r} is not an allowed verification target")
-    if _NUMERICISH_RE.fullmatch(host):
-        try:
-            ipaddress.IPv4Address(host)                 # strict dotted quad only
-        except ValueError:
-            raise InfraInputError(f"host {host!r} is not a canonical address") from None
+    try:
+        from agentic_os.safe_url import public_url_problem
+    except Exception:  # noqa: BLE001 - fail closed if the shared policy is unavailable
+        raise InfraInputError("url policy unavailable") from None
+    allow_private = os.environ.get("INFRA_VERIFY_ALLOW_PRIVATE") == "1"
+    resolved: "list[str]" = []
+
+    def resolver(h):
+        resolved[:] = _resolve_host(h, port)
+        return list(resolved)
+
+    shown = f"[{host}]" if ":" in host else host
+    problem = public_url_problem(f"http://{shown}:{port}/", resolver=resolver, allowed_ports=(port,))
+    if problem and not (allow_private and problem in _PRIVATE_ONLY_PROBLEMS):
+        raise InfraInputError(f"host {host!r} is not an allowed verification target: {problem}")
+    if ":" in host or _NUMERICISH_RE.fullmatch(host):
         addrs = [host]
-    else:
+    elif resolved:
+        addrs = resolved
+    else:                                                     # private opt-in short-circuited the resolver
         try:
-            addrs = [str(ipaddress.ip_address(host))] if ":" in host else _resolve_host(host, port)
+            addrs = _resolve_host(host, port)
         except OSError:
             raise InfraInputError(f"host {host!r} does not resolve") from None
     if not addrs:
         raise InfraInputError(f"host {host!r} does not resolve")
-    allow_private = os.environ.get("INFRA_VERIFY_ALLOW_PRIVATE") == "1"
     for a in addrs:
-        ip = ipaddress.ip_address(a)
+        ip = ipaddress.ip_address(a.split("%")[0])
         if getattr(ip, "ipv4_mapped", None):
             ip = ip.ipv4_mapped
         if (ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified or ip.is_reserved
@@ -385,6 +396,9 @@ def _check_host(host, port: int = 80) -> "list[str]":
             raise InfraInputError(f"host {host!r} resolves to a non-public address "
                                   "(set INFRA_VERIFY_ALLOW_PRIVATE=1 to allow)")
     return addrs
+
+
+_PRIVATE_ONLY_PROBLEMS = frozenset({"host must be a public address", "host resolves to a non-public address"})
 
 
 @_guard("verify")

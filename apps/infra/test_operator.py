@@ -183,7 +183,7 @@ def test_saga_undos_call_destroy_and_rollback():
     run, calls = _fake_runner()
     op = build_infra_operator(run=run)
     d = op.invoke("infra.destroy_delta", {"result": _FWD, "_approval": {"approved": True}})
-    assert d["action"] == "destroy_delta" and "destroy" in calls[-1] and "-target=aws_instance.web" in calls[-1]
+    assert d["action"] == "destroy_delta" and calls[-1][-1] == core._DESTROY_PLAN
     r = op.invoke("infra.rollback_release", {"inventory": "inv.ini", "_approval": {"approved": True}})
     assert r["action"] == "configure" and calls[-1][0] == "ansible-playbook"
 
@@ -303,10 +303,13 @@ def _undo(inp, **kw):
 def test_undo_reads_forward_result_cloud_and_targets():
     res, calls = _undo({"undo_of": "infra.provision", "result": _FWD})
     assert res["status"] == "done" and res["cloud"] == "gcp"
-    calls = [c for c in calls if "destroy" in c and "plan" not in c and "show" not in c]
-    assert len(calls) == 1
-    assert calls[0] == ["terraform", f"-chdir={os.path.join(core.TF_ROOT, 'envs', 'gcp')}", "destroy",
-                        "-input=false", "-auto-approve", "-no-color", "-target=aws_instance.web"]
+    planned = [c for c in calls if "plan" in c and "-destroy" in c]
+    assert len(planned) == 1 and "-target=aws_instance.web" in planned[0]
+    applies = [c for c in calls if "apply" in c and core._DESTROY_PLAN in c]
+    assert len(applies) == 1
+    assert applies[0] == ["terraform", f"-chdir={os.path.join(core.TF_ROOT, 'envs', 'gcp')}", "apply",
+                          "-input=false", "-no-color", core._DESTROY_PLAN]
+    assert not any(c[2:3] == ["destroy"] for c in calls)        # no fresh destroy
 
 
 @pytest.mark.parametrize("inp", [
@@ -323,13 +326,13 @@ def test_undo_reads_forward_result_cloud_and_targets():
 def test_undo_refuses_without_matching_forward_result(inp):
     res, calls = _undo(inp)
     assert res["status"] == "error"
-    assert not any("destroy" in c and "plan" not in c and "show" not in c for c in calls)
+    assert not any("apply" in c or c[2:3] == ["destroy"] for c in calls)
 
 
 def test_undo_refuses_when_destroy_plan_touches_other_resources():
     res, calls = _undo({"result": _FWD}, planned=("aws_instance.web", "aws_eip.web"))
     assert res["status"] == "error" and "aws_eip.web" in res["error"]
-    assert not any("destroy" in c and "-auto-approve" in c for c in calls)
+    assert not any("apply" in c or "-auto-approve" in c for c in calls)
 
 
 def test_undo_refuses_when_destroy_plan_unreadable():
@@ -488,3 +491,18 @@ def test_trailing_newline_rejected_by_name_patterns():
     for rx in (core._CLOUD_RE, core._VAR_KEY_RE, core._HOST_RE):
         assert rx.fullmatch("aws\n") is None
     assert core._ADDR_RE.fullmatch("a.b\n") is None
+
+
+@pytest.mark.parametrize("host", ["intranet", "box.corp", "[::1]", "::ffff:127.0.0.1", "64:ff9b::7f00:1", "1.2.3.4.5"])
+def test_verify_uses_shared_url_policy(monkeypatch, host):
+    monkeypatch.setattr(core, "_resolve_host", lambda h, p: ["8.8.8.8"])
+    seen = []
+    op = build_infra_operator(run=_fake_runner()[0], http_get=lambda u: seen.append(u) or 200)
+    assert op.invoke("infra.verify", {"host": host})["status"] == "error" and seen == []
+
+
+def test_verify_private_opt_in_never_admits_loopback(monkeypatch):
+    monkeypatch.setenv("INFRA_VERIFY_ALLOW_PRIVATE", "1")
+    monkeypatch.setattr(core, "_resolve_host", lambda h, p: ["127.0.0.1"])
+    op = build_infra_operator(run=_fake_runner()[0], http_get=lambda u: 200)
+    assert op.invoke("infra.verify", {"host": "app.example.org"})["status"] == "error"
