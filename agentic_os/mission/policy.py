@@ -141,6 +141,20 @@ class MissionPolicy:
     def ref(self) -> str:
         return f"{self.id}@{self.version}"
 
+    def to_dict(self) -> dict:
+        """JSON-able body (round-trips through :meth:`from_dict`)."""
+        return _jsonable(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "MissionPolicy":
+        rules = tuple(PolicyRule(id=r["id"], effect=Effect(r.get("effect", "require_approval")),
+                                 match=r.get("match", "*"), max_usd=r.get("max_usd"),
+                                 reason=r.get("reason", ""), suggested_action=r.get("suggested_action", ""))
+                      for r in d.get("rules", ()))
+        return cls(id=d["id"], version=d.get("version", "1"), scope=d.get("scope", "mission"), rules=rules,
+                   grants=tuple(d.get("grants", ())), budget_usd=d.get("budget_usd", 0.0),
+                   support_message=d.get("support_message", ""))
+
     def digest(self) -> str:
         """Content-addressed identity — the thing pinned onto each execution for replay. Canonical
         JSON (sorted keys, no whitespace) hashed like every other digest in the runtime."""

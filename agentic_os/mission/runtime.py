@@ -48,6 +48,7 @@ from .types import (
     VerificationDecision, Budget, new_id, now, to_jsonable,
 )
 from .context_view import epoch_from_refs, plan_fingerprint
+from .policy import MissionPolicy
 
 _TERMINAL = {NodeState.DONE, NodeState.SKIPPED, NodeState.COMPENSATED}
 #: DEFAULT business value (USD) per mission kind — the fallback only. The effective value is resolved by
@@ -253,6 +254,7 @@ class MissionRuntime:
         self._plans: dict[str, ExecutionPlan] = {}     # plan_id/mission_id -> plan (recompilable)
         self._missions: dict[str, Mission] = {}
         self._run_locks: dict[str, threading.RLock] = {}
+        self.quarantined: dict[str, str] = {}      # in-flight missions that could not be restored on start
         self._run_locks_guard = threading.Lock()
         #: Node ids whose approval predates capability scoping. Surfaced by
         #: `approval_scope` so replay evidence does not imply an old event
@@ -314,6 +316,9 @@ class MissionRuntime:
                            # records who asked and what it was handed, instead of only a goal string.
                            "principal": getattr(m.principal, "id", m.principal) if m.principal else None,
                            "tenant": m.tenant or None,
+                           "budget": {"usd": m.budget.usd, "tokens": m.budget.tokens,
+                                      "human_minutes": m.budget.human_minutes,
+                                      "wall_clock_s": m.budget.wall_clock_s},
                            # the Decision↔Mission link, mission side (the InterventionRecord holds the other)
                            "intervention_id": m.intervention_id or None,
                            "input_keys": sorted(m.inputs.keys()) if m.inputs else [],
@@ -326,6 +331,7 @@ class MissionRuntime:
                            **({"default_policy_warning": m.default_policy_warning} if m.default_policy_warning else {}),
                            # mission-policy/v1 — pin the named policy identity onto mission creation
                            "policy": (m.policy.ref if m.policy else None),
+                           "policy_body": (m.policy.to_dict() if m.policy else None),
                            "policy_digest": (m.policy.digest() if m.policy else None),
                            **identity})
         self.lifecycle.dispatch(MissionStarted(mission_id=m.id, goal=goal, template=template))
@@ -629,7 +635,12 @@ class MissionRuntime:
         """Drive the mission. One driver at a time per mission: concurrent callers queue and then observe the
         folded state, so a ready node is dispatched once."""
         with self._run_lock(mission_id):
-            return self._run_locked(mission_id)
+            m = self._run_locked(mission_id)
+        if m.state in (MissionState.SUCCEEDED, MissionState.FAILED, MissionState.CANCELLED,
+                       MissionState.COMPENSATION_FAILED):
+            with self._run_locks_guard:                  # finished missions do not keep a lock entry
+                self._run_locks.pop(mission_id, None)
+        return m
 
     def _run_locked(self, mission_id: str) -> Mission:
         m = self._missions[mission_id]
@@ -1131,6 +1142,12 @@ class MissionRuntime:
 
     def approve(self, mission_id: str, node_id: str, decision: str = "approve",
                 edit: dict | None = None, actor: str = "") -> Mission:
+        # serialised with run(): of several concurrent approvals of one gate, one records and dispatches
+        with self._run_lock(mission_id):
+            return self._approve_locked(mission_id, node_id, decision, edit, actor)
+
+    def _approve_locked(self, mission_id: str, node_id: str, decision: str = "approve",
+                        edit: dict | None = None, actor: str = "") -> Mission:
         m = self._missions[mission_id]
         # fork-branch approvals are handled (and fail closed) by the fork controller, before the generic guards
         if isinstance(node_id, str) and ":fork:" in node_id and self.forks.owns(mission_id, node_id):   # fork branch approvals
@@ -1265,7 +1282,7 @@ class MissionRuntime:
     # ── cockpit views (P6: the human-facing shell) ─────────────────────────────
     def missions(self) -> list[dict]:
         """All missions + state, flagged if a human task is waiting (the cockpit list)."""
-        rows = self.repo.list_missions()
+        rows = [r for r in self.repo.list_missions() if r["id"] not in self.quarantined]
         for r in rows:
             r["awaiting_human"] = self.repo.pending_human(r["id"]) is not None
         return rows
@@ -1274,6 +1291,8 @@ class MissionRuntime:
         """Every open human task across all missions — approvals AND disambiguations."""
         items = []
         for mid in self.store.mission_ids():
+            if mid in self.quarantined:
+                continue
             pend = self.repo.pending_human(mid)
             if pend:
                 items.append({"mission_id": mid, "goal": self.repo.goal(mid),
@@ -1310,7 +1329,10 @@ class MissionRuntime:
             "effective_at": now(), "retroactive": retroactive,
             "changes": {"grant": grant or [], "revoke": revoke or [],
                         "constraints": constraints,
-                        "budget_usd": budget.usd if budget else None},
+                        "budget_usd": budget.usd if budget else None,
+                        "budget": ({"usd": budget.usd, "tokens": budget.tokens,
+                                    "human_minutes": budget.human_minutes,
+                                    "wall_clock_s": budget.wall_clock_s} if budget else None)},
             "affected_nodes": affected, "ran_under_previous": ran_under_prev,
             "before_grants": before, "after_grants": list(m.policy_refs)})
 
@@ -1470,7 +1492,23 @@ class MissionRuntime:
 
     # ── restart / rehydrate ────────────────────────────────────────────────────
     def rehydrate(self, mission_id: str, policy_refs: list[str] | None = None,
-                  inputs: dict | None = None) -> Mission:
+                  inputs: dict | None = None, policy: "MissionPolicy | None" = None) -> Mission:
+        """Rebuild a mission from the log (see ``_rehydrate``). If any step fails, nothing of the half-built
+        mission stays registered: it cannot be listed, fetched or approved."""
+        existed = mission_id in self._missions
+        try:
+            return self._rehydrate(mission_id, policy_refs, inputs, policy)
+        except BaseException:
+            if not existed:
+                self._missions.pop(mission_id, None)
+                self._plans.pop(mission_id, None)
+                getattr(self, "_executors", {}).pop(mission_id, None)
+                with self._run_locks_guard:
+                    self._run_locks.pop(mission_id, None)
+            raise
+
+    def _rehydrate(self, mission_id: str, policy_refs: list[str] | None = None,
+                   inputs: dict | None = None, policy: "MissionPolicy | None" = None) -> Mission:
         """EXACT REPLAY — rebuild a mission from the event log after a restart and reproduce the SEALED
         decision path: recompile the deterministic plan pinned to the ORIGINAL evidence identity, verify
         it reproduces the sealed plan signature/fingerprint + ContextEpoch, and fail closed
@@ -1508,6 +1546,17 @@ class MissionRuntime:
                 "Pass `policy_refs=` from the permissions plane, or accept that "
                 "this log predates authority recording — but do not let it "
                 "replay as a wildcard.")
+        # A named MissionPolicy is part of the sealed fingerprint; it is restored from the recorded body (or
+        # supplied by the caller) and must match the recorded digest, otherwise replay fails closed.
+        want_digest = created.payload.get("policy_digest")
+        if policy is None and created.payload.get("policy_body"):
+            policy = MissionPolicy.from_dict(created.payload["policy_body"])
+        if want_digest and (policy is None or policy.digest() != want_digest):
+            raise ReplayError(f"{mission_id}: the mission's recorded policy cannot be restored "
+                              "(not recorded, or does not match its recorded digest)")
+        recorded_budget = created.payload.get("budget")
+        budget = Budget(**{k: v for k, v in recorded_budget.items() if k in Budget.__dataclass_fields__}) \
+            if isinstance(recorded_budget, dict) else Budget()
         active = self._active_plan_record(mission_id)
         # The resolved template, when the log has one. Falling back to
         # `MissionCreated` keeps pre-existing logs working — and those are
@@ -1543,6 +1592,8 @@ class MissionRuntime:
                     default_policy_source=created.payload.get("default_policy_source") or "",
                     default_policy_warning=created.payload.get("default_policy_warning") or "",
                     policy_refs=list(policy_refs if policy_refs is not None else recorded),
+                    policy=policy, budget=budget, tenant=created.payload.get("tenant") or "",
+                    principal=created.payload.get("principal"),
                     # v0.2.x: replay carries the original evidence identity back, so the rehydrated
                     # mission resolves the SAME sealed intent + evidence it was created from.
                     intent_content_hash=created.payload.get("intent_content_hash", ""),
@@ -1610,8 +1661,30 @@ class MissionRuntime:
                     f"replay could not reproduce the sealed ContextEpoch for {mission_id}: "
                     f"{got_epoch} != {want_epoch}")
             m.context_epoch_id = want_epoch or got_epoch
+        # Authority recorded by later PolicyChanged events (revokes, grants, tightened constraints/budget) is
+        # folded in only AFTER the sealed plan is verified, so the live mission ends up as it was before the restart.
+        self._fold_policy_changes(m)
         m.outcome = self._outcome_from_log(m)
         return m
+
+    def _fold_policy_changes(self, m: Mission) -> None:
+        grants = list(m.policy_refs)
+        for e in self.store.for_mission(m.id):
+            if e.type != "PolicyChanged":
+                continue
+            ch = e.payload.get("changes") or {}
+            if ch.get("grant"):
+                grants = sorted(set(grants) | set(ch["grant"]))
+            if ch.get("revoke"):
+                grants = [g for g in grants if g not in set(ch["revoke"])]
+            if ch.get("constraints") is not None:
+                m.constraints = list(ch["constraints"])
+            if isinstance(ch.get("budget"), dict):
+                m.budget = Budget(**{k: v for k, v in ch["budget"].items() if k in Budget.__dataclass_fields__})
+            elif ch.get("budget_usd") is not None:        # older record: only the dollar figure was kept
+                m.budget = Budget(usd=ch["budget_usd"], tokens=m.budget.tokens,
+                                  human_minutes=m.budget.human_minutes, wall_clock_s=m.budget.wall_clock_s)
+        m.policy_refs = grants
 
     def _outcome_from_log(self, m: Mission) -> dict | None:
         """A terminal mission's outcome, rebuilt from the log on rehydrate — the same shape `_succeed`/`_fail`
