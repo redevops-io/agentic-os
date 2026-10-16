@@ -32,6 +32,7 @@ def build_social_operator() -> Operator:
             provides=["draft_staged"],
             outputs={"draft_staged": "post copy generated and staged as a DRAFT in Postiz"},
             side_effecting=True,
+            compensation={"supported": False, "disposition": "PRESERVE", "notes": "a drafted post is kept for human review; it is never published or auto-removed by a failed workflow"},
             permissions=["social:write"], estimated_value="medium", latency_ms=1200,
             concurrency_key="provider:postiz", max_parallelism=3,  # bounded Postiz writes; drafts are independent
         ),

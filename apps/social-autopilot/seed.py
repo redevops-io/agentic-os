@@ -18,7 +18,7 @@ Why we seed the database directly (and not the REST API):
 
 What it creates (idempotent — safe to re-run):
     * 1 Organization  "Meridian Wealth Management" (with a stable apiKey)
-    * 1 User          agent@meridianwealth.com / MeridianWealth!2026  (bcrypt, can log in
+    * 1 User          agent@meridianwealth.com / $POSTIZ_USER_PASSWORD  (bcrypt, can log in
                       via the Postiz UI once a Temporal server is added to the stack)
     * 1 UserOrganization (role SUPERADMIN)
     * 3 Integrations  Instagram / Facebook / Google Business Profile (modelled as

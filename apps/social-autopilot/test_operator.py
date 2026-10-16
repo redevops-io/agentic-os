@@ -188,6 +188,7 @@ def test_publish_stages_then_schedules_on_approval_binding_content_hash(client):
     # Exercised through the TRUSTED in-process path: the open HTTP surface strips `_approval` (so it could
     # only ever stage), hence the unbound-hash branch is reachable only where a real approval is delivered.
     _FakePsql.updates = []
+    core._BINDINGS.clear()      # nothing staged for this post -> nothing to bind the approval to
     unbound = op.invoke("social.publish", {"id": "post-1", "_approval": {"approved": True}})
     assert unbound["status"] == "error" and unbound["publish_executed"] is False and _FakePsql.updates == []
     assert "not bound" in unbound["summary"]

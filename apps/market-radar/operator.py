@@ -29,6 +29,7 @@ def build_market_radar_operator() -> Operator:
             provides=["watch"],
             outputs={"watch": "a new changedetection.io watch monitoring a competitor/price page"},
             side_effecting=True,
+            compensation={"supported": False, "disposition": "PRESERVE", "notes": "a registered watch is kept; removing it is a separate human decision, not an automatic undo"},
             permissions=["market-radar:write"], estimated_value="medium", latency_ms=1200,
             # one watch per target URL: adding DIFFERENT watches runs concurrently, the same URL
             # serializes (pairs with the idempotency-key dedupe). Unresolved url → serialize conservatively.

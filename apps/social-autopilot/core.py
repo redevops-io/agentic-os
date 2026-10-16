@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import subprocess
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -325,6 +326,7 @@ def draft(body: dict, copy: Callable[[str], str | None] | None = None) -> dict:
                 f"'{post_id}-grp', '{now}', '{now}', 'UNKNOWN');"
             )
             staged = True
+            _remember_binding(post_id, _content_hash(text))
             fetch_activity(force=True)  # refresh cache so the dashboard shows the new draft
         except Exception as e:
             return {"status": "error", "action": "draft", "error": f"failed to stage draft: {e}"}
@@ -346,6 +348,30 @@ def draft(body: dict, copy: Callable[[str], str | None] | None = None) -> dict:
 def _content_hash(text: str) -> str:
     import hashlib
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:16]
+
+
+# post id -> content hash recorded when the post was drafted or staged for approval. The runtime's approval
+# marker only says "a human cleared this node", so the hash the approver was shown is remembered here and the
+# publish step compares it with what Postiz holds now. In-memory: after a restart nothing is bound and a publish
+# fails closed until the post is staged again.
+_BINDINGS: "dict[str, str]" = {}
+_BINDINGS_LOCK = threading.Lock()
+_BINDINGS_MAX = 1000
+
+
+def _remember_binding(pid: str, content_hash: str) -> None:
+    if not (pid and content_hash):
+        return
+    with _BINDINGS_LOCK:
+        _BINDINGS.pop(pid, None)
+        _BINDINGS[pid] = content_hash
+        while len(_BINDINGS) > _BINDINGS_MAX:
+            _BINDINGS.pop(next(iter(_BINDINGS)))
+
+
+def _recorded_binding(pid: str) -> str:
+    with _BINDINGS_LOCK:
+        return _BINDINGS.get(pid, "")
 
 
 def _valid_post_id(pid: str) -> bool:
@@ -411,6 +437,8 @@ def publish(body: dict) -> dict:
     where = f" on {target['network']} (“{target['text'][:60]}…”)" if target else ""
 
     if not body.get("_approval"):
+        if cur is not None:
+            _remember_binding(pid, content_hash)
         return {
             "status": "pending_approval", "action": "publish", "id": pid, "requires": "human approval",
             "publish_staged": True,
@@ -427,7 +455,7 @@ def publish(body: dict) -> dict:
     # staged, and it must still match what Postiz holds now. A missing hash (approval not bound to content)
     # or a changed hash (content swapped after staging) both refuse — never publish content the approver
     # didn't see. Previously a missing hash skipped the check, so a post edited after approval still shipped.
-    approved_hash = (body.get("_approval") or {}).get("content_hash")
+    approved_hash = (body.get("_approval") or {}).get("content_hash") or _recorded_binding(pid)
     if not approved_hash or approved_hash != content_hash:
         changed = "changed since approval" if approved_hash else "not bound to the approved hash"
         return {"status": "error", "action": "publish", "id": pid, "publish_staged": True,

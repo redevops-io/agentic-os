@@ -54,3 +54,10 @@ def test_decision_spine_authors_a_mission():
     assert len(store.records) == 1
     if res.outcome in (BridgeOutcome.LAUNCHED, BridgeOutcome.LAUNCHED_GATED):
         assert res.request.capability in _registered_caps()
+
+
+def test_side_effecting_capabilities_declare_reversibility():
+    from agentic_os.mission.compensation import lint_capability
+    op = _operator.build_support_operator()
+    problems = [p for p in (lint_capability(c) for c in op.manifest.capabilities) if p]
+    assert not problems, problems

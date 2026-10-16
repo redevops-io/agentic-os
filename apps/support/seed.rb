@@ -1,4 +1,5 @@
 # Idempotent seed for the Meridian Wealth Management demo tenant on self-hosted Chatwoot.
+# Requires SUPPORT_ADMIN_PASSWORD in the environment.
 # Run via:  rails runner /tmp/meridian_support_seed.rb   (inside the chatwoot rails container)
 #
 # Creates / updates (all by stable natural keys, safe to re-run):
@@ -16,7 +17,10 @@
 
 ADMIN_EMAIL    = 'admin@meridianwealth.com'
 ADMIN_NAME     = 'Meridian Wealth Support Agent'
-ADMIN_PASSWORD = 'MeridianWealth!2026'
+ADMIN_PASSWORD = ENV.fetch('SUPPORT_ADMIN_PASSWORD', '').strip
+if ADMIN_PASSWORD.empty?
+  abort 'SUPPORT_ADMIN_PASSWORD is required (set it in the environment before running the seed)'
+end
 ACCOUNT_NAME   = 'Meridian Wealth Management'
 INBOX_NAME     = 'Meridian Wealth Support'
 

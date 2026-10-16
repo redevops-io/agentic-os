@@ -13,6 +13,8 @@ happen only when `push` is set on the inputs and `GENERATION_ONLY` is off.
 """
 from __future__ import annotations
 
+import base64
+import hmac
 import json
 import os
 import re
@@ -66,7 +68,8 @@ POSTIZ_API_KEY = os.environ.get("POSTIZ_API_KEY", "")
 
 # Public-surface safety: when true, NO action pushes to ERPNext/Listmonk/Postiz
 # (the demo deployment behind demo.redevops.io sets this).
-GENERATION_ONLY = os.environ.get("GENERATION_ONLY", "false").lower() in ("1", "true", "yes")
+# Defaults to ON: live pushes need an explicit GENERATION_ONLY=false AND an authenticated operator.
+GENERATION_ONLY = os.environ.get("GENERATION_ONLY", "true").lower() in ("1", "true", "yes")
 
 SUBTITLE = ("Strategic traction for first-time founders — subreddit incubation, founder-led "
             "growth, lead-magnet communities, and cold outreach — plus vetted-freelancer "
@@ -77,10 +80,41 @@ GenJson = Callable[..., "dict | list | None"]
 GenText = Callable[..., "str | None"]
 
 
+def _operator_credential() -> str:
+    """The operator Basic credential (``user:pass``) from OPERATOR_BASIC_AUTH / OUTREACH_BASIC_AUTH;
+    unset or malformed => "" (nobody is the operator; fail closed)."""
+    combo = os.environ.get("OPERATOR_BASIC_AUTH") or os.environ.get("OUTREACH_BASIC_AUTH") or ""
+    user, sep, pw = combo.partition(":")
+    return combo if (sep and user and pw) else ""
+
+
+def operator_approval(authorization: "str | None") -> "dict | None":
+    """The ``_approval`` marker for a request whose ``Authorization`` header is the valid operator Basic
+    credential, else None."""
+    expected = _operator_credential()
+    if not expected or not authorization or authorization[:6].lower() != "basic ":
+        return None
+    try:
+        got = base64.b64decode(authorization[6:].strip(), validate=True).decode("utf-8")
+    except Exception:  # noqa: BLE001
+        return None
+    if hmac.compare_digest(got.encode("utf-8"), expected.encode("utf-8")):
+        return {"approved": True, "by": "operator-basic"}
+    return None
+
+
+def with_operator_approval(body: dict, authorization: "str | None") -> dict:
+    """``body`` plus the operator marker when (and only when) the credential is valid."""
+    appr = operator_approval(authorization)
+    return {**body, "_approval": appr} if appr else body
+
+
 def _push_on(body: dict) -> bool:
-    """Whether an action may write to the cores. Forced OFF when GENERATION_ONLY
-    (the public demo surface) — so a publicly-reachable instance never writes."""
-    return bool(body.get("push")) and not GENERATION_ONLY
+    """Whether an action may write to the cores: needs an explicit ``push``, an operator-approved request,
+    and GENERATION_ONLY off. Anonymous requests only ever generate."""
+    appr = body.get("_approval")
+    approved = isinstance(appr, dict) and appr.get("approved") is True and appr.get("by") == "operator-basic"
+    return bool(body.get("push")) and approved and not GENERATION_ONLY
 
 
 # --- startup profile helper --------------------------------------------------

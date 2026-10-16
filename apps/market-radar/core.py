@@ -186,6 +186,32 @@ def fetch_activity(force: bool = False) -> dict:
 
 
 # ── agentic actions (deterministic changedetection API work) ─────────────────
+_BLOCKED_HOST_SUFFIXES = (".local", ".internal", ".svc", ".cluster.local", ".localhost", ".lan", ".home.arpa")
+
+
+def _watch_url_error(url: str) -> str:
+    """Why a watch URL is refused ('' when acceptable): only http(s) pages on public-looking hosts."""
+    import ipaddress
+    import urllib.parse
+    try:
+        u = urllib.parse.urlsplit(url)
+        host = (u.hostname or "").lower().rstrip(".")
+        u.port  # noqa: B018 - raises on a malformed port
+    except ValueError:
+        return "invalid url"
+    if u.scheme not in ("http", "https") or not host:
+        return "url must be http(s) with a host"
+    if u.username or u.password:
+        return "credentials in url are not allowed"
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        if "." not in host or host == "localhost" or host.endswith(_BLOCKED_HOST_SUFFIXES):
+            return "host must be a public name"
+        return ""
+    return "" if ip.is_global else "host must be a public address"
+
+
 def add_watch(body: dict) -> dict:
     """Create a new monitor: POST /api/v1/watch. Adding a watch is non-destructive
     (it only starts observing a public page), so no human approval is required.
@@ -199,6 +225,9 @@ def add_watch(body: dict) -> dict:
     if not url:
         return {"status": "error", "action": "add_watch",
                 "error": "missing 'url'", "requires": "none"}
+    bad = _watch_url_error(url)
+    if bad:
+        return {"status": "error", "action": "add_watch", "error": bad, "requires": "none"}
     payload = {"url": url, "title": title or url, "tag": tag}
     try:
         with httpx.Client(timeout=10.0) as client:
