@@ -3,7 +3,10 @@ package mission
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"math"
+	"reflect"
 	"strings"
 )
 
@@ -17,9 +20,68 @@ const (
 	phNegInf = "__aos_nonfinite_NegInf_7f3c9e1b__"
 )
 
-func sanitizeNonFinite(v any) any {
-	switch x := v.(type) {
-	case float64:
+var jsonMarshalerType = reflect.TypeOf((*json.Marshaler)(nil)).Elem()
+
+// sanitizeNonFinite returns a JSON-able copy of v in which every non-finite float, at any depth and in any container
+// shape (maps, slices, arrays, pointers, structs with json tags), is replaced by a placeholder string. Values that
+// marshal themselves (json.Marshaler) and leaf kinds are passed through untouched.
+//
+// Cyclic payloads (a pointer/map/slice reachable from itself) and absurd nesting are an ordinary error, never a
+// stack overflow: containers on the current path are tracked by identity, and depth is capped.
+func sanitizeNonFinite(v any) (any, error) {
+	st := &sanitizeState{path: map[sanitizeKey]bool{}}
+	out := st.value(reflect.ValueOf(v), 0)
+	return out, st.err
+}
+
+const sanitizeMaxDepth = 512
+
+type sanitizeKey struct {
+	ptr uintptr
+	len int
+	typ reflect.Type
+}
+
+type sanitizeState struct {
+	path map[sanitizeKey]bool
+	err  error
+}
+
+func (st *sanitizeState) value(v reflect.Value, depth int) any {
+	if st.err != nil {
+		return nil
+	}
+	return sanitizeValue(st, v, depth)
+}
+
+func sanitizeValue(st *sanitizeState, v reflect.Value, depth int) any {
+	if depth > sanitizeMaxDepth {
+		st.err = errors.New("event payload nested too deeply (or cyclic)")
+		return nil
+	}
+	if !v.IsValid() {
+		return nil
+	}
+	if v.Type().Implements(jsonMarshalerType) || (v.CanAddr() && reflect.PtrTo(v.Type()).Implements(jsonMarshalerType)) {
+		return v.Interface()
+	}
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface:
+		if v.IsNil() {
+			return nil
+		}
+		if v.Kind() == reflect.Ptr {
+			k := sanitizeKey{v.Pointer(), 0, v.Type()}
+			if st.path[k] {
+				st.err = errors.New("event payload is cyclic (pointer)")
+				return nil
+			}
+			st.path[k] = true
+			defer delete(st.path, k)
+		}
+		return sanitizeValue(st, v.Elem(), depth+1)
+	case reflect.Float32, reflect.Float64:
+		x := v.Float()
 		switch {
 		case math.IsNaN(x):
 			return phNaN
@@ -28,28 +90,74 @@ func sanitizeNonFinite(v any) any {
 		case math.IsInf(x, -1):
 			return phNegInf
 		}
-	case float32:
-		return sanitizeNonFinite(float64(x))
-	case map[string]any:
-		out := make(map[string]any, len(x))
-		for k, e := range x {
-			out[k] = sanitizeNonFinite(e)
+		return x
+	case reflect.Map:
+		if v.IsNil() {
+			return nil
+		}
+		mk := sanitizeKey{v.Pointer(), v.Len(), v.Type()}
+		if st.path[mk] {
+			st.err = errors.New("event payload is cyclic (map)")
+			return nil
+		}
+		st.path[mk] = true
+		defer delete(st.path, mk)
+		out := make(map[string]any, v.Len())
+		for _, k := range v.MapKeys() {
+			out[fmt.Sprint(k.Interface())] = sanitizeValue(st, v.MapIndex(k), depth+1)
 		}
 		return out
-	case []any:
-		out := make([]any, len(x))
-		for i, e := range x {
-			out[i] = sanitizeNonFinite(e)
+	case reflect.Slice, reflect.Array:
+		if v.Kind() == reflect.Slice && v.IsNil() {
+			return nil
+		}
+		if v.Type().Elem().Kind() == reflect.Uint8 {
+			return v.Interface()
+		}
+		if v.Kind() == reflect.Slice && v.Len() > 0 {
+			sk := sanitizeKey{v.Pointer(), v.Len(), v.Type()}
+			if st.path[sk] {
+				st.err = errors.New("event payload is cyclic (slice)")
+				return nil
+			}
+			st.path[sk] = true
+			defer delete(st.path, sk)
+		}
+		out := make([]any, v.Len())
+		for i := range out {
+			out[i] = sanitizeValue(st, v.Index(i), depth+1)
 		}
 		return out
-	case []float64:
-		out := make([]any, len(x))
-		for i, e := range x {
-			out[i] = sanitizeNonFinite(e)
+	case reflect.Struct:
+		out := map[string]any{}
+		t := v.Type()
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			if f.PkgPath != "" { // unexported
+				continue
+			}
+			name, omit := f.Name, false
+			if tag, ok := f.Tag.Lookup("json"); ok {
+				parts := strings.Split(tag, ",")
+				if parts[0] == "-" && len(parts) == 1 {
+					continue
+				}
+				if parts[0] != "" {
+					name = parts[0]
+				}
+				for _, o := range parts[1:] {
+					omit = omit || o == "omitempty"
+				}
+			}
+			fv := v.Field(i)
+			if omit && fv.IsZero() {
+				continue
+			}
+			out[name] = sanitizeValue(st, fv, depth+1)
 		}
 		return out
 	}
-	return v
+	return v.Interface()
 }
 
 func restoreNonFinite(v any) any {
@@ -82,7 +190,13 @@ func encodeEventLine(ev *Event) ([]byte, error) {
 	}
 	cp := *ev
 	if cp.Payload != nil {
-		cp.Payload = sanitizeNonFinite(cp.Payload).(map[string]any)
+		clean, serr := sanitizeNonFinite(cp.Payload)
+		if serr != nil {
+			return nil, serr
+		}
+		if m, ok := clean.(map[string]any); ok {
+			cp.Payload = m
+		}
 	}
 	b, err := json.Marshal(&cp)
 	if err != nil {

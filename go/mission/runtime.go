@@ -142,10 +142,19 @@ func (rt *MissionRuntime) CreateMission(goal string, opts CreateOpts) *Mission {
 	if opts.Budget != nil {
 		m.Budget = *opts.Budget
 	}
+	m.DefaultFailurePolicy, m.DefaultPolicySource, m.DefaultPolicyWarning = ResolveDefaultDetailed(m.Template) // frozen
 	rt.missions[m.ID] = m
 	// policy_refs is part of the record: rehydrate must restore the authority the mission was created under.
-	rt.store.Append("MissionCreated", m.ID, map[string]any{"goal": goal, "template": m.Template, "constraints": m.Constraints,
-		"policy_refs": append([]string{}, m.PolicyRefs...)})
+	created := map[string]any{"goal": goal, "template": m.Template, "constraints": m.Constraints,
+		"policy_refs":            append([]string{}, m.PolicyRefs...),
+		"default_failure_policy": m.DefaultFailurePolicy, "default_policy_source": m.DefaultPolicySource}
+	if m.FailurePolicy != "" {
+		created["failure_policy"] = m.FailurePolicy
+	}
+	if m.DefaultPolicyWarning != "" {
+		created["default_policy_warning"] = m.DefaultPolicyWarning
+	}
+	rt.store.Append("MissionCreated", m.ID, created)
 	if err := rt.planAndGate(m, 1, "initial"); err != nil {
 		if _, ok := err.(*CompileError); ok { // stage-1 scoping left no permitted plan — fail closed
 			rt.setState(m, MissionFailed)
@@ -1107,6 +1116,15 @@ func (rt *MissionRuntime) RehydrateStrict(missionID string, opts RehydrateOpts) 
 	if created != nil {
 		m.Template, _ = created.Payload["template"].(string)
 		m.Constraints = toStrSlice(created.Payload["constraints"])
+		m.FailurePolicy, _ = created.Payload["failure_policy"].(string)
+		m.DefaultFailurePolicy, _ = created.Payload["default_failure_policy"].(string)
+		m.DefaultPolicySource, _ = created.Payload["default_policy_source"].(string)
+		m.DefaultPolicyWarning, _ = created.Payload["default_policy_warning"].(string)
+	}
+	for _, e := range rt.store.ForMission(missionID) { // a recorded operator re-resolution is part of the history
+		if to, _ := e.Payload["to"].(string); e.Type == "DefaultPolicyReresolved" && to != "" {
+			m.DefaultFailurePolicy, m.DefaultPolicySource = to, "reresolved"
+		}
 	}
 	m.PolicyRefs = refs
 	if st, ok := rt.repo.State(missionID); ok {

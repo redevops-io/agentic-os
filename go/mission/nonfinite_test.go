@@ -57,3 +57,87 @@ func TestUnencodableEventIsCountedNotSilent(t *testing.T) {
 		t.Fatalf("an unwritable event must be counted, got %d", s.PersistFailures())
 	}
 }
+
+// Every container shape must survive: the sanitiser is generic, not a type switch over a few shapes.
+func TestNonFiniteEventsSurviveForEveryPayloadShape(t *testing.T) {
+	type rec struct {
+		X    float64  `json:"x"`
+		P    *float64 `json:"p"`
+		Skip float64  `json:"-"`
+	}
+	nan, inf := math.NaN(), math.Inf(-1)
+	path := filepath.Join(t.TempDir(), "shapes.jsonl")
+	s := NewEventStore(path)
+	s.Append("Shapes", "m", map[string]any{
+		"maps":   []map[string]any{{"v": nan}, {"v": 2.5}},
+		"typed":  map[string]float64{"a": inf, "b": 1},
+		"struct": rec{X: nan, P: &inf},
+		"ptr":    &nan,
+		"floats": []float64{1, nan},
+		"arr":    [2]float64{inf, 0},
+		"strs":   []string{"ok"},
+	})
+	if s.PersistFailures() != 0 {
+		t.Fatalf("persist failures: %d", s.PersistFailures())
+	}
+	r := NewEventStore(path)
+	evs := r.ForMission("m")
+	if len(evs) != 1 || r.LoadSkipped() != 0 {
+		t.Fatalf("event lost: %d skipped=%d", len(evs), r.LoadSkipped())
+	}
+	p := evs[0].Payload
+	if !math.IsNaN(p["maps"].([]any)[0].(map[string]any)["v"].(float64)) ||
+		!math.IsInf(p["typed"].(map[string]any)["a"].(float64), -1) ||
+		!math.IsNaN(p["struct"].(map[string]any)["x"].(float64)) ||
+		!math.IsInf(p["struct"].(map[string]any)["p"].(float64), -1) ||
+		!math.IsNaN(p["ptr"].(float64)) || !math.IsNaN(p["floats"].([]any)[1].(float64)) ||
+		!math.IsInf(p["arr"].([]any)[0].(float64), -1) {
+		t.Fatalf("non-finite values not restored: %v", p)
+	}
+}
+
+type cyc struct {
+	V    float64
+	Next *cyc
+}
+
+// A cyclic payload (that also carries a NaN, so the sanitiser path is taken) must be an ordinary persist failure,
+// never a stack overflow.
+func TestCyclicPayloadsAreAnErrorNotACrash(t *testing.T) {
+	a := &cyc{V: math.NaN()}
+	a.Next = a
+	m := map[string]any{"nan": math.NaN()}
+	m["self"] = m
+	sl := []any{math.NaN(), nil}
+	sl[1] = sl
+	cases := map[string]map[string]any{
+		"cyclic *struct":      {"p": a},
+		"cyclic map via any":  {"m": m},
+		"self-referencing []": {"s": sl},
+	}
+	for name, payload := range cases {
+		path := filepath.Join(t.TempDir(), "c.jsonl")
+		s := NewEventStore(path)
+		s.Append("Cyc", "m", payload) // must not crash
+		s.Append("After", "m", map[string]any{"ok": true})
+		if s.PersistFailures() != 1 {
+			t.Errorf("%s: want exactly one counted persist failure, got %d", name, s.PersistFailures())
+		}
+		r := NewEventStore(path)
+		if got := r.ForMission("m"); len(got) != 1 || got[0].Type != "After" {
+			t.Errorf("%s: the following event must still persist: %v", name, got)
+		}
+	}
+	// shared (non-cyclic) references are fine
+	shared := map[string]any{"v": math.NaN()}
+	if _, err := sanitizeNonFinite(map[string]any{"a": shared, "b": shared}); err != nil {
+		t.Errorf("a shared sub-object is not a cycle: %v", err)
+	}
+	var deep any = math.NaN()
+	for i := 0; i < sanitizeMaxDepth+10; i++ {
+		deep = []any{deep}
+	}
+	if _, err := sanitizeNonFinite(map[string]any{"d": deep}); err == nil {
+		t.Error("absurd nesting must be refused")
+	}
+}
