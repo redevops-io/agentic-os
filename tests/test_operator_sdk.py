@@ -235,3 +235,48 @@ def test_runtime_http_client_sends_the_control_token(monkeypatch):
     HTTPOperatorClient({"op": "http://op"}, transport=lambda u, b, h, t: seen.update(h=h) or {"result": {}}
                        ).invoke("op", "t.ping", {}, "k")
     assert seen["h"]["Authorization"] == "Bearer s3cret-token"
+
+
+# ── tenant derived from the authenticated credential ──────────────────────────────────────────────────────────
+def _tenant_client(monkeypatch, **env):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from agentic_os.mission.operator_sdk import Operator
+    for k in ("AGENTIC_OS_CONTROL_TOKEN", "AGENTIC_OS_TENANT_TOKENS", "AGENTIC_OS_APPROVER_TOKENS",
+              "AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS"):
+        monkeypatch.delenv(k, raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    op = Operator("tenop", [capability("t.echo", lambda i: {"tenant": i.get("_tenant")}, provides=["tenant"])])
+    app = FastAPI()
+    app.include_router(op.router())
+    return TestClient(app)
+
+
+def _echo(c, tok, **inputs):
+    h = {"Authorization": f"Bearer {tok}"} if tok else {}
+    return c.post("/invoke", json={"capability": "t.echo", "inputs": inputs, "idempotency_key": "k"}, headers=h)
+
+
+def test_tenant_token_supplies_tenant_and_rejects_a_different_body_tenant(monkeypatch):
+    c = _tenant_client(monkeypatch, AGENTIC_OS_TENANT_TOKENS="a=tok-a,b=tok-b")
+    assert _echo(c, "tok-a").json()["result"]["tenant"] == "a"
+    assert _echo(c, "tok-a", _tenant="a").json()["result"]["tenant"] == "a"
+    assert _echo(c, "tok-a", _tenant="b").status_code == 403
+
+
+def test_tenant_tokens_do_not_share_idempotent_results(monkeypatch):
+    c = _tenant_client(monkeypatch, AGENTIC_OS_TENANT_TOKENS="a=tok-a,b=tok-b")
+    assert _echo(c, "tok-a").json()["result"]["tenant"] == "a"
+    assert _echo(c, "tok-b").json()["result"]["tenant"] == "b"
+
+
+def test_admin_token_keeps_body_tenant(monkeypatch):
+    c = _tenant_client(monkeypatch, AGENTIC_OS_CONTROL_TOKEN="adm", AGENTIC_OS_TENANT_TOKENS="a=tok-a")
+    assert _echo(c, "adm", _tenant="b").json()["result"]["tenant"] == "b"
+    assert _echo(c, "adm").json()["result"]["tenant"] is None
+
+
+def test_anonymous_dev_keeps_body_tenant(monkeypatch):
+    c = _tenant_client(monkeypatch, AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS="1")
+    assert _echo(c, None, _tenant="b").json()["result"]["tenant"] == "b"
