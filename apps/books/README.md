@@ -136,3 +136,7 @@ docker run --rm -p 8209:8209 \
 ## Operating notes
 
 Writes are approval-gated in `core`; the app's routes execute them only for requests with valid operator Basic auth (`OPERATOR_BASIC_AUTH=user:pass`, fail closed when unset). Narration goes through `agentic_os.app.llm.governed_text` (fail closed).
+
+Idempotency keys are scoped to the tenant. Over `/invoke` the tenant is taken from the bearer credential: a tenant token supplies its own tenant and a body `_tenant` naming a different one is refused (403); the admin token and the local anonymous-dev flag may still pass `_tenant` in the body.
+
+Single-replica requirement: the per-key locks and the operator's duplicate-call cache are process-local. Run exactly one replica of this app (or pin traffic for a given key to one replica); with several replicas, concurrent identical requests are only de-duplicated by the ledger-side lookup, not by the in-process locks.

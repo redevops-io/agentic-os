@@ -393,3 +393,18 @@ def test_close_executes_verifies_idempotent_and_rejects_inconsistent(monkeypatch
 
     bad = core.close({**base, "period_end": "2026-12-31", "_approval": {"approved": True}})
     assert bad["status"] == "error" and "inconsistent" in (bad.get("error") or "")
+
+
+def test_invoke_tenant_comes_from_the_token_into_record_revenue(monkeypatch):
+    seen = []
+    monkeypatch.setattr(core, "record_revenue", lambda body: seen.append(dict(body)) or {"status": "done"})
+    monkeypatch.delenv("AGENTIC_OS_CONTROL_TOKEN", raising=False)
+    monkeypatch.setenv("AGENTIC_OS_TENANT_TOKENS", "a=tok-a,b=tok-b")
+    app = FastAPI()
+    app.include_router(build_books_operator().router())
+    c = TestClient(app)
+    call = lambda tok, **i: c.post("/invoke", headers={"Authorization": f"Bearer {tok}"}, json={
+        "capability": "books.record_revenue", "inputs": {"amount": "5", **i}, "idempotency_key": "same"})
+    assert call("tok-a", _tenant="b").status_code == 403 and seen == []
+    assert call("tok-a").status_code == 200 and call("tok-b").status_code == 200
+    assert [s["_tenant"] for s in seen] == ["a", "b"]

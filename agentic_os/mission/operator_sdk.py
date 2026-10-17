@@ -253,7 +253,13 @@ class Operator:
         def invoke(body: InvokeBody, idempotency_key: str | None = Header(default=None),
                    authorization: str | None = Header(default=None)):
             from .control_auth import authorize_operator_invoke  # noqa: PLC0415
-            authorize_operator_invoke(authorization)
+            caller = authorize_operator_invoke(authorization)
+            # A tenant-token caller IS that tenant: a body `_tenant` naming another tenant is refused, and the
+            # authenticated tenant is what the handler sees. Admin / anonymous-dev callers keep the body value.
+            if caller.tenant is not None:
+                claimed = (body.inputs or {}).get("_tenant")
+                if claimed not in (None, "") and str(claimed) != caller.tenant:
+                    raise HTTPException(403, "tenant does not match the authenticated credential")
             key = body.idempotency_key or idempotency_key or ""
             # The HTTP /invoke is the UNTRUSTED "try" surface, so strip runtime-only approval markers a caller
             # could forge to bypass a gate: a direct POST of `{"_approval": true}` must NOT make a consequential
@@ -273,6 +279,8 @@ class Operator:
                     inputs["_approval"] = marker
                 else:
                     _warn_unverified_approval()
+            if caller.tenant is not None:
+                inputs["_tenant"] = caller.tenant
             try:
                 return {"result": self.invoke(body.capability, inputs, key)}
             except KeyError as e:
