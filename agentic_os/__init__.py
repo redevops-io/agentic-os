@@ -13,4 +13,4 @@ from .context import Context, Approval
 from .fleet import Fleet
 
 __all__ = ["Module", "Registry", "Router", "Tier", "Task", "Context", "Approval", "Fleet"]
-__version__ = "0.3.39"
+__version__ = "0.3.40"
