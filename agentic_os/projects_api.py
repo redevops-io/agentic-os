@@ -274,6 +274,9 @@ class SampleProjectionProvider:
 
     project_id: str = "customer-ops"
     project_name: str = "Customer Operations"
+    #: Today's sandbox cases + simulated sends exist ONLY on the pure sample provider. A provider backed by real
+    #: producers (RegisteredProducersProvider) sets this False: its Today is the read-only feed of real signals.
+    today_sample_cases: bool = True
     #: providers currently connected — mutated by connect_app so apps() and template
     #: readiness reflect real connection state (seeded from the sample's connected apps).
     connected: Set[str] = field(
@@ -369,7 +372,8 @@ class SampleProjectionProvider:
         from agentic_os.today import TodaySessions
         if getattr(self, "_today_sessions", None) is None:
             self._today_sessions = TodaySessions()
-        return self._today_sessions.get(session or "anon", tenant="demo", project=pid)
+        return self._today_sessions.get(session or "anon", tenant="demo", project=pid,
+                                        sample_cases=self.today_sample_cases)
 
     def today(self, pid: str, session: str = "") -> dict:
         return self._today(pid, session).feed(self.priorities(pid), self.attention(pid))
@@ -1356,6 +1360,7 @@ class RegisteredProducersProvider(SampleProjectionProvider):
     source it falls back to the sample surface WITH the ``basis: "sample"`` label — never silently."""
 
     registry: Any = None
+    today_sample_cases: bool = False
 
     def priorities(self, project_id: str) -> dict:
         import time

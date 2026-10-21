@@ -259,3 +259,22 @@ def test_http_simulated_outcome_closes_only_after_send(http):
     dg = http.get(f"/api/projects/customer-ops/today/{iid}").json()["action"]["payload_digest"]
     http.post(f"/api/projects/customer-ops/today/{iid}/approve", json={"payload_digest": dg})
     assert http.post(f"/api/projects/customer-ops/today/{iid}/simulate-outcome").json()["state"] == "verified"
+
+
+# ── fail-closed for a real (non-sample) deployment ───────────────────────────────────────────────
+def test_non_sample_provider_serves_no_sample_cases_and_no_write_actions():
+    from agentic_os.projects_api import RegisteredProducersProvider
+    c = TestClient(create_app(RegisteredProducersProvider()))
+    f = c.get("/api/projects/customer-ops/today").json()
+    assert f["simulated_actions"] is False        # signals may be labelled sample, but nothing here is executable
+    assert all(i["kind"] == "signal" and i["next_action"]["executable"] is False for i in f["items"])
+    assert not any("Visa documents" in i["user_title"] for i in f["items"])
+    iid = f["items"][0]["id"] if f["items"] else "att_x"
+    for path, body in (("approve", {"payload_digest": "sha256:x"}), ("snooze", {"seconds": 3600}),
+                       ("dismiss", {}), ("simulate-outcome", {})):
+        r = c.post(f"/api/projects/customer-ops/today/{iid}/{path}", json=body)
+        assert r.status_code == 501 and r.json()["detail"]["error"] == "unsupported", path
+
+
+def test_sample_provider_is_unchanged_by_the_failclosed_mode(http):
+    assert http.get("/api/projects/customer-ops/today").json()["simulated_actions"] is True

@@ -216,7 +216,7 @@ class Today:
     """One tenant/project's Today feed plus the governed ledger for its cases (in memory, sample data)."""
 
     def __init__(self, *, tenant: str = "demo", project: str = "customer-ops",
-                 clock: Callable[[], float] = time.time, adapter: Any = None) -> None:
+                 clock: Callable[[], float] = time.time, adapter: Any = None, sample_cases: bool = True) -> None:
         from agentic_os.agent_gateway.external.approval_bridge import ExternalApprovalBridge
         from agentic_os.agent_gateway.external.fake_adapter import FakeExternalAgentAdapter
         from agentic_os.agent_gateway.external.operator import ExternalAgentOperator
@@ -225,7 +225,11 @@ class Today:
         self._bridge = ExternalApprovalBridge()
         self._operator = ExternalAgentOperator(adapter or FakeExternalAgentAdapter())
         self._cases: Dict[str, _Case] = {}
-        for c in _seed_cases(clock()):
+        # sample_cases=False is the FAIL-CLOSED mode for a real deployment: no sample work, nothing executable —
+        # the feed is only the read-only projection of real signals until a governed case source + authenticated
+        # tenant/actor binding exist. (The only adapter here is the in-repo fake; it can never reach a provider.)
+        self.sample_cases = sample_cases
+        for c in (_seed_cases(clock()) if sample_cases else []):
             self._cases[stable_id(tenant, project, "case:" + c.key)] = c
             self._log(c, "suggested", "Suggested from connected channels")
 
@@ -236,6 +240,9 @@ class Today:
     def _case(self, item_id: str) -> _Case:
         c = self._cases.get(item_id)
         if c is None:
+            if not self.sample_cases:
+                raise TodayError(501, "unsupported",
+                                 "no governed case source is configured for this deployment; Today is read-only")
             raise TodayError(404, "not_found", "no such work item")
         return c
 
@@ -346,7 +353,9 @@ class Today:
             for it in merged:
                 counts[it["state"]] += 1
             n = counts["needs_action"]
-            return {"project_id": self.project, "generated_at": now, "basis": "sample", "simulated_actions": True,
+            return {"project_id": self.project, "generated_at": now,
+                    "basis": "sample" if self.sample_cases else (priorities or {}).get("basis", "live"),
+                    "simulated_actions": self.sample_cases,
                     "headline": (f"{n} thing{'s' if n != 1 else ''} need{'s' if n == 1 else ''} your decision."
                                  if n else "Nothing needs you right now."),
                     "counts": counts, "items": merged,
@@ -490,13 +499,14 @@ class TodaySessions:
         self._s: Dict[str, tuple] = {}
         self._lock = threading.Lock()
 
-    def get(self, key: str, *, tenant: str, project: str) -> Today:
+    def get(self, key: str, *, tenant: str, project: str, sample_cases: bool = True) -> Today:
         now = self.clock()
         with self._lock:
             for k in [k for k, (_, ts) in self._s.items() if now - ts > self.ttl]:
                 del self._s[k]
             hit = self._s.get(key)
-            today = hit[0] if hit else Today(tenant=tenant, project=project, clock=self.clock)
+            today = hit[0] if hit else Today(tenant=tenant, project=project, clock=self.clock,
+                                             sample_cases=sample_cases)
             self._s[key] = (today, now)
             while len(self._s) > self.max:
                 self._s.pop(min(self._s, key=lambda k: self._s[k][1]))
