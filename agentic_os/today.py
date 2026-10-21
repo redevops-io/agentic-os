@@ -34,6 +34,9 @@ from agentic_os.overlays import Principal
 STATES = ("needs_action", "waiting", "scheduled", "running", "verified", "failed", "dismissed")
 LIFECYCLE = ("suggested", "approved", "sent", "delivery_verified", "outcome_observed")
 _STATE_ORDER = {s: i for i, s in enumerate(STATES)}
+BATCH_ACTIONS = ("snooze", "dismiss", "assign", "categorize")
+MAX_BATCH = 50
+UNDO_TTL_S = 600.0
 _DAY = 86400.0
 
 
@@ -77,7 +80,7 @@ def _item(*, tenant: str, project: str, key: str, dedupe: str, title: str, reaso
                         "executable": executable},
         "deadline": None, "source_refs": list(source_refs), "evidence_refs": [], "observed_at": None,
         "known_at": now, "confidence": confidence, "approval_ref": None, "policy_decision_ref": None,
-        "last_receipt_ref": None, "verification_ref": None, "outcome_ref": None, "stale": False,
+        "last_receipt_ref": None, "verification_ref": None, "outcome_ref": None, "stale": False, "epoch": 0, "category": "",
         "lifecycle": _blank_lifecycle(suggested=True), "kind": "signal", "dedupe_key": dedupe,
     }
     base.update(extra)
@@ -148,6 +151,7 @@ class _Case:
     connector_ok: bool = True
     identity_candidates: List[dict] = field(default_factory=list)
     score: float = 0.8
+    category: str = ""                   # user label set by batch triage (reversible)
     topics: List[str] = field(default_factory=list)      # words that make a note about this case (capture matching)
     surfaced: bool = True                # a dormant case is known work that does NOT need attention yet
     # mutable ledger
@@ -174,6 +178,8 @@ class _Reminder:
     created: float
     done: bool = False
     snoozed_until: float = 0.0
+    owner: str = "You"
+    category: str = ""
     events: List[dict] = field(default_factory=list)
 
 
@@ -253,6 +259,9 @@ class Today:
         self._cases: Dict[str, _Case] = {}
         self._reminders: Dict[str, _Reminder] = {}
         self._intake: Any = None
+        self._undo: Dict[str, dict] = {}                 # batch undo tokens (single use, expiring)
+        self._seen: Dict[str, float] = {}                # notification keys already acknowledged
+        self._prefs: Dict[str, Any] = {"enabled": True, "quiet_start": None, "quiet_end": None, "tz_offset_minutes": 0}
         # sample_cases=False is the FAIL-CLOSED mode for a real deployment: no sample work, nothing executable —
         # the feed is only the read-only projection of real signals until a governed case source + authenticated
         # tenant/actor binding exist. (The only adapter here is the in-repo fake; it can never reach a provider.)
@@ -346,7 +355,8 @@ class Today:
                    title=c.title, reason=reason, state=state, score=c.score, label=label, executable=True,
                    source_refs=[e["ref"] for e in c.evidence], confidence=None, now=now,
                    kind="case", domain=c.domain, channel=c.channel, resurfaced=resurfaced,
-                   deadline=c.deadline, owner=c.owner, lifecycle=lc, simulated=True,
+                   deadline=c.deadline, owner=c.owner, lifecycle=lc, simulated=True, category=c.category,
+                   epoch=int(max(c.snoozed_until, c.follow_up_at)) + 1000 * c.attempt,
                    evidence_refs=[e["ref"] for e in c.evidence], observed_at=max(e["observed_at"] for e in c.evidence),
                    subject_refs=[t["id"] for t in c.targets],
                    approval_ref=c.approval_ref or None, policy_decision_ref=c.decision_ref or None,
@@ -544,7 +554,8 @@ class Today:
         it = _item(tenant=self.tenant, project=self.project, key="reminder:" + r.capture_id, dedupe="reminder" + _norm(r.text),
                    title=f"Reminder: {r.text}", reason=reason, state=state, score=0.6, label="Mark done",
                    executable=False, source_refs=["capture:" + r.capture_id], confidence=None, now=now,
-                   kind="reminder", deadline=r.due, owner="You", simulated=True, observed_at=r.created,
+                   kind="reminder", deadline=r.due, owner=r.owner, simulated=True, observed_at=r.created,
+                   category=r.category, epoch=int(max(r.snoozed_until, r.due)),
                    evidence_refs=["capture:" + r.capture_id])
         it["id"] = item_id
         it["lifecycle"] = _blank_lifecycle(suggested=True)
@@ -577,6 +588,153 @@ class Today:
             c.phase = "dismissed"
             self._log(c, "dismissed", "Dismissed")
             return self._view(c, item_id, self.clock())
+
+    # ── batch triage: reversible actions only ────────────────────────────────────────
+    def _touch_fields(self, item_id: str) -> tuple:
+        """(object, field names a batch may change) for a case or reminder; refuses anything without a ledger."""
+        r = self._reminders.get(item_id)
+        if r is not None:
+            return r, ("done", "snoozed_until", "owner", "category")
+        c = self._cases.get(item_id)
+        if c is not None and c.surfaced:
+            return c, ("phase", "snoozed_until", "owner", "category")
+        raise TodayError(409, "not_changeable", "this isn't an item that can be changed here (live signals are "
+                                                "resolved where they originate)")
+
+    def batch(self, action: str, item_ids: Sequence[str], *, seconds: Optional[float] = None,
+              assignee: Optional[str] = None, category: Optional[str] = None) -> dict:
+        """Snooze / dismiss / assign / categorize many items at once. NEVER approval: an external send, refund or
+        payment is reviewed one exact payload at a time. Per-item results; one undo token covers what succeeded."""
+        if not self.sample_cases:
+            raise TodayError(501, "unsupported", "no governed case source is configured for this deployment; Today is read-only")
+        if action not in BATCH_ACTIONS:
+            raise TodayError(422, "batch_not_allowed",
+                             "only reversible actions (snooze, dismiss, assign, categorize) can be done in a batch; "
+                             "approvals are reviewed one item at a time")
+        ids = list(dict.fromkeys(item_ids or []))
+        if not ids:
+            raise TodayError(422, "empty_batch", "select at least one item")
+        if len(ids) > MAX_BATCH:
+            raise TodayError(422, "too_many", f"a batch is limited to {MAX_BATCH} items")
+        if action == "snooze" and not (seconds is not None and 60 <= seconds <= 30 * _DAY):
+            raise TodayError(422, "bad_snooze", "snooze must be between 1 minute and 30 days")
+        label = None
+        if action in ("assign", "categorize"):
+            raw = assignee if action == "assign" else category
+            label = (raw or "").strip()
+            limit = 60 if action == "assign" else 40
+            if not label or len(label) > limit or any(ord(ch) < 32 for ch in label):
+                raise TodayError(422, "bad_label", f"a {action} label must be 1-{limit} printable characters")
+        with self._lock:
+            now = self.clock()
+            results, snaps = [], []
+            for iid in ids:
+                try:
+                    obj, fields_ = self._touch_fields(iid)
+                    before = {f: getattr(obj, f) for f in fields_}
+                    if action == "snooze":
+                        self.snooze(iid, seconds=seconds)
+                    elif action == "dismiss":
+                        self.dismiss(iid)
+                    elif action == "assign":
+                        obj.owner = label
+                    else:
+                        obj.category = label
+                    after = {f: getattr(obj, f) for f in fields_}
+                    snaps.append((iid, before, after))
+                    results.append({"id": iid, "ok": True})
+                except TodayError as e:
+                    results.append({"id": iid, "ok": False, "error": e.code, "detail": e.detail})
+            token = None
+            if snaps:
+                token = "undo_" + hashlib.sha256(f"{now}|{action}|{ids}".encode()).hexdigest()[:16]
+                self._undo = {k: v for k, v in self._undo.items() if v["expires"] > now}       # drop expired
+                self._undo[token] = {"snaps": snaps, "expires": now + UNDO_TTL_S, "action": action}
+            ok = sum(1 for r in results if r["ok"])
+            return {"action": action, "results": results, "ok_count": ok, "failed_count": len(results) - ok,
+                    "undo": {"token": token, "expires_at": now + UNDO_TTL_S} if token else None}
+
+    def undo(self, token: str) -> dict:
+        """Reverse a batch. Each field is restored only if it still holds what the batch set — a later change by
+        the user (or time) is never overwritten. Single use; expires."""
+        with self._lock:
+            now = self.clock()
+            entry = self._undo.pop(token, None)
+            if entry is None or entry["expires"] <= now:
+                raise TodayError(404, "undo_unavailable", "this undo has expired or was already used")
+            results = []
+            for iid, before, after in entry["snaps"]:
+                obj = self._reminders.get(iid) or self._cases.get(iid)
+                if obj is None:
+                    results.append({"id": iid, "restored": False, "reason": "gone"})
+                    continue
+                if any(getattr(obj, f) != v for f, v in after.items()):
+                    results.append({"id": iid, "restored": False, "reason": "changed_since"})
+                    continue
+                for f, v in before.items():
+                    setattr(obj, f, v)
+                results.append({"id": iid, "restored": True})
+            return {"action": entry["action"], "results": results,
+                    "restored_count": sum(1 for r in results if r["restored"])}
+
+    # ── notifications: derived from the feed, never a second workflow ────────────────
+    def _quiet_now(self, now: float) -> bool:
+        s, e = self._prefs["quiet_start"], self._prefs["quiet_end"]
+        if s is None or e is None or s == e:
+            return False
+        hour = int((now + self._prefs["tz_offset_minutes"] * 60) // 3600) % 24
+        return s <= hour < e if s < e else (hour >= s or hour < e)
+
+    def notifications(self, priorities: Optional[dict] = None, attention: Optional[Sequence[dict]] = None) -> dict:
+        """What would interrupt the user right now. Only items genuinely in ``needs_action`` count, so a snoozed
+        or waiting item is silent until its wake condition makes it actionable again (its key then changes and
+        it notifies once). ``summary`` is content-free so it is safe on a lock screen; titles are in-app only."""
+        feed = self.feed(priorities, attention)
+        now = feed["generated_at"]
+        actionable = [i for i in feed["items"] if i["state"] == "needs_action"]
+        quiet = self._quiet_now(now)
+        pending = []
+        for it in actionable:
+            key = f"{it['id']}:{it.get('epoch', 0)}:{it['state']}"
+            if key in self._seen:
+                continue
+            pending.append({"key": key, "id": it["id"], "title": it["user_title"], "reason": it["reason"],
+                            "kind": it.get("kind", "signal"), "resurfaced": bool(it.get("resurfaced"))})
+        n = len(actionable)
+        silenced = quiet or not self._prefs["enabled"]
+        return {"generated_at": now, "count": n,
+                "summary": f"{n} thing{'s' if n != 1 else ''} need{'s' if n == 1 else ''} you" if n else "Nothing needs you",
+                "pending": [] if silenced else pending, "suppressed": len(pending) if silenced else 0,
+                "quiet_now": quiet, "prefs": dict(self._prefs)}
+
+    def ack_notifications(self, keys: Sequence[str]) -> dict:
+        if not isinstance(keys, (list, tuple)) or len(keys) > 100 or any(not isinstance(k, str) or len(k) > 120 for k in keys):
+            raise TodayError(422, "bad_keys", "acknowledge up to 100 notification keys")
+        with self._lock:
+            now = self.clock()
+            for k in keys:
+                self._seen[k] = now
+            while len(self._seen) > 1000:                        # bounded: forget the oldest
+                self._seen.pop(next(iter(self._seen)))
+            return {"acknowledged": len(keys)}
+
+    def set_notification_prefs(self, *, enabled: Optional[bool] = None, quiet_start: Optional[int] = None,
+                               quiet_end: Optional[int] = None, tz_offset_minutes: Optional[int] = None,
+                               clear_quiet: bool = False) -> dict:
+        with self._lock:
+            if enabled is not None:
+                self._prefs["enabled"] = bool(enabled)
+            if tz_offset_minutes is not None:
+                if not -840 <= tz_offset_minutes <= 840:
+                    raise TodayError(422, "bad_prefs", "tz_offset_minutes must be within +/-14h")
+                self._prefs["tz_offset_minutes"] = int(tz_offset_minutes)
+            if clear_quiet:
+                self._prefs["quiet_start"] = self._prefs["quiet_end"] = None
+            elif quiet_start is not None or quiet_end is not None:
+                if quiet_start is None or quiet_end is None or not (0 <= quiet_start <= 23 and 0 <= quiet_end <= 23):
+                    raise TodayError(422, "bad_prefs", "quiet hours need a start and an end hour, 0-23")
+                self._prefs["quiet_start"], self._prefs["quiet_end"] = int(quiet_start), int(quiet_end)
+            return dict(self._prefs)
 
     def observe_outcome(self, item_id: str) -> dict:
         """SIMULATED business outcome (e.g. the customer replied). Only a sent item can have one — a send

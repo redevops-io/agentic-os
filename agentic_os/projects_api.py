@@ -401,6 +401,21 @@ class SampleProjectionProvider:
     def today_dismiss(self, pid: str, item_id: str, session: str = "") -> dict:
         return self._today(pid, session).dismiss(item_id)
 
+    def today_batch(self, pid: str, session: str = "", **kw) -> dict:
+        return self._today(pid, session).batch(**kw)
+
+    def today_undo(self, pid: str, session: str = "", token: str = "") -> dict:
+        return self._today(pid, session).undo(token)
+
+    def today_notifications(self, pid: str, session: str = "") -> dict:
+        return self._today(pid, session).notifications(self.priorities(pid), self.attention(pid))
+
+    def today_ack(self, pid: str, session: str = "", keys=None) -> dict:
+        return self._today(pid, session).ack_notifications(keys or [])
+
+    def today_prefs(self, pid: str, session: str = "", **kw) -> dict:
+        return self._today(pid, session).set_notification_prefs(**kw)
+
     def today_simulate_outcome(self, pid: str, item_id: str, session: str = "") -> dict:
         return self._today(pid, session).observe_outcome(item_id)
 
@@ -495,7 +510,8 @@ class SampleProjectionProvider:
             lead = qualify_lead(message="what's your pricing for the team plan?", has_email=True,
                                 has_company=True, message_count=3)
             thread = ThreadState(last_inbound_at=now - 4000, status="awaiting_customer")
-            c = from_support_thread(thread, FollowUpPolicy(clock=lambda: now).assess(thread), lead)
+            c = from_support_thread(thread, FollowUpPolicy(clock=lambda: now).assess(thread), lead,
+                                    thread_ref="sample:acme-pricing")      # a stable identity, not an object address
             return [c] if c else []
 
         def risk_source():
@@ -1202,6 +1218,30 @@ class _CaptureResolveReq(BaseModel):
     case_id: str
 
 
+class _TodayBatchReq(BaseModel):
+    action: str
+    item_ids: List[str]
+    seconds: Optional[float] = None
+    assignee: Optional[str] = None
+    category: Optional[str] = None
+
+
+class _TodayUndoReq(BaseModel):
+    token: str
+
+
+class _TodayAckReq(BaseModel):
+    keys: List[str]
+
+
+class _TodayPrefsReq(BaseModel):
+    enabled: Optional[bool] = None
+    quiet_start: Optional[int] = None
+    quiet_end: Optional[int] = None
+    tz_offset_minutes: Optional[int] = None
+    clear_quiet: bool = False
+
+
 class _TodaySnoozeReq(BaseModel):
     seconds: float
 
@@ -1558,6 +1598,33 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
                     "headline": "Today isn't available on this deployment.", "counts": {}, "items": [],
                     "handled_automatically": 0, "abstained": 0}
         return _today_call("today", project_id, session=_today_session(request, x_demo_session))
+
+    @app.get("/api/projects/{project_id}/today/notifications")
+    def _today_notifications(project_id: str, request: Request, x_demo_session: Optional[str] = Header(default=None)) -> dict:
+        return _today_call("today_notifications", project_id, session=_today_session(request, x_demo_session))
+
+    @app.post("/api/projects/{project_id}/today/notifications/ack")
+    def _today_ack(project_id: str, req: _TodayAckReq, request: Request,
+                   x_demo_session: Optional[str] = Header(default=None)) -> dict:
+        return _today_call("today_ack", project_id, session=_today_session(request, x_demo_session), keys=req.keys)
+
+    @app.put("/api/projects/{project_id}/today/notification-prefs")
+    def _today_prefs(project_id: str, req: _TodayPrefsReq, request: Request,
+                     x_demo_session: Optional[str] = Header(default=None)) -> dict:
+        return _today_call("today_prefs", project_id, session=_today_session(request, x_demo_session),
+                           **req.model_dump())
+
+    @app.post("/api/projects/{project_id}/today/batch")
+    def _today_batch(project_id: str, req: _TodayBatchReq, request: Request,
+                     x_demo_session: Optional[str] = Header(default=None)) -> dict:
+        return _today_call("today_batch", project_id, session=_today_session(request, x_demo_session),
+                           action=req.action, item_ids=req.item_ids, seconds=req.seconds,
+                           assignee=req.assignee, category=req.category)
+
+    @app.post("/api/projects/{project_id}/today/batch/undo")
+    def _today_undo(project_id: str, req: _TodayUndoReq, request: Request,
+                    x_demo_session: Optional[str] = Header(default=None)) -> dict:
+        return _today_call("today_undo", project_id, session=_today_session(request, x_demo_session), token=req.token)
 
     @app.get("/api/projects/{project_id}/today/{item_id}")
     def _today_item(project_id: str, item_id: str, request: Request, targets: Optional[str] = None,

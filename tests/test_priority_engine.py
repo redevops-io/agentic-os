@@ -251,3 +251,20 @@ def test_end_to_end_growth_and_support_into_one_surface():
     s = what_needs_me(candidates, PriorityPolicy(attention_budget=3))
     assert len(s.surfaced) == 2                               # both are approval-gated, both surface
     assert {d.candidate.source_app for d in s.surfaced} == {"growth", "support"}
+
+
+# ── identity: a candidate must keep the same id every time it is listed ──────────────────────────
+def test_support_candidate_id_is_stable_not_an_object_address():
+    import copy
+    from agentic_os.support_autonomy import FollowUpPolicy, ThreadState, qualify_lead
+    pol = FollowUpPolicy(clock=lambda: 10_000.0)
+    lead = qualify_lead(message="what's your pricing?", has_email=True, message_count=3)
+    a = ThreadState(last_inbound_at=1000.0, status="awaiting_customer")
+    b = copy.deepcopy(a)                                   # a different object with identical state
+    ca, cb = from_support_thread(a, pol.assess(a), lead), from_support_thread(b, pol.assess(b), lead)
+    assert ca.candidate_id == cb.candidate_id              # same thread state -> same id (was id(obj): differed)
+    assert hex(id(a))[2:] not in ca.candidate_id
+    changed = ThreadState(last_inbound_at=2000.0, status="awaiting_customer")
+    assert from_support_thread(changed, pol.assess(changed), lead).candidate_id != ca.candidate_id
+    pinned = from_support_thread(a, pol.assess(a), lead, thread_ref="crm:thread:42")
+    assert pinned.candidate_id.startswith("support:crm:thread:42:")     # a caller-supplied ref wins
