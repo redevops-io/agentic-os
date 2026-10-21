@@ -337,7 +337,8 @@ class Today:
         if c.phase == "sent":
             if now >= c.follow_up_at:
                 return "needs_action", "No response yet — time to follow up.", True
-            return "waiting", c.reason, False
+            # the reason it was suggested ("Choose which Sam Rivera before anything is sent") is stale the moment it is sent
+            return "waiting", self._status_line(c, "waiting"), False
         return "needs_action", c.reason, False
 
     def _lifecycle(self, c: _Case) -> Dict[str, bool]:
@@ -431,7 +432,10 @@ class Today:
             to = ([{"id": ident["id"], "label": ident["label"], "address": ident["email"]}] if ident else
                   [{"id": t["id"], "label": t["label"], "address": t["address"]} for t in picked])
             view.update({
-                "why": c.reason, "evidence": c.evidence,
+                # "why this matters" explains the CURRENT situation: the original reason while it is still a suggestion, the live
+                # state once it has been sent / failed / closed (a UI agent caught it still saying "choose which contact before
+                # anything is sent" on an item that had been sent)
+                "why": c.reason if c.phase == "suggested" else view["reason"], "evidence": c.evidence,
                 "action": {
                     "kind": "send_message", "channel": c.channel, "to": to, "skipped": skipped,
                     "subject": c.subject, "body": c.body, "payload_digest": digest, "attempt": c.attempt,
