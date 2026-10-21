@@ -274,6 +274,9 @@ class SampleProjectionProvider:
 
     project_id: str = "customer-ops"
     project_name: str = "Customer Operations"
+    #: Today's sandbox cases + simulated sends exist ONLY on the pure sample provider. A provider backed by real
+    #: producers (RegisteredProducersProvider) sets this False: its Today is the read-only feed of real signals.
+    today_sample_cases: bool = True
     #: providers currently connected — mutated by connect_app so apps() and template
     #: readiness reflect real connection state (seeded from the sample's connected apps).
     connected: Set[str] = field(
@@ -362,6 +365,44 @@ class SampleProjectionProvider:
         import os
         from agentic_os.agent_gateway.external.sample_projections import deployment_inspection_view
         return deployment_inspection_view(os.environ.get("PROJECTS_INSPECTION_TARGET", "").strip())
+
+    # ── Today: the outcome-first feed (agentic_os.today). Per-session sandboxed sample ledger; a real
+    # provider supplies its own implementation of these methods against the governed runtime.
+    def _today(self, pid: str, session: str):
+        from agentic_os.today import TodaySessions
+        if getattr(self, "_today_sessions", None) is None:
+            self._today_sessions = TodaySessions()
+        return self._today_sessions.get(session or "anon", tenant="demo", project=pid,
+                                        sample_cases=self.today_sample_cases)
+
+    def today(self, pid: str, session: str = "") -> dict:
+        return self._today(pid, session).feed(self.priorities(pid), self.attention(pid))
+
+    def today_item(self, pid: str, item_id: str, session: str = "", targets=None, identity_id=None) -> dict:
+        from agentic_os.today import TodayError
+        t = self._today(pid, session)
+        try:
+            return t.item(item_id, targets=targets, identity_id=identity_id)
+        except TodayError as e:
+            if e.status != 404:
+                raise
+            err = e
+        hit = next((i for i in self.today(pid, session)["items"] if i["id"] == item_id), None)
+        if hit is None:
+            raise err
+        return {**hit, "why": hit["reason"], "evidence": [], "action": None, "history": [], "receipt": None}
+
+    def today_approve(self, pid: str, item_id: str, session: str = "", **kw) -> dict:
+        return self._today(pid, session).approve(item_id, **kw)
+
+    def today_snooze(self, pid: str, item_id: str, session: str = "", seconds: float = 0) -> dict:
+        return self._today(pid, session).snooze(item_id, seconds=seconds)
+
+    def today_dismiss(self, pid: str, item_id: str, session: str = "") -> dict:
+        return self._today(pid, session).dismiss(item_id)
+
+    def today_simulate_outcome(self, pid: str, item_id: str, session: str = "") -> dict:
+        return self._today(pid, session).observe_outcome(item_id)
 
     def social_intelligence(self, _pid: str) -> dict:
         """Phase 9 Social Intelligence card over the offline replay corpus (no live social provider)."""
@@ -1126,6 +1167,16 @@ def sidekick_reply(ctx: Dict[str, Any], text: str,
                     "You can also ask me how your credentials are handled or whether your data stays local."}
 
 
+class _TodayApproveReq(BaseModel):
+    payload_digest: str
+    targets: Optional[List[str]] = None
+    identity_id: Optional[str] = None
+
+
+class _TodaySnoozeReq(BaseModel):
+    seconds: float
+
+
 class _SidekickReq(BaseModel):
     ctx: Dict[str, Any] = {}
     text: str = ""
@@ -1309,6 +1360,7 @@ class RegisteredProducersProvider(SampleProjectionProvider):
     source it falls back to the sample surface WITH the ``basis: "sample"`` label — never silently."""
 
     registry: Any = None
+    today_sample_cases: bool = False
 
     def priorities(self, project_id: str) -> dict:
         import time
@@ -1416,6 +1468,60 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
             return {"summary": "Nothing needs you right now.", "surfaced": [], "deferred": [],
                     "handled_automatically": 0, "abstained": 0, "basis": "unavailable"}
         return fn(project_id)
+
+    # ── Today (outcome-first AttentionItem feed). Anonymous callers get a per-session SIMULATED sandbox; the
+    # approve path is the governed external-action path (exact-payload binding, single use, verified send).
+    def _today_session(request: Request, x_demo_session: Optional[str]) -> str:
+        return f"{demo_client_key(request)}|{(x_demo_session or '').strip()[:32]}"
+
+    def _today_call(name: str, *args, **kw):
+        from agentic_os.today import TodayError
+        fn = getattr(prov, name, None)
+        if fn is None:
+            raise HTTPException(501, {"error": "unsupported", "detail": "this deployment does not provide Today"})
+        try:
+            return fn(*args, **kw)
+        except TodayError as e:
+            raise HTTPException(e.status, e.as_dict())
+
+    @app.get("/api/projects/{project_id}/today")
+    def _today(project_id: str, request: Request, x_demo_session: Optional[str] = Header(default=None)) -> dict:
+        if getattr(prov, "today", None) is None:
+            return {"project_id": project_id, "generated_at": 0, "basis": "unavailable", "simulated_actions": False,
+                    "headline": "Today isn't available on this deployment.", "counts": {}, "items": [],
+                    "handled_automatically": 0, "abstained": 0}
+        return _today_call("today", project_id, session=_today_session(request, x_demo_session))
+
+    @app.get("/api/projects/{project_id}/today/{item_id}")
+    def _today_item(project_id: str, item_id: str, request: Request, targets: Optional[str] = None,
+                    identity_id: Optional[str] = None, x_demo_session: Optional[str] = Header(default=None)) -> dict:
+        return _today_call("today_item", project_id, item_id, session=_today_session(request, x_demo_session),
+                           targets=[t for t in (targets or "").split(",") if t] or None, identity_id=identity_id)
+
+    @app.post("/api/projects/{project_id}/today/{item_id}/approve")
+    def _today_approve(project_id: str, item_id: str, req: _TodayApproveReq, request: Request,
+                       x_demo_session: Optional[str] = Header(default=None)) -> dict:
+        return _today_call("today_approve", project_id, item_id, session=_today_session(request, x_demo_session),
+                           expected_digest=req.payload_digest, targets=req.targets, identity_id=req.identity_id)
+
+    @app.post("/api/projects/{project_id}/today/{item_id}/snooze")
+    def _today_snooze(project_id: str, item_id: str, req: _TodaySnoozeReq, request: Request,
+                      x_demo_session: Optional[str] = Header(default=None)) -> dict:
+        return _today_call("today_snooze", project_id, item_id, session=_today_session(request, x_demo_session),
+                           seconds=req.seconds)
+
+    @app.post("/api/projects/{project_id}/today/{item_id}/dismiss")
+    def _today_dismiss(project_id: str, item_id: str, request: Request,
+                       x_demo_session: Optional[str] = Header(default=None)) -> dict:
+        return _today_call("today_dismiss", project_id, item_id, session=_today_session(request, x_demo_session))
+
+    @app.post("/api/projects/{project_id}/today/{item_id}/simulate-outcome")
+    def _today_outcome(project_id: str, item_id: str, request: Request,
+                       x_demo_session: Optional[str] = Header(default=None)) -> dict:
+        # SAMPLE ONLY: lets the demo show a business outcome closing an item. A real provider observes
+        # outcomes from the systems of record and does not implement this method.
+        return _today_call("today_simulate_outcome", project_id, item_id,
+                           session=_today_session(request, x_demo_session))
 
     @app.get("/api/projects/{project_id}/deployment-inspection")
     def _deployment_inspection(project_id: str) -> dict:
