@@ -107,7 +107,9 @@ premium API bill. `agentic-os` replaces that with **one fleet, your data, your h
 
 ## Beyond the fleet: Projects, Integrations, Sidekick & the Agent Gateway
 
-The fleet/router/control-plane above is the kernel. On top of it the current product surface adds:
+The fleet/router/control-plane above is the kernel. (In the `agentic-os-stack` deployment the fleet controller image is replaced by
+[`context-runtime`](https://github.com/redevops-io/context-runtime)'s control plane; this repo remains the Mission kernel and the
+Projects API.) On top of it the current product surface adds:
 
 - **Projects + Sidekick** — a self-host web app ([`agentic_os/projects_api.py`](agentic_os/projects_api.py)
   serves the UI + API on one origin). **Projects** is the control plane (missions · workflows · attention ·

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# The UI source of truth is github.com/redevops-io/redevops-projects; agentic_os/projects_ui/ is only a build output.
 # Rebuild the vendored Projects UI from the redevops-projects repo and copy it into
 # agentic_os/projects_ui/. The UI is built for the SAME origin as the API so the single
 # service serves both with no CORS.
