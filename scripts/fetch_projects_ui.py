@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_LOCK = ROOT / "packaging" / "projects_ui.lock.json"
 DEFAULT_DEST = ROOT / "agentic_os" / "projects_ui"
 MARKER = ".pinned-sha256"
+LOCAL_BUILD = "local-build"   # written by scripts/build_projects_ui.sh: a deliberate local bundle, never overwritten
 
 
 class FetchError(RuntimeError):
@@ -45,11 +46,14 @@ def _safe_extract(blob: bytes, dest: Path) -> None:
 
 
 def fetch(lock: dict, dest: Path, *, url: Optional[str] = None) -> str:
-    """Returns 'unpinned', 'current' or 'fetched'. Raises FetchError on any verification failure."""
+    """Returns 'unpinned', 'local', 'current' or 'fetched'. Raises FetchError on any verification failure."""
     want = (lock.get("sha256") or "").strip().lower()
     if not want:
         return "unpinned"
-    if (dest / MARKER).exists() and (dest / MARKER).read_text().strip() == want and (dest / "index.html").exists():
+    marker = (dest / MARKER).read_text().strip() if (dest / MARKER).exists() else ""
+    if marker == LOCAL_BUILD and (dest / "index.html").exists():
+        return "local"
+    if marker == want and (dest / "index.html").exists():
         return "current"
     if not lock.get("version") or not lock.get("asset"):
         raise FetchError("lock has a sha256 but no version/asset")

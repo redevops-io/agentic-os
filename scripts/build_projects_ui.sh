@@ -17,4 +17,6 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 rm -rf "$ROOT/agentic_os/projects_ui"
 mkdir -p "$ROOT/agentic_os/projects_ui"
 cp -r "$UI_REPO/dist/"* "$ROOT/agentic_os/projects_ui/"
+# mark it as a deliberate local build so scripts/fetch_projects_ui.py (wheel-build hook) does not replace it
+echo "local-build" > "$ROOT/agentic_os/projects_ui/.pinned-sha256"
 echo "vendored $UI_REPO/dist (base=$BASE, api=$API_BASE) -> agentic_os/projects_ui/"
