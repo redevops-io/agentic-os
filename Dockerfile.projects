@@ -1,7 +1,8 @@
 # Self-hosted ReDevOps Projects — the Projects UI + API on one origin.
 #   docker build -f Dockerfile.projects -t redevops-projects .
 #   docker run -p 8787:8787 redevops-projects          # → http://localhost:8787
-# The UI bundle ships in the wheel (agentic_os/projects_ui), so no Node build is needed here.
+# The prebuilt UI (pinned redevops-projects release, packaging/projects_ui.lock.json) is fetched and
+# sha256-verified by the wheel build hook, so no Node build is needed here (the build needs network access).
 FROM python:3.12-slim
 WORKDIR /app
 # git is required at install time: runtime-contracts + redevops-connectors are git dependencies.

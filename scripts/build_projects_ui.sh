@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The UI source of truth is github.com/redevops-io/redevops-projects; agentic_os/projects_ui/ is only a build output.
-# Rebuild the vendored Projects UI from the redevops-projects repo and copy it into
-# agentic_os/projects_ui/. The UI is built for the SAME origin as the API so the single
-# service serves both with no CORS.
+# DEV ONLY: build the Projects UI from a local redevops-projects clone into agentic_os/projects_ui/ (git-ignored;
+# releases use the pinned bundle: scripts/fetch_projects_ui.py). The UI is built for the SAME origin as the API
+# so the single service serves both with no CORS.
 #
 #   scripts/build_projects_ui.sh [path-to-redevops-projects] [base]
 #     base "/"           → serve at the origin root (default) — pair with no PROJECTS_BASE_PATH
