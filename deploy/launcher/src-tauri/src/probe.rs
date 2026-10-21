@@ -61,6 +61,7 @@ pub struct UreqHttp;
 
 impl Http for UreqHttp {
     fn get(&self, url: &str, bearer: Option<&Secret>, timeout: Duration) -> Result<Reply, NetError> {
+        let started = std::time::Instant::now();
         let agent = ureq::AgentBuilder::new().redirects(0).timeout(timeout).timeout_connect(timeout).build();
         let mut req = agent.get(url).set("Accept", "application/json");
         if let Some(b) = bearer {
@@ -69,7 +70,7 @@ impl Http for UreqHttp {
         let resp = match req.call() {
             Ok(r) => r,
             Err(ureq::Error::Status(_, r)) => r,           // 4xx/5xx still carry a status we classify
-            Err(ureq::Error::Transport(t)) => return Err(map_transport(&t)),
+            Err(ureq::Error::Transport(t)) => return Err(map_transport(&t, started.elapsed(), timeout)),
         };
         let status = resp.status();
         let mut body = Vec::new();
@@ -78,13 +79,28 @@ impl Http for UreqHttp {
     }
 }
 
-fn map_transport(t: &ureq::Transport) -> NetError {
+/// Did the transport give up because time ran out? Decided from the underlying `io::ErrorKind` (TimedOut on Windows,
+/// WouldBlock on Unix) and, failing that, from how long we actually waited — never from message wording, which differs
+/// by OS ("timed out" vs "A connection attempt failed … (os error 10060)").
+fn is_timeout(t: &ureq::Transport, elapsed: Duration, limit: Duration) -> bool {
+    let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(t);
+    while let Some(e) = cur {
+        if let Some(io) = e.downcast_ref::<std::io::Error>() {
+            if matches!(io.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) {
+                return true;
+            }
+        }
+        cur = e.source();
+    }
+    elapsed + Duration::from_millis(50) >= limit.mul_f32(0.9)
+}
+
+fn map_transport(t: &ureq::Transport, elapsed: Duration, limit: Duration) -> NetError {
     use ureq::ErrorKind::*;
     match t.kind() {
         ConnectionFailed | Dns => NetError::Refused,
         Io => {
-            let msg = t.to_string().to_ascii_lowercase();
-            if msg.contains("timed out") || msg.contains("would block") { NetError::Timeout } else { NetError::Refused }
+            if is_timeout(t, elapsed, limit) { NetError::Timeout } else { NetError::Refused }
         }
         InvalidUrl | UnknownScheme | InsecureRequestHttpsOnly => NetError::Other,
         _ => {
@@ -165,7 +181,7 @@ pub fn counts(h: &dyn Http, base: &Url, project: &str, token: Option<&Secret>) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Read as _, Write as _};
+    use std::io::Write as _;
     use std::net::TcpListener;
     use std::sync::{Arc, Mutex};
     use std::thread;

@@ -26,6 +26,12 @@ ureq = { version = "2", default-features = false, features = ["tls"] }
 # OS credential store: Keychain (macOS), Credential Manager (Windows), Secret Service (Linux). No plaintext fallback.
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 
+# Linux only: tauri-plugin-deep-link 2.6.2 builds `ini::ParseOption { .. }` with a struct literal, which stops compiling once
+# rust-ini adds fields (0.21.2+ did). Found by CI — a macOS lockfile never compiles that Linux-only path. Remove this pin when
+# the plugin is fixed upstream.
+[target.'cfg(target_os = "linux")'.dependencies]
+rust-ini = "=0.21.1"
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]
 # Test-only hook: load the deployment, read what the page rendered, report it to a local port, exit. Never shipped.
