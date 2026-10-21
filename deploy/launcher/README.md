@@ -1,16 +1,20 @@
-# ReDevOps Launcher (P0.1) — native one-click for Windows & macOS
+# ReDevOps Launcher — the desktop shell
 
-A small native app (menu-bar on macOS / system-tray on Windows) that turns "install the agentic
-app" into a double-click for non-technical users. It is a **thin shell around logic that already
-exists and is tested** — it does not reimplement any of it:
+A native window (Tauri 2) around **the same Today-first UI the browser shows**, plus a tray, deep links, window restore and
+OS credential storage. It is a delivery surface, not a control plane — it owns no approvals, notification state, navigation or
+business logic. **Read [DESKTOP.md](DESKTOP.md)** for the architecture, the credential model, health states, what is verified
+and what is deliberately not built yet.
 
 ```
-Launcher (Tauri, this dir)
-  ├─ "Check this device"  → python -m agentic_os.mission.bootstrap   (device posture + default LLM)
-  ├─ "Install / Start"    → docker compose up -d   in the deploy/sidekick-devops bundle
-  ├─ "Stop"               → docker compose down
-  └─ shows the onboarding notices (where each key was saved, LLM setup link)
+Desktop shell (this dir)
+  ├─ connection screen  → which deployment (URL on disk, token in the OS keychain) · unavailable / unauthenticated / incompatible
+  ├─ the deployment's own UI loaded in the window — the very page the browser shows (no copy)
+  ├─ tray + deep links (redevops://open?section=…&item=…) + window restore + single instance
+  └─ local runtime: "Use this computer" starts the frozen sidecar (`redevops-sidecar serve`); Docker is an opt-in advanced tier
 ```
+
+> Older text below this point describes the original P0.1 launcher scaffold; the bootstrap/acceptance material is still accurate,
+> the "Install / Start → docker compose" flow is not how the shell works any more.
 
 The brain is `agentic_os/mission/bootstrap.py`:
 - `bootstrap(outcome, catalog, …)` runs the full vertical — **device posture (P0.2) → default LLM

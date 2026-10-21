@@ -3,74 +3,56 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ReDevOps</title>
-    <style>
-      :root { color-scheme: light dark; font: 15px/1.5 system-ui, sans-serif; }
-      body { margin: 0; padding: 24px; }
-      h1 { font-size: 18px; margin: 0 0 4px; }
-      p.sub { margin: 0 0 20px; opacity: .7; }
-      button { font: inherit; padding: 10px 16px; margin: 0 8px 8px 0; border-radius: 8px;
-               border: 1px solid rgba(128,128,128,.4); background: transparent; cursor: pointer; }
-      button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
-      button.danger { color: #b91c1c; border-color: rgba(185,28,28,.5); }
-      pre { white-space: pre-wrap; background: rgba(128,128,128,.12); padding: 14px;
-            border-radius: 8px; min-height: 80px; margin-top: 16px; }
-      .adv { margin-top: 20px; padding-top: 12px; border-top: 1px solid rgba(128,128,128,.25); }
-      .adv h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; opacity: .6; margin: 0 0 8px; }
-      .adv[hidden] { display: none; }
-    </style>
+    <title>ReDevOps — connection</title>
+    <link rel="stylesheet" href="shell.css" />
   </head>
   <body>
-    <h1>ReDevOps</h1>
-    <p class="sub">Your apps as one governed system — runs natively, no Docker required.</p>
+    <main>
+      <h1>ReDevOps</h1>
+      <p class="sub">Your work, in one place. This window shows your deployment — the same screen the browser shows.</p>
 
-    <button id="check">Check this device</button>
-    <button id="start" class="primary">Start &amp; open</button>
-    <button id="stop">Stop</button>
+      <div id="status" class="status" role="status" aria-live="polite" hidden></div>
 
-    <div class="adv" id="advanced" hidden>
-      <h2>Advanced · local containers (optional)</h2>
-      <p class="sub">Adds the observability stack + the rootless sandbox for untrusted agent code. Not needed for normal use.</p>
-      <button id="docker-up">Enable local containers</button>
-      <button id="docker-down">Disable</button>
-      <button id="docker-purge" class="danger">Remove container data</button>
-    </div>
+      <form id="connect" autocomplete="off" novalidate>
+        <label for="url">Deployment address</label>
+        <input id="url" name="url" type="text" inputmode="url" placeholder="https://your-company.example" spellcheck="false" />
+        <div class="hint">Use <b>https://</b>. Plain <b>http://</b> is only allowed for this computer.</div>
 
-    <pre id="out">Click “Check this device” to begin.</pre>
+        <label for="token">Access token <span class="opt">(optional)</span></label>
+        <input id="token" name="token" type="password" autocomplete="off" spellcheck="false" />
+        <div class="hint" id="token-hint">Stored in your computer's secure credential store — never in a file, and never shown again.</div>
 
-    <script>
-      const invoke = (name, args) => window.__TAURI__.core.invoke(name, args || {});
-      const out = document.getElementById("out");
-      const say = (t) => (out.textContent = t);
-      const run = (name) => async () => {
-        say("Working…");
-        try { say(await invoke(name) || "Done."); }
-        catch (e) { say("Error:\n" + e); }
-      };
+        <label for="label">Name <span class="opt">(optional)</span></label>
+        <input id="label" name="label" type="text" maxlength="60" />
 
-      document.getElementById("check").onclick = run("device_report");
+        <div class="row">
+          <button id="go" class="primary" type="submit">Connect</button>
+          <button id="local" type="button">Use this computer</button>
+          <button id="forget" type="button" class="danger" hidden>Forget this connection</button>
+        </div>
+      </form>
 
-      // Native-first: start the control plane from the frozen sidecar (no Docker), then open it.
-      document.getElementById("start").onclick = async () => {
-        say("Starting the control plane…");
-        try {
-          const url = await invoke("start_native");
-          await invoke("open_ui");
-          say("Running at " + url + " — opened in your browser.");
-        } catch (e) { say("Error:\n" + e); }
-      };
-      document.getElementById("stop").onclick = run("stop_native");
-
-      // Advanced Docker controls appear only when Docker is actually present.
-      document.getElementById("docker-up").onclick = run("advanced_docker_up");
-      document.getElementById("docker-down").onclick = run("advanced_docker_down");
-      document.getElementById("docker-purge").onclick = async () => {
-        if (!confirm("Remove the container tier's data (volumes)? Native data is untouched.")) return;
-        await run("advanced_docker_purge")();
-      };
-      invoke("docker_available").then((ok) => {
-        if (ok) document.getElementById("advanced").hidden = false;
-      }).catch(() => {});
-    </script>
+      <section class="adv">
+        <details>
+          <summary>Advanced</summary>
+          <p class="hint">The local runtime and optional containers. Not needed when you connect to a deployment.</p>
+          <div class="row">
+            <button id="check" type="button">Check this device</button>
+            <button id="stop" type="button">Stop the local runtime</button>
+            <button id="browser" type="button" hidden>Open in my browser</button>
+          </div>
+          <div id="docker" hidden>
+            <p class="hint">Local containers (optional)</p>
+            <div class="row">
+              <button id="docker-up" type="button">Enable</button>
+              <button id="docker-down" type="button">Disable</button>
+              <button id="docker-purge" type="button" class="danger">Remove container data</button>
+            </div>
+          </div>
+          <pre id="out" tabindex="0" aria-label="Output"></pre>
+        </details>
+      </section>
+    </main>
+    <script src="shell.js"></script>
   </body>
 </html>

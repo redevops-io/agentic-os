@@ -8,21 +8,22 @@
     "frontendDist": "../ui"
   },
   "app": {
-    "windows": [
-      {
-        "title": "Agentic Apps",
-        "width": 560,
-        "height": 640,
-        "resizable": true
-      }
-    ],
+    "windows": [],
     "security": {
-      "csp": null
-    }
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    },
+    "withGlobalTauri": true
   },
   "bundle": {
     "active": true,
-    "targets": ["deb", "appimage", "msi", "nsis", "dmg", "app"],
+    "targets": [
+      "deb",
+      "appimage",
+      "msi",
+      "nsis",
+      "dmg",
+      "app"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -31,12 +32,23 @@
       "icons/icon.ico"
     ],
     "category": "DeveloperTool",
-    "shortDescription": "Governed AI control plane — your apps as one system",
+    "shortDescription": "Governed AI control plane \u2014 your apps as one system",
     "longDescription": "ReDevOps runs your business apps as one governed agentic system: connect apps, run missions across them, approve the consequential steps. One suite installer, native, bring your own model (hosted or local). No Docker required.",
-    "externalBin": ["binaries/redevops-sidecar"],
+    "externalBin": [
+      "binaries/redevops-sidecar"
+    ],
     "linux": {
       "deb": {
         "depends": []
+      }
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "redevops"
+        ]
       }
     }
   }
