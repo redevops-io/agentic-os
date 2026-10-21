@@ -5,7 +5,7 @@
 # The tricky bits for a FastAPI/uvicorn app that loads plugins dynamically:
 #   • collect_submodules('agentic_os') — mission/connector modules are imported by name at runtime
 #   • collect_submodules('uvicorn')    — uvicorn picks its event-loop/protocol impls dynamically
-#   • collect_data_files('agentic_os') — ships the vendored Projects UI bundle (agentic_os/projects_ui)
+#   • collect_data_files('agentic_os') — ships the Projects UI bundle fetched at wheel build (agentic_os/projects_ui)
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
 hidden = collect_submodules("agentic_os") + collect_submodules("uvicorn") + [

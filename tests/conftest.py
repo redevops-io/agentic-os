@@ -19,8 +19,8 @@ def _no_live_cores(monkeypatch):
 
 
 # ── hygiene guard: the suite must never rewrite the vendored UI bundle ─────────────────────────────────────────
-# `agentic_os/projects_ui/` is a TRACKED, vendored build artefact (scripts/build_projects_ui.sh regenerates it).
-# Tests only read it. If any test/fixture starts building into it, fail the run loudly instead of silently
+# `agentic_os/projects_ui/` is a git-ignored build artefact fetched from the pinned redevops-projects release
+# (scripts/fetch_projects_ui.py; scripts/build_projects_ui.sh builds one from a local clone). Tests only read it. If any test/fixture starts building into it, fail the run loudly instead of silently
 # dirtying `git status` (CI also runs `git diff --exit-code` + an untracked-files check as a second guard).
 import hashlib  # noqa: E402
 from pathlib import Path  # noqa: E402
@@ -45,8 +45,8 @@ def pytest_sessionstart(session):
 def pytest_sessionfinish(session, exitstatus):
     before = getattr(session.config, "_ui_digest_before", None)
     if before is not None and _tree_digest(_UI_DIR) != before:
-        print("\nHYGIENE FAILURE: the test run modified agentic_os/projects_ui/ (tracked vendored UI). "
-              "Tests must write to tmp dirs; rebuild the UI only via scripts/build_projects_ui.sh.")
+        print("\nHYGIENE FAILURE: the test run modified agentic_os/projects_ui/ (fetched UI bundle). "
+              "Tests must write to tmp dirs; refresh the UI only via scripts/fetch_projects_ui.py.")
         session.exitstatus = 1
 
 
