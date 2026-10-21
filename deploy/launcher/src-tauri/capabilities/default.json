@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "ReDevOps launcher — allow the main window to call the app commands.",
+  "description": "ReDevOps shell — the app's OWN pages (the connection screen) may call the shell commands. The deployment's UI is a remote origin and is deliberately granted nothing: it is the same web app the browser runs and has no IPC.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "deep-link:default", "window-state:default"]
 }

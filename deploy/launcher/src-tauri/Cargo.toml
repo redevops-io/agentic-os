@@ -1,18 +1,37 @@
 [package]
 name = "redevops-launcher"
 version = "0.1.0"
-description = "ReDevOps Launcher — native one-click for the agentic app (Windows/macOS)"
+description = "ReDevOps desktop shell — a native window around the same Today-first UI the browser uses"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 
-# SCAFFOLD: not built in CI. `cargo tauri dev` / `cargo tauri build` on a dev machine.
+# The desktop shell is a DELIVERY SURFACE, not a control plane: it holds a connection (URL + a credential in the OS
+# keychain), shows the deployment's own UI, and adds native affordances (tray, deep links, window restore). It owns no
+# approvals, scheduling, case storage, notification state or agent execution — see ../DESKTOP.md.
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-window-state = "2"
+tauri-plugin-deep-link = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+url = "2"
+zeroize = "1"
+tokio = { version = "1", features = ["time"] }
+# plain blocking HTTP with rustls (no OpenSSL on Windows/Linux); redirects are disabled in code
+ureq = { version = "2", default-features = false, features = ["tls"] }
+# OS credential store: Keychain (macOS), Credential Manager (Windows), Secret Service (Linux). No plaintext fallback.
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+# Test-only hook: load the deployment, read what the page rendered, report it to a local port, exit. Never shipped.
+selftest = []
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
