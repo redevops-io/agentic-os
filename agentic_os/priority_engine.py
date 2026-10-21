@@ -470,8 +470,18 @@ def from_trend_report(report, *, source_app: str = "growth") -> Optional[Interve
         candidate_id=f"growth:{report.entity}")
 
 
-def from_support_thread(thread_state, follow_up, lead_score, *,
-                        source_app: str = "support") -> Optional[InterventionCandidate]:
+def _thread_ref(thread_state) -> str:
+    """A STABLE identity for a thread when the caller gives none: derived from the thread's own state, never
+    from the object's memory address (which changes per request and per process, so the same follow-up would
+    look like a new item every time it was listed)."""
+    import hashlib
+    parts = [getattr(thread_state, a, "") for a in
+             ("last_inbound_at", "last_outbound_at", "status", "follow_ups_sent", "opted_out")]
+    return hashlib.sha256("|".join(map(str, parts)).encode()).hexdigest()[:12]
+
+
+def from_support_thread(thread_state, follow_up, lead_score, *, source_app: str = "support",
+                        thread_ref: str = "") -> Optional[InterventionCandidate]:
     """Support follow-up → an intervention candidate. Respects the FollowUpPolicy: no candidate unless
     a follow-up is actually due (and never for an opted-out/resolved thread — the policy already
     refuses those). Value scales with the lead tier; urgency with thread risk. Sending an outbound
@@ -490,7 +500,7 @@ def from_support_thread(thread_state, follow_up, lead_score, *,
         urgency=urgency, execution_cost=0.1, attention_cost=0.2,
         risk_tier=RiskTier.CONSEQUENTIAL, reversibility=0.3,
         required_capabilities=("support.message.send",),
-        candidate_id=f"support:{id(thread_state):x}:{n}")
+        candidate_id=f"support:{thread_ref or _thread_ref(thread_state)}:{n}")
 
 
 def from_risk_report(report, *, source_app: str = "projects") -> Optional[InterventionCandidate]:
