@@ -148,6 +148,8 @@ class _Case:
     connector_ok: bool = True
     identity_candidates: List[dict] = field(default_factory=list)
     score: float = 0.8
+    topics: List[str] = field(default_factory=list)      # words that make a note about this case (capture matching)
+    surfaced: bool = True                # a dormant case is known work that does NOT need attention yet
     # mutable ledger
     attempt: int = 0
     phase: str = "suggested"             # suggested | sent | failed | outcome | dismissed
@@ -163,6 +165,18 @@ class _Case:
     events: List[dict] = field(default_factory=list)
 
 
+@dataclass
+class _Reminder:
+    """An internal reminder created from a capture ("remind me to call John Tuesday"). No external action."""
+    text: str
+    due: float
+    capture_id: str
+    created: float
+    done: bool = False
+    snoozed_until: float = 0.0
+    events: List[dict] = field(default_factory=list)
+
+
 def _seed_cases(now: float) -> List[_Case]:
     ev = lambda kind, label, ago, ref: {"kind": kind, "label": label, "observed_at": now - ago, "ref": ref}  # noqa: E731
     return [
@@ -173,7 +187,16 @@ def _seed_cases(now: float) -> List[_Case]:
               "", "Hi Taylor — to finish your visa we still need a clear passport scan and the signed visa "
               "form. Could you send them by Friday? Thanks!", 3 * _DAY, "Documents received and validated",
               [ev("message", "WhatsApp: \"I'll send the docs soon\"", 2 * 3600, "wa:msg:7712"),
-               ev("record", "Booking TRIP-88: visa documents 0 of 2 received", 600, "booking:TRIP-88")], score=0.95),
+               ev("record", "Booking TRIP-88: visa documents 0 of 2 received", 600, "booking:TRIP-88")], score=0.95,
+              topics=["passport", "visa", "documents", "docs", "form", "scan"]),
+        # Known work that needs nothing yet. It reaches Today only when evidence arrives (e.g. a capture).
+        _Case("travel-lee-lisbon-visa", "travel", "Visa documents missing — Jordan Lee, Lisbon trip",
+              "Departure in 12 days; the passport scan has not been received.", now + 12 * _DAY, "You", "whatsapp",
+              [{"id": "jordan", "label": "Jordan Lee", "address": "+1 555 0177", "consent": True}],
+              "", "Hi Jordan — for your Lisbon visa we still need a clear passport scan. Could you send it this "
+              "week? Thanks!", 3 * _DAY, "Documents received and validated",
+              [ev("record", "Booking TRIP-91: visa documents 1 of 2 received", 3 * _DAY, "booking:TRIP-91")],
+              score=0.85, topics=["passport", "visa", "documents", "docs", "form", "scan", "lisbon"], surfaced=False),
         _Case("clinic-unconfirmed", "clinic", "3 patients haven't confirmed tomorrow's appointment",
               "Confirmation is due by 6pm; unconfirmed slots can't be refilled after that.",
               now + 0.4 * _DAY, "Front desk", "sms",
@@ -183,7 +206,8 @@ def _seed_cases(now: float) -> List[_Case]:
                 "why_skipped": "No reminder consent on file"}],
               "", "Reminder: you have an appointment tomorrow. Reply YES to confirm or call us to reschedule.",
               2 * 3600, "Confirmation reply observed",
-              [ev("record", "Schedule: 3 of 14 appointments unconfirmed", 900, "sched:2026-10-22")], score=0.9),
+              [ev("record", "Schedule: 3 of 14 appointments unconfirmed", 900, "sched:2026-10-22")], score=0.9,
+              topics=["appointment", "confirm", "confirmed", "reminder"]),
         _Case("quote-acme-followup", "sales", "Quote hasn't been answered — Acme",
               "Quote #Q-310 was sent 6 days ago with no reply; buyers usually decide within a week.",
               None, "You", "email",
@@ -192,14 +216,16 @@ def _seed_cases(now: float) -> List[_Case]:
               "Hi Dana — checking in on quote Q-310. Happy to adjust scope or walk through it on a call.",
               4 * _DAY, "Reply or order observed",
               [ev("record", "Quote Q-310 sent, no reply (6 days)", 6 * _DAY, "quote:Q-310"),
-               ev("policy", "Follow-up allowed: no discount change", 60, "policy:followup")], score=0.7),
+               ev("policy", "Follow-up allowed: no discount change", 60, "policy:followup")], score=0.7,
+              topics=["quote", "q-310", "proposal", "pricing"]),
         _Case("invoice-1042-reminder", "receivables", "Invoice #1042 is past due — customer hasn't replied",
               "Net-30 passed 5 days ago. The WhatsApp connection expired, so a reminder can't be sent yet.",
               None, "You", "whatsapp",
               [{"id": "c1", "label": "Kestrel Ltd accounts", "address": "+44 20 5550 1042", "consent": True}],
               "", "Hi — a friendly reminder that invoice #1042 is now past due. Could you let us know the "
               "payment date?", 2 * _DAY, "Payment reconciled",
-              [ev("record", "Invoice #1042 overdue by 5 days", 300, "invoice:1042")], connector_ok=False, score=0.6),
+              [ev("record", "Invoice #1042 overdue by 5 days", 300, "invoice:1042")], connector_ok=False, score=0.6,
+              topics=["invoice", "1042", "payment", "overdue"]),
         _Case("invoice-1050-ambiguous", "receivables", "Reminder for Sam Rivera — two customers share this name",
               "Choose which Sam Rivera before anything is sent.", None, "You", "email",
               [{"id": "sam", "label": "Sam Rivera", "address": "", "consent": True}],
@@ -225,6 +251,8 @@ class Today:
         self._bridge = ExternalApprovalBridge()
         self._operator = ExternalAgentOperator(adapter or FakeExternalAgentAdapter())
         self._cases: Dict[str, _Case] = {}
+        self._reminders: Dict[str, _Reminder] = {}
+        self._intake: Any = None
         # sample_cases=False is the FAIL-CLOSED mode for a real deployment: no sample work, nothing executable —
         # the feed is only the read-only projection of real signals until a governed case source + authenticated
         # tenant/actor binding exist. (The only adapter here is the in-repo fake; it can never reach a provider.)
@@ -239,6 +267,8 @@ class Today:
 
     def _case(self, item_id: str) -> _Case:
         c = self._cases.get(item_id)
+        if c is not None and not c.surfaced:
+            c = None                                  # dormant work is not an item until something surfaces it
         if c is None:
             if not self.sample_cases:
                 raise TodayError(501, "unsupported",
@@ -347,7 +377,8 @@ class Today:
             now = self.clock()
             items = project_priorities(priorities, tenant=self.tenant, project=self.project, now=now)
             items += project_attention(attention, tenant=self.tenant, project=self.project, now=now)
-            items += [self._view(c, i, now) for i, c in self._cases.items()]
+            items += [self._view(c, i, now) for i, c in self._cases.items() if c.surfaced]
+            items += [self._reminder_view(r, i, now) for i, r in self._reminders.items()]
             merged = merge_items(items)
             counts = {s: 0 for s in STATES}
             for it in merged:
@@ -366,6 +397,13 @@ class Today:
     def item(self, item_id: str, *, targets: Optional[Sequence[str]] = None,
              identity_id: Optional[str] = None) -> dict:
         with self._lock:
+            r = self._reminders.get(item_id)
+            if r is not None:
+                now = self.clock()
+                return {**self._reminder_view(r, item_id, now), "why": "You asked to be reminded.",
+                        "evidence": [{"kind": "capture", "label": f"Your note: \"{r.text}\"", "observed_at": r.created,
+                                      "ref": "capture:" + r.capture_id}], "action": None, "history": list(r.events),
+                        "receipt": None}
             c = self._case(item_id)
             now = self.clock()
             view = self._view(c, item_id, now)
@@ -403,6 +441,8 @@ class Today:
     def approve(self, item_id: str, *, expected_digest: str, targets: Optional[Sequence[str]] = None,
                 identity_id: Optional[str] = None, approver: str = "user:operator") -> dict:
         with self._lock:
+            if item_id in self._reminders:
+                raise TodayError(409, "not_executable", "a reminder has nothing to send")
             c = self._case(item_id)
             now = self.clock()
             if c.phase in ("sent", "outcome"):        # idempotent: a retry/double-click never re-sends
@@ -453,11 +493,72 @@ class Today:
                 self._log(c, "failed", c.failure)
             return {**self._view(c, item_id, self.clock()), "replayed": False, "receipt": receipt}
 
+    @property
+    def intake(self):
+        from agentic_os.capture import Intake
+        if self._intake is None:
+            self._intake = Intake(self, clock=self.clock)
+        return self._intake
+
+    # ── intake hooks (agentic_os.capture routes into these; Today stays a projection) ──
+    def known_cases(self) -> List[tuple]:
+        """(item_id, case) for every case, surfaced or dormant — what a note can be matched against."""
+        with self._lock:
+            return list(self._cases.items())
+
+    def attach_evidence(self, item_id: str, *, capture_id: str, text: str, observed_at: float) -> dict:
+        """Link a capture to a case as evidence and make the case visible. Never sends or approves anything."""
+        with self._lock:
+            c = self._cases.get(item_id)
+            if c is None:
+                raise TodayError(404, "not_found", "no such case")
+            ref = "capture:" + capture_id
+            if not any(e["ref"] == ref for e in c.evidence):
+                c.evidence.append({"kind": "capture", "label": f"Your note: \"{text}\"", "observed_at": observed_at, "ref": ref})
+            if not c.surfaced:
+                c.surfaced = True
+                c.reason = f"You noted this is outstanding. {c.reason}"
+                self._log(c, "surfaced", "Brought into Today by your note")
+            self._log(c, "evidence", "Added your note as evidence")
+            return {"item_id": item_id, "title": c.title, "state": self._state(c, self.clock())[0]}
+
+    def add_reminder(self, *, capture_id: str, text: str, due: float) -> dict:
+        with self._lock:
+            now = self.clock()
+            rid = stable_id(self.tenant, self.project, "reminder:" + capture_id)
+            if rid not in self._reminders:
+                r = _Reminder(text=text, due=due, capture_id=capture_id, created=now)
+                r.events.append({"at": now, "kind": "created", "text": "Reminder set from your note"})
+                self._reminders[rid] = r
+            return {"item_id": rid, "due": due}
+
+    def _reminder_view(self, r: _Reminder, item_id: str, now: float) -> dict:
+        if r.done:
+            state, reason = "dismissed", "Done."
+        elif r.snoozed_until > now:
+            state, reason = "scheduled", "Snoozed."
+        elif now < r.due:
+            state, reason = "scheduled", f"Reminder for {time.strftime('%a %d %b %H:%M', time.gmtime(r.due))} UTC."
+        else:
+            state, reason = "needs_action", "Your reminder is due."
+        it = _item(tenant=self.tenant, project=self.project, key="reminder:" + r.capture_id, dedupe="reminder" + _norm(r.text),
+                   title=f"Reminder: {r.text}", reason=reason, state=state, score=0.6, label="Mark done",
+                   executable=False, source_refs=["capture:" + r.capture_id], confidence=None, now=now,
+                   kind="reminder", deadline=r.due, owner="You", simulated=True, observed_at=r.created,
+                   evidence_refs=["capture:" + r.capture_id])
+        it["id"] = item_id
+        it["lifecycle"] = _blank_lifecycle(suggested=True)
+        return it
+
     # ── triage ──────────────────────────────────────────────────────────────────────
     def snooze(self, item_id: str, *, seconds: float) -> dict:
         if not (60 <= seconds <= 30 * _DAY):
             raise TodayError(422, "bad_snooze", "snooze must be between 1 minute and 30 days")
         with self._lock:
+            r = self._reminders.get(item_id)
+            if r is not None:
+                r.snoozed_until = self.clock() + seconds
+                return self.item(item_id)
             c = self._case(item_id)
             c.snoozed_until = self.clock() + seconds
             self._log(c, "snoozed", f"Snoozed for {int(seconds // 60)} minutes")
@@ -465,6 +566,11 @@ class Today:
 
     def dismiss(self, item_id: str) -> dict:
         with self._lock:
+            r = self._reminders.get(item_id)
+            if r is not None:
+                r.done = True
+                r.events.append({"at": self.clock(), "kind": "done", "text": "Marked done"})
+                return self.item(item_id)
             c = self._case(item_id)
             if c.phase in ("sent", "outcome"):
                 raise TodayError(409, "already_sent", "a sent item can't be dismissed; wait for the outcome")
