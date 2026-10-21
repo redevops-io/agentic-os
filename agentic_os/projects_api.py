@@ -404,6 +404,24 @@ class SampleProjectionProvider:
     def today_simulate_outcome(self, pid: str, item_id: str, session: str = "") -> dict:
         return self._today(pid, session).observe_outcome(item_id)
 
+    def _intake(self, pid: str, session: str):
+        from agentic_os.capture import CaptureError
+        if not self.today_sample_cases:                       # fail closed: durable intake needs tenant+actor binding
+            raise CaptureError(501, "unsupported", "capture is not enabled for this deployment")
+        return self._today(pid, session).intake
+
+    def capture(self, pid: str, session: str = "", **kw) -> dict:
+        return self._intake(pid, session).capture(**kw)
+
+    def capture_list(self, pid: str, session: str = "", status=None) -> list:
+        return self._intake(pid, session).list(status=status)
+
+    def capture_resolve(self, pid: str, capture_id: str, session: str = "", case_id: str = "") -> dict:
+        return self._intake(pid, session).resolve(capture_id, case_id)
+
+    def capture_archive(self, pid: str, capture_id: str, session: str = "") -> dict:
+        return self._intake(pid, session).archive(capture_id)
+
     def social_intelligence(self, _pid: str) -> dict:
         """Phase 9 Social Intelligence card over the offline replay corpus (no live social provider)."""
         from agentic_os.agent_gateway.external.sample_projections import social_intelligence_view
@@ -1173,6 +1191,17 @@ class _TodayApproveReq(BaseModel):
     identity_id: Optional[str] = None
 
 
+class _CaptureReq(BaseModel):
+    content: str
+    source: str = "manual"
+    observed_at: Optional[float] = None
+    attachments: List[Any] = []
+
+
+class _CaptureResolveReq(BaseModel):
+    case_id: str
+
+
 class _TodaySnoozeReq(BaseModel):
     seconds: float
 
@@ -1483,6 +1512,44 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
             return fn(*args, **kw)
         except TodayError as e:
             raise HTTPException(e.status, e.as_dict())
+
+    def _capture_call(name: str, *args, **kw):
+        from agentic_os.capture import CaptureError
+        fn = getattr(prov, name, None)
+        if fn is None:
+            raise HTTPException(501, {"error": "unsupported", "detail": "this deployment does not provide capture"})
+        try:
+            return fn(*args, **kw)
+        except CaptureError as e:
+            raise HTTPException(e.status, e.as_dict())
+        except Exception as e:                      # a Today refusal while linking (e.g. case vanished)
+            from agentic_os.today import TodayError
+            if isinstance(e, TodayError):
+                raise HTTPException(e.status, e.as_dict())
+            raise
+
+    @app.post("/api/projects/{project_id}/capture")
+    def _capture(project_id: str, req: _CaptureReq, request: Request,
+                 x_demo_session: Optional[str] = Header(default=None)) -> dict:
+        return _capture_call("capture", project_id, session=_today_session(request, x_demo_session),
+                             content=req.content, source=req.source, observed_at=req.observed_at,
+                             attachments=req.attachments)
+
+    @app.get("/api/projects/{project_id}/capture")
+    def _capture_list(project_id: str, request: Request, status: Optional[str] = None,
+                      x_demo_session: Optional[str] = Header(default=None)) -> list:
+        return _capture_call("capture_list", project_id, session=_today_session(request, x_demo_session), status=status)
+
+    @app.post("/api/projects/{project_id}/capture/{capture_id}/resolve")
+    def _capture_resolve(project_id: str, capture_id: str, req: _CaptureResolveReq, request: Request,
+                         x_demo_session: Optional[str] = Header(default=None)) -> dict:
+        return _capture_call("capture_resolve", project_id, capture_id, session=_today_session(request, x_demo_session),
+                             case_id=req.case_id)
+
+    @app.post("/api/projects/{project_id}/capture/{capture_id}/archive")
+    def _capture_archive(project_id: str, capture_id: str, request: Request,
+                         x_demo_session: Optional[str] = Header(default=None)) -> dict:
+        return _capture_call("capture_archive", project_id, capture_id, session=_today_session(request, x_demo_session))
 
     @app.get("/api/projects/{project_id}/today")
     def _today(project_id: str, request: Request, x_demo_session: Optional[str] = Header(default=None)) -> dict:
