@@ -43,7 +43,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # The agentic-os KERNEL is pinned HERE (single source, overridable) rather than in requirements.txt, so
 # the image tracks a known kernel tag instead of a stale commit. Override at build time, e.g.
 #   docker build --build-arg KERNEL_REF=main .   (or a newer release tag)
-ARG KERNEL_REF=v0.3.40
+ARG KERNEL_REF=v0.3.41
 RUN pip install --no-cache-dir "agentic-os @ https://github.com/redevops-io/agentic-os/archive/${KERNEL_REF}.tar.gz"
 
 # Copy ALL python modules into an importable PACKAGE. app.py uses package-relative imports
