@@ -257,3 +257,36 @@ def test_mounted_openapi_document_builds():
     mc = TestClient(mounted_app("/projects"))
     assert mc.get("/projects/openapi.json").status_code == 200
     assert mc.get("/projects/docs").status_code == 200
+
+
+def test_deployment_inspection_endpoint_serves_the_ui_contract_offline(monkeypatch):
+    monkeypatch.delenv("PROJECTS_INSPECTION_TARGET", raising=False)
+    r = client.get("/api/projects/customer-ops/deployment-inspection")
+    assert r.status_code == 200
+    d = r.json()
+    assert {"mission", "target", "connected", "boundary", "kpis", "findings", "findings_by_severity",
+            "finding_count", "proposed_actions", "governed_action"} <= set(d)
+    assert d["boundary"]["inspection"].startswith("sample")          # never claims a live read
+    assert d["finding_count"] == len(d["findings"]) > 0
+    assert sum(len(v) for v in d["findings_by_severity"].values()) == d["finding_count"]
+    ga = d["governed_action"]
+    assert ga["approval"]["state"] == "approved" and ga["verification"] == "verified"
+    assert "token" not in str(d).lower() and "cookie" not in str(d).lower()
+
+
+def test_social_intelligence_endpoint_serves_the_ui_contract():
+    d = client.get("/api/projects/customer-ops/social-intelligence").json()
+    assert {"mission", "sources", "observations", "opportunities", "market_signals",
+            "proposed_actions", "opportunity_cards", "data_source"} <= set(d)
+    st = {s["source"]: s["status"] for s in d["sources"]}
+    assert st["Reddit"].startswith("AVAILABLE") and st["Meta/Muse"].startswith("UNAVAILABLE")
+    assert d["opportunities"]["unknown_commercial_intent"] >= 1       # UNKNOWN survives to the screen
+
+
+def test_new_gateway_cards_degrade_to_honest_empty_state_without_provider_support():
+    class Bare(SampleProjectionProvider):
+        deployment_inspection = None
+        social_intelligence = None
+    c = TestClient(create_app(Bare()))
+    assert c.get("/api/projects/x/deployment-inspection").json()["connected"] is False
+    assert c.get("/api/projects/x/social-intelligence").json()["observations"] == 0
