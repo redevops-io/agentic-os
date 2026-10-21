@@ -448,7 +448,7 @@ class Today:
             if c.phase in ("sent", "outcome"):        # idempotent: a retry/double-click never re-sends
                 if expected_digest != c.sent_digest:
                     raise TodayError(409, "stale_approval", "this item was already acted on with different content")
-                return {**self._view(c, item_id, now), "replayed": True, "receipt": c.receipt}
+                return {**self.item(item_id), "replayed": True, "receipt": c.receipt}
             if c.phase == "dismissed":
                 raise TodayError(409, "dismissed", "this item was dismissed")
             picked, _ = self._select(c, targets)
@@ -491,7 +491,7 @@ class Today:
                 c.failure = ("Not sent — the connection needs attention." if status == "FAILED"
                              else "Not confirmed sent — check before retrying to avoid a duplicate.")
                 self._log(c, "failed", c.failure)
-            return {**self._view(c, item_id, self.clock()), "replayed": False, "receipt": receipt}
+            return {**self.item(item_id), "replayed": False, "receipt": receipt}
 
     @property
     def intake(self):
@@ -562,7 +562,7 @@ class Today:
             c = self._case(item_id)
             c.snoozed_until = self.clock() + seconds
             self._log(c, "snoozed", f"Snoozed for {int(seconds // 60)} minutes")
-            return self._view(c, item_id, self.clock())
+            return self.item(item_id)
 
     def dismiss(self, item_id: str) -> dict:
         with self._lock:
@@ -576,7 +576,7 @@ class Today:
                 raise TodayError(409, "already_sent", "a sent item can't be dismissed; wait for the outcome")
             c.phase = "dismissed"
             self._log(c, "dismissed", "Dismissed")
-            return self._view(c, item_id, self.clock())
+            return self.item(item_id)
 
     def observe_outcome(self, item_id: str) -> dict:
         """SIMULATED business outcome (e.g. the customer replied). Only a sent item can have one — a send
@@ -587,7 +587,7 @@ class Today:
                 raise TodayError(409, "nothing_sent", "no outcome can be observed before a verified send")
             c.phase = "outcome"
             self._log(c, "outcome", f"{c.outcome_label} (simulated)")
-            return self._view(c, item_id, self.clock())
+            return self.item(item_id)
 
     def repair_connection(self, item_id: str) -> None:
         """Python-only (tests / operator tooling): the connector was re-authorised."""

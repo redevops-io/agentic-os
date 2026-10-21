@@ -278,3 +278,39 @@ def test_non_sample_provider_serves_no_sample_cases_and_no_write_actions():
 
 def test_sample_provider_is_unchanged_by_the_failclosed_mode(http):
     assert http.get("/api/projects/customer-ops/today").json()["simulated_actions"] is True
+
+
+# ── contract: every action answers with the SAME full detail the inspect call gives ──────────────────────────────
+# (the UI renders an action's response directly; a bare view crashed the whole page after the first approval)
+DETAIL_KEYS = {"id", "state", "lifecycle", "user_title", "why", "evidence", "action", "history", "receipt", "next_action"}
+
+
+def test_every_action_returns_the_full_detail_shape(today):
+    for key in ("travel-taylor-visa",):
+        iid = _id(today, key)
+        d = today.item(iid)
+        out = today.approve(iid, expected_digest=d["action"]["payload_digest"])
+        assert DETAIL_KEYS <= set(out), set(DETAIL_KEYS) - set(out)
+        assert out["action"]["nothing_sent_yet"] is False and out["history"] and out["evidence"]
+        again = today.approve(iid, expected_digest=d["action"]["payload_digest"])
+        assert DETAIL_KEYS <= set(again) and again["replayed"] is True
+        assert DETAIL_KEYS <= set(today.observe_outcome(iid))
+    q = _id(today, "quote-acme-followup")
+    assert DETAIL_KEYS <= set(today.snooze(q, seconds=3600))
+    assert DETAIL_KEYS <= set(today.dismiss(q))
+    inv = _id(today, "invoice-1042-reminder")
+    failed = today.approve(inv, expected_digest=today.item(inv)["action"]["payload_digest"])
+    assert DETAIL_KEYS <= set(failed) and failed["state"] == "failed"
+
+
+def test_http_action_responses_are_full_details(http):
+    base = "/api/projects/customer-ops"
+    items = {i["user_title"]: i["id"] for i in http.get(f"{base}/today").json()["items"] if i["kind"] == "case"}
+    visa = items["Visa documents missing — Taylor trip"]
+    dg = http.get(f"{base}/today/{visa}").json()["action"]["payload_digest"]
+    r = http.post(f"{base}/today/{visa}/approve", json={"payload_digest": dg}).json()
+    assert DETAIL_KEYS <= set(r)
+    quote = items["Quote hasn't been answered — Acme"]
+    assert DETAIL_KEYS <= set(http.post(f"{base}/today/{quote}/snooze", json={"seconds": 3600}).json())
+    assert DETAIL_KEYS <= set(http.post(f"{base}/today/{quote}/dismiss").json())
+    assert DETAIL_KEYS <= set(http.post(f"{base}/today/{visa}/simulate-outcome").json())
