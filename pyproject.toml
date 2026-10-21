@@ -76,9 +76,12 @@ agentic-os-projects = "agentic_os.projects_api:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.hooks.custom]
+# fetches the pinned Projects UI (packaging/projects_ui.lock.json) from a redevops-projects release
+
 [tool.hatch.build.targets.wheel]
 packages = ["agentic_os"]
-# The vendored Projects UI bundle is data, not Python — force-include it so the wheel ships it
+# The Projects UI bundle (fetched/vendored into agentic_os/projects_ui) is data, not Python — force-include it so the wheel ships it
 # regardless of VCS-ignore rules (so `pip install` serves the UI out of the box).
 artifacts = ["agentic_os/projects_ui/**"]
 
