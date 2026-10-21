@@ -18,7 +18,7 @@ mod secret;
 use config::Connection;
 use health::{Action, Monitor};
 use probe::{Http, State as Health, Status, UreqHttp};
-use secret::{KeyringStore, Secret, SecretStore};
+use secret::{KeyringStore, Secret, SecretStore, TokenCache};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -36,6 +36,8 @@ struct Shell {
     /// the configured deployment — the only http(s) origin the window may show
     allowed: RwLock<Option<Url>>,
     store: Arc<dyn SecretStore>,
+    /// the token is read from the OS keychain once and held here — see `secret::TokenCache`
+    tokens: TokenCache,
     http: Arc<dyn Http>,
     monitor: Mutex<Monitor>,
     last: Mutex<Status>,
@@ -105,7 +107,7 @@ fn account(u: &Url) -> String {
 fn load_connection(sh: &Shell) -> Option<(Url, Option<Secret>)> {
     let c = config::load(&sh.conn_path)?;
     let url = Url::parse(&c.url).ok()?;
-    let token = sh.store.get(&account(&url)).ok().flatten();
+    let token = sh.tokens.get(&account(&url), sh.store.as_ref());
     Some((url, token))
 }
 
@@ -198,7 +200,7 @@ struct ConnectionInfo {
 fn connection_get(sh: Sh) -> ConnectionInfo {
     let conn = config::load(&sh.conn_path);
     let has_credential = conn.as_ref().and_then(|c| Url::parse(&c.url).ok())
-        .map(|u| sh.store.get(&account(&u)).ok().flatten().is_some()).unwrap_or(false);
+        .map(|u| sh.tokens.get(&account(&u), sh.store.as_ref()).is_some()).unwrap_or(false);
     ConnectionInfo {
         url: conn.as_ref().map(|c| c.url.clone()),
         label: conn.map(|c| c.label).unwrap_or_default(),
@@ -217,6 +219,7 @@ async fn connection_save(app: AppHandle, sh: Sh<'_>, url: String, token: Option<
     if let Some(t) = token.as_deref().filter(|t| !t.trim().is_empty()) {
         let secret = Secret::new(t.trim()).map_err(|e| e.to_string())?;
         sh.store.set(&account, &secret).map_err(|e| e.to_string())?;     // refuses on a machine with no credential store
+        sh.tokens.put(&account, Some(&secret));                           // we just wrote it — no need to read it back
     }
     let conn = Connection { url: parsed.to_string(), label: label.unwrap_or_default().chars().take(60).collect() };
     config::save(&sh.conn_path, &conn).map_err(|_| "Couldn't save the connection.".to_string())?;
@@ -236,6 +239,7 @@ async fn connection_save(app: AppHandle, sh: Sh<'_>, url: String, token: Option<
 fn connection_forget(app: AppHandle, sh: Sh) -> Result<(), String> {
     if let Some(u) = config::load(&sh.conn_path).and_then(|c| Url::parse(&c.url).ok()) {
         sh.store.delete(&account(&u)).map_err(|e| e.to_string())?;
+        sh.tokens.clear();
     }
     config::forget(&sh.conn_path);
     *sh.allowed.write().unwrap() = None;
@@ -481,6 +485,7 @@ fn main() {
                 home: RwLock::new(None),
                 allowed: RwLock::new(None),
                 store: Arc::new(KeyringStore),
+                tokens: TokenCache::new(),
                 http: Arc::new(UreqHttp),
                 monitor: Mutex::new(Monitor::new()),
                 last: Mutex::new(unknown()),

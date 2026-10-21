@@ -59,6 +59,53 @@ impl std::fmt::Display for StoreError {
     }
 }
 
+impl Secret {
+    /// An independent copy (each copy is wiped on drop). Used only by the in-memory cache below.
+    fn duplicate(&self) -> Secret {
+        Secret(self.0.clone())
+    }
+}
+
+/// The token is read from the OS credential store ONCE and then held in memory (wiped on drop).
+///
+/// Why: every read of the keychain is an access the OS may ask the user to approve (always, for a binary it does not
+/// fully trust — an unsigned dev build, or an update signed by a different identity). The health monitor runs every 10
+/// seconds, so reading the store on each probe would turn one prompt into one every few seconds. Reading once per
+/// launch (and once after the user changes the connection) bounds it to at most one.
+/// A failed or denied read is cached too (as "no token"): the user then sees "didn't accept your sign-in" and can re-save,
+/// instead of being prompted again on the next tick.
+pub struct TokenCache {
+    slot: std::sync::Mutex<Option<(String, Option<Secret>)>>,
+}
+
+impl TokenCache {
+    pub fn new() -> Self {
+        TokenCache { slot: std::sync::Mutex::new(None) }
+    }
+
+    pub fn get(&self, account: &str, store: &dyn SecretStore) -> Option<Secret> {
+        let mut g = self.slot.lock().unwrap();
+        if let Some((a, t)) = g.as_ref() {
+            if a == account {
+                return t.as_ref().map(Secret::duplicate);
+            }
+        }
+        let loaded = store.get(account).ok().flatten();           // the ONE keychain read
+        *g = Some((account.to_string(), loaded.as_ref().map(Secret::duplicate)));
+        loaded
+    }
+
+    /// After a save: remember exactly what was stored, so the next probe does not touch the store at all.
+    pub fn put(&self, account: &str, token: Option<&Secret>) {
+        *self.slot.lock().unwrap() = Some((account.to_string(), token.map(Secret::duplicate)));
+    }
+
+    /// Forget (connection removed or changed): the next `get` will read the store again.
+    pub fn clear(&self) {
+        *self.slot.lock().unwrap() = None;
+    }
+}
+
 pub trait SecretStore: Send + Sync {
     fn get(&self, account: &str) -> Result<Option<Secret>, StoreError>;
     fn set(&self, account: &str, secret: &Secret) -> Result<(), StoreError>;
@@ -77,6 +124,8 @@ impl KeyringStore {
 }
 impl SecretStore for KeyringStore {
     fn get(&self, account: &str) -> Result<Option<Secret>, StoreError> {
+        #[cfg(feature = "selftest")]
+        eprintln!("[selftest] keychain read");
         match Self::entry(account)?.get_password() {
             Ok(p) => Secret::new(p).map(Some),
             Err(keyring::Error::NoEntry) => Ok(None),
@@ -166,6 +215,79 @@ mod tests {
         st.delete("conn:a").unwrap();
         assert!(st.get("conn:a").unwrap().is_none());
         st.delete("conn:a").unwrap();                                // deleting nothing is fine
+    }
+
+    /// Counts how many times the (real) store is asked — each one is a potential OS permission prompt.
+    struct Counting {
+        inner: MemoryStore,
+        gets: std::sync::atomic::AtomicUsize,
+        deny: bool,
+    }
+    impl Counting {
+        fn new(deny: bool) -> Self { Counting { inner: MemoryStore::new(), gets: 0.into(), deny } }
+        fn reads(&self) -> usize { self.gets.load(std::sync::atomic::Ordering::SeqCst) }
+    }
+    impl SecretStore for Counting {
+        fn get(&self, a: &str) -> Result<Option<Secret>, StoreError> {
+            self.gets.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.deny { return Err(StoreError::Unavailable); }       // the user clicked "Deny" in the OS prompt
+            self.inner.get(a)
+        }
+        fn set(&self, a: &str, s: &Secret) -> Result<(), StoreError> { self.inner.set(a, s) }
+        fn delete(&self, a: &str) -> Result<(), StoreError> { self.inner.delete(a) }
+        fn available(&self) -> bool { true }
+    }
+
+    #[test]
+    fn the_keychain_is_read_once_not_on_every_probe() {
+        let st = Counting::new(false);
+        st.inner.set("conn:a", &Secret::new("tok").unwrap()).unwrap();
+        let cache = TokenCache::new();
+        for _ in 0..500 {                                       // ~80 minutes of 10-second probes (+ tray refreshes)
+            assert_eq!(cache.get("conn:a", &st).unwrap().expose(), "tok");
+        }
+        assert_eq!(st.reads(), 1, "every extra read is another chance of an OS permission prompt");
+    }
+
+    #[test]
+    fn a_denied_or_missing_token_is_not_asked_for_again() {
+        let denied = Counting::new(true);
+        let cache = TokenCache::new();
+        for _ in 0..50 { assert!(cache.get("conn:a", &denied).is_none()); }
+        assert_eq!(denied.reads(), 1, "a Deny must not turn into a prompt every tick");
+        let empty = Counting::new(false);
+        let cache = TokenCache::new();
+        for _ in 0..50 { assert!(cache.get("conn:a", &empty).is_none()); }
+        assert_eq!(empty.reads(), 1);
+    }
+
+    #[test]
+    fn saving_primes_the_cache_and_changing_the_connection_reads_again() {
+        let st = Counting::new(false);
+        let cache = TokenCache::new();
+        let tok = Secret::new("fresh").unwrap();
+        st.set("conn:a", &tok).unwrap();
+        cache.put("conn:a", Some(&tok));                        // just saved
+        assert_eq!(cache.get("conn:a", &st).unwrap().expose(), "fresh");
+        assert_eq!(st.reads(), 0, "right after a save the token is already known — no store read at all");
+        // a different deployment is a different account: read it (once)
+        st.set("conn:b", &Secret::new("other").unwrap()).unwrap();
+        assert_eq!(cache.get("conn:b", &st).unwrap().expose(), "other");
+        assert_eq!(cache.get("conn:b", &st).unwrap().expose(), "other");
+        assert_eq!(st.reads(), 1);
+        // forgetting clears it: the next lookup goes back to the store
+        cache.clear();
+        assert_eq!(cache.get("conn:b", &st).unwrap().expose(), "other");
+        assert_eq!(st.reads(), 2);
+    }
+
+    #[test]
+    fn cached_copies_never_print() {
+        let st = Counting::new(false);
+        st.inner.set("conn:a", &Secret::new("SHOULD-NOT-PRINT").unwrap()).unwrap();
+        let cache = TokenCache::new();
+        let got = cache.get("conn:a", &st);
+        assert!(!format!("{got:?}").contains("SHOULD-NOT"));
     }
 
     #[test]
