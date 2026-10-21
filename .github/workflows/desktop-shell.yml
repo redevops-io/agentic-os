@@ -51,11 +51,11 @@ jobs:
           ext=""; [ "$RUNNER_OS" = "Windows" ] && ext=".exe"
           printf 'stub' > "binaries/redevops-sidecar-${triple}${ext}"
 
-      - name: Unit + local-socket tests
+      - name: "Unit and local-socket tests"
         run: cargo test --locked
 
-      - name: Build (release-shaped: no test hook)
+      - name: "Build (release-shaped, no test hook)"
         run: cargo build --locked
 
-      - name: Build (with the selftest hook, to keep that configuration compiling)
+      - name: "Build with the selftest hook (keeps that configuration compiling)"
         run: cargo build --locked --features selftest
