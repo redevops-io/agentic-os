@@ -356,6 +356,18 @@ class SampleProjectionProvider:
              "available_actions": ["Review"], "priority": 60, **_prov("discovery", "finding:918")},
         ]
 
+    def deployment_inspection(self, _pid: str) -> dict:
+        """Phase 9 Deployment Inspection card. Offline sample snapshot by default; ``$PROJECTS_INSPECTION_TARGET``
+        (an operator opt-in, never request-supplied) switches to a live read-only inspection of that deployment."""
+        import os
+        from agentic_os.agent_gateway.external.sample_projections import deployment_inspection_view
+        return deployment_inspection_view(os.environ.get("PROJECTS_INSPECTION_TARGET", "").strip())
+
+    def social_intelligence(self, _pid: str) -> dict:
+        """Phase 9 Social Intelligence card over the offline replay corpus (no live social provider)."""
+        from agentic_os.agent_gateway.external.sample_projections import social_intelligence_view
+        return social_intelligence_view()
+
     def priorities(self, _pid: str) -> dict:
         """The Priority Engine's cross-app 'what needs me?' surface (plan §2), driven by the SHIPPED
         detectors over this sample's example scenario. Growth trend scoring, Support follow-up, the
@@ -1403,6 +1415,28 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
         if fn is None:
             return {"summary": "Nothing needs you right now.", "surfaced": [], "deferred": [],
                     "handled_automatically": 0, "abstained": 0, "basis": "unavailable"}
+        return fn(project_id)
+
+    @app.get("/api/projects/{project_id}/deployment-inspection")
+    def _deployment_inspection(project_id: str) -> dict:
+        # Phase 9 card. Optional on the provider — absent means the honest "not connected" state, not an error.
+        fn = getattr(prov, "deployment_inspection", None)
+        if fn is None:
+            return {"mission": "Deployment Inspection", "target": "", "connected": False,
+                    "boundary": {"inspection": "unavailable", "remediation": "unavailable"}, "kpis": [],
+                    "findings": [], "findings_by_severity": {}, "finding_count": 0,
+                    "proposed_actions": [], "governed_action": None}
+        return fn(project_id)
+
+    @app.get("/api/projects/{project_id}/social-intelligence")
+    def _social_intelligence(project_id: str) -> dict:
+        fn = getattr(prov, "social_intelligence", None)
+        if fn is None:
+            return {"mission": "Social Intelligence", "sources": [], "observations": 0,
+                    "opportunities": {"total": 0, "problem_signals": 0, "solution_seeking": 0,
+                                      "commercial_intent_evidence": 0, "unknown_commercial_intent": 0},
+                    "market_signals": 0, "proposed_actions": [], "opportunity_cards": [],
+                    "data_source": "unavailable"}
         return fn(project_id)
 
     app.add_middleware(BodyLimitMiddleware, limit=MAX_BODY_BYTES)

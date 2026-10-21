@@ -33,7 +33,8 @@ def external_action_view(request: AgentTaskRequest, *, decision_id: str = "",
         "capability": request.capability,
         "goal": request.goal,
         "intent_digest": request.intent_digest(),
-        "approval": {"required": True, "decision_id": decision_id, "authorized": bool(decision_id)},
+        "approval": {"required": True, "state": "approved" if decision_id else "required",
+                     "decision_id": decision_id, "authorized": bool(decision_id)},
         "evidence_refs": list(request.bounded_context.get("finding_evidence", []) if isinstance(
             request.bounded_context.get("finding_evidence"), list) else
             ([request.bounded_context["finding_evidence"]] if request.bounded_context.get("finding_evidence") else [])),
