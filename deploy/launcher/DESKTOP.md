@@ -73,9 +73,30 @@ exist — the web UI allowlists them. One implementation of navigation.
 
 * Native OS notifications — after the in-app behaviour is stable; they will show a content-free summary only.
 * Code signing / notarization, auto-update, installers, store distribution.
-  **Signing is load-bearing for credentials:** the OS keychain keys access to an item on the app's code identity. An unsigned,
-  rebuilt binary is a *different program* to it and is asked for permission again (observed while testing). Release builds need a
-  stable signing identity, or every update will re-prompt for the stored token.
+* Offline cache, multi-deployment switching, auto-start at login.
+
+## macOS keychain prompts — what to expect
+
+On macOS the keychain asks the user to approve an app reading a credential unless it **trusts the app's code identity**.
+What we know, and what we have not verified:
+
+* **Observed (unsigned debug builds, repeatedly rebuilt):** permission prompts. Two causes, one ours:
+  1. *Ours, fixed:* the health monitor read the keychain on every probe and again for each tray refresh — about **two reads
+     every 10 seconds** (measured: 10 reads in 5 probes). The token is now read **once per launch** and held in memory
+     (`secret::TokenCache`; measured: 1 read in 5 probes). A *Deny* is cached too, so it never turns into a prompt every tick.
+  2. *Inherent:* a rebuilt unsigned binary is a different program to the keychain, so it is asked about items an earlier build
+     created. This only affects developers who rebuild.
+* **Expected for a signed release (not yet tested — no signed build exists):** an app created-and-reads its own item without a
+  prompt, and updates signed by the *same* Developer ID keep that trust. A first launch with no token stored touches no
+  credential at all (the shell only looks one up when a token is saved or a connection is configured).
+* **Never needed:** Full Disk Access, Accessibility, or any broad permission. Nothing else in the shell asks macOS for access.
+* If prompts remain for signed builds, the fallback is the *data-protection keychain* (no prompts by design) — it needs a
+  `keychain-access-groups` entitlement and a provisioning profile, i.e. a proper Apple developer setup. Decide with the first
+  signed build, not before.
+
+Windows (Credential Manager) and Linux (Secret Service) do not prompt per app by default; Linux without a running Secret
+Service has no credential store, and the shell then refuses to save a token (no plaintext fallback).
+
 * Offline cache, multi-deployment switching, auto-start at login.
 
 ## Release order (a real dependency)
