@@ -60,3 +60,11 @@ def test_archive_without_index_html_is_rejected(tmp_path):
     arc = _tgz(tmp_path, {"other.txt": b"x"})
     with pytest.raises(fp.FetchError, match="index.html"):
         fp.fetch(_lock(arc), tmp_path / "ui", url=arc.as_uri())
+
+
+def test_local_build_marker_is_never_overwritten(tmp_path):
+    arc = _tgz(tmp_path, {"index.html": b"pinned"})
+    dest = tmp_path / "ui"; dest.mkdir()
+    (dest / "index.html").write_text("local /projects/ build"); (dest / fp.MARKER).write_text("local-build\n")
+    assert fp.fetch(_lock(arc), dest, url=arc.as_uri()) == "local"
+    assert (dest / "index.html").read_text() == "local /projects/ build"
