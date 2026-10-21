@@ -9,7 +9,7 @@ Mission kernel; it is not a separate fourth runtime.
 |---|---|---|
 | **Interfaces** (CLI) | [`agentic_os/cli.py`](agentic_os/cli.py) | `agentic-os` command; [README quickstart](README.md#quickstart) |
 | **Interfaces** (HTTP control plane) | [`agentic_os/control_plane.py`](agentic_os/control_plane.py), [`mission/api.py`](agentic_os/mission/api.py) | [docs/CONTROL_PLANE_SECURITY.md](docs/CONTROL_PLANE_SECURITY.md) |
-| **Interfaces** (Projects UI + API) | [`agentic_os/projects_api.py`](agentic_os/projects_api.py) | one origin; the `redevops-projects` repo is only the P1 shell |
+| **Interfaces** (Projects UI + API) | [`agentic_os/projects_api.py`](agentic_os/projects_api.py) | API + one-origin server owned here. UI **source** is [`redevops-projects`](https://github.com/redevops-io/redevops-projects) (12 sections, not a shell); `agentic_os/projects_ui/` is a build output vendored by [`scripts/build_projects_ui.sh`](scripts/build_projects_ui.sh), last vendored 2026-09-09, so it lags that repo (no Deployment Inspection / Social Intelligence cards) |
 | **Interfaces** (external agents) | [`agentic_os/agent_gateway/`](agentic_os/agent_gateway/) | [GOVERNED_AGENT_GATEWAY_IMPLEMENTATION_PLAN.md](GOVERNED_AGENT_GATEWAY_IMPLEMENTATION_PLAN.md) |
 | **Interfaces** (developer SDK) | external: [`mission-sdk`](https://github.com/redevops-io/mission-sdk) | depends on this repo |
 | **Persistence** (Mission events, source of truth) | [`mission/store.py`](agentic_os/mission/store.py), [`mission/event_backends.py`](agentic_os/mission/event_backends.py) | append-only; in-memory/JSONL, DuckDB, Postgres backends |
