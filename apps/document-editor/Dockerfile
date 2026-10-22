@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # the image tracks a known kernel tag instead of a stale commit. Override at build time, e.g.
 #   docker build --build-arg KERNEL_REF=main .   (or a newer release tag)
 # v0.3.32+ is required: the capabilities declare per-action compensation disposition=PRESERVE.
-ARG KERNEL_REF=v0.3.41
+ARG KERNEL_REF=v0.3.42
 RUN apt-get update && apt-get install -y --no-install-recommends git \
  && pip install --no-cache-dir "agentic-os @ https://github.com/redevops-io/agentic-os/archive/${KERNEL_REF}.tar.gz" \
  && apt-get purge -y git && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
