@@ -314,3 +314,25 @@ def test_http_action_responses_are_full_details(http):
     assert DETAIL_KEYS <= set(http.post(f"{base}/today/{quote}/snooze", json={"seconds": 3600}).json())
     assert DETAIL_KEYS <= set(http.post(f"{base}/today/{quote}/dismiss").json())
     assert DETAIL_KEYS <= set(http.post(f"{base}/today/{visa}/simulate-outcome").json())
+
+
+# ── "why this matters" follows the state (found by a model playing a first-time user) ──────────────────────────────
+def test_why_and_reason_follow_the_state_after_a_send(today):
+    iid = _id(today, "invoice-1050-ambiguous")
+    before = today.item(iid, identity_id="sam-a")
+    assert "Choose which Sam Rivera" in before["why"]                        # while it is a suggestion, the original reason
+    out = today.approve(iid, expected_digest=before["action"]["payload_digest"], identity_id="sam-a")
+    assert out["state"] == "waiting"
+    for text in (out["why"], out["reason"]):
+        assert "Choose which Sam Rivera" not in text and "before anything is sent" not in text
+        assert "waiting for the customer" in text                            # the live situation, not the stale one
+
+
+def test_why_is_the_failure_when_a_send_failed_and_the_outcome_when_closed(today):
+    inv = _id(today, "invoice-1042-reminder")
+    failed = today.approve(inv, expected_digest=today.item(inv)["action"]["payload_digest"])
+    assert failed["state"] == "failed" and "connection needs attention" in failed["why"]
+    t = _id(today, "travel-taylor-visa")
+    today.approve(t, expected_digest=today.item(t)["action"]["payload_digest"])
+    closed = today.observe_outcome(t)
+    assert closed["state"] == "verified" and "Documents received and validated" in closed["why"]
