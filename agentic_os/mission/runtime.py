@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import copy
 import os
+import re
 import threading
 from typing import Any
 
@@ -349,6 +350,51 @@ class MissionRuntime:
         import hashlib
         from .approval import canonical
         return hashlib.sha256(canonical(strip_approval_keys(dict(inputs or {})))).hexdigest()
+
+    # facts an approver needs to see, never free text or secrets; values are truncated and emails masked
+    _SUMMARY_KEYS = ("amount", "currency", "total", "quantity", "count", "channel", "subject", "to", "recipient",
+                     "destination", "invoice_id", "account_id", "customer_id", "order_id", "resource")
+
+    def _node_inputs_digest(self, m: Mission, world: WorldState, node) -> str:
+        """sha256 of the inputs this node WOULD be dispatched with now (approval markers excluded), so what a
+        human approved can be compared with what is about to run."""
+        resolved = self._resolve_inputs(m, world, node)
+        resolved.pop("_approval", None)
+        resolved.pop("_node", None)
+        return self._inputs_digest(resolved)
+
+    def _action_summary(self, m: Mission, world: WorldState, node) -> dict:
+        """The concrete facts shown to the approver (amount, destination, ...): an allowlist, truncated, with
+        email addresses masked, so the ledger never holds a customer's raw data."""
+        resolved = self._resolve_inputs(m, world, node)
+        out: dict[str, Any] = {}
+        for k in self._SUMMARY_KEYS:
+            if k not in resolved:
+                continue
+            v = resolved[k]
+            if isinstance(v, str):
+                v = re.sub(r"([^@\s]{1,2})[^@\s]*@", r"\1***@", v)[:80]
+            elif not isinstance(v, (int, float, bool)):
+                v = str(v)[:80]
+            out[k] = v
+        return out
+
+    def _approved_digest(self, mission_id: str, node_id: str) -> str | None:
+        """The inputs digest the human was shown when they approved this node (None for legacy approvals)."""
+        dig = None
+        for e in self.store.for_mission(mission_id):
+            if e.type == "ApprovalGranted" and e.payload.get("node_id") == node_id:
+                dig = e.payload.get("inputs_sha256")
+            elif e.type == "ApprovalInvalidated" and e.payload.get("node_id") == node_id:
+                dig = None
+        return dig
+
+    def _parked_digest(self, mission_id: str, node_id: str) -> str | None:
+        dig = None
+        for e in self.store.for_mission(mission_id):
+            if e.type == "NodeParked" and e.payload.get("node_id") == node_id:
+                dig = e.payload.get("inputs_sha256")
+        return dig
 
     def _selected_record(self, m: Mission) -> dict:
         """What ``MissionCreated`` records about a launcher-selected capability and its inputs.
@@ -680,8 +726,18 @@ class MissionRuntime:
             runnable, gated = [], []
             for n in batch:
                 if n.id in approved:
-                    runnable.append((n, None))            # a human already cleared this node
-                    continue
+                    shown = self._approved_digest(mission_id, n.id)
+                    unavailable = m.inputs_unavailable and n.capability == m.selected_capability   # fails closed at dispatch
+                    if shown and not unavailable and shown != self._node_inputs_digest(m, world, n):
+                        # what is about to run is not what the human saw (inputs changed between park and
+                        # resume): the approval no longer applies; fail closed and ask again
+                        self.store.append("ApprovalInvalidated", m.id,
+                                          {"node_id": n.id, "capability": n.capability,
+                                           "reason": "inputs changed since approval"})
+                        approved = approved - {n.id}
+                    else:
+                        runnable.append((n, None))        # a human already cleared this node
+                        continue
                 decision = self.context.resolve(ContextIntent(kind=CHECK_POLICY, node=n, world=world, mission=m, graph=graph)).value
                 # mission-policy/v1 — every policy decision is a ledger event (the Decision Ledger),
                 # pinning the exact evaluated policy identity onto the mission history for replay.
@@ -1018,8 +1074,14 @@ class MissionRuntime:
             evidence=[f"capability={node.capability}", f"side_effecting={node.side_effecting}",
                       f"produces={node.produces}"],
         )
+        world = self._world(m.id)
+        summary = self._action_summary(m, world, node)
+        if summary:
+            task.evidence.append("action=" + ", ".join(f"{k}={v}" for k, v in summary.items()))
         self.store.append("NodeParked", m.id,
                           {"node_id": node.id, "capability": node.capability,
+                           "inputs_sha256": self._node_inputs_digest(m, world, node),
+                           "action_summary": summary,
                            "rules": rules,
                            "risk": to_jsonable(decision.risk) if decision else {},
                            "approval_packet": decision.packet if decision else {},
@@ -1200,8 +1262,10 @@ class MissionRuntime:
             # compile, with `plan_select` choosing among candidates. A provider
             # swap is exactly when a human's yes should stop applying, because
             # what they approved is not what would run.
+            _shown = self._parked_digest(mission_id, node_id)
             self.store.append("ApprovalGranted", mission_id, {
                 "node_id": node_id, "edit": edit, **({"approver": actor} if actor else {}),
+                **({"inputs_sha256": _shown} if _shown else {}),
                 "capability": self._capability_of(mission_id, node_id)})
             self.store.append("NodeResumed", mission_id, {"node_id": node_id})
             return self.run(mission_id)
