@@ -79,3 +79,9 @@ def test_live_erpnext_open_receivables_read_only():
     assert isinstance(rows, list)
     for r in rows:
         assert r["outstanding_cents"] >= 0 and r["invoice_id"]
+
+
+def test_cases_say_which_context_was_not_checked():
+    """The ERPNext feed carries no delivery/dispute/support state: the case must say it assumed them."""
+    cases = receivable_cases_from_erpnext(_StubErpnext(_ROWS), now_ms=_NOW)
+    assert cases and all(any(e.startswith("unchecked:delivery,dispute,support") for e in c.evidence) for c in cases)

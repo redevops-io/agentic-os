@@ -548,9 +548,10 @@ def _close(body: dict | None = None, blurb: Callable[[str], str | None] | None =
             "status": "pending_approval", "action": "close", "requires": "human approval",
             "close_staged": True, "close_pct": pct,
             "close_params": {k: params[k] for k in ("company", "fiscal_year", "period_end_date")},
-            "summary": f"Month-end close is {pct}% complete ({blocker}). Period Closing Voucher for "
+            "summary": f"Close checklist is {pct}% complete ({blocker}). Period Closing Voucher for "
                        f"{params['company']} FY {params['fiscal_year']} (through {params['period_end_date']}) "
-                       "is staged and awaiting human approval — the agent never closes the books on its own.",
+                       "is staged and awaiting human approval. NOTE: this is a FISCAL-YEAR close, not a monthly "
+                       "close: once posted it locks the year in ERPNext. The agent never closes the books on its own.",
         }
         if reasoning:
             out["reasoning"] = reasoning
