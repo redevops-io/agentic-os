@@ -24,7 +24,7 @@ from .write_capabilities import WRITE_CAPABILITIES, build_write_registry
 from .egress import DEFAULT_EGRESS_RULES, EgressRule, PolicyEgressEngine, redact, tokenize
 from .oauth import (
     AuthorizationServer, DEFAULT_AUDIENCE, OAuthClient, OAuthError, TokenResponse, pkce_challenge)
-from .approvals import ApprovalRequest, InboxApprovalStore, UndoWindow
+from .approvals import ApprovalError, ApprovalRequest, InboxApprovalStore, UndoWindow
 from .sandbox import SANDBOX_EXECUTE, echo_capability, register_sandbox_capability
 from .protocols import (
     MCPEndpoint, McpGatewayBridge, RestGatewayAdapter, build_fastmcp_server, mcp_tool_descriptors)
@@ -57,7 +57,7 @@ __all__ = [
     "AuthorizationServer", "OAuthClient", "OAuthError", "TokenResponse", "pkce_challenge",
     "DEFAULT_AUDIENCE", "MCPEndpoint",
     # approval inbox + undo window (Phase 5)
-    "InboxApprovalStore", "ApprovalRequest", "UndoWindow",
+    "InboxApprovalStore", "ApprovalRequest", "ApprovalError", "UndoWindow",
     # action sandbox (Phase 6) — the gateway capability over the canonical mission.executor.Sandbox
     # seam (backed by mission.membrane.LocalContainmentSandbox; the Enterprise SubprocessSandbox wraps it)
     "SANDBOX_EXECUTE", "register_sandbox_capability", "echo_capability",

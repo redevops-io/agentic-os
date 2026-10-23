@@ -34,34 +34,57 @@ class ApprovalRequest:
     decided_by: str = ""
     edit: Optional[dict] = None
     created_at: float = field(default_factory=time.time)
+    expires_at: float = 0.0          # 0 = never; set from the store's ttl when the item is created
+    consumed: bool = False           # an approval satisfies exactly ONE execution
 
     def view(self) -> dict:
         return {"id": self.id, "capability": self.capability, "subject": self.subject,
                 "tenant": self.tenant, "tier": self.tier, "status": self.status,
-                "decided_by": self.decided_by}
+                "decided_by": self.decided_by, "expires_at": self.expires_at or None,
+                "consumed": self.consumed}
+
+
+class ApprovalError(PermissionError):
+    """An approval decision that is not allowed (self-approval, expired, already decided)."""
 
 
 @dataclass
 class InboxApprovalStore:
     """An ApprovalStore backed by a human inbox. A gated request creates a pending item; a person
     approves/rejects it; the identical retry then satisfies the gate. Keyed by the request's
-    content-addressed identity so approving one request never authorizes a different one."""
+    content-addressed identity so approving one request never authorizes a different one.
 
+    An approval is SINGLE-USE (the first satisfied retry consumes it; an identical later call parks a fresh
+    item), expires after ``ttl`` seconds (0 = never), and may not be given by the requesting principal."""
+
+    ttl: float = 900.0
+    clock: Callable[[], float] = time.time
     _by_fp: Dict[str, ApprovalRequest] = field(default_factory=dict)
     _by_id: Dict[str, ApprovalRequest] = field(default_factory=dict)
+
+    def _park(self, fp: str, request: GatewayRequest, manifest: CapabilityManifest) -> ApprovalRequest:
+        now = self.clock()
+        ar = ApprovalRequest(
+            id="apr_" + secrets.token_urlsafe(10), fingerprint=fp, capability=request.capability,
+            subject=request.principal.subject, tenant=request.principal.tenant,
+            tier=int(manifest.risk_tier), created_at=now, expires_at=(now + self.ttl) if self.ttl else 0.0)
+        self._by_fp[fp] = ar
+        self._by_id[ar.id] = ar
+        return ar
+
+    def _expired(self, ar: ApprovalRequest) -> bool:
+        return bool(ar.expires_at) and self.clock() >= ar.expires_at
 
     def is_satisfied(self, request: GatewayRequest, manifest: CapabilityManifest) -> bool:
         fp = request.intent_hash()
         ar = self._by_fp.get(fp)
-        if ar is None:
-            ar = ApprovalRequest(
-                id="apr_" + secrets.token_urlsafe(10), fingerprint=fp, capability=request.capability,
-                subject=request.principal.subject, tenant=request.principal.tenant,
-                tier=int(manifest.risk_tier))
-            self._by_fp[fp] = ar
-            self._by_id[ar.id] = ar
-            return False                      # newly parked → pending in the inbox
-        return ar.status == "approved"        # rejected/pending ⇒ still not satisfied
+        if ar is None or ar.consumed or (ar.status != "rejected" and self._expired(ar)):
+            self._park(fp, request, manifest)   # new, used-up or lapsed → pending in the inbox again
+            return False
+        if ar.status == "approved":
+            ar.consumed = True                  # single use: this execution spends the approval
+            return True
+        return False                            # rejected/pending ⇒ still not satisfied
 
     # ── control-plane / Sidekick inbox surface ──────────────────────────────────
     def pending(self) -> List[dict]:
@@ -73,11 +96,21 @@ class InboxApprovalStore:
 
     def approve(self, approval_id: str, *, by: str, edit: Optional[dict] = None) -> dict:
         ar = self._require(approval_id)
+        if not by:
+            raise ApprovalError("an approval needs an identified approver")
+        if by == ar.subject:
+            raise ApprovalError("the requesting principal cannot approve its own request")
+        if ar.consumed or ar.status != "pending":
+            raise ApprovalError(f"approval {approval_id} is already {'used' if ar.consumed else ar.status}")
+        if self._expired(ar):
+            raise ApprovalError(f"approval {approval_id} has expired; the request must be raised again")
         ar.status, ar.decided_by, ar.edit = "approved", by, edit
         return ar.view()
 
     def reject(self, approval_id: str, *, by: str) -> dict:
         ar = self._require(approval_id)
+        if ar.consumed:
+            raise ApprovalError(f"approval {approval_id} was already used")
         ar.status, ar.decided_by = "rejected", by
         return ar.view()
 
