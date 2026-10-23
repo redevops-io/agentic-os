@@ -21,6 +21,7 @@ from typing import Any, Tuple
 from runtime_contracts.secrets_local.broker import LocalCredentialBroker
 from runtime_contracts.secrets_local.store import EnvironmentSecretStore, FileSecretStore
 
+from .keepassxc import KeePassXCSecretStore
 from .stores import EncryptedFileSecretStore, KeyringSecretStore, VaultSecretStore
 
 
@@ -45,6 +46,12 @@ _STORES = {
     # `backend` selector argument.
     "keyring": lambda **c: KeyringSecretStore(
         service_prefix=c.get("service_prefix", "redevops"), backend=c.get("keyring_backend")),
+    # database path / key file / master-password env-var NAME come from config or REDEVOPS_KEEPASSXC_* (never a value)
+    "keepassxc": lambda **c: KeePassXCSecretStore(
+        c.get("database") or os.environ.get("REDEVOPS_KEEPASSXC_DB", ""),
+        key_file=c.get("key_file") or os.environ.get("REDEVOPS_KEEPASSXC_KEYFILE") or None,
+        password_env=c.get("password_env") or os.environ.get("REDEVOPS_KEEPASSXC_PASSWORD_ENV") or None,
+        cli=c.get("cli"), runner=c.get("runner")),
     "vault": lambda **c: VaultSecretStore(
         addr=c.get("addr"), token=c.get("token"), mount=c.get("mount", "secret"),
         transport=c.get("transport")),

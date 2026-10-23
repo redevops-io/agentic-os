@@ -139,7 +139,8 @@ def _is_in_boundary_host(base: str) -> bool:
     host = (urlparse(base).hostname or "").lower()
     if not host:
         return False
-    allow = {h.strip().lower() for h in os.environ.get("REDEVOPS_LLM_IN_BOUNDARY_HOSTS", "").split(",") if h.strip()}
+    from agentic_os.app.llm_settings import load_llm_settings
+    allow = set(load_llm_settings().in_boundary_hosts)
     if host in allow:
         return True
     if host == "localhost" or host.endswith((".local", ".internal", ".svc", ".cluster.local")):
@@ -160,10 +161,12 @@ def default_in_boundary_endpoint() -> "ModelEndpoint | None":
     operator whose in-boundary model has a public DNS name allowlists it via ``REDEVOPS_LLM_IN_BOUNDARY_HOSTS``."""
     import os
     from agentic_os.governance.routing import ExecutionBoundary
-    base = os.environ.get("REDEVOPS_LLM_BASE_URL", "") or ""
+    from agentic_os.app.llm_settings import load_llm_settings
+    st = load_llm_settings()
+    base = st.base_url
     if not base or not _is_in_boundary_host(base):
         return None
-    return ModelEndpoint(model_id=os.environ.get("REDEVOPS_LLM_MODEL", "DeepSeek-V4-Flash"),
+    return ModelEndpoint(model_id=st.model,
                          provider="self-hosted", boundary=ExecutionBoundary.IN_BOUNDARY,
                          accepts=DataClassification.SECRET, network_route=base)
 
