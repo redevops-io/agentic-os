@@ -93,11 +93,13 @@ def verify_chain(events: "list[Event]") -> ChainReport:
     heads: dict[str, str] = {}
     checked = unchained = 0
     for ev in events:
-        if not ev.hash:
+        # an event from a store that predates chaining (the enterprise overlay carries a fork of this module whose
+        # Event has no hash/prev attributes at all) is "unchained", never an AttributeError
+        if not getattr(ev, "hash", ""):
             unchained += 1
             continue
         want_prev = heads.get(ev.mission_id, "")
-        if ev.prev != want_prev:
+        if getattr(ev, "prev", "") != want_prev:
             return ChainReport(False, checked, unchained, ev.seq, "an event is missing, reordered or replaced")
         if entry_hash(ev.prev, ev.seq, ev.ts, ev.type, ev.mission_id, ev.payload) != ev.hash:
             return ChainReport(False, checked, unchained, ev.seq, "an event was modified")
