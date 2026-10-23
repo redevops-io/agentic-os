@@ -31,11 +31,12 @@ class ProjectsContentService:
     def __init__(self, brief: ContentBrief, *, owner: str = "",
                  generator: Optional[Generator] = None, publisher: Optional[Publisher] = None,
                  project_id: str = "content-studio", project_name: str = "Content Studio",
-                 video_held: bool = False,
+                 tenant: str = "", video_held: bool = False,
                  video_hold_reason: str = "narration off-brand — re-render with scenario detalization",
                  include_video: bool = True, manual_receipts: Optional[dict] = None):
         self.project_id = project_id
         self.project_name = project_name
+        self.tenant = tenant               # the tenant that owns the publishing account (scopes approvals)
         self.owner = owner
         self.brief = brief
         self._video_held = video_held

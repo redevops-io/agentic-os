@@ -24,8 +24,11 @@ def create_content_app(registry: ContentMissionRegistry):
                  authorization: "str | None" = Header(default=None)):
         # the governed owner decision from the Projects UI → resolve the mission's publish gate.
         # With a live publisher the caller must be an authenticated approver (401/403/503 otherwise).
-        approving_actor(authorization, live=registry.live_publisher)
         decision = (body or {}).get("decision", "approve").lower()
+        run = registry.run_for(mission_id)
+        approving_actor(authorization, live=registry.live_publisher, tenant=registry.tenant,
+                        channels=[c.value for c in (run.brief.channels if run else ())],
+                        publishing=decision != "reject")
         result = registry.reject(mission_id) if decision == "reject" else registry.approve(mission_id)
         if result is None:
             return {"ok": False, "error": "mission not found"}

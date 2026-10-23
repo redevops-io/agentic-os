@@ -76,7 +76,9 @@ def create_projects_app(server: ProjectsServer):
         action = (body or {}).get("action", "approve")
         selected = tuple((body or {}).get("selected_ids", []))
         # a live publisher needs an authenticated approver and the actor comes from the credential, not the body
-        actor = approving_actor(authorization, live=s.live_publisher, claimed=(body or {}).get("actor", ""))
+        chans = [s.artifacts[i].subtype for i in selected if i in s.artifacts]
+        actor = approving_actor(authorization, live=s.live_publisher, claimed=(body or {}).get("actor", ""),
+                                tenant=s.tenant, channels=chans, publishing=action != "reject")
         return s.decide(actor, action, selected)
 
     @app.get("/api/workflows")

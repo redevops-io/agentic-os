@@ -24,8 +24,9 @@ class ContentMissionRegistry:
     provider projects them and approval flows back through here."""
 
     def __init__(self, *, owner: str = "", generator_factory=None, publisher_factory=None,
-                 project_id: str = "content-studio", project_name: str = "Content Studio"):
+                 project_id: str = "content-studio", project_name: str = "Content Studio", tenant: str = ""):
         self.owner = owner
+        self.tenant = tenant
         self._genf = generator_factory
         self._pubf = publisher_factory
         self._live: Optional[bool] = None
