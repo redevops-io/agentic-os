@@ -22,6 +22,7 @@ import copy
 import os
 import re
 import threading
+import time
 from typing import Any
 
 from .approval import is_approval_key, strip_approval_keys
@@ -93,6 +94,15 @@ def business_value_for(kind: str, mission=None, *, overrides=None, registry=None
         except ValueError:
             pass
     return _BUSINESS_VALUE.get(kind, 0.0)
+
+
+def _approval_ttl_s() -> float:
+    """Seconds a parked human gate stays approvable (AGENTIC_OS_APPROVAL_TTL_S; 0/unset = no limit). Production
+    deployments should set it (for example 86400): a stale 'yes' to a situation that has changed is not consent."""
+    try:
+        return max(0.0, float(os.environ.get("AGENTIC_OS_APPROVAL_TTL_S", "0") or 0))
+    except ValueError:
+        return 0.0
 
 
 class ApprovalError(ValueError):
@@ -1254,6 +1264,15 @@ class MissionRuntime:
             self._fail(m, plan, reason=f"verification rejected {node_id}")
             return m
         if decision == "approve":
+            ttl = _approval_ttl_s()
+            parked_at = next((e.ts for e in reversed(self.store.for_mission(mission_id))
+                              if e.type == "NodeParked" and e.payload.get("node_id") == node_id), None)
+            if ttl and parked_at is not None and time.time() - parked_at > ttl:
+                # a decision about a situation that has since changed is not a decision: ask again
+                self.store.append("ApprovalExpired", mission_id, {"node_id": node_id, "ttl_s": ttl,
+                                                                  "parked_at": parked_at})
+                raise ApprovalError(f"the approval request for {node_id!r} expired after {int(ttl)}s; "
+                                    "re-run the mission to raise a fresh request")
             # The capability, not only the node. `_node_id` is derived from
             # (mission, revision, outcome) and does not contain the capability,
             # so an approval recorded as a bare node id also authorises any
