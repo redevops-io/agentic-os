@@ -9,7 +9,7 @@ resolution-markers = [
 
 [[package]]
 name = "agentic-os"
-version = "0.3.42"
+version = "0.3.43"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
