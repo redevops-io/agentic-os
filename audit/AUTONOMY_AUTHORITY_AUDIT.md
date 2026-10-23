@@ -47,3 +47,21 @@ Most primitives exist. The missing piece is a **durable authority object that th
 expiry and delegation, enforced at the gateway **fail-closed**, plus child attenuation and a loop supervisor. First implementation step:
 `mission/authority.py` (typed envelope, digest, attenuation, evaluation) and a gateway guard that takes the envelope from trusted state
 (not from `request.arguments`).
+
+## Implemented in this branch (step 1 of the plan)
+* `agentic_os/mission/authority.py` — `mission-authority/v1`: typed `Grant`s (capability pattern, resource selectors, tier cap, per-action and
+  cumulative amount, call count, rate), `AutonomyBudget`, `AuthorityEnvelope` (expiry, revocation epoch, forbidden patterns, required
+  constraints, delegation), digest, **monotonic attenuation** for children, pure `evaluate()`, `AuthorityGuard` with atomic counters
+  (`MemoryLedger`, durable `SqliteLedger`). Verdicts: ALLOW, ESCALATE (owner can extend: parks as pending approval), DENY (out of scope, with a
+  machine-readable amendment).
+* `AgentGateway(authority=...)` — fail-closed when configured: no stored, unexpired, unrevoked envelope that covers the call means no
+  dispatch (F2). Delegated missions inherit the envelope's `required_constraints` and the child quota; the agent can add constraints but not
+  drop the owner's (F1). The envelope is read from trusted state by `tenant:subject` (or `authority_key`), never from request arguments.
+* Tests: `tests/test_mission_authority.py` (31), `tests/test_agent_gateway_authority.py` (11). Existing gateway/mission/policy/approval suites
+  unchanged (900 passed; `test_agent_gateway_sandbox::test_default_backend_runs_a_capability_in_real_containment` fails identically on `main`).
+
+Deliberately NOT in this step (still open, in plan order): durable envelope store (only in-memory exists), wiring `authority` as the default in
+production deployments, loop supervisor with progress watchdog and wall-clock/deadline enforcement in the serial loop (F6, F12, F16), child
+identities with scoped credentials (F5, F14), Fleet background jobs inside the envelope (F15), UNKNOWN-outcome handling in the serial path (F17),
+egress/sandbox network boundary (F10), compaction/provenance checks (F11, NOT_INSPECTED), Sentinel events, Sidekick UX, business standing-grant pilots.
+`MissionPolicy` is unchanged (F3/F4 remain: the envelope covers resources/limits/expiry; ALLOW-vs-gate semantics still need a decision).
