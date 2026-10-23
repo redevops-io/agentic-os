@@ -156,7 +156,9 @@ class _Case:
     surfaced: bool = True                # a dormant case is known work that does NOT need attention yet
     # mutable ledger
     attempt: int = 0
-    phase: str = "suggested"             # suggested | sent | failed | outcome | dismissed
+    phase: str = "suggested"             # suggested | sent | failed | unknown | outcome | dismissed
+    unknown_key: str = ""                # idempotency key of an approved send whose outcome is unconfirmed
+    unknown_digest: str = ""             # the reviewed payload digest that approval was bound to
     snoozed_until: float = 0.0
     follow_up_at: float = 0.0
     sent_digest: str = ""
@@ -256,6 +258,7 @@ class Today:
         self._lock = threading.RLock()
         self._bridge = ExternalApprovalBridge()
         self._operator = ExternalAgentOperator(adapter or FakeExternalAgentAdapter())
+        self.simulated = bool(getattr(self._operator.adapter, "simulated", False))   # nothing real can have been sent
         self._cases: Dict[str, _Case] = {}
         self._reminders: Dict[str, _Reminder] = {}
         self._intake: Any = None
@@ -332,6 +335,8 @@ class Today:
             return "verified", f"{c.outcome_label}.", False
         if c.phase == "failed":
             return "failed", c.failure, False
+        if c.phase == "unknown":      # approved and submitted, outcome unconfirmed: not done, not failed
+            return "waiting", c.failure, False
         if c.snoozed_until > now:
             return "scheduled", f"Snoozed until {time.strftime('%a %H:%M', time.gmtime(c.snoozed_until))} UTC.", False
         if c.phase == "sent":
@@ -350,8 +355,8 @@ class Today:
     def _view(self, c: _Case, item_id: str, now: float) -> dict:
         state, reason, resurfaced = self._state(c, now)
         lc = self._lifecycle(c)
-        label = {"sent": "Follow up", "outcome": "Done"}.get(c.phase, f"Send {c.channel} message" if c.phase != "failed"
-                                                             else "Fix the connection, then retry")
+        label = {"sent": "Follow up", "outcome": "Done", "unknown": "Check whether it was sent"}.get(
+            c.phase, f"Send {c.channel} message" if c.phase != "failed" else "Fix the connection, then retry")
         it = _item(tenant=self.tenant, project=self.project, key="case:" + c.key, dedupe=_norm(c.title),
                    title=c.title, reason=reason, state=state, score=c.score, label=label, executable=True,
                    source_refs=[e["ref"] for e in c.evidence], confidence=None, now=now,
@@ -366,13 +371,14 @@ class Today:
                    outcome_ref=("outcome:" + c.key) if c.phase == "outcome" else None,
                    status_line=self._status_line(c, state))
         it["id"] = item_id
+        it["outcome_unknown"] = c.phase == "unknown"
         it["next_action"]["capability_id"] = "personal_agent.connected_app_action"
         return it
 
     def _status_line(self, c: _Case, state: str) -> str:
         if c.phase == "suggested":
             return "Drafted — nothing has been sent."
-        if c.phase == "failed":
+        if c.phase in ("failed", "unknown"):
             return c.failure
         if c.phase == "sent":
             ok = c.verification == "verified"
@@ -442,6 +448,7 @@ class Today:
                     "will_happen": f"Sends {len(to)} {c.channel} message{'s' if len(to) != 1 else ''} to the "
                                    "recipients above." if to else "",
                     "nothing_sent_yet": c.phase in ("suggested", "failed"),
+                    "reconcile_required": c.phase == "unknown",
                     "policy": {"decision": "requires_approval", "reason": "External message — approval is required."},
                     "blocked_reason": blocked,
                     "disambiguate": [{k: v for k, v in i.items()} for i in c.identity_candidates],
@@ -465,6 +472,9 @@ class Today:
                 return {**self.item(item_id), "replayed": True, "receipt": c.receipt}
             if c.phase == "dismissed":
                 raise TodayError(409, "dismissed", "this item was dismissed")
+            if c.phase == "unknown":
+                raise TodayError(409, "reconcile_required",
+                                 "the last send may have gone out — check whether it was delivered before approving again")
             picked, _ = self._select(c, targets)
             ident = self._identity(c, identity_id)
             if c.identity_candidates and ident is None:
@@ -483,16 +493,26 @@ class Today:
             authz = self._bridge.authorize(req, principal=principal)        # single use
             c.approval_ref, c.decision_ref = approval_id, authz.decision_id
             self._log(c, "approved", f"Approved by {approver} (bound to {digest[:19]}…)")
-            out = self._operator.operator.invoke(
-                req.capability,
-                {"_outcome": req.inputs["_outcome"], "decision_id": decision.decision_id, "goal": req.goal,
-                 "bounded_context": dict(req.bounded_context), "project_id": req.project_id,
-                 "mission_id": req.mission_id}, req.idempotency_key)
-            c.sends += 1
+            c.sends += 1                          # the submission is attempted from here on, whatever comes back
+            try:
+                out = self._operator.operator.invoke(
+                    req.capability,
+                    {"_outcome": req.inputs["_outcome"], "decision_id": decision.decision_id, "goal": req.goal,
+                     "bounded_context": dict(req.bounded_context), "project_id": req.project_id,
+                     "mission_id": req.mission_id}, req.idempotency_key)
+            except Exception as exc:              # noqa: BLE001 — after the approval is consumed ANY error is ambiguous
+                out = {"outcome_unknown": True, "verification": "unknown", "receipt": {},
+                       "error": type(exc).__name__}
             receipt = out.get("receipt", {})
             c.receipt, c.verification = receipt, out.get("verification", "")
             status = receipt.get("status", "")
-            if status == "SUCCEEDED":
+            if out.get("outcome_unknown"):
+                # may have gone out: keep the SAME idempotency key (attempt unchanged) and require reconcile
+                c.phase, c.unknown_key, c.unknown_digest = "unknown", req.idempotency_key, digest
+                c.failure = ("Not confirmed — it may have been sent. Check delivery before trying again, "
+                             "so the same message is not sent twice.")
+                self._log(c, "unknown", c.failure)
+            elif status == "SUCCEEDED":
                 c.phase, c.sent_digest = "sent", digest
                 c.follow_up_at = now + c.follow_up_s
                 self._log(c, "sent", "Sent through the governed path")
@@ -506,6 +526,42 @@ class Today:
                              else "Not confirmed sent — check before retrying to avoid a duplicate.")
                 self._log(c, "failed", c.failure)
             return {**self.item(item_id), "replayed": False, "receipt": receipt}
+
+    def reconcile(self, item_id: str, *, manual: Optional[str] = None, by: str = "user:operator") -> dict:
+        """Settle an approved send whose outcome is unconfirmed, from a read, before anything can be retried.
+
+        Without ``manual`` the provider is asked (lookup by idempotency key + independent probe): found → sent,
+        absent → failed (a retry is then safe and gets a fresh key), no answer → still unknown. ``manual`` is a
+        person's own statement ("delivered" | "not_delivered"), recorded with who said it."""
+        with self._lock:
+            c = self._case(item_id)
+            if c.phase != "unknown":
+                raise TodayError(409, "nothing_to_reconcile", "this item has no unconfirmed send")
+            now = self.clock()
+            if manual is not None:
+                if manual not in ("delivered", "not_delivered"):
+                    raise TodayError(422, "bad_manual", "manual must be 'delivered' or 'not_delivered'")
+                if not by or by == "user:operator" and not self.simulated:
+                    raise TodayError(403, "manual_reconcile_needs_an_identified_approver",
+                                     "a manual reconciliation must be recorded by an identified, authorised person")
+                outcome = "found" if manual == "delivered" else "absent"
+                why, verification = f"{by} confirmed manually: {manual.replace('_', ' ')}", "unverified"
+            else:
+                res = self._operator.reconcile(c.unknown_key)
+                outcome, why, verification = res["outcome"], res.get("reason", ""), res.get("verification", "")
+            if outcome == "found":
+                c.phase, c.sent_digest = "sent", c.unknown_digest
+                c.follow_up_at = now + c.follow_up_s
+                c.verification = "verified" if verification == "verified" else ""
+                self._log(c, "reconciled", f"Confirmed it was sent ({why})")
+            elif outcome == "absent":
+                c.attempt += 1                    # now known not to have gone out: a fresh review + key is safe
+                c.phase, c.unknown_key, c.unknown_digest = "failed", "", ""
+                c.failure = "Confirmed not sent — you can review and send again."
+                self._log(c, "reconciled", f"Confirmed it was not sent ({why})")
+            else:
+                self._log(c, "reconcile_unknown", f"Still could not confirm ({why})")
+            return {**self.item(item_id), "reconcile_outcome": outcome}
 
     @property
     def intake(self):
@@ -589,6 +645,8 @@ class Today:
             c = self._case(item_id)
             if c.phase in ("sent", "outcome"):
                 raise TodayError(409, "already_sent", "a sent item can't be dismissed; wait for the outcome")
+            if c.phase == "unknown":
+                raise TodayError(409, "reconcile_required", "the last send may have gone out; reconcile it first")
             c.phase = "dismissed"
             self._log(c, "dismissed", "Dismissed")
             return self.item(item_id)

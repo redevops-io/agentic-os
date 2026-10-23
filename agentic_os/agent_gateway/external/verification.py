@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
-from typing import Tuple
+from typing import Optional, Protocol, Tuple
 
 from .contracts import AgentTaskRef, AgentTaskResult, TaskState
 
@@ -19,6 +19,20 @@ class VerificationStatus(str, enum.Enum):
     REFUTED = "refuted"         # claim contradicted by observation (e.g. success with no artifact)
     ABSTAINED = "abstained"     # not enough evidence to affirm or refute — do NOT treat as success
     NOT_APPLICABLE = "n/a"      # task did not claim completion (still running / cancelled / failed)
+    UNKNOWN = "unknown"         # the independent probe could not answer: the effect may or may not have happened
+
+
+class ProbeResult(str, enum.Enum):
+    FOUND = "found"             # the effect is observed in a system the provider's own reply does not control
+    ABSENT = "absent"           # a reliable read says the effect is not there
+    ERROR = "error"             # the read failed or timed out: no answer (never treated as FOUND or ABSENT)
+
+
+class PostconditionProbe(Protocol):
+    """An INDEPENDENT read of the postcondition (message-status API, ledger lookup, file open and parse).
+    It must not trust the provider's task result: it asks the system of record. ``ERROR`` means no answer."""
+
+    def probe(self, ref: AgentTaskRef, result: AgentTaskResult) -> ProbeResult: ...
 
 
 @dataclass(frozen=True)
@@ -35,8 +49,14 @@ class VerificationOutcome:
         return self.status is VerificationStatus.VERIFIED
 
 
-def verify_result(request_digest: str, ref: AgentTaskRef, result: AgentTaskResult) -> VerificationOutcome:
-    """Verify a provider result against the authorized request. Fail-closed and honest about uncertainty."""
+def verify_result(request_digest: str, ref: AgentTaskRef, result: AgentTaskResult, *,
+                  probe: Optional[PostconditionProbe] = None,
+                  require_independent: bool = False) -> VerificationOutcome:
+    """Verify a provider result against the authorized request. Fail-closed and honest about uncertainty.
+
+    With a ``probe`` the final answer comes from an independent read (FOUND → VERIFIED, ABSENT → REFUTED,
+    ERROR → UNKNOWN). ``require_independent`` (the default for any non-simulated adapter) forbids minting
+    VERIFIED from the provider's own artifact refs alone: without a probe it abstains."""
     # 1. Re-bind: the result must belong to the exact authorized request (digest carried on the ref).
     if ref.intent_digest and request_digest and ref.intent_digest != request_digest:
         return VerificationOutcome(VerificationStatus.REFUTED,
@@ -62,7 +82,29 @@ def verify_result(request_digest: str, ref: AgentTaskRef, result: AgentTaskResul
                                    request_digest=request_digest, result_task_ref=result.provider_task_ref,
                                    evidence_refs=result.evidence_refs)
 
-    # 5. Artifact + evidence present and the state is SUCCEEDED → verified.
+    # 5. Artifact present: an independent probe (when configured) decides; the provider's refs alone do not.
+    if probe is not None:
+        try:
+            seen = probe.probe(ref, result)
+        except Exception:                                   # a failing probe is "no answer", never "found"
+            seen = ProbeResult.ERROR
+        if seen is ProbeResult.FOUND:
+            return VerificationOutcome(VerificationStatus.VERIFIED, "effect independently observed",
+                                       request_digest=request_digest, result_task_ref=result.provider_task_ref,
+                                       evidence_refs=result.evidence_refs + result.artifact_refs)
+        if seen is ProbeResult.ABSENT:
+            return VerificationOutcome(VerificationStatus.REFUTED,
+                                       "provider reported an artifact but the independent check found no such effect",
+                                       request_digest=request_digest, result_task_ref=result.provider_task_ref)
+        return VerificationOutcome(VerificationStatus.UNKNOWN,
+                                   "the independent check could not answer; the effect may have happened",
+                                   request_digest=request_digest, result_task_ref=result.provider_task_ref,
+                                   evidence_refs=result.evidence_refs)
+    if require_independent:
+        return VerificationOutcome(VerificationStatus.ABSTAINED,
+                                   "no independent probe configured; the provider's own artifact is not proof",
+                                   request_digest=request_digest, result_task_ref=result.provider_task_ref,
+                                   evidence_refs=result.evidence_refs)
     return VerificationOutcome(VerificationStatus.VERIFIED, "artifact and evidence observed",
                                request_digest=request_digest, result_task_ref=result.provider_task_ref,
                                evidence_refs=result.evidence_refs + result.artifact_refs)

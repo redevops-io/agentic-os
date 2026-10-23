@@ -395,6 +395,10 @@ class SampleProjectionProvider:
     def today_approve(self, pid: str, item_id: str, session: str = "", **kw) -> dict:
         return self._today(pid, session).approve(item_id, **kw)
 
+    def today_reconcile(self, pid: str, item_id: str, session: str = "", manual: Optional[str] = None,
+                        by: str = "user:operator") -> dict:
+        return self._today(pid, session).reconcile(item_id, manual=manual, by=by)
+
     def today_snooze(self, pid: str, item_id: str, session: str = "", seconds: float = 0) -> dict:
         return self._today(pid, session).snooze(item_id, seconds=seconds)
 
@@ -1637,6 +1641,23 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
                        x_demo_session: Optional[str] = Header(default=None)) -> dict:
         return _today_call("today_approve", project_id, item_id, session=_today_session(request, x_demo_session),
                            expected_digest=req.payload_digest, targets=req.targets, identity_id=req.identity_id)
+
+    @app.post("/api/projects/{project_id}/today/{item_id}/reconcile")
+    def _today_reconcile(project_id: str, item_id: str, request: Request, manual: Optional[str] = None,
+                         x_demo_session: Optional[str] = Header(default=None),
+                         authorization: Optional[str] = Header(default=None)) -> dict:
+        """Settle an unconfirmed send from a read (provider lookup + independent check). ``manual`` is a person's
+        own statement ("delivered" | "not_delivered"). Never sends anything."""
+        by = "user:operator"
+        if manual is not None:
+            # A person's own statement that it was / was not delivered closes the question, so it is accepted only
+            # from an authenticated, authorised approver when real sends are possible. A provider wired to a real
+            # adapter advertises that with ``today_live``; the sample/simulated Today has nothing real to settle.
+            from agentic_os.projects.approver_auth import approving_actor  # noqa: PLC0415
+            live = bool(getattr(prov, "today_live", lambda pid: False)(project_id))
+            by = approving_actor(authorization, live=live, claimed="user:operator", publishing=False)
+        return _today_call("today_reconcile", project_id, item_id,
+                           session=_today_session(request, x_demo_session), manual=manual, by=by)
 
     @app.post("/api/projects/{project_id}/today/{item_id}/snooze")
     def _today_snooze(project_id: str, item_id: str, req: _TodaySnoozeReq, request: Request,

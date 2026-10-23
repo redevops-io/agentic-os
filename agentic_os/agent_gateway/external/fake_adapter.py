@@ -46,6 +46,7 @@ class _ProviderTask:
     trajectory: List[TaskState]
     cursor: int = 0
     unblocked_input: bool = False
+    idempotency_key: str = ""
 
     @property
     def current(self) -> TaskState:
@@ -69,6 +70,8 @@ class FakeExternalAgentAdapter:
 
     provider: str = "fake-external-agent"
     adapter_version: str = "v1"
+    simulated: bool = True        # nothing leaves the machine: the operator may verify without an independent probe
+    authoritative_lookup: bool = True   # its ledger is read-your-writes: "no record" really means "not created"
     _tasks: Dict[str, _ProviderTask] = field(default_factory=dict)
     _counter: int = 0
 
@@ -81,7 +84,8 @@ class FakeExternalAgentAdapter:
         ptref = f"{self.provider}:task:{self._counter}"
         self._tasks[ptref] = _ProviderTask(
             provider_task_ref=ptref, capability=request.capability, outcome=outcome,
-            intent_digest=request.intent_digest(), trajectory=_trajectory(outcome))
+            intent_digest=request.intent_digest(), trajectory=_trajectory(outcome),
+            idempotency_key=request.idempotency_key)
         return AgentTaskRef.new(self.provider, provider_task_ref=ptref,
                                 intent_digest=request.intent_digest())
 
@@ -130,6 +134,26 @@ class FakeExternalAgentAdapter:
                                    error="provider reported failure", provider_task_ref=t.provider_task_ref)
         return AgentTaskResult(task_id=ref.task_id, state=state, provider_claimed_success=False,
                                provider_task_ref=t.provider_task_ref)
+
+    # ── reconcile + independent check (what a real adapter must offer) ─────────────────
+    def find_task_by_idempotency_key(self, key: str):
+        """The provider's own record for ``key`` (a read), or None. Lets a caller that lost the reply find out
+        whether the task was created before it retries."""
+        if not key:
+            return None
+        for ptref, t in self._tasks.items():
+            if t.idempotency_key == key:
+                return AgentTaskRef.new(self.provider, provider_task_ref=ptref, intent_digest=t.intent_digest)
+        return None
+
+    def probe(self, ref: AgentTaskRef, result: AgentTaskResult):
+        """Independent read: the effect exists only if the provider's ledger holds a SUCCEEDED task whose artifact
+        is the one it would have produced. A fabricated artifact ref is ABSENT."""
+        from .verification import ProbeResult
+        t = self._tasks.get(ref.provider_task_ref)
+        if t is None or t.current is not TaskState.SUCCEEDED or t.outcome == "false_success":
+            return ProbeResult.ABSENT
+        return ProbeResult.FOUND if f"artifact:{t.provider_task_ref}" in result.artifact_refs else ProbeResult.ABSENT
 
     # ── internals ────────────────────────────────────────────────────────────────
     def _require(self, ref: AgentTaskRef) -> _ProviderTask:

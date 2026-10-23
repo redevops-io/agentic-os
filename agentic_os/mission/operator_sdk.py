@@ -125,6 +125,14 @@ def idempotency_wait_s() -> float:
         return 300.0
 
 
+# The idempotency key of the call being executed, readable by a handler that must forward it to a provider
+# (a handler only receives ``inputs``; without this the provider-facing request carried an EMPTY key and the
+# provider-side / TaskManager idempotent start was silently off).
+import contextvars as _cv  # noqa: E402
+
+CURRENT_IDEMPOTENCY_KEY: "_cv.ContextVar[str]" = _cv.ContextVar("operator_idempotency_key", default="")
+
+
 class Operator:
     """One app's capability operator: manifest + handlers + idempotency dedupe."""
 
@@ -196,7 +204,11 @@ class Operator:
             arity = len(inspect.signature(fn).parameters)
         except (TypeError, ValueError):
             arity = 1
-        result = (fn(inputs, secrets or {}) if arity >= 2 else fn(inputs)) or {}
+        _tok = CURRENT_IDEMPOTENCY_KEY.set(idempotency_key or "")
+        try:
+            result = (fn(inputs, secrets or {}) if arity >= 2 else fn(inputs)) or {}
+        finally:
+            CURRENT_IDEMPOTENCY_KEY.reset(_tok)
         # Read-back contract (N4) — see below.
         spec = self._specs.get(capability)
         outs = list((getattr(spec, "outputs", None) or {}).keys()) if spec else []
