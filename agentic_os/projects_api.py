@@ -395,6 +395,9 @@ class SampleProjectionProvider:
     def today_approve(self, pid: str, item_id: str, session: str = "", **kw) -> dict:
         return self._today(pid, session).approve(item_id, **kw)
 
+    def today_reconcile(self, pid: str, item_id: str, session: str = "", manual: Optional[str] = None) -> dict:
+        return self._today(pid, session).reconcile(item_id, manual=manual)
+
     def today_snooze(self, pid: str, item_id: str, session: str = "", seconds: float = 0) -> dict:
         return self._today(pid, session).snooze(item_id, seconds=seconds)
 
@@ -1637,6 +1640,14 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
                        x_demo_session: Optional[str] = Header(default=None)) -> dict:
         return _today_call("today_approve", project_id, item_id, session=_today_session(request, x_demo_session),
                            expected_digest=req.payload_digest, targets=req.targets, identity_id=req.identity_id)
+
+    @app.post("/api/projects/{project_id}/today/{item_id}/reconcile")
+    def _today_reconcile(project_id: str, item_id: str, request: Request, manual: Optional[str] = None,
+                         x_demo_session: Optional[str] = Header(default=None)) -> dict:
+        """Settle an unconfirmed send from a read (provider lookup + independent check). ``manual`` is a person's
+        own statement ("delivered" | "not_delivered"). Never sends anything."""
+        return _today_call("today_reconcile", project_id, item_id,
+                           session=_today_session(request, x_demo_session), manual=manual)
 
     @app.post("/api/projects/{project_id}/today/{item_id}/snooze")
     def _today_snooze(project_id: str, item_id: str, req: _TodaySnoozeReq, request: Request,
