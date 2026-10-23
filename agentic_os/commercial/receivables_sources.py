@@ -64,7 +64,10 @@ def _case_from_row(row: Any, *, now_ms: int) -> ReceivableCase:
         payment_state=state,
         delivery_state=DeliveryState.DELIVERED,     # not carried on an AR invoice → benign default
         account_context="erpnext",
-        evidence=(f"erpnext:Sales Invoice/{row.get('invoice_id', '')}",))
+        # delivery, dispute and support state are NOT read from ERPNext here: say so in the evidence, so a COLLECT
+        # recommendation is never presented as having checked them
+        evidence=(f"erpnext:Sales Invoice/{row.get('invoice_id', '')}",
+                  "unchecked:delivery,dispute,support (assumed delivered, no dispute, no open support case)"))
 
 
 __all__ = ["receivable_cases_from_erpnext"]

@@ -229,12 +229,14 @@ def chase_overdue(blurb: Callable[[str], str | None] | None = None, *, approval=
                     headers=_headers(),
                 )
                 result["lago_status"] = resp.status_code
+                result["accepted"] = resp.status_code in (200, 202)
                 result["action"] = (
-                    "retry_payment triggered (dunning reminder sent)"
-                    if resp.status_code in (200, 202)
+                    "payment retry requested in Lago"
+                    if result["accepted"]
                     else f"retry_payment returned {resp.status_code}"
                 )
             except Exception as e:
+                result["accepted"] = False
                 result["action"] = f"error: {e}"
             actions.append(result)
 
@@ -244,12 +246,17 @@ def chase_overdue(blurb: Callable[[str], str | None] | None = None, *, approval=
         f"summarize sending dunning reminders / retrying payment on these {len(overdue)} overdue "
         f"invoices: {detail}. Be concrete and professional. Final answer only, no preamble."
     ) if (blurb and overdue) else None
+    accepted = sum(1 for a in actions if a.get("accepted"))
+    # the status follows what Lago actually answered: a rejected or failed call is never reported as done
+    status = "done" if accepted == len(actions) else ("partial" if accepted else "failed")
     out = {
-        "status": "done",
+        "status": status,
         "action": "chase_overdue",
         "overdue_count": len(overdue),
+        "accepted_count": accepted,
         "results": actions,
-        "summary": f"Retried payment / sent dunning reminder on {len(actions)} overdue invoice(s) via Lago.",
+        "summary": (f"Payment retry accepted by Lago for {accepted} of {len(actions)} overdue invoice(s)."
+                    + ("" if accepted == len(actions) else " The rest were not accepted; check the per-invoice results.")),
     }
     if reasoning:
         out["reasoning"] = reasoning
