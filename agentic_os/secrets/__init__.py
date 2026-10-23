@@ -9,9 +9,14 @@ from .factory import (
     build_credential_broker,
     build_secret_store,
 )
+from .keepassxc import KeePassXCSecretStore
+from .resolve import read_secret, store_secret
 from .stores import EncryptedFileSecretStore, KeyringSecretStore, VaultSecretStore
 
 __all__ = [
+    "KeePassXCSecretStore",
+    "read_secret",
+    "store_secret",
     "EncryptedFileSecretStore",
     "KeyringSecretStore",
     "VaultSecretStore",

@@ -27,9 +27,11 @@ class OpenAICompatibleTransport:
 
     @classmethod
     def from_env(cls) -> "OpenAICompatibleTransport":
+        from agentic_os.app.llm_settings import llm_api_key, load_llm_settings
+        st = load_llm_settings()           # re-read per call: a changed key reference/provider is live
         return cls(
-            api_key=os.environ.get("OPENAI_API_KEY", "EMPTY") or "EMPTY",
-            base_url=os.environ.get("REDEVOPS_LLM_BASE_URL", "") or "",
+            api_key=llm_api_key(st),
+            base_url=st.base_url,
             timeout=float(os.environ.get("REDEVOPS_LLM_TIMEOUT", "60") or 60),
         )
 
