@@ -75,3 +75,38 @@ def test_mission_receipt_exposes_the_head_and_chain_status():
     r = mission_receipt(rt, mid)
     assert r["ledger_chain"]["ok"] and r["ledger_head"] == rt.store.head(mid) != ""
     assert r["approvals"][0]["approver"] == "approver:acme"
+
+
+def test_events_from_a_store_that_predates_chaining_are_unchained_not_an_error():
+    """The enterprise overlay ships its own fork of mission/store.py whose Event has no hash/prev at all: receipts and
+    assurance must not crash on it."""
+    from dataclasses import dataclass, field
+    from typing import Any
+
+    @dataclass
+    class OldEvent:
+        type: str
+        mission_id: str
+        payload: dict[str, Any]
+        seq: int = 0
+        ts: float = 0.0
+
+    rep = verify_chain([OldEvent("MissionCreated", "m", {}, 1), OldEvent("NodeSucceeded", "m", {}, 2)])
+    assert rep.ok and rep.checked == 0 and rep.unchained == 2
+
+
+def test_receipt_and_assurance_tolerate_an_old_style_store():
+    from agentic_os.mission.assurance import assurance_findings
+    from tests.test_mission_inputs_delivery_and_explicit_planning import _op, _rt, _req
+    from agentic_os.app_kit.mission_launcher import MissionRuntimeLauncher
+    from agentic_os.mission.receipt import mission_receipt
+    rt = _rt(_op())
+    mid = MissionRuntimeLauncher(rt).launch(_req())
+    rt.run(mid)
+    for e in rt.store.all():                      # simulate events from a store without chaining
+        e.hash = ""
+        del e.hash
+        del e.prev
+    r = mission_receipt(rt, mid)
+    assert r["ledger_chain"]["ok"] and r["ledger_chain"]["checked"] == 0
+    assert isinstance(assurance_findings(rt.store.all(), now=1e12), list)
