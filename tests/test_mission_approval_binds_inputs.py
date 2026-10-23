@@ -67,3 +67,23 @@ def test_legacy_approvals_without_a_digest_still_run():
     rt.store.append("NodeResumed", mid, {"node_id": node})
     rt.run(mid)
     assert rt._missions[mid].state is MissionState.SUCCEEDED
+
+
+@pytest.mark.parametrize("field,old,new", [
+    ("amount", 100, 1000),
+    ("currency", "USD", "EUR"),
+    ("to", "jane@acme.com", "attacker@evil.com"),                 # recipient
+    ("destination", "acct-111", "acct-999"),                      # payout destination
+    ("account_id", "A1", "A2"),
+    ("invoice_ids", ["i1"], ["i1", "i2"]),                        # a non-summary field still changes the digest
+])
+def test_changing_any_consequential_field_invalidates_the_approval(field, old, new):
+    inputs = {"account_id": "A1", "amount": 100, "currency": "USD", "to": "jane@acme.com",
+              "destination": "acct-111", "invoice_ids": ["i1"]}
+    assert inputs[field] == old
+    rt = _rt(_op())
+    mid = _park(rt, _req(inputs=dict(inputs)))
+    rt._missions[mid].inputs[field] = new
+    rt.approve(mid, rt.repo.pending_human(mid)["node_id"], "approve")
+    assert seen == [] and rt._missions[mid].state is MissionState.WAITING_HUMAN
+    assert _events(rt, mid, "ApprovalInvalidated")
