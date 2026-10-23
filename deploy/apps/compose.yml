@@ -21,6 +21,9 @@
 #
 # Requires a host with >= 32 GB RAM (Twenty + Metabase + Postiz + Postgres are heavy).
 # ---------------------------------------------------------------------------
+# IMAGE PINNING: every third-party image below is pinned by immutable digest (the "# was <tag>" comment names the
+# tag it replaced). They were the tags current on 2026-10-23 and are the exact images the six-agent install was
+# tested with. To update one: pull the new tag, run the install/journey tests, then replace the digest here.
 
 x-agent: &agent
   restart: unless-stopped
@@ -31,7 +34,7 @@ services:
   # Front door — one URL for the whole suite
   # =========================================================================
   caddy:
-    image: caddy:2-alpine
+    image: caddy@sha256:eb4d35b7452d1ab6171fbdbe8d9275b2301dad6dad92115d91e19fb9b24d510f   # was caddy:2-alpine
     restart: unless-stopped
     depends_on: [projects-console]
     networks: [apps]
@@ -148,7 +151,7 @@ services:
   # =========================================================================
   # --- Twenty CRM ---------------------------------------------------------
   twenty:
-    image: twentycrm/twenty:latest
+    image: twentycrm/twenty@sha256:6398458f42b760312aa59c4ade78cbaaa62063a0817e42cb21c66628fc310b3f   # was twentycrm/twenty:latest
     restart: unless-stopped
     networks: [apps]
     depends_on: [twenty-db, twenty-redis]
@@ -163,7 +166,7 @@ services:
     volumes:
       - twenty_data:/app/packages/twenty-server/.local-storage
   twenty-db:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a   # was pgvector/pgvector:pg16
     restart: unless-stopped
     networks: [apps]
     environment:
@@ -173,13 +176,13 @@ services:
     volumes:
       - twenty_db:/var/lib/postgresql/data
   twenty-redis:
-    image: redis:7-alpine
+    image: redis@sha256:57e4255cc971b1c8d6f8a6ca283ac01bc3ecdd914273ef6bfaede87aaecd6541   # was redis:7-alpine
     restart: unless-stopped
     networks: [apps]
 
   # --- Metabase (BI) ------------------------------------------------------
   metabase:
-    image: metabase/metabase:latest
+    image: metabase/metabase@sha256:e436bb73322cfc79000462bfb769430a6aa1c87b435c36e04b9a6b6e6df32bd4   # was metabase/metabase:latest
     restart: unless-stopped
     networks: [apps]
     depends_on: [metabase-db]
@@ -192,7 +195,7 @@ services:
       - MB_DB_PASS=${METABASE_DB_PASSWORD:-metabase}
       - MB_DB_HOST=metabase-db
   metabase-db:
-    image: postgres:16-alpine
+    image: postgres@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36   # was postgres:16-alpine
     restart: unless-stopped
     networks: [apps]
     environment:
@@ -204,7 +207,7 @@ services:
 
   # --- Postiz (social) ----------------------------------------------------
   postiz:
-    image: ghcr.io/gitroomhq/postiz-app:latest
+    image: ghcr.io/gitroomhq/postiz-app@sha256:d2b37802e96757729fdea2d3d71287f841c2b619faa1cb4c21dac07df657fde1   # was ghcr.io/gitroomhq/postiz-app:latest
     restart: unless-stopped
     networks: [apps]
     depends_on: [postiz-db, postiz-redis]
@@ -223,7 +226,7 @@ services:
       - postiz_config:/config
       - postiz_uploads:/uploads
   postiz-db:
-    image: postgres:16-alpine
+    image: postgres@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36   # was postgres:16-alpine
     restart: unless-stopped
     networks: [apps]
     environment:
@@ -233,7 +236,7 @@ services:
     volumes:
       - postiz_db:/var/lib/postgresql/data
   postiz-redis:
-    image: redis:7-alpine
+    image: redis@sha256:57e4255cc971b1c8d6f8a6ca283ac01bc3ecdd914273ef6bfaede87aaecd6541   # was redis:7-alpine
     restart: unless-stopped
     networks: [apps]
 
