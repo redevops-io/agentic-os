@@ -46,8 +46,8 @@ def test_two_processes_cannot_both_consume_the_same_nonce(tmp_path):
     q = ctx.Queue()
     procs = [ctx.Process(target=_worker, args=(path, q)) for _ in range(4)]
     [p.start() for p in procs]
-    [p.join(30) for p in procs]
-    results = [q.get(timeout=5) for _ in procs]
+    [p.join(120) for p in procs]          # a cold spawned interpreter imports the kernel: allow for it
+    results = [q.get(timeout=60) for _ in procs]
     assert results.count(True) == 1 and results.count(False) == 3
 
 
@@ -81,9 +81,12 @@ def test_production_mode_with_a_db_starts_normally(monkeypatch, tmp_path):
     assert isinstance(default_replay_guard(), SqliteReplayGuard)
 
 
-def test_without_the_flag_the_fallback_is_per_process_but_logged(monkeypatch, caplog):
+def test_without_the_flag_the_fallback_is_per_process_but_logged_once(monkeypatch, caplog):
+    import agentic_os.mission.approval as appr
     monkeypatch.delenv("AGENTIC_OS_REPLAY_DB", raising=False)
     monkeypatch.delenv("AGENTIC_OS_REQUIRE_DURABLE_REPLAY", raising=False)
-    with caplog.at_level("WARNING", logger="agentic_os.operator"):
+    monkeypatch.setattr(appr, "_WARNED_NON_DURABLE", False)
+    with caplog.at_level("WARNING", logger="agentic_os.replay_guard"):
         g = default_replay_guard()
-    assert isinstance(g, ReplayGuard) and "per-process" in caplog.text
+        default_replay_guard()
+    assert isinstance(g, ReplayGuard) and caplog.text.count("per-process") == 1

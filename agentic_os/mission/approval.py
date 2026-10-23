@@ -244,6 +244,7 @@ class SqliteReplayGuard:
         self._db.close()
 
 
+_WARNED_NON_DURABLE = False
 ENV_REPLAY_DB = "AGENTIC_OS_REPLAY_DB"
 ENV_REQUIRE_DURABLE_REPLAY = "AGENTIC_OS_REQUIRE_DURABLE_REPLAY"
 
@@ -265,8 +266,11 @@ def default_replay_guard():
         raise ReplayProtectionNotDurable(
             f"{ENV_REQUIRE_DURABLE_REPLAY} is set but {ENV_REPLAY_DB} is not: approval replay protection would be "
             "per-process. Set it to a private file on durable storage (or provide a shared store).")
-    logging.getLogger("agentic_os.operator").warning(
-        "approval replay protection is per-process (%s unset): a restart or a second worker forgets used "
-        "approvals. Set %s for production and %s=1 to refuse to start without it.",
-        ENV_REPLAY_DB, ENV_REPLAY_DB, ENV_REQUIRE_DURABLE_REPLAY)
+    global _WARNED_NON_DURABLE
+    if not _WARNED_NON_DURABLE:           # once per process, on its own logger (not the operator startup logger)
+        _WARNED_NON_DURABLE = True
+        logging.getLogger("agentic_os.replay_guard").warning(
+            "approval replay protection is per-process (%s unset): a restart or a second worker forgets used "
+            "approvals. Set %s for production and %s=1 to refuse to start without it.",
+            ENV_REPLAY_DB, ENV_REPLAY_DB, ENV_REQUIRE_DURABLE_REPLAY)
     return ReplayGuard()
