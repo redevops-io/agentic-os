@@ -98,3 +98,44 @@ def test_a_used_approval_cannot_be_decided_again():
         inbox.approve(aid, by="bob")
     with pytest.raises(ApprovalError):
         inbox.reject(aid, by="bob")
+
+
+def test_concurrent_executions_spend_one_approval_exactly_once():
+    """Many workers present the same approved call at once: the approval is consumed by exactly one."""
+    import threading
+    inbox, h = InboxApprovalStore(), _Handler()
+    gw = _gw(h, inbox)
+    gw.invoke(_req(GP))
+    inbox.approve(inbox.pending()[0]["id"], by="alice")
+    barrier, results = threading.Barrier(16), []
+
+    def worker():
+        barrier.wait()
+        results.append(gw.invoke(_req(GP)).status)
+
+    ts = [threading.Thread(target=worker) for _ in range(16)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert results.count(GatewayStatus.OK) == 1 and h.calls == 1
+    assert results.count(GatewayStatus.PENDING_APPROVAL) == 15
+
+
+def test_concurrent_approvals_of_one_item_decide_it_once():
+    import threading
+    inbox = InboxApprovalStore()
+    _gw(_Handler(), inbox).invoke(_req(GP))
+    aid = inbox.pending()[0]["id"]
+    barrier, outcomes = threading.Barrier(8), []
+
+    def worker(i):
+        barrier.wait()
+        try:
+            inbox.approve(aid, by=f"approver{i}")
+            outcomes.append("approved")
+        except ApprovalError:
+            outcomes.append("refused")
+
+    ts = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert outcomes.count("approved") == 1 and outcomes.count("refused") == 7

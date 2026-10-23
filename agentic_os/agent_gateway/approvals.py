@@ -15,6 +15,7 @@ declares its reverse via ``CapabilityManifest.compensation``).
 from __future__ import annotations
 
 import secrets
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
@@ -61,6 +62,7 @@ class InboxApprovalStore:
     clock: Callable[[], float] = time.time
     _by_fp: Dict[str, ApprovalRequest] = field(default_factory=dict)
     _by_id: Dict[str, ApprovalRequest] = field(default_factory=dict)
+    _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)   # single-use must be atomic
 
     def _park(self, fp: str, request: GatewayRequest, manifest: CapabilityManifest) -> ApprovalRequest:
         now = self.clock()
@@ -76,6 +78,10 @@ class InboxApprovalStore:
         return bool(ar.expires_at) and self.clock() >= ar.expires_at
 
     def is_satisfied(self, request: GatewayRequest, manifest: CapabilityManifest) -> bool:
+        with self._lock:
+            return self._is_satisfied(request, manifest)
+
+    def _is_satisfied(self, request: GatewayRequest, manifest: CapabilityManifest) -> bool:
         fp = request.intent_hash()
         ar = self._by_fp.get(fp)
         if ar is None or ar.consumed or (ar.status != "rejected" and self._expired(ar)):
@@ -95,6 +101,10 @@ class InboxApprovalStore:
         return ar.view() if ar else None
 
     def approve(self, approval_id: str, *, by: str, edit: Optional[dict] = None) -> dict:
+        with self._lock:
+            return self._approve(approval_id, by=by, edit=edit)
+
+    def _approve(self, approval_id: str, *, by: str, edit: Optional[dict] = None) -> dict:
         ar = self._require(approval_id)
         if not by:
             raise ApprovalError("an approval needs an identified approver")
@@ -108,6 +118,10 @@ class InboxApprovalStore:
         return ar.view()
 
     def reject(self, approval_id: str, *, by: str) -> dict:
+        with self._lock:
+            return self._reject(approval_id, by=by)
+
+    def _reject(self, approval_id: str, *, by: str) -> dict:
         ar = self._require(approval_id)
         if ar.consumed:
             raise ApprovalError(f"approval {approval_id} was already used")
