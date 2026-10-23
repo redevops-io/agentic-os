@@ -27,7 +27,8 @@ def mission_receipt(rt, mission_id: str) -> Dict[str, Any]:
                           "capability": p.get("capability"), "result": p.get("result")})
         elif t == "ApprovalGranted":
             approvals.append({"seq": e.get("seq"), "node_id": p.get("node_id"),
-                              "capability": p.get("capability"), "decision": "approve"})
+                              "capability": p.get("capability"), "decision": "approve",
+                              "approver": p.get("approver"), "inputs_sha256": p.get("inputs_sha256")})
         elif t == "MissionOutcome":
             outcome = {"kind": p.get("kind"), "success": p.get("success"),
                        "business_value": p.get("business_value")}
@@ -35,6 +36,9 @@ def mission_receipt(rt, mission_id: str) -> Dict[str, Any]:
     folded = fold_compensation(rt.repo.timeline(mission_id))
     state = rt.repo.state(mission_id)
     ledger = rt.evidence.ledger(mission_id) or []
+    from .store import verify_chain  # noqa: PLC0415
+    chain = verify_chain(list(rt.store.for_mission(mission_id)))
+    head = rt.store.head(mission_id) if hasattr(rt.store, "head") else ""
     return {
         "mission_id": mission_id,
         "goal": rt.repo.goal(mission_id),
@@ -45,4 +49,9 @@ def mission_receipt(rt, mission_id: str) -> Dict[str, Any]:
         "compensation": {"nodes": folded, **summarize(folded)},   # own receipts; never inferred as rolled back
         "evidence_refs": [c.get("id") for c in ledger if isinstance(c, dict) and c.get("id")],
         "credential": "broker-mediated — values never logged",
+        # tamper evidence: the chain over this mission's events and its head. The head only protects against
+        # edits if it is anchored where the log's writer cannot change it (and cannot detect tail truncation alone).
+        "ledger_head": head,
+        "ledger_chain": {"ok": chain.ok, "checked": chain.checked, "unchained": chain.unchained,
+                         **({"first_bad_seq": chain.first_bad_seq, "reason": chain.reason} if not chain.ok else {})},
     }
