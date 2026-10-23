@@ -1,0 +1,607 @@
+{
+ "doc": "hash = sha256(prev + '|' + canonical) where canonical = json.dumps({seq,ts,type,mission_id,payload}, sort_keys=True, separators=(',',':'), ensure_ascii=False) in UTF-8; prev is the previous event's hash OF THE SAME MISSION ('' for its first). A port must reproduce 'canonical' and 'hash' exactly.",
+ "cases": [
+  {
+   "name": "ascii",
+   "events": [
+    {
+     "seq": 1,
+     "ts": 1792774215.854218,
+     "type": "NodeSucceeded",
+     "mission_id": "m1",
+     "payload": {
+      "goal": "pay invoice",
+      "n": 3
+     },
+     "prev": "",
+     "hash": "bfe19aa455e45ececc38ae83d8d5aef234224a409d5507eb5bd24b3f92edb57f",
+     "canonical": "{\"mission_id\":\"m1\",\"payload\":{\"goal\":\"pay invoice\",\"n\":3},\"seq\":1,\"ts\":1792774215.854218,\"type\":\"NodeSucceeded\"}"
+    },
+    {
+     "seq": 2,
+     "ts": 1.0,
+     "type": "NodeSucceeded",
+     "mission_id": "m2",
+     "payload": {
+      "goal": "pay invoice",
+      "n": 3
+     },
+     "prev": "",
+     "hash": "a04f16b4b380b8a6be18b894ed45b5297d0e74cf106e1f3f198139e1946dfb5f",
+     "canonical": "{\"mission_id\":\"m2\",\"payload\":{\"goal\":\"pay invoice\",\"n\":3},\"seq\":2,\"ts\":1.0,\"type\":\"NodeSucceeded\"}"
+    },
+    {
+     "seq": 3,
+     "ts": 1000000000.0,
+     "type": "NodeSucceeded",
+     "mission_id": "m1",
+     "payload": {
+      "goal": "pay invoice",
+      "n": 3
+     },
+     "prev": "bfe19aa455e45ececc38ae83d8d5aef234224a409d5507eb5bd24b3f92edb57f",
+     "hash": "2e66311d192c629a7c120ec8c411ebb94344c796956f4737c63662ddbd8ad8b6",
+     "canonical": "{\"mission_id\":\"m1\",\"payload\":{\"goal\":\"pay invoice\",\"n\":3},\"seq\":3,\"ts\":1000000000.0,\"type\":\"NodeSucceeded\"}"
+    }
+   ],
+   "ok": true
+  },
+  {
+   "name": "unicode",
+   "events": [
+    {
+     "seq": 1,
+     "ts": 1792774215.854218,
+     "type": "NodeSucceeded",
+     "mission_id": "m1",
+     "payload": {
+      "naïve": "é中😀",
+      "emoji": "😀",
+      "mixed": "aé中😀z"
+     },
+     "prev": "",
+     "hash": "b444098f7e924eb7c6152972149ee99f256d1c6ce09341f178c710ff59de202d",
+     "canonical": "{\"mission_id\":\"m1\",\"payload\":{\"emoji\":\"😀\",\"mixed\":\"aé中😀z\",\"naïve\":\"é中😀\"},\"seq\":1,\"ts\":1792774215.854218,\"type\":\"NodeSucceeded\"}"
+    },
+    {
+     "seq": 2,
+     "ts": 1.0,
+     "type": "NodeSucceeded",
+     "mission_id": "m2",
+     "payload": {
+      "naïve": "é中😀",
+      "emoji": "😀",
+      "mixed": "aé中😀z"
+     },
+     "prev": "",
+     "hash": "22bc5124921ff48f6fb9e5d90898f5bb132fd4ed7c730403c58240779e75f75c",
+     "canonical": "{\"mission_id\":\"m2\",\"payload\":{\"emoji\":\"😀\",\"mixed\":\"aé中😀z\",\"naïve\":\"é中😀\"},\"seq\":2,\"ts\":1.0,\"type\":\"NodeSucceeded\"}"
+    },
+    {
+     "seq": 3,
+     "ts": 1000000000.0,
+     "type": "NodeSucceeded",
+     "mission_id": "m1",
+     "payload": {
+      "naïve": "é中😀",
+      "emoji": "😀",
+      "mixed": "aé中😀z"
+     },
+     "prev": "b444098f7e924eb7c6152972149ee99f256d1c6ce09341f178c710ff59de202d",
+     "hash": "e289dd515e5b2b2c7f7e76d601666647fdd7b3a9aa16703c0504f3f091cee74b",
+     "canonical": "{\"mission_id\":\"m1\",\"payload\":{\"emoji\":\"😀\",\"mixed\":\"aé中😀z\",\"naïve\":\"é中😀\"},\"seq\":3,\"ts\":1000000000.0,\"type\":\"NodeSucceeded\"}"
+    }
+   ],
+   "ok": true
+  },
+  {
+   "name": "key_order_astral",
+   "events": [
+    {
+     "seq": 1,
+     "ts": 1792774215.854218,
+     "type": "NodeSucceeded",
+     "mission_id": "m1",
+     "payload": {
+      "😀": 1,
+      "￿": 2,
+      "z": 3,
+      "é": 4,
+      "A": 5
+     },
+     "prev": "",
+     "hash": "adeb319a51fea90e3212310e22a81728354bf6161e79820fc03c1c84de62cb9a",
+     "canonical": "{\"mission_id\":\"m1\",\"payload\":{\"A\":5,\"z\":3,\"é\":4,\"￿\":2,\"😀\":1},\"seq\":1,\"ts\":1792774215.854218,\"type\":\"NodeSucceeded\"}"
+    },
+    {
+     "seq": 2,
+     "ts": 1.0,
+     "type": "NodeSucceeded",
+     "mission_id": "m2",
+     "payload": {
+      "😀": 1,
+      "￿": 2,
+      "z": 3,
+      "é": 4,
+      "A": 5
+     },
+     "prev": "",
+     "hash": "d74ecc4dea9a139528eefe5ecfc99504dffb8c1c97f9947fcb1238147493c5a8",
+     "canonical": "{\"mission_id\":\"m2\",\"payload\":{\"A\":5,\"z\":3,\"é\":4,\"￿\":2,\"😀\":1},\"seq\":2,\"ts\":1.0,\"type\":\"NodeSucceeded\"}"
+    },
+    {
+     "seq": 3,
+     "ts": 1000000000.0,
+     "type": "NodeSucceeded",
+     "mission_id": "m1",
+     "payload": {
+      "😀": 1,
+      "￿": 2,
+      "z": 3,
+      "é": 4,
+      "A": 5
+     },
+     "prev": "adeb319a51fea90e3212310e22a81728354bf6161e79820fc03c1c84de62cb9a",
+     "hash": "61baa3ce4c41b3103433dddd1394f91f0b9d4166f91b582621dfc10268dc9665",
+     "canonical": "{\"mission_id\":\"m1\",\"payload\":{\"A\":5,\"z\":3,\"é\":4,\"￿\":2,\"😀\":1},\"seq\":3,\"ts\":1000000000.0,\"type\":\"NodeSucceeded\"}"
+    }
+   ],
+   "ok": true
+  },
+  {
+   "name": "numbers",
+   "events": [
+    {
+     "seq": 1,
+     "ts": 1792774215.854218,
+     "type": "NodeSucceeded",
+     "mission_id": "m1",
+     "payload": {
+      "int0": 0,
+      "neg": -1,
+      "big": 12345678901234567890,
+      "f1": 1.0,
+      "f01": 0.1,
+      "f16": 1e+16,
+      "f15": 123456789012345.0,
+      "fe5": 1e-05,
+      "f4": 0.0001,
+      "f300": 1.5e+300,
+      "negzero": -0.0,
+      "f100": 100.0,
+      "f22": 1e+22,
+      "list": [
+       1,
+       2.5,
+       [
+        3.0,
+        {
+         "k": 1e-07
+        }
+       ]
+      ]
+     },
+     "prev": "",
+     "hash": "6cbd9fa4152d8d18fdf95db3552c839f5af3dd516a7e578e70fba307cfb6782a",
+     "canonical": "{\"mission_id\":\"m1\",\"payload\":{\"big\":12345678901234567890,\"f01\":0.1,\"f1\":1.0,\"f100\":100.0,\"f15\":123456789012345.0,\"f16\":1e+16,\"f22\":1e+22,\"f300\":1.5e+300,\"f4\":0.0001,\"fe5\":1e-05,\"int0\":0,\"list\":[1,2.5,[3.0,{\"k\":1e-07}]],\"neg\":-1,\"negzero\":-0.0},\"seq\":1,\"ts\":1792774215.854218,\"type\":\"NodeSucceeded\"}"
+    },
+    {
+     "seq": 2,
+     "ts": 1.0,
+     "type": "NodeSucceeded",
+     "mission_id": "m2",
+     "payload": {
+      "int0": 0,
+      "neg": -1,
+      "big": 12345678901234567890,
+      "f1": 1.0,
+      "f01": 0.1,
+      "f16": 1e+16,
+      "f15": 123456789012345.0,
+      "fe5": 1e-05,
+      "f4": 0.0001,
+      "f300": 1.5e+300,
+      "negzero": -0.0,
+      "f100": 100.0,
+      "f22": 1e+22,
+      "list": [
+       1,
+       2.5,
+       [
+        3.0,
+        {
+         "k": 1e-07
+        }
+       ]
+      ]
+     },
+     "prev": "",
+     "hash": "48a247e7ae24015c7e9681097d6fb1b5466b4a8a57198fbcd6b2f6e4fdd40275",
+     "canonical": "{\"mission_id\":\"m2\",\"payload\":{\"big\":12345678901234567890,\"f01\":0.1,\"f1\":1.0,\"f100\":100.0,\"f15\":123456789012345.0,\"f16\":1e+16,\"f22\":1e+22,\"f300\":1.5e+300,\"f4\":0.0001,\"fe5\":1e-05,\"int0\":0,\"list\":[1,2.5,[3.0,{\"k\":1e-07}]],\"neg\":-1,\"negzero\":-0.0},\"seq\":2,\"ts\":1.0,\"type\":\"NodeSucceeded\"}"
+    },
+    {
+     "seq": 3,
+     "ts": 1000000000.0,
+     "type": "NodeSucceeded",
+     "mission_id": "m1",
+     "payload": {
+      "int0": 0,
+      "neg": -1,
+      "big": 12345678901234567890,
+      "f1": 1.0,
+      "f01": 0.1,
+      "f16": 1e+16,
+      "f15": 123456789012345.0,
+      "fe5": 1e-05,
+      "f4": 0.0001,
+      "f300": 1.5e+300,
+      "negzero": -0.0,
+      "f100": 100.0,
+      "f22": 1e+22,
+      "list": [
+       1,
+       2.5,
+       [
+        3.0,
+        {
+         "k": 1e-07
+        }
+       ]
+      ]
+     },
+     "prev": "6cbd9fa4152d8d18fdf95db3552c839f5af3dd516a7e578e70fba307cfb6782a",
+     "hash": "a90db03de9bccd0e85e982f2596bcbf13a5f9a09b029f464cd0f73b92f60d107",
+     "canonical": "{\"mission_id\":\"m1\",\"payload\":{\"big\":12345678901234567890,\"f01\":0.1,\"f1\":1.0,\"f100\":100.0,\"f15\":123456789012345.0,\"f16\":1e+16,\"f22\":1e+22,\"f300\":1.5e+300,\"f4\":0.0001,\"fe5\":1e-05,\"int0\":0,\"list\":[1,2.5,[3.0,{\"k\":1e-07}]],\"neg\":-1,\"negzero\":-0.0},\"seq\":3,\"ts\":1000000000.0,\"type\":\"NodeSucceeded\"}"
+    }
+   ],
+   "ok": true
+  },
+  {
+   "name": "escapes",
+   "events": [
+    {
+     "seq": 1,
+     "ts": 1792774215.854218,
+     "type": "NodeSucceeded",
+     "mission_id": "m1",
+     "payload": {
+      "s": "q\"b\\s\n\r\t\b\f\u0001  /"
+     },
+     "prev": "",
+     "hash": "124d5b28f88886da147ce3167bf332ab97f208115d110239934509a7d665c4b6",
+     "canonical": "{\"mission_id\":\"m1\",\"payload\":{\"s\":\"q\\\"b\\\\s\\n\\r\\t\\b\\f\\u0001  /\"},\"seq\":1,\"ts\":1792774215.854218,\"type\":\"NodeSucceeded\"}"
+    },
+    {
+     "seq": 2,
+     "ts": 1.0,
+     "type": "NodeSucceeded",
+     "mission_id": "m2",
+     "payload": {
+      "s": "q\"b\\s\n\r\t\b\f\u0001  /"
+     },
+     "prev": "",
+     "hash": "9e7d8c60690277b1101fa8de05b212342175990dea084c46e7bb2791f65b978d",
+     "canonical": "{\"mission_id\":\"m2\",\"payload\":{\"s\":\"q\\\"b\\\\s\\n\\r\\t\\b\\f\\u0001  /\"},\"seq\":2,\"ts\":1.0,\"type\":\"NodeSucceeded\"}"
+    },
+    {
+     "seq": 3,
+     "ts": 1000000000.0,
+     "type": "NodeSucceeded",
+     "mission_id": "m1",
+     "payload": {
+      "s": "q\"b\\s\n\r\t\b\f\u0001  /"
+     },
+     "prev": "124d5b28f88886da147ce3167bf332ab97f208115d110239934509a7d665c4b6",
+     "hash": "450b65acd1549d4f891c881500e09de0d6a78b132622cf7eead32fb5ed89a6e9",
+     "canonical": "{\"mission_id\":\"m1\",\"payload\":{\"s\":\"q\\\"b\\\\s\\n\\r\\t\\b\\f\\u0001  /\"},\"seq\":3,\"ts\":1000000000.0,\"type\":\"NodeSucceeded\"}"
+    }
+   ],
+   "ok": true
+  },
+  {
+   "name": "types",
+   "events": [
+    {
+     "seq": 1,
+     "ts": 1792774215.854218,
+     "type": "NodeSucceeded",
+     "mission_id": "m1",
+     "payload": {
+      "t": true,
+      "f": false,
+      "n": null,
+      "e": {},
+      "l": [],
+      "nested": {
+       "b": {
+        "a": [
+         null,
+         true
+        ]
+       }
+      }
+     },
+     "prev": "",
+     "hash": "7ded7513a6ee4204f5bf05bce03cd0c0d3d6d657c623fec6592c9ed73f7cf8cf",
+     "canonical": "{\"mission_id\":\"m1\",\"payload\":{\"e\":{},\"f\":false,\"l\":[],\"n\":null,\"nested\":{\"b\":{\"a\":[null,true]}},\"t\":true},\"seq\":1,\"ts\":1792774215.854218,\"type\":\"NodeSucceeded\"}"
+    },
+    {
+     "seq": 2,
+     "ts": 1.0,
+     "type": "NodeSucceeded",
+     "mission_id": "m2",
+     "payload": {
+      "t": true,
+      "f": false,
+      "n": null,
+      "e": {},
+      "l": [],
+      "nested": {
+       "b": {
+        "a": [
+         null,
+         true
+        ]
+       }
+      }
+     },
+     "prev": "",
+     "hash": "a63df2a91367bdfc95b2817e95da1f69dc5f067fd6456841aaee4010b86a6e4e",
+     "canonical": "{\"mission_id\":\"m2\",\"payload\":{\"e\":{},\"f\":false,\"l\":[],\"n\":null,\"nested\":{\"b\":{\"a\":[null,true]}},\"t\":true},\"seq\":2,\"ts\":1.0,\"type\":\"NodeSucceeded\"}"
+    },
+    {
+     "seq": 3,
+     "ts": 1000000000.0,
+     "type": "NodeSucceeded",
+     "mission_id": "m1",
+     "payload": {
+      "t": true,
+      "f": false,
+      "n": null,
+      "e": {},
+      "l": [],
+      "nested": {
+       "b": {
+        "a": [
+         null,
+         true
+        ]
+       }
+      }
+     },
+     "prev": "7ded7513a6ee4204f5bf05bce03cd0c0d3d6d657c623fec6592c9ed73f7cf8cf",
+     "hash": "ebbf60cb47c8267c1fc41d01f3ff449dc1a3b900904439071bb19257853187ea",
+     "canonical": "{\"mission_id\":\"m1\",\"payload\":{\"e\":{},\"f\":false,\"l\":[],\"n\":null,\"nested\":{\"b\":{\"a\":[null,true]}},\"t\":true},\"seq\":3,\"ts\":1000000000.0,\"type\":\"NodeSucceeded\"}"
+    }
+   ],
+   "ok": true
+  }
+ ],
+ "tamper": [
+  {
+   "name": "clean",
+   "events": [
+    {
+     "seq": 1,
+     "ts": 1001.0,
+     "type": "E",
+     "mission_id": "m",
+     "payload": {
+      "i": 1,
+      "amount": 100
+     },
+     "prev": "",
+     "hash": "ba05a40ca19ff3ff060efe0f3eba0590dddf1ab7dd92ac9e8b33c7ac6906098a"
+    },
+    {
+     "seq": 2,
+     "ts": 1002.0,
+     "type": "E",
+     "mission_id": "m",
+     "payload": {
+      "i": 2,
+      "amount": 100
+     },
+     "prev": "ba05a40ca19ff3ff060efe0f3eba0590dddf1ab7dd92ac9e8b33c7ac6906098a",
+     "hash": "a7b74fe8cb95c9ae0010d945671aa7e20abe6a6dc62a96276a9b4dcfb5ca61d3"
+    },
+    {
+     "seq": 3,
+     "ts": 1003.0,
+     "type": "E",
+     "mission_id": "m",
+     "payload": {
+      "i": 3,
+      "amount": 100
+     },
+     "prev": "a7b74fe8cb95c9ae0010d945671aa7e20abe6a6dc62a96276a9b4dcfb5ca61d3",
+     "hash": "d386c2c8b59f99931f964af67207f837c51b6fd0f7b6334fcc3c7b3a9bc17b19"
+    }
+   ],
+   "expect": {
+    "ok": true,
+    "checked": 3,
+    "unchained": 0,
+    "first_bad_seq": 0,
+    "reason": ""
+   }
+  },
+  {
+   "name": "edited",
+   "events": [
+    {
+     "seq": 1,
+     "ts": 1001.0,
+     "type": "E",
+     "mission_id": "m",
+     "payload": {
+      "i": 1,
+      "amount": 100
+     },
+     "prev": "",
+     "hash": "ba05a40ca19ff3ff060efe0f3eba0590dddf1ab7dd92ac9e8b33c7ac6906098a"
+    },
+    {
+     "seq": 2,
+     "ts": 1002.0,
+     "type": "E",
+     "mission_id": "m",
+     "payload": {
+      "i": 2,
+      "amount": 1
+     },
+     "prev": "ba05a40ca19ff3ff060efe0f3eba0590dddf1ab7dd92ac9e8b33c7ac6906098a",
+     "hash": "a7b74fe8cb95c9ae0010d945671aa7e20abe6a6dc62a96276a9b4dcfb5ca61d3"
+    },
+    {
+     "seq": 3,
+     "ts": 1003.0,
+     "type": "E",
+     "mission_id": "m",
+     "payload": {
+      "i": 3,
+      "amount": 100
+     },
+     "prev": "a7b74fe8cb95c9ae0010d945671aa7e20abe6a6dc62a96276a9b4dcfb5ca61d3",
+     "hash": "d386c2c8b59f99931f964af67207f837c51b6fd0f7b6334fcc3c7b3a9bc17b19"
+    }
+   ],
+   "expect": {
+    "ok": false,
+    "checked": 1,
+    "unchained": 0,
+    "first_bad_seq": 2,
+    "reason": "an event was modified"
+   }
+  },
+  {
+   "name": "deleted",
+   "events": [
+    {
+     "seq": 1,
+     "ts": 1001.0,
+     "type": "E",
+     "mission_id": "m",
+     "payload": {
+      "i": 1,
+      "amount": 100
+     },
+     "prev": "",
+     "hash": "ba05a40ca19ff3ff060efe0f3eba0590dddf1ab7dd92ac9e8b33c7ac6906098a"
+    },
+    {
+     "seq": 3,
+     "ts": 1003.0,
+     "type": "E",
+     "mission_id": "m",
+     "payload": {
+      "i": 3,
+      "amount": 100
+     },
+     "prev": "a7b74fe8cb95c9ae0010d945671aa7e20abe6a6dc62a96276a9b4dcfb5ca61d3",
+     "hash": "d386c2c8b59f99931f964af67207f837c51b6fd0f7b6334fcc3c7b3a9bc17b19"
+    }
+   ],
+   "expect": {
+    "ok": false,
+    "checked": 1,
+    "unchained": 0,
+    "first_bad_seq": 3,
+    "reason": "an event is missing, reordered or replaced"
+   }
+  },
+  {
+   "name": "reordered",
+   "events": [
+    {
+     "seq": 1,
+     "ts": 1001.0,
+     "type": "E",
+     "mission_id": "m",
+     "payload": {
+      "i": 1,
+      "amount": 100
+     },
+     "prev": "",
+     "hash": "ba05a40ca19ff3ff060efe0f3eba0590dddf1ab7dd92ac9e8b33c7ac6906098a"
+    },
+    {
+     "seq": 3,
+     "ts": 1003.0,
+     "type": "E",
+     "mission_id": "m",
+     "payload": {
+      "i": 3,
+      "amount": 100
+     },
+     "prev": "a7b74fe8cb95c9ae0010d945671aa7e20abe6a6dc62a96276a9b4dcfb5ca61d3",
+     "hash": "d386c2c8b59f99931f964af67207f837c51b6fd0f7b6334fcc3c7b3a9bc17b19"
+    },
+    {
+     "seq": 2,
+     "ts": 1002.0,
+     "type": "E",
+     "mission_id": "m",
+     "payload": {
+      "i": 2,
+      "amount": 100
+     },
+     "prev": "ba05a40ca19ff3ff060efe0f3eba0590dddf1ab7dd92ac9e8b33c7ac6906098a",
+     "hash": "a7b74fe8cb95c9ae0010d945671aa7e20abe6a6dc62a96276a9b4dcfb5ca61d3"
+    }
+   ],
+   "expect": {
+    "ok": false,
+    "checked": 1,
+    "unchained": 0,
+    "first_bad_seq": 3,
+    "reason": "an event is missing, reordered or replaced"
+   }
+  },
+  {
+   "name": "legacy_prefix",
+   "events": [
+    {
+     "seq": 1,
+     "ts": 1.0,
+     "type": "E",
+     "mission_id": "m",
+     "payload": {},
+     "prev": "",
+     "hash": ""
+    },
+    {
+     "seq": 2,
+     "ts": 1001.0,
+     "type": "E",
+     "mission_id": "m",
+     "payload": {
+      "i": 1,
+      "amount": 100
+     },
+     "prev": "",
+     "hash": "ba05a40ca19ff3ff060efe0f3eba0590dddf1ab7dd92ac9e8b33c7ac6906098a"
+    },
+    {
+     "seq": 3,
+     "ts": 1002.0,
+     "type": "E",
+     "mission_id": "m",
+     "payload": {
+      "i": 2,
+      "amount": 100
+     },
+     "prev": "ba05a40ca19ff3ff060efe0f3eba0590dddf1ab7dd92ac9e8b33c7ac6906098a",
+     "hash": "a7b74fe8cb95c9ae0010d945671aa7e20abe6a6dc62a96276a9b4dcfb5ca61d3"
+    }
+   ],
+   "expect": {
+    "ok": false,
+    "checked": 0,
+    "unchained": 1,
+    "first_bad_seq": 2,
+    "reason": "an event was modified"
+   }
+  }
+ ]
+}

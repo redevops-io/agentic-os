@@ -1,0 +1,83 @@
+{
+ "doc": "allowlist (SUMMARY_KEYS), emails masked ([^@\\s]{1,2})[^@\\s]*@ -> \\1***@, strings cut to 80 characters (code points), other types str() cut to 80; numbers/bools kept",
+ "cases": [
+  {
+   "name": "allowlist_only",
+   "resolved": {
+    "amount": 100,
+    "currency": "USD",
+    "secret": "x",
+    "api_key": "k",
+    "_goal": "g",
+    "account_id": "A1"
+   },
+   "summary": {
+    "amount": 100,
+    "currency": "USD",
+    "account_id": "A1"
+   }
+  },
+  {
+   "name": "email_masked",
+   "resolved": {
+    "to": "jane.doe@acme.com",
+    "recipient": "al@x.io",
+    "subject": "a@b@c"
+   },
+   "summary": {
+    "subject": "a***@b***@c",
+    "to": "ja***@acme.com",
+    "recipient": "al***@x.io"
+   }
+  },
+  {
+   "name": "truncation",
+   "resolved": {
+    "subject": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "destination": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+   },
+   "summary": {
+    "subject": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "destination": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+   }
+  },
+  {
+   "name": "non_scalars",
+   "resolved": {
+    "resource": {
+     "a": 1
+    },
+    "count": [
+     1,
+     2
+    ],
+    "order_id": null,
+    "total": 12.5,
+    "quantity": true
+   },
+   "summary": {
+    "total": 12.5,
+    "quantity": true,
+    "count": "[1, 2]",
+    "order_id": "None",
+    "resource": "{'a': 1}"
+   }
+  },
+  {
+   "name": "missing_keys_skipped",
+   "resolved": {
+    "foo": 1
+   },
+   "summary": {}
+  },
+  {
+   "name": "email_not_at_start",
+   "resolved": {
+    "to": "contact: jane@acme.com or bob@evil.org"
+   },
+   "summary": {
+    "to": "contact: ja***@acme.com or bo***@evil.org"
+   }
+  }
+ ]
+}

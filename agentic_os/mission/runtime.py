@@ -361,10 +361,6 @@ class MissionRuntime:
         from .approval import canonical
         return hashlib.sha256(canonical(strip_approval_keys(dict(inputs or {})))).hexdigest()
 
-    # facts an approver needs to see, never free text or secrets; values are truncated and emails masked
-    _SUMMARY_KEYS = ("amount", "currency", "total", "quantity", "count", "channel", "subject", "to", "recipient",
-                     "destination", "invoice_id", "account_id", "customer_id", "order_id", "resource")
-
     def _node_inputs_digest(self, m: Mission, world: WorldState, node) -> str:
         """sha256 of the inputs this node WOULD be dispatched with now (approval markers excluded), so what a
         human approved can be compared with what is about to run."""
@@ -374,20 +370,9 @@ class MissionRuntime:
         return self._inputs_digest(resolved)
 
     def _action_summary(self, m: Mission, world: WorldState, node) -> dict:
-        """The concrete facts shown to the approver (amount, destination, ...): an allowlist, truncated, with
-        email addresses masked, so the ledger never holds a customer's raw data."""
-        resolved = self._resolve_inputs(m, world, node)
-        out: dict[str, Any] = {}
-        for k in self._SUMMARY_KEYS:
-            if k not in resolved:
-                continue
-            v = resolved[k]
-            if isinstance(v, str):
-                v = re.sub(r"([^@\s]{1,2})[^@\s]*@", r"\1***@", v)[:80]
-            elif not isinstance(v, (int, float, bool)):
-                v = str(v)[:80]
-            out[k] = v
-        return out
+        """The concrete facts shown to the approver (see ``approval.action_summary_of``)."""
+        from .approval import action_summary_of  # noqa: PLC0415
+        return action_summary_of(self._resolve_inputs(m, world, node))
 
     def _approved_digest(self, mission_id: str, node_id: str) -> str | None:
         """The inputs digest the human was shown when they approved this node (None for legacy approvals)."""
@@ -1267,7 +1252,8 @@ class MissionRuntime:
             ttl = _approval_ttl_s()
             parked_at = next((e.ts for e in reversed(self.store.for_mission(mission_id))
                               if e.type == "NodeParked" and e.payload.get("node_id") == node_id), None)
-            if ttl and parked_at is not None and time.time() - parked_at > ttl:
+            from .approval import approval_expired  # noqa: PLC0415
+            if approval_expired(parked_at, time.time(), ttl):
                 # a decision about a situation that has since changed is not a decision: ask again
                 self.store.append("ApprovalExpired", mission_id, {"node_id": node_id, "ttl_s": ttl,
                                                                   "parked_at": parked_at})
