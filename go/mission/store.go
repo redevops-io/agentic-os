@@ -6,6 +6,7 @@ package mission
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sync"
@@ -19,6 +20,11 @@ type Event struct {
 	Seq       int            `json:"seq"`
 	ID        string         `json:"id,omitempty"` // optional record id (legacy/imported logs); used only to dedupe replays
 	Ts        float64        `json:"ts"`
+	// Prev/Hash form the per-mission hash chain (chain.go). Empty on events written before chaining.
+	Prev string `json:"prev"`
+	Hash string `json:"hash,omitempty"`
+	// raw is the payload exactly as read from the log (number text preserved); set only on loaded events.
+	raw json.RawMessage
 }
 
 // EventStore is an append-only log: an in-memory slice, optionally persisted to a JSONL file and
@@ -32,11 +38,12 @@ type EventStore struct {
 	// persistFailures counts events kept in memory but not written; loadSkipped counts unreadable log lines.
 	persistFailures int
 	loadSkipped     int
+	heads           map[string]string // mission_id -> hash of its last chained event
 }
 
 // NewEventStore builds a store; if path is non-empty and exists, prior events are reloaded.
 func NewEventStore(path string) *EventStore {
-	s := &EventStore{path: path}
+	s := &EventStore{path: path, heads: map[string]string{}}
 	if path != "" {
 		if _, err := os.Stat(path); err == nil {
 			s.load()
@@ -64,6 +71,9 @@ func (s *EventStore) load() {
 			continue
 		}
 		s.events = append(s.events, ev)
+		if ev.Hash != "" {
+			s.heads[ev.MissionID] = ev.Hash
+		}
 		if ev.Seq > s.seq {
 			s.seq = ev.Seq
 		}
@@ -76,6 +86,9 @@ func (s *EventStore) Append(typ, missionID string, payload map[string]any) *Even
 	s.mu.Lock()
 	s.seq++
 	ev := &Event{Type: typ, MissionID: missionID, Payload: payload, Seq: s.seq, Ts: now()}
+	ev.Prev = s.heads[missionID]
+	ev.Hash = EntryHash(ev.Prev, ev.Seq, ev.Ts, ev.Type, ev.MissionID, ev.chainPayload())
+	s.heads[missionID] = ev.Hash
 	s.events = append(s.events, ev)
 	if s.path != "" {
 		if fh, err := os.OpenFile(s.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {

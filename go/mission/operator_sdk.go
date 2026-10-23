@@ -17,6 +17,21 @@ import (
 type Capability struct {
 	Spec    CapabilitySpec
 	Handler Handler
+	// Keyed, when set, is called instead of Handler and also receives the idempotency key of the call, so a handler that
+	// forwards to a provider can send the SAME key (a provider-side or reconcile lookup by key needs it; without it the
+	// provider request carries no key and its idempotent start is silently off).
+	Keyed KeyedHandler
+}
+
+// KeyedHandler is a Handler that also receives the call's idempotency key ("" when the call has none).
+type KeyedHandler func(inputs map[string]any, idempotencyKey string) (map[string]any, error)
+
+// NewKeyedCapability is NewCapability for a handler that needs the idempotency key.
+func NewKeyedCapability(name string, handler KeyedHandler, opts ...CapOption) Capability {
+	c := NewCapability(name, nil, opts...)
+	c.Keyed = handler
+	c.Handler = func(in map[string]any) (map[string]any, error) { return handler(in, "") }
+	return c
 }
 
 // CapOption configures a capability spec (the ergonomic builder args).
@@ -72,10 +87,11 @@ type Operator struct {
 	Name     string
 	Manifest CapabilityManifest
 	handlers map[string]Handler
+	keyed    map[string]KeyedHandler // handlers that also receive the idempotency key of the call
 	specs    map[string]CapabilitySpec
 	seen     map[string]map[string]any
 	// ReplayGuard makes a verified approval token single-use (per process; multi-replica needs a shared store).
-	ReplayGuard *ReplayGuard
+	ReplayGuard NonceGuard
 	Calls       [][2]string // (capability, idempotency_key) — for assertions
 	mu          sync.Mutex  // guards seen + Calls
 }
@@ -87,9 +103,25 @@ func (o *Operator) CallsSnapshot() [][2]string {
 	return append([][2]string(nil), o.Calls...)
 }
 
+// NewOperator builds an operator. It PANICS (a startup refusal, never a silent downgrade) when
+// AGENTIC_OS_REQUIRE_DURABLE_REPLAY=1 and no durable replay store is configured; use NewOperatorE to handle the error.
 func NewOperator(name string, caps []Capability) *Operator {
+	op, err := NewOperatorE(name, caps)
+	if err != nil {
+		panic(err)
+	}
+	return op
+}
+
+// NewOperatorE is NewOperator returning the replay-protection configuration error instead of panicking.
+func NewOperatorE(name string, caps []Capability) (*Operator, error) {
+	guard, err := DefaultReplayGuard()
+	if err != nil {
+		return nil, err
+	}
 	specs := make([]CapabilitySpec, 0, len(caps))
 	handlers := make(map[string]Handler, len(caps))
+	keyed := make(map[string]KeyedHandler)
 	byName := make(map[string]CapabilitySpec, len(caps))
 	for i := range caps {
 		if caps[i].Spec.Operator == "" {
@@ -97,12 +129,15 @@ func NewOperator(name string, caps []Capability) *Operator {
 		}
 		specs = append(specs, caps[i].Spec)
 		handlers[caps[i].Spec.Name] = caps[i].Handler
+		if caps[i].Keyed != nil {
+			keyed[caps[i].Spec.Name] = caps[i].Keyed
+		}
 		byName[caps[i].Spec.Name] = caps[i].Spec
 	}
 	return &Operator{
 		Name: name, Manifest: CapabilityManifest{Operator: name, Capabilities: specs},
-		handlers: handlers, specs: byName, seen: map[string]map[string]any{}, ReplayGuard: NewReplayGuard(0),
-	}
+		handlers: handlers, keyed: keyed, specs: byName, seen: map[string]map[string]any{}, ReplayGuard: guard,
+	}, nil
 }
 
 // dedupeKey: (capability, canonical inputs minus runtime meta, idempotency key) - the same key with a different
@@ -143,7 +178,13 @@ func (o *Operator) invokeKeyed(capability string, inputs map[string]any, idempot
 	o.mu.Lock()
 	o.Calls = append(o.Calls, [2]string{capability, idempotencyKey})
 	o.mu.Unlock()
-	result, err := fn(inputs)
+	var result map[string]any
+	var err error
+	if kh, isKeyed := o.keyed[capability]; isKeyed {
+		result, err = kh(inputs, idempotencyKey)
+	} else {
+		result, err = fn(inputs)
+	}
 	if err != nil {
 		return nil, err
 	}

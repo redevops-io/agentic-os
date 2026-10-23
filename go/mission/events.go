@@ -413,6 +413,14 @@ func writePyJSON(sb *strings.Builder, v any) { writePyJSONSep(sb, v, ", ", ": ")
 
 // writePyJSONSep is writePyJSON with explicit separators (json.dumps separators=(item, key)).
 func writePyJSONSep(sb *strings.Builder, v any, itemSep, keySep string) {
+	writePyJSONOpts(sb, v, itemSep, keySep, true)
+}
+
+// writePyJSONOpts is writePyJSONSep with json.dumps' ensure_ascii switch: true escapes every non-ASCII character
+// (\uXXXX, the approval canonicalisation), false writes it as raw UTF-8 and escapes only `"`, `\` and C0 controls (the
+// event-chain canonicalisation). Object keys sort by Unicode code point (Go compares UTF-8 bytes, which orders the
+// same way as code points; Java/Kotlin compare UTF-16 code units and must NOT be used here).
+func writePyJSONOpts(sb *strings.Builder, v any, itemSep, keySep string, ascii bool) {
 	switch x := v.(type) {
 	case nil:
 		sb.WriteString("null")
@@ -423,7 +431,7 @@ func writePyJSONSep(sb *strings.Builder, v any, itemSep, keySep string) {
 			sb.WriteString("false")
 		}
 	case string:
-		writePyString(sb, x)
+		writePyStringOpts(sb, x, ascii)
 	case int:
 		sb.WriteString(strconv.Itoa(x))
 	case int64:
@@ -445,7 +453,7 @@ func writePyJSONSep(sb *strings.Builder, v any, itemSep, keySep string) {
 			if i > 0 {
 				sb.WriteString(itemSep)
 			}
-			writePyJSONSep(sb, e, itemSep, keySep)
+			writePyJSONOpts(sb, e, itemSep, keySep, ascii)
 		}
 		sb.WriteByte(']')
 	case map[string]any:
@@ -459,9 +467,9 @@ func writePyJSONSep(sb *strings.Builder, v any, itemSep, keySep string) {
 			if i > 0 {
 				sb.WriteString(itemSep)
 			}
-			writePyString(sb, k)
+			writePyStringOpts(sb, k, ascii)
 			sb.WriteString(keySep)
-			writePyJSONSep(sb, x[k], itemSep, keySep)
+			writePyJSONOpts(sb, x[k], itemSep, keySep, ascii)
 		}
 		sb.WriteByte('}')
 	default:
@@ -474,7 +482,11 @@ func writePyJSONSep(sb *strings.Builder, v any, itemSep, keySep string) {
 // writePyString escapes a string as Python json.dumps (ensure_ascii=True): escape " \ and the C0
 // controls with short escapes where Python does (\b \f \n \r \t), everything else non-ASCII as
 // \uXXXX, printable ASCII verbatim.
-func writePyString(sb *strings.Builder, s string) {
+func writePyString(sb *strings.Builder, s string) { writePyStringOpts(sb, s, true) }
+
+// writePyStringOpts: ascii=false is json.dumps(ensure_ascii=False): only `"` `\` and U+0000..U+001F are escaped
+// (short forms \b \f \n \r \t, others \u00xx); DEL, U+2028, U+2029 and all other characters are written verbatim.
+func writePyStringOpts(sb *strings.Builder, s string, ascii bool) {
 	sb.WriteByte('"')
 	for _, r := range s {
 		switch r {
@@ -493,6 +505,14 @@ func writePyString(sb *strings.Builder, s string) {
 		case '\t':
 			sb.WriteString(`\t`)
 		default:
+			if !ascii {
+				if r < 0x20 {
+					fmt.Fprintf(sb, `\u%04x`, r)
+				} else {
+					sb.WriteRune(r)
+				}
+				continue
+			}
 			if r < 0x20 || r > 0x7e {
 				if r > 0xffff { // surrogate pair, as Python \uXXXX\uXXXX
 					r -= 0x10000
