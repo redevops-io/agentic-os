@@ -271,8 +271,16 @@ func (rt *MissionRuntime) Run(missionID string) *Mission {
 		var runnable, gated []gnode
 		for _, n := range batch {
 			if approved[n.ID] {
-				runnable = append(runnable, gnode{n, nil})
-				continue
+				// What is about to run must be what the human saw: inputs changed between park and resume invalidate
+				// the approval and ask again (fail closed). Legacy approvals without a digest are grandfathered.
+				if shown := rt.approvedDigest(missionID, n.ID); shown != "" && shown != rt.nodeInputsDigest(m, world, n) {
+					rt.store.Append("ApprovalInvalidated", m.ID, map[string]any{"node_id": n.ID, "capability": n.Capability,
+						"reason": "inputs changed since approval"})
+					delete(approved, n.ID)
+				} else {
+					runnable = append(runnable, gnode{n, nil})
+					continue
+				}
 			}
 			d := rt.context.Resolve(ContextIntent{Kind: CheckPolicy, Node: n, World: world, Mission: m, Graph: graph}).Value.(ApprovalDecision)
 			if d.Required {
@@ -560,8 +568,20 @@ func (rt *MissionRuntime) park(m *Mission, node *Node, decision *ApprovalDecisio
 		fmt.Sprintf("Approve '%s' (%s)?%s", node.Capability, node.Operator, why))
 	task.Evidence = []string{"capability=" + node.Capability,
 		fmt.Sprintf("side_effecting=%v", node.SideEffecting), "produces=" + node.Produces}
+	world := rt.world(m.ID)
+	summary := ActionSummaryOf(rt.resolveInputs(m, world, node))
+	if len(summary) > 0 {
+		var parts []string
+		for _, k := range SummaryKeys {
+			if v, ok := summary[k]; ok {
+				parts = append(parts, fmt.Sprintf("%s=%v", k, v))
+			}
+		}
+		task.Evidence = append(task.Evidence, "action="+strings.Join(parts, ", "))
+	}
 	rt.store.Append("NodeParked", m.ID, map[string]any{
 		"node_id": node.ID, "capability": node.Capability, "rules": rules, "risk": risk, "approval_packet": packet,
+		"inputs_sha256": rt.nodeInputsDigest(m, world, node), "action_summary": summary,
 		"human_task": map[string]any{"id": task.ID, "assignee": task.Assignee, "prompt": task.Prompt,
 			"evidence": task.Evidence, "options": task.Options}})
 	rt.setState(m, MissionWaitingHuman)
@@ -643,6 +663,27 @@ func (rt *MissionRuntime) verifyOK(missionID string) map[string]bool {
 // Approve resolves a human gate: disambiguation (authoritative observation), verification
 // (accept→commit / reject→fail), or approval (approve→run / reject→fail).
 func (rt *MissionRuntime) Approve(missionID, nodeID, decision string, edit map[string]any) *Mission {
+	m, _ := rt.ApproveBy(missionID, nodeID, decision, edit, "")
+	return m
+}
+
+// ErrApprovalExpired: the gate waited longer than AGENTIC_OS_APPROVAL_TTL_S; an ApprovalExpired event was recorded and
+// the mission stays waiting for a fresh request. Rejecting is always allowed.
+var ErrApprovalExpired = errors.New("the approval request expired: re-run the mission to raise a fresh request")
+
+// EnvApprovalTTL is the seconds a parked human gate stays approvable (0/unset = no limit). Production should set it.
+const EnvApprovalTTL = "AGENTIC_OS_APPROVAL_TTL_S"
+
+func approvalTTLSeconds() float64 {
+	v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv(EnvApprovalTTL)), 64)
+	if err != nil || v < 0 {
+		return 0
+	}
+	return v
+}
+
+// ApproveBy is Approve with the deciding actor recorded and the expiry reported as an error.
+func (rt *MissionRuntime) ApproveBy(missionID, nodeID, decision string, edit map[string]any, actor string) (*Mission, error) {
 	m := rt.missions[missionID]
 	pending := rt.repo.PendingHuman(missionID)
 	if pending == nil {
@@ -660,13 +701,13 @@ func (rt *MissionRuntime) Approve(missionID, nodeID, decision string, edit map[s
 		rt.world(missionID).Observe(key, value, "human", 100.0)
 		rt.store.Append("BeliefResolved", missionID, map[string]any{"key": key, "value": value, "node_id": nodeID})
 		rt.store.Append("NodeResumed", missionID, map[string]any{"node_id": nodeID})
-		return rt.Run(missionID)
+		return rt.Run(missionID), nil
 	}
 	if kind == "verification" && pnid == nodeID {
 		if decision == "accept" || decision == "approve" {
 			rt.store.Append("VerificationOverridden", missionID, map[string]any{"node_id": nodeID})
 			rt.store.Append("NodeResumed", missionID, map[string]any{"node_id": nodeID})
-			return rt.Run(missionID)
+			return rt.Run(missionID), nil
 		}
 		rt.store.Append("VerificationRejected", missionID, map[string]any{"node_id": nodeID})
 		rt.store.Append("NodeSkipped", missionID, map[string]any{"node_id": nodeID})
@@ -674,19 +715,82 @@ func (rt *MissionRuntime) Approve(missionID, nodeID, decision string, edit map[s
 		plan := rt.plans[missionID]
 		rt.saga(m, plan, rt.nodeByID(plan, nodeID))
 		rt.fail(m, plan, "verification rejected "+nodeID)
-		return m
+		return m, nil
 	}
 	if decision == "approve" {
-		rt.store.Append("ApprovalGranted", missionID, map[string]any{"node_id": nodeID, "edit": edit})
+		if parkedAt, ok := rt.parkedAt(missionID, nodeID); ok && ApprovalExpired(&parkedAt, now(), approvalTTLSeconds()) {
+			// a decision about a situation that has since changed is not a decision: ask again
+			rt.store.Append("ApprovalExpired", missionID, map[string]any{"node_id": nodeID, "ttl_s": approvalTTLSeconds(),
+				"parked_at": parkedAt})
+			return m, ErrApprovalExpired
+		}
+		granted := map[string]any{"node_id": nodeID, "edit": edit}
+		if actor != "" {
+			granted["approver"] = actor
+		}
+		if shown := rt.parkedDigest(missionID, nodeID); shown != "" {
+			granted["inputs_sha256"] = shown // the digest the human was shown
+		}
+		rt.store.Append("ApprovalGranted", missionID, granted)
 		rt.store.Append("NodeResumed", missionID, map[string]any{"node_id": nodeID})
-		return rt.Run(missionID)
+		return rt.Run(missionID), nil
 	}
 	rt.store.Append("ApprovalRejected", missionID, map[string]any{"node_id": nodeID})
 	rt.store.Append("NodeSkipped", missionID, map[string]any{"node_id": nodeID})
 	// an approval gate parks BEFORE the node runs, so it has no own effect — but prior committed side effects unwind
 	rt.saga(m, rt.plans[missionID])
 	rt.fail(m, rt.plans[missionID], "human rejected "+nodeID)
-	return m
+	return m, nil
+}
+
+// ── approval binding helpers (Python: _node_inputs_digest, _approved_digest, _parked_digest) ─────────────────────────
+
+// nodeInputsDigest: the digest of the inputs this node WOULD be dispatched with now (approval markers excluded).
+func (rt *MissionRuntime) nodeInputsDigest(m *Mission, world *WorldState, node *Node) string {
+	resolved := rt.resolveInputs(m, world, node)
+	delete(resolved, "_approval")
+	delete(resolved, "_node")
+	return RuntimeInputsDigest(resolved)
+}
+
+// parkedDigest is the inputs digest recorded by the latest NodeParked for the node ("" for a legacy log).
+func (rt *MissionRuntime) parkedDigest(missionID, nodeID string) string {
+	out := ""
+	for _, e := range rt.store.ForMission(missionID) {
+		if e.Type == "NodeParked" && e.Payload["node_id"] == nodeID {
+			out, _ = e.Payload["inputs_sha256"].(string)
+		}
+	}
+	return out
+}
+
+// approvedDigest is the digest the human was shown when they approved (""= legacy approval, or since invalidated).
+func (rt *MissionRuntime) approvedDigest(missionID, nodeID string) string {
+	out := ""
+	for _, e := range rt.store.ForMission(missionID) {
+		switch e.Type {
+		case "ApprovalGranted":
+			if e.Payload["node_id"] == nodeID {
+				out, _ = e.Payload["inputs_sha256"].(string)
+			}
+		case "ApprovalInvalidated":
+			if e.Payload["node_id"] == nodeID {
+				out = ""
+			}
+		}
+	}
+	return out
+}
+
+func (rt *MissionRuntime) parkedAt(missionID, nodeID string) (float64, bool) {
+	var ts float64
+	found := false
+	for _, e := range rt.store.ForMission(missionID) {
+		if e.Type == "NodeParked" && e.Payload["node_id"] == nodeID {
+			ts, found = e.Ts, true
+		}
+	}
+	return ts, found
 }
 
 func (rt *MissionRuntime) assignee(node *Node) string { return "approver" }
@@ -1180,6 +1284,7 @@ func (rt *MissionRuntime) approved(missionID string) map[string]bool {
 		switch e.Type {
 		case "ApprovalGranted":
 			granted[nid] = true
+			delete(invalidated, nid) // a later grant supersedes an earlier invalidation (Python parity)
 		case "ApprovalInvalidated":
 			invalidated[nid] = true
 		}

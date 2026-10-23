@@ -141,7 +141,7 @@ func bindingOK(bound any, presented string) bool {
 // VerifyApprovalToken returns the approval marker iff the token fully verifies, else nil. Never panics.
 // now == 0 means the wall clock.
 func VerifyApprovalToken(secret []byte, token, operator, capability string, inputs map[string]any, now float64,
-	missionID, nodeID string, guard *ReplayGuard) map[string]any {
+	missionID, nodeID string, guard NonceGuard) map[string]any {
 	key := approvalSecret(secret)
 	if len(key) == 0 || token == "" {
 		return nil
@@ -190,7 +190,7 @@ func VerifyApprovalToken(secret []byte, token, operator, capability string, inpu
 	if !ok {
 		return nil
 	}
-	if guard != nil {
+	if guard != nil && !isNilGuard(guard) {
 		nonce, _ := d["nonce"].(string)
 		if !guard.Consume(nonce, exp, now) {
 			return nil
@@ -205,6 +205,14 @@ type ReplayGuard struct {
 	mu   sync.Mutex
 	used map[string]float64
 	max  int
+}
+
+// isNilGuard: a typed nil *ReplayGuard inside the interface must still mean "no guard" (callers passed one before).
+func isNilGuard(g NonceGuard) bool {
+	if rg, ok := g.(*ReplayGuard); ok {
+		return rg == nil
+	}
+	return false
 }
 
 func NewReplayGuard(maxEntries int) *ReplayGuard {

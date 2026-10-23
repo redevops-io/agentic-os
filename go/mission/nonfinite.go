@@ -221,6 +221,13 @@ func decodeEventLine(line []byte) (*Event, bool) {
 			ev.Payload = restoreNonFinite(ev.Payload).(map[string]any)
 		}
 	}
+	// keep the payload's exact JSON text so the hash chain sees `1.0` as `1.0` (a float64 round trip would not)
+	var probe struct {
+		Payload json.RawMessage `json:"payload"`
+	}
+	if json.Unmarshal(line, &probe) == nil && len(probe.Payload) > 0 && string(probe.Payload) != "null" {
+		ev.raw = append(json.RawMessage(nil), probe.Payload...)
+	}
 	return &ev, true
 }
 
