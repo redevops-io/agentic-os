@@ -7,7 +7,7 @@ import pytest
 pytest.importorskip("fastapi")
 from agentic_os.app_kit.mission_launcher import MissionRuntimeLauncher  # noqa: E402
 from agentic_os.mission.types import MissionState  # noqa: E402
-import test_mission_inputs_delivery_and_explicit_planning as base  # noqa: E402
+from tests import test_mission_inputs_delivery_and_explicit_planning as base  # noqa: E402
 
 _op, _rt, _req, seen = base._op, base._rt, base._req, base.seen
 
