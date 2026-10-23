@@ -62,6 +62,48 @@ class Event:
     payload: dict[str, Any]
     seq: int = 0
     ts: float = field(default_factory=now)
+    prev: str = ""      # entry hash of the previous event of the SAME mission ("" for the first)
+    hash: str = ""      # sha256(prev || canonical(seq, ts, type, mission_id, payload)): tamper evidence
+
+
+def _canonical_entry(seq: int, ts: float, type: str, mission_id: str, payload: Any) -> bytes:
+    return json.dumps({"seq": seq, "ts": ts, "type": type, "mission_id": mission_id, "payload": payload},
+                      sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8")
+
+
+def entry_hash(prev: str, seq: int, ts: float, type: str, mission_id: str, payload: Any) -> str:
+    import hashlib  # noqa: PLC0415
+    return hashlib.sha256(prev.encode("ascii") + b"|" + _canonical_entry(seq, ts, type, mission_id, payload)).hexdigest()
+
+
+@dataclass(frozen=True)
+class ChainReport:
+    ok: bool
+    checked: int            # hashed events verified
+    unchained: int          # legacy events with no hash (not covered)
+    first_bad_seq: int = 0
+    reason: str = ""
+
+
+def verify_chain(events: "list[Event]") -> ChainReport:
+    """Check each mission's hash chain: every hashed event must hash correctly and link to its predecessor, so an
+    edited, deleted or reordered event is detected. Events written before chaining (hash == "") are counted as
+    unchained and not covered. Truncating the END of a log is not detectable from the log alone: anchor the head
+    (``mission_receipt['ledger_head']``) somewhere the log's writer cannot edit."""
+    heads: dict[str, str] = {}
+    checked = unchained = 0
+    for ev in events:
+        if not ev.hash:
+            unchained += 1
+            continue
+        want_prev = heads.get(ev.mission_id, "")
+        if ev.prev != want_prev:
+            return ChainReport(False, checked, unchained, ev.seq, "an event is missing, reordered or replaced")
+        if entry_hash(ev.prev, ev.seq, ev.ts, ev.type, ev.mission_id, ev.payload) != ev.hash:
+            return ChainReport(False, checked, unchained, ev.seq, "an event was modified")
+        heads[ev.mission_id] = ev.hash
+        checked += 1
+    return ChainReport(True, checked, unchained)
 
 
 class EventStore:
@@ -74,6 +116,7 @@ class EventStore:
         self._lock = threading.Lock()
         self._subscribers: list[Callable[[Event], None]] = []
         self._path = path
+        self._heads: dict[str, str] = {}     # mission_id -> hash of its last event (the chain head)
         self._offset = 0            # bytes of the JSONL already folded into memory
         if path and os.path.exists(path):
             with self._lock:
@@ -105,7 +148,9 @@ class EventStore:
                 continue
             d = json.loads(line.decode("utf-8"))
             self._events.append(Event(type=d["type"], mission_id=d["mission_id"], payload=d["payload"],
-                                      seq=d["seq"], ts=d["ts"]))
+                                      seq=d["seq"], ts=d["ts"], prev=d.get("prev", ""), hash=d.get("hash", "")))
+            if d.get("hash"):
+                self._heads[d["mission_id"]] = d["hash"]
             self._seq = max(self._seq, d["seq"])
             added += 1
         self._offset += consumed
@@ -140,18 +185,25 @@ class EventStore:
                     elif size and not self._ends_with_newline():
                         prefix = b"\n"                     # a complete record that lacks its terminator
                     ev = Event(type=type, mission_id=mission_id, payload=to_jsonable(payload), seq=self._seq + 1)
+                    ev.prev = self._heads.get(mission_id, "")
+                    ev.hash = entry_hash(ev.prev, ev.seq, ev.ts, ev.type, ev.mission_id, ev.payload)
                     line = prefix + (json.dumps({"seq": ev.seq, "ts": ev.ts, "type": ev.type,
-                                                 "mission_id": ev.mission_id, "payload": ev.payload}) + "\n").encode("utf-8")
+                                                 "mission_id": ev.mission_id, "payload": ev.payload,
+                                                 "prev": ev.prev, "hash": ev.hash}) + "\n").encode("utf-8")
                     fh.write(line)                         # a failed write leaves memory untouched
                     fh.flush()
                     if _fsync_enabled():
                         os.fsync(fh.fileno())
                     self._offset += len(line)
                     self._seq = ev.seq
+                    self._heads[mission_id] = ev.hash
                     self._events.append(ev)
             else:
                 self._seq += 1
                 ev = Event(type=type, mission_id=mission_id, payload=to_jsonable(payload), seq=self._seq)
+                ev.prev = self._heads.get(mission_id, "")
+                ev.hash = entry_hash(ev.prev, ev.seq, ev.ts, ev.type, ev.mission_id, ev.payload)
+                self._heads[mission_id] = ev.hash
                 self._events.append(ev)
         for cb in list(self._subscribers):
             try:
@@ -167,6 +219,15 @@ class EventStore:
 
     def subscribe(self, cb: Callable[[Event], None]) -> None:
         self._subscribers.append(cb)
+
+    def head(self, mission_id: str) -> str:
+        """The chain head (hash of the mission's last event). Anchor it outside the log's writer's reach."""
+        with self._lock:
+            return self._heads.get(mission_id, "")
+
+    def verify(self) -> ChainReport:
+        with self._lock:
+            return verify_chain(list(self._events))
 
     def for_mission(self, mission_id: str) -> list[Event]:
         return list(_mission_index(self).get(mission_id, ()))
@@ -190,13 +251,25 @@ class MemoryEventStore:
     def __init__(self) -> None:
         self._events: list[Event] = []
         self._seq = 0
+        self._heads: dict[str, str] = {}
         self._lock = threading.Lock()
         self._subscribers: list[Callable[[Event], None]] = []
+
+    def head(self, mission_id: str) -> str:
+        with self._lock:
+            return self._heads.get(mission_id, "")
+
+    def verify(self) -> ChainReport:
+        with self._lock:
+            return verify_chain(list(self._events))
 
     def append(self, type: str, mission_id: str, payload: dict[str, Any]) -> Event:
         with self._lock:
             self._seq += 1
             ev = Event(type=type, mission_id=mission_id, payload=to_jsonable(payload), seq=self._seq)
+            ev.prev = self._heads.get(mission_id, "")
+            ev.hash = entry_hash(ev.prev, ev.seq, ev.ts, ev.type, ev.mission_id, ev.payload)
+            self._heads[mission_id] = ev.hash
             self._events.append(ev)
         for cb in list(self._subscribers):
             try:
