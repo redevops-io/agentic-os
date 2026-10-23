@@ -24,6 +24,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets as _secrets
 import threading
@@ -243,7 +244,29 @@ class SqliteReplayGuard:
         self._db.close()
 
 
+ENV_REPLAY_DB = "AGENTIC_OS_REPLAY_DB"
+ENV_REQUIRE_DURABLE_REPLAY = "AGENTIC_OS_REQUIRE_DURABLE_REPLAY"
+
+
+class ReplayProtectionNotDurable(RuntimeError):
+    """Startup refusal: durable replay protection is required but no durable store is configured."""
+
+
 def default_replay_guard():
-    """The guard an Operator uses: durable when ``AGENTIC_OS_REPLAY_DB`` names a file, else per-process."""
-    path = os.environ.get("AGENTIC_OS_REPLAY_DB", "").strip()
-    return SqliteReplayGuard(path) if path else ReplayGuard()
+    """The guard an Operator uses: durable when ``AGENTIC_OS_REPLAY_DB`` names a file, else per-process.
+
+    PRODUCTION: set ``AGENTIC_OS_REQUIRE_DURABLE_REPLAY=1``. The Operator then REFUSES TO START without a durable
+    store, instead of silently falling back to a per-process set that a restart (or a second worker) forgets.
+    Without that flag the per-process default is kept for development and demos, and a warning is logged."""
+    path = os.environ.get(ENV_REPLAY_DB, "").strip()
+    if path:
+        return SqliteReplayGuard(path)
+    if os.environ.get(ENV_REQUIRE_DURABLE_REPLAY, "").strip().lower() in ("1", "true", "yes", "on"):
+        raise ReplayProtectionNotDurable(
+            f"{ENV_REQUIRE_DURABLE_REPLAY} is set but {ENV_REPLAY_DB} is not: approval replay protection would be "
+            "per-process. Set it to a private file on durable storage (or provide a shared store).")
+    logging.getLogger("agentic_os.operator").warning(
+        "approval replay protection is per-process (%s unset): a restart or a second worker forgets used "
+        "approvals. Set %s for production and %s=1 to refuse to start without it.",
+        ENV_REPLAY_DB, ENV_REPLAY_DB, ENV_REQUIRE_DURABLE_REPLAY)
+    return ReplayGuard()

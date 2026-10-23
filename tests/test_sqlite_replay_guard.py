@@ -62,3 +62,28 @@ def test_an_operator_uses_the_durable_guard_when_configured(tmp_path, monkeypatc
     monkeypatch.setenv("AGENTIC_OS_REPLAY_DB", str(tmp_path / "op.db"))
     from agentic_os.mission.operator_sdk import Operator
     assert isinstance(Operator("x", []).replay_guard, SqliteReplayGuard)
+
+
+def test_production_mode_refuses_to_start_without_a_durable_store(monkeypatch):
+    from agentic_os.mission.approval import ReplayProtectionNotDurable
+    from agentic_os.mission.operator_sdk import Operator
+    monkeypatch.delenv("AGENTIC_OS_REPLAY_DB", raising=False)
+    monkeypatch.setenv("AGENTIC_OS_REQUIRE_DURABLE_REPLAY", "1")
+    with pytest.raises(ReplayProtectionNotDurable):
+        default_replay_guard()
+    with pytest.raises(ReplayProtectionNotDurable):
+        Operator("x", [])                                            # an operator never starts per-process by accident
+
+
+def test_production_mode_with_a_db_starts_normally(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTIC_OS_REQUIRE_DURABLE_REPLAY", "1")
+    monkeypatch.setenv("AGENTIC_OS_REPLAY_DB", str(tmp_path / "r.db"))
+    assert isinstance(default_replay_guard(), SqliteReplayGuard)
+
+
+def test_without_the_flag_the_fallback_is_per_process_but_logged(monkeypatch, caplog):
+    monkeypatch.delenv("AGENTIC_OS_REPLAY_DB", raising=False)
+    monkeypatch.delenv("AGENTIC_OS_REQUIRE_DURABLE_REPLAY", raising=False)
+    with caplog.at_level("WARNING", logger="agentic_os.operator"):
+        g = default_replay_guard()
+    assert isinstance(g, ReplayGuard) and "per-process" in caplog.text
