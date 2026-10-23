@@ -24,13 +24,24 @@ class ContentMissionRegistry:
     provider projects them and approval flows back through here."""
 
     def __init__(self, *, owner: str = "", generator_factory=None, publisher_factory=None,
-                 project_id: str = "content-studio", project_name: str = "Content Studio"):
+                 project_id: str = "content-studio", project_name: str = "Content Studio", tenant: str = ""):
         self.owner = owner
+        self.tenant = tenant
         self._genf = generator_factory
         self._pubf = publisher_factory
+        self._live: Optional[bool] = None
         self.project_id = project_id
         self.project_name = project_name
         self._runs: dict[str, ContentMissionRun] = {}
+
+    @property
+    def live_publisher(self) -> bool:
+        """True when the configured publisher can reach a real account (anything but the simulated/no-op
+        ones): approve/reject on such a registry must be authenticated. Decided once, from a sample instance."""
+        if self._live is None:
+            from ..projects.approver_auth import is_live_publisher
+            self._live = self._pubf is not None and is_live_publisher(self._pubf())
+        return self._live
 
     def open(self, brief: ContentBrief) -> ContentMissionRun:
         run = ContentMissionRun(brief, owner=self.owner,

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from .approver_auth import approving_actor
 from .content_service import ProjectsContentService
 from .contracts import WorkflowDefinition
 
@@ -47,7 +48,7 @@ class ProjectsServer:
 
 
 def create_projects_app(server: ProjectsServer):
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI, Header, HTTPException
     from fastapi.responses import HTMLResponse
 
     app = FastAPI(title="ReDevOps Projects")
@@ -68,13 +69,17 @@ def create_projects_app(server: ProjectsServer):
         return s.mission_view()
 
     @app.post("/api/missions/{mid}/decide")
-    def _decide(mid: str, body: dict):
+    def _decide(mid: str, body: dict, authorization: "str | None" = Header(default=None)):
         s = server.services.get(mid)
         if not s:
             raise HTTPException(404, "mission not found")
         action = (body or {}).get("action", "approve")
         selected = tuple((body or {}).get("selected_ids", []))
-        return s.decide((body or {}).get("actor", "owner"), action, selected)
+        # a live publisher needs an authenticated approver and the actor comes from the credential, not the body
+        chans = [s.artifacts[i].subtype for i in selected if i in s.artifacts]
+        actor = approving_actor(authorization, live=s.live_publisher, claimed=(body or {}).get("actor", ""),
+                                tenant=s.tenant, channels=chans, publishing=action != "reject")
+        return s.decide(actor, action, selected)
 
     @app.get("/api/workflows")
     def _workflows():
