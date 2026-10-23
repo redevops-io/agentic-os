@@ -24,6 +24,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets as _secrets
 import threading
@@ -202,3 +203,74 @@ class ReplayGuard:
                 return False
             self._used[nonce] = exp
             return True
+
+
+class SqliteReplayGuard:
+    """Durable, cross-process replay guard: the same ``consume(nonce, exp, now=)`` contract as :class:`ReplayGuard`
+    over a SQLite file, so a restart, a second worker on the same host, or a crash between consume and dispatch
+    cannot let an approval nonce be used twice. ``INSERT`` on a PRIMARY KEY makes consume atomic across
+    processes; expired rows are purged opportunistically. Fails closed (False) on any storage error. For
+    multi-HOST deployments put the same contract on a shared store (Redis ``SET NX EX``/Postgres)."""
+
+    def __init__(self, path: str, max_entries: int = 100_000):
+        import sqlite3  # noqa: PLC0415
+        self.path, self.max_entries = path, max_entries
+        self._lock = threading.Lock()
+        self._db = sqlite3.connect(path, timeout=10, isolation_level=None, check_same_thread=False)
+        self._db.execute("PRAGMA journal_mode=WAL")
+        self._db.execute("CREATE TABLE IF NOT EXISTS used_nonces (nonce TEXT PRIMARY KEY, exp REAL NOT NULL)")
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+
+    def consume(self, nonce: str, exp: float, *, now: "float | None" = None) -> bool:
+        import sqlite3  # noqa: PLC0415
+        t = time.time() if now is None else now
+        with self._lock:
+            try:
+                self._db.execute("DELETE FROM used_nonces WHERE exp <= ?", (t,))
+                (n,) = self._db.execute("SELECT COUNT(*) FROM used_nonces").fetchone()
+                if n >= self.max_entries:
+                    return False
+                self._db.execute("INSERT INTO used_nonces (nonce, exp) VALUES (?, ?)", (nonce, float(exp)))
+                return True
+            except sqlite3.IntegrityError:
+                return False                      # already used: a replay
+            except sqlite3.Error:
+                return False                      # fail closed
+
+    def close(self) -> None:
+        self._db.close()
+
+
+_WARNED_NON_DURABLE = False
+ENV_REPLAY_DB = "AGENTIC_OS_REPLAY_DB"
+ENV_REQUIRE_DURABLE_REPLAY = "AGENTIC_OS_REQUIRE_DURABLE_REPLAY"
+
+
+class ReplayProtectionNotDurable(RuntimeError):
+    """Startup refusal: durable replay protection is required but no durable store is configured."""
+
+
+def default_replay_guard():
+    """The guard an Operator uses: durable when ``AGENTIC_OS_REPLAY_DB`` names a file, else per-process.
+
+    PRODUCTION: set ``AGENTIC_OS_REQUIRE_DURABLE_REPLAY=1``. The Operator then REFUSES TO START without a durable
+    store, instead of silently falling back to a per-process set that a restart (or a second worker) forgets.
+    Without that flag the per-process default is kept for development and demos, and a warning is logged."""
+    path = os.environ.get(ENV_REPLAY_DB, "").strip()
+    if path:
+        return SqliteReplayGuard(path)
+    if os.environ.get(ENV_REQUIRE_DURABLE_REPLAY, "").strip().lower() in ("1", "true", "yes", "on"):
+        raise ReplayProtectionNotDurable(
+            f"{ENV_REQUIRE_DURABLE_REPLAY} is set but {ENV_REPLAY_DB} is not: approval replay protection would be "
+            "per-process. Set it to a private file on durable storage (or provide a shared store).")
+    global _WARNED_NON_DURABLE
+    if not _WARNED_NON_DURABLE:           # once per process, on its own logger (not the operator startup logger)
+        _WARNED_NON_DURABLE = True
+        logging.getLogger("agentic_os.replay_guard").warning(
+            "approval replay protection is per-process (%s unset): a restart or a second worker forgets used "
+            "approvals. Set %s for production and %s=1 to refuse to start without it.",
+            ENV_REPLAY_DB, ENV_REPLAY_DB, ENV_REQUIRE_DURABLE_REPLAY)
+    return ReplayGuard()
