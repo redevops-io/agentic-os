@@ -1,0 +1,331 @@
+{
+ "doc": "defaults: gate_after_s=86400, dispatch_after_s=900, failures=3, window_s=3600. Findings compared as a set sorted by (seq, kind, node_id). A failed hash chain adds a critical ledger_tampered finding.",
+ "cases": [
+  {
+   "name": "healthy",
+   "now": 110.0,
+   "options": {},
+   "events": [
+    {
+     "seq": 1,
+     "ts": 100.0,
+     "type": "NodeParked",
+     "mission_id": "m",
+     "payload": {
+      "node_id": "n"
+     },
+     "prev": "",
+     "hash": ""
+    },
+    {
+     "seq": 2,
+     "ts": 101.0,
+     "type": "ApprovalGranted",
+     "mission_id": "m",
+     "payload": {
+      "node_id": "n"
+     },
+     "prev": "",
+     "hash": ""
+    },
+    {
+     "seq": 3,
+     "ts": 102.0,
+     "type": "NodeDispatched",
+     "mission_id": "m",
+     "payload": {
+      "node_id": "n"
+     },
+     "prev": "",
+     "hash": ""
+    },
+    {
+     "seq": 4,
+     "ts": 103.0,
+     "type": "VerificationRecorded",
+     "mission_id": "m",
+     "payload": {
+      "node_id": "n"
+     },
+     "prev": "",
+     "hash": ""
+    },
+    {
+     "seq": 5,
+     "ts": 104.0,
+     "type": "NodeSucceeded",
+     "mission_id": "m",
+     "payload": {
+      "node_id": "n",
+      "capability": "billing.dunning"
+     },
+     "prev": "",
+     "hash": ""
+    }
+   ],
+   "findings": []
+  },
+  {
+   "name": "stuck_gate",
+   "now": 90100.0,
+   "options": {},
+   "events": [
+    {
+     "seq": 1,
+     "ts": 100.0,
+     "type": "NodeParked",
+     "mission_id": "m",
+     "payload": {
+      "node_id": "n"
+     },
+     "prev": "",
+     "hash": ""
+    }
+   ],
+   "findings": [
+    {
+     "kind": "stuck_gate",
+     "severity": "medium",
+     "mission_id": "m",
+     "node_id": "n",
+     "detail": "waiting for a human for 1500 min",
+     "seq": 1
+    }
+   ]
+  },
+  {
+   "name": "dispatch_without_result",
+   "now": 2100.0,
+   "options": {},
+   "events": [
+    {
+     "seq": 1,
+     "ts": 100.0,
+     "type": "NodeDispatched",
+     "mission_id": "m",
+     "payload": {
+      "node_id": "n"
+     },
+     "prev": "",
+     "hash": ""
+    }
+   ],
+   "findings": [
+    {
+     "kind": "dispatch_without_result",
+     "severity": "high",
+     "mission_id": "m",
+     "node_id": "n",
+     "detail": "dispatched with no result: the effect may exist; reconcile before retrying",
+     "seq": 1
+    }
+   ]
+  },
+  {
+   "name": "unverified_success",
+   "now": 100.0,
+   "options": {
+    "side_effecting": [
+     "social.publish"
+    ]
+   },
+   "events": [
+    {
+     "seq": 1,
+     "ts": 100.0,
+     "type": "NodeSucceeded",
+     "mission_id": "m",
+     "payload": {
+      "node_id": "n",
+      "capability": "social.publish"
+     },
+     "prev": "",
+     "hash": ""
+    }
+   ],
+   "findings": [
+    {
+     "kind": "unverified_success",
+     "severity": "high",
+     "mission_id": "m",
+     "node_id": "n",
+     "detail": "social.publish succeeded with no recorded verification before it",
+     "seq": 1
+    }
+   ]
+  },
+  {
+   "name": "unverified_success_not_side_effecting",
+   "now": 100.0,
+   "options": {
+    "side_effecting": [
+     "social.publish"
+    ]
+   },
+   "events": [
+    {
+     "seq": 1,
+     "ts": 100.0,
+     "type": "NodeSucceeded",
+     "mission_id": "m",
+     "payload": {
+      "node_id": "n",
+      "capability": "crm.read"
+     },
+     "prev": "",
+     "hash": ""
+    }
+   ],
+   "findings": []
+  },
+  {
+   "name": "repeated_failures",
+   "now": 200.0,
+   "options": {},
+   "events": [
+    {
+     "seq": 1,
+     "ts": 101.0,
+     "type": "NodeFailed",
+     "mission_id": "m",
+     "payload": {
+      "node_id": "n1",
+      "capability": "erpnext.write"
+     },
+     "prev": "",
+     "hash": ""
+    },
+    {
+     "seq": 2,
+     "ts": 102.0,
+     "type": "NodeFailed",
+     "mission_id": "m",
+     "payload": {
+      "node_id": "n2",
+      "capability": "erpnext.write"
+     },
+     "prev": "",
+     "hash": ""
+    },
+    {
+     "seq": 3,
+     "ts": 103.0,
+     "type": "NodeFailed",
+     "mission_id": "m",
+     "payload": {
+      "node_id": "n3",
+      "capability": "erpnext.write"
+     },
+     "prev": "",
+     "hash": ""
+    }
+   ],
+   "findings": [
+    {
+     "kind": "repeated_failures",
+     "severity": "medium",
+     "mission_id": "m",
+     "node_id": "n3",
+     "detail": "erpnext.write failed 3 times in 60 min",
+     "seq": 3
+    }
+   ]
+  },
+  {
+   "name": "invalidated_and_expired",
+   "now": 200.0,
+   "options": {},
+   "events": [
+    {
+     "seq": 1,
+     "ts": 100.0,
+     "type": "ApprovalInvalidated",
+     "mission_id": "m",
+     "payload": {
+      "node_id": "n",
+      "reason": "inputs changed since approval"
+     },
+     "prev": "",
+     "hash": ""
+    },
+    {
+     "seq": 2,
+     "ts": 101.0,
+     "type": "ApprovalExpired",
+     "mission_id": "m",
+     "payload": {
+      "node_id": "n",
+      "ttl_s": 60
+     },
+     "prev": "",
+     "hash": ""
+    }
+   ],
+   "findings": [
+    {
+     "kind": "approval_invalidated",
+     "severity": "high",
+     "mission_id": "m",
+     "node_id": "n",
+     "detail": "inputs changed since approval",
+     "seq": 1
+    },
+    {
+     "kind": "approval_expired",
+     "severity": "low",
+     "mission_id": "m",
+     "node_id": "n",
+     "detail": "gate lapsed after 60s",
+     "seq": 2
+    }
+   ]
+  },
+  {
+   "name": "two_missions",
+   "now": 90100.0,
+   "options": {},
+   "events": [
+    {
+     "seq": 1,
+     "ts": 100.0,
+     "type": "NodeParked",
+     "mission_id": "a",
+     "payload": {
+      "node_id": "n"
+     },
+     "prev": "",
+     "hash": ""
+    },
+    {
+     "seq": 2,
+     "ts": 100.0,
+     "type": "NodeDispatched",
+     "mission_id": "b",
+     "payload": {
+      "node_id": "n"
+     },
+     "prev": "",
+     "hash": ""
+    }
+   ],
+   "findings": [
+    {
+     "kind": "stuck_gate",
+     "severity": "medium",
+     "mission_id": "a",
+     "node_id": "n",
+     "detail": "waiting for a human for 1500 min",
+     "seq": 1
+    },
+    {
+     "kind": "dispatch_without_result",
+     "severity": "high",
+     "mission_id": "b",
+     "node_id": "n",
+     "detail": "dispatched with no result: the effect may exist; reconcile before retrying",
+     "seq": 2
+    }
+   ]
+  }
+ ]
+}

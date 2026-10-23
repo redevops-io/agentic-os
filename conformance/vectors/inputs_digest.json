@@ -1,0 +1,73 @@
+{
+ "doc": "inputs_sha256 = sha256(json.dumps(strip_approval_keys(top-level inputs minus _mission/_goal/_node/_approval*), sort_keys=True, separators=(',',':')) with DEFAULT ensure_ascii=True). runtime_inputs_digest = sha256(same canonical form of strip_approval_keys(inputs)) WITHOUT excluding _mission/_goal.",
+ "cases": [
+  {
+   "name": "simple",
+   "inputs": {
+    "account_id": "A1",
+    "amount": 100
+   },
+   "inputs_sha256": "5f9a81b2d4df2e9c5ed5cc3eb86da3766cdf45b98f418a8873d017933b5ae463",
+   "runtime_inputs_digest": "5f9a81b2d4df2e9c5ed5cc3eb86da3766cdf45b98f418a8873d017933b5ae463"
+  },
+  {
+   "name": "strips_approval_and_meta_keys",
+   "inputs": {
+    "a": 1,
+    "_approval": {
+     "approved": true
+    },
+    "_approval_x": 1,
+    "_mission": "m",
+    "_goal": "g",
+    "_node": "n"
+   },
+   "inputs_sha256": "015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862",
+   "runtime_inputs_digest": "904e6dd80d497adf2af55414378578adf464c4125d16f3bfe9a31fde26d0c8a4"
+  },
+  {
+   "name": "nested_approval_key_kept",
+   "inputs": {
+    "a": {
+     "_approval": 1,
+     "b": 2
+    }
+   },
+   "inputs_sha256": "7040648e8a8a5436016d2f4660e0dbfb16cca5896fccf7962f6dc2b906255d27",
+   "runtime_inputs_digest": "6377e7d18f737adcad5a0930c5d8ce72150fffe1fa2dc1c65d9c5f81d52346f5"
+  },
+  {
+   "name": "unicode_ensure_ascii",
+   "inputs": {
+    "naïve": "é中😀",
+    "k😀": 1
+   },
+   "inputs_sha256": "fe2456b23fddcff95ce0e912b4aac892e72452daaa950940f04a38e475f90c7b",
+   "runtime_inputs_digest": "fe2456b23fddcff95ce0e912b4aac892e72452daaa950940f04a38e475f90c7b"
+  },
+  {
+   "name": "numbers",
+   "inputs": {
+    "i": 5,
+    "f": 10.0,
+    "big": 12345678901234567890,
+    "e": 1e-07,
+    "neg0": -0.0,
+    "l": [
+     1,
+     2.0
+    ]
+   },
+   "inputs_sha256": "04528c5f471149dfe3f489db9731235fe9eaa82bb2d990c18e200364866af372",
+   "runtime_inputs_digest": "04528c5f471149dfe3f489db9731235fe9eaa82bb2d990c18e200364866af372"
+  },
+  {
+   "name": "escapes",
+   "inputs": {
+    "s": "\b\f\n\r\t\u0001 "
+   },
+   "inputs_sha256": "d11f341c50842527852a5e695a88ec1e08dc4746385327efc69aead52e900791",
+   "runtime_inputs_digest": "d11f341c50842527852a5e695a88ec1e08dc4746385327efc69aead52e900791"
+  }
+ ]
+}

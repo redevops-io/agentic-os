@@ -292,3 +292,34 @@ def default_replay_guard():
             "approvals. Set %s for production and %s=1 to refuse to start without it.",
             ENV_REPLAY_DB, ENV_REPLAY_DB, ENV_REQUIRE_DURABLE_REPLAY)
     return ReplayGuard()
+
+
+# ── what an approver is shown about an action (pure; shared with the Go/Kotlin ports by conformance vectors) ──
+SUMMARY_KEYS = ("amount", "currency", "total", "quantity", "count", "channel", "subject", "to", "recipient",
+                "destination", "invoice_id", "account_id", "customer_id", "order_id", "resource")
+
+
+def action_summary_of(resolved: dict) -> dict:
+    """The concrete facts shown to an approver, from the inputs about to run: an allowlist (``SUMMARY_KEYS``), strings
+    truncated to 80 characters with e-mail local parts masked (first one or two characters kept), numbers and booleans
+    as they are, null as ``"null"``, anything else as its canonical JSON text truncated to 80. Never free text, never secrets."""
+    import re  # noqa: PLC0415
+    out: dict = {}
+    for k in SUMMARY_KEYS:
+        if k not in resolved:
+            continue
+        v = resolved[k]
+        if isinstance(v, str):
+            v = re.sub(r"([^@\s]{1,2})[^@\s]*@", r"\1***@", v)[:80]
+        elif v is not None and not isinstance(v, (int, float, bool)):
+            # canonical JSON, not Python's repr, so every language port renders the same text
+            v = json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)[:80]
+        elif v is None:
+            v = "null"
+        out[k] = v
+    return out
+
+
+def approval_expired(parked_at: "float | None", now: float, ttl_s: float) -> bool:
+    """A parked gate lapses when ``ttl_s`` > 0 and it has waited longer than that (``ttl_s`` 0 = no limit)."""
+    return bool(ttl_s) and parked_at is not None and now - parked_at > ttl_s
