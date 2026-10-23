@@ -44,11 +44,11 @@ def test_two_processes_cannot_both_consume_the_same_nonce(tmp_path):
     path = str(tmp_path / "r.db")
     ctx = mp.get_context("spawn")
     q = ctx.Queue()
-    procs = [ctx.Process(target=_worker, args=(path, q)) for _ in range(4)]
+    procs = [ctx.Process(target=_worker, args=(path, q)) for _ in range(8)]
     [p.start() for p in procs]
     [p.join(120) for p in procs]          # a cold spawned interpreter imports the kernel: allow for it
     results = [q.get(timeout=60) for _ in procs]
-    assert results.count(True) == 1 and results.count(False) == 3
+    assert results.count(True) == 1 and results.count(False) == 7
 
 
 def test_default_is_per_process_unless_a_db_is_configured(tmp_path, monkeypatch):
@@ -90,3 +90,25 @@ def test_without_the_flag_the_fallback_is_per_process_but_logged_once(monkeypatc
         g = default_replay_guard()
         default_replay_guard()
     assert isinstance(g, ReplayGuard) and caplog.text.count("per-process") == 1
+
+
+def test_a_locked_database_is_retried_not_mistaken_for_a_replay_or_a_crash():
+    import sqlite3
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise sqlite3.OperationalError("database is locked")
+        return "ok"
+    assert SqliteReplayGuard._retry(flaky, delay=0) == "ok" and calls["n"] == 3
+
+    def broken():
+        raise sqlite3.OperationalError("no such table: used_nonces")
+    with pytest.raises(sqlite3.OperationalError):                       # a real error is not retried
+        SqliteReplayGuard._retry(broken, delay=0)
+
+    def always_locked():
+        raise sqlite3.OperationalError("database is locked")
+    with pytest.raises(sqlite3.OperationalError):                       # bounded: it does not spin forever
+        SqliteReplayGuard._retry(always_locked, attempts=3, delay=0)

@@ -217,28 +217,46 @@ class SqliteReplayGuard:
         self.path, self.max_entries = path, max_entries
         self._lock = threading.Lock()
         self._db = sqlite3.connect(path, timeout=10, isolation_level=None, check_same_thread=False)
-        self._db.execute("PRAGMA journal_mode=WAL")
-        self._db.execute("CREATE TABLE IF NOT EXISTS used_nonces (nonce TEXT PRIMARY KEY, exp REAL NOT NULL)")
+        # Several processes may open a brand-new file at once: switching to WAL and creating the table take locks the
+        # busy timeout does not always cover ("database is locked"), so setup retries instead of crashing the worker.
+        self._retry(lambda: self._db.execute("PRAGMA journal_mode=WAL"))
+        self._retry(lambda: self._db.execute(
+            "CREATE TABLE IF NOT EXISTS used_nonces (nonce TEXT PRIMARY KEY, exp REAL NOT NULL)"))
         try:
             os.chmod(path, 0o600)
         except OSError:
             pass
+
+    @staticmethod
+    def _retry(fn, *, attempts: int = 60, delay: float = 0.05):
+        """Run ``fn``, retrying while SQLite reports the database locked/busy (bounded; the last error is raised)."""
+        import sqlite3  # noqa: PLC0415
+        for i in range(attempts):
+            try:
+                return fn()
+            except sqlite3.OperationalError as e:
+                msg = str(e).lower()
+                if ("locked" not in msg and "busy" not in msg) or i == attempts - 1:
+                    raise
+                time.sleep(min(delay * (1 + i // 5), 0.5))
 
     def consume(self, nonce: str, exp: float, *, now: "float | None" = None) -> bool:
         import sqlite3  # noqa: PLC0415
         t = time.time() if now is None else now
         with self._lock:
             try:
-                self._db.execute("DELETE FROM used_nonces WHERE exp <= ?", (t,))
-                (n,) = self._db.execute("SELECT COUNT(*) FROM used_nonces").fetchone()
+                self._retry(lambda: self._db.execute("DELETE FROM used_nonces WHERE exp <= ?", (t,)))
+                (n,) = self._retry(lambda: self._db.execute("SELECT COUNT(*) FROM used_nonces").fetchone())
                 if n >= self.max_entries:
                     return False
-                self._db.execute("INSERT INTO used_nonces (nonce, exp) VALUES (?, ?)", (nonce, float(exp)))
+                # a lock must not be mistaken for a replay: retry it; only a PRIMARY KEY conflict means "used"
+                self._retry(lambda: self._db.execute("INSERT INTO used_nonces (nonce, exp) VALUES (?, ?)",
+                                                     (nonce, float(exp))))
                 return True
             except sqlite3.IntegrityError:
                 return False                      # already used: a replay
             except sqlite3.Error:
-                return False                      # fail closed
+                return False                      # fail closed (storage error that retrying did not clear)
 
     def close(self) -> None:
         self._db.close()
