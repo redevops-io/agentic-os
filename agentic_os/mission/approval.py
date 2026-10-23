@@ -202,3 +202,48 @@ class ReplayGuard:
                 return False
             self._used[nonce] = exp
             return True
+
+
+class SqliteReplayGuard:
+    """Durable, cross-process replay guard: the same ``consume(nonce, exp, now=)`` contract as :class:`ReplayGuard`
+    over a SQLite file, so a restart, a second worker on the same host, or a crash between consume and dispatch
+    cannot let an approval nonce be used twice. ``INSERT`` on a PRIMARY KEY makes consume atomic across
+    processes; expired rows are purged opportunistically. Fails closed (False) on any storage error. For
+    multi-HOST deployments put the same contract on a shared store (Redis ``SET NX EX``/Postgres)."""
+
+    def __init__(self, path: str, max_entries: int = 100_000):
+        import sqlite3  # noqa: PLC0415
+        self.path, self.max_entries = path, max_entries
+        self._lock = threading.Lock()
+        self._db = sqlite3.connect(path, timeout=10, isolation_level=None, check_same_thread=False)
+        self._db.execute("PRAGMA journal_mode=WAL")
+        self._db.execute("CREATE TABLE IF NOT EXISTS used_nonces (nonce TEXT PRIMARY KEY, exp REAL NOT NULL)")
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+
+    def consume(self, nonce: str, exp: float, *, now: "float | None" = None) -> bool:
+        import sqlite3  # noqa: PLC0415
+        t = time.time() if now is None else now
+        with self._lock:
+            try:
+                self._db.execute("DELETE FROM used_nonces WHERE exp <= ?", (t,))
+                (n,) = self._db.execute("SELECT COUNT(*) FROM used_nonces").fetchone()
+                if n >= self.max_entries:
+                    return False
+                self._db.execute("INSERT INTO used_nonces (nonce, exp) VALUES (?, ?)", (nonce, float(exp)))
+                return True
+            except sqlite3.IntegrityError:
+                return False                      # already used: a replay
+            except sqlite3.Error:
+                return False                      # fail closed
+
+    def close(self) -> None:
+        self._db.close()
+
+
+def default_replay_guard():
+    """The guard an Operator uses: durable when ``AGENTIC_OS_REPLAY_DB`` names a file, else per-process."""
+    path = os.environ.get("AGENTIC_OS_REPLAY_DB", "").strip()
+    return SqliteReplayGuard(path) if path else ReplayGuard()

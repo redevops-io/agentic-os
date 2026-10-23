@@ -138,8 +138,9 @@ class Operator:
         # (capability, inputs-hash, idem key) -> first SUCCESSFUL result (exactly-once). PER-PROCESS, bounded LRU.
         self._seen: "OrderedDict[tuple, dict]" = OrderedDict()
         self._seen_lock = threading.Lock()
-        from .approval import ReplayGuard  # noqa: PLC0415
-        self.replay_guard = ReplayGuard()      # SEAM: per-process; multi-replica deployments need a shared store
+        from .approval import default_replay_guard  # noqa: PLC0415
+        # per-process by default; AGENTIC_OS_REPLAY_DB makes approval nonces durable across restarts/workers
+        self.replay_guard = default_replay_guard()
         self.calls: "deque[tuple[str, str]]" = deque(maxlen=10_000)  # (capability, idempotency_key) — recent, for assertions
         self._inflight: dict[tuple, dict] = {}   # dedupe key -> {"done": Event, "result": ..., "ok": bool}
 
