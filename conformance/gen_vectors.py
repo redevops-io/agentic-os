@@ -15,6 +15,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from agentic_os.mission.approval import action_summary_of, approval_expired, inputs_hash  # noqa: E402
+from agentic_os.mission.runtime import MissionRuntime  # noqa: E402
 from agentic_os.mission.assurance import assurance_findings  # noqa: E402
 from agentic_os.mission.store import Event, _canonical_entry, entry_hash, verify_chain  # noqa: E402
 
@@ -106,8 +107,13 @@ def inputs_vectors():
     ]
     for c in cases:
         c["inputs_sha256"] = inputs_hash(c["inputs"])
+        # the mission runtime's own digest (what NodeParked/ApprovalGranted record): approval keys stripped at every
+        # level, _mission/_goal KEPT, _approval/_node removed first by the caller (they are not in these inputs)
+        c["runtime_inputs_digest"] = MissionRuntime._inputs_digest(c["inputs"])
     return {"doc": "inputs_sha256 = sha256(json.dumps(strip_approval_keys(top-level inputs minus _mission/_goal/_node/_approval*), "
-                   "sort_keys=True, separators=(',',':')) with DEFAULT ensure_ascii=True)", "cases": cases}
+                   "sort_keys=True, separators=(',',':')) with DEFAULT ensure_ascii=True). runtime_inputs_digest = "
+                   "sha256(same canonical form of strip_approval_keys(inputs)) WITHOUT excluding _mission/_goal.",
+            "cases": cases}
 
 
 def summary_vectors():
@@ -120,6 +126,10 @@ def summary_vectors():
                                               "quantity": True}},
         {"name": "missing_keys_skipped", "resolved": {"foo": 1}},
         {"name": "email_not_at_start", "resolved": {"to": "contact: jane@acme.com or bob@evil.org"}},
+        # Python's \s is Unicode whitespace (incl. U+00A0, U+2003, U+001F): the local part stops there
+        {"name": "unicode_whitespace_in_local_part", "resolved": {"to": "a\u00a0bcd@x.io", "subject": "x\u2003yz@q.io",
+                                                                     "recipient": "m\u001fnop@r.io"}},
+        {"name": "non_scalar_canonical_json", "resolved": {"resource": {"b": [1, 2.5], "a": "é"}, "count": [None, True]}},
     ]
     for c in cases:
         c["summary"] = action_summary_of(c["resolved"])

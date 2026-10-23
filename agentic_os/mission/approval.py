@@ -302,7 +302,7 @@ SUMMARY_KEYS = ("amount", "currency", "total", "quantity", "count", "channel", "
 def action_summary_of(resolved: dict) -> dict:
     """The concrete facts shown to an approver, from the inputs about to run: an allowlist (``SUMMARY_KEYS``), strings
     truncated to 80 characters with e-mail local parts masked (first one or two characters kept), numbers and booleans
-    as they are, anything else as its ``str`` truncated. Never free text, never secrets."""
+    as they are, null as ``"null"``, anything else as its canonical JSON text truncated to 80. Never free text, never secrets."""
     import re  # noqa: PLC0415
     out: dict = {}
     for k in SUMMARY_KEYS:
@@ -311,8 +311,11 @@ def action_summary_of(resolved: dict) -> dict:
         v = resolved[k]
         if isinstance(v, str):
             v = re.sub(r"([^@\s]{1,2})[^@\s]*@", r"\1***@", v)[:80]
-        elif not isinstance(v, (int, float, bool)):
-            v = str(v)[:80]
+        elif v is not None and not isinstance(v, (int, float, bool)):
+            # canonical JSON, not Python's repr, so every language port renders the same text
+            v = json.dumps(v, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)[:80]
+        elif v is None:
+            v = "null"
         out[k] = v
     return out
 

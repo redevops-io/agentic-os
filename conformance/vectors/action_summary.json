@@ -58,9 +58,9 @@
    "summary": {
     "total": 12.5,
     "quantity": true,
-    "count": "[1, 2]",
-    "order_id": "None",
-    "resource": "{'a': 1}"
+    "count": "[1,2]",
+    "order_id": "null",
+    "resource": "{\"a\":1}"
    }
   },
   {
@@ -77,6 +77,39 @@
    },
    "summary": {
     "to": "contact: ja***@acme.com or bo***@evil.org"
+   }
+  },
+  {
+   "name": "unicode_whitespace_in_local_part",
+   "resolved": {
+    "to": "a bcd@x.io",
+    "subject": "x yz@q.io",
+    "recipient": "m\u001fnop@r.io"
+   },
+   "summary": {
+    "subject": "x yz***@q.io",
+    "to": "a bc***@x.io",
+    "recipient": "m\u001fno***@r.io"
+   }
+  },
+  {
+   "name": "non_scalar_canonical_json",
+   "resolved": {
+    "resource": {
+     "b": [
+      1,
+      2.5
+     ],
+     "a": "é"
+    },
+    "count": [
+     null,
+     true
+    ]
+   },
+   "summary": {
+    "count": "[null,true]",
+    "resource": "{\"a\":\"é\",\"b\":[1,2.5]}"
    }
   }
  ]
