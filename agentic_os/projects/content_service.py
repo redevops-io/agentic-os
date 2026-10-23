@@ -22,6 +22,9 @@ from .contracts import (
 )
 
 
+from .approver_auth import is_live_publisher  # noqa: E402
+
+
 class ProjectsContentService:
     """One content campaign as a durable Mission with canonical artifacts + a governed publish decision."""
 
@@ -41,6 +44,7 @@ class ProjectsContentService:
         # channels already posted out-of-band (e.g. a LinkedIn post published manually): {channel: post_url}
         self._manual_receipts = manual_receipts or {}
         self._publisher = publisher or FakePublisher(publishable=brief.channels)
+        self.live_publisher = is_live_publisher(publisher)   # a real account can be reached: approvals are authenticated
         # generate + park at the gate; the mission's own publish gate uses a no-op (we publish selectively)
         self.run = ContentMissionRun(brief, owner=owner, generator=generator or FakeGenerator(),
                                      publisher=NoOpPublisher())

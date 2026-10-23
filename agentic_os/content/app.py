@@ -7,6 +7,9 @@ Runtime — so publishing (the one side-effecting step) happens only on the owne
 """
 from __future__ import annotations
 
+from fastapi import Header
+
+from ..projects.approver_auth import approving_actor
 from .projection import ContentMissionRegistry, ContentProjectionProvider
 
 
@@ -17,8 +20,11 @@ def create_content_app(registry: ContentMissionRegistry):
     app = create_app(ContentProjectionProvider(registry))
 
     @app.post("/api/projects/{project_id}/missions/{mission_id}/approve")
-    def _approve(project_id: str, mission_id: str, body: dict | None = None):
-        # the governed owner decision from the Projects UI → resolve the mission's publish gate
+    def _approve(project_id: str, mission_id: str, body: dict | None = None,
+                 authorization: "str | None" = Header(default=None)):
+        # the governed owner decision from the Projects UI → resolve the mission's publish gate.
+        # With a live publisher the caller must be an authenticated approver (401/403/503 otherwise).
+        approving_actor(authorization, live=registry.live_publisher)
         decision = (body or {}).get("decision", "approve").lower()
         result = registry.reject(mission_id) if decision == "reject" else registry.approve(mission_id)
         if result is None:
