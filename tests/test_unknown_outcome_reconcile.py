@@ -34,7 +34,9 @@ class TimeoutBeforeCommit(FakeExternalAgentAdapter):
 
 class FabricatingAdapter(FakeExternalAgentAdapter):
     """Claims SUCCEEDED with an artifact ref that exists nowhere (the ledger has no such task)."""
-    simulated = False
+    def __init__(self):
+        super().__init__()
+        self.simulated = False                             # a REAL-shaped adapter: independence is required
 
     def get_result(self, ref):
         r = super().get_result(ref)
@@ -175,3 +177,60 @@ def test_the_idempotency_key_reaches_the_provider_request():
     iid, dg = _ids(t)
     t.approve(iid, expected_digest=dg)
     assert [v.idempotency_key for v in adapter._tasks.values()] == [f"{iid}:0"]
+
+
+# ── reconciliation must be genuinely independent ───────────────────────────────────────────────────────────────
+class LaggyLookup(FakeExternalAgentAdapter):
+    """A provider whose lookup by idempotency key is eventually consistent: it may not see a task it just created."""
+    def __init__(self):
+        super().__init__()
+        self.authoritative_lookup = False                  # (a dataclass field: set per instance)
+
+    def submit_task(self, request):
+        super().submit_task(request)
+        raise TimeoutError("reply lost")
+
+    def find_task_by_idempotency_key(self, key):
+        return None                                        # the record exists but the index has not caught up
+
+
+def test_no_record_from_a_non_authoritative_lookup_is_not_proof_of_absence():
+    t = _today(LaggyLookup())
+    iid, dg = _ids(t)
+    t.approve(iid, expected_digest=dg)
+    res = t.reconcile(iid)
+    assert res["reconcile_outcome"] == "unknown" and t._cases[iid].phase == "unknown"
+    with pytest.raises(TodayError):                          # still blocked: no blind retry
+        t.approve(iid, expected_digest=dg)
+    assert t._cases[iid].attempt == 0
+
+
+def test_a_lookup_that_times_out_stays_unknown():
+    class Boom(CommitThenTimeout):
+        def find_task_by_idempotency_key(self, key):
+            raise TimeoutError("lookup timed out")
+    t = _today(Boom())
+    iid, dg = _ids(t)
+    t.approve(iid, expected_digest=dg)
+    assert t.reconcile(iid)["reconcile_outcome"] == "unknown"
+
+
+def test_a_manual_reconciliation_needs_an_identified_person_when_real_sends_are_possible():
+    class Live(CommitThenTimeout):
+        def __init__(self):
+            super().__init__()
+            self.simulated = False
+            self.authoritative_lookup = False
+
+        def find_task_by_idempotency_key(self, key):
+            return None
+    t = _today(Live())
+    assert t.simulated is False
+    iid, dg = _ids(t)
+    t.approve(iid, expected_digest=dg)
+    with pytest.raises(TodayError) as e:                     # the anonymous default operator cannot settle it
+        t.reconcile(iid, manual="not_delivered")
+    assert e.value.status == 403
+    res = t.reconcile(iid, manual="not_delivered", by="approver:acme")
+    assert res["reconcile_outcome"] == "absent"
+    assert any("approver:acme" in h["text"] for h in t._cases[iid].events)

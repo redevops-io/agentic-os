@@ -184,7 +184,15 @@ class ExternalAgentOperator:
             except _AMBIGUOUS as exc:
                 return {"outcome": "unknown", "reason": f"lookup failed ({type(exc).__name__})"}
             if ref is None:
-                return {"outcome": "absent", "reason": "the provider has no record of this idempotency key"}
+                # "no record" proves nothing unless the provider's lookup is authoritative (read-your-writes
+                # consistent). A lookup that may lag, time out or miss is "unknown", never "absent": retrying on
+                # that basis could duplicate the effect.
+                if getattr(self.adapter, "authoritative_lookup", False):
+                    return {"outcome": "absent", "reason": "the provider's authoritative lookup has no record of "
+                                                            "this idempotency key"}
+                return {"outcome": "unknown",
+                        "reason": "no record found, but this provider's lookup is not declared authoritative: "
+                                  "absence is not proof; a person must confirm"}
         try:
             for _ in range(_MAX_DRIVE_STEPS):              # a found-but-unfinished task: read its status forward
                 status = self.adapter.get_task(ref)
@@ -195,7 +203,8 @@ class ExternalAgentOperator:
         except _AMBIGUOUS as exc:
             return {"outcome": "unknown", "reason": f"result lookup failed ({type(exc).__name__})"}
         if result.state is not TaskState.SUCCEEDED:
-            return {"outcome": "absent" if result.state in (TaskState.FAILED, TaskState.CANCELLED) else "unknown",
+            definitive = result.state in (TaskState.FAILED, TaskState.CANCELLED)
+            return {"outcome": "absent" if definitive else "unknown",
                     "reason": f"provider task state is {result.state.value}", "verification": "n/a"}
         ver = verify_result("", ref, result, probe=self.probe, require_independent=bool(self.require_independent))
         if ver.status is VerificationStatus.VERIFIED:

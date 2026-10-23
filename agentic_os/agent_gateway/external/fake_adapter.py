@@ -71,6 +71,7 @@ class FakeExternalAgentAdapter:
     provider: str = "fake-external-agent"
     adapter_version: str = "v1"
     simulated: bool = True        # nothing leaves the machine: the operator may verify without an independent probe
+    authoritative_lookup: bool = True   # its ledger is read-your-writes: "no record" really means "not created"
     _tasks: Dict[str, _ProviderTask] = field(default_factory=dict)
     _counter: int = 0
 

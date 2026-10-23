@@ -258,6 +258,7 @@ class Today:
         self._lock = threading.RLock()
         self._bridge = ExternalApprovalBridge()
         self._operator = ExternalAgentOperator(adapter or FakeExternalAgentAdapter())
+        self.simulated = bool(getattr(self._operator.adapter, "simulated", False))   # nothing real can have been sent
         self._cases: Dict[str, _Case] = {}
         self._reminders: Dict[str, _Reminder] = {}
         self._intake: Any = None
@@ -540,6 +541,9 @@ class Today:
             if manual is not None:
                 if manual not in ("delivered", "not_delivered"):
                     raise TodayError(422, "bad_manual", "manual must be 'delivered' or 'not_delivered'")
+                if not by or by == "user:operator" and not self.simulated:
+                    raise TodayError(403, "manual_reconcile_needs_an_identified_approver",
+                                     "a manual reconciliation must be recorded by an identified, authorised person")
                 outcome = "found" if manual == "delivered" else "absent"
                 why, verification = f"{by} confirmed manually: {manual.replace('_', ' ')}", "unverified"
             else:
