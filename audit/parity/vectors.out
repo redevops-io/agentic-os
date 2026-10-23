@@ -1,0 +1,55 @@
+{
+ "chain": [
+  {
+   "seq": 1,
+   "ts": 1700000001.123456,
+   "type": "MissionCreated",
+   "mission_id": "m1",
+   "payload": {
+    "goal": "caf\u00e9 \u2603 \ud83d\ude00",
+    "n": 5,
+    "f": 10.0,
+    "big": 1e+20,
+    "z": {
+     "b": 1,
+     "a": [
+      1,
+      2.5,
+      null,
+      true
+     ]
+    }
+   },
+   "prev": "",
+   "hash": "ab31ec45850dc3f4157f27773a56946aa858e0916ded10a950e9c33c12903183"
+  },
+  {
+   "seq": 2,
+   "ts": 1700000002.123456,
+   "type": "NodeParked",
+   "mission_id": "m1",
+   "payload": {
+    "node_id": "n1",
+    "amount": 12.5,
+    "small": 1e-07
+   },
+   "prev": "ab31ec45850dc3f4157f27773a56946aa858e0916ded10a950e9c33c12903183",
+   "hash": "d1dd0137f9da548e19295f020a4077eae7a82f6d92df824c44aaab2a3fa5df52"
+  },
+  {
+   "seq": 3,
+   "ts": 1700000003.123456,
+   "type": "ApprovalGranted",
+   "mission_id": "m1",
+   "payload": {
+    "node_id": "n1",
+    "inputs_sha256": "ab"
+   },
+   "prev": "d1dd0137f9da548e19295f020a4077eae7a82f6d92df824c44aaab2a3fa5df52",
+   "hash": "b0219c320f75cfa1703e23a25ec3c875f616c3eebdccc04ebae233a548c9624e"
+  }
+ ],
+ "head": "b0219c320f75cfa1703e23a25ec3c875f616c3eebdccc04ebae233a548c9624e"
+}
+inputs_sha256 62751459e9aad0bd4ea583f1c4126b39cb68e6691a798d94d5134cf4fcba7ffb
+token eyJjYXBhYmlsaXR5IjoiY2FwIiwiZXhwIjoxNzAwMDAwMzAwLjAsImlucHV0c19zaGEyNTYiOiI2Mjc1MTQ1OWU5YWFkMGJkNGVhNTgzZjFjNDEyNmIzOWNiNjhlNjY5MWE3OThkOTRkNTEzNGNmNGZjYmE3ZmZiIiwibWFya2VyIjp7ImFwcHJvdmVkIjp0cnVlfSwibWlzc2lvbl9pZCI6Im0xIiwibm9kZV9pZCI6Im4xIiwibm9uY2UiOiIxZTVlMTU3Yjc1NTdlMTdiZDA2ZmNjN2YxN2NkZDk1NyIsIm9wZXJhdG9yIjoib3AifQ.e3vqf3bIDqT9K89XA8HFHlJEplnKuOpvix7KaIBupPI
