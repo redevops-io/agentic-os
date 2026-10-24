@@ -195,3 +195,21 @@ def test_unknown_event_types_and_malformed_input_are_ignored(feed):
 def test_every_kind_has_a_valid_severity_and_a_line():
     assert all(sev in ("info", "low", "medium", "high", "critical") and line for sev, line in KINDS.values())
     assert severity_at_least("high", "medium") and not severity_at_least("low", "medium")
+
+
+def test_the_gateway_reports_unknown_outcomes_out_of_scope_attempts_and_revoked_authority(tmp_path, feed):
+    from agentic_os.agent_gateway import GatewayPrincipal, GatewayRequest
+    from agentic_os.mission.authority import Decision, Verdict
+    from agentic_os.overlays import Principal
+    gp = GatewayPrincipal(Principal("harness-app", "service", (), "acme"))
+    req = lambda cap: GatewayRequest(gp, cap, {})        # noqa: E731
+    feed.gateway_sink(req("billing.refund"), Decision(Verdict.DENY, "outcome_unknown", "x", None, "", -1, "lease-1"))
+    feed.gateway_sink(req("email.send"), Decision(Verdict.DENY, "out_of_scope", "x"))
+    feed.gateway_sink(req("email.send"), Decision(Verdict.DENY, "out_of_scope", "x"))            # the same attempt again: one event
+    feed.gateway_sink(req("crm.read"), Decision(Verdict.DENY, "ancestor_revoked", "x"))
+    feed.gateway_sink(req("crm.read"), Decision(Verdict.ALLOW, "granted", "x"))                  # allowed calls are not events
+    feed.gateway_sink(req("crm.read"), Decision(Verdict.DENY, "no_authority", "x"))              # other refusals are not events
+    out = feed.pull()[0]
+    assert [(e["kind"], e["severity"]) for e in out] == [("UNKNOWN_OUTCOME", "high"), ("AGENT_OUT_OF_SCOPE", "medium"), ("AGENT_AUTHORITY_REVOKED", "high")]
+    assert out[0]["evidence"]["lease_id"] == "lease-1" and out[1]["subject"] == "harness-app" and out[1]["tenant"] == "acme"
+    feed.gateway_sink(None, None)                                                                  # garbage never raises
