@@ -278,11 +278,15 @@ def _cost(rt, mission_id: str) -> tuple:
 class GoalLoop:
     """`GoalLoop(runtime, driver, store=..., verifier=..., leases=...)`. `store` is the loop's own durable log (separate from the mission
     log, so loops never appear as missions). With `leases`, one driver per loop and per mission is enforced at the write; in the production
-    profile leases are required and the mission runtime's store must be a `FencedEventStore`."""
+    profile leases are required and the mission runtime's store must be a `FencedEventStore`.
+
+    With `children` (a `ChildSpawner`), the child agents under a mission's authority key are kept alive for exactly as long as the loop is DRIVING that mission, including children spawned while it
+    runs, and are ended when the loop completes or is cancelled. A loop that is merely waiting (for a person, a reconciliation, a raised limit) stops beating: the children lapse within one lease
+    period and are beaten again when the loop resumes, so a paused loop never keeps credentials alive, and a revoked or expired child is never revived."""
 
     def __init__(self, runtime, driver: LoopDriver, *, store, verifier: Optional[Verifier] = None,
                  leases: Optional[MissionLeases] = None, on_event: Optional[Callable[[dict], None]] = None,
-                 clock: Callable[[], float] = time.time, owner: str = "") -> None:
+                 clock: Callable[[], float] = time.time, owner: str = "", children=None) -> None:
         from .profile import is_production  # noqa: PLC0415
         if is_production():
             if leases is None:
@@ -291,6 +295,7 @@ class GoalLoop:
                 raise LoopError("the production profile requires the mission runtime's store to be a FencedEventStore, or a stale "
                                 "driver could still append to a mission it no longer owns")
         self.rt, self.driver, self.verifier, self.leases = runtime, driver, verifier, leases
+        self.children = children
         self._raw = store
         self.store = FencedEventStore(store, leases) if leases is not None else store
         self.on_event, self.clock, self.owner = on_event or (lambda ev: None), clock, owner
@@ -487,19 +492,62 @@ class GoalLoop:
                 self._wait(loop_id, self.state(loop_id), "waiting_human", detail="the mission is driven by another owner")
                 return False
         t0 = time.monotonic()
+        lost: list = []
         try:
-            if lease is not None:
-                with lease:
+            with self._children_alive(m, lost):
+                if lease is not None:
+                    with lease:
+                        self.rt.run(m.id)
+                else:
                     self.rt.run(m.id)
-            else:
-                self.rt.run(m.id)
         finally:
+            for cid, why in lost:                          # recorded by the thread that owns the loop's log, after the run
+                try:
+                    self._append(loop_id, "LoopChildLost", {"n": it.n, "child_id": cid, "why": why, "at": self.clock()})
+                    self._emit("LOOP_CHILD_LOST", loop_id, child_id=cid, why=why, iteration=it.n)
+                except Exception:  # noqa: BLE001
+                    pass
             try:                                          # durable, so a restart cannot reset the active-time budget
                 self._append(loop_id, "SegmentFinished", {"n": it.n, "s": round(time.monotonic() - t0, 3), "at": self.clock()})
             finally:
                 if lease is not None:
                     lease.release()
         return True
+
+    # ── child agents ──
+    def _children_key(self, m) -> str:
+        try:
+            return self.rt._authority_key(m) if getattr(m, "tenant", "") else ""
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def _children_alive(self, m, lost: list):
+        """A context that beats every active child under this mission's authority key while the mission is driven (a no-op without a spawner or an authority key)."""
+        import contextlib  # noqa: PLC0415
+        key = self._children_key(m) if self.children is not None else ""
+        if not key:
+            return contextlib.nullcontext()
+        return self.children.keepalive_tree(key, on_lost=lambda cid, why: lost.append((cid, why)))
+
+    def _end_children(self, loop_id: str, st: LoopState, reason: str) -> None:
+        """The loop is finished for good: end every child agent still active under any of its missions' authority keys (deepest first; their unused allowance returns to the parent).
+        A failure here is recorded and never stops the loop from reaching its terminal state."""
+        if self.children is None:
+            return
+        ended, errors, keys = [], [], []
+        for it in st.iterations:
+            m = self.rt._missions.get(it.mission_id)
+            k = self._children_key(m) if m is not None else ""
+            if k and k not in keys:
+                keys.append(k)
+        for k in keys:
+            try:
+                ended += [r["child_id"] for r in self.children.end_tree(k, reason, actor=f"loop:{loop_id}")]
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"{k}: {type(e).__name__}")
+        if ended or errors:
+            self._append(loop_id, "LoopChildrenEnded", {"children": ended, "errors": errors, "reason": reason, "at": self.clock()})
+            self._emit("LOOP_CHILDREN_ENDED", loop_id, children=len(ended), errors=len(errors))
 
     # ── iteration outcome ──
     def _outcome(self, m) -> tuple:
@@ -529,12 +577,14 @@ class GoalLoop:
             v = self._verify(loop_id, st, it, m)
             if v is not None and v.verified:
                 self._record_iteration(loop_id, it, m, "succeeded", usd, tok, "")
+                self._end_children(loop_id, self.state(loop_id), "the loop completed")
                 self._append(loop_id, "GoalVerified", {"n": it.n, "evidence": v.evidence, "reason": v.reason, "at": self.clock()})
                 self._append(loop_id, "LoopCompleted", {"verified": True, "n": it.n, "evidence": v.evidence, "at": self.clock()})
                 self._emit("LOOP_COMPLETED", loop_id, verified=True, iterations=it.n)
                 return
             if v is None:
                 self._record_iteration(loop_id, it, m, "succeeded", usd, tok, "")
+                self._end_children(loop_id, self.state(loop_id), "the loop completed")
                 self._append(loop_id, "LoopCompleted", {"verified": False, "n": it.n, "at": self.clock(),
                                                         "note": "no verifier is configured: the goal is not verified"})
                 self._emit("LOOP_COMPLETED", loop_id, verified=False, iterations=it.n)
@@ -708,6 +758,7 @@ class GoalLoop:
                     return self.state(loop_id)           # its owner holds it: the intent is recorded, they finish at their boundary
             pending += [{"mission_id": it.mission_id, **p} for p in self.rt.repo.pending_reconciliation(it.mission_id)]
         req = st.cancel_requested or {}
+        self._end_children(loop_id, st, "the loop was cancelled")
         self._append(loop_id, "LoopCancelled", {"actor": req.get("actor", ""), "reason": req.get("reason", ""),
                                                 "unresolved_reconciliations": [{k: p.get(k) for k in ("mission_id", "node_id", "lease_id")} for p in pending],
                                                 "at": self.clock()})
