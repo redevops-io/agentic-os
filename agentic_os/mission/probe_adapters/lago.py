@@ -7,7 +7,8 @@ What identifies each effect at Lago, from its API documentation:
                        used). `active` after the call is not proof the cancel never happened (it may not be visible yet): INCONCLUSIVE.
   refund               `POST /credit_notes` has NO idempotency key and returns nothing that ties a credit note to our request. A probe can only find a refund credit note on the invoice
                        (`GET /credit_notes?invoice_number=...&types[]=refund`) created since the call was sent, with the requested amount. That is consistent with our request, not identified
-                       by it: exactly one such credit note is CONFIRMED_EXECUTED; more than one is INCONCLUSIVE (it may be a duplicate: a person must look); none is INCONCLUSIVE.
+                       by it, so by default every outcome is INCONCLUSIVE: one candidate is named for a person to confirm (it may be an unrelated refund on the same invoice and amount), several may
+                       include a duplicate, none proves nothing. `accept_unique_refund_match=True` opts in to treating exactly one match as CONFIRMED_EXECUTED.
   dunning              `retry_payment` leaves no identifiable record: UNSUPPORTED (reconcile at the payment provider).
 No Lago adapter is qualified to prove an effect ABSENT: none of these lookups is documented as strongly consistent, and Lago documents no idempotency for these calls. A negative is therefore
 never returned; an unresolved case is retried read-only with backoff and then escalated to a person.
@@ -81,8 +82,12 @@ def default_http(base_url: str, api_key: str, timeout: float = 10.0) -> Http:
 
 
 class LagoProbes:
-    def __init__(self, http: Http) -> None:
+    def __init__(self, http: Http, *, accept_unique_refund_match: bool = False) -> None:
+        """`accept_unique_refund_match`: treat exactly one matching refund credit note as proof the refund executed. Off by default: Lago ties no credit note to our request, so an
+        unrelated refund on the same invoice for the same amount inside the window (a person, another agent, a retry from elsewhere) looks identical. Turn it on only where nothing
+        else can refund the same invoice and amount."""
         self.http = http
+        self.accept_unique_refund_match = accept_unique_refund_match
 
     # ── plumbing ──
     def _get(self, path: str, params: Optional[dict] = None):
@@ -175,6 +180,11 @@ class LagoProbes:
         notes = [n for n in ((body or {}).get("credit_notes") or []) if (_epoch(n.get("created_at")) or 0) >= since]
         if want is not None:
             notes = [n for n in notes if int(n.get("refund_amount_cents") or -1) == want]
+        if len(notes) == 1 and not self.accept_unique_refund_match:
+            n = notes[0]
+            return ProbeResult(ProbeOutcome.INCONCLUSIVE, provider_ref=str(n.get("lago_id") or ""),
+                               detail=f"one refund credit note ({n.get('number')}) matches the invoice and amount since the call, but Lago does not tie it to this request: it may be an unrelated "
+                                      "refund. A person must confirm it before the reservation is settled.")
         if len(notes) == 1:
             n = notes[0]
             return ProbeResult(ProbeOutcome.CONFIRMED_EXECUTED,
@@ -193,9 +203,9 @@ class LagoProbes:
         return ProbeResult(ProbeOutcome.UNSUPPORTED, detail="a payment retry leaves no identifiable record at Lago: reconcile at the payment provider")
 
 
-def register_lago(registry, http: Http, *, prefix: str = "billing.") -> LagoProbes:
+def register_lago(registry, http: Http, *, prefix: str = "billing.", accept_unique_refund_match: bool = False) -> LagoProbes:
     """Register the Lago probes for the billing capabilities (with the input fields that identify each effect) on a `ProbeRegistry`."""
-    p = LagoProbes(http)
+    p = LagoProbes(http, accept_unique_refund_match=accept_unique_refund_match)
     registry.register(f"{prefix}create_subscription", p.create_subscription, QUALIFICATION, ref_keys=("customer", "plan_code"))
     registry.register(f"{prefix}cancel_subscription", p.cancel_subscription, QUALIFICATION, ref_keys=("customer", "plan_code"))
     registry.register(f"{prefix}refund", p.refund, QUALIFICATION, ref_keys=("invoice_number", "amount", "full_refund", "currency"))
