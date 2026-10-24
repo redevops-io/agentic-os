@@ -412,6 +412,24 @@ class MissionRepository:
         nid, task = next(iter(parked.items()))
         return {"node_id": nid, **task}
 
+    def pending_reconciliation(self, mission_id: str) -> list[dict]:
+        """Dispatched nodes whose outcome is unknown and not yet reconciled (fold: required minus resolved). Event-derived, so it
+        survives a restart and cannot be cleared by overwriting the mission state."""
+        pending: dict[str, dict] = {}
+        for e in self.store.for_mission(mission_id):
+            if e.type == "ReconciliationRequired":
+                pending[e.payload["node_id"]] = dict(e.payload)
+            elif e.type == "ReconciliationResolved":
+                pending.pop(e.payload["node_id"], None)
+        return list(pending.values())
+
+    def last_reconciliation(self, mission_id: str, node_id: str) -> dict | None:
+        out = None
+        for e in self.store.for_mission(mission_id):
+            if e.type == "ReconciliationResolved" and e.payload.get("node_id") == node_id:
+                out = dict(e.payload)
+        return out
+
     def timeline(self, mission_id: str) -> list[dict]:
         return [{"seq": e.seq, "ts": e.ts, "type": e.type, "payload": e.payload}
                 for e in self.store.for_mission(mission_id)]

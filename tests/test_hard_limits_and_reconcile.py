@@ -323,7 +323,7 @@ def test_a_retry_after_a_timeout_does_not_send_the_effect_again(profile, monkeyp
         guard = g
     else:
         rt, m, guard, _ = standing_runtime(handler)
-    assert rt.run(m.id).state == MissionState.FAILED and len(calls) == 1
+    assert rt.run(m.id).state == MissionState.WAITING_RECONCILIATION and len(calls) == 1   # parked, not failed
     lease_id, state = guard.outstanding("env")[0]
     assert state == "unknown"                                                                 # it may have executed
     node = rt._plans[m.id].graph.nodes[0]

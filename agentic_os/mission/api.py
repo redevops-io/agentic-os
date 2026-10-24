@@ -66,6 +66,7 @@ def build_router(runtime: MissionRuntime):
             "outcome": m.outcome,
             "active_plan": to_jsonable(plan) if plan else None,
             "pending_human": runtime.repo.pending_human(mid),
+            "pending_reconciliation": runtime.repo.pending_reconciliation(mid),
         }
 
     @router.post("")
@@ -139,6 +140,39 @@ def build_router(runtime: MissionRuntime):
             runtime.approve(mid, body.node_id, body.decision, edit, actor=actor)
         except ApprovalError as e:
             raise HTTPException(409, str(e))
+        return _mission_view(mid)
+
+    class Reconcile(BaseModel):
+        node_id: str
+        outcome: str                       # "executed" | "not_executed"
+        evidence: dict = {}                # {kind, reference, provider_ref?, observed_at?, note?}: what was checked, and where
+        reason: str = ""
+        result: dict | None = None         # the provider's real result, required when later steps read what this node produced
+        resume: bool = True
+
+    @router.post("/{mid}/reconcile")
+    def reconcile(mid: str, body: Reconcile, request: Request):
+        """Resolve a mission parked in WAITING_RECONCILIATION and resume it. Declaring that a side effect did or did not happen is
+        what unlocks (or forecloses) a resend, so it is held to a higher bar than an approval: tenant-scoped (404 cross-tenant);
+        only an approver or admin credential (never a requester); the actor is the credential, never the body; evidence is
+        mandatory; with no credential configured the endpoint is disabled (503). Who, when, why and the evidence are on the mission log."""
+        _authorize_mission(mid, request)
+        c = caller_of(request)
+        if c is None:                      # the router gate always resolves a caller for a POST; refuse if it ever did not
+            raise HTTPException(401, "reconciliation requires an authenticated approver or admin credential")
+        if c.role == "requester":
+            raise HTTPException(403, "reconciliation requires an approver or admin credential, not a requester credential")
+        if body.outcome not in ("executed", "not_executed"):
+            raise HTTPException(422, "outcome must be 'executed' or 'not_executed'")
+        actor = "admin" if c.role == "admin" else f"{c.role}:{c.tenant}"
+        from .reconcile import ReconciliationConflict, ReconciliationError  # noqa: PLC0415
+        try:
+            runtime.reconcile_node(mid, body.node_id, executed=body.outcome == "executed", evidence=body.evidence, actor=actor,
+                                   reason=body.reason, result=body.result, resume=body.resume)
+        except ReconciliationConflict as e:
+            raise HTTPException(409, str(e))
+        except ReconciliationError as e:
+            raise HTTPException(422, str(e))
         return _mission_view(mid)
 
     class CompensationAction(BaseModel):
@@ -273,7 +307,7 @@ button.sm{padding:4px 9px;font-size:12px}
 .pill{font-size:10.5px;padding:2px 8px;border-radius:999px;font-weight:700;letter-spacing:.02em;white-space:nowrap}
 .st-done,.st-succeeded{background:#0e211d;color:var(--teal)}
 .st-failed,.st-compensation_failed{background:#271417;color:var(--red)}
-.st-waiting,.st-waiting_human{background:#271f13;color:var(--amber)}
+.st-waiting,.st-waiting_human,.st-waiting_reconciliation{background:#271f13;color:var(--amber)}
 .st-running,.st-ready,.st-planning{background:#13202e;color:var(--blue)}
 .st-pending{background:#1d1e26;color:var(--dim)}
 .st-skipped{background:#1d1e26;color:var(--mut)}
@@ -415,7 +449,7 @@ async function refreshAll(){
     `<div class="mrow${m.id===CUR?' sel':''}" ${A('open',m.id)}>
       <div class=row style="justify-content:space-between">
         <span class=g>${esc(m.goal||m.id)}</span>${pill(m.state)}</div>
-      <div class=dim style="font-size:12px">${esc(m.template||'—')}${m.awaiting_human?' · ⏳ needs you':''}</div></div>`
+      <div class=dim style="font-size:12px">${esc(m.template||'—')}${m.awaiting_human?' · ⏳ needs you':''}${m.awaiting_reconciliation?' · ⚠ outcome unknown: reconcile':''}</div></div>`
   ).join('') : '<div class=dim>No missions yet.</div>';
 }
 

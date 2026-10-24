@@ -39,6 +39,10 @@ class MissionState(str, Enum):
     SIMULATING = "simulating"
     RUNNING = "running"
     WAITING_HUMAN = "waiting_human"
+    # A dispatched node's outcome is UNKNOWN (the process died, or a side-effecting call timed out after it may have been sent).
+    # It is neither failed nor safe to repeat. The mission is parked, durably, until a person (or, later, a provider probe)
+    # reconciles the reservation with evidence; then THIS mission resumes from where it was, without rerunning completed work.
+    WAITING_RECONCILIATION = "waiting_reconciliation"
     PAUSED = "paused"
     FAILED = "failed"
     SUCCEEDED = "succeeded"

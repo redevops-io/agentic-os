@@ -320,7 +320,7 @@ def test_timeout_after_a_possible_side_effect_is_unknown_and_no_second_authoriza
     calls.fail = True
     op, c = replica(calls)
     rt, m, guard = runtime(env, op, c, Grant("crm.send", max_calls=3))
-    assert rt.run(m.id).state == MissionState.FAILED
+    assert rt.run(m.id).state == MissionState.WAITING_RECONCILIATION        # parked for reconciliation, not failed
     out = guard.outstanding("env-1")
     assert len(out) == 1 and out[0][1] == Lease.UNKNOWN.value                             # counted, needs reconciliation
     node = [n for n in rt._plans[m.id].graph.nodes][0]

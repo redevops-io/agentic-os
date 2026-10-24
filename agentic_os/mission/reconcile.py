@@ -31,6 +31,37 @@ from .profile import is_production
 RELEASE_UNDISPATCHED_AFTER_S = 900.0
 
 
+class ReconciliationError(RuntimeError):
+    """The reconciliation request is not valid (nothing to reconcile, missing evidence, missing result)."""
+
+
+class ReconciliationConflict(ReconciliationError):
+    """The reservation was already resolved the other way (or a concurrent resolver won). Nothing was changed."""
+
+
+#: what a person may cite. A bare assertion ("trust me") is not evidence: a kind AND a reference to something checkable.
+EVIDENCE_KINDS = ("provider_record", "provider_log", "bank_statement", "mailbox_record", "ledger_entry", "screenshot", "other")
+
+
+def validate_evidence(evidence) -> dict:
+    """The evidence a manual reconciliation must carry, normalised: {kind, reference, provider_ref?, observed_at?, note?}."""
+    if not isinstance(evidence, dict):
+        raise ReconciliationError("evidence is required: say what you checked and where (kind and reference)")
+    kind = str(evidence.get("kind", "")).strip().lower()
+    ref = str(evidence.get("reference", "")).strip()
+    if kind not in EVIDENCE_KINDS:
+        raise ReconciliationError(f"evidence.kind must be one of {list(EVIDENCE_KINDS)}")
+    if len(ref) < 4:
+        raise ReconciliationError("evidence.reference must point at something checkable (a record id, a log line, a statement line)")
+    out = {"kind": kind, "reference": ref[:500]}
+    for k in ("provider_ref", "observed_at", "note"):
+        if evidence.get(k):
+            out[k] = str(evidence[k])[:500]
+    if kind == "other" and len(out.get("note", "")) < 20:
+        raise ReconciliationError("evidence of kind 'other' needs a note explaining what was checked")
+    return out
+
+
 class Outcome(str, Enum):
     EXECUTED = "executed"
     NOT_EXECUTED = "not_executed"
