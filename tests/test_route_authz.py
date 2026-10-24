@@ -318,3 +318,17 @@ def test_a_deployment_bound_to_a_tenant_accepts_that_tenants_authorization(env, 
     monkeypatch.setenv("AGENTIC_OS_TENANT", "acme")
     body = {"amount": 5}
     assert c.post("/act", json=body, headers=agent_headers(agent_token(body=body, tenant="acme"))).status_code == 200
+
+
+def test_policies_apply_when_the_app_is_mounted_under_a_base_path(env):
+    """A mounted app sees the full path with the prefix in `root_path`; matching against the full path would make every request look like
+    an unclassified route, refusing legitimate calls in production (and, off production, silently skipping the policy)."""
+    from fastapi import FastAPI
+    hits, _ = env
+    outer = FastAPI()
+    outer.mount("/base", build(hits))
+    c = TestClient(outer, raise_server_exceptions=False)
+    assert c.post("/base/act", json={"x": 1}).status_code == 401 and hits.calls == []
+    assert c.post("/base/act", json={"x": 1}, headers=basic()).status_code == 200 and hits.calls[0][0] == "/act"
+    assert c.post("/base/items/7/pay", json={}, headers=basic()).status_code == 200 and hits.calls[-1][2] == "7"
+    assert c.post("/base/not-a-route", json={}, headers=basic()).status_code == 403          # still fails closed for an unclassified path
