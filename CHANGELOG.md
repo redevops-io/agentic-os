@@ -2,6 +2,7 @@
 
 No curated changelog is kept. History:
 
+- Edge Sentinel SOC 2 evidence (SEC-ACC-02, SEC-ACC-03): `EntraAccess` collects privileged accounts (directory roles, Azure RBAC, service principals) and leaver revocation times from the Entra directory audit log, joined with append-only `ReviewLog` and `LeaverLog` records written by people; any unreadable page is a gap; read-only `az` paths only; no sign-in or MFA claims (no premium licence). Not yet exercised against a live tenant lifecycle.
 - Tags: <https://github.com/redevops-io/agentic-os/tags> (`v0.1.0`, `v0.2.0..v0.2.4`, `v0.3.0..v0.3.34`; never deleted or rewritten).
 - GitHub releases: <https://github.com/redevops-io/agentic-os/releases> (latest release object `v0.3.30`, tags are ahead).
 - Release procedure and known drift between `pyproject.toml`, tags and release objects: [docs/RELEASING.md](docs/RELEASING.md).
