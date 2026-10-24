@@ -388,3 +388,31 @@ def test_the_effect_ref_a_probe_receives_is_the_one_derived_at_dispatch():
     ref = reg.effect_ref("content.publish", inputs)
     (_, probe), = reg.adapters_for("content.publish")
     assert probe(ctx(ref)).outcome is O.CONFIRMED_EXECUTED
+
+
+# ───────────────────────── a Message-ID derived from the idempotency key ─────────────────────────
+def test_the_message_id_is_stable_per_key_distinct_across_keys_and_does_not_expose_the_key():
+    a, b = gmail.message_id_for("idem-1", "mail.example.com"), gmail.message_id_for("idem-2", "mail.example.com")
+    assert a == gmail.message_id_for("idem-1", "mail.example.com") and a != b
+    assert a.startswith("<") and a.endswith("@mail.example.com>") and "idem-1" not in a and len(a.split("@")[0]) == 33
+
+
+def test_the_domain_is_trimmed_and_lowercased_so_the_same_email_always_gets_the_same_id():
+    assert gmail.message_id_for("k", "  Mail.Example.COM ") == gmail.message_id_for("k", "mail.example.com")
+
+
+@pytest.mark.parametrize("key,domain", [("", "mail.example.com"), ("  ", "mail.example.com"), ("k", "not a domain"), ("k", "localhost"), ("k", "a@b.com"), ("k", "x.y\nBcc: z")])
+def test_a_missing_key_or_a_bad_domain_is_refused(key, domain):
+    with pytest.raises(ValueError):
+        gmail.message_id_for(key, domain)
+
+
+def test_the_derived_id_is_accepted_by_the_connectors_validator_and_the_probe_identifies_the_message_by_it():
+    mid = gmail.message_id_for("idem-77", "mail.example.com")
+    import re
+    assert re.fullmatch(r"^<[A-Za-z0-9!#$%&'*+/=?^_`{|}~.\-]+@[A-Za-z0-9.\-]+>$", mid)          # the connector's msg-id grammar
+    ref = gmail.derive_ref({"to": "a@b.co", "subject": "Hi", "message_id": mid})
+    assert ref["message_id"] == mid
+    f = gmail_fake(["m1"], {"m1": gmsg("m1", msgid=mid)})
+    r = gmail.GmailProbes(f).send(ctx(ref))
+    assert r.outcome is O.CONFIRMED_EXECUTED and r.provider_ref == "m1"
