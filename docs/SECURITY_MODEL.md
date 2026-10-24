@@ -10,6 +10,7 @@ Control plane, security profile and the operator authority boundary, approval to
 - [Permissions plane — access-control admin](#permissions-plane--access-control-admin) (was `permissions.md`)
 - [Gate notifications](#gate-notifications) (was `GATE_NOTIFICATIONS.md`)
 - [Child agents](#child-agents)
+- [Context integrity and the sentinel feed](#context-integrity-and-the-sentinel-feed)
 
 ## Control-plane auth, idempotency cache and multi-replica limits
 
@@ -551,4 +552,22 @@ spawner.close(child.child_id)          # or revoke(child_id, actor=..., reason=.
 * `max_children` (total), `max_parallel` (active at once) and the registry's tree ceiling bound the fan-out; `max_depth` bounds the depth. A refusal leaves nothing behind.
 * Every decision walks the chain: revoke, expire or narrow any ancestor and every descendant stops at once. A child with no stored parent is denied.
 * The credential is ONE token for the whole mission, never rotated or re-issued mid-mission. It is bound to the child, its tenant, its lineage and (optionally) one client, and it expires only with the child's envelope (the hard cap). Its short life is a **liveness lease**: it verifies only while the owner keeps beating (`with spawner.keepalive(child_id): ...`, or `spawner.heartbeat(child_id)`), and the lease is extended by the owner, never by the token being used, so a stolen token cannot keep itself alive. When the work ends or its driver dies the token stops verifying within one `lease_ttl_s` (default 60 s). A lapse is not a revocation: the same token works again once the driver beats again; close, revoke, an altered envelope, a revoked or narrowed ancestor and envelope expiry are final (a heartbeat is refused). `reap_lapsed(grace_s)` closes children whose driver is gone and returns their unused allowance. `renew_credential` remains for a deliberate rotation (suspected leak), not for keeping a mission alive. The gateway answers every invalid credential identically.
+
+## Context integrity and the sentinel feed
+
+**Compaction that cannot lose the owner's scope or promote untrusted text** (`agentic_os/mission/context_integrity.py`):
+
+```python
+pin = ScopePin.from_envelope(envelope)                 # goal, acceptance, constraints, forbidden, capabilities + digest
+msgs = [pin.message(), *conversation]                  # tag tool/web/email results: tag(msg, "external", "tool:crm.lookup")
+res = compact_with_integrity(msgs, CompactionPolicy(enabled=True), summarize, pin, on_event=feed.context_sink)
+res.messages                                            # pin first and byte-identical; history unchanged if the summarizer failed
+```
+
+* The pin is never summarized and never shown to the summarizer; a missing, edited or planted copy is repaired and reported (`SCOPE_REINJECTED`, `SCOPE_TAMPERED`).
+* Only `owner` and `system` content is trusted; an unlabelled message is untrusted. A summary containing any untrusted item is `derived_untrusted`, fenced and given the `user` role, never `system`.
+* A summarizer that fails, returns nothing or returns something not smaller leaves the history as it was. Each compaction records what was dropped (trust, source, digest; not the content).
+* This is not prompt-injection detection: it stops injected text from speaking with the owner's or the system's authority and from displacing the scope.
+
+**One feed for a security monitor** (`agentic_os/mission/sentinel.py`): hand the feed's sinks to the components (`GoalLoop(on_event=feed.loop_sink)`, `ChildSpawner(on_event=feed.child_sink)`, `ReconciliationSupervisor(on_event=feed.reconcile_sink)`, `compact_with_integrity(on_event=feed.context_sink)`), feed it the egress proxy's decision-log lines (`feed.egress(line)`) and assurance findings (`feed.assurance(findings)`), and have the monitor `pull(cursor)`. Events are deduplicated, durable and severity-rated; the cursor makes a restart lose and repeat nothing. Edge Sentinel turns them into AI_SECURITY cases with `apps/edge-sentinel/agent_events.pull_cases`; a case is a signal, never an action or a closure.
 
