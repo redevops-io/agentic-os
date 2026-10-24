@@ -11,6 +11,12 @@ import os
 
 import pytest
 
+import sys as _sys                                                     # noqa: E402
+from pathlib import Path as _Path                                      # noqa: E402
+
+_sys.path.insert(0, str(_Path(__file__).parent))
+from _platform_facts import needs_memory_ceiling                      # noqa: E402
+
 from runtime_contracts.models import (
     EnvelopeInvalid, ExecutionConstraint, ExecutionEnvelope,
 )
@@ -37,12 +43,14 @@ def _envelope(**over):
 
 
 # ── baseline ────────────────────────────────────────────────────────────────
+@needs_memory_ceiling
 def test_well_behaved_capability_runs():
     out = _sandbox().invoke("op", f"{CAP}:echo", {"x": 1}, "idem-1")
     assert out == {"echo": {"x": 1}}
 
 
 # ── Benchmark B: credential blindness ────────────────────────────────────────
+@needs_memory_ceiling
 def test_contained_capability_cannot_see_ambient_secret(monkeypatch):
     monkeypatch.setenv("MEMBRANE_TEST_SECRET", "super-secret-value")
     # Sanity: it IS in the parent environment.
@@ -51,6 +59,7 @@ def test_contained_capability_cannot_see_ambient_secret(monkeypatch):
     assert out == {"seen": ""}          # the child saw nothing — env was scrubbed
 
 
+@needs_memory_ceiling
 def test_explicit_passthrough_is_the_only_way_in(monkeypatch):
     monkeypatch.setenv("MEMBRANE_TEST_SECRET", "allowed-on-purpose")
     sb = _sandbox(env_passthrough=("MEMBRANE_TEST_SECRET",))
@@ -59,12 +68,14 @@ def test_explicit_passthrough_is_the_only_way_in(monkeypatch):
 
 
 # ── Benchmark A: resource containment ────────────────────────────────────────
+@needs_memory_ceiling
 def test_cpu_bound_capability_is_killed():
     sb = _sandbox(constraint=ExecutionConstraint(max_duration_seconds=1, max_memory_mb=512))
     with pytest.raises(ContainmentError):
         sb.invoke("op", f"{CAP}:busy", {}, "idem-1")
 
 
+@needs_memory_ceiling
 def test_memory_bound_capability_is_killed():
     sb = _sandbox(constraint=ExecutionConstraint(max_memory_mb=256, max_duration_seconds=10))
     with pytest.raises(ContainmentError):

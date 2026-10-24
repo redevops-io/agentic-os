@@ -18,6 +18,27 @@ def _no_live_cores(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _no_hosted_oauth(monkeypatch):
+    """The Projects API builds its hosted-OAuth connector ONCE from the environment and caches it in module globals. A developer who has exported real OAuth client credentials (to wire a live
+    demo) would then see the simulated Connect flow refused, which is the right behaviour but not what these tests are about. Clear the credentials and reset the cache before every test; a test
+    that exercises hosted OAuth sets them itself."""
+    import sys
+    try:
+        from agentic_os.integrations.hosted_oauth import KNOWN_OAUTH
+        for spec in KNOWN_OAUTH.values():
+            monkeypatch.delenv(spec["env_id"], raising=False)
+            monkeypatch.delenv(spec["env_secret"], raising=False)
+    except Exception:  # the connector plugin may not be installed: nothing to clear
+        pass
+    mod = sys.modules.get("agentic_os.projects_api")
+    if mod is not None:
+        monkeypatch.setattr(mod, "_HOSTED", None, raising=False)
+        monkeypatch.setattr(mod, "_HOSTED_TRIED", False, raising=False)
+        monkeypatch.setattr(mod, "_HOSTED_BROKEN", False, raising=False)
+    yield
+
+
 # ── hygiene guard: the suite must never rewrite the vendored UI bundle ─────────────────────────────────────────
 # `agentic_os/projects_ui/` is a git-ignored build artefact fetched from the pinned redevops-projects release
 # (scripts/fetch_projects_ui.py; scripts/build_projects_ui.sh builds one from a local clone). Tests only read it. If any test/fixture starts building into it, fail the run loudly instead of silently

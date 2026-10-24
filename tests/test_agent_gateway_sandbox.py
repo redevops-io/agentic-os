@@ -7,6 +7,12 @@ LocalContainmentSandbox (which executes in a confined child, proving the contain
 """
 from __future__ import annotations
 
+import sys as _sys                                                     # noqa: E402
+from pathlib import Path as _Path                                      # noqa: E402
+
+_sys.path.insert(0, str(_Path(__file__).parent))
+from _platform_facts import needs_memory_ceiling                      # noqa: E402
+
 from agentic_os.overlays import Principal
 from agentic_os.agent_gateway import (
     AgentGateway, GatewayPrincipal, GatewayRequest, GatewayStatus, register_sandbox_capability)
@@ -82,6 +88,7 @@ def test_a_containment_failure_is_a_clean_error_not_a_crash():
 
 
 # ── a real run through the open LocalContainmentSandbox (default backend) ──────────
+@needs_memory_ceiling
 def test_default_backend_runs_a_capability_in_real_containment():
     # default sandbox = LocalContainmentSandbox; the target executes in a confined child (scrubbed
     # env, rlimits), proving the gateway shares the runtime's actual containment path.

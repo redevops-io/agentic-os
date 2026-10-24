@@ -8,6 +8,12 @@ from dataclasses import replace
 
 import pytest
 
+import sys as _sys                                                     # noqa: E402
+from pathlib import Path as _Path                                      # noqa: E402
+
+_sys.path.insert(0, str(_Path(__file__).parent))
+from _platform_facts import needs_memory_ceiling                      # noqa: E402
+
 from runtime_contracts.models import ExecutionConstraint
 from agentic_os.mission.device_posture import (
     Decision, DeviceFacts, DevicePosture, ExecutionClass, Verdict,
@@ -185,6 +191,7 @@ def test_bootstrap_records_then_gates():
 
 # ── the enforcement link: membrane consults the posture ───────────────────────────────────
 
+@needs_memory_ceiling
 def test_membrane_runs_within_posture_and_clamps():
     sb = LocalContainmentSandbox(posture=derive(VERIFIED_FACTS),
                                  execution_class=ExecutionClass.LOCAL_CONTAINER)
