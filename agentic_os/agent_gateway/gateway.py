@@ -118,6 +118,14 @@ class AgentGateway:
     idempotency: IdempotencyStore = field(default_factory=InMemoryIdempotencyStore)
     #: IF_POLICY tier-1 writes auto-run only when this returns True (enterprise policy plane injects).
     policy_allows: object = None
+    #: mission-authority/v1. When set the gateway is FAIL-CLOSED: every call needs a stored, unexpired,
+    #: unrevoked envelope that covers it, and a delegated mission inherits the envelope's constraints
+    #: instead of whatever the delegating agent put in `arguments`. `authority_key` maps a principal to its
+    #: envelope id (default: one standing envelope per tenant:subject). `on_authority` observes decisions
+    #: (audit / Sentinel); it must not raise.
+    authority: object = None
+    authority_key: object = None
+    on_authority: object = None
 
     # discovery — the agent-visible tool list is the *filtered* registry, never raw routes.
     def capabilities_for(self, principal: GatewayPrincipal) -> list:
@@ -143,6 +151,28 @@ class AgentGateway:
                                   self._deny("unknown_capability"), exposed_reason="hidden")
 
         tier = manifest.risk_tier
+
+        # 1b. authority envelope (fail-closed when configured): scope, resources, limits, expiry, revocation.
+        envelope = None
+        if self.authority is not None:
+            from agentic_os.mission.authority import Action, Verdict   # local: keeps the gateway importable alone
+            key = (self.authority_key(gp) if self.authority_key else f"{gp.tenant}:{gp.subject}")
+            adec = self.authority.authorize(key, gp.tenant, Action(
+                capability=request.capability, arguments=dict(request.arguments), risk_tier=int(tier),
+                side_effecting=bool(manifest.side_effecting)))
+            if self.on_authority:
+                try:
+                    self.on_authority(request, adec)
+                except Exception:  # noqa: BLE001 - an observer must never change the decision
+                    pass
+            if adec.verdict is Verdict.DENY:
+                return self._finalize(request, start, self._deny(f"authority:{adec.rule}", tier), exposed_reason="permitted")
+            if adec.verdict is Verdict.ESCALATE:
+                d = GatewayDecision(allowed=True, reason=f"authority:{adec.rule}", risk_tier=tier, approval_required=True,
+                                    policy_rule_ids=(f"authority:{adec.rule}",))
+                return self._finalize(request, start, GatewayResult(request.request_id, GatewayStatus.PENDING_APPROVAL, d),
+                                      exposed_reason="permitted")
+            envelope = self.authority.envelopes.get(key)
 
         # 2. budget / rate limit
         ok, why, budget_rules = self.budget.check(gp, manifest)
@@ -179,6 +209,17 @@ class AgentGateway:
                                           self._error(decision, "a goal is required"),
                                           exposed_reason="permitted")
                 constraints = tuple(request.arguments.get("constraints") or ())
+                if self.authority is not None:
+                    ddec, denv = self.authority.authorize_delegation(key, gp.tenant)
+                    if not ddec.allowed:
+                        if ddec.verdict is Verdict.ESCALATE:
+                            d = GatewayDecision(allowed=True, reason=f"authority:{ddec.rule}", risk_tier=tier,
+                                                approval_required=True, policy_rule_ids=(f"authority:{ddec.rule}",))
+                            return self._finalize(request, start, GatewayResult(request.request_id, GatewayStatus.PENDING_APPROVAL, d),
+                                                  exposed_reason="permitted")
+                        return self._finalize(request, start, self._deny(f"authority:{ddec.rule}", tier), exposed_reason="permitted")
+                    # the owner's constraints come first and cannot be dropped by the delegating agent
+                    constraints = tuple(denv.required_constraints) + tuple(c for c in constraints if c not in denv.required_constraints)
                 deleg = self.mission.delegate(goal, constraints=constraints, principal=gp,
                                               arguments=dict(request.arguments))
                 hres = HandlerResult(

@@ -7,6 +7,10 @@ No curated changelog is kept. History:
 - Release procedure and known drift between `pyproject.toml`, tags and release objects: [docs/RELEASING.md](docs/RELEASING.md).
 - Downstream pins: `mission-sdk` `COMPATIBILITY.md`.
 
+## Unreleased
+
+- `mission-authority/v1` (`agentic_os/mission/authority.py`) and `AgentGateway(authority=...)`: durable-envelope-style authority with resource/limit/expiry/revocation/attenuation, fail-closed at the gateway, delegated missions inherit the owner's constraints. See `audit/AUTONOMY_AUTHORITY_AUDIT.md`.
+
 ## v0.3.43 (security and execution-correctness release)
 
 Merged in #510-#521 (audit reports in `audit/`):
