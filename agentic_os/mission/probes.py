@@ -85,12 +85,15 @@ class ProbeRegistry:
     def __init__(self) -> None:
         self._adapters: "list[tuple[str, Qualification, Probe]]" = []
         self._refs: "list[tuple[str, tuple]]" = []
+        self._derive: "list[tuple[str, Callable[[dict], dict]]]" = []
 
-    def register(self, capability_pattern: str, probe: Probe, qualification: Qualification, ref_keys: tuple = ()) -> None:
+    def register(self, capability_pattern: str, probe: Probe, qualification: Qualification, ref_keys: tuple = (), ref_derive: "Callable[[dict], dict] | None" = None) -> None:
         """`ref_keys` names the input fields that identify the effect at the provider (a customer id, an invoice number, a message id). They are copied into the
         reservation when the call is dispatched, so a probe still knows WHAT to look for after a restart, without the mission's inputs."""
         self._adapters.append((capability_pattern, qualification, probe))
         self._refs.append((capability_pattern, tuple(ref_keys)))
+        if ref_derive is not None:
+            self._derive.append((capability_pattern, ref_derive))
 
     def ref_keys(self, capability: str) -> tuple:
         out: list = []
@@ -100,12 +103,23 @@ class ProbeRegistry:
         return tuple(out)
 
     def effect_ref(self, capability: str, inputs: "dict | None") -> dict:
-        """The identifying subset of `inputs` for this capability: scalar values only, bounded in size, never a key that looks like a secret."""
+        """The identifying subset of `inputs` for this capability: scalar values only, bounded in size, never a key that looks like a secret. An adapter whose inputs are not
+        scalars (a list of channels, a long body) registers `ref_derive`, which turns the inputs into scalar fields (a joined id list, a digest); its output is held to the same rules."""
         ref: dict = {}
-        for k in self.ref_keys(capability):
-            v = (inputs or {}).get(k)
+
+        def keep(k: str, v: Any) -> None:
             if isinstance(v, (str, int, float, bool)) and not any(w in k.lower() for w in ("secret", "token", "password", "key")):
                 ref[k] = v[:200] if isinstance(v, str) else v
+
+        for k in self.ref_keys(capability):
+            keep(k, (inputs or {}).get(k))
+        for pat, derive in self._derive:
+            if fnmatchcase(capability, pat):
+                try:
+                    for k, v in (derive(dict(inputs or {})) or {}).items():
+                        keep(str(k), v)
+                except Exception:  # noqa: BLE001 - a derivation that fails must not stop the dispatch; the probe will report UNSUPPORTED for the missing fields
+                    continue
         return ref
 
     def adapters_for(self, capability: str) -> "list[tuple[Qualification, Probe]]":
