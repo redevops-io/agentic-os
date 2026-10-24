@@ -1,4 +1,4 @@
-"""Mission fork/join — parallel branches *within* an existing Mission (docs/MISSION_FORK_JOIN.md).
+"""Mission fork/join — parallel branches *within* an existing Mission (docs/mission-execution.md).
 
 A fork is NOT a set of independently authorized agents. The parent Mission owns authority, budget, deadline
 and cancellation; a branch is one capability invocation that receives only the capability it declares and

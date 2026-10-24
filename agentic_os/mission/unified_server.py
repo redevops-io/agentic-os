@@ -108,7 +108,7 @@ def _build_app():
 
     @app.post("/api/gate-notify/callback")
     async def gate_notify_callback(request: Request):
-        """Signed acknowledgement callback. Records 'seen' only; it can never approve (see GATE_NOTIFICATIONS.md)."""
+        """Signed acknowledgement callback. Records 'seen' only; it can never approve (see the GATE notifications section of docs/security-model.md)."""
         from . import gate_notify
         n = gate_notify.current()
         secret = os.environ.get(gate_notify.ENV_CALLBACK_SECRET, "")

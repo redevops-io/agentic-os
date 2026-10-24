@@ -4,9 +4,13 @@ Date 2026-10-23. Scope: the audit plan in `redevops-agent-security-reliability-a
 Method: four read-only audit workstreams (A architecture/threats, B identity/authority/policy, C execution integrity,
 D apps/business catalog), each with file:line evidence labelled CONFIRMED / INFERRED / UNTESTED. Existing offline tests
 were run (about 500 pass; the 13 failures present on `main` are environmental: macOS `preexec_fn` sandbox tests, a
-duckdb sink test, two projects_api tests). Reports: `architecture-map.md`, `data-flow.md`, `threat-model.md`,
-`side-effect-inventory.md`, `identity-authority-policy.md`, `execution-integrity.md`, `app-boundaries.md`,
-`business-admin-catalog.md`.
+duckdb sink test, two projects_api tests). Reports:
+[01-architecture-and-threats.md](01-architecture-and-threats.md) (architecture map, data flow, threat model),
+[02-authority-and-execution.md](02-authority-and-execution.md) (identity/authority/policy, execution integrity, side-effect paths),
+[03-apps-and-business.md](03-apps-and-business.md) (app boundaries, business-admin catalog).
+The living remediation log (findings F1-F22 and every implemented step) is [AUTONOMY_AUTHORITY_AUDIT.md](AUTONOMY_AUTHORITY_AUDIT.md).
+Pinned by tests/scripts, so not merged: [operator_capability_inventory.md](operator_capability_inventory.md),
+[kernel_unauthenticated_routes.json](kernel_unauthenticated_routes.json); cross-language parity notes are in [parity/](parity/).
 
 ## What the audit found (headline)
 | ID | Finding | Sev | Status after this work |
@@ -32,7 +36,7 @@ agentic-os boundary check (agent-harness is a separate repo with long tests runn
 nodes; C9 artifact-format verification; the invoice and tax-obligation state machines and obligation registry;
 tax/e-invoicing provider abstraction; open-core defaults (`_pre_exec_ok` always True, egress allow-all,
 `GovernedEnvelope` presence flag, `safe_url.py` has no callers); other unauthenticated routes listed in
-`side-effect-inventory.md` (admin-console, `/m/*/api` proxy, `interaction.reply`, chat channels).
+`02-authority-and-execution.md` (admin-console, `/m/*/api` proxy, `interaction.reply`, chat channels).
 
 ## Branches (all local, none pushed)
 Independent unless noted; `feat/mission-assurance-and-gate-ttl` builds on `feat/hash-chained-mission-log`.

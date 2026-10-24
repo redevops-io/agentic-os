@@ -289,7 +289,7 @@ evidence, which is recorded.
 
 ## Step 9: the reconciliation supervisor, mission ownership with fencing, independent progress (first of two supervisor PRs)
 Owner decision (2026-10-24): use bounded retries with backoff before escalating, but never retry the business action while its outcome is UNKNOWN; only the read-only probe repeats. A non-authoritative
-"not found" means not observed, not confirmed not executed, and the supervisor, not each adapter, enforces that. Guide for adapter authors: `docs/RECONCILIATION_PROBES.md`.
+"not found" means not observed, not confirmed not executed, and the supervisor, not each adapter, enforces that. Guide for adapter authors: `docs/mission-execution.md`.
 **Implemented**
 * **Evidence contracts (`mission/probes.py`).** A probe returns a structured `ProbeResult` (CONFIRMED_EXECUTED, CONFIRMED_NOT_EXECUTED, INCONCLUSIVE, TRANSIENT_ERROR, UNSUPPORTED) with evidence provenance, provider reference,
   observed time, the real result and Retry-After. Each adapter is registered with a `Qualification` (eventually consistent, documented visibility window, authoritative-negative). The registry judges every answer: a negative is accepted only
@@ -320,7 +320,7 @@ not blocking dependents (found only after I added a multi-wave case: it showed a
 
 ## Step 10: fork reconciliation parity (`feat/fork-reconciliation-parity`)
 Owner direction (2026-10-24): bring fork outcomes into the same reconciliation contract before claiming autonomous-swarm recoverability, and prove it with a crash-and-restart test of three branches (one verified successful, one UNKNOWN, one still running): after the restart the
-successful branch does not rerun, the UNKNOWN branch is not resent, and the third finishes. Guide: `docs/RECONCILIATION_PROBES.md` (section "Fork branches").
+successful branch does not rerun, the UNKNOWN branch is not resent, and the third finishes. Guide: `docs/mission-execution.md` (section "Fork branches").
 **What was different before.** (1) A side-effecting branch whose call failed ambiguously became a terminal `BranchFailed`, which could fail the join, run the failure policy and report `UNKNOWN_EFFECT`: safe against resending, but not recoverable. (2) A branch that an older driver had in flight
 when the process died was re-dispatched on restart with the gate skipped (`resumed`) and with no look at its reservation: in a new process the in-memory lease map is empty, so nothing stopped a second send of a call that was already dispatched.
 **Implemented**

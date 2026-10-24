@@ -941,7 +941,7 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
             "warning). Fix: run `agentic-os secrets init` once, start every service with the same value "
             "(`docker compose --env-file ~/.config/redevops/secrets.env up -d`, or export it from the secrets "
             "file), and restart the runtime and operators. Check with `agentic-os secrets list`."),
-        source="docs/SECRETS.md#troubleshooting · docs/APPROVAL_TOKENS.md"),
+        source="docs/SECRETS.md#troubleshooting · docs/security-model.md"),
     KnowledgeEntry(
         id="outreach-real-send-gate",
         topic="Platform secrets",

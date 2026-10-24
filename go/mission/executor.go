@@ -130,7 +130,7 @@ func (e *Executor) Compensate(node *Node) map[string]any {
 }
 
 // CompensateFor runs the node's undo capability (saga) - best effort, never raises. Fails closed
-// (docs/APPROVAL_TOKENS.md, "Compensation authorization"): the undo is invoked only if THIS node (mission + node id +
+// (docs/security-model.md, "Compensation authorization"): the undo is invoked only if THIS node (mission + node id +
 // capability) is shown to have EXECUTED in THIS mission, the undo equals the registry-declared undo, the target is
 // not the forward action, and - when the registry declares requires_approval - `approval` (a CompensationApproved
 // record) matches this mission, node, attempt, undo and the exact input hash and is unexpired. The undo's inputs

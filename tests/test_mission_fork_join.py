@@ -1,4 +1,4 @@
-"""Mission fork/join (docs/MISSION_FORK_JOIN.md): parallel branches inside an existing Mission."""
+"""Mission fork/join (docs/mission-execution.md): parallel branches inside an existing Mission."""
 from __future__ import annotations
 
 import itertools
