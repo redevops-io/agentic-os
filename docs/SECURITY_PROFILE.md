@@ -89,3 +89,10 @@ no route out except the proxy, which denies by default, refuses private/loopback
 the address it checked, and logs every decision. It is **opt-in** (the default install is unchanged), its allowlist is **global**, and it does not
 inspect payloads. `profile.status()` reports `egress_proxy_configured` as an advisory, and `--require-egress` makes the production preflight fail without one.
 Full guarantees and limits: `deploy/egress/README.md`.
+
+## Hard limits and reconciliation
+
+The serial mission loop enforces `deadline`, `wall_clock_s` (active run time of one driver segment), `usd` and `tokens`: a reached ceiling stops the mission with a
+`HardLimitReached` event and a reason. A reservation that may already have produced an effect is never sent again: the runtime refuses a second dispatch in every
+profile, and `mission/reconcile.py` settles or releases it only when an independent probe proves the outcome, otherwise it stays counted and is flagged for a person
+(`python -m agentic_os.mission.reconcile list|run|resolve`). No provider probes ship yet, so today unknown outcomes need a person.

@@ -241,7 +241,10 @@ class UsageLedger(Protocol):
     def release(self, key: str, deltas: Mapping[str, float]) -> None: ...
     # reservation lifecycle (idempotent, atomic): RESERVED -> DISPATCHED -> SETTLED, plus RELEASED and UNKNOWN
     def reserve_lease(self, lease_id: str, key: str, deltas: Mapping[str, float], limits: Mapping[str, float | None],
-                      rate: tuple[str, int, float] | None = None, now: float | None = None) -> str | None: ...
+                      rate: tuple[str, int, float] | None = None, now: float | None = None,
+                      meta: Mapping[str, Any] | None = None) -> str | None: ...
+    def lease_annotate(self, lease_id: str, **fields: Any) -> bool: ...        # merge identity/evidence fields into the record
+    def lease_get(self, lease_id: str) -> dict | None: ...                    # the full durable record
     def lease_state(self, lease_id: str) -> str | None: ...
     def lease_dispatched(self, lease_id: str) -> bool: ...
     def lease_dispatch_once(self, lease_id: str) -> bool: ...     # True only on the RESERVED -> DISPATCHED transition
@@ -250,7 +253,7 @@ class UsageLedger(Protocol):
     def lease_unknown(self, lease_id: str) -> bool: ...
     def lease_reconcile(self, lease_id: str, executed: bool, actual: Mapping[str, float] | None = None) -> bool: ...
     def lease_sweep(self, older_than_s: float, now: float | None = None) -> int: ...
-    def leases_outstanding(self, key: str | None = None) -> list[tuple[str, str]]: ...
+    def leases_outstanding(self, key: str | None = None, detail: bool = False) -> list: ...
 
 
 class MemoryLedger:
@@ -297,7 +300,7 @@ class MemoryLedger:
             self._l: dict[str, dict] = {}
         return self._l
 
-    def reserve_lease(self, lease_id, key, deltas, limits, rate=None, now=None):
+    def reserve_lease(self, lease_id, key, deltas, limits, rate=None, now=None, meta=None):
         now = time.time() if now is None else now
         with self._lock:
             row = self._leases().get(lease_id)
@@ -319,8 +322,23 @@ class MemoryLedger:
             for name, d in deltas.items():
                 cur[name] += d
             self._leases()[lease_id] = {"key": key, "deltas": dict(deltas), "state": Lease.RESERVED.value, "updated": now,
-                                        "rate": (rate[0], now) if rate else None}
+                                        "rate": (rate[0], now) if rate else None, "meta": dict(meta or {}), "created": now}
             return None
+
+    def lease_annotate(self, lease_id, **fields):
+        with self._lock:
+            row = self._leases().get(lease_id)
+            if row is None:
+                return False
+            row["meta"].update({k: v for k, v in fields.items() if v is not None})
+            return True
+
+    def lease_get(self, lease_id):
+        with self._lock:
+            r = self._leases().get(lease_id)
+            return None if r is None else {"lease_id": lease_id, "key": r["key"], "state": r["state"],
+                                           "deltas": dict(r["deltas"]), "meta": dict(r["meta"]),
+                                           "created": r.get("created", r["updated"]), "updated": r["updated"]}
 
     def lease_state(self, lease_id):
         with self._lock:
@@ -386,10 +404,12 @@ class MemoryLedger:
             ids = [i for i, r in self._leases().items() if r["state"] == Lease.RESERVED.value and now - r["updated"] >= older_than_s]
         return sum(1 for i in ids if self.lease_release(i))
 
-    def leases_outstanding(self, key=None):
+    def leases_outstanding(self, key=None, detail=False):
         with self._lock:
-            return sorted((i, r["state"]) for i, r in self._leases().items()
-                          if r["state"] in _OPEN and (key is None or r["key"] == key))
+            rows = [(i, r) for i, r in self._leases().items() if r["state"] in _OPEN and (key is None or r["key"] == key)]
+        if detail:
+            return sorted((self.lease_get(i) for i, _ in rows), key=lambda d: d["lease_id"])
+        return sorted((i, r["state"]) for i, r in rows)
 
 
 class SqliteLedger:
@@ -403,7 +423,11 @@ class SqliteLedger:
             c.execute("CREATE TABLE IF NOT EXISTS hits (k TEXT, name TEXT, ts REAL NOT NULL)")
             c.execute("CREATE INDEX IF NOT EXISTS hits_idx ON hits (k, name, ts)")
             c.execute("CREATE TABLE IF NOT EXISTS leases (lease_id TEXT PRIMARY KEY, k TEXT NOT NULL, deltas TEXT NOT NULL, "
-                      "state TEXT NOT NULL, rate_name TEXT, rate_ts REAL, updated REAL NOT NULL)")
+                      "state TEXT NOT NULL, rate_name TEXT, rate_ts REAL, updated REAL NOT NULL, meta TEXT, created REAL)")
+            cols = {r[1] for r in c.execute("PRAGMA table_info(leases)")}
+            for col, typ in (("meta", "TEXT"), ("created", "REAL")):      # databases created before lease records existed
+                if col not in cols:
+                    c.execute(f"ALTER TABLE leases ADD COLUMN {col} {typ}")
 
     def _conn(self) -> sqlite3.Connection:
         c = sqlite3.connect(self.path, timeout=30, isolation_level=None)
@@ -468,7 +492,7 @@ class SqliteLedger:
         finally:
             c.close()
 
-    def reserve_lease(self, lease_id, key, deltas, limits, rate=None, now=None):
+    def reserve_lease(self, lease_id, key, deltas, limits, rate=None, now=None, meta=None):
         now = time.time() if now is None else now
 
         def go(c):
@@ -488,11 +512,32 @@ class SqliteLedger:
                 c.execute("INSERT INTO hits (k, name, ts) VALUES (?,?,?)", (key, rname, now))
             for name, d in deltas.items():
                 c.execute("INSERT INTO usage (k,name,v) VALUES (?,?,?) ON CONFLICT(k,name) DO UPDATE SET v=v+excluded.v", (key, name, d))
-            c.execute("INSERT OR REPLACE INTO leases (lease_id,k,deltas,state,rate_name,rate_ts,updated) VALUES (?,?,?,?,?,?,?)",
+            c.execute("INSERT OR REPLACE INTO leases (lease_id,k,deltas,state,rate_name,rate_ts,updated,meta,created) "
+                      "VALUES (?,?,?,?,?,?,?,?,?)",
                       (lease_id, key, json.dumps(dict(deltas), sort_keys=True), Lease.RESERVED.value,
-                       rate[0] if rate else None, now if rate else None, now))
+                       rate[0] if rate else None, now if rate else None, now,
+                       json.dumps(dict(meta or {}), sort_keys=True, default=str), now))
             return None
         return self._tx(go)
+
+    def lease_annotate(self, lease_id, **fields):
+        def go(c):
+            row = c.execute("SELECT meta FROM leases WHERE lease_id=?", (lease_id,)).fetchone()
+            if row is None:
+                return False
+            meta = json.loads(row[0] or "{}")
+            meta.update({k: v for k, v in fields.items() if v is not None})
+            c.execute("UPDATE leases SET meta=? WHERE lease_id=?", (json.dumps(meta, sort_keys=True, default=str), lease_id))
+            return True
+        return self._tx(go)
+
+    def lease_get(self, lease_id):
+        with self._conn() as c:
+            r = c.execute("SELECT k, state, deltas, meta, created, updated FROM leases WHERE lease_id=?", (lease_id,)).fetchone()
+        if r is None:
+            return None
+        return {"lease_id": lease_id, "key": r[0], "state": r[1], "deltas": json.loads(r[2]), "meta": json.loads(r[3] or "{}"),
+                "created": r[4] if r[4] is not None else r[5], "updated": r[5]}
 
     def lease_state(self, lease_id):
         with self._conn() as c:
@@ -556,12 +601,13 @@ class SqliteLedger:
                                            (Lease.RESERVED.value, now, older_than_s))]
         return sum(1 for i in ids if self.lease_release(i))
 
-    def leases_outstanding(self, key=None):
+    def leases_outstanding(self, key=None, detail=False):
         q, a = "SELECT lease_id, state FROM leases WHERE state IN (?,?,?)", list(_OPEN)
         if key is not None:
             q, a = q + " AND k=?", a + [key]
         with self._conn() as c:
-            return sorted((r[0], r[1]) for r in c.execute(q, a))
+            rows = sorted((r[0], r[1]) for r in c.execute(q, a))
+        return [self.lease_get(i) for i, _ in rows] if detail else rows
 
 
 # ── trusted storage ─────────────────────────────────────────────────────────────────────────────────
@@ -770,7 +816,7 @@ class AuthorityGuard:
         return _delegation(self, mission_id, tenant)
 
     def authorize(self, mission_id: str, tenant: str, action: Action, standing: "Standing | None" = None,
-                  lease_id: str = "") -> Decision:
+                  lease_id: str = "", lease_meta: "Mapping[str, Any] | None" = None) -> Decision:
         """`standing` is set when the owner's grant is being asked to stand in for an ordinary approval gate:
         the grant must then be explicit (no bare wildcard) and, if a score-based risk gate also fired, must
         opt in to covering it. Without it this is a plain scope + limits check."""
@@ -809,7 +855,9 @@ class AuthorityGuard:
                             {"extend_budget": {"wall_clock_s": True}}, dec.envelope_digest)
         rate = (f"g{gi}:rate", int(g.rate_calls), g.rate_window_s) if g.rate_calls is not None else None
         if lease_id:                     # idempotent per lease: a retried gate never counts twice
-            refused = self.ledger.reserve_lease(lease_id, env.mission_id, deltas, limits, rate, now)
+            meta = {"capability": action.capability, "tenant": tenant, "side_effecting": action.side_effecting,
+                    "tier": action.risk_tier, "envelope_digest": dec.envelope_digest, **dict(lease_meta or {})}
+            refused = self.ledger.reserve_lease(lease_id, env.mission_id, deltas, limits, rate, now, meta)
         else:
             refused = self.ledger.reserve(env.mission_id, deltas, limits, rate, now)
         if refused:
@@ -843,12 +891,30 @@ class AuthorityGuard:
         """An independent check says the effect did (or did not) happen: settle actual consumption or return it."""
         return bool(lease_id) and self.ledger.lease_reconcile(lease_id, executed, actual)
 
-    def outstanding(self, key: str | None = None) -> list[tuple[str, str]]:
-        return self.ledger.leases_outstanding(key)
+    def outstanding(self, key: str | None = None, detail: bool = False) -> list:
+        return self.ledger.leases_outstanding(key, detail)
+
+    def annotate(self, lease_id: str, **fields: Any) -> bool:
+        """Add evidence to a reservation's durable record (execution id, provider reference, reconciliation status)."""
+        return bool(lease_id) and self.ledger.lease_annotate(lease_id, **fields)
+
+    def lease(self, lease_id: str) -> "dict | None":
+        return self.ledger.lease_get(lease_id)
 
     def sweep_undispatched(self, older_than_s: float) -> int:
         """Operator action: release RESERVED leases older than the bound. Never touches DISPATCHED or UNKNOWN."""
         return self.ledger.lease_sweep(older_than_s, self.clock())
+
+
+def provider_ref_of(result: Any) -> str:
+    """The provider's own reference for an effect (invoice id, message id, ...) if the result carries one under a
+    conventional key; '' otherwise. Used as reconciliation evidence, never as authority."""
+    if isinstance(result, dict):
+        for k in ("provider_ref", "provider_object_id", "external_id", "remote_id"):
+            v = result.get(k)
+            if isinstance(v, (str, int)) and str(v):
+                return str(v)[:200]
+    return ""
 
 
 ENV_REQUIRE = "AGENTIC_OS_REQUIRE_AUTHORITY"

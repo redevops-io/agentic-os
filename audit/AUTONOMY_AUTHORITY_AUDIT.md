@@ -230,3 +230,28 @@ host) are deliberate holes; Caddy keeps outbound access; Kubernetes DNS is a tun
 kubeconfig points at a deleted cluster, so it was not dry-run against an API server) and references an image that is not published or signed yet; the compose overlay was
 validated statically and the mechanism live, but the full stack was not brought up with it (the Docker host was in use by another test run). Edge Sentinel does not consume the
 decision log yet.
+
+## Step 7: hard limits in the serial loop, durable lease records, reconciliation (F12, F16, F17; the groundwork for the loop supervisor)
+**Hard limits (F12).** The serial mission loop now enforces its ceilings instead of recording them: an absolute `Mission.deadline`, `Budget.wall_clock_s`, `Budget.usd` and
+`Budget.tokens`. Deadline and wall-clock are checked before each wave; usd and tokens before dispatching a wave that would pass the cap (executed nodes plus the wave about to start).
+A reached ceiling stops the mission with a `HardLimitReached` event and `outcome = {blocked: hard_limit, limit, used, cap}`; nothing further is dispatched. Extending the budget and
+continuing is the owner's decision (or the supervisor's, next PR), not a silent retry. Semantics to know: `wall_clock_s` counts the ACTIVE run time of one driver segment, so time parked for
+a human is not charged but a mission resumed across many segments is not summed (the supervisor enforces cumulative time at the loop level); tokens were never checked at plan time and
+still are not; fork/join keeps its own checks. Default budgets (5 usd, 86,400 s) did not change any existing behaviour (1,128 mission tests, no regressions).
+**Durable lease records.** A reservation now records its identity: kind (mission, gateway, fleet, direct), mission, node, attempt, operator, capability, tenant, side-effecting flag, risk tier,
+envelope digest, idempotency key, `dispatched_at`, `execution_id` and, when a result carries one under a conventional key, the provider's reference. Memory and SQLite ledgers store it; an older SQLite
+ledger is migrated in place. `AuthorityGuard.lease()`, `annotate()` and `outstanding(detail=True)` expose it.
+**Reconciliation (`mission/reconcile.py`), as decided.** RESERVED with no dispatch: in production released automatically once older than the authorization lifetime (no authorization can exist for it);
+outside production only when a probe says the effect did not happen. DISPATCHED/UNKNOWN: settled when an independent probe confirms the effect (provider reference recorded), released when a probe
+authoritatively says it did not happen, otherwise kept counted, flagged `needs_review` and emitted as an `UNKNOWN_OUTCOME` event. No probe, a probe that raises, a non-authoritative "not found", or a
+"not executed" that contradicts a recorded provider reference all stay unresolved. `resolve_manually()` and the CLI (`python -m agentic_os.mission.reconcile list|run|resolve`) let a named person settle or release
+what no probe can, with their name and reason on the durable record.
+**A restart can no longer turn uncertainty into permission to repeat.** If a node's reservation was already dispatched by an earlier attempt (a retry after a timeout, or a run resumed after a restart), the
+runtime refuses to send it again, in every profile (`RedispatchRefused`; fork branches too). Before this, outside production the runtime would silently call the executor a second time. Tested for development
+and production.
+**Evidence:** 43 tests. Removing the hard limits fails 5; allowing re-dispatch fails 2; removing the contradiction guard fails 2; treating a failed probe as "not executed" fails 4; accepting a non-authoritative absence
+fails 1. Root suite: same 13 failures as main.
+**Not done, stated plainly:** (1) **No provider probes ship.** The reconciler and `idempotency_probe` exist, but nothing registers a probe for any real provider (Lago, Gmail, Postiz, Apollo...), so today every unknown
+outcome goes to a human until someone writes a probe for that provider; whether a provider's "not found" is authoritative is a per-provider fact this code cannot know. (2) Nothing runs the reconciler on a schedule yet;
+the loop supervisor will. (3) The mission runtime's own lease map is still in memory: after a restart a reservation is found by re-evaluating the node (same lease id), which is what makes the refusal above work, but a mission that is
+never resumed leaves its reservation for the reconciler or a human. (4) Fork/join budget checks, and the operator-side settlement for direct authorizations, are unchanged.

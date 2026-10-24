@@ -56,7 +56,9 @@ class ActionAuthorizer:
                         risk_tier=2 if irreversible else (1 if side else 0), side_effecting=side,
                         cost_usd=float(getattr(getattr(spec, "cost", None), "usd", 0.0) or 0.0))
         lease = f"direct:{uuid.uuid4().hex}"
-        res = self.guard.authorize(self.key_for(tenant, subject), tenant, action, lease_id=lease)
+        res = self.guard.authorize(self.key_for(tenant, subject), tenant, action, lease_id=lease,
+                                   lease_meta={"kind": "direct", "operator": operator, "subject": subject,
+                                               "idempotency_key": idempotency_key or lease})
         if not res.allowed:
             return refuse(res.rule, res.reason, res.verdict.value, res.amendment)
         key = idempotency_key or lease                      # the operator requires this exact key on the call

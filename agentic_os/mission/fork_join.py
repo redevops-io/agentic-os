@@ -990,6 +990,12 @@ class ForkJoinController:
                 node.idempotency_key = idem
                 inputs = self._inputs(m, b_spec, node, bs)
                 claims = rt._lease_dispatched(m, node)  # BranchStarted is durable: the call may now leave
+                if claims is None and rt._lease_of(m, node.id) is not None:
+                    # the reservation was already dispatched by an earlier attempt: do not send it again (see runtime._refuse_redispatch)
+                    self._append_failed(m, st, bs, attempt, "redispatch_refused", ran=True,
+                                        error="already dispatched by an earlier attempt; reconcile before retrying")
+                    started = True
+                    continue
                 if claims:
                     inputs = {**inputs, "_exec_auth": claims}
                 fut = self._submit(m, node, inputs)
@@ -1150,7 +1156,7 @@ class ForkJoinController:
             self._fenced(m, st.fork_id, "BranchSucceeded", {
                 "fork_id": st.fork_id, "branch_id": bs.branch_id, "node_id": node.id, "attempt": attempt,
                 "result": result, "receipt": receipt})
-        rt._lease_settle(m, node.id)
+        rt._lease_settle(m, node.id, result)
         rt._meter(m, node, "ok")
         rt.learning.record_capability(node.capability, True)
 

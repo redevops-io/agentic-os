@@ -118,7 +118,8 @@ class Fleet:
             from agentic_os.mission.authority import Action, Verdict
             res = self.authority.authorize(self.authority_key, self.tenant, Action(
                 capability=f"fleet.{module_name}.{action}", arguments={"agent": agent}, risk_tier=1,
-                side_effecting=False), lease_id=f"fleet:{module_name}:{action}:{uuid.uuid4().hex}")
+                side_effecting=False), lease_id=f"fleet:{module_name}:{action}:{uuid.uuid4().hex}",
+                lease_meta={"kind": "fleet", "module": module_name, "action": action, "agent": agent})
             if res.verdict is Verdict.DENY:
                 raise PermissionError(f"authority:{res.rule}: {res.reason}")
             if res.verdict is Verdict.ESCALATE:           # past a limit the owner set: a human decides

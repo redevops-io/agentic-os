@@ -194,7 +194,9 @@ class AgentGateway:
             adec = self.authority.authorize(key, gp.tenant, Action(
                 capability=request.capability, arguments=dict(request.arguments), risk_tier=int(tier),
                 side_effecting=bool(manifest.side_effecting)), Standing() if ordinary else None,
-                lease_id=request.request_id)
+                lease_id=request.request_id,
+                lease_meta={"kind": "gateway", "request_id": request.request_id, "subject": gp.subject,
+                            "idempotency_key": request.idempotency_key or ""})
             if adec.allowed:
                 track["lease"] = adec.lease_id
                 track["side_effecting"] = bool(manifest.side_effecting) or manifest.kind is CapabilityKind.MISSION
@@ -246,6 +248,7 @@ class AgentGateway:
         if track["lease"]:
             self.authority.dispatched(track["lease"])    # from here the effect may exist: only settle/reconcile apply
             track["dispatched"] = True
+            self.authority.annotate(track["lease"], dispatched_at=time.time(), execution_id=request.request_id)
         try:
             if manifest.kind is CapabilityKind.MISSION:
                 goal = str(request.arguments.get("goal") or request.arguments.get("objective") or "")
@@ -282,6 +285,9 @@ class AgentGateway:
             return self._finalize(request, start, self._error(decision, str(exc)),
                                   exposed_reason="permitted")
 
+        if track["lease"]:
+            from agentic_os.mission.authority import provider_ref_of   # noqa: PLC0415
+            self.authority.annotate(track["lease"], provider_ref=provider_ref_of(hres.output) or None)
         if not hres.ok:
             return self._finalize(request, start, self._error(decision, hres.error or "capability failed"),
                                   exposed_reason="permitted")
