@@ -23,8 +23,15 @@ Enforcement (not trust): `AuthorityGuard.chain_denial` walks the chain at every 
 chain: revoke, expire or narrow any ancestor and every descendant is denied at once, with no list to keep in sync. The gateway takes the
 envelope key from a VERIFIED credential, never from a name the caller supplies.
 
-Limits, stated plainly: the credential is a bearer token (reusable until it expires or is rotated), so it is short-lived, bindable to one
-client, revocable instantly (the registry is consulted on every verification) and never wider than the child's envelope; every action
+The credential lives as long as the mission runs, as ONE token: it is not rotated or re-issued mid-mission. Its "short life" is a LIVENESS
+LEASE, not a fixed lifetime. The token itself expires only with the child's envelope (the hard cap). It verifies only while the registry's
+lease for the child is current, and the lease is extended by the OWNER's heartbeat (`keepalive` / `heartbeat`), never by the token being
+used, so a stolen token cannot keep itself alive. While the mission runs the heartbeat keeps the same token valid for as long as the work
+takes; when the mission ends or its driver dies the heartbeat stops and the token dies within one lease period (`lease_ttl_s`). A lapse is
+not a revocation: when the driver comes back and beats again the same token works again; close, revoke and envelope expiry are final.
+
+Limits, stated plainly: the credential is a bearer token (reusable while its lease is live), so it is bindable to one client, revocable
+instantly (the registry is consulted on every verification) and never wider than the child's envelope; every action
 still passes the guard and counts against the child's counters. A crash between steps can leak a unit of quota or a reservation (it is
 counted, never lost); it cannot create authority.
 """
@@ -86,7 +93,10 @@ class ChildRegistry:
             c.execute("CREATE TABLE IF NOT EXISTS children (child_id TEXT PRIMARY KEY, tenant TEXT NOT NULL, parent_key TEXT NOT NULL, "
                       "root_key TEXT NOT NULL, principal TEXT NOT NULL, role TEXT NOT NULL, depth INTEGER NOT NULL, status TEXT NOT NULL, "
                       "spawned_at REAL NOT NULL, expires_at REAL NOT NULL, jti TEXT NOT NULL, carve_lease TEXT NOT NULL, "
-                      "bound_client TEXT NOT NULL DEFAULT '', closed_at REAL, reason TEXT NOT NULL DEFAULT '')")
+                      "bound_client TEXT NOT NULL DEFAULT '', closed_at REAL, reason TEXT NOT NULL DEFAULT '', "
+                      "lease_until REAL NOT NULL DEFAULT 0)")
+            if "lease_until" not in {r[1] for r in c.execute("PRAGMA table_info(children)")}:      # a registry created before leases
+                c.execute("ALTER TABLE children ADD COLUMN lease_until REAL NOT NULL DEFAULT 0")
             c.execute("CREATE UNIQUE INDEX IF NOT EXISTS children_principal ON children (tenant, principal)")
             c.execute("CREATE INDEX IF NOT EXISTS children_parent ON children (parent_key, status)")
             c.execute("CREATE TABLE IF NOT EXISTS child_audit (seq INTEGER PRIMARY KEY AUTOINCREMENT, child_id TEXT, type TEXT, "
@@ -115,9 +125,10 @@ class ChildRegistry:
                 c.execute("ROLLBACK")
                 return "max_tree"
             c.execute("INSERT INTO children (child_id, tenant, parent_key, root_key, principal, role, depth, status, spawned_at, expires_at, "
-                      "jti, carve_lease, bound_client) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                      "jti, carve_lease, bound_client, lease_until) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                       (row["child_id"], row["tenant"], row["parent_key"], row["root_key"], row["principal"], row["role"], row["depth"],
-                       ACTIVE, now, row["expires_at"], row["jti"], row["carve_lease"], row.get("bound_client", "")))
+                       ACTIVE, now, row["expires_at"], row["jti"], row["carve_lease"], row.get("bound_client", ""),
+                       float(row["lease_until"])))
             c.execute("COMMIT")
             return None
         except BaseException:
@@ -161,6 +172,16 @@ class ChildRegistry:
             cur = c.execute("UPDATE children SET status=?, closed_at=?, reason=? WHERE child_id=? AND status='active'",
                             (status, now, reason[:300], child_id))
             return cur.rowcount == 1
+
+    def touch(self, child_id: str, until: float) -> bool:
+        """Extend the liveness lease of an ACTIVE child (never shortens it). False for a child that is finished or unknown."""
+        with self._conn() as c:
+            return c.execute("UPDATE children SET lease_until=MAX(lease_until, ?) WHERE child_id=? AND status='active'",
+                             (until, child_id)).rowcount == 1
+
+    def lapsed(self, before: float) -> list:
+        with self._conn() as c:
+            return [dict(r) for r in c.execute("SELECT * FROM children WHERE status='active' AND lease_until<?", (before,))]
 
     def rotate(self, child_id: str, jti: str) -> bool:
         with self._conn() as c:
@@ -237,6 +258,8 @@ class ChildCredentialVerifier:
                 return Verified(False, None, "superseded credential")
             if not t < float(row["expires_at"]):
                 return Verified(False, None, "the child has expired")
+            if not t < float(row["lease_until"]):
+                return Verified(False, None, "the child's driver has stopped renewing its lease")
             env = self.guard.envelopes.get(row["child_id"])
             if env is None or env.digest() != d["envelope_digest"]:
                 return Verified(False, None, "the envelope is not the one this credential was issued for")
@@ -254,16 +277,42 @@ class ChildCredentialVerifier:
             return Verified(False, None, f"malformed: {type(e).__name__}")
 
 
+class _KeepAlive:
+    def __init__(self, spawner: "ChildSpawner", child_id: str) -> None:
+        self.spawner, self.child_id = spawner, child_id
+        self._stop = __import__("threading").Event()
+        self._thread = None
+
+    def __enter__(self) -> "_KeepAlive":
+        import threading  # noqa: PLC0415
+        if not self.spawner.heartbeat(self.child_id):
+            raise SpawnRefused("not_active", "this child cannot be kept alive (finished, expired or its authority is gone)")
+        self._thread = threading.Thread(target=self._beat, name=f"child-{self.child_id}", daemon=True)
+        self._thread.start()
+        return self
+
+    def _beat(self) -> None:
+        while not self._stop.wait(max(0.01, self.spawner.lease_ttl_s / 3.0)):
+            if not self.spawner.heartbeat(self.child_id):
+                return                                    # closed, revoked or out of authority: nothing to keep alive
+
+    def __exit__(self, *exc) -> bool:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+        return False
+
+
 # ───────────────────────────── spawning ─────────────────────────────
 class ChildSpawner:
     def __init__(self, guard, registry: ChildRegistry, secret, *, clock: Callable[[], float] = time.time,
-                 on_event: Optional[Callable[[dict], None]] = None, credential_ttl_s: float = 900.0, max_active_tree: int = 32) -> None:
+                 on_event: Optional[Callable[[dict], None]] = None, lease_ttl_s: float = 60.0, max_active_tree: int = 32) -> None:
         if not getattr(guard, "durable", False):
             from .profile import is_production  # noqa: PLC0415
             if is_production():
                 raise SpawnRefused("not_durable", "the production profile requires a durable authority guard to spawn child agents")
         self.guard, self.registry, self.secret, self.clock = guard, registry, secret, clock
-        self.on_event, self.credential_ttl_s, self.max_active_tree = on_event or (lambda ev: None), float(credential_ttl_s), int(max_active_tree)
+        self.on_event, self.lease_ttl_s, self.max_active_tree = on_event or (lambda ev: None), float(lease_ttl_s), int(max_active_tree)
         self._verifier = ChildCredentialVerifier(guard, registry, secret, clock=clock)
 
     def verifier(self) -> ChildCredentialVerifier:
@@ -325,7 +374,7 @@ class ChildSpawner:
             # 4. the registry decides how many may be active at once, atomically
             why = self.registry.insert({"child_id": child_id, "tenant": tenant, "parent_key": parent_key, "root_key": root,
                                         "principal": principal, "role": role, "depth": env.depth, "expires_at": env.expires_at,
-                                        "jti": jti, "carve_lease": lease, "bound_client": client},
+                                        "jti": jti, "carve_lease": lease, "bound_client": client, "lease_until": now + self.lease_ttl_s},
                                        max_active_children=max(1, int(parent.budget.max_parallel)),
                                        max_active_tree=self.max_active_tree, now=now)
             if why is not None:
@@ -337,7 +386,7 @@ class ChildSpawner:
             g.envelopes.put(env)
             tok = mint_child_credential(self.secret, tenant=tenant, child_id=child_id, principal=principal, parent_key=parent_key,
                                         role=role, depth=env.depth, envelope_digest=env.digest(),
-                                        exp=min(env.expires_at, now + self.credential_ttl_s), jti=jti, bound_client=client)
+                                        exp=env.expires_at, jti=jti, bound_client=client)
         except SpawnRefused:
             raise
         except BaseException:
@@ -360,7 +409,8 @@ class ChildSpawner:
         return cur
 
     def renew_credential(self, child_id: str, *, client: Optional[str] = None) -> ChildAgent:
-        """A fresh credential (new token id; every earlier one stops verifying at once), never past the child's own expiry."""
+        """A DELIBERATE rotation (a suspected leak, a change of bound client): a new token id, every earlier one stops verifying at once.
+        Not needed to keep a running mission going: the lease heartbeat does that with the same token."""
         row = self.registry.get(child_id)
         env = self.guard.envelopes.get(child_id)
         now = self.clock()
@@ -370,11 +420,37 @@ class ChildSpawner:
         bound = row["bound_client"] if client is None else client
         tok = mint_child_credential(self.secret, tenant=row["tenant"], child_id=child_id, principal=row["principal"], parent_key=row["parent_key"],
                                     role=row["role"], depth=row["depth"], envelope_digest=env.digest(),
-                                    exp=min(env.expires_at, now + self.credential_ttl_s), jti=jti, bound_client=bound)
+                                    exp=env.expires_at, jti=jti, bound_client=bound)
         self.registry.rotate(child_id, jti)
         self.registry.audit(child_id, "credential_renewed", {}, now)
         return ChildAgent(child_id=child_id, principal=row["principal"], key=child_id, tenant=row["tenant"], parent_key=row["parent_key"],
                           role=row["role"], depth=row["depth"], credential=tok or "", expires_at=env.expires_at, envelope_digest=env.digest())
+
+    # ── liveness: the credential lives while the mission runs ──
+    def heartbeat(self, child_id: str) -> bool:
+        """The OWNER's statement that this child's driver is alive: extend its lease by `lease_ttl_s`, same token, nothing rotated. Refused (False)
+        for a child that is finished, expired, or whose chain is no longer valid: a heartbeat can revive a lapse, never a revocation."""
+        now = self.clock()
+        row = self.registry.get(child_id)
+        env = self.guard.envelopes.get(child_id)
+        if row is None or row["status"] != ACTIVE or env is None or not now < min(env.expires_at, float(row["expires_at"])):
+            return False
+        if self.guard.envelopes.is_revoked(env.mission_id) or env.revocation_epoch < self.guard.envelopes.epoch(env.tenant):
+            return False
+        if self.guard.chain_denial(env, now) is not None:
+            return False
+        return self.registry.touch(child_id, now + self.lease_ttl_s)
+
+    def keepalive(self, child_id: str) -> "_KeepAlive":
+        """`with spawner.keepalive(child.child_id): run the child's work` beats every third of the lease period for as long as the work runs,
+        and stops when it ends (or the child is closed/revoked), after which the token dies within one lease period."""
+        return _KeepAlive(self, child_id)
+
+    def reap_lapsed(self, grace_s: float = 300.0) -> list:
+        """A child whose driver has not beaten for `grace_s` beyond its lease is treated as abandoned: closed, its unused allowance returned,
+        anything it left unresolved reported. Run on a schedule; a child still being heartbeat is never touched."""
+        return [self.close(r["child_id"], f"driver lost: no heartbeat for {int(grace_s)}s beyond its lease") for r in
+                self.registry.lapsed(self.clock() - grace_s)]
 
     # ── ending a child ──
     def close(self, child_id: str, reason: str = "done", *, status: str = CLOSED, actor: str = "") -> dict:

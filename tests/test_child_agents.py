@@ -455,3 +455,122 @@ def test_a_non_child_envelope_serialises_and_digests_exactly_as_before():
     import hashlib
     expect = "sha256:" + hashlib.sha256(json.dumps(d, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
     assert e.digest() == expect and AuthorityEnvelope.from_dict(d).digest() == e.digest()
+
+
+# ───────────────────────── the credential lives while the mission runs ─────────────────────────
+def beat_through(lab, c, total_s, step_s=20):
+    """The mission runs for `total_s`; its owner heartbeats every `step_s` (well inside the 60s lease)."""
+    end = lab.clock.t + total_s
+    while lab.clock.t < end:
+        lab.clock.t += step_s
+        assert lab.spawner.heartbeat(c.child_id)
+
+
+def test_one_token_stays_valid_for_a_mission_far_longer_than_any_lease(lab):
+    c = lab.spawn(ttl_s=3000, client="app-1", budget=dict(wall_clock_s=3000))        # the child's own time allowance is a separate, hard cap
+    beat_through(lab, c, 2500)                                                          # ~42 lease periods
+    ver = lab.spawner.verifier().verify(c.credential, tenant="acme", client="app-1")
+    assert ver.ok and ver.claims["child_id"] == c.child_id
+    assert not any(r["type"] == "credential_renewed" for r in lab.registry.audit_log(c.child_id))      # never rotated or re-issued
+    assert lab.registry.get(c.child_id)["jti"] == lab.registry.get(c.child_id)["jti"] and lab.act(c.key).allowed
+
+
+def test_the_gateway_keeps_serving_the_same_credential_through_a_long_mission(lab):
+    c = lab.spawn(ttl_s=3000, grants=(Grant("missions.list"),), client="orchestrator-app")
+    gw, gp = gateway(lab)
+    for _ in range(5):
+        beat_through(lab, c, 400)
+        assert gcall(gw, gp, c.credential).decision.reason != "authority:invalid_credential"
+
+
+def test_when_the_driver_stops_the_token_dies_within_one_lease_and_using_it_does_not_extend_it(lab):
+    c = lab.spawn(client="app-1")
+    ver = lab.spawner.verifier()
+    until = lab.registry.get(c.child_id)["lease_until"]
+    lab.clock.t += 30
+    for _ in range(5):                                                                  # a stolen token being used does not keep itself alive
+        assert ver.verify(c.credential, tenant="acme", client="app-1").ok
+    assert lab.registry.get(c.child_id)["lease_until"] == until
+    lab.clock.t += 31                                                                   # one lease period after the last beat
+    assert not ver.verify(c.credential, tenant="acme", client="app-1").ok
+
+
+def test_a_lapse_is_not_a_revocation_the_same_token_works_again_when_the_driver_resumes(lab):
+    c = lab.spawn(client="app-1")
+    lab.clock.t += 500                                                                  # the driver was paused far longer than the lease
+    ver = lab.spawner.verifier()
+    assert not ver.verify(c.credential, tenant="acme", client="app-1").ok
+    assert lab.spawner.heartbeat(c.child_id)
+    assert ver.verify(c.credential, tenant="acme", client="app-1").ok                    # the SAME token, no re-issue
+
+
+def test_a_heartbeat_can_revive_a_lapse_but_never_a_revocation_or_an_end(lab):
+    a, b = lab.spawn(usd=1), lab.spawn(usd=1)
+    lab.spawner.close(a.child_id)
+    lab.spawner.revoke(b.child_id, actor="ops@acme", reason="misbehaving worker")
+    assert not lab.spawner.heartbeat(a.child_id) and not lab.spawner.heartbeat(b.child_id)
+    d = lab.spawn(usd=1)
+    assert lab.spawner.heartbeat(d.child_id)
+    lab.guard.envelopes.revoke("root")                                                  # an ancestor was revoked
+    assert not lab.spawner.heartbeat(d.child_id)
+    assert not lab.spawner.heartbeat("agent_nope")
+
+
+def test_a_heartbeat_never_outlives_the_envelope(lab):
+    c = lab.spawn(ttl_s=100)
+    lab.clock.t += 99
+    assert lab.spawner.heartbeat(c.child_id)
+    lab.clock.t += 2
+    assert not lab.spawner.heartbeat(c.child_id) and not lab.spawner.verifier().verify(c.credential, tenant="acme").ok
+
+
+def test_keepalive_beats_for_as_long_as_the_work_runs_and_stops_with_it(tmp_path, monkeypatch):
+    import time as _t
+    L = Lab(tmp_path, monkeypatch, clock=_t.time, env=parent_env(issued_at=_t.time() - 1, expires_at=_t.time() + 3600))
+    L.spawner.lease_ttl_s = 0.15
+    c = L.spawn()
+    ver = L.spawner.verifier()
+    with L.spawner.keepalive(c.child_id):
+        _t.sleep(0.6)                                                                   # four lease periods of work
+        assert ver.verify(c.credential, tenant="acme").ok
+    _t.sleep(0.25)
+    assert not ver.verify(c.credential, tenant="acme").ok                               # the work ended: the token died within one lease
+
+
+def test_keepalive_refuses_a_child_that_cannot_be_kept_alive(lab):
+    c = lab.spawn()
+    lab.spawner.close(c.child_id)
+    with pytest.raises(SpawnRefused):
+        lab.spawner.keepalive(c.child_id).__enter__()
+
+
+def test_an_abandoned_child_is_reaped_and_its_allowance_returned_but_a_live_one_is_not(lab):
+    live, dead = lab.spawn(usd=3), lab.spawn(usd=4)
+    assert lab.used()["usd"] == 7
+    lab.clock.t += 400
+    assert lab.spawner.heartbeat(live.child_id)
+    out = lab.spawner.reap_lapsed(grace_s=300)
+    assert [o["child_id"] for o in out] == [dead.child_id] and lab.registry.get(live.child_id)["status"] == "active"
+    assert lab.used()["usd"] == 3 and lab.registry.get(dead.child_id)["status"] == "closed"
+    assert "driver lost" in lab.registry.audit_log(dead.child_id)[-1]["payload"]["reason"]
+
+
+def test_a_registry_created_before_leases_is_migrated(tmp_path):
+    import sqlite3
+    p = str(tmp_path / "old.db")
+    c = sqlite3.connect(p)
+    c.execute("CREATE TABLE children (child_id TEXT PRIMARY KEY, tenant TEXT NOT NULL, parent_key TEXT NOT NULL, root_key TEXT NOT NULL, "
+              "principal TEXT NOT NULL, role TEXT NOT NULL, depth INTEGER NOT NULL, status TEXT NOT NULL, spawned_at REAL NOT NULL, "
+              "expires_at REAL NOT NULL, jti TEXT NOT NULL, carve_lease TEXT NOT NULL, bound_client TEXT NOT NULL DEFAULT '', "
+              "closed_at REAL, reason TEXT NOT NULL DEFAULT '')")
+    c.commit()
+    c.close()
+    reg = ChildRegistry(p)
+    assert reg.touch("none", 1.0) is False                                              # the column exists; an unknown child is simply not found
+
+
+def test_the_registry_itself_refuses_to_extend_a_finished_childs_lease(lab):
+    c = lab.spawn()
+    lab.spawner.close(c.child_id)
+    before = lab.registry.get(c.child_id)["lease_until"]
+    assert lab.registry.touch(c.child_id, before + 10_000) is False and lab.registry.get(c.child_id)["lease_until"] == before
