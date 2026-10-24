@@ -317,7 +317,7 @@ class ReconciliationSupervisor:
         retry_after = None
         for q, probe in adapters:
             try:
-                res = probe(ProbeContext(lease=lease or {}, attempt=attempt, now=now, dispatched_at=dispatched))
+                res = probe(ProbeContext(lease=lease or {}, attempt=attempt, now=now, dispatched_at=dispatched, effect_ref=dict(meta.get("effect_ref") or {})))
             except Exception as e:  # noqa: BLE001 - "I could not look" is a transient failure, never "it did not happen"
                 res = ProbeResult(ProbeOutcome.TRANSIENT_ERROR, detail=f"the probe raised {type(e).__name__}: {str(e)[:150]}")
             v = self.registry.judge(q, res, dispatched_at=dispatched, now=now)

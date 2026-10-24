@@ -939,17 +939,23 @@ class MissionRuntime:
     def _lease_of(self, m: Mission, node_id: str):
         return self._leases().get((str(m.id), node_id)) if self.authority is not None else None
 
-    def _lease_dispatched(self, m: Mission, node) -> "dict | None":
+    def _lease_dispatched(self, m: Mission, node, inputs: "dict | None" = None) -> "dict | None":
         """Mark the reservation DISPATCHED and, only for the caller that wins that transition, return the claims an
         execution authorization is minted from. A re-dispatch of an already-dispatched reservation (a retry after a
         timeout, a re-dispatch after a restart) gets None: it cannot obtain a second authorization to repeat the effect."""
         ent = self._lease_of(m, node.id)
         if not ent or not self.authority.dispatch_once(ent[0]):
             return None
+        ref = self._effect_ref(node.capability, inputs)
         self.authority.annotate(ent[0], dispatched_at=time.time(), execution_id=getattr(node, "idempotency_key", "") or None,
-                                idempotency_key=getattr(node, "idempotency_key", "") or None)
+                                idempotency_key=getattr(node, "idempotency_key", "") or None, effect_ref=ref or None)
         return {"lease_id": ent[0], "tenant": m.tenant, "mission_id": str(m.id), "node_id": node.id,
                 "attempt": ent[3], "envelope_digest": ent[2]}
+
+    def _effect_ref(self, capability: str, inputs: "dict | None") -> dict:
+        """What identifies this effect at the provider, if a probe registry is attached (`self.probe_refs`): recorded in the reservation at dispatch."""
+        reg = getattr(self, "probe_refs", None)
+        return reg.effect_ref(capability, inputs) if reg is not None else {}
 
     def _lease_settle(self, m: Mission, node_id: str, result: Any = None) -> None:
         ent = self._lease_of(m, node_id)
@@ -1219,7 +1225,7 @@ class MissionRuntime:
         inputs = self._resolve_inputs(m, world, node)
         # The reservation is taken BEFORE the dispatch is recorded: a refused re-dispatch must not look like another attempt, or the
         # attempt count (restored from these events on restart) would drift and the next re-gate could miss the unresolved reservation.
-        claims = self._lease_dispatched(m, node)
+        claims = self._lease_dispatched(m, node, inputs)
         if claims is None and self._lease_of(m, node.id) is not None:
             return self._refuse_redispatch(m, plan, node)
         self.store.append("NodeDispatched", m.id, {"node_id": node.id, "capability": node.capability})
@@ -1363,7 +1369,7 @@ class MissionRuntime:
             if not self._pre_exec_ok(m, plan, node):     # admit (fail-closed) before any dispatch, like serial
                 return False
             inputs = self._resolve_inputs(m, world, node)
-            claims = self._lease_dispatched(m, node)         # before the event: see `_execute`
+            claims = self._lease_dispatched(m, node, inputs)         # before the event: see `_execute`
             if claims is None and self._lease_of(m, node.id) is not None:
                 return self._refuse_redispatch(m, plan, node)
             self.store.append("NodeDispatched", m.id, {"node_id": node.id, "capability": node.capability})

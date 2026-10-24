@@ -406,8 +406,8 @@ def test_the_dispatch_backstop_parks_a_branch_whose_reservation_was_already_disp
     m = w.mission(rt)
     real = rt._lease_dispatched
 
-    def dispatch_then_die(mm, node):
-        real(mm, node)
+    def dispatch_then_die(mm, node, inputs=None):
+        real(mm, node, inputs)
         raise SimulatedCrash("after the reservation was dispatched, before the call")
     rt._lease_dispatched = dispatch_then_die
     one = lambda: ForkSpec(FID, [BranchSpec("A", "w.write", inputs={"tag": "a"})], JoinSpec("all", None, None, "fail", True))  # noqa: E731

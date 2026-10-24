@@ -129,6 +129,9 @@ class AgentGateway:
     #: a `ChildCredentialVerifier` (mission/children.py). When set, the envelope key of a child agent comes ONLY from a verified credential,
     #: never from a name the caller supplies, and a caller claiming an `agent:` identity without one is refused.
     child_credentials: object = None
+    #: a `ProbeRegistry` (mission/probes.py). When set, the input fields that identify an effect at its provider (declared by the probe adapter) are recorded in the
+    #: reservation of a direct call, so an unknown outcome can be probed later without the request.
+    probe_refs: object = None
 
     # discovery — the agent-visible tool list is the *filtered* registry, never raw routes.
     def capabilities_for(self, principal: GatewayPrincipal) -> list:
@@ -223,7 +226,9 @@ class AgentGateway:
                 side_effecting=bool(manifest.side_effecting)), Standing() if ordinary else None,
                 lease_id=request.request_id,
                 lease_meta={"kind": "gateway", "request_id": request.request_id, "subject": gp.subject,
-                            "idempotency_key": request.idempotency_key or "", **agent_meta})
+                            "idempotency_key": request.idempotency_key or "", **agent_meta,
+                            **({"effect_ref": self.probe_refs.effect_ref(request.capability, dict(request.arguments))}
+                               if self.probe_refs is not None and manifest.side_effecting else {})})
             if adec.allowed:
                 track["lease"] = adec.lease_id
                 track["side_effecting"] = bool(manifest.side_effecting) or manifest.kind is CapabilityKind.MISSION

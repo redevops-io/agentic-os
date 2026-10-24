@@ -53,6 +53,7 @@ class ProbeContext:
     attempt: int                                # which probe this is (1-based)
     now: float
     dispatched_at: float = 0.0
+    effect_ref: "dict | None" = None            # the few input fields that identify the effect at the provider (recorded at dispatch; never secrets)
 
 
 Probe = Callable[[ProbeContext], ProbeResult]
@@ -83,9 +84,29 @@ class ProbeRegistry:
 
     def __init__(self) -> None:
         self._adapters: "list[tuple[str, Qualification, Probe]]" = []
+        self._refs: "list[tuple[str, tuple]]" = []
 
-    def register(self, capability_pattern: str, probe: Probe, qualification: Qualification) -> None:
+    def register(self, capability_pattern: str, probe: Probe, qualification: Qualification, ref_keys: tuple = ()) -> None:
+        """`ref_keys` names the input fields that identify the effect at the provider (a customer id, an invoice number, a message id). They are copied into the
+        reservation when the call is dispatched, so a probe still knows WHAT to look for after a restart, without the mission's inputs."""
         self._adapters.append((capability_pattern, qualification, probe))
+        self._refs.append((capability_pattern, tuple(ref_keys)))
+
+    def ref_keys(self, capability: str) -> tuple:
+        out: list = []
+        for pat, keys in self._refs:
+            if fnmatchcase(capability, pat):
+                out += [k for k in keys if k not in out]
+        return tuple(out)
+
+    def effect_ref(self, capability: str, inputs: "dict | None") -> dict:
+        """The identifying subset of `inputs` for this capability: scalar values only, bounded in size, never a key that looks like a secret."""
+        ref: dict = {}
+        for k in self.ref_keys(capability):
+            v = (inputs or {}).get(k)
+            if isinstance(v, (str, int, float, bool)) and not any(w in k.lower() for w in ("secret", "token", "password", "key")):
+                ref[k] = v[:200] if isinstance(v, str) else v
+        return ref
 
     def adapters_for(self, capability: str) -> "list[tuple[Qualification, Probe]]":
         return [(q, p) for pat, q, p in self._adapters if fnmatchcase(capability, pat)]
