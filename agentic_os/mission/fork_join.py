@@ -1019,7 +1019,7 @@ class ForkJoinController:
                         "resumed": resumed, "generation": gen})
                 node.idempotency_key = idem
                 inputs = self._inputs(m, b_spec, node, bs)
-                claims = rt._lease_dispatched(m, node)  # BranchStarted is durable: the call may now leave
+                claims = rt._lease_dispatched(m, node, inputs)  # BranchStarted is durable: the call may now leave
                 if claims is None and rt._lease_of(m, node.id) is not None:
                     # the reservation was already dispatched by an earlier attempt: do not send it again (see runtime._refuse_redispatch)
                     self._park_unknown(m, st, bs, node, attempt,
