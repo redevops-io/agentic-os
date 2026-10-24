@@ -14,6 +14,9 @@ an attestation, an auditor's opinion, a "certified" flag or an overall complianc
 | `ledger.py` | Append-only, hash-chained assessments, reviews and exceptions. A reassessment supersedes and keeps the old one. A review needs someone who is neither the control owner nor a producer of the evidence; a FAIL, INCONCLUSIVE or NOT_TESTED cannot be approved. An exception records who accepted the risk, until when and the remediation, expires, and never changes the result. |
 | `export.py` | `restricted_pack` (controls, latest assessment, evidence references with digests, exceptions, vault and ledger integrity; a not-an-attestation banner) and `benchmark_summary` (counts by result only). `assert_no_claim` refuses an export that carries a certification or an overall result. |
 | `collectors.py` | Builders that sign evidence envelopes from what the stack already produces (sentinel events, reconciliation outcomes). |
+| `pipeline.py` | The collection pipeline (ES-5). A `Collector` reads one source for one completed window; the pipeline signs with the producer's key, ingests, skips windows already covered (a rerun cannot double-count) and records failures. A failed collection produces NO evidence: it is a gap the assessor reads as INCONCLUSIVE or NOT_TESTED, never an empty or partial payload that says "complete". Source tokens and keys are supplied by callables and redacted from records. |
+| `sources/github.py` | Collectors for GitHub: `GithubChanges` (merges and direct pushes with independent approvals and required checks, for SEC-CHG-01) and `GithubMfa` (organisation members and the 2FA-disabled list, as `mfa_status`, for SEC-ACC-01 only). Read-only transport restricted to the paths it reads. |
+| `sources/heartbeat.py` | `HeartbeatLog` (the monitor writes a beat each pass) and `HeartbeatCollector` (a window is evidence only if beats were continuous through it), for SEC-MON-01. |
 
 ## Inventory of what existed before (ES-1)
 
@@ -28,11 +31,13 @@ an attestation, an auditor's opinion, a "certified" flag or an overall complianc
 
 ## What is not built, and must not be claimed
 
-* **No collectors for identity providers, CI, cloud or ticketing.** The catalog's procedures read the evidence kinds named in `controls.py`; nothing in this repository gathers them from real systems yet. A control with no evidence is NOT_TESTED, not a pass.
+* **Collectors exist only for GitHub (changes, MFA status) and the monitor heartbeat.** Nothing yet gathers access reviews, leavers, host scans or backups and restore tests from real systems (an identity provider with reviews and terminations, a scanner, the cloud's backup service), nor ticketing. Those controls stay NOT_TESTED until a collector exists; an account list without reviews is deliberately NOT accepted for the access-review and leaver controls.
+* **The GitHub collectors were written from the REST API's documentation and tested against a fake of it, not run against a live organisation.** The MFA filters need an organisation owner's token. Review states are not enumerated in the documentation, so only the exact value `APPROVED` counts. A `404` on the required-checks endpoint is a gap (it can mean no protection or no access); repository rulesets are not read. A merge to the default branch is the change event, not a deployment. Outside collaborators and pending invitations are not in the member list.
+* **A collector's completeness is its statement about the pages it read, within its caps.** A repository or organisation the token cannot see does not appear, and nothing in the vault proves the set in scope is whole.
 * **No operating-effectiveness conclusion.** The first real period of evidence has not been collected. Design effectiveness (the procedure is sound) and operating effectiveness (it held over a period) are different claims; a PASS here is one control, one scope, one period.
 * **The vault is not WORM storage.** A hash chain detects edits and deletions; it does not stop someone who owns the database file from rebuilding it consistently. Anchor `EvidenceVault.head()` somewhere its writer cannot reach. Producer keys live with the deployment; a stolen key can sign false evidence until revoked.
 * **Human and third-party obligations stay manual**: access reviews by people, vendor risk, incident exercises, privacy requests, the auditor's work. Controls with a manual dependency end MANUAL_REVIEW.
 * **Retention is recorded, not enforced**: nothing is ever deleted from the vault; classification and retention policy are the deployment's to define.
 * No HTTP routes were added; the layer is a library. Putting it behind routes needs route policies like the rest of the app.
 
-Run the tests from `apps/` with the repository on `PYTHONPATH`: `pytest edge-sentinel/test_soc2_vault.py edge-sentinel/test_soc2_assess.py edge-sentinel/test_soc2_ledger_export.py`.
+Run the tests from `apps/` with the repository on `PYTHONPATH`: `pytest edge-sentinel/test_soc2_vault.py edge-sentinel/test_soc2_assess.py edge-sentinel/test_soc2_ledger_export.py edge-sentinel/test_soc2_pipeline.py`.
