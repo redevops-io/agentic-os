@@ -21,10 +21,8 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Optional
 from urllib.parse import quote
 
-from ..probes import ProbeContext, ProbeOutcome, ProbeResult, Qualification, from_http_status
-
-SKEW_S = 120.0                                   # a created_at slightly before our dispatch time (clock skew) still counts as "since the call"
-Http = Callable[[str, dict], "tuple[int, Any, dict]"]   # (path, params) -> (status, parsed JSON or None, response headers)
+from ..probes import ProbeContext, ProbeOutcome, ProbeResult, Qualification
+from ._common import Http, ProbeBase, SKEW_S, epoch as _epoch   # noqa: F401 - re-exported: tests and callers import these from here
 
 QUALIFICATION = Qualification("lago", eventually_consistent=True, visibility_window_s=None, authoritative_negative=False)
 NO_LOOKUP = Qualification("lago-no-record", supports_lookup=False)
@@ -34,17 +32,6 @@ def subscription_external_id(customer: str, plan: str) -> str:
     """The same derivation `apps/billing/core.py` uses to make subscription creation an upsert (pinned against it by a test)."""
     slug = re.sub(r"[^a-z0-9]+", "-", f"{customer}-{plan}".lower()).strip("-")
     return f"sub-{slug}"
-
-
-def _epoch(ts: Any) -> Optional[float]:
-    if isinstance(ts, (int, float)):
-        return float(ts)
-    if isinstance(ts, str):
-        try:
-            return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(timezone.utc).timestamp()
-        except ValueError:
-            return None
-    return None
 
 
 def _cents(amount: Any) -> Optional[int]:
@@ -81,34 +68,16 @@ def default_http(base_url: str, api_key: str, timeout: float = 10.0) -> Http:
     return http
 
 
-class LagoProbes:
+class LagoProbes(ProbeBase):
     def __init__(self, http: Http, *, accept_unique_refund_match: bool = False) -> None:
         """`accept_unique_refund_match`: treat exactly one matching refund credit note as proof the refund executed. Off by default: Lago ties no credit note to our request, so an
         unrelated refund on the same invoice for the same amount inside the window (a person, another agent, a retry from elsewhere) looks identical. Turn it on only where nothing
         else can refund the same invoice and amount."""
-        self.http = http
-        self.accept_unique_refund_match = accept_unique_refund_match
+        super().__init__(http, accept_unique_match=accept_unique_refund_match)
 
-    # ── plumbing ──
-    def _get(self, path: str, params: Optional[dict] = None):
-        """(status, body, headers) or a TRANSIENT_ERROR ProbeResult when the lookup itself failed."""
-        try:
-            return self.http(path, params or {})
-        except Exception as e:  # noqa: BLE001 - "I could not look" is never "it did not happen"
-            return ProbeResult(ProbeOutcome.TRANSIENT_ERROR, detail=f"the lookup failed: {type(e).__name__}: {str(e)[:120]}")
-
-    @staticmethod
-    def _bad_status(status: int, headers: dict) -> Optional[ProbeResult]:
-        if 200 <= status < 300:
-            return None
-        if status == 404:
-            return ProbeResult(ProbeOutcome.INCONCLUSIVE, detail="not found: a missing record is not proof the action never happened")
-        h = {k.lower(): v for k, v in (headers or {}).items()}
-        return from_http_status(status, retry_after=h.get("retry-after"))
-
-    @staticmethod
-    def _evidence(reference: str, now: float) -> dict:
-        return {"kind": "provider_record", "reference": reference[:480], "observed_at": str(now)}
+    @property
+    def accept_unique_refund_match(self) -> bool:
+        return self.accept_unique_match
 
     # ── subscriptions ──
     def create_subscription(self, ctx: ProbeContext) -> ProbeResult:
