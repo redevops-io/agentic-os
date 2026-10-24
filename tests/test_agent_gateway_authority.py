@@ -140,3 +140,73 @@ def test_without_authority_configured_nothing_changes():
     dev.issue("agent", tenant="acme", grants=("missions.delegate",))
     gp = GatewayPrincipal(Principal("agent", "service", (), "acme"))
     assert gw.invoke(GatewayRequest(gp, "missions.delegate_goal", {"goal": "x"})).status is GatewayStatus.OK
+
+
+# ── standing grants at the gateway: ordinary approval satisfied, mandatory never ────────
+from dataclasses import replace as _replace                                    # noqa: E402
+
+from agentic_os.agent_gateway import build_write_registry                      # noqa: E402
+from agentic_os.agent_gateway.contracts import ApprovalPolicy                  # noqa: E402
+from agentic_os.agent_gateway.registry import HandlerResult                    # noqa: E402
+from agentic_os.agent_gateway.write_capabilities import CRM_REQUEST_OUTREACH_SEND   # noqa: E402
+
+
+class _Crm:
+    def __init__(self): self.sent = 0
+    def prepare_outreach(self, args): return {"draft": "d", "prepared_ref": "p"}
+    def send_outreach(self, args, envelope):
+        self.sent += 1
+        return {"sent": True, "provider_object_id": "w1"}
+
+
+def _writes(max_tier, grant_cap="crm.request_outreach_send", resources=()):
+    crm = _Crm()
+    reg = build_write_registry(crm=crm)
+    store = MemoryEnvelopeStore()
+    store.put(envelope(grants=(Grant(grant_cap, max_tier=max_tier, resources=resources),), may_delegate=False))
+    gw = AgentGateway(registry=reg, authorize=lambda p, perm: True,
+                      authority=AuthorityGuard(store, MemoryLedger(), clock=lambda: NOW + 1))
+    return crm, gw, GatewayPrincipal(Principal("agent", "service", (), "acme"))
+
+
+def _send(gw, gp, **kw):
+    return gw.invoke(GatewayRequest(gp, "crm.request_outreach_send", {"contact": "a@customer.com", **kw}))
+
+
+def test_default_grant_tier_still_requires_the_human_approval():
+    crm, gw, gp = _writes(max_tier=1)                       # tier-2 action, grant only covers tier 1
+    r = _send(gw, gp)
+    assert r.status is GatewayStatus.PENDING_APPROVAL and r.decision.reason == "authority:tier_over_grant" and crm.sent == 0
+
+
+def test_explicit_grant_raised_to_the_tier_satisfies_an_ordinary_approval():
+    crm, gw, gp = _writes(max_tier=2)
+    r = _send(gw, gp)
+    assert r.status is GatewayStatus.OK and crm.sent == 1
+    assert "authority:standing_grant" in r.decision.policy_rule_ids
+
+
+def test_standing_grant_is_checked_against_the_exact_parameters():
+    crm, gw, gp = _writes(max_tier=2, resources=(("contact", ("*@customer.com",)),))
+    assert _send(gw, gp).status is GatewayStatus.OK
+    r = gw.invoke(GatewayRequest(gp, "crm.request_outreach_send", {"contact": "x@evil.com"}))
+    assert r.status is GatewayStatus.DENIED and crm.sent == 1
+
+
+def test_bare_wildcard_grant_does_not_satisfy_an_approval():
+    crm, gw, gp = _writes(max_tier=2, grant_cap="*")
+    r = _send(gw, gp)
+    assert r.status is GatewayStatus.PENDING_APPROVAL and r.decision.reason == "authority:grant_not_explicit" and crm.sent == 0
+
+
+def test_mandatory_approval_is_never_satisfied_by_a_grant():
+    mandatory = _replace(CRM_REQUEST_OUTREACH_SEND, approval_policy=ApprovalPolicy.MANDATORY)
+    reg2 = CapabilityRegistry()
+    reg2.register(mandatory, lambda req, env: HandlerResult(ok=True, output={"sent": True}, data_classes=mandatory.data_classes))
+    store = MemoryEnvelopeStore()
+    store.put(envelope(grants=(Grant("crm.request_outreach_send", max_tier=3),), may_delegate=False))
+    gw = AgentGateway(registry=reg2, authorize=lambda p, perm: True,
+                      authority=AuthorityGuard(store, MemoryLedger(), clock=lambda: NOW + 1))
+    r = gw.invoke(GatewayRequest(GatewayPrincipal(Principal("agent", "service", (), "acme")),
+                                 "crm.request_outreach_send", {"contact": "a@customer.com"}))
+    assert r.status is GatewayStatus.PENDING_APPROVAL and "authority:standing_grant" not in r.decision.policy_rule_ids

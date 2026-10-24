@@ -114,8 +114,20 @@ class PolicyDecisionPlane:
 
         denied = outcome is not None and outcome.blocked
         required = denied or bool(rules)
+        # A standing grant may stand in only for ordinary, explicitly migrated gates (see policy.STANDING):
+        # never for a DENY, a statically mandatory capability, a legacy `approval:` constraint, or a rule
+        # that was not marked standing_grant_satisfies.
+        from .policy import STANDING
+        mission_rule_ok = (ApprovalRule.MISSION_POLICY.value not in rules) or (
+            outcome is not None and outcome.gated and outcome.approval_mode == STANDING
+            and not self._mission_policy_requires(mission, node))
+        standing_ok = (required and not denied and ApprovalRule.MANDATORY.value not in rules and mission_rule_ok
+                       and any(r in rules for r in (ApprovalRule.MISSION_POLICY.value, ApprovalRule.DYNAMIC_RISK.value)))
+        risk_fired = ApprovalRule.DYNAMIC_RISK.value in rules
         packet = self._packet(node, mission, risk, rules, graph) if required else {}
-        dec = ApprovalDecision(required=required, rules=rules, risk=risk, packet=packet)
+        dec = ApprovalDecision(required=required, rules=rules, risk=risk, packet=packet,
+                               standing_eligible=standing_ok, risk_fired=risk_fired,
+                               risk_waivable=bool(risk.permissioned and not risk.regulatory))
         if outcome is not None:
             support = getattr(getattr(mission, "policy", None), "support_message", "")
             dec.denied = outcome.blocked

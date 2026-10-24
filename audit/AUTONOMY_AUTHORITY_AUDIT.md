@@ -65,3 +65,30 @@ production deployments, loop supervisor with progress watchdog and wall-clock/de
 identities with scoped credentials (F5, F14), Fleet background jobs inside the envelope (F15), UNKNOWN-outcome handling in the serial path (F17),
 egress/sandbox network boundary (F10), compaction/provenance checks (F11, NOT_INSPECTED), Sentinel events, Sidekick UX, business standing-grant pilots.
 `MissionPolicy` is unchanged (F3/F4 remain: the envelope covers resources/limits/expiry; ALLOW-vs-gate semantics still need a decision).
+
+## Step 2 (this branch): durable authority, production enforcement, standing-grant semantics
+Owner decision 2026-10-23: a standing grant may satisfy an ORDINARY approval gate only when it explicitly covers the action and its parameters;
+it never overrides a DENY, never exceeds its limits, and never bypasses a MANDATORY approval. Un-migrated rules keep their behaviour.
+
+| Outcome | Behaviour (as implemented) |
+|---|---|
+| `DENY` rule | Blocked regardless of any grant (`policy_denied`) |
+| Capability/gateway MANDATORY approval | Human approval required, grant ignored |
+| Legacy `approval:` constraint, or a rule not marked `standing_grant_satisfies` | Human approval required (today's behaviour) |
+| Rule marked `approval_mode: standing_grant_satisfies` + explicit grant within limits | Runs unattended; `StandingGrantApplied` event records envelope digest, grant, policy digest, inputs digest |
+| Grant matches but amount/rate/call/budget limit reached | Human gate; `StandingGrantDeclined` with an amendment |
+| No matching grant / expired / revoked / wrong tenant / no envelope | Human gate; never a permissive fallback |
+| Bare wildcard grant (`*`) | Cannot stand in for an approval (`grant_not_explicit`) |
+| Score-based risk gate | Needs the grant's explicit `covers_dynamic_risk`; regulatory or non-permissioned risk is never waived |
+
+* Single source of truth: `MissionPolicy` says whether an action is prohibited or needs special treatment; the envelope says what the owner authorised.
+* `PolicyRule.approval_mode` (`per_action_required` default | `standing_grant_satisfies`, REQUIRE_APPROVAL only). It is omitted from the canonical JSON at its
+  default, so every existing policy digest is byte-identical (pinned in tests).
+* Evaluated per node at dispatch against the exact effective action (resolved inputs, tenant, cost); counters are reserved atomically (verified with 10
+  concurrent runtimes sharing one allowance, memory and SQLite), so a parameter change or a lost race falls back to the human gate.
+* Gateway: an ordinary `REQUIRED` approval policy is satisfied by an explicit grant the owner raised to that tier (`max_tier`); `MANDATORY` is not; the default
+  `max_tier=1` changes nothing.
+* `SqliteEnvelopeStore` (versioned, history kept, durable revocation per mission and per tenant epoch) and `SqliteLedger`; `authority_from_env()`;
+  `AGENTIC_OS_REQUIRE_AUTHORITY=1` makes `AgentGateway` refuse to start without a durable guard, and `AGENTIC_OS_AUTHORITY_DB` selects the database.
+* Not covered yet: fork/join branches still use the human gate (they have their own policy evaluation path); a reservation is not released if the node is
+  later cancelled before it runs (conservative: never overspends); the runtime only uses the guard when `runtime.authority` is set.

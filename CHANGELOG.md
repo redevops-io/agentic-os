@@ -9,6 +9,7 @@ No curated changelog is kept. History:
 
 ## Unreleased
 
+- Standing grants: `PolicyRule.approval_mode = standing_grant_satisfies` lets an explicit `mission-authority/v1` grant stand in for an ordinary approval gate (never DENY, never a mandatory approval, never beyond its limits); durable `SqliteEnvelopeStore`; `AGENTIC_OS_REQUIRE_AUTHORITY` / `AGENTIC_OS_AUTHORITY_DB`. Existing policy digests unchanged.
 - `mission-authority/v1` (`agentic_os/mission/authority.py`) and `AgentGateway(authority=...)`: durable-envelope-style authority with resource/limit/expiry/revocation/attenuation, fail-closed at the gateway, delegated missions inherit the owner's constraints. See `audit/AUTONOMY_AUTHORITY_AUDIT.md`.
 
 ## v0.3.43 (security and execution-correctness release)

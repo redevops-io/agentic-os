@@ -41,6 +41,14 @@ class Effect(str, Enum):
         return {"deny": 2, "require_approval": 1, "allow": 0}[self.value]
 
 
+#: How a REQUIRE_APPROVAL rule may be satisfied. The default keeps today's behaviour exactly: a human decides
+#: each action. `standing_grant_satisfies` lets an owner's mission-authority/v1 grant (explicit capability and
+#: parameters, within its limits) stand in for the human on that rule. It never applies to DENY, to a
+#: capability's static mandatory approval, or to a rule that was not explicitly migrated.
+PER_ACTION = "per_action_required"
+STANDING = "standing_grant_satisfies"
+APPROVAL_MODES = (PER_ACTION, STANDING)
+
 # The selector vocabulary a rule matches against — a superset of the legacy `approval:<scope>` tokens
 # so existing missions map 1:1. `cap:<name>` matches one capability; the rest are predicates on the node.
 _SELECTORS = ("*", "side_effecting", "irreversible", "regulatory", "over_budget")
@@ -57,6 +65,14 @@ class PolicyRule:
     max_usd: float | None = None
     reason: str = ""
     suggested_action: str = ""
+    approval_mode: str = PER_ACTION        # only meaningful for REQUIRE_APPROVAL; omitted from the digest at its default
+    _omit_if_default = ("approval_mode",)
+
+    def __post_init__(self) -> None:
+        if self.approval_mode not in APPROVAL_MODES:
+            raise ValueError(f"approval_mode must be one of {APPROVAL_MODES}, got {self.approval_mode!r}")
+        if self.approval_mode == STANDING and self.effect is not Effect.REQUIRE_APPROVAL:
+            raise ValueError("approval_mode applies only to REQUIRE_APPROVAL rules")
 
     def matches(self, ctx: "NodeContext") -> bool:
         m = self.match
@@ -98,6 +114,7 @@ class PolicyOutcome:
     reason: str = ""
     suggested_action: str = ""
     trace: tuple[dict, ...] = ()           # [{rule, effect, matched}] for every rule, in order
+    approval_mode: str = PER_ACTION        # of the deciding rule (REQUIRE_APPROVAL only)
 
     @property
     def blocked(self) -> bool:
@@ -149,7 +166,8 @@ class MissionPolicy:
     def from_dict(cls, d: dict) -> "MissionPolicy":
         rules = tuple(PolicyRule(id=r["id"], effect=Effect(r.get("effect", "require_approval")),
                                  match=r.get("match", "*"), max_usd=r.get("max_usd"),
-                                 reason=r.get("reason", ""), suggested_action=r.get("suggested_action", ""))
+                                 reason=r.get("reason", ""), suggested_action=r.get("suggested_action", ""),
+                                 approval_mode=r.get("approval_mode", PER_ACTION))
                       for r in d.get("rules", ()))
         return cls(id=d["id"], version=d.get("version", "1"), scope=d.get("scope", "mission"), rules=rules,
                    grants=tuple(d.get("grants", ())), budget_usd=d.get("budget_usd", 0.0),
@@ -175,15 +193,22 @@ class MissionPolicy:
             return PolicyOutcome(Effect.ALLOW, self.ref, digest, trace=tuple(trace))
         return PolicyOutcome(best.effect, self.ref, digest, matched_rule=best.id,
                              reason=best.reason, suggested_action=best.suggested_action,
-                             trace=tuple(trace))
+                             trace=tuple(trace), approval_mode=best.approval_mode)
 
 
 def _jsonable(obj):  # local, dependency-free canonicaliser (avoids importing types.py)
     if isinstance(obj, Enum):
         return obj.value
     if hasattr(obj, "__dataclass_fields__"):
-        from dataclasses import asdict
-        return _jsonable(asdict(obj))
+        from dataclasses import fields
+        omit = getattr(obj, "_omit_if_default", ())     # keep pre-existing digests byte-identical
+        out = {}
+        for f in fields(obj):
+            v = getattr(obj, f.name)
+            if f.name in omit and v == f.default:
+                continue
+            out[f.name] = _jsonable(v)
+        return out
     if isinstance(obj, dict):
         return {k: _jsonable(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
