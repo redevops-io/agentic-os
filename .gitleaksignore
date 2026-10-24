@@ -1,0 +1,2 @@
+# test fixture in the F19 PR's first commit (a non-secret signing key literal); removed from the file in the next commit
+41d8b60b597309d8d424ff374fd516001d9f684f:tests/test_operator_authority_boundary.py:generic-api-key:26

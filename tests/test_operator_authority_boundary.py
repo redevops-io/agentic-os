@@ -5,6 +5,8 @@ execution authorization issued AFTER the owner's envelope and policy were evalua
 exact call, single-use across replicas, and its mission identity comes from signed claims, never from the request body."""
 from __future__ import annotations
 
+import secrets as _secrets
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -23,7 +25,7 @@ from agentic_os.mission.runtime import MissionRuntime
 from agentic_os.mission.types import (
     CapabilityManifest, CapabilitySpec, ExecutionIntent, IntentStep, MissionState)
 
-SECRET = "s3cret-signing-key"
+SECRET = _secrets.token_hex(24)                      # generated per run: no secret-looking literal in the repository
 TOKEN = "control-token"
 NOW = 4_000_000_000.0                                # far future: authorizations minted with real clocks stay valid
 
