@@ -26,7 +26,7 @@ def indexer(tmp_path):
     return RagIndexer(db_dir=str(tmp_path / ".rag"), rag_factory=Fake)
 
 
-PLAIN = [("acme", "crm"), ("acme", "drive-2"), ("p.1", "s.1"), ("Proj-9", "Src")]
+PLAIN = [("acme", "crm"), ("acme", "drive-2"), ("p.1", "s.1"), ("proj-9", "src")]
 AWKWARD = [("a_b", "c"), ("a", "b_c"), ("a:b", "c"), ("a", "b:c"), ("../escape", "x"), ("p", "../../etc/passwd"), ("a/b", "c"), ("a", "b/c"), ("a b", "c"), ("a", "b c"),
            ("é", "x"), ("x", "é"), ("..", "x"), ("a", ".."), ("a.", ".b"), (".a", "b"), ("a\\b", "c"), ("a", "b\\c"), ("A", "b"), ("a", "B")]
 
@@ -96,3 +96,10 @@ def test_the_containment_check_fires_if_the_naming_ever_breaks(tmp_path, monkeyp
 def test_an_id_that_merely_contains_two_dots_stays_inside_the_directory_under_its_own_name(tmp_path):
     ix = indexer(tmp_path)
     assert os.path.basename(ix._store("a..b", "c.d").path) == "a..b_c.d.duckdb"
+
+
+@pytest.mark.parametrize("a,b", [("ACME", "acme"), ("Acme", "acme"), ("acme", "ACME")])
+def test_ids_differing_only_in_case_never_share_a_file_even_on_a_case_insensitive_filesystem(tmp_path, a, b):
+    ix = indexer(tmp_path)
+    pa, pb = ix._store(a, "src").path, ix._store(b, "src").path
+    assert pa.casefold() != pb.casefold()

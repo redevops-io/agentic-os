@@ -62,13 +62,13 @@ class RagIndexer:
     _stores: Dict[tuple, RagStore] = field(default_factory=dict)
 
     def _path(self, project_id: str, source_id: str) -> str:
-        """The index file of ONE (project, source), injective and always inside `db_dir`. Ordinary ids (letters, digits, `.` and `-`, no `_`) keep the historical name `<project>_<source>.duckdb`, which
+        """The index file of ONE (project, source), injective and always inside `db_dir`. Ordinary ids (lower-case letters, digits, `.` and `-`, no `_`) keep the historical name `<project>_<source>.duckdb`, which
         cannot collide because neither id can contain the `_` that separates them, so existing indexes still resolve. Anything else (an underscore, a colon, a slash, `..`, a space) gets a name made of a
         digest of the exact pair, so two different pairs never share a file and no id can reach outside the directory."""
         for label, v in (("project", project_id), ("source", source_id)):
             if not isinstance(v, str) or not v.strip():
                 raise ValueError(f"a {label} id is needed to open an index")
-        plain = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*$")
+        plain = re.compile(r"^[a-z0-9][a-z0-9.-]*$")           # lower case only: `ACME_b` and `acme_b` are one file on a case-insensitive filesystem (macOS, Windows)
         if plain.match(project_id) and plain.match(source_id):
             name = f"{project_id}_{source_id}.duckdb"
         else:
