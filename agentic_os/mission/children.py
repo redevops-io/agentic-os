@@ -303,6 +303,63 @@ class _KeepAlive:
         return False
 
 
+class _TreeKeepAlive:
+    """Keeps every ACTIVE descendant of `parent_key` alive while the context is open. The set is read again at every beat, so a child spawned later by the work being driven is covered
+    from its first beat. A child that the heartbeat refuses while the registry still calls it active has lost its authority (expired, revoked or narrowed above it): `on_lost(child_id, why)`
+    is told once and the loop of beats goes on for the others. A finished child is not "lost": it simply stops being beaten."""
+
+    def __init__(self, spawner: "ChildSpawner", parent_key: str, on_lost=None) -> None:
+        self.spawner, self.parent_key, self.on_lost = spawner, parent_key, on_lost
+        self._stop = __import__("threading").Event()
+        self._thread = None
+        self._reported: set = set()
+
+    def beat_once(self) -> list:
+        """One round of heartbeats. Returns the ids that were extended. Never raises: a keepalive that failed must not take the work down with it."""
+        beaten = []
+        try:
+            rows = self.spawner.registry.descendants(self.parent_key)
+        except Exception:  # noqa: BLE001
+            return beaten
+        for r in rows:
+            if r["status"] != ACTIVE:
+                continue
+            try:
+                ok = self.spawner.heartbeat(r["child_id"])
+            except Exception:  # noqa: BLE001
+                ok = False
+            if ok:
+                beaten.append(r["child_id"])
+                continue
+            now_row = self.spawner.registry.get(r["child_id"])
+            if now_row is not None and now_row["status"] == ACTIVE and r["child_id"] not in self._reported:
+                self._reported.add(r["child_id"])
+                expired = not self.spawner.clock() < float(now_row["expires_at"])
+                if self.on_lost is not None:
+                    try:
+                        self.on_lost(r["child_id"], "expired" if expired else "authority revoked, narrowed or expired above it")
+                    except Exception:  # noqa: BLE001 - an observer must never stop the beats
+                        pass
+        return beaten
+
+    def __enter__(self) -> "_TreeKeepAlive":
+        import threading  # noqa: PLC0415
+        self.beat_once()
+        self._thread = threading.Thread(target=self._run, name=f"children-of-{self.parent_key}", daemon=True)
+        self._thread.start()
+        return self
+
+    def _run(self) -> None:
+        while not self._stop.wait(max(0.01, self.spawner.lease_ttl_s / 3.0)):
+            self.beat_once()
+
+    def __exit__(self, *exc) -> bool:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+        return False
+
+
 # ───────────────────────────── spawning ─────────────────────────────
 class ChildSpawner:
     def __init__(self, guard, registry: ChildRegistry, secret, *, clock: Callable[[], float] = time.time,
@@ -445,6 +502,16 @@ class ChildSpawner:
         """`with spawner.keepalive(child.child_id): run the child's work` beats every third of the lease period for as long as the work runs,
         and stops when it ends (or the child is closed/revoked), after which the token dies within one lease period."""
         return _KeepAlive(self, child_id)
+
+    def keepalive_tree(self, parent_key: str, on_lost=None) -> "_TreeKeepAlive":
+        """`with spawner.keepalive_tree(key): drive the work` keeps every active descendant of `key` alive, including ones spawned while the work runs. Use it around the code that
+        runs a mission; when the work stops being driven the beats stop and each token dies within one lease period."""
+        return _TreeKeepAlive(self, parent_key, on_lost)
+
+    def end_tree(self, parent_key: str, reason: str = "parent finished", *, actor: str = "") -> list:
+        """The work under `parent_key` is over for good: end every ACTIVE descendant, deepest first (so a parent's chain is never cut under a child that is still being closed).
+        Unlike `close_tree` this reaches grandchildren."""
+        return [self.close(r["child_id"], reason, actor=actor) for r in self.registry.descendants(parent_key) if r["status"] == ACTIVE]
 
     def reap_lapsed(self, grace_s: float = 300.0) -> list:
         """A child whose driver has not beaten for `grace_s` beyond its lease is treated as abandoned: closed, its unused allowance returned,

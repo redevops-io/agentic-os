@@ -37,6 +37,8 @@ KINDS = {
     "LOOP_LIMIT_REACHED": ("high", "a goal loop hit a hard limit and stopped"),
     "LOOP_COMPLETED": ("info", "a goal loop finished"),
     "LOOP_CANCELLED": ("info", "a goal loop was cancelled"),
+    "LOOP_CHILD_LOST": ("medium", "a child agent of a goal loop could not be kept alive (its authority expired, was revoked or was narrowed)"),
+    "LOOP_CHILDREN_ENDED": ("info", "a goal loop ended the child agents it was running"),
     # child agents
     "CHILD_SPAWNED": ("info", "a child agent was created"),
     "CHILD_REFUSED": ("medium", "a child agent was refused (outside its parent's authority or allowance)"),
@@ -121,7 +123,7 @@ class SentinelFeed:
 
     def loop_sink(self, d: dict) -> None:
         """For `GoalLoop(on_event=...)`."""
-        key = d.get("kind") or d.get("cap") or d.get("limit") or ""
+        key = d.get("kind") or d.get("cap") or d.get("limit") or d.get("child_id") or ""
         ev = self._from_kind(d, "goal_loop", str(d.get("loop_id", "")), key)
         if ev:
             self.emit(ev)
