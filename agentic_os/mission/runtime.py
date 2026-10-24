@@ -716,6 +716,8 @@ class MissionRuntime:
             self.store.append("SchedulerConfigured", m.id, self.scheduler_config())
 
         while True:
+            if m.state is MissionState.CANCELLED:              # cancelled while running: no further wave is dispatched
+                return m
             status = self.repo.node_status(mission_id)
             done = {nid for nid, st in status.items() if st in _TERMINAL}
             approved = self._approved(mission_id, plan)
@@ -1342,6 +1344,8 @@ class MissionRuntime:
         if self.max_concurrency <= 1 or len(nodes) <= 1:
             parked = False
             for node in nodes:
+                if m.state is MissionState.CANCELLED:        # cancelled while an earlier node ran: do not dispatch the next
+                    return False
                 if self._execute(m, plan, world, node) is False:
                     if m.state is MissionState.WAITING_RECONCILIATION:
                         parked = True                    # this node waits for reconciliation; the rest of the wave does not
