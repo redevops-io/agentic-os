@@ -64,6 +64,10 @@ def _strip_approval(obj):
 
 app = FastAPI(title="agentic-outreach-engine (core: Twenty CRM)")
 
+from agentic_os.app_kit import route_authz as _route_authz  # noqa: E402
+from .route_policy import APP as _APP, ROUTE_POLICIES as _ROUTE_POLICIES  # noqa: E402
+_route_authz.install(app, _APP, _ROUTE_POLICIES)   # one enforcement layer for every write route
+
 
 @app.get("/health")
 def health():

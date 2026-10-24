@@ -156,3 +156,59 @@ Revised order: F19 (this step) -> network egress enforcement (parallel) -> loop 
 **F20 (new, High): the apps' own REST routes bypass the operator.** The inventory finds 45 POST/PUT/PATCH/DELETE routes on apps' own surfaces. Those handlers do not pass through `/invoke`, so none of the above applies to them. Needs per-app authorization on those routes or network isolation so that only the governed operator and the UI gateway can reach them. Not built; do not claim these are governed.
 **F21 (new, Medium):** `approval_required` is honoured only by the mission runtime (27 declared capabilities have no `gated()`); outside production, direct `/invoke` still runs them.
 **Still open:** raw outbound HTTP and shell access (network egress boundary), the loop supervisor, child identities and scoped credentials, the durable lease record and automated restart reconciliation, Fleet `up`/`down`, Edge Sentinel events.
+
+## Step 5: route authorization for the apps' own write routes (F20) and approval consistency (F21)
+Owner direction 2026-10-23: do not build 45 separate mechanisms; use one enforcement layer. Three authorization contexts (human direct action, agent
+action, internal service action) obtain authority differently and pass the same policy enforcement point. A tenant API key must not confer every permission.
+Standing grants must work the same through REST, `/invoke`, serial, fork and Fleet. A new unclassified write route must fail CI. The 45-route inventory is not
+the whole surface, so WebSocket commands, background jobs, hooks, webhooks and internal services are included.
+
+**Implemented:**
+* `agentic_os/app_kit/route_authz.py`: `RoutePolicy` (capability, access class, permission, `agent_actions`, rationale) and one ASGI middleware per app.
+  * **human**: the app's operator credential or the admin token, or a bearer tenant token that must hold the route's permission among the refs that tenant was
+    granted (`AGENTIC_OS_TENANT_LIMITS`): a tenant token alone is not enough.
+  * **agent**: an execution authorization (`X-Execution-Authorization`) bound to the app, the route's capability, the tenant (`AGENTIC_OS_TENANT` when the deployment
+    is bound to one), the idempotency key and the exact request (body plus path parameters); single-use through the replay store. A request that carries one IS an agent
+    request: no other header on it grants human privileges, so an agent cannot impersonate a human decision.
+  * **service**: `X-Service-Token` mapped to explicit capabilities (`AGENTIC_OS_SERVICE_TOKENS`); never satisfies a human-only route.
+  * Access classes: `read_only`, `public_intake` (needs a written rationale), `stages_only`, `authority_required`, `human_only`, `operator_boundary`.
+  * In the production profile an unauthorised call is refused before the handler runs, and any write request that matches no declared policy is refused (fail closed).
+    In other profiles the context is computed (so a marker is still earned only from an authenticated context) but nothing is blocked.
+* The 45 routes, classified in `apps/<app>/route_policy.py` (verified by reading each handler): **27 `stages_only`** (the `/agent/run`, `/api/agent`, `/api/run`,
+  `/api/discover`, `/retention`, `/api/chat` family: the core stages any consequential action unless handed an approval marker), **7 `authority_required`**
+  (billing outcomes/refit/decide, social reel record/schedule, vibex generate/draft), **4 `human_only`** (privacy fulfil, billing decide-approve, edge-sentinel case
+  respond and execute), **4 `read_only`**, **3 `public_intake`** (privacy request, intake, verify: the only anonymous routes, named in a CI test).
+* **Approval markers reach the apps without rewriting their routes:** the middleware sets a request-scoped marker (a context variable, so it reaches sync handlers in the
+  threadpool) and the existing marker helpers (`gate.py` in billing, books, compliance; `core.operator_approval` in crm, outreach, support, growth-assistant) fall back to it.
+  The body can never supply it. An **agent** earns a marker only for actions listed in the route's `agent_actions`, which is empty everywhere. This is deliberate: a name-based
+  deny-list would have been wrong (billing's `chase_overdue` action runs the mandatory `dunning` capability), so on multiplexed routes agents get previews only, and their
+  governed path is the operator `/invoke` or the direct-action flow on a single-purpose route.
+* **Direct-action flow for REST:** `RouteCatalog` lets `ActionAuthorizer` issue authorizations for route capabilities from the same envelope; path parameters are selectable
+  resources (`path.<param>`); a REST side effect with no undo is tier 2, so the owner must raise a grant to `max_tier=2` explicitly; a `stages_only` route is authorized only
+  for its `agent_actions`.
+* **F21:** `approval_required` is now enforced on every operator `/invoke` in every profile. Without a verified human approval the handler does not run; it returns the
+  staged result the runtime already treats as "not executed" (production refuses side-effecting ones with 403). `AGENTIC_OS_ALLOW_UNAPPROVED_INVOKE=1` is an explicit
+  testing override that production ignores. Caveat: the staged result is generic, so a handler's own richer preview is not shown on this path; the legacy handler-level tests
+  that exercised direct execution now opt into the override through their conftest, and the default behaviour has its own tests.
+* **CI gates:** `apps/test_route_authz_registry.py` imports every real app and requires an exact match between the write/WebSocket routes it serves and its policies (new
+  route without a policy fails; stale policy fails); `tests/test_entrypoint_inventory.py` requires a reviewed entry for every non-REST entry type in the apps and pins the
+  kernel's unauthenticated write routes so a new one fails and a fixed one must be removed.
+
+**Reachability audit beyond the 45 routes** (`audit/operator_capability_inventory.md`, regenerated): no WebSocket commands, no webhook-shaped routes and no scheduler
+libraries in the apps. Five non-REST entry points, each reviewed in `apps/other_entrypoints.json`: the billing outcome observer thread (off by default, read plus learning
+only), its lifecycle hooks, the growth-assistant background content job (no approval marker, so the core stages consequential actions), and the suite server's mount.
+Operator `/invoke` is covered by F19. Internal RPC: the kernel services have **44 write routes; 19 show no authentication marker** (heuristic, pinned in
+`audit/kernel_unauthenticated_routes.json`).
+
+**F22 (new, High): the kernel's own services.** 14 of those 19 are the Projects API (`projects_api.py`: capture, today approve/snooze/dismiss/batch/undo, connect app,
+sidekick, source propose). Its "identity" is a demo session or the socket peer and it ships over a sample provider, i.e. it is a demo surface. **It must not face a real runtime
+until it is authenticated and its write routes get policies (the same layer applies).** The rest: `control_plane` permissions preview, intelligence `quote`/`resolve`,
+`mission/api` create, unified `sidekick`. Not changed here; pinned so none can be added.
+
+**Not done / limits, stated plainly:**
+* The layer enforces only in the production profile; elsewhere it is advisory.
+* The 27 `stages_only` routes are reachable by anyone; their protection is the core's staging gate (pinned per app by that app's AST test), which this change does not re-verify.
+* `read_only` and `public_intake` are classifications from reading handlers, not proofs.
+* The kernel services (F22) are inventoried and pinned, not enforced.
+* Network egress and raw outbound HTTP are a separate workstream.
+* Verification correction: an earlier "all apps pass" for the operator-boundary PR was run from `apps/`, where the test venv resolved `agentic_os` to a stale installed copy rather than the repository. All app results for this change were run with the repository on `PYTHONPATH` (2,014 passed); that earlier check should be treated as not having exercised the repository code.

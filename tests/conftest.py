@@ -66,4 +66,8 @@ def _operator_invoke_open_for_legacy_tests(monkeypatch):
     """Operator /invoke fails closed without a credential; pre-existing handler tests exercise it directly, so
     they opt into the documented dev flag. Auth tests clear it explicitly."""
     monkeypatch.setenv("AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS", "1")
+    # F21: `approval_required` is enforced on every /invoke path in every profile. These handler-level tests drive the
+    # handlers directly (including their own staging), so they opt into the explicit, non-production testing override.
+    # The default behaviour has its own tests (tests/test_invoke_approval_required.py) which clear it.
+    monkeypatch.setenv("AGENTIC_OS_ALLOW_UNAPPROVED_INVOKE", "1")
     yield

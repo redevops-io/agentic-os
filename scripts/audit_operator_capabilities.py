@@ -68,6 +68,73 @@ def write_routes(app_dir: Path) -> list[str]:
     return routes
 
 
+AUTH_MARKERS = ("Depends(", "GATE", "require_", "_authorize", "resolve_caller", "admin_only", "authorization", "x_api_key",
+                "mission_gate", "_auth")
+
+
+def other_entrypoints() -> list:
+    """Entry types besides REST write routes that can cause effects in apps/*: WebSocket routes, background threads/tasks,
+    lifecycle hooks, scheduler libraries, webhook/callback-shaped routes, mounted sub-applications. Each needs a
+    reviewed classification in apps/other_entrypoints.json."""
+    found = []
+    sched = ("apscheduler", "schedule.every", "threading.Timer", "BackgroundScheduler", "celery", "croniter")
+    for path in sorted((ROOT / "apps").glob("*/*.py")):
+        if path.name.startswith("test_") or path.name in ("seed.py", "conftest.py"):
+            continue
+        app = path.parent.name
+        src = path.read_text(encoding="utf-8")
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for d in node.decorator_list:
+                    t = ast.get_source_segment(src, d) or ""
+                    if t.startswith(("app.websocket(", "router.websocket(")) or ".on_event(" in t or ".add_api_route(" in t:
+                        found.append({"app": app, "file": path.name, "kind": "websocket" if "websocket" in t else "lifecycle_hook",
+                                      "name": node.name})
+                    if (isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute) and d.func.attr in WRITE_METHODS
+                            and d.args and isinstance(d.args[0], ast.Constant)
+                            and any(w in str(d.args[0].value).lower() for w in ("webhook", "callback", "hook", "notify"))):
+                        found.append({"app": app, "file": path.name, "kind": "webhook_route", "name": node.name})
+            if isinstance(node, ast.Call):
+                f = ast.get_source_segment(src, node.func) or ""
+                if f in ("threading.Thread", "Thread") or f.endswith(".create_task") or f.endswith(".add_task"):
+                    found.append({"app": app, "file": path.name, "kind": "background_thread_or_task", "name": f})
+                if f.endswith(".mount"):
+                    found.append({"app": app, "file": path.name, "kind": "mounted_subapp", "name": f})
+        for k in sched:
+            if k in src and path.name != "safe_fetch.py":
+                found.append({"app": app, "file": path.name, "kind": "scheduler_library", "name": k})
+    uniq = {(f["app"], f["file"], f["kind"], f["name"]): f for f in found}
+    return [uniq[k] for k in sorted(uniq)]
+
+
+def kernel_routes() -> list:
+    """Write routes of the kernel services (agentic_os/**), with whether any authentication marker appears on the handler
+    or its decorators. A heuristic: no marker means 'needs review', not 'proven open'."""
+    out = []
+    for path in sorted((ROOT / "agentic_os").rglob("*.py")):
+        rel = path.relative_to(ROOT / "agentic_os").as_posix()
+        if "tests" in path.parts or path.name.startswith("test_"):
+            continue
+        src = path.read_text(encoding="utf-8")
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:
+            continue
+        for n in ast.walk(tree):
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for d in n.decorator_list:
+                    if (isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute)
+                            and d.func.attr in WRITE_METHODS | {"websocket"} and d.args and isinstance(d.args[0], ast.Constant)):
+                        seg = (ast.get_source_segment(src, n) or "") + " ".join(ast.get_source_segment(src, x) or "" for x in n.decorator_list)
+                        out.append({"file": rel, "route": f"{d.func.attr.upper()} {d.args[0].value}", "handler": n.name,
+                                    "auth_marker": any(m in seg for m in AUTH_MARKERS)})
+    return out
+
+
 def inventory() -> dict:
     apps = {}
     for op in sorted((ROOT / "apps").glob("*/operator.py")):
@@ -103,6 +170,15 @@ def render(inv: dict) -> str:
         for c in a["capabilities"]:
             lines.append(f"| {name} | `{c['name']}` | {'yes' if c['gated'] else ''} | {'yes' if c['approval_required'] else ''} | "
                          f"{'yes' if c['has_undo'] else 'NO'} |")
+    ent = other_entrypoints()
+    lines += ["", "## Other entry types in apps/* (WebSocket, background jobs, hooks, schedulers, webhooks, mounts)", ""]
+    lines += [f"* `{e['app']}/{e['file']}`: {e['kind']} ({e['name']})" for e in ent] or ["* none"]
+    kr = kernel_routes()
+    noauth = [r for r in kr if not r["auth_marker"]]
+    lines += ["", "## Kernel service write routes (agentic_os/**)", "",
+              f"{len(kr)} write routes; **{len(noauth)}** show no authentication marker on the handler (heuristic: needs review, not proven open).", "",
+              "| File | Route | Handler | Auth marker |", "|---|---|---|---|"]
+    lines += [f"| {r['file']} | `{r['route']}` | {r['handler']} | {'yes' if r['auth_marker'] else '**no**'} |" for r in kr]
     return "\n".join(lines) + "\n"
 
 

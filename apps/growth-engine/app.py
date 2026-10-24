@@ -80,6 +80,10 @@ def _strip_approval(obj):
 
 app = FastAPI(title="agentic-growth-engine (Meridian Wealth Management · core: Umami)")
 
+from agentic_os.app_kit import route_authz as _route_authz  # noqa: E402
+from .route_policy import APP as _APP, ROUTE_POLICIES as _ROUTE_POLICIES  # noqa: E402
+_route_authz.install(app, _APP, _ROUTE_POLICIES)   # one enforcement layer for every write route
+
 
 # --- MD3 styling (BASE_CSS reused verbatim from deploy/module_service.py) -----
 BASE_CSS = """

@@ -346,6 +346,13 @@ class Operator:
                 # capability's MANDATORY approval, whoever issued it
                 raise HTTPException(403, "this capability requires a human approval; an execution authorization "
                                          "cannot satisfy it")
+            if (spec is not None and spec.approval_required and claims is None and not inputs.get("_approval")
+                    and not _unapproved_invoke_allowed()):
+                # F21: `approval_required` is the capability's own statement that a human decides. It is enforced on
+                # EVERY path and in EVERY profile: without a verified human approval the handler does not run, it
+                # stages (the same preview the mission runtime treats as "not executed").
+                return {"result": pending_approval(body.capability, reason="approval_required",
+                                                   message="this capability needs a human approval; nothing was done")}
             if claims is not None and claims.get("dispatch_by") == "operator":
                 # A direct-action authorization: the reservation is still RESERVED and THIS is the dispatch. Only one
                 # caller on one replica can win it, and a swept/expired/released reservation can never be dispatched.
@@ -369,6 +376,14 @@ class Operator:
 
 
 _WARN_AT: dict = {}
+
+
+def _unapproved_invoke_allowed() -> bool:
+    """An explicit, named test/demo override. Never honoured in production, and never the default in any profile: development
+    does not silently reinterpret a capability's approval requirement."""
+    import os  # noqa: PLC0415
+    from .profile import is_production  # noqa: PLC0415
+    return os.environ.get("AGENTIC_OS_ALLOW_UNAPPROVED_INVOKE", "").strip() == "1" and not is_production()
 
 
 def _operator_authority():

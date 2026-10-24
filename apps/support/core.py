@@ -56,19 +56,25 @@ def _operator_credential() -> str:
     return combo if (sep and user and pw) else ""
 
 
+def _ctx_marker() -> "dict | None":
+    """The marker this request earned from an authenticated context via the route-authorization layer (never the body)."""
+    from agentic_os.app_kit.route_authz import current_marker
+    return current_marker()
+
+
 def operator_approval(authorization: "str | None") -> "dict | None":
     """The ``_approval`` marker for a request whose ``Authorization`` header is the valid operator Basic
     credential, else None (unauthenticated / wrong credential / no credential configured)."""
     expected = _operator_credential()
     if not expected or not authorization or authorization[:6].lower() != "basic ":
-        return None
+        return _ctx_marker()
     try:
         got = base64.b64decode(authorization[6:].strip(), validate=True).decode("utf-8")
     except Exception:  # noqa: BLE001
-        return None
+        return _ctx_marker()
     if hmac.compare_digest(got.encode("utf-8"), expected.encode("utf-8")):
         return {"approved": True, "by": "operator-basic"}
-    return None
+    return _ctx_marker()
 
 
 def with_operator_approval(body: dict, authorization: "str | None") -> dict:
