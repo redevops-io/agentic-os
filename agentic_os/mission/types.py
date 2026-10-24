@@ -552,6 +552,7 @@ class ApprovalRule(str, Enum):
     MISSION_POLICY = "mission_policy"      # the mission's own policy demanded it
     DYNAMIC_RISK = "dynamic_risk"          # the weighed risk×value assessment crossed threshold
     VERIFICATION = "verification_escalation"  # verification could not accept the result
+    AUTHORITY = "authority_scope"          # production: the owner's envelope does not (yet) cover this action
 
 
 @dataclass

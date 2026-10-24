@@ -13,7 +13,9 @@ re-implement them.
 from __future__ import annotations
 
 import shutil
+import os
 import subprocess
+import uuid
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,7 +35,15 @@ class ModuleStatus:
 
 class Fleet:
     def __init__(self, registry: Registry, router: Router, context: Context,
-                 workdir: str | Path = ".agentic-os/modules"):
+                 workdir: str | Path = ".agentic-os/modules", *, authority=None, authority_key: str = "fleet",
+                 tenant: str = ""):
+        from agentic_os.mission.profile import assert_authority
+        assert_authority(authority, where="Fleet")       # production: agent work needs a durable authority guard
+        # mission-authority/v1: agent work (incl. detached background jobs) is checked against the owner's envelope
+        # (`authority_key`) as capability ``fleet.<module>.<action>``; unset in development, required in production.
+        self.authority = authority
+        self.authority_key = authority_key
+        self.tenant = tenant or os.environ.get("AGENTIC_OS_TENANT", "default")
         self.registry = registry
         self.router = router
         self.context = context
@@ -103,22 +113,50 @@ class Fleet:
             return self.context.request_approval(
                 module=module_name, action=action,
                 summary=f"{agent} wants to {action}", payload={"prompt": prompt})
+        lease = ""
+        if self.authority is not None:
+            from agentic_os.mission.authority import Action, Verdict
+            res = self.authority.authorize(self.authority_key, self.tenant, Action(
+                capability=f"fleet.{module_name}.{action}", arguments={"agent": agent}, risk_tier=1,
+                side_effecting=False), lease_id=f"fleet:{module_name}:{action}:{uuid.uuid4().hex}")
+            if res.verdict is Verdict.DENY:
+                raise PermissionError(f"authority:{res.rule}: {res.reason}")
+            if res.verdict is Verdict.ESCALATE:           # past a limit the owner set: a human decides
+                return self.context.request_approval(
+                    module=module_name, action=action,
+                    summary=f"{agent} wants to {action} (authority: {res.rule})", payload={"prompt": prompt})
+            lease = res.lease_id
         task = Task(prompt=prompt, capability=capability, system=self._system_prompt(m, agent))
         if background:
-            return self._dispatch_background(m, action, task)
+            return self._dispatch_background(m, action, task, lease)
+        if lease:
+            self.authority.dispatched(lease)
+            try:
+                text = self.router.run(task).text
+            except BaseException:
+                self.authority.reconcile(lease, executed=False)   # a model call that raised changed nothing outside
+                raise
+            self.authority.settle(lease)
+            return text
         return self.router.run(task).text
 
-    def _dispatch_background(self, m: Module, action: str, task: Task) -> dict:
+    def _dispatch_background(self, m: Module, action: str, task: Task, lease: str = "") -> dict:
         job_id = f"job-{len(self.jobs) + 1:05d}"
         self.jobs[job_id] = {"status": "running", "module": m.name, "action": action, "result": None}
         notifier = getattr(self.context, "notifier", None)
 
         def _worker() -> None:
             try:
+                if lease:
+                    self.authority.dispatched(lease)
                 text = self.router.run(task).text
                 self.jobs[job_id].update(status="done", result=text)
+                if lease:
+                    self.authority.settle(lease)
                 note = f"✅ background done · {m.name}: {action}"
             except Exception as e:  # noqa: BLE001
+                if lease:
+                    self.authority.reconcile(lease, executed=False)
                 self.jobs[job_id].update(status="error", result=str(e))
                 note = f"⚠ background failed · {m.name}: {action}: {e}"
             if notifier is not None:

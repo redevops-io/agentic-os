@@ -76,7 +76,8 @@ def _build() -> Fleet:
     # Hermes 0.17 chat notifier — no-op until a Telegram/Slack token is configured.
     notifier = channels.Notifier()
     ctx = Context(os.environ.get("AGENTIC_OS_HOME", ".agentic-os"), notifier=notifier)
-    return Fleet(registry, router, ctx)
+    from agentic_os.mission.authority import authority_from_env
+    return Fleet(registry, router, ctx, authority=authority_from_env())
 
 
 app = FastAPI(title="agentic-os control plane", version="0.1.0")
