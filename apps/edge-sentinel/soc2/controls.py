@@ -29,8 +29,8 @@ class ControlDef:
 
 
 CATALOG: tuple = (
-    ControlDef("SEC-ACC-01", "1", "Privileged accounts require multi-factor authentication", ("CC6.1",), "security-owner", 30, "mfa_coverage",
-               ("access_review",), scope_note="privileged accounts of the in-scope systems"),
+    ControlDef("SEC-ACC-01", "2", "Privileged accounts require multi-factor authentication", ("CC6.1",), "security-owner", 30, "mfa_coverage",
+               ("access_review", "mfa_status"), scope_note="privileged accounts of the in-scope systems; `mfa_status` is an account list with no review or leaver data"),
     ControlDef("SEC-ACC-02", "1", "Privileged access is reviewed each period by someone other than the account owner", ("CC6.2", "CC6.3"), "security-owner", 90,
                "access_review", ("access_review",), scope_note="privileged accounts; the review must be inside the period"),
     ControlDef("SEC-ACC-03", "1", "Access is removed promptly when a person leaves", ("CC6.2", "CC6.3"), "security-owner", 30, "termination_revocation",
