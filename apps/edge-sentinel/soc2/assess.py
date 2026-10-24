@@ -123,7 +123,8 @@ def monitoring_coverage(payloads, ctl, period):
 
 
 def host_baseline_scan(payloads, ctl, period, scope_kind: str = "host"):
-    o = _Outcome(len(payloads), len(payloads), complete=bool(payloads))
+    # a scan result need not carry the flag, but a producer that says its coverage is NOT complete is believed: that is never a pass
+    o = _Outcome(len(payloads), len(payloads), complete=bool(payloads) and all(p.get("population_complete", True) is not False for p in payloads))
     for p in payloads:
         if p.get("target_type") != scope_kind:
             o.inconclusive = f"the scan target is a {p.get('target_type')!r}, not a {scope_kind}: it does not support this control"
