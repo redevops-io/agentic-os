@@ -699,9 +699,9 @@ class MissionRuntime:
         if m.state in (MissionState.FAILED, MissionState.COMPENSATION_FAILED,
                        MissionState.SUCCEEDED, MissionState.CANCELLED):
             return m
-        if self.repo.pending_reconciliation(mission_id):
-            # a dispatched node's outcome is unknown: nothing more is dispatched until it is reconciled with evidence.
-            # Derived from the log (not from `m.state`), so a restart, a suspend/resume or any state overwrite cannot skip it.
+        if self.repo.pending_reconciliation(mission_id) and not self._independent_work(mission_id, self._plans[mission_id]):
+            # A dispatched node's outcome is unknown and nothing independent of it can run: wait. Derived from the log (not from
+            # `m.state`), so a restart, a suspend/resume or any state overwrite cannot skip it, and it writes nothing while waiting.
             if m.state is not MissionState.WAITING_RECONCILIATION:
                 self._set_state(m, MissionState.WAITING_RECONCILIATION)
             return m
@@ -727,12 +727,18 @@ class MissionRuntime:
             if limit:                                          # deadline / wall-clock: a hard stop before more work starts
                 self._block_hard_limit(m, limit)
                 return m
+            pend = self.repo.pending_reconciliation(mission_id)
+            blocked = self._reconciliation_blocked(graph, pend)    # a node awaiting reconciliation + everything downstream of it
             batch = self.scheduler.ready(graph, done, running=set(), policy=self.policy)
-            batch = [n for n in batch if n.id not in done and status.get(n.id) != NodeState.FAILED]
+            batch = [n for n in batch if n.id not in done and status.get(n.id) != NodeState.FAILED and n.id not in blocked]
             self._emit_wave_telemetry(m, graph, done, batch)
             if not batch:
                 if self.repo.pending_human(mission_id):
                     self._set_state(m, MissionState.WAITING_HUMAN)
+                    return m
+                if pend:                                           # only the reconciliation is left: that is a wait, not a failure
+                    if m.state is not MissionState.WAITING_RECONCILIATION:
+                        self._set_state(m, MissionState.WAITING_RECONCILIATION)
                     return m
                 self._set_state(m, MissionState.FAILED)   # blocked, no progress possible
                 return m
@@ -779,6 +785,12 @@ class MissionRuntime:
             # Execute the ready wave: independent nodes run concurrently (bounded) when max_concurrency>1,
             # serially when ==1; results commit in deterministic node order either way.
             outcome = self._execute_wave(m, plan, world, [n for n, _ in runnable])
+            if outcome is False and m.state is MissionState.WAITING_RECONCILIATION:
+                # one node parked for reconciliation. Work that does not depend on it carries on; only its dependents wait.
+                if not self._independent_work(mission_id, plan):
+                    return m
+                self._set_state(m, MissionState.RUNNING)
+                continue
             if outcome is False or outcome == "parked":   # a node failed/compensated, or an input needs disambiguation
                 return m
 
@@ -988,6 +1000,26 @@ class MissionRuntime:
             "idempotency_key": getattr(node, "idempotency_key", "") or "", "reason": reason[:300], "at": time.time()})
         self.lifecycle.dispatch(GateReached(mission_id=m.id, node_id=node.id, capability=node.capability))
         self._set_state(m, MissionState.WAITING_RECONCILIATION)
+
+    def _reconciliation_blocked(self, graph, pending: list) -> set:
+        """Node ids that cannot run while a node awaits reconciliation: that node and everything that (transitively) depends on it."""
+        blocked = {p["node_id"] for p in pending}
+        grew = bool(blocked)
+        while grew:
+            grew = False
+            for n in graph.nodes:
+                if n.id not in blocked and any(d in blocked for d in (n.depends_on or [])):
+                    blocked.add(n.id)
+                    grew = True
+        return blocked
+
+    def _independent_work(self, mission_id: str, plan: ExecutionPlan) -> bool:
+        """Is there a ready node that does not depend on a node awaiting reconciliation? (Then the mission is not stuck.)"""
+        blocked = self._reconciliation_blocked(plan.graph, self.repo.pending_reconciliation(mission_id))
+        status = self.repo.node_status(mission_id)
+        done = {nid for nid, st in status.items() if st in _TERMINAL}
+        return any(n.id not in done and status.get(n.id) != NodeState.FAILED and n.id not in blocked
+                   for n in self.scheduler.ready(plan.graph, done, running=set(), policy=self.policy))
 
     def _downstream_reads(self, plan: ExecutionPlan, key: str) -> bool:
         """Does any node read world fact `key`? (A reconciled node that others read must come with the provider's real result.)"""
@@ -1304,10 +1336,14 @@ class MissionRuntime:
                 return "parked"
 
         if self.max_concurrency <= 1 or len(nodes) <= 1:
+            parked = False
             for node in nodes:
                 if self._execute(m, plan, world, node) is False:
+                    if m.state is MissionState.WAITING_RECONCILIATION:
+                        parked = True                    # this node waits for reconciliation; the rest of the wave does not
+                        continue
                     return False
-            return True
+            return not parked
 
         # Concurrent path: resolve inputs from the current (stable) world snapshot and emit the dispatch
         # events in node order, then invoke operators concurrently, then commit results in node order.

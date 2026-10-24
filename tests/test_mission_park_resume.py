@@ -45,15 +45,18 @@ class Provider:
 
 
 class Plan:
-    """first -> second -> third, three side-effecting steps; `third` reads what `second` produced when `chain` is set."""
+    """first -> second -> third, three side-effecting steps; `third` reads what `second` produced when `chain` is set.
+    `deep` adds a fourth step that depends on the third, so independent work spans more than one wave."""
 
-    def __init__(self, chain=False):
-        self.chain = chain
+    def __init__(self, chain=False, deep=False):
+        self.chain, self.deep = chain, deep
 
     def plan(self, mission_id, goal, context):
-        return ExecutionIntent(mission_id=mission_id, steps=[
-            IntentStep(outcome="done1", need="first"), IntentStep(outcome="done2", need="second"),
-            IntentStep(outcome="done3", need="third", inputs_from=["done2"] if self.chain else [])])
+        steps = [IntentStep(outcome="done1", need="first"), IntentStep(outcome="done2", need="second"),
+                 IntentStep(outcome="done3", need="third", inputs_from=["done2"] if self.chain else [])]
+        if self.deep:
+            steps.append(IntentStep(outcome="done4", need="fourth", inputs_from=["done3"]))
+        return ExecutionIntent(mission_id=mission_id, steps=steps)
 
 
 def registry():
@@ -62,6 +65,7 @@ def registry():
         CapabilitySpec("op.first", "op", provides=["done1"], side_effecting=True, undo="op.undo"),
         CapabilitySpec("op.second", "op", provides=["done2"], side_effecting=True, undo="op.undo"),
         CapabilitySpec("op.third", "op", provides=["done3"], side_effecting=True, undo="op.undo"),
+        CapabilitySpec("op.fourth", "op", provides=["done4"], side_effecting=True, undo="op.undo"),
         CapabilitySpec("op.undo", "op", side_effecting=True)]))
     return reg
 
@@ -85,15 +89,17 @@ def handlers(p: Provider, mode: str):
 
     def third(i):
         p.calls.append("third"); p.apply("third"); return {"ok": 3}
-    return {"op.first": first, "op.second": second, "op.third": third, "op.undo": lambda i: {"undone": True}}
+    def fourth(i):
+        p.calls.append("fourth"); p.apply("fourth"); return {"ok": 4}
+    return {"op.first": first, "op.second": second, "op.third": third, "op.fourth": fourth, "op.undo": lambda i: {"undone": True}}
 
 
 class World:
     """A durable process: the same event log and authority ledger across 'restarts'."""
 
-    def __init__(self, tmp, monkeypatch, provider=None, guard=True, chain=False):
+    def __init__(self, tmp, monkeypatch, provider=None, guard=True, chain=True, deep=False):
         monkeypatch.setenv("AGENTIC_OS_PROFILE", "test")
-        self.tmp, self.provider, self.guard_on, self.chain = tmp, provider or Provider(), guard, chain
+        self.tmp, self.provider, self.guard_on, self.chain, self.deep = tmp, provider or Provider(), guard, chain, deep
         self.log = str(tmp / "events.jsonl")
         self.db = str(tmp / "auth.db")
         if guard:
@@ -108,7 +114,7 @@ class World:
             kw = dict(authority=AuthorityGuard(SqliteEnvelopeStore(self.db), SqliteLedger(self.db + ".usage")),
                       authority_key=lambda m: "env")
         return MissionRuntime(registry(), Executor(InMemoryOperatorClient(handlers(self.provider, mode))),
-                              store=EventStore(self.log), planner=Plan(self.chain), **kw)
+                              store=EventStore(self.log), planner=Plan(self.chain, self.deep), **kw)
 
     def new_mission(self, rt):
         pol = MissionPolicy(id="p", version="1", rules=(
@@ -121,8 +127,8 @@ class World:
         return rt
 
 
-def crash_then_restart(tmp, monkeypatch, *, guard=True, mode="crash_before_effect", chain=False):
-    w = World(tmp, monkeypatch, guard=guard, chain=chain)
+def crash_then_restart(tmp, monkeypatch, *, guard=True, mode="crash_before_effect", chain=True, deep=False):
+    w = World(tmp, monkeypatch, guard=guard, chain=chain, deep=deep)
     rt = w.boot(mode)
     m = w.new_mission(rt)
     with pytest.raises(Crash):
@@ -267,7 +273,7 @@ def test_executed_settles_it_marks_the_node_done_without_calling_the_handler_and
     assert w.provider.effects["second"] == 1                                        # the effect really happened before the crash
     node_id = rt.repo.pending_reconciliation(mid)[0]["node_id"]
     out = rt.reconcile_node(mid, node_id, executed=True, evidence={**EVIDENCE, "provider_ref": "pi_second"}, actor="admin",
-                            reason="charge pi_second is on the provider dashboard")
+                            reason="charge pi_second is on the provider dashboard", result={"charge": "pi_second"})
     assert out.state == MissionState.SUCCEEDED
     assert w.provider.calls == ["third"]                                            # NOT second again, NOT first again
     assert w.provider.effects == {"first": 1, "second": 1, "third": 1}
@@ -345,7 +351,7 @@ def test_the_same_decision_twice_is_idempotent_and_the_opposite_decision_is_a_co
     assert rt.reconcile_node(mid, node_id, executed=False, **args).state == MissionState.SUCCEEDED     # a client retry: converges
     assert w.provider.calls == ["second", "third"]                                                       # ... and sends nothing
     with pytest.raises(ReconciliationConflict):
-        rt.reconcile_node(mid, node_id, executed=True, **args)
+        rt.reconcile_node(mid, node_id, executed=True, result={"ok": 2}, **args)
     assert w.provider.effects == {"first": 1, "second": 1, "third": 1}
 
 
@@ -363,7 +369,7 @@ def test_concurrent_reconcile_and_resume_attempts_execute_each_step_at_most_once
     def reconcile(executed):
         barrier.wait()
         try:
-            results.append(rt.reconcile_node(mid, node_id, executed=executed, **args).state)
+            results.append(rt.reconcile_node(mid, node_id, executed=executed, result={"ok": 2} if executed else None, **args).state)
         except (ReconciliationConflict, ReconciliationError) as e:
             errors.append(type(e).__name__)
 
