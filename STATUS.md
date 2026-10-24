@@ -20,7 +20,6 @@ independently validated. "Production-ready" is not claimed.
 
 - `docker compose up -d` and the `agentic-os up ...` fleet path: **not run** for this change.
 - The hosted demo at demo.redevops.io: reachability only (responds over HTTP); behaviour not verified.
-- Go port in [`go/mission/`](go/mission/): not run.
 - Wiring of classification-based model routing ([`governance/routing.py`](agentic_os/governance/routing.py)) into the default router: not audited.
 - Any figure for the share of work kept on local hardware (README design thesis only).
 

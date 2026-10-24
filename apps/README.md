@@ -19,7 +19,7 @@ Each app follows the shared operator pattern:
 
 The catalog that binds these to the fleet — repo, agents, and which tasks need approval — is
 [`../modules.yaml`](../modules.yaml). The kernel they run on is [`../agentic_os/mission/`](../agentic_os/mission/)
-(Python) and [`../go/mission/`](../go/mission/) (Go).
+(Python).
 
 ## Apps
 

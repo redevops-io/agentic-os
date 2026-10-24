@@ -200,8 +200,6 @@ which only `acknowledge` resolves the node.
 * Replay/rehydrate: state, outcome (`outcome_from_log`) and `failure_policy` are rebuilt from the log. The effective default (template/env/HALT) is frozen into
   `MissionCreated.default_failure_policy` at creation, so a later env change never alters replay; a duplicated
   `CompensationRequested` (same attempt) is ignored by the fold and cannot exhaust the attempt cap.
-* Go port (`go/mission`): folds `compensation_failed` and ignores `Compensation*` events (only `NodeCompensated`
-  moves a node); the Go saga is unchanged (see migration notes).
 
 ## 7. Conformance
 
@@ -223,8 +221,7 @@ keys are `{key}:undo:{attempt}`; (5) an undo naming an unregistered capability i
 
 **Explicit opt-ins added (so existing flows keep their saga):** templates `onboarding` and `deploy_app`
 (`TEMPLATE_FAILURE_POLICY`); tests `test_mission::test_saga_compensation_on_failure`,
-`test_kernel_verify_launcher_saga` (`_saga_rt`), `test_approval_token` (`_saga_http`); the Go port's `onboarding`
-and `deploy_app` templates and its two saga tests. 
+`test_kernel_verify_launcher_saga` (`_saga_rt`), `test_approval_token` (`_saga_http`). 
 **Workflows that now SILENTLY KEEP their effects on failure (HALT_AND_REPORT default) - decide each explicitly:**
 
 | Workflow / app | Effects kept on failure |
@@ -259,9 +256,6 @@ Fixtures that declared an undo for a capability they never registered now regist
   `/capabilities`, and make `Mission.failure_policy` a create-time option.
 * **Fork/join** (parallel-branches work): set `ExecutionGraph.forks`, call `decide_on_branch_failure` on a branch
   failure; do not compensate succeeded siblings itself.
-* **Go port**: parity for the policy gate (`EffectiveFailurePolicy`, default HALT_AND_REPORT; nothing is
-  compensated unless COMPENSATE_DECLARED). Still to port: declared-only filtering is by `Undo`, no
-  verification/approval/events yet - it replays the Python events but does not emit them.
 * Consumers of `MissionState` / `m.state == FAILED` must also handle `COMPENSATION_FAILED`.
 
 ## 9. Per-action selection, preconditions and the partially-completed outcome
@@ -326,15 +320,12 @@ step itself may have partly executed: its effect is unknown to the log and is no
   approved `sentinel.unblock_ip`. `infra.provision/configure`, `sky.launch/serve` stay reversible+approval-gated. The
   kernel template defaults were decided by the owner and are now `PRESERVE_ONLY` (section 10); the enterprise overlay
   (`HALT_AND_REPORT`, enterprise `docs/COMPENSATION_POLICY.md`) remains stricter by also skipping the CLEANUP step.
-* **Go port** (`go/mission`): ignores `disposition=PRESERVE|CLEANUP`, `preconditions` and `authorization_policy`, and
-  still auto-compensates any node with `Undo` WHEN the policy is `COMPENSATE_DECLARED`; do not rely on it for per-action
-  selection. Its policy gate agrees with Python on the template defaults (section 10).
 
 ## 10. Kernel template defaults: `PRESERVE_ONLY`
 
 Owner decision (after 0.3.32; version not bumped here): **a failed workflow does not imply its successful actions should be undone.**
 `templates.TEMPLATE_FAILURE_POLICY` sets `onboarding`, `deploy_app` and `sky_deploy` to `PRESERVE_ONLY`
-(previously `COMPENSATE_DECLARED`). Mirrored in `go/mission/compensation_policy.go` (`TemplateFailurePolicy`).
+(previously `COMPENSATE_DECLARED`).
 
 **Behaviour on failure (no implicit rollback):**
 
@@ -419,4 +410,3 @@ approval-gated).
 | in-flight missions frozen at COMPENSATE_DECLARED | unchanged behaviour + `LegacyFailurePolicyNotice`; `AGENTIC_OS_RERESOLVE_LEGACY_POLICY=1` to re-resolve |
 | outcome keys | + `completed_steps`, `recovery_actions`, `retained_costs`; `EffectsRetained` payload carries them |
 | `CompensationSpec` | + `disposition: CLEANUP`, + `incurs_ongoing_cost` |
-| Go port | `onboarding`, `deploy_app`, `sky_deploy` -> `PRESERVE_ONLY` (Go compensates only under `COMPENSATE_DECLARED`; CLEANUP/PRESERVE/preconditions still ignored) |

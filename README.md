@@ -14,8 +14,7 @@
 ---
 
 **What it does.** Runs a catalog of reference business apps as one fleet behind a single control plane: a cost-aware
-LLM router, a permissions plane, human approval gates, and the **Mission kernel** (Python, with a Go port in
-[`go/mission/`](go/mission/)) that executes governed multi-step plans with audit and replay.
+LLM router, a permissions plane, human approval gates, and the **Mission kernel** (Python) that executes governed multi-step plans with audit and replay.
 
 **Who it's for.** Teams who want to self-host and study a governed agent runtime and its reference apps, and are
 comfortable with alpha software.
@@ -239,7 +238,7 @@ target was ">90%"); that share has **not been measured**. See
 | [`agentic_os/workflows.py`](agentic_os/workflows.py) | cross-module workflows (e.g. new-customer onboarding) |
 | [`agentic_os/context.py`](agentic_os/context.py) | shared business context + approvals/audit log |
 | [`agentic_os/control_plane.py`](agentic_os/control_plane.py) | FastAPI control plane |
-| [`agentic_os/mission/`](agentic_os/mission/) | Mission Runtime — the operator/mission engine the reference apps run on (operators, planes, compiler; Go port in [`go/mission/`](go/mission/)) |
+| [`agentic_os/mission/`](agentic_os/mission/) | Mission Runtime — the operator/mission engine the reference apps run on (operators, planes, compiler) |
 | [`agentic_os/integrations/`](agentic_os/integrations/) | Integration Plane + Connect Compiler contracts, hosted OAuth, the productivity plane, and adapter execution |
 | [`agentic_os/intelligence/`](agentic_os/intelligence/) · [`agentic_os/legal/`](agentic_os/legal/) | External & Professional Intelligence layer — apps ask for a **capability**, a gate decides whether to acquire, adapters (open + BYO paid + legal + email) serve it, and value accounting learns what's worth buying ([docs/INTELLIGENCE.md](docs/INTELLIGENCE.md)) |
 | [`agentic_os/agent_gateway/`](agentic_os/agent_gateway/) | Governed Agent Gateway — the governed northbound path for external agents (MCP first) |

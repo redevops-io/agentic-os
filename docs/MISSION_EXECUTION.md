@@ -10,8 +10,7 @@ Parallel branches inside a mission, and how unknown outcomes (plan nodes and for
 
 ## Mission fork/join
 
-Status: implemented in `agentic_os/mission/fork_join.py` (Python spec) with event-folding parity in
-`go/mission/fork.go`. Owner decision (binding): **forks are parallel branches within an existing Mission, not
+Status: implemented in `agentic_os/mission/fork_join.py` (Python spec). Owner decision (binding): **forks are parallel branches within an existing Mission, not
 independently authorized agents.**
 
 ### 1. Principles
@@ -112,7 +111,6 @@ result_sha256, approved}`: it contains hashes only, never secrets or input value
 | `_saga` | Iterates `plan.graph.nodes` only. Branches are never auto-compensated. |
 | `learning.py` / `receipt.py` / `observability.py` | Count `Node*` only; branch outcomes feed learning through `learning.record_capability` at commit (same call the node path makes). Branch receipts are exposed via `fork_summary`. Observability spans and `mission_receipt` rows for branches are a follow-up (deferred). |
 | evidence producers (`compliance/evidence_producers.py`) | Approval evidence for a branch flows through the reused approval events. Branch events are ignored (additive). |
-| Go store (`go/mission`) | Unknown types are ignored by every existing fold; `fork.go` folds the new events with the same rules and a shared golden fixture. |
 
 ### 5. Scheduling
 
@@ -262,12 +260,11 @@ therefore N/A until one exists, and any future route MUST sit behind the gate.
 | Spec swap on replay | `spec_digest` mismatch is refused |
 | Secrets in log | receipts and `ForkOpened` carry hashes; credential material never enters events (executor broker unchanged) |
 
-### 11. Go port parity (phase 4)
+### 11. Other-language ports (phase 4)
 
-Implemented: `go/mission/fork.go` folds the same events (`FoldFork`, `EvaluateJoin`) and a shared golden log
-verifies Python == Go fold output; existing folds already ignore unknown types so replay does not choke.
-**Deferred**: the Go `MissionRuntime` does not execute forks (controller, scheduler, budget, approve hook,
-subscriptions); a Go runtime can replay and display fork state but cannot open one.
+This repository holds the Python reference only. Existing folds ignore unknown event types, so a port that predates
+fork/join still replays a log containing fork events without choking. Private enterprise ports (Go, Kotlin) track
+this behaviour outside this repository.
 
 ### 12. Collapse plan: enterprise executor copy
 
