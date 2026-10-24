@@ -105,7 +105,15 @@ class ContainmentError(RuntimeError):
 # writes {"ok": ...} on stdout. It starts from a scrubbed environment and rlimits already
 # applied by the parent (preexec), so it cannot see ambient secrets or exceed its ceiling.
 _RUNNER = r"""
-import json, sys, importlib
+import json, os, sys, importlib
+# The parent's import paths arrive in MEMBRANE_PATH and are inserted just before site-packages: project code still beats an installed copy, but nothing on them can shadow the standard
+# library (PYTHONPATH sits BEFORE the standard library, so a directory with an `operator.py` or `json.py` on the parent's path would break the child before it ran anything).
+_extra = []
+for _p in json.loads(os.environ.get("MEMBRANE_PATH", "[]")):
+    if _p not in sys.path and _p not in _extra:
+        _extra.append(_p)
+_at = next((i for i, p in enumerate(sys.path) if p.endswith(("site-packages", "dist-packages"))), len(sys.path))
+sys.path[_at:_at] = _extra
 job = json.load(sys.stdin)
 mod, _, attr = job["capability"].partition(":")
 fn = getattr(importlib.import_module(mod), attr)
@@ -192,7 +200,7 @@ class LocalContainmentSandbox:
         scrubbed.setdefault("PATH", "/usr/bin:/bin")
         # Import paths are not secrets — preserve them so the capability resolves, while
         # ambient credential env vars stay scrubbed (that is the property under test).
-        scrubbed["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
+        scrubbed["MEMBRANE_PATH"] = json.dumps([p for p in sys.path if p])
         # Redeemed credential material for grants would be injected here — inside the
         # boundary only — never returned to or visible from the caller/agent.
         with tempfile.TemporaryDirectory(prefix="membrane-") as cwd:
