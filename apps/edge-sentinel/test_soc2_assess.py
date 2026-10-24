@@ -84,6 +84,8 @@ def test_seeded_control_failures_are_failures(tmp_path, control, evidence, expec
     ("SEC-CFG-01", env("scanner_result", {"target_type": "container-image", "target": "web:1", "critical_open": 0, "scanned_at": NOW - DAY}),
      "a container-image scan offered for a host control"),
     ("SEC-CFG-01", env("scanner_result", {"target_type": "host", "target": "web-1", "critical_open": 0, "scanned_at": NOW - 90 * DAY}), "a scan outside the period"),
+    ("SEC-CFG-01", env("scanner_result", {"target_type": "host", "target": "web-1", "critical_open": 0, "scanned_at": NOW - DAY, "population_complete": False}),
+     "a scan the producer says does not cover everything in scope"),
     ("SEC-CHG-01", env("change_records", {"releases": [release("r1")]}), "a producer that did not state the population is complete"),
     ("SEC-CHG-01", env("change_records", {"releases": [release("r1")], "population_complete": False}), "a producer that says the population is incomplete"),
     ("SEC-ACC-01", env("access_review", {"status": "compliant", "all_controls_met": True}), "a bare claim of compliance with no data"),
