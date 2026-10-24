@@ -50,6 +50,9 @@ KINDS = {
     "CONTEXT_COMPACTION_FAILED": ("low", "a context compaction was refused and the history was kept"),
     "SCOPE_REINJECTED": ("high", "an agent's pinned scope was missing or altered and was restored"),
     "SCOPE_TAMPERED": ("critical", "a message in an agent's context claimed to be the owner's pinned scope"),
+    # the agent gateway
+    "AGENT_OUT_OF_SCOPE": ("medium", "an agent asked for a capability or resource outside its authority and was refused"),
+    "AGENT_AUTHORITY_REVOKED": ("high", "an agent acted under an authority that was revoked, expired or whose ancestor was revoked"),
     # egress
     "EGRESS_DENIED": ("medium", "an outbound connection was refused by the egress policy"),
     "EGRESS_BLOCKED_ADDRESS": ("high", "an outbound connection to a metadata or internal address was refused"),
@@ -135,6 +138,27 @@ class SentinelFeed:
         ev = self._from_kind(d, "reconcile", str(d.get("mission_id", "")), d.get("job_id", ""))
         if ev:
             self.emit(ev)
+
+    def gateway_sink(self, request, decision) -> None:
+        """For `AgentGateway(on_authority=...)`: an unknown outcome that blocks a retry, an out-of-scope attempt (what a planted instruction
+        looks like from the outside) and a call under a revoked authority become events; allowed calls and other refusals do not."""
+        try:
+            rule = getattr(decision, "rule", "")
+            who = str(getattr(getattr(request, "principal", None), "subject", "") or "")
+            cap = str(getattr(request, "capability", ""))
+            tenant = str(getattr(getattr(request, "principal", None), "tenant", "") or "")
+            if rule == "outcome_unknown":
+                kind, extra = "UNKNOWN_OUTCOME", {"capability": cap, "lease_id": getattr(decision, "lease_id", ""), "reason": "a retry was refused until it is reconciled"}
+            elif rule in ("out_of_scope", "resource_out_of_scope", "grant_limit", "amount_over_limit", "tier_over_grant", "exceeds_parent"):
+                kind, extra = "AGENT_OUT_OF_SCOPE", {"capability": cap, "rule": rule}
+            elif rule in ("revoked", "ancestor_revoked", "ancestor_expired", "expired", "orphaned"):
+                kind, extra = "AGENT_AUTHORITY_REVOKED", {"capability": cap, "rule": rule}
+            else:
+                return
+            sev, line = KINDS[kind]
+            self.emit(SentinelEvent(kind, sev, tenant, who or cap, "gateway", f"{line}: {cap}", extra, 0.0, _key(kind, who, cap, rule)))
+        except Exception:  # noqa: BLE001 - a sentinel sink must never break the component it observes
+            return
 
     def context_sink(self, d: dict) -> None:
         """For `compact_with_integrity(on_event=...)`."""

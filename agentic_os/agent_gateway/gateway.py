@@ -199,6 +199,22 @@ class AgentGateway:
                 key = vc.claims["key"]
                 agent_meta = {"agent_id": vc.claims["child_id"], "agent_principal": vc.claims["principal"],
                               "agent_parent": vc.claims["parent_key"], "agent_depth": vc.claims["depth"]}
+            # A side-effecting call whose earlier attempt was SENT and has an unknown outcome is not sent again until someone reconciles it:
+            # repeating it could repeat the effect, and uncertainty is never permission to resend (docs/MISSION_EXECUTION.md).
+            if manifest.side_effecting and manifest.kind is CapabilityKind.DIRECT:
+                from agentic_os.mission.profile import is_production   # noqa: PLC0415
+                if not request.idempotency_key and is_production():
+                    return self._finalize(request, start, self._deny("authority:idempotency_key_required", tier), exposed_reason="permitted")
+                prior = self._unresolved_attempt(key, request)
+                if prior is not None:
+                    if self.on_authority:
+                        try:
+                            from agentic_os.mission.authority import Decision   # noqa: PLC0415
+                            self.on_authority(request, Decision(Verdict.DENY, "outcome_unknown", "an earlier attempt of this action has an unknown outcome",
+                                                                None, "", -1, prior["lease_id"]))
+                        except Exception:  # noqa: BLE001 - an observer must never change the decision
+                            pass
+                    return self._finalize(request, start, self._deny("authority:outcome_unknown", tier), exposed_reason="permitted")
             # An ORDINARY approval policy (REQUIRED) may be satisfied in advance by an explicit grant the owner
             # raised to this tier; MANDATORY never is, and IF_POLICY is unchanged.
             ordinary = manifest.effective_approval_policy is ApprovalPolicy.REQUIRED
@@ -326,6 +342,60 @@ class AgentGateway:
         if idem_key and result.ok and manifest.idempotent:
             self.idempotency.put(idem_key, result)
         return result
+
+    # ── unknown outcomes of direct calls ───────────────────────────────────────────
+    def _unresolved_attempt(self, key: str, request: GatewayRequest) -> "dict | None":
+        """An earlier attempt of THIS action (same authority key, capability and idempotency key) that was sent and neither confirmed nor
+        returned: its reservation is still DISPATCHED or UNKNOWN."""
+        if self.authority is None or not request.idempotency_key:
+            return None
+        for lease in self.authority.outstanding(key, detail=True):
+            meta = lease.get("meta") or {}
+            if (lease.get("state") in ("dispatched", "unknown") and meta.get("kind") == "gateway"
+                    and meta.get("capability") == request.capability and meta.get("idempotency_key") == request.idempotency_key):
+                return lease
+        return None
+
+    def unresolved_calls(self, key: str) -> list:
+        """Direct calls under this authority key whose outcome is unknown (for an operator or a monitor)."""
+        if self.authority is None:
+            return []
+        return [l for l in self.authority.outstanding(key, detail=True)
+                if l.get("state") in ("dispatched", "unknown") and (l.get("meta") or {}).get("kind") == "gateway"]
+
+    def reconcile_call(self, lease_id: str, *, executed: bool, evidence: dict, actor: str, reason: str, result: "dict | None" = None) -> dict:
+        """Resolve a direct call with an unknown outcome, with evidence and a named person (the same rules as a mission node). `executed=True`:
+        the effect happened: the reservation is settled and, if `result` is given, a retry with the same idempotency key gets that result instead
+        of being sent again. `executed=False`: it did not happen: the reservation is returned and the action may be tried again. The ledger's
+        atomic transition decides; a contrary second resolution is refused."""
+        from agentic_os.mission.reconcile import ReconciliationConflict, ReconciliationError, validate_evidence   # noqa: PLC0415
+        if self.authority is None:
+            raise ReconciliationError("no authority ledger is configured")
+        ev = validate_evidence(evidence)
+        if not str(actor).strip():
+            raise ReconciliationError("the person reconciling must be named")
+        if len(str(reason).strip()) < 8:
+            raise ReconciliationError("a reason of at least a few words is required")
+        lease = self.authority.lease(lease_id)
+        if lease is None or (lease.get("meta") or {}).get("kind") != "gateway":
+            raise ReconciliationError("this is not a gateway call reservation")
+        want = "settled" if executed else "released"
+        if lease["state"] in ("dispatched", "unknown"):
+            if not self.authority.reconcile(lease_id, executed=executed):
+                now = self.authority.lease(lease_id)
+                if now is None or now["state"] != want:
+                    raise ReconciliationConflict(f"the reservation was resolved the other way ({now['state'] if now else 'gone'})")
+        elif lease["state"] != want:
+            raise ReconciliationConflict(f"the reservation is already {lease['state']}")
+        meta = lease.get("meta") or {}
+        self.authority.annotate(lease_id, reconcile_status="resolved_manually", resolved_by=str(actor).strip(), evidence=ev,
+                                resolution_reason=str(reason).strip()[:500], manual_outcome="executed" if executed else "not_executed")
+        if executed and result is not None and meta.get("idempotency_key"):
+            idem = f"{meta.get('tenant', '')}:{meta.get('subject', '')}:{meta.get('capability', '')}:{meta['idempotency_key']}"
+            self.idempotency.put(idem, GatewayResult(meta.get("request_id", ""), GatewayStatus.OK,
+                                                     GatewayDecision(allowed=True, reason="reconciled", risk_tier=RiskTier.READ),
+                                                     output=dict(result)))
+        return {"lease_id": lease_id, "state": want}
 
     # ── helpers ──────────────────────────────────────────────────────────────────
     def _policy_allows(self, gp: GatewayPrincipal, manifest: CapabilityManifest) -> bool:

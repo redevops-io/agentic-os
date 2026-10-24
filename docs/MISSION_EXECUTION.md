@@ -387,3 +387,7 @@ loop.tick()        # a scheduler: continue every loop whose mission moved
 * Wait states: `classify_loop(state)`; only a quiet RUNNING loop is watchdog-eligible. Sentinel events go to `on_event`: LOOP_STALLED, BUDGET_NEAR_LIMIT, LOOP_ESCALATED, LOOP_LIMIT_REACHED, LOOP_COMPLETED, LOOP_CANCELLED.
 * In the production profile leases are required and the runtime's store must be a `FencedEventStore`. A leased mission can only be written by its lease holder, so a console that reconciles or cancels one takes the lease first.
 
+### Direct gateway calls
+
+The same rule holds for a side-effecting DIRECT capability called through the agent gateway: if an earlier attempt (same authority key, capability and idempotency key) was sent and its outcome is unknown, the next attempt is refused (`authority:outcome_unknown`) until a person resolves it with `AgentGateway.reconcile_call(lease_id, executed=..., evidence=..., actor=..., reason=..., result=...)`. `executed=True` with a `result` makes a retry with the same key return that result; `executed=False` returns the reservation. `unresolved_calls(key)` lists what is waiting. In the production profile a side-effecting direct call must carry an idempotency key. An agent that changes the key looks like a new action: derive the key from the call (tool and arguments) in the tool wrapper; the grant limits and the allowance bound what a fresh key can do.
+
