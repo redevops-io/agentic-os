@@ -703,6 +703,7 @@ class MissionRuntime:
         graph = plan.graph
         world = self._world(mission_id)
         self._set_state(m, MissionState.RUNNING)
+        self._segments()[str(m.id)] = time.monotonic()      # wall-clock budget counts ACTIVE run time of this driver segment
         # Record the effective scheduler config ONCE per mission (startup telemetry). If this says
         # scheduler_policy=serial when you expected parallel, the ceilings are the reason — on the record.
         if not any(e.get("type") == "SchedulerConfigured" for e in self.repo.timeline(mission_id)):
@@ -716,6 +717,10 @@ class MissionRuntime:
             if all(n.id in done for n in graph.nodes):
                 return self._succeed(m, plan, world)
 
+            limit = self._hard_limit(m, graph, status, ())
+            if limit:                                          # deadline / wall-clock: a hard stop before more work starts
+                self._block_hard_limit(m, limit)
+                return m
             batch = self.scheduler.ready(graph, done, running=set(), policy=self.policy)
             batch = [n for n in batch if n.id not in done and status.get(n.id) != NodeState.FAILED]
             self._emit_wave_telemetry(m, graph, done, batch)
@@ -761,6 +766,10 @@ class MissionRuntime:
                     return m
                 (runnable if verdict == "run" else gated).append((n, decision))
 
+            limit = self._hard_limit(m, graph, status, [n for n, _ in runnable])
+            if limit:                                          # spend / tokens: never dispatch what would pass the cap
+                self._block_hard_limit(m, limit)
+                return m
             # Execute the ready wave: independent nodes run concurrently (bounded) when max_concurrency>1,
             # serially when ==1; results commit in deterministic node order either way.
             outcome = self._execute_wave(m, plan, world, [n for n, _ in runnable])
@@ -876,7 +885,10 @@ class MissionRuntime:
             action = self._action_for(m, node, world, inputs)
             n = attempt if attempt is not None else int(getattr(node, "attempts", 0) or 0) + 1
             lease_id = f"{m.id}:{node.id}:a{n}"          # one reservation per node attempt: a re-evaluated gate never recounts
-            res = self.authority.authorize(key, m.tenant, action, standing, lease_id=lease_id)
+            res = self.authority.authorize(
+                key, m.tenant, action, standing, lease_id=lease_id,
+                lease_meta={"kind": "mission", "mission_id": str(m.id), "node_id": node.id, "attempt": n,
+                            "operator": node.operator, "idempotency_key": getattr(node, "idempotency_key", "") or ""})
             if res.allowed:
                 self._leases()[(str(m.id), node.id)] = (res.lease_id, bool(node.side_effecting), res.envelope_digest, n)
             base["inputs_digest"] = self._node_inputs_digest(m, world, node)
@@ -906,11 +918,16 @@ class MissionRuntime:
         ent = self._lease_of(m, node.id)
         if not ent or not self.authority.dispatch_once(ent[0]):
             return None
+        self.authority.annotate(ent[0], dispatched_at=time.time(), execution_id=getattr(node, "idempotency_key", "") or None,
+                                idempotency_key=getattr(node, "idempotency_key", "") or None)
         return {"lease_id": ent[0], "tenant": m.tenant, "mission_id": str(m.id), "node_id": node.id,
                 "attempt": ent[3], "envelope_digest": ent[2]}
 
-    def _lease_settle(self, m: Mission, node_id: str) -> None:
+    def _lease_settle(self, m: Mission, node_id: str, result: Any = None) -> None:
         ent = self._lease_of(m, node_id)
+        if ent:
+            from .authority import provider_ref_of  # noqa: PLC0415
+            self.authority.annotate(ent[0], provider_ref=provider_ref_of(result) or None, settled_at=time.time())
         if ent and self.authority.settle(ent[0]):
             self._leases().pop((str(m.id), node_id), None)
 
@@ -936,6 +953,16 @@ class MissionRuntime:
         if ok:
             self._leases().pop((str(m.id), node_id), None)
 
+    def _refuse_redispatch(self, m: Mission, plan: ExecutionPlan, node) -> bool:
+        """This node's reservation was already dispatched by an earlier attempt (a retry after a timeout, or a run resumed after a
+        restart). The effect may exist. It is NOT sent again: that would turn uncertainty into permission to repeat a side effect.
+        The reservation stays counted until reconciliation settles or releases it (mission/reconcile.py)."""
+        ent = self._lease_of(m, node.id)
+        self.store.append("RedispatchRefused", m.id, {"node_id": node.id, "capability": node.capability,
+                                                      "lease_id": ent[0] if ent else ""})
+        self._fail(m, plan, reason=f"{node.capability}: already dispatched by an earlier attempt; reconcile before retrying")
+        return False
+
     def _release_undispatched(self, m: Mission) -> None:
         """A mission ended or was cancelled: reservations that never dispatched go back. Dispatched ones stay."""
         if self.authority is None:
@@ -943,6 +970,42 @@ class MissionRuntime:
         for (mid, nid), ent in list(self._leases().items()):
             if mid == str(m.id) and self.authority.release(ent[0]):
                 self._leases().pop((mid, nid), None)
+
+    # ── hard limits: money, tokens and time are ceilings the serial loop enforces, not numbers it records ──────────
+    def _segments(self) -> dict:
+        return self.__dict__.setdefault("_run_segments", {})
+
+    def _hard_limit(self, m: Mission, graph, status: dict, about_to_run) -> "dict | None":
+        """The first hard ceiling this mission has reached or would pass by dispatching `about_to_run`, else None.
+        `deadline` is absolute; `wall_clock_s` counts the ACTIVE run time of this driver segment (a mission parked for
+        a human is not running); `usd`/`tokens` count executed nodes plus the wave about to start."""
+        now = time.time()
+        if m.deadline is not None and now >= float(m.deadline):
+            return {"limit": "deadline", "used": round(now, 3), "cap": float(m.deadline)}
+        start = self._segments().get(str(m.id))
+        cap_s = float(getattr(m.budget, "wall_clock_s", 0) or 0)
+        if start is not None and cap_s > 0 and time.monotonic() - start >= cap_s:
+            return {"limit": "wall_clock_s", "used": round(time.monotonic() - start, 3), "cap": cap_s}
+        if not about_to_run:
+            return None
+        done = [n for n in graph.nodes if status.get(n.id) == NodeState.DONE]
+        usd = sum(float(getattr(n.cost, "usd", 0.0) or 0.0) for n in done) + \
+            sum(float(getattr(n.cost, "usd", 0.0) or 0.0) for n in about_to_run)
+        if m.budget.usd and not (usd <= float(m.budget.usd) + 1e-9):     # `not <=` also refuses NaN
+            return {"limit": "usd", "used": round(usd, 6), "cap": float(m.budget.usd)}
+        tokens = sum(int(getattr(n.cost, "tokens", 0) or 0) for n in done) + \
+            sum(int(getattr(n.cost, "tokens", 0) or 0) for n in about_to_run)
+        if m.budget.tokens and tokens > int(m.budget.tokens):
+            return {"limit": "tokens", "used": tokens, "cap": int(m.budget.tokens)}
+        return None
+
+    def _block_hard_limit(self, m: Mission, limit: dict) -> None:
+        """A ceiling was reached. The mission stops (nothing further is dispatched) with a reason an owner or a supervisor
+        can act on; extending the budget and starting a continuation is the owner's decision, not a silent retry."""
+        self.store.append("HardLimitReached", m.id, dict(limit))
+        m.outcome = {"blocked": "hard_limit", **limit}
+        self.lifecycle.dispatch(GateReached(mission_id=m.id, node_id="", capability=""))
+        self._set_state(m, MissionState.FAILED)
 
     def _block_authority(self, m: Mission, node, res) -> None:
         """Production: the envelope forbids this action. Like a policy DENY it is a hard stop with an actionable reason."""
@@ -993,6 +1056,8 @@ class MissionRuntime:
         inputs = self._resolve_inputs(m, world, node)
         self.store.append("NodeDispatched", m.id, {"node_id": node.id, "capability": node.capability})
         claims = self._lease_dispatched(m, node)
+        if claims is None and self._lease_of(m, node.id) is not None:
+            return self._refuse_redispatch(m, plan, node)
         if claims:
             inputs = {**inputs, "_exec_auth": claims}      # the operator client turns these into a signed, bound token
         try:
@@ -1040,7 +1105,7 @@ class MissionRuntime:
             self._saga(m, plan, world)
             self._fail(m, plan, reason=f"{node.capability}: staged_not_executed")
             return False
-        self._lease_settle(m, node.id)           # it executed: counters now hold the confirmed consumption
+        self._lease_settle(m, node.id, result)   # it executed: counters now hold the confirmed consumption
         # P7B: verify a consequential result BEFORE it becomes authoritative world state.
         if needs_verification(node) and node.id not in self._verify_ok(m.id):
             vr = self.verifier.verify(node, result, world, m)
@@ -1123,6 +1188,8 @@ class MissionRuntime:
             inputs = self._resolve_inputs(m, world, node)
             self.store.append("NodeDispatched", m.id, {"node_id": node.id, "capability": node.capability})
             claims = self._lease_dispatched(m, node)
+            if claims is None and self._lease_of(m, node.id) is not None:
+                return self._refuse_redispatch(m, plan, node)
             if claims:
                 inputs = {**inputs, "_exec_auth": claims}
             prepared.append((node, inputs))
