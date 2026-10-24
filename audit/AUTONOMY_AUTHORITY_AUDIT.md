@@ -255,3 +255,34 @@ fails 1. Root suite: same 13 failures as main.
 outcome goes to a human until someone writes a probe for that provider; whether a provider's "not found" is authoritative is a per-provider fact this code cannot know. (2) Nothing runs the reconciler on a schedule yet;
 the loop supervisor will. (3) The mission runtime's own lease map is still in memory: after a restart a reservation is found by re-evaluating the node (same lease id), which is what makes the refusal above work, but a mission that is
 never resumed leaves its reservation for the reconciler or a human. (4) Fork/join budget checks, and the operator-side settlement for direct authorizations, are unchanged.
+
+## Step 8: unknown outcomes park the mission and the same mission resumes (`fix/mission-unknown-outcome-park-resume`; P0 for autonomous workflows with external side effects)
+Why: #553 made a dispatched reservation un-sendable-twice (at-most-once), but ended the mission FAILED, which is safe and not recoverable. Measured before this change (crash after dispatch,
+fresh runtime over the same log and ledger): no guard resumed and finished; guard, before #553, sent the effect twice; guard, #553, did not resend and the mission ended FAILED.
+**What changed**
+* New durable state `WAITING_RECONCILIATION`. A node whose dispatched reservation has an unknown outcome parks the mission instead of failing it. Two triggers: a re-dispatch of an already-dispatched
+  reservation (a retry or a run resumed after a restart), and a side-effecting call that errored after it may have been sent (previously a failure plus compensation of earlier steps; now neither:
+  nothing is declared failed or undone on a guess). An error that proves nothing was applied (`not_applied`) still fails normally.
+* **Preserved across restarts:** the park is a `ReconciliationRequired` event (node, capability, reservation id, attempt, idempotency key, reason), so it is derived from the log, not from mutable state:
+  `run()` is a no-op while it is unresolved (the log does not grow however often it is called, and a suspend/resume or a state overwrite cannot skip it); `rehydrate_in_flight` restores it; the node
+  attempt is restored from the recorded dispatches; completed nodes stay completed; the inbox and the mission view list it.
+* **Authenticated, evidence-backed reconciliation:** `POST /missions/{id}/reconcile` with `{node_id, outcome: executed|not_executed, evidence: {kind, reference, ...}, reason, result?, resume?}`. Tenant-scoped
+  (404 cross-tenant); approver or admin credential only (a requester credential is never accepted, stricter than approving); the actor is the credential, never the body; evidence needs a recognised
+  kind and a checkable reference (a bare assertion is rejected); a reason is required; with no credential configured the endpoint is disabled. Everything is recorded on the mission log and on the durable lease.
+* **Resume of the SAME mission without rerunning completed work:** `not_executed` releases the reservation and the node re-gates under a fresh reservation and runs once; `executed` settles it and marks the
+  node done from the evidence (a `NodeSucceeded` flagged `reconciled`, with who and why; no handler call). If a later step reads what that node produced, the provider's real result must be supplied (refused
+  otherwise, before anything changes). `resume=false` leaves the mission PAUSED for the owner.
+* **Concurrency:** validation happens before any change; the ledger's atomic transition decides (first resolver wins; a conflicting second one gets 409 and changes nothing); the whole operation holds the
+  mission's run lock, so a concurrent run or a second reconciliation cannot dispatch twice; the same decision repeated converges without re-deciding; across replicas the ledger's atomic dispatch still allows
+  exactly one send. In a concurrent wave, siblings' results that already came back are committed, never discarded.
+**Two defects my own regression tests caught while building this** (both would have shipped): restoring `node.attempts` on rehydrate made a re-run's reservation id `...:a2`, a fresh lease, so the refusal silently
+stopped firing (fix: re-gating a node reuses its unresolved reservation); and a refused re-dispatch still appended a `NodeDispatched`, so the attempt count drifted on the next restart (fix: take the reservation
+before recording the dispatch).
+**Evidence:** 39 tests including the three-way comparison with a negative control (a harness that provably sees a duplicate send), repeated restarts, both outcomes with a resume, evidence/actor/reason validation,
+conflicts and idempotency, 8 rounds of concurrent reconcile and run racing a conflicting decision, a replica race on the ledger, suspend/resume bypass attempts, a concurrent wave, and the API credential matrix.
+Seven mutations are each caught (terminal FAILED restored: 34 failures; duplicate send restored: 35; run loop ignoring the park: 1, found by asserting the log does not grow; run lock removed: 8; conflict check removed: 2;
+fresh-lease bug: 35; attempts not restored: 2). Root suite: same 13 failures as main.
+**Not done, stated plainly:** (1) no provider probes, periodic reconciliation, retries or notifications: those are the supervisor's; today a person reconciles. (2) Fork branches keep their own failure semantics
+(`UNKNOWN_EFFECT`); only the serial and concurrent-wave paths park. (3) One driver per mission is still assumed across replicas (the run lock is in-process): the ledger prevents a duplicate send, but two replicas driving
+one mission could both record events. (4) A reconciled `executed` node with no downstream reader is completed with a placeholder result flagged `reconciled`; a person asserting "it executed" is trusted to the extent of their
+evidence, which is recorded.

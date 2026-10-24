@@ -65,10 +65,13 @@ def fleet_slos(rt) -> dict:
     by_state: dict[str, int] = {}
     latencies: list[float] = []
     pending_approvals = 0
+    pending_reconciliations = 0
     for row in rows:
         by_state[row["state"]] = by_state.get(row["state"], 0) + 1
         if row.get("awaiting_human"):
             pending_approvals += 1
+        if row.get("awaiting_reconciliation"):
+            pending_reconciliations += 1
         tl = rt.repo.timeline(row["id"])
         created = next((e["ts"] for e in tl if e["type"] == "MissionCreated"), None)
         ended = next((e["ts"] for e in tl if e["type"] == "MissionOutcome"), None)
@@ -77,6 +80,7 @@ def fleet_slos(rt) -> dict:
     total = len(rows)
     return {
         "missions": total,
+        "pending_reconciliations": pending_reconciliations,
         "by_state": by_state,
         "success_rate": round(by_state.get("succeeded", 0) / total, 3) if total else 0.0,
         "failed": by_state.get("failed", 0),

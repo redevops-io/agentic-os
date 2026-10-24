@@ -699,6 +699,12 @@ class MissionRuntime:
         if m.state in (MissionState.FAILED, MissionState.COMPENSATION_FAILED,
                        MissionState.SUCCEEDED, MissionState.CANCELLED):
             return m
+        if self.repo.pending_reconciliation(mission_id):
+            # a dispatched node's outcome is unknown: nothing more is dispatched until it is reconciled with evidence.
+            # Derived from the log (not from `m.state`), so a restart, a suspend/resume or any state overwrite cannot skip it.
+            if m.state is not MissionState.WAITING_RECONCILIATION:
+                self._set_state(m, MissionState.WAITING_RECONCILIATION)
+            return m
         plan = self._plans[mission_id]
         graph = plan.graph
         world = self._world(mission_id)
@@ -885,6 +891,14 @@ class MissionRuntime:
             action = self._action_for(m, node, world, inputs)
             n = attempt if attempt is not None else int(getattr(node, "attempts", 0) or 0) + 1
             lease_id = f"{m.id}:{node.id}:a{n}"          # one reservation per node attempt: a re-evaluated gate never recounts
+            if attempt is None and int(getattr(node, "attempts", 0) or 0) > 0:
+                # An earlier attempt of THIS node was dispatched and has not been resolved. Re-gating must find THAT reservation (so its
+                # dispatch is seen as already taken and the node is parked, not sent again), never mint a fresh one for a new attempt.
+                # Only a resolved (released) reservation lets the next attempt take a new id.
+                prior_n = int(node.attempts)
+                prior = self.authority.lease(f"{m.id}:{node.id}:a{prior_n}")
+                if prior is not None and prior["state"] in ("dispatched", "unknown"):
+                    n, lease_id = prior_n, f"{m.id}:{node.id}:a{prior_n}"
             res = self.authority.authorize(
                 key, m.tenant, action, standing, lease_id=lease_id,
                 lease_meta={"kind": "mission", "mission_id": str(m.id), "node_id": node.id, "attempt": n,
@@ -956,12 +970,123 @@ class MissionRuntime:
     def _refuse_redispatch(self, m: Mission, plan: ExecutionPlan, node) -> bool:
         """This node's reservation was already dispatched by an earlier attempt (a retry after a timeout, or a run resumed after a
         restart). The effect may exist. It is NOT sent again: that would turn uncertainty into permission to repeat a side effect.
-        The reservation stays counted until reconciliation settles or releases it (mission/reconcile.py)."""
+        The mission is PARKED (not failed): the reservation stays counted until someone reconciles it with evidence, and then this
+        same mission resumes (`reconcile_node`)."""
         ent = self._lease_of(m, node.id)
         self.store.append("RedispatchRefused", m.id, {"node_id": node.id, "capability": node.capability,
                                                       "lease_id": ent[0] if ent else ""})
-        self._fail(m, plan, reason=f"{node.capability}: already dispatched by an earlier attempt; reconcile before retrying")
+        self._park_for_reconciliation(m, node, "already dispatched by an earlier attempt; the outcome is unknown")
         return False
+
+    def _park_for_reconciliation(self, m: Mission, node, reason: str) -> None:
+        """Durably park the mission at a node whose dispatched reservation has an unknown outcome. Records everything a resumed
+        run needs (node, attempt, reservation, idempotency key) in the log; completed nodes are untouched."""
+        ent = self._lease_of(m, node.id)
+        self.store.append("ReconciliationRequired", m.id, {
+            "node_id": node.id, "capability": node.capability, "operator": getattr(node, "operator", ""),
+            "lease_id": ent[0] if ent else "", "attempt": ent[3] if ent and len(ent) > 3 else int(getattr(node, "attempts", 0) or 0),
+            "idempotency_key": getattr(node, "idempotency_key", "") or "", "reason": reason[:300], "at": time.time()})
+        self.lifecycle.dispatch(GateReached(mission_id=m.id, node_id=node.id, capability=node.capability))
+        self._set_state(m, MissionState.WAITING_RECONCILIATION)
+
+    def _downstream_reads(self, plan: ExecutionPlan, key: str) -> bool:
+        """Does any node read world fact `key`? (A reconciled node that others read must come with the provider's real result.)"""
+        for n in plan.graph.nodes:
+            for v in (n.inputs or {}).values():
+                if isinstance(v, dict) and v.get("$from_world") == key:
+                    return True
+        return False
+
+    def reconcile_node(self, mission_id: str, node_id: str, *, executed: bool, evidence: dict, actor: str, reason: str,
+                       result: "dict | None" = None, resume: bool = True) -> Mission:
+        """Resolve a node parked in WAITING_RECONCILIATION with evidence, and resume THIS mission.
+
+        `executed=False`: the provider shows the effect did not happen. The reservation is released and the node runs again under a
+        fresh reservation. `executed=True`: it did happen. The reservation is settled and the node is marked done from the evidence
+        (no handler call); give the provider's real `result` when a later step reads what this node produced.
+
+        Safety: everything is validated before anything changes; the ledger's atomic transition decides (the first resolver wins, a
+        conflicting second one gets `ReconciliationConflict`); the whole operation holds the mission's run lock, so a concurrent run or
+        a second reconciliation cannot dispatch the node twice; repeating the same decision is idempotent. Completed nodes are never
+        rerun. `resume=False` leaves the mission PAUSED for the owner to resume."""
+        from .reconcile import ReconciliationConflict, ReconciliationError, validate_evidence  # noqa: PLC0415
+        ev = validate_evidence(evidence)
+        if not str(actor).strip():
+            raise ReconciliationError("the person reconciling must be named")
+        if len(str(reason).strip()) < 8:
+            raise ReconciliationError("a reason of at least a few words is required")
+        if self.authority is None:
+            raise ReconciliationError("no authority ledger is configured, so nothing is reserved to reconcile")
+        terminal = (MissionState.SUCCEEDED, MissionState.FAILED, MissionState.CANCELLED, MissionState.COMPENSATION_FAILED)
+        with self._run_lock(mission_id):
+            m = self._missions[mission_id]
+            plan = self._plans[mission_id]
+            pend = {p["node_id"]: p for p in self.repo.pending_reconciliation(mission_id)}
+            rec = pend.get(node_id)
+            if rec is None:
+                prior = self.repo.last_reconciliation(mission_id, node_id)
+                if prior is None:
+                    raise ReconciliationError("this node has no unresolved reconciliation")
+                if bool(prior.get("executed")) != bool(executed):
+                    raise ReconciliationConflict(f"this node was already reconciled as "
+                                                 f"{'executed' if prior.get('executed') else 'not executed'} by {prior.get('actor')}")
+                if resume and m.state not in terminal and not self.repo.pending_reconciliation(mission_id):
+                    return self._run_locked(mission_id)          # the same decision again: converge, never re-decide
+                return m
+            node = next((n for n in plan.graph.nodes if n.id == node_id), None)
+            if node is None:
+                raise ReconciliationError("unknown node")
+            if executed and node.produces and self._downstream_reads(plan, node.produces) and not result:
+                raise ReconciliationError(f"later steps read '{node.produces}', which this node produces: supply the provider's "
+                                          "real result so they run on facts, not on a placeholder")
+            lid = rec.get("lease_id") or ""
+            lease = self.authority.lease(lid) if lid else None
+            if lease is None:
+                raise ReconciliationError("the reservation behind this node is not in the authority ledger; resolve it there first")
+            want = "settled" if executed else "released"
+            if lease["state"] in ("dispatched", "unknown"):
+                if not self.authority.reconcile(lid, executed=executed):
+                    lease = self.authority.lease(lid)            # someone else's transition landed between the read and the write
+                    if lease is None or lease["state"] != want:
+                        raise ReconciliationConflict(f"the reservation was resolved the other way ({lease['state'] if lease else 'gone'})")
+            elif lease["state"] != want:
+                raise ReconciliationConflict(f"the reservation is already {lease['state']}; it cannot be reconciled as "
+                                             f"{'executed' if executed else 'not executed'}")
+            provider_ref = ev.get("provider_ref", "")
+            self.authority.annotate(lid, reconcile_status="resolved_manually", resolved_by=str(actor).strip(),
+                                    resolution_reason=str(reason).strip()[:500], evidence=ev, resolved_at=time.time(),
+                                    manual_outcome="executed" if executed else "not_executed", provider_ref=provider_ref or None)
+            if executed and self.repo.node_status(mission_id).get(node_id) != NodeState.DONE:
+                self._complete_from_reconciliation(m, plan, node, ev, str(actor).strip(), result)
+            self.store.append("ReconciliationResolved", mission_id, {
+                "node_id": node_id, "lease_id": lid, "executed": bool(executed), "actor": str(actor).strip(),
+                "reason": str(reason).strip()[:500], "evidence": ev, "provider_ref": provider_ref, "at": time.time()})
+            self._leases().pop((str(m.id), node_id), None)
+            if m.state in terminal:
+                return m                                         # the ledger and the record are settled; nothing to resume
+            if not resume:
+                self._set_state(m, MissionState.PAUSED)
+                return m
+            return self._run_locked(mission_id)
+
+    def _complete_from_reconciliation(self, m: Mission, plan: ExecutionPlan, node, ev: dict, actor: str, result) -> None:
+        """Mark a node done from evidence that it executed. It becomes the same durable fact `_finish` records (a NodeSucceeded and
+        the world observation), so a restart and every later step see it as completed work. Marked `reconciled` with who and why."""
+        out = {**(dict(result) if isinstance(result, dict) else {}), "reconciled": True, "reconciled_by": actor, "evidence": ev}
+        node.result, node.status = out, NodeState.DONE
+        if node.produces:
+            self._world(m.id).observe(node.produces, out, source="reconciliation", confidence=1.0)
+        self.store.append("NodeSucceeded", m.id, {"node_id": node.id, "capability": node.capability, "result": out,
+                                                  "reconciled": True})
+        self._meter(m, node, "ok")
+
+    def _unknown_lease(self, m: Mission, node) -> str:
+        """The reservation id if this node's reservation is UNKNOWN (it may have executed), else ''."""
+        ent = self._lease_of(m, node.id)
+        if not ent or self.authority is None:
+            return ""
+        rec = self.authority.lease(ent[0])
+        return ent[0] if rec and rec["state"] == "unknown" else ""
 
     def _release_undispatched(self, m: Mission) -> None:
         """A mission ended or was cancelled: reservations that never dispatched go back. Dispatched ones stay."""
@@ -1054,10 +1179,12 @@ class MissionRuntime:
         if not self._pre_exec_ok(m, plan, node):
             return False
         inputs = self._resolve_inputs(m, world, node)
-        self.store.append("NodeDispatched", m.id, {"node_id": node.id, "capability": node.capability})
+        # The reservation is taken BEFORE the dispatch is recorded: a refused re-dispatch must not look like another attempt, or the
+        # attempt count (restored from these events on restart) would drift and the next re-gate could miss the unresolved reservation.
         claims = self._lease_dispatched(m, node)
         if claims is None and self._lease_of(m, node.id) is not None:
             return self._refuse_redispatch(m, plan, node)
+        self.store.append("NodeDispatched", m.id, {"node_id": node.id, "capability": node.capability})
         if claims:
             inputs = {**inputs, "_exec_auth": claims}      # the operator client turns these into a signed, bound token
         try:
@@ -1069,9 +1196,15 @@ class MissionRuntime:
     def _fail_node(self, m: Mission, plan: ExecutionPlan, world: WorldState, node, e) -> bool:
         """The operator raised — record, learn, compensate, fail. Shared by the serial and concurrent
         paths so failure semantics are identical."""
+        self._lease_failed(m, node.id, ran=True, executed=False if getattr(e, "not_applied", False) else None)
+        if self._unknown_lease(m, node):
+            # The call may have been sent, so this is neither a failure nor safe to repeat. Park the mission; do not compensate
+            # earlier steps or declare failure on a guess. `reconcile_node` decides, with evidence, and resumes this mission.
+            self._meter(m, node, "error")
+            self._park_for_reconciliation(m, node, f"{type(e).__name__}: {str(e)[:200]}; the outcome is unknown")
+            return False
         self.store.append("NodeFailed", m.id,
                           {"node_id": node.id, "capability": node.capability, "error": str(e)})
-        self._lease_failed(m, node.id, ran=True, executed=False if getattr(e, "not_applied", False) else None)
         self._meter(m, node, "error")
         self.learning.record_capability(node.capability, False)
         self._observe_routing(node, False)
@@ -1186,10 +1319,10 @@ class MissionRuntime:
             if not self._pre_exec_ok(m, plan, node):     # admit (fail-closed) before any dispatch, like serial
                 return False
             inputs = self._resolve_inputs(m, world, node)
-            self.store.append("NodeDispatched", m.id, {"node_id": node.id, "capability": node.capability})
-            claims = self._lease_dispatched(m, node)
+            claims = self._lease_dispatched(m, node)         # before the event: see `_execute`
             if claims is None and self._lease_of(m, node.id) is not None:
                 return self._refuse_redispatch(m, plan, node)
+            self.store.append("NodeDispatched", m.id, {"node_id": node.id, "capability": node.capability})
             if claims:
                 inputs = {**inputs, "_exec_auth": claims}
             prepared.append((node, inputs))
@@ -1213,13 +1346,17 @@ class MissionRuntime:
                 except Exception as e:  # noqa: BLE001
                     results[nid] = ("err", e)
 
+        parked = False
         for node, _ in prepared:                         # commit serially, deterministic order
             kind, payload = results[node.id]
             ok = (self._fail_node(m, plan, world, node, payload) if kind == "err"
                   else self._finish(m, plan, world, node, payload))
             if ok is False:                              # first failure/park stops the mission (fail-fast)
+                if m.state is MissionState.WAITING_RECONCILIATION and not parked:
+                    parked = True                        # ... but results that already came back are committed, never discarded
+                    continue
                 return False
-        return True
+        return not parked
 
     def _operator_semaphores(self, operators) -> dict:
         """A bounding Semaphore per operator that declares a per_operator_limit — so a wave never issues
@@ -1588,6 +1725,7 @@ class MissionRuntime:
         rows = [r for r in self.repo.list_missions() if r["id"] not in self.quarantined]
         for r in rows:
             r["awaiting_human"] = self.repo.pending_human(r["id"]) is not None
+            r["awaiting_reconciliation"] = bool(self.repo.pending_reconciliation(r["id"]))
         return rows
 
     def inbox(self) -> list[dict]:
@@ -1600,6 +1738,10 @@ class MissionRuntime:
             if pend:
                 items.append({"mission_id": mid, "goal": self.repo.goal(mid),
                               "kind": pend.get("kind", "approval"), **pend})
+            for rec in self.repo.pending_reconciliation(mid):
+                items.append({"mission_id": mid, "goal": self.repo.goal(mid), "kind": "reconciliation",
+                              "node_id": rec["node_id"], "capability": rec.get("capability"),
+                              "lease_id": rec.get("lease_id"), "reason": rec.get("reason", "")})
         return items
 
     # ── P10: governance console (control surface over the auditable log) ─────────
@@ -1953,6 +2095,12 @@ class MissionRuntime:
 
         self._plans[mission_id] = plan
         m.active_plan_id = plan.id
+        dispatched: dict[str, int] = {}
+        for _e in self.store.for_mission(mission_id):          # the node attempt survives a restart (reservations are keyed by it)
+            if _e.type == "NodeDispatched":
+                dispatched[_e.payload.get("node_id", "")] = dispatched.get(_e.payload.get("node_id", ""), 0) + 1
+        for _n in plan.graph.nodes:
+            _n.attempts = max(int(_n.attempts or 0), dispatched.get(_n.id, 0))
 
         # Verify exact replay reproduced the sealed plan + evidence identity (fail closed on drift).
         sealed = self._last_plan_meta(mission_id)

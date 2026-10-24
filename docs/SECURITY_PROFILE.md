@@ -90,6 +90,20 @@ the address it checked, and logs every decision. It is **opt-in** (the default i
 inspect payloads. `profile.status()` reports `egress_proxy_configured` as an advisory, and `--require-egress` makes the production preflight fail without one.
 Full guarantees and limits: `deploy/egress/README.md`.
 
+## Unknown outcomes: park, reconcile, resume
+
+When a dispatched node's outcome is unknown (the process died, or a side-effecting call errored after it may have been sent), the mission is parked in
+`WAITING_RECONCILIATION`, durably, and nothing more is dispatched. A person with an approver or admin credential reconciles it with evidence:
+
+```
+POST /missions/{id}/reconcile
+{"node_id": "...", "outcome": "not_executed" | "executed", "evidence": {"kind": "provider_record", "reference": "..."},
+ "reason": "...", "result": {...only when later steps read what this node produced...}}
+```
+
+`not_executed` releases the reservation and the same mission re-runs the node once; `executed` settles it and marks the node done from the evidence. Completed work is never
+rerun; a requester credential can never reconcile; the actor is the credential; the evidence and reason are on the mission log. See `audit/AUTONOMY_AUTHORITY_AUDIT.md` step 8.
+
 ## Hard limits and reconciliation
 
 The serial mission loop enforces `deadline`, `wall_clock_s` (active run time of one driver segment), `usd` and `tokens`: a reached ceiling stops the mission with a
