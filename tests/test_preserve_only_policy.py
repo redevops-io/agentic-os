@@ -173,18 +173,6 @@ def test_cleanup_runs_once_across_repeated_settles_and_retries():
     assert _types(fx.rt, fx.m).count("EffectsRetained") == 1
 
 
-def test_go_port_template_defaults_agree_with_python():
-    """The Go policy gate (go/mission/compensation_policy.go) must carry the same template defaults."""
-    import re
-    from pathlib import Path
-    src = (Path(__file__).resolve().parents[1] / "go" / "mission" / "compensation_policy.go").read_text()
-    block = re.search(r"var TemplateFailurePolicy = map\[string\]string\{(.*?)\n\}", src, re.S).group(1)
-    consts = dict(re.findall(r"(Policy\w+)\s*=\s*\"(\w+)\"", src))
-    go = {k: consts[v] for k, v in re.findall(r'"(\w+)":\s*(Policy\w+)', block)}
-    assert go == TEMPLATE_FAILURE_POLICY
-    assert consts["PolicyPreserveOnly"] == FailurePolicy.PRESERVE_ONLY.value
-
-
 # ── review fixes ─────────────────────────────────────────────────────────────────────────────────────────────
 def _reg(*specs):
     reg = CapabilityRegistry()

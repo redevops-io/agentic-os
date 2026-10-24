@@ -789,7 +789,7 @@ def test_restart_does_not_reexecute_completed_branches(tmp_path):
     assert op.calls == before
 
 
-# ───────────────────────── Python <-> Go golden parity ─────────────────────────
+# ───────────────────── fold golden cases (replayed by the private ports; fixture lives with them) ─────────────────────
 def _golden_cases():
     def opened(fid, n, mode="all", k=None):
         return ("ForkOpened", {"fork_id": fid, "spec_digest": "d", "join": {"mode": mode, "k": k},
@@ -864,20 +864,13 @@ def _real_controller_case():
     return {"name": "real_controller_log", "fork_id": "f1", "events": [(e["type"], e["payload"]) for e in evs]}
 
 
-def test_golden_fixture_is_current_and_python_fold_matches():
+def test_golden_cases_python_fold():
     cases = []
     for c in _golden_cases() + [_real_controller_case()]:
         evs = [(t, p) for t, p in c["events"]]
         cases.append({"name": c["name"], "fork_id": c["fork_id"],
                       "events": [{"type": t, "payload": p} for t, p in evs],
                       "expected": json.loads(json.dumps(fold_fork(evs, c["fork_id"]).to_dict()))})
-    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        "go", "mission", "testdata", "fork_join_golden.json")
-    rendered = json.dumps(cases, indent=1, sort_keys=True) + "\n"
-    if os.environ.get("UPDATE_FORK_GOLDEN") == "1":
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        open(path, "w").write(rendered)
-    assert open(path).read() == rendered, "regenerate with UPDATE_FORK_GOLDEN=1"
     by = {c["name"]: c["expected"] for c in cases}
     assert by["failed_with_late_and_retry"]["closed"] == "failed" and len(by["failed_with_late_and_retry"]["late_results"]) == 2
     assert by["approval_park_resume_invalidate"]["branches"][1]["status"] == "parked"

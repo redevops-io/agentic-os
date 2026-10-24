@@ -332,9 +332,6 @@ Limits operators/humans must know:
   stages visibly).
 - One executor serves one runtime; binding a second runtime's event log raises.
 
-The Go port (`go/mission`) does not mirror this: its `Compensate` never mints an approval marker (it sends only
-`undo_of`/`result`), so there is no unconditional-approval path to guard.
-
 ## Permissions plane — access-control admin
 
 Fine-grained data access for every app: grant a **subject** (app / role / user) read/write on a
