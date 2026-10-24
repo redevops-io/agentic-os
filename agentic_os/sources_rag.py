@@ -17,7 +17,10 @@ sentence-transformers). Tests drive a fake store; production uses :func:`default
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Sequence
@@ -56,13 +59,30 @@ class RagIndexer:
     db_dir: str = field(default_factory=lambda: os.path.join(os.getcwd(), ".rag"))
     rag_factory: RagFactory = default_rag
     clock: Callable[[], str] = _now
-    _stores: Dict[str, RagStore] = field(default_factory=dict)
+    _stores: Dict[tuple, RagStore] = field(default_factory=dict)
+
+    def _path(self, project_id: str, source_id: str) -> str:
+        """The index file of ONE (project, source), injective and always inside `db_dir`. Ordinary ids (lower-case letters, digits, `.` and `-`, no `_`) keep the historical name `<project>_<source>.duckdb`, which
+        cannot collide because neither id can contain the `_` that separates them, so existing indexes still resolve. Anything else (an underscore, a colon, a slash, `..`, a space) gets a name made of a
+        digest of the exact pair, so two different pairs never share a file and no id can reach outside the directory."""
+        for label, v in (("project", project_id), ("source", source_id)):
+            if not isinstance(v, str) or not v.strip():
+                raise ValueError(f"a {label} id is needed to open an index")
+        plain = re.compile(r"^[a-z0-9][a-z0-9.-]*$")           # lower case only: `ACME_b` and `acme_b` are one file on a case-insensitive filesystem (macOS, Windows)
+        if plain.match(project_id) and plain.match(source_id):
+            name = f"{project_id}_{source_id}.duckdb"
+        else:
+            name = "x-" + hashlib.sha256(json.dumps([project_id, source_id]).encode()).hexdigest()[:32] + ".duckdb"
+        path = os.path.abspath(os.path.join(self.db_dir, name))
+        if os.path.dirname(path) != os.path.abspath(self.db_dir):
+            raise ValueError("the index path escapes the index directory")
+        return path
 
     def _store(self, project_id: str, source_id: str) -> RagStore:
-        key = f"{project_id}:{source_id}"
+        key = (project_id, source_id)                                  # the pair itself: "a:b"+"c" and "a"+"b:c" are different stores
         if key not in self._stores:
             os.makedirs(self.db_dir, exist_ok=True)
-            self._stores[key] = self.rag_factory(os.path.join(self.db_dir, f"{project_id}_{source_id}.duckdb"))
+            self._stores[key] = self.rag_factory(self._path(project_id, source_id))
         return self._stores[key]
 
     # ── Indexer seam ────────────────────────────────────────────────────────────
