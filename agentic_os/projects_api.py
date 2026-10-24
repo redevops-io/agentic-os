@@ -1899,6 +1899,12 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
         from fastapi.staticfiles import StaticFiles
         app.mount("/", StaticFiles(directory=str(ui), html=True), name="projects-ui")
 
+    # F22: the same enforcement layer the apps use. In the production profile a write route with no policy, or without an authenticated
+    # context, is refused before the handler runs; elsewhere nothing is blocked (the demo keeps working).
+    from agentic_os.app_kit import route_authz as _route_authz
+    from agentic_os.projects_route_policy import APP as _APP, PROJECTS_ROUTE_POLICIES
+    _route_authz.install(app, _APP, PROJECTS_ROUTE_POLICIES)
+
     return app
 
 

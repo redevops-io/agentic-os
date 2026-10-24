@@ -124,6 +124,9 @@ def kernel_routes() -> list:
             tree = ast.parse(src)
         except SyntaxError:
             continue
+        # a module that installs the route-authorization layer on its app is enforced route by route in production; the CI test of that
+        # module (every write route has a policy) is what keeps the claim true
+        file_guarded = "_route_authz.install(" in src
         for n in ast.walk(tree):
             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 for d in n.decorator_list:
@@ -131,7 +134,7 @@ def kernel_routes() -> list:
                             and d.func.attr in WRITE_METHODS | {"websocket"} and d.args and isinstance(d.args[0], ast.Constant)):
                         seg = (ast.get_source_segment(src, n) or "") + " ".join(ast.get_source_segment(src, x) or "" for x in n.decorator_list)
                         out.append({"file": rel, "route": f"{d.func.attr.upper()} {d.args[0].value}", "handler": n.name,
-                                    "auth_marker": any(m in seg for m in AUTH_MARKERS)})
+                                    "auth_marker": file_guarded or any(m in seg for m in AUTH_MARKERS)})
     return out
 
 

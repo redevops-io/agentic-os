@@ -232,12 +232,23 @@ class RouteAuthzMiddleware:
             self._compiled = sorted(rows, key=lambda r: (r[0], -r[1]))
         return self._compiled
 
+    @staticmethod
+    def _route_path(scope) -> str:
+        """The path the app's own routes are declared against. When the app is mounted under a base path (`/projects`), the server keeps the
+        full path and records the prefix in `root_path`; matching must be against what is left, or every request would look like a route
+        nobody classified (and be refused in production)."""
+        path, root = scope["path"], scope.get("root_path", "") or ""
+        if root and path.startswith(root.rstrip("/") + "/"):
+            return path[len(root.rstrip("/")):]
+        return path
+
     def _match(self, scope):
         method = "WS" if scope["type"] == "websocket" else scope["method"]
+        path = self._route_path(scope)
         for _n, _l, m, template, regex, convertors, key in self._templates():
             if m != method:
                 continue
-            hit = regex.match(scope["path"])
+            hit = regex.match(path)
             if hit:
                 return key, {k: convertors[k].convert(v) for k, v in hit.groupdict().items()}
         return None, {}
