@@ -1,4 +1,4 @@
-"""Email delivery adapters + governed bridge (moat plan §3.11, §6 P1). All offline via injected fetch."""
+"""Email delivery adapters + governed bridge (intelligence plan §3.11, §6 P1). All offline via injected fetch."""
 from __future__ import annotations
 
 from runtime_contracts.protocol import EmailDeliveryStatus, EmailMessageRef, EmailSendRequest, EmailSubmitFailure

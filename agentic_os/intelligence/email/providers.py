@@ -1,4 +1,4 @@
-"""Concrete BYO email delivery adapters (moat plan §3.11 P0, §6 P1).
+"""Concrete BYO email delivery adapters (intelligence plan §3.11 P0, §6 P1).
 
 These close Listmonk's deliverability weakness without ReDevOps operating an MTA reputation network — the tenant
 brings a mature delivery provider and we normalize its receipts. Postmark and SES are reference adapters; more

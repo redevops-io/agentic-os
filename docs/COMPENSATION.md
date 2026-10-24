@@ -5,7 +5,7 @@ an operation can be reversed. A consequential action DECLARES whether it support
 compensating capability. Compensation is a *new, separately governed forward action*, not an undo button.
 
 Builds on the merged guard (#447: `Executor.compensate` fails closed) and token binding (#446, see
-`docs/security-model.md`, "Compensation authorization"). Code: `agentic_os/mission/compensation.py`
+`docs/SECURITY_MODEL.md`, "Compensation authorization"). Code: `agentic_os/mission/compensation.py`
 (vocabulary, metadata, fold), `compensation_policy.py` (failure policy), `compensation_runner.py` (saga).
 
 ## 1. Vocabulary: reversibility classes

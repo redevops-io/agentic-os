@@ -1,4 +1,4 @@
-"""Discovery → intelligence bridge (moat plan §4.1, §8).
+"""Discovery → intelligence bridge (intelligence plan §4.1, §8).
 
 Apps never call a provider directly (no `Twenty → Apollo`). They raise an EvidenceRequest for a CAPABILITY;
 Discovery decides via the evidence-value gate whether to acquire, drives the fallback ladder, and records the

@@ -1,4 +1,4 @@
-"""Shared base for Bring-Your-Own email delivery adapters (moat plan §3.11, §6 P1).
+"""Shared base for Bring-Your-Own email delivery adapters (intelligence plan §3.11, §6 P1).
 
 Email delivery is an execution: hand a message to a provider, get a normalized receipt. Every adapter follows the
 same shape — entitled only when the tenant supplies a credential, one HTTP submit, a governed EmailDeliveryReceipt

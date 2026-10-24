@@ -1,4 +1,4 @@
-"""Per-app capability wiring (moat plan §4.1, §7).
+"""Per-app capability wiring (intelligence plan §4.1, §7).
 
 Apps never call a provider (`Twenty → Apollo`). Each app declares the CAPABILITIES it is allowed to request and a
 default purpose for each; `request_for(...)` builds a governed EvidenceRequest tagged with that purpose and the

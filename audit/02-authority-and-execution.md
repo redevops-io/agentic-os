@@ -1,6 +1,6 @@
 # Identity, authority, execution integrity and side-effect paths (workstreams A-C)
 
-Baseline audit reports, 2026-10-23. Findings and their status: [README.md](README.md). The living remediation log is [AUTONOMY_AUTHORITY_AUDIT.md](AUTONOMY_AUTHORITY_AUDIT.md).
+Baseline audit reports, 2026-10-23. Findings and their status: [README.md](README.md). The living remediation log is [autonomy-authority-audit.md](autonomy-authority-audit.md).
 
 ## Contents
 

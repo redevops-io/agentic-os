@@ -343,7 +343,7 @@ def test_a_side_effecting_branch_in_flight_at_the_crash_is_not_sent_again(tmp_pa
     m = w.mission(rt1)
     w.op.gates["b"] = threading.Event()                                  # B's write is in the provider when the process dies
     t1, _ = in_thread(lambda: rt1.forks.run_fork(m.id, three()))
-    wait_for(lambda: status(rt1, m.id).get("B") == "running" and "b" in w.op.order)
+    wait_for(lambda: status(rt1, m.id) == {"A": "succeeded", "B": "running", "C": "succeeded"} and "b" in w.op.order)
     w.crashing.dead = True
     kb = key(m.id, "B")
     assert w.op.sent(kb) == 1
@@ -362,7 +362,9 @@ def _b_in_flight_then_crash(w, max_b=1):
     m = w.mission(rt1)
     w.op.gates["b"] = threading.Event()
     t1, _ = in_thread(lambda: rt1.forks.run_fork(m.id, three(max_b=max_b)))
-    wait_for(lambda: status(rt1, m.id).get("B") == "running" and "b" in w.op.order)
+    # A and C must have committed before the process dies: on a slow machine they can still be in flight, and then they (correctly) wait for
+    # reconciliation after the restart, which is a different scenario from the one this helper sets up
+    wait_for(lambda: status(rt1, m.id) == {"A": "succeeded", "B": "running", "C": "succeeded"} and "b" in w.op.order)
     w.crashing.dead = True
     return rt1, m, t1
 

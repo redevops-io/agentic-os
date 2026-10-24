@@ -8,7 +8,7 @@ duckdb sink test, two projects_api tests). Reports:
 [01-architecture-and-threats.md](01-architecture-and-threats.md) (architecture map, data flow, threat model),
 [02-authority-and-execution.md](02-authority-and-execution.md) (identity/authority/policy, execution integrity, side-effect paths),
 [03-apps-and-business.md](03-apps-and-business.md) (app boundaries, business-admin catalog).
-The living remediation log (findings F1-F22 and every implemented step) is [AUTONOMY_AUTHORITY_AUDIT.md](AUTONOMY_AUTHORITY_AUDIT.md).
+The living remediation log (findings F1-F22 and every implemented step) is [autonomy-authority-audit.md](autonomy-authority-audit.md).
 Pinned by tests/scripts, so not merged: [operator_capability_inventory.md](operator_capability_inventory.md),
 [kernel_unauthenticated_routes.json](kernel_unauthenticated_routes.json); cross-language parity notes are in [parity/](parity/).
 

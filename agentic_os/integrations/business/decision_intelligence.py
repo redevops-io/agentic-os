@@ -8,9 +8,8 @@ Dependency direction is fixed: the public Runtime depends only on this protocol;
 depends on the public contracts, never the reverse. The community can run the substrate with the no-op or a
 simple deterministic implementation; the commercial Decision Intelligence plugs in the learning engine.
 
-This module also states, domain-neutrally, the transition / experience-eligibility invariants that are a
-trust signal rather than a moat — a decision Runtime must honour them regardless of who supplies the
-intelligence:
+This module also states, domain-neutrally, the transition / experience-eligibility invariants that a decision
+Runtime must honour regardless of who supplies the intelligence:
 
     * a *proposal* is not an *execution* — proposing an action changes nothing on its own;
     * a *rejected* or *failed* action is not a *state transition* — it must not evolve state;

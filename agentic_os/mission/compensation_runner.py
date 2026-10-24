@@ -4,7 +4,7 @@
 reversible, never reports a mission as rolled back because a compensating action was *attempted*, and leaves
 irreversible steps alone (listed as ``not_reversible``). Enforcement of "the forward step really executed",
 "the undo is the registered one" and "the compensation has its own approval" stays in
-``Executor.compensate`` (docs/security-model.md, docs/COMPENSATION.md).
+``Executor.compensate`` (docs/SECURITY_MODEL.md, docs/COMPENSATION.md).
 
 Per attempt ``n`` (counted from the log): idempotency key ``{key}:undo:{n}``, read-back key
 ``{key}:undo:{n}:verify``. Attempts are capped (``AGENTIC_OS_COMPENSATION_MAX_ATTEMPTS``, default 3); after the

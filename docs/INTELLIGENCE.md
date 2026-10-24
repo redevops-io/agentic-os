@@ -1,11 +1,6 @@
 # External & Professional Intelligence
 
-The incumbent moats behind CRM/ERP/BI/security tools are mostly *data network* moats — Apollo's contact graph,
-Klaviyo's cross-customer benchmarks, D&B's entity hierarchy, a mature deliverability reputation. ReDevOps does not
-try to reproduce those. Instead the apps sit on a first-class **intelligence provider layer** behind the Discovery
-Runtime: an app asks for a **capability**, a gate decides whether the evidence can change the decision and is worth
-its cost, an adapter acquires it, and the result is a governed artifact carrying provenance / cost / freshness /
-license. Later, verified-outcome accounting says whether buying it actually helped.
+Apps need external and professional data: contact and company enrichment, entity hierarchies, deliverability and reputation signals, cross-customer benchmarks. They get it through a first-class **intelligence provider layer** behind the Discovery Runtime: an app asks for a **capability**, a gate decides whether the evidence can change the decision and is worth its cost, an adapter acquires it, and the result is a governed artifact carrying provenance / cost / freshness / license. Later, verified-outcome accounting says whether buying it actually helped.
 
 > The rule the whole layer enforces: **apps ask for a capability, never a provider.** There is no `Twenty → Apollo`
 > call site anywhere. `Twenty` asks for `PERSON_ENRICHMENT`; Discovery decides whether to acquire it and which
@@ -116,7 +111,7 @@ changed decision — and a verdict per `(provider, capability)`:
 Run the end-to-end demo (offline, no keys):
 
 ```bash
-PYTHONPATH=/path/to/runtime-contracts python examples/intelligence_moat_demo.py
+PYTHONPATH=/path/to/runtime-contracts python examples/intelligence_demo.py
 ```
 
 ## Historical outcome migration (WP7)
