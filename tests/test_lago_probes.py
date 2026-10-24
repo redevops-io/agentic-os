@@ -91,8 +91,25 @@ def cn(lago_id, cents, created=NOW - 300, status="succeeded"):
 REFREF = {"invoice_number": "INV-1001", "amount": "10.00"}
 
 
-def test_exactly_one_matching_refund_since_the_call_is_positive_but_described_as_consistent_not_identified():
+def test_exactly_one_matching_refund_is_not_proof_by_default_it_names_the_candidate_for_a_person():
     p = LagoProbes(Fake({("/api/v1/credit_notes", "INV-1001"): (200, notes(cn("a", 1000)), {})}))
+    r = p.refund(ctx(REFREF))
+    assert r.outcome is O.INCONCLUSIVE and r.provider_ref == "a" and r.result is None and r.evidence is None
+    assert "unrelated" in r.detail and "person must confirm" in r.detail
+
+
+def test_an_unrelated_refund_with_the_same_invoice_and_amount_inside_the_window_is_never_silently_certain():
+    """A person refunds INV-1001 for $10 while our own refund call (same invoice, same amount) is still unknown: the two are indistinguishable at Lago."""
+    ours_never_landed = notes(cn("someone-elses", 1000, created=DISPATCHED + 30))
+    p = LagoProbes(Fake({("/api/v1/credit_notes", "INV-1001"): (200, ours_never_landed, {})}))
+    assert p.refund(ctx(REFREF)).outcome is O.INCONCLUSIVE
+    both = LagoProbes(Fake({("/api/v1/credit_notes", "INV-1001"): (200, notes(cn("a", 1000), cn("b", 1000, created=DISPATCHED + 5)), {})}))
+    assert both.refund(ctx(REFREF)).outcome is O.INCONCLUSIVE
+    assert register_lago(ProbeRegistry(), Fake({})).accept_unique_refund_match is False
+
+
+def test_the_opt_in_confirms_a_unique_match_and_says_it_is_not_identified():
+    p = LagoProbes(Fake({("/api/v1/credit_notes", "INV-1001"): (200, notes(cn("a", 1000)), {})}), accept_unique_refund_match=True)
     r = p.refund(ctx(REFREF))
     assert r.outcome is O.CONFIRMED_EXECUTED and r.result["refunded_cents"] == 1000 and r.provider_ref == "a"
     assert "consistent with the request, not identified by it" in r.detail
@@ -112,12 +129,12 @@ def test_no_matching_refund_is_inconclusive_never_a_negative(rows, why):
 
 
 def test_a_refund_from_just_before_dispatch_inside_the_clock_skew_still_counts():
-    p = LagoProbes(Fake({("/api/v1/credit_notes", "INV-1001"): (200, notes(cn("a", 1000, created=DISPATCHED - SKEW_S + 5)), {})}))
+    p = LagoProbes(Fake({("/api/v1/credit_notes", "INV-1001"): (200, notes(cn("a", 1000, created=DISPATCHED - SKEW_S + 5)), {})}), accept_unique_refund_match=True)
     assert p.refund(ctx(REFREF)).outcome is O.CONFIRMED_EXECUTED
 
 
 def test_a_full_refund_matches_any_single_new_refund_credit_note():
-    p = LagoProbes(Fake({("/api/v1/credit_notes", "INV-1001"): (200, notes(cn("a", 4321)), {})}))
+    p = LagoProbes(Fake({("/api/v1/credit_notes", "INV-1001"): (200, notes(cn("a", 4321)), {})}), accept_unique_refund_match=True)
     assert p.refund(ctx({"invoice_number": "INV-1001", "full_refund": True})).outcome is O.CONFIRMED_EXECUTED
 
 
