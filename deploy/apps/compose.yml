@@ -21,6 +21,9 @@
 #
 # Requires a host with >= 32 GB RAM (Twenty + Metabase + Postiz + Postgres are heavy).
 # ---------------------------------------------------------------------------
+# EGRESS: to put this stack on an internal network behind an allowlist proxy (no direct outbound access for the agents or the cores),
+# add the overlay:  docker compose -f compose.yml -f compose.egress.yml up -d   (see ../egress/README.md).
+#
 # IMAGE PINNING: every third-party image below is pinned by immutable digest (the "# was <tag>" comment names the
 # tag it replaced). They were the tags current on 2026-10-23 and are the exact images the six-agent install was
 # tested with. To update one: pull the new tag, run the install/journey tests, then replace the digest here.

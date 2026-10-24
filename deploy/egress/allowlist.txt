@@ -1,0 +1,18 @@
+# Egress allowlist: everything not listed here is refused (deny by default). Grammar and guarantees: deploy/egress/proxy.py.
+#   host[:ports] [private]     exact host, default port 443
+#   *.suffix[:ports]           any SUBDOMAIN, never the apex
+#   `private` marks an explicit private/loopback target; without it a name that resolves to a private, loopback,
+#   link-local or metadata address is refused even when listed.
+# Edit, then `docker compose kill -s HUP egress` (a bad file keeps the last good policy). Validate first:
+#   python deploy/egress/proxy.py --allowlist deploy/egress/allowlist.txt --check
+
+# The local model server the stack uses by default (REDEVOPS_LLM_BASE_URL). Delete this line if the model is hosted elsewhere.
+host.docker.internal:8000 private
+
+# Enable only what you actually use. Each line is a destination every service in the stack can reach.
+# api.openai.com                  # hosted model provider
+# api.apollo.io                   # Revenue: outreach sequences
+# api.github.com                  # GitHub issues/PRs
+# *.googleapis.com                # Gmail send, Drive
+# graph.microsoft.com             # Microsoft 365
+# api.postiz.com                  # Postiz cloud (self-hosted Postiz needs the social networks' own API hosts)

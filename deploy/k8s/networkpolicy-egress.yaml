@@ -1,0 +1,92 @@
+# Egress boundary for a Kubernetes namespace running the apps (the cluster equivalent of deploy/apps/compose.egress.yml).
+#
+#   kubectl apply -f deploy/k8s/networkpolicy-egress.yaml
+#
+# 1. Every pod in the namespace is denied all egress by default.
+# 2. Every pod may reach DNS and the OTHER pods of the same namespace (the console reaching the agents, the agents reaching their
+#    databases, and the egress proxy). Nothing outside the namespace.
+# 3. Only the egress proxy pod may reach the outside, on 443/80, and never private ranges, the node or the metadata service
+#    (what it forwards is decided by its allowlist, a ConfigMap).
+# So the proxy is the one exit. Set HTTP_PROXY/HTTPS_PROXY=http://egress-proxy:3128 on the workloads and NO_PROXY for in-cluster
+# Services. Needs a CNI that enforces NetworkPolicy (Cilium, Calico, Azure CNI with a policy engine); without one this file does nothing.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: redevops-apps
+  labels: {pod-security.kubernetes.io/enforce: restricted}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: default-deny-egress, namespace: redevops-apps}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: allow-dns-and-same-namespace, namespace: redevops-apps}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+    - to:
+        - podSelector: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: egress-proxy-outbound, namespace: redevops-apps}
+spec:
+  podSelector:
+    matchLabels: {app: egress-proxy}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10]   # never the cluster, the node or the metadata service
+      ports: [{protocol: TCP, port: 443}, {protocol: TCP, port: 80}]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: egress-allowlist, namespace: redevops-apps}
+data:
+  allowlist.txt: |
+    # deny by default; grammar in deploy/egress/proxy.py. Add only what the workloads actually use.
+    # api.openai.com
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: egress-proxy, namespace: redevops-apps}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: egress-proxy}}
+  template:
+    metadata: {labels: {app: egress-proxy}}
+    spec:
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: proxy
+          image: ghcr.io/redevops-io/agentic-egress@sha256:REPLACE_WITH_THE_PUBLISHED_DIGEST   # build deploy/egress, publish, sign, pin by digest
+          args: ["--listen", "0.0.0.0:3128", "--allowlist", "/etc/egress/allowlist.txt"]
+          ports: [{containerPort: 3128}]
+          readinessProbe: {httpGet: {path: /healthz, port: 3128}, periodSeconds: 10}
+          resources: {requests: {cpu: 25m, memory: 48Mi}, limits: {memory: 128Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: allowlist, mountPath: /etc/egress, readOnly: true}]
+      volumes: [{name: allowlist, configMap: {name: egress-allowlist}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: egress-proxy, namespace: redevops-apps}
+spec:
+  selector: {app: egress-proxy}
+  ports: [{port: 3128, targetPort: 3128}]

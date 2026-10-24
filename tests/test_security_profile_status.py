@@ -76,3 +76,38 @@ def test_cli_exit_codes(monkeypatch, capsys):
     assert pr.main(["--require-production"]) == 1
     assert "AGENTIC_OS_AUTHORITY_DB" in capsys.readouterr().out
     assert pr.main([]) == 0                               # plain run only reports
+
+
+def test_egress_proxy_is_reported_without_leaking_credentials():
+    assert pr.egress_proxy({}) == ""
+    assert pr.egress_proxy({"HTTPS_PROXY": "http://egress:3128"}) == "egress:3128"
+    assert pr.egress_proxy({"https_proxy": "http://user:s3cretpass@proxy.internal:8080"}) == "proxy.internal:8080"
+    assert pr.egress_proxy({"HTTPS_PROXY": "egress"}) == "egress"
+
+
+def test_posture_advises_in_production_when_no_proxy_and_the_preflight_can_require_one(monkeypatch):
+    monkeypatch.setenv("AGENTIC_OS_PROFILE", "production")
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.delenv("https_proxy", raising=False)
+    st = pr.status()
+    assert st["egress_proxy_configured"] is False and any("egress proxy" in a for a in st["advisories"])
+    assert not any("egress" in w for w in st["warnings"])                                  # advisory: does not flip ok
+    assert not any("egress" in p for p in pr.check_environment(GOOD))                        # advisory by default
+    assert any("egress proxy" in p for p in pr.check_environment(GOOD, require_egress=True))
+    assert pr.check_environment({**GOOD, "HTTPS_PROXY": "http://egress:3128"}, require_egress=True) == []
+    monkeypatch.setenv("HTTPS_PROXY", "http://egress:3128")
+    assert pr.status()["egress_proxy_configured"] is True
+
+
+def test_cli_require_egress_flag(monkeypatch, capsys):
+    monkeypatch.delenv("AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS", raising=False)
+    monkeypatch.delenv("AGENTIC_OS_TENANT_TOKENS", raising=False)
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    monkeypatch.delenv("https_proxy", raising=False)
+    for k, v in GOOD.items():
+        monkeypatch.setenv(k, v)
+    assert pr.main(["--require-production"]) == 0
+    assert pr.main(["--require-production", "--require-egress"]) == 1
+    assert "egress proxy" in capsys.readouterr().out
+    monkeypatch.setenv("HTTPS_PROXY", "http://egress:3128")
+    assert pr.main(["--require-production", "--require-egress"]) == 0
