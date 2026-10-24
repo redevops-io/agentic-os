@@ -54,6 +54,7 @@ class Grant:
     max_calls: int | None = None           # cumulative
     rate_calls: int | None = None          # at most this many calls ...
     rate_window_s: float = 3600.0          # ... per this many seconds
+    covers_dynamic_risk: bool = False      # owner opt-in: may also stand in for a score-based risk gate (never regulatory)
 
     def __post_init__(self) -> None:
         # one canonical number type per field, so a digest is the same before and after a JSON round-trip
@@ -61,6 +62,7 @@ class Grant:
             v = getattr(self, f)
             object.__setattr__(self, f, None if v is None else t(v))
         object.__setattr__(self, "max_tier", int(self.max_tier))
+        object.__setattr__(self, "covers_dynamic_risk", bool(self.covers_dynamic_risk))
         object.__setattr__(self, "rate_window_s", float(self.rate_window_s))
 
     def covers(self, other: "Grant") -> bool:
@@ -74,7 +76,7 @@ class Grant:
                 return False
             if not all(any(fnmatchcase(t, p) for p in patterns) for t in theirs[key]):
                 return False
-        if other.max_tier > self.max_tier:
+        if other.max_tier > self.max_tier or (other.covers_dynamic_risk and not self.covers_dynamic_risk):
             return False
         for a, b in ((self.max_amount, other.max_amount), (self.max_total_amount, other.max_total_amount),
                      (self.max_calls, other.max_calls)):
@@ -141,7 +143,8 @@ class AuthorityEnvelope:
             max_tier=int(g.get("max_tier", 1)), amount_param=g.get("amount_param", "amount"),
             max_amount=g.get("max_amount"), max_total_amount=g.get("max_total_amount"),
             max_calls=g.get("max_calls"), rate_calls=g.get("rate_calls"),
-            rate_window_s=float(g.get("rate_window_s", 3600.0))) for g in d.get("grants", ()))
+            rate_window_s=float(g.get("rate_window_s", 3600.0)),
+            covers_dynamic_risk=bool(g.get("covers_dynamic_risk", False))) for g in d.get("grants", ()))
         return cls(
             tenant=d["tenant"], principal=d["principal"], mission_id=d["mission_id"], goal=d.get("goal", ""),
             acceptance=tuple(d.get("acceptance", ())), grants=grants, forbidden=tuple(d.get("forbidden", ())),
@@ -225,6 +228,8 @@ class UsageLedger(Protocol):
 
 
 class MemoryLedger:
+    durable = False
+
     def __init__(self) -> None:
         self._c: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
         self._w: dict[tuple[str, str], deque] = defaultdict(deque)
@@ -263,6 +268,8 @@ class MemoryLedger:
 
 class SqliteLedger:
     """Durable, multi-process counters (one `BEGIN IMMEDIATE` transaction per reserve)."""
+    durable = True
+
     def __init__(self, path: str) -> None:
         self.path = path
         with self._conn() as c:
@@ -323,13 +330,18 @@ class EnvelopeStore(Protocol):
     def put(self, env: AuthorityEnvelope) -> None: ...
     def epoch(self, tenant: str) -> int: ...
     def revoke_all(self, tenant: str) -> int: ...
+    def revoke(self, mission_id: str) -> None: ...
+    def is_revoked(self, mission_id: str) -> bool: ...
 
 
 class MemoryEnvelopeStore:
     """Authoritative store. Only owner/platform code calls `put`/`revoke_all`; the gateway only calls `get`."""
+    durable = False
+
     def __init__(self) -> None:
         self._e: dict[str, AuthorityEnvelope] = {}
         self._epoch: dict[str, int] = defaultdict(int)
+        self._revoked: set[str] = set()
 
     def get(self, mission_id):
         return self._e.get(mission_id)
@@ -343,6 +355,86 @@ class MemoryEnvelopeStore:
     def revoke_all(self, tenant):
         self._epoch[tenant] += 1
         return self._epoch[tenant]
+
+    def revoke(self, mission_id):
+        self._revoked.add(mission_id)
+
+    def is_revoked(self, mission_id):
+        return mission_id in self._revoked
+
+
+class SqliteEnvelopeStore:
+    """Durable authority: survives restarts and is shared by replicas on the same database file. Every `put`
+    is a new immutable version (history is kept for audit); `get` returns the latest. Revocation is durable
+    and takes effect on the next decision of any process."""
+    durable = True
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        with self._conn() as c:
+            c.execute("CREATE TABLE IF NOT EXISTS envelopes (mission_id TEXT, version INTEGER, digest TEXT NOT NULL, "
+                      "body TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY (mission_id, version))")
+            c.execute("CREATE TABLE IF NOT EXISTS epochs (tenant TEXT PRIMARY KEY, epoch INTEGER NOT NULL)")
+            c.execute("CREATE TABLE IF NOT EXISTS revoked (mission_id TEXT PRIMARY KEY, at REAL NOT NULL)")
+
+    def _conn(self) -> sqlite3.Connection:
+        c = sqlite3.connect(self.path, timeout=30, isolation_level=None)
+        c.execute("PRAGMA journal_mode=WAL")
+        return c
+
+    def get(self, mission_id):
+        c = self._conn()
+        try:
+            r = c.execute("SELECT body FROM envelopes WHERE mission_id=? ORDER BY version DESC LIMIT 1", (mission_id,)).fetchone()
+        finally:
+            c.close()
+        return AuthorityEnvelope.from_dict(json.loads(r[0])) if r else None
+
+    def put(self, env):
+        body = json.dumps(env.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        c = self._conn()
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            v = c.execute("SELECT COALESCE(MAX(version),0)+1 FROM envelopes WHERE mission_id=?", (env.mission_id,)).fetchone()[0]
+            c.execute("INSERT INTO envelopes (mission_id, version, digest, body, created) VALUES (?,?,?,?,?)",
+                      (env.mission_id, v, env.digest(), body, time.time()))
+            c.execute("COMMIT")
+        except BaseException:
+            try:
+                c.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise
+        finally:
+            c.close()
+
+    def versions(self, mission_id: str) -> list[tuple[int, str]]:
+        with self._conn() as c:
+            return list(c.execute("SELECT version, digest FROM envelopes WHERE mission_id=? ORDER BY version", (mission_id,)))
+
+    def epoch(self, tenant):
+        with self._conn() as c:
+            r = c.execute("SELECT epoch FROM epochs WHERE tenant=?", (tenant,)).fetchone()
+        return r[0] if r else 0
+
+    def revoke_all(self, tenant):
+        c = self._conn()
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            c.execute("INSERT INTO epochs (tenant, epoch) VALUES (?,1) ON CONFLICT(tenant) DO UPDATE SET epoch=epoch+1", (tenant,))
+            e = c.execute("SELECT epoch FROM epochs WHERE tenant=?", (tenant,)).fetchone()[0]
+            c.execute("COMMIT")
+            return e
+        finally:
+            c.close()
+
+    def revoke(self, mission_id):
+        with self._conn() as c:
+            c.execute("INSERT OR IGNORE INTO revoked (mission_id, at) VALUES (?,?)", (mission_id, time.time()))
+
+    def is_revoked(self, mission_id):
+        with self._conn() as c:
+            return c.execute("SELECT 1 FROM revoked WHERE mission_id=?", (mission_id,)).fetchone() is not None
 
 
 # ── evaluation ──────────────────────────────────────────────────────────────────────────────────────
@@ -413,6 +505,13 @@ def evaluate(env: AuthorityEnvelope, action: Action, *, now: float | None = None
              {"add_resource": {"capability": action.capability, "argument": scope_fail}})
 
 
+@dataclass(frozen=True)
+class Standing:
+    """What the approval gate that a standing grant is asked to satisfy looked like."""
+    risk_fired: bool = False       # a score-based dynamic-risk rule was among the reasons
+    risk_waivable: bool = True     # false when the risk is regulatory or the actor is not permissioned: never waived
+
+
 class AuthorityGuard:
     """Enforcement: scope check, then atomic counter reservation. `envelopes` is trusted state; the
     caller supplies only a mission id, never an envelope."""
@@ -422,18 +521,38 @@ class AuthorityGuard:
         self.ledger = ledger or MemoryLedger()
         self.clock = clock
 
+    @property
+    def durable(self) -> bool:
+        return bool(getattr(self.envelopes, "durable", False) and getattr(self.ledger, "durable", False))
+
     def authorize_delegation(self, mission_id: str, tenant: str) -> tuple[Decision, "AuthorityEnvelope | None"]:
         """May this authority start a child mission? Reserves one unit of the child quota when it may."""
         return _delegation(self, mission_id, tenant)
 
-    def authorize(self, mission_id: str, tenant: str, action: Action) -> Decision:
+    def authorize(self, mission_id: str, tenant: str, action: Action, standing: "Standing | None" = None) -> Decision:
+        """`standing` is set when the owner's grant is being asked to stand in for an ordinary approval gate:
+        the grant must then be explicit (no bare wildcard) and, if a score-based risk gate also fired, must
+        opt in to covering it. Without it this is a plain scope + limits check."""
         env = self.envelopes.get(mission_id)
         if env is None or env.tenant != tenant:      # unknown, or another tenant's: indistinguishable
             return Decision(Verdict.DENY, "no_authority", "no authority is recorded for this mission")
         now = self.clock()
+        if self.envelopes.is_revoked(env.mission_id):
+            return Decision(Verdict.DENY, "revoked", "this authority was revoked", None, env.digest())
         dec = evaluate(env, action, now=now, current_epoch=self.envelopes.epoch(env.tenant))
         if dec.verdict is not Verdict.ALLOW:
             return dec
+        if standing is not None:
+            g0 = env.grants[dec.grant_index]
+            if g0.capability.strip("*") == "":
+                return Decision(Verdict.ESCALATE, "grant_not_explicit",
+                                "a bare wildcard grant cannot stand in for an approval",
+                                {"narrow_grant": {"capability": action.capability}}, dec.envelope_digest)
+            if standing.risk_fired and not (standing.risk_waivable and g0.covers_dynamic_risk):
+                return Decision(Verdict.ESCALATE, "risk_not_waived",
+                                "a score-based risk gate fired and this grant does not cover it",
+                                {"raise_grant": {"capability": g0.capability, "covers_dynamic_risk": True}}
+                                if standing.risk_waivable else None, dec.envelope_digest)
         gi = dec.grant_index
         g = env.grants[gi]
         amt = _amount(g, action.arguments)
@@ -457,12 +576,33 @@ class AuthorityGuard:
         return dec
 
 
+ENV_REQUIRE = "AGENTIC_OS_REQUIRE_AUTHORITY"
+ENV_DB = "AGENTIC_OS_AUTHORITY_DB"
+
+
+def authority_required() -> bool:
+    import os
+    return os.environ.get(ENV_REQUIRE, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def authority_from_env() -> "AuthorityGuard | None":
+    """Production wiring. With `AGENTIC_OS_AUTHORITY_DB` set, a durable store and ledger back the guard.
+    With `AGENTIC_OS_REQUIRE_AUTHORITY=1` and no database, refuse to start rather than run without authority."""
+    import os
+    path = os.environ.get(ENV_DB, "").strip()
+    if not path:
+        if authority_required():
+            raise RuntimeError(f"{ENV_REQUIRE}=1 but {ENV_DB} is not set: refusing to run without durable authority")
+        return None
+    return AuthorityGuard(SqliteEnvelopeStore(path), SqliteLedger(path + ".usage"))
+
+
 def _delegation(guard: "AuthorityGuard", mission_id: str, tenant: str) -> tuple[Decision, "AuthorityEnvelope | None"]:
     env = guard.envelopes.get(mission_id)
     if env is None or env.tenant != tenant:
         return Decision(Verdict.DENY, "no_authority", "no authority is recorded for this mission"), None
     now = guard.clock()
-    if env.revocation_epoch < guard.envelopes.epoch(env.tenant):
+    if guard.envelopes.is_revoked(env.mission_id) or env.revocation_epoch < guard.envelopes.epoch(env.tenant):
         return Decision(Verdict.DENY, "revoked", "this authority was revoked", None, env.digest()), env
     if not (now < env.expires_at):
         return Decision(Verdict.DENY, "expired", "this authority has expired", None, env.digest()), env

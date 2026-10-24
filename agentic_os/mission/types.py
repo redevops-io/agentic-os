@@ -582,6 +582,11 @@ class ApprovalDecision:
     policy_ref: str = ""                                  # "finance-prod@12"
     policy_digest: str = ""                               # "sha256:…" — replayable policy identity
     explain: dict = field(default_factory=dict)           # {matched_rule, reason, suggested_action, trace}
+    # mission-authority/v1 — an owner's standing grant MAY stand in for this gate. Set only when every reason
+    # the gate fired is an explicitly migrated, ordinary one; never when a mandatory/regulatory reason exists.
+    standing_eligible: bool = False
+    risk_fired: bool = False                              # a score-based dynamic-risk rule is among the reasons
+    risk_waivable: bool = True                            # false: regulatory / not permissioned, never waived
 
 
 def to_jsonable(obj: Any) -> Any:

@@ -745,6 +745,9 @@ class MissionRuntime:
                 if getattr(decision, "denied", False):    # a policy DENY rule — hard block, no human gate
                     self._block_denied(m, n, decision)
                     return m
+                if decision.required and self._standing_grant(m, n, decision, world):
+                    runnable.append((n, decision))        # the owner's standing grant stood in for this ordinary gate
+                    continue
                 (gated if decision.required else runnable).append((n, decision))
 
             # Execute the ready wave: independent nodes run concurrently (bounded) when max_concurrency>1,
@@ -793,6 +796,48 @@ class MissionRuntime:
             "serialization_reason": {r["node"]: r["reason"] for r in serialized},
             "explain": rows,
         })
+
+    #: mission-authority/v1. An `AuthorityGuard` (owner/platform-issued, trusted state) that may stand in for an
+    #: ORDINARY approval gate when a node's decision is `standing_eligible`. Unset by default: behaviour unchanged.
+    authority = None
+    authority_key = None          # optional callable(mission) -> envelope id
+
+    def _authority_key(self, m: Mission) -> str:
+        if callable(self.authority_key):
+            return self.authority_key(m)
+        if self.authority.envelopes.get(str(m.id)) is not None:
+            return str(m.id)
+        p = m.principal
+        subject = getattr(p, "subject", None) or getattr(p, "id", None) or (p if isinstance(p, str) else "")
+        return f"{m.tenant}:{subject}" if (m.tenant and subject) else ""
+
+    def _standing_grant(self, m: Mission, node, decision, world: WorldState) -> bool:
+        """May the owner's standing grant stand in for this node's approval gate? The grant is evaluated against
+        the exact effective action (resolved inputs, tenant, cost) at the moment of dispatch and its counters are
+        reserved atomically, so concurrent nodes and missions cannot spend the same allowance twice. Anything
+        short of an ALLOW (no/expired/revoked grant, limit reached, mandatory gate) leaves the normal human gate."""
+        guard = self.authority
+        if guard is None or not getattr(decision, "standing_eligible", False) or not m.tenant:
+            return False
+        key = self._authority_key(m)
+        if not key:
+            return False
+        from .authority import Action, Standing  # noqa: PLC0415
+        args = {k: v for k, v in self._resolve_inputs(m, world, node).items() if not str(k).startswith("_")}
+        cost = getattr(node, "cost", None)
+        action = Action(capability=node.capability, arguments=args, risk_tier=1 if node.side_effecting else 0,
+                        side_effecting=bool(node.side_effecting), cost_usd=float(getattr(cost, "usd", 0.0) or 0.0),
+                        tokens=int(getattr(cost, "tokens", 0) or 0))
+        res = guard.authorize(key, m.tenant, action, Standing(decision.risk_fired, decision.risk_waivable))
+        base = {"node_id": node.id, "capability": node.capability, "rules": list(decision.rules),
+                "policy_digest": getattr(decision, "policy_digest", ""), "envelope_digest": res.envelope_digest,
+                "inputs_digest": self._node_inputs_digest(m, world, node)}
+        if res.allowed:
+            self.store.append("StandingGrantApplied", m.id, {**base, "grant_index": res.grant_index})
+            return True
+        self.store.append("StandingGrantDeclined", m.id, {**base, "verdict": res.verdict.value, "rule": res.rule,
+                                                          "amendment": res.amendment})
+        return False
 
     def _pre_exec_ok(self, m: Mission, plan: ExecutionPlan, node) -> bool:
         """Node-admission seam, evaluated BEFORE dispatch (no operator has run, nothing to compensate).

@@ -131,6 +131,12 @@ class AgentGateway:
     def capabilities_for(self, principal: GatewayPrincipal) -> list:
         return [m.public_view() for m in self.registry.visible_for(principal, self.authorize)]
 
+    def __post_init__(self) -> None:
+        from agentic_os.mission.authority import authority_required   # noqa: PLC0415
+        if authority_required() and (self.authority is None or not getattr(self.authority, "durable", False)):
+            raise RuntimeError("AGENTIC_OS_REQUIRE_AUTHORITY=1: the gateway needs a durable AuthorityGuard "
+                               "(see authority_from_env); refusing to serve without enforceable authority")
+
     def invoke(self, request: GatewayRequest) -> GatewayResult:
         start = time.time()
         gp = request.principal
@@ -153,13 +159,16 @@ class AgentGateway:
         tier = manifest.risk_tier
 
         # 1b. authority envelope (fail-closed when configured): scope, resources, limits, expiry, revocation.
-        envelope = None
+        standing_ok = False
         if self.authority is not None:
-            from agentic_os.mission.authority import Action, Verdict   # local: keeps the gateway importable alone
+            from agentic_os.mission.authority import Action, Standing, Verdict   # local: keeps the gateway importable alone
             key = (self.authority_key(gp) if self.authority_key else f"{gp.tenant}:{gp.subject}")
+            # An ORDINARY approval policy (REQUIRED) may be satisfied in advance by an explicit grant the owner
+            # raised to this tier; MANDATORY never is, and IF_POLICY is unchanged.
+            ordinary = manifest.effective_approval_policy is ApprovalPolicy.REQUIRED
             adec = self.authority.authorize(key, gp.tenant, Action(
                 capability=request.capability, arguments=dict(request.arguments), risk_tier=int(tier),
-                side_effecting=bool(manifest.side_effecting)))
+                side_effecting=bool(manifest.side_effecting)), Standing() if ordinary else None)
             if self.on_authority:
                 try:
                     self.on_authority(request, adec)
@@ -172,7 +181,7 @@ class AgentGateway:
                                     policy_rule_ids=(f"authority:{adec.rule}",))
                 return self._finalize(request, start, GatewayResult(request.request_id, GatewayStatus.PENDING_APPROVAL, d),
                                       exposed_reason="permitted")
-            envelope = self.authority.envelopes.get(key)
+            standing_ok = ordinary and adec.allowed
 
         # 2. budget / rate limit
         ok, why, budget_rules = self.budget.check(gp, manifest)
@@ -187,11 +196,15 @@ class AgentGateway:
             or (policy is ApprovalPolicy.IF_POLICY and not self._policy_allows(gp, manifest)))
         approval_satisfied = (
             self.approvals.is_satisfied(request, manifest) if approval_required else False)
+        standing_rule: tuple = ()
+        if approval_required and not approval_satisfied and standing_ok and policy is ApprovalPolicy.REQUIRED:
+            approval_satisfied = True                     # the owner's standing grant covers this exact call
+            standing_rule = ("authority:standing_grant",)
 
         decision = GatewayDecision(
             allowed=True, reason="permitted", risk_tier=tier,
             approval_required=approval_required, approval_satisfied=approval_satisfied,
-            egress_action=EgressAction.ALLOW, policy_rule_ids=budget_rules, budget_ok=True)
+            egress_action=EgressAction.ALLOW, policy_rule_ids=tuple(budget_rules) + standing_rule, budget_ok=True)
 
         # 4. approval gate for DIRECT side effects — block before any execution.
         #    (MISSION delegation is allowed to start; the mission gates its own side effects.)
