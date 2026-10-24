@@ -286,3 +286,34 @@ fresh-lease bug: 35; attempts not restored: 2). Root suite: same 13 failures as 
 (`UNKNOWN_EFFECT`); only the serial and concurrent-wave paths park. (3) One driver per mission is still assumed across replicas (the run lock is in-process): the ledger prevents a duplicate send, but two replicas driving
 one mission could both record events. (4) A reconciled `executed` node with no downstream reader is completed with a placeholder result flagged `reconciled`; a person asserting "it executed" is trusted to the extent of their
 evidence, which is recorded.
+
+## Step 9: the reconciliation supervisor, mission ownership with fencing, independent progress (first of two supervisor PRs)
+Owner decision (2026-10-24): use bounded retries with backoff before escalating, but never retry the business action while its outcome is UNKNOWN; only the read-only probe repeats. A non-authoritative
+"not found" means not observed, not confirmed not executed, and the supervisor, not each adapter, enforces that. Guide for adapter authors: `docs/RECONCILIATION_PROBES.md`.
+**Implemented**
+* **Evidence contracts (`mission/probes.py`).** A probe returns a structured `ProbeResult` (CONFIRMED_EXECUTED, CONFIRMED_NOT_EXECUTED, INCONCLUSIVE, TRANSIENT_ERROR, UNSUPPORTED) with evidence provenance, provider reference,
+  observed time, the real result and Retry-After. Each adapter is registered with a `Qualification` (eventually consistent, documented visibility window, authoritative-negative). The registry judges every answer: a negative is accepted only
+  from a qualified adapter, marked authoritative by the result, with evidence, and past the visibility window; a positive needs usable evidence provenance; everything else is downgraded. A generic HTTP 404 is INCONCLUSIVE (`from_http_status`).
+* **Durable scheduler and the policy table (`mission/reconcile_jobs.py`).** Executed with evidence: settle, restore the result, resume. Authoritative negative: release, re-gate, retry the action once. Non-authoritative not-found and
+  transient errors: retry the probe with exponential backoff, jitter and a bounded Retry-After. Unsupported, conflicting evidence, a positive that later steps need but that carries no result, and an exhausted budget: escalate; the
+  mission stays waiting and **nothing is resent**. Probe attempts, the next eligible time, the last result, the escalation and its notification state live in SQLite: a restart does not reset a budget (5 probes total across processes,
+  not 5 per process), replicas claim a job with a compare-and-swap and a stale claimant is fenced out by a claim token, an expired claim returns a crashed worker's job, and the escalation transition happens exactly once. The first probe waits
+  for the adapter's documented visibility horizon.
+* **Mission ownership with fencing (`mission/ownership.py`).** A durable lease per mission with a monotonically increasing fencing token (a takeover always advances it, a release never moves it back); `FencedEventStore` checks the token INSIDE the append, in the
+  same critical section under SQLite's write lock, so a stale driver cannot interleave with the new owner (a test holds an in-flight write and shows the takeover blocks behind it). A heartbeat renews a live owner; a lost lease stops writes. The supervisor takes the
+  mission lease around a resume and, if another replica owns the mission, skips it without spending an attempt.
+* **Independent progress.** A node awaiting reconciliation blocks only itself and (transitively) its dependents; independent ready nodes keep running, including in later waves, and a flat plan completes everything that does not depend on the unknown node.
+  When nothing independent is left the mission waits and writes nothing. Dependents stay blocked until reconciliation. In a concurrent wave the siblings' results are committed.
+* **Wait-state classification (`mission/waitstate.py`).** `WAITING_RECONCILIATION` (scheduled observation or escalated), a human approval, paused, active and genuinely hung are distinguished; only a RUNNING mission with nothing recorded for too long is
+  `watchdog_eligible`, so a healthy waiting mission is never sent into automatic replanning.
+**Evidence.** 40 new tests plus the 39 from #554 (79 together). Twelve deliberate breakages are each caught: accepting a negative from an unqualified adapter (found only after I added a case isolating it from the consistency rule), ignoring the visibility window,
+resending when the budget is exhausted (8 failures), dropping the contradiction check, not checking the claim token, resetting a job on rescan (21), re-claiming sent notifications, not checking the fence at append, a check that is not in the writer's critical section,
+not blocking dependents (found only after I added a multi-wave case: it showed a duplicate refusal written every wave), non-transitive blocking, and calling a waiting mission hung. Root suite: the same 13 failures as main; apps: 2,014 passed.
+**Not done, stated plainly**
+* **No provider adapters ship.** The contract, enforcement and scheduler are in place, but nothing registers a probe for Lago, Gmail, Postiz, Apollo etc. With no adapter a job escalates as "no reliable lookup" and a person reconciles; automatic resolution begins when an adapter is written and
+  qualified for that provider. Qualifying an adapter (is its lookup strongly consistent by our idempotency key?) is a per-provider fact this code cannot know.
+* **Fencing has a stated limit.** It serialises writers that share the lease database (replicas on one host or a shared filesystem). A mission log that cannot take part in that critical section needs the log itself to reject stale writers (e.g. a conditional append on an owner epoch). The runtime
+  is not yet wired to drive every mission under a lease; only the supervisor's resume is. Driving all missions under a fenced lease belongs with the goal-loop controller. Lease expiry uses wall clocks: replicas with badly skewed clocks weaken it.
+* **Fork parity is not done.** Fork branches still use their own failure semantics (`UNKNOWN_EFFECT`); only serial and concurrent-wave nodes follow this contract. Do not claim general autonomous-swarm recoverability until fork outcomes join the same reconciliation contract.
+* **Notification delivery is at-least-once with a stable key**, not exactly-once: the escalation is recorded exactly once, a failing notifier is retried a bounded number of times, and a crash between a successful send and recording it can send once more (receivers dedupe on the key).
+* Backoff values are starting values, not provider guarantees. The goal-loop controller (renewable execution leases, soft versus hard limit ladder, diagnose-then-replan, verified completion, cancellation propagation) is the next PR.

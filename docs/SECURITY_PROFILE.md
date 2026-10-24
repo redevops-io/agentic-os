@@ -104,6 +104,13 @@ POST /missions/{id}/reconcile
 `not_executed` releases the reservation and the same mission re-runs the node once; `executed` settles it and marks the node done from the evidence. Completed work is never
 rerun; a requester credential can never reconcile; the actor is the credential; the evidence and reason are on the mission log. See `audit/AUTONOMY_AUTHORITY_AUDIT.md` step 8.
 
+## The reconciliation supervisor
+
+A parked unknown outcome is probed on a durable schedule by `ReconciliationSupervisor`: only the read-only probe repeats (bounded, with backoff), the business action never does while the
+outcome is unknown, and exhausting the budget escalates to a person instead of resending. Only positive execution evidence or an authoritative negative resolves it; a generic 404 or any
+non-authoritative "not found" is not observed, not confirmed absent. Independent branches of the mission keep running; only the node and its dependents wait. How to write a probe and what
+"authoritative" requires: `docs/RECONCILIATION_PROBES.md`. No provider adapters ship yet, so today every unknown outcome escalates to a person.
+
 ## Hard limits and reconciliation
 
 The serial mission loop enforces `deadline`, `wall_clock_s` (active run time of one driver segment), `usd` and `tokens`: a reached ceiling stops the mission with a
