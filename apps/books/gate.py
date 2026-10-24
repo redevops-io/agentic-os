@@ -44,4 +44,7 @@ def is_operator(request) -> bool:
 
 def operator_approval(request):
     """The marker the ROUTE injects into the core call, or ``None`` (staged preview only)."""
-    return dict(OPERATOR_MARKER) if is_operator(request) else None
+    if is_operator(request):
+        return dict(OPERATOR_MARKER)
+    from agentic_os.app_kit.route_authz import current_marker
+    return current_marker()      # earned from an authenticated context by the route-authorization layer, never the body

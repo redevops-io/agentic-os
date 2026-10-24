@@ -1,0 +1,45 @@
+{
+  "doc": "Reviewed classification of non-REST entry types in apps/*. tests/test_entrypoint_inventory.py fails when an entry type appears or disappears without a matching entry here.",
+  "entries": [
+    {
+      "app": "_suite-server",
+      "file": "serve.py",
+      "kind": "mounted_subapp",
+      "name": "_parent.mount",
+      "classification": "reviewed",
+      "rationale": "Composes the apps' own ASGI apps under one server; each mounted app carries its own route policies (route_authz) and operator boundary. The mount adds no route of its own."
+    },
+    {
+      "app": "billing",
+      "file": "loop_api.py",
+      "kind": "background_thread_or_task",
+      "name": "threading.Thread",
+      "classification": "reviewed",
+      "rationale": "Outcome observer, off unless BILLING_OUTCOME_INTERVAL_S > 0. Its tick only observes due outcomes (a read from Lago plus recording learning); it takes the loop lock non-blocking and never refits or executes. No external write."
+    },
+    {
+      "app": "billing",
+      "file": "loop_api.py",
+      "kind": "lifecycle_hook",
+      "name": "_shutdown",
+      "classification": "reviewed",
+      "rationale": "Router startup/shutdown: rehydrates parked missions and starts/stops the optional observer above. No request-reachable effect."
+    },
+    {
+      "app": "billing",
+      "file": "loop_api.py",
+      "kind": "lifecycle_hook",
+      "name": "_startup",
+      "classification": "reviewed",
+      "rationale": "Router startup/shutdown: rehydrates parked missions and starts/stops the optional observer above. No request-reachable effect."
+    },
+    {
+      "app": "growth-assistant",
+      "file": "app.py",
+      "kind": "background_thread_or_task",
+      "name": "threading.Thread",
+      "classification": "reviewed",
+      "rationale": "Detached job started by the public /api/chat route to run an in-app content-generation action chosen by the chat model. It passes no approval marker, so the core stages any consequential action (push_assets); the result lands in an in-memory job table."
+    }
+  ]
+}

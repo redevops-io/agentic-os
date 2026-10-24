@@ -42,9 +42,17 @@ class ActionAuthorizer:
             return refuse("mandatory_approval", "this capability always needs a human approval; it cannot be authorized "
                                                 "by a standing grant or a direct action", "escalate")
         clean = strip_exec_auth_keys(strip_approval_keys(dict(inputs or {})))
+        if getattr(spec, "route_access", None) == "stages_only" and str(clean.get("action", "")) not in tuple(
+                getattr(spec, "agent_actions", ()) or ()):
+            # a multiplexed route stages unless approved: an agent may approve only the actions the app lists for it
+            return refuse("human_action", f"'{clean.get('action')}' is not an action an agent may approve on this route; "
+                                          "it needs a human approval", "escalate")
         side = bool(spec.side_effecting)
         irreversible = side and not (getattr(spec, "undo", None) or getattr(spec, "compensation", None))
-        action = Action(capability=capability, arguments={k: v for k, v in clean.items() if not str(k).startswith("_")},
+        args = {k: v for k, v in clean.items() if not str(k).startswith("_")}
+        for k, v in (clean.get("_path_params") or {}).items():       # REST routes: path parameters are selectable resources
+            args[f"path.{k}"] = v
+        action = Action(capability=capability, arguments=args,
                         risk_tier=2 if irreversible else (1 if side else 0), side_effecting=side,
                         cost_usd=float(getattr(getattr(spec, "cost", None), "usd", 0.0) or 0.0))
         lease = f"direct:{uuid.uuid4().hex}"

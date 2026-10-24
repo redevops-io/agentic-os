@@ -81,6 +81,10 @@ def _strip_approval(obj):
 
 app = FastAPI(title=f"lifecycle ({TENANT} · core: Listmonk)")
 
+from agentic_os.app_kit import route_authz as _route_authz  # noqa: E402
+from .route_policy import APP as _APP, ROUTE_POLICIES as _ROUTE_POLICIES  # noqa: E402
+_route_authz.install(app, _APP, _ROUTE_POLICIES)   # one enforcement layer for every write route
+
 
 BASE_CSS = """
 :root{--surface:#131316;--surface-container-low:#1b1b1f;--surface-container:#1f1f23;
