@@ -28,6 +28,7 @@ _TERMINAL = (MissionState.SUCCEEDED, MissionState.FAILED, MissionState.CANCELLED
 class Wait(str, Enum):
     ACTIVE = "active"                            # running and recently doing something
     HUNG = "hung"                                # RUNNING but nothing recorded for too long: the one state for intervention
+    STALLED = "stalled"                          # a goal loop iterating without progress: the controller diagnoses and replans (not a watchdog case)
     WAITING_HUMAN = "waiting_human"              # blocked on a person's authority (an approval)
     WAITING_OBSERVATION = "waiting_observation"  # an unknown outcome is being probed on a schedule
     WAITING_ESCALATED = "waiting_escalated"      # an unknown outcome the supervisor could not resolve: a person must

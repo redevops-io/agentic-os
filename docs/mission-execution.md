@@ -6,6 +6,7 @@ Parallel branches inside a mission, and how unknown outcomes (plan nodes and for
 
 - [Mission fork/join](#mission-forkjoin) (was `MISSION_FORK_JOIN.md`)
 - [Writing a reconciliation probe](#writing-a-reconciliation-probe) (was `RECONCILIATION_PROBES.md`)
+- [Goal loop](#goal-loop)
 
 ## Mission fork/join
 
@@ -367,3 +368,22 @@ stays UNKNOWN, and the mission parks in `WAITING_RECONCILIATION`. Your probe, th
 
 What resolution does to the fork: **executed** completes the branch from the evidence (return the provider's real `result`; a branch that `produces` a fact requires it) and the same fork carries on, without rerunning branches that succeeded; **authoritative not-executed** makes the next attempt a
 new one under a fresh reservation if the branch has attempts left, otherwise the branch fails cleanly (not as an unknown effect). After a process restart the owner re-supplies the fork spec (`forks.register_spec`, then `run_fork`), because branch inputs are not in the log; until then the mission stays PAUSED.
+
+## Goal loop
+
+`agentic_os/mission/goal_loop.py` pursues a goal across iterations; each iteration is an ordinary mission, so every gate, reservation and reconciliation rule applies unchanged.
+
+```python
+loop = GoalLoop(runtime, driver, store=EventStore(path), verifier=check_goal, leases=MissionLeases(db))
+lid = loop.start(LoopSpec("onboard acct 42", limits=HardLimits(max_iterations=6, max_usd=20)))
+loop.run(lid)      # drive; call again any time (restart, after a reconciliation, after an escalation is resolved)
+loop.tick()        # a scheduler: continue every loop whose mission moved
+```
+
+* `driver.start(ctx)` creates (does not run) the iteration's mission and returns its id; `ctx.completed` holds the step signatures already done so it can skip them. `driver.replan(ctx)` returns guidance for the next iteration or `None` (no different approach: the loop escalates).
+* `verifier(ctx, mission)` returns `Verification(verified, evidence, reason)`. Evidence is validated like a reconciliation's; without a verifier the loop ends `completed_unverified`.
+* Hard limits stop the loop (`limit`); only `extend_limits(actor=..., reason=...)` raises them. Soft thresholds (`SoftThresholds`) diagnose, replan a bounded number of times, then escalate; `resolve_escalation(actor=..., decision="continue"|"stop", reason=...)` decides.
+* An unresolved reconciliation holds the loop (no new iteration, no replan). An authority denial, a mission-level ceiling, an unknown effect and a failed compensation escalate immediately.
+* Wait states: `classify_loop(state)`; only a quiet RUNNING loop is watchdog-eligible. Sentinel events go to `on_event`: LOOP_STALLED, BUDGET_NEAR_LIMIT, LOOP_ESCALATED, LOOP_LIMIT_REACHED, LOOP_COMPLETED, LOOP_CANCELLED.
+* In the production profile leases are required and the runtime's store must be a `FencedEventStore`. A leased mission can only be written by its lease holder, so a console that reconciles or cancels one takes the lease first.
+
