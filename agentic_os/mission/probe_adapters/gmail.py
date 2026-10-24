@@ -30,6 +30,19 @@ def default_http(access_token: str, base_url: str = "https://gmail.googleapis.co
     return httpx_get(base_url, {"Authorization": f"Bearer {access_token}"}, READ_PATHS, timeout, one_segment=True)
 
 
+def message_id_for(idempotency_key: str, domain: str) -> str:
+    """The `Message-ID` a caller should put on an outgoing message (`message_id` in `email.message.send`'s inputs): `<hex@domain>`, derived from the reservation's idempotency key, so that the same intended email always
+    has the same id (a retry, and this probe, reproduce it), a different one never does, and the key itself is not exposed in a header. `domain` is a domain the sender controls."""
+    import hashlib  # noqa: PLC0415
+    import re  # noqa: PLC0415
+    if not idempotency_key or not str(idempotency_key).strip():
+        raise ValueError("an idempotency key is needed to derive a Message-ID")
+    d = str(domain).strip().lower()
+    if not re.fullmatch(r"[a-z0-9.-]+\.[a-z]{2,}", d):
+        raise ValueError("domain must be a plain domain name like mail.example.com")
+    return f"<{hashlib.sha256(str(idempotency_key).encode()).hexdigest()[:32]}@{d}>"
+
+
 def derive_ref(inputs: dict) -> dict:
     """The sender's fields that identify the message (what `redevops-connectors`' `email.message.send` takes)."""
     out = {}
