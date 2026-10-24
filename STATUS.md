@@ -12,8 +12,8 @@ independently validated. "Production-ready" is not claimed.
 | Kernel test suite incl. N-invariant conformance gate | `pytest tests` -> **3229 passed, 39 skipped** (2026-10-15, `pip install -e ".[dev,duckdb]"`, without the connector fixtures env var, which may account for some skips). CI: `.github/workflows/tests.yml` |
 | Per-app suites | CI `tests` workflow (not re-run for this change) |
 | `agentic-os modules` lists the catalog | run 2026-10-15: 21 modules, matches `modules.yaml` |
-| Mission kernel: governed plan, approval gates, event-sourced replay | `tests/`, [docs/CONFORMANCE.md](docs/CONFORMANCE.md), [docs/COMPENSATION.md](docs/COMPENSATION.md), [docs/MISSION_FORK_JOIN.md](docs/MISSION_FORK_JOIN.md) |
-| Control-plane auth (mutating endpoints fail closed) | `tests/test_kernel_residuals.py`, [docs/CONTROL_PLANE_SECURITY.md](docs/CONTROL_PLANE_SECURITY.md) |
+| Mission kernel: governed plan, approval gates, event-sourced replay | `tests/`, [docs/CONFORMANCE.md](docs/CONFORMANCE.md), [docs/COMPENSATION.md](docs/COMPENSATION.md), [docs/mission-execution.md](docs/mission-execution.md#mission-forkjoin) |
+| Control-plane auth (mutating endpoints fail closed) | `tests/test_kernel_residuals.py`, [docs/security-model.md](docs/security-model.md#control-plane-auth-idempotency-cache-and-multi-replica-limits) |
 | Installing as a package from a git tag | the `mission-sdk` clean-room run installed `agentic-os` `v0.3.31` this way on 2026-10-15 (see mission-sdk `docs/QUICKSTART_VERIFIED.md`) |
 
 ## Proposed / not verified

@@ -282,7 +282,7 @@ class MissionRuntime:
 
     @property
     def forks(self):
-        """Fork/join controller (docs/MISSION_FORK_JOIN.md): parallel branches inside a Mission."""
+        """Fork/join controller (docs/mission-execution.md): parallel branches inside a Mission."""
         fc = getattr(self, "_forks", None)
         if fc is None:
             from .fork_join import ForkJoinController  # noqa: PLC0415 - lazy: forks are opt-in

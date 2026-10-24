@@ -1,10 +1,19 @@
-# Mission fork/join
+# Mission execution: fork/join and reconciliation
+
+Parallel branches inside a mission, and how unknown outcomes (plan nodes and fork branches alike) are reconciled. Compensation is in [COMPENSATION.md](COMPENSATION.md).
+
+## Contents
+
+- [Mission fork/join](#mission-forkjoin) (was `MISSION_FORK_JOIN.md`)
+- [Writing a reconciliation probe](#writing-a-reconciliation-probe) (was `RECONCILIATION_PROBES.md`)
+
+## Mission fork/join
 
 Status: implemented in `agentic_os/mission/fork_join.py` (Python spec) with event-folding parity in
 `go/mission/fork.go`. Owner decision (binding): **forks are parallel branches within an existing Mission, not
 independently authorized agents.**
 
-## 1. Principles
+### 1. Principles
 
 * The parent Mission owns authority, budget, deadline and cancellation. A branch has none of its own.
 * A branch is one capability invocation. It receives only the capability it declares (plus an explicit,
@@ -16,7 +25,7 @@ independently authorized agents.**
 * A failed branch never invalidates a successful sibling's recorded work, and successful branches are not
   compensated automatically. The Mission's declared failure policy decides (default `HALT_AND_REPORT`).
 
-## 2. Existing machinery that is extended (not duplicated)
+### 2. Existing machinery that is extended (not duplicated)
 
 | Existing | Used by forks |
 |---|---|
@@ -33,7 +42,7 @@ The only edits to `runtime.py` are: a lazy `forks` property and a 4-line hook at
 hands branch node ids to the fork controller. All logic lives in `fork_join.py` so the concurrently developed
 compensation module does not conflict.
 
-## 3. Data model
+### 3. Data model
 
 ```
 ForkSpec(fork_id, branches=[BranchSpec...], join=JoinSpec, max_concurrent=None,
@@ -59,7 +68,7 @@ JoinSpec(mode="all"|"any"|"quorum", k=None, timeout_s=None, on_timeout="fail"|"p
 * `ForkSpec` digest: sha256 of the canonical spec with input *hashes* (never input values), recorded in
   `ForkOpened`. Re-opening a fork id with a different digest is refused (replay divergence).
 
-## 4. Durable events
+### 4. Durable events
 
 All are mission-scoped (`mission_id` = parent). Payloads (additive; unknown keys ignored by readers):
 
@@ -78,7 +87,7 @@ All are mission-scoped (`mission_id` = parent). Payloads (additive; unknown keys
 `receipt` = `{fork_id, branch_id, node_id, capability, operator, attempt, idempotency_key, input_sha256,
 result_sha256, approved}`: it contains hashes only, never secrets or input values.
 
-### Fold / replay rules (`fold_fork(events, fork_id)`; `fold_forks`)
+#### Fold / replay rules (`fold_fork(events, fork_id)`; `fold_forks`)
 
 1. Events for a fork are applied in log order; the fold is a pure function of the event list (no clock, no
    randomness). Folded branch lists are emitted in `ForkOpened.branches` order, never completion order.
@@ -92,7 +101,7 @@ result_sha256, approved}`: it contains hashes only, never secrets or input value
 5. `JoinSatisfied` / `JoinFailed` close the fork; the first wins, later ones are ignored.
 6. Join evaluation (`evaluate_join`) is a pure function of terminal counts, so replay and live agree.
 
-### How existing readers treat the events
+#### How existing readers treat the events
 
 | Reader | Treatment |
 |---|---|
@@ -104,7 +113,7 @@ result_sha256, approved}`: it contains hashes only, never secrets or input value
 | evidence producers (`compliance/evidence_producers.py`) | Approval evidence for a branch flows through the reused approval events. Branch events are ignored (additive). |
 | Go store (`go/mission`) | Unknown types are ignored by every existing fold; `fork.go` folds the new events with the same rules and a shared golden fixture. |
 
-## 5. Scheduling
+### 5. Scheduling
 
 Deterministic given the plan: branches are considered strictly in `ForkOpened` order; a branch starts when
 (a) the effective concurrency has a free slot, (b) the tenant slot pool has capacity, (c) the capability's
@@ -128,7 +137,7 @@ Sources, lowest to highest precedence: `ForkLimits()` defaults, env `AGENTIC_OS_
 `ForkLimits(per_tenant=...)`. Requested concurrency above the tenant cap is clamped (recorded); branch count
 above `max_branches` is refused. A tenant's slots never admit another tenant's branch.
 
-## 6. Join semantics
+### 6. Join semantics
 
 `n` branches, `s` succeeded, `f` failed, `c` cancelled, `r = n - s - f - c` still possible.
 
@@ -148,7 +157,7 @@ whatever the join decision. Results are **published to world state** (`Observati
 after verification) only on `JoinSatisfied`, in plan order, for the branches named in `winners`. A failed join
 publishes nothing, and the successful work remains visible (not deleted, not compensated).
 
-## 7. Cancellation, budget, deadline
+### 7. Cancellation, budget, deadline
 
 * Mission cancel: the controller subscribes to `MissionCancelled`; every open fork gets
   `BranchCancelled(mission_cancelled)` for unstarted and running branches and no new branch starts. Python
@@ -162,7 +171,7 @@ publishes nothing, and the successful work remains visible (not deleted, not com
   is not refunded when the operator later fails (the spend is conservative). Tokens use the same mechanism.
 * Deadline: `Mission.deadline` bounds `timeout_s`; an expired mission deadline behaves like a timeout.
 
-## 8. Approvals, policy and saga
+### 8. Approvals, policy and saga
 
 * On start each branch is checked with `context.resolve(CHECK_POLICY)` like a node. `denied` -> branch fails
   (`ran=false`), `required` -> `NodeParked` with the branch node id and the branch is `parked` (it does not
@@ -203,7 +212,7 @@ publishes nothing, and the successful work remains visible (not deleted, not com
   retried only when the failure carries `not_applied=True` (exception attribute); otherwise the branch fails
   and is reported (`UNKNOWN_EFFECT`).
 
-## 9. Crash recovery
+### 9. Crash recovery
 
 `run_fork` is idempotent: given the same spec it folds the log and resumes. Closed fork -> returns the stored
 result without calling any operator. Branch with `BranchSucceeded|Failed|Cancelled` -> never re-executed.
@@ -238,7 +247,7 @@ Restart: the spec (inputs are not logged) must be re-supplied. `run_fork(spec)` 
 forks, and there is currently NO API route that opens or drives a fork: the #444 gate and tenant isolation are
 therefore N/A until one exists, and any future route MUST sit behind the gate.
 
-## 10. Threat model
+### 10. Threat model
 
 | Threat | Control |
 |---|---|
@@ -252,14 +261,14 @@ therefore N/A until one exists, and any future route MUST sit behind the gate.
 | Spec swap on replay | `spec_digest` mismatch is refused |
 | Secrets in log | receipts and `ForkOpened` carry hashes; credential material never enters events (executor broker unchanged) |
 
-## 11. Go port parity (phase 4)
+### 11. Go port parity (phase 4)
 
 Implemented: `go/mission/fork.go` folds the same events (`FoldFork`, `EvaluateJoin`) and a shared golden log
 verifies Python == Go fold output; existing folds already ignore unknown types so replay does not choke.
 **Deferred**: the Go `MissionRuntime` does not execute forks (controller, scheduler, budget, approve hook,
 subscriptions); a Go runtime can replay and display fork state but cannot open one.
 
-## 12. Collapse plan: enterprise executor copy
+### 12. Collapse plan: enterprise executor copy
 
 `agentic_os_enterprise/mission/executor.py` is a 71-line fork of the kernel executor
 (`run` = attempts++ + `client.invoke`, `compensate` = unconditional undo with `:undo` key, 4-arg
@@ -282,3 +291,79 @@ marker (the fork's unconditional undo is the weaker behaviour and should go); `I
 fork lacks the `secrets` channel. Steps: (1) enterprise runtime builds the kernel `Executor` through
 `secure_executor_for`; (2) run the enterprise suite against it; (3) delete the fork and re-export from the
 kernel. Not done here (enterprise repo untouched).
+
+## Writing a reconciliation probe
+
+When a dispatched action's outcome is unknown, the supervisor asks the provider, read-only, whether the effect exists. **You write the
+adapter; the supervisor decides what to believe.** Read this before you write one.
+
+### The one rule
+
+Only positive execution evidence or an authoritative negative resolves an unknown outcome. Repeating your read-only probe is fine.
+Repeating the business action while the outcome is unknown never is, and running out of probe retries never changes that.
+
+### What you return
+
+A `ProbeResult`, never a boolean:
+
+| `outcome` | Meaning | What the supervisor does |
+|---|---|---|
+| `CONFIRMED_EXECUTED` | The effect exists. Attach `evidence` (kind + a checkable reference), the `provider_ref`, and the real `result` | settles the reservation, restores the result, resumes the mission |
+| `CONFIRMED_NOT_EXECUTED` | The effect provably does not exist | accepted **only** if you qualified the adapter for it (below); then releases, re-gates and retries the action once |
+| `INCONCLUSIVE` | Not observed / cannot tell | retries the probe with backoff |
+| `TRANSIENT_ERROR` | The lookup failed (timeout, 429, 5xx). Set `retry_after_s` if the provider sent Retry-After | retries the probe with backoff, honouring Retry-After (bounded) |
+| `UNSUPPORTED` | This provider cannot be reconciled reliably | escalates to a person immediately |
+
+A generic HTTP 404 is `INCONCLUSIVE`: "not found" means "not observed". Use `from_http_status(status)` for the standard mapping.
+
+### What you declare: `Qualification`
+
+```python
+Qualification(
+    name="ledgerco",
+    eventually_consistent=True,      # a fresh effect may not be visible yet (the default: assume it is)
+    visibility_window_s=600,         # the provider's documented maximum delay before a fresh effect is visible (None = unknown)
+    authoritative_negative=False,    # may an absence from THIS lookup prove the effect did not happen? (the default: no)
+)
+```
+
+A `CONFIRMED_NOT_EXECUTED` is accepted only when **all** hold, enforced by the supervisor and not by you:
+
+1. the adapter was registered with `authoritative_negative=True`;
+2. the result itself says `authoritative_negative=True` (necessary, never sufficient);
+3. evidence is attached;
+4. if the provider is eventually consistent: it documents a `visibility_window_s` and that window has elapsed since the dispatch.
+
+Anything else is downgraded to `INCONCLUSIVE` and retried. Say `authoritative_negative=True` only for a **strongly consistent lookup by the idempotency
+key we sent** (so "zero results" really means "never created"). A search index, a list endpoint with paging, or anything that can lag is not.
+
+If you document a visibility window, no probe is scheduled before it: probes before the window cannot say anything useful.
+
+### Registering
+
+```python
+registry = ProbeRegistry()
+registry.register("billing.*", my_probe, Qualification("lago", eventually_consistent=False, authoritative_negative=True))
+supervisor = ReconciliationSupervisor(runtime, ReconcileJobs(path), registry, policy=PRESETS["default"], notifier=page_someone)
+supervisor.tick()        # call it on a schedule; every transition is durable
+```
+
+Two adapters for one capability must agree: one saying executed and another saying not executed is conflicting evidence and escalates immediately.
+
+### Retry policy
+
+`RetryPolicy(max_probes=5, initial_s=30, max_s=300, factor=2, jitter=0.2)`: probes at about 30 s, 1 m, 2 m, 4 m, 5 m, with jitter. These are starting values, not
+provider guarantees; presets `fast`, `default` and `slow` are provided. Exhausting the budget escalates to a person; it does not resend.
+
+### Escalation and notification
+
+An escalation is recorded once (durably) and the notifier is called with a stable idempotency key (`escalation:<job>:<time>`). Delivery is retried a bounded
+number of times if the notifier fails; a receiver should dedupe on the key, because a crash between a successful send and recording it can send once more.
+
+### Fork branches
+
+A fork branch follows the same contract as a plan node. If its call may have been sent and its outcome is unknown (an ambiguous error on a side-effecting capability, or a driver lost with the call in flight), it writes the same `ReconciliationRequired` record (with `fork_id` and `branch_id`), its reservation
+stays UNKNOWN, and the mission parks in `WAITING_RECONCILIATION`. Your probe, the supervisor, `reconcile_node` and the inbox need nothing fork-specific: the node id is the branch node id (`<mission>:fork:<fork>:<branch>`), and `ProbeContext.lease` is the branch attempt's reservation.
+
+What resolution does to the fork: **executed** completes the branch from the evidence (return the provider's real `result`; a branch that `produces` a fact requires it) and the same fork carries on, without rerunning branches that succeeded; **authoritative not-executed** makes the next attempt a
+new one under a fresh reservation if the branch has attempts left, otherwise the branch fails cleanly (not as an unknown effect). After a process restart the owner re-supplies the fork spec (`forks.register_spec`, then `run_fork`), because branch inputs are not in the log; until then the mission stays PAUSED.

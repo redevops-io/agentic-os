@@ -311,7 +311,7 @@ class Executor:
                    approval: dict | None = None) -> dict | None:
         """Run the node's undo capability (saga) — best effort; never raises past the caller.
 
-        Fails closed (docs/APPROVAL_TOKENS.md, "Compensation authorization"). The undo is invoked only if
+        Fails closed (docs/security-model.md, "Compensation authorization"). The undo is invoked only if
         THIS node (mission + node id + capability) is shown to have EXECUTED in THIS mission: durable event
         log via ``evidence_probe`` (restart-safe), else this executor's ledger (same rules). Otherwise no
         operator call is made and a visible ``compensation_skipped`` result is returned. The signed

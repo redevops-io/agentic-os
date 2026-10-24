@@ -65,7 +65,7 @@ surface, not a fourth runtime. Full glossary: [docs/GLOSSARY.md](docs/GLOSSARY.m
 ## Docs
 
 [STATUS](STATUS.md) · [ARCHITECTURE](ARCHITECTURE.md) · [GLOSSARY](docs/GLOSSARY.md) · [docs/](docs/) ·
-[CONTROL_PLANE_SECURITY](docs/CONTROL_PLANE_SECURITY.md) · [SECURITY](SECURITY.md) · [CONTRIBUTING](CONTRIBUTING.md) ·
+[CONTROL_PLANE_SECURITY](docs/security-model.md#control-plane-auth-idempotency-cache-and-multi-replica-limits) · [SECURITY](SECURITY.md) · [CONTRIBUTING](CONTRIBUTING.md) ·
 [CHANGELOG](CHANGELOG.md) · [LICENSE.md](LICENSE.md)
 
 ---
@@ -103,7 +103,7 @@ premium API bill. `agentic-os` replaces that with **one fleet, your data, your h
 - **Human-in-the-loop where it matters** — money, compliance, and infra actions pause for one-click approval.
 - **Fine-grained access control** — a permissions plane grants each app/role/user read/write on a database, table
   or corpus, sliced by **row scope** and **column mask**; set it up and preview it live at `/permissions` (grants
-  AES-GCM–encrypted at rest, gated write API). See [docs/permissions.md](docs/permissions.md).
+  AES-GCM–encrypted at rest, gated write API). See [docs/security-model.md](docs/security-model.md#permissions-plane--access-control-admin).
 
 ## Beyond the fleet: Projects, Integrations, Sidekick & the Agent Gateway
 
@@ -274,4 +274,4 @@ Operator `POST /invoke` takes the same bearer credentials (admin or tenant; appr
 when none is configured; `AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS=1` opens it for local development only (ignored once any
 token is set). The runtime's HTTP operator client sends `AGENTIC_OS_CONTROL_TOKEN` automatically.
 The Projects API is same-origin by default (`PROJECTS_CORS_ORIGINS` opts in). See
-[docs/CONTROL_PLANE_SECURITY.md](docs/CONTROL_PLANE_SECURITY.md).
+[docs/security-model.md](docs/security-model.md#control-plane-auth-idempotency-cache-and-multi-replica-limits).
