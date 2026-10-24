@@ -212,3 +212,21 @@ until it is authenticated and its write routes get policies (the same layer appl
 * The kernel services (F22) are inventoried and pinned, not enforced.
 * Network egress and raw outbound HTTP are a separate workstream.
 * Verification correction: an earlier "all apps pass" for the operator-boundary PR was run from `apps/`, where the test venv resolved `agentic_os` to a stale installed copy rather than the repository. All app results for this change were run with the repository on `PYTHONPATH` (2,014 passed); that earlier check should be treated as not having exercised the repository code.
+
+## Step 6: the network boundary (F10) - a separate workstream from F20/F21
+Token checks cannot constrain raw HTTP or shell access from a workload (F10: one flat compose network, ~60 modules using `urllib` directly).
+**Implemented:** `deploy/egress/proxy.py` (allowlist forward proxy, deny by default, SSRF guard that resolves once, checks every address and connects to the address
+checked, JSON decision log), `forward.py` (inbound forwarder: a service stays on the internal network and one port is relayed to one fixed target), an
+optional Compose overlay (`deploy/apps/compose.egress.yml`: the `apps` network becomes internal, the proxy is the only exit, the three cores' published ports go
+through forwarders) and a Kubernetes NetworkPolicy set. The merged Compose file was checked with `docker compose config`: only Caddy and the three forwarders publish
+ports and only they, the proxy and Caddy touch a non-internal network.
+**Evidence:** 44 tests (40 proxy, 4 forwarder: policy grammar, 12 non-public address classes, mixed DNS answers, tunnels and plain HTTP over real sockets, limits, reload) fail when the
+SSRF check, the apex rule, default-deny or the mixed-answer rule is removed (15, 1, 5 and 1 failures). `deploy/egress/selftest.sh` ran on a throwaway Docker network:
+a client on an internal network could reach nothing directly (origin IP, the internet, the origin by name), reached an allowlisted origin only through the proxy, was
+refused (403) for an off-list host and for the metadata address, and every decision was on the log. On Docker 29.9.1 an internal network also does not resolve external names.
+**F10 status: mitigated for deployments that adopt the overlay or the policy; not closed by default.**
+**Not done / limits:** opt-in; global allowlist (every service reaches every listed destination); no payload inspection; `private` rules (the default allows a model server on the
+host) are deliberate holes; Caddy keeps outbound access; Kubernetes DNS is a tunnelling channel unless restricted; the Kubernetes manifest is YAML-validated only (the available
+kubeconfig points at a deleted cluster, so it was not dry-run against an API server) and references an image that is not published or signed yet; the compose overlay was
+validated statically and the mechanism live, but the full stack was not brought up with it (the Docker host was in use by another test run). Edge Sentinel does not consume the
+decision log yet.

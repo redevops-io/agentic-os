@@ -1,0 +1,103 @@
+# Egress boundary for the apps stack (optional overlay).
+#
+#   docker compose -f compose.yml -f compose.egress.yml up -d
+#
+# What it does: the `apps` network becomes INTERNAL (no route to the internet or the host), and the only way out is the
+# `egress` proxy, which denies by default and logs every decision (deploy/egress/allowlist.txt). A process that opens its
+# own socket, runs `curl`, or ignores HTTP(S)_PROXY simply has nowhere to go. Token checks cannot do that.
+#
+# Before you enable it: put the destinations your agents really use in deploy/egress/allowlist.txt (a hosted model, Apollo,
+# Gmail, GitHub, the social networks Postiz posts to). Anything missing fails visibly in `docker compose logs egress`.
+#
+# Needs Docker Compose >= 2.24 (the `!reset` tag removes the cores' directly published ports).
+#
+# Not covered: the allowlist is global to the proxy (every service can reach every listed destination); payloads are not
+# inspected; this is the stack's boundary, not a substitute for per-route authorization.
+
+x-egress-env: &egress_env
+  - HTTP_PROXY=http://egress:3128
+  - HTTPS_PROXY=http://egress:3128
+  - http_proxy=http://egress:3128
+  - https_proxy=http://egress:3128
+  # in-stack names and loopback never go through the proxy
+  - NO_PROXY=localhost,127.0.0.1,egress,caddy,projects-console,revenue-agent,intelligence-agent,content-agent,security-compliance,finance-agent,customer-success,twenty,twenty-db,twenty-redis,metabase,metabase-db,postiz,postiz-db,postiz-redis
+  - no_proxy=localhost,127.0.0.1,egress,caddy,projects-console,revenue-agent,intelligence-agent,content-agent,security-compliance,finance-agent,customer-success,twenty,twenty-db,twenty-redis,metabase,metabase-db,postiz,postiz-db,postiz-redis
+
+services:
+  egress:
+    build: ../egress
+    restart: unless-stopped
+    networks: [apps, outbound]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"     # lets the proxy (not the services) reach a model server on the host
+    volumes:
+      - ../egress/allowlist.txt:/etc/egress/allowlist.txt:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+
+  # The published port needs a non-internal network; everything else stays internal.
+  caddy:
+    networks: [apps, edge]
+
+  # The cores' own UIs are published on host ports. Docker does not publish ports for a container on an internal network, and
+  # putting the core on a normal network would give it open internet access. So each core stays internal (its `ports` are
+  # reset below) and a forwarder, attached to both networks, publishes ONE port and relays it to ONE fixed target.
+  forward-twenty:
+    build: ../egress
+    restart: unless-stopped
+    entrypoint: ["python", "/usr/local/bin/egress-forward"]
+    command: ["--listen", "0.0.0.0:3000", "--to", "twenty:3000"]
+    ports: ["${TWENTY_PORT:-3010}:3000"]
+    networks: [apps, edge]
+    depends_on: [twenty]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+  forward-metabase:
+    build: ../egress
+    restart: unless-stopped
+    entrypoint: ["python", "/usr/local/bin/egress-forward"]
+    command: ["--listen", "0.0.0.0:3000", "--to", "metabase:3000"]
+    ports: ["${METABASE_PORT:-3001}:3000"]
+    networks: [apps, edge]
+    depends_on: [metabase]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+  forward-postiz:
+    build: ../egress
+    restart: unless-stopped
+    entrypoint: ["python", "/usr/local/bin/egress-forward"]
+    command: ["--listen", "0.0.0.0:5000", "--to", "postiz:5000"]
+    ports: ["${POSTIZ_PORT:-4200}:5000"]
+    networks: [apps, edge]
+    depends_on: [postiz]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  twenty:   {ports: !reset []}
+  metabase: {ports: !reset []}
+
+  projects-console:        {environment: *egress_env}
+  revenue-agent:           {environment: *egress_env}
+  intelligence-agent:      {environment: *egress_env}
+  content-agent:           {environment: *egress_env}
+  security-compliance:     {environment: *egress_env}
+  finance-agent:           {environment: *egress_env}
+  customer-success:        {environment: *egress_env}
+  postiz:
+    environment: *egress_env
+    ports: !reset []
+
+networks:
+  apps:
+    internal: true          # no route out: the proxy is the only way
+  outbound:
+    driver: bridge          # the proxy's route to the outside
+  edge:
+    driver: bridge          # caddy's published port

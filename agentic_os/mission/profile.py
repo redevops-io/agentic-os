@@ -84,12 +84,29 @@ def status(guard=None, *, replay_durable: "bool | None" = None) -> dict:
         warnings.append("authority guard is not durable")
     if replay_durable is False:
         warnings.append("approval/authorization replay protection is per-process")
+    proxy = egress_proxy()
+    advisories = []                       # reported, but they do not flip `ok`: the network may constrain egress another way
+    if prof == PRODUCTION and not proxy:
+        advisories.append("no egress proxy configured (HTTPS_PROXY): outbound connections from this process are only "
+                          "constrained if the network itself blocks them (see deploy/apps/compose.egress.yml)")
     return {"profile": prof, "explicit": explicit, "authority_configured": guard is not None,
+            "egress_proxy_configured": bool(proxy),
             "authority_durable": bool(guard is not None and getattr(guard, "durable", False)),
-            "replay_durable": replay_durable, "ok": prof == PRODUCTION and not warnings, "warnings": warnings}
+            "replay_durable": replay_durable, "ok": prof == PRODUCTION and not warnings, "warnings": warnings, "advisories": advisories}
 
 
-def check_environment(env=None) -> list:
+def egress_proxy(env=None) -> str:
+    """The configured outbound proxy host (credentials, if any, are never returned), else ''."""
+    e = os.environ if env is None else env
+    raw = (e.get("HTTPS_PROXY") or e.get("https_proxy") or "").strip()
+    if not raw:
+        return ""
+    from urllib.parse import urlsplit
+    u = urlsplit(raw if "://" in raw else "//" + raw)
+    return f"{u.hostname or ''}:{u.port}" if u.port else (u.hostname or "")
+
+
+def check_environment(env=None, *, require_egress: bool = False) -> list:
     """Problems that would make the PRODUCTION profile unsafe or unable to start. Pure (reads only `env`), so a deployment
     pipeline can run it before rollout. Returns [] when everything production needs is present."""
     e = os.environ if env is None else env
@@ -115,6 +132,9 @@ def check_environment(env=None) -> list:
         problems.append("no AGENTIC_OS_CONTROL_TOKEN or AGENTIC_OS_TENANT_TOKENS: operator /invoke would be disabled")
     if (e.get("AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS", "") or "").strip() == "1":
         problems.append("AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS=1 must not be set in production")
+    if require_egress and not egress_proxy(e):
+        problems.append("no egress proxy configured: set HTTPS_PROXY to the allowlist proxy (deploy/egress) and run the "
+                        "workload on an internal network (deploy/apps/compose.egress.yml or deploy/k8s/networkpolicy-egress.yaml)")
     return problems
 
 
@@ -126,10 +146,12 @@ def main(argv=None) -> int:
     import json
     ap = argparse.ArgumentParser(prog="agentic_os.mission.profile")
     ap.add_argument("--require-production", action="store_true")
+    ap.add_argument("--require-egress", action="store_true",
+                    help="with --require-production: also require an egress proxy to be configured")
     a = ap.parse_args(argv)
     out = {"posture": status()}
     if a.require_production:
-        out["problems"] = check_environment()
+        out["problems"] = check_environment(require_egress=a.require_egress)
     print(json.dumps(out, indent=2))
     return 1 if a.require_production and out["problems"] else 0
 
