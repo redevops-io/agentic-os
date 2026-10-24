@@ -92,3 +92,44 @@ it never overrides a DENY, never exceeds its limits, and never bypasses a MANDAT
   `AGENTIC_OS_REQUIRE_AUTHORITY=1` makes `AgentGateway` refuse to start without a durable guard, and `AGENTIC_OS_AUTHORITY_DB` selects the database.
 * Not covered yet: fork/join branches still use the human gate (they have their own policy evaluation path); a reservation is not released if the node is
   later cancelled before it runs (conservative: never overspends); the runtime only uses the guard when `runtime.authority` is set.
+
+## Step 3 (this branch): enforcement as an invariant, one gate for every topology, reservation lifecycle
+
+Owner direction 2026-10-23, from the three gaps left by step 2: (1) fork branches must follow the same standing-grant semantics, (2) reservations need an
+explicit lifecycle, (3) authority enforcement must be a production invariant with an explicit development opt-out.
+
+**Execution profile** (`mission/profile.py`, `AGENTIC_OS_PROFILE`):
+| Profile | Behaviour |
+|---|---|
+| `production` | A durable store, guard and ledger are required. `MissionRuntime`, `AgentGateway` and `Fleet` refuse to start (and the runtime refuses `run()` if the guard is removed afterwards) without one. Every mission node is checked against the owner's envelope: no covering envelope, no autonomous action. |
+| `development` | Permissive local mode, explicit and logged once. |
+| `test` | Injected guards and clocks; durability not required. |
+Unset behaves as `development` and logs a warning once (so an existing install without an envelope database does not break); `AGENTIC_OS_REQUIRE_AUTHORITY=1`
+is an alias for `production`; any other value is an error. **Open decision:** whether an unset profile should become `production` by default.
+
+**One gate** (`MissionRuntime._authority_gate`), used by serial nodes and fork branches: DENY -> mandatory approval -> standing grant -> ordinary approval -> run.
+In production a node with no human gate is still checked against the envelope: ALLOW runs (`ScopeAuthorized`), a limit reached parks as a human gate with rule
+`authority_scope`, anything else is a hard stop (`authority_denied`). Human-approved nodes are not re-checked (the owner's approval is itself the authority).
+
+**Reservation lifecycle** (`UsageLedger` lease API; memory and SQLite, each transition atomic and idempotent):
+`RESERVED -> DISPATCHED -> SETTLED`, plus `RELEASED` and `UNKNOWN`.
+| Event | Transition |
+|---|---|
+| Gate allows | RESERVED (one lease per node attempt: `<mission>:<node>:a<n>`; re-evaluating the gate never recounts) |
+| About to dispatch (`NodeDispatched`, `BranchStarted`, gateway handler call, Fleet job start) | DISPATCHED |
+| Confirmed success (also a late fork receipt) | SETTLED with actual consumption |
+| Failed or refused before dispatch; mission ended or cancelled with it undispatched | RELEASED |
+| Staged preview (did not execute), or an error that says `not_applied`, or a non-side-effecting failure | reconciled to RELEASED |
+| Side-effecting call errored or timed out | UNKNOWN: stays counted until `reconcile(lease, executed)` |
+Time alone never releases a DISPATCHED or UNKNOWN lease; `sweep_undispatched` is an explicit operator action that touches only RESERVED. Lease state is durable on
+SQLite, so a restart leaves orphan DISPATCHED/UNKNOWN leases visible through `outstanding()` for reconciliation instead of silently losing them. The mission-runtime
+lease map is in memory: after a restart those leases are reconciled by an operator, not by the runtime.
+
+**Bypass check** ("can background jobs, fork branches, raw tool calls or direct handlers skip the gateway?"):
+| Path | Result |
+|---|---|
+| Fork branches | **Closed.** Same gate as serial nodes; lease lifecycle wired; tested serial/fork, production, limits, unknown. |
+| Fleet `dispatch` and background jobs | **Closed** (new). `fleet.<module>.<action>` is checked against the envelope in production; background jobs hold a lease for their life; mandatory-approval actions still stage for a human. Fleet `up`/`down` (docker compose, git clone) are admin lifecycle calls and are **not** covered here. |
+| Gateway DIRECT and MISSION calls | **Closed.** Lease released if the call never dispatched, settled on success, UNKNOWN on a side-effecting error. |
+| **F19 Operator `/invoke` and direct application handlers** | **NOT closed.** Any caller with a valid operator or tenant token runs the handler directly: no envelope check. Only 7 of 53 side-effecting app capabilities are wrapped in `gated()` (heuristic count of `side_effecting=True` in `apps/*/operator.py`); the mission runtime gates mission-originated calls, but a direct call is not a mission-originated call and a body `mission_id` is forgeable. **High.** Fix needs a runtime-issued, input-bound, single-use authority token (the approval-token pattern), so the operator can tell a mission-gated call from a direct one; direct callers then need an envelope. Not built: do not claim direct calls are governed. |
+| Raw tool calls / raw outbound HTTP | **Not enforceable in-process.** No agent shell tool was found in the open core, but ~60 modules use `urllib` directly and the compose network is flat (F10). Needs the network boundary (step 6). |

@@ -136,6 +136,33 @@ class AgentGateway:
         assert_authority(self.authority, where="AgentGateway")
 
     def invoke(self, request: GatewayRequest) -> GatewayResult:
+        """Run one request, then settle the authority reservation it made: a call that never dispatched returns it; one
+        that did is settled when it succeeded and kept UNKNOWN (counted) when a side-effecting call errored, because it
+        may have executed. Time never releases a dispatched reservation."""
+        track = {"lease": "", "dispatched": False, "side_effecting": False}
+        try:
+            result = self._invoke(request, track)
+        except BaseException:
+            self._settle_lease(track, ok=None)
+            raise
+        self._settle_lease(track, ok=result.status)
+        return result
+
+    def _settle_lease(self, track: dict, *, ok) -> None:
+        lease = track["lease"]
+        if not lease or self.authority is None:
+            return
+        g = self.authority
+        if not track["dispatched"]:
+            g.release(lease)
+        elif ok in (GatewayStatus.OK, GatewayStatus.PENDING_APPROVAL):
+            g.settle(lease)                              # it executed (a withheld output still executed)
+        elif track["side_effecting"]:
+            g.unknown(lease)                             # errored mid-flight: may have executed; counted until reconciled
+        else:
+            g.reconcile(lease, executed=False)           # a read that errored changed nothing
+
+    def _invoke(self, request: GatewayRequest, track: dict) -> GatewayResult:
         start = time.time()
         gp = request.principal
 
@@ -166,7 +193,11 @@ class AgentGateway:
             ordinary = manifest.effective_approval_policy is ApprovalPolicy.REQUIRED
             adec = self.authority.authorize(key, gp.tenant, Action(
                 capability=request.capability, arguments=dict(request.arguments), risk_tier=int(tier),
-                side_effecting=bool(manifest.side_effecting)), Standing() if ordinary else None)
+                side_effecting=bool(manifest.side_effecting)), Standing() if ordinary else None,
+                lease_id=request.request_id)
+            if adec.allowed:
+                track["lease"] = adec.lease_id
+                track["side_effecting"] = bool(manifest.side_effecting) or manifest.kind is CapabilityKind.MISSION
             if self.on_authority:
                 try:
                     self.on_authority(request, adec)
@@ -212,6 +243,9 @@ class AgentGateway:
                                                 decision), exposed_reason="permitted")
 
         # 5. invoke — one of the two governed paths.
+        if track["lease"]:
+            self.authority.dispatched(track["lease"])    # from here the effect may exist: only settle/reconcile apply
+            track["dispatched"] = True
         try:
             if manifest.kind is CapabilityKind.MISSION:
                 goal = str(request.arguments.get("goal") or request.arguments.get("objective") or "")

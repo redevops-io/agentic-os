@@ -210,3 +210,79 @@ def test_mandatory_approval_is_never_satisfied_by_a_grant():
     r = gw.invoke(GatewayRequest(GatewayPrincipal(Principal("agent", "service", (), "acme")),
                                  "crm.request_outreach_send", {"contact": "a@customer.com"}))
     assert r.status is GatewayStatus.PENDING_APPROVAL and "authority:standing_grant" not in r.decision.policy_rule_ids
+
+
+# ── reservation lifecycle at the gateway ────────────────────────────────────────────────
+from agentic_os.mission.authority import Lease as _Lease                       # noqa: E402
+
+
+class _FailingCrm(_Crm):
+    def send_outreach(self, args, envelope):
+        raise RuntimeError("provider timeout after the request was written")
+
+
+def _lifecycle(crm, max_tier=2, max_calls=5, policy=None, budget=None):
+    reg = build_write_registry(crm=crm)
+    if policy is not None:
+        reg2 = CapabilityRegistry()
+        m = _replace(CRM_REQUEST_OUTREACH_SEND, approval_policy=policy)
+        reg2.register(m, lambda req, env: HandlerResult(ok=True, output={"sent": True}, data_classes=m.data_classes))
+        reg = reg2
+    store = MemoryEnvelopeStore()
+    store.put(envelope(grants=(Grant("crm.request_outreach_send", max_tier=max_tier, max_calls=max_calls),), may_delegate=False))
+    guard = AuthorityGuard(store, MemoryLedger(), clock=lambda: NOW + 1)
+    kw = {"budget": budget} if budget is not None else {}
+    gw = AgentGateway(registry=reg, authorize=lambda p, perm: True, authority=guard, **kw)
+    return gw, guard, GatewayPrincipal(Principal("agent", "service", (), "acme"))
+
+
+def _lease(guard, req_id):
+    return guard.ledger.lease_state(req_id)
+
+
+def test_success_settles_and_keeps_the_consumption():
+    gw, guard, gp = _lifecycle(_Crm())
+    req = GatewayRequest(gp, "crm.request_outreach_send", {"contact": "a@customer.com"})
+    assert gw.invoke(req).status is GatewayStatus.OK
+    assert _lease(guard, req.request_id) == _Lease.SETTLED.value and guard.ledger.used("acme:agent")["g0:calls"] == 1
+    assert guard.outstanding("acme:agent") == []
+
+
+def test_pending_approval_before_dispatch_returns_the_reservation():
+    gw, guard, gp = _lifecycle(_Crm(), max_tier=3, policy=ApprovalPolicy.MANDATORY)
+    req = GatewayRequest(gp, "crm.request_outreach_send", {"contact": "a@customer.com"})
+    assert gw.invoke(req).status is GatewayStatus.PENDING_APPROVAL
+    assert _lease(guard, req.request_id) == _Lease.RELEASED.value and guard.ledger.used("acme:agent")["g0:calls"] == 0
+
+
+def test_side_effecting_error_is_unknown_and_stays_counted_until_reconciled():
+    crm = _FailingCrm()
+    gw, guard, gp = _lifecycle(crm, max_calls=1)
+    req = GatewayRequest(gp, "crm.request_outreach_send", {"contact": "a@customer.com"})
+    assert gw.invoke(req).status is GatewayStatus.ERROR
+    assert _lease(guard, req.request_id) == _Lease.UNKNOWN.value
+    # the allowance is held: a second attempt cannot spend it again while the first is unresolved
+    r2 = gw.invoke(GatewayRequest(gp, "crm.request_outreach_send", {"contact": "a@customer.com"}))
+    assert r2.status is GatewayStatus.PENDING_APPROVAL and r2.decision.reason == "authority:grant_limit"
+    assert guard.outstanding("acme:agent") == [(req.request_id, "unknown")]
+    # an independent check (e.g. the provider's sent log) says it did not go out: capacity returns
+    assert guard.reconcile(req.request_id, executed=False)
+    assert _lease(guard, req.request_id) == _Lease.RELEASED.value and guard.ledger.used("acme:agent")["g0:calls"] == 0
+
+
+def test_budget_refusal_after_the_authority_check_returns_the_reservation():
+    class _NoBudget:
+        def check(self, principal, manifest):
+            return False, "daily_cap", ()
+    gw, guard, gp = _lifecycle(_Crm(), budget=_NoBudget())
+    req = GatewayRequest(gp, "crm.request_outreach_send", {"contact": "a@customer.com"})
+    assert gw.invoke(req).status is GatewayStatus.DENIED
+    assert _lease(guard, req.request_id) == _Lease.RELEASED.value and guard.ledger.used("acme:agent")["g0:calls"] == 0
+
+
+def test_a_call_counts_once_per_request():
+    gw, guard, gp = _lifecycle(_Crm(), max_calls=3)
+    for _ in range(3):
+        assert gw.invoke(GatewayRequest(gp, "crm.request_outreach_send", {"contact": "a@customer.com"})).status is GatewayStatus.OK
+    r = gw.invoke(GatewayRequest(gp, "crm.request_outreach_send", {"contact": "a@customer.com"}))
+    assert r.status is GatewayStatus.PENDING_APPROVAL and guard.ledger.used("acme:agent")["g0:calls"] == 3
