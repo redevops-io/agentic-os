@@ -34,6 +34,19 @@ from typing import Any, Mapping, Protocol
 CONTRACT_VERSION = "mission-authority/v1"
 
 
+class Lease(str, Enum):
+    """Lifecycle of a counter reservation. RESERVED and DISPATCHED/UNKNOWN all count against the limits; only a
+    reservation that provably never dispatched (RESERVED) can be released without reconciliation."""
+    RESERVED = "reserved"
+    DISPATCHED = "dispatched"      # the effect may now exist outside: never released by time alone
+    SETTLED = "settled"            # confirmed executed; counters hold the ACTUAL consumption
+    RELEASED = "released"          # confirmed not executed; counters returned
+    UNKNOWN = "unknown"            # outcome ambiguous: retained until reconciled
+
+
+_OPEN = (Lease.RESERVED.value, Lease.DISPATCHED.value, Lease.UNKNOWN.value)
+
+
 class Verdict(str, Enum):
     ALLOW = "allow"
     ESCALATE = "escalate"   # inside the grant's scope but past a limit/tier: the owner may extend it
@@ -200,6 +213,7 @@ class Decision:
     amendment: dict | None = None          # machine-readable "what the owner could grant"
     envelope_digest: str = ""
     grant_index: int = -1                  # which grant allowed it (ALLOW only)
+    lease_id: str = ""                     # the counter reservation backing an ALLOW (when a lease id was given)
 
     @property
     def allowed(self) -> bool:
@@ -225,6 +239,17 @@ class UsageLedger(Protocol):
         rate window is full). Returns None on success, else the name of the counter that refused."""
     def used(self, key: str) -> dict[str, float]: ...
     def release(self, key: str, deltas: Mapping[str, float]) -> None: ...
+    # reservation lifecycle (idempotent, atomic): RESERVED -> DISPATCHED -> SETTLED, plus RELEASED and UNKNOWN
+    def reserve_lease(self, lease_id: str, key: str, deltas: Mapping[str, float], limits: Mapping[str, float | None],
+                      rate: tuple[str, int, float] | None = None, now: float | None = None) -> str | None: ...
+    def lease_state(self, lease_id: str) -> str | None: ...
+    def lease_dispatched(self, lease_id: str) -> bool: ...
+    def lease_settle(self, lease_id: str, actual: Mapping[str, float] | None = None) -> bool: ...
+    def lease_release(self, lease_id: str) -> bool: ...
+    def lease_unknown(self, lease_id: str) -> bool: ...
+    def lease_reconcile(self, lease_id: str, executed: bool, actual: Mapping[str, float] | None = None) -> bool: ...
+    def lease_sweep(self, older_than_s: float, now: float | None = None) -> int: ...
+    def leases_outstanding(self, key: str | None = None) -> list[tuple[str, str]]: ...
 
 
 class MemoryLedger:
@@ -265,6 +290,98 @@ class MemoryLedger:
             for name, d in deltas.items():
                 self._c[key][name] = max(0.0, self._c[key][name] - d)
 
+    # ── reservation lifecycle ──────────────────────────────────────────────────────────
+    def _leases(self) -> dict:
+        if not hasattr(self, "_l"):
+            self._l: dict[str, dict] = {}
+        return self._l
+
+    def reserve_lease(self, lease_id, key, deltas, limits, rate=None, now=None):
+        now = time.time() if now is None else now
+        with self._lock:
+            row = self._leases().get(lease_id)
+            if row and row["state"] != Lease.RELEASED.value:
+                return None                                   # idempotent: already counted, never twice
+            cur = self._c[key]
+            for name, d in deltas.items():
+                lim = limits.get(name)
+                if lim is not None and not (cur.get(name, 0.0) + d <= lim + 1e-9):
+                    return name
+            if rate:
+                rname, n, win = rate
+                q = self._w[(key, rname)]
+                while q and now - q[0] >= win:
+                    q.popleft()
+                if len(q) >= n:
+                    return rname
+                q.append(now)
+            for name, d in deltas.items():
+                cur[name] += d
+            self._leases()[lease_id] = {"key": key, "deltas": dict(deltas), "state": Lease.RESERVED.value, "updated": now,
+                                        "rate": (rate[0], now) if rate else None}
+            return None
+
+    def lease_state(self, lease_id):
+        with self._lock:
+            r = self._leases().get(lease_id)
+            return r["state"] if r else None
+
+    def _give_back(self, row, actual=None):
+        for name, d in row["deltas"].items():
+            self._c[row["key"]][name] = max(0.0, self._c[row["key"]][name] - d + (0.0 if actual is None else actual.get(name, d)))
+        if actual is None and row["rate"]:
+            q = self._w[(row["key"], row["rate"][0])]
+            try:
+                q.remove(row["rate"][1])
+            except ValueError:
+                pass
+
+    def _transition(self, lease_id, allowed_from, to, *, actual=None, give_back=False, now=None):
+        with self._lock:
+            row = self._leases().get(lease_id)
+            if row is None:
+                return False
+            if row["state"] == to:
+                return True                                   # idempotent
+            if row["state"] not in allowed_from:
+                return False
+            if give_back:
+                self._give_back(row)
+            elif actual is not None:
+                self._give_back(row, actual)                  # settle: replace the reserved amount with the actual one
+            row["state"], row["updated"] = to, (time.time() if now is None else now)
+            return True
+
+    def lease_dispatched(self, lease_id):
+        return self._transition(lease_id, (Lease.RESERVED.value,), Lease.DISPATCHED.value)
+
+    def lease_settle(self, lease_id, actual=None):
+        return self._transition(lease_id, (Lease.DISPATCHED.value, Lease.UNKNOWN.value), Lease.SETTLED.value,
+                                actual=dict(actual) if actual is not None else None)
+
+    def lease_release(self, lease_id):
+        return self._transition(lease_id, (Lease.RESERVED.value,), Lease.RELEASED.value, give_back=True)
+
+    def lease_unknown(self, lease_id):
+        return self._transition(lease_id, (Lease.DISPATCHED.value,), Lease.UNKNOWN.value)
+
+    def lease_reconcile(self, lease_id, executed, actual=None):
+        if executed:
+            return self._transition(lease_id, (Lease.DISPATCHED.value, Lease.UNKNOWN.value), Lease.SETTLED.value,
+                                    actual=dict(actual) if actual is not None else None)
+        return self._transition(lease_id, (Lease.DISPATCHED.value, Lease.UNKNOWN.value), Lease.RELEASED.value, give_back=True)
+
+    def lease_sweep(self, older_than_s, now=None):
+        now = time.time() if now is None else now
+        with self._lock:
+            ids = [i for i, r in self._leases().items() if r["state"] == Lease.RESERVED.value and now - r["updated"] >= older_than_s]
+        return sum(1 for i in ids if self.lease_release(i))
+
+    def leases_outstanding(self, key=None):
+        with self._lock:
+            return sorted((i, r["state"]) for i, r in self._leases().items()
+                          if r["state"] in _OPEN and (key is None or r["key"] == key))
+
 
 class SqliteLedger:
     """Durable, multi-process counters (one `BEGIN IMMEDIATE` transaction per reserve)."""
@@ -276,6 +393,8 @@ class SqliteLedger:
             c.execute("CREATE TABLE IF NOT EXISTS usage (k TEXT, name TEXT, v REAL NOT NULL, PRIMARY KEY (k, name))")
             c.execute("CREATE TABLE IF NOT EXISTS hits (k TEXT, name TEXT, ts REAL NOT NULL)")
             c.execute("CREATE INDEX IF NOT EXISTS hits_idx ON hits (k, name, ts)")
+            c.execute("CREATE TABLE IF NOT EXISTS leases (lease_id TEXT PRIMARY KEY, k TEXT NOT NULL, deltas TEXT NOT NULL, "
+                      "state TEXT NOT NULL, rate_name TEXT, rate_ts REAL, updated REAL NOT NULL)")
 
     def _conn(self) -> sqlite3.Connection:
         c = sqlite3.connect(self.path, timeout=30, isolation_level=None)
@@ -322,6 +441,111 @@ class SqliteLedger:
         with self._conn() as c:
             for name, d in deltas.items():
                 c.execute("UPDATE usage SET v=MAX(0, v-?) WHERE k=? AND name=?", (d, key, name))
+
+    # ── reservation lifecycle (every transition is one BEGIN IMMEDIATE transaction) ───────
+    def _tx(self, fn):
+        c = self._conn()
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            out = fn(c)
+            c.execute("COMMIT")
+            return out
+        except BaseException:
+            try:
+                c.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise
+        finally:
+            c.close()
+
+    def reserve_lease(self, lease_id, key, deltas, limits, rate=None, now=None):
+        now = time.time() if now is None else now
+
+        def go(c):
+            row = c.execute("SELECT state FROM leases WHERE lease_id=?", (lease_id,)).fetchone()
+            if row and row[0] != Lease.RELEASED.value:
+                return None
+            cur = {n: v for n, v in c.execute("SELECT name, v FROM usage WHERE k=?", (key,))}
+            for name, d in deltas.items():
+                lim = limits.get(name)
+                if lim is not None and not (cur.get(name, 0.0) + d <= lim + 1e-9):
+                    return name
+            if rate:
+                rname, n, win = rate
+                c.execute("DELETE FROM hits WHERE k=? AND name=? AND ts<=?", (key, rname, now - win))
+                if c.execute("SELECT COUNT(*) FROM hits WHERE k=? AND name=?", (key, rname)).fetchone()[0] >= n:
+                    return rname
+                c.execute("INSERT INTO hits (k, name, ts) VALUES (?,?,?)", (key, rname, now))
+            for name, d in deltas.items():
+                c.execute("INSERT INTO usage (k,name,v) VALUES (?,?,?) ON CONFLICT(k,name) DO UPDATE SET v=v+excluded.v", (key, name, d))
+            c.execute("INSERT OR REPLACE INTO leases (lease_id,k,deltas,state,rate_name,rate_ts,updated) VALUES (?,?,?,?,?,?,?)",
+                      (lease_id, key, json.dumps(dict(deltas), sort_keys=True), Lease.RESERVED.value,
+                       rate[0] if rate else None, now if rate else None, now))
+            return None
+        return self._tx(go)
+
+    def lease_state(self, lease_id):
+        with self._conn() as c:
+            r = c.execute("SELECT state FROM leases WHERE lease_id=?", (lease_id,)).fetchone()
+        return r[0] if r else None
+
+    def _move(self, lease_id, allowed_from, to, *, actual=None, give_back=False):
+        def go(c):
+            row = c.execute("SELECT k, deltas, state, rate_name, rate_ts FROM leases WHERE lease_id=?", (lease_id,)).fetchone()
+            if row is None:
+                return False
+            k, deltas, state, rname, rts = row
+            if state == to:
+                return True
+            if state not in allowed_from:
+                return False
+            d = json.loads(deltas)
+            if give_back:
+                for n, v in d.items():
+                    c.execute("UPDATE usage SET v=MAX(0, v-?) WHERE k=? AND name=?", (v, k, n))
+                if rname:
+                    c.execute("DELETE FROM hits WHERE rowid IN (SELECT rowid FROM hits WHERE k=? AND name=? AND ts=? LIMIT 1)",
+                              (k, rname, rts))
+            elif actual is not None:
+                for n, v in d.items():
+                    c.execute("UPDATE usage SET v=MAX(0, v-?+?) WHERE k=? AND name=?", (v, actual.get(n, v), k, n))
+            c.execute("UPDATE leases SET state=?, updated=? WHERE lease_id=?", (to, time.time(), lease_id))
+            return True
+        return self._tx(go)
+
+    def lease_dispatched(self, lease_id):
+        return self._move(lease_id, (Lease.RESERVED.value,), Lease.DISPATCHED.value)
+
+    def lease_settle(self, lease_id, actual=None):
+        return self._move(lease_id, (Lease.DISPATCHED.value, Lease.UNKNOWN.value), Lease.SETTLED.value,
+                          actual=dict(actual) if actual is not None else None)
+
+    def lease_release(self, lease_id):
+        return self._move(lease_id, (Lease.RESERVED.value,), Lease.RELEASED.value, give_back=True)
+
+    def lease_unknown(self, lease_id):
+        return self._move(lease_id, (Lease.DISPATCHED.value,), Lease.UNKNOWN.value)
+
+    def lease_reconcile(self, lease_id, executed, actual=None):
+        if executed:
+            return self._move(lease_id, (Lease.DISPATCHED.value, Lease.UNKNOWN.value), Lease.SETTLED.value,
+                              actual=dict(actual) if actual is not None else None)
+        return self._move(lease_id, (Lease.DISPATCHED.value, Lease.UNKNOWN.value), Lease.RELEASED.value, give_back=True)
+
+    def lease_sweep(self, older_than_s, now=None):
+        now = time.time() if now is None else now
+        with self._conn() as c:
+            ids = [r[0] for r in c.execute("SELECT lease_id FROM leases WHERE state=? AND ?-updated>=?",
+                                           (Lease.RESERVED.value, now, older_than_s))]
+        return sum(1 for i in ids if self.lease_release(i))
+
+    def leases_outstanding(self, key=None):
+        q, a = "SELECT lease_id, state FROM leases WHERE state IN (?,?,?)", list(_OPEN)
+        if key is not None:
+            q, a = q + " AND k=?", a + [key]
+        with self._conn() as c:
+            return sorted((r[0], r[1]) for r in c.execute(q, a))
 
 
 # ── trusted storage ─────────────────────────────────────────────────────────────────────────────────
@@ -529,7 +753,8 @@ class AuthorityGuard:
         """May this authority start a child mission? Reserves one unit of the child quota when it may."""
         return _delegation(self, mission_id, tenant)
 
-    def authorize(self, mission_id: str, tenant: str, action: Action, standing: "Standing | None" = None) -> Decision:
+    def authorize(self, mission_id: str, tenant: str, action: Action, standing: "Standing | None" = None,
+                  lease_id: str = "") -> Decision:
         """`standing` is set when the owner's grant is being asked to stand in for an ordinary approval gate:
         the grant must then be explicit (no bare wildcard) and, if a score-based risk gate also fired, must
         opt in to covering it. Without it this is a plain scope + limits check."""
@@ -567,13 +792,42 @@ class AuthorityGuard:
             return Decision(Verdict.DENY, "wall_clock_exhausted", "the mission's time allowance is used up",
                             {"extend_budget": {"wall_clock_s": True}}, dec.envelope_digest)
         rate = (f"g{gi}:rate", int(g.rate_calls), g.rate_window_s) if g.rate_calls is not None else None
-        refused = self.ledger.reserve(env.mission_id, deltas, limits, rate, now)
+        if lease_id:                     # idempotent per lease: a retried gate never counts twice
+            refused = self.ledger.reserve_lease(lease_id, env.mission_id, deltas, limits, rate, now)
+        else:
+            refused = self.ledger.reserve(env.mission_id, deltas, limits, rate, now)
         if refused:
             rule = {"actions": "action_budget", "usd": "usd_budget", "tokens": "token_budget"}.get(
                 refused, "rate_limit" if refused.endswith(":rate") else "grant_limit")
             return Decision(Verdict.ESCALATE, rule, f"{rule.replace('_', ' ')} reached ({refused})",
                             {"extend_budget": {refused: True}}, dec.envelope_digest)
-        return dec
+        return replace(dec, lease_id=lease_id)
+
+    # ── reservation lifecycle (delegates to the ledger; all transitions are atomic and idempotent) ──
+    def dispatched(self, lease_id: str) -> bool:
+        """The call is about to leave: from now on the reservation is only released by reconciliation, never by time."""
+        return bool(lease_id) and self.ledger.lease_dispatched(lease_id)
+
+    def settle(self, lease_id: str, actual: Mapping[str, float] | None = None) -> bool:
+        return bool(lease_id) and self.ledger.lease_settle(lease_id, actual)
+
+    def release(self, lease_id: str) -> bool:
+        """Only valid before dispatch (the action provably did not leave)."""
+        return bool(lease_id) and self.ledger.lease_release(lease_id)
+
+    def unknown(self, lease_id: str) -> bool:
+        return bool(lease_id) and self.ledger.lease_unknown(lease_id)
+
+    def reconcile(self, lease_id: str, executed: bool, actual: Mapping[str, float] | None = None) -> bool:
+        """An independent check says the effect did (or did not) happen: settle actual consumption or return it."""
+        return bool(lease_id) and self.ledger.lease_reconcile(lease_id, executed, actual)
+
+    def outstanding(self, key: str | None = None) -> list[tuple[str, str]]:
+        return self.ledger.leases_outstanding(key)
+
+    def sweep_undispatched(self, older_than_s: float) -> int:
+        """Operator action: release RESERVED leases older than the bound. Never touches DISPATCHED or UNKNOWN."""
+        return self.ledger.lease_sweep(older_than_s, self.clock())
 
 
 ENV_REQUIRE = "AGENTIC_OS_REQUIRE_AUTHORITY"

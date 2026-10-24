@@ -831,7 +831,8 @@ class MissionRuntime:
                       side_effecting=bool(node.side_effecting), cost_usd=float(getattr(cost, "usd", 0.0) or 0.0),
                       tokens=int(getattr(cost, "tokens", 0) or 0))
 
-    def _authority_gate(self, m: Mission, node, decision, world: WorldState, *, graph=None, inputs: dict | None = None):
+    def _authority_gate(self, m: Mission, node, decision, world: WorldState, *, graph=None, inputs: dict | None = None,
+                        attempt: int | None = None):
         """THE decision for one node, shared by serial nodes and fork branches so the execution topology cannot
         change the security outcome. Order: DENY -> mandatory approval -> standing grant -> ordinary approval -> run.
         Returns (verdict, authority_decision) with verdict one of
@@ -848,11 +849,11 @@ class MissionRuntime:
             # a mandatory / un-migrated / legacy gate is never offered to the guard (standing_eligible is False)
             if guard is None or not getattr(decision, "standing_eligible", False) or not m.tenant:
                 return "park", None
-            res = self._authorize(m, node, decision, world, inputs, Standing(decision.risk_fired, decision.risk_waivable))
+            res = self._authorize(m, node, decision, world, inputs, Standing(decision.risk_fired, decision.risk_waivable), attempt)
             return ("run" if res is not None and res.allowed else "park"), res
         if guard is None or not production:
             return "run", None                      # development/test: scope enforcement is an explicit opt-in
-        res = self._authorize(m, node, decision, world, inputs, None)
+        res = self._authorize(m, node, decision, world, inputs, None, attempt)
         if res is not None and res.allowed:
             return "run", res
         if res is not None and res.verdict is Verdict.ESCALATE:
@@ -863,7 +864,7 @@ class MissionRuntime:
             return "park", res
         return "authority_denied", res
 
-    def _authorize(self, m: Mission, node, decision, world: WorldState, inputs, standing):
+    def _authorize(self, m: Mission, node, decision, world: WorldState, inputs, standing, attempt=None):
         """Evaluate the exact effective action against the owner's envelope and reserve its counters atomically."""
         from .authority import Decision, Verdict  # noqa: PLC0415
         key = self._authority_key(m) if m.tenant else ""
@@ -873,7 +874,11 @@ class MissionRuntime:
             res = Decision(Verdict.DENY, "no_authority", "no authority is recorded for this mission")
         else:
             action = self._action_for(m, node, world, inputs)
-            res = self.authority.authorize(key, m.tenant, action, standing)
+            n = attempt if attempt is not None else int(getattr(node, "attempts", 0) or 0) + 1
+            lease_id = f"{m.id}:{node.id}:a{n}"          # one reservation per node attempt: a re-evaluated gate never recounts
+            res = self.authority.authorize(key, m.tenant, action, standing, lease_id=lease_id)
+            if res.allowed:
+                self._leases()[(str(m.id), node.id)] = (res.lease_id, bool(node.side_effecting))
             base["inputs_digest"] = self._node_inputs_digest(m, world, node)
         base["envelope_digest"] = res.envelope_digest
         if res.allowed:
@@ -883,6 +888,56 @@ class MissionRuntime:
             self.store.append("StandingGrantDeclined" if standing is not None else "AuthorityDeclined", m.id,
                               {**base, "verdict": res.verdict.value, "rule": res.rule, "amendment": res.amendment})
         return res
+
+    # ── reservation lifecycle: RESERVED -> DISPATCHED -> SETTLED | RELEASED | UNKNOWN ─────────────────
+    # The ledger enforces the state machine atomically and idempotently; these hooks only say what happened.
+    # Rule: anything that may have left the building is never released by the runtime itself - it is settled
+    # (confirmed executed), reconciled (confirmed not executed) or kept UNKNOWN for an independent check.
+    def _leases(self) -> dict:
+        return self.__dict__.setdefault("_authority_leases", {})
+
+    def _lease_of(self, m: Mission, node_id: str):
+        return self._leases().get((str(m.id), node_id)) if self.authority is not None else None
+
+    def _lease_dispatched(self, m: Mission, node) -> None:
+        ent = self._lease_of(m, node.id)
+        if ent:
+            self.authority.dispatched(ent[0])
+
+    def _lease_settle(self, m: Mission, node_id: str) -> None:
+        ent = self._lease_of(m, node_id)
+        if ent and self.authority.settle(ent[0]):
+            self._leases().pop((str(m.id), node_id), None)
+
+    def _lease_failed(self, m: Mission, node_id: str, *, ran: bool, executed: bool | None = None) -> None:
+        """`ran` False: it never dispatched -> release. `executed` True: it ran (settle). False: it provably did
+        not apply (reconcile -> return). None: ambiguous -> UNKNOWN for a side-effecting capability (kept counted
+        until reconciled), a plain return for one with no external effect."""
+        ent = self._lease_of(m, node_id)
+        if not ent:
+            return
+        lid, side_effecting = ent
+        g = self.authority
+        if not ran:
+            ok = g.release(lid)
+        elif executed is True:
+            ok = g.settle(lid)
+        elif executed is False or not side_effecting:
+            ok = g.reconcile(lid, executed=False)
+        else:
+            ok = g.unknown(lid)
+            self.store.append("AuthorityLeaseUnknown", m.id, {"node_id": node_id, "lease_id": lid})
+            return
+        if ok:
+            self._leases().pop((str(m.id), node_id), None)
+
+    def _release_undispatched(self, m: Mission) -> None:
+        """A mission ended or was cancelled: reservations that never dispatched go back. Dispatched ones stay."""
+        if self.authority is None:
+            return
+        for (mid, nid), (lid, _se) in list(self._leases().items()):
+            if mid == str(m.id) and self.authority.release(lid):
+                self._leases().pop((mid, nid), None)
 
     def _block_authority(self, m: Mission, node, res) -> None:
         """Production: the envelope forbids this action. Like a policy DENY it is a hard stop with an actionable reason."""
@@ -932,6 +987,7 @@ class MissionRuntime:
             return False
         inputs = self._resolve_inputs(m, world, node)
         self.store.append("NodeDispatched", m.id, {"node_id": node.id, "capability": node.capability})
+        self._lease_dispatched(m, node)
         try:
             result = self._executor_for(m).run(node, inputs)
         except Exception as e:  # noqa: BLE001
@@ -943,6 +999,7 @@ class MissionRuntime:
         paths so failure semantics are identical."""
         self.store.append("NodeFailed", m.id,
                           {"node_id": node.id, "capability": node.capability, "error": str(e)})
+        self._lease_failed(m, node.id, ran=True, executed=False if getattr(e, "not_applied", False) else None)
         self._meter(m, node, "error")
         self.learning.record_capability(node.capability, False)
         self._observe_routing(node, False)
@@ -964,6 +1021,7 @@ class MissionRuntime:
         # it, so there is no human task to resume, and failing keeps the gated flows (which park BEFORE
         # dispatch and then run with ``_approval``) untouched.
         if is_staged(result) and self._approval_marker(m.id, node.id) is None:
+            self._lease_failed(m, node.id, ran=True, executed=False)     # a staged preview did not execute
             self.store.append("NodeFailed", m.id,
                               {"node_id": node.id, "capability": node.capability,
                                "reason": "staged_not_executed",
@@ -975,6 +1033,7 @@ class MissionRuntime:
             self._saga(m, plan, world)
             self._fail(m, plan, reason=f"{node.capability}: staged_not_executed")
             return False
+        self._lease_settle(m, node.id)           # it executed: counters now hold the confirmed consumption
         # P7B: verify a consequential result BEFORE it becomes authoritative world state.
         if needs_verification(node) and node.id not in self._verify_ok(m.id):
             vr = self.verifier.verify(node, result, world, m)
@@ -1056,6 +1115,7 @@ class MissionRuntime:
                 return False
             inputs = self._resolve_inputs(m, world, node)
             self.store.append("NodeDispatched", m.id, {"node_id": node.id, "capability": node.capability})
+            self._lease_dispatched(m, node)
             prepared.append((node, inputs))
         sems = self._operator_semaphores([n.operator for n, _ in prepared])
 
@@ -2035,5 +2095,7 @@ class MissionRuntime:
         m.state = state
         m.updated_at = now()
         self.store.append("MissionStateChanged", m.id, {"state": state.value})
+        if state in (MissionState.SUCCEEDED, MissionState.FAILED, MissionState.COMPENSATION_FAILED, MissionState.CANCELLED):
+            self._release_undispatched(m)
         if state in (MissionState.SUCCEEDED, MissionState.FAILED, MissionState.COMPENSATION_FAILED):
             self.lifecycle.dispatch(MissionFinished(mission_id=m.id, state=state.value))

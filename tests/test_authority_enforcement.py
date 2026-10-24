@@ -211,3 +211,115 @@ def test_legacy_require_authority_flag_means_production(monkeypatch):
     monkeypatch.delenv("AGENTIC_OS_PROFILE", raising=False)
     monkeypatch.setenv("AGENTIC_OS_REQUIRE_AUTHORITY", "1")
     assert profile() == "production"
+
+
+# ── reservation lifecycle through the runtime ───────────────────────────────────────────
+from agentic_os.mission.authority import Lease                               # noqa: E402
+from agentic_os.mission.fork_join import branch_node_id                      # noqa: E402
+
+
+def lid(m, bid, fid="f1", attempt=1):
+    """The ledger lease id the runtime derives for a fork branch attempt."""
+    return f"{m.id}:{branch_node_id(m.id, fid, bid)}:a{attempt}"
+
+
+def test_success_settles_the_reservation():
+    rt, op, m, g = make(env(Grant("w.write")))
+    assert fork(rt, m, n=2).status == "satisfied"
+    assert [g.ledger.lease_state(lid(m, f"b{i}")) for i in range(2)] == [Lease.SETTLED.value] * 2
+    assert g.outstanding("env-1") == [] and g.ledger.used("env-1")["g0:calls"] == 2
+
+
+def test_operator_error_on_a_side_effecting_call_stays_counted_as_unknown():
+    rt, op, m, g = make(env(Grant("w.write", max_calls=3)))
+    op.fail_caps = {"w.write"}
+    fork(rt, m, n=1)
+    state = g.ledger.lease_state(lid(m, "b0"))
+    assert state == Lease.UNKNOWN.value                                       # it may have executed: never freed silently
+    assert g.outstanding("env-1") == [(lid(m, "b0"), "unknown")]
+    assert g.ledger.used("env-1")["g0:calls"] == 1                            # still counts against the limit
+    assert types(rt, m.id, "AuthorityLeaseUnknown") == ["AuthorityLeaseUnknown"]   # on the ledger for the operator
+    # independent verification says it did NOT execute: capacity returns
+    assert g.reconcile(lid(m, "b0"), executed=False) and g.ledger.used("env-1")["g0:calls"] == 0
+
+
+def test_unknown_blocks_overspend_until_reconciled():
+    rt, op, m, g = make(env(Grant("w.write", max_calls=1)))
+    op.fail_caps = {"w.write"}
+    fork(rt, m, n=1, fid="f1")
+    op.fail_caps = set()
+    rt2, op2, m2, _ = make(None, guard=g)                                      # another mission/agent on the same allowance
+    res = rt2.forks.run_fork(m2.id, spec("f2", n=1))                          # still held by the unknown one
+    assert not op2.effects and res.status == "parked"
+    g.reconcile(lid(m, "b0", "f1"), executed=False)
+    rt3, op3, m3, _ = make(None, guard=g)
+    assert rt3.forks.run_fork(m3.id, spec("f3", n=1)).status == "satisfied" and sum(op3.effects.values()) == 1
+
+
+def test_failure_that_says_nothing_was_applied_returns_the_reservation():
+    class NotApplied(RuntimeError):
+        not_applied = True
+    rt, op, m, g = make(env(Grant("w.write", max_calls=2)))
+    orig = op.invoke
+
+    def inv(operator, capability, inputs, key, *, secrets=None):
+        if capability == "w.write":
+            raise NotApplied("rejected before sending")
+        return orig(operator, capability, inputs, key, secrets=secrets)
+    op.invoke = inv
+    fork(rt, m, n=1)
+    assert g.ledger.lease_state(lid(m, "b0")) == Lease.RELEASED.value and g.ledger.used("env-1")["g0:calls"] == 0
+
+
+def test_failure_before_dispatch_releases():
+    rt, op, m, g = make(env(Grant("w.write", max_calls=5)))
+    rt._pre_exec_ok = lambda *a, **k: False                                    # admission refuses AFTER the gate reserved
+    fork(rt, m, n=2)
+    assert not op.effects
+    assert [g.ledger.lease_state(lid(m, f"b{i}")) for i in range(2)] == [Lease.RELEASED.value] * 2
+    assert g.ledger.used("env-1")["g0:calls"] == 0 and g.outstanding("env-1") == []
+
+
+def _node(nid):
+    from agentic_os.mission.types import Node
+    n = Node(capability="w.write", operator="w-op", side_effecting=True)
+    n.id = nid
+    return n
+
+
+def _dec():
+    return type("D", (), {"required": True, "standing_eligible": True, "risk_fired": False, "risk_waivable": True,
+                          "rules": ["mission_policy"], "policy_digest": ""})()
+
+
+def test_mission_end_releases_reservations_that_never_dispatched():
+    rt, op, m, g = make(env(Grant("w.write", max_calls=5)))
+    node, dec = _node("n-x"), _dec()
+    verdict, res = rt._authority_gate(m, node, dec, rt._world(m.id), inputs={})
+    assert verdict == "run" and g.outstanding("env-1") == [(res.lease_id, "reserved")]
+    rt._set_state(m, MissionState.CANCELLED)
+    assert g.ledger.lease_state(res.lease_id) == Lease.RELEASED.value
+
+
+def test_mission_end_never_releases_a_dispatched_reservation():
+    rt, op, m, g = make(env(Grant("w.write", max_calls=5)))
+    op.fail_caps = {"w.write"}
+    fork(rt, m, n=1)
+    rt._set_state(m, MissionState.CANCELLED)
+    assert g.ledger.lease_state(lid(m, "b0")) == Lease.UNKNOWN.value
+
+
+def test_regating_the_same_attempt_does_not_count_twice():
+    rt, op, m, g = make(env(Grant("w.write", max_calls=5)))
+    node, dec = _node("n-y"), _dec()
+    for _ in range(4):
+        assert rt._authority_gate(m, node, dec, rt._world(m.id), inputs={})[0] == "run"
+    assert g.ledger.used("env-1")["g0:calls"] == 1
+
+
+def test_a_retry_attempt_gets_its_own_reservation():
+    rt, op, m, g = make(env(Grant("w.write", max_calls=5)))
+    node, dec = _node("n-z"), _dec()
+    rt._authority_gate(m, node, dec, rt._world(m.id), inputs={}, attempt=1)
+    rt._authority_gate(m, node, dec, rt._world(m.id), inputs={}, attempt=2)
+    assert g.ledger.used("env-1")["g0:calls"] == 2

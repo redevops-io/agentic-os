@@ -950,7 +950,8 @@ class ForkJoinController:
                     continue
                 # one decision for every execution topology: DENY -> mandatory -> standing grant -> ordinary approval
                 verdict, ares = ("run", None) if resumed else rt._authority_gate(
-                    m, node, decision, world, graph=plan.graph, inputs=self._inputs(m, by_id[bs.branch_id], node, bs))
+                    m, node, decision, world, graph=plan.graph, inputs=self._inputs(m, by_id[bs.branch_id], node, bs),
+                    attempt=attempt)
                 if verdict == "authority_denied":
                     self._append_failed(m, st, bs, attempt, "authority_denied", ran=False,
                                         error=getattr(ares, "reason", "") or "authority_denied")
@@ -988,6 +989,7 @@ class ForkJoinController:
                         "resumed": resumed, "generation": gen})
                 node.idempotency_key = idem
                 inputs = self._inputs(m, b_spec, node, bs)
+                rt._lease_dispatched(m, node)          # BranchStarted is durable: the call may now leave
                 fut = self._submit(m, node, inputs)
                 submitted = True
                 fut.add_done_callback(lambda _f, mm=m: self._release_slot(mm))
@@ -1115,7 +1117,8 @@ class ForkJoinController:
             # applied the effect, so it is retried only if the failure explicitly says nothing was applied.
             safe = (not node.side_effecting) or bool(getattr(exc, "not_applied", False))
             self._append_failed(m, st, bs, attempt, "operator_error", ran=True, error=str(exc),
-                                will_retry=attempt < b_spec.max_attempts and safe)
+                                will_retry=attempt < b_spec.max_attempts and safe,
+                                not_applied=bool(getattr(exc, "not_applied", False)))
             return
         result = fut.result()
         inputs_hash = _sha({k: v for k, v in b_spec.inputs.items() if not is_approval_key(k)})
@@ -1145,11 +1148,12 @@ class ForkJoinController:
             self._fenced(m, st.fork_id, "BranchSucceeded", {
                 "fork_id": st.fork_id, "branch_id": bs.branch_id, "node_id": node.id, "attempt": attempt,
                 "result": result, "receipt": receipt})
+        rt._lease_settle(m, node.id)
         rt._meter(m, node, "ok")
         rt.learning.record_capability(node.capability, True)
 
     def _append_failed(self, m, st, bs, attempt, reason, *, ran, error="", will_retry=False,
-                       receipt=None, result=None) -> None:
+                       receipt=None, result=None, not_applied=False) -> None:
         payload = {"fork_id": st.fork_id, "branch_id": bs.branch_id, "node_id": bs.node_id,
                    "attempt": attempt, "reason": reason, "error": error, "ran": ran,
                    "will_retry": bool(will_retry)}
@@ -1159,6 +1163,11 @@ class ForkJoinController:
             payload["result"] = result
         with self._lock:
             self._fenced(m, st.fork_id, "BranchFailed", payload)
+        # reservation lifecycle: never dispatched -> release; staged -> did not execute; verification -> it executed;
+        # an operator error is ambiguous for a side-effecting capability (kept UNKNOWN) unless it says not_applied
+        self.rt._lease_failed(m, bs.node_id, ran=ran, executed=(
+            False if reason == "staged_not_executed" else True if reason.startswith("verification_") else
+            False if not_applied else None))
 
     # ── cancellation ──
     def cancel_branch(self, mission_id: str, fork_id: str, branch_id: str, reason: str = "cancelled") -> None:
@@ -1216,6 +1225,7 @@ class ForkJoinController:
                 self.rt.store.append("BranchSucceeded", m.id, {
                     "fork_id": st.fork_id, "branch_id": bs.branch_id, "node_id": node.id,
                     "attempt": bs.attempt or 1, "result": result, "receipt": receipt, "late": True})
+            self.rt._lease_settle(m, node.id)
         except BaseException:  # noqa: BLE001 - a late callback must never raise (nor kill the worker)
             pass
 
