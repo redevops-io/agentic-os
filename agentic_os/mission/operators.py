@@ -49,6 +49,7 @@ class HTTPOperatorClient:
         inputs = dict(inputs)
         marker = inputs.pop("_approval", None)
         node_id = inputs.pop("_node", None)
+        claims = inputs.pop("_exec_auth", None)
         body = {"capability": capability, "inputs": inputs,
                 "mission_id": inputs.get("_mission"), "node_id": node_id,
                 "idempotency_key": idempotency_key}
@@ -69,6 +70,19 @@ class HTTPOperatorClient:
                                         inputs=inputs, marker=marker)
             if token:
                 body["approval_token"] = token
+            else:
+                _warn_no_secret()
+        if isinstance(claims, dict) and claims:
+            # The runtime already decided this exact call (envelope + policy, reservation dispatched once). Turn the
+            # claims into a signed token bound to operator, capability, tenant, mission, node, lease, key and inputs.
+            from .execution_auth import mint_execution_authorization  # noqa: PLC0415
+            token = mint_execution_authorization(
+                None, operator=operator, capability=capability, tenant=str(claims.get("tenant") or ""),
+                mission_id=str(claims.get("mission_id") or ""), node_id=str(claims.get("node_id") or ""),
+                lease_id=str(claims.get("lease_id") or ""), attempt=int(claims.get("attempt") or 1),
+                envelope_digest=str(claims.get("envelope_digest") or ""), inputs=inputs, idempotency_key=idempotency_key)
+            if token:
+                body["authorization"] = token
             else:
                 _warn_no_secret()
         headers = {"Idempotency-Key": idempotency_key} if idempotency_key else {}

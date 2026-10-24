@@ -147,8 +147,12 @@ class Operator:
         self._seen: "OrderedDict[tuple, dict]" = OrderedDict()
         self._seen_lock = threading.Lock()
         from .approval import default_replay_guard  # noqa: PLC0415
-        # per-process by default; AGENTIC_OS_REPLAY_DB makes approval nonces durable across restarts/workers
+        # per-process by default; AGENTIC_OS_REPLAY_DB makes approval nonces durable across restarts/workers.
+        # In the production profile a durable, shared store is REQUIRED (default_replay_guard refuses to start without).
         self.replay_guard = default_replay_guard()
+        # Optional: the same durable authority ledger the runtime uses, so the operator can settle (or mark UNKNOWN) the
+        # reservation behind an authorization it consumed. Needed for direct-action authorizations (no runtime to settle).
+        self.authority = _operator_authority()
         self.calls: "deque[tuple[str, str]]" = deque(maxlen=10_000)  # (capability, idempotency_key) — recent, for assertions
         self._inflight: dict[tuple, dict] = {}   # dedupe key -> {"done": Event, "result": ..., "ok": bool}
 
@@ -191,6 +195,22 @@ class Operator:
             with self._seen_lock:
                 self._inflight.pop(_dk, None)
             slot["done"].set()
+
+    def _lease_outcome(self, claims, spec, *, executed) -> None:
+        """Settle or mark UNKNOWN the reservation behind a consumed authorization (idempotent with the runtime's own
+        bookkeeping). `executed` True: settle. False (a staged preview): the effect did not happen. None: it may have."""
+        if not claims or self.authority is None:
+            return
+        lease = claims.get("lease_id", "")
+        try:
+            if executed is True:
+                self.authority.settle(lease)
+            elif executed is False or spec is None or not spec.side_effecting:
+                self.authority.reconcile(lease, executed=False)
+            else:
+                self.authority.unknown(lease)
+        except Exception:  # noqa: BLE001 - bookkeeping must never turn a result into a failure
+            pass
 
     def _execute(self, capability: str, inputs: dict, idempotency_key: str, _dk, secrets: "dict | None") -> dict:
         fn = self._handlers.get(capability)
@@ -257,6 +277,14 @@ class Operator:
             mission_id: str | None = None
             node_id: str | None = None
             approval_token: str | None = None
+            authorization: str | None = None      # execution authorization (execution_auth.py), issued by a trusted control point
+
+        @router.get("/_security")
+        def security():
+            """Effective security posture of THIS operator, for readiness checks and Edge Sentinel."""
+            from .profile import status  # noqa: PLC0415
+            return status(self.authority, replay_durable=bool(getattr(self.replay_guard, "durable", None)
+                                                              or type(self.replay_guard).__name__ == "SqliteReplayGuard"))
 
         @router.get("/capabilities")
         def capabilities():
@@ -280,7 +308,20 @@ class Operator:
             # the trusted in-process invoke (co-located) or an authenticated internal channel — never this open
             # endpoint — so legitimate approval flows are unaffected.
             from .approval import strip_approval_keys, verify_approval_token  # noqa: PLC0415
-            inputs = strip_approval_keys(body.inputs or {})
+            from .execution_auth import strip_exec_auth_keys, verify_execution_authorization  # noqa: PLC0415
+            from .profile import is_production  # noqa: PLC0415
+            inputs = strip_exec_auth_keys(strip_approval_keys(body.inputs or {}))
+            # An execution authorization is the proof a trusted control point decided THIS call. It is verified before
+            # anything else and the mission identity is taken from its signed claims, never from the request body.
+            claims = None
+            if body.authorization:
+                claims = verify_execution_authorization(
+                    None, body.authorization, operator=self.name, capability=body.capability, inputs=inputs,
+                    tenant=caller.tenant, idempotency_key=key, replay_guard=self.replay_guard)
+                if claims is None:
+                    _warn_unverified_authorization()
+                else:
+                    inputs["_mission"] = claims["mission_id"]       # a forged body mission_id changes nothing
             # A runtime-delivered approval arrives ONLY as a signed, operator/capability/inputs-bound,
             # single-use token. Verified => inject the marker AFTER the strip. Anything else => ignored (stages).
             if body.approval_token:
@@ -292,17 +333,61 @@ class Operator:
                     inputs["_approval"] = marker
                 else:
                     _warn_unverified_approval()
+            spec = self._specs.get(body.capability)
+            if (is_production() and spec is not None and spec.side_effecting and claims is None
+                    and not inputs.get("_approval")):
+                # Authentication is not authority: a valid operator/tenant token does not by itself authorise a
+                # consequential action. Refuse BEFORE the handler: it neither runs nor stages.
+                raise HTTPException(403, "execution authorization required: a side-effecting capability needs a "
+                                         "human approval or an execution authorization issued after the owner's "
+                                         "envelope and policy were evaluated")
+            if spec is not None and spec.approval_required and claims is not None and not inputs.get("_approval"):
+                # defence in depth: an execution authorization (envelope/standing grant) can never stand in for a
+                # capability's MANDATORY approval, whoever issued it
+                raise HTTPException(403, "this capability requires a human approval; an execution authorization "
+                                         "cannot satisfy it")
+            if claims is not None and claims.get("dispatch_by") == "operator":
+                # A direct-action authorization: the reservation is still RESERVED and THIS is the dispatch. Only one
+                # caller on one replica can win it, and a swept/expired/released reservation can never be dispatched.
+                if self.authority is None or not self.authority.dispatch_once(claims["lease_id"]):
+                    raise HTTPException(403, "this authorization can no longer be dispatched (already used, released "
+                                             "or the operator has no authority ledger)")
             if caller.tenant is not None:
                 inputs["_tenant"] = caller.tenant
             try:
-                return {"result": self.invoke(body.capability, inputs, key)}
+                result = self.invoke(body.capability, inputs, key)
             except KeyError as e:
                 raise HTTPException(404, str(e))
+            except BaseException:
+                self._lease_outcome(claims, spec, executed=None)      # may have executed: UNKNOWN, never retried by token
+                raise
+            from .verify import is_staged  # noqa: PLC0415
+            self._lease_outcome(claims, spec, executed=not is_staged(result))
+            return {"result": result}
 
         return router
 
 
 _WARN_AT: dict = {}
+
+
+def _operator_authority():
+    """The authority guard from AGENTIC_OS_AUTHORITY_DB when configured, else None (the operator then does not settle)."""
+    import os  # noqa: PLC0415
+    from .authority import ENV_DB, authority_from_env  # noqa: PLC0415
+    return authority_from_env() if os.environ.get(ENV_DB, "").strip() else None
+
+
+def _warn_unverified_authorization() -> None:
+    """Rate-limited WARNING: an execution authorization did not verify (wrong operator/capability/inputs/tenant,
+    expired, forged, or replayed). Never logs the token."""
+    import logging  # noqa: PLC0415
+    import time as _t  # noqa: PLC0415
+    now = _t.time()
+    if now - _WARN_AT.get("authz", 0.0) >= 60:
+        _WARN_AT["authz"] = now
+        logging.getLogger("agentic_os.operator").warning("an execution authorization did not verify: the call is "
+                                                         "treated as unauthorised (refused in production)")
 
 
 def _warn_unverified_approval() -> None:

@@ -989,7 +989,9 @@ class ForkJoinController:
                         "resumed": resumed, "generation": gen})
                 node.idempotency_key = idem
                 inputs = self._inputs(m, b_spec, node, bs)
-                rt._lease_dispatched(m, node)          # BranchStarted is durable: the call may now leave
+                claims = rt._lease_dispatched(m, node)  # BranchStarted is durable: the call may now leave
+                if claims:
+                    inputs = {**inputs, "_exec_auth": claims}
                 fut = self._submit(m, node, inputs)
                 submitted = True
                 fut.add_done_callback(lambda _f, mm=m: self._release_slot(mm))

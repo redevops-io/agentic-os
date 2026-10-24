@@ -456,7 +456,9 @@ def dashboard() -> str:
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "modules": len(fleet.registry)}
+    from agentic_os.mission.profile import status as _security_status
+    sec = _security_status(getattr(fleet, "authority", None))
+    return {"status": "ok", "modules": len(fleet.registry), "security": sec}
 
 
 @app.get("/modules", response_model=list[ModuleList])
