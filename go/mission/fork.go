@@ -1,7 +1,7 @@
 package mission
 
 // Fork/join event folding — Go port of the pure fold in agentic_os/mission/fork_join.py
-// (docs/mission-execution.md). This is replay-only parity: a Go runtime can fold, display and replay a
+// (docs/MISSION_EXECUTION.md). This is replay-only parity: a Go runtime can fold, display and replay a
 // mission that contains forks, but it does not yet OPEN or DRIVE forks (controller, scheduler, budget,
 // approve hook, subscriptions are deferred). Existing folds already ignore the Fork/Branch/Join event
 // types, so adding them to a log never breaks Go replay.

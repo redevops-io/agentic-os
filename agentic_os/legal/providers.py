@@ -1,4 +1,4 @@
-"""Specialist legal Professional-Intelligence providers (moat plan §19.2). BYO credentials.
+"""Specialist legal Professional-Intelligence providers (intelligence plan §19.2). BYO credentials.
 
 LexisNexis and Thomson Reuters CoCounsel expose programmatic legal research/review grounded in authoritative
 sources. These adapters preserve authority/jurisdiction/citations (§19.6) — a generated proposition with no

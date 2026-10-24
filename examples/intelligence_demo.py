@@ -1,4 +1,4 @@
-"""End-to-end demo of the external-intelligence moat loop (moat plan §4.1, §7, §8, §9, WP7).
+"""End-to-end demo of the external-intelligence loop (intelligence plan §4.1, §7, §8, §9, WP7).
 
 Offline, no keys. Shows the four seams working together:
   1. an app asks for a CAPABILITY (never a provider) via `request_for`;
@@ -6,7 +6,7 @@ Offline, no keys. Shows the four seams working together:
   3. gated paid lookups are recorded in the evidence-value ledger (§8/WP8);
   4. the evaluation harness (§9) turns the ledger into per-provider retain/review/drop verdicts.
 
-Run:  PYTHONPATH=/mnt/backup/projects/runtime-contracts python examples/intelligence_moat_demo.py
+Run:  PYTHONPATH=/mnt/backup/projects/runtime-contracts python examples/intelligence_demo.py
 """
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Agentic Apps legal operations (moat plan §19): governed document assistance + specialist legal intelligence.
+"""Agentic Apps legal operations (intelligence plan §19): governed document assistance + specialist legal intelligence.
 
 Native routine drafting from approved templates (L0/L1), an L0–L4 governance gate on external execution, a generic
 professional-review handoff, and BYO specialist providers (LexisNexis, CoCounsel) that preserve legal authority.

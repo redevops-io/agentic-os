@@ -1,4 +1,4 @@
-"""Legal layer tests (moat plan §19): native drafting, L0–L4 governance, professional-review handoff, and
+"""Legal layer tests (intelligence plan §19): native drafting, L0–L4 governance, professional-review handoff, and
 specialist BYO providers with authority preservation. Provider calls are offline via an injected fetch.
 """
 from __future__ import annotations

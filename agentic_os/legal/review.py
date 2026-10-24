@@ -1,4 +1,4 @@
-"""Generic professional-review handoff (moat plan §19.5).
+"""Generic professional-review handoff (intelligence plan §19.5).
 
 When a legal decision exceeds what the Runtime may resolve (L2+), it hands a structured request to a qualified
 professional rather than encoding one firm/vendor. The returned decision becomes GOVERNED EVIDENCE — not an

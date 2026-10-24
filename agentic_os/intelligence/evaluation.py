@@ -1,4 +1,4 @@
-"""Provider evaluation harness (moat plan §9).
+"""Provider evaluation harness (intelligence plan §9).
 
 Before a provider is trusted (or kept) in production, it earns its place on observed value, not brand. This reads
 the EvidenceValueStore ledger (WP8) and, per (provider, capability), computes the §9 metrics and the paid-evidence

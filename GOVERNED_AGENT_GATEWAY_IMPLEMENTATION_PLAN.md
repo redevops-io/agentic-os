@@ -530,21 +530,14 @@ Show:
 - audit
 - outcome
 
-## 16. Messaging
-Avoid:
-> MCP server for Agentic Apps
+## 16. Purpose
+The component is called the **Governed Agent Gateway**.
 
-Prefer:
-> **Governed Agent Gateway**
+Purpose: connect Claude, ChatGPT, Cursor, or your own agents to enterprise apps without giving them an ungoverned backdoor.
 
-Supporting line:
-> Connect Claude, ChatGPT, Cursor, or your own agents to enterprise apps without giving them an ungoverned backdoor.
+Implementation: MCP is the first protocol. Every operation still runs through ReDevOps identity, permissions, policy, approval, verification, evidence, and audit.
 
-Technical line:
-> MCP is the first protocol. Every operation still runs through ReDevOps identity, permissions, policy, approval, verification, evidence, and audit.
-
-Mission-level differentiator:
-> External agents can delegate goals. ReDevOps decides how those goals execute.
+Mission delegation: external agents can delegate goals (`missions.delegate_goal`); ReDevOps decides how those goals execute.
 
 ## 17. Priority
 1. Governed Agent Gateway (MCP first)

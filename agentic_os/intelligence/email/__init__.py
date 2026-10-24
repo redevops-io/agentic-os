@@ -1,4 +1,4 @@
-"""Governed email delivery (moat plan §3.11, §6 P1).
+"""Governed email delivery (intelligence plan §3.11, §6 P1).
 
 Email delivery is an EXECUTION, not read-only evidence, so it has its own contract (runtime_contracts email_delivery)
 and its own bridge here — not the intelligence acquisition gate. Apps hand an EmailSendRequest to `send_email`,

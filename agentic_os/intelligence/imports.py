@@ -1,4 +1,4 @@
-"""Historical outcome migration (moat plan WP7 / moat M2).
+"""Historical outcome migration (intelligence plan WP7 / M2).
 
 When a customer leaves Zendesk / Intercom / Klaviyo for the open stack, the objective is not feature parity — it is
 preserving their historical *Experience*: the resolved decisions and their verified outcomes. These parsers

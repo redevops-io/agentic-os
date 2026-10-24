@@ -1,4 +1,4 @@
-"""Governed email delivery bridge (moat plan §3.11, §8, §10).
+"""Governed email delivery bridge (intelligence plan §3.11, §8, §10).
 
 Apps (Listmonk) never call a delivery provider directly. They hand an EmailSendRequest to `send_email`, which:
   1. refuses to send to a suppressed recipient (governed side effect of prior bounce/complaint/unsubscribe);

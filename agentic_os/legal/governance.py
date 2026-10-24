@@ -1,4 +1,4 @@
-"""Legal action governance (moat plan §19.3). A disclaimer is not a boundary — encode it.
+"""Legal action governance (intelligence plan §19.3). A disclaimer is not a boundary — encode it.
 
 This gates EXTERNAL EXECUTION of a legal artifact (send / sign / file), NOT the acquisition of legal research
 (that's evidence). Evidence never grants execution permission; source-system authorization stays independent of

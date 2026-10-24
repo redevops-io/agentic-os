@@ -1,4 +1,4 @@
-"""Native document drafting (moat plan §19.1/§19.4): approved template + business facts → validated draft.
+"""Native document drafting (intelligence plan §19.1/§19.4): approved template + business facts → validated draft.
 
 Flow: business facts → approved template → draft artifact → deterministic validation → (review) → APPROVED
 Decision → governed send. This module does the draft + validation; execution is gated by governance.py. The

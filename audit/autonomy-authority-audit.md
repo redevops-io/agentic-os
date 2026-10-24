@@ -289,7 +289,7 @@ evidence, which is recorded.
 
 ## Step 9: the reconciliation supervisor, mission ownership with fencing, independent progress (first of two supervisor PRs)
 Owner decision (2026-10-24): use bounded retries with backoff before escalating, but never retry the business action while its outcome is UNKNOWN; only the read-only probe repeats. A non-authoritative
-"not found" means not observed, not confirmed not executed, and the supervisor, not each adapter, enforces that. Guide for adapter authors: `docs/mission-execution.md`.
+"not found" means not observed, not confirmed not executed, and the supervisor, not each adapter, enforces that. Guide for adapter authors: `docs/MISSION_EXECUTION.md`.
 **Implemented**
 * **Evidence contracts (`mission/probes.py`).** A probe returns a structured `ProbeResult` (CONFIRMED_EXECUTED, CONFIRMED_NOT_EXECUTED, INCONCLUSIVE, TRANSIENT_ERROR, UNSUPPORTED) with evidence provenance, provider reference,
   observed time, the real result and Retry-After. Each adapter is registered with a `Qualification` (eventually consistent, documented visibility window, authoritative-negative). The registry judges every answer: a negative is accepted only
@@ -320,7 +320,7 @@ not blocking dependents (found only after I added a multi-wave case: it showed a
 
 ## Step 10: fork reconciliation parity (`feat/fork-reconciliation-parity`)
 Owner direction (2026-10-24): bring fork outcomes into the same reconciliation contract before claiming autonomous-swarm recoverability, and prove it with a crash-and-restart test of three branches (one verified successful, one UNKNOWN, one still running): after the restart the
-successful branch does not rerun, the UNKNOWN branch is not resent, and the third finishes. Guide: `docs/mission-execution.md` (section "Fork branches").
+successful branch does not rerun, the UNKNOWN branch is not resent, and the third finishes. Guide: `docs/MISSION_EXECUTION.md` (section "Fork branches").
 **What was different before.** (1) A side-effecting branch whose call failed ambiguously became a terminal `BranchFailed`, which could fail the join, run the failure policy and report `UNKNOWN_EFFECT`: safe against resending, but not recoverable. (2) A branch that an older driver had in flight
 when the process died was re-dispatched on restart with the gate skipped (`resumed`) and with no look at its reservation: in a new process the in-memory lease map is empty, so nothing stopped a second send of a call that was already dispatched.
 **Implemented**
@@ -344,7 +344,7 @@ instead of re-run; reserved lease not re-registered; success never settled; fail
 * A fork closed by deadline/cancel with a branch in flight still cannot kill the call (late results are kept as receipts); that is F16, not changed here.
 
 ## Step 11: the goal-loop controller (`feat/goal-loop-controller`)
-Owner direction (2026-10-24): after fork parity, the controller builds on one recoverable execution model. Guide: `docs/mission-execution.md`, section "Goal loop".
+Owner direction (2026-10-24): after fork parity, the controller builds on one recoverable execution model. Guide: `docs/MISSION_EXECUTION.md`, section "Goal loop".
 **Implemented (`mission/goal_loop.py`, with its own durable log; each iteration is an ordinary mission)**
 * **Hard limits are ceilings** (iterations, active time, usd, tokens, deadline): reaching one stops the loop (`limit`) with the reason on the record; only a named owner with a reason can raise them (`extend_limits`; a ceiling only goes up). A loop cannot be started without a ceiling.
   Active time is durable (a restart cannot reset it). `BUDGET_NEAR_LIMIT` is raised once per cap at 80%.
@@ -365,7 +365,7 @@ Owner direction (2026-10-24): after fork parity, the controller builds on one re
 * **Child-agent identities and scoped credentials, context provenance and Edge Sentinel consumption** are the next items in the agreed order.
 
 ## Step 12: child-agent identities and scoped credentials (`feat/child-agent-identities`; F5, F13, F14)
-Owner order: after the goal-loop controller, child-agent identities and credentials. Guide: `docs/security-model.md`, section "Child agents".
+Owner order: after the goal-loop controller, child-agent identities and credentials. Guide: `docs/SECURITY_MODEL.md`, section "Child agents".
 **What was missing.** `AuthorityEnvelope.attenuate` could derive a provably smaller envelope but nothing stored one, enforced it or tied it to a caller. A delegated worker ran as its parent: same identity in every audit record, no share of its own in the budget, no way to switch it off without switching off the parent, and the gateway took the envelope key from a name the caller supplied.
 **Implemented (`mission/children.py`, `mission/authority.py`, `agent_gateway`)**
 * **Spawning is a sequence of refusals, each undoing the last**: the parent must be allowed to delegate (not revoked or expired, `may_delegate`, a unit of `max_children`, a valid chain of its own); the envelope is derived by `attenuate` (never a grant, limit, lifetime or depth the parent lacks);

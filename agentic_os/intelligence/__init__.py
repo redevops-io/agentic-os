@@ -1,4 +1,4 @@
-"""Agentic Apps external/professional intelligence layer (moat plan WP2+).
+"""Agentic Apps external/professional intelligence layer (intelligence plan WP2+).
 
 Adapters implement the runtime_contracts intelligence provider contract; the Discovery bridge is the single seam
 apps use to acquire external evidence for a decision (gate → acquire → value-account). This open-core layer ships

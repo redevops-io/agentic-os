@@ -7,7 +7,7 @@ contract is unified by making THIS ``Node`` the superset (it carries both ``cosm
 ``resource`` tenancy field), so both planes share one ``types``; the enterprise side re-exports this kernel and
 keeps only its tenancy overlay (``tenant_runtime``). Change the contract here, not there.
 
-Layered like a database engine (see docs/architecture.md):
+Layered like a database engine (see docs/ARCHITECTURE.md):
 
     Mission Planner   (what should happen?)   -> ExecutionIntent   [LLM, logical]
     Execution Compiler(in what order/with what?)-> ExecutionPlan.graph [deterministic, physical]

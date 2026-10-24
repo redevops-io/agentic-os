@@ -1,4 +1,4 @@
-"""Organization-approved legal templates (moat plan §19.1 native routine document assistance).
+"""Organization-approved legal templates (intelligence plan §19.1 native routine document assistance).
 
 The stack drafts low-complexity documents ONLY from approved templates + supplied facts — never by inventing
 legal language. Each template declares its authority LEVEL (L0 clerical / L1 approved-template), which drives the

@@ -65,7 +65,7 @@ surface, not a fourth runtime. Full glossary: [docs/GLOSSARY.md](docs/GLOSSARY.m
 ## Docs
 
 [STATUS](STATUS.md) · [ARCHITECTURE](ARCHITECTURE.md) · [GLOSSARY](docs/GLOSSARY.md) · [docs/](docs/) ·
-[CONTROL_PLANE_SECURITY](docs/security-model.md#control-plane-auth-idempotency-cache-and-multi-replica-limits) · [SECURITY](SECURITY.md) · [CONTRIBUTING](CONTRIBUTING.md) ·
+[CONTROL_PLANE_SECURITY](docs/SECURITY_MODEL.md#control-plane-auth-idempotency-cache-and-multi-replica-limits) · [SECURITY](SECURITY.md) · [CONTRIBUTING](CONTRIBUTING.md) ·
 [CHANGELOG](CHANGELOG.md) · [LICENSE.md](LICENSE.md)
 
 ---
@@ -103,7 +103,7 @@ premium API bill. `agentic-os` replaces that with **one fleet, your data, your h
 - **Human-in-the-loop where it matters** — money, compliance, and infra actions pause for one-click approval.
 - **Fine-grained access control** — a permissions plane grants each app/role/user read/write on a database, table
   or corpus, sliced by **row scope** and **column mask**; set it up and preview it live at `/permissions` (grants
-  AES-GCM–encrypted at rest, gated write API). See [docs/security-model.md](docs/security-model.md#permissions-plane--access-control-admin).
+  AES-GCM–encrypted at rest, gated write API). See [docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md#permissions-plane--access-control-admin).
 
 ## Beyond the fleet: Projects, Integrations, Sidekick & the Agent Gateway
 
@@ -241,7 +241,7 @@ target was ">90%"); that share has **not been measured**. See
 | [`agentic_os/control_plane.py`](agentic_os/control_plane.py) | FastAPI control plane |
 | [`agentic_os/mission/`](agentic_os/mission/) | Mission Runtime — the operator/mission engine the reference apps run on (operators, planes, compiler; Go port in [`go/mission/`](go/mission/)) |
 | [`agentic_os/integrations/`](agentic_os/integrations/) | Integration Plane + Connect Compiler contracts, hosted OAuth, the productivity plane, and adapter execution |
-| [`agentic_os/intelligence/`](agentic_os/intelligence/) · [`agentic_os/legal/`](agentic_os/legal/) | External & Professional Intelligence layer — apps ask for a **capability**, a gate decides whether to acquire, adapters (open + BYO paid + legal + email) serve it, and value accounting learns what's worth buying ([docs/intelligence.md](docs/intelligence.md)) |
+| [`agentic_os/intelligence/`](agentic_os/intelligence/) · [`agentic_os/legal/`](agentic_os/legal/) | External & Professional Intelligence layer — apps ask for a **capability**, a gate decides whether to acquire, adapters (open + BYO paid + legal + email) serve it, and value accounting learns what's worth buying ([docs/INTELLIGENCE.md](docs/INTELLIGENCE.md)) |
 | [`agentic_os/agent_gateway/`](agentic_os/agent_gateway/) | Governed Agent Gateway — the governed northbound path for external agents (MCP first) |
 | [`agentic_os/projects_api.py`](agentic_os/projects_api.py) | Projects UI + API (one origin) |
 | [`agentic_os/sidekick_assistant.py`](agentic_os/sidekick_assistant.py) · [`stack_knowledge.py`](agentic_os/stack_knowledge.py) | Sidekick's grounded LLM fallback + curated stack Q&A knowledge base |
@@ -274,4 +274,4 @@ Operator `POST /invoke` takes the same bearer credentials (admin or tenant; appr
 when none is configured; `AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS=1` opens it for local development only (ignored once any
 token is set). The runtime's HTTP operator client sends `AGENTIC_OS_CONTROL_TOKEN` automatically.
 The Projects API is same-origin by default (`PROJECTS_CORS_ORIGINS` opts in). See
-[docs/security-model.md](docs/security-model.md#control-plane-auth-idempotency-cache-and-multi-replica-limits).
+[docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md#control-plane-auth-idempotency-cache-and-multi-replica-limits).

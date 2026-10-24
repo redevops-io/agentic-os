@@ -1,4 +1,4 @@
-"""Shared base for Bring-Your-Own-credential intelligence adapters (moat plan §12 P1 providers).
+"""Shared base for Bring-Your-Own-credential intelligence adapters (intelligence plan §12 P1 providers).
 
 Every paid provider (Apollo, Similarweb, Semrush, Stripe·Radar, Cloudflare TI, D&B, Brandwatch, VirusTotal,
 Defender TI) follows the same shape: entitled only when the tenant supplies a credential, one HTTP call, a

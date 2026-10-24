@@ -1,4 +1,4 @@
-"""Evidence-value accounting store (moat plan §8 / WP8).
+"""Evidence-value accounting store (intelligence plan §8 / WP8).
 
 Every gated lookup appends an EvidenceValueRecord (why requested, provider, cost, decision before/after, action,
 and later the verified outcome). This is the ledger that lets the Runtime learn whether a provider/capability is
