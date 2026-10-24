@@ -77,6 +77,9 @@ def mount(app, runtime: MissionRuntime | None = None) -> MissionRuntime:
     app.include_router(build_router(rt))
     app.include_router(build_capabilities_router(rt))
     app.include_router(build_cockpit_router(rt))   # P6: /inbox + /cockpit
+    if getattr(rt, "authority", None) is not None:  # direct-action authorizations need an envelope to evaluate against
+        from .action_auth import build_action_router
+        app.include_router(build_action_router(rt))
     return rt
 
 

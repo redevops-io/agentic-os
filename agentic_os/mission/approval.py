@@ -280,7 +280,8 @@ def default_replay_guard():
     path = os.environ.get(ENV_REPLAY_DB, "").strip()
     if path:
         return SqliteReplayGuard(path)
-    if os.environ.get(ENV_REQUIRE_DURABLE_REPLAY, "").strip().lower() in ("1", "true", "yes", "on"):
+    from .profile import is_production  # noqa: PLC0415
+    if is_production() or os.environ.get(ENV_REQUIRE_DURABLE_REPLAY, "").strip().lower() in ("1", "true", "yes", "on"):
         raise ReplayProtectionNotDurable(
             f"{ENV_REQUIRE_DURABLE_REPLAY} is set but {ENV_REPLAY_DB} is not: approval replay protection would be "
             "per-process. Set it to a private file on durable storage (or provide a shared store).")

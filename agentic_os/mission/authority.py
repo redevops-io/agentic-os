@@ -244,6 +244,7 @@ class UsageLedger(Protocol):
                       rate: tuple[str, int, float] | None = None, now: float | None = None) -> str | None: ...
     def lease_state(self, lease_id: str) -> str | None: ...
     def lease_dispatched(self, lease_id: str) -> bool: ...
+    def lease_dispatch_once(self, lease_id: str) -> bool: ...     # True only on the RESERVED -> DISPATCHED transition
     def lease_settle(self, lease_id: str, actual: Mapping[str, float] | None = None) -> bool: ...
     def lease_release(self, lease_id: str) -> bool: ...
     def lease_unknown(self, lease_id: str) -> bool: ...
@@ -354,6 +355,14 @@ class MemoryLedger:
 
     def lease_dispatched(self, lease_id):
         return self._transition(lease_id, (Lease.RESERVED.value,), Lease.DISPATCHED.value)
+
+    def lease_dispatch_once(self, lease_id):
+        with self._lock:
+            row = self._leases().get(lease_id)
+            if row is None or row["state"] != Lease.RESERVED.value:
+                return False                                  # already dispatched/settled/unknown/released: no new authority
+            row["state"], row["updated"] = Lease.DISPATCHED.value, time.time()
+            return True
 
     def lease_settle(self, lease_id, actual=None):
         return self._transition(lease_id, (Lease.DISPATCHED.value, Lease.UNKNOWN.value), Lease.SETTLED.value,
@@ -516,6 +525,13 @@ class SqliteLedger:
 
     def lease_dispatched(self, lease_id):
         return self._move(lease_id, (Lease.RESERVED.value,), Lease.DISPATCHED.value)
+
+    def lease_dispatch_once(self, lease_id):
+        def go(c):
+            cur = c.execute("UPDATE leases SET state=?, updated=? WHERE lease_id=? AND state=?",
+                            (Lease.DISPATCHED.value, time.time(), lease_id, Lease.RESERVED.value))
+            return cur.rowcount == 1                           # exactly one caller (process, replica) wins the transition
+        return self._tx(go)
 
     def lease_settle(self, lease_id, actual=None):
         return self._move(lease_id, (Lease.DISPATCHED.value, Lease.UNKNOWN.value), Lease.SETTLED.value,
@@ -807,6 +823,11 @@ class AuthorityGuard:
     def dispatched(self, lease_id: str) -> bool:
         """The call is about to leave: from now on the reservation is only released by reconciliation, never by time."""
         return bool(lease_id) and self.ledger.lease_dispatched(lease_id)
+
+    def dispatch_once(self, lease_id: str) -> bool:
+        """Atomic: True for exactly one caller, only while the reservation is still RESERVED. This is the single
+        door to an execution authorization, so a retry after a timeout or restart can never obtain a second one."""
+        return bool(lease_id) and self.ledger.lease_dispatch_once(lease_id)
 
     def settle(self, lease_id: str, actual: Mapping[str, float] | None = None) -> bool:
         return bool(lease_id) and self.ledger.lease_settle(lease_id, actual)

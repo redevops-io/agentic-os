@@ -43,6 +43,7 @@ class InMemoryOperatorClient:
 
     def invoke(self, operator: str, capability: str, inputs: dict, idempotency_key: str,
                *, secrets: "dict | None" = None) -> dict:
+        inputs = {k: v for k, v in (inputs or {}).items() if k != "_exec_auth"}   # claims are for the operator boundary
         if idempotency_key and idempotency_key in self._seen:
             return self._seen[idempotency_key]          # exactly-once: return the prior result
         self.calls.append((capability, idempotency_key))

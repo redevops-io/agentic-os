@@ -186,7 +186,7 @@ class UnrecoverableAuthority(RuntimeError):
 
 
 #: keys the runtime owns in a node's resolved inputs; mission inputs can never set them.
-_RESERVED_INPUT_KEYS = frozenset({"_goal", "_mission", "_node"})
+_RESERVED_INPUT_KEYS = frozenset({"_goal", "_mission", "_node", "_exec_auth"})
 
 
 def compensation_summary(events) -> dict:
@@ -878,7 +878,7 @@ class MissionRuntime:
             lease_id = f"{m.id}:{node.id}:a{n}"          # one reservation per node attempt: a re-evaluated gate never recounts
             res = self.authority.authorize(key, m.tenant, action, standing, lease_id=lease_id)
             if res.allowed:
-                self._leases()[(str(m.id), node.id)] = (res.lease_id, bool(node.side_effecting))
+                self._leases()[(str(m.id), node.id)] = (res.lease_id, bool(node.side_effecting), res.envelope_digest, n)
             base["inputs_digest"] = self._node_inputs_digest(m, world, node)
         base["envelope_digest"] = res.envelope_digest
         if res.allowed:
@@ -899,10 +899,15 @@ class MissionRuntime:
     def _lease_of(self, m: Mission, node_id: str):
         return self._leases().get((str(m.id), node_id)) if self.authority is not None else None
 
-    def _lease_dispatched(self, m: Mission, node) -> None:
+    def _lease_dispatched(self, m: Mission, node) -> "dict | None":
+        """Mark the reservation DISPATCHED and, only for the caller that wins that transition, return the claims an
+        execution authorization is minted from. A re-dispatch of an already-dispatched reservation (a retry after a
+        timeout, a re-dispatch after a restart) gets None: it cannot obtain a second authorization to repeat the effect."""
         ent = self._lease_of(m, node.id)
-        if ent:
-            self.authority.dispatched(ent[0])
+        if not ent or not self.authority.dispatch_once(ent[0]):
+            return None
+        return {"lease_id": ent[0], "tenant": m.tenant, "mission_id": str(m.id), "node_id": node.id,
+                "attempt": ent[3], "envelope_digest": ent[2]}
 
     def _lease_settle(self, m: Mission, node_id: str) -> None:
         ent = self._lease_of(m, node_id)
@@ -916,7 +921,7 @@ class MissionRuntime:
         ent = self._lease_of(m, node_id)
         if not ent:
             return
-        lid, side_effecting = ent
+        lid, side_effecting = ent[0], ent[1]
         g = self.authority
         if not ran:
             ok = g.release(lid)
@@ -935,8 +940,8 @@ class MissionRuntime:
         """A mission ended or was cancelled: reservations that never dispatched go back. Dispatched ones stay."""
         if self.authority is None:
             return
-        for (mid, nid), (lid, _se) in list(self._leases().items()):
-            if mid == str(m.id) and self.authority.release(lid):
+        for (mid, nid), ent in list(self._leases().items()):
+            if mid == str(m.id) and self.authority.release(ent[0]):
                 self._leases().pop((mid, nid), None)
 
     def _block_authority(self, m: Mission, node, res) -> None:
@@ -987,7 +992,9 @@ class MissionRuntime:
             return False
         inputs = self._resolve_inputs(m, world, node)
         self.store.append("NodeDispatched", m.id, {"node_id": node.id, "capability": node.capability})
-        self._lease_dispatched(m, node)
+        claims = self._lease_dispatched(m, node)
+        if claims:
+            inputs = {**inputs, "_exec_auth": claims}      # the operator client turns these into a signed, bound token
         try:
             result = self._executor_for(m).run(node, inputs)
         except Exception as e:  # noqa: BLE001
@@ -1115,7 +1122,9 @@ class MissionRuntime:
                 return False
             inputs = self._resolve_inputs(m, world, node)
             self.store.append("NodeDispatched", m.id, {"node_id": node.id, "capability": node.capability})
-            self._lease_dispatched(m, node)
+            claims = self._lease_dispatched(m, node)
+            if claims:
+                inputs = {**inputs, "_exec_auth": claims}
             prepared.append((node, inputs))
         sems = self._operator_semaphores([n.operator for n, _ in prepared])
 

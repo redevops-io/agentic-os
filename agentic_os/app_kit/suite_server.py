@@ -72,8 +72,9 @@ def build_suite_app(suite: Suite, operators: Mapping[str, Any], *,
 
     @app.get("/health")
     def health() -> dict:
+        from agentic_os.mission.profile import status as _security_status
         return {"ok": True, "suite": suite.name, "apps": list(suite.apps),
-                "capabilities": len(caps)}
+                "capabilities": len(caps), "security": _security_status()}
 
     @app.get("/")
     def landing() -> dict:

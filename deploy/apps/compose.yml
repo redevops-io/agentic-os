@@ -55,6 +55,7 @@ services:
     environment:
       - PORT=8240
       - AGENTIC_OS_APPROVAL_SECRET=${AGENTIC_OS_APPROVAL_SECRET:-}
+      - AGENTIC_OS_PROFILE=${AGENTIC_OS_PROFILE:-}          # production | development | test; empty = development with a warning
       - OUTREACH_BASIC_AUTH=${OUTREACH_BASIC_AUTH:-}
       - CONSOLE_TENANT=${TENANT:-Summit Roofing Co.}
       - REVENUE_URL=http://revenue-agent:8220
@@ -83,6 +84,7 @@ services:
     environment:
       - PORT=8220
       - AGENTIC_OS_APPROVAL_SECRET=${AGENTIC_OS_APPROVAL_SECRET:-}
+      - AGENTIC_OS_PROFILE=${AGENTIC_OS_PROFILE:-}          # production | development | test; empty = development with a warning
       - OUTREACH_BASIC_AUTH=${OUTREACH_BASIC_AUTH:-}
       - TWENTY_URL=http://twenty:3000
       - TWENTY_API_KEY=${TWENTY_API_KEY:-}
@@ -106,6 +108,7 @@ services:
     image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-intelligence-agent:${APPS_TAG:-stable}
     environment:
       - PORT=8221
+      - AGENTIC_OS_PROFILE=${AGENTIC_OS_PROFILE:-}          # production | development | test; empty = development with a warning
       - METABASE_API_URL=http://metabase:3000
       - INTEL_TENANT=${TENANT:-Summit Roofing Co.}
       - DEMO_SAFE_SEND=${SHADOW_MODE:-true}
@@ -116,6 +119,7 @@ services:
     image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-content-agent:${APPS_TAG:-stable}
     environment:
       - PORT=8222
+      - AGENTIC_OS_PROFILE=${AGENTIC_OS_PROFILE:-}          # production | development | test; empty = development with a warning
       - POSTIZ_URL=http://postiz:5000
       - CONTENT_TENANT=${TENANT:-Summit Roofing Co.}
       - CONTENT_SHADOW=${SHADOW_MODE:-true}
@@ -126,6 +130,7 @@ services:
     image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-finance-agent:${APPS_TAG:-stable}
     environment:
       - PORT=8231
+      - AGENTIC_OS_PROFILE=${AGENTIC_OS_PROFILE:-}          # production | development | test; empty = development with a warning
       - METABASE_API_URL=http://metabase:3000
       - FIN_TENANT=${TENANT:-Summit Roofing Co.}
       - FIN_SHADOW=${SHADOW_MODE:-true}
@@ -135,6 +140,7 @@ services:
     image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-customer-success:${APPS_TAG:-stable}
     environment:
       - PORT=8232
+      - AGENTIC_OS_PROFILE=${AGENTIC_OS_PROFILE:-}          # production | development | test; empty = development with a warning
       - CS_TENANT=${TENANT:-Summit Roofing Co.}
       - CS_SHADOW=${SHADOW_MODE:-true}
 
@@ -143,6 +149,7 @@ services:
     image: ${REGISTRY:-ghcr.io/redevops-io}/agentic-security-compliance:${APPS_TAG:-stable}
     environment:
       - PORT=8230
+      - AGENTIC_OS_PROFILE=${AGENTIC_OS_PROFILE:-}          # production | development | test; empty = development with a warning
       - SEC_TENANT=${TENANT:-Summit Roofing Co.}
       - SEC_SHADOW=${SHADOW_MODE:-true}
 
