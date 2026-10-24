@@ -217,7 +217,15 @@ class MissionRuntime:
         disambiguation_confidence: float = 0.75,
         max_concurrency: int = 1,
         secure_executor_for=None,
+        authority=None,
+        authority_key=None,
     ):
+        from .profile import assert_authority  # noqa: PLC0415
+        if authority is not None:
+            self.authority = authority
+        if authority_key is not None:
+            self.authority_key = authority_key
+        assert_authority(self.authority, where="MissionRuntime")      # production: no durable guard, no start
         self.registry = registry
         self.executor = executor
         # Opt-in per-mission secured executor. When wired (by the enterprise boot path), `secure_executor_for(m)`
@@ -684,6 +692,8 @@ class MissionRuntime:
         return m
 
     def _run_locked(self, mission_id: str) -> Mission:
+        from .profile import assert_authority  # noqa: PLC0415
+        assert_authority(self.authority, where="MissionRuntime.run")   # a guard removed after start is not authorization
         m = self._missions[mission_id]
         # blocked in simulation / needs a human / already finished or cancelled
         if m.state in (MissionState.FAILED, MissionState.COMPENSATION_FAILED,
@@ -745,10 +755,11 @@ class MissionRuntime:
                 if getattr(decision, "denied", False):    # a policy DENY rule — hard block, no human gate
                     self._block_denied(m, n, decision)
                     return m
-                if decision.required and self._standing_grant(m, n, decision, world):
-                    runnable.append((n, decision))        # the owner's standing grant stood in for this ordinary gate
-                    continue
-                (gated if decision.required else runnable).append((n, decision))
+                verdict, ares = self._authority_gate(m, n, decision, world, graph=graph)
+                if verdict == "authority_denied":
+                    self._block_authority(m, n, ares)
+                    return m
+                (runnable if verdict == "run" else gated).append((n, decision))
 
             # Execute the ready wave: independent nodes run concurrently (bounded) when max_concurrency>1,
             # serially when ==1; results commit in deterministic node order either way.
@@ -811,33 +822,75 @@ class MissionRuntime:
         subject = getattr(p, "subject", None) or getattr(p, "id", None) or (p if isinstance(p, str) else "")
         return f"{m.tenant}:{subject}" if (m.tenant and subject) else ""
 
-    def _standing_grant(self, m: Mission, node, decision, world: WorldState) -> bool:
-        """May the owner's standing grant stand in for this node's approval gate? The grant is evaluated against
-        the exact effective action (resolved inputs, tenant, cost) at the moment of dispatch and its counters are
-        reserved atomically, so concurrent nodes and missions cannot spend the same allowance twice. Anything
-        short of an ALLOW (no/expired/revoked grant, limit reached, mandatory gate) leaves the normal human gate."""
-        guard = self.authority
-        if guard is None or not getattr(decision, "standing_eligible", False) or not m.tenant:
-            return False
-        key = self._authority_key(m)
-        if not key:
-            return False
-        from .authority import Action, Standing  # noqa: PLC0415
-        args = {k: v for k, v in self._resolve_inputs(m, world, node).items() if not str(k).startswith("_")}
+    def _action_for(self, m: Mission, node, world: WorldState, inputs: dict | None):
+        from .authority import Action  # noqa: PLC0415
+        resolved = inputs if inputs is not None else self._resolve_inputs(m, world, node)
+        args = {k: v for k, v in resolved.items() if not str(k).startswith("_")}
         cost = getattr(node, "cost", None)
-        action = Action(capability=node.capability, arguments=args, risk_tier=1 if node.side_effecting else 0,
-                        side_effecting=bool(node.side_effecting), cost_usd=float(getattr(cost, "usd", 0.0) or 0.0),
-                        tokens=int(getattr(cost, "tokens", 0) or 0))
-        res = guard.authorize(key, m.tenant, action, Standing(decision.risk_fired, decision.risk_waivable))
+        return Action(capability=node.capability, arguments=args, risk_tier=1 if node.side_effecting else 0,
+                      side_effecting=bool(node.side_effecting), cost_usd=float(getattr(cost, "usd", 0.0) or 0.0),
+                      tokens=int(getattr(cost, "tokens", 0) or 0))
+
+    def _authority_gate(self, m: Mission, node, decision, world: WorldState, *, graph=None, inputs: dict | None = None):
+        """THE decision for one node, shared by serial nodes and fork branches so the execution topology cannot
+        change the security outcome. Order: DENY -> mandatory approval -> standing grant -> ordinary approval -> run.
+        Returns (verdict, authority_decision) with verdict one of
+          "run"              execute now (no gate, or the owner's standing grant / envelope covers it)
+          "park"             a human gate (ordinary approval, or the envelope needs extending)
+          "authority_denied" production only: the envelope does not allow this action (hard stop)
+        The policy DENY is handled by the caller before this is reached (`decision.denied`)."""
+        from .authority import Standing, Verdict  # noqa: PLC0415
+        from .profile import is_production  # noqa: PLC0415
+        from .types import ApprovalRule  # noqa: PLC0415
+        guard = self.authority
+        production = is_production()
+        if decision.required:
+            # a mandatory / un-migrated / legacy gate is never offered to the guard (standing_eligible is False)
+            if guard is None or not getattr(decision, "standing_eligible", False) or not m.tenant:
+                return "park", None
+            res = self._authorize(m, node, decision, world, inputs, Standing(decision.risk_fired, decision.risk_waivable))
+            return ("run" if res is not None and res.allowed else "park"), res
+        if guard is None or not production:
+            return "run", None                      # development/test: scope enforcement is an explicit opt-in
+        res = self._authorize(m, node, decision, world, inputs, None)
+        if res is not None and res.allowed:
+            return "run", res
+        if res is not None and res.verdict is Verdict.ESCALATE:
+            decision.required = True                # the envelope must be extended: ordinary human gate
+            decision.rules = list(decision.rules) + [ApprovalRule.AUTHORITY.value]
+            if graph is not None and not decision.packet:
+                decision.packet = self.policy_plane._packet(node, m, decision.risk, decision.rules, graph)
+            return "park", res
+        return "authority_denied", res
+
+    def _authorize(self, m: Mission, node, decision, world: WorldState, inputs, standing):
+        """Evaluate the exact effective action against the owner's envelope and reserve its counters atomically."""
+        from .authority import Decision, Verdict  # noqa: PLC0415
+        key = self._authority_key(m) if m.tenant else ""
         base = {"node_id": node.id, "capability": node.capability, "rules": list(decision.rules),
-                "policy_digest": getattr(decision, "policy_digest", ""), "envelope_digest": res.envelope_digest,
-                "inputs_digest": self._node_inputs_digest(m, world, node)}
+                "policy_digest": getattr(decision, "policy_digest", "")}
+        if not key:
+            res = Decision(Verdict.DENY, "no_authority", "no authority is recorded for this mission")
+        else:
+            action = self._action_for(m, node, world, inputs)
+            res = self.authority.authorize(key, m.tenant, action, standing)
+            base["inputs_digest"] = self._node_inputs_digest(m, world, node)
+        base["envelope_digest"] = res.envelope_digest
         if res.allowed:
-            self.store.append("StandingGrantApplied", m.id, {**base, "grant_index": res.grant_index})
-            return True
-        self.store.append("StandingGrantDeclined", m.id, {**base, "verdict": res.verdict.value, "rule": res.rule,
-                                                          "amendment": res.amendment})
-        return False
+            self.store.append("StandingGrantApplied" if standing is not None else "ScopeAuthorized", m.id,
+                              {**base, "grant_index": res.grant_index})
+        else:
+            self.store.append("StandingGrantDeclined" if standing is not None else "AuthorityDeclined", m.id,
+                              {**base, "verdict": res.verdict.value, "rule": res.rule, "amendment": res.amendment})
+        return res
+
+    def _block_authority(self, m: Mission, node, res) -> None:
+        """Production: the envelope forbids this action. Like a policy DENY it is a hard stop with an actionable reason."""
+        m.outcome = {"blocked": "authority_denied", "node": node.id, "capability": node.capability,
+                     "rule": res.rule if res else "no_authority", "reason": res.reason if res else "",
+                     "amendment": res.amendment if res else None}
+        self.lifecycle.dispatch(GateReached(mission_id=m.id, node_id=node.id, capability=node.capability))
+        self._set_state(m, MissionState.FAILED)
 
     def _pre_exec_ok(self, m: Mission, plan: ExecutionPlan, node) -> bool:
         """Node-admission seam, evaluated BEFORE dispatch (no operator has run, nothing to compensate).

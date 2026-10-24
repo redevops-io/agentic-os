@@ -132,10 +132,8 @@ class AgentGateway:
         return [m.public_view() for m in self.registry.visible_for(principal, self.authorize)]
 
     def __post_init__(self) -> None:
-        from agentic_os.mission.authority import authority_required   # noqa: PLC0415
-        if authority_required() and (self.authority is None or not getattr(self.authority, "durable", False)):
-            raise RuntimeError("AGENTIC_OS_REQUIRE_AUTHORITY=1: the gateway needs a durable AuthorityGuard "
-                               "(see authority_from_env); refusing to serve without enforceable authority")
+        from agentic_os.mission.profile import assert_authority   # noqa: PLC0415
+        assert_authority(self.authority, where="AgentGateway")
 
     def invoke(self, request: GatewayRequest) -> GatewayResult:
         start = time.time()

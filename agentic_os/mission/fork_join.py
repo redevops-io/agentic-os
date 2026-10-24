@@ -948,7 +948,15 @@ class ForkJoinController:
                     self._append_failed(m, st, bs, attempt, "policy_denied", ran=False)
                     started = True
                     continue
-                if decision.required:
+                # one decision for every execution topology: DENY -> mandatory -> standing grant -> ordinary approval
+                verdict, ares = ("run", None) if resumed else rt._authority_gate(
+                    m, node, decision, world, graph=plan.graph, inputs=self._inputs(m, by_id[bs.branch_id], node, bs))
+                if verdict == "authority_denied":
+                    self._append_failed(m, st, bs, attempt, "authority_denied", ran=False,
+                                        error=getattr(ares, "reason", "") or "authority_denied")
+                    started = True
+                    continue
+                if verdict == "park":
                     self._park(m, node, decision, st.fork_id, bs.branch_id)
                     started = True
                     continue

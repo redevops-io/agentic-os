@@ -581,8 +581,8 @@ ENV_DB = "AGENTIC_OS_AUTHORITY_DB"
 
 
 def authority_required() -> bool:
-    import os
-    return os.environ.get(ENV_REQUIRE, "").strip().lower() in ("1", "true", "yes", "on")
+    from .profile import is_production
+    return is_production()
 
 
 def authority_from_env() -> "AuthorityGuard | None":
@@ -592,7 +592,7 @@ def authority_from_env() -> "AuthorityGuard | None":
     path = os.environ.get(ENV_DB, "").strip()
     if not path:
         if authority_required():
-            raise RuntimeError(f"{ENV_REQUIRE}=1 but {ENV_DB} is not set: refusing to run without durable authority")
+            raise RuntimeError(f"production profile but {ENV_DB} is not set: refusing to run without durable authority")
         return None
     return AuthorityGuard(SqliteEnvelopeStore(path), SqliteLedger(path + ".usage"))
 
