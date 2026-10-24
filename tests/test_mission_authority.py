@@ -149,6 +149,8 @@ def test_child_is_a_subset():
     c = child(p)
     assert c.depth == 1 and c.parent_digest == p.digest() and c.expires_at <= p.expires_at
     g, st = guard(c)
+    assert g.authorize("c1", "acme", act("crm.read")).rule == "orphaned"      # a child whose parent is not on record is denied, never trusted alone
+    st.put(p)
     assert g.authorize("c1", "acme", act("crm.read")).allowed
     assert g.authorize("c1", "acme", act("crm.update", 1)).rule == "out_of_scope"
 

@@ -137,6 +137,7 @@ class AuthorityEnvelope:
     revocation_epoch: int = 0
     parent_digest: str = ""                # set on attenuated children
     depth: int = 0
+    parent_mission_id: str = ""            # the parent's envelope key, so the chain can be walked and checked live (omitted when empty)
 
     def __post_init__(self) -> None:
         for f in ("issued_at", "expires_at"):
@@ -146,7 +147,10 @@ class AuthorityEnvelope:
 
     # ── identity ────────────────────────────────────────────────────────────────
     def to_dict(self) -> dict:
-        return _jsonable(self)
+        d = _jsonable(self)
+        if not d.get("parent_mission_id"):
+            d.pop("parent_mission_id", None)       # absent for every non-child envelope: stored forms and digests are unchanged
+        return d
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> "AuthorityEnvelope":
@@ -165,10 +169,11 @@ class AuthorityEnvelope:
             required_constraints=tuple(d.get("required_constraints", ())),
             policy_version=str(d.get("policy_version", "1")), issued_at=float(d.get("issued_at", 0.0)),
             expires_at=float(d.get("expires_at", 0.0)), revocation_epoch=int(d.get("revocation_epoch", 0)),
-            parent_digest=d.get("parent_digest", ""), depth=int(d.get("depth", 0)))
+            parent_digest=d.get("parent_digest", ""), depth=int(d.get("depth", 0)),
+            parent_mission_id=str(d.get("parent_mission_id", "")))
 
     def digest(self) -> str:
-        canonical = json.dumps(_jsonable(self), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        canonical = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         return "sha256:" + sha256(canonical.encode()).hexdigest()
 
     # ── attenuation ─────────────────────────────────────────────────────────────
@@ -196,7 +201,7 @@ class AuthorityEnvelope:
         exp = self.expires_at if expires_at is None else min(expires_at, self.expires_at)
         return replace(self, mission_id=mission_id, principal=principal, goal=goal or self.goal, grants=grants,
                        budget=budget, may_delegate=may_delegate and budget.max_depth > 0, issued_at=now, expires_at=exp,
-                       parent_digest=self.digest(), depth=self.depth + 1)
+                       parent_digest=self.digest(), depth=self.depth + 1, parent_mission_id=self.mission_id)
 
 
 class AuthorityError(ValueError):
@@ -811,6 +816,30 @@ class AuthorityGuard:
     def durable(self) -> bool:
         return bool(getattr(self.envelopes, "durable", False) and getattr(self.ledger, "durable", False))
 
+    def chain_denial(self, env: "AuthorityEnvelope", now: float) -> "Decision | None":
+        """For an attenuated child: every ancestor must still exist, belong to the same tenant, be unrevoked, unexpired and current in
+        its revocation epoch, and still COVER what the child holds. A child's authority is therefore always the intersection down its
+        chain, checked at every decision: revoking, expiring or narrowing a parent takes effect on all its descendants at once, with
+        no need to enumerate them. Anything unreadable fails closed."""
+        cur, seen = env, {env.mission_id}
+        while cur.parent_mission_id:
+            pid = cur.parent_mission_id
+            parent = self.envelopes.get(pid)
+            if pid in seen or len(seen) > 16:
+                return Decision(Verdict.DENY, "bad_chain", "the delegation chain is malformed", None, env.digest())
+            seen.add(pid)
+            if parent is None or parent.tenant != env.tenant:
+                return Decision(Verdict.DENY, "orphaned", "the authority this was delegated from is gone", None, env.digest())
+            if self.envelopes.is_revoked(pid) or parent.revocation_epoch < self.envelopes.epoch(parent.tenant):
+                return Decision(Verdict.DENY, "ancestor_revoked", "an authority above this one was revoked", None, env.digest())
+            if not (now < parent.expires_at):
+                return Decision(Verdict.DENY, "ancestor_expired", "an authority above this one has expired", None, env.digest())
+            if any(not any(pg.covers(g) for pg in parent.grants) for g in cur.grants):
+                return Decision(Verdict.DENY, "exceeds_parent", "the parent's authority no longer covers what was delegated",
+                                None, env.digest())
+            cur = parent
+        return None
+
     def authorize_delegation(self, mission_id: str, tenant: str) -> tuple[Decision, "AuthorityEnvelope | None"]:
         """May this authority start a child mission? Reserves one unit of the child quota when it may."""
         return _delegation(self, mission_id, tenant)
@@ -826,6 +855,9 @@ class AuthorityGuard:
         now = self.clock()
         if self.envelopes.is_revoked(env.mission_id):
             return Decision(Verdict.DENY, "revoked", "this authority was revoked", None, env.digest())
+        bad = self.chain_denial(env, now)
+        if bad is not None:
+            return bad
         dec = evaluate(env, action, now=now, current_epoch=self.envelopes.epoch(env.tenant))
         if dec.verdict is not Verdict.ALLOW:
             return dec
@@ -947,6 +979,9 @@ def _delegation(guard: "AuthorityGuard", mission_id: str, tenant: str) -> tuple[
         return Decision(Verdict.DENY, "revoked", "this authority was revoked", None, env.digest()), env
     if not (now < env.expires_at):
         return Decision(Verdict.DENY, "expired", "this authority has expired", None, env.digest()), env
+    bad = guard.chain_denial(env, now)
+    if bad is not None:
+        return bad, env
     if not env.may_delegate:
         return Decision(Verdict.DENY, "delegation_not_allowed", "this authority does not allow delegation", None, env.digest()), env
     refused = guard.ledger.reserve(env.mission_id, {"children": 1.0}, {"children": float(env.budget.max_children)}, None, now)

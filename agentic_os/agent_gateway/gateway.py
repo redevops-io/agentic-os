@@ -126,6 +126,9 @@ class AgentGateway:
     authority: object = None
     authority_key: object = None
     on_authority: object = None
+    #: a `ChildCredentialVerifier` (mission/children.py). When set, the envelope key of a child agent comes ONLY from a verified credential,
+    #: never from a name the caller supplies, and a caller claiming an `agent:` identity without one is refused.
+    child_credentials: object = None
 
     # discovery — the agent-visible tool list is the *filtered* registry, never raw routes.
     def capabilities_for(self, principal: GatewayPrincipal) -> list:
@@ -188,6 +191,14 @@ class AgentGateway:
         if self.authority is not None:
             from agentic_os.mission.authority import Action, Standing, Verdict   # local: keeps the gateway importable alone
             key = (self.authority_key(gp) if self.authority_key else f"{gp.tenant}:{gp.subject}")
+            agent_meta: dict = {}
+            if self.child_credentials is not None and (request.credential or str(gp.subject).startswith("agent:")):
+                vc = self.child_credentials.verify(request.credential, tenant=gp.tenant, client=gp.client_id)
+                if not vc.ok:                                   # one answer for every reason: the caller learns nothing about why
+                    return self._finalize(request, start, self._deny("authority:invalid_credential", tier), exposed_reason="permitted")
+                key = vc.claims["key"]
+                agent_meta = {"agent_id": vc.claims["child_id"], "agent_principal": vc.claims["principal"],
+                              "agent_parent": vc.claims["parent_key"], "agent_depth": vc.claims["depth"]}
             # An ORDINARY approval policy (REQUIRED) may be satisfied in advance by an explicit grant the owner
             # raised to this tier; MANDATORY never is, and IF_POLICY is unchanged.
             ordinary = manifest.effective_approval_policy is ApprovalPolicy.REQUIRED
@@ -196,7 +207,7 @@ class AgentGateway:
                 side_effecting=bool(manifest.side_effecting)), Standing() if ordinary else None,
                 lease_id=request.request_id,
                 lease_meta={"kind": "gateway", "request_id": request.request_id, "subject": gp.subject,
-                            "idempotency_key": request.idempotency_key or ""})
+                            "idempotency_key": request.idempotency_key or "", **agent_meta})
             if adec.allowed:
                 track["lease"] = adec.lease_id
                 track["side_effecting"] = bool(manifest.side_effecting) or manifest.kind is CapabilityKind.MISSION

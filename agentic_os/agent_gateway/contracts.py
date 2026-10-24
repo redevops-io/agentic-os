@@ -160,6 +160,9 @@ class GatewayRequest:
     idempotency_key: Optional[str] = None
     protocol: str = "mcp"
     request_id: str = field(default_factory=lambda: "req_" + uuid.uuid4().hex[:16])
+    #: a child agent's credential (mission/children.py). Never part of `arguments`, never hashed into the intent: it proves who is
+    #: calling, it is not an input of the call.
+    credential: Optional[str] = None
 
     def intent_hash(self) -> str:
         """Content-address the request so the same call under the same principal is one intent —
