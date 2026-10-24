@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
+from .fork_join import is_branch_node_id
 from .types import MissionState
 
 _TERMINAL = (MissionState.SUCCEEDED, MissionState.FAILED, MissionState.CANCELLED, MissionState.COMPENSATION_FAILED)
@@ -57,7 +58,10 @@ def classify(rt, mission_id: str, jobs=None, *, now: Optional[float] = None, hun
     if m.state in _TERMINAL:
         return Assessment(Wait.TERMINAL)
     pend = rt.repo.pending_reconciliation(mission_id)
-    independent = rt._independent_work(mission_id, rt._plans[mission_id]) if pend else False
+    # a plan node's wait is "not stuck" if independent plan work could run; a fork branch's is the fork's, which has already run
+    # everything it could before it parked (a branch awaiting reconciliation is never "independent work" of itself)
+    independent = (rt._independent_work(mission_id, rt._plans[mission_id])
+                   if pend and not any(is_branch_node_id(p.get("node_id", "")) for p in pend) else False)
     if pend and not independent:
         job = jobs.get(pend[0].get("lease_id", "")) if jobs is not None and pend[0].get("lease_id") else None
         if job is not None and job["state"] == "escalated":

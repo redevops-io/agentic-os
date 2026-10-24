@@ -204,7 +204,7 @@ class BranchState:
     operator: str = ""
     produces: str | None = None
     max_attempts: int = 1
-    status: str = "pending"            # pending|running|parked|retrying|succeeded|failed|cancelled
+    status: str = "pending"            # pending|running|parked|reconciling|retrying|succeeded|failed|cancelled
     attempt: int = 0
     idempotency_key: str = ""
     reason: str = ""
@@ -215,12 +215,17 @@ class BranchState:
     parked: bool = False
     reserved: dict = field(default_factory=dict)
     generation: int = 0
+    awaiting: bool = False             # an unknown outcome is unresolved (ReconciliationRequired minus ReconciliationResolved)
+    reconcile: dict | None = None      # that record: lease_id, attempt, reason
 
     def to_dict(self) -> dict:
-        return {"branch_id": self.branch_id, "node_id": self.node_id, "capability": self.capability,
-                "status": self.status, "attempt": self.attempt, "idempotency_key": self.idempotency_key,
-                "reason": self.reason, "ran": self.ran, "result": self.result, "receipt": self.receipt,
-                "approval": self.approval, "parked": self.parked}
+        d = {"branch_id": self.branch_id, "node_id": self.node_id, "capability": self.capability,
+             "status": self.status, "attempt": self.attempt, "idempotency_key": self.idempotency_key,
+             "reason": self.reason, "ran": self.ran, "result": self.result, "receipt": self.receipt,
+             "approval": self.approval, "parked": self.parked}
+        if self.awaiting:                  # omitted when false: the serialised form of every existing fork is unchanged
+            d["awaiting_reconciliation"] = True
+        return d
 
 
 @dataclass
@@ -302,7 +307,7 @@ def fold_fork(events: Iterable, fork_id: str) -> ForkState:
         if not st.opened:
             continue
         if t in ("NodeParked", "NodeResumed", "NodeSkipped", "ApprovalGranted", "ApprovalInvalidated",
-                 "ApprovalRejected"):
+                 "ApprovalRejected", "ReconciliationRequired", "ReconciliationResolved"):
             bid = by_node.get(p.get("node_id", ""))
             if bid is None:
                 continue
@@ -315,6 +320,10 @@ def fold_fork(events: Iterable, fork_id: str) -> ForkState:
                 b.approval = p.get("capability") or ""
             elif t == "ApprovalInvalidated":
                 b.approval = None
+            elif t == "ReconciliationRequired":
+                b.awaiting, b.reconcile = True, dict(p)
+            elif t == "ReconciliationResolved":
+                b.awaiting = False
             continue
         if p.get("fork_id") != fork_id:
             continue
@@ -352,6 +361,8 @@ def fold_fork(events: Iterable, fork_id: str) -> ForkState:
     for b in st.branches.values():     # derived, not stored: a parked non-terminal branch shows as parked
         if b.parked and b.status in ("pending", "retrying"):
             b.status = "parked"
+        if b.awaiting and b.status in ("pending", "running", "parked"):
+            b.status = "reconciling"   # a dispatched call whose outcome is unknown: neither running, failed nor retryable
     return st
 
 
@@ -396,7 +407,7 @@ def _winners(st: ForkState) -> list:
 # ───────────────────────────── controller ─────────────────────────────
 @dataclass
 class ForkResult:
-    status: str                     # satisfied | failed | parked
+    status: str                     # satisfied | failed | parked | awaiting_reconciliation
     state: ForkState
 
     @property
@@ -799,6 +810,7 @@ class ForkJoinController:
         try:
             if m.state != MissionState.RUNNING:
                 rt._set_state(m, MissionState.RUNNING)
+            self._settle_confirmed(m, self.state(m.id, fid))
             while True:
                 st = self.state(m.id, fid)
                 if st.closed:
@@ -844,6 +856,11 @@ class ForkJoinController:
                         self._wait(futs)
                         continue
                     st = self.state(m.id, fid)
+                    if not forced and any(b.awaiting and b.status == "reconciling" for b in st.ordered()):
+                        # The join can no longer succeed, but what it must compensate depends on a call that may have
+                        # applied its effect. Deciding now would roll back around an unknown: wait for the evidence.
+                        rt._set_state(m, MissionState.WAITING_RECONCILIATION)
+                        return ForkResult("awaiting_reconciliation", st)
                     self._finalize(m, st, "failed", reason=forced or self._failed_reason(st))
                     continue
                 started = self._start_ready(m, st, spec, by_id, nodes, futs)
@@ -862,6 +879,12 @@ class ForkJoinController:
                             if b.status in ("pending", "retrying", "running"):
                                 self._append_failed(m, st, b, b.attempt or 1, "unschedulable", ran=False)
                         continue
+                    if any(b.status == "reconciling" for b in st.ordered()):
+                        # Everything that can run has run. What is left is a call whose outcome is unknown: that is a wait on
+                        # evidence (a probe or a person), not a failure, and it is not resent. The mission parks; the same
+                        # fork resumes when the branch is reconciled.
+                        rt._set_state(m, MissionState.WAITING_RECONCILIATION)
+                        return ForkResult("awaiting_reconciliation", st)
                 self._wait(futs)
         finally:
             with self._lock:
@@ -928,6 +951,13 @@ class ForkJoinController:
                 continue
             attempt = (bs.attempt + 1) if bs.status == "retrying" else max(bs.attempt, 1)
             resumed = bs.status == "running"
+            regate = False
+            if resumed:
+                # a branch an older driver had in flight: what its reservation says decides whether it may be sent again
+                handled, regate = self._resume_lease(m, st, bs, node, attempt)
+                if handled:
+                    started = True
+                    continue
             # scope: capability must still be granted (policy tightened since open)
             if rt._scoped(m).get(node.capability) is None:
                 self._append_failed(m, st, bs, attempt, "policy_revoked", ran=False)
@@ -949,7 +979,7 @@ class ForkJoinController:
                     started = True
                     continue
                 # one decision for every execution topology: DENY -> mandatory -> standing grant -> ordinary approval
-                verdict, ares = ("run", None) if resumed else rt._authority_gate(
+                verdict, ares = ("run", None) if resumed and not regate else rt._authority_gate(
                     m, node, decision, world, graph=plan.graph, inputs=self._inputs(m, by_id[bs.branch_id], node, bs),
                     attempt=attempt)
                 if verdict == "authority_denied":
@@ -992,8 +1022,8 @@ class ForkJoinController:
                 claims = rt._lease_dispatched(m, node)  # BranchStarted is durable: the call may now leave
                 if claims is None and rt._lease_of(m, node.id) is not None:
                     # the reservation was already dispatched by an earlier attempt: do not send it again (see runtime._refuse_redispatch)
-                    self._append_failed(m, st, bs, attempt, "redispatch_refused", ran=True,
-                                        error="already dispatched by an earlier attempt; reconcile before retrying")
+                    self._park_unknown(m, st, bs, node, attempt,
+                                       "already dispatched by an earlier attempt; the outcome is unknown")
                     started = True
                     continue
                 if claims:
@@ -1009,6 +1039,177 @@ class ForkJoinController:
             ops[node.operator] = ops.get(node.operator, 0) + 1
             started = True
         return started
+
+    # ── unknown outcomes: the same reconciliation contract as a plan node ──
+    def _park_unknown(self, m: Mission, st: ForkState, bs: BranchState, node: Node, attempt: int, reason: str,
+                      lease_id: str = "") -> None:
+        """Record that this branch's dispatched call has an unknown outcome. The record is the SAME `ReconciliationRequired` a
+        plan node writes, so the inbox, the supervisor's probe jobs, the watchdog classification and `reconcile_node` see a fork
+        branch exactly like any other parked node. The branch is neither failed (the effect may exist) nor retried (that could
+        repeat it); it holds until evidence arrives. Idempotent."""
+        rt = self.rt
+        if self.state(m.id, st.fork_id).branches[bs.branch_id].awaiting:
+            return
+        ent = rt._lease_of(m, node.id)
+        lid = lease_id or (ent[0] if ent else "")
+        if lid and rt.authority is not None:
+            lease = rt.authority.lease(lid)
+            if lease is not None and lease["state"] == "dispatched":
+                rt.authority.unknown(lid)
+                rt.store.append("AuthorityLeaseUnknown", m.id, {"node_id": node.id, "lease_id": lid})
+        with self._lock:
+            self._fenced(m, st.fork_id, "ReconciliationRequired", {
+                "fork_id": st.fork_id, "branch_id": bs.branch_id, "node_id": node.id, "capability": node.capability,
+                "operator": getattr(node, "operator", ""), "lease_id": lid, "attempt": attempt,
+                "idempotency_key": bs.idempotency_key or getattr(node, "idempotency_key", "") or "",
+                "reason": reason[:300], "at": time.time()})
+        rt.lifecycle.dispatch(GateReached(mission_id=m.id, node_id=node.id, capability=node.capability))
+
+    def _resume_lease(self, m: Mission, st: ForkState, bs: BranchState, node: Node, attempt: int) -> tuple:
+        """A branch whose BranchStarted is durable but whose driver is gone. Returns (handled, regate). Its reservation
+        (`<mission>:<node>:a<attempt>`, derived, so it needs no memory of the old process) says what may happen:
+
+          reserved      never dispatched: the call did not leave; send it
+          dispatched /  it may have executed. A read-only call is simply run again (its reservation is returned and re-taken);
+          unknown       a side-effecting call is NEVER sent again: it waits for reconciliation
+          settled       the effect is confirmed but this branch recorded no result: it waits for reconciliation (a result is needed)
+          released      it did not execute: re-attempt if the branch has attempts left, else it fails cleanly
+        """
+        rt = self.rt
+        g = rt.authority
+        if g is None:
+            return False, False
+        lid = f"{m.id}:{node.id}:a{attempt}"
+        lease = g.lease(lid)
+        if lease is None:
+            return False, False
+        state = lease["state"]
+        if state == "reserved":
+            rt._leases()[(str(m.id), node.id)] = (lid, bool(node.side_effecting),
+                                                  (lease.get("meta") or {}).get("envelope_digest", ""), attempt)
+            return False, False
+        if state in ("dispatched", "unknown"):
+            if not node.side_effecting:
+                if g.reconcile(lid, executed=False):            # nothing external to repeat: take the reservation again
+                    rt._leases().pop((str(m.id), node.id), None)
+                    return False, True
+            self._park_unknown(m, st, bs, node, attempt, "the driver was lost with this call in flight; the outcome is unknown",
+                               lease_id=lid)
+            return True, False
+        if state == "settled":
+            self._park_unknown(m, st, bs, node, attempt, "the effect is confirmed but no result was recorded", lease_id=lid)
+            return True, False
+        if state == "released":
+            self._append_failed(m, st, bs, attempt, "lease_released", ran=False,
+                                will_retry=attempt < self._max_attempts(m.id, st.fork_id, bs))
+            return True, False
+        return False, False
+
+    def _settle_confirmed(self, m: Mission, st: ForkState) -> None:
+        """A branch the log records as succeeded whose reservation is still open (the driver died between recording the success and
+        settling the ledger): the log is the proof, so settle it. Otherwise the counters would stay held for a finished call."""
+        g = self.rt.authority
+        if g is None:
+            return
+        for b in st.ordered():
+            if b.status == "succeeded" and b.attempt and not b.reason:
+                lid = f"{m.id}:{b.node_id}:a{b.attempt}"
+                lease = g.lease(lid)
+                if lease is not None and lease["state"] in ("dispatched", "unknown"):
+                    g.settle(lid)
+
+    def _max_attempts(self, mission_id: str, fork_id: str, bs: BranchState) -> int:
+        spec = self._specs.get((mission_id, fork_id))
+        return next((x.max_attempts for x in (spec.branches if spec else []) if x.branch_id == bs.branch_id), bs.max_attempts)
+
+    def reconcile_branch(self, m: Mission, mission_id: str, node_id: str, *, executed: bool, evidence: dict, actor: str,
+                         reason: str, result: "dict | None" = None, resume: bool = True) -> Mission:
+        """`MissionRuntime.reconcile_node` for a fork branch. Same rules as a plan node (validated first; the ledger's atomic
+        transition decides, the first resolver wins; repeating the same decision converges), and the same fork continues:
+        branches that succeeded are not rerun, branches still waiting stay waiting, the fork is driven again from its log."""
+        from .reconcile import ReconciliationConflict, ReconciliationError, validate_evidence  # noqa: PLC0415
+        rt = self.rt
+        ev = validate_evidence(evidence)
+        evs = rt.store.for_mission(mission_id)
+        target = None
+        for fid in fork_ids(evs):
+            fs = fold_fork(evs, fid)
+            for b in fs.ordered():
+                if b.node_id == node_id:
+                    target = (fs, b)
+        if target is None:
+            raise ReconciliationError("this node is not a fork branch of the mission")
+        st, b = target
+        rec = next((p for p in rt.repo.pending_reconciliation(mission_id) if p["node_id"] == node_id), None)
+        if rec is None:
+            prior = rt.repo.last_reconciliation(mission_id, node_id)
+            if prior is None:
+                raise ReconciliationError("this node has no unresolved reconciliation")
+            if bool(prior.get("executed")) != bool(executed):
+                raise ReconciliationConflict(f"this node was already reconciled as "
+                                             f"{'executed' if prior.get('executed') else 'not executed'} by {prior.get('actor')}")
+            return self._after_reconcile(m, mission_id, st.fork_id, resume)
+        if executed and b.produces and not result:
+            raise ReconciliationError(f"branch {b.branch_id} produces '{b.produces}': supply the provider's real result so the "
+                                      "fork's join publishes facts, not a placeholder")
+        lid = rec.get("lease_id") or ""
+        lease = rt.authority.lease(lid) if lid else None
+        if lease is None:
+            raise ReconciliationError("the reservation behind this branch is not in the authority ledger; resolve it there first")
+        want = "settled" if executed else "released"
+        if lease["state"] in ("dispatched", "unknown"):
+            if not rt.authority.reconcile(lid, executed=executed):
+                lease = rt.authority.lease(lid)
+                if lease is None or lease["state"] != want:
+                    raise ReconciliationConflict(f"the reservation was resolved the other way ({lease['state'] if lease else 'gone'})")
+        elif lease["state"] != want:
+            raise ReconciliationConflict(f"the reservation is already {lease['state']}; it cannot be reconciled as "
+                                         f"{'executed' if executed else 'not executed'}")
+        rt.authority.annotate(lid, reconcile_status="resolved_manually", resolved_by=str(actor).strip(),
+                              resolution_reason=str(reason).strip()[:500], evidence=ev, resolved_at=time.time(),
+                              manual_outcome="executed" if executed else "not_executed",
+                              provider_ref=ev.get("provider_ref") or None)
+        attempt = int(rec.get("attempt") or b.attempt or 1)
+        max_attempts = self._max_attempts(mission_id, st.fork_id, b)
+        with self._lock:
+            if executed:
+                out = {**(dict(result) if isinstance(result, dict) else {}), "reconciled": True,
+                       "reconciled_by": str(actor).strip(), "evidence": ev}
+                rcpt = {"fork_id": st.fork_id, "branch_id": b.branch_id, "node_id": node_id, "capability": b.capability,
+                        "operator": b.operator, "attempt": attempt, "idempotency_key": rec.get("idempotency_key", ""),
+                        "result_sha256": _sha(out), "reconciled": True}
+                # a branch the fork already gave up on (cancelled, or the join closed) keeps the receipt as a LATE one
+                late = b.status in _TERMINAL_BRANCH or st.closed is not None
+                if b.status != "succeeded":
+                    self._fenced(m, st.fork_id, "BranchSucceeded", {
+                        "fork_id": st.fork_id, "branch_id": b.branch_id, "node_id": node_id, "attempt": attempt,
+                        "result": out, "receipt": rcpt, **({"late": True} if late else {})})
+            elif b.status == "reconciling":
+                # authoritative negative: the call did not happen, so a retry is a NEW attempt under a fresh reservation
+                self._fenced(m, st.fork_id, "BranchFailed", {
+                    "fork_id": st.fork_id, "branch_id": b.branch_id, "node_id": node_id, "attempt": attempt,
+                    "reason": "reconciled_not_executed", "error": "", "ran": False,
+                    "will_retry": attempt < max_attempts})
+            rt.store.append("ReconciliationResolved", mission_id, {
+                "node_id": node_id, "lease_id": lid, "executed": bool(executed), "actor": str(actor).strip(),
+                "reason": str(reason).strip()[:500], "evidence": ev, "provider_ref": ev.get("provider_ref", ""),
+                "fork_id": st.fork_id, "branch_id": b.branch_id, "at": time.time()})
+        rt._leases().pop((str(m.id), node_id), None)
+        return self._after_reconcile(m, mission_id, st.fork_id, resume)
+
+    def _after_reconcile(self, m: Mission, mission_id: str, fork_id: str, resume: bool) -> Mission:
+        """Continue the SAME fork from its log if its spec is known to this process; otherwise leave the mission paused for the
+        owner to `register_spec` + `run_fork` (the spec's inputs are not in the log)."""
+        terminal = (MissionState.SUCCEEDED, MissionState.FAILED, MissionState.CANCELLED, MissionState.COMPENSATION_FAILED)
+        if m.state in terminal or self.state(mission_id, fork_id).closed:
+            return m
+        spec = self._specs.get((mission_id, fork_id))
+        if not resume or spec is None or (mission_id, fork_id) in self._driving:
+            if m.state is MissionState.WAITING_RECONCILIATION and not self.rt.repo.pending_reconciliation(mission_id):
+                self.rt._set_state(m, MissionState.PAUSED)
+            return m
+        self.run_fork(mission_id, spec)
+        return m
 
     def _submit(self, m: Mission, node: Node, inputs: dict) -> _cf.Future:
         fut: _cf.Future = _cf.Future()
@@ -1124,6 +1325,12 @@ class ForkJoinController:
             # A retry is a NEW idempotency key. After a real call failed, a side-effecting capability might have
             # applied the effect, so it is retried only if the failure explicitly says nothing was applied.
             safe = (not node.side_effecting) or bool(getattr(exc, "not_applied", False))
+            if not safe and rt.authority is not None and rt._lease_of(m, node.id) is not None:
+                # It may have applied its effect and nothing says it did not: the same contract as a plan node. The reservation
+                # stays counted (UNKNOWN), the branch waits for evidence, and nothing is sent again.
+                rt._lease_failed(m, node.id, ran=True, executed=None)
+                self._park_unknown(m, st, bs, node, attempt, f"the call failed after it may have been sent: {str(exc)[:200]}")
+                return
             self._append_failed(m, st, bs, attempt, "operator_error", ran=True, error=str(exc),
                                 will_retry=attempt < b_spec.max_attempts and safe,
                                 not_applied=bool(getattr(exc, "not_applied", False)))
@@ -1346,7 +1553,8 @@ class ForkJoinController:
         # unknown-effect branches: a failed call that actually ran on a consequential capability may have applied
         # its effect; report it, never claim it was rolled back
         unknown = [{"node_id": b.node_id, "capability": b.capability, "reversibility": "UNKNOWN_EFFECT"}
-                   for b in st.ordered() if b.status == "failed" and b.ran and getattr(self._caps_of(b), "side_effecting", False)]
+                   for b in st.ordered()
+                   if b.awaiting or (b.status == "failed" and b.ran and getattr(self._caps_of(b), "side_effecting", False))]
         _runner.settle(rt, m, plan)           # compensation facts for plan nodes + every folded compensation
         out = dict(m.outcome or {})
         extra_nr = list(dec.get("not_reversible") or []) + unknown
@@ -1413,6 +1621,7 @@ class ForkJoinController:
         return {"fork_id": fork_id, "closed": st.closed, "join": st.join,
                 "succeeded": st.ids("succeeded"), "failed": st.ids("failed"),
                 "cancelled": st.ids("cancelled"), "parked": st.ids("parked"),
+                "awaiting_reconciliation": [b.branch_id for b in st.ordered() if b.awaiting],
                 "late_results": len(st.late_results), "generation": st.generation,
                 "reasons": {b.branch_id: b.reason for b in st.ordered() if b.reason}}
 

@@ -65,3 +65,11 @@ provider guarantees; presets `fast`, `default` and `slow` are provided. Exhausti
 
 An escalation is recorded once (durably) and the notifier is called with a stable idempotency key (`escalation:<job>:<time>`). Delivery is retried a bounded
 number of times if the notifier fails; a receiver should dedupe on the key, because a crash between a successful send and recording it can send once more.
+
+## Fork branches
+
+A fork branch follows the same contract as a plan node. If its call may have been sent and its outcome is unknown (an ambiguous error on a side-effecting capability, or a driver lost with the call in flight), it writes the same `ReconciliationRequired` record (with `fork_id` and `branch_id`), its reservation
+stays UNKNOWN, and the mission parks in `WAITING_RECONCILIATION`. Your probe, the supervisor, `reconcile_node` and the inbox need nothing fork-specific: the node id is the branch node id (`<mission>:fork:<fork>:<branch>`), and `ProbeContext.lease` is the branch attempt's reservation.
+
+What resolution does to the fork: **executed** completes the branch from the evidence (return the provider's real `result`; a branch that `produces` a fact requires it) and the same fork carries on, without rerunning branches that succeeded; **authoritative not-executed** makes the next attempt a
+new one under a fresh reservation if the branch has attempts left, otherwise the branch fails cleanly (not as an unknown effect). After a process restart the owner re-supplies the fork spec (`forks.register_spec`, then `run_fork`), because branch inputs are not in the log; until then the mission stays PAUSED.
