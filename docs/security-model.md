@@ -9,6 +9,7 @@ Control plane, security profile and the operator authority boundary, approval to
 - [Signed approval tokens (HTTP operators)](#signed-approval-tokens-http-operators) (was `APPROVAL_TOKENS.md`)
 - [Permissions plane — access-control admin](#permissions-plane--access-control-admin) (was `permissions.md`)
 - [Gate notifications](#gate-notifications) (was `GATE_NOTIFICATIONS.md`)
+- [Child agents](#child-agents)
 
 ## Control-plane auth, idempotency cache and multi-replica limits
 
@@ -532,3 +533,22 @@ Fake transport + fake clock. Healthy transport: 20/20 gates delivered within 60 
 repeated ticks: exactly 1 outbox row. External sends under 0/1/2 injected lost-acks: 1/2/3 (duplicates track
 ambiguous acks). Forged/unsigned/stale/replayed callbacks accepted: 0. Old pending gate: exactly one reminder,
 one escalation, one `GateExpired`, zero approval events. `time_to_decision()` reports per-gate seconds.
+
+## Child agents
+
+A delegated worker is an identity with its own envelope, allowance and credential (`agentic_os/mission/children.py`), never a borrowed copy of its parent's.
+
+```python
+spawner = ChildSpawner(guard, ChildRegistry(db), secret)           # production: a durable guard, a real secret
+child = spawner.spawn("root-key", "acme", role="researcher", goal="gather", grants=(Grant("crm.read"),),
+                      budget=AutonomyBudget(usd=2, tokens=200, max_actions=5, wall_clock_s=600), client="orchestrator-app")
+gateway = AgentGateway(..., authority=guard, child_credentials=spawner.verifier())
+gateway.invoke(GatewayRequest(principal, "crm.read", {...}, credential=child.credential))
+spawner.close(child.child_id)          # or revoke(child_id, actor=..., reason=...), close_tree(parent_key)
+```
+
+* A child is never wider than its parent (grants, limits, lifetime, depth). Its usd/tokens/actions are reserved from the parent's counters; the unused part returns on close.
+* `max_children` (total), `max_parallel` (active at once) and the registry's tree ceiling bound the fan-out; `max_depth` bounds the depth. A refusal leaves nothing behind.
+* Every decision walks the chain: revoke, expire or narrow any ancestor and every descendant stops at once. A child with no stored parent is denied.
+* The credential is a short-lived bearer token bound to the child, its tenant, its lineage and (optionally) one client; closing, revoking, rotating (`renew_credential`) or altering the envelope kills it immediately. The gateway answers every invalid credential identically.
+
