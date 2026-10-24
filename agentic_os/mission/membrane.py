@@ -27,6 +27,7 @@ and refuses to *pretend* to do the rest.
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
 import resource
@@ -113,6 +114,19 @@ sys.stdout.write(json.dumps({"result": out}))
 """
 
 
+@functools.lru_cache(maxsize=1)
+def memory_ceiling_enforceable() -> bool:
+    """Whether this platform lets a child be given an address-space ceiling (RLIMIT_AS), tried once on a throwaway child. Linux allows it. macOS refuses (`setrlimit` raises
+    ValueError), so there a memory ceiling cannot be enforced at all: the sandbox says so by name instead of dying inside the child with an unexplained `SubprocessError`, and it
+    never runs a capability "as if" the ceiling applied."""
+    def probe() -> None:
+        resource.setrlimit(resource.RLIMIT_AS, (1 << 30, 1 << 30))
+    try:
+        return subprocess.run([sys.executable, "-c", "pass"], preexec_fn=probe, capture_output=True, timeout=15).returncode == 0
+    except Exception:  # noqa: BLE001 - "could not establish that it works" is "not enforceable"
+        return False
+
+
 def _limits(constraint: ExecutionConstraint) -> Callable[[], None]:
     """Build a preexec_fn that applies the constraint's ceilings to the child process."""
     def apply() -> None:  # runs in the child, before exec
@@ -171,6 +185,9 @@ class LocalContainmentSandbox:
                 constraint = admit(self.posture, self.execution_class, constraint)
             except PostureDenied as e:
                 raise ContainmentError(str(e))
+        if constraint.max_memory_mb and not memory_ceiling_enforceable():
+            # fail closed and by name: a ceiling that cannot be applied is not a ceiling. (`max_memory_mb=0` means the caller asked for none.)
+            raise ContainmentError("memory_ceiling_unenforceable: this platform cannot apply an address-space limit (RLIMIT_AS); run on Linux or request no memory ceiling")
         scrubbed = {k: os.environ[k] for k in self.env_passthrough if k in os.environ}
         scrubbed.setdefault("PATH", "/usr/bin:/bin")
         # Import paths are not secrets — preserve them so the capability resolves, while

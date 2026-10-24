@@ -7,6 +7,12 @@ from __future__ import annotations
 
 import pytest
 
+import sys as _sys                                                     # noqa: E402
+from pathlib import Path as _Path                                      # noqa: E402
+
+_sys.path.insert(0, str(_Path(__file__).parent))
+from _platform_facts import needs_memory_ceiling                      # noqa: E402
+
 from runtime_contracts.models import (
     BackendCapabilities, EnforcementDowngrade, EnforcementProfile, ExecutionConstraint, ExecutionEnvelope,
     ExecutionBackend, admit_backend, profile_requirements,
@@ -58,6 +64,7 @@ def test_admission_fails_closed_above_membrane_tier():
         admit_backend(EnforcementProfile.HARDWARE_ATTESTED, be, env, ident)
 
 
+@needs_memory_ceiling
 def test_execute_runs_contained_capability():
     be, env, ident = MembraneExecutionBackend(), _envelope(), _identity()
     r = be.execute(env, ident, EnforcementProfile.STANDARD)
@@ -72,6 +79,7 @@ def test_execute_refuses_profile_it_cannot_enforce():
     assert r.outcome == "refused" and r.reason == "enforcement_downgrade"
 
 
+@needs_memory_ceiling
 def test_govern_and_execute_binds_identity_and_gates():
     be, env, ident = MembraneExecutionBackend(), _envelope(), _identity()
     admission, receipt = govern_and_execute(be, env, ident, EnforcementProfile.STANDARD)
@@ -83,6 +91,7 @@ def test_govern_and_execute_binds_identity_and_gates():
         govern_and_execute(be, env, ident, EnforcementProfile.HARDENED)
 
 
+@needs_memory_ceiling
 def test_execute_containment_failure_is_a_refusal_receipt():
     be, ident = MembraneExecutionBackend(), _identity()
     env = _envelope(cap=f"{CAP}:busy",
