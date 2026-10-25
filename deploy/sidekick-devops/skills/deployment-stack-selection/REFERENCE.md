@@ -28,7 +28,7 @@ measured (a bounded spike, then a benchmark against the current runner).
 | Short, stateless invocation | Ordinary Lambda (Event Functions, On-Demand) | 15 min per invocation; no retained state |
 | Long-running asynchronous task | Lambda Managed Instances | 90 min and only for async / event-source-mapping invocations (synchronous stays 15 min); EC2-backed, so it pays off for continuously utilized load (peak-to-mean < 2), not bursty; > 90 min -> containers / EC2 |
 | Durable orchestration with long waits | Lambda Durable Functions | each step is bounded by its capacity provider's timeout; supported runtimes only (Python 3.13+, Node.js 22+, Java 17+, .NET 8+); does not replace the Mission Runtime's approvals, receipts and replay |
-| Isolated agent code with resumable process state | Lambda MicroVMs | **ARM64 only; no GPU; 8-hour session lifetime, and suspended time counts toward it**; Dockerfile-in-a-zip-in-S3 image on an AWS base image; state must outlive the session outside it; Terraform / CloudFormation support unconfirmed |
+| Isolated agent code with resumable process state | Lambda MicroVMs | **ARM64 only; no GPU; 8-hour session lifetime, and suspended time counts toward it; egress is the open internet unless a VPC connector restricts it**; Dockerfile-in-a-zip-in-S3 image on an AWS base image; state must outlive the session outside it; Terraform / CloudFormation support unconfirmed |
 | Managed agent hosting | AgentCore Runtime | you do not control the VM lifecycle; identity, MCP and A2A are AWS's |
 | Persistent services, specialized hardware or GPU | ECS, EKS or EC2 | see `deployment-aws` §A-§B |
 
@@ -47,17 +47,31 @@ loss, on a failed resume).
   The agent process must not keep its own approval state, enforce its own permissions, or declare its own execution successful.
 - **Snapshot hygiene.** The image is snapshotted after init, so unique content (IDs, secrets, connections) created at build time is shared by
   every MicroVM from that image version: create it in the `/run` hook and re-establish connections on resume.
-- **Record the exact image identity (digest) with every session** for provenance.
+- **Deny the network with a VPC egress connector, not by omission, and attach no execution role unless the code needs AWS access** (its credentials are readable by guest code).
+- **Record the image identity with every session** for provenance: version, base image version and artifact hashes (MicroVM images have no registry digest).
 
-**Confirmed vs unverified** (as of 2026-10-25; re-check before relying on any number):
+**Confirmed vs measured vs unverified** (as of 2026-10-25; re-check before relying on any number):
 - *Confirmed in AWS documentation / posts:* MicroVMs are ARM64-only; up to 8 hours of total runtime; up to 16 vCPU, 32 GB memory, 32 GB disk;
   memory and disk preserved across suspend / resume; suspended MicroVMs accrue no compute charge (snapshot charges still apply); image
   built from a Dockerfile zip in S3 and snapshotted; lifecycle `run / suspend / resume / terminate` through `aws lambda-microvms`; public egress
   by default, VPC egress through a network connector; available in 14 Regions after the October 2026 expansion. Managed Instances: 90 minutes for
   async invocations, Graviton5 instance types supported. Durable Functions: executions can wait up to a year at no compute cost.
-- *Unverified or third-party only:* start and resume latency (about 2 s and 1 s in one launch-day test by one author); AgentCore Runtime session
-  and "Runtime Instances" limits; Terraform / CloudFormation resources for MicroVMs (none found); behaviour at the 8-hour limit and after a
-  failed resume; idle-parameter ranges, quotas and image limits; whether the controller can be restarted and re-attach to a running MicroVM.
+- *Measured on a real account* (us-east-1, one image, single runs; spike and raw evidence in `runtime-plugins-enterprise` `spikes/microvm`):
+  - **Default egress is the open internet, and omitting the egress connector does not deny it**: the service applies `INTERNET_EGRESS` and guest
+    code reached the internet. AWS documents no deny-all connector. A customer-managed VPC egress connector in an isolated subnet whose security
+    group has no outbound rules blocked TCP, but **DNS resolution still worked** (an exfiltration channel). A "no network" requirement therefore needs
+    that connector; do not infer it from leaving the parameter out.
+  - **An execution role's temporary credentials are readable by any code in the VM** through the metadata endpoint; with no role the VM has no AWS
+    credentials. Treat a role as a credential handed to untrusted code; the default is no role.
+  - `maximumDurationInSeconds` is enforced for running **and suspended** VMs alike (a suspended VM was terminated at the limit); a terminated VM cannot be resumed.
+  - Start to `RUNNING` about 3.5 s, suspend and resume about 2.2 s each, first request to a suspended VM with auto-resume 0.65 s; process, memory and
+    file survived suspend, the monotonic clock paused while the wall clock jumped.
+  - All VMs from one image version share state created at build time (use the `/run` hook for per-VM values). Inbound requests need a per-VM,
+    per-port token (missing, foreign and wrong-port tokens were refused). The guest runs as root with elevated capabilities inside the VM.
+  - No registry-style image digest exists; provenance is image version + base image version + hashes of the code artifact.
+- *Unverified or third-party only:* AgentCore Runtime session and "Runtime Instances" limits; Terraform / CloudFormation resources for MicroVMs
+  (none found); the real 8-hour expiry (tested at 2 minutes); behaviour after a genuinely failed resume; host allow-lists through a VPC connector;
+  idle-parameter ranges, quotas and image limits; behaviour under load.
 
 ## §B — The 12 heuristics (if-then, agent-applicable)
 
