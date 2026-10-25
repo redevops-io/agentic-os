@@ -1,11 +1,12 @@
 # Projects + Sidekick orchestration node — Projects UI + Sidekick + the parallel-workflow composer and
-# A2A/MCP external-agent interop, in ONE public image. No cores, no fleet, no database required.
+# A2A/MCP external-agent interop, in ONE image. No cores, no fleet, no database required.
 #
 #   docker compose up -d
 #   # Projects UI      → http://localhost:8290/
 #   # Workflows console → http://localhost:8290/workflows
 #
-# The image is public (GHCR); the enterprise overlay source is private (only the AGPL kernel is open).
+# The image is PRIVATE (GHCR): it carries the enterprise code, so `docker login ghcr.io` with an account ReDevOps granted access to first.
+# Only the AGPL kernel is open.
 # Bring your own model endpoint (local or cloud) and only the external-agent / channel credentials you use.
 services:
   projects-sidekick:
