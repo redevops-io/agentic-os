@@ -167,7 +167,9 @@ services:
     depends_on: [twenty-db, twenty-redis]
     ports: ["${TWENTY_PORT:-3010}:3000"]
     environment:
-      - SERVER_URL=${TWENTY_SERVER_URL:-http://localhost:3010}
+      # Twenty redirects the browser to this origin and bakes it into the page: it must be the address you OPEN it at.
+      # localhost only works when the browser is on this machine; from another machine set TWENTY_SERVER_URL=http://<host>:<port>.
+      - SERVER_URL=${TWENTY_SERVER_URL:-http://localhost:${TWENTY_PORT:-3010}}
       - PG_DATABASE_URL=postgres://postgres:${TWENTY_DB_PASSWORD:-twenty}@twenty-db:5432/default
       - REDIS_URL=redis://twenty-redis:6379
       - APP_SECRET=${TWENTY_APP_SECRET:?set TWENTY_APP_SECRET in .env (>=32 bytes)}
