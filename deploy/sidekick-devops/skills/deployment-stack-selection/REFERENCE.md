@@ -16,6 +16,49 @@ the exact matrix/thresholds. Grounded in 2024–2026 sources (§F). Tiers: **T1*
 | Cron / scheduled jobs | T1 serverless (or T4 Modal for GPU) | T2 container if >50k invocations/day or >50% duty | Always-on instance for a 2-min/day job (80× overpay) |
 | Edge / low-latency global | T1 Fly.io (full container) or Vercel (edge fns) | T3/T2 multi-region for persistent conns + local DB | Single-region SSR when SLO can't absorb ~200ms cross-continent |
 
+## §A2 — AWS execution environments for agents and long-running work (candidates, not defaults)
+
+Applies when the target stack is AWS and the workload is an agent, a long-running task or a workflow. "Lambda" is no longer one
+thing: the 15-minute stateless function is only the On-Demand form. The rows below name a **candidate**; they are not deployment rules,
+and **nothing here changes a default**: no Lambda form is preferred over the existing k3s/Proxmox or ECS/EKS paths until it has been
+measured (a bounded spike, then a benchmark against the current runner).
+
+| Workload | Preferred candidate | What disqualifies it |
+|---|---|---|
+| Short, stateless invocation | Ordinary Lambda (Event Functions, On-Demand) | 15 min per invocation; no retained state |
+| Long-running asynchronous task | Lambda Managed Instances | 90 min and only for async / event-source-mapping invocations (synchronous stays 15 min); EC2-backed, so it pays off for continuously utilized load (peak-to-mean < 2), not bursty; > 90 min -> containers / EC2 |
+| Durable orchestration with long waits | Lambda Durable Functions | each step is bounded by its capacity provider's timeout; supported runtimes only (Python 3.13+, Node.js 22+, Java 17+, .NET 8+); does not replace the Mission Runtime's approvals, receipts and replay |
+| Isolated agent code with resumable process state | Lambda MicroVMs | **ARM64 only; no GPU; 8-hour session lifetime, and suspended time counts toward it**; Dockerfile-in-a-zip-in-S3 image on an AWS base image; state must outlive the session outside it; Terraform / CloudFormation support unconfirmed |
+| Managed agent hosting | AgentCore Runtime | you do not control the VM lifecycle; identity, MCP and A2A are AWS's |
+| Persistent services, specialized hardware or GPU | ECS, EKS or EC2 | see `deployment-aws` §A-§B |
+
+**Evaluate before choosing** (in this order): duration against the form's ceiling · architecture (ARM64 clean?) · network egress and
+destinations · region availability · quotas · cost model (per-second vCPU and GB; snapshot write / read / storage; suspended time is not
+billed as compute) · security (who holds credentials, which side is the controller) · lifecycle guarantees (what happens at expiry, on VM
+loss, on a failed resume).
+
+**If a MicroVM is chosen:**
+- **Mission lifetime is independent of VM lifetime.** A mission may stay parked for days; a MicroVM cannot (8 h including suspended time).
+  Suspend for short approval waits when economical; for long waits checkpoint the durable mission state outside the VM, terminate it, and
+  launch a new session after approval. One mission may therefore use several MicroVM sessions; session-per-mission is a starting
+  convenience, not an invariant.
+- **Keep the controller outside the sandbox.** The Mission Runtime stays authoritative for approvals and separation of duty, execution
+  receipts and replay protection, sandbox credentials and capability grants, network policy, recovery and retry, budgets and termination.
+  The agent process must not keep its own approval state, enforce its own permissions, or declare its own execution successful.
+- **Snapshot hygiene.** The image is snapshotted after init, so unique content (IDs, secrets, connections) created at build time is shared by
+  every MicroVM from that image version: create it in the `/run` hook and re-establish connections on resume.
+- **Record the exact image identity (digest) with every session** for provenance.
+
+**Confirmed vs unverified** (as of 2026-10-25; re-check before relying on any number):
+- *Confirmed in AWS documentation / posts:* MicroVMs are ARM64-only; up to 8 hours of total runtime; up to 16 vCPU, 32 GB memory, 32 GB disk;
+  memory and disk preserved across suspend / resume; suspended MicroVMs accrue no compute charge (snapshot charges still apply); image
+  built from a Dockerfile zip in S3 and snapshotted; lifecycle `run / suspend / resume / terminate` through `aws lambda-microvms`; public egress
+  by default, VPC egress through a network connector; available in 14 Regions after the October 2026 expansion. Managed Instances: 90 minutes for
+  async invocations, Graviton5 instance types supported. Durable Functions: executions can wait up to a year at no compute cost.
+- *Unverified or third-party only:* start and resume latency (about 2 s and 1 s in one launch-day test by one author); AgentCore Runtime session
+  and "Runtime Instances" limits; Terraform / CloudFormation resources for MicroVMs (none found); behaviour at the 8-hour limit and after a
+  failed resume; idle-parameter ranges, quotas and image limits; whether the controller can be restarted and re-attach to a running MicroVM.
+
 ## §B — The 12 heuristics (if-then, agent-applicable)
 
 1. No dedicated infra owner (< ~4 platform/DevOps eng) → never self-managed k8s / bare metal; default T1 PaaS. Ops labor (20–40% of an engineer, $2.5–8k/mo) erases hardware savings.
@@ -29,13 +72,13 @@ the exact matrix/thresholds. Grounded in 2024–2026 sources (§F). Tiers: **T1*
 9. Egress-heavy → flag egress cost first: hyperscaler $0.09–0.20/GB vs Fly $0.02/GB vs Cloudflare R2 $0. Keep compute next to data; prefer zero-egress storage.
 10. High-bandwidth prod on premium PaaS (Vercel $0.15/GB post-cut) → warn of bill-shock; a viral 1TB spike ≈ $1,100 overage. Propose Fly.io/self-host.
 11. Runs > ~6 months at 70–80%+ steady util → reserved instances / savings plans / CUDs (~40% off, ~6-month all-upfront break-even). Target 70–80% coverage, not 100%.
-12. Stateless-clean (12/15-factor: config in env, disposable, attached backing services) → portable across tiers → prefer managed/serverless for velocity. Stateful/long-lived conns/WebSockets → rule out pure serverless; use T2/T3 containers.
+12. Stateless-clean (12/15-factor: config in env, disposable, attached backing services) → portable across tiers → prefer managed/serverless for velocity. Stateful/long-lived conns/WebSockets → rule out ordinary (On-Demand) serverless functions; use T2/T3, or on AWS check the §A2 candidates (MicroVMs, Managed Instances, Durable Functions) before ruling serverless out containers.
 
 ## §C — Cost & scale flip thresholds
 
 **App/compute**
 - PaaS → VPS/self-host: solo/small flips ~**$40–50/mo** PaaS bill (Hetzner CX22 ~$4.59 vs Vercel Pro+DB ~$120–200 — 20–40× gap). Covers most apps < ~100k monthly users on 1–2 servers.
-- Serverless → always-on container: ~**50k invocations/day** or **>50% duty cycle**. Real case: 40 Lambda fns → ECS Fargate cut bill 73% ($9,400 → $2,500/mo). Inverse: 2-min/day job is 80× cheaper on Lambda.
+- Serverless → always-on container: ~**50k invocations/day** or **>50% duty cycle** (for On-Demand functions; on AWS, Lambda Managed Instances is the Lambda option for continuously utilized load, see §A2). Real case: 40 Lambda fns → ECS Fargate cut bill 73% ($9,400 → $2,500/mo). Inverse: 2-min/day job is 80× cheaper on Lambda.
 - Managed cloud → repatriation: ~**$1M+/yr** steady spend, high util + large egress/storage. 37signals: $3.2M → $1.3M/yr (~$2M saved 2024) after ~$700k capex; 18PB Pure Storage < $200k/yr.
 - DIY platform / self-run k8s: org break-even ~**$2–2.5M/yr** cloud (or 50+ engineers) — a min viable platform team ≈ 3 seniors ≈ $600k/yr before compute. Managed k8s (EKS/GKE) keeps ~30–50% of DIY savings without running the control plane.
 
@@ -61,6 +104,7 @@ Well-Architected (AWS 6 / GCP 6 / Azure 5 pillars) — per-decision trade-off ch
 
 ## §F — Sources
 
+AWS execution environments (§A2): docs.aws.amazon.com/lambda/latest/dg/microvms-how-it-works.html · aws.amazon.com/blogs/aws/run-isolated-sandboxes-with-full-lifecycle-control-aws-lambda-introduces-microvms · aws.amazon.com/lambda/pricing · aws.amazon.com/about-aws/whats-new/2026/09/aws-lambda-graviton5-ec2 · aws.amazon.com/about-aws/whats-new/2026/10/lambda-microvms-4-additional-regions · infoq.com/news/2026/09/lambda-90-minute-timeout (third-party) · gerardo.dev/en/lambda-microvms-vs-agentcore-runtime (third-party opinion).
 Tiers/migration: byteiota "PaaS-first 2026", encore.dev/articles/kubernetes-cost, cloudraft railway-render-flyio→k8s, AWS Fargate-or-Lambda decision guide, umh.app AWS/Azure-vs-Hetzner, theregister/datacenterdynamics 37signals repatriation, deploybase Vercel bill-shock.
 Thresholds: devtoolpicks Vercel-vs-Hetzner, byteiota Lambda-vs-containers, egresscost.com, spendark egress guide, hykell/repost AWS savings-plans-vs-RI, cloudzero H100 cost.
 ML: gmicloud serverless-vs-dedicated, spheron serverless-vs-on-demand-vs-reserved + gpu-pricing-2026 + fine-tuning-cost, lambda.ai/pricing, modal.com/pricing, towardsdatascience SageMaker-vs-Vertex.
