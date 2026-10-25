@@ -2,7 +2,7 @@
 name: deployment-aws
 description: Deploy a workload to AWS as a governed mission — EKS or ECS/Fargate (or EC2) behind an ALB, image from ECR, DNS in Route 53, Terraform state in S3+DynamoDB. Use when the target stack is AWS and you need the exact plan→approval→apply→configure→verify runbook, mapped to the infra operator, with real aws/terraform/kubectl commands and the saga rollback.
 license: Apache-2.0
-version: 0.1.0
+version: 0.2.0
 ---
 
 # deployment-aws
@@ -18,6 +18,11 @@ approval gate**.
 The deploy spec's target stack is AWS: EKS (managed k8s) or ECS/Fargate (serverless containers) or
 EC2 (VMs), image in **ECR**, ingress via an **ALB**, DNS in **Route 53**. If the stack is unset or
 looks wrong, run `deployment-stack-selection` first — this skill executes the *how*, not the *where*.
+
+**Not covered here: Lambda targets.** This runbook provisions container and VM targets with Terraform. For an agent session, a long-running
+or asynchronous task, or a durable workflow, `deployment-stack-selection` `REFERENCE.md` §A2 names the Lambda candidates (Managed
+Instances, Durable Functions, MicroVMs) and AgentCore Runtime with their limits; Lambda MicroVMs are launched at runtime with
+`aws lambda-microvms` and have no confirmed Terraform / CloudFormation resource, so they are not a `deploy_app` Terraform target.
 
 ## Prerequisites (deterministic checklist — all must exist before step 1)
 

@@ -17,6 +17,10 @@ guessed flag.
 | Registry | **ECR** | `aws_ecr_repository`, `aws_ecr_lifecycle_policy` | OCI images; per-region; login token ~12 h |
 | DNS | **Route 53** | `aws_route53_zone`, `aws_route53_record` (alias to ALB) | Managed DNS + health checks |
 
+Lambda is **not** a row in this table: its forms (Event Functions, Managed Instances, Durable Functions, MicroVMs) and AgentCore Runtime are
+selected in `deployment-stack-selection` §A2 and are not provisioned by this runbook. Lambda MicroVMs are ARM64-only (Graviton): any image
+built for one must be arm64-clean.
+
 Rule of thumb: **ECS/Fargate until node/k8s features are actually needed**; EKS earns its control-plane
 cost (~$0.10/hr/cluster) at scale, multi-region, or regulated. GPU inference → EC2 GPU node group or
 EKS GPU node group (see §B).
