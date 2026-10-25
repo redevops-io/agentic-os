@@ -50,7 +50,7 @@ system and a cross-domain attention queue.
 
 ## First-run wiring
 
-- **Twenty** (`:3010`): create an account, then a personal **API key**
+- **Twenty** (`:3010`): open it at the address in `TWENTY_SERVER_URL` (default `http://localhost:3010`; set it to `http://<host>:<port>` when you browse from another machine, or the page stays blank). Create an account, then a personal **API key**
   (Settings → APIs). Paste it into `.env` as `TWENTY_API_KEY` and
   `docker compose up -d revenue-agent` to connect the revenue agent.
 - **Metabase** (`:3001`) and **Postiz** (`:4200`): complete their first-run setup;
