@@ -2,7 +2,7 @@
 
 Deploy **just the Projects UI + Sidekick** to compose and run missions that orchestrate **3rd-party agents**
 (over MCP / A2A) across messengers and social — *without* the agentic-apps fleet (Chatwoot, ERPNext, Lago,
-Postiz, …). One public image, one model endpoint.
+Postiz, …). One image, one model endpoint.
 
 ## Run it
 
@@ -35,10 +35,10 @@ log is in-memory by default; durable storage (JSONL / Postgres) is a production 
 
 ## Open-core / licensing
 
-- The **image is public** and runnable by anyone from GHCR.
+- The **image is private** (GHCR): `docker login ghcr.io` with an account ReDevOps granted read access to, then run it.
 - The **AGPL kernel source** (`agentic-os`) is open; the **enterprise overlay source is private** — you get the
   binary, not the code.
-- Review licensing terms before production use; enterprise features in the public image are subject to the
+- Review licensing terms before production use; enterprise features in the image are subject to the
   ReDevOps enterprise license.
 
 ## Even simpler: the Mission SDK
