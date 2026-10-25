@@ -21,7 +21,6 @@ Targeted existing tests run (all pass, read-only): `tests/test_agent_gateway*.py
 | discovery-runtime v0.1.19, knowledge-frontier v0.2.0, redevops-rag v0.4.0 (opt), redevops-connectors v0.1.0 (opt) | pinned git tags | intent discovery, retrieval, SaaS adapters | pyproject.toml:17-46 |
 | ~/projects/context-runtime | 0.1.0 (git w4-59-gc255945) | "Core Runtime": context planner + its own control plane + tools | pyproject.toml:3 |
 | ~/projects/agent-harness | 0.1.0 (v0.1.0-52-gaac5a43) | tool registry + approval gate + agent loop; STATUS.md says alpha; "no real LLM provider wired in this repo" | STATUS.md:5-18 |
-| Go port | go/mission | not audited | go/README.md |
 Not in repo/not audited: `reel` (video-ad handlers), redevops-connectors (live adapters), enterprise overlay (authority gate, metering, credential broker, sandbox) -- all are *injected seams* here.
 
 ### 2. Entry points (CONFIRMED unless noted)
