@@ -341,6 +341,7 @@ def draft(body: dict, copy: Callable[[str], str | None] | None = None, media: li
         "copy": text,
         "copy_source": "llm" if llm else "template",
         "staged_as_draft": staged,
+        "draft_staged": staged,          # the declared output of social.draft: the runtime's verifier rejects a result without it
         "post_id": post_id if staged else None,
         "network": network,
         "media": media or [],
@@ -376,7 +377,12 @@ def draft_visual(body: dict, copy: Callable[[str], str | None] | None = None) ->
     media, why = _visual_media(body.get("visual_export"))
     if media is None:
         return {"status": "refused", "action": "draft_visual", "error": why}
-    return draft(body, copy=copy, media=media)
+    intent = body.get("intent") if isinstance(body.get("intent"), dict) else {}      # a multi-step mission delivers its verified fields here
+    topic = body.get("topic") or intent.get("topic")
+    res = draft({**body, **({"topic": topic} if topic else {})}, copy=copy, media=media)
+    if res.get("status") == "done":
+        res["visual_draft_staged"] = bool(res.get("staged_as_draft"))
+    return res
 
 
 def _content_hash(text: str) -> str:

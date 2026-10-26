@@ -228,7 +228,7 @@ def _draft_visual(client, export, topic="founder mistakes"):
 
 def test_draft_visual_attaches_media_reference_with_provenance(client):
     res = _draft_visual(client, _export())
-    assert res["status"] == "done" and res["staged_as_draft"] is True
+    assert res["status"] == "done" and res["staged_as_draft"] is True and res["visual_draft_staged"] is True
     assert res["media"] == [{"source": "vibexgen", "asset_id": "a" * 32, "kind": "image", "media_type": "image/png",
                              "bytes": 123, "sha256": "ab" * 32, "target": "instagram_post", "ai_generated": True}]
     assert len(_FakePsql.inserts) == 1 and "vibexgen" in _FakePsql.inserts[0] and "'DRAFT'" in _FakePsql.inserts[0]
@@ -251,3 +251,35 @@ def test_draft_visual_refuses_unusable_media_and_writes_nothing(client, export, 
 def test_draft_visual_accepts_unlabelled_media_that_is_not_ai_generated(client):
     res = _draft_visual(client, _export(ai_generated=False, ai_label="none"))
     assert res["status"] == "done" and res["media"][0]["ai_generated"] is False
+
+
+def test_draft_visual_takes_the_topic_from_a_missions_verified_fields(client):
+    r = client.post("/invoke", json={"capability": "social.draft_visual",
+                                     "inputs": {"intent": {"topic": "shipping on Friday"}, "visual_export": _export()}}).json()["result"]
+    assert r["topic"] == "shipping on Friday"
+
+
+def _run_one_step_mission(capability, outcome, inputs=None):
+    from agentic_os.mission.executor import Executor
+    from agentic_os.mission.operator_sdk import LocalOperatorClient
+    from agentic_os.mission.registry import CapabilityRegistry
+    from agentic_os.mission.runtime import MissionRuntime
+    from agentic_os.mission.types import ExecutionIntent, IntentStep
+
+    class Planner:
+        def plan(self, mission_id, goal, context):
+            return ExecutionIntent(mission_id=mission_id, steps=[IntentStep(outcome=outcome, need=goal)], bind={outcome: capability})
+    op = build_social_operator()
+    reg = CapabilityRegistry()
+    reg.register(op.manifest)
+    rt = MissionRuntime(reg, Executor(LocalOperatorClient({"social-autopilot": op})), planner=Planner())
+    m = rt.create_mission("draft a post", policy_refs=["*"], inputs=inputs or {})
+    rt.run(m.id)
+    return rt._missions[m.id]
+
+
+def test_a_draft_passes_the_runtimes_verification_inside_a_mission():
+    """The runtime rejects a side-effecting result that lacks the outputs the capability declares; run through a real mission, not just /invoke."""
+    m = _run_one_step_mission("social.draft", "draft_staged")
+    assert m.state.value == "succeeded", m.outcome
+    assert len(_FakePsql.inserts) == 1
