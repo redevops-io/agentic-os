@@ -288,7 +288,7 @@ def _template_copy(topic: str) -> str:
             "#WealthManagement #MeridianWealth")
 
 
-def draft(body: dict, copy: Callable[[str], str | None] | None = None) -> dict:
+def draft(body: dict, copy: Callable[[str], str | None] | None = None, media: list[dict] | None = None) -> dict:
     """Generate post copy and stage it as a DRAFT in Postiz.
 
     Staging = INSERT a Post row with state='DRAFT' on the first channel. This is a real,
@@ -317,7 +317,10 @@ def draft(body: dict, copy: Callable[[str], str | None] | None = None) -> dict:
         int_id, prov = channels[0]
         network = _net_label(prov)
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        content = json.dumps([{"content": text}]).replace("'", "''")
+        entry: dict = {"content": text}
+        if media:
+            entry["media"] = media      # references only: the file itself is not copied into Postiz
+        content = json.dumps([entry]).replace("'", "''")
         try:
             _psql(
                 'INSERT INTO "Post" (id, state, "publishDate", "organizationId", "integrationId", '
@@ -340,9 +343,40 @@ def draft(body: dict, copy: Callable[[str], str | None] | None = None) -> dict:
         "staged_as_draft": staged,
         "post_id": post_id if staged else None,
         "network": network,
+        "media": media or [],
         "summary": (f"Drafted a {network} post on “{topic}” and staged it as a DRAFT in Postiz "
                     f"(id {post_id}). It will not publish until a human approves it."),
     }
+
+
+def _visual_media(export: object) -> tuple[list[dict] | None, str]:
+    """The media reference to attach, taken from a Vibexgen `visual.export` result, or (None, why not).
+
+    Only a finished, validated export is accepted, and an AI-generated one only if the label was burned
+    into it: the label is the exporter's job, and a post must not go out for review without it."""
+    if not isinstance(export, dict):
+        return None, "no visual export was provided"
+    if export.get("status") != "ok":
+        return None, f"the visual export is not usable: {export.get('error') or export.get('status')}"
+    arts = export.get("artifacts") or []
+    if len(arts) != 1 or not isinstance(arts[0], dict) or not arts[0].get("asset"):
+        return None, "expected exactly one exported file"
+    if not (export.get("validation") or {}).get("ok"):
+        return None, "the export does not meet its platform's requirements"
+    if export.get("ai_generated") and export.get("ai_label") != "burn":
+        return None, "the media is AI-generated but carries no AI-generated label"
+    a = arts[0]
+    return [{"source": "vibexgen", "asset_id": a["asset"], "kind": a.get("kind"), "media_type": a.get("media_type"), "bytes": a.get("bytes"),
+             "sha256": a.get("sha256"), "target": export.get("target"),
+             "ai_generated": bool(export.get("ai_generated"))}], ""
+
+
+def draft_visual(body: dict, copy: Callable[[str], str | None] | None = None) -> dict:
+    """Stage a DRAFT whose media is a Vibexgen export (`visual_export`, from the mission's world state)."""
+    media, why = _visual_media(body.get("visual_export"))
+    if media is None:
+        return {"status": "refused", "action": "draft_visual", "error": why}
+    return draft(body, copy=copy, media=media)
 
 
 def _content_hash(text: str) -> str:

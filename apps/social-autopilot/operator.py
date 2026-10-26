@@ -6,6 +6,7 @@ actions the console exposes at `/agent/run`, now discoverable + idempotent on th
 
 Capabilities (syscalls):
   social.draft    — generate post copy + stage it as a DRAFT in Postiz (real postgres write)
+  social.draft_visual — the same, with a Vibexgen `visual.export` result attached as the post's media
   social.publish  — publish a post to the social networks       [approval gate: publish]
 
 Publishing is the one action that pushes content OUT to the public, so social.publish carries
@@ -35,6 +36,17 @@ def build_social_operator() -> Operator:
             compensation={"supported": False, "disposition": "PRESERVE", "notes": "a drafted post is kept for human review; it is never published or auto-removed by a failed workflow"},
             permissions=["social:write"], estimated_value="medium", latency_ms=1200,
             concurrency_key="provider:postiz", max_parallelism=3,  # bounded Postiz writes; drafts are independent
+        ),
+        capability(
+            "social.draft_visual",
+            lambda inp: core.draft_visual(inp),
+            provides=["visual_draft_staged"],
+            inputs={"visual_export": "dict", "topic": "str"},
+            outputs={"visual_draft_staged": "post copy and a validated, labelled visual staged as a DRAFT in Postiz"},
+            side_effecting=True,
+            compensation={"supported": False, "disposition": "PRESERVE", "notes": "a drafted post is kept for human review; it is never published or auto-removed by a failed workflow"},
+            permissions=["social:write"], estimated_value="medium", latency_ms=1200,
+            concurrency_key="provider:postiz", max_parallelism=3,
         ),
         capability(
             "social.publish",
