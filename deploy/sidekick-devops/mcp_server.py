@@ -6,7 +6,10 @@ never have to parse CLI text to decide readiness. The mission's node-0 gate call
 directly (deterministic); this tool is what lets Sidekick run/re-run it *conversationally* while
 helping a user fix their setup.
 
-Run:  python mcp_server.py   (streamable-http on :8231)
+Run:  python mcp_server.py   (streamable-http on 127.0.0.1:8231; BIND_HOST/BIND_PORT override)
+
+This server has no authentication: it binds to loopback by default. Set BIND_HOST=0.0.0.0 only behind something that
+authenticates callers (a reverse proxy, a private network policy).
 """
 from __future__ import annotations
 
@@ -70,5 +73,5 @@ def preflight_check(cloud: str = "aws") -> dict:
 
 if __name__ == "__main__":  # pragma: no cover
     mcp.run(transport="streamable-http",
-            host=os.getenv("BIND_HOST", "0.0.0.0"),
+            host=os.getenv("BIND_HOST", "127.0.0.1"),
             port=int(os.getenv("BIND_PORT", "8231")))
