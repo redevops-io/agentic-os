@@ -23,7 +23,7 @@ from agentic_os.overlays import Principal
 from .contracts import (
     ApprovalPolicy, AuditEvent, CapabilityKind, CapabilityManifest, DataClass, EgressAction,
     GatewayDecision, GatewayPrincipal, GatewayRequest, GatewayResult, GatewayStatus, RiskTier)
-from .registry import Authorizer, CapabilityRegistry, HandlerResult, _default_authorizer
+from .registry import Authorizer, CapabilityRegistry, HandlerResult, _default_authorizer, client_safe_error
 
 
 # ── injectable seams (open-core defaults; enterprise tightens) ─────────────────────
@@ -314,7 +314,7 @@ class AgentGateway:
                 hres = handler(request, envelope)   # type: ignore[misc]
                 mission_id = ""
         except Exception as exc:  # a handler/mission fault must not crash the gateway
-            return self._finalize(request, start, self._error(decision, str(exc)),
+            return self._finalize(request, start, self._error(decision, client_safe_error(exc, where=request.capability)),
                                   exposed_reason="permitted")
 
         if track["lease"]:

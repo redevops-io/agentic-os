@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Optional, Protocol
 
 from .contracts import ApprovalPolicy, CapabilityKind, CapabilityManifest, DataClass, RiskTier
-from .registry import CapabilityRegistry, HandlerResult
+from .registry import CapabilityRegistry, HandlerResult, client_safe_error
 
 
 # ── write-port seams (adapt real connectors/apps to these in wiring) ───────────────
@@ -73,7 +73,7 @@ def _guard(fn) -> HandlerResult:
     try:
         out = fn()
     except Exception as exc:
-        return HandlerResult(ok=False, error=str(exc))
+        return HandlerResult(ok=False, error=client_safe_error(exc, where="write capability"))
     evidence = ()
     if isinstance(out, dict) and out.get("provider_object_id"):
         evidence = (str(out["provider_object_id"]),)      # provenance for the audit record

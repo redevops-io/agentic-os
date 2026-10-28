@@ -7,12 +7,27 @@ invoked (plan §13 Phase-1 acceptance, §18 non-goals) lives here and in the pip
 """
 from __future__ import annotations
 
+import logging
+import re
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Protocol, Tuple
 
 from agentic_os.overlays import Principal, identity_provider
 
 from .contracts import CapabilityManifest, GatewayPrincipal, GatewayRequest
+
+
+_log = logging.getLogger("agentic_os.agent_gateway")
+_ERROR_CODE = re.compile(r"^([a-z][a-z0-9_]{2,60}(?:\(rc=-?\d+\))?)(?::|$)")
+
+
+def client_safe_error(exc: BaseException, *, where: str = "", default: str = "capability_error") -> str:
+    """The only part of an exception an external caller may see: a short machine code (``duration_exceeded``,
+    ``contained_failure(rc=1)``, ...) when the message starts with one, otherwise ``default``. The full message (which can
+    carry paths, connection strings or child tracebacks) goes to the server log, never to the client."""
+    _log.warning("capability %s raised %s", where or "?", type(exc).__name__, exc_info=exc)
+    m = _ERROR_CODE.match(str(exc).strip())
+    return m.group(1) if m else default
 
 
 @dataclass(frozen=True)
