@@ -7,10 +7,20 @@ Every call, on either entry point, runs the same governed path: visibility and p
 | | Mounted endpoint | FastMCP server |
 |---|---|---|
 | Protocol | REST, and an MCP-*shaped* `POST /api/agent-gateway/mcp` (`{"method", "params"}`) | MCP Streamable-HTTP (standard clients) |
-| Start | set `AGENT_GATEWAY_TOKEN` on the Projects API | build it in a few lines (below); needs `pip install "agentic-os[mcp]"` |
+| Start | set `AGENT_GATEWAY_TOKEN` on the Projects API | build it in a few lines (below); needs the `mcp` extra (below) |
 | Authentication | one static bearer token | any `TokenVerifier`; the bundled `DevTokenVerifier` is dev-only |
 | Capabilities | read only: `projects.list`, `projects.get_status`, `missions.*` (read), `sources.search` | whatever registry you give it |
 | Standard MCP client | **no** (no `initialize`, no JSON-RPC envelope) | yes |
+
+## Install
+
+`agentic-os` is not on PyPI; install from a release tag (see the tags for the current one):
+
+```bash
+pip install "agentic-os[mcp] @ git+https://github.com/redevops-io/agentic-os.git@v0.3.43"
+```
+
+The `mcp` extra (`fastmcp`) is only needed for section B. `agentic-os-projects` starts the Projects API that section A mounts the gateway on.
 
 ## A. The mounted endpoint
 
