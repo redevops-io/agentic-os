@@ -19,7 +19,8 @@ def invoke(c, tok, cap, inputs=None, **kw):
 
 def test_health_is_open_and_independent_of_the_editor(client, env):
     env.backend.mode = "unavailable"
-    assert client.get("/health").json() == {"status": "ok", "app": "document-editor"}
+    body = client.get("/health").json()
+    assert {k: body[k] for k in ("status", "app")} == {"status": "ok", "app": "document-editor"} and body["authorization"] in ("unenforced", "restricted", "enforced")
 
 
 def test_no_credentials_is_401_on_every_route(client):

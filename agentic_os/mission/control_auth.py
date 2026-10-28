@@ -16,6 +16,8 @@ ENV_APPROVER_TOKENS = "AGENTIC_OS_APPROVER_TOKENS"  # "acme=<token>" -> distinct
 ENV_TENANT_LIMITS = "AGENTIC_OS_TENANT_LIMITS"    # JSON {"acme": {"policy_refs": ["crm:read"], "budget_usd": 25}}
 ENV_OPERATOR_ANON = "AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS"  # "1" = operator /invoke open when NO token is set (dev only)
 ENV_GATE_READS = "AGENTIC_OS_GATE_READS"          # default ON; "0"/"false"/"off" opts OUT (unsafe off loopback)
+# KD-4: the caller credential of an operator's /invoke has its OWN header, because ``Authorization: Bearer`` is where an enterprise identity layer reads the END USER's token.
+CONTROL_HEADER = "X-Control-Token"
 
 
 def configured_token() -> str:
@@ -147,8 +149,17 @@ def reads_gated() -> bool:
     return os.environ.get(ENV_GATE_READS, "").strip().lower() not in ("0", "false", "no", "off")
 
 
-def resolve_caller(authorization: "str | None") -> Caller:
-    """Authenticate ``Authorization: Bearer`` against the admin, tenant and approver tokens (constant-time, no early
+def credential_of(authorization: "str | None", control_token: "str | None" = None) -> str:
+    """The caller credential presented on a request. A non-blank ``X-Control-Token`` IS the credential (the bare token, no scheme) and ``Authorization`` is then left to the identity
+    layer: a wrong control header is never rescued by a correct Bearer, and a user's JWT is never read as a control credential. With no (or a blank) control header the legacy
+    ``Authorization: Bearer <token>`` is the credential, so existing callers keep working."""
+    if control_token is not None and control_token.strip():
+        return control_token.strip()
+    return bearer_of(authorization)
+
+
+def resolve_caller(authorization: "str | None", control_token: "str | None" = None) -> Caller:
+    """Authenticate the caller credential (``X-Control-Token``, else ``Authorization: Bearer``) against the admin, tenant and approver tokens (constant-time, no early
     exit). 503 when no token is configured (or the config is invalid); 401 when missing/wrong."""
     from fastapi import HTTPException  # noqa: PLC0415
     try:
@@ -158,7 +169,7 @@ def resolve_caller(authorization: "str | None") -> Caller:
     if not admin and not tenants and not approvers:
         raise HTTPException(503, f"endpoints are disabled: {ENV_TOKEN} (or {ENV_TENANT_TOKENS}) is not set. "
                                  "Set a long random secret and send 'Authorization: Bearer <token>'.")
-    presented = bearer_of(authorization)
+    presented = credential_of(authorization, control_token)
     found: "Caller | None" = Caller(None, "admin") if token_matches(presented, admin) else None
     for tenant, tok in tenants.items():
         if token_matches(presented, tok) and found is None:
@@ -171,9 +182,9 @@ def resolve_caller(authorization: "str | None") -> Caller:
     return found
 
 
-def authorize_operator_invoke(authorization: "str | None") -> Caller:
-    """Gate for an operator's ``POST /invoke``. Same credentials as the other control routes (admin or tenant bearer
-    token); an approver-only token is refused (403). With NO token configured it fails closed (503) unless
+def authorize_operator_invoke(authorization: "str | None", control_token: "str | None" = None, *, duplicated: bool = False) -> Caller:
+    """Gate for an operator's ``POST /invoke``. Same credentials as the other control routes (admin or tenant token, in ``X-Control-Token`` or, for existing callers, ``Authorization: Bearer``;
+    the user's identity token travels in ``Authorization`` and is never read here when ``X-Control-Token`` is present); an approver-only token is refused (403). With NO token configured it fails closed (503) unless
     ``AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS=1`` is set explicitly (local development only). Once any token is
     configured the flag is ignored and a valid bearer token is always required."""
     from fastapi import HTTPException  # noqa: PLC0415
@@ -182,7 +193,16 @@ def authorize_operator_invoke(authorization: "str | None") -> Caller:
             return Caller(None, "admin")
         raise HTTPException(503, f"operator /invoke is disabled: {ENV_TOKEN} (or {ENV_TENANT_TOKENS}) is not set. "
                                  "Set a long random secret and send 'Authorization: Bearer <token>'.")
-    caller = resolve_caller(authorization)
+    if duplicated:                           # BB-02: a repeated X-Control-Token or Authorization header is a request-smuggling signal: refuse it, whichever copy would have been valid
+        raise HTTPException(401, "a credential header was sent more than once", headers={"WWW-Authenticate": "Bearer"})
+    caller = resolve_caller(authorization, control_token)
+    if control_token is not None and control_token.strip() and bearer_of(authorization) and bearer_of(authorization) != control_token.strip():
+        try:
+            resolve_caller(authorization)    # the Authorization header carries a DIFFERENT valid control credential: two callers claimed at once
+        except HTTPException:
+            pass                             # a user's identity token (not a control credential): the intended pairing
+        else:
+            raise HTTPException(401, "conflicting credentials: X-Control-Token and Authorization name different callers", headers={"WWW-Authenticate": "Bearer"})
     if caller.role == "approver":
         raise HTTPException(403, "approver credentials cannot invoke capabilities")
     return caller

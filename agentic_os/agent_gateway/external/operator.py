@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional, Tuple
 
+from agentic_os.app_gate import kernel_governed
 from agentic_os.mission.operator_sdk import CURRENT_IDEMPOTENCY_KEY, Capability, Operator, capability
 
 from .contracts import (
@@ -62,6 +63,7 @@ class ExternalAgentOperator:
             self.require_independent = not getattr(self.adapter, "simulated", False)
         caps = [self._build_capability(cap, undo) for cap, undo in _OUTBOUND_CAPS]
         self.operator = Operator(self.name, caps)
+        kernel_governed(self.operator, "the Agent Gateway's external-agent operator: governed by the gateway's token auth, capability filtering and approvals")
 
     def _build_capability(self, cap_name: str, undo: Optional[str]) -> Capability:
         def handler(inputs: Mapping[str, Any]) -> dict:

@@ -12,9 +12,12 @@ from pathlib import Path
 
 import httpx
 import yaml
+from starlette.concurrency import run_in_threadpool
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from .permissions_http import (create_kwargs as _perm_create_kwargs, json_object as _perm_json, log_disabled as _perm_log_disabled, warn_if_unprotected_throttle as _perm_warn_throttle, require_permissions_admin as _perm_require_admin, secure_page as _secure_page, SecurityHeaders as _SecurityHeaders,
+                               update_fields as _perm_update_fields)
 from pydantic import BaseModel
 
 from . import channels, views
@@ -41,8 +44,9 @@ def _authorize_mutation(x_api_key: str | None, authorization: str | None, *key_e
     legacy = next((os.environ[e] for e in key_envs if os.environ.get(e)), "")
     token = configured_token()
     if not token and not legacy:
-        raise HTTPException(503, "mutating endpoints are disabled: set AGENTIC_OS_CONTROL_TOKEN "
-                                 "(Authorization: Bearer) or AGENTIC_OS_API_KEY (X-API-Key) to enable them")
+        _perm_log_disabled("the control plane's mutating endpoints",
+                           "set AGENTIC_OS_CONTROL_TOKEN (Authorization: Bearer) or AGENTIC_OS_API_KEY (X-API-Key) to enable them")
+        raise HTTPException(503, "mutating endpoints are disabled on this server")
     if token_matches(bearer_of(authorization), token) or token_matches(x_api_key or "", legacy):
         return
     raise HTTPException(401, "invalid or missing credentials (Bearer token or X-API-Key)",
@@ -59,12 +63,12 @@ def require_api_key(x_api_key: str | None = Header(default=None),
     _authorize_mutation(x_api_key, authorization, "AGENTIC_OS_API_KEY")
 
 
-def require_permissions_admin(x_api_key: str | None = Header(default=None),
-                              authorization: str | None = Header(default=None)) -> None:
-    """Auth for the permissions WRITE path — gating grant edits independently of the fleet-ops key
-    (PERMISSIONS_ADMIN_KEY, falling back to AGENTIC_OS_API_KEY; the control token is also accepted).
-    Disabled (503) when nothing is configured."""
-    _authorize_mutation(x_api_key, authorization, "PERMISSIONS_ADMIN_KEY", "AGENTIC_OS_API_KEY")
+def require_permissions_admin(request: Request) -> None:
+    """Auth for the WHOLE permissions admin API: grant list, status, preview, authorize (diagnostics), create, update, remove. A SEPARATE
+    privilege: only ``PERMISSIONS_ADMIN_KEY`` (X-API-Key or Bearer, at least 24 characters) opens it; the fleet key
+    ``AGENTIC_OS_API_KEY`` and the control token administer the fleet routes and no grant. FAIL CLOSED: 503 when no usable key is configured
+    (never open), 401 for a missing, empty or wrong credential (constant-time compare), 400 for a credential in the query string."""
+    _perm_require_admin(request)
 
 
 def _build() -> Fleet:
@@ -80,7 +84,11 @@ def _build() -> Fleet:
     return Fleet(registry, router, ctx, authority=authority_from_env())
 
 
-app = FastAPI(title="agentic-os control plane", version="0.1.0")
+# No Swagger UI / ReDoc (they load scripts from a CDN without integrity checks) and no anonymous route inventory: /openapi.json needs the fleet credential.
+_perm_warn_throttle()
+app = FastAPI(title="agentic-os control plane", version="0.1.0", docs_url=None, redoc_url=None, openapi_url=None)
+# the permissions page and admin API: security headers, no-store; every trailing-slash redirect is relative (never the Host header or http)
+app.add_middleware(_SecurityHeaders, scope_prefixes=("/permissions", "/api/permissions"), no_store_prefixes=("/api/permissions",))
 fleet = _build()
 
 # Mission Runtime (Whitepaper v5) — mount /missions + /capabilities over the pilot operators.
@@ -454,6 +462,12 @@ def dashboard() -> str:
     return DASHBOARD_HTML
 
 
+@app.get("/openapi.json", include_in_schema=False, dependencies=[Depends(require_api_key)])
+def openapi_schema() -> dict:
+    """The route inventory, for an operator holding the fleet credential only."""
+    return app.openapi()
+
+
 @app.get("/health")
 def health() -> dict:
     from agentic_os.mission.profile import status as _security_status
@@ -526,31 +540,34 @@ from . import permissions as _perm  # noqa: E402
 
 _GRANTS = _perm.GrantStore()
 _GRANTS.seed([
-    {"subject_kind": "app", "subject": "support", "resource_kind": "table", "resource_name": "crm.customers",
-     "actions": ["read"], "row_scope": "in", "row_column": "region", "row_values": ["us"],
+    {"id": "seed-support-crm-customers", "subject_kind": "app", "subject": "support", "resource_kind": "table",
+     "resource_name": "crm.customers", "actions": ["read"], "row_scope": "in", "row_column": "region", "row_values": ["us"],
      "masked_columns": ["email"], "created_by": "seed"},
-    {"subject_kind": "role", "subject": "finance", "resource_kind": "table", "resource_name": "crm.customers",
-     "actions": ["read"], "row_scope": "all", "masked_columns": ["notes"], "created_by": "seed"},
+    {"id": "seed-finance-crm-customers", "subject_kind": "role", "subject": "finance", "resource_kind": "table",
+     "resource_name": "crm.customers", "actions": ["read"], "row_scope": "all", "masked_columns": ["notes"], "created_by": "seed"},
 ])
 
 
 @app.get("/permissions", response_class=HTMLResponse)
 def permissions_page() -> HTMLResponse:
+    # PUBLIC, static: built from constants only (the repository's own module names, the role and option lists). It reads no grant, no store,
+    # no request and no environment; every call the page then makes is the admin API and needs the key typed into it (kept in memory).
     apps = sorted({m for members in GROUPS.values() for m in members})
-    return HTMLResponse(views.permissions_page(
+    return _secure_page(
+        views.permissions_page,
         subjects=apps, roles=["admin", "finance", "support", "analyst", "auditor"],
         resource=_perm.PREVIEW_RESOURCE, columns=_perm.PREVIEW_COLS,
         subject_kinds=list(_perm.SUBJECT_KINDS), resource_kinds=list(_perm.RESOURCE_KINDS),
         actions=list(_perm.ACTIONS), row_scopes=list(_perm.ROW_SCOPES),
-    ))
+    )
 
 
-@app.get("/api/permissions/status")
+@app.get("/api/permissions/status", dependencies=[Depends(require_permissions_admin)])
 def permissions_status() -> dict:
     return _GRANTS.status()
 
 
-@app.get("/api/permissions/grants")
+@app.get("/api/permissions/grants", dependencies=[Depends(require_permissions_admin)])
 def permissions_grants() -> list[dict]:
     return [g.to_dict() for g in _GRANTS.list()]
 
@@ -559,17 +576,30 @@ def permissions_grants() -> list[dict]:
 async def permissions_add(request: Request) -> dict:
     # Write path — gated by X-API-Key when AGENTIC_OS_API_KEY is set (the admin auth layer). This is
     # SEPARATE from at-rest protection: grants are AES-GCM encrypted + fail-closed in the GrantStore.
-    b = await request.json()
+    b = await _perm_json(request)
     if not b.get("subject") or not b.get("resource_name"):
         raise HTTPException(400, "subject and resource_name are required")
     try:
-        g = _GRANTS.add(
+        g = await run_in_threadpool(
+            _GRANTS.add,
             b.get("subject_kind", "app"), b["subject"], b.get("resource_kind", "table"), b["resource_name"],
-            actions=b.get("actions") or ["read"], row_scope=b.get("row_scope", "all"),
-            row_column=b.get("row_column", "owner"), row_values=b.get("row_values") or [],
-            masked_columns=b.get("masked_columns") or [], created_by="admin")
+            created_by="admin", **_perm_create_kwargs(b))
     except RuntimeError as e:
         raise HTTPException(409, str(e))
+    return g.to_dict()
+
+
+@app.put("/api/permissions/grants/{gid}", dependencies=[Depends(require_permissions_admin)])
+async def permissions_update(gid: str, request: Request) -> dict:
+    # Explicit update-by-id (POST only ever creates). Only the scope fields change; id, subject and resource are immutable.
+    b = await _perm_json(request)
+    fields = _perm_update_fields(b)
+    try:
+        g = await run_in_threadpool(_GRANTS.update, gid, **fields)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    if g is None:
+        raise HTTPException(404, f"no grant {gid}")
     return g.to_dict()
 
 
@@ -581,16 +611,16 @@ def permissions_remove(gid: str) -> dict:
         raise HTTPException(409, str(e))
 
 
-@app.post("/api/permissions/preview")
+@app.post("/api/permissions/preview", dependencies=[Depends(require_permissions_admin)])
 async def permissions_preview(request: Request) -> dict:
-    b = await request.json()
+    b = await _perm_json(request)
     return _perm.preview(_GRANTS, b.get("subject_kind", "app"), b.get("subject", ""))
 
 
-@app.post("/api/permissions/authorize")
+@app.post("/api/permissions/authorize", dependencies=[Depends(require_permissions_admin)])
 async def permissions_authorize(request: Request) -> dict:
-    b = await request.json()
-    ident = _perm.Identity(app=b.get("app", ""), user=b.get("user", ""), roles=b.get("roles") or [])
+    b = await _perm_json(request)
+    ident = _perm.Identity(app=b.get("app", ""), user=b.get("user", ""), roles=b["roles"] if "roles" in b else [])
     plane = _perm.PermissionsPlane(_GRANTS)
     return plane.authorize(ident, b.get("resource_kind", "table"), b.get("resource_name", ""),
                            b.get("action", "read")).to_dict()

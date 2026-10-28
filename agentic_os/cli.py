@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -126,6 +127,97 @@ def _secrets_cmd(args, b=None, stdin_tty=None) -> int:
     return 0
 
 
+def _permissions_cmd(args) -> int:
+    from . import permissions_setup as ps
+    from .permissions import GrantStorageError, GrantStore
+    try:
+        if args.pcmd == "key":
+            path = ps.write_key_env_file(args.env_file, from_key_file=args.from_key_file)
+            print(f"  wrote PERMISSIONS_KEY to {path} (mode 0600; the key is not printed, keep the file out of git and images)")
+            print(f"  Docker Compose : docker compose --env-file {path} up   (the compose files require PERMISSIONS_KEY; no default)")
+            if args.k8s_secret:
+                ns = f" --namespace {args.namespace}" if args.namespace else ""
+                print(f"  Kubernetes     : kubectl create secret generic {args.k8s_secret} --from-env-file={path}{ns}")
+                print(f"                   then set permissions.keySecret={args.k8s_secret} in the chart values; delete {path} afterwards")
+            return 0
+        if args.pcmd == "init":
+            r = ps.init_local_profile(args.dir, user=args.user, include_write=args.include_write, key_only=args.key_only)
+            env_key = r["key_source"] == "environment"
+            if args.key_only:
+                print(f"  permissions directory : {r['directory']}")
+                if env_key:
+                    print("  key                   : PERMISSIONS_KEY is set in the environment; nothing to provision, no key file is created")
+                    return 0
+                print(f"  key file              : {r['key_file']} ({'created' if r['key_created'] else 'kept'}, mode 0600)")
+                print(f"  next                  : export PERMISSIONS_DIR={r['directory']} AGENTIC_OS_PERMISSIONS=1   (the key file and the local profile are found there; the apps then enforce these grants)")
+                return 0
+            print(f"  permissions directory : {r['directory']}")
+            if env_key:
+                print("  key                   : PERMISSIONS_KEY from the environment seals the grants; no key file was created (keep the key in a secret store, never beside the data)")
+            else:
+                print(f"  key file              : {r['key_file']} ({'created' if r['key_created'] else 'kept'}, mode 0600)")
+            print(f"  user                  : {r['user']}")
+            print(f"  grants                : {len(r['granted'])} for bundled tools"
+                  + (f", {len(r['withheld'])} write-class tools withheld (re-run with --include-write)" if r["withheld"] else ""))
+            print(f"  next                  : export PERMISSIONS_DIR={r['directory']} AGENTIC_OS_PERMISSIONS=1   ("
+                  + ("the same PERMISSIONS_KEY must be in the environment of every app; " if env_key else "the key file ")
+                  + "and the local profile are found there; the apps then enforce these grants)")
+            print(f"  note                  : {ps.INSTANCE_NOT_CALLERS}. Put authentication in front of an instance that is reachable from a network" + (", or re-run without --include-write." if args.include_write else "."))
+            return 0
+        if args.pcmd == "audit-identifiers":                  # READ-ONLY: never migrates, generates a key, writes or deletes anything
+            directory = args.dir or ps.default_dir()
+            try:
+                report = GrantStore(directory, migrate_plaintext=False, allow_plaintext_dev=False, allow_generated_key_dev=False,
+                                  read_only=True).audit_identifiers()
+            except GrantStorageError as e:
+                print(f"  error: {e}", file=sys.stderr)
+                return 2
+            if args.json:
+                print(json.dumps(report, indent=2))
+            else:
+                c = report["contract"]
+                print(f"  identifier contract: Unicode {c['unicode_version']} table {c['table_sha256'][:12]}...  grants checked: {report['total']}  "
+                      f"violating: {report['violations']}")
+                for f in report["findings"]:
+                    print(f"    {f['id'] or '(id is not a plain token)'}: " + "; ".join(f"{field}: {why}" for field, why in f["problems"]))
+                if report["violations"]:
+                    print("  nothing was changed. These grants authorise nothing under the current contract (they count in status().malformed). "
+                          "Remedy, your choice: `agentic-os permissions revoke <id>`, then add the grant again with a corrected name.")
+            return 1 if report["violations"] else 0
+        store = GrantStore(args.dir or ps.default_dir())
+        if args.pcmd == "migrate":
+            if not args.purge_backup:
+                print("  error: nothing to do — pass --purge-backup", file=sys.stderr)
+                return 2
+            n = store.purge_migration_backups()
+            print(f"  purged {n} plaintext backup file(s) (verified the encrypted store opens; overwritten, then removed)")
+            return 0
+        if args.pcmd == "accept-rollback":
+            n = store.accept_rollback()
+            print(f"  accepted: the store at counter {n} is the new floor")
+            return 0
+        if args.pcmd == "recover-counter":
+            if not args.confirm:
+                print("  error: this re-establishes the rollback counter from the store as it is NOW: an older store restored by "
+                      "mistake would be accepted. Check the store is the one you mean, then re-run with --confirm", file=sys.stderr)
+                return 2
+            n = store.recover_counter()
+            print(f"  recorded: the rollback counter is re-established at {n}")
+            return 0
+        if args.pcmd == "list":
+            for g in sorted(store.list(), key=lambda g: (g.resource_name, g.subject)):
+                print(f"  {g.id}  {g.subject_kind}:{g.subject}  {g.resource_kind}:{g.resource_name}  {','.join(g.actions)}  by {g.created_by}")
+            return 0
+        if args.pcmd == "revoke":
+            ok = store.remove(args.id)
+            print(f"  {args.id}: {'revoked' if ok else 'no such grant'}")
+            return 0 if ok else 1
+    except GrantStorageError as e:
+        print(f"  error: {e}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="agentic-os", description="The redevops.io Agentic Business OS control plane.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -138,6 +230,34 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("approve", "reject"):
         sp = sub.add_parser(name, help=f"{name} a pending action")
         sp.add_argument("id", help="approval id")
+    sp = sub.add_parser("permissions", help="local single-user permissions profile (key + explicit grants for the bundled tools)")
+    sperm = sp.add_subparsers(dest="pcmd", required=True)
+    pi = sperm.add_parser("init", help="create the persistent key and per-tool grants (idempotent; never replaces a key)")
+    pi.add_argument("--dir", default=None, help="permissions directory (default: $PERMISSIONS_DIR or ~/.config/redevops/permissions)")
+    pi.add_argument("--user", default="local", help="the local user the grants are for")
+    pi.add_argument("--include-write", action="store_true", help="also grant the write-class bundled tools (state changes, scanner launchers)")
+    pi.add_argument("--key-only", action="store_true", help="create only the persistent key file (no grants)")
+    pm = sperm.add_parser("migrate", help="after a plaintext -> encrypted migration: purge the plaintext backup (verified, overwritten, removed)")
+    pm.add_argument("--purge-backup", action="store_true", help="verify the encrypted store opens, then overwrite and remove grants.jsonl.migrated-*")
+    pm.add_argument("--dir", default=None)
+    pa = sperm.add_parser("accept-rollback", help="explicitly accept an OLDER grants store (after a restore) as the new floor")
+    pa.add_argument("--dir", default=None)
+    pc = sperm.add_parser("recover-counter", help="re-establish a MISSING rollback sidecar from the store (needs --confirm)")
+    pc.add_argument("--dir", default=None)
+    pc.add_argument("--confirm", action="store_true", help="I checked that the store in this directory is the one I mean")
+    pai = sperm.add_parser("audit-identifiers", help="read-only: list stored grants whose names break the current identifier contract (nothing is changed)")
+    pai.add_argument("--dir", default=None)
+    pai.add_argument("--json", action="store_true", help="machine-readable report")
+    pk = sperm.add_parser("key", help="create a PERMISSIONS_KEY env file for Docker Compose / Kubernetes (the key is never printed)")
+    pk.add_argument("--env-file", required=True, help="the new 0600 file to write PERMISSIONS_KEY=... into (never overwritten)")
+    pk.add_argument("--from-key-file", default=None, help="reuse the key of an existing key file (continuity for a running deployment)")
+    pk.add_argument("--k8s-secret", default=None, metavar="NAME", help="also print the kubectl command that creates this Secret from the file")
+    pk.add_argument("--namespace", default=None, help="namespace for the kubectl command")
+    pl = sperm.add_parser("list", help="the grants in the store (no secrets)")
+    pl.add_argument("--dir", default=None)
+    pr = sperm.add_parser("revoke", help="revoke one grant by id")
+    pr.add_argument("id")
+    pr.add_argument("--dir", default=None)
     sp = sub.add_parser("secrets", help="auto-generate / inspect platform secrets")
     ss = sp.add_subparsers(dest="scmd", required=True)
     si = ss.add_parser("init", help="generate missing secrets (idempotent, never overwrites)")
@@ -161,6 +281,8 @@ def main(argv: list[str] | None = None) -> int:
     ss.add_parser("where", help="platform locations and fetch commands")
     args = p.parse_args(argv)
 
+    if args.cmd == "permissions":
+        return _permissions_cmd(args)
     if args.cmd == "secrets":
         return _secrets_cmd(args)
     if args.cmd == "up":

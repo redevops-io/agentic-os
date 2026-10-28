@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from agentic_os.app_gate import kernel_governed
 from agentic_os.mission.operator_sdk import Operator, capability
 from runtime_contracts import Channel, InteractionEvent, MediaArtifact, Modality
 
@@ -49,7 +50,7 @@ def build_interaction_operator(service: InteractionService) -> Operator:
         pkg = service.handoff(inp["conversation_id"], to=inp["to"], note=inp.get("note", ""))
         return pkg.summary()
 
-    return Operator("interaction", [
+    op = Operator("interaction", [
         capability(
             "interaction.ingest", ingest,
             provides=["interaction_recorded"],
@@ -81,3 +82,5 @@ def build_interaction_operator(service: InteractionService) -> Operator:
             estimated_value="medium", latency_ms=400,
         ),
     ])
+    kernel_governed(op, "the customer-interaction layer (channel adapters); its outbound sends carry their own approvals, it is not an app tool table")
+    return op

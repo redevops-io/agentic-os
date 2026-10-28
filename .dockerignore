@@ -7,3 +7,10 @@ dist
 build
 *.egg-info
 .ruff_cache
+# key material and local state: never in a build context, never in an image layer (SC-03)
+**/permissions.env
+**/*.permissions.env
+**/.permissions.key
+**/*.key
+**/.env
+.local

@@ -40,13 +40,12 @@ import json
 import os
 
 # ── enterprise permissions plane — gate tool/data access by (app, user) ──
-# No-op without the context_runtime_enterprise package or CR_PERMISSIONS=1 (open-core default).
-try:
-    from context_runtime_enterprise.apps import bootstrap as _cr_bootstrap
-    _req_principal = _cr_bootstrap("lifecycle")
-except Exception:  # noqa: BLE001
-    def _req_principal(request=None):
-        return None
+# Basic default without the enterprise package and without CR_PERMISSIONS / CR_IDENTITY_*; if either is set and the gate cannot
+# be installed, agentic_os.app_gate refuses to start the app (it never runs ungated by accident).
+from agentic_os.app_gate import RequestContext as _RequestContext, denial_result as _denial_result, deny_response as _deny_response, install_gate as _install_gate
+from agentic_os.app_gate import with_authorization as _with_authorization
+_GATE_APP = "lifecycle"
+_req_principal = _install_gate(_GATE_APP)   # starts gated or not at all when permissions were requested (RR-01)
 import time
 from pathlib import Path
 
@@ -84,6 +83,7 @@ app = FastAPI(title=f"lifecycle ({TENANT} · core: Listmonk)")
 from agentic_os.app_kit import route_authz as _route_authz  # noqa: E402
 from .route_policy import APP as _APP, ROUTE_POLICIES as _ROUTE_POLICIES  # noqa: E402
 _route_authz.install(app, _APP, _ROUTE_POLICIES)   # one enforcement layer for every write route
+app.add_middleware(_RequestContext)   # the active gate (basic or enterprise) sees THIS request's principal in every route
 
 
 BASE_CSS = """
@@ -253,6 +253,8 @@ def _agent_reply(message: str) -> dict:
                             (("list", "segment", "audience"), _t_list_segments, "list_segments"),
                             (("email", "subscriber", "doing", "summary", "open"), _t_lifecycle_summary, "lifecycle_summary")):
         if any(w in low for w in words):
+            if (_d := _denial_result(_GATE_APP, name)):
+                return {"intent": name, "text": _d["error"], "evidence": [], "denied": True}
             return {"intent": name, "text": fn({})["text"], "evidence": []}
     txt = _llm_text(_LIFECYCLE_PRIMER + "\n\nAnswer in 2-4 plain sentences.\nQuestion: " + message, 300)
     return {"intent": "help", "text": txt or "The assistant model is offline (no in-boundary model configured).",
@@ -270,7 +272,7 @@ _AGENT_PANEL = (
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "core": "listmonk", "connected": listmonk_connected()}
+    return _with_authorization(_GATE_APP, {"status": "ok", "core": "listmonk", "connected": listmonk_connected()})
 
 
 @app.post("/api/agent")
@@ -284,11 +286,15 @@ async def api_agent(request: Request) -> JSONResponse:
 
 @app.get("/api/activity")
 def activity() -> JSONResponse:
+    if (_r := _deny_response(_GATE_APP, "lifecycle_summary")):
+        return _r
     return JSONResponse(fetch_activity())
 
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
+    if (_r := _deny_response(_GATE_APP, "lifecycle_summary")):
+        return _r
     page = render(fetch_activity())
     return page.replace("<footer", _AGENT_PANEL + "<footer", 1)
 
@@ -301,6 +307,9 @@ async def agent_run(request: Request) -> JSONResponse:
         body = {}
     action = (body or {}).get("action", "")
     if action in _ACTIONS:
+        _tool = {"compose_campaign": "lifecycle.compose_campaign", "segment": "lifecycle.segment", "suggest_flow": "lifecycle.suggest_flow"}[action]
+        if (_r := _deny_response(_GATE_APP, _tool)):
+            return _r
         return JSONResponse(_ACTIONS[action](body or {}))
     return JSONResponse({"status": "error", "error": f"unknown action '{action}'",
                          "supported": list(_ACTIONS)}, status_code=400)
@@ -308,6 +317,8 @@ async def agent_run(request: Request) -> JSONResponse:
 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
+    from agentic_os.app_gate import require_explicit_setting_when_exposed as _exposed
+    _exposed("0.0.0.0")   # a reachable bind needs an explicit permissions setting
     uvicorn.run(app, host="0.0.0.0", port=PORT)
 
 

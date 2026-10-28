@@ -111,11 +111,19 @@ def _strip_approval(obj):
     return obj
 
 
+# ── permissions: basic (AGPL) permissions or the enterprise plane; the app starts gated or not at all (agentic_os/app_gate.py). Every route that
+# EXECUTES a tool asks the gate first (authorisation), separately from the approval the core stages for consequential actions.
+from agentic_os.app_gate import RequestContext as _RequestContext, denial_result as _denial_result, deny_response as _deny_response, install_gate as _install_gate  # noqa: E402
+from agentic_os.app_gate import with_authorization as _with_authorization
+_GATE_APP = "social-autopilot"
+_req_principal = _install_gate(_GATE_APP)
+
 app = FastAPI(title="agentic-social-autopilot (Meridian Wealth Management · core: Postiz)")
 
 from agentic_os.app_kit import route_authz as _route_authz  # noqa: E402
 from .route_policy import APP as _APP, ROUTE_POLICIES as _ROUTE_POLICIES  # noqa: E402
 _route_authz.install(app, _APP, _ROUTE_POLICIES)   # one enforcement layer for every write route
+app.add_middleware(_RequestContext)   # the active gate (basic or enterprise) sees THIS request's principal in every route
 
 
 # --- MD3 styling (BASE_CSS reused verbatim from deploy/module_service.py) -----
@@ -531,11 +539,13 @@ def _publish(body: dict) -> dict:
 # --- routes ------------------------------------------------------------------
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "core": "postiz", "connected": postiz_connected()}
+    return _with_authorization(_GATE_APP, {"status": "ok", "core": "postiz", "connected": postiz_connected()})
 
 
 @app.get("/api/activity")
 def activity() -> JSONResponse:
+    if (_r := _deny_response(_GATE_APP, "social.activity")):
+        return _r
     return JSONResponse(fetch_activity())
 
 
@@ -544,6 +554,8 @@ _CR_BANNER = """<div style="position:sticky;top:0;z-index:9998;background:linear
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
+    if (_r := _deny_response(_GATE_APP, "social.activity")):
+        return _r
     import re as _cr_re
     page = render(fetch_activity())
     page = _cr_re.sub(r"(<body[^>]*>)", lambda m: m.group(1) + _CR_BANNER, page, count=1)
@@ -555,16 +567,22 @@ def index() -> str:
 @app.post("/api/reel/record")
 def api_reel_record() -> JSONResponse:
     """Start recording the product-demo reel (background; ~45s)."""
+    if (_r := _deny_response(_GATE_APP, "social.record_reel")):
+        return _r
     return JSONResponse(_reel_start())
 
 
 @app.get("/api/reel/status")
 def api_reel_status() -> JSONResponse:
+    if (_r := _deny_response(_GATE_APP, "social.activity")):
+        return _r
     return JSONResponse({**_reel_status_read(), "ready": _REEL_OUT.exists()})
 
 
 @app.get("/api/reel/video")
 def api_reel_video():
+    if (_r := _deny_response(_GATE_APP, "social.activity")):
+        return _r
     if _REEL_OUT.exists():
         return FileResponse(str(_REEL_OUT), media_type="video/mp4",
                             filename="redevops-context-runtime-demo.mp4")
@@ -574,6 +592,8 @@ def api_reel_video():
 @app.post("/api/reel/schedule")
 def api_reel_schedule() -> JSONResponse:
     """Queue the reel as a Postiz draft (reuses the app's own draft path; nothing is published)."""
+    if (_r := _deny_response(_GATE_APP, "social.draft")):
+        return _r
     draft = _draft({"topic": "our Context Runtime product demo — live retrieval, the planner "
                              "choosing a strategy, and measured v1→v2 benchmarks"})
     return JSONResponse({"status": "queued", "draft": draft,
@@ -583,17 +603,23 @@ def api_reel_schedule() -> JSONResponse:
 # --- vibexgen: content intelligence (trends) + AI generation, exposed to the agent ----------
 @app.get("/api/vibex/status")
 def api_vibex_status() -> JSONResponse:
+    if (_r := _deny_response(_GATE_APP, "social.activity")):
+        return _r
     return JSONResponse(vibex.status())
 
 
 @app.post("/api/vibex/trends")
 async def api_vibex_trends(request: Request) -> JSONResponse:
+    if (_r := _deny_response(_GATE_APP, "social.vibex_trends")):
+        return _r
     body = _strip_approval(await request.json()) if request.headers.get("content-type", "").startswith("application/json") else {}
     return JSONResponse(vibex.trends((body or {}).get("topic", "")))
 
 
 @app.post("/api/vibex/generate")
 async def api_vibex_generate(request: Request) -> JSONResponse:
+    if (_r := _deny_response(_GATE_APP, "social.vibex_generate")):
+        return _r
     body = _strip_approval(await request.json()) if request.headers.get("content-type", "").startswith("application/json") else {}
     return JSONResponse(vibex.generate((body or {}).get("prompt", ""), (body or {}).get("kind", "clip")))
 
@@ -601,6 +627,8 @@ async def api_vibex_generate(request: Request) -> JSONResponse:
 @app.post("/api/vibex/draft")
 async def api_vibex_draft(request: Request) -> JSONResponse:
     """Draft a post FROM a vibexgen trend angle — reuses the app's Postiz draft path."""
+    if (_r := _deny_response(_GATE_APP, "social.draft")):
+        return _r
     body = _strip_approval(await request.json()) if request.headers.get("content-type", "").startswith("application/json") else {}
     hook = (body or {}).get("hook") or (body or {}).get("topic") or "a trending wealth-management angle"
     return JSONResponse(_draft({"topic": hook}))
@@ -614,6 +642,10 @@ async def agent_run(request: Request) -> JSONResponse:
         body = {}
     action = (body or {}).get("action", "")
 
+    _tool = {"draft": "social.draft", "publish": "social.publish", "record_reel": "social.record_reel",
+             "vibex_trends": "social.vibex_trends", "vibex_generate": "social.vibex_generate"}.get(action)
+    if _tool and (_r := _deny_response(_GATE_APP, _tool)):
+        return _r
     if action == "draft":
         return JSONResponse(_draft(body or {}))
     if action == "publish":
@@ -633,6 +665,10 @@ async def agent_run(request: Request) -> JSONResponse:
 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
+
+    from agentic_os.app_gate import require_explicit_setting_when_exposed as _exposed
+
+    _exposed("0.0.0.0")   # a reachable bind needs an explicit permissions setting
 
     uvicorn.run(app, host="0.0.0.0", port=PORT)
 

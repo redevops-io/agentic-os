@@ -95,20 +95,30 @@ def answer(question: str, role: str, role_source: str = "client_asserted") -> di
     return core.answer(question, role, llm=_llm, role_source=role_source)
 
 
+# ── permissions: basic (AGPL) permissions or the enterprise plane; the app starts gated or not at all (agentic_os/app_gate.py). Every route that
+# EXECUTES a tool asks the gate first (authorisation), separately from the approval the core stages for consequential actions.
+from agentic_os.app_gate import RequestContext as _RequestContext, denial_result as _denial_result, deny_response as _deny_response, install_gate as _install_gate  # noqa: E402
+from agentic_os.app_gate import with_authorization as _with_authorization
+_GATE_APP = "guide"
+_req_principal = _install_gate(_GATE_APP)
+
 app = FastAPI(title="agentic-guide (core: redevops-rag)")
 
 from agentic_os.app_kit import route_authz as _route_authz  # noqa: E402
 from .route_policy import APP as _APP, ROUTE_POLICIES as _ROUTE_POLICIES  # noqa: E402
 _route_authz.install(app, _APP, _ROUTE_POLICIES)   # one enforcement layer for every write route
+app.add_middleware(_RequestContext)   # the active gate (basic or enterprise) sees THIS request's principal in every route
 
 
 @app.get("/health")
 def health():
-    return {"status": "up", "core": "redevops-rag", "connected": True}
+    return _with_authorization(_GATE_APP, {"status": "up", "core": "redevops-rag", "connected": True})
 
 
 @app.post("/api/ask")
 async def api_ask(req: Request):
+    if (_r := _deny_response(_GATE_APP, "guide.retrieve")):
+        return _r
     try:
         b = _strip_approval(await req.json())
     except Exception:  # noqa: BLE001
@@ -123,6 +133,8 @@ async def api_ask(req: Request):
 
 @app.get("/api/walkthrough")
 def api_walkthrough(request: Request, app: str, role: str = "viewer"):
+    if (_r := _deny_response(_GATE_APP, "guide.walkthrough")):
+        return _r
     role, _source = effective_role(request, role)
     if app not in APP_DOCS:
         return JSONResponse(walkthrough(app), status_code=404)
@@ -133,6 +145,8 @@ def api_walkthrough(request: Request, app: str, role: str = "viewer"):
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, role: str = "viewer"):
+    if (_r := _deny_response(_GATE_APP, "guide.retrieve")):
+        return _r
     role, _source = effective_role(request, role)
     return HTMLResponse(render(role))
 

@@ -105,7 +105,7 @@ python3 -m uvicorn app:app --host 0.0.0.0 --port 8207
 
 # Or with Docker (point CHATWOOT_API_URL at the Chatwoot rails service, not localhost):
 docker build -t agentic-support .
-docker run --rm -p 8207:8207 \
+docker run -e AGENTIC_OS_PERMISSIONS=off --rm -p 8207:8207 \
   -e CHATWOOT_API_URL=http://host.docker.internal:3003 \
   -e CHATWOOT_API_TOKEN=<token from .env> \
   -e CHATWOOT_ACCOUNT_ID=1 \
@@ -143,3 +143,7 @@ docker run --rm -p 8207:8207 \
   - `"resolve"` → `POST /conversations/{id}/toggle_status` (open ↔ resolved).
   - `"escalate"` → `POST /conversations/{id}/toggle_priority` (urgent) +
     `POST /conversations/{id}/assignments` (assign to the agent).
+
+## Authorization note
+
+Note: basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write. See `docs/PERMISSIONS_MIGRATION.md` section 29.

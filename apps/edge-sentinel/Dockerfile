@@ -66,6 +66,9 @@ RUN useradd --system --uid 10001 --create-home --home-dir /home/app app \
  && mkdir -p /data && chown -R app:app /app /data
 RUN printf '#!/bin/sh\n[ -w /data ] || { echo "/data is not writable by uid 10001; see apps/README.md (Upgrading images)" >&2; exit 1; }\nexec "$@"\n' > /usr/local/bin/aos-entrypoint \
  && chmod 755 /usr/local/bin/aos-entrypoint
+# A container is reachable by design: it refuses to start on an UNSET permissions setting. Run it with -e AGENTIC_OS_PERMISSIONS=1 (after `agentic-os permissions init`) to enforce
+# grants, or -e AGENTIC_OS_PERMISSIONS=off to run deliberately without authorization (standalone). See docs/PERMISSIONS_MIGRATION.md section 19.
+ENV AGENTIC_OS_REQUIRE_PERMISSIONS_SETTING=1
 ENTRYPOINT ["aos-entrypoint"]
 USER app
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

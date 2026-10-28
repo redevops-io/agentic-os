@@ -20,13 +20,13 @@ Control plane, security profile and the operator authority boundary, approval to
 | Surface | Mutating (token required) | Open (read-only) |
 |---|---|---|
 | `agentic_os.mission.unified_server` | `POST /api/bridge/invoke`, `POST /api/missions/{id}/approve` | `/api/connections`, `/api/needs-you`, `/api/missions/*`, `/api/bridge/capabilities`, `/` |
-| `agentic_os.control_plane` | `POST /up`, `/down`, `/dispatch`, `/approvals/{id}/{decision}`, `POST/DELETE /api/permissions/grants` | `/health`, `/status`, `/modules`, `/approvals`, `/jobs/*`, ... |
+| `agentic_os.control_plane` | `POST /up`, `/down`, `/dispatch`, `/approvals/{id}/{decision}`, `/api/permissions/*` (all routes) | `/health`, `/status`, `/modules`, `/approvals`, `/jobs/*`, ... |
 
 Send `Authorization: Bearer <token>` (compared with `hmac.compare_digest`).
-* token unset (and, on the main control plane, no legacy `AGENTIC_OS_API_KEY` / `PERMISSIONS_ADMIN_KEY`) -> **503** with a message; the endpoint never runs open;
+* token unset (and, on the main control plane, no legacy `AGENTIC_OS_API_KEY`) -> **503** with a message; the endpoint never runs open;
 * wrong / missing credentials -> **401**; correct -> normal handling.
 
-The main control plane still accepts the legacy `X-API-Key` (`AGENTIC_OS_API_KEY`; grants: `PERMISSIONS_ADMIN_KEY`) as an alternative. **Behaviour change:** an unset key used to mean "open"; it now means "disabled".
+The main control plane still accepts the legacy `X-API-Key` (`AGENTIC_OS_API_KEY`) as an alternative for the fleet routes; the grants API is a separate privilege (`PERMISSIONS_ADMIN_KEY` only). **Behaviour change:** an unset key used to mean "open"; it now means "disabled".
 `python -m agentic_os.mission.unified_server` binds `127.0.0.1` (override with `UNIFIED_HOST`, port `UNIFIED_PORT`, default 8090).
 `agentic_os/mission/control_plane.py` is only the wire-protocol codec (no HTTP surface), so nothing to gate there.
 `/m/<name>/api/*` (module proxy) is unchanged; the public demo keeps it read-only via `DEMO_READ_ONLY=1`.
@@ -334,7 +334,7 @@ Limits operators/humans must know:
 
 ## Permissions plane — access-control admin
 
-Fine-grained data access for every app: grant a **subject** (app / role / user) read/write on a
+Basic resource permissions and governed tool access, suitable for individual and trusted small-team deployments (not complete row/column enforcement across an estate; an application enforces grants by installing the authorizer over its tools, or with `AGENTIC_OS_PERMISSIONS=1`): grant a **subject** (app / role / user) read/write on a
 **resource** (database / table / corpus / tool), sliced by **row scope** and **column mask**. It is a
 kernel plane (a control-plane primitive alongside Approvals), not a business app, so it deploys with
 the core stack — no business apps required.
@@ -348,12 +348,37 @@ the core stack — no business apps required.
 | Piece | What it is |
 |---|---|
 | `Grant` | `<subject_kind:subject>` may `<actions>` on `<resource_kind:resource_name>`, with `row_scope` (`all`/`own`/`in`) + `masked_columns`. A grant on `crm` covers `crm.customers` (dotted prefix). |
-| `GrantStore` | Encrypted-at-rest JSONL CRUD (`grants.enc`), atomic writes, **fail-closed**. |
+| `GrantStore` | **Grants coexist**: each has an immutable random id (`g-` + 128 bits); `add` always appends (a role may hold several row predicates on one resource; the plane ORs them), removal and `update` are by id. Encrypted-at-rest JSONL CRUD (`grants.enc`), atomic writes, **fail-closed**. |
 | `PermissionsPlane` | `authorize(identity, resource, action) → AccessDecision` (privileged bypass → resource grant → row scope → column mask); `slice()` applies it. |
-| `make_authorizer(store)` | The **enforce** side a client app installs so grants gate every tool call. |
+| `make_authorizer(store)` | The **enforce** side: an application installs it over its own tools, and from then on the grants gate the tools it covers. Nothing installs it for you, and the AGPL plane provides basic resource permissions and governed tool access suitable for individual and trusted small-team deployments, not complete row/column enforcement across an estate. |
 
-`authorize` combines matching grants: rows = most-permissive (`all` > `own` > `in`); a column is
-masked only if **every** matching grant masks it (an added grant can unmask).
+`authorize` combines matching grants additively. Each grant is a **complete predicate** (column,
+operator and values together); a row is visible when at least one applicable grant authorises it, so
+`owner = <current user> OR region IN ('eu')` is the OR of two whole predicates. An `all` grant means
+every row. Values are never merged across columns (`region IN ('eu')` plus `team IN ('a')` is never
+`region IN ('eu','a')`); `in` grants on the *same* column share one term, which is the same set. One
+predicate keeps the legacy `{"column","op","value"|"values"}` shape; several come back as
+`{"op": "or", "filters": [predicate, …]}`. A caller with no identity (`user` empty, blank or non-string)
+gets nothing from an `own` grant.
+
+**Columns are decided per row**, from the grants that authorise *that row*: a column is exposed on a row
+iff some grant authorising that row exposes it, and masked on it iff every grant authorising that row masks
+it. So a masking grant `region IN ('eu')` beside an unmasking grant `region IN ('us')` masks email on the eu
+rows and exposes it on the us rows; a user grant that masks beside a broader role grant over the same rows
+exposes it. The decision keeps each grant's complete predicate and masks in `decision.rules`
+(`{"row_filter": predicate | None, "masked_columns": [...]}`, canonical order, so the result never depends on
+the order of grants or roles); `decision.masked_columns` is the union (masked on at least one row), so a
+consumer that ignores `rules` can only over-mask. `PermissionsPlane.slice` applies the rules row by row;
+`PermissionsPlane.row_allowed` / `masked_for_row` answer for one row.
+
+**The principal is validated as a whole** (`Identity.is_valid()` / `invalid_reason()`, computed once at the identity
+boundary, naming the field and never its value). `app` and `user` must be strings (a **blank** one is merely absent, not
+malformed); `roles` must be a list, tuple or set of non-blank strings: a bare string, bytes, `None`, any other
+non-collection, or a collection with **any** malformed member (blank, non-string, an object that merely compares equal to a
+role) is malformed. A principal with a malformed field is **invalid as a whole**: it grants nothing through *any* field (a
+valid role beside a malformed user grants nothing either), gets **no `admin` bypass**, and nothing raises. The restrictive
+fallback in this plane is a denial. Role matching is exact, never a substring. Behaviour change from earlier revisions, which
+normalised field by field: an identity such as `user=42` with the role `clerk` is now denied.
 
 ### Encryption at rest + fail-closed
 
@@ -362,9 +387,41 @@ tamper-evidence in one). Any hand-edit of the file fails authentication on read 
 **sealed** → the plane honors **no grants and denies everything, including the admin bypass**.
 `add`/`remove` refuse to overwrite a sealed file.
 
-Key precedence: **`PERMISSIONS_KEY`** (base64 16/24/32 bytes, from Vault/env) → a generated on-box key
-file (`.permissions.key`, dev only). Status (`GET /api/permissions/status`) reports
-`encrypted` / `key_source` (`env`|`keyfile`) / `sealed` / `count`; the UI shows a badge.
+**There is no implicit plaintext and no implicit key.** Without the `cryptography` package, or when no
+key is available (see the rule below; an invalid `PERMISSIONS_KEY`, a damaged key file), the store refuses to start with a `GrantStorageError` that says why, before it
+touches any existing grants file. The **only** way to get plaintext is the explicit development-only
+`PERMISSIONS_ALLOW_PLAINTEXT_DEV=1` (or `GrantStore(allow_plaintext_dev=True)`): it logs a loud
+`DEVELOPMENT ONLY — NOT FOR PRODUCTION` warning at start-up and on every write, `GET
+/api/permissions/status` reports `plaintext_dev: true`, it never downgrades an existing `grants.enc`,
+and no compose file, Dockerfile or workflow in this repository sets either dev opt-in (a test guards that).
+
+**The key rule** (a key is never generated implicitly): (a) `PERMISSIONS_KEY` (base64, 16/24/32 bytes) set and
+valid → used; (b) an **already existing** valid key file — `PERMISSIONS_KEY_FILE`, else `<dir>/.permissions.key` →
+kept in use (existing deployments keep working; logged); (c) neither → `GrantStorageError` with the fix.
+Two explicit, development-only opt-ins exist and each warns loudly: `PERMISSIONS_ALLOW_GENERATED_KEY_DEV=1`
+generates a 0600 key file, `PERMISSIONS_ALLOW_PLAINTEXT_DEV=1` runs unencrypted. `PERMISSIONS_REQUIRE_KEY=1` is
+stricter than the rule: only `PERMISSIONS_KEY` is accepted, an on-box key file is refused too. The deliberate way to
+create the persistent key for a single user is `agentic-os permissions init` (below).
+Status (`GET /api/permissions/status`) reports `encrypted` / `key_source` (`env`|`keyfile`) /
+`sealed` / `count` / `plaintext_dev` / `migrated_from_plaintext`; the UI shows a badge.
+
+**Concurrency and files.** `add`, `remove` and `seed` hold one exclusive `flock` (`.grants.lock`) across
+the **whole** read-modify-write and persist through a temp file in the same directory, `fsync`,
+`os.replace` and a directory `fsync`, so concurrent writers (threads or processes) lose no update and a
+reader never sees a torn file. The store needs POSIX `fcntl` and **raises at start-up on a platform
+without it** rather than run unlocked. The directory is created 0700, files 0600; a symbolic link in
+place of a grants file, backup or temp path is refused.
+
+#### Migrating an existing plaintext `grants.jsonl`
+
+Earlier releases wrote `grants.jsonl` in plaintext when no key or `cryptography` was available. With a key
+available, start-up migrates it automatically and safely: **back up the original** (0600) → encrypt into a
+temp file in the same directory → verify by decrypting and comparing → atomically replace → verify the
+file on disk → remove the plaintext original. The backup `grants.jsonl.migrated-<epoch>-<hex>` stays for
+rollback (it is plaintext; delete it once confirmed). Any error leaves the existing data unchanged; if the
+key is unavailable, start-up fails before any grants file is touched. Logs name paths and counts, never keys
+or grant contents. `PERMISSIONS_MIGRATE_PLAINTEXT=0` makes start-up refuse instead. The full table of
+situations, a before/after, and the rollback note are in [PERMISSIONS_MIGRATION.md](PERMISSIONS_MIGRATION.md).
 
 **Honest ceiling (on-host model):** a root user who can read the running key (env/`/proc`) can still
 forge grants — encryption stops *file* tampering, not a fully-compromised host. Keep `PERMISSIONS_KEY`
@@ -373,38 +430,52 @@ verify-only design (server holds only the public key; signing happens off-box).
 
 ### API auth (write path)
 
-`POST`/`DELETE /api/permissions/grants` are gated by **`PERMISSIONS_ADMIN_KEY`** (its own key, so it
-is independent of the fleet-ops `AGENTIC_OS_API_KEY`; falls back to it if unset). Reads/preview are
+`POST`/`PUT`/`DELETE /api/permissions/grants` are gated by **`PERMISSIONS_ADMIN_KEY`** (its own key, so it
+is independent of the fleet-ops `AGENTIC_OS_API_KEY`, which does not fall back to it; at least 24 characters, a shorter key disables the API). Reads/preview are
 open. The UI has an admin-key field (stored in `localStorage`, sent as `X-API-Key`; HTTP Basic with the
 key as password is also accepted; compared with `hmac.compare_digest`). This is a **separate layer**
 from at-rest encryption: it protects the network write path, not the file.
 
-#### Public demo: simulated writes (fail closed)
+#### The showcase: a public demo API and an admin API (two separate interfaces)
 
-The standalone showcase (`deploy/permissions-showcase-demo`, demo.redevops.io/permissions) stays
-anonymous and interactive but visitors can never mutate the shared, persistent store. **An unset key is
-never "open"**: with no key configured, or a missing/invalid key on the request, grant writes are
-*simulated* in an in-memory per-session overlay (`agentic_os/permissions_overlay.py`):
+The standalone showcase (`deploy/permissions-showcase-demo`, demo.redevops.io/permissions) has **two** interfaces, and the public one
+never reaches the real store:
 
-- keyed by the `perm_demo_sid` cookie (HttpOnly, SameSite=Lax); responses carry `X-Demo-Simulated: 1`
-  and the normal success shape, so the page works unchanged;
-- never persisted, invisible to other visitors; `GET grants`, `status`, `preview` and `authorize`
-  evaluate against base grants + that session's overlay;
-- capped (25 simulated adds / 50 removals per session, 500 sessions, oldest evicted) and expires after
-  30 minutes idle; over-cap writes return 429;
-- a valid admin key persists writes exactly as before. At-rest encryption is unchanged.
+- **Public demo API** (no credential): `GET /api/demo/scenarios` (a fixed list) and `GET /api/demo/scenarios/{id}` (id matches
+  `[a-z0-9][a-z0-9-]{0,39}`, must be in the allowlist: 400 for a malformed id, 404 for an unknown one). Each scenario is evaluated by a
+  throw-away in-memory plane over a **synthetic** table (`agentic_os/permissions_demo.py`). A visitor picks a scenario and nothing else: never
+  an identity, a role, a resource or an action. A result carries the canned explanation, the synthetic rows the scenario's principal may see
+  (masked cells `null`) and counts; it never carries a real grant, a principal, a row predicate, a decision or reason, or store status.
+  `GET /healthz` is liveness only (`{"ok": true}`). There is no cookie and no per-visitor state.
+- **Admin API** (`/api/permissions/*`): see "Endpoints". Every route needs the admin credential; the page's admin panel is inert until a key is
+  typed in and then sends it in a header.
 
-### Endpoints
+(An earlier revision let anonymous visitors "simulate" writes in a per-session overlay and read grants, status, preview and authorize
+without a key; that overlay and those open routes are gone.)
+
+### Endpoints — the ADMIN API contract
+
+Every route below needs the admin credential. **Fail closed, no public read:** nothing configured means the route is *disabled* (503), never
+open; a missing, empty, malformed or wrong credential is 401; a credential in the query string is refused (400); the secret-derived
+comparison is constant-time. There is no `public_read` setting anywhere.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| GET | `/permissions` | — | Admin page (grant editor + live preview) |
-| GET | `/api/permissions/status` | — | encrypted / key_source / sealed / count |
-| GET | `/api/permissions/grants` | — | list grants |
-| POST | `/api/permissions/grants` | `PERMISSIONS_ADMIN_KEY` | add/replace a grant |
-| DELETE | `/api/permissions/grants/{id}` | `PERMISSIONS_ADMIN_KEY` | remove a grant |
-| POST | `/api/permissions/preview` | — | permissionless vs permissioned over the sample resource |
-| POST | `/api/permissions/authorize` | — | dry-run a decision |
+| GET | `/permissions` | — (static page) | the admin page: HTML only, it loads data through the API below with the key you type in |
+| GET | `/api/permissions/status` | admin | encrypted / key_source / sealed / count / malformed / counter / rollback_detected |
+| GET | `/api/permissions/grants` | admin | list the usable grants |
+| POST | `/api/permissions/grants` | admin | **create** a grant (always a new one; returns its `id`) |
+| PUT | `/api/permissions/grants/{id}` | admin | update the scope of one grant by id (id, subject, resource immutable) |
+| DELETE | `/api/permissions/grants/{id}` | admin | remove one grant by id |
+| POST | `/api/permissions/preview` | admin | permissionless vs permissioned over the sample resource |
+| POST | `/api/permissions/authorize` | admin | dry-run a decision (diagnostics) |
+
+**Credentials.** Control plane and showcase alike: `X-API-Key` or `Authorization: Bearer`, both compared in constant time with `PERMISSIONS_ADMIN_KEY` (at least
+24 characters; the fleet key and the control token open nothing here). HTTP Basic and cookies are
+not credentials for this API. **Errors:** 400 credential in the query string (also: not JSON / not an object); 401 invalid or missing credentials
+(`WWW-Authenticate: Bearer`); 404 unknown grant id (PUT); 409 a malformed or conflicting grant (`GrantError`, a sealed store); 413 body over 64 KB;
+503 admin API disabled (no key configured). A request that reaches the plane with a malformed principal or resource is a clean denial
+(`allowed: false`), never a 500.
 
 ### Enforcing grants in a client app
 
@@ -421,11 +492,46 @@ set_default_authorizer(make_authorizer(
     store,
     app_resources={"support": ("table", "crm.customers")},   # app → its own resource
     tool_resources={"read_customers": ("table", "crm.customers")},  # optional per-tool overrides
+    tool_actions={"read_customers": "read", "update_customer": "write"},  # REQUIRED for every checked tool
+    public_tools=["ping"],                                  # tools that touch no controlled data
+    scoped_tools=["read_customers"],                        # tools that apply row/column scope themselves
 ))
 ```
 
-Every gated tool call is then authorized against the plane; a saved grant takes effect on the next
-request. Tools that touch no controlled resource pass through.
+Four rules, each failing closed (details and examples in [PERMISSIONS_MIGRATION.md](PERMISSIONS_MIGRATION.md)):
+
+1. **Mapping.** A tool that maps to no resource (not in `tool_resources`, and the calling app not in
+   `app_resources`) is **denied for every principal, `admin` included**, unless it is in `public_tools`
+   (which may not also be mapped or classified `write`/`delete`); a public tool is **still listed in
+   `tool_actions`, as `read`** — an unlisted public tool is denied. A privileged role keeps its full access to
+   a *mapped* resource.
+2. **Action.** `tool_actions[name]` (`read`, `write` or `delete`) is the grant action the tool requires. It is
+   **trusted registration metadata**: set by the registering code, never inferred from the tool's name,
+   description or an MCP `readOnlyHint`. A tool with no entry is **denied**; a tool that registered `read`
+   but whose spec declares `side_effecting` is ambiguous and **denied** (a spec can tighten, never
+   downgrade). This is separate from approval: an approved action without the grant is still denied.
+   `agentic_os.tool_actions.TOOL_ACTIONS` classifies every tool this repository registers.
+3. **Scope.** The seam can only allow or deny, so a grant with a row filter or column mask is honoured only
+   for a tool declared in `scoped_tools`, which applies the **whole** decision — the OR of whole predicates
+   and the per-row column masks — with `authorizer.slice_for(principal, tool_name, records)` (reads) or
+   `authorizer.permits_row(...)` (writes). A tool that can push only **one** predicate into its own query is
+   declared in `single_predicate_tools` and is denied when the decision has several predicates or masks
+   differently from row to row. Any other tool is **denied**, never run with a restriction dropped or
+   approximated. The gate cannot verify a declared tool really applies the decision.
+4. **Identity.** A principal with an empty or blank `user` gets nothing from an `own` grant.
+
+```python
+authz = make_authorizer(store, app_resources=..., tool_actions={"read_customers": "read"},
+                        scoped_tools=["read_customers"])
+
+def read_customers(args):                       # the tool's side of the contract
+    rows = db.query(...)
+    return ToolResult(data=authz.slice_for(current_principal(), "read_customers", rows))
+```
+
+A saved grant takes effect on the next request (the gate re-reads the store on every call). Data a
+conversation or cache already holds is not recalled — that, and multi-tenant isolation, are not part of
+this edition.
 
 ### Deploy & secrets
 
@@ -568,3 +674,25 @@ res.messages                                            # pin first and byte-ide
 
 **One feed for a security monitor** (`agentic_os/mission/sentinel.py`): hand the feed's sinks to the components (`GoalLoop(on_event=feed.loop_sink)`, `ChildSpawner(on_event=feed.child_sink)`, `ReconciliationSupervisor(on_event=feed.reconcile_sink)`, `compact_with_integrity(on_event=feed.context_sink)`), feed it the egress proxy's decision-log lines (`feed.egress(line)`) and assurance findings (`feed.assurance(findings)`), and have the monitor `pull(cursor)`. Events are deduplicated, durable and severity-rated; the cursor makes a restart lose and repeat nothing. Edge Sentinel turns them into AI_SECURITY cases with `apps/edge-sentinel/agent_events.pull_cases`; a case is a signal, never an action or a closure.
 
+
+
+### Admin API throttle: buckets, backoff, trusted proxies, IPv6, eviction
+
+Failed admin credentials are counted per CLIENT BUCKET. **Where the client identity is trustworthy** (`PERMISSIONS_TRUSTED_PROXIES` is set and the client is a distinct address: the
+forwarded client behind a trusted proxy, or a direct peer that is not itself a trusted proxy) ten wrong credentials in five minutes lock that client out (`429` + `Retry-After`), for good
+guesses too. **Where it is not** (no `PERMISSIONS_TRUSTED_PROXIES`, which is the compose default, or a trusted proxy with no usable forwarded address) every visitor behind the reverse proxy shares ONE
+bucket, and a hard lock would let anonymous wrong keys lock the real admin out; there the bucket **backs off** instead: past the limit each request waits `min(5 s, 0.25 s * 2^(failures - 10))`, the same for
+a correct, a missing and a wrong credential (so the slow-down is no oracle), the number of threads sleeping in backoff is bounded (8; the overflow is a uniform `429`), and a correct credential still gets in.
+A one-time start-up warning is logged when the admin API is enabled without the setting, and `deploy.sh` refuses to deploy without it. Set it to the proxy hop (for a local cloudflared, `127.0.0.1`); uvicorn
+then honours proxy headers only from that list (`--no-proxy-headers` otherwise), so a loopback peer cannot choose its throttle identity through `X-Forwarded-For`.
+Caveats, stated: IPv6 clients are bucketed by their **/64** (one subscriber holds a whole /64; per-address buckets would let one host rotate through 2^64 identities), so everybody sharing a /64 shares a bucket;
+the bucket table is bounded (4096 clients) and the OLDEST window is **evicted** when it is full, so an attacker with very many source addresses can push other clients' counters out (a counter reset, never an
+opening); counters live in the process (a restart or a second worker starts from zero). The throttle protects the admin API only; it never opens anything and does not touch enforcement.
+
+## The single-user quickstart principal (basic permissions)
+
+With `AGENTIC_OS_PERMISSIONS=1` every app acts as ONE local user, taken from `profile.json` in the permissions directory (written by `agentic-os permissions init`; read like a secret: a regular file you own, mode
+0600, never a symlink). It is never taken from a request header, query string or token: a caller cannot choose, rename or add roles to it, and there is no administrator bypass. **If `profile.json` is missing**
+(a store provisioned before profiles existed) the principal is the default local user `local`: the app logs a warning naming the file and the fix, and `local` can do only what grants for `local` allow (none unless
+someone created them). Note: basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write. The quickstart therefore protects against callers who are not the machine's user, not against another process running as that user: anything that can read the permissions directory
+and key already holds the grants.

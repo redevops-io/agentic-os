@@ -33,6 +33,9 @@ services:
       - AGENTIC_OS_CONTROL_TOKEN=${AGENTIC_OS_CONTROL_TOKEN:-}
       - AGENTIC_OS_API_KEY=${AGENTIC_OS_API_KEY:-}
       - AGENTIC_OS_HOME=/data
+      # The grant-store key: external, NO default. Created once by `make permissions-key`; the grants persist in /data.
+      - "PERMISSIONS_KEY=${PERMISSIONS_KEY:?PERMISSIONS_KEY is required - create it once with make permissions-key (or agentic-os permissions key --env-file permissions.env) then run docker compose --env-file permissions.env up}"
+      - PERMISSIONS_DIR=/data/permissions
     volumes:
       - agentic_os_data:/data
     networks: [agentic]

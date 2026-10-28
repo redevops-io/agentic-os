@@ -83,7 +83,7 @@ build-backend = "hatchling.build"
 packages = ["agentic_os"]
 # The Projects UI bundle (fetched/vendored into agentic_os/projects_ui) is data, not Python — force-include it so the wheel ships it
 # regardless of VCS-ignore rules (so `pip install` serves the UI out of the box).
-artifacts = ["agentic_os/projects_ui/**"]
+artifacts = ["agentic_os/projects_ui/**", "agentic_os/identifier_ranges.json"]
 
 [tool.hatch.metadata]
 # `runtime-contracts` is pinned by git tag, which hatchling calls a direct

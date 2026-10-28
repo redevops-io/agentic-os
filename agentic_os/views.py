@@ -173,7 +173,7 @@ def overview_page(*, groups: dict, has_agent: set, module_meta: dict, workflows:
         ("Router", "Sends every task to the cheapest model that can do it well — a model on your own hardware first, a premium one only for the hard 5%."),
         ("Context", "The shared memory of your business — the profile, customers, and policies every agent works from."),
         ("Approvals & Audit", "The human-in-the-loop gate: anything that moves money, touches compliance, or changes infrastructure pauses here for your one-click sign-off, and every decision is logged."),
-        ("Permissions", "Fine-grained data access for every app — grant a subject read/write on a database, table or corpus, sliced by row scope and column mask. Set it up and preview it live.", "/permissions"),
+        ("Permissions", "Basic resource permissions and governed tool access: grant a subject read/write on a database, table or corpus, with optional row and column restrictions. An application enforces them by installing the authorizer over its tools; this page edits the grants and previews the effect.", "/permissions"),
     ]
     kernel_html = "".join(
         (lambda t, d, href: (
@@ -398,19 +398,22 @@ health(); setInterval(health, 5000);
 </html>"""
 
 
-def permissions_page(*, subjects, roles, resource, columns, subject_kinds, resource_kinds, actions, row_scopes) -> str:
+def permissions_page(*, subjects, roles, resource, columns, subject_kinds, resource_kinds, actions, row_scopes, nonce: str = "") -> str:
     """The kernel Permissions admin: define grants for your apps (subject → resource, row-scope +
     column-mask) and preview live what each subject can see. Served at /permissions."""
-    subj_opts = "".join(f'<option value="{html.escape(s)}">' for s in list(subjects) + list(roles))
-    sk_opts = "".join(f'<option value="{k}">{k}</option>' for k in subject_kinds)
-    rk_opts = "".join(f'<option value="{k}"{" selected" if k==resource["kind"] else ""}>{k}</option>' for k in resource_kinds)
-    rs_opts = "".join(f'<option value="{s}">{s}</option>' for s in row_scopes)
-    act_boxes = "".join(f'<label class="chip"><input type="checkbox" value="{a}"{" checked" if a=="read" else ""}> {a}</label>' for a in actions)
-    mask_boxes = "".join(f'<label class="chip"><input type="checkbox" value="{c}"> {c}</label>' for c in resource["maskable"])
-    rowcol_opts = "".join(f'<option value="{c}">' for c in resource["row_columns"])
+    e = lambda x: html.escape(str(x), quote=True)          # every static-config parameter is escaped too (defence in depth, PP-13)
+    subj_opts = "".join(f'<option value="{e(s)}">' for s in list(subjects) + list(roles))
+    sk_opts = "".join(f'<option value="{e(k)}">{e(k)}</option>' for k in subject_kinds)
+    rk_opts = "".join(f'<option value="{e(k)}"{" selected" if k==resource["kind"] else ""}>{e(k)}</option>' for k in resource_kinds)
+    rs_opts = "".join(f'<option value="{e(s)}">{e(s)}</option>' for s in row_scopes)
+    act_boxes = "".join(f'<label class="chip"><input type="checkbox" value="{e(a)}"{" checked" if a=="read" else ""}> {e(a)}</label>' for a in actions)
+    mask_boxes = "".join(f'<label class="chip"><input type="checkbox" value="{e(c)}"> {e(c)}</label>' for c in resource["maskable"])
+    rowcol_opts = "".join(f'<option value="{e(c)}">' for c in resource["row_columns"])
     tmpl = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Permissions · Agentic OS</title>
-<style>__BASE_CSS__
+<style__NONCEATTR__>__BASE_CSS__
+  .row6{display:flex;gap:6px} .row6c{display:flex;gap:6px;align-items:center} .w100{width:100px} .w150{width:150px} .w230{width:230px} .fs11{font-size:11px}
+  .keyrow{display:flex;gap:12px;align-items:center;margin-bottom:16px;flex-wrap:wrap} .mb14{margin-bottom:14px}
   .wrap{max-width:1240px;margin:0 auto;padding:20px}
   .top{display:flex;align-items:center;gap:12px;margin-bottom:6px}
   .top a{color:var(--on-surface-muted);font-size:13px}
@@ -452,29 +455,30 @@ def permissions_page(*, subjects, roles, resource, columns, subject_kinds, resou
 </style></head><body><div class="wrap">
 <div class="top"><a href="/overview">&larr; Agentic OS</a><span class="dot up"></span></div>
 <h1>&#128273; Permissions &mdash; access control for your apps</h1>
-<p class="sub">Define who may read which data, at row + column granularity, and preview live what each subject sees. Grants persist to a store the plane enforces on every tool call (privileged bypass &rarr; database grant &rarr; table grant &rarr; row scope &rarr; column mask). Editing here updates the <b>preview</b>; a client app enforces the same grants by installing the authorizer over the shared store.</p>
+<p class="sub">Define who may read or change which data, with optional row and column restrictions, and preview what each subject would see. Grants live in an encrypted store. They are enforced where an application installs the authorizer over its tools (<code>make_authorizer</code>) on top of this store: this page edits the grants and previews the effect, it is not itself an enforcement point. The AGPL plane provides basic resource permissions and governed tool access suitable for individual and trusted small-team deployments.</p>
 <p class="sub">This is the <b>data-access</b> plane. The layer beneath it &mdash; per-call security decisions, boundary telemetry, and correlation &amp; containment of a <em>series</em> of calls &mdash; is the v0.3.0 intrinsic-security plane: <a href="/security">Intrinsic Security &amp; Telemetry &rarr;</a></p>
-<div style="display:flex;gap:12px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
-  <span id="pstatus" class="badge" style="font-size:11px">checking…</span>
-  <input id="apikey" type="password" placeholder="admin X-API-Key (if set)" style="width:230px" oninput="saveKey()">
-  <span class="note">grants are AES-GCM encrypted at rest &amp; fail-closed; the write API is gated by this key.</span>
+<div class="keyrow">
+  <span id="pstatus" class="badge fs11">locked</span>
+  <input id="apikey" type="password" autocomplete="off" spellcheck="false" placeholder="admin key" class="w230">
+  <button class="btn" id="unlock">Unlock</button> <button class="btn ghost" id="lock">Lock</button>
+  <span class="note">Every call on this page is the permissions ADMIN API. Nothing is sent until you press Unlock; the key is then held in memory only (never stored, never in the URL; reloading forgets it) and sent in a header. When a key is provisioned the grants are encrypted at rest (AES-GCM) and the store fails closed.</span>
 </div>
 
 <div class="card"><h2>Add a grant</h2>
 <div class="form">
   <div class="f"><label class="l">Subject</label>
-    <div style="display:flex;gap:6px"><select id="sk">__SK__</select>
+    <div class="row6"><select id="sk">__SK__</select>
     <input type="text" id="subj" list="subjlist" placeholder="app / role / user"><datalist id="subjlist">__SUBJOPTS__</datalist></div></div>
   <div class="f"><label class="l">Resource</label>
-    <div style="display:flex;gap:6px"><select id="rk">__RK__</select>
+    <div class="row6"><select id="rk">__RK__</select>
     <input type="text" id="rname" value="__RESOURCE__"></div></div>
   <div class="f"><label class="l">Actions</label><div class="chips" id="acts">__ACTS__</div></div>
   <div class="f"><label class="l">Row scope</label>
-    <div style="display:flex;gap:6px;align-items:center"><select id="rs">__RS__</select>
-    <input type="text" id="rcol" list="rowcols" placeholder="column" value="owner" style="width:100px"><datalist id="rowcols">__ROWCOLS__</datalist>
-    <input type="text" id="rvals" placeholder="values (comma)" style="width:150px"></div></div>
+    <div class="row6c"><select id="rs">__RS__</select>
+    <input type="text" id="rcol" list="rowcols" placeholder="column" value="owner" class="w100"><datalist id="rowcols">__ROWCOLS__</datalist>
+    <input type="text" id="rvals" placeholder="values (comma)" class="w150"></div></div>
   <div class="f"><label class="l">Column mask</label><div class="chips" id="masks">__MASKS__</div></div>
-  <button class="btn" onclick="addGrant()">Add grant</button>
+  <button class="btn" id="addbtn">Add grant</button>
 </div>
 <div class="note">Row scope: <b>all</b> = every row &middot; <b>own</b> = rows where <code>column</code> = the user &middot; <b>in</b> = rows where <code>column</code> &isin; the comma values.</div>
 </div>
@@ -484,11 +488,11 @@ def permissions_page(*, subjects, roles, resource, columns, subject_kinds, resou
   <tbody id="grows"><tr><td colspan="6" class="mask">loading…</td></tr></tbody></table></div></div>
 
 <div class="card"><h2>Preview &mdash; what a subject can see</h2>
-<div class="form" style="margin-bottom:14px">
+<div class="form mb14">
   <div class="f"><label class="l">Preview as</label>
-    <div style="display:flex;gap:6px"><select id="psk">__SK__</select>
+    <div class="row6"><select id="psk">__SK__</select>
     <input type="text" id="psubj" list="subjlist" placeholder="app / role / user" value="support"></div></div>
-  <button class="btn ghost" onclick="runPreview()">Preview</button>
+  <button class="btn ghost" id="prevbtn">Preview</button>
 </div>
 <div class="panels">
   <div class="panel"><div class="phead"><div><b>Full access</b><small>role: admin &middot; permissionless</small></div><span class="count" id="fcount">&mdash;</span></div>
@@ -497,13 +501,15 @@ def permissions_page(*, subjects, roles, resource, columns, subject_kinds, resou
     <div class="decision" id="ldec"></div><div class="ptbl" id="ltbl"></div></div>
 </div></div>
 </div>
-<script>
+<script__NONCEATTR__>
 const COLS=__COLUMNS__;
-function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");}
 function checked(id){return Array.from(document.querySelectorAll("#"+id+" input:checked")).map(x=>x.value);}
 async function loadGrants(){
-  const r=await fetch("api/permissions/grants"); const gs=await r.json();
+  const r=await fetch("api/permissions/grants",{headers:wHeaders()});
   const tb=document.getElementById("grows");
+  if(!r.ok){ tb.innerHTML='<tr><td colspan="6" class="mask">'+esc(adminMsg(r.status))+'</td></tr>'; return; }
+  const gs=await r.json();
   if(!gs.length){ tb.innerHTML='<tr><td colspan="6" class="mask">no grants yet — add one above</td></tr>'; return; }
   tb.innerHTML=gs.map(function(g){
     const scope = g.row_scope==="all"?"all rows":(g.row_scope==="own"?("own · "+esc(g.row_column)):(esc(g.row_column)+" ∈ ["+(g.row_values||[]).map(esc).join(", ")+"]"));
@@ -512,9 +518,14 @@ async function loadGrants(){
       '<td>'+(g.actions||[]).map(esc).join(", ")+'</td>'+
       '<td>'+scope+'</td>'+
       '<td class="mask">'+((g.masked_columns||[]).map(esc).join(", ")||"—")+'</td>'+
-      '<td><button class="del" onclick="delGrant(\''+g.id+'\')">remove</button></td></tr>';
+      '<td><button class="del" data-id="'+esc(g.id)+'">remove</button></td></tr>';
   }).join("");
 }
+// ids and every other dynamic value reach the page escaped, never inside an inline handler: a delegated listener reads data-id
+document.getElementById("grows").addEventListener("click",function(e){
+  const b=e.target.closest&&e.target.closest("button.del"); if(b&&b.dataset.id) delGrant(b.dataset.id);
+});
+function adminMsg(st){return st===401?"admin key missing or wrong — enter it above":(st===503?"the admin API is disabled on this server (no admin key configured)":(st===400?"request refused: send the key in the X-API-Key header, never in the URL":"error "+st));}
 async function addGrant(){
   const body={subject_kind:document.getElementById("sk").value, subject:document.getElementById("subj").value.trim(),
     resource_kind:document.getElementById("rk").value, resource_name:document.getElementById("rname").value.trim(),
@@ -529,14 +540,22 @@ async function addGrant(){
   await loadGrants(); runPreview(); loadStatus();
 }
 async function delGrant(id){
-  const r=await fetch("api/permissions/grants/"+id,{method:"DELETE",headers:wHeaders()});
+  const r=await fetch("api/permissions/grants/"+encodeURIComponent(id),{method:"DELETE",headers:wHeaders()});
   if(r.status===401){alert("Admin X-API-Key required or invalid.");return;}
   await loadGrants(); runPreview(); loadStatus();
 }
-function saveKey(){try{localStorage.setItem("cp_api_key",document.getElementById("apikey").value);}catch(e){}}
-function wHeaders(){const h={"Content-Type":"application/json"};const k=document.getElementById("apikey").value;if(k)h["X-API-Key"]=k;return h;}
+// The admin key is held in this variable ONLY (memory): never written to browser storage, a cookie or the URL, never sent per keystroke, gone on reload.
+// It is read from the input once, when the operator presses Unlock (or Enter), and the input is cleared.
+let ADMIN_KEY="";
+function unlock(){const i=document.getElementById("apikey");if(!i.value)return;ADMIN_KEY=i.value;i.value="";boot();}
+function lock(){ADMIN_KEY="";document.getElementById("apikey").value="";document.getElementById("pstatus").textContent="locked";
+  document.getElementById("grows").innerHTML='<tr><td colspan="6" class="mask">locked — enter the admin key and press Unlock</td></tr>';
+  document.getElementById("ftbl").innerHTML="";document.getElementById("ltbl").innerHTML="";}
+function wHeaders(){const h={"Content-Type":"application/json"};if(ADMIN_KEY)h["X-API-Key"]=ADMIN_KEY;return h;}
 async function loadStatus(){
-  try{const s=await (await fetch("api/permissions/status")).json();const el=document.getElementById("pstatus");
+  try{const r=await fetch("api/permissions/status",{headers:wHeaders()});const el=document.getElementById("pstatus");
+    if(!r.ok){el.textContent="🔑 "+adminMsg(r.status);el.style.color="#e7d488";return;}
+    const s=await r.json();
     if(s.sealed){el.textContent="⛔ store SEALED — tamper/wrong key (failing closed)";el.style.color="#ff9b9b";el.style.borderColor="#ff9b9b";}
     else if(s.encrypted){el.textContent="🔒 encrypted at rest · AES-GCM · key:"+s.key_source+" · "+s.count+" grants";el.style.color="#8fe3d6";}
     else{el.textContent="⚠ PLAINTEXT — set PERMISSIONS_KEY";el.style.color="#e7d488";}
@@ -559,7 +578,8 @@ function recTable(records, mode, withheld, decision){
 async function runPreview(){
   const sk=document.getElementById("psk").value, subj=document.getElementById("psubj").value.trim();
   document.getElementById("psub").textContent=sk+": "+(subj||"—");
-  const r=await fetch("api/permissions/preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({subject_kind:sk,subject:subj})});
+  const r=await fetch("api/permissions/preview",{method:"POST",headers:wHeaders(),body:JSON.stringify({subject_kind:sk,subject:subj})});
+  if(!r.ok){document.getElementById("ltbl").innerHTML='<div class="deny-box">'+esc(adminMsg(r.status))+'</div>';return;}
   const d=await r.json();
   document.getElementById("fcount").textContent=d.full.count+" rows";
   const L=d.limited; document.getElementById("lcount").textContent=L.count+" of "+d.full.count+" rows"+(L.withheld?(" · "+L.withheld+" withheld"):"");
@@ -569,13 +589,19 @@ async function runPreview(){
   document.getElementById("ftbl").innerHTML=recTable(d.full.records,"full",0,null);
   document.getElementById("ltbl").innerHTML=recTable(L.records,"lim",L.withheld,L.decision);
 }
-try{document.getElementById("apikey").value=localStorage.getItem("cp_api_key")||"";}catch(e){}
-loadStatus(); loadGrants(); runPreview();
+function boot(){ if(!ADMIN_KEY) return; loadStatus(); loadGrants(); runPreview(); }
+document.getElementById("unlock").addEventListener("click",unlock);
+document.getElementById("lock").addEventListener("click",lock);
+document.getElementById("apikey").addEventListener("keydown",function(e){if(e.key==="Enter")unlock();});
+document.getElementById("addbtn").addEventListener("click",addGrant);
+document.getElementById("prevbtn").addEventListener("click",runPreview);
+lock();
 </script></body></html>"""
     return (tmpl
+            .replace("__NONCEATTR__", f' nonce="{html.escape(nonce, quote=True)}"' if nonce else "")
             .replace("__BASE_CSS__", _BASE_CSS)
-            .replace("__RESOURCE__", html.escape(resource["name"]))
-            .replace("__COLUMNS__", json.dumps(columns))
+            .replace("__RESOURCE__", html.escape(resource["name"], quote=True))
+            .replace("__COLUMNS__", json.dumps(list(columns)).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026"))
             .replace("__SUBJOPTS__", subj_opts)
             .replace("__SK__", sk_opts)
             .replace("__RK__", rk_opts)
@@ -583,3 +609,77 @@ loadStatus(); loadGrants(); runPreview();
             .replace("__ACTS__", act_boxes)
             .replace("__MASKS__", mask_boxes)
             .replace("__ROWCOLS__", rowcol_opts))
+
+
+def permissions_demo_page(scenarios, nonce: str = "") -> str:
+    """The PUBLIC showcase page: synthetic scenarios only. It calls ``/api/demo/*`` (a fixed list of scenario ids, synthetic data) and
+    nothing else; the admin panel at the bottom is inert until an admin key is typed in, and then it calls the ADMIN API with that key
+    in a header. No dynamic value is placed in an inline handler."""
+    opts = "".join(f'<option value="{html.escape(s["id"])}">{html.escape(s["title"])}</option>' for s in scenarios)
+    tmpl = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Permissions · Agentic OS</title>
+<style__NONCEATTR__>__BASE_CSS__
+  .w230{width:230px}
+  .wrap{max-width:1100px;margin:0 auto;padding:20px}
+  h1{font-size:21px;margin:2px 0 6px} .sub{color:var(--on-surface-muted);margin:0 0 16px;max-width:880px}
+  .card{background:var(--surface-container);border:1px solid var(--outline-variant);border-radius:var(--radius-lg);padding:16px;margin-bottom:18px}
+  .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--on-surface-muted);margin:0 0 12px}
+  .ptbl{overflow:auto;max-height:52vh} .mask{color:#5c5c63;font-style:italic} .note{color:var(--on-surface-muted);font-size:11.5px;margin-top:6px}
+  .deny-box{padding:20px;text-align:center;color:#ff9b9b} .withheld{padding:9px 13px;color:var(--on-surface-muted);font-size:12px;text-align:center}
+</style></head><body><div class="wrap">
+<h1>&#128273; Permissions &mdash; access control, by example</h1>
+<p class="sub">Pick a scenario to see what a grant lets a principal read, over a <b>synthetic</b> customer table. Every scenario is built in memory for this page: it never touches a real grant store, and you cannot choose an identity, a role or a resource &mdash; only a scenario. This page is an illustration with synthetic data, not a running enforcement point.</p>
+<div class="card"><h2>Scenario</h2>
+  <select id="sc">__OPTS__</select> <button class="btn" id="run">Show</button>
+  <p id="expl" class="note"></p><div id="sres"></div></div>
+<div class="card"><h2>Administration</h2>
+  <p class="note">Inert until you enter the admin key. It then calls the admin API with the key in a header; nothing here is public.</p>
+  <input id="akey" type="password" autocomplete="off" spellcheck="false" placeholder="admin key" class="w230"> <button class="btn ghost" id="aload">Load</button> <button class="btn ghost" id="alock">Lock</button>
+  <div id="abox" class="ptbl"></div></div>
+</div>
+<script__NONCEATTR__>
+function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
+function table(cols,rows){
+  let h='<table><thead><tr>'+cols.map(c=>'<th>'+esc(c)+'</th>').join("")+'</tr></thead><tbody>';
+  for(const r of rows){const m=r._masked||[];
+    h+='<tr>'+cols.map(function(c){if(m.indexOf(c)>=0) return '<td class="mask">•••</td>'; const v=r[c]; return '<td>'+(v==null?'<span class="mask">—</span>':esc(v))+'</td>';}).join("")+'</tr>';}
+  return h+'</tbody></table>';
+}
+async function runScenario(){
+  const id=document.getElementById("sc").value;
+  const r=await fetch("api/demo/scenarios/"+encodeURIComponent(id));
+  if(!r.ok){document.getElementById("sres").innerHTML='<div class="deny-box">unknown scenario</div>';return;}
+  const d=await r.json();
+  document.getElementById("expl").textContent=d.explanation;
+  document.getElementById("sres").innerHTML=d.allowed
+    ? table(d.columns,d.records)+(d.withheld>0?'<div class="withheld">&#128274; '+esc(d.withheld)+' of '+esc(d.full_count)+' row(s) withheld</div>':'')
+    : '<div class="deny-box">&#10007; denied: nothing is returned</div>';
+}
+document.getElementById("run").addEventListener("click",runScenario);
+// ADMIN-BEGIN — the only code on this page that calls the admin API; it needs a key typed in by the operator
+let AKEY="";   // memory only: read from the input when the operator presses Load, then the input is cleared; never stored, never per keystroke
+async function adminLoad(){
+  const i=document.getElementById("akey"), box=document.getElementById("abox");
+  if(i.value){AKEY=i.value;i.value="";}
+  if(!AKEY){box.textContent="enter the admin key first";return;}
+  const h={"X-API-Key":AKEY};
+  const [st,gr]=await Promise.all([fetch("api/permissions/status",{headers:h}),fetch("api/permissions/grants",{headers:h})]);
+  if(!gr.ok){box.textContent=gr.status===401?"admin key wrong":(gr.status===503?"the admin API is disabled (no admin key configured)":"error "+gr.status);return;}
+  const gs=await gr.json(), s=st.ok?await st.json():{};
+  box.innerHTML='<p class="note">'+esc(gs.length)+' grants · '+(s.encrypted?'encrypted':'plaintext')+'</p>'+
+    '<table><thead><tr><th>Subject</th><th>Resource</th><th>Actions</th><th></th></tr></thead><tbody>'+gs.map(g=>
+    '<tr><td>'+esc(g.subject_kind)+': '+esc(g.subject)+'</td><td>'+esc(g.resource_kind)+':'+esc(g.resource_name)+'</td><td>'+(g.actions||[]).map(esc).join(", ")+'</td>'+
+    '<td><button class="del" data-id="'+esc(g.id)+'">remove</button></td></tr>').join("")+'</tbody></table>';
+}
+document.getElementById("aload").addEventListener("click",adminLoad);
+document.getElementById("alock").addEventListener("click",function(){AKEY="";document.getElementById("akey").value="";document.getElementById("abox").textContent="locked — the key is forgotten; enter it and press Load";});
+document.getElementById("abox").addEventListener("click",async function(e){
+  const b=e.target.closest&&e.target.closest("button.del"); if(!b||!b.dataset.id) return;
+  await fetch("api/permissions/grants/"+encodeURIComponent(b.dataset.id),{method:"DELETE",headers:{"X-API-Key":AKEY}});
+  adminLoad();
+});
+// ADMIN-END
+runScenario();
+</script></body></html>"""
+    return (tmpl.replace("__NONCEATTR__", f' nonce="{html.escape(nonce, quote=True)}"' if nonce else "")
+            .replace("__BASE_CSS__", _BASE_CSS).replace("__OPTS__", opts))

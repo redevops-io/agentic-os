@@ -51,6 +51,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(core, "SMTP_HOST", "")
     monkeypatch.setattr(core, "DEV_MODE", False)
     monkeypatch.setattr(core, "DEMO_MODE", False)
+    monkeypatch.setattr(core, "PRIVACY_PUBLIC_URL", "http://testserver")        # the verification link comes from configuration, never from the Host header (DR-01)
     monkeypatch.setattr(core, "SUMMARIZER", None)
     for k in ("OPERATOR_BASIC_AUTH_USER", "OPERATOR_BASIC_AUTH_PASS", "OPERATOR_BASIC_AUTH", "OUTREACH_BASIC_AUTH"):
         monkeypatch.delenv(k, raising=False)
@@ -87,11 +88,12 @@ def _verify(st, rid, tok):
 
 # ── /request: forged flags do nothing ───────────────────────────────────────
 def test_forged_verified_confirm_on_request_does_nothing(env):
+    """DR-01 made the public schema strict: the forged flags are not silently ignored any more, they are a 400 and nothing is created. (The flags, sent alone as the old test did, never did anything.)"""
     for t in ("delete", "access", "correct"):
-        r = env.client.post("/request", json={"type": t, "email": SUBJECT, "verified": True, "confirm": True,
-                                              "_approval": {"approved": True}}).json()
-        assert r["status"] == "received" and r["delivery"] == "postmark"
-        assert "systems" not in r and "record_count" not in r
+        r = env.client.post("/request", json={"type": t, "email": SUBJECT, "verified": True, "confirm": True, "_approval": {"approved": True}})
+        assert r.status_code == 400 and "systems" not in r.text and "record_count" not in r.text
+        ok = env.client.post("/request", json={"type": t, "email": SUBJECT}).json()
+        assert ok["status"] == "received" and ok["delivery"] == "postmark" and "systems" not in ok and "record_count" not in ok
     assert len(env.data["crm"]) == 1 and len(env.data["mail"]) == 1
     assert all(q["status"] == "awaiting_verification" and not q["verified"] for q in core._load_requests())
 

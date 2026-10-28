@@ -82,7 +82,7 @@ python3 -m uvicorn app:app --host 0.0.0.0 --port 8202
 
 # Or with Docker (point METABASE_API_URL at the Metabase service, not localhost):
 docker build -t agentic-control-tower .
-docker run --rm -p 8202:8202 \
+docker run -e AGENTIC_OS_PERMISSIONS=off --rm -p 8202:8202 \
   -e METABASE_API_URL=http://host.docker.internal:3001 \
   -e METABASE_SESSION=<token from .env> \
   -e METABASE_DB_ID=1 \
@@ -119,3 +119,7 @@ docker run --rm -p 8202:8202 \
   - **No approval gate:** Control Tower is read-only analytics — nothing moves money or
     mutates the core — so unlike billing's `refund`, every response states
     `approval: "not required — read-only analytics (no destructive action)"`.
+
+## Authorization note
+
+Note: basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write. See `docs/PERMISSIONS_MIGRATION.md` section 29.
