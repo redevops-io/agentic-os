@@ -6,7 +6,7 @@ app that installs `make_authorizer` — and are moving to the release that tight
 Multi-tenant isolation, revocation across conversations and caches, end-to-end document/row/column/graph
 authorisation and identity integration are not part of it.
 
-Licence: this kernel is source-available, not open source: AGPL-3.0-or-later with its network clause (section 13) plus the Commons Clause Condition v1.0
+Licence: this kernel is source-available, not open source: AGPL-3.0-or-later with its network clause (§13 of the AGPL) plus the Commons Clause Condition v1.0
 (see [LICENSE.md](../LICENSE.md), which also states the separate licence of the reference applications under `apps/`). "The AGPL edition" in this guide means this
 kernel, as distinct from the optional Enterprise package.
 
@@ -75,8 +75,8 @@ make_authorizer(store, app_resources={"support": ("table", "crm.customers")},
 ```
 
 A grant whose `actions` is `["write"]` does not imply `read`; give both when a tool needs both (classify such a
-tool `write`). `agentic_os/tool_actions.py` classifies the 46 tools this repository registers (33 `_crtool` and 13 `assistant.Tool`)
-(`tool_actions("edge-sentinel")` returns a ready mapping); a test fails when an app registers a tool that is not
+tool `write`). `agentic_os/tool_actions.py` classifies the 135 tools of the 17 apps (their registered tools and operator capabilities; the per-tool record is
+[TOOL_CLASSIFICATION_INVENTORY.md](TOOL_CLASSIFICATION_INVENTORY.md)) (`tool_actions("edge-sentinel")` returns a ready mapping); a test fails when an app registers a tool that is not
 classified there.
 
 ## 3. Row and column scope: `scoped_tools`, `single_predicate_tools`, OR of whole predicates
@@ -549,9 +549,9 @@ Per-app inventory of the ten apps that execute tools through routes and operator
 | growth-assistant | `assistant.push_assets` | `write` | yes | apps/growth-assistant/operator.py:106 | operator /invoke |
 | guide | `guide.retrieve` | `read` | no | apps/guide/operator.py:25 | operator /invoke; POST /api/ask; GET / |
 | guide | `guide.walkthrough` | `read` | no | apps/guide/operator.py:33 | operator /invoke; GET /api/walkthrough |
-| infra | `infra.plan` | `read` | no | apps/infra/operator.py:113 | operator /invoke |
+| infra | `infra.plan` | `write` | no | apps/infra/operator.py:113 | operator /invoke |
 | infra | `infra.verify` | `read` | no | apps/infra/operator.py:130 | operator /invoke |
-| infra | `infra.drift` | `read` | no | apps/infra/operator.py:132 | operator /invoke |
+| infra | `infra.drift` | `write` | no | apps/infra/operator.py:132 | operator /invoke |
 | infra | `infra.provision` | `write` | yes | apps/infra/operator.py:56 | operator /invoke |
 | infra | `infra.configure` | `write` | yes | apps/infra/operator.py:123 | operator /invoke |
 | infra | `infra.rollback_release` | `write` | yes | apps/infra/operator.py:126 | operator /invoke |
@@ -662,14 +662,14 @@ FR-06 (a store at counter 1 with a deleted sidecar is accepted; a whole-director
 
 **Loopback versus non-loopback: not implementable robustly, so the alternative is used.** Whether an app is reachable is decided by the process manager (`uvicorn --host`, a container's published port), not by
 the module, and containers bind 0.0.0.0 by design; a check at import time would either miss the exposure or refuse local development. Implemented instead: (1) where the code binds itself (14 apps' `__main__`)
-`require_explicit_setting_when_exposed` refuses a non-loopback host with no explicit setting; (2) every shipped app image (the 17 app Dockerfiles and the suite server's) sets
+`require_explicit_setting_when_exposed` refuses a non-loopback host with no explicit setting; (2) every shipped app image (the 16 app Dockerfiles and the suite server's) sets
 `AGENTIC_OS_REQUIRE_PERMISSIONS_SETTING=1`, so a container never starts on an unset setting; (3) the unset notice. Loopback dev (`uv run uvicorn ... --host 127.0.0.1`) keeps working with the notice.
 
 **Impact table (every shipped flow in this repository that starts a gated app).**
 
 | flow | before | now |
 |---|---|---|
-| `docker run` of an app image (17 app Dockerfiles, `apps/_suite-server`) | started ungated, silently | refuses to start unless `-e AGENTIC_OS_PERMISSIONS=1` or `=off`; the `docker run` examples in the 8 app READMEs that have one now carry `-e AGENTIC_OS_PERMISSIONS=off` explicitly (change to `1` after `permissions init`) |
+| `docker run` of an app image (16 app Dockerfiles, `apps/_suite-server`) | started ungated, silently | refuses to start unless `-e AGENTIC_OS_PERMISSIONS=1` or `=off`; the `docker run` examples in the 8 app READMEs that have one now carry `-e AGENTIC_OS_PERMISSIONS=off` explicitly (change to `1` after `permissions init`) |
 | `python3 -m uvicorn app:app --host 0.0.0.0` / `python app.py` (14 apps' `__main__`) | ungated | `python app.py` with a reachable bind refuses with no setting; `-m uvicorn` runs with the notice |
 | fleet `up` (`agentic_os.fleet`, `modules.yaml`) | runs each module's own `docker compose` | **follow-up outside this repository**: those module compose files must pass `AGENTIC_OS_PERMISSIONS` (they inherit the REQUIRE image default) |
 | root `docker-compose.yml`, `deploy/docker-compose.yml`, `deploy/reference-system` Helm chart, `deploy/sidekick-devops` | control plane / runtime images, no gated app | no gated app is started by them, so the image default does not apply; not started or installed in the release checks (apart from the `permissions.keySecret` render check above) |
