@@ -3,6 +3,8 @@
 Written for: deployers and operators of agentic-os. These notes carry sections 28 to 32 of `docs/PERMISSIONS_MIGRATION.md` verbatim (a test keeps them equal); the migration guide has the rest
 (before/after examples, the impact table for images and `docker run` examples, the execution invariant, the idempotency cache order, the threat model).
 
+**Patched version:** 0.4.0. The app Dockerfiles and `apps/infra/requirements.txt` pin the kernel as `v0.4.0` (`KERNEL_REF`); that tag is created when 0.4.0 is released, and until it exists those builds cannot resolve the pin.
+
 **Claim of this release:** The permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent.
 
 ## 28. What this release claims, and what it does not (DR-03)

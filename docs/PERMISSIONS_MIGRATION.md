@@ -1,7 +1,7 @@
 # Permissions plane: migration guide
 
 For operators who run `agentic_os.permissions` — the grant store, the control-plane permissions API, or a client
-app that installs `make_authorizer` — and are moving to the release that tightens it. Scope: this is the
+app that installs `make_authorizer` — and are upgrading to 0.4.0, the release that tightens it. Scope: this is the
 **basic** permissions plane of the AGPL edition (resource grants, row/column restrictions at the tool boundary).
 Multi-tenant isolation, revocation across conversations and caches, end-to-end document/row/column/graph
 authorisation and identity integration are not part of it.
