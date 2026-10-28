@@ -172,13 +172,8 @@ class AgentGateway:
         start = time.time()
         gp = request.principal
 
-        # idempotency replay (side-effecting capabilities only; keyed within the principal)
-        idem_key = None
-        if request.idempotency_key:
-            idem_key = f"{gp.tenant}:{gp.subject}:{request.capability}:{request.idempotency_key}"
-            prior = self.idempotency.get(idem_key)
-            if prior is not None:
-                return prior
+        idem_key = (f"{gp.tenant}:{gp.subject}:{request.capability}:{request.idempotency_key}"
+                    if request.idempotency_key else None)
 
         # 1. visibility == permission. A capability the principal can't see is treated as unknown —
         #    same response whether it doesn't exist or is merely not permitted (plan §18: never leak).
@@ -186,6 +181,13 @@ class AgentGateway:
         if manifest is None or not self.registry.is_visible(request.capability, gp, self.authorize):
             return self._finalize(request, start,
                                   self._deny("unknown_capability"), exposed_reason="hidden")
+
+        # idempotency replay (keyed within the principal). After the visibility check, so a principal whose permission
+        # was revoked is not served the stored output of an earlier call.
+        if idem_key is not None:
+            prior = self.idempotency.get(idem_key)
+            if prior is not None:
+                return prior
 
         tier = manifest.risk_tier
 
