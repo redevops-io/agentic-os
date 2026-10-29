@@ -85,6 +85,10 @@ class Reason:
     DOWNSTREAM_ERROR = "downstream_error"
     NO_DOWNSTREAM_RECEIPT = "no_downstream_receipt"
     BRIDGE_UNAVAILABLE = "bridge_unavailable"
+    IDEMPOTENCY_CONFLICT = "idempotency_conflict"        # the gateway holds this key for a different request (scope, capability or arguments)
+    IDEMPOTENCY_IN_PROGRESS = "idempotency_in_progress"  # another call under this key has not finished
+    GATEWAY_ERROR = "gateway_error"                      # a gateway seam failed before anything was dispatched (e.g. the idempotency store is full)
+    OUTPUT_HELD = "output_held"                          # the write executed; the egress policy is holding its output
 
 
 class ValidationError(ValueError):

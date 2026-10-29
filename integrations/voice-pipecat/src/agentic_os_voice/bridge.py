@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 from agentic_os.agent_gateway import (
-    AgentGateway, GatewayPrincipal, GatewayRequest, GatewayStatus)
+    AgentGateway, EgressAction, GatewayPrincipal, GatewayRequest, GatewayStatus)
 from agentic_os.overlays import Principal
 
 from .contracts import (
@@ -302,6 +302,26 @@ class VoiceActionBridge:
         return GatewayPrincipal(Principal(b.subject, "service", (), b.tenant), client_id=b.client_id,
                                 workspace=b.tenant, scopes=tuple(b.scopes))
 
+    def _entitled(self, b: SessionBinding, spec: ToolSpec, args: dict) -> bool:
+        """Is this principal allowed to make this call RIGHT NOW? Used before the bridge answers a repeat from its own journal, so a
+        replay never outlives the right to the call (the gateway does the same before serving a stored result; the journal is the
+        bridge's, so the bridge asks). Nothing is reserved and no counter moves. Any fault answers no."""
+        try:
+            gp = self._gateway_principal(b)
+            reg = self.gateway.registry
+            manifest = reg.get(spec.capability)
+            if manifest is None or not reg.is_visible(spec.capability, gp, self.gateway.authorize):
+                return False
+            guard = self.gateway.authority
+            if guard is None:
+                return True
+            from agentic_os.mission.authority import Action, Verdict   # noqa: PLC0415
+            key = self.gateway.authority_key(gp) if self.gateway.authority_key else f"{gp.tenant}:{gp.subject}"
+            return guard.check(key, gp.tenant, Action(capability=spec.capability, arguments=dict(args), risk_tier=int(manifest.risk_tier),
+                                                      side_effecting=bool(manifest.side_effecting))).verdict is Verdict.ALLOW
+        except Exception:  # noqa: BLE001
+            return False
+
     def _action_lock(self, action_id: str) -> threading.Lock:
         with self._lock:
             return self._action_locks.setdefault(action_id, threading.Lock())
@@ -314,6 +334,8 @@ class VoiceActionBridge:
             if spec.side_effecting and prior:
                 # an earlier attempt decides before anything is sent again
                 if prior["status"] == ActionStatus.COMPLETED.value:
+                    if not self._entitled(binding, spec, args):
+                        return self._refuse_known(binding, spec, action_id, corr, Reason.POLICY_DENIED, ActionStatus.DENIED)
                     self._note_replay(binding, spec, action_id, corr, ActionStatus.COMPLETED)
                     return ActionResult(ActionStatus.COMPLETED, Reason.REPLAYED, action_id, corr, sid, spec.name,
                                         receipt_ref=prior.get("receipt_ref", ""), replayed=True)
@@ -345,7 +367,7 @@ class VoiceActionBridge:
                 else:
                     out = self._map(res, gw_req, spec, action_id, corr, binding)
                 self._decide(binding, spec, out, gateway_request_id=corr)
-                if out.status is ActionStatus.PENDING_APPROVAL:
+                if out.status is ActionStatus.PENDING_APPROVAL or out.reason == Reason.OUTPUT_HELD:
                     with self._lock:
                         self._pending[action_id] = _Pending(binding, spec, dict(args), action_id, evidence, confirmation, out.approval_id)
                 else:
@@ -389,10 +411,10 @@ class VoiceActionBridge:
         lease = g.lease(corr)
         return (lease or {}).get("state", "none")
 
-    def _unknown_or_failed(self, spec: ToolSpec, corr: str, action_id: str, b: SessionBinding) -> ActionResult:
+    def _unknown_or_failed(self, spec: ToolSpec, corr: str, action_id: str, b: SessionBinding, reason: str = Reason.DOWNSTREAM_ERROR) -> ActionResult:
         if spec.side_effecting and self._lease_state(corr) not in ("released", "none"):
             return ActionResult(ActionStatus.OUTCOME_UNKNOWN, Reason.OUTCOME_UNKNOWN, action_id, corr, b.session_id, spec.name)
-        return ActionResult(ActionStatus.FAILED, Reason.DOWNSTREAM_ERROR, action_id, corr, b.session_id, spec.name, retry_safe=True)
+        return ActionResult(ActionStatus.FAILED, reason, action_id, corr, b.session_id, spec.name, retry_safe=True)
 
     def _map(self, res: Any, gw_req: GatewayRequest, spec: ToolSpec, action_id: str, corr: str, b: SessionBinding) -> ActionResult:
         sid = b.session_id
@@ -401,13 +423,24 @@ class VoiceActionBridge:
             if res.decision.reason == "authority:outcome_unknown":
                 return ActionResult(ActionStatus.OUTCOME_UNKNOWN, Reason.OUTCOME_UNKNOWN, action_id, corr, sid, spec.name)
             return ActionResult(ActionStatus.DENIED, Reason.POLICY_DENIED, action_id, corr, sid, spec.name, retry_safe=True)
+        if st is GatewayStatus.PENDING_APPROVAL and spec.side_effecting and res.decision.egress_action is EgressAction.REQUIRE_APPROVAL:
+            # The write RAN; the egress policy is holding its output. That is not an approval to wait for: asking the gateway again
+            # replays the held outcome under the policy of that moment and never sends the write again. It is not 'completed'
+            # either, because the downstream receipt has not been released.
+            return ActionResult(ActionStatus.APPROVED, Reason.OUTPUT_HELD, action_id, corr, sid, spec.name)
         if st is GatewayStatus.PENDING_APPROVAL:
             aid = self.approvals.approval_id_for(gw_req) if self.approvals else ""
             return ActionResult(ActionStatus.PENDING_APPROVAL, Reason.APPROVAL_REQUIRED, action_id, corr, sid, spec.name, approval_id=aid)
         if st is GatewayStatus.ERROR:
+            # The gateway refuses a key that is already bound to something else, or to a call that has not finished, BEFORE it reserves
+            # any authority or dispatches anything. Neither is ever a completed action, and neither reveals the earlier result.
+            if res.error == "idempotency_conflict":
+                return ActionResult(ActionStatus.FAILED, Reason.IDEMPOTENCY_CONFLICT, action_id, corr, sid, spec.name, retry_safe=False)
+            if res.error == "idempotency_in_progress":
+                return ActionResult(ActionStatus.APPROVED, Reason.IDEMPOTENCY_IN_PROGRESS, action_id, corr, sid, spec.name)
             if self.approvals is not None and self.approvals.was_unavailable(gw_req.request_id):
                 return ActionResult(ActionStatus.FAILED, Reason.APPROVAL_UNAVAILABLE, action_id, corr, sid, spec.name, retry_safe=True)
-            return self._unknown_or_failed(spec, corr, action_id, b)
+            return self._unknown_or_failed(spec, corr, action_id, b, Reason.GATEWAY_ERROR if res.error == "gateway_error" else Reason.DOWNSTREAM_ERROR)
         replayed = res.request_id != corr
         out = res.output
         if spec.side_effecting:

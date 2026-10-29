@@ -1,6 +1,6 @@
 # ADR: optional voice integration on Pipecat
 
-Status: proposed (first milestone, P0). Scope: [integrations/voice-pipecat](../integrations/voice-pipecat/README.md). Date of the checks below: 2026-10-29, against `main` at `794c943` (v0.4.0 is tagged).
+Status: proposed (first milestone, P0). Scope: [integrations/voice-pipecat](../integrations/voice-pipecat/README.md). Date of the checks below: 2026-10-29, against `main` at `5342fc6` (tag v0.4.1; the first draft of this record was written against v0.4.0 at `794c943` and was revised for 0.4.1).
 
 ## Purpose
 
@@ -32,9 +32,9 @@ A planning document for this work (`REDEVOPS_VOICE_AGENTS_FRAMEWORK_AUDIT_AND_IM
 | Agent Gateway | `agentic_os/agent_gateway/gateway.py` `AgentGateway.invoke`: visibility and permission, authority envelope, budget, approval gate, handler, egress, audit, idempotency replay | the single execution path; every voice action is a `GatewayRequest` with `protocol="voice"` |
 | Capability registry | `registry.py` `CapabilityRegistry`, `CapabilityManifest` (permissions, scopes, `risk_tier`, `side_effecting`, `approval_policy`, `idempotent`) | the example capabilities are ordinary manifests; the gateway's `prepare_* / request_*` convention is followed; two manifests are reused from `write_capabilities.py` |
 | Authorizer | `Authorizer(principal, permission)` seam on `AgentGateway` | unchanged; the demo supplies a revocable stand-in for the identity plane |
-| Authority guard | `agentic_os/mission/authority.py` `AuthorityGuard`, `AuthorityEnvelope`, `Grant` (resource selectors, tier, call and rate limits, expiry, revocation), `SqliteLedger` leases (reserved, dispatched, settled, unknown) | the owner's limits for the voice agent; its lease states are how a crash or a lost reply is recovered without a second send |
+| Authority guard | `agentic_os/mission/authority.py` `AuthorityGuard` (`authorize`, and `check`, which since 0.4.1 answers "inside the authority now?" without moving a counter), `AuthorityEnvelope`, `Grant` (resource selectors, tier, call and rate limits, expiry, revocation), `SqliteLedger` leases (reserved, dispatched, settled, unknown) | the owner's limits for the voice agent; its lease states are how a crash or a lost reply is recovered without a second send; `check` is how the bridge revalidates before answering a repeat |
 | Approvals | `approvals.py` `InboxApprovalStore` (single use, 15 minutes by default, bound to the exact request, requester cannot approve) | human approval of consequential actions; `ApprovalTap` only records which inbox item belongs to which action |
-| Idempotency | gateway `idempotency_key` replay; `gateway.reconcile_call` for unknown outcomes | the key is the action id; unknown outcomes are reconciled through `reconcile_call` |
+| Idempotency | gateway `idempotency_key` with the 0.4.1 store (`begin`/`complete`/`abandon`/`seed`, one key per tenant, bound to a fingerprint of workspace, subject, authority key, capability and canonical arguments; `idempotency_conflict` and `idempotency_in_progress`; a bounded store that keeps completed writes and refuses a new claim when full); `gateway.reconcile_call`, which seeds the store | the key is the action id (36 characters, within the 1 to 256 bound); unknown outcomes are reconciled through `reconcile_call` |
 | Audit | `AuditSink` (in-memory by default) | unchanged; the bridge keeps its own durable journal in addition (below) |
 | Mission runtime | `agentic_os/mission/` (`MissionRuntime`, `EventStore` with hash chaining, `mission_receipt`) and the gateway's `MissionPort` / `missions.delegate_goal` | the journal reuses `EventStore` (durable JSONL, fsync, hash chain, `verify_chain`) and its `CrashingStore` test pattern; delegating a long task to a mission is a future capability, not part of P0 |
 | Operator seam | `agentic_os/mission/operator_sdk.py` (`/invoke`, Idempotency-Key cache), `approval_gate.gated`, `HTTPOperatorClient` | not used in P0: the example handlers call a port directly. A real CRM operator would sit behind a gateway handler or a mission node |
@@ -53,7 +53,8 @@ A planning document for this work (`REDEVOPS_VOICE_AGENTS_FRAMEWORK_AUDIT_AND_IM
 | no arbitrary code execution, no implicit admin | arguments are data (typed, pattern-checked, control characters refused); no tool maps to `sandbox.execute`; the principal is a service identity with exactly the owner's grants; `sandbox.execute` is not registered | `capabilities.py` |
 | policy gate on the bounded write | an authority `Grant` with resource selectors (the voice agent may set `qualified` or `nurture`, nothing else) and call and rate limits; a value outside the selector is denied, not escalated | `capabilities.default_grants` |
 | human approval for the consequential action | the send capability is registered with `ApprovalPolicy.MANDATORY`; a standing grant cannot satisfy it (gateway rule), so it parks in the inbox | `capabilities.OUTREACH_SEND` |
-| action-level idempotency | the gateway idempotency key is the action id; the action id includes the arguments, so a changed argument cannot be answered with an old result; the bridge answers a repeat from its journal without calling the gateway | `bridge._run` |
+| action-level idempotency | the gateway idempotency key is the action id, derived from tenant, tool and the intent arguments only (not the session, not the principal), so it is stable per business intent; the gateway binds the key to the full scope and arguments and refuses a mismatch; the bridge answers a repeat from its journal without calling the gateway, but only after it has revalidated the principal (visibility and `AuthorityGuard.check`), so a replay does not outlive the right to the call | `bridge._run`, `bridge._entitled` |
+| gateway answers other than success | `idempotency_conflict` becomes `failed` / `idempotency_conflict`, not retry safe (the key is held for something else; a person decides); `idempotency_in_progress` becomes `approved` / `idempotency_in_progress` (another call is running; nothing is sent); a store that cannot take a claim (`gateway_error` before any reservation) becomes `failed` / `gateway_error`, retry safe; a write whose output the egress policy holds becomes `approved` / `output_held` (it ran, its receipt is not released; asking again replays the held outcome and never re-sends); none of these is `completed` | `bridge._map` |
 | durable receipts and correlation ids | every attempt gets `corr_…`, used as the gateway `request_id` and the authority lease id; the journal records submitted, decided, refused, replayed, reconciled; a receipt is the fold of an action's events and holds hashes, never argument values | `bridge.receipt` |
 | completed only with a downstream receipt | for a side effect the output (or evidence) must carry `provider_object_id`; without it the result is `outcome_unknown` | `bridge._map` |
 | cancellation never cancels a committed write; replay never duplicates | `submit_async` runs the work in its own task and shields it from the caller; before dispatch a cancel is honoured (`cancelled_before_dispatch`); after dispatch the work finishes and is journaled; a repeat gets the same receipt | `bridge.submit_async` |
@@ -80,13 +81,13 @@ A planning document for this work (`REDEVOPS_VOICE_AGENTS_FRAMEWORK_AUDIT_AND_IM
 
 | Component | Pinned or tested | Notes |
 |---|---|---|
-| agentic-os | `main` at `794c943` (v0.4.0) | not on PyPI; install from the tag first. The package declares `agentic-os>=0.4.0` |
-| Python | 3.11, 3.12 (hosted CI), 3.13, 3.14 | 3.11, 3.13 and 3.14 run locally on macOS arm64; 3.11 to 3.13 run in the hosted workflow `voice-pipecat` |
+| agentic-os | `main` at `5342fc6` (v0.4.1) | not on PyPI; install from the tag first. The package declares `agentic-os>=0.4.1`: the bridge uses `AuthorityGuard.check` and the 0.4.1 idempotency store semantics, and the suite checks them |
+| Python | 3.11, 3.12 (hosted CI), 3.13 | 3.13 runs locally on macOS arm64; 3.11 to 3.13 run in the hosted workflow `voice-pipecat`. 3.11 and 3.14 passed locally against 0.4.0 before the rebase and were not repeated |
 | pipecat-ai | `==1.12.0` (uploaded 2026-09-26, 33 days before the pin), no extras | 1.13.0 (10-19), 1.14.0 (10-24) and 1.15.0 (10-29) were less than two weeks old; 1.15.0 also passes the suite |
 | Lock | `integrations/voice-pipecat/uv.lock`, 1756 recorded hashes | `uv sync --frozen --extra dev` installs it; CI runs the suite on it and `uv lock --check` |
 | OS | macOS arm64 (local), ubuntu-latest (hosted) | not tested on Windows |
 
-Base install, before and after: no file under `agentic_os/`, the root `pyproject.toml` or the root `uv.lock` is changed; an environment with only the base package has 26 installed distributions (pip's own included) and 47 MB of site-packages; adding this package, Pipecat and the test tools gives 71 and 495 MB (45 more distributions: 38 for Pipecat and what it pulls in, 7 for this package and the test tools). `import agentic_os, agentic_os.agent_gateway` takes about 0.049 s in either environment (median of nine runs, both measured on the same machine). `tests/test_voice_pipecat_boundary.py` runs in the required job and fails if the base imports any of pipecat, the voice package, numba, onnxruntime or openai, or if the root dependency set mentions the voice packages.
+Base install, before and after: this work changes no file under `agentic_os/`, the root `pyproject.toml` or the root `uv.lock` (compared with v0.4.1); an environment with only the base package has 26 installed distributions (pip's own included) and 47 MB of site-packages; adding this package, Pipecat and the test tools gives 71 and 495 MB (45 more distributions: 38 for Pipecat and what it pulls in, 7 for this package and the test tools). `import agentic_os, agentic_os.agent_gateway` takes about 0.049 s in either environment (median of nine runs, both measured on the same machine). `tests/test_voice_pipecat_boundary.py` runs in the required job and fails if the base imports any of pipecat, the voice package, numba, onnxruntime or openai, or if the root dependency set mentions the voice packages.
 
 ## Differences from the illustrative contract in the brief
 
@@ -100,16 +101,22 @@ Base install, before and after: no file under `agentic_os/`, the root `pyproject
 | a voice approval flow | none built | the gateway's inbox is used as it is |
 | missions | not used in P0 | the example actions are bounded direct capabilities; long tasks would go through `missions.delegate_goal` |
 
-## Observations about the existing gateway (not changed here)
+## Observations about the existing gateway
 
-These were found while wiring the bridge. Each is handled inside the bridge; none was changed in `agentic_os/`.
+Found while wiring the bridge against 0.4.0 and re-checked against 0.4.1. Nothing under `agentic_os/` is changed by this work.
 
-1. A stored idempotent result is returned at the top of `AgentGateway._invoke`, before the visibility, permission and authority checks. A caller whose permission or envelope was revoked can still be answered with the earlier result. The bridge checks the session first and answers repeats from its own journal.
-2. The gateway's idempotency key is not bound to the arguments: the same key with different arguments returns the first result. The bridge derives the key from the arguments.
-3. The default idempotency store and audit sink are in memory. After a restart the durable record of an attempt is the authority ledger's lease (with the provider reference annotated on it) and the bridge journal.
+Fixed in 0.4.1 (and no longer a reason for any bridge workaround, though the bridge keeps its own checks):
+
+1. A stored idempotent result used to be returned before the visibility, permission and authority checks. Since 0.4.1 the gateway revalidates the caller (visibility, `AuthorityGuard.check`) before it serves a stored result. The bridge answers repeats from its own journal, so it asks the same question itself before it does.
+2. The key used to be unbound to the arguments. Since 0.4.1 it is bound to a fingerprint of scope and canonical arguments, per tenant, and a mismatch is `idempotency_conflict`. The bridge still derives the key from the arguments, so a conflict is not expected in normal use.
+
+Still true in 0.4.1:
+
+3. The default idempotency store and audit sink are in memory, and so is the approval inbox. After a restart the durable record of an attempt is the authority ledger's lease (with the provider reference annotated on it) and the bridge journal. (The 0.4.1 store also has a time-to-live and a size bound; after either, a key is unknown and only the ledger holds an unknown outcome.)
 4. When an authority guard returns `ESCALATE` (tier over the grant, a limit reached) the call is reported as pending approval but no inbox item is created; the owner has to extend the grant. A per-action human approval needs a grant that reaches the tier and a `MANDATORY` approval policy, which is how the send is registered.
 5. Any error after dispatch of a side-effecting call, including a connection failure before the downstream did anything, leaves the lease `unknown` until a named person reconciles it. That is the safe choice; it means a failed write needs an operator step before it can be retried.
-6. `InboxApprovalStore` is in memory: pending approvals do not survive a restart, and each approval is single use and expires.
+
+New behaviour of 0.4.1 that the bridge accounts for: a side-effecting capability with a key is always retry-safe in the gateway's store, even if not declared `idempotent`; a held write (egress `REQUIRE_APPROVAL`) is stored and replayed instead of re-run; `reconcile_call` seeds the store under the fingerprint recorded on the lease; a non-JSON argument fails the call with `gateway_error`; keys outside 1 to 256 characters are refused.
 
 ## Risks and limits of this milestone
 
@@ -126,7 +133,7 @@ These were found while wiring the bridge. Each is handled inside the bridge; non
 1. Pin policy: keep `1.12.0` (newest release older than two weeks) or move to `1.15.0`, which passes the suite today.
 2. Licences in the closure: Pipecat's always-installed dependencies include `num2words` and `soxr`, whose metadata declares LGPL licences (`COPYING`; `COPYING.LGPL`, with `LICENSE-libsoxr.txt` and `LICENSE-PFFFT.txt`). The separate package keeps them out of the base install; whether that is acceptable for the way this will be distributed is a licence review.
 3. The extra status `outcome_unknown`.
-4. Whether the two gateway behaviours (replay before authorisation, key not bound to arguments) should be changed in the gateway itself, in a separate change.
+4. (Resolved by 0.4.1, which this record now targets.) Observations 3 to 5 above remain; whether any of them should change in the gateway, in a separate change.
 5. Whether pending approvals must survive a restart for voice (needs a durable approval store).
 6. Whether the distress phrase list needs review by someone qualified before any use with real callers.
 7. When to open the LiveKit adapter: the contract points that keep the bridge provider-neutral are `ActionRequest`, `ActionResult`, `SessionBinding` and `ActionProxy`; nothing for another framework is built.

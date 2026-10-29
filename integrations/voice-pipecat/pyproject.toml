@@ -6,8 +6,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "AGPL-3.0-or-later WITH Commons-Clause" }
 dependencies = [
-    # agentic-os is not on PyPI: install it first from a release tag (see README), then this package.
-    "agentic-os>=0.4.0",
+    # agentic-os is not on PyPI: install it first from a release tag (see README), then this package. 0.4.1 is the first release whose gateway
+    # binds an idempotency key to its arguments and scope and revalidates a caller before serving a stored result (AuthorityGuard.check).
+    "agentic-os>=0.4.1",
     "pipecat-ai==1.12.0",
 ]
 

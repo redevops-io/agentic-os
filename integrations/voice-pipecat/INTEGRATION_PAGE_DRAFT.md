@@ -99,12 +99,12 @@ Design record: [docs/VOICE_PIPECAT_ADR.md](../../docs/VOICE_PIPECAT_ADR.md).
 
 Labels follow the repository's convention. Nothing here is *Externally reproduced* or *Field validated*.
 
-**Test suite (Internally reproduced, synthetic inputs).** 98 tests in `integrations/voice-pipecat/tests` and 5 boundary tests in `tests/test_voice_pipecat_boundary.py`:
+**Test suite (Internally reproduced, synthetic inputs).** 107 tests in `integrations/voice-pipecat/tests` and 5 boundary tests in `tests/test_voice_pipecat_boundary.py`:
 
 | Area | What is asserted |
 |---|---|
-| authorisation | anonymous and merely-claimed callers are refused account data; a caller verified for one account cannot reach another; wrong tenant, unknown, closed and expired sessions are refused; authority revoked or expired and permissions revoked during a call stop the next action; values outside the owner's grant are denied; transcript-injection attempts (unlisted tools, widened status, extra fields, other accounts, an unapproved send) produce no unauthorised effect |
-| idempotency | repeated, concurrent (tasks and threads), cross-session and post-restart requests for one intent give one effect and one receipt; a changed argument is a new action; a duplicate "call started" delivery opens no second session |
+| authorisation | anonymous and merely-claimed callers are refused account data; a repeat is answered only while the principal is still entitled (authority or permission revoked mid-call: the receipt is no longer handed out); a caller verified for one account cannot reach another; wrong tenant, unknown, closed and expired sessions are refused; authority revoked or expired and permissions revoked during a call stop the next action; values outside the owner's grant are denied; transcript-injection attempts (unlisted tools, widened status, extra fields, other accounts, an unapproved send) produce no unauthorised effect |
+| idempotency | repeated, concurrent (tasks and threads), cross-session and post-restart requests for one intent give one effect and one receipt; a changed argument is a new action; a duplicate "call started" delivery opens no second session; against the gateway's key store (0.4.1): a key held for different arguments is a failure and never a completion, a call still running under the key is reported in progress and not sent again, a full store fails closed before anything is dispatched, a write whose output the egress policy holds is neither pending approval nor completed and is never sent again, a result an operator seeded by reconciliation is replayed and not re-sent |
 | crash boundaries | the repository's `CrashingStore` is armed before and after the bridge's journal writes; a kill inside the downstream call; a lost reply; a failure before any effect; journal unavailable. In each case the mock CRM's own count of effects is checked: no duplicate |
 | cancellation | cancelling during a write leaves it to finish once; a deadline during a write reports in flight, never completed; a request cancelled before dispatch has no effect; Pipecat's real interruption frame cancels a read and does not cancel a write |
 | approvals | a person approves, once; an approval is bound to the exact request; rejected and expired approvals do not run; an unavailable approval service fails closed and leaves nothing reserved; a hand-off requested after a message was parked stops it even if approved |
@@ -116,19 +116,19 @@ n = 300 per row after a 20-call warm-up, Python 3.13.18, macOS-27.0.1-arm64-arm-
 
 | Path | p50 | p95 | p99 | max |
 |---|---|---|---|---|
-| read (lookup) | 0.091 | 0.106 | 0.169 | 0.276 |
-| write (new intent) | 0.126 | 0.174 | 0.216 | 0.265 |
-| replay (completed write asked again) | 0.016 | 0.018 | 0.024 | 0.142 |
-| refusal (not allowlisted) | 0.009 | 0.011 | 0.012 | 0.018 |
+| read (lookup) | 0.086 | 0.092 | 0.133 | 0.299 |
+| write (new intent) | 0.187 | 0.199 | 0.265 | 0.267 |
+| replay (completed write asked again) | 0.053 | 0.055 | 0.057 | 0.116 |
+| refusal (not allowlisted) | 0.009 | 0.010 | 0.011 | 0.013 |
 
 Durable stores (hash-chained JSONL journal with fsync, SQLite authority ledger), milliseconds:
 
 | Path | p50 | p95 | p99 | max |
 |---|---|---|---|---|
-| read (lookup) | 2.899 | 3.478 | 4.153 | 4.598 |
-| write (new intent) | 1.377 | 2.453 | 5.884 | 6.116 |
-| replay (completed write asked again) | 0.086 | 0.104 | 0.143 | 0.163 |
-| refusal (not allowlisted) | 0.078 | 0.103 | 0.126 | 1.179 |
+| read (lookup) | 2.555 | 3.381 | 4.078 | 5.065 |
+| write (new intent) | 1.508 | 3.203 | 6.238 | 6.904 |
+| replay (completed write asked again) | 0.339 | 0.375 | 1.348 | 1.656 |
+| refusal (not allowlisted) | 0.073 | 0.083 | 0.095 | 0.788 |
 
 These numbers describe this code on one machine. They are not a speech-path latency, not a comparison with any other product, and not a statement about any deployment. Most of the durable cost is the existing SQLite authority ledger opening a connection per transaction. Reproduce with `python bench/measure_action_path.py --n 300`; the evidence card is `docs/evidence/voice_action_path_overhead.yaml`.
 
@@ -145,7 +145,7 @@ Not tested, and no claim is made about them:
 - load, many concurrent calls, or several replicas of the bridge (one process per tenant is assumed; per-action locks are in-process);
 - any latency of the speech path;
 - a real CRM, a real approval service, a real identity provider, or durable approvals (the approval inbox used here is in memory and does not survive a restart);
-- macOS and Linux only; Windows is untested; Python 3.11, 3.12 and 3.13 are covered by the hosted workflow, 3.14 only locally.
+- macOS and Linux only; Windows is untested; Python 3.11, 3.12 and 3.13 are covered by the hosted workflow.
 
 ## Licences of every component
 
@@ -157,7 +157,7 @@ This package imports agentic-os and carries the repository's licence files (`LIC
 
 | Distribution | Version | License-Expression | License field | License classifiers | Licence files shipped |
 |---|---|---|---|---|---|
-| agentic-os | 0.4.0 | - | AGPL-3.0-or-later WITH Commons-Clause | - | LICENSE, LICENSE-COMMONS-CLAUSE, LICENSE.md |
+| agentic-os | 0.4.1 | - | AGPL-3.0-or-later WITH Commons-Clause | - | LICENSE, LICENSE-COMMONS-CLAUSE, LICENSE.md |
 | agentic-os-voice-pipecat | 0.1.0 | - | AGPL-3.0-or-later WITH Commons-Clause | - | LICENSE, LICENSE-COMMONS-CLAUSE, LICENSE.md |
 | aiofiles | 25.1.0 | - | Apache-2.0 | Apache Software License | LICENSE, NOTICE |
 | aiohappyeyeballs | 2.7.1 | - | PSF-2.0 | Python Software Foundation License | LICENSE |

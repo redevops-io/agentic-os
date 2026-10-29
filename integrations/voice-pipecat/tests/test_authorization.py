@@ -66,7 +66,7 @@ async def test_a_session_cannot_be_rebound_to_another_tenant(env, make_session):
         env.bridge.open_session(SessionBinding("call-1", "tenant-b", env.clock() + 60, subject="voice-agent"))
 
 
-async def test_authority_revoked_mid_call_stops_the_next_write_but_not_the_receipts_already_made(env, make_session):
+async def test_authority_revoked_mid_call_stops_the_next_write_and_a_replay_of_an_earlier_one(env, make_session):
     p = make_session(env)
     first = await update(p)
     assert first.status is ActionStatus.COMPLETED
@@ -74,8 +74,21 @@ async def test_authority_revoked_mid_call_stops_the_next_write_but_not_the_recei
     second = await update(p, {**UPDATE_ARGS, "timeline": "later"})
     assert (second.status, second.reason) == (ActionStatus.DENIED, Reason.POLICY_DENIED)
     assert env.crm.effect_count == 1
-    again = await update(p)                                           # asking for the FIRST one again: the receipt is returned, but only to
-    assert again.replayed and again.receipt_ref == first.receipt_ref  # a session that is still entitled (checked above the replay)
+    # the receipt of the first write is no longer handed out either: a replay never outlives the right to the call (the gateway does the
+    # same before it serves a stored result, and the bridge asks the same question before it answers from its journal)
+    again = await update(p)
+    assert (again.status, again.reason, again.replayed) == (ActionStatus.DENIED, Reason.POLICY_DENIED, False)
+    assert again.receipt_ref == "" and env.crm.effect_count == 1
+
+
+async def test_a_replay_is_refused_after_the_permission_is_revoked_and_served_again_if_it_returns(env, make_session):
+    p = make_session(env)
+    first = await update(p)
+    env.authorizer.grants.discard("crm.write")
+    assert (await update(p)).status is ActionStatus.DENIED
+    env.authorizer.grants.add("crm.write")
+    back = await update(p)
+    assert back.replayed and back.receipt_ref == first.receipt_ref and env.crm.effect_count == 1
 
 
 async def test_replay_does_not_bypass_authorisation(env, make_session, clock):
