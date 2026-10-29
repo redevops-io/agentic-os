@@ -27,3 +27,7 @@ Bring up Listmonk + its Postgres with `listmonk.compose.yml` (repo root), then c
 API user in the Listmonk UI (Settings → Users) and set `LISTMONK_API_USER`/`LISTMONK_API_TOKEN`.
 Klaviyo's free plan can be used as a stop-gap benchmark, but self-hosting removes the
 250-profile / branding limits and keeps the data on hardware you own.
+
+## Authorization note
+
+Note: basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write. See `docs/PERMISSIONS_MIGRATION.md` section 29.

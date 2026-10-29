@@ -145,6 +145,7 @@ class Operator:
         self._specs: dict[str, CapabilitySpec] = {c.spec.name: c.spec for c in capabilities}
         # (capability, inputs-hash, idem key) -> first SUCCESSFUL result (exactly-once). PER-PROCESS, bounded LRU.
         self._seen: "OrderedDict[tuple, dict]" = OrderedDict()
+        self._seen_scope: dict = {}                    # dedupe key -> the authorisation scope digest the cached result was produced under
         self._seen_lock = threading.Lock()
         from .approval import default_replay_guard  # noqa: PLC0415
         # per-process by default; AGENTIC_OS_REPLAY_DB makes approval nonces durable across restarts/workers.
@@ -159,13 +160,19 @@ class Operator:
     def invoke(self, capability: str, inputs: dict, idempotency_key: str = "",
                *, secrets: "dict | None" = None) -> dict:
         from .approval import canonical  # noqa: PLC0415
+        # AUTHORISE FIRST (FR-05): before the idempotency cache, the in-flight claim or anything else. A revoked grant must not be answered from a cached result,
+        # and a denial is never cached (a later grant works with the same key).
+        from ..app_gate import operator_denial, operator_scope, principal_key  # noqa: PLC0415
+        _deny = operator_denial(self.name, capability, self)
+        if _deny:
+            return {"status": "denied", "executed": False, "error": f"[blocked] {capability}: {_deny}"}
         # Dedupe on (capability, canonical inputs, key): the same key with different capability/inputs is a
         # different call. `_approval` stays IN the hash so an approved retry is never served the staged result.
         try:
             # the caller's ephemeral credential material scopes the key: two tenants never share a result
             _ctx = hashlib.sha256(canonical(secrets or {})).hexdigest() if secrets else ""
             _dk = (capability, canonical({k: v for k, v in (inputs or {}).items()
-                                          if k not in {"_mission", "_goal", "_node"}}), idempotency_key, _ctx)
+                                          if k not in {"_mission", "_goal", "_node"}}), idempotency_key, _ctx, principal_key(self.name))
         except Exception:  # noqa: BLE001
             _dk = None
         if not (idempotency_key and _dk is not None):
@@ -175,8 +182,18 @@ class Operator:
         while True:
             with self._seen_lock:
                 if _dk in self._seen:
-                    self._seen.move_to_end(_dk)
-                    return self._seen[_dk]
+                    # the cache sits INSIDE the authorised scope: a hit counts only when the CURRENT effective scope equals the one the entry was produced under
+                    _now, _was = operator_scope(self.name, capability), self._seen_scope.get(_dk, "")
+                    if _now == _was:
+                        self._seen.move_to_end(_dk)
+                        return self._seen[_dk]
+                    spec = self._specs.get(capability)
+                    if spec is not None and getattr(spec, "side_effecting", False):
+                        # re-running would repeat the side effect, returning the old body would hand out what the old scope produced: refuse, use a new key
+                        return {"status": "denied", "executed": False, "error": f"[blocked] {capability}: the authorised scope of this idempotency key changed since "
+                                                                               "it was used; retry with a new idempotency key"}
+                    self._seen.pop(_dk, None)
+                    self._seen_scope.pop(_dk, None)                                              # a read: executed again inside the current scope
                 slot = self._inflight.get(_dk)
                 leader = slot is None
                 if leader:
@@ -216,6 +233,12 @@ class Operator:
         fn = self._handlers.get(capability)
         if fn is None:
             raise KeyError(f"operator '{self.name}' has no capability '{capability}'")
+        # Authorisation WHERE EXECUTION HAPPENS (basic permissions, AGPL): the grant for this capability is checked before the handler runs.
+        # Separate from approval (the route / runtime checks that before this point). A no-op unless AGENTIC_OS_PERMISSIONS is on for this app.
+        from ..app_gate import operator_denial  # noqa: PLC0415
+        _deny = operator_denial(self.name, capability, self)
+        if _deny:
+            return {"status": "denied", "executed": False, "error": f"[blocked] {capability}: {_deny}"}
         self.calls.append((capability, idempotency_key))
         # A handler that declares a second parameter receives the ephemeral redeemed credential material
         # (mirrors InMemoryOperatorClient). `secrets` is never persisted — the dedupe cache holds the
@@ -253,18 +276,21 @@ class Operator:
         # cannot block the approved retry (which carries `_approval`, hence a different key) and keeps staging
         # idempotent. Every other failure-shaped result is left uncached.
         from .verify import is_staged  # noqa: PLC0415
+        from ..app_gate import operator_scope  # noqa: PLC0415
         if idempotency_key and _dk is not None and (not _failed or is_staged(result)):
             cap = idempotency_max()
             with self._seen_lock:
                 self._seen[_dk] = result
+                self._seen_scope[_dk] = operator_scope(self.name, capability)
                 self._seen.move_to_end(_dk)
                 while len(self._seen) > cap:
-                    self._seen.popitem(last=False)
+                    old, _ = self._seen.popitem(last=False)
+                    self._seen_scope.pop(old, None)
         return result
 
     # ── HTTP surface (mount into the app's FastAPI) ──────────────────────────
     def router(self):
-        from fastapi import APIRouter, Header, HTTPException
+        from fastapi import APIRouter, Header, HTTPException, Request
         from pydantic import BaseModel
 
         _warn_if_no_approval_secret(self.name)
@@ -283,18 +309,23 @@ class Operator:
         def security():
             """Effective security posture of THIS operator, for readiness checks and Edge Sentinel."""
             from .profile import status  # noqa: PLC0415
-            return status(self.authority, replay_durable=bool(getattr(self.replay_guard, "durable", None)
-                                                              or type(self.replay_guard).__name__ == "SqliteReplayGuard"))
+            from ..app_gate import authorization_fields  # noqa: PLC0415
+            return {**status(self.authority, replay_durable=bool(getattr(self.replay_guard, "durable", None)
+                                                                 or type(self.replay_guard).__name__ == "SqliteReplayGuard")), **authorization_fields(self.name)}
 
         @router.get("/capabilities")
         def capabilities():
             return to_jsonable(self.manifest)
 
         @router.post("/invoke")
-        def invoke(body: InvokeBody, idempotency_key: str | None = Header(default=None),
-                   authorization: str | None = Header(default=None)):
+        def invoke(request: Request, body: InvokeBody, idempotency_key: str | None = Header(default=None),
+                   authorization: str | None = Header(default=None),
+                   x_control_token: str | None = Header(default=None, alias="X-Control-Token")):
             from .control_auth import authorize_operator_invoke  # noqa: PLC0415
-            caller = authorize_operator_invoke(authorization)
+            # KD-4: the CALLER credential is X-Control-Token (or, for existing callers, Authorization: Bearer); with the header present Authorization belongs to the END USER's identity
+            hdr = request.headers
+            duplicated = len(hdr.getlist("x-control-token")) > 1 or len(hdr.getlist("authorization")) > 1          # BB-02
+            caller = authorize_operator_invoke(authorization, x_control_token, duplicated=duplicated)
             # A tenant-token caller IS that tenant: a body `_tenant` naming another tenant is refused, and the
             # authenticated tenant is what the handler sees. Admin / anonymous-dev callers keep the body value.
             if caller.tenant is not None:
@@ -302,6 +333,13 @@ class Operator:
                 if claimed not in (None, "") and str(claimed) != caller.tenant:
                     raise HTTPException(403, "tenant does not match the authenticated credential")
             key = body.idempotency_key or idempotency_key or ""
+            # AUTHORISE, THEN APPROVE, THEN EXECUTE: the grant is asked BEFORE anything about approval. A caller who may not run the capability gets the denial, never an approval prompt, a 403 about
+            # execution authorization or a 404 (those would reveal that the capability exists and has side effects, and let the caller queue requests for the approvers), and a denied call consumes
+            # nothing single-use (an approval token or an execution-authorization nonce is verified only below). A no-op when permissions are not requested.
+            from ..app_gate import operator_denial  # noqa: PLC0415
+            _deny = operator_denial(self.name, body.capability, self)
+            if _deny:
+                return {"result": {"status": "denied", "executed": False, "error": f"[blocked] {body.capability}: {_deny}"}}
             # The HTTP /invoke is the UNTRUSTED "try" surface, so strip runtime-only approval markers a caller
             # could forge to bypass a gate: a direct POST of `{"_approval": true}` must NOT make a consequential
             # handler execute (it stages / stays pending instead). The runtime delivers a real approval through

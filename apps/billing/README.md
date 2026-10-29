@@ -84,7 +84,7 @@ python3 -m uvicorn app:app --host 0.0.0.0 --port 8201
 
 # Or with Docker (point LAGO_API_URL at the Lago api service, not localhost):
 docker build -t agentic-billing .
-docker run --rm -p 8201:8201 \
+docker run -e AGENTIC_OS_PERMISSIONS=off --rm -p 8201:8201 \
   -e LAGO_API_URL=http://host.docker.internal:3000 \
   -e LAGO_API_KEY=<key from .env> \
   -e LAGO_FRONT_URL=http://localhost:80 \
@@ -185,3 +185,7 @@ stores survive with `BILLING_STATE_DIR`); Lago has no `paid_at`, so a payment is
 - `POST /api/outcomes/observe` and `POST /api/policy/refit` (operator auth). `BILLING_OUTCOME_INTERVAL_S=<seconds>`
   enables a background outcome observer (default off). Refit always goes through the promotion gate.
 - Narration uses `agentic_os.app.llm.governed_text` (CUSTOMER_CONFIDENTIAL, fail closed to deterministic text).
+
+## Authorization note
+
+Note: basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write. See `docs/PERMISSIONS_MIGRATION.md` section 29.

@@ -141,3 +141,7 @@ python3 -m uvicorn app:app --host 0.0.0.0 --port 8206
     again after an edit is refused. To pick up an edit, an authenticated operator calls publish with
     `"restage": true`; this invalidates the old request, opens a new `request_id` for the current content, and any
     approval for the old request stays refused. Anonymous callers cannot restage.
+
+## Authorization note
+
+Note: basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write. See `docs/PERMISSIONS_MIGRATION.md` section 29.

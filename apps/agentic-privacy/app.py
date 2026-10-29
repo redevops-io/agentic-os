@@ -33,17 +33,17 @@ from __future__ import annotations
 
 import base64
 import html
+import json
 import os
 import secrets
 
 # ── enterprise permissions plane — gate tool/data access by (app, user) ──
-# No-op without the context_runtime_enterprise package or CR_PERMISSIONS=1 (open-core default).
-try:
-    from context_runtime_enterprise.apps import bootstrap as _cr_bootstrap
-    _req_principal = _cr_bootstrap("agentic-privacy")
-except Exception:  # noqa: BLE001
-    def _req_principal(request=None):
-        return None
+# Basic default without the enterprise package and without CR_PERMISSIONS / CR_IDENTITY_*; if either is set and the gate cannot
+# be installed, agentic_os.app_gate refuses to start the app (it never runs ungated by accident).
+from agentic_os.app_gate import RequestContext as _RequestContext, denial_result as _denial_result, deny_response as _deny_response, install_gate as _install_gate
+from agentic_os.app_gate import with_authorization as _with_authorization, public_intake as _public_intake_ticket
+_GATE_APP = "agentic-privacy"
+_req_principal = _install_gate(_GATE_APP)   # starts gated or not at all when permissions were requested (RR-01)
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -75,6 +75,7 @@ app = FastAPI(title=f"agentic-privacy ({TENANT})")
 from agentic_os.app_kit import route_authz as _route_authz  # noqa: E402
 from .route_policy import APP as _APP, ROUTE_POLICIES as _ROUTE_POLICIES  # noqa: E402
 _route_authz.install(app, _APP, _ROUTE_POLICIES)   # one enforcement layer for every write route
+app.add_middleware(_RequestContext)   # the active gate (basic or enterprise) sees THIS request's principal in every route
 
 
 # --- rate limiting (in-memory; per replica) -----------------------------------
@@ -102,9 +103,12 @@ def _intake_per_hour() -> int:
         return 5
 
 
+from collections import OrderedDict as _OrderedDict
+
 _RL_LOCK = _threading.Lock()
-_BUCKETS: dict[str, list] = {}          # ip -> [tokens, last_ts]
-_EMAIL_HITS: dict[str, "_deque[float]"] = {}
+_BUCKETS: "_OrderedDict[str, list]" = _OrderedDict()          # ip -> [tokens, last_ts]   (bounded: the OLDEST client is evicted, never everyone)
+_EMAIL_HITS: "_OrderedDict[str, _deque[float]]" = _OrderedDict()
+_GLOBAL_HITS: "_deque[float]" = _deque()                      # one window for every accepted public submission (a bound on the e-mails this app can be made to send per hour)
 _RL_MAX_KEYS = 50_000
 
 
@@ -112,6 +116,27 @@ def _reset_rate_limits() -> None:
     with _RL_LOCK:
         _BUCKETS.clear()
         _EMAIL_HITS.clear()
+        _GLOBAL_HITS.clear()
+
+
+def _global_per_hour() -> int:
+    try:
+        return max(0, int(os.environ.get("PRIVACY_INTAKE_GLOBAL_PER_HOUR", "500")))
+    except ValueError:
+        return 500
+
+
+def _global_cap(now: float | None = None) -> float:
+    """Global cap on accepted public submissions per rolling hour. Returns 0.0 if allowed (and records the hit) else seconds to wait."""
+    now = _time.monotonic() if now is None else now
+    cap = _global_per_hour()
+    with _RL_LOCK:
+        while _GLOBAL_HITS and now - _GLOBAL_HITS[0] >= 3600:
+            _GLOBAL_HITS.popleft()
+        if len(_GLOBAL_HITS) >= cap:
+            return 3600 - (now - _GLOBAL_HITS[0]) if _GLOBAL_HITS else 3600.0
+        _GLOBAL_HITS.append(now)
+        return 0.0
 
 
 def _client_ip(request: Request) -> str:
@@ -127,14 +152,15 @@ def _take(key: str, now: float | None = None) -> float:
     now = _time.monotonic() if now is None else now
     rate = _rate_per_min() / 60.0
     with _RL_LOCK:
-        if len(_BUCKETS) > _RL_MAX_KEYS:
-            _BUCKETS.clear()
         tokens, last = _BUCKETS.get(key, [float(RATE_BURST), now])
         tokens = min(float(RATE_BURST), tokens + (now - last) * rate)
-        if tokens >= 1.0:
-            _BUCKETS[key] = [tokens - 1.0, now]
+        allowed = tokens >= 1.0
+        _BUCKETS[key] = [tokens - 1.0 if allowed else tokens, now]
+        _BUCKETS.move_to_end(key)
+        while len(_BUCKETS) > _RL_MAX_KEYS:
+            _BUCKETS.popitem(last=False)
+        if allowed:
             return 0.0
-        _BUCKETS[key] = [tokens, now]
         return (1.0 - tokens) / rate if rate > 0 else 60.0
 
 
@@ -154,9 +180,10 @@ def _email_cap(email: str, now: float | None = None) -> float:
     now = _time.monotonic() if now is None else now
     cap = _intake_per_hour()
     with _RL_LOCK:
-        if len(_EMAIL_HITS) > _RL_MAX_KEYS:
-            _EMAIL_HITS.clear()
         q = _EMAIL_HITS.setdefault(email, _deque())
+        _EMAIL_HITS.move_to_end(email)
+        while len(_EMAIL_HITS) > _RL_MAX_KEYS:
+            _EMAIL_HITS.popitem(last=False)
         while q and now - q[0] >= 3600:
             q.popleft()
         if len(q) >= cap:
@@ -265,11 +292,13 @@ def render(d: dict) -> str:
 # --- routes ------------------------------------------------------------------
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "connectors_live": [s for s, (_f, _d, cfg) in CONNECTORS.items() if cfg()]}
+    return _with_authorization(_GATE_APP, {"status": "ok", "connectors_live": [s for s, (_f, _d, cfg) in CONNECTORS.items() if cfg()]})
 
 
 @app.get("/api/activity")
 def api_activity() -> JSONResponse:
+    if (_r := _deny_response(_GATE_APP, "privacy_summary")):
+        return _r
     return JSONResponse(activity())
 
 
@@ -366,6 +395,8 @@ async def api_agent(request: Request) -> JSONResponse:
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
+    if (_r := _deny_response(_GATE_APP, "privacy_summary")):
+        return _r
     page = render(activity())
     if _PRIVACY_CONSOLE is not None:
         panel = "<section class='shell' style='margin-top:16px'>" + _PRIVACY_CONSOLE.panel_html("privacy") + "</section>"
@@ -413,16 +444,89 @@ def _public(resp: dict) -> dict:
     return resp
 
 
-@app.post("/request")
-async def request_route(request: Request) -> JSONResponse:
+_PUBLIC_KEYS = {"email", "type", "website"}                  # the whole schema of a public submission; "website" is the honeypot (a hidden field a person never fills)
+
+
+def _max_body() -> int:
+    try:
+        return max(64, int(os.environ.get("PRIVACY_INTAKE_MAX_BODY", "2048")))
+    except ValueError:
+        return 2048
+
+
+def _public_error(status: int, error: str) -> JSONResponse:
+    return JSONResponse({"status": "error", "error": error}, status_code=status, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+
+async def _read_public_submission(request: Request):
+    """Strict schema for a public submission: JSON, at most ``PRIVACY_INTAKE_MAX_BODY`` bytes (default 2048, enforced while reading), an object with ONLY ``email`` (a string), ``type`` (a string, optional)
+    and the honeypot ``website`` (a string, optional). Returns (submission, None) or (None, the error response)."""
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
+        return None, _public_error(415, "send application/json")
+    limit = _max_body()
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > limit:
+        return None, _public_error(413, "request too large")
+    raw = b""
+    async for chunk in request.stream():
+        raw += chunk
+        if len(raw) > limit:
+            return None, _public_error(413, "request too large")
+    try:
+        body = json.loads(raw.decode("utf-8"))
+    except Exception:  # noqa: BLE001
+        return None, _public_error(400, "the body must be a JSON object")
+    if not isinstance(body, dict) or set(body) - _PUBLIC_KEYS or "email" not in body:
+        return None, _public_error(400, "the body must be a JSON object with an email and optionally a type")
+    email, rtype, trap = body.get("email"), body.get("type", "access"), body.get("website", "")
+    if not (isinstance(email, str) and isinstance(rtype, str) and isinstance(trap, str)):
+        return None, _public_error(400, "email, type and website must be strings")
+    email = email.lower()                                         # (no strip: padding is not a mailbox)
+    if not core.valid_public_email(email) or core.PUBLIC_REQUEST_TYPES.get(rtype) is None:
+        return None, _public_error(400, "a valid email address and a known request type are required")
+    return {"email": email, "type": core.PUBLIC_REQUEST_TYPES[rtype], "trap": trap}, None
+
+
+def _public_headers(resp: JSONResponse) -> JSONResponse:
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
+
+
+async def _public_submit(request: Request, path: str) -> JSONResponse:
+    """The body of POST /intake and POST /request in the normal mode. NO grant is consulted (a data subject must be able to reach it): this is the registered public-intake exception, which
+    can only open a PENDING request and send one verification e-mail (see core.public_intake and agentic_os.tool_actions.PUBLIC_INTAKE_ROUTES)."""
     if (limited := _rate_check(request)) is not None:
         return limited
+    sub, err = await _read_public_submission(request)
+    if err is not None:
+        return err
+    if sub["trap"].strip():                                           # a bot: the same answer as a person, and nothing is created or sent
+        ch = "postmark" if core.POSTMARK_TOKEN else "smtp" if core.SMTP_HOST else "undeliverable"
+        return _public_headers(JSONResponse({"status": "received", "request_id": core._new_dsar_id(), "type": sub["type"], "delivery": ch, "message": core.public_intake_message(ch)}))
+    generic = "too many requests; try again later"
+    if (wait := _email_cap(sub["email"])):
+        return _limited(wait, generic)
+    if (wait := _global_cap()):
+        return _limited(wait, generic)
+    ticket = (_public_intake_ticket(_GATE_APP, "POST", "/intake") if path == "/intake" else _public_intake_ticket(_GATE_APP, "POST", "/request"))
     try:
-        body = _strip_approval(await request.json())
-    except Exception:
-        body = {}
-    # Body flags (verified/confirm/_approval) are never trusted: this only opens a PENDING intake record.
-    return JSONResponse(_public(handle_request(body or {}, base_url=str(request.base_url))))
+        return _public_headers(JSONResponse(_public(core.public_intake(ticket, sub["email"], sub["type"], str(request.base_url)))))
+    except core.PublicIntakeBusy:
+        return _public_error(503, "temporarily unable to accept requests; try again later")
+
+
+@app.post("/request")
+async def request_route(request: Request) -> JSONResponse:
+    if core.DEMO_MODE:                                            # the synthetic one-click demo store only (validate_demo_mode): the old, lenient flow
+        if (limited := _rate_check(request)) is not None:
+            return limited
+        try:
+            body = _strip_approval(await request.json())
+        except Exception:
+            body = {}
+        return JSONResponse(_public(handle_request(body or {}, base_url=str(request.base_url))))
+    return await _public_submit(request, "/request")
 
 
 # --- public intake form ------------------------------------------------------
@@ -443,7 +547,8 @@ label{{font:500 13px/1.4 var(--font-sans);color:var(--on-surface-variant)}}
 <p class="appbar__sub" style="margin:0">{html.escape(TENANT)} — exercise your GDPR / CCPA / CPRA rights. We verify your
 identity before acting and respond within {SLA_DAYS} days.</p>
 <label>Your email (the subject of the request)</label>
-<input id="email" type="email" placeholder="you@example.com" required>
+<input id="email" type="email" placeholder="you@example.com" required maxlength="254">
+<input id="website" name="website" type="text" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-10000px;width:1px;height:1px;opacity:0">
 <label>Request type</label>
 <select id="type">
   <option value="access">Access — what data do you hold about me?</option>
@@ -463,7 +568,7 @@ async function submitReq() {{
   msg.textContent = 'Submitting…';
   try {{
     const r = await fetch('/intake', {{method:'POST',headers:{{'Content-Type':'application/json'}},
-      body: JSON.stringify({{email, type}})}});
+      body: JSON.stringify({{email, type, website: document.getElementById('website').value}})}});
     const d = await r.json();
     msg.style.color = '#5bd98a';
     msg.textContent = d.message || ('Received: ' + (d.request_id||''));
@@ -479,20 +584,7 @@ def intake_form() -> str:
 
 @app.post("/intake")
 async def intake_submit(request: Request) -> JSONResponse:
-    if (limited := _rate_check(request)) is not None:
-        return limited
-    try:
-        body = _strip_approval(await request.json())
-    except Exception:
-        body = {}
-    email = (body.get("email") or "").strip().lower()
-    rtype = (body.get("type") or "access").lower()
-    if not email or "@" not in email:
-        return JSONResponse({"status": "error", "error": "a valid email is required"}, status_code=400)
-    if (wait := _email_cap(email)):
-        return _limited(wait, "too many requests for this address; try again later")
-    # intake agent (core): opens the DSAR, sends the verification email, audits + persists.
-    return JSONResponse(_public(core.intake(email, rtype, str(request.base_url))))
+    return await _public_submit(request, "/intake")
 
 
 def _verify_page(message: str, ok: bool, raw: bool = False) -> str:
@@ -578,6 +670,8 @@ def export(request: Request, id: str = "", token: str = "") -> JSONResponse:
 @app.post("/fulfil/{request_id}")
 async def fulfil_route(request_id: str, request: Request) -> JSONResponse:
     """Operator confirmation of a VERIFIED delete/correct request (Basic auth; fail-closed)."""
+    if (_r := _deny_response(_GATE_APP, "privacy.delete")):
+        return _r
     require_operator(request)
     try:
         body = _strip_approval(await request.json())
@@ -591,17 +685,23 @@ async def fulfil_route(request_id: str, request: Request) -> JSONResponse:
 @app.get("/audit/verify")
 def audit_verify() -> JSONResponse:
     """Confirm the audit log's hash chain is intact (tamper-evidence)."""
+    if (_r := _deny_response(_GATE_APP, "privacy_summary")):
+        return _r
     return JSONResponse(verify_audit_chain())
 
 
 @app.post("/retention")
 async def retention_route(request: Request) -> JSONResponse:
     """Retention enforcement: scan (dry-run) or purge (confirm:true) PII past the window."""
+    if (_r := _deny_response(_GATE_APP, "privacy.retention")):
+        return _r
     try:
         body = _strip_approval(await request.json())
     except Exception:
         body = {}
     want_purge = bool((body or {}).get("confirm"))
+    if want_purge and (_r := _deny_response(_GATE_APP, "privacy.delete")):          # a PURGE removes data: it needs the delete grant too
+        return _r
     # Unauthenticated callers (and any call without confirm:true) get a counts-only DRY RUN. A real purge needs
     # operator Basic auth AND confirm:true.
     if want_purge and _operator_ok(request):
@@ -614,6 +714,8 @@ async def retention_route(request: Request) -> JSONResponse:
 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
+    from agentic_os.app_gate import require_explicit_setting_when_exposed as _exposed
+    _exposed("0.0.0.0")   # a reachable bind needs an explicit permissions setting
     uvicorn.run(app, host="0.0.0.0", port=PORT)
 
 

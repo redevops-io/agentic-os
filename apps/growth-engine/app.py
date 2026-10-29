@@ -37,13 +37,12 @@ import html
 import os
 
 # ── enterprise permissions plane — gate tool/data access by (app, user) ──
-# No-op without the context_runtime_enterprise package or CR_PERMISSIONS=1 (open-core default).
-try:
-    from context_runtime_enterprise.apps import bootstrap as _cr_bootstrap
-    _req_principal = _cr_bootstrap("growth-engine")
-except Exception:  # noqa: BLE001
-    def _req_principal(request=None):
-        return None
+# Basic default without the enterprise package and without CR_PERMISSIONS / CR_IDENTITY_*; if either is set and the gate cannot
+# be installed, agentic_os.app_gate refuses to start the app (it never runs ungated by accident).
+from agentic_os.app_gate import RequestContext as _RequestContext, denial_result as _denial_result, deny_response as _deny_response, guarded as _guarded, install_gate as _install_gate
+from agentic_os.app_gate import with_authorization as _with_authorization
+_GATE_APP = "growth-engine"
+_req_principal = _install_gate(_GATE_APP)   # starts gated or not at all when permissions were requested (RR-01)
 import time
 from pathlib import Path
 
@@ -83,6 +82,7 @@ app = FastAPI(title="agentic-growth-engine (Meridian Wealth Management · core: 
 from agentic_os.app_kit import route_authz as _route_authz  # noqa: E402
 from .route_policy import APP as _APP, ROUTE_POLICIES as _ROUTE_POLICIES  # noqa: E402
 _route_authz.install(app, _APP, _ROUTE_POLICIES)   # one enforcement layer for every write route
+app.add_middleware(_RequestContext)   # the active gate (basic or enterprise) sees THIS request's principal in every route
 
 
 # --- MD3 styling (BASE_CSS reused verbatim from deploy/module_service.py) -----
@@ -368,11 +368,13 @@ class _GovernedConsoleModel:
 
 
 # --- agentic actions (thin wrappers over core; core stays context-runtime-free) ---
+@_guarded(_GATE_APP, "growth.analyze")
 def _analyze() -> dict:
     """Channel attribution over the real Umami core, with the optional LLM narration blurb."""
     return core.analyze(blurb=_llm_blurb)
 
 
+@_guarded(_GATE_APP, "growth.reallocate_budget")
 def _reallocate_budget(body: dict) -> dict:
     """Stage an ad-budget change for human approval (never auto-executed)."""
     return core.reallocate_budget(body)
@@ -455,7 +457,7 @@ else:
 # --- routes ------------------------------------------------------------------
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "core": "umami", "connected": umami_connected()}
+    return _with_authorization(_GATE_APP, {"status": "ok", "core": "umami", "connected": umami_connected()})
 
 
 @app.post("/api/agent")
@@ -471,6 +473,8 @@ async def api_agent(request: Request) -> JSONResponse:
 
 @app.get("/api/activity")
 def activity() -> JSONResponse:
+    if (_r := _deny_response(_GATE_APP, "traffic_summary")):
+        return _r
     return JSONResponse(fetch_activity())
 
 
@@ -479,6 +483,8 @@ _CR_BANNER = """<div style="position:sticky;top:0;z-index:9998;background:linear
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
+    if (_r := _deny_response(_GATE_APP, "traffic_summary")):
+        return _r
     import re as _cr_re
     page = render(fetch_activity())
     if _GROWTH_CONSOLE is not None:
@@ -498,6 +504,9 @@ async def agent_run(request: Request) -> JSONResponse:
         body = {}
     action = (body or {}).get("action", "")
 
+    _tool = {"analyze": "growth.analyze", "reallocate_budget": "growth.reallocate_budget"}.get(action) if isinstance(action, str) else None
+    if _tool and (_r := _deny_response(_GATE_APP, _tool)):
+        return _r
     if action == "analyze":
         return JSONResponse(_analyze())
     if action == "reallocate_budget":
@@ -511,6 +520,10 @@ async def agent_run(request: Request) -> JSONResponse:
 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
+
+    from agentic_os.app_gate import require_explicit_setting_when_exposed as _exposed
+
+    _exposed("0.0.0.0")   # a reachable bind needs an explicit permissions setting
 
     uvicorn.run(app, host="0.0.0.0", port=PORT)
 

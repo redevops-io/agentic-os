@@ -93,7 +93,7 @@ python3 -m uvicorn app:app --host 0.0.0.0 --port 8209
 
 # Or with Docker (point ERPNEXT_URL at the host gateway, not localhost):
 docker build -t agentic-books .
-docker run --rm -p 8209:8209 \
+docker run -e AGENTIC_OS_PERMISSIONS=off --rm -p 8209:8209 \
   -e ERPNEXT_URL=http://host.docker.internal:8092 \
   -e ERPNEXT_API_KEY=<key> -e ERPNEXT_API_SECRET=<secret> \
   -e ERPNEXT_FRONT_URL=http://localhost:8092 \
@@ -140,3 +140,7 @@ Writes are approval-gated in `core`; the app's routes execute them only for requ
 Idempotency keys are scoped to the tenant. Over `/invoke` the tenant is taken from the bearer credential: a tenant token supplies its own tenant and a body `_tenant` naming a different one is refused (403); the admin token and the local anonymous-dev flag may still pass `_tenant` in the body.
 
 Single-replica requirement: the per-key locks and the operator's duplicate-call cache are process-local. Run exactly one replica of this app (or pin traffic for a given key to one replica); with several replicas, concurrent identical requests are only de-duplicated by the ledger-side lookup, not by the in-process locks.
+
+## Authorization note
+
+Note: basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write. See `docs/PERMISSIONS_MIGRATION.md` section 29.

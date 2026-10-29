@@ -12,3 +12,7 @@ The `infra` operator turns a deploy into a Mission Runtime mission (`deploy_app`
 Credentials come from the environment (never HCL): AWS `AWS_*`, DigitalOcean `TF_VAR_do_token`
 (from `DO_TOKEN`), GCP ADC + a service account with `roles/compute.admin`, Azure `ARM_*` (a service
 principal — not yet exported here). `INFRA_DEPLOY_ROOT` overrides the deploy-tree location.
+
+## Authorization note
+
+Note: basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write. See `docs/PERMISSIONS_MIGRATION.md` section 29.

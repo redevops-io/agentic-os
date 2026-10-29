@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Set
 
+from agentic_os.app_gate import kernel_governed
 from agentic_os.mission.operator_sdk import Capability, Operator, capability
 
 from .contracts import ActionClass, SocialActionReceipt, SocialActionRequest
@@ -46,6 +47,7 @@ class SocialOperator:
         for action in _OUTBOUND_ACTIONS:
             caps.append(self._build(action))
         self.operator = Operator(self.name, caps)
+        kernel_governed(self.operator, "the Agent Gateway's social operator: governed by the gateway's token auth, capability filtering and approvals")
 
     def _build(self, action: ActionClass) -> Capability:
         def handler(inputs: Mapping[str, Any]) -> dict:
