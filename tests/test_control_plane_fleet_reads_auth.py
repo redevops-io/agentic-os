@@ -1,7 +1,7 @@
 """The control plane's fleet READ routes need the fleet credential: ``GET /jobs/{id}``, ``GET /api/fleet``, ``GET /status`` and ``GET /notify/status``.
 
-They expose the result text and errors of dispatched agent actions (sequential, guessable job ids), the application inventory and topology (repositories,
-ports, approval-required capability names, backend names, live health), which modules are up, and which chat channels are wired. They take the same credential
+They expose the result text and errors of dispatched agent actions (sequential, guessable job ids), per-module details that the public catalogue (/modules, /overview)
+does not carry (ports, approval-required capability names, backend names, deploy kind, live health), which modules are up, and which chat channels are wired. They take the same credential
 as the other fleet routes: ``Authorization: Bearer <AGENTIC_OS_CONTROL_TOKEN>`` or ``X-API-Key: <AGENTIC_OS_API_KEY>``; nothing configured answers 503; the
 permissions admin key is a different privilege and does not open them. A denial runs nothing and returns no content. The liveness and static routes stay open.
 """

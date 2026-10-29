@@ -56,7 +56,7 @@ def _authorize_mutation(x_api_key: str | None, authorization: str | None, *key_e
 def require_api_key(x_api_key: str | None = Header(default=None),
                     authorization: str | None = Header(default=None)) -> None:
     """Auth dependency for the fleet routes: the mutating ones (deploy / start / stop / approve / dispatch) and the reads of non-public state: the pending
-    approvals (the request text an approver signs off), job results, the application inventory and topology, module status and the wired chat channels.
+    approvals (the request text an approver signs off), job results, per-module ports, approval-required capability names, backend names and live health, module status and the wired chat channels.
 
     Requires ``Authorization: Bearer <AGENTIC_OS_CONTROL_TOKEN>`` or ``X-API-Key: <AGENTIC_OS_API_KEY>``.
     With neither configured the endpoint is disabled (503) — it never runs unauthenticated. The liveness and static routes
