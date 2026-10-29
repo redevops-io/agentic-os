@@ -40,13 +40,12 @@ import json
 import os
 
 # ── enterprise permissions plane — gate tool/data access by (app, user) ──
-# No-op without the context_runtime_enterprise package or CR_PERMISSIONS=1 (open-core default).
-try:
-    from context_runtime_enterprise.apps import bootstrap as _cr_bootstrap
-    _req_principal = _cr_bootstrap("edge-sentinel")
-except Exception:  # noqa: BLE001
-    def _req_principal(request=None):
-        return None
+# Basic default without the enterprise package and without CR_PERMISSIONS / CR_IDENTITY_*; if either is set and the gate cannot
+# be installed, agentic_os.app_gate refuses to start the app (it never runs ungated by accident).
+from agentic_os.app_gate import RequestContext as _RequestContext, denial_result as _denial_result, deny_response as _deny_response, guarded as _guarded, install_gate as _install_gate
+from agentic_os.app_gate import with_authorization as _with_authorization
+_GATE_APP = "edge-sentinel"
+_req_principal = _install_gate(_GATE_APP)   # starts gated or not at all when permissions were requested (RR-01)
 import re
 import subprocess
 import time
@@ -97,6 +96,7 @@ app = FastAPI(title="edge-sentinel (Meridian Wealth Management · core: CrowdSec
 from agentic_os.app_kit import route_authz as _route_authz  # noqa: E402
 from .route_policy import APP as _APP, ROUTE_POLICIES as _ROUTE_POLICIES  # noqa: E402
 _route_authz.install(app, _APP, _ROUTE_POLICIES)   # one enforcement layer for every write route
+app.add_middleware(_RequestContext)   # the active gate (basic or enterprise) sees THIS request's principal in every route
 
 
 # --- MD3 styling (BASE_CSS reused verbatim from deploy/module_service.py) -----
@@ -569,6 +569,7 @@ class _GovernedConsoleModel:
 
 
 # --- agentic actions ---------------------------------------------------------
+@_guarded(_GATE_APP, "ban_ip")
 def _block_ip(body: dict) -> dict:
     """Blocking traffic is the SENSITIVE action — never auto-executed.
 
@@ -592,6 +593,7 @@ def _block_ip(body: dict) -> dict:
     }
 
 
+@_guarded(_GATE_APP, "ban_ip")
 def _approve_block(body: dict) -> dict:
     """The approved path: enforce the ban decision on the real CrowdSec core — but only when
     SENTINEL_BLOCK_ENABLED is set. Default is dry-run, so an approval in the public demo never mutates the
@@ -615,6 +617,7 @@ def _unblock(body: dict) -> dict:
     return core.unblock_ip(body or {})
 
 
+@_guarded(_GATE_APP, "sentinel.triage")
 def _triage(body: dict) -> dict:
     """Summarize the current alerts/decisions over the real CrowdSec core, with the
     optional LLM narration blurb (core stays context-runtime-free)."""
@@ -1113,24 +1116,26 @@ if _AgentConsole is not None:
                     parameters={"type": "object", "properties": {"scenario": {"type": "string", "description": "a scenario name from the live feed to explain"}}}),
             _crtool("ban_ip", "block an IP at the edge for a duration (destructive — staged for human approval)", _t_ban_ip, side_effecting=True,
                     parameters={"type": "object", "properties": {"ip": {"type": "string"}, "duration": {"type": "string", "description": "e.g. 4h, 24h"}}}),
-            # supply-chain (pre-deploy) tools — read-only inspection, run ungated
+            # supply-chain (pre-deploy) tools. The launchers (supply_chain_scan, list_vulnerabilities, scan_app, scan_apps, sbom, malware_scan) start
+            # processes / scans, so they are registered side_effecting=True (classified `write`): the approval policy applies in addition to the
+            # write grant. list_scannable_apps, scanner_status, explain_vulnerability only read.
             _crtool("supply_chain_scan", "scan our own software supply chain (dependencies, images, IaC, secrets) for known vulnerabilities before deployment", _sc_scan,
-                    parameters={"type": "object", "properties": {"target": {"type": "string", "description": "path or image to scan (default: the stack's dependencies)"}}}),
-            _crtool("list_vulnerabilities", "list the CVEs found in the last supply-chain scan, worst first, each with the version that fixes it", _sc_list),
+                    parameters={"type": "object", "properties": {"target": {"type": "string", "description": "path or image to scan (default: the stack's dependencies)"}}}, side_effecting=True),
+            _crtool("list_vulnerabilities", "list the CVEs found in the last supply-chain scan, worst first, each with the version that fixes it", _sc_list, side_effecting=True),
             _crtool("explain_vulnerability", "explain a specific CVE from the last scan and the patched version to move to", _sc_explain,
                     parameters={"type": "object", "properties": {"id": {"type": "string", "description": "a CVE id from the scan"}}}),
             _crtool("scan_app", "scan a SPECIFIC agentic app's container image for open-source (CVE) vulnerabilities and suggest the fixes to apply", _t_scan_app,
-                    parameters={"type": "object", "properties": {"app": {"type": "string", "description": "the app to scan, e.g. billing, compliance, market-radar, books"}}}),
+                    parameters={"type": "object", "properties": {"app": {"type": "string", "description": "the app to scan, e.g. billing, compliance, market-radar, books"}}}, side_effecting=True),
             _crtool("scan_apps", "scan MANY agentic apps/containers at once for open-source (CVE) vulnerabilities and roll up the results — optionally filtered to ONE package ecosystem (npm, pypi, maven, go, os). Use this for 'scan all apps', 'which apps have npm modules/CVEs', 'scan the npm apps'.", _t_scan_apps,
                     parameters={"type": "object", "properties": {
                         "ecosystem": {"type": "string", "description": "restrict findings to one ecosystem: npm | pypi | maven | go | os (optional)"},
                         "apps": {"type": "string", "description": "comma-separated app names to scan (optional; default: all agentic apps)"},
-                        "limit": {"type": "integer", "description": "max apps to scan in one call (default 8)"}}}),
+                        "limit": {"type": "integer", "description": "max apps to scan in one call (default 8)"}}}, side_effecting=True),
             _crtool("list_scannable_apps", "list every agentic app + core container whose open-source dependencies can be scanned", _t_list_apps),
             _crtool("vuln_db_lookup", "look up a package or CVE in our own NVD/OSV vulnerability database (advisories + patched versions)", _t_vuln_lookup,
                     parameters={"type": "object", "properties": {"package": {"type": "string"}, "cve": {"type": "string", "description": "a CVE id"}}}),
             _crtool("vuln_db_permissions", "demonstrate the vuln-DB access policy: the same query returns different rows/columns per principal (row scope + column masking)", _t_vuln_db_permissions),
-            _crtool("sbom", "generate the software bill of materials (component inventory) for the stack", _sc_sbom),
+            _crtool("sbom", "generate the software bill of materials (component inventory) for the stack", _sc_sbom, side_effecting=True),
             _crtool("scanner_status", "which supply-chain scanners are installed (trivy/syft/cosign) and the last scan result", _sc_status),
             # runtime-DAST (post-deploy) tools — scan a LIVE deployment via the deploy-scan service
             _crtool("scan_deployment", "actively scan a RUNNING deployment (host or URL) for exploitable exposure with nmap/nuclei/ZAP — the RUNTIME half of security, complementing the supply-chain scan. Destructive: sends probe traffic, so it is staged for human approval. profile: recon (nmap surface) | web-baseline (nuclei + ZAP passive) | web-active (ZAP attack traffic) | full", deploy_scan.scan, side_effecting=True,
@@ -1143,7 +1148,7 @@ if _AgentConsole is not None:
                     parameters={"type": "object", "properties": {"job_id": {"type": "string"}}}),
             # runtime data plane
             _crtool("malware_scan", "scan the stack's files for malware/viruses with ClamAV", _t_malware_scan,
-                    parameters={"type": "object", "properties": {"path": {"type": "string", "description": "path to scan (default: the whole stack)"}}}),
+                    parameters={"type": "object", "properties": {"path": {"type": "string", "description": "path to scan (default: the whole stack)"}}}, side_effecting=True),
             _crtool("wazuh_status", "report the Wazuh SIEM/XDR hub — connected agents and what it monitors (malware, compliance, FIM, vulns)", _t_wazuh_status),
             # network access plane (NetBird / zero-trust) — the "who can reach what" half
             _crtool("network_access_review", "review zero-trust network access (NetBird): peers, groups and policies, flagging over-broad All-to-All access that breaks least-privilege", netbird.access_review),
@@ -1166,8 +1171,8 @@ else:
 @app.get("/health")
 def health() -> dict:
     sh = live.state_health()
-    return {"status": "ok" if sh["ok"] else "degraded", "core": "crowdsec", "connected": crowdsec_connected(),
-            "state": sh}
+    return _with_authorization(_GATE_APP, {"status": "ok" if sh["ok"] else "degraded", "core": "crowdsec", "connected": crowdsec_connected(),
+            "state": sh})
 
 
 @app.post("/api/agent", dependencies=[Depends(ratelimit.rate_limit)])
@@ -1183,12 +1188,16 @@ async def api_agent(request: Request) -> JSONResponse:
 
 @app.get("/api/activity")
 def activity() -> JSONResponse:
+    if (_r := _deny_response(_GATE_APP, "threat_summary")):
+        return _r
     return JSONResponse(fetch_activity())
 
 
 @app.post("/api/permissions/query", dependencies=[Depends(ratelimit.rate_limit)])
 async def permissions_query(request: Request) -> JSONResponse:
     """Run the vuln query as full-access (left) and the posted scoped grant (right)."""
+    if (_r := _deny_response(_GATE_APP, "vuln_db_permissions")):
+        return _r
     try:
         body = _strip_approval(await request.json())
     except Exception:  # noqa: BLE001
@@ -1198,28 +1207,38 @@ async def permissions_query(request: Request) -> JSONResponse:
 
 @app.get("/api/permissions/ui", response_class=HTMLResponse)
 def permissions_ui_page() -> str:
+    if (_r := _deny_response(_GATE_APP, "vuln_db_permissions")):
+        return _r
     return permissions_ui.PERM_PAGE
 
 
 @app.get("/api/network/review")
 def network_review() -> JSONResponse:
     """Zero-trust network access review over NetBird (live when configured, else sample)."""
+    if (_r := _deny_response(_GATE_APP, "network_access_review")):
+        return _r
     return JSONResponse(netbird.access_review({})["data"])
 
 
 @app.get("/api/network/ui", response_class=HTMLResponse)
 def network_ui() -> str:
+    if (_r := _deny_response(_GATE_APP, "network_access_review")):
+        return _r
     return netbird.panel()
 
 
 @app.get("/api/backups/status")
 def backups_status() -> JSONResponse:
     """Backup coverage over Portabase (live when configured, else sample)."""
+    if (_r := _deny_response(_GATE_APP, "backup_status")):
+        return _r
     return JSONResponse(portabase.backup_status({})["data"])
 
 
 @app.get("/api/backups/ui", response_class=HTMLResponse)
 def backups_ui() -> str:
+    if (_r := _deny_response(_GATE_APP, "backup_status")):
+        return _r
     return portabase.panel()
 
 
@@ -1227,6 +1246,8 @@ def backups_ui() -> str:
 def api_cases() -> JSONResponse:
     """List live investigation cases, worst severity first. Syncs the latest CrowdSec alerts into cases first
     (idempotent), so the list reflects real detections — never a canned scenario."""
+    if (_r := _deny_response(_GATE_APP, "threat_summary")):
+        return _r
     live.sync_cases()
     return JSONResponse({"cases": live.case_summaries()})
 
@@ -1235,6 +1256,8 @@ def api_cases() -> JSONResponse:
 def api_case(case_id: str) -> JSONResponse:
     """Full resolved bundle for one case (evidence/observations/findings/actions/decisions/receipts) plus
     the replay proof that the case id is reproducible from its immutable evidence."""
+    if (_r := _deny_response(_GATE_APP, "threat_summary")):
+        return _r
     detail = live.case_detail(case_id)
     if detail is None:
         return JSONResponse({"error": f"unknown case '{case_id}'"}, status_code=404)
@@ -1255,6 +1278,8 @@ async def api_case_respond(case_id: str, request: Request) -> JSONResponse:
     """DEMO-FACING decision — OPEN, no auth, NO edge effect. Reject records the rejection and stops; approve
     stages the action as APPROVED (awaiting the authenticated execute step). The edge is never touched here —
     the real kick-off is POST /api/cases/{id}/execute, which is operator-authenticated."""
+    if (_r := _deny_response(_GATE_APP, "ban_ip")):
+        return _r
     try:
         body = _strip_approval(await request.json())
     except Exception:  # noqa: BLE001
@@ -1284,6 +1309,8 @@ async def api_case_execute(case_id: str, request: Request,
     """AUTHENTICATED execution — the real kick-off. HTTP-Basic operator gate (503 if unconfigured, 401 if not
     authenticated). Only an already-APPROVED action runs; dry-run unless SENTINEL_BLOCK_ENABLED, so the public
     demo never mutates the live edge by default. Returns the receipt (execution proof) + a distinct verification."""
+    if (_r := _deny_response(_GATE_APP, "ban_ip")):
+        return _r
     try:
         body = _strip_approval(await request.json())
     except Exception:  # noqa: BLE001
@@ -1311,6 +1338,8 @@ _CR_BANNER = """<div style="position:sticky;top:0;z-index:9998;background:linear
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
+    if (_r := _deny_response(_GATE_APP, "threat_summary")):
+        return _r
     import re as _cr_re
     page = render(fetch_activity())
     blocks = ""
@@ -1337,6 +1366,10 @@ async def agent_run(request: Request) -> JSONResponse:
     except Exception:
         body = {}
     action = (body or {}).get("action", "")
+    _tool = {"block_ip": "ban_ip", "approve_block": "ban_ip", "triage": "sentinel.triage", "propose_network_policy": "propose_network_policy",
+             "approve_network_policy": "propose_network_policy"}.get(action) if isinstance(action, str) else None
+    if _tool and (_r := _deny_response(_GATE_APP, _tool)):                          # authorise where the tool body runs (also before the operator Basic check)
+        return _r
 
     # Real kick-off actions are operator-authenticated (HTTP Basic); propose/block-stage/triage stay open.
     if action in ("approve_block", "approve_network_policy"):
@@ -1374,6 +1407,10 @@ async def agent_run(request: Request) -> JSONResponse:
 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
+
+    from agentic_os.app_gate import require_explicit_setting_when_exposed as _exposed
+
+    _exposed("0.0.0.0")   # a reachable bind needs an explicit permissions setting
 
     uvicorn.run(app, host="0.0.0.0", port=PORT)
 

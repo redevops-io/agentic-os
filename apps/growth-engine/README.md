@@ -108,7 +108,7 @@ python3 -m uvicorn app:app --host 0.0.0.0 --port 8205
 
 # Or with Docker (point UMAMI_URL at the Umami service, not localhost):
 docker build -t agentic-growth-engine .
-docker run --rm -p 8205:8205 \
+docker run -e AGENTIC_OS_PERMISSIONS=off --rm -p 8205:8205 \
   -e UMAMI_URL=http://host.docker.internal:3002 \
   -e WEBSITE_ID=<id from .env> \
   -e UMAMI_FRONT_URL=http://localhost:3002 \
@@ -144,3 +144,7 @@ docker run --rm -p 8205:8205 \
   - `"reallocate_budget"` `{from,to,amount}` → **approval-gated** (the module declares
     `approval_required:[budget_change]`). Returns `{"status":"pending_approval", ...}` and
     does **not** execute — actual ad spend lives in the external Ads platform (Google/Meta).
+
+## Authorization note
+
+Note: basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write. See `docs/PERMISSIONS_MIGRATION.md` section 29.

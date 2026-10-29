@@ -21,7 +21,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from .contracts import ApprovalPolicy, CapabilityKind, CapabilityManifest, DataClass, RiskTier
-from .registry import CapabilityRegistry, HandlerResult
+from .registry import CapabilityRegistry, HandlerResult, client_safe_error
 
 
 def echo_capability(inputs: dict) -> dict:
@@ -71,7 +71,7 @@ def register_sandbox_capability(registry: CapabilityRegistry, sandbox: Optional[
             result = sbx.invoke("agent-gateway", target, dict(args.get("inputs") or {}),
                                 req.intent_hash(), isolation=isolation)
         except Exception as exc:              # ContainmentError / import failure / policy violation
-            return HandlerResult(ok=False, error=str(exc))
+            return HandlerResult(ok=False, error=client_safe_error(exc, where="sandbox.execute", request_id=req.request_id))
         out = result if isinstance(result, dict) else {"result": result}
         return HandlerResult(ok=True, output=out, data_classes=(DataClass.INTERNAL,))
 

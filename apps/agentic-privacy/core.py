@@ -236,7 +236,11 @@ def _send_email(to: str, subject: str, body_html: str) -> str:
     """Send via Postmark, then SMTP. Returns the delivery channel: "postmark" | "smtp" | "undeliverable".
 
     "undeliverable" means NO channel delivered the message (none configured, or every configured one failed).
-    There is deliberately no log-only fallback that hands the token to the caller."""
+    There is deliberately no log-only fallback that hands the token to the caller.
+
+    The recipient must be ONE plain mailbox (DR-01): a list, a display name, a CR/LF or any control character is refused, so no caller-chosen recipient list, Bcc or header can ride in."""
+    if not valid_public_email(to):
+        return "undeliverable"
     if POSTMARK_TOKEN:
         try:
             r = httpx.post("https://api.postmarkapp.com/email",
@@ -267,13 +271,25 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def _link_root(base: str) -> str:
+    """The root of the link in a verification e-mail: the configured ``PRIVACY_PUBLIC_URL``. The request's own base URL is derived from the Host header, which a caller chooses, so it is used ONLY for a
+    loopback host (local development); otherwise there is no root and no message is sent (DR-01)."""
+    if PRIVACY_PUBLIC_URL:
+        return PRIVACY_PUBLIC_URL
+    host = (urllib.parse.urlparse(base or "").hostname or "").lower()
+    return base.rstrip("/") if host in ("localhost", "127.0.0.1", "::1") else ""
+
+
 def _verify_link(req_id: str, token: str, base: str) -> str:
-    root = PRIVACY_PUBLIC_URL or base.rstrip("/")
+    root = _link_root(base)
     return f"{root}/verify?id={urllib.parse.quote(req_id)}&token={urllib.parse.quote(token)}"
 
 
 def _send_verification(req_id: str, email: str, rtype: str, base: str) -> tuple[str, str, str]:
     token = secrets.token_urlsafe(24)
+    if not _link_root(base):
+        _log.warning("agentic-privacy: no verification e-mail sent: PRIVACY_PUBLIC_URL is not set and the request's host is not a loopback host (a Host header must not choose the link)")
+        return token, "undeliverable", ""
     link = _verify_link(req_id, token, base)
     label = {"access": "access your data", "delete": "delete your data",
              "opt_out": "opt out of sale/sharing", "correct": "correct your data"}.get(rtype, "process your request")
@@ -761,6 +777,87 @@ def intake(email: str, rtype: str = "access", base_url: str = "") -> dict:
         resp["verify_url"] = link
         resp["dev_note"] = "PRIVACY_DEV_MODE: verification link returned for local testing only."
     return resp
+
+
+# --- the public intake exception (DR-01) --------------------------------------
+import re as _re
+
+_PUBLIC_EMAIL = _re.compile(r"^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+PUBLIC_REQUEST_TYPES = {"access": "access", "know": "access", "delete": "delete", "erase": "delete", "opt_out": "opt_out", "opt-out": "opt_out", "do_not_sell": "opt_out", "correct": "correct"}
+
+
+def valid_public_email(value) -> bool:
+    """ONE plain ASCII mailbox: no list, display name, comment, whitespace, control or format character, no IP literal, a dotted domain; at most 254 characters, 64 before the @."""
+    if not isinstance(value, str) or not (3 <= len(value) <= 254) or not value.isascii() or not value.isprintable():
+        return False
+    local = value.rpartition("@")[0]
+    return len(local) <= 64 and bool(_PUBLIC_EMAIL.match(value))
+
+
+class PublicIntakeBusy(RuntimeError):
+    """The pending backlog is full: refuse rather than push real requests out of the store."""
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return max(0, int(os.environ.get(name, default)))
+    except ValueError:
+        return default
+
+
+def _purge_unverified() -> int:
+    """Minimal retention: an unverified request older than ``PRIVACY_UNVERIFIED_RETENTION_HOURS`` (default 72) is deleted; verified and fulfilled requests are never touched here."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=_int_env("PRIVACY_UNVERIFIED_RETENTION_HOURS", 72))
+
+    def stale(r):
+        if r.get("verified") or r.get("status") != "awaiting_verification":
+            return False
+        try:
+            return datetime.fromisoformat(r.get("created_at", "")) < cutoff
+        except Exception:  # noqa: BLE001
+            return False
+    with _store_mutation():
+        reqs = _load_requests()
+        keep = [r for r in reqs if not stale(r)]
+        if len(keep) != len(reqs):
+            _save_requests(keep)
+        return len(reqs) - len(keep)
+
+
+def public_intake(ticket, email: str, rtype: str, base_url: str = "") -> dict:
+    """The ONLY thing a public submission may do: open a PENDING request and send one verification e-mail to the address typed. It needs a ticket minted for a registered public route
+    (``app_gate.public_intake``), looks up no customer record, returns no data and changes or deletes nothing. The response is the same whoever the address belongs to and echoes nothing."""
+    from agentic_os.app_gate import is_public_intake
+    if not is_public_intake(ticket, "agentic-privacy", "privacy.intake"):
+        raise PermissionError("public intake needs a ticket for a registered public route")
+    email = _norm(email)
+    rtype = PUBLIC_REQUEST_TYPES.get(rtype)
+    if rtype is None or not valid_public_email(email):
+        return {"status": "error", "error": "a valid email address and request type are required"}
+    _purge_unverified()
+    if sum(1 for r in _load_requests() if r.get("status") == "awaiting_verification") >= _int_env("PRIVACY_PENDING_MAX", 200):
+        raise PublicIntakeBusy("too many pending requests")
+    req_id = _new_dsar_id()
+    now = datetime.now(timezone.utc)
+    token, channel, link = _send_verification(req_id, email, rtype, base_url)
+    rec = {"id": req_id, "type": rtype, "email": email, "verified": False,
+           "verify_token_hash": _hash_token(token), "verify_expires_at": _secs_from_now(VERIFY_TTL_SECONDS),
+           "created_at": now.isoformat(), "due_at": (now + timedelta(days=SLA_DAYS)).isoformat(),
+           "status": "awaiting_verification", "source": "public_intake", "delivery": channel}
+    _audit({"req": req_id, "type": "public_intake", "route": f"{ticket.method} {ticket.path}", "email_masked": _mask(email), "request_type": rtype, "verification": channel})
+    _persist(rec)
+    _log.info("agentic-privacy: public intake %s (%s) from %s, verification %s", req_id, rtype, _mask(email), channel)
+    resp = {"status": "received", "request_id": req_id, "type": rtype, "delivery": channel, "message": public_intake_message(channel)}
+    if DEV_MODE:
+        resp["verify_url"] = link
+        resp["dev_note"] = "PRIVACY_DEV_MODE: verification link returned for local testing only."
+    return resp
+
+
+def public_intake_message(channel: str) -> str:
+    if channel == "undeliverable":
+        return ("Request received, but we could not send the verification email. It stays pending until identity is verified; contact the privacy team.")
+    return f"Request received. A verification link is on its way to the address you entered; we respond within {SLA_DAYS} days of verification."
 
 
 def verify_request(req_id: str, token: str) -> dict:

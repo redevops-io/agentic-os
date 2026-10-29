@@ -48,3 +48,12 @@ def _operator_invoke_open_for_legacy_tests(monkeypatch):
     # The default behaviour has its own tests (tests/test_invoke_approval_required.py) which clear it.
     monkeypatch.setenv("AGENTIC_OS_ALLOW_UNAPPROVED_INVOKE", "1")
     yield
+
+
+@pytest.fixture(autouse=True)
+def _app_gate_state_is_per_test(monkeypatch):
+    """The gate registries are process-global (an app registers its gate at import). A test that installs one must not leak it into the next test."""
+    from agentic_os import app_gate
+    app_gate.reset_state()
+    yield
+    app_gate.reset_state()

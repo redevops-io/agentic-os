@@ -94,7 +94,7 @@ python3 -m uvicorn app:app --host 0.0.0.0 --port 8204
 
 # Or with Docker (point CD_API_URL at the changedetection service, not localhost):
 docker build -t agentic-market-radar .
-docker run --rm -p 8204:8204 \
+docker run -e AGENTIC_OS_PERMISSIONS=off --rm -p 8204:8204 \
   -e CD_API_URL=http://host.docker.internal:5001 \
   -e CD_API_KEY=<token from .env> \
   -e CD_FRONT_URL=http://localhost:5001 \
@@ -129,3 +129,7 @@ docker run --rm -p 8204:8204 \
   - `"brief"` → reads the watch list + each watch's history
     (`GET /api/v1/watch/{uuid}/history`) and summarizes recent changes. Read-only →
     no approval. Adds an LLM brief if `ANTHROPIC_API_KEY` is set (guarded).
+
+## Authorization note
+
+Note: basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write. See `docs/PERMISSIONS_MIGRATION.md` section 29.

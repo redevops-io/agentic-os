@@ -33,13 +33,12 @@ import html
 import os
 
 # ── enterprise permissions plane — gate tool/data access by (app, user) ──
-# No-op without the context_runtime_enterprise package or CR_PERMISSIONS=1 (open-core default).
-try:
-    from context_runtime_enterprise.apps import bootstrap as _cr_bootstrap
-    _req_principal = _cr_bootstrap("books")
-except Exception:  # noqa: BLE001
-    def _req_principal(request=None):
-        return None
+# Basic default without the enterprise package and without CR_PERMISSIONS / CR_IDENTITY_*; if either is set and the gate cannot
+# be installed, agentic_os.app_gate refuses to start the app (it never runs ungated by accident).
+from agentic_os.app_gate import RequestContext as _RequestContext, denial_result as _denial_result, deny_response as _deny_response, guarded as _guarded, install_gate as _install_gate
+from agentic_os.app_gate import with_authorization as _with_authorization
+_GATE_APP = "books"
+_req_principal = _install_gate(_GATE_APP)   # starts gated or not at all when permissions were requested (RR-01)
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -77,6 +76,7 @@ app = FastAPI(title="agentic-books (Meridian Wealth Management · core: ERPNext)
 from agentic_os.app_kit import route_authz as _route_authz  # noqa: E402
 from .route_policy import APP as _APP, ROUTE_POLICIES as _ROUTE_POLICIES  # noqa: E402
 _route_authz.install(app, _APP, _ROUTE_POLICIES)   # one enforcement layer for every write route
+app.add_middleware(_RequestContext)   # the active gate (basic or enterprise) sees THIS request's principal in every route
 
 
 # --- MD3 styling (BASE_CSS reused verbatim from deploy/module_service.py) -----
@@ -382,26 +382,31 @@ def _with_approval(body: dict, approval) -> dict:
 
 # --- agentic actions (thin wrappers over core; the approval gate lives IN core) ---
 # ``approval`` is None for every caller except a route that proved operator Basic auth (see gate.py).
+@_guarded(_GATE_APP, "books.categorize")
 def _categorize(approval=None) -> dict:
     """Categorize the next uncategorized bank transaction (staged preview unless approved)."""
     return core.categorize(blurb=_llm_blurb, approval=approval)
 
 
+@_guarded(_GATE_APP, "books.reconcile")
 def _reconcile() -> dict:
     """Stage a deposit↔invoice match (bank reconciliation, read-only), with optional narration."""
     return core.reconcile(blurb=_llm_blurb)
 
 
+@_guarded(_GATE_APP, "books.close")
 def _close(approval=None) -> dict:
     """Month-end close -- staged unless approved; an ERPNext outage returns a structured error."""
     return core.close({"_approval": approval} if approval else {}, blurb=_llm_blurb)
 
 
+@_guarded(_GATE_APP, "books.record_revenue")
 def _record_revenue(body: dict, approval=None) -> dict:
     """Onboarding: record subscription revenue as a real ERPNext Journal Entry (staged unless approved)."""
     return core.record_revenue(_with_approval(body, approval))
 
 
+@_guarded(_GATE_APP, "books.reverse_entry")
 def _reverse_entry(body: dict, approval=None) -> dict:
     """Compensating saga undo: cancel the revenue Journal Entry (staged unless approved)."""
     return core.reverse_entry(_with_approval(body, approval))
@@ -512,7 +517,7 @@ _BOOKS_CONSOLE = _Assistant(
 # --- routes ------------------------------------------------------------------
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "core": "erpnext", "connected": erpnext_connected()}
+    return _with_authorization(_GATE_APP, {"status": "ok", "core": "erpnext", "connected": erpnext_connected()})
 
 
 @app.post("/api/agent")
@@ -526,11 +531,15 @@ async def api_agent(request: Request) -> JSONResponse:
 
 @app.get("/api/activity")
 def activity() -> JSONResponse:
+    if (_r := _deny_response(_GATE_APP, "financials_summary")):
+        return _r
     return JSONResponse(fetch_activity())
 
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
+    if (_r := _deny_response(_GATE_APP, "financials_summary")):
+        return _r
     page = render(fetch_activity())
     if _BOOKS_CONSOLE is not None:
         panel = "<section class='shell' style='margin-top:var(--sp-4)'>" + _BOOKS_CONSOLE.panel_html("books") + "</section>"
@@ -546,6 +555,9 @@ async def agent_run(request: Request) -> JSONResponse:
         body = {}
     action = (body or {}).get("action", "")
     handler = ACTIONS.get(action) if isinstance(action, str) else None
+    _tool = {"categorize": "books.categorize", "reconcile": "books.reconcile", "close": "books.close", "record_revenue": "books.record_revenue", "reverse_entry": "books.reverse_entry"}.get(action) if isinstance(action, str) else None
+    if handler is not None and _tool is not None and (_r := _deny_response(_GATE_APP, _tool)):      # authorise where the tool body runs
+        return _r
     if handler is None:
         return JSONResponse(
             {"status": "error", "error": f"unknown action '{action}'", "supported": sorted(ACTIONS),
@@ -558,6 +570,10 @@ async def agent_run(request: Request) -> JSONResponse:
 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
+
+    from agentic_os.app_gate import require_explicit_setting_when_exposed as _exposed
+
+    _exposed("0.0.0.0")   # a reachable bind needs an explicit permissions setting
 
     uvicorn.run(app, host="0.0.0.0", port=PORT)
 

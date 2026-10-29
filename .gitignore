@@ -23,3 +23,8 @@ deploy/launcher/src-tauri/icons/64x64.png
 
 # Projects UI: fetched at wheel build from the pinned redevops-projects release (packaging/projects_ui.lock.json)
 agentic_os/projects_ui/
+# grant-store key material (see `make permissions-key`): never commit
+permissions.env
+*.permissions.env
+.permissions.key
+.local/

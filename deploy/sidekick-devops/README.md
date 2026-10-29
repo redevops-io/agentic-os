@@ -26,6 +26,7 @@ docker compose up             # builds Sidekick, starts Prometheus + Grafana + L
 | `apps/infra` operator (from the kernel) | deploy · provision · configure · verify · drift · destroy · rollback, each a gated capability |
 | `skills/` | `deployment-aws` · `deployment-azure` · `deployment-gcp` · `deployment-digitalocean` · `deployment-proxmox` · `deployment-skypilot` · `deployment-preflight` · `deployment-audit` · `deployment-observability` · `deployment-stack-selection` |
 | `mcp_reads.py` | read-only ops reads — cluster usage (metrics-server / kubectl), Prometheus (PromQL), Loki (LogQL) |
+| `mcp_server.py` | the preflight MCP tool. **stdio by default**; `MCP_TRANSPORT=http` needs `MCP_BEARER_TOKEN` (24+ characters, `Authorization: Bearer`; the process refuses to start without it), binds `127.0.0.1` unless `BIND_HOST` is set, and uses the host's ambient AWS credentials only with `SIDEKICK_MCP_ALLOW_AWS=1` |
 | `monitor.py` | the standing monitor loop — watches live signals, spawns governed response missions |
 | `observability/` | Prometheus + Grafana (datasources) + Loki + Promtail configs |
 

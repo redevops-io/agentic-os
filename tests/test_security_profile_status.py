@@ -33,13 +33,17 @@ def test_startup_announcement_is_loud_in_development_and_once_per_component(monk
     assert len(warned) == 2 and "svc-a" in warned[0].getMessage() and "not enforced" in warned[0].getMessage()
 
 
-def test_control_plane_health_exposes_the_security_posture(monkeypatch, tmp_path):
+def test_control_plane_health_shows_the_security_posture_only_to_a_credentialed_caller(monkeypatch, tmp_path):
     monkeypatch.setenv("PERMISSIONS_DIR", str(tmp_path / "perm"))      # the module creates these at import
     monkeypatch.setenv("AGENTIC_OS_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("AGENTIC_OS_API_KEY", "fleet-key-DO-NOT-STORE")
     from fastapi.testclient import TestClient
     from agentic_os import control_plane
     monkeypatch.setenv("AGENTIC_OS_PROFILE", "development")
-    body = TestClient(control_plane.app).get("/health").json()
+    client = TestClient(control_plane.app)
+    anonymous = client.get("/health").json()
+    assert set(anonymous) == {"status", "modules"} and anonymous["status"] == "ok"            # liveness only: no posture for an anonymous caller
+    body = client.get("/health", headers={"X-API-Key": "fleet-key-DO-NOT-STORE"}).json()
     assert body["status"] == "ok" and body["security"]["profile"] == "development" and body["security"]["ok"] is False
 
 

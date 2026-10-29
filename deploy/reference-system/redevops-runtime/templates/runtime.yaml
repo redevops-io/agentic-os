@@ -43,6 +43,14 @@ spec:
               containerPort: {{ .Values.runtime.grpc.port }}
             {{- end }}
           env:
+            # grant-store key from an external Secret; the chart refuses to render without one (no default, no literal)
+            - name: PERMISSIONS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "permissions.keySecret is required: create the Secret first (agentic-os permissions key --env-file permissions.env --k8s-secret NAME) and set permissions.keySecret=NAME" .Values.permissions.keySecret | quote }}
+                  key: PERMISSIONS_KEY
+            - name: PERMISSIONS_DIR
+              value: /var/lib/redevops/ledger/permissions
             - name: RDO_PGVECTOR_DSN
               value: {{ include "rr.pgvectorDsn" . | quote }}
             {{- if .Values.model.apiKeySecret }}

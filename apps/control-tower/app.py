@@ -73,11 +73,19 @@ def _strip_approval(obj):
     return obj
 
 
+# ── permissions: basic (AGPL) permissions or the enterprise plane; the app starts gated or not at all (agentic_os/app_gate.py). Every route that
+# EXECUTES a tool asks the gate first (authorisation), separately from the approval the core stages for consequential actions.
+from agentic_os.app_gate import RequestContext as _RequestContext, denial_result as _denial_result, deny_response as _deny_response, install_gate as _install_gate  # noqa: E402
+from agentic_os.app_gate import with_authorization as _with_authorization
+_GATE_APP = "control-tower"
+_req_principal = _install_gate(_GATE_APP)
+
 app = FastAPI(title="agentic-control-tower (Meridian Wealth Management · core: Metabase)")
 
 from agentic_os.app_kit import route_authz as _route_authz  # noqa: E402
 from .route_policy import APP as _APP, ROUTE_POLICIES as _ROUTE_POLICIES  # noqa: E402
 _route_authz.install(app, _APP, _ROUTE_POLICIES)   # one enforcement layer for every write route
+app.add_middleware(_RequestContext)   # the active gate (basic or enterprise) sees THIS request's principal in every route
 
 
 # --- MD3 styling (BASE_CSS reused verbatim from deploy/module_service.py) ------
@@ -446,11 +454,13 @@ def _refresh() -> dict:
 # --- routes -------------------------------------------------------------------
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "core": "metabase", "connected": metabase_connected()}
+    return _with_authorization(_GATE_APP, {"status": "ok", "core": "metabase", "connected": metabase_connected()})
 
 
 @app.get("/api/activity")
 def activity() -> JSONResponse:
+    if (_r := _deny_response(_GATE_APP, "bi.summary")):
+        return _r
     return JSONResponse(fetch_activity())
 
 
@@ -459,6 +469,8 @@ def api_ask(q: str = "") -> JSONResponse:
     """Live chatbox: a natural-language question -> routed template -> REAL Metabase query ->
     a viz-ready result (chart hint + rows). Under /api/ so the demo control-plane proxies it;
     read-only (only pre-written template SQL runs)."""
+    if (_r := _deny_response(_GATE_APP, "bi.ask")):
+        return _r
     q = (q or "").strip()
     if not q:
         return JSONResponse({"status": "empty", "answer": "Ask a question about the business.",
@@ -482,6 +494,8 @@ _CR_BANNER = """<div style="position:sticky;top:0;z-index:9998;background:linear
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
+    if (_r := _deny_response(_GATE_APP, "bi.summary")):
+        return _r
     import re as _cr_re
     page = render(fetch_activity())
     page = _cr_re.sub(r"(<body[^>]*>)", lambda m: m.group(1) + _CR_BANNER, page, count=1)
@@ -499,8 +513,12 @@ async def agent_run(request: Request) -> JSONResponse:
     action = (body or {}).get("action", "")
 
     if action == "ask":
+        if (_r := _deny_response(_GATE_APP, "bi.ask")):
+            return _r
         return JSONResponse(_ask((body or {}).get("question", "")))
     if action == "refresh":
+        if (_r := _deny_response(_GATE_APP, "bi.refresh")):
+            return _r
         out = _refresh()
         return JSONResponse(out, status_code=503 if out.get("status") == "error" else 200)
     return JSONResponse(
@@ -512,6 +530,10 @@ async def agent_run(request: Request) -> JSONResponse:
 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
+
+    from agentic_os.app_gate import require_explicit_setting_when_exposed as _exposed
+
+    _exposed("0.0.0.0")   # a reachable bind needs an explicit permissions setting
 
     uvicorn.run(app, host="0.0.0.0", port=PORT)
 

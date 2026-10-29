@@ -7,12 +7,68 @@ invoked (plan §13 Phase-1 acceptance, §18 non-goals) lives here and in the pip
 """
 from __future__ import annotations
 
+import logging
+import re
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Protocol, Tuple
 
 from agentic_os.overlays import Principal, identity_provider
 
 from .contracts import CapabilityManifest, GatewayPrincipal, GatewayRequest
+
+
+_log = logging.getLogger("agentic_os.agent_gateway")
+
+#: The ONLY codes an external caller can receive for an exception. A code is never parsed out of an arbitrary message: an exception maps to one of
+#: these when its message starts with one (the sandbox and posture layers raise exactly these), or when it names one in a ``public_code`` attribute.
+PUBLIC_ERROR_CODES = frozenset({
+    "capability_error",                 # the default: a handler or port raised and nothing more is said
+    "gateway_error",                    # a gateway seam (authority, budget, approvals, egress, audit, authorizer) itself raised
+    "duration_exceeded",
+    "memory_ceiling_unenforceable",
+    "execution_class_denied",
+})
+_CONTAINED_FAILURE = re.compile(r"contained_failure\(rc=-?\d{1,4}\)")          # the sandbox's exit-status code; its stderr is never part of it
+_LOG_TEXT_MAX = 4000
+
+
+def _neutralise(text: str) -> str:
+    """Escape control characters (newlines included) so exception text cannot start a new log line, and bound its size."""
+    out = []
+    for ch in text[:_LOG_TEXT_MAX]:
+        o = ord(ch)
+        out.append(f"\\x{o:02x}" if o < 32 or o in (127, 0x85, 0x2028, 0x2029) else ch)
+    return "".join(out) + ("...[truncated]" if len(text) > _LOG_TEXT_MAX else "")
+
+
+def _public_code(exc: BaseException, default: str) -> str:
+    named = getattr(exc, "public_code", None)
+    if isinstance(named, str) and named in PUBLIC_ERROR_CODES:
+        return named
+    try:
+        token = str(exc).strip().split(":", 1)[0].strip()
+    except Exception:  # noqa: BLE001 - a hostile __str__ must not break the error path
+        return default
+    if token in PUBLIC_ERROR_CODES or _CONTAINED_FAILURE.fullmatch(token):
+        return token
+    return default
+
+
+def client_safe_error(exc: BaseException, *, where: str = "", request_id: str = "", default: str = "capability_error") -> str:
+    """The only part of an exception an external caller may see: a code from the fixed set ``PUBLIC_ERROR_CODES`` (or
+    ``contained_failure(rc=N)``), otherwise ``default``. The code is chosen from the allow-list, never copied out of the message.
+
+    The full exception, with its traceback, goes to the server log (logger ``agentic_os.agent_gateway``, WARNING), together with the
+    capability and the request id the caller also receives, so a report can be matched to a log line. The log therefore holds the raw
+    exception text by design: treat it as sensitive. Control characters are escaped so the text cannot forge a log line."""
+    try:
+        import traceback as _tb
+        detail = "".join(_tb.format_exception(type(exc), exc, exc.__traceback__))
+    except Exception:  # noqa: BLE001
+        detail = type(exc).__name__
+    _log.warning("capability %s raised %s (request %s): %s", _neutralise(where or "?"), type(exc).__name__, _neutralise(request_id or "?"),
+                 _neutralise(detail))
+    return _public_code(exc, default)
 
 
 @dataclass(frozen=True)

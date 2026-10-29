@@ -37,3 +37,7 @@ Assemblable free sources: GitHub API, Apollo free (50/mo), Crunchbase free searc
 Companies House, job-board / news scraping.
 
 Seed demo data: `python seed.py` (writes `.env` too). Run: `uvicorn app:app --port 8210`.
+
+## Authorization note
+
+Note: basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write. See `docs/PERMISSIONS_MIGRATION.md` section 29.

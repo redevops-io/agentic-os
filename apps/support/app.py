@@ -37,13 +37,12 @@ import html
 import os
 
 # ── enterprise permissions plane — gate tool/data access by (app, user) ──
-# No-op without the context_runtime_enterprise package or CR_PERMISSIONS=1 (open-core default).
-try:
-    from context_runtime_enterprise.apps import bootstrap as _cr_bootstrap
-    _req_principal = _cr_bootstrap("support")
-except Exception:  # noqa: BLE001
-    def _req_principal(request=None):
-        return None
+# Basic default without the enterprise package and without CR_PERMISSIONS / CR_IDENTITY_*; if either is set and the gate cannot
+# be installed, agentic_os.app_gate refuses to start the app (it never runs ungated by accident).
+from agentic_os.app_gate import RequestContext as _RequestContext, denial_result as _denial_result, deny_response as _deny_response, install_gate as _install_gate
+from agentic_os.app_gate import with_authorization as _with_authorization
+_GATE_APP = "support"
+_req_principal = _install_gate(_GATE_APP)   # starts gated or not at all when permissions were requested (RR-01)
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -80,6 +79,7 @@ app = FastAPI(title="agentic-support (Meridian Wealth Management · core: Chatwo
 from agentic_os.app_kit import route_authz as _route_authz  # noqa: E402
 from .route_policy import APP as _APP, ROUTE_POLICIES as _ROUTE_POLICIES  # noqa: E402
 _route_authz.install(app, _APP, _ROUTE_POLICIES)   # one enforcement layer for every write route
+app.add_middleware(_RequestContext)   # the active gate (basic or enterprise) sees THIS request's principal in every route
 
 
 # --- MD3 styling (BASE_CSS reused verbatim from deploy/module_service.py) -----
@@ -364,6 +364,11 @@ def _run_action(action: str, body: dict, authorization: "str | None") -> "dict |
     """THE single route -> core entry point. The operator marker is injected server-side only when the request
     carries the valid operator Basic credential; any other caller gets a staged preview from the core gate."""
     fn = _ACTIONS.get(action)
+    if fn is not None:
+        denied = _denial_result(_GATE_APP, {"draft_reply": "support.draft_reply", "resolve": "support.resolve", "escalate": "support.escalate",
+                                            "send_onboarding": "support.send_onboarding"}[action])   # authorise where it executes
+        if denied is not None:
+            return denied
     if fn is None:
         return None
     return fn(core.with_operator_approval(body, authorization))
@@ -460,6 +465,11 @@ def _agent_reply(message: str) -> dict:
     low = (message or "").lower()
     if not low.strip():
         return {"intent": "help", "text": "Ask about the queue, a conversation, or have me draft a reply.", "evidence": []}
+    _need = ("draft_reply" if any(w in low for w in ("draft", "reply", "respond")) else
+             "list_conversations" if any(w in low for w in ("list", "queue", "conversation", "ticket")) else
+             "inbox_summary" if any(w in low for w in ("inbox", "summary", "open", "pending", "sla", "response")) else None)
+    if _need and (_d := _denial_result(_GATE_APP, _need)):
+        return {"intent": _need, "text": _d["error"], "evidence": [], "denied": True}
     if any(w in low for w in ("draft", "reply", "respond")):
         t = _t_draft_reply({"topic": message})
         txt = _llm_text(t["text"], 320) or ("No in-boundary model is configured, so I can't draft text; "
@@ -488,7 +498,7 @@ _AGENT_PANEL = (
 # --- routes ------------------------------------------------------------------
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "core": "chatwoot", "connected": chatwoot_connected()}
+    return _with_authorization(_GATE_APP, {"status": "ok", "core": "chatwoot", "connected": chatwoot_connected()})
 
 
 @app.post("/api/agent")
@@ -502,11 +512,15 @@ async def api_agent(request: Request) -> JSONResponse:
 
 @app.get("/api/activity")
 def activity() -> JSONResponse:
+    if (_r := _deny_response(_GATE_APP, "inbox_summary")):
+        return _r
     return JSONResponse(fetch_activity())
 
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
+    if (_r := _deny_response(_GATE_APP, "inbox_summary")):
+        return _r
     page = render(fetch_activity())
     return page.replace("<footer", _AGENT_PANEL + "<footer", 1)
 
@@ -522,7 +536,7 @@ async def agent_run(request: Request) -> JSONResponse:
     action = body.get("action", "")
     res = _run_action(action, body, request.headers.get("authorization"))
     if res is not None:
-        return JSONResponse(res)
+        return JSONResponse(res, status_code=403 if res.get("status") == "denied" and res.get("executed") is False else 200)
     return JSONResponse(
         {"status": "error", "error": f"unknown action '{action}'",
          "supported": _supported_actions()},
@@ -533,6 +547,10 @@ async def agent_run(request: Request) -> JSONResponse:
 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
+
+    from agentic_os.app_gate import require_explicit_setting_when_exposed as _exposed
+
+    _exposed("0.0.0.0")   # a reachable bind needs an explicit permissions setting
 
     uvicorn.run(app, host="0.0.0.0", port=PORT)
 

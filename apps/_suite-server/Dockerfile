@@ -3,14 +3,14 @@
 # run from the canonical operators instead of a bespoke per-agent service. Pick the suite with SUITE=.
 #
 # Build context is the agentic-os repo ROOT (so the image can COPY apps/):
-#     docker build -f apps/_suite-server/Dockerfile --build-arg KERNEL_REF=v0.3.43 -t suite-server .
+#     docker build -f apps/_suite-server/Dockerfile --build-arg KERNEL_REF=v0.4.0 -t suite-server .
 #     docker run -e SUITE=revenue -p 8300:8300 suite-server
 #
 # The composed app operators are pure (httpx against their cores at invoke time — no web framework in
 # core.py), so only fastapi/uvicorn/httpx/pyyaml + the agentic_os kernel (app_kit) are required.
 FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
 # app_kit (incl. suite_server) is pinned to a kernel release tag (same tag as every app image); override to bump.
-ARG KERNEL_REF=v0.3.43
+ARG KERNEL_REF=v0.4.0
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git \
  && pip install --no-cache-dir "fastapi>=0.110" "uvicorn[standard]>=0.27" "httpx>=0.27" "pyyaml>=6.0" \
@@ -23,6 +23,9 @@ RUN useradd --system --uid 10001 --create-home --home-dir /home/app app \
  && mkdir -p /data && chown -R app:app /app /data
 RUN printf '#!/bin/sh\n[ -w /data ] || { echo "/data is not writable by uid 10001; see apps/README.md (Upgrading images)" >&2; exit 1; }\nexec "$@"\n' > /usr/local/bin/aos-entrypoint \
  && chmod 755 /usr/local/bin/aos-entrypoint
+# A container is reachable by design: it refuses to start on an UNSET permissions setting. Run it with -e AGENTIC_OS_PERMISSIONS=1 (after `agentic-os permissions init`) to enforce
+# grants, or -e AGENTIC_OS_PERMISSIONS=off to run deliberately without authorization (standalone). See docs/PERMISSIONS_MIGRATION.md section 19.
+ENV AGENTIC_OS_REQUIRE_PERMISSIONS_SETTING=1
 ENTRYPOINT ["aos-entrypoint"]
 USER app
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

@@ -113,7 +113,9 @@ def build_fastmcp_server(gateway: AgentGateway, verifier: TokenVerifier, *,
                                subject=gp.subject,
                                claims={"tenant": gp.tenant, "workspace": gp.effective_workspace})
 
-    server = FastMCP(name, auth=_Verifier())
+    # mask_error_details: an exception that escapes a tool function (anything the gateway's own error handling did not catch) reaches the client as
+    # "Error calling tool '<name>'" only; its text stays in the server log.
+    server = FastMCP(name, auth=_Verifier(), mask_error_details=True)
 
     def _make_tool(capability: str):
         async def _tool(arguments: Optional[dict] = None):

@@ -1,0 +1,63 @@
+name: permissions-demo-compat
+
+# Demo / unattended-run compatibility gate for the permissions plane (docs/PERMISSIONS_MIGRATION.md).
+# Starts each demo path with its documented configuration and synthetic data, runs its principal workflow with no human
+# in the loop, and asserts both that the intended operation succeeds and that unauthorised operations stay denied.
+# Offline: no model endpoint, no Docker, no network service. Authorisation is never relaxed to make a demo pass.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "agentic_os/permissions*.py"
+      - "agentic_os/tool_actions.py"
+      - "agentic_os/control_plane.py"
+      - "agentic_os/cli.py"
+      - "deploy/permissions-showcase-demo/**"
+      - "tests/test_demo_compatibility.py"
+      - "tests/test_permissions_*.py"
+      - "tests/test_sc*.py"
+      - "tests/_page_js_harness.js"
+      - ".github/workflows/permissions-demo-compat.yml"
+  pull_request:
+    paths:
+      - "agentic_os/permissions*.py"
+      - "agentic_os/tool_actions.py"
+      - "agentic_os/control_plane.py"
+      - "agentic_os/cli.py"
+      - "deploy/permissions-showcase-demo/**"
+      - "tests/test_demo_compatibility.py"
+      - "tests/test_permissions_*.py"
+      - "tests/test_sc*.py"
+      - "tests/_page_js_harness.js"
+      - ".github/workflows/permissions-demo-compat.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: permissions-demo-compat-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  demos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      # None of these is set: the gate proves the documented configuration starts, not a relaxed one.
+      # (No approval secret, no key and no development-only opt-in is exported here.)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: "Install the kernel, dev extras and the tool-gate harness (pinned to a commit, so a moving dependency cannot weaken this gate)"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,duckdb]" "agent-harness @ git+https://github.com/redevops-io/agent-harness.git@052d54fb4fb9a70f561867b59a1d8cdcb6ff3051"
+      - name: Demo compatibility gate
+        run: pytest -q -p no:cacheprovider tests/test_demo_compatibility.py tests/test_deployment_paths.py tests/test_tool_actions_complete.py tests/test_sc*.py
+      - name: Permissions regression suites (authorisation, scope, write authorisation, roles/columns, storage, concurrency)
+        run: pytest -q -p no:cacheprovider tests/test_permissions_*.py
