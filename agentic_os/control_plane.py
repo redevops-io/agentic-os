@@ -64,6 +64,12 @@ def require_api_key(x_api_key: str | None = Header(default=None),
     _authorize_mutation(x_api_key, authorization, "AGENTIC_OS_API_KEY")
 
 
+def _fleet_credential_ok(x_api_key: str | None, authorization: str | None) -> bool:
+    """Non-raising, non-logging form of the fleet check (the fleet key or the control token), for the routes that only ADD detail for a credentialed caller."""
+    from .mission.control_auth import bearer_of, configured_token, token_matches  # noqa: PLC0415
+    return token_matches(bearer_of(authorization), configured_token()) or token_matches(x_api_key or "", os.environ.get("AGENTIC_OS_API_KEY", ""))
+
+
 def require_permissions_admin(request: Request) -> None:
     """Auth for the WHOLE permissions admin API: grant list, status, preview, authorize (diagnostics), create, update, remove. A SEPARATE
     privilege: only ``PERMISSIONS_ADMIN_KEY`` (X-API-Key or Bearer, at least 24 characters) opens it; the fleet key
@@ -481,10 +487,16 @@ def openapi_schema() -> dict:
 
 
 @app.get("/health")
-def health() -> dict:
-    from agentic_os.mission.profile import status as _security_status
-    sec = _security_status(getattr(fleet, "authority", None))
-    return {"status": "ok", "modules": len(fleet.registry), "security": sec}
+def health(x_api_key: str | None = Header(default=None), authorization: str | None = Header(default=None)) -> dict:
+    """Liveness for probes (kubelet, load balancers, `curl`): ``{"status": "ok", "modules": N}``, no credential needed. The security posture block (profile,
+    durability of authority and replay protection, egress proxy, warnings) tells a caller which protections are absent, so it is added only for a caller
+    that presents the fleet credential (the fleet key or the control token; the read-only dashboard token does not open it)."""
+    out = {"status": "ok", "modules": len(fleet.registry)}
+    if _fleet_credential_ok(x_api_key, authorization):
+        from agentic_os.mission.profile import status as _security_status
+        out["security"] = _security_status(getattr(fleet, "authority", None))
+    return out
+
 
 
 @app.get("/modules", response_model=list[ModuleList])
