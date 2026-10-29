@@ -55,12 +55,12 @@ def _authorize_mutation(x_api_key: str | None, authorization: str | None, *key_e
 
 def require_api_key(x_api_key: str | None = Header(default=None),
                     authorization: str | None = Header(default=None)) -> None:
-    """Auth dependency for the fleet routes: the mutating ones (deploy / start / stop / approve / dispatch) and the read of the pending approvals,
-    whose payloads are the request text an approver is asked to sign off.
+    """Auth dependency for the fleet routes: the mutating ones (deploy / start / stop / approve / dispatch) and the reads of non-public state: the pending
+    approvals (the request text an approver signs off), job results, the application inventory and topology, module status and the wired chat channels.
 
     Requires ``Authorization: Bearer <AGENTIC_OS_CONTROL_TOKEN>`` or ``X-API-Key: <AGENTIC_OS_API_KEY>``.
     With neither configured the endpoint is disabled (503) — it never runs unauthenticated. The liveness and static routes
-    (/health, /status, /modules, /overview, ...) stay open."""
+    (/health, /modules, /overview, ...) stay open."""
     _authorize_mutation(x_api_key, authorization, "AGENTIC_OS_API_KEY")
 
 
@@ -269,9 +269,10 @@ async def _probe_health(client: httpx.AsyncClient, m: Module) -> dict:
         return {"health": "down", "core": None, "connected": None}
 
 
-@app.get("/api/fleet")
+@app.get("/api/fleet", dependencies=[Depends(require_api_key)])
 async def api_fleet() -> list[dict]:
-    """Aggregate every module with a live health probe of its real agent service.
+    """Aggregate every module with a live health probe of its real agent service. Needs the fleet credential: it lists the application inventory,
+    ports, approval-required capability names, backend names and live health.
 
     Health checks run concurrently with a short timeout, so one slow or missing
     module can never block the response. ``core`` + ``connected`` are surfaced from
@@ -482,7 +483,7 @@ def modules() -> list[ModuleList]:
             for m in fleet.registry]
 
 
-@app.get("/status")
+@app.get("/status", dependencies=[Depends(require_api_key)])
 async def status() -> list[dict]:
     """Deployment status from a LIVE health probe of each module's agent service.
 
@@ -656,17 +657,18 @@ def dispatch(req: DispatchRequest) -> dict:
     return {"kind": "result", "text": out}
 
 
-@app.get("/jobs/{job_id}")
+@app.get("/jobs/{job_id}", dependencies=[Depends(require_api_key)])
 def job_status(job_id: str) -> dict:
+    """Status and result text of a background dispatch. Needs the fleet credential (the ids are sequential, and the result is agent output)."""
     job = fleet.job(job_id)
     if job is None:
         raise HTTPException(404, f"no job {job_id}")
     return {"job_id": job_id, **job}
 
 
-@app.get("/notify/status")
+@app.get("/notify/status", dependencies=[Depends(require_api_key)])
 def notify_status() -> dict:
-    """What chat channels are wired + whether the inbound gateway is running."""
+    """What chat channels are wired + whether the inbound gateway is running. Needs the fleet credential (integration configuration)."""
     n = fleet.context.notifier
     chans = [c.name for c in n.channels] if n is not None else []
     return {"channels": chans, "notifier_enabled": bool(chans),
