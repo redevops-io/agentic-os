@@ -43,10 +43,12 @@ jobs:
           REDEVOPS_CONNECTORS_FIXTURES: ${{ runner.temp }}/redevops-connectors/fixtures
         run: pytest -q -p no:cacheprovider tests
       - name: The real FastMCP HTTP transport test must run, not skip
+        # always() so that its result is visible even when an unrelated test in the full suite above fails
+        if: ${{ !cancelled() }}
         env:
           PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/apps
         run: |
-          pytest -q -p no:cacheprovider -rs tests/test_agent_gateway_fastmcp_http.py tests/test_agent_gateway_fastmcp.py | tee "$RUNNER_TEMP/fastmcp.out"
+          pytest -v -p no:cacheprovider -rs tests/test_agent_gateway_fastmcp_http.py tests/test_agent_gateway_fastmcp.py | tee "$RUNNER_TEMP/fastmcp.out"
           if grep -q "SKIPPED" "$RUNNER_TEMP/fastmcp.out"; then echo "::error::a FastMCP transport test was skipped (is the mcp extra installed?)"; exit 1; fi
       - name: Per-app suites
         # One run per app: several apps share test file basenames (test_operator.py, ...), and each app is its own
