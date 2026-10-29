@@ -1,0 +1,65 @@
+{
+  "id": "inbound_lead_call_v1",
+  "description": "Synthetic inbound call from a fictional lead. No real person, number, company or audio.",
+  "tenant": "acme-demo",
+  "session_id": "call-0001",
+  "caller_id": "+15550100",
+  "lead_id": "lead_dana01",
+  "verified_accounts": [
+    "lead_dana01"
+  ],
+  "utterances": {
+    "u1": "Hi, this is Dana from Northwind Example. I filled in your web form yesterday.",
+    "u2": "Sure, the code is four eight one five.",
+    "u3": "Around twenty thousand dollars, and we would like to start this quarter. We need help with onboarding.",
+    "u4": "Yes yes, that is right, please record it.",
+    "u5": "Yes please, ask someone to send that to me."
+  },
+  "timeline": [
+    {
+      "do": "wait_idle"
+    },
+    {
+      "do": "say",
+      "id": "u1"
+    },
+    {
+      "do": "wait_idle"
+    },
+    {
+      "do": "host",
+      "name": "verify"
+    },
+    {
+      "do": "say_text",
+      "id": "u2"
+    },
+    {
+      "do": "wait_idle"
+    },
+    {
+      "do": "hold_next_speech"
+    },
+    {
+      "do": "say",
+      "id": "u3"
+    },
+    {
+      "do": "barge_in_while_bot_speaks",
+      "id": "u4"
+    },
+    {
+      "do": "wait_idle"
+    },
+    {
+      "do": "say",
+      "id": "u5"
+    },
+    {
+      "do": "wait_idle"
+    },
+    {
+      "do": "end"
+    }
+  ]
+}
