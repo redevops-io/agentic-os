@@ -148,11 +148,25 @@ class AgentGateway:
         track = {"lease": "", "dispatched": False, "side_effecting": False}
         try:
             result = self._invoke(request, track)
+        except Exception as exc:                  # a gateway seam (authorizer, authority, budget, approvals, egress, audit) itself raised
+            self._settle_lease(track, ok=None)
+            return self._seam_fault(request, exc)
         except BaseException:
             self._settle_lease(track, ok=None)
             raise
         self._settle_lease(track, ok=result.status)
         return result
+
+    def _seam_fault(self, request: GatewayRequest, exc: Exception) -> GatewayResult:
+        """A fault raised outside the handler ``try``. The call fails closed with a short fixed code on every adapter (the exception text goes to the
+        server log with the request id, never to the client), and the error is audited when the audit sink still works."""
+        code = client_safe_error(exc, where=request.capability, request_id=request.request_id, default="gateway_error")
+        result = GatewayResult(request.request_id, GatewayStatus.ERROR,
+                               GatewayDecision(allowed=False, reason="gateway_error", risk_tier=RiskTier.READ), error=code)
+        try:
+            return self._finalize(request, time.time(), result, exposed_reason="permitted")
+        except Exception:  # noqa: BLE001 - the audit sink may be the failing seam; the caller still gets the short code
+            return result
 
     def _settle_lease(self, track: dict, *, ok) -> None:
         lease = track["lease"]
@@ -314,7 +328,7 @@ class AgentGateway:
                 hres = handler(request, envelope)   # type: ignore[misc]
                 mission_id = ""
         except Exception as exc:  # a handler/mission fault must not crash the gateway
-            return self._finalize(request, start, self._error(decision, client_safe_error(exc, where=request.capability)),
+            return self._finalize(request, start, self._error(decision, client_safe_error(exc, where=request.capability, request_id=request.request_id)),
                                   exposed_reason="permitted")
 
         if track["lease"]:

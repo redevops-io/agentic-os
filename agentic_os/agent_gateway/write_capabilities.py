@@ -68,12 +68,13 @@ PROJECTS_REQUEST_CHANGE = CapabilityManifest(
     data_classes=(DataClass.INTERNAL,))
 
 
-def _guard(fn) -> HandlerResult:
+def _guard(fn, request=None) -> HandlerResult:
     """Run a port call, turning any fault into a clean handler error (never a gateway crash)."""
     try:
         out = fn()
     except Exception as exc:
-        return HandlerResult(ok=False, error=client_safe_error(exc, where="write capability"))
+        return HandlerResult(ok=False, error=client_safe_error(exc, where=getattr(request, "capability", "write capability"),
+                                                           request_id=getattr(request, "request_id", "")))
     evidence = ()
     if isinstance(out, dict) and out.get("provider_object_id"):
         evidence = (str(out["provider_object_id"]),)      # provenance for the audit record
@@ -87,12 +88,12 @@ def build_write_registry(*, crm: Optional[CrmWritePort] = None,
     reg = registry or CapabilityRegistry()
     if crm is not None:
         reg.register(CRM_PREPARE_OUTREACH,
-                     lambda req, env: _guard(lambda: crm.prepare_outreach(dict(req.arguments))))
+                     lambda req, env: _guard(lambda: crm.prepare_outreach(dict(req.arguments)), req))
         reg.register(CRM_REQUEST_OUTREACH_SEND,
-                     lambda req, env: _guard(lambda: crm.send_outreach(dict(req.arguments), env)))
+                     lambda req, env: _guard(lambda: crm.send_outreach(dict(req.arguments), env), req))
     if projects is not None:
         reg.register(PROJECTS_REQUEST_CHANGE,
-                     lambda req, env: _guard(lambda: projects.request_change(dict(req.arguments), env)))
+                     lambda req, env: _guard(lambda: projects.request_change(dict(req.arguments), env), req))
     return reg
 
 
