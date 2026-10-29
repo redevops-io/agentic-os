@@ -14,10 +14,10 @@ Every call, on either entry point, runs the same path: visibility and permission
 
 ## Install
 
-`agentic-os` is not on PyPI; install from a release tag (the error codes described below are in v0.4.0 and later; see the tags for the current one):
+`agentic-os` is not on PyPI; install from a release tag (the error codes described below are in v0.4.1 and later; see the tags for the current one):
 
 ```bash
-pip install "agentic-os[mcp] @ git+https://github.com/redevops-io/agentic-os.git@v0.4.0"
+pip install "agentic-os[mcp] @ git+https://github.com/redevops-io/agentic-os.git@v0.4.1"
 ```
 
 The `mcp` extra (`fastmcp`) is only needed for section B. `agentic-os-projects` starts the Projects API that section A mounts the gateway on.

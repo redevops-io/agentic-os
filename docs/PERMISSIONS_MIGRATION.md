@@ -953,3 +953,27 @@ check it; that is left for a later change.
 * A fresh install no longer starts with the two example grants (section 32); a demo that wants them sets `AGENTIC_OS_SEED_DEMO_GRANTS=1`.
 * The 503 body for these routes reads "the fleet endpoints are disabled on this server" (it said "mutating endpoints").
 * On the public demo, an anonymous visitor would see the credential prompt instead of the module cards, since the cards come from `GET /api/fleet`; the demo can publish a read-only dashboard token for that purpose.
+
+## 34. Agent Gateway: an idempotent replay is revalidated and bound to the request
+
+**What changed (0.4.1).** The gateway used to return the stored result of an earlier idempotent call under the key `tenant:subject:capability:key` before it checked the caller again, and the key was not bound to the arguments, the workspace or the authority the call ran under. A stored result is now served as a call:
+
+| | before | now |
+|---|---|---|
+| Visibility, grants, OAuth scope | not checked on a replay | checked first; a caller who no longer holds them gets the ordinary denial |
+| Authority guard (envelope, revocation of an envelope or a child agent, child credential, expiry) | not checked on a replay | checked without reserving or consuming the call allowance; an invalid credential gets the same answer as on a first call |
+| What a key is bound to | tenant, subject, capability | per tenant: workspace, subject, authority key (the child, when a child credential is used), capability and the canonical arguments |
+| Same key, different request | the earlier result | `idempotency_conflict` (no earlier result, no arguments) |
+| Same key while the first call runs | a second execution was possible | `idempotency_in_progress`; of any number of concurrent retries one executes |
+| Egress policy on the stored output | not asked | asked again; it may withhold the output |
+| Audit | a replay left no event | an event with the policy rule `idempotent_replay`, or the conflict, without arguments or results |
+| Store | unbounded, no expiry | `InMemoryIdempotencyStore(ttl_s=86400, max_entries=10000)`: oldest completed entries are evicted first, an in-flight claim is never evicted |
+
+**Behaviour you may notice.**
+
+* A client that reused one idempotency key for different arguments, a different workspace or a different capability now receives `idempotency_conflict`; use a new key per distinct request. The two new codes are in the fixed list of codes a client can receive (section 19).
+* Arguments that JSON cannot carry (objects, bytes, non-finite numbers), more than 256 KiB of canonical arguments, nesting deeper than 16 levels or a key outside 1 to 256 characters cannot be bound to a key: the call fails with `gateway_error` (detail in the server log) when it carries an idempotency key for an idempotent capability.
+* A replay is refused with the ordinary denial once the caller's grant, scope or authority is gone, even if the original call succeeded. A replay does not ask the approval store or the budget again, because nothing executes.
+* After the TTL or an eviction a key is unknown and the call runs again. A call whose outcome is unknown stays held by the authority ledger (`authority:outcome_unknown`) until a person reconciles it; that state is not stored in, and is not affected by, the idempotency store. `reconcile_call(executed=True, result=...)` stores the result under the fingerprint recorded with the reservation; a reservation created by an earlier release has none, and a retry then gets `idempotency_conflict` rather than a second send.
+* The `IdempotencyStore` protocol changed from `get`/`put` to `begin`/`complete`/`abandon`/`seed`; a custom store must implement the new methods. The built-in store is local to one process: with several worker processes, supply a shared implementation.
+* Without an authority guard there is no `outcome_unknown` state, as before: a side-effecting call that raised is not recorded and a retry runs.
