@@ -16,14 +16,16 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field, replace
-from typing import Optional, Protocol, Tuple
+from typing import Protocol, Tuple
 
 from agentic_os.overlays import Principal
 
 from .contracts import (
     ApprovalPolicy, AuditEvent, CapabilityKind, CapabilityManifest, DataClass, EgressAction,
     GatewayDecision, GatewayPrincipal, GatewayRequest, GatewayResult, GatewayStatus, RiskTier)
-from .registry import Authorizer, CapabilityRegistry, HandlerResult, _default_authorizer, client_safe_error
+from .idempotency import (
+    CONFLICT, NEW, REPLAY, IdempotencyStore, InMemoryIdempotencyStore, fingerprint, normalise_key)
+from .registry import Authorizer, CapabilityRegistry, HandlerResult, PUBLIC_ERROR_CODES, _default_authorizer, client_safe_error
 
 
 # ── injectable seams (open-core defaults; enterprise tightens) ─────────────────────
@@ -93,18 +95,6 @@ class InMemoryAuditSink:
         return ref
 
 
-class IdempotencyStore(Protocol):
-    def get(self, key: str) -> Optional[GatewayResult]: ...
-    def put(self, key: str, result: GatewayResult) -> None: ...
-
-
-@dataclass
-class InMemoryIdempotencyStore:
-    _by_key: dict = field(default_factory=dict)
-    def get(self, key): return self._by_key.get(key)
-    def put(self, key, result): self._by_key[key] = result
-
-
 # ── the gateway ────────────────────────────────────────────────────────────────────
 @dataclass
 class AgentGateway:
@@ -145,17 +135,28 @@ class AgentGateway:
         """Run one request, then settle the authority reservation it made: a call that never dispatched returns it; one
         that did is settled when it succeeded and kept UNKNOWN (counted) when a side-effecting call errored, because it
         may have executed. Time never releases a dispatched reservation."""
-        track = {"lease": "", "dispatched": False, "side_effecting": False}
+        track = {"lease": "", "dispatched": False, "side_effecting": False, "claim": None}
         try:
             result = self._invoke(request, track)
-        except Exception as exc:                  # a gateway seam (authorizer, authority, budget, approvals, egress, audit) itself raised
+        except Exception as exc:                  # a gateway seam (authorizer, authority, budget, approvals, egress, audit, idempotency store) itself raised
             self._settle_lease(track, ok=None)
+            self._abandon_claim(request, track)
             return self._seam_fault(request, exc)
         except BaseException:
             self._settle_lease(track, ok=None)
+            self._abandon_claim(request, track)
             raise
         self._settle_lease(track, ok=result.status)
+        self._abandon_claim(request, track)       # a claim that was not completed (denied, pending, errored) is released so a retry may run
         return result
+
+    def _abandon_claim(self, request: GatewayRequest, track: dict) -> None:
+        claim, track["claim"] = track.get("claim"), None
+        if claim:
+            try:
+                self.idempotency.abandon(*claim)
+            except Exception:  # noqa: BLE001 - releasing a claim must never mask the call's own outcome
+                pass
 
     def _seam_fault(self, request: GatewayRequest, exc: Exception) -> GatewayResult:
         """A fault raised outside the handler ``try``. The call fails closed with a short fixed code on every adapter (the exception text goes to the
@@ -186,9 +187,6 @@ class AgentGateway:
         start = time.time()
         gp = request.principal
 
-        idem_key = (f"{gp.tenant}:{gp.subject}:{request.capability}:{request.idempotency_key}"
-                    if request.idempotency_key else None)
-
         # 1. visibility == permission. A capability the principal can't see is treated as unknown —
         #    same response whether it doesn't exist or is merely not permitted (plan §18: never leak).
         manifest = self.registry.get(request.capability)
@@ -196,17 +194,14 @@ class AgentGateway:
             return self._finalize(request, start,
                                   self._deny("unknown_capability"), exposed_reason="hidden")
 
-        # idempotency replay (keyed within the principal). After the visibility check, so a principal whose permission
-        # was revoked is not served the stored output of an earlier call.
-        if idem_key is not None:
-            prior = self.idempotency.get(idem_key)
-            if prior is not None:
-                return prior
-
         tier = manifest.risk_tier
 
         # 1b. authority envelope (fail-closed when configured): scope, resources, limits, expiry, revocation.
         standing_ok = False
+        if self.authority is None:
+            early = self._idempotency_gate(request, start, manifest, "", track)
+            if early is not None:
+                return early
         if self.authority is not None:
             from agentic_os.mission.authority import Action, Standing, Verdict   # local: keeps the gateway importable alone
             key = (self.authority_key(gp) if self.authority_key else f"{gp.tenant}:{gp.subject}")
@@ -234,6 +229,11 @@ class AgentGateway:
                         except Exception:  # noqa: BLE001 - an observer must never change the decision
                             pass
                     return self._finalize(request, start, self._deny("authority:outcome_unknown", tier), exposed_reason="permitted")
+            # A stored result of an earlier call with this key is served (or refused) only now, after the caller is identified, may see the
+            # capability, and is inside its authority at this moment.
+            early = self._idempotency_gate(request, start, manifest, key, track)
+            if early is not None:
+                return early
             # An ORDINARY approval policy (REQUIRED) may be satisfied in advance by an explicit grant the owner
             # raised to this tier; MANDATORY never is, and IF_POLICY is unchanged.
             ordinary = manifest.effective_approval_policy is ApprovalPolicy.REQUIRED
@@ -242,7 +242,8 @@ class AgentGateway:
                 side_effecting=bool(manifest.side_effecting)), Standing() if ordinary else None,
                 lease_id=request.request_id,
                 lease_meta={"kind": "gateway", "request_id": request.request_id, "subject": gp.subject,
-                            "idempotency_key": request.idempotency_key or "", **agent_meta,
+                            "idempotency_key": request.idempotency_key or "", **({"request_fp": track["fp"]} if track.get("fp") else {}),
+                            **agent_meta,
                             **({"effect_ref": self.probe_refs.effect_ref(request.capability, dict(request.arguments))}
                                if self.probe_refs is not None and manifest.side_effecting else {})})
             if adec.allowed:
@@ -359,10 +360,64 @@ class AgentGateway:
             request.request_id, GatewayStatus.OK, decision, output=output, mission_id=mission_id,
             evidence_refs=hres.evidence_refs, source_refs=hres.source_refs, data_classes=classes)
         result = self._finalize(request, start, result, exposed_reason="permitted")
-        # 7. idempotency: remember successful, side-effecting, idempotent results for replay.
-        if idem_key and result.ok and manifest.idempotent:
-            self.idempotency.put(idem_key, result)
+        # 7. idempotency: complete the claim made before execution with this successful, idempotent result (see _idempotency_gate).
+        if track["claim"] and result.ok:
+            claim, track["claim"] = track["claim"], None
+            try:
+                self.idempotency.complete(*claim, result)
+            except Exception:  # noqa: BLE001 - the effect happened; a result that cannot be stored is returned, and the claim released
+                self.idempotency.abandon(*claim[:3])
         return result
+
+    # ── idempotent replay ─────────────────────────────────────────────────────────
+    def _idempotency_gate(self, request: GatewayRequest, start: float, manifest: CapabilityManifest, authority_key: str,
+                          track: dict) -> "GatewayResult | None":
+        """Called once the caller is identified and may see the capability. A stored result is returned only if the caller is inside its authority
+        NOW (revocation, child credential and lineage, scope, expiry), so a replay never outlives the right to the call, and only if the key is
+        bound to the same fingerprint (scope + arguments). Otherwise: a different fingerprint is a conflict, a call still running under the key is
+        in progress, and neither reveals the earlier result. Returns None to carry on with a normal call; a new claim is then held in
+        ``track['claim']`` until the result is stored or the call ends."""
+        if not request.idempotency_key or not manifest.idempotent:
+            return None
+        gp = request.principal
+        key = normalise_key(request.idempotency_key)
+        fp = fingerprint(tenant=gp.tenant, workspace=gp.effective_workspace, subject=gp.subject, authority_key=authority_key,
+                         capability=request.capability, arguments=request.arguments)
+        track["fp"] = fp
+        if self.authority is not None:
+            from agentic_os.mission.authority import Action, Verdict   # noqa: PLC0415
+            now_ok = self.authority.check(authority_key, gp.tenant, Action(
+                capability=request.capability, arguments=dict(request.arguments), risk_tier=int(manifest.risk_tier),
+                side_effecting=bool(manifest.side_effecting))).verdict is Verdict.ALLOW
+            if not now_ok:
+                return None                      # the authority step that follows decides, reports and audits the refusal; nothing stored is consulted
+        state, prior = self.idempotency.begin(gp.tenant, key, fp)
+        if state == NEW:
+            track["claim"] = (gp.tenant, key, fp)
+            return None
+        if state == REPLAY:
+            return self._replay(request, start, manifest, prior)
+        code = "idempotency_conflict" if state == CONFLICT else "idempotency_in_progress"
+        assert code in PUBLIC_ERROR_CODES
+        result = GatewayResult("", GatewayStatus.ERROR, GatewayDecision(allowed=False, reason=code, risk_tier=manifest.risk_tier), error=code)
+        return self._finalize(request, start, result, exposed_reason="permitted")
+
+    def _replay(self, request: GatewayRequest, start: float, manifest: CapabilityManifest, prior: GatewayResult) -> GatewayResult:
+        """Serve a stored result: nothing is executed. The egress policy is asked again about the stored output and may withhold it (the stored
+        output is already filtered, so it is never transformed twice). The replay is audited under its own request id; the caller receives the
+        stored result with the request id of the call that produced it."""
+        gp = request.principal
+        action, _, rules = self.egress.decide(prior.output, prior.data_classes or manifest.data_classes, gp, manifest)
+        decision = replace(prior.decision, egress_action=action,
+                           policy_rule_ids=tuple(prior.decision.policy_rule_ids) + tuple(rules) + ("idempotent_replay",))
+        if action is EgressAction.DENY:
+            result = replace(prior, decision=decision, output=None)
+        elif action is EgressAction.REQUIRE_APPROVAL:
+            result = replace(prior, decision=decision, status=GatewayStatus.PENDING_APPROVAL, output=None)
+        else:
+            result = replace(prior, decision=decision)
+        audited = self._finalize(request, start, replace(result, request_id=request.request_id), exposed_reason="permitted")
+        return replace(audited, request_id=prior.request_id or request.request_id)
 
     # ── unknown outcomes of direct calls ───────────────────────────────────────────
     def _unresolved_attempt(self, key: str, request: GatewayRequest) -> "dict | None":
@@ -412,10 +467,12 @@ class AgentGateway:
         self.authority.annotate(lease_id, reconcile_status="resolved_manually", resolved_by=str(actor).strip(), evidence=ev,
                                 resolution_reason=str(reason).strip()[:500], manual_outcome="executed" if executed else "not_executed")
         if executed and result is not None and meta.get("idempotency_key"):
-            idem = f"{meta.get('tenant', '')}:{meta.get('subject', '')}:{meta.get('capability', '')}:{meta['idempotency_key']}"
-            self.idempotency.put(idem, GatewayResult(meta.get("request_id", ""), GatewayStatus.OK,
-                                                     GatewayDecision(allowed=True, reason="reconciled", risk_tier=RiskTier.READ),
-                                                     output=dict(result)))
+            # bound to the fingerprint recorded when the call was authorised; a reservation without one (made by an earlier release) is bound to
+            # nothing a caller can present, so a retry gets a conflict rather than a stranger's result or a second send
+            self.idempotency.seed(str(meta.get("tenant", "")), normalise_key(meta["idempotency_key"]), str(meta.get("request_fp") or "unbound"),
+                                  GatewayResult(meta.get("request_id", ""), GatewayStatus.OK,
+                                                GatewayDecision(allowed=True, reason="reconciled", risk_tier=RiskTier.READ),
+                                                output=dict(result)))
         return {"lease_id": lease_id, "state": want}
 
     # ── helpers ──────────────────────────────────────────────────────────────────

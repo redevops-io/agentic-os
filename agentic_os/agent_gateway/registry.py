@@ -27,6 +27,8 @@ PUBLIC_ERROR_CODES = frozenset({
     "duration_exceeded",
     "memory_ceiling_unenforceable",
     "execution_class_denied",
+    "idempotency_conflict",             # an idempotency key was reused for a different request (arguments, caller scope or capability)
+    "idempotency_in_progress",          # the first call under this idempotency key has not finished
 })
 _CONTAINED_FAILURE = re.compile(r"contained_failure\(rc=-?\d{1,4}\)")          # the sandbox's exit-status code; its stderr is never part of it
 _LOG_TEXT_MAX = 4000
