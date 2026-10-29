@@ -37,16 +37,16 @@ COCKPIT_URL = os.environ.get("COCKPIT_URL", "https://demo.redevops.io/cockpit")
 
 
 def _authorize_mutation(x_api_key: str | None, authorization: str | None, *key_envs: str) -> None:
-    """Fail-closed auth for mutating routes. Accepts ``Authorization: Bearer $AGENTIC_OS_CONTROL_TOKEN`` or
+    """Fail-closed auth for the fleet routes (the mutating ones and the reads of non-public state). Accepts ``Authorization: Bearer $AGENTIC_OS_CONTROL_TOKEN`` or
     ``X-API-Key`` matching the first set of ``key_envs`` (legacy AGENTIC_OS_API_KEY / PERMISSIONS_ADMIN_KEY).
     Compared in constant time. If NOTHING is configured the route refuses (503) instead of running open."""
     from .mission.control_auth import bearer_of, configured_token, token_matches  # noqa: PLC0415
     legacy = next((os.environ[e] for e in key_envs if os.environ.get(e)), "")
     token = configured_token()
     if not token and not legacy:
-        _perm_log_disabled("the control plane's mutating endpoints",
+        _perm_log_disabled("the control plane's fleet endpoints",
                            "set AGENTIC_OS_CONTROL_TOKEN (Authorization: Bearer) or AGENTIC_OS_API_KEY (X-API-Key) to enable them")
-        raise HTTPException(503, "mutating endpoints are disabled on this server")
+        raise HTTPException(503, "the fleet endpoints are disabled on this server")
     if token_matches(bearer_of(authorization), token) or token_matches(x_api_key or "", legacy):
         return
     raise HTTPException(401, "invalid or missing credentials (Bearer token or X-API-Key)",
@@ -461,8 +461,10 @@ async def overview() -> HTMLResponse:
 
 _DASHBOARD_HEADERS = {
     "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer",
-    # The page takes a credential: it may not be framed, may not load a <base>, submit a form elsewhere or send requests to another origin.
-    # (No script-src/style-src: the page still has inline styles and a handler attribute, and loads its fonts from Google Fonts.)
+    # The page takes a credential. frame-ancestors/base-uri/form-action/object-src stop framing, a <base> tag, a form posted elsewhere and plugins.
+    # connect-src 'self' blocks fetch/XHR/WebSocket/EventSource/beacon to OTHER origins only; it does not restrict images, links, navigation or
+    # window.open. There is NO script-src: this is not a defence against script injection (the page has no known injection sink, and builds its DOM
+    # with textContent). A nonce policy like /permissions' would need the inline styles and the one handler attribute reworked and a browser to check it.
     "Content-Security-Policy": "frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'; connect-src 'self'",
 }
 

@@ -142,9 +142,17 @@ function frameLoaded(){{
     }});
   }} catch (e) {{}}
 }}
+let healthTimer = null;
 async function health(){{
   try{{
-    const r = await fetch('/api/fleet'); if(!r.ok) return;
+    const r = await fetch('/api/fleet');
+    if(r.status === 401 || r.status === 503){{
+      // GET /api/fleet needs the fleet credential and this page holds none: ask once, then stop polling.
+      clearInterval(healthTimer);
+      document.getElementById('hlbl').textContent = r.status === 401 ? 'credential required (enter it on the dashboard)' : 'no fleet credential configured on the server';
+      return;
+    }}
+    if(!r.ok) return;
     const m = (await r.json()).find(x => x.name === NAME); if(!m) return;
     const dot = document.getElementById('hdot'), lbl = document.getElementById('hlbl');
     dot.className = 'dot ' + (m.health === 'up' ? 'up' : m.health === 'down' ? 'down' : 'na');
@@ -153,7 +161,7 @@ async function health(){{
     lbl.textContent = t;
   }}catch(e){{}}
 }}
-health(); setInterval(health, 5000);
+healthTimer = setInterval(health, 5000); health();
 </script>
 </body>
 </html>"""
@@ -370,6 +378,7 @@ def overview_page(*, groups: dict, has_agent: set, module_meta: dict, workflows:
   <section>
     <h2 class="sect-label">The modules — grouped by what they do</h2>
     <p class="legend">Each module's <b>core</b> is the open-source tool it is built on.</p>
+    <p class="legend" id="healthnote"></p>
     {modules_html}
   </section>
 
@@ -380,10 +389,19 @@ def overview_page(*, groups: dict, has_agent: set, module_meta: dict, workflows:
   </section>
 </div>
 <script>
-// Live health dots on the module map.
+// Live health dots on the module map. GET /api/fleet needs the fleet credential and this page holds none: after the first refusal it stops polling and says so once.
+let healthTimer = null;
 async function health(){{
   try{{
-    const r = await fetch('/api/fleet'); if(!r.ok) return;
+    const r = await fetch('/api/fleet');
+    if(r.status === 401 || r.status === 503){{
+      clearInterval(healthTimer);
+      document.getElementById('healthnote').textContent = r.status === 401
+        ? 'Live health is off: it needs the fleet credential. Enter it on the dashboard (/).'
+        : 'Live health is off: no fleet credential configured on the server.';
+      return;
+    }}
+    if(!r.ok) return;
     const fleet = await r.json();
     document.querySelectorAll('.omod').forEach(a => {{
       const m = fleet.find(x => x.name === a.dataset.name); if(!m) return;
@@ -392,7 +410,7 @@ async function health(){{
     }});
   }}catch(e){{}}
 }}
-health(); setInterval(health, 5000);
+healthTimer = setInterval(health, 5000); health();
 </script>
 </body>
 </html>"""

@@ -22,6 +22,8 @@ jobs:
     timeout-minutes: 25
     env:
       PYTHONDONTWRITEBYTECODE: "1"
+      # the dashboard behaviour tests run the page scripts with node (preinstalled on ubuntu-latest): a missing node must FAIL here, not skip
+      AGENTIC_OS_REQUIRE_NODE_TESTS: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

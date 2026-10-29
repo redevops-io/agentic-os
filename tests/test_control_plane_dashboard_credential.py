@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import html.parser
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -21,7 +22,9 @@ import subprocess
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-needs_node = pytest.mark.skipif(not shutil.which("node"), reason="node not installed")
+_HAS_NODE = bool(shutil.which("node"))
+_REQUIRED = os.environ.get("AGENTIC_OS_REQUIRE_NODE_TESTS") == "1"        # set by the CI workflow: there a missing node is a FAILURE, not a skip
+needs_node = pytest.mark.skipif(not _HAS_NODE and not _REQUIRED, reason="node not installed (set AGENTIC_OS_REQUIRE_NODE_TESTS=1 to make that a failure)")
 SECRET = "SYNTH-DASH-CRED-12345-DO-NOT-STORE"
 BODY_SECRET = "SYNTH-BODY-LEAK-DO-NOT-STORE"
 
@@ -101,6 +104,12 @@ def test_the_credential_is_cleared_when_the_page_goes_away():
     js = _script(_page())
     for ev in ("pagehide", "beforeunload"):
         assert re.search(rf'window\.addEventListener\("{ev}", \(\) => {{ credential\.clear\(\); wipeCredentialField\(\); }}\)', js), ev
+
+
+@needs_node
+def test_node_is_available_when_it_is_required():
+    if _REQUIRED:
+        assert _HAS_NODE, "AGENTIC_OS_REQUIRE_NODE_TESTS=1 but node is not installed: the dashboard behaviour tests would silently not run"
 
 
 # ── behaviour, by running the script ───────────────────────────────────────────────────────────
@@ -201,7 +210,7 @@ def test_after_pagehide_the_next_poll_sends_no_credential(tmp_path):
 
 
 # ── the response ──────────────────────────────────────────────────────────────────────────────
-def test_the_dashboard_response_cannot_be_framed_cached_or_send_requests_elsewhere():
+def test_the_dashboard_response_cannot_be_framed_cached_and_has_the_connect_policy():
     from fastapi.testclient import TestClient
     from agentic_os import control_plane
     r = TestClient(control_plane.app).get("/")
@@ -209,5 +218,8 @@ def test_the_dashboard_response_cannot_be_framed_cached_or_send_requests_elsewhe
     h = r.headers
     assert h["cache-control"] == "no-store" and h["x-frame-options"] == "DENY" and h["referrer-policy"] == "no-referrer" and h["x-content-type-options"] == "nosniff"
     csp = h["content-security-policy"]
+    # exactly what the policy does and does not do (see the comment in control_plane.py): connect-src 'self' limits fetch/XHR/WebSocket/EventSource/beacon to this origin;
+    # there is deliberately no script-src, so this is not a defence against script injection.
+    assert "script-src" not in csp and "default-src" not in csp
     for d_ in ("frame-ancestors 'none'", "base-uri 'none'", "form-action 'none'", "object-src 'none'", "connect-src 'self'"):
         assert d_ in csp, d_

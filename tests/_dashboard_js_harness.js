@@ -21,16 +21,18 @@ class El {
 const byId = {};
 for (const m of html.matchAll(/<(\w+)[^>]*\bid="([^"]+)"[^>]*>/g)) byId[m[2]] = new El(m[1], m[2]);
 if (byId.credKind) byId.credKind.value = "key";
-const calls = [], consoleOut = [], windowListeners = {}, intervals = [];
+const calls = [], consoleOut = [], windowListeners = {}, intervals = new Map();
+let nextTimer = 1;
 let storageTouched = false;
 const trap = () => { storageTouched = true; throw new Error("browser storage used"); };
 const sandbox = {
-  document: { getElementById: id => byId[id] || null, createElement: t => new El(t), get cookie() { trap(); }, set cookie(v) { trap(); } },
+  document: { getElementById: id => byId[id] || null, createElement: t => new El(t), querySelectorAll: () => [], querySelector: () => null, get cookie() { trap(); }, set cookie(v) { trap(); } },
   window: { addEventListener: (t, f) => { windowListeners[t] = f; } },
   get localStorage() { return trap(); }, get sessionStorage() { return trap(); }, get indexedDB() { return trap(); },
   location: { get hash() { trap(); }, get search() { trap(); } },
   console: { log: (...a) => consoleOut.push(a.join(" ")), error: (...a) => consoleOut.push(a.join(" ")), warn: (...a) => consoleOut.push(a.join(" ")), info: (...a) => consoleOut.push(a.join(" ")) },
-  setInterval: (f, ms) => { intervals.push(f); return intervals.length; },
+  setInterval: (f, ms) => { const id = nextTimer++; intervals.set(id, f); return id; },
+  clearInterval: id => { intervals.delete(id); },
   fetch: async (url, opts) => {
     calls.push({ url: String(url), headers: (opts && opts.headers) || {}, credentials: opts && opts.credentials, cache: opts && opts.cache });
     const f = scenario.responses[String(url)] || { status: 404, body: {} };
@@ -44,17 +46,17 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   try { vm.runInContext(script, sandbox); } catch (e) { console.log(JSON.stringify({ error: String(e) })); return; }
   await wait(30);
   const snapshots = [];
-  const snap = () => { const o = {}; for (const id of ["summary", "groups", "approvals", "credState", "credValue"]) o[id] = { text: byId[id].textContent, value: byId[id].value }; return o; };
+  const snap = () => { const o = {}; for (const id of Object.keys(byId)) o[id] = { text: byId[id].textContent, value: byId[id].value }; return o; };
   snapshots.push({ step: "load", ...snap(), calls: calls.length });
   for (const st of scenario.steps || []) {
     if (st.type) byId[st.type[0]].value = st.type[1];
     if (st.select) byId[st.select[0]].value = st.select[1];
     if (st.click) await byId[st.click].listeners.click({});
     if (st.key) await byId[st.key[0]].listeners.keydown({ key: st.key[1] });
-    if (st.tick) for (const f of intervals) await f();
+    if (st.tick) for (const f of [...intervals.values()]) await f();
     if (st.event) await windowListeners[st.event]({});
     await wait(30);
     snapshots.push({ step: JSON.stringify(st), ...snap(), calls: calls.length });
   }
-  console.log(JSON.stringify({ calls, snapshots, console: consoleOut, storageTouched, windowEvents: Object.keys(windowListeners), intervals: intervals.length }));
+  console.log(JSON.stringify({ calls, snapshots, console: consoleOut, storageTouched, windowEvents: Object.keys(windowListeners), intervals: intervals.size }));
 })();
