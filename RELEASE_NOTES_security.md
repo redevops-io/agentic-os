@@ -7,7 +7,7 @@ Written for: deployers and operators of agentic-os. These notes carry sections 2
 
 **Claim of this release:** The permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent.
 
-## 28. What this release claims, and what it does not (DR-03)
+## 28. What this release claims, and what it does not
 
 The statement this release makes, and no more: *The permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent.*. This release does not describe a deployment as protected by default: an
 app started with `AGENTIC_OS_PERMISSIONS` unset (or `=off`) enforces nothing, and says so:
@@ -49,7 +49,7 @@ Making the strict permission setting the default (an unset setting refusing to s
 
 Tests: `tests/test_basic_plane_app_grants_are_union_subjects.py`.
 
-## 30. The privacy portal is public by design: a constrained exception (`public_intake`), not a bypass (DR-01)
+## 30. The privacy portal is public by design: a constrained exception (`public_intake`), not a bypass
 
 **What it is.** `agentic-privacy`'s `POST /intake` and `POST /request` (and the static form at `GET /intake`) are reachable WITHOUT a grant: a data subject has to be able to file a request. They are the only routes
 of the 17 apps with this property. They are registered by id in trusted code (`agentic_os.tool_actions.PUBLIC_INTAKE_ROUTES`: app, method, path, and the one tool they may act for), no environment variable or
@@ -78,21 +78,21 @@ without `PRIVACY_PUBLIC_URL` sends no verification message. Tests: `apps/agentic
 
 ## 31. Known limitations of this release (stated, not fixed)
 
-* **Public intake can be filled (BB-03).** The portal's pending backlog (`PRIVACY_PENDING_MAX`, default 200) and the global cap (`PRIVACY_INTAKE_GLOBAL_PER_HOUR`, default 500) bound the e-mail the portal can be made to send, and
+* **Public intake can be filled.** The portal's pending backlog (`PRIVACY_PENDING_MAX`, default 200) and the global cap (`PRIVACY_INTAKE_GLOBAL_PER_HOUR`, default 500) bound the e-mail the portal can be made to send, and
   they can be filled by valid, unique addresses: once full, real data subjects get 503 or 429 until entries expire (the unverified retention is 72 hours, `PRIVACY_UNVERIFIED_RETENTION_HOURS`) or are verified. Each accepted
   submission sends one e-mail to the typed address; the raw address is kept in the requests store, unverified, for up to that retention, while the audit log holds it masked. There is no CAPTCHA. What an operator can do:
   lower the caps to what the mailbox provider tolerates, put a rate limit or a challenge in front of `/intake` and `/request`, and watch for `public_intake` audit events and 503s. The limiter state is per process.
-* **`kernel_governed` identifies its caller by the frame's `__name__` (BB-04).** Only the three kernel plane modules may register an operator as governed by their plane; the check reads the calling frame's module
+* **`kernel_governed` identifies its caller by the frame's `__name__`.** Only the three kernel plane modules may register an operator as governed by their plane; the check reads the calling frame's module
   name, so in-process code that sets `__name__` to one of those names could register an operator. A normal import path cannot. In-process code can do far more than this; the check keeps a user-chosen operator
   or capability NAME from obtaining the exemption, which it does.
-* **`/health` and `/_security` tell anonymous callers whether authorization is enforced (BB-05).** `authorization: enforced | restricted | unenforced` and `authorization_setting: on | off | unset | enterprise` are part of
+* **`/health` and `/_security` tell anonymous callers whether authorization is enforced.** `authorization: enforced | restricted | unenforced` and `authorization_setting: on | off | unset | enterprise` are part of
   the answer (no key, path or grant content). This is deliberate transparency for deployers and also tells a scanner which instances are open. If the endpoints are reachable from a network you do not control, restrict
   them at the proxy; the fix for an `unenforced` answer is the configuration in section 28, not hiding the answer.
-* **The public-intake ticket seal is reachable in process as `app_gate._SEAL` (BB-06).** The ticket is not an argument of the Operator or any HTTP route and the registry is read-only, so the seal protects against
+* **The public-intake ticket seal is reachable in process as `app_gate._SEAL`.** The ticket is not an argument of the Operator or any HTTP route and the registry is read-only, so the seal protects against
   mistakes and against anything that reaches a route, not against code running inside the process.
-* **A spent approval token in the revoke race (BB-07).** `/invoke` checks the grant before it verifies an approval token and `Operator._execute` checks again. If a grant is revoked between the two, the call is denied and
+* **A spent approval token in the revoke race.** `/invoke` checks the grant before it verifies an approval token and `Operator._execute` checks again. If a grant is revoked between the two, the call is denied and
   the approval token that was verified in between has been consumed (single use). Nothing executes; the approver must approve again.
-* **`enforced` with no grants (BB-08).** A basic-plane app reports `authorization: enforced` when a permissions key is provisioned, even when no grant exists yet: the gate decides and denies everything. `restricted`
+* **`enforced` with no grants.** A basic-plane app reports `authorization: enforced` when a permissions key is provisioned, even when no grant exists yet: the gate decides and denies everything. `restricted`
   means that no permissions key is provisioned, so there is no grant store to consult. A missing local profile (`profile.json`) alone does not make an app `restricted`: the principal is then the default local user `local`, and the app logs a warning.
 
 ## 32. Where the key lives: an environment key means no key file on the data volume

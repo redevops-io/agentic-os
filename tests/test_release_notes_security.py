@@ -41,7 +41,7 @@ def test_the_review_claim_is_factual_and_no_document_claims_an_audit_or_certific
 
 def test_every_limitation_is_in_the_section():
     s = section(31)
-    for needle in ("BB-03", "BB-04", "BB-05", "BB-06", "BB-07", "BB-08", "PRIVACY_PENDING_MAX", "PRIVACY_INTAKE_GLOBAL_PER_HOUR", "frame's `__name__`", "app_gate._SEAL", "approval token", "`enforced` with no grants"):
+    for needle in ("Public intake can be filled", "identifies its caller by the frame", "tell anonymous callers whether authorization is enforced", "ticket seal is reachable", "revoke race", "`enforced` with no grants", "PRIVACY_PENDING_MAX", "PRIVACY_INTAKE_GLOBAL_PER_HOUR", "frame's `__name__`", "app_gate._SEAL", "approval token", "`enforced` with no grants"):
         assert needle in s, needle
 
 

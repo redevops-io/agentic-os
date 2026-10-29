@@ -148,7 +148,7 @@ holds `None`, `""` or only whitespace there, is never matched by `in` or `own`, 
 `masked_for_row()` and the tool gate. Numbers are not coerced: a grant that listed `[1, 2]` (the API accepts JSON numbers) now
 matches nothing; list them as strings (`["1", "2"]`).
 
-**Exact matching (SC-11).** `in`, `eq`, ownership, role names and column/mask names are compared **exactly**: `EU` does not match `eu`, `" ana "` is not `ana`, a mask on `email` does not mask `Email`. This is a **behaviour change**: `in` used to lower-case both sides, so a grant `in region ("acme")` also matched `ACME`; it no longer does. Nothing in the plane, `slice()`, `row_allowed()`, `masked_for_row()` or the UI folds case. A business field that needs case-insensitivity must be normalised by an explicit, trusted schema-level rule **before** authorisation is evaluated (store `region` in one canonical case, normalise the user's identity the same way); the plane will not guess. (The Enterprise package's grant evaluation is also exact.)
+**Exact matching.** `in`, `eq`, ownership, role names and column/mask names are compared **exactly**: `EU` does not match `eu`, `" ana "` is not `ana`, a mask on `email` does not mask `Email`. This is a **behaviour change**: `in` used to lower-case both sides, so a grant `in region ("acme")` also matched `ACME`; it no longer does. Nothing in the plane, `slice()`, `row_allowed()`, `masked_for_row()` or the UI folds case. A business field that needs case-insensitivity must be normalised by an explicit, trusted schema-level rule **before** authorisation is evaluated (store `region` in one canonical case, normalise the user's identity the same way); the plane will not guess. (The Enterprise package's grant evaluation is also exact.)
 
 **Malformed definitions fail closed.** `GrantStore.add` rejects the whole grant with `GrantError` (a `RuntimeError`: the control
 plane, the enterprise router and the demo answer **409**; the message names the field, never its content) for: an `own`/`in`
@@ -356,7 +356,7 @@ check: `agentic_os/permissions_profiles.py` (`build_gate`, `DeterministicApprove
 | **demo** (unattended) | enforced; limited, visible demo grants (`created_by="demo-fixture"`) | deterministic: auto-resolved only for the explicitly listed `ApprovedOperation`s (each with a written reason and an optional argument predicate); everything else is denied immediately, never waited on | a recorded **stub**, never the real body (`gate.registry()`), unless the tool is named in `build_gate(safe_synthetic=[...])` |
 | **test** (automated) | enforced; synthetic grants | the same deterministic approver; never prompts | the same recorded stub |
 
-**A deterministic approval decision is not a simulation of a side effect** (SC-04): approving `ban_ip` does not make `ban_ip`
+**A deterministic approval decision is not a simulation of a side effect**: approving `ban_ip` does not make `ban_ip`
 harmless. So, in the demo and test profiles, the registry the profile builds (`gate.registry()`) swaps every side-effecting tool
 (`side_effecting` in its spec, or classified `write`/`delete`) for a recorded stub when it is registered. The stub keeps the tool's spec
 (approval and authorisation still apply) and records what would have happened in `gate.effects` (`kind` = the tool name, argument names
@@ -372,7 +372,7 @@ signatures carry none). What the repository already had: the harness `ApprovalPo
 with a named, deterministic approver whose decisions are logged, and the substituting registry; it does not use `bypass`. The Agent Gateway has its own
 plane and is not affected (section 12).
 
-**Scanners are approval-gated too** (SC-17): the six scanner launchers are classified `write` **and** registered
+**Scanners are approval-gated too**: the six scanner launchers are classified `write` **and** registered
 `side_effecting=True` in `apps/edge-sentinel/app.py`, so the approval policy applies in addition to the write grant. A live
 console with `allow_side_effects=[]` therefore waits for a human before starting a scan; the demo/test profiles do not auto-approve
 one unless it is listed as an `ApprovedOperation`, and then only a stub runs.
@@ -402,9 +402,9 @@ builds a `GrantStore` at import. `tests/test_demo_compatibility.py` (and `.githu
 start each documented path with synthetic data, run its workflow with no human, and assert that the intended operation
 succeeds and the unauthorised ones stay denied.
 
-## 13. Review hardening: admin API, public demo API, and the rest
+## 13. Admin API, public demo API and grant-store robustness
 
-**SC-02 — breaking.** The permissions API is two interfaces now.
+**Breaking.** The permissions API is two interfaces now.
 
 * **Admin API** (control plane, the showcase's admin routes; the enterprise router's inherited routes are patched separately): `GET status`, `GET
   grants`, `POST preview`, `POST authorize`, `POST`/`PUT`/`DELETE grants` **all require the admin credential**. No credential, a wrong, empty or
@@ -414,26 +414,26 @@ succeeds and the unauthorised ones stay denied.
   preview or authorize anonymously: a script that did `curl .../api/permissions/grants` now gets 401. The control-plane admin page already sends it.
 * **Public demo API** (showcase only): `GET /api/demo/scenarios`, `GET /api/demo/scenarios/{id}`: fixed, synthetic, allowlisted scenarios; no
   identities, roles, resources or actions accepted; never a real grant, principal, predicate, decision or store status. The old per-visitor
-  overlay, its cookie and the anonymous read routes are removed (this also closes SC-12). `/healthz` is liveness only.
+  overlay, its cookie and the anonymous read routes are removed. `/healthz` is liveness only.
 
 **Seen by a deployment:** the showcase compose and `deploy.sh` now start with `--env-file permissions.env`, which should also carry
 `PERMISSIONS_ADMIN_KEY`; without it the admin API is disabled (503) and the page's admin panel says so. The cloudflared rule must also route
 `/api/demo/*`. `/api/permissions/status` is no longer a health probe: use `/healthz`.
 
-**SC-05** the sealed/unsealed state is per operation (inside the locked transaction); a failed read aborts a write. **SC-13** the grants lock wait
-is bounded (default 10 s, `PERMISSIONS_LOCK_TIMEOUT`); the error leaves the data intact. **SC-06** `actions: []` is rejected at add/update and
-unusable when stored (it no longer becomes `["read"]`); only an absent or null `actions` defaults. **SC-07** `seed()` runs at most once per store
-(a marker inside the encrypted payload), so revoking everything is not undone by a restart. **SC-09** an existing key file wider than 0600 or owned by
+The sealed/unsealed state is per operation (inside the locked transaction); a failed read aborts a write. The grants lock wait
+is bounded (default 10 s, `PERMISSIONS_LOCK_TIMEOUT`); the error leaves the data intact. `actions: []` is rejected at add/update and
+unusable when stored (it no longer becomes `["read"]`); only an absent or null `actions` defaults. `seed()` runs at most once per store
+(a marker inside the encrypted payload), so revoking everything is not undone by a restart. An existing key file wider than 0600 or owned by
 someone else is refused (`chmod 600` and own it, or provide `PERMISSIONS_KEY`; a mounted secret is often 0444 root-owned: use the environment
-variable there); only the explicit generated-key dev opt-in uses it, with a warning. **SC-11** exact matching (section 3a). **SC-10** a malformed
-request is a clean denial or a 400, never a 500; bodies over 64 KB are 413. **SC-19** `remove_count(id)` reports how many entries went; legacy
+variable there); only the explicit generated-key dev opt-in uses it, with a warning. Exact matching is described in section 3a. A malformed
+request is a clean denial or a 400, never a 500; bodies over 64 KB are 413. `remove_count(id)` reports how many entries went; legacy
 duplicate ids are all removed with a log line.
 
-**SC-15 backup and rollback.** While a `grants.jsonl.migrated-*` plaintext backup exists every start warns; `agentic-os permissions migrate
+**Backup and rollback.** While a `grants.jsonl.migrated-*` plaintext backup exists every start warns; `agentic-os permissions migrate
 --purge-backup --dir D` verifies that the encrypted store opens, overwrites the backup in place, fsyncs and removes it (no symlink is followed;
 journals, snapshots and copies elsewhere are not reached). Each write now bumps a counter inside the encrypted payload and records it in a sidecar
 (`grants.counter` next to the store, or `PERMISSIONS_COUNTER_FILE` on another volume); an **older** store than the sidecar recorded is refused with a
-clear message and an explicit recovery, `agentic-os permissions accept-rollback --dir D`. **RR-05:** a MISSING sidecar next to a store above its first
+clear message and an explicit recovery, `agentic-os permissions accept-rollback --dir D`. A MISSING sidecar next to a store above its first
 write (counter > 1) is refused too (fail closed, nothing honoured, writes refused); it used to count as "floor 0", so an older store plus a deleted
 sidecar passed. Recovery after you moved or lost the sidecar on purpose: `agentic-os permissions recover-counter --dir D --confirm` (verifies the
 store opens, refuses when a sidecar exists, records the store's own counter; without `--confirm` it changes nothing). A pre-counter store (written
@@ -443,18 +443,18 @@ different volume or host path): a snapshot restore of the data directory is then
 snapshot that restores the whole directory restores the sidecar too. Adopting an off-volume sidecar on an existing store needs one `recover-counter
 --confirm`.
 
-**SC-04 / SC-08 / SC-17** profiles substitute stubs for side-effecting bodies (section 10); a public tool that declares side effects is denied; the six
-scanner launchers are registered `side_effecting=True`, so approval applies in addition to the write grant. **SC-18** no dynamic value reaches an
-inline handler; escaped for attribute context. **SC-03** `.dockerignore` excludes every key-bearing path and `make permissions-key` defaults to
-`~/.config/agentic-os/permissions.env`. **SC-14** `deploy.sh` has `--init-key`, stops when the host has no key, excludes key and env files from
-`rsync --delete`. **SC-20** CI installs `agent-harness` from a commit.
+Profiles substitute stubs for side-effecting bodies (section 10); a public tool that declares side effects is denied; the six
+scanner launchers are registered `side_effecting=True`, so approval applies in addition to the write grant. No dynamic value reaches an
+inline handler; escaped for attribute context. `.dockerignore` excludes every key-bearing path and `make permissions-key` defaults to
+`~/.config/agentic-os/permissions.env`. `deploy.sh` has `--init-key`, stops when the host has no key, excludes key and env files from
+`rsync --delete`. CI installs `agent-harness` from a commit.
 
 **Dispatch paths.** Besides the harness `ToolRegistry`, the `books`, `billing` and `compliance` consoles dispatch 13 tools through
 `assistant.Assistant`; they are now classified and `Assistant(authorizer=...)` consults the same seam (an authorizer that raises is a denial).
 
-## 14. Second round of review hardening: what changed (RR-01 to RR-14, PP-01 to PP-13) and the identifier contract
+## 14. Gated app start-up, console gating, grant administration, pages, and the identifier contract
 
-**Apps start gated or not at all (RR-01).** Every app that joins the enterprise permissions plane now calls `agentic_os.app_gate.install_gate("<app>")` at
+**Apps start gated or not at all.** Every app that joins the enterprise permissions plane now calls `agentic_os.app_gate.install_gate("<app>")` at
 import instead of `try: bootstrap(...) except Exception: <ungated>`. Permissions are *requested* when `CR_PERMISSIONS` is set to anything but an explicit
 off value (`0`, `false`, `no`, `off`, empty) or any `CR_IDENTITY_*` variable is set. When requested, a missing enterprise package, a bootstrap too old to take
 `tool_actions`, a table that cannot be resolved, ANY exception from `bootstrap` and a bootstrap that installs no process-wide authorizer are a
@@ -464,19 +464,19 @@ the app registers plus the enterprise `fleet_tool_actions` of the same app, merg
 Dockerfiles install the kernel from a pinned `KERNEL_REF` tag; an image built from this app code needs a kernel release that contains `agentic_os.app_gate`
 (nothing in this change moves a pin).
 
-**Consoles are gated (RR-02).** The books, billing and compliance consoles use their own `authorizer=` or else the process-wide default authorizer the
+**Consoles are gated.** The books, billing and compliance consoles use their own `authorizer=` or else the process-wide default authorizer the
 enterprise bootstrap installs (read at call time, the same seam as a harness `ToolRegistry`); with permissions requested and no authorizer installed they deny.
 
-**Grant administration is its own privilege (RR-03, RR-04, PP-04).** Only `PERMISSIONS_ADMIN_KEY` (at least 24 characters) opens `/api/permissions/*`; neither
+**Grant administration is its own privilege.** Only `PERMISSIONS_ADMIN_KEY` (at least 24 characters) opens `/api/permissions/*`; neither
 `AGENTIC_OS_API_KEY` nor the control token does, and a shorter key answers 503 like no key (one log line, never the value). Wrong credentials are throttled per
 client: 10 in 5 minutes, then 429 with `Retry-After` (a missing credential is not counted; a locked client is locked for good guesses too). The client is the
 connection peer; set `PERMISSIONS_TRUSTED_PROXIES` (addresses or CIDRs) when a proxy fronts the service, and only then is `X-Forwarded-For` believed (rightmost
 untrusted hop). Without it everything behind one proxy shares one lockout.
 
-**Rollback protection (RR-05).** See section 13: a missing sidecar next to a store above counter 1 is refused; `agentic-os permissions recover-counter --dir D
+**Rollback protection.** See section 13: a missing sidecar next to a store above counter 1 is refused; `agentic-os permissions recover-counter --dir D
 --confirm` re-establishes it. Keep the sidecar off the data volume (`PERMISSIONS_COUNTER_FILE`).
 
-**Pages and the admin API (RR-06, RR-14, PP-01 to PP-13).** The control-plane `/permissions` page keeps the admin key in memory only: nothing is sent until the
+**Pages and the admin API.** The control-plane `/permissions` page keeps the admin key in memory only: nothing is sent until the
 operator presses Unlock (never per keystroke), the field is cleared, reloading forgets the key. Both pages carry a strict CSP with a per-response nonce, `X-Frame-Options:
 DENY`, `nosniff`, `Referrer-Policy: no-referrer`; the admin API answers `Cache-Control: no-store`. There are no inline handlers or style attributes. Trailing-slash
 redirects are relative (the showcase answers 404); `/docs`, `/redoc` and `/openapi.json` are off (the control plane serves `/openapi.json` only to the fleet
@@ -484,7 +484,7 @@ credential); the 503 body names no variable (the fix is logged). The showcase st
 store on the first authenticated admin request. The pages say what the plane does: it enforces where an application installs the authorizer over its tools; the AGPL
 plane gives basic resource permissions and governed tool access suitable for individual and trusted small-team deployments.
 
-**The sidekick MCP server (RR-13).** `deploy/sidekick-devops/mcp_server.py` is stdio by default; `MCP_TRANSPORT=http` needs `MCP_BEARER_TOKEN` (24+ characters) or it
+**The sidekick MCP server.** `deploy/sidekick-devops/mcp_server.py` is stdio by default; `MCP_TRANSPORT=http` needs `MCP_BEARER_TOKEN` (24+ characters) or it
 refuses to start; it binds `127.0.0.1` unless `BIND_HOST` is set; the host's ambient AWS credentials are used only with `SIDEKICK_MCP_ALLOW_AWS=1`.
 
 ### The identifier contract (breaking validation change)
@@ -529,8 +529,8 @@ executes a tool (`/agent/run`, `/api/run`, `/api/chat`, `/api/agent`, `/api/disc
 two grants needs both (a `push` needs `assistant.push_assets` as well as the action). Authorisation and approval stay separate: a write grant lets the capability STAGE and, with the
 operator approval the core still demands, execute; an approval never substitutes for a grant. In the enterprise mode nothing new is enforced on the routes (the enterprise gate keeps its own seam).
 
-**Tool classification (kernel side, no enterprise package).** Classified from what the code does, with the registered `side_effecting` flag as a cross-check, and the optional Enterprise package's tool table compared once (never imported or copied): its overlapping entries agree with the kernel table and none is classified only by the Enterprise table. **The kernel table lists 64 tools for the ten apps and 135 in total (FR-13).** The table is cross-checked only in the enterprise mode, only from an installed distribution, and can only add denials (section 18). One kernel-side disagreement with a registration flag: `compliance.scan` is registered non-side-effecting but runs the oscap scan script, so it is `write`. Anything not
-listed is unclassified and denied. Not covered by the seam: `sky`, `video-ad` and `zoning` ship an operator but no `app.py` (nothing installs a gate for them). (Edge-sentinel's case, network, backup and permission routes are gated since the final re-review; section 18.)
+**Tool classification (kernel side, no enterprise package).** Classified from what the code does, with the registered `side_effecting` flag as a cross-check, and the optional Enterprise package's tool table compared once (never imported or copied): its overlapping entries agree with the kernel table and none is classified only by the Enterprise table. **The kernel table lists 64 tools for the ten apps and 135 in total.** The table is cross-checked only in the enterprise mode, only from an installed distribution, and can only add denials (section 18). One kernel-side disagreement with a registration flag: `compliance.scan` is registered non-side-effecting but runs the oscap scan script, so it is `write`. Anything not
+listed is unclassified and denied. Not covered by the seam: `sky`, `video-ad` and `zoning` ship an operator but no `app.py` (nothing installs a gate for them). (Edge-sentinel's case, network, backup and permission routes are gated; section 18.)
 
 Per-app inventory of the ten apps that execute tools through routes and operators (evidence = where the tool is declared; every row is also a test in `apps/test_basic_permissions_apps.py`):
 
@@ -615,7 +615,7 @@ migration by the operator: **remove the grant by id (`agentic-os permissions rev
 contains a comma is refused (409) and a stored one is unusable and counted in `status()["malformed"]`; the same holds for a comma in an action, mask or row column name (already the case
 for those three). This is a **breaking** validation change; user and app names may contain commas (they are single strings compared exactly). It matches the CR planes (Python and Go).
 
-## 17. Admin API throttle behind a proxy, and the required deploy step (page re-test RT-01 to RT-05)
+## 17. Admin API throttle behind a proxy, and the required deploy step
 
 With `PERMISSIONS_TRUSTED_PROXIES` unset (the compose default) every visitor behind the reverse proxy shares ONE failed-attempt bucket. A hard lock would let ten anonymous wrong keys lock the real
 admin out, so a shared bucket now **backs off** (each request waits `min(5 s, 0.25 s * 2^(failures - 10))`, identically for correct, missing and wrong keys; at most 8 threads sleep, the overflow is a
@@ -626,30 +626,29 @@ API is enabled without the setting. **Deploy step (breaking for the showcase dep
 (shared /64, bounded table eviction, per-process counters): `docs/SECURITY_MODEL.md`, "Admin API throttle".
 
 
-## 18. Final re-review (FR-01 to FR-14): what changed
+## 18. Switch spellings, authorizer precedence, route gating and smaller fixes
 
-**Switch spellings (FR-03).** `AGENTIC_OS_PERMISSIONS`, `AGENTIC_OS_PERMISSION_AWARE_RETRIEVAL` and `AGENTIC_OS_PERMISSION_AWARE_CACHE` accept, case-insensitively and ignoring surrounding white space, **1, true, yes, on** (on) and
+**Switch spellings.** `AGENTIC_OS_PERMISSIONS`, `AGENTIC_OS_PERMISSION_AWARE_RETRIEVAL` and `AGENTIC_OS_PERMISSION_AWARE_CACHE` accept, case-insensitively and ignoring surrounding white space, **1, true, yes, on** (on) and
 **0, false, no, off** or empty/unset (off). Any other value is "not a recognised value": the app refuses to start with a message naming the variable and these spellings, never starts ungated; at call time such a value counts as
 requested, so a console that is somehow running denies. `CR_PERMISSIONS` keeps its own rule: any non-off value is a request.
 
-**Authorizer precedence (FR-10).** When the engine's default authorizer (what the enterprise bootstrap installs, or anything that calls `set_default_authorizer`) and the kernel's own (basic mode) are BOTH
+**Authorizer precedence.** When the engine's default authorizer (what the enterprise bootstrap installs, or anything that calls `set_default_authorizer`) and the kernel's own (basic mode) are BOTH
 installed, the consoles and `default_authorizer()` use the **stricter rule: both allow** (the first deny reason wins). A permissive default installed later can never loosen basic mode and basic mode never loosens the
 enterprise gate; one alone is used as is.
 
-**Route gating under either gate (KD-3, FR-02).** `app_gate.RequestContext` (installed in every app) makes the current request visible to `tool_denial`, so every route that executes a tool or returns tool/activity
+**Route gating under either gate.** `app_gate.RequestContext` (installed in every app) makes the current request visible to `tool_denial`, so every route that executes a tool or returns tool/activity
 data asks the ACTIVE gate (basic: the local profile; enterprise: the principal the bootstrap resolves from the request, anonymous when there is none) with the request's principal. The seven older apps' routes
 (`/agent/run`, `/api/activity`, `/`, edge-sentinel's case/network/backup/permissions routes, privacy's fulfil/retention/audit) are gated like the ten newer ones. The disposition of EVERY route of the 17 apps (gated with its
 tool, public by design with the reason, operator-authenticated, engine console, framework) is `apps/_route_table.py`; `apps/test_route_walk.py` fails when a route has no decision and walks every gated route anonymously
 under the enterprise gate and under restricted basic mode.
 
-**Final re-review items, one line each.** FR-01 the Operator seam denies when basic permissions are requested and no gate is registered for the operator (the suite server installs its gates; `sky`, `video-ad`, `zoning` are denied
-under permissions until they get a tool table; the operators the kernel planes build themselves are exempt per capability by registration, see section 26). FR-02/KD-3 the routes ask the active gate with the request's principal. FR-03 strict
-switch parsing. FR-04 `infra.plan` and `infra.drift` are `write`; an automated sink heuristic covers the read classifications. FR-05 the Operator authorises before its idempotency cache and keys the cache by principal.
-FR-08 the profile file is read like a secret (no symlink, regular file, owned by the user, mode 0600). FR-10 stricter-of-both. FR-11 the enterprise table is read only from an installed distribution, only in the enterprise mode,
-and can only add denials. KD-1 the engine's default authorizer is looked up where the engine keeps it. KD-2 with nothing requested the enterprise bootstrap is used for identity only (`install=False`).
-FR-06 (a store at counter 1 with a deleted sidecar is accepted; a whole-directory restore revives revoked grants) is a disclosed residual, not a code change.
+**Smaller changes, one line each.** The Operator seam denies when basic permissions are requested and no gate is registered for the operator (the suite server installs its gates; `sky`, `video-ad`, `zoning` are denied
+under permissions until they get a tool table; the operators the kernel planes build themselves are exempt per capability by registration, see section 26). The routes ask the active gate with the request's principal. Switch parsing is strict. `infra.plan` and `infra.drift` are `write`; an automated sink heuristic covers the read classifications. The Operator authorises before its idempotency cache and keys the cache by principal.
+The profile file is read like a secret (no symlink, regular file, owned by the user, mode 0600). When both authorizers are installed the stricter of the two applies. The enterprise table is read only from an installed distribution, only in the enterprise mode,
+and can only add denials. The engine's default authorizer is looked up where the engine keeps it. With nothing requested the enterprise bootstrap is used for identity only (`install=False`).
+A store at counter 1 with a deleted sidecar is accepted, and a whole-directory restore revives revoked grants: both are disclosed residuals, not code changes.
 
-## 19. An unset setting is not consent: the rule, the execution invariant, cache order, and the threat model (design decisions after the final re-review)
+## 19. An unset setting is not consent: the rule, the execution invariant, cache order, and the threat model
 
 **The rule (implemented).** `AGENTIC_OS_PERMISSIONS` has three meaningful states and one failure:
 
@@ -658,7 +657,7 @@ FR-06 (a store at counter 1 with a deleted sidecar is accepted; a whole-director
 | `1` (true, yes, on) | permissions enforced (basic, AGPL) | gate installed; no grants provisioned = starts restricted (denies, pointing at `agentic-os permissions init`) |
 | `off` (0, false, no) | **deliberate standalone mode** | no authorization on the app's tools; a start-up INFO line says "authorization is explicitly disabled (standalone)" |
 | **unset** | *unconfigured*, not consent | the documented single-user quickstart keeps working (basic default) **but** every app logs, once, a WARNING that authorization is NOT enforced and how to enforce it (`agentic-os permissions init`, `AGENTIC_OS_PERMISSIONS=1`) or silence it deliberately (`=off`). With `AGENTIC_OS_REQUIRE_PERMISSIONS_SETTING=1` an unset setting REFUSES TO START |
-| anything else | malformed | refuses to start (FR-03) |
+| anything else | malformed | refuses to start |
 
 **Loopback versus non-loopback: not implementable robustly, so the alternative is used.** Whether an app is reachable is decided by the process manager (`uvicorn --host`, a container's published port), not by
 the module, and containers bind 0.0.0.0 by design; a check at import time would either miss the exposure or refuse local development. Implemented instead: (1) where the code binds itself (14 apps' `__main__`)
@@ -687,11 +686,11 @@ reach: processes that never import `agentic_os.mission.operator_sdk` (none ships
 effective scope (resource, action, row filter, column masks); a read whose scope changed executes again inside the new scope, a write whose scope changed is refused (new key needed), and a principal who lost access gets the
 denial, not the cached body, and the side effect is not repeated.
 
-**Authorizer conflicts (FR-10).** When the engine's default and the kernel's own authorizer are both installed, both must allow; if they disagree the call is denied (tests: engine denies/kernel allows, kernel denies/engine
-allows, both allow). **Classification (FR-11)**: a planted `sys.path` module or an unexpected distribution can never weaken it; the enterprise table can only add denials. The reviewed per-tool record is
+**Authorizer conflicts.** When the engine's default and the kernel's own authorizer are both installed, both must allow; if they disagree the call is denied (tests: engine denies/kernel allows, kernel denies/engine
+allows, both allow). **Classification**: a planted `sys.path` module or an unexpected distribution can never weaken it; the enterprise table can only add denials. The reviewed per-tool record is
 `docs/TOOL_CLASSIFICATION_INVENTORY.md`; the sink heuristic is a regression signal that cannot prove a tool read-only.
 
-**Threat model (FR-06, documentation only).** The rollback counter protects against restoring an older `grants.enc` while the sidecar stays (partial restores) and against deleting the sidecar of a store past its first
+**Threat model (documentation only).** The rollback counter protects against restoring an older `grants.enc` while the sidecar stays (partial restores) and against deleting the sidecar of a store past its first
 write. It does NOT protect against an attacker who controls the storage volume itself (a whole-directory or whole-volume restore, which restores the sidecar and the key file too), against a store at counter 1 with a
 deleted sidecar, or against anyone who can write the permissions directory and read the key. Those are out of scope for the first AGPL release unless made an explicit guarantee; keep `PERMISSIONS_COUNTER_FILE` on a
 different volume, and the key outside the data volume (`PERMISSIONS_KEY` from a secret store), if they matter.
@@ -701,7 +700,7 @@ the consoles' `/api/agent`, and the apps' tool bodies (the shared `guarded` wrap
 callers with their own OAuth/token layer and govern kernel operators by action class (those operators are registered as kernel-governed, section 26), and the `agentic-os` CLI, whose commands administer the permissions
 store and local state rather than execute app tools. The gateway's REST adapter, MCP bridge and MCPEndpoint return a short fixed code (for example `capability_error`, `gateway_error`, `duration_exceeded`) when a capability, a write port or a gateway seam raises, never the exception text; the code is chosen from a fixed list, not copied from the message. The exception text and traceback go to the `agentic_os.agent_gateway` log together with the request id (control characters escaped), so gateway logs hold the raw exception text by design and access to them is privileged. A handler that returns its own error string is unchanged. The reproducible sweep is `tests/sweeps/sweep.py` (about 86,000 calls, no violation at the commit that adds it).
 
-## 20. The operator's caller credential and the user's identity token use separate headers (KD-4)
+## 20. The operator's caller credential and the user's identity token use separate headers
 
 An operator's `POST /invoke` authenticates its CALLER (the control token, or a tenant token) and, under an enterprise gate in token identity mode, the END USER comes from `Authorization: Bearer <JWT>`.
 Both used to read `Authorization: Bearer`, so with a control token configured a user identified by a token could not use `/invoke` (the JWT failed as a control credential, or the control token made the
@@ -714,11 +713,11 @@ request anonymous). The contract now:
 | `Authorization: Bearer <control token>` | **still works for existing callers** (no `X-Control-Token`): the original contract. In enterprise token mode the same header would also be the user's identity channel, so such a request identifies no user (anonymous): switch those callers to `X-Control-Token` |
 
 Neither credential stands in for the other: a wrong `X-Control-Token` is not rescued by a correct Bearer; a JWT in `X-Control-Token` or alone in `Authorization` is refused (401); a forged or invalid user token
-is anonymous even with a valid control token; with no token configured the route stays disabled (503, or the explicit development flag). A repeated `X-Control-Token` or `Authorization` header (BB-02), or an `X-Control-Token` together with a DIFFERENT valid control credential in `Authorization`, is refused with 401: a duplicated credential header is a
+is anonymous even with a valid control token; with no token configured the route stays disabled (503, or the explicit development flag). A repeated `X-Control-Token` or `Authorization` header, or an `X-Control-Token` together with a DIFFERENT valid control credential in `Authorization`, is refused with 401: a duplicated credential header is a
 request-smuggling signal, and no copy is preferred. Only `/invoke` changed; the other control routes still read `Authorization`.
 Tests: `tests/test_kd4_control_token_channel.py`.
 
-## 21. The idempotency cache rule holds under the enterprise gate too (KD-5)
+## 21. The idempotency cache rule holds under the enterprise gate too
 
 `app_gate.principal_key` and `app_gate.operator_scope` are mode-aware. Basic mode: the local profile user and the digest of the plane's decision. Enterprise mode: a digest of the identity the enterprise
 gate resolves for THIS request (user, app, role set; anonymous when there is none, as for a background job) and a digest of the plane's CURRENT decision for it (allow with row filter, column masks and
@@ -739,7 +738,7 @@ The gate registries (`_GATES`, `_ENTERPRISE`, the "not enforced" notices and the
 and after every test, and a harness that re-imports apps in one process should too. Production does not need it: `install_gate` starts each app from a clean entry, a reinstall that no longer enforces basic
 permissions drops the stale process-wide authorizer once no gate is left, and if an app name were ever in both registries the stricter answer wins. Tests: `tests/test_gate_state_reset_and_stale_entries.py`.
 
-## 24. The enterprise package is imported only on an explicit request, and only from an installed distribution (DR-02)
+## 24. The enterprise package is imported only on an explicit request, and only from an installed distribution
 
 * **Nothing requested, or basic permissions (`AGENTIC_OS_PERMISSIONS`)**: the kernel does NOT import `context_runtime_enterprise` at all, whether or not it is installed (before, with nothing requested it was
   imported to resolve the request identity; the bootstrap is no longer called). Basic mode only sets the engine's default authorizer when the PUBLIC engine package (`context_runtime`) is installed.
@@ -748,7 +747,7 @@ permissions drops the stale process-wide authorizer once no gate is left, and if
   install, to lie under the project directory in the distribution's `direct_url.json`. A package that is present but not provided that way (a directory on `sys.path`, such as the working directory of
   `python -m uvicorn`, a module injected into `sys.modules`) makes the app REFUSE to start ("not provided by an installed distribution"); nothing is imported. Absent keeps the missing-capability error.
 * The distribution itself is looked up ONLY in the interpreter's own package directories (`sysconfig` purelib / platlib, `site.getsitepackages()`, the user site; the venv's site-packages inside a venv), never in the
-  working directory or another `sys.path` entry (BB-01: `importlib.metadata` reads dist-info from every `sys.path` entry, so a forged `*.dist-info` next to a planted package would otherwise vouch for it). A RECORD-listed
+  working directory or another `sys.path` entry (`importlib.metadata` reads dist-info from every `sys.path` entry, so a forged `*.dist-info` next to a planted package would otherwise vouch for it). A RECORD-listed
   file must lie there too; an editable install is trusted when its dist-info is there and the package lies under the project directory it records. Both recipes work: a normal `pip install` of the optional Enterprise package, and `pip install -e`.
 * The enterprise tool table (`tool_actions`) and the engine hook use the same check.
 * **Limit:** this does not defend against an attacker who already controls the import environment (the installed packages, the interpreter, `PYTHONPATH`-style startup hooks, the metadata itself); it removes
@@ -764,20 +763,20 @@ unchanged (a grant spelled `X.` covers a resource named exactly `X.`, not bare `
 the tool seam looks a tool up by exact name in the trusted table, and the other prefix tests in the kernel match URL paths, not resources. Tests: `tests/test_resource_empty_segment_coverage.py`; the Enterprise package's authorization suite,
 run against this kernel, also passes.
 
-## 26. No exemption by operator name (DR-04)
+## 26. No exemption by operator name
 
 `app_gate.KERNEL_OPERATORS` (a set of three NAMES) is gone: an operator someone calls `social`, `interaction` or `external-agent` is gated like any other. The three kernel planes that build their own operators
 register the operator OBJECT and the capabilities it has at that moment with `app_gate.kernel_governed(operator, reason)`, which refuses any caller outside `agentic_os.interaction.operator`,
 `agentic_os.agent_gateway.social.operator` and `agentic_os.agent_gateway.external.operator`. `operator_denial(name, capability, operator=...)` honours the registration for that object and capability only; a second
 operator with the same name and capabilities, or a capability added later, is not exempt. Tests: `apps/test_dr04_no_name_based_exemption.py` (also pins the exact registration sites).
 
-## 27. A missing `profile.json` means the default local user `local` (DR-09)
+## 27. A missing `profile.json` means the default local user `local`
 
 Quickstart threat model: the single local principal comes from `profile.json` (written by `agentic-os permissions init`) and from nothing a request carries. When the file is missing (a store provisioned before
 profiles existed) the principal is the default local user `local`, with a warning at start-up that names the file and `agentic-os permissions init`; the fallback fails closed unless grants for `local` exist. Request
 headers, query strings and tokens never choose the principal (tested with a missing profile too). Tests: `tests/test_dr09_missing_profile_default_user.py`. See `docs/SECURITY_MODEL.md`.
 
-## 28. What this release claims, and what it does not (DR-03)
+## 28. What this release claims, and what it does not
 
 The statement this release makes, and no more: *The permissions plane and the app execution paths were reviewed in a multi-stage, AI-assisted security review with separate reviewer agents working from the code diff; this is not an external audit or third-party certification. Deployment configuration may still run unenforced when the setting is absent.*. This release does not describe a deployment as protected by default: an
 app started with `AGENTIC_OS_PERMISSIONS` unset (or `=off`) enforces nothing, and says so:
@@ -819,7 +818,7 @@ Making the strict permission setting the default (an unset setting refusing to s
 
 Tests: `tests/test_basic_plane_app_grants_are_union_subjects.py`.
 
-## 30. The privacy portal is public by design: a constrained exception (`public_intake`), not a bypass (DR-01)
+## 30. The privacy portal is public by design: a constrained exception (`public_intake`), not a bypass
 
 **What it is.** `agentic-privacy`'s `POST /intake` and `POST /request` (and the static form at `GET /intake`) are reachable WITHOUT a grant: a data subject has to be able to file a request. They are the only routes
 of the 17 apps with this property. They are registered by id in trusted code (`agentic_os.tool_actions.PUBLIC_INTAKE_ROUTES`: app, method, path, and the one tool they may act for), no environment variable or
@@ -848,21 +847,21 @@ without `PRIVACY_PUBLIC_URL` sends no verification message. Tests: `apps/agentic
 
 ## 31. Known limitations of this release (stated, not fixed)
 
-* **Public intake can be filled (BB-03).** The portal's pending backlog (`PRIVACY_PENDING_MAX`, default 200) and the global cap (`PRIVACY_INTAKE_GLOBAL_PER_HOUR`, default 500) bound the e-mail the portal can be made to send, and
+* **Public intake can be filled.** The portal's pending backlog (`PRIVACY_PENDING_MAX`, default 200) and the global cap (`PRIVACY_INTAKE_GLOBAL_PER_HOUR`, default 500) bound the e-mail the portal can be made to send, and
   they can be filled by valid, unique addresses: once full, real data subjects get 503 or 429 until entries expire (the unverified retention is 72 hours, `PRIVACY_UNVERIFIED_RETENTION_HOURS`) or are verified. Each accepted
   submission sends one e-mail to the typed address; the raw address is kept in the requests store, unverified, for up to that retention, while the audit log holds it masked. There is no CAPTCHA. What an operator can do:
   lower the caps to what the mailbox provider tolerates, put a rate limit or a challenge in front of `/intake` and `/request`, and watch for `public_intake` audit events and 503s. The limiter state is per process.
-* **`kernel_governed` identifies its caller by the frame's `__name__` (BB-04).** Only the three kernel plane modules may register an operator as governed by their plane; the check reads the calling frame's module
+* **`kernel_governed` identifies its caller by the frame's `__name__`.** Only the three kernel plane modules may register an operator as governed by their plane; the check reads the calling frame's module
   name, so in-process code that sets `__name__` to one of those names could register an operator. A normal import path cannot. In-process code can do far more than this; the check keeps a user-chosen operator
   or capability NAME from obtaining the exemption, which it does.
-* **`/health` and `/_security` tell anonymous callers whether authorization is enforced (BB-05).** `authorization: enforced | restricted | unenforced` and `authorization_setting: on | off | unset | enterprise` are part of
+* **`/health` and `/_security` tell anonymous callers whether authorization is enforced.** `authorization: enforced | restricted | unenforced` and `authorization_setting: on | off | unset | enterprise` are part of
   the answer (no key, path or grant content). This is deliberate transparency for deployers and also tells a scanner which instances are open. If the endpoints are reachable from a network you do not control, restrict
   them at the proxy; the fix for an `unenforced` answer is the configuration in section 28, not hiding the answer.
-* **The public-intake ticket seal is reachable in process as `app_gate._SEAL` (BB-06).** The ticket is not an argument of the Operator or any HTTP route and the registry is read-only, so the seal protects against
+* **The public-intake ticket seal is reachable in process as `app_gate._SEAL`.** The ticket is not an argument of the Operator or any HTTP route and the registry is read-only, so the seal protects against
   mistakes and against anything that reaches a route, not against code running inside the process.
-* **A spent approval token in the revoke race (BB-07).** `/invoke` checks the grant before it verifies an approval token and `Operator._execute` checks again. If a grant is revoked between the two, the call is denied and
+* **A spent approval token in the revoke race.** `/invoke` checks the grant before it verifies an approval token and `Operator._execute` checks again. If a grant is revoked between the two, the call is denied and
   the approval token that was verified in between has been consumed (single use). Nothing executes; the approver must approve again.
-* **`enforced` with no grants (BB-08).** A basic-plane app reports `authorization: enforced` when a permissions key is provisioned, even when no grant exists yet: the gate decides and denies everything. `restricted`
+* **`enforced` with no grants.** A basic-plane app reports `authorization: enforced` when a permissions key is provisioned, even when no grant exists yet: the gate decides and denies everything. `restricted`
   means that no permissions key is provisioned, so there is no grant store to consult. A missing local profile (`profile.json`) alone does not make an app `restricted`: the principal is then the default local user `local`, and the app logs a warning.
 
 ## 32. Where the key lives: an environment key means no key file on the data volume
