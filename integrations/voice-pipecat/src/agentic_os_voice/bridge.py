@@ -44,6 +44,7 @@ EV_SUBMITTED = "VoiceActionSubmitted"
 EV_DECIDED = "VoiceActionDecided"
 EV_REFUSED = "VoiceActionRefused"
 EV_RECONCILED = "VoiceActionReconciled"
+EV_REPLAYED = "VoiceActionReplayed"
 EV_HANDOFF = "VoiceHandoffRequested"
 EV_SESSION = "VoiceSession"
 
@@ -225,8 +226,7 @@ class VoiceActionBridge:
     def close_session(self, session_id: str) -> None:
         with self._lock:
             b = self._sessions.pop(session_id, None)
-            self._closed.add(session_id)
-            self._handoff.discard(session_id)
+            self._closed.add(session_id)               # a hand-off request outlives the call: it still blocks a parked action
         if b is not None:
             self._append(EV_SESSION, b.tenant, {"action_id": "", "event": "closed", "session_id": session_id})
 
@@ -314,9 +314,11 @@ class VoiceActionBridge:
             if spec.side_effecting and prior:
                 # an earlier attempt decides before anything is sent again
                 if prior["status"] == ActionStatus.COMPLETED.value:
+                    self._note_replay(binding, spec, action_id, corr, ActionStatus.COMPLETED)
                     return ActionResult(ActionStatus.COMPLETED, Reason.REPLAYED, action_id, corr, sid, spec.name,
                                         receipt_ref=prior.get("receipt_ref", ""), replayed=True)
                 if prior["status"] == ActionStatus.OUTCOME_UNKNOWN.value:
+                    self._note_replay(binding, spec, action_id, corr, ActionStatus.OUTCOME_UNKNOWN)
                     return ActionResult(ActionStatus.OUTCOME_UNKNOWN, Reason.OUTCOME_UNKNOWN, action_id, corr, sid, spec.name)
             if cancel is not None and cancel.is_set():
                 return self._refuse_known(binding, spec, action_id, corr, Reason.CANCELLED_BEFORE_DISPATCH, ActionStatus.FAILED)
@@ -353,6 +355,14 @@ class VoiceActionBridge:
             finally:
                 with self._lock:
                     self._live.discard(action_id)
+
+    def _note_replay(self, b: SessionBinding, spec: ToolSpec, action_id: str, corr: str, status: ActionStatus) -> None:
+        """A repeated request answered from the journal. Nothing is dispatched; the repeat is still on the record."""
+        try:
+            self._append(EV_REPLAYED, b.tenant, {"action_id": action_id, "correlation_id": corr, "tenant": b.tenant, "session_id": b.session_id,
+                                                 "tool": spec.name, "answered_with": status.value})
+        except Exception:  # noqa: BLE001 - the answer does not depend on it
+            _log.warning("could not journal a replay (correlation %s)", corr)
 
     def _refuse_known(self, b: SessionBinding, spec: ToolSpec, action_id: str, corr: str, code: str, status: ActionStatus) -> ActionResult:
         res = ActionResult(status, code, action_id, corr, b.session_id, spec.name, retry_safe=True)
@@ -504,6 +514,12 @@ class VoiceActionBridge:
         if p is None:
             raise KeyError("no pending action with this id (it was decided, or the process restarted and the approval inbox is gone)")
         corr = "corr_" + uuid.uuid4().hex[:20]
+        if self.handoff_active(p.binding.session_id) and not p.spec.allowed_while_handoff:
+            # the caller asked for a person (or was routed to one) after this was parked: an approval cannot turn an automated
+            # follow-up into something sent to someone who is now being handled by a human
+            with self._lock:
+                self._pending.pop(action_id, None)
+            return self._refuse_known(p.binding, p.spec, action_id, corr, Reason.HANDOFF_ACTIVE, ActionStatus.DENIED)
         return self._run(p.binding, p.spec, p.arguments, action_id, p.evidence_refs, p.confirmation, corr, None, resumed=True)
 
     async def resume_async(self, action_id: str) -> ActionResult:

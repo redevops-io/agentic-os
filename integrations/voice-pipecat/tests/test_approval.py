@@ -91,3 +91,15 @@ async def test_the_follow_up_draft_is_read_only_and_sends_nothing(env, make_sess
     p = make_session(env)
     r = await p.call("draft_followup", {"contact": "lead_dana01", "goal": "Share the booking link."})
     assert r.status is ActionStatus.COMPLETED and "Hi Dana" in r.output["draft"] and env.crm.effect_count == 0
+
+
+async def test_a_hand_off_after_the_request_stops_the_parked_message_even_after_approval(env, make_session):
+    p = make_session(env)
+    r = await send(p)
+    assert r.status is ActionStatus.PENDING_APPROVAL
+    assert (await p.request_handoff("distress")).status is ActionStatus.COMPLETED
+    env.bridge.close_session("call-1")                                  # the call is over; the latch is not forgotten
+    env.inbox.approve(r.approval_id, by="alex.reviewer")
+    res = env.bridge.resume(r.action_id)
+    assert (res.status, res.reason) == (ActionStatus.DENIED, Reason.HANDOFF_ACTIVE)
+    assert env.crm.effects_of("send_outreach") == [] and r.action_id not in env.bridge.pending_actions()

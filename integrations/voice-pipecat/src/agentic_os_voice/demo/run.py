@@ -88,9 +88,10 @@ def open_call(env: DemoEnv, fixture: dict, *, identity: IdentityLevel = Identity
 
 @contextlib.contextmanager
 def network_blocked():
-    """In-process guard: any attempt to open a network connection raises. (Not an OS-level sandbox; it proves the demo code and
+    """In-process guard: any attempt to open a network connection, or to bind or listen on a port, raises. (Not an OS-level sandbox; it proves the demo code and
     the libraries it exercised did not try, not that nothing could.)"""
-    real = (socket.socket.connect, socket.socket.connect_ex, socket.create_connection, socket.getaddrinfo)
+    real = (socket.socket.connect, socket.socket.connect_ex, socket.create_connection, socket.getaddrinfo, socket.socket.bind,
+            socket.socket.listen)
 
     def deny(*a: Any, **k: Any):
         raise RuntimeError("network access is blocked in the synthetic demo")
@@ -98,10 +99,13 @@ def network_blocked():
     socket.socket.connect_ex = deny                    # type: ignore[method-assign]
     socket.create_connection = deny                    # type: ignore[assignment]
     socket.getaddrinfo = deny                          # type: ignore[assignment]
+    socket.socket.bind = deny                          # type: ignore[method-assign]      # no listening port either
+    socket.socket.listen = deny                        # type: ignore[method-assign]
     try:
         yield
     finally:
-        socket.socket.connect, socket.socket.connect_ex, socket.create_connection, socket.getaddrinfo = real   # type: ignore[method-assign,assignment]
+        (socket.socket.connect, socket.socket.connect_ex, socket.create_connection, socket.getaddrinfo, socket.socket.bind,   # type: ignore[method-assign,assignment]
+         socket.socket.listen) = real
 
 
 # ── the scripted 'model' for the happy-path call ───────────────────────────────────────────────────────────────

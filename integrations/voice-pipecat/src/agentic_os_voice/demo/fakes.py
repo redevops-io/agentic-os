@@ -192,7 +192,7 @@ class FakeTTS(FrameProcessor):
         await self.push_frame(BotStartedSpeakingFrame(), FrameDirection.UPSTREAM)
         self.speaking.set()
         try:
-            await self.push_frame(TTSTextFrame(text, aggregated_by="sentence"))
+            await self.push_frame(TTSTextFrame(text, aggregated_by="sentence"))   # `text_type` from pipecat 1.13; the pin is 1.12.0
             for _ in range(self._chunks):
                 await self.push_frame(TTSAudioRawFrame(b"\x00" * 640, SAMPLE_RATE, 1))
                 await asyncio.sleep(self._delay)

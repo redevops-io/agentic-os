@@ -60,8 +60,6 @@ class CallSimulator:
         for step in self.fixture["timeline"]:
             op = step["do"]
             before = self.llm.inferences
-            if os.environ.get("VOICE_DEMO_TRACE"):
-                print("SIM", step, "inferences", before, flush=True)
             self.log.append(op + (":" + step.get("id", step.get("name", "")) if ("id" in step or "name" in step) else ""))
             if op == "wait_idle":
                 await self._wait_idle()

@@ -1,0 +1,90 @@
+name: voice-pipecat
+
+# The optional voice integration (integrations/voice-pipecat). Separate from the required `pytest` job on purpose: the base
+# install does not contain it. tests/test_voice_pipecat_boundary.py (in the required job) proves the base does not import it.
+# Everything here is synthetic: fake speech, a scripted model, a mock CRM. No provider key, no telephony, no model download.
+on:
+  pull_request:
+    paths:
+      - "integrations/voice-pipecat/**"
+      - ".github/workflows/voice-pipecat.yml"
+      - "agentic_os/agent_gateway/**"
+      - "agentic_os/mission/authority.py"
+      - "agentic_os/mission/store.py"
+      - "tests/_fork_support.py"
+  push:
+    branches: [main]
+    paths:
+      - "integrations/voice-pipecat/**"
+      - ".github/workflows/voice-pipecat.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: voice-pipecat-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install agentic-os (this checkout), then the voice package with its pinned pipecat
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install -e integrations/voice-pipecat pytest pytest-asyncio
+      - name: Voice suite (authorisation, idempotency, crash boundaries, cancellation, approvals, handoff, Pipecat pipeline, latency guard)
+        working-directory: integrations/voice-pipecat
+        run: |
+          set -o pipefail
+          pytest -q -p no:cacheprovider -rs tests | tee "$RUNNER_TEMP/voice.out"
+      - name: No test may be skipped
+        run: |
+          if grep -qi "skipped" "$RUNNER_TEMP/voice.out"; then echo "::error::a voice test was skipped"; exit 1; fi
+      - name: The synthetic demo runs and its own checks pass
+        run: python -m agentic_os_voice.demo.run
+      - name: The demo also runs under the production profile (durable authority guard required)
+        env:
+          AGENTIC_OS_PROFILE: production
+        run: python -m agentic_os_voice.demo.run
+      - name: Governance overhead of the action path (printed, not asserted beyond the suite's ceilings)
+        working-directory: integrations/voice-pipecat
+        run: python bench/measure_action_path.py --n 100
+      - name: Tests must not dirty the working tree
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=all)" || { git status --short; echo "untracked files left by tests"; exit 1; }
+
+  locked:
+    # the committed lock (hashes) installs and the suite passes on exactly those versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install from the lock
+        working-directory: integrations/voice-pipecat
+        run: |
+          python -m pip install --upgrade pip uv
+          uv sync --frozen --extra dev
+      - name: Voice suite on the locked versions
+        working-directory: integrations/voice-pipecat
+        run: uv run --frozen pytest -q -p no:cacheprovider tests
+      - name: The lock is current
+        working-directory: integrations/voice-pipecat
+        run: uv lock --check
