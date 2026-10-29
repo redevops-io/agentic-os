@@ -240,7 +240,7 @@ If `grants.jsonl` exists and a key is available, start-up migrates it:
 | `grants.enc` and `grants.jsonl` both exist | `grants.enc` wins; a warning flags the stale plaintext file (not deleted) |
 | `PERMISSIONS_MIGRATE_PLAINTEXT=0` | start-up refuses instead of starting with no grants |
 
-Logs name paths, counts and exception types — never keys, key material or grant contents.
+The permissions plane's logs name paths, counts and exception types — never keys, key material or grant contents. (The Agent Gateway's server log is different: it holds the raw text and traceback of a failing capability by design, see section 19.)
 
 Before / after:
 
@@ -699,7 +699,7 @@ different volume, and the key outside the data volume (`PERMISSIONS_KEY` from a 
 **Scope of the execution invariant, stated plainly.** Covered and tested: the 17 apps' routes, `Operator.invoke`, each operator's HTTP `/invoke`, `/agent/run`, the suite server's `/m/<module>/invoke`,
 the consoles' `/api/agent`, and the apps' tool bodies (the shared `guarded` wrapper). Not part of this grant model: the agent gateway's REST and MCP adapters (`agentic_os/agent_gateway`), which authenticate
 callers with their own OAuth/token layer and govern kernel operators by action class (those operators are registered as kernel-governed, section 26), and the `agentic-os` CLI, whose commands administer the permissions
-store and local state rather than execute app tools. The reproducible sweep is `tests/sweeps/sweep.py` (about 86,000 calls, no violation at the commit that adds it).
+store and local state rather than execute app tools. The gateway's REST adapter, MCP bridge and MCPEndpoint return a short fixed code (for example `capability_error`, `gateway_error`, `duration_exceeded`) when a capability, a write port or a gateway seam raises, never the exception text; the code is chosen from a fixed list, not copied from the message. The exception text and traceback go to the `agentic_os.agent_gateway` log together with the request id (control characters escaped), so gateway logs hold the raw exception text by design and access to them is privileged. A handler that returns its own error string is unchanged. The reproducible sweep is `tests/sweeps/sweep.py` (about 86,000 calls, no violation at the commit that adds it).
 
 ## 20. The operator's caller credential and the user's identity token use separate headers (KD-4)
 
