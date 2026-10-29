@@ -29,6 +29,7 @@ kernel, as distinct from the optional Enterprise package.
 | Roles are validated strictly (list/tuple/set of non-blank strings, all-or-nothing) | Principals whose `roles` is a string, bytes, None, or contains a blank/non-string member | Pass a clean list of role names |
 | Column masks are decided per row, per grant | Deployments with several grants that mask differently; code that reads `decision.masked_columns` | Apply `decision.rules` (`slice_for` does); see section 3 |
 | No implicit plaintext storage, **no implicit key** | Installs without `cryptography`, or with neither `PERMISSIONS_KEY` nor an existing key file | Set `PERMISSIONS_KEY` (section 7a), or keep the existing key file |
+| `GET /approvals` on the control plane needs the fleet key or the control token | Anything that read the pending approvals without a credential, and the dashboard's approvals panel | Send `X-API-Key` or a bearer control token; set one of them (section 33) |
 | Scanner launchers need `write` | Principals that ran the scan tools with `read` grants | Grant `write`, or leave them denied (section 9) |
 | Plaintext `grants.jsonl` is migrated at start-up | Installs that stored plaintext | Nothing, or read the safeguards below |
 | One lock per grant transaction (POSIX `fcntl`) | Windows, or filesystems without `flock` | Use a POSIX host / a volume that supports `flock` |
@@ -890,3 +891,16 @@ Small things to know: re-running `init` with no environment key over a store tha
 **The control plane seeds two example grants.** On first start of an empty store the control plane (`agentic_os/control_plane.py`) seeds, once, `seed-support-crm-customers` (app `support`, table `crm.customers`, read,
 rows `region = us`, `email` masked) and `seed-finance-crm-customers` (role `finance`, same table, read, `notes` masked). They are examples for the grant-admin page and preview. They are `table` grants, so the apps'
 tool gate (resource kind `tool`) never matches them and they widen no tool access; they do sit in the store the control plane administers. Remove them with `DELETE /api/permissions/grants/<id>`.
+
+## 33. The control plane's pending approvals need the fleet credential
+
+`GET /approvals` on the control plane (`agentic_os/control_plane.py`) used to answer anyone who could reach the port. It returns every pending approval with its payload, which
+is the request text the approver is asked to sign off, so it now needs the same credential as deciding one (`POST /approvals/{id}/{decision}`): `Authorization: Bearer
+<AGENTIC_OS_CONTROL_TOKEN>` or `X-API-Key: <AGENTIC_OS_API_KEY>`. A missing, empty or wrong credential answers 401 and, as for every fleet route, nothing configured answers 503
+(never open). The permissions admin key (`PERMISSIONS_ADMIN_KEY`) is a separate privilege and does not open it, and a credential in the query string is ignored. A refusal runs nothing and
+returns no approval content.
+
+**Upgrade impact.** Anything that called `GET /approvals` without a credential now gets 401, or 503 when neither `AGENTIC_OS_API_KEY` nor `AGENTIC_OS_CONTROL_TOKEN` is set; the shipped
+compose files pass both through empty by default, so a stock deployment answers 503 until one of them is set. The control-plane dashboard has no field for a credential: its approvals panel
+now says that pending approvals need the fleet credential (instead of "nothing waiting on you"). Read the list with the credential, for example `curl -H "X-API-Key: $AGENTIC_OS_API_KEY" .../approvals`.
+`/health`, `/status`, `/modules`, `/overview`, `/jobs/{id}`, `/api/fleet`, `/notify/status` and the static pages are unchanged.

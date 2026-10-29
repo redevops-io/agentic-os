@@ -1,6 +1,6 @@
 # Release notes: permissions and authorization hardening
 
-Written for: deployers and operators of agentic-os. These notes carry sections 28 to 32 of `docs/PERMISSIONS_MIGRATION.md` verbatim (a test keeps them equal); the migration guide has the rest
+Written for: deployers and operators of agentic-os. These notes carry sections 28 to 33 of `docs/PERMISSIONS_MIGRATION.md` verbatim (a test keeps them equal); the migration guide has the rest
 (before/after examples, the impact table for images and `docker run` examples, the execution invariant, the idempotency cache order, the threat model).
 
 **Patched version:** 0.4.0. The app Dockerfiles and `apps/infra/requirements.txt` pin the kernel as `v0.4.0` (`KERNEL_REF`); that tag is created when 0.4.0 is released, and until it exists those builds cannot resolve the pin.
@@ -121,3 +121,16 @@ Small things to know: re-running `init` with no environment key over a store tha
 **The control plane seeds two example grants.** On first start of an empty store the control plane (`agentic_os/control_plane.py`) seeds, once, `seed-support-crm-customers` (app `support`, table `crm.customers`, read,
 rows `region = us`, `email` masked) and `seed-finance-crm-customers` (role `finance`, same table, read, `notes` masked). They are examples for the grant-admin page and preview. They are `table` grants, so the apps'
 tool gate (resource kind `tool`) never matches them and they widen no tool access; they do sit in the store the control plane administers. Remove them with `DELETE /api/permissions/grants/<id>`.
+
+## 33. The control plane's pending approvals need the fleet credential
+
+`GET /approvals` on the control plane (`agentic_os/control_plane.py`) used to answer anyone who could reach the port. It returns every pending approval with its payload, which
+is the request text the approver is asked to sign off, so it now needs the same credential as deciding one (`POST /approvals/{id}/{decision}`): `Authorization: Bearer
+<AGENTIC_OS_CONTROL_TOKEN>` or `X-API-Key: <AGENTIC_OS_API_KEY>`. A missing, empty or wrong credential answers 401 and, as for every fleet route, nothing configured answers 503
+(never open). The permissions admin key (`PERMISSIONS_ADMIN_KEY`) is a separate privilege and does not open it, and a credential in the query string is ignored. A refusal runs nothing and
+returns no approval content.
+
+**Upgrade impact.** Anything that called `GET /approvals` without a credential now gets 401, or 503 when neither `AGENTIC_OS_API_KEY` nor `AGENTIC_OS_CONTROL_TOKEN` is set; the shipped
+compose files pass both through empty by default, so a stock deployment answers 503 until one of them is set. The control-plane dashboard has no field for a credential: its approvals panel
+now says that pending approvals need the fleet credential (instead of "nothing waiting on you"). Read the list with the credential, for example `curl -H "X-API-Key: $AGENTIC_OS_API_KEY" .../approvals`.
+`/health`, `/status`, `/modules`, `/overview`, `/jobs/{id}`, `/api/fleet`, `/notify/status` and the static pages are unchanged.

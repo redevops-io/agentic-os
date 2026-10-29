@@ -55,11 +55,12 @@ def _authorize_mutation(x_api_key: str | None, authorization: str | None, *key_e
 
 def require_api_key(x_api_key: str | None = Header(default=None),
                     authorization: str | None = Header(default=None)) -> None:
-    """Auth dependency for mutating endpoints (deploy / start / stop / approve / dispatch).
+    """Auth dependency for the fleet routes: the mutating ones (deploy / start / stop / approve / dispatch) and the read of the pending approvals,
+    whose payloads are the request text an approver is asked to sign off.
 
     Requires ``Authorization: Bearer <AGENTIC_OS_CONTROL_TOKEN>`` or ``X-API-Key: <AGENTIC_OS_API_KEY>``.
-    With neither configured the endpoint is disabled (503) — it never runs unauthenticated. Read-only
-    routes (/health, /status, /modules, /approvals, ...) stay open."""
+    With neither configured the endpoint is disabled (503) — it never runs unauthenticated. The liveness and static routes
+    (/health, /status, /modules, /overview, ...) stay open."""
     _authorize_mutation(x_api_key, authorization, "AGENTIC_OS_API_KEY")
 
 
@@ -516,8 +517,9 @@ def down(names: list[str] | None = None) -> list[dict]:
     return [asdict(s) for s in fleet.down(*(names or []))]
 
 
-@app.get("/approvals")
+@app.get("/approvals", dependencies=[Depends(require_api_key)])
 def approvals() -> list[dict]:
+    """The pending approvals, payload included: the same credential as deciding them (the fleet key or the control token)."""
     return [asdict(a) for a in fleet.context.pending()]
 
 
@@ -998,6 +1000,12 @@ async function pollApprovals() {
   const ul = document.getElementById("approvals");
   try {
     const r = await fetch("/approvals");
+    if (r.status === 401 || r.status === 503) {
+      // refused: do NOT claim that nothing is waiting. Pending approvals need the fleet credential (X-API-Key or a bearer control token).
+      ul.innerHTML = "";
+      ul.appendChild(el("li", "empty", "Pending approvals need the fleet credential. Read them with GET /approvals and an X-API-Key or bearer control token."));
+      return;
+    }
     if (!r.ok) throw new Error("bad status");
     const list = await r.json();
     ul.innerHTML = "";

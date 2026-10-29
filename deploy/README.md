@@ -59,14 +59,14 @@ The control-plane dashboard on **port 8080 is the primary UI**; Traefik is optio
 
 ## Auth
 
-Mutating endpoints (`/up`, `/down`, `/approvals/{id}/{decision}`) honor
-`AGENTIC_OS_API_KEY`. Set it to require an `X-API-Key` header:
+Mutating endpoints (`/up`, `/down`, `/approvals/{id}/{decision}`) and the read of the pending approvals (`GET /approvals`) honor
+`AGENTIC_OS_API_KEY` (or a bearer `AGENTIC_OS_CONTROL_TOKEN`). Set it to require an `X-API-Key` header:
 
 ```bash
 AGENTIC_OS_API_KEY=secret docker compose -f deploy/docker-compose.yml up --build
 ```
 
-If unset, auth is disabled (fine for a local demo).
+If neither `AGENTIC_OS_API_KEY` nor `AGENTIC_OS_CONTROL_TOKEN` is set, these endpoints answer 503: they are never open. A missing or wrong credential answers 401.
 
 ## Note on the stand-in
 
