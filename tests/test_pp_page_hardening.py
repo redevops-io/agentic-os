@@ -319,7 +319,7 @@ def test_with_both_keys_the_admin_api_builds_the_store_lazily_after_authenticati
         ok = c.get("/api/permissions/grants", headers={"x-api-key": os.environ["PERMISSIONS_ADMIN_KEY"]})
         print(json.dumps({"before": before, "after": len(built), "status": ok.status_code, "n": len(ok.json())}))
     """, tmp_path, **STD)
-    assert r["before"] == 0 and r["after"] == 1 and r["status"] == 200 and r["n"] == 2          # seeded once on first use
+    assert r["before"] == 0 and r["after"] == 1 and r["status"] == 200 and r["n"] == 0          # built once on first use; no grant is created implicitly
 
 
 # ───────────────────────── wording (PP-07) ─────────────────────────

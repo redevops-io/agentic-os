@@ -146,6 +146,7 @@ def test_the_control_plane_with_an_environment_key_creates_no_key_file(monkeypat
     import sys
     d = perm(tmp_path)
     env = {**{k: v for k, v in os.environ.items() if not k.startswith(("PERMISSIONS_", "AGENTIC_OS_"))}, "PERMISSIONS_KEY": ENV_KEY, "PERMISSIONS_DIR": str(d),
+           "AGENTIC_OS_SEED_DEMO_GRANTS": "1",  # the example grants are opt-in; seeding is what makes the store file here
            "PYTHONPATH": str(pathlib.Path(__file__).resolve().parents[1])}
     p = subprocess.run([sys.executable, "-c", "import agentic_os.control_plane as c; print(len(c._GRANTS.list()))"], capture_output=True, text=True, env=env, cwd=str(d), timeout=120)
     assert p.returncode == 0 and p.stdout.strip().endswith("2"), p.stderr[-300:]

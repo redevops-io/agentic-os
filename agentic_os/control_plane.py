@@ -95,6 +95,12 @@ def _dashboard_token() -> str:
     return tok
 
 
+def _fleet_credential_ok(x_api_key: str | None, authorization: str | None) -> bool:
+    """Non-raising, non-logging form of the fleet check (the fleet key or the control token), for the routes that only ADD detail for a credentialed caller."""
+    from .mission.control_auth import bearer_of, configured_token, token_matches  # noqa: PLC0415
+    return token_matches(bearer_of(authorization), configured_token()) or token_matches(x_api_key or "", os.environ.get("AGENTIC_OS_API_KEY", ""))
+
+
 def require_fleet_read(x_api_key: str | None = Header(default=None), authorization: str | None = Header(default=None),
                        x_dashboard_token: str | None = Header(default=None)) -> None:
     """Auth dependency for the FIVE dashboard reads (GET /approvals, /jobs/{id}, /api/fleet, /status, /notify/status): the fleet credential (as
@@ -107,12 +113,6 @@ def require_fleet_read(x_api_key: str | None = Header(default=None), authorizati
     if dash and not (configured_token() or os.environ.get("AGENTIC_OS_API_KEY", "").strip()):
         raise HTTPException(401, "invalid or missing credentials", headers={"WWW-Authenticate": "Bearer"})
     _authorize_mutation(x_api_key, authorization, "AGENTIC_OS_API_KEY")
-
-
-def _fleet_credential_ok(x_api_key: str | None, authorization: str | None) -> bool:
-    """Non-raising, non-logging form of the fleet check (the fleet key or the control token), for the routes that only ADD detail for a credentialed caller."""
-    from .mission.control_auth import bearer_of, configured_token, token_matches  # noqa: PLC0415
-    return token_matches(bearer_of(authorization), configured_token()) or token_matches(x_api_key or "", os.environ.get("AGENTIC_OS_API_KEY", ""))
 
 
 def require_permissions_admin(request: Request) -> None:
@@ -543,7 +543,6 @@ def health(x_api_key: str | None = Header(default=None), authorization: str | No
     return out
 
 
-
 @app.get("/modules", response_model=list[ModuleList])
 def modules() -> list[ModuleList]:
     return [ModuleList(name=m.name, repo=m.repo, pain=m.pain, agents=list(m.agents))
@@ -609,13 +608,17 @@ def resolve(approval_id: str, decision: str) -> dict:
 from . import permissions as _perm  # noqa: E402
 
 _GRANTS = _perm.GrantStore()
-_GRANTS.seed([
+# No grant is created implicitly. The two example grants below (a demo of the grant-admin page and its preview) are seeded ONLY when the deployment opts in
+# explicitly with AGENTIC_OS_SEED_DEMO_GRANTS=1 (the permissions showcase and demo deployments do; a fresh install does not).
+_DEMO_GRANTS = ([
     {"id": "seed-support-crm-customers", "subject_kind": "app", "subject": "support", "resource_kind": "table",
      "resource_name": "crm.customers", "actions": ["read"], "row_scope": "in", "row_column": "region", "row_values": ["us"],
      "masked_columns": ["email"], "created_by": "seed"},
     {"id": "seed-finance-crm-customers", "subject_kind": "role", "subject": "finance", "resource_kind": "table",
      "resource_name": "crm.customers", "actions": ["read"], "row_scope": "all", "masked_columns": ["notes"], "created_by": "seed"},
 ])
+if os.environ.get("AGENTIC_OS_SEED_DEMO_GRANTS", "").strip().lower() in ("1", "true", "yes", "on"):
+    _GRANTS.seed(list(_DEMO_GRANTS))
 
 
 @app.get("/permissions", response_class=HTMLResponse)

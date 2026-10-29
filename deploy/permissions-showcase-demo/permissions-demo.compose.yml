@@ -26,6 +26,9 @@ services:
     mem_limit: 512m
     environment:
       - BIND_HOST=${PERM_BIND_HOST:-127.0.0.1}
+      # DEMO ONLY, explicit: seed the two example grants (support / finance on crm.customers) once into the store so an administrator has something to look at.
+      # Not a default of the kernel or of the control plane; remove this line for a deployment that should start with no grant.
+      - AGENTIC_OS_SEED_DEMO_GRANTS=1
       # PERMISSIONS_ADMIN_KEY (at least 24 characters) enables the admin API; unset or shorter => it answers 503 (disabled, never open).
       # The public demo API needs no key. The grant-store key below is only used by the admin API.
       - PERMISSIONS_ADMIN_KEY=${PERMISSIONS_ADMIN_KEY:-}

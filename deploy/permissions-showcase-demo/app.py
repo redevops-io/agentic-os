@@ -13,11 +13,13 @@ A standalone surface that shows the row/column **grants** plane. It exposes TWO 
    query string is refused (400).
 
 The real grant store (`agentic_os.permissions.GrantStore`, encrypted at rest, fail-closed) is only ever touched by the admin API. It is
-seeded once with two example grants so an administrator has something to look at.
+seeded once with two example grants, ONLY when the deployment opts in explicitly with AGENTIC_OS_SEED_DEMO_GRANTS=1 (the showcase compose file does);
+without it no grant exists until an administrator creates one.
 """
 from __future__ import annotations
 
 import logging
+import os
 import threading
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -56,7 +58,8 @@ def _grants() -> "_perm.GrantStore":
         if _STORE is None:
             try:
                 store = _perm.GrantStore()
-                store.seed(_SEED)
+                if os.environ.get("AGENTIC_OS_SEED_DEMO_GRANTS", "").strip().lower() in ("1", "true", "yes", "on"):      # demo-only, explicit opt-in
+                    store.seed(_SEED)
             except _perm.GrantStorageError as e:
                 _log.error("the grant store is unavailable, so the admin API answers 503: %s", e)
                 raise HTTPException(503, "the grant store is unavailable on this server") from None

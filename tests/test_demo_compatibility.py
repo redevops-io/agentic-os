@@ -91,12 +91,22 @@ def volume(tmp_path):
 
 class TestPermissionsShowcase:
     def test_starts_with_a_provisioned_key_and_runs_its_workflow(self, volume):
-        r = _json(_py(SHOWCASE, PERMISSIONS_DIR=str(volume), PERMISSIONS_KEY=KEY, PERMISSIONS_ADMIN_KEY="adm-k-0123456789-DO-NOT-STORE"))
+        r = _json(_py(SHOWCASE, PERMISSIONS_DIR=str(volume), PERMISSIONS_KEY=KEY, PERMISSIONS_ADMIN_KEY="adm-k-0123456789-DO-NOT-STORE", AGENTIC_OS_SEED_DEMO_GRANTS="1"))
         assert "support-us-masked" in r["scenarios"] and r["us_visible"] < r["us_full"] and r["us_masked"] == ["email"]   # the public workflow
         assert r["denied"] == [False, False] and r["unknown"] == 404                                                    # unauthorised stays denied
         assert r["health"] == {"ok": True}                                                                              # liveness only
         assert r["admin_no_key"] == [401, 401, 401, 401] and r["admin_wrong_key"] == 401                                 # the admin API needs the key
         assert r["admin_grants"] == ["seed-finance-crm-customers", "seed-support-crm-customers"] and r["admin_status"] == "env"
+
+    def test_without_the_explicit_opt_in_no_grant_is_created(self, volume):
+        r = _json(_py(SHOWCASE, PERMISSIONS_DIR=str(volume), PERMISSIONS_KEY=KEY, PERMISSIONS_ADMIN_KEY="adm-k-0123456789-DO-NOT-STORE"))
+        assert r["admin_grants"] == [] and r["admin_status"] == "env"
+
+    def test_the_showcase_deployment_config_opts_in_explicitly(self):
+        compose = (ROOT / "deploy" / "permissions-showcase-demo" / "permissions-demo.compose.yml").read_text()
+        assert "- AGENTIC_OS_SEED_DEMO_GRANTS=1" in compose
+        for other in ("docker-compose.yml", "deploy/docker-compose.yml"):
+            assert "AGENTIC_OS_SEED_DEMO_GRANTS" not in (ROOT / other).read_text(), other                     # a normal deployment never seeds
 
     def test_with_no_admin_key_configured_the_admin_api_is_disabled_never_open(self, volume):
         p = _py(SHOWCASE, PERMISSIONS_DIR=str(volume), PERMISSIONS_KEY=KEY)
@@ -128,11 +138,17 @@ print(json.dumps({"public": c.get("/api/demo/scenarios").status_code,
 
 
 class TestControlPlane:
-    def test_starts_with_a_provisioned_key_and_runs_its_workflow(self, volume):
+    def test_starts_with_a_provisioned_key_and_creates_no_grant_by_default(self, volume):
         r = _json(_py(CONTROL, PERMISSIONS_DIR=str(volume), PERMISSIONS_KEY=KEY, PERMISSIONS_ADMIN_KEY="adm-k-0123456789-DO-NOT-STORE"))
-        assert r["status"]["encrypted"] and r["status"]["key_source"] == "env" and r["support"] is True
+        assert r["status"]["encrypted"] and r["status"]["key_source"] == "env"
+        assert r["status"]["count"] == 0 and r["support"] is False                  # no implicit demo grant on a fresh install
         assert r["nobody"] is False and r["write_action"] is False                 # unauthorised stays denied
         assert r["no_credentials"] == [401, 401]                                    # the admin API needs the credential
+
+    def test_the_demo_grants_exist_only_with_the_explicit_opt_in(self, volume):
+        r = _json(_py(CONTROL, PERMISSIONS_DIR=str(volume), PERMISSIONS_KEY=KEY, PERMISSIONS_ADMIN_KEY="adm-k-0123456789-DO-NOT-STORE",
+                      AGENTIC_OS_SEED_DEMO_GRANTS="1"))
+        assert r["status"]["count"] == 2 and r["support"] is True and r["nobody"] is False and r["write_action"] is False
 
     def test_a_missing_key_at_start_up_is_a_clear_refusal(self, volume):
         p = _py(CONTROL, PERMISSIONS_DIR=str(volume))

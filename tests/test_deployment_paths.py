@@ -233,7 +233,8 @@ print(json.dumps({"key_source": st["key_source"], "sealed": st["sealed"], "suppo
 
 class TestFreshInstallWalkthroughs:
     def test_compose_control_plane_paths(self, tmp_path):
-        """The root and `deploy/` compose files start `uvicorn agentic_os.control_plane:app` with PERMISSIONS_DIR=/data/permissions
+        """(The two example demo grants are seeded here with the explicit opt-in AGENTIC_OS_SEED_DEMO_GRANTS=1, so that the sealed-volume steps below have a store to check; without it no grant exists.)
+        The root and `deploy/` compose files start `uvicorn agentic_os.control_plane:app` with PERMISSIONS_DIR=/data/permissions
         on a persistent volume and PERMISSIONS_KEY from the env file. Run the same entrypoint with the same variables."""
         vol = str(tmp_path / "data" / "permissions")
         # 1. a fresh volume and no key: the container would not start, and the error names the setup step
@@ -243,19 +244,19 @@ class TestFreshInstallWalkthroughs:
         # 2. the setup step, then the documented start
         envf = tmp_path / "permissions.env"
         assert _cli("key", "--env-file", str(envf)).returncode == 0
-        out = _py(CONTROL, PERMISSIONS_DIR=vol, PERMISSIONS_ADMIN_KEY="adm-k-0123456789-DO-NOT-STORE", **_parse_env_file(envf))
+        out = _py(CONTROL, PERMISSIONS_DIR=vol, PERMISSIONS_ADMIN_KEY="adm-k-0123456789-DO-NOT-STORE", AGENTIC_OS_SEED_DEMO_GRANTS="1", **_parse_env_file(envf))
         assert out.returncode == 0, out.stderr[-500:]
         import json
         r = json.loads(out.stdout.strip().splitlines()[-1])
         assert r == {"key_source": "env", "sealed": False, "support": True, "nobody": False}
         # 3. a restart on the same volume with the same key keeps working
-        again = json.loads(_py(CONTROL, PERMISSIONS_DIR=vol, PERMISSIONS_ADMIN_KEY="adm-k-0123456789-DO-NOT-STORE", **_parse_env_file(envf)).stdout.strip().splitlines()[-1])
+        again = json.loads(_py(CONTROL, PERMISSIONS_DIR=vol, PERMISSIONS_ADMIN_KEY="adm-k-0123456789-DO-NOT-STORE", AGENTIC_OS_SEED_DEMO_GRANTS="1", **_parse_env_file(envf)).stdout.strip().splitlines()[-1])
         assert again["sealed"] is False and again["support"] is True
         # 4. a different key cannot open the volume: the control plane refuses to run (sealed) and nothing is overwritten
         other = tmp_path / "other.env"
         _cli("key", "--env-file", str(other))
         before = pathlib.Path(vol, "grants.enc").read_bytes()
-        bad = _py(CONTROL, PERMISSIONS_DIR=vol, PERMISSIONS_ADMIN_KEY="adm-k-0123456789-DO-NOT-STORE", **_parse_env_file(other))
+        bad = _py(CONTROL, PERMISSIONS_DIR=vol, PERMISSIONS_ADMIN_KEY="adm-k-0123456789-DO-NOT-STORE", AGENTIC_OS_SEED_DEMO_GRANTS="1", **_parse_env_file(other))
         assert bad.returncode != 0 and "sealed" in bad.stderr and pathlib.Path(vol, "grants.enc").read_bytes() == before
 
     def test_permissions_demo_path(self, tmp_path):
