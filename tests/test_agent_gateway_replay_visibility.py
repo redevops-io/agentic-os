@@ -14,11 +14,13 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
 from agentic_os.agent_gateway import (
     AgentGateway, CapabilityKind, CapabilityManifest, CapabilityRegistry, DataClass, EgressAction, GatewayPrincipal,
     GatewayRequest, GatewayStatus, HandlerResult, InboxApprovalStore, RiskTier)
 from agentic_os.agent_gateway.registry import PUBLIC_ERROR_CODES
-from agentic_os.mission.authority import Grant
+from agentic_os.mission.authority import AuthorityGuard, Grant, MemoryEnvelopeStore, MemoryLedger
 from agentic_os.overlays import Principal
 
 SECRET = "customer-record-for-the-first-caller"
@@ -451,7 +453,9 @@ def test_a_fault_in_the_authority_check_during_a_replay_is_gateway_error(tmp_pat
 def test_a_fault_in_the_idempotency_store_is_gateway_error_and_nothing_executes():
     class Broken:
         def begin(self, *a): raise RuntimeError("store offline")
+        def complete(self, *a): pass
         def abandon(self, *a): pass
+        def seed(self, *a): pass
 
     gw, h, _ = gateway(idempotency=Broken())
     r = call(gw, gp())
@@ -502,3 +506,127 @@ def test_arguments_that_cannot_be_bound_fail_closed_before_anything_executes():
         assert r.status is GatewayStatus.ERROR and r.error == "gateway_error" and h.calls == 0
     assert call(gw, gp(), key="k" * 300).error == "gateway_error" and h.calls == 0
     assert call(gw, gp(), args={"x": object()}, key=None).ok and h.calls == 1      # without a key nothing needs binding
+
+
+def test_a_store_with_the_old_get_put_protocol_is_refused_when_the_gateway_is_built():
+    class Old:
+        def get(self, key): return None
+        def put(self, key, result): pass
+
+    with pytest.raises(TypeError, match="begin/complete/abandon/seed"):
+        gateway(idempotency=Old())
+
+
+# ───────────────────────────── side-effecting capabilities that are not declared idempotent ─────────────────────────────
+def plain_wire(*, idempotent=False):
+    """tests/test_gateway_unknown_outcome.wire, but the write capability is NOT declared idempotent."""
+    from tests.test_gateway_unknown_outcome import NOW, Provider
+    from agentic_os.mission.authority import AuthorityEnvelope, AutonomyBudget
+    prov, reg = Provider(), CapabilityRegistry()
+    reg.register(CapabilityManifest("billing.refund", "refund", CapabilityKind.DIRECT, permissions=("billing.refund",),
+                                    risk_tier=RiskTier.BOUNDED_WRITE, side_effecting=True, idempotent=idempotent, provider="p"), prov.refund)
+    reg.register(CapabilityManifest("crm.read", "read", CapabilityKind.DIRECT, permissions=("crm.read",)),
+                 lambda r, e: HandlerResult(ok=True, output={"n": 1}))
+    st = MemoryEnvelopeStore()
+    st.put(AuthorityEnvelope(tenant="acme", principal="agent", mission_id="acme:agent", issued_at=NOW, expires_at=NOW + 3600,
+                             grants=(Grant("billing.refund", max_tier=1), Grant("crm.read")), budget=AutonomyBudget(usd=5, max_actions=50, wall_clock_s=3600)))
+    guard = AuthorityGuard(st, MemoryLedger(), clock=lambda: NOW + 1)
+
+    class Approved:
+        def is_satisfied(self, request, manifest):
+            return True
+
+    return prov, AgentGateway(registry=reg, authorize=lambda pr, perm: True, approvals=Approved(), authority=guard), GatewayPrincipal(Principal("agent", "service", (), "acme"))
+
+
+def refund_plain(gw, who, key="k1", **kw):
+    return gw.invoke(GatewayRequest(who, "billing.refund", {"invoice": "INV-1", "amount": 40, **kw}, idempotency_key=key))
+
+
+def test_a_reconciled_write_that_is_not_declared_idempotent_is_not_sent_again():
+    from tests.test_gateway_unknown_outcome import EVIDENCE
+    prov, gw, who = plain_wire()
+    prov.fail_next = True                                                      # the provider timed out after applying the refund
+    assert refund_plain(gw, who).status is GatewayStatus.ERROR and prov.sends == 1
+    (lease,) = gw.unresolved_calls("acme:agent")
+    gw.reconcile_call(lease["lease_id"], executed=True, evidence=EVIDENCE, actor="ops@acme", reason="refund obj_1 is in the dashboard",
+                      result={"ok": True, "provider_object_id": "obj_1"})
+    again = refund_plain(gw, who)
+    assert again.ok and again.output["provider_object_id"] == "obj_1" and prov.sends == 1
+    assert refund_plain(gw, who, amount=99).error == "idempotency_conflict" and prov.sends == 1
+
+
+def test_a_write_reconciled_as_not_executed_may_be_sent_again():
+    from tests.test_gateway_unknown_outcome import EVIDENCE
+    prov, gw, who = plain_wire()
+    prov.fail_next = True
+    refund_plain(gw, who)
+    (lease,) = gw.unresolved_calls("acme:agent")
+    gw.reconcile_call(lease["lease_id"], executed=False, evidence=EVIDENCE, actor="ops@acme", reason="no refund exists for this key")
+    assert refund_plain(gw, who).ok and prov.sends == 2                       # a person attested that it did not happen
+
+
+def test_a_retry_of_a_successful_write_with_a_key_replays_it_whether_or_not_it_is_declared_idempotent():
+    for declared in (False, True):
+        prov, gw, who = plain_wire(idempotent=declared)
+        first = refund_plain(gw, who)
+        again = refund_plain(gw, who)
+        assert first.ok and again.ok and again.output == first.output and prov.sends == 1, declared
+        assert refund_plain(gw, who, amount=99).error == "idempotency_conflict" and prov.sends == 1
+
+
+def test_a_write_without_a_key_and_a_read_that_is_not_declared_idempotent_are_executed_every_time():
+    prov, gw, who = plain_wire()
+    assert gw.invoke(GatewayRequest(who, "billing.refund", {"invoice": "INV-1"})).ok
+    assert gw.invoke(GatewayRequest(who, "billing.refund", {"invoice": "INV-1"})).ok and prov.sends == 2
+    reads = []
+    gw.registry._handlers["crm.read"] = lambda r, e: reads.append(1) or HandlerResult(ok=True, output={"n": len(reads)})
+    for _ in range(2):
+        assert gw.invoke(GatewayRequest(who, "crm.read", {}, idempotency_key="k")).ok
+    assert len(reads) == 2
+
+
+def test_an_unknown_outcome_of_a_write_that_is_not_declared_idempotent_still_blocks_a_retry():
+    prov, gw, who = plain_wire()
+    prov.fail_next = True
+    refund_plain(gw, who)
+    r = refund_plain(gw, who)
+    assert r.status is GatewayStatus.DENIED and r.decision.reason == "authority:outcome_unknown" and prov.sends == 1
+
+
+# ───────────────────────────── egress re-applied on a replay ─────────────────────────────
+class Tightenable:
+    mode = EgressAction.ALLOW
+
+    def decide(self, output, classes, principal, manifest):
+        from agentic_os.agent_gateway.egress import redact, tokenize
+        if self.mode is EgressAction.REDACT:
+            return EgressAction.REDACT, redact(output), ("egress:redact",)
+        if self.mode is EgressAction.TOKENIZE:
+            return EgressAction.TOKENIZE, tokenize(output), ("egress:tokenize",)
+        return EgressAction.ALLOW, output, ()
+
+
+class Sensitive(Counter):
+    def __call__(self, req, env):
+        super().__call__(req, env)
+        return HandlerResult(ok=True, output={"password": "hunter2-synthetic", "note": "hello"}, data_classes=(DataClass.INTERNAL,))
+
+
+def test_a_stricter_egress_policy_is_applied_to_a_replay():
+    policy = Tightenable()
+    gw, h, _ = gateway(Sensitive(), egress=policy)
+    assert call(gw, gp()).output["password"] == "hunter2-synthetic"
+    policy.mode = EgressAction.REDACT
+    r = call(gw, gp())
+    assert r.ok and "hunter2-synthetic" not in repr(r.output) and r.output["note"] == "hello" and h.calls == 1
+    assert r.decision.egress_action is EgressAction.REDACT and "egress:redact" in r.decision.policy_rule_ids
+
+
+def test_the_same_egress_policy_does_not_transform_a_stored_output_twice():
+    policy = Tightenable()
+    policy.mode = EgressAction.TOKENIZE
+    gw, h, _ = gateway(Sensitive(), egress=policy)
+    first = call(gw, gp())
+    again = call(gw, gp())
+    assert first.output == again.output and again.output["password"].startswith("tok_") and h.calls == 1

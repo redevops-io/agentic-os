@@ -23,6 +23,7 @@ from agentic_os.overlays import Principal
 from .contracts import (
     ApprovalPolicy, AuditEvent, CapabilityKind, CapabilityManifest, DataClass, EgressAction,
     GatewayDecision, GatewayPrincipal, GatewayRequest, GatewayResult, GatewayStatus, RiskTier)
+from .egress import _RANK as _EGRESS_RANK
 from .idempotency import (
     CONFLICT, NEW, REPLAY, IdempotencyStore, InMemoryIdempotencyStore, fingerprint, normalise_key)
 from .registry import Authorizer, CapabilityRegistry, HandlerResult, PUBLIC_ERROR_CODES, _default_authorizer, client_safe_error
@@ -128,6 +129,9 @@ class AgentGateway:
         return [m.public_view() for m in self.registry.visible_for(principal, self.authorize)]
 
     def __post_init__(self) -> None:
+        for name in ("begin", "complete", "abandon", "seed"):
+            if not callable(getattr(self.idempotency, name, None)):
+                raise TypeError(f"the idempotency store must implement begin/complete/abandon/seed (missing {name!r}); the 0.4.0 get/put protocol is no longer accepted")
         from agentic_os.mission.profile import assert_authority   # noqa: PLC0415
         assert_authority(self.authority, where="AgentGateway")
 
@@ -375,10 +379,12 @@ class AgentGateway:
         """Called once the caller is identified and may see the capability. A stored result is returned only if the caller is inside its authority
         NOW (revocation, child credential and lineage, scope, expiry), so a replay never outlives the right to the call, and only if the key is
         bound to the same fingerprint (scope + arguments). Otherwise: a different fingerprint is a conflict, a call still running under the key is
-        in progress, and neither reveals the earlier result. Returns None to carry on with a normal call; a new claim is then held in
+        in progress, and neither reveals the earlier result. A side-effecting capability is covered whether or not it is declared ``idempotent``: a
+        key on a write means "do this once", so a retry replays the stored result (also a result an operator established by ``reconcile_call``)
+        and is never sent again. Returns None to carry on with a normal call; a new claim is then held in
         ``track['claim']`` until the result is stored or the call ends."""
-        if not request.idempotency_key or not manifest.idempotent:
-            return None
+        if not request.idempotency_key or not (manifest.idempotent or manifest.side_effecting):
+            return None                      # a read that is not declared idempotent has nothing to replay; a write with a key is always retry-safe
         gp = request.principal
         key = normalise_key(request.idempotency_key)
         fp = fingerprint(tenant=gp.tenant, workspace=gp.effective_workspace, subject=gp.subject, authority_key=authority_key,
@@ -407,15 +413,18 @@ class AgentGateway:
         output is already filtered, so it is never transformed twice). The replay is audited under its own request id; the caller receives the
         stored result with the request id of the call that produced it."""
         gp = request.principal
-        action, _, rules = self.egress.decide(prior.output, prior.data_classes or manifest.data_classes, gp, manifest)
+        action, filtered, rules = self.egress.decide(prior.output, prior.data_classes or manifest.data_classes, gp, manifest)
+        stored = prior.decision.egress_action
         decision = replace(prior.decision, egress_action=action,
                            policy_rule_ids=tuple(prior.decision.policy_rule_ids) + tuple(rules) + ("idempotent_replay",))
         if action is EgressAction.DENY:
             result = replace(prior, decision=decision, output=None)
         elif action is EgressAction.REQUIRE_APPROVAL:
             result = replace(prior, decision=decision, status=GatewayStatus.PENDING_APPROVAL, output=None)
+        elif _EGRESS_RANK.get(action, 0) > _EGRESS_RANK.get(stored, 0):
+            result = replace(prior, decision=decision, output=filtered)       # the policy is now stricter than when this was stored: apply it
         else:
-            result = replace(prior, decision=decision)
+            result = replace(prior, decision=decision, output=prior.output)   # the same (or a looser) policy: the stored output is already filtered
         audited = self._finalize(request, start, replace(result, request_id=request.request_id), exposed_reason="permitted")
         return replace(audited, request_id=prior.request_id or request.request_id)
 

@@ -127,3 +127,35 @@ def test_invalid_bounds_are_refused():
     for kw in (dict(ttl_s=0), dict(max_entries=0)):
         with pytest.raises(ValueError):
             InMemoryIdempotencyStore(**kw)
+
+
+def test_one_tenants_traffic_does_not_evict_another_tenants_keys():
+    s = InMemoryIdempotencyStore(ttl_s=1000, max_entries=10)
+    for k in ("a", "b"):
+        s.begin("quiet", k, "F")
+        s.complete("quiet", k, "F", k)
+    for i in range(50):                                                        # a busy tenant far over the shared bound
+        s.begin("busy", f"k{i}", "F")
+        s.complete("busy", f"k{i}", "F", i)
+    assert len(s) == 10
+    assert s.begin("quiet", "a", "F") == (REPLAY, "a") and s.begin("quiet", "b", "F") == (REPLAY, "b")
+    assert s.begin("busy", "k49", "F")[0] == REPLAY and s.begin("busy", "k0", "F")[0] == NEW
+
+
+def test_a_per_tenant_cap_evicts_within_the_tenant_and_refuses_when_it_is_all_in_flight():
+    s = InMemoryIdempotencyStore(ttl_s=1000, max_entries=100, max_entries_per_tenant=2)
+    for k in ("a", "b", "c"):
+        s.begin("t", k, "F")
+        s.complete("t", k, "F", k)
+    assert s.begin("t", "a", "F")[0] == NEW                                    # "a" was the oldest of the tenant's two-entry share
+    assert s.begin("other", "x", "F")[0] == NEW                                # another tenant has its own share
+    s2 = InMemoryIdempotencyStore(max_entries=100, max_entries_per_tenant=1)
+    s2.begin("t", "a", "F")
+    with pytest.raises(IdempotencyStoreFull):
+        s2.begin("t", "b", "F")
+    assert s2.begin("u", "b", "F")[0] == NEW
+
+
+def test_argument_names_that_collapse_under_normalisation_cannot_be_bound():
+    with pytest.raises(IdempotencyError):
+        canonical_arguments({"caf\u00e9": 1, "cafe\u0301": 2})

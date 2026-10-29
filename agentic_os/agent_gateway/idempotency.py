@@ -62,7 +62,10 @@ def _normal(value: Any, depth: int) -> Any:
         for k, v in value.items():
             if not isinstance(k, str):
                 raise IdempotencyError("argument names must be strings")
-            out[unicodedata.normalize("NFC", k)] = _normal(v, depth + 1)
+            name = unicodedata.normalize("NFC", k)
+            if name in out:
+                raise IdempotencyError("two argument names are the same after normalisation")
+            out[name] = _normal(v, depth + 1)
         return out
     if isinstance(value, (list, tuple)):
         return [_normal(v, depth + 1) for v in value]
@@ -115,51 +118,77 @@ class _Entry:
 
 @dataclass
 class InMemoryIdempotencyStore:
-    """Process-local store: a time-to-live (``ttl_s``) and a bound on the number of entries (``max_entries``). When full, the oldest *completed*
-    entries are evicted first; an in-flight claim is never evicted, and if nothing can be evicted a new claim is refused
-    (:class:`IdempotencyStoreFull`) rather than the bound exceeded. After its TTL or eviction a key is simply unknown: a retry executes again,
-    which is why an unknown outcome is held by the authority ledger (``outcome_unknown``) and not here. Not shared between processes."""
+    """Process-local store: a time-to-live (``ttl_s``, measured on ``clock``, wall-clock time by default) and a bound on the number of entries
+    (``max_entries``, shared by all tenants; ``max_entries_per_tenant`` optionally caps one tenant lower). When the store is full, the oldest *completed*
+    entry of the tenant that holds the most entries is evicted, so a busy tenant evicts its own keys before another tenant's; an in-flight claim
+    is never evicted, and if nothing can be evicted a new claim is refused (:class:`IdempotencyStoreFull`) rather than the bound exceeded. The
+    bound counts entries, not bytes. After its TTL or eviction a key is simply unknown: a retry executes again, which is why an unknown outcome is
+    held by the authority ledger (``outcome_unknown``) and not here. An in-flight claim has no timeout. Not shared between processes."""
 
     ttl_s: float = DEFAULT_TTL_S
     max_entries: int = DEFAULT_MAX_ENTRIES
+    max_entries_per_tenant: Optional[int] = None
     clock: Callable[[], float] = time.time
+    _count: "dict[str, int]" = field(default_factory=dict, repr=False)
     _entries: "OrderedDict[Tuple[str, str], _Entry]" = field(default_factory=OrderedDict, repr=False)
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     def __post_init__(self) -> None:
-        if self.ttl_s <= 0 or self.max_entries < 1:
-            raise ValueError("ttl_s must be positive and max_entries at least 1")
+        if self.max_entries_per_tenant is None:
+            self.max_entries_per_tenant = self.max_entries
+        if self.ttl_s <= 0 or self.max_entries < 1 or self.max_entries_per_tenant < 1:
+            raise ValueError("ttl_s must be positive and the entry bounds at least 1")
 
     def __len__(self) -> int:
         with self._lock:
             return len(self._entries)
 
+    def _drop(self, ident: Tuple[str, str]) -> None:
+        del self._entries[ident]
+        self._count[ident[0]] -= 1
+        if not self._count[ident[0]]:
+            del self._count[ident[0]]
+
+    def _add(self, ident: Tuple[str, str], entry: _Entry) -> None:
+        self._entries[ident] = entry
+        self._count[ident[0]] = self._count.get(ident[0], 0) + 1
+
     def _live(self, ident: Tuple[str, str], now: float) -> Optional[_Entry]:
         e = self._entries.get(ident)
         if e is not None and e.done and now >= e.expires_at:
-            del self._entries[ident]                              # expired: forgotten (an in-flight claim has no expiry)
+            self._drop(ident)                                     # expired: forgotten (an in-flight claim has no expiry)
             return None
         return e
 
-    def _make_room(self, now: float) -> None:
-        if len(self._entries) < self.max_entries:
+    def _evict_oldest_completed(self, tenant: str) -> bool:
+        for ident, e in self._entries.items():                    # insertion order is completion order
+            if ident[0] == tenant and e.done:
+                self._drop(ident)
+                return True
+        return False
+
+    def _make_room(self, now: float, tenant: str) -> None:
+        if len(self._entries) < self.max_entries and self._count.get(tenant, 0) < self.max_entries_per_tenant:
             return
         for ident in [i for i, e in self._entries.items() if e.done and now >= e.expires_at]:
-            del self._entries[ident]
-        for ident in [i for i, e in self._entries.items() if e.done]:         # oldest completed first (insertion order)
-            if len(self._entries) < self.max_entries:
-                return
-            del self._entries[ident]
-        if len(self._entries) >= self.max_entries:
-            raise IdempotencyStoreFull("the idempotency store is full of in-flight calls")
+            self._drop(ident)
+        while self._count.get(tenant, 0) >= self.max_entries_per_tenant:
+            if not self._evict_oldest_completed(tenant):
+                raise IdempotencyStoreFull("this tenant's share of the idempotency store is full of in-flight calls")
+        while len(self._entries) >= self.max_entries:
+            for victim in sorted(self._count, key=lambda x: -self._count[x]):       # the tenant holding the most entries pays first
+                if self._evict_oldest_completed(victim):
+                    break
+            else:
+                raise IdempotencyStoreFull("the idempotency store is full of in-flight calls")
 
     def begin(self, tenant: str, key: str, fingerprint: str) -> Tuple[str, Any]:
         with self._lock:
             now, ident = self.clock(), (tenant, key)
             e = self._live(ident, now)
             if e is None:
-                self._make_room(now)
-                self._entries[ident] = _Entry(fingerprint)
+                self._make_room(now, tenant)
+                self._add(ident, _Entry(fingerprint))
                 return NEW, None
             if e.fingerprint != fingerprint:
                 return CONFLICT, None
@@ -179,7 +208,7 @@ class InMemoryIdempotencyStore:
         with self._lock:
             e = self._entries.get((tenant, key))
             if e is not None and not e.done and e.fingerprint == fingerprint:
-                del self._entries[(tenant, key)]
+                self._drop((tenant, key))
 
     def seed(self, tenant: str, key: str, fingerprint: str, result: Any) -> None:
         with self._lock:
@@ -188,6 +217,7 @@ class InMemoryIdempotencyStore:
             if e is not None and not e.done:
                 return                                                         # a call is in flight under this key: it will store its own result
             if e is None:
-                self._make_room(now)
-            self._entries.pop(ident, None)
-            self._entries[ident] = _Entry(fingerprint, copy.deepcopy(result), True, now + self.ttl_s)
+                self._make_room(now, tenant)
+            elif ident in self._entries:
+                self._drop(ident)
+            self._add(ident, _Entry(fingerprint, copy.deepcopy(result), True, now + self.ttl_s))
