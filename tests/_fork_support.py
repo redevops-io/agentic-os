@@ -133,28 +133,54 @@ def types(rt, mid, prefix=""):
 
 
 class CrashingStore(EventStore):
-    """Durable JSONL store that 'crashes' (raises SimulatedCrash) at the Nth append after arming — either
-    BEFORE the event is persisted or AFTER."""
+    """Durable JSONL store that 'crashes' (raises SimulatedCrash) at the Nth append after arming: either BEFORE the event is
+    persisted or AFTER it is written and fsynced.
+
+    Appends arrive from the driver and from branch worker threads at once, so the crash decision is made atomically: the
+    dead check, the count, the comparison with the armed threshold and, in 'after' mode, the durable write of the targeted
+    event all happen under one gate. Exactly one append is the Nth, whatever the interleaving, and no other append can pass
+    the decision while it is in progress. Once the crash fires the store is `dead`: every later append, on any thread, raises
+    SimulatedCrash("dead") and writes nothing (an in-flight write of another store user is not interrupted, as with kill -9).
+    `dead` may also be set from outside to model a hard kill.
+
+    Subscribers are notified here, after the gate is released, never while it is held: a subscriber may take a lock that
+    another appending thread holds (the fork/join controller's subscriber does), and holding the gate across it would
+    invert the lock order. `EventStore._subscribers` is therefore left empty and the callbacks live in `_subs`."""
+
+    dead = False
 
     def __init__(self, path, mode="after"):
         super().__init__(path)
         self.mode, self.countdown = mode, None
         self.appended = 0
+        self._gate = threading.Lock()          # serialises appends on THIS test store only; never taken by the runtime
+        self._subs: list = []
 
     def arm(self, n):
-        self.countdown, self.appended = n, 0
+        with self._gate:
+            self.countdown, self.appended = n, 0
 
-    dead = False
+    def subscribe(self, cb):
+        self._subs.append(cb)
 
     def append(self, type, mission_id, payload):
-        if self.dead:                      # a crashed process writes nothing more (orphan threads included)
-            raise SimulatedCrash("dead")
-        self.appended += 1
-        if self.countdown is not None and self.appended == self.countdown and self.mode == "before":
-            self.countdown, self.dead = None, True
-            raise SimulatedCrash(f"before {type}")
-        ev = super().append(type, mission_id, payload)
-        if self.countdown is not None and self.appended == self.countdown and self.mode == "after":
-            self.countdown, self.dead = None, True
+        with self._gate:
+            if self.dead:                  # a crashed process writes nothing more (orphan threads included)
+                raise SimulatedCrash("dead")
+            self.appended += 1
+            hit = self.countdown is not None and self.appended == self.countdown
+            if hit and self.mode == "before":
+                self.countdown, self.dead = None, True
+                raise SimulatedCrash(f"before {type}")
+            ev = super().append(type, mission_id, payload)      # written and fsynced; EventStore notifies nobody (see above)
+            hit = hit and self.mode == "after"
+            if hit:
+                self.countdown, self.dead = None, True          # dead the moment the targeted write is durable
+        for cb in list(self._subs):
+            try:
+                cb(ev)
+            except Exception:              # a subscriber must never break the log (same as EventStore.append)
+                pass
+        if hit:
             raise SimulatedCrash(f"after {type}")
         return ev
