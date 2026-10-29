@@ -1,5 +1,5 @@
 """The classification inventory (docs/TOOL_CLASSIFICATION_INVENTORY.md): one row per tool, kept equal to the registry. Classification is not enforcement, and the sink heuristic cannot prove a
-tool read-only; the inventory is the human-reviewed record, and this test is what keeps it honest."""
+tool read-only; the inventory is the written record of how each tool was classified, and this test is what keeps it honest."""
 from __future__ import annotations
 
 import pathlib

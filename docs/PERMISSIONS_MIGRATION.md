@@ -687,7 +687,7 @@ effective scope (resource, action, row filter, column masks); a read whose scope
 denial, not the cached body, and the side effect is not repeated.
 
 **Authorizer conflicts.** When the engine's default and the kernel's own authorizer are both installed, both must allow; if they disagree the call is denied (tests: engine denies/kernel allows, kernel denies/engine
-allows, both allow). **Classification**: a planted `sys.path` module or an unexpected distribution can never weaken it; the enterprise table can only add denials. The reviewed per-tool record is
+allows, both allow). **Classification**: a planted `sys.path` module or an unexpected distribution can never weaken it; the enterprise table can only add denials. The per-tool classification record is
 `docs/TOOL_CLASSIFICATION_INVENTORY.md`; the sink heuristic is a regression signal that cannot prove a tool read-only.
 
 **Threat model (documentation only).** The rollback counter protects against restoring an older `grants.enc` while the sidecar stays (partial restores) and against deleting the sidecar of a store past its first

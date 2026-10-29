@@ -3,8 +3,8 @@
 # Licensed under the GNU Affero General Public License v3.0 or later, as modified by the Commons Clause License (see LICENSE.md).
 """Generate docs/TOOL_CLASSIFICATION_INVENTORY.md: one row per classified tool (the inventory behind agentic_os/tool_actions.py).
 
-Columns: tool, app, action, category, evidence (file:line where the tool is declared), approval needed (the operator capability is approval_required), reviewed-by / date.
-The category is a reviewed judgement recorded in CATEGORY_OVERRIDES / the sets below (not inferred from names); everything not listed there falls back to the action:
+Columns: tool, app, action, category, evidence (file:line where the tool is declared), approval needed (the operator capability is approval_required), classification basis (how the row was classified).
+The category is a judgement made by reading the code, recorded in CATEGORY_OVERRIDES / the sets below (not inferred from names); everything not listed there falls back to the action:
 read -> ``read-only-state``, write/delete -> ``writes-local-or-persistent-artifacts``. A test (tests/test_tool_inventory.py) fails when a classified tool has no row or the rows
 disagree with the registry. The sink heuristic (tests/test_read_classification_sinks.py) is a regression signal only: it cannot prove a tool read-only (indirect execution, imported helpers,
 subprocesses behind an injected runner all escape a static scan), so the strictest-action rule applies to anything with caller-selected behaviour.
@@ -24,7 +24,7 @@ from agentic_os.tool_actions import PUBLIC_INTAKE_ROUTES, TOOL_ACTIONS  # noqa: 
 
 PUBLIC_INTAKE_TOOLS = {(app, tool) for app, routes in PUBLIC_INTAKE_ROUTES.items() for tool in routes.values()}
 
-REVIEWER = "reviewed in the 2026-10 AI-assisted permissions security review (not an external audit)"
+CLASSIFICATION_BASIS = "classified by reading the code (AI-assisted review, 2026-10; not an external audit)"
 CATEGORIES = ("read-only-state", "writes-local-or-persistent-artifacts", "launches external process or network", "dynamically selected behaviour", "public intake: unauthenticated by design")
 
 # launches an external process, or reads/writes another system over the network (a scan, a deploy, a CRM/e-mail/payment API, an editor service)
@@ -92,11 +92,11 @@ def main() -> None:
           "(a scanner, a deploy, a provider or CRM/e-mail/payment call, an editor service) / `dynamically selected behaviour` (the caller chooses what runs) / "
           "`public intake: unauthenticated by design` (the tool is `write` for the Operator, `/invoke` and the console, and a route registered in `PUBLIC_INTAKE_ROUTES` may ALSO call it with no grant, to open a "
           "PENDING request only; see `docs/PERMISSIONS_MIGRATION.md` section 30).\n")
-    print("| tool | app | action | category | evidence | approval needed | reviewed by / date |")
+    print("| tool | app | action | category | evidence | approval needed | classification basis |")
     print("|---|---|---|---|---|---|---|")
     for app in sorted(TOOL_ACTIONS):
         for tool, action in sorted(TOOL_ACTIONS[app].items()):
-            print(f"| `{tool}` | {app} | {action} | {category(tool, action, app)} | {evidence(app, tool)} | {approval(app, tool)} | {REVIEWER} |")
+            print(f"| `{tool}` | {app} | {action} | {category(tool, action, app)} | {evidence(app, tool)} | {approval(app, tool)} | {CLASSIFICATION_BASIS} |")
 
 
 if __name__ == "__main__":
