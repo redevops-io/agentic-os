@@ -20,7 +20,7 @@ Then open the dashboard:
 
 - **Dashboard (primary UI):** http://localhost:8080/
 - Fleet JSON API: http://localhost:8080/api/fleet (needs the fleet credential, see Auth; the dashboard has a field for it)
-- Control-plane health: http://localhost:8080/health
+- Control-plane health: http://localhost:8080/health (liveness; add the fleet credential to see the security posture)
 
 The dashboard polls `/api/fleet` every 5 seconds. Each module card shows its pain
 label, tagline, agent chips, any approval-gated actions, and a live status dot
@@ -60,7 +60,7 @@ The control-plane dashboard on **port 8080 is the primary UI**; Traefik is optio
 ## Auth
 
 Mutating endpoints (`/up`, `/down`, `/approvals/{id}/{decision}`) and the reads of non-public state (`GET /approvals`, `/jobs/{id}`, `/api/fleet`, `/status`, `/notify/status`) honor
-`AGENTIC_OS_API_KEY` (or a bearer `AGENTIC_OS_CONTROL_TOKEN`). Generate a value, set it, and send it as an `X-API-Key` header:
+`AGENTIC_OS_API_KEY` (or a bearer `AGENTIC_OS_CONTROL_TOKEN`); the five reads also accept the read-only `AGENTIC_OS_DASHBOARD_TOKEN` (`X-Dashboard-Token`), which is what the dashboard page should be given. Generate a value, set it, and send it as an `X-API-Key` header:
 
 ```bash
 export AGENTIC_OS_API_KEY="$(openssl rand -hex 24)"

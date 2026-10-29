@@ -15,12 +15,12 @@ Control plane, security profile and the operator authority boundary, approval to
 ## Control-plane auth, idempotency cache and multi-replica limits
 
 ### Mutating endpoints, and reads of non-public state, require a token
-`AGENTIC_OS_CONTROL_TOKEN` gates every endpoint that can change state; on the main control plane the same credential (or `AGENTIC_OS_API_KEY`) also gates five reads of non-public state:
+`AGENTIC_OS_CONTROL_TOKEN` gates every endpoint that can change state; on the main control plane the same credential (or `AGENTIC_OS_API_KEY`) also gates five reads of non-public state, which additionally accept the read-only `AGENTIC_OS_DASHBOARD_TOKEN` (header `X-Dashboard-Token`) and nothing else does:
 
 | Surface | Token required | Open |
 |---|---|---|
 | `agentic_os.mission.unified_server` | `POST /api/bridge/invoke`, `POST /api/missions/{id}/approve` | `/api/connections`, `/api/needs-you`, `/api/missions/*`, `/api/bridge/capabilities`, `/` |
-| `agentic_os.control_plane` | mutating: `POST /up`, `/down`, `/dispatch`, `/approvals/{id}/{decision}`; reads of non-public state: `GET /approvals` (the payloads), `GET /jobs/{id}`, `GET /api/fleet`, `GET /status`, `GET /notify/status`, `/openapi.json`; separate privilege: `/api/permissions/*` (all routes) | `/health` (includes a `security` posture block), `/modules`, the static pages, `/capabilities`, `/cockpit`, `/buildinfo` (mission routers, public by design), **and the module proxy `/m/<name>`, `/m/<name>/raw`, `GET`/`POST /m/<name>/api/*`, which is anonymous** (public issue #528) |
+| `agentic_os.control_plane` | mutating: `POST /up`, `/down`, `/dispatch`, `/approvals/{id}/{decision}`; reads of non-public state: `GET /approvals` (the payloads), `GET /jobs/{id}`, `GET /api/fleet`, `GET /status`, `GET /notify/status`, `/openapi.json`; separate privilege: `/api/permissions/*` (all routes) | `/health` (liveness only for an anonymous caller; the `security` posture block needs the fleet credential), `/modules`, the static pages, `/capabilities` (names only for an anonymous caller; detail needs a control or tenant token), `/cockpit`, `/buildinfo` (mission routers), **and the module proxy `/m/<name>`, `/m/<name>/raw`, `GET`/`POST /m/<name>/api/*`, which is anonymous** (public issue #528) |
 
 Send `Authorization: Bearer <token>` (compared with `hmac.compare_digest`).
 * token unset (and, on the main control plane, no legacy `AGENTIC_OS_API_KEY`) -> **503** with a message; the endpoint never runs open;
@@ -114,7 +114,7 @@ database keeps working. `AGENTIC_OS_REQUIRE_AUTHORITY=1` is kept as an alias for
 Official production deployments must set `AGENTIC_OS_PROFILE=production` explicitly; the Compose file passes the variable
 through to every service that decides authority (empty means development).
 
-**See the posture:** `GET /health` on the control plane and the suite server include `security`; every operator serves
+**See the posture:** `GET /health` on the control plane (with the fleet credential) and on the suite server include `security`; every operator serves
 `GET /_security`. A deployment that is in development mode, or whose guard or replay store is not durable, shows
 `"ok": false` with the reasons: wire that into readiness checks and Edge Sentinel.
 
