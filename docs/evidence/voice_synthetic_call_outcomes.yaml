@@ -1,7 +1,7 @@
 claim_id: voice_synthetic_call_outcomes
 claim: "In the synthetic inbound-call demo the bot's spoken outcome statements match the journal: one lead update and one parked follow-up before review, two mock-CRM effects after the reviewer approves, and no spoken claim without a receipt."
 status: Illustrative/synthetic
-code_commit: "CODE_COMMIT"
+code_commit: "5782f86bc5136fb33045c4bc5bac30f05169353f"
 dataset: "integrations/voice-pipecat/src/agentic_os_voice/demo/fixtures/inbound_lead_call.json: fictional lead, fictional number (555 range), fake speech in and out, scripted model, mock CRM. No real person, audio or provider."
 protocol: "python -m agentic_os_voice.demo.run, 2026-10-29; the same call also under AGENTIC_OS_PROFILE=production; the assertions are in tests/test_pipecat_pipeline.py (the downstream mock CRM's own effect record is compared with the bridge's receipts)."
 model: "none; a deterministic script stands in for a language model"
