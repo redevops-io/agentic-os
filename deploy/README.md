@@ -60,13 +60,16 @@ The control-plane dashboard on **port 8080 is the primary UI**; Traefik is optio
 ## Auth
 
 Mutating endpoints (`/up`, `/down`, `/approvals/{id}/{decision}`) and the reads of non-public state (`GET /approvals`, `/jobs/{id}`, `/api/fleet`, `/status`, `/notify/status`) honor
-`AGENTIC_OS_API_KEY` (or a bearer `AGENTIC_OS_CONTROL_TOKEN`). Set it to require an `X-API-Key` header:
+`AGENTIC_OS_API_KEY` (or a bearer `AGENTIC_OS_CONTROL_TOKEN`). Generate a value, set it, and send it as an `X-API-Key` header:
 
 ```bash
-AGENTIC_OS_API_KEY=secret docker compose -f deploy/docker-compose.yml up --build
+export AGENTIC_OS_API_KEY="$(openssl rand -hex 24)"
+docker compose -f deploy/docker-compose.yml up --build
+curl -H "X-API-Key: $AGENTIC_OS_API_KEY" http://localhost:8080/api/fleet
 ```
 
-If neither `AGENTIC_OS_API_KEY` nor `AGENTIC_OS_CONTROL_TOKEN` is set, these endpoints answer 503: they are never open. A missing or wrong credential answers 401.
+The fleet key has no minimum length and no failed-attempt throttle, so use a long random value and keep the port off untrusted networks. The module proxy (`/m/<name>`) is not covered by this
+credential and is open (public issue #528): put an authenticating proxy in front of the control plane if it is reachable by anyone you do not trust. If neither `AGENTIC_OS_API_KEY` nor `AGENTIC_OS_CONTROL_TOKEN` is set, these endpoints answer 503: they are never open. A missing or wrong credential answers 401.
 
 ## Note on the stand-in
 

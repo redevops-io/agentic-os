@@ -894,29 +894,49 @@ tool gate (resource kind `tool`) never matches them and they widen no tool acces
 
 ## 33. The control plane's fleet reads need the fleet credential
 
-Four read routes of the control plane (`agentic_os/control_plane.py`) used to answer anyone who could reach the port, and a GET is not safe for that reason:
+Five read routes of the control plane (`agentic_os/control_plane.py`) used to answer anyone who could reach the port, and a GET is not safe for that reason:
 
 | Route | What it returns |
 |---|---|
 | `GET /approvals` | every pending approval with its payload: the request text an approver is asked to sign off |
 | `GET /jobs/{job_id}` | the status and the result text or error of a background dispatch; the ids are sequential (`job-00001`) |
-| `GET /api/fleet` | the application inventory and topology: repositories, ports, approval-required capability names, backend names and live health |
-| `GET /status` and `GET /notify/status` | which modules are deployed (one health probe each), and which chat channels are wired |
+| `GET /api/fleet` | per module: the repository, ports, approval-required capability names, backend names, deploy kind and live health |
+| `GET /status` | which modules are deployed (one health probe each) |
+| `GET /notify/status` | which chat channels are wired and whether the inbound gateway runs |
 
 They now take the same credential as the other fleet routes (`POST /up`, `/down`, `/dispatch`, `/approvals/{id}/{decision}`, `/openapi.json`): `Authorization: Bearer <AGENTIC_OS_CONTROL_TOKEN>` or
 `X-API-Key: <AGENTIC_OS_API_KEY>`. A missing, empty, wrong or wrong-scheme credential answers 401; with neither variable set they answer 503 (never open). The permissions admin key
-(`PERMISSIONS_ADMIN_KEY`) is a separate privilege and does not open them, and a credential in the query string is ignored. A refusal runs nothing (no job lookup, no registry walk, no health
-probe) and returns no content.
+(`PERMISSIONS_ADMIN_KEY`) is a separate privilege and does not open them, and a credential in the query string is ignored (it would still appear in an access log). A refusal runs nothing (no job
+lookup, no registry walk, no health probe) and returns no content. Names, repositories, pains, taglines and agents of the modules are still public through `GET /modules` and `/overview`.
 
-Left open on purpose: `GET /health` (status, module count and the security profile; it is the readiness probe), `GET /modules` (the public catalogue), the static pages (`/`, `/overview`,
-`/permissions`) and `/assets`. On the mission routers, `/capabilities`, `/cockpit` and `/buildinfo` are marked public by design.
+**This release does not make the control plane as a whole protected. What is still open:**
+
+* **The module proxy is anonymous, including POST.** `GET /m/<name>`, `GET /m/<name>/raw`, and `GET` and `POST /m/<name>/api/<path>` are reachable without any credential in every default deployment. They forward
+  to the module's own service (its dashboard and its `/api/*`, which can include chat actions and data reads). The only restriction is `DEMO_READ_ONLY=1`, which no shipped configuration sets and which blocks
+  only `POST`. This is pre-existing, is tracked as public issue #528, and **is not changed by this release.** Whether each app's own gate (`AGENTIC_OS_PERMISSIONS`) stops a request that arrives through
+  the proxy has **not been verified.** **Operator mitigation:** do not expose the control plane's port to an untrusted network, and put an authenticating reverse proxy in front of it (or block `/m/` there).
+* `GET /health` is public and includes a `security` block: the profile, whether authority and replay protection are durable, whether an egress proxy is configured, and the warnings. It is the readiness probe,
+  so it was not changed.
+* `GET /capabilities`, `GET /cockpit` and `GET /buildinfo` (mission routers) are public by design. `/capabilities` is the capability registry: names, operators, inputs and outputs, costs and approval flags.
+* `GET /modules`, `/overview`, `/`, `/permissions` and `/assets` are public.
+
+**Known limits of the dashboard credential.** The dashboard asks for the credential in a field (API key or control token, then Use). It is kept in that page's memory only, sent as a request header to the
+dashboard's own origin, never stored or put in a URL or log, and dropped on Clear, on a refusal and when the page is closed or reloaded. But it is the full fleet key or control token (it can dispatch, start, stop and
+approve), it is re-sent every 5 seconds while the tab is open, over whatever transport the deployment uses (the stock compose file serves plain HTTP on port 8080), and `AGENTIC_OS_API_KEY` has no minimum length and no
+failed-attempt throttle. A read-only dashboard credential is not part of this release. `GET /` is served with `Cache-Control: no-store`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and a
+Content-Security-Policy of `frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'; connect-src 'self'`. That stops framing, a `<base>` tag, a form posted elsewhere and plugins, and limits
+`fetch`/XHR/WebSocket/EventSource/beacon connections to the page's own origin. It does not restrict images, links or navigation, and there is **no `script-src`**: it is not a defence against script injection (the
+page builds its DOM with `textContent` and has no known injection sink). A nonce policy like the one on `/permissions` would need the page's inline styles and its one handler attribute reworked and a browser to
+check it; that is left for a later change.
 
 **Upgrade impact.**
 
-* Anything that called these routes without a credential now gets 401, or 503 on a deployment that sets neither `AGENTIC_OS_API_KEY` nor `AGENTIC_OS_CONTROL_TOKEN`. The shipped compose files pass both
-  through empty by default, so **a stock compose deployment answers 503 on these routes until one of them is set.** Set one, and send it, for example
-  `curl -H "X-API-Key: $AGENTIC_OS_API_KEY" http://localhost:8080/api/fleet`.
-* The dashboard asks for the credential. Its page has a field (choose API key or control token, then Use); the value is kept in the page's memory only, sent as a request header to the dashboard's own
-  origin, never stored or put in a URL, and dropped on Clear, on a refusal and when the page is closed or reloaded. Until a credential is entered the dashboard shows no fleet and no approvals and says
-  what it needs; with no credential configured on the server it says the views are disabled.
-* `GET /` (the dashboard page) is now served with `Cache-Control: no-store`, `X-Frame-Options: DENY` and a policy that forbids framing and requests to other origins.
+* Anything that called these five routes without a credential now gets 401, or 503 on a deployment that sets neither `AGENTIC_OS_API_KEY` nor `AGENTIC_OS_CONTROL_TOKEN`. `deploy/docker-compose.yml` passes both
+  variables through, empty by default, and the root `docker-compose.yml` now does too (this release adds the two lines; before, the container never saw them, so a key could not be set without editing the
+  file). A stock compose deployment answers 503 on these routes until one of them is set, for example `AGENTIC_OS_API_KEY=$(openssl rand -hex 24) docker compose ... up`, and then
+  `curl -H "X-API-Key: $AGENTIC_OS_API_KEY" http://localhost:8080/api/fleet`. The Helm runtime chart deploys the published runtime image, not this control plane, and is not affected.
+* The dashboard shows no fleet and no approvals until the credential is entered, and says what it needs; with no credential configured on the server it says the views are disabled. Because a page cannot share the
+  credential with another page without storing it, `/overview` and `/m/<name>` (which also poll `GET /api/fleet` for their live health dots) hold none: they ask once, and after the first 401 or 503 stop polling and show
+  one line ("credential required" or "no fleet credential configured on the server"); their health dots stay grey. Behind a reverse proxy that adds the credential they keep working.
+* The 503 body for these routes now reads "the fleet endpoints are disabled on this server" (it said "mutating endpoints").
+* On the public demo, an anonymous visitor would see the prompt instead of the module cards, since the cards come from `GET /api/fleet`.

@@ -265,7 +265,9 @@ the effective commit, and what it means for anything depending on this package.
 ## Control-plane security
 
 Mutating control endpoints (`/up`, `/down`, `/dispatch`, approvals, `/api/bridge/invoke`, mission approve) require
-`Authorization: Bearer $AGENTIC_OS_CONTROL_TOKEN` and return 503 when it is unset; read-only endpoints stay open.
+`Authorization: Bearer $AGENTIC_OS_CONTROL_TOKEN` and return 503 when it is unset. On the control plane the reads of non-public state (`GET /approvals`,
+`/jobs/{id}`, `/api/fleet`, `/status`, `/notify/status`) take the same credential (`X-API-Key: $AGENTIC_OS_API_KEY` also works); liveness and static pages stay open, and so does the module proxy
+`/m/<name>` (see `docs/PERMISSIONS_MIGRATION.md` section 33).
 The `/missions` API is default-deny: every non-GET route AND every read except the static shell/catalogue needs a bearer
 token (optionally tenant-scoped via `AGENTIC_OS_TENANT_TOKENS`, optional distinct approvers via
 `AGENTIC_OS_APPROVER_TOKENS`; `AGENTIC_OS_GATE_READS=0` opts out of read gating, unsafe off loopback).

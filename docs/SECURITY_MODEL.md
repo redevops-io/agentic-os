@@ -14,13 +14,13 @@ Control plane, security profile and the operator authority boundary, approval to
 
 ## Control-plane auth, idempotency cache and multi-replica limits
 
-### Mutating endpoints require a bearer token
-`AGENTIC_OS_CONTROL_TOKEN` gates every endpoint that can change state:
+### Mutating endpoints, and reads of non-public state, require a token
+`AGENTIC_OS_CONTROL_TOKEN` gates every endpoint that can change state; on the main control plane the same credential (or `AGENTIC_OS_API_KEY`) also gates five reads of non-public state:
 
-| Surface | Mutating (token required) | Open (read-only) |
+| Surface | Token required | Open |
 |---|---|---|
 | `agentic_os.mission.unified_server` | `POST /api/bridge/invoke`, `POST /api/missions/{id}/approve` | `/api/connections`, `/api/needs-you`, `/api/missions/*`, `/api/bridge/capabilities`, `/` |
-| `agentic_os.control_plane` | `POST /up`, `/down`, `/dispatch`, `/approvals/{id}/{decision}`, `GET /approvals` (the payloads), `GET /jobs/{id}`, `GET /api/fleet`, `GET /status`, `GET /notify/status`, `/openapi.json`, `/api/permissions/*` (all routes) | `/health`, `/modules`, the static pages, `/capabilities`, `/cockpit`, `/buildinfo` (mission routers, public by design), ... |
+| `agentic_os.control_plane` | mutating: `POST /up`, `/down`, `/dispatch`, `/approvals/{id}/{decision}`; reads of non-public state: `GET /approvals` (the payloads), `GET /jobs/{id}`, `GET /api/fleet`, `GET /status`, `GET /notify/status`, `/openapi.json`; separate privilege: `/api/permissions/*` (all routes) | `/health` (includes a `security` posture block), `/modules`, the static pages, `/capabilities`, `/cockpit`, `/buildinfo` (mission routers, public by design), **and the module proxy `/m/<name>`, `/m/<name>/raw`, `GET`/`POST /m/<name>/api/*`, which is anonymous** (public issue #528) |
 
 Send `Authorization: Bearer <token>` (compared with `hmac.compare_digest`).
 * token unset (and, on the main control plane, no legacy `AGENTIC_OS_API_KEY`) -> **503** with a message; the endpoint never runs open;
@@ -29,7 +29,7 @@ Send `Authorization: Bearer <token>` (compared with `hmac.compare_digest`).
 The main control plane still accepts the legacy `X-API-Key` (`AGENTIC_OS_API_KEY`) as an alternative for the fleet routes; the grants API is a separate privilege (`PERMISSIONS_ADMIN_KEY` only). **Behaviour change:** an unset key used to mean "open"; it now means "disabled".
 `python -m agentic_os.mission.unified_server` binds `127.0.0.1` (override with `UNIFIED_HOST`, port `UNIFIED_PORT`, default 8090).
 `agentic_os/mission/control_plane.py` is only the wire-protocol codec (no HTTP surface), so nothing to gate there.
-`/m/<name>/api/*` (module proxy) is unchanged; the public demo keeps it read-only via `DEMO_READ_ONLY=1`.
+**The module proxy is open and unchanged by this release.** `GET /m/<name>`, `GET /m/<name>/raw` and `GET`/`POST /m/<name>/api/*` forward anonymously to the module's service in every default deployment; the only restriction is `DEMO_READ_ONLY=1` (which no shipped configuration sets, and which blocks only POST). It is tracked as public issue #528. Whether the apps' own gates stop a request that arrives through it has not been verified. Do not expose the control plane's port to an untrusted network; put an authenticating reverse proxy in front of it or block `/m/` there.
 
 ### Mission API (`/missions`, `/inbox`, `/cockpit`, `/capabilities`, `/learning`) - default-deny
 

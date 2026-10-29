@@ -2,7 +2,8 @@
 
 Policy (fail closed): the mutating endpoints require ``Authorization: Bearer <AGENTIC_OS_CONTROL_TOKEN>``
 (constant-time compare). When the token is NOT configured they refuse to serve (503 with a clear message)
-rather than run open. Read-only endpoints never call this and stay open.
+rather than run open. This gate is for the mutating endpoints; reads of non-public state are gated elsewhere (the control plane's fleet
+credential, the mission gate), and only deliberately public reads (liveness, static pages, the capability catalogue) stay open.
 """
 from __future__ import annotations
 
