@@ -131,7 +131,7 @@ Projects API.) On top of it the current product surface adds:
   your own) invoke ReDevOps capabilities without an ungoverned backdoor ([`agentic_os/agent_gateway/`](agentic_os/agent_gateway/)).
   MCP is its first protocol adapter — not the product. Every call runs the one path: identity → permissions → risk →
   approval → GovernedEnvelope → invoke (a governed capability, or a delegated Mission) → egress policy → audit.
-  See [GOVERNED_AGENT_GATEWAY_IMPLEMENTATION_PLAN.md](GOVERNED_AGENT_GATEWAY_IMPLEMENTATION_PLAN.md).
+  See [GOVERNED_AGENT_GATEWAY_IMPLEMENTATION_PLAN.md](GOVERNED_AGENT_GATEWAY_IMPLEMENTATION_PLAN.md); to connect a client, [docs/AGENT_GATEWAY_QUICKSTART.md](docs/AGENT_GATEWAY_QUICKSTART.md).
 
 ## Architecture (overview diagram)
 
