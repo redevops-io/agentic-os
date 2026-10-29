@@ -6,15 +6,19 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from dataclasses import asdict
 from pathlib import Path
 
 import httpx
 import yaml
+from starlette.concurrency import run_in_threadpool
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from .permissions_http import (create_kwargs as _perm_create_kwargs, json_object as _perm_json, log_disabled as _perm_log_disabled, warn_if_unprotected_throttle as _perm_warn_throttle, require_permissions_admin as _perm_require_admin, secure_page as _secure_page, SecurityHeaders as _SecurityHeaders,
+                               update_fields as _perm_update_fields)
 from pydantic import BaseModel
 
 from . import channels, views
@@ -34,15 +38,16 @@ COCKPIT_URL = os.environ.get("COCKPIT_URL", "https://demo.redevops.io/cockpit")
 
 
 def _authorize_mutation(x_api_key: str | None, authorization: str | None, *key_envs: str) -> None:
-    """Fail-closed auth for mutating routes. Accepts ``Authorization: Bearer $AGENTIC_OS_CONTROL_TOKEN`` or
+    """Fail-closed auth for the fleet routes (the mutating ones and the reads of non-public state). Accepts ``Authorization: Bearer $AGENTIC_OS_CONTROL_TOKEN`` or
     ``X-API-Key`` matching the first set of ``key_envs`` (legacy AGENTIC_OS_API_KEY / PERMISSIONS_ADMIN_KEY).
     Compared in constant time. If NOTHING is configured the route refuses (503) instead of running open."""
     from .mission.control_auth import bearer_of, configured_token, token_matches  # noqa: PLC0415
     legacy = next((os.environ[e] for e in key_envs if os.environ.get(e)), "")
     token = configured_token()
     if not token and not legacy:
-        raise HTTPException(503, "mutating endpoints are disabled: set AGENTIC_OS_CONTROL_TOKEN "
-                                 "(Authorization: Bearer) or AGENTIC_OS_API_KEY (X-API-Key) to enable them")
+        _perm_log_disabled("the control plane's fleet endpoints",
+                           "set AGENTIC_OS_CONTROL_TOKEN (Authorization: Bearer) or AGENTIC_OS_API_KEY (X-API-Key) to enable them")
+        raise HTTPException(503, "the fleet endpoints are disabled on this server")
     if token_matches(bearer_of(authorization), token) or token_matches(x_api_key or "", legacy):
         return
     raise HTTPException(401, "invalid or missing credentials (Bearer token or X-API-Key)",
@@ -51,20 +56,71 @@ def _authorize_mutation(x_api_key: str | None, authorization: str | None, *key_e
 
 def require_api_key(x_api_key: str | None = Header(default=None),
                     authorization: str | None = Header(default=None)) -> None:
-    """Auth dependency for mutating endpoints (deploy / start / stop / approve / dispatch).
+    """Auth dependency for the fleet routes: the mutating ones (deploy / start / stop / approve / dispatch) and the reads of non-public state: the pending
+    approvals (the request text an approver signs off), job results, per-module ports, approval-required capability names, backend names and live health, module status and the wired chat channels.
 
     Requires ``Authorization: Bearer <AGENTIC_OS_CONTROL_TOKEN>`` or ``X-API-Key: <AGENTIC_OS_API_KEY>``.
-    With neither configured the endpoint is disabled (503) — it never runs unauthenticated. Read-only
-    routes (/health, /status, /modules, /approvals, ...) stay open."""
+    With neither configured the endpoint is disabled (503) — it never runs unauthenticated. The liveness and static routes
+    (/health, /modules, /overview, ...) stay open."""
     _authorize_mutation(x_api_key, authorization, "AGENTIC_OS_API_KEY")
 
 
-def require_permissions_admin(x_api_key: str | None = Header(default=None),
-                              authorization: str | None = Header(default=None)) -> None:
-    """Auth for the permissions WRITE path — gating grant edits independently of the fleet-ops key
-    (PERMISSIONS_ADMIN_KEY, falling back to AGENTIC_OS_API_KEY; the control token is also accepted).
-    Disabled (503) when nothing is configured."""
-    _authorize_mutation(x_api_key, authorization, "PERMISSIONS_ADMIN_KEY", "AGENTIC_OS_API_KEY")
+DASHBOARD_TOKEN_ENV = "AGENTIC_OS_DASHBOARD_TOKEN"
+DASHBOARD_TOKEN_MIN = 24
+_dashboard_token_warned: set[str] = set()
+
+
+def _dashboard_token() -> str:
+    """The read-only dashboard token, or "" when none is usable. It must be at least 24 characters and DIFFERENT from every other credential of this
+    server (the fleet key, the control token, the permissions admin key): a token that equals one of them would be that credential under another name, so it
+    is refused (disabled, logged once) rather than accepted. It is accepted by the five dashboard reads only (``require_fleet_read``) and by nothing that
+    changes state, dispatches, starts, stops or decides."""
+    from .mission.control_auth import configured_token, token_matches  # noqa: PLC0415
+    tok = os.environ.get(DASHBOARD_TOKEN_ENV, "").strip()
+    if not tok:
+        return ""
+    problem = ""
+    if len(tok) < DASHBOARD_TOKEN_MIN:
+        problem = f"shorter than {DASHBOARD_TOKEN_MIN} characters"
+    elif any(token_matches(tok, other) for other in (configured_token(), os.environ.get("AGENTIC_OS_API_KEY", "").strip(),
+                                                    os.environ.get("PERMISSIONS_ADMIN_KEY", "").strip())):
+        problem = "equal to another credential of this server"
+    if problem:
+        if problem not in _dashboard_token_warned:
+            _dashboard_token_warned.add(problem)
+            logging.getLogger("agentic_os.control_plane").error(
+                "%s is %s, so the read-only dashboard token is DISABLED: set a distinct value of at least %d characters (for example `openssl rand -hex 24`), or unset it",
+                DASHBOARD_TOKEN_ENV, problem, DASHBOARD_TOKEN_MIN)
+        return ""
+    return tok
+
+
+def _fleet_credential_ok(x_api_key: str | None, authorization: str | None) -> bool:
+    """Non-raising, non-logging form of the fleet check (the fleet key or the control token), for the routes that only ADD detail for a credentialed caller."""
+    from .mission.control_auth import bearer_of, configured_token, token_matches  # noqa: PLC0415
+    return token_matches(bearer_of(authorization), configured_token()) or token_matches(x_api_key or "", os.environ.get("AGENTIC_OS_API_KEY", ""))
+
+
+def require_fleet_read(x_api_key: str | None = Header(default=None), authorization: str | None = Header(default=None),
+                       x_dashboard_token: str | None = Header(default=None)) -> None:
+    """Auth dependency for the FIVE dashboard reads (GET /approvals, /jobs/{id}, /api/fleet, /status, /notify/status): the fleet credential (as
+    ``require_api_key``) OR the read-only dashboard token in ``X-Dashboard-Token``. Every other route uses ``require_api_key``, which ignores that header, so
+    the dashboard token opens nothing else. With only the dashboard token configured, a missing or wrong credential is 401; with nothing configured, 503."""
+    from .mission.control_auth import configured_token, token_matches  # noqa: PLC0415
+    dash = _dashboard_token()
+    if dash and x_dashboard_token and token_matches(x_dashboard_token, dash):
+        return
+    if dash and not (configured_token() or os.environ.get("AGENTIC_OS_API_KEY", "").strip()):
+        raise HTTPException(401, "invalid or missing credentials", headers={"WWW-Authenticate": "Bearer"})
+    _authorize_mutation(x_api_key, authorization, "AGENTIC_OS_API_KEY")
+
+
+def require_permissions_admin(request: Request) -> None:
+    """Auth for the WHOLE permissions admin API: grant list, status, preview, authorize (diagnostics), create, update, remove. A SEPARATE
+    privilege: only ``PERMISSIONS_ADMIN_KEY`` (X-API-Key or Bearer, at least 24 characters) opens it; the fleet key
+    ``AGENTIC_OS_API_KEY`` and the control token administer the fleet routes and no grant. FAIL CLOSED: 503 when no usable key is configured
+    (never open), 401 for a missing, empty or wrong credential (constant-time compare), 400 for a credential in the query string."""
+    _perm_require_admin(request)
 
 
 def _build() -> Fleet:
@@ -80,7 +136,11 @@ def _build() -> Fleet:
     return Fleet(registry, router, ctx, authority=authority_from_env())
 
 
-app = FastAPI(title="agentic-os control plane", version="0.1.0")
+# No Swagger UI / ReDoc (they load scripts from a CDN without integrity checks) and no anonymous route inventory: /openapi.json needs the fleet credential.
+_perm_warn_throttle()
+app = FastAPI(title="agentic-os control plane", version="0.1.0", docs_url=None, redoc_url=None, openapi_url=None)
+# the permissions page and admin API: security headers, no-store; every trailing-slash redirect is relative (never the Host header or http)
+app.add_middleware(_SecurityHeaders, scope_prefixes=("/permissions", "/api/permissions"), no_store_prefixes=("/api/permissions",))
 fleet = _build()
 
 # Mission Runtime (Whitepaper v5) — mount /missions + /capabilities over the pilot operators.
@@ -260,9 +320,10 @@ async def _probe_health(client: httpx.AsyncClient, m: Module) -> dict:
         return {"health": "down", "core": None, "connected": None}
 
 
-@app.get("/api/fleet")
+@app.get("/api/fleet", dependencies=[Depends(require_fleet_read)])
 async def api_fleet() -> list[dict]:
-    """Aggregate every module with a live health probe of its real agent service.
+    """Aggregate every module with a live health probe of its real agent service. Needs the fleet credential: it lists the application inventory,
+    ports, approval-required capability names, backend names and live health.
 
     Health checks run concurrently with a short timeout, so one slow or missing
     module can never block the response. ``core`` + ``connected`` are surfaced from
@@ -449,16 +510,37 @@ async def overview() -> HTMLResponse:
     ))
 
 
+_DASHBOARD_HEADERS = {
+    "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer",
+    # The page takes a credential. frame-ancestors/base-uri/form-action/object-src stop framing, a <base> tag, a form posted elsewhere and plugins.
+    # connect-src 'self' blocks fetch/XHR/WebSocket/EventSource/beacon to OTHER origins only; it does not restrict images, links, navigation or
+    # window.open. There is NO script-src: this is not a defence against script injection (the page has no known injection sink, and builds its DOM
+    # with textContent). A nonce policy like /permissions' would need the inline styles and the one handler attribute reworked and a browser to check it.
+    "Content-Security-Policy": "frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'; connect-src 'self'",
+}
+
+
 @app.get("/", response_class=HTMLResponse)
-def dashboard() -> str:
-    return DASHBOARD_HTML
+def dashboard() -> HTMLResponse:
+    return HTMLResponse(DASHBOARD_HTML, headers=_DASHBOARD_HEADERS)
+
+
+@app.get("/openapi.json", include_in_schema=False, dependencies=[Depends(require_api_key)])
+def openapi_schema() -> dict:
+    """The route inventory, for an operator holding the fleet credential only."""
+    return app.openapi()
 
 
 @app.get("/health")
-def health() -> dict:
-    from agentic_os.mission.profile import status as _security_status
-    sec = _security_status(getattr(fleet, "authority", None))
-    return {"status": "ok", "modules": len(fleet.registry), "security": sec}
+def health(x_api_key: str | None = Header(default=None), authorization: str | None = Header(default=None)) -> dict:
+    """Liveness for probes (kubelet, load balancers, `curl`): ``{"status": "ok", "modules": N}``, no credential needed. The security posture block (profile,
+    durability of authority and replay protection, egress proxy, warnings) tells a caller which protections are absent, so it is added only for a caller
+    that presents the fleet credential (the fleet key or the control token; the read-only dashboard token does not open it)."""
+    out = {"status": "ok", "modules": len(fleet.registry)}
+    if _fleet_credential_ok(x_api_key, authorization):
+        from agentic_os.mission.profile import status as _security_status
+        out["security"] = _security_status(getattr(fleet, "authority", None))
+    return out
 
 
 @app.get("/modules", response_model=list[ModuleList])
@@ -467,7 +549,7 @@ def modules() -> list[ModuleList]:
             for m in fleet.registry]
 
 
-@app.get("/status")
+@app.get("/status", dependencies=[Depends(require_fleet_read)])
 async def status() -> list[dict]:
     """Deployment status from a LIVE health probe of each module's agent service.
 
@@ -502,8 +584,9 @@ def down(names: list[str] | None = None) -> list[dict]:
     return [asdict(s) for s in fleet.down(*(names or []))]
 
 
-@app.get("/approvals")
+@app.get("/approvals", dependencies=[Depends(require_fleet_read)])
 def approvals() -> list[dict]:
+    """The pending approvals, payload included: the same credential as deciding them (the fleet key or the control token)."""
     return [asdict(a) for a in fleet.context.pending()]
 
 
@@ -525,32 +608,39 @@ def resolve(approval_id: str, decision: str) -> dict:
 from . import permissions as _perm  # noqa: E402
 
 _GRANTS = _perm.GrantStore()
-_GRANTS.seed([
-    {"subject_kind": "app", "subject": "support", "resource_kind": "table", "resource_name": "crm.customers",
-     "actions": ["read"], "row_scope": "in", "row_column": "region", "row_values": ["us"],
+# No grant is created implicitly. The two example grants below (a demo of the grant-admin page and its preview) are seeded ONLY when the deployment opts in
+# explicitly with AGENTIC_OS_SEED_DEMO_GRANTS=1 (the permissions showcase and demo deployments do; a fresh install does not).
+_DEMO_GRANTS = ([
+    {"id": "seed-support-crm-customers", "subject_kind": "app", "subject": "support", "resource_kind": "table",
+     "resource_name": "crm.customers", "actions": ["read"], "row_scope": "in", "row_column": "region", "row_values": ["us"],
      "masked_columns": ["email"], "created_by": "seed"},
-    {"subject_kind": "role", "subject": "finance", "resource_kind": "table", "resource_name": "crm.customers",
-     "actions": ["read"], "row_scope": "all", "masked_columns": ["notes"], "created_by": "seed"},
+    {"id": "seed-finance-crm-customers", "subject_kind": "role", "subject": "finance", "resource_kind": "table",
+     "resource_name": "crm.customers", "actions": ["read"], "row_scope": "all", "masked_columns": ["notes"], "created_by": "seed"},
 ])
+if os.environ.get("AGENTIC_OS_SEED_DEMO_GRANTS", "").strip().lower() in ("1", "true", "yes", "on"):
+    _GRANTS.seed(list(_DEMO_GRANTS))
 
 
 @app.get("/permissions", response_class=HTMLResponse)
 def permissions_page() -> HTMLResponse:
+    # PUBLIC, static: built from constants only (the repository's own module names, the role and option lists). It reads no grant, no store,
+    # no request and no environment; every call the page then makes is the admin API and needs the key typed into it (kept in memory).
     apps = sorted({m for members in GROUPS.values() for m in members})
-    return HTMLResponse(views.permissions_page(
+    return _secure_page(
+        views.permissions_page,
         subjects=apps, roles=["admin", "finance", "support", "analyst", "auditor"],
         resource=_perm.PREVIEW_RESOURCE, columns=_perm.PREVIEW_COLS,
         subject_kinds=list(_perm.SUBJECT_KINDS), resource_kinds=list(_perm.RESOURCE_KINDS),
         actions=list(_perm.ACTIONS), row_scopes=list(_perm.ROW_SCOPES),
-    ))
+    )
 
 
-@app.get("/api/permissions/status")
+@app.get("/api/permissions/status", dependencies=[Depends(require_permissions_admin)])
 def permissions_status() -> dict:
     return _GRANTS.status()
 
 
-@app.get("/api/permissions/grants")
+@app.get("/api/permissions/grants", dependencies=[Depends(require_permissions_admin)])
 def permissions_grants() -> list[dict]:
     return [g.to_dict() for g in _GRANTS.list()]
 
@@ -559,17 +649,30 @@ def permissions_grants() -> list[dict]:
 async def permissions_add(request: Request) -> dict:
     # Write path — gated by X-API-Key when AGENTIC_OS_API_KEY is set (the admin auth layer). This is
     # SEPARATE from at-rest protection: grants are AES-GCM encrypted + fail-closed in the GrantStore.
-    b = await request.json()
+    b = await _perm_json(request)
     if not b.get("subject") or not b.get("resource_name"):
         raise HTTPException(400, "subject and resource_name are required")
     try:
-        g = _GRANTS.add(
+        g = await run_in_threadpool(
+            _GRANTS.add,
             b.get("subject_kind", "app"), b["subject"], b.get("resource_kind", "table"), b["resource_name"],
-            actions=b.get("actions") or ["read"], row_scope=b.get("row_scope", "all"),
-            row_column=b.get("row_column", "owner"), row_values=b.get("row_values") or [],
-            masked_columns=b.get("masked_columns") or [], created_by="admin")
+            created_by="admin", **_perm_create_kwargs(b))
     except RuntimeError as e:
         raise HTTPException(409, str(e))
+    return g.to_dict()
+
+
+@app.put("/api/permissions/grants/{gid}", dependencies=[Depends(require_permissions_admin)])
+async def permissions_update(gid: str, request: Request) -> dict:
+    # Explicit update-by-id (POST only ever creates). Only the scope fields change; id, subject and resource are immutable.
+    b = await _perm_json(request)
+    fields = _perm_update_fields(b)
+    try:
+        g = await run_in_threadpool(_GRANTS.update, gid, **fields)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    if g is None:
+        raise HTTPException(404, f"no grant {gid}")
     return g.to_dict()
 
 
@@ -581,16 +684,16 @@ def permissions_remove(gid: str) -> dict:
         raise HTTPException(409, str(e))
 
 
-@app.post("/api/permissions/preview")
+@app.post("/api/permissions/preview", dependencies=[Depends(require_permissions_admin)])
 async def permissions_preview(request: Request) -> dict:
-    b = await request.json()
+    b = await _perm_json(request)
     return _perm.preview(_GRANTS, b.get("subject_kind", "app"), b.get("subject", ""))
 
 
-@app.post("/api/permissions/authorize")
+@app.post("/api/permissions/authorize", dependencies=[Depends(require_permissions_admin)])
 async def permissions_authorize(request: Request) -> dict:
-    b = await request.json()
-    ident = _perm.Identity(app=b.get("app", ""), user=b.get("user", ""), roles=b.get("roles") or [])
+    b = await _perm_json(request)
+    ident = _perm.Identity(app=b.get("app", ""), user=b.get("user", ""), roles=b["roles"] if "roles" in b else [])
     plane = _perm.PermissionsPlane(_GRANTS)
     return plane.authorize(ident, b.get("resource_kind", "table"), b.get("resource_name", ""),
                            b.get("action", "read")).to_dict()
@@ -624,17 +727,18 @@ def dispatch(req: DispatchRequest) -> dict:
     return {"kind": "result", "text": out}
 
 
-@app.get("/jobs/{job_id}")
+@app.get("/jobs/{job_id}", dependencies=[Depends(require_fleet_read)])
 def job_status(job_id: str) -> dict:
+    """Status and result text of a background dispatch. Needs the fleet credential (the ids are sequential, and the result is agent output)."""
     job = fleet.job(job_id)
     if job is None:
         raise HTTPException(404, f"no job {job_id}")
     return {"job_id": job_id, **job}
 
 
-@app.get("/notify/status")
+@app.get("/notify/status", dependencies=[Depends(require_fleet_read)])
 def notify_status() -> dict:
-    """What chat channels are wired + whether the inbound gateway is running."""
+    """What chat channels are wired + whether the inbound gateway is running. Needs the fleet credential (integration configuration)."""
     n = fleet.context.notifier
     chans = [c.name for c in n.channels] if n is not None else []
     return {"channels": chans, "notifier_enabled": bool(chans),
@@ -739,6 +843,13 @@ DASHBOARD_HTML = """<!doctype html>
   .src{font:400 13px/18px var(--font-sans);color:var(--on-surface-muted)}
   .src:hover{color:var(--primary)}
   .tool-note{font:400 13px/18px var(--font-sans);color:var(--secondary)}
+  .credbar{display:flex;align-items:center;gap:var(--sp-3);flex-wrap:wrap;background:var(--surface-container-low);border:1px solid var(--outline-variant);
+    border-radius:var(--radius-lg);padding:10px var(--sp-5);font:400 13px/18px var(--font-sans);color:var(--on-surface-variant)}
+  .credbar input,.credbar select{font:400 13px/18px var(--font-sans);background:var(--surface-container);color:var(--on-surface);border:1px solid var(--outline-variant);
+    border-radius:var(--radius-md,8px);padding:6px 10px}
+  .credbar input{min-width:260px}
+  .credbar button{background:none;border:1px solid currentColor;color:var(--primary);border-radius:var(--radius-pill);padding:4px 14px;font:500 12px/1 var(--font-sans);cursor:pointer}
+  .credbar .credstate{margin-left:auto}
   .demo-note{display:flex;align-items:center;gap:var(--sp-3);background:var(--info-container);
     color:var(--info);border:1px solid var(--outline-variant);border-radius:var(--radius-lg);
     padding:10px var(--sp-5);font:400 13px/18px var(--font-sans)}
@@ -767,6 +878,15 @@ DASHBOARD_HTML = """<!doctype html>
       </div>
     </div>
   </header>
+
+  <div class="credbar" id="credbar">
+    <label for="credKind">Fleet credential</label>
+    <select id="credKind"><option value="dashboard">Read-only dashboard token (X-Dashboard-Token)</option><option value="key">Fleet API key (X-API-Key)</option><option value="bearer">Control token (Bearer)</option></select>
+    <input id="credValue" type="password" autocomplete="off" spellcheck="false" placeholder="kept in this page's memory only">
+    <button id="credUse" type="button">Use</button>
+    <button id="credClear" type="button">Clear</button>
+    <span class="credstate" id="credState">No credential: the fleet and the approvals are not loaded.</span>
+  </div>
 
   <div class="demo-note" id="demoNote">
     <span>Live demo on fictional <b>Meridian Wealth Management</b> data — real open-source cores, simulated business. Actions that move money or change infrastructure are gated and safe to explore.</span>
@@ -957,17 +1077,92 @@ function renderFleet(mods) {
   summary.appendChild(el("span", null, up + "/" + total + " modules up"));
 }
 
+// The fleet credential lives ONLY in this closure: never in browser storage, a cookie, a URL, a log or the DOM (the field is emptied as soon as it is used, and
+// the state line never repeats it). It is sent only as a request header, to this origin, by apiGet(), and dropped on a refusal, on "Clear" and when the page goes away.
+const credential = (() => {
+  let kind = "dashboard", value = "";
+  return {
+    set(k, v) { kind = k === "bearer" ? "bearer" : (k === "key" ? "key" : "dashboard"); value = String(v == null ? "" : v).trim(); },
+    clear() { value = ""; },
+    present() { return value !== ""; },
+    headers() {
+      if (!value) return {};
+      if (kind === "bearer") return { "Authorization": "Bearer " + value };
+      return kind === "key" ? { "X-API-Key": value } : { "X-Dashboard-Token": value };
+    },
+  };
+})();
+
+function apiGet(path) {
+  return fetch(path, { headers: credential.headers(), credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer" });
+}
+
+function setCredState(text) {
+  const s = document.getElementById("credState");
+  if (s) s.textContent = text;
+}
+
+function wipeCredentialField() {
+  const f = document.getElementById("credValue");
+  if (f) f.value = "";
+}
+
+function showFleetPrompt(text) {
+  const root = document.getElementById("groups");
+  root.innerHTML = "";
+  root.appendChild(el("div", "empty", text));
+  const summary = document.getElementById("summary");
+  summary.innerHTML = "";
+  summary.appendChild(el("span", "pill__dot"));
+  summary.appendChild(el("span", null, "credential needed"));
+}
+
+function showApprovalsPrompt(text) {
+  const ul = document.getElementById("approvals");
+  ul.innerHTML = "";
+  ul.appendChild(el("li", "empty", text));
+}
+
+// A refusal never shows the response body or the credential. 401: the credential was wrong, so it is dropped. 503: the server has none configured.
+function refused(status) {
+  if (status === 401) {
+    credential.clear();
+    setCredState("The credential was not accepted and has been discarded.");
+  } else {
+    setCredState("The server has no fleet credential configured (AGENTIC_OS_API_KEY or AGENTIC_OS_CONTROL_TOKEN).");
+  }
+}
+
 async function pollFleet() {
+  if (!credential.present()) {
+    showFleetPrompt("Enter a fleet credential (or the read-only dashboard token) above to load the fleet. It is kept in this page's memory only.");
+    return;
+  }
   try {
-    const r = await fetch("/api/fleet");
+    const r = await apiGet("/api/fleet");
+    if (r.status === 401 || r.status === 503) {
+      refused(r.status);
+      showFleetPrompt(r.status === 401 ? "The credential was not accepted. Enter the fleet credential above." : "The fleet view is disabled until a fleet credential is configured on the server.");
+      return;
+    }
     if (r.ok) renderFleet(await r.json());
   } catch (e) { /* keep last render */ }
 }
 
 async function pollApprovals() {
   const ul = document.getElementById("approvals");
+  if (!credential.present()) {
+    showApprovalsPrompt("Pending approvals need the fleet credential or the read-only dashboard token. Enter it above; it is kept in this page's memory only.");
+    return;
+  }
   try {
-    const r = await fetch("/approvals");
+    const r = await apiGet("/approvals");
+    if (r.status === 401 || r.status === 503) {
+      // refused: do NOT claim that nothing is waiting.
+      refused(r.status);
+      showApprovalsPrompt(r.status === 401 ? "The credential was not accepted. Enter the fleet credential above." : "Pending approvals are disabled until a fleet credential is configured on the server.");
+      return;
+    }
     if (!r.ok) throw new Error("bad status");
     const list = await r.json();
     ul.innerHTML = "";
@@ -991,9 +1186,35 @@ async function pollApprovals() {
     });
   } catch (e) {
     ul.innerHTML = "";
-    ul.appendChild(el("li", "empty", "nothing waiting on you"));
+    ul.appendChild(el("li", "empty", "Approvals are unavailable right now."));
   }
 }
+
+function useCredential() {
+  const field = document.getElementById("credValue");
+  const kind = document.getElementById("credKind");
+  if (!field.value.trim()) { setCredState("Enter a credential first."); return; }
+  credential.set(kind.value, field.value);
+  wipeCredentialField();                                   // never echoed back
+  setCredState("A credential is held in this page's memory (not stored).");
+  pollFleet();
+  pollApprovals();
+}
+
+function clearCredential() {
+  credential.clear();
+  wipeCredentialField();
+  setCredState("No credential: the fleet and the approvals are not loaded.");
+  pollFleet();
+  pollApprovals();
+}
+
+document.getElementById("credUse").addEventListener("click", useCredential);
+document.getElementById("credClear").addEventListener("click", clearCredential);
+document.getElementById("credValue").addEventListener("keydown", e => { if (e.key === "Enter") useCredential(); });
+// gone with the page: on unload, reload, navigation away or being put in the back/forward cache
+window.addEventListener("pagehide", () => { credential.clear(); wipeCredentialField(); });
+window.addEventListener("beforeunload", () => { credential.clear(); wipeCredentialField(); });
 
 renderWorkflows();
 pollFleet();

@@ -19,6 +19,15 @@ def _no_live_cores(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _permissions_dev_key(monkeypatch):
+    """The grant store never generates a key implicitly: it needs PERMISSIONS_KEY or an existing key file. The suite
+    builds many throw-away stores in temp directories, so the TEST ENVIRONMENT opts into the explicit development-only
+    key generation. Tests of the fail-closed default (tests/test_permissions_grant_storage.py) clear this."""
+    monkeypatch.setenv("PERMISSIONS_ALLOW_GENERATED_KEY_DEV", "1")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_hosted_oauth(monkeypatch):
     """The Projects API builds its hosted-OAuth connector ONCE from the environment and caches it in module globals. A developer who has exported real OAuth client credentials (to wire a live
     demo) would then see the simulated Connect flow refused, which is the right behaviour but not what these tests are about. Clear the credentials and reset the cache before every test; a test
@@ -92,3 +101,12 @@ def _operator_invoke_open_for_legacy_tests(monkeypatch):
     # The default behaviour has its own tests (tests/test_invoke_approval_required.py) which clear it.
     monkeypatch.setenv("AGENTIC_OS_ALLOW_UNAPPROVED_INVOKE", "1")
     yield
+
+
+@pytest.fixture(autouse=True)
+def _app_gate_state_is_per_test(monkeypatch):
+    """The gate registries are process-global (an app registers its gate at import). A test that installs one must not leak it into the next test: every test starts and ends clean."""
+    from agentic_os import app_gate
+    app_gate.reset_state()
+    yield
+    app_gate.reset_state()

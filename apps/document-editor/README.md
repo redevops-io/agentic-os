@@ -79,3 +79,7 @@ CI: `.github/workflows/document-editor.yml` runs the unit tests on ubuntu, macos
 * View-only editor sessions (no save callback); patch operations are `replace_text`, `append_paragraph` (docx) and
   `set_cell` (xlsx); tracked changes are docx-only and carry no author attribute.
 * Collabora, S3 storage and ElixirOffice are not implemented.
+
+## Authorization note
+
+Note: basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write. See `docs/PERMISSIONS_MIGRATION.md` section 29.

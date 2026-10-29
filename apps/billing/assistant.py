@@ -11,7 +11,10 @@ from __future__ import annotations
 import html
 import re
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Callable
+
+from agentic_os.app_gate import default_authorizer, permissions_requested
 
 _WORD = re.compile(r"[a-z0-9]+")
 
@@ -45,7 +48,12 @@ def governed_answer(prompt: str, classifications, *, max_tokens: int = 400, temp
 
 class Assistant:
     def __init__(self, title: str, primer: str, tools: list, suggestions: list, subtitle: str,
-                 classifications: tuple):
+                 classifications: tuple, authorizer=None):
+        # ``authorizer(principal, spec, args) -> None | deny-reason`` is the SAME seam the harness ToolRegistry uses
+        # (``permissions.make_authorizer(..., tool_actions=agentic_os.tool_actions.tool_actions("<app>"))``). When set, every tool call is
+        # authorised before its body runs, and an authorizer that raises is a denial. None means the process-wide default authorizer (the
+        # enterprise gate), and no gate at all only when permissions were not requested.
+        self.authorizer = authorizer
         self.title, self.primer, self.tools = title, primer, list(tools)
         self.suggestions, self.subtitle, self.classifications = list(suggestions), subtitle, tuple(classifications)
 
@@ -65,11 +73,30 @@ class Assistant:
         return ranked[0] if ranked and q & _tokens(ranked[0]) else \
             "I can answer questions about this module or run one of its tools: " + ", ".join(t.name for t in self.tools) + "."
 
+    def _deny(self, tool, principal, message: str):
+        """The deny reason for this call, or None to allow. The authorizer is this console's own, else the process-wide default the enterprise
+        bootstrap installs (read at call time: the SAME seam as every harness ``ToolRegistry``). No authorizer at all is the basic default
+        (None) unless permissions were requested, and then the console is closed: it is never an open door beside a gated app (RR-02).
+        An authorizer that raises is a denial."""
+        authorizer = self.authorizer if self.authorizer is not None else default_authorizer()
+        if authorizer is None:
+            return "permissions were requested (CR_PERMISSIONS / CR_IDENTITY_*) but no authorizer is installed; denied (fail closed)" \
+                if permissions_requested() else None
+        try:
+            return authorizer(principal, SimpleNamespace(name=tool.name, side_effecting=tool.side_effecting, approval_required=False),
+                              {"message": message})
+        except Exception as e:  # noqa: BLE001 — fail closed
+            return f"authorizer error ({type(e).__name__})"
+
     def respond(self, message: str, principal=None) -> dict:
         message = (message or "").strip()
         if not message:
             return {"intent": "help", "text": self.subtitle, "evidence": []}
         tool = self._pick(message)
+        if tool is not None:
+            deny = self._deny(tool, principal, message)
+            if deny:
+                return {"intent": tool.name, "text": f"[blocked] {tool.name}: {deny}", "evidence": [], "denied": True}
         if tool is not None:
             try:
                 out = tool.fn({"message": message})

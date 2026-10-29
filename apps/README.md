@@ -29,6 +29,17 @@ The catalog that binds these to the fleet — repo, agents, and which tasks need
 cost-audit / drift) and `sky` (SkyPilot elastic-compute), the operators that turn a deployment
 into a governed mission.
 
+## Authorization setting (required for the images)
+
+The app images refuse to start unless the authorization setting is explicit
+(`AGENTIC_OS_REQUIRE_PERMISSIONS_SETTING=1` is baked into them): pass `-e AGENTIC_OS_PERMISSIONS=1` to enforce
+permissions (run `agentic-os permissions init` first; with no grants the app starts restricted), or
+`-e AGENTIC_OS_PERMISSIONS=off` to run deliberately standalone (a start-up line says so). Run directly on a
+loopback address (`uvicorn ... --host 127.0.0.1`) the setting may stay unset: the app starts as before and logs a notice
+that authorization is not enforced. See `docs/PERMISSIONS_MIGRATION.md` section 19.
+
+Note: basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write.
+
 ## Upgrading images
 
 App images run as an unprivileged user (uid 10001). `/data` is owned by that user inside the image, and the

@@ -86,11 +86,19 @@ def _strip_approval(obj):
     return obj
 
 
+# ── permissions: basic (AGPL) permissions or the enterprise plane; the app starts gated or not at all (agentic_os/app_gate.py). Every route that
+# EXECUTES a tool asks the gate first (authorisation), separately from the approval the core stages for consequential actions.
+from agentic_os.app_gate import RequestContext as _RequestContext, denial_result as _denial_result, deny_response as _deny_response, install_gate as _install_gate  # noqa: E402
+from agentic_os.app_gate import with_authorization as _with_authorization
+_GATE_APP = "growth-assistant"
+_req_principal = _install_gate(_GATE_APP)
+
 app = FastAPI(title=f"growth-assistant ({TENANT})")
 
 from agentic_os.app_kit import route_authz as _route_authz  # noqa: E402
 from .route_policy import APP as _APP, ROUTE_POLICIES as _ROUTE_POLICIES  # noqa: E402
 _route_authz.install(app, _APP, _ROUTE_POLICIES)   # one enforcement layer for every write route
+app.add_middleware(_RequestContext)   # the active gate (basic or enterprise) sees THIS request's principal in every route
 
 
 # --- the agent brain (DeepSeek-V4-Flash; Claude fallback) --------------------
@@ -416,6 +424,29 @@ ACTIONS = {
     "ask": lambda b: core.ask(b, gen=_gen_text),
 }
 
+# the grant each console action needs (the SAME names as the operator capabilities; trusted classification: agentic_os/tool_actions.py)
+_TOOL_OF = {"playbook": "assistant.playbook", "subreddit_plan": "assistant.subreddit_plan", "founder_content": "assistant.founder_content",
+            "community_blueprint": "assistant.community_blueprint", "cold_outreach": "assistant.cold_outreach",
+            "hire_brief": "assistant.hire_brief", "ask": "assistant.ask"}
+
+
+def _tools_for(action: str, call: dict) -> list:
+    """The grants an action needs: its own, plus ``assistant.push_assets`` when the call asks to PUSH to the external cores (the push stays
+    additionally behind the operator approval the core requires: authorisation and approval are separate)."""
+    tools = [_TOOL_OF[action]]
+    push = call.get("push")
+    if push is True or (isinstance(push, str) and push.strip().lower() in ("true", "1")):
+        tools.append("assistant.push_assets")
+    return tools
+
+
+def _execute(action: str, call: dict) -> dict:
+    """THE execution point of a console action (``/agent/run`` and the chat's background job): authorise, then run."""
+    denied = _denial_result(_GATE_APP, *_tools_for(action, call))
+    if denied is not None:
+        return denied
+    return ACTIONS[action](call)
+
 _CHAT_SYSTEM = (
     "You are the Growth Assistant — an AI growth strategist for first-time founders "
     "(subreddit incubation, founder-led X/LinkedIn growth, lead-magnet communities, cold "
@@ -445,7 +476,7 @@ _JOBS: dict[str, dict] = {}
 
 def _run_action_job(job_id: str, action: str, call: dict) -> None:
     try:
-        result = ACTIONS[action](call)
+        result = _execute(action, call)
         prior = _JOBS.get(job_id, {})
         if result.get("status") == "error":
             _JOBS[job_id] = {"status": "error", "ts": time.time(),
@@ -495,6 +526,9 @@ def _chat(body: dict, client_ip: str) -> dict:
         for k in ("platform", "count", "role"):
             if params.get(k) not in (None, "", 0):
                 call[k] = params[k]
+        _d = _denial_result(_GATE_APP, *_tools_for(action, call))
+        if _d is not None:
+            return {"status": "denied", "mode": "denied", "reply": _d["error"], "executed": False}
         # Run the (slow) generation in the background so this request returns fast.
         job_id = uuid.uuid4().hex[:12]
         ack = reply or (f"On it — generating your {action.replace('_', ' ')}. "
@@ -513,6 +547,8 @@ def _chat(body: dict, client_ip: str) -> dict:
 # --- routes ------------------------------------------------------------------
 @app.post("/api/chat")
 async def api_chat(request: Request) -> JSONResponse:
+    if (_r := _deny_response(_GATE_APP, "assistant.ask")):
+        return _r
     try:
         body = _strip_approval(await request.json())
     except Exception:
@@ -524,6 +560,8 @@ async def api_chat(request: Request) -> JSONResponse:
 
 @app.get("/api/chat/job/{job_id}")
 def api_chat_job(job_id: str) -> JSONResponse:
+    if (_r := _deny_response(_GATE_APP, "assistant.ask")):
+        return _r
     j = _JOBS.get(re.sub(r"[^a-f0-9]", "", job_id))
     if not j:
         return JSONResponse({"status": "unknown"}, status_code=404)
@@ -532,17 +570,21 @@ def api_chat_job(job_id: str) -> JSONResponse:
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "cores": {"erpnext": erp_connected(),
-            "listmonk": listmonk_connected(), "postiz": postiz_reachable()}}
+    return _with_authorization(_GATE_APP, {"status": "ok", "cores": {"erpnext": erp_connected(),
+            "listmonk": listmonk_connected(), "postiz": postiz_reachable()}})
 
 
 @app.get("/api/activity")
 def activity(session: str = "") -> JSONResponse:
+    if (_r := _deny_response(_GATE_APP, "assistant.ask")):
+        return _r
     return JSONResponse(fetch_activity(session=session))
 
 
 @app.get("/api/assets")
 def assets(session: str = "") -> JSONResponse:
+    if (_r := _deny_response(_GATE_APP, "assistant.ask")):
+        return _r
     sid = _sid(session)
     items = [a for a in _load_assets() if not sid or _sid(a.get("session")) == sid]
     return JSONResponse({"assets": [{"id": a["id"], "type": a["type"], "title": a["title"],
@@ -552,6 +594,8 @@ def assets(session: str = "") -> JSONResponse:
 
 @app.get("/api/assets/{aid}")
 def asset(aid: str, session: str = "") -> JSONResponse:
+    if (_r := _deny_response(_GATE_APP, "assistant.ask")):
+        return _r
     f = ASSET_DIR / f"{re.sub(r'[^A-Za-z0-9-]', '', aid)}.json"
     if f.exists():
         doc = json.loads(f.read_text())
@@ -566,6 +610,8 @@ def asset(aid: str, session: str = "") -> JSONResponse:
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
+    if (_r := _deny_response(_GATE_APP, "assistant.ask")):
+        return _r
     return render(fetch_activity())
 
 
@@ -579,13 +625,16 @@ async def agent_run(request: Request) -> JSONResponse:
                                        request.headers.get("authorization"))
     action = (body or {}).get("action", "")
     if action in ACTIONS:
-        return JSONResponse(ACTIONS[action](body or {}))
+        out = _execute(action, body or {})
+        return JSONResponse(out, status_code=403 if out.get("status") == "denied" and out.get("executed") is False else 200)
     return JSONResponse({"status": "error", "error": f"unknown action '{action}'",
                          "supported": list(ACTIONS)}, status_code=400)
 
 
 if __name__ == "__main__":  # pragma: no cover
     import uvicorn
+    from agentic_os.app_gate import require_explicit_setting_when_exposed as _exposed
+    _exposed("0.0.0.0")   # a reachable bind needs an explicit permissions setting
     uvicorn.run(app, host="0.0.0.0", port=PORT)
 
 
