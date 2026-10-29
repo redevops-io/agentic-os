@@ -159,3 +159,33 @@ def test_a_per_tenant_cap_evicts_within_the_tenant_and_refuses_when_it_is_all_in
 def test_argument_names_that_collapse_under_normalisation_cannot_be_bound():
     with pytest.raises(IdempotencyError):
         canonical_arguments({"caf\u00e9": 1, "cafe\u0301": 2})
+
+
+def test_the_completed_entry_of_a_write_is_not_evicted_before_its_ttl_and_a_new_claim_is_refused_instead():
+    c = Clock()
+    s = InMemoryIdempotencyStore(ttl_s=100, max_entries=2, clock=c)
+    for k in ("w1", "w2"):
+        s.begin("t", k, "F", write=True)
+        s.complete("t", k, "F", k)
+    with pytest.raises(IdempotencyStoreFull):
+        s.begin("t", "w3", "F", write=True)
+    with pytest.raises(IdempotencyStoreFull):
+        s.begin("t", "r1", "F")                                              # a read cannot displace a write either
+    with pytest.raises(IdempotencyStoreFull):
+        s.begin("other", "r1", "F")
+    assert s.begin("t", "w1", "F") == (REPLAY, "w1")
+    c.t += 101
+    assert s.begin("t", "w3", "F", write=True)[0] == NEW                     # expired entries make room
+
+
+def test_completed_reads_go_first_and_a_reconciled_result_counts_as_a_write():
+    s = InMemoryIdempotencyStore(ttl_s=1000, max_entries=3)
+    s.begin("t", "w", "F", write=True)
+    s.complete("t", "w", "F", "w")
+    s.begin("t", "r1", "F")
+    s.complete("t", "r1", "F", "r1")
+    s.seed("t", "seeded", "F", "s")
+    assert s.begin("t", "r2", "F")[0] == NEW                                 # r1 was the only evictable entry
+    s.abandon("t", "r2", "F")
+    assert s.begin("t", "w", "F") == (REPLAY, "w") and s.begin("t", "seeded", "F") == (REPLAY, "s")
+    assert s.begin("t", "r1", "F")[0] == NEW

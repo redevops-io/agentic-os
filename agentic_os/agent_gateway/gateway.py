@@ -356,6 +356,16 @@ class AgentGateway:
             # output withheld pending an export approval; surface as pending, not ok.
             result = GatewayResult(request.request_id, GatewayStatus.PENDING_APPROVAL, decision,
                                    mission_id=mission_id)
+            if track["claim"]:
+                # The call EXECUTED; only its output is held. Keep the claim, with the unfiltered output (it never reaches a client from here:
+                # a replay applies the policy of that moment to it), so a retry replays the held outcome and never sends the write again.
+                claim, track["claim"] = track["claim"], None
+                held = GatewayResult(request.request_id, GatewayStatus.PENDING_APPROVAL, decision, output=hres.output, mission_id=mission_id,
+                                     evidence_refs=hres.evidence_refs, source_refs=hres.source_refs, data_classes=classes)
+                try:
+                    self.idempotency.complete(*claim, held)
+                except Exception:  # noqa: BLE001 - the effect happened; the held outcome is returned, and the claim released
+                    self.idempotency.abandon(*claim[:3])
             return self._finalize(request, start, result, exposed_reason="permitted")
         else:
             output = filtered
@@ -397,7 +407,7 @@ class AgentGateway:
                 side_effecting=bool(manifest.side_effecting))).verdict is Verdict.ALLOW
             if not now_ok:
                 return None                      # the authority step that follows decides, reports and audits the refusal; nothing stored is consulted
-        state, prior = self.idempotency.begin(gp.tenant, key, fp)
+        state, prior = self.idempotency.begin(gp.tenant, key, fp, write=bool(manifest.side_effecting))
         if state == NEW:
             track["claim"] = (gp.tenant, key, fp)
             return None
@@ -417,7 +427,15 @@ class AgentGateway:
         stored = prior.decision.egress_action
         decision = replace(prior.decision, egress_action=action,
                            policy_rule_ids=tuple(prior.decision.policy_rule_ids) + tuple(rules) + ("idempotent_replay",))
-        if action is EgressAction.DENY:
+        if prior.status is GatewayStatus.PENDING_APPROVAL:
+            # the call executed and its output was held by the egress policy; the stored output is the unfiltered one, so the current policy decides from scratch
+            if action is EgressAction.DENY:
+                result = replace(prior, decision=decision, status=GatewayStatus.OK, output=None)
+            elif action is EgressAction.REQUIRE_APPROVAL:
+                result = replace(prior, decision=decision, output=None)
+            else:
+                result = replace(prior, decision=decision, status=GatewayStatus.OK, output=filtered)
+        elif action is EgressAction.DENY:
             result = replace(prior, decision=decision, output=None)
         elif action is EgressAction.REQUIRE_APPROVAL:
             result = replace(prior, decision=decision, status=GatewayStatus.PENDING_APPROVAL, output=None)

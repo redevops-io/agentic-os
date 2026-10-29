@@ -371,18 +371,20 @@ def test_a_full_store_never_evicts_in_flight_work_and_refuses_new_claims_instead
     assert call(gw, gp(), key="a").ok and h.calls == 2                          # the in-flight claims completed and are stored, not evicted
 
 
-def test_eviction_never_turns_an_unknown_outcome_into_a_re_executable_call(tmp_path, monkeypatch):
+def test_a_full_store_never_turns_an_unknown_outcome_into_a_re_executable_call(tmp_path, monkeypatch):
     from agentic_os.agent_gateway import InMemoryIdempotencyStore
     from tests.test_gateway_unknown_outcome import wire, refund
     prov, gw, guard, who = wire()
-    gw.idempotency = InMemoryIdempotencyStore(ttl_s=3600, max_entries=1)
+    gw.idempotency = InMemoryIdempotencyStore(ttl_s=3600, max_entries=2)
     prov.fail_next = True
     assert refund(gw, who, key="k1").status is GatewayStatus.ERROR and prov.sends == 1
-    for i in range(4):                                                          # churn the one-entry store
-        assert refund(gw, who, key=f"other{i}", invoice=f"INV-{i}").ok
+    assert refund(gw, who, key="other0", invoice="INV-0").ok and refund(gw, who, key="other1", invoice="INV-1").ok
+    full = refund(gw, who, key="other2", invoice="INV-2")                       # the store holds two completed writes: a third is refused, nothing evicted
+    assert full.error == "gateway_error" and prov.sends == 3
     r = refund(gw, who, key="k1")
     assert r.status is GatewayStatus.DENIED and r.decision.reason == "authority:outcome_unknown" and not leaks(r)
-    assert prov.sends == 5 and gw.unresolved_calls("acme:agent")[0]["meta"]["idempotency_key"] == "k1"
+    assert prov.sends == 3 and gw.unresolved_calls("acme:agent")[0]["meta"]["idempotency_key"] == "k1"
+    assert refund(gw, who, key="other0", invoice="INV-0").ok and prov.sends == 3        # and the completed writes were not evicted
 
 
 def test_an_unknown_outcome_stays_non_retryable_and_a_changed_request_does_not_reveal_it():
@@ -452,7 +454,7 @@ def test_a_fault_in_the_authority_check_during_a_replay_is_gateway_error(tmp_pat
 
 def test_a_fault_in_the_idempotency_store_is_gateway_error_and_nothing_executes():
     class Broken:
-        def begin(self, *a): raise RuntimeError("store offline")
+        def begin(self, *a, **k): raise RuntimeError("store offline")
         def complete(self, *a): pass
         def abandon(self, *a): pass
         def seed(self, *a): pass
@@ -630,3 +632,128 @@ def test_the_same_egress_policy_does_not_transform_a_stored_output_twice():
     first = call(gw, gp())
     again = call(gw, gp())
     assert first.output == again.output and again.output["password"].startswith("tok_") and h.calls == 1
+
+
+# ───────────────────────────── a write whose output is held by the egress policy ─────────────────────────────
+class Holding:
+    """An export policy: the output is held until `mode` is changed (an approved export), or redacted / denied."""
+    mode = EgressAction.REQUIRE_APPROVAL
+
+    def decide(self, output, classes, principal, manifest):
+        from agentic_os.agent_gateway.egress import redact
+        if self.mode is EgressAction.ALLOW:
+            return EgressAction.ALLOW, output, ()
+        if self.mode is EgressAction.REDACT:
+            return EgressAction.REDACT, redact(output), ("egress:redact",)
+        if self.mode is EgressAction.DENY:
+            return EgressAction.DENY, None, ("egress:deny",)
+        return EgressAction.REQUIRE_APPROVAL, None, ("egress:hold",)
+
+
+def test_a_write_whose_output_is_held_is_not_sent_again_by_a_retry():
+    prov, gw, who = plain_wire()
+    gw.egress = Holding()
+    first = refund_plain(gw, who)
+    assert first.status is GatewayStatus.PENDING_APPROVAL and prov.sends == 1       # it executed; only the output is held
+    for _ in range(3):
+        again = refund_plain(gw, who)
+        assert again.status is GatewayStatus.PENDING_APPROVAL and again.output is None and prov.sends == 1
+        assert "obj_" not in repr(again.client_view())
+    assert refund_plain(gw, who, amount=99).error == "idempotency_conflict" and prov.sends == 1
+
+
+def test_an_approved_export_releases_the_held_output_without_sending_the_write_again():
+    prov, gw, who = plain_wire()
+    policy = gw.egress = Holding()
+    assert refund_plain(gw, who).status is GatewayStatus.PENDING_APPROVAL
+    policy.mode = EgressAction.ALLOW                                                 # the export is approved
+    released = refund_plain(gw, who)
+    assert released.ok and released.output["provider_object_id"] == "obj_1" and prov.sends == 1
+    assert refund_plain(gw, who).output == released.output and prov.sends == 1
+
+
+def test_a_held_output_follows_the_policy_of_the_moment_it_is_replayed():
+    prov, gw, who = plain_wire()
+    policy = gw.egress = Holding()
+    refund_plain(gw, who)
+    policy.mode = EgressAction.DENY
+    denied = refund_plain(gw, who)
+    assert denied.ok and denied.output is None and "egress:deny" in denied.decision.policy_rule_ids
+    policy.mode = EgressAction.REQUIRE_APPROVAL
+    assert refund_plain(gw, who).status is GatewayStatus.PENDING_APPROVAL
+    policy.mode = EgressAction.REDACT
+    assert refund_plain(gw, who).ok and prov.sends == 1
+
+
+def test_a_held_write_without_an_authority_guard_is_not_sent_again_either():
+    from agentic_os.agent_gateway.contracts import ApprovalPolicy
+    policy = Holding()
+    gw, h, _ = gateway(None, write_manifest(approval=ApprovalPolicy.AUTO), grants=Grants(("t1", "bob", "data.write")), egress=policy)
+    assert call(gw, gp(), "idem.write", {"v": 1}).status is GatewayStatus.PENDING_APPROVAL
+    assert call(gw, gp(), "idem.write", {"v": 1}).status is GatewayStatus.PENDING_APPROVAL and h.calls == 1
+    policy.mode = EgressAction.ALLOW
+    assert call(gw, gp(), "idem.write", {"v": 1}).output["record"] == SECRET and h.calls == 1
+
+
+# ───────────────────────────── writes are not evicted ─────────────────────────────
+def test_a_full_store_refuses_a_new_write_instead_of_evicting_a_completed_one():
+    from agentic_os.agent_gateway import InMemoryIdempotencyStore
+    from agentic_os.agent_gateway.contracts import ApprovalPolicy
+    store = InMemoryIdempotencyStore(ttl_s=3600, max_entries=2)
+    gw, h, _ = gateway(None, write_manifest(approval=ApprovalPolicy.AUTO), grants=Grants(("t1", "bob", "data.write")), idempotency=store)
+    assert call(gw, gp(), "idem.write", {"v": 1}, key="a").ok and call(gw, gp(), "idem.write", {"v": 2}, key="b").ok and h.calls == 2
+    refused = call(gw, gp(), "idem.write", {"v": 3}, key="c")
+    assert refused.status is GatewayStatus.ERROR and refused.error == "gateway_error" and h.calls == 2          # nothing executed
+    assert call(gw, gp(), "idem.write", {"v": 1}, key="a").ok and h.calls == 2                                   # the old writes still replay
+    assert len(store) == 2
+
+
+def test_completed_reads_are_evicted_before_completed_writes():
+    from agentic_os.agent_gateway import InMemoryIdempotencyStore
+    from agentic_os.agent_gateway.contracts import ApprovalPolicy
+    store = InMemoryIdempotencyStore(ttl_s=3600, max_entries=3)
+    handler = Counter()
+    gw, h, _ = gateway(handler, read_manifest(), write_manifest(approval=ApprovalPolicy.AUTO), grants=Grants(("t1", "bob", "data.write"), ("t1", "bob", "data.read")),
+                       idempotency=store)
+    assert call(gw, gp(), "idem.write", {"v": 1}, key="w").ok                    # oldest entry, but a write
+    assert call(gw, gp(), "idem.read", key="r1").ok and call(gw, gp(), "idem.read", key="r2").ok
+    assert call(gw, gp(), "idem.read", key="r3").ok and h.calls == 4              # r1 made room
+    for _ in range(3):
+        assert call(gw, gp(), "idem.write", {"v": 1}, key="w").ok
+    assert h.calls == 4                                                           # the write was never sent again
+    assert call(gw, gp(), "idem.read", key="r1").ok and h.calls == 5              # the evicted read runs again
+
+
+def test_a_write_entry_ends_with_its_ttl_not_before():
+    from agentic_os.agent_gateway import InMemoryIdempotencyStore
+    from agentic_os.agent_gateway.contracts import ApprovalPolicy
+    clock = Clock()
+    store = InMemoryIdempotencyStore(ttl_s=100, max_entries=5, clock=clock)
+    gw, h, _ = gateway(None, write_manifest(approval=ApprovalPolicy.AUTO), grants=Grants(("t1", "bob", "data.write")), idempotency=store)
+    assert call(gw, gp(), "idem.write", {"v": 1}).ok
+    clock.t += 99
+    assert call(gw, gp(), "idem.write", {"v": 1}).ok and h.calls == 1
+    clock.t += 2
+    assert call(gw, gp(), "idem.write", {"v": 1}).ok and h.calls == 2             # after the TTL it can be sent again (documented)
+
+
+def test_a_concurrent_retry_of_a_write_under_an_authority_guard_is_refused_as_outcome_unknown():
+    prov, gw, who = plain_wire()
+    gate, release = threading.Event(), threading.Event()
+    original = prov.refund
+
+    def slow(req, env):
+        gate.set()
+        release.wait(5)
+        return original(req, env)
+
+    gw.registry._handlers["billing.refund"] = slow
+    out = []
+    t = threading.Thread(target=lambda: out.append(refund_plain(gw, who)))
+    t.start()
+    assert gate.wait(5)
+    second = refund_plain(gw, who)
+    release.set()
+    t.join()
+    assert second.status is GatewayStatus.DENIED and second.decision.reason == "authority:outcome_unknown" and prov.sends == 1
+    assert out[0].ok and refund_plain(gw, who).ok and prov.sends == 1

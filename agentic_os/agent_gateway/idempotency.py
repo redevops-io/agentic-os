@@ -100,9 +100,10 @@ class IdempotencyStore(Protocol):
     ``begin`` is atomic: of any number of concurrent callers presenting the same (tenant, key), exactly one gets ``NEW`` (it holds the claim and
     will execute); the others get ``IN_PROGRESS``, or ``REPLAY`` once the claim is completed, or ``CONFLICT`` if their fingerprint differs.
     A claim ends with ``complete`` (the result is stored) or ``abandon`` (nothing is stored; a retry may claim again). ``seed`` records a
-    result that an operator established by reconciliation."""
+    result that an operator established by reconciliation. ``write=True`` marks the claim as a side-effecting call: a store must not evict the
+    completed entry of a write before its time-to-live ends (a retry would send the write again) and should refuse a new claim instead."""
 
-    def begin(self, tenant: str, key: str, fingerprint: str) -> Tuple[str, Any]: ...
+    def begin(self, tenant: str, key: str, fingerprint: str, write: bool = False) -> Tuple[str, Any]: ...
     def complete(self, tenant: str, key: str, fingerprint: str, result: Any) -> None: ...
     def abandon(self, tenant: str, key: str, fingerprint: str) -> None: ...
     def seed(self, tenant: str, key: str, fingerprint: str, result: Any) -> None: ...
@@ -114,14 +115,17 @@ class _Entry:
     result: Any = None
     done: bool = False
     expires_at: float = 0.0
+    keep: bool = False                    # the call is a write: its completed entry is not evicted before its TTL ends
 
 
 @dataclass
 class InMemoryIdempotencyStore:
     """Process-local store: a time-to-live (``ttl_s``, measured on ``clock``, wall-clock time by default) and a bound on the number of entries
     (``max_entries``, shared by all tenants; ``max_entries_per_tenant`` optionally caps one tenant lower). When the store is full, the oldest *completed*
-    entry of the tenant that holds the most entries is evicted, so a busy tenant evicts its own keys before another tenant's; an in-flight claim
-    is never evicted, and if nothing can be evicted a new claim is refused (:class:`IdempotencyStoreFull`) rather than the bound exceeded. The
+    entry of the tenant that holds the most entries is evicted, so a busy tenant evicts its own keys before another tenant's. Only completed *reads* are
+    evictable: the completed entry of a write (``begin(..., write=True)``, and any reconciled result) is kept until its TTL ends, because evicting it
+    would let a retry send the write again. An in-flight claim is never evicted either. If nothing can be evicted a new claim, read or write, is refused
+    (:class:`IdempotencyStoreFull`, which the gateway reports as ``gateway_error``) rather than the bound exceeded. The
     bound counts entries, not bytes. After its TTL or eviction a key is simply unknown: a retry executes again, which is why an unknown outcome is
     held by the authority ledger (``outcome_unknown``) and not here. An in-flight claim has no timeout. Not shared between processes."""
 
@@ -162,7 +166,7 @@ class InMemoryIdempotencyStore:
 
     def _evict_oldest_completed(self, tenant: str) -> bool:
         for ident, e in self._entries.items():                    # insertion order is completion order
-            if ident[0] == tenant and e.done:
+            if ident[0] == tenant and e.done and not e.keep:
                 self._drop(ident)
                 return True
         return False
@@ -174,21 +178,21 @@ class InMemoryIdempotencyStore:
             self._drop(ident)
         while self._count.get(tenant, 0) >= self.max_entries_per_tenant:
             if not self._evict_oldest_completed(tenant):
-                raise IdempotencyStoreFull("this tenant's share of the idempotency store is full of in-flight calls")
+                raise IdempotencyStoreFull("this tenant's share of the idempotency store is full of in-flight calls and completed writes")
         while len(self._entries) >= self.max_entries:
             for victim in sorted(self._count, key=lambda x: -self._count[x]):       # the tenant holding the most entries pays first
                 if self._evict_oldest_completed(victim):
                     break
             else:
-                raise IdempotencyStoreFull("the idempotency store is full of in-flight calls")
+                raise IdempotencyStoreFull("the idempotency store is full of in-flight calls and completed writes")
 
-    def begin(self, tenant: str, key: str, fingerprint: str) -> Tuple[str, Any]:
+    def begin(self, tenant: str, key: str, fingerprint: str, write: bool = False) -> Tuple[str, Any]:
         with self._lock:
             now, ident = self.clock(), (tenant, key)
             e = self._live(ident, now)
             if e is None:
                 self._make_room(now, tenant)
-                self._add(ident, _Entry(fingerprint))
+                self._add(ident, _Entry(fingerprint, keep=bool(write)))
                 return NEW, None
             if e.fingerprint != fingerprint:
                 return CONFLICT, None
@@ -220,4 +224,4 @@ class InMemoryIdempotencyStore:
                 self._make_room(now, tenant)
             elif ident in self._entries:
                 self._drop(ident)
-            self._add(ident, _Entry(fingerprint, copy.deepcopy(result), True, now + self.ttl_s))
+            self._add(ident, _Entry(fingerprint, copy.deepcopy(result), True, now + self.ttl_s, keep=True))
