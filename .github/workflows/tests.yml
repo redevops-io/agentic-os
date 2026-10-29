@@ -22,6 +22,8 @@ jobs:
     timeout-minutes: 25
     env:
       PYTHONDONTWRITEBYTECODE: "1"
+      # the dashboard behaviour tests run the page scripts with node (preinstalled on ubuntu-latest): a missing node must FAIL here, not skip
+      AGENTIC_OS_REQUIRE_NODE_TESTS: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -29,11 +31,12 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
-      - name: Install the kernel + dev + duckdb extra
+      - name: Install the kernel + dev + duckdb + mcp extras
         # duckdb: two durable-ledger tests need the optional DuckDB event store; without it they fail.
+        # mcp (fastmcp): the Agent Gateway's FastMCP transport tests, including the real HTTP server + client test, need it; without it they skip.
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,duckdb]"
+          pip install -e ".[dev,duckdb,mcp]"
       - name: Fetch real connector fixtures (public repo) for the normalization tests
         run: git clone --depth 1 https://github.com/redevops-io/redevops-connectors "$RUNNER_TEMP/redevops-connectors"
       - name: Full kernel suite (tests/, incl. tests/conformance)
@@ -41,6 +44,14 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/apps
           REDEVOPS_CONNECTORS_FIXTURES: ${{ runner.temp }}/redevops-connectors/fixtures
         run: pytest -q -p no:cacheprovider tests
+      - name: The real FastMCP HTTP transport test must run, not skip
+        # always() so that its result is visible even when an unrelated test in the full suite above fails
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/apps
+        run: |
+          pytest -v -p no:cacheprovider -rs tests/test_agent_gateway_fastmcp_http.py tests/test_agent_gateway_fastmcp.py | tee "$RUNNER_TEMP/fastmcp.out"
+          if grep -q "SKIPPED" "$RUNNER_TEMP/fastmcp.out"; then echo "::error::a FastMCP transport test was skipped (is the mcp extra installed?)"; exit 1; fi
       - name: Per-app suites
         # One run per app: several apps share test file basenames (test_operator.py, ...), and each app is its own
         # deployable. (apps/pytest.ini also makes a single `pytest apps` work via importlib import mode.)

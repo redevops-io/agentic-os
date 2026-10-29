@@ -90,7 +90,7 @@ python3 -m uvicorn app:app --host 0.0.0.0 --port 8203
 # Or with Docker (point the LAPI URL at the CrowdSec service; mount the docker socket
 # for the cscli-backed alert/triage/approve paths):
 docker build -t edge-sentinel .
-docker run --rm -p 8203:8203 \
+docker run -e AGENTIC_OS_PERMISSIONS=off --rm -p 8203:8203 \
   -e CROWDSEC_LAPI_URL=http://host.docker.internal:8086 \
   -e CROWDSEC_BOUNCER_KEY=<key from .env> \
   -v /var/run/docker.sock:/var/run/docker.sock \
@@ -143,3 +143,7 @@ The sentinel can also read alerts from the CrowdSec LAPI with a machine (watcher
 ## Docker socket access
 
 The image runs as uid 10001. If you mount `/var/run/docker.sock`, add the socket group to the container (compose `group_add: ["<gid>"]`, from `stat -c %g /var/run/docker.sock`). See `apps/README.md`.
+
+## Authorization note
+
+Note: basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write. See `docs/PERMISSIONS_MIGRATION.md` section 29.

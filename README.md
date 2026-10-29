@@ -102,7 +102,7 @@ premium API bill. `agentic-os` replaces that with **one fleet, your data, your h
 - **Human-in-the-loop where it matters** — money, compliance, and infra actions pause for one-click approval.
 - **Fine-grained access control** — a permissions plane grants each app/role/user read/write on a database, table
   or corpus, sliced by **row scope** and **column mask**; set it up and preview it live at `/permissions` (grants
-  AES-GCM–encrypted at rest, gated write API). See [docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md#permissions-plane--access-control-admin).
+  AES-GCM–encrypted at rest; every admin route needs the admin key). See [docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md#permissions-plane--access-control-admin).
 
 ## Beyond the fleet: Projects, Integrations, Sidekick & the Agent Gateway
 
@@ -265,7 +265,9 @@ the effective commit, and what it means for anything depending on this package.
 ## Control-plane security
 
 Mutating control endpoints (`/up`, `/down`, `/dispatch`, approvals, `/api/bridge/invoke`, mission approve) require
-`Authorization: Bearer $AGENTIC_OS_CONTROL_TOKEN` and return 503 when it is unset; read-only endpoints stay open.
+`Authorization: Bearer $AGENTIC_OS_CONTROL_TOKEN` and return 503 when it is unset. On the control plane the reads of non-public state (`GET /approvals`,
+`/jobs/{id}`, `/api/fleet`, `/status`, `/notify/status`) take the same credential (`X-API-Key: $AGENTIC_OS_API_KEY` also works); liveness and static pages stay open, and so does the module proxy
+`/m/<name>` (see `docs/PERMISSIONS_MIGRATION.md` section 33).
 The `/missions` API is default-deny: every non-GET route AND every read except the static shell/catalogue needs a bearer
 token (optionally tenant-scoped via `AGENTIC_OS_TENANT_TOKENS`, optional distinct approvers via
 `AGENTIC_OS_APPROVER_TOKENS`; `AGENTIC_OS_GATE_READS=0` opts out of read gating, unsafe off loopback).
@@ -274,3 +276,10 @@ when none is configured; `AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS=1` opens it for lo
 token is set). The runtime's HTTP operator client sends `AGENTIC_OS_CONTROL_TOKEN` automatically.
 The Projects API is same-origin by default (`PROJECTS_CORS_ORIGINS` opts in). See
 [docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md#control-plane-auth-idempotency-cache-and-multi-replica-limits).
+
+The **permissions admin API** (`/api/permissions/*`: grant list, status, preview, authorize, create, update, remove) is not an exception to the
+rule above: **every route, reads included, needs the admin credential** (`X-API-Key: $PERMISSIONS_ADMIN_KEY` or the same key as a Bearer; at least 24 characters; the fleet key and the control token do not open it), is
+disabled (503) while none is configured, answers 401 to a missing or wrong credential and 400 to a credential in the query string. The grant store
+needs a key and refuses to start without one: `make permissions-key` / `agentic-os permissions key` (see
+[docs/PERMISSIONS_MIGRATION.md](docs/PERMISSIONS_MIGRATION.md)). The public permissions showcase exposes only a synthetic scenario API
+(`/api/demo/*`); see [deploy/permissions-showcase-demo/README.md](deploy/permissions-showcase-demo/README.md).

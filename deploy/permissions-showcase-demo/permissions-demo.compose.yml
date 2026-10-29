@@ -1,6 +1,7 @@
 # demo.redevops.io/permissions — data-access permissions plane showcase (standalone, v6-native).
-#   permissions-api :8109 (FastAPI) runs the REAL agentic_os.permissions GrantStore over seeded grants.
-#   cloudflared: demo.redevops.io /^(permissions|api/permissions)/ -> 192.168.40.105:8109
+#   permissions-api :8109 (FastAPI): the PUBLIC demo API (/api/demo/*, /permissions page, /healthz: synthetic, no keys needed) and the ADMIN
+#   API (/api/permissions/*: needs PERMISSIONS_ADMIN_KEY and the store key; the real agentic_os.permissions GrantStore is opened only then).
+#   cloudflared: demo.redevops.io /^(permissions|api/demo|api/permissions)/ -> 192.168.40.105:8109 (route api/demo too, or the page is empty)
 #   Replaces the /permissions plane that lived in the retired v3 control-plane (:8091); depends ONLY on
 #   the public kernel's permissions module — does NOT resurrect the control-plane.
 services:
@@ -9,19 +10,44 @@ services:
     image: ${PERM_API_IMAGE:-permissions-demo:latest}
     container_name: permissions-api
     restart: unless-stopped
-    # host networking: binds :8109 directly on the host (cloudflared -> 192.168.40.105:8109). The host's
-    # default bridge address pools are exhausted (33+ networks from ephemeral deploys), so we avoid
-    # creating a new per-project network entirely. The app binds 0.0.0.0:8109.
+    # host networking: binds :8109 directly on the host (cloudflared -> 192.168.40.105:8109). The host's default bridge address pools are
+    # exhausted (33+ networks from ephemeral deploys), so we avoid creating a new per-project network entirely. It binds ONE address, not
+    # 0.0.0.0: PERM_BIND_HOST (default 127.0.0.1; deploy.sh sets it to the interface cloudflared reaches), so the rest of the LAN cannot
+    # reach the port directly and bypass the path allowlist.
     network_mode: host
+    # runs as an unprivileged user with a read-only root filesystem, no capabilities and no privilege gain
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: 512m
     environment:
-      # Valid PERMISSIONS_ADMIN_KEY persists grant writes; unset/invalid => writes are simulated per visitor (never persisted).
+      - BIND_HOST=${PERM_BIND_HOST:-127.0.0.1}
+      # DEMO ONLY, explicit: seed the two example grants (support / finance on crm.customers) once into the store so an administrator has something to look at.
+      # Not a default of the kernel or of the control plane; remove this line for a deployment that should start with no grant.
+      - AGENTIC_OS_SEED_DEMO_GRANTS=1
+      # PERMISSIONS_ADMIN_KEY (at least 24 characters) enables the admin API; unset or shorter => it answers 503 (disabled, never open).
+      # The public demo API needs no key. The grant-store key below is only used by the admin API.
       - PERMISSIONS_ADMIN_KEY=${PERMISSIONS_ADMIN_KEY:-}
+      # REQUIRED for a deployment behind cloudflared (deploy.sh refuses without it): the address of the proxy hop, e.g. 127.0.0.1. Unset, every
+      # client behind the proxy shares ONE throttle bucket (failures slow the admin API down for everybody, never lock it); set, each client is throttled
+      # on its own from X-Forwarded-For, and uvicorn honours proxy headers only from this list.
+      - PERMISSIONS_TRUSTED_PROXIES=${PERMISSIONS_TRUSTED_PROXIES:-}
       - PERMISSIONS_DIR=/data/permissions
+      # The grant-store key: external, NO default (never a shared or empty one). `agentic-os permissions key --env-file permissions.env`,
+      # then `docker compose --env-file permissions.env up`. A volume that already holds a .permissions.key: reuse that key with
+      # `agentic-os permissions key --env-file permissions.env --from-key-file <that file>` (see docs/PERMISSIONS_MIGRATION.md).
+      - "PERMISSIONS_KEY=${PERMISSIONS_KEY:?PERMISSIONS_KEY is required - create it once with make permissions-key (or agentic-os permissions key --env-file permissions.env) then run docker compose --env-file permissions.env up}"
     volumes:
       - permissions_data:/data/permissions
-    # This host's default AppArmor/seccomp blocks socketpair(), which breaks asyncio's self-pipe
-    # (uvicorn won't start). Opt out, same as the rest of the demo stack.
+    # no-new-privileges: always. seccomp/apparmor=unconfined are kept ONLY because of this host's limit: its default AppArmor/seccomp profile
+    # blocks socketpair(), which breaks asyncio's self-pipe (uvicorn will not start). On a host without that limit delete the two
+    # unconfined lines and keep no-new-privileges (the container then runs under the engine's default profiles).
     security_opt:
+      - no-new-privileges:true
       - seccomp=unconfined
       - apparmor=unconfined
 

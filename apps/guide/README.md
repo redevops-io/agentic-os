@@ -16,3 +16,7 @@ surfaces the apps a user is allowed to see.
 ## Files
 `core.py` retrieval + answer logic · `operator.py` the gated surface · `app.py` the service ·
 `test_operator.py` tests. Follows the shared operator pattern — see [../README.md](../README.md).
+
+## Authorization note
+
+Note: basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write. See `docs/PERMISSIONS_MIGRATION.md` section 29.

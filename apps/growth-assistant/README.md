@@ -82,3 +82,7 @@ make proxmox-agentic-os AGENTIC_SERVICES=growth-assistant
 ## Upgrading
 
 The image runs as uid 10001. Re-own an existing `/data` volume once: `docker run --rm --user 0 -v <volume>:/data python:3.12-slim chown -R 10001:10001 /data`. See `apps/README.md`.
+
+## Authorization note
+
+Note: basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write. See `docs/PERMISSIONS_MIGRATION.md` section 29.

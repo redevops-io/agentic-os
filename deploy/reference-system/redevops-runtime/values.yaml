@@ -39,6 +39,15 @@ runtime:
     # verification is on: a mission's terminal state must replay identically.
     verification: true
 
+# ── the permissions plane's at-rest key: an EXTERNAL Secret, no default ──
+# Create the Secret once, on purpose:
+#   agentic-os permissions key --env-file permissions.env --k8s-secret redevops-permissions-key
+#   (run the kubectl command it prints, then delete permissions.env)
+# and set keySecret to its name. The chart FAILS TO RENDER while keySecret is empty (checked with `helm template`; no cluster install
+# was tested); there is no default key.
+permissions:
+  keySecret: ""                   # REQUIRED: name of a Secret holding PERMISSIONS_KEY (never put a key in values)
+
 # ── v0.3.0 intrinsic-security + telemetry plugins (Enterprise Edition) ──
 # The canonical security/telemetry CONTRACTS are open (runtime-contracts@0.3.0, already the runtime's
 # dependency); the ENFORCEMENT planes — sandbox, Vault credential broker, correlation → containment, SIEM

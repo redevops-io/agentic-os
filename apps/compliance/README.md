@@ -75,7 +75,7 @@ python3 -m uvicorn app:app --host 0.0.0.0 --port 8208
 
 # Or with Docker (results + content are baked into the image):
 docker build -t agentic-compliance .
-docker run --rm -p 8208:8208 agentic-compliance
+docker run -e AGENTIC_OS_PERMISSIONS=off --rm -p 8208:8208 agentic-compliance
 ```
 
 `scan.sh` runs the scan directly if you want to re-scan without the wrapper:
@@ -142,3 +142,7 @@ Writes are approval-gated in `core`; the app's routes execute them only for requ
 ## Docker socket access
 
 The image runs as uid 10001. If you mount `/var/run/docker.sock`, add the socket group to the container (compose `group_add: ["<gid>"]`, from `stat -c %g /var/run/docker.sock`). See `apps/README.md`.
+
+## Authorization note
+
+Note: basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write. See `docs/PERMISSIONS_MIGRATION.md` section 29.

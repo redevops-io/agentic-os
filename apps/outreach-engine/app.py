@@ -62,23 +62,34 @@ def _strip_approval(obj):
     return obj
 
 
+# ── permissions: basic (AGPL) permissions or the enterprise plane; the app starts gated or not at all (agentic_os/app_gate.py). Every route that
+# EXECUTES a tool asks the gate first (authorisation), separately from the approval the core stages for consequential actions.
+from agentic_os.app_gate import RequestContext as _RequestContext, denial_result as _denial_result, deny_response as _deny_response, install_gate as _install_gate  # noqa: E402
+from agentic_os.app_gate import with_authorization as _with_authorization
+_GATE_APP = "outreach-engine"
+_req_principal = _install_gate(_GATE_APP)
+
 app = FastAPI(title="agentic-outreach-engine (core: Twenty CRM)")
 
 from agentic_os.app_kit import route_authz as _route_authz  # noqa: E402
 from .route_policy import APP as _APP, ROUTE_POLICIES as _ROUTE_POLICIES  # noqa: E402
 _route_authz.install(app, _APP, _ROUTE_POLICIES)   # one enforcement layer for every write route
+app.add_middleware(_RequestContext)   # the active gate (basic or enterprise) sees THIS request's principal in every route
 
 
 @app.get("/health")
 def health():
-    return {"status": "up", "core": "twenty", "connected": twenty_connected()}
+    return _with_authorization(_GATE_APP, {"status": "up", "core": "twenty", "connected": twenty_connected()})
 
 
 @app.get("/api/pipeline")
 def api_pipeline(live: int = 1):
+    if (_r := _deny_response(_GATE_APP, "outreach.refresh")):
+        return _r
     return JSONResponse({"accounts": build_pipeline(bool(live)), "connected": twenty_connected()})
 
 
+_TOOL_OF = {"refresh": "outreach.refresh", "approve": "outreach.approve", "send_all": "outreach.send_all"}
 _ACTIONS = {"refresh": core.refresh,
             "approve": core.approve,        # gated INSIDE core: staged unless `_approval` (human sign-off → Twenty sync)
             "send_all": core.send_all}      # gated INSIDE core
@@ -90,6 +101,9 @@ def _run_action(action: str, body: dict, authorization: "str | None") -> "dict |
     fn = _ACTIONS.get(action)
     if fn is None:
         return None
+    denied = _denial_result(_GATE_APP, _TOOL_OF[action])          # authorise where it executes; the core still stages for approval
+    if denied is not None:
+        return denied
     return fn(core.with_operator_approval(body, authorization))
 
 
@@ -102,6 +116,9 @@ async def agent_run(req: Request):
     action = body.get("action", "refresh")
     res = _run_action(action, body, req.headers.get("authorization"))
     if res is not None:
+        if res.get("status") == "denied" and res.get("executed") is False:        # a basic-permissions denial: 403, nothing ran
+            from fastapi.responses import JSONResponse as _J
+            return _J(res, status_code=403)
         return res
     return {"ok": False, "error": f"unknown action {action}"}
 
@@ -324,6 +341,8 @@ def do_discover(instruction: str, approval: "dict | None" = None) -> dict:
 async def api_discover(req: Request):
     body = _strip_approval(await req.json())
     instruction = (body.get("instruction") or "").strip()
+    if (_r := _deny_response(_GATE_APP, "outreach.discover")):
+        return _r
     if not instruction:
         return {"ok": False, "error": "Tell me what kind of leads you're after — e.g. “RAG eval startups with 200+ stars”."}
     return {"ok": True, **do_discover(instruction, core.operator_approval(req.headers.get("authorization")))}
@@ -455,6 +474,9 @@ async def api_agent(req: Request):
         return {"ok": False, "say": "Ask me to find leads, draft a follow-up, summarize your pipeline, or explain how the CRM works."}
     cls = classify(message)
     intent = cls["intent"]
+    _need = {"discover": "outreach.discover", "followup": "outreach.draft_followup", "pipeline": "outreach.pipeline_summary"}.get(intent)
+    if _need and (_d := _denial_result(_GATE_APP, _need)):
+        return {"ok": False, "intent": intent, "say": _d["error"], "executed": False}
     if intent == "discover":
         rep = do_discover(message)          # no approval => preview only, nothing persisted
         n = len(rep.get("candidates", []))
@@ -484,6 +506,8 @@ async def api_agent(req: Request):
 @app.get("/api/synced")
 def api_synced():
     """Opportunities read back from Twenty — proves the sync end-to-end over https."""
+    if (_r := _deny_response(_GATE_APP, "outreach.synced")):
+        return _r
     opps = twenty_opportunities()
     return JSONResponse({"opportunities": opps, "authed": bool(TWENTY_API_KEY),
                          "crm_url": TWENTY_PUBLIC_URL})
@@ -500,6 +524,8 @@ _AGENT_PANEL = (
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
+    if (_r := _deny_response(_GATE_APP, "outreach.refresh")):
+        return _r
     rows = _STATE["accounts"] or build_pipeline()
     conn = twenty_connected()
     page = render(rows, conn)

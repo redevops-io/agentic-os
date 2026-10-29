@@ -2,11 +2,6 @@
   "doc": "Kernel write routes (agentic_os/**) with no authentication marker on the handler, as of the F20 review. This is a PINNED BASELINE, not an approval: each is a finding to resolve (see audit/autonomy-authority-audit.md F22). tests/test_entrypoint_inventory.py fails when a NEW unauthenticated write route appears, and when one is fixed and the baseline is not shrunk.",
   "routes": [
     {
-      "file": "control_plane.py",
-      "route": "POST /api/permissions/preview",
-      "handler": "permissions_preview"
-    },
-    {
       "file": "intelligence/api.py",
       "route": "POST /quote",
       "handler": "quote"

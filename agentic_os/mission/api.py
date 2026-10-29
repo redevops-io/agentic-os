@@ -220,18 +220,27 @@ def build_router(runtime: MissionRuntime):
 
 
 def build_capabilities_router(runtime: MissionRuntime):
-    from fastapi import APIRouter
+    from fastapi import APIRouter, Request
 
     router = APIRouter(tags=["capabilities"], dependencies=[GATE])
 
     @router.get("/capabilities")
     @public
-    def capabilities(need: str | None = None, k: int = 5):
+    def capabilities(request: Request, need: str | None = None, k: int = 5):
+        """The capability catalogue. Anonymous callers get a trimmed view: the name, the operator and what the capability ``provides``. The detail
+        (inputs and outputs, cost, permissions, side effects and undo, approval flags, secrets, network and authority requirements, isolation, resource keys,
+        data classes and the embedding) is for a caller that presents a valid control or tenant token, or for a server that has opted out of gating reads
+        (``AGENTIC_OS_GATE_READS=0``, local demos on loopback)."""
+        from .control_auth import reads_gated  # noqa: PLC0415
+        detail = caller_of(request) is not None or not reads_gated()
         if need:
-            return {"need": need,
-                    "matches": [{"capability": c.name, "operator": c.operator, "score": round(s, 3)}
-                                for c, s in runtime.registry.discover(need, k)]}
-        return {"capabilities": [to_jsonable(c) for c in runtime.registry.all()]}
+            matches = runtime.registry.discover(need, k)
+            if detail:
+                return {"need": need, "matches": [{"capability": c.name, "operator": c.operator, "score": round(s, 3)} for c, s in matches]}
+            return {"need": need, "matches": [{"capability": c.name, "operator": c.operator} for c, _s in matches]}
+        if detail:
+            return {"capabilities": [to_jsonable(c) for c in runtime.registry.all()]}
+        return {"capabilities": [{"name": c.name, "operator": c.operator, "provides": list(c.provides)} for c in runtime.registry.all()]}
 
     @router.get("/learning")
     @admin_only
