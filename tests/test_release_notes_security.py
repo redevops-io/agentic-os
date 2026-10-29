@@ -20,7 +20,7 @@ def section(n: int) -> str:
     return m.group(0).rstrip() + "\n"
 
 
-@pytest.mark.parametrize("n", [28, 29, 30, 31, 32, 33])
+@pytest.mark.parametrize("n", [28, 29, 30, 31, 32, 33, 34])
 def test_the_release_notes_carry_the_guide_section_verbatim(n):
     assert section(n) in NOTES
 

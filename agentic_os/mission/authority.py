@@ -844,21 +844,38 @@ class AuthorityGuard:
         """May this authority start a child mission? Reserves one unit of the child quota when it may."""
         return _delegation(self, mission_id, tenant)
 
+    def _scope(self, mission_id: str, tenant: str, action: Action) -> "tuple[AuthorityEnvelope | None, float, Decision]":
+        """The scope half of a decision, with no counters touched: the envelope exists in this tenant, is not revoked, its chain is intact,
+        and it covers the action. Returns (envelope, now, decision); the decision is not ALLOW when anything fails."""
+        env = self.envelopes.get(mission_id)
+        if env is None or env.tenant != tenant:      # unknown, or another tenant's: indistinguishable
+            return None, 0.0, Decision(Verdict.DENY, "no_authority", "no authority is recorded for this mission")
+        now = self.clock()
+        if self.envelopes.is_revoked(env.mission_id):
+            return env, now, Decision(Verdict.DENY, "revoked", "this authority was revoked", None, env.digest())
+        bad = self.chain_denial(env, now)
+        if bad is not None:
+            return env, now, bad
+        return env, now, evaluate(env, action, now=now, current_epoch=self.envelopes.epoch(env.tenant))
+
+    def check(self, mission_id: str, tenant: str, action: Action) -> Decision:
+        """Would this action be inside the authority RIGHT NOW? Scope, revocation (including every ancestor of a child), expiry and the
+        mission's time allowance are checked; nothing is reserved and no counter moves. The gateway uses it to revalidate a caller before
+        serving a stored result of an earlier call, which executes nothing and so must not consume the call allowance."""
+        env, now, dec = self._scope(mission_id, tenant, action)
+        if dec.verdict is not Verdict.ALLOW:
+            return dec
+        if now - env.issued_at > env.budget.wall_clock_s > 0:
+            return Decision(Verdict.DENY, "wall_clock_exhausted", "the mission's time allowance is used up",
+                            {"extend_budget": {"wall_clock_s": True}}, dec.envelope_digest)
+        return dec
+
     def authorize(self, mission_id: str, tenant: str, action: Action, standing: "Standing | None" = None,
                   lease_id: str = "", lease_meta: "Mapping[str, Any] | None" = None) -> Decision:
         """`standing` is set when the owner's grant is being asked to stand in for an ordinary approval gate:
         the grant must then be explicit (no bare wildcard) and, if a score-based risk gate also fired, must
         opt in to covering it. Without it this is a plain scope + limits check."""
-        env = self.envelopes.get(mission_id)
-        if env is None or env.tenant != tenant:      # unknown, or another tenant's: indistinguishable
-            return Decision(Verdict.DENY, "no_authority", "no authority is recorded for this mission")
-        now = self.clock()
-        if self.envelopes.is_revoked(env.mission_id):
-            return Decision(Verdict.DENY, "revoked", "this authority was revoked", None, env.digest())
-        bad = self.chain_denial(env, now)
-        if bad is not None:
-            return bad
-        dec = evaluate(env, action, now=now, current_epoch=self.envelopes.epoch(env.tenant))
+        env, now, dec = self._scope(mission_id, tenant, action)
         if dec.verdict is not Verdict.ALLOW:
             return dec
         if standing is not None:
