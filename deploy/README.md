@@ -19,7 +19,7 @@ docker compose -f deploy/docker-compose.yml up --build
 Then open the dashboard:
 
 - **Dashboard (primary UI):** http://localhost:8080/
-- Fleet JSON API: http://localhost:8080/api/fleet
+- Fleet JSON API: http://localhost:8080/api/fleet (needs the fleet credential, see Auth; the dashboard has a field for it)
 - Control-plane health: http://localhost:8080/health
 
 The dashboard polls `/api/fleet` every 5 seconds. Each module card shows its pain
@@ -59,7 +59,7 @@ The control-plane dashboard on **port 8080 is the primary UI**; Traefik is optio
 
 ## Auth
 
-Mutating endpoints (`/up`, `/down`, `/approvals/{id}/{decision}`) and the read of the pending approvals (`GET /approvals`) honor
+Mutating endpoints (`/up`, `/down`, `/approvals/{id}/{decision}`) and the reads of non-public state (`GET /approvals`, `/jobs/{id}`, `/api/fleet`, `/status`, `/notify/status`) honor
 `AGENTIC_OS_API_KEY` (or a bearer `AGENTIC_OS_CONTROL_TOKEN`). Set it to require an `X-API-Key` header:
 
 ```bash

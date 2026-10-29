@@ -20,7 +20,7 @@ Control plane, security profile and the operator authority boundary, approval to
 | Surface | Mutating (token required) | Open (read-only) |
 |---|---|---|
 | `agentic_os.mission.unified_server` | `POST /api/bridge/invoke`, `POST /api/missions/{id}/approve` | `/api/connections`, `/api/needs-you`, `/api/missions/*`, `/api/bridge/capabilities`, `/` |
-| `agentic_os.control_plane` | `POST /up`, `/down`, `/dispatch`, `/approvals/{id}/{decision}`, `GET /approvals` (the payloads), `/openapi.json`, `/api/permissions/*` (all routes) | `/health`, `/status`, `/modules`, `/jobs/*`, ... |
+| `agentic_os.control_plane` | `POST /up`, `/down`, `/dispatch`, `/approvals/{id}/{decision}`, `GET /approvals` (the payloads), `GET /jobs/{id}`, `GET /api/fleet`, `GET /status`, `GET /notify/status`, `/openapi.json`, `/api/permissions/*` (all routes) | `/health`, `/modules`, the static pages, `/capabilities`, `/cockpit`, `/buildinfo` (mission routers, public by design), ... |
 
 Send `Authorization: Bearer <token>` (compared with `hmac.compare_digest`).
 * token unset (and, on the main control plane, no legacy `AGENTIC_OS_API_KEY`) -> **503** with a message; the endpoint never runs open;

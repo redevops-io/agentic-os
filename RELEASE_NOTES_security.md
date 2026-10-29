@@ -122,15 +122,31 @@ Small things to know: re-running `init` with no environment key over a store tha
 rows `region = us`, `email` masked) and `seed-finance-crm-customers` (role `finance`, same table, read, `notes` masked). They are examples for the grant-admin page and preview. They are `table` grants, so the apps'
 tool gate (resource kind `tool`) never matches them and they widen no tool access; they do sit in the store the control plane administers. Remove them with `DELETE /api/permissions/grants/<id>`.
 
-## 33. The control plane's pending approvals need the fleet credential
+## 33. The control plane's fleet reads need the fleet credential
 
-`GET /approvals` on the control plane (`agentic_os/control_plane.py`) used to answer anyone who could reach the port. It returns every pending approval with its payload, which
-is the request text the approver is asked to sign off, so it now needs the same credential as deciding one (`POST /approvals/{id}/{decision}`): `Authorization: Bearer
-<AGENTIC_OS_CONTROL_TOKEN>` or `X-API-Key: <AGENTIC_OS_API_KEY>`. A missing, empty or wrong credential answers 401 and, as for every fleet route, nothing configured answers 503
-(never open). The permissions admin key (`PERMISSIONS_ADMIN_KEY`) is a separate privilege and does not open it, and a credential in the query string is ignored. A refusal runs nothing and
-returns no approval content.
+Four read routes of the control plane (`agentic_os/control_plane.py`) used to answer anyone who could reach the port, and a GET is not safe for that reason:
 
-**Upgrade impact.** Anything that called `GET /approvals` without a credential now gets 401, or 503 when neither `AGENTIC_OS_API_KEY` nor `AGENTIC_OS_CONTROL_TOKEN` is set; the shipped
-compose files pass both through empty by default, so a stock deployment answers 503 until one of them is set. The control-plane dashboard has no field for a credential: its approvals panel
-now says that pending approvals need the fleet credential (instead of "nothing waiting on you"). Read the list with the credential, for example `curl -H "X-API-Key: $AGENTIC_OS_API_KEY" .../approvals`.
-`/health`, `/status`, `/modules`, `/overview`, `/jobs/{id}`, `/api/fleet`, `/notify/status` and the static pages are unchanged.
+| Route | What it returns |
+|---|---|
+| `GET /approvals` | every pending approval with its payload: the request text an approver is asked to sign off |
+| `GET /jobs/{job_id}` | the status and the result text or error of a background dispatch; the ids are sequential (`job-00001`) |
+| `GET /api/fleet` | the application inventory and topology: repositories, ports, approval-required capability names, backend names and live health |
+| `GET /status` and `GET /notify/status` | which modules are deployed (one health probe each), and which chat channels are wired |
+
+They now take the same credential as the other fleet routes (`POST /up`, `/down`, `/dispatch`, `/approvals/{id}/{decision}`, `/openapi.json`): `Authorization: Bearer <AGENTIC_OS_CONTROL_TOKEN>` or
+`X-API-Key: <AGENTIC_OS_API_KEY>`. A missing, empty, wrong or wrong-scheme credential answers 401; with neither variable set they answer 503 (never open). The permissions admin key
+(`PERMISSIONS_ADMIN_KEY`) is a separate privilege and does not open them, and a credential in the query string is ignored. A refusal runs nothing (no job lookup, no registry walk, no health
+probe) and returns no content.
+
+Left open on purpose: `GET /health` (status, module count and the security profile; it is the readiness probe), `GET /modules` (the public catalogue), the static pages (`/`, `/overview`,
+`/permissions`) and `/assets`. On the mission routers, `/capabilities`, `/cockpit` and `/buildinfo` are marked public by design.
+
+**Upgrade impact.**
+
+* Anything that called these routes without a credential now gets 401, or 503 on a deployment that sets neither `AGENTIC_OS_API_KEY` nor `AGENTIC_OS_CONTROL_TOKEN`. The shipped compose files pass both
+  through empty by default, so **a stock compose deployment answers 503 on these routes until one of them is set.** Set one, and send it, for example
+  `curl -H "X-API-Key: $AGENTIC_OS_API_KEY" http://localhost:8080/api/fleet`.
+* The dashboard asks for the credential. Its page has a field (choose API key or control token, then Use); the value is kept in the page's memory only, sent as a request header to the dashboard's own
+  origin, never stored or put in a URL, and dropped on Clear, on a refusal and when the page is closed or reloaded. Until a credential is entered the dashboard shows no fleet and no approvals and says
+  what it needs; with no credential configured on the server it says the views are disabled.
+* `GET /` (the dashboard page) is now served with `Cache-Control: no-store`, `X-Frame-Options: DENY` and a policy that forbids framing and requests to other origins.
