@@ -1,0 +1,13 @@
+claim_id: voice_synthetic_call_outcomes
+claim: "In the synthetic inbound-call demo the bot's spoken outcome statements match the journal: one lead update and one parked follow-up before review, two mock-CRM effects after the reviewer approves, and no spoken claim without a receipt."
+status: Illustrative/synthetic
+code_commit: "CODE_COMMIT"
+dataset: "integrations/voice-pipecat/src/agentic_os_voice/demo/fixtures/inbound_lead_call.json: fictional lead, fictional number (555 range), fake speech in and out, scripted model, mock CRM. No real person, audio or provider."
+protocol: "python -m agentic_os_voice.demo.run, 2026-10-29; the same call also under AGENTIC_OS_PROFILE=production; the assertions are in tests/test_pipecat_pipeline.py (the downstream mock CRM's own effect record is compared with the bridge's receipts)."
+model: "none; a deterministic script stands in for a language model"
+metrics: "4 governed actions in the journal (lookup, update, draft, send); before review: 1 CRM effect and 0 messages sent; after review: 2 CRM effects (one update, one message), 13 journal events with a verified hash chain; unreceipted spoken claims: 0."
+baselines: "NOT_IN_REPO"
+reproduce: "cd integrations/voice-pipecat && python -m agentic_os_voice.demo.run && pytest -q tests/test_pipecat_pipeline.py"
+artifacts: "integrations/voice-pipecat/src/agentic_os_voice/demo/; integrations/voice-pipecat/tests/"
+limitations: "Everything on the call is a fixture or a fake, so this shows the wiring and the bridge's rules, not how a real model, real speech or a real network behaves. The reviewer name and the identity-verification step are scripted."
+review: "none; no external review"

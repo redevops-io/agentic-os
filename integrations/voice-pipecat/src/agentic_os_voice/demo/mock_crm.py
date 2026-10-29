@@ -22,10 +22,10 @@ FIXTURE_LEADS = {
 
 
 class MockCrm:
-    def __init__(self, path: Optional[str] = None, *, api_key: str = "mock-crm-key-FIXTURE-NOT-A-SECRET"):
+    def __init__(self, path: Optional[str] = None, *, credential: str = "SENTINEL-AAAAAAAAAAAAAAAAAAAA"):
         self._path = path
         self._lock = threading.RLock()
-        self.api_key = api_key                      # stands in for a backend credential: it must never reach the model, a frame or a log
+        self.credential = credential                # a fake stand-in for a backend credential: it must never reach the model, a frame or a log
         self.leads: Dict[str, dict] = {k: dict(v) for k, v in FIXTURE_LEADS.items()}
         self.effects: Dict[str, dict] = {}          # idempotency key -> the effect that really happened
         self.effect_count = 0

@@ -39,7 +39,7 @@ async def test_no_backend_credential_reaches_the_model_the_frames_or_the_journal
     with network_blocked():
         rep = await run_call(env, fixture_call, happy_script(fixture_call["lead_id"]))
     operator_review(env)
-    secret = env.crm.api_key
+    secret = env.crm.credential
     assert secret not in json.dumps(rep.context) and secret not in " ".join(rep.spoken)
     assert secret not in open(env.journal._path, encoding="utf-8").read()
     # nor does a journal line carry an argument value: only hashes and ids

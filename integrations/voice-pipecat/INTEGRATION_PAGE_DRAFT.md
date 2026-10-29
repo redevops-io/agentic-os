@@ -99,7 +99,7 @@ Design record: [docs/VOICE_PIPECAT_ADR.md](../../docs/VOICE_PIPECAT_ADR.md).
 
 Labels follow the repository's convention. Nothing here is *Externally reproduced* or *Field validated*.
 
-**Test suite (Internally reproduced, synthetic inputs).** 97 tests in `integrations/voice-pipecat/tests` and 5 boundary tests in `tests/test_voice_pipecat_boundary.py`:
+**Test suite (Internally reproduced, synthetic inputs).** 98 tests in `integrations/voice-pipecat/tests` and 5 boundary tests in `tests/test_voice_pipecat_boundary.py`:
 
 | Area | What is asserted |
 |---|---|
@@ -107,7 +107,7 @@ Labels follow the repository's convention. Nothing here is *Externally reproduce
 | idempotency | repeated, concurrent (tasks and threads), cross-session and post-restart requests for one intent give one effect and one receipt; a changed argument is a new action; a duplicate "call started" delivery opens no second session |
 | crash boundaries | the repository's `CrashingStore` is armed before and after the bridge's journal writes; a kill inside the downstream call; a lost reply; a failure before any effect; journal unavailable. In each case the mock CRM's own count of effects is checked: no duplicate |
 | cancellation | cancelling during a write leaves it to finish once; a deadline during a write reports in flight, never completed; a request cancelled before dispatch has no effect; Pipecat's real interruption frame cancels a read and does not cancel a write |
-| approvals | a person approves, once; an approval is bound to the exact request; rejected and expired approvals do not run; an unavailable approval service fails closed and leaves nothing reserved |
+| approvals | a person approves, once; an approval is bound to the exact request; rejected and expired approvals do not run; an unavailable approval service fails closed and leaves nothing reserved; a hand-off requested after a message was parked stops it even if approved |
 | distress | phrase screen; the model never gets a turn for the matching transcript; the spoken script contains no promise; later tools are refused |
 | profile | the bridge refuses a gateway without an authority guard; the whole call also runs under `AGENTIC_OS_PROFILE=production`; no provider service import, no transport import, no key read, no extras, no tool that dials; the demo blocks connect, bind and listen |
 
