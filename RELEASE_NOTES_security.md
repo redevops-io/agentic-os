@@ -163,8 +163,10 @@ check it; that is left for a later change.
 
 * Anything that called these five routes without a credential now gets 401, or 503 on a deployment that sets neither `AGENTIC_OS_API_KEY` nor `AGENTIC_OS_CONTROL_TOKEN`. `deploy/docker-compose.yml` passes both
   variables through, empty by default, and the root `docker-compose.yml` now does too (this release adds the two lines; before, the container never saw them, so a key could not be set without editing the
-  file). A stock compose deployment answers 503 on these routes until one of them is set, for example `AGENTIC_OS_API_KEY=$(openssl rand -hex 24) docker compose ... up`, and then
-  `curl -H "X-API-Key: $AGENTIC_OS_API_KEY" http://localhost:8080/api/fleet`. The Helm runtime chart deploys the published runtime image, not this control plane, and is not affected.
+  file). A stock compose deployment answers 503 on these routes until one of them is set, for example `export AGENTIC_OS_API_KEY="$(openssl rand -hex 24)"`, then `docker compose ... up`, and then
+  `curl -H "X-API-Key: $AGENTIC_OS_API_KEY" http://localhost:8080/api/fleet`. The Helm runtime chart pulls a separately published image that its values describe as built from this control plane
+  (`ghcr.io/redevops-io/redevops-runtime`, pinned at 0.3.1, so existing installs are unaffected until that tag is rebuilt from this release). The chart has no value for `AGENTIC_OS_API_KEY` or
+  `AGENTIC_OS_CONTROL_TOKEN`, so after that the five reads answer 503 on a Helm install (the mutating fleet routes already did) until the chart gains one.
 * The dashboard shows no fleet and no approvals until the credential is entered, and says what it needs; with no credential configured on the server it says the views are disabled. Because a page cannot share the
   credential with another page without storing it, `/overview` and `/m/<name>` (which also poll `GET /api/fleet` for their live health dots) hold none: they ask once, and after the first 401 or 503 stop polling and show
   one line ("credential required" or "no fleet credential configured on the server"); their health dots stay grey. Behind a reverse proxy that adds the credential they keep working.

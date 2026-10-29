@@ -3,6 +3,8 @@
 Classes: ``fleet`` (the fleet key or the control token: ``require_api_key``), ``perm-admin`` (``PERMISSIONS_ADMIN_KEY`` only), ``mission-gate`` (the mission routers' gate: control or tenant
 token, reads gated by default), ``mission-admin`` (mission gate, unscoped admin token only), ``public`` (deliberately public: liveness, catalogue, static pages, and the mission routers'
 ``@public`` shell/catalogue/build info) and ``open-proxy`` (the module proxy, anonymous today: public issue #528, not changed by this release).
+
+Known gap: this walks the routes (including the mounted mission routers) but not ``Mount``s such as ``/assets``; a newly mounted open sub-app would not be caught here.
 """
 from __future__ import annotations
 
