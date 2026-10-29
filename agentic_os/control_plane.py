@@ -459,9 +459,17 @@ async def overview() -> HTMLResponse:
     ))
 
 
+_DASHBOARD_HEADERS = {
+    "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer",
+    # The page takes a credential: it may not be framed, may not load a <base>, submit a form elsewhere or send requests to another origin.
+    # (No script-src/style-src: the page still has inline styles and a handler attribute, and loads its fonts from Google Fonts.)
+    "Content-Security-Policy": "frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'; connect-src 'self'",
+}
+
+
 @app.get("/", response_class=HTMLResponse)
-def dashboard() -> str:
-    return DASHBOARD_HTML
+def dashboard() -> HTMLResponse:
+    return HTMLResponse(DASHBOARD_HTML, headers=_DASHBOARD_HEADERS)
 
 
 @app.get("/openapi.json", include_in_schema=False, dependencies=[Depends(require_api_key)])
@@ -773,6 +781,13 @@ DASHBOARD_HTML = """<!doctype html>
   .src{font:400 13px/18px var(--font-sans);color:var(--on-surface-muted)}
   .src:hover{color:var(--primary)}
   .tool-note{font:400 13px/18px var(--font-sans);color:var(--secondary)}
+  .credbar{display:flex;align-items:center;gap:var(--sp-3);flex-wrap:wrap;background:var(--surface-container-low);border:1px solid var(--outline-variant);
+    border-radius:var(--radius-lg);padding:10px var(--sp-5);font:400 13px/18px var(--font-sans);color:var(--on-surface-variant)}
+  .credbar input,.credbar select{font:400 13px/18px var(--font-sans);background:var(--surface-container);color:var(--on-surface);border:1px solid var(--outline-variant);
+    border-radius:var(--radius-md,8px);padding:6px 10px}
+  .credbar input{min-width:260px}
+  .credbar button{background:none;border:1px solid currentColor;color:var(--primary);border-radius:var(--radius-pill);padding:4px 14px;font:500 12px/1 var(--font-sans);cursor:pointer}
+  .credbar .credstate{margin-left:auto}
   .demo-note{display:flex;align-items:center;gap:var(--sp-3);background:var(--info-container);
     color:var(--info);border:1px solid var(--outline-variant);border-radius:var(--radius-lg);
     padding:10px var(--sp-5);font:400 13px/18px var(--font-sans)}
@@ -801,6 +816,15 @@ DASHBOARD_HTML = """<!doctype html>
       </div>
     </div>
   </header>
+
+  <div class="credbar" id="credbar">
+    <label for="credKind">Fleet credential</label>
+    <select id="credKind"><option value="key">API key (X-API-Key)</option><option value="bearer">Control token (Bearer)</option></select>
+    <input id="credValue" type="password" autocomplete="off" spellcheck="false" placeholder="kept in this page's memory only">
+    <button id="credUse" type="button">Use</button>
+    <button id="credClear" type="button">Clear</button>
+    <span class="credstate" id="credState">No credential: the fleet and the approvals are not loaded.</span>
+  </div>
 
   <div class="demo-note" id="demoNote">
     <span>Live demo on fictional <b>Meridian Wealth Management</b> data — real open-source cores, simulated business. Actions that move money or change infrastructure are gated and safe to explore.</span>
@@ -991,21 +1015,89 @@ function renderFleet(mods) {
   summary.appendChild(el("span", null, up + "/" + total + " modules up"));
 }
 
+// The fleet credential lives ONLY in this closure: never in browser storage, a cookie, a URL, a log or the DOM (the field is emptied as soon as it is used, and
+// the state line never repeats it). It is sent only as a request header, to this origin, by apiGet(), and dropped on a refusal, on "Clear" and when the page goes away.
+const credential = (() => {
+  let kind = "key", value = "";
+  return {
+    set(k, v) { kind = k === "bearer" ? "bearer" : "key"; value = String(v == null ? "" : v).trim(); },
+    clear() { value = ""; },
+    present() { return value !== ""; },
+    headers() {
+      if (!value) return {};
+      return kind === "bearer" ? { "Authorization": "Bearer " + value } : { "X-API-Key": value };
+    },
+  };
+})();
+
+function apiGet(path) {
+  return fetch(path, { headers: credential.headers(), credentials: "omit", cache: "no-store", referrerPolicy: "no-referrer" });
+}
+
+function setCredState(text) {
+  const s = document.getElementById("credState");
+  if (s) s.textContent = text;
+}
+
+function wipeCredentialField() {
+  const f = document.getElementById("credValue");
+  if (f) f.value = "";
+}
+
+function showFleetPrompt(text) {
+  const root = document.getElementById("groups");
+  root.innerHTML = "";
+  root.appendChild(el("div", "empty", text));
+  const summary = document.getElementById("summary");
+  summary.innerHTML = "";
+  summary.appendChild(el("span", "pill__dot"));
+  summary.appendChild(el("span", null, "credential needed"));
+}
+
+function showApprovalsPrompt(text) {
+  const ul = document.getElementById("approvals");
+  ul.innerHTML = "";
+  ul.appendChild(el("li", "empty", text));
+}
+
+// A refusal never shows the response body or the credential. 401: the credential was wrong, so it is dropped. 503: the server has none configured.
+function refused(status) {
+  if (status === 401) {
+    credential.clear();
+    setCredState("The credential was not accepted and has been discarded.");
+  } else {
+    setCredState("The server has no fleet credential configured (AGENTIC_OS_API_KEY or AGENTIC_OS_CONTROL_TOKEN).");
+  }
+}
+
 async function pollFleet() {
+  if (!credential.present()) {
+    showFleetPrompt("Enter the fleet credential above to load the fleet. It is kept in this page's memory only.");
+    return;
+  }
   try {
-    const r = await fetch("/api/fleet");
+    const r = await apiGet("/api/fleet");
+    if (r.status === 401 || r.status === 503) {
+      refused(r.status);
+      showFleetPrompt(r.status === 401 ? "The credential was not accepted. Enter the fleet credential above." : "The fleet view is disabled until a fleet credential is configured on the server.");
+      return;
+    }
     if (r.ok) renderFleet(await r.json());
   } catch (e) { /* keep last render */ }
 }
 
 async function pollApprovals() {
   const ul = document.getElementById("approvals");
+  if (!credential.present()) {
+    showApprovalsPrompt("Pending approvals need the fleet credential. Enter it above; it is kept in this page's memory only.");
+    return;
+  }
   try {
-    const r = await fetch("/approvals");
+    const r = await apiGet("/approvals");
     if (r.status === 401 || r.status === 503) {
-      // refused: do NOT claim that nothing is waiting. Pending approvals need the fleet credential (X-API-Key or a bearer control token).
-      ul.innerHTML = "";
-      ul.appendChild(el("li", "empty", "Pending approvals need the fleet credential. Read them with GET /approvals and an X-API-Key or bearer control token."));
+      // refused: do NOT claim that nothing is waiting.
+      refused(r.status);
+      showApprovalsPrompt(r.status === 401 ? "The credential was not accepted. Enter the fleet credential above." : "Pending approvals are disabled until a fleet credential is configured on the server.");
       return;
     }
     if (!r.ok) throw new Error("bad status");
@@ -1031,9 +1123,35 @@ async function pollApprovals() {
     });
   } catch (e) {
     ul.innerHTML = "";
-    ul.appendChild(el("li", "empty", "nothing waiting on you"));
+    ul.appendChild(el("li", "empty", "Approvals are unavailable right now."));
   }
 }
+
+function useCredential() {
+  const field = document.getElementById("credValue");
+  const kind = document.getElementById("credKind");
+  if (!field.value.trim()) { setCredState("Enter a credential first."); return; }
+  credential.set(kind.value, field.value);
+  wipeCredentialField();                                   // never echoed back
+  setCredState("A credential is held in this page's memory (not stored).");
+  pollFleet();
+  pollApprovals();
+}
+
+function clearCredential() {
+  credential.clear();
+  wipeCredentialField();
+  setCredState("No credential: the fleet and the approvals are not loaded.");
+  pollFleet();
+  pollApprovals();
+}
+
+document.getElementById("credUse").addEventListener("click", useCredential);
+document.getElementById("credClear").addEventListener("click", clearCredential);
+document.getElementById("credValue").addEventListener("keydown", e => { if (e.key === "Enter") useCredential(); });
+// gone with the page: on unload, reload, navigation away or being put in the back/forward cache
+window.addEventListener("pagehide", () => { credential.clear(); wipeCredentialField(); });
+window.addEventListener("beforeunload", () => { credential.clear(); wipeCredentialField(); });
 
 renderWorkflows();
 pollFleet();

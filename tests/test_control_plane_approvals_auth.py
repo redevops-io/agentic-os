@@ -231,8 +231,9 @@ def test_the_liveness_and_static_routes_stay_open(world, path):
 
 
 def test_the_dashboard_does_not_say_nothing_is_waiting_when_it_is_refused():
+    """The panel must not read as empty when the read was refused (the full dashboard behaviour is tested in tests/test_control_plane_dashboard_credential.py)."""
     from agentic_os import control_plane
     html = control_plane.DASHBOARD_HTML
-    assert 'fetch("/approvals")' in html
-    assert "r.status === 401" in html and "r.status === 503" in html
-    assert "need the fleet credential" in html
+    assert 'apiGet("/approvals")' in html
+    assert "r.status === 401 || r.status === 503" in html
+    assert "need the fleet credential" in html and "nothing waiting on you" not in html
