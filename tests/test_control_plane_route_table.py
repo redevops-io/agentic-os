@@ -1,6 +1,6 @@
 """A route table that cannot drift: every route of the control plane has an explicit, expected access class, and a new route fails this test until someone classifies it.
 
-Classes: ``fleet`` (the fleet key or the control token: ``require_api_key``), ``perm-admin`` (``PERMISSIONS_ADMIN_KEY`` only), ``mission-gate`` (the mission routers' gate: control or tenant
+Classes: ``fleet`` (the fleet key or the control token: ``require_api_key``), ``fleet-read`` (the same, or the read-only dashboard token: ``require_fleet_read``; exactly the five dashboard reads), ``perm-admin`` (``PERMISSIONS_ADMIN_KEY`` only), ``mission-gate`` (the mission routers' gate: control or tenant
 token, reads gated by default), ``mission-admin`` (mission gate, unscoped admin token only), ``public`` (deliberately public: liveness, catalogue, static pages, and the mission routers'
 ``@public`` shell/catalogue/build info) and ``open-proxy`` (the module proxy, anonymous today: public issue #528, not changed by this release).
 
@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import pytest
 
-FLEET, PERM, GATE, GATE_ADMIN, PUBLIC, PROXY = "fleet", "perm-admin", "mission-gate", "mission-admin", "public", "open-proxy"
+FLEET, FLEET_READ, PERM, GATE, GATE_ADMIN, PUBLIC, PROXY = "fleet", "fleet-read", "perm-admin", "mission-gate", "mission-admin", "public", "open-proxy"
 
 EXPECTED = {
     # the fleet credential
-    ("GET", "/approvals"): FLEET, ("POST", "/approvals/{approval_id}/{decision}"): FLEET, ("POST", "/dispatch"): FLEET, ("POST", "/up"): FLEET, ("POST", "/down"): FLEET,
-    ("GET", "/jobs/{job_id}"): FLEET, ("GET", "/api/fleet"): FLEET, ("GET", "/status"): FLEET, ("GET", "/notify/status"): FLEET, ("GET", "/openapi.json"): FLEET,
+    ("GET", "/approvals"): FLEET_READ, ("POST", "/approvals/{approval_id}/{decision}"): FLEET, ("POST", "/dispatch"): FLEET, ("POST", "/up"): FLEET, ("POST", "/down"): FLEET,
+    ("GET", "/jobs/{job_id}"): FLEET_READ, ("GET", "/api/fleet"): FLEET_READ, ("GET", "/status"): FLEET_READ, ("GET", "/notify/status"): FLEET_READ, ("GET", "/openapi.json"): FLEET,
     # the permissions admin key
     ("GET", "/api/permissions/status"): PERM, ("GET", "/api/permissions/grants"): PERM, ("POST", "/api/permissions/grants"): PERM, ("PUT", "/api/permissions/grants/{gid}"): PERM,
     ("DELETE", "/api/permissions/grants/{gid}"): PERM, ("POST", "/api/permissions/preview"): PERM, ("POST", "/api/permissions/authorize"): PERM,
@@ -44,6 +44,8 @@ def cp(tmp_path_factory, monkeypatch):
 def _classify(route, router_gated: bool) -> str:
     deps = {getattr(d.dependency, "__name__", "") for d in (getattr(route, "dependencies", None) or [])}
     ep = getattr(route, "endpoint", None)
+    if "require_fleet_read" in deps:
+        return FLEET_READ
     if "require_api_key" in deps:
         return FLEET
     if "require_permissions_admin" in deps:
@@ -93,13 +95,19 @@ def test_no_get_route_other_than_the_listed_public_ones_is_open(cp):
     assert open_gets == sorted(["/", "/health", "/modules", "/overview", "/permissions", "/buildinfo", "/capabilities", "/cockpit", "/m/{name}", "/m/{name}/raw", "/m/{name}/api/{path:path}"])
 
 
+def test_exactly_five_routes_take_the_read_only_dashboard_token(cp):
+    five = sorted(p for (m, p), c in _actual(cp.app).items() if c == FLEET_READ)
+    assert five == sorted(["/approvals", "/jobs/{job_id}", "/api/fleet", "/status", "/notify/status"])
+    assert all(m == "GET" for (m, p), c in _actual(cp.app).items() if c == FLEET_READ), "the dashboard token may open reads only"
+
+
 def test_every_fleet_class_route_refuses_an_anonymous_call_when_nothing_is_configured(cp, monkeypatch):
     from fastapi.testclient import TestClient
     for k in ("AGENTIC_OS_API_KEY", "AGENTIC_OS_CONTROL_TOKEN"):
         monkeypatch.delenv(k, raising=False)
     client = TestClient(cp.app, follow_redirects=False)
     for (method, path), cls in EXPECTED.items():
-        if cls != FLEET:
+        if cls not in (FLEET, FLEET_READ):
             continue
         url = path.replace("{approval_id}", "a").replace("{decision}", "approve").replace("{job_id}", "job-1")
         r = client.request(method, url)

@@ -10,6 +10,9 @@ services:
       # The fleet routes (dispatch, up/down, approvals, jobs, fleet, status) answer 503 until one of these is set (both empty by default).
       - AGENTIC_OS_CONTROL_TOKEN=${AGENTIC_OS_CONTROL_TOKEN:-}
       - AGENTIC_OS_API_KEY=${AGENTIC_OS_API_KEY:-}
+      # Optional READ-ONLY dashboard token (at least 24 characters, different from the two above): lets the dashboard page read the fleet, approvals, jobs and status,
+      # and nothing else. Empty by default (the dashboard then needs a fleet credential).
+      - AGENTIC_OS_DASHBOARD_TOKEN=${AGENTIC_OS_DASHBOARD_TOKEN:-}
       # The grant-store key: external, NO default. Created once by `make permissions-key`; the grants persist in /data.
       - "PERMISSIONS_KEY=${PERMISSIONS_KEY:?PERMISSIONS_KEY is required - create it once with make permissions-key (or agentic-os permissions key --env-file permissions.env) then run docker compose --env-file permissions.env up}"
       - PERMISSIONS_DIR=/data/permissions

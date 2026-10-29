@@ -144,11 +144,11 @@ def test_without_a_credential_the_page_makes_no_request_and_says_what_it_needs(t
 
 
 @needs_node
-@pytest.mark.parametrize("kind,header", [("key", "X-API-Key"), ("bearer", "Authorization")])
+@pytest.mark.parametrize("kind,header", [("dashboard", "X-Dashboard-Token"), ("key", "X-API-Key"), ("bearer", "Authorization")])
 def test_the_credential_is_sent_only_as_a_header_and_is_never_echoed_back(tmp_path, kind, header):
     out = _run(tmp_path, OK, [{"select": ["credKind", kind]}, {"type": ["credValue", SECRET]}, {"click": "credUse"}])
     assert [c["url"] for c in out["calls"]] == ["/api/fleet", "/approvals"]                    # literal paths, no query string, no fragment
-    want = SECRET if kind == "key" else "Bearer " + SECRET
+    want = "Bearer " + SECRET if kind == "bearer" else SECRET
     for c in out["calls"]:
         assert c["headers"] == {header: want} and c["credentials"] == "omit" and c["cache"] == "no-store"
         assert SECRET not in c["url"]
@@ -223,3 +223,13 @@ def test_the_dashboard_response_cannot_be_framed_cached_and_has_the_connect_poli
     assert "script-src" not in csp and "default-src" not in csp
     for d_ in ("frame-ancestors 'none'", "base-uri 'none'", "form-action 'none'", "object-src 'none'", "connect-src 'self'"):
         assert d_ in csp, d_
+
+
+def test_the_read_only_dashboard_token_is_the_default_choice_and_the_other_two_stay_available():
+    p = _Tags()
+    p.feed(_page())
+    opts = re.findall(r'<option value="([^"]+)">([^<]+)</option>', _page().split('id="credKind"', 1)[1].split("</select>", 1)[0])
+    assert [v for v, _ in opts] == ["dashboard", "key", "bearer"]
+    assert "X-Dashboard-Token" in opts[0][1] and "read-only" in opts[0][1].lower()
+    js = _script(_page())
+    assert 'let kind = "dashboard"' in js                                    # the narrow credential is what the page reaches for first

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from dataclasses import asdict
 from pathlib import Path
@@ -61,6 +62,50 @@ def require_api_key(x_api_key: str | None = Header(default=None),
     Requires ``Authorization: Bearer <AGENTIC_OS_CONTROL_TOKEN>`` or ``X-API-Key: <AGENTIC_OS_API_KEY>``.
     With neither configured the endpoint is disabled (503) — it never runs unauthenticated. The liveness and static routes
     (/health, /modules, /overview, ...) stay open."""
+    _authorize_mutation(x_api_key, authorization, "AGENTIC_OS_API_KEY")
+
+
+DASHBOARD_TOKEN_ENV = "AGENTIC_OS_DASHBOARD_TOKEN"
+DASHBOARD_TOKEN_MIN = 24
+_dashboard_token_warned: set[str] = set()
+
+
+def _dashboard_token() -> str:
+    """The read-only dashboard token, or "" when none is usable. It must be at least 24 characters and DIFFERENT from every other credential of this
+    server (the fleet key, the control token, the permissions admin key): a token that equals one of them would be that credential under another name, so it
+    is refused (disabled, logged once) rather than accepted. It is accepted by the five dashboard reads only (``require_fleet_read``) and by nothing that
+    changes state, dispatches, starts, stops or decides."""
+    from .mission.control_auth import configured_token, token_matches  # noqa: PLC0415
+    tok = os.environ.get(DASHBOARD_TOKEN_ENV, "").strip()
+    if not tok:
+        return ""
+    problem = ""
+    if len(tok) < DASHBOARD_TOKEN_MIN:
+        problem = f"shorter than {DASHBOARD_TOKEN_MIN} characters"
+    elif any(token_matches(tok, other) for other in (configured_token(), os.environ.get("AGENTIC_OS_API_KEY", "").strip(),
+                                                    os.environ.get("PERMISSIONS_ADMIN_KEY", "").strip())):
+        problem = "equal to another credential of this server"
+    if problem:
+        if problem not in _dashboard_token_warned:
+            _dashboard_token_warned.add(problem)
+            logging.getLogger("agentic_os.control_plane").error(
+                "%s is %s, so the read-only dashboard token is DISABLED: set a distinct value of at least %d characters (for example `openssl rand -hex 24`), or unset it",
+                DASHBOARD_TOKEN_ENV, problem, DASHBOARD_TOKEN_MIN)
+        return ""
+    return tok
+
+
+def require_fleet_read(x_api_key: str | None = Header(default=None), authorization: str | None = Header(default=None),
+                       x_dashboard_token: str | None = Header(default=None)) -> None:
+    """Auth dependency for the FIVE dashboard reads (GET /approvals, /jobs/{id}, /api/fleet, /status, /notify/status): the fleet credential (as
+    ``require_api_key``) OR the read-only dashboard token in ``X-Dashboard-Token``. Every other route uses ``require_api_key``, which ignores that header, so
+    the dashboard token opens nothing else. With only the dashboard token configured, a missing or wrong credential is 401; with nothing configured, 503."""
+    from .mission.control_auth import configured_token, token_matches  # noqa: PLC0415
+    dash = _dashboard_token()
+    if dash and x_dashboard_token and token_matches(x_dashboard_token, dash):
+        return
+    if dash and not (configured_token() or os.environ.get("AGENTIC_OS_API_KEY", "").strip()):
+        raise HTTPException(401, "invalid or missing credentials", headers={"WWW-Authenticate": "Bearer"})
     _authorize_mutation(x_api_key, authorization, "AGENTIC_OS_API_KEY")
 
 
@@ -275,7 +320,7 @@ async def _probe_health(client: httpx.AsyncClient, m: Module) -> dict:
         return {"health": "down", "core": None, "connected": None}
 
 
-@app.get("/api/fleet", dependencies=[Depends(require_api_key)])
+@app.get("/api/fleet", dependencies=[Depends(require_fleet_read)])
 async def api_fleet() -> list[dict]:
     """Aggregate every module with a live health probe of its real agent service. Needs the fleet credential: it lists the application inventory,
     ports, approval-required capability names, backend names and live health.
@@ -505,7 +550,7 @@ def modules() -> list[ModuleList]:
             for m in fleet.registry]
 
 
-@app.get("/status", dependencies=[Depends(require_api_key)])
+@app.get("/status", dependencies=[Depends(require_fleet_read)])
 async def status() -> list[dict]:
     """Deployment status from a LIVE health probe of each module's agent service.
 
@@ -540,7 +585,7 @@ def down(names: list[str] | None = None) -> list[dict]:
     return [asdict(s) for s in fleet.down(*(names or []))]
 
 
-@app.get("/approvals", dependencies=[Depends(require_api_key)])
+@app.get("/approvals", dependencies=[Depends(require_fleet_read)])
 def approvals() -> list[dict]:
     """The pending approvals, payload included: the same credential as deciding them (the fleet key or the control token)."""
     return [asdict(a) for a in fleet.context.pending()]
@@ -679,7 +724,7 @@ def dispatch(req: DispatchRequest) -> dict:
     return {"kind": "result", "text": out}
 
 
-@app.get("/jobs/{job_id}", dependencies=[Depends(require_api_key)])
+@app.get("/jobs/{job_id}", dependencies=[Depends(require_fleet_read)])
 def job_status(job_id: str) -> dict:
     """Status and result text of a background dispatch. Needs the fleet credential (the ids are sequential, and the result is agent output)."""
     job = fleet.job(job_id)
@@ -688,7 +733,7 @@ def job_status(job_id: str) -> dict:
     return {"job_id": job_id, **job}
 
 
-@app.get("/notify/status", dependencies=[Depends(require_api_key)])
+@app.get("/notify/status", dependencies=[Depends(require_fleet_read)])
 def notify_status() -> dict:
     """What chat channels are wired + whether the inbound gateway is running. Needs the fleet credential (integration configuration)."""
     n = fleet.context.notifier
@@ -833,7 +878,7 @@ DASHBOARD_HTML = """<!doctype html>
 
   <div class="credbar" id="credbar">
     <label for="credKind">Fleet credential</label>
-    <select id="credKind"><option value="key">API key (X-API-Key)</option><option value="bearer">Control token (Bearer)</option></select>
+    <select id="credKind"><option value="dashboard">Read-only dashboard token (X-Dashboard-Token)</option><option value="key">Fleet API key (X-API-Key)</option><option value="bearer">Control token (Bearer)</option></select>
     <input id="credValue" type="password" autocomplete="off" spellcheck="false" placeholder="kept in this page's memory only">
     <button id="credUse" type="button">Use</button>
     <button id="credClear" type="button">Clear</button>
@@ -1032,14 +1077,15 @@ function renderFleet(mods) {
 // The fleet credential lives ONLY in this closure: never in browser storage, a cookie, a URL, a log or the DOM (the field is emptied as soon as it is used, and
 // the state line never repeats it). It is sent only as a request header, to this origin, by apiGet(), and dropped on a refusal, on "Clear" and when the page goes away.
 const credential = (() => {
-  let kind = "key", value = "";
+  let kind = "dashboard", value = "";
   return {
-    set(k, v) { kind = k === "bearer" ? "bearer" : "key"; value = String(v == null ? "" : v).trim(); },
+    set(k, v) { kind = k === "bearer" ? "bearer" : (k === "key" ? "key" : "dashboard"); value = String(v == null ? "" : v).trim(); },
     clear() { value = ""; },
     present() { return value !== ""; },
     headers() {
       if (!value) return {};
-      return kind === "bearer" ? { "Authorization": "Bearer " + value } : { "X-API-Key": value };
+      if (kind === "bearer") return { "Authorization": "Bearer " + value };
+      return kind === "key" ? { "X-API-Key": value } : { "X-Dashboard-Token": value };
     },
   };
 })();
@@ -1086,7 +1132,7 @@ function refused(status) {
 
 async function pollFleet() {
   if (!credential.present()) {
-    showFleetPrompt("Enter the fleet credential above to load the fleet. It is kept in this page's memory only.");
+    showFleetPrompt("Enter a fleet credential (or the read-only dashboard token) above to load the fleet. It is kept in this page's memory only.");
     return;
   }
   try {
@@ -1103,7 +1149,7 @@ async function pollFleet() {
 async function pollApprovals() {
   const ul = document.getElementById("approvals");
   if (!credential.present()) {
-    showApprovalsPrompt("Pending approvals need the fleet credential. Enter it above; it is kept in this page's memory only.");
+    showApprovalsPrompt("Pending approvals need the fleet credential or the read-only dashboard token. Enter it above; it is kept in this page's memory only.");
     return;
   }
   try {
