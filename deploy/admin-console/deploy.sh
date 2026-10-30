@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Deploy the Business-OS Admin & Governance console to proxmox (demo.redevops.io/admin), :8105.
+# LAGO_API_URL and LAGO_API_KEY are required and have no default: put them in a host-only .env in $AD_HOST_DIR on the
+# target (never committed, kept across deploys) or export them there; `docker compose up` refuses to run without them.
 set -euo pipefail
 HOST="${AD_HOST:-192.168.40.105}"; HOST_DIR="${AD_HOST_DIR:-/projects/agentic-os/admin-console}"
 SRC="$(cd "$(dirname "$0")" && pwd)"; AGENTIC="$(cd "$SRC/../.." && pwd)"

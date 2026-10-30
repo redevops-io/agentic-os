@@ -16,6 +16,7 @@ from .contracts import (
 from .gateway import (
     AgentGateway, ApprovalStore, AuditSink, BudgetGuard, EgressPolicy, InMemoryAuditSink,
     InMemoryIdempotencyStore, IdempotencyStore, MissionDelegation, MissionPort)
+from .audit_store import EventStoreAuditSink
 from .registry import CapabilityHandler, CapabilityRegistry, HandlerResult
 from .auth import DevTokenVerifier, GatewayAuthError, TokenVerifier, bearer_token
 from .capabilities import READ_CAPABILITIES, build_read_registry, register_mission_capabilities
@@ -43,6 +44,7 @@ __all__ = [
     # gateway + seams
     "AgentGateway", "MissionPort", "MissionDelegation", "EgressPolicy", "ApprovalStore",
     "BudgetGuard", "AuditSink", "IdempotencyStore", "InMemoryAuditSink", "InMemoryIdempotencyStore",
+    "EventStoreAuditSink",
     # auth
     "TokenVerifier", "DevTokenVerifier", "GatewayAuthError", "bearer_token",
     # read capabilities + MCP adapter

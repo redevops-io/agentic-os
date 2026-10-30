@@ -1,7 +1,19 @@
-"""Reference ASGI server for the Intelligence §3 API — the deployable entry point for a live demo.
+"""Reference ASGI server for the Intelligence §3 API — a DEMO over canned data.
 
-Run it directly:  `uvicorn agentic_os.intelligence.demo_server:app --port 8814`
-behind a host port + a cloudflared route + a DNS CNAME (e.g. intel.redevops.io).
+UNAUTHENTICATED DEMO. Every route answers any caller with no credential, and the ``tenant`` in a request body is
+used as sent (it is a label, not an authorisation). The data is synthetic and built into this module. Do not put
+real data behind it and do not expose it on a network you do not control. A deployment that serves a tenant's own
+data mounts ``build_router(service, authenticator=...)`` instead (``agentic_os.intelligence.auth``), which
+authenticates the caller and takes the tenant from the principal.
+
+Run it (binds 127.0.0.1:8814; refuses a non-loopback address unless you opt in):
+
+    python -m agentic_os.intelligence.demo_server [--host 127.0.0.1] [--port 8814]
+    python -m agentic_os.intelligence.demo_server --host 0.0.0.0 --allow-non-loopback    # explicit opt-in
+    # or INTELLIGENCE_DEMO_ALLOW_NON_LOOPBACK=1
+
+Starting it with ``uvicorn agentic_os.intelligence.demo_server:app --host ...`` bypasses that check (uvicorn owns
+the bind address); the startup log line still says "UNAUTHENTICATED DEMO".
 
 It wires an :class:`IntelligenceService` over compact demo data for several families (counterparty, supply,
 order) so every §3 endpoint is exercisable, and adds one bespoke route — GET /v1/intelligence/kyc/screen —
@@ -9,6 +21,11 @@ that demonstrates the temporal ownership graph: the same vendor screens GO befor
 known and NO-GO after (bi-temporal replay). The demo data is self-contained; a real deployment binds the
 tenant's own graphs instead.
 """
+import logging
+import os
+import sys
+from contextlib import asynccontextmanager
+
 from .apps import app_capabilities
 from .families import (
     CounterpartyRecords, InMemoryOrderGraph, InMemoryRevenueState, QuoteInputs, SupplyGraph,
@@ -17,6 +34,12 @@ from .families import (
 )
 from .service import IntelligenceService
 from .temporal_graph import project_kyc_ownership, screen_ownership
+
+log = logging.getLogger("agentic_os.intelligence.demo")
+
+DEMO_NOTICE = ("intelligence demo server: UNAUTHENTICATED DEMO over canned data. No credential is required and the "
+               "request body's tenant is used as sent. Do not expose it or put real data behind it.")
+ALLOW_NON_LOOPBACK_ENV = "INTELLIGENCE_DEMO_ALLOW_NON_LOOPBACK"
 
 # ── compact demo data (self-contained; a real deploy binds the tenant's own graphs) ──────────────────────
 _KYC_VENDORS = {
@@ -287,7 +310,12 @@ def build_app():
     from fastapi import Request
     from fastapi.responses import HTMLResponse, JSONResponse
 
-    app = FastAPI(title="ReDevOps Decision Intelligence", version="1")
+    @asynccontextmanager
+    async def _lifespan(_app):
+        log.warning(DEMO_NOTICE)
+        yield
+
+    app = FastAPI(title="ReDevOps Decision Intelligence", version="1", lifespan=_lifespan)
     app.include_router(build_router(service))
     landing = _landing_html(service)
     index_json = {
@@ -315,4 +343,43 @@ def build_app():
     return app
 
 
+def is_loopback_host(host: str) -> bool:
+    """True for ``localhost`` and loopback IP literals only. An empty host, a wildcard (``0.0.0.0``, ``::``), any
+    other address and any other name are not loopback (a name is never resolved here)."""
+    import ipaddress  # noqa: PLC0415
+    h = (host or "").strip().strip("[]")
+    if h.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(h).is_loopback
+    except ValueError:
+        return False
+
+
+def main(argv=None) -> int:
+    """Serve the demo. Refuses a non-loopback bind address unless ``--allow-non-loopback`` (or
+    ``INTELLIGENCE_DEMO_ALLOW_NON_LOOPBACK=1``) is given."""
+    import argparse  # noqa: PLC0415
+
+    ap = argparse.ArgumentParser(prog="agentic_os.intelligence.demo_server", description=__doc__.split("\n")[0])
+    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--port", type=int, default=8814)
+    ap.add_argument("--allow-non-loopback", action="store_true",
+                    help="serve the UNAUTHENTICATED demo on a non-loopback address")
+    a = ap.parse_args(argv)
+    opted_in = a.allow_non_loopback or os.environ.get(ALLOW_NON_LOOPBACK_ENV, "").strip().lower() in ("1", "true", "yes")
+    if not is_loopback_host(a.host) and not opted_in:
+        print(f"refusing to bind {a.host!r}: this is an UNAUTHENTICATED demo. Use 127.0.0.1, or pass "
+              f"--allow-non-loopback (or set {ALLOW_NON_LOOPBACK_ENV}=1) to serve it on purpose.", file=sys.stderr)
+        return 2
+    if not is_loopback_host(a.host):
+        log.warning("binding %s with --allow-non-loopback: the UNAUTHENTICATED demo is reachable from the network", a.host)
+    import uvicorn  # noqa: PLC0415
+    uvicorn.run(app, host=a.host, port=a.port)
+    return 0
+
+
 app = build_app()
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -94,6 +94,25 @@ req = request_for("twenty", Capability.PERSON_ENRICHMENT,
 Entitled apps: `twenty`, `erpnext`, `metabase`, `lago`, `postiz`, `umami`, `changedetection`, `crowdsec`,
 `openscap`, `listmonk`, `entity_risk`.
 
+## HTTP API: demo and authenticated use
+
+`agentic_os.intelligence.build_router(service)` serves `/v1/intelligence/*`. With no authenticator it is an **unauthenticated demo**: any caller is served and the `tenant` in the request body is used as sent. `intelligence/demo_server.py` is the only place in this repository that mounts it that way, over canned data; it logs `UNAUTHENTICATED DEMO` at startup, and `python -m agentic_os.intelligence.demo_server` binds `127.0.0.1:8814` and refuses any other address unless `--allow-non-loopback` (or `INTELLIGENCE_DEMO_ALLOW_NON_LOOPBACK=1`) is given. Starting the module with the `uvicorn` command line is not checked.
+
+For real data pass an authenticator. The router then requires a credential on every route and derives the tenant from the authenticated principal:
+
+```python
+from agentic_os.intelligence import build_router
+from agentic_os.intelligence.auth import StaticBearerAuthenticator   # or GatewayVerifierAuthenticator(token_verifier)
+
+router = build_router(service, authenticator=StaticBearerAuthenticator({token_a: ("svc-a", "tenant-a")}))
+```
+
+- no or wrong credential: `401`; a principal without a tenant: `403`;
+- the tenant of every call is the principal's. A body that names a different tenant is refused (`403`) and is never used; a body that names the same tenant, or none, is accepted;
+- `GET /requests/{id}` returns only results of the principal's tenant (another tenant's id is `404`).
+
+Credential issuance, rotation, rate limiting and the isolation of the data the service is bound to are not part of the router.
+
 ## Evidence-value accounting & the evaluation harness (§8/§9)
 
 Every gated lookup appends an `EvidenceValueRecord` (why requested, provider, cost, decision before/after, action,

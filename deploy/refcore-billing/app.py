@@ -3,16 +3,34 @@ contract (POST/GET /api/v1/customers + Bearer auth). It exists to prove the Worl
 against a LIVE networked core: a governed world's customer entity is projected here over real HTTP and
 persists. Production Lago speaks the same contract, so pointing LagoBillingAdapter at a real Lago is the
 identical env swap (LAGO_API_URL/LAGO_API_KEY) — this just lets the seam be proven without Lago's full stack.
+
+The service refuses to start unless REFCORE_API_KEY is set to a non-empty key of your own choosing. There is no
+default key. A key that is empty, only whitespace, or the retired development key `refcore-dev-key` is refused.
 """
 from __future__ import annotations
 
+import hmac
 import json
 import os
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 
-_TOKEN = os.environ.get("REFCORE_API_KEY", "refcore-dev-key")
+_RETIRED_DEFAULT_KEYS = frozenset({"refcore-dev-key"})
+
+
+def _require_key(env=None) -> str:
+    """The API key from REFCORE_API_KEY. Raises RuntimeError (the process does not start) when it is absent, empty,
+    whitespace-only or the retired default; the value is never included in the message."""
+    key = (os.environ if env is None else env).get("REFCORE_API_KEY", "")
+    if not key.strip():
+        raise RuntimeError("REFCORE_API_KEY is not set: set it to a secret of your own choosing (there is no default key)")
+    if key.strip() in _RETIRED_DEFAULT_KEYS:
+        raise RuntimeError("REFCORE_API_KEY is the retired development default: set a secret of your own choosing")
+    return key
+
+
+_TOKEN = _require_key()
 _DB = os.environ.get("REFCORE_DB", "/data/customers.json")
 
 app = FastAPI(title="Reference Billing Core (Lago-contract)")
@@ -33,7 +51,7 @@ def _save(store: dict) -> None:
 
 
 def _auth(authorization: str) -> None:
-    if authorization != f"Bearer {_TOKEN}":
+    if not hmac.compare_digest(authorization.encode("utf-8"), f"Bearer {_TOKEN}".encode("utf-8")):
         raise HTTPException(status_code=401, detail="unauthorized")
 
 
