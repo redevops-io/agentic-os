@@ -3,7 +3,8 @@
 * the kernel and the Agent Gateway import without the bridge, without any Infinity, AWS, Bedrock, DSQL or CDK module;
 * the root dependency set neither depends on nor offers an extra for the bridge, the wheel still contains only agentic_os, and the root lock has no trace of it;
 * nothing under agentic_os/ refers to the optional package;
-* the optional package depends on agentic-os and nothing else at run time, imports no cloud SDK, and its Rust harness is pinned to exact versions with checksums.
+* the optional package depends on agentic-os and nothing else at run time, its source imports no cloud SDK, and its Rust harness is pinned to exact versions with checksums
+  (that the installed package loads no cloud SDK is checked in the package's own suite, where it is installed).
 """
 from __future__ import annotations
 
@@ -68,14 +69,6 @@ def test_the_package_depends_on_agentic_os_alone_and_imports_no_cloud_sdk():
         if CLOUD.search(p.read_text(encoding="utf-8")):
             bad.append(str(p.relative_to(PKG)))
     assert bad == []
-
-
-def test_importing_the_package_loads_no_cloud_sdk():
-    code = "import sys, json, redevops_infinity; print(json.dumps(sorted({m.split('.')[0] for m in sys.modules})))"
-    out = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=120, cwd=str(ROOT))
-    assert out.returncode == 0, out.stderr[-2000:]
-    loaded = set(json.loads(out.stdout.strip().splitlines()[-1]))
-    assert not (loaded & {"boto3", "botocore", "aws_cdk", "anthropic", "openai", "infinity_agent_core"}), sorted(loaded)
 
 
 def test_the_rust_harness_is_pinned_to_exact_versions_and_its_lock_carries_checksums():
