@@ -1352,14 +1352,21 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     static bearer an external client presents (fine for a read-only surface over sample/scoped data;
     production wires the OAuth 2.1 + PKCE AuthorizationServer instead). Returns True if mounted.
 
+    The bearer is compared in constant time (``hmac.compare_digest``). Every holder is the same read-only
+    principal in tenant ``demo``. Audit records are kept in memory (lost on restart) unless
+    ``AGENT_GATEWAY_AUDIT_PATH`` names a file: then each call is appended to that hash-chained JSONL event
+    log (``EventStoreAuditSink``), and a path that cannot be written stops startup.
+
     Only READ capabilities are wired (projects/missions/sources), each running the one governed path
     with PolicyEgressEngine on the way out, so PII/secrets are redacted/denied and every call audits.
     Writes, mission delegation and the sandbox are intentionally NOT exposed on this surface.
     """
+    import hmac
     import os
     token = os.environ.get("AGENT_GATEWAY_TOKEN", "").strip()
     if not token:
         return False
+    token_bytes = token.encode("utf-8")
     from fastapi import Body, Header, HTTPException
     from agentic_os.overlays import Principal
     from agentic_os.agent_gateway import (
@@ -1386,15 +1393,21 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     class _StaticVerifier:
         """Maps the configured bearer to a read-only principal; anything else → None (deny)."""
         def verify(self, t):
-            if t and t == token:
+            if t and hmac.compare_digest(t.encode("utf-8"), token_bytes):
                 return GatewayPrincipal(Principal("external-agent", "service", (), "demo"),
                                         client_id="external-agent", workspace="demo",
                                         scopes=tuple(_GRANTS))
             return None
 
     registry = build_read_registry(projections=_Projections(), missions=_Missions(), sources=_Sources())
+    audit_path = os.environ.get("AGENT_GATEWAY_AUDIT_PATH", "").strip()
+    if audit_path:
+        from agentic_os.agent_gateway.audit_store import EventStoreAuditSink
+        audit = EventStoreAuditSink.from_path(audit_path)
+    else:
+        audit = InMemoryAuditSink()
     gateway = AgentGateway(registry=registry, authorize=lambda p, perm: perm in _GRANTS,
-                           egress=PolicyEgressEngine(), audit=InMemoryAuditSink())
+                           egress=PolicyEgressEngine(), audit=audit)
     verifier = _StaticVerifier()
     rest = RestGatewayAdapter(gateway, verifier)
     endpoint = MCPEndpoint(McpGatewayBridge(gateway, verifier))

@@ -1,4 +1,5 @@
 # A real, persistent billing core speaking the Lago customer contract — proves the World Adapter LIVE path.
+# REFCORE_API_KEY is required (no default): export it, or put it in a host-only .env beside this file (never committed).
 services:
   refcore-billing:
     build: .
@@ -6,7 +7,7 @@ services:
     container_name: refcore-billing
     restart: unless-stopped
     environment:
-      - REFCORE_API_KEY=${REFCORE_API_KEY:-refcore-dev-key}
+      - REFCORE_API_KEY=${REFCORE_API_KEY:?set REFCORE_API_KEY to a secret of your own choosing (no default key)}
       - REFCORE_DB=/data/customers.json
     volumes:
       - refcore-data:/data
