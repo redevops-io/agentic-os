@@ -132,6 +132,14 @@ def try_lock(fd: int) -> bool:
     raise ctypes.WinError(err)
 
 
+def lock_blocking(fd: int) -> None:
+    """Take the exclusive lock on the open file ``fd``, waiting for it in the kernel (a queue, so waiters are served in turn: a polling
+    waiter can be starved by a holder that releases and re-takes the lock in a loop). Not interruptible; use ``try_lock`` for a bounded wait."""
+    ov = _overlapped()
+    if not _k32.LockFileEx(msvcrt.get_osfhandle(fd), _LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, ctypes.byref(ov)):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
 def unlock(fd: int) -> None:
     ov = _overlapped()
     if not _k32.UnlockFileEx(msvcrt.get_osfhandle(fd), 0, 1, 0, ctypes.byref(ov)):
