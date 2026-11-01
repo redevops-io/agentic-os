@@ -69,6 +69,11 @@ class Decision(str, Enum):
 class Verdict(str, Enum):
     VERIFIED = "verified"   #: the mandatory floor is met; the device may host missions
     BLOCKED = "blocked"     #: the floor is not met; no execution class is granted
+    #: No container runtime (docker/podman) was found on a native desktop host (Windows or macOS, outside WSL). Steps could only run
+    #: as ordinary host processes: an environment scrub, a throwaway working directory and a time limit, with NO filesystem or
+    #: network isolation. It is reported as such and is NOT a verified device: the installer gate still refuses it, every high-risk
+    #: class (host process, raw credential access, public ingress) is DENY, and the one remaining class needs a human.
+    NATIVE_PROCESS_ONLY = "native_process_only"
 
 
 #: The network posture strings a probe may report.
@@ -91,9 +96,13 @@ class DeviceFacts:
     tailscale_connected: bool = False
     #: Whether the rootless membrane can actually run here (posix + `resource`).
     containment_supported: bool = False
+    #: A native desktop host (Windows or macOS, not WSL) where a step can only be run as an ordinary child process. It selects the
+    #: ``NATIVE_PROCESS_ONLY`` verdict when no container runtime exists; it never grants isolation. Absent from the canonical form
+    #: while False, so every posture id recorded before this field existed is unchanged.
+    native_process_boundary: bool = False
 
     def canonical_form(self) -> Dict[str, object]:
-        return {
+        form: Dict[str, object] = {
             "platform": self.platform,
             "container_runtime": self.container_runtime,
             "disk_encryption": self.disk_encryption,
@@ -103,6 +112,9 @@ class DeviceFacts:
             "tailscale_connected": self.tailscale_connected,
             "containment_supported": self.containment_supported,
         }
+        if self.native_process_boundary:
+            form["native_process_boundary"] = True
+        return form
 
 
 @dataclass(frozen=True)
@@ -221,6 +233,18 @@ def derive(facts: DeviceFacts) -> DevicePosture:
     floor_ok = bool(facts.container_runtime) and facts.containment_supported
     if floor_ok:
         verdict = Verdict.VERIFIED
+    elif not facts.container_runtime and facts.native_process_boundary:
+        # A native desktop host with no container runtime: say exactly that, claim no isolation, and fail closed for everything risky.
+        verdict = Verdict.NATIVE_PROCESS_ONLY
+        reasons = [r for r in reasons if not r.startswith("containment unsupported")]
+        reasons.append("native process boundary only: no container runtime (docker/podman) found; steps would run as ordinary host "
+                       "processes with an environment scrub and a time limit, and no filesystem or network isolation")
+        if not facts.containment_supported:
+            reasons.append("containment unsupported on this platform: the membrane's resource limits are POSIX-only")
+        reasons.append("host-process execution, raw credential access and public ingress are denied under a native process boundary")
+        classes = {c: Decision.DENY for c in ExecutionClass}
+        if facts.containment_supported:
+            classes[ExecutionClass.LOCAL_CONTAINER] = Decision.REVIEW     # a limited child process, never without a human
     else:
         verdict = Verdict.BLOCKED
         if not facts.container_runtime:
@@ -316,6 +340,7 @@ def probe_device() -> DeviceFacts:
         gpu=_probe_gpu(),
         tailscale_connected=_probe_tailscale(),
         containment_supported=_probe_containment_supported(),
+        native_process_boundary=platform_str.startswith(("darwin", "windows")) and "wsl2" not in platform_str,
         # disk_encryption / network_exposure intentionally conservative (see docstring).
     )
 
@@ -329,7 +354,7 @@ def inspect() -> DevicePosture:
 
 def _facts_from_canonical(d: Dict[str, object]) -> DeviceFacts:
     keys = ("platform", "container_runtime", "disk_encryption", "secure_credential_store",
-            "network_exposure", "gpu", "tailscale_connected", "containment_supported")
+            "network_exposure", "gpu", "tailscale_connected", "containment_supported", "native_process_boundary")
     return DeviceFacts(**{k: d[k] for k in keys if k in d})  # type: ignore[arg-type]
 
 

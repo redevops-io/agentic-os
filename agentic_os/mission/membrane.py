@@ -30,7 +30,6 @@ from __future__ import annotations
 import functools
 import json
 import os
-import resource
 import subprocess
 import sys
 import tempfile
@@ -46,6 +45,11 @@ from runtime_contracts.models import (
     ExecutionReceipt,
 )
 from .device_posture import DevicePosture, ExecutionClass, admit, PostureDenied
+
+try:
+    import resource                       # POSIX only: the rlimit mechanism the ceilings below are applied with
+except ImportError:                       # Windows has no `resource` module: no ceiling here can be applied, and the membrane says so by name
+    resource = None
 
 # ── Envelope validation ────────────────────────────────────────────────────────
 
@@ -101,6 +105,15 @@ class ContainmentError(RuntimeError):
     the capability raised). Surfaces as a named refusal, never a silent pass."""
 
 
+class CapabilityUnavailable(ContainmentError):
+    """The request needs a containment capability this platform cannot provide. The membrane refuses, by name, before anything runs:
+    ``capability`` is the missing capability (today ``"memory_ceiling"``), and the message starts ``<capability>_unenforceable``."""
+
+    def __init__(self, capability: str, message: str):
+        super().__init__(message)
+        self.capability = capability
+
+
 # Child entrypoint. Reads {capability, inputs} on stdin, imports "module:attr", runs it,
 # writes {"ok": ...} on stdout. It starts from a scrubbed environment and rlimits already
 # applied by the parent (preexec), so it cannot see ambient secrets or exceed its ceiling.
@@ -125,14 +138,38 @@ sys.stdout.write(json.dumps({"result": out}))
 @functools.lru_cache(maxsize=1)
 def memory_ceiling_enforceable() -> bool:
     """Whether this platform lets a child be given an address-space ceiling (RLIMIT_AS), tried once on a throwaway child. Linux allows it. macOS refuses (`setrlimit` raises
-    ValueError), so there a memory ceiling cannot be enforced at all: the sandbox says so by name instead of dying inside the child with an unexplained `SubprocessError`, and it
-    never runs a capability "as if" the ceiling applied."""
+    ValueError), and Windows has no `resource` module at all, so there a memory ceiling cannot be enforced: the sandbox says so by name instead of dying inside the child with an
+    unexplained `SubprocessError` (or failing to import), and it never runs a capability "as if" the ceiling applied."""
+    if resource is None:
+        return False
+
     def probe() -> None:
         resource.setrlimit(resource.RLIMIT_AS, (1 << 30, 1 << 30))
     try:
         return subprocess.run([sys.executable, "-c", "pass"], preexec_fn=probe, capture_output=True, timeout=15).returncode == 0
     except Exception:  # noqa: BLE001 - "could not establish that it works" is "not enforceable"
         return False
+
+
+def containment_capabilities() -> Dict[str, bool]:
+    """What this platform can actually enforce on a contained child, for the posture and backend layers to report honestly (nothing here
+    claims filesystem or network isolation, which no platform provides rootless):
+
+    * ``scrubbed_environment`` / ``contained_cwd``: the child inherits no ambient variables and runs in a throwaway directory (every platform);
+    * ``wall_clock_timeout``: the child is killed when ``max_duration_seconds`` passes (every platform);
+    * ``memory_ceiling``: an address-space limit (RLIMIT_AS; Linux only);
+    * ``posix_rlimits``: CPU-seconds and process-count limits applied in the child before it starts (POSIX only; the process count is best-effort)."""
+    return {"scrubbed_environment": True, "contained_cwd": True, "wall_clock_timeout": True,
+            "memory_ceiling": memory_ceiling_enforceable(), "posix_rlimits": resource is not None}
+
+
+def _windows_child_env(scrubbed: Dict[str, str]) -> None:
+    """A Windows child needs a few system variables to start at all (``SystemRoot`` for the network and random-number libraries); these name
+    system directories and are not secrets. Everything else stays scrubbed."""
+    for k in ("SystemRoot", "SYSTEMDRIVE", "WINDIR"):
+        if k in os.environ:
+            scrubbed.setdefault(k, os.environ[k])
+    scrubbed.setdefault("PATH", os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32"))
 
 
 def _limits(constraint: ExecutionConstraint) -> Callable[[], None]:
@@ -195,8 +232,12 @@ class LocalContainmentSandbox:
                 raise ContainmentError(str(e))
         if constraint.max_memory_mb and not memory_ceiling_enforceable():
             # fail closed and by name: a ceiling that cannot be applied is not a ceiling. (`max_memory_mb=0` means the caller asked for none.)
-            raise ContainmentError("memory_ceiling_unenforceable: this platform cannot apply an address-space limit (RLIMIT_AS); run on Linux or request no memory ceiling")
+            raise CapabilityUnavailable(
+                "memory_ceiling",
+                "memory_ceiling_unenforceable: this platform cannot apply an address-space limit (RLIMIT_AS); run on Linux or request no memory ceiling")
         scrubbed = {k: os.environ[k] for k in self.env_passthrough if k in os.environ}
+        if os.name == "nt":
+            _windows_child_env(scrubbed)
         scrubbed.setdefault("PATH", "/usr/bin:/bin")
         # Import paths are not secrets — preserve them so the capability resolves, while
         # ambient credential env vars stay scrubbed (that is the property under test).
@@ -209,8 +250,8 @@ class LocalContainmentSandbox:
                 proc = subprocess.run(
                     [sys.executable, "-c", _RUNNER],
                     input=json.dumps({"capability": capability, "inputs": inputs}),
-                    text=True, capture_output=True, cwd=cwd, env=scrubbed,
-                    preexec_fn=_limits(constraint), timeout=timeout,
+                    encoding="utf-8", errors="replace", capture_output=True, cwd=cwd, env=scrubbed,
+                    timeout=timeout, **({"preexec_fn": _limits(constraint)} if resource is not None else {}),
                 )
             except subprocess.TimeoutExpired:
                 raise ContainmentError("duration_exceeded")

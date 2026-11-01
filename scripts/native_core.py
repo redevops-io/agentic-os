@@ -21,6 +21,7 @@ The committed manifest is scripts/native_core_manifest.json.
     python scripts/native_core.py --check     # fail if the manifest, the workflow pin or the closure drifted
     python scripts/native_core.py --write     # regenerate the manifest (keeps DESELECT as committed)
     python scripts/native_core.py --run [pytest args...]   # run the lane's tests with the current interpreter
+    python scripts/native_core.py --import-all             # import every agentic_os module (the import smoke of the all-modules lane)
 """
 from __future__ import annotations
 
@@ -207,6 +208,45 @@ def run(extra: list[str]) -> int:
     return subprocess.call(args, cwd=ROOT, env=env)
 
 
+# Distributions an optional extra or a Linux-hosted integration provides. A module that needs one of them and finds it missing is reported as
+# skipped; ANY other import failure (a missing POSIX module, a bad guard, a syntax error) is a failure.
+OPTIONAL_IMPORTS = frozenset({
+    "duckdb", "psycopg", "fastmcp", "mcp", "redevops_connectors", "redevops_rag", "sentence_transformers", "google", "requests", "keyring",
+    "agent_harness", "context_runtime", "reel", "numpy", "torch", "scipy", "sklearn", "docker", "kafka", "boto3",
+})
+
+
+def import_all() -> int:
+    """Import every module of the package in this interpreter. Prints one line per failure and a summary; exit 1 on any failure."""
+    import importlib
+    import tempfile
+
+    sys.path.insert(0, str(ROOT))
+    os.environ.setdefault("PERMISSIONS_ALLOW_GENERATED_KEY_DEV", "1")             # control_plane builds its grant store at import
+    os.environ.setdefault("PERMISSIONS_DIR", tempfile.mkdtemp(prefix="aos-import-"))
+    os.environ.setdefault("REDEVOPS_SECRETS_AUTO", "0")
+    ok, skipped, failed = 0, [], []
+    for name in sorted(_modules()):
+        if name == "agentic_os._platform._win32" and os.name != "nt":
+            continue                                                               # the Windows API module imports msvcrt by design
+        try:
+            importlib.import_module(name)
+            ok += 1
+        except ModuleNotFoundError as e:
+            if (e.name or "").split(".")[0] in OPTIONAL_IMPORTS:
+                skipped.append(f"{name} (optional: {e.name})")
+            else:
+                failed.append(f"{name}: {type(e).__name__}: {e}")
+        except BaseException as e:  # noqa: BLE001 - an import must not raise anything
+            failed.append(f"{name}: {type(e).__name__}: {e}")
+    for line in failed:
+        print("IMPORT FAILED", line)
+    print(f"native_core: imported {ok} modules, skipped {len(skipped)} (optional dependency absent), failed {len(failed)}")
+    for line in skipped:
+        print("  skipped", line)
+    return 1 if failed else 0
+
+
 def main(argv: list[str]) -> int:
     if argv[:1] == ["--check"]:
         return check()
@@ -215,6 +255,8 @@ def main(argv: list[str]) -> int:
         return 0
     if argv[:1] == ["--run"]:
         return run(argv[1:])
+    if argv[:1] == ["--import-all"]:
+        return import_all()
     print(__doc__)
     return 2
 

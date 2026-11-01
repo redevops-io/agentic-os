@@ -43,3 +43,28 @@ jobs:
         run: python scripts/native_core.py --check
       - name: Governance core tests
         run: python scripts/native_core.py --run -q -rfEs --continue-on-collection-errors
+
+  import-all:
+    # Every module of the package imports on a native host (no POSIX-only module is imported unguarded). This lane installs the base
+    # dependencies plus a few extras so that only a missing OPTIONAL package (listed in scripts/native_core.py) is excused.
+    name: import every module (${{ matrix.os }}, non-required)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-15]
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      AGENTIC_OS_SKIP_UI_FETCH: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the package with the duckdb, mcp and projects extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[duckdb,mcp,projects]"
+      - name: Import every agentic_os module
+        run: python scripts/native_core.py --import-all

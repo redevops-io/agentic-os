@@ -175,6 +175,7 @@
   "tests/test_mission_fork_join.py",
   "tests/test_mission_fork_join_hardening.py",
   "tests/test_mission_policy.py",
+  "tests/test_native_posture_and_membrane.py",
   "tests/test_outcome_loop.py",
   "tests/test_permissions_agpl_regression.py",
   "tests/test_permissions_authz_correctness.py",
@@ -223,13 +224,6 @@
   "tests/test_sc10_robust_requests.py::test_the_documented_codes_for_the_common_malformed_bodies": "needs the web stack (fastapi/httpx): it drives the control plane or the demo app, which the native core lane does not install; the Linux merge gate runs it"
  },
  "pending_on_windows": {
-  "tests/test_agent_gateway_error_text.py": "to implement: membrane import guard and an explicit 'capability unavailable' decision (agentic_os/mission/membrane.py imports `resource` at module top)",
-  "tests/test_keepassxc_store.py": "to investigate: read_secret('file:...') returns None on Windows; the file secret store lives in runtime-contracts (`secrets_local`) and applies a POSIX mode check there (upstream; not changed by this stack)",
-  "tests/test_agent_gateway_sandbox.py": "to implement: agentic_os/mission/membrane.py imports `resource` at module top, so any test module that imports it (directly or through tests/_platform_facts.py) cannot be collected on Windows; the import guard and the explicit 'capability unavailable' decision are the next change in this stack",
-  "tests/test_device_posture.py": "to implement: agentic_os/mission/membrane.py imports `resource` at module top, so any test module that imports it (directly or through tests/_platform_facts.py) cannot be collected on Windows; the import guard and the explicit 'capability unavailable' decision are the next change in this stack",
-  "tests/test_execution_backend.py": "to implement: agentic_os/mission/membrane.py imports `resource` at module top, so any test module that imports it (directly or through tests/_platform_facts.py) cannot be collected on Windows; the import guard and the explicit 'capability unavailable' decision are the next change in this stack",
-  "tests/test_membrane.py": "to implement: agentic_os/mission/membrane.py imports `resource` at module top, so any test module that imports it (directly or through tests/_platform_facts.py) cannot be collected on Windows; the import guard and the explicit 'capability unavailable' decision are the next change in this stack",
-  "tests/test_membrane_import_paths.py": "to implement: agentic_os/mission/membrane.py imports `resource` at module top, so any test module that imports it (directly or through tests/_platform_facts.py) cannot be collected on Windows; the import guard and the explicit 'capability unavailable' decision are the next change in this stack",
-  "tests/test_membrane_platform.py": "to implement: agentic_os/mission/membrane.py imports `resource` at module top, so any test module that imports it (directly or through tests/_platform_facts.py) cannot be collected on Windows; the import guard and the explicit 'capability unavailable' decision are the next change in this stack"
+  "tests/test_keepassxc_store.py": "to implement upstream or shadow here: the `file:` secret provider is runtime-contracts' `FileSecretStore`, which refuses any file whose POSIX mode shows group or other bits (Windows reports 0666), so it refuses every file and `read_secret('file:...')` returns None; fail-closed, but the provider is unusable on Windows until the check is DACL-aware (`agentic_os.secrets.stores.EncryptedFileSecretStore` already is)"
  }
 }

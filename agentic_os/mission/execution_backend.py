@@ -4,7 +4,7 @@ The rootless :class:`LocalContainmentSandbox` is the reference executor; this ad
 ``ExecutionBackend`` Protocol and — crucially — advertises the capabilities it *actually* enforces, so the
 capability-negotiated admission gate can refuse a profile the membrane cannot honor instead of running it anyway.
 
-Honest capabilities: the rootless membrane enforces filesystem containment (contained cwd + constrained paths),
+Honest capabilities (on Linux; ``capabilities()`` drops ``resource_limits`` on a platform that cannot apply a memory ceiling): the rootless membrane enforces filesystem containment (contained cwd + constrained paths),
 resource ceilings, process isolation, and envelope/identity binding. It does NOT enforce network-egress control
 (that is the enterprise net-namespace wrapper), does not do live quarantine, and produces no host/hardware
 attestation ("empty is honest for a trusted local membrane"). It therefore satisfies STANDARD; an ISOLATED+ mission
@@ -12,6 +12,7 @@ attestation ("empty is honest for a trusted local membrane"). It therefore satis
 """
 from __future__ import annotations
 
+import dataclasses
 import time
 from typing import Optional
 
@@ -21,7 +22,7 @@ from runtime_contracts.models import (
 )
 from runtime_contracts.protocol import ExecutionIdentity
 
-from .membrane import ContainmentError, LocalContainmentSandbox
+from .membrane import ContainmentError, LocalContainmentSandbox, memory_ceiling_enforceable
 
 # What the rootless reference membrane can truthfully enforce.
 MEMBRANE_CAPABILITIES = BackendCapabilities(
@@ -41,7 +42,12 @@ class MembraneExecutionBackend:
         self._sandbox = sandbox or LocalContainmentSandbox()
 
     def capabilities(self) -> BackendCapabilities:
-        return MEMBRANE_CAPABILITIES
+        """What THIS platform enforces. Where a memory ceiling cannot be applied (macOS refuses RLIMIT_AS; Windows has no rlimits) the
+        membrane does not advertise ``resource_limits``: a profile that needs them is refused as a downgrade instead of run unenforced.
+        On Linux this is exactly ``MEMBRANE_CAPABILITIES``."""
+        if memory_ceiling_enforceable():
+            return MEMBRANE_CAPABILITIES
+        return dataclasses.replace(MEMBRANE_CAPABILITIES, resource_limits=False)
 
     def execute(self, envelope: ExecutionEnvelope, identity: ExecutionIdentity,
                 profile: EnforcementProfile) -> ExecutionReceipt:
