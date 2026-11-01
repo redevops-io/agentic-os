@@ -170,13 +170,17 @@ def test_every_high_risk_class_is_denied_under_a_native_process_boundary(facts):
     assert hard.classes[ExecutionClass.HOST_PROCESS] is Decision.DENY and hard.classes[ExecutionClass.PUBLIC_INGRESS] is Decision.DENY
 
 
-def test_the_one_remaining_class_needs_a_human_where_limits_exist_and_is_denied_where_they_do_not():
-    assert derive(NATIVE_MAC).classes[ExecutionClass.LOCAL_CONTAINER] is Decision.REVIEW
-    win = derive(NATIVE_WIN)
-    assert win.classes[ExecutionClass.LOCAL_CONTAINER] is Decision.DENY
-    assert "POSIX-only" in " ".join(win.reasons) and "WSL2" not in " ".join(win.reasons)
+@pytest.mark.parametrize("facts", [NATIVE_MAC, NATIVE_WIN])
+def test_the_native_posture_grants_no_class_at_all(facts):
+    """NATIVE_PROCESS_ONLY is a label, not a permission: EVERY class is DENY, the limited-child-process class included (on macOS it was REVIEW
+    in the first version, which made a previously blocked device installable for any caller that reads the class map instead of the verdict)."""
+    p = derive(facts)
+    assert all(d is Decision.DENY for d in p.classes.values()) and set(p.classes) == set(ExecutionClass)
+    assert all(not p.issuable(c) and p.ceiling(c) is None for c in ExecutionClass)
+    if not facts.containment_supported:
+        assert "POSIX-only" in " ".join(p.reasons) and "WSL2" not in " ".join(p.reasons)
     with pytest.raises(ContainmentError):                                      # the sandbox honours the denial (posture -> containment link)
-        LocalContainmentSandbox(posture=win).run_contained("op", f"{CAP}:echo", {}, "k", constraint=ExecutionConstraint(max_duration_seconds=5))
+        LocalContainmentSandbox(posture=p).run_contained("op", f"{CAP}:echo", {}, "k", constraint=ExecutionConstraint(max_duration_seconds=5))
 
 
 def test_linux_without_a_container_runtime_and_unknown_hosts_stay_blocked():
@@ -218,3 +222,29 @@ def test_the_native_posture_is_recorded_replayed_and_stops_the_bootstrap():
     back = latest_posture(store)
     assert back.verdict is Verdict.NATIVE_PROCESS_ONLY and back.facts.native_process_boundary is True
     assert back.posture_id == derive(NATIVE_MAC).posture_id                      # the replayed posture is the derived one, byte for byte
+
+
+# ── capability flags are truthful per platform ──
+
+def test_a_native_host_does_not_advertise_isolation_it_does_not_have(monkeypatch):
+    from runtime_contracts.models import BackendCapabilities
+    from agentic_os.mission import execution_backend as eb
+    for plat in ("darwin", "win32"):
+        monkeypatch.setattr(eb.sys, "platform", plat)
+        monkeypatch.setattr(eb, "memory_ceiling_enforceable", lambda: False)
+        caps = eb.MembraneExecutionBackend().capabilities()
+        assert not caps.filesystem_isolation and not caps.process_isolation and not caps.resource_limits and not caps.network_egress_control
+        assert caps == BackendCapabilities(identity_binding=True), plat
+    monkeypatch.setattr(eb.sys, "platform", "linux")
+    monkeypatch.setattr(eb, "memory_ceiling_enforceable", lambda: True)
+    assert eb.MembraneExecutionBackend().capabilities() == eb.MEMBRANE_CAPABILITIES            # Linux is unchanged
+    monkeypatch.setattr(eb, "memory_ceiling_enforceable", lambda: False)
+    import dataclasses
+    assert eb.MembraneExecutionBackend().capabilities() == dataclasses.replace(eb.MEMBRANE_CAPABILITIES, resource_limits=False)
+
+
+@pytest.mark.skipif(not sys.platform.startswith(("darwin", "win")), reason="asserts the real capabilities of a native desktop host")
+def test_on_this_native_host_the_backend_claims_no_filesystem_or_process_isolation():
+    from agentic_os.mission.execution_backend import MembraneExecutionBackend
+    caps = MembraneExecutionBackend().capabilities()
+    assert not caps.filesystem_isolation and not caps.process_isolation
