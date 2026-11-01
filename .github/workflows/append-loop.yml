@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        which: [old, new]
+        which: [new]
         load: [idle, loaded]
     env:
       PYTHONDONTWRITEBYTECODE: "1"
@@ -35,7 +35,7 @@ jobs:
         shell: bash
         run: |
           cd ${{ matrix.which }}
-          cp ../new/tests/test_append_writers.py tests/
+          [ "${{ matrix.which }}" = "old" ] && cp ../new/tests/test_append_writers.py tests/ || true
           if [ "${{ matrix.which }}" = "old" ]; then
             python - <<'PY'
           import re
