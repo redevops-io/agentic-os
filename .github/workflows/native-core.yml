@@ -1,6 +1,6 @@
 name: native-core
 
-# Native-core lanes: the governance core (the 74-module closure listed in scripts/native_core_manifest.json) and
+# Native-core lanes: the governance core (the import closure of the governance roots, plus the portability layer, listed in scripts/native_core_manifest.json) and
 # the tests that cover it, run on native Windows and native macOS Apple Silicon with ONLY what the core needs:
 # the standard library, cryptography, PyYAML, runtime-contracts (pinned as pyproject.toml pins it) and pytest.
 # No Docker, no WSL, no web stack. These are evidence lanes: they are NOT required checks and they do not replace

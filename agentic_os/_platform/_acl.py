@@ -10,6 +10,8 @@ _ALIASES = {"SY": "S-1-5-18", "BA": "S-1-5-32-544", "CO": "S-1-3-0", "OW": "S-1-
 # file's own owner. They are the Windows counterpart of "root" in a POSIX 0600 check and are not counted as exposure.
 _ALWAYS_ALLOWED = frozenset({"S-1-5-18", "S-1-5-32-544", "S-1-3-0", "S-1-3-4"})
 _ALLOW_ACE_TYPES = frozenset({"A", "OA", "XA", "ZA"})
+# Entries that grant nothing: deny ACEs, and the audit/alarm/label entries of an S: section.
+_IGNORED_ACE_TYPES = frozenset({"D", "OD", "XD", "AU", "AL", "OU", "OL", "XU", "ML", "RA", "SP", "TL"})
 
 
 def _sid(token: str, resolve=None) -> str:
@@ -29,10 +31,11 @@ def _sid(token: str, resolve=None) -> str:
 _TRUSTEE = r"(?:S-[0-9-]+|[A-Z]{2})"
 
 
-def _aces(dacl: str) -> "list[str] | None":
-    """The top-level ACE strings of a ``D:`` section (an ``S:`` audit section, if any, holds only audit ACEs, which grant nothing), counting parentheses so an ACE with a
-    conditional expression (nested parentheses) cannot hide the ACEs after it. None when the parentheses do not balance."""
-    out, depth, start = [], 0, 0
+def _aces(dacl: str) -> "tuple[list[str], str] | None":
+    """``(ACEs, leftover)``: the top-level ACE strings of a ``D:`` section, counting parentheses so an ACE with a conditional expression
+    (nested parentheses) cannot hide the ACEs after it, and the text found OUTSIDE the parentheses (only an ``S:`` audit section marker may
+    legitimately be there). None when the parentheses do not balance."""
+    out, outside, depth, start = [], [], 0, 0
     for i, ch in enumerate(dacl):
         if ch == "(":
             if depth == 0:
@@ -44,7 +47,9 @@ def _aces(dacl: str) -> "list[str] | None":
                 return None
             if depth == 0:
                 out.append(dacl[start:i])
-    return out if depth == 0 else None
+        elif depth == 0:
+            outside.append(ch)
+    return (out, "".join(outside)) if depth == 0 else None
 
 
 def dacl_problem(sddl: str, user_sid: str, resolve=None) -> str | None:
@@ -67,14 +72,26 @@ def dacl_problem(sddl: str, user_sid: str, resolve=None) -> str | None:
     if not d:
         return "has no DACL (every account has full access)"
     body = rest[d.end():]
-    first = body.find("(")
-    aces = _aces(body[first:]) if first >= 0 else []
-    if aces is None:
+    if "NO_ACCESS_CONTROL" in body:
+        return "has a NULL DACL (every account has full access)"
+    flags = re.match(r"[A-Z]*", body).group(0)
+    after = body[len(flags):]
+    if not after:
+        return "has an empty DACL (nothing in it can be shown to name the running user)"
+    if not after.startswith("("):
         return "has a DACL that could not be parsed"
+    parsed = _aces(after)
+    if parsed is None or not re.fullmatch(r"(S:[A-Z]*)?", parsed[1]):
+        return "has a DACL that could not be parsed"
+    aces = parsed[0]
     for ace in aces:
         f = ace.split(";")
-        if len(f) < 6 or f[0] not in _ALLOW_ACE_TYPES:
+        if len(f) < 6:
+            return "has a malformed ACE (fewer than six fields)"
+        if f[0] in _IGNORED_ACE_TYPES:
             continue
+        if f[0] not in _ALLOW_ACE_TYPES:
+            return f"has an ACE of unknown type {f[0]!r}"
         if "IO" in re.findall(r"[A-Z]{2}", f[1]):
             continue
         who = _sid(f[5], resolve)
