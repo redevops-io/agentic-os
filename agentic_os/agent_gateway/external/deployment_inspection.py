@@ -101,51 +101,67 @@ SAMPLE_NOTE = "sample data, not a finding"
 
 def is_sample_payload(payload: Dict[str, Any]) -> bool:
     """True when the payload declares it is sample data: ``live`` is False or ``data_status`` is "sample".
-    A payload with neither key (an older Sentinel, a fixture) is read as live, as before."""
+    A payload with neither key (an older Sentinel, a fixture) is read as live, as before. Conflicting flags
+    (``live: false`` with ``data_status: "live"``, or ``live: true`` with ``data_status: "sample"``) are not trusted
+    as a reason to drop findings: they are read as live."""
     if not isinstance(payload, dict):
         return False
-    return payload.get("live") is False or str(payload.get("data_status", "")).lower() == "sample"
+    live, status = payload.get("live"), str(payload.get("data_status", "")).lower()
+    if (live is False and status == "live") or (live is True and status == "sample"):
+        return False
+    return live is False or status == "sample"
+
+
+def _obj(value: Any) -> dict:
+    """A payload object, or {} when the Sentinel sent something else (a malformed payload must not raise)."""
+    return value if isinstance(value, dict) else {}
+
+
+def _as_list(value: Any) -> list:
+    """A list payload field, or [] when the Sentinel sent something else (a malformed payload must not raise)."""
+    return value if isinstance(value, list) else []
 
 
 def sample_sources(snapshot: Dict[str, Any]) -> List[dict]:
     """The planes whose payload is sample data, each with how many would-be items it carried."""
     out: List[dict] = []
-    net = snapshot.get("/api/network/review") or {}
+    net = _obj(snapshot.get("/api/network/review"))
     if is_sample_payload(net):
-        out.append({"source": "network", "status": SAMPLE_NOTE, "items": len(net.get("risks", []) or [])})
-    bk = snapshot.get("/api/backups/status") or {}
+        out.append({"source": "network", "status": SAMPLE_NOTE, "items": len(_as_list(net.get("risks")))})
+    bk = _obj(snapshot.get("/api/backups/status"))
     if is_sample_payload(bk):
         out.append({"source": "backups", "status": SAMPLE_NOTE,
-                    "items": sum(len(bk.get(k, []) or []) for k in ("never", "no_offsite", "unencrypted"))})
+                    "items": sum(len(_as_list(bk.get(k))) for k in ("never", "no_offsite", "unencrypted"))})
     return out
 
 
 def derive_findings(snapshot: Dict[str, Any]) -> List[DeploymentFinding]:
     findings: List[DeploymentFinding] = []
 
-    health = snapshot.get("/health") or {}
+    health = _obj(snapshot.get("/health"))
     if health and not health.get("connected", True):
         findings.append(DeploymentFinding("health", "core_disconnected", "high",
                                           f"security core '{health.get('core', '?')}' is not connected"))
 
-    net = snapshot.get("/api/network/review") or {}
-    for risk in ([] if is_sample_payload(net) else net.get("risks", []) or []):
+    net = _obj(snapshot.get("/api/network/review"))
+    for risk in ([] if is_sample_payload(net) else [r for r in _as_list(net.get("risks")) if isinstance(r, dict)]):
         findings.append(DeploymentFinding("network", risk.get("kind", "network_risk"),
                                           risk.get("severity", "medium"), risk.get("detail", "")))
 
-    bk = snapshot.get("/api/backups/status") or {}
+    bk = _obj(snapshot.get("/api/backups/status"))
     if is_sample_payload(bk):
         bk = {}                                            # sample data is reported under sample_sources, never as a finding
-    for name in bk.get("never", []) or []:
+    for name in _as_list(bk.get("never")):
         findings.append(DeploymentFinding("backups", "no_backup", "high", f"{name} has never been backed up"))
-    for name in bk.get("no_offsite", []) or []:
+    for name in _as_list(bk.get("no_offsite")):
         findings.append(DeploymentFinding("backups", "no_offsite", "medium", f"{name} has no offsite copy"))
-    for name in bk.get("unencrypted", []) or []:
+    for name in _as_list(bk.get("unencrypted")):
         findings.append(DeploymentFinding("backups", "unencrypted_backup", "high", f"{name} backup is unencrypted"))
 
-    act = snapshot.get("/api/activity") or {}
-    if act.get("has_threat") and (act.get("decisions_status") or {}).get("ok", True):
-        n = len(act.get("decisions", []) or [])
+    act = _obj(snapshot.get("/api/activity"))
+    dstatus = act.get("decisions_status")
+    if act.get("has_threat") and (dstatus.get("ok", True) if isinstance(dstatus, dict) else True):
+        n = len(_as_list(act.get("decisions")))
         findings.append(DeploymentFinding("crowdsec", "active_threats", "medium",
                                           f"{n} active CrowdSec decision(s) held (a decision is not proof that a bouncer enforces it)"))
     return findings
@@ -153,8 +169,8 @@ def derive_findings(snapshot: Dict[str, Any]) -> List[DeploymentFinding]:
 
 def run_inspection(base_url: str, *, fetch: Optional[Callable[[str, str], Optional[dict]]] = None) -> InspectionReport:
     snap = read_deployment(base_url, fetch=fetch)
-    health = snap.get("/health") or {}
-    act = snap.get("/api/activity") or {}
+    health = _obj(snap.get("/health"))
+    act = _obj(snap.get("/api/activity"))
     findings = derive_findings(snap)
     proposed = []
     if findings:
