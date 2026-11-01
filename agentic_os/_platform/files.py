@@ -22,7 +22,7 @@ import stat
 import tempfile
 import time
 
-from . import _acl
+from . import _acl, locks
 
 _WINDOWS = os.name == "nt"
 if _WINDOWS:
@@ -185,6 +185,36 @@ def replace_file(src, dst) -> None:
             if not is_sharing_violation(e) or attempt == _REPLACE_ATTEMPTS - 1:
                 raise
             time.sleep(_REPLACE_DELAY_S)
+
+
+def locked_append(path, record, *, fsync: bool = False, makedirs: bool = True) -> None:
+    """Append ``record`` (``bytes``, or ``str`` encoded as UTF-8) to ``path`` as ONE write while holding the file's inter-process lock, so
+    concurrent appenders (threads and processes) never interleave or overwrite each other's records.
+
+    Lock-free appending relies on POSIX ``O_APPEND`` being atomic. On Windows the C runtime emulates it as "seek to the end, then write", which
+    two writers with their own descriptors can interleave: one record overwrites another and is silently lost. Here the file is opened in
+    binary mode (no newline translation: ``\\n`` stays ``\\n`` on every OS), locked through ``locks.locked`` (a byte-range ``LockFileEx`` lock
+    on Windows, ``flock`` on POSIX; handles in one process conflict too, so threads are serialised as well) and written in a single call; the
+    lock is released on close. ``fsync`` forces the record to disk before the lock is released. The lock lives on the data file itself, so no
+    sidecar file appears beside it. On Windows a file this creates is created private (see ``touch_private``)."""
+    data = record.encode("utf-8") if isinstance(record, str) else bytes(record)
+    path = os.fspath(path)
+    if makedirs:
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    touch_private(path)
+    with open(path, "ab") as fh, locks.locked(fh):
+        fh.write(data)
+        fh.flush()
+        if fsync:
+            os.fsync(fh.fileno())
+
+
+def append_line(path, line: str, *, fsync: bool = False, makedirs: bool = True) -> None:
+    """``locked_append`` of one text record terminated by a bare ``\\n``. ``line`` must not contain a line break: a record that spans lines
+    would be read back as several (a ``ValueError`` here, not a corrupt file)."""
+    if "\n" in line or "\r" in line:
+        raise ValueError("a line record must not contain a line break")
+    locked_append(path, line + "\n", fsync=fsync, makedirs=makedirs)
 
 
 def create_private_temp(directory, prefix: str, suffix: str) -> "tuple[int, str]":

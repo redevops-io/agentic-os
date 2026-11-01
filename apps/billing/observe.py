@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from agentic_os._platform.files import append_line as _append_line
 from agentic_os.observation import (EvidenceChange, KnownAtQuality, Observation, ObservationIngestor,
                                     StateDelta)
 
@@ -77,11 +78,7 @@ class FileObservationStore:
     def append(self, obs: Observation) -> None:
         if self.get(obs.observation_id) is not None:
             return
-        d = os.path.dirname(self.path)
-        if d:
-            os.makedirs(d, exist_ok=True)
-        with open(self.path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(_obs_to_dict(obs), default=str) + "\n")
+        _append_line(self.path, json.dumps(_obs_to_dict(obs), default=str))      # one locked write (Windows append is not atomic)
 
     def count(self) -> int:
         return len(self.all())

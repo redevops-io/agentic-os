@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
+from agentic_os._platform.files import append_line as _append_line
+
 
 class OutreachDecision(str, Enum):
     SEND = "SEND"                          # auto-send allowed and executed
@@ -81,9 +83,8 @@ class SuppressionLedger:
             return
         (self._tokens if len(v) == 24 and "@" not in v else self._addrs).add(v)
         if self.path:
-            os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
-            with open(self.path, "a", encoding="utf-8") as fh:
-                fh.write(v + "\n")
+            for part in v.splitlines() or [v]:      # one locked write per record (a value with a line break was always written as several lines)
+                _append_line(self.path, part)
 
 
 def handle_unsubscribe(token_or_email: str, ledger: SuppressionLedger) -> Dict[str, str]:

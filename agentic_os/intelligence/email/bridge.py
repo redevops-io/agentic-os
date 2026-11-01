@@ -14,6 +14,7 @@ import json
 import os
 from typing import Optional
 
+from agentic_os._platform.files import append_line as _append_line
 from runtime_contracts.protocol import (
     EmailDeliveryProvider, EmailDeliveryReceipt, EmailDeliveryStatus, EmailSendRequest, EmailSubmitFailure,
 )
@@ -41,8 +42,7 @@ class SuppressionList:
         if key in self._set:
             return False
         self._set.add(key)
-        with open(self.path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps({"tenant": tenant, "recipient": recipient, "reason": reason}) + "\n")
+        _append_line(self.path, json.dumps({"tenant": tenant, "recipient": recipient, "reason": reason}))
         return True
 
 
@@ -53,8 +53,7 @@ class ReceiptStore:
         os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
 
     def append(self, receipt: EmailDeliveryReceipt) -> None:
-        with open(self.path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(receipt.canonical_form()) + "\n")
+        _append_line(self.path, json.dumps(receipt.canonical_form()))
 
     def _rows(self) -> list[dict]:
         if not os.path.exists(self.path):

@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Optional
 
+from agentic_os._platform.files import append_line as _append_line
 from .contracts import OpportunityType, Priority, RevenueOpportunity
 from .gateway import AttentionChannel
 from .runner import RevenueMissionRun
@@ -273,10 +274,7 @@ class MissionRegistry:
     def _persist(self, rec: _Record) -> None:
         if not self.persist_path:
             return
-        import os
-        os.makedirs(os.path.dirname(os.path.abspath(self.persist_path)), exist_ok=True)
-        with open(self.persist_path, "a") as fh:
-            fh.write(json.dumps({
+        _append_line(self.persist_path, json.dumps({
                 "opportunity_id": rec.opportunity.opportunity_id, "digest": rec.digest,
                 "mission_id": rec.mission_id, "kind": rec.kind, "type": rec.opportunity.type.value,
                 "correlation_key": rec.correlation_key, "posted_ref": rec.posted_ref,
@@ -286,7 +284,7 @@ class MissionRegistry:
                 "evidence_ids": list(rec.opportunity.evidence_ids),
                 "linked_opportunity_id": rec.opportunity.linked_opportunity_id,
                 "forecast_lead_days": rec.opportunity.forecast_lead_days,
-            }, separators=(",", ":")) + "\n")
+            }, separators=(",", ":")))
 
     def _ensure_run(self, rec: _Record) -> Optional[RevenueMissionRun]:
         """Return the live run, rehydrating it from the durable mission store after a restart if needed."""
