@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   native-core:
-    name: native core (${{ matrix.os }}, non-required)
+    name: native core (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
