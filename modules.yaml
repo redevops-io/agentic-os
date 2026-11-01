@@ -9,7 +9,7 @@ modules:
     pain: network security & systems handled
     deploy: compose
     port: 8203
-    tagline: Your firewall, triaged and explained by an agent.
+    tagline: Threat triage and approval-gated response.
     agents: [triage, remediation]
     approval_required: [remediation]
   - name: agentic-support
