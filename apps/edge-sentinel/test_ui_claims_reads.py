@@ -14,7 +14,10 @@ import html as _html
 import importlib
 import json as _json
 import pathlib
+import re
 import sys
+import threading
+import time
 import types
 
 import pytest
@@ -60,7 +63,7 @@ class _R:
         return self._body
 
 
-def stub_lapi(monkeypatch, *, decisions="ok", alerts="ok", alert_items=None):
+def stub_lapi(monkeypatch, *, decisions="ok", alerts="ok", alert_items=None, alert_delay=0.0):
     """A stub CrowdSec: GET /health answers 404 (up), /v1/decisions behaves per `decisions`, the alert feed per `alerts`."""
     monkeypatch.setattr(core, "CROWDSEC_BOUNCER_KEY", "bouncer-key")
     core._CACHE.update(ts=0.0, data=None)
@@ -77,7 +80,12 @@ def stub_lapi(monkeypatch, *, decisions="ok", alerts="ok", alert_items=None):
     ns = dict(get=get, HTTPError=httpx.HTTPError, ConnectError=httpx.ConnectError, ReadTimeout=httpx.ReadTimeout)
     if PUBLIC_TREE:
         monkeypatch.setattr(core, "httpx", types.SimpleNamespace(**ns))
-        monkeypatch.setattr(core, "_cscli", lambda args: (1, "", "boom") if alerts == "fail" else (0, _json.dumps(items), ""))
+        def cscli(args):
+            time.sleep(alert_delay)
+            if alerts == "fail":
+                return 1, "", "boom"
+            return (0, "this is not json", "") if alerts == "malformed" else (0, _json.dumps(items), "")
+        monkeypatch.setattr(core, "_cscli", cscli)
     else:
         monkeypatch.setenv("SENTINEL_LAPI_MACHINE_ID", "m")
         monkeypatch.setenv("SENTINEL_LAPI_MACHINE_PASSWORD", "p")
@@ -98,7 +106,8 @@ def stub_lapi(monkeypatch, *, decisions="ok", alerts="ok", alert_items=None):
                 return _R(401, {}) if alerts == "fail" else _R(200, {"token": "t", "expire": "2999-01-01T00:00:00Z"})
 
             def get(self, url, params=None, headers=None):
-                return _R(200, items)
+                time.sleep(alert_delay)
+                return _R(200, bad_json=True) if alerts == "malformed" else _R(200, items)
         ns["Client"] = Client
         monkeypatch.setattr(core, "httpx", types.SimpleNamespace(**ns))
 
@@ -372,3 +381,84 @@ def test_apps_readme_no_longer_tells_edge_sentinel_to_mount_the_socket():
         pytest.skip("apps/README.md is in the public tree only")
     line = next(ln for ln in f.read_text().splitlines() if ln.strip().startswith("- edge-sentinel"))
     assert "docker CLI used for" not in line and "not the raw socket" in line
+
+
+# ── retest: malformed alert body, overlapping requests, per-source stamps, not-read card bodies ───────────────
+def test_decisions_ok_with_a_malformed_alert_body_is_not_a_read(app, monkeypatch):
+    stub_lapi(monkeypatch, decisions="ok", alerts="malformed")
+    data = core.fetch_activity(force=True)
+    assert data["decisions_status"]["ok"] is True and data["alerts_status"]["ok"] is False
+    assert "malformed" in data["alerts_status"]["note"] or "not JSON" in data["alerts_status"]["note"]
+    assert data["alerts_read_at"] == "" and data["read_at"] == "" and data["decisions_read_at"]
+    banner = app._status_banner(data)
+    assert "alert feed could not be read" in banner and "Latest alert" not in banner
+    assert {k["label"]: k["value"] for k in data["kpis"]}["Alerts (24h)"] == "not read"
+
+
+def test_overlapping_requests_do_not_swap_each_others_read_status(app, monkeypatch):
+    """Request A reads a 401 on decisions; while it is still between its read and its status lookup, request B finishes a
+    successful read. A must still report its own 401 (the status is per call, not a module global)."""
+    stub_lapi(monkeypatch)                                              # decisions answer 200 by default
+    ok_get = core.httpx.get
+
+    def get(url, **kw):
+        if url.endswith("/v1/decisions") and threading.current_thread().name == "MainThread":
+            return _R(401, {"message": "no"})                           # A (this thread) is refused
+        return ok_get(url, **kw)
+    monkeypatch.setattr(core.httpx, "get", get)
+    real, other = core.fetch_decisions, {}
+
+    def racing():
+        data = real()                                                   # A: 401, recorded for A
+        th = threading.Thread(name="B", target=lambda: (real(), other.update(b=core._own_read("decisions"))))
+        th.start(); th.join()                                           # B finishes OK in the gap, overwriting the globals
+        return data
+    monkeypatch.setattr(core, "fetch_decisions", racing)
+    a_data, a_status = core.read_decisions()
+    assert other["b"]["ok"] is True and core.decisions_status()["ok"] is True      # the shared store now says "ok"
+    assert a_data == [] and a_status["ok"] is False and "HTTP 401" in a_status["note"]   # A still reports its own failure
+    core._CACHE.update(ts=0.0, data=None)
+    data = core.fetch_activity(force=True)                              # the same through the whole payload
+    assert data["decisions_status"]["ok"] is False and {k["label"]: k["value"] for k in data["kpis"]}["Active decisions"] == "not read"
+
+
+def test_each_source_is_stamped_when_its_own_read_finished(app, monkeypatch):
+    stub_lapi(monkeypatch, alert_delay=1.1)                             # a slow alert read must not skew the decisions stamp
+    data = core.fetch_activity(force=True)
+    assert data["decisions_read_at"] and data["alerts_read_at"] and data["decisions_read_at"] < data["alerts_read_at"]
+    assert data["read_at"] == data["alerts_read_at"]                    # read_at is the later of the two
+
+
+def test_card_bodies_say_not_read_not_empty_when_a_source_failed(app, monkeypatch):
+    stub_lapi(monkeypatch, decisions="401", alerts="fail")
+    html = page(app)
+    assert "Decisions not read (" in html and "Alerts not read (" in html and "Alerts not read, so no scenarios are shown" in html
+    for empty in ("No active decisions.", "No alerts in the CrowdSec store.", "No scenarios recorded."):
+        assert empty not in html, empty
+    last = {k["label"]: k["value"] for k in core.fetch_activity()["kpis"]}["Last event"]
+    assert last == "not read"
+    stub_lapi(monkeypatch, decisions="empty", alert_items=[])
+    ok_html = page(app)
+    assert "No active decisions." in ok_html and "No alerts in the CrowdSec store." in ok_html   # a real empty read still says so
+
+
+def test_block_execution_wording_is_scoped_to_this_ui(console):
+    texts = [console.primer, console.tools["ban_ip"]["description"], (APPDIR / "README.md").read_text()]
+    for text in texts:
+        assert not re.search(r"executing (a block|it|a real block) needs", text), text[:80]
+    assert "executing a block from this UI needs an operator credential and an enable flag" in console.tools["ban_ip"]["description"]
+    assert "executing it from this UI needs" in console.primer
+
+
+def test_readme_proxy_limits_include_image_export():
+    readme = (APPDIR / "README.md").read_text()
+    assert "GET /images/<ref>/get" in readme and "baked-in secrets" in readme
+
+
+@pytest.mark.skipif(not PUBLIC_TREE, reason="the public tree's Dockerfile and core comments")
+def test_public_dockerfile_and_core_comments_do_not_tell_the_reader_to_mount_the_socket():
+    for f in ("Dockerfile", "core.py"):
+        text = (APPDIR / f).read_text()
+        assert "mount /var/run/docker.sock" not in text and "via the mounted /var/run/docker.sock" not in text, f
+        assert "docker socket mounted" not in text, f
+    assert "do not mount the raw /var/run/docker.sock" in (APPDIR / "Dockerfile").read_text()

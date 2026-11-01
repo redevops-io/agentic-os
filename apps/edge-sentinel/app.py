@@ -384,7 +384,7 @@ def _alert_feed(data: dict) -> str:
                 "</div>"
             )
     if not rows:
-        rows = "<div class='feed__row'><div class='feed__meta'>No alerts in the CrowdSec store.</div></div>"
+        rows = ("<div class='feed__row'><div class='feed__meta'>" + ("No alerts in the CrowdSec store." if _src(data, "alerts")[0] else f"Alerts not read ({_esc(_src(data, 'alerts')[1])}).") + "</div></div>")
     return (
         "<div class='card'>"
         "<div class='card__head'><h2 class='card__title'>Alert feed · by severity</h2>"
@@ -405,7 +405,7 @@ def _scenario_bars(data: dict) -> str:
             "</div>"
         )
     if not body:
-        body = "<div class='barlist__label'>No scenarios recorded.</div>"
+        body = ("<div class='barlist__label'>No scenarios recorded.</div>" if _src(data, "alerts")[0] else "<div class='barlist__label'>Alerts not read, so no scenarios are shown.</div>")
     return (
         "<div class='card'>"
         "<div class='card__head'><h2 class='card__title'>Alerts by scenario (from the CrowdSec reading)</h2></div>"
@@ -428,7 +428,7 @@ def _decisions_table(data: dict) -> str:
             "</tr>"
         )
     if not rows:
-        rows = "<tr><td colspan='6'>No active decisions.</td></tr>"
+        rows = ("<tr><td colspan='6'>No active decisions.</td></tr>" if _src(data, "decisions")[0] else f"<tr><td colspan='6'>Decisions not read ({_esc(_src(data, 'decisions')[1])}).</td></tr>")
     return (
         "<div class='card'>"
         "<div class='card__head'><h2 class='card__title'>Attack sources · active decisions</h2>"
@@ -756,7 +756,7 @@ A PARSER turns raw log lines into structured events; a COLLECTION is a ready-mad
 
 A WHITELIST tells CrowdSec to never block certain trusted IPs (your office, your VPN, a monitoring service). A FALSE POSITIVE is a legitimate visitor wrongly flagged — if a real customer or your own address gets blocked, unban them and add them to a whitelist so it doesn't recur. When unsure, prefer a short ban over a permanent one.
 
-Should you worry? A handful of brute-force or probing alerts from random internet IPs is common background noise; say what was read, and do not say that anything was blocked unless the data shows an enforcing bouncer. Look closer when you see many events from one source, repeated attempts on the same account, or an exploit/RCE scenario — those deserve a closer look. edge-sentinel never auto-blocks: a block is staged and waits for human approval; executing it needs an operator credential and an enable flag, and the demo's approved block is a dry run (nothing is blocked). Never describe the network as safe or clean; describe what was read and when.
+Should you worry? A handful of brute-force or probing alerts from random internet IPs is common background noise; say what was read, and do not say that anything was blocked unless the data shows an enforcing bouncer. Look closer when you see many events from one source, repeated attempts on the same account, or an exploit/RCE scenario — those deserve a closer look. edge-sentinel never auto-blocks: a block is staged and waits for human approval; executing it from this UI needs an operator credential and an enable flag, and the demo's approved block is a dry run (nothing is blocked). Never describe the network as safe or clean; describe what was read and when.
 
 Beyond the network, edge-sentinel also inspects the SOFTWARE SUPPLY CHAIN — the open-source libraries and images this platform installs — BEFORE they run for clients. A supply-chain SCAN (Trivy) checks every dependency, container image and config for known VULNERABILITIES (CVEs), leaked SECRETS and MISCONFIGURATIONS, and builds an SBOM (a Software Bill of Materials: the full list of components). Each CVE names the package, its SEVERITY (critical/high/medium/low), and the FIXED VERSION to upgrade to — the "patched pin" to move to. This is the PRE-DEPLOYMENT half of security; the network monitoring above is the RUNTIME half. In this deployment the scan covers the sentinel's own container filesystem only; scans of other apps' images need docker access that is off by default and are not available in the public demo. Scanner output is a report of known vulnerabilities, not confirmed exploitation.
 
@@ -1242,7 +1242,7 @@ def _build_sentinel_console(console_cls, _crtool):
             _crtool("list_bans", "list the active ban decisions CrowdSec holds: source IP, scenario, severity and when each expires (a decision is not proof that a bouncer enforces it)", _t_list_bans),
             _crtool("explain_alert", "explain a specific alert currently in CrowdSec's feed (by scenario name) and whether it needs a closer look", _t_explain_alert,
                     parameters={"type": "object", "properties": {"scenario": {"type": "string", "description": "a scenario name from the live feed to explain"}}}),
-            _crtool("ban_ip", "stage a ban of an IP for a duration. It is staged for human approval and never runs from this chat; executing a block needs an operator credential and an enable flag, and the demo's approved block is a dry run (nothing is blocked)", _t_ban_ip, side_effecting=True,
+            _crtool("ban_ip", "stage a ban of an IP for a duration. It is staged for human approval and never runs from this chat; executing a block from this UI needs an operator credential and an enable flag, and the demo's approved block is a dry run (nothing is blocked)", _t_ban_ip, side_effecting=True,
                     parameters={"type": "object", "properties": {"ip": {"type": "string"}, "duration": {"type": "string", "description": "e.g. 4h, 24h"}}}),
             # supply-chain (pre-deploy) tools. The launchers (supply_chain_scan, list_vulnerabilities, scan_app, scan_apps, sbom, malware_scan) start
             # processes / scans, so they are registered side_effecting=True (classified `write`): the approval policy applies in addition to the

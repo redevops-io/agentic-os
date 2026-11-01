@@ -17,9 +17,11 @@ keeping this module dependency-light and deterministic.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import os
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Callable
@@ -45,9 +47,9 @@ CROWDSEC_LAPI_URL = os.environ.get("CROWDSEC_LAPI_URL", "http://localhost:8086")
 CROWDSEC_BOUNCER_KEY = os.environ.get("CROWDSEC_BOUNCER_KEY", "")
 CROWDSEC_CONTAINER = os.environ.get("CROWDSEC_CONTAINER", "agentic-cores-crowdsec-1")
 CROWDSEC_FRONT_URL = os.environ.get("CROWDSEC_FRONT_URL", "http://localhost:8086").rstrip("/")
-# How to invoke docker for `cscli` (alerts). On the host this needs `sudo docker`; inside the
-# integrated container we run as root with the docker socket mounted, so DOCKER_CMD="docker"
-# (no sudo). Override via env.
+# How to invoke docker for `cscli` (alerts). On the host this needs `sudo docker`; inside a container it needs
+# Docker access that the operator provides (never the raw socket: see the README, "Docker access"), with
+# DOCKER_CMD="docker" (no sudo). Override via env.
 DOCKER_CMD = os.environ.get("DOCKER_CMD", "sudo docker").split()
 
 TENANT = "Meridian Wealth Management"
@@ -83,6 +85,24 @@ def crowdsec_connected() -> bool:
             return False
 
 
+_TLS = threading.local()    # the status and finish time of the read this THREAD just made (module globals are shared by requests)
+
+
+def _set_status(store: dict, source: str, *, ok: bool, note: str) -> None:
+    """Record a source's read status in the shared store (health) AND for the calling thread with the time this read
+    finished, so a request never reports another request's result or the finish time of a different source."""
+    store.update(ok=ok, note=note)
+    setattr(_TLS, f"{source}_status", {"ok": ok, "note": note})
+    setattr(_TLS, f"{source}_at", _dt.datetime.now(_dt.timezone.utc))
+
+
+def _own_read(source: str):
+    st = getattr(_TLS, f"{source}_status", None)
+    if st is None:                                      # the fetch function did not record one (e.g. replaced in a test)
+        return {"ok": True, "note": "", "at": _dt.datetime.now(_dt.timezone.utc)}
+    return {**st, "at": getattr(_TLS, f"{source}_at", None)}
+
+
 _DECISIONS_STATUS: dict = {"ok": False, "note": "not read yet"}
 
 
@@ -95,7 +115,7 @@ def fetch_decisions() -> list[dict]:
     """Active decisions via the LAPI bouncer endpoint (GET /v1/decisions). Returns [] on any failure and records why in
     :func:`decisions_status`, so an empty list from a failed read is never mistaken for 'CrowdSec holds no decisions'."""
     if not CROWDSEC_BOUNCER_KEY:
-        _DECISIONS_STATUS.update(ok=False, note="CrowdSec bouncer key not configured")
+        _set_status(_DECISIONS_STATUS, "decisions", ok=False, note="CrowdSec bouncer key not configured")
         return []
     try:
         r = httpx.get(
@@ -104,22 +124,22 @@ def fetch_decisions() -> list[dict]:
             timeout=8.0,
         )
     except Exception as e:  # noqa: BLE001
-        _DECISIONS_STATUS.update(ok=False, note=f"LAPI request failed ({type(e).__name__})")
+        _set_status(_DECISIONS_STATUS, "decisions", ok=False, note=f"LAPI request failed ({type(e).__name__})")
         return []
     if r.status_code != 200:
-        _DECISIONS_STATUS.update(ok=False, note=f"LAPI decisions HTTP {r.status_code}")
+        _set_status(_DECISIONS_STATUS, "decisions", ok=False, note=f"LAPI decisions HTTP {r.status_code}")
         return []
     try:
         data = r.json()
     except Exception:  # noqa: BLE001
-        _DECISIONS_STATUS.update(ok=False, note="LAPI decisions: malformed response")
+        _set_status(_DECISIONS_STATUS, "decisions", ok=False, note="LAPI decisions: malformed response")
         return []
     if data is None:                                   # CrowdSec answers `null` for "no decisions"
         data = []
     if not isinstance(data, list):
-        _DECISIONS_STATUS.update(ok=False, note="LAPI decisions: unexpected response")
+        _set_status(_DECISIONS_STATUS, "decisions", ok=False, note="LAPI decisions: unexpected response")
         return []
-    _DECISIONS_STATUS.update(ok=True, note="")
+    _set_status(_DECISIONS_STATUS, "decisions", ok=True, note="")
     return data
 
 
@@ -136,23 +156,38 @@ def fetch_alerts() -> list[dict]:
     :func:`alerts_status`, so an empty list from a failed read is never mistaken for 'no alerts'."""
     rc, out, _err = _cscli(["alerts", "list", "-o", "json"])
     if rc != 0:
-        _ALERTS_STATUS.update(ok=False, note=f"cscli failed (exit {rc})")
+        _set_status(_ALERTS_STATUS, "alerts", ok=False, note=f"cscli failed (exit {rc})")
         return []
     if not out.strip():
-        _ALERTS_STATUS.update(ok=False, note="cscli printed nothing")
+        _set_status(_ALERTS_STATUS, "alerts", ok=False, note="cscli printed nothing")
         return []
     try:
         data = json.loads(out)
     except Exception:  # noqa: BLE001
-        _ALERTS_STATUS.update(ok=False, note="cscli output is not JSON")
+        _set_status(_ALERTS_STATUS, "alerts", ok=False, note="cscli output is not JSON")
         return []
     if data is None:                                   # cscli prints `null` for "no alerts"
         data = []
     if not isinstance(data, list):
-        _ALERTS_STATUS.update(ok=False, note="cscli output has an unexpected shape")
+        _set_status(_ALERTS_STATUS, "alerts", ok=False, note="cscli output has an unexpected shape")
         return []
-    _ALERTS_STATUS.update(ok=True, note="")
+    _set_status(_ALERTS_STATUS, "alerts", ok=True, note="")
     return data
+
+
+def read_decisions() -> tuple[list[dict], dict]:
+    """(data, status) of one decisions read. The status is this call's own (thread-local) and carries the read's finish
+    time under "at"; it is never another request's result."""
+    _TLS.decisions_status = None
+    data = fetch_decisions()
+    return data, _own_read("decisions")
+
+
+def read_alerts() -> tuple[list[dict], dict]:
+    """(data, status) of one alerts read; see :func:`read_decisions`."""
+    _TLS.alerts_status = None
+    data = fetch_alerts()
+    return data, _own_read("alerts")
 
 
 # ── pure display helpers ─────────────────────────────────────────────────────
@@ -217,11 +252,13 @@ def fetch_activity(force: bool = False) -> dict:
         return _CACHE["data"]
 
     connected = crowdsec_connected()
-    decisions = fetch_decisions() if connected else []
-    alerts = fetch_alerts() if connected else []
     not_read = {"ok": False, "note": "CrowdSec unreachable"}
-    d_status = decisions_status() if connected else dict(not_read)
-    a_status = alerts_status() if connected else dict(not_read)
+    if connected:
+        decisions, d_status = read_decisions()
+        alerts, a_status = read_alerts()
+    else:
+        decisions, alerts, d_status, a_status = [], [], dict(not_read), dict(not_read)
+    d_at, a_at = d_status.pop("at", None), a_status.pop("at", None)       # each source's OWN read time
 
     # --- decisions table (active bans) ---
     decision_rows = []
@@ -261,9 +298,10 @@ def fetch_activity(force: bool = False) -> dict:
     active_bans = len([d for d in decisions if (d.get("type") or "ban") == "ban"])
 
     from datetime import datetime, timezone, timedelta
-    read_dt = datetime.now(timezone.utc)
-    stamp, stamp_iso = read_dt.strftime("%Y-%m-%d %H:%M:%S UTC"), read_dt.isoformat(timespec="seconds")
-    both_ok = d_status["ok"] and a_status["ok"]
+    def _fmt(dt) -> str:
+        return dt.strftime("%Y-%m-%d %H:%M:%S UTC") if dt else ""
+    both_ok = d_status["ok"] and a_status["ok"] and d_at and a_at
+    last_dt = max(d_at, a_at) if both_ok else None
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
     def _within_24h(iso: str) -> bool:
@@ -300,10 +338,10 @@ def fetch_activity(force: bool = False) -> dict:
         "core": "crowdsec",
         "connected": connected,
         # read_at is set only when BOTH sources were read; each source also has its own stamp and status
-        "read_at": stamp if both_ok else "",
-        "read_at_iso": stamp_iso if both_ok else "",
-        "decisions_read_at": stamp if d_status["ok"] else "",
-        "alerts_read_at": stamp if a_status["ok"] else "",
+        "read_at": _fmt(last_dt),
+        "read_at_iso": last_dt.isoformat(timespec="seconds") if last_dt else "",
+        "decisions_read_at": _fmt(d_at) if d_status["ok"] else "",
+        "alerts_read_at": _fmt(a_at) if a_status["ok"] else "",
         "decisions_status": d_status,
         "front_url": CROWDSEC_FRONT_URL,
         "has_threat": has_threat,
@@ -314,7 +352,7 @@ def fetch_activity(force: bool = False) -> dict:
              "note": (f"{len(alerts)} total in store" if a_status["ok"] else a_status["note"])},
             {"label": "Source IPs", "value": (str(unique_sources) if d_status["ok"] else "not read"),
              "note": ("unique sources in active decisions" if d_status["ok"] else d_status["note"])},
-            {"label": "Last event", "value": last_event, "note": top_scenarios[0][0] if top_scenarios else "—"},
+            {"label": "Last event", "value": (last_event if a_status["ok"] else "not read"), "note": top_scenarios[0][0] if top_scenarios else "—"},
         ],
         "alerts_status": a_status,
         "decisions": decision_rows,
