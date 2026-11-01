@@ -136,7 +136,8 @@ The sentinel can also read alerts from the CrowdSec LAPI with a machine (watcher
     `{"status":"pending_approval","summary":"block <ip>"}` — never auto-bans.
   - `"approve_block"` `{ip, duration?, reason?}` → the approved path: actually runs
     `cscli decisions add` to enforce the ban, then refreshes the dashboard cache. Without
-    `SENTINEL_BLOCK_ENABLED` this is a **dry run**: the response says `Dry run: nothing was blocked`.
+    `SENTINEL_BLOCK_ENABLED` this route returns a **dry run**: the response says `Dry run: nothing was blocked`.
+    Executing a real block needs an operator credential and that enable flag.
   - `"triage"` → summarizes active decisions + alerts (severity mix, top scenarios);
     adds a one-line LLM reasoning blurb iff `ANTHROPIC_API_KEY` is set.
 

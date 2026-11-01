@@ -60,32 +60,32 @@ Categories: `read-only-state` (reads state, writes nothing observable) / `writes
 | `document.propose_patch` | document-editor | read | read-only-state | apps/document-editor/operator.py:35 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `document.publish` | document-editor | write | launches external process or network | apps/document-editor/operator.py:132 | yes | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `document.set_label` | document-editor | write | launches external process or network | apps/document-editor/operator.py:146 | yes | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `backup_status` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1186 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `ban_ip` | edge-sentinel | write | launches external process or network | apps/edge-sentinel/app.py:599 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `explain_alert` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1142 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `explain_vulnerability` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1152 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `list_bans` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1141 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `list_scannable_apps` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1161 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `list_vulnerabilities` | edge-sentinel | write | dynamically selected behaviour | apps/edge-sentinel/app.py:1151 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `malware_scan` | edge-sentinel | write | dynamically selected behaviour | apps/edge-sentinel/app.py:1177 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `network_access_review` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1181 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `network_posture` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1182 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `propose_network_policy` | edge-sentinel | write | launches external process or network | apps/edge-sentinel/app.py:1183 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `sbom` | edge-sentinel | write | dynamically selected behaviour | apps/edge-sentinel/app.py:1165 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `scan_app` | edge-sentinel | write | dynamically selected behaviour | apps/edge-sentinel/app.py:1154 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `scan_apps` | edge-sentinel | write | dynamically selected behaviour | apps/edge-sentinel/app.py:1156 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `scan_deployment` | edge-sentinel | write | dynamically selected behaviour | apps/edge-sentinel/app.py:1168 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `scan_results` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1174 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `scan_status` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1172 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `scanner_status` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1166 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `backup_status` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1277 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `ban_ip` | edge-sentinel | write | launches external process or network | apps/edge-sentinel/app.py:684 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `explain_alert` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1233 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `explain_vulnerability` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1243 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `list_bans` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1232 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `list_scannable_apps` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1252 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `list_vulnerabilities` | edge-sentinel | write | dynamically selected behaviour | apps/edge-sentinel/app.py:1242 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `malware_scan` | edge-sentinel | write | dynamically selected behaviour | apps/edge-sentinel/app.py:1268 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `network_access_review` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1272 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `network_posture` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1273 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `propose_network_policy` | edge-sentinel | write | launches external process or network | apps/edge-sentinel/app.py:1274 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `sbom` | edge-sentinel | write | dynamically selected behaviour | apps/edge-sentinel/app.py:1256 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `scan_app` | edge-sentinel | write | dynamically selected behaviour | apps/edge-sentinel/app.py:1245 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `scan_apps` | edge-sentinel | write | dynamically selected behaviour | apps/edge-sentinel/app.py:1247 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `scan_deployment` | edge-sentinel | write | dynamically selected behaviour | apps/edge-sentinel/app.py:1259 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `scan_results` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1265 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `scan_status` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1263 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `scanner_status` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1257 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `sentinel.block_ip` | edge-sentinel | write | launches external process or network | apps/edge-sentinel/operator.py:37 | yes | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `sentinel.triage` | edge-sentinel | read | read-only-state | apps/edge-sentinel/operator.py:29 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `sentinel.unblock_ip` | edge-sentinel | write | launches external process or network | apps/edge-sentinel/operator.py:50 | yes | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `supply_chain_scan` | edge-sentinel | write | dynamically selected behaviour | apps/edge-sentinel/app.py:1149 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `threat_summary` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1140 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `vuln_db_lookup` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1162 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `vuln_db_permissions` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1164 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
-| `wazuh_status` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1179 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `supply_chain_scan` | edge-sentinel | write | dynamically selected behaviour | apps/edge-sentinel/app.py:1240 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `threat_summary` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1231 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `vuln_db_lookup` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1253 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `vuln_db_permissions` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1255 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
+| `wazuh_status` | edge-sentinel | read | read-only-state | apps/edge-sentinel/app.py:1270 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `assistant.ask` | growth-assistant | read | read-only-state | apps/growth-assistant/operator.py:127 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `assistant.cold_outreach` | growth-assistant | write | writes-local-or-persistent-artifacts | apps/growth-assistant/operator.py:97 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |
 | `assistant.community_blueprint` | growth-assistant | write | writes-local-or-persistent-artifacts | apps/growth-assistant/operator.py:88 | no | classified by reading the code (AI-assisted review, 2026-10; not an external audit) |

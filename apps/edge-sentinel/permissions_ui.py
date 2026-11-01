@@ -220,7 +220,7 @@ code{background:#000;border:1px solid var(--bd);border-radius:5px;padding:1px 6p
 <div class="wrap">
 <header>
 <h1>&#128274; Vuln-DB Access Control &mdash; interactive permissions demo</h1>
-<p>The same retrieval, two ways &mdash; <b>permissionless</b> (Security Admin, left) vs <b>permissioned</b> (the scoped Query Agent, right). Change the agent's grant on <code id="res">context_runtime.vulns</code> below and the right column re-slices live: withheld hits are <b>dimmed</b> (row scope), masked fields show as <b>&bull;&bull;&bull;</b>. <span id="src"><b style="color:#e7d488">Data source:</b> read when the page loads. If the Apache Doris vulnerability table is not reachable, the rows are built-in <b>SAMPLE DATA</b>.</span></p>
+<p>The same retrieval, two ways &mdash; <b>permissionless</b> (Security Admin, left) vs <b>permissioned</b> (the scoped Query Agent, right). Change the agent's grant on <code id="res">context_runtime.vulns</code> below and the right column re-slices live: withheld hits are <b>dimmed</b> (row scope), masked fields show as <b>&bull;&bull;&bull;</b>. <span id="src"><b style="color:#e7d488">Data source:</b> none loaded yet. The rows are read when the page loads; if the Apache Doris vulnerability table is not reachable, they are built-in <b>SAMPLE DATA</b>.</span></p>
 </header>
 
 <div class="controls">

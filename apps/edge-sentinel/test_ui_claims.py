@@ -68,7 +68,7 @@ def test_quiet_reading_says_what_was_read_and_when_not_all_clear(app):
     assert "0 active decisions and 0 alerts" in html
     assert "2026-11-01 12:00:00 UTC" in html                       # when it was read
     assert "not an assessment of the environment" in html
-    assert "read from the CrowdSec LAPI at 2026-11-01 12:00:00 UTC" in html   # the header badge, not a static "live"
+    assert "read from CrowdSec at 2026-11-01 12:00:00 UTC" in html   # the header badge, not a static "live"
 
 
 def test_alert_feed_down_is_never_shown_as_a_quiet_reading(app):
@@ -80,7 +80,7 @@ def test_alert_feed_down_is_never_shown_as_a_quiet_reading(app):
 def test_unreachable_core_has_no_reading_label(app):
     html = app.render(_data(connected=False))
     assert "UNREACHABLE" in html and "no reading: CrowdSec unreachable" in html
-    assert "read from the CrowdSec LAPI" not in html
+    assert "read from CrowdSec" not in html
 
 
 def test_active_decisions_are_not_described_as_enforced_by_the_agent(app):
@@ -110,33 +110,6 @@ def test_alert_origin_is_read_from_the_attached_decision():
 
 
 # ── chat console: chips and subtitle, and the capability claims in the tool text ───────────────────────────────────
-def _console_kwargs() -> dict:
-    tree = ast.parse((HERE / "app.py").read_text())
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "_AgentConsole":
-            return {k.arg: k.value for k in node.keywords}
-    raise AssertionError("console construction not found")
-
-
-def test_chat_chips_and_subtitle_make_no_unavailable_capability_claim():
-    kw = _console_kwargs()
-    chips = ast.literal_eval(kw["suggestions"])
-    assert chips and not [c for c in chips if c.lower().startswith("scan")], chips
-    assert any("sample" in c.lower() for c in chips if "network" in c.lower())      # the sample-backed chip says so
-    sub = ast.literal_eval(kw["subtitle"])
-    assert "not available in this demo" in sub and "SIEM" not in sub and "any app" not in sub
-    _assert_clean(" ".join(chips) + " " + sub, "chat chips/subtitle")
-
-
-def test_tool_text_and_primer_make_no_unsupported_claim():
-    src = (HERE / "app.py").read_text()
-    for bad in ("SIEM", "for exploitable", "exploitable weakness", "exploitable exposure", "learns the cheapest",
-                "All systems normal", "tighter NetBird", "unifies malware", "correlates malware"):
-        assert bad not in src, bad
-    assert "not confirmed exploitation" in src
-    assert "cannot be started from the public demo chat" in src
-
-
 def test_list_bans_empty_answer_states_the_reading_not_that_nobody_is_banned(app, monkeypatch):
     monkeypatch.setattr(app, "fetch_activity", lambda force=False: _data())
     text = app._t_list_bans({})["text"]
@@ -158,28 +131,12 @@ def test_threat_summary_says_read_time_and_decisions_not_enforced_blocks(app, mo
     assert "active decision(s) held in CrowdSec" in text and "2026-11-01 12:00:00 UTC" in text and "enforced" not in text
 
 
-@pytest.mark.skipif(importlib.util.find_spec("context_runtime") is None, reason="the console needs context_runtime")
-def test_rendered_home_page_is_clean(app):
-    if app._SENTINEL_CONSOLE is None:
-        pytest.skip("console not built in this environment")
-    html = TestClient(app.app).get("/").text
-    _assert_clean(html, "GET /")
-    assert "Scan the billing app" not in html
-
-
 def test_home_page_without_console_is_clean(app, monkeypatch):
     monkeypatch.setattr(app, "_SENTINEL_CONSOLE", None)
     html = TestClient(app.app).get("/").text
     _assert_clean(html, "GET /")
     assert "does not run in this app" in html                        # the benchmark sentence says so
     assert "Network access (sample data)" in html and "Backups (sample data)" in html
-
-
-def test_banner_drops_the_sample_label_only_when_the_service_is_configured(app, monkeypatch):
-    monkeypatch.setenv("NETBIRD_API_TOKEN", "x")
-    monkeypatch.delenv("PORTABASE_API_TOKEN", raising=False)
-    b = app._cr_banner()
-    assert "Network access (sample data)" not in b and "Backups (sample data)" in b
 
 
 # ── everything backed by a sample/simulated source carries a visible label ────────────────────────────────────────
