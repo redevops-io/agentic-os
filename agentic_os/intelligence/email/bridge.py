@@ -11,12 +11,16 @@ Dependency-light JSONL persistence, mirroring the EvidenceValueStore.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Optional
 
+from agentic_os._platform.files import append_line as _append_line, fsync_enabled, locked_append
 from runtime_contracts.protocol import (
     EmailDeliveryProvider, EmailDeliveryReceipt, EmailDeliveryStatus, EmailSendRequest, EmailSubmitFailure,
 )
+
+_log = logging.getLogger(__name__)
 
 
 class SuppressionList:
@@ -40,9 +44,8 @@ class SuppressionList:
         key = (tenant, recipient)
         if key in self._set:
             return False
-        self._set.add(key)
-        with open(self.path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps({"tenant": tenant, "recipient": recipient, "reason": reason}) + "\n")
+        _append_line(self.path, json.dumps({"tenant": tenant, "recipient": recipient, "reason": reason}), fsync=fsync_enabled())
+        self._set.add(key)                      # in memory only once the record is on disk: a failed write must not look like a suppression
         return True
 
 
@@ -53,8 +56,12 @@ class ReceiptStore:
         os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
 
     def append(self, receipt: EmailDeliveryReceipt) -> None:
-        with open(self.path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(receipt.canonical_form()) + "\n")
+        _append_line(self.path, json.dumps(receipt.canonical_form()), fsync=fsync_enabled())      # the idempotency record: forced to disk
+
+    def preflight(self) -> None:
+        """Prove a receipt can be recorded NOW (the directory exists, the file can be created and its lock taken) without writing one. Raises
+        ``OSError`` / ``LockTimeout`` otherwise, so ``send_email`` can refuse to send what it could not record."""
+        locked_append(self.path, b"")
 
     def _rows(self) -> list[dict]:
         if not os.path.exists(self.path):
@@ -122,9 +129,20 @@ def send_email(
             idempotency_key=request.idempotency_key, status=EmailDeliveryStatus.ACCEPTED,
             reason="idempotent replay — already delivered", cost=0.0)
 
-    receipt = provider.send(request)
     if receipts is not None:
-        receipts.append(receipt)
+        receipts.preflight()                    # cannot record a receipt: fail BEFORE sending, never a send without a record
+    receipt = provider.send(request)
+    # The message is out. From here a failure to record must not turn into an exception the caller retries (that would send it twice): it is
+    # logged at ERROR with the whole record, so the receipt and the suppression can be restored from the log.
+    if receipts is not None:
+        try:
+            receipts.append(receipt)
+        except Exception:  # noqa: BLE001
+            _log.exception("email SENT but its receipt could not be recorded; record: %s", json.dumps(receipt.canonical_form()))
     if suppression is not None and receipt.should_suppress():
-        suppression.add(tenant, recipient, reason=receipt.status.value)
+        try:
+            suppression.add(tenant, recipient, reason=receipt.status.value)
+        except Exception:  # noqa: BLE001
+            _log.exception("email receipt says suppress but the suppression could not be recorded: tenant=%s recipient=%s reason=%s",
+                           tenant, recipient, receipt.status.value)
     return receipt

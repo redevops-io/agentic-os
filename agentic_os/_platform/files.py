@@ -22,7 +22,7 @@ import stat
 import tempfile
 import time
 
-from . import _acl
+from . import _acl, locks
 
 _WINDOWS = os.name == "nt"
 if _WINDOWS:
@@ -185,6 +185,94 @@ def replace_file(src, dst) -> None:
             if not is_sharing_violation(e) or attempt == _REPLACE_ATTEMPTS - 1:
                 raise
             time.sleep(_REPLACE_DELAY_S)
+
+
+#: How long an append or a locked rewrite waits for the file's lock before it raises ``LockTimeout`` (a stuck holder ends in an error, not a hang).
+APPEND_LOCK_TIMEOUT_S = 10.0
+
+
+def fsync_enabled() -> bool:
+    """Whether evidentiary appends are forced to disk (default on). ``AGENTIC_OS_EVENT_FSYNC=0`` turns it off, the same switch the mission
+    event log uses (durability traded for speed, for tests)."""
+    return os.environ.get("AGENTIC_OS_EVENT_FSYNC", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def _lock_error(path, e: "locks.LockTimeout") -> "locks.LockTimeout":
+    return locks.LockTimeout(f"could not take the lock on {path}: {e}. Another process holds it (a stuck writer?); nothing was written.")
+
+
+def locked_append(path, record, *, fsync: bool = False, makedirs: bool = True, timeout: "float | None" = APPEND_LOCK_TIMEOUT_S) -> None:
+    """Append ``record`` (``bytes``, or ``str`` encoded as UTF-8) to ``path`` as ONE write while holding the file's inter-process lock, so
+    concurrent appenders (threads and processes) never interleave or overwrite each other's records.
+
+    Lock-free appending relies on POSIX ``O_APPEND`` being atomic. On Windows the C runtime emulates it as "seek to the end, then write", which
+    two writers with their own descriptors can interleave: one record overwrites another and is silently lost. Here the file is opened in
+    binary mode (no newline translation: ``\\n`` stays ``\\n`` on every OS), locked through ``locks.locked`` (a byte-range ``LockFileEx`` lock
+    on Windows, ``flock`` on POSIX; handles in one process conflict too, so threads are serialised as well) and written in a single call; the
+    lock is released on close. If the file does not end in a newline (a writer died mid-record), a newline is written first, in the same call,
+    so the next record is not glued onto the fragment. ``fsync`` forces the record to disk before the lock is released.
+
+    The wait for the lock is bounded by ``timeout`` seconds (default ``APPEND_LOCK_TIMEOUT_S``; ``None`` waits without bound on POSIX and for
+    the Windows default bound there): a lock that stays held raises ``locks.LockTimeout`` and nothing is written. The guarantee is for LOCAL
+    filesystems: ``flock`` over NFS is emulated with byte-range locks that do not serialise threads of one process, and a mount without lock
+    support raises ``OSError`` (nothing is written then either).
+
+    The lock lives on the data file itself, so no sidecar file appears beside it, and the file must not be replaced (``os.replace``) under it:
+    a replacement is a different file with a different lock. Rewrite in place under ``locked_rewrite`` instead. On Windows a file this creates
+    is created private (see ``touch_private``)."""
+    data = record.encode("utf-8") if isinstance(record, str) else bytes(record)
+    path = os.fspath(path)
+    if makedirs:
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    touch_private(path)
+    try:
+        with open(path, "a+b") as fh, locks.locked(fh, timeout):
+            if data:
+                size = fh.seek(0, os.SEEK_END)
+                if size:
+                    fh.seek(size - 1)
+                    if fh.read(1) != b"\n":                       # a torn tail: end it first, in the same write
+                        data = b"\n" + data
+                fh.write(data)
+                fh.flush()
+                if fsync:
+                    os.fsync(fh.fileno())
+    except locks.LockTimeout as e:
+        raise _lock_error(path, e) from e
+
+
+def append_line(path, line: str, *, fsync: bool = False, makedirs: bool = True, timeout: "float | None" = APPEND_LOCK_TIMEOUT_S) -> None:
+    """``locked_append`` of one text record terminated by a bare ``\\n``. ``line`` must not contain a line break: a record that spans lines
+    would be read back as several (a ``ValueError`` here, not a corrupt file)."""
+    if "\n" in line or "\r" in line:
+        raise ValueError("a line record must not contain a line break")
+    locked_append(path, line + "\n", fsync=fsync, makedirs=makedirs, timeout=timeout)
+
+
+def locked_rewrite(path, transform, *, fsync: bool = False, timeout: "float | None" = APPEND_LOCK_TIMEOUT_S) -> bool:
+    """Rewrite an existing file IN PLACE under the same lock ``locked_append`` takes, so a rewrite cannot destroy a concurrent append (and an
+    append cannot interleave with the rewrite): ``transform(old_bytes)`` returns the new content, or ``None`` to leave the file as it is. The
+    inode is kept (open ``r+b``, truncate, write), which is what keeps the lock meaningful. Returns True when the file was rewritten, False
+    when it was left alone or does not exist. A crash between the truncate and the end of the write can leave a short file: use it for
+    files whose records can be re-derived or are re-appended, not for a single irreplaceable copy."""
+    path = os.fspath(path)
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path, "r+b") as fh, locks.locked(fh, timeout):
+            old = fh.read()
+            new = transform(old)
+            if new is None:
+                return False
+            fh.seek(0)
+            fh.truncate()
+            fh.write(new)
+            fh.flush()
+            if fsync:
+                os.fsync(fh.fileno())
+            return True
+    except locks.LockTimeout as e:
+        raise _lock_error(path, e) from e
 
 
 def create_private_temp(directory, prefix: str, suffix: str) -> "tuple[int, str]":

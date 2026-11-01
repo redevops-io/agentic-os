@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Dict, List, Optional, Protocol, Tuple
 
+from agentic_os._platform.files import append_line as _append_line, fsync_enabled
 from agentic_os.priority_engine import (
     DecisionOpportunity, PriorityPolicy, SelectedAction, UtilityFn, normalize_action_label, priority_score,
     select_action)
@@ -170,11 +171,7 @@ class FileInterventionStore:
     path: str
 
     def _append_line(self, obj: dict) -> None:
-        d = os.path.dirname(self.path)
-        if d:
-            os.makedirs(d, exist_ok=True)
-        with open(self.path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(obj) + "\n")
+        _append_line(self.path, json.dumps(obj), fsync=fsync_enabled())        # one locked write: lines never interleave or get lost (Windows append is not atomic)
 
     def append(self, rec: InterventionRecord) -> None:
         self._append_line(_rec_to_dict(rec))

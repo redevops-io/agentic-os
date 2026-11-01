@@ -51,7 +51,11 @@ ADJACENT = frozenset({
     "agentic_os.permissions_setup", "agentic_os.permissions_profiles", "agentic_os.app_gate", "agentic_os.priority_engine",
     "agentic_os.trusted_import", "agentic_os.outcome_store", "agentic_os.mission.fork_join",
     "agentic_os.mission.membrane", "agentic_os.mission.device_posture", "agentic_os.mission.execution_backend",
-    "agentic_os.mission.gate_notify", "agentic_os.mission.provisioning", "agentic_os.mission.installer", "agentic_os.secrets", "agentic_os.secrets.stores",
+    "agentic_os.mission.gate_notify",
+    "agentic_os.policy_promotion", "agentic_os.intervention_record", "agentic_os.intelligence", "agentic_os.intelligence.value_store",
+    "agentic_os.intelligence.email", "agentic_os.intelligence.email.bridge", "agentic_os.world", "agentic_os.world.outreach",
+    "agentic_os.mission.apps_e2e_runner", "agentic_os.mission.apps_e2e", "agentic_os.mission.decision_provider", "agentic_os.revenue",
+    "agentic_os.revenue.discovery_bridge", "agentic_os.mission.provisioning", "agentic_os.mission.installer", "agentic_os.secrets", "agentic_os.secrets.stores",
     "agentic_os.secrets.resolve", "agentic_os.secrets.factory", "agentic_os.secrets.bootstrap",
 })
 
