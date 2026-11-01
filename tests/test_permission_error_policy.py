@@ -84,6 +84,7 @@ def test_only_windows_sharing_violations_are_wrapped(tmp_path, monkeypatch, as_w
 
 
 def test_a_sharing_violation_wins_nothing_on_a_platform_that_is_not_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(files, "_WINDOWS", False)                    # (a no-op off Windows; on the Windows lane it makes the layer behave as POSIX)
     monkeypatch.setattr(os, "replace", lambda *a, **k: (_ for _ in ()).throw(_perm_error(32)))
     with pytest.raises(PermissionError) as e:
         perm._atomic_write(tmp_path / "f", b"new")
