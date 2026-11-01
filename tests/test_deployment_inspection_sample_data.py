@@ -90,3 +90,31 @@ def test_crowdsec_finding_does_not_claim_enforcement_against_live_sources():
 def test_unread_decisions_are_not_a_finding():
     act = {"connected": True, "has_threat": True, "decisions": [{"value": "x"}], "decisions_status": {"ok": False, "note": "HTTP 401"}}
     assert [f for f in derive_findings(snap({"live": True}, {"live": True}, act)) if f.kind == "active_threats"] == []
+
+
+# ── malformed and conflicting payloads must neither raise nor hide findings ─────────────────────────────────────
+def test_conflicting_flags_are_not_trusted_to_drop_findings():
+    assert not is_sample_payload({"live": False, "data_status": "live"}) and not is_sample_payload({"live": True, "data_status": "sample"})
+    assert is_sample_payload({"live": False, "data_status": "sample"})
+    s = snap({"live": False, "data_status": "live"}, {"live": True, "data_status": "sample"})
+    assert {"broad_policy", "no_backup"} <= {f.kind for f in derive_findings(s)}               # read as live: findings kept
+    assert run_inspection("t", fetch=lambda b, p: s.get(p)).sample_sources == []
+
+
+def test_a_non_object_decisions_status_does_not_raise():
+    for bad in ("down", ["ok"], 7, None):
+        act = {"connected": True, "has_threat": True, "decisions": [{"value": "x"}], "decisions_status": bad}
+        kinds = [f.kind for f in derive_findings(snap({"live": True}, {"live": True}, act))]
+        assert "active_threats" in kinds                      # an unreadable status is not a reason to drop the finding
+
+
+def test_malformed_payload_shapes_do_not_raise():
+    junk = {"/health": "up", "/api/activity": [1], "/api/network/review": ["x"], "/api/backups/status": "nope"}
+    assert derive_findings(junk) == []
+    s = snap({"live": True}, {"live": True})
+    s["/api/network/review"]["risks"] = "oops"
+    s["/api/backups/status"]["never"] = {"a": 1}
+    s["/api/activity"] = {"has_threat": True, "decisions": "many"}
+    kinds = {f.kind for f in derive_findings(s)}
+    assert "no_offsite" in kinds and "broad_policy" not in kinds
+    assert run_inspection("t", fetch=lambda b, p: junk.get(p)).connected is False
