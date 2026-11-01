@@ -21,6 +21,7 @@ import json
 import secrets
 from pathlib import Path
 
+from ._platform import files as _files
 from .permissions import GrantStorageError, GrantStore, _ensure_private_dir, provision_key_file
 from .permissions_profiles import GateProfile, build_gate
 from .tool_actions import TOOL_ACTIONS
@@ -65,10 +66,15 @@ def local_user(directory: str) -> str:
         st = os.fstat(fd)
         if not _stat.S_ISREG(st.st_mode):
             raise GrantStorageError(f"the local profile {path} is not a regular file")
-        if st.st_uid != os.geteuid():
-            raise GrantStorageError(f"the local profile {path} is not owned by the user running this process")
-        if _stat.S_IMODE(st.st_mode) != 0o600:
-            raise GrantStorageError(f"the local profile {path} must be mode 0600 (it is {_stat.S_IMODE(st.st_mode):04o}): chmod 600 it, or re-run `agentic-os permissions init`")
+        if _files.HAS_POSIX_MODES:
+            if st.st_uid != os.geteuid():
+                raise GrantStorageError(f"the local profile {path} is not owned by the user running this process")
+            if _stat.S_IMODE(st.st_mode) != 0o600:
+                raise GrantStorageError(f"the local profile {path} must be mode 0600 (it is {_stat.S_IMODE(st.st_mode):04o}): chmod 600 it, or re-run `agentic-os permissions init`")
+        else:       # Windows: no mode bits or uids; the file must be under the user's profile with a DACL that shows no access for anyone else
+            why = _files.private_file_problem(path)
+            if why:
+                raise GrantStorageError(f"the local profile {path} {why}: re-run `agentic-os permissions init`, or restrict it to your account (icacls)")
         with os.fdopen(fd, "rb") as f:
             fd = -1
             raw = f.read(65536)
@@ -107,15 +113,14 @@ def write_key_env_file(path: str, *, from_key_file: str | None = None) -> str:
             raise GrantStorageError(f"the key file {from_key_file} is unusable ({type(e).__name__}); nothing written") from e
     else:
         key = base64.b64encode(secrets.token_bytes(32)).decode()
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     parent = os.path.dirname(os.path.abspath(path))
     _ensure_private_dir(parent)                              # a missing parent (the default is under ~/.config) is created private
     try:
-        fd = os.open(path, flags, 0o600)
+        fd = _files.create_exclusive(path)
     except FileExistsError:
         raise GrantStorageError(f"{path} already exists; not overwriting a key (delete it deliberately if you mean to "
                                 f"replace it — a different key cannot open grants already encrypted with the old one)") from None
-    with os.fdopen(fd, "w") as f:
+    with os.fdopen(fd, "w", newline="\n") as f:                 # LF on every OS: a CRLF would end up inside the value for an env-file reader
         f.write(f"PERMISSIONS_KEY={key}\n")
         f.flush()
         os.fsync(f.fileno())

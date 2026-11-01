@@ -47,7 +47,7 @@ ROOTS = (
 # Modules outside the closure that the core's tests also exercise: the basic permissions plane, the durable
 # stores and the containment/posture code (all stdlib plus the packages above).
 ADJACENT = frozenset({
-    "agentic_os.permissions_setup", "agentic_os.permissions_profiles", "agentic_os.app_gate",
+    "agentic_os.permissions_setup", "agentic_os.permissions_profiles", "agentic_os.app_gate", "agentic_os.priority_engine",
     "agentic_os.trusted_import", "agentic_os.outcome_store", "agentic_os.mission.fork_join",
     "agentic_os.mission.membrane", "agentic_os.mission.device_posture", "agentic_os.mission.execution_backend",
     "agentic_os.mission.gate_notify", "agentic_os.secrets", "agentic_os.secrets.stores",

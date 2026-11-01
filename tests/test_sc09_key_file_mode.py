@@ -11,6 +11,7 @@ import subprocess
 import sys
 
 import pytest
+from tests._posix_marks import posix_modes
 
 from agentic_os import permissions as P
 from agentic_os.permissions import GrantStorageError, GrantStore
@@ -33,6 +34,7 @@ def _env(monkeypatch):
 
 
 @pytest.mark.parametrize("mode", [0o644, 0o640, 0o604, 0o660, 0o666, 0o700 | 0o010])
+@posix_modes
 def test_a_key_file_wider_than_0600_is_refused_with_the_fix(tmp_path, mode):
     d = _key_dir(tmp_path, mode)
     with pytest.raises(GrantStorageError) as e:
@@ -48,6 +50,7 @@ def test_0600_and_narrower_are_accepted(tmp_path, mode):
     assert GrantStore(str(d)).status()["key_source"] == "keyfile"
 
 
+@posix_modes
 def test_a_key_file_owned_by_someone_else_is_refused(tmp_path, monkeypatch):
     d = _key_dir(tmp_path, 0o600)
     monkeypatch.setattr(os, "geteuid", lambda: os.stat(d / ".permissions.key").st_uid + 1)
@@ -55,6 +58,7 @@ def test_a_key_file_owned_by_someone_else_is_refused(tmp_path, monkeypatch):
         GrantStore(str(d))
 
 
+@posix_modes
 def test_the_dev_opt_in_uses_it_with_a_warning(tmp_path, caplog):
     d = _key_dir(tmp_path, 0o644)
     with caplog.at_level(logging.WARNING, logger="agentic_os.permissions"):
@@ -64,12 +68,14 @@ def test_the_dev_opt_in_uses_it_with_a_warning(tmp_path, caplog):
     assert "0644" in text and "wider than 0600" in text and "DEVELOPMENT" in text
 
 
+@posix_modes
 def test_the_plaintext_dev_opt_in_does_not_make_a_loose_key_file_usable(tmp_path):
     d = _key_dir(tmp_path, 0o644)
     s = GrantStore(str(d), allow_plaintext_dev=True)
     assert s.encrypted is False                                            # the unusable key file is not used: plaintext dev store
 
 
+@posix_modes
 def test_permissions_key_file_is_checked_too(tmp_path, monkeypatch):
     d = _key_dir(tmp_path, 0o644)
     monkeypatch.setenv("PERMISSIONS_KEY_FILE", str(d / ".permissions.key"))
@@ -83,6 +89,7 @@ def test_a_key_in_the_environment_is_unaffected_by_a_loose_key_file(tmp_path, mo
     assert GrantStore(str(d)).status()["key_source"] == "env"
 
 
+@posix_modes
 def test_the_message_never_contains_the_key(tmp_path):
     d = _key_dir(tmp_path, 0o644)
     key = (d / ".permissions.key").read_text().strip()
@@ -91,6 +98,7 @@ def test_the_message_never_contains_the_key(tmp_path):
     assert key not in str(e.value)
 
 
+@posix_modes
 def test_init_on_a_loose_key_file_is_refused(tmp_path):
     d = _key_dir(tmp_path, 0o644)
     env = {k: v for k, v in os.environ.items() if not k.startswith(("PERMISSIONS_", "APPROVAL_", "AGENTIC_OS_"))}

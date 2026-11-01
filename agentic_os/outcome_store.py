@@ -19,6 +19,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import List, Optional, Protocol
 
+from agentic_os._platform import files as _files, locks as _locks
 from agentic_os.priority_engine import Action, OutcomeEvent, OutcomeLog
 
 
@@ -89,35 +90,34 @@ class InMemoryOutcomeStore:
         return list(self.events)
 
 
-_WARNED_NO_FCNTL = False
 _PATH_LOCKS: dict = {}
 _PATH_LOCKS_GUARD = threading.Lock()
 
 
 class _flock:
-    """Advisory inter-process lock (fcntl.flock); a no-op where fcntl is unavailable."""
+    """Advisory inter-process lock on a lock file (flock on POSIX, LockFileEx on Windows). A platform with neither raises: the store
+    never appends unlocked."""
     def __init__(self, path: str) -> None:
         self.path, self.fd = path, None
 
     def __enter__(self):
+        _files.touch_private(self.path)                 # Windows: created private, never under the parent's ACL
+        self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
         try:
-            import fcntl
-            self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o644)
-            fcntl.flock(self.fd, fcntl.LOCK_EX)
-        except ImportError:
+            _locks.acquire(self.fd)
+        except BaseException:
+            os.close(self.fd)
             self.fd = None
-            global _WARNED_NO_FCNTL
-            if not _WARNED_NO_FCNTL:
-                _WARNED_NO_FCNTL = True
-                import logging
-                logging.getLogger(__name__).warning(
-                    "fcntl unavailable: FileOutcomeStore has no inter-process lock (single writer only; "
-                    "use the Postgres store for concurrent writers)")
+            raise
         return self
 
     def __exit__(self, *a):
         if self.fd is not None:
-            os.close(self.fd)                        # closing releases the flock
+            try:
+                _locks.release(self.fd)
+            finally:
+                os.close(self.fd)
+                self.fd = None
 
 
 @dataclass
@@ -138,7 +138,8 @@ class FileOutcomeStore:
         with tlock, _flock(self.path + ".lock"):
             if k and any(dedupe_key(e) == k for e in self.load()):
                 return                               # idempotent: same key => no second append
-            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+            _files.touch_private(self.path)
+            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)   # binary: no CRLF translation on Windows
             try:
                 os.write(fd, (json.dumps(event_to_dict(ev)) + "\n").encode("utf-8"))
             finally:
