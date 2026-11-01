@@ -94,3 +94,19 @@ def test_the_encrypted_secret_store_refuses_an_exposed_file_and_writes_private_o
     _icacls(target, "/grant", "*S-1-1-0:R")
     with pytest.raises(SecretAccessError, match="not private"):
         store._read(ref)
+
+
+def test_the_plaintext_dev_opt_in_does_not_make_an_exposed_key_file_usable(tmp_path):
+    kf, _ = perm.provision_key_file(str(tmp_path / "d"))
+    _icacls(str(kf), "/grant", "*S-1-1-0:R")
+    s = GrantStore(str(tmp_path / "d"), allow_plaintext_dev=True)
+    assert s.encrypted is False                                          # the unusable key file is not used: a plaintext dev store
+
+
+def test_the_refusal_never_contains_the_key(tmp_path):
+    kf, _ = perm.provision_key_file(str(tmp_path / "d"))
+    key = open(kf, encoding="ascii").read().strip()
+    _icacls(str(kf), "/grant", "*S-1-1-0:R")
+    with pytest.raises(GrantStorageError) as e:
+        GrantStore(str(tmp_path / "d"))
+    assert key not in str(e.value)

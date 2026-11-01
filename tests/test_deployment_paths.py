@@ -191,8 +191,8 @@ class TestTheSetupStep:
         assert pathlib.Path(kf).read_text().strip() not in r.stdout + r.stderr
         out = _py("""
             from agentic_os.permissions import GrantStore
-            s = GrantStore("%s"); print(s.status()["key_source"], [g.subject for g in s.list()], s.sealed)
-        """ % d, **_parse_env_file(envf))
+            s = GrantStore(%r); print(s.status()["key_source"], [g.subject for g in s.list()], s.sealed)
+        """ % str(d), **_parse_env_file(envf))
         assert out.returncode == 0 and out.stdout.strip() == "env ['support'] False"
 
     def test_a_damaged_key_file_is_refused_and_nothing_is_written(self, tmp_path):

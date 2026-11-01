@@ -68,6 +68,7 @@ def test_the_dev_opt_in_uses_it_with_a_warning(tmp_path, caplog):
     assert "0644" in text and "wider than 0600" in text and "DEVELOPMENT" in text
 
 
+@posix_modes
 def test_the_plaintext_dev_opt_in_does_not_make_a_loose_key_file_usable(tmp_path):
     d = _key_dir(tmp_path, 0o644)
     s = GrantStore(str(d), allow_plaintext_dev=True)
@@ -88,6 +89,7 @@ def test_a_key_in_the_environment_is_unaffected_by_a_loose_key_file(tmp_path, mo
     assert GrantStore(str(d)).status()["key_source"] == "env"
 
 
+@posix_modes
 def test_the_message_never_contains_the_key(tmp_path):
     d = _key_dir(tmp_path, 0o644)
     key = (d / ".permissions.key").read_text().strip()
