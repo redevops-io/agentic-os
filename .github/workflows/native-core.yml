@@ -26,7 +26,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-14]
+        # macos-14 is retired on 2026-11-02 (runner-images#13518); macos-15 is an Apple Silicon (arm64) image
+        os: [windows-latest, macos-15]
     env:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
