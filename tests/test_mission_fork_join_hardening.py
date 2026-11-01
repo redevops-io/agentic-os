@@ -85,7 +85,7 @@ def test_two_controller_instances_on_one_log_dispatch_exactly_once():
 
 _PROC = textwrap.dedent("""
     import sys, time, os
-    from tests._fork_support import make_rt, spec, GRANTS
+    from tests._fork_support import make_rt, spec, GRANTS, record_effect
     from agentic_os.mission.store import EventStore
     from agentic_os.mission.fork_join import ForkError
     path, mid, role, effects = sys.argv[1:5]
@@ -94,8 +94,7 @@ _PROC = textwrap.dedent("""
             if not capability.startswith("w."):
                 return {"ok": True}
             time.sleep(1.5)
-            fd = os.open(effects, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
-            os.write(fd, (inputs["tag"] + "\\n").encode()); os.close(fd)
+            record_effect(effects, inputs["tag"])
             return {"ok": True}
     rt = make_rt(EventStore(path), Op())
     rt.rehydrate(mid, policy_refs=GRANTS)
@@ -113,7 +112,8 @@ _PROC = textwrap.dedent("""
 
 
 def test_second_process_is_refused_and_each_branch_dispatches_once(tmp_path):
-    path, effects = str(tmp_path / "log.jsonl"), str(tmp_path / "effects.txt")
+    path, effects = str(tmp_path / "log.jsonl"), str(tmp_path / "effects")
+    os.mkdir(effects)                      # one file per effect (see tests/_fork_support.record_effect)
     rt, _, m = build(store=EventStore(path))
     env = {**os.environ, "PYTHONPATH": ROOT}
     run = lambda role: subprocess.Popen([sys.executable, "-c", _PROC, path, m.id, role, effects],  # noqa: E731
@@ -125,9 +125,33 @@ def test_second_process_is_refused_and_each_branch_dispatches_once(tmp_path):
     bo, be = b.communicate(timeout=60)
     assert "DONE satisfied" in ao, (ao, ae[-500:])
     assert "REFUSED" in bo, (bo, be[-500:])
-    assert sorted(open(effects).read().split()) == ["b0", "b1", "b2"]
+    assert sorted(os.listdir(effects)) == ["b0", "b1", "b2"], (sorted(os.listdir(effects)), ao[-300:])
     fresh = EventStore(path)
     assert len([e for e in fresh.for_mission(m.id) if e.type == "BranchStarted"]) == 3
+
+
+def test_the_effect_recorder_loses_nothing_when_branches_finish_at_the_same_instant(tmp_path):
+    """Regression for a Windows-only flake in the test above: three branches finished within 10 ms and the shared append file lost one line
+    although all three branches had started, run and succeeded (logs in the pull request). The recorder is now one exclusive file per effect:
+    many simultaneous writers lose nothing, and a repeated dispatch of the same branch is an error, not a quiet duplicate."""
+    from tests._fork_support import record_effect
+    n = 48
+    gate = threading.Barrier(n)
+    errs = []
+
+    def writer(i):
+        try:
+            gate.wait(10)
+            record_effect(str(tmp_path), f"b{i}")
+        except BaseException as e:  # noqa: BLE001
+            errs.append(e)
+    ts = [threading.Thread(target=writer, args=(i,)) for i in range(n)]
+    [t.start() for t in ts]
+    [t.join(30) for t in ts]
+    assert not errs, errs
+    assert sorted(os.listdir(tmp_path)) == sorted(f"b{i}" for i in range(n))
+    with pytest.raises(FileExistsError):
+        record_effect(str(tmp_path), "b0")
 
 
 def test_claim_generation_increases_and_restart_orphans_are_redispatched_only_by_newer_generation():

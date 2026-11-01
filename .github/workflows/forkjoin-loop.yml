@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest]
+        os: [windows-latest, ubuntu-latest, macos-15]
         load: [idle, loaded]
     env:
       PYTHONDONTWRITEBYTECODE: "1"
@@ -28,16 +28,26 @@ jobs:
         shell: bash
         run: |
           for i in 1 2 3 4; do (python -c "while True: pass" &) ; done
-      - name: replay the second-process test, 40 times, with diagnostics
+      - name: the OLD recorder under simultaneous writers (3 threads, 2000 rounds)
         shell: bash
-        run: python diag/loop_forkjoin.py 40
-      - name: the real test, 40 times
+        run: python diag/append_race.py 2000
+      - name: the real test, 60 times
         if: always()
         shell: bash
         run: |
           fail=0
-          for i in $(seq 1 40); do
+          for i in $(seq 1 60); do
             PYTHONPATH=. python -m pytest -q -p no:cacheprovider tests/test_mission_fork_join_hardening.py::test_second_process_is_refused_and_each_branch_dispatches_once >/tmp/o.txt 2>&1 || { fail=$((fail+1)); echo "=== run $i FAILED"; tail -25 /tmp/o.txt; }
           done
-          echo "REAL TEST RESULT $((40-fail))/40 passed"
+          echo "REAL TEST RESULT $((60-fail))/60 passed"
+          [ "$fail" -eq 0 ]
+      - name: the whole hardening module with the new regression test, 20 times
+        if: always()
+        shell: bash
+        run: |
+          fail=0
+          for i in $(seq 1 20); do
+            PYTHONPATH=. python -m pytest -q -p no:cacheprovider tests/test_mission_fork_join_hardening.py >/tmp/o2.txt 2>&1 || { fail=$((fail+1)); echo "=== module run $i FAILED"; tail -25 /tmp/o2.txt; }
+          done
+          echo "MODULE RESULT $((20-fail))/20 passed"
           [ "$fail" -eq 0 ]
