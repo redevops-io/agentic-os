@@ -597,6 +597,6 @@ class TestKeyRule:
 
 class TestLockingNeedsAPlatformThatHasIt:
     def test_without_fcntl_the_store_refuses_to_start(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(perm, "_fcntl", None)
+        monkeypatch.setattr(perm._locks, "available", lambda: False)
         with pytest.raises(RuntimeError, match="locking"):
             GrantStore(str(tmp_path))

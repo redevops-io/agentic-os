@@ -1,3 +1,6 @@
 # Text files are checked out with LF on every OS. The audit chain, the conformance vectors, the checked-in tables and the
 # golden fixtures are hashed or compared byte for byte, so a CRLF checkout (Windows, core.autocrlf) must not change them.
 * text=auto eol=lf
+# Byte-exact fixtures: never converted, on any OS.
+tests/golden/* text eol=lf
+conformance/vectors/* text eol=lf
