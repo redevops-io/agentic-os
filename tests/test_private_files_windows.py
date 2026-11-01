@@ -225,3 +225,19 @@ def test_the_temp_file_of_an_atomic_write_is_private_before_any_data_is_written(
     finally:
         os.close(fd)
         os.unlink(tmp)
+
+
+def test_the_event_log_the_outcome_store_and_the_fork_lock_are_created_private(open_dir):
+    from agentic_os.mission.fork_join import _FileLock
+    from agentic_os.mission.store import EventStore
+    from agentic_os.outcome_store import FileOutcomeStore
+    from agentic_os.priority_engine import OutcomeEvent
+    log = open_dir / "log.jsonl"
+    store = EventStore(str(log))
+    store.append("A", "m1", {"n": 1})
+    with _FileLock(store):
+        pass
+    out = open_dir / "outcomes.jsonl"
+    FileOutcomeStore(str(out)).append(OutcomeEvent(candidate_id="c1", source_app="app", accepted=True, event_id="e1"))
+    for p in (log, open_dir / "log.jsonl.forklock", out, open_dir / "outcomes.jsonl.lock"):
+        assert p.exists() and files.private_file_problem(p) is None, f"{p.name} was created exposed"

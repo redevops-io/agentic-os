@@ -54,6 +54,12 @@ class GrantStorageError(RuntimeError):
     guess about). A RuntimeError, so the admin routers answer 409 like they do for a sealed store."""
 
 
+class GrantStorageBusy(GrantStorageError, OSError):
+    """A Windows sharing violation that outlasted the bounded replace retry: the grants file is held open by another process. It is a
+    ``GrantStorageError`` (the admin routers translate it) and an ``OSError`` (so a caller that tolerates an ``OSError`` from a write, such as
+    the first rollback-counter write of a plaintext migration, tolerates this one exactly as it did the raw ``PermissionError``)."""
+
+
 def _env_yes(name: str, default: bool = False) -> bool:
     v = os.getenv(name)
     return default if v is None else v.strip().lower() in _YES
@@ -540,8 +546,11 @@ def _atomic_write(path, data: bytes) -> None:
     _refuse_symlink(path, "grants file")
     try:
         _files.atomic_write(path, data)
-    except PermissionError as e:                                  # still refused after the bounded retry (Windows: the file is held open elsewhere)
-        raise GrantStorageError(f"could not replace {path}: it is in use by another process ({type(e).__name__}); the previous file was left "
+    except PermissionError as e:
+        if not _files.is_sharing_violation(e):
+            raise                     # a directory this process may not write to, a privilege error: unchanged on every platform
+        # Windows only: the destination is still held open elsewhere after the bounded retry
+        raise GrantStorageBusy(f"could not replace {path}: it is in use by another process ({type(e).__name__}); the previous file was left "
                                 f"as it was. Retry the operation.") from e
 
 

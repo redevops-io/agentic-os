@@ -198,3 +198,118 @@ def test_concurrent_processes_do_not_duplicate_outcome_events(tmp_path):
     events = FileOutcomeStore(path).load()
     assert sorted(e.candidate_id for e in events) == sorted("c%d" % i for i in range(20))   # idempotent on the event id across processes
     assert b"\r" not in open(path, "rb").read()
+
+
+# ── the Windows wait policy: interruptible, bounded, fair (POSIX keeps the blocking flock, which the kernel already makes interruptible) ──
+
+_windows_only = pytest.mark.skipif(os.name != "nt", reason="the Windows wait policy (queue byte plus bounded polling); POSIX waits in flock")
+
+
+@_windows_only
+def test_an_unbounded_wait_is_bounded_and_ends_in_a_clear_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(locks, "_WINDOWS_DEFAULT_WAIT_S", 0.5)
+    holder, waiter = _open(tmp_path / "b.lock"), _open(tmp_path / "b.lock")
+    try:
+        locks.acquire(holder)
+        t0 = time.monotonic()
+        with pytest.raises(locks.LockTimeout, match="bounded"):
+            locks.acquire(waiter)                       # no timeout given: the Windows default bound applies
+        assert 0.4 <= time.monotonic() - t0 < 10
+        locks.release(holder)
+        locks.acquire(waiter, timeout=2)                # a timed-out waiter left nothing held
+        locks.release(waiter)
+    finally:
+        os.close(holder)
+        os.close(waiter)
+
+
+@_windows_only
+def test_a_waiting_acquire_can_be_interrupted_and_leaves_nothing_held(tmp_path):
+    import ctypes
+    import threading
+    p = tmp_path / "i.lock"
+    holder = _open(p)
+    locks.acquire(holder)
+    result = {}
+
+    def waiter():
+        fd = _open(p)
+        try:
+            locks.acquire(fd)
+        except BaseException as e:                      # noqa: BLE001 - the interrupt is what is being observed
+            result["exc"] = e
+        finally:
+            os.close(fd)
+    t = threading.Thread(target=waiter)
+    t.start()
+    time.sleep(0.3)                                     # the waiter is now waiting
+    ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(t.ident), ctypes.py_object(KeyboardInterrupt))
+    t.join(5)
+    still_waiting = t.is_alive()
+    locks.release(holder)                               # never leave the helper thread blocked, whatever the outcome
+    t.join(10)
+    os.close(holder)
+    assert not still_waiting and isinstance(result.get("exc"), KeyboardInterrupt)
+    fd = _open(p)
+    try:
+        locks.acquire(fd, timeout=2)                    # the interrupted waiter released its place in the queue
+        locks.release(fd)
+    finally:
+        os.close(fd)
+
+
+@_windows_only
+def test_a_holder_that_retakes_the_lock_in_a_loop_cannot_starve_a_waiter(tmp_path):
+    """The holder keeps the lock for 20 ms, releases it and asks again at once, until the waiter has it. Acquirers take a queue slot first, so
+    the holder cannot get back in ahead of a waiter that is already waiting: the waiter gets the lock at the first release, within a bound
+    far above that (5 s) so a slow runner cannot make this flaky."""
+    import threading
+    p = tmp_path / "f.lock"
+    got, started = threading.Event(), threading.Event()
+    rounds = []
+
+    def holder():
+        fd = _open(p)
+        try:
+            end = time.monotonic() + 30
+            while not got.is_set() and time.monotonic() < end:
+                locks.acquire(fd, timeout=20)
+                started.set()
+                time.sleep(0.02)
+                locks.release(fd)
+                rounds.append(1)
+        finally:
+            os.close(fd)
+    t = threading.Thread(target=holder)
+    t.start()
+    assert started.wait(10)
+    fd = _open(p)
+    try:
+        t0 = time.monotonic()
+        locks.acquire(fd, timeout=20)
+        waited = time.monotonic() - t0
+        got.set()
+        locks.release(fd)
+    finally:
+        os.close(fd)
+        got.set()
+        t.join(30)
+    assert waited < 5, f"the waiter waited {waited:.2f} s through {len(rounds)} holder rounds"
+
+
+@_windows_only
+def test_the_event_log_ends_a_stuck_lock_wait_in_a_clear_error(tmp_path, monkeypatch):
+    from agentic_os.mission.store import EventStore
+    monkeypatch.setattr(locks, "_WINDOWS_DEFAULT_WAIT_S", 0.5)
+    log = tmp_path / "log.jsonl"
+    store = EventStore(str(log))
+    store.append("A", "m1", {"n": 1})
+    holder = _open(log)
+    try:
+        locks.acquire(holder)
+        with pytest.raises(locks.LockTimeout, match="bounded"):
+            store.append("A", "m1", {"n": 2})
+    finally:
+        locks.release(holder)
+        os.close(holder)
+    assert [e.payload["n"] for e in EventStore(str(log)).all()] == [1]

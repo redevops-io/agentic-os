@@ -19,7 +19,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import List, Optional, Protocol
 
-from agentic_os._platform import locks as _locks
+from agentic_os._platform import files as _files, locks as _locks
 from agentic_os.priority_engine import Action, OutcomeEvent, OutcomeLog
 
 
@@ -101,6 +101,7 @@ class _flock:
         self.path, self.fd = path, None
 
     def __enter__(self):
+        _files.touch_private(self.path)                 # Windows: created private, never under the parent's ACL
         self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
         try:
             _locks.acquire(self.fd)
@@ -137,6 +138,7 @@ class FileOutcomeStore:
         with tlock, _flock(self.path + ".lock"):
             if k and any(dedupe_key(e) == k for e in self.load()):
                 return                               # idempotent: same key => no second append
+            _files.touch_private(self.path)
             fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)   # binary: no CRLF translation on Windows
             try:
                 os.write(fd, (json.dumps(event_to_dict(ev)) + "\n").encode("utf-8"))

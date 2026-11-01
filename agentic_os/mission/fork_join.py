@@ -27,7 +27,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
-from .._platform import locks as _locks
+from .._platform import files as _files, locks as _locks
 from .._platform.process import pid_alive as _pid_alive_probe
 from . import concurrency as conc
 from .approval import is_approval_key, strip_approval_keys
@@ -456,6 +456,7 @@ class _FileLock:
 
     def __enter__(self):
         if self.path:
+            _files.touch_private(self.path)           # Windows: created private, never under the parent's ACL
             self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o666)
             try:
                 _locks.acquire(self.fd)

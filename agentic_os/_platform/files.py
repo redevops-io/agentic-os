@@ -110,6 +110,17 @@ def create_exclusive(path, mode: int = 0o600) -> int:
     return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | getattr(os, "O_BINARY", 0), mode)
 
 
+def touch_private(path) -> None:
+    """Windows only (a no-op elsewhere, where the file keeps the mode its creator gives it): make sure ``path`` exists and was created private,
+    so a log or lock file that a later ``open`` would create under the parent's ACL is never created exposed. An existing file is left as it is."""
+    if not _WINDOWS or os.path.lexists(path):
+        return
+    try:
+        os.close(_win32.create_private_file(os.fspath(path)))
+    except FileExistsError:
+        pass
+
+
 def make_private(path, *, is_dir: bool = False) -> None:
     """Make an existing file or directory private: ``0600``/``0700`` on POSIX, a protected user-and-system-only DACL on
     Windows. Raises ``OSError`` on failure (a caller that cannot make it private must not use it)."""
@@ -154,6 +165,12 @@ def fsync_dir(path) -> None:
         os.close(fd)
 
 
+def is_sharing_violation(e: BaseException) -> bool:
+    """Is ``e`` a Windows sharing violation (``winerror`` 5, 32 or 33, on Windows): the only ``PermissionError`` that passes once the other
+    process lets go? Anything else (a POSIX permission problem, another Windows error) is not."""
+    return _WINDOWS and isinstance(e, PermissionError) and getattr(e, "winerror", None) in _SHARING
+
+
 def replace_file(src, dst) -> None:
     """``os.replace`` that, on Windows, retries for about a second when a reader still holds the destination open
     (a sharing violation). On POSIX it is exactly ``os.replace``."""
@@ -165,7 +182,7 @@ def replace_file(src, dst) -> None:
             os.replace(src, dst)
             return
         except PermissionError as e:
-            if getattr(e, "winerror", None) not in _SHARING or attempt == _REPLACE_ATTEMPTS - 1:
+            if not is_sharing_violation(e) or attempt == _REPLACE_ATTEMPTS - 1:
                 raise
             time.sleep(_REPLACE_DELAY_S)
 

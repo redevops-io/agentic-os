@@ -112,18 +112,19 @@ _CREATE_NEW = 1
 _FILE_ATTRIBUTE_NORMAL = 0x80
 
 
-def _overlapped() -> _OVERLAPPED:
+def _overlapped(byte: int = 0) -> _OVERLAPPED:
     ov = _OVERLAPPED()
-    ov.Offset = _LOCK_OFFSET & 0xFFFFFFFF
-    ov.OffsetHigh = _LOCK_OFFSET >> 32
+    ov.Offset = (_LOCK_OFFSET + byte) & 0xFFFFFFFF
+    ov.OffsetHigh = (_LOCK_OFFSET + byte) >> 32
     return ov
 
 
 # ── locks ────────────────────────────────────────────────────────────────────────────────────────────────
 
-def try_lock(fd: int) -> bool:
-    """Take the exclusive lock on the open file ``fd`` without waiting: True when taken, False when another handle holds it."""
-    ov = _overlapped()
+def try_lock(fd: int, byte: int = 0) -> bool:
+    """Take the exclusive lock on byte ``byte`` (0 the lock itself, 1 the waiters' queue slot, see ``locks``) of the open file ``fd`` without
+    waiting: True when taken, False when another handle holds it."""
+    ov = _overlapped(byte)
     if _k32.LockFileEx(msvcrt.get_osfhandle(fd), _LOCKFILE_EXCLUSIVE_LOCK | _LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, ctypes.byref(ov)):
         return True
     err = ctypes.get_last_error()
@@ -132,16 +133,8 @@ def try_lock(fd: int) -> bool:
     raise ctypes.WinError(err)
 
 
-def lock_blocking(fd: int) -> None:
-    """Take the exclusive lock on the open file ``fd``, waiting for it in the kernel (a queue, so waiters are served in turn: a polling
-    waiter can be starved by a holder that releases and re-takes the lock in a loop). Not interruptible; use ``try_lock`` for a bounded wait."""
-    ov = _overlapped()
-    if not _k32.LockFileEx(msvcrt.get_osfhandle(fd), _LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, ctypes.byref(ov)):
-        raise ctypes.WinError(ctypes.get_last_error())
-
-
-def unlock(fd: int) -> None:
-    ov = _overlapped()
+def unlock(fd: int, byte: int = 0) -> None:
+    ov = _overlapped(byte)
     if not _k32.UnlockFileEx(msvcrt.get_osfhandle(fd), 0, 1, 0, ctypes.byref(ov)):
         raise ctypes.WinError(ctypes.get_last_error())
 
