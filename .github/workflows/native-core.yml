@@ -1,0 +1,45 @@
+name: native-core
+
+# Native-core lanes: the governance core (the 74-module closure listed in scripts/native_core_manifest.json) and
+# the tests that cover it, run on native Windows and native macOS Apple Silicon with ONLY what the core needs:
+# the standard library, cryptography, PyYAML, runtime-contracts (pinned as pyproject.toml pins it) and pytest.
+# No Docker, no WSL, no web stack. These are evidence lanes: they are NOT required checks and they do not replace
+# the Linux merge gate (`pytest` in tests.yml), which is unchanged. The module and test lists are derived from the
+# code by scripts/native_core.py (`--check` fails when they drift).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-core-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-core:
+    name: native core (${{ matrix.os }}, non-required)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-14 is retired on 2026-11-02 (runner-images#13518); macos-15 is an Apple Silicon (arm64) image
+        os: [windows-latest, macos-15]
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install only what the core needs
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "pytest>=8.0" "cryptography>=42" "pyyaml>=6.0" "runtime-contracts @ git+https://github.com/redevops-io/runtime-contracts.git@v0.3.14"
+      - name: The module and test lists match the code (no installs, no network)
+        run: python scripts/native_core.py --check
+      - name: Governance core tests
+        run: python scripts/native_core.py --run -q -rfEs --continue-on-collection-errors
