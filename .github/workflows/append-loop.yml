@@ -1,0 +1,49 @@
+name: append-loop (temporary diagnostic)
+on:
+  push:
+    branches: [fix-windows-append-writers]
+permissions:
+  contents: read
+jobs:
+  loop:
+    name: ${{ matrix.which }} writers (${{ matrix.load }})
+    runs-on: windows-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        which: [old, new]
+        load: [idle, loaded]
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: new }
+      - uses: actions/checkout@v4
+        with: { path: old, ref: 8c751cf389135d2c5fa06acc0e00dc1cacc1dbfe }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install "pytest>=8.0" "cryptography>=42" "pyyaml>=6.0" "runtime-contracts @ git+https://github.com/redevops-io/runtime-contracts.git@v0.3.14"
+      - name: start CPU load
+        if: matrix.load == 'loaded'
+        shell: bash
+        run: |
+          for i in 1 2 3 4; do (python -c "while True: pass" &) ; done
+      - name: run the writer tests 15 times against the ${{ matrix.which }} writers
+        shell: bash
+        run: |
+          cd ${{ matrix.which }}
+          if [ "${{ matrix.which }}" = "old" ]; then cp ../new/tests/test_append_writers.py tests/; fi
+          pass=0; fail=0
+          for i in $(seq 1 15); do
+            PYTHONPATH=. python -m pytest -q -p no:cacheprovider tests/test_append_writers.py -k "(threads or processes or episode or discovery) and not helper" -x -q >/tmp/o.txt 2>&1 && pass=$((pass+1)) || { fail=$((fail+1)); echo "=== iteration $i"; grep -E "^(FAILED|E  )" /tmp/o.txt | head -6; }
+          done
+          echo "ITERATIONS ${{ matrix.which }} ${{ matrix.load }}: $pass passed, $fail failed (of 15; each iteration runs 14 concurrency tests, -x stops at the first failure)"
+      - name: per-test failure counts over 3 full (no -x) passes
+        if: always()
+        shell: bash
+        run: |
+          cd ${{ matrix.which }}
+          for i in 1 2 3; do PYTHONPATH=. python -m pytest -q -p no:cacheprovider tests/test_append_writers.py -k "(threads or episode or discovery) and not helper" 2>&1 | grep -E "^FAILED|passed|failed" | sed "s/^/pass $i: /"; done
