@@ -8,8 +8,8 @@ the hash-chained mission event log, the outcome store, the fork/join driver clai
 * ``file_lock(path, timeout=...)`` opens (creating) a lock file and holds the lock for the block.
 
 A platform that has neither mechanism raises ``LockUnavailable``: callers fail closed, they never carry on unlocked.
-On POSIX with no timeout the lock is the blocking ``flock`` the callers used before, so behaviour there is unchanged;
-with a timeout the wait is a bounded poll that ends in ``LockTimeout``. On Windows the lock is advisory in effect:
+With no timeout the lock is a blocking, queued wait (``flock`` on POSIX, as the callers used before; a blocking ``LockFileEx`` on Windows),
+so waiters are served in turn; with a timeout the wait is a bounded poll that ends in ``LockTimeout``. On Windows the lock is advisory in effect:
 it covers one byte far beyond the data, so it never blocks a reader or writer of the file's content.
 """
 from __future__ import annotations
@@ -71,7 +71,10 @@ def acquire(handle, timeout: "float | None" = None) -> None:
                 raise LockTimeout(f"the lock stayed held for {timeout:g} s")
             time.sleep(_POLL_S)
     elif _WINDOWS:
-        deadline = None if timeout is None else time.monotonic() + timeout
+        if timeout is None:
+            _win32.lock_blocking(fd)                  # the kernel queues waiters in turn, like a blocking flock
+            return
+        deadline = time.monotonic() + timeout
         while not _win32.try_lock(fd):
             if deadline is not None and time.monotonic() >= deadline:
                 raise LockTimeout(f"the lock stayed held for {timeout:g} s")
