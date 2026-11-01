@@ -102,8 +102,10 @@ implementation.
 
 The reference applications in `apps/` are deliberately licensed **AGPL-3.0-only,
 WITHOUT the Commons Clause** — each carries its own `apps/<name>/LICENSE` (the
-standard GNU AGPLv3 text), so the apps are open source and sellable, unlike the
-kernel. The paragraph above would otherwise extend the Commons Clause onto them
+standard GNU AGPLv3 text), so each app is AGPL-3.0-only by its own LICENSE file
+and does not carry the Commons Clause that the kernel carries. This file does not
+call the apps open source: that description waits for the additional permission
+below to be final and to have had legal review. The paragraph above would otherwise extend the Commons Clause onto them
 because they import the Commons-Clause kernel. Reconciling the two requires an
 AGPL §7 **additional permission** granting the apps the right to import the
 kernel without inheriting the Commons Clause; that legal text is being finalized

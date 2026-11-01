@@ -159,15 +159,17 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
         topic="Cost & licensing",
         keywords=("how much", "cost", "pricing", "price", "free", "open source", "open-source",
                   "license", "licence", "licensing", "agpl", "pay", "subscription", "trial"),
-        question="What does it cost — is it open source?",
+        question="What does it cost, and how is it licensed?",
         answer=(
-            "The core stack is open source (AGPL-3.0) and free to self-host — you run it on your "
-            "own infrastructure with no licence fee. What you pay for is your own compute and any "
+            "The core stack is source-available under the family licence (AGPL-3.0-or-later with the "
+            "Commons Clause), not open source. You can self-host it on your own infrastructure, including "
+            "inside a company for its own business, with no licence fee; the Commons Clause removes the "
+            "right to sell it. What you pay for is your own compute and any "
             "cloud model or cloud-suite usage you choose to enable. Hosted/managed options and "
             "commercial support are a separate conversation — reach the team at #agentic-apps on "
             "Slack or info@redevops.io. (No pricing tiers are quoted here so this answer can't go "
             "stale — ask the team for current commercial terms.)"),
-        source="AGPL-3.0 flagship repos · self-host is free · commercial terms via contact"),
+        source="LICENSE.md (family licence) · self-host is free · commercial terms via contact"),
     KnowledgeEntry(
         id="compliance",
         topic="Governance",
