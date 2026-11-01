@@ -6,7 +6,7 @@
 #   # Workflows console → http://localhost:8290/workflows
 #
 # The image is PRIVATE (GHCR): it carries the enterprise code, so `docker login ghcr.io` with an account ReDevOps granted access to first.
-# Only the AGPL kernel is open.
+# Only the kernel source is available (source-available under the family licence); the enterprise overlay is private.
 # Bring your own model endpoint (local or cloud) and only the external-agent / channel credentials you use.
 services:
   projects-sidekick:

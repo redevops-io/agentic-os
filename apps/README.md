@@ -1,7 +1,7 @@
 # Reference apps
 
 The reference application implementations that run on the Mission Runtime — one focused
-agentic system per business function. (Each `apps/*/LICENSE` is a plain AGPL-3.0 text, while the repository
+agentic system per business function. (Each `apps/*/LICENSE` is a plain AGPL-3.0 text and each app is declared AGPL-3.0-only in the root `LICENSE.md`, while the repository
 root [LICENSE.md](../LICENSE.md) is titled "source-available, not open source".) Each app is the *implementation* (agents +
 operators + core logic + seed data); the **deployment** is kept separate — a self-contained compose
 demo lives in [`../deploy/`](../deploy/), while the full Terraform / Ansible / k3s machinery is

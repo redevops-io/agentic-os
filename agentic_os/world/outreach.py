@@ -95,7 +95,7 @@ _PRIMARY = """Subject: A question about your AI stack
 
 Hi {first_name},
 
-I'm building ReDevOps, an open-source runtime stack for production AI systems.
+I'm building ReDevOps, a source-available runtime stack for production AI systems.
 
 I'm reaching out because {company} appears to be {observed_activity}. {specific_evidence_sentence} That made \
 me wonder whether {runtime_problem} is something your team is already running into.
