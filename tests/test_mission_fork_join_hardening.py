@@ -154,6 +154,32 @@ def test_the_effect_recorder_loses_nothing_when_branches_finish_at_the_same_inst
         record_effect(str(tmp_path), "b0")
 
 
+def test_three_branches_inside_the_call_at_the_same_instant_are_all_dispatched_recorded_and_joined(tmp_path):
+    """The interleaving behind the Windows flake, forced instead of hoped for: a barrier holds all three branches inside the capability call
+    and releases them together, so they finish, record their effect and report success at the same instant. Nothing may be lost: three
+    BranchStarted, three effects, three BranchSucceeded, one JoinSatisfied, one driver claim, and no branch dispatched twice."""
+    from tests._fork_support import record_effect
+    effects = tmp_path / "effects"
+    effects.mkdir()
+    gate = threading.Barrier(3)
+
+    class Op:
+        def invoke(self, operator, capability, inputs, key, *, secrets=None):
+            if not capability.startswith("w."):
+                return {"ok": True}
+            gate.wait(20)                                   # all three are in the call together, and leave it together
+            record_effect(str(effects), inputs["tag"])      # exclusive: a second dispatch of a branch raises
+            return {"ok": True}
+    rt, _, m = build(store=EventStore(str(tmp_path / "log.jsonl")), op=Op())
+    res = rt.forks.run_fork(m.id, spec(n=3))
+    evs = rt.store.for_mission(m.id)
+    assert res.status == "satisfied"
+    assert sorted(os.listdir(effects)) == ["b0", "b1", "b2"]
+    assert sorted(e.payload["branch_id"] for e in evs if e.type == "BranchStarted") == ["b0", "b1", "b2"]
+    assert sorted(e.payload["branch_id"] for e in evs if e.type == "BranchSucceeded") == ["b0", "b1", "b2"]
+    assert [e.type for e in evs].count("JoinSatisfied") == 1 and [e.type for e in evs].count("ForkDriverClaimed") == 1
+
+
 def test_claim_generation_increases_and_restart_orphans_are_redispatched_only_by_newer_generation():
     from agentic_os.mission.fork_join import fold_fork
     rt, op, m = build()

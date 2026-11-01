@@ -5,14 +5,56 @@ on:
 permissions:
   contents: read
 jobs:
-  loop:
-    name: loop (${{ matrix.os }}, ${{ matrix.load }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+  isolate:
+    name: ${{ matrix.variant }} (${{ matrix.load }})
+    runs-on: windows-latest
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-15]
+        load: [idle, loaded]
+        include:
+          - { variant: "pre-598 (main 009d493)", ref: 009d493, iterations: 3, nolock: "0" }
+          - { variant: "first #598 (20 ms polling, f0a3418)", ref: f0a3418be1b94019f2de05dc24b54ea0ac57ed73, iterations: 100, nolock: "0" }
+          - { variant: "blocking LockFileEx (c58cd1a)", ref: c58cd1a19bbc4d46d7f505a5f79124d4f899eae6, iterations: 100, nolock: "0" }
+          - { variant: "main, queue slot (a94323a)", ref: a94323a, iterations: 100, nolock: "0" }
+          - { variant: "main, NO lock code (a94323a)", ref: a94323a, iterations: 100, nolock: "1" }
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: tool }
+      - uses: actions/checkout@v4
+        with: { path: src, ref: "${{ matrix.ref }}" }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install "pytest>=8.0" "cryptography>=42" "pyyaml>=6.0" "runtime-contracts @ git+https://github.com/redevops-io/runtime-contracts.git@v0.3.14"
+      - name: start CPU load
+        if: matrix.load == 'loaded'
+        shell: bash
+        run: |
+          for i in 1 2 3 4; do (python -c "while True: pass" &) ; done
+      - name: fork_join imports (what this commit can do on Windows)
+        shell: bash
+        run: |
+          cd src
+          grep -n "import fcntl" agentic_os/mission/fork_join.py || echo "no fcntl import in fork_join.py"
+          PYTHONPATH=. python -c "import agentic_os.mission.fork_join; print('fork_join imports')" || true
+      - name: replay the second-process test with the OLD recorder, with diagnostics
+        shell: bash
+        env:
+          SRC: ${{ github.workspace }}/src
+          NOLOCK: ${{ matrix.nolock }}
+        run: python tool/diag/loop_forkjoin.py ${{ matrix.iterations }}
+  fixed:
+    name: fixed recorder, the real test (${{ matrix.load }})
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
         load: [idle, loaded]
     env:
       PYTHONDONTWRITEBYTECODE: "1"
@@ -28,26 +70,25 @@ jobs:
         shell: bash
         run: |
           for i in 1 2 3 4; do (python -c "while True: pass" &) ; done
-      - name: the OLD recorder under simultaneous writers (3 threads, 2000 rounds)
+      - name: the forced interleaving with the OLD recorder (diagnostic)
         shell: bash
-        run: python diag/append_race.py 2000
-      - name: the real test, 60 times
-        if: always()
+        run: PYTHONPATH=. python diag/forced_old_recorder.py 50
+      - name: the real test, 100 times
         shell: bash
         run: |
           fail=0
-          for i in $(seq 1 60); do
+          for i in $(seq 1 100); do
             PYTHONPATH=. python -m pytest -q -p no:cacheprovider tests/test_mission_fork_join_hardening.py::test_second_process_is_refused_and_each_branch_dispatches_once >/tmp/o.txt 2>&1 || { fail=$((fail+1)); echo "=== run $i FAILED"; tail -25 /tmp/o.txt; }
           done
-          echo "REAL TEST RESULT $((60-fail))/60 passed"
+          echo "REAL TEST RESULT $((100-fail))/100 passed"
           [ "$fail" -eq 0 ]
-      - name: the whole hardening module with the new regression test, 20 times
+      - name: the regression test (simultaneous finish), 50 times
         if: always()
         shell: bash
         run: |
           fail=0
-          for i in $(seq 1 20); do
-            PYTHONPATH=. python -m pytest -q -p no:cacheprovider tests/test_mission_fork_join_hardening.py >/tmp/o2.txt 2>&1 || { fail=$((fail+1)); echo "=== module run $i FAILED"; tail -25 /tmp/o2.txt; }
+          for i in $(seq 1 50); do
+            PYTHONPATH=. python -m pytest -q -p no:cacheprovider tests/test_mission_fork_join_hardening.py -k "same_instant or simultaneous" >/tmp/o3.txt 2>&1 || { fail=$((fail+1)); echo "=== regression run $i FAILED"; tail -25 /tmp/o3.txt; }
           done
-          echo "MODULE RESULT $((20-fail))/20 passed"
+          echo "REGRESSION RESULT $((50-fail))/50 passed"
           [ "$fail" -eq 0 ]

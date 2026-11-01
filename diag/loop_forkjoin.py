@@ -2,7 +2,7 @@
 N times and, on a mismatch, prints what happened: the raw bytes of the shared effects file, one marker file per branch (did invoke() run?), the
 BranchStarted/BranchSucceeded events and the outputs of both processes."""
 import os, subprocess, sys, tempfile, textwrap, time, json, pathlib
-ROOT = str(pathlib.Path(__file__).resolve().parents[1])
+ROOT = os.environ.get("SRC") or str(pathlib.Path(__file__).resolve().parents[1])          # the checkout under test
 sys.path.insert(0, ROOT)
 from tests._fork_support import build
 from agentic_os.mission.store import EventStore
@@ -23,6 +23,10 @@ PROC = textwrap.dedent("""
             os.write(fd, (inputs["tag"] + "\\n").encode()); os.close(fd)
             open(effects + "." + inputs["tag"], "w").write("%r %r" % (t, os.getpid()))
             return {"ok": True}
+    if os.environ.get("NOLOCK") == "1":                       # experiment: no lock code at all in either process
+        from agentic_os._platform import locks
+        locks.acquire = lambda *a, **k: None
+        locks.release = lambda *a, **k: None
     rt = make_rt(EventStore(path), Op())
     rt.rehydrate(mid, policy_refs=GRANTS)
     if role == "B":
@@ -37,6 +41,9 @@ PROC = textwrap.dedent("""
         print("REFUSED", str(e)[:60])
 """)
 
+STATS = {"markers_all": 0, "effects_lost_but_all_ran": 0}
+
+
 def one(i):
     d = tempfile.mkdtemp(prefix="fj-")
     path, effects = os.path.join(d, "log.jsonl"), os.path.join(d, "effects.txt")
@@ -48,6 +55,10 @@ def one(i):
     ao, ae = a.communicate(timeout=120); bo, be = b.communicate(timeout=120)
     got = sorted(open(effects).read().split()) if os.path.exists(effects) else None
     ok = "DONE satisfied" in ao and "REFUSED" in bo and got == ["b0", "b1", "b2"]
+    markers = [os.path.exists(effects + "." + t) for t in ("b0", "b1", "b2")]
+    if os.environ.get("QUIET_OK") != "1" or not ok:
+        pass
+    STATS["markers_all"] += all(markers); STATS["effects_lost_but_all_ran"] += (not ok and all(markers) and "DONE satisfied" in ao and "REFUSED" in bo)
     if not ok:
         print(f"--- iteration {i} MISMATCH: effects={got!r} raw={open(effects,'rb').read()!r}")
         print("A:", ao.strip(), ae[-300:], "| B:", bo.strip(), be[-300:])
@@ -64,5 +75,5 @@ if __name__ == "__main__":
     for i in range(n):
         if not one(i):
             bad += 1
-    print(f"RESULT {n - bad}/{n} passed")
+    print(f"RESULT {n - bad}/{n} passed; mismatches where every branch DID run, succeed and join but the shared effects file lost a line: {STATS['effects_lost_but_all_ran']}")
     sys.exit(1 if bad else 0)
