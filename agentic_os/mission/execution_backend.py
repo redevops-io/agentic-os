@@ -13,6 +13,7 @@ attestation ("empty is honest for a trusted local membrane"). It therefore satis
 from __future__ import annotations
 
 import dataclasses
+import sys
 import time
 from typing import Optional
 
@@ -42,9 +43,12 @@ class MembraneExecutionBackend:
         self._sandbox = sandbox or LocalContainmentSandbox()
 
     def capabilities(self) -> BackendCapabilities:
-        """What THIS platform enforces. Where a memory ceiling cannot be applied (macOS refuses RLIMIT_AS; Windows has no rlimits) the
-        membrane does not advertise ``resource_limits``: a profile that needs them is refused as a downgrade instead of run unenforced.
-        On Linux this is exactly ``MEMBRANE_CAPABILITIES``."""
+        """What THIS platform enforces. On Linux: ``MEMBRANE_CAPABILITIES``, with ``resource_limits`` dropped where a memory ceiling cannot be
+        applied. On every other platform (macOS, Windows) the membrane is a child process with a scrubbed environment, a throwaway working
+        directory and a time limit, and that is all: it does not advertise filesystem isolation, process isolation or resource limits, only
+        the identity binding of the envelope, so a profile that needs any of them is refused as a downgrade instead of run unenforced."""
+        if not sys.platform.startswith("linux"):
+            return BackendCapabilities(identity_binding=MEMBRANE_CAPABILITIES.identity_binding)
         if memory_ceiling_enforceable():
             return MEMBRANE_CAPABILITIES
         return dataclasses.replace(MEMBRANE_CAPABILITIES, resource_limits=False)

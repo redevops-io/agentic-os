@@ -158,7 +158,10 @@ def containment_capabilities() -> Dict[str, bool]:
     * ``scrubbed_environment`` / ``contained_cwd``: the child inherits no ambient variables and runs in a throwaway directory (every platform);
     * ``wall_clock_timeout``: the child is killed when ``max_duration_seconds`` passes (every platform);
     * ``memory_ceiling``: an address-space limit (RLIMIT_AS; Linux only);
-    * ``posix_rlimits``: CPU-seconds and process-count limits applied in the child before it starts (POSIX only; the process count is best-effort)."""
+    * ``posix_rlimits``: CPU-seconds and process-count limits applied in the child before it starts (POSIX only; the process count is best-effort).
+
+    Known limit (Windows): the timeout kills the direct child only (there is no job object), and `subprocess.run` then waits for the pipes to
+    close, so a descendant that inherited them can keep a timed-out step from returning promptly."""
     return {"scrubbed_environment": True, "contained_cwd": True, "wall_clock_timeout": True,
             "memory_ceiling": memory_ceiling_enforceable(), "posix_rlimits": resource is not None}
 

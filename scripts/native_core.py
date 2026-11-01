@@ -51,7 +51,7 @@ ADJACENT = frozenset({
     "agentic_os.permissions_setup", "agentic_os.permissions_profiles", "agentic_os.app_gate", "agentic_os.priority_engine",
     "agentic_os.trusted_import", "agentic_os.outcome_store", "agentic_os.mission.fork_join",
     "agentic_os.mission.membrane", "agentic_os.mission.device_posture", "agentic_os.mission.execution_backend",
-    "agentic_os.mission.gate_notify", "agentic_os.secrets", "agentic_os.secrets.stores",
+    "agentic_os.mission.gate_notify", "agentic_os.mission.provisioning", "agentic_os.mission.installer", "agentic_os.secrets", "agentic_os.secrets.stores",
     "agentic_os.secrets.resolve", "agentic_os.secrets.factory", "agentic_os.secrets.bootstrap",
 })
 
@@ -208,11 +208,11 @@ def run(extra: list[str]) -> int:
     return subprocess.call(args, cwd=ROOT, env=env)
 
 
-# Distributions an optional extra or a Linux-hosted integration provides. A module that needs one of them and finds it missing is reported as
-# skipped; ANY other import failure (a missing POSIX module, a bad guard, a syntax error) is a failure.
+# Distributions that the all-modules lane does NOT install (an extra it leaves out, or a Linux-hosted integration). A module that needs one of
+# them and finds it missing is reported as skipped; ANY other import failure (a missing POSIX module, a bad guard, a syntax error, a missing
+# package the lane does install) is a failure. Every package the lane installs is deliberately absent from this list.
 OPTIONAL_IMPORTS = frozenset({
-    "duckdb", "psycopg", "fastmcp", "mcp", "redevops_connectors", "redevops_rag", "sentence_transformers", "google", "requests", "keyring",
-    "agent_harness", "context_runtime", "reel", "numpy", "torch", "scipy", "sklearn", "docker", "kafka", "boto3",
+    "psycopg", "redevops_rag", "sentence_transformers", "keyring", "agent_harness", "context_runtime", "reel",
 })
 
 

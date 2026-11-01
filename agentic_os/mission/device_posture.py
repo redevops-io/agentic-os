@@ -14,7 +14,7 @@ Three types, no infrastructure, same discipline as the execution contract:
   rootless membrane can even run here). Every field defaults to the **conservative** value,
   so a probe that fails or cannot answer never widens authority.
 * :class:`DevicePosture` — the *derived* verdict: a decision per :class:`ExecutionClass`
-  (ALLOW / REVIEW / DENY), an overall :attr:`verdict` (VERIFIED / BLOCKED), the reasons, and
+  (ALLOW / REVIEW / DENY), an overall :attr:`verdict` (VERIFIED / BLOCKED / NATIVE_PROCESS_ONLY), the reasons, and
   a content-addressed :attr:`posture_id` — change any observed fact and the id changes, so a
   posture is tamper-evident exactly like an :class:`~runtime_contracts.models.ExecutionEnvelope`.
 * :class:`ExecutionClass` — the coarse risk tiers the plan asks for
@@ -67,12 +67,15 @@ class Decision(str, Enum):
 
 
 class Verdict(str, Enum):
-    VERIFIED = "verified"   #: the mandatory floor is met; the device may host missions
+    #: The mandatory floor is met: a container runtime binary (docker or podman) is on PATH and the platform can apply POSIX resource limits to
+    #: a child process. It does NOT mean the membrane uses that runtime or that execution is isolated: the membrane runs the same child
+    #: process, with an environment scrub, a throwaway working directory and resource limits, on every platform. Nothing probes whether the
+    #: runtime's daemon is running.
+    VERIFIED = "verified"
     BLOCKED = "blocked"     #: the floor is not met; no execution class is granted
     #: No container runtime (docker/podman) was found on a native desktop host (Windows or macOS, outside WSL). Steps could only run
     #: as ordinary host processes: an environment scrub, a throwaway working directory and a time limit, with NO filesystem or
-    #: network isolation. It is reported as such and is NOT a verified device: the installer gate still refuses it, every high-risk
-    #: class (host process, raw credential access, public ingress) is DENY, and the one remaining class needs a human.
+    #: network isolation. It is reported as such and is NOT a verified device: the installer gate still refuses it and EVERY class is DENY.
     NATIVE_PROCESS_ONLY = "native_process_only"
 
 
@@ -143,9 +146,16 @@ class DevicePosture:
         """Content-addressed identity — any changed observed fact yields a new id."""
         return content_hash(self.canonical_form())
 
+    def decision(self, cls: ExecutionClass) -> Decision:
+        """The decision for ``cls``. A posture whose verdict is not VERIFIED grants nothing, whatever its per-class map says: every consumer
+        reads the decision through here (never ``classes`` directly), so a verdict other than VERIFIED cannot be turned into an install or a run."""
+        if self.verdict is not Verdict.VERIFIED:
+            return Decision.DENY
+        return self.classes.get(cls, Decision.DENY)
+
     def issuable(self, cls: ExecutionClass) -> bool:
         """True if this device may run ``cls`` at all (ALLOW or REVIEW), False if DENY."""
-        return self.classes.get(cls, Decision.DENY) is not Decision.DENY
+        return self.decision(cls) is not Decision.DENY
 
     def ceiling(self, cls: ExecutionClass) -> ExecutionConstraint | None:
         """The tightest ``ExecutionConstraint`` this device permits for ``cls``.
@@ -241,10 +251,8 @@ def derive(facts: DeviceFacts) -> DevicePosture:
                        "processes with an environment scrub and a time limit, and no filesystem or network isolation")
         if not facts.containment_supported:
             reasons.append("containment unsupported on this platform: the membrane's resource limits are POSIX-only")
-        reasons.append("host-process execution, raw credential access and public ingress are denied under a native process boundary")
-        classes = {c: Decision.DENY for c in ExecutionClass}
-        if facts.containment_supported:
-            classes[ExecutionClass.LOCAL_CONTAINER] = Decision.REVIEW     # a limited child process, never without a human
+        reasons.append("every execution class is denied under a native process boundary; nothing is granted")
+        classes = {c: Decision.DENY for c in ExecutionClass}          # a label, not a permission: nothing is granted, the limited child process included
     else:
         verdict = Verdict.BLOCKED
         if not facts.container_runtime:

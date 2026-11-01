@@ -6,6 +6,7 @@ above the tier it enforces), real contained execution, and identity-bound receip
 from __future__ import annotations
 
 import dataclasses
+import sys
 
 import pytest
 
@@ -51,9 +52,11 @@ def test_backend_conforms_to_protocol():
 
 def test_capabilities_are_honest():
     caps = MembraneExecutionBackend().capabilities()
-    if memory_ceiling_enforceable():
+    if not sys.platform.startswith("linux"):          # macOS, Windows: a child process with a scrubbed environment and a time limit, no more is claimed
+        assert caps == BackendCapabilities(identity_binding=True)
+    elif memory_ceiling_enforceable():
         assert caps == MEMBRANE_CAPABILITIES
-    else:                               # macOS refuses RLIMIT_AS and Windows has no rlimits: resource limits are not advertised there
+    else:                                              # Linux that refuses RLIMIT_AS: resource limits are not advertised
         assert caps == dataclasses.replace(MEMBRANE_CAPABILITIES, resource_limits=False)
     # satisfies STANDARD, but not ISOLATED (rootless membrane can't control network egress)
     assert caps.satisfies(profile_requirements(EnforcementProfile.STANDARD))

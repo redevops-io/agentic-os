@@ -136,6 +136,7 @@ def test_the_capabilities_report_what_the_platform_enforces(monkeypatch):
 
 def test_the_backend_does_not_advertise_resource_limits_it_cannot_apply(monkeypatch):
     from agentic_os.mission import execution_backend as eb
+    monkeypatch.setattr(eb.sys, "platform", "linux")
     monkeypatch.setattr(eb, "memory_ceiling_enforceable", lambda: False)
     assert eb.MembraneExecutionBackend().capabilities().resource_limits is False
     monkeypatch.setattr(eb, "memory_ceiling_enforceable", lambda: True)

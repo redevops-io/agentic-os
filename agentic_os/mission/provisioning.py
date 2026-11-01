@@ -26,7 +26,7 @@ from typing import Callable, Dict, Iterable, List, Tuple
 
 from runtime_contracts.canonical import content_hash
 
-from .device_posture import Decision, DevicePosture, ExecutionClass
+from .device_posture import Decision, DevicePosture, ExecutionClass, Verdict
 from .types import CapabilityManifest, CapabilitySpec
 
 CONTRACT_VERSION = "install-plan/v1"
@@ -159,7 +159,7 @@ def resolve(outcome: str, catalog: Iterable[CapabilityManifest], posture: Device
             if not matcher(outcome, spec):
                 continue
             cls = execution_class_for(spec)
-            decision = posture.classes.get(cls, Decision.DENY)
+            decision = posture.decision(cls)               # DENY for every class unless the verdict is VERIFIED
             cost_milli = int(round(spec.cost.usd * 1000))
             modules_needed.add(spec.operator)
             creds.update(spec.secrets)
@@ -171,9 +171,15 @@ def resolve(outcome: str, catalog: Iterable[CapabilityManifest], posture: Device
                 decision=decision, secrets=tuple(sorted(spec.secrets)),
                 approval_required=spec.approval_required, cost_usd_milli=cost_milli))
             if decision is Decision.DENY:
-                blocked.append((spec.name, f"{cls.value} denied by device posture"))
+                why = (f"{cls.value} denied by device posture" if posture.verdict is Verdict.VERIFIED
+                       else f"{cls.value} denied: device posture is {posture.verdict.value}, not verified")
+                blocked.append((spec.name, why))
             elif decision is Decision.REVIEW or spec.approval_required:
                 needs_approval.append(spec.name)
+
+    if posture.verdict is not Verdict.VERIFIED and not blocked:
+        # nothing matched, but a device that is not verified installs nothing: say so instead of returning a vacuously installable plan
+        blocked.append(("(device)", f"device posture is {posture.verdict.value}, not verified: nothing is installable"))
 
     return InstallPlan(
         outcome=outcome, topology=topology,
