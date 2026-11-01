@@ -1223,58 +1223,58 @@ def _t_vuln_db_permissions(_a: dict) -> dict:
                      "refs_visible_admin": refs_admin, "refs_visible_osv": refs_osv}}
 
 
-def _build_sentinel_console(console_cls, tool_fn):
+def _build_sentinel_console(console_cls, _crtool):
     """Build the chat console (also called by the tests with a recording stand-in, so the REAL tool text and primer are checked)."""
     return console_cls(
         f"{TENANT} Edge Sentinel", _SENTINEL_PRIMER,
         tools=[
-            tool_fn("threat_summary", "what CrowdSec currently holds: active decisions (bans), alerts in the last 24h and the top scenarios, with the time of the read. It is a reading, not an assessment of the environment", _t_threat_summary),
-            tool_fn("list_bans", "list the active ban decisions CrowdSec holds: source IP, scenario, severity and when each expires (a decision is not proof that a bouncer enforces it)", _t_list_bans),
-            tool_fn("explain_alert", "explain a specific alert currently in CrowdSec's feed (by scenario name) and whether it needs a closer look", _t_explain_alert,
+            _crtool("threat_summary", "what CrowdSec currently holds: active decisions (bans), alerts in the last 24h and the top scenarios, with the time of the read. It is a reading, not an assessment of the environment", _t_threat_summary),
+            _crtool("list_bans", "list the active ban decisions CrowdSec holds: source IP, scenario, severity and when each expires (a decision is not proof that a bouncer enforces it)", _t_list_bans),
+            _crtool("explain_alert", "explain a specific alert currently in CrowdSec's feed (by scenario name) and whether it needs a closer look", _t_explain_alert,
                     parameters={"type": "object", "properties": {"scenario": {"type": "string", "description": "a scenario name from the live feed to explain"}}}),
-            tool_fn("ban_ip", "stage a ban of an IP for a duration. It is staged for human approval and never runs from this chat; executing a block needs an operator credential and an enable flag, and the demo's approved block is a dry run (nothing is blocked)", _t_ban_ip, side_effecting=True,
+            _crtool("ban_ip", "stage a ban of an IP for a duration. It is staged for human approval and never runs from this chat; executing a block needs an operator credential and an enable flag, and the demo's approved block is a dry run (nothing is blocked)", _t_ban_ip, side_effecting=True,
                     parameters={"type": "object", "properties": {"ip": {"type": "string"}, "duration": {"type": "string", "description": "e.g. 4h, 24h"}}}),
             # supply-chain (pre-deploy) tools. The launchers (supply_chain_scan, list_vulnerabilities, scan_app, scan_apps, sbom, malware_scan) start
             # processes / scans, so they are registered side_effecting=True (classified `write`): the approval policy applies in addition to the
             # write grant. list_scannable_apps, scanner_status, explain_vulnerability only read.
-            tool_fn("supply_chain_scan", "scan the sentinel's own container filesystem for known vulnerabilities with Trivy (a scanner report, not confirmed exploitation). Scanning other apps' images needs docker access, which is off by default and not available in the public demo", _sc_scan,
+            _crtool("supply_chain_scan", "scan the sentinel's own container filesystem for known vulnerabilities with Trivy (a scanner report, not confirmed exploitation). Scanning other apps' images needs docker access, which is off by default and not available in the public demo", _sc_scan,
                     parameters={"type": "object", "properties": {"target": {"type": "string", "description": "path or image to scan (default: the stack's dependencies)"}}}, side_effecting=True),
-            tool_fn("list_vulnerabilities", "list the CVEs found in the last scan, worst first, each with the fixed version where there is one (a scanner report; run supply_chain_scan first)", _sc_list, side_effecting=True),
-            tool_fn("explain_vulnerability", "explain a specific CVE from the last scan and the fixed version to move to, if there is one", _sc_explain,
+            _crtool("list_vulnerabilities", "list the CVEs found in the last scan, worst first, each with the fixed version where there is one (a scanner report; run supply_chain_scan first)", _sc_list, side_effecting=True),
+            _crtool("explain_vulnerability", "explain a specific CVE from the last scan and the fixed version to move to, if there is one", _sc_explain,
                     parameters={"type": "object", "properties": {"id": {"type": "string", "description": "a CVE id from the scan"}}}),
-            tool_fn("scan_app", "NOT available in the public demo (needs docker access, which is off by default; it runs only where an operator has enabled it): scan one app's container image for open-source (CVE) vulnerabilities and suggest fixes", _t_scan_app,
+            _crtool("scan_app", "NOT available in the public demo (needs docker access, which is off by default; it runs only where an operator has enabled it): scan one app's container image for open-source (CVE) vulnerabilities and suggest fixes", _t_scan_app,
                     parameters={"type": "object", "properties": {"app": {"type": "string", "description": "the app to scan, e.g. billing, compliance, market-radar, books"}}}, side_effecting=True),
-            tool_fn("scan_apps", "NOT available in the public demo (needs docker access, which is off by default; it runs only where an operator has enabled it): scan several app containers and roll up the CVEs, optionally for one ecosystem (npm, pypi, maven, go, os)", _t_scan_apps,
+            _crtool("scan_apps", "NOT available in the public demo (needs docker access, which is off by default; it runs only where an operator has enabled it): scan several app containers and roll up the CVEs, optionally for one ecosystem (npm, pypi, maven, go, os)", _t_scan_apps,
                     parameters={"type": "object", "properties": {
                         "ecosystem": {"type": "string", "description": "restrict findings to one ecosystem: npm | pypi | maven | go | os (optional)"},
                         "apps": {"type": "string", "description": "comma-separated app names to scan (optional; default: all agentic apps)"},
                         "limit": {"type": "integer", "description": "max apps to scan in one call (default 8)"}}}, side_effecting=True),
-            tool_fn("list_scannable_apps", "NOT available in the public demo (needs docker access, which is off by default): list the app and core containers whose images could be scanned", _t_list_apps),
-            tool_fn("vuln_db_lookup", "look up a package or CVE in the NVD/OSV vulnerability table (Apache Doris) when it is reachable; the table holds only what its refresh job was configured to load, not all of NVD or OSV", _t_vuln_lookup,
+            _crtool("list_scannable_apps", "NOT available in the public demo (needs docker access, which is off by default): list the app and core containers whose images could be scanned", _t_list_apps),
+            _crtool("vuln_db_lookup", "look up a package or CVE in the NVD/OSV vulnerability table (Apache Doris) when it is reachable; the table holds only what its refresh job was configured to load, not all of NVD or OSV", _t_vuln_lookup,
                     parameters={"type": "object", "properties": {"package": {"type": "string"}, "cve": {"type": "string", "description": "a CVE id"}}}),
-            tool_fn("vuln_db_permissions", "demonstrate the vuln-DB access policy: the same query returns different rows and columns per principal (row scope and column masking)", _t_vuln_db_permissions),
-            tool_fn("sbom", "list the components (a software bill of materials) of the sentinel's own filesystem with Syft or Trivy", _sc_sbom, side_effecting=True),
-            tool_fn("scanner_status", "which scanners (trivy, syft, cosign, clamscan) are installed in this container and the last scan result", _sc_status),
+            _crtool("vuln_db_permissions", "demonstrate the vuln-DB access policy: the same query returns different rows and columns per principal (row scope and column masking)", _t_vuln_db_permissions),
+            _crtool("sbom", "list the components (a software bill of materials) of the sentinel's own filesystem with Syft or Trivy", _sc_sbom, side_effecting=True),
+            _crtool("scanner_status", "which scanners (trivy, syft, cosign, clamscan) are installed in this container and the last scan result", _sc_status),
             # runtime-DAST (post-deploy) tools — scan a LIVE deployment via the deploy-scan service
-            tool_fn("scan_deployment", "actively scan a RUNNING deployment (host or URL) with nmap/nuclei/ZAP and report the scanners' findings (not confirmed exploitation) — the RUNTIME half of security, complementing the supply-chain scan. Destructive: sends probe traffic, so it is staged for human approval and does not run from the public demo chat. profile: recon (nmap surface) | web-baseline (nuclei + ZAP passive) | web-active (ZAP attack traffic) | full", deploy_scan.scan, side_effecting=True,
+            _crtool("scan_deployment", "actively scan a RUNNING deployment (host or URL) with nmap/nuclei/ZAP and report the scanners' findings (not confirmed exploitation) — the RUNTIME half of security, complementing the supply-chain scan. Destructive: sends probe traffic, so it is staged for human approval and does not run from the public demo chat. profile: recon (nmap surface) | web-baseline (nuclei + ZAP passive) | web-active (ZAP attack traffic) | full", deploy_scan.scan, side_effecting=True,
                     parameters={"type": "object", "properties": {
                         "target": {"type": "string", "description": "host or URL to scan (must be in the deploy-scan allowlist)"},
                         "profile": {"type": "string", "description": "recon | web-baseline | web-active | full (default web-baseline)"}}}),
-            tool_fn("scan_status", "check the progress of a running deployment scan by its job id", deploy_scan.status,
+            _crtool("scan_status", "check the progress of a running deployment scan by its job id", deploy_scan.status,
                     parameters={"type": "object", "properties": {"job_id": {"type": "string"}}}),
-            tool_fn("scan_results", "fetch the findings + severity summary of a finished deployment scan by its job id", deploy_scan.results,
+            _crtool("scan_results", "fetch the findings + severity summary of a finished deployment scan by its job id", deploy_scan.results,
                     parameters={"type": "object", "properties": {"job_id": {"type": "string"}}}),
             # runtime data plane
-            tool_fn("malware_scan", "scan files visible to the ClamAV service with ClamAV (only where a ClamAV service is configured)", _t_malware_scan,
+            _crtool("malware_scan", "scan files visible to the ClamAV service with ClamAV (only where a ClamAV service is configured)", _t_malware_scan,
                     parameters={"type": "object", "properties": {"path": {"type": "string", "description": "path to scan (default: the whole stack)"}}}, side_effecting=True),
-            tool_fn("wazuh_status", "report the Wazuh manager's enrolled-agent counts (status only; no Wazuh alerts or detections are read)", _t_wazuh_status),
+            _crtool("wazuh_status", "report the Wazuh manager's enrolled-agent counts (status only; no Wazuh alerts or detections are read)", _t_wazuh_status),
             # network access plane (NetBird / zero-trust) — the "who can reach what" half
-            tool_fn("network_access_review", "review NetBird peers and policies, flagging an over-broad All-to-All rule; SAMPLE DATA unless NetBird is connected", netbird.access_review),
-            tool_fn("network_posture", "check NetBird device posture (expired logins, unapproved devices, broad SSH); SAMPLE DATA unless NetBird is connected", netbird.posture),
-            tool_fn("propose_network_policy", "draft an additional, narrower NetBird access policy for an over-broad one (staged for human approval; applying it only adds a policy and does not remove or disable the broad one; sample data unless NetBird is connected)", netbird.propose, side_effecting=True,
+            _crtool("network_access_review", "review NetBird peers and policies, flagging an over-broad All-to-All rule; SAMPLE DATA unless NetBird is connected", netbird.access_review),
+            _crtool("network_posture", "check NetBird device posture (expired logins, unapproved devices, broad SSH); SAMPLE DATA unless NetBird is connected", netbird.posture),
+            _crtool("propose_network_policy", "draft an additional, narrower NetBird access policy for an over-broad one (staged for human approval; applying it only adds a policy and does not remove or disable the broad one; sample data unless NetBird is connected)", netbird.propose, side_effecting=True,
                     parameters={"type": "object", "properties": {"policy": {"type": "string", "description": "name of the over-broad policy to draft a narrower policy for (optional; default: the first one found)"}}}),
             # continuity plane (Portabase / backups) — is every core safely backed up offsite?
-            tool_fn("backup_status", "report Portabase backup coverage (recent, encrypted, offsite) and the gaps; SAMPLE DATA unless Portabase is connected", portabase.backup_status),
+            _crtool("backup_status", "report Portabase backup coverage (recent, encrypted, offsite) and the gaps; SAMPLE DATA unless Portabase is connected", portabase.backup_status),
         ],
         suggestions=_chips(),
         subtitle="Ask what CrowdSec holds, to explain an alert, to look up a CVE, or to read the sample network and backup reviews. App image scans and deployment scans run only where an operator has enabled them; they are not available in this demo.",
