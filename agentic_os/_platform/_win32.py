@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ctypes
 import msvcrt
+import os
 from ctypes import wintypes
 
 _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -34,6 +35,17 @@ _k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
 _k32.OpenProcess.restype = wintypes.HANDLE
 _k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
 _k32.WaitForSingleObject.restype = wintypes.DWORD
+
+
+class _SECURITY_ATTRIBUTES(ctypes.Structure):
+    _fields_ = [("nLength", wintypes.DWORD), ("lpSecurityDescriptor", _PVOID), ("bInheritHandle", wintypes.BOOL)]
+
+
+_k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(_SECURITY_ATTRIBUTES), wintypes.DWORD,
+                             wintypes.DWORD, wintypes.HANDLE]
+_k32.CreateFileW.restype = wintypes.HANDLE
+_k32.CreateDirectoryW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(_SECURITY_ATTRIBUTES)]
+_k32.CreateDirectoryW.restype = wintypes.BOOL
 
 
 class _OVERLAPPED(ctypes.Structure):
@@ -91,6 +103,13 @@ _SDDL_REVISION_1 = 1
 # The locked byte sits far beyond any record the files hold (1 TiB), so a mandatory Windows byte-range lock never
 # blocks a reader or writer of the data itself (a POSIX flock is advisory and whole-file).
 _LOCK_OFFSET = 1 << 40
+_ERROR_FILE_EXISTS = 80
+_ERROR_ALREADY_EXISTS = 183
+_INVALID_HANDLE = ctypes.c_void_p(-1).value
+_GENERIC_READ, _GENERIC_WRITE = 0x80000000, 0x40000000
+_FILE_SHARE_READ_WRITE = 0x3                  # what Python's own os.open uses (no delete sharing)
+_CREATE_NEW = 1
+_FILE_ATTRIBUTE_NORMAL = 0x80
 
 
 def _overlapped() -> _OVERLAPPED:
@@ -241,5 +260,55 @@ def set_private_dacl(path: str, *, is_dir: bool) -> None:
                                         None, None, dacl, None)
         if rc:
             raise ctypes.WinError(rc)
+    finally:
+        _local_free(psd)
+
+
+def _private_sa(*, is_dir: bool):
+    """A SECURITY_ATTRIBUTES whose descriptor carries a PROTECTED DACL for the current user and the system only, so an object created
+    with it is private from its first instant (nothing is inherited from the parent). Returns ``(sa, psd)``; free ``psd`` with ``_local_free``."""
+    user = current_user_sid()
+    inherit = "OICI" if is_dir else ""
+    sddl = f"D:P(A;{inherit};FA;;;{user})(A;{inherit};FA;;;SY)"
+    psd = _PVOID()
+    if not _adv.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, _SDDL_REVISION_1, ctypes.byref(psd), None):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return _SECURITY_ATTRIBUTES(ctypes.sizeof(_SECURITY_ATTRIBUTES), psd, False), psd
+
+
+def create_private_file(path: str) -> int:
+    """Create a NEW file that is private (user and system only) from creation and return an ``os``-level descriptor for it (binary,
+    read/write). ``FileExistsError`` when the path exists; any other failure is an ``OSError`` and nothing is left behind."""
+    sa, psd = _private_sa(is_dir=False)
+    try:
+        h = _k32.CreateFileW(path, _GENERIC_READ | _GENERIC_WRITE, _FILE_SHARE_READ_WRITE, ctypes.byref(sa), _CREATE_NEW,
+                             _FILE_ATTRIBUTE_NORMAL, None)
+        if h is None or h == _INVALID_HANDLE:
+            err = ctypes.get_last_error()
+            if err in (_ERROR_FILE_EXISTS, _ERROR_ALREADY_EXISTS):
+                raise FileExistsError(17, "already exists", path)
+            raise ctypes.WinError(err)
+    finally:
+        _local_free(psd)
+    try:
+        return msvcrt.open_osfhandle(h, os.O_RDWR | os.O_BINARY)
+    except BaseException:
+        _k32.CloseHandle(h)
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
+
+
+def create_private_dir(path: str) -> None:
+    """Create a NEW directory that is private (user and system only, inherited by what is created in it) from creation."""
+    sa, psd = _private_sa(is_dir=True)
+    try:
+        if not _k32.CreateDirectoryW(path, ctypes.byref(sa)):
+            err = ctypes.get_last_error()
+            if err in (_ERROR_FILE_EXISTS, _ERROR_ALREADY_EXISTS):
+                raise FileExistsError(17, "already exists", path)
+            raise ctypes.WinError(err)
     finally:
         _local_free(psd)

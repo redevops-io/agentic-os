@@ -124,8 +124,6 @@ def write_key_env_file(path: str, *, from_key_file: str | None = None) -> str:
         f.write(f"PERMISSIONS_KEY={key}\n")
         f.flush()
         os.fsync(f.fileno())
-    if not _files.HAS_POSIX_MODES:
-        _files.make_private(path)                            # Windows ignores the mode above: set a user-only DACL
     return path
 
 

@@ -264,6 +264,14 @@ nothing. An inter-process file lock is required (`flock` on POSIX, `LockFileEx` 
 construction** instead of running unlocked. Network filesystems that do not implement `flock` correctly cannot give this guarantee: keep the grants
 volume on local or properly locking storage.
 
+Windows has no mode bits, so the key file, the local profile and the encrypted secret files are checked from their location and their
+DACL instead (`agentic_os/_platform/files.py`): the file must be a regular file under the user's profile directory, and its owner and
+DACL may name only that user, the system and the machine's administrators; anything else is refused, with the `icacls` command that
+fixes it in the message. No development switch makes an exposed key file usable there (`PERMISSIONS_ALLOW_GENERATED_KEY_DEV` still
+generates a key file when there is none). Files and directories the store creates are private from the moment they exist (a protected
+DACL for the user and the system). Limits: the check covers the file, not the directories above it; a check and the read that follows
+are separate steps; a link or reparse point (including some redirected or cloud-synced known folders) is refused.
+
 ## 7. Rollback
 
 * **Back to the previous release, encrypted file kept.** The previous release reads `grants.enc` if it has

@@ -96,7 +96,7 @@ def test_a_permission_error_after_the_bounded_retry_is_a_grant_storage_error(tmp
         raise e
     monkeypatch.setattr(files, "_WINDOWS", True)
     monkeypatch.setattr(files, "_REPLACE_DELAY_S", 0)
-    monkeypatch.setattr(files, "make_private", lambda *a, **k: None)           # the Windows API is not there to call on this host
+    monkeypatch.setattr(files, "create_private_temp", lambda d, pre, suf: __import__("tempfile").mkstemp(dir=d, prefix=pre, suffix=suf))   # the Windows API is not there to call on this host
     monkeypatch.setattr(os, "replace", held)
     with pytest.raises(perm.GrantStorageError, match="in use by another process"):
         perm._atomic_write(p, b"new")

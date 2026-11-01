@@ -380,7 +380,8 @@ class _SecretBox:
         except OSError:
             problem = None          # unreadable: the read below reports it
         if problem:
-            if not allow_generated_key_dev:
+            if not allow_generated_key_dev or not _files.HAS_POSIX_MODES:
+                # Without POSIX modes (Windows) no development switch makes an exposed key file usable: the opt-in only ever meant "generate one if there is none"
                 self._plaintext_or_raise(
                     f"the key file {kf} {problem}. Fix it ({_key_fix_hint(kf)}), or provide the "
                     f"key as PERMISSIONS_KEY instead (a mounted secret is often 0444 and root-owned: use the environment "
@@ -409,8 +410,6 @@ class _SecretBox:
                 fd = _files.create_exclusive(kf)
                 with os.fdopen(fd, "w", newline="\n") as f:
                     f.write(base64.b64encode(key).decode())
-                if not _files.HAS_POSIX_MODES:
-                    _files.make_private(kf)                      # Windows ignores the mode above: set a user-only DACL
             except Exception as e:  # noqa: BLE001
                 self._plaintext_or_raise(f"could not generate a key file at {kf} ({type(e).__name__})")
                 return
@@ -479,8 +478,6 @@ def provision_key_file(directory: str, path: "str | None" = None) -> tuple[Path,
     fd = _files.create_exclusive(kf)
     with os.fdopen(fd, "w", newline="\n") as f:
         f.write(base64.b64encode(AESGCM.generate_key(bit_length=256)).decode())
-    if not _files.HAS_POSIX_MODES:
-        _files.make_private(kf)                                 # Windows ignores the mode above: set a user-only DACL on the key file
     return kf, True
 
 
@@ -532,8 +529,6 @@ def _copy_private(src, dst) -> None:
         f.write(data)
         f.flush()
         os.fsync(f.fileno())
-    if not _files.HAS_POSIX_MODES:
-        _files.make_private(dst)                                # Windows ignores the mode above: a user-only DACL
     _fsync_dir(os.path.dirname(dst) or ".")
 
 
@@ -543,7 +538,11 @@ def _atomic_write(path, data: bytes) -> None:
     previous file or the complete new one, never a partial one; the temp file is removed on failure."""
     path = os.fspath(path)
     _refuse_symlink(path, "grants file")
-    _files.atomic_write(path, data)
+    try:
+        _files.atomic_write(path, data)
+    except PermissionError as e:                                  # still refused after the bounded retry (Windows: the file is held open elsewhere)
+        raise GrantStorageError(f"could not replace {path}: it is in use by another process ({type(e).__name__}); the previous file was left "
+                                f"as it was. Retry the operation.") from e
 
 
 class _Doc(NamedTuple):

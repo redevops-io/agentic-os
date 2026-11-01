@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import errno
 import os
+import secrets
 import stat
 import tempfile
 import time
@@ -100,9 +101,12 @@ def read_regular(path) -> bytes:
 def create_exclusive(path, mode: int = 0o600) -> int:
     """Create a NEW file and return its descriptor: never an existing path, never through a symbolic link. POSIX: ``O_EXCL`` with
     ``O_NOFOLLOW``. Windows ignores ``mode`` and would create through a dangling link, so an existing path of any kind (a link
-    included) is refused first; the caller then applies ``make_private``. Raises ``FileExistsError`` for an existing path."""
-    if _WINDOWS and os.path.lexists(path):
-        raise FileExistsError(errno.EEXIST, "already exists", os.fspath(path))
+    included) is refused first, and the file is created with a protected user-and-system-only DACL, so it is private from its first
+    instant. Raises ``FileExistsError`` for an existing path."""
+    if _WINDOWS:
+        if os.path.lexists(path):
+            raise FileExistsError(errno.EEXIST, "already exists", os.fspath(path))
+        return _win32.create_private_file(os.fspath(path))    # private from creation (a DACL set afterwards would leave a window)
     return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | getattr(os, "O_BINARY", 0), mode)
 
 
@@ -128,11 +132,12 @@ def ensure_private_dir(path) -> None:
         path = parent
     for d in reversed(missing):
         try:
-            os.mkdir(d, 0o700)
+            if _WINDOWS:
+                _win32.create_private_dir(d)                  # private from creation: nothing is inherited, nothing to harden afterwards
+            else:
+                os.mkdir(d, 0o700)
         except FileExistsError:
             continue
-        if _WINDOWS:
-            _win32.set_private_dacl(d, is_dir=True)
 
 
 def fsync_dir(path) -> None:
@@ -165,19 +170,32 @@ def replace_file(src, dst) -> None:
             time.sleep(_REPLACE_DELAY_S)
 
 
+def create_private_temp(directory, prefix: str, suffix: str) -> "tuple[int, str]":
+    """A new temporary file in ``directory``, private from creation: ``mkstemp`` (0600) on POSIX, a file created with a protected
+    user-and-system-only DACL on Windows (so no data is ever written to a file the parent's ACL exposes). Returns ``(fd, path)``."""
+    if not _WINDOWS:
+        return tempfile.mkstemp(dir=directory, prefix=prefix, suffix=suffix)
+    for _ in range(100):
+        path = os.path.join(os.fspath(directory), f"{prefix}{secrets.token_hex(4)}{suffix}")
+        try:
+            return create_exclusive(path), path
+        except FileExistsError:
+            continue
+    raise FileExistsError(errno.EEXIST, "could not find an unused temporary name", os.fspath(directory))
+
+
 def atomic_write(path, data: bytes) -> None:
     """Replace ``path`` with ``data`` all-or-nothing: a temp file in the same directory (private, created exclusively),
     write and fsync, ``replace_file``, fsync the directory. A failure or a crash leaves the previous file or the
     complete new one, never a partial one; the temp file is removed on failure."""
     path = os.fspath(path)
     d = os.path.dirname(path) or "."
-    fd, tmp = tempfile.mkstemp(dir=d, prefix=os.path.basename(path) + ".", suffix=".tmp")
+    fd, tmp = create_private_temp(d, os.path.basename(path) + ".", ".tmp")
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
-        make_private(tmp)
         replace_file(tmp, path)
     except BaseException:
         try:
