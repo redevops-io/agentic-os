@@ -12,13 +12,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        load: [idle, loaded]
         include:
-          - { variant: "pre-598 (main 009d493)", ref: 009d493, iterations: 3, nolock: "0" }
-          - { variant: "first #598 (20 ms polling, f0a3418)", ref: f0a3418be1b94019f2de05dc24b54ea0ac57ed73, iterations: 100, nolock: "0" }
-          - { variant: "blocking LockFileEx (c58cd1a)", ref: c58cd1a19bbc4d46d7f505a5f79124d4f899eae6, iterations: 100, nolock: "0" }
-          - { variant: "main, queue slot (a94323a)", ref: a94323a, iterations: 100, nolock: "0" }
-          - { variant: "main, NO lock code (a94323a)", ref: a94323a, iterations: 100, nolock: "1" }
+          - { load: idle, variant: "pre-598 (main 009d493)", ref: 009d493925384af916c2e6e56a7489a4605673ae, iterations: 3, nolock: "0" }
+          - { load: idle, variant: "first #598 (20 ms polling f0a3418)", ref: f0a3418be1b94019f2de05dc24b54ea0ac57ed73, iterations: 100, nolock: "0" }
+          - { load: idle, variant: "blocking LockFileEx (c58cd1a)", ref: c58cd1a19bbc4d46d7f505a5f79124d4f899eae6, iterations: 100, nolock: "0" }
+          - { load: idle, variant: "main, queue slot (a94323a)", ref: a94323a0a496236ec9c1bb77f8b96734cc63a9af, iterations: 100, nolock: "0" }
+          - { load: idle, variant: "main, NO lock code (a94323a)", ref: a94323a0a496236ec9c1bb77f8b96734cc63a9af, iterations: 100, nolock: "1" }
+          - { load: loaded, variant: "pre-598 (main 009d493)", ref: 009d493925384af916c2e6e56a7489a4605673ae, iterations: 3, nolock: "0" }
+          - { load: loaded, variant: "first #598 (20 ms polling f0a3418)", ref: f0a3418be1b94019f2de05dc24b54ea0ac57ed73, iterations: 100, nolock: "0" }
+          - { load: loaded, variant: "blocking LockFileEx (c58cd1a)", ref: c58cd1a19bbc4d46d7f505a5f79124d4f899eae6, iterations: 100, nolock: "0" }
+          - { load: loaded, variant: "main, queue slot (a94323a)", ref: a94323a0a496236ec9c1bb77f8b96734cc63a9af, iterations: 100, nolock: "0" }
+          - { load: loaded, variant: "main, NO lock code (a94323a)", ref: a94323a0a496236ec9c1bb77f8b96734cc63a9af, iterations: 100, nolock: "1" }
     env:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
