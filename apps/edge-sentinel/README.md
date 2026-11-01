@@ -1,6 +1,6 @@
 > ### Reference application for [Context Runtime](https://github.com/redevops-io/context-runtime)
 >
-> A focused AI system for **security operations**. Context Runtime ships a tenant that learns **which sources to pull per alert (CrowdSec · threat-intel · EDR)** — in its offline benchmark the learned policy scores **0.900 vs 0.800** against a always-full baseline ([`examples/soc_triage.py`](https://github.com/redevops-io/context-runtime/blob/main/examples/soc_triage.py)).
+> A focused AI system for **security operations**: CrowdSec decisions and alerts, read and explained by an agent, with a human approval step before any block.
 >
 > ```
 > Context Runtime  →  ReDevOps RAG  →  Sidekick  →  Application logic
@@ -17,7 +17,7 @@ detection & decision engine) with:
 
 - an **agent layer** that reads REAL CrowdSec data — live decisions over the LAPI bouncer
   API + alerts via `cscli ... -o json`, and
-- an **MD3 SOC dashboard** rendered from that live data (no mock data),
+- an **MD3 SOC dashboard** rendered from the data CrowdSec holds (no mock data on the CrowdSec panels; the network and backup panels show labelled SAMPLE DATA until their token is set),
 
 for the demo tenant **Meridian Wealth Management** (a wealth-management firm).
 
@@ -87,13 +87,11 @@ pip install -r requirements.txt          # add --break-system-packages on PEP-66
 python3 -m uvicorn app:app --host 0.0.0.0 --port 8203
 #   app.py auto-loads .env, so CROWDSEC_BOUNCER_KEY is picked up with no manual copy.
 
-# Or with Docker (point the LAPI URL at the CrowdSec service; mount the docker socket
-# for the cscli-backed alert/triage/approve paths):
+# Or with Docker (point the LAPI URL at the CrowdSec service; the socket is NOT mounted, see "Docker access" below):
 docker build -t edge-sentinel .
 docker run -e AGENTIC_OS_PERMISSIONS=off --rm -p 8203:8203 \
   -e CROWDSEC_LAPI_URL=http://host.docker.internal:8086 \
   -e CROWDSEC_BOUNCER_KEY=<key from .env> \
-  -v /var/run/docker.sock:/var/run/docker.sock \
   edge-sentinel
 ```
 
@@ -125,24 +123,30 @@ The sentinel can also read alerts from the CrowdSec LAPI with a machine (watcher
 ## Endpoints
 
 - `GET /health` → `{"status":"ok","core":"crowdsec","connected": <bool>}`
-- `GET /api/activity` → live KPIs (threats blocked, alerts 24h, unique source IPs, last
-  event) + active decisions + alert feed + top scenarios, all from CrowdSec. Cached 10s.
-- `GET /` → the MD3 SOC dashboard from the live data: a **status banner** first (green
-  "All systems normal" / red when there are active threats), **KPI tiles**, an
+- `GET /api/activity` → KPIs read from CrowdSec (active decisions, alerts 24h, unique source IPs, last
+  event, plus the time of the read) + active decisions + alert feed + top scenarios, all from CrowdSec. Cached 10s.
+- `GET /` → the MD3 SOC dashboard from the live data: a **status banner** first (a neutral "CrowdSec: N active decisions and M alerts, read at <time>" statement, or red when CrowdSec holds active decisions or is unreachable; it never claims all is well), **KPI tiles**, an
   **alert feed grouped by severity** with color pills, a **scenario bar meter**, and an
-  **attack-sources / active-decisions table**. Header shows "Meridian Wealth Management", a green
-  "agent active · core: CrowdSec connected" pill, and an "Open CrowdSec metrics ↗" link.
+  **attack-sources / active-decisions table**. Header shows "Meridian Wealth Management", a
+  "CrowdSec LAPI reachable" pill, a "read from the CrowdSec LAPI at <time>" badge, and an "Open CrowdSec metrics ↗" link.
 - `POST /agent/run` with `{"action": ...}`:
   - `"block_ip"` `{ip}` → the **approval-gated** sensitive action. Returns
     `{"status":"pending_approval","summary":"block <ip>"}` — never auto-bans.
   - `"approve_block"` `{ip, duration?, reason?}` → the approved path: actually runs
-    `cscli decisions add` to enforce the ban, then refreshes the dashboard cache.
+    `cscli decisions add` to enforce the ban, then refreshes the dashboard cache. Without
+    `SENTINEL_BLOCK_ENABLED` this route returns a **dry run**: the response says `Dry run: nothing was blocked`.
+    Executing a real block from this route needs an operator credential and that enable flag.
   - `"triage"` → summarizes active decisions + alerts (severity mix, top scenarios);
     adds a one-line LLM reasoning blurb iff `ANTHROPIC_API_KEY` is set.
 
-## Docker socket access
+## Docker access (least privilege)
 
-The image runs as uid 10001. If you mount `/var/run/docker.sock`, add the socket group to the container (compose `group_add: ["<gid>"]`, from `stat -c %g /var/run/docker.sock`). See `apps/README.md`.
+Edge Sentinel does not need unrestricted Docker access, and the example above does not mount the Docker socket.
+
+- **Decisions** are read over the CrowdSec LAPI with a bouncer key: no Docker access.
+- **Alerts**: in this tree the alert feed is read with `cscli alerts list` through `docker exec` into the CrowdSec container (`core.fetch_alerts`). Without Docker access that read fails and the dashboard says "ALERT FEED UNAVAILABLE"; it is never shown as a quiet reading. Reading alerts from the LAPI with a watcher (machine) login, which needs no Docker access, is planned for this tree.
+- **Image and deployment scanning** from the chat is not available in the demo and is planned.
+- If an operator turns on a container feature: never mount the raw socket into the app. Either run the scanners in a separate, isolated worker that holds the access and returns results, or put a restricted socket proxy in front of the daemon. The proxy is **operator-supplied**: Edge Sentinel does not ship or support one, and this describes a pattern. It must allow-list by method and path; for the features above that is `GET /_ping`; for the `cscli` alert read `GET /containers/<crowdsec container>/json`, `POST /containers/<crowdsec container>/exec`, `POST /exec/<id>/start`, `GET /exec/<id>/json` and `POST /exec/<id>/resize`; for listing containers `GET /containers/json` and `GET /containers/<name>/json`; for images `GET /images/<ref>/json` and, for scanners that read an image through the daemon, `GET /images/<ref>/get` (image export). Know the limits: a path allow-list does not inspect request bodies, so the exec endpoints let the caller run any command in that container (this is not read-only), `GET /containers/<name>/json` returns the container's environment, which may hold secrets, and `GET /images/<ref>/get` exports every layer of an image, which may include baked-in secrets.
 
 ## Authorization note
 

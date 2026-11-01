@@ -51,5 +51,5 @@ container refuses to start with a clear message if `/data` is not writable.
   Bind mounts need the same `chown` on the host path.
 - Apps that talk to the Docker socket need the socket's group added to the container, e.g. compose
   `group_add: ["<docker gid>"]` (find it with `stat -c %g /var/run/docker.sock`):
-  - edge-sentinel (docker CLI used for `cscli`, Trivy/Syft/Cosign inspection)
+  - edge-sentinel: only if an operator enables a Docker-backed feature; see its README ("Docker access"): use a restricted, operator-supplied proxy or a separate scanner worker, not the raw socket
   - compliance (only when `scan.sh` runs in its docker mode)

@@ -3,9 +3,10 @@ FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0
 
 WORKDIR /app
 
-# docker CLI (static binary) so `cscli` (alerts/bans) can be exec'd into the CrowdSec
-# container via the mounted /var/run/docker.sock. Decisions/health are read purely over
-# the LAPI and need none of this — alerts just degrade gracefully if the socket is absent.
+# docker CLI (static binary) so `cscli` (alerts/bans) CAN be exec'd into the CrowdSec container when an operator
+# provides Docker access (a restricted, operator-supplied proxy or a separate worker; see the README, "Docker access").
+# Decisions/health are read purely over the LAPI and need none of this; without Docker access the alert feed
+# shows as unavailable.
 ARG DOCKER_CLI_VERSION=27.3.1
 ARG TRIVY_VERSION=0.75.0
 ARG TRIVY_SHA256=c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
@@ -58,9 +59,9 @@ RUN touch edge_sentinel/__init__.py
 # Notes for containerized runs:
 #   * CROWDSEC_LAPI_URL should point at the CrowdSec service on the shared docker
 #     network (e.g. http://crowdsec:8080), not localhost.
-#   * The `triage`/`approve_block`/alerts path shells out to `cscli` via the docker
-#     socket; to use it from a container, mount /var/run/docker.sock. Decisions are
-#     read purely over the LAPI bouncer key and need no socket.
+#   * The `triage`/`approve_block`/alerts path shells out to `cscli` via the docker CLI, which needs Docker access
+#     (do not mount the raw /var/run/docker.sock; see the README, "Docker access"). Decisions are read purely over
+#     the LAPI bouncer key and need none.
 # Run as an unprivileged user; /app and /data are writable by it (state lives under $HOME or /data).
 RUN useradd --system --uid 10001 --create-home --home-dir /home/app app \
  && mkdir -p /data && chown -R app:app /app /data

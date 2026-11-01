@@ -172,6 +172,7 @@ a{color:var(--primary);text-decoration:none}
 .footer{color:var(--on-surface-muted);font:400 12px/16px var(--font-sans);text-align:center;padding-top:var(--sp-2)}
 .status-banner{display:flex;align-items:center;gap:var(--sp-4);padding:var(--sp-4) var(--sp-5);border-radius:var(--radius-md);border-left:4px solid var(--success);background:var(--success-container);color:var(--on-surface)}
 .status-banner--threat{border-left-color:var(--danger);background:var(--danger-container)}
+.status-banner--quiet{border-left-color:var(--info);background:var(--info-container)}
 .status-banner__icon{font-size:20px;line-height:1}
 .feed{display:flex;flex-direction:column}
 .feed__row{display:flex;align-items:center;gap:var(--sp-4);padding:var(--sp-3) 0;border-bottom:1px solid var(--outline-variant)}
@@ -195,6 +196,89 @@ FONT_LINK = (
 
 def _esc(v) -> str:
     return html.escape(str(v))
+
+
+def _src(data: dict, key: str) -> tuple[bool, str]:
+    """(ok, note) for one CrowdSec source ('decisions' or 'alerts'); a payload without a status counts as read."""
+    st = data.get(f"{key}_status")
+    if not isinstance(st, dict):
+        return True, ""
+    return bool(st.get("ok", True)), str(st.get("note", ""))
+
+
+def _read_note(data: dict) -> str:
+    """What was read and when, per source, or why there is no reading. Never claims a read for a source that failed."""
+    if not data.get("connected"):
+        return "no reading: CrowdSec unreachable"
+    d_ok, d_note = _src(data, "decisions")
+    a_ok, a_note = _src(data, "alerts")
+    at = data.get("read_at") or "an unknown time"
+    if d_ok and a_ok:
+        return f"read from CrowdSec at {at}"
+    parts = []
+    parts.append(f"decisions read at {data.get('decisions_read_at') or at}" if d_ok else f"decisions not read ({d_note})")
+    parts.append(f"alerts read at {data.get('alerts_read_at') or at}" if a_ok else f"alerts not read ({a_note})")
+    return "; ".join(parts)
+
+
+def _alerts_note(data: dict) -> str:
+    """The alert feed card's own read note (it can fail while decisions were read)."""
+    if not data.get("connected"):
+        return "no reading: CrowdSec unreachable"
+    a_ok, a_note = _src(data, "alerts")
+    if not a_ok:
+        return f"alerts not read ({a_note})"
+    return f"read from CrowdSec at {data.get('alerts_read_at') or data.get('read_at') or 'an unknown time'}"
+
+
+def _origin_tag(origin: str, scenario_full: str = "") -> str:
+    """Visible tag for an entry that was added by hand. It says only what is known: a SAMPLE HISTORY marker in the reason
+    (written by seed.py) is shown as such; an origin of cscli is 'manual', which can be sample history or an approved block."""
+    if str(scenario_full or "").startswith("SAMPLE HISTORY:"):
+        return (" <span class='pill pill--neutral' title='Marked SAMPLE HISTORY when it was added (seed.py). Not a detection by a "
+                "CrowdSec scenario.'>sample history</span>")
+    if origin != "cscli":
+        return ""
+    return (" <span class='pill pill--neutral' title='Added manually via cscli. This can be demo sample history or an approved "
+            "block; it was not detected by a CrowdSec scenario.'>manual (cscli)</span>")
+
+
+_SAMPLE_STATE: dict = {"netbird": {"ts": 0.0, "sample": True, "busy": False}, "portabase": {"ts": 0.0, "sample": True, "busy": False}}
+_SAMPLE_TTL = 30.0
+
+
+def _refresh_sample_state(name: str) -> None:
+    """Re-read whether a service panel is showing sample data, from the same snapshot() the panel uses (so a token set
+    against an unreachable service is reported as sample, exactly like the panel)."""
+    mod = netbird if name == "netbird" else portabase
+    try:
+        sample = not mod.snapshot().get("live")
+    except Exception:  # noqa: BLE001
+        sample = True
+    _SAMPLE_STATE[name].update(ts=time.monotonic(), sample=sample, busy=False)
+
+
+def _is_sample(name: str) -> bool:
+    """True when the service's panel is (as far as is known) showing sample data. With no token configured the answer is
+    immediate; with a token the snapshot is refreshed in the background and 'sample' is assumed until it says otherwise."""
+    st = _SAMPLE_STATE[name]
+    token = netbird.NETBIRD_API_TOKEN if name == "netbird" else portabase.PORTABASE_API_TOKEN
+    if time.monotonic() - st["ts"] < _SAMPLE_TTL and st["ts"]:
+        return st["sample"]
+    if not token:
+        _refresh_sample_state(name)
+        return _SAMPLE_STATE[name]["sample"]
+    if not st["busy"]:
+        st["busy"] = True
+        import threading as _t
+        _t.Thread(target=_refresh_sample_state, args=(name,), daemon=True, name=f"sample-state-{name}").start()
+    return st["sample"]
+
+
+def _chips() -> list[str]:
+    return ["Any threats today?", "List the active bans",
+            "Review network access" + (" (sample data)" if _is_sample("netbird") else ""),
+            "Which vulnerability scanners are installed?"]
 
 
 _SEV_PILL = {
@@ -224,7 +308,7 @@ def _kpi_tiles(kpis: list[dict]) -> str:
 
 
 def _status_banner(data: dict) -> str:
-    """Green 'All systems normal' / red when there's an active threat being handled."""
+    """Red when CrowdSec is unreachable or holds active decisions; otherwise a neutral statement of what was read and when."""
     if not data["connected"]:
         return (
             "<div class='status-banner status-banner--threat'>"
@@ -233,23 +317,47 @@ def _status_banner(data: dict) -> str:
             "<span class='body-m'>CrowdSec LAPI is not responding — detections cannot be read.</span>"
             "</div>"
         )
-    if data["has_threat"]:
+    d_ok, d_note = _src(data, "decisions")
+    a_ok, a_note = _src(data, "alerts")
+    notes = []
+    if not d_ok:
+        notes.append(f"the decisions could not be read ({d_note})")
+    if not a_ok:
+        notes.append(f"the alert feed could not be read ({a_note})")
+    unread = (" The count for " + " and ".join(n for n in ("decisions" if not d_ok else "", "alerts" if not a_ok else "") if n) +
+              " is not a reading.") if notes else ""
+    if data["has_threat"] and d_ok:
         crit = [a for a in data["alerts"] if a["severity"] == "critical"]
         n = len(data["decisions"])
         top = data["alerts"][0]["scenario"] if data["alerts"] else "—"
+        alert_part = (f"{len(crit)} critical alert(s) by scenario name. Latest alert: <span class='mono'>{_esc(top)}</span>. "
+                      if a_ok else "")
+        feed = f" CrowdSec: {_esc('; '.join(notes))}.{unread}" if notes else ""
         return (
             "<div class='status-banner status-banner--threat'>"
             "<span class='status-banner__icon'>&#9888;</span>"
-            f"<span class='pill pill--danger'><span class='pill__dot'></span>ACTIVE THREATS · {n} blocked</span>"
-            f"<span class='body-m'>{len(crit)} critical · agent is enforcing {n} block decision(s) at the edge. "
-            f"Latest: <span class='mono'>{_esc(top)}</span>. Sensitive blocks are human-approved.</span>"
+            f"<span class='pill pill--danger'><span class='pill__dot'></span>ACTIVE DECISIONS · {n}</span>"
+            f"<span class='body-m'>CrowdSec holds {n} active decision(s). {alert_part}{_esc(_read_note(data))}.{feed} "
+            "Entries tagged manual (cscli) or sample history were added by hand and may be sample data. Sensitive blocks are human-approved.</span>"
+            "</div>"
+        )
+    if notes:
+        label = "DECISIONS NOT READ" if not d_ok else "ALERT FEED UNAVAILABLE"
+        return (
+            "<div class='status-banner status-banner--quiet'>"
+            "<span class='status-banner__icon'>&#9888;</span>"
+            f"<span class='pill pill--warn'><span class='pill__dot'></span>{label}</span>"
+            f"<span class='body-m'>CrowdSec: {_esc('; '.join(notes))}.{unread} Nothing can be said about the unread part; "
+            f"{_esc(_read_note(data))}.</span>"
             "</div>"
         )
     return (
-        "<div class='status-banner'>"
-        "<span class='status-banner__icon'>&#10003;</span>"
-        "<span class='pill pill--success'><span class='pill__dot'></span>All systems normal</span>"
-        "<span class='body-m'>No active block decisions. CrowdSec is monitoring; the agent is on watch.</span>"
+        "<div class='status-banner status-banner--quiet'>"
+        "<span class='status-banner__icon'>&#9432;</span>"
+        "<span class='pill pill--info'><span class='pill__dot'></span>Quiet reading</span>"
+        f"<span class='body-m'>CrowdSec: {len(data['decisions'])} active decisions and {len(data['alerts'])} alerts, "
+        f"{_esc(_read_note(data))}. This is what CrowdSec currently holds. It is not an assessment of the "
+        "environment: it does not show that nothing happened or that any sensor is watching.</span>"
         "</div>"
     )
 
@@ -268,7 +376,7 @@ def _alert_feed(data: dict) -> str:
                 "<div class='feed__row'>"
                 f"<div class='feed__sev'>{_sev_pill(sev)}</div>"
                 "<div class='feed__main'>"
-                f"<div class='feed__scenario'>{_esc(a['scenario'])}</div>"
+                f"<div class='feed__scenario'>{_esc(a['scenario'])}{_origin_tag(a.get('origin', ''), a.get('scenario_full', ''))}</div>"
                 f"<div class='feed__meta'>from <span class='feed__src'>{_esc(a['source'])}</span> "
                 f"· {_esc(a['scope'])} · {_esc(a['events'])} event(s)</div>"
                 "</div>"
@@ -276,11 +384,11 @@ def _alert_feed(data: dict) -> str:
                 "</div>"
             )
     if not rows:
-        rows = "<div class='feed__row'><div class='feed__meta'>No alerts in the CrowdSec store.</div></div>"
+        rows = ("<div class='feed__row'><div class='feed__meta'>" + ("No alerts in the CrowdSec store." if _src(data, "alerts")[0] else f"Alerts not read ({_esc(_src(data, 'alerts')[1])}).") + "</div></div>")
     return (
         "<div class='card'>"
         "<div class='card__head'><h2 class='card__title'>Alert feed · by severity</h2>"
-        "<span class='pill pill--info'><span class='pill__dot'></span>data: live from CrowdSec</span></div>"
+        f"<span class='pill pill--info'><span class='pill__dot'></span>{_esc(_alerts_note(data))}</span></div>"
         f"<div class='feed'>{rows}</div>"
         "</div>"
     )
@@ -297,10 +405,10 @@ def _scenario_bars(data: dict) -> str:
             "</div>"
         )
     if not body:
-        body = "<div class='barlist__label'>No scenarios recorded.</div>"
+        body = ("<div class='barlist__label'>No scenarios recorded.</div>" if _src(data, "alerts")[0] else "<div class='barlist__label'>Alerts not read, so no scenarios are shown.</div>")
     return (
         "<div class='card'>"
-        "<div class='card__head'><h2 class='card__title'>Detections by scenario (live)</h2></div>"
+        "<div class='card__head'><h2 class='card__title'>Alerts by scenario (from the CrowdSec reading)</h2></div>"
         f"<div class='barlist'>{body}</div>"
         "</div>"
     )
@@ -313,14 +421,14 @@ def _decisions_table(data: dict) -> str:
             "<tr>"
             f"<td class='mono'>{_esc(d['value'])}</td>"
             f"<td>{_esc(d['scope'])}</td>"
-            f"<td class='mono'>{_esc(d['scenario'])}</td>"
+            f"<td class='mono'>{_esc(d['scenario'])}{_origin_tag(d.get('origin', ''), d.get('scenario_full', ''))}</td>"
             f"<td>{_sev_pill(d['severity'])}</td>"
             f"<td class='mono'>{_esc(d['duration'])}</td>"
             f"<td><span class='pill pill--danger'>{_esc(d['type'])}</span></td>"
             "</tr>"
         )
     if not rows:
-        rows = "<tr><td colspan='6'>No active decisions.</td></tr>"
+        rows = ("<tr><td colspan='6'>No active decisions.</td></tr>" if _src(data, "decisions")[0] else f"<tr><td colspan='6'>Decisions not read ({_esc(_src(data, 'decisions')[1])}).</td></tr>")
     return (
         "<div class='card'>"
         "<div class='card__head'><h2 class='card__title'>Attack sources · active decisions</h2>"
@@ -329,6 +437,9 @@ def _decisions_table(data: dict) -> str:
         "<th>Source</th><th>Scope</th><th>Scenario</th><th>Severity</th><th>Expires in</th><th>Action</th>"
         "</tr></thead>"
         f"<tbody>{rows}</tbody></table>"
+        "<div class='body-s' style='color:#9b99a1'>Entries tagged manual (cscli) were added by hand with cscli: demo sample "
+        "history or an approved block. Entries tagged sample history were marked as such when they were added. Neither is a "
+        "detection by a CrowdSec scenario.</div>"
         "</div>"
     )
 
@@ -354,8 +465,8 @@ def _panel_shell(title: str, subtitle: str, body: str) -> str:
 
 def _live_badge(is_live: bool, hint: str) -> str:
     if is_live:
-        return "<span style='background:#0d1f1c;color:#4fd1c5;border:1px solid #4fd1c5;border-radius:5px;padding:2px 9px;font-size:11px;font-weight:700'>LIVE</span>"
-    return f"<span style='background:#241f14;color:#e0b000;border:1px solid #6b5a1e;border-radius:5px;padding:2px 9px;font-size:11px;font-weight:700'>SAMPLE — {_esc(hint)}</span>"
+        return "<span style='background:#0d1f1c;color:#4fd1c5;border:1px solid #4fd1c5;border-radius:5px;padding:2px 9px;font-size:11px;font-weight:700'>READ FROM THE SERVICE</span>"
+    return f"<span style='background:#241f14;color:#e0b000;border:1px solid #6b5a1e;border-radius:5px;padding:2px 9px;font-size:11px;font-weight:700'>SAMPLE DATA — {_esc(hint)}</span>"
 
 
 def _tbl(headers: list[str], rows: list[list[str]]) -> str:
@@ -378,12 +489,12 @@ def _card(title: str, inner: str) -> str:
 
 def render(data: dict) -> str:
     connected = data["connected"]
-    conn_txt = "core: CrowdSec connected" if connected else "core: CrowdSec UNREACHABLE"
+    conn_txt = "CrowdSec LAPI reachable" if connected else "CrowdSec LAPI UNREACHABLE"
     conn_cls = "pill--success" if connected else "pill--danger"
     status_pill = (
-        f"<span class='pill {conn_cls}'><span class='pill__dot'></span>agent active · {_esc(conn_txt)}</span>"
+        f"<span class='pill {conn_cls}'><span class='pill__dot'></span>{_esc(conn_txt)}</span>"
     )
-    live_badge = "<span class='pill pill--info'><span class='pill__dot'></span>data: live from CrowdSec</span>"
+    live_badge = f"<span class='pill pill--info'><span class='pill__dot'></span>{_esc(_read_note(data))}</span>"
     open_btn = (
         f"<a class='btn' href='{_esc(data['front_url'])}' target='_blank' rel='noopener' "
         "title='CrowdSec has no rich UI — this is the LAPI endpoint; CrowdSec is CLI-managed via cscli'>"
@@ -429,7 +540,7 @@ def render(data: dict) -> str:
     <div class="appbar__sub">{_esc(SUBTITLE)}</div>
   </header>
   {body}
-  <footer class="footer">edge-sentinel · live activity for {_esc(TENANT)} ·
+  <footer class="footer">edge-sentinel · CrowdSec readings for the {_esc(TENANT)} demo tenant ·
     <a href="/api/activity">/api/activity</a> · agent + human, on a real CrowdSec core · redevops.io Agentic Business OS</footer>
 </div>
 </body>
@@ -487,7 +598,7 @@ def _cases_panel(summaries: list[dict]) -> str:
         )
     if not rows:
         rows = ("<tr><td colspan='6'>No investigation cases yet — a case is opened from each live CrowdSec "
-                "alert as it arrives. Nothing here is canned.</td></tr>")
+                "CrowdSec alert read (none at the last read). Nothing here is canned.</td></tr>")
     return (
         "<div class='card'>"
         "<div class='card__head'><h2 class='card__title'>Investigation cases · evidence workspace</h2>"
@@ -495,8 +606,9 @@ def _cases_panel(summaries: list[dict]) -> str:
         "<div class='body-m' style='color:#9b99a1;margin:-4px 0 10px'>Each row is a replayable "
         "<span class='mono'>SecurityCase</span> built from immutable evidence — raw alert &rarr; observation "
         "&rarr; finding &rarr; approval-gated action. <b>Approve is open</b> (it only stages the action); the "
-        "<b>real kick-off is operator-authenticated</b> and dry-run by default — the edge is never touched on "
-        "approve or reject.</div>"
+        "<b>real kick-off is operator-authenticated</b> and needs an enable flag (SENTINEL_BLOCK_ENABLED); without it this execute "
+        "step is a <b>dry run</b>: nothing is blocked, and the edge is never touched on approve or reject. Cases are rebuilt from the alerts "
+        "CrowdSec currently holds, including hand-added (cscli) entries that may be sample history.</div>"
         "<table class='table'><thead><tr>"
         "<th>Severity</th><th>Case</th><th>Status</th><th>Evidence</th><th>Replay</th><th>Response</th>"
         "</tr></thead>"
@@ -521,7 +633,7 @@ def _cases_panel(summaries: list[dict]) -> str:
         "  if(r.status===401){alert('Operator authentication required (HTTP Basic).');return;}\n"
         "  if(r.status===503){alert('Operator approval is not configured on this deployment.');return;}\n"
         "  const j = await r.json();\n"
-        "  alert(j.dry_run ? 'DRY-RUN: edge not touched (SENTINEL_BLOCK_ENABLED unset). Receipt: '+"
+        "  alert(j.dry_run ? 'Dry run: nothing was blocked (SENTINEL_BLOCK_ENABLED unset). Receipt: '+"
         "(j.receipt?j.receipt.status:'(none)') : 'Executed. Receipt: '+(j.receipt?j.receipt.status:'(none)')+"
         "' · verified='+(j.verification?j.verification.verified:'n/a'));\n"
         "  location.reload();\n"
@@ -607,8 +719,8 @@ def _approve_block(body: dict) -> dict:
     ip = target.value
     if not auth.block_enabled():
         return {"status": "dry_run", "action": "approve_block", "ip": ip,
-                "summary": f"DRY-RUN: would block {ip}",
-                "detail": "SENTINEL_BLOCK_ENABLED not set — the edge was not touched."}
+                "summary": f"Dry run: nothing was blocked. Would have blocked {ip}.",
+                "detail": "Dry run: SENTINEL_BLOCK_ENABLED is not set, so nothing was blocked and the edge was not touched."}
     return core.block_ip(body or {})
 
 
@@ -630,11 +742,11 @@ try:
 except Exception:  # noqa: BLE001 — context-runtime absent → no console
     _AgentConsole = None
 
-_SENTINEL_PRIMER = """CrowdSec is the open-source engine watching your network. It reads your logs, spots attacks, and can block the attacker's IP address at the edge. Think of it as a smart doorman: it recognises bad behaviour and shuts the door on it. edge-sentinel is the friendly agent layer on top — you can ask it what's happening, and it always keeps a human in the loop before it blocks anyone.
+_SENTINEL_PRIMER = """CrowdSec is the open-source engine watching your network. It reads your logs, spots attacks, and records ban decisions for attacking IP addresses; whether anything is actually blocked depends on a bouncer, which edge-sentinel neither provides nor checks. edge-sentinel is the agent layer on top: you can ask it what CrowdSec currently holds, and it keeps a human in the loop before any block is executed.
 
 The LAPI (Local API) is CrowdSec's brain: it holds the list of who should be blocked and hands that list out. A BOUNCER is the muscle — the component that actually enforces a block (in a firewall, web server, or proxy) by asking the LAPI "should I let this IP in?". Detection and enforcement are separate on purpose.
 
-A DECISION is an instruction to block a source, almost always a BAN on an IP address for a set DURATION (e.g. 4h). "Active decisions" = who is being blocked right now. When the duration runs out the block lifts automatically. To ban an IP for real, the agent runs `cscli decisions add`; to lift one you run `cscli decisions delete --ip <address>` (this is how you UNBAN someone).
+A DECISION is an instruction to block a source, almost always a BAN on an IP address for a set DURATION (e.g. 4h). "Active decisions" = the bans CrowdSec currently holds; a bouncer is what enforces them, and edge-sentinel does not know whether one is present. When the duration runs out the decision expires. To ban an IP for real, the agent runs `cscli decisions add`; to lift one you run `cscli decisions delete --ip <address>` (this is how you UNBAN someone).
 
 An ALERT is CrowdSec saying "I detected an attack." Read an alert by its SCENARIO (what the attacker did), its SOURCE (the IP it came from), and its event count (how many suspicious requests). One alert usually leads to one decision, but not always — some alerts are just logged for awareness.
 
@@ -644,25 +756,28 @@ A PARSER turns raw log lines into structured events; a COLLECTION is a ready-mad
 
 A WHITELIST tells CrowdSec to never block certain trusted IPs (your office, your VPN, a monitoring service). A FALSE POSITIVE is a legitimate visitor wrongly flagged — if a real customer or your own address gets blocked, unban them and add them to a whitelist so it doesn't recur. When unsure, prefer a short ban over a permanent one.
 
-Should you worry? A handful of brute-force or probing alerts from random internet IPs is normal background noise — CrowdSec blocked them, nothing to do. Worry when you see many events from one source, repeated attempts on the same account, or an exploit/RCE scenario — those deserve a closer look. edge-sentinel never auto-blocks: sensitive blocks are staged and wait for your approval.
+Should you worry? A handful of brute-force or probing alerts from random internet IPs is common background noise; say what was read, and do not say that anything was blocked unless the data shows an enforcing bouncer. Look closer when you see many events from one source, repeated attempts on the same account, or an exploit/RCE scenario — those deserve a closer look. edge-sentinel never auto-blocks: a block is staged and waits for human approval; executing it from this UI needs an operator credential and an enable flag, and the demo's approved block is a dry run (nothing is blocked). Never describe the network as safe or clean; describe what was read and when.
 
-Beyond the network, edge-sentinel also inspects the SOFTWARE SUPPLY CHAIN — the open-source libraries and images this platform installs — BEFORE they run for clients. A supply-chain SCAN (Trivy) checks every dependency, container image and config for known VULNERABILITIES (CVEs), leaked SECRETS and MISCONFIGURATIONS, and builds an SBOM (a Software Bill of Materials: the full list of components). Each CVE names the package, its SEVERITY (critical/high/medium/low), and the FIXED VERSION to upgrade to — the "patched pin" to move to. This is the PRE-DEPLOYMENT half of security; the network monitoring above is the RUNTIME half. Ask edge-sentinel to "scan our dependencies", list the vulnerabilities, explain a CVE, or produce an SBOM — it inspects the software before you trust it.
+Beyond the network, edge-sentinel also inspects the SOFTWARE SUPPLY CHAIN — the open-source libraries and images this platform installs — BEFORE they run for clients. A supply-chain SCAN (Trivy) checks every dependency, container image and config for known VULNERABILITIES (CVEs), leaked SECRETS and MISCONFIGURATIONS, and builds an SBOM (a Software Bill of Materials: the full list of components). Each CVE names the package, its SEVERITY (critical/high/medium/low), and the FIXED VERSION to upgrade to — the "patched pin" to move to. This is the PRE-DEPLOYMENT half of security; the network monitoring above is the RUNTIME half. In this deployment the scan covers the sentinel's own container filesystem only; scans of other apps' images need docker access that is off by default and are not available in the public demo. Scanner output is a report of known vulnerabilities, not confirmed exploitation.
 
-NETWORK ACCESS (NetBird) is the "who can reach what" half of security — a private WireGuard network with central policies, single sign-on and device checks. CrowdSec guards the perimeter; NetBird controls internal access. edge-sentinel can REVIEW it — ask "review network access" or "check device posture" and it lists the peers (devices) and policies, flagging any over-broad "All-to-All" rule that lets everything reach everything (that breaks least-privilege), plus posture issues like expired logins or unapproved devices. It can also PROPOSE a tighter policy, but like a block it is staged for your approval and only applied when you approve it. HOW TO ENABLE LIVE DATA: create a NetBird personal-access token and set NETBIRD_API_TOKEN (for a self-hosted NetBird also set NETBIRD_API_URL to https://your-netbird-host/api). Until a token is set the review shows clearly-labelled SAMPLE data so you can see the shape; once set it reads your real peers and policies.
+NETWORK ACCESS (NetBird) is the "who can reach what" half of security — a private WireGuard network with central policies, single sign-on and device checks. CrowdSec guards the perimeter; NetBird controls internal access. edge-sentinel can REVIEW it — ask "review network access" or "check device posture" and it lists the peers (devices) and policies, flagging any over-broad "All-to-All" rule that lets everything reach everything (that breaks least-privilege), plus posture issues like expired logins or unapproved devices. It can also DRAFT an additional, narrower policy, but like a block it is staged for your approval and only applied when you approve it. Applying it only adds a policy: the broad rule stays until someone disables it in NetBird. HOW TO ENABLE LIVE DATA: create a NetBird personal-access token and set NETBIRD_API_TOKEN (for a self-hosted NetBird also set NETBIRD_API_URL to https://your-netbird-host/api). Until a token is set the review shows clearly-labelled SAMPLE data so you can see the shape; once set it reads your real peers and policies.
 
 BACKUPS / CONTINUITY (Portabase) answer "is every database safely backed up, and could we recover?". Portabase is a self-hosted backup control plane: small agents sit next to each database, take an ENCRYPTED dump, and ship it to one or more STORAGE DESTINATIONS — a local disk for a fast restore, and an OFFSITE S3 bucket (AWS S3 or MinIO) for durability if a whole host is lost. edge-sentinel reports COVERAGE — ask "are the databases backed up?" and it says which cores have a recent, encrypted, offsite backup and where the gaps are (no backup at all, local-only with no offsite copy, or unencrypted). HOW TO SET UP OFFSITE S3 BACKUPS: bring up the backup control plane, add each database as a source and an S3 storage destination (keep the real keys in Vault), enrol the backup agent, then set PORTABASE_API_TOKEN so edge-sentinel can read coverage. Tip: add BOTH a local and an S3 destination and fan each backup out to both. Until a token is set, coverage shows clearly-labelled SAMPLE data.
 
-RUNTIME EXPOSURE (deploy-scan) is the complement of the supply-chain scan: it actively scans a LIVE deployment (a host or URL) for exploitable weakness using nmap / nuclei / ZAP. Supply-chain scanning inspects code & packages BEFORE deploy; this is the RUNTIME half. Because it sends probe traffic it is destructive, so starting a scan is staged for your approval, and scope is fail-closed to an allowlist on the deploy-scan side. Ask to "scan a running deployment for exposure"; it is available once DEPLOY_SCAN_MCP_URL points at the deploy-scan service."""
+RUNTIME EXPOSURE (deploy-scan) is the complement of the supply-chain scan: it actively scans a LIVE deployment (a host or URL) with nmap / nuclei / ZAP and reports what the scanners find (scanner output, not confirmed exploitation). Supply-chain scanning inspects code & packages BEFORE deploy; this is the RUNTIME half. Because it sends probe traffic it is destructive, so starting a scan is staged for your approval, and scope is fail-closed to an allowlist on the deploy-scan side. It is available only once DEPLOY_SCAN_MCP_URL points at the deploy-scan service, and it cannot be started from the public demo chat."""
 
 
 def _t_threat_summary(_a: dict) -> dict:
     d = fetch_activity()
     if not d["connected"]:
         return {"text": "CrowdSec core is unreachable, so I can't read live detections right now.", "data": d}
+    if not (_src(d, "decisions")[0] and _src(d, "alerts")[0]):
+        return {"text": f"CrowdSec was only partly read: {_read_note(d)}. I can say nothing about the part that was not read.",
+                "data": {"kpis": d["kpis"], "counts": d["counts"]}}
     k = {x["label"]: x["value"] for x in d["kpis"]}
     c = d["counts"]
     top = ", ".join(f"{s['scenario']} ({s['count']})" for s in d["top_scenarios"][:3]) or "none"
-    return {"text": f"{k.get('Threats blocked')} active block(s) enforced, {k.get('Alerts (24h)')} alert(s) in the last 24h "
+    return {"text": f"{k.get('Active decisions')} active decision(s) held in CrowdSec (read at {d.get('read_at') or 'an unknown time'}), {k.get('Alerts (24h)')} alert(s) in the last 24h "
             f"({c['alerts']} total in store) from {c['sources']} unique source IP(s). Top scenarios: {top}.",
             "data": {"kpis": d["kpis"], "top_scenarios": d["top_scenarios"], "counts": c}}
 
@@ -670,8 +785,10 @@ def _t_threat_summary(_a: dict) -> dict:
 def _t_list_bans(_a: dict) -> dict:
     d = fetch_activity()
     bans = d["decisions"]
+    if not _src(d, "decisions")[0]:
+        return {"text": f"I could not read CrowdSec's decisions ({_src(d, 'decisions')[1]}), so I cannot say who is banned.", "data": []}
     if not bans:
-        return {"text": "No active block decisions right now — nobody is currently banned.", "data": []}
+        return {"text": f"CrowdSec holds no active block decisions (read at {d.get('read_at') or 'an unknown time'}).", "data": []}
     lines = [f"{b['value']} · {b['scenario']} · {b['severity']} · {b['type']} expires in {b['duration'] or 'n/a'}" for b in bans[:15]]
     return {"text": f"{len(bans)} active ban(s):\n" + "\n".join(lines), "data": bans}
 
@@ -818,7 +935,7 @@ def _sc_status(_a: dict) -> dict:
     return {"text": f"Supply-chain scanners present: {have}.{last}", "data": {"available": av}}
 
 
-# ─── Runtime data plane: ClamAV (malware) + Wazuh (SIEM/XDR hub) — now deployed alongside ───
+# ─── Runtime data plane: ClamAV (malware scan) + Wazuh (manager status only) ───
 CLAMAV_HOST = os.environ.get("CLAMAV_HOST", "security-clamav")
 CLAMAV_PORT = int(os.environ.get("CLAMAV_PORT", "3310"))
 WAZUH_API = os.environ.get("WAZUH_API_URL", "https://host.docker.internal:55000").rstrip("/")
@@ -901,15 +1018,15 @@ def _wazuh_get(path: str) -> dict:
 def _t_wazuh_status(_a: dict) -> dict:
     d = _wazuh_get("/agents/summary/status")
     if not d:
-        return {"text": "The Wazuh SIEM hub isn't reachable from here yet (set WAZUH_API_PASSWORD). "
-                "Once wired, it unifies malware (ClamAV), compliance (OpenSCAP), FIM, SCA and vulnerability detection.", "data": {}}
+        return {"text": "Wazuh is not reachable from here (set WAZUH_API_PASSWORD). Edge Sentinel only reads Wazuh's "
+                "enrolled-agent counts; it does not ingest Wazuh alerts.", "data": {}}
     data = (d.get("data") or {})
     c = data.get("connection", data)   # /agents/summary/status nests counts under .connection
     active, disc = c.get("active", 0), c.get("disconnected", 0)
     total = c.get("total", active + disc)
-    return {"text": f"Wazuh SIEM/XDR hub is up: {active} active agent(s), {disc} disconnected, {total} enrolled. "
-            f"It correlates malware (ClamAV), compliance (OpenSCAP), FIM, SCA and vulnerability signals in one place. "
-            + ("Enroll endpoints as Wazuh agents to populate it." if total == 0 else ""),
+    return {"text": f"Wazuh manager is reachable: {active} active agent(s), {disc} disconnected, {total} enrolled "
+            f"(agent counts only; no Wazuh alerts or detections are read). "
+            + ("No endpoints are enrolled as Wazuh agents." if total == 0 else ""),
             "data": c}
 
 
@@ -935,6 +1052,10 @@ def _resolve_app_container(app: str) -> str:
     return ""
 
 
+_SCAN_UNAVAILABLE = ("App image scanning is not available in this deployment: it needs Docker access, which is off by default "
+                     "(planned).")
+
+
 def _t_scan_app(a: dict) -> dict:
     if _SCAN is None:
         return {"text": "Supply-chain scanning is unavailable (context-runtime missing).", "data": {}}
@@ -942,6 +1063,8 @@ def _t_scan_app(a: dict) -> dict:
     # tolerate the various keys an LLM picks (app / app_name / name / target / value)
     app = next((str(a[k]) for k in ("app", "app_name", "name", "target", "value", "application") if a.get(k)), "")
     cont = _resolve_app_container(app)
+    if not cont and not _SCAN.list_scannable_containers(""):
+        return {"text": _SCAN_UNAVAILABLE, "data": {"available": False}}
     if not cont:
         avail = ", ".join(c["name"].replace("agentic-os-stack-", "").replace("-1", "")
                           for c in _SCAN.list_scannable_containers("agentic-os-stack")[:20])
@@ -969,6 +1092,8 @@ def _t_list_apps(_a: dict) -> dict:
     if _SCAN is None:
         return {"text": "Supply-chain scanning is unavailable.", "data": {}}
     conts = _SCAN.list_scannable_containers("")
+    if not conts:
+        return {"text": _SCAN_UNAVAILABLE, "data": {"available": False}}
     apps = [c["name"] for c in conts if c["name"].startswith("agentic-os-stack-")]
     cores = [c["name"] for c in conts if not c["name"].startswith("agentic-os-stack-")]
     short = [a.replace("agentic-os-stack-", "").replace("-1", "") for a in apps]
@@ -1025,6 +1150,8 @@ def _t_scan_apps(a: dict) -> dict:
     limit = limit if limit > 0 else 8
 
     conts = _SCAN.list_scannable_containers("agentic-os-stack")
+    if not conts:
+        return {"text": _SCAN_UNAVAILABLE, "data": {"available": False}}
     names = [c["name"] for c in conts if c["name"].startswith("agentic-os-stack-")]
     wanted = a.get("apps") or a.get("targets")
     if isinstance(wanted, str):
@@ -1106,65 +1233,67 @@ def _t_vuln_db_permissions(_a: dict) -> dict:
                      "refs_visible_admin": refs_admin, "refs_visible_osv": refs_osv}}
 
 
-if _AgentConsole is not None:
-    _SENTINEL_CONSOLE = _AgentConsole(
+def _build_sentinel_console(console_cls, _crtool):
+    """Build the chat console (also called by the tests with a recording stand-in, so the REAL tool text and primer are checked)."""
+    return console_cls(
         f"{TENANT} Edge Sentinel", _SENTINEL_PRIMER,
         tools=[
-            _crtool("threat_summary", "current threat posture — active bans, alerts in the last 24h, top attack scenarios, source IPs", _t_threat_summary),
-            _crtool("list_bans", "list active block decisions: source IP, scenario, severity, and when the ban expires", _t_list_bans),
-            _crtool("explain_alert", "explain a specific alert currently in this network's feed (by scenario name) and whether it needs action", _t_explain_alert,
+            _crtool("threat_summary", "what CrowdSec currently holds: active decisions (bans), alerts in the last 24h and the top scenarios, with the time of the read. It is a reading, not an assessment of the environment", _t_threat_summary),
+            _crtool("list_bans", "list the active ban decisions CrowdSec holds: source IP, scenario, severity and when each expires (a decision is not proof that a bouncer enforces it)", _t_list_bans),
+            _crtool("explain_alert", "explain a specific alert currently in CrowdSec's feed (by scenario name) and whether it needs a closer look", _t_explain_alert,
                     parameters={"type": "object", "properties": {"scenario": {"type": "string", "description": "a scenario name from the live feed to explain"}}}),
-            _crtool("ban_ip", "block an IP at the edge for a duration (destructive — staged for human approval)", _t_ban_ip, side_effecting=True,
+            _crtool("ban_ip", "stage a ban of an IP for a duration. It is staged for human approval and never runs from this chat; executing a block from this UI needs an operator credential and an enable flag, and the demo's approved block is a dry run (nothing is blocked)", _t_ban_ip, side_effecting=True,
                     parameters={"type": "object", "properties": {"ip": {"type": "string"}, "duration": {"type": "string", "description": "e.g. 4h, 24h"}}}),
             # supply-chain (pre-deploy) tools. The launchers (supply_chain_scan, list_vulnerabilities, scan_app, scan_apps, sbom, malware_scan) start
             # processes / scans, so they are registered side_effecting=True (classified `write`): the approval policy applies in addition to the
             # write grant. list_scannable_apps, scanner_status, explain_vulnerability only read.
-            _crtool("supply_chain_scan", "scan our own software supply chain (dependencies, images, IaC, secrets) for known vulnerabilities before deployment", _sc_scan,
+            _crtool("supply_chain_scan", "scan the sentinel's own container filesystem for known vulnerabilities with Trivy (a scanner report, not confirmed exploitation). Scanning other apps' images needs docker access, which is off by default and not available in the public demo", _sc_scan,
                     parameters={"type": "object", "properties": {"target": {"type": "string", "description": "path or image to scan (default: the stack's dependencies)"}}}, side_effecting=True),
-            _crtool("list_vulnerabilities", "list the CVEs found in the last supply-chain scan, worst first, each with the version that fixes it", _sc_list, side_effecting=True),
-            _crtool("explain_vulnerability", "explain a specific CVE from the last scan and the patched version to move to", _sc_explain,
+            _crtool("list_vulnerabilities", "list the CVEs found in the last scan, worst first, each with the fixed version where there is one (a scanner report; run supply_chain_scan first)", _sc_list, side_effecting=True),
+            _crtool("explain_vulnerability", "explain a specific CVE from the last scan and the fixed version to move to, if there is one", _sc_explain,
                     parameters={"type": "object", "properties": {"id": {"type": "string", "description": "a CVE id from the scan"}}}),
-            _crtool("scan_app", "scan a SPECIFIC agentic app's container image for open-source (CVE) vulnerabilities and suggest the fixes to apply", _t_scan_app,
+            _crtool("scan_app", "Not available: app image scans need Docker access, which is off by default and is not provided in the public demo (planned).", _t_scan_app,
                     parameters={"type": "object", "properties": {"app": {"type": "string", "description": "the app to scan, e.g. billing, compliance, market-radar, books"}}}, side_effecting=True),
-            _crtool("scan_apps", "scan MANY agentic apps/containers at once for open-source (CVE) vulnerabilities and roll up the results — optionally filtered to ONE package ecosystem (npm, pypi, maven, go, os). Use this for 'scan all apps', 'which apps have npm modules/CVEs', 'scan the npm apps'.", _t_scan_apps,
+            _crtool("scan_apps", "Not available: app image scans need Docker access, which is off by default and is not provided in the public demo (planned).", _t_scan_apps,
                     parameters={"type": "object", "properties": {
                         "ecosystem": {"type": "string", "description": "restrict findings to one ecosystem: npm | pypi | maven | go | os (optional)"},
                         "apps": {"type": "string", "description": "comma-separated app names to scan (optional; default: all agentic apps)"},
                         "limit": {"type": "integer", "description": "max apps to scan in one call (default 8)"}}}, side_effecting=True),
-            _crtool("list_scannable_apps", "list every agentic app + core container whose open-source dependencies can be scanned", _t_list_apps),
-            _crtool("vuln_db_lookup", "look up a package or CVE in our own NVD/OSV vulnerability database (advisories + patched versions)", _t_vuln_lookup,
+            _crtool("list_scannable_apps", "Not available: app image scans need Docker access, which is off by default and is not provided in the public demo (planned).", _t_list_apps),
+            _crtool("vuln_db_lookup", "look up a package or CVE in the NVD/OSV vulnerability table (Apache Doris) when it is reachable; the table holds only what its refresh job was configured to load, not all of NVD or OSV", _t_vuln_lookup,
                     parameters={"type": "object", "properties": {"package": {"type": "string"}, "cve": {"type": "string", "description": "a CVE id"}}}),
-            _crtool("vuln_db_permissions", "demonstrate the vuln-DB access policy: the same query returns different rows/columns per principal (row scope + column masking)", _t_vuln_db_permissions),
-            _crtool("sbom", "generate the software bill of materials (component inventory) for the stack", _sc_sbom, side_effecting=True),
-            _crtool("scanner_status", "which supply-chain scanners are installed (trivy/syft/cosign) and the last scan result", _sc_status),
+            _crtool("vuln_db_permissions", "demonstrate the vuln-DB access policy: the same query returns different rows and columns per principal (row scope and column masking)", _t_vuln_db_permissions),
+            _crtool("sbom", "list the components (a software bill of materials) of the sentinel's own filesystem with Syft or Trivy", _sc_sbom, side_effecting=True),
+            _crtool("scanner_status", "which scanners (trivy, syft, cosign, clamscan) are installed in this container and the last scan result", _sc_status),
             # runtime-DAST (post-deploy) tools — scan a LIVE deployment via the deploy-scan service
-            _crtool("scan_deployment", "actively scan a RUNNING deployment (host or URL) for exploitable exposure with nmap/nuclei/ZAP — the RUNTIME half of security, complementing the supply-chain scan. Destructive: sends probe traffic, so it is staged for human approval. profile: recon (nmap surface) | web-baseline (nuclei + ZAP passive) | web-active (ZAP attack traffic) | full", deploy_scan.scan, side_effecting=True,
+            _crtool("scan_deployment", "Not available from this chat (planned): a deployment scan would send probe traffic, so it would be staged for human approval; it never runs here.", deploy_scan.scan, side_effecting=True,
                     parameters={"type": "object", "properties": {
                         "target": {"type": "string", "description": "host or URL to scan (must be in the deploy-scan allowlist)"},
                         "profile": {"type": "string", "description": "recon | web-baseline | web-active | full (default web-baseline)"}}}),
-            _crtool("scan_status", "check the progress of a running deployment scan by its job id", deploy_scan.status,
+            _crtool("scan_status", "read the status of a deployment scan job by its job id (no scan can be started from this chat)", deploy_scan.status,
                     parameters={"type": "object", "properties": {"job_id": {"type": "string"}}}),
-            _crtool("scan_results", "fetch the findings + severity summary of a finished deployment scan by its job id", deploy_scan.results,
+            _crtool("scan_results", "read the findings of a finished deployment scan job by its job id (no scan can be started from this chat)", deploy_scan.results,
                     parameters={"type": "object", "properties": {"job_id": {"type": "string"}}}),
             # runtime data plane
-            _crtool("malware_scan", "scan the stack's files for malware/viruses with ClamAV", _t_malware_scan,
+            _crtool("malware_scan", "scan files visible to the ClamAV service with ClamAV (only where a ClamAV service is configured)", _t_malware_scan,
                     parameters={"type": "object", "properties": {"path": {"type": "string", "description": "path to scan (default: the whole stack)"}}}, side_effecting=True),
-            _crtool("wazuh_status", "report the Wazuh SIEM/XDR hub — connected agents and what it monitors (malware, compliance, FIM, vulns)", _t_wazuh_status),
+            _crtool("wazuh_status", "report the Wazuh manager's enrolled-agent counts (status only; no Wazuh alerts or detections are read)", _t_wazuh_status),
             # network access plane (NetBird / zero-trust) — the "who can reach what" half
-            _crtool("network_access_review", "review zero-trust network access (NetBird): peers, groups and policies, flagging over-broad All-to-All access that breaks least-privilege", netbird.access_review),
-            _crtool("network_posture", "check device posture on the network (NetBird): peers with expired logins, pending/unapproved devices, or broad SSH access", netbird.posture),
-            _crtool("propose_network_policy", "draft a tighter NetBird access policy to replace an over-broad one (destructive — staged for human approval, applied only via approve_network_policy)", netbird.propose, side_effecting=True,
-                    parameters={"type": "object", "properties": {"policy": {"type": "string", "description": "name of the over-broad policy to tighten (optional; default: the first one found)"}}}),
+            _crtool("network_access_review", "review NetBird peers and policies, flagging an over-broad All-to-All rule; SAMPLE DATA unless NetBird is connected", netbird.access_review),
+            _crtool("network_posture", "check NetBird device posture (expired logins, unapproved devices, broad SSH); SAMPLE DATA unless NetBird is connected", netbird.posture),
+            _crtool("propose_network_policy", "draft an additional, narrower NetBird access policy for an over-broad one (staged for human approval; applying it only adds a policy and does not remove or disable the broad one; sample data unless NetBird is connected)", netbird.propose, side_effecting=True,
+                    parameters={"type": "object", "properties": {"policy": {"type": "string", "description": "name of the over-broad policy to draft a narrower policy for (optional; default: the first one found)"}}}),
             # continuity plane (Portabase / backups) — is every core safely backed up offsite?
-            _crtool("backup_status", "report backup coverage (Portabase): which of the stack's databases have a recent, encrypted, offsite (S3) backup — and the gaps", portabase.backup_status),
+            _crtool("backup_status", "report Portabase backup coverage (recent, encrypted, offsite) and the gaps; SAMPLE DATA unless Portabase is connected", portabase.backup_status),
         ],
-        suggestions=["Any threats today?", "Scan the billing app for vulnerabilities", "Scan a running deployment for exposure", "Review network access"],
-        subtitle="Ask me to scan any app's open-source dependencies, check the network/SIEM, or explain a finding.",
+        suggestions=_chips(),
+        subtitle="Ask what CrowdSec holds, to explain an alert, to look up a CVE, or to read the sample network and backup reviews.",
         model=_GovernedConsoleModel(),
         allow_side_effects=[],  # ban_ip stays gated → the harness asks for human approval before blocking
     )
-else:
-    _SENTINEL_CONSOLE = None
+
+
+_SENTINEL_CONSOLE = _build_sentinel_console(_AgentConsole, _crtool) if _AgentConsole is not None else None
 
 
 # --- routes ------------------------------------------------------------------
@@ -1333,7 +1462,14 @@ async def api_case_execute(case_id: str, request: Request,
     return JSONResponse(out)
 
 
-_CR_BANNER = """<div style="position:sticky;top:0;z-index:9998;background:linear-gradient(90deg,#10201d,#17171a);border-bottom:1px solid #2f2f33;color:#e4e2e6;font:13px/1.4 Roboto,system-ui,sans-serif;padding:9px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">CONTEXT RUNTIME</span><span style="background:#2f2f33;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">DEMO</span><span style="color:#9b99a1">This app runs on <b style="color:#e4e2e6">Context Runtime</b>, which powers the investigation assistant, supply-chain/vuln scanners and the permissions plane here. Its Edge-Sentinel tenant learns the cheapest alert-source bundle that still reaches the right verdict. <a href="https://github.com/redevops-io/context-runtime" style="color:#4fd1c5;text-decoration:none">learn more \u2192</a></span><span style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap"><a href="api/network/ui" style="background:#1b2b28;color:#4fd1c5;border:1px solid #2f6f66;font-weight:700;border-radius:6px;padding:5px 11px;font-size:12px;text-decoration:none;white-space:nowrap">\U0001F310 Network access \u2192</a><a href="api/backups/ui" style="background:#1b2b28;color:#4fd1c5;border:1px solid #2f6f66;font-weight:700;border-radius:6px;padding:5px 11px;font-size:12px;text-decoration:none;white-space:nowrap">\U0001F5C4 Backups \u2192</a><a href="api/permissions/ui" style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:6px;padding:5px 11px;font-size:12px;text-decoration:none;white-space:nowrap">\U0001F512 Permissions demo \u2192</a></span></div>"""
+def _cr_banner() -> str:
+    """The sticky banner; its Network access and Backups links say sample while the panel behind them shows sample data."""
+    nb = " (sample data)" if _is_sample("netbird") else ""
+    pb = " (sample data)" if _is_sample("portabase") else ""
+    return _CR_BANNER.replace("@@NB@@", nb).replace("@@PB@@", pb)
+
+
+_CR_BANNER = """<div style="position:sticky;top:0;z-index:9998;background:linear-gradient(90deg,#10201d,#17171a);border-bottom:1px solid #2f2f33;color:#e4e2e6;font:13px/1.4 Roboto,system-ui,sans-serif;padding:9px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">CONTEXT RUNTIME</span><span style="background:#2f2f33;border-radius:5px;padding:2px 8px;font-size:11px;letter-spacing:.4px">DEMO</span><span style="color:#9b99a1">This app runs on <b style="color:#e4e2e6">Context Runtime</b>, which powers the investigation assistant and the permissions plane. <a href="https://github.com/redevops-io/context-runtime" style="color:#4fd1c5;text-decoration:none">learn more \u2192</a></span><span style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap"><a href="api/network/ui" style="background:#1b2b28;color:#4fd1c5;border:1px solid #2f6f66;font-weight:700;border-radius:6px;padding:5px 11px;font-size:12px;text-decoration:none;white-space:nowrap">\U0001F310 Network access@@NB@@ \u2192</a><a href="api/backups/ui" style="background:#1b2b28;color:#4fd1c5;border:1px solid #2f6f66;font-weight:700;border-radius:6px;padding:5px 11px;font-size:12px;text-decoration:none;white-space:nowrap">\U0001F5C4 Backups@@PB@@ \u2192</a><a href="api/permissions/ui" style="background:#4fd1c5;color:#08110f;font-weight:700;border-radius:6px;padding:5px 11px;font-size:12px;text-decoration:none;white-space:nowrap">\U0001F512 Permissions demo \u2192</a></span></div>"""
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1350,12 +1486,13 @@ def index() -> str:
     except Exception:  # noqa: BLE001 — the case workspace is additive; never break the dashboard
         pass
     if _SENTINEL_CONSOLE is not None:
+        _SENTINEL_CONSOLE.suggestions = _chips()          # the sample label follows the panel's real state
         blocks += "<section class='shell' style='margin-top:var(--sp-4)'>" + _SENTINEL_CONSOLE.panel_html("sentinel") + "</section>"
     if blocks:
         page = page.replace("<footer", blocks + "<footer", 1)
-    page = _cr_re.sub(r"(<body[^>]*>)", lambda m: m.group(1) + _CR_BANNER, page, count=1)
-    if "_CR_BANNER" not in page:
-        page = _CR_BANNER + page
+    page = _cr_re.sub(r"(<body[^>]*>)", lambda m: m.group(1) + _cr_banner(), page, count=1)
+    if "CONTEXT RUNTIME" not in page:
+        page = _cr_banner() + page
     return page
 
 
@@ -1395,8 +1532,8 @@ async def agent_run(request: Request) -> JSONResponse:
     if action == "approve_network_policy":
         if not auth.block_enabled():
             return JSONResponse({"status": "dry_run", "action": "approve_network_policy",
-                                 "summary": "DRY-RUN: policy change not applied",
-                                 "detail": "SENTINEL_BLOCK_ENABLED not set — NetBird was not modified."})
+                                 "summary": "Dry run: nothing was changed in NetBird. The policy was not created.",
+                                 "detail": "Dry run: SENTINEL_BLOCK_ENABLED is not set, so nothing was changed in NetBird."})
         return JSONResponse(netbird.approve(body or {}))
     return JSONResponse(
         {"status": "error", "error": f"unknown action '{action}'",

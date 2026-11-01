@@ -3,7 +3,7 @@
 CrowdSec is the runtime/perimeter half of security; NetBird is the ACCESS half — a WireGuard
 overlay with central policies, SSO/MFA and device posture. This module reads NetBird's REST API
 (Authorization: Token) to review peers + policies, flag over-broad access, and (approval-gated)
-propose a tightened policy — mirroring block_ip→approve_block.
+propose an additional, narrower policy — mirroring block_ip→approve_block.
 
 Self-contained: no context-runtime / agentic-os deps. Until NETBIRD_API_TOKEN is set the review
 shows clearly-labelled SAMPLE data so the panel/tool always render; once set it reads the real
@@ -122,17 +122,17 @@ def access_review(_a: dict) -> dict:
     snap = snapshot()
     peers, pol, rk = snap["peers"], snap["policies"], risks(snap)
     conn = sum(1 for p in peers if p.get("connected"))
-    tag = "" if snap["live"] else " (SAMPLE — set NETBIRD_API_TOKEN for live data)"
+    tag = "" if snap["live"] else " (SAMPLE DATA, not read from NetBird — set NETBIRD_API_TOKEN to read it)"
     txt = f"NetBird access review{tag}: {len(peers)} peer(s), {conn} connected, {len(pol)} policy(ies). "
     txt += (f"{len(rk)} risk(s): " + "; ".join(r["detail"] for r in rk[:4]) + "."
             if rk else "No over-broad policies or posture issues found.")
-    return {"text": txt, "data": {"live": snap["live"], "peers": len(peers), "connected": conn, "policies": len(pol), "risks": rk}}
+    return {"text": txt, "data": {"live": snap["live"], "data_status": "live" if snap["live"] else "sample", "peers": len(peers), "connected": conn, "policies": len(pol), "risks": rk}}
 
 
 def posture(_a: dict) -> dict:
     snap = snapshot()
     issues = [r for r in risks(snap) if r["kind"] in ("login_expired", "unapproved_peer", "ssh_broad")]
-    tag = "" if snap["live"] else " (SAMPLE)"
+    tag = "" if snap["live"] else " (SAMPLE DATA, not read from NetBird)"
     if not issues:
         return {"text": f"Device posture{tag}: all peers healthy — no expired logins, unapproved devices or broad SSH.", "data": {"issues": []}}
     return {"text": f"Device posture{tag}: {len(issues)} issue(s) — " + "; ".join(i["detail"] for i in issues[:5]) + ".", "data": {"issues": issues}}
@@ -146,18 +146,20 @@ def propose(body: dict) -> dict:
     pick = next((p for p in broad if not target or p.get("name", "").lower() == target.lower()), (broad[0] if broad else None))
     if pick is None:
         return {"status": "noop", "action": "propose_network_policy",
-                "summary": "No over-broad policy to tighten — network access is already least-privilege."}
-    draft = {"name": f"{pick.get('name', 'Default')} (tightened)", "enabled": True, "rules": [{
+                "summary": "No over-broad policy found — nothing to draft a narrower policy for."}
+    draft = {"name": f"{pick.get('name', 'Default')} (narrower draft)", "enabled": True, "rules": [{
         "name": "least-privilege", "action": "accept", "enabled": True, "bidirectional": False,
         "sources": [{"name": "admins"}], "destinations": [{"name": "cores"}], "protocol": "tcp", "ports": ["22", "443"]}]}
     return {"status": "pending_approval", "action": "propose_network_policy", "requires": "human approval",
-            "summary": f"tighten NetBird policy '{pick.get('name')}' (All→All ⇒ admins→cores:22,443)",
-            "detail": "Draft only — nothing changes until approve_network_policy is called.",
+            "summary": ("SAMPLE DATA: " if not snap["live"] else "") +
+                       f"draft an additional NetBird policy admins→cores:22,443 next to '{pick.get('name')}' (the existing rule is not removed or disabled)",
+            "detail": "Draft only — nothing changes until approve_network_policy is called, and applying it only adds a policy.",
+            "sample": not snap["live"],
             "replaces": pick.get("name"), "draft": draft}
 
 
 def approve(body: dict) -> dict:
-    """The approved path: actually create the tightened policy via the NetBird API."""
+    """The approved path: actually create the drafted policy via the NetBird API (it adds a policy; it does not change the original)."""
     draft = body.get("draft") or {}
     if not draft:
         return {"status": "error", "action": "approve_network_policy", "error": "missing 'draft' — call propose_network_policy first"}
@@ -166,7 +168,7 @@ def approve(body: dict) -> dict:
         return {"status": "error", "action": "approve_network_policy", "error": err,
                 "hint": "Set NETBIRD_API_URL + NETBIRD_API_TOKEN to a reachable NetBird management API."}
     return {"status": "done", "action": "approve_network_policy", "enforced": True,
-            "summary": f"Created tightened policy '{draft.get('name')}' via NetBird.", "policy": res}
+            "summary": f"Created policy '{draft.get('name')}' via NetBird. The original policy was not changed.", "policy": res}
 
 
 def panel() -> str:
@@ -197,7 +199,8 @@ def panel() -> str:
                             "<span style='color:#ff6b6b'>over-broad</span>" if broad else "<span style='color:#4fd1c5'>scoped</span>"])
     body = (_app._card(f"Peers &nbsp; {_app._live_badge(snap['live'], 'set NETBIRD_API_TOKEN')}",
                        _app._tbl(["Peer", "OS", "Overlay IP", "Groups", "State", "Flags"], prows))
-            + _app._card("Access policies", _app._tbl(["Policy", "Source → Destination", "Proto", "Verdict"], polrows))
-            + _app._card("Risks &amp; least-privilege", _app._risk_list(risks(snap))
-                         + "<p style='color:#9b99a1;font-size:12px;margin:10px 0 0'>Ask the agent to <b>propose a tightened policy</b> — it stages the change and waits for your approval before touching NetBird.</p>"))
-    return _app._panel_shell("Network Access", "Zero-trust access review over NetBird — peers, policies and posture, with an approval-gated tighten action.", body)
+            + _app._card(f"Access policies &nbsp; {_app._live_badge(snap['live'], 'set NETBIRD_API_TOKEN')}",
+                         _app._tbl(["Policy", "Source → Destination", "Proto", "Verdict"], polrows))
+            + _app._card(f"Risks &amp; least-privilege &nbsp; {_app._live_badge(snap['live'], 'set NETBIRD_API_TOKEN')}", _app._risk_list(risks(snap))
+                         + "<p style='color:#9b99a1;font-size:12px;margin:10px 0 0'>Ask the agent to <b>draft an additional, narrower policy</b> — it is staged and waits for your approval. Applying it only adds a policy; the broad rule stays until someone disables it in NetBird.</p>"))
+    return _app._panel_shell("Network Access", "Review of NetBird peers, policies and posture, with an approval-gated draft of a narrower policy." + ("" if snap["live"] else " SAMPLE DATA: nothing on this page was read from a NetBird."), body)
