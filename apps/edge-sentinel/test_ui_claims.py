@@ -277,7 +277,7 @@ def test_manifest_and_module_tagline_do_not_claim_a_firewall():
     manifest = importlib.import_module("edge-sentinel.manifest")
     text = (HERE / "manifest.py").read_text() + (HERE.parent.parent / "modules.yaml").read_text()
     assert "Your firewall" not in text
-    assert "blocks wait for your approval" in text
+    assert "approval-gated response" in text
     assert manifest  # imports cleanly
 
 

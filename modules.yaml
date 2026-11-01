@@ -9,7 +9,7 @@ modules:
     pain: network security & systems handled
     deploy: compose
     port: 8203
-    tagline: CrowdSec detections, triaged and explained by an agent; blocks wait for your approval.
+    tagline: Threat triage and approval-gated response.
     agents: [triage, remediation]
     approval_required: [remediation]
   - name: agentic-support
