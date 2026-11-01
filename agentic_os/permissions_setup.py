@@ -113,15 +113,14 @@ def write_key_env_file(path: str, *, from_key_file: str | None = None) -> str:
             raise GrantStorageError(f"the key file {from_key_file} is unusable ({type(e).__name__}); nothing written") from e
     else:
         key = base64.b64encode(secrets.token_bytes(32)).decode()
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     parent = os.path.dirname(os.path.abspath(path))
     _ensure_private_dir(parent)                              # a missing parent (the default is under ~/.config) is created private
     try:
-        fd = os.open(path, flags, 0o600)
+        fd = _files.create_exclusive(path)
     except FileExistsError:
         raise GrantStorageError(f"{path} already exists; not overwriting a key (delete it deliberately if you mean to "
                                 f"replace it — a different key cannot open grants already encrypted with the old one)") from None
-    with os.fdopen(fd, "w") as f:
+    with os.fdopen(fd, "w", newline="\n") as f:                 # LF on every OS: a CRLF would end up inside the value for an env-file reader
         f.write(f"PERMISSIONS_KEY={key}\n")
         f.flush()
         os.fsync(f.fileno())

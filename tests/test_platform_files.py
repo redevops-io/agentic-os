@@ -36,18 +36,30 @@ def test_a_descriptor_for_one_user_is_private(sddl):
 
 
 @pytest.mark.parametrize("sddl,who", [
-    (f"O:{USER}D:PAI(A;;FA;;;{USER})(A;;FR;;;WD)", "WD"),
-    (f"O:{USER}D:PAI(A;;FA;;;{USER})(A;;FR;;;BU)", "BU"),
-    (f"O:{USER}D:PAI(A;;FA;;;{USER})(A;;FR;;;AU)", "AU"),
+    (f"O:{USER}D:PAI(A;;FA;;;{USER})(A;;FR;;;WD)", "S-1-1-0"),
+    (f"O:{USER}D:PAI(A;;FA;;;{USER})(A;;FR;;;BU)", "S-1-5-32-545"),
+    (f"O:{USER}D:PAI(A;;FA;;;{USER})(A;;FR;;;AU)", "S-1-5-11"),
     (f"O:{USER}D:PAI(A;;FA;;;{OTHER})", OTHER),
-    (f"O:{USER}D:PAI(A;;FA;;;{USER})(XA;;FA;;;WD;(Member_of{{SID(WD)}}))", "WD"),
+    (f"O:{USER}D:PAI(A;;FA;;;{USER})(XA;;FA;;;WD;(Member_of{{SID(WD)}}))", "S-1-1-0"),
     # a conditional ACE (nested parentheses) must not hide the Everyone ACE after it
-    (f"O:{USER}D:PAI(XA;;FA;;;{USER};(Member_of{{SID(BA)}}))(A;;FR;;;WD)", "WD"),
-    (f"O:{USER}G:SYD:PAI(A;;FA;;;{USER})(A;;FR;;;WD)S:(AU;SA;FA;;;WD)", "WD"),
+    (f"O:{USER}D:PAI(XA;;FA;;;{USER};(Member_of{{SID(BA)}}))(A;;FR;;;WD)", "S-1-1-0"),
+    (f"O:{USER}G:SYD:PAI(A;;FA;;;{USER})(A;;FR;;;WD)S:(AU;SA;FA;;;WD)", "S-1-1-0"),
 ])
 def test_any_other_principal_is_exposure(sddl, who):
     why = _acl.dacl_problem(sddl, USER)
     assert why and who in why
+
+
+def test_an_abbreviation_that_is_the_running_user_is_resolved_not_mistaken_for_a_stranger():
+    """SDDL writes the machine's built-in Administrator as ``LA``; when that account is the running user (a CI runner), the abbreviation
+    must resolve to the user's SID. Without a resolver an unknown abbreviation stays foreign (fail closed)."""
+    sddl = f"O:LAD:PAI(A;;FA;;;LA)(A;;FA;;;SY)"
+    assert "LA" in _acl.dacl_problem(sddl, USER)
+    assert _acl.dacl_problem(sddl, USER, resolve=lambda t: USER if t == "LA" else t) is None
+
+    def broken(token):
+        raise OSError("no such account")
+    assert _acl.dacl_problem(sddl, USER, resolve=broken)
 
 
 def test_a_missing_dacl_or_a_foreign_owner_is_refused():

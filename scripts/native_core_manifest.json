@@ -190,6 +190,7 @@
   "tests/test_policy_decision.py",
   "tests/test_policy_presence_neutral.py",
   "tests/test_policy_promotion_contract.py",
+  "tests/test_private_files_windows.py",
   "tests/test_registry.py",
   "tests/test_release_notes_security.py",
   "tests/test_replay_integrity.py",

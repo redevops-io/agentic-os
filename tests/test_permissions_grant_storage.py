@@ -12,6 +12,7 @@ import logging
 import os
 
 import pytest
+from tests._posix_marks import needs_dir_fsync, posix_modes
 
 from agentic_os import permissions as perm
 from agentic_os.permissions import GrantStore
@@ -280,6 +281,7 @@ class TestMigrationSafeguards:
         GrantStore(str(tmp_path))
         assert len(seen["backups"]) == 1 and seen["backups"][0][1] == original and seen["legacy_intact"]
 
+    @posix_modes
     def test_files_are_0600_and_the_directory_is_0700(self, tmp_path, monkeypatch):
         monkeypatch.setenv("PERMISSIONS_KEY", KEY)
         os.chmod(tmp_path, 0o755)
@@ -289,6 +291,7 @@ class TestMigrationSafeguards:
         assert mode(tmp_path / "grants.enc") == 0o600 and mode(tmp_path) == 0o700
         assert all(mode(b) == 0o600 for b in tmp_path.glob("grants.jsonl.migrated-*"))
 
+    @posix_modes
     def test_a_new_store_creates_a_private_directory_and_private_files(self, tmp_path, monkeypatch):
         monkeypatch.setenv("PERMISSIONS_KEY", KEY)
         d = tmp_path / "fresh" / "perm"
@@ -297,6 +300,7 @@ class TestMigrationSafeguards:
         mode = lambda p: stat.S_IMODE(os.stat(p).st_mode)   # noqa: E731
         assert mode(d) == 0o700 and mode(d / "grants.enc") == 0o600 and mode(d / ".grants.lock") == 0o600
 
+    @posix_modes
     def test_a_generated_key_file_is_0600(self, tmp_path):
         GrantStore(str(tmp_path), allow_generated_key_dev=True)
         assert stat.S_IMODE(os.stat(tmp_path / ".permissions.key").st_mode) == 0o600
@@ -329,7 +333,8 @@ class TestMigrationSafeguards:
         assert s.list() == [] and s.sealed and _snapshot(tmp_path) == before
 
     @pytest.mark.parametrize("crash", [Exception, _Crash])
-    @pytest.mark.parametrize("step", ["backup", "fsync-1", "fsync-2", "fsync-3", "fsync-4", "replace", "verify"])
+    @pytest.mark.parametrize("step", ["backup", "fsync-1", "fsync-2", pytest.param("fsync-3", marks=needs_dir_fsync),
+                                      pytest.param("fsync-4", marks=needs_dir_fsync), "replace", "verify"])
     def test_a_failure_at_any_step_leaves_the_old_file_or_the_verified_new_one(self, tmp_path, monkeypatch, step, crash):
         monkeypatch.setenv("PERMISSIONS_KEY", KEY)
         legacy, original = _write_legacy(tmp_path)
@@ -521,6 +526,7 @@ class TestKeyRule:
             GrantStore(str(tmp_path), allow_generated_key_dev=True)       # even the dev opt-in must not overwrite it
         assert (tmp_path / ".permissions.key").read_text() == "%%% not a key"
 
+    @posix_modes
     def test_dev_generated_key_is_loud_and_0600(self, tmp_path, caplog):
         with caplog.at_level(logging.WARNING, logger="agentic_os.permissions"):
             s = GrantStore(str(tmp_path), allow_generated_key_dev=True)

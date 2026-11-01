@@ -8,6 +8,7 @@ import pathlib
 import stat
 
 import pytest
+from tests._posix_marks import posix_modes
 
 from agentic_os import app_gate
 from agentic_os.app_gate import GateStartupError, install_gate
@@ -29,6 +30,7 @@ def d(tmp_path, monkeypatch):
     return tmp_path / "perm"
 
 
+@posix_modes
 def test_the_written_profile_is_a_private_regular_file(d):
     st = os.lstat(d / "profile.json")
     assert stat.S_ISREG(st.st_mode) and stat.S_IMODE(st.st_mode) == 0o600 and st.st_uid == os.geteuid()
@@ -49,6 +51,7 @@ def test_a_symlinked_profile_is_refused_even_when_it_points_at_a_valid_one(d, tm
 
 
 @pytest.mark.parametrize("mode", [0o644, 0o640, 0o660, 0o604, 0o666, 0o700])
+@posix_modes
 def test_a_profile_that_others_can_read_or_write_or_that_is_executable_is_refused(d, mode):
     os.chmod(d / "profile.json", mode)
     with pytest.raises(GrantStorageError) as e:
@@ -58,6 +61,7 @@ def test_a_profile_that_others_can_read_or_write_or_that_is_executable_is_refuse
         install_gate(APP)
 
 
+@posix_modes
 def test_a_profile_owned_by_someone_else_is_refused(d, monkeypatch):
     monkeypatch.setattr(os, "geteuid", lambda: os.lstat(d / "profile.json").st_uid + 1)
     with pytest.raises(GrantStorageError) as e:

@@ -54,6 +54,8 @@ _adv.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, _PVOID, wint
 _adv.GetTokenInformation.restype = wintypes.BOOL
 _adv.ConvertSidToStringSidW.argtypes = [_PVOID, ctypes.POINTER(wintypes.LPWSTR)]
 _adv.ConvertSidToStringSidW.restype = wintypes.BOOL
+_adv.ConvertStringSidToSidW.argtypes = [wintypes.LPCWSTR, _PPVOID]
+_adv.ConvertStringSidToSidW.restype = wintypes.BOOL
 _adv.GetNamedSecurityInfoW.argtypes = [wintypes.LPCWSTR, ctypes.c_int, wintypes.DWORD, _PPVOID, _PPVOID, _PPVOID, _PPVOID, _PPVOID]
 _adv.GetNamedSecurityInfoW.restype = wintypes.DWORD
 _adv.SetNamedSecurityInfoW.argtypes = [wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD, _PVOID, _PVOID, _PVOID, _PVOID]
@@ -173,6 +175,20 @@ def current_user_sid() -> str:
         return _wstr_and_free(out)
     finally:
         _k32.CloseHandle(tok)
+
+
+def resolve_sid(token: str) -> str:
+    """An SDDL trustee abbreviation (``LA``, ``DA``, ...) or SID string as a full SID string."""
+    psid = _PVOID()
+    if not _adv.ConvertStringSidToSidW(token, ctypes.byref(psid)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        out = wintypes.LPWSTR()
+        if not _adv.ConvertSidToStringSidW(psid, ctypes.byref(out)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return _wstr_and_free(out)
+    finally:
+        _local_free(psid)
 
 
 def user_profile_dir() -> str:

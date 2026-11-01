@@ -15,6 +15,7 @@ file's DACL and its location, and the answer is fail-closed:
 """
 from __future__ import annotations
 
+import errno
 import os
 import stat
 import tempfile
@@ -35,6 +36,8 @@ _REPARSE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 _SHARING = (5, 32, 33)
 _REPLACE_ATTEMPTS = 20
 _REPLACE_DELAY_S = 0.05
+_READ_ATTEMPTS = 40
+_READ_DELAY_S = 0.025
 
 
 def _same_or_below(path: str, root: str) -> bool:
@@ -67,9 +70,40 @@ def private_file_problem(path) -> "str | None":
         profile = _win32.user_profile_dir()
         if not _same_or_below(p, profile):
             return f"is not under the user's profile directory ({profile})"
-        return _acl.dacl_problem(_win32.owner_and_dacl_sddl(os.path.abspath(p)), _win32.current_user_sid())
+        return _acl.dacl_problem(_win32.owner_and_dacl_sddl(os.path.abspath(p)), _win32.current_user_sid(), _win32.resolve_sid)
     except OSError as e:
         return f"could not be shown to be private to the running user ({type(e).__name__}: {e})"
+
+
+def read_regular(path) -> bytes:
+    """Read a regular file without following a symbolic link. POSIX: ``O_NOFOLLOW``. Windows: a link or reparse point is refused
+    first, and a ``PermissionError`` is retried for about a second, because a lock-free reader that meets a concurrent
+    atomic replace (``replace_file``) can have its open refused for a moment; without the retry it would mistake the replace for a
+    failure."""
+    if _WINDOWS:
+        st = os.lstat(path)
+        if stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & _REPARSE:
+            raise OSError(errno.ELOOP, "refusing to read through a link", os.fspath(path))
+        for attempt in range(_READ_ATTEMPTS):
+            try:
+                with open(path, "rb") as f:
+                    return f.read()
+            except PermissionError:
+                if attempt == _READ_ATTEMPTS - 1:
+                    raise
+                time.sleep(_READ_DELAY_S)
+    fd = os.open(path, os.O_RDONLY | _O_NOFOLLOW)
+    with os.fdopen(fd, "rb") as f:
+        return f.read()
+
+
+def create_exclusive(path, mode: int = 0o600) -> int:
+    """Create a NEW file and return its descriptor: never an existing path, never through a symbolic link. POSIX: ``O_EXCL`` with
+    ``O_NOFOLLOW``. Windows ignores ``mode`` and would create through a dangling link, so an existing path of any kind (a link
+    included) is refused first; the caller then applies ``make_private``. Raises ``FileExistsError`` for an existing path."""
+    if _WINDOWS and os.path.lexists(path):
+        raise FileExistsError(errno.EEXIST, "already exists", os.fspath(path))
+    return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | getattr(os, "O_BINARY", 0), mode)
 
 
 def make_private(path, *, is_dir: bool = False) -> None:

@@ -406,8 +406,8 @@ class _SecretBox:
             try:
                 key = AESGCM.generate_key(bit_length=256)
                 _ensure_private_dir(kf.parent)
-                fd = os.open(kf, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW, 0o600)
-                with os.fdopen(fd, "w") as f:
+                fd = _files.create_exclusive(kf)
+                with os.fdopen(fd, "w", newline="\n") as f:
                     f.write(base64.b64encode(key).decode())
                 if not _files.HAS_POSIX_MODES:
                     _files.make_private(kf)                      # Windows ignores the mode above: set a user-only DACL
@@ -476,8 +476,8 @@ def provision_key_file(directory: str, path: "str | None" = None) -> tuple[Path,
         except Exception as e:  # noqa: BLE001
             raise GrantStorageError(f"the existing key file {kf} is unusable ({type(e).__name__}); not replacing it") from e
         return kf, False
-    fd = os.open(kf, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "w") as f:
+    fd = _files.create_exclusive(kf)
+    with os.fdopen(fd, "w", newline="\n") as f:
         f.write(base64.b64encode(AESGCM.generate_key(bit_length=256)).decode())
     if not _files.HAS_POSIX_MODES:
         _files.make_private(kf)                                 # Windows ignores the mode above: set a user-only DACL on the key file
@@ -520,20 +520,20 @@ def _fsync_dir(path) -> None:
 
 
 def _read_regular(path) -> bytes:
-    """Read a regular file without following a symlink."""
-    fd = os.open(path, os.O_RDONLY | _O_NOFOLLOW)
-    with os.fdopen(fd, "rb") as f:
-        return f.read()
+    """Read a regular file without following a symlink (and, on Windows, without losing a race with an atomic replace)."""
+    return _files.read_regular(path)
 
 
 def _copy_private(src, dst) -> None:
     """Copy ``src`` to a NEW file ``dst`` (0600, never an existing path, never through a symlink), durably."""
     data = _read_regular(src)
-    fd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW, 0o600)
+    fd = _files.create_exclusive(dst)
     with os.fdopen(fd, "wb") as f:
         f.write(data)
         f.flush()
         os.fsync(f.fileno())
+    if not _files.HAS_POSIX_MODES:
+        _files.make_private(dst)                                # Windows ignores the mode above: a user-only DACL
     _fsync_dir(os.path.dirname(dst) or ".")
 
 
