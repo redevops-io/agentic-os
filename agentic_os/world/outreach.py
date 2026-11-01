@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
-from agentic_os._platform.files import append_line as _append_line
+from agentic_os._platform.files import append_line as _append_line, fsync_enabled
 
 
 class OutreachDecision(str, Enum):
@@ -81,15 +81,20 @@ class SuppressionLedger:
         v = (value or "").strip().lower()
         if not v:
             return
-        (self._tokens if len(v) == 24 and "@" not in v else self._addrs).add(v)
+        if any(ord(c) < 32 or 127 <= ord(c) <= 159 or c in "\u2028\u2029" for c in v):
+            # a control or line-separator character would split into several entries when the file is read back: refuse the value
+            raise ValueError("a suppression value must not contain control or line-separator characters")
         if self.path:
-            for part in v.splitlines() or [v]:      # one locked write per record (a value with a line break was always written as several lines)
-                _append_line(self.path, part)
+            _append_line(self.path, v, fsync=fsync_enabled())       # one locked, durable write; memory is updated only once it succeeded
+        (self._tokens if len(v) == 24 and "@" not in v else self._addrs).add(v)
 
 
 def handle_unsubscribe(token_or_email: str, ledger: SuppressionLedger) -> Dict[str, str]:
     """What the monitored /unsubscribe endpoint (or mailbox processor) calls — suppress + confirm."""
-    ledger.suppress(token_or_email, reason="user_unsubscribe")
+    try:
+        ledger.suppress(token_or_email, reason="user_unsubscribe")
+    except ValueError:
+        return {"status": "rejected", "message": "That value cannot be used to unsubscribe."}
     return {"status": "unsubscribed", "message": "You won't hear from us again."}
 
 _PRIMARY = """Subject: A question about your AI stack

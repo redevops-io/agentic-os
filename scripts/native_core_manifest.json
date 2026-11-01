@@ -149,6 +149,7 @@
   "tests/test_agent_gateway_rest.py",
   "tests/test_agent_gateway_sandbox.py",
   "tests/test_agent_gateway_writes.py",
+  "tests/test_append_failure_modes.py",
   "tests/test_append_writers.py",
   "tests/test_apps_e2e_contract.py",
   "tests/test_apps_e2e_runner.py",

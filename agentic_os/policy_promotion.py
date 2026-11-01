@@ -41,7 +41,7 @@ import time
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
 
-from agentic_os._platform.files import append_line as _append_line
+from agentic_os._platform.files import append_line as _append_line, fsync_enabled
 from agentic_os.outcome_learning import UtilityModel
 from agentic_os.priority_engine import OutcomeEvent, OutcomeLog, UtilityFn
 
@@ -224,7 +224,7 @@ class FilePolicyStore:
     path: str
 
     def append(self, event: Dict[str, Any]) -> None:
-        _append_line(self.path, json.dumps(event, sort_keys=True))     # one locked write: lines never interleave or get lost (Windows append is not atomic)
+        _append_line(self.path, json.dumps(event, sort_keys=True), fsync=fsync_enabled())     # one locked write: lines never interleave or get lost (Windows append is not atomic)
 
     def load(self) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []

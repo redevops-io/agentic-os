@@ -203,48 +203,151 @@ def test_the_helper_does_not_lose_records_between_threads(tmp_path):
 # ── the guard: no new unlocked append ──
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# file -> (how many append-mode opens it may contain, why that is safe). Anything else must use files.append_line / files.locked_append.
+SCANNED = ("agentic_os", "apps", "deploy", "scripts")
+# "file::function" -> (append-shaped sites in that function, why that is safe). Anything else must use files.append_line / files.locked_append.
 ALLOWED_APPENDERS = {
-    "agentic_os/_platform/files.py": (1, "the helper itself"),
-    "agentic_os/mission/store.py": (1, "the hash-chained event log: opened append and locked for the whole append (locks.locked)"),
-    "agentic_os/outcome_store.py": (1, "O_APPEND inside the store's own lock file (check-then-append under _flock)"),
-    "agentic_os/agent_gateway/audit_store.py": (1, "touch only: proves the path is writable; the events go through EventStore"),
-    "agentic_os/context.py": (1, "the approvals queue: handled by its own change"),
-    "apps/document-editor/ledger.py": (1, "hash-chained ledger append under the connector's own portable lock"),
-    "apps/compliance/core.py": (2, "the ledger append runs under _ledger_lock; the other open is the lock file itself"),
-    "apps/agentic-privacy/core.py": (1, "audit append under _store_mutation, whose cross-process lock is POSIX-only: to implement"),
-    "apps/books/seed_erpnext.py": (1, "a dev seed script's own log file, not a data store"),
+    "agentic_os/_platform/files.py::locked_append": (1, "the helper itself"),
+    "agentic_os/mission/store.py::EventStore.append": (1, "the hash-chained event log: opened append and locked for the whole append (locks.locked)"),
+    "agentic_os/outcome_store.py::FileOutcomeStore.append": (1, "O_APPEND inside the store's own lock file (check-then-append under _flock)"),
+    "agentic_os/agent_gateway/audit_store.py::EventStoreAuditSink.from_path": (1, "touch only: proves the path is writable; the events go through EventStore"),
+    "agentic_os/context.py::Context._append": (1, "not part of this change"),
+    "apps/document-editor/ledger.py::Ledger.append": (1, "hash-chained ledger append under the connector's own portable lock"),
+    "apps/compliance/core.py::_ledger_lock.__enter__": (1, "the lock file itself"),
+    "apps/compliance/core.py::_append_chained": (1, "the ledger append runs under _ledger_lock"),
+    "apps/agentic-privacy/core.py::_audit": (1, "audit append under the app's own store lock (separate change)"),
+    "apps/books/seed_erpnext.py::<module>": (1, "a dev seed script's own log file, not a data store"),
+    "deploy/launcher/selftest/run.py::launch": (1, "a Linux/macOS harness redirecting a child process's output to a log"),
 }
 
+_FILE_HANDLERS = ("FileHandler", "RotatingFileHandler", "TimedRotatingFileHandler", "WatchedFileHandler")
 
-def _is_append_open(node) -> bool:
+
+def _scan(tree) -> "dict[str, int]":
+    """Append-shaped sites per enclosing function: an append-mode ``open``/``fdopen`` (literal mode containing "a"), a builtin ``open``/``os.fdopen``/
+    ``io.open`` whose mode is not a literal, a log file handler that is not explicitly ``mode="w"``, ``os.O_APPEND`` (attribute) and
+    ``from os import O_APPEND``."""
     import ast
-    if not isinstance(node, ast.Call):
-        return False
-    f = node.func
-    name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else ""
-    if name not in ("open", "fdopen"):
-        return False
-    cands = [a.value for a in node.args[:2] if isinstance(a, ast.Constant) and isinstance(a.value, str)]
-    cands += [k.value.value for k in node.keywords if k.arg == "mode" and isinstance(k.value, ast.Constant) and isinstance(k.value.value, str)]
-    return any(c and set(c) <= set("rwxabt+") and "a" in c for c in cands)
+    from collections import Counter
+    hits: "Counter[str]" = Counter()
+    stack: list[str] = []
+
+    def key() -> str:
+        return ".".join(stack) or "<module>"
+
+    def is_append(c) -> bool:
+        return isinstance(c, str) and bool(c) and set(c) <= set("rwxabt+") and "a" in c
+
+    class V(ast.NodeVisitor):
+        def _scope(self, node):
+            stack.append(node.name)
+            self.generic_visit(node)
+            stack.pop()
+        visit_FunctionDef = visit_AsyncFunctionDef = visit_ClassDef = _scope
+
+        def visit_ImportFrom(self, node):
+            if node.module == "os" and any(a.name == "O_APPEND" for a in node.names):
+                hits[key()] += 1
+
+        def visit_Attribute(self, node):
+            if node.attr == "O_APPEND":
+                hits[key()] += 1
+            self.generic_visit(node)
+
+        def visit_Call(self, node):
+            f = node.func
+            name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else ""
+            owner = f.value.id if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) else ""
+            kw = {k.arg: k.value for k in node.keywords if k.arg}
+            if name in ("open", "fdopen") and not (name == "open" and owner == "os"):          # os.open takes flags, not a mode string
+                builtin_like = isinstance(f, ast.Name) or owner in ("os", "io")
+                mode = kw.get("mode") or (node.args[1] if builtin_like and len(node.args) > 1 else node.args[0] if not builtin_like and node.args else None)
+                if mode is not None:
+                    if isinstance(mode, ast.Constant):
+                        if is_append(mode.value):
+                            hits[key()] += 1
+                    elif builtin_like:
+                        hits[key()] += 1                     # a mode this scan cannot read: it must be reviewed (`obj.open(x)` is not judged: zipfile.open(name))
+            elif name in _FILE_HANDLERS:
+                mode = kw.get("mode") or (node.args[1] if len(node.args) > 1 else None)
+                if not (isinstance(mode, ast.Constant) and mode.value == "w"):
+                    hits[key()] += 1                         # the logging handlers append unless told otherwise
+            self.generic_visit(node)
+    V().visit(tree)
+    return dict(hits)
 
 
-def test_no_new_unlocked_append_appears_outside_the_helper():
+def _scan_repo() -> "dict[str, int]":
     import ast
     import pathlib
     found: dict[str, int] = {}
-    for base in ("agentic_os", "apps"):
+    for base in SCANNED:
         for f in (pathlib.Path(ROOT) / base).rglob("*.py"):
-            if f.name.startswith("test_") or "tests" in f.parts:
+            if f.name.startswith("test_") or "tests" in f.parts or "node_modules" in f.parts:
                 continue
-            tree = ast.parse(f.read_text(encoding="utf-8"))
-            n = sum(1 for node in ast.walk(tree) if _is_append_open(node))
-            n += sum(1 for node in ast.walk(tree) if isinstance(node, ast.Attribute) and node.attr == "O_APPEND")
-            if n:
-                found[f.relative_to(ROOT).as_posix()] = n
+            for fn, n in _scan(ast.parse(f.read_text(encoding="utf-8"))).items():
+                found[f"{f.relative_to(ROOT).as_posix()}::{fn}"] = n
+    return found
+
+
+def test_no_new_unlocked_append_appears_outside_the_helper():
+    found = _scan_repo()
     new = {k: v for k, v in found.items() if k not in ALLOWED_APPENDERS or v > ALLOWED_APPENDERS[k][0]}
-    assert not new, (f"append-mode open(s) outside the helper: {new}. Use agentic_os._platform.files.append_line / locked_append "
-                     f"(a lock-free append can lose a record on Windows), or add the file to ALLOWED_APPENDERS with the reason it is safe.")
+    assert not new, (f"append-shaped site(s) outside the helper: {new}. Use agentic_os._platform.files.append_line / locked_append "
+                     f"(a lock-free append can lose a record on Windows), or add the function to ALLOWED_APPENDERS with the reason it is safe.")
     stale = sorted(k for k in ALLOWED_APPENDERS if k not in found)
     assert not stale, f"ALLOWED_APPENDERS entries with no append left (remove them): {stale}"
+
+
+@pytest.mark.parametrize("src,expected", [
+    ("def f(p):\n    open(p, 'a')\n", 1),
+    ("def f(p):\n    open(p, mode='ab')\n", 1),
+    ("def f(p):\n    from pathlib import Path\n    Path(p).open('a')\n", 1),
+    ("from os import O_APPEND\n", 1),
+    ("import os\ndef f(p):\n    os.open(p, os.O_WRONLY | os.O_APPEND)\n", 1),
+    ("def f(p, m):\n    open(p, m)\n", 1),                                   # a mode the scan cannot read
+    ("def f(p, x):\n    open(p, 'a' if x else 'w')\n", 1),
+    ("import os\ndef f(fd, m):\n    os.fdopen(fd, m)\n", 1),
+    ("import logging\ndef f(p):\n    logging.FileHandler(p)\n", 1),
+    ("import logging.handlers as h\ndef f(p):\n    h.RotatingFileHandler(p, maxBytes=1)\n", 1),
+    ("import logging\ndef f(p):\n    logging.FileHandler(p, mode='w')\n", 0),
+    ("def f(p):\n    open(p)\n    open(p, 'r')\n    open(p, 'w')\n    open(p, 'rb')\n", 0),
+])
+def test_the_guard_recognises_every_append_shape(src, expected):
+    import ast
+    assert sum(_scan(ast.parse(src)).values()) == expected
+
+
+def test_the_guard_counts_per_function_so_a_second_append_in_an_allowed_file_is_caught():
+    import ast
+    src = "class S:\n    def a(self, p):\n        open(p, 'ab')\n    def b(self, p):\n        open(p, 'a')\n"
+    assert _scan(ast.parse(src)) == {"S.a": 1, "S.b": 1}
+
+
+def test_locked_append_takes_and_releases_the_lock_around_the_write(tmp_path, monkeypatch):
+    """Platform independent: the concurrency tests above cannot tell on Linux/macOS whether the lock is taken (POSIX append is atomic anyway), so
+    a fake lock records the order of events: the lock is taken before the record is written and released after, once per record."""
+    events = []
+
+    class FakeLocks:
+        LockTimeout = files.locks.LockTimeout
+
+        @staticmethod
+        def locked(fh, timeout=None):
+            import contextlib
+
+            @contextlib.contextmanager
+            def cm():
+                events.append(("acquire", timeout, fh.tell()))
+                try:
+                    yield
+                finally:
+                    events.append(("release", os.path.getsize(fh.name)))
+            return cm()
+    monkeypatch.setattr(files, "locks", FakeLocks)
+    p = tmp_path / "log"
+    files.append_line(p, "one")
+    files.append_line(p, "two", timeout=3.0)
+    assert [e[0] for e in events] == ["acquire", "release", "acquire", "release"]
+    assert events[0][1] == files.APPEND_LOCK_TIMEOUT_S and events[2][1] == 3.0
+    assert events[1][1] == 4 and events[3][1] == 8                  # the bytes were written between the acquire and the release
+    assert p.read_bytes() == b"one\ntwo\n"

@@ -67,6 +67,7 @@ def acquire(handle, timeout: "float | None" = None) -> None:
             _fcntl.flock(fd, _fcntl.LOCK_EX)
             return
         deadline = time.monotonic() + timeout
+        pause = 0.0005
         while True:
             try:
                 _fcntl.flock(fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
@@ -76,7 +77,8 @@ def acquire(handle, timeout: "float | None" = None) -> None:
                     raise
             if time.monotonic() >= deadline:
                 raise LockTimeout(f"the lock stayed held for {timeout:g} s")
-            time.sleep(_POLL_S)
+            time.sleep(pause)
+            pause = min(pause * 2, _POLL_S)       # a short, backing-off poll: quick when the holder is brief, never more than 20 ms
     elif _WINDOWS:
         _acquire_windows(fd, _WINDOWS_DEFAULT_WAIT_S if timeout is None else timeout, unbounded=timeout is None)
     else:

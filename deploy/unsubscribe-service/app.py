@@ -41,7 +41,9 @@ def unsubscribe_get(u: str = "", e: str = ""):
     if not key:
         return HTMLResponse(_page("This link is missing its unsubscribe code. Email unsubscribe@redevops.io "
                                   "and we'll remove you.", ok=False), status_code=400)
-    handle_unsubscribe(key, _LEDGER)
+    if handle_unsubscribe(key, _LEDGER).get("status") == "rejected":
+        return HTMLResponse(_page("That unsubscribe code is not valid. Email unsubscribe@redevops.io "
+                                  "and we'll remove you.", ok=False), status_code=400)
     return HTMLResponse(_page("You won't receive any further outreach from ReDevOps. This is honored within "
                               "10 business days across our systems."))
 
@@ -50,8 +52,8 @@ def unsubscribe_get(u: str = "", e: str = ""):
 def unsubscribe_post(u: str = Form(default=""), e: str = Form(default="")):
     # RFC 8058 List-Unsubscribe-Post one-click
     key = (u or e).strip()
-    if key:
-        handle_unsubscribe(key, _LEDGER)
+    if key and handle_unsubscribe(key, _LEDGER).get("status") == "rejected":
+        return PlainTextResponse("rejected", status_code=400)
     return PlainTextResponse("unsubscribed")
 
 
