@@ -42,4 +42,4 @@ jobs:
       - name: The module and test lists match the code (no installs, no network)
         run: python scripts/native_core.py --check
       - name: Governance core tests
-        run: python scripts/native_core.py --run -q -rfs --continue-on-collection-errors
+        run: python scripts/native_core.py --run -q -rfEs --continue-on-collection-errors
