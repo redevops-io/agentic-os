@@ -32,7 +32,7 @@ def build_manifest(operator):
         deploy=DeploySpec(
             port=8203,
             pain='network security & systems handled',
-            tagline='Your firewall, triaged and explained by an agent.',
+            tagline='Threat triage and approval-gated response.',
             agents=('triage', 'remediation'),
             approval=('remediation',),
             deploy='compose',
