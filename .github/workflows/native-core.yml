@@ -47,7 +47,7 @@ jobs:
   import-all:
     # Every module of the package imports on a native host (no POSIX-only module is imported unguarded). This lane installs the base
     # dependencies plus a few extras so that only a missing OPTIONAL package (listed in scripts/native_core.py) is excused.
-    name: import every module (${{ matrix.os }}, non-required)
+    name: import every module (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
