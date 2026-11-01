@@ -110,3 +110,118 @@ def test_the_refusal_never_contains_the_key(tmp_path):
     with pytest.raises(GrantStorageError) as e:
         GrantStore(str(tmp_path / "d"))
     assert key not in str(e.value)
+
+
+# ── the files whose POSIX tests assert a 0600 mode: the same properties from the DACL ──
+
+def test_the_env_file_written_for_a_key_is_private_and_is_lf_only(tmp_path):
+    from agentic_os.permissions_setup import write_key_env_file
+    p = write_key_env_file(str(tmp_path / "e" / "permissions.env"))
+    assert files.private_file_problem(p) is None
+    raw = open(p, "rb").read()
+    assert raw.startswith(b"PERMISSIONS_KEY=") and b"\r" not in raw and raw.endswith(b"\n")
+
+
+def test_the_plaintext_migration_backup_and_the_rollback_counter_are_private(tmp_path, monkeypatch):
+    d = tmp_path / "g"
+    GrantStore(str(d), allow_plaintext_dev=True).add("app", "support", "table", "crm.customers")    # an old plaintext store
+    assert (d / "grants.jsonl").exists()
+    monkeypatch.setenv("PERMISSIONS_KEY", KEY)
+    GrantStore(str(d))                                                                              # migrates it, keeping an UNENCRYPTED backup
+    backups = list(d.glob("grants.jsonl.migrated-*"))
+    assert backups and all(files.private_file_problem(b) is None for b in backups)
+    GrantStore(str(d)).add("app", "other", "table", "crm.customers")
+    assert files.private_file_problem(d / "grants.counter") is None
+
+
+def test_init_key_only_creates_a_private_key_file_and_no_grants(tmp_path):
+    from agentic_os.permissions_setup import init_local_profile
+    d = tmp_path / "perm"
+    r = init_local_profile(str(d), key_only=True)
+    assert r["key_created"] and files.private_file_problem(d / ".permissions.key") is None and not (d / "grants.enc").exists()
+
+
+def test_init_on_an_exposed_key_file_is_refused_with_the_icacls_fix(tmp_path):
+    from agentic_os.permissions_setup import init_local_profile
+    d = tmp_path / "perm"
+    kf, _ = perm.provision_key_file(str(d))
+    _icacls(str(kf), "/grant", "*S-1-1-0:R")
+    with pytest.raises(GrantStorageError) as e:
+        init_local_profile(str(d))
+    assert "icacls" in str(e.value) and "S-1-1-0" in str(e.value)
+
+
+def test_the_dev_opt_in_does_not_use_an_exposed_key_file_on_windows(tmp_path, monkeypatch):
+    kf, _ = perm.provision_key_file(str(tmp_path / "d"))
+    _icacls(str(kf), "/grant", "*S-1-1-0:R")
+    monkeypatch.setenv("PERMISSIONS_ALLOW_GENERATED_KEY_DEV", "1")
+    with pytest.raises(GrantStorageError, match="S-1-1-0"):
+        GrantStore(str(tmp_path / "d"))
+
+
+# ── private from creation: a failure to harden a file must not leave it exposed ──
+
+@pytest.fixture
+def open_dir(tmp_path):
+    """A directory whose DACL gives Everyone inheritable read: whatever is created inside inherits an exposed ACL unless it is created private."""
+    d = tmp_path / "open"
+    d.mkdir()
+    _icacls(str(d), "/grant", "*S-1-1-0:(OI)(CI)R")
+    return d
+
+
+def _never_exposed(*paths):
+    for p in paths:
+        assert not os.path.exists(p) or files.private_file_problem(p) is None, f"{p} was left exposed"
+
+
+def test_a_key_file_is_private_from_creation_even_if_the_hardening_step_fails(open_dir, monkeypatch):
+    from agentic_os._platform import _win32
+
+    def boom(*a, **k):
+        raise OSError("injected")
+    monkeypatch.setattr(_win32, "set_private_dacl", boom)
+    keys = open_dir / "keys"
+    keys.mkdir()
+    try:
+        perm.provision_key_file(str(keys))
+    except OSError:
+        pass
+    _never_exposed(keys / ".permissions.key")
+
+
+def test_an_env_key_file_is_private_from_creation_even_if_the_hardening_step_fails(open_dir, monkeypatch):
+    from agentic_os._platform import _win32
+    from agentic_os.permissions_setup import write_key_env_file
+
+    def boom(*a, **k):
+        raise OSError("injected")
+    monkeypatch.setattr(_win32, "set_private_dacl", boom)
+    target = open_dir / "permissions.env"
+    try:
+        write_key_env_file(str(target))
+    except OSError:
+        pass
+    _never_exposed(target)
+
+
+def test_an_atomic_write_never_leaves_an_exposed_file_even_if_the_hardening_step_fails(open_dir, monkeypatch):
+    from agentic_os._platform import _win32
+
+    def boom(*a, **k):
+        raise OSError("injected")
+    monkeypatch.setattr(_win32, "set_private_dacl", boom)
+    try:
+        files.atomic_write(open_dir / "secret.bin", b"sealed")
+    except OSError:
+        pass
+    _never_exposed(*open_dir.iterdir())
+
+
+def test_the_temp_file_of_an_atomic_write_is_private_before_any_data_is_written(open_dir):
+    fd, tmp = files.create_private_temp(str(open_dir), "t.", ".tmp")
+    try:
+        assert files.private_file_problem(tmp) is None
+    finally:
+        os.close(fd)
+        os.unlink(tmp)
