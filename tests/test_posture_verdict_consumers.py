@@ -87,16 +87,19 @@ KNOWN_READERS = {
     "agentic_os/mission/membrane.py": "admit() (decision-based) clamps or refuses",
     "deploy/launcher/acceptance_check.py": "compares the verdict with VERIFIED",
 }
-_READ = re.compile(r"posture\.(classes|verdict|decision|issuable|ceiling)\b|\.classes\.(get|items)|Verdict\.(VERIFIED|BLOCKED|NATIVE_PROCESS_ONLY)\b|"
-                   r"verdict\.value\b|\badmit\(|require_verified\(")
+_READ = re.compile(r"\bDevicePosture\b|\bExecutionClass\b|\.ceiling\(|\.issuable\(|\.decision\(|posture\.(classes|verdict)\b|\.classes\.(get|items)\(|"
+                   r"Verdict\.(VERIFIED|BLOCKED|NATIVE_PROCESS_ONLY)\b|\brequire_verified\(")
 
 
 def test_the_code_that_reads_a_device_posture_is_a_known_set():
+    """Scans EVERY Python file of the package, the deploy tools and the apps for the posture's types and decision helpers, not only the files that
+    mention the module name (a reader can get a posture handed to it without importing anything)."""
     found = set()
-    for base in ("agentic_os", "deploy"):
+    for base in ("agentic_os", "deploy", "apps"):
         for f in (ROOT / base).rglob("*.py"):
-            text = f.read_text(encoding="utf-8", errors="ignore")
-            if "device_posture" in text or f.name == "device_posture.py":
-                if _READ.search(text):
-                    found.add(f.relative_to(ROOT).as_posix())
+            if f.name.startswith("test_"):
+                continue
+            if _READ.search(f.read_text(encoding="utf-8", errors="ignore")):
+                found.add(f.relative_to(ROOT).as_posix())
     assert found <= set(KNOWN_READERS), f"new reader of a device posture, review it and add it to KNOWN_READERS: {sorted(found - set(KNOWN_READERS))}"
+    assert set(KNOWN_READERS) <= found, f"stale entry in KNOWN_READERS: {sorted(set(KNOWN_READERS) - found)}"
