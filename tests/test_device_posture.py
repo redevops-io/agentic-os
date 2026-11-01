@@ -118,7 +118,9 @@ def test_probes_run_and_inspect_returns_a_posture():
     assert facts.platform and facts.platform != "unknown-unknown"
     p = inspect()
     assert isinstance(p, DevicePosture)
-    assert p.verdict in (Verdict.VERIFIED, Verdict.BLOCKED)
+    # a native desktop host (Windows, macOS) without a container runtime is reported as NATIVE_PROCESS_ONLY, never as VERIFIED; Linux stays two-valued
+    allowed = {Verdict.VERIFIED, Verdict.BLOCKED} | ({Verdict.NATIVE_PROCESS_ONLY} if facts.native_process_boundary else set())
+    assert p.verdict in allowed and (p.verdict is not Verdict.VERIFIED or facts.container_runtime)
     assert p.posture_id.startswith("rcv1:")
 
 

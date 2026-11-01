@@ -21,6 +21,7 @@ The committed manifest is scripts/native_core_manifest.json.
     python scripts/native_core.py --check     # fail if the manifest, the workflow pin or the closure drifted
     python scripts/native_core.py --write     # regenerate the manifest (keeps DESELECT as committed)
     python scripts/native_core.py --run [pytest args...]   # run the lane's tests with the current interpreter
+    python scripts/native_core.py --import-all             # import every agentic_os module (the import smoke of the all-modules lane)
 """
 from __future__ import annotations
 
@@ -50,7 +51,7 @@ ADJACENT = frozenset({
     "agentic_os.permissions_setup", "agentic_os.permissions_profiles", "agentic_os.app_gate", "agentic_os.priority_engine",
     "agentic_os.trusted_import", "agentic_os.outcome_store", "agentic_os.mission.fork_join",
     "agentic_os.mission.membrane", "agentic_os.mission.device_posture", "agentic_os.mission.execution_backend",
-    "agentic_os.mission.gate_notify", "agentic_os.secrets", "agentic_os.secrets.stores",
+    "agentic_os.mission.gate_notify", "agentic_os.mission.provisioning", "agentic_os.mission.installer", "agentic_os.secrets", "agentic_os.secrets.stores",
     "agentic_os.secrets.resolve", "agentic_os.secrets.factory", "agentic_os.secrets.bootstrap",
 })
 
@@ -207,6 +208,45 @@ def run(extra: list[str]) -> int:
     return subprocess.call(args, cwd=ROOT, env=env)
 
 
+# Distributions that the all-modules lane does NOT install (an extra it leaves out, or a Linux-hosted integration). A module that needs one of
+# them and finds it missing is reported as skipped; ANY other import failure (a missing POSIX module, a bad guard, a syntax error, a missing
+# package the lane does install) is a failure. Every package the lane installs is deliberately absent from this list.
+OPTIONAL_IMPORTS = frozenset({
+    "psycopg", "redevops_rag", "sentence_transformers", "keyring", "agent_harness", "context_runtime", "reel",
+})
+
+
+def import_all() -> int:
+    """Import every module of the package in this interpreter. Prints one line per failure and a summary; exit 1 on any failure."""
+    import importlib
+    import tempfile
+
+    sys.path.insert(0, str(ROOT))
+    os.environ.setdefault("PERMISSIONS_ALLOW_GENERATED_KEY_DEV", "1")             # control_plane builds its grant store at import
+    os.environ.setdefault("PERMISSIONS_DIR", tempfile.mkdtemp(prefix="aos-import-"))
+    os.environ.setdefault("REDEVOPS_SECRETS_AUTO", "0")
+    ok, skipped, failed = 0, [], []
+    for name in sorted(_modules()):
+        if name == "agentic_os._platform._win32" and os.name != "nt":
+            continue                                                               # the Windows API module imports msvcrt by design
+        try:
+            importlib.import_module(name)
+            ok += 1
+        except ModuleNotFoundError as e:
+            if (e.name or "").split(".")[0] in OPTIONAL_IMPORTS:
+                skipped.append(f"{name} (optional: {e.name})")
+            else:
+                failed.append(f"{name}: {type(e).__name__}: {e}")
+        except BaseException as e:  # noqa: BLE001 - an import must not raise anything
+            failed.append(f"{name}: {type(e).__name__}: {e}")
+    for line in failed:
+        print("IMPORT FAILED", line)
+    print(f"native_core: imported {ok} modules, skipped {len(skipped)} (optional dependency absent), failed {len(failed)}")
+    for line in skipped:
+        print("  skipped", line)
+    return 1 if failed else 0
+
+
 def main(argv: list[str]) -> int:
     if argv[:1] == ["--check"]:
         return check()
@@ -215,6 +255,8 @@ def main(argv: list[str]) -> int:
         return 0
     if argv[:1] == ["--run"]:
         return run(argv[1:])
+    if argv[:1] == ["--import-all"]:
+        return import_all()
     print(__doc__)
     return 2
 

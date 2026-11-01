@@ -5,6 +5,9 @@ above the tier it enforces), real contained execution, and identity-bound receip
 """
 from __future__ import annotations
 
+import dataclasses
+import sys
+
 import pytest
 
 import sys as _sys                                                     # noqa: E402
@@ -20,6 +23,7 @@ from runtime_contracts.models import (
 from runtime_contracts.models.capability import Idempotency
 from runtime_contracts.protocol import AuthorityContext, ExecutionIdentity, PrincipalRef
 
+from agentic_os.mission.membrane import memory_ceiling_enforceable
 from agentic_os.mission.execution_backend import (
     MEMBRANE_CAPABILITIES, MembraneExecutionBackend, govern_and_execute,
 )
@@ -48,7 +52,12 @@ def test_backend_conforms_to_protocol():
 
 def test_capabilities_are_honest():
     caps = MembraneExecutionBackend().capabilities()
-    assert caps == MEMBRANE_CAPABILITIES
+    if not sys.platform.startswith("linux"):          # macOS, Windows: a child process with a scrubbed environment and a time limit, no more is claimed
+        assert caps == BackendCapabilities(identity_binding=True)
+    elif memory_ceiling_enforceable():
+        assert caps == MEMBRANE_CAPABILITIES
+    else:                                              # Linux that refuses RLIMIT_AS: resource limits are not advertised
+        assert caps == dataclasses.replace(MEMBRANE_CAPABILITIES, resource_limits=False)
     # satisfies STANDARD, but not ISOLATED (rootless membrane can't control network egress)
     assert caps.satisfies(profile_requirements(EnforcementProfile.STANDARD))
     assert not caps.satisfies(profile_requirements(EnforcementProfile.ISOLATED))

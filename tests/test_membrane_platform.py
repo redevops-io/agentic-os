@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,6 +23,11 @@ def _fresh_probe():
     _PROBE.cache_clear()
     yield
     _PROBE.cache_clear()
+
+
+# Windows has no `resource` module (the membrane then holds None). The tests that fake the probe or the child run stand in for it, so the
+# logic they prove (refuse by name, cache the probe, pass a preexec function) is exercised on every OS.
+_FAKE_RESOURCE = SimpleNamespace(RLIMIT_AS=9, RLIMIT_CPU=0, RLIMIT_NPROC=6, setrlimit=lambda *a: None)
 
 
 def never_run(*a, **k):
@@ -44,6 +50,7 @@ def test_asking_for_no_memory_ceiling_still_runs_on_every_platform():
 
 def test_where_the_ceiling_can_be_applied_nothing_changes(monkeypatch):
     monkeypatch.setattr(membrane, "memory_ceiling_enforceable", lambda: True)
+    monkeypatch.setattr(membrane, "resource", _FAKE_RESOURCE)
     seen = {}
 
     def fake_run(cmd, **kw):
@@ -65,6 +72,7 @@ def test_a_probe_that_fails_or_cannot_run_means_not_enforceable(monkeypatch, beh
 
 
 def test_a_probe_that_succeeds_means_enforceable_and_is_cached(monkeypatch):
+    monkeypatch.setattr(membrane, "resource", _FAKE_RESOURCE)
     calls = []
 
     def fake(cmd, **kw):
