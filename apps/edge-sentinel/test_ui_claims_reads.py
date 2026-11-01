@@ -20,8 +20,12 @@ import types
 import pytest
 
 HERE = pathlib.Path(__file__).resolve().parent
-if not (HERE / "core.py").exists():                      # the deployed copy: tests live in <repo>/tests
-    sys.path.insert(0, str(HERE.parent / "agents"))
+if (HERE / "core.py").exists():                          # the public tree: tests live next to the app
+    APPDIR, REPO = HERE, HERE.parent.parent
+else:                                                    # the deployed copy: tests live in <repo>/tests
+    REPO = HERE.parent
+    APPDIR = REPO / "agents" / "edge-sentinel"
+    sys.path.insert(0, str(REPO / "agents"))
 core = importlib.import_module("edge-sentinel.core")
 netbird = importlib.import_module("edge-sentinel.netbird")
 portabase = importlib.import_module("edge-sentinel.portabase")
@@ -209,14 +213,14 @@ def test_all_23_tools_are_registered_and_none_claims_what_the_demo_cannot_do(con
     for name, t in console.tools.items():
         for bad in CLAIMS_THE_DEMO_CANNOT_BACK:
             assert bad.lower() not in t["description"].lower(), f"{name}: {bad!r}"
-    for name in ("scan_app", "scan_apps", "list_scannable_apps"):
-        assert "NOT available in the public demo" in console.tools[name]["description"], name
+    for name in ("scan_app", "scan_apps", "list_scannable_apps", "scan_deployment"):
+        assert console.tools[name]["description"].startswith("Not available"), name
     assert "Scanning other apps' images needs docker access" in console.tools["supply_chain_scan"]["description"]
     for name in ("network_access_review", "network_posture", "backup_status", "propose_network_policy"):
         assert "sample data" in console.tools[name]["description"].lower(), name
     ban = console.tools["ban_ip"]["description"]
     assert console.tools["ban_ip"]["side_effecting"] and "dry run" in ban and "never runs from this chat" in ban
-    assert console.tools["scan_deployment"]["side_effecting"] and "does not run from the public demo chat" in console.tools["scan_deployment"]["description"]
+    assert console.tools["scan_deployment"]["side_effecting"] and "never runs here" in console.tools["scan_deployment"]["description"]
     assert console.allow == []                                              # no side-effecting tool may run from chat
 
 
@@ -237,7 +241,7 @@ def test_console_page_chips_and_subtitle_come_from_the_console(app, console, mon
     html = TestClient(app.app).get("/").text
     assert "Review network access (sample data)" in html and "List the active bans" in html
     assert "Scan the billing app" not in html and "Scan a running deployment" not in html and "SIEM" not in html
-    assert "not available in this demo" in html
+    assert "app image scans" not in html.lower() and "deployment scans" not in html.lower()   # no scan is advertised
     assert html.count("CONTEXT RUNTIME") == 1                                # the sticky banner appears once
 
 
@@ -310,3 +314,61 @@ def test_cases_panel_does_not_promise_a_dry_run_everywhere(app):
     html = app._cases_panel([])
     assert "needs an enable flag" in html and "this execute step is a <b>dry run</b>" in html and "nothing is blocked" in html
     assert "unless SENTINEL_BLOCK_ENABLED is set" not in html
+
+
+# ── owner decisions: removals ───────────────────────────────────────────────────────────────────────────────────
+def test_no_benchmark_comparison_on_any_product_surface(app, monkeypatch):
+    banner = app._cr_banner()
+    readme = (APPDIR / "README.md").read_text()
+    for text, where in ((banner, "sticky banner"), (readme, "README")):
+        for bad in ("0.900", "0.800", "benchmark", "learned", "learns the cheapest"):
+            assert bad.lower() not in text.lower(), f"{where}: {bad!r}"
+    stub_lapi(monkeypatch)
+    html = page(app)
+    assert "0.900" not in html and "0.800" not in html and "benchmark" not in html.lower()
+    assert "supply-chain/vuln scanners" not in banner                      # the banner no longer advertises scanners
+
+
+class _NoDockerScanner:
+    def list_scannable_containers(self, name_filter=""):
+        return []                                                          # no Docker access: nothing can be listed
+
+
+def test_scan_chat_actions_answer_that_they_are_unavailable_when_there_is_no_docker_access(app, monkeypatch):
+    monkeypatch.setattr(app, "_SCAN", _NoDockerScanner())
+    for tool, args in ((app._t_scan_app, {"app": "billing"}), (app._t_scan_apps, {}), (app._t_list_apps, {})):
+        out = tool(args)
+        assert "not available in this deployment" in out["text"] and "planned" in out["text"], tool.__name__
+        assert "Scannable apps" not in out["text"] and out["data"] == {"available": False}
+
+
+def test_readme_examples_do_not_mount_the_docker_socket_and_give_least_privilege_guidance():
+    readme = (APPDIR / "README.md").read_text()
+    assert "-v /var/run/docker.sock" not in readme and "docker.sock:/var/run/docker.sock" not in readme
+    assert "DOCKER_HOST=tcp://sentinel-docker-proxy" not in readme and "sentinel-docker-scan" not in readme
+    assert "## Docker access (least privilege)" in readme and "does not need unrestricted Docker access" in readme
+    assert "operator-supplied" in readme and "does not ship or support one" in readme
+    for endpoint in ("GET /_ping", "POST /containers/<crowdsec container>/exec", "POST /exec/<id>/start", "GET /images/<ref>/json"):
+        assert endpoint in readme, endpoint
+    assert "not read-only" in readme and "may hold secrets" in readme            # the limits of a path allow-list are stated
+    assert "planned" in readme
+
+
+def test_no_default_compose_service_for_edge_sentinel_mounts_the_docker_socket():
+    yaml = pytest.importorskip("yaml")
+    checked = 0
+    for f in list(REPO.glob("*compose*.y*ml")) + list((REPO / "deploy").glob("*compose*.y*ml")):
+        doc = yaml.safe_load(f.read_text()) or {}
+        for name, svc in (doc.get("services") or {}).items():
+            if "edge-sentinel" in name:
+                checked += 1
+                assert not any("docker.sock" in str(v) for v in (svc.get("volumes") or [])), f"{f.name}:{name}"
+    assert checked >= 1
+
+
+def test_apps_readme_no_longer_tells_edge_sentinel_to_mount_the_socket():
+    f = REPO / "apps" / "README.md"
+    if not f.exists():
+        pytest.skip("apps/README.md is in the public tree only")
+    line = next(ln for ln in f.read_text().splitlines() if ln.strip().startswith("- edge-sentinel"))
+    assert "docker CLI used for" not in line and "not the raw socket" in line

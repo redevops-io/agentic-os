@@ -135,7 +135,7 @@ def test_home_page_without_console_is_clean(app, monkeypatch):
     monkeypatch.setattr(app, "_SENTINEL_CONSOLE", None)
     html = TestClient(app.app).get("/").text
     _assert_clean(html, "GET /")
-    assert "does not run in this app" in html                        # the benchmark sentence says so
+    assert "0.900" not in html and "benchmark" not in html.lower()       # the comparison is gone, not reworded
     assert "Network access (sample data)" in html and "Backups (sample data)" in html
 
 
@@ -241,4 +241,4 @@ def test_manifest_and_module_tagline_do_not_claim_a_firewall():
 def test_readme_does_not_describe_the_learning_policy_as_running_or_a_green_all_clear():
     readme = (HERE / "README.md").read_text()
     assert "All systems normal" not in readme and "agent active" not in readme
-    assert "not running in this app" in readme and "simulated" in readme
+    assert "0.900" not in readme and "benchmark" not in readme.lower()
