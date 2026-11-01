@@ -2,8 +2,12 @@
 
 This is what turns the demo from illustrative into real: it reads the LIVE Edge Sentinel
 (sentinel.redevops.io) **read-only** and derives findings from actual deployment state — CrowdSec
-threats, backup posture, network-policy risks — then composes the governed chain
+decisions, backup posture, network-policy risks — then composes the governed chain
 (finding → approval-bound Decision → operator → receipt → verification → projection).
+
+A payload that says it is sample data (``live: false`` or ``data_status: "sample"``, which Edge Sentinel sets
+on its network and backup planes until they are connected) is NOT turned into findings: it is reported under
+``sample_sources`` as "sample data, not a finding".
 
 Two safety rules (hard guardrail — never disturb the live demos):
   * every read is GET-only against Edge Sentinel's read endpoints; nothing here mutates the SOC;
@@ -57,6 +61,7 @@ class InspectionReport:
     kpis: List[dict] = field(default_factory=list)
     findings: List[DeploymentFinding] = field(default_factory=list)
     proposed_actions: List[str] = field(default_factory=list)
+    sample_sources: List[dict] = field(default_factory=list)   # planes that answered with sample data (not findings)
 
     @property
     def top_finding(self) -> Optional[DeploymentFinding]:
@@ -67,7 +72,8 @@ class InspectionReport:
     def view(self) -> dict:
         return {"target": self.target, "connected": self.connected, "kpis": self.kpis,
                 "findings": [f.view() for f in self.findings],
-                "proposed_actions": self.proposed_actions}
+                "proposed_actions": self.proposed_actions,
+                "sample_sources": self.sample_sources}
 
 
 # ── reading the live deployment (GET-only) ───────────────────────────────────────────
@@ -90,6 +96,30 @@ def read_deployment(base_url: str, *, fetch: Optional[Callable[[str, str], Optio
 
 
 # ── deriving findings from real state ────────────────────────────────────────────────
+SAMPLE_NOTE = "sample data, not a finding"
+
+
+def is_sample_payload(payload: Dict[str, Any]) -> bool:
+    """True when the payload declares it is sample data: ``live`` is False or ``data_status`` is "sample".
+    A payload with neither key (an older Sentinel, a fixture) is read as live, as before."""
+    if not isinstance(payload, dict):
+        return False
+    return payload.get("live") is False or str(payload.get("data_status", "")).lower() == "sample"
+
+
+def sample_sources(snapshot: Dict[str, Any]) -> List[dict]:
+    """The planes whose payload is sample data, each with how many would-be items it carried."""
+    out: List[dict] = []
+    net = snapshot.get("/api/network/review") or {}
+    if is_sample_payload(net):
+        out.append({"source": "network", "status": SAMPLE_NOTE, "items": len(net.get("risks", []) or [])})
+    bk = snapshot.get("/api/backups/status") or {}
+    if is_sample_payload(bk):
+        out.append({"source": "backups", "status": SAMPLE_NOTE,
+                    "items": sum(len(bk.get(k, []) or []) for k in ("never", "no_offsite", "unencrypted"))})
+    return out
+
+
 def derive_findings(snapshot: Dict[str, Any]) -> List[DeploymentFinding]:
     findings: List[DeploymentFinding] = []
 
@@ -99,11 +129,13 @@ def derive_findings(snapshot: Dict[str, Any]) -> List[DeploymentFinding]:
                                           f"security core '{health.get('core', '?')}' is not connected"))
 
     net = snapshot.get("/api/network/review") or {}
-    for risk in net.get("risks", []) or []:
+    for risk in ([] if is_sample_payload(net) else net.get("risks", []) or []):
         findings.append(DeploymentFinding("network", risk.get("kind", "network_risk"),
                                           risk.get("severity", "medium"), risk.get("detail", "")))
 
     bk = snapshot.get("/api/backups/status") or {}
+    if is_sample_payload(bk):
+        bk = {}                                            # sample data is reported under sample_sources, never as a finding
     for name in bk.get("never", []) or []:
         findings.append(DeploymentFinding("backups", "no_backup", "high", f"{name} has never been backed up"))
     for name in bk.get("no_offsite", []) or []:
@@ -112,10 +144,10 @@ def derive_findings(snapshot: Dict[str, Any]) -> List[DeploymentFinding]:
         findings.append(DeploymentFinding("backups", "unencrypted_backup", "high", f"{name} backup is unencrypted"))
 
     act = snapshot.get("/api/activity") or {}
-    if act.get("has_threat"):
+    if act.get("has_threat") and (act.get("decisions_status") or {}).get("ok", True):
         n = len(act.get("decisions", []) or [])
         findings.append(DeploymentFinding("crowdsec", "active_threats", "medium",
-                                          f"{n} active CrowdSec decision(s) enforced against live sources"))
+                                          f"{n} active CrowdSec decision(s) held (a decision is not proof that a bouncer enforces it)"))
     return findings
 
 
@@ -130,7 +162,8 @@ def run_inspection(base_url: str, *, fetch: Optional[Callable[[str, str], Option
                     "Draft an operator briefing"]
     return InspectionReport(
         target=base_url, connected=bool(health.get("connected")),
-        kpis=act.get("kpis", []) or [], findings=findings, proposed_actions=proposed)
+        kpis=act.get("kpis", []) or [], findings=findings, proposed_actions=proposed,
+        sample_sources=sample_sources(snap))
 
 
 # ── the governed remediation proposal (SAFE — fake-executed) ─────────────────────────
