@@ -69,6 +69,41 @@ def test_a_missing_dacl_or_a_foreign_owner_is_refused():
     assert "parsed" in _acl.dacl_problem(f"O:{USER}D:PAI(A;;FA;;;{USER}", USER)      # unbalanced: refuse, never guess
 
 
+@pytest.mark.parametrize("sddl,why", [
+    (f"O:{USER}D:NO_ACCESS_CONTROL", "NULL"),                                   # a NULL DACL: every account has full access
+    (f"O:{USER}D:PNO_ACCESS_CONTROL", "NULL"),
+    (f"O:{USER}D:PAI(A;;FA;;WD)", "malformed"),                                 # a 5-field ACE must be refused, not skipped
+    (f"O:{USER}D:PAI(A;;FA;;;{USER})(A;;FA;;WD)", "malformed"),
+    (f"O:{USER}D:PAI(Q;;FA;;;{USER})", "unknown"),                              # an ACE type the rule does not know
+    (f"O:{USER}D:PAI(A;;FA;;;{USER})garbage", "parsed"),
+    (f"O:{USER}D:", "empty"),                                                   # nothing is granted: refuse rather than guess
+])
+def test_a_null_empty_or_malformed_dacl_is_refused_not_accepted(sddl, why):
+    got = _acl.dacl_problem(sddl, USER)
+    assert got and why in got, got
+
+
+def test_a_permission_error_after_the_bounded_retry_is_a_grant_storage_error(tmp_path, monkeypatch):
+    """A destination held open past the retry window (an antivirus scan, a stuck reader) must surface as the store's own error, which the
+    admin routes translate, not as a raw PermissionError (a 500)."""
+    from agentic_os import permissions as perm
+    p = tmp_path / "f"
+    p.write_bytes(b"old")
+
+    def held(src, dst):
+        e = PermissionError(13, "in use")
+        e.winerror = 32
+        raise e
+    monkeypatch.setattr(files, "_WINDOWS", True)
+    monkeypatch.setattr(files, "_REPLACE_DELAY_S", 0)
+    monkeypatch.setattr(files, "make_private", lambda *a, **k: None)           # the Windows API is not there to call on this host
+    monkeypatch.setattr(os, "replace", held)
+    with pytest.raises(perm.GrantStorageError, match="in use by another process"):
+        perm._atomic_write(p, b"new")
+    assert p.read_bytes() == b"old" and sorted(x.name for x in tmp_path.iterdir()) == ["f"]
+
+
+
 # ── private directories and files ──
 
 def test_ensure_private_dir_creates_missing_parents_private_and_leaves_existing_ones(tmp_path):
