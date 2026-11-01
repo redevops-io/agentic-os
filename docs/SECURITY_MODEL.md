@@ -94,7 +94,7 @@ Authoritative requirements (4xx and **no append** otherwise):
 
 `POST /api/projects/{id}/policy/promotion-cycle`: `apply=true` or any `tenant_id` requires the control token; an anonymous dry run evaluates only **untenanted** evidence. The cycle is always scoped to one tenant (no mixing).
 
-Defence in depth: `OutcomeEvent.simulated=True` is refused by every `OutcomeStore.append` and filtered by `policy_promotion.run_promotion_cycle`. Store `append` is atomic (lock; `flock` + `O_APPEND` for the file store, multi-process safe on local POSIX filesystems only: the flock is a no-op without `fcntl` (Windows, a warning is logged once) and unreliable on NFS; use the Postgres store or a single writer there) and idempotent on `event_id` (tenant-scoped). **Changed dedupe semantics:** a derived outcome with identical (source observation ids, selected intervention) is now dropped on append (previously both were stored). Trusted in-process callers (`apps/billing`, connectors) keep using `record_outcome_event` / store `append` directly.
+Defence in depth: `OutcomeEvent.simulated=True` is refused by every `OutcomeStore.append` and filtered by `policy_promotion.run_promotion_cycle`. Store `append` is atomic (lock; `flock` + `O_APPEND` for the file store, multi-process safe on local filesystems (the lock is `flock` on POSIX and `LockFileEx` on Windows, `agentic_os/_platform/locks.py`; a platform with neither raises instead of appending unlocked) and unreliable on NFS; use the Postgres store or a single writer there) and idempotent on `event_id` (tenant-scoped). **Changed dedupe semantics:** a derived outcome with identical (source observation ids, selected intervention) is now dropped on append (previously both were stored). Trusted in-process callers (`apps/billing`, connectors) keep using `record_outcome_event` / store `append` directly.
 
 ## Security profile and the operator authority boundary
 
@@ -408,8 +408,10 @@ Status (`GET /api/permissions/status`) reports `encrypted` / `key_source` (`env`
 **Concurrency and files.** `add`, `remove` and `seed` hold one exclusive `flock` (`.grants.lock`) across
 the **whole** read-modify-write and persist through a temp file in the same directory, `fsync`,
 `os.replace` and a directory `fsync`, so concurrent writers (threads or processes) lose no update and a
-reader never sees a torn file. The store needs POSIX `fcntl` and **raises at start-up on a platform
-without it** rather than run unlocked. The directory is created 0700, files 0600; a symbolic link in
+reader never sees a torn file. The store needs an inter-process file lock (`flock` on POSIX, `LockFileEx` on Windows) and **raises at
+start-up on a platform without one** rather than run unlocked. The directory is created 0700, files 0600 (on Windows: a protected DACL for
+the user and the system; a key or profile file is accepted only under the user's profile and only when its DACL shows no access for anyone
+else); a symbolic link in
 place of a grants file, backup or temp path is refused.
 
 #### Migrating an existing plaintext `grants.jsonl`

@@ -27,6 +27,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
+from .._platform import locks as _locks
+from .._platform.process import pid_alive as _pid_alive_probe
 from . import concurrency as conc
 from .approval import is_approval_key, strip_approval_keys
 from . import compensation as _comp
@@ -439,35 +441,37 @@ def _driver_lock(store, mission_id: str, fork_id: str) -> threading.Lock:
 
 
 def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except OSError:
-        return True
+    """Is the claiming driver's process still running? Never signals it (``os.kill(pid, 0)`` terminates a process on Windows)."""
+    return _pid_alive_probe(pid)
 
 
 class _FileLock:
-    """Cross-process mutex around claim/refresh (flock on a sidecar file) for file-backed logs."""
+    """Cross-process mutex around claim/refresh (an exclusive lock on a sidecar file) for file-backed logs: flock on POSIX,
+    LockFileEx on Windows; a platform with neither raises instead of running unlocked."""
 
     def __init__(self, store):
         path = getattr(store, "_path", None)
         self.path = (path + ".forklock") if path else None
-        self.fh = None
+        self.fd = None
 
     def __enter__(self):
         if self.path:
-            import fcntl  # noqa: PLC0415
-            self.fh = open(self.path, "a+")
-            fcntl.flock(self.fh, fcntl.LOCK_EX)
+            self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o666)
+            try:
+                _locks.acquire(self.fd)
+            except BaseException:
+                os.close(self.fd)
+                self.fd = None
+                raise
         return self
 
     def __exit__(self, *a):
-        if self.fh:
-            import fcntl  # noqa: PLC0415
-            fcntl.flock(self.fh, fcntl.LOCK_UN)
-            self.fh.close()
+        if self.fd is not None:
+            try:
+                _locks.release(self.fd)
+            finally:
+                os.close(self.fd)
+                self.fd = None
 
 
 class ForkJoinController:

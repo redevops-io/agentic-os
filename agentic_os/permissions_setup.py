@@ -21,6 +21,7 @@ import json
 import secrets
 from pathlib import Path
 
+from ._platform import files as _files
 from .permissions import GrantStorageError, GrantStore, _ensure_private_dir, provision_key_file
 from .permissions_profiles import GateProfile, build_gate
 from .tool_actions import TOOL_ACTIONS
@@ -65,10 +66,15 @@ def local_user(directory: str) -> str:
         st = os.fstat(fd)
         if not _stat.S_ISREG(st.st_mode):
             raise GrantStorageError(f"the local profile {path} is not a regular file")
-        if st.st_uid != os.geteuid():
-            raise GrantStorageError(f"the local profile {path} is not owned by the user running this process")
-        if _stat.S_IMODE(st.st_mode) != 0o600:
-            raise GrantStorageError(f"the local profile {path} must be mode 0600 (it is {_stat.S_IMODE(st.st_mode):04o}): chmod 600 it, or re-run `agentic-os permissions init`")
+        if _files.HAS_POSIX_MODES:
+            if st.st_uid != os.geteuid():
+                raise GrantStorageError(f"the local profile {path} is not owned by the user running this process")
+            if _stat.S_IMODE(st.st_mode) != 0o600:
+                raise GrantStorageError(f"the local profile {path} must be mode 0600 (it is {_stat.S_IMODE(st.st_mode):04o}): chmod 600 it, or re-run `agentic-os permissions init`")
+        else:       # Windows: no mode bits or uids; the file must be under the user's profile with a DACL that shows no access for anyone else
+            why = _files.private_file_problem(path)
+            if why:
+                raise GrantStorageError(f"the local profile {path} {why}: re-run `agentic-os permissions init`, or restrict it to your account (icacls)")
         with os.fdopen(fd, "rb") as f:
             fd = -1
             raw = f.read(65536)
@@ -119,6 +125,8 @@ def write_key_env_file(path: str, *, from_key_file: str | None = None) -> str:
         f.write(f"PERMISSIONS_KEY={key}\n")
         f.flush()
         os.fsync(f.fileno())
+    if not _files.HAS_POSIX_MODES:
+        _files.make_private(path)                            # Windows ignores the mode above: set a user-only DACL
     return path
 
 

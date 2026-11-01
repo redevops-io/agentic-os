@@ -32,7 +32,7 @@ kernel, as distinct from the optional Enterprise package.
 | The control plane's fleet reads (`GET /approvals`, `/jobs/{id}`, `/api/fleet`, `/status`, `/notify/status`) need the fleet key, the control token or the read-only dashboard token; `/health` is minimal and `/capabilities` is trimmed for anonymous callers | Scripts, monitors and readiness checks that read them without a credential, and the dashboard (it now asks for a credential) | Send `X-API-Key`, a bearer control token or `X-Dashboard-Token` and set one of them (section 33) |
 | Scanner launchers need `write` | Principals that ran the scan tools with `read` grants | Grant `write`, or leave them denied (section 9) |
 | Plaintext `grants.jsonl` is migrated at start-up | Installs that stored plaintext | Nothing, or read the safeguards below |
-| One lock per grant transaction (POSIX `fcntl`) | Windows, or filesystems without `flock` | Use a POSIX host / a volume that supports `flock` |
+| One lock per grant transaction (`flock` on POSIX, `LockFileEx` on Windows, through `agentic_os/_platform/locks.py`) | Platforms with neither, or filesystems without working locks | Use a local volume that supports file locking |
 | Files 0600, directory 0700 | Control plane and apps that share the grants volume as different users | Run both as the same user, or share a group deliberately (below) |
 
 ## 1. Unmapped tools and `public_tools`
@@ -260,8 +260,8 @@ choose and apply a group-based mode deliberately; the store does not widen modes
 
 `add`/`remove`/`seed` hold one exclusive `flock` on `.grants.lock` across the whole read-modify-write and write
 through a temp file, `fsync` and `os.replace`: no lost update (a removal included), no torn file, readers lock
-nothing. POSIX `fcntl` is required; a platform without it (Windows) **raises at construction** instead of running
-unlocked. Network filesystems that do not implement `flock` correctly cannot give this guarantee: keep the grants
+nothing. An inter-process file lock is required (`flock` on POSIX, `LockFileEx` on Windows); a platform with neither **raises at
+construction** instead of running unlocked. Network filesystems that do not implement `flock` correctly cannot give this guarantee: keep the grants
 volume on local or properly locking storage.
 
 ## 7. Rollback
@@ -321,7 +321,7 @@ checked without starting anything: `docker compose config` stops with the messag
 - [ ] code that reads `row_filter` handles `{"op": "or"}`
 - [ ] `PERMISSIONS_DIR` set and a key provisioned: `PERMISSIONS_KEY` (preferably from a secret store, with `PERMISSIONS_REQUIRE_KEY=1` in production) or an existing key file
 - [ ] neither `PERMISSIONS_ALLOW_PLAINTEXT_DEV` nor `PERMISSIONS_ALLOW_GENERATED_KEY_DEV` appears in any shipped configuration
-- [ ] the grants volume is on a POSIX filesystem with `flock`; readers and writers run as a user that can open 0600 files
+- [ ] the grants volume is on a local filesystem with working file locks; readers and writers run as a user that can open 0600 files (on Windows: the key and profile files live under that user's profile and are readable by that account only)
 - [ ] after the first start: confirm `status.migrated_from_plaintext`, then delete `grants.jsonl.migrated-*`
 
 ## 9. Scanner tools and the `execute` question

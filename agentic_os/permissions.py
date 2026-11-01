@@ -20,14 +20,12 @@ from __future__ import annotations
 
 import base64
 import contextlib
-import errno
 import hashlib
 import json
 import logging
 import os
 import secrets as _secrets
 import stat
-import tempfile
 import math
 import time
 from dataclasses import dataclass, field
@@ -42,10 +40,7 @@ try:
 except Exception:  # noqa: BLE001
     _HAVE_CRYPTO = False
 
-try:
-    import fcntl as _fcntl
-except ImportError:  # not POSIX: GrantStore refuses to run without a lock
-    _fcntl = None
+from ._platform import files as _files, locks as _locks   # flock on POSIX, LockFileEx on Windows; GrantStore refuses to run without one
 
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
@@ -387,7 +382,7 @@ class _SecretBox:
         if problem:
             if not allow_generated_key_dev:
                 self._plaintext_or_raise(
-                    f"the key file {kf} {problem}. Fix it (`chmod 600 {kf}` and own it as the service user), or provide the "
+                    f"the key file {kf} {problem}. Fix it ({_key_fix_hint(kf)}), or provide the "
                     f"key as PERMISSIONS_KEY instead (a mounted secret is often 0444 and root-owned: use the environment "
                     f"variable there)")
                 return
@@ -414,6 +409,8 @@ class _SecretBox:
                 fd = os.open(kf, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW, 0o600)
                 with os.fdopen(fd, "w") as f:
                     f.write(base64.b64encode(key).decode())
+                if not _files.HAS_POSIX_MODES:
+                    _files.make_private(kf)                      # Windows ignores the mode above: set a user-only DACL
             except Exception as e:  # noqa: BLE001
                 self._plaintext_or_raise(f"could not generate a key file at {kf} ({type(e).__name__})")
                 return
@@ -482,19 +479,22 @@ def provision_key_file(directory: str, path: "str | None" = None) -> tuple[Path,
     fd = os.open(kf, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(base64.b64encode(AESGCM.generate_key(bit_length=256)).decode())
+    if not _files.HAS_POSIX_MODES:
+        _files.make_private(kf)                                 # Windows ignores the mode above: set a user-only DACL on the key file
     return kf, True
 
 
+def _key_fix_hint(kf) -> str:
+    if _files.HAS_POSIX_MODES:
+        return f"`chmod 600 {kf}` and own it as the service user"
+    return f"keep it under your user profile and restrict it to your account: `icacls \"{kf}\" /inheritance:r /grant:r \"%USERNAME%:F\"`"
+
+
 def _key_file_exposure(path) -> str | None:
-    """Why an existing key file is too exposed to use (wider than 0600, or not owned by the running user), or None. The mode of the
-    file a symlink points at is what counts. Platforms without ``geteuid`` skip the ownership test."""
-    st = os.stat(path)
-    why = []
-    if st.st_mode & 0o177:
-        why.append(f"has mode {stat.S_IMODE(st.st_mode):04o}, wider than 0600")
-    if hasattr(os, "geteuid") and st.st_uid != os.geteuid():
-        why.append("is not owned by the running user")
-    return " and ".join(why) or None
+    """Why an existing key file is too exposed to use, or None. POSIX (Linux, macOS): wider than 0600, or not owned by the running
+    user (the mode of the file a symlink points at is what counts; platforms without ``geteuid`` skip the ownership test). Windows: the
+    file must live under the user's profile and its DACL must show no access for anyone but the user (see ``_platform.files``)."""
+    return _files.private_file_problem(path)
 
 
 # ── file helpers: private modes, no symlinks, atomic + durable replacement ──
@@ -510,34 +510,13 @@ def _refuse_symlink(path, what: str) -> None:
 
 
 def _ensure_private_dir(path) -> None:
-    """Create ``path`` and any MISSING parents with mode 0700 (``os.makedirs(mode=)`` would leave the intermediate ones at the default).
-    Directories that already exist are left exactly as they are."""
-    path = os.path.abspath(os.fspath(path))
-    missing = []
-    while path and not os.path.isdir(path):
-        missing.append(path)
-        parent = os.path.dirname(path)
-        if parent == path:
-            break
-        path = parent
-    for d in reversed(missing):
-        try:
-            os.mkdir(d, 0o700)
-        except FileExistsError:
-            pass
+    """Create ``path`` and any MISSING parents private (0700 on POSIX; a user-only protected DACL on Windows). Directories that already
+    exist are left exactly as they are."""
+    _files.ensure_private_dir(path)
 
 
 def _fsync_dir(path) -> None:
-    try:
-        fd = os.open(path, os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(fd)
-    except OSError:
-        pass
-    finally:
-        os.close(fd)
+    _files.fsync_dir(path)
 
 
 def _read_regular(path) -> bytes:
@@ -559,27 +538,12 @@ def _copy_private(src, dst) -> None:
 
 
 def _atomic_write(path, data: bytes) -> None:
-    """Replace ``path`` with ``data`` all-or-nothing: temp file in the same directory (0600, created
-    exclusively), write + fsync, ``os.replace``, fsync the directory. A failure — or a crash — leaves the
+    """Replace ``path`` with ``data`` all-or-nothing: temp file in the same directory (private, created
+    exclusively), write + fsync, replace, fsync the directory. A failure — or a crash — leaves the
     previous file or the complete new one, never a partial one; the temp file is removed on failure."""
     path = os.fspath(path)
     _refuse_symlink(path, "grants file")
-    d = os.path.dirname(path) or "."
-    fd, tmp = tempfile.mkstemp(dir=d, prefix=os.path.basename(path) + ".", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-    _fsync_dir(d)
+    _files.atomic_write(path, data)
 
 
 class _Doc(NamedTuple):
@@ -631,9 +595,9 @@ class GrantStore:
         plaintext file is an error, never something to migrate."""
         self.read_only = bool(read_only)
         self.dir = directory or os.getenv("PERMISSIONS_DIR", "/data/agentic-os/permissions")
-        if _fcntl is None:
-            raise GrantStorageError("GrantStore needs POSIX file locking (fcntl), which this platform does not "
-                                    "provide — refusing to run without a lock")
+        if not _locks.available():
+            raise GrantStorageError("GrantStore needs inter-process file locking (flock or LockFileEx), which this platform "
+                                    "does not provide — refusing to run without a lock")
         if allow_plaintext_dev is None:
             allow_plaintext_dev = _env_yes("PERMISSIONS_ALLOW_PLAINTEXT_DEV")
         if migrate_plaintext is None:
@@ -698,30 +662,22 @@ class GrantStore:
             fd = os.open(Path(self.dir) / ".grants.lock", os.O_RDWR | os.O_CREAT | _O_NOFOLLOW, 0o600)
         except OSError as e:
             raise GrantStorageError(f"cannot take the grants lock in {self.dir} ({type(e).__name__})") from e
-        locked = False
         try:
-            deadline = time.monotonic() + self.lock_timeout
-            while True:
-                try:
-                    _fcntl.flock(fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
-                    locked = True
-                    break
-                except OSError as e:
-                    if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES):
-                        raise GrantStorageError(f"cannot take the grants lock in {self.dir} ({type(e).__name__})") from e
-                    if time.monotonic() >= deadline:
-                        raise GrantStorageError(
-                            f"could not take the grants lock in {self.dir} within {self.lock_timeout:g} s — another process "
-                            f"holds it (a stuck writer?); the data was not changed. Retry, find the holder, or raise "
-                            f"PERMISSIONS_LOCK_TIMEOUT.") from None
-                    time.sleep(0.02)
-            yield
-        finally:
             try:
-                if locked:
-                    _fcntl.flock(fd, _fcntl.LOCK_UN)
+                _locks.acquire(fd, self.lock_timeout)
+            except _locks.LockTimeout:
+                raise GrantStorageError(
+                    f"could not take the grants lock in {self.dir} within {self.lock_timeout:g} s — another process "
+                    f"holds it (a stuck writer?); the data was not changed. Retry, find the holder, or raise "
+                    f"PERMISSIONS_LOCK_TIMEOUT.") from None
+            except OSError as e:
+                raise GrantStorageError(f"cannot take the grants lock in {self.dir} ({type(e).__name__})") from e
+            try:
+                yield
             finally:
-                os.close(fd)
+                _locks.release(fd)
+        finally:
+            os.close(fd)
 
     def _migrate_legacy(self, legacy: Path, enc: Path, enabled: bool) -> None:
         if not enabled:
