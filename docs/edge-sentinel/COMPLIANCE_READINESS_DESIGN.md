@@ -111,7 +111,15 @@ The R0 bar is the test: for each probe, a deliberately misconfigured fixture pro
 
 ### 3.6 Subject binding
 
-A probe declares its subject (host, container, agent or service) and verifies that the subject it observes is the one declared before it reads anything else. A probe that reads `/proc/net`, `/proc/sys`, the mount table or the filesystem observes the current namespaces: run from the shipped container image, it would see the container, not the host, and could PASS a host it never looked at. The subject check compares the process's network, mount and PID namespaces with those of PID 1 and looks for container control groups; when the observed subject is a container and the declared subject is a host (the default), or the check cannot be made, every probe of that subject returns INCONCLUSIVE with reason `subject-mismatch`, never PASS, and never NOT_APPLICABLE. A probe targets a container only when the profile says so explicitly. The check result is part of the evidence. The package install (not the image) is the supported way to probe a host; the image's `doctor` says so.
+A probe declares its subject (host, container, agent or service) and verifies that the subject it observes is the one declared before it reads anything else. A probe that reads `/proc/net`, `/proc/sys`, the mount table or the filesystem observes the current namespaces: run from the shipped container image it would see the container, not the host, and could PASS a host it never looked at. Comparing the process's namespaces with those of PID 1 does not detect that (inside a container PID 1 is the container's own init, in the same namespaces), and the control-group path reads `0::/` under cgroup v2 with a private cgroup namespace, so the check requires positive evidence of a host context instead:
+
+* PID 1 (`/proc/1/comm`) is a known init (for example `systemd` or `init`), and `/proc/1/cgroup` shows a host path, not `0::/` alone or a container path;
+* neither `/.dockerenv` nor `/run/.containerenv` exists;
+* `/proc/1/environ` has no `container=` entry;
+* `/proc/self/mountinfo` shows no overlay or other container root filesystem;
+* the profile names the host (for example its machine identifier) and it equals what the probe reads.
+
+Any container indicator, any missing positive indicator, and any read the check cannot make is `subject-mismatch`: every subject-sensitive probe returns INCONCLUSIVE, never PASS and never NOT_APPLICABLE. The same applies to chroot, systemd-nspawn, LXC and user-namespace runs of the package install: they probe what they can see, which is not declared to be the host. A probe targets a container only when the profile says so explicitly and then states "container" in its result. The check result is part of the evidence. The package install on the host (not the image) is the supported way to probe a host, and the image's `doctor` says so. Fixtures: a recorded `/proc` tree from a process in a container (an empty or container-local `/proc/net`, `0::/` in the cgroup file, a container marker file) must give INCONCLUSIVE for HOST-NET-01, HOST-SYS-01, HOST-FS-01 and HOST-DKR-01, and a recorded host tree must pass the subject check.
 
 ## 4. First pack: original Linux baseline, not CIS-certified
 
@@ -178,7 +186,7 @@ Dependencies are one-way: Edge Sentinel reads the identity workstream's records 
 
 Flow: probes and collectors produce signed evidence envelopes; the vault stores them; the assessor evaluates one control, one scope, one period; the ledger records the assessment and any review or exception; the export builds the reports in section 7.
 
-qa-evidence export. Edge Sentinel is an additive consumer of the merged qa-evidence bundle format (`packages/qa-evidence` in the redevops-qa repository, commit 2ad97f3 read 2026-11-01); it adds nothing to the format and changes no shared contract (`runtime-contracts` qa/v1, `agent-harness`, the QA product's evidence schema). The mapping details, the role rules and the interface points are in section 13 of [SBOM_CVE_DESIGN.md](SBOM_CVE_DESIGN.md) and apply here too. For control assessments:
+qa-evidence export. Edge Sentinel (pinned for development to an immutable, reviewed commit SHA of qa-evidence, not a tag) is an additive consumer of the merged qa-evidence bundle format (`packages/qa-evidence` in the redevops-qa repository, commit 2ad97f3 read 2026-11-01); it adds nothing to the format and changes no shared contract (`runtime-contracts` qa/v1, `agent-harness`, the QA product's evidence schema). The mapping details, the role rules and the interface points are in section 13 of [SBOM_CVE_DESIGN.md](SBOM_CVE_DESIGN.md) and apply here too. For control assessments:
 
 | Edge Sentinel result | Lane native status (the assessor's own report) | Note |
 |---|---|---|
@@ -195,7 +203,7 @@ The lane model constrains the design in one more way: the format requires at lea
 
 ## 7. Report structure
 
-One report per subject, scope and run, rendered from the same records in four forms.
+One report per subject, scope and run, rendered from the same records as the seven parts below.
 
 1. Executive posture summary, one page. Contents: subject and scope, run time and tool versions, the criteria version, counts by result (PASS, FAIL, INCONCLUSIVE, NOT_TESTED, NOT_APPLICABLE, MANUAL_REVIEW) per control, the list of FAIL and INCONCLUSIVE items, evidence freshness, and the fixed banner: readiness evidence for a reviewer, not an attestation, not an auditor's opinion, point in time. No score, no traffic-light roll-up, no "compliant".
 2. Control table. Per control: id, title, owner role, criteria hypotheses (section 7.1), result with reason, probes and their states, evidence references (id and digest, never the bytes), exceptions with owner and expiry, review state.
@@ -234,7 +242,7 @@ The product may say, once the corresponding capability exists and its tests pass
 * "evidence is digest-checked and exportable in a verifiable bundle";
 * "supports your SOC 2 preparation".
 
-The product may not say: "SOC 2 compliant", "SOC 2 certified", "audit-ready" (with or without a qualifier, because the qualifier is lost in copy), "passes SOC 2", "satisfies" a criterion, "audited", any percentage or score of compliance, "continuous compliance", "CIS compliant", "CIS certified" or "CIS benchmark" results for the own-checks pack (its name always carries "not CIS-certified"), "no vulnerabilities", and "confirmed exploit" for any scanner result. The demo's nav blurb that said "control-check" was flagged by ES-00 as unsupported because no control check is deployed; the owner reports the site wording was changed in separate site pull requests (not re-verified here).
+The product may not say: "SOC 2 compliant", "SOC 2 certified", "audit-ready" (with or without a qualifier, because the qualifier is lost in copy), "passes SOC 2", "satisfies" a criterion, "audited", any percentage or score of compliance, "continuous compliance", "CIS compliant", "CIS certified" or "CIS benchmark" results for the own-checks pack (the pack's description and every report carry the "not CIS-certified" disclaimer), "no vulnerabilities", and "confirmed exploit" for any scanner result. The demo's nav blurb that said "control-check" was flagged by ES-00 as unsupported because no control check is deployed; the owner reports the site wording was changed in separate site pull requests (not re-verified here).
 
 Enforcement: extend the existing `assert_no_claim` guard to scan string values as well as keys, with a forbidden-phrase list covering the lines above, and run it over every export, report and public page text in CI (ES-01 PR list). Scope of the scan: generated prose (report text, summaries, remediation text, public copy), not recorded observations (raw settings, hostnames and configuration text may legitimately contain any word). The fixed banner, which says that no criterion is stated to be satisfied, is exempt by exact match, and so are quoted negations inside it. A hit in generated prose fails the export; the guard never masks text. A phrase list is a backstop; it does not replace review.
 
