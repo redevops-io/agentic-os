@@ -1,6 +1,6 @@
 # Edge Sentinel: compliance-readiness architecture (SOC 2 technical readiness)
 
-Status: DESIGN. Nothing here is an implemented capability unless a row says Implemented or CI-tested and names the repository evidence. Probe names, file layouts and the report structure are design targets.
+Status: DESIGN. Nothing here is an implemented capability unless a row says Implemented or CI-tested and names the repository evidence. Probe names, file layouts and the report structure are design targets. The owner approved the R0 scope on 2026-11-02: vulnerability assessment plus 4 to 6 deterministic read-only Linux host probes, with no ban enforcement, no nmap, ZAP or nuclei, and no SOC 2 certification claim (see [DECISIONS.md](DECISIONS.md) Q10).
 
 Companion documents: [SBOM_CVE_DESIGN.md](SBOM_CVE_DESIGN.md) and [DECISIONS.md](DECISIONS.md). The existing library is described in [the app's SOC 2 readiness note](../../apps/edge-sentinel/SOC2_READINESS.md).
 
@@ -18,13 +18,13 @@ Wording rules that bind this design and everything derived from it:
 
 In scope: technical control evidence for a selected, named set of Trust Services Criteria, gathered by deterministic read-only probes and collectors, kept as verifiable evidence, and reported with its limits.
 
-Out of scope, and stated as such in every report:
+Out of scope, and stated as such in every report (the certification claim, active scanning and ban enforcement are also excluded from R0 by the owner's decision of 2026-11-02):
 
 * Organisational controls and policies (HR, vendor management, board oversight, risk assessment process, incident response procedures). They remain manual dependencies; a control that depends on one ends MANUAL_REVIEW, never PASS (the existing assessor already works this way).
 * Operating effectiveness over time. A probe run is a point in time. A series of runs is supporting evidence; the product does not conclude that a control operated effectively over a period. Design effectiveness (the procedure is sound) and operating effectiveness (it held) are separate claims, and the library's own notes already say so.
 * Attestation. Only a licensed CPA firm issues a SOC 2 report; Edge Sentinel produces readiness evidence for a reviewer, with a banner saying so. (That CPA firms issue SOC 2 reports is general knowledge; the AICPA pages I retrieved did not state it: UNVERIFIED as a cited fact.)
 * Any overall score, "compliance percentage", "compliant" or "certified" flag.
-* The text of the criteria. The catalog holds identifiers only; the criteria are AICPA content with their own terms (UNVERIFIED: the AICPA copyright page was not retrieved; the existing library already avoids reproducing criteria text and this design keeps that).
+* The text of the criteria (release gate RG8, owner: counsel, covers any crosswalk wording beyond identifiers). The catalog holds identifiers only; the criteria are AICPA content with their own terms (UNVERIFIED: the AICPA copyright page was not retrieved; the existing library already avoids reproducing criteria text and this design keeps that).
 
 Criteria version: the catalog references the 2017 Trust Services Criteria with the revised points of focus of 2022. The AICPA states the 2022 revision does not change the criteria themselves (secondary extract of the AICPA resource page, retrieved 2026-11-01; https://www.aicpa-cima.com/resources/article/2017-trust-services-criteria-with-revised-points-of-focus-2022 appeared in the search results and was not read directly: UNVERIFIED at the primary page). Each crosswalk entry records the criteria version so a later AICPA revision is a visible change, not a silent one.
 
@@ -102,7 +102,7 @@ Each probe run produces three records, each with a digest: the raw observation (
 
 The R0 bar is the test: for each probe, a deliberately misconfigured fixture produces FAIL, the corrected fixture produces PASS, and a fixture with the evidence absent (file missing, command missing, unreadable, unparsable) produces INCONCLUSIVE; a fixture that proves the probe does not apply produces NOT_APPLICABLE where applicability is defined. Fixtures are directory trees and recorded command outputs fed through a test-only reader, so the probes run in CI without privileges and without touching the CI host. A probe also has a test that fails if it reads anything outside its declared `reads`.
 
-## 4. First pack: Linux hardening baseline
+## 4. First pack: original Linux baseline, not CIS-certified
 
 ### 4.1 Licence position (read 2026-11-01)
 
@@ -116,13 +116,13 @@ The R0 bar is the test: for each probe, a deliberately misconfigured fixture pro
 
 ### 4.2 Recommendation
 
-Write Edge Sentinel's own probes for a short list of widely documented hardening properties. The package carries no CIS text, no CIS recommendation numbers and no statement of CIS conformance; the pack is called "Linux hardening baseline v0 (own checks)". A crosswalk to CIS Benchmark recommendation numbers would be derivative of CIS content or at least requires reading the terms against that use, so it is not shipped in the public package and is a counsel question (DECISIONS D6).
+Write Edge Sentinel's own probes for a short list of widely documented hardening properties. The package carries no CIS text, no CIS recommendation numbers and no statement of CIS conformance; the pack is called "original Linux baseline, not CIS-certified", and that disclaimer appears in every probe title, report heading and package description that mentions the pack. A crosswalk to CIS Benchmark recommendation numbers would be derivative of CIS content or at least requires reading the terms against that use, so it is not shipped and is blocked by release gate RG6 (owner: counsel; DECISIONS section 5 and D6).
 
 Optional adapter, Planned: if an operator already holds SCAP content they are licensed to use (a CIS member's datastream, or the BSD-3-Clause ComplianceAsCode content for a non-CIS profile), Edge Sentinel can run `oscap` over that operator-supplied content on the operator's host and keep the results as a native artifact (never PASS by itself), mapping nothing to criteria automatically. Edge Sentinel ships no SCAP content. Rejected alternative: consuming CIS-derived content on the operator's behalf, because of the redistribution and no-compliance-claim terms above and because it would put third-party content in the verifier's path. Rejected alternative: bundling ComplianceAsCode profiles as the default, because the content is large, changes often and would make the first pack depend on a moving dataset.
 
-### 4.3 Candidate probes (first pack; R0 targets four to six)
+### 4.3 Candidate probes (R0 ships four to six of these eight; the rest are later)
 
-Criterion references are hypotheses for the control owner and the auditor to confirm; none is a statement that a criterion is satisfied.
+Criterion references are hypotheses for the control owner and the auditor to confirm; none is a statement that a criterion is satisfied. The R0 selection is made in ES-01e1; the first four by value are HOST-SSH-01, HOST-FS-01, HOST-NET-01 and HOST-ACC-01, with HOST-SYS-01 and HOST-DKR-01 as the next two.
 
 | Probe | Reads | Prerequisites | Expectation (profile) | Not applicable when | Criteria hypothesis |
 |---|---|---|---|---|---|
@@ -221,7 +221,7 @@ The product may say, once the corresponding capability exists and its tests pass
 * "evidence is digest-checked and exportable in a verifiable bundle";
 * "supports your SOC 2 preparation".
 
-The product may not say: "SOC 2 compliant", "SOC 2 certified", "audit-ready" without the qualifier that it means evidence gathering for a reviewer, "passes SOC 2", "satisfies" a criterion, "audited", any percentage or score of compliance, "continuous compliance", "CIS compliant" or "CIS benchmark" results for the own-checks pack, "no vulnerabilities", and "confirmed exploit" for any scanner result. The demo's nav blurb that said "control-check" was flagged by ES-00 as unsupported because no control check is deployed; the owner reports the site wording was changed in separate site pull requests (not re-verified here).
+The product may not say: "SOC 2 compliant", "SOC 2 certified", "audit-ready" without the qualifier that it means evidence gathering for a reviewer, "passes SOC 2", "satisfies" a criterion, "audited", any percentage or score of compliance, "continuous compliance", "CIS compliant", "CIS certified" or "CIS benchmark" results for the own-checks pack (its name always carries "not CIS-certified"), "no vulnerabilities", and "confirmed exploit" for any scanner result. The demo's nav blurb that said "control-check" was flagged by ES-00 as unsupported because no control check is deployed; the owner reports the site wording was changed in separate site pull requests (not re-verified here).
 
 Enforcement: extend the existing `assert_no_claim` guard to scan string values as well as keys, with a forbidden-phrase list covering the lines above, and run it over every export, report and public page text in CI (ES-01 PR list). A phrase list is a backstop; it does not replace review.
 

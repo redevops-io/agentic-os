@@ -1,6 +1,6 @@
 # Edge Sentinel: SBOM and vulnerability-intelligence design
 
-Status: DESIGN. Nothing in this document is an implemented capability unless a row below says Implemented or CI-tested and names the repository evidence. The command line, the data model and the file layouts are design targets.
+Status: DESIGN. Nothing in this document is an implemented capability unless a row below says Implemented or CI-tested and names the repository evidence. The command line, the data model and the file layouts are design targets. The evidence architecture of sections 7 to 13 was approved by the owner on 2026-11-02; the scope decisions of the same date are in [DECISIONS.md](DECISIONS.md).
 
 Companion documents: [COMPLIANCE_READINESS_DESIGN.md](COMPLIANCE_READINESS_DESIGN.md) (control probes and SOC 2 technical readiness) and [DECISIONS.md](DECISIONS.md) (open questions, recommended defaults, the ES-01 PR breakdown, risk register).
 
@@ -16,6 +16,8 @@ Status labels, used on every capability named here:
 | Planned | Described here only |
 
 External facts (licences, API terms, rate limits) cite a URL and the date they were retrieved (2026-11-01). A fact I could not read from a primary page is marked UNVERIFIED, with the secondary source if one exists. Section 17 collects them.
+
+Licence wording: the kernel, `context-runtime`, `redevops-qa` (including the qa-evidence adapter) and `runtime-contracts` are "source-available under the family licence (AGPL-3.0-or-later with the Commons Clause)", never "open source". `apps/edge-sentinel` and the standard-library-only R0 core are "AGPL-3.0-only by the app's own LICENSE file, subject to the pending additional permission". Third-party tools are described by their own licence. No package is published until the release gates in DECISIONS section 5 clear; no restricted data is bundled and no licensed framework coverage is claimed before then.
 
 Two wording rules apply throughout and to anything derived from this design:
 
@@ -38,7 +40,7 @@ Non-goals:
 
 * No scanning of systems the operator has not declared and consented to. No third-party scanning.
 * No automatic remediation in R0. No package upgrade, configuration change, firewall change or process kill, not even behind a flag.
-* No active exploitation, no proof-of-concept execution, no DAST in R0. The existing `deploy-scan` proxy (nmap, nuclei, ZAP) is outside R0 (see DECISIONS Q12).
+* Excluded from R0 by the owner's decision of 2026-11-02: ban enforcement, nmap, ZAP, nuclei and any other active scanning, active exploitation, proof-of-concept execution, DAST, and any SOC 2 certification claim. The existing `deploy-scan` proxy is outside R0 (DECISIONS Q10 and Q12). R0 is vulnerability assessment plus 4 to 6 deterministic read-only Linux host probes (compliance document, section 4).
 * No claim of independent confirmation of exploitation, and no CVSS-derived "risk score" that is presented as a measured probability.
 * No general vulnerability database or mirror. The product reads feeds on the operator's machine for the operator's inventory.
 * No change to the shared contracts. Evidence export is an additive consumer of the merged qa-evidence format (section 13); `runtime-contracts` qa/v1, `agent-harness` and the QA product's evidence schema are not modified or extended by this design.
@@ -162,6 +164,8 @@ All terms retrieved 2026-11-01. "Primary" means read from the cited page or repo
 | FIRST EPSS | daily CSV `https://epss.empiricalsecurity.com/epss_scores-current.csv.gz` (redirects to a dated file) and API `https://api.first.org/data/v1/epss?cve=...` | the FIRST page says the data is "freely and openly accessible" and published every day (https://www.first.org/epss/); no rate limit stated | Reuse, attribution and redistribution terms not stated on the pages I could read; the site footer reads "All Rights Reserved" and links a copyright page I could not retrieve: UNVERIFIED. Treat as: fetch on the operator's machine, never bundle, cite FIRST as the source | CSV first line `#model_version:vYYYY.MM.DD,score_date:<ISO time>`; columns `cve,epss,percentile`; API fields `cve`, `epss`, `percentile`, `date` (both read live) | Context only: a probability estimate with a model version, not a measurement for this host. FIRST warns that a percentile recalculated over a subset must be labelled as such (https://www.first.org/epss/articles/prob_percentile_bins), so the product shows the published percentile only |
 | Scanner databases (Trivy, Grype) | see section 6 | per the tool | UNVERIFIED for the aggregate | Trivy DB `metadata.json` (field names not read: UNVERIFIED); `grype db status` reports build time | Native artifacts of the scan step; their identity (version, build time, digest) is recorded |
 | Distribution security trackers (Debian, Ubuntu, Red Hat and similar) | not selected for R0 | not read | not read | not read | Planned. For OS packages the distribution's own advisory data is the right authority (section 8.3); R0 relies on the scanner databases for it and states that as a caveat |
+
+Release gates: the data terms in this table are inputs to release gates RG2 to RG5 in [DECISIONS.md](DECISIONS.md) section 5 (owner: counsel). Until they clear, nothing in this table is bundled, redistributed or shown as licensed coverage; the operator's machine downloads each feed.
 
 Snyk is not a feed: the existing fetcher is never enabled and its API data terms prohibit redistribution (ES-00; not re-read here). It is dropped from the design.
 
@@ -316,13 +320,28 @@ Every failure is written to `run.json` and to the evidence bundle as a record, s
 
 * Declared scope only. A scope file lists targets (paths, image references already local, SBOM files) and, for any later network-facing mode, host allow-lists. Anything not in it is refused. Third-party systems are never targets.
 * Read-only. Scanners get the target mounted read-only, no network when run against a local snapshot, a non-root user, a dropped capability set, no new privileges, a CPU, memory, time and output-size cap, and a scratch directory that is discarded. Linux first; other platforms are marked unsupported until the same isolation is demonstrated.
-* No Docker socket. Image scanning reads image archives or a registry-less directory the operator exports (`docker save` run by the operator), or an OCI layout. The audited tree already ships a default deployment with no socket and an opt-in overlay behind a path-filtering proxy; its own documentation states that a path allow-list cannot inspect request bodies and that the read-only mount does not make the Docker API read-only (ES-00 section 2.6). R0 does not carry the socket proxy and does not need it.
+* No Docker socket by default, and none in R0. Image scanning reads image archives or an OCI layout that the operator exports (for example with `docker save`, run by the operator), or an SBOM file. The audited tree already ships a default deployment with no socket and an opt-in overlay behind a path-filtering proxy; its own documentation states that a path allow-list cannot inspect request bodies and that a read-only mount does not make the Docker API read-only (ES-00 section 2.6). R0 does not carry the socket proxy and does not need it. Section 12.1 is the deployment guidance, including the opt-in tiers that come after R0.
+* Operator credential. Where a privileged operation exists (only in the app and in the post-R0 response workflow; the R0 CLI has none), the single operator credential is governed by requirements OC1 to OC8 in [DECISIONS.md](DECISIONS.md) section 3.2: securely stored, rotatable, never in images or logs, every privileged operation authenticated and audited, no anonymous write endpoints. Multi-user identity and tenant authorisation are Enterprise.
 * Network. Only `refresh-feeds` opens connections, to the feed hosts in section 7, with a fixed allow-list, TLS verification on, and the NVD key read from a file or an environment variable and never written to output. Scanners and the matcher run with the network disabled.
 * Rate limits. Feed clients enforce the published limits with margin (NVD: at most one request every 6.5 seconds without a key, as the existing ingest does, and 0.7 seconds with one) and a maximum retry count.
 * Secret redaction. Command lines, environment and output pass a redaction step before they enter records: known token patterns, the configured key names, and any value from the secret files declared in the scope. SBOMs of a filesystem can contain file paths with sensitive names; paths are recorded as given by the SBOM and the operator is told so in the `inventory` output.
 * Untrusted input. SBOMs, VEX files, scanner output and feed data are parsed with size caps and without executing anything from them; no archive is extracted outside a scratch directory; every string that enters a report is escaped for the output format.
 * Supply chain. Pinned scanner versions with checksums, a recorded SBOM of Edge Sentinel itself, and a refusal to run an unpinned scanner.
 * Prompts. No LLM is in the R0 path. If the chat console later presents findings, it receives records, not raw scanner output, and its tools cannot start a scan or a remediation (the existing console already marks such tools side-effecting with an empty allow-list: CI-tested in the private deployment copy).
+
+### 12.1 Least-privilege deployment and container-runtime access
+
+Design rule: Edge Sentinel never requires unrestricted container-runtime access by default. A raw runtime socket mount gives the container effective control of the host (it can start privileged containers and mount the host filesystem), and mounting it read-only does not restrict the API. The guidance has three tiers; only tier 0 exists in R0.
+
+| Tier | What it is | Status | Conditions |
+|---|---|---|---|
+| 0 | No runtime access at all. R0 reads files, SBOMs, exported image archives and OCI layouts the operator provides. The Edge Sentinel process, if containerised, has no socket mount and no runtime CLI, runs as a non-root user with a read-only root filesystem, all capabilities dropped and no-new-privileges, and the scan step has no network | Planned (R0) | `doctor` reports "container-runtime access: none" as the expected state and fails if a socket is reachable from the scanner's namespace |
+| 1 | Image scanning by registry pull with read-only registry credentials, or through a rootless runtime socket owned by a dedicated unprivileged user that holds only the images the operator loads | Planned (after R0, opt-in) | the credential or socket is scoped to that user; nothing else on the host is reachable; documented as opt-in |
+| 2 | A socket proxy in front of the runtime, on an internal-only network with no published ports, with an allow-list of method and path: `GET` for ping, version, image list and image export only. No exec, no create, no start, no `POST`, no container inspect (it returns each container's environment), no `DELETE` | Planned (after R0, opt-in, off by default) | the proxy itself runs read-only, with capabilities dropped and, where possible, rootless; the residual risk (a path allow-list cannot inspect request bodies, so the allow-list is limited to `GET`) is stated next to the instructions; a fake-proxy test shows the denied calls are refused |
+
+What is replaced: the public tree's README instructions that mount the socket and add its group, the Dockerfile notes that explain the same, and the container-exec path for reading the detection engine's alerts. The alert path moves to the engine's authenticated local API (ES-01a1), which removes the reason for any socket. The exact places to change are in [DECISIONS.md](DECISIONS.md) section 6.
+
+Acceptance tests: a test fails if a default compose file, Dockerfile or README command mounts the runtime socket outside a section labelled as an opt-in tier; the R0 install and the fixtures run in an environment with no runtime installed; the proxy test shows `POST`, exec and container inspect are refused; `doctor` fails when it finds a socket reachable by the scanner.
 
 ## 13. Evidence export to qa-evidence
 
@@ -353,7 +372,7 @@ Interface points, so each side ships independently:
 1. The bundle layout and report schema of qa-evidence 1.0, pinned by commit or tag. Edge Sentinel treats `python -m qa_evidence verify BUNDLE` as the acceptance test and runs it offline in its own CI, with a golden bundle.
 2. The library API `assemble_report` and `build_bundle`, used through an optional extra pinned to a commit. If the package is absent, `report` still writes the output directory and says no bundle was built; no other feature depends on it.
 3. The `qa_evidence digest` value, handed to the operator's CI attestation step. Edge Sentinel does not implement attestation.
-4. The licence relationship between the packages (DECISIONS Q2).
+4. The licence relationship between the packages: the adapter is family-licence code and the R0 core is AGPL-3.0-only, so the adapter stays an optional extra until release gate RG1 clears (DECISIONS Q2 and section 5).
 
 Edge Sentinel does not depend on the QA runner, the QA verifier's engines, runtime-contracts, agent-harness or any identity-workstream feature. The QA side does not depend on Edge Sentinel. If the pinned qa-evidence changes its major version, Edge Sentinel's export is disabled until the adapter is updated, and nothing else changes.
 
@@ -381,7 +400,7 @@ Acceptance (also in DECISIONS): seeded findings in dry-run mode cannot trigger a
 | Identity workstream | the executor's authority check (ES-01): a function that takes an operation digest and returns an authorisation or a refusal. Until the identity work ships, the answer is always refusal | Edge Sentinel consumes; absence means no execution, not a degraded mode |
 | Identity workstream | agent identity strings in receipts (an optional field in Edge Sentinel's own records) | optional; no behaviour depends on it |
 | Governance and approvals (AGPL-side) | the approval state machine used by the existing response layer | existing |
-| Enterprise | per-tenant authorisation of findings and multi-user approvals | out of scope; the single operator credential is the first-package assumption (DECISIONS Q8) |
+| Enterprise | per-tenant authorisation of findings and multi-user approvals | out of scope; the single operator credential is the first-package assumption under conditions OC1 to OC8 (DECISIONS Q8 and section 3.2) |
 
 ## 16. Wording rules for this capability
 
