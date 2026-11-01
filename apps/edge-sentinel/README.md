@@ -1,6 +1,6 @@
 > ### Reference application for [Context Runtime](https://github.com/redevops-io/context-runtime)
 >
-> A focused AI system for **security operations**. Context Runtime ships a tenant that learns **which sources to pull per alert (CrowdSec · threat-intel · EDR)** — in its offline benchmark the learned policy scores **0.900 vs 0.800** against a always-full baseline ([`examples/soc_triage.py`](https://github.com/redevops-io/context-runtime/blob/main/examples/soc_triage.py)).
+> A focused AI system for **security operations**. Context Runtime includes an offline benchmark of a source-selection policy over **simulated** threat-intel and EDR sources — the learned policy scores **0.900 vs 0.800** against a always-full baseline on six synthetic questions; that policy is not running in this app ([`examples/soc_triage.py`](https://github.com/redevops-io/context-runtime/blob/main/examples/soc_triage.py)).
 >
 > ```
 > Context Runtime  →  ReDevOps RAG  →  Sidekick  →  Application logic
@@ -17,7 +17,7 @@ detection & decision engine) with:
 
 - an **agent layer** that reads REAL CrowdSec data — live decisions over the LAPI bouncer
   API + alerts via `cscli ... -o json`, and
-- an **MD3 SOC dashboard** rendered from that live data (no mock data),
+- an **MD3 SOC dashboard** rendered from the data CrowdSec holds (no mock data on the CrowdSec panels; the network and backup panels show labelled SAMPLE DATA until their token is set),
 
 for the demo tenant **Meridian Wealth Management** (a wealth-management firm).
 
@@ -125,18 +125,18 @@ The sentinel can also read alerts from the CrowdSec LAPI with a machine (watcher
 ## Endpoints
 
 - `GET /health` → `{"status":"ok","core":"crowdsec","connected": <bool>}`
-- `GET /api/activity` → live KPIs (threats blocked, alerts 24h, unique source IPs, last
-  event) + active decisions + alert feed + top scenarios, all from CrowdSec. Cached 10s.
-- `GET /` → the MD3 SOC dashboard from the live data: a **status banner** first (green
-  "All systems normal" / red when there are active threats), **KPI tiles**, an
+- `GET /api/activity` → KPIs read from CrowdSec (active decisions, alerts 24h, unique source IPs, last
+  event, plus the time of the read) + active decisions + alert feed + top scenarios, all from CrowdSec. Cached 10s.
+- `GET /` → the MD3 SOC dashboard from the live data: a **status banner** first (a neutral "CrowdSec: N active decisions and M alerts, read at <time>" statement, or red when CrowdSec holds active decisions or is unreachable; it never claims all is well), **KPI tiles**, an
   **alert feed grouped by severity** with color pills, a **scenario bar meter**, and an
-  **attack-sources / active-decisions table**. Header shows "Meridian Wealth Management", a green
-  "agent active · core: CrowdSec connected" pill, and an "Open CrowdSec metrics ↗" link.
+  **attack-sources / active-decisions table**. Header shows "Meridian Wealth Management", a
+  "CrowdSec LAPI reachable" pill, a "read from the CrowdSec LAPI at <time>" badge, and an "Open CrowdSec metrics ↗" link.
 - `POST /agent/run` with `{"action": ...}`:
   - `"block_ip"` `{ip}` → the **approval-gated** sensitive action. Returns
     `{"status":"pending_approval","summary":"block <ip>"}` — never auto-bans.
   - `"approve_block"` `{ip, duration?, reason?}` → the approved path: actually runs
-    `cscli decisions add` to enforce the ban, then refreshes the dashboard cache.
+    `cscli decisions add` to enforce the ban, then refreshes the dashboard cache. Without
+    `SENTINEL_BLOCK_ENABLED` this is a **dry run**: the response says `Dry run: nothing was blocked`.
   - `"triage"` → summarizes active decisions + alerts (severity mix, top scenarios);
     adds a one-line LLM reasoning blurb iff `ANTHROPIC_API_KEY` is set.
 

@@ -1,6 +1,6 @@
 """edge-sentinel · runtime-DAST plane — proxy to the deploy-scan MCP service (nmap / nuclei / ZAP).
 
-The RUNTIME half of exposure security: scan a LIVE deployment for exploitable weakness (the
+The RUNTIME half of exposure security: scan a LIVE deployment and report the scanners' findings (the
 complement of the supply-chain/Trivy plane, which inspects code & packages pre-deploy). The
 scanners live in the separate deploy-scan service; this module calls them over MCP/HTTP JSON-RPC.
 

@@ -152,6 +152,14 @@ def _ago(iso: str) -> str:
         return iso[:16].replace("T", " ")
 
 
+def _alert_origin(alert: dict) -> str:
+    """Origin of the first decision attached to an alert (CrowdSec: 'crowdsec' for an engine detection, 'cscli' for an
+    entry added by hand), or '' when the alert carries none."""
+    ds = alert.get("decisions") if isinstance(alert, dict) else None
+    first = ds[0] if isinstance(ds, list) and ds and isinstance(ds[0], dict) else {}
+    return str(first.get("origin") or "")
+
+
 # ── live data + KPIs (cached briefly) ────────────────────────────────────────
 _CACHE: dict = {"ts": 0.0, "data": None}
 _CACHE_TTL = 10.0  # seconds — keep the dashboard snappy without hammering CrowdSec
@@ -197,6 +205,7 @@ def fetch_activity(force: bool = False) -> dict:
             "created_at": a.get("created_at", ""),
             "ago": _ago(a.get("created_at", "")),
             "severity": _severity(scenario),
+            "origin": _alert_origin(a),
         })
     alert_rows.sort(key=lambda r: r["created_at"], reverse=True)
 
@@ -239,12 +248,13 @@ def fetch_activity(force: bool = False) -> dict:
         "tenant": TENANT,
         "core": "crowdsec",
         "connected": connected,
+        "read_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
         "front_url": CROWDSEC_FRONT_URL,
         "has_threat": has_threat,
         "kpis": [
-            {"label": "Threats blocked", "value": str(active_bans), "note": "active decisions enforced"},
+            {"label": "Active decisions", "value": str(active_bans), "note": "bans held in CrowdSec (not proof that a bouncer enforces them)"},
             {"label": "Alerts (24h)", "value": str(alerts_24h), "note": f"{len(alerts)} total in store"},
-            {"label": "Source IPs", "value": str(unique_sources), "note": "unique blocked sources"},
+            {"label": "Source IPs", "value": str(unique_sources), "note": "unique sources in active decisions"},
             {"label": "Last event", "value": last_event, "note": top_scenarios[0][0] if top_scenarios else "—"},
         ],
         "decisions": decision_rows,

@@ -47,12 +47,12 @@ DOCKER = ["sudo", "docker"]
 # Varied, believable Meridian Wealth edge-security activity.
 # (ip|range, duration, reason incl. crowdsecurity/<scenario> token, type)
 SEED_DECISIONS = [
-    ("--ip", "45.143.200.14", "4h", "ssh bruteforce (crowdsecurity/ssh-bf)"),
-    ("--ip", "185.220.101.34", "6h", "port scan against office NVR (crowdsecurity/port-scan)"),
-    ("--ip", "89.248.165.52", "2h", "http path traversal probe (crowdsecurity/http-probing)"),
-    ("--ip", "193.41.206.18", "12h", "wordpress login bruteforce (crowdsecurity/wp-bf)"),
-    ("--ip", "23.129.64.130", "1h", "nmap TCP SYN scan (crowdsecurity/port-scan)"),
-    ("--range", "141.98.10.0/24", "8h", "credential stuffing botnet (crowdsecurity/http-bf)"),
+    ("--ip", "45.143.200.14", "4h", "SAMPLE HISTORY: ssh bruteforce (crowdsecurity/ssh-bf)"),
+    ("--ip", "185.220.101.34", "6h", "SAMPLE HISTORY: port scan against office NVR (crowdsecurity/port-scan)"),
+    ("--ip", "89.248.165.52", "2h", "SAMPLE HISTORY: http path traversal probe (crowdsecurity/http-probing)"),
+    ("--ip", "193.41.206.18", "12h", "SAMPLE HISTORY: wordpress login bruteforce (crowdsecurity/wp-bf)"),
+    ("--ip", "23.129.64.130", "1h", "SAMPLE HISTORY: nmap TCP SYN scan (crowdsecurity/port-scan)"),
+    ("--range", "141.98.10.0/24", "8h", "SAMPLE HISTORY: credential stuffing botnet (crowdsecurity/http-bf)"),
 ]
 
 

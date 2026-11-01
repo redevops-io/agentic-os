@@ -345,8 +345,8 @@ def execute(case_id: str, request_id: str, *, actor: str, st: CaseStore | None =
         if not enabled:
             receipt = st.put_receipt(ActionReceipt(
                 request_id=request_id, decision_id=recorded.decision_id, status="DRY_RUN", external_ref="dry-run",
-                error="SENTINEL_BLOCK_ENABLED not set — edge not touched"))
-            return {"executed": False, "dry_run": True, "receipt": receipt.to_dict(),
+                error="Dry run: nothing was blocked (SENTINEL_BLOCK_ENABLED not set; edge not touched)"))
+            return {"executed": False, "dry_run": True, "summary": "Dry run: nothing was blocked.", "receipt": receipt.to_dict(),
                     "verification": None, "case_status": case.status.value}
         _INFLIGHT.add(request_id)
     try:
