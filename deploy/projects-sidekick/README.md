@@ -33,10 +33,10 @@ That's the whole deployment. The image is pulled from GHCR — **nothing to buil
 **Not required:** the agentic-apps fleet, cores, context-runtime, Vault, Kafka, or a database. The Mission event
 log is in-memory by default; durable storage (JSONL / Postgres) is a production config step, not a prerequisite.
 
-## Open-core / licensing
+## Licensing
 
 - The **image is private** (GHCR): `docker login ghcr.io` with an account ReDevOps granted read access to, then run it.
-- The **AGPL kernel source** (`agentic-os`) is open; the **enterprise overlay source is private** — you get the
+- The kernel source (`agentic-os`) is source-available under the family licence (AGPL-3.0-or-later with the Commons Clause); the **enterprise overlay source is private** — you get the
   binary, not the code.
 - Review licensing terms before production use; enterprise features in the image are subject to the
   ReDevOps enterprise license.

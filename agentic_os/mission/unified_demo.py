@@ -124,7 +124,7 @@ class UnifiedTwoDomainPlanner:
         ])
 
 
-# ── credential/authority seams (open-source has no CapabilitySpec.secrets→requirement map; supply it) ───
+# ── credential/authority seams (the source-available core has no CapabilitySpec.secrets→requirement map; supply it) ───
 
 def _credentials_for(node) -> Tuple[CredentialRequirement, ...]:
     spec = _CRED.get(node.capability)

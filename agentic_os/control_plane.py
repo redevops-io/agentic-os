@@ -909,7 +909,7 @@ DASHBOARD_HTML = """<!doctype html>
        the grid's intrinsic width (one capped track), collapsing the module grid to a lone column. -->
   <div id="groups" class="shell" style="gap:var(--sp-6);align-self:stretch;width:100%"></div>
 
-  <footer>redevops.io — Context Runtime · self-hosted &amp; open-core · <a href="https://github.com/redevops-io/context-runtime" target="_blank" rel="noopener">source &#8599;</a></footer>
+  <footer>redevops.io — Context Runtime · self-hosted &amp; source-available · <a href="https://github.com/redevops-io/context-runtime" target="_blank" rel="noopener">source &#8599;</a></footer>
 </div>
 
 <script>
