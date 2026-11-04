@@ -50,7 +50,7 @@ function Test-Survivors {
 function Clear-Recorded {
   param($Pids, [string]$TempDir)
   if ($NoCleanup) { Write-Line 'cleanup skipped (-NoCleanup): recorded orphans and _MEI dirs are left for inspection'; return }
-  foreach ($x in $Pids) { if (Test-PidAlive $x) { $pr = Get-Process -Id $x -ErrorAction SilentlyContinue; if ($pr -and $pr.ProcessName -eq 'redevops-sidecar') { Stop-Process -Id $x -Force -ErrorAction SilentlyContinue } } }
+  foreach ($x in $Pids) { if (Test-PidAlive $x) { $pr = Get-Process -Id $x -ErrorAction SilentlyContinue; if ($pr -and $pr.ProcessName -eq $script:Id.SidecarName) { Stop-Process -Id $x -Force -ErrorAction SilentlyContinue } } }
   Start-Sleep -Seconds 2
   Remove-MeiDirs $TempDir
 }
@@ -59,9 +59,9 @@ try {
   if (-not $InstallDir) { $st = Read-State; if ($st -and $st.installDir) { $InstallDir = $st.installDir } }
   if (-not $InstallDir) { $InstallDir = Find-InstallDir }
   if (-not $InstallDir) { Add-Result 'ORP-00' 'install directory' 'FAIL' 'not found: run 01-Install.ps1 first'; throw 'stop' }
-  $sidecar = Join-Path $InstallDir 'redevops-sidecar.exe'
-  $launcher = Join-Path $InstallDir 'agentic-apps.exe'
-  $baseline = @(Get-Process -Name 'redevops-sidecar' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+  $sidecar = Join-Path $InstallDir $script:Id.SidecarExe
+  $launcher = Join-Path $InstallDir $script:Id.LauncherExe
+  $baseline = @(Get-Process -Name $script:Id.SidecarName -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
   if ($baseline.Count) { Add-Result 'ORP-00' 'pre-existing sidecar processes' 'INFO' ("pids {0} existed before this run; they are NOT touched and are excluded from the verdicts" -f ($baseline -join ',')) }
 
   if ($Mode -eq 'Sidecar') {
@@ -97,24 +97,26 @@ try {
     } else { Add-Result 'ORP-C0' 'control sidecar started' 'FAIL' 'control instance did not listen' }
   }
   else {
-    if (-not (Test-Path -LiteralPath $launcher)) { Add-Result 'ORP-00' 'agentic-apps.exe present' 'FAIL' 'not found'; throw 'stop' }
+    if (-not (Test-Path -LiteralPath $launcher)) { Add-Result 'ORP-00' 'launcher exe present' 'FAIL' 'not found'; throw 'stop' }
     if (-not [Environment]::UserInteractive) { Add-Result 'ORP-L0' 'interactive session needed to click the launcher' 'MANUAL' 'run this mode from an interactive desktop session'; throw 'stop' }
-    if (@(Get-Listeners 8787).Count -gt 0) { Add-Result 'ORP-L0' 'port 8787 free' 'FAIL' 'something already listens on 8787 (old orphan?); free it by hand and re-run'; throw 'stop' }
+    if (@(Get-Listeners 8787).Count -gt 0) { Add-Result 'ORP-L0' 'port 8787 in use before the run' 'INFO' 'something listens on 8787 (a stale v0.3.2 sidecar?). The R0-prime launcher uses an OS-chosen port and must not care; this run follows the listener of the launcher tree, not 8787' }
     $prof = New-IsolatedProfile (Join-Path $script:OutDir 'orphan-profile-launcher')
     $lp = Start-ProcessWithEnv -FilePath $launcher -ArgumentList @() -SetEnv @{ TEMP = $prof.Temp; TMP = $prof.Temp } -RemoveEnv $script:LlmEnvNames
     [void]$allPids.Add($lp.Id)
     Start-Sleep -Seconds 8
     Write-Line ''
     Write-Line '>>> In the launcher window click "Start & open" (screenshot: orphan-01-launcher-started.png). Close any browser tab it opens.'
-    [void](Read-Host '>>> press Enter here once the control plane is running (port 8787)')
+    [void](Read-Host '>>> press Enter here once the control plane is running')
     $snap = Get-ProcessSnapshot
     $kids = @(Get-DescendantPids $lp.Id $snap); foreach ($k in $kids) { [void]$allPids.Add($k) }
-    $listenerPids = @(Get-Listeners 8787 | ForEach-Object { [int]$_.OwningProcess } | Select-Object -Unique)
+    $ownedLs = @(Get-ListenersOf (@($lp.Id) + $kids))
+    $lport = $(if ($ownedLs.Count) { [int]$ownedLs[0].LocalPort } else { 0 })
+    $listenerPids = @($ownedLs | ForEach-Object { [int]$_.OwningProcess } | Select-Object -Unique)
     foreach ($k in $listenerPids) { if ($allPids -notcontains $k) { [void]$allPids.Add($k) } }
     Add-Result 'ORP-L1' 'process tree before the kill (launcher mode)' 'INFO' ("tree: {0}; listener owner pid(s): {1}; _MEI now: {2}" -f (Format-Procs $snap (@($lp.Id) + $kids)), ($listenerPids -join ','), (@(Get-MeiDirs $prof.Temp)).Count)
-    if (@($listenerPids).Count -eq 0) { Add-Result 'ORP-L2' 'control plane was started from the GUI' 'MANUAL' 'nothing listens on 8787: the button did not work (defect (c)?) -> record with a screenshot'; Clear-Recorded -Pids $allPids -TempDir $prof.Temp; throw 'stop' }
+    if (@($listenerPids).Count -eq 0) { Add-Result 'ORP-L2' 'control plane was started from the GUI' 'MANUAL' 'no listener is owned by the launcher tree: the button did not start the control plane (defect (c)?) -> record with a screenshot'; Clear-Recorded -Pids $allPids -TempDir $prof.Temp; throw 'stop' }
     Stop-Process -Id $lp.Id -Force
-    $res = Test-Survivors -IdPrefix 'ORP-L3' -Label 'after Stop-Process -Force of the LAUNCHER' -ChildPids (@($kids) + @($listenerPids)) -Port 8787 -TempDir $prof.Temp -RootPid $lp.Id
+    $res = Test-Survivors -IdPrefix 'ORP-L3' -Label 'after Stop-Process -Force of the LAUNCHER' -ChildPids (@($kids) + @($listenerPids)) -Port $lport -TempDir $prof.Temp -RootPid $lp.Id
     Add-Result 'ORP-L4' 'screenshot of the leftover state (if any)' 'MANUAL' 'orphan-02-after-kill.png: Task Manager Details tab filtered on redevops-sidecar'
     Clear-Recorded -Pids $allPids -TempDir $prof.Temp
   }
@@ -122,7 +124,7 @@ try {
 catch { if ($_.Exception.Message -ne 'stop') { Add-Result 'ORP-99' 'unexpected error' 'FAIL' $_.Exception.Message } }
 finally {
   if (-not $NoCleanup) {
-    foreach ($x in $allPids) { if (Test-PidAlive $x) { $pr = Get-Process -Id $x -ErrorAction SilentlyContinue; if ($pr -and $pr.ProcessName -eq 'redevops-sidecar') { Stop-Process -Id $x -Force -ErrorAction SilentlyContinue } } }
+    foreach ($x in $allPids) { if (Test-PidAlive $x) { $pr = Get-Process -Id $x -ErrorAction SilentlyContinue; if ($pr -and $pr.ProcessName -eq $script:Id.SidecarName) { Stop-Process -Id $x -Force -ErrorAction SilentlyContinue } } }
     foreach ($t in @(Get-ChildItem -LiteralPath $script:OutDir -Directory -Filter 'orphan-profile*' -ErrorAction SilentlyContinue)) { Remove-MeiDirs (Join-Path $t.FullName 'Temp') }
   }
 }

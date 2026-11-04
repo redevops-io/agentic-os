@@ -14,6 +14,42 @@ $script:LlmEnvNames = @('GROQ_API_KEY', 'CEREBRAS_API_KEY', 'OPENROUTER_API_KEY'
   'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'RDO_LLM_BASE_URL', 'RDO_LLM_API_KEY', 'RDO_LLM_MODEL',
   'MODEL_ENDPOINT', 'MODEL_NAME', 'RDO_LOCAL_MODEL_URL', 'RDO_LOCAL_MODEL')
 
+# ---- identity of the candidate under test ------------------------------------------------------------------------------------
+# The R0-prime line has its OWN names (product, launcher exe, identifier), distinct from the frozen v0.3.2 line. They are read from
+# packaging/identity.json (the "r0prime" block; "frozen" with $env:R0P_IDENTITY_LINE=frozen) in this order: $env:R0P_IDENTITY_FILE,
+# identity.json next to this file (copy it there when the kit runs off-repo), ..\..\identity.json (kit inside a checkout). When none exists
+# the FROZEN v0.3.2 values are used and every transcript header says so. Nothing else in the kit hard-codes a product or file name.
+function Get-KitIdentity {
+  $line = $(if ($env:R0P_IDENTITY_LINE) { $env:R0P_IDENTITY_LINE } else { 'r0prime' })
+  $cands = @()
+  if ($env:R0P_IDENTITY_FILE) { $cands += $env:R0P_IDENTITY_FILE }
+  $cands += (Join-Path $PSScriptRoot 'identity.json')
+  $cands += (Join-Path $PSScriptRoot '..\..\identity.json')
+  foreach ($c in $cands) {
+    if (-not (Test-Path -LiteralPath $c)) { continue }
+    try {
+      $j = Get-Content -LiteralPath $c -Raw | ConvertFrom-Json
+      $b = $j.$line
+      if (-not $b) { continue }
+      $ident = [string]$b.bundle_identifier
+      $parts = $ident.Split('.')
+      return [pscustomobject]@{
+        Source = ("{0} [{1}]" -f (Resolve-Path -LiteralPath $c).Path, $line)
+        ProductName = [string]$b.product_name; Version = [string]$b.version
+        Identifier = $ident; PublisherKey = $(if ($parts.Count -gt 1) { $parts[1] } else { $ident })
+        LauncherName = [string]$b.main_binary_name; LauncherExe = ([string]$b.main_binary_name + '.exe')
+        SidecarName = [string]$b.sidecar_binary_name; SidecarExe = ([string]$b.sidecar_binary_name + '.exe')
+      }
+    } catch { }
+  }
+  return [pscustomobject]@{
+    Source = 'built-in FROZEN v0.3.2 defaults (no identity.json found: copy packaging/identity.json next to Common.ps1 for the R0-prime line)'
+    ProductName = 'Agentic Apps'; Version = '0.1.0'; Identifier = 'io.redevops.agentic-apps'; PublisherKey = 'redevops'
+    LauncherName = 'agentic-apps'; LauncherExe = 'agentic-apps.exe'; SidecarName = 'redevops-sidecar'; SidecarExe = 'redevops-sidecar.exe'
+  }
+}
+$script:Id = Get-KitIdentity
+
 function Write-Line([string]$Text) { Write-Host $Text }
 
 function Test-IsAdmin {
@@ -32,6 +68,8 @@ function Get-Sha256([string]$Path) {
 function Write-EnvHeader {
   Write-Line '=== environment ==='
   Write-Line ("step              : {0}" -f $script:StepName)
+  Write-Line ("identity          : {0} {1}  launcher={2} sidecar={3} identifier={4}" -f $script:Id.ProductName, $script:Id.Version, $script:Id.LauncherExe, $script:Id.SidecarExe, $script:Id.Identifier)
+  Write-Line ("identity source   : {0}" -f $script:Id.Source)
   Write-Line ("hostname          : {0}" -f $env:COMPUTERNAME)
   try {
     $os = Get-CimInstance Win32_OperatingSystem
@@ -119,7 +157,7 @@ function Get-InstalledProduct {
     if (-not (Test-Path $r)) { continue }
     foreach ($k in (Get-ChildItem $r -ErrorAction SilentlyContinue)) {
       $p = Get-ItemProperty -LiteralPath $k.PSPath -ErrorAction SilentlyContinue
-      if ($p -and $p.PSObject.Properties['DisplayName'] -and $p.DisplayName -eq 'Agentic Apps') {
+      if ($p -and $p.PSObject.Properties['DisplayName'] -and $p.DisplayName -eq $script:Id.ProductName) {
         $pc = $null; if ($k.PSChildName -match '^\{[0-9A-Fa-f-]{36}\}$') { $pc = $k.PSChildName }
         $found += [pscustomobject]@{
           Hive = $r.Substring(0, 4); Key = $k.PSChildName; ProductCode = $pc; DisplayVersion = $p.DisplayVersion; Publisher = $p.Publisher
@@ -137,14 +175,14 @@ function Get-CandidateInstallDirs {
     if ($p.InstallLocation) { $dirs += $p.InstallLocation.TrimEnd('\') }
     if ($p.UninstallString -and $p.UninstallString -match '"?([A-Za-z]:\\[^"]+)\\uninstall\.exe') { $dirs += $Matches[1] }
   }
-  try { $v = (Get-ItemProperty 'HKCU:\Software\redevops\Agentic Apps' -ErrorAction Stop).'(default)'; if ($v) { $dirs += $v.TrimEnd('\') } } catch { }
-  $dirs += (Join-Path $env:ProgramFiles 'Agentic Apps')
-  $dirs += (Join-Path $env:LOCALAPPDATA 'Agentic Apps')
+  try { $v = (Get-ItemProperty ('HKCU:\Software\' + $script:Id.PublisherKey + '\' + $script:Id.ProductName) -ErrorAction Stop).'(default)'; if ($v) { $dirs += $v.TrimEnd('\') } } catch { }
+  $dirs += (Join-Path $env:ProgramFiles $script:Id.ProductName)
+  $dirs += (Join-Path $env:LOCALAPPDATA $script:Id.ProductName)
   return @($dirs | Where-Object { $_ } | Select-Object -Unique)
 }
 
 function Find-InstallDir {
-  foreach ($d in (Get-CandidateInstallDirs)) { if (Test-Path -LiteralPath (Join-Path $d 'redevops-sidecar.exe')) { return $d } }
+  foreach ($d in (Get-CandidateInstallDirs)) { if (Test-Path -LiteralPath (Join-Path $d $script:Id.SidecarExe)) { return $d } }
   return $null
 }
 
@@ -184,6 +222,11 @@ function Test-PidAlive([int]$ProcessId) {
 
 function Get-Listeners([int]$Port) {
   try { return @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop | Select-Object LocalAddress, LocalPort, OwningProcess) } catch { return @() }
+}
+
+# Listeners (127.0.0.1 or any address) owned by one of the given process ids. A PyInstaller onefile sidecar's CHILD owns the socket.
+function Get-ListenersOf([int[]]$Pids) {
+  try { return @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object { $Pids -contains [int]$_.OwningProcess } | Select-Object LocalAddress, LocalPort, OwningProcess) } catch { return @() }
 }
 
 function Get-FreePort {
@@ -377,3 +420,40 @@ function Get-SignatureSummary([string]$Path) {
   if ($s.TimeStamperCertificate) { $ts = $s.TimeStamperCertificate.Subject }
   return [pscustomobject]@{ Status = [string]$s.Status; Message = $s.StatusMessage; Subject = $sub; Thumbprint = $tp; NotAfterUtc = $na; Timestamper = $ts }
 }
+
+
+# ---- ACL (icacls) --------------------------------------------------------------------------------------------------------------
+# Returns the output lines of `icacls <path>` (read-only). Each ACE line looks like  DOMAIN\Name:(OI)(CI)(F)  ; the first line starts with the path.
+function Get-IcaclsLines([string]$Path) {
+  $icacls = Get-Command icacls.exe -ErrorAction SilentlyContinue
+  if (-not $icacls) { return @() }
+  $out = & $icacls.Source $Path 2>&1
+  return @($out | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() -and $_ -notmatch '^Successfully processed' })
+}
+
+# Names/SIDs that must NOT appear in the ACL of the private launch directory or of a redirect file (anything broader than the owner,
+# SYSTEM and Administrators): Everyone, Users, Authenticated Users, INTERACTIVE, plus a different user.
+function Get-BroadAclEntries([string[]]$IcaclsLines) {
+  $bad = @()
+  foreach ($l in $IcaclsLines) {
+    if ($l -match '(?i)(\bEveryone\b|BUILTIN\\Users\b|NT AUTHORITY\\Authenticated Users|NT AUTHORITY\\INTERACTIVE|\*S-1-1-0|\*S-1-5-32-545|\*S-1-5-11)\s*:') { $bad += $l.Trim() }
+  }
+  return $bad
+}
+
+# ---- PE header flags (read-only): ASLR / high-entropy ASLR / DEP / CFG ---------------------------------------------------------------
+function Get-PeFlags([string]$Path) {
+  try {
+    $fs = [IO.File]::OpenRead($Path)
+    try {
+      $br = New-Object IO.BinaryReader($fs)
+      $fs.Seek(0x3C, 'Begin') | Out-Null; $pe = $br.ReadInt32()
+      $fs.Seek($pe + 4 + 20 + 70, 'Begin') | Out-Null     # signature(4) + COFF header(20) + 70 bytes into the optional header = DllCharacteristics
+      $dc = $br.ReadUInt16()
+      return [pscustomobject]@{ DllCharacteristics = ('0x{0:X4}' -f $dc); DynamicBase = [bool]($dc -band 0x40); HighEntropyVA = [bool]($dc -band 0x20); NxCompat = [bool]($dc -band 0x100); GuardCF = [bool]($dc -band 0x4000); ForceIntegrity = [bool]($dc -band 0x80) }
+    } finally { $fs.Close() }
+  } catch { return $null }
+}
+
+# ---- HTTP over a raw socket (no curl) for the fake sidecar tests -------------------------------------------------------------------
+function Get-UtcStamp { return (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ') }

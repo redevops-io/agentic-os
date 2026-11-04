@@ -18,9 +18,9 @@ $handle = $null
 try {
   if (-not $InstallDir) { $st = Read-State; if ($st -and $st.installDir) { $InstallDir = $st.installDir } }
   if (-not $InstallDir) { $InstallDir = Find-InstallDir }
-  $exe = $(if ($InstallDir) { Join-Path $InstallDir 'agentic-apps.exe' } else { $null })
-  if (-not $exe -or -not (Test-Path -LiteralPath $exe)) { Add-Result 'LCH-00' 'agentic-apps.exe present' 'FAIL' 'not found: run 01-Install.ps1 first'; throw 'stop' }
-  if (@(Get-Process -Name 'agentic-apps' -ErrorAction SilentlyContinue).Count -gt 0) { Add-Result 'LCH-00' 'no other agentic-apps.exe running' 'SKIP' 'another instance is running; close it yourself and re-run (this script does not kill processes it did not start)'; throw 'stop' }
+  $exe = $(if ($InstallDir) { Join-Path $InstallDir $script:Id.LauncherExe } else { $null })
+  if (-not $exe -or -not (Test-Path -LiteralPath $exe)) { Add-Result 'LCH-00' 'launcher exe present' 'FAIL' 'not found: run 01-Install.ps1 first'; throw 'stop' }
+  if (@(Get-Process -Name $script:Id.LauncherName -ErrorAction SilentlyContinue).Count -gt 0) { Add-Result 'LCH-00' 'no other launcher instance running' 'SKIP' 'another instance is running; close it yourself and re-run (this script does not kill processes it did not start)'; throw 'stop' }
 
   $wv = $null; try { $wv = (Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction Stop).pv } catch { }
   Add-Result 'LCH-01' 'WebView2 runtime present' 'INFO' $(if ($wv) { "version $wv" } else { 'not found in the EdgeUpdate registry key (the launcher window may fail to render)' })
@@ -45,7 +45,7 @@ try {
     $kids = Get-DescendantPids $p.Id $snap
     $desc = ($snap | Where-Object { $kids -contains [int]$_.ProcessId } | ForEach-Object { "{0}:{1}" -f $_.ProcessId, $_.Name }) -join ', '
     Add-Result 'LCH-05' 'child processes of the launcher' 'INFO' $(if ($desc) { $desc } else { 'none' })
-    $sc = @($snap | Where-Object { $_.Name -eq 'redevops-sidecar.exe' }).Count
+    $sc = @($snap | Where-Object { $_.Name -eq $script:Id.SidecarExe }).Count
     Add-Result 'LCH-06' 'sidecar started by merely launching' 'INFO' ("redevops-sidecar.exe processes: {0}; listeners on 8787: {1} (none expected before 'Start & open' is clicked)" -f $sc, @(Get-Listeners 8787).Count)
     Add-Result 'FW-02' 'listener bind addresses seen so far' 'INFO' ((Get-Listeners 8787 | ForEach-Object { $_.LocalAddress }) -join ',')
     # graceful close
@@ -56,10 +56,10 @@ try {
     } else { Add-Result 'LCH-07' 'closes on CloseMainWindow' 'PASS' ("exit code {0}" -f $p.ExitCode) }
   }
   Start-Sleep -Seconds 2
-  $left = @(Get-Process -Name 'redevops-sidecar' -ErrorAction SilentlyContinue).Count
+  $left = @(Get-Process -Name $script:Id.SidecarName -ErrorAction SilentlyContinue).Count
   Add-Result 'LCH-08' 'no sidecar left after closing the launcher' $(if ($left -eq 0) { 'PASS' } else { 'FAIL' }) ("redevops-sidecar.exe processes: {0} (not started by this script unless the GUI was clicked)" -f $left)
   try {
-    $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = $t0 } -ErrorAction Stop | Where-Object { $_.Message -match 'agentic-apps|redevops-sidecar' -and $_.LevelDisplayName -in @('Error', 'Critical') })
+    $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = $t0 } -ErrorAction Stop | Where-Object { $_.Message -match ([regex]::Escape($script:Id.LauncherName) + '|' + [regex]::Escape($script:Id.SidecarName)) -and $_.LevelDisplayName -in @('Error', 'Critical') })
     Add-Result 'LCH-09' 'crash events for the launcher/sidecar since start' $(if ($ev.Count -eq 0) { 'PASS' } else { 'FAIL' }) ("{0} error events in the Application log" -f $ev.Count)
   } catch { Add-Result 'LCH-09' 'crash events for the launcher/sidecar since start' 'INFO' ("Application log not readable or no events: {0}" -f $_.Exception.Message) }
 

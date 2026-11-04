@@ -28,7 +28,7 @@ try {
   $gc = Get-Command signtool.exe -ErrorAction SilentlyContinue; if ($gc) { $signtool = $gc.Source }
   if (-not $signtool) { Write-Line 'signtool.exe not found (nothing is installed by this kit): signtool verify rows are SKIPPED' }
 
-  foreach ($n in @('agentic-apps.exe', 'redevops-sidecar.exe', 'uninstall.exe')) {
+  foreach ($n in @($script:Id.LauncherExe, $script:Id.SidecarExe, 'uninstall.exe')) {
     $f = Join-Path $InstallDir $n
     $key = $n.Replace('.exe', '').Replace('-', '').ToUpper()
     if (-not (Test-Path -LiteralPath $f)) {
