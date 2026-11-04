@@ -16,11 +16,15 @@ Native installer (.deb / AppImage / .msi / .dmg)
 ## Build order (one reproducible recipe → all platforms)
 
 ```bash
-./packaging/build-wheelhouse.sh   # Task 1: hash-locked wheelhouse from pinned inputs; proves an offline --no-index --require-hashes install
-./packaging/build-sidecar.sh      # Task 2: freeze → packaging/dist/redevops-sidecar
-./packaging/stage-sidecar.sh      # place it as Tauri externalBin (per target triple)
-./packaging/build-launcher.sh      # Task 4: cargo tauri build -- --locked (pinned rustc/tauri-cli, committed Cargo.lock)
-./packaging/build-sbom.sh          # shipped-component SBOM from the BUILT artifacts + verifier (fails on an unlisted component)
+./packaging/build-all.sh          # the whole recipe below, in this order (the one place that owns the order)
+#   build-wheelhouse.sh            Task 1: hash-locked wheelhouse from pinned inputs; proves an offline --no-index --require-hashes install
+#   build-sidecar.sh               Task 2, pass 1: freeze -> packaging/dist/redevops-sidecar (the archive the notices are derived from)
+#   build-notices.sh               SBOM of that archive -> THIRD_PARTY_NOTICES / NOTICES_MISSING -> deploy/launcher/src-tauri/licenses
+#   REDEVOPS_LICENSES_DIR=... build-sidecar.sh   Task 2, pass 2: freeze again, embedding the Licenses folder
+#   stage-sidecar.sh               place it as Tauri externalBin (per target triple)
+#   build-launcher.sh              Task 4: cargo tauri build -- --locked (refuses to run without the notices / the pass-2 sidecar)
+#   build-sbom.sh                  shipped-component SBOM from the BUILT artifacts + verifier (fails on an unlisted component)
+#   notices/check_notices_vs_sbom.py   closing check: the staged notices describe exactly the final SBOM
 ```
 
 CI runs exactly this across ubuntu/windows/macos: `.github/workflows/native-packaging.yml`.

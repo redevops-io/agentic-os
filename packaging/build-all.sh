@@ -12,3 +12,8 @@ REDEVOPS_LICENSES_DIR="$ROOT/deploy/launcher/src-tauri/licenses" "$HERE/build-si
 "$HERE/stage-sidecar.sh"
 "$HERE/build-launcher.sh"
 "$HERE/build-sbom.sh"
+# closing check: the staged notices describe exactly the components of the FINAL SBOM (sidecar archive + launcher)
+EXCL=(); for x in ${NOTICES_EXCLUDE-knowledge-frontier}; do EXCL+=(--exclude "$x"); done
+"${MANIFEST_PYTHON:-python3}" -I "$HERE/notices/check_notices_vs_sbom.py" --sbom "$HERE/dist/sbom/sbom.cdx.json" \
+    --notices-report "$HERE/notices/out/notices-report.json" --licenses-dir "$ROOT/deploy/launcher/src-tauri/licenses" \
+    ${EXCL[@]+"${EXCL[@]}"}

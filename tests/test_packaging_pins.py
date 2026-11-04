@@ -249,3 +249,54 @@ def test_compare_builds_reports_a_difference_and_its_class(tmp_path):
     assert "File: DIFFERENT" in text and "'LC_UUID': 16" in text
     (b / "launcher").write_bytes(hdr + body)
     assert cb.main() == 0 and "File: IDENTICAL" in out.read_text()
+
+
+# --- build order: one owner (build-all.sh); the workflow, the Windows driver and the README agree with it -----------
+def _scripts_in_order(text: str) -> list[str]:
+    return re.findall(r"(build-(?:wheelhouse|sidecar|notices|launcher|sbom)\.sh|stage-sidecar\.sh)", text)
+
+
+def test_build_all_order_is_wheelhouse_sidecar_notices_sidecar_stage_launcher_sbom():
+    seq = [s for s in _scripts_in_order("\n".join(l for l in (PK / "build-all.sh").read_text().splitlines()
+                                                  if not l.lstrip().startswith("#")))]
+    assert seq == ["build-wheelhouse.sh", "build-sidecar.sh", "build-notices.sh", "build-sidecar.sh",
+                   "stage-sidecar.sh", "build-launcher.sh", "build-sbom.sh"]
+    text = (PK / "build-all.sh").read_text()
+    # pass 2 (and only pass 2) embeds the Licenses folder
+    assert text.count("REDEVOPS_LICENSES_DIR=") == 1
+    assert text.index("REDEVOPS_LICENSES_DIR=") > text.index("build-notices.sh")
+    assert "check_notices_vs_sbom.py" in text and text.index("check_notices_vs_sbom.py") > text.index("build-sbom.sh")
+
+
+def test_workflow_and_windows_driver_follow_the_same_order():
+    yaml = pytest.importorskip("yaml")
+    wf = yaml.safe_load((ROOT / ".github/workflows/native-packaging.yml").read_text())
+    runs = "\n".join(s.get("run", "") for s in wf["jobs"]["bundle"]["steps"])
+    assert _scripts_in_order(runs) == ["build-wheelhouse.sh", "build-sidecar.sh", "build-notices.sh", "build-sidecar.sh",
+                                       "stage-sidecar.sh", "build-launcher.sh", "build-sbom.sh"]
+    # the pass-2 sidecar step carries REDEVOPS_LICENSES_DIR, pass 1 does not
+    sidecar_steps = [s for s in wf["jobs"]["bundle"]["steps"] if "build-sidecar.sh" in s.get("run", "")]
+    assert [("REDEVOPS_LICENSES_DIR" in (s.get("env") or {})) for s in sidecar_steps] == [False, True]
+    assert "check_notices_vs_sbom.py" in runs
+    ps1 = (PK / "build-windows.ps1").read_text()
+    assert 'Run-Step "build-all.sh"' in ps1
+    for forbidden in ("build-wheelhouse.sh", "build-launcher.sh", "stage-sidecar.sh"):
+        assert f'Run-Step "{forbidden}"' not in ps1, "the Windows driver must not list the steps a second time"
+
+
+def test_launcher_build_refuses_to_run_without_the_notices_or_the_pass_2_sidecar():
+    text = (PK / "build-launcher.sh").read_text()
+    assert "THIRD_PARTY_NOTICES.txt" in text and "sidecar-licenses.sha256" in text
+    assert text.index("sidecar-licenses.sha256") < text.index('"${TAURI[@]}" build')
+    assert "sidecar-licenses.sha256" in (PK / "build-sidecar.sh").read_text()
+
+
+def test_notices_are_derived_from_the_built_sbom_not_from_a_lock():
+    bn = (PK / "build-notices.sh").read_text()
+    assert "--sbom" in bn and "sbom-pass1/sbom.cdx.json" in bn and "requirements.lock" not in bn
+    bl = (PK / "notices" / "build-licenses.sh").read_text()
+    assert "requirements.lock" not in bl
+    # without --sbom the script refuses (the lock-derived stand-in needs the explicit --interim-lock)
+    r = subprocess.run(["bash", str(PK / "notices" / "build-licenses.sh"), "--platform", "macos", "--site-packages", str(ROOT)],
+                       capture_output=True, text=True)
+    assert r.returncode == 2 and "--sbom" in r.stderr

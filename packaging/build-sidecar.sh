@@ -59,6 +59,14 @@ cd "$PK"
 BIN="$PK/dist/redevops-sidecar"
 [ -f "$BIN.exe" ] && BIN="$BIN.exe"
 echo "built: $BIN"
+# Record which Licenses folder (if any) this binary embeds, so build-launcher.sh can refuse a sidecar whose
+# embedded notices differ from the folder the launcher bundle will carry (pass 1 embeds none, pass 2 embeds them).
+rm -f "$PK/dist/sidecar-licenses.sha256"
+if [ -n "${REDEVOPS_LICENSES_DIR:-}" ]; then
+  "$FPY" -I -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1]+"/LICENSES-MANIFEST.json","rb").read()).hexdigest())' \
+      "$REDEVOPS_LICENSES_DIR" > "$PK/dist/sidecar-licenses.sha256"
+  echo "sidecar embeds Licenses (LICENSES-MANIFEST.json sha256 $(cat "$PK/dist/sidecar-licenses.sha256"))"
+fi
 "$FPY" -m pip freeze --all > "$PK/dist/freeze-venv-pip-freeze.txt"
 # the freeze venv is deleted on exit: keep its distribution inventory for the SBOM step (packaging/build-sbom.sh)
 "$FPY" -I "$PK/sbom/inventory.py" --dump > "$PK/dist/inventory-env.json"

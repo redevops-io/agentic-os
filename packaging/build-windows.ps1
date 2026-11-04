@@ -1,6 +1,7 @@
 # Windows build - runs the SAME pinned bash recipe as CI (git-bash), so the Windows and Linux/macOS
-# builds cannot drift: build-wheelhouse.sh -> build-sidecar.sh -> stage-sidecar.sh -> build-launcher.sh
-# -> build-sbom.sh. Every input is pinned by packaging/toolchain.env + packaging/locks/*
+# builds cannot drift: ONE script, packaging/build-all.sh, owns the order (wheelhouse -> sidecar pass 1 ->
+# notices -> sidecar pass 2 -> stage -> launcher -> SBOM -> notices check). The launcher build fails without the
+# notices, so the steps must not be listed here a second time. Every input is pinned by packaging/toolchain.env + packaging/locks/*
 # (requirements-windows.lock is installed with --require-hashes; the launcher builds with cargo --locked).
 #
 # Prereqs on the image (one-time): Git for Windows (provides bash.exe), uv, CPython EXACTLY 3.12.10 (the
@@ -35,9 +36,5 @@ function Run-Step($script) {
   & $bash -lc "cd '$($Root -replace '\\','/')' && ./packaging/$script"
   if ($LASTEXITCODE -ne 0) { throw "$script failed ($LASTEXITCODE)" }
 }
-Run-Step "build-wheelhouse.sh"
-Run-Step "build-sidecar.sh"
-Run-Step "stage-sidecar.sh"
-Run-Step "build-launcher.sh"
-Run-Step "build-sbom.sh"
+Run-Step "build-all.sh"
 Write-Host "done - see deploy\launcher\src-tauri\target\release\bundle\ (.msi / .nsis) and packaging\dist\"
