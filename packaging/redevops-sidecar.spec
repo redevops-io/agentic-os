@@ -13,6 +13,12 @@ hidden = collect_submodules("agentic_os") + collect_submodules("uvicorn") + [
     "uvicorn.loops.auto", "uvicorn.protocols.http.auto",
     "uvicorn.protocols.websockets.auto", "uvicorn.lifespan.on",
 ]
+# Shipped-but-unexercised: nothing in the serve/bootstrap import closure imports `knowledge-frontier` (AST scan,
+# blocked-import run and frozen run: tests/test_sidecar_excludes.py), and its licence is an inference
+# ([OWNER DECISION D-LIC-2]), so the frozen sidecar leaves it out. The two shim modules go with it: they cannot
+# import without it.
+UNEXERCISED = ("knowledge_frontier", "agentic_os.knowledge_frontier", "agentic_os.knowledge_frontier_backtest")
+hidden = [h for h in hidden if h not in UNEXERCISED]
 for opt in ("redevops_connectors", "duckdb"):
     try:
         hidden += collect_submodules(opt)
@@ -38,7 +44,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter", "matplotlib", "redevops_rag", "sentence_transformers", "torch"],
+    excludes=["tkinter", "matplotlib", "redevops_rag", "sentence_transformers", "torch", *UNEXERCISED],
     noarchive=False,
 )
 pyz = PYZ(a.pure)
