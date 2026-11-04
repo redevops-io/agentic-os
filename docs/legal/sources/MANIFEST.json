@@ -1,0 +1,88 @@
+{
+ "schema": 1,
+ "note": "Sources for the counsel brief. Excerpts only for third-party documents that are not redistributed with the product; full copies of those documents are kept outside the repository (sha256 recorded). Presence here is not a clearance.",
+ "files": {
+  "r-efi-5.2.0-AUTHORS.txt": {
+   "source": "https://static.crates.io/crates/r-efi/r-efi-5.2.0.crate (AUTHORS; crate sha256 74765f6d916ee2faa39bc8e68e4f3ed8949b48cccdac59983d287a7cb71ce9c5, verified against the crates.io index and the SBOM)",
+   "retrieved": "2026-11-04",
+   "description": "The only licence statement of the r-efi 5.2.0 package; byte-identical to AUTHORS at upstream commit db87f6c8c6346d66750b5bda6befebafa0dc0c4c (tag v5.2.0 of github.com/r-efi/r-efi), which has no LICENSE file",
+   "sha256": "c42285aa32440c3b5358fd4805b817cd8d6e1795111d2e4c547530be41896b2d",
+   "bytes": 3652
+  },
+  "certifi-2026.10.19-LICENSE.txt": {
+   "source": "wheel certifi-2026.10.19-py3-none-any.whl (sha256 42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b), dist-info/licenses/LICENSE; identical to LICENSE at tag 2026.10.19 (commit 39e296825d323aa1c8e998ffd9cc57fe22514a24) of github.com/certifi/python-certifi",
+   "retrieved": "2026-11-04",
+   "description": "certifi's licence file: the notice header of the Mozilla CA bundle, not the MPL text",
+   "sha256": "e93716da6b9c0d5a4a1df60fe695b370f0695603d21f6f83f053e42cfc10caf7",
+   "bytes": 989
+  },
+  "BSD-3-Clause-sample-starlette-1.6.0-LICENSE.md": {
+   "source": "wheel starlette-1.6.0 dist-info/licenses/LICENSE.md",
+   "retrieved": "2026-11-04",
+   "description": "a shipped BSD-3-Clause text, quoted as a sample of the binary-form attribution condition",
+   "sha256": "dcb95677a02240243187e964f941847d19b17821cf99e5afae684fab328c19bf",
+   "bytes": 1518
+  },
+  "Unicode-3.0-sample-icu_collections-2.3.0-LICENSE.txt": {
+   "source": "crate icu_collections 2.3.0 LICENSE (crates.io package)",
+   "retrieved": "2026-11-04",
+   "description": "a shipped Unicode-3.0 text, quoted as a sample of the notice condition",
+   "sha256": "f367c1b8e1aa262435251e442901da4607b4650e0e63a026f5044473ecfb90f2",
+   "bytes": 2195
+  },
+  "microsoft-vc-2015-2022-runtime-licence-excerpt.txt": {
+   "source": "https://visualstudio.microsoft.com/license-terms/vs2022-cruntime/ (embeds https://visualstudio.microsoft.com/wp-content/uploads/2021/09/Visual-C-Runtime-2015-2022-License-1.docx)",
+   "retrieved": "2026-11-04",
+   "description": "Excerpt of 'MICROSOFT SOFTWARE LICENSE TERMS - MICROSOFT VISUAL C++ 2015 - 2022 RUNTIME' (the licence of the Visual C++ Redistributable package), text extracted from the .docx",
+   "sha256": "1700f2b7d7ecd203e79480b10e07a507156ba3d1c878269a314c79e5e48b6312",
+   "bytes": 2401,
+   "full_document_sha256": "f1e3d56ceb2ad68aae0711b910375009e651ac5530fa0760f0dea6e81e54fae1"
+  },
+  "microsoft-learn-excerpts.txt": {
+   "source": "learn.microsoft.com pages listed in the file (4 pages)",
+   "retrieved": "2026-11-04",
+   "description": "Verbatim lines from Microsoft documentation on redistributing the Visual C++ runtime, the UCRT and the Visual Studio 2022 'Distributable code' list; per-page ms.date and sha256 of the fetched HTML are inside the file",
+   "sha256": "05dd7ba3013f1c7f96629cb8ba7c98443c2f28c586c7485876d1d64c2b87a27e",
+   "bytes": 8856
+  },
+  "apple-xcode-agreement-excerpts.txt": {
+   "source": "https://www.apple.com/legal/sla/docs/xcode.pdf",
+   "retrieved": "2026-11-04",
+   "description": "Excerpts of the Xcode and Apple SDKs Agreement (definitions, 2.4, 2.5, 2.7)",
+   "sha256": "432a0451f09487b54a1eadb202a8f1927cd8e8e6c83c280cceb9081bdc2e8410",
+   "bytes": 5300,
+   "full_document_sha256": "5e6bd16bcba3dd591bde1c57f7c6f19f08a194c84cdc54485c4660f90e2a26ec"
+  },
+  "_not_obtained": {
+   "description": "Not obtained: the Visual Studio 2022 licence terms page (https://visualstudio.microsoft.com/license-terms/vs2022-ga-community/ and its siblings) is rendered by script and the 'Distributable Code' section text was NOT captured; Microsoft's documentation pages above quote the REDIST list only by reference. Windows SDK redistributable terms page: https://learn.microsoft.com/en-us/windows/win32/win_cert/redistributable-files and https://learn.microsoft.com/en-us/legal/windows-sdk/license-agreements returned HTTP 404 on 2026-11-04. Status: UNVERIFIED."
+  },
+  "sibling-repositories-facts.txt": {
+   "source": "anonymous git clones of github.com/redevops-io/redevops-connectors and github.com/redevops-io/knowledge-frontier",
+   "retrieved": "2026-11-04",
+   "description": "tags, trees, pyproject licence lines, licence commit messages and the 'Note on this file' paragraph, command output verbatim",
+   "sha256": "5bc5d471fca1262f09d9204f46b1bb313ef91a8829616fc586e7bd41f6ef36db",
+   "bytes": 3155
+  },
+  "objc2-upstream-LICENSE.md-at-packaged-commit-8852b424.txt": {
+   "source": "https://raw.githubusercontent.com/madsmtm/objc2/8852b424193ca41602281b3d7540d7c8ed51e49a/LICENSE.md (sha256 7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54)",
+   "retrieved": "2026-11-04",
+   "description": "the licence-selection statement of the objc2 repository at the commit the objc2 0.6.4 package was built from; the same file at the other packaged commits has the same role",
+   "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+   "bytes": 1339
+  },
+  "selectors-0.36.1-lib.rs-header.txt": {
+   "source": "crate selectors 0.36.1 (crates.io package), lib.rs lines 1 to 3",
+   "retrieved": "2026-11-04",
+   "description": "the MPL-2.0 notice in a source file of the crate (the crate and its upstream repository have no licence file)",
+   "sha256": "766674381e88a468d55e07de3596987391cf0e8beebe51baf4fddf11078785b3",
+   "bytes": 206
+  },
+  "qa-handoff-facts.txt": {
+   "source": "r0-audit/licences/licence_matrix.json rows QA-EV-rf-htmldog-tabs and QA-EV-rf-tablesorter-2.30.5; https://htmldog.com/terms/",
+   "retrieved": "2026-11-04",
+   "description": "facts quoted by QA_BUNDLE_HANDOFF.md",
+   "sha256": "db678c3a48f7eedbead9edfbaab78a993c1a90f0724416d86280184e62b73715",
+   "bytes": 2274
+  }
+ }
+}

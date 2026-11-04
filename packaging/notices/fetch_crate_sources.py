@@ -113,7 +113,7 @@ def safe_member(m: tarfile.TarInfo) -> str | None:
     if len(parts) < 2 or ".." in parts or m.name.startswith("/"):
         return None
     rel = Path(*parts[1:])
-    keep = rel.name in ("Cargo.toml", ".cargo_vcs_info.json") or (
+    keep = rel.name in ("Cargo.toml", ".cargo_vcs_info.json", "AUTHORS") or (
         len(rel.parts) == 1 and KEEP.match(rel.name)) or (
         len(rel.parts) > 1 and rel.parts[0] in ("licenses", "LICENSES", "license", "licences") )
     return rel.as_posix() if keep and m.size < 2_000_000 else None
@@ -221,7 +221,7 @@ def main(argv=None) -> int:
             rec["upstream"] = "offline"
         else:
             dest.mkdir(parents=True, exist_ok=True)
-            for f in ("Cargo.toml", ".cargo_vcs_info.json"):
+            for f in ("Cargo.toml", ".cargo_vcs_info.json", "AUTHORS"):     # AUTHORS: r-efi keeps its licence statement there (components.json package_files)
                 if (d / f).is_file():
                     (dest / f).write_bytes((d / f).read_bytes())
             rec["upstream"] = upstream_licences(dest)

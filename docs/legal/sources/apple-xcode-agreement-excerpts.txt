@@ -1,0 +1,61 @@
+Xcode and Apple SDKs Agreement (https://www.apple.com/legal/sla/docs/xcode.pdf), retrieved 2026-11-04; sha256 of the PDF as fetched: 5e6bd16bcba3dd591bde1c57f7c6f19f08a194c84cdc54485c4660f90e2a26ec
+Excerpts: lines cut mechanically from `pdftotext -layout` output (page-break characters and page-number lines removed). Section numbers as in the document.
+
+--- definitions ---
+“Apple Software” means the Xcode Developer Tools and the Apple SDKs, including any Updates
+thereto (if any) that may be provided to You by Apple.
+“Apple SDKs” means the macOS SDK, and the Apple-proprietary Software Development Kits (SDKs)
+provided hereunder, including but not limited to header files, APIs, libraries, simulators, and software
+(source code and object code) labeled as part of the iOS SDK, watchOS SDK, iPadOS SDK, tvOS SDK
+and/or visionOS SDK and included in the Xcode Developer Tools package for purposes of targeting
+Apple-branded products running iOS, watchOS, iPadOS, tvOS or visionOS.
+
+--- 2.4 Apple Developer Program (the sentences on macOS applications and libraries) ---
+If You would like a third-party to use Your Application for iOS, watchOS, iPadOS, tvOS, or visionOS, or
+You would like to distribute Your Application for macOS through the App Store, then You must enter into
+a separate written agreement with Apple (the Apple Developer Program License Agreement) and Your
+Application must comply with the Program Requirements and Documentation. Information regarding the
+Program Requirements is available at: https://developer.apple.com/programs/ . Apple reserves the
+right to change the Program Requirements and/or the terms of the Apple Developer Program License
+Agreement from time to time. You are fully responsible for any and all costs, expenses or other liabilities
+You may incur as a result of Your development or use of the Apple Software or Services. For clarity,
+macOS applications and libraries may be distributed without entering into a separate written agreement
+with Apple so long as such applications and libraries comply with the terms of this Agreement.
+
+--- 2.5 Copies ---
+2.5      Copies
+You agree to retain and reproduce in full the Apple copyright, disclaimers and other proprietary notices
+in all copies of the Apple Software that You are permitted to make under this Agreement. For clarity,
+You may copy only the entire package or piece of the Apple Software and Services in its entirety and
+only for use as permitted herein. You may not alter the Apple Software or Services in any way in such
+copy, e.g., You are expressly prohibited from separately using the Apple SDKs or attempting to run any
+part of the Apple Software on non-Apple-branded hardware. Images contained in the Documentation
+may not be separately copied or used outside of the Documentation.
+
+--- 2.7 Restrictions; No Other Permitted Uses ---
+2.7      Restrictions; No Other Permitted Uses
+The grants set forth in this Agreement do not permit You to, and You agree not to, install, use or run the
+Apple Software or Apple Services on any non-Apple-branded computer or device, or to enable others to
+do so. This Agreement does not allow the Apple Software or Services to be made available over a
+network where they could be run or used by multiple computers at the same time, unless otherwise
+expressly permitted in writing by Apple. Further, unless otherwise expressly permitted by Apple in
+writing, You agree not to rent, lease, lend, upload to or host on any website or server, sell, redistribute,
+or sublicense the Apple Software and Apple Services, in whole or in part, or to enable others to do so.
+You may not use the Apple Software and Apple Services for any purpose not expressly permitted by this
+Agreement. You may not and You agree not to, or to enable others to, copy (except as expressly
+permitted under this Agreement), decompile, reverse engineer, disassemble, attempt to derive the
+source code of, modify, decrypt, or create derivative works of the Apple Software or Services, or any
+part thereof (except as and only to the extent any foregoing restriction is prohibited by applicable law, or
+to the extent as may be permitted by licensing terms governing use of open-sourced components or
+sample code included with the Apple Software). You agree not to exploit the Apple Services or Apple
+Software in any unauthorized way whatsoever, including but not limited to, by trespass or burdening
+network capacity. Further, as a condition to using the Apple Software and Apple Services, You agree
+that You will not, directly or indirectly, commit any act intended to interfere with the Apple Software or
+Apple Services. All licenses not expressly granted in this Agreement are reserved and no other licenses,
+immunity or rights, express or implied are granted by Apple, by implication or otherwise. This
+Agreement does not grant You any rights to use any trademarks, logos or service marks) belonging to
+Apple, including but not limited to the Mac, iPhone, iPad, Apple Watch, Apple Vision Pro, AirPods,
+AirTags, Apple TV, HomePod or iPod word marks. If You make reference to any Apple products or
+technology or use Apple’s trademarks, You agree to comply with the guidelines at:
+http://www.apple.com/legal/trademark/guidelinesfor3rdparties.html, as modified by Apple from time to
+time.

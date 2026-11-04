@@ -1,0 +1,866 @@
+{
+ "schema": 1,
+ "purpose": "Every decision that must be taken in writing before any DISTRIBUTION of an R0-prime artifact. A private candidate build may proceed while decisions are OPEN. status is OPEN until the owner (and counsel where 'decides' names counsel) has decided; only a person can change it. A DECIDED entry must carry chosen_option, decision_reference (the signed docs/legal/OWNER_DECISION_FORM.md record), decision_sha256 (sha256 of that record), decided_by and decided_on (YYYY-MM-DD) and, when counsel decides, counsel_reference.",
+ "wording_rule": "No entry says that anything is cleared, compliant or permitted.",
+ "decisions": [
+  {
+   "id": "D-LIC-1",
+   "title": "Product licence wording, copyright line, installer acceptance",
+   "question": "Is 'source-available (family licence: AGPL-3.0-or-later with the Commons Clause)', SPDX LicenseRef-AGPL-3.0-or-later-with-Commons-Clause and the copyright line 'Copyright (c) 2025-2026 RedevOps.' the statement the distributed packages carry, and is RedevOps (the named copyright holder and Licensor) the right legal person?",
+   "decides": "owner+counsel",
+   "scope": [
+    "all"
+   ],
+   "blocks_distribution": true,
+   "status": "OPEN",
+   "options": [
+    {
+     "key": "a",
+     "text": "Keep the short statement and the copyright line as written (LICENSING.md section 1)."
+    },
+    {
+     "key": "b",
+     "text": "Replace by a longer statement and/or a different copyright holder line drafted by counsel."
+    },
+    {
+     "key": "c",
+     "text": "Change the licence the packages carry (a different family licence or plain AGPL-3.0-or-later)."
+    }
+   ],
+   "recommended_default": {
+    "option": "a",
+    "note": "For the private candidate. Counsel confirms (a) or drafts (b) before any distribution; the legal person behind 'RedevOps' is a fact only the owner can state."
+   },
+   "ships_meanwhile": "the statement as in LICENSING.md; texts in Licenses/",
+   "counsel_questions": [
+    "Q1",
+    "Q2",
+    "Q3"
+   ],
+   "facts_resolved_by_lic2": "Exact texts of LICENSE.md, the Commons Clause and AGPL sections compiled in docs/legal/EXACT_TEXTS.md; all five package fields checked by check_licence_statements.py.",
+   "package": "docs/legal/DECISION_PACKAGES.md#d-lic-1",
+   "chosen_option": null,
+   "decision_reference": null,
+   "decision_sha256": null,
+   "decided_by": null,
+   "decided_on": null,
+   "counsel_reference": null
+  },
+  {
+   "id": "D-LIC-2",
+   "title": "Inferred licences of redevops-connectors and knowledge-frontier (pinned tags carry no licence file)",
+   "question": "What licence does the owner state, in writing, for the redevops-connectors bytes at tag v0.1.0 (the pin; its tag has no licence file and the repository's later LICENSE.md says earlier versions 'were not covered by this file') and for knowledge-frontier, and how is that statement attached to the distributed source?",
+   "decides": "owner",
+   "scope": [
+    "all"
+   ],
+   "blocks_distribution": true,
+   "status": "OPEN",
+   "options": [
+    {
+     "key": "a",
+     "text": "Owner states the licence intent in writing; the maintainers add the licence files in a NEW tagged release of each repository; R0-prime pins the new tag (new tags are an owner action; the pin, the wheelhouse, the SBOM, the source offer and the candidate change; neither package is a benchmarked component)."
+    },
+    {
+     "key": "a2",
+     "text": "Owner states the licence intent in writing and it is recorded in the notices only; the pinned tag stays as it is (the corresponding source for the shipped bytes then still has no licence file; counsel question Q7)."
+    },
+    {
+     "key": "b",
+     "text": "Exclude redevops-connectors from the distribution (as knowledge-frontier already is): the Projects UI then shows the 6-provider sample instead of the 14 provider setup guides (measured: tests/test_connectors_removal_cost.py)."
+    },
+    {
+     "key": "c",
+     "text": "Ship the packages privately only (no distribution) until (a) is done."
+    }
+   ],
+   "recommended_default": {
+    "option": "a",
+    "note": "Before any distribution; (c) until then. Connectors cannot be replaced by another component in R0-prime."
+   },
+   "ships_meanwhile": "private candidate only: connectors at v0.1.0 with no licence text (listed in NOTICES_MISSING.md); knowledge-frontier excluded from the binary",
+   "counsel_questions": [
+    "Q7",
+    "Q8",
+    "Q4"
+   ],
+   "facts_resolved_by_lic2": "Facts re-read 2026-11-04 from the public repositories (tags, trees, commit messages); cost of option (b) measured.",
+   "package": "docs/legal/DECISION_PACKAGES.md#d-lic-2",
+   "chosen_option": null,
+   "decision_reference": null,
+   "decision_sha256": null,
+   "decided_by": null,
+   "decided_on": null,
+   "counsel_reference": null
+  },
+  {
+   "id": "D-LIC-3",
+   "title": "Commons Clause term in one distribution together with plain-AGPL, permissive and other-licence code",
+   "question": "May the Commons Clause condition stay in the family code of a binary that also contains code under plain AGPL-3.0 (if any sibling is), permissive licences, MPL-2.0 file-level copyleft and GPL-2.0-or-later with the Bootloader Exception, in light of AGPL sections 7 and 10?",
+   "decides": "counsel",
+   "scope": [
+    "all"
+   ],
+   "blocks_distribution": true,
+   "status": "OPEN",
+   "options": [
+    {
+     "key": "a",
+     "text": "Counsel opinion that the family arrangement is sound for the packages as built (the owner then records it)."
+    },
+    {
+     "key": "b",
+     "text": "Separate any plain-AGPL component from the distribution (done for knowledge-frontier) and restrict the family code to what counsel accepts."
+    },
+    {
+     "key": "c",
+     "text": "Relicense the siblings consistently, or drop the Commons Clause for the packages (owner's business decision)."
+    },
+    {
+     "key": "d",
+     "text": "No distribution until counsel has opined."
+    }
+   ],
+   "recommended_default": {
+    "option": "d",
+    "note": "Counsel decides; this work does not conclude. The default is the safe one: private candidate only."
+   },
+   "ships_meanwhile": "all family-licence code plus the third-party texts, with the family statement; private candidate only",
+   "counsel_questions": [
+    "Q4",
+    "Q5",
+    "Q6"
+   ],
+   "facts_resolved_by_lic2": "Exact AGPL 7 / 10 / Commons Clause / LICENSE.md texts compiled; the list of licences present in the 406-component notices.",
+   "package": "docs/legal/DECISION_PACKAGES.md#d-lic-3",
+   "chosen_option": null,
+   "decision_reference": null,
+   "decision_sha256": null,
+   "decided_by": null,
+   "decided_on": null,
+   "counsel_reference": null
+  },
+  {
+   "id": "D-LIC-4",
+   "title": "MPL-2.0 components: certifi cacert.pem and five statically linked crates",
+   "question": "What must accompany distribution of certifi's cacert.pem (inside both executables) and of the MPL-2.0 crates statically linked into the launcher (cssparser, cssparser-macros, dtoa-short, option-ext, selectors) to meet MPL-2.0 section 3.2, and is a source-location statement in the Licenses folder sufficient?",
+   "decides": "counsel",
+   "scope": [
+    "all"
+   ],
+   "blocks_distribution": true,
+   "status": "OPEN",
+   "options": [
+    {
+     "key": "a",
+     "text": "Ship the MPL-2.0 text (done) plus a statement of where the Source Code Form of each MPL component is (certifi: PyPI sdist sha256 035c1e85..., tag 2026.10.19 commit 39e29682; the crates: crates.io packages), worded by counsel."
+    },
+    {
+     "key": "b",
+     "text": "Replace certifi by the operating-system trust store (a behaviour change; not tested; certifi stays pinned per owner decision 6)."
+    },
+    {
+     "key": "c",
+     "text": "No distribution until counsel has worded (a)."
+    }
+   ],
+   "recommended_default": {
+    "option": "a",
+    "note": "Wording by counsel; the facts for the statement are in the decision package."
+   },
+   "ships_meanwhile": "MPL-2.0 text and each component's own file in THIRD_PARTY_NOTICES.txt; no source-form statement",
+   "counsel_questions": [
+    "Q9",
+    "Q10"
+   ],
+   "facts_resolved_by_lic2": "cacert.pem sha256 identical in wheel, embedded archive and upstream tag; five MPL crates identified; selectors' repository has no licence file (file headers carry the MPL notice).",
+   "package": "docs/legal/DECISION_PACKAGES.md#d-lic-4",
+   "chosen_option": null,
+   "decision_reference": null,
+   "decision_sha256": null,
+   "decided_by": null,
+   "decided_on": null,
+   "counsel_reference": null
+  },
+  {
+   "id": "D-LIC-5",
+   "title": "AGPL section 13 for a loopback-served UI",
+   "question": "Does AGPL section 13 ('users interacting with it remotely through a computer network') apply to the Projects UI that the sidecar serves on 127.0.0.1 of the same machine, to a mounted/tunnelled deployment of the same sidecar, or not at all to unmodified builds?",
+   "decides": "counsel",
+   "scope": [
+    "all"
+   ],
+   "blocks_distribution": true,
+   "status": "OPEN",
+   "options": [
+    {
+     "key": "a",
+     "text": "No statement in the product (only if counsel concludes section 13 is not engaged)."
+    },
+    {
+     "key": "b",
+     "text": "Add an About/Licence item to the UI that links the source location (also serves D-LIC-10)."
+    },
+    {
+     "key": "c",
+     "text": "Counsel opinion first, then (a) or (b)."
+    }
+   ],
+   "recommended_default": {
+    "option": "c",
+    "note": "Counsel first. This work does not conclude."
+   },
+   "ships_meanwhile": "no UI statement",
+   "counsel_questions": [
+    "Q11",
+    "Q12"
+   ],
+   "facts_resolved_by_lic2": "Section 13 and section 0 texts compiled; sidecar bind address and the mounted-path mode recorded (STATIC).",
+   "package": "docs/legal/DECISION_PACKAGES.md#d-lic-5",
+   "chosen_option": null,
+   "decision_reference": null,
+   "decision_sha256": null,
+   "decided_by": null,
+   "decided_on": null,
+   "counsel_reference": null
+  },
+  {
+   "id": "D-LIC-6",
+   "title": "CPython, OpenSSL, PyInstaller and statically linked libraries: notice texts and what is linked",
+   "question": "Are the texts now in THIRD_PARTY_NOTICES.txt (PSF-2.0 with the bundled-software acknowledgements, Apache-2.0 for OpenSSL 3.0.16 and 4.0.2, GPL-2.0-or-later with the Bootloader Exception for PyInstaller, libyaml/libffi/DuckDB reference notices) sufficient, given that which libraries are linked is not readable from the binaries?",
+   "decides": "owner+counsel",
+   "scope": [
+    "all"
+   ],
+   "blocks_distribution": true,
+   "status": "OPEN",
+   "options": [
+    {
+     "key": "a",
+     "text": "Accept the collected texts; record that linkage and exact versions are UNVERIFIED (counsel: Q19-Q22)."
+    },
+    {
+     "key": "b",
+     "text": "First scan the frozen archive and the extension binaries to settle what is linked (engineering work), then (a)."
+    },
+    {
+     "key": "c",
+     "text": "No distribution until (b)."
+    }
+   ],
+   "recommended_default": {
+    "option": "a",
+    "note": "With counsel's confirmation of Q19-Q22; (b) is optional hardening."
+   },
+   "ships_meanwhile": "THIRD_PARTY_NOTICES.txt including the REFERENCE NOTICES section",
+   "counsel_questions": [
+    "Q19",
+    "Q20",
+    "Q21",
+    "Q22",
+    "Q24"
+   ],
+   "facts_resolved_by_lic2": "OpenSSL has no NOTICE file at tags 3.0.16 / 4.0.2; Python 3.12.10 Windows externals (libffi 3.4.4, OpenSSL 3.0.16) read from the CPython tag; libyaml 0.2.5, libffi 3.4.4 and DuckDB v1.5.5 texts added.",
+   "package": "docs/legal/DECISION_PACKAGES.md#d-lic-6",
+   "chosen_option": null,
+   "decision_reference": null,
+   "decision_sha256": null,
+   "decided_by": null,
+   "decided_on": null,
+   "counsel_reference": null
+  },
+  {
+   "id": "D-LIC-7",
+   "title": "React and other JavaScript in the UI bundle",
+   "question": "Does the owner accept React 18.3.1 / react-dom / scheduler MIT (text now shipped) as the complete set of third-party code in the vendored UI bundle, and record the redevops-projects commit and npm lock that produced it?",
+   "decides": "owner",
+   "scope": [
+    "all"
+   ],
+   "blocks_distribution": false,
+   "status": "OPEN",
+   "options": [
+    {
+     "key": "a",
+     "text": "Accept React-only (the bundle's only @license / Copyright strings are the four React banners)."
+    },
+    {
+     "key": "b",
+     "text": "Record the redevops-projects tag/commit and npm lock and generate the UI notices from it."
+    }
+   ],
+   "recommended_default": {
+    "option": "b",
+    "note": "Cheap and removes the UNVERIFIED."
+   },
+   "ships_meanwhile": "React MIT text",
+   "counsel_questions": [
+    "Q22",
+    "Q30"
+   ],
+   "facts_resolved_by_lic2": "Bundle scanned: the only @license/Copyright strings are 4 React banners (OBSERVED).",
+   "package": "docs/legal/DECISION_PACKAGES.md#d-lic-7",
+   "chosen_option": null,
+   "decision_reference": null,
+   "decision_sha256": null,
+   "decided_by": null,
+   "decided_on": null,
+   "counsel_reference": null
+  },
+  {
+   "id": "D-LIC-8",
+   "title": "hero.jpg placeholder: provenance statement",
+   "question": "Does the owner confirm that the neutral generated placeholder (drawn by scripts/make_neutral_hero.py, no model output, no photograph) may be treated as first-party artwork under the family licence?",
+   "decides": "owner",
+   "scope": [
+    "all"
+   ],
+   "blocks_distribution": true,
+   "status": "OPEN",
+   "options": [
+    {
+     "key": "a",
+     "text": "Confirm: first-party artwork under the family licence."
+    },
+    {
+     "key": "b",
+     "text": "Supply an image whose rights the owner holds and record its provenance."
+    },
+    {
+     "key": "c",
+     "text": "Remove the image from the product."
+    }
+   ],
+   "recommended_default": {
+    "option": "a",
+    "note": "For the candidate; (b) when an asset exists."
+   },
+   "ships_meanwhile": "the neutral generated placeholder",
+   "counsel_questions": [
+    "Q28"
+   ],
+   "facts_resolved_by_lic2": "Placeholder script and test present; the original (C2PA: Black Forest Labs API) is no longer shipped.",
+   "package": "docs/legal/DECISION_PACKAGES.md#d-lic-8",
+   "chosen_option": null,
+   "decision_reference": null,
+   "decision_sha256": null,
+   "decided_by": null,
+   "decided_on": null,
+   "counsel_reference": null
+  },
+  {
+   "id": "D-LIC-9",
+   "title": "NSIS, WiX and WebView2 notices (Windows installers)",
+   "question": "What notices must the Windows installers (NSIS .exe with LZMA compression by default, WiX MSI) carry for the installer-tool code that ends up inside them, and is the Microsoft Edge WebView2 bootstrapper (downloaded at install time) outside the redistribution?",
+   "decides": "owner+counsel",
+   "scope": [
+    "windows"
+   ],
+   "blocks_distribution": true,
+   "status": "OPEN",
+   "options": [
+    {
+     "key": "a",
+     "text": "Counsel reads the NSIS (zlib/libpng, bzip2, CPL-1.0 for LZMA) and WiX (MS-RL) texts and states the notice set; WebView2 terms read."
+    },
+    {
+     "key": "b",
+     "text": "Build the NSIS installer with a non-LZMA compressor, if counsel finds the CPL-1.0 section 3 obligations undesirable (engineering change, untested)."
+    },
+    {
+     "key": "c",
+     "text": "No Windows distribution."
+    }
+   ],
+   "recommended_default": {
+    "option": "a",
+    "note": "Before a Windows distribution. macOS is not affected."
+   },
+   "ships_meanwhile": "crate texts; NSIS/WiX texts now in the Windows notices; no Windows build exists yet",
+   "counsel_questions": [
+    "Q27"
+   ],
+   "facts_resolved_by_lic2": "NSIS COPYING and WiX LICENSE.TXT fetched; tauri-bundler 2.10.4 source read (NSIS 3.13, LZMA default, WiX 3.14.1).",
+   "package": "docs/legal/DECISION_PACKAGES.md#d-lic-9",
+   "chosen_option": null,
+   "decision_reference": null,
+   "decision_sha256": null,
+   "decided_by": null,
+   "decided_on": null,
+   "counsel_reference": null
+  },
+  {
+   "id": "D-LIC-10",
+   "title": "Licence acceptance pages and Appropriate Legal Notices in the interactive UI",
+   "question": "Does AGPL section 5(d) require the launcher and the Projects UI to display Appropriate Legal Notices, and is an installer acceptance page wanted (section 9: acceptance is not required to receive or run a copy)?",
+   "decides": "owner+counsel",
+   "scope": [
+    "all"
+   ],
+   "blocks_distribution": true,
+   "status": "OPEN",
+   "options": [
+    {
+     "key": "a",
+     "text": "Files only (Licenses/ folder); no acceptance page; no UI notice."
+    },
+    {
+     "key": "b",
+     "text": "Add a short notice file as the installer licenseFile (acceptance step on every installer)."
+    },
+    {
+     "key": "c",
+     "text": "Add an About/Licence entry (copyright, no-warranty, conveyance, how to view the licence) to the launcher or Projects UI."
+    }
+   ],
+   "recommended_default": {
+    "option": "c",
+    "note": "Counsel confirms; (c) also answers D-LIC-5(b)."
+   },
+   "ships_meanwhile": "Licenses/ folder only",
+   "counsel_questions": [
+    "Q17",
+    "Q18"
+   ],
+   "facts_resolved_by_lic2": "Section 5(d) and section 0 texts compiled; UI shows no licence statement (OBSERVED).",
+   "package": "docs/legal/DECISION_PACKAGES.md#d-lic-10",
+   "chosen_option": null,
+   "decision_reference": null,
+   "decision_sha256": null,
+   "decided_by": null,
+   "decided_on": null,
+   "counsel_reference": null
+  },
+  {
+   "id": "D-LIC-11",
+   "title": "Launcher icons and the 'Re' mark",
+   "question": "Does the owner confirm that icons/* are first-party artwork under the family licence (matrix NAT-AS-icons: authorship/rights not recorded)?",
+   "decides": "owner",
+   "scope": [
+    "all"
+   ],
+   "blocks_distribution": true,
+   "status": "OPEN",
+   "options": [
+    {
+     "key": "a",
+     "text": "Confirm first-party artwork under the family licence."
+    },
+    {
+     "key": "b",
+     "text": "Exclude the icons from the licence statement and record their actual terms."
+    }
+   ],
+   "recommended_default": {
+    "option": "a",
+    "note": "Owner fact."
+   },
+   "ships_meanwhile": "as before; LICENSING.md section 4 does not list the icons as covered",
+   "counsel_questions": [
+    "Q29"
+   ],
+   "facts_resolved_by_lic2": "None: authorship is not discoverable from the files.",
+   "package": "docs/legal/DECISION_PACKAGES.md#d-lic-11",
+   "chosen_option": null,
+   "decision_reference": null,
+   "decision_sha256": null,
+   "decided_by": null,
+   "decided_on": null,
+   "counsel_reference": null
+  },
+  {
+   "id": "D-LIC-12",
+   "title": "Source availability for the object code (AGPL section 6)",
+   "question": "Which of AGPL section 6(a)-(e) does the owner choose for the dmg/MSI/NSIS downloads, and what does the artifact carry (an accompanying source archive, a written offer, or network access naming repository, commit and tags)?",
+   "decides": "owner+counsel",
+   "scope": [
+    "all"
+   ],
+   "blocks_distribution": true,
+   "status": "OPEN",
+   "options": [
+    {
+     "key": "a",
+     "text": "6(a): ship a machine-readable Corresponding Source archive next to each installer (first-party commit, sibling packages at their pins, third-party sources by reference or copy). No hosting dependency."
+    },
+    {
+     "key": "b",
+     "text": "6(b): a written offer valid for the period the text prescribes (counsel words it; a copy is in the artifact)."
+    },
+    {
+     "key": "c",
+     "text": "6(d): network access to the Corresponding Source from the same place (repository, commit and tags named; requires the R0-prime commit to be public: pins-04)."
+    },
+    {
+     "key": "d",
+     "text": "Counsel chooses."
+    }
+   ],
+   "recommended_default": {
+    "option": "d",
+    "note": "Counsel chooses; engineering can produce (a) from the build inputs."
+   },
+   "ships_meanwhile": "repository pointer in LICENSING.md only; SOURCE-OFFER.md is NOT inside the .app or dmg (OBSERVED: 0 listings)",
+   "counsel_questions": [
+    "Q13",
+    "Q14",
+    "Q16"
+   ],
+   "facts_resolved_by_lic2": "Section 6 and section 1 texts compiled; contents of the candidate checked: no source, no offer inside the app or dmg.",
+   "package": "docs/legal/DECISION_PACKAGES.md#d-lic-12",
+   "chosen_option": null,
+   "decision_reference": null,
+   "decision_sha256": null,
+   "decided_by": null,
+   "decided_on": null,
+   "counsel_reference": null
+  },
+  {
+   "id": "D-LIC-13",
+   "title": "Components whose package holds no licence file: accept the per-item evidence table",
+   "question": "Does the owner accept the per-item evidence table of docs/legal/DECISION_PACKAGES.md (r-efi AUTHORS, objc2 family, selectors, alloc-stdlib, webview2-com*, libyaml, libffi, DuckDB tree) as the notice set, with the UNVERIFIED notes?",
+   "decides": "owner",
+   "scope": [
+    "all"
+   ],
+   "blocks_distribution": true,
+   "status": "OPEN",
+   "options": [
+    {
+     "key": "a",
+     "text": "Accept the table; record the elections (r-efi, self_cell, unicode-ident) in the notices."
+    },
+    {
+     "key": "b",
+     "text": "Ask the upstream projects for licence files and wait."
+    },
+    {
+     "key": "c",
+     "text": "Replace or exclude any item the owner does not accept (not possible for the Tauri/objc2 stack on macOS)."
+    }
+   ],
+   "recommended_default": {
+    "option": "a",
+    "note": "Most items are now resolved by fact; the only component still without any text is redevops-connectors (D-LIC-2)."
+   },
+   "ships_meanwhile": "all texts found are printed; NOTICES_MISSING lists redevops-connectors only",
+   "counsel_questions": [
+    "Q23",
+    "Q24"
+   ],
+   "facts_resolved_by_lic2": "r-efi: AUTHORS verbatim (package and upstream tag identical); objc2 family: standard texts from a later upstream commit; selectors: no upstream licence file at the packaged commit (OBSERVED); webview2-com*/alloc-stdlib: upstream LICENSE at packaged commits.",
+   "package": "docs/legal/DECISION_PACKAGES.md#d-lic-13",
+   "chosen_option": null,
+   "decision_reference": null,
+   "decision_sha256": null,
+   "decided_by": null,
+   "decided_on": null,
+   "counsel_reference": null
+  },
+  {
+   "id": "D-LIC-14",
+   "title": "Removal of knowledge-frontier from the frozen sidecar",
+   "question": "Does the owner keep knowledge-frontier excluded from the frozen sidecar?",
+   "decides": "owner",
+   "scope": [
+    "all"
+   ],
+   "blocks_distribution": false,
+   "status": "OPEN",
+   "options": [
+    {
+     "key": "a",
+     "text": "Keep excluded (default)."
+    },
+    {
+     "key": "b",
+     "text": "Restore it once D-LIC-2 is decided for it."
+    }
+   ],
+   "recommended_default": {
+    "option": "a",
+    "note": "Excluded is the safe state."
+   },
+   "ships_meanwhile": "excluded",
+   "counsel_questions": [],
+   "facts_resolved_by_lic2": "Proven earlier (blocked-import and frozen runs); knowledge-frontier v0.2.0 exists since 2026-09-23, still without a licence file at the tag.",
+   "package": "docs/legal/DECISION_PACKAGES.md#d-lic-14",
+   "chosen_option": null,
+   "decision_reference": null,
+   "decision_sha256": null,
+   "decided_by": null,
+   "decided_on": null,
+   "counsel_reference": null
+  },
+  {
+   "id": "D-LIC-15",
+   "title": "Shipped text that calls the product 'open source'",
+   "question": "Does the owner change agentic_os/world/outreach.py ('an open-source runtime stack') to the family wording?",
+   "decides": "owner",
+   "scope": [
+    "all"
+   ],
+   "blocks_distribution": true,
+   "status": "OPEN",
+   "options": [
+    {
+     "key": "a",
+     "text": "Change the template to 'source-available (family licence: AGPL-3.0-or-later with the Commons Clause)'."
+    },
+    {
+     "key": "b",
+     "text": "Leave it."
+    }
+   ],
+   "recommended_default": {
+    "option": "a",
+    "note": "The owner's own wording rule."
+   },
+   "ships_meanwhile": "unchanged",
+   "counsel_questions": [
+    "Q31"
+   ],
+   "facts_resolved_by_lic2": "None.",
+   "package": "docs/legal/DECISION_PACKAGES.md#d-lic-15",
+   "chosen_option": null,
+   "decision_reference": null,
+   "decision_sha256": null,
+   "decided_by": null,
+   "decided_on": null,
+   "counsel_reference": null
+  },
+  {
+   "id": "D-LIC-16",
+   "title": "QA bundle (redevops-qa): hand-off",
+   "question": "Which of the QA bundle's open items does the owner decide before any distribution of that bundle (report.css HTML Dog tab styles, tablesorter election, declared-only items, plain-AGPL agent-harness)?",
+   "decides": "owner+counsel",
+   "scope": [
+    "qa"
+   ],
+   "blocks_distribution": true,
+   "status": "OPEN",
+   "options": [
+    {
+     "key": "a",
+     "text": "Decide each item in redevops-qa per docs/legal/QA_BUNDLE_HANDOFF.md."
+    },
+    {
+     "key": "b",
+     "text": "Do not distribute the QA bundle."
+    }
+   ],
+   "recommended_default": {
+    "option": "b",
+    "note": "Separate repository; nothing is changed here."
+   },
+   "ships_meanwhile": "QA bundle untouched",
+   "counsel_questions": [
+    "Q32"
+   ],
+   "facts_resolved_by_lic2": "Matrix rows and the HTML Dog terms page (unchanged, sha256 6cd966ba...) re-read.",
+   "package": "docs/legal/DECISION_PACKAGES.md#d-lic-16",
+   "chosen_option": null,
+   "decision_reference": null,
+   "decision_sha256": null,
+   "decided_by": null,
+   "decided_on": null,
+   "counsel_reference": null
+  },
+  {
+   "id": "D-LIC-17",
+   "title": "Shipped-but-unexercised components",
+   "question": "Does the owner accept the engineering resolution: setuptools, packaging and _distutils_hack left out of the frozen binary (proven); pycparser not in the archive; duckdb kept (documented durable ledger backend)?",
+   "decides": "owner",
+   "scope": [
+    "all"
+   ],
+   "blocks_distribution": false,
+   "status": "OPEN",
+   "options": [
+    {
+     "key": "a",
+     "text": "Accept (the exclude commit is on r0prime/lic2)."
+    },
+    {
+     "key": "b",
+     "text": "Also drop duckdb (behaviour change: no durable single-node backend)."
+    }
+   ],
+   "recommended_default": {
+    "option": "a",
+    "note": "No behaviour change."
+   },
+   "ships_meanwhile": "(after merge) setuptools/packaging/_distutils_hack not shipped; duckdb kept",
+   "counsel_questions": [],
+   "facts_resolved_by_lic2": "Frozen baseline vs excluded: 63/63 smoke, locales 8/8, lifecycle PASS, bootstrap byte-identical.",
+   "package": "docs/legal/DECISION_PACKAGES.md#d-lic-17",
+   "chosen_option": null,
+   "decision_reference": null,
+   "decision_sha256": null,
+   "decided_by": null,
+   "decided_on": null,
+   "counsel_reference": null
+  },
+  {
+   "id": "D-LIC-18",
+   "title": "objc2 crate family: derived from Apple SDKs",
+   "question": "Does distributing a macOS launcher that links crates which their repository says are 'derived from Apple SDKs shipped with Xcode' (and about which it says 'it is unclear whether distributing derived works such as these crates are allowed') raise obligations under the Xcode and Apple SDKs Agreement?",
+   "decides": "owner+counsel",
+   "scope": [
+    "macos"
+   ],
+   "blocks_distribution": true,
+   "status": "OPEN",
+   "options": [
+    {
+     "key": "a",
+     "text": "Accept the upstream statement and the crates' declared licences; record the question as accepted risk."
+    },
+    {
+     "key": "b",
+     "text": "Counsel reads the Xcode and Apple SDKs Agreement (excerpts in docs/legal/sources) before any macOS distribution."
+    },
+    {
+     "key": "c",
+     "text": "Replace the dependency (not possible without leaving Tauri on macOS)."
+    }
+   ],
+   "recommended_default": {
+    "option": "b",
+    "note": "Counsel before any macOS distribution."
+   },
+   "ships_meanwhile": "LICENSE.md of upstream shown with the standard texts; the Apple SDK question is open",
+   "counsel_questions": [
+    "Q25"
+   ],
+   "facts_resolved_by_lic2": "Crates' own statements quoted; standard MIT/Zlib/Apache texts found at a later upstream commit; Xcode agreement sections 2.4, 2.5, 2.7 excerpted.",
+   "package": "docs/legal/DECISION_PACKAGES.md#d-lic-18",
+   "chosen_option": null,
+   "decision_reference": null,
+   "decision_sha256": null,
+   "decided_by": null,
+   "decided_on": null,
+   "counsel_reference": null
+  },
+  {
+   "id": "pins-03",
+   "title": "Commons Clause and the content of a source offer",
+   "question": "What must a source offer contain and how long must it last; does the Commons Clause restrict what a recipient may do with offered source and must the offer say so; how does the offer treat third-party copyleft components in the same product?",
+   "decides": "counsel",
+   "scope": [
+    "all"
+   ],
+   "blocks_distribution": true,
+   "status": "OPEN",
+   "options": [
+    {
+     "key": "a",
+     "text": "Counsel words the offer (packaging/SOURCE-OFFER.md has a bracketed placeholder for it)."
+    },
+    {
+     "key": "b",
+     "text": "No distribution until (a)."
+    }
+   ],
+   "recommended_default": {
+    "option": "a",
+    "note": "Counsel."
+   },
+   "ships_meanwhile": "SOURCE-OFFER.md template only, not inside the artifacts",
+   "counsel_questions": [
+    "Q15",
+    "Q16"
+   ],
+   "facts_resolved_by_lic2": "Section 6(b) and Commons Clause texts compiled.",
+   "package": "docs/legal/DECISION_PACKAGES.md#pins-03",
+   "chosen_option": null,
+   "decision_reference": null,
+   "decision_sha256": null,
+   "decided_by": null,
+   "decided_on": null,
+   "counsel_reference": null
+  },
+  {
+   "id": "pins-04",
+   "title": "The exact R0-prime commit must exist publicly before it is referenced",
+   "question": "Does the owner publish the exact R0-prime commit (branch, tag or release) that the source reference names, before any binary is distributed?",
+   "decides": "owner",
+   "scope": [
+    "all"
+   ],
+   "blocks_distribution": true,
+   "status": "OPEN",
+   "options": [
+    {
+     "key": "a",
+     "text": "Publish the commit and tag it (needs push authorization, not granted to any agent)."
+    },
+    {
+     "key": "b",
+     "text": "Reference a different public form of the source (counsel)."
+    }
+   ],
+   "recommended_default": {
+    "option": "a",
+    "note": "Owner action after push authorization."
+   },
+   "ships_meanwhile": "nothing is published; the references are to a local commit",
+   "counsel_questions": [
+    "Q16"
+   ],
+   "facts_resolved_by_lic2": "Public repository has v0.3.2 -> feeca065 and no R0-prime commit (OBSERVED, pins-04).",
+   "package": "docs/legal/DECISION_PACKAGES.md#pins-04",
+   "chosen_option": null,
+   "decision_reference": null,
+   "decision_sha256": null,
+   "decided_by": null,
+   "decided_on": null,
+   "counsel_reference": null
+  },
+  {
+   "id": "pins-08",
+   "title": "Microsoft redistributable DLLs in the Windows sidecar (VCRUNTIME140*, ucrtbase, api-ms-win-*)",
+   "question": "Which Microsoft terms govern the copies of VCRUNTIME140.dll, VCRUNTIME140_1.dll, ucrtbase.dll and the 50 api-ms-win-* DLLs inside the Windows sidecar, and what notice or change does counsel require?",
+   "decides": "counsel",
+   "scope": [
+    "windows"
+   ],
+   "blocks_distribution": true,
+   "status": "OPEN",
+   "options": [
+    {
+     "key": "a",
+     "text": "Counsel reads the two Microsoft regimes (Visual Studio 'Distributable Code' versus the 'Visual C++ 2015-2022 Runtime' licence) and states the notice set."
+    },
+    {
+     "key": "b",
+     "text": "Engineering: build the Windows sidecar without the app-local UCRT DLLs (Microsoft documents that on Windows 10 and 11 the system UCRT is always used); needs a Windows test; not done."
+    },
+    {
+     "key": "c",
+     "text": "Require the Visual C++ Redistributable as an installer prerequisite (central deployment); counsel checks that the 'combined with any of your applications' clause permits the way it is provided."
+    },
+    {
+     "key": "d",
+     "text": "Distribute macOS only until counsel has answered."
+    }
+   ],
+   "recommended_default": {
+    "option": "d",
+    "note": "With counsel on (a)."
+   },
+   "ships_meanwhile": "Windows build does not exist yet; no text shipped for these files",
+   "counsel_questions": [
+    "Q26"
+   ],
+   "facts_resolved_by_lic2": "Microsoft pages and the Visual C++ 2015-2022 Runtime licence read 2026-11-04 (excerpts in docs/legal/sources); the Visual Studio licence 'Distributable Code' section could not be captured (UNVERIFIED).",
+   "package": "docs/legal/DECISION_PACKAGES.md#pins-08",
+   "chosen_option": null,
+   "decision_reference": null,
+   "decision_sha256": null,
+   "decided_by": null,
+   "decided_on": null,
+   "counsel_reference": null
+  }
+ ]
+}

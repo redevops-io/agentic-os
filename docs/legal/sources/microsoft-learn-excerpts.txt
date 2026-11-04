@@ -1,0 +1,58 @@
+Excerpts (verbatim lines) of Microsoft documentation pages, cut mechanically from text extracted from the fetched HTML.
+Not legal advice; not a statement about which terms govern any file.
+
+### Redistribute Visual C++ files
+URL: https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files?view=msvc-170
+page ms.date: 2026-04-13T00:00:00Z; retrieved 2026-11-04; sha256 of the HTML as fetched: 58d459061c654868c033d60929501ea089b6f53d0bab017b14d2855c7aaa2a6a
+
+Redistributable files and licensing
+Distribution of the Visual C++ Runtime Redistributable package, merge modules, and individual binaries is limited to licensed Visual Studio users and is subject to Microsoft Software License Terms.
+When you deploy an application, you must also deploy the files that are required to support it. If Microsoft provides any of these files, check whether you're permitted to redistribute them. You can find a link to the Visual Studio license terms in the IDE. In the About Microsoft Visual Studio dialog, select the License Terms link. You can also download the relevant Microsoft Software License Terms and licenses from the Visual Studio License Directory.
+To view the "REDIST list" that's referenced in the "Distributable Code" section of the Visual Studio 2022 Microsoft Software License Terms, see Distributable code files for Microsoft Visual Studio 2022.
+To view the "REDIST list" that's referenced in the "Distributable Code" section of the Visual Studio 2019 Microsoft Software License Terms, see Distributable code files for Microsoft Visual Studio 2019.
+To view the "REDIST list" that's referenced in the "Distributable Code" section of the Visual Studio 2017 Microsoft Software License Terms, see Distributable code files for Microsoft Visual Studio 2017.
+To view the "REDIST list" that's referenced in the "Distributable Code" section of the Visual Studio 2015 Microsoft Software License Terms, see Distributable code files for Microsoft Visual Studio 2015.
+For more information about redistributable files, see Determine which dynamic-link libraries (DLLs) to redistribute and Deployment examples.
+
+Install individual redistributable files
+It's also possible to directly install the Redistributable DLLs in the application local folder. The application local folder is the folder that contains your executable application file. For servicing reasons, we don't recommend that you use this installation location.
+Potential runtime errors
+
+
+### Determine which DLLs to redistribute
+URL: https://learn.microsoft.com/en-us/cpp/windows/determining-which-dlls-to-redistribute?view=msvc-170
+page ms.date: 2022-06-28T00:00:00Z; retrieved 2026-11-04; sha256 of the HTML as fetched: 764def38381567c1e9d0df4b78839b590f7f46fd1215e91bf7e34eb76d1e01c3
+
+Use the latest version of any library DLL file, Redistributable package, or merge module found in these directories. You may use these libraries for local deployment, by installing them in the same directory as your application. We don't recommend local deployment because it makes you responsible for delivering updates to your deployed applications. Central deployment by using the Redistributable packages is preferred.
+
+In Visual Studio versions before Visual Studio 2015, the C Runtime Library (CRT) was included as a Redistributable DLL, in msvc[version].dll. In Visual Studio 2015, the functions in the CRT were refactored into the vcruntime and the UCRT. The UCRT is now a system component in Windows 10 and later, managed by Windows Update. It's available on all Windows 10 and later operating systems. To deploy your application to earlier operating systems, you may need to redistribute the UCRT as well. An early version of the UCRT is included in the Visual Studio Redistributable files. This version is only installed on operating systems earlier than Windows 10, and only if no version of the UCRT is already installed. For an installable version of the UCRT for downlevel systems as a Microsoft System Update package, see Windows 10 Universal C Runtime in the Microsoft Download Center.
+
+You can't redistribute all of the files that are included in Visual Studio. You're only permitted to redistribute the files that are specified in Redist.txt or the online "REDIST list." You also can't redistribute debug versions of your applications, or the debug versions of DLLs or libraries supplied by Microsoft. You may only copy debug executables and libraries to machines you use for testing. For more information, see Choosing a deployment method.
+
+
+### Universal CRT deployment
+URL: https://learn.microsoft.com/en-us/cpp/windows/universal-crt-deployment?view=msvc-170
+page ms.date: 2022-02-07T00:00:00Z; retrieved 2026-11-04; sha256 of the HTML as fetched: 4174f1c2527d5340c9fc001381d6668ebb3467e7aab7a8fdbcbd3fdc3eaf01aa
+
+Central deployment
+The preferred method to centrally install the Universal CRT is to use Microsoft Windows Update. The Universal CRT is a Recommended update for all supported Microsoft Windows operating systems, so by default, most machines install it as part of the regular update process. The initial release of the Universal CRT was KB2999226. A later update with various bug fixes was made in KB3118401, and there have been more updates with further bug fixes and new features. For more recent updates, search support.microsoft.com for "Universal C Runtime" or "Universal CRT".
+Not all Microsoft Windows computers regularly install updates by use of Windows Update, and some may not install all Recommended updates. To support the use of applications built by using the Visual Studio 2015 and later C++ toolsets on those machines, there are Universal CRT Redistributable files available for offline distribution. Those redistributable files may be downloaded from one of the KB links above. The Universal CRT Redistributable requires that the machine has been updated to the current service pack. So, for example, the redistributable for Windows 7 will only install onto Windows 7 SP1, not Windows 7 RTM.
+The Universal CRT is a fundamental dependency of the C++ libraries. The Visual C++ Redistributable (VCRedist) installs the initial version of the Universal CRT (version 10.0.10240) on machines that don't already have one installed. This version is sufficient to satisfy the C++ library dependencies. If your application depends on a more recent version of the Universal CRT, you must use Windows Update to bring your machine fully up to date. Or, install that version of the UCRT explicitly. It's best to install the Universal C Runtime by using Windows Update or an MSU before you install the VCRedist. This installation order can help avoid multiple required reboots.
+
+Local deployment
+Local deployment of the Universal CRT is supported, but not recommended for both performance and security reasons. The DLLs for local deployment are included as part of the Windows SDK, in the Windows Kits\10\Redist\ucrt\DLLs subdirectory, by computer architecture. The DLLs required include ucrtbase.dll and a set of APISet forwarder DLLs named api-ms-win-*.dll. The set of DLLs required on each operating system varies. It's highly recommended that you include all of the DLLs when you deploy locally.
+There are two restrictions on local deployment to be aware of:
+On Windows 10 and Windows 11, the Universal CRT in the system directory is always used, even if an application includes an application-local copy of the Universal CRT. It's true even when the local copy is newer, because the Universal CRT is a core operating system component on Windows 10 and later.
+Versions of Windows before Windows 8: The Universal CRT can't be packaged locally with a plugin, if it's located anywhere but the main app executable directory. The APISet forwarder DLLs are unable to resolve the ucrtbase.dll successfully in this case. Some recommended alternative solutions include:
+Statically link the Universal CRT,
+Centrally deploy the Universal CRT, or
+Place the Universal CRT files in the same directory as the app.
+
+
+### Visual Studio 2022 Redistribution
+URL: https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution
+page ms.date: 2025-11-11T00:00:00Z; retrieved 2026-11-04; sha256 of the HTML as fetched: 5d0f481ac457e18abb4a7482433c7b52361a5110ece7dbab52b9baa960026ff9
+
+Subject to the License Terms for the software, you may copy and distribute with your program any of the files within the following folder and its subfolders except as noted below. You may not modify these files.
+
+The same Visual C++ Runtime Redistributable package is available from Latest supported Visual C++ Redistributable downloads and Download Visual Studio Tools. Distribution of the Visual C++ Runtime Redistributable package, merge modules, and individual binaries obtained from those pages is limited to licensed Visual Studio users and is subject to its license terms.

@@ -19,6 +19,12 @@ hidden = collect_submodules("agentic_os") + collect_submodules("uvicorn") + [
 # import without it.
 UNEXERCISED = ("knowledge_frontier", "agentic_os.knowledge_frontier", "agentic_os.knowledge_frontier_backtest")
 hidden = [h for h in hidden if h not in UNEXERCISED]
+# Build-tool leftovers ([OWNER DECISION D-LIC-17]): PyInstaller's own `pyi_rth_setuptools` runtime hook pulls setuptools
+# (130 modules, with its vendored jaraco.* / backports.* / wheel), `_distutils_hack` and `packaging` into the archive
+# because setuptools sits in the freeze venv as a PyInstaller dependency. No first-party or shipped third-party module
+# imports them (AST scan + frozen run: tests/test_sidecar_build_only_excludes.py), none of the three is in the shipped
+# wheel lock, and none has a licence text in the notices. Leaving them out changes no behaviour.
+BUILD_ONLY = ("setuptools", "pkg_resources", "_distutils_hack", "packaging")
 for opt in ("redevops_connectors", "duckdb"):
     try:
         hidden += collect_submodules(opt)
@@ -44,7 +50,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter", "matplotlib", "redevops_rag", "sentence_transformers", "torch", *UNEXERCISED],
+    excludes=["tkinter", "matplotlib", "redevops_rag", "sentence_transformers", "torch", *UNEXERCISED, *BUILD_ONLY],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

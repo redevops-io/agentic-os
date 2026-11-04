@@ -195,6 +195,10 @@ def resolve(comp: dict, entries: dict, site_dirs, crate_dirs, texts_dir: Path) -
             reasons.append("crate source directory not found under --crates-dir")
         else:
             fs = licence_files_in(d)
+            for extra in entry.get("package_files", []):     # licence statements in a non-standard file of the package
+                ep = d / extra
+                if ep.is_file() and ep not in fs:
+                    fs.append(ep)
             files += [(f"{d.name}/{f.relative_to(d).as_posix()}", f, kind_of(f)) for f in fs]
             if not fs:
                 reasons.append("crate package holds no LICENSE/COPYING/NOTICE file")
@@ -234,7 +238,7 @@ def resolve(comp: dict, entries: dict, site_dirs, crate_dirs, texts_dir: Path) -
     }
 
 
-def render(records: list[dict], title: str, sbom_digest: str) -> str:
+def render(records: list[dict], title: str, sbom_digest: str, refs: list[dict] | None = None) -> str:
     out = []
     w = out.append
     w(f"THIRD-PARTY NOTICES - {title}")
@@ -282,7 +286,72 @@ def render(records: list[dict], title: str, sbom_digest: str) -> str:
             w("")
             w(read_text(f["_path"]).rstrip("\n"))
         w("")
+    out.extend(render_reference(refs or [], printed))
     return "\n".join(out) + "\n"
+
+
+def sbom_limitations(sbom: Path) -> set[str]:
+    """Ids (e.g. 'L-LIBYAML') of the `redevops:limitation:<id>` properties of the SBOM's metadata."""
+    doc = json.loads(sbom.read_text(encoding="utf-8"))
+    out = set()
+    for p in (doc.get("metadata") or {}).get("properties") or []:
+        n = p.get("name", "")
+        if n.startswith("redevops:limitation:"):
+            out.add(n[len("redevops:limitation:"):])
+    return out
+
+
+def resolve_reference_notices(refs: list[dict], limitations: set[str], texts_dir: Path) -> list[dict]:
+    """Texts for libraries that the SBOM can only name as a LIMITATION (linked in, not enumerable from the binary)."""
+    out = []
+    for r in refs:
+        if r.get("limitation") not in limitations:
+            continue
+        files, reasons = [], []
+        for t in r.get("texts", []):
+            p = texts_dir / t
+            if p.is_file():
+                files.append({"label": f"texts/{t}", "kind": "licence", "sha256": sha256(p.read_bytes()),
+                              "bytes": p.stat().st_size, "_path": p})
+            else:
+                raise SystemExit(f"reference notice {r['id']}: text file texts/{t} named in components.json is missing")
+        out.append({"id": r["id"], "limitation": r["limitation"], "title": r["title"], "declared": r.get("declared", ""),
+                    "decision": r.get("decision", ""), "note": r.get("note", ""), "unverified": r.get("unverified", ""),
+                    "status": "text-found" if files and not reasons else "text-not-found", "reasons": reasons,
+                    "files": files})
+    return out
+
+
+def render_reference(refs: list[dict], printed: dict[str, str]) -> list[str]:
+    if not refs:
+        return []
+    out = ["=" * 72, "REFERENCE NOTICES", "-" * 72,
+           "The texts below belong to libraries that the SBOM can only name as a LIMITATION: they are linked into a",
+           "shipped binary (or are part of the interpreter build) but their presence and version cannot be read from",
+           "the binary. Each text is the upstream text of the version named in its note; whether that exact version is",
+           "the one linked is UNVERIFIED unless stated. A text listed here is not a statement that the library is",
+           "cleared. Items without a text are listed in NOTICES_MISSING.md.", ""]
+    for i, r in enumerate(refs, 1):
+        out.append("=" * 72)
+        out.append(f"[R{i:02d}] {r['title']}")
+        out.append(f"Declared licence: {r['declared'] or '(not recorded)'}   Register item: {r['decision'] or '-'}   SBOM limitation: {r['limitation']}")
+        if r["note"]:
+            out.append(f"Note: {r['note']}")
+        if r["unverified"]:
+            out.append(f"UNVERIFIED: {r['unverified']}")
+        for reason in r["reasons"]:
+            out.append(f"TEXT NOT FOUND: {reason}")
+        for f in r["files"]:
+            out.append("-" * 72)
+            out.append(f"File: {f['label']}")
+            if f["sha256"] in printed:
+                out.append(f"(identical to the text printed under {printed[f['sha256']]})")
+                continue
+            printed[f["sha256"]] = f"[R{i:02d}] {r['title']}, file {f['label']}"
+            out.append("")
+            out.append(read_text(f["_path"]).rstrip("\n"))
+        out.append("")
+    return out
 
 
 def missing_md(missing: list[dict]) -> str:
@@ -307,13 +376,17 @@ def run(sbom: Path, site_dirs, crate_dirs, texts_dir: Path, components: Path | N
             entries[f"generic:{norm(sc['name'])}"] = {
                 k: sc[k] for k in ("texts", "declared", "decision", "note", "unverified", "missing_reason")
                 if k in sc}
+    ref_defs = []
+    if components and components.is_file():
+        ref_defs = list(json.loads(components.read_text(encoding="utf-8")).get("reference_notices", []))
+    refs = resolve_reference_notices(ref_defs, sbom_limitations(sbom), texts_dir)
     comps = [c for c in load_components(sbom) if norm(c["name"]) not in {norm(e) for e in exclude}]
     records = [resolve(c, entries, site_dirs, crate_dirs, texts_dir) for c in comps]
     missing = [r for r in records if r["status"] == "text-not-found"]
     not_third_party = [r for r in records if r["status"] == "not-third-party"]
     out.mkdir(parents=True, exist_ok=True)
     digest = sha256(sbom.read_bytes())
-    (out / "THIRD_PARTY_NOTICES.txt").write_text(render(records, title, digest), encoding="utf-8", newline="\n")
+    (out / "THIRD_PARTY_NOTICES.txt").write_text(render(records, title, digest, refs), encoding="utf-8", newline="\n")
     clean = lambda r: {k: v for k, v in r.items() if k != "files"} | {
         "files": [{k: v for k, v in f.items() if k != "_path"} for f in r["files"]]}
     (out / "NOTICES_MISSING.json").write_text(
@@ -323,6 +396,7 @@ def run(sbom: Path, site_dirs, crate_dirs, texts_dir: Path, components: Path | N
         {"sbom_sha256": digest, "generator_version": GENERATOR_VERSION, "components": len(records),
          "text_found": len(records) - len(missing) - len(not_third_party), "text_not_found": len(missing),
          "not_third_party": len(not_third_party),
+         "reference_notices": [clean(r) for r in refs],
          "records": [clean(r) for r in records]}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return records, missing
 

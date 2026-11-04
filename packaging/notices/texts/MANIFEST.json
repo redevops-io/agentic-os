@@ -3,17 +3,29 @@
   "retrieved": "2026-11-04",
   "note": "Reference texts fetched from the upstream projects. Presence here is not a clearance.",
   "files": {
+    "CPython-3.12.10-Doc-license.rst": {
+      "source": "https://raw.githubusercontent.com/python/cpython/v3.12.10/Doc/license.rst",
+      "description": "CPython documentation page 'History and License' with 'Licenses and Acknowledgements for Incorporated Software' (expat, zlib, libmpdec, bz2/xz etc.). reStructuredText as published; which of these libraries the shipped python.org-style build links was not traced (UNVERIFIED)",
+      "sha256": "341832873fd316a37927e79385093fbbfd40a467428480835fe435a80cadf4e5",
+      "bytes": 54130
+    },
     "CPython-3.12.10-LICENSE.txt": {
       "source": "https://raw.githubusercontent.com/python/cpython/v3.12.10/LICENSE",
       "description": "CPython 3.12.10 LICENSE (PSF License Agreement and predecessors' agreements), tag v3.12.10; sha256 prefix equals the lib/python3.12/LICENSE.txt of the uv-managed CPython 3.12.10 used as build interpreter",
       "sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf",
       "bytes": 13936
     },
-    "CPython-3.12.10-Doc-license.rst": {
-      "source": "https://raw.githubusercontent.com/python/cpython/v3.12.10/Doc/license.rst",
-      "description": "CPython documentation page 'History and License' with 'Licenses and Acknowledgements for Incorporated Software' (expat, zlib, libmpdec, bz2/xz etc.). reStructuredText as published; which of these libraries the shipped python.org-style build links was not traced (UNVERIFIED)",
-      "sha256": "341832873fd316a37927e79385093fbbfd40a467428480835fe435a80cadf4e5",
-      "bytes": 54130
+    "MPL-2.0.txt": {
+      "source": "https://www.mozilla.org/media/MPL/2.0/index.txt",
+      "description": "Mozilla Public License Version 2.0 as published by the Mozilla Foundation (plain text). certifi's wheel carries only the MPL notice header (989 bytes), not this text",
+      "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+      "bytes": 16726
+    },
+    "NSIS-trunk-COPYING.txt": {
+      "source": "https://sourceforge.net/p/nsis/code/HEAD/tree/NSIS/trunk/COPYING?format=raw",
+      "description": "NSIS COPYING (HEAD of the NSIS trunk on 2026-11-04: zlib/libpng for the stub and plug-ins, bzip2 licence, Common Public License 1.0 for the LZMA module). tauri-bundler 2.10.4 downloads NSIS 3.13 and defaults to LZMA compression; the NSIS version and compression used for any installer are UNVERIFIED (no Windows build exists)",
+      "sha256": "6cc665347be5c84b76bf0fd6f85fbb0c33261e89b3408aa3e3e55dbe95e12d89",
+      "bytes": 15488
     },
     "OpenSSL-LICENSE.txt": {
       "source": "https://raw.githubusercontent.com/openssl/openssl/openssl-3.0.16/LICENSE.txt",
@@ -33,11 +45,245 @@
       "sha256": "52412d7bc7ce4157ea628bbaacb8829e0a9cb3c58f57f99176126bc8cf2bfc85",
       "bytes": 1086
     },
-    "MPL-2.0.txt": {
-      "source": "https://www.mozilla.org/media/MPL/2.0/index.txt",
-      "description": "Mozilla Public License Version 2.0 as published by the Mozilla Foundation (plain text). certifi's wheel carries only the MPL notice header (989 bytes), not this text",
-      "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
-      "bytes": 16726
+    "Tcl-8.6.14-license.terms.txt": {
+      "source": "https://raw.githubusercontent.com/tcltk/tcl/core-8-6-14/license.terms",
+      "description": "Tcl 8.6.14 license.terms. Tcl/Tk 8.6.14 version strings are present in the libpython3.12.dylib of the python-build-standalone interpreter used by the local candidate although tkinter is excluded from the sidecar archive (OBSERVED by strings)",
+      "sha256": "c0a69a2bfd757361ec7e6143973b103c90409316b49e9c88db26ad6388e79f16",
+      "bytes": 2255
+    },
+    "Tk-8.6.14-license.terms.txt": {
+      "source": "https://raw.githubusercontent.com/tcltk/tk/core-8-6-14/license.terms",
+      "description": "Tk 8.6.14 license.terms (see the Tcl entry)",
+      "sha256": "2cde822b93ca16ae535c954b7dfe658b4ad10df2a193628d1b358f1765e8b198",
+      "bytes": 2267
+    },
+    "WiX3-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/wixtoolset/wix3/wix3141rtm/LICENSE.TXT",
+      "description": "WiX Toolset v3 LICENSE.TXT (Microsoft Reciprocal License). tauri-bundler 2.10.4 downloads wix314-binaries.zip (wix3141rtm); which WiX-supplied files, if any, end up inside an MSI is UNVERIFIED (no Windows build exists)",
+      "sha256": "dfdf2048787635215a6baf3b9d461dee89a2904d246787258a44f072a98d4786",
+      "bytes": 3341
+    },
+    "bzip2-1.0.8-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/libarchive/bzip2/bzip2-1.0.8/LICENSE",
+      "description": "bzip2 1.0.8 LICENSE. A version banner '1.0.8, 13-Jul-2019' is present in the libpython3.12.dylib of the python-build-standalone 3.12.10 interpreter used by the local macOS candidate (OBSERVED by strings); the linkage in other interpreter builds is not established",
+      "sha256": "c6dbbf828498be844a89eaa3b84adbab3199e342eb5cb2ed2f0d4ba7ec0f38a3",
+      "bytes": 1896
+    },
+    "duckdb-1.5.5-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/LICENSE",
+      "description": "DuckDB LICENSE (MIT) at tag v1.5.5",
+      "sha256": "7e17fd31249fa875cb3b1c5e05c6c3e99b75509f6a2804ca176c217834de1dcb",
+      "bytes": 1072
+    },
+    "duckdb-1.5.5-third_party-brotli-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/brotli/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/brotli/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "3d180008e36922a4e8daec11c34c7af264fed5962d07924aea928c38e8663c94",
+      "bytes": 1084
+    },
+    "duckdb-1.5.5-third_party-concurrentqueue-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/concurrentqueue/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/concurrentqueue/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "eaf0df40f77e929cd83cd4485de2bdf806c7908db84a52007a700588f6566331",
+      "bytes": 3246
+    },
+    "duckdb-1.5.5-third_party-fast_float-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/fast_float/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/fast_float/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+      "bytes": 1023
+    },
+    "duckdb-1.5.5-third_party-fastpforlib-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/fastpforlib/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/fastpforlib/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "9ff562631a04b8cb1030c53fdf461bd749c9af0655d86e4f17eb270e935a7fe2",
+      "bytes": 10272
+    },
+    "duckdb-1.5.5-third_party-fmt-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/fmt/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/fmt/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "825c9324e70f8c839c8ba910543dd4a7daee243b86ef960594c11381a19980b8",
+      "bytes": 1408
+    },
+    "duckdb-1.5.5-third_party-fsst-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/fsst/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/fsst/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "20e9c14ff437a73a6e2b105f1b5aaf9ef24a84d962741c0ab01d04b4910294ab",
+      "bytes": 1087
+    },
+    "duckdb-1.5.5-third_party-httplib-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/httplib/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/httplib/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "4b45cbe16d7b71b89ae6127e26e0d90a029198ca5e958ad8e3d0b8bbed364d8b",
+      "bytes": 1075
+    },
+    "duckdb-1.5.5-third_party-hyperloglog-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/hyperloglog/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/hyperloglog/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "3a3fcdbaecbeb1e7dea97843961100c637766e59de4674fed809760283b716e1",
+      "bytes": 1055
+    },
+    "duckdb-1.5.5-third_party-jaro_winkler-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/jaro_winkler/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/jaro_winkler/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "077815ffd10f0677d060e9d5c0059592d28c41d1e9985c848435e0ea17ea06c3",
+      "bytes": 1055
+    },
+    "duckdb-1.5.5-third_party-jemalloc-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/jemalloc/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/jemalloc/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "94aa2caa98c25d942f58b956c71dba6a99ff98fc3a31cbc669fe2a4cd0268b53",
+      "bytes": 1709
+    },
+    "duckdb-1.5.5-third_party-libpg_query-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/libpg_query/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/libpg_query/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "2780b6375a5ab1901472b7694958dd0c8c1381a21f0765cbb64e1923d94c6717",
+      "bytes": 1484
+    },
+    "duckdb-1.5.5-third_party-lz4-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/lz4/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/lz4/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "99b8d2d8011d1ce548c5aaf3270c6bee014507fa821c4f9a7e300a9e11015db7",
+      "bytes": 1310
+    },
+    "duckdb-1.5.5-third_party-mbedtls-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/mbedtls/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/mbedtls/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "9b405ef4c89342f5eae1dd828882f931747f71001cfba7d114801039b52ad09b",
+      "bytes": 29852
+    },
+    "duckdb-1.5.5-third_party-miniz-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/miniz/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/miniz/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "0115478d567121238cf6cc1c0c361926cf07a49d9e4c9e66da97fac6a01646b3",
+      "bytes": 1184
+    },
+    "duckdb-1.5.5-third_party-parquet-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/parquet/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/parquet/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "70b6a7d630fae9f49643f9b16bee42a2feda68301f9c14470e7fb5ad0599bb9f",
+      "bytes": 11625
+    },
+    "duckdb-1.5.5-third_party-pcg-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/pcg/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/pcg/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "3febf788fd814bf1f350db169bdc51b28ff7e7596ff1f09cc0181e4fde42b480",
+      "bytes": 1092
+    },
+    "duckdb-1.5.5-third_party-pdqsort-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/pdqsort/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/pdqsort/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "323fc18e35fcf058d69d684022ef844f206cb8fefb2bac1298fa1767e0b9ae38",
+      "bytes": 874
+    },
+    "duckdb-1.5.5-third_party-re2-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/re2/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/re2/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "6040cda75d90b1738292a631d89934c411ef7ffd543c4d6a1b7edfc8edf29449",
+      "bytes": 1558
+    },
+    "duckdb-1.5.5-third_party-ska_sort-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/ska_sort/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/ska_sort/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "3c3a838f6ac2201bb8255b374fad34e3e1de07940c3acdc09e661e118fb75078",
+      "bytes": 147
+    },
+    "duckdb-1.5.5-third_party-skiplist-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/skiplist/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/skiplist/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "3b9cac57dbb2d7ec76298cb0d33afe12f891e1d0dbb38ff17993a14f3480ee7c",
+      "bytes": 1071
+    },
+    "duckdb-1.5.5-third_party-snappy-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/snappy/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/snappy/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "55172044f7e241207117448a4d9d6ba1d0925c8ad66b5d4c08c70adfa9cc3de6",
+      "bytes": 2645
+    },
+    "duckdb-1.5.5-third_party-snowball-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/snowball/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/snowball/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "f6f9e4c0e737728ca980de8595ded046d5e077017c1bb0ee05dc794a01434dae",
+      "bytes": 1655
+    },
+    "duckdb-1.5.5-third_party-tdigest-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/tdigest/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/tdigest/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
+      "bytes": 11356
+    },
+    "duckdb-1.5.5-third_party-tdigest-NOTICES.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/tdigest/NOTICES",
+      "description": "DuckDB source tree tag v1.5.5, third_party/tdigest/NOTICES (as above: linkage not established)",
+      "sha256": "5ded9726da6c5360c0b0ba0725455f57b367dc9b4954bed7ca8f235d26cee33b",
+      "bytes": 457
+    },
+    "duckdb-1.5.5-third_party-thrift-thrift-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/thrift/thrift/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/thrift/thrift/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "23df881cec3192d1f4474633c14eb2ec30a45b84f8daeb82b9de5d2bd3ac8218",
+      "bytes": 12610
+    },
+    "duckdb-1.5.5-third_party-utf8proc-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/utf8proc/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/utf8proc/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "fbc720fcc90fb44396985646f67e4d19be03e0c0539f7138ed9dc6efba49dc49",
+      "bytes": 5125
+    },
+    "duckdb-1.5.5-third_party-vergesort-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/vergesort/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/vergesort/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "12dd392860ea2a3633bce5f33d7eebd4308a7e3386b4372260e5e72be7a64033",
+      "bytes": 1097
+    },
+    "duckdb-1.5.5-third_party-yyjson-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/yyjson/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/yyjson/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "734d7fb3eb56f0a04e6b7ab0c5d3634624a8bfaa2acc87a2c03a029b20868cf8",
+      "bytes": 1083
+    },
+    "duckdb-1.5.5-third_party-zstd-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/third_party/zstd/LICENSE",
+      "description": "DuckDB source tree tag v1.5.5, third_party/zstd/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
+      "sha256": "8b7bc50ec3ecee27224e17d4d316a939fa2ddda9c88e0ddc2f059ce432edbfb9",
+      "bytes": 1529
+    },
+    "expat-2.6.3-COPYING.txt": {
+      "source": "https://raw.githubusercontent.com/libexpat/libexpat/R_2_6_3/expat/COPYING",
+      "description": "expat 2.6.3 COPYING (MIT). The banner 'expat_2.6.3' is present in the libpython3.12.dylib of the python-build-standalone interpreter used by the local candidate (OBSERVED by strings); CPython's Doc/license.rst also covers expat",
+      "sha256": "122f2c27000472a201d337b9b31f7eb2b52d091b02857061a8880371612d9534",
+      "bytes": 1144
+    },
+    "libffi-3.4.4-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/libffi/libffi/v3.4.4/LICENSE",
+      "description": "libffi v3.4.4 LICENSE (MIT); byte-identical to python/cpython-source-deps tag libffi-3.4.4. CPython v3.12.10 PCbuild/get_externals.bat names libffi-3.4.4 as the Windows libffi; the version of libffi-8.dll actually shipped was not read from the file",
+      "sha256": "2c9c2acb9743e6b007b91350475308aee44691d96aa20eacef8e199988c8c388",
+      "bytes": 1132
+    },
+    "libyaml-0.2.5-License.txt": {
+      "source": "https://raw.githubusercontent.com/yaml/libyaml/0.2.5/License",
+      "description": "libyaml 0.2.5 License (MIT). PyYAML 6.0.3's CI builds its wheels against libyaml ref 0.2.5 (.github/workflows/ci.yaml LIBYAML_REF default); the version linked in the shipped _yaml extension was not read from the binary",
+      "sha256": "c40112449f254b9753045925248313e9270efa36d226b22d82d4cc6c43c57f29",
+      "bytes": 1101
+    },
+    "objc2-LICENSE-APACHE.txt": {
+      "source": "https://raw.githubusercontent.com/madsmtm/objc2/8a5abacd90d5403fc0463459a35826f892b9142e/LICENSE-APACHE.txt",
+      "description": "Apache-2.0 text of the madsmtm/objc2 repository, upstream commit 8a5abacd (later than the packaged crates); for the 'Zlib OR Apache-2.0 OR MIT' crates",
+      "sha256": "0c9a5f6fe28e27015e12506ffe58c9e007cead169af9670ec15c1df0d14e4f2a",
+      "bytes": 10204
+    },
+    "objc2-LICENSE-MIT.txt": {
+      "source": "https://raw.githubusercontent.com/madsmtm/objc2/8a5abacd90d5403fc0463459a35826f892b9142e/LICENSE-MIT.txt",
+      "description": "MIT text of the madsmtm/objc2 repository (Copyright 2026 Mads Marquart) from upstream commit 8a5abacd, which is LATER than the commits the packaged crates were built from (those hold only the licence-selection statement LICENSE.md); for objc2, block2, objc2-foundation, objc2-encode. UNVERIFIED that the copyright line applies to the packaged versions",
+      "sha256": "f6a2e783669a0dd7a2c3b8a4f76db40ae49033e66e1bdc30f3aa25fe5577b070",
+      "bytes": 1053
+    },
+    "objc2-LICENSE-ZLIB.txt": {
+      "source": "https://raw.githubusercontent.com/madsmtm/objc2/8a5abacd90d5403fc0463459a35826f892b9142e/LICENSE-ZLIB.txt",
+      "description": "Zlib text of the madsmtm/objc2 repository, upstream commit 8a5abacd (later than the packaged crates); for the 'Zlib OR Apache-2.0 OR MIT' crates",
+      "sha256": "fced3e7fedc235fa83ed0108b0df74d86b435d06436356f46917a903cbadd80a",
+      "bytes": 838
     }
   }
 }
