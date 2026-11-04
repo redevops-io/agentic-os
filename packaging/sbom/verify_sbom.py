@@ -122,6 +122,16 @@ def main(argv: list[str] | None = None) -> int:
     for p in res.problems:
         add("FAIL", "inconsistent", p)
 
+    # launcher crate graph: every crate cargo resolves for the target must be listed
+    exp_crates: set[tuple[str, str]] = set()
+    if a.cargo_manifest or a.cargo_metadata_json:
+        meta = json.loads(Path(a.cargo_metadata_json).read_text()) if a.cargo_metadata_json else rustsbom.cargo_metadata(a.cargo_manifest, a.cargo_target)
+        listed_c = {(c["name"], c["version"]) for c in idx if c["eco"] == "cargo"}
+        for cr in rustsbom.crates(meta, {}):
+            exp_crates.add((cr["name"], cr["version"]))
+            if cr["scope"] == "required" and (cr["name"], cr["version"]) not in listed_c:
+                add("FAIL", "missing", f"crate {cr['name']} {cr['version']} is linked into the launcher (cargo metadata) but not in the SBOM", component=f"cargo:{cr['name']}@{cr['version']}")
+
     # launcher crate cross-check
     if a.launcher_bin and Path(a.launcher_bin).is_file():
         listed = {(c["name"], c["version"]) for c in idx if c["purl"].startswith("pkg:cargo/")}
@@ -138,6 +148,8 @@ def main(argv: list[str] | None = None) -> int:
             continue
         if c["purl"].startswith(("pkg:pypi/", "pkg:cargo/")) and c["scope"] == "required":
             if c["purl"].startswith("pkg:cargo/") and not (a.cargo_manifest or a.cargo_metadata_json):
+                continue
+            if c["purl"].startswith("pkg:cargo/") and (c["name"], c["version"]) in exp_crates:
                 continue
             expected_keys = {e.key for e in res.comps.values()}
             if c["key"] in expected_keys:

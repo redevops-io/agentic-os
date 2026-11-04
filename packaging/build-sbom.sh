@@ -15,7 +15,8 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 uv venv --python "$PYTHON_VERSION" "$TMP/sbomvenv" >/dev/null
 SPY="$(venv_py "$TMP/sbomvenv")"
 uv pip install --python "$SPY" --require-hashes --no-deps -r "$LOCKS/build-tools-$OS.lock" >/dev/null
-ARGS=(--sidecar "$DIST/redevops-sidecar$([ "$OS" = windows ] && echo .exe)" --wheelhouse "$PK/wheelhouse"
+EXE=""; if [ "$OS" = windows ]; then EXE=".exe"; fi
+ARGS=(--sidecar "$DIST/redevops-sidecar$EXE" --wheelhouse "$PK/wheelhouse"
       --inventory-json "$DIST/inventory-env.json" --build-manifest "$DIST/build-manifest.json" --git-pins "$PK/git-pins.json"
       --cargo-manifest "$ROOT/deploy/launcher/src-tauri/Cargo.toml" --cargo-lock "$ROOT/deploy/launcher/src-tauri/Cargo.lock"
       --cargo-target "$TRIPLE" --tauri-conf "$ROOT/deploy/launcher/src-tauri/tauri.conf.json")
