@@ -14,8 +14,11 @@ Model (full spec: ``docs/LOCAL_API_SECURITY.md``):
   holds it (and checks the server holds it) with an HMAC challenge, so a stale or foreign process on
   the port cannot be adopted.
 * A short-lived, single-use **launch code** is placed by the launcher in the URL *fragment*. The UI
-  script exchanges it (POST, JSON) for a **session**: an HttpOnly + SameSite=Strict host-only cookie
-  plus a **CSRF token** that must be echoed in a custom header on every state-changing request.
+  script exchanges it (POST, JSON) for a **session**: a random session token returned in the response
+  body (NOT a cookie: cookies are not port-scoped, so a hostile server on another 127.0.0.1 port would
+  receive it). The UI keeps it in ``sessionStorage`` (per tab, per origin including the port) and sends
+  it in the ``X-Agentic-Session`` header, plus a **CSRF token** in ``X-Agentic-CSRF`` on every
+  state-changing request. The server accepts the header credential only and sets no cookie.
 * Defence in depth on every request: strict ``Host`` allowlist (DNS rebinding), ``Origin`` must be
   absent or same-origin, ``Sec-Fetch-Site`` honoured, preflights refused, **no** CORS headers ever,
   security headers and ``Cache-Control: no-store`` on API responses.
@@ -24,10 +27,11 @@ Everything is a pure ASGI middleware so it covers every route (including ``/docs
 ``/openapi.json``, conditionally mounted routers, and 404s) and is wrapped around the OUTERMOST app.
 
 What this does NOT do: protect against malware running as the same OS user (it can read the
-launcher's memory or the browser's cookie jar). See the doc.
+launcher's memory or the browser's storage). See the doc.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -41,8 +45,8 @@ from dataclasses import dataclass
 from typing import Any, Callable, Deque, Dict, Iterable, List, Optional, Tuple
 
 PROTO = "agentic-os-local-capability/1"
-COOKIE_NAME = "agentic_os_session"
-CSRF_HEADER = "x-agentic-csrf"          # lower-case: ASGI header names are lower-case
+SESSION_HEADER = "x-agentic-session"    # lower-case: ASGI header names are lower-case
+CSRF_HEADER = "x-agentic-csrf"
 SESSION_PATH = "/api/local/session"
 HANDSHAKE_PATH = "/api/local/handshake"
 LAUNCH_CODE_PATH = "/api/local/launch-code"
@@ -87,7 +91,8 @@ def _ct_equal(a: str, b: str) -> bool:
 @dataclass
 class Session:
     csrf: str
-    expires: float
+    expires: Tuple[float, float]      # (monotonic deadline, wall-clock deadline): dead when EITHER passes
+    host: str = ""                    # the exact Host the session was established on (lower-case)
 
 
 class _FailureLimiter:
@@ -124,7 +129,8 @@ class LocalCapability:
     def __init__(self, *, port: Optional[int] = None, extra_hosts: Iterable[str] = (),
                  launch_code_ttl: float = 60.0, session_ttl: float = 86400.0,
                  challenge_ttl: float = 30.0, max_failures: int = 10, failure_window: float = 60.0,
-                 clock: Callable[[], float] = time.monotonic):
+                 clock: Callable[[], float] = time.monotonic,
+                 wall_clock: Callable[[], float] = time.time):
         self._secret = secrets.token_bytes(32)           # 256 bits, memory only
         self.port = port
         self.extra_hosts = frozenset(h.strip().lower() for h in extra_hosts if h and h.strip())
@@ -132,9 +138,10 @@ class LocalCapability:
         self.session_ttl = float(session_ttl)
         self.challenge_ttl = float(challenge_ttl)
         self._clock = clock
+        self._wall = wall_clock
         self._lock = threading.Lock()
-        self._codes: List[Tuple[bytes, float]] = []
-        self._challenges: List[Tuple[bytes, float]] = []
+        self._codes: List[Tuple[bytes, Tuple[float, float]]] = []
+        self._challenges: List[Tuple[bytes, Tuple[float, float]]] = []
         self._sessions: List[Tuple[bytes, Session]] = []
         # Two independent budgets: noise on the launch-code exchange (any local process can send
         # it) must never lock the launcher out of minting codes.
@@ -178,9 +185,24 @@ class LocalCapability:
         return origin.strip().lower() == "http://" + host.strip().lower()
 
     # ------------------------------------------------------------------ launch codes
+    # ------------------------------------------------------------------ expiry (two clocks)
+    def _deadline(self, ttl: float) -> Tuple[float, float]:
+        """time.monotonic does not advance while a laptop sleeps (macOS), the wall clock can be set
+        either way. A credential is dead when EITHER clock says so: sleep cannot extend a lifetime
+        (the wall clock catches it), a backward wall-clock jump cannot extend one (the monotonic clock
+        bounds it), and a forward jump only fails closed (the user opens again from the launcher)."""
+        return (self._clock() + ttl, self._wall() + ttl)
+
+    def _alive(self, deadline: Tuple[float, float]) -> bool:
+        return self._clock() < deadline[0] and self._wall() < deadline[1]
+
+    def remaining(self, deadline: Tuple[float, float]) -> int:
+        return max(0, int(min(deadline[0] - self._clock(), deadline[1] - self._wall())))
+
+    # ------------------------------------------------------------------ launch codes
     def issue_launch_code(self, ttl: Optional[float] = None) -> str:
         code = secrets.token_urlsafe(32)
-        expiry = self._clock() + (self.launch_code_ttl if ttl is None else float(ttl))
+        expiry = self._deadline(self.launch_code_ttl if ttl is None else float(ttl))
         with self._lock:
             self._purge(self._codes)
             if len(self._codes) >= self.MAX_CODES:
@@ -194,7 +216,6 @@ class LocalCapability:
             return False
         d = _digest(code)
         with self._lock:
-            now = self._clock()
             hit = -1
             for i, (stored, _exp) in enumerate(self._codes):
                 if hmac.compare_digest(stored, d):
@@ -202,12 +223,15 @@ class LocalCapability:
             if hit < 0:
                 return False
             _stored, expiry = self._codes.pop(hit)          # burned whether or not it is still valid
-            return now < expiry
+            return self._alive(expiry)
 
     # ------------------------------------------------------------------ sessions
-    def new_session(self) -> Tuple[str, Session]:
+    def new_session(self, host: str = "") -> Tuple[str, Session]:
+        """Create a session bound to the exact ``Host`` it was established on. The token is returned to
+        the caller in the response body; it is never a cookie."""
         token = secrets.token_urlsafe(32)
-        sess = Session(csrf=secrets.token_urlsafe(32), expires=self._clock() + self.session_ttl)
+        sess = Session(csrf=secrets.token_urlsafe(32), expires=self._deadline(self.session_ttl),
+                       host=(host or "").strip().lower())
         with self._lock:
             self._purge_sessions()
             if len(self._sessions) >= self.MAX_SESSIONS:
@@ -215,7 +239,8 @@ class LocalCapability:
             self._sessions.append((_digest(token), sess))
         return token, sess
 
-    def find_session(self, tokens: Iterable[str]) -> Optional[Session]:
+    def find_session(self, tokens: Iterable[str], host: str = "") -> Optional[Session]:
+        h = (host or "").strip().lower()
         with self._lock:
             self._purge_sessions()
             found: Optional[Session] = None
@@ -224,7 +249,7 @@ class LocalCapability:
                     continue
                 d = _digest(tok)
                 for stored, sess in self._sessions:
-                    if hmac.compare_digest(stored, d):
+                    if hmac.compare_digest(stored, d) and sess.host == h:
                         found = sess
             return found
 
@@ -233,12 +258,10 @@ class LocalCapability:
             self._sessions = [(d, s) for d, s in self._sessions if s is not sess]
 
     def _purge_sessions(self) -> None:
-        now = self._clock()
-        self._sessions = [(d, s) for d, s in self._sessions if now < s.expires]
+        self._sessions = [(d, s) for d, s in self._sessions if self._alive(s.expires)]
 
-    def _purge(self, store: List[Tuple[bytes, float]]) -> None:
-        now = self._clock()
-        store[:] = [(d, e) for d, e in store if now < e]
+    def _purge(self, store: List[Tuple[bytes, Tuple[float, float]]]) -> None:
+        store[:] = [(d, e) for d, e in store if self._alive(e)]
 
     # ------------------------------------------------------------------ handshake + mint
     def handshake(self, client_nonce: str) -> Optional[Dict[str, Any]]:
@@ -249,7 +272,7 @@ class LocalCapability:
             self._purge(self._challenges)
             if len(self._challenges) >= self.MAX_CHALLENGES:
                 self._challenges.pop(0)
-            self._challenges.append((_digest(server_nonce), self._clock() + self.challenge_ttl))
+            self._challenges.append((_digest(server_nonce), self._deadline(self.challenge_ttl)))
         return {"v": 1, "proto": PROTO, "proof": handshake_proof(self._secret, self.port or 0, client_nonce),
                 "server_nonce": server_nonce, "expires_in": int(self.challenge_ttl)}
 
@@ -260,7 +283,6 @@ class LocalCapability:
             return None
         d = _digest(server_nonce)
         with self._lock:
-            now = self._clock()
             hit = -1
             for i, (stored, _e) in enumerate(self._challenges):
                 if hmac.compare_digest(stored, d):
@@ -268,7 +290,7 @@ class LocalCapability:
             if hit < 0:
                 return None
             _stored, expiry = self._challenges.pop(hit)
-            if now >= expiry:
+            if not self._alive(expiry):
                 return None
         expected = mint_proof(self._secret, self.port or 0, server_nonce)
         if not isinstance(proof, str) or not _ct_equal(proof, expected):
@@ -332,12 +354,12 @@ class LocalCapabilityMiddleware:
     """Wrap the OUTERMOST ASGI app. ``base_path`` is the URL prefix the app is mounted under (or "")."""
 
     def __init__(self, app: Any, capability: LocalCapability, *, base_path: str = "",
-                 public_paths: Iterable[str] = ()):
+                 public_paths: Iterable[str] = (), body_timeout: float = 10.0):
         self.app = app
+        self.body_timeout = float(body_timeout)
         self.cap = capability
         self.base = (base_path or "").rstrip("/")
         self.public = frozenset(p for p in public_paths if p not in _RESERVED_PUBLIC)
-        self.cookie_path = self.base or "/"
 
     # -------------------------------------------------------------- entry
     async def __call__(self, scope: Dict[str, Any], receive: Callable, send: Callable) -> None:
@@ -374,7 +396,10 @@ class LocalCapabilityMiddleware:
     async def _read_json(self, receive: Callable) -> Optional[Dict[str, Any]]:
         chunks, total = [], 0
         while True:
-            msg = await receive()
+            try:
+                msg = await asyncio.wait_for(receive(), self.body_timeout)
+            except asyncio.TimeoutError:
+                return None
             if msg["type"] != "http.request":
                 return None
             part = msg.get("body", b"")
@@ -399,15 +424,32 @@ class LocalCapabilityMiddleware:
             return path[len(self.base):]
         return None
 
-    @staticmethod
-    def _cookie_values(hdrs: Dict[str, List[str]]) -> List[str]:
-        vals: List[str] = []
-        for line in hdrs.get("cookie", []):
-            for part in line.split(";"):
-                name, _, value = part.strip().partition("=")
-                if name == COOKIE_NAME and value:
-                    vals.append(value)
-        return vals
+    def _session(self, hdrs: Dict[str, List[str]]) -> Optional[Session]:
+        """The session named by the ``X-Agentic-Session`` header (exactly one), established on this very
+        Host. Cookies are never consulted: they are not port-scoped."""
+        tokens = hdrs.get(SESSION_HEADER, [])
+        if len(tokens) != 1:
+            return None
+        return self.cap.find_session(tokens, hdrs.get("host", [""])[0])
+
+    def _guard_receive(self, receive: Callable) -> Callable:
+        """Bound how long a client may leave a request BODY unfinished (a stalled upload would otherwise
+        pin the connection, block graceful shutdown and eat file descriptors). After the body is complete
+        receive() is passed through untouched (the app may legitimately wait for a disconnect)."""
+        state = {"done": False}
+
+        async def guarded() -> Dict[str, Any]:
+            if state["done"]:
+                return await receive()
+            try:
+                msg = await asyncio.wait_for(receive(), self.body_timeout)
+            except asyncio.TimeoutError:
+                state["done"] = True
+                return {"type": "http.disconnect"}
+            if msg["type"] != "http.request" or not msg.get("more_body"):
+                state["done"] = True
+            return msg
+        return guarded
 
     # -------------------------------------------------------------- main flow
     async def _http(self, scope: Dict[str, Any], receive: Callable, send: Callable) -> None:
@@ -445,7 +487,7 @@ class LocalCapabilityMiddleware:
             return
 
         # 4. Capability: a valid session, plus the CSRF header on anything that can change state.
-        sess = self.cap.find_session(self._cookie_values(hdrs))
+        sess = self._session(hdrs)
         if sess is None:
             await self._reply(send, 401, "auth_required", "a local session is required")
             return
@@ -454,7 +496,7 @@ class LocalCapabilityMiddleware:
             if len(presented) != 1 or not _ct_equal(presented[0], sess.csrf):
                 await self._reply(send, 403, "csrf_invalid", "missing or invalid CSRF header")
                 return
-        await self.app(scope, receive, self._wrap_send(send, no_store=True))
+        await self.app(scope, self._guard_receive(receive), self._wrap_send(send, no_store=True))
 
     def _wrap_send(self, send: Callable, *, no_store: bool) -> Callable:
         async def wrapped(message: Dict[str, Any]) -> None:
@@ -469,15 +511,15 @@ class LocalCapabilityMiddleware:
                      send: Callable) -> None:
         cap = self.cap
         if rel == SESSION_PATH and method == "GET":
-            sess = cap.find_session(self._cookie_values(hdrs))
+            sess = self._session(hdrs)
             if sess is None:
                 await self._reply(send, 401, "auth_required", "a local session is required")
                 return
-            await self._reply(send, 200, "", "", body={"v": 1, "csrf_token": sess.csrf, "expires_in": max(
-                0, int(sess.expires - cap._clock()))})
+            await self._reply(send, 200, "", "", body={"v": 1, "csrf_token": sess.csrf,
+                                                        "expires_in": cap.remaining(sess.expires)})
             return
         if rel == SESSION_PATH and method == "DELETE":
-            sess = cap.find_session(self._cookie_values(hdrs))
+            sess = self._session(hdrs)
             if sess is None:
                 await self._reply(send, 401, "auth_required", "a local session is required")
                 return
@@ -486,9 +528,7 @@ class LocalCapabilityMiddleware:
                 await self._reply(send, 403, "csrf_invalid", "missing or invalid CSRF header")
                 return
             cap.drop_session(sess)
-            clear = f"{COOKIE_NAME}=; Path={self.cookie_path}; Max-Age=0; HttpOnly; SameSite=Strict"
-            await self._reply(send, 200, "", "", body={"ok": True},
-                              extra=[(b"set-cookie", clear.encode("ascii"))])
+            await self._reply(send, 200, "", "", body={"ok": True})
             return
         if method != "POST":
             await self._reply(send, 405, "method_not_allowed", "method not allowed",
@@ -500,18 +540,11 @@ class LocalCapabilityMiddleware:
         if ctype != "application/json":
             await self._reply(send, 415, "unsupported_media_type", "Content-Type must be application/json")
             return
-        if rel == SESSION_PATH:
-            retry = cap.limiter.retry_after()
-            if retry:
-                await self._reply(send, 429, "rate_limited", "too many failed attempts",
-                                  extra=[(b"retry-after", str(retry).encode("ascii"))])
-                return
         data = await self._read_json(receive)
         if data is None:
-            if rel == SESSION_PATH:
-                cap.limiter.record_failure()
-            elif rel == LAUNCH_CODE_PATH:
-                cap.mint_limiter.record_failure()
+            limiter = cap.limiter if rel == SESSION_PATH else cap.mint_limiter if rel == LAUNCH_CODE_PATH else None
+            if limiter is not None:
+                limiter.record_failure()
             await self._reply(send, 400, "bad_request", "malformed JSON body")
             return
 
@@ -542,15 +575,23 @@ class LocalCapabilityMiddleware:
                                                         "expires_in": int(cap.launch_code_ttl)})
             return
 
-        # SESSION_PATH POST: exchange a launch code for a session.
+        # SESSION_PATH POST: exchange a launch code for a session. The code is checked even while the
+        # failure budget is spent: a correct, unexpired, unused 256-bit code cannot be guessed, so serving
+        # it costs nothing, and other local processes cannot lock the user out of signing in. Only FAILED
+        # attempts are counted and, once the budget is spent, answered 429.
+        retry = cap.limiter.retry_after()
         if not cap.consume_launch_code(str(data.get("code", ""))):
+            if retry:
+                await self._reply(send, 429, "rate_limited", "too many failed attempts",
+                                  extra=[(b"retry-after", str(retry).encode("ascii"))])
+                return
             cap.limiter.record_failure()
             await self._reply(send, 401, "invalid_launch_code", "launch code invalid, expired, or already used")
             return
-        token, sess = cap.new_session()
-        cookie = f"{COOKIE_NAME}={token}; Path={self.cookie_path}; HttpOnly; SameSite=Strict"
-        await self._reply(send, 200, "", "", extra=[(b"set-cookie", cookie.encode("ascii"))],
-                          body={"v": 1, "csrf_token": sess.csrf, "csrf_header": "X-Agentic-CSRF",
+        token, sess = cap.new_session(hdrs.get("host", [""])[0])
+        await self._reply(send, 200, "", "",
+                          body={"v": 1, "session_token": token, "session_header": "X-Agentic-Session",
+                                "csrf_token": sess.csrf, "csrf_header": "X-Agentic-CSRF",
                                 "expires_in": int(cap.session_ttl)})
 
 
