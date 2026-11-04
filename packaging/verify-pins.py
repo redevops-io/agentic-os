@@ -7,7 +7,8 @@
   3. pyproject.toml third-party specifiers of core + built extras == packaging/requirements.in
   4. every lock: each pin has at least one --hash, no unpinned line
   5. the three requirements-<os>.lock cover the same 21 distributions and equal the wheels of the frozen
-     CI run (packaging/evidence/frozen-ci-wheels.json) for the same OS, except documented deviations
+     CI run (packaging/evidence/frozen-ci-wheels.json) for the same OS, EXCEPT the documented deviation set {certifi}
+     (pins-16; each deviation is pinned to its recorded version and must be >= its fixing release)
   6. the build tool locks pin pyinstaller==toolchain.env and setuptools/pip as toolchain.env says
   7. the launcher Cargo.lock exists (when present: the launcher crate and tauri 2.11.5 are in it)
 
@@ -26,8 +27,39 @@ ROOT = Path(__file__).resolve().parent.parent
 PK = ROOT / "packaging"
 BUILT_EXTRAS = ["projects", "duckdb"]
 OSES = ["macos", "windows", "linux"]
-# Documented, intentional differences from the frozen CI wheel set (name -> reason). Empty: none needed.
-DEVIATIONS: dict[str, str] = {}
+# Documented, intentional differences from the frozen CI wheel set. EXACTLY these names may differ, and only to the recorded
+# version (anything else drifting, or a deviation drifting to another version, fails). Recorded in packaging/PINS.md and
+# packaging/DECISIONS-REQUIRED.md (pins-16).
+DEVIATIONS: dict[str, dict[str, str]] = {
+    "certifi": {
+        "frozen": "2026.7.22",
+        "pinned": "2026.10.19",
+        "min_version": "2026.10.18",
+        "reason": "GHSA-6q48-6c7w-9gw2 / PYSEC-2026-4320: certifi < 2026.10.18 trusts the emSign ECC Root CA - G3 root",
+    },
+}
+
+
+def vkey(v: str) -> tuple[int, ...]:
+    return tuple(int(x) for x in re.findall(r"\d+", v))
+
+
+def compare_to_frozen(os_: str, got: dict[str, str], want: dict[str, str]) -> list[str]:
+    """Problems when the lock's pins differ from the frozen CI wheels, except the documented deviation set."""
+    problems: list[str] = []
+    for n in sorted(set(want) | set(got)):
+        if n in DEVIATIONS:
+            d = DEVIATIONS[n]
+            if want.get(n) != d["frozen"]:
+                problems.append(f"requirements-{os_}.lock: frozen CI {n} is {want.get(n)}, the deviation record says {d['frozen']}")
+            if got.get(n) != d["pinned"]:
+                problems.append(f"requirements-{os_}.lock: {n} {got.get(n)} != the documented deviation {d['pinned']}")
+            elif vkey(got[n]) < vkey(d["min_version"]):
+                problems.append(f"requirements-{os_}.lock: {n} {got[n]} is below the fixing release {d['min_version']}")
+            continue
+        if want.get(n) != got.get(n):
+            problems.append(f"requirements-{os_}.lock: {n} {got.get(n)} != frozen CI {want.get(n)}")
+    return problems
 
 
 def norm(n: str) -> str:
@@ -173,12 +205,10 @@ def main() -> int:
         fz = frozen_set(os_)
         want = {n: v for n, v in fz.items() if n in third_party_frozen_names(os_)}
         got = locks[os_]
-        for n in sorted(set(want) | set(got)):
-            if n in DEVIATIONS:
-                continue
-            if want.get(n) != got.get(n):
-                problems.append(f"requirements-{os_}.lock: {n} {got.get(n)} != frozen CI {want.get(n)}")
-        info.append(f"requirements-{os_}.lock: {len(got)} pins == frozen CI third-party wheels" if want == got else f"requirements-{os_}.lock DIFFERS")
+        probs = compare_to_frozen(os_, got, want)
+        problems += probs
+        info.append(f"requirements-{os_}.lock: {len(got)} pins == frozen CI third-party wheels EXCEPT the documented deviation set {sorted(DEVIATIONS)}"
+                    if not probs else f"requirements-{os_}.lock DIFFERS")
     if len({tuple(sorted(v)) for v in locks.values()}) > 1:
         problems.append("requirements-<os>.lock cover different distributions")
 

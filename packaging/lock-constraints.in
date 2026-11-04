@@ -1,0 +1,4 @@
+# Constraints for packaging/regen-python-locks.sh (uv pip compile -c). Constraints add no package; they only bound versions.
+# pins-16 (deliberate deviation from the frozen v0.3.2 wheel set): certifi must be the fixing release or later.
+# GHSA-6q48-6c7w-9gw2 / PYSEC-2026-4320: certifi < 2026.10.18 still trusts the emSign ECC Root CA - G3 root.
+certifi>=2026.10.18

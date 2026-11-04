@@ -95,7 +95,50 @@ def test_requirements_lock_matches_what_the_frozen_build_resolved(os_name):
         n = re.sub(r"[-_.]+", "-", n).lower()
         if n not in first_party:
             want[n] = v
+    # the ONE documented deviation from the frozen wheel set (pins-16): certifi, to the fixing release
+    assert want["certifi"] == "2026.7.22" and pins["certifi"] == "2026.10.19"
+    want["certifi"] = pins["certifi"]
     assert pins == want
+
+
+def _verify_pins():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("verify_pins", PK / "verify-pins.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def test_the_deviation_set_is_exactly_certifi_and_drift_elsewhere_still_fails():
+    vp = _verify_pins()
+    assert set(vp.DEVIATIONS) == {"certifi"}
+    got = lock_pins("requirements-macos.lock")
+    frozen = {vp.norm(f[:-4].split("-")[0]): f[:-4].split("-")[1]
+              for f in json.loads((PK / "evidence/frozen-ci-wheels.json").read_text())["platforms"]["macos"]}
+    want = {n: v for n, v in frozen.items() if n in got}
+    assert vp.compare_to_frozen("macos", got, want) == []
+    # another package drifting is caught
+    assert vp.compare_to_frozen("macos", {**got, "idna": "3.19"}, want)
+    assert vp.compare_to_frozen("macos", {**got, "uvicorn": "0.54.0"}, want)
+    # the deviation drifting back to the frozen version, to another version, or below the fixing release is caught
+    assert vp.compare_to_frozen("macos", {**got, "certifi": "2026.7.22"}, want)
+    assert vp.compare_to_frozen("macos", {**got, "certifi": "2026.10.23"}, want)
+    assert vp.compare_to_frozen("macos", {k: v for k, v in got.items() if k != "certifi"}, want)
+    # the record itself: pinned >= fixing release > frozen
+    d = vp.DEVIATIONS["certifi"]
+    assert vp.vkey(d["pinned"]) >= vp.vkey(d["min_version"]) > vp.vkey(d["frozen"])
+
+
+def test_certifi_is_pinned_to_the_same_version_in_every_lock_and_the_cutoff_is_separate():
+    for name in ("requirements-macos.lock", "requirements-windows.lock", "requirements-linux.lock"):
+        assert lock_pins(name)["certifi"] == "2026.10.19", name
+    uni = lock_pins("../requirements.lock")
+    assert uni["certifi"] == "2026.10.19"
+    env = read_env()
+    assert env["LOCK_EXCLUDE_NEWER"] == "2026-09-18T14:00:00Z" and env["LOCK_EXCLUDE_NEWER_CERTIFI"] > env["LOCK_EXCLUDE_NEWER"]
+    assert "certifi>=2026.10.18" in (PK / "lock-constraints.in").read_text()
+    regen = (PK / "regen-python-locks.sh").read_text()
+    assert "--exclude-newer-package" in regen and "lock-constraints.in" in regen
 
 
 @pytest.mark.parametrize("name", sorted(p.name for p in (PK / "locks").glob("*.lock")))
@@ -324,3 +367,11 @@ def test_candidate_script_refuses_signing_variables_and_a_non_empty_output_dir(t
     text = (PK / "candidate" / "build-local-macos-candidate.sh").read_text()
     for bad in ("codesign --sign", "notarytool", "security import", "gh release", "git push"):
         assert bad not in text
+
+
+def test_candidate_script_uses_a_throwaway_home_a_per_build_pyinstaller_dir_and_cleans_up():
+    text = (PK / "candidate" / "build-local-macos-candidate.sh").read_text()
+    assert 'HOME="$W/home"' in text and 'TMPDIR="$W/tmp"' in text and "PYINSTALLER_CONFIG_DIR" in text
+    assert 'HOME="$HOME"' not in text                       # the real HOME is not passed on
+    assert "trap cleanup EXIT" in text and "hdiutil detach" in text
+    assert "! -path './.build-work/*'" in text               # the throwaway area is not part of the evidence hashes
