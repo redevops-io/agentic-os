@@ -977,11 +977,15 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
             return {"hosted": True, "authorize_url": started["authorize_url"], "state": started["state"]}
         return {"hosted": False, "authorize_url": None, "connected": prov.connect_app(provider)}
 
-    @app.get("/api/apps/connect/callback")
-    def _connect_callback(code: str = "", state: str = "") -> "HTMLResponse":
+    # HTMLResponse is imported BEFORE the decorator and declared as response_class: a string return
+    # annotation ("HTMLResponse") cannot be resolved by FastAPI (the name was local to the function
+    # body), which made /openapi.json raise a pydantic ForwardRef error (HTTP 500).
+    from fastapi.responses import HTMLResponse
+
+    @app.get("/api/apps/connect/callback", response_class=HTMLResponse)
+    def _connect_callback(code: str = "", state: str = ""):
         """The hosted redirect target: exchange the code, store the token, verify, and reflect
         the connection in the projections. Returns a small page the user closes."""
-        from fastapi.responses import HTMLResponse
         hosted = _get_hosted()
         if hosted is None:
             return HTMLResponse("<p>Hosted OAuth is not configured on this deployment.</p>", status_code=400)
