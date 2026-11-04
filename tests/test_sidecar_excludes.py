@@ -166,8 +166,8 @@ def test_spec_embeds_licences_only_from_a_complete_directory(tmp_path, monkeypat
 @pytest.mark.skipif(not os.environ.get("REDEVOPS_FROZEN_SIDECAR"),
                     reason="set REDEVOPS_FROZEN_SIDECAR to a built redevops-sidecar to run the frozen check")
 def test_frozen_sidecar_has_no_knowledge_frontier_and_still_serves(tmp_path):
-    import socket
     import time
+    import urllib.error
     import urllib.request
     binary = os.environ["REDEVOPS_FROZEN_SIDECAR"]
     # the archive's module table names every frozen module: knowledge_frontier must not be in it
@@ -175,21 +175,41 @@ def test_frozen_sidecar_has_no_knowledge_frontier_and_still_serves(tmp_path):
     env = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
     boot = subprocess.run([binary, "bootstrap"], capture_output=True, text=True, env=env, timeout=120, cwd=tmp_path)
     assert "Traceback" not in boot.stdout + boot.stderr and "device readiness" in boot.stdout
-    s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
-    srv = subprocess.Popen([binary, "serve"], env={**env, "PROJECTS_PORT": str(port)}, cwd=tmp_path,
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    import re
+    log = tmp_path / "serve.log"
+    with open(log, "wb") as lf:
+        # PROJECTS_PORT=0: the sidecar picks the port and prints the one-time URL (docs/LOCAL_API_SECURITY.md 5);
+        # the API needs the session that code buys, the UI files do not.
+        srv = subprocess.Popen([binary, "serve"], env={**env, "PROJECTS_PORT": "0"}, cwd=tmp_path,
+                               stdout=lf, stderr=subprocess.STDOUT)
     try:
-        for _ in range(60):
-            try:
-                urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=1)
+        m = None
+        for _ in range(120):
+            m = re.search(r"http://127\.0\.0\.1:(\d+)/#lc=([A-Za-z0-9_-]+)", log.read_text(errors="replace"))
+            if m:
                 break
-            except OSError:
-                time.sleep(0.5)
-        for path in ("/", "/api/projects", "/api/projects/customer-ops/apps", "/hero.jpg"):
-            assert urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=5).status == 200
-        guides = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/projects/customer-ops/apps"))
+            time.sleep(0.5)
+        assert m, "the sidecar did not print its one-time URL"
+        port, code = int(m.group(1)), m.group(2)
+        base = f"http://127.0.0.1:{port}"
+        assert urllib.request.urlopen(f"{base}/", timeout=5).status == 200
+        assert urllib.request.urlopen(f"{base}/hero.jpg", timeout=5).status == 200
+        try:
+            urllib.request.urlopen(f"{base}/api/projects", timeout=5)
+            raise AssertionError("/api/projects must need a session")
+        except urllib.error.HTTPError as e:
+            assert e.code == 401
+        req = urllib.request.Request(f"{base}/api/local/session", data=json.dumps({"code": code}).encode(),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        resp = urllib.request.urlopen(req, timeout=5)
+        cookie = resp.headers["Set-Cookie"].split(";")[0]
+        get = lambda path: urllib.request.urlopen(urllib.request.Request(f"{base}{path}", headers={"Cookie": cookie}), timeout=5)
+        for path in ("/api/projects", "/api/projects/customer-ops/apps"):
+            assert get(path).status == 200
+        guides = json.load(get("/api/projects/customer-ops/apps"))
         assert len(guides) == 14
     finally:
         srv.terminate()
-        out = srv.communicate(timeout=20)[0].decode(errors="replace")
+        srv.wait(timeout=20)
+    out = log.read_text(errors="replace")
     assert "Traceback" not in out and "ModuleNotFoundError" not in out
