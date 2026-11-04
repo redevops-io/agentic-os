@@ -35,7 +35,7 @@ extern "C" {
 fn child_count(pid: u32) -> usize {
     let mut buf = [0i32; 64];
     let n = unsafe { proc_listchildpids(pid as i32, buf.as_mut_ptr() as *mut _, (buf.len() * 4) as i32) };
-    if n <= 0 { 0 } else { n as usize / 4 }
+    if n <= 0 { 0 } else { 1 } // libproc returns a byte/pid count depending on the OS build; only ">0 children" matters
 }
 
 fn json_str(s: &str) -> String {
