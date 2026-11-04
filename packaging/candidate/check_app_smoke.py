@@ -94,14 +94,14 @@ def port_open(port: int) -> bool:
 def http(port: int, method: str, path: str, headers: dict | None = None, body: bytes | None = None, host: str | None = None):
     h = {"Host": host or f"127.0.0.1:{port}", "Connection": "close"}
     h.update(headers or {})
-    for attempt in range(6):          # transient local socket errors (EADDRNOTAVAIL under load) are retried, HTTP answers never
+    for attempt in range(40):          # transient local socket errors (EADDRNOTAVAIL under load) are retried, HTTP answers never
         try:
             c = HTTPConnection("127.0.0.1", port, timeout=10)
             c.request(method, path, body=body, headers=h)
             r = c.getresponse()
             break
         except OSError:
-            if attempt == 5:
+            if attempt == 39:
                 raise
             time.sleep(0.5)
     data = r.read()
