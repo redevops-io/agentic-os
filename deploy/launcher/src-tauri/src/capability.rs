@@ -9,7 +9,7 @@
 // handles need raw CreateProcess + handle-list plumbing), while a piped stdout works identically on
 // every platform and the sidecar already moves its banner and access log off stdout in this mode.
 //
-// Secrecy rules enforced here: the secret, the launch code and the cookie are never written to a log,
+// Secrecy rules enforced here: the secret, the launch code and any session token are never written to a log,
 // never put in an error message, never given to the UI, and the secret is wiped on drop. Error values
 // carry only fixed text and public numbers (status codes, ports).
 //
@@ -317,7 +317,7 @@ pub fn read_handoff<R: Read + Send + 'static>(mut stream: R, timeout: Duration) 
 #[derive(Debug)]
 pub struct HttpResponse {
     pub status: u16,
-    #[allow(dead_code)] // read by the integration tests (Set-Cookie)
+    #[allow(dead_code)] // read by the integration tests
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
 }

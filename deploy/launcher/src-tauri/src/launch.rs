@@ -44,7 +44,7 @@ impl Running {
     }
 }
 
-/// Why a start failed. `Display` text is user-facing and contains no secret, code or cookie.
+/// Why a start failed. `Display` text is user-facing and contains no secret, code or session token.
 #[derive(Debug)]
 pub enum StartError {
     Spawn(String),
@@ -219,13 +219,20 @@ mod tests {
         c
     }
 
-    fn cookie_of(r: &HttpResponse) -> String {
-        let sc = r.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("set-cookie")).expect("Set-Cookie").1.clone();
-        sc.split(';').next().unwrap().to_string()
+    /// The session the page's script gets from the exchange: since the cookie was removed
+    /// (docs/LOCAL_API_SECURITY.md 4.5) it is `session_token` + `csrf_token` in the body.
+    fn session_of(r: &HttpResponse) -> (String, String) {
+        assert!(
+            !r.headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("set-cookie")),
+            "the sidecar must not set a cookie any more"
+        );
+        let v: serde_json::Value = serde_json::from_slice(&r.body).expect("session JSON");
+        assert_eq!(v["session_header"], "X-Agentic-Session");
+        (v["session_token"].as_str().unwrap().to_string(), v["csrf_token"].as_str().unwrap().to_string())
     }
 
-    fn get(port: u16, path: &str, cookie: Option<&str>) -> HttpResponse {
-        let h: Vec<(&str, &str)> = cookie.map(|c| vec![("Cookie", c)]).unwrap_or_default();
+    fn get(port: u16, path: &str, session: Option<&str>) -> HttpResponse {
+        let h: Vec<(&str, &str)> = session.map(|t| vec![("X-Agentic-Session", t)]).unwrap_or_default();
         http_request(port, "GET", path, &h, None, Duration::from_secs(5)).unwrap()
     }
 
@@ -328,11 +335,21 @@ mod tests {
         let body = format!("{{\"code\":\"{frag_code}\"}}");
         let ex = http_request(port, "POST", "/api/local/session", &[], Some(&body), Duration::from_secs(5)).unwrap();
         assert_eq!(ex.status, 200, "exchanging the launch code must yield a session");
-        let cookie = cookie_of(&ex);
-        assert!(cookie.starts_with("agentic_os_session="));
-        let projects = get(port, "/api/projects", Some(&cookie));
+        let (token, _csrf) = session_of(&ex);
+        let projects = get(port, "/api/projects", Some(&token));
         assert_eq!(projects.status, 200, "the session works");
         assert!(String::from_utf8_lossy(&projects.body).contains("customer-ops"));
+        // the old cookie credential is gone: presenting it as a cookie authenticates nothing
+        let as_cookie = http_request(
+            port,
+            "GET",
+            "/api/projects",
+            &[("Cookie", &format!("agentic_os_session={token}"))],
+            None,
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(as_cookie.status, 401);
 
         // single use
         let again = http_request(port, "POST", "/api/local/session", &[], Some(&body), Duration::from_secs(5)).unwrap();
@@ -401,6 +418,42 @@ mod tests {
             assert!(fresh_launch_code(port, running.secret()).is_ok(), "and works after the flood");
         }
         assert_eq!(running.stop(), StopOutcome::Graceful);
+    }
+
+    /// End to end through a real (headless) browser, for SR-01: mint a code with the real sidecar, write the
+    /// private redirect page, let a headless browser open THE FILE (as the OS opener would), and require
+    /// that it lands on the sidecar origin, signs in from the fragment (the UI script strips it) and gets
+    /// data from the API. `RDO_BROWSER_CMD` is a command line `<program> <args...>`; it receives
+    /// `<redirect file> <port>` as the last two arguments and prints one JSON line.
+    #[test]
+    #[ignore]
+    fn real_sidecar_redirect_page_signs_in_through_a_headless_browser() {
+        let cmdline = std::env::var("RDO_BROWSER_CMD").expect("set RDO_BROWSER_CMD");
+        let mut cmd = real_sidecar_cmd();
+        let running = start_sidecar(&mut cmd, READY_TIMEOUT).expect("start");
+        let code = fresh_launch_code(running.port, running.secret()).unwrap();
+        let dir = std::env::temp_dir().join(format!("rdo-launch-browser-{}", std::process::id()));
+        let file = crate::opener::write_redirect(&dir, &launch_url(running.port, &running.base_path, &code)).unwrap();
+        let mut parts = cmdline.split_whitespace();
+        let out = Command::new(parts.next().unwrap())
+            .args(parts)
+            .arg(&file)
+            .arg(running.port.to_string())
+            .output()
+            .expect("run browser driver");
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        println!("browser driver output: {}", text.replace(code.expose(), "<code>"));
+        crate::opener::remove(&file);
+        let _ = std::fs::remove_dir(&dir);
+        let v: serde_json::Value = serde_json::from_str(text.lines().last().unwrap_or("{}")).expect("driver JSON");
+        assert_eq!(v["landedOnSidecar"], true);
+        assert_eq!(v["fragmentGone"], true, "the UI script removed #lc= from the address bar");
+        assert_eq!(v["apiStatus"], 200, "the page is signed in and gets data");
+        // the code was used by the browser: it is dead now
+        let body = format!("{{\"code\":\"{}\"}}", code.expose());
+        let again = http_request(running.port, "POST", "/api/local/session", &[], Some(&body), Duration::from_secs(5)).unwrap();
+        assert_eq!(again.status, 401);
+        running.stop();
     }
 
     /// A stale v0.3.2 sidecar (no handshake, no gate) and a foreign listener are refused; and the new
