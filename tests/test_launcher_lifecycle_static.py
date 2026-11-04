@@ -45,7 +45,7 @@ def test_launcher_spawns_with_an_os_chosen_port_and_the_stdout_handoff():
 
 def test_nothing_is_trusted_or_opened_before_the_handshake():
     launch = _src("launch.rs")
-    assert launch.index("capability::read_handoff") < launch.index("capability::handshake(") < launch.index("Ok(Running")
+    assert launch.index("capability::read_handoff") < launch.index("prove_sidecar(handoff.port") < launch.index("Ok(Running")
     main = _src("main.rs")
     assert main.index("capability::fresh_launch_code") < main.index("opener::write_redirect") < main.index("open_in_browser(&file)")
 
@@ -97,3 +97,11 @@ def test_sr07_legacy_listener_is_only_reported_never_adopted_or_killed():
     assert "legacy_service_warning" in main
     ui = (ROOT / "deploy" / "launcher" / "ui" / "index.html").read_text(encoding="utf-8")
     assert 'invoke("legacy_service_warning")' in ui
+
+
+def test_n03_start_path_distinguishes_busy_from_untrusted():
+    launch = _src("launch.rs").split("#[cfg(test)]")[0]
+    assert "prove_sidecar(handoff.port" in launch and "START_VERIFY_DEADLINE: Duration = Duration::from_secs(30)" in launch
+    assert "capability::handshake(&handoff" not in launch, "the start path must not map every handshake error to untrusted"
+    cap = _src("capability.rs").split("#[cfg(test)]")[0]
+    assert "Transient(u16)" in cap and "429 | 500..=599" in cap

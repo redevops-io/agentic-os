@@ -1184,12 +1184,39 @@ def test_sr06_many_stalled_connections_do_not_exhaust_a_256_fd_sidecar():
     p, port = _spawn_serve(preexec=small_limit)
     socks = []
     try:
-        for _ in range(320):
-            s = socket.create_connection(("127.0.0.1", port), timeout=5)
-            s.sendall(b"GET / HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nX-Slow: " % port)     # never finishes the headers
-            socks.append(s)
-        nonce = b64url(os.urandom(16))
-        st, body, _ = _http("POST", f"http://127.0.0.1:{port}/api/local/handshake", body={"client_nonce": nonce})
+        # The listen backlog is 128 and the sidecar's single event loop accepts in batches, so an
+        # unpaced burst of 320 connects can see resets/timeouts from the OS (macOS drops the overflow):
+        # a property of the test client, not of the sidecar. Pace the connects in batches, retry a
+        # connection the OS refused (bounded), and require that (nearly) all 320 stalled clients exist.
+        def stalled_connection():
+            last = None
+            for _ in range(8):
+                try:
+                    s = socket.create_connection(("127.0.0.1", port), timeout=5)
+                    s.sendall(b"GET / HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nX-Slow: " % port)   # headers never finish
+                    return s
+                except OSError as e:
+                    last = e
+                    time.sleep(0.1)
+            raise AssertionError(f"could not establish a stalled client after 8 tries: {last!r}")
+
+        for i in range(320):
+            socks.append(stalled_connection())
+            if i % 32 == 31:
+                time.sleep(0.05)                 # let the server's loop accept the batch
+        assert len(socks) == 320
+        # the launcher's handshake must work with the stalled clients present; allow the OS/loop a bounded
+        # moment (5 s) instead of a single attempt
+        deadline = time.monotonic() + 5.0
+        while True:
+            nonce = b64url(os.urandom(16))
+            try:
+                st, body, _ = _http("POST", f"http://127.0.0.1:{port}/api/local/handshake", body={"client_nonce": nonce})
+            except OSError:
+                st = None
+            if st == 200 or time.monotonic() > deadline:
+                break
+            time.sleep(0.1)
         assert st == 200, "the launcher's handshake must still work with 320 stalled clients"
     finally:
         for s in socks:

@@ -452,6 +452,9 @@ pub enum CapabilityError {
     Untrusted(&'static str),
     /// The proof did not verify: whatever listens on the port does not hold this launch's secret.
     ProofMismatch,
+    /// The peer answered with a transient condition (429, 5xx, `401 invalid_proof`): a busy or flooded
+    /// sidecar, not evidence of a foreign one. Retryable; never a reason to distrust.
+    Transient(u16),
 }
 
 impl fmt::Display for CapabilityError {
@@ -460,6 +463,7 @@ impl fmt::Display for CapabilityError {
             CapabilityError::Unreachable(e) => write!(f, "the control plane did not answer ({e})"),
             CapabilityError::Untrusted(why) => write!(f, "the listener did not behave as this launch's control plane ({why})"),
             CapabilityError::ProofMismatch => f.write_str("the listener could not prove it is this launch's control plane"),
+            CapabilityError::Transient(st) => write!(f, "the control plane is busy (HTTP {st})"),
         }
     }
 }
@@ -473,7 +477,7 @@ impl From<HttpError> for CapabilityError {
     }
 }
 
-fn fresh_nonce() -> Result<String, CapabilityError> {
+pub fn fresh_nonce() -> Result<String, CapabilityError> {
     let mut n = [0u8; 16];
     getrandom::fill(&mut n).map_err(|_| CapabilityError::Unreachable("no system randomness".into()))?;
     Ok(b64url_encode(&n)) // 22 chars
@@ -495,9 +499,35 @@ pub fn handshake(port: u16, secret: &Secret) -> Result<String, CapabilityError> 
 
 /// `handshake` with a caller-chosen nonce (tests).
 pub fn handshake_with(port: u16, secret: &Secret, client_nonce: &str) -> Result<String, CapabilityError> {
+    handshake_budgeted(port, secret, client_nonce, HTTP_TIMEOUT)
+}
+
+/// Is this non-200 answer to the handshake a TRANSIENT condition of a busy/flooded sidecar (retry) rather
+/// than proof of a peer that is not ours? 429 and 5xx, and the gate's own busy codes. Everything else
+/// (404/405 of a stale v0.3.2 sidecar, 401 `auth_required` or 403 of another gate, 3xx, other 4xx) means
+/// the handshake endpoint is absent or refused: Untrusted at once.
+fn handshake_status_is_transient(r: &HttpResponse) -> bool {
+    match r.status {
+        429 | 500..=599 => true,
+        401 => matches!(error_code(r).as_deref(), Some("invalid_proof") | Some("rate_limited")),
+        _ => false,
+    }
+}
+
+/// `handshake_with` with an explicit time budget for the HTTP exchange (the start path bounds the whole
+/// verification with a deadline).
+pub fn handshake_budgeted(
+    port: u16,
+    secret: &Secret,
+    client_nonce: &str,
+    budget: Duration,
+) -> Result<String, CapabilityError> {
     let body = format!("{{\"client_nonce\":\"{client_nonce}\"}}");
-    let r = http_request(port, "POST", "/api/local/handshake", &[], Some(&body), HTTP_TIMEOUT)?;
+    let r = http_request(port, "POST", "/api/local/handshake", &[], Some(&body), budget)?;
     if r.status != 200 {
+        if handshake_status_is_transient(&r) {
+            return Err(CapabilityError::Transient(r.status));
+        }
         return Err(CapabilityError::Untrusted("handshake endpoint refused or absent"));
     }
     let m = json_body(&r)?;
@@ -615,6 +645,14 @@ pub fn fresh_launch_code_with(
             Ok(n) => n,
             Err(CapabilityError::Unreachable(e)) => {
                 last = OpenError::Unreachable(e);
+                if i + 1 < attempts {
+                    sleep(backoff(i));
+                }
+                continue;
+            }
+            Err(CapabilityError::Transient(_)) => {
+                // 429/5xx on the handshake: a busy sidecar, not a foreign one (same rule as the mint)
+                last = OpenError::Busy;
                 if i + 1 < attempts {
                     sleep(backoff(i));
                 }
@@ -914,7 +952,7 @@ pub(crate) mod tests {
     #[test]
     fn handshake_refuses_a_stale_sidecar_without_the_endpoint() {
         // v0.3.2 answered unknown POSTs with 404/405 (or 401 behind the gate without a session).
-        for status in ["404 Not Found", "405 Method Not Allowed", "401 Unauthorized", "500 Internal Server Error"] {
+        for status in ["404 Not Found", "405 Method Not Allowed", "401 Unauthorized", "403 Forbidden", "301 Moved Permanently"] {
             let body = "{\"detail\":\"Not Found\"}";
             let resp = format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
             let port = one_shot_server(resp.into_bytes());

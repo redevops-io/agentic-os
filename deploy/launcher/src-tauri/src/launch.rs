@@ -13,11 +13,14 @@ use crate::lifecycle::{ManagedChild, StopOutcome, GRACE};
 use std::io::Read;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Time allowed for the sidecar to extract (PyInstaller onefile), import and bind. Generous: a first
 /// start on Windows with antivirus scanning can take tens of seconds.
 pub const READY_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// Total time allowed for the start path's identity check (handshake with retries).
+pub const START_VERIFY_DEADLINE: Duration = Duration::from_secs(30);
 
 /// A sidecar this launcher started and authenticated.
 pub struct Running {
@@ -56,6 +59,9 @@ pub enum StartError {
     HandoffTooLong,
     /// The listener did not pass the handshake: it was stopped and not opened.
     Untrusted(CapabilityError),
+    /// The identity check could not be completed within the deadline because the sidecar stayed busy or
+    /// unreachable (flood, overload). Not evidence of a foreign process; what WE spawned was stopped.
+    Busy,
 }
 
 impl std::fmt::Display for StartError {
@@ -81,6 +87,13 @@ impl std::fmt::Display for StartError {
             StartError::HandoffTooLong => f.write_str(
                 "The control plane sent an oversized start-up message; it was stopped and not trusted.",
             ),
+            StartError::Busy => write!(
+                f,
+                "The local service is busy: the control plane this app just started did not answer its \
+                 identity check within {} s (something may be flooding the local port, or the machine is \
+                 overloaded). It was stopped, nothing was opened and nothing else was used. Try Start again.",
+                START_VERIFY_DEADLINE.as_secs()
+            ),
             StartError::Untrusted(e) => write!(
                 f,
                 "The process on the reported port could not prove it is the control plane this app started \
@@ -97,7 +110,7 @@ const LEGACY_PROBE_BUDGET: Duration = Duration::from_millis(300);
 
 /// Best-effort, non-invasive detection of an OLD v0.3.2 sidecar left running on `port` (the old launcher
 /// orphaned it, and it keeps serving an unauthenticated API with wildcard CORS). Only a
-/// `GET /api/projects` without credentials: a 200 with a JSON body means it is open to anyone. It is
+/// `GET /api/projects` without credentials: a 200 with the projects list means it is open to anyone. It is
 /// neither adopted nor stopped; the caller shows the returned text. Anything else (nothing listening,
 /// 401/403/404, slow, not JSON) returns None. Bounded by LEGACY_PROBE_BUDGET.
 pub fn legacy_listener_warning(port: u16) -> Option<String> {
@@ -106,7 +119,13 @@ pub fn legacy_listener_warning(port: u16) -> Option<String> {
         return None;
     }
     let v: serde_json::Value = serde_json::from_slice(&r.body).ok()?;
-    if !(v.is_array() || v.is_object()) {
+    // The old sidecar's `/api/projects` is a list of projects with string `id` and `name`
+    // ([{"id":"customer-ops","name":"Customer Operations",...}]). Require that shape so an unrelated JSON
+    // service on the port does not trigger a false warning (review N-05).
+    let looks_like_projects = v.as_array().is_some_and(|a| {
+        !a.is_empty() && a.iter().all(|p| p.get("id").is_some_and(|x| x.is_string()) && p.get("name").is_some_and(|x| x.is_string()))
+    });
+    if !looks_like_projects {
         return None;
     }
     Some(format!(
@@ -148,6 +167,35 @@ fn stderr_hint(tail: &Arc<Mutex<Vec<u8>>>) -> String {
     if clean.is_empty() { String::new() } else { format!(" ({clean})") }
 }
 
+/// Run the HMAC handshake against `port` until it verifies, retrying transient conditions until `deadline`.
+/// - `Ok`: the peer holds this launch's secret.
+/// - `Untrusted`: final at once for a wrong proof or a peer that is not the sidecar (404/405/other
+///   refusals, wrong protocol, malformed answer): a stale v0.3.2 sidecar or a foreign listener can never
+///   answer, so it is never reported as merely busy.
+/// - `Busy`: only transient conditions (429, 5xx, `401 invalid_proof`, timeouts, resets, refused
+///   connection) until the deadline.
+pub fn prove_sidecar(port: u16, secret: &Secret, deadline: Duration, sleep: &dyn Fn(Duration)) -> Result<(), StartError> {
+    let start = Instant::now();
+    let mut attempt = 0u32;
+    loop {
+        let left = deadline.saturating_sub(start.elapsed());
+        if left.is_zero() {
+            return Err(StartError::Busy);
+        }
+        let nonce = capability::fresh_nonce().map_err(StartError::Untrusted)?;
+        // each exchange is bounded by what is left of the deadline (at most the normal 5 s)
+        match capability::handshake_budgeted(port, secret, &nonce, left.min(Duration::from_secs(5))) {
+            Ok(_) => return Ok(()),
+            Err(CapabilityError::Unreachable(_)) | Err(CapabilityError::Transient(_)) => {
+                attempt += 1;
+                let wait = Duration::from_millis(250u64 << attempt.min(2)).min(deadline.saturating_sub(start.elapsed()));
+                sleep(wait);
+            }
+            Err(e) => return Err(StartError::Untrusted(e)),
+        }
+    }
+}
+
 /// Spawn `cmd` (program and fixed arguments already set), read the hand-off, run the handshake.
 /// On any failure the spawned tree is stopped before returning.
 pub fn start_sidecar(cmd: &mut Command, ready_timeout: Duration) -> Result<Running, StartError> {
@@ -186,10 +234,12 @@ pub fn start_sidecar(cmd: &mut Command, ready_timeout: Duration) -> Result<Runni
         }
     };
 
-    // Nothing is trusted, and no browser is opened, before this passes.
-    if let Err(e) = capability::handshake(handoff.port, &handoff.secret) {
-        child.stop(GRACE);
-        return Err(StartError::Untrusted(e));
+    // Nothing is trusted, and no browser is opened, before this passes. Only a VERIFIED failure is final
+    // (wrong proof, or a peer whose handshake endpoint is absent/refused: a stale or foreign process);
+    // transient conditions get bounded retries with a total deadline, and then "busy".
+    if let Err(e) = prove_sidecar(handoff.port, &handoff.secret, START_VERIFY_DEADLINE, &std::thread::sleep) {
+        child.stop(GRACE); // only the process tree WE spawned
+        return Err(e);
     }
     Ok(Running { child, port: handoff.port, base_path: handoff.base_path, secret: handoff.secret })
 }
@@ -285,6 +335,10 @@ mod tests {
         // the current sidecar (gated): 401
         assert!(legacy_listener_warning(fake_peer(http("401 Unauthorized", "{\"error\":{\"code\":\"auth_required\"}}"), Duration::ZERO)).is_none());
         assert!(legacy_listener_warning(fake_peer(http("404 Not Found", "{}"), Duration::ZERO)).is_none());
+        // 200 JSON that is not the projects list (some other service on 8787): no false warning (N-05)
+        assert!(legacy_listener_warning(fake_peer(http("200 OK", "{\"status\":\"ok\"}"), Duration::ZERO)).is_none());
+        assert!(legacy_listener_warning(fake_peer(http("200 OK", "[1,2,3]"), Duration::ZERO)).is_none());
+        assert!(legacy_listener_warning(fake_peer(http("200 OK", "[]"), Duration::ZERO)).is_none());
         // 200 but not JSON (some other web server)
         assert!(legacy_listener_warning(fake_peer(http("200 OK", "<html>hi</html>"), Duration::ZERO)).is_none());
         // nothing listening
@@ -294,10 +348,165 @@ mod tests {
 
     #[test]
     fn legacy_probe_never_slows_start_by_more_than_its_budget() {
-        let port = fake_peer(http("200 OK", "[]"), Duration::from_secs(3)); // slow peer
+        let port = fake_peer(http("200 OK", "[{\"id\":\"a\",\"name\":\"b\"}]"), Duration::from_secs(3)); // slow peer
         let t0 = Instant::now();
         assert!(legacy_listener_warning(port).is_none());
         assert!(t0.elapsed() < Duration::from_millis(600), "took {:?}", t0.elapsed());
+    }
+
+    // --- N-03: the START path's identity check (flood => retry/busy, stale/foreign => untrusted) ----
+
+    use capability::{handshake_proof, PROTO};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    #[derive(Clone)]
+    enum Hs {
+        Honest,
+        WrongProof,
+        Status(u16, &'static str), // status, error.code ("" for none)
+        Drop,                      // close without answering
+        Hang,                      // read the request and never answer
+    }
+
+    struct HsServer {
+        port: u16,
+        calls: Arc<AtomicUsize>,
+        stop: Arc<AtomicBool>,
+    }
+    impl Drop for HsServer {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Handshake double. `script` is consumed one answer per connection; when exhausted: `then`.
+    fn hs_server(secret: Secret, script: Vec<Hs>, then: Hs) -> HsServer {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        l.set_nonblocking(true).unwrap();
+        let port = l.local_addr().unwrap().port();
+        let (calls, stop) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicBool::new(false)));
+        let (c2, s2) = (calls.clone(), stop.clone());
+        let script = Arc::new(Mutex::new(script.into_iter().collect::<std::collections::VecDeque<_>>()));
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            while !s2.load(Ordering::SeqCst) {
+                let Ok((mut s, _)) = l.accept() else {
+                    std::thread::sleep(Duration::from_millis(5));
+                    continue;
+                };
+                s.set_nonblocking(false).ok();
+                let mut buf = [0u8; 4096];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                c2.fetch_add(1, Ordering::SeqCst);
+                let step = script.lock().unwrap().pop_front().unwrap_or(then.clone());
+                let nonce = req
+                    .split("\"client_nonce\":\"")
+                    .nth(1)
+                    .and_then(|x| x.split('"').next())
+                    .unwrap_or("")
+                    .to_string();
+                let ok_body = |proof: String| {
+                    format!(
+                        "{{\"v\":1,\"proto\":\"{PROTO}\",\"proof\":\"{proof}\",\"server_nonce\":\"{}\",\"expires_in\":30}}",
+                        "S".repeat(22)
+                    )
+                };
+                let reply = |status: &str, body: &str| {
+                    format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+                };
+                match step {
+                    Hs::Honest => {
+                        let _ = s.write_all(reply("200 OK", &ok_body(handshake_proof(&secret, port, &nonce))).as_bytes());
+                    }
+                    Hs::WrongProof => {
+                        let _ = s.write_all(reply("200 OK", &ok_body("A".repeat(43))).as_bytes());
+                    }
+                    Hs::Status(st, code) => {
+                        let body = if code.is_empty() {
+                            "{\"detail\":\"x\"}".to_string()
+                        } else {
+                            format!("{{\"error\":{{\"code\":\"{code}\",\"message\":\"x\"}}}}")
+                        };
+                        let _ = s.write_all(reply(&format!("{st} X"), &body).as_bytes());
+                    }
+                    Hs::Drop => {}
+                    Hs::Hang => held.push(s), // keep the connection open, silent
+                }
+            }
+        });
+        HsServer { port, calls, stop }
+    }
+
+    fn key() -> Secret {
+        Secret::from_bytes([42; 32])
+    }
+
+    #[test]
+    fn start_path_flood_answers_are_retried_until_the_handshake_verifies() {
+        for transient in [Hs::Status(429, "rate_limited"), Hs::Status(503, ""), Hs::Status(401, "invalid_proof"), Hs::Drop] {
+            let srv = hs_server(key(), vec![transient.clone(), transient.clone(), transient], Hs::Honest);
+            let slept = Mutex::new(0usize);
+            let r = prove_sidecar(srv.port, &key(), Duration::from_secs(30), &|_| *slept.lock().unwrap() += 1);
+            assert!(r.is_ok(), "{r:?}");
+            assert_eq!(srv.calls.load(Ordering::SeqCst), 4, "3 transient answers, then a verified handshake");
+            assert_eq!(*slept.lock().unwrap(), 3);
+        }
+    }
+
+    #[test]
+    fn start_path_that_stays_busy_ends_busy_at_the_deadline_not_untrusted() {
+        for transient in [Hs::Status(429, "rate_limited"), Hs::Status(500, ""), Hs::Drop, Hs::Hang] {
+            let srv = hs_server(key(), vec![], transient);
+            let t0 = Instant::now();
+            let r = prove_sidecar(srv.port, &key(), Duration::from_millis(1500), &std::thread::sleep);
+            assert!(matches!(r, Err(StartError::Busy)), "{r:?}");
+            assert!(t0.elapsed() < Duration::from_millis(2500), "bounded by the deadline: {:?}", t0.elapsed());
+            let msg = r.unwrap_err().to_string();
+            assert!(msg.contains("busy") && msg.contains("stopped") && msg.contains("nothing was opened"), "{msg}");
+        }
+        // nothing listening at all: also only busy after the deadline
+        let port = { TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port() };
+        assert!(matches!(prove_sidecar(port, &key(), Duration::from_millis(900), &std::thread::sleep), Err(StartError::Busy)));
+    }
+
+    #[test]
+    fn start_path_stale_or_foreign_peers_are_untrusted_at_once_never_busy() {
+        // a stale v0.3.2 sidecar (404/405), another gate (401 auth_required, 403), a redirect, a 200 that is
+        // not the protocol or carries a wrong proof: all final on the FIRST answer
+        for peer in [
+            Hs::Status(404, ""),
+            Hs::Status(405, ""),
+            Hs::Status(401, "auth_required"),
+            Hs::Status(403, "origin_not_allowed"),
+            Hs::Status(301, ""),
+            Hs::WrongProof,
+        ] {
+            let srv = hs_server(key(), vec![], peer);
+            let t0 = Instant::now();
+            let r = prove_sidecar(srv.port, &key(), Duration::from_secs(30), &|_| panic!("must not retry or wait"));
+            assert!(matches!(r, Err(StartError::Untrusted(_))), "{r:?}");
+            assert_eq!(srv.calls.load(Ordering::SeqCst), 1);
+            assert!(t0.elapsed() < Duration::from_secs(1), "promptly: {:?}", t0.elapsed());
+        }
+    }
+
+    #[test]
+    fn start_path_a_failed_proof_after_transient_answers_is_still_final() {
+        let srv = hs_server(key(), vec![Hs::Status(429, "rate_limited")], Hs::WrongProof);
+        let r = prove_sidecar(srv.port, &key(), Duration::from_secs(30), &|_| ());
+        assert!(matches!(r, Err(StartError::Untrusted(capability::CapabilityError::ProofMismatch))), "{r:?}");
+        assert_eq!(srv.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn open_path_treats_a_handshake_429_as_busy_not_untrusted() {
+        let srv = hs_server(key(), vec![], Hs::Status(429, "rate_limited"));
+        let r = capability::fresh_launch_code_with(srv.port, &key(), 3, &|_| ());
+        assert_eq!(r.unwrap_err(), capability::OpenError::Busy);
+        let srv = hs_server(key(), vec![], Hs::Status(404, ""));
+        assert!(matches!(capability::fresh_launch_code_with(srv.port, &key(), 3, &|_| ()), Err(capability::OpenError::Untrusted(_))));
     }
 
     /// Normal start -> handshake OK -> launch URL has #lc= -> the code yields a working session ->
@@ -404,6 +613,15 @@ mod tests {
                     Err(_) => other += 1,
                 }
             }
+            // N-03: the START path's identity check under the same flood. Verified, or busy after its
+            // deadline; never untrusted (that would have stopped the sidecar we just spawned).
+            let proved = prove_sidecar(port, running.secret(), Duration::from_secs(10), &std::thread::sleep);
+            println!("RESULT {threads} flood threads: start-path identity check => {}", match &proved {
+                Ok(()) => "verified".to_string(),
+                Err(StartError::Busy) => "busy".to_string(),
+                Err(_) => "UNTRUSTED".to_string(),
+            });
+            assert!(matches!(proved, Ok(()) | Err(StartError::Busy)), "a flood must never make Start untrusted: {proved:?}");
             stop.store(true, Ordering::SeqCst);
             for f in flooders {
                 let _ = f.join();
@@ -477,6 +695,8 @@ mod tests {
         }
         // sanity: the stale one really is unauthenticated (this is the v0.3.2 exposure)
         assert_eq!(get(free, "/api/projects", None).status, 200);
+        // ... and the launcher's best-effort legacy probe recognises its real answer shape (SR-07/N-05)
+        assert!(legacy_listener_warning(free).is_some(), "the real v0.3.2 projects list must trigger the warning");
 
         // a new launch is unaffected (different OS-chosen port) ...
         let mut cmd = real_sidecar_cmd();
