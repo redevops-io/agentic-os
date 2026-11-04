@@ -14,7 +14,7 @@ Use the same `env`-free path as the checklist (Finder double-click), NOT the har
 
 | ID | What to look at | Expected from the headless evidence | Screenshot |
 |---|---|---|---|
-| D-01 | window content: title "Agentic Apps", heading "ReDevOps", three buttons, text box | OBSERVED headless only: a 560 x 640 on-screen window of owner "Agentic Apps" exists, and the page's own start-up calls arrive (see report 3.2) so the page scripts and `window.__TAURI__` work. Not observed: pixels. | `D-01-launcher-window.png` |
+| D-01 | window content: title "Agentic Apps", heading "ReDevOps", three buttons, text box | OBSERVED headless only: a 560 x 640 on-screen window of owner "Agentic Apps" exists, and the page's own start-up calls arrive (see report section 1) so the page scripts and `window.__TAURI__` work. Not observed: pixels. | `D-01-launcher-window.png` |
 | D-02 | "Advanced - local containers" section hidden | the page asks `docker --version` at load (OBSERVED); with no docker on the launcher's PATH it answers false, so hidden | `D-02-advanced-section.png` |
 | E-01 | Check this device | `Error:` + `exit exit status: 1` + report text, no traceback (the sidecar CLI path is OBSERVED headless: `check` command, exit 1) | `E-01-check-device.png` |
 | E-02 | Start & open | "Starting the control plane..." then `Running at http://127.0.0.1:<port> - opened in your browser.` (the code path is OBSERVED headless: start about 0.6 s, port ephemeral) | `E-02-start-open.png` |
