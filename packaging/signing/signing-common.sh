@@ -188,32 +188,42 @@ r0p_ledger_check() {
     else die "this scope file (sha256 $s) was already used (it is in the ledger). Write a NEW scope file for a new run, or pass --allow-reuse after deciding that a repeat is intended"; fi
   fi
 }
+# The locked sections run in a SUBSHELL whose EXIT trap releases the lock, so a `die` inside (broken chain, symlink, existing event file) can never
+# leave a stale lock behind; the parent propagates the exit status.
+R0P_LOCKED_LEDGER=""
+r0p_ledger_in_lock() { # LEDGER function args... : run the function under the lock in a subshell
+  local rc=0
+  ( r0p_ledger_lock "$1"; R0P_LOCKED_LEDGER="$1"; trap 'r0p_ledger_unlock "$R0P_LOCKED_LEDGER"' EXIT; "${@:2}" ) || rc=$?
+  [ "$rc" -eq 0 ] || exit "$rc"
+}
 # r0p_ledger_append LEDGER SCOPE_SHA MODE EVENT [DETAIL]
-r0p_ledger_append() {
+r0p_ledger_append_locked() {
   local l="$1" s="$2" seq prev f line
-  r0p_ledger_lock "$l"
-  if [ -L "$l" ] || [ -L "$l/events" ]; then r0p_ledger_unlock "$l"; die "ledger: the ledger path became a symlink; refusing"; fi
+  if [ -L "$l" ] || [ -L "$l/events" ]; then die "ledger: the ledger path became a symlink; refusing"; fi
   r0p_ledger_verify "$l"
   seq=$((R0P_LEDGER_N + 1)); prev="$R0P_LEDGER_LAST"
   f="$l/events/$(printf '%06d' "$seq").txt"
   line="seq=$seq prev=$prev scope=$s time=$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ) mode=$3 event=$4${5:+ $5}"
-  if ! ( set -C; printf '%s\n' "$line" > "$f" ) 2>/dev/null; then r0p_ledger_unlock "$l"; die "ledger: $f already exists or is a symlink; refusing (nothing was followed or overwritten)"; fi
+  # O_EXCL (noclobber): an existing file or a symlink at the event path is never followed or overwritten
+  ( set -C; printf '%s\n' "$line" > "$f" ) 2>/dev/null || die "ledger: $f already exists or is a symlink; refusing (nothing was followed or overwritten)"
   chmod 600 "$f"
-  ( set -C; printf '%s %s\n' "$seq" "$(r0p_sha "$f")" > "$l/LENGTH.new" ) 2>/dev/null || { /bin/rm -f "$l/LENGTH.new"; ( set -C; printf '%s %s\n' "$seq" "$(r0p_sha "$f")" > "$l/LENGTH.new" ); }
+  /bin/rm -f "$l/LENGTH.new"
+  ( set -C; printf '%s %s\n' "$seq" "$(r0p_sha "$f")" > "$l/LENGTH.new" ) 2>/dev/null || die "ledger: cannot write LENGTH.new"
   /bin/mv -f "$l/LENGTH.new" "$l/LENGTH"
-  r0p_ledger_unlock "$l"
 }
+r0p_ledger_append() { r0p_ledger_in_lock "$1" r0p_ledger_append_locked "$@"; }
 # r0p_ledger_claim LEDGER SCOPE_SHA ALLOW_REUSE MODE DETAIL : ATOMICALLY claim the scope (mkdir), then record "started". Exactly one of several
 # parallel runs of the same scope wins; the others stop here, before any use of the owner's session. A claim is never released.
-r0p_ledger_claim() {
+r0p_ledger_claim_locked() {
   local l="$1" s="$2" allow="$3"
-  r0p_ledger_prepare "$l"
-  r0p_ledger_lock "$l"
   if /bin/mkdir "$l/claims/$s" 2>/dev/null; then :
   elif [ "$allow" = 1 ]; then echo "NOTE: --allow-reuse: the scope was claimed before; this repeat is recorded"
-  else r0p_ledger_unlock "$l"; die "this scope file (sha256 $s) is already claimed (used before, or by a parallel run); refusing"; fi
-  r0p_ledger_unlock "$l"
-  r0p_ledger_append "$l" "$s" "$4" started "${5:-}${allow:+ allow_reuse=$allow}"
+  else die "this scope file (sha256 $s) is already claimed (used before, or by a parallel run); refusing"; fi
+}
+r0p_ledger_claim() {
+  r0p_ledger_prepare "$1"
+  r0p_ledger_in_lock "$1" r0p_ledger_claim_locked "$1" "$2" "$3"
+  r0p_ledger_append "$1" "$2" "$4" started "${5:-}${3:+ allow_reuse=$3}"
 }
 
 # distribution gate -----------------------------------------------------------------------------------------------------

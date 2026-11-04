@@ -2043,31 +2043,15 @@ def test_the_release_fingerprint_constant_is_the_published_one_everywhere():
 def test_provenance_entries_verify_against_their_sources():
     base = os.environ.get("R0P_PROVENANCE_SOURCES")
     if not base or not Path(base).is_dir():
-        pytest.skip("set R0P_PROVENANCE_SOURCES to the scratch/evidence root to re-verify the literals against their sources")
-    base = Path(base)
-    checked = 0
-    for e in PROV["entries"]:
-        c, v = e["check"], e["value"]
-        if c["type"] == "repo_file_sha256":
-            assert sha_file(ROOT / c["file"]) == v
-            checked += 1
-        elif c["type"] == "file_sha256":
-            f = base / c["file"]
-            if f.is_file():
-                assert sha_file(f) == v, c["file"]
-                checked += 1
-        elif c["type"] == "text_in_files":
-            for rel in c["files"]:
-                f = base / rel
-                if f.is_file():
-                    txt = f.read_text(errors="replace")
-                    assert (v.lower() in txt.lower()) if c.get("case_insensitive") else (v in txt), (rel, v)
-                    checked += 1
-        else:
-            raise AssertionError(c)
-    assert checked >= 5
+        pytest.skip("SELF-CONSISTENCY ONLY: set R0P_PROVENANCE_SOURCES to the scratch/evidence root to re-verify the literals against their sources")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_chk", SIGN / "tools" / "check_literals_against_sources.py")
+    chk = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(chk)
+    problems = chk.verify(PROV["entries"], Path(base), ROOT)
+    assert problems == [], problems
     # the namespace string is the one of the evidence set
-    sr = base / "r0prime/candidate/evidence-macos-arm64-unsigned-final3/SIGNING_REQUEST.md"
+    sr = Path(base) / "r0prime/candidate/evidence-macos-arm64-unsigned-final3/SIGNING_REQUEST.md"
     if sr.is_file():
         assert "redevops-qa-release@v1" in sr.read_text() and 'NAMESPACE="redevops-qa-release@v1"' in SSH.read_text()
 
@@ -2225,7 +2209,10 @@ def test_r5_04_ledger_claim_is_atomic_exactly_one_parallel_run_wins(tmp_path):
     led = tmp_path / "ledger"
     procs = [subprocess.Popen(["/bin/bash", "-p", "-c", 'die() { echo "ERROR: $*" >&2; exit 1; }; set -euo pipefail; . "%s"; r0p_ledger_check "%s" %s 0; r0p_ledger_claim "%s" %s 0 real x' % (COMMON, led, S64, led, S64)],
                               env=clean_env(tmp_path), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(16)]
-    outs = [(p.wait(60), p.stderr.read()) for p in procs]
+    outs = []
+    for p in procs:
+        _, e = p.communicate(timeout=60)
+        outs.append((p.returncode, e))
     assert sum(1 for rc, _ in outs if rc == 0) == 1, outs
     assert all("already" in e for rc, e in outs if rc != 0), outs
     assert ledger_text(led).count("event=started") == 1 and ledger_claims(led) == [S64]
@@ -2242,14 +2229,23 @@ def test_r5_04_a_symlink_planted_at_the_next_event_or_over_the_ledger_is_never_f
     victim.write_text("precious\n")
     os.symlink(victim, led / "events" / "000002.txt")
     r = lib(tmp_path, f'r0p_ledger_append "{led}" {S64} real ended rc=0')
-    assert r.returncode == 1 and victim.read_text() == "precious\n"
+    assert r.returncode == 1 and "not a regular file" in r.stderr and victim.read_text() == "precious\n"
+    assert not (led / "lock").exists(), "a die inside the locked section must not leave a stale lock"
+    (led / "events" / "000002.txt").unlink()
+    # the symlink appears AFTER the chain was verified and BEFORE the event file is created (the race): O_EXCL must refuse it
+    race = (f'eval "$(declare -f r0p_ledger_verify | sed "1s/r0p_ledger_verify/r0p_ledger_verify_orig/")"; '
+            f'r0p_ledger_verify() {{ r0p_ledger_verify_orig "$@"; ln -s "{victim}" "$1/events/$(printf %06d $((R0P_LEDGER_N + 1))).txt"; }}; '
+            f'r0p_ledger_append "{led}" {S64} real ended rc=0')
+    r = lib(tmp_path, race)
+    assert r.returncode == 1 and "already exists or is a symlink" in r.stderr and victim.read_text() == "precious\n"
+    assert not (led / "lock").exists()
     (led / "events" / "000002.txt").unlink()
     # the ledger directory itself replaced by a symlink after the early check
     real = tmp_path / "ledger-real"
     led.rename(real)
     os.symlink(real, led)
     r = lib(tmp_path, f'r0p_ledger_append "{led}" {S64} real ended rc=0')
-    assert r.returncode == 1 and "symlink" in r.stderr
+    assert r.returncode == 1 and "symlink" in r.stderr and not (real / "lock").exists()
     r = lib(tmp_path, f'r0p_ledger_check "{led}" {"cd" * 32} 0')
     assert r.returncode == 1 and "symlink" in r.stderr
     assert len(list((real / "events").glob("*.txt"))) == 1
@@ -2306,8 +2302,9 @@ def test_r5_04_two_parallel_sshsig_runs_under_one_scope_exactly_one_signs(ssh):
         for i in (1, 2):
             a = real_args(ssh, sc, ssh.outside / f"par{i}.sig")
             procs.append(subprocess.Popen(["/bin/bash", str(ssh.tscript), *[str(x) for x in a]], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True))
-        rcs = [p.wait(60) for p in procs]
-        errs = [p.stderr.read() for p in procs]
+        res = [p.communicate(timeout=60) for p in procs]
+        rcs = [p.returncode for p in procs]
+        errs = [e for _, e in res]
         assert sorted(rcs) == [0, 1], (rcs, errs)
         assert len(list(ssh.outside.glob("par*.sig"))) == 1
         assert any("already claimed" in e or "already used" in e for e in errs)
@@ -2324,8 +2321,9 @@ def test_r5_04_two_parallel_macos_runs_under_one_scope_exactly_one_signs(mac):
         a = ["/bin/bash", mac.script, "--real", "--notarize", "--i-have-owner-authorization", sha_file(sc), "--scope-file", sc, "--ledger", mac.ledger,
              "--input-dmg", mac.dmg, "--expected-sha256", sha_file(mac.dmg), "--out-dir", mac.work / f"par{i}"]
         procs.append(subprocess.Popen([str(x) for x in a], env=base, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True))
-    rcs = [p.wait(120) for p in procs]
-    errs = [p.stderr.read() for p in procs]
+    res = [p.communicate(timeout=120) for p in procs]
+    rcs = [p.returncode for p in procs]
+    errs = [e for _, e in res]
     assert sorted(rcs) == [0, 1], (rcs, errs)
     assert ledger_text(mac.ledger).count("event=started") == 1
     assert len([c for c in mac.calls("xcrun") if "notarytool submit" in c]) == 1
