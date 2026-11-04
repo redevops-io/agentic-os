@@ -414,4 +414,12 @@ def main() -> int:
 SIGKILL_FACTS: dict = {}
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        rc = main()
+    finally:                      # a crash must not leave sidecars running: kill what is left of THIS binary, by named PID
+        for _pid, *_ in procs_of(os.path.realpath(sys.argv[sys.argv.index("--sidecar") + 1])):
+            try:
+                os.kill(_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    sys.exit(rc)
