@@ -25,21 +25,29 @@
 #                  file) and are never written by this script to the transcript or the evidence (only sha256(identity) is recorded); note that the certificate's
 #                  own name appears in `codesign -dvvv` output, which is kept as evidence, as in the frozen v0.3.2 evidence.
 #
-# SCOPE FILE (what the owner authorizes; plain KEY=VALUE lines, '#' comments, unknown or duplicate keys are refused;
-# its sha256 is the argument of --i-have-owner-authorization; template: packaging/signing/AUTHORIZATION-TEMPLATE.md)
-#   scope_version=1  valid_from=YYYY-MM-DD  valid_until=YYYY-MM-DD (UTC, inclusive)  script_sha256=<this file>
-#   entitlements_sha256=<plist>  input_dmg_sha256=<dmg>  identity_sha256=<sha256 of the exact identity string>
-#   team_id=<10 chars>  notarize=yes|no  upload_to=apple-notary|none
-# Real mode refuses if the date is outside the window, if any value differs from what this run would use, if notarize=yes is
-# not matched by --notarize (and vice versa), or if --notarize is requested without upload_to=apple-notary.
+# SCOPE FILE (what the owner states; plain KEY=VALUE lines, '#' comments, unknown or duplicate keys are refused; its sha256 is the
+# argument of --i-have-owner-authorization; the file is read ONCE into a private copy and that copy is hashed and parsed; template:
+# packaging/signing/AUTHORIZATION-TEMPLATE.md). It is a TRIPWIRE against mistakes (wrong file, wrong script, wrong day, a repeat),
+# NOT an authentication: anyone who can write a scope file can satisfy it. The authentication is the owner's own terminal, keychain,
+# identity and notarytool profile.
+#   scope_version=2  not_before / not_after = YYYY-MM-DDTHH:MM:SSZ (UTC, at most 24 h apart)  script_sha256  common_sha256
+#   entitlements_sha256  identity_json_sha256  input_dmg_sha256  identity_sha256 (sha256 of the identity string)
+#   notary_profile_sha256 (sha256 of the profile NAME, or none)  team_id  notarize=yes|no  upload_to=apple-notary|none
+#   distribution=yes|no (must agree with --distribution)  gate_sha256  gate_tool_sha256  evidence_manifest_sha256
+#   build_commit  procedure_commit (40-hex git ids, recorded, not verified here)
+# Real mode refuses if the window is not open, any value differs from what this run would use, notarize/--notarize disagree, or the
+# scope file is in the ledger (--ledger FILE, required; one-time use; --allow-reuse is recorded). With --distribution the distribution gate
+# (packaging/check-distribution-gate.py, bound by hash) must pass; without it a PRIVATE-CANDIDATE statement is printed: signing and
+# notarization do not imply permission to distribute.
 #
 # SAFETY (kept from v2 unless noted in DIFF-vs-v2.md)
 #   * Real identity only in --real; any R0P_CODESIGN_IDENTITY in the environment of a non-real mode is REFUSED (no accidental use).
 #   * The input dmg and anything inside a candidate directory are never written: the input must be a COPY (refused if its folder
 #     looks like a candidate/evidence set or is named by --protected-dir). Everything this script writes lives under --out-dir
 #     (must not exist or must be empty). It never uses rm -rf, sudo or `security`, never `set -x`, and never prints secrets.
-#   * The script re-executes itself under `env -i` with an allowlist (PATH, HOME, LANG, TERM, R0P_*): cloud and token variables of
-#     the caller never reach codesign, notarytool or hdiutil.
+#   * The environment must BE the allowlist (PATH, HOME, LANG, TERM and three named R0P_* variables): if it is not, the script re-executes
+#     itself once under `env -i`; no marker variable can skip that. PATH is fixed to the system directories (stubs only with
+#     R0P_ALLOW_NONSYSTEM_TOOLS=stub-test). The identity and profile names are unset after they are read: no child process inherits them.
 #   * In --real the tools must resolve to system locations (R0P_ALLOW_NONSYSTEM_TOOLS=stub-test is for the unit tests only and is
 #     printed in the evidence).
 #   * Inside-out signing, never --deep: sidecar (entitlements, hardened runtime, secure timestamp), launcher, bundle, then the dmg.
@@ -53,31 +61,30 @@
 # Usage:
 #   sign_and_notarize_r0prime_macos_v3.sh --input-dmg PATH --expected-sha256 HEX --out-dir DIR
 #       [--dry-run | --adhoc-test | --real --i-have-owner-authorization SHA --scope-file FILE [--notarize]]
-#       [--entitlements FILE] [--protected-dir DIR]... [--notary-timeout 30m]
+#       [--entitlements FILE] [--protected-dir DIR]... [--notary-timeout 30m] [--ledger FILE] [--allow-reuse] [--distribution]
 case "$-" in *x*) echo "ERROR: xtrace is on; refusing (it could print secrets)" >&2; exit 1;; esac
 set +x
 set -euo pipefail
 umask 077
 
-SCRIPT_VERSION="r0prime-3"
+SCRIPT_VERSION="r0prime-3.1"
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
 SELF_DIR="$(dirname "$SELF")"
 
-# ---------------------------------------------------------------- scrubbed re-exec (allowlist environment)
-if [ "${R0P_SCRUBBED:-}" != 1 ]; then
-  KEEP=()
-  for v in $(compgen -A export | grep '^R0P_' || true); do KEEP+=("$v=${!v}"); done
-  exec env -i "PATH=${PATH:-/usr/bin:/bin}" "HOME=${HOME:-/nonexistent}" LANG=C LC_ALL=C "TERM=${TERM:-dumb}" \
-       ${KEEP[@]+"${KEEP[@]}"} R0P_SCRUBBED=1 "${BASH:-/bin/bash}" "$SELF" "$@"
-fi
-export LC_ALL=C
-
 die() { echo "ERROR: $*" >&2; exit 1; }
+# shared safety functions (their sha256 is bound by the scope file); the environment must BE the allowlist: no variable can skip this
+. "$SELF_DIR/signing-common.sh"
+r0p_scrub " R0P_CODESIGN_IDENTITY R0P_NOTARY_PROFILE R0P_ALLOW_NONSYSTEM_TOOLS " "$@"
+unset R0P_REEXEC
+r0p_fix_path ""      # fixed system PATH (R0P_ALLOW_NONSYSTEM_TOOLS=stub-test keeps the inherited PATH: unit tests only)
+export LC_ALL=C
+COMMON_SHA="$(r0p_sha "$SELF_DIR/signing-common.sh")"
+
 usage() { sed -n '/^# Usage:/,/^case /p' "$SELF" | sed '$d' | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
 
 INPUT_DMG=""; EXPECTED_SHA=""; OUT_DIR=""; ENTITLEMENTS="$SELF_DIR/../macos/sidecar.entitlements.plist"
 MODE_DRY=0; MODE_ADHOC=0; MODE_REAL=0; AUTH_SHA=""; SCOPE_FILE=""; DO_NOTARIZE=0
-NOTARY_TIMEOUT="30m"; PROTECTED=()
+NOTARY_TIMEOUT="30m"; NOTARY_MARGIN=90; PROTECTED=(); LEDGER=""; ALLOW_REUSE=0; DISTRIBUTION=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -87,8 +94,12 @@ while [ $# -gt 0 ]; do
     --entitlements) [ $# -ge 2 ] || die "--entitlements needs a value"; ENTITLEMENTS="$2"; shift 2;;
     --protected-dir) [ $# -ge 2 ] || die "--protected-dir needs a value"; PROTECTED+=("$2"); shift 2;;
     --notary-timeout) [ $# -ge 2 ] || die "--notary-timeout needs a value"; NOTARY_TIMEOUT="$2"; shift 2;;
+    --notary-watchdog-margin) [ $# -ge 2 ] || die "--notary-watchdog-margin needs a value"; NOTARY_MARGIN="$2"; shift 2;;
     --i-have-owner-authorization) [ $# -ge 2 ] || die "--i-have-owner-authorization needs the sha256 of the scope file"; AUTH_SHA="$2"; shift 2;;
     --scope-file) [ $# -ge 2 ] || die "--scope-file needs a value"; SCOPE_FILE="$2"; shift 2;;
+    --ledger) [ $# -ge 2 ] || die "--ledger needs a value"; LEDGER="$2"; shift 2;;
+    --allow-reuse) ALLOW_REUSE=1; shift;;
+    --distribution) DISTRIBUTION=1; shift;;
     --notarize) DO_NOTARIZE=1; shift;;
     --dry-run) MODE_DRY=1; shift;;
     --adhoc-test) MODE_ADHOC=1; shift;;
@@ -113,7 +124,10 @@ if [ "$MODE" != real ]; then
   [ -z "$NOTARY_PROFILE" ] || die "R0P_NOTARY_PROFILE is set but the mode is '$MODE': unset it (notarization exists only with --real --notarize)"
   [ "$DO_NOTARIZE" = 0 ] || die "--notarize exists only with --real"
   [ -z "$AUTH_SHA" ] && [ -z "$SCOPE_FILE" ] || die "--i-have-owner-authorization and --scope-file are used only with --real"
+  [ -z "$LEDGER" ] && [ "$ALLOW_REUSE" = 0 ] && [ "$DISTRIBUTION" = 0 ] || die "--ledger, --allow-reuse and --distribution are used only with --real"
 fi
+# the identity and profile NAMES are now in shell variables only: they are not exported to any child process
+unset R0P_CODESIGN_IDENTITY R0P_NOTARY_PROFILE
 
 # ---------------------------------------------------------------- identity of the line (from packaging/identity.json, same rules as packaging/tools/identity.py)
 IDJSON="$SELF_DIR/../identity.json"
@@ -143,6 +157,7 @@ EXPECTED_SHA="$(echo "$EXPECTED_SHA" | tr 'A-F' 'a-f')"
 [ -f "$ENTITLEMENTS" ] || die "entitlements file not found: $ENTITLEMENTS"
 plutil -lint "$ENTITLEMENTS" >/dev/null || die "entitlements file is not a valid plist"
 [[ "$NOTARY_TIMEOUT" =~ ^[0-9]{1,3}[smh]$ ]] || die "--notary-timeout must look like 90s, 30m or 2h"
+[[ "$NOTARY_MARGIN" =~ ^[0-9]{1,4}$ ]] || die "--notary-watchdog-margin must be a number of seconds"
 
 sha() { shasum -a 256 "$1" | awk '{print $1}'; }
 sha_str() { printf '%s' "$1" | shasum -a 256 | awk '{print $1}'; }
@@ -156,8 +171,7 @@ if [ "$PLAN" = 1 ]; then TS_FLAG="--timestamp"; fi   # the plan shows the --real
 if [ "$MODE" = real ]; then
   [[ "$AUTH_SHA" =~ ^[0-9a-fA-F]{64}$ ]] || die "--real needs --i-have-owner-authorization <sha256 of the scope file>"
   AUTH_SHA="$(echo "$AUTH_SHA" | tr 'A-F' 'a-f')"
-  [ -n "$SCOPE_FILE" ] && [ -f "$SCOPE_FILE" ] && [ ! -L "$SCOPE_FILE" ] || die "--real needs --scope-file FILE (the file the owner's authorization names)"
-  [ "$(sha "$SCOPE_FILE")" = "$AUTH_SHA" ] || die "the scope file's sha256 does not equal the value given to --i-have-owner-authorization"
+  [ -n "$SCOPE_FILE" ] || die "--real needs --scope-file FILE (the file the owner's authorization names)"
   [ -n "$IDENTITY_ENV" ] || die "--real needs R0P_CODESIGN_IDENTITY in the environment (the identity is never a command-line argument)"
   case "$IDENTITY_ENV" in "Developer ID Application:"*) ;; *) die "R0P_CODESIGN_IDENTITY must start with 'Developer ID Application:'";; esac
   case "$IDENTITY_ENV" in *[[:cntrl:]]*) die "R0P_CODESIGN_IDENTITY contains control characters";; esac
@@ -168,39 +182,38 @@ if [ "$MODE" = real ]; then
     [ -z "$NOTARY_PROFILE" ] || die "R0P_NOTARY_PROFILE is set but --notarize was not given; refusing the ambiguity"
   fi
   IDENTITY="$IDENTITY_ENV"; TS_FLAG="--timestamp"
-  # --- parse the scope file strictly (no sourcing)
-  S_scope_version=""; S_valid_from=""; S_valid_until=""; S_script_sha256=""; S_entitlements_sha256=""; S_input_dmg_sha256=""
-  S_identity_sha256=""; S_team_id=""; S_notarize=""; S_upload_to=""
-  SEEN=" "
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in ''|'#'*) continue;; esac
-    key="${line%%=*}"; val="${line#*=}"
-    [ "$key" != "$line" ] || die "scope file: line without '=': refusing"
-    case "$val" in *[[:cntrl:]]*) die "scope file: control character in a value";; esac
-    case "$SEEN" in *" $key "*) die "scope file: duplicate key $key";; esac
-    SEEN="$SEEN$key "
-    case "$key" in
-      scope_version|valid_from|valid_until|script_sha256|entitlements_sha256|input_dmg_sha256|identity_sha256|team_id|notarize|upload_to) eval "S_$key=\$val";;
-      *) die "scope file: unknown key '$key'";;
-    esac
-  done < "$SCOPE_FILE"
-  [ "$S_scope_version" = 1 ] || die "scope file: scope_version must be 1"
-  [[ "$S_valid_from" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && [[ "$S_valid_until" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "scope file: valid_from/valid_until must be YYYY-MM-DD"
-  TODAY="$(date -u +%Y-%m-%d)"
-  { [ "$TODAY" = "$S_valid_from" ] || [[ "$TODAY" > "$S_valid_from" ]]; } && { [ "$TODAY" = "$S_valid_until" ] || [[ "$TODAY" < "$S_valid_until" ]]; } \
-    || die "scope file: today (UTC $TODAY) is outside the authorized window $S_valid_from .. $S_valid_until"
+  # The scope file is read ONCE into a private copy; the copy is hashed against the authorization argument and the copy is parsed.
+  # NOTE (round 4, R4-04): this is a TRIPWIRE against mistakes (wrong file, wrong day, wrong script, a repeat), NOT an authentication:
+  # anyone who can write a scope file can satisfy it. The authentication is the owner's own terminal, keychain and identity.
+  r0p_mktmp
+  r0p_scope_load "$SCOPE_FILE" "$AUTH_SHA" scope_version not_before not_after script_sha256 common_sha256 entitlements_sha256 \
+    identity_json_sha256 input_dmg_sha256 identity_sha256 notary_profile_sha256 team_id notarize upload_to distribution \
+    gate_sha256 gate_tool_sha256 evidence_manifest_sha256 build_commit procedure_commit
+  [ "$S_scope_version" = 2 ] || die "scope file: scope_version must be 2 (v3.1 format; see AUTHORIZATION-TEMPLATE.md)"
+  r0p_window_check "$S_not_before" "$S_not_after"
   [ "$S_script_sha256" = "$SELF_SHA" ] || die "scope file: script_sha256 does not match this script ($SELF_SHA)"
+  [ "$S_common_sha256" = "$COMMON_SHA" ] || die "scope file: common_sha256 does not match signing-common.sh ($COMMON_SHA)"
   [ "$S_entitlements_sha256" = "$ENT_SHA" ] || die "scope file: entitlements_sha256 does not match the entitlements file ($ENT_SHA)"
+  [ "$S_identity_json_sha256" = "$(sha "$IDJSON")" ] || die "scope file: identity_json_sha256 does not match packaging/identity.json ($(sha "$IDJSON"))"
   [ "$S_input_dmg_sha256" = "$EXPECTED_SHA" ] || die "scope file: input_dmg_sha256 does not match --expected-sha256"
   [ "$S_identity_sha256" = "$(sha_str "$IDENTITY")" ] || die "scope file: identity_sha256 does not match the identity in R0P_CODESIGN_IDENTITY (the authorization names a different identity)"
   [[ "$S_team_id" =~ ^[A-Z0-9]{10}$ ]] || die "scope file: team_id must be 10 characters [A-Z0-9]"
+  [[ "$S_build_commit" =~ ^[0-9a-f]{40}$ ]] && [[ "$S_procedure_commit" =~ ^[0-9a-f]{40}$ ]] || die "scope file: build_commit and procedure_commit must be 40-hex git commit ids"
+  [[ "$S_evidence_manifest_sha256" =~ ^[0-9a-f]{64}$ ]] || die "scope file: evidence_manifest_sha256 must be 64 hex chars (the manifest of the evidence set of this dmg)"
   case "$S_notarize:$S_upload_to" in yes:apple-notary|no:none) ;; *) die "scope file: notarize/upload_to must be yes/apple-notary or no/none";; esac
   if [ "$DO_NOTARIZE" = 1 ]; then [ "$S_notarize" = yes ] || die "--notarize given but the scope file says notarize=$S_notarize"
   else [ "$S_notarize" = no ] || die "scope file authorizes notarization (notarize=yes) but --notarize was not given: run exactly what was authorized"; fi
+  if [ "$DO_NOTARIZE" = 1 ]; then [ "$S_notary_profile_sha256" = "$(sha_str "$NOTARY_PROFILE")" ] || die "scope file: notary_profile_sha256 does not match the profile name in R0P_NOTARY_PROFILE"
+  else [ "$S_notary_profile_sha256" = none ] || die "scope file: notary_profile_sha256 must be 'none' for a sign-only run"; fi
+  case "$S_distribution:$DISTRIBUTION" in yes:1|no:0) ;; *) die "scope file says distribution=$S_distribution but --distribution is $( [ "$DISTRIBUTION" = 1 ] && echo given || echo not given ): they must agree";; esac
+  r0p_ledger_check "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE"
+  r0p_gate macos "$DISTRIBUTION" "$S_gate_sha256" "$S_gate_tool_sha256"
 fi
 
 # ---------------------------------------------------------------- paths: input must be a copy, output must be new
 INPUT_DMG="$(abspath "$INPUT_DMG")"
+[ ! -L "$OUT_DIR" ] || die "--out-dir must not be a symlink"
+[[ "$OUT_DIR" =~ ^[A-Za-z0-9._/\ -]+$ ]] || die "--out-dir may contain only letters, digits, '.', '_', '-', '/' and spaces (no quotes, newlines or shell characters)"
 OUT_DIR="$(abspath "$OUT_DIR")" || die "parent of --out-dir does not exist"
 case "$OUT_DIR" in /|/System|/System/*|/usr|/usr/*|/bin|/bin/*|/sbin|/sbin/*|/Library|/Library/*|/Applications|/Applications/*|"$HOME"|"$HOME/") die "unsafe --out-dir: $OUT_DIR";; esac
 IN_DIR="$(dirname "$INPUT_DMG")"
@@ -228,7 +241,7 @@ if [ -e "$OUT_DIR" ]; then [ -d "$OUT_DIR" ] && [ -z "$(ls -A "$OUT_DIR")" ] || 
 # ---------------------------------------------------------------- tools (system locations in --real)
 TOOLS="codesign hdiutil ditto plutil shasum xattr lipo diskutil spctl"
 [ "$MODE" != real ] || [ "$DO_NOTARIZE" = 0 ] || TOOLS="$TOOLS xcrun"
-NONSYSTEM=0
+NONSYSTEM="$R0P_STUBS"
 tool_path() { command -v "$1" 2>/dev/null || true; }
 if [ "$PLAN" = 0 ]; then
   for t in $TOOLS; do
@@ -256,7 +269,7 @@ if [ "$PLAN" = 0 ]; then
   TRANSCRIPT="$OUT_DIR/TRANSCRIPT.txt"; : >"$TRANSCRIPT"
 fi
 EVIDENCE="$OUT_DIR/EVIDENCE.txt"
-FINISHED=0; MOUNTS=(); FAIL_NOTE=""
+FINISHED=0; MOUNTS=(); FAIL_NOTE=""; LEDGER_STARTED=0; NOTARY_PID=""
 
 out() { printf '%s\n' "$*"; if [ -n "$TRANSCRIPT" ]; then printf '%s\n' "$*" >>"$TRANSCRIPT"; fi; return 0; }
 say() { out "== $*"; }
@@ -287,6 +300,9 @@ capture() {
 cleanup() {
   local rc=$? m
   set +e
+  if [ -n "${NOTARY_PID:-}" ]; then kill "$NOTARY_PID" 2>/dev/null; fi
+  if [ "${LEDGER_STARTED:-0}" = 1 ]; then r0p_ledger_append "$LEDGER" "$AUTH_SHA" real "ended" "rc=$rc finished=$FINISHED"; fi
+  r0p_tmp_cleanup
   for m in ${MOUNTS[@]+"${MOUNTS[@]}"}; do [ -n "$m" ] && hdiutil detach "$m" -quiet 2>/dev/null; done
   if [ "$PLAN" = 0 ] && [ "$FINISHED" != 1 ] && [ -d "$OUT_DIR" ]; then
     { echo "FAILED (exit status $rc) at $(date -u +%Y-%m-%dT%H:%M:%SZ) by $(basename "$SELF") version $SCRIPT_VERSION (mode $MODE)."
@@ -355,7 +371,12 @@ if [ "$PLAN" = 0 ]; then
     printf '%s\n' "AD-HOC TEST OUTPUT. Not a release artifact. Signed with the ad-hoc identity on a copy; never distribute." >"$OUT_DIR/ADHOC-TEST-NOT-A-RELEASE.txt"
   fi
   if [ "$MODE" = real ]; then
-    ev "authorization: scope file sha256=$AUTH_SHA (valid $S_valid_from .. $S_valid_until UTC); team_id=$S_team_id; notarize=$S_notarize; upload_to=$S_upload_to"
+    ev "authorization: scope file sha256=$AUTH_SHA (window $S_not_before .. $S_not_after UTC); team_id=$S_team_id; notarize=$S_notarize; upload_to=$S_upload_to; distribution=$S_distribution"
+    ev "scope binds: identity.json sha256=$S_identity_json_sha256 common sha256=$S_common_sha256 gate sha256=$S_gate_sha256 gate tool sha256=$S_gate_tool_sha256"
+    ev "scope binds: build commit $S_build_commit, procedure commit $S_procedure_commit (recorded, not verified by the script), evidence manifest sha256 $S_evidence_manifest_sha256"
+    ev "the scope file is a TRIPWIRE against mistakes, not an authentication: the owner's terminal, keychain and identity are the authentication"
+    ev "ledger: $LEDGER (scope used once; --allow-reuse=$ALLOW_REUSE)"
+    if [ "$DISTRIBUTION" = 1 ]; then ev "distribution gate: enforced (--distribution) and passed"; else ev "PRIVATE-CANDIDATE signing: signing and notarization do NOT imply permission to distribute; open decisions were printed by the gate"; fi
     ev "identity: only sha256(identity)=$(sha_str "$IDENTITY") is recorded; the profile name is not recorded either"
   fi
   ev ""; ev "INPUT dmg: $(basename "$INPUT_DMG")  sha256 actual=$ACTUAL_SHA expected=$EXPECTED_SHA  RESULT: match  size=$(stat -f %z "$INPUT_DMG")"
@@ -422,13 +443,13 @@ else
   [ "$(plutil -extract LSMinimumSystemVersion raw -o - "$PL" 2>/dev/null)" = "11.0" ] || fail "Info.plist LSMinimumSystemVersion is not 11.0"
   [ "$(plutil -extract RedevopsReleaseLine raw -o - "$PL" 2>/dev/null)" = "$RELEASE_LINE" ] || fail "Info.plist RedevopsReleaseLine is not $RELEASE_LINE"
   [ -d "$RES/Licenses" ] || fail "Contents/Resources/Licenses is missing"
-  NLIC="$(find "$RES/Licenses" -type f | wc -l | tr -d ' ')"
+  NLIC="$(find "$RES/Licenses" -type f -print0 | tr -cd '\0' | wc -c | tr -d ' ')"       # NUL-counted: names with newlines are counted once
   [ "$NLIC" -ge 1 ] || fail "Contents/Resources/Licenses holds no files"
   [ -z "$(find "$RES/Licenses" -type f -perm -u+x | head -1)" ] || fail "a file in Resources/Licenses is executable"
   ev ""; ev "INPUT binaries (before signing; ad-hoc/linker-signed by the build):"
   ev "  $MAIN_EXE sha256=$(sha "$MACOS/$MAIN_EXE")"; ev "  $SIDECAR_EXE sha256=$(sha "$MACOS/$SIDECAR_EXE")"
   ev "  Info.plist sha256=$(sha "$PL"); Licenses files: $NLIC"
-  evblock "Info.plist keys" bash -c "plutil -p '$PL' | grep -E 'CFBundleIdentifier|CFBundleShortVersionString|CFBundleVersion|LSMinimumSystemVersion|CFBundleExecutable|RedevopsReleaseLine'"
+  { printf -- '--- Info.plist keys\n'; plutil -p "$PL" | grep -E 'CFBundleIdentifier|CFBundleShortVersionString|CFBundleVersion|LSMinimumSystemVersion|CFBundleExecutable|RedevopsReleaseLine' || true; echo; } >>"$EVIDENCE"
   out "  layout OK: 2 executables (arm64), $NLIC licence files, identity matches identity.json"
 fi
 
@@ -446,6 +467,11 @@ csign() {
   return "$rc"
 }
 cs() { csign --options runtime "$@"; }
+if [ "$MODE" = real ]; then
+  # the scope is consumed from here on (the first use of the keychain identity): a failed run burns it, as a failed submission is never reused
+  r0p_ledger_append "$LEDGER" "$AUTH_SHA" real started "script=$SELF_SHA input=$ACTUAL_SHA"
+  LEDGER_STARTED=1
+fi
 cs --identifier "$SIDECAR_ID" --entitlements "$ENTITLEMENTS" "$MACOS/$SIDECAR_EXE"
 cs "$MACOS/$MAIN_EXE"
 cs "$APP"      # bundle last: seals Info.plist + Resources (including Licenses/); re-signs the main executable with the bundle id
@@ -567,11 +593,24 @@ NOTARY_ID="n/a"; NOTARY_STATUS="not submitted"; STAPLE="dmg: NOT stapled; app in
 if [ "$MODE" = real ] && [ "$DO_NOTARIZE" = 1 ]; then
   say "step 6: notarize (UPLOADS the signed dmg to the Apple notary service; one submission, time-boxed to $NOTARY_TIMEOUT, no retry)"
   SUBMIT_JSON="$OUT_DIR/notary/submit.json"
-  out "+ xcrun notarytool submit $OUT_DMG --keychain-profile <profile from R0P_NOTARY_PROFILE> --wait --timeout $NOTARY_TIMEOUT --output-format json > notary/submit.json"
-  xcrun notarytool submit "$OUT_DMG" --keychain-profile "$NOTARY_PROFILE" --wait --timeout "$NOTARY_TIMEOUT" --output-format json >"$SUBMIT_JSON" 2>"$OUT_DIR/notary/submit.stderr.txt" || true
+  SUBMISSIONS="$OUT_DIR/notary/SUBMISSIONS.txt"
+  # the timeout is bounded here as well: notarytool's own --timeout, plus a watchdog that ends it NOTARY_MARGIN (default 90) s after the limit
+  NT_N="${NOTARY_TIMEOUT%[smh]}"; NT_U="${NOTARY_TIMEOUT: -1}"
+  case "$NT_U" in s) NT_SECS="$NT_N";; m) NT_SECS=$((NT_N * 60));; h) NT_SECS=$((NT_N * 3600));; esac
+  printf '%s input_sha256=%s file=%s status=submitting (id not yet known)\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SIGNED_SHA" "$OUT_DMG_NAME" >>"$SUBMISSIONS"
+  r0p_ledger_append "$LEDGER" "$AUTH_SHA" real notary-submit "input=$SIGNED_SHA"
+  out "+ xcrun notarytool submit $(printf '%q' "$OUT_DMG") --keychain-profile <profile from R0P_NOTARY_PROFILE> --wait --timeout $NOTARY_TIMEOUT --output-format json > notary/submit.json   # watchdog $((NT_SECS + NOTARY_MARGIN)) s"
+  xcrun notarytool submit "$OUT_DMG" --keychain-profile "$NOTARY_PROFILE" --wait --timeout "$NOTARY_TIMEOUT" --output-format json >"$SUBMIT_JSON" 2>"$OUT_DIR/notary/submit.stderr.txt" &
+  NOTARY_PID=$!
+  ( sleep $((NT_SECS + NOTARY_MARGIN)); kill "$NOTARY_PID" 2>/dev/null ) >/dev/null 2>&1 &
+  NT_WD=$!
+  wait "$NOTARY_PID" || true
+  kill "$NT_WD" 2>/dev/null || true; wait "$NT_WD" 2>/dev/null || true
+  NOTARY_PID=""
   NOTARY_ID="$(plutil -extract id raw -o - "$SUBMIT_JSON" 2>/dev/null || echo unknown)"
   NOTARY_STATUS="$(plutil -extract status raw -o - "$SUBMIT_JSON" 2>/dev/null || echo unknown)"
   out "  notarytool: submission id=$NOTARY_ID status=$NOTARY_STATUS"
+  printf '%s input_sha256=%s id=%s status=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SIGNED_SHA" "$NOTARY_ID" "$NOTARY_STATUS" >>"$SUBMISSIONS"
   if [ "$NOTARY_ID" != unknown ]; then
     out "+ xcrun notarytool log $NOTARY_ID --keychain-profile <profile> notary/log.json"
     xcrun notarytool log "$NOTARY_ID" --keychain-profile "$NOTARY_PROFILE" "$OUT_DIR/notary/log.json" >/dev/null 2>&1 || ev "WARNING: could not fetch the notary log"

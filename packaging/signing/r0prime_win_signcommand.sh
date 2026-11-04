@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# r0prime_win_signcommand.sh  (version r0prime-handoff-1)
+# r0prime_win_signcommand.sh  (version r0prime-handoff-2)
 #
 # Hand-off helper for the WINDOWS BUILD HOST. It is the `signCommand` that tauri-bundler calls for every file it would sign
 # (bundle.windows.signCommand = {"cmd":"bash","args":["<abs path>/r0prime_win_signcommand.sh","%1"]}). It holds NO credential,
@@ -8,7 +8,15 @@
 #
 # Environment (set by the person running the build):
 #   R0P_HANDOFF_MODE  collect | apply
-#   R0P_HANDOFF_DIR   an existing ABSOLUTE directory for this round (kept outside the source tree)
+#   R0P_HANDOFF_DIR   an existing ABSOLUTE directory for this round (kept outside the source tree; keep it private to the build user)
+#   apply only (round 4, R4-07):
+#   R0P_HANDOFF_REQUESTS      absolute path of the REQUESTS.sha256 that THIS build host wrote in its own collect round: an inner file is
+#                             accepted only if its unsigned hash is in that list (the build host's own record), never merely because
+#                             a SHA256SUMS next to the signed files says so
+#   R0P_EXPECT_SIGNER_CN      exact first CN of the signer certificate that every signed inner file must carry (from the authorization)
+#   R0P_EXPECT_ISSUER_SUBSTR  text the signer certificate's issuer must contain (from the authorization)
+#   The signature of every signed file is checked with powershell.exe Get-AuthenticodeSignature (Status Valid, signer CN, issuer text,
+#   a timestamper certificate present) BEFORE the file is copied in; no check, no replacement. (UNVERIFIED on a real Windows host.)
 #
 # Layout inside R0P_HANDOFF_DIR:
 #   requests-inner/<role>-<sha256 of the unsigned file>.exe   written by collect (and apply for unknown files is an error)
@@ -57,6 +65,7 @@ hash_file() {
 lower() { printf '%s' "$1" | tr 'A-Z' 'a-z'; }
 
 B="$(basename "$F")"; LB="$(lower "$B")"; SHA="$(hash_file "$F")"
+case "$B" in *[[:cntrl:]]*) die "file name with a control character; refusing (it could forge log lines)";; esac
 case "$LB" in
   *.dll) ROLE=skip;;
   *.msi) ROLE=container;;
@@ -89,18 +98,33 @@ esac
 EXT="exe"
 REQ="$ROLE-$SHA.$EXT"
 if [ "$MODE" = collect ]; then
-  put_request requests-inner "$REQ"; logline "collected inner request $REQ (file left unchanged)"; echo "collected: $REQ"; exit 0
+  put_request requests-inner "$REQ"
+  # the build host's own record of what it asked to have signed (used by apply)
+  touch "$DIR/REQUESTS.sha256"
+  grep -q -F "  $REQ" "$DIR/REQUESTS.sha256" || printf '%s  %s\n' "$SHA" "$REQ" >>"$DIR/REQUESTS.sha256"
+  logline "collected inner request $REQ (file left unchanged)"; echo "collected: $REQ"; exit 0
 fi
 
 # ---- apply (inner roles only)
 [ "$ROLE" != unknown ] || { logline "FAIL unknown role"; die "unknown executable $B: refusing to let it into the installer unsigned (add its role after review, or remove it)"; }
+REQLIST="${R0P_HANDOFF_REQUESTS:-}"
+case "$REQLIST" in /*|[A-Za-z]:[/\\]*) ;; *) logline "FAIL no request list"; die "apply needs R0P_HANDOFF_REQUESTS (absolute path of the REQUESTS.sha256 this host wrote in its collect round)";; esac
+if command -v cygpath >/dev/null 2>&1; then REQLIST="$(cygpath -u "$REQLIST")"; fi
+[ -f "$REQLIST" ] && [ ! -L "$REQLIST" ] || die "R0P_HANDOFF_REQUESTS is not a regular file"
+in_requests() { grep -q -F -x "$1  $2" "$REQLIST"; }   # unsigned-sha  request-name
 SIGNED_DIR="$DIR/signed-inner"
 [ -f "$SIGNED_DIR/SHA256SUMS" ] || { logline "FAIL no SHA256SUMS"; die "signed-inner/SHA256SUMS is missing (copy the SHA256SUMS of the signing run next to the signed files)"; }
 # already one of the signed files? (idempotent: the sidecar is signed in place and the bundler may ask again)
 while IFS= read -r line || [ -n "$line" ]; do
   want="${line%% *}"; name="${line#*  }"
-  if [ "$want" = "$SHA" ]; then logline "already the signed file $name (accepted unchanged)"; echo "already signed: $name"; exit 0; fi
+  if [ "$want" = "$SHA" ]; then
+    # the signed file must belong to a request this host recorded: name = <role>-<unsigned sha>.exe
+    usha="${name#*-}"; usha="${usha%.exe}"
+    in_requests "$usha" "$name" || { logline "FAIL signed file not from this host's requests"; die "$name is not one of the requests this build host recorded (R0P_HANDOFF_REQUESTS)"; }
+    logline "already the signed file $name (accepted unchanged)"; echo "already signed: $name"; exit 0
+  fi
 done < "$SIGNED_DIR/SHA256SUMS"
+in_requests "$SHA" "$REQ" || { logline "FAIL not in this host's request list"; die "$B (sha256 $SHA) is not in the request list this build host recorded in its collect round: refusing"; }
 CAND="$SIGNED_DIR/$REQ"
 [ -f "$CAND" ] && [ ! -L "$CAND" ] || { logline "FAIL no signed counterpart $REQ"; die "no signed counterpart for $B ($REQ): not in signed-inner/. The build must fail rather than ship an unsigned $ROLE"; }
 EXPECT=""
@@ -112,6 +136,16 @@ done < "$SIGNED_DIR/SHA256SUMS"
 CSHA="$(hash_file "$CAND")"
 [ "$CSHA" = "$EXPECT" ] || { logline "FAIL hash mismatch for $REQ"; die "signed-inner/$REQ does not match its SHA256SUMS entry"; }
 [ "$CSHA" != "$SHA" ] || { logline "FAIL signed file equals unsigned file"; die "signed-inner/$REQ is byte-identical to the unsigned file: it is not signed"; }
+# the signature identity of the signed counterpart, checked before it is accepted (Windows PowerShell on the build host)
+[ -n "${R0P_EXPECT_SIGNER_CN:-}" ] && [ -n "${R0P_EXPECT_ISSUER_SUBSTR:-}" ] || { logline "FAIL no signer expectation"; die "apply needs R0P_EXPECT_SIGNER_CN and R0P_EXPECT_ISSUER_SUBSTR"; }
+case "$CAND" in *[!A-Za-z0-9._/:\\\ -]*) die "unsafe characters in the signed file path";; esac
+WINCAND="$CAND"; if command -v cygpath >/dev/null 2>&1; then WINCAND="$(cygpath -w "$CAND")"; fi
+SIGINFO="$(powershell.exe -NoProfile -NonInteractive -Command "\$s = Get-AuthenticodeSignature -LiteralPath '$WINCAND'; \"\$(\$s.Status)|\$(\$s.SignerCertificate.Subject)|\$(\$s.SignerCertificate.Issuer)|\$(\$s.TimeStamperCertificate -ne \$null)\"" 2>/dev/null | tr -d '\r')" || { logline "FAIL signature check could not run"; die "could not run powershell.exe Get-AuthenticodeSignature"; }
+SIG_STATUS="${SIGINFO%%|*}"; REST="${SIGINFO#*|}"; SIG_SUBJECT="${REST%%|*}"; REST="${REST#*|}"; SIG_ISSUER="${REST%%|*}"; SIG_TS="${REST#*|}"
+[ "$SIG_STATUS" = Valid ] || { logline "FAIL signature status $SIG_STATUS"; die "signed counterpart $REQ: signature status is '$SIG_STATUS', not Valid"; }
+case "$SIG_SUBJECT" in "CN=$R0P_EXPECT_SIGNER_CN,"*|"CN=$R0P_EXPECT_SIGNER_CN") ;; *) logline "FAIL signer subject"; die "signed counterpart $REQ: signer subject is not CN=$R0P_EXPECT_SIGNER_CN";; esac
+case "$SIG_ISSUER" in *"$R0P_EXPECT_ISSUER_SUBSTR"*) ;; *) logline "FAIL issuer"; die "signed counterpart $REQ: issuer does not contain the expected text";; esac
+[ "$SIG_TS" = True ] || { logline "FAIL no timestamp"; die "signed counterpart $REQ carries no timestamp certificate"; }
 cp "$CAND" "$F"
 [ "$(hash_file "$F")" = "$CSHA" ] || die "the replacement did not land (hash differs after copy)"
 logline "replaced by signed counterpart $REQ (sha256 $CSHA)"

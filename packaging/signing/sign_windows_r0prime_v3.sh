@@ -31,6 +31,15 @@
 #                        'Artifact Signing Certificate Profile Signer' role. The token is written by `az` into a 0600 file and read by
 #                        Jsign with --storepass file:...; it is never printed, never on a command line, never in the environment.
 #
+# SCOPE FILE (scope_version=2; KEY=VALUE; read ONCE into a private copy that is hashed and parsed; a TRIPWIRE against mistakes, NOT an
+# authentication: the owner's own terminal and `az` login are the authentication): not_before/not_after (UTC, at most 24 h), script_sha256,
+# common_sha256, verifier_sha256, identity_json_sha256, stage, inputs_sha256 (sorted, comma separated), az_endpoint, az_account, az_profile,
+# expected_cn, gate_sha256, gate_tool_sha256, distribution=yes|no (must agree with --distribution), evidence_manifest_sha256, build_commit,
+# procedure_commit, tool_az_sha256, tool_java_sha256, tool_python_sha256, tool_osslsigncode_sha256 (or none), container_listing_sha256 (stage
+# container: the file list of the rebuilt installers, passed with --container-listing; none for stage inner). --ledger FILE is required (one-time
+# use of a scope; --allow-reuse is recorded). Tools resolve from a fixed system PATH plus the owner's R0P_TOOLS_DIR and are pinned by hash.
+# The files are re-hashed right after they are copied into the private work directory and again right before each Jsign call.
+#
 # SAFETY (kept from v2): service coordinates are validated before anything else (endpoint ^https://[a-z0-9]+\.codesigning\.azure\.net/?$;
 # account/profile ^[A-Za-z0-9-]{3,63}$); inputs are hash-verified and never modified; signed files appear in --outdir only after
 # verification; a failed run leaves only a FAILED marker; INT/TERM/HUP clean up; no rm -rf; no `set -x`. New in v3: scrubbed environment
@@ -42,6 +51,7 @@
 # Usage:
 #   sign_windows_r0prime_v3.sh --stage inner|container --input FILE --sha256 HEX [--input FILE2 --sha256 HEX2 ...] --outdir NEWDIR
 #        [--dry-run | --throwaway-test | --real --i-have-owner-authorization SHA --scope-file FILE]
+#        [--ledger FILE] [--allow-reuse] [--distribution] [--container-listing FILE]
 #        [--name "Application name"] [--url URL] [--throwaway-dir DIR] [--tsa-url LOCAL_URL]
 #        [--tools-dir DIR] [--ms-root-pem FILE] [--python FILE] [--verifier FILE]
 case "$-" in *x*) echo "ERROR: xtrace is on; refusing (it could print secrets)" >&2; exit 1;; esac
@@ -49,23 +59,23 @@ set +x
 set -euo pipefail
 umask 077
 
-SCRIPT_VERSION="r0prime-win-3"
+SCRIPT_VERSION="r0prime-win-3.1"
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
 SELF_DIR="$(dirname "$SELF")"
 SELF_NAME="$(basename "$SELF")"
 FAILED_MAGIC="FAILED-ATTEMPT sign_windows_r0prime_v3"
 
-if [ "${R0P_SCRUBBED:-}" != 1 ]; then
-  KEEP=()
-  for v in $(compgen -A export | grep '^R0P_' || true); do KEEP+=("$v=${!v}"); done
-  exec env -i "PATH=${PATH:-/usr/bin:/bin}" "HOME=${HOME:-/nonexistent}" LANG=C LC_ALL=C "TERM=${TERM:-dumb}" \
-       ${KEEP[@]+"${KEEP[@]}"} R0P_SCRUBBED=1 "${BASH:-/bin/bash}" "$SELF" "$@"
-fi
-export LC_ALL=C
 
 usage() { sed -n '/^# Usage:/,/^case /p' "$SELF" | sed '$d' | sed 's/^# \{0,1\}//'; }
 FAIL_REASON=""
 die() { FAIL_REASON="$*"; echo "ERROR: $*" >&2; exit 2; }
+# shared safety functions (their sha256 is bound by the scope file); the environment must BE the allowlist: no variable can skip this
+. "$SELF_DIR/signing-common.sh"
+r0p_scrub " R0P_AZ_ENDPOINT R0P_AZ_ACCOUNT R0P_AZ_PROFILE R0P_AZ_EXPECTED_CN R0P_SIGN_TIMEOUT_SECONDS R0P_ALLOW_NONSYSTEM_TOOLS R0P_TOOLS_DIR " "$@"
+unset R0P_REEXEC
+r0p_fix_path "${R0P_TOOLS_DIR:-}"      # fixed system PATH + the owner's validated tools directory (stub-test: inherited PATH, unit tests only)
+export LC_ALL=C
+COMMON_SHA="$(r0p_sha "$SELF_DIR/signing-common.sh")"
 log() { echo "[$(date -u +%H:%M:%SZ)] $*"; }
 qcmd() { local s="" a; for a in "$@"; do s="$s$(printf '%q' "$a") "; done; printf '%s' "${s% }"; }
 
@@ -84,7 +94,7 @@ NSIS_NAME="${PRODUCT}_${VERSION}_x64-setup.exe"
 FROZEN_MSI="$(idj frozen.product_name)_$(idj frozen.version)_x64_en-US.msi"
 FROZEN_NSIS="$(idj frozen.product_name)_$(idj frozen.version)_x64-setup.exe"
 
-STAGE=""; MODE_DRY=0; MODE_THROW=0; MODE_REAL=0; AUTH_SHA=""; SCOPE_FILE=""
+STAGE=""; MODE_DRY=0; MODE_THROW=0; MODE_REAL=0; AUTH_SHA=""; SCOPE_FILE=""; LEDGER=""; ALLOW_REUSE=0; DISTRIBUTION=0; LISTING=""
 APPNAME="$PRODUCT"; APPURL=""; OUTDIR=""; THROWAWAY_DIR="$SELF_DIR/dryrun/throwaway"; TSA_URL=""
 TOOLS_DIR="$SELF_DIR/tools"; MS_ROOT_PEM="$SELF_DIR/docs/pki/root2020.pem"
 PY="$SELF_DIR/venv/v/bin/python"; VERIFY_PY=""
@@ -109,6 +119,10 @@ while [ $# -gt 0 ]; do
     --verifier)         [ $# -ge 2 ] || die "--verifier needs a value"; VERIFY_PY="$2"; shift 2;;
     --i-have-owner-authorization) [ $# -ge 2 ] || die "--i-have-owner-authorization needs the sha256 of the scope file"; AUTH_SHA="$2"; shift 2;;
     --scope-file)       [ $# -ge 2 ] || die "--scope-file needs a value"; SCOPE_FILE="$2"; shift 2;;
+    --ledger)           [ $# -ge 2 ] || die "--ledger needs a value"; LEDGER="$2"; shift 2;;
+    --container-listing) [ $# -ge 2 ] || die "--container-listing needs a value"; LISTING="$2"; shift 2;;
+    --allow-reuse)      ALLOW_REUSE=1; shift;;
+    --distribution)     DISTRIBUTION=1; shift;;
     --dry-run)          MODE_DRY=1; shift;;
     --throwaway-test)   MODE_THROW=1; shift;;
     --real)             MODE_REAL=1; shift;;
@@ -154,7 +168,10 @@ validate_service_args() {
 validate_service_args
 if [ "$MODE" != real ]; then
   [ -z "$AUTH_SHA$SCOPE_FILE" ] || die "--i-have-owner-authorization/--scope-file are used only with --real"
+  [ -z "$LEDGER" ] && [ "$ALLOW_REUSE" = 0 ] && [ "$DISTRIBUTION" = 0 ] || die "--ledger, --allow-reuse and --distribution are used only with --real"
 fi
+# the Azure coordinates are in shell variables only now: no child process inherits them
+unset R0P_AZ_ENDPOINT R0P_AZ_ACCOUNT R0P_AZ_PROFILE R0P_AZ_EXPECTED_CN
 case "$STAGE" in inner|container) ;; *) die "--stage must be 'inner' or 'container'";; esac
 [ ${#INPUTS[@]} -ge 1 ] || die "at least one --input is required"
 [ ${#INPUTS[@]} -eq ${#HASHES[@]} ] || die "each --input needs a matching --sha256 (got ${#INPUTS[@]} inputs, ${#HASHES[@]} hashes)"
@@ -162,6 +179,7 @@ case "$STAGE" in inner|container) ;; *) die "--stage must be 'inner' or 'contain
 if [ -n "$TSA_URL" ] && [ "$MODE" != throwaway-test ]; then die "--tsa-url is for --throwaway-test only; production always uses $TSA_PROD"; fi
 if [ -n "$TSA_URL" ]; then case "$TSA_URL" in http://127.0.0.1*|http://localhost*) ;; *) die "--tsa-url must be a local test TSA";; esac; fi
 [[ "$APPNAME" =~ ^[A-Za-z0-9][A-Za-z0-9\ ._-]{0,63}$ ]] || die "--name has unexpected characters"
+[ -z "$APPURL" ] || [[ "$APPURL" =~ ^https://[A-Za-z0-9._/-]{1,200}$ ]] || die "--url must be an https URL of letters, digits, '.', '_', '-' and '/'"
 
 sha() { shasum -a 256 "$1" | awk '{print $1}'; }
 SELF_SHA="$(sha "$SELF")"
@@ -222,35 +240,46 @@ for f in "${INPUTS[@]}"; do case "$(cd "$(dirname "$f")" && pwd -P)/" in "$OUTDI
 if [ "$MODE" = real ]; then
   [[ "$AUTH_SHA" =~ ^[0-9a-fA-F]{64}$ ]] || die "--real needs --i-have-owner-authorization <sha256 of the scope file>"
   AUTH_SHA="$(echo "$AUTH_SHA" | tr 'A-F' 'a-f')"
-  [ -n "$SCOPE_FILE" ] && [ -f "$SCOPE_FILE" ] && [ ! -L "$SCOPE_FILE" ] || die "--real needs --scope-file FILE"
-  [ "$(sha "$SCOPE_FILE")" = "$AUTH_SHA" ] || die "the scope file's sha256 does not equal the value given to --i-have-owner-authorization"
-  S_scope_version=""; S_valid_from=""; S_valid_until=""; S_script_sha256=""; S_verifier_sha256=""; S_stage=""; S_inputs_sha256=""
-  S_az_endpoint=""; S_az_account=""; S_az_profile=""; S_expected_cn=""
-  SEEN=" "
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in ''|'#'*) continue;; esac
-    key="${line%%=*}"; val="${line#*=}"
-    [ "$key" != "$line" ] || die "scope file: line without '='"
-    case "$val" in *[[:cntrl:]]*) die "scope file: control character in a value";; esac
-    case "$SEEN" in *" $key "*) die "scope file: duplicate key $key";; esac
-    SEEN="$SEEN$key "
-    case "$key" in
-      scope_version|valid_from|valid_until|script_sha256|verifier_sha256|stage|inputs_sha256|az_endpoint|az_account|az_profile|expected_cn) eval "S_$key=\$val";;
-      *) die "scope file: unknown key '$key'";;
-    esac
-  done < "$SCOPE_FILE"
-  [ "$S_scope_version" = 1 ] || die "scope file: scope_version must be 1"
-  [[ "$S_valid_from" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && [[ "$S_valid_until" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "scope file: dates must be YYYY-MM-DD"
-  TODAY="$(date -u +%Y-%m-%d)"
-  { [ "$TODAY" = "$S_valid_from" ] || [[ "$TODAY" > "$S_valid_from" ]]; } && { [ "$TODAY" = "$S_valid_until" ] || [[ "$TODAY" < "$S_valid_until" ]]; } \
-    || die "scope file: today (UTC $TODAY) is outside the authorized window $S_valid_from .. $S_valid_until (the certificates are valid for 3 days: sign inside the window)"
+  [ -n "$SCOPE_FILE" ] || die "--real needs --scope-file FILE"
+  # read ONCE into a private copy, hash the copy, parse the copy. The scope file is a TRIPWIRE against mistakes, NOT an authentication:
+  # the owner's own terminal and `az` login are the authentication (round 4, R4-04).
+  r0p_mktmp
+  r0p_scope_load "$SCOPE_FILE" "$AUTH_SHA" scope_version not_before not_after script_sha256 common_sha256 verifier_sha256 identity_json_sha256 \
+    stage inputs_sha256 az_endpoint az_account az_profile expected_cn gate_sha256 gate_tool_sha256 distribution evidence_manifest_sha256 \
+    build_commit procedure_commit tool_az_sha256 tool_java_sha256 tool_python_sha256 tool_osslsigncode_sha256 container_listing_sha256
+  [ "$S_scope_version" = 2 ] || die "scope file: scope_version must be 2 (v3.1 format; see AUTHORIZATION-TEMPLATE.md)"
+  r0p_window_check "$S_not_before" "$S_not_after"
   [ "$S_script_sha256" = "$SELF_SHA" ] || die "scope file: script_sha256 does not match this script"
+  [ "$S_common_sha256" = "$COMMON_SHA" ] || die "scope file: common_sha256 does not match signing-common.sh"
   [ "$S_verifier_sha256" = "$VERIFY_SHA" ] || die "scope file: verifier_sha256 does not match the verifier"
+  [ "$S_identity_json_sha256" = "$(sha "$IDJSON")" ] || die "scope file: identity_json_sha256 does not match packaging/identity.json"
   [ "$S_stage" = "$STAGE" ] || die "scope file: stage '$S_stage' differs from --stage '$STAGE'"
   SORTED="$(printf '%s\n' "${HASHES[@]}" | sort | tr '\n' ',' | sed 's/,$//')"
   [ "$S_inputs_sha256" = "$SORTED" ] || die "scope file: inputs_sha256 does not list exactly the sha256 of the given inputs (sorted, comma separated)"
   { [ "$S_az_endpoint" = "$ENDPOINT" ] && [ "$S_az_account" = "$ACCOUNT" ] && [ "$S_az_profile" = "$PROFILE" ]; } || die "scope file: the service coordinates differ from R0P_AZ_ENDPOINT/ACCOUNT/PROFILE"
   [ "$S_expected_cn" = "$EXPECTED_SUBJECT" ] || die "scope file: expected_cn differs from R0P_AZ_EXPECTED_CN"
+  [[ "$S_build_commit" =~ ^[0-9a-f]{40}$ ]] && [[ "$S_procedure_commit" =~ ^[0-9a-f]{40}$ ]] || die "scope file: build_commit and procedure_commit must be 40-hex git commit ids"
+  [[ "$S_evidence_manifest_sha256" =~ ^[0-9a-f]{64}$ ]] || die "scope file: evidence_manifest_sha256 must be 64 hex chars"
+  case "$S_distribution:$DISTRIBUTION" in yes:1|no:0) ;; *) die "scope file says distribution=$S_distribution but --distribution is $( [ "$DISTRIBUTION" = 1 ] && echo given || echo not given ): they must agree";; esac
+  if [ "$STAGE" = container ]; then
+    [ -n "$LISTING" ] || die "stage container in --real needs --container-listing FILE (the file list of the rebuilt installers, made on the Windows build host)"
+    [[ "$S_container_listing_sha256" =~ ^[0-9a-f]{64}$ ]] || die "scope file: container_listing_sha256 must be 64 hex chars for stage container"
+  else
+    [ -z "$LISTING" ] && [ "$S_container_listing_sha256" = none ] || die "scope file: container_listing_sha256 must be 'none' and no --container-listing given for stage inner"
+  fi
+  r0p_ledger_check "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE"
+  r0p_gate windows "$DISTRIBUTION" "$S_gate_sha256" "$S_gate_tool_sha256"
+fi
+# the container listing (what the installers hold, from the build host) is read once into a private copy and recorded in the evidence
+LISTING_SHA="none"; LISTING_LINES=0
+if [ -n "$LISTING" ]; then
+  [ "$STAGE" = container ] || die "--container-listing belongs to stage container"
+  [ -f "$LISTING" ] && [ ! -L "$LISTING" ] || die "--container-listing must be a regular file"
+  [ -n "$R0P_TMP" ] || r0p_mktmp
+  cat "$LISTING" > "$R0P_TMP/listing.copy"
+  LISTING_SHA="$(sha "$R0P_TMP/listing.copy")"; LISTING_LINES="$(wc -l < "$R0P_TMP/listing.copy" | tr -d ' ')"
+  [ "$LISTING_LINES" -ge 1 ] || die "--container-listing is empty"
+  if [ "$MODE" = real ]; then [ "$LISTING_SHA" = "$S_container_listing_sha256" ] || die "scope file: container_listing_sha256 does not match --container-listing"; fi
 fi
 
 # ---- tools (not needed to print a plan)
@@ -262,7 +291,18 @@ if [ "$PLAN" = 0 ]; then
   [ -f "$JSIGN" ] || die "missing <tools-dir>/jsign/jsign-7.6.jar"
   [ "$(sha "$JSIGN")" = "$JSIGN_SHA256" ] || die "jsign jar sha256 mismatch (pinned $JSIGN_SHA256)"
   [ -x "$PY" ] || die "missing python venv with signify ($PY)"
-  if [ "$MODE" = real ]; then command -v az >/dev/null 2>&1 || die "Azure CLI (az) not found"; fi
+  AZ_PATH=""
+  if [ "$MODE" = real ]; then
+    AZ_PATH="$(command -v az 2>/dev/null || true)"; [ -n "$AZ_PATH" ] || die "Azure CLI (az) not found in the fixed PATH or R0P_TOOLS_DIR"
+    # every external non-system tool is pinned by the sha256 of the file the fixed PATH resolves to (round 4, R4-05)
+    JAVA_ABS="$(cd "$(dirname "$JAVA")" && pwd -P)/$(basename "$JAVA")"
+    PY_ABS="$(cd "$(dirname "$PY")" && pwd -P)/$(basename "$PY")"
+    [ "$(sha "$AZ_PATH")" = "$S_tool_az_sha256" ] || die "scope file: tool_az_sha256 does not match $(basename "$AZ_PATH") ($(sha "$AZ_PATH"))"
+    [ "$(sha "$JAVA_ABS")" = "$S_tool_java_sha256" ] || die "scope file: tool_java_sha256 does not match the java executable ($(sha "$JAVA_ABS"))"
+    [ "$(sha "$PY_ABS")" = "$S_tool_python_sha256" ] || die "scope file: tool_python_sha256 does not match the python executable ($(sha "$PY_ABS"))"
+    if [ -n "$OSSL" ]; then [ "$(sha "$OSSL")" = "$S_tool_osslsigncode_sha256" ] || die "scope file: tool_osslsigncode_sha256 does not match osslsigncode"
+    else [ "$S_tool_osslsigncode_sha256" = none ] || die "scope file: tool_osslsigncode_sha256 is not 'none' but osslsigncode is absent"; fi
+  fi
   # inputs must be unsigned (a second signature is never added); an unreadable file fails closed
   i=0
   while [ $i -lt ${#INPUTS[@]} ]; do
@@ -320,7 +360,7 @@ if [ "$MODE" = throwaway-test ]; then
 fi
 
 # ---- state, cleanup, signals (as v2)
-OUTDIR_CREATED=0; SUCCESS=0; JPID=""; LAST_LINE=""
+OUTDIR_CREATED=0; SUCCESS=0; JPID=""; LAST_LINE=""; LEDGER_STARTED=0
 WORK=""; TOKDIR=""; SIGNDIR=""; WTMP=""
 trap 'LAST_LINE=$LINENO' ERR
 wipe_tree() { # dir: truncate+remove files one by one (named rm -f), then rmdir deepest-first. Never rm -rf.
@@ -354,6 +394,8 @@ on_exit() {
   trap - EXIT; trap '' INT TERM HUP
   set +e +x
   if [ -n "${TOKDIR:-}" ]; then wipe_tree "$TOKDIR"; fi
+  if [ "${LEDGER_STARTED:-0}" = 1 ]; then r0p_ledger_append "$LEDGER" "$AUTH_SHA" real ended "rc=$rc success=$SUCCESS"; fi
+  r0p_tmp_cleanup
   if [ "$OUTDIR_CREATED" = 1 ]; then
     if [ "$rc" -ne 0 ] || [ "$SUCCESS" != 1 ]; then
       [ "$rc" -ne 0 ] || rc=1
@@ -402,8 +444,19 @@ while [ $i -lt ${#INPUTS[@]} ]; do
   b="$(basename "${INPUTS[$i]}")"
   NAMES+=("$b")
   cp "${INPUTS[$i]}" "$SIGNDIR/$b"; chmod 600 "$SIGNDIR/$b"
+  # TOCTOU (round 4, R4-02): what was copied must be what was hashed and authorized; sign only the copy
+  [ "$(sha "$SIGNDIR/$b")" = "${HASHES[$i]}" ] || die "$b changed between the hash check and the copy (the copy is not the authorized file); nothing was signed"
   OUTS+=("$SIGNDIR/$b"); i=$((i+1))
 done
+# immediately before every signing call: the files in the private directory still are the authorized bytes
+verify_copies() {
+  local k
+  k=0
+  while [ $k -lt ${#NAMES[@]} ]; do
+    [ "$(sha "$SIGNDIR/${NAMES[$k]}")" = "${HASHES[$k]}" ] || die "${NAMES[$k]} in the work directory is not the authorized file (hash differs); refusing to sign"
+    k=$((k+1))
+  done
+}
 
 # ---- sign
 JAVA_TMP_ARG="-Djava.io.tmpdir=$WTMP"
@@ -427,11 +480,15 @@ if [ "$MODE" = throwaway-test ]; then
     if [ -f "$THROWAWAY_DIR/../tsa/anchors.pem" ]; then ANCHORS="$THROWAWAY_DIR/../tsa/anchors.pem"; fi
   fi
   log "signing with THROWAWAY keystore (no network except optional local TSA)"
+  verify_copies
   run_child "${CLEAN_ENV[@]}" "$JAVA" "$JAVA_TMP_ARG" -jar "$JSIGN" --keystore "$THROWAWAY_DIR/throwaway.p12" --storetype PKCS12 \
       --storepass "file:$THROWAWAY_DIR/ks.pass" --alias throwaway-leaf --alg SHA-256 \
       "${JSIGN_NAME_ARGS[@]}" ${TS_ARGS[@]+"${TS_ARGS[@]}"} "${OUTS[@]}" || die "Jsign failed (exit status $?)"
 else
   validate_service_args      # again, immediately before the only token request (defence in depth)
+  # the scope is consumed from here on (the first use of the owner's az session): a failed run burns it
+  r0p_ledger_append "$LEDGER" "$AUTH_SHA" real started "script=$SELF_SHA stage=$STAGE inputs=$SORTED"
+  LEDGER_STARTED=1
   TOKFILE="$TOKDIR/token"; RAW="$TOKDIR/raw"
   log "service: $ENDPOINT account=$ACCOUNT profile=$PROFILE"
   log "obtaining access token via az (written to a 0600 file; never printed)"
@@ -441,6 +498,7 @@ else
   tr -d '\r\n' < "$RAW" > "$TOKFILE"; : > "$RAW"; rm -f "$RAW"; chmod 600 "$TOKFILE"
   [ -s "$TOKFILE" ] || die "empty token"
   log "signing ${#OUTS[@]} file(s) in ONE Jsign invocation (the secure timestamp is mandatory)"
+  verify_copies
   run_child "${CLEAN_ENV[@]}" "$JAVA" "$JAVA_TMP_ARG" -jar "$JSIGN" --storetype TRUSTEDSIGNING --keystore "$ENDPOINT" \
       --storepass "file:$TOKFILE" --alias "$ACCOUNT/$PROFILE" --alg SHA-256 \
       --tsmode RFC3161 --tsaurl "$TSA_PROD" --tsretries 3 --tsretrywait 10 \
@@ -546,7 +604,12 @@ EVID_TMP="$OUTDIR/EVIDENCE.txt.tmp"
   echo "host:            $(uname -srm)"
   echo "operator:        (not recorded: no OS user name in the evidence)"
   if [ "$MODE" = real ]; then
-    echo "authorization:   scope file sha256 $AUTH_SHA (window $S_valid_from .. $S_valid_until UTC)"
+    echo "authorization:   scope file sha256 $AUTH_SHA (window $S_not_before .. $S_not_after UTC); TRIPWIRE against mistakes, not an authentication"
+    echo "scope binds:     identity.json $S_identity_json_sha256; common $S_common_sha256; gate $S_gate_sha256; gate tool $S_gate_tool_sha256"
+    echo "scope binds:     build commit $S_build_commit; procedure commit $S_procedure_commit (recorded, not verified); evidence manifest $S_evidence_manifest_sha256"
+    echo "tools (sha256):  az $S_tool_az_sha256; java $S_tool_java_sha256; python $S_tool_python_sha256; osslsigncode $S_tool_osslsigncode_sha256"
+    echo "ledger:          $LEDGER (--allow-reuse=$ALLOW_REUSE)"
+    if [ "$DISTRIBUTION" = 1 ]; then echo "distribution:    gate enforced (--distribution) and passed"; else echo "distribution:    PRIVATE-CANDIDATE signing: signing does NOT imply permission to distribute"; fi
     echo "service:         $ENDPOINT account=$ACCOUNT profile=$PROFILE"
     echo "timestamp auth.: $TSA_PROD (RFC3161), mandatory"
     echo "subject check:   signer certificate must carry exactly one CN, equal to '$EXPECTED_CN' (exact match)"
@@ -578,6 +641,7 @@ EVID_TMP="$OUTDIR/EVIDENCE.txt.tmp"
   echo
   cat "$OSSL_TEXT"
   echo
+  if [ "$STAGE" = container ]; then echo "CONTAINER LISTING (file list of the installers from the build host): sha256 $LISTING_SHA, $LISTING_LINES lines; this script does NOT inspect the container contents"; echo; fi
   echo "LIMITS OF THIS EVIDENCE"
   echo "  * Verification here is offline and cross-platform (no CRL/OCSP). It shows the digest matches, the signature"
   echo "    is cryptographically valid, the chain reaches the pinned/known root and the timestamp countersignature is"
