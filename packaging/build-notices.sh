@@ -29,9 +29,9 @@ uv pip install --python "$SPY" --no-index --find-links "$WH" --require-hashes --
 FIRST="$(ls "$WH"/agentic_os-*.whl "$WH"/runtime_contracts-*.whl "$WH"/knowledge_frontier-*.whl "$WH"/redevops_connectors-*.whl)"
 # shellcheck disable=SC2086
 uv pip install --python "$SPY" --no-index --find-links "$WH" --no-deps $FIRST >/dev/null
-SITE="$("$SPY" -c 'import sysconfig;print(sysconfig.get_paths()["purelib"])')"
+SITE="$("$SPY" -c 'import sysconfig;print(sysconfig.get_paths()["purelib"])' | strip_cr)"
 # the build tools (setuptools, packaging, PyInstaller) are in the archive too: their dist-info is in the tools venv
-TSITE="$("$TPY" -c 'import sysconfig;print(sysconfig.get_paths()["purelib"])')"
+TSITE="$("$TPY" -c 'import sysconfig;print(sysconfig.get_paths()["purelib"])' | strip_cr)"
 # 3. crate sources for the licence texts: the launcher's crates from the cargo registry (cargo fetch --locked), and the
 #    Rust crates the cryptography / pydantic_core wheels declare as statically linked, from crates.io (checksum-verified
 #    against the SBOM or the sparse index; fetch_crate_sources.py). Both need the network.

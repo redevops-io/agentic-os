@@ -28,7 +28,7 @@ uv venv --python "$PYTHON_VERSION" "$TMP/build" >/dev/null
 BPY="$(venv_py "$TMP/build")"
 assert_python "$BPY"
 uv pip install --python "$BPY" --require-hashes --no-deps -r "$LOCKS/build-backends-$OS.lock" >/dev/null
-echo "   $("$BPY" -m pip --version | cut -d' ' -f1-2), setuptools $("$BPY" -c 'import setuptools;print(setuptools.__version__)')"
+echo "   $("$BPY" -m pip --version | cut -d' ' -f1-2), setuptools $("$BPY" -c 'import setuptools;print(setuptools.__version__)' | strip_cr)"
 [ "$("$BPY" -m pip --version | cut -d' ' -f2)" = "$PIP_VERSION" ] || { echo "pip is not the pinned $PIP_VERSION"; exit 1; }
 echo "== pins check (pyproject, git-pins.json, requirements.in, locks, Cargo.lock) =="
 "$BPY" -I "$PK/verify-pins.py" --quiet || { echo "pins are inconsistent: run packaging/verify-pins.py"; exit 1; }
