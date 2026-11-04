@@ -1,0 +1,16 @@
+MICROSOFT SOFTWARE LICENSE TERMS
+MICROSOFT VISUAL C++ 2015 - 2022 RUNTIME 
+These license terms are an agreement between Microsoft Corporation (or based on where you live, one of its affiliates) and you. They apply to the software named above. The terms also apply to any Microsoft services or updates for the software, except to the extent those have different terms.
+IF YOU COMPLY WITH THESE LICENSE TERMS, YOU HAVE THE RIGHTS BELOW.
+INSTALLATION AND USE RIGHTS. 
+You may install and use any number of copies of the software.
+TERMS FOR SPECIFIC COMPONENTS.
+Microsoft Platforms. The software may include components from Microsoft Windows; Microsoft Windows Server; Microsoft SQL Server; Microsoft Exchange; Microsoft Office; and Microsoft SharePoint. These components are governed by separate agreements and their own product support policies, as described in the Microsoft “Licenses” folder accompanying the software, except that, if license terms for those components are also included in the associated installation directory, those license terms control.
+Third Party Components. The software may include third party components with separate legal notices or governed by other agreements, as may be described in the notices file(s) accompanying the software. 
+SCOPE OF LICENSE. The software is licensed, not sold. This agreement only gives you some rights to use the software. Microsoft reserves all other rights. Unless applicable law gives you more rights despite this limitation, you may use the software only as expressly permitted in this agreement. In doing so, you must comply with any technical limitations in the software that only allow you to use it in certain ways. You may not
+work around any technical limitations in the software;
+reverse engineer, decompile or disassemble the software, or otherwise attempt to derive the source code for the software except, and only to the extent required by third party licensing terms governing the use of certain open source components that may be included in the software;
+remove, minimize, block or modify any notices of Microsoft or its suppliers in the software; 
+use the software in any way that is against the law; 
+share, publish, rent or lease the software; or 
+provide the software as a stand-alone offering or combined with any of your applications for others to use, or transfer the software or this agreement to any third party.

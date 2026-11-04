@@ -1,0 +1,73 @@
+Facts read on 2026-11-04 from clones of https://github.com/redevops-io/redevops-connectors and https://github.com/redevops-io/knowledge-frontier (anonymous, read-only). Commands are named; the output is verbatim.
+
+### redevops-connectors
+$ git tag -l --format='%(refname:short) tag-object=%(objectname:short) commit=%(*objectname:short) %(creatordate:short)'
+v0.1.0 tag-object=f36bdf5 commit=7fbb9ec 2026-09-19
+$ git ls-tree --name-only v0.1.0
+.gitignore
+README.md
+fixtures
+pyproject.toml
+redevops_connectors
+tests
+uv.lock
+$ git show v0.1.0:pyproject.toml | grep -n -i licen
+7:license = "AGPL-3.0-or-later"
+$ git ls-tree --name-only origin/main | grep -i licen
+LICENSE
+LICENSE-COMMONS-CLAUSE
+LICENSE.md
+$ git log --format='%h %ad %s' --date=short origin/main -- LICENSE LICENSE.md LICENSE-COMMONS-CLAUSE
+c5fbe82 2026-10-15 Docs wording cleanup
+d990280 2026-10-13 chore(license): add AGPL-3.0-or-later + Commons Clause (LICENSE INTENT INFERRED - owner to confirm)
+$ git log -1 --format=%B d990280
+chore(license): add AGPL-3.0-or-later + Commons Clause (LICENSE INTENT INFERRED - owner to confirm)
+
+LICENSE INTENT INFERRED - owner to confirm.
+
+Adds LICENSE (AGPL-3.0 full text), LICENSE-COMMONS-CLAUSE, LICENSE.md and aligns pyproject.toml and README to AGPL-3.0-or-later WITH Commons Clause, per the README badge (the stronger declared license). Inferred from the badge, not owner-stated.
+
+Before: no LICENSE file; README badge said AGPL-3.0 + Commons Clause but pyproject.toml and README footer said plain AGPL-3.0-or-later. Both now changed to match the badge.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+$ git show origin/main:LICENSE.md   (section 'Note on this file')
+## Note on this file
+
+Earlier versions of this repository were not covered by this file and are not
+affected retroactively by it.
+
+This file states the terms. It is not legal advice.
+
+### knowledge-frontier
+$ git tag -l --format='%(refname:short) tag-object=%(objectname:short) commit=%(*objectname:short) %(creatordate:short)'
+v0.1.0 tag-object=5da341e commit=d6a78ca 2026-09-13
+v0.2.0 tag-object=189029f commit=057258a 2026-09-23
+$ git ls-tree --name-only v0.1.0
+.gitignore
+README.md
+knowledge_frontier
+pyproject.toml
+tests
+$ git ls-tree --name-only v0.2.0
+.gitignore
+README.md
+knowledge_frontier
+pyproject.toml
+tests
+$ git show v0.2.0:pyproject.toml | grep -n -i licen
+7:license = { text = "AGPL-3.0-or-later" }
+$ git log -1 --format=%B d32a82a
+chore(license): add AGPL-3.0-or-later LICENSE (LICENSE INTENT INFERRED - owner to confirm)
+
+LICENSE INTENT INFERRED - owner to confirm.
+
+Adds the AGPL-3.0 full text as LICENSE and a short README license section. pyproject.toml already declares AGPL-3.0-or-later; there is no README badge, so plain AGPL-3.0-or-later was inferred (no Commons Clause). No other changes.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+
+### README of redevops-connectors at v0.1.0 (lines mentioning the licence)
+$ git show v0.1.0:README.md | grep -n -i 'licen\|commons' | cut -c1-110
+3:[![License: AGPL-3.0 + Commons Clause](https://img.shields.io/badge/License-AGPL--3.0%20%2B%20Commons%20Clau
+148:Licensed AGPL-3.0-or-later.
