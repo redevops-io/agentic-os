@@ -55,7 +55,9 @@ try {
 
   $elev = Test-IsAdmin
   $before = @(Get-InstalledProduct)
-  Add-Result 'INST-04' 'pre-state (already installed?)' 'INFO' ("elevated={0}; uninstall entries named 'Agentic Apps': {1}" -f $elev, $before.Count)
+  Add-Result 'INST-04' 'pre-state (already installed?)' 'INFO' ("elevated={0}; uninstall entries named '{1}': {2}" -f $elev, $script:ProductName, $before.Count)
+  $frozenBefore = @(Get-InstalledProduct $script:FrozenProductName)
+  Add-Result 'INST-04b' 'frozen v0.3.2 product present (side-by-side check)' 'INFO' ("uninstall entries named '{0}': {1}. The R0-prime installer has its own name, UpgradeCode, install directory and registry key, so it must neither replace nor remove the frozen product; this step never touches it." -f $script:FrozenProductName, $frozenBefore.Count)
 
   # firewall observation (read-only)
   $fwBefore = @()
@@ -88,7 +90,7 @@ try {
 
   if ($installed) {
     $prod = @(Get-InstalledProduct)
-    if ($prod.Count -eq 0) { Add-Result 'INST-07' 'uninstall registry entry' 'FAIL' 'no uninstall entry named Agentic Apps in HKLM/HKCU' }
+    if ($prod.Count -eq 0) { Add-Result 'INST-07' 'uninstall registry entry' 'FAIL' ('no uninstall entry named {0} in HKLM/HKCU' -f $script:ProductName) }
     else {
       $p0 = $prod[0]
       Add-Result 'INST-07' 'uninstall registry entry' 'PASS' ("hive={0} key={1} version={2} publisher={3} InstallLocation={4} UninstallString={5}" -f $p0.Hive, $p0.Key, $p0.DisplayVersion, $p0.Publisher, $p0.InstallLocation, $p0.UninstallString)
@@ -106,8 +108,8 @@ try {
       if ($d -and (Test-Path -LiteralPath $d)) { $lnks += @(Get-ChildItem -LiteralPath $d -Recurse -Filter '*Agentic*' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }) }
     }
     Add-Result 'INST-09' 'shortcuts created' 'INFO' ($(if ($lnks.Count) { $lnks -join '; ' } else { 'none found' }))
-    $reg = $null; try { $reg = (Get-ItemProperty 'HKCU:\Software\redevops\Agentic Apps' -ErrorAction Stop).'(default)' } catch { }
-    Add-Result 'INST-10' 'HKCU\Software\redevops\Agentic Apps' 'INFO' $(if ($reg) { "default value = $reg" } else { 'absent' })
+    $reg = $null; try { $reg = (Get-ItemProperty $script:ManufacturerKey -ErrorAction Stop).'(default)' } catch { }
+    Add-Result 'INST-10' $script:ManufacturerKey 'INFO' $(if ($reg) { "default value = $reg" } else { 'absent' })
     $fwAfter = @()
     try { $fwAfter = @(Get-NetFirewallRule -ErrorAction Stop | Where-Object { $_.DisplayName -match 'agentic|redevops' } | Select-Object -ExpandProperty DisplayName) } catch { }
     $newFw = @($fwAfter | Where-Object { $fwBefore -notcontains $_ })

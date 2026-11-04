@@ -9,6 +9,20 @@ $script:OutDir = $null
 $script:TranscriptPath = $null
 $script:ValidStatus = @('PASS', 'FAIL', 'MANUAL', 'INFO', 'SKIP')
 
+# Identity of the R0-prime line. These literals mirror packaging/identity.json (tests/test_r0prime_identity.py keeps them equal).
+# The FROZEN v0.3.2 identity is listed only so the kit can tell the two apart and never touches it.
+$script:ProductName = 'Agentic Apps R0-prime'
+$script:LauncherExe = 'agentic-r0prime.exe'
+$script:LauncherProcess = 'agentic-r0prime'
+$script:AppId = 'io.redevops.agentic-apps.r0prime'
+$script:AppVersion = '0.1.1'
+$script:ManufacturerKey = 'HKCU:\Software\redevops\Agentic Apps R0-prime'
+$script:FrozenProductName = 'Agentic Apps'
+$script:FrozenLauncherExe = 'agentic-apps.exe'
+$script:FrozenLauncherProcess = 'agentic-apps'
+$script:FrozenAppId = 'io.redevops.agentic-apps'
+$script:FrozenManufacturerKey = 'HKCU:\Software\redevops\Agentic Apps'
+
 # Provider key / endpoint variables that change what `bootstrap` prints (see agentic_os/mission/default_llm.py).
 $script:LlmEnvNames = @('GROQ_API_KEY', 'CEREBRAS_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'XAI_API_KEY',
   'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'RDO_LLM_BASE_URL', 'RDO_LLM_API_KEY', 'RDO_LLM_MODEL',
@@ -112,14 +126,14 @@ function Read-ExpectedHashes([string]$File) {
 }
 
 # ---- installed product discovery (read-only registry) --------------------------------------------------------------------
-function Get-InstalledProduct {
+function Get-InstalledProduct([string]$Name = $script:ProductName) {
   $roots = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall', 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall')
   $found = @()
   foreach ($r in $roots) {
     if (-not (Test-Path $r)) { continue }
     foreach ($k in (Get-ChildItem $r -ErrorAction SilentlyContinue)) {
       $p = Get-ItemProperty -LiteralPath $k.PSPath -ErrorAction SilentlyContinue
-      if ($p -and $p.PSObject.Properties['DisplayName'] -and $p.DisplayName -eq 'Agentic Apps') {
+      if ($p -and $p.PSObject.Properties['DisplayName'] -and $p.DisplayName -eq $Name) {
         $pc = $null; if ($k.PSChildName -match '^\{[0-9A-Fa-f-]{36}\}$') { $pc = $k.PSChildName }
         $found += [pscustomobject]@{
           Hive = $r.Substring(0, 4); Key = $k.PSChildName; ProductCode = $pc; DisplayVersion = $p.DisplayVersion; Publisher = $p.Publisher
@@ -137,9 +151,9 @@ function Get-CandidateInstallDirs {
     if ($p.InstallLocation) { $dirs += $p.InstallLocation.TrimEnd('\') }
     if ($p.UninstallString -and $p.UninstallString -match '"?([A-Za-z]:\\[^"]+)\\uninstall\.exe') { $dirs += $Matches[1] }
   }
-  try { $v = (Get-ItemProperty 'HKCU:\Software\redevops\Agentic Apps' -ErrorAction Stop).'(default)'; if ($v) { $dirs += $v.TrimEnd('\') } } catch { }
-  $dirs += (Join-Path $env:ProgramFiles 'Agentic Apps')
-  $dirs += (Join-Path $env:LOCALAPPDATA 'Agentic Apps')
+  try { $v = (Get-ItemProperty $script:ManufacturerKey -ErrorAction Stop).'(default)'; if ($v) { $dirs += $v.TrimEnd('\') } } catch { }
+  $dirs += (Join-Path $env:ProgramFiles $script:ProductName)
+  $dirs += (Join-Path $env:LOCALAPPDATA $script:ProductName)
   return @($dirs | Where-Object { $_ } | Select-Object -Unique)
 }
 

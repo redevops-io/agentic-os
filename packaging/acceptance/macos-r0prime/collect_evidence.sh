@@ -1,7 +1,7 @@
 #!/bin/bash
 # collect_evidence.sh: bundle what a test session produced into ONE evidence directory with hashes.
 #
-#   collect_evidence.sh --out DIR [--note TEXT] [--tester NAME] [--dmg FILE] [--installed-app "/Applications/Agentic Apps.app"]
+#   collect_evidence.sh --out DIR [--note TEXT] [--tester NAME] [--dmg FILE] [--installed-app "/Applications/Agentic Apps R0-prime.app"]
 #                       [--path FILE_OR_DIR]...
 #
 # Writes DIR/evidence-transcript.txt (host name, OS build, hardware, user/uid, admin or standard, Gatekeeper and SIP
@@ -18,7 +18,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=_lib.sh
 . "$HERE/_lib.sh"
 
-OUT=""; NOTE=""; TESTER=""; DMG=""; INSTALLED="/Applications/Agentic Apps.app"; PATHS=""
+OUT=""; NOTE=""; TESTER=""; DMG=""; INSTALLED="/Applications/$APP_NAME"; PATHS=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) OUT="${2:?}"; shift 2;;

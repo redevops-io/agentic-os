@@ -1,7 +1,7 @@
 #!/bin/bash
-# headless_smoke.sh: run the EMBEDDED sidecar of an Agentic Apps .app with NO GUI and check the local API contract.
+# headless_smoke.sh: run the EMBEDDED sidecar of an Agentic Apps R0-prime .app with NO GUI and check the local API contract.
 #
-#   headless_smoke.sh [--out DIR] [--keep] [--start-timeout SECONDS] [--skip-bootstrap] <path to "Agentic Apps.app">
+#   headless_smoke.sh [--out DIR] [--keep] [--start-timeout SECONDS] [--skip-bootstrap] <path to "Agentic Apps R0-prime.app">
 #
 # What it does (all under a private work directory created with mktemp -d; nothing outside it is written except the
 # transcript under --out):

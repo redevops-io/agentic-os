@@ -1,6 +1,6 @@
 # R0-prime macOS acceptance kit (dmg verification, headless sidecar smoke test, manual GUI checklist)
 
-Purpose: run the Agentic Apps macOS arm64 candidate through a repeatable acceptance test on a **fresh local macOS account**, and
+Purpose: run the Agentic Apps R0-prime macOS arm64 candidate (`Agentic Apps R0-prime.app`, bundle id `io.redevops.agentic-apps.r0prime`, version 0.1.1; the frozen v0.3.2 app is `Agentic Apps.app` / `io.redevops.agentic-apps` / 0.1.0: `docs/R0_PRIME_IDENTITY.md`) through a repeatable acceptance test on a **fresh local macOS account**, and
 record what happened. It is the macOS counterpart of `../windows-r0prime/` and `../../ACCEPTANCE-ubuntu.md`.
 
 The kit **prepares and verifies**. It never starts the launcher, opens a window or a browser, signs anything, touches a keychain,
@@ -101,7 +101,7 @@ macOS 27 recommending `diskutil image attach`; the kit keeps `hdiutil` because t
 | 0 | owner's account | `./verify_dmg.sh --expect unsigned\|signed --out ... <dmg> <sha file>` on the candidate; fix anything FAIL before involving a person. For the signed candidate also `--team-id <Team ID>`. |
 | 1 | test account | `./post_run_checks.sh --out ~/r0p-evidence/post-00-baseline`: expect all PASS (the baseline snapshot is used later with `--compare`). |
 | 2 | test account | `MANUAL-CHECKLIST.md` parts B to J (this is where the app is launched, by a person). After each of the stop/quit/kill steps run `./post_run_checks.sh --out ~/r0p-evidence/post-<step>`. |
-| 3 | test account | `./headless_smoke.sh "/Applications/Agentic Apps.app" --out ~/r0p-evidence/smoke` (or the `~/Applications` copy): the API contract of the **installed** sidecar, no GUI. |
+| 3 | test account | `./headless_smoke.sh "/Applications/Agentic Apps R0-prime.app" --out ~/r0p-evidence/smoke` (or the `~/Applications` copy): the API contract of the **installed** sidecar, no GUI. |
 | 4 | test account | `./collect_evidence.sh --out ~/r0p-evidence/bundle --tester <name> --dmg <dmg> --path ~/r0p-evidence/screenshots --path ~/r0p-evidence/notes.txt ...` and record the printed SHA-256 of `SHA256SUMS.txt` out of band. |
 | 5 | owner's account | collect, delete the account. |
 
@@ -115,7 +115,7 @@ For a signed + notarized candidate the same script with `--expect signed` must b
 Only if the owner **explicitly approves it later**. It needs no new account but is a weaker test:
 
 * `fallback_throwaway_home.sh prepare` creates `HOME`/`TMPDIR`/cwd directories and a baseline of the real home; `command --i-have-the-owners-explicit-approval ...`
-  prints the one Terminal command the owner may run (`cd <cwd> && env HOME=<dir>/home TMPDIR=<dir>/tmp "<app>/Contents/MacOS/agentic-apps"`); `verify` checks what was
+  prints the one Terminal command the owner may run (`cd <cwd> && env HOME=<dir>/home TMPDIR=<dir>/tmp "<app>/Contents/MacOS/agentic-r0prime"`); `verify` checks what was
   left in the throwaway HOME and what **leaked into the real `~/Library`** (compared with the baseline). The kit does not run the command.
 * What it does **not** give: a clean keychain (shared), the Gatekeeper first-launch path (starting the binary directly bypasses LaunchServices and
   the quarantine check), an isolated WebKit data directory (Cocoa resolves the home folder from the account database, not from `$HOME`, so WebKit/Caches

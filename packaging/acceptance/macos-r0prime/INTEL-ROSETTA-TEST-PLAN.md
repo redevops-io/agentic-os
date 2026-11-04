@@ -2,7 +2,7 @@
 
 ## Statement
 
-The R0-prime macOS candidate is **Apple silicon (arm64) only**. Both Mach-O files in the bundle (`agentic-apps`, `redevops-sidecar`) are thin arm64 binaries (`file` and `verify_dmg.sh` row `A-01`,
+The R0-prime macOS candidate is **Apple silicon (arm64) only**. Both Mach-O files in the bundle (`agentic-r0prime`, `redevops-sidecar`) are thin arm64 binaries (`file` and `verify_dmg.sh` row `A-01`,
 OBSERVED on the local development build and on the v0.3.2 dmg). **No Intel claim is made**, and none may be made in any document, release note or web page until the plan below has been run.
 
 Rosetta 2 is **not** a route for Intel Macs to run this candidate: Rosetta translates x86_64 code on Apple silicon; it does nothing for an arm64 binary on an Intel Mac. The Rosetta question that
