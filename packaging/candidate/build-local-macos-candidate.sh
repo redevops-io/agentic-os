@@ -18,17 +18,32 @@ set -euo pipefail
 OUT="${1:?usage: build-local-macos-candidate.sh OUT_DIR}"
 HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$HERE/../.." && pwd)"; PK="$ROOT/packaging"
 [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] || { echo "macOS arm64 only"; exit 2; }
-if [ -e "$OUT" ] && [ -n "$(ls -A "$OUT" 2>/dev/null)" ]; then echo "OUT_DIR $OUT exists and is not empty"; exit 2; fi
+if [ -z "${RDO_CANDIDATE_CLEAN_ENV:-}" ] && [ -e "$OUT" ] && [ -n "$(ls -A "$OUT" 2>/dev/null)" ]; then echo "OUT_DIR $OUT exists and is not empty"; exit 2; fi
 if env | grep -qiE '^(APPLE_|CODESIGN|TAURI_SIGNING|KEYCHAIN)'; then echo "refusing: a signing-related variable is set (names: $(env | grep -iE '^(APPLE_|CODESIGN|TAURI_SIGNING|KEYCHAIN)' | cut -d= -f1 | tr '\n' ' '))"; exit 2; fi
 if [ -n "$(git -C "$ROOT" status --porcelain --untracked-files=no)" ] && [ "${ALLOW_DIRTY:-0}" != 1 ]; then echo "tracked files are modified: commit first (the manifest records the commit), or ALLOW_DIRTY=1"; exit 2; fi
-# Re-run once in an ALLOWLISTED environment: no ambient credential (API keys, tokens, cloud/agent sockets) reaches the build,
-# the tests or the smoke run. (The signing-variable refusal above runs first, in the caller's environment.)
-if [ -z "${RDO_CANDIDATE_CLEAN_ENV:-}" ]; then
-  keep=(PATH="$PATH" HOME="$HOME" USER="${USER:-}" LANG=en_US.UTF-8 TERM=dumb RDO_CANDIDATE_CLEAN_ENV=1)
-  for v in TMPDIR CARGO_HOME RUSTUP_HOME ALLOW_DIRTY UV_CACHE_DIR; do [ -n "${!v+x}" ] && keep+=("$v=${!v}"); done
-  exec env -i "${keep[@]}" bash "$0" "$@"
-fi
+# Re-run once in an ALLOWLISTED environment: no ambient credential (API keys, tokens, cloud/agent sockets, ~/.ssh, ~/.aws, ...)
+# reaches the build, the tests or the smoke run. HOME and TMPDIR are THROWAWAY directories under the output dir
+# ($OUT/.build-work, excluded from SHA256SUMS), so nothing file-based in the real HOME is reachable. The only things taken from
+# the real HOME are explicit, non-secret tool caches/installs, passed by path: the uv-managed CPython (UV_PYTHON_INSTALL_DIR),
+# uv's wheel cache (UV_CACHE_DIR) and the cargo registry (CARGO_HOME). PyInstaller's cache/config directory is per build
+# (PYINSTALLER_CONFIG_DIR) so two builds can never collide in ~/Library/Application Support/pyinstaller.
+# (The signing-variable refusal above runs first, in the caller's environment.)
 mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"
+if [ -z "${RDO_CANDIDATE_CLEAN_ENV:-}" ]; then
+  W="$OUT/.build-work"; mkdir -p "$W/home" "$W/tmp" "$W/pyinstaller"
+  UVPY="${UV_PYTHON_INSTALL_DIR:-$HOME/.local/share/uv/python}"
+  UVC="${UV_CACHE_DIR:-$(uv cache dir 2>/dev/null || echo "$HOME/.cache/uv")}"
+  CH="${CARGO_HOME:-$HOME/.cargo}"
+  keep=(PATH="$PATH" HOME="$W/home" TMPDIR="$W/tmp" USER="${USER:-}" LANG=en_US.UTF-8 TERM=dumb RDO_CANDIDATE_CLEAN_ENV=1
+        UV_PYTHON_INSTALL_DIR="$UVPY" UV_CACHE_DIR="$UVC" CARGO_HOME="$CH" PYINSTALLER_CONFIG_DIR="$W/pyinstaller")
+  for v in RUSTUP_HOME ALLOW_DIRTY; do [ -n "${!v+x}" ] && keep+=("$v=${!v}"); done
+  exec env -i "${keep[@]}" bash "$0" "$OUT"
+fi
+cleanup() { # temp dirs of this run and a possibly still mounted dmg (N-06)
+  [ -n "${M:-}" ] && [ -d "$M" ] && { hdiutil detach "$M" -quiet >/dev/null 2>&1 || true; rmdir "$M" 2>/dev/null || true; }
+  for d in "${TV:-}" "${SW:-}"; do [ -n "$d" ] && [ -d "$d" ] && rm -rf "$d"; done
+}
+trap cleanup EXIT
 mkdir -p "$OUT"/{logs,sbom,notices,listings,environment,smoke-test,signing-inputs}
 COMMIT="$(git -C "$ROOT" rev-parse HEAD)"; TREE="$(git -C "$ROOT" rev-parse 'HEAD^{tree}')"
 . "$PK/toolchain.env"
@@ -65,7 +80,7 @@ M="$(mktemp -d)"; hdiutil attach -readonly -nobrowse -noautoopen -noverify -moun
     if [ -L "$f" ]; then echo "symlink  $f -> $(readlink "$f")"; else echo "$(shasum -a 256 "$f" | cut -d' ' -f1)  $(stat -f %z "$f")  $f"; fi; done ) > "$OUT/listings/dmg-contents.txt"
 if diff <(cd "$M/$APPNAME" && find . -type f | sort | xargs shasum -a 256) <(cd "$APP" && find . -type f | sort | xargs shasum -a 256) >/dev/null; then
   echo "the .app inside the dmg has file hashes identical to the .app copy" > "$OUT/listings/dmg-vs-app.txt"; else echo "DIFFERENT" > "$OUT/listings/dmg-vs-app.txt"; fi
-hdiutil detach "$M" >/dev/null; rmdir "$M"
+hdiutil detach "$M" >/dev/null; rmdir "$M"; M=""
 { echo "## Info.plist"; plutil -p "$APP/Contents/Info.plist"; echo; for f in "$APP/Contents/MacOS/"*; do echo "--- $(basename "$f")"; lipo -archs "$f"; vtool -show-build "$f" | grep -E "platform|minos|sdk"; codesign -dv "$f" 2>&1 | grep -E "Identifier|flags|Signature|TeamIdentifier"; echo "entitlements:"; codesign -d --entitlements - "$f" 2>&1 | grep -v '^Executable' || true; done
   echo "--- bundle"; codesign -dv "$APP" 2>&1 | grep -E "Format|Signature|Sealed|TeamIdentifier" || true; codesign --verify --deep --strict "$APP" 2>&1 | head -2 || true; } > "$OUT/listings/app-info-and-macho-facts.txt" 2>&1
 TV="$(mktemp -d)"; uv venv --python "$PYTHON_VERSION" "$TV/v" >/dev/null
@@ -122,5 +137,5 @@ cat > "$OUT/README-LOCAL-BUILD.md" <<EOF
 4. the dmg (sign, notarize, staple).
 Windows msi/nsis/exe and installed executables are not built here.
 EOF
-(cd "$OUT" && find . -type f ! -name SHA256SUMS ! -path './previous-outputs-moved-aside/*' | sort | while read -r f; do shasum -a 256 "$f"; done) > "$OUT/SHA256SUMS"
+(cd "$OUT" && find . -type f ! -name SHA256SUMS ! -path './previous-outputs-moved-aside/*' ! -path './.build-work/*' | sort | while read -r f; do shasum -a 256 "$f"; done) > "$OUT/SHA256SUMS"
 echo "done: $OUT  (dmg sha256 $DMGSHA)"

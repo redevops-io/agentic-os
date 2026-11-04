@@ -23,6 +23,28 @@ what a check in this repository shows. Evidence levels: OBSERVED / STATIC / INFE
 `verify-pins.py` checks pyproject <-> git-pins <-> requirements.in <-> locks <-> toolchain.env <-> the frozen CI wheel list <-> Cargo.lock.
 `tests/test_packaging_pins.py` (offline) asserts the same and that the scripts and workflow use the pins.
 
+## certifi: a DELIBERATE deviation from the frozen v0.3.2 wheel set (decision pins-16)
+
+The 21 third-party wheels equal the frozen CI wheel set **except certifi**: frozen 2026.7.22, now **2026.10.19**.
+Why: GHSA-6q48-6c7w-9gw2 / PYSEC-2026-4320 (2026-10-20): certifi before 2026.10.18 bundles the `emSign ECC Root CA - G3` root, and
+eight eMudhra intermediate CAs chaining to it have compromised keys; the sidecar's outbound TLS (httpx and the connectors) trusts the certifi
+bundle. The advisory says: upgrade to 2026.10.19 or later (2026.10.18 removed all emSign roots; 2026.10.19 restored the unaffected
+ones; the ECC G3 root is gone in both). The locks of 2026-09-18 predate the advisory.
+How: `toolchain.env` `LOCK_EXCLUDE_NEWER_CERTIFI=2026-10-21T00:00:00Z` (certifi only; every other package keeps `LOCK_EXCLUDE_NEWER`
+2026-09-18T14:00Z) selects the newest certifi published at least about two weeks before 2026-11-04 (2026.10.19, uploaded 2026-10-20;
+2026.10.23 was too new), and `lock-constraints.in` (`certifi>=2026.10.18`) makes the resolver fail instead of falling back below the fixing
+release. `regen-python-locks.sh` passes both (`--exclude-newer-package`, `-c`). The regeneration changed exactly certifi (version, two
+hashes, the `via -c` comment) in the three `requirements-<os>.lock` files and the universal `requirements.lock`; the build-tools and
+build-backends locks changed in a header comment only.
+Enforcement: `verify-pins.py` asserts "the 21 pins equal the frozen CI wheels EXCEPT the documented deviation set {certifi}" and pins each deviation to
+its recorded version (>= its fixing release); a drift of any other package, or of certifi to another version, fails
+(`tests/test_packaging_pins.py::test_the_deviation_set_is_exactly_certifi_and_drift_elsewhere_still_fails`). The frozen evidence list is unchanged.
+Not changed: the first-party pins (runtime-contracts v0.3.4, redevops-connectors v0.1.0, knowledge-frontier v0.1.0); `uv.lock` at the repository
+root is a stale developer lock that no build reads (regenerating it rewrites it wholesale) and still names certifi 2026.7.22.
+OSV check (read-only API, 2026-11-04) of all 21 pinned macOS wheels with certifi 2026.10.19: no advisory for any of them.
+Consequence for the reproducibility claim: this build is NOT a byte-for-byte rebuild of the frozen v0.3.2 wheel set; the shipped `cacert.pem`
+differs (and the notices/SBOM name certifi 2026.10.19).
+
 ## idna 3.20 / uvicorn 0.53.0 versus the old lock (3.19 / 0.52.4)
 
 The committed `packaging/requirements.lock` was the `pip freeze` OUTPUT of `build-wheelhouse.sh`, rewritten in the CI
