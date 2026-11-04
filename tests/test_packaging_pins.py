@@ -214,3 +214,15 @@ def test_build_manifest_records_tools_and_never_the_environment(tmp_path, monkey
     assert m["runner"]["env"]["ImageVersion"] == "20260831.0302.1"
     assert m["inputs_sha256"]["packaging/toolchain.env"] and m["inputs_sha256"]["pyproject.toml"]
     assert "python_x" in m["toolchain"] and m["source"]["commit"]
+
+
+def test_workflow_parses_and_runs_the_pinned_steps_in_order():
+    yaml = pytest.importorskip("yaml")
+    wf = yaml.safe_load((ROOT / ".github/workflows/native-packaging.yml").read_text())
+    names = [s.get("name", s.get("uses", "")) for s in wf["jobs"]["bundle"]["steps"]]
+    runs = [s.get("run", "") for s in wf["jobs"]["bundle"]["steps"]]
+    order = [next(i for i, r in enumerate(runs) if k in r) for k in
+             ("verify-pins.py", "build-wheelhouse.sh", "build-sidecar.sh", "build-notices.sh", "stage-sidecar.sh", "tauri-cli", "build-launcher.sh", "build-sbom.sh")
+             if k != "tauri-cli"]
+    assert order == sorted(order), names
+    assert wf["jobs"]["bundle"]["strategy"]["matrix"]["include"][2]["os"] == "macos-14"

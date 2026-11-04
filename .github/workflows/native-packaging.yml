@@ -68,7 +68,7 @@ jobs:
         shell: bash
         run: ./packaging/build-wheelhouse.sh
 
-      - name: Task 2 — freeze the Python sidecar (pass 1: the archive the notices are derived from)
+      - name: Task 2 — freeze the Python sidecar (pass 1; the archive the notices are derived from)
         shell: bash
         run: ./packaging/build-sidecar.sh
 
