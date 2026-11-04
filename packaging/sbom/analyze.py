@@ -316,10 +316,16 @@ def analyze(archive: Archive, inv: dict[str, dict], facts: dict | None = None, w
                                           limitations=["library files present but no version banner readable (listing-only run without facts)"])
 
     # Microsoft DLLs ---------------------------------------------------------------------------
+    # (c.entries is only filled further down, so the archive entries of a component are taken from A.attribution here: with
+    # c.entries the file name fell back to the lower-case key, ms_versions[<name as archived>] never matched, and the version of
+    # an upper-case file such as VCRUNTIME140.dll was lost whenever the bytes were available.)
+    def archived(key: str) -> list[str]:
+        return [k.split(":", 1)[1] for k, v in A.attribution.items() if v == key and k.startswith("pkg:")]
+
     for k, c in list(A.comps.items()):
         if k.startswith("ms-dll:"):
             base = k.split(":", 1)[1]
-            fname = next((e.split(":", 1)[1] for e in c.entries if e.lower().endswith(base)), base)
+            fname = next((e for e in archived(k) if e.replace("\\", "/").split("/")[-1].lower() == base), base)
             fv = ms_versions.get(fname) or (facts.get("ms_dlls", {}).get(base))
             c.name, c.version, c.kind = fname.split("/")[-1], fv, "library"
             c.purl = f"pkg:generic/microsoft-{base.replace('.dll', '')}@{fv}" if fv else None
@@ -327,8 +333,14 @@ def analyze(archive: Archive, inv: dict[str, dict], facts: dict | None = None, w
             c.props["redevops:licence-note"] = "Microsoft redistributable runtime; licence not read from the file, none asserted"
             c.props["redevops:role"] = "Microsoft C/C++ runtime shipped inside the Windows PyInstaller archive"
         if k == "ms-apiset":
+            files = archived(k)
+            read = sorted({ms_versions[f] for f in files if ms_versions.get(f)})
             c.name, c.version, c.kind = "Windows Universal CRT API-set forwarders (api-ms-win-*.dll)", facts.get("ms_dlls", {}).get("ucrtbase.dll"), "library"
-            c.evidence.append(f"{len(c.entries)} api-ms-win-*.dll files in the archive")
+            if not c.version and len(read) == 1:
+                c.version = read[0]      # every forwarder carries the same UCRT version resource
+            elif len(read) > 1:
+                c.limitations.append("the api-ms-win-*.dll files carry more than one version resource: " + ", ".join(read))
+            c.evidence.append(f"{len(files)} api-ms-win-*.dll files in the archive" + (f"; PE VS_FIXEDFILEINFO of the files: {', '.join(read)}" if read else ""))
             c.props["redevops:licence-note"] = "Microsoft redistributable runtime; none asserted"
             if not c.version:
                 c.limitations.append("version of the api-set forwarder DLLs not discovered (they carry the Windows 10 SDK UCRT version; read the files' VS_FIXEDFILEINFO)")
