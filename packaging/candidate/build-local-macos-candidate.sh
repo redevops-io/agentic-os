@@ -6,8 +6,9 @@
 #
 # OUT_DIR must not exist or must be empty (a second candidate never overwrites the first). Needs on PATH: the pinned
 # rustc/cargo (1.98.1), tauri-cli (`tauri` or `cargo tauri`, 2.11.4), uv, python3, git, network (PyPI/GitHub/crates.io).
-# Run it through the scrubbed environment:
-#   env -u SSH_AUTH_SOCK -u SSH_AGENT_PID -u APPROVAL_SECRET packaging/candidate/build-local-macos-candidate.sh OUT_DIR
+# The script re-executes itself under `env -i` with an allowlist (PATH HOME USER TMPDIR CARGO_HOME ...), so the caller's
+# credentials never reach the build. Example (one go, on a new tip):
+#   packaging/candidate/build-local-macos-candidate.sh "$S/r0prime/candidate/macos-arm64-unsigned-<tip>"
 #
 # Steps: refuse a dirty tree / signing variables -> move previous build outputs aside (never deleted) -> build-all.sh
 # (CI=true: the dmg bundler skips the Finder AppleScript styling) -> copy .app/.dmg/SBOM/notices/source offer/manifest ->
@@ -20,6 +21,13 @@ HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$HERE/../.." && pwd)"; PK="$R
 if [ -e "$OUT" ] && [ -n "$(ls -A "$OUT" 2>/dev/null)" ]; then echo "OUT_DIR $OUT exists and is not empty"; exit 2; fi
 if env | grep -qiE '^(APPLE_|CODESIGN|TAURI_SIGNING|KEYCHAIN)'; then echo "refusing: a signing-related variable is set (names: $(env | grep -iE '^(APPLE_|CODESIGN|TAURI_SIGNING|KEYCHAIN)' | cut -d= -f1 | tr '\n' ' '))"; exit 2; fi
 if [ -n "$(git -C "$ROOT" status --porcelain --untracked-files=no)" ] && [ "${ALLOW_DIRTY:-0}" != 1 ]; then echo "tracked files are modified: commit first (the manifest records the commit), or ALLOW_DIRTY=1"; exit 2; fi
+# Re-run once in an ALLOWLISTED environment: no ambient credential (API keys, tokens, cloud/agent sockets) reaches the build,
+# the tests or the smoke run. (The signing-variable refusal above runs first, in the caller's environment.)
+if [ -z "${RDO_CANDIDATE_CLEAN_ENV:-}" ]; then
+  keep=(PATH="$PATH" HOME="$HOME" USER="${USER:-}" LANG=en_US.UTF-8 TERM=dumb RDO_CANDIDATE_CLEAN_ENV=1)
+  for v in TMPDIR CARGO_HOME RUSTUP_HOME ALLOW_DIRTY UV_CACHE_DIR; do [ -n "${!v+x}" ] && keep+=("$v=${!v}"); done
+  exec env -i "${keep[@]}" bash "$0" "$@"
+fi
 mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"
 mkdir -p "$OUT"/{logs,sbom,notices,listings,environment,smoke-test,signing-inputs}
 COMMIT="$(git -C "$ROOT" rev-parse HEAD)"; TREE="$(git -C "$ROOT" rev-parse 'HEAD^{tree}')"
