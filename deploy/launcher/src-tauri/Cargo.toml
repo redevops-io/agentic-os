@@ -3,7 +3,10 @@ name = "redevops-launcher"
 version = "0.1.0"
 description = "ReDevOps Launcher — native one-click for the agentic app (Windows/macOS)"
 edition = "2021"
-license = "AGPL-3.0-or-later"
+# No SPDX `license` field: the family licence (AGPL-3.0-or-later with the Commons Clause) has no
+# registered SPDX id, and plain "AGPL-3.0-or-later" would omit the Commons Clause. See LICENSING.md.
+license-file = "../../../LICENSING.md"
+publish = false
 
 # SCAFFOLD: not built in CI. `cargo tauri dev` / `cargo tauri build` on a dev machine.
 [build-dependencies]
