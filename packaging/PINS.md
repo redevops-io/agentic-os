@@ -84,9 +84,23 @@ any unlisted or mismatched one; run against the frozen v0.3.2 listings it reprod
 
 ## Reproducibility (what the check shows, nothing more)
 
-`verify-reproducible.sh` builds the same commit twice in clean clones and compares. On one host with one toolchain the wheelhouse
-(25 wheels), the PyInstaller sidecar (whole file, every PKG entry, every PYZ module) and the launcher binary were byte-identical, with the
-checkout in the same or in a different directory. The launcher embeds the build host's CARGO_HOME and source paths unless remapped
-(`build-launcher.sh` passes `--remap-path-prefix`). Not shown: identity across hosts, runner image versions, interpreters (CI vs
-standalone), Rust/Xcode SDK versions, the dmg step (not run: it drives Finder) or code-signed output. No claim of reproducible
-releases is made from these results alone.
+`verify-reproducible.sh` builds the same committed tree twice in clean clones (fresh wheelhouse, fresh venvs, empty
+`CARGO_TARGET_DIR`) and compares; `build-all.sh` is the sequence it builds. Results on one Mac (arm64, uv's python-build-standalone
+3.12.10, Rust 1.98.1, tauri-cli 2.11.4), release build of the launcher `.app` only (no dmg):
+
+| run (OBSERVED, 2026-11-04) | wheelhouse | sidecar | launcher | app tree | SBOM |
+|---|---|---|---|---|---|
+| same checkout path, same CARGO_HOME | 25/25 wheels identical | whole file identical (63 PKG entries, 1088 PYZ modules, all identical) | identical | 12/12 files identical | byte-identical |
+| different checkout paths + different CARGO_HOME (equal-length), launcher WITHOUT `--remap-path-prefix` | identical | identical | DIFFERENT: 7064 bytes: the embedded CARGO_HOME path (324 strings) + LC_UUID (16) + ad-hoc code signature (892); after replacing the path the remaining differences are LC_UUID and the signature only | `agentic-apps` differs | differs only by an absolute path in a property (fixed since) |
+| same, WITH `--remap-path-prefix` (the default in `build-launcher.sh`) | identical | identical | identical | 12/12 identical | byte-identical |
+
+Difference classes found: (1) build paths embedded by rustc (CARGO_HOME registry paths, checkout dir) -> removed by remapping;
+(2) Mach-O LC_UUID and the ad-hoc linker signature, which follow any content change. PyInstaller output was identical with
+`SOURCE_DATE_EPOCH` (commit time) and `PYTHONHASHSEED=1` set; first-party wheels were identical with `SOURCE_DATE_EPOCH`.
+Durations: wheelhouse 7-9 s, sidecar freeze 15-16 s (twice per build: notices pass), launcher 21-23 s (release, crates already
+downloaded; first fetch adds the download), whole build 68-69 s.
+
+Not shown, therefore not claimed: identity across hosts, runner image versions, interpreters (python.org framework / hostedtoolcache
+vs standalone: the PKG layer differs, decision pins-06), Rust/Xcode SDK versions, the dmg (not run: it drives Finder), Windows (the path
+remap is POSIX-only; UNVERIFIED), or code-signed output (signing changes bytes by design). The frozen v0.3.2 launcher embeds
+`/Users/runner/.cargo/...`; a CI rebuild with the remap embeds `/cargo-home/...` instead. No claim of reproducible releases is made.

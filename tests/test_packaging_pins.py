@@ -226,3 +226,26 @@ def test_workflow_parses_and_runs_the_pinned_steps_in_order():
              if k != "tauri-cli"]
     assert order == sorted(order), names
     assert wf["jobs"]["bundle"]["strategy"]["matrix"]["include"][2]["os"] == "macos-14"
+
+
+def test_compare_builds_reports_a_difference_and_its_class(tmp_path):
+    """The reproducibility comparison must not say 'identical' when bytes differ (negative control)."""
+    import struct
+
+    import compare_builds as cb
+
+    a = tmp_path / "A"; b = tmp_path / "B"
+    for d in (a, b):
+        d.mkdir()
+    # a minimal thin Mach-O header with an LC_UUID, so the region attribution can be checked
+    hdr = b"\xcf\xfa\xed\xfe" + struct.pack("<7I", 0x0100000C, 0, 2, 1, 24, 0, 0) + struct.pack("<II", 0x1B, 24) + b"\x11" * 16
+    body = b"x" * 64 + b"/cargo-home/registry" + b"y" * 32
+    (a / "launcher").write_bytes(hdr + body)
+    (b / "launcher").write_bytes(hdr.replace(b"\x11" * 16, b"\x22" * 16) + body)
+    out = tmp_path / "r.md"
+    rc = cb.sys.argv = ["compare_builds.py", str(a), str(b), "--out", str(out), "--path-marker", "/cargo-home"]
+    assert cb.main() == 0
+    text = out.read_text()
+    assert "File: DIFFERENT" in text and "'LC_UUID': 16" in text
+    (b / "launcher").write_bytes(hdr + body)
+    assert cb.main() == 0 and "File: IDENTICAL" in out.read_text()
