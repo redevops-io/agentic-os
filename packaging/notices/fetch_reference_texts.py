@@ -61,6 +61,21 @@ ENTRIES: dict[str, tuple[str, str]] = {
         f"{RAW}/wixtoolset/wix3/wix3141rtm/LICENSE.TXT",
         "WiX Toolset v3 LICENSE.TXT (Microsoft Reciprocal License). tauri-bundler 2.10.4 downloads wix314-binaries.zip "
         "(wix3141rtm); which WiX-supplied files, if any, end up inside an MSI is UNVERIFIED (no Windows build exists)"),
+    "bzip2-1.0.8-LICENSE.txt": (
+        f"{RAW}/libarchive/bzip2/bzip2-1.0.8/LICENSE",
+        "bzip2 1.0.8 LICENSE. A version banner '1.0.8, 13-Jul-2019' is present in the libpython3.12.dylib of the python-build-"
+        "standalone 3.12.10 interpreter used by the local macOS candidate (OBSERVED by strings); the linkage in other interpreter builds "
+        "is not established"),
+    "Tcl-8.6.14-license.terms.txt": (
+        f"{RAW}/tcltk/tcl/core-8-6-14/license.terms",
+        "Tcl 8.6.14 license.terms. Tcl/Tk 8.6.14 version strings are present in the libpython3.12.dylib of the python-build-standalone "
+        "interpreter used by the local candidate although tkinter is excluded from the sidecar archive (OBSERVED by strings)"),
+    "Tk-8.6.14-license.terms.txt": (
+        f"{RAW}/tcltk/tk/core-8-6-14/license.terms", "Tk 8.6.14 license.terms (see the Tcl entry)"),
+    "expat-2.6.3-COPYING.txt": (
+        f"{RAW}/libexpat/libexpat/R_2_6_3/expat/COPYING",
+        "expat 2.6.3 COPYING (MIT). The banner 'expat_2.6.3' is present in the libpython3.12.dylib of the python-build-standalone "
+        "interpreter used by the local candidate (OBSERVED by strings); CPython's Doc/license.rst also covers expat"),
     "duckdb-1.5.5-LICENSE.txt": (
         f"{RAW}/duckdb/duckdb/{DUCK}/LICENSE", "DuckDB LICENSE (MIT) at tag v1.5.5"),
 }

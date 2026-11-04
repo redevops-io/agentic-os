@@ -45,11 +45,29 @@
       "sha256": "52412d7bc7ce4157ea628bbaacb8829e0a9cb3c58f57f99176126bc8cf2bfc85",
       "bytes": 1086
     },
+    "Tcl-8.6.14-license.terms.txt": {
+      "source": "https://raw.githubusercontent.com/tcltk/tcl/core-8-6-14/license.terms",
+      "description": "Tcl 8.6.14 license.terms. Tcl/Tk 8.6.14 version strings are present in the libpython3.12.dylib of the python-build-standalone interpreter used by the local candidate although tkinter is excluded from the sidecar archive (OBSERVED by strings)",
+      "sha256": "c0a69a2bfd757361ec7e6143973b103c90409316b49e9c88db26ad6388e79f16",
+      "bytes": 2255
+    },
+    "Tk-8.6.14-license.terms.txt": {
+      "source": "https://raw.githubusercontent.com/tcltk/tk/core-8-6-14/license.terms",
+      "description": "Tk 8.6.14 license.terms (see the Tcl entry)",
+      "sha256": "2cde822b93ca16ae535c954b7dfe658b4ad10df2a193628d1b358f1765e8b198",
+      "bytes": 2267
+    },
     "WiX3-LICENSE.txt": {
       "source": "https://raw.githubusercontent.com/wixtoolset/wix3/wix3141rtm/LICENSE.TXT",
       "description": "WiX Toolset v3 LICENSE.TXT (Microsoft Reciprocal License). tauri-bundler 2.10.4 downloads wix314-binaries.zip (wix3141rtm); which WiX-supplied files, if any, end up inside an MSI is UNVERIFIED (no Windows build exists)",
       "sha256": "dfdf2048787635215a6baf3b9d461dee89a2904d246787258a44f072a98d4786",
       "bytes": 3341
+    },
+    "bzip2-1.0.8-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/libarchive/bzip2/bzip2-1.0.8/LICENSE",
+      "description": "bzip2 1.0.8 LICENSE. A version banner '1.0.8, 13-Jul-2019' is present in the libpython3.12.dylib of the python-build-standalone 3.12.10 interpreter used by the local macOS candidate (OBSERVED by strings); the linkage in other interpreter builds is not established",
+      "sha256": "c6dbbf828498be844a89eaa3b84adbab3199e342eb5cb2ed2f0d4ba7ec0f38a3",
+      "bytes": 1896
     },
     "duckdb-1.5.5-LICENSE.txt": {
       "source": "https://raw.githubusercontent.com/duckdb/duckdb/v1.5.5/LICENSE",
@@ -230,6 +248,12 @@
       "description": "DuckDB source tree tag v1.5.5, third_party/zstd/LICENSE. The wheel statically embeds third-party libraries; which of this tree's libraries are linked into the shipped _duckdb extension was NOT established",
       "sha256": "8b7bc50ec3ecee27224e17d4d316a939fa2ddda9c88e0ddc2f059ce432edbfb9",
       "bytes": 1529
+    },
+    "expat-2.6.3-COPYING.txt": {
+      "source": "https://raw.githubusercontent.com/libexpat/libexpat/R_2_6_3/expat/COPYING",
+      "description": "expat 2.6.3 COPYING (MIT). The banner 'expat_2.6.3' is present in the libpython3.12.dylib of the python-build-standalone interpreter used by the local candidate (OBSERVED by strings); CPython's Doc/license.rst also covers expat",
+      "sha256": "122f2c27000472a201d337b9b31f7eb2b52d091b02857061a8880371612d9534",
+      "bytes": 1144
     },
     "libffi-3.4.4-LICENSE.txt": {
       "source": "https://raw.githubusercontent.com/libffi/libffi/v3.4.4/LICENSE",
