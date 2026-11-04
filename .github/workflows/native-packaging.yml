@@ -9,8 +9,11 @@
 #     is recorded in packaging/dist/build-manifest.json (ImageVersion)
 #   * CPython 3.12.10, Rust 1.98.1, tauri-cli 2.11.4, uv 0.12.16 (packaging/toolchain.env)
 #   * Python wheels `--require-hashes` (packaging/locks), Rust crates `--locked` (Cargo.lock)
-# Nothing here signs or publishes anything new; the existing `release` job is unchanged.
+# Nothing here signs or publishes: the `release` job of the frozen workflow is REMOVED (see the end of the file).
 name: native-packaging
+
+permissions:
+  contents: read     # read-only token for every job; nothing in this workflow writes to the repository or to releases
 
 on:
   workflow_dispatch:
@@ -99,6 +102,10 @@ jobs:
         shell: bash
         run: ./packaging/build-sbom.sh
 
+      - name: Closing check - the staged notices describe exactly the components of the final SBOM
+        shell: bash
+        run: python -I packaging/notices/check_notices_vs_sbom.py --sbom packaging/dist/sbom/sbom.cdx.json --notices-report packaging/notices/out/notices-report.json --licenses-dir deploy/launcher/src-tauri/licenses --exclude knowledge-frontier
+
       # --- Signing / notarization: staged (decision 4). Enabled per-OS in P2 when secrets exist. ---
       # - name: Sign & notarize (macOS)   if: runner.os == 'macOS' && secrets.APPLE_ID ...
       # - name: Sign (Windows)            if: runner.os == 'Windows' && secrets.WIN_CERT ...
@@ -128,38 +135,14 @@ jobs:
       - name: Clean-machine acceptance (install the .deb, reach a served control plane, no Docker)
         run: ./packaging/acceptance-ubuntu.sh "$(find dist -name '*.deb' | head -1)"
 
-  # On a version tag, collect every OS's installers and publish them as GitHub Release
-  # assets — the public download page for the desktop app. (Unsigned until signing secrets
-  # are wired in P2; the release notes flag the Gatekeeper/SmartScreen workaround.)
-  release:
-    needs: [bundle, acceptance-ubuntu]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - name: Download all OS installer artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
-        with:
-          path: dist
-      - name: Flatten installer files
-        run: |
-          mkdir -p release
-          find dist -type f \( -name '*.deb' -o -name '*.AppImage' -o -name '*.msi' \
-            -o -name '*.exe' -o -name '*.dmg' \) -exec cp {} release/ \;
-          ls -la release/
-      - name: Publish installers to the GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
-        with:
-          files: release/*
-          fail_on_unmatched_files: false
-          generate_release_notes: true
-          body: |
-            **ReDevOps Agentic Apps — desktop control surface.** Native installers for Linux, Windows and macOS.
-
-            These builds are **not yet code-signed/notarized**:
-            - **macOS**: right-click the app → **Open** (once) to bypass Gatekeeper.
-            - **Windows**: SmartScreen → **More info → Run anyway**.
-
-            The desktop app is the control surface; the Runtime/app services deploy separately (see
-            https://redevops.io/projects/apps-install).
+  # ---------------------------------------------------------------------------------------------
+  # NO RELEASE / PUBLISH JOB (R0-prime, decision pins-05).
+  # The v0.3.2 workflow had a `release` job here that, on any `v*` tag, downloaded every OS's installers and
+  # published them as GitHub Release assets with softprops/action-gh-release (permissions: contents: write),
+  # UNSIGNED. That job is removed from this tree: no workflow in this repository can create a release or
+  # publish an artifact. Build jobs only; their outputs stay workflow artifacts (private to the repository).
+  # Publication needs (1) a separate, explicit owner authorization and (2) SIGNED artifacts (macOS Developer ID
+  # + notarization, Windows Authenticode); a publishing job is then added by that decision's own change,
+  # with the signing steps in front of it. The old job is in git history at feeca065
+  # (.github/workflows/native-packaging.yml). tests/test_workflow_no_publish.py enforces this.
+  # ---------------------------------------------------------------------------------------------
