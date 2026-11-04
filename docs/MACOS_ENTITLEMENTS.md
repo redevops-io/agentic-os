@@ -39,8 +39,8 @@ whoever signed it (or if nobody did). Residual risks that remain after signing a
 
 1. **Library planting.** Code that can write into a directory the sidecar loads libraries from can get that code
    loaded into the sidecar. The directory is the per-launch extraction directory `_MEI*` under the user's temporary
-   directory (PyInstaller creates it for the process; permissions are listed in `reports/build.md` for the observed
-   local build). An attacker with the same user's file-write access could race or replace a file there. Same-user
+   directory; it was observed with mode `drwx------` (owner only) in a local build, so the writer has to be the
+   same user (or root). An attacker with the same user's file-write access could race or replace a file there. Same-user
    attackers are outside the threat model of `docs/LOCAL_API_SECURITY.md`; the entitlement is the reason that boundary
    matters more for the sidecar than for a fully library-validated process.
 2. **Inherited reach.** Anything loaded into the sidecar runs with the sidecar's privileges: the user's files that the

@@ -102,6 +102,58 @@
   "key:platform:wkwebview": {
    "not_third_party": "system component of macOS (WKWebView / WebKit): linked as an operating-system library, not redistributed in the artifact.",
    "decision": ""
+  },
+  "key:licenses-folder": {
+   "not_third_party": "first-party: the Licenses folder itself (product licence files and these notices), embedded in the sidecar by the second freeze pass",
+   "decision": ""
+  },
+  "cargo:objc2": {
+   "decision": "D-LIC-18",
+   "note": "The crate is derived from Apple SDKs shipped with Xcode; its repository states that it is unclear whether distributing derived works is allowed under the Xcode licence (madsmtm/objc2 LICENSE.md, 'Apple SDKs'). The crate package carries no licence file and the upstream repository root holds only a licence-selection statement (LICENSE.md), not the MIT/Zlib/Apache texts. Owner/counsel decision."
+  },
+  "cargo:block2": {
+   "decision": "D-LIC-18",
+   "note": "The crate is derived from Apple SDKs shipped with Xcode; its repository states that it is unclear whether distributing derived works is allowed under the Xcode licence (madsmtm/objc2 LICENSE.md, 'Apple SDKs'). The crate package carries no licence file and the upstream repository root holds only a licence-selection statement (LICENSE.md), not the MIT/Zlib/Apache texts. Owner/counsel decision."
+  },
+  "cargo:dispatch2": {
+   "decision": "D-LIC-18",
+   "note": "The crate is derived from Apple SDKs shipped with Xcode; its repository states that it is unclear whether distributing derived works is allowed under the Xcode licence (madsmtm/objc2 LICENSE.md, 'Apple SDKs'). The crate package carries no licence file and the upstream repository root holds only a licence-selection statement (LICENSE.md), not the MIT/Zlib/Apache texts. Owner/counsel decision."
+  },
+  "cargo:objc2-app-kit": {
+   "decision": "D-LIC-18",
+   "note": "The crate is derived from Apple SDKs shipped with Xcode; its repository states that it is unclear whether distributing derived works is allowed under the Xcode licence (madsmtm/objc2 LICENSE.md, 'Apple SDKs'). The crate package carries no licence file and the upstream repository root holds only a licence-selection statement (LICENSE.md), not the MIT/Zlib/Apache texts. Owner/counsel decision."
+  },
+  "cargo:objc2-core-foundation": {
+   "decision": "D-LIC-18",
+   "note": "The crate is derived from Apple SDKs shipped with Xcode; its repository states that it is unclear whether distributing derived works is allowed under the Xcode licence (madsmtm/objc2 LICENSE.md, 'Apple SDKs'). The crate package carries no licence file and the upstream repository root holds only a licence-selection statement (LICENSE.md), not the MIT/Zlib/Apache texts. Owner/counsel decision."
+  },
+  "cargo:objc2-core-graphics": {
+   "decision": "D-LIC-18",
+   "note": "The crate is derived from Apple SDKs shipped with Xcode; its repository states that it is unclear whether distributing derived works is allowed under the Xcode licence (madsmtm/objc2 LICENSE.md, 'Apple SDKs'). The crate package carries no licence file and the upstream repository root holds only a licence-selection statement (LICENSE.md), not the MIT/Zlib/Apache texts. Owner/counsel decision."
+  },
+  "cargo:objc2-encode": {
+   "decision": "D-LIC-18",
+   "note": "The crate is derived from Apple SDKs shipped with Xcode; its repository states that it is unclear whether distributing derived works is allowed under the Xcode licence (madsmtm/objc2 LICENSE.md, 'Apple SDKs'). The crate package carries no licence file and the upstream repository root holds only a licence-selection statement (LICENSE.md), not the MIT/Zlib/Apache texts. Owner/counsel decision."
+  },
+  "cargo:objc2-exception-helper": {
+   "decision": "D-LIC-18",
+   "note": "The crate is derived from Apple SDKs shipped with Xcode; its repository states that it is unclear whether distributing derived works is allowed under the Xcode licence (madsmtm/objc2 LICENSE.md, 'Apple SDKs'). The crate package carries no licence file and the upstream repository root holds only a licence-selection statement (LICENSE.md), not the MIT/Zlib/Apache texts. Owner/counsel decision."
+  },
+  "cargo:objc2-foundation": {
+   "decision": "D-LIC-18",
+   "note": "The crate is derived from Apple SDKs shipped with Xcode; its repository states that it is unclear whether distributing derived works is allowed under the Xcode licence (madsmtm/objc2 LICENSE.md, 'Apple SDKs'). The crate package carries no licence file and the upstream repository root holds only a licence-selection statement (LICENSE.md), not the MIT/Zlib/Apache texts. Owner/counsel decision."
+  },
+  "cargo:objc2-io-surface": {
+   "decision": "D-LIC-18",
+   "note": "The crate is derived from Apple SDKs shipped with Xcode; its repository states that it is unclear whether distributing derived works is allowed under the Xcode licence (madsmtm/objc2 LICENSE.md, 'Apple SDKs'). The crate package carries no licence file and the upstream repository root holds only a licence-selection statement (LICENSE.md), not the MIT/Zlib/Apache texts. Owner/counsel decision."
+  },
+  "cargo:objc2-web-kit": {
+   "decision": "D-LIC-18",
+   "note": "The crate is derived from Apple SDKs shipped with Xcode; its repository states that it is unclear whether distributing derived works is allowed under the Xcode licence (madsmtm/objc2 LICENSE.md, 'Apple SDKs'). The crate package carries no licence file and the upstream repository root holds only a licence-selection statement (LICENSE.md), not the MIT/Zlib/Apache texts. Owner/counsel decision."
+  },
+  "cargo:r-efi": {
+   "decision": "D-LIC-13",
+   "unverified": "Neither the crate package nor the upstream repository at the packaged commit (db87f6c8c6) holds a licence file; the Cargo.toml declares MIT OR Apache-2.0 OR LGPL-2.1-or-later. Only reachable on UEFI targets; listed because the SBOM resolves the crate for the launcher target set."
   }
  },
  "static_components": [

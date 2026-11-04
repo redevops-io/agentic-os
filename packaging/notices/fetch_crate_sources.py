@@ -17,6 +17,8 @@ the text with an UNVERIFIED note, because it is not the file the crate package s
 
   fetch_crate_sources.py --sbom FILE --out DIR [--crates-dir DIR]... [--offline]
 
+The generator must be given OUT before the registry directories (--crates-dir order) so that these files are found first.
+
 Standard library only. Network: static.crates.io, index.crates.io, raw.githubusercontent.com.
 """
 from __future__ import annotations
@@ -186,17 +188,36 @@ def main(argv=None) -> int:
     gen = _gen()
     excl = {gen.norm(e) for e in a.exclude}
     hashes = sbom_hashes(a.sbom)
-    todo = []
+    todo, local_no_licence = [], []
     for c in gen.load_components(a.sbom):
         if c["type"] != "cargo" or gen.norm(c["name"]) in excl:
             continue
-        if gen.find_crate_dir(a.crates_dir, c["name"], c["version"]) is None:
+        d = gen.find_crate_dir(a.crates_dir, c["name"], c["version"])
+        if d is None:
             todo.append((c["name"], c["version"]))
+        elif not gen.licence_files_in(d):
+            local_no_licence.append((c["name"], c["version"], d))
     a.out.mkdir(parents=True, exist_ok=True)
     with ThreadPoolExecutor(max_workers=6) as ex:
         recs = list(ex.map(lambda t: fetch_one(t[0], t[1], hashes.get(t), a.out, a.offline), todo))
+    # crates in the local registry (checksum-verified by cargo against Cargo.lock) whose package holds no licence file:
+    # look for the upstream repository's files at the packaged commit; they go to OUT/<name>-<version>/ next to a copy of
+    # the package's Cargo.toml / .cargo_vcs_info.json, and OUT must be listed BEFORE the registry in --crates-dir for the
+    # generator to see them.
+    for name, version, d in local_no_licence:
+        dest = a.out / f"{name}-{version}"
+        rec = {"name": name, "version": version, "dir": dest.name, "status": "local registry package has no licence file"}
+        if a.offline:
+            rec["upstream"] = "offline"
+        else:
+            dest.mkdir(parents=True, exist_ok=True)
+            for f in ("Cargo.toml", ".cargo_vcs_info.json"):
+                if (d / f).is_file():
+                    (dest / f).write_bytes((d / f).read_bytes())
+            rec["upstream"] = upstream_licences(dest)
+        recs.append(rec)
     (a.out / "fetch-report.json").write_text(json.dumps(recs, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    bad = [r for r in recs if r["status"] not in ("verified", "cached")]
+    bad = [r for r in recs if r["status"] not in ("verified", "cached", "local registry package has no licence file")]
     print(f"crates not in a local registry: {len(todo)}; verified/cached: {len(recs) - len(bad)}; problems: {len(bad)} -> {a.out}")
     for r in bad:
         print(f"  {r['name']} {r['version']}: {r['status']}", file=sys.stderr)

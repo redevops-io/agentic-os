@@ -42,7 +42,7 @@ EXCL=(); for x in ${NOTICES_EXCLUDE-knowledge-frontier}; do EXCL+=(--exclude "$x
 EXTRA="$PK/notices/out/crate-sources"
 "$TPY" -I "$PK/notices/fetch_crate_sources.py" --sbom "$DIST/sbom-pass1/sbom.cdx.json" --out "$EXTRA" \
     ${CRATES[@]+"${CRATES[@]}"} ${EXCL[@]+"${EXCL[@]}"}
-CRATES+=(--crates-dir "$EXTRA")
+CRATES=(--crates-dir "$EXTRA" ${CRATES[@]+"${CRATES[@]}"})     # EXTRA first: its upstream licence texts win over a registry package with none
 # 4. notices + staging (writes deploy/launcher/src-tauri/licenses)
 "$PK/notices/build-licenses.sh" --platform "$OS" --sbom "$DIST/sbom-pass1/sbom.cdx.json" --site-packages "$SITE" --site-packages "$TSITE" \
     ${CRATES[@]+"${CRATES[@]}"} ${EXCL[@]+"${EXCL[@]}"}
