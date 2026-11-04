@@ -298,13 +298,14 @@ function Invoke-Curl {
 # ---- capability model (docs/LOCAL_API_SECURITY.md of branch r0prime/security, section 4) ----------------------------------
 # The local API is deny-by-default. A client obtains a SESSION by exchanging a single-use launch code:
 #   standalone `serve` prints  http://127.0.0.1:<port>/#lc=<code>  on stderr (ASCII, valid 300 s, single use);
-#   POST /api/local/session  Content-Type: application/json  {"code":"<code>"}  ->  200 {"csrf_token","csrf_header":"X-Agentic-CSRF"}
-#   + Set-Cookie: agentic_os_session=<43 chars>; every non-GET/HEAD request must also carry  X-Agentic-CSRF: <csrf_token>.
-# Get-CapabilityCredential performs that exchange and returns the cookie + CSRF header. It returns $null (callers then report MANUAL,
+#   POST /api/local/session  Content-Type: application/json  {"code":"<code>"}  ->  200 {"session_token","session_header":"X-Agentic-Session","csrf_token","csrf_header":"X-Agentic-CSRF"}
+#   and NO Set-Cookie (header session, stage 3 of r0prime/security): every request carries  X-Agentic-Session: <session_token>, every
+#   non-GET/HEAD request also  X-Agentic-CSRF: <csrf_token>.
+# Get-CapabilityCredential performs that exchange and returns the session header + CSRF header. It returns $null (callers then report MANUAL,
 # never PASS) when no launch code can be found or the exchange fails. For an instance this kit did not start, pass -LaunchCode
 # (or env AGENTIC_LAUNCH_CODE) taken from the one-time URL printed on that sidecar's stderr.
 # TODO(security-spec, UNVERIFIED): the spec was read on 2026-11-04 from the branch while the code was still in review; if the
-# contract changes (cookie name, CSRF header, exchange endpoint, error codes) adjust only this function and the expectations in 06-Api-Checks.ps1.
+# contract changes (session header name, CSRF header, exchange endpoint, error codes) adjust only this function and the expectations in 06-Api-Checks.ps1.
 function Get-LaunchCodeFromStderr([string]$StdErrPath, [int]$TimeoutSec = 20) {
   $sw = [Diagnostics.Stopwatch]::StartNew()
   while ($sw.Elapsed.TotalSeconds -lt $TimeoutSec) {
@@ -326,14 +327,14 @@ function Get-CapabilityCredential {
   $r = Invoke-Curl @('-X', 'POST', '-H', 'Content-Type: application/json', '--data-binary', "@$bf", "$BaseUrl/api/local/session")
   Remove-Item -LiteralPath $bf -Force -ErrorAction SilentlyContinue
   if ($r.Status -ne 200) { return [pscustomobject]@{ Ok = $false; Status = $r.Status; Detail = ("session exchange answered HTTP {0}" -f $r.Status) } }
-  $sc = $r.Headers['set-cookie']
-  $cookie = $null; if ($sc -and $sc -match '^(agentic_os_session=[^;]+)') { $cookie = $Matches[1] }
+  $hasSetCookie = [bool]$r.Headers['set-cookie']
+  $tok = $null; $sessHeader = 'X-Agentic-Session'
   $csrf = $null; $csrfHeader = 'X-Agentic-CSRF'
-  try { $j = $r.Body | ConvertFrom-Json; $csrf = $j.csrf_token; if ($j.csrf_header) { $csrfHeader = $j.csrf_header } } catch { }
-  if (-not $cookie -or -not $csrf) { return [pscustomobject]@{ Ok = $false; Status = 200; Detail = 'session exchange returned no cookie or no csrf_token' } }
-  return [pscustomobject]@{ Ok = $true; Status = 200; Cookie = $cookie; CsrfHeader = $csrfHeader; CsrfToken = $csrf; Detail = 'session established (values not printed)'
-    GetArgs = @('-H', ("Cookie: " + $cookie))
-    PostArgs = @('-H', ("Cookie: " + $cookie), '-H', ("{0}: {1}" -f $csrfHeader, $csrf)) }
+  try { $j = $r.Body | ConvertFrom-Json; $tok = $j.session_token; if ($j.session_header) { $sessHeader = $j.session_header }; $csrf = $j.csrf_token; if ($j.csrf_header) { $csrfHeader = $j.csrf_header } } catch { }
+  if (-not $tok -or -not $csrf) { return [pscustomobject]@{ Ok = $false; Status = 200; Detail = 'session exchange returned no session_token or no csrf_token' } }
+  return [pscustomobject]@{ Ok = $true; Status = 200; SessionHeader = $sessHeader; CsrfHeader = $csrfHeader; CsrfToken = $csrf; HasSetCookie = $hasSetCookie; Detail = 'session established (values not printed)'
+    GetArgs = @('-H', ("{0}: {1}" -f $sessHeader, $tok))
+    PostArgs = @('-H', ("{0}: {1}" -f $sessHeader, $tok), '-H', ("{0}: {1}" -f $csrfHeader, $csrf)) }
 }
 
 function ConvertFrom-Base64Url([string]$Text) {

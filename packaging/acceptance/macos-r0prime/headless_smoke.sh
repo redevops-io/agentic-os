@@ -9,9 +9,10 @@
 #     working directory, bound to 127.0.0.1 on an OS-chosen port (PROJECTS_PORT=0); the one-time launch URL it prints on
 #     stderr is the only credential, it is parsed in memory and never written to the transcript;
 #   * checks: no session -> 401 on /api/projects and /openapi.json; the UI shell loads with the capability shim; Host
-#     rebinding and cross-origin requests are refused with no CORS headers; the launch code is exchanged for an HttpOnly,
-#     SameSite=Strict cookie; /api/projects is 200 with the cookie; /openapi.json is 200 with the cookie; the code is
-#     single use; a session without the CSRF header cannot DELETE; logout revokes the cookie;
+#     rebinding and cross-origin requests are refused with no CORS headers; the launch code is exchanged for a session token
+#     in the response body (NO cookie: the credential is the X-Agentic-Session header, state changes also need
+#     X-Agentic-CSRF); /api/projects is 200 with the header; /openapi.json is 200 with the header; the code is single use;
+#     a session without the CSRF header cannot DELETE; logout revokes the session; a Cookie header alone is refused;
 #   * runs `redevops-sidecar bootstrap` with stdout redirected, under a UTF-8 and an ISO8859-1 locale (guards the v0.3.2
 #     UnicodeEncodeError defect: the verdict must be rc 0/1 with the same bytes in both);
 #   * stops the sidecar BY EXACT PID (SIGTERM to the bootloader, which forwards it; SIGKILL by exact PID only as a
@@ -150,7 +151,7 @@ if [ "$H_CODE" = 200 ] && grep -q 'local-capability-shim.js' "$W/http/a3.body"; 
 http a4 GET /local-capability-shim.js
 [ "$H_CODE" = 200 ] && rec PASS SM-13 "shim script served (200)" || rec FAIL SM-13 "shim script -> $H_CODE"
 http a5 GET /api/local/session
-[ "$H_CODE" = 401 ] && rec PASS SM-14 "GET /api/local/session without cookie -> 401" || rec FAIL SM-14 "GET /api/local/session without cookie -> $H_CODE"
+[ "$H_CODE" = 401 ] && rec PASS SM-14 "GET /api/local/session without a session header -> 401" || rec FAIL SM-14 "GET /api/local/session without a session header -> $H_CODE"
 http a6 GET /api/projects -H 'Host: evil.example'
 case "$H_CODE" in 400|403|421) rec PASS SM-15 "foreign Host header refused ($H_CODE)";; *) rec FAIL SM-15 "foreign Host header -> $H_CODE (expected 400/403/421)";; esac
 http a7 OPTIONS /api/sources/confirm -H 'Origin: https://evil.example' -H 'Access-Control-Request-Method: POST' -H 'Access-Control-Request-Headers: content-type'
@@ -162,32 +163,32 @@ has_hdr a9 content-security-policy && rec PASS SM-19 "Content-Security-Policy he
 
 # ---------------------------------------------------------------- session exchange
 L ""; L "=== launch code -> session"
-JAR="$W/http/jar.txt"
-http s1 POST /api/local/session -H 'Content-Type: application/json' -H 'Accept: application/json' -c "$JAR" --data "{\"code\":\"$CODE\"}"
+http s1 POST /api/local/session -H 'Content-Type: application/json' -H 'Accept: application/json' --data "{\"code\":\"$CODE\"}"
 if [ "$H_CODE" = 200 ]; then rec PASS SM-20 "POST /api/local/session with the launch code -> 200"; else rec FAIL SM-20 "session exchange -> $H_CODE"; fi
-SC="$(hdr_val s1 set-cookie)"
-case "$SC" in agentic_os_session=*) rec PASS SM-21 "cookie name agentic_os_session";; *) rec FAIL SM-21 "unexpected Set-Cookie (name not shown)";; esac
-printf '%s' "$SC" | grep -qi 'HttpOnly' && rec PASS SM-22 "cookie HttpOnly" || rec FAIL SM-22 "cookie is not HttpOnly"
-printf '%s' "$SC" | grep -qi 'SameSite=Strict' && rec PASS SM-23 "cookie SameSite=Strict" || rec FAIL SM-23 "cookie is not SameSite=Strict"
-printf '%s' "$SC" | grep -qi 'Domain=' && rec FAIL SM-24 "cookie has a Domain attribute" || rec PASS SM-24 "cookie is host-only (no Domain attribute)"
-printf '%s' "$SC" | grep -qiE 'Max-Age|Expires' && rec INFO SM-25 "cookie is persistent (Max-Age/Expires present)" || rec INFO SM-25 "cookie is a browser-session cookie (no Max-Age/Expires): it ends when the browser quits"
+has_hdr s1 set-cookie && rec FAIL SM-21 "the exchange response sets a cookie (the header-session design sets none)" || rec PASS SM-21 "no Set-Cookie on the exchange response (header session, not a cookie)"
+TOK="$(sed -n 's/.*"session_token" *: *"\([^"]*\)".*/\1/p' "$W/http/s1.body" | head -1)"
+SHDR="$(sed -n 's/.*"session_header" *: *"\([^"]*\)".*/\1/p' "$W/http/s1.body" | head -1)"
+[ -n "$TOK" ] && rec PASS SM-22 "response carries a session_token (${#TOK} chars, not recorded)" || rec FAIL SM-22 "no session_token in the exchange response"
+[ "$SHDR" = "X-Agentic-Session" ] && rec PASS SM-23 "session header name is X-Agentic-Session" || rec FAIL SM-23 "unexpected session header name '$SHDR'"
 CSRF="$(sed -n 's/.*"csrf_token" *: *"\([^"]*\)".*/\1/p' "$W/http/s1.body" | head -1)"
 [ -n "$CSRF" ] && rec PASS SM-26 "response carries a csrf_token (${#CSRF} chars, not recorded)" || rec FAIL SM-26 "no csrf_token in the exchange response"
-http s2 GET /api/projects -b "$JAR"
-if [ "$H_CODE" = 200 ]; then rec PASS SM-27 "GET /api/projects with the session -> 200 ($(wc -c <"$W/http/s2.body" | tr -d ' ') bytes; sample project listed: $(grep -c 'customer-ops' "$W/http/s2.body" | tr -d ' ') mention(s) of customer-ops)"; else rec FAIL SM-27 "GET /api/projects with the session -> $H_CODE"; fi
-http s3 GET /openapi.json -b "$JAR"
-[ "$H_CODE" = 200 ] && rec PASS SM-28 "GET /openapi.json with the session -> 200 (v0.3.2 returned 500)" || rec FAIL SM-28 "GET /openapi.json with the session -> $H_CODE"
-http s4 GET /api/local/session -b "$JAR" -H 'Accept: application/json'
-[ "$H_CODE" = 200 ] && grep -q csrf_token "$W/http/s4.body" && rec PASS SM-29 "reload path: GET /api/local/session with the cookie returns a csrf_token" || rec FAIL SM-29 "reload path -> $H_CODE"
+http s2 GET /api/projects -H "X-Agentic-Session: $TOK"
+if [ "$H_CODE" = 200 ]; then rec PASS SM-27 "GET /api/projects with the session header -> 200 ($(wc -c <"$W/http/s2.body" | tr -d ' ') bytes; sample project listed: $(grep -c 'customer-ops' "$W/http/s2.body" | tr -d ' ') mention(s) of customer-ops)"; else rec FAIL SM-27 "GET /api/projects with the session header -> $H_CODE"; fi
+http s3 GET /openapi.json -H "X-Agentic-Session: $TOK"
+[ "$H_CODE" = 200 ] && rec PASS SM-28 "GET /openapi.json with the session header -> 200 (v0.3.2 returned 500)" || rec FAIL SM-28 "GET /openapi.json with the session header -> $H_CODE"
+http s4 GET /api/local/session -H "X-Agentic-Session: $TOK" -H 'Accept: application/json'
+[ "$H_CODE" = 200 ] && grep -q csrf_token "$W/http/s4.body" && rec PASS SM-29 "reload path: GET /api/local/session with the session header returns a csrf_token" || rec FAIL SM-29 "reload path -> $H_CODE"
+http s4b GET /api/projects -H "Cookie: agentic_os_session=$TOK"
+[ "$H_CODE" = 401 ] && rec PASS SM-29b "the token sent as a Cookie header is not a credential (401)" || rec FAIL SM-29b "a Cookie header was accepted ($H_CODE)"
 http s5 POST /api/local/session -H 'Content-Type: application/json' --data "{\"code\":\"$CODE\"}"
 [ "$H_CODE" = 401 ] && rec PASS SM-30 "the launch code is single use (replay -> 401)" || rec FAIL SM-30 "replay of the launch code -> $H_CODE (expected 401)"
-http s6 DELETE /api/local/session -b "$JAR"
-[ "$H_CODE" = 403 ] && rec PASS SM-31 "DELETE with the cookie but without the CSRF header -> 403" || rec FAIL SM-31 "DELETE without CSRF -> $H_CODE (expected 403)"
-http s7 DELETE /api/local/session -b "$JAR" -H "X-Agentic-CSRF: $CSRF"
+http s6 DELETE /api/local/session -H "X-Agentic-Session: $TOK"
+[ "$H_CODE" = 403 ] && rec PASS SM-31 "DELETE with the session header but without the CSRF header -> 403" || rec FAIL SM-31 "DELETE without CSRF -> $H_CODE (expected 403)"
+http s7 DELETE /api/local/session -H "X-Agentic-Session: $TOK" -H "X-Agentic-CSRF: $CSRF"
 [ "$H_CODE" = 200 ] && rec PASS SM-32 "logout with the CSRF header -> 200" || rec FAIL SM-32 "logout -> $H_CODE"
-http s8 GET /api/projects -b "$JAR"
-[ "$H_CODE" = 401 ] && rec PASS SM-33 "after logout the old cookie is refused (401)" || rec FAIL SM-33 "after logout /api/projects -> $H_CODE (expected 401)"
-rm -f "$JAR"; CODE=""; CSRF=""
+http s8 GET /api/projects -H "X-Agentic-Session: $TOK"
+[ "$H_CODE" = 401 ] && rec PASS SM-33 "after logout the old session token is refused (401)" || rec FAIL SM-33 "after logout /api/projects -> $H_CODE (expected 401)"
+CODE=""; CSRF=""; TOK=""
 
 # ---------------------------------------------------------------- bootstrap under two locales
 L ""; L "=== bootstrap with stdout redirected (v0.3.2 defect a: UnicodeEncodeError)"

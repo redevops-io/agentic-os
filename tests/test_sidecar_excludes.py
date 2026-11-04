@@ -202,8 +202,9 @@ def test_frozen_sidecar_has_no_knowledge_frontier_and_still_serves(tmp_path):
         req = urllib.request.Request(f"{base}/api/local/session", data=json.dumps({"code": code}).encode(),
                                      headers={"Content-Type": "application/json"}, method="POST")
         resp = urllib.request.urlopen(req, timeout=5)
-        cookie = resp.headers["Set-Cookie"].split(";")[0]
-        get = lambda path: urllib.request.urlopen(urllib.request.Request(f"{base}{path}", headers={"Cookie": cookie}), timeout=5)
+        assert resp.headers["Set-Cookie"] is None, "header session: the exchange sets no cookie"
+        token = json.loads(resp.read())["session_token"]
+        get = lambda path: urllib.request.urlopen(urllib.request.Request(f"{base}{path}", headers={"X-Agentic-Session": token}), timeout=5)
         for path in ("/api/projects", "/api/projects/customer-ops/apps"):
             assert get(path).status == 200
         guides = json.load(get("/api/projects/customer-ops/apps"))

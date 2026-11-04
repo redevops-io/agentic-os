@@ -5,7 +5,7 @@
   Expectations come from the capability-model contract (docs/LOCAL_API_SECURITY.md of branch r0prime/security). Spec (UNVERIFIED
   against a built Windows sidecar): deny by default; no session -> 401 auth_required (also for unknown paths and /openapi.json);
   foreign Host -> 400 invalid_host (checked first, even without a session); cross-origin / cross-site -> 403; CORS preflight -> 403
-  and never an Access-Control-* header; state change needs the session cookie AND the X-Agentic-CSRF header; launch code is single use.
+  and never an Access-Control-* header; the credential is the X-Agentic-Session header (no cookie), state change needs it AND the X-Agentic-CSRF header; launch code is single use.
   On the frozen v0.3.2 sidecar these rows are EXPECTED to FAIL (it has no capability model, answers CORS '*', /openapi.json is 500).
 
   Part A  standalone `serve`: negatives before a session, session exchange with the launch code printed on stderr, positives and
@@ -105,6 +105,8 @@ try {
   else { Add-Result 'API-09' 'session exchange with the launch code' 'MANUAL' 'no launch code available (candidate without capability model, or an instance not started here: pass -LaunchCode from its one-time URL)' }
 
   if ($cred -and $cred.Ok) {
+    Add-Result 'API-09b' 'the session exchange sets no cookie (header session)' $(if (-not $cred.HasSetCookie) { 'PASS' } else { 'FAIL' }) ("Set-Cookie present on the exchange response: {0}" -f $cred.HasSetCookie)
+    Add-Expect 'API-09c' 'a Cookie header alone is not a credential' (Invoke-Curl @('-H', 'Cookie: agentic_os_session=x', "$base/api/projects")) @(401) 'auth_required'
     $r = Invoke-Curl ($cred.GetArgs + @("$base/openapi.json"))
     $pathsOk = $false; $routeOk = $false
     if ($r.Status -eq 200) { try { $j = $r.Body | ConvertFrom-Json; $pathsOk = [bool]$j.paths; $routeOk = [bool]($j.paths.PSObject.Properties.Name -contains '/api/apps/connect/callback') } catch { } }
@@ -112,7 +114,7 @@ try {
     $r = Invoke-Curl ($cred.GetArgs + @("$base/api/projects"))
     Add-Result 'API-11' 'GET /api/projects with the session -> 200 JSON' $(if ($r.Status -eq 200) { 'PASS' } else { 'FAIL' }) ("HTTP {0} content-type={1}" -f $r.Status, $r.Headers['content-type'])
     [IO.File]::WriteAllText($bodyFile, '{}', (New-Object Text.UTF8Encoding($false)))
-    Add-Expect 'API-12' "POST $ProbePath with the session cookie but WITHOUT the CSRF header is refused" (Invoke-Curl (@('-X', 'POST', '-H', 'Content-Type: application/json', '--data-binary', "@$bodyFile") + $cred.GetArgs + @("$base$ProbePath"))) @(403) 'csrf_invalid'
+    Add-Expect 'API-12' "POST $ProbePath with the session header but WITHOUT the CSRF header is refused" (Invoke-Curl (@('-X', 'POST', '-H', 'Content-Type: application/json', '--data-binary', "@$bodyFile") + $cred.GetArgs + @("$base$ProbePath"))) @(403) 'csrf_invalid'
     Add-Expect 'API-13' "POST $ProbePath with session + CSRF but Origin $EvilOrigin is refused" (Invoke-Curl (@('-X', 'POST', '-H', "Origin: $EvilOrigin", '-H', 'Content-Type: application/json', '--data-binary', "@$bodyFile") + $cred.PostArgs + @("$base$ProbePath"))) @(403) 'origin_not_allowed'
     Add-Expect 'API-14' 'GET with the session but Sec-Fetch-Site: cross-site is refused' (Invoke-Curl ($cred.GetArgs + @('-H', 'Sec-Fetch-Site: cross-site', "$base/api/projects"))) @(403) 'fetch_site_not_allowed'
     Add-Expect 'API-15' 'Host: evil.example WITH a valid session is still refused' (Invoke-Curl ($cred.GetArgs + @('-H', 'Host: evil.example', "$base/api/projects"))) @(400, 421) 'invalid_host'
@@ -125,7 +127,7 @@ try {
     # logout revokes the session
     $r = Invoke-Curl (@('-X', 'DELETE') + $cred.PostArgs + @("$base/api/local/session"))
     $r2 = Invoke-Curl ($cred.GetArgs + @("$base/api/projects"))
-    Add-Result 'API-17' 'DELETE /api/local/session revokes the session (old cookie -> 401)' $(if ($r.Status -eq 200 -and $r2.Status -eq 401) { 'PASS' } else { 'FAIL' }) ("DELETE HTTP {0}; GET with the old cookie HTTP {1}" -f $r.Status, $r2.Status)
+    Add-Result 'API-17' 'DELETE /api/local/session revokes the session (old session token -> 401)' $(if ($r.Status -eq 200 -and $r2.Status -eq 401) { 'PASS' } else { 'FAIL' }) ("DELETE HTTP {0}; GET with the old session token HTTP {1}" -f $r.Status, $r2.Status)
   }
 
   # ---------------- Part B: launcher hand-off contract ----------------

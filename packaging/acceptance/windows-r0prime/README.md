@@ -87,11 +87,11 @@ Run `MANUAL-CHECKLIST.md` between step 3 and step 7 (use `-SkipUninstall`, do th
 
 Step 6 follows the capability-model contract of branch `r0prime/security` (`docs/LOCAL_API_SECURITY.md`, summary in `reports/security.md`):
 the local API is deny-by-default, a client gets a **session** by exchanging the single-use launch code that standalone `serve` prints on
-stderr (`http://127.0.0.1:<port>/#lc=<code>`), and every state change needs the session cookie plus the `X-Agentic-CSRF` header.
+stderr (`http://127.0.0.1:<port>/#lc=<code>`), and the credential is the `X-Agentic-Session` header (the exchange response carries `session_token` and sets **no cookie**) and every state change also needs the `X-Agentic-CSRF` header.
 `Get-CapabilityCredential` in `Common.ps1` performs that exchange against the sidecar the script started (it reads the code from that
 sidecar's stderr file, never prints it) and returns `$null` when there is no code, in which case the session-dependent rows are `MANUAL`,
 never `PASS`. For an instance the script did not start (`-BaseUrl`), pass `-LaunchCode` from its printed URL. The contract was read from
-the branch while the code was still in review; if it changes (cookie name, header, endpoints, error codes), only `Get-CapabilityCredential`
+the branch while the code was still in review; if it changes (header names, endpoints, error codes), only `Get-CapabilityCredential`
 and the expectations in `06-Api-Checks.ps1` need adjusting (marked `TODO(security-spec)`).
 Part B of step 6 tests the sidecar side of the launcher contract: `AGENTIC_OS_HANDOFF=stdout`, `PROJECTS_PORT=0`, the one-line `ready` record
 and the HMAC handshake proof (the proof code is first checked against the spec's pinned test vectors). The hand-off stdout file holds a

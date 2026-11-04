@@ -4,7 +4,7 @@
   python3 -I packaging/candidate/check_app_smoke.py --sidecar "<.../Agentic Apps.app/Contents/MacOS/redevops-sidecar>" --work DIR --log FILE
 
 Everything runs under `env -i` with a throwaway HOME/TMPDIR below --work. Secrets (hand-off secret, launch
-codes, cookies, CSRF tokens) are never written to the log. Leftover processes are killed by NAMED PID/PGID only;
+codes, session tokens, CSRF tokens) are never written to the log. Leftover processes are killed by NAMED PID/PGID only;
 `_MEI*` directories created by the run are removed by exact name after being recorded.
 """
 from __future__ import annotations
@@ -156,9 +156,9 @@ def parse_standalone_url(stderr_path: Path):
 def session(port: int, code: str):
     st, hd, body = http(port, "POST", "/api/local/session", {"Content-Type": "application/json"}, json.dumps({"code": code}).encode())
     if st != 200:
-        return st, None, None
-    ck = re.match(r"(agentic_os_session=[^;]+)", hd.get("set-cookie", ""))
-    return st, (ck[1] if ck else None), json.loads(body)["csrf_token"]
+        return st, None, None, False
+    j = json.loads(body)
+    return st, j.get("session_token"), j.get("csrf_token"), "set-cookie" in hd
 
 
 def api_checks(label: str, port: int, code: str) -> None:
@@ -168,19 +168,23 @@ def api_checks(label: str, port: int, code: str) -> None:
     check(f"{label}: /openapi.json without a session is 401", st == 401, f"status {st}")
     st, hd, body = http(port, "GET", "/")
     check(f"{label}: the UI root is public (200, html)", st == 200 and (b"<html" in body.lower()[:2000] or b"<!doctype" in body.lower()[:200]), f"status {st}")
-    st, cookie, csrf = session(port, code)
-    check(f"{label}: launch code exchange gives a session cookie and a CSRF token", st == 200 and bool(cookie) and bool(csrf), f"status {st}")
+    st, token, csrf, set_cookie = session(port, code)
+    check(f"{label}: launch code exchange gives a session token and a CSRF token in the body", st == 200 and bool(token) and bool(csrf), f"status {st}")
+    check(f"{label}: the exchange sets no cookie (header session)", not set_cookie)
     st2, _, _ = http(port, "POST", "/api/local/session", {"Content-Type": "application/json"}, json.dumps({"code": code}).encode())
     check(f"{label}: the launch code is single use (replay refused)", st2 == 401, f"status {st2}")
-    if not cookie:
+    if not token:
         return
-    st, hd, body = http(port, "GET", "/api/projects", {"Cookie": cookie})
+    sess = {"X-Agentic-Session": token}
+    st, _, _ = http(port, "GET", "/api/projects", {"Cookie": "agentic_os_session=" + token})
+    check(f"{label}: the token sent as a Cookie header is not a credential", st == 401, f"status {st}")
+    st, hd, body = http(port, "GET", "/api/projects", sess)
     try:
         projects = json.loads(body)
     except Exception:
         projects = None
-    check(f"{label}: /api/projects with the session is 200 and lists projects", st == 200 and projects is not None, f"status {st}, {len(body)} bytes")
-    st, hd, body = http(port, "GET", "/openapi.json", {"Cookie": cookie})
+    check(f"{label}: /api/projects with the session header is 200 and lists projects", st == 200 and projects is not None, f"status {st}, {len(body)} bytes")
+    st, hd, body = http(port, "GET", "/openapi.json", sess)
     ok = st == 200
     npaths = 0
     if ok:
@@ -190,10 +194,10 @@ def api_checks(label: str, port: int, code: str) -> None:
             ok = bool(doc.get("openapi")) and npaths > 10
         except Exception:
             ok = False
-    check(f"{label}: /openapi.json with the session is 200 (defect d)", ok, f"status {st}, {npaths} paths")
+    check(f"{label}: /openapi.json with the session header is 200 (defect d)", ok, f"status {st}, {npaths} paths")
     st, hd, _ = http(port, "GET", "/hero.jpg")
     check(f"{label}: /hero.jpg is served as image/jpeg", st == 200 and hd.get("content-type", "").startswith("image/jpeg"), f"status {st}")
-    st, hd, _ = http(port, "GET", "/api/projects", {"Cookie": cookie}, host="evil.example")
+    st, hd, _ = http(port, "GET", "/api/projects", sess, host="evil.example")
     check(f"{label}: a foreign Host header is refused (DNS rebinding)", st in (400, 403), f"status {st}")
     st, hd, _ = http(port, "OPTIONS", "/api/projects", {"Origin": "http://evil.example", "Access-Control-Request-Method": "POST"})
     check(f"{label}: cross-origin preflight is refused and carries no CORS headers", st == 403 and not any(k.startswith("access-control-") for k in hd), f"status {st}")
