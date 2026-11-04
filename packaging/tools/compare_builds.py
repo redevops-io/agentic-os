@@ -45,6 +45,45 @@ def diff_offsets(a: bytes, b: bytes, limit: int = 12) -> tuple[int, list[int]]:
     return count + abs(len(a) - len(b)), offs
 
 
+def macho_regions(data: bytes) -> dict[str, tuple[int, int]]:
+    """Byte ranges of the content-derived parts of a thin 64-bit Mach-O: LC_UUID and the code signature."""
+    import struct
+
+    out: dict[str, tuple[int, int]] = {}
+    if data[:4] != b"\xcf\xfa\xed\xfe":
+        return out
+    ncmds = struct.unpack_from("<I", data, 16)[0]
+    off = 32
+    for _ in range(ncmds):
+        cmd, size = struct.unpack_from("<II", data, off)
+        if cmd == 0x1B:
+            out["LC_UUID"] = (off + 8, off + 24)
+        elif cmd == 0x1D:
+            dataoff, datasize = struct.unpack_from("<II", data, off + 8)
+            out["code signature"] = (dataoff, dataoff + datasize)
+        off += size
+    return out
+
+
+def diff_regions(a: bytes, b: bytes) -> dict[str, int]:
+    """Count differing bytes by Mach-O region (equal-length images only)."""
+    regs = macho_regions(a)
+    counts: dict[str, int] = {}
+    if len(a) != len(b):
+        return {"sizes differ": abs(len(a) - len(b))}
+    step = 1 << 16
+    for base in range(0, len(a), step):
+        ca, cb = a[base:base + step], b[base:base + step]
+        if ca == cb:
+            continue
+        for i, (x, y) in enumerate(zip(ca, cb)):
+            if x != y:
+                pos = base + i
+                name = next((n for n, (lo, hi) in regs.items() if lo <= pos < hi), "other (code/data)")
+                counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
 def classify(a: bytes, b: bytes, paths: list[bytes]) -> str:
     if a == b:
         return "identical"
@@ -135,14 +174,18 @@ def main() -> int:
         pa = [p.decode() for p in paths if p in ba]
         pb = [p.decode() for p in paths if p in bb]
         remap = None
+        regions = diff_regions(ba, bb) if ba != bb else {}
         if ba != bb:
             # does A become B when A's embedded build paths are replaced by B's? (same-length prefixes only)
             for x in pa:
                 for y in pb:
-                    if x != y and len(x) == len(y) and ba.replace(x.encode(), y.encode()) == bb:
-                        remap = f"A == B after replacing {x} -> {y}: the ONLY difference is the embedded build path"
+                    if x != y and len(x) == len(y):
+                        ra = ba.replace(x.encode(), y.encode())
+                        after = diff_regions(ra, bb)
+                        remap = (f"after replacing A's embedded path {x} by B's {y} (equal length) the remaining differing bytes are: {after or 'none'}"
+                                 + ("" if not after else " (LC_UUID and the ad-hoc code signature are derived from the content, so they follow any content change)"))
         rep["launcher"] = {"sha256_a": sha(ba), "sha256_b": sha(bb), "size_a": len(ba), "size_b": len(bb), "differing_bytes": cnt, "first_offsets": offs}
-        P(f"## Launcher (Tauri, Mach-O/PE)\n\nFile: {'IDENTICAL' if ba == bb else 'DIFFERENT'}; size A {len(ba)} B {len(bb)}; differing bytes {cnt}; first offsets {offs}; build-dir marker strings present in A: {pa or 'none'}; in B: {pb or 'none'}. {remap or ''}\n")
+        P(f"## Launcher (Tauri, Mach-O/PE)\n\nFile: {'IDENTICAL' if ba == bb else 'DIFFERENT'}; size A {len(ba)} B {len(bb)}; differing bytes {cnt}; first offsets {offs}; build-dir marker strings present in A: {pa or 'none'}; in B: {pb or 'none'}.\n\nDifferent bytes by Mach-O region: {regions or 'n/a'}. {remap or ''}\n")
         rep["launcher"]["path_only_difference"] = remap
     for sub in ("app",):
         if (A / sub).is_dir() and (B / sub).is_dir():
