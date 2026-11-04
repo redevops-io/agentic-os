@@ -104,3 +104,35 @@ def test_checksum_falls_back_to_the_sparse_index_and_index_paths(monkeypatch, tm
     monkeypatch.setattr(fetch, "get", fake_get)
     assert fetch.fetch_one("demo", "1.0.0", None, tmp_path, False)["verified_against"] == "crates.io index"
     assert [fetch.index_path(n) for n in ("a", "ab", "abc", "abcd", "serde")] == ["1/a", "2/ab", "3/a/abc", "ab/cd/abcd", "se/rd/serde"]
+
+
+def test_transient_network_errors_are_retried_and_a_failed_fetch_fails_the_step(monkeypatch, tmp_path):
+    import urllib.error
+    calls = {"n": 0}
+
+    class R:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b"payload"
+
+    def flaky(req, timeout=0):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise urllib.error.URLError(OSError(49, "Can't assign requested address"))
+        return R()
+    monkeypatch.setattr(fetch.urllib.request, "urlopen", flaky)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    assert fetch.get("https://example.invalid/x") == b"payload" and calls["n"] == 3
+    def not_found(req, timeout=0):
+        raise urllib.error.HTTPError("u", 404, "nf", {}, None)
+    monkeypatch.setattr(fetch.urllib.request, "urlopen", not_found)
+    assert fetch.get("https://example.invalid/x") is None
+    # the step exits 1 when a crate cannot be fetched, 0 with --allow-failures
+    sb = write_sbom(tmp_path / "s.json", [{"type": "library", "name": "demo", "version": "1.0.0", "purl": "pkg:cargo/demo@1.0.0"}])
+    assert fetch.main(["--sbom", str(sb), "--out", str(tmp_path / "o"), "--offline"]) == 1
+    assert fetch.main(["--sbom", str(sb), "--out", str(tmp_path / "o2"), "--offline", "--allow-failures"]) == 0

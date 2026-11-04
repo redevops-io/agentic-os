@@ -50,12 +50,21 @@ def _gen():
     return m
 
 
-def get(url: str, timeout: int = 60) -> bytes | None:
-    try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout) as r:
-            return r.read()
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
-        return None
+def get(url: str, timeout: int = 60, tries: int = 6) -> bytes | None:
+    """GET with retries for transient failures (connection errors, timeouts, 429/5xx). A 404/403 is final (None)."""
+    import time
+    for attempt in range(tries):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout) as r:
+                return r.read()
+        except urllib.error.HTTPError as e:
+            if e.code not in (429, 500, 502, 503, 504):
+                return None
+        except (urllib.error.URLError, TimeoutError, OSError):
+            pass
+        if attempt < tries - 1:
+            time.sleep(min(2 * (attempt + 1), 10))
+    return None
 
 
 def index_path(name: str) -> str:
@@ -184,6 +193,7 @@ def main(argv=None) -> int:
     ap.add_argument("--crates-dir", action="append", default=[], type=Path)
     ap.add_argument("--exclude", action="append", default=[])
     ap.add_argument("--offline", action="store_true")
+    ap.add_argument("--allow-failures", action="store_true", help="exit 0 even if a crate could not be fetched/verified")
     a = ap.parse_args(argv)
     gen = _gen()
     excl = {gen.norm(e) for e in a.exclude}
@@ -221,7 +231,8 @@ def main(argv=None) -> int:
     print(f"crates not in a local registry: {len(todo)}; verified/cached: {len(recs) - len(bad)}; problems: {len(bad)} -> {a.out}")
     for r in bad:
         print(f"  {r['name']} {r['version']}: {r['status']}", file=sys.stderr)
-    return 0
+    # a download that failed or did not verify must not silently turn into "licence text missing": fail the build step
+    return 1 if bad and not a.allow_failures else 0
 
 
 if __name__ == "__main__":
