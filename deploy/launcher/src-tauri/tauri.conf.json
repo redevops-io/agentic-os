@@ -35,6 +35,8 @@
     "shortDescription": "Governed AI control plane — your apps as one system",
     "longDescription": "ReDevOps runs your business apps as one governed agentic system: connect apps, run missions across them, approve the consequential steps. One suite installer, native, bring your own model (hosted or local). No Docker required.",
     "externalBin": ["binaries/redevops-sidecar"],
+    "copyright": "Copyright (c) 2025-2026 RedevOps.",
+    "resources": {"licenses/": "Licenses/"},
     "linux": {
       "deb": {
         "depends": []
