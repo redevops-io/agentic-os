@@ -1,0 +1,15 @@
+{
+  "_comment": "Facts about the FROZEN v0.3.2 Windows sidecar (MSI payload) that a LISTING cannot show, copied from the read-only audit record r0-audit/licences/native_frozen_facts.json (python312.dll / VCRUNTIME140.dll / ucrtbase.dll version resources, libcrypto-3.dll and cryptography _rust.pyd strings).",
+  "python_version": "3.12.10",
+  "pyinstaller_version": "6.22.3",
+  "openssl": [
+    {"entry": "libcrypto-3.dll", "version": "3.0.16", "date": "11 Feb 2025"},
+    {"entry": "cryptography/hazmat/bindings/_rust.pyd", "version": "4.0.2", "date": "25 Aug 2026"}
+  ],
+  "ms_dlls": {"vcruntime140.dll": "14.42.34438.0", "ucrtbase.dll": "10.0.26100.1742"},
+  "ui_js": [
+    {"name": "react", "version": "18.3.1", "licence_text": "MIT"},
+    {"name": "react-dom", "version": "18.3.1", "licence_text": "MIT"},
+    {"name": "scheduler", "version": null, "licence_text": "MIT"}
+  ]
+}

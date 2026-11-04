@@ -60,6 +60,8 @@ BIN="$PK/dist/redevops-sidecar"
 [ -f "$BIN.exe" ] && BIN="$BIN.exe"
 echo "built: $BIN"
 "$FPY" -m pip freeze --all > "$PK/dist/freeze-venv-pip-freeze.txt"
+# the freeze venv is deleted on exit: keep its distribution inventory for the SBOM step (packaging/build-sbom.sh)
+"$FPY" -I "$PK/sbom/inventory.py" --dump > "$PK/dist/inventory-env.json"
 "$FPY" -I "$PK/tools/build_manifest.py" --root "$ROOT" --out "$PK/dist/build-manifest.json" --stage sidecar --record-python \
     --artifact "sidecar=$BIN" --wheelhouse "$WH" --cmd 'uv="uv --version"' --duration "sidecar=$(( $(now) - T0 ))"
 echo "== smoke test: the frozen binary imports + shows the bootstrap report =="
