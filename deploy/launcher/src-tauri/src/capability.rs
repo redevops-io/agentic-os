@@ -447,6 +447,22 @@ pub enum CapabilityError {
     Untrusted(&'static str),
     /// The proof did not verify: whatever listens on the port does not hold this launch's secret.
     ProofMismatch,
+    /// Only from `mint_launch_code`, i.e. AFTER a verified handshake: the sidecar refused the mint in a way
+    /// that is worth another attempt (429, or 401 `invalid_proof`: expired/evicted challenge). Section 4.7.
+    /// Neither evidence of an attack nor of trust. `fresh_launch_code` turns it into a bounded retry.
+    Retry(MintRetry),
+    /// Every bounded attempt of 4.7 failed: the local service is busy. The browser is not opened and the
+    /// sidecar is NOT stopped or declared untrusted.
+    Busy,
+}
+
+/// Why a mint was refused with a retryable answer (docs/LOCAL_API_SECURITY.md 4.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MintRetry {
+    /// `429`; the `Retry-After` seconds, if the header was a plain integer.
+    RateLimited(Option<u64>),
+    /// `401` with `error.code == "invalid_proof"` (challenge unknown/expired/evicted).
+    InvalidProof,
 }
 
 impl fmt::Display for CapabilityError {
@@ -455,6 +471,8 @@ impl fmt::Display for CapabilityError {
             CapabilityError::Unreachable(e) => write!(f, "the control plane did not answer ({e})"),
             CapabilityError::Untrusted(why) => write!(f, "the listener did not behave as this launch's control plane ({why})"),
             CapabilityError::ProofMismatch => f.write_str("the listener could not prove it is this launch's control plane"),
+            CapabilityError::Retry(_) => f.write_str("the control plane asked for a retry"),
+            CapabilityError::Busy => f.write_str("the local service is busy"),
         }
     }
 }
@@ -518,7 +536,10 @@ pub fn mint_launch_code(port: u16, secret: &Secret, server_nonce: &str) -> Resul
     let body = format!("{{\"server_nonce\":\"{server_nonce}\"}}");
     let r = http_request(port, "POST", "/api/local/launch-code", &[("X-Launcher-Proof", &p)], Some(&body), HTTP_TIMEOUT)?;
     if r.status != 200 {
-        return Err(CapabilityError::Untrusted("launch code refused"));
+        return Err(match mint_refusal(&r) {
+            Some(retry) => CapabilityError::Retry(retry),
+            None => CapabilityError::Untrusted("launch code refused"),
+        });
     }
     let m = json_body(&r)?;
     let code = m
@@ -529,11 +550,62 @@ pub fn mint_launch_code(port: u16, secret: &Secret, server_nonce: &str) -> Resul
     Ok(LaunchCode(code.to_string()))
 }
 
+/// Classify a non-200 mint answer (the handshake already verified the peer): `429`, or `401` whose JSON
+/// `error.code` is `invalid_proof`, are retryable (4.7); anything else is a refusal.
+fn mint_refusal(r: &HttpResponse) -> Option<MintRetry> {
+    match r.status {
+        429 => Some(MintRetry::RateLimited(r.header("retry-after").and_then(|v| v.trim().parse::<u64>().ok()))),
+        401 => {
+            let v: Value = serde_json::from_slice(&r.body).ok()?;
+            (v.get("error")?.get("code")?.as_str()? == "invalid_proof").then_some(MintRetry::InvalidProof)
+        }
+        _ => None,
+    }
+}
+
+/// 4.7: at most this many attempts (each = a fresh verified handshake + one mint) per user action.
+pub const MINT_ATTEMPTS: u32 = 3;
+/// 4.7: never wait longer than this for a `Retry-After`.
+pub const MAX_RETRY_WAIT: Duration = Duration::from_secs(5);
+/// 4.7: wait before the next attempt (`attempt` counts from 1 = the attempt that just failed).
+fn retry_wait(why: MintRetry, attempt: u32) -> Duration {
+    match why {
+        MintRetry::RateLimited(Some(s)) => Duration::from_secs(s).min(MAX_RETRY_WAIT),
+        MintRetry::RateLimited(None) => Duration::from_secs(1),
+        MintRetry::InvalidProof => Duration::from_millis(250u64 << (attempt - 1).min(2)), // 0.25 s, 0.5 s, 1 s
+    }
+}
+
 /// Verified handshake, then a fresh launch code: what every "open" does (the 60 s lifetime means a
-/// code is never kept).
+/// code is never kept). Bounded retry per docs/LOCAL_API_SECURITY.md 4.7:
+///  * a handshake that fails in ANY way is final (a failed proof is the stale/foreign-process case; no retry);
+///  * after a VERIFIED handshake, a 429 or `401 invalid_proof` on the mint waits min(Retry-After, 5) s (or
+///    0.25/0.5/1 s) and redoes handshake + mint, up to `MINT_ATTEMPTS` tries, then `Busy`;
+///  * every other mint answer is refused at once.
 pub fn fresh_launch_code(port: u16, secret: &Secret) -> Result<LaunchCode, CapabilityError> {
-    let server_nonce = handshake(port, secret)?;
-    mint_launch_code(port, secret, &server_nonce)
+    fresh_launch_code_with(port, secret, &mut |d| std::thread::sleep(d))
+}
+
+/// `fresh_launch_code` with an injectable sleeper (tests).
+pub fn fresh_launch_code_with(
+    port: u16,
+    secret: &Secret,
+    sleep: &mut dyn FnMut(Duration),
+) -> Result<LaunchCode, CapabilityError> {
+    let mut attempt = 1;
+    loop {
+        let server_nonce = handshake(port, secret)?;
+        match mint_launch_code(port, secret, &server_nonce) {
+            Err(CapabilityError::Retry(why)) => {
+                if attempt >= MINT_ATTEMPTS {
+                    return Err(CapabilityError::Busy);
+                }
+                sleep(retry_wait(why, attempt));
+                attempt += 1;
+            }
+            other => return other,
+        }
+    }
 }
 
 /// 4.3: the code travels only in the fragment, which the browser never sends to a server.
@@ -860,6 +932,200 @@ pub(crate) mod tests {
         assert!(matches!(handshake(port, &vector_key()), Err(CapabilityError::Unreachable(_))));
         assert!(t0.elapsed() < Duration::from_secs(7));
         drop(t);
+    }
+
+    // --- 4.7: bounded retry of the mint after a VERIFIED handshake -----------------------------------
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct Seen {
+        handshakes: AtomicUsize,
+        mints: AtomicUsize,
+        client_nonces: Mutex<Vec<String>>,
+    }
+
+    fn mint_answer(status: &str, extra_header: &str, body: &str) -> Vec<u8> {
+        format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{extra_header}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
+    }
+
+    fn err_body(code: &str) -> String {
+        format!("{{\"error\":{{\"code\":\"{code}\",\"message\":\"x\"}}}}")
+    }
+
+    fn ok_mint() -> Vec<u8> {
+        json_200(&format!("{{\"v\":1,\"launch_code\":\"{}\",\"expires_in\":60}}", "L".repeat(43)))
+    }
+
+    /// A scripted sidecar (holding the pinned vector key): serves exactly `connections` sequential connections.
+    /// Handshakes are honest unless `other_secret_from_handshake` = Some(n) makes the n-th and later ones use
+    /// another secret; mints pop `mints` in
+    /// order after checking that the proof is correct for the challenge of the latest handshake.
+    fn scripted_sidecar(
+        mut mints: Vec<Vec<u8>>,
+        connections: usize,
+        other_secret_from_handshake: Option<usize>,
+    ) -> (u16, Arc<Seen>) {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let seen = Arc::new(Seen::default());
+        let seen2 = seen.clone();
+        mints.reverse();
+        thread::spawn(move || {
+            let secret = vector_key();
+            let mut last_server_nonce = String::new();
+            for _ in 0..connections {
+                let Ok((mut s, _)) = l.accept() else { return };
+                let mut buf = [0u8; 4096];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                if req.starts_with("POST /api/local/handshake ") {
+                    let k = seen2.handshakes.fetch_add(1, Ordering::SeqCst) + 1;
+                    let nonce = req.split("\"client_nonce\":\"").nth(1).unwrap().split('"').next().unwrap().to_string();
+                    seen2.client_nonces.lock().unwrap().push(nonce.clone());
+                    last_server_nonce = format!("{k:0>22}");
+                    let key = match other_secret_from_handshake {
+                        Some(from) if k >= from => Secret::from_bytes([9; 32]),
+                        _ => vector_key(),
+                    };
+                    let body = format!(
+                        "{{\"v\":1,\"proto\":\"{PROTO}\",\"proof\":\"{}\",\"server_nonce\":\"{last_server_nonce}\",\"expires_in\":30}}",
+                        handshake_proof(&key, port, &nonce)
+                    );
+                    let _ = s.write_all(&json_200(&body));
+                } else if req.starts_with("POST /api/local/launch-code ") {
+                    seen2.mints.fetch_add(1, Ordering::SeqCst);
+                    // the mint must answer the challenge of the handshake just before it, with a correct proof
+                    assert!(req.contains(&format!("\"server_nonce\":\"{last_server_nonce}\"")), "mint without a fresh handshake");
+                    let want = mint_proof(&secret, port, &last_server_nonce);
+                    assert!(req.contains(&format!("X-Launcher-Proof: {want}\r\n")), "wrong mint proof");
+                    let _ = s.write_all(&mints.pop().expect("script exhausted"));
+                } else {
+                    let _ = s.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                }
+            }
+        });
+        (port, seen)
+    }
+
+    fn run_fresh(port: u16) -> (Result<LaunchCode, CapabilityError>, Vec<Duration>) {
+        let mut slept = Vec::new();
+        let r = fresh_launch_code_with(port, &vector_key(), &mut |d| slept.push(d));
+        (r, slept)
+    }
+
+    #[test]
+    fn a_429_after_a_verified_handshake_waits_retry_after_then_redoes_handshake_and_mint() {
+        let mints = vec![
+            mint_answer("429 Too Many Requests", "Retry-After: 2\r\n", &err_body("rate_limited")),
+            ok_mint(),
+        ];
+        let (port, seen) = scripted_sidecar(mints, 4, None);
+        let (r, slept) = run_fresh(port);
+        assert_eq!(r.unwrap().expose(), "L".repeat(43));
+        assert_eq!(slept, vec![Duration::from_secs(2)]);
+        assert_eq!(seen.handshakes.load(Ordering::SeqCst), 2, "a fresh handshake before every mint");
+        assert_eq!(seen.mints.load(Ordering::SeqCst), 2);
+        let n = seen.client_nonces.lock().unwrap().clone();
+        assert_ne!(n[0], n[1], "a new client_nonce for every handshake");
+    }
+
+    #[test]
+    fn retry_after_is_capped_at_five_seconds_and_defaults_to_one() {
+        let mints = vec![
+            mint_answer("429 Too Many Requests", "Retry-After: 60\r\n", &err_body("rate_limited")),
+            mint_answer("429 Too Many Requests", "", &err_body("rate_limited")),
+            ok_mint(),
+        ];
+        let (port, _) = scripted_sidecar(mints, 6, None);
+        let (r, slept) = run_fresh(port);
+        assert!(r.is_ok());
+        assert_eq!(slept, vec![Duration::from_secs(5), Duration::from_secs(1)]);
+        // an unparsable Retry-After is treated as absent
+        let mints = vec![mint_answer("429 Too Many Requests", "Retry-After: soon\r\n", "{}"), ok_mint()];
+        let (port, _) = scripted_sidecar(mints, 4, None);
+        assert_eq!(run_fresh(port).1, vec![Duration::from_secs(1)]);
+    }
+
+    #[test]
+    fn invalid_proof_is_retried_with_short_backoff_then_the_launcher_reports_busy() {
+        let inv = || mint_answer("401 Unauthorized", "", &err_body("invalid_proof"));
+        let (port, seen) = scripted_sidecar(vec![inv(), inv(), inv()], 6, None);
+        let (r, slept) = run_fresh(port);
+        assert_eq!(r.unwrap_err(), CapabilityError::Busy);
+        assert_eq!(slept, vec![Duration::from_millis(250), Duration::from_millis(500)], "no sleep after the last try");
+        assert_eq!(seen.handshakes.load(Ordering::SeqCst), 3, "at most 3 attempts");
+        assert_eq!(seen.mints.load(Ordering::SeqCst), 3);
+        // Busy is not an identity verdict: main.rs stops the sidecar only for ProofMismatch / Untrusted
+        assert!(!matches!(CapabilityError::Busy, CapabilityError::ProofMismatch | CapabilityError::Untrusted(_)));
+        assert!(CapabilityError::Busy.to_string().contains("busy"));
+    }
+
+    #[test]
+    fn three_429s_also_end_in_busy_after_two_bounded_waits() {
+        let r429 = || mint_answer("429 Too Many Requests", "Retry-After: 9\r\n", &err_body("rate_limited"));
+        let (port, seen) = scripted_sidecar(vec![r429(), r429(), r429()], 6, None);
+        let (r, slept) = run_fresh(port);
+        assert_eq!(r.unwrap_err(), CapabilityError::Busy);
+        assert_eq!(slept, vec![MAX_RETRY_WAIT, MAX_RETRY_WAIT]);
+        assert_eq!(seen.mints.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn other_mint_refusals_are_not_retried_and_stay_untrusted() {
+        for (status, body) in [
+            ("401 Unauthorized", err_body("unauthorized")),   // 401 with another code
+            ("401 Unauthorized", "not json".to_string()),
+            ("403 Forbidden", err_body("forbidden")),
+            ("400 Bad Request", err_body("bad_request")),
+            ("500 Internal Server Error", err_body("invalid_proof")), // right code, wrong status
+        ] {
+            let (port, seen) = scripted_sidecar(vec![mint_answer(status, "", &body)], 2, None);
+            let (r, slept) = run_fresh(port);
+            assert_eq!(r.unwrap_err(), CapabilityError::Untrusted("launch code refused"), "{status} {body}");
+            assert!(slept.is_empty());
+            assert_eq!(seen.handshakes.load(Ordering::SeqCst), 1);
+            assert_eq!(seen.mints.load(Ordering::SeqCst), 1, "no retry for {status}");
+        }
+    }
+
+    #[test]
+    fn a_failed_handshake_proof_is_final_even_in_the_middle_of_retries() {
+        // attempt 1: honest handshake, mint answers invalid_proof; attempt 2: the "sidecar" now holds
+        // another secret (a foreign process took the port): ProofMismatch, no further tries, no mint.
+        let inv = mint_answer("401 Unauthorized", "", &err_body("invalid_proof"));
+        let (port, seen) = scripted_sidecar(vec![inv], 3, Some(2));
+        let (r, slept) = run_fresh(port);
+        assert_eq!(r.unwrap_err(), CapabilityError::ProofMismatch);
+        assert_eq!(slept, vec![Duration::from_millis(250)]);
+        assert_eq!(seen.handshakes.load(Ordering::SeqCst), 2);
+        assert_eq!(seen.mints.load(Ordering::SeqCst), 1, "never mint from a peer that failed the handshake");
+    }
+
+    #[test]
+    fn a_handshake_that_never_verifies_is_never_retried() {
+        let (port, seen) = scripted_sidecar(vec![], 2, Some(1));
+        let (r, slept) = run_fresh(port);
+        assert_eq!(r.unwrap_err(), CapabilityError::ProofMismatch);
+        assert!(slept.is_empty());
+        assert_eq!(seen.handshakes.load(Ordering::SeqCst), 1);
+        assert_eq!(seen.mints.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn retry_wait_schedule() {
+        assert_eq!(retry_wait(MintRetry::InvalidProof, 1), Duration::from_millis(250));
+        assert_eq!(retry_wait(MintRetry::InvalidProof, 2), Duration::from_millis(500));
+        assert_eq!(retry_wait(MintRetry::InvalidProof, 3), Duration::from_millis(1000));
+        assert_eq!(retry_wait(MintRetry::InvalidProof, 9), Duration::from_millis(1000));
+        assert_eq!(retry_wait(MintRetry::RateLimited(Some(0)), 1), Duration::ZERO);
+        assert_eq!(retry_wait(MintRetry::RateLimited(Some(3)), 1), Duration::from_secs(3));
+        assert_eq!(retry_wait(MintRetry::RateLimited(Some(u64::MAX)), 1), MAX_RETRY_WAIT);
     }
 
     #[test]

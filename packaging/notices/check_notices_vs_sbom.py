@@ -13,7 +13,11 @@ between. It fails (exit 1) when
   * the notices report has a record that is not in the final SBOM (phantom),
   * a version differs between the two,
   * the staged THIRD_PARTY_NOTICES.txt / NOTICES_MISSING.* do not match LICENSES-MANIFEST.json or the report
-    (the folder was edited after it was generated, or it is stale).
+    (the folder was edited after it was generated, or it is stale),
+  * the final SBOM records Licenses/ entries inside the sidecar archive (pass 2) and any of them differs from the
+    staged file (the launcher would bundle other notices than the sidecar embeds).
+First-party components (property redevops:role = "first-party ...", e.g. the embedded Licenses folder) are not
+third-party notices and are skipped in the component comparison.
 It does not judge licences. Standard library only.
 """
 from __future__ import annotations
@@ -39,7 +43,9 @@ def check(sbom: Path, report: Path, licenses_dir: Path | None, exclude: list[str
     gen = _gen()
     errors: list[str] = []
     excl = {gen.norm(e) for e in exclude}
-    sbom_c = {(c["type"], gen.norm(c["name"])): c for c in gen.load_components(sbom) if gen.norm(c["name"]) not in excl}
+    all_c = gen.load_components(sbom)
+    first_party = lambda c: c["props"].get("redevops:role", "").startswith("first-party")   # e.g. the embedded Licenses folder
+    sbom_c = {(c["type"], gen.norm(c["name"])): c for c in all_c if gen.norm(c["name"]) not in excl and not first_party(c)}
     rep = json.loads(report.read_text(encoding="utf-8"))
     rep_c = {(r["type"], gen.norm(r["name"])): r for r in rep["records"]}
     for key, c in sorted(sbom_c.items()):
@@ -72,6 +78,22 @@ def check(sbom: Path, report: Path, licenses_dir: Path | None, exclude: list[str
                 rep_missing = sorted((r["type"], gen.norm(r["name"]), r["version"]) for r in rep["records"] if r["status"] != "text-found")
                 if staged_missing != rep_missing:
                     errors.append("staged NOTICES_MISSING.json does not match the notices report")
+        # the sidecar embeds exactly the staged folder: its archive entries are hashed in the SBOM
+        embedded = {}
+        for c in all_c:
+            for k, v in c["props"].items():
+                if k.startswith("redevops:sha256:Licenses/"):
+                    embedded[k[len("redevops:sha256:Licenses/"):]] = v
+        if embedded:
+            for name, h in sorted(embedded.items()):
+                p = licenses_dir / name
+                if not p.is_file():
+                    errors.append(f"Licenses/{name} is embedded in the sidecar (SBOM) but not in the staged folder")
+                elif hashlib.sha256(p.read_bytes()).hexdigest() != h:
+                    errors.append(f"Licenses/{name}: the embedded copy (SBOM sha256) differs from the staged file")
+            for p in sorted(licenses_dir.iterdir()):
+                if p.is_file() and p.name not in embedded:
+                    errors.append(f"Licenses/{p.name} is staged but not embedded in the sidecar")
     return errors
 
 
