@@ -3,7 +3,7 @@
 # Nothing is signed or published. Output: packaging/dist/ (sidecar, build manifest, SBOM) and the launcher bundle.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$HERE/.." && pwd)"
-# Distribution gate: REDEVOPS_DISTRIBUTION_BUILD=1 is refused (exit 3) while a distribution-blocking decision is OPEN
+# Distribution gate: any REDEVOPS_DISTRIBUTION_BUILD other than empty or 0 is a distribution build and is refused (exit 3) while a distribution-blocking decision is OPEN
 # (packaging/distribution-gate.json); a private build only prints the open decisions.
 case "$(uname -s)" in Darwin) GATE_OS=macos ;; Linux) GATE_OS=linux ;; *) GATE_OS=windows ;; esac
 "${MANIFEST_PYTHON:-python3}" -I "$HERE/check-distribution-gate.py" --platform "$GATE_OS" || exit 3

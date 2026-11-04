@@ -18,7 +18,7 @@ set -euo pipefail
 OUT="${1:?usage: build-local-macos-candidate.sh OUT_DIR}"
 HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$HERE/../.." && pwd)"; PK="$ROOT/packaging"
 # Distribution gate (first, in the caller's environment): this script builds a PRIVATE candidate, which is not a distribution.
-# REDEVOPS_DISTRIBUTION_BUILD=1 turns the run into a distribution build, which is refused (exit 3) while any
+# Any REDEVOPS_DISTRIBUTION_BUILD value other than empty or 0 turns the run into a distribution build, which is refused (exit 3) while any
 # distribution-blocking decision in packaging/distribution-gate.json is OPEN. Nothing is built or written before this check.
 python3 -I "$PK/check-distribution-gate.py" --platform macos || exit 3
 [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] || { echo "macOS arm64 only"; exit 2; }
