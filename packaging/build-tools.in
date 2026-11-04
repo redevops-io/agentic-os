@@ -1,0 +1,4 @@
+# Freeze tool. NOT shipped as a component, but its bootloader and runtime hooks end up inside the
+# executable, and its setuptools/packaging dependencies are collected into the PYZ (observed in the
+# frozen archive). pyinstaller-hooks-contrib resolves to 2026.7 (the frozen log: "contrib hooks: 2026.7").
+pyinstaller==6.22.3

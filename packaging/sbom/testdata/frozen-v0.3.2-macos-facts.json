@@ -1,0 +1,14 @@
+{
+  "_comment": "Facts about the FROZEN v0.3.2 macOS sidecar that a LISTING cannot show, copied from the read-only audit record r0-audit/licences/native_frozen_facts.json (method: PyInstaller CArchiveReader, strings, UI bundle banner search). Used only to test the verifier against the frozen archive listing.",
+  "python_version": "3.12.10",
+  "pyinstaller_version": "6.22.3",
+  "openssl": [
+    {"entry": "libcrypto.3.dylib", "version": "3.0.16", "date": "11 Feb 2025"},
+    {"entry": "cryptography/hazmat/bindings/_rust.abi3.so", "version": "4.0.2", "date": "25 Aug 2026"}
+  ],
+  "ui_js": [
+    {"name": "react", "version": "18.3.1", "licence_text": "MIT"},
+    {"name": "react-dom", "version": "18.3.1", "licence_text": "MIT"},
+    {"name": "scheduler", "version": null, "licence_text": "MIT"}
+  ]
+}

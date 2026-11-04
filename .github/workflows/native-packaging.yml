@@ -2,6 +2,14 @@
 # Ubuntu is the proving ground (needs no signing); Windows/macOS build the SAME
 # wheelhouse+sidecar+Tauri bundle from day one (unsigned) so the recipe stays portable.
 # Signing/notarization + winget/Homebrew wiring switch on per-OS in P2 (gated on secrets).
+#
+# R0-prime pins (packaging/PINS.md): every build input is an exact version, hash-locked or SHA-pinned:
+#   * actions pinned by commit SHA (the tag they were resolved from is in the comment)
+#   * runner images by NAME (macos-14 / windows-2022 / ubuntu-24.04); the image VERSION still floats and
+#     is recorded in packaging/dist/build-manifest.json (ImageVersion)
+#   * CPython 3.12.10, Rust 1.98.1, tauri-cli 2.11.4, uv 0.12.16 (packaging/toolchain.env)
+#   * Python wheels `--require-hashes` (packaging/locks), Rust crates `--locked` (Cargo.lock)
+# Nothing here signs or publishes anything new; the existing `release` job is unchanged.
 name: native-packaging
 
 on:
@@ -16,20 +24,34 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest    # → .deb + AppImage   (release target now)
-          - os: windows-latest   # → .msi / .nsis      (unsigned until P2)
+          - os: ubuntu-24.04     # → .deb + AppImage   (release target now)
+          - os: windows-2022     # → .msi / .nsis      (unsigned until P2; the frozen v0.3.2 run used windows-latest = windows-2025)
           - os: macos-14         # → .dmg (arm64)       (unsigned/un-notarized until P2)
           # macos-13 (Intel/x86_64) dropped — GitHub is retiring the Intel runners and jobs queue
           # indefinitely. Ship arm64 macOS for now; add Intel via a universal2 build later.
     runs-on: ${{ matrix.os }}
+    env:
+      # uv must use the interpreter installed below (exactly 3.12.10) and never fetch another one.
+      UV_PYTHON_PREFERENCE: only-system
+      UV_PYTHON_DOWNLOADS: never
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: CPython 3.12.10 (exact; packaging/toolchain.env PYTHON_VERSION)
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12.10"
+          check-latest: false
 
       - name: Install uv (drives the Python 3.12 bundle build)
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
+        with:
+          version: "0.12.16"   # packaging/toolchain.env UV_VERSION
 
-      - name: Rust toolchain (Tauri)
-        uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain 1.98.1 (Tauri; packaging/toolchain.env RUST_VERSION)
+        uses: dtolnay/rust-toolchain@18f0487477426dce244608110aa2660c2893deb7  # branch 1.98.1
+        with:
+          toolchain: "1.98.1"
 
       - name: Linux bundle deps (Tauri needs GTK/WebKit; only on Linux)
         if: runner.os == 'Linux'
@@ -38,34 +60,57 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
             libayatana-appindicator3-dev patchelf rsync
 
+      - name: Pins are consistent (pyproject, git pins, locks, frozen CI wheel list, Cargo.lock)
+        shell: bash
+        run: python -I packaging/verify-pins.py
+
       - name: Task 1 — reproducible wheelhouse (kills git+https from the user path)
         shell: bash
         run: ./packaging/build-wheelhouse.sh
 
-      - name: Task 2 — freeze the Python sidecar
+      - name: Task 2 — freeze the Python sidecar (pass 1; the archive the notices are derived from)
         shell: bash
+        run: ./packaging/build-sidecar.sh
+
+      - name: Task 3 — licence notices from the SBOM of the built archive (packaging/notices; needs network for cargo fetch)
+        shell: bash
+        run: ./packaging/build-notices.sh
+
+      - name: Task 2b — freeze again, embedding the Licenses folder
+        shell: bash
+        env:
+          REDEVOPS_LICENSES_DIR: ${{ github.workspace }}/deploy/launcher/src-tauri/licenses
         run: ./packaging/build-sidecar.sh
 
       - name: Stage sidecar for Tauri externalBin
         shell: bash
         run: ./packaging/stage-sidecar.sh
 
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2" --locked
+      - name: Install Tauri CLI 2.11.4 (packaging/toolchain.env TAURI_CLI_VERSION)
+        run: cargo install tauri-cli --version 2.11.4 --locked
 
-      - name: Task 4 — build the native installer(s)
-        working-directory: deploy/launcher
-        run: cargo tauri build
+      - name: Task 4 — build the native installer(s) (cargo --locked against the committed Cargo.lock)
+        shell: bash
+        env:
+          MANIFEST_PYTHON: python
+        run: ./packaging/build-launcher.sh
+
+      - name: Shipped-component SBOM from the built artifacts (generate + verify; fails on an unlisted component)
+        shell: bash
+        run: ./packaging/build-sbom.sh
 
       # --- Signing / notarization: staged (decision 4). Enabled per-OS in P2 when secrets exist. ---
       # - name: Sign & notarize (macOS)   if: runner.os == 'macOS' && secrets.APPLE_ID ...
       # - name: Sign (Windows)            if: runner.os == 'Windows' && secrets.WIN_CERT ...
 
       - name: Upload installers
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: redevops-${{ matrix.os }}
           path: |
+            packaging/dist/build-manifest.json
+            packaging/dist/sbom/*
+            packaging/wheelhouse/WHEELS.sha256
             deploy/launcher/src-tauri/target/release/bundle/**/*.deb
             deploy/launcher/src-tauri/target/release/bundle/**/*.AppImage
             deploy/launcher/src-tauri/target/release/bundle/**/*.msi
@@ -75,11 +120,11 @@ jobs:
 
   acceptance-ubuntu:
     needs: bundle
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with: { name: redevops-ubuntu-latest, path: dist }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with: { name: redevops-ubuntu-24.04, path: dist }
       - name: Clean-machine acceptance (install the .deb, reach a served control plane, no Docker)
         run: ./packaging/acceptance-ubuntu.sh "$(find dist -name '*.deb' | head -1)"
 
@@ -89,12 +134,12 @@ jobs:
   release:
     needs: [bundle, acceptance-ubuntu]
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - name: Download all OS installer artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           path: dist
       - name: Flatten installer files
@@ -104,7 +149,7 @@ jobs:
             -o -name '*.exe' -o -name '*.dmg' \) -exec cp {} release/ \;
           ls -la release/
       - name: Publish installers to the GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
           files: release/*
           fail_on_unmatched_files: false
