@@ -188,12 +188,15 @@ r0p_ledger_check() {
     else die "this scope file (sha256 $s) was already used (it is in the ledger). Write a NEW scope file for a new run, or pass --allow-reuse after deciding that a repeat is intended"; fi
   fi
 }
-# The locked sections run in a SUBSHELL whose EXIT trap releases the lock, so a `die` inside (broken chain, symlink, existing event file) can never
-# leave a stale lock behind; the parent propagates the exit status.
-R0P_LOCKED_LEDGER=""
+# The locked sections run in a SUBSHELL so that a `die` inside (broken chain, symlink, existing event file) ends only the subshell: the parent then
+# releases the lock and passes the exit status on. (An EXIT trap in the subshell is NOT used: bash does not run it reliably when the parent is itself
+# inside its own EXIT trap, which is where the "ended" event is written.) A parent killed by a signal inside the section leaves lock/ behind; the
+# next run then stops with a message that names it.
 r0p_ledger_in_lock() { # LEDGER function args... : run the function under the lock in a subshell
   local rc=0
-  ( r0p_ledger_lock "$1"; R0P_LOCKED_LEDGER="$1"; trap 'r0p_ledger_unlock "$R0P_LOCKED_LEDGER"' EXIT; "${@:2}" ) || rc=$?
+  r0p_ledger_lock "$1"
+  ( "${@:2}" ) || rc=$?
+  r0p_ledger_unlock "$1"
   [ "$rc" -eq 0 ] || exit "$rc"
 }
 # r0p_ledger_append LEDGER SCOPE_SHA MODE EVENT [DETAIL]
