@@ -23,9 +23,6 @@ EXTRAS="projects,duckdb"   # the suite the native installer ships (rag/postgres/
 rm -rf "$WH"; mkdir -p "$WH" "$PK/dist"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
-echo "== pins check (pyproject <-> git-pins.json <-> requirements.in <-> locks) =="
-python3 -I "$PK/verify-pins.py" --quiet || { echo "pins are inconsistent: see packaging/verify-pins.py"; exit 1; }
-
 echo "== build venv: CPython $PYTHON_VERSION (unseeded) + build backends from the hash lock =="
 uv venv --python "$PYTHON_VERSION" "$TMP/build" >/dev/null
 BPY="$(venv_py "$TMP/build")"
@@ -33,6 +30,8 @@ assert_python "$BPY"
 uv pip install --python "$BPY" --require-hashes --no-deps -r "$LOCKS/build-backends-$OS.lock" >/dev/null
 echo "   $("$BPY" -m pip --version | cut -d' ' -f1-2), setuptools $("$BPY" -c 'import setuptools;print(setuptools.__version__)')"
 [ "$("$BPY" -m pip --version | cut -d' ' -f2)" = "$PIP_VERSION" ] || { echo "pip is not the pinned $PIP_VERSION"; exit 1; }
+echo "== pins check (pyproject, git-pins.json, requirements.in, locks, Cargo.lock) =="
+"$BPY" -I "$PK/verify-pins.py" --quiet || { echo "pins are inconsistent: run packaging/verify-pins.py"; exit 1; }
 
 echo "== 1/4 third-party wheels: pip download --require-hashes (binary only, no build) =="
 "$BPY" -m pip download --quiet --no-deps --only-binary=:all: --require-hashes \

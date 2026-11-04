@@ -23,12 +23,13 @@ while [ $# -gt 0 ]; do case "$1" in
 mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"
 . "$HERE/toolchain.env"
 export LAUNCHER_BUNDLES="${LAUNCHER_BUNDLES:-app}"
-echo "output: $OUT   commit: $(git -C "$ROOT" rev-parse HEAD)   dirty files: $(git -C "$ROOT" status --porcelain | wc -l | tr -d ' ')"
+COMMIT="$(git -C "$ROOT" rev-parse HEAD)"   # fixed once: both builds use the same commit even if HEAD moves
+echo "output: $OUT   commit: $COMMIT   dirty files: $(git -C "$ROOT" status --porcelain | wc -l | tr -d ' ')"
 [ -z "$(git -C "$ROOT" status --porcelain --untracked-files=no)" ] || echo "WARNING: tracked files are modified; the build uses the COMMITTED state only"
 
 build_one() { # <label> <srcdir>
   local label="$1" src="$2" t0 t1
-  rm -rf "$src"; git clone -q --no-hardlinks "$ROOT" "$src"; git -C "$src" checkout -q "$(git -C "$ROOT" rev-parse HEAD)"
+  rm -rf "$src"; git clone -q --no-hardlinks "$ROOT" "$src"; git -C "$src" checkout -q "$COMMIT"
   echo "== build $label in $src =="
   t0=$(date +%s)
   ( cd "$src" && ./packaging/build-wheelhouse.sh && ./packaging/build-sidecar.sh && ./packaging/stage-sidecar.sh ) > "$OUT/build-$label.log" 2>&1

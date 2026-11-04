@@ -14,23 +14,25 @@ T0="$(now)"
 LOCK="$ROOT/deploy/launcher/src-tauri/Cargo.lock"
 [ -f "$LOCK" ] || { echo "Cargo.lock missing: run packaging/regen-cargo-lock.sh"; exit 1; }
 [ "$(rustc --version | cut -d' ' -f2)" = "$RUST_VERSION" ] || { echo "rustc is '$(rustc --version)', pinned $RUST_VERSION"; exit 1; }
-[ "$(cargo tauri --version | awk '{print $NF}')" = "$TAURI_CLI_VERSION" ] || { echo "cargo tauri is '$(cargo tauri --version)', pinned $TAURI_CLI_VERSION"; exit 1; }
+# tauri-cli is `cargo tauri` (cargo install tauri-cli, as CI does) or the equivalent `tauri` binary of the npm package @tauri-apps/cli
+if cargo tauri --version >/dev/null 2>&1; then TAURI=(cargo tauri); elif command -v tauri >/dev/null 2>&1; then TAURI=(tauri); else echo "tauri-cli not found"; exit 1; fi
+[ "$("${TAURI[@]}" --version | awk '{print $NF}')" = "$TAURI_CLI_VERSION" ] || { echo "tauri-cli is '$("${TAURI[@]}" --version)', pinned $TAURI_CLI_VERSION"; exit 1; }
 LOCK_BEFORE="$(shasum -a 256 "$LOCK" 2>/dev/null | cut -d' ' -f1 || sha256sum "$LOCK" | cut -d' ' -f1)"
 
 cd "$ROOT/deploy/launcher"
 BUNDLES=()
 [ -n "${LAUNCHER_BUNDLES:-}" ] && BUNDLES=(--bundles "$LAUNCHER_BUNDLES")
 # cargo's own args go after `--`.
-cargo tauri build ${BUNDLES[@]+"${BUNDLES[@]}"} -- --locked
+"${TAURI[@]}" build ${BUNDLES[@]+"${BUNDLES[@]}"} -- --locked
 
 LOCK_AFTER="$(shasum -a 256 "$LOCK" 2>/dev/null | cut -d' ' -f1 || sha256sum "$LOCK" | cut -d' ' -f1)"
 [ "$LOCK_BEFORE" = "$LOCK_AFTER" ] || { echo "ERROR: Cargo.lock changed during the build"; exit 1; }
 
 TARGET="${CARGO_TARGET_DIR:-$ROOT/deploy/launcher/src-tauri/target}"
 BIN="$TARGET/release/agentic-apps"; [ -f "$BIN.exe" ] && BIN="$BIN.exe"
-MPY="${MANIFEST_PYTHON:-python3}"
+MPY="${MANIFEST_PYTHON:-$(command -v python3 || command -v python)}"
 "$MPY" -I "$PK/tools/build_manifest.py" --root "$ROOT" --out "$PK/dist/build-manifest.json" --stage launcher \
     --artifact "launcher=$BIN" --artifact "launcher_bundles=$TARGET/release/bundle" \
-    --cmd 'rustc="rustc -Vv"' --cmd 'cargo="cargo -V"' --cmd 'tauri_cli="cargo tauri --version"' \
+    --cmd 'rustc="rustc -Vv"' --cmd 'cargo="cargo -V"' --cmd "tauri_cli=${TAURI[*]} --version" \
     --duration "launcher=$(( $(now) - T0 ))"
 echo "launcher: $BIN"

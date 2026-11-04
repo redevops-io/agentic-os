@@ -65,4 +65,6 @@ echo "built: $BIN"
 "$FPY" -I "$PK/tools/build_manifest.py" --root "$ROOT" --out "$PK/dist/build-manifest.json" --stage sidecar --record-python \
     --artifact "sidecar=$BIN" --wheelhouse "$WH" --cmd 'uv="uv --version"' --duration "sidecar=$(( $(now) - T0 ))"
 echo "== smoke test: the frozen binary imports + shows the bootstrap report =="
-"$BIN" bootstrap || true    # exit code is the device verdict; we only assert it runs
+# exit code is the device verdict; we only assert it runs. Scrubbed environment: the report must not touch
+# (or print) credentials of the build host.
+env -i PATH="$PATH" HOME="$TMP" TMPDIR="$TMP" "$BIN" bootstrap || true
