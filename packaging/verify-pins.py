@@ -150,6 +150,14 @@ def main() -> int:
                     problems.append(f"{p.name}: pip {pins_.get('pip')} != toolchain.env")
                 if pins_.get("setuptools") != env.get("SETUPTOOLS_VERSION"):
                     problems.append(f"{p.name}: setuptools {pins_.get('setuptools')} != toolchain.env")
+    ul = PK / "requirements.lock"
+    if ul.exists():
+        up, probs = parse_lock(ul)
+        problems += probs
+        if "macos" in locks and up != locks["macos"]:
+            problems.append("requirements.lock (universal) differs from requirements-macos.lock: " + str(sorted(set(up.items()) ^ set(locks["macos"].items()))[:4]))
+    else:
+        problems.append("missing packaging/requirements.lock")
     pl = PK / "locks" / "pip.lock"
     if pl.exists():
         pp, probs = parse_lock(pl); problems += probs

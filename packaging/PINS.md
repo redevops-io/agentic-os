@@ -30,8 +30,7 @@ workspace on every build and never the input. It lagged what was built: the froz
 idna 3.20 and uvicorn 0.53.0 (CI logs; confirmed inside the shipped archive's PYZ by the audit). The new locks are inputs,
 generated with `uv pip compile --generate-hashes --exclude-newer 2026-09-18T14:00:00Z`; that cut-off makes the resolver
 reproduce the 21 third-party wheels of ALL THREE CI legs exactly (macOS, Windows and Linux lists in
-`evidence/frozen-ci-wheels.json`; `verify-pins.py` compares them). **Chosen: idna 3.20, uvicorn 0.53.0** (what was built and
-benchmarked-adjacent; no reason to move). knowledge-frontier 0.1.0 (absent from the old lock) is built from its git pin.
+`evidence/frozen-ci-wheels.json`; `verify-pins.py` compares them). **Chosen: idna 3.20, uvicorn 0.53.0** (what the frozen run built; no reason to move). knowledge-frontier 0.1.0 (absent from the old lock) is built from its git pin.
 PyPI check of 2026-11-04: all 63 wheel files of the three legs still exist and none is yanked or removed.
 
 ## runtime-contracts v0.3.4 and the stale `build/lib`
@@ -64,7 +63,7 @@ first-party clones (tag object, commit, SOURCE_DATE_EPOCH, removed build dirs); 
 
 | Need | Command | Network |
 |---|---|---|
-| Python locks | `packaging/regen-python-locks.sh` | PyPI |
+| Python locks (per-OS + `packaging/requirements.lock`, the universal lock the notices tooling reads) | `packaging/regen-python-locks.sh` | PyPI |
 | Cargo.lock (after any Cargo.toml change, e.g. a new Windows dependency) | `packaging/regen-cargo-lock.sh` | crates.io |
 | Third-party source references | `python -I packaging/tools/collect_source_refs.py --sbom packaging/dist/sbom/sbom.cdx.json --out packaging/source-offer/third-party-sources.json --existing packaging/source-offer/third-party-sources.json` | PyPI, npm, python.org, GitHub |
 | Check | `python -I packaging/verify-pins.py`; `python -m pytest tests/test_packaging_pins.py tests/test_packaging_sbom.py` | none |
