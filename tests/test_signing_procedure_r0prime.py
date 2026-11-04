@@ -80,6 +80,37 @@ def run(cmd, env, cwd=None, timeout=300, input=None):
     return subprocess.run([str(c) for c in cmd], env=env, cwd=cwd, capture_output=True, text=True, timeout=timeout, input=input)
 
 
+def make_tree(dest: Path) -> Path:
+    """A private copy of packaging/ (signing scripts, identity.json, entitlement plist, gate files) for the stub tests of the --real paths. In the
+    copy of signing-common.sh the single patch point `r0p_no_test_switch` is replaced by a no-op, because the PRODUCTION library refuses the
+    unit-test switch in --real (R5-02); the copy therefore has another sha256, which the test scope files bind."""
+    (dest / "signing").mkdir(parents=True)
+    (dest / "macos").mkdir()
+    for p in SIGN.iterdir():
+        if p.is_file():
+            shutil.copy(p, dest / "signing" / p.name)
+    shutil.copytree(SIGN / "tools", dest / "signing" / "tools")
+    for src in (IDJSON, GATE_JSON, GATE_PY):
+        shutil.copy(src, dest / src.name)
+    shutil.copy(ENT, dest / "macos" / ENT.name)
+    c = dest / "signing" / "signing-common.sh"
+    lines = c.read_text().splitlines(keepends=True)
+    out = [("r0p_no_test_switch() { :; }   # TEST COPY: the production library refuses the switch in --real\n" if "R0P-TEST-PATCH-POINT" in ln else ln) for ln in lines]
+    assert out != lines
+    c.write_text("".join(out))
+    return dest
+
+
+def ledger_text(d: Path) -> str:
+    """All event lines of a ledger directory, in order."""
+    ev = Path(d) / "events"
+    return "".join(f.read_text() for f in sorted(ev.glob("*.txt"))) if ev.is_dir() else ""
+
+
+def ledger_claims(d: Path) -> list:
+    return sorted(p.name for p in (Path(d) / "claims").glob("*")) if (Path(d) / "claims").is_dir() else []
+
+
 def write_exec(path: Path, text: str) -> Path:
     path.write_text(text)
     path.chmod(0o755)
@@ -159,6 +190,7 @@ STUB_CODESIGN = r'''#!/bin/bash
 D="$(cd "$(dirname "$0")" && pwd)"; . "$D/stub.conf"
 echo "codesign $*" >> "$LOG"
 env | sed 's/=.*//' | sort >> "$STATE/codesign-env"
+ls /dev/fd | tr '\n' ' ' >> "$STATE/codesign-fds"; echo >> "$STATE/codesign-fds"
 key() { printf '%s' "$1" | shasum -a 256 | cut -c1-16; }
 st() { echo "$STATE/$(key "$1").st"; }
 if [ "$1" = "--verify" ]; then
@@ -305,6 +337,9 @@ class Mac:
         self.log = tmp / "stub.log"
         self.log.write_text("")
         self.fixture = tmp / "fixture"
+        self.tree = make_tree(tmp / "mtree")
+        self.script = self.tree / "signing" / MAC.name
+        self.common = self.tree / "signing" / COMMON.name
         self.conf(NOTARY_MODE="ok")
         write_exec(self.stubs / "codesign", STUB_CODESIGN)
         write_exec(self.stubs / "hdiutil", STUB_HDIUTIL)
@@ -357,7 +392,7 @@ class Mac:
         return clean_env(self.home, [self.stubs], **extra)
 
     def run(self, *args, mode=None, input_dmg=None, out=None, sha=None, stubs=True, **extra_env):
-        a = ["/bin/bash", MAC]
+        a = ["/bin/bash", self.script]
         if mode:
             a.append(mode)
         a += ["--input-dmg", input_dmg or self.dmg, "--expected-sha256", sha or sha_file(Path(input_dmg or self.dmg)), "--out-dir", out or self.out]
@@ -371,7 +406,7 @@ class Mac:
     def scope(self, **over) -> Path:
         now = datetime.now(timezone.utc)
         d = {"scope_version": "2", "not_before": iso(now - timedelta(hours=1)), "not_after": iso(now + timedelta(hours=1)),
-             "script_sha256": sha_file(MAC), "common_sha256": sha_file(COMMON), "entitlements_sha256": sha_file(ENT),
+             "script_sha256": sha_file(self.script), "common_sha256": sha_file(self.common), "entitlements_sha256": sha_file(ENT),
              "identity_json_sha256": sha_file(IDJSON), "input_dmg_sha256": sha_file(self.dmg),
              "identity_sha256": sha_bytes(TEST_IDENTITY.encode()), "notary_profile_sha256": sha_bytes(TEST_PROFILE.encode()),
              "team_id": "TESTTEAM01", "notarize": "yes", "upload_to": "apple-notary", "distribution": "no",
@@ -384,7 +419,7 @@ class Mac:
 
     @property
     def ledger(self) -> Path:
-        return self.tmp / "ledger.txt"
+        return self.tmp / "ledger"
 
     def real(self, scope: Path, *extra, notarize=True, env=None, ledger=True, **kw):
         e = {"R0P_CODESIGN_IDENTITY": TEST_IDENTITY}
@@ -856,6 +891,9 @@ class Ssh:
         self.manifest.write_text('{"files": {"a": "0"}}\n')
         self.keys = tmp / "keys"
         self.keys.mkdir()
+        self.tree = make_tree(tmp / "stree")                     # patched copy for the stub-tool --real tests (see make_tree)
+        self.tscript = self.tree / "signing" / SSH.name
+        self.tcommon = self.tree / "signing" / COMMON.name
         self.key = self.make_key("k1", "signproc-TEST-KEY")     # a throwaway key for tests that need a key pair of their own
         self.pub = self.key.with_name("k1.pub")
 
@@ -874,8 +912,8 @@ class Ssh:
     def digest(self):
         return sha_file(self.manifest)
 
-    def run(self, *args, path_dirs=(), cwd=None, **extra):
-        return run(["/bin/bash", SSH, *args], self.env(path_dirs, **extra), cwd=cwd)
+    def run(self, *args, path_dirs=(), cwd=None, script=None, **extra):
+        return run(["/bin/bash", script or SSH, *args], self.env(path_dirs, **extra), cwd=cwd)
 
     def selftest(self, sig=None, **kw):
         """The script generates its own throwaway key; the public half is exported to outside/test.pub for verify-only."""
@@ -1022,10 +1060,10 @@ def make_fake_tools(ssh: Ssh, real_key: Path) -> Path:
     return d
 
 
-def ssh_scope(ssh: Ssh, **over) -> Path:
+def ssh_scope(ssh: Ssh, tree=False, **over) -> Path:
     now = datetime.now(timezone.utc)
     d = {"scope_version": "2", "not_before": iso(now - timedelta(hours=1)), "not_after": iso(now + timedelta(hours=1)),
-         "script_sha256": sha_file(SSH), "common_sha256": sha_file(COMMON), "identity_json_sha256": sha_file(IDJSON),
+         "script_sha256": sha_file(ssh.tscript if tree else SSH), "common_sha256": sha_file(ssh.tcommon if tree else COMMON), "identity_json_sha256": sha_file(IDJSON),
          "manifest_sha256": ssh.digest(), "key_fingerprint": ssh.fpr(ssh.pub), "namespace": "redevops-qa-release@v1",
          "build_commit": "b" * 40, "procedure_commit": "c" * 40}
     d.update(over)
@@ -1036,7 +1074,7 @@ def ssh_scope(ssh: Ssh, **over) -> Path:
 
 def real_args(ssh: Ssh, sc: Path, sig: Path, ledger: Path = None, fp=True, manifest=None):
     a = ["--real", "--manifest", manifest or ssh.manifest, "--pubkey", ssh.pub, "--expected-sha256", sha_file(Path(manifest or ssh.manifest)),
-         "--i-have-owner-authorization", sha_file(sc), "--scope-file", sc, "--sig-out", sig, "--ledger", ledger or (ssh.tmp / "ledger.txt")]
+         "--i-have-owner-authorization", sha_file(sc), "--scope-file", sc, "--sig-out", sig, "--ledger", ledger or (ssh.tmp / "ledger")]
     if fp:
         a += ["--expected-fingerprint", ssh.fpr(ssh.pub)]
     return a
@@ -1056,7 +1094,7 @@ def test_sshsig_real_never_falls_back_to_a_private_key_file_beside_the_pub(ssh):
         agent = FakeAgent(sock, blobs=blobs, failure_for_identities=fail_ids)
         try:
             sig = ssh.outside / f"fb{n}.sig"
-            led = ssh.tmp / f"l{n}.txt"
+            led = ssh.tmp / f"l{n}"
             # AF_UNIX connect paths are short: the agent is reached through a relative name from the directory that holds it
             r = ssh.run(*real_args(ssh, sc, sig, ledger=led), SSH_AUTH_SOCK=sock.name, cwd=sock.parent)
             assert r.returncode == 1, (r.stdout, r.stderr)
@@ -1065,7 +1103,7 @@ def test_sshsig_real_never_falls_back_to_a_private_key_file_beside_the_pub(ssh):
                 assert "does not hold the key" in r.stderr
             assert not sig.exists(), "no signature may be made from the key file"
             assert 13 not in agent.requests, "the script did not even ask the agent to sign"
-            assert not led.exists(), "the scope was not consumed: nothing was started"
+            assert not list((led / "claims").glob("*")) and ledger_text(led) == "", "the scope was not consumed: nothing was claimed or recorded"
         finally:
             agent.close()
 
@@ -1084,7 +1122,7 @@ def test_sshsig_real_agent_lists_the_key_but_refuses_to_sign_then_no_key_file_is
         assert r.returncode == 1 and "agent did not sign" in r.stderr, (r.stdout, r.stderr)
         assert not sig.exists()
         assert 13 in agent.requests, "the agent was asked to sign (and refused)"
-        led = (ssh.tmp / "ledger.txt").read_text()
+        led = ledger_text(ssh.tmp / "ledger")
         assert "event=started" in led and "event=ended" in led and "rc=sign-failed" in led
     finally:
         agent.close()
@@ -1095,9 +1133,9 @@ def test_sshsig_real_positive_path_uses_a_private_copy_of_the_public_key_and_a_q
     sock = ssh.tmp / "agent.sock"
     s = bind_unix_socket(sock)
     try:
-        sc = ssh_scope(ssh)
+        sc = ssh_scope(ssh, tree=True)
         sig = ssh.outside / "real.sig"
-        r = ssh.run(*real_args(ssh, sc, sig), path_dirs=[fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test")
+        r = ssh.run(*real_args(ssh, sc, sig), path_dirs=[fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test", script=ssh.tscript)
         assert r.returncode == 0, (r.stdout, r.stderr)
         log = (ssh.tmp / "tools.log").read_text()
         sign_line = [l for l in log.splitlines() if l.startswith("ssh-keygen -Y sign")][0]
@@ -1109,13 +1147,13 @@ def test_sshsig_real_positive_path_uses_a_private_copy_of_the_public_key_and_a_q
         assert f"SOCK={sock}" in sign_env and "ASKPASS=/usr/bin/false" in sign_env and "DISPLAY=unset" in sign_env
         assert str(ssh.home) not in sign_env, "a throwaway HOME, not the user's"
         assert sig.is_file() and "Good" in r.stdout
-        led = (ssh.tmp / "ledger.txt").read_text()
+        led = ledger_text(ssh.tmp / "ledger")
         assert "event=started" in led and "event=ended" in led and "rc=0" in led
         # one-time ledger: the same scope is refused again, --allow-reuse is recorded
         sig2 = ssh.outside / "real2.sig"
-        r2 = ssh.run(*real_args(ssh, sc, sig2), path_dirs=[fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test")
+        r2 = ssh.run(*real_args(ssh, sc, sig2), path_dirs=[fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test", script=ssh.tscript)
         assert r2.returncode == 1 and "already used" in r2.stderr and not sig2.exists()
-        r3 = ssh.run(*real_args(ssh, sc, sig2), "--allow-reuse", path_dirs=[fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test")
+        r3 = ssh.run(*real_args(ssh, sc, sig2), "--allow-reuse", path_dirs=[fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test", script=ssh.tscript)
         assert r3.returncode == 0 and "--allow-reuse" in r3.stdout and sig2.exists()
     finally:
         s.close()
@@ -1143,34 +1181,34 @@ def test_sshsig_real_mode_refusals(ssh):
             env = dict(R0P_ALLOW_NONSYSTEM_TOOLS="stub-test")
             if sock_env:
                 env["SSH_AUTH_SOCK"] = str(sock)
-            return ssh.run(*real_args(ssh, sc, ssh.outside / sig, ledger=ledger, fp=fp, manifest=manifest), *extra, path_dirs=[fake], **env)
+            return ssh.run(*real_args(ssh, sc, ssh.outside / sig, ledger=ledger, fp=fp, manifest=manifest), *extra, path_dirs=[fake], script=ssh.tscript, **env)
 
         now = datetime.now(timezone.utc)
-        assert "ssh-agent" in go(ssh_scope(ssh), sock_env=False).stderr
-        assert "--expected-fingerprint" in go(ssh_scope(ssh), fp=False).stderr
-        assert "outside the authorized window" in go(ssh_scope(ssh, not_before=iso(now - timedelta(hours=3)), not_after=iso(now - timedelta(hours=2)))).stderr
-        assert "longer than 24 hours" in go(ssh_scope(ssh, not_after=iso(now + timedelta(hours=30)))).stderr
-        assert "script_sha256" in go(ssh_scope(ssh, script_sha256="1" * 64)).stderr
-        assert "common_sha256" in go(ssh_scope(ssh, common_sha256="1" * 64)).stderr
-        assert "identity_json_sha256" in go(ssh_scope(ssh, identity_json_sha256="1" * 64)).stderr
-        assert "manifest_sha256" in go(ssh_scope(ssh, manifest_sha256="1" * 64)).stderr
-        assert "key_fingerprint" in go(ssh_scope(ssh, key_fingerprint="SHA256:" + "B" * 43)).stderr
-        assert "namespace" in go(ssh_scope(ssh, namespace="other@v1")).stderr
-        assert "unknown key" in go(ssh_scope(ssh, extra="1")).stderr
-        assert "required key" in go(ssh_scope(ssh, build_commit=None)).stderr
+        assert "ssh-agent" in go(ssh_scope(ssh, tree=True), sock_env=False).stderr
+        assert "--expected-fingerprint" in go(ssh_scope(ssh, tree=True), fp=False).stderr
+        assert "outside the authorized window" in go(ssh_scope(ssh, tree=True, not_before=iso(now - timedelta(hours=3)), not_after=iso(now - timedelta(hours=2)))).stderr
+        assert "longer than 24 hours" in go(ssh_scope(ssh, tree=True, not_after=iso(now + timedelta(hours=30)))).stderr
+        assert "script_sha256" in go(ssh_scope(ssh, tree=True, script_sha256="1" * 64)).stderr
+        assert "common_sha256" in go(ssh_scope(ssh, tree=True, common_sha256="1" * 64)).stderr
+        assert "identity_json_sha256" in go(ssh_scope(ssh, tree=True, identity_json_sha256="1" * 64)).stderr
+        assert "manifest_sha256" in go(ssh_scope(ssh, tree=True, manifest_sha256="1" * 64)).stderr
+        assert "key_fingerprint" in go(ssh_scope(ssh, tree=True, key_fingerprint="SHA256:" + "B" * 43)).stderr
+        assert "namespace" in go(ssh_scope(ssh, tree=True, namespace="other@v1")).stderr
+        assert "unknown key" in go(ssh_scope(ssh, tree=True, extra="1")).stderr
+        assert "required key" in go(ssh_scope(ssh, tree=True, build_commit=None)).stderr
         other = ssh.ev / "not-the-manifest.json"
         other.write_text("{}\n")
-        assert "only the top-level release-manifest.json" in go(ssh_scope(ssh, manifest_sha256=sha_file(other)), manifest=other).stderr
-        r = ssh.run(*real_args(ssh, ssh_scope(ssh), ssh.outside / "e.sig", fp=True)[:-2], "--expected-fingerprint", "SHA256:" + "C" * 43, path_dirs=[fake],
-                    SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test")
+        assert "only the top-level release-manifest.json" in go(ssh_scope(ssh, tree=True, manifest_sha256=sha_file(other)), manifest=other).stderr
+        r = ssh.run(*real_args(ssh, ssh_scope(ssh, tree=True), ssh.outside / "e.sig", fp=True)[:-2], "--expected-fingerprint", "SHA256:" + "C" * 43, path_dirs=[fake],
+                    SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test", script=ssh.tscript)
         assert "expected one" in r.stderr
-        a = real_args(ssh, ssh_scope(ssh), ssh.outside / "rl.sig")
+        a = real_args(ssh, ssh_scope(ssh, tree=True), ssh.outside / "rl.sig")
         a[a.index("--ledger") + 1] = "relative-ledger.txt"
-        assert "absolute" in ssh.run(*a, path_dirs=[fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test").stderr
-        b = real_args(ssh, ssh_scope(ssh), ssh.outside / "nl.sig")
+        assert "absolute" in ssh.run(*a, path_dirs=[fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test", script=ssh.tscript).stderr
+        b = real_args(ssh, ssh_scope(ssh, tree=True), ssh.outside / "nl.sig")
         i = b.index("--ledger")
         del b[i:i + 2]
-        assert "--ledger FILE" in ssh.run(*b, path_dirs=[fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test").stderr
+        assert "--ledger DIR" in ssh.run(*b, path_dirs=[fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test", script=ssh.tscript).stderr
         assert not any(p.suffix == ".sig" for p in ssh.outside.iterdir())
         assert not (ssh.tmp / "tools.log").exists() or "-Y sign" not in (ssh.tmp / "tools.log").read_text()
     finally:
@@ -1181,7 +1219,7 @@ def test_scope_file_is_read_once_and_the_copy_is_parsed(ssh):
     """R4-03: the scope file is hashed and parsed from ONE private copy. A `cat` stub (first in PATH under the test switch) swaps the scope
     file for garbage right after the script read it; the run must still be judged on the bytes that were hashed (and so not on the swap)."""
     fake = make_fake_tools(ssh, ssh.key)
-    sc = ssh_scope(ssh)
+    sc = ssh_scope(ssh, tree=True)
     write_exec(fake / "cat", textwrap.dedent(f'''\
         #!/bin/bash
         /bin/cat "$@"; rc=$?
@@ -1191,7 +1229,7 @@ def test_scope_file_is_read_once_and_the_copy_is_parsed(ssh):
     sock = ssh.tmp / "agent.sock"
     s = bind_unix_socket(sock)
     try:
-        r = ssh.run(*real_args(ssh, sc, ssh.outside / "once.sig"), path_dirs=[fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test")
+        r = ssh.run(*real_args(ssh, sc, ssh.outside / "once.sig"), path_dirs=[fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test", script=ssh.tscript)
         assert r.returncode == 0, (r.stdout, r.stderr)
         assert "garbage" in sc.read_text(), "the swap happened"
     finally:
@@ -1215,7 +1253,9 @@ def helper_env(tmp: Path, mode: str, d: Path, requests: Path = None, stubs: Path
         e.update(R0P_HANDOFF_REQUESTS=str(requests or (d / "REQUESTS.sha256")), R0P_EXPECT_SIGNER_CN="Stub Test Org", R0P_EXPECT_ISSUER_SUBSTR="Stub Issuer CA")
     e.update({k: str(v) for k, v in env.items()})
     (tmp / "h").mkdir(exist_ok=True)
-    return clean_env(tmp / "h", [stubs] if stubs else [], **e)
+    if stubs:
+        e["R0P_POWERSHELL"] = str(stubs / "powershell.exe")     # the helper takes powershell.exe from an absolute path, not from PATH
+    return clean_env(tmp / "h", [], **e)
 
 
 def helper_run(tmp: Path, mode: str, f: Path, d: Path = None, requests: Path = None, stubs: Path = None, **env):
@@ -1396,7 +1436,7 @@ if [ "$1" = "-I" ] && [ "$2" = "-" ]; then
   [ -n "${SWAP_DURING_PRECHECK:-}" ] && [ "$3" = "$SWAP_DURING_PRECHECK" ] && printf 'SWAPPED BYTES' > "$3"
   if grep -q STUB-AUTHENTICODE "$3" 2>/dev/null; then echo 1; else echo 0; fi; exit 0
 fi
-if [ "$1" = "-I" ] && [ "$2" = "-c" ]; then echo "0.0-stub"; exit 0; fi
+if [ "$1" = "-I" ] && [ "$2" = "-c" ]; then case "$3" in *distributions*) echo "signify==0.0-stub";; *) echo "0.0-stub";; esac; exit 0; fi
 if [ "$1" = "-I" ]; then
   echo "python $*" >> "$LOG"
   shift 2
@@ -1441,19 +1481,15 @@ class Win:
         self.tools = tmp / "tools"
         (self.tools / "jsign").mkdir(parents=True)
         (self.tools / "jsign" / "jsign-7.6.jar").write_bytes(b"stand-in jar")
-        # a private copy of the script tree with the pinned jar hash replaced by the stand-in's (the production script is not edited)
-        tree = tmp / "tree"
-        (tree / "signing").mkdir(parents=True)
-        for src in (WIN, VERIFIER, COMMON):
-            shutil.copy(src, tree / "signing" / src.name)
-        for src in (IDJSON, GATE_JSON, GATE_PY):
-            shutil.copy(src, tree / src.name)
+        # a private copy of the script tree (patched library, see make_tree) with the pinned jar hash replaced by the stand-in's
+        tree = make_tree(tmp / "tree")
         text = (tree / "signing" / WIN.name).read_text()
         pin = "6cf58aa080e7ff82656f320cff8d4a3bff30408df8766806dcba3740dd839fa5"
         assert pin in text
         (tree / "signing" / WIN.name).write_text(text.replace(pin, sha_bytes(b"stand-in jar")))
         (tree / "signing" / WIN.name).chmod(0o755)
         self.script = tree / "signing" / WIN.name
+        self.common = tree / "signing" / COMMON.name
         self.tree = tree
         self.files = tmp / "files"
         self.files.mkdir()
@@ -1490,18 +1526,19 @@ class Win:
 
     @property
     def ledger(self) -> Path:
-        return self.tmp / "wledger.txt"
+        return self.tmp / "wledger"
 
     def scope(self, st, pairs, **over) -> Path:
         now = datetime.now(timezone.utc)
         d = {"scope_version": "2", "not_before": iso(now - timedelta(hours=1)), "not_after": iso(now + timedelta(hours=1)),
-             "script_sha256": sha_file(self.script), "common_sha256": sha_file(COMMON), "verifier_sha256": sha_file(VERIFIER),
+             "script_sha256": sha_file(self.script), "common_sha256": sha_file(self.common), "verifier_sha256": sha_file(VERIFIER),
              "identity_json_sha256": sha_file(IDJSON), "stage": st, "inputs_sha256": ",".join(sorted(h for _, h in pairs)),
              "az_endpoint": "https://eus.codesigning.azure.net/", "az_account": "stub-account", "az_profile": "stub-profile", "expected_cn": "CN=Stub Test Org",
              "gate_sha256": sha_file(GATE_JSON), "gate_tool_sha256": sha_file(GATE_PY), "distribution": "no",
              "evidence_manifest_sha256": "e" * 64, "build_commit": "b" * 40, "procedure_commit": "c" * 40,
              "tool_az_sha256": sha_file(self.stubs / "az"), "tool_java_sha256": sha_file(self.stubs / "java"),
-             "tool_python_sha256": sha_file(self.stubs / "py"), "tool_osslsigncode_sha256": "none",
+             "tool_python_sha256": sha_file(self.stubs / "py"), "tool_python_packages_sha256": sha_bytes(b"signify==0.0-stub\n"),
+             "tool_osslsigncode_sha256": "none",
              "container_listing_sha256": "none" if st == "inner" else sha_bytes(LISTING_TEXT)}
         d.update(over)
         p = self.tmp / f"wscope-{len(list(self.tmp.glob('wscope-*')))}.txt"
@@ -1598,7 +1635,7 @@ WIN_SCOPE_REFUSALS = [
     ("distribution disagrees", dict(distribution="yes"), "distribution=yes"),
     ("bad commit", dict(procedure_commit="abc"), "40-hex"), ("bad manifest", dict(evidence_manifest_sha256="x"), "evidence_manifest_sha256"),
     ("az tool hash", dict(tool_az_sha256="1" * 64), "tool_az_sha256"), ("java tool hash", dict(tool_java_sha256="1" * 64), "tool_java_sha256"),
-    ("python tool hash", dict(tool_python_sha256="1" * 64), "tool_python_sha256"), ("osslsigncode", dict(tool_osslsigncode_sha256="1" * 64), "tool_osslsigncode_sha256"),
+    ("python tool hash", dict(tool_python_sha256="1" * 64), "tool_python_sha256"), ("python packages hash", dict(tool_python_packages_sha256="1" * 64), "tool_python_packages_sha256"), ("osslsigncode", dict(tool_osslsigncode_sha256="1" * 64), "tool_osslsigncode_sha256"),
     ("listing for inner", dict(container_listing_sha256="1" * 64), "container_listing_sha256"),
     ("unknown", dict(extra="1"), "unknown key"), ("missing", dict(az_profile=None), "required key"), ("old version", dict(scope_version="1"), "scope_version must be 2"),
 ]
@@ -1610,7 +1647,7 @@ def test_windows_real_scope_refusals_make_no_azure_call(win, name, over, msg):
     sc = win.scope("inner", [(p, h)], **over)
     r = win.real("inner", [(p, h)], sc)
     assert r.returncode == 2 and msg in r.stderr, (r.stdout, r.stderr)
-    assert "az " not in win.log.read_text() and not (win.tmp / "wout").exists() and not win.ledger.exists()
+    assert "az " not in win.log.read_text() and not (win.tmp / "wout").exists() and ledger_claims(win.ledger) == []
 
 
 def test_windows_real_requires_authorization_ledger_and_env(win):
@@ -1621,7 +1658,7 @@ def test_windows_real_requires_authorization_ledger_and_env(win):
     r = win.run("inner", [(p, h)], "--real", "--i-have-owner-authorization", sha_file(sc), "--scope-file", sc)
     assert r.returncode == 2 and "R0P_AZ_ENDPOINT" in r.stderr
     r = win.real("inner", [(p, h)], sc, ledger=False)
-    assert r.returncode == 2 and "--ledger FILE" in r.stderr
+    assert r.returncode == 2 and "--ledger DIR" in r.stderr
     r = win.run("inner", [(p, h)], "--dry-run", "--real", **win.REAL_ENV)
     assert r.returncode == 2 and "at most one" in r.stderr
     r = win.run("inner", [(p, h)], "--i-have-owner-authorization", "0" * 64)
@@ -1658,7 +1695,7 @@ def test_windows_real_path_with_stubs_token_handling_ledger_and_two_stages(win):
     assert not [n for n in names if n.startswith(("AZURE", "AWS", "SSH_", "GITHUB", "GH_", "APPROVAL", "R0P_AZ"))]
     az_names = (win.stubs / "az-env-names.txt").read_text().split()
     assert not [n for n in az_names if n.startswith(("AWS", "SSH_", "GITHUB", "GH_", "APPROVAL", "R0P_AZ"))]
-    led = win.ledger.read_text()
+    led = ledger_text(win.ledger)
     assert "event=started" in led and "event=ended" in led and "success=1" in led
     assert (out / "SHA256SUMS").read_text().split()[1] == p.name
     # the same scope is refused a second time (one-time ledger), --allow-reuse is explicit
@@ -1683,7 +1720,7 @@ def test_windows_distribution_flag_runs_the_gate_and_refuses_while_decisions_are
     sc = win.scope("inner", [(p, h)], distribution="yes")
     r = win.real("inner", [(p, h)], sc, "--distribution")
     assert r.returncode == 2 and "REFUSES a distribution signing" in r.stderr and "D-LIC-1" in r.stderr
-    assert "az " not in win.log.read_text() and not win.ledger.exists()
+    assert "az " not in win.log.read_text() and ledger_claims(win.ledger) == []
 
 
 def test_windows_verification_failure_releases_nothing_and_leaves_a_marker(win):
@@ -1696,7 +1733,7 @@ def test_windows_verification_failure_releases_nothing_and_leaves_a_marker(win):
     assert [x.name for x in out.iterdir()] == ["FAILED"] and "FAILED-ATTEMPT" in (out / "FAILED").read_text()
     assert "STUBTOKEN" not in (out / "FAILED").read_text() + r.stdout + r.stderr
     assert not list(out.rglob("token"))
-    assert "success=0" in win.ledger.read_text(), "a failed run burns the scope: it is in the ledger"
+    assert "success=0" in ledger_text(win.ledger) and list((win.ledger / "claims").glob("*")), "a failed run burns the scope: it is claimed in the ledger"
 
 
 def test_windows_swapped_input_is_detected_after_the_copy(win):
@@ -1854,7 +1891,7 @@ def test_macos_ledger_makes_a_scope_single_use(mac):
     sc = mac.scope()
     r = mac.real(sc)
     assert r.returncode == 0
-    led = mac.ledger.read_text()
+    led = ledger_text(mac.ledger)
     assert led.count("event=started") == 1 and "event=notary-submit" in led and "event=ended rc=0 finished=1" in led
     sub = (mac.out / "notary" / "SUBMISSIONS.txt").read_text()
     assert "status=submitting" in sub and "id=11111111-2222-3333-4444-555555555555 status=Accepted" in sub and "input_sha256=" in sub
@@ -1863,13 +1900,13 @@ def test_macos_ledger_makes_a_scope_single_use(mac):
     assert r2.returncode == 1 and "already used" in r2.stderr and not (mac.work / "out2").exists() and len(mac.calls()) == calls_before
     r3 = mac.real(sc, "--allow-reuse", out=mac.work / "out3")
     assert r3.returncode == 0 and "--allow-reuse" in r3.stdout
-    assert mac.ledger.read_text().count("event=started") == 2
+    assert ledger_text(mac.ledger).count("event=started") == 2
 
 
 def test_macos_ledger_is_required_and_must_be_absolute(mac):
     sc = mac.scope()
     r = mac.real(sc, ledger=False)
-    assert r.returncode == 1 and "--ledger FILE" in r.stderr
+    assert r.returncode == 1 and "--ledger DIR" in r.stderr
     r = mac.real(sc, "--ledger", "relative.txt", ledger=False)
     assert r.returncode == 1 and "absolute" in r.stderr
     assert mac.calls() == []
@@ -1879,7 +1916,7 @@ def test_macos_failed_run_burns_the_scope(mac):
     mac.conf(NOTARY_MODE="invalid")
     sc = mac.scope()
     assert mac.real(sc).returncode != 0
-    assert "event=ended rc=1 finished=0" in mac.ledger.read_text()
+    assert "event=ended rc=1 finished=0" in ledger_text(mac.ledger)
     assert "already used" in mac.real(sc, out=mac.work / "retry").stderr
 
 
@@ -1959,6 +1996,12 @@ def _signing_texts():
 
 
 def test_every_literal_digest_and_fingerprint_has_a_recorded_provenance():
+    """SELF-CONSISTENCY ONLY unless R0P_PROVENANCE_SOURCES is set (R5-05): this test proves that every literal is LISTED, and the fingerprint is
+    re-derived from the committed public key; the other entries are verified against their sources only by the source-root run / the
+    tools/check-literals-against-sources.sh gate, which a signer must run before the first real run."""
+    if not os.environ.get("R0P_PROVENANCE_SOURCES"):
+        import warnings
+        warnings.warn("SELF-CONSISTENCY ONLY: LITERALS-PROVENANCE.json was NOT verified against its sources (set R0P_PROVENANCE_SOURCES / run tools/check-literals-against-sources.sh)", UserWarning)
     allowed = {e["value"].lower() if not e["value"].startswith("SHA256:") else e["value"]: e for e in PROV["entries"]}
     assert len(allowed) == len(PROV["entries"]), "duplicate entries"
     used = set()
@@ -1992,6 +2035,9 @@ def test_the_release_fingerprint_constant_is_the_published_one_everywhere():
         for m in re.finditer(r"SHA256:[A-Za-z0-9+/]{30,}", text):
             assert m.group(0) == RELEASE_FPR, f"{p.relative_to(ROOT)}: {m.group(0)}"
     assert RELEASE_FPR in {e["value"] for e in PROV["entries"]}
+    # derived from the committed PUBLIC key, in every run (R5-05)
+    fp = subprocess.run(["/usr/bin/ssh-keygen", "-lf", str(SIGN / "release-signing-key.pub")], capture_output=True, text=True).stdout.split()[1]
+    assert fp == RELEASE_FPR
 
 
 def test_provenance_entries_verify_against_their_sources():
@@ -2024,3 +2070,323 @@ def test_provenance_entries_verify_against_their_sources():
     sr = base / "r0prime/candidate/evidence-macos-arm64-unsigned-final3/SIGNING_REQUEST.md"
     if sr.is_file():
         assert "redevops-qa-release@v1" in sr.read_text() and 'NAMESPACE="redevops-qa-release@v1"' in SSH.read_text()
+
+
+# ====================================================================================================================
+# round 5 regression tests
+# ====================================================================================================================
+HOSTILE_FUNCS = ("compgen", "declare", "uname", "dirname", "basename", "id", "shasum", "exec_probe")
+
+
+def hostile_env_items(marker: Path) -> dict:
+    """Exported shell functions with the names the reviewer used (and more), plus fake credentials. A function body appends to `marker`."""
+    items = {f"BASH_FUNC_{n}%%": f"() {{ echo {n} >> {marker}; }}" for n in HOSTILE_FUNCS}
+    items.update(FAKE_AWS_SECRET_ACCESS_KEY="fake-secret", FAKE_GITHUB_TOKEN="fake-token", SSH_AUTH_SOCK="/nonexistent/agent.sock")
+    return items
+
+
+def test_r5_01_exported_functions_cannot_blind_or_run_before_the_scrub(tmp_path):
+    for n in "mws":
+        (tmp_path / n).mkdir()
+    mac, win, ssh = Mac(tmp_path / "m"), Win(tmp_path / "w"), Ssh(tmp_path / "s")
+    marker = tmp_path / "HOSTILE.log"
+    items = hostile_env_items(marker)
+    # macOS: dry run and a full ad-hoc run with stubs (the stub codesign records the environment it receives)
+    r = mac.run(**items)
+    assert r.returncode == 0, r.stderr
+    r = mac.run(mode="--adhoc-test", **items)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    names = (mac.state / "codesign-env").read_text().split()
+    assert not [n for n in names if n.startswith(("FAKE_", "SSH_", "BASH_FUNC"))], names
+    # Windows and SSHSIG dry runs
+    p, h = win.inner()
+    assert win.run("inner", [(p, h)], **items).returncode == 0
+    assert ssh.run("--manifest", ssh.manifest, "--pubkey", ssh.pub, "--expected-sha256", ssh.digest(), **items).returncode == 0
+    assert not marker.exists(), "no exported function ran: " + (marker.read_text() if marker.exists() else "")
+    # the production (unpatched) scripts as well
+    r = run(["/bin/bash", MAC, "--input-dmg", mac.dmg, "--expected-sha256", sha_file(mac.dmg), "--out-dir", mac.work / "o-prod"], {**clean_env(mac.home), **items})
+    assert r.returncode == 0 and not marker.exists()
+
+
+def test_r5_01_the_environment_check_cannot_be_blinded_and_a_preset_marker_is_not_trusted(mac, tmp_path):
+    marker = tmp_path / "HOSTILE.log"
+    # the privileged copy refuses a dirty environment itself: start it directly in the state the re-exec would produce, with extra variables
+    env = clean_env(mac.home, [mac.stubs], R0P_REEXEC="1", FAKE_TOKEN="x", R0P_ALLOW_NONSYSTEM_TOOLS="stub-test")
+    r = run(["/bin/bash", "-p", mac.script, "--input-dmg", mac.dmg, "--expected-sha256", sha_file(mac.dmg), "--out-dir", mac.out], env)
+    assert r.returncode == 1 and "not the allowlist" in r.stderr and "FAKE_TOKEN" in r.stderr
+    # a preset marker without privileged mode is ignored: the script re-executes anyway
+    env = {**clean_env(mac.home, [mac.stubs], R0P_REEXEC="1", R0P_SCRUBBED="1"), "FAKE_TOKEN": "x", **hostile_env_items(marker)}
+    r = run(["/bin/bash", mac.script, "--input-dmg", mac.dmg, "--expected-sha256", sha_file(mac.dmg), "--out-dir", mac.out], env)
+    assert r.returncode == 0 and not marker.exists(), (r.stdout, r.stderr)
+    # an exported function that survives in the environment of the privileged copy is refused
+    env = clean_env(mac.home, [], R0P_REEXEC="1")
+    env["BASH_FUNC_uname%%"] = "() { echo x >> " + str(marker) + "; }"
+    r = run(["/bin/bash", "-p", mac.script, "--input-dmg", mac.dmg, "--expected-sha256", sha_file(mac.dmg), "--out-dir", mac.out], env)
+    assert r.returncode == 1 and "exported-function" in r.stderr and not marker.exists()
+
+
+def test_r5_01_direct_execution_uses_privileged_mode_so_bash_env_is_not_read(mac, tmp_path):
+    hook = tmp_path / "benv.sh"
+    marker = tmp_path / "BASH_ENV.ran"
+    hook.write_text(f"echo ran > {marker}\n")
+    assert os.access(mac.script, os.X_OK) and mac.script.read_text().startswith("#!/bin/bash -p\n")
+    r = run([str(mac.script), "--input-dmg", mac.dmg, "--expected-sha256", sha_file(mac.dmg), "--out-dir", mac.out], {**clean_env(mac.home), "BASH_ENV": str(hook)})
+    assert r.returncode == 0 and not marker.exists(), "BASH_ENV was processed"
+    for s in (MAC, WIN, SSH):
+        assert s.read_text().startswith("#!/bin/bash -p\n")
+
+
+def test_r5_03_nothing_path_resolved_runs_before_the_scrub(tmp_path):
+    for n in "mws":
+        (tmp_path / n).mkdir()
+    mac, win, ssh = Mac(tmp_path / "m"), Win(tmp_path / "w"), Ssh(tmp_path / "s")
+    poison = tmp_path / "poison"
+    poison.mkdir()
+    log = tmp_path / "poison.log"
+    for c in ("dirname", "basename", "uname", "id", "shasum", "cat", "sed", "awk", "tr", "head", "date", "stat", "find", "ls", "wc", "grep", "mktemp", "plutil", "python3"):
+        write_exec(poison / c, f"#!/bin/bash\necho {c} >> {log}\nexec /usr/bin/{c} \"$@\"\n")
+    base = {"PATH": f"{poison}:/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(mac.home), "LANG": "C"}
+    r = run(["/bin/bash", MAC, "--input-dmg", mac.dmg, "--expected-sha256", sha_file(mac.dmg), "--out-dir", mac.work / "op"], base)
+    assert r.returncode == 0, r.stderr
+    p, h = win.inner()
+    r = run(["/bin/bash", WIN, "--stage", "inner", "--input", p, "--sha256", h, "--outdir", win.tmp / "op"], base)
+    assert r.returncode == 0, r.stderr
+    r = run(["/bin/bash", SSH, "--manifest", ssh.manifest, "--pubkey", ssh.pub, "--expected-sha256", ssh.digest()], base)
+    assert r.returncode == 0, r.stderr
+    assert not log.exists(), "PATH-resolved tools ran: " + (log.read_text() if log.exists() else "")
+    # the same with the poisoned PATH ahead of the stubs' switch NOT set: ad-hoc mode never reaches them either
+    r = run(["/bin/bash", MAC, "--adhoc-test", "--input-dmg", mac.dmg, "--expected-sha256", sha_file(mac.dmg), "--out-dir", mac.work / "oa"], base)
+    assert not log.exists()
+    # static: the first executable lines resolve nothing through PATH
+    for s in (MAC, WIN, SSH):
+        head = s.read_text().split("R0P_REEXEC=1 /bin/bash -p", 1)[0]
+        code = "\n".join(ln for ln in head.splitlines() if not ln.lstrip().startswith("#"))
+        for word in ("dirname", "basename", "command -v", "compgen", "declare", "uname", "$(", "`"):
+            assert word not in code, (s.name, word)
+        assert "builtin exec" in code and "/usr/bin/env -i" in code
+
+
+def test_r5_inherited_file_descriptors_are_closed(mac):
+    fds = []
+    for n in (9, 12, 20):
+        fd = os.open(__file__, os.O_RDONLY)
+        os.dup2(fd, n)
+        os.close(fd)
+        fds.append(n)
+    try:
+        a = ["/bin/bash", mac.script, "--adhoc-test", "--input-dmg", mac.dmg, "--expected-sha256", sha_file(mac.dmg), "--out-dir", mac.out]
+        r = subprocess.run([str(x) for x in a], env=mac.env(), capture_output=True, text=True, pass_fds=fds)
+    finally:
+        for n in fds:
+            os.close(n)
+    assert r.returncode == 0, r.stderr
+    seen = set(" ".join((mac.state / "codesign-fds").read_text().split("\n")).split())
+    assert not (seen & {"9", "12", "20"}), seen
+
+
+@pytest.mark.parametrize("value", ["stub-test", "1", "anything"])
+def test_r5_02_the_unit_test_switch_is_refused_in_real_mode_by_all_three_scripts(tmp_path, value):
+    home = tmp_path / "home"
+    home.mkdir()
+    poison = tmp_path / "poison"
+    poison.mkdir()
+    log = tmp_path / "poison.log"
+    for c in ("codesign", "xcrun", "hdiutil", "ssh-add", "ssh-keygen", "az", "java", "shasum"):
+        write_exec(poison / c, f"#!/bin/bash\necho {c} >> {log}\nexit 3\n")
+    env = clean_env(home, [poison], R0P_ALLOW_NONSYSTEM_TOOLS=value, R0P_CODESIGN_IDENTITY=TEST_IDENTITY, R0P_NOTARY_PROFILE=TEST_PROFILE)
+    f = tmp_path / "in.dmg"
+    f.write_bytes(b"x")
+    cases = [
+        [MAC, "--real", "--input-dmg", f, "--expected-sha256", sha_file(f), "--out-dir", tmp_path / "o", "--i-have-owner-authorization", "0" * 64, "--scope-file", f, "--notarize"],
+        [WIN, "--stage", "inner", "--real", "--input", f, "--sha256", sha_file(f), "--outdir", tmp_path / "w"],
+        [SSH, "--real", "--manifest", f, "--pubkey", f, "--expected-sha256", sha_file(f)],
+    ]
+    for c in cases:
+        r = run(["/bin/bash", *c], env)
+        assert r.returncode in (1, 2) and "unit-test switch" in r.stderr and "refused in --real" in r.stderr, (c[0].name, r.stderr)
+    assert not log.exists(), "a hostile tool ran"
+    # the switch still works for the dry run of a non-real mode (that is how the stub tests run)
+    r = run(["/bin/bash", MAC, "--input-dmg", f, "--expected-sha256", sha_file(f), "--out-dir", tmp_path / "o2"], clean_env(home, [], R0P_ALLOW_NONSYSTEM_TOOLS=value))
+    assert r.returncode == 0
+    # the production library carries exactly one patch point and the unit-test copy differs from it only there
+    assert COMMON.read_text().count("R0P-TEST-PATCH-POINT") == 1
+
+
+# ---- R5-04 ledger -------------------------------------------------------------------------------------------------
+def lib(tmp: Path, body: str, timeout=60):
+    script = 'die() { echo "ERROR: $*" >&2; exit 1; }; set -euo pipefail; . "%s"; %s' % (COMMON, body)
+    return run(["/bin/bash", "-p", "-c", script], clean_env(tmp), timeout=timeout)
+
+
+S64 = "ab" * 32
+
+
+def test_r5_04_ledger_claim_is_atomic_exactly_one_parallel_run_wins(tmp_path):
+    led = tmp_path / "ledger"
+    procs = [subprocess.Popen(["/bin/bash", "-p", "-c", 'die() { echo "ERROR: $*" >&2; exit 1; }; set -euo pipefail; . "%s"; r0p_ledger_check "%s" %s 0; r0p_ledger_claim "%s" %s 0 real x' % (COMMON, led, S64, led, S64)],
+                              env=clean_env(tmp_path), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(16)]
+    outs = [(p.wait(60), p.stderr.read()) for p in procs]
+    assert sum(1 for rc, _ in outs if rc == 0) == 1, outs
+    assert all("already" in e for rc, e in outs if rc != 0), outs
+    assert ledger_text(led).count("event=started") == 1 and ledger_claims(led) == [S64]
+    # the chain is intact and the modes are private
+    assert lib(tmp_path, f'r0p_ledger_verify "{led}"').returncode == 0
+    assert stat.S_IMODE(led.stat().st_mode) == 0o700
+    assert all(stat.S_IMODE(f.stat().st_mode) == 0o600 for f in (led / "events").glob("*.txt"))
+
+
+def test_r5_04_a_symlink_planted_at_the_next_event_or_over_the_ledger_is_never_followed(tmp_path):
+    led = tmp_path / "ledger"
+    assert lib(tmp_path, f'r0p_ledger_claim "{led}" {S64} 0 real x').returncode == 0
+    victim = tmp_path / "victim.txt"
+    victim.write_text("precious\n")
+    os.symlink(victim, led / "events" / "000002.txt")
+    r = lib(tmp_path, f'r0p_ledger_append "{led}" {S64} real ended rc=0')
+    assert r.returncode == 1 and victim.read_text() == "precious\n"
+    (led / "events" / "000002.txt").unlink()
+    # the ledger directory itself replaced by a symlink after the early check
+    real = tmp_path / "ledger-real"
+    led.rename(real)
+    os.symlink(real, led)
+    r = lib(tmp_path, f'r0p_ledger_append "{led}" {S64} real ended rc=0')
+    assert r.returncode == 1 and "symlink" in r.stderr
+    r = lib(tmp_path, f'r0p_ledger_check "{led}" {"cd" * 32} 0')
+    assert r.returncode == 1 and "symlink" in r.stderr
+    assert len(list((real / "events").glob("*.txt"))) == 1
+
+
+def test_r5_04_truncation_modification_and_gaps_are_detected(tmp_path):
+    led = tmp_path / "ledger"
+    assert lib(tmp_path, f'r0p_ledger_claim "{led}" {S64} 0 real x; r0p_ledger_append "{led}" {S64} real ended rc=0; r0p_ledger_append "{led}" {S64} real extra a').returncode == 0
+    ev = sorted((led / "events").glob("*.txt"))
+    assert len(ev) == 3 and lib(tmp_path, f'r0p_ledger_verify "{led}"').returncode == 0
+    saved = ev[2].read_text()
+    ev[2].unlink()                                           # truncation: the last event is deleted
+    r = lib(tmp_path, f'r0p_ledger_verify "{led}"')
+    assert r.returncode == 1 and "truncated" in r.stderr
+    ev[2].write_text(saved)
+    assert lib(tmp_path, f'r0p_ledger_verify "{led}"').returncode == 0
+    mid = ev[1].read_text()
+    ev[1].write_text(mid.replace("rc=0", "rc=9"))             # a middle event is edited: the chain breaks at the next event
+    r = lib(tmp_path, f'r0p_ledger_verify "{led}"')
+    assert r.returncode == 1 and "broken" in r.stderr
+    ev[1].write_text(mid)
+    ev[1].rename(led / "events" / "000009.txt")              # numbering gap
+    r = lib(tmp_path, f'r0p_ledger_verify "{led}"')
+    assert r.returncode == 1 and "gap" in r.stderr
+    (led / "events" / "000009.txt").rename(ev[1])
+    (led / "LENGTH").write_text("3 " + "0" * 63 + "1\n")      # the recorded length/hash no longer matches
+    assert lib(tmp_path, f'r0p_ledger_verify "{led}"').returncode == 1
+    # an old single-file ledger is not accepted
+    old = tmp_path / "old-ledger.txt"
+    old.write_text("scope=x\n")
+    r = lib(tmp_path, f'r0p_ledger_check "{old}" {S64} 0')
+    assert r.returncode == 1 and "must be a directory" in r.stderr
+    # group-writable directory refused
+    os.chmod(led, 0o770)
+    r = lib(tmp_path, f'r0p_ledger_check "{led}" {S64} 1')
+    assert r.returncode == 1 and "writable by group or others" in r.stderr
+
+
+def _slow_sign_tools(ssh: Ssh, real_key: Path, delay: float) -> Path:
+    d = make_fake_tools(ssh, real_key)
+    k = (d / "ssh-keygen").read_text().replace('echo "ssh-keygen $*"', f'case "$1 $2" in "-Y sign") sleep {delay};; esac; echo "ssh-keygen $*"', 1)
+    write_exec(d / "ssh-keygen", k)
+    return d
+
+
+def test_r5_04_two_parallel_sshsig_runs_under_one_scope_exactly_one_signs(ssh):
+    fake = _slow_sign_tools(ssh, ssh.key, 2.0)
+    sock = ssh.tmp / "agent.sock"
+    s = bind_unix_socket(sock)
+    try:
+        sc = ssh_scope(ssh, tree=True)
+        env = ssh.env([fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test")
+        procs = []
+        for i in (1, 2):
+            a = real_args(ssh, sc, ssh.outside / f"par{i}.sig")
+            procs.append(subprocess.Popen(["/bin/bash", str(ssh.tscript), *[str(x) for x in a]], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True))
+        rcs = [p.wait(60) for p in procs]
+        errs = [p.stderr.read() for p in procs]
+        assert sorted(rcs) == [0, 1], (rcs, errs)
+        assert len(list(ssh.outside.glob("par*.sig"))) == 1
+        assert any("already claimed" in e or "already used" in e for e in errs)
+        assert ledger_text(ssh.tmp / "ledger").count("event=started") == 1
+    finally:
+        s.close()
+
+
+def test_r5_04_two_parallel_macos_runs_under_one_scope_exactly_one_signs(mac):
+    sc = mac.scope()
+    base = mac.env(R0P_CODESIGN_IDENTITY=TEST_IDENTITY, R0P_NOTARY_PROFILE=TEST_PROFILE)
+    procs = []
+    for i in (1, 2):
+        a = ["/bin/bash", mac.script, "--real", "--notarize", "--i-have-owner-authorization", sha_file(sc), "--scope-file", sc, "--ledger", mac.ledger,
+             "--input-dmg", mac.dmg, "--expected-sha256", sha_file(mac.dmg), "--out-dir", mac.work / f"par{i}"]
+        procs.append(subprocess.Popen([str(x) for x in a], env=base, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True))
+    rcs = [p.wait(120) for p in procs]
+    errs = [p.stderr.read() for p in procs]
+    assert sorted(rcs) == [0, 1], (rcs, errs)
+    assert ledger_text(mac.ledger).count("event=started") == 1
+    assert len([c for c in mac.calls("xcrun") if "notarytool submit" in c]) == 1
+
+
+# ---- R5-05 literal provenance gate ------------------------------------------------------------------------------------
+CHECKER = SIGN / "tools" / "check-literals-against-sources.sh"
+
+
+def test_r5_05_the_source_gate_fails_when_a_source_is_missing_or_a_literal_is_wrong(tmp_path):
+    empty = tmp_path / "no-sources"
+    empty.mkdir()
+    r = run(["/bin/bash", CHECKER, empty], clean_env(tmp_path))
+    assert r.returncode == 1 and "not found under the source root" in r.stderr, "a missing source is a FAILURE, not a skip"
+    assert run(["/bin/bash", CHECKER], clean_env(tmp_path)).returncode == 2
+    assert run(["/bin/bash", CHECKER, tmp_path / "nonexistent"], clean_env(tmp_path)).returncode == 2
+    base = os.environ.get("R0P_PROVENANCE_SOURCES")
+    if base:
+        r = run(["/bin/bash", CHECKER, base], clean_env(tmp_path))
+        assert r.returncode == 0 and "0 problems" in r.stdout, (r.stdout, r.stderr)
+        # a wrong literal in the allowlist is caught by the gate (the default test cannot see it)
+        bad = json.loads((SIGN / "LITERALS-PROVENANCE.json").read_text())
+        bad["entries"][1]["value"] = "6cf58aa080e7ff82656f320cff8d4a3bff30408df8766806dcba3740dd839fa6"
+        pbad = tmp_path / "prov-bad.json"
+        pbad.write_text(json.dumps(bad))
+        r = run(["/usr/bin/python3", "-I", SIGN / "tools" / "check_literals_against_sources.py", base, "--provenance", pbad], clean_env(tmp_path))
+        assert r.returncode == 1 and "PROBLEM" in r.stderr
+        # a wrong fingerprint is caught even without sources: the committed public key is the authority
+        bad = json.loads((SIGN / "LITERALS-PROVENANCE.json").read_text())
+        bad["entries"][0]["value"] = RELEASE_FPR[:-1] + "B"
+        pbad.write_text(json.dumps(bad))
+        r = run(["/usr/bin/python3", "-I", SIGN / "tools" / "check_literals_against_sources.py", base, "--provenance", pbad], clean_env(tmp_path))
+        assert r.returncode == 1 and "ssh-keygen -lf" in r.stderr
+    assert "check-literals-against-sources.sh" in (SIGN / "SIGNING-PROCEDURE-R0PRIME.md").read_text()
+
+
+def test_r5_05_the_default_provenance_test_announces_that_it_is_self_consistency_only():
+    src = Path(__file__).read_text()
+    assert "SELF-CONSISTENCY ONLY" in src
+    pub = (SIGN / "release-signing-key.pub").read_text()
+    assert pub.startswith("ssh-ed25519 ") and "PRIVATE" not in pub and pub.count("\n") == 1
+
+
+# ---- R5-06 / INFO -----------------------------------------------------------------------------------------------------
+def test_r5_06_windows_evidence_states_what_the_tool_pins_cover(win):
+    p, h = win.inner()
+    sc = win.scope("inner", [(p, h)])
+    r = win.real("inner", [(p, h)], sc)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    ev = (win.tmp / "wout" / "EVIDENCE.txt").read_text()
+    assert "python packages (names+versions) " + sha_bytes(b"signify==0.0-stub\n") in ev
+    assert "NOT hashed (residual)" in ev
+    doc = (SIGN / "SIGNING-PROCEDURE-R0PRIME.md").read_text()
+    assert "Tool pins cover executables only" in doc and "argv of `codesign`" in doc
+
+
+def test_info_the_helper_takes_powershell_from_an_absolute_path_not_from_path(tmp_path):
+    exe, req, d2, ps = _round(tmp_path)
+    e = helper_env(tmp_path, "apply", d2, req, ps)
+    e.pop("R0P_POWERSHELL")
+    e["PATH"] = f"{ps}:/usr/bin:/bin"            # a powershell.exe on PATH must not be used
+    r = run(["/bin/bash", HELPER, exe], e)
+    assert r.returncode == 1 and "cannot locate powershell.exe" in r.stderr
+    assert exe.read_bytes() == b"MZ launcher"

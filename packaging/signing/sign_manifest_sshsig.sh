@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash -p
 # sign_manifest_sshsig.sh  (script version r0prime-sshsig-2)
 #
 # Sign (or only verify) the top-level evidence manifest of an R0-prime evidence set with an OpenSSH signature (SSHSIG), namespace
@@ -20,7 +20,7 @@
 #   --self-test    The script GENERATES a throwaway ed25519 key itself in a fresh private temp directory (comment signproc-TEST-KEY),
 #                  signs and verifies with it, and deletes it by name. There is no way to hand it another key, and it refuses any key
 #                  whose fingerprint equals the published release key's. No agent. --test-pubkey-out FILE exports the throwaway PUBLIC key.
-#   --real         Signs with the owner's ssh-agent. Needs --i-have-owner-authorization <sha256 of the scope file>, --scope-file, --ledger FILE,
+#   --real         Signs with the owner's ssh-agent. Needs --i-have-owner-authorization <sha256 of the scope file>, --scope-file, --ledger DIR,
 #                  --expected-sha256, --expected-fingerprint, --pubkey (public) and SSH_AUTH_SOCK (the owner's agent, key already loaded).
 #
 # SCOPE FILE (KEY=VALUE; read once into a private copy that is hashed and parsed; a TRIPWIRE against mistakes, NOT an authentication):
@@ -31,9 +31,29 @@
 #
 # Usage:
 #   sign_manifest_sshsig.sh --manifest FILE --pubkey FILE.pub --expected-sha256 HEX [--expected-fingerprint SHA256:...]
-#       [--dry-run | --self-test [--test-pubkey-out FILE] | --real --i-have-owner-authorization SHA --scope-file FILE --ledger FILE [--allow-reuse]]
+#       [--dry-run | --self-test [--test-pubkey-out FILE] | --real --i-have-owner-authorization SHA --scope-file FILE --ledger DIR [--allow-reuse]]
 #       [--sig-out FILE] [--record-out FILE]
 #   sign_manifest_sshsig.sh --verify-only --manifest FILE --sig FILE --pubkey FILE.pub [--expected-fingerprint SHA256:...]
+# ---- FIRST EXECUTABLE LINES (round 5, R5-01/R5-03): nothing here is resolved through PATH and no function is called. Only reserved words, parameter
+# expansion and `builtin exec` run before the environment is replaced. The script is started by bash -p (shebang or the re-exec below): privileged
+# mode ignores BASH_ENV/ENV/SHELLOPTS/BASHOPTS/CDPATH/GLOBIGNORE and does NOT import exported shell functions. Unless the shell is already in that
+# state AND this is the re-executed copy, the script re-executes itself through /usr/bin/env -i with the allowlist below, fixed PATH and fds 3-9 closed.
+# Residual: a function named `builtin` in the caller's environment would run before this block when the script is started WITHOUT -p
+# (an attacker who controls the operator's shell environment already runs code as the operator).
+if [[ "${R0P_REEXEC:-}" != 1 || "$-" != *p* ]]; then
+  IFS=$' \t\n'
+  R0P_KEEP=()
+  for R0P_V in R0P_ALLOW_NONSYSTEM_TOOLS; do
+    if [[ -n "${!R0P_V+x}" ]]; then R0P_KEEP+=("$R0P_V=${!R0P_V}"); fi
+  done
+  for R0P_A in "$@"; do
+    if [[ "$R0P_A" == --real && -n "${SSH_AUTH_SOCK:-}" ]]; then R0P_KEEP+=("SSH_AUTH_SOCK=$SSH_AUTH_SOCK"); fi
+  done
+  R0P_PATHV="/usr/bin:/bin:/usr/sbin:/sbin"
+  if [[ "${R0P_ALLOW_NONSYSTEM_TOOLS:-}" == stub-test ]]; then R0P_PATHV="${PATH:-$R0P_PATHV}"; fi
+  builtin exec 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- /usr/bin/env -i "PATH=$R0P_PATHV" "HOME=${HOME:-/nonexistent}" LANG=C LC_ALL=C "TERM=${TERM:-dumb}" \
+       ${R0P_KEEP[@]+"${R0P_KEEP[@]}"} R0P_REEXEC=1 /bin/bash -p "${BASH_SOURCE[0]}" "$@"
+fi
 case "$-" in *x*) echo "ERROR: xtrace is on; refusing" >&2; exit 1;; esac
 set +x
 set -euo pipefail
@@ -58,7 +78,7 @@ unset R0P_REEXEC
 r0p_fix_path ""
 export LC_ALL=C
 COMMON_SHA="$(r0p_sha "$SELF_DIR/signing-common.sh")"
-usage() { sed -n '/^# Usage:/,/^case /p' "$SELF" | sed '$d' | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+usage() { sed -n -E '/^# Usage:/,/^([^#]|$)/p' "$SELF" | sed '$d' | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
 
 MANIFEST=""; PUBKEY=""; EXPECTED_SHA=""; EXPECTED_FPR=""; SIG_OUT=""; RECORD_OUT=""; SIG_IN=""; TEST_PUB_OUT=""
 MODE_DRY=0; MODE_VERIFY=0; MODE_SELF=0; MODE_REAL=0; AUTH_SHA=""; SCOPE_FILE=""; LEDGER=""; ALLOW_REUSE=0
@@ -87,6 +107,7 @@ done
 [ $((MODE_DRY + MODE_VERIFY + MODE_SELF + MODE_REAL)) -le 1 ] || die "give at most one of --dry-run, --verify-only, --self-test, --real"
 if [ $((MODE_DRY + MODE_VERIFY + MODE_SELF + MODE_REAL)) -eq 0 ]; then MODE_DRY=1; fi
 if [ "$MODE_REAL" = 1 ]; then MODE=real; elif [ "$MODE_SELF" = 1 ]; then MODE=self-test; elif [ "$MODE_VERIFY" = 1 ]; then MODE=verify-only; else MODE=dry-run; fi
+if [ "$MODE" = real ]; then r0p_no_test_switch; fi      # the unit-test switch is refused in --real (round 5, R5-02)
 
 sha() { r0p_sha "$1"; }
 abspath() { ( cd "$(dirname "$1")" 2>/dev/null && printf '%s/%s' "$(pwd -P)" "$(basename "$1")" ); }
@@ -228,11 +249,11 @@ if [ "$MODE" = real ]; then
   [ -z "$(ls -A "$R0P_TMP/pub" | grep -v '^release.pub$' || true)" ] || die "unexpected files beside the public key copy"
   AGENT_LIST="$(env -i "PATH=$PATH" "HOME=$R0P_TMP/home" "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" "$SSHADD" -l 2>/dev/null)" || die "ssh-add -l could not list the owner's agent (is it running, and is the key loaded?); refusing: this script never falls back to a key file"
   echo "$AGENT_LIST" | awk '{print $2}' | grep -qx -F "$FPR" || die "the owner's agent does not hold the key $FPR; refusing (no fallback to a private key file, no prompt)"
-  r0p_ledger_append "$LEDGER" "$AUTH_SHA" real started "script=$(sha "$SELF") manifest=$ACTUAL_SHA key=$FPR"
+  r0p_ledger_claim "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE" real "script=$(sha "$SELF") manifest=$ACTUAL_SHA key=$FPR"
   echo "+ ssh-keygen -Y sign -U -n $NAMESPACE -f <private copy of the public key>   # the owner's ssh-agent signs"
   env -i "PATH=$PATH" "HOME=$R0P_TMP/home" "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" SSH_ASKPASS=/usr/bin/false SSH_ASKPASS_REQUIRE=never \
     "$KEYGEN" -Y sign -U -n "$NAMESPACE" -f "$R0P_TMP/pub/release.pub" <"$R0P_TMP/manifest" >"$R0P_TMP/sig" 2>"$R0P_TMP/sign.err" \
-    || { cat "$R0P_TMP/sign.err" >&2; r0p_ledger_append "$LEDGER" "$AUTH_SHA" real ended "rc=sign-failed"; die "ssh-keygen -Y sign failed (the agent did not sign)"; }
+    || { cat "$R0P_TMP/sign.err" >&2; ( r0p_ledger_append "$LEDGER" "$AUTH_SHA" real ended "rc=sign-failed" ) 2>/dev/null; die "ssh-keygen -Y sign failed (the agent did not sign)"; }
 else
   echo "+ ssh-keygen -Y sign -n $NAMESPACE -f <throwaway test key generated by this run>   # SELF-TEST"
   "$KEYGEN" -Y sign -n "$NAMESPACE" -f "$R0P_TMP/selftest/key" <"$R0P_TMP/manifest" >"$R0P_TMP/sig" 2>"$R0P_TMP/sign.err" || { cat "$R0P_TMP/sign.err" >&2; die "ssh-keygen -Y sign failed"; }

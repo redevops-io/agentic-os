@@ -1,4 +1,4 @@
-# signing-common.sh  (version r0prime-common-2)  -- SOURCED by the R0-prime signing scripts; it is not run on its own.
+# signing-common.sh  (version r0prime-common-3)  -- SOURCED by the R0-prime signing scripts; it is not run on its own.
 # Shared safety functions so that the three scripts (macOS, Windows, SSHSIG) behave the same way. Its sha256 is bound by every
 # scope file (`common_sha256`), like the script's own. bash 3.2 compatible. No `set -x`, no rm -r, no secrets.
 #
@@ -14,36 +14,32 @@
 #   r0p_ledger_*     R4-04  one-time ledger: a scope hash that was used is refused again unless --allow-reuse is given
 #   r0p_gate         R4-09  distribution gate: bound to the repository copy by hash, printed, enforced with --distribution
 
-R0P_BASE_ALLOW=" PATH HOME LANG LC_ALL TERM PWD OLDPWD SHLVL _ R0P_REEXEC "
-R0P_FIXED_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
-R0P_TMP=""
-
 r0p_sha() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
 r0p_sha_str() { printf '%s' "$1" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'; }
 
-# r0p_scrub "<space separated extra variable names that may pass>" "$@"
-# The environment of the running script must contain ONLY the base allowlist plus the named extras and no exported function. If it
-# does not, the script re-executes itself ONCE under `env -i` with exactly those variables. There is no flag that skips this check:
-# R0P_REEXEC only prevents a loop, and if it is set while the environment is still not clean the script stops.
+# r0p_scrub "<space separated extra variable names that may be present>"
+# VERIFICATION, not re-execution (round 5): each script re-executes itself unconditionally in its first lines (bash -p, /usr/bin/env -i, fixed PATH,
+# fds 3-9 closed) before any function or PATH-resolved command runs. Here the running copy checks that it really is that copy: privileged mode, the
+# re-exec marker, an environment that is exactly the allowlist, no BASH_FUNC_ entry, and it closes every other inherited file descriptor. Anything else
+# is fatal (there is no flag that skips this). Builtins are called with `builtin` and externals by absolute path.
+R0P_BASE_ALLOW=" PATH HOME LANG LC_ALL TERM PWD OLDPWD SHLVL _ R0P_REEXEC "
+R0P_FIXED_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+R0P_TMP=""
 r0p_scrub() {
-  local extra=" $1 " v bad="" allow keep=() i
-  shift
+  local extra=" $1 " v bad="" allow i
   allow="$R0P_BASE_ALLOW${extra# }"
-  for v in $(compgen -A export); do
+  [[ "$-" == *p* && "${R0P_REEXEC:-}" == 1 ]] || { echo "ERROR: the script is not the re-executed privileged-mode copy; refusing" >&2; exit 1; }
+  for v in $(builtin compgen -A export); do
     case "$allow" in *" $v "*) ;; *) bad="$bad $v";; esac
   done
-  if [ -n "$(declare -xf 2>/dev/null)" ]; then bad="$bad <exported-function>"; fi
-  if [ -z "$bad" ]; then return 0; fi
-  if [ "${R0P_REEXEC:-}" = 1 ]; then echo "ERROR: the environment is still not the allowlist after the scrub (extra:$bad); refusing" >&2; exit 1; fi
-  for v in $extra; do
-    if [ -n "${!v+x}" ]; then keep+=("$v=${!v}"); fi
-  done
-  exec env -i "PATH=${PATH:-/usr/bin:/bin}" "HOME=${HOME:-/nonexistent}" LANG=C LC_ALL=C "TERM=${TERM:-dumb}" \
-       ${keep[@]+"${keep[@]}"} R0P_REEXEC=1 "${BASH:-/bin/bash}" "$SELF" "$@"
+  if /usr/bin/env | /usr/bin/grep -q '^BASH_FUNC_'; then bad="$bad <exported-function>"; fi
+  if [ -n "$bad" ]; then echo "ERROR: the environment is not the allowlist (extra:$bad); refusing" >&2; exit 1; fi
+  # file descriptors above 9 (3 to 9 were closed by the re-exec); 255 is bash's own script descriptor and is left alone
+  for ((i = 10; i < 64; i++)); do eval "exec $i>&-"; done
 }
 
 # r0p_fix_path [extra-dirs]  : PATH becomes the fixed system path (+ the validated extra directories). R0P_ALLOW_NONSYSTEM_TOOLS=stub-test
-# keeps the inherited PATH (unit tests only; the scripts print it in their evidence).
+# keeps the inherited PATH (unit tests only) and is REFUSED in --real (r0p_no_test_switch).
 R0P_STUBS=0
 r0p_fix_path() {
   local extra="${1:-}" d
@@ -62,6 +58,9 @@ r0p_fix_path() {
   fi
   PATH="$R0P_FIXED_PATH${extra:+:$extra}"; export PATH
 }
+# The unit-test switch must never be honoured when a real identity, agent or service can be reached (round 5, R5-02). Called by each script as soon
+# as the mode is known. (The unit tests run a copy of the library in which the next line is replaced by a no-op; that copy has another sha256.)
+r0p_no_test_switch() { if [ -n "${R0P_ALLOW_NONSYSTEM_TOOLS:-}" ]; then die "R0P_ALLOW_NONSYSTEM_TOOLS (a unit-test switch) is refused in --real"; fi; }   # R0P-TEST-PATCH-POINT
 
 # private temp directory (0700) for scope copies and the like; removed by r0p_tmp_cleanup
 r0p_mktmp() {
@@ -120,25 +119,101 @@ r0p_window_check() {
   { [ "$now" -ge "$a" ] && [ "$now" -le "$b" ]; } || die "scope file: now (UTC $(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)) is outside the authorized window $1 .. $2"
 }
 
-# one-time ledger -------------------------------------------------------------------------------------------------------
-# r0p_ledger_check LEDGER SCOPE_SHA ALLOW_REUSE(0/1): a scope that appears in the ledger is refused unless reuse was asked for.
-r0p_ledger_check() {
-  local l="$1" s="$2" allow="$3"
-  [ -n "$l" ] || die "--real needs --ledger FILE (an append-only record of used scope files, kept outside the repository)"
+# one-time ledger (round 5, R5-04) ----------------------------------------------------------------------------------------
+# --ledger DIR is a DIRECTORY the owner keeps outside the repository:
+#   events/NNNNNN.txt  one line per event, created with O_EXCL (noclobber) so a planted symlink or file is never followed or overwritten;
+#                      each line carries the sha256 of the previous event file (a hash chain)
+#   claims/<scope sha> one directory per scope file, created with mkdir (atomic): the first run that claims a scope wins, a parallel run loses
+#   LENGTH             "<number of events> <sha256 of the last event file>", rewritten after each event (detects deletion of the last events)
+#   lock/              mkdir lock held while events are appended
+# The chain and LENGTH make tampering with the middle or the tail DETECTABLE; they cannot stop the owner's own account from deleting the whole
+# directory (documented). The scope is CLAIMED (burned) right before the first use of the owner's session and stays claimed if the run fails.
+R0P_ZERO64="$(printf '%064d' 0)"      # the "previous hash" of the first event
+r0p_ledger_prepare() {
+  local l="$1" perm owner s
+  [ -n "$l" ] || die "--real needs --ledger DIR (a directory outside the repository that records used scope files)"
   case "$l" in /*) ;; *) die "--ledger must be an absolute path";; esac
-  [ -d "$(dirname "$l")" ] || die "the directory of --ledger does not exist"
-  if [ -e "$l" ] || [ -L "$l" ]; then
-    [ -f "$l" ] && [ ! -L "$l" ] || die "--ledger must be a regular file (not a symlink)"
-    [ "$(/usr/bin/stat -f %u "$l")" = "$(/usr/bin/id -u)" ] || die "--ledger is owned by someone else"
-    if /usr/bin/grep -q "^scope=$s " "$l"; then
-      if [ "$allow" = 1 ]; then echo "NOTE: --allow-reuse: this scope file was used before (see the ledger); reuse is recorded"
-      else die "this scope file (sha256 $s) was already used (it is in the ledger). Write a NEW scope file for a new run, or pass --allow-reuse after deciding that a repeat is intended"; fi
-    fi
+  [ -d "$(dirname "$l")" ] || die "the parent directory of --ledger does not exist"
+  [ ! -L "$l" ] || die "--ledger must not be a symlink"
+  if /bin/mkdir "$l" 2>/dev/null; then
+    # created by this run: build the layout, LENGTH LAST (parallel runs wait for it)
+    /bin/mkdir "$l/events" "$l/claims" || die "cannot create the ledger directory"
+    chmod 700 "$l" "$l/events" "$l/claims"
+    ( set -C; printf '0 %s\n' "$R0P_ZERO64" > "$l/LENGTH" ) || die "cannot create LENGTH"
+  else
+    [ -d "$l" ] || die "--ledger must be a directory (an older single-file ledger is not accepted: use a new directory)"
+    local i
+    for ((i = 0; i < 50; i++)); do [ -f "$l/LENGTH" ] && break; /bin/sleep 0.1; done      # another run may be creating it right now
+    owner="$(/usr/bin/stat -f %u "$l")"; perm="$(/usr/bin/stat -f %Lp "$l")"
+    [ "$owner" = "$(/usr/bin/id -u)" ] || die "--ledger is owned by someone else"
+    case "${perm: -2}" in [0145][0145]) ;; *) die "--ledger is writable by group or others (mode $perm)";; esac
+    for s in events claims; do [ -d "$l/$s" ] && [ ! -L "$l/$s" ] || die "--ledger: $s is missing or a symlink"; done
   fi
 }
-# r0p_ledger_append LEDGER SCOPE_SHA MODE EVENT [DETAIL]  (the file is created 0600 by umask 077)
+# r0p_ledger_verify LEDGER : chain intact, numbering contiguous, not shorter than the recorded length; prints nothing; sets R0P_LEDGER_N / R0P_LEDGER_LAST
+R0P_LEDGER_N=0; R0P_LEDGER_LAST="$R0P_ZERO64"
+r0p_ledger_verify() {
+  local l="$1" n=0 prev="$R0P_ZERO64" f rec_n rec_h line
+  read -r rec_n rec_h < "$l/LENGTH" 2>/dev/null || die "ledger: LENGTH is missing or unreadable"
+  [[ "$rec_n" =~ ^[0-9]+$ && "$rec_h" =~ ^[0-9a-f]{64}$ ]] || die "ledger: LENGTH is malformed"
+  for f in "$l"/events/*.txt; do
+    [ -e "$f" ] || break
+    [ -f "$f" ] && [ ! -L "$f" ] || die "ledger: $f is not a regular file"
+    n=$((n + 1))
+    [ "${f##*/}" = "$(printf '%06d' "$n").txt" ] || die "ledger: event numbering has a gap or an unexpected file at $f"
+    IFS= read -r line < "$f" || true
+    case "$line" in "seq=$n prev=$prev "*) ;; *) die "ledger: the hash chain is broken at event $n (the ledger was modified)";; esac
+    prev="$(r0p_sha "$f")"
+    if [ "$n" -eq "$rec_n" ] && [ "$prev" != "$rec_h" ]; then die "ledger: event $n does not match the recorded length file (the ledger was modified)"; fi
+  done
+  [ "$n" -ge "$rec_n" ] || die "ledger: it holds $n events but $rec_n were recorded (the ledger was truncated)"
+  R0P_LEDGER_N=$n; R0P_LEDGER_LAST="$prev"
+}
+r0p_ledger_lock() {
+  local i
+  for ((i = 0; i < 100; i++)); do
+    if /bin/mkdir "$1/lock" 2>/dev/null; then return 0; fi
+    /bin/sleep 0.1
+  done
+  die "the ledger is locked (a parallel run, or a stale lock: remove $1/lock only when no run is active)"
+}
+r0p_ledger_unlock() { /bin/rmdir "$1/lock" 2>/dev/null || true; }
+# r0p_ledger_check LEDGER SCOPE_SHA ALLOW_REUSE : read-only early refusal (the atomic claim comes later)
+r0p_ledger_check() {
+  local l="$1" s="$2" allow="$3"
+  r0p_ledger_prepare "$l"
+  r0p_ledger_verify "$l"
+  if [ -d "$l/claims/$s" ]; then
+    if [ "$allow" = 1 ]; then echo "NOTE: --allow-reuse: this scope file was used before (see the ledger); reuse is recorded"
+    else die "this scope file (sha256 $s) was already used (it is in the ledger). Write a NEW scope file for a new run, or pass --allow-reuse after deciding that a repeat is intended"; fi
+  fi
+}
+# r0p_ledger_append LEDGER SCOPE_SHA MODE EVENT [DETAIL]
 r0p_ledger_append() {
-  printf 'scope=%s time=%s mode=%s event=%s%s\n' "$2" "$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)" "$3" "$4" "${5:+ $5}" >> "$1"
+  local l="$1" s="$2" seq prev f line
+  r0p_ledger_lock "$l"
+  if [ -L "$l" ] || [ -L "$l/events" ]; then r0p_ledger_unlock "$l"; die "ledger: the ledger path became a symlink; refusing"; fi
+  r0p_ledger_verify "$l"
+  seq=$((R0P_LEDGER_N + 1)); prev="$R0P_LEDGER_LAST"
+  f="$l/events/$(printf '%06d' "$seq").txt"
+  line="seq=$seq prev=$prev scope=$s time=$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ) mode=$3 event=$4${5:+ $5}"
+  if ! ( set -C; printf '%s\n' "$line" > "$f" ) 2>/dev/null; then r0p_ledger_unlock "$l"; die "ledger: $f already exists or is a symlink; refusing (nothing was followed or overwritten)"; fi
+  chmod 600 "$f"
+  ( set -C; printf '%s %s\n' "$seq" "$(r0p_sha "$f")" > "$l/LENGTH.new" ) 2>/dev/null || { /bin/rm -f "$l/LENGTH.new"; ( set -C; printf '%s %s\n' "$seq" "$(r0p_sha "$f")" > "$l/LENGTH.new" ); }
+  /bin/mv -f "$l/LENGTH.new" "$l/LENGTH"
+  r0p_ledger_unlock "$l"
+}
+# r0p_ledger_claim LEDGER SCOPE_SHA ALLOW_REUSE MODE DETAIL : ATOMICALLY claim the scope (mkdir), then record "started". Exactly one of several
+# parallel runs of the same scope wins; the others stop here, before any use of the owner's session. A claim is never released.
+r0p_ledger_claim() {
+  local l="$1" s="$2" allow="$3"
+  r0p_ledger_prepare "$l"
+  r0p_ledger_lock "$l"
+  if /bin/mkdir "$l/claims/$s" 2>/dev/null; then :
+  elif [ "$allow" = 1 ]; then echo "NOTE: --allow-reuse: the scope was claimed before; this repeat is recorded"
+  else r0p_ledger_unlock "$l"; die "this scope file (sha256 $s) is already claimed (used before, or by a parallel run); refusing"; fi
+  r0p_ledger_unlock "$l"
+  r0p_ledger_append "$l" "$s" "$4" started "${5:-}${allow:+ allow_reuse=$allow}"
 }
 
 # distribution gate -----------------------------------------------------------------------------------------------------

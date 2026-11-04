@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash -p
 # sign_and_notarize_r0prime_macos_v3.sh  (script version r0prime-3)
 #
 # Sign, (optionally) notarize + staple, and verify the macOS arm64 .dmg of "Agentic Apps R0-prime" WITHOUT modifying the input.
@@ -36,7 +36,7 @@
 #   distribution=yes|no (must agree with --distribution)  gate_sha256  gate_tool_sha256  evidence_manifest_sha256
 #   build_commit  procedure_commit (40-hex git ids, recorded, not verified here)
 # Real mode refuses if the window is not open, any value differs from what this run would use, notarize/--notarize disagree, or the
-# scope file is in the ledger (--ledger FILE, required; one-time use; --allow-reuse is recorded). With --distribution the distribution gate
+# scope file is in the ledger (--ledger DIR, required; one-time use; --allow-reuse is recorded). With --distribution the distribution gate
 # (packaging/check-distribution-gate.py, bound by hash) must pass; without it a PRIVATE-CANDIDATE statement is printed: signing and
 # notarization do not imply permission to distribute.
 #
@@ -61,7 +61,24 @@
 # Usage:
 #   sign_and_notarize_r0prime_macos_v3.sh --input-dmg PATH --expected-sha256 HEX --out-dir DIR
 #       [--dry-run | --adhoc-test | --real --i-have-owner-authorization SHA --scope-file FILE [--notarize]]
-#       [--entitlements FILE] [--protected-dir DIR]... [--notary-timeout 30m] [--ledger FILE] [--allow-reuse] [--distribution]
+#       [--entitlements FILE] [--protected-dir DIR]... [--notary-timeout 30m] [--ledger DIR] [--allow-reuse] [--distribution]
+# ---- FIRST EXECUTABLE LINES (round 5, R5-01/R5-03): nothing here is resolved through PATH and no function is called. Only reserved words, parameter
+# expansion and `builtin exec` run before the environment is replaced. The script is started by bash -p (shebang or the re-exec below): privileged
+# mode ignores BASH_ENV/ENV/SHELLOPTS/BASHOPTS/CDPATH/GLOBIGNORE and does NOT import exported shell functions. Unless the shell is already in that
+# state AND this is the re-executed copy, the script re-executes itself through /usr/bin/env -i with the allowlist below, fixed PATH and fds 3-9 closed.
+# Residual: a function named `builtin` in the caller's environment would run before this block when the script is started WITHOUT -p
+# (an attacker who controls the operator's shell environment already runs code as the operator).
+if [[ "${R0P_REEXEC:-}" != 1 || "$-" != *p* ]]; then
+  IFS=$' \t\n'
+  R0P_KEEP=()
+  for R0P_V in R0P_CODESIGN_IDENTITY R0P_NOTARY_PROFILE R0P_ALLOW_NONSYSTEM_TOOLS; do
+    if [[ -n "${!R0P_V+x}" ]]; then R0P_KEEP+=("$R0P_V=${!R0P_V}"); fi
+  done
+  R0P_PATHV="/usr/bin:/bin:/usr/sbin:/sbin"
+  if [[ "${R0P_ALLOW_NONSYSTEM_TOOLS:-}" == stub-test ]]; then R0P_PATHV="${PATH:-$R0P_PATHV}"; fi
+  builtin exec 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- /usr/bin/env -i "PATH=$R0P_PATHV" "HOME=${HOME:-/nonexistent}" LANG=C LC_ALL=C "TERM=${TERM:-dumb}" \
+       ${R0P_KEEP[@]+"${R0P_KEEP[@]}"} R0P_REEXEC=1 /bin/bash -p "${BASH_SOURCE[0]}" "$@"
+fi
 case "$-" in *x*) echo "ERROR: xtrace is on; refusing (it could print secrets)" >&2; exit 1;; esac
 set +x
 set -euo pipefail
@@ -80,7 +97,7 @@ r0p_fix_path ""      # fixed system PATH (R0P_ALLOW_NONSYSTEM_TOOLS=stub-test ke
 export LC_ALL=C
 COMMON_SHA="$(r0p_sha "$SELF_DIR/signing-common.sh")"
 
-usage() { sed -n '/^# Usage:/,/^case /p' "$SELF" | sed '$d' | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+usage() { sed -n -E '/^# Usage:/,/^([^#]|$)/p' "$SELF" | sed '$d' | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
 
 INPUT_DMG=""; EXPECTED_SHA=""; OUT_DIR=""; ENTITLEMENTS="$SELF_DIR/../macos/sidecar.entitlements.plist"
 MODE_DRY=0; MODE_ADHOC=0; MODE_REAL=0; AUTH_SHA=""; SCOPE_FILE=""; DO_NOTARIZE=0
@@ -114,6 +131,7 @@ done
 if [ $((MODE_DRY + MODE_ADHOC + MODE_REAL)) -eq 0 ]; then MODE_DRY=1; fi
 if [ "$MODE_REAL" = 1 ]; then MODE="real"; elif [ "$MODE_ADHOC" = 1 ]; then MODE="adhoc-test"; else MODE="dry-run"; fi
 PLAN=0; [ "$MODE" = dry-run ] && PLAN=1
+if [ "$MODE" = real ]; then r0p_no_test_switch; fi      # the unit-test switch is refused in --real (round 5, R5-02)
 [ "$(uname -s)" = Darwin ] || die "macOS only"
 [ "$(id -u)" -ne 0 ] || die "do not run as root"
 
@@ -250,7 +268,7 @@ if [ "$PLAN" = 0 ]; then
     if [ "$MODE" = real ]; then
       case "$tp" in
         /usr/bin/*|/bin/*|/usr/sbin/*|/sbin/*|/Library/Developer/CommandLineTools/usr/bin/*|/Applications/Xcode*.app/Contents/Developer/*) ;;
-        *) if [ "${R0P_ALLOW_NONSYSTEM_TOOLS:-}" = "stub-test" ]; then NONSYSTEM=1; else die "in --real the tool $t must resolve to a system location (got $tp)"; fi;;
+        *) if [ "$R0P_STUBS" = 1 ]; then NONSYSTEM=1; else die "in --real the tool $t must resolve to a system location (got $tp)"; fi;;
       esac
     fi
   done
@@ -301,7 +319,7 @@ cleanup() {
   local rc=$? m
   set +e
   if [ -n "${NOTARY_PID:-}" ]; then kill "$NOTARY_PID" 2>/dev/null; fi
-  if [ "${LEDGER_STARTED:-0}" = 1 ]; then r0p_ledger_append "$LEDGER" "$AUTH_SHA" real "ended" "rc=$rc finished=$FINISHED"; fi
+  if [ "${LEDGER_STARTED:-0}" = 1 ]; then ( r0p_ledger_append "$LEDGER" "$AUTH_SHA" real "ended" "rc=$rc finished=$FINISHED" ) 2>/dev/null; fi
   r0p_tmp_cleanup
   for m in ${MOUNTS[@]+"${MOUNTS[@]}"}; do [ -n "$m" ] && hdiutil detach "$m" -quiet 2>/dev/null; done
   if [ "$PLAN" = 0 ] && [ "$FINISHED" != 1 ] && [ -d "$OUT_DIR" ]; then
@@ -469,7 +487,7 @@ csign() {
 cs() { csign --options runtime "$@"; }
 if [ "$MODE" = real ]; then
   # the scope is consumed from here on (the first use of the keychain identity): a failed run burns it, as a failed submission is never reused
-  r0p_ledger_append "$LEDGER" "$AUTH_SHA" real started "script=$SELF_SHA input=$ACTUAL_SHA"
+  r0p_ledger_claim "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE" real "script=$SELF_SHA input=$ACTUAL_SHA"
   LEDGER_STARTED=1
 fi
 cs --identifier "$SIDECAR_ID" --entitlements "$ENTITLEMENTS" "$MACOS/$SIDECAR_EXE"

@@ -22,7 +22,7 @@ review but cannot approve it.
 * This is a PRIVATE candidate signing: [ ] yes (scope `distribution=no`; the run prints the open decisions and the statement that signing does not imply permission to distribute)  [ ] no, it is a DISTRIBUTION candidate (scope `distribution=yes` and `--distribution`: the script runs `check-distribution-gate.py --platform <p> --distribution` itself and refuses while any blocker is OPEN; decisions recorded in `docs/legal/OWNER_DECISION_FORM.md`).
 * Signing does not publish, tag, release or upload anything except what a block below names. Where the signed files may be stored afterwards: ______________________
 * Time window of this session (UTC): from ____-__-__T__:__:__Z to ____-__-__T__:__:__Z (at most 24 hours; the scripts refuse a longer one). Outside it nothing may be signed under this authorization.
-* Ledger file (absolute path, outside the repository; one line per use; a scope file already in it is refused unless `--allow-reuse` is given and recorded): ______________________
+* Ledger DIRECTORY (absolute path, outside the repository, created by the script; hash-chained events; a scope file already claimed in it is refused unless `--allow-reuse` is given and recorded): ______________________
 * Build commit (40 hex, the commit the dmg/installers were built from) and procedure commit (40 hex, the commit of `packaging/signing`): ______________________ / ______________________ (recorded in the evidence, not verified by the scripts)
 * Who runs the commands, at their own terminal: ______________________ . Who reviews the output (not the person who ran it): ______________________
 * Evidence set the dmg belongs to (directory, manifest sha256 obtained out of band): ______________________ / ______________________________________________________________
@@ -125,10 +125,11 @@ procedure_commit=<40 hex>
 tool_az_sha256=<sha256 of the az executable the fixed PATH + R0P_TOOLS_DIR resolves to>
 tool_java_sha256=<sha256 of the java executable>
 tool_python_sha256=<sha256 of the python executable given to --python>
+tool_python_packages_sha256=<sha256 of the sorted "name==version" list of the python distributions, one per line, with a final newline>
 tool_osslsigncode_sha256=<sha256 of osslsigncode, or none>
 container_listing_sha256=none
 ```
-Also supply `R0P_TOOLS_DIR` (absolute, yours, not writable by others) when az/java/python live outside the system directories; pass `--ledger <absolute path>`.
+(These pins cover executables and the python package NAMES and VERSIONS only; library files are not hashed: procedure R12.) Also supply `R0P_TOOLS_DIR` (absolute, yours, not writable by others) when az/java/python live outside the system directories; pass `--ledger <absolute path>`.
 You are logged in with `az login` yourself before the run; the script asks `az` for one access token, keeps it in a 0600 file for the duration of the Jsign call and removes it.
 
 Signed: ______________________  Date: ____-__-__

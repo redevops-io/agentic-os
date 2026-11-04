@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash -p
 # sign_windows_r0prime_v3.sh   (script version r0prime-win-3)
 #
 # Authenticode-sign the Windows files of "Agentic Apps R0-prime" from macOS with Jsign 7.6 against Azure Artifact Signing
@@ -36,7 +36,7 @@
 # common_sha256, verifier_sha256, identity_json_sha256, stage, inputs_sha256 (sorted, comma separated), az_endpoint, az_account, az_profile,
 # expected_cn, gate_sha256, gate_tool_sha256, distribution=yes|no (must agree with --distribution), evidence_manifest_sha256, build_commit,
 # procedure_commit, tool_az_sha256, tool_java_sha256, tool_python_sha256, tool_osslsigncode_sha256 (or none), container_listing_sha256 (stage
-# container: the file list of the rebuilt installers, passed with --container-listing; none for stage inner). --ledger FILE is required (one-time
+# container: the file list of the rebuilt installers, passed with --container-listing; none for stage inner). --ledger DIR is required (one-time
 # use of a scope; --allow-reuse is recorded). Tools resolve from a fixed system PATH plus the owner's R0P_TOOLS_DIR and are pinned by hash.
 # The files are re-hashed right after they are copied into the private work directory and again right before each Jsign call.
 #
@@ -51,9 +51,26 @@
 # Usage:
 #   sign_windows_r0prime_v3.sh --stage inner|container --input FILE --sha256 HEX [--input FILE2 --sha256 HEX2 ...] --outdir NEWDIR
 #        [--dry-run | --throwaway-test | --real --i-have-owner-authorization SHA --scope-file FILE]
-#        [--ledger FILE] [--allow-reuse] [--distribution] [--container-listing FILE]
+#        [--ledger DIR] [--allow-reuse] [--distribution] [--container-listing FILE]
 #        [--name "Application name"] [--url URL] [--throwaway-dir DIR] [--tsa-url LOCAL_URL]
 #        [--tools-dir DIR] [--ms-root-pem FILE] [--python FILE] [--verifier FILE]
+# ---- FIRST EXECUTABLE LINES (round 5, R5-01/R5-03): nothing here is resolved through PATH and no function is called. Only reserved words, parameter
+# expansion and `builtin exec` run before the environment is replaced. The script is started by bash -p (shebang or the re-exec below): privileged
+# mode ignores BASH_ENV/ENV/SHELLOPTS/BASHOPTS/CDPATH/GLOBIGNORE and does NOT import exported shell functions. Unless the shell is already in that
+# state AND this is the re-executed copy, the script re-executes itself through /usr/bin/env -i with the allowlist below, fixed PATH and fds 3-9 closed.
+# Residual: a function named `builtin` in the caller's environment would run before this block when the script is started WITHOUT -p
+# (an attacker who controls the operator's shell environment already runs code as the operator).
+if [[ "${R0P_REEXEC:-}" != 1 || "$-" != *p* ]]; then
+  IFS=$' \t\n'
+  R0P_KEEP=()
+  for R0P_V in R0P_AZ_ENDPOINT R0P_AZ_ACCOUNT R0P_AZ_PROFILE R0P_AZ_EXPECTED_CN R0P_SIGN_TIMEOUT_SECONDS R0P_ALLOW_NONSYSTEM_TOOLS R0P_TOOLS_DIR; do
+    if [[ -n "${!R0P_V+x}" ]]; then R0P_KEEP+=("$R0P_V=${!R0P_V}"); fi
+  done
+  R0P_PATHV="/usr/bin:/bin:/usr/sbin:/sbin"
+  if [[ "${R0P_ALLOW_NONSYSTEM_TOOLS:-}" == stub-test ]]; then R0P_PATHV="${PATH:-$R0P_PATHV}"; fi
+  builtin exec 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- /usr/bin/env -i "PATH=$R0P_PATHV" "HOME=${HOME:-/nonexistent}" LANG=C LC_ALL=C "TERM=${TERM:-dumb}" \
+       ${R0P_KEEP[@]+"${R0P_KEEP[@]}"} R0P_REEXEC=1 /bin/bash -p "${BASH_SOURCE[0]}" "$@"
+fi
 case "$-" in *x*) echo "ERROR: xtrace is on; refusing (it could print secrets)" >&2; exit 1;; esac
 set +x
 set -euo pipefail
@@ -66,7 +83,7 @@ SELF_NAME="$(basename "$SELF")"
 FAILED_MAGIC="FAILED-ATTEMPT sign_windows_r0prime_v3"
 
 
-usage() { sed -n '/^# Usage:/,/^case /p' "$SELF" | sed '$d' | sed 's/^# \{0,1\}//'; }
+usage() { sed -n -E '/^# Usage:/,/^([^#]|$)/p' "$SELF" | sed '$d' | sed 's/^# \{0,1\}//'; }
 FAIL_REASON=""
 die() { FAIL_REASON="$*"; echo "ERROR: $*" >&2; exit 2; }
 # shared safety functions (their sha256 is bound by the scope file); the environment must BE the allowlist: no variable can skip this
@@ -134,6 +151,7 @@ done
 if [ $((MODE_DRY + MODE_THROW + MODE_REAL)) -eq 0 ]; then MODE_DRY=1; fi
 if [ "$MODE_REAL" = 1 ]; then MODE=real; elif [ "$MODE_THROW" = 1 ]; then MODE=throwaway-test; else MODE=dry-run; fi
 PLAN=0; [ "$MODE" = dry-run ] && PLAN=1
+if [ "$MODE" = real ]; then r0p_no_test_switch; fi      # the unit-test switch is refused in --real (round 5, R5-02)
 [ "$(uname -s)" = Darwin ] || die "macOS only (the signing host)"
 [ "$(id -u)" -ne 0 ] || die "do not run as root"
 
@@ -246,7 +264,7 @@ if [ "$MODE" = real ]; then
   r0p_mktmp
   r0p_scope_load "$SCOPE_FILE" "$AUTH_SHA" scope_version not_before not_after script_sha256 common_sha256 verifier_sha256 identity_json_sha256 \
     stage inputs_sha256 az_endpoint az_account az_profile expected_cn gate_sha256 gate_tool_sha256 distribution evidence_manifest_sha256 \
-    build_commit procedure_commit tool_az_sha256 tool_java_sha256 tool_python_sha256 tool_osslsigncode_sha256 container_listing_sha256
+    build_commit procedure_commit tool_az_sha256 tool_java_sha256 tool_python_sha256 tool_python_packages_sha256 tool_osslsigncode_sha256 container_listing_sha256
   [ "$S_scope_version" = 2 ] || die "scope file: scope_version must be 2 (v3.1 format; see AUTHORIZATION-TEMPLATE.md)"
   r0p_window_check "$S_not_before" "$S_not_after"
   [ "$S_script_sha256" = "$SELF_SHA" ] || die "scope file: script_sha256 does not match this script"
@@ -300,6 +318,11 @@ if [ "$PLAN" = 0 ]; then
     [ "$(sha "$AZ_PATH")" = "$S_tool_az_sha256" ] || die "scope file: tool_az_sha256 does not match $(basename "$AZ_PATH") ($(sha "$AZ_PATH"))"
     [ "$(sha "$JAVA_ABS")" = "$S_tool_java_sha256" ] || die "scope file: tool_java_sha256 does not match the java executable ($(sha "$JAVA_ABS"))"
     [ "$(sha "$PY_ABS")" = "$S_tool_python_sha256" ] || die "scope file: tool_python_sha256 does not match the python executable ($(sha "$PY_ABS"))"
+    # the python environment that runs the post-sign verification (signify): the sorted list of installed distributions with versions is hashed
+    # (names and versions only; the files of the libraries are NOT hashed: documented residual, round 5 R5-06)
+    PKGS="$("$PY_ABS" -I -c 'import importlib.metadata as m; print("\n".join(sorted("%s==%s" % (d.metadata["Name"].lower(), d.version) for d in m.distributions())))')" || die "could not list the python distributions"
+    PKGS_SHA="$(printf '%s\n' "$PKGS" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')"
+    [ "$PKGS_SHA" = "$S_tool_python_packages_sha256" ] || die "scope file: tool_python_packages_sha256 does not match the installed python distributions ($PKGS_SHA)"
     if [ -n "$OSSL" ]; then [ "$(sha "$OSSL")" = "$S_tool_osslsigncode_sha256" ] || die "scope file: tool_osslsigncode_sha256 does not match osslsigncode"
     else [ "$S_tool_osslsigncode_sha256" = none ] || die "scope file: tool_osslsigncode_sha256 is not 'none' but osslsigncode is absent"; fi
   fi
@@ -394,7 +417,7 @@ on_exit() {
   trap - EXIT; trap '' INT TERM HUP
   set +e +x
   if [ -n "${TOKDIR:-}" ]; then wipe_tree "$TOKDIR"; fi
-  if [ "${LEDGER_STARTED:-0}" = 1 ]; then r0p_ledger_append "$LEDGER" "$AUTH_SHA" real ended "rc=$rc success=$SUCCESS"; fi
+  if [ "${LEDGER_STARTED:-0}" = 1 ]; then ( r0p_ledger_append "$LEDGER" "$AUTH_SHA" real ended "rc=$rc success=$SUCCESS" ) 2>/dev/null; fi
   r0p_tmp_cleanup
   if [ "$OUTDIR_CREATED" = 1 ]; then
     if [ "$rc" -ne 0 ] || [ "$SUCCESS" != 1 ]; then
@@ -487,7 +510,7 @@ if [ "$MODE" = throwaway-test ]; then
 else
   validate_service_args      # again, immediately before the only token request (defence in depth)
   # the scope is consumed from here on (the first use of the owner's az session): a failed run burns it
-  r0p_ledger_append "$LEDGER" "$AUTH_SHA" real started "script=$SELF_SHA stage=$STAGE inputs=$SORTED"
+  r0p_ledger_claim "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE" real "script=$SELF_SHA stage=$STAGE inputs=$SORTED"
   LEDGER_STARTED=1
   TOKFILE="$TOKDIR/token"; RAW="$TOKDIR/raw"
   log "service: $ENDPOINT account=$ACCOUNT profile=$PROFILE"
@@ -607,7 +630,8 @@ EVID_TMP="$OUTDIR/EVIDENCE.txt.tmp"
     echo "authorization:   scope file sha256 $AUTH_SHA (window $S_not_before .. $S_not_after UTC); TRIPWIRE against mistakes, not an authentication"
     echo "scope binds:     identity.json $S_identity_json_sha256; common $S_common_sha256; gate $S_gate_sha256; gate tool $S_gate_tool_sha256"
     echo "scope binds:     build commit $S_build_commit; procedure commit $S_procedure_commit (recorded, not verified); evidence manifest $S_evidence_manifest_sha256"
-    echo "tools (sha256):  az $S_tool_az_sha256; java $S_tool_java_sha256; python $S_tool_python_sha256; osslsigncode $S_tool_osslsigncode_sha256"
+    echo "tools (sha256):  az $S_tool_az_sha256; java $S_tool_java_sha256; python $S_tool_python_sha256; python packages (names+versions) $S_tool_python_packages_sha256; osslsigncode $S_tool_osslsigncode_sha256"
+    echo "tool pins:       executables and the python package list only; library files, the JDK tree and az's modules are NOT hashed (residual)"
     echo "ledger:          $LEDGER (--allow-reuse=$ALLOW_REUSE)"
     if [ "$DISTRIBUTION" = 1 ]; then echo "distribution:    gate enforced (--distribution) and passed"; else echo "distribution:    PRIVATE-CANDIDATE signing: signing does NOT imply permission to distribute"; fi
     echo "service:         $ENDPOINT account=$ACCOUNT profile=$PROFILE"

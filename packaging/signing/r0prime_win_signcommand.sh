@@ -16,7 +16,8 @@
 #   R0P_EXPECT_SIGNER_CN      exact first CN of the signer certificate that every signed inner file must carry (from the authorization)
 #   R0P_EXPECT_ISSUER_SUBSTR  text the signer certificate's issuer must contain (from the authorization)
 #   The signature of every signed file is checked with powershell.exe Get-AuthenticodeSignature (Status Valid, signer CN, issuer text,
-#   a timestamper certificate present) BEFORE the file is copied in; no check, no replacement. (UNVERIFIED on a real Windows host.)
+#   a timestamper certificate present) BEFORE the file is copied in; no check, no replacement. powershell.exe is taken from %SystemRoot%\System32\
+#   (absolute path, not PATH; R0P_POWERSHELL overrides, for tests). (UNVERIFIED on a real Windows host.)
 #
 # Layout inside R0P_HANDOFF_DIR:
 #   requests-inner/<role>-<sha256 of the unsigned file>.exe   written by collect (and apply for unknown files is an error)
@@ -140,7 +141,15 @@ CSHA="$(hash_file "$CAND")"
 [ -n "${R0P_EXPECT_SIGNER_CN:-}" ] && [ -n "${R0P_EXPECT_ISSUER_SUBSTR:-}" ] || { logline "FAIL no signer expectation"; die "apply needs R0P_EXPECT_SIGNER_CN and R0P_EXPECT_ISSUER_SUBSTR"; }
 case "$CAND" in *[!A-Za-z0-9._/:\\\ -]*) die "unsafe characters in the signed file path";; esac
 WINCAND="$CAND"; if command -v cygpath >/dev/null 2>&1; then WINCAND="$(cygpath -w "$CAND")"; fi
-SIGINFO="$(powershell.exe -NoProfile -NonInteractive -Command "\$s = Get-AuthenticodeSignature -LiteralPath '$WINCAND'; \"\$(\$s.Status)|\$(\$s.SignerCertificate.Subject)|\$(\$s.SignerCertificate.Issuer)|\$(\$s.TimeStamperCertificate -ne \$null)\"" 2>/dev/null | tr -d '\r')" || { logline "FAIL signature check could not run"; die "could not run powershell.exe Get-AuthenticodeSignature"; }
+# powershell.exe is resolved to its absolute system path (not through PATH): R0P_POWERSHELL (owner-controlled, for tests) or %SystemRoot%
+PS_EXE="${R0P_POWERSHELL:-}"
+if [ -z "$PS_EXE" ]; then
+  if command -v cygpath >/dev/null 2>&1 && [ -n "${SYSTEMROOT:-}" ]; then PS_EXE="$(cygpath -u "$SYSTEMROOT")/System32/WindowsPowerShell/v1.0/powershell.exe"
+  else logline "FAIL no powershell path"; die "cannot locate powershell.exe in %SystemRoot%\\System32 (set R0P_POWERSHELL to its absolute path)"; fi
+fi
+case "$PS_EXE" in /*) ;; *) die "R0P_POWERSHELL must be an absolute path";; esac
+[ -x "$PS_EXE" ] || { logline "FAIL powershell not executable"; die "powershell.exe not found at $PS_EXE"; }
+SIGINFO="$("$PS_EXE" -NoProfile -NonInteractive -Command "\$s = Get-AuthenticodeSignature -LiteralPath '$WINCAND'; \"\$(\$s.Status)|\$(\$s.SignerCertificate.Subject)|\$(\$s.SignerCertificate.Issuer)|\$(\$s.TimeStamperCertificate -ne \$null)\"" 2>/dev/null | tr -d '\r')" || { logline "FAIL signature check could not run"; die "could not run powershell.exe Get-AuthenticodeSignature"; }
 SIG_STATUS="${SIGINFO%%|*}"; REST="${SIGINFO#*|}"; SIG_SUBJECT="${REST%%|*}"; REST="${REST#*|}"; SIG_ISSUER="${REST%%|*}"; SIG_TS="${REST#*|}"
 [ "$SIG_STATUS" = Valid ] || { logline "FAIL signature status $SIG_STATUS"; die "signed counterpart $REQ: signature status is '$SIG_STATUS', not Valid"; }
 case "$SIG_SUBJECT" in "CN=$R0P_EXPECT_SIGNER_CN,"*|"CN=$R0P_EXPECT_SIGNER_CN") ;; *) logline "FAIL signer subject"; die "signed counterpart $REQ: signer subject is not CN=$R0P_EXPECT_SIGNER_CN";; esac

@@ -100,3 +100,15 @@ Not changed and still UNVERIFIED: the `--real` branch has never run against Azur
 | R4-09 distribution gate | gate fails closed (only empty or `0` is private; decision records must be repository files with matching hashes); `--real` prints the open decisions, `--distribution` runs the gate on the hash-bound repository copy and refuses while blockers are OPEN; private signing prints the "no permission to distribute" statement |
 | R4-10 notarytool bound, ledger, modes | script-side watchdog (`--notary-timeout` + `--notary-watchdog-margin`, default 90 s), `notary/SUBMISSIONS.txt`, ledger lines, output modes documented (0700/0600) |
 | R4-11 GUI harness | paths from the environment, read-only `snap_real.sh`, incident note in `packaging/acceptance/macos-r0prime/README.md` |
+
+## E. Round 5 changes (independent review, findings R5-01 to R5-06 and INFO)
+
+| Finding | Change |
+|---|---|
+| R5-01 exported functions blind the scrub | scripts are `#!/bin/bash -p`; the first lines run only reserved words, parameter expansion and `builtin exec` and re-exec through `/usr/bin/env -i` as `bash -p` (functions, `BASH_ENV`, `SHELLOPTS` etc. not honoured); the library verifies privileged mode, the marker, the exact allowlist and `BASH_FUNC_*` with `builtin`/absolute paths |
+| R5-02 test switch honoured in `--real` | `r0p_no_test_switch` refuses any `R0P_ALLOW_NONSYSTEM_TOOLS` in `--real` (all three scripts); the unit tests use a copy of the library with that single function patched (another sha256) |
+| R5-03 `dirname`/`basename` before the scrub | nothing PATH-resolved runs before the re-exec; PATH is fixed in the re-exec |
+| R5-04 ledger not atomic, redirectable, no integrity | ledger is a DIRECTORY: atomic `mkdir` claim, O_EXCL event files, hash chain, `LENGTH`, lock directory, symlink and permission refusals, truncation detection; the claim happens right before the first use of the owner's session |
+| R5-05 provenance only self-consistency | committed release PUBLIC key (fingerprint derived with `ssh-keygen -lf` in every run), `tools/check-literals-against-sources.sh` (missing source = failure), loud "SELF-CONSISTENCY ONLY" warning in the default test, procedure gate G12 |
+| R5-06 tool pins | Windows scope adds `tool_python_packages_sha256` (names and versions); the procedure and the evidence state that library files are not hashed |
+| INFO | file descriptors 3 to 63 closed; helper uses an absolute `powershell.exe`; argv visibility of identity/profile names documented |
