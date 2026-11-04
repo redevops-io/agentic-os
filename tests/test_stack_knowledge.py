@@ -112,7 +112,10 @@ def test_component_explainers_are_grounded_in_public_pages():
 def test_expanded_answers_stay_truthful_not_overclaiming():
     # licensing must not quote a fabricated price; compliance must not claim a certification it lacks
     lic = answer_stack_question("what does it cost?")
-    assert lic.id == "licensing" and "open source" in lic.answer.lower()
+    assert lic.id == "licensing"
+    # the product statement is the family licence, and the answer never calls the product open source
+    assert "source-available (family licence: AGPL-3.0-or-later with the Commons Clause)" in lic.answer
+    assert "is open source" not in lic.answer.lower()
     comp = answer_stack_question("is it soc2 certified?").answer.lower()
     assert "self-host" in comp and "contact" in comp        # points to the team, doesn't assert a cert
 

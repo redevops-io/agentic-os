@@ -161,13 +161,15 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
                   "license", "licence", "licensing", "agpl", "pay", "subscription", "trial"),
         question="What does it cost — is it open source?",
         answer=(
-            "The core stack is open source (AGPL-3.0) and free to self-host — you run it on your "
-            "own infrastructure with no licence fee. What you pay for is your own compute and any "
-            "cloud model or cloud-suite usage you choose to enable. Hosted/managed options and "
+            "The core stack is source-available (family licence: AGPL-3.0-or-later with the "
+            "Commons Clause) and free to self-host — you run it on your own infrastructure with no "
+            "licence fee; the licence texts ship with the app (LICENSING.md). What you pay for is "
+            "your own compute and any cloud model or cloud-suite usage you choose to enable. "
+            "Hosted/managed options and "
             "commercial support are a separate conversation — reach the team at #agentic-apps on "
             "Slack or info@redevops.io. (No pricing tiers are quoted here so this answer can't go "
             "stale — ask the team for current commercial terms.)"),
-        source="AGPL-3.0 flagship repos · self-host is free · commercial terms via contact"),
+        source="LICENSING.md · self-host is free · commercial terms via contact"),
     KnowledgeEntry(
         id="compliance",
         topic="Governance",

@@ -3,7 +3,10 @@ name = "redevops-launcher"
 version = "0.1.0"
 description = "ReDevOps Launcher — native one-click for the agentic app (Windows/macOS)"
 edition = "2021"
-license = "AGPL-3.0-or-later"
+# No SPDX `license` field: the family licence (AGPL-3.0-or-later with the Commons Clause) has no
+# registered SPDX id, and plain "AGPL-3.0-or-later" would omit the Commons Clause. See LICENSING.md.
+license-file = "../../../LICENSING.md"
+publish = false
 
 # SCAFFOLD: not built in CI. `cargo tauri dev` / `cargo tauri build` on a dev machine.
 [build-dependencies]
@@ -13,6 +16,24 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Capability handshake (src/capability.rs): HMAC-SHA256 is built on sha2, the client nonce on getrandom.
+# Both packages are already in the tauri tree (sha2 0.10.x, getrandom 0.3.x): direct edges only.
+sha2 = "0.10"
+getrandom = "0.3"
+
+# Sidecar lifecycle (src/lifecycle.rs). Both crates are already in the resolved tree through
+# tauri/tao/wry (libc 0.2.x everywhere, windows-sys 0.61.x on Windows); listing them here adds
+# no new package to Cargo.lock, only a direct edge + feature flags.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

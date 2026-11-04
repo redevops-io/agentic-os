@@ -4,7 +4,8 @@ version = "0.2.4"
 description = "The control plane for the redevops.io Agentic Business OS — run your business as a cost-aware fleet of agents."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "AGPL-3.0-or-later WITH Commons-Clause" }
+license = "LicenseRef-AGPL-3.0-or-later-with-Commons-Clause"   # PEP 639; the statement is in LICENSING.md
+license-files = ["LICENSE", "LICENSE-COMMONS-CLAUSE", "LICENSE.md", "LICENSING.md"]
 dependencies = [
     # The Discovery -> Mission boundary, owned by neither runtime. Pinned to a
     # tag: a branch can be rebased under a consumer, and a contract that moves
@@ -64,7 +65,7 @@ agentic-os = "agentic_os.cli:main"
 agentic-os-projects = "agentic_os.projects_api:main"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]   # PEP 639 licence expressions need >= 1.27
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]

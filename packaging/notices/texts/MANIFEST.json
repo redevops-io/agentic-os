@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "retrieved": "2026-11-04",
+  "note": "Reference texts fetched from the upstream projects. Presence here is not a clearance.",
+  "files": {
+    "CPython-3.12.10-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/python/cpython/v3.12.10/LICENSE",
+      "description": "CPython 3.12.10 LICENSE (PSF License Agreement and predecessors' agreements), tag v3.12.10; sha256 prefix equals the lib/python3.12/LICENSE.txt of the uv-managed CPython 3.12.10 used as build interpreter",
+      "sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf",
+      "bytes": 13936
+    },
+    "CPython-3.12.10-Doc-license.rst": {
+      "source": "https://raw.githubusercontent.com/python/cpython/v3.12.10/Doc/license.rst",
+      "description": "CPython documentation page 'History and License' with 'Licenses and Acknowledgements for Incorporated Software' (expat, zlib, libmpdec, bz2/xz etc.). reStructuredText as published; which of these libraries the shipped python.org-style build links was not traced (UNVERIFIED)",
+      "sha256": "341832873fd316a37927e79385093fbbfd40a467428480835fe435a80cadf4e5",
+      "bytes": 54130
+    },
+    "OpenSSL-LICENSE.txt": {
+      "source": "https://raw.githubusercontent.com/openssl/openssl/openssl-3.0.16/LICENSE.txt",
+      "description": "OpenSSL LICENSE.txt (Apache License 2.0). Byte-identical at tags openssl-3.0.16 and openssl-4.0.2 (both fetched 2026-11-04)",
+      "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+      "bytes": 10175
+    },
+    "PyInstaller-6.22.3-COPYING.txt": {
+      "source": "https://raw.githubusercontent.com/pyinstaller/pyinstaller/v6.22.3/COPYING.txt",
+      "description": "PyInstaller COPYING.txt at v6.22.3: GPL-2.0-or-later with the Bootloader Exception; runtime hooks Apache-2.0",
+      "sha256": "0598064c7d2718e38d7914a7d08343b2fa008e3bea9ebba2aa7a6ffa5900dd64",
+      "bytes": 32604
+    },
+    "React-18.3.1-MIT-LICENSE.txt": {
+      "source": "https://registry.npmjs.org/react/-/react-18.3.1.tgz (package/LICENSE)",
+      "description": "MIT licence of react 18.3.1; the same bytes are in react-dom 18.3.1 and scheduler 0.23.2 tarballs",
+      "sha256": "52412d7bc7ce4157ea628bbaacb8829e0a9cb3c58f57f99176126bc8cf2bfc85",
+      "bytes": 1086
+    },
+    "MPL-2.0.txt": {
+      "source": "https://www.mozilla.org/media/MPL/2.0/index.txt",
+      "description": "Mozilla Public License Version 2.0 as published by the Mozilla Foundation (plain text). certifi's wheel carries only the MPL notice header (989 bytes), not this text",
+      "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+      "bytes": 16726
+    }
+  }
+}
