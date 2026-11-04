@@ -137,3 +137,14 @@ Only if the owner **explicitly approves it later**. It needs no new account but 
 * Intel Macs: not supported by this candidate, not tested (`INTEL-ROSETTA-TEST-PLAN.md`).
 * `headless_smoke.sh` runs the sidecar in **standalone** `serve` mode (it prints the one-time URL on stderr). The launcher's hand-off mode (`AGENTIC_OS_HANDOFF=stdout`, the HMAC handshake) is covered by the launcher's own `cargo test -- --ignored` suite (reports/defects.md), not by this kit.
 * The kit was written and run on macOS 27.0.1 (Apple Silicon). Other macOS versions are untested; the process, `lsof`, `ps` and `curl` output formats it parses are the stock ones.
+
+
+## Incident note: one real `open` ran during the GUI acceptance work (2026-11-04)
+
+While the harness was being developed, `gui/lib/gui-env.sh` derived `GUI_DIR` from `BASH_SOURCE`, which is empty under zsh, so the PATH shim directory was
+wrong and the launcher's `open <redirect file>` resolved to the REAL `/usr/bin/open` once. The redirect file lived in a disposable HOME and held a single-use
+code of a sidecar that had already stopped (dead port), so no credential was exposed, but LaunchServices probably handed it to the owner's default browser
+(one stray tab may exist). Fixes now in the harness: `GUI_DIR` and every other path come from the environment (`lib/gui-env.sh` refuses to run without them and
+without `shim/open`), the Python helper aborts when the shim is missing, and the Rust driver refuses `open` unless the first PATH entry ends in `/gui/shim`.
+`gui/lib/snap_real.sh` is read-only (names and mtimes of the real profile locations, `REAL_HOME` required). The check on the first PATH entry is textual; it does not
+resolve `open`. Details: `reports/gui.md` section 9 of the acceptance run.
