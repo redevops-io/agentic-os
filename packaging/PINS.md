@@ -44,6 +44,10 @@ root is a stale developer lock that no build reads (regenerating it rewrites it 
 OSV check (read-only API, 2026-11-04) of all 21 pinned macOS wheels with certifi 2026.10.19: no advisory for any of them.
 Consequence for the reproducibility claim: this build is NOT a byte-for-byte rebuild of the frozen v0.3.2 wheel set; the shipped `cacert.pem`
 differs (and the notices/SBOM name certifi 2026.10.19).
+Compatibility check (owner decision 6, 2026-11-04): `packaging/tools/certifi_chain_compat.py` compared the frozen bundle (2026.7.22) with the shipped one
+(2026.10.19, the bytes extracted from the candidate sidecar) over 3,665 hosts (every product and documented host, 1,994 top-ranked, 1,498 `.in`, emSign and
+major-CA candidates): no host validates with the old bundle and fails with the new one; the only difference between the bundles is `emSign ECC Root CA - G3`, and no
+tested chain ends in it. Result, host table and limits: `packaging/evidence/certifi-chain-compat-2026-11-04.md`. certifi 2026.10.19 is retained.
 
 ## idna 3.20 / uvicorn 0.53.0 versus the old lock (3.19 / 0.52.4)
 
