@@ -90,6 +90,32 @@ impl std::fmt::Display for StartError {
     }
 }
 
+/// The port the frozen v0.3.2 sidecar listened on (fixed). Current sidecars use an OS-chosen port.
+pub const LEGACY_PORT: u16 = 8787;
+/// Budget for the legacy probe: start is never slowed by more than this.
+const LEGACY_PROBE_BUDGET: Duration = Duration::from_millis(300);
+
+/// Best-effort, non-invasive detection of an OLD v0.3.2 sidecar left running on `port` (the old launcher
+/// orphaned it, and it keeps serving an unauthenticated API with wildcard CORS). Only a
+/// `GET /api/projects` without credentials: a 200 with a JSON body means it is open to anyone. It is
+/// neither adopted nor stopped; the caller shows the returned text. Anything else (nothing listening,
+/// 401/403/404, slow, not JSON) returns None. Bounded by LEGACY_PROBE_BUDGET.
+pub fn legacy_listener_warning(port: u16) -> Option<String> {
+    let r = capability::http_request(port, "GET", "/api/projects", &[], None, LEGACY_PROBE_BUDGET).ok()?;
+    if r.status != 200 {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_slice(&r.body).ok()?;
+    if !(v.is_array() || v.is_object()) {
+        return None;
+    }
+    Some(format!(
+        "An old, unauthenticated Agentic Apps service is running on port {port} (it answers without any \
+         credential). It was not started by this version and is not used. Quit it: close the old app, or \
+         end the process listening on 127.0.0.1:{port}."
+    ))
+}
+
 /// Collect up to 2 KiB of the sidecar's stderr tail for failure messages. The contract keeps secrets out
 /// of stderr; nothing is shown unless the start fails.
 fn drain_stderr(mut r: impl Read + Send + 'static) -> Arc<Mutex<Vec<u8>>> {
@@ -172,7 +198,9 @@ pub fn start_sidecar(cmd: &mut Command, ready_timeout: Duration) -> Result<Runni
 mod tests {
     use super::*;
     use crate::capability::{fresh_launch_code, handshake, http_request, launch_url, HttpResponse};
+    use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
+    use std::sync::Arc;
     use std::time::Instant;
 
     /// Real sidecar for the integration tests. Either the frozen binary (`RDO_SIDECAR`) or the source
@@ -219,6 +247,52 @@ mod tests {
         false
     }
 
+    /// One-connection fake peer: answers the first request with `raw` after `delay`.
+    fn fake_peer(raw: String, delay: Duration) -> u16 {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = l.accept() {
+                let mut b = [0u8; 4096];
+                let _ = s.read(&mut b);
+                std::thread::sleep(delay);
+                let _ = s.write_all(raw.as_bytes());
+            }
+        });
+        port
+    }
+
+    fn http(status: &str, body: &str) -> String {
+        format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+    }
+
+    #[test]
+    fn legacy_listener_with_an_open_api_is_reported_not_touched() {
+        let port = fake_peer(http("200 OK", "[{\"id\":\"customer-ops\",\"name\":\"Customer Operations\"}]"), Duration::ZERO);
+        let w = legacy_listener_warning(port).expect("warning");
+        assert!(w.contains("old, unauthenticated Agentic Apps service") && w.contains(&port.to_string()) && w.contains("Quit it"));
+    }
+
+    #[test]
+    fn legacy_probe_ignores_gated_missing_and_unrelated_listeners() {
+        // the current sidecar (gated): 401
+        assert!(legacy_listener_warning(fake_peer(http("401 Unauthorized", "{\"error\":{\"code\":\"auth_required\"}}"), Duration::ZERO)).is_none());
+        assert!(legacy_listener_warning(fake_peer(http("404 Not Found", "{}"), Duration::ZERO)).is_none());
+        // 200 but not JSON (some other web server)
+        assert!(legacy_listener_warning(fake_peer(http("200 OK", "<html>hi</html>"), Duration::ZERO)).is_none());
+        // nothing listening
+        let free = { TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port() };
+        assert!(legacy_listener_warning(free).is_none());
+    }
+
+    #[test]
+    fn legacy_probe_never_slows_start_by_more_than_its_budget() {
+        let port = fake_peer(http("200 OK", "[]"), Duration::from_secs(3)); // slow peer
+        let t0 = Instant::now();
+        assert!(legacy_listener_warning(port).is_none());
+        assert!(t0.elapsed() < Duration::from_millis(600), "took {:?}", t0.elapsed());
+    }
+
     /// Normal start -> handshake OK -> launch URL has #lc= -> the code yields a working session ->
     /// the code is single use -> another open mints another code -> Stop leaves nothing.
     /// `RDO_SIDECAR=<frozen> | RDO_TEST_PYTHON=<python>  cargo test real_sidecar -- --ignored`
@@ -238,8 +312,20 @@ mod tests {
         let url = launch_url(port, &running.base_path, &code);
         assert!(url.starts_with(&format!("http://127.0.0.1:{port}/#lc=")));
 
+        // SR-01: the opener only ever gets a file PATH. The redirect page carries the URL; the code the
+        // browser would read from its fragment is what gets exchanged below.
+        let dir = std::env::temp_dir().join(format!("rdo-launch-it-{}", std::process::id()));
+        let file = crate::opener::write_redirect(&dir, &url).expect("redirect page");
+        let (_prog, args) = crate::opener::opener_command(&file);
+        assert!(args.iter().all(|a| !a.to_string_lossy().contains("lc=")), "no code in the opener argv");
+        let page = std::fs::read_to_string(&file).unwrap();
+        let frag_code = page.split("#lc=").nth(1).unwrap().split('"').next().unwrap().to_string();
+        assert_eq!(frag_code, code.expose(), "the fragment in the redirect page is the minted code");
+        crate::opener::remove(&file);
+        std::fs::remove_dir(&dir).unwrap();
+
         // what the page's script does with the fragment: exchange it for a session
-        let body = format!("{{\"code\":\"{}\"}}", code.expose());
+        let body = format!("{{\"code\":\"{frag_code}\"}}");
         let ex = http_request(port, "POST", "/api/local/session", &[], Some(&body), Duration::from_secs(5)).unwrap();
         assert_eq!(ex.status, 200, "exchanging the launch code must yield a session");
         let cookie = cookie_of(&ex);
@@ -266,6 +352,55 @@ mod tests {
         // Stop: whole tree gone, port closed
         assert_eq!(running.stop(), StopOutcome::Graceful);
         assert!(gone(port, pid), "no process left in the group and the port is closed");
+    }
+
+    /// The review's flood (SR-03): local threads hammer the unauthenticated handshake endpoint while the
+    /// launcher opens repeatedly. Hard guarantees at any intensity: no open is ever reported as an
+    /// untrusted sidecar, the user's sidecar keeps running and works again after the flood. With a
+    /// moderate flood (enough to evict challenges, which made 0 of 200 opens succeed before the fix)
+    /// opens must also still succeed.
+    #[test]
+    #[ignore]
+    fn real_sidecar_survives_a_handshake_flood() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let mut cmd = real_sidecar_cmd();
+        let mut running = start_sidecar(&mut cmd, READY_TIMEOUT).expect("start");
+        let port = running.port;
+        for (threads, opens, must_succeed) in [(8usize, 40usize, true), (32, 8, false), (64, 4, false)] {
+            let stop = Arc::new(AtomicBool::new(false));
+            let flooders: Vec<_> = (0..threads)
+                .map(|_| {
+                    let stop = stop.clone();
+                    std::thread::spawn(move || {
+                        while !stop.load(Ordering::SeqCst) {
+                            let _ = http_request(port, "POST", "/api/local/handshake", &[], Some("{\"client_nonce\":\"AAAAAAAAAAAAAAAAAAAAAA\"}"), Duration::from_secs(2));
+                        }
+                    })
+                })
+                .collect();
+            let (mut ok, mut busy, mut untrusted, mut other) = (0, 0, 0, 0);
+            for _ in 0..opens {
+                match fresh_launch_code(port, running.secret()) {
+                    Ok(_) => ok += 1,
+                    Err(capability::OpenError::Busy) => busy += 1,
+                    Err(capability::OpenError::Untrusted(_)) => untrusted += 1,
+                    Err(_) => other += 1,
+                }
+            }
+            stop.store(true, Ordering::SeqCst);
+            for f in flooders {
+                let _ = f.join();
+            }
+            println!("RESULT {threads} flood threads: ok={ok} busy={busy} untrusted={untrusted} other={other} of {opens}");
+            assert_eq!(untrusted, 0, "a flood must never look like an untrusted sidecar (review: 116 of 200 before)");
+            if must_succeed {
+                assert!(ok > 0, "opens still succeed under a moderate flood");
+            }
+            assert!(running.child.is_running(), "the user's sidecar is still running");
+            std::thread::sleep(Duration::from_millis(500));
+            assert!(fresh_launch_code(port, running.secret()).is_ok(), "and works after the flood");
+        }
+        assert_eq!(running.stop(), StopOutcome::Graceful);
     }
 
     /// A stale v0.3.2 sidecar (no handshake, no gate) and a foreign listener are refused; and the new

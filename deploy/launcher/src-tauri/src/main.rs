@@ -11,6 +11,7 @@
 mod capability;
 mod launch;
 mod lifecycle;
+mod opener;
 
 use launch::Running;
 use lifecycle::StopOutcome;
@@ -111,10 +112,12 @@ async fn stop_native(server: State<'_, Server>) -> Result<String, String> {
 
 /// Open the control plane in the user's browser with a FRESH single-use launch code. The launcher
 /// window stays the control panel; the sidecar origin is never loaded into this webview. Every click
-/// re-proves the sidecar (handshake) and mints a new code (they live 60 s and work once); the code is
-/// only ever in the URL fragment handed to the OS opener and is never logged or returned to the UI.
+/// re-proves the sidecar (handshake) and mints a new code (they live 60 s and work once). The code is
+/// never put on a command line: the OS opener is given only the path of a private (0600, in a 0700
+/// per-user directory) redirect page that carries the URL with the code in its fragment, and that file
+/// is deleted after the code's lifetime and on exit (security review SR-01).
 #[tauri::command]
-async fn open_ui(server: State<'_, Server>) -> Result<(), String> {
+async fn open_ui(app: tauri::AppHandle, server: State<'_, Server>) -> Result<(), String> {
     let (port, base_path, secret) = {
         let mut guard = server.lock();
         let alive = guard.as_mut().map(|r| r.child.is_running()).unwrap_or(false);
@@ -125,29 +128,46 @@ async fn open_ui(server: State<'_, Server>) -> Result<(), String> {
     };
     let code = match capability::fresh_launch_code(port, &secret) {
         Ok(c) => c,
-        Err(e @ (capability::CapabilityError::ProofMismatch | capability::CapabilityError::Untrusted(_))) => {
-            // Something that does not hold this launch's secret now answers on the port: do not open.
+        Err(e @ capability::OpenError::Untrusted(_)) => {
+            // The handshake proof failed: something that does not hold this launch's secret answers on
+            // the port. Final for that process: stop it and do not open.
             server.stop();
             return Err(format!(
                 "The control plane could not prove its identity ({e}). It was stopped and the browser was not opened."
             ));
         }
+        // Transient or unexpected: never stop the user's sidecar for it (docs/LOCAL_API_SECURITY.md 4.7).
+        Err(capability::OpenError::Busy) => {
+            return Err("The local service is busy. Nothing was opened; try again in a moment.".to_string())
+        }
         Err(e) => return Err(format!("Could not get a launch code: {e}. Try again, or Stop and Start.")),
     };
-    open_in_browser(&capability::launch_url(port, &base_path, &code))
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("no per-user cache directory: {e}"))?
+        .join("launch");
+    let file = opener::write_redirect(&dir, &capability::launch_url(port, &base_path, &code))
+        .map_err(|e| format!("could not prepare the private launch page: {}", e.kind()))?;
+    opener::remove_after(file.clone(), opener::FILE_LIFETIME);
+    if let Err(e) = open_in_browser(&file) {
+        opener::remove(&file);
+        return Err(e);
+    }
+    Ok(())
 }
 
-/// Hand a URL to the OS opener. The URL (which carries the launch code in its fragment) is passed as
-/// an argument only; it is not echoed or logged. It is briefly visible to same-user processes in the
-/// opener's command line, which the threat model puts out of scope (single use, 60 s).
-fn open_in_browser(url: &str) -> Result<(), String> {
-    let (prog, args): (&str, Vec<&str>) = if cfg!(target_os = "windows") {
-        ("cmd", vec!["/C", "start", "", url])
-    } else if cfg!(target_os = "macos") {
-        ("open", vec![url])
-    } else {
-        ("xdg-open", vec![url])
-    };
+/// Warn (never act) about a leftover v0.3.2 sidecar that still serves an unauthenticated API on the old
+/// fixed port. Best effort, bounded to 300 ms; None when nothing is found.
+#[tauri::command]
+async fn legacy_service_warning() -> Option<String> {
+    launch::legacy_listener_warning(launch::LEGACY_PORT)
+}
+
+/// Hand the redirect page's PATH to the OS opener. The argv holds a file path only: no URL, no code, no
+/// secret (see opener.rs).
+fn open_in_browser(file: &std::path::Path) -> Result<(), String> {
+    let (prog, args) = opener::opener_command(file);
     let mut cmd = Command::new(prog);
     cmd.args(args);
     lifecycle::hide_console(&mut cmd);
@@ -210,6 +230,7 @@ fn main() {
             start_native,
             stop_native,
             open_ui,
+            legacy_service_warning,
             device_report,
             docker_available,
             advanced_docker_up,
@@ -223,6 +244,7 @@ fn main() {
         // Quit (Cmd+Q, last window closed, tray/menu quit): never leave the control plane behind.
         if let tauri::RunEvent::Exit = event {
             app_handle.state::<Server>().stop();
+            opener::cleanup_all();
         }
     });
 }

@@ -47,13 +47,13 @@ def test_nothing_is_trusted_or_opened_before_the_handshake():
     launch = _src("launch.rs")
     assert launch.index("capability::read_handoff") < launch.index("capability::handshake(") < launch.index("Ok(Running")
     main = _src("main.rs")
-    assert main.index("capability::fresh_launch_code") < main.index("open_in_browser(&capability::launch_url")
+    assert main.index("capability::fresh_launch_code") < main.index("opener::write_redirect") < main.index("open_in_browser(&file)")
 
 
 def test_launch_code_only_ever_lives_in_the_url_fragment_and_is_never_logged():
     cap = _src("capability.rs")
     assert '"http://127.0.0.1:{port}{base_path}/#lc={}"' in cap
-    for name in ("main.rs", "launch.rs", "capability.rs", "lifecycle.rs"):
+    for name in ("main.rs", "launch.rs", "capability.rs", "lifecycle.rs", "opener.rs"):
         text = _src(name)
         non_test = text.split("#[cfg(test)]")[0]
         assert "println!" not in non_test and "eprintln!" not in non_test and "dbg!" not in non_test, name
@@ -63,3 +63,37 @@ def test_launch_code_only_ever_lives_in_the_url_fragment_and_is_never_logged():
 def test_the_webview_never_loads_the_sidecar_origin():
     main = _src("main.rs")
     assert "WebviewWindow" not in main and "navigate(" not in main and ".eval(" not in main
+
+
+# ---- stage 3: security review fixes (SR-01, SR-03, SR-07) --------------------------------------
+
+
+def test_sr01_no_credential_ever_reaches_a_command_line():
+    main = _src("main.rs")
+    # the OS opener gets a file path; the URL builder is only used to fill the private redirect page
+    assert "fn open_in_browser(file: &std::path::Path)" in main
+    assert "open_in_browser(&capability::launch_url" not in main
+    assert 'vec![url]' not in main and 'url]' not in main.split("fn open_in_browser")[1].split("\n}\n")[0]
+    opener = _src("opener.rs")
+    assert "0o600" in opener and "0o700" in opener and "create_new(true)" in opener
+    assert "cleanup_all()" in main and "remove_after(" in main
+
+
+def test_sr03_the_sidecar_is_stopped_only_for_a_failed_handshake():
+    main = _src("main.rs")
+    body = main.split("async fn open_ui")[1].split("async fn legacy_service_warning")[0]
+    assert body.count("server.stop()") == 1
+    arm = body.split("Err(e @ capability::OpenError::Untrusted(_))")[1].split("Err(capability::OpenError::Busy)")[0]
+    assert "server.stop()" in arm
+    assert "busy" in body.lower()
+    cap = _src("capability.rs").split("#[cfg(test)]")[0]
+    assert "MAX_OPEN_ATTEMPTS: usize = 3" in cap and "s.min(5)" in cap
+
+
+def test_sr07_legacy_listener_is_only_reported_never_adopted_or_killed():
+    launch = _src("launch.rs").split("#[cfg(test)]")[0]
+    assert "LEGACY_PORT: u16 = 8787" in launch and "from_millis(300)" in launch
+    main = _src("main.rs")
+    assert "legacy_service_warning" in main
+    ui = (ROOT / "deploy" / "launcher" / "ui" / "index.html").read_text(encoding="utf-8")
+    assert 'invoke("legacy_service_warning")' in ui
