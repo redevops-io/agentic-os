@@ -64,16 +64,23 @@ iPhone is only needed later for push/backgrounding/Keychain/real-network accepta
 ## Native control plane lifecycle (`src-tauri/src/lifecycle.rs`)
 The frozen sidecar is a PyInstaller onefile executable: a bootloader process plus a Python child that
 owns `127.0.0.1:8787`. The launcher therefore treats it as one unit:
-- **Start** refuses (clear message, no adoption) when something already listens on port 8787, and
-  starts the sidecar as `serve --exit-on-stdin-eof` in its own process group (Unix) / a Windows Job
-  Object with kill-on-close.
+- **Start** spawns the sidecar as `serve --exit-on-stdin-eof` with `PROJECTS_PORT=0` and
+  `AGENTIC_OS_HANDOFF=stdout`, in its own process group (Unix) / a Windows Job Object with kill-on-close.
+  It reads the single hand-off line (port, one-run secret) from the sidecar's stdout, then proves with
+  the HMAC handshake that the process on that port is the one it started
+  (`src/capability.rs`, `src/launch.rs`, contract in `docs/LOCAL_API_SECURITY.md`). A stale or foreign
+  listener cannot answer the handshake and is never adopted; nothing is opened before it passes.
+- **Start & open** / `open_ui`: every click re-proves the sidecar, mints a fresh single-use launch code
+  and opens `http://127.0.0.1:<port>/#lc=<code>` in the system browser (code in the fragment only; never
+  logged or shown in this window; the launcher window stays the control panel).
 - **Stop** and **quit** (`RunEvent::Exit`) close the sidecar's stdin pipe and send SIGTERM to the
   process group, wait up to 3 s, then SIGKILL the group / terminate the job.
 - If the launcher itself dies (crash, SIGKILL) the OS closes the pipe; the sidecar sees EOF and shuts
   down cleanly, so the bootloader removes its `_MEI*` temp dir. A hard kill of the whole sidecar group
   (the forced stop after the grace period) cannot clean it: that leak is a documented limit.
-- Checks: `cargo test` (this crate), `packaging/check-sidecar-lifecycle.py` and
-  `packaging/check-sidecar-locales.sh` against a frozen sidecar. The Windows paths are compile-checked
+- Checks: `cargo test` (this crate; `-- --ignored` with `RDO_SIDECAR` or `RDO_TEST_PYTHON` runs the
+  real-sidecar handshake tests, plus `RDO_STALE_SIDECAR` for the stale v0.3.2 refusal),
+  `packaging/check-sidecar-lifecycle.py` and `packaging/check-sidecar-locales.sh` against a frozen sidecar. The Windows paths are compile-checked
   only and still need a run on a Windows host.
 
 ## Status — precise

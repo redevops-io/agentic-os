@@ -8,35 +8,31 @@
 // SCAFFOLD — build/test on a machine with the Rust + Tauri toolchain and a GUI (see ../README.md).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod capability;
+mod launch;
 mod lifecycle;
 
-use lifecycle::{ManagedChild, PortState, StopOutcome};
-use std::net::SocketAddr;
-use std::process::{Command, Stdio};
+use launch::Running;
+use lifecycle::StopOutcome;
+use std::process::Command;
 use std::sync::{Mutex, MutexGuard};
 use tauri::{Manager, State};
 
-const PORT: u16 = 8787;
-const URL: &str = "http://127.0.0.1:8787";
-
-fn sidecar_addr() -> SocketAddr {
-    SocketAddr::from(([127, 0, 0, 1], PORT))
-}
-
-/// Tracks the running native control-plane process TREE (bootloader + Python child) so we can stop
-/// all of it on Stop and on quit. Only a process this launcher spawned is ever tracked.
-struct Server(Mutex<Option<ManagedChild>>);
+/// Tracks the running native control-plane process TREE (bootloader + Python child) plus this launch's
+/// secret, so we can open it with a fresh launch code and stop all of it on Stop and on quit. Only a
+/// process this launcher spawned and authenticated is ever tracked.
+struct Server(Mutex<Option<Running>>);
 
 impl Server {
     /// Poison-tolerant lock (a panicking command must not stop us from cleaning up on exit).
-    fn lock(&self) -> MutexGuard<'_, Option<ManagedChild>> {
+    fn lock(&self) -> MutexGuard<'_, Option<Running>> {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Take the tree out of the mutex and stop it (blocking up to the grace period).
     fn stop(&self) -> Option<StopOutcome> {
         let taken = self.lock().take();
-        taken.map(|child| child.stop(lifecycle::GRACE))
+        taken.map(|running| running.stop())
     }
 }
 
@@ -77,55 +73,30 @@ fn run_wait(cmd: &mut Command) -> Result<String, String> {
 
 // ── Native default (no Docker) ────────────────────────────────────────────────────────
 
-/// Explain why the sidecar port cannot be used. Deliberately does NOT adopt the listener: a process
-/// we did not start (a stale control plane of an older version, or anything else) must never be
-/// treated as "ours" just because it answers on the port.
-fn port_refusal(state: PortState) -> Option<String> {
-    match state {
-        PortState::Free => None,
-        PortState::Listening => Some(format!(
-            "Port {PORT} is already in use: another process is listening on 127.0.0.1:{PORT} \
-             (possibly a control plane left over from an earlier run or version). It was not \
-             started by this app, so it will not be reused. Quit that process, then try again."
-        )),
-        PortState::Unavailable(e) => Some(format!(
-            "Port {PORT} cannot be used on 127.0.0.1 ({e}). Free the port, then try again."
-        )),
-    }
-}
-
-/// One-click: start the control plane natively from the frozen sidecar and return its URL.
+/// One-click: start the control plane natively from the frozen sidecar, authenticate it, and return its
+/// plain URL (no launch code). Nothing is opened here; `open_ui` mints a fresh launch code per open.
 #[tauri::command]
 async fn start_native(server: State<'_, Server>) -> Result<String, String> {
     let mut guard = server.lock();
     if let Some(running) = guard.as_mut() {
-        if running.is_running() {
-            return Ok(URL.to_string()); // OUR child, started by this launcher
+        if running.child.is_running() {
+            return Ok(capability::plain_url(running.port, &running.base_path)); // OUR authenticated child
         }
-        // It exited on its own (crash, port race): drop the dead handle and start fresh.
+        // It exited on its own (crash): drop the dead handle (wipes its secret) and start fresh.
         *guard = None;
     }
 
-    // SECURITY-HANDSHAKE SEAM 1 (pre-start): the policy for an existing listener is "refuse".
-    // The per-launch capability handshake (agent `security`) can replace this refusal, e.g. with a
-    // free-port start or an authenticated identity check, but must never reintroduce silent adoption.
-    if let Some(msg) = port_refusal(lifecycle::probe_port(sidecar_addr())) {
-        return Err(msg);
-    }
-
-    // SECURITY-HANDSHAKE SEAM 2 (spawn): program, args, env and the stdin pipe are decided here. A
-    // per-launch secret can be handed to the sidecar through its environment, or as the first bytes
-    // on the stdin tether that `ManagedChild::spawn` already keeps open (the sidecar's
-    // `_watch_stdin` in packaging/sidecar_main.py reads and discards that stream today).
+    // The capability handshake (docs/LOCAL_API_SECURITY.md section 4) replaces the old
+    // fixed-port "is something listening" check: the sidecar binds an OS-chosen port, reports it with a one-run secret,
+    // on a pipe only this launcher holds, and must pass an HMAC proof before anything trusts or opens
+    // it. A stale or foreign listener cannot answer, and cannot make us adopt it.
+    // The stdin pipe from ManagedChild::spawn stays open as the exit-on-EOF tether.
     let mut cmd = Command::new(sidecar());
-    cmd.args(["serve", "--exit-on-stdin-eof"]).stdout(Stdio::null()).stderr(Stdio::null());
-    let child =
-        ManagedChild::spawn(&mut cmd).map_err(|e| format!("failed to start the control plane: {e}"))?;
-    *guard = Some(child);
-
-    // SECURITY-HANDSHAKE SEAM 3 (post-start): there is no readiness/identity check yet; the UI is told
-    // the constant URL. A handshake would verify here that the listener on PORT is the child above.
-    Ok(URL.to_string())
+    cmd.args(["serve", "--exit-on-stdin-eof"]);
+    let running = launch::start_sidecar(&mut cmd, launch::READY_TIMEOUT).map_err(|e| e.to_string())?;
+    let url = capability::plain_url(running.port, &running.base_path);
+    *guard = Some(running);
+    Ok(url)
 }
 
 /// Stop the native control plane: the whole process tree, gracefully first (also called on quit).
@@ -138,18 +109,49 @@ async fn stop_native(server: State<'_, Server>) -> Result<String, String> {
     })
 }
 
-/// Open the control plane in the user's browser.
+/// Open the control plane in the user's browser with a FRESH single-use launch code. The launcher
+/// window stays the control panel; the sidecar origin is never loaded into this webview. Every click
+/// re-proves the sidecar (handshake) and mints a new code (they live 60 s and work once); the code is
+/// only ever in the URL fragment handed to the OS opener and is never logged or returned to the UI.
 #[tauri::command]
-fn open_ui() -> Result<(), String> {
-    let (prog, args): (&str, Vec<&str>) = if cfg!(target_os = "windows") {
-        ("cmd", vec!["/C", "start", "", URL])
-    } else if cfg!(target_os = "macos") {
-        ("open", vec![URL])
-    } else {
-        ("xdg-open", vec![URL])
+async fn open_ui(server: State<'_, Server>) -> Result<(), String> {
+    let (port, base_path, secret) = {
+        let mut guard = server.lock();
+        let alive = guard.as_mut().map(|r| r.child.is_running()).unwrap_or(false);
+        match guard.as_ref().filter(|_| alive) {
+            Some(r) => r.open_params(),
+            None => return Err("The control plane is not running. Press \"Start & open\" first.".to_string()),
+        }
     };
-    Command::new(prog).args(args).spawn().map_err(|e| e.to_string())?;
-    Ok(())
+    let code = match capability::fresh_launch_code(port, &secret) {
+        Ok(c) => c,
+        Err(e @ (capability::CapabilityError::ProofMismatch | capability::CapabilityError::Untrusted(_))) => {
+            // Something that does not hold this launch's secret now answers on the port: do not open.
+            server.stop();
+            return Err(format!(
+                "The control plane could not prove its identity ({e}). It was stopped and the browser was not opened."
+            ));
+        }
+        Err(e) => return Err(format!("Could not get a launch code: {e}. Try again, or Stop and Start.")),
+    };
+    open_in_browser(&capability::launch_url(port, &base_path, &code))
+}
+
+/// Hand a URL to the OS opener. The URL (which carries the launch code in its fragment) is passed as
+/// an argument only; it is not echoed or logged. It is briefly visible to same-user processes in the
+/// opener's command line, which the threat model puts out of scope (single use, 60 s).
+fn open_in_browser(url: &str) -> Result<(), String> {
+    let (prog, args): (&str, Vec<&str>) = if cfg!(target_os = "windows") {
+        ("cmd", vec!["/C", "start", "", url])
+    } else if cfg!(target_os = "macos") {
+        ("open", vec![url])
+    } else {
+        ("xdg-open", vec![url])
+    };
+    let mut cmd = Command::new(prog);
+    cmd.args(args);
+    lifecycle::hide_console(&mut cmd);
+    cmd.spawn().map(|_| ()).map_err(|e| format!("could not open the browser: {}", e.kind()))
 }
 
 /// "Check this device" — device readiness via the FROZEN brain (posture + default LLM). No system Python.
@@ -242,14 +244,5 @@ mod tests {
             "no global API script embedded in the context"
         );
         assert!(dump.contains("__TAURI_IIFE__"), "the embedded script is not the global API bundle");
-    }
-
-    #[test]
-    fn port_refusal_never_adopts_a_listener() {
-        assert!(port_refusal(PortState::Free).is_none());
-        let msg = port_refusal(PortState::Listening).unwrap();
-        assert!(msg.contains("8787") && msg.contains("will not be reused"));
-        let e = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
-        assert!(port_refusal(PortState::Unavailable(e)).unwrap().contains("8787"));
     }
 }

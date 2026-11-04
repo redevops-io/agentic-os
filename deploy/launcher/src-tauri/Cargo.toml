@@ -16,6 +16,10 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Capability handshake (src/capability.rs): HMAC-SHA256 is built on sha2, the client nonce on getrandom.
+# Both packages are already in the tauri tree (sha2 0.10.x, getrandom 0.3.x): direct edges only.
+sha2 = "0.10"
+getrandom = "0.3"
 
 # Sidecar lifecycle (src/lifecycle.rs). Both crates are already in the resolved tree through
 # tauri/tao/wry (libc 0.2.x everywhere, windows-sys 0.61.x on Windows); listing them here adds

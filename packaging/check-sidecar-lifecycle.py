@@ -135,35 +135,45 @@ def main() -> int:
     report("launcher killed (pipe closed by the kernel)", ok, f"before[{before}] after[{s.state()}]")
     s.cleanup_force()
 
-    # 3b. real SIGKILL of a real parent process that owns the pipe
-    root = Path(tempfile.mkdtemp(prefix="rdo-life-parent-"))
-    (root / "tmp").mkdir()
-    (root / "home").mkdir()
-    port = free_port()
-    parent_src = (
-        "import subprocess,sys,time,os\n"
-        "env={'PATH':'/usr/bin:/bin','HOME':sys.argv[3],'TMPDIR':sys.argv[2],'PROJECTS_PORT':sys.argv[4],"
-        "'PROJECTS_HOST':'127.0.0.1','LANG':'en_US.UTF-8'}\n"
-        "p=subprocess.Popen([sys.argv[1],'serve','--exit-on-stdin-eof'],env=env,stdin=subprocess.PIPE,"
-        "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,process_group=0)\n"
-        "print(p.pid,flush=True)\n"
-        "time.sleep(600)\n"
-    )
-    parent = subprocess.Popen([sys.executable, "-c", parent_src, str(binary), str(root / "tmp"),
-                               str(root / "home"), str(port)], stdout=subprocess.PIPE, text=True)
-    pgid = int(parent.stdout.readline())
-    wait(lambda: listening(port), 90)
-    before = f"procs={len(group_pids(pgid))} listener={listening(port)} mei={len(list((root / 'tmp').glob('_MEI*')))}"
-    parent.send_signal(signal.SIGKILL)
-    parent.wait()
-    ok = wait(lambda: not group_pids(pgid) and not listening(port) and not list((root / "tmp").glob("_MEI*")), 10)
-    after = f"procs={len(group_pids(pgid))} listener={listening(port)} mei={len(list((root / 'tmp').glob('_MEI*')))}"
-    report("launcher process SIGKILLed", ok, f"before[{before}] after[{after}]")
-    try:
-        os.killpg(pgid, signal.SIGKILL)
-    except OSError:
-        pass
-    shutil.rmtree(root, ignore_errors=True)
+    # 3b/3c. real SIGKILL of a real parent process that owns the pipes. 3c is the launcher's real mode:
+    # PROJECTS_PORT=0 + AGENTIC_OS_HANDOFF=stdout (the parent reads the hand-off line, prints only pid+port).
+    for label, handoff in (("3b", False), ("3c", True)):
+        root = Path(tempfile.mkdtemp(prefix="rdo-life-parent-"))
+        (root / "tmp").mkdir()
+        (root / "home").mkdir()
+        port = free_port()
+        parent_src = (
+            "import subprocess,sys,time,os,json\n"
+            "h=sys.argv[5]=='1'\n"
+            "env={'PATH':'/usr/bin:/bin','HOME':sys.argv[3],'TMPDIR':sys.argv[2],'PROJECTS_PORT':'0' if h else sys.argv[4],"
+            "'PROJECTS_HOST':'127.0.0.1','LANG':'en_US.UTF-8'}\n"
+            "if h: env['AGENTIC_OS_HANDOFF']='stdout'\n"
+            "p=subprocess.Popen([sys.argv[1],'serve','--exit-on-stdin-eof'],env=env,stdin=subprocess.PIPE,"
+            "stdout=subprocess.PIPE if h else subprocess.DEVNULL,stderr=subprocess.DEVNULL,process_group=0)\n"
+            "port=sys.argv[4]\n"
+            "if h:\n"
+            "    port=json.loads(p.stdout.readline())['port']\n"
+            "print(p.pid,port,flush=True)\n"
+            "time.sleep(600)\n"
+        )
+        parent = subprocess.Popen([sys.executable, "-c", parent_src, str(binary), str(root / "tmp"),
+                                   str(root / "home"), str(port), "1" if handoff else "0"],
+                                  stdout=subprocess.PIPE, text=True)
+        pg, pt = parent.stdout.readline().split()
+        pgid, port = int(pg), int(pt)
+        wait(lambda: listening(port), 90)
+        before = f"procs={len(group_pids(pgid))} listener={listening(port)} mei={len(list((root / 'tmp').glob('_MEI*')))}"
+        parent.send_signal(signal.SIGKILL)
+        parent.wait()
+        ok = wait(lambda: not group_pids(pgid) and not listening(port) and not list((root / "tmp").glob("_MEI*")), 10)
+        after = f"procs={len(group_pids(pgid))} listener={listening(port)} mei={len(list((root / 'tmp').glob('_MEI*')))}"
+        report(f"{label} launcher process SIGKILLed" + (" (hand-off mode, port 0)" if handoff else ""), ok,
+               f"before[{before}] after[{after}]")
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except OSError:
+            pass
+        shutil.rmtree(root, ignore_errors=True)
 
     # 4. [limit] the whole group is SIGKILLed: nothing runs, but the bootloader never cleans _MEI
     s = Scenario(binary)

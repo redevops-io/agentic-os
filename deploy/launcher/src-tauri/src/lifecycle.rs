@@ -17,12 +17,15 @@
 //      power-off of the GUI). A clean uvicorn exit lets the PyInstaller bootloader delete `_MEI*`.
 //      It needs no console API, so it is also the graceful channel on Windows, where a GUI-subsystem
 //      launcher has no console to send CTRL_BREAK on.
-//   4. Port preflight: refuse to start when something already listens on the port (never adopt).
+//   4. No adoption: the sidecar binds an OS-chosen port (PROJECTS_PORT=0) and the launcher proves it
+//      is that process with the capability handshake (src/capability.rs, src/launch.rs); a stale or
+//      foreign listener can neither take the port nor answer the handshake.
 //
 // Windows paths are written against the windows-sys API but have NOT been run: see the UNVERIFIED
 // notes and the test plan in the R0-prime defects report.
 
 use std::io;
+#[cfg(test)]
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::thread::sleep;
@@ -32,17 +35,20 @@ use std::time::{Duration, Instant};
 pub const GRACE: Duration = Duration::from_secs(3);
 const POLL: Duration = Duration::from_millis(25);
 
-/// What the preflight found on the sidecar port.
+/// What a port probe found (test helper: the product no longer pre-probes, see header note 4).
+#[cfg(test)]
 #[derive(Debug)]
 pub enum PortState {
     Free,
     /// Something accepts connections there (possibly a stale ReDevOps control plane).
     Listening,
     /// Cannot connect, but binding fails too (port reserved/in use/denied); carries the bind error.
+    #[allow(dead_code)]
     Unavailable(io::Error),
 }
 
-/// Look for an existing listener on `addr`. Never adopts anything: the caller decides what to say.
+/// Look for an existing listener on `addr`.
+#[cfg(test)]
 pub fn probe_port(addr: SocketAddr) -> PortState {
     if TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok() {
         return PortState::Listening;
@@ -104,6 +110,19 @@ impl ManagedChild {
             #[cfg(windows)]
             job,
         })
+    }
+
+    /// Take the piped stdout / stderr (the caller sets `Stdio::piped()` before `spawn`).
+    pub fn take_stdout(&mut self) -> Option<std::process::ChildStdout> {
+        self.child.stdout.take()
+    }
+    pub fn take_stderr(&mut self) -> Option<std::process::ChildStderr> {
+        self.child.stderr.take()
+    }
+
+    /// Exit status if the leader already exited (non-blocking).
+    pub fn try_exit_status(&mut self) -> Option<std::process::ExitStatus> {
+        self.child.try_wait().ok().flatten()
     }
 
     /// PID of the bootloader (also the process-group id on Unix).
