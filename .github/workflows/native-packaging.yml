@@ -106,6 +106,22 @@ jobs:
         shell: bash
         run: python -I packaging/notices/check_notices_vs_sbom.py --sbom packaging/dist/sbom/sbom.cdx.json --notices-report packaging/notices/out/notices-report.json --licenses-dir deploy/launcher/src-tauri/licenses --exclude knowledge-frontier
 
+      # Windows only: the launcher's own tests on a real Windows host (nothing signs, nothing publishes). `cargo test --locked`
+      # runs the Windows Job Object test (stop kills the grandchild); the two --ignored tests start the REAL sidecar built above
+      # (RDO_SIDECAR), do the hand-off + HMAC handshake, exchange a launch code, flood the handshake and stop the tree.
+      # continue-on-error: a failing test must not discard the unsigned build; the log is uploaded with the artifact either way.
+      - name: Launcher tests on Windows (Job Object, real-sidecar start / handshake / stop)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        timeout-minutes: 25
+        shell: bash
+        working-directory: deploy/launcher/src-tauri
+        env:
+          RDO_SIDECAR: ${{ github.workspace }}\packaging\dist\redevops-sidecar.exe
+        run: |
+          mkdir -p ../../../packaging/dist
+          { cargo test --locked && cargo test --locked -- --ignored --test-threads=1 real_sidecar_start_handshake real_sidecar_survives; } 2>&1 | tee ../../../packaging/dist/launcher-tests-windows.log
+
       # --- Signing / notarization: staged (decision 4). Enabled per-OS in P2 when secrets exist. ---
       # - name: Sign & notarize (macOS)   if: runner.os == 'macOS' && secrets.APPLE_ID ...
       # - name: Sign (Windows)            if: runner.os == 'Windows' && secrets.WIN_CERT ...
@@ -117,6 +133,7 @@ jobs:
           path: |
             packaging/dist/build-manifest.json
             packaging/dist/sbom/*
+            packaging/dist/launcher-tests-windows.log
             packaging/wheelhouse/WHEELS.sha256
             deploy/launcher/src-tauri/target/release/bundle/**/*.deb
             deploy/launcher/src-tauri/target/release/bundle/**/*.AppImage
