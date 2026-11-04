@@ -8,7 +8,7 @@ set -euo pipefail
 . "$(dirname "$0")/common.sh"
 DIST="$PK/dist"
 TARGET="${CARGO_TARGET_DIR:-$ROOT/deploy/launcher/src-tauri/target}"
-LBIN="$TARGET/release/agentic-apps"; [ -f "$LBIN.exe" ] && LBIN="$LBIN.exe"
+LBIN="$TARGET/release/$(identity main_binary_name)"; [ -f "$LBIN.exe" ] && LBIN="$LBIN.exe"
 case "$OS" in macos) TRIPLE=aarch64-apple-darwin ;; windows) TRIPLE=x86_64-pc-windows-msvc ;; linux) TRIPLE=x86_64-unknown-linux-gnu ;; esac
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 # PyInstaller (hash-locked) is needed to read the executable's archive

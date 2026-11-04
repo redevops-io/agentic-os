@@ -56,5 +56,5 @@ packaging/notices/build-licenses.sh --platform <macos|windows> --site-packages <
     --exclude knowledge-frontier
 ```
 
-After the bundle step: `python packaging/notices/check_artifact_manifest.py --dir "<Agentic Apps.app>"` (macOS) or
+After the bundle step: `python packaging/notices/check_artifact_manifest.py --dir "<Agentic Apps R0-prime.app>"` (macOS) or
 `--listing <paths of the installed/extracted tree>` (Windows).
