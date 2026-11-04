@@ -306,3 +306,21 @@ def test_ubuntu_acceptance_uses_no_predictable_tmp_log_and_checks_the_gate():
     text = (PK / "acceptance-ubuntu.sh").read_text()
     assert "/tmp/rdo-serve.log" not in text and "mktemp" in text
     assert "/api/projects" in text and "401" in text
+
+
+def test_candidate_script_refuses_signing_variables_and_a_non_empty_output_dir(tmp_path):
+    import os
+    if os.uname().sysname != "Darwin" or os.uname().machine != "arm64":
+        pytest.skip("macOS arm64 only")
+    script = str(PK / "candidate" / "build-local-macos-candidate.sh")
+    env = {**os.environ, "APPLE_SIGNING_IDENTITY": "x"}
+    r = subprocess.run(["bash", script, str(tmp_path / "out")], capture_output=True, text=True, env=env)
+    assert r.returncode == 2 and "signing-related variable" in r.stdout, r.stdout + r.stderr
+    (tmp_path / "full").mkdir()
+    (tmp_path / "full" / "x").write_text("x")
+    env2 = {k: v for k, v in os.environ.items() if not k.startswith(("APPLE_", "CODESIGN", "TAURI_SIGNING", "KEYCHAIN"))}
+    r = subprocess.run(["bash", script, str(tmp_path / "full")], capture_output=True, text=True, env=env2)
+    assert r.returncode == 2 and "not empty" in r.stdout
+    text = (PK / "candidate" / "build-local-macos-candidate.sh").read_text()
+    for bad in ("codesign --sign", "notarytool", "security import", "gh release", "git push"):
+        assert bad not in text
