@@ -32,7 +32,7 @@ tree gets a 403 on the preflight and a 403 on the simple POST, and nothing is re
 | Malicious web page in the user's browser (cross-origin `fetch`, forms, `<img>`, navigations) | Send requests to `127.0.0.1:<port>` with the browser's ambient state | Yes |
 | DNS rebinding page (attacker hostname re-pointed to 127.0.0.1) | Same-origin from the browser's view; sends `Host: attacker` | Yes (Host allowlist) |
 | Other local web app or server on another port of 127.0.0.1/localhost (same-site) | The browser sends cookies for the host to it, whatever the port; it can make requests to us | Yes: the session is not a cookie (it is a header token kept in the UI origin's `sessionStorage`, which is port-scoped), and requests are also checked by Origin, `Sec-Fetch-Site` and the CSRF header |
-| Another OS user on the same machine (shared host) | Connect to the loopback port; read other users' process arguments | Yes for the secret (memory only, never in argv or on disk) and the session. The single-use launch code is the exception until the launcher fix below lands: today the launcher passes it in the argv of the OS opener, where another local user can read it for the moments the opener lives and exchange it first (reviewer finding SR-01). Fix, PENDING and not yet confirmed: the launcher opens a 0600 redirect file in a per-user directory and no credential appears in any argv. Until it is confirmed, treat other local users as NOT excluded on a shared machine. |
+| Another OS user on the same machine (shared host) | Connect to the loopback port; read other users' process arguments; list or read files in world-readable places | Yes for the secret (memory only, never in argv or on disk) and the session. The single-use launch code never appears in any argv: the launcher hands the OS opener only the path of a private redirect file (section 4.3). Residual: a same-user process can read that file during its 60 s lifetime (same-user malware is out of scope); Windows ACL behaviour of the file and directory is UNVERIFIED (section 8). |
 | A stale or foreign process holding the sidecar's port | Be mistaken for the sidecar by the launcher | Yes (HMAC handshake, section 5) |
 | Malware running as the same OS user | Read launcher memory, the browser's storage, the process list, attach a debugger | NO. Out of scope. |
 | A compromised user session or browser (extension, XSS in the UI) | Act with the session | NO (an XSS inside the UI origin acts as the user; the CSP reduces this surface) |
@@ -123,7 +123,7 @@ process on the port unadoptable: it cannot know the secret that this launch's si
 
 ### 4.3 Opening the UI
 
-The launcher navigates the webview or browser to
+The browser has to arrive at
 
 ```
 http://127.0.0.1:<port><base_path>/#lc=<launch_code>
@@ -131,8 +131,39 @@ http://127.0.0.1:<port><base_path>/#lc=<launch_code>
 
 The code is in the URL fragment: the browser never sends it to the server, and it is not in access logs
 or `Referer`. The page's script removes the fragment from the address bar immediately and exchanges it
-(section 4.5). The webview must load this URL itself (same origin as the API); an app-bundled page on
-another origin (for example a `tauri://` origin) cannot call the API, by design.
+(section 4.5). The page must be loaded by a browser at the sidecar origin itself (same origin as the API);
+an app-bundled page on another origin (for example a `tauri://` origin) cannot call the API, by design,
+so the launcher does not load the sidecar into its own webview.
+
+**The URL is never given to the OS opener.** A URL passed to `open` / `xdg-open` / `cmd /C start` sits in
+that process's argv, which every other local user can read (`ps`, `/proc/<pid>/cmdline`) while the opener
+or a freshly started browser runs (review finding SR-01). Instead the launcher (`deploy/launcher/src-tauri/src/opener.rs`,
+`main.rs::open_ui`):
+
+1. performs the verified handshake and mints a fresh code (4.2, 4.4, 4.7);
+2. writes a small redirect page `open-<32 hex digits = 128 random bits>.html` into
+   `<app_cache_dir()>/launch/` (on macOS `~/Library/Caches/io.redevops.agentic-apps/launch/`). The directory
+   is created with mode 0700 and must be a real directory (a symlink is refused) owned by the current user
+   (otherwise the open is refused); a looser existing mode is tightened to 0700. The file is created
+   exclusively (`create_new`, never follows a planted name) with mode 0600. The page holds
+   `location.replace("<URL>")` (and a `<noscript>` meta refresh), a `no-referrer` policy and a CSP that
+   allows only its own inline script. The URL is refused unless it starts with `http://127.0.0.1:` and
+   contains only inert characters (`[A-Za-z0-9:/._-#=~]`);
+3. gives the opener **only that file path** as its argument (`open <path>`, `xdg-open <path>`,
+   `cmd /C start "" <path>`): no URL, no code, no secret in any argv;
+4. deletes the file 60 s later (the code's lifetime), sweeps any `open-*.html` older than 120 s before each
+   write (crash leftovers), and deletes every file it wrote on exit. If starting the opener fails the file is
+   deleted at once.
+
+The redirect is a top-level navigation from a `file:` page to `http:`, with the fragment as part of the target,
+which Chromium, WebKit and Gecko allow (observed in headless Chromium; see section 8 for the browsers not tried).
+
+`legacy_service_warning` (launcher command, shown in the launcher window): after a start, the launcher makes a
+best-effort probe of the OLD fixed port 8787 with one unauthenticated `GET /api/projects`, bounded to 300 ms. A
+200 with a JSON body means a v0.3.2 sidecar (orphaned by the old launcher) is still serving an unauthenticated API
+there; the launcher then shows a warning text and nothing else: it never adopts, contacts further, or stops that
+process. Nothing listening, 401/403/404, a slow peer or a non-JSON body gives no warning. The new sidecar uses an
+OS-chosen port and cannot collide with it.
 
 ### 4.4 Minting another launch code (re-open a window, expired code)
 
@@ -321,7 +352,7 @@ are not usable in a browser (the JSON at `/openapi.json` is, with a session).
    extension before the script removes it (a few ms), and the used (dead) URL may remain in browser
    history or session-restore. It is single use and expires; the script removes it from the address bar
    immediately. The launcher's own hand-off of the code to the browser is the weak point on a shared
-   machine: see the Another-OS-user row in section 2 (argv exposure, fix pending).
+   machine: see the Another-OS-user row in section 2 and the redirect file in 4.3.
 8. **Availability, not secrecy.** A local process cannot lock the user out of signing in (a correct code
    is served while the failure budget is spent, 4.7) and cannot block the launcher's mint (4.7), but it
    can flood `/handshake` to evict a live challenge, which the launcher handles by retrying (4.7). A
@@ -362,5 +393,6 @@ are not usable in a browser (the JSON at `/openapi.json` is, with a session).
 | The UI works under the CSP (loads, exchanges, renders data) | OBSERVED in headless Chromium for the load path; the Sidekick POST path with the CSRF header is covered by the node-VM shim test and the TestClient flow, not by a real-browser click |
 | macOS sleep behaviour of the two-clock expiry | STATIC plus fake-clock tests (no real sleep was performed) |
 | The Windows socket option (`SO_EXCLUSIVEADDRUSE`) and Windows/WebView2/WKWebView behaviour of `sessionStorage` and the fragment | UNVERIFIED (not run) |
-| The launcher argv fix (0600 redirect file, no credential in argv) | PENDING, not confirmed |
+| The launcher opener (4.3): no credential in any argv; redirect file 0600 in a 0700 non-symlink, owner-checked directory, random 128-bit name, deleted after 60 s / swept after 120 s / on exit; `legacy_service_warning` | OBSERVED by `cargo test` on macOS arm64 (`opener.rs`: argv carries only the path, a `ps` poller finds no code, modes, symlink refusal, injection refusal, sweep, timers, exit hook; `launch.rs`: the legacy probe) and, in a headless browser, the redirect landing with the fragment intact (security stage 3 report). The real launcher GUI was not launched |
+| Open items of the opener: Firefox, real desktop Safari / WKWebView, snap- or flatpak-confined browsers (they may not be able to read a `file:` page in the user's cache directory, or may rewrite the URL), Windows (file and directory ACL inheritance of `%LOCALAPPDATA%`, `cmd /C start` with a path, WebView2) | UNVERIFIED |
 | Timing safety beyond the use of `hmac.compare_digest` over fixed-length digests | STATIC (no timing measurement) |
