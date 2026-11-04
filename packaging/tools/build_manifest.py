@@ -36,7 +36,8 @@ INPUT_GLOBS = [
     "packaging/build-sidecar.sh", "packaging/build-launcher.sh", "packaging/build-windows.ps1",
     "packaging/stage-sidecar.sh", "packaging/tools/*.py", "packaging/cargo-targets/*",
     "deploy/launcher/src-tauri/Cargo.toml", "deploy/launcher/src-tauri/Cargo.lock",
-    "deploy/launcher/src-tauri/tauri.conf.json", "deploy/launcher/src-tauri/build.rs",
+    "deploy/launcher/src-tauri/tauri.conf.json", "deploy/launcher/src-tauri/build.rs", "deploy/launcher/src-tauri/Info.plist",
+    "packaging/identity.json",
     "deploy/launcher/src-tauri/src/*.rs", "deploy/launcher/rust-toolchain.toml",
     ".github/workflows/native-packaging.yml",
 ]
@@ -73,6 +74,16 @@ def git_info(root: Path) -> dict:
         "dirty_files": len(status.splitlines()) if status else 0,
         "remote_origin": g("config", "--get", "remote.origin.url"),
     }
+
+
+def release_identity(root: Path) -> tuple[str | None, dict | None]:
+    """The release line and the identity of the artifact this build produces (packaging/identity.json), so a manifest says
+    whether it describes the R0-prime line or not. None/None when the file is absent (an older tree)."""
+    f = root / "packaging" / "identity.json"
+    if not f.is_file():
+        return None, None
+    d = json.loads(f.read_text(encoding="utf-8"))
+    return d.get("release_line"), {"schema": d.get("schema"), **d.get("r0prime", {})}
 
 
 def input_hashes(root: Path) -> dict:
@@ -135,6 +146,7 @@ def main(argv: list[str] | None = None) -> int:
     m["schema"] = SCHEMA
     m["generated_at_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     m["source"] = git_info(root)
+    m["release_line"], m["identity"] = release_identity(root)
     m["inputs_sha256"] = input_hashes(root)
     tc = m.setdefault("toolchain", {})
     if a.record_python:

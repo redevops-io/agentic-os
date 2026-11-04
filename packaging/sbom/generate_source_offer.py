@@ -57,6 +57,10 @@ def main() -> int:
     src = manifest.get("source", {})
     ident = [f"- SBOM serial: `{bom['serialNumber']}` ({len(comps)} components, CycloneDX {bom['specVersion']})",
              f"- agentic-os source commit: `{meta_props.get('redevops:source-commit', 'unknown')}` (tree `{meta_props.get('redevops:source-tree', 'unknown')}`)"]
+    ident_rel = manifest.get("identity") or {}
+    if manifest.get("release_line"):
+        ident.append(f"- product: {ident_rel.get('product_name', '?')} {ident_rel.get('version', '?')}, release line `{manifest['release_line']}`, "
+                     f"bundle identifier `{ident_rel.get('bundle_identifier', '?')}` (not the frozen v0.3.2 identity; see docs/R0_PRIME_IDENTITY.md)")
     if src.get("dirty_files"):
         ident.append(f"- WARNING: the build tree had {src['dirty_files']} uncommitted/untracked files: the commit above does not fully describe the build")
     ident.append(f"- archive analysed: {meta_props.get('redevops:archive-source', '?')} sha256 `{meta_props.get('redevops:archive-sha256', '')}`")

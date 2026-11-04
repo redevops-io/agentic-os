@@ -11,7 +11,7 @@
              LAUNCHER-side fix (Job Object / taskkill /T), so on a candidate whose fix is in the launcher this mode is EXPECTED to
              FAIL; it still tells whether the sidecar itself survives parent death. The control run (taskkill /T /F) proves the
              harness sees success.
-    Launcher (assisted)  start agentic-apps.exe, ask the operator to click "Start & open" (screenshot orphan-01), snapshot, kill the
+    Launcher (assisted)  start agentic-r0prime.exe, ask the operator to click "Start & open" (screenshot orphan-01), snapshot, kill the
              LAUNCHER with Stop-Process -Force, and report survivors / port 8787 / _MEI.  This is the real defect path.
   Only process ids recorded by this script are ever stopped.  The sidecar runs with an isolated TEMP, so _MEI leftovers are exactly the
   ones it created.  Cleanup removes only those recorded PIDs and the _MEI dirs found in the isolated TEMP (disable with -NoCleanup).
@@ -60,7 +60,7 @@ try {
   if (-not $InstallDir) { $InstallDir = Find-InstallDir }
   if (-not $InstallDir) { Add-Result 'ORP-00' 'install directory' 'FAIL' 'not found: run 01-Install.ps1 first'; throw 'stop' }
   $sidecar = Join-Path $InstallDir 'redevops-sidecar.exe'
-  $launcher = Join-Path $InstallDir 'agentic-apps.exe'
+  $launcher = Join-Path $InstallDir $script:LauncherExe
   $baseline = @(Get-Process -Name 'redevops-sidecar' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
   if ($baseline.Count) { Add-Result 'ORP-00' 'pre-existing sidecar processes' 'INFO' ("pids {0} existed before this run; they are NOT touched and are excluded from the verdicts" -f ($baseline -join ',')) }
 
@@ -97,7 +97,7 @@ try {
     } else { Add-Result 'ORP-C0' 'control sidecar started' 'FAIL' 'control instance did not listen' }
   }
   else {
-    if (-not (Test-Path -LiteralPath $launcher)) { Add-Result 'ORP-00' 'agentic-apps.exe present' 'FAIL' 'not found'; throw 'stop' }
+    if (-not (Test-Path -LiteralPath $launcher)) { Add-Result 'ORP-00' ($script:LauncherExe + ' present') 'FAIL' 'not found'; throw 'stop' }
     if (-not [Environment]::UserInteractive) { Add-Result 'ORP-L0' 'interactive session needed to click the launcher' 'MANUAL' 'run this mode from an interactive desktop session'; throw 'stop' }
     if (@(Get-Listeners 8787).Count -gt 0) { Add-Result 'ORP-L0' 'port 8787 free' 'FAIL' 'something already listens on 8787 (old orphan?); free it by hand and re-run'; throw 'stop' }
     $prof = New-IsolatedProfile (Join-Path $script:OutDir 'orphan-profile-launcher')

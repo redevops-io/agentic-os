@@ -124,8 +124,11 @@ def main(argv: list[str] | None = None) -> int:
     # launcher
     launcher = None
     tauri_ver = None
+    product_name = "Agentic Apps"
     if a.tauri_conf:
-        tauri_ver = json.loads(Path(a.tauri_conf).read_text()).get("version")
+        tconf = json.loads(Path(a.tauri_conf).read_text())
+        tauri_ver = tconf.get("version")
+        product_name = tconf.get("productName") or product_name
     if a.launcher_bin or a.cargo_manifest or a.cargo_metadata_json:
         launcher = Comp(key="launcher", name="agentic-apps launcher (redevops-launcher)", version=tauri_ver, kind="application",
                         purl=f"pkg:generic/redevops-launcher@{tauri_ver}" if tauri_ver else None)
@@ -156,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
     src = manifest.get("source", {})
     ts = a.timestamp or (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(os.environ.get("SOURCE_DATE_EPOCH") or src.get("commit_time_epoch") or time.time()))))
     root_ver = tauri_ver or (inv.get("agentic-os") or {}).get("version")
-    root = {"type": "application", "bom-ref": "rdo:product", "name": "Agentic Apps (native build)", "version": root_ver,
+    root = {"type": "application", "bom-ref": "rdo:product", "name": f"{product_name} (native build)", "version": root_ver,
             "properties": [{"name": "redevops:source-commit", "value": src.get("commit", "unknown")},
                            {"name": "redevops:source-tree", "value": src.get("tree", "unknown")},
                            {"name": "redevops:archive-source", "value": arc.source},

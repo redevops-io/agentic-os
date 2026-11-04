@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Smoke test of the embedded sidecar of a built (unsigned) .app WITHOUT launching its GUI.
 
-  python3 -I packaging/candidate/check_app_smoke.py --sidecar "<.../Agentic Apps.app/Contents/MacOS/redevops-sidecar>" --work DIR --log FILE
+  python3 -I packaging/candidate/check_app_smoke.py --sidecar "<.../Agentic Apps R0-prime.app/Contents/MacOS/redevops-sidecar>" --work DIR --log FILE
 
 Everything runs under `env -i` with a throwaway HOME/TMPDIR below --work. Secrets (hand-off secret, launch
 codes, session tokens, CSRF tokens) are never written to the log. Leftover processes are killed by NAMED PID/PGID only;

@@ -3,7 +3,7 @@
 # app, never opens a window, and refuses to print the launch command unless the owner's explicit approval is acknowledged.
 #
 #   fallback_throwaway_home.sh prepare [--dir DIR]
-#   fallback_throwaway_home.sh command --i-have-the-owners-explicit-approval --app "/path/Agentic Apps.app" [--dir DIR]
+#   fallback_throwaway_home.sh command --i-have-the-owners-explicit-approval --app "/path/Agentic Apps R0-prime.app" [--dir DIR]
 #   fallback_throwaway_home.sh verify  [--dir DIR]
 #
 # This is NOT equivalent to a fresh account (README, "Fallback"): the keychain, the Gatekeeper first-launch path of a
@@ -52,19 +52,19 @@ Prepared: $DIR
   throwaway HOME : $DIR/home
   throwaway TMPDIR: $DIR/tmp
   working dir    : $DIR/cwd
-Next (only with the owner's explicit approval): $0 command --i-have-the-owners-explicit-approval --app "<path to Agentic Apps.app>" --dir "$DIR"
+Next (only with the owner's explicit approval): $0 command --i-have-the-owners-explicit-approval --app "<path to Agentic Apps R0-prime.app>" --dir "$DIR"
 Then follow MANUAL-CHECKLIST.md as far as it applies, quit the app, and run: $0 verify --dir "$DIR"
 EOT
     ;;
   command)
     [ "$APPROVED" = 1 ] || die "refusing: pass --i-have-the-owners-explicit-approval only after the owner approved a GUI run in their own session"
     [ -d "$DIR/home" ] || die "run 'prepare' first"
-    [ -x "$APP/Contents/MacOS/agentic-apps" ] || die "launcher not found in --app: $APP"
+    [ -x "$APP/Contents/MacOS/$MAIN_EXE" ] || die "launcher not found in --app: $APP"
     DIR="$(abs_path "$DIR")"; APP="$(abs_path "$APP")"
     cat <<EOT
 The owner may run this in Terminal (it starts the launcher binary directly, in the owner's GUI session, with a throwaway HOME):
 
-  cd "$DIR/cwd" && env HOME="$DIR/home" TMPDIR="$DIR/tmp" "$APP/Contents/MacOS/agentic-apps"
+  cd "$DIR/cwd" && env HOME="$DIR/home" TMPDIR="$DIR/tmp" "$APP/Contents/MacOS/$MAIN_EXE"
 
 Notes: launching the binary directly skips LaunchServices, so it is NOT the Finder first-launch / Gatekeeper path. Cocoa/WebKit
 may still write under the real ~/Library (NSHomeDirectory follows the account database, not \$HOME); 'verify' shows what leaked.

@@ -1,5 +1,5 @@
 #!/bin/bash
-# verify_dmg.sh: read-only verification of the Agentic Apps macOS dmg. The same script is used for the unsigned local
+# verify_dmg.sh: read-only verification of the Agentic Apps R0-prime macOS dmg. The same script is used for the unsigned local
 # development build (--expect unsigned, the default) and for a signed + notarized + stapled candidate (--expect signed).
 #
 #   verify_dmg.sh [--expect unsigned|signed] [--team-id ID] [--expect-version V] [--expect-app-stapled]
@@ -148,6 +148,15 @@ L "Info.plist: CFBundleIdentifier=$BID CFBundleExecutable=$BEXE CFBundleVersion=
 if [ -n "$EXPECT_VERSION" ]; then [ "$BVER" = "$EXPECT_VERSION" ] && rec PASS P-03 "CFBundleVersion equals the expected $EXPECT_VERSION" || rec FAIL P-03 "CFBundleVersion '$BVER' != expected '$EXPECT_VERSION'"; fi
 [ -n "$LSMIN" ] || rec FAIL P-04 "LSMinimumSystemVersion missing"
 [ -x "$APP/Contents/MacOS/$BEXE" ] && rec PASS P-05 "CFBundleExecutable '$BEXE' exists and is executable" || rec FAIL P-05 "CFBundleExecutable '$BEXE' missing"
+# R0-prime identity (docs/R0_PRIME_IDENTITY.md): distinct from the frozen v0.3.2 deliverable in name, bundle id, executable and version
+[ "$(basename "$APP")" = "$APP_NAME" ] && rec PASS P-06 "app bundle name is '$APP_NAME' (the frozen app is '$FROZEN_APP_NAME')" || rec FAIL P-06 "app bundle name is '$(basename "$APP")', expected '$APP_NAME'"
+[ "$BEXE" = "$MAIN_EXE" ] && rec PASS P-07 "CFBundleExecutable = $MAIN_EXE (frozen: $FROZEN_MAIN_EXE)" || rec FAIL P-07 "CFBundleExecutable is '$BEXE', expected '$MAIN_EXE'"
+case "$BSVER$BVER" in
+  *[!0-9.]*|"") rec FAIL P-08 "CFBundleShortVersionString '$BSVER' / CFBundleVersion '$BVER' are not plain dotted integers (Apple: 1-3 integers)";;
+  *) if [ "$BSVER" = "$APP_VERSION" ] && [ "$BVER" = "$APP_VERSION" ] && [ "$BSVER" != "$FROZEN_APP_VERSION" ]; then rec PASS P-08 "version $BSVER / bundle version $BVER = $APP_VERSION (frozen: $FROZEN_APP_VERSION)"
+     else rec FAIL P-08 "version '$BSVER' / bundle version '$BVER', expected $APP_VERSION (the frozen app is $FROZEN_APP_VERSION)"; fi;;
+esac
+[ "$(pb RedevopsReleaseLine)" = "$RELEASE_LINE" ] && rec PASS P-09 "RedevopsReleaseLine = $RELEASE_LINE" || rec FAIL P-09 "RedevopsReleaseLine is '$(pb RedevopsReleaseLine)', expected $RELEASE_LINE"
 
 MACHOS=""; NM=0
 while IFS= read -r f; do

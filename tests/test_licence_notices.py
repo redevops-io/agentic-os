@@ -199,7 +199,7 @@ def test_frozen_r0_macos_app_lacks_the_licence_files_and_r0prime_layout_has_them
 
 
 def test_windows_install_tree_listing(tmp_path):
-    good = [f"C:\\Program Files\\Agentic Apps\\Licenses\\{n}" for n in manifest.REQUIRED]
+    good = [f"C:\\Program Files\\Agentic Apps R0-prime\\Licenses\\{n}" for n in manifest.REQUIRED]
     assert manifest.check_paths(good) == []
     assert manifest.check_paths(good[:-1]) != []
 

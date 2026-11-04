@@ -2,12 +2,12 @@
 .SYNOPSIS
   Step 3: launcher process smoke test. NOT GUI automation: the window content is checked by the MANUAL checklist.
 .DESCRIPTION
-  Starts agentic-apps.exe (the Tauri launcher), waits, and records: process alive, main window handle/title (only in an
+  Starts agentic-r0prime.exe (the Tauri launcher), waits, and records: process alive, main window handle/title (only in an
   interactive session), child processes (WebView2), listener on the launcher's fixed port 8787 (the control plane starts only when
   "Start & open" is clicked, so none is expected), crash events (Application Error / .NET) since the start. Then it closes the
   window with CloseMainWindow() and, only if the process stays, Stop-Process on that one PID.
   The launcher is started with TEMP/TMP pointing to an isolated directory so any sidecar it spawns writes _MEI there.
-  Idempotent; refuses to run when another agentic-apps.exe is already running (it never kills processes it did not start).
+  Idempotent; refuses to run when another agentic-r0prime.exe is already running (it never kills processes it did not start).
 #>
 [CmdletBinding()]
 param([string]$InstallDir, [string]$OutDir, [int]$WaitSeconds = 10)
@@ -18,9 +18,9 @@ $handle = $null
 try {
   if (-not $InstallDir) { $st = Read-State; if ($st -and $st.installDir) { $InstallDir = $st.installDir } }
   if (-not $InstallDir) { $InstallDir = Find-InstallDir }
-  $exe = $(if ($InstallDir) { Join-Path $InstallDir 'agentic-apps.exe' } else { $null })
-  if (-not $exe -or -not (Test-Path -LiteralPath $exe)) { Add-Result 'LCH-00' 'agentic-apps.exe present' 'FAIL' 'not found: run 01-Install.ps1 first'; throw 'stop' }
-  if (@(Get-Process -Name 'agentic-apps' -ErrorAction SilentlyContinue).Count -gt 0) { Add-Result 'LCH-00' 'no other agentic-apps.exe running' 'SKIP' 'another instance is running; close it yourself and re-run (this script does not kill processes it did not start)'; throw 'stop' }
+  $exe = $(if ($InstallDir) { Join-Path $InstallDir $script:LauncherExe } else { $null })
+  if (-not $exe -or -not (Test-Path -LiteralPath $exe)) { Add-Result 'LCH-00' ($script:LauncherExe + ' present') 'FAIL' 'not found: run 01-Install.ps1 first'; throw 'stop' }
+  if (@(Get-Process -Name $script:LauncherProcess -ErrorAction SilentlyContinue).Count -gt 0) { Add-Result 'LCH-00' ('no other ' + $script:LauncherExe + ' running') 'SKIP' 'another instance is running; close it yourself and re-run (this script does not kill processes it did not start)'; throw 'stop' }
 
   $wv = $null; try { $wv = (Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction Stop).pv } catch { }
   Add-Result 'LCH-01' 'WebView2 runtime present' 'INFO' $(if ($wv) { "version $wv" } else { 'not found in the EdgeUpdate registry key (the launcher window may fail to render)' })
@@ -59,7 +59,7 @@ try {
   $left = @(Get-Process -Name 'redevops-sidecar' -ErrorAction SilentlyContinue).Count
   Add-Result 'LCH-08' 'no sidecar left after closing the launcher' $(if ($left -eq 0) { 'PASS' } else { 'FAIL' }) ("redevops-sidecar.exe processes: {0} (not started by this script unless the GUI was clicked)" -f $left)
   try {
-    $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = $t0 } -ErrorAction Stop | Where-Object { $_.Message -match 'agentic-apps|redevops-sidecar' -and $_.LevelDisplayName -in @('Error', 'Critical') })
+    $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = $t0 } -ErrorAction Stop | Where-Object { $_.Message -match 'agentic-r0prime|redevops-sidecar' -and $_.LevelDisplayName -in @('Error', 'Critical') })
     Add-Result 'LCH-09' 'crash events for the launcher/sidecar since start' $(if ($ev.Count -eq 0) { 'PASS' } else { 'FAIL' }) ("{0} error events in the Application log" -f $ev.Count)
   } catch { Add-Result 'LCH-09' 'crash events for the launcher/sidecar since start' 'INFO' ("Application log not readable or no events: {0}" -f $_.Exception.Message) }
 

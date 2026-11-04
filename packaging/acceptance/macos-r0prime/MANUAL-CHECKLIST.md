@@ -25,9 +25,9 @@ result is a finding, not a failed test of the checklist. Describe what you saw i
 | ID | Step | Expected | Record | Screenshot |
 |---|---|---|---|---|
 | B-01 | Terminal: `xattr -l <dmg>` and `shasum -a 256 <dmg>`. | variant Q/Q-set: `com.apple.quarantine: 0081;...`; the hash equals the expected file. | the attribute value, the hash | `B-01-dmg-xattr-hash.png` |
-| B-02 | Double-click the dmg in Finder (do not use `open`). | A "Verifying..." progress sheet may flash; then the volume "Agentic Apps" mounts. Signed + notarized: no warning. Unsigned: macOS may warn that the image cannot be verified; note the exact text. | dialog text, whether it needed a password | `B-02-dmg-open.png` |
+| B-02 | Double-click the dmg in Finder (do not use `open`). | A "Verifying..." progress sheet may flash; then the volume "Agentic Apps R0-prime" mounts. Signed + notarized: no warning. Unsigned: macOS may warn that the image cannot be verified; note the exact text. | dialog text, whether it needed a password | `B-02-dmg-open.png` |
 | B-03 | Look at the volume window. | The app and an `Applications` link; a custom volume icon. No stray files. | what is shown | `B-03-volume-window.png` |
-| B-04 | Drag "Agentic Apps" onto the `Applications` link. | A standard user cannot write to `/Applications`: Finder asks for an **administrator name and password**. Record that prompt; authenticate only if the owner is present and wants to (then the app lands in `/Applications`). Otherwise Cancel and do B-05. | prompt text, choice | `B-04-drag-to-applications.png` |
+| B-04 | Drag "Agentic Apps R0-prime" onto the `Applications` link. | A standard user cannot write to `/Applications`: Finder asks for an **administrator name and password**. Record that prompt; authenticate only if the owner is present and wants to (then the app lands in `/Applications`). Otherwise Cancel and do B-05. | prompt text, choice | `B-04-drag-to-applications.png` |
 | B-05 | If B-04 was cancelled: create `~/Applications` (Finder: Go > Home, New Folder, name `Applications`) and drag the app into it. | the app is copied. | where it lives | `B-05-copy-to-home-applications.png` |
 | B-06 | Terminal: `xattr -l "<installed app>"` (path from B-04/B-05). | variant Q: the copy **carries** `com.apple.quarantine` (INFERRED: DiskImages tags the files of a quarantined image). If it does not, record that: then C below does not exercise Gatekeeper. | value | `B-06-app-xattr.png` |
 | B-07 | Eject the dmg (Finder sidebar). | ejects. | | |
@@ -36,7 +36,7 @@ result is a finding, not a failed test of the checklist. Describe what you saw i
 
 | ID | Step | Expected | Record | Screenshot |
 |---|---|---|---|---|
-| C-01 | Double-click the app in Finder. | **Signed + notarized:** "'Agentic Apps' is an app downloaded from the Internet. Are you sure you want to open it?" naming the developer and an Open button. **Unsigned (quarantined):** a block dialog ("... cannot be opened because Apple cannot check it for malicious software" or equivalent); no Open button for a standard user. | exact dialog text, button names | `C-01-gatekeeper-first-launch.png` |
+| C-01 | Double-click the app in Finder. | **Signed + notarized:** "'Agentic Apps R0-prime' is an app downloaded from the Internet. Are you sure you want to open it?" naming the developer and an Open button. **Unsigned (quarantined):** a block dialog ("... cannot be opened because Apple cannot check it for malicious software" or equivalent); no Open button for a standard user. | exact dialog text, button names | `C-01-gatekeeper-first-launch.png` |
 | C-02 | Signed: click Open. Unsigned: do **not** use System Settings > Privacy & Security > Open Anyway unless the owner is present (it asks for an administrator password); if done, record it. | signed: the launcher window appears (D). unsigned: stays blocked, or opens after Open Anyway. | what was needed | `C-02-open-or-blocked.png` |
 | C-03 | Terminal: `xattr -l "<app>"` then `spctl -a -t exec -vv "<app>"`. | after an approved first open the quarantine value usually changes (INFERRED: `0083`-style). `spctl`: signed `accepted source=Notarized Developer ID`; unsigned `rejected`. | both outputs | `C-03-xattr-spctl-after.png` |
 | C-04 | Re-open the app a second time (quit first). | no dialog the second time (signed). | | |
@@ -45,7 +45,7 @@ result is a finding, not a failed test of the checklist. Describe what you saw i
 
 | ID | Step | Expected | Record | Screenshot |
 |---|---|---|---|---|
-| D-01 | Look at the window. | Title "Agentic Apps", about 560 x 640; heading "ReDevOps", the sub-line "Your apps as one governed system"; three buttons: **Check this device**, **Start & open** (blue), **Stop**; a text box "Click \"Check this device\" to begin."; a Dock icon with the app's icon. Not blank. | what is shown; blank window? | `D-01-launcher-window.png` |
+| D-01 | Look at the window. | Title "Agentic Apps R0-prime", about 560 x 640; heading "ReDevOps", the sub-line "Your apps as one governed system" and a second line "Private candidate, release line r0-prime."; three buttons: **Check this device**, **Start & open** (blue), **Stop**; a text box "Click \"Check this device\" to begin."; a Dock icon with the app's icon. Not blank. | what is shown; blank window? | `D-01-launcher-window.png` |
 | D-02 | Look for the "Advanced - local containers" section. | **Hidden** unless `docker` is found on the launcher's `PATH` (a Finder-launched app has the minimal `/usr/bin:/bin:/usr/sbin:/sbin`, so Docker Desktop's `/usr/local/bin/docker` is probably not found even if installed: INFERRED). The three Docker buttons (Enable local containers, Disable, Remove container data) are therefore probably **not reachable** from the GUI on a normal Mac. Record whether the section is visible. | visible yes/no | `D-02-advanced-section.png` |
 | D-03 | Any dialog from macOS (Local Network, Documents/Desktop access, notifications, Accessibility)? | none expected for loopback. | every dialog, its text, your answer | `P-01-permission-dialog-<n>.png` (one per dialog) |
 
@@ -85,10 +85,10 @@ Start the app with **Start & open** before each row; `PRC` = `post_run_checks.sh
 
 | ID | Step | Expected | Record | Screenshot |
 |---|---|---|---|---|
-| G-01 | Cmd-Q the launcher (menu: Agentic Apps > Quit). | the sidecar stops: `PRC` shows 0 processes, 0 listeners, 0 `_MEI*`. | rows | transcript |
+| G-01 | Cmd-Q the launcher (menu: Agentic Apps R0-prime > Quit). | the sidecar stops: `PRC` shows 0 processes, 0 listeners, 0 `_MEI*`. | rows | transcript |
 | G-02 | Start again; close the window with the red button (do **not** use Cmd-Q). | Tauri exits when the last window closes (the source says so, UNVERIFIED on macOS: some macOS apps stay alive without a window): record whether the Dock icon stays. Then `PRC`. If the launcher stays alive, the sidecar legitimately keeps running: `PRC --phase running`. | Dock state, rows | `G-02-window-closed.png` |
-| G-03 | Start again. Find the launcher: `pgrep -x agentic-apps`. `kill -9 <pid>` (replace with the printed pid). Wait 5 s. `PRC`. | **0 processes, 0 listeners, 0 `_MEI*`** (the stdin tether ends the sidecar when the launcher's pipe closes). In v0.3.2 this left a server on 127.0.0.1:8787 plus an 80 MB `_MEI` directory. | rows | transcript |
-| G-04 | Start again. Apple menu > Force Quit > Agentic Apps. Wait 5 s. `PRC`. | same as G-03. | rows | `G-04-force-quit.png`, transcript |
+| G-03 | Start again. Find the launcher: `pgrep -x agentic-r0prime`. `kill -9 <pid>` (replace with the printed pid). Wait 5 s. `PRC`. | **0 processes, 0 listeners, 0 `_MEI*`** (the stdin tether ends the sidecar when the launcher's pipe closes). In v0.3.2 this left a server on 127.0.0.1:8787 plus an 80 MB `_MEI` directory. | rows | transcript |
+| G-04 | Start again. Apple menu > Force Quit > Agentic Apps R0-prime. Wait 5 s. `PRC`. | same as G-03. | rows | `G-04-force-quit.png`, transcript |
 | G-05 | Start again. Terminal: `kill -TERM <launcher pid>`. Wait 5 s. `PRC`. | the launcher dies without running its exit hook; the tether still stops the sidecar (OBSERVED only with a stand-in parent by the defects agent). | rows | transcript |
 | G-06 | Start again. Log the test user out (Apple menu > Log Out) and back in. `PRC`. | nothing of the app is running after login; no login item re-started it (System Settings > General > Login Items has no entry). | rows, login items | `G-06-login-items.png` |
 | G-07 | After G-03 (a hard kill) check `/Users/<user>`: `ls -la ~/.agentic-os ~/.redevops /.agentic-os 2>&1`. | not present (the sidecar's default state directory is relative to the working directory; a Finder launch starts in `/`). If a state directory appears, record its location: the product writes outside `~/Library`. | listing | `G-07-state-dirs.png` |
@@ -111,7 +111,7 @@ Mount the dmg again; each copy goes to its own folder under `~/Desktop/r0p-copie
 | ID | Step | Expected | Record | Screenshot |
 |---|---|---|---|---|
 | I-01 | Copy by Finder drag, then `xattr -l` on the copy. | variant Q: quarantine present (INFERRED). | value | `I-01-finder-copy-xattr.png` |
-| I-02 | Copy by `ditto "<mounted app>" ~/Desktop/r0p-copies/ditto/"Agentic Apps.app"`, then `xattr -l`. | same as I-01 (OBSERVED for files: `ditto` keeps the attribute). | value | `I-02-ditto-xattr.png` |
+| I-02 | Copy by `ditto "<mounted app>" ~/Desktop/r0p-copies/ditto/"Agentic Apps R0-prime.app"`, then `xattr -l`. | same as I-01 (OBSERVED for files: `ditto` keeps the attribute). | value | `I-02-ditto-xattr.png` |
 | I-03 | Launch each copy from Finder. | the same Gatekeeper behaviour as C-01 for each (signed: one prompt per copy). | outcome | `I-03-copy-launch.png` |
 | I-04 | **Deliberately** strip the attribute on one copy only: `xattr -d com.apple.quarantine "<copy>"`, launch it. | no Gatekeeper dialog at all (the unsigned and the signed build both open): proves that a copy without quarantine says nothing about Gatekeeper. | outcome | `I-04-no-quarantine-launch.png` |
 | I-05 | `codesign --verify --deep --strict --verbose=2 "<copy>"` on every copy. | signed: valid on disk; unsigned: fails or reports ad hoc. | output | in transcript |

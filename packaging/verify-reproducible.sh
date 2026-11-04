@@ -24,6 +24,7 @@ while [ $# -gt 0 ]; do case "$1" in
 [ -n "$OUT" ] || OUT="$(mktemp -d)/repro"
 mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"
 . "$HERE/toolchain.env"
+PK="$HERE"; . "$HERE/common.sh"   # identity(): the launcher binary name comes from packaging/identity.json
 export LAUNCHER_BUNDLES="${LAUNCHER_BUNDLES:-app}"
 COMMIT="$(git -C "$ROOT" rev-parse HEAD)"   # fixed once: both builds use the same commit even if HEAD moves
 echo "output: $OUT   commit: $COMMIT   dirty files: $(git -C "$ROOT" status --porcelain | wc -l | tr -d ' ')"
@@ -52,7 +53,7 @@ build_one() { # <label> <srcdir>
   cp "$src/packaging/dist/redevops-sidecar"* "$dst/"; cp -R "$src/packaging/wheelhouse" "$dst/wheelhouse"
   cp "$src/packaging/dist/build-manifest.json" "$dst/"; [ -d "$src/packaging/dist/sbom" ] && cp -R "$src/packaging/dist/sbom" "$dst/sbom"
   if [ "$SKIP_L" = 0 ]; then
-    cp "$OUT/target-$label/release/agentic-apps" "$dst/launcher"
+    cp "$OUT/target-$label/release/$(identity main_binary_name)" "$dst/launcher"
     [ -d "$OUT/target-$label/release/bundle/macos" ] && cp -R "$OUT/target-$label/release/bundle/macos" "$dst/app"
   fi
 }

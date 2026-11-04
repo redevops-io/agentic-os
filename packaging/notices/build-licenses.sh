@@ -38,7 +38,7 @@ if [ -z "$SBOM" ]; then
 fi
 set +e
 python3 -I "$HERE/generate_notices.py" --sbom "$SBOM" "${SITE[@]}" "${CRATES[@]+"${CRATES[@]}"}" \
-    "${EXCL[@]+"${EXCL[@]}"}" --out "$OUT" --title "Agentic Apps ($PLATFORM)" $FAIL
+    "${EXCL[@]+"${EXCL[@]}"}" --out "$OUT" --title "$(python3 -I "$ROOT/packaging/tools/identity.py" get product_name) ($PLATFORM)" $FAIL
 RC=$?
 set -e
 python3 -I "$HERE/stage_licenses.py" --notices-dir "$OUT" "${DEST[@]+"${DEST[@]}"}"
