@@ -37,6 +37,13 @@ makes that link for you when you press **Start & open**. The sign-in lives only 
 | Started the service in a **container** | the one-time address is in the container log; a different published port gives a "not allowed" answer | read the address from the log; map the same port, or ask the person who runs it to list the address you use |
 | Signed in to an app with a **provider's "connect" page** that redirects back to Agentic Apps | the provider's last page shows an error instead of "Connected" | not supported in R0-prime; use a connection that takes a key or token you enter in the app |
 | Opened **/docs** or **/redoc** in the address bar | an error or a blank page | these pages are not available in the browser in R0-prime |
+| Pressed **Stop** and then **Start & open** again, then used the **Back button**, a restored tab or a bookmark of the old address | the browser shows its own "cannot connect" page (the port is new every start); no Agentic Apps page explains it | open the app from the launcher again (**Start & open**) |
+
+## Known limitations of this private build
+
+* **Leftover `_MEI...` folders.** If the service is force-killed (for example `kill -9` on `redevops-sidecar`), one folder named `_MEI...` (about 80 MB) can stay in your temporary folder (`/var/folders/.../T`). It is safe to delete when no `redevops-sidecar` process is running. A normal **Stop**, quitting the launcher or a normal shutdown leaves nothing.
+* **The Docker buttons (Enable / Disable / Remove local containers)** do not work when the app is opened from Finder or the Dock; they are for development setups started from a terminal. You can ignore that section.
+* **The app is not signed.** macOS will refuse the first launch of the unsigned `.app` (Gatekeeper), and `codesign --verify --strict` fails on it until it is signed inside-out. A copy made out of a quarantined disk image carries the quarantine flag.
 
 ## If it still does not work
 

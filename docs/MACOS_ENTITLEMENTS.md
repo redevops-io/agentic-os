@@ -23,12 +23,35 @@ happens outside the repository (see "Use").
      runtime with library validation ON (the entitlement removed), shown on a signed build by the checks of `MANUAL-CHECKLIST.md`
      parts E to G and by `verify_dmg.sh --expect signed` with an empty sidecar entitlement set; or
   2. the owner records, for a named release, that the residual risk is accepted with the entitlement in place.
-* **Evidence status: NOT YET AVAILABLE.** [PLACEHOLDER: the `gui` agent delivers its native-GUI and hardened-runtime evidence in a separate
-  report (`gui.md`). This document claims no result from it. When that report exists, link it here and state only what it observed:
-  whether "Start & open" works under the hardened runtime with the entitlement, and whether the sidecar also starts with the entitlement
-  removed (the empirical question behind exit criterion 1).]
-  What is OBSERVED today is limited to the frozen v0.3.2 matrix runs quoted below; the R0-prime sidecar bytes changed and have not been re-run
-  under a signed hardened runtime (UNVERIFIED).
+* **Evidence (OBSERVED by agent `gui`, `reports/gui.md` section 8, harness `packaging/acceptance/macos-r0prime/gui/scenarios/hr_matrix.sh`,
+  transcript `gui-data/hardened-runtime.txt`; all on COPIES of the candidate's sidecar/app with ad-hoc `codesign -s -`: no identity, no keychain,
+  no Developer ID, no notarization):**
+
+  | Variant | Result |
+  |---|---|
+  | as shipped (ad-hoc, no hardened runtime, no entitlement) | runs |
+  | hardened runtime (`--options runtime`), **no** entitlement | **does not start**: `code signature ... not valid for use in process: mapping process and mapped file (non-platform) have different Team IDs` (the extracted `libpython3.12.dylib` is refused) |
+  | hardened runtime + **only** `disable-library-validation` (this plist) | **runs** (hand-off in about 0.8 s) |
+  | the whole `.app` copy signed inner-first (sidecar with the entitlement, launcher and bundle `--options runtime`, no `--deep`) | `codesign --verify --deep --strict` valid; the signed sidecar started through the launcher's start code, handshake, sign-in, API 200, Open, Stop all worked; the hardened launcher's window appeared and its page scripts ran (`window.__TAURI__` works with no entitlement on the launcher); ended cleanly on SIGTERM |
+
+  A toy host (`gui/tools/hr_loader.c`) confirms the rule independently: a hardened host without the entitlement refuses even an ad-hoc signed
+  library; with the entitlement it accepts it; a library with **no** signature at all is refused in every case (arm64), so the entitlement does
+  not mean "load anything". Developer-ID/Team-ID signing, notarization and Gatekeeper were **not** tested (UNVERIFIED; with a real Team ID the
+  sidecar behaves like the second row without the entitlement, INFERRED from the same mechanism).
+* **Residual risk, measured (OBSERVED PoC, `gui/scenarios/hr_plant.py`):** a same-user process that can write into the per-run `$TMPDIR/_MEI*`
+  directory replaced an extracted extension module (`yaml/_yaml.cpython-312-darwin.so`) with its own ad-hoc signed dylib 100 to 190 ms after the
+  sidecar started; its constructor ran inside the sidecar's Python process. **This works identically on the current unhardened candidate and on
+  the hardened variant with the entitlement.** `$TMPDIR` (`/var/folders/.../T`) and `_MEI*` are mode 0700, so it takes code running as the same user
+  (or root): a window of a few hundred milliseconds per Start. The hardened runtime without the entitlement would refuse the planted library, but
+  that configuration cannot run the onefile sidecar at all. What the hardened variant adds over the current candidate: `DYLD_INSERT_LIBRARIES`
+  injection is ignored (OBSERVED: it ran in the unhardened variant and was ignored in the hardened one) and, by Apple's documented rules,
+  debugger/task-port attach is denied (INFERRED, not tested). The app is not sandboxed.
+* **The onedir exit criterion (criterion 1 above) is what removes the planting risk:** no extraction (extraction costs about 200 to 260 ms of a
+  roughly 550 ms Start, OBSERVED), no `$TMPDIR` trust, no leaked `_MEI` directories, no entitlement. Its cost: Tauri's `externalBin` expects a
+  single file (a wrapper or a resource launch is needed), about 60 more files to sign inside-out, and a changed frozen layout (a new evidence set).
+  Keeping onefile with an app-private extraction root gains nothing against the same user.
+* **Required by the signing procedure (OBSERVED on the ad-hoc test):** the bundle is signed inner-first (sidecar with the entitlement, then the launcher,
+  then the bundle, each `--options runtime`, no `--deep`); an unsigned `.app` fails `codesign --verify --strict` until then.
 
 ## What is in the repository
 
@@ -38,8 +61,8 @@ happens outside the repository (see "Use").
 |---|---|
 | `com.apple.security.cs.disable-library-validation` | `true` |
 
-It is copied unchanged from the frozen v0.3.2 signing inputs (same single key; the frozen copy only differs in
-whitespace and in a comment block). `allow-jit`, `allow-unsigned-executable-memory`, `allow-dyld-environment-variables`
+The key content is copied unchanged from the frozen v0.3.2 signing inputs (same single key); only the comment text differs (it now states
+the six libraries this candidate extracts). `allow-jit`, `allow-unsigned-executable-memory`, `allow-dyld-environment-variables`
 and every other key are NOT set: the v0.3.2 matrix runs found them unnecessary for the frozen sidecar.
 
 ## Where it applies
@@ -52,11 +75,12 @@ configuration references no entitlements file, and that no other file in the rep
 
 ## Why the sidecar needs it
 
-The onefile sidecar unpacks about 60 Mach-O libraries (libpython, DuckDB, cryptography, pydantic_core, OpenSSL, ...)
-into `$TMPDIR/_MEI<random>` at start and `dlopen`s them. Under the hardened runtime, library validation accepts only
+The onefile sidecar of this candidate extracts **six** ad-hoc-signed Mach-O files (80 MB: `libpython3.12.dylib`, `_duckdb`, the
+`cryptography` Rust extension, `pydantic_core`, `_cffi_backend`, `yaml/_yaml`; the frozen v0.3.2 CPython build extracted 61) into
+`$TMPDIR/_MEI<random>` at every start and `dlopen`s them. Under the hardened runtime, library validation accepts only
 libraries signed by Apple or by the same Team ID as the process. Those libraries come from wheels and from the
 interpreter build and are ad-hoc signed or unsigned, so without the entitlement `dlopen` of the embedded Python fails
-("mapping process and mapped file (non-platform) have different Team IDs"; observed in the frozen v0.3.2 matrix runs).
+("mapping process and mapped file (non-platform) have different Team IDs"; observed in the frozen v0.3.2 matrix runs and again on this candidate by agent `gui`).
 
 ## What it permits, and the residual risk
 

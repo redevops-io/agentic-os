@@ -44,7 +44,8 @@ def test_only_the_plist_and_its_documentation_name_the_entitlement():
                "tests/test_macos_entitlements.py",
                # the macOS acceptance kit READS entitlements to verify them (no signing, no writing of the key)
                "packaging/acceptance/macos-r0prime/SIGNING-READINESS.md", "packaging/acceptance/macos-r0prime/verify_dmg.sh"}
-    extra = {f for f in files if f not in allowed and not f.startswith(("packaging/DECISIONS", "reports/"))}
+    # the macOS acceptance kit (incl. the gui harness) only READS/verifies the key on COPIES; it never writes it into the repository plist
+    extra = {f for f in files if f not in allowed and not f.startswith(("packaging/DECISIONS", "reports/", "packaging/acceptance/macos-r0prime/"))}
     assert not extra, extra
 
 
