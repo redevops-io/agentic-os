@@ -1,0 +1,38 @@
+{
+  "_comment": "First-party git dependencies built into the wheelhouse. pip's VCS syntax accepts ONE ref, so pyproject.toml pins the TAG and this file pins the tag object AND the peeled commit; packaging/tools/build_git_wheels.py clones the tag, fails unless HEAD == commit, and builds from the clean clone. runtime-contracts is a benchmarked component: its pin (v0.3.4) is not to be changed here.",
+  "dependencies": [
+    {
+      "name": "runtime-contracts",
+      "version": "0.3.4",
+      "url": "https://github.com/redevops-io/runtime-contracts.git",
+      "tag": "v0.3.4",
+      "tag_object": "46f6283e6ed4fb289fd375a27bf9839d5514bf33",
+      "commit": "a643edc3ba5df9024532ca170afbb6e83c2256c1",
+      "build_backend": "setuptools",
+      "committed_build_dirs": ["build"],
+      "note": "The tag commits a stale build/lib tree (15 files of older code). It must be removed from the clean clone before building, and the wheel is compared against the git tree afterwards."
+    },
+    {
+      "name": "knowledge-frontier",
+      "version": "0.1.0",
+      "url": "https://github.com/redevops-io/knowledge-frontier.git",
+      "tag": "v0.1.0",
+      "tag_object": "5da341eb0a4561e6d7f057d94730d91902dec89f",
+      "commit": "d6a78ca3d1474cd06fd84c5f4547fdf381231cfb",
+      "build_backend": "hatchling",
+      "committed_build_dirs": [],
+      "note": "Pinned by commit d6a78ca3 (v0.1.0) as built by the frozen run. Agent `licences` may exclude it from the shipped set; this pin is not a decision to ship it."
+    },
+    {
+      "name": "redevops-connectors",
+      "version": "0.1.0",
+      "url": "https://github.com/redevops-io/redevops-connectors.git",
+      "tag": "v0.1.0",
+      "tag_object": "f36bdf554f32b5737689f48d1a7dec41185d287a",
+      "commit": "7fbb9ec4d4faff1dea2e238a94495bc1951b56bc",
+      "build_backend": "hatchling",
+      "committed_build_dirs": [],
+      "note": "Replaces the floating @main of the frozen build. v0.1.0 is the exact commit the frozen CI run cloned; main has since moved (15 commits as of 2026-11-04)."
+    }
+  ]
+}

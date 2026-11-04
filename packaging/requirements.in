@@ -1,0 +1,12 @@
+# Third-party (PyPI) direct dependencies of the shipped sidecar: agentic-os core dependencies plus the
+# built extras "projects" and "duckdb", with the SAME specifiers as pyproject.toml (checked by
+# packaging/verify-pins.py). The first-party git dependencies (runtime-contracts, knowledge-frontier,
+# redevops-connectors) and agentic-os itself are built from source into the wheelhouse and are pinned
+# by packaging/git-pins.json, not here.
+pyyaml>=6.0
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.6
+httpx>=0.27
+cryptography>=42
+duckdb>=1.0

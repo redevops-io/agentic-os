@@ -1,0 +1,94 @@
+{
+  "_comment": "Wheelhouse of the FROZEN v0.3.2 build (CI run 35353188692, 2026-09-18), read from the three job logs ('Saved ...whl' and pip 'Created wheel' lines). Used by packaging/verify-pins.py to prove the new locks match what was built. Not a lock.",
+  "run": 35353188692,
+  "commit_built": "d352b91822e2fcad9070b1d4d8b643c0b019b59b",
+  "platforms": {
+    "macos": [
+      "annotated_doc-0.0.5-py3-none-any.whl",
+      "annotated_types-0.8.0-py3-none-any.whl",
+      "anyio-4.15.1-py3-none-any.whl",
+      "certifi-2026.7.22-py3-none-any.whl",
+      "cffi-2.1.1-cp312-cp312-macosx_11_0_arm64.whl",
+      "click-8.5.0-py3-none-any.whl",
+      "cryptography-50.0.1-cp311-abi3-macosx_11_0_arm64.whl",
+      "duckdb-1.5.5-cp312-cp312-macosx_11_0_arm64.whl",
+      "fastapi-0.141.1-py3-none-any.whl",
+      "h11-0.16.0-py3-none-any.whl",
+      "httpcore-1.0.9-py3-none-any.whl",
+      "httpx-0.28.1-py3-none-any.whl",
+      "idna-3.20-py3-none-any.whl",
+      "pycparser-3.0-py3-none-any.whl",
+      "pydantic-2.13.5-py3-none-any.whl",
+      "pydantic_core-2.46.5-cp312-cp312-macosx_11_0_arm64.whl",
+      "pyyaml-6.0.3-cp312-cp312-macosx_11_0_arm64.whl",
+      "starlette-1.6.0-py3-none-any.whl",
+      "typing_extensions-4.16.0-py3-none-any.whl",
+      "typing_inspection-0.4.4-py3-none-any.whl",
+      "uvicorn-0.53.0-py3-none-any.whl"
+    ],
+    "windows": [
+      "annotated_doc-0.0.5-py3-none-any.whl",
+      "annotated_types-0.8.0-py3-none-any.whl",
+      "anyio-4.15.1-py3-none-any.whl",
+      "certifi-2026.7.22-py3-none-any.whl",
+      "cffi-2.1.1-cp312-cp312-win_amd64.whl",
+      "click-8.5.0-py3-none-any.whl",
+      "cryptography-50.0.1-cp311-abi3-win_amd64.whl",
+      "duckdb-1.5.5-cp312-cp312-win_amd64.whl",
+      "fastapi-0.141.1-py3-none-any.whl",
+      "h11-0.16.0-py3-none-any.whl",
+      "httpcore-1.0.9-py3-none-any.whl",
+      "httpx-0.28.1-py3-none-any.whl",
+      "idna-3.20-py3-none-any.whl",
+      "pycparser-3.0-py3-none-any.whl",
+      "pydantic-2.13.5-py3-none-any.whl",
+      "pydantic_core-2.46.5-cp312-cp312-win_amd64.whl",
+      "pyyaml-6.0.3-cp312-cp312-win_amd64.whl",
+      "starlette-1.6.0-py3-none-any.whl",
+      "typing_extensions-4.16.0-py3-none-any.whl",
+      "typing_inspection-0.4.4-py3-none-any.whl",
+      "uvicorn-0.53.0-py3-none-any.whl"
+    ],
+    "linux": [
+      "annotated_doc-0.0.5-py3-none-any.whl",
+      "annotated_types-0.8.0-py3-none-any.whl",
+      "anyio-4.15.1-py3-none-any.whl",
+      "certifi-2026.7.22-py3-none-any.whl",
+      "cffi-2.1.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "click-8.5.0-py3-none-any.whl",
+      "cryptography-50.0.1-cp311-abi3-manylinux_2_34_x86_64.whl",
+      "duckdb-1.5.5-cp312-cp312-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl",
+      "fastapi-0.141.1-py3-none-any.whl",
+      "h11-0.16.0-py3-none-any.whl",
+      "httpcore-1.0.9-py3-none-any.whl",
+      "httpx-0.28.1-py3-none-any.whl",
+      "idna-3.20-py3-none-any.whl",
+      "pycparser-3.0-py3-none-any.whl",
+      "pydantic-2.13.5-py3-none-any.whl",
+      "pydantic_core-2.46.5-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "starlette-1.6.0-py3-none-any.whl",
+      "typing_extensions-4.16.0-py3-none-any.whl",
+      "typing_inspection-0.4.4-py3-none-any.whl",
+      "uvicorn-0.53.0-py3-none-any.whl"
+    ]
+  },
+  "first_party_wheel_sha256_ci": {
+    "runtime_contracts-0.3.4-py3-none-any.whl": {
+      "size": 149029,
+      "sha256": "4cc4ef79f8a9ddf43baa9c63beb8b3778c0f27f4bffcbe5b95edab170db9ba12"
+    },
+    "knowledge_frontier-0.1.0-py3-none-any.whl": {
+      "size": 10879,
+      "sha256": "e2696057969fc41ccd10f0c9e14f676d04654f2c0584760684cd668a8d67ddf1"
+    },
+    "redevops_connectors-0.1.0-py3-none-any.whl": {
+      "size": 70374,
+      "sha256": "69038821faa8a7958f6365bad56d789036ac4220305f2589d34ec2666788b5c9"
+    },
+    "agentic_os-0.2.4-py3-none-any.whl": {
+      "size": 953838,
+      "sha256": "73b68c32ed42756dee4dfcdc44238b11b5fa6a0368c9b22786e6d9313f5b6566"
+    }
+  }
+}
