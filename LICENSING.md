@@ -154,3 +154,18 @@ commit are recorded in the build evidence. Whether a pointer to that
 repository, a written offer, or both is the chosen way under section 6, and
 the wording of any offer, is for the owner. Until decided, the artifacts carry
 this pointer and no offer.
+
+## 7. Where the decisions are recorded, and the distribution gate
+
+Every decision that blocks distribution is listed, with its question, options, recommended default, who decides and what ships
+meanwhile, in [docs/legal/DECISION_PACKAGES.md](docs/legal/DECISION_PACKAGES.md); counsel's questions are numbered in
+[docs/legal/COUNSEL_BRIEF.md](docs/legal/COUNSEL_BRIEF.md), the exact texts they refer to are in
+[docs/legal/EXACT_TEXTS.md](docs/legal/EXACT_TEXTS.md), and the owner's written record is the form
+[docs/legal/OWNER_DECISION_FORM.md](docs/legal/OWNER_DECISION_FORM.md). The list is machine-readable in
+`packaging/distribution-gate.json` (status OPEN until the owner has decided); a build with `REDEVOPS_DISTRIBUTION_BUILD=1` is refused
+by `packaging/check-distribution-gate.py` while any applicable decision is OPEN. A private candidate build is not a distribution.
+None of these documents says that any component or distribution is cleared.
+
+Two facts changed since section 6 was written, and are stated here rather than interpreted: the artifacts carry no source and no
+source offer inside the application or the disk image (the `SOURCE-OFFER.md` template is a separate file), and the pinned
+`redevops-connectors` tag still has no licence file (D-LIC-2).
