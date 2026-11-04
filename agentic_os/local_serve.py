@@ -27,6 +27,9 @@ ENV_ALLOWED_HOSTS = "PROJECTS_ALLOWED_HOSTS"
 ENV_HANDOFF_CODE = "AGENTIC_OS_HANDOFF_LAUNCH_CODE"   # "1": also put a first launch code in the record
 STANDALONE_CODE_TTL = 300.0       # a person copies the URL by hand; the launcher path uses 60 s
 LAUNCHER_CODE_TTL = 60.0
+GRACEFUL_SHUTDOWN_S = 2      # in-flight requests are cancelled after this long on shutdown
+KEEP_ALIVE_S = 5
+WANTED_NOFILE = 4096
 _LOOPBACK = {"127.0.0.1": "127.0.0.1", "localhost": "127.0.0.1", "::1": "::1"}
 
 
@@ -41,6 +44,18 @@ def _bind(host: str, port: int) -> socket.socket:
     sock.listen(128)
     sock.setblocking(False)
     return sock
+
+
+def _raise_nofile() -> None:
+    """Best effort: a GUI-launched process often has a soft limit of 256 descriptors."""
+    try:
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        want = WANTED_NOFILE if hard == resource.RLIM_INFINITY else min(hard, WANTED_NOFILE)
+        if soft != resource.RLIM_INFINITY and soft < want:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+    except (ImportError, ValueError, OSError):
+        pass                                     # Windows has no resource module; keep the defaults
 
 
 def _handoff_writer(spec: str):
@@ -148,5 +163,11 @@ def serve(env: Optional[Dict[str, str]] = None) -> None:
 
     if off and not handoff_spec:
         print(f"ReDevOps Projects - {served} on http://{_url_host(host)}:{real_port}{base or ''}", file=sys.stderr)
-    config = uvicorn.Config(app, log_level="info", proxy_headers=False, access_log=(write is None or handoff_spec != "stdout"))
+    _raise_nofile()
+    # Local availability limits: a client that stalls mid-request must not keep the process from exiting
+    # (the launcher gives it a short grace period and then force-kills the group), and idle or stalled
+    # connections must not exhaust file descriptors.
+    config = uvicorn.Config(app, log_level="info", proxy_headers=False,
+                            access_log=(write is None or handoff_spec != "stdout"),
+                            timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_S, timeout_keep_alive=KEEP_ALIVE_S)
     uvicorn.Server(config).run(sockets=[sock])

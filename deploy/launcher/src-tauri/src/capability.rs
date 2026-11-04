@@ -9,7 +9,7 @@
 // handles need raw CreateProcess + handle-list plumbing), while a piped stdout works identically on
 // every platform and the sidecar already moves its banner and access log off stdout in this mode.
 //
-// Secrecy rules enforced here: the secret, the launch code and the cookie are never written to a log,
+// Secrecy rules enforced here: the secret, the launch code and any session token are never written to a log,
 // never put in an error message, never given to the UI, and the secret is wiped on drop. Error values
 // carry only fixed text and public numbers (status codes, ports).
 //
@@ -317,7 +317,7 @@ pub fn read_handoff<R: Read + Send + 'static>(mut stream: R, timeout: Duration) 
 #[derive(Debug)]
 pub struct HttpResponse {
     pub status: u16,
-    #[allow(dead_code)] // read by the integration tests (Set-Cookie)
+    #[allow(dead_code)] // read by the integration tests
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
 }
@@ -376,7 +376,12 @@ pub fn http_request(
         }
         s.set_read_timeout(Some(left(deadline))).ok();
         match s.read(&mut chunk) {
-            Ok(0) => break,
+            Ok(0) => {
+                if buf.is_empty() {
+                    return Err(HttpError::Io("connection closed without an answer".into()));
+                }
+                break;
+            }
             Ok(n) => {
                 buf.extend_from_slice(&chunk[..n]);
                 if buf.len() > MAX_RESPONSE {
@@ -512,28 +517,132 @@ pub fn handshake_with(port: u16, secret: &Secret, client_nonce: &str) -> Result<
     Ok(server_nonce.to_string())
 }
 
+/// Why one mint attempt did not give a code.
+#[derive(Debug, PartialEq, Eq)]
+pub enum MintError {
+    /// 429 (`Retry-After` seconds when present) or 401 `invalid_proof` (`None`): the challenge expired or
+    /// was evicted, or the budget is spent. Transient (docs/LOCAL_API_SECURITY.md 4.7): never evidence of
+    /// an attack and never a reason to stop the sidecar.
+    Busy(Option<u64>, u16),
+    /// Could not reach the sidecar / the exchange broke off. Retryable.
+    Unreachable(String),
+    /// Any other answer after a verified handshake (not transient, not proof of a foreign peer).
+    Refused(&'static str),
+}
+
 /// POST /api/local/launch-code with the proof for `server_nonce` (from a verified handshake).
-pub fn mint_launch_code(port: u16, secret: &Secret, server_nonce: &str) -> Result<LaunchCode, CapabilityError> {
+pub fn mint_launch_code(port: u16, secret: &Secret, server_nonce: &str) -> Result<LaunchCode, MintError> {
     let p = mint_proof(secret, port, server_nonce);
     let body = format!("{{\"server_nonce\":\"{server_nonce}\"}}");
-    let r = http_request(port, "POST", "/api/local/launch-code", &[("X-Launcher-Proof", &p)], Some(&body), HTTP_TIMEOUT)?;
-    if r.status != 200 {
-        return Err(CapabilityError::Untrusted("launch code refused"));
+    let r = match http_request(port, "POST", "/api/local/launch-code", &[("X-Launcher-Proof", &p)], Some(&body), HTTP_TIMEOUT) {
+        Ok(r) => r,
+        Err(HttpError::Io(e)) => return Err(MintError::Unreachable(e)),
+        Err(HttpError::BadResponse(w)) => return Err(MintError::Refused(w)),
+    };
+    match r.status {
+        200 => {}
+        429 => {
+            let ra = r.header("Retry-After").and_then(|v| v.trim().parse::<u64>().ok());
+            return Err(MintError::Busy(ra, 429));
+        }
+        401 if error_code(&r).as_deref() == Some("invalid_proof") => return Err(MintError::Busy(None, 401)),
+        _ => return Err(MintError::Refused("launch code refused")),
     }
-    let m = json_body(&r)?;
+    let m = serde_json::from_slice::<Value>(&r.body)
+        .ok()
+        .and_then(|v| v.as_object().cloned())
+        .ok_or(MintError::Refused("answer is not a JSON object"))?;
     let code = m
         .get("launch_code")
         .and_then(Value::as_str)
         .filter(|c| is_b64url(c, 22, 86))
-        .ok_or(CapabilityError::Untrusted("bad launch_code"))?;
+        .ok_or(MintError::Refused("bad launch_code"))?;
     Ok(LaunchCode(code.to_string()))
 }
 
-/// Verified handshake, then a fresh launch code: what every "open" does (the 60 s lifetime means a
-/// code is never kept).
-pub fn fresh_launch_code(port: u16, secret: &Secret) -> Result<LaunchCode, CapabilityError> {
-    let server_nonce = handshake(port, secret)?;
-    mint_launch_code(port, secret, &server_nonce)
+fn error_code(r: &HttpResponse) -> Option<String> {
+    let v: Value = serde_json::from_slice(&r.body).ok()?;
+    v.get("error")?.get("code")?.as_str().map(str::to_string)
+}
+
+/// Outcome of "get me a fresh launch code" (an Open click).
+#[derive(Debug, PartialEq, Eq)]
+pub enum OpenError {
+    /// The handshake proof did not verify (or the peer is not the sidecar): final for that process. The
+    /// only case in which the caller may stop what it spawned.
+    Untrusted(CapabilityError),
+    /// Three attempts hit the transient conditions of 4.7 ("the local service is busy").
+    Busy,
+    /// The sidecar could not be reached on the last attempt.
+    Unreachable(String),
+    /// Verified peer, unexpected answer to the mint.
+    Refused(&'static str),
+}
+
+impl fmt::Display for OpenError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OpenError::Untrusted(e) => write!(f, "{e}"),
+            OpenError::Busy => f.write_str("the local service is busy"),
+            OpenError::Unreachable(e) => write!(f, "the control plane did not answer ({e})"),
+            OpenError::Refused(w) => write!(f, "the control plane refused the request ({w})"),
+        }
+    }
+}
+
+/// At most this many (handshake + mint) attempts per user action (4.7).
+pub const MAX_OPEN_ATTEMPTS: usize = 3;
+
+/// Verified handshake, then a fresh launch code: what every "open" does (the 60 s lifetime means a code
+/// is never kept). Follows 4.7: after a VERIFIED handshake, a 429 or `401 invalid_proof` on the mint (and a
+/// network error) is retried with a whole new handshake, waiting min(Retry-After, 5) s (429) or
+/// 0.25/0.5/1 s (plain 401, network error), at most 3 attempts; then `Busy`/`Unreachable`. A handshake
+/// whose proof does not verify is final (`Untrusted`).
+pub fn fresh_launch_code(port: u16, secret: &Secret) -> Result<LaunchCode, OpenError> {
+    fresh_launch_code_with(port, secret, MAX_OPEN_ATTEMPTS, &std::thread::sleep)
+}
+
+pub fn fresh_launch_code_with(
+    port: u16,
+    secret: &Secret,
+    attempts: usize,
+    sleep: &dyn Fn(Duration),
+) -> Result<LaunchCode, OpenError> {
+    let backoff = |i: usize| Duration::from_millis(250u64 << i.min(2));
+    let mut last = OpenError::Busy;
+    for i in 0..attempts {
+        let server_nonce = match handshake(port, secret) {
+            Ok(n) => n,
+            Err(CapabilityError::Unreachable(e)) => {
+                last = OpenError::Unreachable(e);
+                if i + 1 < attempts {
+                    sleep(backoff(i));
+                }
+                continue;
+            }
+            Err(e) => return Err(OpenError::Untrusted(e)),
+        };
+        match mint_launch_code(port, secret, &server_nonce) {
+            Ok(code) => return Ok(code),
+            Err(MintError::Busy(ra, _status)) => {
+                last = OpenError::Busy;
+                if i + 1 < attempts {
+                    sleep(match ra {
+                        Some(s) => Duration::from_secs(s.min(5)),
+                        None => backoff(i),
+                    });
+                }
+            }
+            Err(MintError::Unreachable(e)) => {
+                last = OpenError::Unreachable(e);
+                if i + 1 < attempts {
+                    sleep(backoff(i));
+                }
+            }
+            Err(MintError::Refused(w)) => return Err(OpenError::Refused(w)),
+        }
+    }
+    Err(last)
 }
 
 /// 4.3: the code travels only in the fragment, which the browser never sends to a server.
@@ -860,6 +969,163 @@ pub(crate) mod tests {
         assert!(matches!(handshake(port, &vector_key()), Err(CapabilityError::Unreachable(_))));
         assert!(t0.elapsed() < Duration::from_secs(7));
         drop(t);
+    }
+
+    // --- SR-03: bounded retry on the mint (docs/LOCAL_API_SECURITY.md 4.7) ----------------------
+
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone)]
+    enum Mint {
+        Code,
+        Status(u16, &'static str, Option<u64>), // status, error code, Retry-After
+        Drop,                                    // close without answering
+    }
+
+    struct Scripted {
+        port: u16,
+        handshakes: Arc<AtomicUsize>,
+        mints: Arc<AtomicUsize>,
+        stop: Arc<AtomicBool>,
+    }
+    impl Drop for Scripted {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// A sidecar double: honest handshake (HMAC with `secret`), scripted answers to the mint.
+    fn scripted_sidecar(secret: Secret, handshake_ok: bool, script: Vec<Mint>) -> Scripted {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        l.set_nonblocking(true).unwrap();
+        let port = l.local_addr().unwrap().port();
+        let (hs, mi, stop) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)), Arc::new(AtomicBool::new(false)));
+        let (hs2, mi2, stop2) = (hs.clone(), mi.clone(), stop.clone());
+        let script = Arc::new(Mutex::new(script.into_iter().collect::<std::collections::VecDeque<_>>()));
+        thread::spawn(move || {
+            while !stop2.load(Ordering::SeqCst) {
+                let Ok((mut s, _)) = l.accept() else {
+                    thread::sleep(Duration::from_millis(5));
+                    continue;
+                };
+                s.set_nonblocking(false).ok();
+                let mut buf = [0u8; 4096];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                if req.starts_with("POST /api/local/handshake") {
+                    hs2.fetch_add(1, Ordering::SeqCst);
+                    let nonce = req.split("\"client_nonce\":\"").nth(1).unwrap().split('"').next().unwrap().to_string();
+                    let proof = if handshake_ok {
+                        handshake_proof(&secret, port, &nonce)
+                    } else {
+                        "A".repeat(43)
+                    };
+                    let body = format!(
+                        "{{\"v\":1,\"proto\":\"{PROTO}\",\"proof\":\"{proof}\",\"server_nonce\":\"{}\",\"expires_in\":30}}",
+                        "S".repeat(22)
+                    );
+                    let _ = s.write_all(&json_200(&body));
+                } else if req.starts_with("POST /api/local/launch-code") {
+                    mi2.fetch_add(1, Ordering::SeqCst);
+                    let step = script.lock().unwrap().pop_front().unwrap_or(Mint::Code);
+                    match step {
+                        Mint::Code => {
+                            let body = format!("{{\"v\":1,\"launch_code\":\"{}\",\"expires_in\":60}}", "C".repeat(43));
+                            let _ = s.write_all(&json_200(&body));
+                        }
+                        Mint::Status(st, code, ra) => {
+                            let body = format!("{{\"error\":{{\"code\":\"{code}\",\"message\":\"x\"}}}}");
+                            let ra = ra.map(|r| format!("Retry-After: {r}\r\n")).unwrap_or_default();
+                            let _ = s.write_all(
+                                format!("HTTP/1.1 {st} X\r\n{ra}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+                                    .as_bytes(),
+                            );
+                        }
+                        Mint::Drop => {}
+                    }
+                }
+            }
+        });
+        Scripted { port, handshakes: hs, mints: mi, stop }
+    }
+
+    fn run_open(sc: &Scripted) -> (Result<LaunchCode, OpenError>, Vec<Duration>) {
+        let sleeps = Mutex::new(Vec::new());
+        let r = fresh_launch_code_with(sc.port, &vector_key(), MAX_OPEN_ATTEMPTS, &|d| sleeps.lock().unwrap().push(d));
+        (r, sleeps.into_inner().unwrap())
+    }
+
+    const BUSY401: Mint = Mint::Status(401, "invalid_proof", None);
+
+    #[test]
+    fn flood_scenario_evicted_challenge_then_success_never_kills_anything() {
+        // the review's flood: the mint answers 401 invalid_proof (challenge evicted) twice, then works
+        let sc = scripted_sidecar(vector_key(), true, vec![BUSY401, BUSY401, Mint::Code]);
+        let (r, sleeps) = run_open(&sc);
+        assert!(r.is_ok(), "{r:?}");
+        assert_eq!(sc.handshakes.load(Ordering::SeqCst), 3, "a whole fresh handshake per attempt");
+        assert_eq!(sc.mints.load(Ordering::SeqCst), 3);
+        assert_eq!(sleeps, vec![Duration::from_millis(250), Duration::from_millis(500)]);
+    }
+
+    #[test]
+    fn rate_limited_then_ok_waits_retry_after_capped_at_5s() {
+        let sc = scripted_sidecar(vector_key(), true, vec![Mint::Status(429, "rate_limited", Some(2)), Mint::Status(429, "rate_limited", Some(60)), Mint::Code]);
+        let (r, sleeps) = run_open(&sc);
+        assert!(r.is_ok(), "{r:?}");
+        assert_eq!(sleeps, vec![Duration::from_secs(2), Duration::from_secs(5)], "min(Retry-After, 5)");
+    }
+
+    #[test]
+    fn three_busy_answers_report_busy_and_make_no_fourth_attempt() {
+        for m in [BUSY401, Mint::Status(429, "rate_limited", Some(1))] {
+            let sc = scripted_sidecar(vector_key(), true, vec![m.clone(), m.clone(), m.clone(), Mint::Code]);
+            let (r, sleeps) = run_open(&sc);
+            assert_eq!(r.unwrap_err(), OpenError::Busy, "reported as busy, not as an untrusted sidecar");
+            assert_eq!(sc.mints.load(Ordering::SeqCst), 3, "at most 3 attempts");
+            assert_eq!(sleeps.len(), 2, "no wait after the last attempt");
+        }
+    }
+
+    #[test]
+    fn network_errors_during_the_retry_are_retryable() {
+        let sc = scripted_sidecar(vector_key(), true, vec![Mint::Drop, BUSY401, Mint::Code]);
+        let (r, _) = run_open(&sc);
+        assert!(r.is_ok(), "{r:?}");
+        // and a peer that keeps dropping ends as Unreachable, never Untrusted
+        let sc = scripted_sidecar(vector_key(), true, vec![Mint::Drop, Mint::Drop, Mint::Drop]);
+        let (r, _) = run_open(&sc);
+        assert!(matches!(r, Err(OpenError::Unreachable(_))), "{r:?}");
+        // nothing listening at all: retried, then Unreachable
+        let port = { TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port() };
+        let slept = Mutex::new(0usize);
+        let r = fresh_launch_code_with(port, &vector_key(), 3, &|_| *slept.lock().unwrap() += 1);
+        assert!(matches!(r, Err(OpenError::Unreachable(_))), "{r:?}");
+        assert_eq!(*slept.lock().unwrap(), 2);
+    }
+
+    #[test]
+    fn a_failed_handshake_proof_stays_final_and_never_mints() {
+        let sc = scripted_sidecar(vector_key(), false, vec![]);
+        let (r, sleeps) = run_open(&sc);
+        assert_eq!(r.unwrap_err(), OpenError::Untrusted(CapabilityError::ProofMismatch));
+        assert_eq!(sc.handshakes.load(Ordering::SeqCst), 1, "no retry of a failed proof");
+        assert_eq!(sc.mints.load(Ordering::SeqCst), 0, "no mint call to an unverified peer");
+        assert!(sleeps.is_empty());
+    }
+
+    #[test]
+    fn other_mint_answers_after_a_verified_handshake_are_refused_without_retry_or_distrust() {
+        for st in [403u16, 404, 500, 415] {
+            let sc = scripted_sidecar(vector_key(), true, vec![Mint::Status(st, "whatever", None), Mint::Code]);
+            let (r, _) = run_open(&sc);
+            assert_eq!(r.unwrap_err(), OpenError::Refused("launch code refused"), "{st}");
+            assert_eq!(sc.mints.load(Ordering::SeqCst), 1);
+        }
+        // 401 with another error code is not "busy" either
+        let sc = scripted_sidecar(vector_key(), true, vec![Mint::Status(401, "auth_required", None), Mint::Code]);
+        assert_eq!(run_open(&sc).0.unwrap_err(), OpenError::Refused("launch code refused"));
     }
 
     #[test]

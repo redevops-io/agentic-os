@@ -44,7 +44,7 @@ impl Running {
     }
 }
 
-/// Why a start failed. `Display` text is user-facing and contains no secret, code or cookie.
+/// Why a start failed. `Display` text is user-facing and contains no secret, code or session token.
 #[derive(Debug)]
 pub enum StartError {
     Spawn(String),
@@ -88,6 +88,32 @@ impl std::fmt::Display for StartError {
             ),
         }
     }
+}
+
+/// The port the frozen v0.3.2 sidecar listened on (fixed). Current sidecars use an OS-chosen port.
+pub const LEGACY_PORT: u16 = 8787;
+/// Budget for the legacy probe: start is never slowed by more than this.
+const LEGACY_PROBE_BUDGET: Duration = Duration::from_millis(300);
+
+/// Best-effort, non-invasive detection of an OLD v0.3.2 sidecar left running on `port` (the old launcher
+/// orphaned it, and it keeps serving an unauthenticated API with wildcard CORS). Only a
+/// `GET /api/projects` without credentials: a 200 with a JSON body means it is open to anyone. It is
+/// neither adopted nor stopped; the caller shows the returned text. Anything else (nothing listening,
+/// 401/403/404, slow, not JSON) returns None. Bounded by LEGACY_PROBE_BUDGET.
+pub fn legacy_listener_warning(port: u16) -> Option<String> {
+    let r = capability::http_request(port, "GET", "/api/projects", &[], None, LEGACY_PROBE_BUDGET).ok()?;
+    if r.status != 200 {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_slice(&r.body).ok()?;
+    if !(v.is_array() || v.is_object()) {
+        return None;
+    }
+    Some(format!(
+        "An old, unauthenticated Agentic Apps service is running on port {port} (it answers without any \
+         credential). It was not started by this version and is not used. Quit it: close the old app, or \
+         end the process listening on 127.0.0.1:{port}."
+    ))
 }
 
 /// Collect up to 2 KiB of the sidecar's stderr tail for failure messages. The contract keeps secrets out
@@ -172,7 +198,9 @@ pub fn start_sidecar(cmd: &mut Command, ready_timeout: Duration) -> Result<Runni
 mod tests {
     use super::*;
     use crate::capability::{fresh_launch_code, handshake, http_request, launch_url, HttpResponse};
+    use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
+    use std::sync::Arc;
     use std::time::Instant;
 
     /// Real sidecar for the integration tests. Either the frozen binary (`RDO_SIDECAR`) or the source
@@ -191,13 +219,20 @@ mod tests {
         c
     }
 
-    fn cookie_of(r: &HttpResponse) -> String {
-        let sc = r.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("set-cookie")).expect("Set-Cookie").1.clone();
-        sc.split(';').next().unwrap().to_string()
+    /// The session the page's script gets from the exchange: since the cookie was removed
+    /// (docs/LOCAL_API_SECURITY.md 4.5) it is `session_token` + `csrf_token` in the body.
+    fn session_of(r: &HttpResponse) -> (String, String) {
+        assert!(
+            !r.headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("set-cookie")),
+            "the sidecar must not set a cookie any more"
+        );
+        let v: serde_json::Value = serde_json::from_slice(&r.body).expect("session JSON");
+        assert_eq!(v["session_header"], "X-Agentic-Session");
+        (v["session_token"].as_str().unwrap().to_string(), v["csrf_token"].as_str().unwrap().to_string())
     }
 
-    fn get(port: u16, path: &str, cookie: Option<&str>) -> HttpResponse {
-        let h: Vec<(&str, &str)> = cookie.map(|c| vec![("Cookie", c)]).unwrap_or_default();
+    fn get(port: u16, path: &str, session: Option<&str>) -> HttpResponse {
+        let h: Vec<(&str, &str)> = session.map(|t| vec![("X-Agentic-Session", t)]).unwrap_or_default();
         http_request(port, "GET", path, &h, None, Duration::from_secs(5)).unwrap()
     }
 
@@ -219,6 +254,52 @@ mod tests {
         false
     }
 
+    /// One-connection fake peer: answers the first request with `raw` after `delay`.
+    fn fake_peer(raw: String, delay: Duration) -> u16 {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = l.accept() {
+                let mut b = [0u8; 4096];
+                let _ = s.read(&mut b);
+                std::thread::sleep(delay);
+                let _ = s.write_all(raw.as_bytes());
+            }
+        });
+        port
+    }
+
+    fn http(status: &str, body: &str) -> String {
+        format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+    }
+
+    #[test]
+    fn legacy_listener_with_an_open_api_is_reported_not_touched() {
+        let port = fake_peer(http("200 OK", "[{\"id\":\"customer-ops\",\"name\":\"Customer Operations\"}]"), Duration::ZERO);
+        let w = legacy_listener_warning(port).expect("warning");
+        assert!(w.contains("old, unauthenticated Agentic Apps service") && w.contains(&port.to_string()) && w.contains("Quit it"));
+    }
+
+    #[test]
+    fn legacy_probe_ignores_gated_missing_and_unrelated_listeners() {
+        // the current sidecar (gated): 401
+        assert!(legacy_listener_warning(fake_peer(http("401 Unauthorized", "{\"error\":{\"code\":\"auth_required\"}}"), Duration::ZERO)).is_none());
+        assert!(legacy_listener_warning(fake_peer(http("404 Not Found", "{}"), Duration::ZERO)).is_none());
+        // 200 but not JSON (some other web server)
+        assert!(legacy_listener_warning(fake_peer(http("200 OK", "<html>hi</html>"), Duration::ZERO)).is_none());
+        // nothing listening
+        let free = { TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port() };
+        assert!(legacy_listener_warning(free).is_none());
+    }
+
+    #[test]
+    fn legacy_probe_never_slows_start_by_more_than_its_budget() {
+        let port = fake_peer(http("200 OK", "[]"), Duration::from_secs(3)); // slow peer
+        let t0 = Instant::now();
+        assert!(legacy_listener_warning(port).is_none());
+        assert!(t0.elapsed() < Duration::from_millis(600), "took {:?}", t0.elapsed());
+    }
+
     /// Normal start -> handshake OK -> launch URL has #lc= -> the code yields a working session ->
     /// the code is single use -> another open mints another code -> Stop leaves nothing.
     /// `RDO_SIDECAR=<frozen> | RDO_TEST_PYTHON=<python>  cargo test real_sidecar -- --ignored`
@@ -238,15 +319,37 @@ mod tests {
         let url = launch_url(port, &running.base_path, &code);
         assert!(url.starts_with(&format!("http://127.0.0.1:{port}/#lc=")));
 
+        // SR-01: the opener only ever gets a file PATH. The redirect page carries the URL; the code the
+        // browser would read from its fragment is what gets exchanged below.
+        let dir = std::env::temp_dir().join(format!("rdo-launch-it-{}", std::process::id()));
+        let file = crate::opener::write_redirect(&dir, &url).expect("redirect page");
+        let (_prog, args) = crate::opener::opener_command(&file);
+        assert!(args.iter().all(|a| !a.to_string_lossy().contains("lc=")), "no code in the opener argv");
+        let page = std::fs::read_to_string(&file).unwrap();
+        let frag_code = page.split("#lc=").nth(1).unwrap().split('"').next().unwrap().to_string();
+        assert_eq!(frag_code, code.expose(), "the fragment in the redirect page is the minted code");
+        crate::opener::remove(&file);
+        std::fs::remove_dir(&dir).unwrap();
+
         // what the page's script does with the fragment: exchange it for a session
-        let body = format!("{{\"code\":\"{}\"}}", code.expose());
+        let body = format!("{{\"code\":\"{frag_code}\"}}");
         let ex = http_request(port, "POST", "/api/local/session", &[], Some(&body), Duration::from_secs(5)).unwrap();
         assert_eq!(ex.status, 200, "exchanging the launch code must yield a session");
-        let cookie = cookie_of(&ex);
-        assert!(cookie.starts_with("agentic_os_session="));
-        let projects = get(port, "/api/projects", Some(&cookie));
+        let (token, _csrf) = session_of(&ex);
+        let projects = get(port, "/api/projects", Some(&token));
         assert_eq!(projects.status, 200, "the session works");
         assert!(String::from_utf8_lossy(&projects.body).contains("customer-ops"));
+        // the old cookie credential is gone: presenting it as a cookie authenticates nothing
+        let as_cookie = http_request(
+            port,
+            "GET",
+            "/api/projects",
+            &[("Cookie", &format!("agentic_os_session={token}"))],
+            None,
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(as_cookie.status, 401);
 
         // single use
         let again = http_request(port, "POST", "/api/local/session", &[], Some(&body), Duration::from_secs(5)).unwrap();
@@ -266,6 +369,91 @@ mod tests {
         // Stop: whole tree gone, port closed
         assert_eq!(running.stop(), StopOutcome::Graceful);
         assert!(gone(port, pid), "no process left in the group and the port is closed");
+    }
+
+    /// The review's flood (SR-03): local threads hammer the unauthenticated handshake endpoint while the
+    /// launcher opens repeatedly. Hard guarantees at any intensity: no open is ever reported as an
+    /// untrusted sidecar, the user's sidecar keeps running and works again after the flood. With a
+    /// moderate flood (enough to evict challenges, which made 0 of 200 opens succeed before the fix)
+    /// opens must also still succeed.
+    #[test]
+    #[ignore]
+    fn real_sidecar_survives_a_handshake_flood() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let mut cmd = real_sidecar_cmd();
+        let mut running = start_sidecar(&mut cmd, READY_TIMEOUT).expect("start");
+        let port = running.port;
+        for (threads, opens, must_succeed) in [(8usize, 40usize, true), (32, 8, false), (64, 4, false)] {
+            let stop = Arc::new(AtomicBool::new(false));
+            let flooders: Vec<_> = (0..threads)
+                .map(|_| {
+                    let stop = stop.clone();
+                    std::thread::spawn(move || {
+                        while !stop.load(Ordering::SeqCst) {
+                            let _ = http_request(port, "POST", "/api/local/handshake", &[], Some("{\"client_nonce\":\"AAAAAAAAAAAAAAAAAAAAAA\"}"), Duration::from_secs(2));
+                        }
+                    })
+                })
+                .collect();
+            let (mut ok, mut busy, mut untrusted, mut other) = (0, 0, 0, 0);
+            for _ in 0..opens {
+                match fresh_launch_code(port, running.secret()) {
+                    Ok(_) => ok += 1,
+                    Err(capability::OpenError::Busy) => busy += 1,
+                    Err(capability::OpenError::Untrusted(_)) => untrusted += 1,
+                    Err(_) => other += 1,
+                }
+            }
+            stop.store(true, Ordering::SeqCst);
+            for f in flooders {
+                let _ = f.join();
+            }
+            println!("RESULT {threads} flood threads: ok={ok} busy={busy} untrusted={untrusted} other={other} of {opens}");
+            assert_eq!(untrusted, 0, "a flood must never look like an untrusted sidecar (review: 116 of 200 before)");
+            if must_succeed {
+                assert!(ok > 0, "opens still succeed under a moderate flood");
+            }
+            assert!(running.child.is_running(), "the user's sidecar is still running");
+            std::thread::sleep(Duration::from_millis(500));
+            assert!(fresh_launch_code(port, running.secret()).is_ok(), "and works after the flood");
+        }
+        assert_eq!(running.stop(), StopOutcome::Graceful);
+    }
+
+    /// End to end through a real (headless) browser, for SR-01: mint a code with the real sidecar, write the
+    /// private redirect page, let a headless browser open THE FILE (as the OS opener would), and require
+    /// that it lands on the sidecar origin, signs in from the fragment (the UI script strips it) and gets
+    /// data from the API. `RDO_BROWSER_CMD` is a command line `<program> <args...>`; it receives
+    /// `<redirect file> <port>` as the last two arguments and prints one JSON line.
+    #[test]
+    #[ignore]
+    fn real_sidecar_redirect_page_signs_in_through_a_headless_browser() {
+        let cmdline = std::env::var("RDO_BROWSER_CMD").expect("set RDO_BROWSER_CMD");
+        let mut cmd = real_sidecar_cmd();
+        let running = start_sidecar(&mut cmd, READY_TIMEOUT).expect("start");
+        let code = fresh_launch_code(running.port, running.secret()).unwrap();
+        let dir = std::env::temp_dir().join(format!("rdo-launch-browser-{}", std::process::id()));
+        let file = crate::opener::write_redirect(&dir, &launch_url(running.port, &running.base_path, &code)).unwrap();
+        let mut parts = cmdline.split_whitespace();
+        let out = Command::new(parts.next().unwrap())
+            .args(parts)
+            .arg(&file)
+            .arg(running.port.to_string())
+            .output()
+            .expect("run browser driver");
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        println!("browser driver output: {}", text.replace(code.expose(), "<code>"));
+        crate::opener::remove(&file);
+        let _ = std::fs::remove_dir(&dir);
+        let v: serde_json::Value = serde_json::from_str(text.lines().last().unwrap_or("{}")).expect("driver JSON");
+        assert_eq!(v["landedOnSidecar"], true);
+        assert_eq!(v["fragmentGone"], true, "the UI script removed #lc= from the address bar");
+        assert_eq!(v["apiStatus"], 200, "the page is signed in and gets data");
+        // the code was used by the browser: it is dead now
+        let body = format!("{{\"code\":\"{}\"}}", code.expose());
+        let again = http_request(running.port, "POST", "/api/local/session", &[], Some(&body), Duration::from_secs(5)).unwrap();
+        assert_eq!(again.status, 401);
+        running.stop();
     }
 
     /// A stale v0.3.2 sidecar (no handshake, no gate) and a foreign listener are refused; and the new

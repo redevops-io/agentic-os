@@ -51,6 +51,7 @@ def _no_gateway(monkeypatch):
 
 def make(base="", **cap_kw):
     clock = cap_kw.pop("clock", None) or Clock()
+    cap_kw.setdefault("wall_clock", clock)          # default: both clocks tick together (tests move one)
     cap = LocalCapability(port=PORT, clock=clock, **cap_kw)
     handoff = cap.launcher_handoff("127.0.0.1", PORT, base)
     app = mounted_app(base, SampleProjectionProvider(), capability=cap)
@@ -62,9 +63,14 @@ def client(app, **kw):
 
 
 def login(c, code, base=""):
+    """Exchange a launch code; like the UI shim, keep the session token (it is NOT a cookie) and send it
+    in X-Agentic-Session on every later request of this client. Returns the CSRF token."""
     r = c.post(base + "/api/local/session", json={"code": code})
     assert r.status_code == 200, r.text
-    return r.json()["csrf_token"]
+    assert "set-cookie" not in r.headers
+    j = r.json()
+    c.headers["X-Agentic-Session"] = j["session_token"]
+    return j["csrf_token"]
 
 
 def no_cors(r):
@@ -387,11 +393,32 @@ def test_failed_attempts_are_rate_limited_and_recover():
     c = client(app)
     for _ in range(5):
         assert c.post("/api/local/session", json={"code": "wrong" * 5}).status_code == 401
-    r = c.post("/api/local/session", json={"code": hand["launch_code"]})
-    assert r.status_code == 429 and int(r.headers["retry-after"]) >= 1     # even the right code waits
+    r = c.post("/api/local/session", json={"code": "wrong" * 5})
+    assert r.status_code == 429 and int(r.headers["retry-after"]) >= 1     # guessing is throttled
     assert no_cors(r)
     clock.t += 61.0
     login(c, cap.issue_launch_code())                    # (the first code has expired meanwhile)
+
+
+def test_sr04_a_correct_code_is_served_even_while_the_failure_budget_is_spent():
+    """SR-04: 10 bad codes a minute from any local process used to lock sign-in out for good."""
+    app, cap, hand, clock = make(max_failures=5, failure_window=60.0)
+    c = client(app)
+    for _ in range(5):
+        assert c.post("/api/local/session", json={"code": "wrong" * 5}).status_code == 401
+    assert c.post("/api/local/session", json={"code": "wrong" * 5}).status_code == 429
+    csrf = login(c, hand["launch_code"])                 # the real, unexpired, unused code still works
+    assert csrf and c.get("/api/projects").status_code == 200
+    # ... and a REPLAY of it, or a wrong one, is still throttled
+    assert client(app).post("/api/local/session", json={"code": hand["launch_code"]}).status_code == 429
+    assert client(app).post("/api/local/session", json={"code": "wrong" * 5}).status_code == 429
+    # an expired code is not served either (long window so the budget is still spent)
+    app, cap, hand, clock = make(max_failures=2, failure_window=600.0)
+    c = client(app)
+    for _ in range(2):
+        c.post("/api/local/session", json={"code": "wrong" * 5})
+    clock.t += 61.0                                       # hand["launch_code"] (60 s) has expired
+    assert c.post("/api/local/session", json={"code": hand["launch_code"]}).status_code == 429
 
 
 def test_cross_origin_exchange_attempts_do_not_burn_the_rate_limit_or_the_code():
@@ -424,31 +451,89 @@ def test_concurrent_exchange_of_one_code_succeeds_exactly_once():
 
 
 # --------------------------------------------------------------------------- session
-def test_session_cookie_attributes_and_end_to_end():
+def test_session_is_a_header_credential_never_a_cookie_and_works_end_to_end():
     app, cap, hand, _ = make()
     c = client(app)
     r = c.post("/api/local/session", json={"code": hand["launch_code"]})
-    sc = r.headers["set-cookie"]
-    attrs = [a.strip().lower() for a in sc.split(";")]
-    assert attrs[0].startswith("agentic_os_session=") and len(attrs[0].split("=", 1)[1]) >= 40
-    assert "httponly" in attrs and "samesite=strict" in attrs and "path=/" in attrs
-    assert not any(a.startswith("domain") for a in attrs)
-    token = sc.split(";")[0].split("=", 1)[1]
-    assert token.lower() not in r.text.lower()                   # the cookie value is never in the body
-    csrf = r.json()["csrf_token"]
-    assert csrf != token and len(csrf) >= 40
-    # a data call and a state-changing call, end to end
-    assert c.get("/api/projects").json()[0]["id"] == "customer-ops"
-    assert c.post("/api/sidekick", json={"ctx": {}, "text": "hello"}, headers={"X-Agentic-CSRF": csrf}).status_code == 200
-    # reload: the cookie alone re-yields the same CSRF token (it is never in the URL or storage)
+    assert r.status_code == 200 and "set-cookie" not in {k.lower() for k in r.headers}
+    j = r.json()
+    token, csrf = j["session_token"], j["csrf_token"]
+    assert j["session_header"] == "X-Agentic-Session" and j["csrf_header"] == "X-Agentic-CSRF"
+    assert len(b64url_decode(token)) == 32 and csrf != token and len(csrf) >= 40
+    h = {"X-Agentic-Session": token}
+    # no header: nothing works, even with a cookie of the same value under any name
     c2 = client(app)
+    for name in ("agentic_os_session", "session", "X-Agentic-Session"):
+        r = c2.get("/api/projects", headers={"Cookie": f"{name}={token}"})
+        assert r.status_code == 401
     assert c2.get("/api/local/session").status_code == 401
-    jar = {"Cookie": f"agentic_os_session={token}"}
-    assert c2.get("/api/local/session", headers=jar).json()["csrf_token"] == csrf
+    assert c2.get("/api/local/session", headers={"Cookie": f"agentic_os_session={token}"}).status_code == 401
+    # a data call and a state-changing call, end to end
+    assert c2.get("/api/projects", headers=h).json()[0]["id"] == "customer-ops"
+    assert c2.post("/api/sidekick", json={"ctx": {}, "text": "hello"}, headers=h).status_code == 403   # no CSRF
+    assert c2.post("/api/sidekick", json={"ctx": {}, "text": "hello"},
+                   headers={**h, "X-Agentic-CSRF": csrf}).status_code == 200
+    # reload of the same tab: the stored token re-yields the CSRF token; without the token nothing is handed out
+    assert c2.get("/api/local/session", headers=h).json()["csrf_token"] == csrf
+    # duplicate / garbled session headers are refused
+    assert c2.get("/api/projects", headers=[("X-Agentic-Session", token), ("X-Agentic-Session", token)]).status_code == 401
+    assert c2.get("/api/projects", headers={"X-Agentic-Session": token + "x"}).status_code == 401
     # logout needs the CSRF header and kills the session
-    assert c.delete("/api/local/session").status_code == 403
-    assert c.delete("/api/local/session", headers={"X-Agentic-CSRF": csrf}).status_code == 200
-    assert client(app).get("/api/projects", headers=jar).status_code == 401
+    assert c2.delete("/api/local/session", headers=h).status_code == 403
+    assert c2.delete("/api/local/session", headers={**h, "X-Agentic-CSRF": csrf}).status_code == 200
+    assert c2.get("/api/projects", headers=h).status_code == 401
+
+
+def test_session_is_bound_to_the_host_it_was_established_on():
+    app, cap, hand, _ = make()
+    c = client(app)
+    token = c.post("/api/local/session", json={"code": hand["launch_code"]}).json()["session_token"]
+    assert c.get("/api/projects", headers={"X-Agentic-Session": token}).status_code == 200
+    assert c.get("/api/projects", headers={"X-Agentic-Session": token, "Host": "localhost:8787"}).status_code == 401
+    assert c.get("/api/projects", headers={"X-Agentic-Session": token, "Host": "127.0.0.1:8787"}).status_code == 200
+
+
+def test_sr02_a_hostile_local_server_on_another_port_receives_nothing_it_can_replay():
+    """SR-02 regression. Cookies are not port-scoped: a browser sends a 127.0.0.1 cookie to EVERY local
+    server. A hostile server on another port gets every cookie the browser holds for the host; it must be
+    unable to use anything it receives. (Real-browser run of the reviewer's script: see the stage 3 report.)"""
+    import http.server
+    import httpx
+    app, cap, hand, _ = make()
+    victim = client(app)                                   # the victim's browser; its cookie jar is per host
+    r = victim.post("/api/local/session", json={"code": hand["launch_code"]})
+    assert r.status_code == 200
+    seen: list = []
+
+    class Hostile(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append({k.lower(): v for k, v in self.headers.items()})
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Hostile)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        # the victim navigates to the hostile page: the browser attaches every cookie it holds for 127.0.0.1
+        # (the jar is shared with the sidecar's origin because cookies ignore the port)
+        with httpx.Client(cookies=victim.cookies) as browser:
+            browser.get(f"http://127.0.0.1:{srv.server_address[1]}/")
+    finally:
+        srv.shutdown()
+    assert len(seen) == 1
+    got = seen[0]
+    assert "cookie" not in got and "x-agentic-session" not in got and "x-agentic-csrf" not in got
+    # the attacker replays everything it received (plus guesses) against the sidecar: nothing works
+    attacker = client(app)
+    replay = {k: v for k, v in got.items() if k not in ("host", "connection", "accept-encoding", "user-agent")}
+    for headers in (replay, {**replay, "Cookie": "agentic_os_session=" + "A" * 43}):
+        assert attacker.get("/api/local/session", headers=headers).status_code == 401
+        assert attacker.get("/api/projects", headers=headers).status_code == 401
+        assert attacker.post("/api/sources/confirm", json={"sources": []}, headers=headers).status_code == 401
 
 
 def test_session_expires():
@@ -460,17 +545,49 @@ def test_session_expires():
     assert c.get("/api/projects").status_code == 401
 
 
-def test_a_cookie_without_the_session_is_not_enough_and_dupes_do_not_help():
-    app, cap, hand, _ = make()
+def test_sr08_expiry_stops_on_the_wall_clock_too_sleep_cannot_extend_a_lifetime():
+    """time.monotonic does not advance while a Mac sleeps; the wall clock does. Dead when EITHER says so."""
+    mono, wall = Clock(), Clock()
+    wall.t = 1_700_000_000.0
+    app, cap, hand, _ = make(clock=mono, wall_clock=wall, launch_code_ttl=60, session_ttl=3600)
+    # launch code: the laptop sleeps 10 minutes (monotonic +1 s, wall +600 s)
+    mono.t += 1.0
+    wall.t += 600.0
+    assert not cap.consume_launch_code(hand["launch_code"])
+    # session
+    code = cap.issue_launch_code()
     c = client(app)
-    token = None
-    r = c.post("/api/local/session", json={"code": hand["launch_code"]})
-    token = c.cookies.get("agentic_os_session")
-    c2 = client(app)
-    r = c2.get("/api/projects", headers={"Cookie": "agentic_os_session=" + "A" * 43})
-    assert r.status_code == 401
-    r = c2.get("/api/projects", headers={"Cookie": f"agentic_os_session={'A' * 43}; agentic_os_session={token}"})
-    assert r.status_code == 200                           # a tossed junk cookie cannot lock the user out
+    login(c, code)
+    assert c.get("/api/projects").status_code == 200
+    mono.t += 5.0
+    wall.t += 7200.0                                      # sleep: wall +2 h, monotonic +5 s
+    assert c.get("/api/projects").status_code == 401
+    # challenge
+    sn = c.post("/api/local/handshake", json={"client_nonce": "A" * 22}).json()["server_nonce"]
+    wall.t += 31.0
+    assert cap.mint_launch_code(sn, mint_proof(b64url_decode(hand["secret"]), PORT, sn)) is None
+
+
+def test_sr08_backward_wall_clock_jumps_cannot_extend_and_forward_jumps_fail_closed():
+    mono, wall = Clock(), Clock()
+    wall.t = 1_700_000_000.0
+    app, cap, hand, _ = make(clock=mono, wall_clock=wall, launch_code_ttl=60)
+    c1 = cap.issue_launch_code()
+    wall.t -= 10_000.0                                    # clock set back: the monotonic bound still holds
+    mono.t += 59.0
+    assert cap.consume_launch_code(c1)
+    c2 = cap.issue_launch_code()
+    wall.t -= 10_000.0
+    mono.t += 61.0
+    assert not cap.consume_launch_code(c2)                # not extended by the backward jump
+    c3 = cap.issue_launch_code()
+    wall.t += 10_000.0                                    # forward jump: fails closed
+    assert not cap.consume_launch_code(c3)
+    c4 = cap.issue_launch_code()
+    mono.t += 59.0
+    wall.t += 59.0
+    assert cap.consume_launch_code(c4)                    # boundary: both clocks just inside
+    assert cap.remaining((mono.t + 5, wall.t + 3)) == 3   # remaining() is the smaller of the two
 
 
 # --------------------------------------------------------------------------- handshake / launcher proof
@@ -594,7 +711,7 @@ def test_comparisons_use_constant_time_primitives(monkeypatch):
     n = len(calls)
     assert n >= 1
     c.get("/api/projects")
-    assert len(calls) > n                                # session cookie compare
+    assert len(calls) > n                                # session token compare
     csrf = c.get("/api/local/session").json()["csrf_token"]
     before = len(calls)
     c.post("/api/sidekick", json={"ctx": {}, "text": "x"}, headers={"X-Agentic-CSRF": csrf})
@@ -641,54 +758,83 @@ def test_vendored_ui_is_compatible_with_the_csp_static_check():
 
 
 # --------------------------------------------------------------------------- the UI shim (node vm)
-@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
-def test_shim_exchanges_fragment_code_and_adds_csrf_header(tmp_path):
-    harness = tmp_path / "harness.js"
-    harness.write_text(r"""
+_SHIM_HARNESS = r"""
 const vm = require('vm'), fs = require('fs');
 const src = fs.readFileSync(process.argv[2], 'utf8');
 const mode = process.argv[3];
 const log = [];
-const location = { origin: 'http://127.0.0.1:8787', href: 'http://127.0.0.1:8787/' + '',
+const store = {};
+if (mode === 'reload') store['agentic_os.session'] = 'STORED-TOKEN';
+const location = { origin: 'http://127.0.0.1:8787', href: 'http://127.0.0.1:8787/',
   pathname: '/', search: '', hash: mode === 'code' ? '#lc=' + 'A'.repeat(43) : '' };
 const history = { replaceState(_a, _b, url) { log.push(['replaceState', url]); location.hash = ''; } };
 class Headers { constructor(h){ this.m = {}; if (h instanceof Headers) Object.assign(this.m, h.m); else if (h) for (const k in h) this.m[k.toLowerCase()] = h[k]; }
   set(k,v){ this.m[k.toLowerCase()] = v; } get(k){ return this.m[k.toLowerCase()]; } }
-const fetchImpl = (u, o) => { log.push(['fetch', String(u), o && o.method || 'GET', o && o.credentials,
-    o && o.headers && (o.headers instanceof Headers ? o.headers.m : o.headers), o && o.body, location.hash]);
-  return Promise.resolve({ ok: true, json: () => Promise.resolve({ csrf_token: 'CSRFTOKEN' }) }); };
-const window = { fetch: fetchImpl, location, history };
-window.fetch.bind = undefined;
+const hdrs = (o) => o && o.headers && (o.headers instanceof Headers ? o.headers.m : o.headers);
+const fetchImpl = (u, o) => { log.push(['fetch', String(u), (o && o.method) || 'GET', o && o.credentials, hdrs(o) || null, (o && o.body) || null, location.hash]);
+  const ok = String(u).endsWith('/api/local/session') && (mode !== 'none');
+  const status = ok ? 200 : (String(u).endsWith('/api/local/session') ? 401 : 200);
+  return Promise.resolve({ ok: status === 200, status, json: () => Promise.resolve({ session_token: 'SESSIONTOKEN', csrf_token: 'CSRFTOKEN' }) }); };
+const sessionStorage = { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = v; }, removeItem: (k) => { delete store[k]; } };
+const created = [];
+const window = { fetch: fetchImpl, location, history, sessionStorage };
 const ctx = { window, document: { currentScript: { src: 'http://127.0.0.1:8787/local-capability-shim.js' },
-  body: {}, addEventListener(){}, createElement(){ return { setAttribute(){} }; } },
+  body: { appendChild(e){ created.push(e.text); } }, addEventListener(){}, createElement(){ const e = { setAttribute(){}, set textContent(v){ e.text = v; } }; return e; } },
   location, history, URL, Headers, Object, JSON, Promise };
-window.fetch = fetchImpl; ctx.window.fetch = fetchImpl;
 vm.createContext(ctx);
 vm.runInContext(src.replace('window.fetch.bind(window)', 'window.fetch'), ctx);
 (async () => {
   await ctx.window.fetch('/api/projects');
   await ctx.window.fetch('/api/sidekick', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
   await ctx.window.fetch('https://example.org/api/x');
-  console.log(JSON.stringify(log));
+  console.log(JSON.stringify({ log, store, banner: created.length }));
 })();
-""")
-    shim = ROOT / "agentic_os" / "local_capability_shim.js"
-    out = subprocess.run(["node", str(harness), str(shim), "code"], capture_output=True, text=True, timeout=30)
+"""
+
+
+def _run_shim(tmp_path, mode):
+    harness = tmp_path / "harness.js"
+    harness.write_text(_SHIM_HARNESS)
+    out = subprocess.run(["node", str(harness), str(ROOT / "agentic_os" / "local_capability_shim.js"), mode],
+                         capture_output=True, text=True, timeout=30)
     assert out.returncode == 0, out.stderr
-    log = json.loads(out.stdout.strip().splitlines()[-1])
+    res = json.loads(out.stdout.strip().splitlines()[-1])
+    for entry in res["log"]:                              # header names are case-insensitive
+        if entry[0] == "fetch" and entry[4]:
+            entry[4] = {k.lower(): v for k, v in entry[4].items()}
+    return res
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_shim_exchanges_fragment_code_keeps_the_token_in_session_storage_and_sends_headers(tmp_path):
+    r = _run_shim(tmp_path, "code")
+    log = r["log"]
     assert log[0] == ["replaceState", "/"]                                         # fragment removed first
     ex = log[1]
     assert ex[1].endswith("/api/local/session") and ex[2] == "POST" and json.loads(ex[5]) == {"code": "A" * 43}
-    assert ex[6] == ""                                                             # hash already cleared
+    assert ex[6] == "" and ex[3] == "omit"                                         # hash already cleared; no cookies
+    assert r["store"] == {"agentic_os.session": "SESSIONTOKEN"}                    # per-tab storage, not a cookie
     api = log[2]
-    assert api[4]["x-agentic-csrf"] == "CSRFTOKEN" and api[3] == "same-origin"
+    assert api[4]["x-agentic-session"] == "SESSIONTOKEN" and api[4]["x-agentic-csrf"] == "CSRFTOKEN"
+    assert api[3] == "omit"
     post = log[3]
-    assert post[4]["x-agentic-csrf"] == "CSRFTOKEN" and post[4]["content-type"] == "application/json"
-    foreign = log[4]
-    assert foreign[4] is None                                                      # cross-origin: untouched
-    out = subprocess.run(["node", str(harness), str(shim), "reload"], capture_output=True, text=True, timeout=30)
-    log = json.loads(out.stdout.strip().splitlines()[-1])
-    assert log[0][1].endswith("/api/local/session") and log[0][2] == "GET"        # reload: cookie session
+    assert post[4]["x-agentic-session"] == "SESSIONTOKEN" and post[4]["x-agentic-csrf"] == "CSRFTOKEN"
+    assert post[4]["content-type"] == "application/json"
+    assert log[4][4] is None                                                       # cross-origin: untouched
+    assert r["banner"] == 0
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_shim_resumes_a_reloaded_tab_from_session_storage_and_a_new_tab_needs_a_code(tmp_path):
+    r = _run_shim(tmp_path, "reload")                    # same tab, hash empty, token in sessionStorage
+    first = r["log"][0]
+    assert first[1].endswith("/api/local/session") and first[2] == "GET"
+    assert first[4]["x-agentic-session"] == "STORED-TOKEN"
+    assert r["log"][1][4]["x-agentic-session"] == "STORED-TOKEN" and r["log"][1][4]["x-agentic-csrf"] == "CSRFTOKEN"
+    r = _run_shim(tmp_path, "none")                      # new tab / bookmark: no code, no stored token
+    assert [e for e in r["log"] if e[1].endswith("/api/local/session")] == []      # nothing to resume with
+    assert r["banner"] == 1                                                        # tells the user what to do
+    assert "x-agentic-session" not in (r["log"][0][4] or {})
 
 
 # --------------------------------------------------------------------------- real processes
@@ -789,12 +935,14 @@ def test_standalone_serve_prints_a_one_time_ascii_url_on_stderr_and_it_works():
         assert _http("POST", base + "/api/local/session", body={"code": "A" * 43})[0] == 401
         st, body, hdrs = _http("POST", base + "/api/local/session", body={"code": code})
         assert st == 200
-        cookie = hdrs["Set-Cookie"].split(";")[0]
+        assert "Set-Cookie" not in hdrs
+        sess = {"X-Agentic-Session": json.loads(body)["session_token"]}
         csrf = json.loads(body)["csrf_token"]
-        assert _http("GET", base + "/api/projects", cookie=cookie)[0] == 200
-        assert _http("POST", base + "/api/sidekick", body={"ctx": {}, "text": "hi"}, cookie=cookie)[0] == 403
-        assert _http("POST", base + "/api/sidekick", body={"ctx": {}, "text": "hi"}, cookie=cookie,
-                     headers={"X-Agentic-CSRF": csrf})[0] == 200
+        assert _http("GET", base + "/api/projects", headers=sess)[0] == 200
+        assert _http("GET", base + "/api/local/session")[0] == 401
+        assert _http("POST", base + "/api/sidekick", body={"ctx": {}, "text": "hi"}, headers=sess)[0] == 403
+        assert _http("POST", base + "/api/sidekick", body={"ctx": {}, "text": "hi"},
+                     headers={**sess, "X-Agentic-CSRF": csrf})[0] == 200
         assert _http("POST", base + "/api/local/session", body={"code": code})[0] == 401     # single use
         assert _http("GET", base + "/", headers={"Host": "evil.example"})[0] == 400
         # the secret is never emitted in standalone mode, and the code is not on stdout
@@ -834,8 +982,9 @@ def test_launcher_handoff_over_stdout_and_stale_sidecar_cannot_be_adopted():
         code = json.loads(body)["launch_code"]
         st, body, hdrs = _http("POST", base + "/api/local/session", body={"code": code})
         assert st == 200
-        cookie = hdrs["Set-Cookie"].split(";")[0]
-        assert _http("GET", base + "/api/projects", cookie=cookie)[0] == 200
+        assert "Set-Cookie" not in hdrs
+        sess = {"X-Agentic-Session": json.loads(body)["session_token"]}
+        assert _http("GET", base + "/api/projects", headers=sess)[0] == 200
         p.terminate()
         rest, err = p.stdout.read().decode(), p.stderr.read().decode()
         for stream in (rest, err):                          # secret/code never in logs, banner or access log
@@ -927,3 +1076,129 @@ def test_sidecar_main_serve_path_goes_through_the_gate():
     assert "from agentic_os.projects_api import main as serve" in src
     api = (ROOT / "agentic_os" / "projects_api.py").read_text()
     assert "from .local_serve import serve" in api
+
+
+# --------------------------------------------------------------------------- SR-06: stalled clients
+def test_sr06_a_stalled_request_body_is_cut_off_instead_of_pinning_the_connection():
+    """A client that sends headers and then never finishes the body must not hold the request forever."""
+    cap = LocalCapability(port=PORT)
+    inner = create_app(SampleProjectionProvider())
+    gate = lc.LocalCapabilityMiddleware(inner, cap, body_timeout=0.3)
+    token, sess = cap.new_session("127.0.0.1:8787")
+    got = {}
+
+    async def run():
+        first = {"sent": False}
+
+        async def receive():
+            if not first["sent"]:
+                first["sent"] = True
+                return {"type": "http.request", "body": b'{"ctx": ', "more_body": True}
+            await asyncio.sleep(3600)                       # the client goes silent
+
+        async def send(m):
+            if m["type"] == "http.response.start":
+                got["status"] = m["status"]
+        t0 = time.monotonic()
+        try:
+            await asyncio.wait_for(gate({
+                "type": "http", "method": "POST", "path": "/api/sidekick", "raw_path": b"/api/sidekick",
+                "query_string": b"", "scheme": "http", "http_version": "1.1", "root_path": "",
+                "server": ("127.0.0.1", 8787), "client": ("127.0.0.1", 5),
+                "headers": [(b"host", b"127.0.0.1:8787"), (b"x-agentic-session", token.encode()),
+                            (b"x-agentic-csrf", sess.csrf.encode()), (b"content-type", b"application/json"),
+                            (b"content-length", b"1000")]}, receive, send), 8)
+        except Exception:
+            pass                                             # the app may fail on the cut body; it must END
+        got["elapsed"] = time.monotonic() - t0
+    asyncio.run(run())
+    assert got["elapsed"] < 6, got                           # ended by the body timeout, not by the 8 s guard
+
+    # the same for the launch-code endpoint's own body reader
+    async def run2():
+        async def receive():
+            await asyncio.sleep(3600)
+
+        async def send(m):
+            if m["type"] == "http.response.start":
+                got["local"] = m["status"]
+        await asyncio.wait_for(gate({
+            "type": "http", "method": "POST", "path": "/api/local/session", "raw_path": b"/api/local/session",
+            "query_string": b"", "scheme": "http", "http_version": "1.1", "root_path": "",
+            "server": ("127.0.0.1", 8787), "client": ("127.0.0.1", 5),
+            "headers": [(b"host", b"127.0.0.1:8787"), (b"content-type", b"application/json")]}, receive, send), 5)
+    asyncio.run(run2())
+    assert got["local"] == 400
+
+
+def _spawn_serve(env_extra=None, preexec=None):
+    env = _clean_env(PROJECTS_PORT="0", **(env_extra or {}))
+    p = subprocess.Popen([sys.executable, "-c", "from agentic_os.projects_api import main; main()"],
+                         env=env, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.PIPE, preexec_fn=preexec)
+    m, lines = _read_until(p.stderr, r"http://127\.0\.0\.1:(\d+)/#lc=")
+    assert m, lines
+    return p, int(m.group(1))
+
+
+def test_sr06_graceful_exit_is_not_blocked_by_a_stalled_connection():
+    p, port = _spawn_serve()
+    socks = []
+    try:
+        for path in ("/api/local/handshake", "/api/local/session"):     # the reviewer's SR-06 stall: 10 of 1000 body bytes
+            s = socket.create_connection(("127.0.0.1", port), timeout=5)
+            s.sendall((f"POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
+                       "Content-Type: application/json\r\nContent-Length: 1000\r\n\r\n0123456789").encode())
+            socks.append(s)
+        s = socket.create_connection(("127.0.0.1", port), timeout=5)       # header-stalled too
+        s.sendall(b"GET /api/projects HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nX-Slow: " % port)
+        socks.append(s)
+        time.sleep(0.5)
+        t0 = time.monotonic()
+        p.terminate()                                        # SIGTERM: uvicorn's graceful path
+        rc = p.wait(timeout=20)
+        elapsed = time.monotonic() - t0
+        assert elapsed < 5.0, f"exit took {elapsed:.1f}s with stalled clients (launcher grace is 3 s)"
+    finally:
+        for s in socks:
+            s.close()
+        if p.poll() is None:
+            p.kill()
+            p.wait()
+        p.stdout.close()
+        p.stderr.close()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="RLIMIT_NOFILE is POSIX only")
+def test_sr06_many_stalled_connections_do_not_exhaust_a_256_fd_sidecar():
+    import resource
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft != resource.RLIM_INFINITY and soft < 1024:
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (min(1024, hard) if hard != resource.RLIM_INFINITY else 1024, hard))
+        except (ValueError, OSError):
+            pytest.skip("cannot raise the test process's own descriptor limit")
+
+    def small_limit():
+        h = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
+        resource.setrlimit(resource.RLIMIT_NOFILE, (256, h))
+    p, port = _spawn_serve(preexec=small_limit)
+    socks = []
+    try:
+        for _ in range(320):
+            s = socket.create_connection(("127.0.0.1", port), timeout=5)
+            s.sendall(b"GET / HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nX-Slow: " % port)     # never finishes the headers
+            socks.append(s)
+        nonce = b64url(os.urandom(16))
+        st, body, _ = _http("POST", f"http://127.0.0.1:{port}/api/local/handshake", body={"client_nonce": nonce})
+        assert st == 200, "the launcher's handshake must still work with 320 stalled clients"
+    finally:
+        for s in socks:
+            s.close()
+        p.terminate()
+        try:
+            p.wait(10)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+        p.stdout.close()
+        p.stderr.close()

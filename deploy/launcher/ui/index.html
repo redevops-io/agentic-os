@@ -56,7 +56,7 @@
         try {
           const url = await invoke("start_native");
           await invoke("open_ui");
-          say("Running at " + url + " — opened in your browser.");
+          say("Running at " + url + " — opened in your browser." + (await legacyNote()));
         } catch (e) { say("Error:\n" + e); }
       };
       document.getElementById("stop").onclick = run("stop_native");
@@ -68,6 +68,14 @@
         if (!confirm("Remove the container tier's data (volumes)? Native data is untouched.")) return;
         await run("advanced_docker_purge")();
       };
+      // Warn (never act) when an OLD unauthenticated service is still running on port 8787.
+      const legacyNote = async () => {
+        try {
+          const w = await invoke("legacy_service_warning");
+          return w ? "\n\nWARNING: " + w : "";
+        } catch (e) { return ""; }
+      };
+      legacyNote().then((n) => { if (n) say(out.textContent + n); });
       invoke("docker_available").then((ok) => {
         if (ok) document.getElementById("advanced").hidden = false;
       }).catch(() => {});
