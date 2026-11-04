@@ -34,7 +34,8 @@ build_one() { # <label> <srcdir>
   rm -rf "$src"; git clone -q --no-hardlinks "$ROOT" "$src"; git -C "$src" checkout -q "$COMMIT"
   echo "== build $label in $src =="
   t0=$(date +%s)
-  ( cd "$src" && ./packaging/build-wheelhouse.sh && ./packaging/build-sidecar.sh && ./packaging/stage-sidecar.sh ) > "$OUT/build-$label.log" 2>&1
+  ( cd "$src" && ./packaging/build-wheelhouse.sh && ./packaging/build-sidecar.sh && ./packaging/build-notices.sh && \
+      REDEVOPS_LICENSES_DIR="$src/deploy/launcher/src-tauri/licenses" ./packaging/build-sidecar.sh && ./packaging/stage-sidecar.sh ) > "$OUT/build-$label.log" 2>&1
   t1=$(date +%s); echo "   wheelhouse+sidecar: $((t1-t0)) s"
   if [ "$SKIP_L" = 0 ]; then
     export CARGO_TARGET_DIR="$OUT/target-$label"; rm -rf "$CARGO_TARGET_DIR"

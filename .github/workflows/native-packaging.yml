@@ -68,8 +68,18 @@ jobs:
         shell: bash
         run: ./packaging/build-wheelhouse.sh
 
-      - name: Task 2 — freeze the Python sidecar
+      - name: Task 2 — freeze the Python sidecar (pass 1: the archive the notices are derived from)
         shell: bash
+        run: ./packaging/build-sidecar.sh
+
+      - name: Task 3 — licence notices from the SBOM of the built archive (packaging/notices; needs network for cargo fetch)
+        shell: bash
+        run: ./packaging/build-notices.sh
+
+      - name: Task 2b — freeze again, embedding the Licenses folder
+        shell: bash
+        env:
+          REDEVOPS_LICENSES_DIR: ${{ github.workspace }}/deploy/launcher/src-tauri/licenses
         run: ./packaging/build-sidecar.sh
 
       - name: Stage sidecar for Tauri externalBin
