@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Merged into the bundle's Info.plist by tauri-cli (it looks for Info.plist next to tauri.conf.json).
+	     Pure metadata: nothing reads it at run time. packaging/identity.json is the source of truth and
+	     tests/test_r0prime_identity.py keeps the two equal. -->
+	<key>RedevopsReleaseLine</key>
+	<string>r0-prime</string>
+</dict>
+</plist>

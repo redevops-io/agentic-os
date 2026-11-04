@@ -189,7 +189,12 @@ def test_cargo_lock_pins_frozen_ci_versions():
         assert need in rows, need
     recovered = {m.groups() for l in (PK / "cargo-targets/ci-locked-rows-recovered.txt").read_text().splitlines()
                  if (m := re.match(r"^(\S+) v(\S+)$", l.strip()))}
-    assert recovered <= rows, sorted(recovered - rows)[:5]
+    # the launcher crate itself is first-party: its version follows the product version (R0-prime: 0.1.1, packaging/identity.json),
+    # while the recovered CI record keeps what the frozen build locked (0.1.0). Every third-party row must still be locked.
+    assert ("redevops-launcher", "0.1.0") in recovered
+    third_party = {r for r in recovered if r[0] != "redevops-launcher"}
+    assert third_party <= rows, sorted(third_party - rows)[:5]
+    assert ("redevops-launcher", "0.1.1") in rows
     assert len(recovered) >= 340
 
 

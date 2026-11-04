@@ -1,9 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Agentic Apps",
-  "version": "0.1.0",
-  "identifier": "io.redevops.agentic-apps",
-  "mainBinaryName": "agentic-apps",
+  "productName": "Agentic Apps R0-prime",
+  "version": "0.1.1",
+  "identifier": "io.redevops.agentic-apps.r0prime",
+  "mainBinaryName": "agentic-r0prime",
   "build": {
     "frontendDist": "../ui"
   },
@@ -11,7 +11,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Agentic Apps",
+        "title": "Agentic Apps R0-prime",
         "width": 560,
         "height": 640,
         "resizable": true
@@ -37,7 +37,8 @@
     "externalBin": ["binaries/redevops-sidecar"],
     "copyright": "Copyright (c) 2025-2026 RedevOps.",
     "resources": {"licenses/": "Licenses/"},
-    "macOS": {"minimumSystemVersion": "11.0"},
+    "macOS": {"minimumSystemVersion": "11.0", "bundleVersion": "0.1.1"},
+    "windows": {"wix": {"upgradeCode": "f13fc625-f77d-5c30-b308-a3c3ec1045fc"}},
     "linux": {
       "deb": {
         "depends": []
