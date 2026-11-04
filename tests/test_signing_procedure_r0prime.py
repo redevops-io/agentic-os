@@ -892,8 +892,23 @@ class FakeAgent:
             pass
 
 
+_SSH_LIVE: list = []
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _delete_all_throwaway_ssh_keys():
+    """Every throwaway key a test made (also in tests that build an Ssh object by hand) is unlinked by name when the session ends."""
+    yield
+    for s in _SSH_LIVE:
+        try:
+            s.cleanup()
+        except OSError:
+            pass
+
+
 class Ssh:
     def __init__(self, tmp: Path):
+        _SSH_LIVE.append(self)
         self.tmp = tmp
         self.home = tmp / "home"
         self.home.mkdir()
