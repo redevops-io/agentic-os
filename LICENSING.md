@@ -38,10 +38,10 @@ place of a longer one, is for the owner.
 | [LICENSE.md](LICENSE.md) | the owner's statement of the combination, the effective date (2026-08-08) and the reasoning |
 | this file | which artifact carries which statement (section 3) and the open points (section 5) |
 
-The three licence files and this file are delivered inside every shipped
-artifact, in a `Licenses` folder (see
-[packaging/notices/README.md](packaging/notices/README.md)), together with
-`THIRD_PARTY_NOTICES.txt`.
+The build configuration places the three licence files and this file in a
+`Licenses` folder of each artifact, together with `THIRD_PARTY_NOTICES.txt`
+(how, and what has been observed per artifact:
+[packaging/notices/README.md](packaging/notices/README.md)).
 
 ## 3. What carries the statement
 
@@ -76,8 +76,8 @@ Not covered by it:
 * third-party components (Python wheels, Rust crates, CPython, OpenSSL,
   Microsoft runtime files, JavaScript in the UI bundle). They remain under
   their own licences, whose texts are collected in `THIRD_PARTY_NOTICES.txt`;
-  items for which no text could be found are listed in
-  `packaging/notices/NOTICES_MISSING.md` and in the decision register;
+  items for which no text could be found are listed in `NOTICES_MISSING.md`
+  (same folder) and in the decision register;
 * the sibling first-party packages that are imported (`runtime-contracts`,
   `redevops-connectors`, `knowledge-frontier`), each of which declares its own
   licence in its own repository; two of those declarations are marked there as
