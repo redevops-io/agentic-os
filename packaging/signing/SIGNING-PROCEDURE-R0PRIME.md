@@ -6,7 +6,10 @@ Signing needs the owner's separate, explicit authorization (`AUTHORIZATION-TEMPL
 
 Evidence levels used below: OBSERVED (seen in a run on this Mac), STATIC (read from source or documents), INFERRED, UNVERIFIED.
 
-Files (all in `packaging/signing/`): `sign_and_notarize_r0prime_macos_v3.sh`, `sign_windows_r0prime_v3.sh`, `r0prime_win_signcommand.sh`,
+Revision: round 4 independent review fixes applied (findings R4-01 to R4-11; table in `reports/signproc.md`). Scope files are now **version 2**
+(`AUTHORIZATION-TEMPLATE.md`); the new shared library `signing-common.sh` is bound by hash like the scripts.
+
+Files (all in `packaging/signing/`): `signing-common.sh`, `sign_and_notarize_r0prime_macos_v3.sh`, `sign_windows_r0prime_v3.sh`, `r0prime_win_signcommand.sh`,
 `sign_manifest_sshsig.sh`, `verify_signature_v2.py` (the frozen verifier, byte-identical), `tools/make_adhoc_fixture.sh`, `DIFF-vs-v2.md`,
 `SSHSIG-manifest-signing.md`, `AUTHORIZATION-TEMPLATE.md`, `README.md`; tests in `tests/test_signing_procedure_r0prime.py`.
 Frozen references (read-only, unchanged): `sign_and_notarize_macos_v2.sh`, `sign_windows_artifact_signing_v2.sh`, their ERRATA and the two independent
@@ -61,6 +64,7 @@ Signing is not publication, a signature is not a licence, and a notarization tic
 | G7 Scripts are the reviewed ones | `shasum -a 256` of the signing script, plist, verifier and `identity.json` equal the values in G2 (the scope file binds the script and plist hashes) | signer |
 | G8 Names are R0-prime | the dry run prints `Agentic Apps R0-prime.app`, `agentic-r0prime`, `io.redevops.agentic-apps.r0prime`, `io.redevops.agentic-apps.r0prime.sidecar` and the dmg name `Agentic Apps R0-prime_0.1.1_aarch64.dmg`; a frozen name aborts the run | signer |
 | G9 Sidecar entitlement decision | `docs/MACOS_ENTITLEMENTS.md`: the provisional decision 4 (keep `disable-library-validation` on the sidecar only) is the stated basis; the owner accepts the residual risk R1 for this named build | owner |
+| G11 Ledger | a real run needs `--ledger FILE` (absolute, outside the repository): the scope file's sha256 is appended when the first signing action starts and again when the run ends; the same scope is refused a second time unless `--allow-reuse` is passed (recorded). A failed run burns its scope on purpose: write a new one | signer |
 | G10 The evidence set matches the identity | the evidence set that describes the dmg being signed is for the R0-prime identity (see 3.3) | owner |
 
 ### 3.2 Private candidate versus DISTRIBUTION candidate
@@ -81,6 +85,8 @@ Signing is not publication, a signature is not a licence, and a notarization tic
   to users but it is a disclosure to a third party, so it needs its own approval (A-05 of `SIGNING_REQUEST.md`).
 * The scripts are distribution-neutral: they never publish, tag, release or upload except the one explicit notarization submission.
 
+* **The scripts enforce this** (round 4, R4-09). In `--real`, `r0p_gate` prints the gate's list of open decisions for the platform and then: with `--distribution` it runs the gate with `--distribution` and REFUSES while any blocker is OPEN or the gate file is malformed (before any signing or upload); without it, it prints "PRIVATE-CANDIDATE SIGNING: signing and notarization do NOT imply permission to distribute" and records it in the evidence. The scope file says `distribution=yes|no` and must agree with the flag. The gate file (`packaging/distribution-gate.json`) and the gate tool are bound by sha256 in the scope (`gate_sha256`, `gate_tool_sha256`); the scripts always run the repository copy (no `--gate`). The gate itself now fails closed: any `REDEVOPS_DISTRIBUTION_BUILD` value other than empty or exactly `0` means distribution, and a DECIDED entry must reference a file of the repository whose sha256 matches.
+
 ### 3.3 Identity and evidence-set consistency (open point)
 
 The evidence set `evidence-macos-arm64-unsigned-final3` (manifest sha256 `a16c3687...`) describes the candidate `macos-arm64-unsigned-final2`, which carries the FROZEN names
@@ -90,6 +96,15 @@ which dmg is signed: the rebuilt R0-prime candidate with a matching, reviewed, u
 
 ---------------------------------------------------------------------------------------------------------------------------------------
 
+### 3.4 What the scope file is, and is not (plainly)
+
+The scope file plus `--i-have-owner-authorization <sha256>` is a **tripwire against mistakes**: the wrong file, the wrong script version, the wrong day, the wrong identity, a repeated run. It is
+**not an authentication.** Anyone who can write a text file can produce a scope file that passes (the round 4 reviewer did, with public hashes and a fake identity string). What authenticates a real
+run is that it happens in the owner's own terminal, with the owner's keychain identity, notarytool profile, `az` login or ssh-agent, which no script and no agent here holds. The scripts therefore bind
+as much as they can into the scope (script, shared library, entitlement plist, `identity.json`, input hashes, identity and profile hashes, Team ID, gate file and tool, evidence-manifest digest, build and
+procedure commit ids, tool hashes on Windows, a UTC window of at most 24 hours) and keep a one-time ledger, but none of that replaces the owner's own action. The commit ids and the manifest digest are
+recorded in the evidence and are not verified by the scripts (they cannot see the repository history); the reviewer compares them.
+
 ## 4. Authorization scope statements the owner must give
 
 `AUTHORIZATION-TEMPLATE.md` has the fill-in form. Every approval states, in words and as a scope file the script checks:
@@ -97,7 +112,7 @@ which dmg is signed: the rebuilt R0-prime candidate with a matching, reviewed, u
 1. WHAT (sign / notarize and upload / staple / Windows inner / Windows container / manifest SSHSIG), each separately.
 2. WHICH bytes: the sha256 of every input (dmg; Windows request files; installers; manifest) and of the script and entitlement plist.
 3. WHICH identity: macOS Developer ID Application identity (the scope holds `sha256(identity string)` and the Team ID); Windows Artifact Signing endpoint, account, profile and exact certificate CN; SSH release-key fingerprint.
-4. WHICH dates: a UTC window (`valid_from`, `valid_until`). For Windows the 3-day certificates and the timestamp make this a hard requirement (section 6.5).
+4. WHICH time: a UTC window (`not_before`, `not_after`, at most 24 hours; a longer window is refused). For Windows the 3-day certificates and the timestamp make this a hard requirement (section 6.5).
 5. WHERE data goes: macOS notarization uploads the signed dmg to the Apple notary service; Windows signing sends file digests to the Artifact Signing service through Jsign (what exactly Jsign sends to the service, the digest or more, was not observed here: UNVERIFIED); SSHSIG sends nothing anywhere.
 6. WHAT is not authorized: publication, tags, releases, CI use of the secrets, re-use of the authorization for another hash or date.
 
@@ -135,22 +150,25 @@ read -r R0P_NOTARY_PROFILE
 export R0P_CODESIGN_IDENTITY R0P_NOTARY_PROFILE
 packaging/signing/sign_and_notarize_r0prime_macos_v3.sh --real --notarize \
     --i-have-owner-authorization "$(shasum -a 256 scope-macos.txt | awk '{print $1}')" --scope-file scope-macos.txt \
+    --ledger "$HOME/r0prime-signing-ledger.txt" \
     --input-dmg "$SIGN/in/<dmg>" --expected-sha256 <hex> --out-dir "$SIGN/out-real"
 ```
 (Without `--notarize` the run signs and verifies only; the scope file must then say `notarize=no`.)
 
 What the script does, in order, and what it refuses:
 
-1. Re-executes itself under `env -i` (PATH, HOME, LANG, TERM and `R0P_*` only), refuses xtrace, refuses to run as root, requires system tool locations in `--real`.
+1. Requires the environment to BE the allowlist (PATH, HOME, LANG, TERM and three named `R0P_*` variables): if it is not, it re-executes itself once under `env -i`; no marker variable can skip this (round 4: the old `R0P_SCRUBBED` shortcut is gone). Sets PATH to the system directories (`/usr/bin:/bin:/usr/sbin:/sbin`; stubs only with the unit-test switch), unsets the identity and profile variables after reading them so no child inherits them, refuses xtrace and root, and requires system tool locations in `--real`.
 2. Reads the names from `packaging/identity.json`; refuses a line that is not distinct from the frozen one.
-3. Verifies the scope file (sha256 equals the authorization argument; date window; script, plist, input and identity hashes; Team ID; notarize/upload agree with the flags).
+3. Reads the scope file ONCE into a private copy, hashes the copy against the authorization argument and parses the copy; checks the UTC window (at most 24 h), the script, `signing-common.sh`, plist, `identity.json`, input, identity and profile hashes, the Team ID, that notarize/upload and `distribution` agree with the flags, the ledger (single use) and runs the distribution gate (3.2). The output directory name may contain only letters, digits, `.`, `_`, `-`, `/` and spaces and must not be a symlink.
 4. Verifies the input dmg sha256 against `--expected-sha256` (a read), copies it to `out/work/input-copy.dmg` (sha256 re-checked) and attaches THAT copy read-only. The input is never opened for writing.
 5. Refuses unexpected content: dmg root items other than the app, `.VolumeIcon.icns` and `Applications`; bundle directories other than `Contents/MacOS` and `Resources`; any file other than the launcher and the sidecar that is executable, a library or has a Mach-O magic; non-arm64 binaries; an Info.plist that differs from identity.json (identifier, executable, versions, `LSMinimumSystemVersion` 11.0, `RedevopsReleaseLine`); a missing or executable file in `Resources/Licenses`.
 6. Signs inside-out: sidecar (identifier, entitlement plist, `--options runtime`, `--timestamp`), launcher, bundle, never `--deep`.
 7. Verifies per binary and for the bundle (`codesign --verify --strict`, no `--deep`): hardened-runtime flag, identifier, entitlements read back FAIL-CLOSED (`--entitlements - --xml`, fallback `:-`, cross-check with the human-readable dump; the sidecar must carry exactly `{"com.apple.security.cs.disable-library-validation":true}`, the launcher and bundle none, nobody `get-task-allow`), the Developer ID Application / Developer ID Certification Authority / Apple Root CA chain, a secure timestamp, one Team ID equal to the scope's, `Info.plist` bound, sealed-resource count at least the number of `Licenses/` files.
 8. Builds the dmg (`hdiutil` UDRW then UDZO, `Applications` link, volume icon flag), signs it, verifies it.
-9. With `--notarize`: **one** `xcrun notarytool submit <signed dmg> --keychain-profile <name> --wait --timeout 30m --output-format json` (this UPLOADS the signed dmg, about 40 MB, to the Apple notary service), `notarytool log`, then, only if `Accepted`, `stapler staple` and `stapler validate` on the dmg.
+9. With `--notarize`: **one** `xcrun notarytool submit <signed dmg> --keychain-profile <name> --wait --timeout 30m --output-format json` (this UPLOADS the signed dmg, about 40 MB, to the Apple notary service; the ledger gets a `notary-submit` line and `notary/SUBMISSIONS.txt` records the submission before and after; the script also ends the call itself 90 s after the timeout), `notarytool log`, then, only if `Accepted`, `stapler staple` and `stapler validate` on the dmg.
 10. Re-mounts the output, copies the app out, verifies its signature and that the binaries equal the signed ones, runs `spctl` on the dmg and the app copy, runs `stapler validate` on the app copy (EXPECTED: no ticket), writes `EVIDENCE.txt`, `OUTPUT.sha256`, `TRANSCRIPT.txt` and `TRANSCRIPT.sha256` (printed too), removes the staged copies file by file.
+
+Output modes: umask 077, so the output directory is 0700 and every file in it, including the signed dmg, is 0600; the owner changes the mode when handing the dmg on.
 
 What is uploaded to Apple, exactly: the signed dmg file (`out/<dmg>`; contents: the signed app with launcher, sidecar and the eight `Licenses/` files, the volume icon, the `Applications` link). No source, no evidence set, no credentials (the profile is resolved by `notarytool` from the keychain).
 What is stapled: the dmg only. The app inside has no ticket; an app copied out relies on Gatekeeper's online lookup (optional improvement, owner decision O-04: notarize and staple the app before building the dmg; not done by the script).
@@ -176,13 +194,20 @@ Scripts: `r0prime_win_signcommand.sh` (on the Windows build host, no secret) and
   Consequences: (a) an executable cannot be signed before packaging and left alone, because the bundler patches the launcher afterwards; (b) the installers must be rebuilt after the inner files are signed; (c) the bundler would also sign third-party DLLs with whatever the command does, so the command must skip them; (d) the msi and nsis passes see different launcher bytes (explains the two different launcher hashes in the frozen v0.3.2 installers: INFERRED).
 * The build host (Windows) has no secret. The signing host (the owner's Mac) holds access to Artifact Signing through the owner's `az` login. Files move by hand, hashes verified at every hop.
 
+### 6.1a Tools, hashes and the scope on the signing host
+
+The signing host resolves every external tool from the fixed system PATH plus an explicit owner-supplied tools directory (`R0P_TOOLS_DIR`, absolute, owned by the owner, not writable by group or others);
+`az`, the java executable, the python executable and `osslsigncode` (or `none`) are pinned by sha256 in the scope (`tool_az_sha256`, `tool_java_sha256`, `tool_python_sha256`, `tool_osslsigncode_sha256`), and the Jsign jar and
+the verifier are pinned as before. The Azure coordinates (`R0P_AZ_*`) are unset after they are read, so neither `az` nor Jsign inherits them. The inputs are hashed, copied into the private 0700 work directory, **re-hashed
+immediately after the copy and again immediately before each Jsign call**; a file that differs from the authorized hash is refused and never signed (round 4, R4-02).
+
 ### 6.2 Round 1: collect the inner files (build host)
 
 1. Clean checkout of the exact commit; build per `packaging/build-windows.ps1` up to the launcher and the staged sidecar (`cargo tauri build --no-bundle`). Keep a copy of the unpatched `target\release\agentic-r0prime.exe` (the bundler patches it in place per package type).
 2. Write a config override OUTSIDE the repository, e.g. `override.json`: `{"bundle":{"windows":{"signCommand":{"cmd":"bash","args":["<abs>/r0prime_win_signcommand.sh","%1"]}}}}`.
 3. For each package type, restoring the unpatched launcher first: `set R0P_HANDOFF_MODE=collect`, `set R0P_HANDOFF_DIR=<abs>\round1`, `cargo tauri bundle --bundles msi --config override.json`, then the same for `nsis`.
    (UNVERIFIED: `tauri bundle` with a config override and a pre-built binary was not run; if it behaves differently, use `cargo tauri build --config override.json` in a fresh checkout per package type.)
-4. Result: `round1\requests-inner\<role>-<sha256>.exe` for launcher, sidecar, uninstaller; the unsigned installers are throw-away; unknown executables appear as `unknown-<sha256>.exe` (the signing script refuses that name: review the file, extend the helper, review again).
+4. Result: `round1\requests-inner\<role>-<sha256>.exe` for launcher, sidecar, uninstaller, and `round1\REQUESTS.sha256`, THIS build host's own record of what it asked to have signed (keep it; apply needs it); the unsigned installers are throw-away; unknown executables appear as `unknown-<sha256>.exe` (the signing script refuses that name: review the file, extend the helper, review again).
 
 ### 6.3 Stage inner (signing host)
 
@@ -198,10 +223,11 @@ Verification before release (inside `work/`): `verify_signature_v2.py --require-
 ### 6.4 Round 2: rebuild the containers with the signed inner files (build host), then stage container
 
 1. Copy the signed files and the `SHA256SUMS` of the stage-inner run into `round2\signed-inner\` (new directory; hashes re-checked by the helper).
-2. Restore the unpatched launcher; `set R0P_HANDOFF_MODE=apply`, `set R0P_HANDOFF_DIR=<abs>\round2`, `cargo tauri bundle --bundles msi --config override.json`; again for `nsis`. The helper replaces each inner file by its signed counterpart ONLY when `signed-inner/<role>-<sha256 of the incoming file>.exe` exists and matches `SHA256SUMS`; a file that is already one of the signed files is accepted; anything else FAILS the build (it never lets an unsigned inner file through); containers are copied to `round2\requests-container\` unsigned.
+2. Restore the unpatched launcher; `set R0P_HANDOFF_MODE=apply`, `set R0P_HANDOFF_DIR=<abs>\round2`, `set R0P_HANDOFF_REQUESTS=<abs>\round1\REQUESTS.sha256`, `set R0P_EXPECT_SIGNER_CN=<exact CN>`, `set R0P_EXPECT_ISSUER_SUBSTR=<issuer text from the authorization>`, `cargo tauri bundle --bundles msi --config override.json`; again for `nsis`. The helper replaces each inner file by its signed counterpart ONLY when the incoming file's unsigned hash is in THIS host's `REQUESTS.sha256`, `signed-inner/<role>-<sha256 of the incoming file>.exe` exists, matches `SHA256SUMS`, and `powershell.exe Get-AuthenticodeSignature` on it reports Status `Valid`, a signer subject whose first CN is exactly `R0P_EXPECT_SIGNER_CN`, an issuer containing `R0P_EXPECT_ISSUER_SUBSTR` and a timestamper certificate (round 4, R4-07; UNVERIFIED on a real Windows host); a file that is already one of the signed files is accepted; anything else FAILS the build (it never lets an unsigned inner file through); containers are copied to `round2\requests-container\` unsigned.
    (UNVERIFIED: that the NSIS uninstaller and the patched launcher have identical bytes in both rounds. If they do not, the lookup misses and the build fails: fail-closed, then use the online alternative below.)
-3. Check the container names equal the derived ones (`Agentic Apps R0-prime_0.1.1_x64_en-US.msi`, `Agentic Apps R0-prime_0.1.1_x64-setup.exe`), hand them to the signing host and run `--stage container` (same flags, own scope file).
-4. On a Windows host: `Get-AuthenticodeSignature` on both containers and on the installed `agentic-r0prime.exe`, `redevops-sidecar.exe`, `uninstall.exe` (Windows acceptance kit step 11). The signing script cannot see inside the containers.
+3. On the build host record the **file list of each rebuilt installer** (for example `msiexec /a <msi> /qn TARGETDIR=<temp>` then a sorted listing with sha256, and the same for the NSIS exe with 7-Zip) into one text file. The container stage in `--real` REQUIRES it (`--container-listing FILE`, hash in the scope as `container_listing_sha256`) and records its hash and line count in the evidence. **The container signing does not inspect the installer contents**: the signature vouches for whatever the hand-off delivered, so the listing (inner file hashes equal to the signed `SHA256SUMS`) must be reviewed before the run, and the Windows acceptance kit must check the installed files afterwards.
+4. Check the container names equal the derived ones (`Agentic Apps R0-prime_0.1.1_x64_en-US.msi`, `Agentic Apps R0-prime_0.1.1_x64-setup.exe`), hand them to the signing host and run `--stage container` (same flags, own scope file).
+5. On a Windows host: `Get-AuthenticodeSignature` on both containers and on the installed `agentic-r0prime.exe`, `redevops-sidecar.exe`, `uninstall.exe` (Windows acceptance kit step 11). The signing script cannot see inside the containers.
 
 Online alternative (not the default): run the build on a host the owner controls and let `signCommand` call a script outside the repository that signs with the owner's `az` session. That puts Azure access on the build host; never in CI without a separate decision.
 Alternative of v0.3.2: sign only the two containers (no inner signing). Weaker: the installed executables stay unsigned.
@@ -225,7 +251,7 @@ Alternative of v0.3.2: sign only the two containers (no inner signing). Weaker: 
 
 `SSHSIG-manifest-signing.md` and `sign_manifest_sshsig.sh`: namespace `redevops-qa-release@v1`, the EXISTING release key (public fingerprint in `SIGNING_REQUEST.md`), used only through the owner's ssh-agent
 after separate explicit authorization; the signature is streamed (stdin to stdout) into a file outside the evidence directory so that no file is added to the set; verification with the public key only.
-The key is never read or exported by any script, and it is never placed in an agent for a test.
+The key is never read or exported by any script, and it is never placed in an agent for a test. Since round 4 the script copies the PUBLIC key into a private directory, requires the fingerprint in `ssh-add -l` of the owner's agent, signs with `-U` under a throwaway HOME and `SSH_ASKPASS=/usr/bin/false`, and refuses otherwise: it can no longer fall back to a private key file beside the `.pub` (R4-01). The fingerprint printed in `SIGNING_REQUEST.md` has 42 characters after `SHA256:` where OpenSSH prints 43; the owner passes the true fingerprint as `--expected-fingerprint`, and the self-test guard treats the published string as a prefix.
 
 ---------------------------------------------------------------------------------------------------------------------------------------
 
@@ -252,7 +278,7 @@ Plus: an ERRATA file for any statement in the evidence that turned out wrong (th
 
 ## 10. Secrets handling
 
-* No credential is a command-line argument, a file in the repository, a CI secret, a chat message or an environment variable of a child process: the identity and profile come from `R0P_*` variables of the owner's own shell; the scripts scrub the environment (`env -i` allowlist) before calling any tool.
+* No credential is a command-line argument, a file in the repository, a CI secret, a chat message or an environment variable of a child process: the identity and profile come from `R0P_*` variables of the owner's own shell and are unset right after they are read; the environment of every script must be the allowlist (the scripts re-execute under `env -i` otherwise, and nothing can skip that); PATH is fixed.
 * The macOS scripts print a placeholder instead of the identity and the profile; the transcript records `sha256(identity)` only. The Windows script writes the Azure token with `az` straight into a 0600 file in a 0700 directory, hands Jsign `file:<path>`, truncates and removes the file as soon as Jsign returns and on every failure path, and never echoes it.
 * Transcripts, evidence and CI artifacts are reviewed for secrets before they leave the machine; the scripts never use `set -x`, and refuse to run under xtrace.
 * Keys: no script reads a private key. The SSHSIG key is used through the owner's agent only. Test keys are throwaway files in temporary directories, deleted by name, never in an agent.
@@ -274,6 +300,9 @@ Plus: an ERRATA file for any statement in the evidence that turned out wrong (th
 
 ---------------------------------------------------------------------------------------------------------------------------------------
 
+* **R10 The scope file is not an authentication** (3.4). A passing scope check proves only that the stated hashes, window and flags agree; the owner's terminal and credentials are the authentication; the ledger stops accidental repeats, not a deliberate one by someone who can edit the ledger.
+* **R11 Gate semantics.** The gate proves that written decisions exist in the repository copy bound by hash; it is not a legal conclusion and a repository writer can still edit the gate file (the hash binding makes that visible to the reviewer, not impossible).
+
 ## 12. UNVERIFIED (consolidated)
 
-Real Developer ID signing and notarization of the new bundle id/entitlement; `codesign -d --entitlements - --xml` output on a Developer-ID-signed, timestamped binary; offline first launch of an app copied from a stapled dmg; hardened-runtime behaviour of the signed sidecar through "Start & open" with a Team ID; every Azure call; Jsign output for the new names; `tauri bundle` with `signCommand` and pre-built binaries; byte-identity of the uninstaller and launcher across rounds; whether files inside the containers carry the signatures; Windows 10/11 behaviour of a Jsign-signed MSI without `MsiDigitalSignatureEx`; behaviour of the dated frozen-signature check; bash other than 3.2.57; Linux.
+Real Developer ID signing and notarization of the new bundle id/entitlement; `codesign -d --entitlements - --xml` output on a Developer-ID-signed, timestamped binary; offline first launch of an app copied from a stapled dmg; hardened-runtime behaviour of the signed sidecar through "Start & open" with a Team ID; every Azure call; Jsign output for the new names; `tauri bundle` with `signCommand` and pre-built binaries; the PowerShell signature check of the hand-off helper (no Windows host); whether `ssh-keygen -Y sign -U` with a real agent behaves as the fake-agent tests show; byte-identity of the uninstaller and launcher across rounds; whether files inside the containers carry the signatures; Windows 10/11 behaviour of a Jsign-signed MSI without `MsiDigitalSignatureEx`; behaviour of the dated frozen-signature check; bash other than 3.2.57; Linux.

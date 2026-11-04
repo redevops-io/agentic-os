@@ -7,6 +7,7 @@ owner's authorization (`AUTHORIZATION-TEMPLATE.md`), the owner's own identity/pr
 |---|---|
 | `SIGNING-PROCEDURE-R0PRIME.md` | the procedure: order, gates (private candidate versus distribution), authorization scope, macOS and Windows steps, evidence, abort rules, secrets handling, risks, UNVERIFIED |
 | `AUTHORIZATION-TEMPLATE.md` | the form the owner fills in; scope-file formats |
+| `signing-common.sh` | shared safety functions sourced by the three scripts (environment allowlist, fixed PATH, scope read once, window, ledger, distribution gate); its sha256 is bound by every scope file |
 | `sign_and_notarize_r0prime_macos_v3.sh` | macOS: sidecar, launcher, bundle, dmg; notarize and staple the dmg. Modes `--dry-run` (default, plan only), `--adhoc-test` (ad-hoc `-` on a copy, no secret), `--real` |
 | `sign_windows_r0prime_v3.sh` | Windows (macOS host): Jsign 7.6 + Azure Artifact Signing; stages `inner` and `container`. Modes `--dry-run` (default), `--throwaway-test`, `--real` |
 | `r0prime_win_signcommand.sh` | the `signCommand` for the Windows build host: collects files to sign / puts signed files back by hash; no credential |

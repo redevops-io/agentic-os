@@ -1,7 +1,7 @@
 # Signing the evidence manifest with SSHSIG (approval M-01)
 
 Purpose: bind, by one signature, the top-level `release-manifest.json` of an R0-prime evidence set (and through its sha256 list every file the manifest names) to the existing release key,
-without adding any file to the evidence directory. Implementation: `sign_manifest_sshsig.sh` (version `r0prime-sshsig-1`).
+without adding any file to the evidence directory. Implementation: `sign_manifest_sshsig.sh` (version `r0prime-sshsig-2`).
 Nothing has been signed. The owner's key was not touched to prepare or test this: tests use a throwaway key in a temporary directory, never in an agent.
 
 ## 1. What is signed, with which key
@@ -12,7 +12,7 @@ Nothing has been signed. The owner's key was not touched to prepare or test this
 | Digest | sha256 of that file, obtained OUT OF BAND (evidence INDEX/review, delivery message), passed as `--expected-sha256`; the script refuses any other file |
 | Format | OpenSSH SSHSIG (`ssh-keygen -Y sign`), Ed25519 |
 | Namespace | `redevops-qa-release@v1` (fixed in the script; domain separation from every other use of the key, for example `redevops-qa-anchor@v1`) |
-| Key | the EXISTING release key; its public fingerprint (`SHA256:wUoE8xKJpmtTH7GqWXMIl9/BW0SH1Isc5/w9HEiwqA` in `SIGNING_REQUEST.md`) is published by the owner; the owner supplies the public key file (`.pub`) |
+| Key | the EXISTING release key; its public fingerprint as printed in `SIGNING_REQUEST.md` is `SHA256:wUoE8xKJpmtTH7GqWXMIl9/BW0SH1Isc5/w9HEiwqA`, which has 42 characters after the colon where an OpenSSH SHA256 fingerprint has 43 (truncated or mistyped: the owner gives the true one as `--expected-fingerprint`); the owner supplies the public key file (`.pub`) |
 | Signer | the owner's ssh-agent only, after separate explicit authorization (template section 4); the script never opens a private key file |
 
 ## 2. How the signature is made (the frozen approach)
@@ -21,7 +21,7 @@ Nothing has been signed. The owner's key was not touched to prepare or test this
 
 * The manifest is streamed on stdin; the signature is read from stdout. `ssh-keygen` writes no file next to the manifest. The script refuses a `--sig-out` inside the manifest's directory,
   so the evidence set is byte-for-byte unchanged (tests compare names, sizes and mtimes before and after).
-* `-f` names the PUBLIC key file: with a public key `ssh-keygen` asks the agent to sign (OpenSSH documents `-f` as a private key or a public key whose private half is in an agent). The script refuses a file that contains a private key and a file that is not one `ssh-ed25519` line.
+* **Agent only, no fallback (round 4, R4-01).** OpenSSH, given `-f <name>.pub` and an agent that lacks the key, loads the private key file `<name>` beside it. The script therefore (1) copies the PUBLIC key into its private 0700 temp directory and gives THAT copy to `ssh-keygen -f`, so no private key sits beside it; (2) requires the key's fingerprint in `ssh-add -l` of the owner's agent and refuses otherwise; (3) signs with `-U` (use the agent), a throwaway `HOME`, `SSH_ASKPASS=/usr/bin/false`, `SSH_ASKPASS_REQUIRE=never` and no `DISPLAY`, so no `~/.ssh` is read and nothing is prompted. It refuses a `--pubkey` file that contains a private key or is not one `ssh-ed25519` line. Regression tests use the reviewer's fake-agent scenario (an agent without the key and a private key file next to the `.pub`) with the real `ssh-keygen` and `ssh-add`.
 * The script copies the manifest to a private temporary directory, checks the sha256 of the copy, signs and verifies THAT copy, re-checks the original at the end, and removes its temporary files by name.
 * `SSH_AUTH_SOCK` reaches `ssh-keygen` only in `--real` mode (the script re-executes itself under `env -i`); in every other mode it is dropped.
 * Verification, before the signature is released: `ssh-keygen -Y verify -f <allowed_signers> -I redevops-qa-release -n redevops-qa-release@v1 -s <sig> < manifest`, with an `allowed_signers` file built from the SUPPLIED public key only (one principal, `namespaces="redevops-qa-release@v1"`). A key found anywhere else is never consulted.
@@ -33,10 +33,10 @@ Nothing has been signed. The owner's key was not touched to prepare or test this
 |---|---|---|
 | `--dry-run` (default) | checks the digest, the key file and prints the two commands; contacts no agent, creates nothing | none |
 | `--verify-only --manifest M --sig S --pubkey K [--expected-fingerprint F]` | verifies an existing signature; exit 0 verified, 5 not verified | none (what a reviewer or third party runs) |
-| `--self-test --test-private-key T` | mechanics with a THROWAWAY key whose public comment is `signproc-TEST-KEY`; refuses the release key and any agent | a throwaway key made for the test |
+| `--self-test [--test-pubkey-out F]` | mechanics with a THROWAWAY key that the script generates itself in a fresh private temp directory (comment `signproc-TEST-KEY`), uses and deletes; no key can be handed to it; refuses any key whose fingerprint starts with the published release fingerprint, and any agent | none (the key is made and removed by the run) |
 | `--real --i-have-owner-authorization SHA --scope-file F --expected-fingerprint F` | signs through the owner's agent | the owner's agent (the script sees none of it) |
 
-`--real` additionally requires: `SSH_AUTH_SOCK` set to a socket, the file name `release-manifest.json`, `--expected-fingerprint`, a scope file (window, script sha256, manifest sha256, key fingerprint, namespace) whose sha256 equals the flag.
+`--real` additionally requires: `SSH_AUTH_SOCK` set to a socket (the only mode in which it is passed on), the file name `release-manifest.json`, `--expected-fingerprint`, `--ledger FILE` (one-time use of the scope; `--allow-reuse` is recorded), and a scope file (version 2: UTC window of at most 24 h, script and `signing-common.sh` sha256, `identity.json` sha256, manifest sha256, key fingerprint, namespace, build and procedure commit ids) read once into a private copy whose sha256 equals the flag. The scope file is a tripwire against mistakes, not an authentication: the owner's agent is the authentication.
 
 ## 4. Verification by anyone, with public material only
 
