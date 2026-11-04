@@ -16,10 +16,11 @@ Native installer (.deb / AppImage / .msi / .dmg)
 ## Build order (one reproducible recipe → all platforms)
 
 ```bash
-./packaging/build-wheelhouse.sh   # Task 1: wheels + requirements.lock; proves offline --no-index install
+./packaging/build-wheelhouse.sh   # Task 1: hash-locked wheelhouse from pinned inputs; proves an offline --no-index --require-hashes install
 ./packaging/build-sidecar.sh      # Task 2: freeze → packaging/dist/redevops-sidecar
 ./packaging/stage-sidecar.sh      # place it as Tauri externalBin (per target triple)
-cd deploy/launcher && cargo tauri build   # Task 4: emits the native installer(s) for the host OS
+./packaging/build-launcher.sh      # Task 4: cargo tauri build -- --locked (pinned rustc/tauri-cli, committed Cargo.lock)
+./packaging/build-sbom.sh          # shipped-component SBOM from the BUILT artifacts + verifier (fails on an unlisted component)
 ```
 
 CI runs exactly this across ubuntu/windows/macos: `.github/workflows/native-packaging.yml`.
@@ -48,4 +49,6 @@ macOS → AWS EC2 Mac dedicated host). Only signing/notarization + winget/Homebr
   brain's `default_llm`. Same contract as the parked try-container (`SIDEKICK_MODEL_*`).
 - **Docker is advanced/opt-in:** the launcher's `advanced_docker_*` commands enable the container tier
   (observability combo + rootless code-exec membrane); nothing here requires it.
-- Build artifacts (`wheelhouse/`, `dist/`, `build/`) are git-ignored; `requirements.lock` is committed.
+- Build artifacts (`wheelhouse/`, `dist/`, `build/`) are git-ignored. The Python locks (`packaging/locks/*.lock`, hash-locked per OS)
+  and `deploy/launcher/src-tauri/Cargo.lock` are committed; the old `requirements.lock` (a pip-freeze output that disagreed with the
+  build) is gone. See **`PINS.md`** for every pin, how to regenerate it, and what is and is not reproducible.

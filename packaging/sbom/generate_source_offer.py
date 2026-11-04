@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""Render packaging/SOURCE-OFFER.md for one build from its SBOM + the pinned source references.
+
+  generate_source_offer.py --sbom packaging/dist/sbom/sbom.cdx.json --out packaging/dist/SOURCE-OFFER.md \
+      [--template packaging/SOURCE-OFFER.md] [--git-pins packaging/git-pins.json] \
+      [--sources packaging/source-offer/third-party-sources.json] [--build-manifest packaging/dist/build-manifest.json]
+
+Exit 1 when a shipped component has no source reference entry (so the offer cannot silently shrink).
+Writes facts only; it never says a licence is cleared.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+FIRST_PARTY = {"agentic-os", "runtime-contracts", "knowledge-frontier", "redevops-connectors"}
+HERE = Path(__file__).resolve().parent.parent
+
+
+def props(c: dict) -> dict[str, str]:
+    return {p["name"]: p["value"] for p in c.get("properties", [])}
+
+
+def lic(c: dict) -> str:
+    for l in c.get("licenses", []):
+        if "expression" in l:
+            return l["expression"]
+        if "license" in l:
+            return l["license"].get("id") or l["license"].get("name", "")
+    return "none read"
+
+
+def md_row(cells: list[str]) -> str:
+    return "| " + " | ".join(x.replace("|", "\\|").replace("\n", " ") for x in cells) + " |"
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--sbom", required=True)
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--template", default=str(HERE / "SOURCE-OFFER.md"))
+    ap.add_argument("--git-pins", default=str(HERE / "git-pins.json"))
+    ap.add_argument("--sources", default=str(HERE / "source-offer" / "third-party-sources.json"))
+    ap.add_argument("--build-manifest")
+    a = ap.parse_args()
+    bom = json.loads(Path(a.sbom).read_text())
+    pins = {p["name"]: p for p in json.loads(Path(a.git_pins).read_text())["dependencies"]}
+    srcs = json.loads(Path(a.sources).read_text())["components"]
+    manifest = json.loads(Path(a.build_manifest).read_text()) if a.build_manifest and Path(a.build_manifest).exists() else {}
+    comps = bom["components"]
+    missing: list[str] = []
+
+    # --- build identity ---------------------------------------------------------------------
+    meta_props = {p["name"]: p["value"] for p in bom["metadata"].get("component", {}).get("properties", [])}
+    src = manifest.get("source", {})
+    ident = [f"- SBOM serial: `{bom['serialNumber']}` ({len(comps)} components, CycloneDX {bom['specVersion']})",
+             f"- agentic-os source commit: `{meta_props.get('redevops:source-commit', 'unknown')}` (tree `{meta_props.get('redevops:source-tree', 'unknown')}`)"]
+    if src.get("dirty_files"):
+        ident.append(f"- WARNING: the build tree had {src['dirty_files']} uncommitted/untracked files: the commit above does not fully describe the build")
+    ident.append(f"- archive analysed: {meta_props.get('redevops:archive-source', '?')} sha256 `{meta_props.get('redevops:archive-sha256', '')}`")
+    tc = manifest.get("toolchain", {})
+    for k in ("rustc", "cargo", "tauri_cli", "uv"):
+        if tc.get(k):
+            ident.append(f"- {k}: {str(tc[k]).splitlines()[0]}")
+    py = tc.get("python_sidecar") or {}
+    if py:
+        ident.append(f"- build interpreter: CPython {py.get('version')} ({py.get('source')}); executable sha256 `{py.get('executable_sha256')}`")
+    rn = manifest.get("runner", {}).get("env", {})
+    if rn.get("ImageVersion"):
+        ident.append(f"- runner image: {rn.get('ImageOS')} version {rn['ImageVersion']}")
+
+    # --- first-party --------------------------------------------------------------------------
+    fp = ["| component | declared licence | repository | tag | tag object | commit | obtain |", "|---|---|---|---|---|---|---|"]
+    for c in comps:
+        p = props(c)
+        key = p.get("redevops:key", "")
+        if not key.startswith("pypi:") or key.split(":", 1)[1] not in FIRST_PARTY:
+            continue
+        n = key.split(":", 1)[1]
+        if n == "agentic-os":
+            commit = p.get("redevops:git-commit", meta_props.get("redevops:source-commit", "unknown"))
+            fp.append(md_row([f"agentic-os {c.get('version')} (control plane, sidecar entry script, Tauri launcher, packaging)", lic(c),
+                              "https://github.com/redevops-io/agentic-os", "(none: R0-prime commit)", "-", f"`{commit}`",
+                              f"`git clone https://github.com/redevops-io/agentic-os && git checkout {commit}`; PUBLICATION OF THIS COMMIT IS AN OPEN OWNER ACTION (decision pins-SO-1)"]))
+        else:
+            pin = pins.get(n, {})
+            fp.append(md_row([f"{n} {c.get('version')}", lic(c), pin.get("url", "?"), pin.get("tag", "?"), f"`{pin.get('tag_object', '?')}`", f"`{pin.get('commit', '?')}`",
+                              f"`git clone {pin.get('url', '?')} && git checkout {pin.get('commit', '?')}`"]))
+    launcher = next((c for c in comps if props(c).get("redevops:key") == "launcher"), None)
+    if launcher:
+        fp.append("")
+        fp.append(f"The launcher (`redevops-launcher`, declared licence per its Cargo.toml: {lic(launcher)}) lives in the agentic-os repository under `deploy/launcher/`.")
+
+    # --- third party --------------------------------------------------------------------------
+    groups: dict[str, list[list[str]]] = {"Python (PyPI) distributions": [], "JavaScript (UI bundle)": [], "Native libraries and runtimes": [], "Rust crates (launcher)": [],
+                                          "Rust crates statically linked into Python wheels (upstream-declared)": []}
+    nosrc: list[str] = []
+    for c in sorted(comps, key=lambda c: (c["name"].lower(), c.get("version", ""))):
+        p = props(c)
+        key = p.get("redevops:key", "")
+        if c.get("scope") == "excluded" or c["type"] in ("platform", "application"):
+            continue
+        if key.startswith("pypi:") and key.split(":", 1)[1] in FIRST_PARTY:
+            continue
+        if key in ("ui-bundle",) or key.startswith("asset:"):
+            continue
+        ent = srcs.get(key) or srcs.get(c.get("purl", ""))
+        if ent is None:
+            missing.append(key or c["name"])
+            continue
+        sh = "shipped in: " + p.get("redevops:shipped_in", "?")
+        if "unresolved" in ent or ent.get("source", {}).get("type") in ("none", None):
+            nosrc.append(f"- {c['name']} {c.get('version', '(version unknown)')} ({lic(c)}): " + (ent.get("unresolved") or ent["source"].get("note", "")))
+            continue
+        s = ent["source"]
+        ref = s.get("url") or s.get("project_url", "")
+        h = s.get("sha256") or s.get("integrity") or s.get("sha1") or ""
+        row = [c["name"], c.get("version", ""), lic(c), ref, h or ("not recorded" if not s.get("note") else s["note"])]
+        if key.startswith("pypi:") or key in ("certifi-bundle", "pyinstaller-runtime"):
+            g = "Python (PyPI) distributions"
+        elif key.startswith("npm:"):
+            g = "JavaScript (UI bundle)"
+        elif key.startswith("embedded:"):
+            g = "Rust crates statically linked into Python wheels (upstream-declared)"
+        elif key.startswith("cargo:"):
+            g = "Rust crates (launcher)"
+        else:
+            g = "Native libraries and runtimes"
+        groups[g].append(row)
+    tp: list[str] = []
+    for g, rows in groups.items():
+        if not rows:
+            continue
+        tp += [f"### {g} ({len(rows)})", "", md_row(["component", "version", "declared licence", "source", "sha256 / integrity"]), "|---|---|---|---|---|"]
+        tp += [md_row(r) for r in rows]
+        tp.append("")
+    ns = nosrc or ["(none)"]
+    for c in comps:  # Microsoft DLLs etc. flagged in the SBOM itself
+        pass
+    text = Path(a.template).read_text()
+    for marker, body in (("build-inputs", ident), ("first-party", fp), ("third-party", tp), ("no-source", ns)):
+        text = text.replace(f"<!-- GENERATED:{marker} -->", "\n".join(body))
+    Path(a.out).parent.mkdir(parents=True, exist_ok=True)
+    Path(a.out).write_text(text)
+    print(f"wrote {a.out}: {sum(len(r) for r in groups.values())} third-party source references, {len(nosrc)} without a nameable source")
+    if missing:
+        print("NO source-reference entry for: " + ", ".join(sorted(set(missing))[:20]) + (" ..." if len(set(missing)) > 20 else ""))
+        print("run packaging/tools/collect_source_refs.py to refresh packaging/source-offer/third-party-sources.json")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

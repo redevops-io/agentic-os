@@ -136,6 +136,11 @@ def analyze(archive: Archive, inv: dict[str, dict], facts: dict | None = None, w
             c.hashes["SHA-256"] = e["wheel_sha256"]
             c.props["redevops:hash-of"] = f"wheel {e.get('wheel_file')} (the installed distribution), not of the bytes inside the archive"
         c.props["redevops:top-level-modules"] = ",".join(e.get("top_level", []))
+        txt = (e.get("licence") or {}).get("license")
+        if txt and (not c.licence or c.licence.get("name") != txt):
+            c.props["redevops:licence-declared-text"] = " ".join(txt.split())[:400]
+        if (e.get("licence") or {}).get("license_files"):
+            c.props["redevops:licence-files"] = ",".join(e["licence"]["license_files"])
         if first:
             c.props["redevops:origin"] = "first-party (git dependency built into the wheelhouse)"
         else:
@@ -208,6 +213,7 @@ def analyze(archive: Archive, inv: dict[str, dict], facts: dict | None = None, w
             continue
         A.attribution[f"pkg:{name}"] = key
         # components created lazily by rule
+        A.comps.setdefault(key, Comp(key=key, name=key, version=None))
         if key.startswith("openssl"):
             comp(Comp(key="openssl-dynamic", name="OpenSSL", version=None, purl=None))
         low = name.lower()
@@ -252,6 +258,9 @@ def analyze(archive: Archive, inv: dict[str, dict], facts: dict | None = None, w
     if "sidecar" in A.comps:
         c = A.comps["sidecar"]
         c.name, c.kind, c.version = "redevops-sidecar", "application", None
+        if archive.has_bytes and archive.source_sha256:
+            c.hashes["SHA-256"] = archive.source_sha256
+            c.evidence.append("SHA-256 of the executable that was analysed")
         c.props["redevops:role"] = "the frozen Python sidecar executable; sidecar_main is its entry script"
         c.shipped_in.add("sidecar")
 
@@ -335,6 +344,7 @@ def analyze(archive: Archive, inv: dict[str, dict], facts: dict | None = None, w
     if ui_entries:
         ui = A.comps.setdefault("ui-bundle", Comp(key="ui-bundle", name="Projects UI bundle (agentic_os/projects_ui)", version=None))
         ui.kind = "data"
+        ui.name = "Projects UI bundle (agentic_os/projects_ui)"
         agentic = inv.get("agentic-os")
         ui.version = (agentic or {}).get("version")
         ui.props["redevops:origin"] = "built from the separate redevops-projects repository and vendored into agentic_os; its npm lock is not in this repository"

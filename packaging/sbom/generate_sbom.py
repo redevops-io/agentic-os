@@ -88,7 +88,8 @@ def rust_components(a, comps: list[Comp], launcher: Comp | None) -> tuple[list[C
     lc = rustsbom.launcher_crate(meta)
     if launcher:
         launcher.licence = {"expression": lc["licence"], "source": "Cargo.toml license of redevops-launcher"} if lc["licence"] else None
-        launcher.props["redevops:cargo-lock"] = a.cargo_lock or ""
+        if a.cargo_lock:   # no absolute path: the SBOM must not depend on where the tree was checked out
+            launcher.props["redevops:cargo-lock-sha256"] = hashlib.sha256(Path(a.cargo_lock).read_bytes()).hexdigest()
     notes["rust-target"] = a.cargo_target
     return out, notes
 
