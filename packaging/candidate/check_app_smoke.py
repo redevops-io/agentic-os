@@ -242,7 +242,7 @@ def main() -> int:
         t0 = time.time()
         os.kill(p.pid, signal.SIGTERM)
         done = wait_for(lambda: p.poll() is not None, 15)
-        time.sleep(1.0)
+        wait_for(lambda: not procs_of(sidecar), 10)        # the python child may need a moment on a loaded host
         check("SIGTERM: the bootloader exits", done is not None, f"rc {p.poll()}, {time.time() - t0:.1f}s")
         check("SIGTERM: no process of the sidecar is left", not procs_of(sidecar), str([(r[0], r[1]) for r in procs_of(sidecar)]))
         check("SIGTERM: the port is closed", not port_open(port))
