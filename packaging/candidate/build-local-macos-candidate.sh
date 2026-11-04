@@ -17,6 +17,10 @@
 set -euo pipefail
 OUT="${1:?usage: build-local-macos-candidate.sh OUT_DIR}"
 HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$HERE/../.." && pwd)"; PK="$ROOT/packaging"
+# Distribution gate (first, in the caller's environment): this script builds a PRIVATE candidate, which is not a distribution.
+# REDEVOPS_DISTRIBUTION_BUILD=1 turns the run into a distribution build, which is refused (exit 3) while any
+# distribution-blocking decision in packaging/distribution-gate.json is OPEN. Nothing is built or written before this check.
+python3 -I "$PK/check-distribution-gate.py" --platform macos || exit 3
 [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] || { echo "macOS arm64 only"; exit 2; }
 if [ -z "${RDO_CANDIDATE_CLEAN_ENV:-}" ] && [ -e "$OUT" ] && [ -n "$(ls -A "$OUT" 2>/dev/null)" ]; then echo "OUT_DIR $OUT exists and is not empty"; exit 2; fi
 if env | grep -qiE '^(APPLE_|CODESIGN|TAURI_SIGNING|KEYCHAIN)'; then echo "refusing: a signing-related variable is set (names: $(env | grep -iE '^(APPLE_|CODESIGN|TAURI_SIGNING|KEYCHAIN)' | cut -d= -f1 | tr '\n' ' '))"; exit 2; fi
@@ -36,7 +40,7 @@ if [ -z "${RDO_CANDIDATE_CLEAN_ENV:-}" ]; then
   CH="${CARGO_HOME:-$HOME/.cargo}"
   keep=(PATH="$PATH" HOME="$W/home" TMPDIR="$W/tmp" USER="${USER:-}" LANG=en_US.UTF-8 TERM=dumb RDO_CANDIDATE_CLEAN_ENV=1
         UV_PYTHON_INSTALL_DIR="$UVPY" UV_CACHE_DIR="$UVC" CARGO_HOME="$CH" PYINSTALLER_CONFIG_DIR="$W/pyinstaller")
-  for v in RUSTUP_HOME ALLOW_DIRTY; do [ -n "${!v+x}" ] && keep+=("$v=${!v}"); done
+  for v in RUSTUP_HOME ALLOW_DIRTY REDEVOPS_DISTRIBUTION_BUILD; do [ -n "${!v+x}" ] && keep+=("$v=${!v}"); done
   exec env -i "${keep[@]}" bash "$0" "$OUT"
 fi
 cleanup() { # temp dirs of this run and a possibly still mounted dmg (N-06)
