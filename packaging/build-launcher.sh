@@ -19,6 +19,16 @@ if cargo tauri --version >/dev/null 2>&1; then TAURI=(cargo tauri); elif command
 [ "$("${TAURI[@]}" --version | awk '{print $NF}')" = "$TAURI_CLI_VERSION" ] || { echo "tauri-cli is '$("${TAURI[@]}" --version)', pinned $TAURI_CLI_VERSION"; exit 1; }
 LOCK_BEFORE="$(shasum -a 256 "$LOCK" 2>/dev/null | cut -d' ' -f1 || sha256sum "$LOCK" | cut -d' ' -f1)"
 
+# rustc embeds absolute source paths (panic locations, file!()): the CARGO_HOME of the build host
+# (`<cargo home>/registry/src/index.crates.io-*/tauri-2.11.5/src/...`, 300+ strings in the launcher) and the
+# checkout dir. Remap them to fixed prefixes so two hosts produce the same bytes. (The frozen v0.3.2 launcher
+# carries `/Users/runner/.cargo/...`.) Set LAUNCHER_REMAP_PATHS=0 to build without. POSIX hosts only: the
+# Windows path forms (C:\Users\...) under git-bash are not handled here (UNVERIFIED on Windows).
+if [ "${LAUNCHER_REMAP_PATHS:-1}" = 1 ] && [ "$OS" != windows ]; then
+  CH="${CARGO_HOME:-$HOME/.cargo}"
+  export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--remap-path-prefix=$CH=/cargo-home --remap-path-prefix=$ROOT=/src"
+  echo "launcher: RUSTFLAGS=$RUSTFLAGS"
+fi
 cd "$ROOT/deploy/launcher"
 BUNDLES=()
 [ -n "${LAUNCHER_BUNDLES:-}" ] && BUNDLES=(--bundles "$LAUNCHER_BUNDLES")

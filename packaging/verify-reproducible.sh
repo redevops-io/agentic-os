@@ -3,6 +3,8 @@
 # report what is and is not byte-identical (wheelhouse, sidecar archive entries/modules, launcher, SBOM).
 #
 #   packaging/verify-reproducible.sh [--out DIR] [--skip-launcher] [--different-paths]
+#   env: REPRO_CARGO_HOME_B=<dir>   build B with a different CARGO_HOME (registry cache is re-downloaded)
+#        LAUNCHER_REMAP_PATHS=0     build the launcher WITHOUT --remap-path-prefix (to show the path-embedding class)
 #
 # * Each build starts from `git clone` of HEAD of this checkout (committed state only), a fresh
 #   wheelhouse, a fresh freeze venv, an empty CARGO_TARGET_DIR (crate download cache is shared).
@@ -36,9 +38,11 @@ build_one() { # <label> <srcdir>
   t1=$(date +%s); echo "   wheelhouse+sidecar: $((t1-t0)) s"
   if [ "$SKIP_L" = 0 ]; then
     export CARGO_TARGET_DIR="$OUT/target-$label"; rm -rf "$CARGO_TARGET_DIR"
+    if [ "$label" = B ] && [ -n "${REPRO_CARGO_HOME_B:-}" ]; then OLD_CH="${CARGO_HOME:-}"; export CARGO_HOME="$REPRO_CARGO_HOME_B"; mkdir -p "$CARGO_HOME"; fi
     ( cd "$src" && MANIFEST_PYTHON="$(command -v python3)" ./packaging/build-launcher.sh ) >> "$OUT/build-$label.log" 2>&1
     echo "   launcher: $(( $(date +%s) - t1 )) s"
     unset CARGO_TARGET_DIR
+    if [ "$label" = B ] && [ -n "${REPRO_CARGO_HOME_B:-}" ]; then export CARGO_HOME="$OLD_CH"; fi
   fi
   ( cd "$src" && CARGO_TARGET_DIR="$OUT/target-$label" ./packaging/build-sbom.sh ) >> "$OUT/build-$label.log" 2>&1 || echo "   (SBOM verifier reported findings: see $OUT/build-$label.log)"
   echo "   total: $(( $(date +%s) - t0 )) s" | tee -a "$OUT/durations.txt"
@@ -62,6 +66,6 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 uv venv --python "$PYTHON_VERSION" "$TMP/cmp" >/dev/null; CPY="$(venv_py "$TMP/cmp")"
 uv pip install --python "$CPY" --require-hashes --no-deps -r "$LOCKS/build-tools-$OS.lock" >/dev/null
 "$CPY" -I "$HERE/tools/compare_builds.py" "$OUT/A" "$OUT/B" --out "$OUT/reproducibility-report.md" --json "$OUT/reproducibility-report.json" \
-   --path-marker "$SRC_A" --path-marker "$SRC_B" --path-marker "$OUT" --path-marker "$HOME" > "$OUT/compare.log"
+   --path-marker "$SRC_A" --path-marker "$SRC_B" --path-marker "$OUT" --path-marker "$HOME" --path-marker "${CARGO_HOME:-$HOME/.cargo}" ${REPRO_CARGO_HOME_B:+--path-marker "$REPRO_CARGO_HOME_B"} > "$OUT/compare.log"
 cat "$OUT/durations.txt"
 echo "report: $OUT/reproducibility-report.md"

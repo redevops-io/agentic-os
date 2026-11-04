@@ -133,8 +133,17 @@ def main() -> int:
         ba, bb = la.read_bytes(), lb.read_bytes()
         cnt, offs = diff_offsets(ba, bb)
         pa = [p.decode() for p in paths if p in ba]
+        pb = [p.decode() for p in paths if p in bb]
+        remap = None
+        if ba != bb:
+            # does A become B when A's embedded build paths are replaced by B's? (same-length prefixes only)
+            for x in pa:
+                for y in pb:
+                    if x != y and len(x) == len(y) and ba.replace(x.encode(), y.encode()) == bb:
+                        remap = f"A == B after replacing {x} -> {y}: the ONLY difference is the embedded build path"
         rep["launcher"] = {"sha256_a": sha(ba), "sha256_b": sha(bb), "size_a": len(ba), "size_b": len(bb), "differing_bytes": cnt, "first_offsets": offs}
-        P(f"## Launcher (Tauri, Mach-O/PE)\n\nFile: {'IDENTICAL' if ba == bb else 'DIFFERENT'}; size A {len(ba)} B {len(bb)}; differing bytes {cnt}; first offsets {offs}; build-dir marker strings present in A: {pa or 'none'}.\n")
+        P(f"## Launcher (Tauri, Mach-O/PE)\n\nFile: {'IDENTICAL' if ba == bb else 'DIFFERENT'}; size A {len(ba)} B {len(bb)}; differing bytes {cnt}; first offsets {offs}; build-dir marker strings present in A: {pa or 'none'}; in B: {pb or 'none'}. {remap or ''}\n")
+        rep["launcher"]["path_only_difference"] = remap
     for sub in ("app",):
         if (A / sub).is_dir() and (B / sub).is_dir():
             fa = {p.relative_to(A / sub).as_posix(): sha(p.read_bytes()) for p in (A / sub).rglob("*") if p.is_file() and not p.is_symlink()}
