@@ -1,0 +1,5 @@
+#!/bin/bash
+# Fake `docker` for the harness: logs argv (+cwd) and answers like a present docker for --version, fails compose.
+{ printf '%s cwd=%s argv:' "$(/bin/date +%s)" "$(pwd)"; for a in "$@"; do printf ' [%s]' "$a"; done; printf '\n'; } >> "${RDO_DOCKER_LOG:-/dev/null}"
+[ "$1" = "--version" ] && { echo "Docker version 99.0.0-harness-shim"; exit 0; }
+echo "harness docker shim: not a real docker" >&2; exit 1
