@@ -91,7 +91,7 @@ any unlisted or mismatched one; run against the frozen v0.3.2 listings it reprod
 | run (OBSERVED, 2026-11-04) | wheelhouse | sidecar | launcher | app tree | SBOM |
 |---|---|---|---|---|---|
 | same checkout path, same CARGO_HOME | 25/25 wheels identical | whole file identical (63 PKG entries, 1088 PYZ modules, all identical) | identical | 12/12 files identical | byte-identical |
-| different checkout paths + different CARGO_HOME (equal-length), launcher WITHOUT `--remap-path-prefix` | identical | identical | DIFFERENT: 7064 bytes: the embedded CARGO_HOME path (324 strings) + LC_UUID (16) + ad-hoc code signature (892); after replacing the path the remaining differences are LC_UUID and the signature only | `agentic-apps` differs | differs only by an absolute path in a property (fixed since) |
+| different checkout paths + different CARGO_HOME (equal-length), launcher WITHOUT `--remap-path-prefix` | identical | identical | DIFFERENT: 7064 bytes: the embedded CARGO_HOME path (324 strings) + LC_UUID (16) + ad-hoc code signature (892); after replacing the path the remaining differences are LC_UUID and the signature only | `agentic-apps` differs | differs (it records the launcher's SHA-256) |
 | same, WITH `--remap-path-prefix` (the default in `build-launcher.sh`) | identical | identical | identical | 12/12 identical | byte-identical |
 
 Difference classes found: (1) build paths embedded by rustc (CARGO_HOME registry paths, checkout dir) -> removed by remapping;
