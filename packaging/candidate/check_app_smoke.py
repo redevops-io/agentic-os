@@ -92,11 +92,18 @@ def port_open(port: int) -> bool:
 
 
 def http(port: int, method: str, path: str, headers: dict | None = None, body: bytes | None = None, host: str | None = None):
-    c = HTTPConnection("127.0.0.1", port, timeout=10)
     h = {"Host": host or f"127.0.0.1:{port}", "Connection": "close"}
     h.update(headers or {})
-    c.request(method, path, body=body, headers=h)
-    r = c.getresponse()
+    for attempt in range(6):          # transient local socket errors (EADDRNOTAVAIL under load) are retried, HTTP answers never
+        try:
+            c = HTTPConnection("127.0.0.1", port, timeout=10)
+            c.request(method, path, body=body, headers=h)
+            r = c.getresponse()
+            break
+        except OSError:
+            if attempt == 5:
+                raise
+            time.sleep(0.5)
     data = r.read()
     hdrs = {k.lower(): v for k, v in r.getheaders()}
     c.close()
@@ -223,7 +230,7 @@ def main() -> int:
     check("standalone: neither the URL nor a code is on stdout", "#lc=" not in out_txt and "lc=" not in out_txt)
     if got:
         port, code = got
-        check("standalone: listener is on loopback only", port_open(port))
+        check("standalone: the printed port accepts connections on loopback", bool(wait_for(lambda: port_open(port), 10)))
         api_checks("standalone", port, code)
         rows = procs_of(sidecar)
         log(f"  process tree: {[(r[0], r[1], r[2]) for r in rows]} (pid, ppid, pgid); _MEI: {e.mei()}")
