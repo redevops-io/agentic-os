@@ -17,9 +17,9 @@ from agentic_os.mission.device_posture import DeviceFacts, derive
 from agentic_os.mission.provisioning import resolve
 from agentic_os.mission.installer import DockerDeployer, install
 
-pytestmark = pytest.mark.skipif(
+pytestmark = [pytest.mark.live, pytest.mark.skipif(
     os.environ.get("RDO_PROXMOX_IT") != "1",
-    reason="proxmox integration test (set RDO_PROXMOX_IT=1 to run)")
+    reason="proxmox integration test (set RDO_PROXMOX_IT=1 to run)")]
 
 VERIFIED = DeviceFacts(platform="linux-x86_64", container_runtime="docker",
                        disk_encryption=True, secure_credential_store=True,

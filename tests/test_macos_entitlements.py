@@ -41,7 +41,9 @@ def test_only_the_plist_and_its_documentation_name_the_entitlement():
     files = set(r.stdout.split())
     # this test and the docs describe it; the plist carries it; the licence/decision registers may cite it
     allowed = {"packaging/macos/sidecar.entitlements.plist", "docs/MACOS_ENTITLEMENTS.md",
-               "tests/test_macos_entitlements.py"}
+               "tests/test_macos_entitlements.py",
+               # the macOS acceptance kit READS entitlements to verify them (no signing, no writing of the key)
+               "packaging/acceptance/macos-r0prime/SIGNING-READINESS.md", "packaging/acceptance/macos-r0prime/verify_dmg.sh"}
     extra = {f for f in files if f not in allowed and not f.startswith(("packaging/DECISIONS", "reports/"))}
     assert not extra, extra
 

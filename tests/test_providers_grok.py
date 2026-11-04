@@ -97,6 +97,7 @@ def test_capabilities_advertise_byo_key_and_models():
     assert caps["stt_model"] == "grok-stt" and caps["tts_model"] == "grok-voice-latest"
 
 
+@pytest.mark.live
 @pytest.mark.skipif(not os.environ.get("XAI_API_KEY"), reason="needs live XAI_API_KEY")
 def test_live_round_trip_tts_then_stt():
     p = GrokSpeechProvider()                            # real transport, key from env

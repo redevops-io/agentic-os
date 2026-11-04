@@ -106,6 +106,7 @@ def test_capabilities():
     assert c["channel"] == "telegram" and c["voice_notes"] is True and "poll" in c["inbound"]
 
 
+@pytest.mark.live
 @pytest.mark.skipif(not os.environ.get("REDEVOPS_BOT_TOKEN"), reason="needs live REDEVOPS_BOT_TOKEN")
 def test_live_get_me_and_poll():
     a = TelegramChannelAdapter()      # real token from env
