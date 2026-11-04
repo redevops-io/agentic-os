@@ -136,21 +136,30 @@ class LocalCapability:
         self._codes: List[Tuple[bytes, float]] = []
         self._challenges: List[Tuple[bytes, float]] = []
         self._sessions: List[Tuple[bytes, Session]] = []
-        self.limiter = _FailureLimiter(clock, max_failures, failure_window)
+        # Two independent budgets: noise on the launch-code exchange (any local process can send
+        # it) must never lock the launcher out of minting codes.
+        self.limiter = _FailureLimiter(clock, max_failures, failure_window)        # POST /api/local/session
+        self.mint_limiter = _FailureLimiter(clock, max_failures, failure_window)   # POST /api/local/launch-code
 
     # ------------------------------------------------------------------ hand-off to the launcher
     def bind_port(self, port: int) -> None:
         self.port = int(port)
 
     def launcher_handoff(self, host: str, port: int, base_path: str = "",
-                         launch_code_ttl: Optional[float] = None) -> Dict[str, Any]:
-        """The one-time out-of-band record for the launcher. Contains the secret: never log it."""
+                         launch_code_ttl: Optional[float] = None,
+                         include_launch_code: bool = True) -> Dict[str, Any]:
+        """The one-time out-of-band record for the launcher. Contains the secret: never log it.
+        ``launch_code`` and ``launch_code_ttl`` are optional on the wire: a launcher that mints its own
+        codes (4.4) does not need the first one, and an unused code holds one of the 8 slots for its TTL."""
         import os
         self.bind_port(port)
-        ttl = self.launch_code_ttl if launch_code_ttl is None else float(launch_code_ttl)
-        return {"v": 1, "proto": PROTO, "event": "ready", "host": host, "port": int(port),
-                "pid": os.getpid(), "base_path": base_path, "secret": b64url(self._secret),
-                "launch_code": self.issue_launch_code(ttl), "launch_code_ttl": int(ttl)}
+        rec: Dict[str, Any] = {"v": 1, "proto": PROTO, "event": "ready", "host": host, "port": int(port),
+                               "pid": os.getpid(), "base_path": base_path, "secret": b64url(self._secret)}
+        if include_launch_code:
+            ttl = self.launch_code_ttl if launch_code_ttl is None else float(launch_code_ttl)
+            rec["launch_code"] = self.issue_launch_code(ttl)
+            rec["launch_code_ttl"] = int(ttl)
+        return rec
 
     # ------------------------------------------------------------------ Host / Origin
     def host_ok(self, host: str) -> bool:
@@ -491,7 +500,7 @@ class LocalCapabilityMiddleware:
         if ctype != "application/json":
             await self._reply(send, 415, "unsupported_media_type", "Content-Type must be application/json")
             return
-        if rel in (SESSION_PATH, LAUNCH_CODE_PATH):
+        if rel == SESSION_PATH:
             retry = cap.limiter.retry_after()
             if retry:
                 await self._reply(send, 429, "rate_limited", "too many failed attempts",
@@ -499,8 +508,10 @@ class LocalCapabilityMiddleware:
                 return
         data = await self._read_json(receive)
         if data is None:
-            if rel in (SESSION_PATH, LAUNCH_CODE_PATH):
+            if rel == SESSION_PATH:
                 cap.limiter.record_failure()
+            elif rel == LAUNCH_CODE_PATH:
+                cap.mint_limiter.record_failure()
             await self._reply(send, 400, "bad_request", "malformed JSON body")
             return
 
@@ -513,10 +524,18 @@ class LocalCapabilityMiddleware:
             return
 
         if rel == LAUNCH_CODE_PATH:
+            # The proof is checked even while the failure budget is spent: it is an HMAC over a
+            # single-use server challenge, so a correct one cannot be guessed and a legitimate launcher
+            # is never locked out by someone else's bad attempts. Only a FAILED attempt is throttled.
             proof = hdrs.get("x-launcher-proof", [""])[0]
+            retry = cap.mint_limiter.retry_after()
             code = cap.mint_launch_code(str(data.get("server_nonce", "")), proof)
             if code is None:
-                cap.limiter.record_failure()
+                if retry:
+                    await self._reply(send, 429, "rate_limited", "too many failed attempts",
+                                      extra=[(b"retry-after", str(retry).encode("ascii"))])
+                    return
+                cap.mint_limiter.record_failure()
                 await self._reply(send, 401, "invalid_proof", "challenge unknown, expired, or proof wrong")
                 return
             await self._reply(send, 200, "", "", body={"v": 1, "launch_code": code,

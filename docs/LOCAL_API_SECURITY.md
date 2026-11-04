@@ -77,17 +77,24 @@ file descriptor), `PROJECTS_PORT=0` (recommended: the sidecar binds first and re
 the default without it is 8787), optional `PROJECTS_BASE_PATH`.
 
 The sidecar binds `127.0.0.1` only (a non-loopback `PROJECTS_HOST` is refused in this mode), starts
-listening, then writes exactly one ASCII JSON line, terminated by `\n`, to the channel:
+listening, then writes exactly one ASCII JSON line to the channel. The line is written as **bytes** and
+ends in a single `\n` (never `\r\n`, even on Windows; a launcher should still tolerate a trailing `\r`):
 
 ```json
-{"v":1,"proto":"agentic-os-local-capability/1","event":"ready","host":"127.0.0.1","port":50123,"pid":4242,"base_path":"","secret":"<43 chars base64url>","launch_code":"<43 chars base64url>","launch_code_ttl":60}
+{"v":1,"proto":"agentic-os-local-capability/1","event":"ready","host":"127.0.0.1","port":50123,"pid":4242,"base_path":"","secret":"<43 chars base64url>"}
 ```
+
+`launch_code` (43 chars base64url) and `launch_code_ttl` (60) are **optional fields**. In launcher mode they
+are omitted by default, because a launcher that mints a fresh code for every open (4.4) does not use the
+first one and an unused code would hold one of the 8 outstanding-code slots for its lifetime. Set
+`AGENTIC_OS_HANDOFF_LAUNCH_CODE=1` in the sidecar's environment to have them included (the code is then
+single use and valid `launch_code_ttl` seconds from the moment the line is written). A launcher must
+accept the record with or without these two fields and must ignore them if it mints its own codes.
+Required fields: `v`, `proto`, `event`, `host`, `port`, `pid`, `base_path`, `secret`.
 
 * `secret`: 32 random bytes, base64url without padding. The launch secret. Held in memory by the sidecar
   and the launcher only. It never appears on a command line, in a URL, in a log, on disk, or in an
   HTTP message (the handshake proves possession with an HMAC).
-* `launch_code`: 32 random bytes, base64url, single use, valid `launch_code_ttl` seconds (60) from the
-  moment the line is written.
 * With `stdout`, the line is the first thing on stdout, the banner moves to stderr and uvicorn's access
   log is disabled, so stdout carries nothing else of interest. The launcher must read the line into
   memory and MUST NOT forward it to its own logs, crash reports, or the UI.
@@ -179,10 +186,42 @@ All errors are `{"error":{"code":"...","message":"..."}}` with `Cache-Control: n
 | 403 | `csrf_invalid` | state-changing request without the right `X-Agentic-CSRF` |
 | 405 | `method_not_allowed` | wrong method on a `/api/local/*` path |
 | 415 | `unsupported_media_type` | `/api/local/*` POST without `Content-Type: application/json` (a cross-site form cannot send it) |
-| 429 | `rate_limited` | 10 failed code or proof attempts in 60 s; `Retry-After` seconds. While limited even a valid code is refused. |
+| 429 | `rate_limited` | the failure budget of that endpoint is spent (10 failures in 60 s); `Retry-After` seconds. See 4.7. |
 
 Failures counted for the limit are only those that pass the Host/Origin/fetch-site checks, so a web page
 cannot lock the user out by spamming the endpoint cross-origin.
+
+### 4.7 Rate limits and what a launcher does on 429
+
+Exactly two endpoints are rate limited, each with its own budget of 10 FAILED attempts per rolling 60 s
+(global: loopback has one client address):
+
+| Endpoint | Counts as a failure | When the budget is spent |
+|---|---|---|
+| `POST /api/local/session` (the UI script's exchange) | wrong/expired/used code, malformed body | 429 for everything, even a valid code, until the window passes |
+| `POST /api/local/launch-code` (the launcher's mint) | wrong proof, unknown/expired challenge, malformed body | a request whose proof is **correct** is still served; a failing one gets 429 (and is not counted again) |
+
+`POST /api/local/handshake` is not rate limited (it has no secret to guess; its state is capped at 16
+live challenges of 30 s, oldest evicted). The budgets are independent: noise on the exchange endpoint
+cannot block the launcher. Successful requests never count. A launcher's own attempts count only when
+they fail, so a launcher that follows 4.2 to 4.4 (fresh handshake immediately before each mint, proof
+computed correctly) never trips the limit by itself. It can only see a 429 or a `401 invalid_proof` on the
+mint when its challenge expired or was evicted (more than 30 s between handshake and mint, or another
+local process flooded `/handshake`) or when something else is answering.
+
+What the launcher does:
+
+1. Trust comes only from verifying the HMAC in the handshake (4.2); a 429 is never evidence of an attack
+   and never evidence of trust. Do not treat a 429 as "untrusted sidecar" and do not kill the sidecar for it.
+2. On `429` or `401 invalid_proof` from `/api/local/launch-code` after a verified handshake: wait
+   `min(Retry-After, 5)` seconds (or 0.25 s, 0.5 s, 1 s on a plain 401), then repeat the whole
+   handshake (new `client_nonce`, verify the proof again) and mint. At most 3 attempts per user action.
+3. If all attempts fail, report "the local service is busy" and do not open the browser; do not fall back
+   to the first launch code, a URL without a code, or any unauthenticated path.
+4. A handshake whose proof does not verify is different: that is the stale/foreign-process case (4.2) and
+   is final for that process.
+5. 429 on `/api/local/session` concerns the browser, not the launcher; the UI shows its "not signed in"
+   banner. The launcher recovers by minting a fresh code (rate limiting there does not affect minting).
 
 ## 5. Standalone `serve` (no launcher)
 
@@ -254,8 +293,9 @@ are not usable in a browser (the JSON at `/openapi.json` is, with a session).
    session-restore history on some browsers could see it. It is single use and expires; the script
    removes it immediately. A launcher that keeps the code only in memory and opens a private webview
    keeps the exposure minimal.
-8. **Availability, not secrecy:** a local process can exhaust the failure budget (10 per minute) and
-   make the real exchange wait. The launcher can mint a fresh code after the window.
+8. **Availability, not secrecy:** a local process can exhaust the exchange failure budget (10 per minute)
+   and make the UI's exchange wait; it cannot block the launcher's mint (4.7), but it can flood
+   `/handshake` to evict a live challenge, which the launcher handles by retrying (4.7).
 9. **The module-level `app` and a bare `create_app()` are not gated** (they remain the legacy open
    library/hosted-demo surface, now without CORS). Do not run them on a desktop; only `main()` / `serve`
    (what the sidecar executes) installs the gate.

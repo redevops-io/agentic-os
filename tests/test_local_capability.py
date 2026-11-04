@@ -527,6 +527,50 @@ VECTOR_HANDSHAKE = "XrELUoD7WHe1e8IgKZZYoltOOKdPcPN3PR-qWdhqCeY"   # key = bytes
 VECTOR_MINT = "JYxsI49qlI_AzpnZPgZwDLjyQLNRgueAarKpIxB19VQ"
 
 
+def test_first_launch_code_is_optional_and_costs_no_slot_when_omitted():
+    cap = LocalCapability(port=PORT)
+    rec = cap.launcher_handoff("127.0.0.1", PORT, "", include_launch_code=False)
+    assert "launch_code" not in rec and "launch_code_ttl" not in rec and len(b64url_decode(rec["secret"])) == 32
+    assert cap._codes == []
+    rec2 = cap.launcher_handoff("127.0.0.1", PORT, "")
+    assert len(cap._codes) == 1 and rec2["launch_code_ttl"] == 60
+
+
+def _mint(c, secret, nonce=None):
+    nonce = nonce or b64url(os.urandom(16))
+    sn = c.post("/api/local/handshake", json={"client_nonce": nonce}).json()["server_nonce"]
+    return c.post("/api/local/launch-code", json={"server_nonce": sn},
+                  headers={"X-Launcher-Proof": mint_proof(secret, PORT, sn)})
+
+
+def test_a_legitimate_launcher_is_never_rate_limited_by_other_peoples_failures():
+    app, cap, hand, clock = make(max_failures=3)
+    c = client(app)
+    secret = b64url_decode(hand["secret"])
+    for _ in range(3):                                        # noise on the exchange endpoint: budget spent
+        assert c.post("/api/local/session", json={"code": "x" * 30}).status_code == 401
+    assert c.post("/api/local/session", json={"code": "x" * 30}).status_code == 429
+    assert _mint(c, secret).status_code == 200                # separate budget: the launcher still mints
+    for _ in range(3):                                        # noise on the mint endpoint itself
+        r = c.post("/api/local/launch-code", json={"server_nonce": "z" * 22}, headers={"X-Launcher-Proof": "A" * 43})
+        assert r.status_code == 401
+    bad = c.post("/api/local/launch-code", json={"server_nonce": "z" * 22}, headers={"X-Launcher-Proof": "A" * 43})
+    assert bad.status_code == 429 and int(bad.headers["retry-after"]) >= 1   # a wrong proof is throttled...
+    ok = _mint(c, secret)                                     # ...a correct proof never is
+    assert ok.status_code == 200 and len(ok.json()["launch_code"]) >= 40
+    # the handshake endpoint is never rate limited (its state is capped instead)
+    for _ in range(40):
+        assert c.post("/api/local/handshake", json={"client_nonce": "A" * 22}).status_code == 200
+    # a verified handshake whose challenge was evicted/expired fails with 401 (not 429): retry handshake + mint
+    sn = c.post("/api/local/handshake", json={"client_nonce": "B" * 22}).json()["server_nonce"]
+    clock.t += 31
+    r = c.post("/api/local/launch-code", json={"server_nonce": sn},
+               headers={"X-Launcher-Proof": mint_proof(secret, PORT, sn)})
+    assert r.status_code in (401, 429)
+    clock.t += 61
+    assert _mint(c, secret).status_code == 200
+
+
 def test_secret_is_generated_in_memory_never_accepted_and_never_in_repr():
     a, b = LocalCapability(), LocalCapability()
     assert a.launcher_handoff("127.0.0.1", 1)["secret"] != b.launcher_handoff("127.0.0.1", 1)["secret"]
@@ -769,32 +813,73 @@ def test_launcher_handoff_over_stdout_and_stale_sidecar_cannot_be_adopted():
     p = subprocess.Popen([sys.executable, "-c", "from agentic_os.projects_api import main; main()"],
                          env=env, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
-        first = p.stdout.readline().decode()
-        rec = json.loads(first)
+        raw = p.stdout.readline()
+        assert raw.endswith(b"\n") and not raw.endswith(b"\r\n") and raw.count(b"\n") == 1
+        rec = json.loads(raw.decode())
         assert rec["event"] == "ready" and rec["proto"] == lc.PROTO and rec["v"] == 1
         assert rec["host"] == "127.0.0.1" and rec["port"] > 0 and rec["pid"] == p.pid
         secret = b64url_decode(rec["secret"])
-        assert len(secret) == 32 and rec["launch_code_ttl"] == 60
+        assert len(secret) == 32
+        assert "launch_code" not in rec and "launch_code_ttl" not in rec     # optional; omitted in launcher mode
         base = f"http://127.0.0.1:{rec['port']}"
         # handshake: the launcher verifies the server's proof; a stale/foreign process cannot produce it
         nonce = b64url(os.urandom(16))
         st, body, _ = _http("POST", base + "/api/local/handshake", body={"client_nonce": nonce})
         assert st == 200 and json.loads(body)["proof"] == handshake_proof(secret, rec["port"], nonce)
         assert json.loads(body)["proof"] != handshake_proof(os.urandom(32), rec["port"], nonce)
-        st, body, hdrs = _http("POST", base + "/api/local/session", body={"code": rec["launch_code"]})
+        sn = json.loads(body)["server_nonce"]
+        st, body, _ = _http("POST", base + "/api/local/launch-code", body={"server_nonce": sn},
+                            headers={"X-Launcher-Proof": mint_proof(secret, rec["port"], sn)})
+        assert st == 200
+        code = json.loads(body)["launch_code"]
+        st, body, hdrs = _http("POST", base + "/api/local/session", body={"code": code})
         assert st == 200
         cookie = hdrs["Set-Cookie"].split(";")[0]
         assert _http("GET", base + "/api/projects", cookie=cookie)[0] == 200
         p.terminate()
         rest, err = p.stdout.read().decode(), p.stderr.read().decode()
         for stream in (rest, err):                          # secret/code never in logs, banner or access log
-            assert rec["secret"] not in stream and rec["launch_code"] not in stream
+            assert rec["secret"] not in stream and code not in stream
             assert "#lc=" not in stream
     finally:
         p.kill()
         p.wait()
         p.stdout.close()
         p.stderr.close()
+
+
+def test_launcher_handoff_can_still_carry_a_first_launch_code_when_asked():
+    env = _clean_env(PROJECTS_PORT="0", AGENTIC_OS_HANDOFF="stdout", AGENTIC_OS_HANDOFF_LAUNCH_CODE="1")
+    p = subprocess.Popen([sys.executable, "-c", "from agentic_os.projects_api import main; main()"],
+                         env=env, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        rec = json.loads(p.stdout.readline().decode())
+        assert rec["launch_code_ttl"] == 60 and len(b64url_decode(rec["launch_code"])) == 32
+        st, _, _ = _http("POST", f"http://127.0.0.1:{rec['port']}/api/local/session", body={"code": rec["launch_code"]})
+        assert st == 200
+    finally:
+        p.kill()
+        p.wait()
+        p.stdout.close()
+        p.stderr.close()
+
+
+def test_handoff_line_is_written_as_bytes_with_a_single_lf_even_on_a_translating_stream(monkeypatch):
+    """A Windows text-mode stdout turns "\\n" into CR LF; the hand-off must bypass that translation."""
+    import io
+    from agentic_os.local_serve import _handoff_writer
+    raw = io.BytesIO()
+    fake = io.TextIOWrapper(raw, encoding="ascii", newline="\r\n")           # translating, like Windows
+    monkeypatch.setattr(sys, "stdout", fake)
+    write, close = _handoff_writer("stdout")
+    write('{"v":1,"event":"ready"}')
+    fake.flush()
+    assert raw.getvalue() == b'{"v":1,"event":"ready"}\n'
+    assert b"\r" not in raw.getvalue()
+    # control: a plain text write on the same stream WOULD have produced CR LF
+    fake.write("x\n")
+    fake.flush()
+    assert raw.getvalue().endswith(b"x\r\n")
 
 
 def test_launcher_handoff_over_inherited_fd():
@@ -804,9 +889,10 @@ def test_launcher_handoff_over_inherited_fd():
                          env=env, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.PIPE, pass_fds=(w,))
     os.close(w)
     try:
-        with os.fdopen(r, "r") as f:
+        with os.fdopen(r, "rb") as f:
             line = f.readline()
-        rec = json.loads(line)
+        assert line.endswith(b"\n") and not line.endswith(b"\r\n") and line.count(b"\n") == 1
+        rec = json.loads(line.decode())
         assert rec["event"] == "ready" and rec["port"] > 0 and len(b64url_decode(rec["secret"])) == 32
         assert _http("GET", f"http://127.0.0.1:{rec['port']}/api/projects")[0] == 401
     finally:

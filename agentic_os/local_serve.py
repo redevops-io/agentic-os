@@ -24,6 +24,7 @@ from typing import Any, Dict, Optional, Tuple
 ENV_HANDOFF = "AGENTIC_OS_HANDOFF"
 ENV_OFF = "AGENTIC_OS_LOCAL_CAPABILITY"
 ENV_ALLOWED_HOSTS = "PROJECTS_ALLOWED_HOSTS"
+ENV_HANDOFF_CODE = "AGENTIC_OS_HANDOFF_LAUNCH_CODE"   # "1": also put a first launch code in the record
 STANDALONE_CODE_TTL = 300.0       # a person copies the URL by hand; the launcher path uses 60 s
 LAUNCHER_CODE_TTL = 60.0
 _LOOPBACK = {"127.0.0.1": "127.0.0.1", "localhost": "127.0.0.1", "::1": "::1"}
@@ -43,17 +44,26 @@ def _bind(host: str, port: int) -> socket.socket:
 
 
 def _handoff_writer(spec: str):
-    """Return (write(line), close()) for ``stdout`` or ``fd:<n>``; raises ValueError otherwise."""
+    """Return (write(line), close()) for ``stdout`` or ``fd:<n>``; raises ValueError otherwise.
+    The line is written as BYTES ending in a single LF: a text-mode stream on Windows would
+    translate it to CR LF."""
     if spec == "stdout":
         def write(line: str) -> None:
-            sys.stdout.write(line + "\n")
-            sys.stdout.flush()
+            raw = line.encode("ascii") + b"\n"
+            out = getattr(sys.stdout, "buffer", None)
+            if out is not None:
+                sys.stdout.flush()
+                out.write(raw)
+                out.flush()
+            else:                                   # no binary layer (unusual): newline translation is all we have
+                sys.stdout.write(line + "\n")
+                sys.stdout.flush()
         return write, (lambda: None)
     if spec.startswith("fd:") and spec[3:].isdigit():
-        stream = os.fdopen(int(spec[3:]), "w", encoding="ascii", closefd=True)
+        stream = os.fdopen(int(spec[3:]), "wb", closefd=True)
 
         def write_fd(line: str) -> None:
-            stream.write(line + "\n")
+            stream.write(line.encode("ascii") + b"\n")
             stream.flush()
         return write_fd, stream.close
     raise ValueError(f"{ENV_HANDOFF} must be 'stdout' or 'fd:<n>', got {spec!r}")
@@ -122,7 +132,9 @@ def serve(env: Optional[Dict[str, str]] = None) -> None:
                               launch_code_ttl=LAUNCHER_CODE_TTL if write else STANDALONE_CODE_TTL)
         app = mounted_app(base, capability=cap)
         if write is not None:
-            write(json.dumps(cap.launcher_handoff(host, real_port, base), separators=(",", ":")))
+            with_code = env.get(ENV_HANDOFF_CODE, "").strip() == "1"
+            write(json.dumps(cap.launcher_handoff(host, real_port, base, include_launch_code=with_code),
+                             separators=(",", ":")))
             close()
         else:
             code = cap.issue_launch_code()
