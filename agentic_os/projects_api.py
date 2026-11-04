@@ -21,7 +21,6 @@ from typing import Any, Dict, List, Optional, Protocol, Set
 
 try:
     from fastapi import FastAPI
-    from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel
 except ImportError as e:  # pragma: no cover
     raise ImportError("the Projects API needs fastapi (a base dependency)") from e
@@ -892,15 +891,25 @@ def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     return True
 
 
-def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: Optional[List[str]] = None) -> FastAPI:
+def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: Optional[List[str]] = None,
+               capability: Optional[Any] = None, base_path: str = "") -> FastAPI:
+    """Build the Projects app. ``capability`` (an :class:`agentic_os.local_capability.LocalCapability`)
+    puts the whole app behind the local capability gate (deny by default: every route, /docs, /redoc,
+    /openapi.json and the agent gateway need a session; only the static UI is public) and forbids CORS.
+    Without it the app is the legacy open surface (library/test/hosted use): never run that on a desktop.
+    ``allow_origins`` is an explicit opt-in to CORS (no wildcard default; refused with a capability).
+    ``base_path`` is set by :func:`mounted_app`, which installs the gate on the outermost app itself."""
+    if capability is not None and allow_origins:
+        raise ValueError("allow_origins (CORS) cannot be combined with the local capability gate")
     # a deployment sets $OUTCOME_STORE_PATH to persist the learning loop's outcomes across restarts
     import os as _os_env
     prov: ProjectionProvider = provider or SampleProjectionProvider(
         persist_path=(_os_env.environ.get("OUTCOME_STORE_PATH", "").strip() or None))
     app = FastAPI(title="ReDevOps Projects API", version="0.1.0")
-    app.add_middleware(
-        CORSMiddleware, allow_origins=allow_origins or ["*"],
-        allow_methods=["*"], allow_headers=["*"])
+    if allow_origins:   # explicit opt-in only: the UI is same-origin, so the default is NO CORS at all
+        from fastapi.middleware.cors import CORSMiddleware
+        app.add_middleware(CORSMiddleware, allow_origins=allow_origins,
+                           allow_methods=["*"], allow_headers=["*"])
 
     @app.get("/api/projects")
     def _projects() -> List[dict]:
@@ -1038,9 +1047,18 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     # the /api routes above always win. The UI is built with VITE_PROJECTS_API="/", so it calls
     # this service's /api directly. `pip install 'agentic-os[projects]'` ships the bundle.
     ui = _ui_dir()
+    public: Any = frozenset()
     if ui is not None:
+        if capability is not None:
+            from .local_capability_ui import install_ui_bootstrap
+            public = install_ui_bootstrap(app, ui, base_path)   # index.html + shim, ahead of the mount
         from fastapi.staticfiles import StaticFiles
         app.mount("/", StaticFiles(directory=str(ui), html=True), name="projects-ui")
+    if capability is not None:
+        app.state.local_public_paths = public
+        if not base_path:       # with a base path, mounted_app gates the OUTER app instead
+            from .local_capability import install
+            install(app, capability, public_paths=public)
 
     return app
 
@@ -1066,26 +1084,23 @@ def mounted_app(base_path: str = "", provider: Optional[ProjectionProvider] = No
     a URL sub-path — cloudflared routes ``demo.redevops.io/projects`` → this service without
     stripping, so the app serves ``/projects/api`` + ``/projects/`` (the UI must be built with a
     matching ``base``). Without ``base_path`` the app serves at the origin root."""
-    inner = create_app(provider, **kw)
     base = (base_path or "").rstrip("/")
+    inner = create_app(provider, base_path=base, **kw)
     if not base:
         return inner
     outer = FastAPI(title="ReDevOps Projects", version="0.1.0")
     outer.mount(base, inner)   # Starlette strips the prefix before the inner app sees it
+    if kw.get("capability") is not None:     # the gate must wrap the outermost app (its /docs too)
+        from .local_capability import install
+        install(outer, kw["capability"], base_path=base, public_paths=inner.state.local_public_paths)
     return outer
 
 
 def main() -> None:
-    """Console entrypoint (``agentic-os-projects``): serve the Projects UI + API on one origin,
-    optionally under ``$PROJECTS_BASE_PATH``."""
-    import os
-    import uvicorn
-    host = os.environ.get("PROJECTS_HOST", "127.0.0.1")
-    port = int(os.environ.get("PROJECTS_PORT", "8787"))
-    base = os.environ.get("PROJECTS_BASE_PATH", "")
-    served = "UI + API" if _ui_dir() is not None else "API only (no UI bundle found)"
-    print(f"ReDevOps Projects — {served} on http://{host}:{port}{base or ''}")
-    uvicorn.run(mounted_app(base), host=host, port=port)
+    """Console entrypoint (``agentic-os-projects`` / the sidecar's ``serve``): serve the Projects UI + API
+    on one origin behind the local capability gate. See :mod:`agentic_os.local_serve`."""
+    from .local_serve import serve
+    serve()
 
 
 # Module-level app for `uvicorn agentic_os.projects_api:app` (honours $PROJECTS_BASE_PATH).
