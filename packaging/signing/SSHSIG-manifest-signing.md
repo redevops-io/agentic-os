@@ -12,7 +12,7 @@ Nothing has been signed. The owner's key was not touched to prepare or test this
 | Digest | sha256 of that file, obtained OUT OF BAND (evidence INDEX/review, delivery message), passed as `--expected-sha256`; the script refuses any other file |
 | Format | OpenSSH SSHSIG (`ssh-keygen -Y sign`), Ed25519 |
 | Namespace | `redevops-qa-release@v1` (fixed in the script; domain separation from every other use of the key, for example `redevops-qa-anchor@v1`) |
-| Key | the EXISTING release key; its public fingerprint as printed in `SIGNING_REQUEST.md` is `SHA256:wUoE8xKJpmtTH7GqWXMIl9/BW0SH1Isc5/w9HEiwqA`, which has 42 characters after the colon where an OpenSSH SHA256 fingerprint has 43 (truncated or mistyped: the owner gives the true one as `--expected-fingerprint`); the owner supplies the public key file (`.pub`) |
+| Key | the EXISTING release key; its published fingerprint is `SHA256:wUoE8wxKJpmtTH7GqWXMIl9/BW0SH1Isc5/w9HEiwqA` (SIGNING_REQUEST.md and VERIFY.md; `ssh-keygen -lf` on the public key prints it); the owner supplies the public key file (`.pub`) and passes the fingerprint as `--expected-fingerprint` |
 | Signer | the owner's ssh-agent only, after separate explicit authorization (template section 4); the script never opens a private key file |
 
 ## 2. How the signature is made (the frozen approach)

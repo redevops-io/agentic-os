@@ -38,6 +38,7 @@ SSH = SIGN / "sign_manifest_sshsig.sh"
 HELPER = SIGN / "r0prime_win_signcommand.sh"
 VERIFIER = SIGN / "verify_signature_v2.py"
 COMMON = SIGN / "signing-common.sh"
+RELEASE_FPR = "SHA256:wUoE8wxKJpmtTH7GqWXMIl9/BW0SH1Isc5/w9HEiwqA"      # as published in SIGNING_REQUEST.md / VERIFY.md (provenance: LITERALS-PROVENANCE.json)
 GATE_JSON = ROOT / "packaging" / "distribution-gate.json"
 GATE_PY = ROOT / "packaging" / "check-distribution-gate.py"
 IDJSON = ROOT / "packaging" / "identity.json"
@@ -931,22 +932,29 @@ def test_sshsig_selftest_cannot_be_handed_a_key_and_refuses_the_release_key_pref
     assert r.returncode == 1 and "generates its own throwaway key" in r.stderr
     r = ssh.run("--self-test", "--test-private-key", ssh.key, "--manifest", ssh.manifest, "--expected-sha256", ssh.digest(), "--sig-out", ssh.outside / "x.sig")
     assert r.returncode == 2 and "unknown argument" in r.stderr and not (ssh.outside / "x.sig").exists()
-    # R4-08: the published release fingerprint is 42 characters after SHA256: (an OpenSSH fingerprint has 43); it is used as a PREFIX
+    # R4-08: the published release fingerprint is an exact constant compared by EQUALITY: "SHA256:" + 43 characters = 50
     src = SSH.read_text()
-    const = re.search(r'RELEASE_KEY_FPR_PREFIX="SHA256:([^"]+)"', src).group(1)
-    assert const == "wUoE8xKJpmtTH7GqWXMIl9/BW0SH1Isc5/w9HEiwqA" and len(const) == 42
-    assert 'case "$FPR" in "$RELEASE_KEY_FPR_PREFIX"*)' in src
+    const = re.search(r'RELEASE_KEY_FPR="(SHA256:[^"]+)"', src).group(1)
+    assert const == RELEASE_FPR and len(const) == 50 and re.fullmatch(r"SHA256:[A-Za-z0-9+/]{43}", const)
+    assert "RELEASE_KEY_FPR_PREFIX" not in src and '[ "$FPR" != "$RELEASE_KEY_FPR" ]' in src
     # a stub ssh-keygen that reports a fingerprint with that prefix for the generated key: the self-test must refuse
     d = ssh.tmp / "fakebin"
     d.mkdir()
     write_exec(d / "ssh-keygen", textwrap.dedent(f'''\
         #!/bin/bash
-        if [ "$1" = "-lf" ]; then echo "256 SHA256:{const}A signproc-TEST-KEY (ED25519)"; exit 0; fi
+        if [ "$1" = "-lf" ]; then echo "256 {const} signproc-TEST-KEY (ED25519)"; exit 0; fi
         exec /usr/bin/ssh-keygen "$@"
         '''))
     r = ssh.run("--self-test", "--manifest", ssh.manifest, "--expected-sha256", ssh.digest(), "--sig-out", ssh.outside / "y.sig", path_dirs=[d],
                 R0P_ALLOW_NONSYSTEM_TOOLS="stub-test")
     assert r.returncode == 1 and "refuses the release key" in r.stderr and not (ssh.outside / "y.sig").exists()
+    # a key that is merely similar (one character different) is not the release key: the self-test proceeds
+    d2 = ssh.tmp / "fakebin2"
+    d2.mkdir()
+    write_exec(d2 / "ssh-keygen", (d / "ssh-keygen").read_text().replace(const, const[:-1] + "B"))
+    r = ssh.run("--self-test", "--manifest", ssh.manifest, "--expected-sha256", ssh.digest(), "--sig-out", ssh.outside / "z.sig", path_dirs=[d2],
+                R0P_ALLOW_NONSYSTEM_TOOLS="stub-test")
+    assert "refuses the release key" not in r.stderr
 
 
 def test_sshsig_failure_cases(ssh):
@@ -1934,3 +1942,85 @@ def test_macos_outputs_have_the_documented_modes(mac):
     assert stat.S_IMODE(out.stat().st_mode) == 0o700
     for f in (out / "EVIDENCE.txt", out / "TRANSCRIPT.txt", out / f"ADHOC-TEST-ONLY_{DMG_NAME}"):
         assert stat.S_IMODE(f.stat().st_mode) == 0o600, f
+
+
+# ====================================================================================================================
+# hand-typed literals: every digest and fingerprint in packaging/signing/** has a recorded provenance and is re-verified
+# ====================================================================================================================
+PROV = json.loads((SIGN / "LITERALS-PROVENANCE.json").read_text())
+_TOKEN = re.compile(r"(?<![0-9A-Za-z+/])(?:[0-9a-fA-F]{64}|[0-9a-fA-F]{40}|SHA256:[A-Za-z0-9+/]{20,})(?![0-9A-Za-z+/])")
+_ABBREV = re.compile(r"(?<![0-9a-f])([0-9a-f]{8})\.\.\.([0-9a-f]{4})?(?![0-9a-z])")
+
+
+def _signing_texts():
+    for p in sorted(SIGN.rglob("*")):
+        if p.is_file() and p.name != "LITERALS-PROVENANCE.json" and p.suffix in (".sh", ".md", ".py", ".json", ""):
+            yield p, p.read_text(errors="replace")
+
+
+def test_every_literal_digest_and_fingerprint_has_a_recorded_provenance():
+    allowed = {e["value"].lower() if not e["value"].startswith("SHA256:") else e["value"]: e for e in PROV["entries"]}
+    assert len(allowed) == len(PROV["entries"]), "duplicate entries"
+    used = set()
+    for p, text in _signing_texts():
+        for m in _TOKEN.finditer(text):
+            tok = m.group(0)
+            key = tok if tok.startswith("SHA256:") else tok.lower()
+            assert key in allowed, f"{p.relative_to(ROOT)}: literal {tok} has no entry in LITERALS-PROVENANCE.json"
+            used.add(key)
+        for m in _ABBREV.finditer(text):
+            pre, suf = m.group(1), m.group(2) or ""
+            hits = [k for k in allowed if k.startswith(pre) and k.endswith(suf)]
+            assert hits, f"{p.relative_to(ROOT)}: abbreviated digest {m.group(0)} matches no entry"
+            used.update(hits)
+    assert used == set(allowed), f"entries never used: {set(allowed) - used}"
+    for e in PROV["entries"]:
+        assert e["source"] and e["meaning"] and e["check"]
+        v = e["value"]
+        if v.startswith("SHA256:"):
+            assert re.fullmatch(r"SHA256:[A-Za-z0-9+/]{43}", v) and len(v) == 50
+        else:
+            assert re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", v)
+    # things that must never be typed into these files
+    blob = "".join(text for _, text in _signing_texts())
+    for secretish in ("Q8A92DM4T7", "A5726E26325013EE238988B8688E07FAA77B532D", "af674c05bd3a5278689e5d27119141c8dc08cf2f445d9e40aebbc44e7ed1a90e"):
+        assert secretish not in blob
+
+
+def test_the_release_fingerprint_constant_is_the_published_one_everywhere():
+    for p, text in _signing_texts():
+        for m in re.finditer(r"SHA256:[A-Za-z0-9+/]{30,}", text):
+            assert m.group(0) == RELEASE_FPR, f"{p.relative_to(ROOT)}: {m.group(0)}"
+    assert RELEASE_FPR in {e["value"] for e in PROV["entries"]}
+
+
+def test_provenance_entries_verify_against_their_sources():
+    base = os.environ.get("R0P_PROVENANCE_SOURCES")
+    if not base or not Path(base).is_dir():
+        pytest.skip("set R0P_PROVENANCE_SOURCES to the scratch/evidence root to re-verify the literals against their sources")
+    base = Path(base)
+    checked = 0
+    for e in PROV["entries"]:
+        c, v = e["check"], e["value"]
+        if c["type"] == "repo_file_sha256":
+            assert sha_file(ROOT / c["file"]) == v
+            checked += 1
+        elif c["type"] == "file_sha256":
+            f = base / c["file"]
+            if f.is_file():
+                assert sha_file(f) == v, c["file"]
+                checked += 1
+        elif c["type"] == "text_in_files":
+            for rel in c["files"]:
+                f = base / rel
+                if f.is_file():
+                    txt = f.read_text(errors="replace")
+                    assert (v.lower() in txt.lower()) if c.get("case_insensitive") else (v in txt), (rel, v)
+                    checked += 1
+        else:
+            raise AssertionError(c)
+    assert checked >= 5
+    # the namespace string is the one of the evidence set
+    sr = base / "r0prime/candidate/evidence-macos-arm64-unsigned-final3/SIGNING_REQUEST.md"
+    if sr.is_file():
+        assert "redevops-qa-release@v1" in sr.read_text() and 'NAMESPACE="redevops-qa-release@v1"' in SSH.read_text()

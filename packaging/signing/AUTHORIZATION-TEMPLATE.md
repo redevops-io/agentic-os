@@ -172,7 +172,7 @@ namespace=redevops-qa-release@v1
 build_commit=<40 hex>
 procedure_commit=<40 hex>
 ```
-(The fingerprint printed in `SIGNING_REQUEST.md` has 42 characters after `SHA256:`; give the true 43-character one from `ssh-keygen -lf <public key>`.) Pass `--ledger <absolute path>`.
+(The published release fingerprint is `SHA256:wUoE8wxKJpmtTH7GqWXMIl9/BW0SH1Isc5/w9HEiwqA`; confirm it with `ssh-keygen -lf <public key>`.) Pass `--ledger <absolute path>`.
 I load the key into MY agent myself; no script reads the private key; the key is never exported. The script refuses unless my agent lists the key's fingerprint, and never falls back to a key file.
 
 Signed: ______________________  Date: ____-__-__
