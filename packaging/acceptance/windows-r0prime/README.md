@@ -20,10 +20,19 @@ kit defect to fix, not as a candidate result.
 | 4 | `04-Regression-Bootstrap.ps1` | defect (a): `redevops-sidecar.exe bootstrap` with redirected stdout (pipes and files) on the host ANSI code page, `chcp` variants, UTF-8 env variants |
 | 5 | `05-Regression-Orphan.ps1` | defect (b): kill the parent with `Stop-Process -Force`, then check surviving children (`Win32_Process`), the port (`Get-NetTCPConnection`) and `_MEI*` leftovers; control run with `taskkill /T /F`; `-Mode Launcher` for the real GUI path |
 | 6 | `06-Api-Checks.ps1` | defect (d) and the capability model (`curl.exe`): anonymous requests refused (401), cross-origin POST (json and text/plain) refused, CORS preflight 403 with no `Access-Control-*`, Host-header rebinding refused (400), session exchange with the one-time launch code, `/openapi.json` 200 with the session, CSRF/Origin/Sec-Fetch-Site negatives, launch-code replay, logout, loopback-only bind; Part B: launcher hand-off line and HMAC handshake |
+| 8 | `08-Lifecycle-Ports.ps1` | port conflicts at the sidecar level: a stale listener on 8787 (the real frozen v0.3.2 sidecar via `-StaleSidecarExe`, else the stand-in `tools/fake-listener.ps1 -Role legacy`), `bind_failed` hand-off error with the fixed port taken, `PROJECTS_PORT=0` gets an OS-chosen port next to the stale one, handshake verifies, the stale listener is untouched and receives no POST, two sidecars get two ports |
+| 9 | `09-Launcher-Lifecycle.ps1` | **assisted, needs a person**: the real launcher. `KillOnClose` (Stop-Process -Force on the launcher: the sidecar tree and the listener must be gone within 10 s = Job Object; `_MEI` leftovers recorded), the redirect file (`%LOCALAPPDATA%\<identifier>\launch`, `icacls` ACL, name = 32 hex digits, content never read), console flash (CREATE_NO_WINDOW), direct-URL/restored-tab behaviour (UI loads, API 401); `StartUntrusted` / `StartStale` / `StartBusy` (the launcher is pointed at a FAKE sidecar through `RDO_SIDECAR`: wrong proof / 404 must be final after ONE request and stop it, 429 must retry to the ~30 s deadline and then say busy; no redirect page may be written); `PortConflict` (real sidecar next to a stale 8787 listener, not adopted, legacy warning) |
+| 10 | `10-ColdStart-Timing.ps1` | cold-start distribution of the sidecar for the provisional 30 s Start deadline: N runs (`-Runs 10`, `-Label first-after-install` / `after-reboot`), CSV (`r0prime-coldstart-<label>.csv`): ready_ms (hand-off line), handshake_ms (verified HMAC proof), total_ms; min / median / p90 / p95 / max and counts over 10 / 20 / 30 s. Does not change the deadline: it produces the evidence |
+| 11 | `11-Hardening-Checks.ps1` | Windows counterpart of the hardened-runtime checks (read-only): ASLR / DEP / high-entropy / CFG flags in the PE headers of the installed binaries, Authenticode status, Mark of the Web, `Get-ProcessMitigation`, Defender / SmartScreen / Smart App Control state |
 | 7 | `07-Uninstall.ps1` | silent uninstall and leftover scan (install dir, registry, shortcuts, processes, `_MEI`, app data, firewall rules) |
 | - | `MANUAL-CHECKLIST.md` | everything that needs eyes: SmartScreen/UAC/MOTW, GUI buttons (defect c), non-Latin ANSI code page, firewall prompt, uninstall visuals |
 
-`Run-All.ps1` runs 1 to 7 for one variant and prints a final PASS/FAIL/MANUAL table (the four manual groups are always listed as MANUAL).
+`Run-All.ps1` runs 1 to 7 plus 8, 10 and 11 (unless `-SkipExtra`) for one variant and prints a final PASS/FAIL/MANUAL table (the manual groups and the assisted step 9 are always listed as MANUAL). Step 9 is run by hand: `.\09-Launcher-Lifecycle.ps1 -Test All`.
+`Collect-Results.ps1 -OutDir <dir>` zips a run (redacted copies, hash manifest, host facts) and prints the zip's SHA-256. `Verify-FrozenSignatures.ps1` and `DATED-CHECK-RUNBOOK.md` are the dated signature check of the frozen v0.3.2 installers (separate from the candidate run). `RUNNER-QUICKSTART.md` is the one-page version of this file for the person at the keyboard.
+
+## Identity of the build under test (R0-prime names)
+
+The R0-prime line has its own product name, launcher exe, identifier and installer names (`packaging/identity.json`, written by the `rc2` work; the frozen v0.3.2 values stay recorded there). The kit reads them in this order: `$env:R0P_IDENTITY_FILE` (or `Run-All.ps1 -IdentityFile`), `identity.json` next to `Common.ps1`, `..\..\identity.json` (kit inside a checkout); `$env:R0P_IDENTITY_LINE=frozen` selects the frozen block. **Copy `packaging/identity.json` next to `Common.ps1` when the kit runs off-repo**; without it the kit falls back to the FROZEN names and every transcript header says `built-in FROZEN v0.3.2 defaults`. The header line `identity` shows what was used: check it before reading any result. Nothing in the kit hard-codes a product, exe or identifier any more (uninstall entry, `HKCU\Software\<publisher>\<product>`, install directories, process names, `%LOCALAPPDATA%\<identifier>\launch`).
 Defect (c) (`window.__TAURI__` undefined, dead buttons) can only be judged in the window: it is in the manual list.
 
 ## Host requirements
@@ -83,7 +92,7 @@ binaries are signed" into a gate), `-PayloadSha256File <file>` (expected hashes 
 
 Run `MANUAL-CHECKLIST.md` between step 3 and step 7 (use `-SkipUninstall`, do the checklist, then `.\07-Uninstall.ps1 -OutDir <dir>`).
 
-## Capability credential (spec-driven, UNVERIFIED on Windows)
+## Capability credential (header session; re-checked against docs/LOCAL_API_SECURITY.md of this tree, UNVERIFIED on Windows)
 
 Step 6 follows the capability-model contract of branch `r0prime/security` (`docs/LOCAL_API_SECURITY.md`, summary in `reports/security.md`):
 the local API is deny-by-default, a client gets a **session** by exchanging the single-use launch code that standalone `serve` prints on
@@ -94,7 +103,7 @@ never `PASS`. For an instance the script did not start (`-BaseUrl`), pass `-Laun
 the branch while the code was still in review; if it changes (header names, endpoints, error codes), only `Get-CapabilityCredential`
 and the expectations in `06-Api-Checks.ps1` need adjusting (marked `TODO(security-spec)`).
 Part B of step 6 tests the sidecar side of the launcher contract: `AGENTIC_OS_HANDOFF=stdout`, `PROJECTS_PORT=0`, the one-line `ready` record
-and the HMAC handshake proof (the proof code is first checked against the spec's pinned test vectors). The hand-off stdout file holds a
+and the HMAC handshake proof (the proof code is first checked against the spec's pinned test vectors). Required hand-off fields are `v, proto, event, host, port, pid, base_path, secret`; `launch_code` / `launch_code_ttl` are OPTIONAL (only with `AGENTIC_OS_HANDOFF_LAUNCH_CODE=1`) and are not required by the check (the first draft of the kit required them: fixed). The hand-off stdout file holds a
 throw-away secret for a sidecar that is killed seconds later; it is deleted and never printed. The launcher (Rust) side of the contract is not
 tested by any script here.
 
@@ -121,9 +130,12 @@ tested by any script here.
 * The scripts clean up only what they started (recorded PIDs, `_MEI` directories inside the isolated TEMP they created). Old `_MEI` directories in the real `%TEMP%` are reported, not deleted.
 * The sidecar runs with `HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `TEMP`, `TMP` pointed at `<OutDir>\*-profile\` (child processes only), so it does not touch the real user profile. The launcher in `-Mode Launcher` only gets `TEMP`/`TMP` redirected.
 * `Get-NetFirewallRule` may not be readable by a standard user; the rows then say so.
-* Revocation of the production signing leaf after its 2026-11-07 expiry is checked by the separate dated verification (`Verify-FrozenSignatures.ps1`, not part of this kit), not here.
+* Revocation of the production signing leaf after its 2026-11-07 expiry is checked by the separate dated verification (`Verify-FrozenSignatures.ps1` + `DATED-CHECK-RUNBOOK.md` in this folder), not by the candidate steps.
+* Step 9 needs a person and an interactive desktop; it starts the INSTALLED launcher (a real default browser opens on "Start & open"). The fake-sidecar tests rely on the launcher honouring `RDO_SIDECAR` (it does, `main.rs::sidecar()`); a launcher build that removed that override makes the three `FKE-00-*` rows MANUAL, not PASS. Whether `cmd /C start` quotes a user name with `&` or `^` correctly was not tested.
+* Step 10 measures the sidecar, not the window: the launcher's own spawn / Job Object / WebView2 start-up is outside the numbers. The first run after a reboot on a slow disk with Defender scanning the freshly extracted `_MEI` tree is the case that matters for the deadline: label it and keep its CSV.
+* Step 9 `KillOnClose`: a Job Object kill is a hard kill, so the `_MEI` extraction directory of the killed sidecar is expected to LEAK (INFO row KOC-03). The graceful paths (Stop, quit) are the ones that clean up (G-05, G-06). A `_MEI` sweep at the next start is not implemented; record the leak size if it matters.
 * `ACCEPTANCE.md`'s first-verified-mission path (WSL2/Docker prerequisites, LLM choice, approval, restart survival) is not exercised here.
 
 ## Files
 
-`Common.ps1` (helpers, credential stub) - `01-Install.ps1` - `02-Verify-Installed.ps1` - `03-Launch-Smoke.ps1` - `04-Regression-Bootstrap.ps1` - `05-Regression-Orphan.ps1` - `06-Api-Checks.ps1` - `07-Uninstall.ps1` - `Run-All.ps1` - `MANUAL-CHECKLIST.md` - `tools/static_check_ps.py` (off-Windows syntax/safety lint) - `tools/stage-to-host.sh` (hash-check and print the copy instructions).
+`Common.ps1` (helpers, identity, credential exchange) - `01-Install.ps1` - `02-Verify-Installed.ps1` - `03-Launch-Smoke.ps1` - `04-Regression-Bootstrap.ps1` - `05-Regression-Orphan.ps1` - `06-Api-Checks.ps1` - `07-Uninstall.ps1` - `08-Lifecycle-Ports.ps1` - `09-Launcher-Lifecycle.ps1` - `10-ColdStart-Timing.ps1` - `11-Hardening-Checks.ps1` - `Run-All.ps1` - `Collect-Results.ps1` - `Verify-FrozenSignatures.ps1` - `DATED-CHECK-RUNBOOK.md` - `RUNNER-QUICKSTART.md` - `MANUAL-CHECKLIST.md` - `tools/static_check_ps.py` (off-Windows syntax/safety lint) - `tools/stage-to-host.sh` (hash-check the candidate and print the copy instructions) - `tools/stage-for-windows-host.sh` (the same for the dated signature check) - `tools/fake-listener.ps1` (test doubles for steps 8 and 9: a stand-in v0.3.2 listener and fake sidecars).

@@ -31,7 +31,9 @@ for f in "${FILES[@]}"; do
   if [ "$got" = "$want" ]; then echo "OK    $got  $b"; else echo "FAIL  $got  $b (expected $want)"; ok=0; fi
 done
 [ "$ok" = 1 ] || { echo "refusing: hash check failed"; exit 1; }
-echo "kit files:"; (cd "$KIT" && ls -1 *.ps1 MANUAL-CHECKLIST.md README.md)
+echo "kit files:"; (cd "$KIT" && ls -1 *.ps1 *.md tools/fake-listener.ps1)
+IDF="$KIT/../../identity.json"
+if [ -f "$IDF" ]; then echo "identity: $(cd "$(dirname "$IDF")" && pwd)/identity.json (copy it next to Common.ps1 on the host so the kit uses the R0-prime names)"; else echo "WARNING: no packaging/identity.json in this tree: the kit will fall back to the FROZEN v0.3.2 names"; fi
 cat <<TXT
 
 Copy (any channel) the kit folder, the installer file(s) and the sums file to one folder on the host (for example $DEST), then on the host:
@@ -44,4 +46,5 @@ if [ -n "$COPY" ]; then
   echo "== scp to $COPY:$DEST =="
   scp -p -- "${FILES[@]}" "$SUMS" "$COPY:$DEST/" || exit 1
   scp -pr -- "$KIT" "$COPY:$DEST/" || exit 1
+  [ -f "$IDF" ] && { scp -p -- "$IDF" "$COPY:$DEST/$(basename "$KIT")/identity.json" || exit 1; }
 fi

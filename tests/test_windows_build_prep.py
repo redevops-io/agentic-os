@@ -457,3 +457,85 @@ def test_the_kit_lint_accepts_every_powershell_file_of_the_kit(capsys):
     files = sorted(str(p) for p in (PK / "acceptance/windows-r0prime").rglob("*.ps1"))
     assert files
     assert _lint().main(files) == 0, capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# the Windows acceptance kit (static): identity, contract, the dated-check runbook
+# ---------------------------------------------------------------------------------------------------------------------
+KIT = PK / "acceptance/windows-r0prime"
+
+
+def _code_lines(path: Path) -> list[str]:
+    text = re.sub(r"<#.*?#>", "", path.read_text(), flags=re.S)           # comment-based help blocks
+    return [l for l in text.splitlines() if not l.lstrip().startswith("#")]
+
+
+def test_the_kit_does_not_hard_code_a_product_exe_or_identifier_outside_the_identity_defaults():
+    pat = re.compile(r"'agentic-apps(\.exe)?'|'redevops-sidecar(\.exe)?'|'Agentic Apps'|io\.redevops\.agentic-apps|Software\\redevops")
+    offenders = []
+    for f in sorted(KIT.glob("*.ps1")):
+        if f.name in ("Verify-FrozenSignatures.ps1",):          # the dated check is about the FROZEN files on purpose
+            continue
+        for n, l in enumerate(_code_lines(f), 1):
+            if pat.search(l) and not (f.name == "Common.ps1" and ("ProductName = 'Agentic Apps'" in l or "LauncherName = 'agentic-apps'" in l)):
+                offenders.append(f"{f.name}:{n}: {l.strip()[:100]}")
+    assert offenders == [], "\n".join(offenders)
+
+
+def test_the_kit_reads_the_identity_file_the_rc2_work_defines():
+    text = (KIT / "Common.ps1").read_text()
+    for key in ("bundle_identifier", "product_name", "main_binary_name", "sidecar_binary_name", "R0P_IDENTITY_FILE", "R0P_IDENTITY_LINE"):
+        assert key in text, key
+    assert "..\\..\\identity.json" in text and "built-in FROZEN v0.3.2 defaults" in text
+
+
+def test_the_handoff_check_requires_the_eight_contract_fields_and_not_the_optional_launch_code():
+    text = (KIT / "06-Api-Checks.ps1").read_text()
+    assert "-and $ho.launch_code" not in text
+    for field in ("'v', 'proto', 'event', 'host', 'port', 'pid', 'base_path', 'secret'",):
+        assert field in text
+    contract = (ROOT / "docs/LOCAL_API_SECURITY.md").read_text()
+    assert "Required fields: `v`, `proto`, `event`, `host`, `port`, `pid`, `base_path`, `secret`." in contract
+    common = (KIT / "Common.ps1").read_text()
+    assert "X-Agentic-Session" in common and "X-Agentic-CSRF" in common and "agentic_os_session" not in "\n".join(_code_lines(KIT / "Common.ps1"))
+
+
+def test_the_orphan_launcher_mode_follows_the_launcher_tree_not_port_8787():
+    code = "\n".join(_code_lines(KIT / "05-Regression-Orphan.ps1"))
+    assert "-Port 8787 -TempDir $prof.Temp -RootPid $lp.Id" not in code and "Get-ListenersOf" in code
+
+
+def test_the_start_path_test_windows_match_the_launcher_constants():
+    rs = (ROOT / "deploy/launcher/src-tauri/src/launch.rs").read_text()
+    deadline = int(re.search(r"START_VERIFY_DEADLINE: Duration = Duration::from_secs\((\d+)\)", rs).group(1))
+    assert deadline == 30
+    ps = (KIT / "09-Launcher-Lifecycle.ps1").read_text()
+    assert "$secs -ge 25 -and $secs -le 45" in ps and "30 s" in ps                       # the busy window brackets the 30 s deadline
+    cold = (KIT / "10-ColdStart-Timing.ps1").read_text()
+    assert "30000" in cold and "90000" in cold and "READY_TIMEOUT: Duration = Duration::from_secs(90)" in rs
+    main = (ROOT / "deploy/launcher/src-tauri/src/main.rs").read_text()
+    assert 'std::env::var("RDO_SIDECAR")' in main                                          # the fake-sidecar tests rely on this override
+    lc = (ROOT / "deploy/launcher/src-tauri/src/lifecycle.rs").read_text()
+    assert "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE" in lc and "CREATE_NO_WINDOW" in lc
+
+
+def test_run_all_includes_the_new_steps_and_the_assisted_one_is_listed_as_manual():
+    text = (KIT / "Run-All.ps1").read_text()
+    for s in ("08-Lifecycle-Ports.ps1", "10-ColdStart-Timing.ps1", "11-Hardening-Checks.ps1"):
+        assert s in text
+    assert "09-Launcher-Lifecycle.ps1" in text and "IdentityFile" in text
+
+
+def test_the_dated_check_runbook_names_the_script_and_the_frozen_hashes_that_the_script_embeds():
+    import hashlib
+
+    run = (KIT / "DATED-CHECK-RUNBOOK.md").read_text()
+    script = KIT / "Verify-FrozenSignatures.ps1"
+    sha = hashlib.sha256(script.read_bytes()).hexdigest()
+    assert sha in run, "the runbook must state the sha256 of the script it tells the person to run"
+    body = script.read_text()
+    for h in ("9e5e6262f7830255333060193cc4c285fcf60a72ee70905f22792c12e12d58e5", "5931b1914e732c7b8106fc19f26e63e806fd1b0f3b876b2236cd2e24410fde23",
+              "A5726E26325013EE238988B8688E07FAA77B532D"):
+        assert h in body and h in run
+    assert "2026-11-07T03:13:00Z" in run and "2026-11-07T03:12:51Z" in run and "2026-11-07T03:13:00" in body
+    assert (KIT / "tools/stage-for-windows-host.sh").is_file() and "Collect-Results.ps1" in run
