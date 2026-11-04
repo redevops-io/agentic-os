@@ -471,22 +471,27 @@ def _code_lines(path: Path) -> list[str]:
 
 
 def test_the_kit_does_not_hard_code_a_product_exe_or_identifier_outside_the_identity_defaults():
-    pat = re.compile(r"'agentic-apps(\.exe)?'|'redevops-sidecar(\.exe)?'|'Agentic Apps'|io\.redevops\.agentic-apps|Software\\redevops")
+    pat = re.compile(r"'agentic-(apps|r0prime)(\.exe)?'|'Agentic Apps( R0-prime)?'|io\.redevops\.agentic-apps|Software\\redevops")
     offenders = []
     for f in sorted(KIT.glob("*.ps1")):
-        if f.name in ("Verify-FrozenSignatures.ps1",):          # the dated check is about the FROZEN files on purpose
+        if f.name in ("Verify-FrozenSignatures.ps1", "Common.ps1"):      # the dated check is about the FROZEN files; Common.ps1 holds the defaults
             continue
         for n, l in enumerate(_code_lines(f), 1):
-            if pat.search(l) and not (f.name == "Common.ps1" and ("ProductName = 'Agentic Apps'" in l or "LauncherName = 'agentic-apps'" in l)):
+            if pat.search(l):
                 offenders.append(f"{f.name}:{n}: {l.strip()[:100]}")
     assert offenders == [], "\n".join(offenders)
 
 
-def test_the_kit_reads_the_identity_file_the_rc2_work_defines():
+def test_the_kit_identity_defaults_equal_the_identity_file_and_can_be_overridden_from_it():
     text = (KIT / "Common.ps1").read_text()
-    for key in ("bundle_identifier", "product_name", "main_binary_name", "sidecar_binary_name", "R0P_IDENTITY_FILE", "R0P_IDENTITY_LINE"):
+    for key in ("bundle_identifier", "product_name", "main_binary_name", "sidecar_binary_name", "R0P_IDENTITY_FILE", "R0P_IDENTITY_LINE", "Import-KitIdentity"):
         assert key in text, key
-    assert "..\\..\\identity.json" in text and "built-in FROZEN v0.3.2 defaults" in text
+    assert "..\\..\\identity.json" in text
+    idf = PK / "identity.json"
+    if idf.is_file():                                   # present once the rc2 identity work is merged
+        r0 = json.loads(idf.read_text())["r0prime"]
+        assert f"$script:ProductName = '{r0['product_name']}'" in text and f"$script:AppId = '{r0['bundle_identifier']}'" in text
+        assert f"$script:LauncherExe = '{r0['main_binary_name']}.exe'" in text
 
 
 def test_the_handoff_check_requires_the_eight_contract_fields_and_not_the_optional_launch_code():

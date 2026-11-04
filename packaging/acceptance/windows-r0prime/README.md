@@ -1,6 +1,6 @@
 # R0-prime Windows 11 acceptance kit (installers, regression tests, manual checklist)
 
-Purpose: run the Agentic Apps Windows candidate through a repeatable test on an **existing, authorized Windows 11 host** and record
+Purpose: run the Agentic Apps R0-prime Windows candidate (product `Agentic Apps R0-prime`, `agentic-r0prime.exe`, bundle id `io.redevops.agentic-apps.r0prime`, version 0.1.1, own MSI UpgradeCode; the frozen v0.3.2 product is `Agentic Apps` / `agentic-apps.exe` / 0.1.0: `docs/R0_PRIME_IDENTITY.md`) through a repeatable test on an **existing, authorized Windows 11 host** and record
 what happened. The kit creates no infrastructure (no VM, no cloud resource, no Proxmox use) and changes no system, security,
 firewall, execution-policy, Defender or trust-store setting. It is the Windows counterpart of
 `packaging/ACCEPTANCE-ubuntu.md` and of the journey in `deploy/launcher/ACCEPTANCE.md` (that file's first-verified-mission journey
@@ -15,7 +15,7 @@ kit defect to fix, not as a candidate result.
 | Step | Script | Guards / records |
 |---|---|---|
 | 1 | `01-Install.ps1` | candidate hash vs expected file (fail closed), copy, Zone.Identifier/MOTW, container signature, silent install (msi `/qn`, NSIS `/S`), registry/files/shortcuts/firewall-rule recording, non-admin behaviour of the msi |
-| 2 | `02-Verify-Installed.ps1` | installed `agentic-apps.exe`, `redevops-sidecar.exe`, `uninstall.exe`: hash, PE architecture, **whether they are Authenticode-signed** (v0.3.2: NotSigned; only the containers were signed), `signtool` if already present |
+| 2 | `02-Verify-Installed.ps1` | installed `agentic-r0prime.exe`, `redevops-sidecar.exe`, `uninstall.exe`: hash, PE architecture, **whether they are Authenticode-signed** (v0.3.2: NotSigned; only the containers were signed), `signtool` if already present |
 | 3 | `03-Launch-Smoke.ps1` | launcher process starts, window handle, no crash event, closes on `CloseMainWindow`. **Not GUI automation** |
 | 4 | `04-Regression-Bootstrap.ps1` | defect (a): `redevops-sidecar.exe bootstrap` with redirected stdout (pipes and files) on the host ANSI code page, `chcp` variants, UTF-8 env variants |
 | 5 | `05-Regression-Orphan.ps1` | defect (b): kill the parent with `Stop-Process -Force`, then check surviving children (`Win32_Process`), the port (`Get-NetTCPConnection`) and `_MEI*` leftovers; control run with `taskkill /T /F`; `-Mode Launcher` for the real GUI path |
@@ -32,8 +32,12 @@ kit defect to fix, not as a candidate result.
 
 ## Identity of the build under test (R0-prime names)
 
-The R0-prime line has its own product name, launcher exe, identifier and installer names (`packaging/identity.json`, written by the `rc2` work; the frozen v0.3.2 values stay recorded there). The kit reads them in this order: `$env:R0P_IDENTITY_FILE` (or `Run-All.ps1 -IdentityFile`), `identity.json` next to `Common.ps1`, `..\..\identity.json` (kit inside a checkout); `$env:R0P_IDENTITY_LINE=frozen` selects the frozen block. **Copy `packaging/identity.json` next to `Common.ps1` when the kit runs off-repo**; without it the kit falls back to the FROZEN names and every transcript header says `built-in FROZEN v0.3.2 defaults`. The header line `identity` shows what was used: check it before reading any result. Nothing in the kit hard-codes a product, exe or identifier any more (uninstall entry, `HKCU\Software\<publisher>\<product>`, install directories, process names, `%LOCALAPPDATA%\<identifier>\launch`).
-Defect (c) (`window.__TAURI__` undefined, dead buttons) can only be judged in the window: it is in the manual list.
+The R0-prime line has its own product name, launcher exe, identifier and installer names (`packaging/identity.json`; the frozen v0.3.2 values stay recorded there).
+`Common.ps1` carries the R0-prime values as defaults (`$script:ProductName`, `$script:LauncherExe`, `$script:AppId`, `$script:ManufacturerKey`, ... plus the frozen ones, only to tell the
+two lines apart) and **replaces them from an identity file when it finds one**, so a rename needs no edit of the kit. Search order: `$env:R0P_IDENTITY_FILE` (or `Run-All.ps1 -IdentityFile`),
+`identity.json` next to `Common.ps1`, `..\..\identity.json` (kit inside a checkout); `$env:R0P_IDENTITY_LINE=frozen` selects the frozen block. **Copy `packaging/identity.json` next to
+`Common.ps1` when the kit runs off-repo** (`tools/stage-to-host.sh --copy` does). Every transcript header prints the `identity` and `identity source` lines: check them before reading any result;
+`built-in R0-prime literals` means no file was found and the defaults compiled into the kit were used.
 
 ## Host requirements
 
@@ -41,7 +45,7 @@ Defect (c) (`window.__TAURI__` undefined, dead buttons) can only be judged in th
 * Two accounts, both **non-SYSTEM**: a *standard user* for the NSIS `.exe` variant and all runtime checks, and (for the `.msi`) an *administrator* account of which you open an **elevated** PowerShell. Never run the kit as `NT AUTHORITY\SYSTEM` (the 2026-11-03 Azure run was SYSTEM-only, which is why non-SYSTEM behaviour is still unverified). The scripts print `elevated` and `is SYSTEM` in every transcript header.
 * Windows PowerShell 5.1 (in the box) or PowerShell 7. `curl.exe` (in `System32` since Windows 10 1803). `signtool.exe` is optional and **never installed** by the kit; without it those rows are skipped and reported as such.
 * Outbound HTTPS to `www.microsoft.com` / `oneocsp.microsoft.com` only matters for the dated signature check, not for this kit. The candidate itself needs no network for steps 1 to 7 (`bootstrap` runs with `RDO_DISABLE_PAIR=1` and no LLM key on purpose).
-* Defender real-time protection **on** (do not exclude the folders; record the signature version, the header prints it). No other `agentic-apps.exe` / `redevops-sidecar.exe` running; nothing listening on 8787.
+* Defender real-time protection **on** (do not exclude the folders; record the signature version, the header prints it). No other `agentic-r0prime.exe` / `redevops-sidecar.exe` running (a frozen `agentic-apps.exe` may be installed: R0-prime installs next to it, `INST-04b` records it; do not run both at once, the R0-prime launcher warns about an old unauthenticated service on port 8787); nothing listening on 8787.
 * A folder with the candidate installer(s) and an expected-hash file in `sha256sum` format (`<64 hex>  <file name>`), produced on the build machine, **not** on the test host. The scripts refuse to install a file whose hash is not in that file.
 
 ## Checkpoints (snapshots) and the clean-state rule
@@ -64,20 +68,20 @@ Roll back to `r0p-clean` between variants. Never snapshot or test on the owner's
 Copy the kit folder and the candidate files to the host (any channel; for example `scp` or a shared folder). Hash first, on the host:
 
 ```powershell
-Get-FileHash .\Agentic.Apps_*.msi, .\Agentic.Apps_*-setup.exe -Algorithm SHA256
+Get-FileHash '.\Agentic Apps R0-prime_*.msi', '.\Agentic Apps R0-prime_*-setup.exe' -Algorithm SHA256
 ```
 
 NSIS variant (standard user, normal non-elevated PowerShell):
 
 ```powershell
 cd <kit folder>
-powershell -NoProfile -File .\Run-All.ps1 -Variant exe -Exe C:\r0p\Agentic.Apps_0.1.0_x64-setup.exe -ExpectedSha256File C:\r0p\SHA256SUMS
+powershell -NoProfile -File .\Run-All.ps1 -Variant exe -Exe 'C:\r0p\Agentic Apps R0-prime_0.1.1_x64-setup.exe' -ExpectedSha256File C:\r0p\SHA256SUMS
 ```
 
 MSI variant (the administrator account's **elevated** PowerShell; this is the only elevated run):
 
 ```powershell
-powershell -NoProfile -File .\Run-All.ps1 -Variant msi -Msi C:\r0p\Agentic.Apps_0.1.0_x64_en-US.msi -ExpectedSha256File C:\r0p\SHA256SUMS
+powershell -NoProfile -File .\Run-All.ps1 -Variant msi -Msi 'C:\r0p\Agentic Apps R0-prime_0.1.1_x64_en-US.msi' -ExpectedSha256File C:\r0p\SHA256SUMS
 ```
 
 If the execution policy blocks scripts that arrived from the network, either `Unblock-File` the kit files or add `-BypassPolicyForChildren` to
@@ -85,7 +89,7 @@ If the execution policy blocks scripts that arrived from the network, either `Un
 system setting is changed).
 
 Useful switches: `-OutDir <dir>` (default `%TEMP%\r0prime-win-<variant>-<UTC stamp>`), `-RequireSignedPayload` (turns "installed
-binaries are signed" into a gate), `-PayloadSha256File <file>` (expected hashes of `agentic-apps.exe` / `redevops-sidecar.exe`), `-SkipLaunch`
+binaries are signed" into a gate), `-PayloadSha256File <file>` (expected hashes of `agentic-r0prime.exe` / `redevops-sidecar.exe`), `-SkipLaunch`
 (no window, e.g. over a non-interactive session), `-SkipUninstall` (keep the install for the manual checklist), `-ForceInstall`,
 `-LaunchCode` for step 6 against an instance you started yourself. Each step also runs on its own, with the same `-OutDir`, for example
 `.\05-Regression-Orphan.ps1 -Mode Launcher -OutDir <dir>` (assisted: it asks you to click "Start & open", then kills the launcher).

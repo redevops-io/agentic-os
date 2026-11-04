@@ -48,7 +48,8 @@ mkdir -p "$OUT"/{logs,sbom,notices,listings,environment,smoke-test,signing-input
 COMMIT="$(git -C "$ROOT" rev-parse HEAD)"; TREE="$(git -C "$ROOT" rev-parse 'HEAD^{tree}')"
 . "$PK/toolchain.env"
 BD="$ROOT/deploy/launcher/src-tauri/target/release/bundle"
-APPNAME="Agentic Apps.app"
+ident() { python3 -I "$PK/tools/identity.py" get "$1"; }   # packaging/identity.json (docs/R0_PRIME_IDENTITY.md)
+APPNAME="$(ident app_bundle)"; MAINEXE="$(ident main_binary_name)"; PRODUCT="$(ident product_name)"; VERSION="$(ident version)"; RELEASE_LINE="$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["release_line"])' "$PK/identity.json")"
 
 echo "== 1. move previous build outputs aside =="
 PREV="$OUT/previous-outputs-moved-aside"
@@ -64,6 +65,11 @@ DMG="$(ls "$BD"/dmg/*.dmg | head -1)"
 echo "== 3. copy artifacts and evidence =="
 ditto "$BD/macos/$APPNAME" "$OUT/$APPNAME"; cp "$DMG" "$OUT/"
 DMGNAME="$(basename "$DMG")"
+# The candidate must carry the R0-prime identity (names, bundle id, versions, release-line marker) and must not be
+# mistaken for the frozen v0.3.2 deliverable (`Agentic Apps_0.1.0_aarch64.dmg`, io.redevops.agentic-apps).
+mkdir -p "$OUT/listings"; cp "$PK/identity.json" "$OUT/listings/identity.json"
+python3 -I "$PK/tools/check_bundle_identity.py" --app "$OUT/$APPNAME" --dmg "$OUT/$DMGNAME" | tee "$OUT/listings/identity-check.txt" \
+  || { echo "the built bundle does not carry the R0-prime identity: see listings/identity-check.txt"; exit 1; }
 cp "$PK"/dist/sbom/* "$OUT/sbom/"; cp "$PK/dist/build-manifest.json" "$OUT/"; cp "$PK/dist/freeze-venv-pip-freeze.txt" "$OUT/environment/"
 L="$ROOT/deploy/launcher/src-tauri/licenses"
 cp "$L"/THIRD_PARTY_NOTICES.txt "$L"/NOTICES_MISSING.md "$L"/NOTICES_MISSING.json "$L"/LICENSES-MANIFEST.json "$OUT/notices/"
@@ -106,7 +112,7 @@ echo "== 6. environment, README, SHA256SUMS =="
 } > "$OUT/environment/local-build-environment.txt" 2>&1
 DMGSHA="$(shasum -a 256 "$OUT/$DMGNAME" | cut -d' ' -f1)"
 cat > "$OUT/README-LOCAL-BUILD.md" <<EOF
-# Agentic Apps R0-prime candidate, macOS arm64, UNSIGNED, LOCAL BUILD (not CI)
+# $PRODUCT candidate (release line $RELEASE_LINE, version $VERSION), macOS arm64, UNSIGNED, LOCAL BUILD (not CI)
 
 | | |
 |---|---|
@@ -132,7 +138,7 @@ cat > "$OUT/README-LOCAL-BUILD.md" <<EOF
 ## Would need signing later (not done)
 
 1. \`Contents/MacOS/redevops-sidecar\` (Mach-O, with the entitlement plist, hardened runtime) and the Mach-O libraries it extracts at run time if library validation is to stay on (otherwise the entitlement applies);
-2. \`Contents/MacOS/agentic-apps\` (launcher Mach-O, no entitlements);
+2. \`Contents/MacOS/$MAINEXE\` (launcher Mach-O, no entitlements);
 3. the app bundle \`$APPNAME\` (inside-out, after 1 and 2) and notarization + stapling;
 4. the dmg (sign, notarize, staple).
 Windows msi/nsis/exe and installed executables are not built here.

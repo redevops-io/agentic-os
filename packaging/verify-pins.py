@@ -216,7 +216,7 @@ def main() -> int:
     if cl.exists():
         c = tomllib.loads(cl.read_text())
         names = {(x["name"], x["version"]) for x in c["package"]}
-        for need in [("tauri", "2.11.5"), ("tauri-build", "2.6.3"), ("serde", "1.0.229"), ("serde_json", "1.0.151"), ("redevops-launcher", "0.1.0")]:
+        for need in [("tauri", "2.11.5"), ("tauri-build", "2.6.3"), ("serde", "1.0.229"), ("serde_json", "1.0.151"), ("redevops-launcher", "0.1.1")]:
             if need not in names:
                 problems.append(f"Cargo.lock: {need[0]} {need[1]} not locked")
     else:

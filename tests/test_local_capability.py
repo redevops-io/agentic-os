@@ -787,7 +787,7 @@ vm.runInContext(src.replace('window.fetch.bind(window)', 'window.fetch'), ctx);
   await ctx.window.fetch('/api/projects');
   await ctx.window.fetch('/api/sidekick', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
   await ctx.window.fetch('https://example.org/api/x');
-  console.log(JSON.stringify({ log, store, banner: created.length }));
+  console.log(JSON.stringify({ log, store, banner: created.length, texts: created }));
 })();
 """
 
@@ -835,6 +835,21 @@ def test_shim_resumes_a_reloaded_tab_from_session_storage_and_a_new_tab_needs_a_
     assert [e for e in r["log"] if e[1].endswith("/api/local/session")] == []      # nothing to resume with
     assert r["banner"] == 1                                                        # tells the user what to do
     assert "x-agentic-session" not in (r["log"][0][4] or {})
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_shim_banner_tells_a_user_what_to_press_and_what_does_not_sign_in(tmp_path):
+    """Text only (R0-prime decision 5): the banner names the launcher button and the three things that cannot sign in on their own."""
+    r = _run_shim(tmp_path, "none")
+    assert len(r["texts"]) == 1
+    text = r["texts"][0]
+    assert text.startswith("Not signed in to the local Agentic Apps service")
+    assert 'press "Start & open"' in text                                          # the launcher button (deploy/launcher/ui/index.html)
+    for word in ("bookmark", "restored tab", "second tab", "works once", "one-time URL"):
+        assert word in text, word
+    assert "#lc=" not in text and "secret" not in text.lower()                      # never mentions a credential value
+    ui = (ROOT / "deploy" / "launcher" / "ui" / "index.html").read_text(encoding="utf-8")
+    assert "Start &amp; open" in ui                                                # the button the banner names exists
 
 
 # --------------------------------------------------------------------------- real processes

@@ -15,7 +15,7 @@ expiry. Offline tools (signify, osslsigncode, OpenSSL) agree; what has never bee
 | Network | outbound HTTPS/HTTP to Microsoft's certificate services (`www.microsoft.com/pkiops`, `oneocsp.microsoft.com`). Offline hosts give an INCONCLUSIVE result (`-NoUrlFetch`) |
 | Files (4) | `Agentic.Apps_0.1.0_x64_en-US.msi`, `Agentic.Apps_0.1.0_x64-setup.exe`, `SHA256SUMS`, `Verify-FrozenSignatures.ps1` |
 | Frozen hashes | msi `9e5e6262f7830255333060193cc4c285fcf60a72ee70905f22792c12e12d58e5`; exe `5931b1914e732c7b8106fc19f26e63e806fd1b0f3b876b2236cd2e24410fde23` |
-| Script hash | `Verify-FrozenSignatures.ps1` `f52dffc25295a618567b93e51bb84bda963b19e5b6412db7ba903cc89655046e` |
+| Script hash | `Verify-FrozenSignatures.ps1` `0e143010a62837bd67c27624fc115096840cd00d9637f841c3ecdff34af3384c` |
 
 ## 2. Bring the files over (on the Mac that holds the copies)
 
@@ -34,7 +34,7 @@ No SSH? Copy the four files by USB stick, SMB share or RDP drive redirection int
 
 ```powershell
 (Get-Date).ToUniversalTime().ToString('o')          # must be 2026-11-07T03:13:00Z or later
-Get-FileHash .\Agentic.Apps_0.1.0_x64_en-US.msi, .\Agentic.Apps_0.1.0_x64-setup.exe -Algorithm SHA256   # must equal the hashes above
+Get-FileHash .\Agentic.Apps_0.1.0_x64_en-US.msi, .\Agentic.Apps_0.1.0_x64-setup.exe -Algorithm SHA256   # must equal the frozen hashes above
 Get-FileHash .\Verify-FrozenSignatures.ps1 -Algorithm SHA256                                              # must equal the script hash above
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Verify-FrozenSignatures.ps1 -MsiPath .\Agentic.Apps_0.1.0_x64_en-US.msi -ExePath .\Agentic.Apps_0.1.0_x64-setup.exe
 ```

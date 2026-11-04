@@ -2,10 +2,10 @@
 .SYNOPSIS
   Step 2: inspect the INSTALLED binaries: hashes, PE architecture, version info and Authenticode status.
 .DESCRIPTION
-  Records whether the installed agentic-apps.exe, redevops-sidecar.exe (and uninstall.exe for NSIS) are signed.
+  Records whether the installed agentic-r0prime.exe, redevops-sidecar.exe (and uninstall.exe for NSIS) are signed.
   The frozen v0.3.2 installers sign only the containers; the payload binaries are NotSigned (ACCEPTANCE.md, ERRATA item 5).
   Use -RequireSignedPayload to turn "signed" into a PASS/FAIL gate; without it the row is INFO (fact recording, no claim).
-  Optional -ExpectedSha256File may contain entries for agentic-apps.exe / redevops-sidecar.exe (by file name).
+  Optional -ExpectedSha256File may contain entries for agentic-r0prime.exe / redevops-sidecar.exe (by file name).
   Read-only.
 #>
 [CmdletBinding()]
@@ -28,7 +28,7 @@ try {
   $gc = Get-Command signtool.exe -ErrorAction SilentlyContinue; if ($gc) { $signtool = $gc.Source }
   if (-not $signtool) { Write-Line 'signtool.exe not found (nothing is installed by this kit): signtool verify rows are SKIPPED' }
 
-  foreach ($n in @($script:Id.LauncherExe, $script:Id.SidecarExe, 'uninstall.exe')) {
+  foreach ($n in @($script:LauncherExe, 'redevops-sidecar.exe', 'uninstall.exe')) {
     $f = Join-Path $InstallDir $n
     $key = $n.Replace('.exe', '').Replace('-', '').ToUpper()
     if (-not (Test-Path -LiteralPath $f)) {
@@ -56,8 +56,8 @@ try {
       Add-Result ('BIN-' + $key + '-T') ("$n signtool verify /pa /v /all") $(if ($code -eq 0) { 'PASS' } elseif ($RequireSignedPayload) { 'FAIL' } else { 'INFO' }) ("exit {0} (full output in signtool-{1}.txt)" -f $code, $n)
     }
   }
-  # the MSI and NSIS installers shipped different agentic-apps.exe hashes in v0.3.2 (not investigated): always print for comparison
-  Write-Line 'NOTE: compare agentic-apps.exe / redevops-sidecar.exe hashes between the msi and exe variants (two runs); a difference is an open question, not a result.'
+  # the MSI and NSIS installers shipped different agentic-apps.exe (frozen name) hashes in v0.3.2 (not investigated): always print for comparison
+  Write-Line 'NOTE: compare agentic-r0prime.exe / redevops-sidecar.exe hashes between the msi and exe variants (two runs); a difference is an open question, not a result.'
   Add-Result 'BIN-NOTE' 'payload hashes recorded for msi-vs-exe comparison' 'INFO' 'see the sha256 lines above and *-installed-files.sha256.txt'
 }
 catch { if ($_.Exception.Message -ne 'stop') { Add-Result 'BIN-99' 'unexpected error' 'FAIL' $_.Exception.Message } }

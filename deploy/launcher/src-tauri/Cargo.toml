@@ -1,6 +1,6 @@
 [package]
 name = "redevops-launcher"
-version = "0.1.0"
+version = "0.1.1"
 description = "ReDevOps Launcher — native one-click for the agentic app (Windows/macOS)"
 edition = "2021"
 # No SPDX `license` field: the family licence (AGPL-3.0-or-later with the Commons Clause) has no

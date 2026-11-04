@@ -9,7 +9,17 @@ unset SSH_AUTH_SOCK SSH_AGENT_PID APPROVAL_SECRET 2>/dev/null || true
 export LC_ALL=C
 
 KIT_NAME="r0prime-macos-kit"
-APP_ID="io.redevops.agentic-apps"
+# Identity of the R0-prime line. These literals mirror packaging/identity.json (tests/test_r0prime_identity.py keeps them equal).
+# The FROZEN v0.3.2 identity is listed only so a script can tell the two apart; this kit never expects it.
+APP_ID="io.redevops.agentic-apps.r0prime"
+APP_NAME="Agentic Apps R0-prime.app"
+MAIN_EXE="agentic-r0prime"
+APP_VERSION="0.1.1"
+RELEASE_LINE="r0-prime"
+FROZEN_APP_ID="io.redevops.agentic-apps"
+FROZEN_APP_NAME="Agentic Apps.app"
+FROZEN_MAIN_EXE="agentic-apps"
+FROZEN_APP_VERSION="0.1.0"
 TRANSCRIPT=""
 N_PASS=0; N_FAIL=0; N_WARN=0; N_INFO=0; N_SKIP=0
 RESULT_ROWS=""

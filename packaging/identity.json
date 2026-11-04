@@ -1,0 +1,25 @@
+{
+  "schema": "redevops.identity/1",
+  "_comment": "Single source of truth for the identity of the R0-prime line, and the recorded identity of the frozen v0.3.2 line it must never collide with. tauri.conf.json, Cargo.toml and the build/acceptance tooling are checked against this file by tests/test_r0prime_identity.py; docs/R0_PRIME_IDENTITY.md explains every field. Artifact file names are DERIVED (packaging/tools/identity.py), not stored.",
+  "release_line": "r0-prime",
+  "r0prime": {
+    "product_name": "Agentic Apps R0-prime",
+    "version": "0.1.1",
+    "bundle_version": "0.1.1",
+    "bundle_identifier": "io.redevops.agentic-apps.r0prime",
+    "sidecar_signing_identifier": "io.redevops.agentic-apps.r0prime.sidecar",
+    "main_binary_name": "agentic-r0prime",
+    "sidecar_binary_name": "redevops-sidecar",
+    "wix_upgrade_code": "f13fc625-f77d-5c30-b308-a3c3ec1045fc"
+  },
+  "frozen": {
+    "product_name": "Agentic Apps",
+    "version": "0.1.0",
+    "bundle_version": "0.1.0",
+    "bundle_identifier": "io.redevops.agentic-apps",
+    "sidecar_signing_identifier": "io.redevops.agentic-apps.sidecar",
+    "main_binary_name": "agentic-apps",
+    "sidecar_binary_name": "redevops-sidecar",
+    "wix_upgrade_code": "79fccc4d-fe4b-5bed-9113-69daba98ac8f"
+  }
+}

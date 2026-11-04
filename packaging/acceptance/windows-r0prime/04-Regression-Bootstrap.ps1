@@ -88,7 +88,7 @@ try {
   if (-not $SidecarExe) {
     if (-not $InstallDir) { $st = Read-State; if ($st -and $st.installDir) { $InstallDir = $st.installDir } }
     if (-not $InstallDir) { $InstallDir = Find-InstallDir }
-    if ($InstallDir) { $SidecarExe = Join-Path $InstallDir $script:Id.SidecarExe }
+    if ($InstallDir) { $SidecarExe = Join-Path $InstallDir $script:SidecarExe }
   }
   if (-not $SidecarExe -or -not (Test-Path -LiteralPath $SidecarExe)) { Add-Result 'BST-00' 'sidecar exe present' 'FAIL' 'not found: run 01-Install.ps1 first or pass -SidecarExe'; throw 'stop' }
   Write-Line ("sidecar: {0}  sha256 {1}" -f $SidecarExe, (Get-Sha256 $SidecarExe))

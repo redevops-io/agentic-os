@@ -48,3 +48,6 @@ scrubbed_run() {
   fi
 }
 now() { date +%s; }
+# identity KEY: one field of the R0-prime identity (packaging/identity.json via packaging/tools/identity.py), e.g.
+# `identity main_binary_name`, `identity app_bundle`, `identity dmg_macos_arm64`. Standard-library python, no side effect.
+identity() { "$(command -v python3 || command -v python)" -I "$PK/tools/identity.py" get "$1" | tr -d '\r'; }

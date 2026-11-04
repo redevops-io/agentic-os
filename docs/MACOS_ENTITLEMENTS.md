@@ -1,8 +1,34 @@
-# macOS entitlements of the Agentic Apps bundle
+# macOS entitlements of the Agentic Apps R0-prime bundle
 
 Purpose: state which entitlement the macOS build needs, where it applies, what it permits and the risk that
 remains. Nothing in this repository signs or notarizes; the plist is an input for a later signing run that
 happens outside the repository (see "Use").
+
+## Status: provisional decision (owner decision 4, 2026-11-04)
+
+* **Retained provisionally.** The R0-prime candidate keeps the sidecar entitlement `com.apple.security.cs.disable-library-validation`
+  until the exit criteria below are met or the owner accepts the residual risk for a named release. It is a decision for the
+  private engineering candidate, not an approval for any public release.
+* **Sidecar only.** The entitlement is applied to `Contents/MacOS/redevops-sidecar` and to nothing else. The launcher
+  (`Contents/MacOS/agentic-r0prime`) and the bundle carry no entitlements.
+* **The hardened runtime is required for every Mach-O file that is signed** (the sidecar, the launcher, and the bundle seal; `codesign --options runtime`).
+  Disabling library validation is the only relaxation; `allow-jit`, `allow-unsigned-executable-memory`,
+  `allow-dyld-environment-variables` and every other key stay off. `packaging/acceptance/macos-r0prime/verify_dmg.sh --expect signed` reads the
+  entitlements back and fails if any binary carries a different set (rows `E-*`).
+* **Residual risk** is the one described below ("What it permits, and the residual risk"): library planting into the per-launch
+  `_MEI*` directory by a same-user writer, and inherited reach of anything loaded into the sidecar. Same-user malware is outside the
+  threat model of `docs/LOCAL_API_SECURITY.md`; this entitlement is the reason that boundary matters more for the sidecar.
+* **Exit criteria** (any one removes the provisional status):
+  1. an onedir sidecar layout, or a build that signs every embedded Mach-O with the release Developer ID, runs under the hardened
+     runtime with library validation ON (the entitlement removed), shown on a signed build by the checks of `MANUAL-CHECKLIST.md`
+     parts E to G and by `verify_dmg.sh --expect signed` with an empty sidecar entitlement set; or
+  2. the owner records, for a named release, that the residual risk is accepted with the entitlement in place.
+* **Evidence status: NOT YET AVAILABLE.** [PLACEHOLDER: the `gui` agent delivers its native-GUI and hardened-runtime evidence in a separate
+  report (`gui.md`). This document claims no result from it. When that report exists, link it here and state only what it observed:
+  whether "Start & open" works under the hardened runtime with the entitlement, and whether the sidecar also starts with the entitlement
+  removed (the empirical question behind exit criterion 1).]
+  What is OBSERVED today is limited to the frozen v0.3.2 matrix runs quoted below; the R0-prime sidecar bytes changed and have not been re-run
+  under a signed hardened runtime (UNVERIFIED).
 
 ## What is in the repository
 
@@ -18,8 +44,8 @@ and every other key are NOT set: the v0.3.2 matrix runs found them unnecessary f
 
 ## Where it applies
 
-Only the sidecar Mach-O, `Agentic Apps.app/Contents/MacOS/redevops-sidecar` (a PyInstaller onefile binary).
-The launcher executable (`Contents/MacOS/agentic-apps`) and the app bundle carry no entitlements, and
+Only the sidecar Mach-O, `Agentic Apps R0-prime.app/Contents/MacOS/redevops-sidecar` (a PyInstaller onefile binary).
+The launcher executable (`Contents/MacOS/agentic-r0prime`) and the app bundle carry no entitlements, and
 `tauri.conf.json` has no `bundle.macOS.entitlements`, so the Tauri bundler never applies this plist to the launcher
 or the bundle. `tests/test_macos_entitlements.py` checks the single key, the file's name and scope, that the launcher
 configuration references no entitlements file, and that no other file in the repository names the key.

@@ -24,7 +24,7 @@ try {
   if (-not $InstallDir) { $st = Read-State; if ($st -and $st.installDir) { $InstallDir = $st.installDir } }
   if (-not $InstallDir) { $InstallDir = Find-InstallDir }
   if (-not $InstallDir) { Add-Result 'HRD-00' 'install directory' 'FAIL' 'not found: run 01-Install.ps1 first'; throw 'stop' }
-  $files = @($script:Id.LauncherExe, $script:Id.SidecarExe, 'uninstall.exe')
+  $files = @($script:LauncherExe, $script:SidecarExe, 'uninstall.exe')
   foreach ($n in $files) {
     $f = Join-Path $InstallDir $n
     if (-not (Test-Path -LiteralPath $f)) { if ($n -ne 'uninstall.exe') { Add-Result ('HRD-01-' + $n) ("{0} present" -f $n) 'FAIL' $f } ; continue }
@@ -39,7 +39,7 @@ try {
     Add-Result ('HRD-03-' + $n) ("{0}: Mark of the Web (Zone.Identifier)" -f $n) 'INFO' $(if ($zone) { ($zone -join ' ') } else { 'none' })
   }
   try {
-    foreach ($n in @($script:Id.LauncherExe, $script:Id.SidecarExe)) {
+    foreach ($n in @($script:LauncherExe, $script:SidecarExe)) {
       $pm = Get-ProcessMitigation -Name $n -ErrorAction Stop
       Add-Result ('HRD-04-' + $n) ("Get-ProcessMitigation {0}" -f $n) 'INFO' (($pm | Out-String).Trim() -replace '\s+', ' ')
     }

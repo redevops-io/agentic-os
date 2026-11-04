@@ -46,7 +46,7 @@ $recorded = New-Object System.Collections.ArrayList
 $profiles = New-Object System.Collections.ArrayList
 $extraKill = New-Object System.Collections.ArrayList
 
-function Get-LaunchDir { return (Join-Path (Join-Path $env:LOCALAPPDATA $script:Id.Identifier) 'launch') }
+function Get-LaunchDir { return (Join-Path (Join-Path $env:LOCALAPPDATA $script:AppId) 'launch') }
 
 function Start-Launcher([string]$Exe, [hashtable]$SetEnv, [string]$TempDir) {
   $env2 = @{}; foreach ($k in $SetEnv.Keys) { $env2[$k] = $SetEnv[$k] }
@@ -96,7 +96,7 @@ function Test-KillOnClose([string]$Launcher, [string]$SidecarExe) {
   }
   $aclDone = $S.AclDone; $aclDir = $S.AclDir; $aclFile = $S.AclFile; $aclOwner = $S.AclOwner; $fileName = $S.FileName
   if (-not $found) { Add-Result 'KOC-00' 'control plane started from the window' 'MANUAL' ("nothing listened within {0} s: the click did not happen or the button is dead (defect c): screenshot" -f $ClickTimeoutSec); return }
-  $sidecarPids = @($found.Snap | Where-Object { $found.Kids -contains [int]$_.ProcessId -and $_.Name -eq $script:Id.SidecarExe } | ForEach-Object { [int]$_.ProcessId })
+  $sidecarPids = @($found.Snap | Where-Object { $found.Kids -contains [int]$_.ProcessId -and $_.Name -eq $script:SidecarExe } | ForEach-Object { [int]$_.ProcessId })
   $lport = $found.Port
   foreach ($x in $sidecarPids) { [void]$recorded.Add($x) }
   Add-Result 'KOC-01' 'control plane running under the launcher' 'PASS' ("launcher pid {0}; sidecar process(es) {1}; OS-chosen listener port {2} (not 8787: {3})" -f $lp.Id, ($sidecarPids -join ','), $lport, ($lport -ne 8787))
@@ -203,7 +203,7 @@ function Test-PortConflict([string]$Launcher, [string]$SidecarExe) {
     if ($ls.Count) { return [pscustomobject]@{ Kids = $kids; Port = [int]$ls[0].LocalPort; Snap = $snap } } else { return $null }
   }
   if (-not $found) { Add-Result 'PCF-02' 'the real sidecar started next to the stale listener' 'MANUAL' ("no listener under the launcher within {0} s" -f $ClickTimeoutSec); return }
-  foreach ($x in @($found.Snap | Where-Object { $found.Kids -contains [int]$_.ProcessId -and $_.Name -eq $script:Id.SidecarExe } | ForEach-Object { [int]$_.ProcessId })) { [void]$recorded.Add($x) }
+  foreach ($x in @($found.Snap | Where-Object { $found.Kids -contains [int]$_.ProcessId -and $_.Name -eq $script:SidecarExe } | ForEach-Object { [int]$_.ProcessId })) { [void]$recorded.Add($x) }
   Add-Result 'PCF-02' 'the real sidecar started on an OS-chosen port next to the stale listener' $(if ($found.Port -ne 8787 -and $found.Port -gt 1023) { 'PASS' } else { 'FAIL' }) ("new listener port {0}" -f $found.Port)
   $r = Invoke-Curl @('http://127.0.0.1:8787/api/projects')
   Add-Result 'PCF-03' 'the stale listener on 8787 was neither killed nor adopted (still answers)' $(if ($r.Status -eq 200 -and (Test-PidAlive $stalePid)) { 'PASS' } else { 'FAIL' }) ("HTTP {0}; pid {1} alive={2}" -f $r.Status, $stalePid, (Test-PidAlive $stalePid))
@@ -221,9 +221,9 @@ try {
   if (-not $InstallDir) { $st = Read-State; if ($st -and $st.installDir) { $InstallDir = $st.installDir } }
   if (-not $InstallDir) { $InstallDir = Find-InstallDir }
   if (-not $InstallDir) { Add-Result 'LCL-00' 'install directory' 'FAIL' 'not found: run 01-Install.ps1 first'; throw 'stop' }
-  $launcher = Join-Path $InstallDir $script:Id.LauncherExe; $sidecarExe = Join-Path $InstallDir $script:Id.SidecarExe
+  $launcher = Join-Path $InstallDir $script:LauncherExe; $sidecarExe = Join-Path $InstallDir $script:SidecarExe
   if (-not (Test-Path -LiteralPath $launcher)) { Add-Result 'LCL-00' 'launcher exe present' 'FAIL' $launcher; throw 'stop' }
-  if (@(Get-Process -Name $script:Id.LauncherName -ErrorAction SilentlyContinue).Count -gt 0) { Add-Result 'LCL-00' 'no other launcher instance running' 'SKIP' 'close it yourself and re-run (this script never stops a process it did not start)'; throw 'stop' }
+  if (@(Get-Process -Name $script:LauncherProcess -ErrorAction SilentlyContinue).Count -gt 0) { Add-Result 'LCL-00' 'no other launcher instance running' 'SKIP' 'close it yourself and re-run (this script never stops a process it did not start)'; throw 'stop' }
   $tests = $(if ($Test -eq 'All') { @('KillOnClose', 'StartUntrusted', 'StartStale', 'StartBusy', 'PortConflict') } else { @($Test) })
   foreach ($t in $tests) {
     Write-Line ("`n==== test {0} ====" -f $t)

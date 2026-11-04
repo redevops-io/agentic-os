@@ -22,7 +22,7 @@
   normal behaviour for any chain build and is not a setting), start the installers, or contact anything other
   than the certificate AIA/CRL/OCSP endpoints named in the certificates.
 
-.PARAMETER MsiPath / ExePath   Paths to the signed Agentic.Apps_0.1.0_x64_en-US.msi / Agentic.Apps_0.1.0_x64-setup.exe
+.PARAMETER MsiPath / ExePath   Paths to the signed FROZEN v0.3.2 Agentic.Apps_0.1.0_x64_en-US.msi / Agentic.Apps_0.1.0_x64-setup.exe
 .PARAMETER ExpectedSha256File  Optional sha256sum-format file ("<hash>  <name>"); default: SHA256SUMS next to -MsiPath if present
 .PARAMETER OutDir              Output directory (default: $env:TEMP\frozen-sig-verify-<UTC stamp>); must not exist or be empty
 .PARAMETER NoUrlFetch          Skip the certutil -urlfetch step (offline host); the verdict then says revocation was NOT checked
@@ -51,15 +51,15 @@ $ProgressPreference = 'SilentlyContinue'
 
 # ---- frozen facts (from BASELINE_SHA256SUMS and the signing evidence) -------------------------------------------------
 $Expected = @{
-  'Agentic.Apps_0.1.0_x64_en-US.msi' = '9e5e6262f7830255333060193cc4c285fcf60a72ee70905f22792c12e12d58e5'
-  'Agentic.Apps_0.1.0_x64-setup.exe' = '5931b1914e732c7b8106fc19f26e63e806fd1b0f3b876b2236cd2e24410fde23'
+  'Agentic.Apps_0.1.0_x64_en-US.msi' = '9e5e6262f7830255333060193cc4c285fcf60a72ee70905f22792c12e12d58e5'   # frozen v0.3.2
+  'Agentic.Apps_0.1.0_x64-setup.exe' = '5931b1914e732c7b8106fc19f26e63e806fd1b0f3b876b2236cd2e24410fde23'   # frozen v0.3.2
 }
 $LeafThumbprint  = 'A5726E26325013EE238988B8688E07FAA77B532D'
 $LeafNotAfterUtc = [datetime]::SpecifyKind([datetime]'2026-11-07T03:12:51', 'Utc')
 $MeaningfulFromUtc = [datetime]::SpecifyKind([datetime]'2026-11-07T03:13:00', 'Utc')
 $ExpectedTsTimeUtc = @{                 # RFC3161 signing times recorded offline (signify + osslsigncode + openssl ts)
-  'Agentic.Apps_0.1.0_x64_en-US.msi' = '2026-11-04T03:36:10Z'
-  'Agentic.Apps_0.1.0_x64-setup.exe' = '2026-11-04T03:36:11Z'
+  'Agentic.Apps_0.1.0_x64_en-US.msi' = '2026-11-04T03:36:10Z'   # frozen v0.3.2
+  'Agentic.Apps_0.1.0_x64-setup.exe' = '2026-11-04T03:36:11Z'   # frozen v0.3.2
 }
 $nowUtc = (Get-Date).ToUniversalTime()
 
@@ -201,7 +201,7 @@ try {
   Say '--- 6. time comparison (UTC) ---'
   Say ("now                     : {0}" -f $nowUtc.ToString('yyyy-MM-ddTHH:mm:ssZ'))
   Say ("leaf NotAfter           : {0}  -> leaf is {1}" -f $LeafNotAfterUtc.ToString('yyyy-MM-ddTHH:mm:ssZ'), $(if ($nowUtc -gt $LeafNotAfterUtc) { 'EXPIRED (signature validity must come from the timestamp)' } else { 'still valid (no dependency on the timestamp yet)' }))
-  Say ("RFC3161 times (offline)  : msi {0}, exe {1}  -> both inside the leaf validity window 2026-11-04T03:12:51Z..2026-11-07T03:12:51Z" -f $ExpectedTsTimeUtc['Agentic.Apps_0.1.0_x64_en-US.msi'], $ExpectedTsTimeUtc['Agentic.Apps_0.1.0_x64-setup.exe'])
+  Say ("RFC3161 times (offline)  : msi {0}, exe {1}  -> both inside the leaf validity window 2026-11-04T03:12:51Z..2026-11-07T03:12:51Z" -f $ExpectedTsTimeUtc['Agentic.Apps_0.1.0_x64_en-US.msi'], $ExpectedTsTimeUtc['Agentic.Apps_0.1.0_x64-setup.exe'])   # frozen v0.3.2 file names
   Say ''
 
   # ---- verdicts -------------------------------------------------------------------------------------------------------

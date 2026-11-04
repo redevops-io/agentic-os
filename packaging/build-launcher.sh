@@ -57,7 +57,7 @@ LOCK_AFTER="$(shasum -a 256 "$LOCK" 2>/dev/null | cut -d' ' -f1 || sha256sum "$L
 [ "$LOCK_BEFORE" = "$LOCK_AFTER" ] || { echo "ERROR: Cargo.lock changed during the build"; exit 1; }
 
 TARGET="${CARGO_TARGET_DIR:-$ROOT/deploy/launcher/src-tauri/target}"
-BIN="$TARGET/release/agentic-apps"; [ -f "$BIN.exe" ] && BIN="$BIN.exe"
+BIN="$TARGET/release/$(identity main_binary_name)"; [ -f "$BIN.exe" ] && BIN="$BIN.exe"
 MPY="${MANIFEST_PYTHON:-$(command -v python3 || command -v python)}"
 "$MPY" -I "$PK/tools/build_manifest.py" --root "$ROOT" --out "$PK/dist/build-manifest.json" --stage launcher \
     --artifact "launcher=$BIN" --artifact "launcher_bundles=$TARGET/release/bundle" --artifact "licenses_manifest=$LIC/LICENSES-MANIFEST.json" \

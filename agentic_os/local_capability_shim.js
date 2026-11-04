@@ -45,9 +45,10 @@
       d.setAttribute("role", "alert");
       d.setAttribute("style", "position:fixed;left:0;right:0;top:0;z-index:2147483647;padding:10px 16px;" +
         "background:#7f1d1d;color:#fff;font:14px system-ui,sans-serif");
-      d.textContent = "Not signed in to the local Agentic Apps service. Open the app from its launcher " +
-        "(or the one-time URL printed by the serve command); this tab has no session, or its link " +
-        "may have expired or been used.";
+      d.textContent = "Not signed in to the local Agentic Apps service: this page has no session. " +
+        "Go back to the Agentic Apps window and press \"Start & open\" to get a fresh link. " +
+        "A link works once, and a bookmark, a restored tab or a second tab cannot sign in on its own. " +
+        "If you started the server yourself (the serve command or a container), open the one-time URL it printed in its output.";
       document.body.appendChild(d);
     }
     if (document.body) { show(); } else { document.addEventListener("DOMContentLoaded", show); }

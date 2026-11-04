@@ -3,7 +3,7 @@
 # AUTHORIZED existing Windows test host. Default is a DRY RUN. This script creates no infrastructure and reads no keys:
 # --copy simply runs scp with your own ssh configuration.
 #
-#   tools/stage-to-host.sh --sums SHA256SUMS --file Agentic.Apps_0.1.0_x64-setup.exe [--file other.msi]
+#   tools/stage-to-host.sh --sums SHA256SUMS --file "Agentic Apps R0-prime_0.1.1_x64-setup.exe" [--file other.msi]
 #   tools/stage-to-host.sh --sums SHA256SUMS --file X.exe --copy tester@win11 --dest 'C:/r0p'
 #
 # bash or zsh (run as: bash tools/stage-to-host.sh ...).

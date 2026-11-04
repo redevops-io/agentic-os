@@ -12,7 +12,7 @@ set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 ART=${ART_DIR:?set ART_DIR to a directory holding COPIES of the frozen .msi/.exe (and their SHA256SUMS); never the frozen directory itself}
 PS1=$HERE/../Verify-FrozenSignatures.ps1
-MSI=Agentic.Apps_0.1.0_x64_en-US.msi; EXE=Agentic.Apps_0.1.0_x64-setup.exe
+MSI=Agentic.Apps_0.1.0_x64_en-US.msi; EXE=Agentic.Apps_0.1.0_x64-setup.exe   # the frozen v0.3.2 file names
 WANT_MSI=9e5e6262f7830255333060193cc4c285fcf60a72ee70905f22792c12e12d58e5
 WANT_EXE=5931b1914e732c7b8106fc19f26e63e806fd1b0f3b876b2236cd2e24410fde23
 DO_COPY=""; DEST='C:/Users/Public/frozen-check'

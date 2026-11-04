@@ -49,7 +49,7 @@ try {
     if (-not $InstallDir) { Add-Result 'API-00' 'install directory' 'FAIL' 'not found: run 01-Install.ps1 first'; throw 'stop' }
     $prof = New-IsolatedProfile (Join-Path $script:OutDir 'api-profile')
     $port = Get-FreePort; $base = "http://127.0.0.1:$port"
-    $handle = Start-Sidecar -Exe (Join-Path $InstallDir $script:Id.SidecarExe) -Port $port -Profile $prof -LogPrefix (Join-Path $script:OutDir 'api-serve')
+    $handle = Start-Sidecar -Exe (Join-Path $InstallDir $script:SidecarExe) -Port $port -Profile $prof -LogPrefix (Join-Path $script:OutDir 'api-serve')
     $up = Wait-Port $port 90
     Add-Result 'API-00' 'sidecar serve started' $(if ($up) { 'PASS' } else { 'FAIL' }) ("pid {0}, {1}" -f $handle.RootPid, $base)
     if (-not $up) { throw 'stop' }
@@ -136,7 +136,7 @@ try {
     $vec2 = Get-CapabilityProof -Key ([byte[]](0..31)) -Domain 'agentic-os-mint-v1' -Port 8787 -Nonce 'BBBBBBBBBBBBBBBBBBBBBB'
     Add-Result 'HS-00' 'proof implementation reproduces the pinned test vectors of the spec' $(if ($vec -ceq 'XrELUoD7WHe1e8IgKZZYoltOOKdPcPN3PR-qWdhqCeY' -and $vec2 -ceq 'JYxsI49qlI_AzpnZPgZwDLjyQLNRgueAarKpIxB19VQ') { 'PASS' } else { 'FAIL' }) ("handshake={0} mint={1}" -f $vec, $vec2)
     $prof2 = New-IsolatedProfile (Join-Path $script:OutDir 'api-profile-handoff')
-    $handle2 = Start-Sidecar -Exe (Join-Path $InstallDir $script:Id.SidecarExe) -Port 0 -Profile $prof2 -LogPrefix (Join-Path $script:OutDir 'api-handoff') -ExtraEnv @{ AGENTIC_OS_HANDOFF = 'stdout' }
+    $handle2 = Start-Sidecar -Exe (Join-Path $InstallDir $script:SidecarExe) -Port 0 -Profile $prof2 -LogPrefix (Join-Path $script:OutDir 'api-handoff') -ExtraEnv @{ AGENTIC_OS_HANDOFF = 'stdout' }
     $line = $null; $sw = [Diagnostics.Stopwatch]::StartNew()
     while ($sw.Elapsed.TotalSeconds -lt 60 -and -not $line) {
       $t = Read-SharedText $handle2.StdOut

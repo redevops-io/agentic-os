@@ -9,17 +9,34 @@ $script:OutDir = $null
 $script:TranscriptPath = $null
 $script:ValidStatus = @('PASS', 'FAIL', 'MANUAL', 'INFO', 'SKIP')
 
+# Identity of the R0-prime line. These literals mirror packaging/identity.json (tests/test_r0prime_identity.py keeps them equal).
+# The FROZEN v0.3.2 identity is listed only so the kit can tell the two apart and never touches it.
+$script:ProductName = 'Agentic Apps R0-prime'
+$script:LauncherExe = 'agentic-r0prime.exe'
+$script:LauncherProcess = 'agentic-r0prime'
+$script:AppId = 'io.redevops.agentic-apps.r0prime'
+$script:AppVersion = '0.1.1'
+$script:ManufacturerKey = 'HKCU:\Software\redevops\Agentic Apps R0-prime'
+$script:FrozenProductName = 'Agentic Apps'
+$script:FrozenLauncherExe = 'agentic-apps.exe'
+$script:FrozenLauncherProcess = 'agentic-apps'
+$script:FrozenAppId = 'io.redevops.agentic-apps'
+$script:FrozenManufacturerKey = 'HKCU:\Software\redevops\Agentic Apps'
+
 # Provider key / endpoint variables that change what `bootstrap` prints (see agentic_os/mission/default_llm.py).
 $script:LlmEnvNames = @('GROQ_API_KEY', 'CEREBRAS_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY', 'XAI_API_KEY',
   'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'RDO_LLM_BASE_URL', 'RDO_LLM_API_KEY', 'RDO_LLM_MODEL',
   'MODEL_ENDPOINT', 'MODEL_NAME', 'RDO_LOCAL_MODEL_URL', 'RDO_LOCAL_MODEL')
 
-# ---- identity of the candidate under test ------------------------------------------------------------------------------------
-# The R0-prime line has its OWN names (product, launcher exe, identifier), distinct from the frozen v0.3.2 line. They are read from
-# packaging/identity.json (the "r0prime" block; "frozen" with $env:R0P_IDENTITY_LINE=frozen) in this order: $env:R0P_IDENTITY_FILE,
-# identity.json next to this file (copy it there when the kit runs off-repo), ..\..\identity.json (kit inside a checkout). When none exists
-# the FROZEN v0.3.2 values are used and every transcript header says so. Nothing else in the kit hard-codes a product or file name.
-function Get-KitIdentity {
+# ---- identity of the candidate under test: optional override from packaging/identity.json -----------------------------------------
+# The literals above are the R0-prime defaults (tests/test_r0prime_identity.py keeps them equal to packaging/identity.json). When an identity
+# file is found they are REPLACED from it, so a later rename needs no edit of the kit. Search order: $env:R0P_IDENTITY_FILE, identity.json next to
+# this file (copy it there when the kit runs off-repo), ..\..\identity.json (kit inside a checkout). $env:R0P_IDENTITY_LINE=frozen selects the
+# frozen v0.3.2 block (the default is "r0prime"). The sidecar name is not part of the R0-prime change and defaults to redevops-sidecar.
+$script:SidecarExe = 'redevops-sidecar.exe'
+$script:SidecarProcess = 'redevops-sidecar'
+$script:IdentitySource = 'built-in R0-prime literals (no identity.json found: copy packaging/identity.json next to Common.ps1 to follow a rename)'
+function Import-KitIdentity {
   $line = $(if ($env:R0P_IDENTITY_LINE) { $env:R0P_IDENTITY_LINE } else { 'r0prime' })
   $cands = @()
   if ($env:R0P_IDENTITY_FILE) { $cands += $env:R0P_IDENTITY_FILE }
@@ -30,25 +47,29 @@ function Get-KitIdentity {
     try {
       $j = Get-Content -LiteralPath $c -Raw | ConvertFrom-Json
       $b = $j.$line
-      if (-not $b) { continue }
-      $ident = [string]$b.bundle_identifier
-      $parts = $ident.Split('.')
-      return [pscustomobject]@{
-        Source = ("{0} [{1}]" -f (Resolve-Path -LiteralPath $c).Path, $line)
-        ProductName = [string]$b.product_name; Version = [string]$b.version
-        Identifier = $ident; PublisherKey = $(if ($parts.Count -gt 1) { $parts[1] } else { $ident })
-        LauncherName = [string]$b.main_binary_name; LauncherExe = ([string]$b.main_binary_name + '.exe')
-        SidecarName = [string]$b.sidecar_binary_name; SidecarExe = ([string]$b.sidecar_binary_name + '.exe')
+      if (-not $b -or -not $b.product_name -or -not $b.bundle_identifier -or -not $b.main_binary_name) { continue }
+      $parts = ([string]$b.bundle_identifier).Split('.')
+      $pub = $(if ($parts.Count -gt 1) { $parts[1] } else { [string]$b.bundle_identifier })
+      $script:ProductName = [string]$b.product_name
+      $script:AppVersion = [string]$b.version
+      $script:AppId = [string]$b.bundle_identifier
+      $script:LauncherProcess = [string]$b.main_binary_name
+      $script:LauncherExe = $script:LauncherProcess + '.exe'
+      $script:ManufacturerKey = 'HKCU:\Software\' + $pub + '\' + $script:ProductName
+      if ($b.sidecar_binary_name) { $script:SidecarProcess = [string]$b.sidecar_binary_name; $script:SidecarExe = $script:SidecarProcess + '.exe' }
+      $fz = $j.frozen
+      if ($fz -and $fz.product_name) {
+        $fparts = ([string]$fz.bundle_identifier).Split('.')
+        $script:FrozenProductName = [string]$fz.product_name; $script:FrozenAppId = [string]$fz.bundle_identifier
+        $script:FrozenLauncherProcess = [string]$fz.main_binary_name; $script:FrozenLauncherExe = $script:FrozenLauncherProcess + '.exe'
+        $script:FrozenManufacturerKey = 'HKCU:\Software\' + $fparts[1] + '\' + $script:FrozenProductName
       }
+      $script:IdentitySource = ("{0} [{1}]" -f (Resolve-Path -LiteralPath $c).Path, $line)
+      return
     } catch { }
   }
-  return [pscustomobject]@{
-    Source = 'built-in FROZEN v0.3.2 defaults (no identity.json found: copy packaging/identity.json next to Common.ps1 for the R0-prime line)'
-    ProductName = 'Agentic Apps'; Version = '0.1.0'; Identifier = 'io.redevops.agentic-apps'; PublisherKey = 'redevops'
-    LauncherName = 'agentic-apps'; LauncherExe = 'agentic-apps.exe'; SidecarName = 'redevops-sidecar'; SidecarExe = 'redevops-sidecar.exe'
-  }
 }
-$script:Id = Get-KitIdentity
+Import-KitIdentity
 
 function Write-Line([string]$Text) { Write-Host $Text }
 
@@ -68,8 +89,8 @@ function Get-Sha256([string]$Path) {
 function Write-EnvHeader {
   Write-Line '=== environment ==='
   Write-Line ("step              : {0}" -f $script:StepName)
-  Write-Line ("identity          : {0} {1}  launcher={2} sidecar={3} identifier={4}" -f $script:Id.ProductName, $script:Id.Version, $script:Id.LauncherExe, $script:Id.SidecarExe, $script:Id.Identifier)
-  Write-Line ("identity source   : {0}" -f $script:Id.Source)
+  Write-Line ("identity          : {0} {1}  launcher={2} sidecar={3} identifier={4}" -f $script:ProductName, $script:AppVersion, $script:LauncherExe, $script:SidecarExe, $script:AppId)
+  Write-Line ("identity source   : {0}" -f $script:IdentitySource)
   Write-Line ("hostname          : {0}" -f $env:COMPUTERNAME)
   try {
     $os = Get-CimInstance Win32_OperatingSystem
@@ -150,14 +171,14 @@ function Read-ExpectedHashes([string]$File) {
 }
 
 # ---- installed product discovery (read-only registry) --------------------------------------------------------------------
-function Get-InstalledProduct {
+function Get-InstalledProduct([string]$Name = $script:ProductName) {
   $roots = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall', 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall')
   $found = @()
   foreach ($r in $roots) {
     if (-not (Test-Path $r)) { continue }
     foreach ($k in (Get-ChildItem $r -ErrorAction SilentlyContinue)) {
       $p = Get-ItemProperty -LiteralPath $k.PSPath -ErrorAction SilentlyContinue
-      if ($p -and $p.PSObject.Properties['DisplayName'] -and $p.DisplayName -eq $script:Id.ProductName) {
+      if ($p -and $p.PSObject.Properties['DisplayName'] -and $p.DisplayName -eq $Name) {
         $pc = $null; if ($k.PSChildName -match '^\{[0-9A-Fa-f-]{36}\}$') { $pc = $k.PSChildName }
         $found += [pscustomobject]@{
           Hive = $r.Substring(0, 4); Key = $k.PSChildName; ProductCode = $pc; DisplayVersion = $p.DisplayVersion; Publisher = $p.Publisher
@@ -175,14 +196,14 @@ function Get-CandidateInstallDirs {
     if ($p.InstallLocation) { $dirs += $p.InstallLocation.TrimEnd('\') }
     if ($p.UninstallString -and $p.UninstallString -match '"?([A-Za-z]:\\[^"]+)\\uninstall\.exe') { $dirs += $Matches[1] }
   }
-  try { $v = (Get-ItemProperty ('HKCU:\Software\' + $script:Id.PublisherKey + '\' + $script:Id.ProductName) -ErrorAction Stop).'(default)'; if ($v) { $dirs += $v.TrimEnd('\') } } catch { }
-  $dirs += (Join-Path $env:ProgramFiles $script:Id.ProductName)
-  $dirs += (Join-Path $env:LOCALAPPDATA $script:Id.ProductName)
+  try { $v = (Get-ItemProperty $script:ManufacturerKey -ErrorAction Stop).'(default)'; if ($v) { $dirs += $v.TrimEnd('\') } } catch { }
+  $dirs += (Join-Path $env:ProgramFiles $script:ProductName)
+  $dirs += (Join-Path $env:LOCALAPPDATA $script:ProductName)
   return @($dirs | Where-Object { $_ } | Select-Object -Unique)
 }
 
 function Find-InstallDir {
-  foreach ($d in (Get-CandidateInstallDirs)) { if (Test-Path -LiteralPath (Join-Path $d $script:Id.SidecarExe)) { return $d } }
+  foreach ($d in (Get-CandidateInstallDirs)) { if (Test-Path -LiteralPath (Join-Path $d $script:SidecarExe)) { return $d } }
   return $null
 }
 

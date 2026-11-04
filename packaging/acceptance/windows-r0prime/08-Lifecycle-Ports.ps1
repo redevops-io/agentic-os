@@ -40,7 +40,7 @@ try {
   if (-not $InstallDir) { $st = Read-State; if ($st -and $st.installDir) { $InstallDir = $st.installDir } }
   if (-not $InstallDir) { $InstallDir = Find-InstallDir }
   if (-not $InstallDir) { Add-Result 'PRT-00' 'install directory' 'FAIL' 'not found: run 01-Install.ps1 first'; throw 'stop' }
-  $exe = Join-Path $InstallDir $script:Id.SidecarExe
+  $exe = Join-Path $InstallDir $script:SidecarExe
   if (-not (Test-Path -LiteralPath $exe)) { Add-Result 'PRT-00' 'sidecar exe present' 'FAIL' $exe; throw 'stop' }
 
   # ---- PRT-01: the stale listener on 8787 ----
