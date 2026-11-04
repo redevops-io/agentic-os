@@ -112,3 +112,14 @@ Not changed and still UNVERIFIED: the `--real` branch has never run against Azur
 | R5-05 provenance only self-consistency | committed release PUBLIC key (fingerprint derived with `ssh-keygen -lf` in every run), `tools/check-literals-against-sources.sh` (missing source = failure), loud "SELF-CONSISTENCY ONLY" warning in the default test, procedure gate G12 |
 | R5-06 tool pins | Windows scope adds `tool_python_packages_sha256` (names and versions); the procedure and the evidence state that library files are not hashed |
 | INFO | file descriptors 3 to 63 closed; helper uses an absolute `powershell.exe`; argv visibility of identity/profile names documented |
+
+## F. Round 6 changes (R6-01 to R6-07)
+
+| Finding | Change |
+|---|---|
+| R6-01 preset `R0P_REEXEC=1` skips the re-exec | no environment variable is consulted: the first statements replace PATH with a fixed value, the re-exec marker is a positional `--r0p-reexec` trusted only with privileged mode, directory of the script computed with parameter expansion and builtins (no `dirname`/`basename`), loud refusal of `BASH_ENV`/`ENV` in a non-privileged start, `--help` no longer prints the block; step 0 of the procedure lists what `./script`, `bash -p script`, `bash script` and `sh script` guarantee |
+| R6-02 replay decided from the claim only | "used" is decided from the claim directory AND the verified chain; a started scope without its claim is refused as tamper, also with `--allow-reuse` |
+| R6-03 python pin | `.pth` files bound (`tool_python_pth_sha256`), `sitecustomize`/`usercustomize` refused; `-I -S` evaluated and rejected (signify needs site-packages); fresh-venv rule documented |
+| R6-04 `R0P_POWERSHELL` in production | removed from the shipped helper (test copy only); `powershell.exe` from `cygpath -S`, `SYSTEMROOT` ignored |
+| R6-05 test switch keeps the inherited PATH in `--real` | the first block refuses the switch in `--real` before anything runs and never keeps the caller's PATH there |
+| R6-06/07 | documented: literals gate procedural, public key not read by the scripts, stale lock recovery, contention, `SHELLOPTS`/`PS4`/`sh script`; fds closed up to the soft limit (at most 1024); ledger example is a directory |

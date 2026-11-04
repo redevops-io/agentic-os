@@ -34,13 +34,39 @@
 #       [--dry-run | --self-test [--test-pubkey-out FILE] | --real --i-have-owner-authorization SHA --scope-file FILE --ledger DIR [--allow-reuse]]
 #       [--sig-out FILE] [--record-out FILE]
 #   sign_manifest_sshsig.sh --verify-only --manifest FILE --sig FILE --pubkey FILE.pub [--expected-fingerprint SHA256:...]
-# ---- FIRST EXECUTABLE LINES (round 5, R5-01/R5-03): nothing here is resolved through PATH and no function is called. Only reserved words, parameter
-# expansion and `builtin exec` run before the environment is replaced. The script is started by bash -p (shebang or the re-exec below): privileged
-# mode ignores BASH_ENV/ENV/SHELLOPTS/BASHOPTS/CDPATH/GLOBIGNORE and does NOT import exported shell functions. Unless the shell is already in that
-# state AND this is the re-executed copy, the script re-executes itself through /usr/bin/env -i with the allowlist below, fixed PATH and fds 3-9 closed.
-# Residual: a function named `builtin` in the caller's environment would run before this block when the script is started WITHOUT -p
-# (an attacker who controls the operator's shell environment already runs code as the operator).
-if [[ "${R0P_REEXEC:-}" != 1 || "$-" != *p* ]]; then
+
+#
+# ---- FIRST EXECUTABLE LINES (rounds 5 and 6): no external command and no function runs here; only reserved words, parameter expansion, assignments and
+# builtins do, and PATH is replaced by a fixed value FIRST, so even a start that skips the re-exec resolves nothing through the caller's PATH.
+# What is and is not guaranteed, by way of starting the script:
+#   ./script          shebang '#!/bin/bash -p': privileged mode (BASH_ENV/ENV/SHELLOPTS/BASHOPTS/CDPATH/GLOBIGNORE ignored, exported functions NOT imported).
+#                     Nothing of the caller's runs before this block; the script then re-executes itself through /usr/bin/env -i. RECOMMENDED.
+#   bash -p script    same.
+#   bash script, sh script   NOT privileged: BASH_ENV (bash) and SHELLOPTS+PS4, and an exported function named `builtin`, run BEFORE this block and cannot
+#                     be prevented by it. The script refuses loudly when BASH_ENV/ENV is set in such a start, and re-executes itself as above otherwise.
+#                     Use ./script.
+# The re-exec marker is a POSITIONAL argument (--r0p-reexec) that is only trusted together with privileged mode; no environment variable is consulted
+# or trusted, and a skipped re-exec still ends in r0p_scrub, which refuses any environment that is not the allowlist.
+R0P_ORIG_PATH="${PATH:-}"
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+R0P_STARTED_OK=""
+R0P_IS_REAL=""
+for R0P_A in "$@"; do
+  if [[ "$R0P_A" == --real ]]; then R0P_IS_REAL=1; fi
+done
+if [[ -n "$R0P_IS_REAL" && -n "${R0P_ALLOW_NONSYSTEM_TOOLS:-}" ]]; then   # R0P-TEST-PATCH-POINT-PRE
+  builtin echo "ERROR: R0P_ALLOW_NONSYSTEM_TOOLS (a unit-test switch) is refused in --real [first block]" >&2
+  builtin exit 1
+fi
+if [[ "${1:-}" == --r0p-reexec && "$-" == *p* ]]; then
+  shift
+  R0P_STARTED_OK=1
+fi
+if [[ -z "$R0P_STARTED_OK" ]]; then
+  if [[ "$-" != *p* && -n "${BASH_ENV:-}${ENV:-}" ]]; then
+    builtin echo "ERROR: BASH_ENV/ENV is set and the script was not started in privileged mode; start it as ./script (refusing)" >&2
+    builtin exit 1
+  fi
   IFS=$' \t\n'
   R0P_KEEP=()
   for R0P_V in R0P_ALLOW_NONSYSTEM_TOOLS; do
@@ -49,11 +75,20 @@ if [[ "${R0P_REEXEC:-}" != 1 || "$-" != *p* ]]; then
   for R0P_A in "$@"; do
     if [[ "$R0P_A" == --real && -n "${SSH_AUTH_SOCK:-}" ]]; then R0P_KEEP+=("SSH_AUTH_SOCK=$SSH_AUTH_SOCK"); fi
   done
-  R0P_PATHV="/usr/bin:/bin:/usr/sbin:/sbin"
-  if [[ "${R0P_ALLOW_NONSYSTEM_TOOLS:-}" == stub-test ]]; then R0P_PATHV="${PATH:-$R0P_PATHV}"; fi
+  R0P_PATHV="$PATH"
+  if [[ -z "$R0P_IS_REAL" && "${R0P_ALLOW_NONSYSTEM_TOOLS:-}" == stub-test ]]; then R0P_PATHV="$R0P_ORIG_PATH"; fi   # R0P-TEST-PATCH-POINT-PATH
   builtin exec 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- /usr/bin/env -i "PATH=$R0P_PATHV" "HOME=${HOME:-/nonexistent}" LANG=C LC_ALL=C "TERM=${TERM:-dumb}" \
-       ${R0P_KEEP[@]+"${R0P_KEEP[@]}"} R0P_REEXEC=1 /bin/bash -p "${BASH_SOURCE[0]}" "$@"
+       ${R0P_KEEP[@]+"${R0P_KEEP[@]}"} /bin/bash -p "${BASH_SOURCE[0]}" --r0p-reexec "$@"
 fi
+# the directory of the script without dirname/basename
+R0P_SP="${BASH_SOURCE[0]}"
+case "$R0P_SP" in
+  */*) R0P_SD="${R0P_SP%/*}"; [[ -n "$R0P_SD" ]] || R0P_SD="/";;
+  *) R0P_SD=".";;
+esac
+SELF_DIR="$(builtin cd "$R0P_SD" && builtin pwd -P)"
+SELF_NAME="${R0P_SP##*/}"
+SELF="$SELF_DIR/$SELF_NAME"
 case "$-" in *x*) echo "ERROR: xtrace is on; refusing" >&2; exit 1;; esac
 set +x
 set -euo pipefail
@@ -65,8 +100,6 @@ PRINCIPAL="redevops-qa-release"
 # The PUBLISHED fingerprint of the existing release key (SIGNING_REQUEST.md, VERIFY.md; `ssh-keygen -lf` on its public key prints exactly this:
 # "SHA256:" plus 43 characters). --self-test refuses a key whose fingerprint EQUALS it; --real records whether the key matches it.
 RELEASE_KEY_FPR="SHA256:wUoE8wxKJpmtTH7GqWXMIl9/BW0SH1Isc5/w9HEiwqA"
-SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
-SELF_DIR="$(dirname "$SELF")"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 . "$SELF_DIR/signing-common.sh"
@@ -74,7 +107,6 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 EXTRA=" R0P_ALLOW_NONSYSTEM_TOOLS "
 for a in "$@"; do if [ "$a" = "--real" ]; then EXTRA="$EXTRA SSH_AUTH_SOCK "; fi; done
 r0p_scrub "$EXTRA" "$@"
-unset R0P_REEXEC
 r0p_fix_path ""
 export LC_ALL=C
 COMMON_SHA="$(r0p_sha "$SELF_DIR/signing-common.sh")"

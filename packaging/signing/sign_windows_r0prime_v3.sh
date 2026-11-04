@@ -54,32 +54,64 @@
 #        [--ledger DIR] [--allow-reuse] [--distribution] [--container-listing FILE]
 #        [--name "Application name"] [--url URL] [--throwaway-dir DIR] [--tsa-url LOCAL_URL]
 #        [--tools-dir DIR] [--ms-root-pem FILE] [--python FILE] [--verifier FILE]
-# ---- FIRST EXECUTABLE LINES (round 5, R5-01/R5-03): nothing here is resolved through PATH and no function is called. Only reserved words, parameter
-# expansion and `builtin exec` run before the environment is replaced. The script is started by bash -p (shebang or the re-exec below): privileged
-# mode ignores BASH_ENV/ENV/SHELLOPTS/BASHOPTS/CDPATH/GLOBIGNORE and does NOT import exported shell functions. Unless the shell is already in that
-# state AND this is the re-executed copy, the script re-executes itself through /usr/bin/env -i with the allowlist below, fixed PATH and fds 3-9 closed.
-# Residual: a function named `builtin` in the caller's environment would run before this block when the script is started WITHOUT -p
-# (an attacker who controls the operator's shell environment already runs code as the operator).
-if [[ "${R0P_REEXEC:-}" != 1 || "$-" != *p* ]]; then
+
+#
+# ---- FIRST EXECUTABLE LINES (rounds 5 and 6): no external command and no function runs here; only reserved words, parameter expansion, assignments and
+# builtins do, and PATH is replaced by a fixed value FIRST, so even a start that skips the re-exec resolves nothing through the caller's PATH.
+# What is and is not guaranteed, by way of starting the script:
+#   ./script          shebang '#!/bin/bash -p': privileged mode (BASH_ENV/ENV/SHELLOPTS/BASHOPTS/CDPATH/GLOBIGNORE ignored, exported functions NOT imported).
+#                     Nothing of the caller's runs before this block; the script then re-executes itself through /usr/bin/env -i. RECOMMENDED.
+#   bash -p script    same.
+#   bash script, sh script   NOT privileged: BASH_ENV (bash) and SHELLOPTS+PS4, and an exported function named `builtin`, run BEFORE this block and cannot
+#                     be prevented by it. The script refuses loudly when BASH_ENV/ENV is set in such a start, and re-executes itself as above otherwise.
+#                     Use ./script.
+# The re-exec marker is a POSITIONAL argument (--r0p-reexec) that is only trusted together with privileged mode; no environment variable is consulted
+# or trusted, and a skipped re-exec still ends in r0p_scrub, which refuses any environment that is not the allowlist.
+R0P_ORIG_PATH="${PATH:-}"
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+R0P_STARTED_OK=""
+R0P_IS_REAL=""
+for R0P_A in "$@"; do
+  if [[ "$R0P_A" == --real ]]; then R0P_IS_REAL=1; fi
+done
+if [[ -n "$R0P_IS_REAL" && -n "${R0P_ALLOW_NONSYSTEM_TOOLS:-}" ]]; then   # R0P-TEST-PATCH-POINT-PRE
+  builtin echo "ERROR: R0P_ALLOW_NONSYSTEM_TOOLS (a unit-test switch) is refused in --real [first block]" >&2
+  builtin exit 1
+fi
+if [[ "${1:-}" == --r0p-reexec && "$-" == *p* ]]; then
+  shift
+  R0P_STARTED_OK=1
+fi
+if [[ -z "$R0P_STARTED_OK" ]]; then
+  if [[ "$-" != *p* && -n "${BASH_ENV:-}${ENV:-}" ]]; then
+    builtin echo "ERROR: BASH_ENV/ENV is set and the script was not started in privileged mode; start it as ./script (refusing)" >&2
+    builtin exit 1
+  fi
   IFS=$' \t\n'
   R0P_KEEP=()
   for R0P_V in R0P_AZ_ENDPOINT R0P_AZ_ACCOUNT R0P_AZ_PROFILE R0P_AZ_EXPECTED_CN R0P_SIGN_TIMEOUT_SECONDS R0P_ALLOW_NONSYSTEM_TOOLS R0P_TOOLS_DIR; do
     if [[ -n "${!R0P_V+x}" ]]; then R0P_KEEP+=("$R0P_V=${!R0P_V}"); fi
   done
-  R0P_PATHV="/usr/bin:/bin:/usr/sbin:/sbin"
-  if [[ "${R0P_ALLOW_NONSYSTEM_TOOLS:-}" == stub-test ]]; then R0P_PATHV="${PATH:-$R0P_PATHV}"; fi
+  R0P_PATHV="$PATH"
+  if [[ -z "$R0P_IS_REAL" && "${R0P_ALLOW_NONSYSTEM_TOOLS:-}" == stub-test ]]; then R0P_PATHV="$R0P_ORIG_PATH"; fi   # R0P-TEST-PATCH-POINT-PATH
   builtin exec 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- /usr/bin/env -i "PATH=$R0P_PATHV" "HOME=${HOME:-/nonexistent}" LANG=C LC_ALL=C "TERM=${TERM:-dumb}" \
-       ${R0P_KEEP[@]+"${R0P_KEEP[@]}"} R0P_REEXEC=1 /bin/bash -p "${BASH_SOURCE[0]}" "$@"
+       ${R0P_KEEP[@]+"${R0P_KEEP[@]}"} /bin/bash -p "${BASH_SOURCE[0]}" --r0p-reexec "$@"
 fi
+# the directory of the script without dirname/basename
+R0P_SP="${BASH_SOURCE[0]}"
+case "$R0P_SP" in
+  */*) R0P_SD="${R0P_SP%/*}"; [[ -n "$R0P_SD" ]] || R0P_SD="/";;
+  *) R0P_SD=".";;
+esac
+SELF_DIR="$(builtin cd "$R0P_SD" && builtin pwd -P)"
+SELF_NAME="${R0P_SP##*/}"
+SELF="$SELF_DIR/$SELF_NAME"
 case "$-" in *x*) echo "ERROR: xtrace is on; refusing (it could print secrets)" >&2; exit 1;; esac
 set +x
 set -euo pipefail
 umask 077
 
 SCRIPT_VERSION="r0prime-win-3.1"
-SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
-SELF_DIR="$(dirname "$SELF")"
-SELF_NAME="$(basename "$SELF")"
 FAILED_MAGIC="FAILED-ATTEMPT sign_windows_r0prime_v3"
 
 
@@ -89,7 +121,6 @@ die() { FAIL_REASON="$*"; echo "ERROR: $*" >&2; exit 2; }
 # shared safety functions (their sha256 is bound by the scope file); the environment must BE the allowlist: no variable can skip this
 . "$SELF_DIR/signing-common.sh"
 r0p_scrub " R0P_AZ_ENDPOINT R0P_AZ_ACCOUNT R0P_AZ_PROFILE R0P_AZ_EXPECTED_CN R0P_SIGN_TIMEOUT_SECONDS R0P_ALLOW_NONSYSTEM_TOOLS R0P_TOOLS_DIR " "$@"
-unset R0P_REEXEC
 r0p_fix_path "${R0P_TOOLS_DIR:-}"      # fixed system PATH + the owner's validated tools directory (stub-test: inherited PATH, unit tests only)
 export LC_ALL=C
 COMMON_SHA="$(r0p_sha "$SELF_DIR/signing-common.sh")"
@@ -264,7 +295,7 @@ if [ "$MODE" = real ]; then
   r0p_mktmp
   r0p_scope_load "$SCOPE_FILE" "$AUTH_SHA" scope_version not_before not_after script_sha256 common_sha256 verifier_sha256 identity_json_sha256 \
     stage inputs_sha256 az_endpoint az_account az_profile expected_cn gate_sha256 gate_tool_sha256 distribution evidence_manifest_sha256 \
-    build_commit procedure_commit tool_az_sha256 tool_java_sha256 tool_python_sha256 tool_python_packages_sha256 tool_osslsigncode_sha256 container_listing_sha256
+    build_commit procedure_commit tool_az_sha256 tool_java_sha256 tool_python_sha256 tool_python_packages_sha256 tool_python_pth_sha256 tool_osslsigncode_sha256 container_listing_sha256
   [ "$S_scope_version" = 2 ] || die "scope file: scope_version must be 2 (v3.1 format; see AUTHORIZATION-TEMPLATE.md)"
   r0p_window_check "$S_not_before" "$S_not_after"
   [ "$S_script_sha256" = "$SELF_SHA" ] || die "scope file: script_sha256 does not match this script"
@@ -322,6 +353,16 @@ if [ "$PLAN" = 0 ]; then
     # (names and versions only; the files of the libraries are NOT hashed: documented residual, round 5 R5-06)
     PKGS="$("$PY_ABS" -I -c 'import importlib.metadata as m; print("\n".join(sorted("%s==%s" % (d.metadata["Name"].lower(), d.version) for d in m.distributions())))')" || die "could not list the python distributions"
     PKGS_SHA="$(printf '%s\n' "$PKGS" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')"
+    # interpreter start-up hooks (round 6, R6-03): `python -I` still runs sitecustomize/usercustomize and .pth files of the environment, and `-S` would
+    # remove site-packages (signify) altogether. So: no sitecustomize/usercustomize anywhere under <venv>/lib, and the sha256 of every .pth is bound.
+    VENV_ROOT="$(cd "$(dirname "$PY_ABS")/.." 2>/dev/null && pwd -P)" || VENV_ROOT=""
+    if [ -n "$VENV_ROOT" ] && [ -d "$VENV_ROOT/lib" ]; then
+      HOOKS="$(/usr/bin/find "$VENV_ROOT/lib" -maxdepth 5 \( -name sitecustomize.py -o -name usercustomize.py -o -name 'sitecustomize.*.py' \) 2>/dev/null | head -3)"
+      [ -z "$HOOKS" ] || die "the python environment has an interpreter start-up hook that runs inside the verifier: $HOOKS"
+      PTH_LIST="$(cd "$VENV_ROOT" && /usr/bin/find lib -maxdepth 5 -name '*.pth' -type f 2>/dev/null | LC_ALL=C /usr/bin/sort | while IFS= read -r pf; do printf '%s %s\n' "$pf" "$(sha "$pf")"; done)"
+    else PTH_LIST=""; fi
+    PTH_SHA="$(printf '%s\n' "$PTH_LIST" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')"
+    [ "$PTH_SHA" = "$S_tool_python_pth_sha256" ] || die "scope file: tool_python_pth_sha256 does not match the .pth files of the python environment ($PTH_SHA)"
     [ "$PKGS_SHA" = "$S_tool_python_packages_sha256" ] || die "scope file: tool_python_packages_sha256 does not match the installed python distributions ($PKGS_SHA)"
     if [ -n "$OSSL" ]; then [ "$(sha "$OSSL")" = "$S_tool_osslsigncode_sha256" ] || die "scope file: tool_osslsigncode_sha256 does not match osslsigncode"
     else [ "$S_tool_osslsigncode_sha256" = none ] || die "scope file: tool_osslsigncode_sha256 is not 'none' but osslsigncode is absent"; fi
@@ -630,7 +671,7 @@ EVID_TMP="$OUTDIR/EVIDENCE.txt.tmp"
     echo "authorization:   scope file sha256 $AUTH_SHA (window $S_not_before .. $S_not_after UTC); TRIPWIRE against mistakes, not an authentication"
     echo "scope binds:     identity.json $S_identity_json_sha256; common $S_common_sha256; gate $S_gate_sha256; gate tool $S_gate_tool_sha256"
     echo "scope binds:     build commit $S_build_commit; procedure commit $S_procedure_commit (recorded, not verified); evidence manifest $S_evidence_manifest_sha256"
-    echo "tools (sha256):  az $S_tool_az_sha256; java $S_tool_java_sha256; python $S_tool_python_sha256; python packages (names+versions) $S_tool_python_packages_sha256; osslsigncode $S_tool_osslsigncode_sha256"
+    echo "tools (sha256):  az $S_tool_az_sha256; java $S_tool_java_sha256; python $S_tool_python_sha256; python packages (names+versions) $S_tool_python_packages_sha256; .pth files $S_tool_python_pth_sha256; osslsigncode $S_tool_osslsigncode_sha256"
     echo "tool pins:       executables and the python package list only; library files, the JDK tree and az's modules are NOT hashed (residual)"
     echo "ledger:          $LEDGER (--allow-reuse=$ALLOW_REUSE)"
     if [ "$DISTRIBUTION" = 1 ]; then echo "distribution:    gate enforced (--distribution) and passed"; else echo "distribution:    PRIVATE-CANDIDATE signing: signing does NOT imply permission to distribute"; fi

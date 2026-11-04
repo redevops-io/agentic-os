@@ -126,10 +126,11 @@ tool_az_sha256=<sha256 of the az executable the fixed PATH + R0P_TOOLS_DIR resol
 tool_java_sha256=<sha256 of the java executable>
 tool_python_sha256=<sha256 of the python executable given to --python>
 tool_python_packages_sha256=<sha256 of the sorted "name==version" list of the python distributions, one per line, with a final newline>
+tool_python_pth_sha256=<sha256 of the sorted "<relative path> <sha256>" lines of every .pth file under <venv>/lib, one per line, with a final newline; the hash of a single newline when there is none>
 tool_osslsigncode_sha256=<sha256 of osslsigncode, or none>
 container_listing_sha256=none
 ```
-(These pins cover executables and the python package NAMES and VERSIONS only; library files are not hashed: procedure R12.) Also supply `R0P_TOOLS_DIR` (absolute, yours, not writable by others) when az/java/python live outside the system directories; pass `--ledger <absolute path>`.
+(Build the python venv fresh from the pinned wheels (with hashes) on the day of the run; an old venv is not reused. These pins cover executables and the python package NAMES and VERSIONS only; library files are not hashed: procedure R12.) Also supply `R0P_TOOLS_DIR` (absolute, yours, not writable by others) when az/java/python live outside the system directories; pass `--ledger <absolute path of a DIRECTORY; the script creates it>`.
 You are logged in with `az login` yourself before the run; the script asks `az` for one access token, keeps it in a 0600 file for the duration of the Jsign call and removes it.
 
 Signed: ______________________  Date: ____-__-__

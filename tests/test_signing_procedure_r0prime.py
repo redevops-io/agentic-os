@@ -35,7 +35,7 @@ SIGN = ROOT / "packaging" / "signing"
 MAC = SIGN / "sign_and_notarize_r0prime_macos_v3.sh"
 WIN = SIGN / "sign_windows_r0prime_v3.sh"
 SSH = SIGN / "sign_manifest_sshsig.sh"
-HELPER = SIGN / "r0prime_win_signcommand.sh"
+HELPER_PROD = SIGN / "r0prime_win_signcommand.sh"
 VERIFIER = SIGN / "verify_signature_v2.py"
 COMMON = SIGN / "signing-common.sh"
 RELEASE_FPR = "SHA256:wUoE8wxKJpmtTH7GqWXMIl9/BW0SH1Isc5/w9HEiwqA"      # as published in SIGNING_REQUEST.md / VERIFY.md (provenance: LITERALS-PROVENANCE.json)
@@ -93,12 +93,26 @@ def make_tree(dest: Path) -> Path:
     for src in (IDJSON, GATE_JSON, GATE_PY):
         shutil.copy(src, dest / src.name)
     shutil.copy(ENT, dest / "macos" / ENT.name)
-    c = dest / "signing" / "signing-common.sh"
-    lines = c.read_text().splitlines(keepends=True)
-    out = [("r0p_no_test_switch() { :; }   # TEST COPY: the production library refuses the switch in --real\n" if "R0P-TEST-PATCH-POINT" in ln else ln) for ln in lines]
-    assert out != lines
-    c.write_text("".join(out))
+    def patch(path, mapping):
+        lines = path.read_text().splitlines(keepends=True)
+        out = []
+        for ln in lines:
+            for marker, new in mapping.items():
+                if marker in ln:
+                    ln = new
+            out.append(ln)
+        assert out != lines, path
+        path.write_text("".join(out))
+
+    patch(dest / "signing" / "signing-common.sh", {"R0P-TEST-PATCH-POINT\n": "r0p_no_test_switch() { :; }   # TEST COPY: the production library refuses the switch in --real\n"})
+    for name in (MAC.name, WIN.name, SSH.name):       # the first block of each script refuses the switch in --real and drops the inherited PATH in --real: not in the test copies
+        patch(dest / "signing" / name, {"R0P-TEST-PATCH-POINT-PRE": "if false; then   # TEST COPY\n",
+                                        "R0P-TEST-PATCH-POINT-PATH": '  if [[ "${R0P_ALLOW_NONSYSTEM_TOOLS:-}" == stub-test ]]; then R0P_PATHV="$R0P_ORIG_PATH"; fi   # TEST COPY\n'})
+    patch(dest / "signing" / HELPER_PROD.name, {"R0P-TEST-PATCH-POINT-PS": 'PS_EXE="${R0P_POWERSHELL:-}"   # TEST COPY: the shipped helper has no override\n'})
     return dest
+
+
+HELPER = make_tree(Path(__import__("tempfile").mkdtemp(prefix="r0p-helper-")) / "t") / "signing" / HELPER_PROD.name       # patched copy (see make_tree)
 
 
 def ledger_text(d: Path) -> str:
@@ -130,7 +144,7 @@ def code_of(script: Path) -> str:
     return "\n".join(out)
 
 
-SCRIPTS = [MAC, WIN, SSH, HELPER, COMMON, SIGN / "tools" / "make_adhoc_fixture.sh"]
+SCRIPTS = [MAC, WIN, SSH, HELPER_PROD, COMMON, SIGN / "tools" / "make_adhoc_fixture.sh"]
 
 
 @pytest.mark.parametrize("script", SCRIPTS, ids=lambda p: p.name)
@@ -146,7 +160,7 @@ def test_script_syntax_and_static_rules(script):
     assert not re.search(r"(^|[;&|(\s])security\s+(find|add|delete|import|unlock|list|dump|cms)", code), "the keychain tool is never called"
     if script != COMMON:
         assert "umask 077" in code
-    if script in (MAC, WIN, SSH, HELPER):
+    if script in (MAC, WIN, SSH, HELPER_PROD):
         assert 'case "$-" in *x*)' in code, "xtrace refusal"
     if script in (MAC, WIN, SSH):
         assert "R0P_SCRUBBED" not in code, "no marker variable can skip the environment scrub (round 4, R4-05)"
@@ -157,7 +171,7 @@ def test_shellcheck_if_available():
     sc = shutil.which("shellcheck")
     if not sc:
         pytest.skip("shellcheck is not installed (not installed by this suite)")
-    r = subprocess.run([sc, "-S", "warning", "-s", "bash", str(MAC), str(WIN), str(SSH), str(HELPER)], capture_output=True, text=True)
+    r = subprocess.run([sc, "-S", "warning", "-s", "bash", str(MAC), str(WIN), str(SSH), str(HELPER_PROD)], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout
 
 
@@ -1537,7 +1551,7 @@ class Win:
              "gate_sha256": sha_file(GATE_JSON), "gate_tool_sha256": sha_file(GATE_PY), "distribution": "no",
              "evidence_manifest_sha256": "e" * 64, "build_commit": "b" * 40, "procedure_commit": "c" * 40,
              "tool_az_sha256": sha_file(self.stubs / "az"), "tool_java_sha256": sha_file(self.stubs / "java"),
-             "tool_python_sha256": sha_file(self.stubs / "py"), "tool_python_packages_sha256": sha_bytes(b"signify==0.0-stub\n"),
+             "tool_python_sha256": sha_file(self.stubs / "py"), "tool_python_packages_sha256": sha_bytes(b"signify==0.0-stub\n"), "tool_python_pth_sha256": sha_bytes(b"\n"),
              "tool_osslsigncode_sha256": "none",
              "container_listing_sha256": "none" if st == "inner" else sha_bytes(LISTING_TEXT)}
         d.update(over)
@@ -2094,19 +2108,26 @@ def test_r5_01_exported_functions_cannot_blind_or_run_before_the_scrub(tmp_path)
 
 def test_r5_01_the_environment_check_cannot_be_blinded_and_a_preset_marker_is_not_trusted(mac, tmp_path):
     marker = tmp_path / "HOSTILE.log"
-    # the privileged copy refuses a dirty environment itself: start it directly in the state the re-exec would produce, with extra variables
-    env = clean_env(mac.home, [mac.stubs], R0P_REEXEC="1", FAKE_TOKEN="x", R0P_ALLOW_NONSYSTEM_TOOLS="stub-test")
-    r = run(["/bin/bash", "-p", mac.script, "--input-dmg", mac.dmg, "--expected-sha256", sha_file(mac.dmg), "--out-dir", mac.out], env)
+    argv = ["--input-dmg", mac.dmg, "--expected-sha256", sha_file(mac.dmg), "--out-dir", mac.out]
+    # the privileged copy refuses a dirty environment itself: started with the positional marker in privileged mode but with extra variables
+    env = clean_env(mac.home, [mac.stubs], FAKE_TOKEN="x", R0P_ALLOW_NONSYSTEM_TOOLS="stub-test")
+    r = run(["/bin/bash", "-p", mac.script, "--r0p-reexec", *argv], env)
     assert r.returncode == 1 and "not the allowlist" in r.stderr and "FAKE_TOKEN" in r.stderr
-    # a preset marker without privileged mode is ignored: the script re-executes anyway
+    # the positional marker without privileged mode is NOT trusted, and a preset R0P_REEXEC/R0P_SCRUBBED means nothing
     env = {**clean_env(mac.home, [mac.stubs], R0P_REEXEC="1", R0P_SCRUBBED="1"), "FAKE_TOKEN": "x", **hostile_env_items(marker)}
-    r = run(["/bin/bash", mac.script, "--input-dmg", mac.dmg, "--expected-sha256", sha_file(mac.dmg), "--out-dir", mac.out], env)
+    r = run(["/bin/bash", mac.script, "--r0p-reexec", *argv], env)
+    assert r.returncode == 2 and "unknown argument: --r0p-reexec" in r.stderr and not marker.exists(), (r.stdout, r.stderr)   # re-executed, the stray marker is an ordinary (unknown) argument
+    r = run(["/bin/bash", mac.script, *argv], env)
     assert r.returncode == 0 and not marker.exists(), (r.stdout, r.stderr)
     # an exported function that survives in the environment of the privileged copy is refused
-    env = clean_env(mac.home, [], R0P_REEXEC="1")
+    env = clean_env(mac.home, [])
     env["BASH_FUNC_uname%%"] = "() { echo x >> " + str(marker) + "; }"
-    r = run(["/bin/bash", "-p", mac.script, "--input-dmg", mac.dmg, "--expected-sha256", sha_file(mac.dmg), "--out-dir", mac.out], env)
+    r = run(["/bin/bash", "-p", mac.script, "--r0p-reexec", *argv], env)
     assert r.returncode == 1 and "exported-function" in r.stderr and not marker.exists()
+    # a start in privileged mode WITHOUT the marker still re-executes (the old R0P_REEXEC=1 shortcut is gone)
+    env = {**clean_env(mac.home, [mac.stubs], R0P_REEXEC="1"), "FAKE_TOKEN": "x"}
+    r = run(["/bin/bash", "-p", mac.script, *argv], env)
+    assert r.returncode == 0, (r.stdout, r.stderr)
 
 
 def test_r5_01_direct_execution_uses_privileged_mode_so_bash_env_is_not_read(mac, tmp_path):
@@ -2143,16 +2164,20 @@ def test_r5_03_nothing_path_resolved_runs_before_the_scrub(tmp_path):
     assert not log.exists()
     # static: the first executable lines resolve nothing through PATH
     for s in (MAC, WIN, SSH):
-        head = s.read_text().split("R0P_REEXEC=1 /bin/bash -p", 1)[0]
+        head = s.read_text().split("# the directory of the script without dirname/basename", 1)[0]
         code = "\n".join(ln for ln in head.splitlines() if not ln.lstrip().startswith("#"))
         for word in ("dirname", "basename", "command -v", "compgen", "declare", "uname", "$(", "`"):
             assert word not in code, (s.name, word)
         assert "builtin exec" in code and "/usr/bin/env -i" in code
+        assert code.lstrip().startswith('R0P_ORIG_PATH="${PATH:-}"\nPATH=/usr/bin:/bin:/usr/sbin:/sbin'), "PATH is replaced by the first statements"
+        selfblock = s.read_text().split("# the directory of the script without dirname/basename", 1)[1].split('case "$-" in *x*)', 1)[0]
+        for word in ("dirname", "basename"):
+            assert word not in selfblock, (s.name, word)
 
 
 def test_r5_inherited_file_descriptors_are_closed(mac):
     fds = []
-    for n in (9, 12, 20):
+    for n in (9, 12, 20, 64, 100, 200):
         fd = os.open(__file__, os.O_RDONLY)
         os.dup2(fd, n)
         os.close(fd)
@@ -2165,7 +2190,7 @@ def test_r5_inherited_file_descriptors_are_closed(mac):
             os.close(n)
     assert r.returncode == 0, r.stderr
     seen = set(" ".join((mac.state / "codesign-fds").read_text().split("\n")).split())
-    assert not (seen & {"9", "12", "20"}), seen
+    assert not (seen & {"9", "12", "20", "64", "100", "200"}), seen
 
 
 @pytest.mark.parametrize("value", ["stub-test", "1", "anything"])
@@ -2388,3 +2413,173 @@ def test_info_the_helper_takes_powershell_from_an_absolute_path_not_from_path(tm
     r = run(["/bin/bash", HELPER, exe], e)
     assert r.returncode == 1 and "cannot locate powershell.exe" in r.stderr
     assert exe.read_bytes() == b"MZ launcher"
+
+
+# ====================================================================================================================
+# round 6 regression tests
+# ====================================================================================================================
+def _poison_dir(tmp_path: Path, log: Path, alt: Path = None) -> Path:
+    poison = tmp_path / "poison6"
+    poison.mkdir()
+    names = ("dirname", "basename", "uname", "id", "shasum", "cat", "sed", "awk", "tr", "head", "date", "stat", "find", "ls", "wc", "grep", "mktemp", "plutil", "python3", "cygpath", "sort")
+    for c in names:
+        body = f"#!/bin/bash\necho {c} \"$SSH_AUTH_SOCK\" >> {log}\n"
+        if c == "dirname" and alt is not None:
+            body += f"echo {alt}; exit 0\n"                         # answers another directory: the script must never source a library from there
+        else:
+            body += f"exec /usr/bin/{c} \"$@\"\n"
+        write_exec(poison / c, body)
+    return poison
+
+
+@pytest.mark.parametrize("start", ["direct", "bash-p", "bash", "sh"])
+def test_r6_01_a_preset_reexec_marker_and_a_hostile_path_run_nothing_before_the_scrub(tmp_path, start):
+    for n in "mws":
+        (tmp_path / n).mkdir()
+    mac, win, ssh = Mac(tmp_path / "m"), Win(tmp_path / "w"), Ssh(tmp_path / "s")
+    log = tmp_path / "poison.log"
+    alt = tmp_path / "alt"
+    alt.mkdir()
+    (alt / "signing-common.sh").write_text(f'echo ATTACKER-LIBRARY >> {tmp_path}/attacker.log\n')
+    poison = _poison_dir(tmp_path, log, alt)
+    p, h = win.inner()
+    cases = [
+        (MAC, ["--input-dmg", mac.dmg, "--expected-sha256", sha_file(mac.dmg), "--out-dir", mac.work / "o"]),
+        (WIN, ["--stage", "inner", "--input", p, "--sha256", h, "--outdir", win.tmp / "o"]),
+        (SSH, ["--manifest", ssh.manifest, "--pubkey", ssh.pub, "--expected-sha256", ssh.digest()]),
+    ]
+    prefix = {"direct": [], "bash-p": ["/bin/bash", "-p"], "bash": ["/bin/bash"], "sh": ["/bin/sh"]}[start]
+    for script, args in cases:
+        for extra in ({}, {"R0P_REEXEC": "1"}, {"R0P_REEXEC": "1", "R0P_SCRUBBED": "1", "R0P_STARTED_OK": "1"}):
+            env = {"PATH": f"{poison}:/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(mac.home), "LANG": "C", "SSH_AUTH_SOCK": "/nonexistent/sock", **extra}
+            r = run([*(str(x) for x in prefix), str(script), *[str(a) for a in args]], env)
+            assert r.returncode == 0, (start, script.name, extra, r.stderr)
+            assert not log.exists(), (start, script.name, extra, "PATH-resolved tools ran: " + (log.read_text() if log.exists() else ""))
+            assert not (tmp_path / "attacker.log").exists(), "an attacker library was sourced"
+            for d in ("o",):
+                pass
+            # each run needs a fresh output directory
+            for o in (mac.work / "o", win.tmp / "o"):
+                if o.exists():
+                    for f in sorted(o.rglob("*"), key=lambda q: -len(q.parts)):
+                        f.unlink() if (f.is_file() or f.is_symlink()) else f.rmdir()
+                    o.rmdir()
+
+
+def test_r6_01_a_privileged_start_that_skips_the_reexec_still_runs_nothing_hostile(tmp_path):
+    for n in "mws":
+        (tmp_path / n).mkdir()
+    mac, win, ssh = Mac(tmp_path / "m"), Win(tmp_path / "w"), Ssh(tmp_path / "s")
+    log = tmp_path / "poison.log"
+    alt = tmp_path / "alt"
+    alt.mkdir()
+    (alt / "signing-common.sh").write_text(f'echo ATTACKER-LIBRARY >> {tmp_path}/attacker.log\n')
+    poison = _poison_dir(tmp_path, log, alt)
+    p, h = win.inner()
+    for script, args in ((MAC, [mac.dmg, sha_file(mac.dmg), mac.work / "o"]), (WIN, [p, h, win.tmp / "o"]), (SSH, [ssh.manifest, ssh.pub, ssh.digest()])):
+        a = {MAC: ["--input-dmg", args[0], "--expected-sha256", args[1], "--out-dir", args[2]],
+             WIN: ["--stage", "inner", "--input", args[0], "--sha256", args[1], "--outdir", args[2]],
+             SSH: ["--manifest", args[0], "--pubkey", args[1], "--expected-sha256", args[2]]}[script]
+        # the attacker starts the script in privileged mode with the positional marker, a preset R0P_REEXEC and a dirty environment
+        env = {"PATH": f"{poison}:/usr/bin:/bin", "HOME": str(mac.home), "LANG": "C", "R0P_REEXEC": "1", "FAKE_SECRET": "x", "SSH_AUTH_SOCK": "/nonexistent/s"}
+        r = run(["/bin/bash", "-p", str(script), "--r0p-reexec", *[str(x) for x in a]], env)
+        assert r.returncode == 1 and "not the allowlist" in r.stderr, (script.name, r.stderr)
+        assert not log.exists() and not (tmp_path / "attacker.log").exists(), (script.name, "hostile code ran before the refusal")
+
+
+def test_r6_01_non_privileged_starts_with_bash_env_are_refused_loudly_and_direct_start_is_clean(tmp_path):
+    (tmp_path / "m").mkdir()
+    mac = Mac(tmp_path / "m")
+    hook = tmp_path / "benv.sh"
+    marker = tmp_path / "ran"
+    hook.write_text(f"echo x >> {marker}\n")
+    argv = ["--input-dmg", mac.dmg, "--expected-sha256", sha_file(mac.dmg), "--out-dir", mac.out]
+    r = run(["/bin/bash", MAC, *argv], {**clean_env(mac.home), "BASH_ENV": str(hook)})
+    assert r.returncode == 1 and "not started in privileged mode" in r.stderr and "./script" in r.stderr
+    # the hook ran in the first shell (nothing in the script can prevent that): the doc says so; the direct start never reads it
+    marker.unlink(missing_ok=True)
+    r = run([str(MAC), *argv], {**clean_env(mac.home), "BASH_ENV": str(hook)})
+    assert r.returncode == 0 and not marker.exists()
+    doc = (SIGN / "SIGNING-PROCEDURE-R0PRIME.md").read_text()
+    for needle in ("`./script`", "`bash -p script`", "`bash script`", "`sh script`", "SHELLOPTS", "PS4", "`builtin`"):
+        assert needle in doc, needle
+
+
+def test_r6_01_help_does_not_print_the_first_block_comments():
+    for s in (MAC, WIN, SSH):
+        r = run([str(s), "--help"], clean_env(Path("/tmp")))
+        assert r.returncode in (0, 2) and "Usage:" in (r.stdout + r.stderr)
+        assert "FIRST EXECUTABLE" not in r.stdout + r.stderr and "R0P-TEST-PATCH" not in r.stdout + r.stderr
+
+
+def test_r6_02_a_removed_claim_directory_is_detected_from_the_chain(tmp_path):
+    led = tmp_path / "ledger"
+    assert lib(tmp_path, f'r0p_ledger_claim "{led}" {S64} 0 real x; r0p_ledger_claim "{led}" {"cd" * 32} 0 real y').returncode == 0
+    # a plain replay is refused as before
+    assert "already used" in lib(tmp_path, f'r0p_ledger_check "{led}" {S64} 0').stderr
+    (led / "claims" / S64).rmdir()                      # T7: the cheapest tamper
+    for allow in (0, 1):
+        r = lib(tmp_path, f'r0p_ledger_check "{led}" {S64} {allow}')
+        assert r.returncode == 1 and "claim is missing" in r.stderr and "tampered" in r.stderr, (allow, r.stderr)
+        r = lib(tmp_path, f'r0p_ledger_claim "{led}" {S64} {allow} real x')
+        assert r.returncode == 1 and "claim is missing" in r.stderr
+    assert not (led / "claims" / S64).exists() and ledger_text(led).count("event=started") == 2
+    assert not (led / "lock").exists()
+    # the other scope is unaffected
+    assert lib(tmp_path, f'r0p_ledger_check "{led}" {"ef" * 32} 0').returncode == 0
+
+
+def test_r6_04_the_shipped_helper_has_no_powershell_override(tmp_path):
+    exe, req, d2, ps = _round(tmp_path)
+    e = helper_env(tmp_path, "apply", d2, req, ps)               # sets R0P_POWERSHELL to a stub that would print Valid|...
+    r = run(["/bin/bash", HELPER_PROD, exe], e)
+    assert r.returncode == 1 and "cannot locate powershell.exe" in r.stderr and exe.read_bytes() == b"MZ launcher"
+    e["SYSTEMROOT"] = str(ps)                                     # SYSTEMROOT is not consulted either
+    r = run(["/bin/bash", HELPER_PROD, exe], e)
+    assert r.returncode == 1 and "cannot locate powershell.exe" in r.stderr
+    src = HELPER_PROD.read_text()
+    assert "R0P_POWERSHELL" not in "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#")) and "SYSTEMROOT" not in "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
+
+
+@pytest.mark.parametrize("extra", [{}, {"R0P_REEXEC": "1"}])
+def test_r6_05_the_test_switch_with_real_runs_nothing_from_the_inherited_path(tmp_path, extra):
+    log = tmp_path / "poison.log"
+    poison = _poison_dir(tmp_path, log)
+    f = tmp_path / "in.dmg"
+    f.write_bytes(b"x")
+    env = {"PATH": f"{poison}:/usr/bin:/bin", "HOME": str(tmp_path), "LANG": "C", "R0P_ALLOW_NONSYSTEM_TOOLS": "stub-test", "SSH_AUTH_SOCK": "/nonexistent/s", **extra}
+    for c in ([MAC, "--real", "--input-dmg", f, "--expected-sha256", sha_file(f), "--out-dir", tmp_path / "o"],
+              [WIN, "--stage", "inner", "--real", "--input", f, "--sha256", sha_file(f), "--outdir", tmp_path / "w"],
+              [SSH, "--real", "--manifest", f, "--pubkey", f, "--expected-sha256", sha_file(f)]):
+        r = run(["/bin/bash", *[str(x) for x in c]], env)
+        assert r.returncode == 1 and "unit-test switch" in r.stderr and "[first block]" in r.stderr, (c[0].name, r.stderr)
+    assert not log.exists(), "a hostile tool from the inherited PATH ran: " + (log.read_text() if log.exists() else "")
+
+
+def test_r6_03_python_start_up_hooks_in_the_environment_are_refused_and_pth_files_are_bound(win):
+    p, h = win.inner()
+    sc = win.scope("inner", [(p, h)])
+    site = win.tmp / "lib" / "python3.12" / "site-packages"           # the venv root is the parent of the directory that holds the python (wstubs)
+    site.mkdir(parents=True)
+    (site / "sitecustomize.py").write_text("print('hook')\n")
+    r = win.real("inner", [(p, h)], sc)
+    assert r.returncode == 2 and "start-up hook" in r.stderr and "az " not in win.log.read_text()
+    (site / "sitecustomize.py").unlink()
+    (site / "zz.pth").write_text("import os\n")
+    r = win.real("inner", [(p, h)], sc, outdir=win.tmp / "w2")
+    assert r.returncode == 2 and "tool_python_pth_sha256" in r.stderr
+    pth_sha = sha_bytes(f"lib/python3.12/site-packages/zz.pth {sha_file(site / 'zz.pth')}\n".encode())
+    sc2 = win.scope("inner", [(p, h)], tool_python_pth_sha256=pth_sha)
+    r = win.real("inner", [(p, h)], sc2, outdir=win.tmp / "w3")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert ".pth files " + pth_sha in (win.tmp / "w3" / "EVIDENCE.txt").read_text()
+
+
+def test_r6_documentation_states_the_residuals(tmp_path):
+    doc = (SIGN / "SIGNING-PROCEDURE-R0PRIME.md").read_text()
+    for needle in ("rmdir <ledger>/lock", "ended", "contention", "sitecustomize", ".pth", "names and versions", "release-signing-key.pub", "not read by the signing scripts",
+                   "G12", "procedural", "fresh venv", "-S"):
+        assert needle in doc, needle
+    assert "ledger.txt" not in doc and "--ledger \"$HOME/r0prime-signing-ledger\"" in doc
+    tpl = (SIGN / "AUTHORIZATION-TEMPLATE.md").read_text()
+    assert "tool_python_pth_sha256" in tpl and "fresh" in tpl

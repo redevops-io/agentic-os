@@ -22,20 +22,21 @@ r0p_sha_str() { printf '%s' "$1" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print
 # fds 3-9 closed) before any function or PATH-resolved command runs. Here the running copy checks that it really is that copy: privileged mode, the
 # re-exec marker, an environment that is exactly the allowlist, no BASH_FUNC_ entry, and it closes every other inherited file descriptor. Anything else
 # is fatal (there is no flag that skips this). Builtins are called with `builtin` and externals by absolute path.
-R0P_BASE_ALLOW=" PATH HOME LANG LC_ALL TERM PWD OLDPWD SHLVL _ R0P_REEXEC "
+R0P_BASE_ALLOW=" PATH HOME LANG LC_ALL TERM PWD OLDPWD SHLVL _ "
 R0P_FIXED_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 R0P_TMP=""
 r0p_scrub() {
-  local extra=" $1 " v bad="" allow i
+  local extra=" $1 " v bad="" allow i maxfd
   allow="$R0P_BASE_ALLOW${extra# }"
-  [[ "$-" == *p* && "${R0P_REEXEC:-}" == 1 ]] || { echo "ERROR: the script is not the re-executed privileged-mode copy; refusing" >&2; exit 1; }
+  [[ "$-" == *p* && "${R0P_STARTED_OK:-}" == 1 ]] || { echo "ERROR: the script is not the privileged-mode copy started by its own first block; refusing" >&2; exit 1; }
   for v in $(builtin compgen -A export); do
     case "$allow" in *" $v "*) ;; *) bad="$bad $v";; esac
   done
   if /usr/bin/env | /usr/bin/grep -q '^BASH_FUNC_'; then bad="$bad <exported-function>"; fi
   if [ -n "$bad" ]; then echo "ERROR: the environment is not the allowlist (extra:$bad); refusing" >&2; exit 1; fi
-  # file descriptors above 9 (3 to 9 were closed by the re-exec); 255 is bash's own script descriptor and is left alone
-  for ((i = 10; i < 64; i++)); do eval "exec $i>&-"; done
+  # file descriptors above 9 (3 to 9 were closed by the re-exec) up to the soft limit, at most 1024; 255 is bash's own script descriptor and is left alone
+  maxfd="$(builtin ulimit -n)"; [[ "$maxfd" =~ ^[0-9]+$ ]] || maxfd=256; [ "$maxfd" -le 1024 ] || maxfd=1024
+  for ((i = 10; i < maxfd; i++)); do [ "$i" -eq 255 ] || eval "exec $i>&-"; done
 }
 
 # r0p_fix_path [extra-dirs]  : PATH becomes the fixed system path (+ the validated extra directories). R0P_ALLOW_NONSYSTEM_TOOLS=stub-test
@@ -43,7 +44,7 @@ r0p_scrub() {
 R0P_STUBS=0
 r0p_fix_path() {
   local extra="${1:-}" d
-  if [ "${R0P_ALLOW_NONSYSTEM_TOOLS:-}" = "stub-test" ]; then R0P_STUBS=1; return 0; fi
+  if [ "${R0P_ALLOW_NONSYSTEM_TOOLS:-}" = "stub-test" ]; then R0P_STUBS=1; PATH="$R0P_ORIG_PATH"; export PATH; return 0; fi
   if [ -n "$extra" ]; then
     local IFS=:
     for d in $extra; do
@@ -151,9 +152,10 @@ r0p_ledger_prepare() {
   fi
 }
 # r0p_ledger_verify LEDGER : chain intact, numbering contiguous, not shorter than the recorded length; prints nothing; sets R0P_LEDGER_N / R0P_LEDGER_LAST
-R0P_LEDGER_N=0; R0P_LEDGER_LAST="$R0P_ZERO64"
+R0P_LEDGER_N=0; R0P_LEDGER_LAST="$R0P_ZERO64"; R0P_LEDGER_STARTED=" "
 r0p_ledger_verify() {
-  local l="$1" n=0 prev="$R0P_ZERO64" f rec_n rec_h line
+  local l="$1" n=0 prev="$R0P_ZERO64" f rec_n rec_h line sc
+  R0P_LEDGER_STARTED=" "
   read -r rec_n rec_h < "$l/LENGTH" 2>/dev/null || die "ledger: LENGTH is missing or unreadable"
   [[ "$rec_n" =~ ^[0-9]+$ && "$rec_h" =~ ^[0-9a-f]{64}$ ]] || die "ledger: LENGTH is malformed"
   for f in "$l"/events/*.txt; do
@@ -163,6 +165,7 @@ r0p_ledger_verify() {
     [ "${f##*/}" = "$(printf '%06d' "$n").txt" ] || die "ledger: event numbering has a gap or an unexpected file at $f"
     IFS= read -r line < "$f" || true
     case "$line" in "seq=$n prev=$prev "*) ;; *) die "ledger: the hash chain is broken at event $n (the ledger was modified)";; esac
+    case "$line" in *" event=started"*) sc="${line#* scope=}"; R0P_LEDGER_STARTED="$R0P_LEDGER_STARTED${sc%% *} ";; esac
     prev="$(r0p_sha "$f")"
     if [ "$n" -eq "$rec_n" ] && [ "$prev" != "$rec_h" ]; then die "ledger: event $n does not match the recorded length file (the ledger was modified)"; fi
   done
@@ -178,11 +181,19 @@ r0p_ledger_lock() {
   die "the ledger is locked (a parallel run, or a stale lock: remove $1/lock only when no run is active)"
 }
 r0p_ledger_unlock() { /bin/rmdir "$1/lock" 2>/dev/null || true; }
+# "used" is decided from BOTH the claim directory and the verified chain (round 6, R6-02): a scope that the chain records as started but whose claim
+# directory is missing means someone removed the claim (tamper) and is refused even with --allow-reuse.
+r0p_ledger_tamper_check() { # LEDGER SCOPE : after r0p_ledger_verify
+  case "$R0P_LEDGER_STARTED" in
+    *" $2 "*) [ -d "$1/claims/$2" ] || die "ledger: the chain records this scope as started but its claim is missing (the claims directory was tampered with); refusing";;
+  esac
+}
 # r0p_ledger_check LEDGER SCOPE_SHA ALLOW_REUSE : read-only early refusal (the atomic claim comes later)
 r0p_ledger_check() {
   local l="$1" s="$2" allow="$3"
   r0p_ledger_prepare "$l"
   r0p_ledger_verify "$l"
+  r0p_ledger_tamper_check "$l" "$s"
   if [ -d "$l/claims/$s" ]; then
     if [ "$allow" = 1 ]; then echo "NOTE: --allow-reuse: this scope file was used before (see the ledger); reuse is recorded"
     else die "this scope file (sha256 $s) was already used (it is in the ledger). Write a NEW scope file for a new run, or pass --allow-reuse after deciding that a repeat is intended"; fi
@@ -219,6 +230,8 @@ r0p_ledger_append() { r0p_ledger_in_lock "$1" r0p_ledger_append_locked "$@"; }
 # parallel runs of the same scope wins; the others stop here, before any use of the owner's session. A claim is never released.
 r0p_ledger_claim_locked() {
   local l="$1" s="$2" allow="$3"
+  r0p_ledger_verify "$l"
+  r0p_ledger_tamper_check "$l" "$s"
   if /bin/mkdir "$l/claims/$s" 2>/dev/null; then :
   elif [ "$allow" = 1 ]; then echo "NOTE: --allow-reuse: the scope was claimed before; this repeat is recorded"
   else die "this scope file (sha256 $s) is already claimed (used before, or by a parallel run); refusing"; fi
