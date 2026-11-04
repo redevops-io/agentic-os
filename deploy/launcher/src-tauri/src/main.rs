@@ -132,11 +132,6 @@ async fn open_ui(server: State<'_, Server>) -> Result<(), String> {
                 "The control plane could not prove its identity ({e}). It was stopped and the browser was not opened."
             ));
         }
-        // 4.7: after a verified handshake the sidecar kept answering 429 / invalid_proof through the bounded
-        // retries. Not an identity problem: leave it running, do not open anything without a code.
-        Err(capability::CapabilityError::Busy) => {
-            return Err("The local service is busy. The browser was not opened; try again in a moment.".to_string());
-        }
         Err(e) => return Err(format!("Could not get a launch code: {e}. Try again, or Stop and Start.")),
     };
     open_in_browser(&capability::launch_url(port, &base_path, &code))

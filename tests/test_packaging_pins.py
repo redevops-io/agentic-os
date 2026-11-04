@@ -300,3 +300,9 @@ def test_notices_are_derived_from_the_built_sbom_not_from_a_lock():
     r = subprocess.run(["bash", str(PK / "notices" / "build-licenses.sh"), "--platform", "macos", "--site-packages", str(ROOT)],
                        capture_output=True, text=True)
     assert r.returncode == 2 and "--sbom" in r.stderr
+
+
+def test_ubuntu_acceptance_uses_no_predictable_tmp_log_and_checks_the_gate():
+    text = (PK / "acceptance-ubuntu.sh").read_text()
+    assert "/tmp/rdo-serve.log" not in text and "mktemp" in text
+    assert "/api/projects" in text and "401" in text
