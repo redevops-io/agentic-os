@@ -25,7 +25,7 @@ import stat
 import subprocess
 import sys
 import textwrap
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -37,6 +37,10 @@ WIN = SIGN / "sign_windows_r0prime_v3.sh"
 SSH = SIGN / "sign_manifest_sshsig.sh"
 HELPER = SIGN / "r0prime_win_signcommand.sh"
 VERIFIER = SIGN / "verify_signature_v2.py"
+COMMON = SIGN / "signing-common.sh"
+GATE_JSON = ROOT / "packaging" / "distribution-gate.json"
+GATE_PY = ROOT / "packaging" / "check-distribution-gate.py"
+IDJSON = ROOT / "packaging" / "identity.json"
 ENT = ROOT / "packaging" / "macos" / "sidecar.entitlements.plist"
 IDENT = json.loads((ROOT / "packaging" / "identity.json").read_text())
 R0 = IDENT["r0prime"]
@@ -54,6 +58,10 @@ pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="macOS tools (p
 
 def sha_bytes(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
+
+
+def iso(dt) -> str:
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def sha_file(p: Path) -> str:
@@ -90,21 +98,27 @@ def code_of(script: Path) -> str:
     return "\n".join(out)
 
 
-SCRIPTS = [MAC, WIN, SSH, HELPER, SIGN / "tools" / "make_adhoc_fixture.sh"]
+SCRIPTS = [MAC, WIN, SSH, HELPER, COMMON, SIGN / "tools" / "make_adhoc_fixture.sh"]
 
 
 @pytest.mark.parametrize("script", SCRIPTS, ids=lambda p: p.name)
 def test_script_syntax_and_static_rules(script):
-    assert script.is_file() and os.access(script, os.X_OK), f"{script} must be executable"
+    assert script.is_file()
+    if script != COMMON:
+        assert os.access(script, os.X_OK), f"{script} must be executable"
     assert subprocess.run(["/bin/bash", "-n", str(script)], capture_output=True).returncode == 0
     code = code_of(script)
     assert not re.search(r"\brm\s+-[a-zA-Z]*(rf|fr|r)\b", code), "no rm -r / rm -rf"
     assert "sudo " not in code
     assert "set -x" not in code.replace("set +x", "") and "bash -x" not in code
     assert not re.search(r"(^|[;&|(\s])security\s+(find|add|delete|import|unlock|list|dump|cms)", code), "the keychain tool is never called"
-    assert "umask 077" in code
+    if script != COMMON:
+        assert "umask 077" in code
     if script in (MAC, WIN, SSH, HELPER):
         assert 'case "$-" in *x*)' in code, "xtrace refusal"
+    if script in (MAC, WIN, SSH):
+        assert "R0P_SCRUBBED" not in code, "no marker variable can skip the environment scrub (round 4, R4-05)"
+        assert "bash -c" not in code and "eval \"$" not in code.replace('eval "S_$', ''), "no command strings are built and evaluated (R4-06)"
 
 
 def test_shellcheck_if_available():
@@ -143,6 +157,7 @@ def test_entitlements_file_is_the_expected_single_key():
 STUB_CODESIGN = r'''#!/bin/bash
 D="$(cd "$(dirname "$0")" && pwd)"; . "$D/stub.conf"
 echo "codesign $*" >> "$LOG"
+env | sed 's/=.*//' | sort >> "$STATE/codesign-env"
 key() { printf '%s' "$1" | shasum -a 256 | cut -c1-16; }
 st() { echo "$STATE/$(key "$1").st"; }
 if [ "$1" = "--verify" ]; then
@@ -334,37 +349,51 @@ class Mac:
             p.unlink() if (p.is_file() or p.is_symlink()) else p.rmdir()
         self.build_fixture(**kw)
 
-    def env(self, **extra):
+    def env(self, stubs=True, **extra):
+        # the stub switch lets the script use the stub tools on PATH; without it PATH is fixed to the system directories
+        if stubs:
+            extra.setdefault("R0P_ALLOW_NONSYSTEM_TOOLS", "stub-test")
         return clean_env(self.home, [self.stubs], **extra)
 
-    def run(self, *args, mode=None, input_dmg=None, out=None, sha=None, **extra_env):
+    def run(self, *args, mode=None, input_dmg=None, out=None, sha=None, stubs=True, **extra_env):
         a = ["/bin/bash", MAC]
         if mode:
             a.append(mode)
         a += ["--input-dmg", input_dmg or self.dmg, "--expected-sha256", sha or sha_file(Path(input_dmg or self.dmg)), "--out-dir", out or self.out]
         a += list(args)
-        return run(a, self.env(**extra_env))
+        return run(a, self.env(stubs=stubs, **extra_env))
 
     def calls(self, tool=None):
         lines = self.log.read_text().splitlines()
         return [l for l in lines if tool is None or l.startswith(tool + " ")]
 
     def scope(self, **over) -> Path:
-        d = {"scope_version": "1", "valid_from": (date.today() - timedelta(days=1)).isoformat(), "valid_until": (date.today() + timedelta(days=1)).isoformat(),
-             "script_sha256": sha_file(MAC), "entitlements_sha256": sha_file(ENT), "input_dmg_sha256": sha_file(self.dmg),
-             "identity_sha256": sha_bytes(TEST_IDENTITY.encode()), "team_id": "TESTTEAM01", "notarize": "yes", "upload_to": "apple-notary"}
+        now = datetime.now(timezone.utc)
+        d = {"scope_version": "2", "not_before": iso(now - timedelta(hours=1)), "not_after": iso(now + timedelta(hours=1)),
+             "script_sha256": sha_file(MAC), "common_sha256": sha_file(COMMON), "entitlements_sha256": sha_file(ENT),
+             "identity_json_sha256": sha_file(IDJSON), "input_dmg_sha256": sha_file(self.dmg),
+             "identity_sha256": sha_bytes(TEST_IDENTITY.encode()), "notary_profile_sha256": sha_bytes(TEST_PROFILE.encode()),
+             "team_id": "TESTTEAM01", "notarize": "yes", "upload_to": "apple-notary", "distribution": "no",
+             "gate_sha256": sha_file(GATE_JSON), "gate_tool_sha256": sha_file(GATE_PY), "evidence_manifest_sha256": "e" * 64,
+             "build_commit": "b" * 40, "procedure_commit": "c" * 40}
         d.update(over)
         p = self.tmp / f"scope-{len(list(self.tmp.glob('scope-*')))}.txt"
         p.write_text("# test scope\n" + "".join(f"{k}={v}\n" for k, v in d.items() if v is not None))
         return p
 
-    def real(self, scope: Path, *extra, notarize=True, env=None, **kw):
-        e = {"R0P_CODESIGN_IDENTITY": TEST_IDENTITY, "R0P_ALLOW_NONSYSTEM_TOOLS": "stub-test"}
+    @property
+    def ledger(self) -> Path:
+        return self.tmp / "ledger.txt"
+
+    def real(self, scope: Path, *extra, notarize=True, env=None, ledger=True, **kw):
+        e = {"R0P_CODESIGN_IDENTITY": TEST_IDENTITY}
         if notarize:
             e["R0P_NOTARY_PROFILE"] = TEST_PROFILE
         e.update(env or {})
-        args = ["--i-have-owner-authorization", sha_file(scope), "--scope-file", scope] + (["--notarize"] if notarize else []) + list(extra)
-        return self.run(*args, mode="--real", **dict(e, **kw))
+        args = ["--i-have-owner-authorization", sha_file(scope), "--scope-file", scope] + (["--notarize"] if notarize else [])
+        if ledger:
+            args += ["--ledger", self.ledger]
+        return self.run(*args, *extra, mode="--real", **dict(e, **kw))
 
 
 @pytest.fixture
@@ -384,6 +413,7 @@ def test_macos_names_derive_from_identity_json_and_equal_identity_py(mac):
     (tree / "signing").mkdir(parents=True)
     (tree / "macos").mkdir()
     shutil.copy(MAC, tree / "signing" / MAC.name)
+    shutil.copy(COMMON, tree / "signing" / COMMON.name)
     shutil.copy(ENT, tree / "macos" / ENT.name)
     ident = json.loads(json.dumps(IDENT))
     ident["r0prime"]["product_name"] = "Zed Test Product"
@@ -535,24 +565,39 @@ def test_macho_magic_in_an_unexpected_file_is_refused(mac):
 
 
 # ---- real mode with stubs: authorization binding, notarization sequence, no secret printing, no retry ---------------
-def test_real_mode_requires_system_tools_without_the_test_switch(mac):
+def test_stub_tools_on_path_are_ignored_without_the_test_switch(mac):
+    """R4-05: PATH is fixed to the system directories; a stub (or hijacked tool) first in the caller's PATH is never used."""
     sc = mac.scope()
-    args = ["--i-have-owner-authorization", sha_file(sc), "--scope-file", sc, "--notarize"]
-    r = mac.run(*args, mode="--real", R0P_CODESIGN_IDENTITY=TEST_IDENTITY, R0P_NOTARY_PROFILE=TEST_PROFILE)
-    assert r.returncode == 1 and "must resolve to a system location" in r.stderr and not mac.out.exists()
+    r = mac.real(sc, stubs=False)
+    assert mac.calls() == [], "no tool from the caller's PATH was started"
+    assert r.returncode != 0
+    r = mac.run(mode="--adhoc-test", stubs=False)
+    assert mac.calls() == []
 
 
+_now = datetime.now(timezone.utc)
 SCOPE_REFUSALS = [
     ("wrong script hash", dict(script_sha256="1" * 64), "script_sha256"),
+    ("wrong common hash", dict(common_sha256="1" * 64), "common_sha256"),
     ("wrong entitlements hash", dict(entitlements_sha256="1" * 64), "entitlements_sha256"),
+    ("wrong identity.json hash", dict(identity_json_sha256="1" * 64), "identity_json_sha256"),
     ("wrong input hash", dict(input_dmg_sha256="1" * 64), "input_dmg_sha256"),
     ("wrong identity", dict(identity_sha256="1" * 64), "identity_sha256"),
+    ("wrong notary profile", dict(notary_profile_sha256="1" * 64), "notary_profile_sha256"),
+    ("wrong gate hash", dict(gate_sha256="1" * 64), "gate_sha256"),
+    ("wrong gate tool hash", dict(gate_tool_sha256="1" * 64), "gate_tool_sha256"),
     ("bad team id", dict(team_id="lower"), "team_id"),
-    ("expired window", dict(valid_until=(date.today() - timedelta(days=1)).isoformat()), "outside the authorized window"),
-    ("future window", dict(valid_from=(date.today() + timedelta(days=1)).isoformat()), "outside the authorized window"),
+    ("bad commit", dict(build_commit="abc"), "40-hex"),
+    ("bad manifest digest", dict(evidence_manifest_sha256="zz"), "evidence_manifest_sha256"),
+    ("expired window", dict(not_before=iso(_now - timedelta(hours=3)), not_after=iso(_now - timedelta(hours=2))), "outside the authorized window"),
+    ("future window", dict(not_before=iso(_now + timedelta(hours=1)), not_after=iso(_now + timedelta(hours=2))), "outside the authorized window"),
+    ("window longer than 24 h", dict(not_before=iso(_now - timedelta(hours=1)), not_after=iso(_now + timedelta(hours=25))), "longer than 24 hours"),
+    ("old date-only format", dict(not_before="2026-01-01"), "YYYY-MM-DDTHH:MM:SSZ"),
     ("notarize=no but --notarize given", dict(notarize="no", upload_to="none"), "notarize=no"),
+    ("distribution disagrees with the flag", dict(distribution="yes"), "distribution=yes"),
     ("unknown key", dict(surprise="1"), "unknown key"),
-    ("bad version", dict(scope_version="2"), "scope_version"),
+    ("missing key", dict(team_id=None), "required key 'team_id'"),
+    ("old version", dict(scope_version="1"), "scope_version must be 2"),
     ("inconsistent upload", dict(notarize="yes", upload_to="none"), "notarize/upload_to"),
 ]
 
@@ -637,7 +682,7 @@ def test_real_mode_full_sequence_with_stubs(mac):
 
 
 def test_real_mode_sign_only_has_no_apple_contact(mac):
-    sc = mac.scope(notarize="no", upload_to="none")
+    sc = mac.scope(notarize="no", upload_to="none", notary_profile_sha256="none")
     r = mac.real(sc, notarize=False)
     assert r.returncode == 0, (r.stdout, r.stderr)
     assert mac.calls("xcrun") == []
@@ -716,6 +761,87 @@ def test_adhoc_sequence_with_the_real_tools_on_a_tiny_arm64_app(tmp_path):
 # ====================================================================================================================
 # SSHSIG script
 # ====================================================================================================================
+import struct
+import threading
+
+
+def bind_unix_socket(path: Path):
+    """AF_UNIX paths are short: bind through a relative name from inside the directory (the absolute path may be long)."""
+    s = socket.socket(socket.AF_UNIX)
+    cwd = os.getcwd()
+    os.chdir(path.parent)
+    try:
+        s.bind(path.name)
+    finally:
+        os.chdir(cwd)
+    return s
+
+
+class FakeAgent:
+    """A minimal ssh-agent of the test's own (a thread on a unix socket; never the user's agent). It answers the identities request with
+    the key blobs it is given (or with FAILURE) and ALWAYS refuses to sign: if a signature appears, it did not come from the agent."""
+
+    def __init__(self, sockpath: Path, blobs=(), failure_for_identities=False):
+        self.path = sockpath
+        self.blobs = list(blobs)
+        self.fail_ids = failure_for_identities
+        self.requests = []
+        self.srv = socket.socket(socket.AF_UNIX)
+        cwd = os.getcwd()
+        os.chdir(sockpath.parent)               # AF_UNIX paths are short: bind through a relative name
+        try:
+            self.srv.bind(sockpath.name)
+        finally:
+            os.chdir(cwd)
+        self.srv.listen(8)
+        self.srv.settimeout(0.2)
+        self.stop = False
+        self.th = threading.Thread(target=self.loop, daemon=True)
+        self.th.start()
+
+    def loop(self):
+        while not self.stop:
+            try:
+                c, _ = self.srv.accept()
+            except (socket.timeout, OSError):
+                continue
+            try:
+                c.settimeout(2)
+                while True:
+                    hdr = c.recv(4)
+                    if len(hdr) < 4:
+                        break
+                    (n,) = struct.unpack(">I", hdr)
+                    body = b""
+                    while len(body) < n:
+                        chunk = c.recv(n - len(body))
+                        if not chunk:
+                            break
+                        body += chunk
+                    typ = body[0]
+                    self.requests.append(typ)
+                    if typ == 11 and not self.fail_ids:        # REQUEST_IDENTITIES -> IDENTITIES_ANSWER
+                        out = bytes([12]) + struct.pack(">I", len(self.blobs))
+                        for b in self.blobs:
+                            out += struct.pack(">I", len(b)) + b + struct.pack(">I", 4) + b"test"
+                    else:                                       # everything else (including SIGN_REQUEST): SSH_AGENT_FAILURE
+                        out = bytes([5])
+                    c.sendall(struct.pack(">I", len(out)) + out)
+            except OSError:
+                pass
+            finally:
+                c.close()
+
+    def close(self):
+        self.stop = True
+        self.th.join(2)
+        self.srv.close()
+        try:
+            self.path.unlink()
+        except OSError:
+            pass
+
+
 class Ssh:
     def __init__(self, tmp: Path):
         self.tmp = tmp
@@ -729,7 +855,7 @@ class Ssh:
         self.manifest.write_text('{"files": {"a": "0"}}\n')
         self.keys = tmp / "keys"
         self.keys.mkdir()
-        self.key = self.make_key("k1", "signproc-TEST-KEY")
+        self.key = self.make_key("k1", "signproc-TEST-KEY")     # a throwaway key for tests that need a key pair of their own
         self.pub = self.key.with_name("k1.pub")
 
     def make_key(self, name, comment) -> Path:
@@ -738,19 +864,24 @@ class Ssh:
         assert r.returncode == 0, r.stderr
         return k
 
+    def fpr(self, pub: Path) -> str:
+        return [x for x in run(["/usr/bin/ssh-keygen", "-lf", pub], clean_env(self.home)).stdout.split() if x.startswith("SHA256:")][0]
+
     def env(self, path_dirs=(), **extra):
         return clean_env(self.home, path_dirs, **extra)
 
     def digest(self):
         return sha_file(self.manifest)
 
-    def run(self, *args, path_dirs=(), **extra):
-        return run(["/bin/bash", SSH, *args], self.env(path_dirs, **extra))
+    def run(self, *args, path_dirs=(), cwd=None, **extra):
+        return run(["/bin/bash", SSH, *args], self.env(path_dirs, **extra), cwd=cwd)
 
     def selftest(self, sig=None, **kw):
+        """The script generates its own throwaway key; the public half is exported to outside/test.pub for verify-only."""
         sig = sig or self.outside / "m.sig"
-        return self.run("--self-test", "--test-private-key", self.key, "--manifest", self.manifest, "--pubkey", self.pub,
-                        "--expected-sha256", kw.pop("sha", self.digest()), "--sig-out", sig, "--record-out", self.outside / "rec.txt", **kw), sig
+        extra = kw.pop("extra", [])
+        return self.run("--self-test", "--manifest", self.manifest, "--expected-sha256", kw.pop("sha", self.digest()), "--sig-out", sig,
+                        "--record-out", self.outside / "rec.txt", "--test-pubkey-out", self.outside / "test.pub", *extra, **kw), sig
 
     def cleanup(self):
         for p in self.keys.iterdir():          # the throwaway keys, deleted by name
@@ -772,13 +903,14 @@ def test_sshsig_dry_run_default_creates_nothing_and_checks_the_digest(ssh):
     before = tree_state(ssh.ev)
     r = ssh.run("--manifest", ssh.manifest, "--pubkey", ssh.pub, "--expected-sha256", ssh.digest())
     assert r.returncode == 0, r.stderr
-    assert "mode: dry-run" in r.stdout and "ssh-keygen -Y sign -n redevops-qa-release@v1 -f" in r.stdout and "no agent is contacted" in r.stdout
+    assert "mode: dry-run" in r.stdout and "ssh-keygen -Y sign -U -n redevops-qa-release@v1 -f" in r.stdout and "no agent is contacted" in r.stdout
+    assert "ssh-add -l" in r.stdout and "no fallback to a key file" in r.stdout
     assert tree_state(ssh.ev) == before and list(ssh.outside.iterdir()) == []
     r = ssh.run("--manifest", ssh.manifest, "--pubkey", ssh.pub, "--expected-sha256", "0" * 64)
     assert r.returncode == 1 and "not the expected digest" in r.stderr
 
 
-def test_sshsig_selftest_signs_without_adding_a_file_to_the_evidence_dir_and_verifies(ssh):
+def test_sshsig_selftest_makes_its_own_key_signs_without_adding_a_file_to_the_evidence_dir_and_verifies(ssh):
     before = tree_state(ssh.ev)
     r, sig = ssh.selftest()
     assert r.returncode == 0, (r.stdout, r.stderr)
@@ -787,27 +919,52 @@ def test_sshsig_selftest_signs_without_adding_a_file_to_the_evidence_dir_and_ver
     assert "THROWAWAY KEY" in r.stdout and "Good \"redevops-qa-release@v1\" signature" in r.stdout
     rec = (ssh.outside / "rec.txt").read_text()
     assert ssh.digest() in rec and "no time" in rec and "SHA256:" in rec
-    v = ssh.run("--verify-only", "--manifest", ssh.manifest, "--sig", sig, "--pubkey", ssh.pub)
+    assert (ssh.outside / "test.pub").read_text().rstrip().endswith("signproc-TEST-KEY")
+    v = ssh.run("--verify-only", "--manifest", ssh.manifest, "--sig", sig, "--pubkey", ssh.outside / "test.pub")
     assert v.returncode == 0 and "VERIFIED" in v.stdout
+    # the generated key does not survive the run: nothing named key* is left in the system temp area used by the run
+    assert not list(ssh.home.rglob("key*"))
+
+
+def test_sshsig_selftest_cannot_be_handed_a_key_and_refuses_the_release_key_prefix(ssh):
+    r, _ = ssh.selftest(extra=["--pubkey", ssh.pub])
+    assert r.returncode == 1 and "generates its own throwaway key" in r.stderr
+    r = ssh.run("--self-test", "--test-private-key", ssh.key, "--manifest", ssh.manifest, "--expected-sha256", ssh.digest(), "--sig-out", ssh.outside / "x.sig")
+    assert r.returncode == 2 and "unknown argument" in r.stderr and not (ssh.outside / "x.sig").exists()
+    # R4-08: the published release fingerprint is 42 characters after SHA256: (an OpenSSH fingerprint has 43); it is used as a PREFIX
+    src = SSH.read_text()
+    const = re.search(r'RELEASE_KEY_FPR_PREFIX="SHA256:([^"]+)"', src).group(1)
+    assert const == "wUoE8xKJpmtTH7GqWXMIl9/BW0SH1Isc5/w9HEiwqA" and len(const) == 42
+    assert 'case "$FPR" in "$RELEASE_KEY_FPR_PREFIX"*)' in src
+    # a stub ssh-keygen that reports a fingerprint with that prefix for the generated key: the self-test must refuse
+    d = ssh.tmp / "fakebin"
+    d.mkdir()
+    write_exec(d / "ssh-keygen", textwrap.dedent(f'''\
+        #!/bin/bash
+        if [ "$1" = "-lf" ]; then echo "256 SHA256:{const}A signproc-TEST-KEY (ED25519)"; exit 0; fi
+        exec /usr/bin/ssh-keygen "$@"
+        '''))
+    r = ssh.run("--self-test", "--manifest", ssh.manifest, "--expected-sha256", ssh.digest(), "--sig-out", ssh.outside / "y.sig", path_dirs=[d],
+                R0P_ALLOW_NONSYSTEM_TOOLS="stub-test")
+    assert r.returncode == 1 and "refuses the release key" in r.stderr and not (ssh.outside / "y.sig").exists()
 
 
 def test_sshsig_failure_cases(ssh):
     r, sig = ssh.selftest()
     assert r.returncode == 0
-    # tampered manifest
-    ssh.manifest.write_text('{"files": {"a": "1"}}\n')
-    v = ssh.run("--verify-only", "--manifest", ssh.manifest, "--sig", sig, "--pubkey", ssh.pub)
+    tpub = ssh.outside / "test.pub"
+    ssh.manifest.write_text('{"files": {"a": "1"}}\n')           # tampered manifest
+    v = ssh.run("--verify-only", "--manifest", ssh.manifest, "--sig", sig, "--pubkey", tpub)
     assert v.returncode == 5 and "NOT VERIFIED" in v.stderr
     ssh.manifest.write_text('{"files": {"a": "0"}}\n')
-    assert ssh.run("--verify-only", "--manifest", ssh.manifest, "--sig", sig, "--pubkey", ssh.pub).returncode == 0
+    assert ssh.run("--verify-only", "--manifest", ssh.manifest, "--sig", sig, "--pubkey", tpub).returncode == 0
     # wrong namespace: sign the same bytes directly with ssh-keygen in another namespace
-    bad = ssh.outside / "ns.sig"
     with open(ssh.manifest, "rb") as f:
         p = subprocess.run(["/usr/bin/ssh-keygen", "-Y", "sign", "-n", "other-namespace@v1", "-f", str(ssh.key)], stdin=f, capture_output=True, env=clean_env(ssh.home))
     assert p.returncode == 0
+    bad = ssh.outside / "ns.sig"
     bad.write_bytes(p.stdout)
-    v = ssh.run("--verify-only", "--manifest", ssh.manifest, "--sig", bad, "--pubkey", ssh.pub)
-    assert v.returncode == 5
+    assert ssh.run("--verify-only", "--manifest", ssh.manifest, "--sig", bad, "--pubkey", ssh.pub).returncode == 5
     # signature by another key
     k2 = ssh.make_key("k2", "signproc-TEST-KEY")
     with open(ssh.manifest, "rb") as f:
@@ -815,58 +972,41 @@ def test_sshsig_failure_cases(ssh):
     other = ssh.outside / "k2.sig"
     other.write_bytes(p.stdout)
     assert ssh.run("--verify-only", "--manifest", ssh.manifest, "--sig", other, "--pubkey", ssh.pub).returncode == 5
-    # an expected fingerprint that is not the key's
-    v = ssh.run("--verify-only", "--manifest", ssh.manifest, "--sig", sig, "--pubkey", ssh.pub, "--expected-fingerprint", "SHA256:" + "A" * 43)
+    v = ssh.run("--verify-only", "--manifest", ssh.manifest, "--sig", sig, "--pubkey", tpub, "--expected-fingerprint", "SHA256:" + "A" * 43)
     assert v.returncode == 1 and "not the expected one" in v.stderr
 
 
 def test_sshsig_refusals(ssh):
-    # wrong digest: nothing is signed, nothing is created
     r, sig = ssh.selftest(sha="0" * 64)
     assert r.returncode == 1 and "nothing was signed" in r.stderr and not sig.exists()
-    # the signature must not be placed inside the evidence directory
     r, sig = ssh.selftest(sig=ssh.ev / "release-manifest.json.sig")
     assert r.returncode == 1 and "must not be added to the evidence set" in r.stderr and not sig.exists()
-    # existing --sig-out is never overwritten
     (ssh.outside / "m.sig").write_text("x")
     assert "already exists" in ssh.selftest()[0].stderr
     (ssh.outside / "m.sig").unlink()
-    # a private key given as --pubkey is refused outright (never handled by this script)
     r = ssh.run("--manifest", ssh.manifest, "--pubkey", ssh.key, "--expected-sha256", ssh.digest())
     assert r.returncode == 1 and "contains a private key" in r.stderr
-    # self-test only with a throwaway key (comment) and with its own private key
-    k3 = ssh.make_key("k3", "someone@laptop")
-    r = ssh.run("--self-test", "--test-private-key", k3, "--manifest", ssh.manifest, "--pubkey", k3.with_name("k3.pub"), "--expected-sha256", ssh.digest(), "--sig-out", ssh.outside / "x.sig")
-    assert r.returncode == 1 and "signproc-TEST-KEY" in r.stderr
-    r = ssh.run("--self-test", "--test-private-key", ssh.keys / "k3", "--manifest", ssh.manifest, "--pubkey", ssh.pub, "--expected-sha256", ssh.digest(), "--sig-out", ssh.outside / "x.sig")
-    assert r.returncode == 1 and "does not belong" in r.stderr
-    assert "release key" in SSH.read_text() and "wUoE8xKJpmtTH7GqWXMIl9/BW0SH1Isc5/w9HEiwqA" in SSH.read_text()
-    assert not (ssh.outside / "x.sig").exists()
 
 
-def bind_unix_socket(path: Path):
-    """AF_UNIX paths are short: bind through a relative name from inside the directory (the absolute path may be long)."""
-    s = socket.socket(socket.AF_UNIX)
-    cwd = os.getcwd()
-    os.chdir(path.parent)
-    try:
-        s.bind(path.name)
-    finally:
-        os.chdir(cwd)
-    return s
-
-
-def make_fake_keygen(ssh: Ssh, real_key: Path) -> Path:
-    """A stub ssh-keygen: logs argv and whether an agent socket was passed; for `-Y sign -f <public key>` it signs with the
-    THROWAWAY key (never an agent); everything else goes to the real ssh-keygen."""
+def make_fake_tools(ssh: Ssh, real_key: Path) -> Path:
+    """STUB ssh-keygen / ssh-add for the positive --real path: they log argv, the environment they got and the files beside the key they
+    were given; the stub ssh-keygen signs with a THROWAWAY test key (never an agent, never a release key)."""
     d = ssh.tmp / "fakebin"
     d.mkdir()
+    log = ssh.tmp / "tools.log"
+    write_exec(d / "ssh-add", textwrap.dedent(f'''\
+        #!/bin/bash
+        echo "ssh-add $* SOCK=${{SSH_AUTH_SOCK:-unset}} HOME=${{HOME:-unset}}" >> "{log}"
+        echo "256 $STUB_FPR comment (ED25519)"
+        '''.replace("$STUB_FPR", ssh.fpr(ssh.pub))))
     write_exec(d / "ssh-keygen", textwrap.dedent(f'''\
         #!/bin/bash
-        echo "ssh-keygen $*" >> "{ssh.tmp}/keygen.log"
-        echo "AUTH_SOCK=${{SSH_AUTH_SOCK:-unset}}" >> "{ssh.tmp}/keygen.log"
+        echo "ssh-keygen $*" >> "{log}"
+        echo "ENV SOCK=${{SSH_AUTH_SOCK:-unset}} HOME=${{HOME:-unset}} ASKPASS=${{SSH_ASKPASS:-unset}} DISPLAY=${{DISPLAY:-unset}}" >> "{log}"
         if [ "$1" = "-Y" ] && [ "$2" = "sign" ]; then
-          shift 2; args=(); while [ $# -gt 0 ]; do case "$1" in -f) shift 2;; *) args+=("$1"); shift;; esac; done
+          orig=("$@"); shift 2; args=(); f=""; while [ $# -gt 0 ]; do case "$1" in -f) f="$2"; shift 2;; -U) shift;; *) args+=("$1"); shift;; esac; done
+          case "$f" in */release.pub) ;; *) exec /usr/bin/ssh-keygen "${{orig[@]}}";; esac
+          echo "BESIDE_KEY: $(ls "$(dirname "$f")" | tr '\\n' ' ')" >> "{log}"
           exec /usr/bin/ssh-keygen -Y sign -f "{real_key}" "${{args[@]}}"
         fi
         exec /usr/bin/ssh-keygen "$@"
@@ -874,77 +1014,178 @@ def make_fake_keygen(ssh: Ssh, real_key: Path) -> Path:
     return d
 
 
-def ssh_scope(ssh: Ssh, sock_free=True, **over) -> Path:
-    fpr = [x for x in run(["/usr/bin/ssh-keygen", "-lf", ssh.pub], clean_env(ssh.home)).stdout.split() if x.startswith("SHA256:")][0]
-    d = {"scope_version": "1", "valid_from": (date.today() - timedelta(days=1)).isoformat(), "valid_until": (date.today() + timedelta(days=1)).isoformat(),
-         "script_sha256": sha_file(SSH), "manifest_sha256": ssh.digest(), "key_fingerprint": fpr, "namespace": "redevops-qa-release@v1"}
+def ssh_scope(ssh: Ssh, **over) -> Path:
+    now = datetime.now(timezone.utc)
+    d = {"scope_version": "2", "not_before": iso(now - timedelta(hours=1)), "not_after": iso(now + timedelta(hours=1)),
+         "script_sha256": sha_file(SSH), "common_sha256": sha_file(COMMON), "identity_json_sha256": sha_file(IDJSON),
+         "manifest_sha256": ssh.digest(), "key_fingerprint": ssh.fpr(ssh.pub), "namespace": "redevops-qa-release@v1",
+         "build_commit": "b" * 40, "procedure_commit": "c" * 40}
     d.update(over)
     p = ssh.tmp / f"sc-{len(list(ssh.tmp.glob('sc-*')))}.txt"
-    p.write_text("".join(f"{k}={v}\n" for k, v in d.items()))
+    p.write_text("".join(f"{k}={v}\n" for k, v in d.items() if v is not None))
     return p
 
 
-def test_sshsig_real_mode_uses_only_the_agent_path_and_the_public_key_file(ssh):
-    # a unix socket file stands in for the agent socket; the stub ssh-keygen proves what the script passes
-    fake = make_fake_keygen(ssh, ssh.key)
+def real_args(ssh: Ssh, sc: Path, sig: Path, ledger: Path = None, fp=True, manifest=None):
+    a = ["--real", "--manifest", manifest or ssh.manifest, "--pubkey", ssh.pub, "--expected-sha256", sha_file(Path(manifest or ssh.manifest)),
+         "--i-have-owner-authorization", sha_file(sc), "--scope-file", sc, "--sig-out", sig, "--ledger", ledger or (ssh.tmp / "ledger.txt")]
+    if fp:
+        a += ["--expected-fingerprint", ssh.fpr(ssh.pub)]
+    return a
+
+
+def test_sshsig_real_never_falls_back_to_a_private_key_file_beside_the_pub(ssh):
+    """R4-01 regression (the reviewer's fake-agent reproducer): an agent that does NOT hold the key and a private key file next to
+    the .pub. OpenSSH alone would sign from the key FILE; the script must refuse, with the REAL ssh-keygen/ssh-add, and sign nothing."""
+    assert (ssh.keys / "k1").is_file() and ssh.pub.exists(), "the private key sits beside the .pub (the dangerous layout)"
+    sock = ssh.tmp / "agent.sock"
+    sc = ssh_scope(ssh)
+    import base64
+    k2 = ssh.make_key("k2", "someone-else")
+    other_blob = base64.b64decode(k2.with_name("k2.pub").read_text().split()[1])
+    # agent answers FAILURE / lists nothing / lists a DIFFERENT key (the fingerprint check)
+    for n, (fail_ids, blobs) in enumerate(((True, []), (False, []), (False, [other_blob]))):
+        agent = FakeAgent(sock, blobs=blobs, failure_for_identities=fail_ids)
+        try:
+            sig = ssh.outside / f"fb{n}.sig"
+            led = ssh.tmp / f"l{n}.txt"
+            # AF_UNIX connect paths are short: the agent is reached through a relative name from the directory that holds it
+            r = ssh.run(*real_args(ssh, sc, sig, ledger=led), SSH_AUTH_SOCK=sock.name, cwd=sock.parent)
+            assert r.returncode == 1, (r.stdout, r.stderr)
+            assert "ssh-add -l could not list" in r.stderr or "does not hold the key" in r.stderr, r.stderr
+            if n == 2:
+                assert "does not hold the key" in r.stderr
+            assert not sig.exists(), "no signature may be made from the key file"
+            assert 13 not in agent.requests, "the script did not even ask the agent to sign"
+            assert not led.exists(), "the scope was not consumed: nothing was started"
+        finally:
+            agent.close()
+
+
+def test_sshsig_real_agent_lists_the_key_but_refuses_to_sign_then_no_key_file_is_read(ssh):
+    """The agent holds the key (fingerprint listed) but refuses to sign; the private key file is beside the .pub. The script must still not
+    sign from the file: with -U and a private copy of the public key there is no file to fall back to."""
+    import base64
+    blob = base64.b64decode(ssh.pub.read_text().split()[1])
+    sock = ssh.tmp / "agent.sock"
+    agent = FakeAgent(sock, blobs=[blob])
+    try:
+        sc = ssh_scope(ssh)
+        sig = ssh.outside / "r.sig"
+        r = ssh.run(*real_args(ssh, sc, sig), SSH_AUTH_SOCK=sock.name, cwd=sock.parent)
+        assert r.returncode == 1 and "agent did not sign" in r.stderr, (r.stdout, r.stderr)
+        assert not sig.exists()
+        assert 13 in agent.requests, "the agent was asked to sign (and refused)"
+        led = (ssh.tmp / "ledger.txt").read_text()
+        assert "event=started" in led and "event=ended" in led and "rc=sign-failed" in led
+    finally:
+        agent.close()
+
+
+def test_sshsig_real_positive_path_uses_a_private_copy_of_the_public_key_and_a_quiet_environment(ssh):
+    fake = make_fake_tools(ssh, ssh.key)
     sock = ssh.tmp / "agent.sock"
     s = bind_unix_socket(sock)
     try:
         sc = ssh_scope(ssh)
-        fpr = [x for x in run(["/usr/bin/ssh-keygen", "-lf", ssh.pub], clean_env(ssh.home)).stdout.split() if x.startswith("SHA256:")][0]
         sig = ssh.outside / "real.sig"
-        r = ssh.run("--real", "--manifest", ssh.manifest, "--pubkey", ssh.pub, "--expected-sha256", ssh.digest(), "--expected-fingerprint", fpr,
-                    "--i-have-owner-authorization", sha_file(sc), "--scope-file", sc, "--sig-out", sig,
-                    path_dirs=[fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test")
+        r = ssh.run(*real_args(ssh, sc, sig), path_dirs=[fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test")
         assert r.returncode == 0, (r.stdout, r.stderr)
-        log = (ssh.tmp / "keygen.log").read_text()
+        log = (ssh.tmp / "tools.log").read_text()
         sign_line = [l for l in log.splitlines() if l.startswith("ssh-keygen -Y sign")][0]
-        assert f"-n redevops-qa-release@v1 -f {ssh.pub}" in sign_line, "the PUBLIC key file is what is handed to ssh-keygen"
-        assert str(ssh.key) not in sign_line.split(), "no private key path is passed"
-        # the agent socket reached ssh-keygen for the sign call (real mode only)
-        assert f"AUTH_SOCK={sock}" in log
+        assert "-U -n redevops-qa-release@v1 -f" in sign_line
+        assert str(ssh.pub) not in sign_line and str(ssh.key) not in sign_line.split(), "the original .pub path (and any sibling) is not used"
+        assert "BESIDE_KEY: release.pub" in log and "k1" not in [x for l in log.splitlines() if l.startswith("BESIDE_KEY") for x in l.split()][1:]
+        lines = log.splitlines()
+        sign_env = lines[lines.index(sign_line) + 1]          # the ENV line the stub wrote for the sign call
+        assert f"SOCK={sock}" in sign_env and "ASKPASS=/usr/bin/false" in sign_env and "DISPLAY=unset" in sign_env
+        assert str(ssh.home) not in sign_env, "a throwaway HOME, not the user's"
         assert sig.is_file() and "Good" in r.stdout
-        # without --real the socket is never passed on
-        (ssh.tmp / "keygen.log").write_text("")
-        r2 = ssh.run("--self-test", "--test-private-key", ssh.key, "--manifest", ssh.manifest, "--pubkey", ssh.pub, "--expected-sha256", ssh.digest(),
-                     "--sig-out", ssh.outside / "st.sig", path_dirs=[fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test")
-        assert r2.returncode == 0, r2.stderr
-        assert "AUTH_SOCK=unset" in (ssh.tmp / "keygen.log").read_text() and str(sock) not in (ssh.tmp / "keygen.log").read_text()
+        led = (ssh.tmp / "ledger.txt").read_text()
+        assert "event=started" in led and "event=ended" in led and "rc=0" in led
+        # one-time ledger: the same scope is refused again, --allow-reuse is recorded
+        sig2 = ssh.outside / "real2.sig"
+        r2 = ssh.run(*real_args(ssh, sc, sig2), path_dirs=[fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test")
+        assert r2.returncode == 1 and "already used" in r2.stderr and not sig2.exists()
+        r3 = ssh.run(*real_args(ssh, sc, sig2), "--allow-reuse", path_dirs=[fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test")
+        assert r3.returncode == 0 and "--allow-reuse" in r3.stdout and sig2.exists()
+    finally:
+        s.close()
+
+
+def test_sshsig_agent_socket_is_never_passed_outside_real(ssh):
+    fake = make_fake_tools(ssh, ssh.key)
+    sock = ssh.tmp / "agent.sock"
+    s = bind_unix_socket(sock)
+    try:
+        r, _ = ssh.selftest(path_dirs=[fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test")
+        assert r.returncode == 0, r.stderr
+        log = (ssh.tmp / "tools.log").read_text() if (ssh.tmp / "tools.log").exists() else ""
+        assert str(sock) not in log
     finally:
         s.close()
 
 
 def test_sshsig_real_mode_refusals(ssh):
-    fake = make_fake_keygen(ssh, ssh.key)
+    fake = make_fake_tools(ssh, ssh.key)
     sock = ssh.tmp / "agent.sock"
     s = bind_unix_socket(sock)
     try:
-        fpr = [x for x in run(["/usr/bin/ssh-keygen", "-lf", ssh.pub], clean_env(ssh.home)).stdout.split() if x.startswith("SHA256:")][0]
-
-        def go(sc, sig="r.sig", manifest=None, fp=fpr, sock_env=True, **kw):
-            args = ["--real", "--manifest", manifest or ssh.manifest, "--pubkey", ssh.pub, "--expected-sha256", sha_file(Path(manifest or ssh.manifest)),
-                    "--i-have-owner-authorization", sha_file(sc), "--scope-file", sc, "--sig-out", ssh.outside / sig]
-            if fp:
-                args += ["--expected-fingerprint", fp]
+        def go(sc, sig="r.sig", manifest=None, fp=True, sock_env=True, ledger=None, extra=()):
             env = dict(R0P_ALLOW_NONSYSTEM_TOOLS="stub-test")
             if sock_env:
                 env["SSH_AUTH_SOCK"] = str(sock)
-            return ssh.run(*args, path_dirs=[fake], **env)
+            return ssh.run(*real_args(ssh, sc, ssh.outside / sig, ledger=ledger, fp=fp, manifest=manifest), *extra, path_dirs=[fake], **env)
 
+        now = datetime.now(timezone.utc)
         assert "ssh-agent" in go(ssh_scope(ssh), sock_env=False).stderr
-        assert "--expected-fingerprint" in go(ssh_scope(ssh), fp=None).stderr
-        assert "outside the authorized window" in go(ssh_scope(ssh, valid_until=(date.today() - timedelta(days=1)).isoformat())).stderr
+        assert "--expected-fingerprint" in go(ssh_scope(ssh), fp=False).stderr
+        assert "outside the authorized window" in go(ssh_scope(ssh, not_before=iso(now - timedelta(hours=3)), not_after=iso(now - timedelta(hours=2)))).stderr
+        assert "longer than 24 hours" in go(ssh_scope(ssh, not_after=iso(now + timedelta(hours=30)))).stderr
         assert "script_sha256" in go(ssh_scope(ssh, script_sha256="1" * 64)).stderr
+        assert "common_sha256" in go(ssh_scope(ssh, common_sha256="1" * 64)).stderr
+        assert "identity_json_sha256" in go(ssh_scope(ssh, identity_json_sha256="1" * 64)).stderr
         assert "manifest_sha256" in go(ssh_scope(ssh, manifest_sha256="1" * 64)).stderr
         assert "key_fingerprint" in go(ssh_scope(ssh, key_fingerprint="SHA256:" + "B" * 43)).stderr
         assert "namespace" in go(ssh_scope(ssh, namespace="other@v1")).stderr
         assert "unknown key" in go(ssh_scope(ssh, extra="1")).stderr
+        assert "required key" in go(ssh_scope(ssh, build_commit=None)).stderr
         other = ssh.ev / "not-the-manifest.json"
         other.write_text("{}\n")
-        sc = ssh_scope(ssh, manifest_sha256=sha_file(other))
-        assert "only the top-level release-manifest.json" in go(sc, manifest=other).stderr
-        assert "expected one" in go(ssh_scope(ssh), fp="SHA256:" + "C" * 43).stderr
-        assert not (ssh.outside / "r.sig").exists() and not (ssh.tmp / "keygen.log").exists() or "-Y sign" not in (ssh.tmp / "keygen.log").read_text()
+        assert "only the top-level release-manifest.json" in go(ssh_scope(ssh, manifest_sha256=sha_file(other)), manifest=other).stderr
+        r = ssh.run(*real_args(ssh, ssh_scope(ssh), ssh.outside / "e.sig", fp=True)[:-2], "--expected-fingerprint", "SHA256:" + "C" * 43, path_dirs=[fake],
+                    SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test")
+        assert "expected one" in r.stderr
+        a = real_args(ssh, ssh_scope(ssh), ssh.outside / "rl.sig")
+        a[a.index("--ledger") + 1] = "relative-ledger.txt"
+        assert "absolute" in ssh.run(*a, path_dirs=[fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test").stderr
+        b = real_args(ssh, ssh_scope(ssh), ssh.outside / "nl.sig")
+        i = b.index("--ledger")
+        del b[i:i + 2]
+        assert "--ledger FILE" in ssh.run(*b, path_dirs=[fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test").stderr
+        assert not any(p.suffix == ".sig" for p in ssh.outside.iterdir())
+        assert not (ssh.tmp / "tools.log").exists() or "-Y sign" not in (ssh.tmp / "tools.log").read_text()
+    finally:
+        s.close()
+
+
+def test_scope_file_is_read_once_and_the_copy_is_parsed(ssh):
+    """R4-03: the scope file is hashed and parsed from ONE private copy. A `cat` stub (first in PATH under the test switch) swaps the scope
+    file for garbage right after the script read it; the run must still be judged on the bytes that were hashed (and so not on the swap)."""
+    fake = make_fake_tools(ssh, ssh.key)
+    sc = ssh_scope(ssh)
+    write_exec(fake / "cat", textwrap.dedent(f'''\
+        #!/bin/bash
+        /bin/cat "$@"; rc=$?
+        case "$1" in "{sc}") echo "garbage_after_hash=1" > "{sc}";; esac
+        exit $rc
+        '''))
+    sock = ssh.tmp / "agent.sock"
+    s = bind_unix_socket(sock)
+    try:
+        r = ssh.run(*real_args(ssh, sc, ssh.outside / "once.sig"), path_dirs=[fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test")
+        assert r.returncode == 0, (r.stdout, r.stderr)
+        assert "garbage" in sc.read_text(), "the swap happened"
     finally:
         s.close()
 
@@ -952,15 +1193,39 @@ def test_sshsig_real_mode_refusals(ssh):
 # ====================================================================================================================
 # hand-off helper (Windows build host) and the Windows signing script, with stubs
 # ====================================================================================================================
-def helper_run(tmp: Path, mode: str, f: Path, d: Path = None, **env):
-    e = clean_env(tmp / "h", [], R0P_HANDOFF_MODE=mode, R0P_HANDOFF_DIR=str(d), **env)
+STUB_POWERSHELL = r'''#!/bin/bash
+# stand-in for powershell.exe on the build host: prints what Get-AuthenticodeSignature would (configured in stub.conf)
+D="$(cd "$(dirname "$0")" && pwd)"; . "$D/stub.conf"
+echo "powershell.exe $*" >> "$LOG"
+printf '%s|%s|%s|%s\r\n' "${SIG_STATUS:-Valid}" "${SIG_SUBJECT:-CN=Stub Test Org, O=Stub}" "${SIG_ISSUER:-CN=Stub Issuer CA 01}" "${SIG_TS:-True}"
+'''
+
+
+def helper_env(tmp: Path, mode: str, d: Path, requests: Path = None, stubs: Path = None, **env):
+    e = {"R0P_HANDOFF_MODE": mode, "R0P_HANDOFF_DIR": str(d)}
+    if mode == "apply":
+        e.update(R0P_HANDOFF_REQUESTS=str(requests or (d / "REQUESTS.sha256")), R0P_EXPECT_SIGNER_CN="Stub Test Org", R0P_EXPECT_ISSUER_SUBSTR="Stub Issuer CA")
+    e.update({k: str(v) for k, v in env.items()})
     (tmp / "h").mkdir(exist_ok=True)
-    return run(["/bin/bash", HELPER, f], e)
+    return clean_env(tmp / "h", [stubs] if stubs else [], **e)
+
+
+def helper_run(tmp: Path, mode: str, f: Path, d: Path = None, requests: Path = None, stubs: Path = None, **env):
+    return run(["/bin/bash", HELPER, f], helper_env(tmp, mode, d, requests, stubs, **env))
+
+
+def make_ps_stub(tmp: Path, **conf) -> Path:
+    s = tmp / "psstub"
+    s.mkdir(exist_ok=True)
+    (s / "stub.conf").write_text("".join(f"{k}={shlex.quote(str(v))}\n" for k, v in dict(LOG=str(tmp / "ps.log"), **conf).items()))
+    write_exec(s / "powershell.exe", STUB_POWERSHELL)
+    return s
 
 
 def test_handoff_helper_collect_and_apply(tmp_path):
     d = tmp_path / "round1"
     d.mkdir()
+    ps = make_ps_stub(tmp_path)
     bins = tmp_path / "bins"
     bins.mkdir()
     launcher = bins / "agentic-r0prime.exe"
@@ -983,15 +1248,19 @@ def test_handoff_helper_collect_and_apply(tmp_path):
     names = sorted(p.name for p in (d / "requests-inner").iterdir())
     assert names == sorted([f"launcher-{before[launcher.name]}.exe", f"sidecar-{before[sidecar.name]}.exe", f"uninstaller-{before[unins.name]}.exe",
                             f"unknown-{before[other.name]}.exe"]), "an unknown exe is recorded as 'unknown' (the signing script refuses that name); the dll is not requested"
+    # the build host's own record of what it asked for
+    reqs = (d / "REQUESTS.sha256").read_text().splitlines()
+    assert f"{before[launcher.name]}  launcher-{before[launcher.name]}.exe" in reqs and len(reqs) == 4
     assert (d / "requests-container" / MSI_NAME).is_file()
     log = (d / "signcommand.log").read_text()
     assert "skipped (third-party" in log and "role=unknown" in log
-    # idempotent; a different file with the same request name is impossible (the name carries the hash), a changed container is refused
     assert helper_run(tmp_path, "collect", launcher, d).returncode == 0
+    assert len((d / "REQUESTS.sha256").read_text().splitlines()) == 4, "idempotent"
     msi.write_bytes(b"msi unsigned CHANGED")
     r = helper_run(tmp_path, "collect", msi, d)
     assert r.returncode == 1 and "different bytes" in r.stderr
-    # round 2: signed files come back (here: stand-ins with extra bytes) with the SHA256SUMS of the signing run
+    # round 2: signed files come back (stand-ins) with the SHA256SUMS of the signing run
+    requests = d / "REQUESTS.sha256"
     d2 = tmp_path / "round2"
     (d2 / "signed-inner").mkdir(parents=True)
     sums = []
@@ -1002,34 +1271,98 @@ def test_handoff_helper_collect_and_apply(tmp_path):
         sums.append(f"{sha_file(signed)}  {req}\n")
     (d2 / "signed-inner" / "SHA256SUMS").write_text("".join(sums))
     for src in (launcher, sidecar, unins):
-        r = helper_run(tmp_path, "apply", src, d2)
+        r = helper_run(tmp_path, "apply", src, d2, requests=requests, stubs=ps)
         assert r.returncode == 0 and "replaced" in r.stdout, r.stderr
         assert src.read_bytes().endswith(b"\nSIGNED")
-        # running it again on the now-signed file is accepted unchanged
-        assert "already signed" in helper_run(tmp_path, "apply", src, d2).stdout
-    assert helper_run(tmp_path, "apply", dll, d2).returncode == 0 and dll.read_bytes() == b"MZ third party dll"
-    # failures never let an unsigned inner file through
-    r = helper_run(tmp_path, "apply", other, d2)
+        assert "already signed" in helper_run(tmp_path, "apply", src, d2, requests=requests, stubs=ps).stdout
+    assert "Get-AuthenticodeSignature" in (tmp_path / "ps.log").read_text()
+    assert helper_run(tmp_path, "apply", dll, d2, requests=requests, stubs=ps).returncode == 0 and dll.read_bytes() == b"MZ third party dll"
+    r = helper_run(tmp_path, "apply", other, d2, requests=requests, stubs=ps)
     assert r.returncode == 1 and "unknown executable" in r.stderr
     new = bins / "agentic-r0prime.exe"
     new.write_bytes(b"MZ a different build of the launcher")
-    r = helper_run(tmp_path, "apply", new, d2)
-    assert r.returncode == 1 and "no signed counterpart" in r.stderr and new.read_bytes() == b"MZ a different build of the launcher"
-    # a tampered signed file fails its SHA256SUMS entry
+    r = helper_run(tmp_path, "apply", new, d2, requests=requests, stubs=ps)
+    assert r.returncode == 1 and "not in the request list" in r.stderr and new.read_bytes() == b"MZ a different build of the launcher"
     req = f"launcher-{before['agentic-r0prime.exe']}.exe"
     (d2 / "signed-inner" / req).write_bytes(b"tampered")
     unsigned_again = tmp_path / "again" / "agentic-r0prime.exe"
     unsigned_again.parent.mkdir()
     unsigned_again.write_bytes(b"MZ unsigned launcher")
-    r = helper_run(tmp_path, "apply", unsigned_again, d2)
+    r = helper_run(tmp_path, "apply", unsigned_again, d2, requests=requests, stubs=ps)
     assert r.returncode == 1 and "does not match its SHA256SUMS" in r.stderr
-    # containers are recorded unsigned in apply mode
     (tmp_path / "again" / MSI_NAME).write_bytes(b"rebuilt msi")
-    assert helper_run(tmp_path, "apply", tmp_path / "again" / MSI_NAME, d2).returncode == 0
+    assert helper_run(tmp_path, "apply", tmp_path / "again" / MSI_NAME, d2, requests=requests, stubs=ps).returncode == 0
     assert (d2 / "requests-container" / MSI_NAME).read_bytes() == b"rebuilt msi"
-    # argument policy
     assert "absolute" in run(["/bin/bash", HELPER, launcher], clean_env(tmp_path, [], R0P_HANDOFF_MODE="collect", R0P_HANDOFF_DIR="rel")).stderr
     assert "collect or apply" in run(["/bin/bash", HELPER, launcher], clean_env(tmp_path, [], R0P_HANDOFF_DIR=str(d))).stderr
+
+
+def _round(tmp_path, sig_conf=None):
+    """collect one launcher on the 'build host', fabricate its signed counterpart, return everything the apply step needs"""
+    d1 = tmp_path / "r1"
+    d1.mkdir()
+    exe = tmp_path / "bh" / "agentic-r0prime.exe"
+    exe.parent.mkdir()
+    exe.write_bytes(b"MZ launcher")
+    unsigned = sha_file(exe)
+    assert helper_run(tmp_path, "collect", exe, d1).returncode == 0
+    d2 = tmp_path / "r2"
+    (d2 / "signed-inner").mkdir(parents=True)
+    req = f"launcher-{unsigned}.exe"
+    signed = d2 / "signed-inner" / req
+    signed.write_bytes(b"MZ launcher\nSIGNED")
+    (d2 / "signed-inner" / "SHA256SUMS").write_text(f"{sha_file(signed)}  {req}\n")
+    return exe, d1 / "REQUESTS.sha256", d2, make_ps_stub(tmp_path, **(sig_conf or {}))
+
+
+@pytest.mark.parametrize("conf,msg", [
+    (dict(SIG_STATUS="NotSigned"), "not Valid"),
+    (dict(SIG_STATUS="HashMismatch"), "not Valid"),
+    (dict(SIG_SUBJECT="CN=Somebody Else, O=x"), "signer subject is not CN=Stub Test Org"),
+    (dict(SIG_SUBJECT="CN=Stub Test Org Evil, O=x"), "signer subject is not CN=Stub Test Org"),
+    (dict(SIG_ISSUER="CN=Other CA"), "issuer does not contain"),
+    (dict(SIG_TS="False"), "no timestamp"),
+])
+def test_handoff_apply_verifies_the_signature_identity_before_accepting(tmp_path, conf, msg):
+    """R4-07: a planted file plus a matching SHA256SUMS line is not enough: Status Valid, the signer CN, the issuer text and a timestamp."""
+    exe, req, d2, ps = _round(tmp_path, conf)
+    r = helper_run(tmp_path, "apply", exe, d2, requests=req, stubs=ps)
+    assert r.returncode == 1 and msg in r.stderr, r.stderr
+    assert exe.read_bytes() == b"MZ launcher", "nothing was replaced"
+    # and with the right identity it is accepted
+    ps_ok = make_ps_stub(tmp_path)
+    assert helper_run(tmp_path, "apply", exe, d2, requests=req, stubs=ps_ok).returncode == 0
+
+
+def test_handoff_apply_needs_the_hosts_own_request_list_and_the_expectations(tmp_path):
+    exe, req, d2, ps = _round(tmp_path)
+    # a signed file planted with a matching SHA256SUMS line that this host never requested (the reviewer's reproducer)
+    planted = d2 / "signed-inner" / ("launcher-" + "9" * 64 + ".exe")
+    planted.write_bytes(b"random planted file")
+    with open(d2 / "signed-inner" / "SHA256SUMS", "a") as f:
+        f.write(f"{sha_file(planted)}  {planted.name}\n")
+    victim = tmp_path / "bh" / "other" / "agentic-r0prime.exe"
+    victim.parent.mkdir()
+    victim.write_bytes(b"random planted file")        # hash equals the planted signed file: 'already signed' path
+    r = helper_run(tmp_path, "apply", victim, d2, requests=req, stubs=ps)
+    assert r.returncode == 1 and "not one of the requests this build host recorded" in r.stderr
+    e = helper_env(tmp_path, "apply", d2, req, ps)
+    e.pop("R0P_HANDOFF_REQUESTS")
+    assert "R0P_HANDOFF_REQUESTS" in run(["/bin/bash", HELPER, exe], e).stderr
+    e = helper_env(tmp_path, "apply", d2, req, ps)
+    e.pop("R0P_EXPECT_SIGNER_CN")
+    assert "R0P_EXPECT_SIGNER_CN" in run(["/bin/bash", HELPER, exe], e).stderr
+    assert exe.read_bytes() == b"MZ launcher"
+
+
+def test_handoff_helper_refuses_file_names_with_control_characters(tmp_path):
+    d = tmp_path / "r"
+    d.mkdir()
+    bad = tmp_path / "bad\nname.exe"
+    bad.write_bytes(b"MZ")
+    r = helper_run(tmp_path, "collect", bad, d)
+    assert r.returncode == 1 and "control character" in r.stderr
+    assert not (d / "signcommand.log").exists() or "\nname" not in (d / "signcommand.log").read_text()
 
 
 # ---- Windows signing script with stub java / python / az ------------------------------------------------------------
@@ -1040,7 +1373,6 @@ echo "java $*" >> "$LOG"
 env | sed 's/=.*//' | sort >> "$D/java-env-names.txt"
 [ "${JAVA_SLEEP:-0}" -gt 0 ] && exec sleep "$JAVA_SLEEP"
 [ "${JAVA_FAIL:-0}" = 1 ] && exit 1
-if [ "${JAVA_STORETYPE_CHECK:-0}" = 1 ]; then :; fi
 for a in "$@"; do
   case "$a" in file:*) tf="${a#file:}"; [ -f "$tf" ] && cp "$tf" "$D/token-seen.txt";; esac
   if [ -f "$a" ]; then case "$a" in *.exe|*.msi) [ "${JAVA_NOSIGN:-0}" = 1 ] || printf '\nSTUB-AUTHENTICODE-SIGNATURE' >> "$a";; esac; fi
@@ -1051,7 +1383,11 @@ exit 0
 STUB_PY = r'''#!/bin/bash
 D="$(cd "$(dirname "$0")" && pwd)"; . "$D/stub.conf"
 # python -I - FILE  (signature count) | python -I verify_signature_v2.py ... | python -I -c ...
-if [ "$1" = "-I" ] && [ "$2" = "-" ]; then cat >/dev/null; if grep -q STUB-AUTHENTICODE "$3" 2>/dev/null; then echo 1; else echo 0; fi; exit 0; fi
+if [ "$1" = "-I" ] && [ "$2" = "-" ]; then
+  cat >/dev/null
+  [ -n "${SWAP_DURING_PRECHECK:-}" ] && [ "$3" = "$SWAP_DURING_PRECHECK" ] && printf 'SWAPPED BYTES' > "$3"
+  if grep -q STUB-AUTHENTICODE "$3" 2>/dev/null; then echo 1; else echo 0; fi; exit 0
+fi
 if [ "$1" = "-I" ] && [ "$2" = "-c" ]; then echo "0.0-stub"; exit 0; fi
 if [ "$1" = "-I" ]; then
   echo "python $*" >> "$LOG"
@@ -1068,8 +1404,16 @@ STUB_AZ = r'''#!/bin/bash
 D="$(cd "$(dirname "$0")" && pwd)"; . "$D/stub.conf"
 echo "az $*" >> "$LOG"
 env | sed 's/=.*//' | sort >> "$D/az-env-names.txt"
+[ -n "${SWAP_COPY_BEFORE_SIGN:-}" ] && printf 'SWAPPED AFTER COPY' > "$SWAP_COPY_BEFORE_SIGN"
 echo "STUBTOKEN-0123456789-SECRET"
 exit 0
+'''
+
+STUB_CP = r'''#!/bin/bash
+# a cp that swaps the SOURCE right before copying it (the window between the hash check and the copy)
+D="$(cd "$(dirname "$0")" && pwd)"; . "$D/stub.conf"
+if [ -n "${SWAP_SOURCE_AT_CP:-}" ] && [ "${1:-}" = "$SWAP_SOURCE_AT_CP" ]; then printf 'SWAPPED AT COPY' > "$1"; fi
+exec /bin/cp "$@"
 '''
 
 
@@ -1086,22 +1430,23 @@ class Win:
         write_exec(self.stubs / "java", STUB_JAVA)
         write_exec(self.stubs / "az", STUB_AZ)
         write_exec(self.stubs / "py", STUB_PY)
-        # tools dir with a stand-in "jsign jar"; the production script pins the real jar's sha256, so the test copies the script
-        # into its own tree and replaces the pin with the stand-in's hash (the production script is not edited)
         self.tools = tmp / "tools"
         (self.tools / "jsign").mkdir(parents=True)
         (self.tools / "jsign" / "jsign-7.6.jar").write_bytes(b"stand-in jar")
+        # a private copy of the script tree with the pinned jar hash replaced by the stand-in's (the production script is not edited)
         tree = tmp / "tree"
         (tree / "signing").mkdir(parents=True)
-        shutil.copy(WIN, tree / "signing" / WIN.name)
-        shutil.copy(VERIFIER, tree / "signing" / VERIFIER.name)
-        shutil.copy(ROOT / "packaging" / "identity.json", tree / "identity.json")
+        for src in (WIN, VERIFIER, COMMON):
+            shutil.copy(src, tree / "signing" / src.name)
+        for src in (IDJSON, GATE_JSON, GATE_PY):
+            shutil.copy(src, tree / src.name)
         text = (tree / "signing" / WIN.name).read_text()
         pin = "6cf58aa080e7ff82656f320cff8d4a3bff30408df8766806dcba3740dd839fa5"
         assert pin in text
         (tree / "signing" / WIN.name).write_text(text.replace(pin, sha_bytes(b"stand-in jar")))
         (tree / "signing" / WIN.name).chmod(0o755)
         self.script = tree / "signing" / WIN.name
+        self.tree = tree
         self.files = tmp / "files"
         self.files.mkdir()
 
@@ -1123,29 +1468,55 @@ class Win:
         p.write_bytes(content)
         return p, sha_bytes(content)
 
-    def run(self, stage, pairs, *args, outdir=None, **env):
+    def env(self, stubs=True, **extra):
+        if stubs:
+            extra.setdefault("R0P_ALLOW_NONSYSTEM_TOOLS", "stub-test")
+        return clean_env(self.home, [self.stubs], **extra)
+
+    def run(self, stage, pairs, *args, outdir=None, stubs=True, **env):
         a = ["/bin/bash", self.script, "--stage", stage]
         for p, h in pairs:
             a += ["--input", p, "--sha256", h]
         a += ["--outdir", outdir or (self.tmp / "wout"), "--tools-dir", self.tools, "--python", self.stubs / "py"] + list(args)
-        return run(a, clean_env(self.home, [self.stubs], **env))
+        return run(a, self.env(stubs=stubs, **env))
+
+    @property
+    def ledger(self) -> Path:
+        return self.tmp / "wledger.txt"
 
     def scope(self, st, pairs, **over) -> Path:
-        d = {"scope_version": "1", "valid_from": (date.today() - timedelta(days=1)).isoformat(), "valid_until": (date.today() + timedelta(days=1)).isoformat(),
-             "script_sha256": sha_file(self.script), "verifier_sha256": sha_file(VERIFIER), "stage": st,
-             "inputs_sha256": ",".join(sorted(h for _, h in pairs)), "az_endpoint": "https://eus.codesigning.azure.net/", "az_account": "stub-account",
-             "az_profile": "stub-profile", "expected_cn": "CN=Stub Test Org"}
+        now = datetime.now(timezone.utc)
+        d = {"scope_version": "2", "not_before": iso(now - timedelta(hours=1)), "not_after": iso(now + timedelta(hours=1)),
+             "script_sha256": sha_file(self.script), "common_sha256": sha_file(COMMON), "verifier_sha256": sha_file(VERIFIER),
+             "identity_json_sha256": sha_file(IDJSON), "stage": st, "inputs_sha256": ",".join(sorted(h for _, h in pairs)),
+             "az_endpoint": "https://eus.codesigning.azure.net/", "az_account": "stub-account", "az_profile": "stub-profile", "expected_cn": "CN=Stub Test Org",
+             "gate_sha256": sha_file(GATE_JSON), "gate_tool_sha256": sha_file(GATE_PY), "distribution": "no",
+             "evidence_manifest_sha256": "e" * 64, "build_commit": "b" * 40, "procedure_commit": "c" * 40,
+             "tool_az_sha256": sha_file(self.stubs / "az"), "tool_java_sha256": sha_file(self.stubs / "java"),
+             "tool_python_sha256": sha_file(self.stubs / "py"), "tool_osslsigncode_sha256": "none",
+             "container_listing_sha256": "none" if st == "inner" else sha_bytes(LISTING_TEXT)}
         d.update(over)
         p = self.tmp / f"wscope-{len(list(self.tmp.glob('wscope-*')))}.txt"
-        p.write_text("".join(f"{k}={v}\n" for k, v in d.items()))
+        p.write_text("".join(f"{k}={v}\n" for k, v in d.items() if v is not None))
         return p
 
     REAL_ENV = {"R0P_AZ_ENDPOINT": "https://eus.codesigning.azure.net/", "R0P_AZ_ACCOUNT": "stub-account", "R0P_AZ_PROFILE": "stub-profile", "R0P_AZ_EXPECTED_CN": "CN=Stub Test Org"}
 
-    def real(self, stage, pairs, sc, *args, env=None, **kw):
+    def listing(self) -> Path:
+        p = self.tmp / "container-listing.txt"
+        p.write_bytes(LISTING_TEXT)
+        return p
+
+    def real(self, stage, pairs, sc, *args, env=None, ledger=True, **kw):
         e = dict(self.REAL_ENV)
         e.update(env or {})
-        return self.run(stage, pairs, "--real", "--i-have-owner-authorization", sha_file(sc), "--scope-file", sc, *args, **dict(e, **kw))
+        extra = ["--ledger", self.ledger] if ledger else []
+        if stage == "container" and "--container-listing" not in args:
+            extra += ["--container-listing", self.listing()]
+        return self.run(stage, pairs, "--real", "--i-have-owner-authorization", sha_file(sc), "--scope-file", sc, *extra, *args, **dict(e, **kw))
+
+
+LISTING_TEXT = b"Contents of the rebuilt installer:\nagentic-r0prime.exe\nredevops-sidecar.exe\nuninstall.exe\n"
 
 
 @pytest.fixture
@@ -1202,17 +1573,26 @@ def test_windows_service_coordinates_are_validated_before_anything(win, var, val
     r = win.run("inner", [(p, h)], "--real", "--i-have-owner-authorization", "0" * 64, "--scope-file", win.tmp / "none", **env)
     assert r.returncode == 2 and msg in r.stderr
     assert win.log.read_text() == "" and not (win.tmp / "wout").exists()
-    # the same refusal in dry-run mode (mode-independent)
     r = win.run("inner", [(p, h)], **env)
     assert r.returncode == 2 and msg in r.stderr
 
 
+_n = datetime.now(timezone.utc)
 WIN_SCOPE_REFUSALS = [
-    ("script", dict(script_sha256="1" * 64), "script_sha256"), ("verifier", dict(verifier_sha256="1" * 64), "verifier_sha256"),
+    ("script", dict(script_sha256="1" * 64), "script_sha256"), ("common", dict(common_sha256="1" * 64), "common_sha256"),
+    ("verifier", dict(verifier_sha256="1" * 64), "verifier_sha256"), ("identity.json", dict(identity_json_sha256="1" * 64), "identity_json_sha256"),
     ("stage", dict(stage="container"), "stage"), ("inputs", dict(inputs_sha256="1" * 64), "inputs_sha256"),
     ("endpoint", dict(az_endpoint="https://weu.codesigning.azure.net/"), "service coordinates"), ("account", dict(az_account="other-acct"), "service coordinates"),
-    ("cn", dict(expected_cn="CN=Other"), "expected_cn"), ("expired", dict(valid_until=(date.today() - timedelta(days=1)).isoformat()), "outside the authorized window"),
-    ("unknown", dict(extra="1"), "unknown key"),
+    ("cn", dict(expected_cn="CN=Other"), "expected_cn"),
+    ("expired", dict(not_before=iso(_n - timedelta(hours=3)), not_after=iso(_n - timedelta(hours=2))), "outside the authorized window"),
+    ("longer than 24 h", dict(not_after=iso(_n + timedelta(hours=30))), "longer than 24 hours"),
+    ("gate", dict(gate_sha256="1" * 64), "gate_sha256"), ("gate tool", dict(gate_tool_sha256="1" * 64), "gate_tool_sha256"),
+    ("distribution disagrees", dict(distribution="yes"), "distribution=yes"),
+    ("bad commit", dict(procedure_commit="abc"), "40-hex"), ("bad manifest", dict(evidence_manifest_sha256="x"), "evidence_manifest_sha256"),
+    ("az tool hash", dict(tool_az_sha256="1" * 64), "tool_az_sha256"), ("java tool hash", dict(tool_java_sha256="1" * 64), "tool_java_sha256"),
+    ("python tool hash", dict(tool_python_sha256="1" * 64), "tool_python_sha256"), ("osslsigncode", dict(tool_osslsigncode_sha256="1" * 64), "tool_osslsigncode_sha256"),
+    ("listing for inner", dict(container_listing_sha256="1" * 64), "container_listing_sha256"),
+    ("unknown", dict(extra="1"), "unknown key"), ("missing", dict(az_profile=None), "required key"), ("old version", dict(scope_version="1"), "scope_version must be 2"),
 ]
 
 
@@ -1222,25 +1602,28 @@ def test_windows_real_scope_refusals_make_no_azure_call(win, name, over, msg):
     sc = win.scope("inner", [(p, h)], **over)
     r = win.real("inner", [(p, h)], sc)
     assert r.returncode == 2 and msg in r.stderr, (r.stdout, r.stderr)
-    assert "az " not in win.log.read_text() and not (win.tmp / "wout").exists()
+    assert "az " not in win.log.read_text() and not (win.tmp / "wout").exists() and not win.ledger.exists()
 
 
-def test_windows_real_requires_authorization_and_env(win):
+def test_windows_real_requires_authorization_ledger_and_env(win):
     p, h = win.inner()
     r = win.run("inner", [(p, h)], "--real", **win.REAL_ENV)
     assert r.returncode == 2 and "--i-have-owner-authorization" in r.stderr
     sc = win.scope("inner", [(p, h)])
     r = win.run("inner", [(p, h)], "--real", "--i-have-owner-authorization", sha_file(sc), "--scope-file", sc)
     assert r.returncode == 2 and "R0P_AZ_ENDPOINT" in r.stderr
+    r = win.real("inner", [(p, h)], sc, ledger=False)
+    assert r.returncode == 2 and "--ledger FILE" in r.stderr
     r = win.run("inner", [(p, h)], "--dry-run", "--real", **win.REAL_ENV)
     assert r.returncode == 2 and "at most one" in r.stderr
     r = win.run("inner", [(p, h)], "--i-have-owner-authorization", "0" * 64)
     assert "used only with --real" in r.stderr
+    r = win.run("inner", [(p, h)], "--ledger", win.ledger)
+    assert "used only with --real" in r.stderr
     assert "az " not in win.log.read_text()
 
 
-def test_windows_real_path_with_stubs_token_handling_and_two_stages(win):
-    # stage inner
+def test_windows_real_path_with_stubs_token_handling_ledger_and_two_stages(win):
     p, h = win.inner("launcher")
     q, hq = win.inner("sidecar", b"MZ sidecar")
     sc = win.scope("inner", [(p, h), (q, hq)])
@@ -1253,29 +1636,46 @@ def test_windows_real_path_with_stubs_token_handling_and_two_stages(win):
     assert "--storetype TRUSTEDSIGNING --keystore https://eus.codesigning.azure.net/ --storepass file:" in jl[0]
     assert "--alias stub-account/stub-profile --alg SHA-256 --tsmode RFC3161 --tsaurl http://timestamp.acs.microsoft.com --tsretries 3 --tsretrywait 10" in jl[0]
     assert "STUBTOKEN" not in log and "SECRET" not in log, "the token is never on a command line"
-    # the token file was readable by (stub) Jsign through file:, then removed; nothing of the token is in the outdir or on the console
     assert (win.stubs / "token-seen.txt").read_text().strip() == "STUBTOKEN-0123456789-SECRET"
     out = win.tmp / "wout"
     assert sorted(x.name for x in out.iterdir()) == sorted(["EVIDENCE.txt", "SHA256SUMS", p.name, q.name])
     assert "STUBTOKEN" not in all_text(out) + r.stdout + r.stderr
     ev = (out / "EVIDENCE.txt").read_text()
     assert "stage:           inner" in ev and "role=launcher" in ev and "role=sidecar" in ev and "NOT yet in any installer" in ev
+    assert "TRIPWIRE" in ev and "PRIVATE-CANDIDATE" in ev and "tools (sha256)" in ev and "build commit " + "b" * 40 in ev
     assert "/Users/" not in ev and "/private/" not in ev and "/var/folders" not in ev
-    assert (out / p.name).read_bytes().endswith(b"STUB-AUTHENTICODE-SIGNATURE") and sha_file(p) == h, "the input is untouched"
-    # the Jsign child saw neither the token nor cloud/agent variables in its environment names
+    assert "PRIVATE-CANDIDATE SIGNING" in r.stdout, "the gate output and the loud statement are printed"
+    assert (out / p.name).read_bytes().endswith(b"STUB-AUTHENTICODE-SIGNATURE") and sha_file(p) == h
     names = (win.stubs / "java-env-names.txt").read_text().split()
-    assert not [n for n in names if n.startswith(("AZURE", "AWS", "SSH_", "GITHUB", "GH_", "APPROVAL"))]
+    assert not [n for n in names if n.startswith(("AZURE", "AWS", "SSH_", "GITHUB", "GH_", "APPROVAL", "R0P_AZ"))]
     az_names = (win.stubs / "az-env-names.txt").read_text().split()
-    assert not [n for n in az_names if n.startswith(("AWS", "SSH_", "GITHUB", "GH_", "APPROVAL"))]
-    # the hand-off: SHA256SUMS of the signing run feeds the build host's apply step
+    assert not [n for n in az_names if n.startswith(("AWS", "SSH_", "GITHUB", "GH_", "APPROVAL", "R0P_AZ"))]
+    led = win.ledger.read_text()
+    assert "event=started" in led and "event=ended" in led and "success=1" in led
     assert (out / "SHA256SUMS").read_text().split()[1] == p.name
-    # stage container, a separate run, own scope
+    # the same scope is refused a second time (one-time ledger), --allow-reuse is explicit
+    r2 = win.real("inner", [(p, h), (q, hq)], sc, outdir=win.tmp / "wout-again")
+    assert r2.returncode == 2 and "already used" in r2.stderr and not (win.tmp / "wout-again").exists()
+    r3 = win.real("inner", [(p, h), (q, hq)], sc, "--allow-reuse", outdir=win.tmp / "wout-again")
+    assert r3.returncode == 0 and "--allow-reuse" in r3.stdout
+    # stage container: a separate run, own scope, the container listing is required and recorded
     m, hm = win.container()
     scc = win.scope("container", [(m, hm)])
-    r2 = win.real("container", [(m, hm)], scc, outdir=win.tmp / "wout2")
-    assert r2.returncode == 0, (r2.stdout, r2.stderr)
-    assert "stage:           container" in (win.tmp / "wout2" / "EVIDENCE.txt").read_text()
-    assert "Windows acceptance kit must check the installed files" in (win.tmp / "wout2" / "EVIDENCE.txt").read_text()
+    assert "--container-listing" in win.run("container", [(m, hm)], "--real", "--i-have-owner-authorization", sha_file(scc), "--scope-file", scc,
+                                           "--ledger", win.ledger, outdir=win.tmp / "wout-nolist", **win.REAL_ENV).stderr
+    r4 = win.real("container", [(m, hm)], scc, outdir=win.tmp / "wout2")
+    assert r4.returncode == 0, (r4.stdout, r4.stderr)
+    ev2 = (win.tmp / "wout2" / "EVIDENCE.txt").read_text()
+    assert "stage:           container" in ev2 and "does NOT inspect the container contents" in ev2 and sha_bytes(LISTING_TEXT) in ev2
+    assert "Windows acceptance kit must check the installed files" in ev2
+
+
+def test_windows_distribution_flag_runs_the_gate_and_refuses_while_decisions_are_open(win):
+    p, h = win.inner()
+    sc = win.scope("inner", [(p, h)], distribution="yes")
+    r = win.real("inner", [(p, h)], sc, "--distribution")
+    assert r.returncode == 2 and "REFUSES a distribution signing" in r.stderr and "D-LIC-1" in r.stderr
+    assert "az " not in win.log.read_text() and not win.ledger.exists()
 
 
 def test_windows_verification_failure_releases_nothing_and_leaves_a_marker(win):
@@ -1287,8 +1687,68 @@ def test_windows_verification_failure_releases_nothing_and_leaves_a_marker(win):
     out = win.tmp / "wout"
     assert [x.name for x in out.iterdir()] == ["FAILED"] and "FAILED-ATTEMPT" in (out / "FAILED").read_text()
     assert "STUBTOKEN" not in (out / "FAILED").read_text() + r.stdout + r.stderr
-    # the token file did not survive the failure
     assert not list(out.rglob("token"))
+    assert "success=0" in win.ledger.read_text(), "a failed run burns the scope: it is in the ledger"
+
+
+def test_windows_swapped_input_is_detected_after_the_copy(win):
+    """R4-02 regression: the input is replaced after its hash was checked (here: while the signature pre-check runs on it); the script
+    must refuse and must NOT hand the replaced bytes to Jsign."""
+    p, h = win.inner()
+    win.conf(SWAP_DURING_PRECHECK=str(p))
+    sc = win.scope("inner", [(p, h)])
+    r = win.real("inner", [(p, h)], sc)
+    assert r.returncode == 2 and "changed between the hash check and the copy" in r.stderr, (r.stdout, r.stderr)
+    log = win.log.read_text()
+    assert "java " not in log and "az " not in log, "nothing was signed and no token was requested"
+    assert [x.name for x in (win.tmp / "wout").iterdir()] == ["FAILED"]
+
+
+def test_windows_input_swapped_between_hash_and_cp_is_detected(win):
+    """R4-02: a `cp` stub swaps the source right before copying; the hash of the COPY is compared with the authorized hash."""
+    p, h = win.inner()
+    write_exec(win.stubs / "cp", STUB_CP)
+    win.conf(SWAP_SOURCE_AT_CP=str(p))
+    sc = win.scope("inner", [(p, h)])
+    r = win.real("inner", [(p, h)], sc)
+    assert r.returncode == 2 and "changed between the hash check and the copy" in r.stderr
+    assert "java " not in win.log.read_text()
+
+
+def test_windows_copy_swapped_after_the_token_request_is_detected_before_jsign(win):
+    """R4-02: the file in the private work directory is replaced just before the Jsign call (the az stub does it): re-hashed, refused."""
+    p, h = win.inner()
+    win.conf(SWAP_COPY_BEFORE_SIGN=str(win.tmp / "wout" / "work" / "signing" / p.name))
+    sc = win.scope("inner", [(p, h)])
+    r = win.real("inner", [(p, h)], sc)
+    assert r.returncode == 2 and "is not the authorized file" in r.stderr, (r.stdout, r.stderr)
+    assert "java " not in win.log.read_text(), "Jsign was never started on the swapped bytes"
+
+
+def test_windows_environment_scrub_cannot_be_skipped_and_path_is_fixed(win):
+    p, h = win.inner()
+    sc = win.scope("inner", [(p, h)])
+    # a pre-set marker variable and ambient credentials: the scrub still happens (the check looks at the environment itself)
+    r = win.real("inner", [(p, h)], sc, env=dict(R0P_SCRUBBED="1", AZURE_CLIENT_SECRET="x", AWS_SECRET_ACCESS_KEY="y", GITHUB_TOKEN="z", SSH_AUTH_SOCK="/nonexistent"))
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    for f in ("java-env-names.txt", "az-env-names.txt"):
+        names = (win.stubs / f).read_text().split()
+        assert not [n for n in names if n.startswith(("AZURE", "AWS", "SSH_", "GITHUB", "R0P_SCRUBBED", "R0P_AZ"))], (f, names)
+    # without the test switch the stubs on the caller's PATH are not used at all
+    p2, h2 = win.inner("sidecar", b"MZ other")
+    sc2 = win.scope("inner", [(p2, h2)])
+    (win.stubs / "java-env-names.txt").write_text("")
+    win.log.write_text("")
+    r = win.real("inner", [(p2, h2)], sc2, outdir=win.tmp / "wout-nostub", stubs=False)
+    assert r.returncode != 0
+    assert "java " not in win.log.read_text() and "az " not in win.log.read_text()
+
+
+def test_windows_url_is_validated(win):
+    p, h = win.inner()
+    assert "--url must be an https URL" in win.run("inner", [(p, h)], "--url", "http://x/").stderr
+    assert "--url must be an https URL" in win.run("inner", [(p, h)], "--url", "https://x/a b").stderr
+    assert win.run("inner", [(p, h)], "--url", "https://example.invalid/app").returncode == 0
 
 
 def test_windows_a_signer_that_signs_nothing_is_refused(win):
@@ -1314,7 +1774,7 @@ def test_windows_throwaway_test_mode_makes_no_azure_call(win):
     r = win.run("inner", [(p, h)], "--throwaway-test", "--throwaway-dir", tw)
     assert r.returncode == 0, (r.stdout, r.stderr)
     assert "az " not in win.log.read_text() and "THROWAWAY" in (win.tmp / "wout" / "EVIDENCE.txt").read_text()
-    assert "--tsa-url is for --throwaway-test only" in win.run("inner", [(p, h)], "--tsa-url", "http://127.0.0.1:1", outdir=win.tmp / "x").stderr or True
+    assert "--tsa-url is for --throwaway-test only" in win.run("inner", [(p, h)], "--tsa-url", "http://127.0.0.1:1", outdir=win.tmp / "x").stderr
 
 
 def test_windows_watchdog_ends_a_hung_signer(win):
@@ -1343,8 +1803,134 @@ def test_end_to_end_handoff_with_stubs(win, tmp_path):
     assert req.is_file()
     r = win.real("inner", [(req, unsigned)], win.scope("inner", [(req, unsigned)]), outdir=tmp_path / "signed-out")
     assert r.returncode == 0, (r.stdout, r.stderr)
-    (d / "signed-inner").mkdir()
-    shutil.copy(tmp_path / "signed-out" / req.name, d / "signed-inner" / req.name)
-    shutil.copy(tmp_path / "signed-out" / "SHA256SUMS", d / "signed-inner" / "SHA256SUMS")
-    r = helper_run(tmp_path, "apply", exe, d)
+    d2 = tmp_path / "ho2"
+    (d2 / "signed-inner").mkdir(parents=True)
+    shutil.copy(tmp_path / "signed-out" / req.name, d2 / "signed-inner" / req.name)
+    shutil.copy(tmp_path / "signed-out" / "SHA256SUMS", d2 / "signed-inner" / "SHA256SUMS")
+    ps = make_ps_stub(tmp_path)
+    r = helper_run(tmp_path, "apply", exe, d2, requests=d / "REQUESTS.sha256", stubs=ps)
     assert r.returncode == 0 and exe.read_bytes().endswith(b"STUB-AUTHENTICODE-SIGNATURE")
+
+
+# ====================================================================================================================
+# round 4 regression tests for the macOS script (R4-03 .. R4-10)
+# ====================================================================================================================
+def test_macos_scope_is_read_once_and_the_copy_is_parsed(mac):
+    """R4-03: a `cat` stub (first in PATH under the test switch) rewrites the scope file right after the script read it; the run is judged on the
+    bytes that were hashed. (Before the fix the script parsed the path again and would have seen the garbage.)"""
+    sc = mac.scope()
+    write_exec(mac.stubs / "cat", f"#!/bin/bash\n/bin/cat \"$@\"; rc=$?\ncase \"$1\" in \"{sc}\") echo 'garbage_after_hash=1' > \"{sc}\";; esac\nexit $rc\n")
+    r = mac.real(sc)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert "garbage" in sc.read_text()
+
+
+def test_macos_environment_must_be_the_allowlist_no_marker_variable_skips_it(mac):
+    """R4-05: R0P_SCRUBBED=1 (the old skip marker) plus ambient credentials: the tools still see a clean environment."""
+    r = mac.run(mode="--adhoc-test", R0P_SCRUBBED="1", AWS_SECRET_ACCESS_KEY="x", GITHUB_TOKEN="y", AZURE_CLIENT_SECRET="z", SSH_AUTH_SOCK="/nonexistent")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    names = (mac.state / "codesign-env").read_text().split()
+    assert not [n for n in names if n.startswith(("AWS", "GITHUB", "AZURE", "SSH_", "R0P_SCRUBBED"))], names
+
+
+def test_macos_identity_and_profile_are_not_exported_to_children(mac):
+    """R4-05: after they are read, the names are unset: codesign (and every other child) never inherits them."""
+    r = mac.real(mac.scope())
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    names = (mac.state / "codesign-env").read_text().split()
+    assert "R0P_CODESIGN_IDENTITY" not in names and "R0P_NOTARY_PROFILE" not in names, names
+    assert (mac.state / "xcrun-env").exists() is False or "R0P" not in (mac.state / "xcrun-env").read_text()
+
+
+def test_macos_ledger_makes_a_scope_single_use(mac):
+    sc = mac.scope()
+    r = mac.real(sc)
+    assert r.returncode == 0
+    led = mac.ledger.read_text()
+    assert led.count("event=started") == 1 and "event=notary-submit" in led and "event=ended rc=0 finished=1" in led
+    sub = (mac.out / "notary" / "SUBMISSIONS.txt").read_text()
+    assert "status=submitting" in sub and "id=11111111-2222-3333-4444-555555555555 status=Accepted" in sub and "input_sha256=" in sub
+    calls_before = len(mac.calls())
+    r2 = mac.real(sc, out=mac.work / "out2")
+    assert r2.returncode == 1 and "already used" in r2.stderr and not (mac.work / "out2").exists() and len(mac.calls()) == calls_before
+    r3 = mac.real(sc, "--allow-reuse", out=mac.work / "out3")
+    assert r3.returncode == 0 and "--allow-reuse" in r3.stdout
+    assert mac.ledger.read_text().count("event=started") == 2
+
+
+def test_macos_ledger_is_required_and_must_be_absolute(mac):
+    sc = mac.scope()
+    r = mac.real(sc, ledger=False)
+    assert r.returncode == 1 and "--ledger FILE" in r.stderr
+    r = mac.real(sc, "--ledger", "relative.txt", ledger=False)
+    assert r.returncode == 1 and "absolute" in r.stderr
+    assert mac.calls() == []
+
+
+def test_macos_failed_run_burns_the_scope(mac):
+    mac.conf(NOTARY_MODE="invalid")
+    sc = mac.scope()
+    assert mac.real(sc).returncode != 0
+    assert "event=ended rc=1 finished=0" in mac.ledger.read_text()
+    assert "already used" in mac.real(sc, out=mac.work / "retry").stderr
+
+
+def test_macos_distribution_gate_private_statement_and_enforcement(mac):
+    r = mac.real(mac.scope())
+    assert r.returncode == 0
+    assert "PRIVATE-CANDIDATE SIGNING: signing and notarization do NOT imply permission to distribute" in r.stdout
+    assert "PRIVATE CANDIDATE build" in r.stdout and "D-LIC-1" in r.stdout, "the open decisions are printed"
+    assert "PRIVATE-CANDIDATE signing" in (mac.out / "EVIDENCE.txt").read_text()
+    # with --distribution the gate is enforced: open blockers refuse BEFORE anything is signed or uploaded
+    n = len(mac.calls())
+    sc = mac.scope(distribution="yes")
+    r = mac.real(sc, "--distribution", out=mac.work / "dist")
+    assert r.returncode == 1 and "REFUSES a distribution signing" in r.stderr and "D-LIC-1" in r.stderr
+    assert not (mac.work / "dist").exists()
+    assert len(mac.calls()) == n, "the refused run started no tool at all"
+
+
+def test_macos_out_dir_with_shell_characters_is_refused_and_nothing_is_executed(mac, tmp_path):
+    """R4-06: --out-dir used to reach `bash -c`; a quote broke out. Now such a path is refused and no marker file appears."""
+    marker = mac.work / "MK"
+    for bad in (f"{mac.work}/x';touch MK;'y", f"{mac.work}/x$(touch MK)", f"{mac.work}/x\nMK", f"{mac.work}/x`touch MK`"):
+        r = run(["/bin/bash", MAC, "--adhoc-test", "--input-dmg", mac.dmg, "--expected-sha256", sha_file(mac.dmg), "--out-dir", bad], mac.env(), cwd=mac.work)
+        assert r.returncode == 1 and "--out-dir may contain only" in r.stderr, (bad, r.stderr)
+    assert not marker.exists() and not (Path.cwd() / "MK").exists()
+    link = mac.work / "linkdir"
+    (mac.work / "realdir").mkdir()
+    os.symlink(mac.work / "realdir", link)
+    r = mac.run(mode="--adhoc-test", out=link)
+    assert r.returncode == 1 and "must not be a symlink" in r.stderr
+
+
+def test_macos_hostile_names_inside_the_dmg_do_not_inject(mac):
+    """R4-06: file names with spaces, quotes, $(...) and a newline inside the bundle are signed as plain data; nothing is executed."""
+    lic = mac.fixture / APP_NAME / "Contents" / "Resources" / "Licenses"
+    for name in ("$(touch HOSTILE1).txt", "a\"b'c;touch HOSTILE2.txt", "-rf", "with space.txt", "new\nline.txt"):
+        (lic / name).write_text("x\n")
+    r = mac.run(mode="--adhoc-test")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    for m in ("HOSTILE1", "HOSTILE2"):
+        assert not list(mac.work.rglob(m + "*")) and not list(Path(os.getcwd()).glob(m + "*"))
+    assert "licence files" in r.stdout or "layout OK" in r.stdout
+
+
+def test_macos_notary_watchdog_ends_a_hung_notarytool(mac):
+    """R4-10: besides notarytool's own --timeout the script bounds the call (timeout + margin)."""
+    write_exec(mac.stubs / "xcrun", "#!/bin/bash\necho \"xcrun $*\" >> \"%s\"\nexec sleep 30\n" % mac.log)
+    import time
+    t0 = time.time()
+    r = mac.real(mac.scope(), "--notary-timeout", "1s", "--notary-watchdog-margin", "1")
+    assert time.time() - t0 < 25, "the hung notarytool was ended by the watchdog"
+    assert r.returncode != 0 and "status is 'unknown'" in (r.stdout + r.stderr)
+    assert len([c for c in mac.calls("xcrun") if "notarytool submit" in c]) == 1
+
+
+def test_macos_outputs_have_the_documented_modes(mac):
+    r = mac.run(mode="--adhoc-test")
+    assert r.returncode == 0
+    out = mac.out
+    assert stat.S_IMODE(out.stat().st_mode) == 0o700
+    for f in (out / "EVIDENCE.txt", out / "TRANSCRIPT.txt", out / f"ADHOC-TEST-ONLY_{DMG_NAME}"):
+        assert stat.S_IMODE(f.stat().st_mode) == 0o600, f
