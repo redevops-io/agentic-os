@@ -1,96 +1,78 @@
 #!/usr/bin/env bash
-# Task 1 — the reproducible wheelhouse: make the git+https dependencies DISAPPEAR from the
-# end-user path. We build every dependency (incl. our own runtime-contracts / knowledge-frontier /
-# redevops-connectors, which pyproject pins as git direct-URLs) into wheels, rewrite the project's
-# direct-URL deps to plain names, and prove a fully offline `--no-index` install — no git, no network.
+# Task 1 — the reproducible wheelhouse: every shipped Python component as a wheel, from PINNED inputs.
 #
-# Output: packaging/wheelhouse/*.whl  +  packaging/requirements.lock (exact pins)
-# Target interpreter: CPython 3.12 (the bundle's runtime). Override with $PYTHON_VERSION.
-# Runs on Linux, macOS (bash 3.2 — no mapfile) and Windows git-bash (venv bin dir = Scripts/, no rsync).
+#   third-party (21)  pip download --only-binary --require-hashes -r locks/requirements-<os>.lock
+#   first-party (4)   built from CLEAN, verified clones of the pinned tags (runtime-contracts,
+#                     knowledge-frontier, redevops-connectors: packaging/git-pins.json) and from the
+#                     tracked files of this checkout (agentic-os), with backends installed from
+#                     locks/build-backends-<os>.lock and `--no-build-isolation`
+#
+# No unpinned build input remains: the interpreter must be exactly CPython $PYTHON_VERSION, pip/
+# setuptools/wheel/hatchling come from a hash lock, the clones are checked against tag object AND
+# commit, the committed stale build/ of runtime-contracts v0.3.4 is removed, and every built .py is
+# compared with `git show <commit>:<path>`.
+#
+# Output: packaging/wheelhouse/*.whl, WHEELS.sha256, wheelhouse-manifest.json (+ packaging/dist/build-manifest.json)
+# Runs on Linux, macOS (bash 3.2) and Windows git-bash. Needs uv and git; network for PyPI and GitHub.
 set -euo pipefail
+. "$(dirname "$0")/common.sh"
+T0="$(now)"
+WH="$PK/wheelhouse"
+EXTRAS="projects,duckdb"   # the suite the native installer ships (rag/postgres/mcp excluded)
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WH="$ROOT/packaging/wheelhouse"
-PYV="${PYTHON_VERSION:-3.12}"
-# The suite the native installer ships: Projects control plane + connectors + an embedded (DuckDB)
-# durable ledger so missions survive a reboot with no external service. (rag/postgres/mcp excluded.)
-EXTRAS="projects,duckdb"
-
-# uv venv puts executables in bin/ on POSIX and Scripts/ on Windows — resolve per-venv.
-venv_bin() { if [ -d "$1/bin" ]; then echo "$1/bin"; else echo "$1/Scripts"; fi; }
-
-rm -rf "$WH"; mkdir -p "$WH"
+rm -rf "$WH"; mkdir -p "$WH" "$PK/dist"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
-echo "== build venv (seeded, python $PYV) =="
-uv venv --seed --python "$PYV" "$TMP/build" >/dev/null
-BBIN="$(venv_bin "$TMP/build")"; PIP="$BBIN/pip"; PY="$BBIN/python"
+echo "== pins check (pyproject <-> git-pins.json <-> requirements.in <-> locks) =="
+python3 -I "$PK/verify-pins.py" --quiet || { echo "pins are inconsistent: see packaging/verify-pins.py"; exit 1; }
 
-echo "== derive git deps from pyproject (core + EXTRAS: $EXTRAS) =="
-# every git+https direct-URL dep in the core deps + the built EXTRAS — derived, so the list can't
-# drift out of sync (that is exactly what stranded `knowledge-frontier`: a core git dep added later).
-GIT_DEPS=()
-while IFS= read -r line; do
-  [ -n "$line" ] && GIT_DEPS+=("$line")
-done < <("$PY" - "$ROOT/pyproject.toml" "$EXTRAS" <<'PY'
-import sys, tomllib
-d = tomllib.load(open(sys.argv[1], "rb"))
-extras = [e for e in sys.argv[2].split(",") if e]
-proj = d["project"]
-deps = list(proj.get("dependencies", []))
-opt = proj.get("optional-dependencies", {})
-for e in extras:
-    deps += opt.get(e, [])
-seen = set()
-for x in deps:
-    if "git+" in x and x not in seen:
-        seen.add(x); print(x)
+echo "== build venv: CPython $PYTHON_VERSION (unseeded) + build backends from the hash lock =="
+uv venv --python "$PYTHON_VERSION" "$TMP/build" >/dev/null
+BPY="$(venv_py "$TMP/build")"
+assert_python "$BPY"
+uv pip install --python "$BPY" --require-hashes --no-deps -r "$LOCKS/build-backends-$OS.lock" >/dev/null
+echo "   $("$BPY" -m pip --version | cut -d' ' -f1-2), setuptools $("$BPY" -c 'import setuptools;print(setuptools.__version__)')"
+[ "$("$BPY" -m pip --version | cut -d' ' -f2)" = "$PIP_VERSION" ] || { echo "pip is not the pinned $PIP_VERSION"; exit 1; }
+
+echo "== 1/4 third-party wheels: pip download --require-hashes (binary only, no build) =="
+"$BPY" -m pip download --quiet --no-deps --only-binary=:all: --require-hashes \
+    -r "$LOCKS/requirements-$OS.lock" --dest "$WH"
+
+echo "== 2/4 first-party git dependencies: clean verified clones -> wheels =="
+"$BPY" -I "$PK/tools/build_git_wheels.py" --pins "$PK/git-pins.json" --out "$WH" \
+    --record "$TMP/git-wheels.json" --python "$BPY" --work "$TMP"
+
+echo "== 3/4 agentic-os wheel from the tracked files of this checkout =="
+"$BPY" -I "$PK/tools/build_project_wheel.py" --root "$ROOT" --out "$WH" --python "$BPY"
+
+echo "== 4/4 PROVE an offline, hash-checked install: exact set, no index, no git =="
+uv venv --python "$PYTHON_VERSION" "$TMP/verify" >/dev/null
+VPY="$(venv_py "$TMP/verify")"
+uv pip install --python "$VPY" --no-index --find-links "$WH" --require-hashes --no-deps \
+    -r "$LOCKS/requirements-$OS.lock" >/dev/null
+FIRST="$(ls "$WH"/agentic_os-*.whl "$WH"/runtime_contracts-*.whl "$WH"/knowledge_frontier-*.whl "$WH"/redevops_connectors-*.whl)"
+# shellcheck disable=SC2086
+uv pip install --python "$VPY" --no-index --find-links "$WH" --no-deps $FIRST >/dev/null
+uv pip check --python "$VPY"
+"$VPY" -c "import agentic_os, agentic_os.projects_api, agentic_os.mission.bootstrap; print('   offline import OK: control plane + bootstrap brain')"
+"$VPY" - "$WH" <<'PY'
+import importlib.metadata as m, pathlib, sys
+wheels = {p.name.split("-")[0].lower().replace("_", "-") for p in pathlib.Path(sys.argv[1]).glob("*.whl")}
+installed = {d.metadata["Name"].lower().replace("_", "-") for d in m.distributions()}
+installed -= {"pip", "setuptools", "wheel"}
+bad = [d.metadata["Name"] for d in m.distributions() if "vcs" in (d.read_text("direct_url.json") or "")]
+print("   wheelhouse == installed set:", wheels == installed, "| VCS-origin distributions:", bad or "none")
+sys.exit(0 if wheels == installed and not bad else 1)
+PY
+( cd "$WH" && "$BPY" - <<'PY'
+import hashlib, pathlib
+rows = [f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}" for p in sorted(pathlib.Path('.').glob('*.whl'))]
+pathlib.Path('WHEELS.sha256').write_text("\n".join(rows) + "\n")
 PY
 )
-[ ${#GIT_DEPS[@]} -gt 0 ] || { echo "   ERROR: no git deps found in pyproject"; exit 1; }
-printf '   %s\n' "${GIT_DEPS[@]}"
-
-echo "== 1/4 build wheels for the git-pinned deps (they become normal versioned wheels) =="
-"$PIP" wheel --wheel-dir "$WH" "${GIT_DEPS[@]}"
-
-echo "== 2/4 sanitize the project: git+https direct refs -> plain names =="
-# portable copy (rsync isn't on Windows git-bash): tar the project, excluding .git + the wheelhouse.
-mkdir -p "$TMP/src"
-( cd "$ROOT" && tar --exclude=.git --exclude=packaging/wheelhouse -cf - . ) | ( cd "$TMP/src" && tar -xf - )
-"$PY" - "$TMP/src/pyproject.toml" <<'PY'
-import re, sys
-p = sys.argv[1]; t = open(p).read()
-# "<name> @ git+https://...@ref"  ->  "<name>"  (wheelhouse supplies the built wheel)
-t = re.sub(r'"([A-Za-z0-9_.-]+)\s*@\s*git\+https://[^"]+"', r'"\1"', t)
-open(p, "w").write(t)
-print("   sanitized direct-URL deps in pyproject.toml")
-PY
-
-echo "== 3/4 build wheels for the sanitized suite (resolves the git deps from the wheelhouse) =="
-# On Windows git-bash the native pip.exe can't read the MSYS "/tmp/..[extras]" path (git-bash won't
-# auto-convert an arg with [brackets]); hand pip a real Windows path via cygpath there. POSIX unchanged.
-SRC="$TMP/src"
-command -v cygpath >/dev/null 2>&1 && SRC="$(cygpath -m "$TMP/src")"
-"$PIP" wheel --wheel-dir "$WH" --find-links "$WH" "${SRC}[$EXTRAS]"
-
-echo "== 4/4 PROVE a fully offline install (no index, no git) + lock =="
-uv venv --seed --python "$PYV" "$TMP/verify" >/dev/null
-VBIN="$(venv_bin "$TMP/verify")"; VPIP="$VBIN/pip"; VPY="$VBIN/python"
-# --no-index means pip may NOT reach any index or git; a surviving direct-URL dep would fail here.
-"$VPIP" install --no-index --find-links "$WH" "agentic-os[$EXTRAS]" >/dev/null
-"$VPIP" freeze > "$ROOT/packaging/requirements.lock"
-"$VPY" -c "import agentic_os, agentic_os.projects_api, agentic_os.mission.bootstrap; print('   offline import OK: control plane + bootstrap brain')"
-# assert nothing installed still carries a VCS/URL origin
-if "$VPY" - <<'PY'
-import importlib.metadata as m, sys
-bad=[d.metadata["Name"] for d in m.distributions()
-     if (d.read_text("direct_url.json") or "").find("vcs")>=0]
-print("   VCS-origin distributions:", bad or "none")
-sys.exit(1 if bad else 0)
-PY
-then :; else echo "   WARNING: a dependency still has a VCS origin"; fi
-
+cp "$TMP/git-wheels.json" "$WH/first-party-wheels.json"
+"$BPY" -I "$PK/tools/build_manifest.py" --root "$ROOT" --out "$PK/dist/build-manifest.json" --stage wheelhouse --record-python \
+    --wheelhouse "$WH" --git-wheels "$TMP/git-wheels.json" --cmd 'uv="uv --version"' --duration "wheelhouse=$(( $(now) - T0 ))"
 echo
-echo "wheelhouse: $(ls "$WH"/*.whl | wc -l) wheels in $WH"
-echo "lock:       packaging/requirements.lock"
-echo "OK — the suite installs fully offline; git+https is gone from the end-user path."
+echo "wheelhouse: $(ls "$WH"/*.whl | wc -l | tr -d ' ') wheels in $WH   (expected 25 = 21 third-party + 4 first-party)"
+echo "OK — the suite installs fully offline from hash-checked wheels; git+https is gone from the end-user path."
