@@ -31,10 +31,10 @@ tree gets a 403 on the preflight and a 403 on the simple POST, and nothing is re
 |---|---|---|
 | Malicious web page in the user's browser (cross-origin `fetch`, forms, `<img>`, navigations) | Send requests to `127.0.0.1:<port>` with the browser's ambient state | Yes |
 | DNS rebinding page (attacker hostname re-pointed to 127.0.0.1) | Same-origin from the browser's view; sends `Host: attacker` | Yes (Host allowlist) |
-| Other local web app on another port of 127.0.0.1/localhost (same-site) | Browser sends cookies to it; it can make requests to us | Yes for requests (Origin, `Sec-Fetch-Site`, CSRF header); see cookie scope in section 7 |
-| Another OS user on the same machine (shared host) | Connect to the loopback port | Yes (no credential, no secret on disk or argv); not against a user who can read the victim's browser cookies |
+| Other local web app or server on another port of 127.0.0.1/localhost (same-site) | The browser sends cookies for the host to it, whatever the port; it can make requests to us | Yes: the session is not a cookie (it is a header token kept in the UI origin's `sessionStorage`, which is port-scoped), and requests are also checked by Origin, `Sec-Fetch-Site` and the CSRF header |
+| Another OS user on the same machine (shared host) | Connect to the loopback port; read other users' process arguments | Yes for the secret (memory only, never in argv or on disk) and the session. The single-use launch code is the exception until the launcher fix below lands: today the launcher passes it in the argv of the OS opener, where another local user can read it for the moments the opener lives and exchange it first (reviewer finding SR-01). Fix, PENDING and not yet confirmed: the launcher opens a 0600 redirect file in a per-user directory and no credential appears in any argv. Until it is confirmed, treat other local users as NOT excluded on a shared machine. |
 | A stale or foreign process holding the sidecar's port | Be mistaken for the sidecar by the launcher | Yes (HMAC handshake, section 5) |
-| Malware running as the same OS user | Read launcher memory, the browser cookie jar, the process list, attach a debugger | NO. Out of scope. |
+| Malware running as the same OS user | Read launcher memory, the browser's storage, the process list, attach a debugger | NO. Out of scope. |
 | A compromised user session or browser (extension, XSS in the UI) | Act with the session | NO (an XSS inside the UI origin acts as the user; the CSP reduces this surface) |
 | Network attacker | Reach the port | Not applicable while bound to loopback; with `PROJECTS_HOST` non-loopback the traffic is plain HTTP (section 7) |
 
@@ -62,7 +62,7 @@ require the session. The gate is an ASGI middleware wrapped around the outermost
 `PROJECTS_BASE_PATH` mounts. WebSocket connections are refused.
 
 Order of checks for a gated request: Host, preflight refusal, Origin, `Sec-Fetch-Site`, then the route
-class (session endpoints, or session cookie and, for non-`GET`/`HEAD` methods, the CSRF header).
+class (session endpoints, or the `X-Agentic-Session` header and, for non-`GET`/`HEAD` methods, the CSRF header).
 
 No CORS: no `Access-Control-*` header is ever emitted (any the app produced is stripped); `OPTIONS`
 requests carrying `Access-Control-Request-Method` get 403. `create_app()` no longer defaults to a
@@ -156,18 +156,23 @@ Pinned test vectors (key = bytes `00 01 ... 1f`, port 8787):
 
 | Request | Result |
 |---|---|
-| `POST /api/local/session`, `Content-Type: application/json`, `{"code": "<launch code>"}` | 200 `{"v":1,"csrf_token":"...","csrf_header":"X-Agentic-CSRF","expires_in":86400}` and `Set-Cookie` |
-| `GET /api/local/session` (cookie) | 200 `{"v":1,"csrf_token":"...","expires_in":N}` (so a reload recovers the CSRF token; the cross-origin same-origin policy keeps it from other pages) |
-| `DELETE /api/local/session` (cookie + CSRF header) | 200, cookie cleared, session dropped |
+| `POST /api/local/session`, `Content-Type: application/json`, `{"code": "<launch code>"}` | 200 `{"v":1,"session_token":"...","session_header":"X-Agentic-Session","csrf_token":"...","csrf_header":"X-Agentic-CSRF","expires_in":86400}`. No `Set-Cookie`. |
+| `GET /api/local/session` (header `X-Agentic-Session`) | 200 `{"v":1,"csrf_token":"...","expires_in":N}` (so a reload of the same tab recovers the CSRF token). Without a valid session header: 401, nothing is handed out. |
+| `DELETE /api/local/session` (session header + CSRF header) | 200, session dropped |
 
-Cookie: `agentic_os_session=<43 chars>; Path=<base_path or />; HttpOnly; SameSite=Strict`. No `Domain`
-(host-only), no `Max-Age`/`Expires` (a session cookie; the server also expires it after 24 h), not
-`Secure` (the origin is plain-HTTP loopback). The value is 256 random bits and is stored server-side as
-a SHA-256 digest only.
-
-Every state-changing request (any method other than `GET`/`HEAD`) must carry `X-Agentic-CSRF: <csrf_token>`.
-The UI script adds it to all same-origin `/api/` fetches. At most 16 sessions and 8 outstanding launch
-codes exist at a time (oldest evicted).
+The session is a header credential, not a cookie. The server never sets a cookie and never reads one.
+`session_token` is 32 random bytes (base64url) held server-side only as a SHA-256 digest; it is bound to the
+exact `Host` (`127.0.0.1:<port>`, `localhost:<port>`, ...) it was established on, and a request with a
+different or missing `Host`, a missing header or more than one `X-Agentic-Session` header is 401. It lives
+24 hours at most. Every authenticated request carries `X-Agentic-Session: <session_token>`; every
+state-changing request (any method other than `GET`/`HEAD`) also carries `X-Agentic-CSRF: <csrf_token>`
+(kept as defence in depth: both are non-simple headers a cross-site page cannot send without a preflight,
+which is refused). The UI script keeps the token in `sessionStorage` and adds both headers to all
+same-origin `/api/` fetches. At most 16 sessions and 8 outstanding launch codes exist at a time (oldest
+evicted). Consequences, all by design: a browser address-bar navigation to `/docs` or `/openapi.json`
+cannot carry the header and gets 401 (use a client that sets it); a reload of the same tab keeps the
+session; a new tab, a bookmarked URL or a restored session needs a fresh launch code from the launcher;
+a hand-started `serve` user opens the stderr URL again (restart `serve` if its 300 s code has expired).
 
 ### 4.6 Error codes
 
@@ -186,7 +191,7 @@ All errors are `{"error":{"code":"...","message":"..."}}` with `Cache-Control: n
 | 403 | `csrf_invalid` | state-changing request without the right `X-Agentic-CSRF` |
 | 405 | `method_not_allowed` | wrong method on a `/api/local/*` path |
 | 415 | `unsupported_media_type` | `/api/local/*` POST without `Content-Type: application/json` (a cross-site form cannot send it) |
-| 429 | `rate_limited` | the failure budget of that endpoint is spent (10 failures in 60 s); `Retry-After` seconds. See 4.7. |
+| 429 | `rate_limited` | the failure budget of that endpoint is spent (10 failures in 60 s) and the attempt did not present a correct credential; `Retry-After` seconds. See 4.7. |
 
 Failures counted for the limit are only those that pass the Host/Origin/fetch-site checks, so a web page
 cannot lock the user out by spamming the endpoint cross-origin.
@@ -198,7 +203,7 @@ Exactly two endpoints are rate limited, each with its own budget of 10 FAILED at
 
 | Endpoint | Counts as a failure | When the budget is spent |
 |---|---|---|
-| `POST /api/local/session` (the UI script's exchange) | wrong/expired/used code, malformed body | 429 for everything, even a valid code, until the window passes |
+| `POST /api/local/session` (the UI script's exchange) | wrong/expired/used code, malformed body | a request with a correct, unexpired, unused code is still served; a failing one gets 429 (and is not counted again) until the window passes |
 | `POST /api/local/launch-code` (the launcher's mint) | wrong proof, unknown/expired challenge, malformed body | a request whose proof is **correct** is still served; a failing one gets 429 (and is not counted again) |
 
 `POST /api/local/handshake` is not rate limited (it has no secret to guess; its state is capped at 16
@@ -220,8 +225,15 @@ What the launcher does:
    to the first launch code, a URL without a code, or any unauthenticated path.
 4. A handshake whose proof does not verify is different: that is the stale/foreign-process case (4.2) and
    is final for that process.
-5. 429 on `/api/local/session` concerns the browser, not the launcher; the UI shows its "not signed in"
-   banner. The launcher recovers by minting a fresh code (rate limiting there does not affect minting).
+5. 429 on `/api/local/session` concerns the browser, not the launcher, and cannot lock the user out: a
+   correct code is served even while the budget is spent, so other local processes cannot deny sign-in
+   by sending bad codes (reviewer finding SR-04). The throttle only slows guessing, which is already
+   infeasible against 256-bit codes.
+6. Expiry (codes, challenges and sessions) is checked on two clocks, the monotonic clock and the wall
+   clock, and a credential is dead as soon as either passes its deadline. The monotonic clock stops while
+   a laptop sleeps (macOS), so the wall clock closes that gap; a backward wall-clock jump cannot extend a
+   lifetime (the monotonic bound still holds); a forward jump only fails closed (open again from the
+   launcher) (SR-08).
 
 ## 5. Standalone `serve` (no launcher)
 
@@ -234,7 +246,8 @@ Open this one-time URL in your browser (single use, expires in 300 s; the part a
 ```
 
 The secret is not emitted in this mode. Opening `http://127.0.0.1:8787/` by hand without the code loads
-the UI but every API call answers 401; the shim shows a banner telling the user to use the printed URL.
+the UI but every API call answers 401 (and a second tab or a bookmark of the printed URL has no session
+either: the session lives in the first tab's `sessionStorage`); the shim shows a banner telling the user to use the printed URL.
 This is a breaking change for people who started `serve` and typed the address. If a code expires,
 restart `serve`.
 
@@ -249,9 +262,9 @@ The vendored bundle (`agentic_os/projects_ui/`) is **not modified**. The bundle 
 sites (a GET helper and a POST helper, both same-origin, no auth header, no `window.open`, no
 `localStorage`). `index.html` is served by a route that injects one tag,
 `<script src="/local-capability-shim.js"></script>`, as the first child of `<head>` (a plain script, so
-it runs before the deferred module bundle). The shim (`agentic_os/local_capability_shim.js`, about 70
+it runs before the deferred module bundle). The shim (`agentic_os/local_capability_shim.js`, about 100
 lines, no eval, no inline script) exchanges `#lc=` and wraps `window.fetch` for same-origin `/api/`
-requests (waits for the exchange, adds `X-Agentic-CSRF`, forces `credentials: same-origin`). Because the
+requests (waits for the exchange, keeps the session token in `sessionStorage`, adds `X-Agentic-Session` and `X-Agentic-CSRF`, sends no cookies). Because the
 injection happens at serve time, `scripts/build_projects_ui.sh` and `$PROJECTS_UI_DIR` need no change.
 
 The CSP applied to every response is `default-src 'none'; script-src 'self'; style-src 'self'
@@ -268,40 +281,74 @@ are not usable in a browser (the JSON at `/openapi.json` is, with a session).
 ## 7. Residual risks and limits (read these)
 
 1. **Same-user malware is out of scope.** A process running as the same OS user can read the launcher's
-   memory (the secret), the browser or webview cookie jar (the session), or attach to the sidecar. The
-   capability only raises the bar against web pages, other users, and stale processes.
-2. **Cookies are not port-scoped.** A cookie set for `127.0.0.1` is sent by the browser to every
-   local server on that host, whatever the port. A hostile local server on another port that the user
-   browses to would receive the session cookie and could replay it (it would also need to read the CSRF
-   token, which a cookie holder can fetch with `GET /api/local/session`). The Strict/Host/Origin checks
-   stop other web pages, not a local server that already holds the cookie. A bearer token held only in
-   page memory would avoid this at the cost of losing the session on reload (owner decision, not taken).
-3. **Plain HTTP on loopback.** The session cookie is not `Secure`. A local user with packet capture
-   privileges on loopback (root) could read it. Not mitigated.
-4. **An authenticated session is fully powerful.** The gate decides who may call the API; it does not
-   restrict what an authorised call does. `/api/sources/confirm` still walks any folder the sidecar user
-   can read for a caller holding a session (upstream's later KC-03 added an allow-listed-roots rule; not
-   part of this change).
+   memory (the secret), the browser's `sessionStorage` or memory (the session), or attach to the sidecar.
+   The capability only raises the bar against web pages, other users, and stale processes.
+2. **Session token in `sessionStorage` instead of a cookie (owner decision SR-02, implemented).** Cookies
+   are not port-scoped: a browser sends a `127.0.0.1` cookie to every server on that host, whatever the
+   port, so a hostile local server on another port that the user browses to received the session cookie
+   and could replay it (the previous design, reproduced by the reviewer in a real browser). The session is
+   now a header token that script in the UI origin keeps in `sessionStorage` (origin-scoped including the
+   port) and no cookie exists. Costs: (a) the token is readable by script running in the UI origin (the
+   CSP forbids inline script and the bundle has no app-level HTML injection, but an XSS in the UI would
+   read it; with a cookie `HttpOnly` would have hidden it from script); (b) a reload of the same tab keeps
+   the session, a new tab, a bookmarked URL or a restored browser session needs a fresh launch code from
+   the launcher, and a standalone user re-opens the stderr URL; (c) browser address-bar navigation to
+   `/docs` or `/openapi.json` gets 401. Revert path: restore the `Set-Cookie`/cookie read in
+   `local_capability.py` (the previous commit), accepting the cross-port cookie exposure.
+3. **Plain HTTP on loopback.** The session token and the CSRF token travel over plain HTTP on the
+   loopback interface; a local user with packet-capture privileges on loopback (root) could read them.
+   Not mitigated.
+4. **An authenticated session is fully powerful (KC-03 residual, accepted for R0-prime; reviewer finding
+   SR-05).** The gate decides who may call the API; it does not restrict what an authorised call does.
+   `POST /api/sources/confirm` walks any folder the sidecar user can read (`os.walk`, up to 100,000
+   files per call, `~` expanded) for a caller holding a session. Observed behaviour in the frozen build
+   (reviewer, with a session): it returns the folder name, whether the path is a folder, the count of
+   discovered and eligible files (pdf, docx, md, text, csv) and a hash of the sorted (relative path, size)
+   set; no file names and no contents (the indexer is a counting stub and `redevops-rag` is not
+   included); `/etc` reported 235 files; `kind=database` answers "pending" and `kind=cloud` fails with
+   500. So it is an existence and size-profile oracle and an I/O and CPU lever, not a content leak today;
+   the risk grows if a real indexer or connector is enabled. Upstream's later KC-03 added an
+   allow-listed-roots rule (`PROJECTS_SOURCE_ROOTS`); it is NOT part of R0-prime and no such mechanism
+   exists here. A session is obtainable only by the paths in this document (launcher, launch code), not
+   by a web page.
 5. **The hosted-OAuth callback cannot work through the gate.** `GET /api/apps/connect/callback` is
-   reached by a cross-site redirect from the provider; `SameSite=Strict` omits the cookie and
+   reached by a cross-site redirect from the provider and cannot carry the session header, and
    `Sec-Fetch-Site` is `cross-site`, so it answers 401/403. Not exercised in R0-prime (no hosted OAuth
    app is configured in the sample project).
 6. **The agent gateway needs a session too.** An external agent client cannot use the gateway
    (`AGENT_GATEWAY_TOKEN`) on a gated sidecar without a session; the gateway bearer alone is not enough.
-7. **Launch codes in the URL fragment.** The code is in the fragment while the page loads: a user who
-   copies the URL from the address bar before the script runs (a few ms), a browser extension, or
-   session-restore history on some browsers could see it. It is single use and expires; the script
-   removes it immediately. A launcher that keeps the code only in memory and opens a private webview
-   keeps the exposure minimal.
-8. **Availability, not secrecy:** a local process can exhaust the exchange failure budget (10 per minute)
-   and make the UI's exchange wait; it cannot block the launcher's mint (4.7), but it can flood
-   `/handshake` to evict a live challenge, which the launcher handles by retrying (4.7).
-9. **The module-level `app` and a bare `create_app()` are not gated** (they remain the legacy open
-   library/hosted-demo surface, now without CORS). Do not run them on a desktop; only `main()` / `serve`
-   (what the sidecar executes) installs the gate.
-10. **Docker self-host:** `Dockerfile.projects` runs `agentic-os-projects` with `PROJECTS_HOST=0.0.0.0`.
-    It now prints the one-time URL in the container logs and requires `localhost`/`127.0.0.1` in `Host`
-    (set `PROJECTS_ALLOWED_HOSTS` for other names). The Dockerfile is unchanged.
+7. **Launch codes.** In the URL fragment the code is visible to the page that loads and to a browser
+   extension before the script removes it (a few ms), and the used (dead) URL may remain in browser
+   history or session-restore. It is single use and expires; the script removes it from the address bar
+   immediately. The launcher's own hand-off of the code to the browser is the weak point on a shared
+   machine: see the Another-OS-user row in section 2 (argv exposure, fix pending).
+8. **Availability, not secrecy.** A local process cannot lock the user out of signing in (a correct code
+   is served while the failure budget is spent, 4.7) and cannot block the launcher's mint (4.7), but it
+   can flood `/handshake` to evict a live challenge, which the launcher handles by retrying (4.7). A
+   client that stalls mid-request is cut off: a request body that stops for 10 s is aborted, `serve` waits
+   at most 2 s for in-flight requests on shutdown (`timeout_graceful_shutdown`, so the launcher's 3 s grace
+   is enough and the PyInstaller bootloader is not left to a SIGKILL), idle or half-sent connections are
+   closed after 5 s (`timeout_keep_alive`), and the soft descriptor limit is raised towards 4096 at start so
+   a few hundred stalled connections cannot exhaust a 256-descriptor process (SR-06). A determined local
+   flooder can still consume CPU and descriptors; this is not a defence against a local denial of service.
+9. **Ungated surfaces have NO Host check (SR-09).** The module-level `app` (`uvicorn
+   agentic_os.projects_api:app`), a bare `create_app()` and `AGENTIC_OS_LOCAL_CAPABILITY=off` build the app
+   without the gate, and therefore without the Host allowlist, the Origin check and the session
+   requirement. They are for hosted deployments that put their own controls in front (their own
+   authentication and Host/TLS handling) and MUST NOT be used on a desktop: on a desktop a DNS-rebinding
+   page can read and write everything on them (reviewer: `Host: evil.example` answers 200, and a
+   same-origin JSON POST reaches `/api/sources/confirm`). Wildcard CORS is gone there too, which stops the
+   classic cross-site simple-request attack but not rebinding. The frozen sidecar's only server path is
+   `serve()` (gated); the launcher strips the variable and `serve()` refuses `off` together with the
+   hand-off.
+10. **Standalone and Docker (SR-10).** The one-time URL, which contains the launch code, is printed on
+    stderr, so it lands in terminals, supervisors and `docker logs`; it is dead after one use or 300 s.
+    Standalone `serve` binds the fixed default port 8787, which a web page can probe (launcher mode uses an
+    OS-chosen port). `Dockerfile.projects` (unchanged) runs `agentic-os-projects` on `0.0.0.0`: the gate is
+    on, but `Host` must be `localhost` or `127.0.0.1` with the real in-container port, so a `-p 9000:8787`
+    mapping or a host name needs `PROJECTS_ALLOWED_HOSTS`, the traffic is plain HTTP, and once the 300 s
+    code is gone the only way to sign in is to restart the container. This is operationally breaking
+    rather than a vulnerability.
 
 ## 8. Evidence levels
 
@@ -309,8 +356,11 @@ are not usable in a browser (the JSON at `/openapi.json` is, with a session).
 |---|---|
 | The anonymous cross-origin POST walks a folder on feeca065 | OBSERVED (audit; and in headless Chromium here) |
 | The same page against the fixed sidecar is refused (preflight 403, POST 403) | OBSERVED (headless Chromium, real sockets) |
-| Every route, docs, redoc, openapi, gateway needs the session; no CORS headers; Host/Origin/fetch-site/CSRF rules; single-use, expiry, rate limit, concurrency; timing-safe primitives are used | OBSERVED by the test suite (`tests/test_local_capability.py`, 47 tests; real `serve` subprocesses for standalone and hand-off) |
+| Every route, docs, redoc, openapi, gateway needs the session; no CORS headers; Host/Origin/fetch-site/CSRF rules; single-use, expiry on two clocks, rate limit with correct-code bypass, concurrency; timing-safe primitives are used | OBSERVED by the test suite (`tests/test_local_capability.py`; real `serve` subprocesses for standalone and hand-off) |
+| A hostile server on another 127.0.0.1 port receives nothing replayable (no cookie exists) | OBSERVED by test (simulated browser jar); a real-browser run is in the stage 3 report |
+| A stalled request body does not block a graceful exit; 320 stalled connections do not break a 256-descriptor sidecar | OBSERVED by test on macOS arm64 (source run, not the frozen binary) |
 | The UI works under the CSP (loads, exchanges, renders data) | OBSERVED in headless Chromium for the load path; the Sidekick POST path with the CSRF header is covered by the node-VM shim test and the TestClient flow, not by a real-browser click |
-| The Windows socket option (`SO_EXCLUSIVEADDRUSE`) and Windows/WebView2/WKWebView behaviour of the `HttpOnly; SameSite=Strict` cookie and the fragment | UNVERIFIED (not run) |
-| The Rust launcher implements 4.1 to 4.4 | NOT YET WRITTEN (contract only) |
+| macOS sleep behaviour of the two-clock expiry | STATIC plus fake-clock tests (no real sleep was performed) |
+| The Windows socket option (`SO_EXCLUSIVEADDRUSE`) and Windows/WebView2/WKWebView behaviour of `sessionStorage` and the fragment | UNVERIFIED (not run) |
+| The launcher argv fix (0600 redirect file, no credential in argv) | PENDING, not confirmed |
 | Timing safety beyond the use of `hmac.compare_digest` over fixed-length digests | STATIC (no timing measurement) |
