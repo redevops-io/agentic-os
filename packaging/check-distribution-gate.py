@@ -3,8 +3,8 @@
 
   python3 -I packaging/check-distribution-gate.py [--platform macos|windows|linux|qa|all] [--distribution] [--gate FILE]
 
-A distribution build is one with --distribution or the environment variable REDEVOPS_DISTRIBUTION_BUILD=1 (also
-`true` / `yes`). A PRIVATE candidate build (neither set) prints the open decisions and exits 0: private candidates stay
+A distribution build is one with --distribution or ANY value of the environment variable REDEVOPS_DISTRIBUTION_BUILD other than
+exactly `0` or empty (fail closed: `1`, `true`, `yes`, `on`, `y`, `false`, `no` ... all mean distribution). A PRIVATE candidate build (neither set) prints the open decisions and exits 0: private candidates stay
 on the owner's machine and are not distribution.
 
 Exit codes: 0 = allowed (private build, or every applicable blocker is DECIDED and complete); 1 = distribution build
@@ -38,7 +38,8 @@ REQUIRED_KEYS = ("id", "title", "question", "decides", "scope", "blocks_distribu
 
 def is_distribution(flag: bool, env=None) -> bool:
     env = os.environ if env is None else env
-    return flag or str(env.get("REDEVOPS_DISTRIBUTION_BUILD", "")).strip().lower() in ("1", "true", "yes")
+    # fail closed: only an empty value or exactly "0" means "private candidate"; every other value is a distribution build
+    return flag or str(env.get("REDEVOPS_DISTRIBUTION_BUILD", "")).strip() not in ("", "0")
 
 
 def load(path: Path) -> list[dict]:
@@ -96,9 +97,16 @@ def _decided_problems(d: dict, keys: list, root: Path) -> list[str]:
         errs.append(f"{i}: DECIDED without a 64-hex decision_sha256 of the signed record")
     else:
         ref = str(d.get("decision_reference") or "")
-        p = (root / ref) if ref and not re.match(r"^[a-z]+://", ref) else None
-        if p is not None and p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest() != h:
-            errs.append(f"{i}: decision_sha256 does not match {ref}")
+        # the written decision must be a FILE OF THE REPOSITORY (relative path, no URL, no '..'): a URL or an absolute path
+        # cannot be checked and is not accepted; the hash must match the file's bytes
+        if not ref or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", ref) or Path(ref).is_absolute() or ".." in Path(ref).parts:
+            errs.append(f"{i}: decision_reference must be a relative path of a file in the repository, not {ref!r}")
+        else:
+            p = root / ref
+            if not p.is_file():
+                errs.append(f"{i}: decision_reference {ref!r} is not a file of the repository")
+            elif hashlib.sha256(p.read_bytes()).hexdigest() != h:
+                errs.append(f"{i}: decision_sha256 does not match {ref}")
     if not str(d.get("decided_by") or "").strip():
         errs.append(f"{i}: DECIDED without decided_by")
     try:
@@ -115,11 +123,11 @@ def applicable(decisions: list[dict], platform: str) -> list[dict]:
             ("all" in d["scope"] or platform == "all" or platform in d["scope"])]
 
 
-def open_blockers(decisions: list[dict], platform: str) -> list[dict]:
+def open_blockers(decisions: list[dict], platform: str, root: Path = ROOT) -> list[dict]:
     """Applicable blockers that are OPEN, or DECIDED but incomplete (an incomplete record counts as open)."""
     out = []
     for d in applicable(decisions, platform):
-        if d["status"] != "DECIDED" or _decided_problems(d, [o["key"] for o in d["options"]], ROOT):
+        if d["status"] != "DECIDED" or _decided_problems(d, [o["key"] for o in d["options"]], root):
             out.append(d)
     return out
 
@@ -128,15 +136,20 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--platform", default="all", choices=PLATFORMS)
     ap.add_argument("--distribution", action="store_true", help="treat this as a distribution build")
-    ap.add_argument("--gate", type=Path, default=DEFAULT_GATE)
+    ap.add_argument("--gate", type=Path, default=DEFAULT_GATE,
+                    help="gate file (default: the repository copy; a different file is for tests only and is never valid for signing)")
+    ap.add_argument("--root", type=Path, default=ROOT,
+                    help="directory against which decision_reference paths are resolved (default: the repository; tests only)")
     a = ap.parse_args(argv)
+    if a.gate.resolve() != DEFAULT_GATE.resolve() or a.root.resolve() != ROOT.resolve():
+        print("NOTE: non-default --gate/--root: this result is NOT valid for signing or release decisions", file=sys.stderr)
     decisions = load(a.gate)
-    errs = validate(decisions)
+    errs = validate(decisions, a.root)
     if errs:
         for e in errs:
             print("GATE FILE PROBLEM:", e, file=sys.stderr)
         return 2
-    blockers = open_blockers(decisions, a.platform)
+    blockers = open_blockers(decisions, a.platform, a.root)
     total = len(applicable(decisions, a.platform))
     dist = is_distribution(a.distribution)
     ids = ", ".join(d["id"] for d in blockers)

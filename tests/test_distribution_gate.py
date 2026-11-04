@@ -38,7 +38,7 @@ def _env(**extra):
 def _run(*args, gate_file=None, **env):
     cmd = [sys.executable, "-I", str(GATE_PY), *args]
     if gate_file:
-        cmd += ["--gate", str(gate_file)]
+        cmd += ["--gate", str(gate_file), "--root", str(Path(gate_file).parent)]   # records of a test gate live beside it
     return subprocess.run(cmd, capture_output=True, text=True, env=_env(**env), timeout=60)
 
 
@@ -50,7 +50,7 @@ def _decided(d, tmp_path):
     d = copy.deepcopy(d)
     record = tmp_path / f"{d['id']}.signed.txt"
     record.write_text("signed by the owner\n")
-    d.update(status="DECIDED", chosen_option=d["options"][0]["key"], decision_reference=str(record),
+    d.update(status="DECIDED", chosen_option=d["options"][0]["key"], decision_reference=record.name,
              decision_sha256=hashlib.sha256(record.read_bytes()).hexdigest(), decided_by="owner",
              decided_on="2026-12-01")
     if "counsel" in d["decides"]:
@@ -116,9 +116,30 @@ def test_distribution_build_fails_while_a_blocker_is_open(how):
     assert "OWNER_DECISION_FORM.md" in r.stderr
 
 
-def test_env_values_that_do_not_mean_yes_are_a_private_build():
-    for v in ("", "0", "false", "no"):
+def test_only_empty_or_zero_means_a_private_build_everything_else_is_distribution():
+    """Fail closed (round 4, R4-09): any other value, including 'on', 'enabled', 'y', 'false' and 'no', is a distribution build."""
+    for v in ("", "0"):
         assert _run("--platform", "macos", REDEVOPS_DISTRIBUTION_BUILD=v).returncode == 0
+    assert gate.is_distribution(False, {"REDEVOPS_DISTRIBUTION_BUILD": " 0 "}) is False
+    for v in ("1", "true", "yes", "on", "enabled", "y", "false", "no", "TRUE", "2", "off"):
+        assert gate.is_distribution(False, {"REDEVOPS_DISTRIBUTION_BUILD": v}) is True, v
+        r = _run("--platform", "macos", REDEVOPS_DISTRIBUTION_BUILD=v)
+        assert r.returncode == 1 and "DISTRIBUTION BUILD REFUSED" in r.stderr, v
+
+
+def test_a_forged_decision_record_is_not_accepted(tmp_path):
+    """R4-09: a URL, an absolute path, a '..' path, a missing file or a wrong hash never makes a decision complete."""
+    for bad in ("https://example.invalid/fake", "/etc/hosts", "../x", "missing.txt"):
+        ds = [_decided(d, tmp_path) if d["blocks_distribution"] else d for d in _decisions()]
+        ds[0].update(decision_reference=bad, decision_sha256="0" * 64)
+        assert gate.validate(ds, tmp_path), bad
+        assert _run("--platform", "all", "--distribution", gate_file=_write(tmp_path, ds)).returncode == 2, bad
+
+
+def test_a_non_default_gate_file_says_it_is_not_valid_for_signing(tmp_path):
+    ds = [_decided(d, tmp_path) if d["blocks_distribution"] else d for d in _decisions()]
+    r = _run("--platform", "all", "--distribution", gate_file=_write(tmp_path, ds))
+    assert r.returncode == 0 and "NOT valid for signing" in r.stderr
 
 
 def test_all_blockers_decided_with_a_written_record_passes(tmp_path):
@@ -176,9 +197,10 @@ def test_the_hash_of_a_record_inside_the_repository_is_verified(tmp_path):
     record = ROOT / "docs" / "legal" / "OWNER_DECISION_FORM.md"
     ds = [_decided(d, tmp_path) if d["blocks_distribution"] else d for d in _decisions()]
     ds[0].update(decision_reference="docs/legal/OWNER_DECISION_FORM.md", decision_sha256="0" * 64)
-    assert any("does not match" in e for e in gate.validate(ds))
+    # the other decided entries keep their records in tmp_path: resolve them there, the first one against the repository
+    assert any("does not match" in e for e in gate.validate(ds[:1], ROOT))
     ds[0]["decision_sha256"] = hashlib.sha256(record.read_bytes()).hexdigest()
-    assert gate.validate(ds) == []
+    assert gate.validate(ds[:1], ROOT) == []
 
 
 def test_an_open_entry_with_decision_fields_is_rejected(tmp_path):
