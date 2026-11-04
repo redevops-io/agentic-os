@@ -1,6 +1,2613 @@
 {
  "_comment": "Generator input for packaging/sbom/generate_source_offer.py; collected by packaging/tools/collect_source_refs.py. Entries marked unresolved are NOT sources.",
  "components": {
+  "cargo:adler2@2.0.1": {
+   "name": "adler2",
+   "version": "2.0.1",
+   "purl": "pkg:cargo/adler2@2.0.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/adler2/2.0.1/download",
+    "sha256": "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa",
+    "note": ""
+   }
+  },
+  "cargo:aho-corasick@1.1.5": {
+   "name": "aho-corasick",
+   "version": "1.1.5",
+   "purl": "pkg:cargo/aho-corasick@1.1.5",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/aho-corasick/1.1.5/download",
+    "sha256": "c982642fa9e8606056828ee9a8505737230110bb1099153c79efe865c59d12ba",
+    "note": ""
+   }
+  },
+  "cargo:alloc-no-stdlib@2.0.4": {
+   "name": "alloc-no-stdlib",
+   "version": "2.0.4",
+   "purl": "pkg:cargo/alloc-no-stdlib@2.0.4",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/alloc-no-stdlib/2.0.4/download",
+    "sha256": "cc7bb162ec39d46ab1ca8c77bf72e890535becd1751bb45f64c597edb4c8c6b3",
+    "note": ""
+   }
+  },
+  "cargo:alloc-stdlib@0.2.4": {
+   "name": "alloc-stdlib",
+   "version": "0.2.4",
+   "purl": "pkg:cargo/alloc-stdlib@0.2.4",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/alloc-stdlib/0.2.4/download",
+    "sha256": "0e76a019e91224d279006ff972f1e984179a6e9feb050adba6ce8274aef23195",
+    "note": ""
+   }
+  },
+  "cargo:anyhow@1.0.104": {
+   "name": "anyhow",
+   "version": "1.0.104",
+   "purl": "pkg:cargo/anyhow@1.0.104",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/anyhow/1.0.104/download",
+    "sha256": "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470",
+    "note": ""
+   }
+  },
+  "cargo:base64@0.21.7": {
+   "name": "base64",
+   "version": "0.21.7",
+   "purl": "pkg:cargo/base64@0.21.7",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/base64/0.21.7/download",
+    "sha256": "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567",
+    "note": ""
+   }
+  },
+  "cargo:base64@0.22.1": {
+   "name": "base64",
+   "version": "0.22.1",
+   "purl": "pkg:cargo/base64@0.22.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/base64/0.22.1/download",
+    "sha256": "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6",
+    "note": ""
+   }
+  },
+  "cargo:base64@0.23.1": {
+   "name": "base64",
+   "version": "0.23.1",
+   "purl": "pkg:cargo/base64@0.23.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/base64/0.23.1/download",
+    "sha256": "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5",
+    "note": ""
+   }
+  },
+  "cargo:bit-set@0.8.0": {
+   "name": "bit-set",
+   "version": "0.8.0",
+   "purl": "pkg:cargo/bit-set@0.8.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/bit-set/0.8.0/download",
+    "sha256": "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3",
+    "note": ""
+   }
+  },
+  "cargo:bit-vec@0.8.0": {
+   "name": "bit-vec",
+   "version": "0.8.0",
+   "purl": "pkg:cargo/bit-vec@0.8.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/bit-vec/0.8.0/download",
+    "sha256": "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7",
+    "note": ""
+   }
+  },
+  "cargo:bitflags@1.3.2": {
+   "name": "bitflags",
+   "version": "1.3.2",
+   "purl": "pkg:cargo/bitflags@1.3.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/bitflags/1.3.2/download",
+    "sha256": "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a",
+    "note": ""
+   }
+  },
+  "cargo:bitflags@2.13.2": {
+   "name": "bitflags",
+   "version": "2.13.2",
+   "purl": "pkg:cargo/bitflags@2.13.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/bitflags/2.13.2/download",
+    "sha256": "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06",
+    "note": ""
+   }
+  },
+  "cargo:block-buffer@0.10.4": {
+   "name": "block-buffer",
+   "version": "0.10.4",
+   "purl": "pkg:cargo/block-buffer@0.10.4",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/block-buffer/0.10.4/download",
+    "sha256": "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71",
+    "note": ""
+   }
+  },
+  "cargo:block2@0.6.2": {
+   "name": "block2",
+   "version": "0.6.2",
+   "purl": "pkg:cargo/block2@0.6.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/block2/0.6.2/download",
+    "sha256": "cdeb9d870516001442e364c5220d3574d2da8dc765554b4a617230d33fa58ef5",
+    "note": ""
+   }
+  },
+  "cargo:brotli-decompressor@5.0.3": {
+   "name": "brotli-decompressor",
+   "version": "5.0.3",
+   "purl": "pkg:cargo/brotli-decompressor@5.0.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/brotli-decompressor/5.0.3/download",
+    "sha256": "3a32acac15fe1967bc3986b2a6347dffc965602354ea6f450ad07e8bfd253583",
+    "note": ""
+   }
+  },
+  "cargo:brotli@8.0.4": {
+   "name": "brotli",
+   "version": "8.0.4",
+   "purl": "pkg:cargo/brotli@8.0.4",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/brotli/8.0.4/download",
+    "sha256": "5cc91aac060a7a1e25823bdccbfb6af1875b88f17c6daac97894eed8207166b3",
+    "note": ""
+   }
+  },
+  "cargo:bs58@0.5.1": {
+   "name": "bs58",
+   "version": "0.5.1",
+   "purl": "pkg:cargo/bs58@0.5.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/bs58/0.5.1/download",
+    "sha256": "bf88ba1141d185c399bee5288d850d63b8369520c1eafc32a0430b5b6c287bf4",
+    "note": ""
+   }
+  },
+  "cargo:byteorder@1.5.0": {
+   "name": "byteorder",
+   "version": "1.5.0",
+   "purl": "pkg:cargo/byteorder@1.5.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/byteorder/1.5.0/download",
+    "sha256": "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b",
+    "note": ""
+   }
+  },
+  "cargo:bytes@1.12.1": {
+   "name": "bytes",
+   "version": "1.12.1",
+   "purl": "pkg:cargo/bytes@1.12.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/bytes/1.12.1/download",
+    "sha256": "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04",
+    "note": ""
+   }
+  },
+  "cargo:camino@1.2.6": {
+   "name": "camino",
+   "version": "1.2.6",
+   "purl": "pkg:cargo/camino@1.2.6",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/camino/1.2.6/download",
+    "sha256": "bbbad30e4b4c14a39e3cc8aed085a12a327257c316619c93581e017bc52be591",
+    "note": ""
+   }
+  },
+  "cargo:cargo-platform@0.1.9": {
+   "name": "cargo-platform",
+   "version": "0.1.9",
+   "purl": "pkg:cargo/cargo-platform@0.1.9",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/cargo-platform/0.1.9/download",
+    "sha256": "e35af189006b9c0f00a064685c727031e3ed2d8020f7ba284d78cc2671bd36ea",
+    "note": ""
+   }
+  },
+  "cargo:cargo_metadata@0.19.2": {
+   "name": "cargo_metadata",
+   "version": "0.19.2",
+   "purl": "pkg:cargo/cargo_metadata@0.19.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/cargo_metadata/0.19.2/download",
+    "sha256": "dd5eb614ed4c27c5d706420e4320fbe3216ab31fa1c33cd8246ac36dae4479ba",
+    "note": ""
+   }
+  },
+  "cargo:cfb@0.7.3": {
+   "name": "cfb",
+   "version": "0.7.3",
+   "purl": "pkg:cargo/cfb@0.7.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/cfb/0.7.3/download",
+    "sha256": "d38f2da7a0a2c4ccf0065be06397cc26a81f4e528be095826eee9d4adbb8c60f",
+    "note": ""
+   }
+  },
+  "cargo:cfg-if@1.0.5": {
+   "name": "cfg-if",
+   "version": "1.0.5",
+   "purl": "pkg:cargo/cfg-if@1.0.5",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/cfg-if/1.0.5/download",
+    "sha256": "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600",
+    "note": ""
+   }
+  },
+  "cargo:chrono@0.4.45": {
+   "name": "chrono",
+   "version": "0.4.45",
+   "purl": "pkg:cargo/chrono@0.4.45",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/chrono/0.4.45/download",
+    "sha256": "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327",
+    "note": ""
+   }
+  },
+  "cargo:cookie@0.18.2": {
+   "name": "cookie",
+   "version": "0.18.2",
+   "purl": "pkg:cargo/cookie@0.18.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/cookie/0.18.2/download",
+    "sha256": "1a373e3602691c3cdea496d2f0ee5935151e6168fe87739483c463db1b2f2f87",
+    "note": ""
+   }
+  },
+  "cargo:core-foundation-sys@0.8.7": {
+   "name": "core-foundation-sys",
+   "version": "0.8.7",
+   "purl": "pkg:cargo/core-foundation-sys@0.8.7",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/core-foundation-sys/0.8.7/download",
+    "sha256": "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b",
+    "note": ""
+   }
+  },
+  "cargo:core-foundation@0.10.1": {
+   "name": "core-foundation",
+   "version": "0.10.1",
+   "purl": "pkg:cargo/core-foundation@0.10.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/core-foundation/0.10.1/download",
+    "sha256": "b2a6cd9ae233e7f62ba4e9353e81a88df7fc8a5987b8d445b4d90c879bd156f6",
+    "note": ""
+   }
+  },
+  "cargo:core-graphics-types@0.2.0": {
+   "name": "core-graphics-types",
+   "version": "0.2.0",
+   "purl": "pkg:cargo/core-graphics-types@0.2.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/core-graphics-types/0.2.0/download",
+    "sha256": "3d44a101f213f6c4cdc1853d4b78aef6db6bdfa3468798cc1d9912f4735013eb",
+    "note": ""
+   }
+  },
+  "cargo:core-graphics@0.25.0": {
+   "name": "core-graphics",
+   "version": "0.25.0",
+   "purl": "pkg:cargo/core-graphics@0.25.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/core-graphics/0.25.0/download",
+    "sha256": "064badf302c3194842cf2c5d61f56cc88e54a759313879cdf03abdd27d0c3b97",
+    "note": ""
+   }
+  },
+  "cargo:cpufeatures@0.2.17": {
+   "name": "cpufeatures",
+   "version": "0.2.17",
+   "purl": "pkg:cargo/cpufeatures@0.2.17",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/cpufeatures/0.2.17/download",
+    "sha256": "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280",
+    "note": ""
+   }
+  },
+  "cargo:crc32fast@1.5.2": {
+   "name": "crc32fast",
+   "version": "1.5.2",
+   "purl": "pkg:cargo/crc32fast@1.5.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/crc32fast/1.5.2/download",
+    "sha256": "01a7799fd6b852db0e61728dde9a204c423b44d689dbd432522543614b490e78",
+    "note": ""
+   }
+  },
+  "cargo:crossbeam-channel@0.5.17": {
+   "name": "crossbeam-channel",
+   "version": "0.5.17",
+   "purl": "pkg:cargo/crossbeam-channel@0.5.17",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/crossbeam-channel/0.5.17/download",
+    "sha256": "98b0cc327b5bc766e7fda9c9260cc0fa81b43a8e240440422dff70788e3f9ef1",
+    "note": ""
+   }
+  },
+  "cargo:crossbeam-utils@0.8.23": {
+   "name": "crossbeam-utils",
+   "version": "0.8.23",
+   "purl": "pkg:cargo/crossbeam-utils@0.8.23",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/crossbeam-utils/0.8.23/download",
+    "sha256": "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6",
+    "note": ""
+   }
+  },
+  "cargo:crypto-common@0.1.7": {
+   "name": "crypto-common",
+   "version": "0.1.7",
+   "purl": "pkg:cargo/crypto-common@0.1.7",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/crypto-common/0.1.7/download",
+    "sha256": "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a",
+    "note": ""
+   }
+  },
+  "cargo:cssparser-macros@0.6.1": {
+   "name": "cssparser-macros",
+   "version": "0.6.1",
+   "purl": "pkg:cargo/cssparser-macros@0.6.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/cssparser-macros/0.6.1/download",
+    "sha256": "13b588ba4ac1a99f7f2964d24b3d896ddc6bf847ee3855dbd4366f058cfcd331",
+    "note": ""
+   }
+  },
+  "cargo:cssparser@0.36.0": {
+   "name": "cssparser",
+   "version": "0.36.0",
+   "purl": "pkg:cargo/cssparser@0.36.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/cssparser/0.36.0/download",
+    "sha256": "dae61cf9c0abb83bd659dab65b7e4e38d8236824c85f0f804f173567bda257d2",
+    "note": ""
+   }
+  },
+  "cargo:ctor-proc-macro@0.0.7": {
+   "name": "ctor-proc-macro",
+   "version": "0.0.7",
+   "purl": "pkg:cargo/ctor-proc-macro@0.0.7",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/ctor-proc-macro/0.0.7/download",
+    "sha256": "52560adf09603e58c9a7ee1fe1dcb95a16927b17c127f0ac02d6e768a0e25bc1",
+    "note": ""
+   }
+  },
+  "cargo:ctor@0.8.0": {
+   "name": "ctor",
+   "version": "0.8.0",
+   "purl": "pkg:cargo/ctor@0.8.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/ctor/0.8.0/download",
+    "sha256": "352d39c2f7bef1d6ad73db6f5160efcaed66d94ef8c6c573a8410c00bf909a98",
+    "note": ""
+   }
+  },
+  "cargo:darling@0.24.1": {
+   "name": "darling",
+   "version": "0.24.1",
+   "purl": "pkg:cargo/darling@0.24.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/darling/0.24.1/download",
+    "sha256": "ed17f5901b6630b993ca003def43f2f8ef4014fc13b047b57aad617ff32bc2ec",
+    "note": ""
+   }
+  },
+  "cargo:darling_core@0.24.1": {
+   "name": "darling_core",
+   "version": "0.24.1",
+   "purl": "pkg:cargo/darling_core@0.24.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/darling_core/0.24.1/download",
+    "sha256": "6837e2cf7485aaae18f86181d2f0e9a7ed297a025e220aeabf63fdebd3a2ddff",
+    "note": ""
+   }
+  },
+  "cargo:darling_macro@0.24.1": {
+   "name": "darling_macro",
+   "version": "0.24.1",
+   "purl": "pkg:cargo/darling_macro@0.24.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/darling_macro/0.24.1/download",
+    "sha256": "2ac7135c3ef02b2f7833bbeb1be5ba7f966dcde8a87c6b87f65a778d71a02785",
+    "note": ""
+   }
+  },
+  "cargo:defmt-macros@1.1.1": {
+   "name": "defmt-macros",
+   "version": "1.1.1",
+   "purl": "pkg:cargo/defmt-macros@1.1.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/defmt-macros/1.1.1/download",
+    "sha256": "bad9c72e7ca2137e0dc3813245a0d282fd6daad32fd800af018306a9169b5fe8",
+    "note": ""
+   }
+  },
+  "cargo:defmt-parser@1.0.0": {
+   "name": "defmt-parser",
+   "version": "1.0.0",
+   "purl": "pkg:cargo/defmt-parser@1.0.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/defmt-parser/1.0.0/download",
+    "sha256": "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e",
+    "note": ""
+   }
+  },
+  "cargo:defmt@1.1.1": {
+   "name": "defmt",
+   "version": "1.1.1",
+   "purl": "pkg:cargo/defmt@1.1.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/defmt/1.1.1/download",
+    "sha256": "e2953bfe4f93bbd20cc71198842756f77d161884c99ebbabc41d80231ded88d1",
+    "note": ""
+   }
+  },
+  "cargo:deranged@0.5.8": {
+   "name": "deranged",
+   "version": "0.5.8",
+   "purl": "pkg:cargo/deranged@0.5.8",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/deranged/0.5.8/download",
+    "sha256": "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c",
+    "note": ""
+   }
+  },
+  "cargo:derive_more-impl@2.1.1": {
+   "name": "derive_more-impl",
+   "version": "2.1.1",
+   "purl": "pkg:cargo/derive_more-impl@2.1.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/derive_more-impl/2.1.1/download",
+    "sha256": "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb",
+    "note": ""
+   }
+  },
+  "cargo:derive_more@2.1.1": {
+   "name": "derive_more",
+   "version": "2.1.1",
+   "purl": "pkg:cargo/derive_more@2.1.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/derive_more/2.1.1/download",
+    "sha256": "d751e9e49156b02b44f9c1815bcb94b984cdcc4396ecc32521c739452808b134",
+    "note": ""
+   }
+  },
+  "cargo:digest@0.10.7": {
+   "name": "digest",
+   "version": "0.10.7",
+   "purl": "pkg:cargo/digest@0.10.7",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/digest/0.10.7/download",
+    "sha256": "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292",
+    "note": ""
+   }
+  },
+  "cargo:dirs-sys@0.5.0": {
+   "name": "dirs-sys",
+   "version": "0.5.0",
+   "purl": "pkg:cargo/dirs-sys@0.5.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/dirs-sys/0.5.0/download",
+    "sha256": "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab",
+    "note": ""
+   }
+  },
+  "cargo:dirs@6.0.0": {
+   "name": "dirs",
+   "version": "6.0.0",
+   "purl": "pkg:cargo/dirs@6.0.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/dirs/6.0.0/download",
+    "sha256": "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e",
+    "note": ""
+   }
+  },
+  "cargo:dispatch2@0.3.1": {
+   "name": "dispatch2",
+   "version": "0.3.1",
+   "purl": "pkg:cargo/dispatch2@0.3.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/dispatch2/0.3.1/download",
+    "sha256": "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38",
+    "note": ""
+   }
+  },
+  "cargo:displaydoc@0.2.7": {
+   "name": "displaydoc",
+   "version": "0.2.7",
+   "purl": "pkg:cargo/displaydoc@0.2.7",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/displaydoc/0.2.7/download",
+    "sha256": "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8",
+    "note": ""
+   }
+  },
+  "cargo:dom_query@0.27.0": {
+   "name": "dom_query",
+   "version": "0.27.0",
+   "purl": "pkg:cargo/dom_query@0.27.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/dom_query/0.27.0/download",
+    "sha256": "521e380c0c8afb8d9a1e83a1822ee03556fc3e3e7dbc1fd30be14e37f9cb3f89",
+    "note": ""
+   }
+  },
+  "cargo:dpi@0.1.2": {
+   "name": "dpi",
+   "version": "0.1.2",
+   "purl": "pkg:cargo/dpi@0.1.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/dpi/0.1.2/download",
+    "sha256": "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76",
+    "note": ""
+   }
+  },
+  "cargo:dtoa-short@0.3.5": {
+   "name": "dtoa-short",
+   "version": "0.3.5",
+   "purl": "pkg:cargo/dtoa-short@0.3.5",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/dtoa-short/0.3.5/download",
+    "sha256": "cd1511a7b6a56299bd043a9c167a6d2bfb37bf84a6dfceaba651168adfb43c87",
+    "note": ""
+   }
+  },
+  "cargo:dtoa@1.0.11": {
+   "name": "dtoa",
+   "version": "1.0.11",
+   "purl": "pkg:cargo/dtoa@1.0.11",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/dtoa/1.0.11/download",
+    "sha256": "4c3cf4824e2d5f025c7b531afcb2325364084a16806f6d47fbc1f5fbd9960590",
+    "note": ""
+   }
+  },
+  "cargo:dtor-proc-macro@0.0.6": {
+   "name": "dtor-proc-macro",
+   "version": "0.0.6",
+   "purl": "pkg:cargo/dtor-proc-macro@0.0.6",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/dtor-proc-macro/0.0.6/download",
+    "sha256": "f678cf4a922c215c63e0de95eb1ff08a958a81d47e485cf9da1e27bf6305cfa5",
+    "note": ""
+   }
+  },
+  "cargo:dtor@0.3.0": {
+   "name": "dtor",
+   "version": "0.3.0",
+   "purl": "pkg:cargo/dtor@0.3.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/dtor/0.3.0/download",
+    "sha256": "f1057d6c64987086ff8ed0fd3fbf377a6b7d205cc7715868cd401705f715cbe4",
+    "note": ""
+   }
+  },
+  "cargo:dunce@1.0.5": {
+   "name": "dunce",
+   "version": "1.0.5",
+   "purl": "pkg:cargo/dunce@1.0.5",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/dunce/1.0.5/download",
+    "sha256": "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813",
+    "note": ""
+   }
+  },
+  "cargo:dyn-clone@1.0.20": {
+   "name": "dyn-clone",
+   "version": "1.0.20",
+   "purl": "pkg:cargo/dyn-clone@1.0.20",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/dyn-clone/1.0.20/download",
+    "sha256": "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555",
+    "note": ""
+   }
+  },
+  "cargo:embed_plist@1.2.2": {
+   "name": "embed_plist",
+   "version": "1.2.2",
+   "purl": "pkg:cargo/embed_plist@1.2.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/embed_plist/1.2.2/download",
+    "sha256": "4ef6b89e5b37196644d8796de5268852ff179b44e96276cf4290264843743bb7",
+    "note": ""
+   }
+  },
+  "cargo:equivalent@1.0.2": {
+   "name": "equivalent",
+   "version": "1.0.2",
+   "purl": "pkg:cargo/equivalent@1.0.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/equivalent/1.0.2/download",
+    "sha256": "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f",
+    "note": ""
+   }
+  },
+  "cargo:erased-serde@0.4.10": {
+   "name": "erased-serde",
+   "version": "0.4.10",
+   "purl": "pkg:cargo/erased-serde@0.4.10",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/erased-serde/0.4.10/download",
+    "sha256": "d2add8a07dd6a8d93ff627029c51de145e12686fbc36ecb298ac22e74cf02dec",
+    "note": ""
+   }
+  },
+  "cargo:fastrand@2.5.0": {
+   "name": "fastrand",
+   "version": "2.5.0",
+   "purl": "pkg:cargo/fastrand@2.5.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/fastrand/2.5.0/download",
+    "sha256": "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223",
+    "note": ""
+   }
+  },
+  "cargo:fdeflate@0.3.7": {
+   "name": "fdeflate",
+   "version": "0.3.7",
+   "purl": "pkg:cargo/fdeflate@0.3.7",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/fdeflate/0.3.7/download",
+    "sha256": "1e6853b52649d4ac5c0bd02320cddc5ba956bdb407c4b75a2c6b75bf51500f8c",
+    "note": ""
+   }
+  },
+  "cargo:flate2@1.1.10": {
+   "name": "flate2",
+   "version": "1.1.10",
+   "purl": "pkg:cargo/flate2@1.1.10",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/flate2/1.1.10/download",
+    "sha256": "6e634e2e0ebac1ee034020da1ca582e17ffe4e0f5e985823721e168928136dcb",
+    "note": ""
+   }
+  },
+  "cargo:fnv@1.0.7": {
+   "name": "fnv",
+   "version": "1.0.7",
+   "purl": "pkg:cargo/fnv@1.0.7",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/fnv/1.0.7/download",
+    "sha256": "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1",
+    "note": ""
+   }
+  },
+  "cargo:foldhash@0.2.0": {
+   "name": "foldhash",
+   "version": "0.2.0",
+   "purl": "pkg:cargo/foldhash@0.2.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/foldhash/0.2.0/download",
+    "sha256": "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb",
+    "note": ""
+   }
+  },
+  "cargo:foreign-types-macros@0.2.4": {
+   "name": "foreign-types-macros",
+   "version": "0.2.4",
+   "purl": "pkg:cargo/foreign-types-macros@0.2.4",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/foreign-types-macros/0.2.4/download",
+    "sha256": "ea5190182e6915eb873ddbc16e23b711b6eb1f9c00a0d0a3a91b5f6228475225",
+    "note": ""
+   }
+  },
+  "cargo:foreign-types-shared@0.3.1": {
+   "name": "foreign-types-shared",
+   "version": "0.3.1",
+   "purl": "pkg:cargo/foreign-types-shared@0.3.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/foreign-types-shared/0.3.1/download",
+    "sha256": "aa9a19cbb55df58761df49b23516a86d432839add4af60fc256da840f66ed35b",
+    "note": ""
+   }
+  },
+  "cargo:foreign-types@0.5.0": {
+   "name": "foreign-types",
+   "version": "0.5.0",
+   "purl": "pkg:cargo/foreign-types@0.5.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/foreign-types/0.5.0/download",
+    "sha256": "d737d9aa519fb7b749cbc3b962edcf310a8dd1f4b67c91c4f83975dbdd17d965",
+    "note": ""
+   }
+  },
+  "cargo:form_urlencoded@1.2.2": {
+   "name": "form_urlencoded",
+   "version": "1.2.2",
+   "purl": "pkg:cargo/form_urlencoded@1.2.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/form_urlencoded/1.2.2/download",
+    "sha256": "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf",
+    "note": ""
+   }
+  },
+  "cargo:generic-array@0.14.7": {
+   "name": "generic-array",
+   "version": "0.14.7",
+   "purl": "pkg:cargo/generic-array@0.14.7",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/generic-array/0.14.7/download",
+    "sha256": "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a",
+    "note": ""
+   }
+  },
+  "cargo:getrandom@0.3.4": {
+   "name": "getrandom",
+   "version": "0.3.4",
+   "purl": "pkg:cargo/getrandom@0.3.4",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/getrandom/0.3.4/download",
+    "sha256": "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd",
+    "note": ""
+   }
+  },
+  "cargo:getrandom@0.4.3": {
+   "name": "getrandom",
+   "version": "0.4.3",
+   "purl": "pkg:cargo/getrandom@0.4.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/getrandom/0.4.3/download",
+    "sha256": "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099",
+    "note": ""
+   }
+  },
+  "cargo:glob@0.3.4": {
+   "name": "glob",
+   "version": "0.3.4",
+   "purl": "pkg:cargo/glob@0.3.4",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/glob/0.3.4/download",
+    "sha256": "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b",
+    "note": ""
+   }
+  },
+  "cargo:hashbrown@0.12.3": {
+   "name": "hashbrown",
+   "version": "0.12.3",
+   "purl": "pkg:cargo/hashbrown@0.12.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/hashbrown/0.12.3/download",
+    "sha256": "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888",
+    "note": ""
+   }
+  },
+  "cargo:hashbrown@0.17.1": {
+   "name": "hashbrown",
+   "version": "0.17.1",
+   "purl": "pkg:cargo/hashbrown@0.17.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/hashbrown/0.17.1/download",
+    "sha256": "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a",
+    "note": ""
+   }
+  },
+  "cargo:heck@0.5.0": {
+   "name": "heck",
+   "version": "0.5.0",
+   "purl": "pkg:cargo/heck@0.5.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/heck/0.5.0/download",
+    "sha256": "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea",
+    "note": ""
+   }
+  },
+  "cargo:hex@0.4.3": {
+   "name": "hex",
+   "version": "0.4.3",
+   "purl": "pkg:cargo/hex@0.4.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/hex/0.4.3/download",
+    "sha256": "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70",
+    "note": ""
+   }
+  },
+  "cargo:html5ever@0.38.0": {
+   "name": "html5ever",
+   "version": "0.38.0",
+   "purl": "pkg:cargo/html5ever@0.38.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/html5ever/0.38.0/download",
+    "sha256": "1054432bae2f14e0061e33d23402fbaa67a921d319d56adc6bcf887ddad1cbc2",
+    "note": ""
+   }
+  },
+  "cargo:http@1.5.0": {
+   "name": "http",
+   "version": "1.5.0",
+   "purl": "pkg:cargo/http@1.5.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/http/1.5.0/download",
+    "sha256": "918d3568bebf352712bc2ef3d46a8bcf1a75b373be6539de198e9105cbbf9ce0",
+    "note": ""
+   }
+  },
+  "cargo:iana-time-zone@0.1.65": {
+   "name": "iana-time-zone",
+   "version": "0.1.65",
+   "purl": "pkg:cargo/iana-time-zone@0.1.65",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/iana-time-zone/0.1.65/download",
+    "sha256": "e31bc9ad994ba00e440a8aa5c9ef0ec67d5cb5e5cb0cc7f8b744a35b389cc470",
+    "note": ""
+   }
+  },
+  "cargo:ico@0.5.0": {
+   "name": "ico",
+   "version": "0.5.0",
+   "purl": "pkg:cargo/ico@0.5.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/ico/0.5.0/download",
+    "sha256": "3e795dff5605e0f04bff85ca41b51a96b83e80b281e96231bcaaf1ac35103371",
+    "note": ""
+   }
+  },
+  "cargo:icu_collections@2.3.0": {
+   "name": "icu_collections",
+   "version": "2.3.0",
+   "purl": "pkg:cargo/icu_collections@2.3.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/icu_collections/2.3.0/download",
+    "sha256": "fa68d21081c4a05d5a901a1c62add574c77048b6a1c67be3b50ce0b60d4ca513",
+    "note": ""
+   }
+  },
+  "cargo:icu_locale_core@2.3.0": {
+   "name": "icu_locale_core",
+   "version": "2.3.0",
+   "purl": "pkg:cargo/icu_locale_core@2.3.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/icu_locale_core/2.3.0/download",
+    "sha256": "d56e28588da92eee5c3201a6eff33fabdd49b62269c8938d4ff050ce4d900deb",
+    "note": ""
+   }
+  },
+  "cargo:icu_normalizer@2.3.0": {
+   "name": "icu_normalizer",
+   "version": "2.3.0",
+   "purl": "pkg:cargo/icu_normalizer@2.3.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/icu_normalizer/2.3.0/download",
+    "sha256": "12f9cf5f235641ed274641dd81c3f28d870e276763d0797aeeab72317b1c646f",
+    "note": ""
+   }
+  },
+  "cargo:icu_normalizer_data@2.3.0": {
+   "name": "icu_normalizer_data",
+   "version": "2.3.0",
+   "purl": "pkg:cargo/icu_normalizer_data@2.3.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/icu_normalizer_data/2.3.0/download",
+    "sha256": "1563da1ed3e0b3bf3d74c9b85917ac9c56464d2f57242270c09c9e752f8021a0",
+    "note": ""
+   }
+  },
+  "cargo:icu_properties@2.3.0": {
+   "name": "icu_properties",
+   "version": "2.3.0",
+   "purl": "pkg:cargo/icu_properties@2.3.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/icu_properties/2.3.0/download",
+    "sha256": "7e7ca276ad3145661a65914e6daf131ca5120cd3dcee8f8f3214b8875184a148",
+    "note": ""
+   }
+  },
+  "cargo:icu_properties_data@2.3.0": {
+   "name": "icu_properties_data",
+   "version": "2.3.0",
+   "purl": "pkg:cargo/icu_properties_data@2.3.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/icu_properties_data/2.3.0/download",
+    "sha256": "e590f038c1464a96894fd6d10127e90a8be4509f56ff7ecef851b15cee0b7caa",
+    "note": ""
+   }
+  },
+  "cargo:icu_provider@2.3.1": {
+   "name": "icu_provider",
+   "version": "2.3.1",
+   "purl": "pkg:cargo/icu_provider@2.3.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/icu_provider/2.3.1/download",
+    "sha256": "d27bbb9d3abbefac45d55f647c9de1d44aafcd1186eb91879afef17c396c3e73",
+    "note": ""
+   }
+  },
+  "cargo:ident_case@1.0.1": {
+   "name": "ident_case",
+   "version": "1.0.1",
+   "purl": "pkg:cargo/ident_case@1.0.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/ident_case/1.0.1/download",
+    "sha256": "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39",
+    "note": ""
+   }
+  },
+  "cargo:idna@1.1.0": {
+   "name": "idna",
+   "version": "1.1.0",
+   "purl": "pkg:cargo/idna@1.1.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/idna/1.1.0/download",
+    "sha256": "3b0875f23caa03898994f6ddc501886a45c7d3d62d04d2d90788d47be1b1e4de",
+    "note": ""
+   }
+  },
+  "cargo:idna_adapter@1.2.2": {
+   "name": "idna_adapter",
+   "version": "1.2.2",
+   "purl": "pkg:cargo/idna_adapter@1.2.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/idna_adapter/1.2.2/download",
+    "sha256": "cb68373c0d6620ef8105e855e7745e18b0d00d3bdb07fb532e434244cdb9a714",
+    "note": ""
+   }
+  },
+  "cargo:indexmap@1.9.3": {
+   "name": "indexmap",
+   "version": "1.9.3",
+   "purl": "pkg:cargo/indexmap@1.9.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/indexmap/1.9.3/download",
+    "sha256": "bd070e393353796e801d209ad339e89596eb4c8d430d18ede6a1cced8fafbd99",
+    "note": ""
+   }
+  },
+  "cargo:indexmap@2.14.2": {
+   "name": "indexmap",
+   "version": "2.14.2",
+   "purl": "pkg:cargo/indexmap@2.14.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/indexmap/2.14.2/download",
+    "sha256": "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855",
+    "note": ""
+   }
+  },
+  "cargo:infer@0.19.0": {
+   "name": "infer",
+   "version": "0.19.0",
+   "purl": "pkg:cargo/infer@0.19.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/infer/0.19.0/download",
+    "sha256": "a588916bfdfd92e71cacef98a63d9b1f0d74d6599980d11894290e7ddefffcf7",
+    "note": ""
+   }
+  },
+  "cargo:itoa@1.0.18": {
+   "name": "itoa",
+   "version": "1.0.18",
+   "purl": "pkg:cargo/itoa@1.0.18",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/itoa/1.0.18/download",
+    "sha256": "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682",
+    "note": ""
+   }
+  },
+  "cargo:jiff-core@0.1.1": {
+   "name": "jiff-core",
+   "version": "0.1.1",
+   "purl": "pkg:cargo/jiff-core@0.1.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/jiff-core/0.1.1/download",
+    "sha256": "5e52fe76043ccecc9005d2305ebaadf7d7fc0cc89ca6baa10a94d6bc68c7128c",
+    "note": ""
+   }
+  },
+  "cargo:jiff@0.2.37": {
+   "name": "jiff",
+   "version": "0.2.37",
+   "purl": "pkg:cargo/jiff@0.2.37",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/jiff/0.2.37/download",
+    "sha256": "0ab1baf72f08796de0260609515130699b890ac25f30e610ad894bc5856cafdb",
+    "note": ""
+   }
+  },
+  "cargo:json-patch@3.0.1": {
+   "name": "json-patch",
+   "version": "3.0.1",
+   "purl": "pkg:cargo/json-patch@3.0.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/json-patch/3.0.1/download",
+    "sha256": "863726d7afb6bc2590eeff7135d923545e5e964f004c2ccf8716c25e70a86f08",
+    "note": ""
+   }
+  },
+  "cargo:jsonptr@0.6.3": {
+   "name": "jsonptr",
+   "version": "0.6.3",
+   "purl": "pkg:cargo/jsonptr@0.6.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/jsonptr/0.6.3/download",
+    "sha256": "5dea2b27dd239b2556ed7a25ba842fe47fd602e7fc7433c2a8d6106d4d9edd70",
+    "note": ""
+   }
+  },
+  "cargo:keyboard-types@0.7.0": {
+   "name": "keyboard-types",
+   "version": "0.7.0",
+   "purl": "pkg:cargo/keyboard-types@0.7.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/keyboard-types/0.7.0/download",
+    "sha256": "b750dcadc39a09dbadd74e118f6dd6598df77fa01df0cfcdc52c28dece74528a",
+    "note": ""
+   }
+  },
+  "cargo:libc@0.2.189": {
+   "name": "libc",
+   "version": "0.2.189",
+   "purl": "pkg:cargo/libc@0.2.189",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/libc/0.2.189/download",
+    "sha256": "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2",
+    "note": ""
+   }
+  },
+  "cargo:litemap@0.8.3": {
+   "name": "litemap",
+   "version": "0.8.3",
+   "purl": "pkg:cargo/litemap@0.8.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/litemap/0.8.3/download",
+    "sha256": "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae",
+    "note": ""
+   }
+  },
+  "cargo:lock_api@0.4.14": {
+   "name": "lock_api",
+   "version": "0.4.14",
+   "purl": "pkg:cargo/lock_api@0.4.14",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/lock_api/0.4.14/download",
+    "sha256": "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965",
+    "note": ""
+   }
+  },
+  "cargo:log@0.4.34": {
+   "name": "log",
+   "version": "0.4.34",
+   "purl": "pkg:cargo/log@0.4.34",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/log/0.4.34/download",
+    "sha256": "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6",
+    "note": ""
+   }
+  },
+  "cargo:markup5ever@0.38.0": {
+   "name": "markup5ever",
+   "version": "0.38.0",
+   "purl": "pkg:cargo/markup5ever@0.38.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/markup5ever/0.38.0/download",
+    "sha256": "8983d30f2915feeaaab2d6babdd6bc7e9ed1a00b66b5e6d74df19aa9c0e91862",
+    "note": ""
+   }
+  },
+  "cargo:memchr@2.8.3": {
+   "name": "memchr",
+   "version": "2.8.3",
+   "purl": "pkg:cargo/memchr@2.8.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/memchr/2.8.3/download",
+    "sha256": "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98",
+    "note": ""
+   }
+  },
+  "cargo:mime@0.3.17": {
+   "name": "mime",
+   "version": "0.3.17",
+   "purl": "pkg:cargo/mime@0.3.17",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/mime/0.3.17/download",
+    "sha256": "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a",
+    "note": ""
+   }
+  },
+  "cargo:miniz_oxide@0.8.9": {
+   "name": "miniz_oxide",
+   "version": "0.8.9",
+   "purl": "pkg:cargo/miniz_oxide@0.8.9",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/miniz_oxide/0.8.9/download",
+    "sha256": "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316",
+    "note": ""
+   }
+  },
+  "cargo:miniz_oxide@0.9.1": {
+   "name": "miniz_oxide",
+   "version": "0.9.1",
+   "purl": "pkg:cargo/miniz_oxide@0.9.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/miniz_oxide/0.9.1/download",
+    "sha256": "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c",
+    "note": ""
+   }
+  },
+  "cargo:mio@1.2.3": {
+   "name": "mio",
+   "version": "1.2.3",
+   "purl": "pkg:cargo/mio@1.2.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/mio/1.2.3/download",
+    "sha256": "4b18443e9c262bfe8fa82f51666e2642c53393f7e5c27b3e1aeab922cff5b9d8",
+    "note": ""
+   }
+  },
+  "cargo:muda@0.19.3": {
+   "name": "muda",
+   "version": "0.19.3",
+   "purl": "pkg:cargo/muda@0.19.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/muda/0.19.3/download",
+    "sha256": "1dd04e60bc0b07438a6771710ee1698f98f6ebbc7f89b61264af1563b8aeb878",
+    "note": ""
+   }
+  },
+  "cargo:new_debug_unreachable@1.0.6": {
+   "name": "new_debug_unreachable",
+   "version": "1.0.6",
+   "purl": "pkg:cargo/new_debug_unreachable@1.0.6",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/new_debug_unreachable/1.0.6/download",
+    "sha256": "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086",
+    "note": ""
+   }
+  },
+  "cargo:num-conv@0.2.2": {
+   "name": "num-conv",
+   "version": "0.2.2",
+   "purl": "pkg:cargo/num-conv@0.2.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/num-conv/0.2.2/download",
+    "sha256": "521739c6d2bac4aa25192232afe6841231376b2b26d4d9fae5ecf8ca5772e441",
+    "note": ""
+   }
+  },
+  "cargo:num-traits@0.2.19": {
+   "name": "num-traits",
+   "version": "0.2.19",
+   "purl": "pkg:cargo/num-traits@0.2.19",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/num-traits/0.2.19/download",
+    "sha256": "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841",
+    "note": ""
+   }
+  },
+  "cargo:objc2-app-kit@0.3.2": {
+   "name": "objc2-app-kit",
+   "version": "0.3.2",
+   "purl": "pkg:cargo/objc2-app-kit@0.3.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/objc2-app-kit/0.3.2/download",
+    "sha256": "d49e936b501e5c5bf01fda3a9452ff86dc3ea98ad5f283e1455153142d97518c",
+    "note": ""
+   }
+  },
+  "cargo:objc2-core-foundation@0.3.2": {
+   "name": "objc2-core-foundation",
+   "version": "0.3.2",
+   "purl": "pkg:cargo/objc2-core-foundation@0.3.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/objc2-core-foundation/0.3.2/download",
+    "sha256": "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536",
+    "note": ""
+   }
+  },
+  "cargo:objc2-core-graphics@0.3.2": {
+   "name": "objc2-core-graphics",
+   "version": "0.3.2",
+   "purl": "pkg:cargo/objc2-core-graphics@0.3.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/objc2-core-graphics/0.3.2/download",
+    "sha256": "e022c9d066895efa1345f8e33e584b9f958da2fd4cd116792e15e07e4720a807",
+    "note": ""
+   }
+  },
+  "cargo:objc2-encode@4.1.0": {
+   "name": "objc2-encode",
+   "version": "4.1.0",
+   "purl": "pkg:cargo/objc2-encode@4.1.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/objc2-encode/4.1.0/download",
+    "sha256": "ef25abbcd74fb2609453eb695bd2f860d389e457f67dc17cafc8b8cbc89d0c33",
+    "note": ""
+   }
+  },
+  "cargo:objc2-exception-helper@0.1.1": {
+   "name": "objc2-exception-helper",
+   "version": "0.1.1",
+   "purl": "pkg:cargo/objc2-exception-helper@0.1.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/objc2-exception-helper/0.1.1/download",
+    "sha256": "c7a1c5fbb72d7735b076bb47b578523aedc40f3c439bea6dfd595c089d79d98a",
+    "note": ""
+   }
+  },
+  "cargo:objc2-foundation@0.3.2": {
+   "name": "objc2-foundation",
+   "version": "0.3.2",
+   "purl": "pkg:cargo/objc2-foundation@0.3.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/objc2-foundation/0.3.2/download",
+    "sha256": "e3e0adef53c21f888deb4fa59fc59f7eb17404926ee8a6f59f5df0fd7f9f3272",
+    "note": ""
+   }
+  },
+  "cargo:objc2-io-surface@0.3.2": {
+   "name": "objc2-io-surface",
+   "version": "0.3.2",
+   "purl": "pkg:cargo/objc2-io-surface@0.3.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/objc2-io-surface/0.3.2/download",
+    "sha256": "180788110936d59bab6bd83b6060ffdfffb3b922ba1396b312ae795e1de9d81d",
+    "note": ""
+   }
+  },
+  "cargo:objc2-web-kit@0.3.2": {
+   "name": "objc2-web-kit",
+   "version": "0.3.2",
+   "purl": "pkg:cargo/objc2-web-kit@0.3.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/objc2-web-kit/0.3.2/download",
+    "sha256": "b2e5aaab980c433cf470df9d7af96a7b46a9d892d521a2cbbb2f8a4c16751e7f",
+    "note": ""
+   }
+  },
+  "cargo:objc2@0.6.4": {
+   "name": "objc2",
+   "version": "0.6.4",
+   "purl": "pkg:cargo/objc2@0.6.4",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/objc2/0.6.4/download",
+    "sha256": "3a12a8ed07aefc768292f076dc3ac8c48f3781c8f2d5851dd3d98950e8c5a89f",
+    "note": ""
+   }
+  },
+  "cargo:once_cell@1.21.4": {
+   "name": "once_cell",
+   "version": "1.21.4",
+   "purl": "pkg:cargo/once_cell@1.21.4",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/once_cell/1.21.4/download",
+    "sha256": "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50",
+    "note": ""
+   }
+  },
+  "cargo:option-ext@0.2.0": {
+   "name": "option-ext",
+   "version": "0.2.0",
+   "purl": "pkg:cargo/option-ext@0.2.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/option-ext/0.2.0/download",
+    "sha256": "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d",
+    "note": ""
+   }
+  },
+  "cargo:parking_lot@0.12.5": {
+   "name": "parking_lot",
+   "version": "0.12.5",
+   "purl": "pkg:cargo/parking_lot@0.12.5",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/parking_lot/0.12.5/download",
+    "sha256": "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a",
+    "note": ""
+   }
+  },
+  "cargo:parking_lot_core@0.9.12": {
+   "name": "parking_lot_core",
+   "version": "0.9.12",
+   "purl": "pkg:cargo/parking_lot_core@0.9.12",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/parking_lot_core/0.9.12/download",
+    "sha256": "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1",
+    "note": ""
+   }
+  },
+  "cargo:percent-encoding@2.3.2": {
+   "name": "percent-encoding",
+   "version": "2.3.2",
+   "purl": "pkg:cargo/percent-encoding@2.3.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/percent-encoding/2.3.2/download",
+    "sha256": "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220",
+    "note": ""
+   }
+  },
+  "cargo:phf@0.13.1": {
+   "name": "phf",
+   "version": "0.13.1",
+   "purl": "pkg:cargo/phf@0.13.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/phf/0.13.1/download",
+    "sha256": "c1562dc717473dbaa4c1f85a36410e03c047b2e7df7f45ee938fbef64ae7fadf",
+    "note": ""
+   }
+  },
+  "cargo:phf_generator@0.13.1": {
+   "name": "phf_generator",
+   "version": "0.13.1",
+   "purl": "pkg:cargo/phf_generator@0.13.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/phf_generator/0.13.1/download",
+    "sha256": "135ace3a761e564ec88c03a77317a7c6b80bb7f7135ef2544dbe054243b89737",
+    "note": ""
+   }
+  },
+  "cargo:phf_macros@0.13.1": {
+   "name": "phf_macros",
+   "version": "0.13.1",
+   "purl": "pkg:cargo/phf_macros@0.13.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/phf_macros/0.13.1/download",
+    "sha256": "812f032b54b1e759ccd5f8b6677695d5268c588701effba24601f6932f8269ef",
+    "note": ""
+   }
+  },
+  "cargo:phf_shared@0.13.1": {
+   "name": "phf_shared",
+   "version": "0.13.1",
+   "purl": "pkg:cargo/phf_shared@0.13.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/phf_shared/0.13.1/download",
+    "sha256": "e57fef6bc5981e38c2ce2d63bfa546861309f875b8a75f092d1d54ae2d64f266",
+    "note": ""
+   }
+  },
+  "cargo:pin-project-lite@0.2.17": {
+   "name": "pin-project-lite",
+   "version": "0.2.17",
+   "purl": "pkg:cargo/pin-project-lite@0.2.17",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/pin-project-lite/0.2.17/download",
+    "sha256": "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd",
+    "note": ""
+   }
+  },
+  "cargo:plist@1.10.1": {
+   "name": "plist",
+   "version": "1.10.1",
+   "purl": "pkg:cargo/plist@1.10.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/plist/1.10.1/download",
+    "sha256": "2896bade328c13f7042a297ea5ac5b0951f6cf989dea5f32c2fd98da398195cb",
+    "note": ""
+   }
+  },
+  "cargo:png@0.17.16": {
+   "name": "png",
+   "version": "0.17.16",
+   "purl": "pkg:cargo/png@0.17.16",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/png/0.17.16/download",
+    "sha256": "82151a2fc869e011c153adc57cf2789ccb8d9906ce52c0b39a6b5697749d7526",
+    "note": ""
+   }
+  },
+  "cargo:png@0.18.1": {
+   "name": "png",
+   "version": "0.18.1",
+   "purl": "pkg:cargo/png@0.18.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/png/0.18.1/download",
+    "sha256": "60769b8b31b2a9f263dae2776c37b1b28ae246943cf719eb6946a1db05128a61",
+    "note": ""
+   }
+  },
+  "cargo:potential_utf@0.1.6": {
+   "name": "potential_utf",
+   "version": "0.1.6",
+   "purl": "pkg:cargo/potential_utf@0.1.6",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/potential_utf/0.1.6/download",
+    "sha256": "d83eb9bc6d8e5cf568e7a1101d60ee05e81ed50ea106026f3d18deeb046d7661",
+    "note": ""
+   }
+  },
+  "cargo:powerfmt@0.2.0": {
+   "name": "powerfmt",
+   "version": "0.2.0",
+   "purl": "pkg:cargo/powerfmt@0.2.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/powerfmt/0.2.0/download",
+    "sha256": "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391",
+    "note": ""
+   }
+  },
+  "cargo:precomputed-hash@0.1.1": {
+   "name": "precomputed-hash",
+   "version": "0.1.1",
+   "purl": "pkg:cargo/precomputed-hash@0.1.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/precomputed-hash/0.1.1/download",
+    "sha256": "925383efa346730478fb4838dbe9137d2a47675ad789c546d150a6e1dd4ab31c",
+    "note": ""
+   }
+  },
+  "cargo:proc-macro2@1.0.107": {
+   "name": "proc-macro2",
+   "version": "1.0.107",
+   "purl": "pkg:cargo/proc-macro2@1.0.107",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/proc-macro2/1.0.107/download",
+    "sha256": "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9",
+    "note": ""
+   }
+  },
+  "cargo:quick-xml@0.42.0": {
+   "name": "quick-xml",
+   "version": "0.42.0",
+   "purl": "pkg:cargo/quick-xml@0.42.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/quick-xml/0.42.0/download",
+    "sha256": "41b1177fdf999d2321d3fb46ff47159d9c1fb9ad66a4879f8c50a0b504615e9b",
+    "note": ""
+   }
+  },
+  "cargo:quote@1.0.47": {
+   "name": "quote",
+   "version": "1.0.47",
+   "purl": "pkg:cargo/quote@1.0.47",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/quote/1.0.47/download",
+    "sha256": "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001",
+    "note": ""
+   }
+  },
+  "cargo:raw-window-handle@0.6.2": {
+   "name": "raw-window-handle",
+   "version": "0.6.2",
+   "purl": "pkg:cargo/raw-window-handle@0.6.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/raw-window-handle/0.6.2/download",
+    "sha256": "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539",
+    "note": ""
+   }
+  },
+  "cargo:ref-cast-impl@1.0.27": {
+   "name": "ref-cast-impl",
+   "version": "1.0.27",
+   "purl": "pkg:cargo/ref-cast-impl@1.0.27",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/ref-cast-impl/1.0.27/download",
+    "sha256": "92ecd8964f8453721699a1ed72037b0db49ce2f5a5138486ee89bed6f67cdf3a",
+    "note": ""
+   }
+  },
+  "cargo:ref-cast@1.0.27": {
+   "name": "ref-cast",
+   "version": "1.0.27",
+   "purl": "pkg:cargo/ref-cast@1.0.27",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/ref-cast/1.0.27/download",
+    "sha256": "7e440fb4e4b4147295338efb76001ab9e4efc0e5839df2c47fc5ac2381d365c3",
+    "note": ""
+   }
+  },
+  "cargo:regex-automata@0.4.18": {
+   "name": "regex-automata",
+   "version": "0.4.18",
+   "purl": "pkg:cargo/regex-automata@0.4.18",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/regex-automata/0.4.18/download",
+    "sha256": "ad8553b9b26413251cbf30e620595c7a41b3887f03da04579c0e6b0d6a06b4b2",
+    "note": ""
+   }
+  },
+  "cargo:regex-syntax@0.8.11": {
+   "name": "regex-syntax",
+   "version": "0.8.11",
+   "purl": "pkg:cargo/regex-syntax@0.8.11",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/regex-syntax/0.8.11/download",
+    "sha256": "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4",
+    "note": ""
+   }
+  },
+  "cargo:regex@1.13.1": {
+   "name": "regex",
+   "version": "1.13.1",
+   "purl": "pkg:cargo/regex@1.13.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/regex/1.13.1/download",
+    "sha256": "f020237b6c8eed93db2e2cb53c00c60a8e1bc73da7d073199a1180401450218d",
+    "note": ""
+   }
+  },
+  "cargo:rustc-hash@2.1.3": {
+   "name": "rustc-hash",
+   "version": "2.1.3",
+   "purl": "pkg:cargo/rustc-hash@2.1.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/rustc-hash/2.1.3/download",
+    "sha256": "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d",
+    "note": ""
+   }
+  },
+  "cargo:same-file@1.0.6": {
+   "name": "same-file",
+   "version": "1.0.6",
+   "purl": "pkg:cargo/same-file@1.0.6",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/same-file/1.0.6/download",
+    "sha256": "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502",
+    "note": ""
+   }
+  },
+  "cargo:schemars@0.8.22": {
+   "name": "schemars",
+   "version": "0.8.22",
+   "purl": "pkg:cargo/schemars@0.8.22",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/schemars/0.8.22/download",
+    "sha256": "3fbf2ae1b8bc8e02df939598064d22402220cd5bbcca1c76f7d6a310974d5615",
+    "note": ""
+   }
+  },
+  "cargo:schemars@0.9.0": {
+   "name": "schemars",
+   "version": "0.9.0",
+   "purl": "pkg:cargo/schemars@0.9.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/schemars/0.9.0/download",
+    "sha256": "4cd191f9397d57d581cddd31014772520aa448f65ef991055d7f61582c65165f",
+    "note": ""
+   }
+  },
+  "cargo:schemars@1.2.2": {
+   "name": "schemars",
+   "version": "1.2.2",
+   "purl": "pkg:cargo/schemars@1.2.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/schemars/1.2.2/download",
+    "sha256": "687274d293b6cdc6e73e0fee520bf2049650090d7164f87672d212a3c530cf4a",
+    "note": ""
+   }
+  },
+  "cargo:schemars_derive@0.8.22": {
+   "name": "schemars_derive",
+   "version": "0.8.22",
+   "purl": "pkg:cargo/schemars_derive@0.8.22",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/schemars_derive/0.8.22/download",
+    "sha256": "32e265784ad618884abaea0600a9adf15393368d840e0222d101a072f3f7534d",
+    "note": ""
+   }
+  },
+  "cargo:scopeguard@1.2.0": {
+   "name": "scopeguard",
+   "version": "1.2.0",
+   "purl": "pkg:cargo/scopeguard@1.2.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/scopeguard/1.2.0/download",
+    "sha256": "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49",
+    "note": ""
+   }
+  },
+  "cargo:selectors@0.36.1": {
+   "name": "selectors",
+   "version": "0.36.1",
+   "purl": "pkg:cargo/selectors@0.36.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/selectors/0.36.1/download",
+    "sha256": "c5d9c0c92a92d33f08817311cf3f2c29a3538a8240e94a6a3c622ce652d7e00c",
+    "note": ""
+   }
+  },
+  "cargo:semver@1.0.28": {
+   "name": "semver",
+   "version": "1.0.28",
+   "purl": "pkg:cargo/semver@1.0.28",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/semver/1.0.28/download",
+    "sha256": "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd",
+    "note": ""
+   }
+  },
+  "cargo:serde-untagged@0.1.9": {
+   "name": "serde-untagged",
+   "version": "0.1.9",
+   "purl": "pkg:cargo/serde-untagged@0.1.9",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/serde-untagged/0.1.9/download",
+    "sha256": "f9faf48a4a2d2693be24c6289dbe26552776eb7737074e6722891fadbe6c5058",
+    "note": ""
+   }
+  },
+  "cargo:serde@1.0.229": {
+   "name": "serde",
+   "version": "1.0.229",
+   "purl": "pkg:cargo/serde@1.0.229",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/serde/1.0.229/download",
+    "sha256": "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba",
+    "note": ""
+   }
+  },
+  "cargo:serde_core@1.0.229": {
+   "name": "serde_core",
+   "version": "1.0.229",
+   "purl": "pkg:cargo/serde_core@1.0.229",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/serde_core/1.0.229/download",
+    "sha256": "67dca2c9c51e58a4791a4b1ed58308b39c64224d349a935ab5039aa360942a48",
+    "note": ""
+   }
+  },
+  "cargo:serde_derive@1.0.229": {
+   "name": "serde_derive",
+   "version": "1.0.229",
+   "purl": "pkg:cargo/serde_derive@1.0.229",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/serde_derive/1.0.229/download",
+    "sha256": "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348",
+    "note": ""
+   }
+  },
+  "cargo:serde_derive_internals@0.29.1": {
+   "name": "serde_derive_internals",
+   "version": "0.29.1",
+   "purl": "pkg:cargo/serde_derive_internals@0.29.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/serde_derive_internals/0.29.1/download",
+    "sha256": "18d26a20a969b9e3fdf2fc2d9f21eda6c40e2de84c9408bb5d3b05d499aae711",
+    "note": ""
+   }
+  },
+  "cargo:serde_json@1.0.151": {
+   "name": "serde_json",
+   "version": "1.0.151",
+   "purl": "pkg:cargo/serde_json@1.0.151",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/serde_json/1.0.151/download",
+    "sha256": "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14",
+    "note": ""
+   }
+  },
+  "cargo:serde_repr@0.1.21": {
+   "name": "serde_repr",
+   "version": "0.1.21",
+   "purl": "pkg:cargo/serde_repr@0.1.21",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/serde_repr/0.1.21/download",
+    "sha256": "8d3b1629de253c70a0508c3899572da79ca359fdab27c7920ff00406df418906",
+    "note": ""
+   }
+  },
+  "cargo:serde_spanned@1.1.1": {
+   "name": "serde_spanned",
+   "version": "1.1.1",
+   "purl": "pkg:cargo/serde_spanned@1.1.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/serde_spanned/1.1.1/download",
+    "sha256": "6662b5879511e06e8999a8a235d848113e942c9124f211511b16466ee2995f26",
+    "note": ""
+   }
+  },
+  "cargo:serde_with@3.23.0": {
+   "name": "serde_with",
+   "version": "3.23.0",
+   "purl": "pkg:cargo/serde_with@3.23.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/serde_with/3.23.0/download",
+    "sha256": "935177bb8c0cd8ca1a4e6d1a2ac8988bea69cab4f9d3a31311e012ad27868ea4",
+    "note": ""
+   }
+  },
+  "cargo:serde_with_macros@3.23.0": {
+   "name": "serde_with_macros",
+   "version": "3.23.0",
+   "purl": "pkg:cargo/serde_with_macros@3.23.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/serde_with_macros/3.23.0/download",
+    "sha256": "1d607aa01a3cb0ad757d6fd216136910db3c97b102fe686585689615a02dbcdc",
+    "note": ""
+   }
+  },
+  "cargo:serialize-to-javascript-impl@0.1.2": {
+   "name": "serialize-to-javascript-impl",
+   "version": "0.1.2",
+   "purl": "pkg:cargo/serialize-to-javascript-impl@0.1.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/serialize-to-javascript-impl/0.1.2/download",
+    "sha256": "772ee033c0916d670af7860b6e1ef7d658a4629a6d0b4c8c3e67f09b3765b75d",
+    "note": ""
+   }
+  },
+  "cargo:serialize-to-javascript@0.1.2": {
+   "name": "serialize-to-javascript",
+   "version": "0.1.2",
+   "purl": "pkg:cargo/serialize-to-javascript@0.1.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/serialize-to-javascript/0.1.2/download",
+    "sha256": "04f3666a07a197cdb77cdf306c32be9b7f598d7060d50cfd4d5aa04bfd92f6c5",
+    "note": ""
+   }
+  },
+  "cargo:servo_arc@0.4.3": {
+   "name": "servo_arc",
+   "version": "0.4.3",
+   "purl": "pkg:cargo/servo_arc@0.4.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/servo_arc/0.4.3/download",
+    "sha256": "170fb83ab34de17dc69aa7c67482b22218ddb85da56546f9bd6b929e32a05930",
+    "note": ""
+   }
+  },
+  "cargo:sha2@0.10.9": {
+   "name": "sha2",
+   "version": "0.10.9",
+   "purl": "pkg:cargo/sha2@0.10.9",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/sha2/0.10.9/download",
+    "sha256": "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283",
+    "note": ""
+   }
+  },
+  "cargo:simd-adler32@0.3.10": {
+   "name": "simd-adler32",
+   "version": "0.3.10",
+   "purl": "pkg:cargo/simd-adler32@0.3.10",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/simd-adler32/0.3.10/download",
+    "sha256": "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea",
+    "note": ""
+   }
+  },
+  "cargo:siphasher@1.0.3": {
+   "name": "siphasher",
+   "version": "1.0.3",
+   "purl": "pkg:cargo/siphasher@1.0.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/siphasher/1.0.3/download",
+    "sha256": "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649",
+    "note": ""
+   }
+  },
+  "cargo:smallvec@1.16.1": {
+   "name": "smallvec",
+   "version": "1.16.1",
+   "purl": "pkg:cargo/smallvec@1.16.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/smallvec/1.16.1/download",
+    "sha256": "ba467056f1b547ed52077911161fc86985becbc60e8e1857c8a144dab0def891",
+    "note": ""
+   }
+  },
+  "cargo:socket2@0.6.5": {
+   "name": "socket2",
+   "version": "0.6.5",
+   "purl": "pkg:cargo/socket2@0.6.5",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/socket2/0.6.5/download",
+    "sha256": "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4",
+    "note": ""
+   }
+  },
+  "cargo:stable_deref_trait@1.2.1": {
+   "name": "stable_deref_trait",
+   "version": "1.2.1",
+   "purl": "pkg:cargo/stable_deref_trait@1.2.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/stable_deref_trait/1.2.1/download",
+    "sha256": "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596",
+    "note": ""
+   }
+  },
+  "cargo:string_cache@0.9.0": {
+   "name": "string_cache",
+   "version": "0.9.0",
+   "purl": "pkg:cargo/string_cache@0.9.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/string_cache/0.9.0/download",
+    "sha256": "a18596f8c785a729f2819c0f6a7eae6ebeebdfffbfe4214ae6b087f690e31901",
+    "note": ""
+   }
+  },
+  "cargo:strsim@0.11.1": {
+   "name": "strsim",
+   "version": "0.11.1",
+   "purl": "pkg:cargo/strsim@0.11.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/strsim/0.11.1/download",
+    "sha256": "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f",
+    "note": ""
+   }
+  },
+  "cargo:swift-rs@1.0.8": {
+   "name": "swift-rs",
+   "version": "1.0.8",
+   "purl": "pkg:cargo/swift-rs@1.0.8",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/swift-rs/1.0.8/download",
+    "sha256": "e45c444e496845d3f2a351146bff59aae4975b2280238df1dfaa0c7d1846f38e",
+    "note": ""
+   }
+  },
+  "cargo:syn@2.0.119": {
+   "name": "syn",
+   "version": "2.0.119",
+   "purl": "pkg:cargo/syn@2.0.119",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/syn/2.0.119/download",
+    "sha256": "872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297",
+    "note": ""
+   }
+  },
+  "cargo:syn@3.0.6": {
+   "name": "syn",
+   "version": "3.0.6",
+   "purl": "pkg:cargo/syn@3.0.6",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/syn/3.0.6/download",
+    "sha256": "8593e8e72159ed2257d083c7a454a85cbf854f37a0966d8d483aff8c8a3ebcee",
+    "note": ""
+   }
+  },
+  "cargo:synstructure@0.14.0": {
+   "name": "synstructure",
+   "version": "0.14.0",
+   "purl": "pkg:cargo/synstructure@0.14.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/synstructure/0.14.0/download",
+    "sha256": "901704edd0dfe137f1987838ee4f259e4e063c31371bdb423f7ae38ec6f77f02",
+    "note": ""
+   }
+  },
+  "cargo:tao@0.35.3": {
+   "name": "tao",
+   "version": "0.35.3",
+   "purl": "pkg:cargo/tao@0.35.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/tao/0.35.3/download",
+    "sha256": "d1c93047acf68669466a34690ac58cca7010bd1b201e1ec86f1fd0a75d3dd4a9",
+    "note": ""
+   }
+  },
+  "cargo:tauri-codegen@2.6.3": {
+   "name": "tauri-codegen",
+   "version": "2.6.3",
+   "purl": "pkg:cargo/tauri-codegen@2.6.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/tauri-codegen/2.6.3/download",
+    "sha256": "08279169ff42f8fc45a1dbc9dcae888893ba95288142e5880c59b93a26d2cfc5",
+    "note": ""
+   }
+  },
+  "cargo:tauri-macros@2.6.3": {
+   "name": "tauri-macros",
+   "version": "2.6.3",
+   "purl": "pkg:cargo/tauri-macros@2.6.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/tauri-macros/2.6.3/download",
+    "sha256": "e8b394794f399a421811d06966343e7933fcae92d59f5180b9388d1174497a45",
+    "note": ""
+   }
+  },
+  "cargo:tauri-runtime-wry@2.11.4": {
+   "name": "tauri-runtime-wry",
+   "version": "2.11.4",
+   "purl": "pkg:cargo/tauri-runtime-wry@2.11.4",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/tauri-runtime-wry/2.11.4/download",
+    "sha256": "4e6fac707727b7a2f48e4ded90976324267371073edbb415ffb73bb0458d203f",
+    "note": ""
+   }
+  },
+  "cargo:tauri-runtime@2.11.3": {
+   "name": "tauri-runtime",
+   "version": "2.11.3",
+   "purl": "pkg:cargo/tauri-runtime@2.11.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/tauri-runtime/2.11.3/download",
+    "sha256": "b0b4bc95aed361b0019067d189a1174a603d460d0f6c72606512d59fc9c12ec8",
+    "note": ""
+   }
+  },
+  "cargo:tauri-utils@2.9.3": {
+   "name": "tauri-utils",
+   "version": "2.9.3",
+   "purl": "pkg:cargo/tauri-utils@2.9.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/tauri-utils/2.9.3/download",
+    "sha256": "3e176a18e67764923c4f1ce66f25ae4abe5f688384d5eb1a0fa6c77f3d90f887",
+    "note": ""
+   }
+  },
+  "cargo:tauri@2.11.5": {
+   "name": "tauri",
+   "version": "2.11.5",
+   "purl": "pkg:cargo/tauri@2.11.5",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/tauri/2.11.5/download",
+    "sha256": "667b20e2726d572dea2de7370da16e188eb06008faf9a92fab7cdc46791190b5",
+    "note": ""
+   }
+  },
+  "cargo:tendril@0.5.1": {
+   "name": "tendril",
+   "version": "0.5.1",
+   "purl": "pkg:cargo/tendril@0.5.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/tendril/0.5.1/download",
+    "sha256": "5fed54709c5b3a53d09bb1c113ea4f5ceafd1e772ddcb0030a82e1d56c087b08",
+    "note": ""
+   }
+  },
+  "cargo:thiserror-impl@1.0.69": {
+   "name": "thiserror-impl",
+   "version": "1.0.69",
+   "purl": "pkg:cargo/thiserror-impl@1.0.69",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/thiserror-impl/1.0.69/download",
+    "sha256": "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1",
+    "note": ""
+   }
+  },
+  "cargo:thiserror-impl@2.0.20": {
+   "name": "thiserror-impl",
+   "version": "2.0.20",
+   "purl": "pkg:cargo/thiserror-impl@2.0.20",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/thiserror-impl/2.0.20/download",
+    "sha256": "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af",
+    "note": ""
+   }
+  },
+  "cargo:thiserror@1.0.69": {
+   "name": "thiserror",
+   "version": "1.0.69",
+   "purl": "pkg:cargo/thiserror@1.0.69",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/thiserror/1.0.69/download",
+    "sha256": "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52",
+    "note": ""
+   }
+  },
+  "cargo:thiserror@2.0.20": {
+   "name": "thiserror",
+   "version": "2.0.20",
+   "purl": "pkg:cargo/thiserror@2.0.20",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/thiserror/2.0.20/download",
+    "sha256": "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f",
+    "note": ""
+   }
+  },
+  "cargo:time-core@0.1.9": {
+   "name": "time-core",
+   "version": "0.1.9",
+   "purl": "pkg:cargo/time-core@0.1.9",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/time-core/0.1.9/download",
+    "sha256": "9e1c906769ad99c88eaa54e728060edef082f8e358ff32030cb7c7d315e81109",
+    "note": ""
+   }
+  },
+  "cargo:time-macros@0.2.32": {
+   "name": "time-macros",
+   "version": "0.2.32",
+   "purl": "pkg:cargo/time-macros@0.2.32",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/time-macros/0.2.32/download",
+    "sha256": "7e689342a48d2ea927c87ea50cabf8594854bf940e9310208848d680d668ed85",
+    "note": ""
+   }
+  },
+  "cargo:time@0.3.55": {
+   "name": "time",
+   "version": "0.3.55",
+   "purl": "pkg:cargo/time@0.3.55",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/time/0.3.55/download",
+    "sha256": "cdb87b95ec50ddfa440816d227a17b2ccbdda963a316a727fda0fc4334f7d134",
+    "note": ""
+   }
+  },
+  "cargo:tinystr@0.8.4": {
+   "name": "tinystr",
+   "version": "0.8.4",
+   "purl": "pkg:cargo/tinystr@0.8.4",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/tinystr/0.8.4/download",
+    "sha256": "b1e27c91459209c2986af3dcf603a5a74a4368754ce37414f59acc971167f643",
+    "note": ""
+   }
+  },
+  "cargo:tinyvec@1.13.3": {
+   "name": "tinyvec",
+   "version": "1.13.3",
+   "purl": "pkg:cargo/tinyvec@1.13.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/tinyvec/1.13.3/download",
+    "sha256": "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee",
+    "note": ""
+   }
+  },
+  "cargo:tokio@1.53.1": {
+   "name": "tokio",
+   "version": "1.53.1",
+   "purl": "pkg:cargo/tokio@1.53.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/tokio/1.53.1/download",
+    "sha256": "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed",
+    "note": ""
+   }
+  },
+  "cargo:toml@1.1.6+spec-1.1.0": {
+   "name": "toml",
+   "version": "1.1.6+spec-1.1.0",
+   "purl": "pkg:cargo/toml@1.1.6+spec-1.1.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/toml/1.1.6+spec-1.1.0/download",
+    "sha256": "920602543f0911ab71da12c50d59701da54c196d1a2bf5cb4b75667f137a406a",
+    "note": ""
+   }
+  },
+  "cargo:toml_datetime@1.1.1+spec-1.1.0": {
+   "name": "toml_datetime",
+   "version": "1.1.1+spec-1.1.0",
+   "purl": "pkg:cargo/toml_datetime@1.1.1+spec-1.1.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/toml_datetime/1.1.1+spec-1.1.0/download",
+    "sha256": "3165f65f62e28e0115a00b2ebdd37eb6f3b641855f9d636d3cd4103767159ad7",
+    "note": ""
+   }
+  },
+  "cargo:toml_parser@1.1.3+spec-1.1.0": {
+   "name": "toml_parser",
+   "version": "1.1.3+spec-1.1.0",
+   "purl": "pkg:cargo/toml_parser@1.1.3+spec-1.1.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/toml_parser/1.1.3+spec-1.1.0/download",
+    "sha256": "1d38ac1cf9b95face32296c0a3ede1fdc270627c9d9c02a7274dd6d960dc4d56",
+    "note": ""
+   }
+  },
+  "cargo:toml_writer@1.1.2+spec-1.1.0": {
+   "name": "toml_writer",
+   "version": "1.1.2+spec-1.1.0",
+   "purl": "pkg:cargo/toml_writer@1.1.2+spec-1.1.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/toml_writer/1.1.2+spec-1.1.0/download",
+    "sha256": "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2",
+    "note": ""
+   }
+  },
+  "cargo:tray-icon@0.24.2": {
+   "name": "tray-icon",
+   "version": "0.24.2",
+   "purl": "pkg:cargo/tray-icon@0.24.2",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/tray-icon/0.24.2/download",
+    "sha256": "045979e3f037cd18ad1cb2a419dfda133c5c29c9f3453370079f2255d46c257e",
+    "note": ""
+   }
+  },
+  "cargo:typeid@1.0.3": {
+   "name": "typeid",
+   "version": "1.0.3",
+   "purl": "pkg:cargo/typeid@1.0.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/typeid/1.0.3/download",
+    "sha256": "bc7d623258602320d5c55d1bc22793b57daff0ec7efc270ea7d55ce1d5f5471c",
+    "note": ""
+   }
+  },
+  "cargo:typenum@1.20.1": {
+   "name": "typenum",
+   "version": "1.20.1",
+   "purl": "pkg:cargo/typenum@1.20.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/typenum/1.20.1/download",
+    "sha256": "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20",
+    "note": ""
+   }
+  },
+  "cargo:unic-char-property@0.9.0": {
+   "name": "unic-char-property",
+   "version": "0.9.0",
+   "purl": "pkg:cargo/unic-char-property@0.9.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/unic-char-property/0.9.0/download",
+    "sha256": "a8c57a407d9b6fa02b4795eb81c5b6652060a15a7903ea981f3d723e6c0be221",
+    "note": ""
+   }
+  },
+  "cargo:unic-char-range@0.9.0": {
+   "name": "unic-char-range",
+   "version": "0.9.0",
+   "purl": "pkg:cargo/unic-char-range@0.9.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/unic-char-range/0.9.0/download",
+    "sha256": "0398022d5f700414f6b899e10b8348231abf9173fa93144cbc1a43b9793c1fbc",
+    "note": ""
+   }
+  },
+  "cargo:unic-common@0.9.0": {
+   "name": "unic-common",
+   "version": "0.9.0",
+   "purl": "pkg:cargo/unic-common@0.9.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/unic-common/0.9.0/download",
+    "sha256": "80d7ff825a6a654ee85a63e80f92f054f904f21e7d12da4e22f9834a4aaa35bc",
+    "note": ""
+   }
+  },
+  "cargo:unic-ucd-ident@0.9.0": {
+   "name": "unic-ucd-ident",
+   "version": "0.9.0",
+   "purl": "pkg:cargo/unic-ucd-ident@0.9.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/unic-ucd-ident/0.9.0/download",
+    "sha256": "e230a37c0381caa9219d67cf063aa3a375ffed5bf541a452db16e744bdab6987",
+    "note": ""
+   }
+  },
+  "cargo:unic-ucd-version@0.9.0": {
+   "name": "unic-ucd-version",
+   "version": "0.9.0",
+   "purl": "pkg:cargo/unic-ucd-version@0.9.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/unic-ucd-version/0.9.0/download",
+    "sha256": "96bd2f2237fe450fcd0a1d2f5f4e91711124f7857ba2e964247776ebeeb7b0c4",
+    "note": ""
+   }
+  },
+  "cargo:unicode-ident@1.0.26": {
+   "name": "unicode-ident",
+   "version": "1.0.26",
+   "purl": "pkg:cargo/unicode-ident@1.0.26",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/unicode-ident/1.0.26/download",
+    "sha256": "d245f478577f809a851594d02313b640fb437e0bb33866753cff937863096954",
+    "note": ""
+   }
+  },
+  "cargo:unicode-segmentation@1.13.3": {
+   "name": "unicode-segmentation",
+   "version": "1.13.3",
+   "purl": "pkg:cargo/unicode-segmentation@1.13.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/unicode-segmentation/1.13.3/download",
+    "sha256": "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8",
+    "note": ""
+   }
+  },
+  "cargo:url@2.5.8": {
+   "name": "url",
+   "version": "2.5.8",
+   "purl": "pkg:cargo/url@2.5.8",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/url/2.5.8/download",
+    "sha256": "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed",
+    "note": ""
+   }
+  },
+  "cargo:urlpattern@0.3.0": {
+   "name": "urlpattern",
+   "version": "0.3.0",
+   "purl": "pkg:cargo/urlpattern@0.3.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/urlpattern/0.3.0/download",
+    "sha256": "70acd30e3aa1450bc2eece896ce2ad0d178e9c079493819301573dae3c37ba6d",
+    "note": ""
+   }
+  },
+  "cargo:utf8_iter@1.0.4": {
+   "name": "utf8_iter",
+   "version": "1.0.4",
+   "purl": "pkg:cargo/utf8_iter@1.0.4",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/utf8_iter/1.0.4/download",
+    "sha256": "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be",
+    "note": ""
+   }
+  },
+  "cargo:uuid@1.26.1": {
+   "name": "uuid",
+   "version": "1.26.1",
+   "purl": "pkg:cargo/uuid@1.26.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/uuid/1.26.1/download",
+    "sha256": "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce",
+    "note": ""
+   }
+  },
+  "cargo:walkdir@2.5.0": {
+   "name": "walkdir",
+   "version": "2.5.0",
+   "purl": "pkg:cargo/walkdir@2.5.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/walkdir/2.5.0/download",
+    "sha256": "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b",
+    "note": ""
+   }
+  },
+  "cargo:web_atoms@0.2.6": {
+   "name": "web_atoms",
+   "version": "0.2.6",
+   "purl": "pkg:cargo/web_atoms@0.2.6",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/web_atoms/0.2.6/download",
+    "sha256": "ba8b815c1b593dc0baf78dd0f4fc8fdb2de53198fb1163738093e9a311c33fb3",
+    "note": ""
+   }
+  },
+  "cargo:window-vibrancy@0.6.0": {
+   "name": "window-vibrancy",
+   "version": "0.6.0",
+   "purl": "pkg:cargo/window-vibrancy@0.6.0",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/window-vibrancy/0.6.0/download",
+    "sha256": "d9bec5a31f3f9362f2258fd0e9c9dd61a9ca432e7306cc78c444258f0dce9a9c",
+    "note": ""
+   }
+  },
+  "cargo:winnow@1.0.4": {
+   "name": "winnow",
+   "version": "1.0.4",
+   "purl": "pkg:cargo/winnow@1.0.4",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/winnow/1.0.4/download",
+    "sha256": "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81",
+    "note": ""
+   }
+  },
+  "cargo:writeable@0.6.4": {
+   "name": "writeable",
+   "version": "0.6.4",
+   "purl": "pkg:cargo/writeable@0.6.4",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/writeable/0.6.4/download",
+    "sha256": "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc",
+    "note": ""
+   }
+  },
+  "cargo:wry@0.55.1": {
+   "name": "wry",
+   "version": "0.55.1",
+   "purl": "pkg:cargo/wry@0.55.1",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/wry/0.55.1/download",
+    "sha256": "186f9871daa55fd9c016578b810d149de58367113db7fb72b462d2323ce19514",
+    "note": ""
+   }
+  },
+  "cargo:yoke-derive@0.8.3": {
+   "name": "yoke-derive",
+   "version": "0.8.3",
+   "purl": "pkg:cargo/yoke-derive@0.8.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/yoke-derive/0.8.3/download",
+    "sha256": "33811428bee40dbceb6d545e95754741d17a6aef9a4849f0fd62e2ba4f412a78",
+    "note": ""
+   }
+  },
+  "cargo:yoke@0.8.3": {
+   "name": "yoke",
+   "version": "0.8.3",
+   "purl": "pkg:cargo/yoke@0.8.3",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/yoke/0.8.3/download",
+    "sha256": "709fe23a0424b6a435d82152b1bd3fdfb0833487d5fa90d05d42762a9891fef5",
+    "note": ""
+   }
+  },
+  "cargo:zerofrom-derive@0.1.8": {
+   "name": "zerofrom-derive",
+   "version": "0.1.8",
+   "purl": "pkg:cargo/zerofrom-derive@0.1.8",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/zerofrom-derive/0.1.8/download",
+    "sha256": "f75b4683f6c7f45248d4d64056a24298c6281e0993356d7d1b4a1a962ef10d4a",
+    "note": ""
+   }
+  },
+  "cargo:zerofrom@0.1.8": {
+   "name": "zerofrom",
+   "version": "0.1.8",
+   "purl": "pkg:cargo/zerofrom@0.1.8",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/zerofrom/0.1.8/download",
+    "sha256": "0ec05a11813ea801ff6d75110ad09cd0824ddba17dfe17128ea0d5f68e6c5272",
+    "note": ""
+   }
+  },
+  "cargo:zerotrie@0.2.5": {
+   "name": "zerotrie",
+   "version": "0.2.5",
+   "purl": "pkg:cargo/zerotrie@0.2.5",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/zerotrie/0.2.5/download",
+    "sha256": "4ea269c3bd32f0a32c321907a2ae912ba6f4649bb0fc764a15627e99a7095a3f",
+    "note": ""
+   }
+  },
+  "cargo:zerovec-derive@0.11.6": {
+   "name": "zerovec-derive",
+   "version": "0.11.6",
+   "purl": "pkg:cargo/zerovec-derive@0.11.6",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/zerovec-derive/0.11.6/download",
+    "sha256": "34df6fc39dbd26ddc9c10e6a2984476e13acce22e64e4487636ef494369225da",
+    "note": ""
+   }
+  },
+  "cargo:zerovec@0.11.8": {
+   "name": "zerovec",
+   "version": "0.11.8",
+   "purl": "pkg:cargo/zerovec@0.11.8",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/zerovec/0.11.8/download",
+    "sha256": "bb0464e17806c1d976d5cba29399c7f08e516e279e2ba493f63123b5fca67dd8",
+    "note": ""
+   }
+  },
+  "cargo:zlib-rs@0.6.8": {
+   "name": "zlib-rs",
+   "version": "0.6.8",
+   "purl": "pkg:cargo/zlib-rs@0.6.8",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/zlib-rs/0.6.8/download",
+    "sha256": "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112",
+    "note": ""
+   }
+  },
+  "cargo:zmij@1.0.23": {
+   "name": "zmij",
+   "version": "1.0.23",
+   "purl": "pkg:cargo/zmij@1.0.23",
+   "source": {
+    "type": "crate",
+    "url": "https://crates.io/api/v1/crates/zmij/1.0.23/download",
+    "sha256": "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b",
+    "note": ""
+   }
+  },
   "certifi-bundle": {
    "name": "Mozilla CA certificate bundle (certifi/cacert.pem)",
    "version": "2026.7.22",
@@ -1567,10 +4174,15 @@
    }
   },
   "pyinstaller-runtime": {
-   "name": "pyinstaller-runtime",
-   "version": null,
-   "purl": "",
-   "unresolved": "no rule produced a source for this component"
+   "name": "PyInstaller (bootloader + runtime modules + runtime hooks)",
+   "version": "6.22.3",
+   "purl": "pkg:pypi/pyinstaller@6.22.3",
+   "source": {
+    "type": "sdist",
+    "url": "https://files.pythonhosted.org/packages/63/41/f90302845945abd4ed647933ff5ee7c6ac93983187be67f897b6cb613331/pyinstaller-6.22.3.tar.gz",
+    "sha256": "05eb2f5615503e72939a7224d68b4aff572c6b0438ee4a17d0a4b481f399362d"
+   },
+   "upstream": "https://pyinstaller.org"
   },
   "pypi:annotated-doc": {
    "name": "annotated-doc",
