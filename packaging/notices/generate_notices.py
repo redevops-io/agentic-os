@@ -164,7 +164,9 @@ def resolve(comp: dict, entries: dict, site_dirs, crate_dirs, texts_dir: Path) -
     """Return the notice record for one component."""
     key_exact = f"{comp['type']}:{norm(comp['name'])}@{comp['version']}"
     key = f"{comp['type']}:{norm(comp['name'])}"
-    entry = entries.get(key_exact) or entries.get(key) or {}
+    rkey = comp["props"].get("redevops:key", "")         # the SBOM generator's stable key, e.g. npm:react, certifi-bundle
+    entry = entries.get(key_exact) or entries.get(key) or entries.get(f"key:{rkey}") or (entries.get(rkey) if ":" in rkey else None) or {}
+    from_pypi_dist = comp["type"] == "pypi" or rkey.startswith("pypi:")   # first-party wheels carry a pkg:github purl
     files: list[tuple[str, Path, str]] = []   # (label, path, kind: licence|notice)
     hint = ""
     reasons = []
@@ -176,7 +178,7 @@ def resolve(comp: dict, entries: dict, site_dirs, crate_dirs, texts_dir: Path) -
         else:
             reasons.append(f"text file texts/{t} named in components.json is missing")
 
-    if comp["type"] == "pypi" and (entry.get("texts_from_wheel", True)):
+    if from_pypi_dist and (entry.get("texts_from_wheel", True)):
         dists = find_dist_info(site_dirs, comp["name"], comp["version"])
         if not dists:
             if not entry.get("texts"):
@@ -196,9 +198,21 @@ def resolve(comp: dict, entries: dict, site_dirs, crate_dirs, texts_dir: Path) -
             files += [(f"{d.name}/{f.relative_to(d).as_posix()}", f, kind_of(f)) for f in fs]
             if not fs:
                 reasons.append("crate package holds no LICENSE/COPYING/NOTICE file")
-    elif comp["type"] not in ("pypi", "cargo") and not entry:
+            up = d / "UPSTREAM-SOURCE.txt"
+            if fs and up.is_file():                  # texts fetched from the upstream repository, not from the package
+                entry = dict(entry, unverified=(entry.get("unverified", "") + " " + up.read_text(encoding="utf-8").strip().replace("\n", " ")).strip())
+    elif not from_pypi_dist and comp["type"] != "cargo" and not entry:
         reasons.append("no entry with licence texts in components.json")
 
+    if entry.get("not_third_party"):
+        # first-party / system / not-redistributed item: listed for completeness, not a missing third-party text
+        return {
+            "type": comp["type"], "name": comp["name"], "version": comp["version"], "purl": comp["purl"],
+            "declared": entry.get("declared") or comp["declared"] or "(none recorded in the SBOM)",
+            "sbom_declared": comp["declared"], "metadata_hint": "", "note": entry.get("note", ""),
+            "decision": entry.get("decision") or "", "unverified": entry.get("unverified", ""),
+            "status": "not-third-party", "reasons": [entry["not_third_party"]], "files": [],
+        }
     has_licence_text = any(k == "licence" for _, _, k in files)
     only_notice = bool(files) and not has_licence_text
     status = "text-found" if has_licence_text else "text-not-found"
@@ -239,7 +253,7 @@ def render(records: list[dict], title: str, sbom_digest: str) -> str:
     w("INDEX")
     w("-" * 72)
     for i, r in enumerate(records, 1):
-        mark = "" if r["status"] == "text-found" else "   ** TEXT NOT FOUND **"
+        mark = {"text-found": "", "not-third-party": "   (not a third-party notice, see below)"}.get(r["status"], "   ** TEXT NOT FOUND **")
         w(f"[{i:03d}] {r['name']} {r['version']} - {r['declared']}{mark}")
     w("")
     printed: dict[str, str] = {}
@@ -253,7 +267,9 @@ def render(records: list[dict], title: str, sbom_digest: str) -> str:
             w(f"Note: {r['note']}")
         if r["unverified"]:
             w(f"UNVERIFIED: {r['unverified']}")
-        if r["status"] != "text-found":
+        if r["status"] == "not-third-party":
+            w("Not a third-party notice: " + "; ".join(r["reasons"]))
+        elif r["status"] != "text-found":
             w("TEXT NOT FOUND: " + ("; ".join(r["reasons"]) or "no reason recorded"))
         for f in r["files"]:
             w("-" * 72)
@@ -293,7 +309,8 @@ def run(sbom: Path, site_dirs, crate_dirs, texts_dir: Path, components: Path | N
                 if k in sc}
     comps = [c for c in load_components(sbom) if norm(c["name"]) not in {norm(e) for e in exclude}]
     records = [resolve(c, entries, site_dirs, crate_dirs, texts_dir) for c in comps]
-    missing = [r for r in records if r["status"] != "text-found"]
+    missing = [r for r in records if r["status"] == "text-not-found"]
+    not_third_party = [r for r in records if r["status"] == "not-third-party"]
     out.mkdir(parents=True, exist_ok=True)
     digest = sha256(sbom.read_bytes())
     (out / "THIRD_PARTY_NOTICES.txt").write_text(render(records, title, digest), encoding="utf-8", newline="\n")
@@ -304,7 +321,8 @@ def run(sbom: Path, site_dirs, crate_dirs, texts_dir: Path, components: Path | N
     (out / "NOTICES_MISSING.md").write_text(missing_md(missing), encoding="utf-8", newline="\n")
     (out / "notices-report.json").write_text(json.dumps(
         {"sbom_sha256": digest, "generator_version": GENERATOR_VERSION, "components": len(records),
-         "text_found": len(records) - len(missing), "text_not_found": len(missing),
+         "text_found": len(records) - len(missing) - len(not_third_party), "text_not_found": len(missing),
+         "not_third_party": len(not_third_party),
          "records": [clean(r) for r in records]}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return records, missing
 
@@ -326,8 +344,9 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     records, missing = run(a.sbom, a.site_packages, a.crates_dir, a.texts_dir, a.components, a.out, a.title,
                            a.exclude)
-    print(f"components: {len(records)}  text found: {len(records) - len(missing)}  "
-          f"text NOT found: {len(missing)}  -> {a.out}")
+    ntp = sum(1 for r in records if r["status"] == "not-third-party")
+    print(f"components: {len(records)}  text found: {len(records) - len(missing) - ntp}  "
+          f"not third-party (listed): {ntp}  text NOT found: {len(missing)}  -> {a.out}")
     for m in missing:
         print(f"  MISSING {m['type']}:{m['name']} {m['version']}  [{m['decision'] or 'UNASSIGNED'}]  "
               f"{'; '.join(m['reasons'])}", file=sys.stderr)

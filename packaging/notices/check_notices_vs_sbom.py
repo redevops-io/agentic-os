@@ -75,7 +75,7 @@ def check(sbom: Path, report: Path, licenses_dir: Path | None, exclude: list[str
             mj = licenses_dir / "NOTICES_MISSING.json"
             if mj.is_file():
                 staged_missing = sorted((m["type"], gen.norm(m["name"]), m["version"]) for m in json.loads(mj.read_text(encoding="utf-8")))
-                rep_missing = sorted((r["type"], gen.norm(r["name"]), r["version"]) for r in rep["records"] if r["status"] != "text-found")
+                rep_missing = sorted((r["type"], gen.norm(r["name"]), r["version"]) for r in rep["records"] if r["status"] == "text-not-found")
                 if staged_missing != rep_missing:
                     errors.append("staged NOTICES_MISSING.json does not match the notices report")
         # the sidecar embeds exactly the staged folder: its archive entries are hashed in the SBOM

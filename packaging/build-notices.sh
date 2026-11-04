@@ -30,12 +30,20 @@ FIRST="$(ls "$WH"/agentic_os-*.whl "$WH"/runtime_contracts-*.whl "$WH"/knowledge
 # shellcheck disable=SC2086
 uv pip install --python "$SPY" --no-index --find-links "$WH" --no-deps $FIRST >/dev/null
 SITE="$("$SPY" -c 'import sysconfig;print(sysconfig.get_paths()["purelib"])')"
-# 3. crate sources for the licence texts
+# the build tools (setuptools, packaging, PyInstaller) are in the archive too: their dist-info is in the tools venv
+TSITE="$("$TPY" -c 'import sysconfig;print(sysconfig.get_paths()["purelib"])')"
+# 3. crate sources for the licence texts: the launcher's crates from the cargo registry (cargo fetch --locked), and the
+#    Rust crates the cryptography / pydantic_core wheels declare as statically linked, from crates.io (checksum-verified
+#    against the SBOM or the sparse index; fetch_crate_sources.py). Both need the network.
 cargo fetch --locked --manifest-path "$ROOT/deploy/launcher/src-tauri/Cargo.toml"
 CH="${CARGO_HOME:-$HOME/.cargo}"
 CRATES=(); for d in "$CH"/registry/src/index.crates.io-*; do [ -d "$d" ] && CRATES+=(--crates-dir "$d"); done
 EXCL=(); for x in ${NOTICES_EXCLUDE-knowledge-frontier}; do EXCL+=(--exclude "$x"); done
+EXTRA="$PK/notices/out/crate-sources"
+"$TPY" -I "$PK/notices/fetch_crate_sources.py" --sbom "$DIST/sbom-pass1/sbom.cdx.json" --out "$EXTRA" \
+    ${CRATES[@]+"${CRATES[@]}"} ${EXCL[@]+"${EXCL[@]}"}
+CRATES+=(--crates-dir "$EXTRA")
 # 4. notices + staging (writes deploy/launcher/src-tauri/licenses)
-"$PK/notices/build-licenses.sh" --platform "$OS" --sbom "$DIST/sbom-pass1/sbom.cdx.json" --site-packages "$SITE" \
+"$PK/notices/build-licenses.sh" --platform "$OS" --sbom "$DIST/sbom-pass1/sbom.cdx.json" --site-packages "$SITE" --site-packages "$TSITE" \
     ${CRATES[@]+"${CRATES[@]}"} ${EXCL[@]+"${EXCL[@]}"}
 echo "Licenses staged in $ROOT/deploy/launcher/src-tauri/licenses (set REDEVOPS_LICENSES_DIR to that path for sidecar pass 2)"

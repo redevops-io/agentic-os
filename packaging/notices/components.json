@@ -44,6 +44,64 @@
    "declared": "MPL-2.0 (crates.io declaration)",
    "decision": "D-LIC-13",
    "unverified": "The crate package holds no licence file; the generic MPL-2.0 text is shown, without the crate's copyright notice. File-level copyleft (MPL-2.0 section 3.2) handling is as for certifi (D-LIC-4)."
+  },
+  "npm:react": {
+   "decision": "D-LIC-7",
+   "texts": [
+    "React-18.3.1-MIT-LICENSE.txt"
+   ],
+   "note": "MIT licence text of the React 18.3.1 repository (the same text for react, react-dom and scheduler); the vendored UI bundle carries the licence banners only."
+  },
+  "npm:react-dom": {
+   "decision": "D-LIC-7",
+   "texts": [
+    "React-18.3.1-MIT-LICENSE.txt"
+   ],
+   "note": "MIT licence text of the React 18.3.1 repository (the same text for react, react-dom and scheduler); the vendored UI bundle carries the licence banners only."
+  },
+  "npm:scheduler": {
+   "decision": "D-LIC-7",
+   "texts": [
+    "React-18.3.1-MIT-LICENSE.txt"
+   ],
+   "note": "MIT licence text of the React 18.3.1 repository (the same text for react, react-dom and scheduler); the vendored UI bundle carries the licence banners only."
+  },
+  "key:certifi-bundle": {
+   "decision": "D-LIC-4",
+   "texts": [
+    "MPL-2.0.txt"
+   ],
+   "texts_from_wheel": false,
+   "declared": "MPL-2.0",
+   "note": "Mozilla CA certificate bundle (cacert.pem) inside certifi, MPL-2.0. The text shown is the full MPL-2.0; the certifi wheel's own LICENSE (an MPL notice header) is listed under the certifi component."
+  },
+  "key:pyinstaller-runtime": {
+   "decision": "D-LIC-6",
+   "texts": [
+    "PyInstaller-6.22.3-COPYING.txt"
+   ],
+   "texts_from_wheel": false,
+   "note": "PyInstaller COPYING.txt: GPL-2.0-or-later with the Bootloader Exception; runtime hooks Apache-2.0. Its bootloader and pyimod runtime are inside the sidecar executable."
+  },
+  "key:launcher": {
+   "not_third_party": "first-party: the Agentic Apps launcher; its licence is the product licence (LICENSING.md). Its third-party crates are listed individually.",
+   "decision": ""
+  },
+  "key:sidecar": {
+   "not_third_party": "first-party: the frozen sidecar executable; its contents are listed component by component.",
+   "decision": ""
+  },
+  "key:ui-bundle": {
+   "not_third_party": "first-party: the vendored Projects UI bundle (agentic_os/projects_ui); the product licence applies (LICENSING.md); the React libraries inside it are listed as react / react-dom.",
+   "decision": ""
+  },
+  "key:asset:agentic_os/projects_ui/hero.jpg": {
+   "not_third_party": "first-party asset: the neutral generated placeholder that replaced the original image in R0-prime (scripts/make_neutral_hero.py); the provenance statement is owner decision D-LIC-8.",
+   "decision": "D-LIC-8"
+  },
+  "key:platform:wkwebview": {
+   "not_third_party": "system component of macOS (WKWebView / WebKit): linked as an operating-system library, not redistributed in the artifact.",
+   "decision": ""
   }
  },
  "static_components": [
