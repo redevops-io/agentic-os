@@ -49,7 +49,7 @@ try {
     if (-not $InstallDir) { Add-Result 'API-00' 'install directory' 'FAIL' 'not found: run 01-Install.ps1 first'; throw 'stop' }
     $prof = New-IsolatedProfile (Join-Path $script:OutDir 'api-profile')
     $port = Get-FreePort; $base = "http://127.0.0.1:$port"
-    $handle = Start-Sidecar -Exe (Join-Path $InstallDir 'redevops-sidecar.exe') -Port $port -Profile $prof -LogPrefix (Join-Path $script:OutDir 'api-serve')
+    $handle = Start-Sidecar -Exe (Join-Path $InstallDir $script:SidecarExe) -Port $port -Profile $prof -LogPrefix (Join-Path $script:OutDir 'api-serve')
     $up = Wait-Port $port 90
     Add-Result 'API-00' 'sidecar serve started' $(if ($up) { 'PASS' } else { 'FAIL' }) ("pid {0}, {1}" -f $handle.RootPid, $base)
     if (-not $up) { throw 'stop' }
@@ -136,19 +136,23 @@ try {
     $vec2 = Get-CapabilityProof -Key ([byte[]](0..31)) -Domain 'agentic-os-mint-v1' -Port 8787 -Nonce 'BBBBBBBBBBBBBBBBBBBBBB'
     Add-Result 'HS-00' 'proof implementation reproduces the pinned test vectors of the spec' $(if ($vec -ceq 'XrELUoD7WHe1e8IgKZZYoltOOKdPcPN3PR-qWdhqCeY' -and $vec2 -ceq 'JYxsI49qlI_AzpnZPgZwDLjyQLNRgueAarKpIxB19VQ') { 'PASS' } else { 'FAIL' }) ("handshake={0} mint={1}" -f $vec, $vec2)
     $prof2 = New-IsolatedProfile (Join-Path $script:OutDir 'api-profile-handoff')
-    $handle2 = Start-Sidecar -Exe (Join-Path $InstallDir 'redevops-sidecar.exe') -Port 0 -Profile $prof2 -LogPrefix (Join-Path $script:OutDir 'api-handoff') -ExtraEnv @{ AGENTIC_OS_HANDOFF = 'stdout' }
+    $handle2 = Start-Sidecar -Exe (Join-Path $InstallDir $script:SidecarExe) -Port 0 -Profile $prof2 -LogPrefix (Join-Path $script:OutDir 'api-handoff') -ExtraEnv @{ AGENTIC_OS_HANDOFF = 'stdout' }
     $line = $null; $sw = [Diagnostics.Stopwatch]::StartNew()
     while ($sw.Elapsed.TotalSeconds -lt 60 -and -not $line) {
       $t = Read-SharedText $handle2.StdOut
       if ($t -match '^\s*(\{.*\})\s*(\r?\n|$)') { $line = $Matches[1] } else { Start-Sleep -Milliseconds 500 }
     }
     $ho = $null; if ($line) { try { $ho = $line | ConvertFrom-Json } catch { } }
-    $ok = ($ho -and $ho.event -eq 'ready' -and $ho.port -and $ho.secret -and $ho.launch_code)
+    # required fields (docs/LOCAL_API_SECURITY.md 4.1): v, proto, event, host, port, pid, base_path, secret. launch_code / launch_code_ttl are OPTIONAL
+    # (present only with AGENTIC_OS_HANDOFF_LAUNCH_CODE=1) and must not be required: a launcher that mints its own codes ignores them.
+    $names = @(); if ($ho) { $names = @($ho.PSObject.Properties.Name) }
+    $missing = @(@('v', 'proto', 'event', 'host', 'port', 'pid', 'base_path', 'secret') | Where-Object { $names -notcontains $_ })
+    $ok = ($ho -and $ho.event -eq 'ready' -and $ho.port -and $ho.secret -and $missing.Count -eq 0)
     # delete the file holding the throw-away secret as soon as it is parsed (after the process has stopped writing: the process stays up, so truncate by deleting)
     if ($ok) {
       $secretBytes = ConvertFrom-Base64Url ([string]$ho.secret)
       $hport = [int]$ho.port
-      Add-Result 'HS-01' 'hand-off line on stdout: one JSON line, event=ready, host/port/secret/launch_code present' 'PASS' ("proto={0}; host={1}; port={2}; secret length={3} bytes; launch_code_ttl={4}; values not printed" -f $ho.proto, $ho.host, $hport, $secretBytes.Length, $ho.launch_code_ttl)
+      Add-Result 'HS-01' 'hand-off line on stdout: one JSON line, event=ready, the 8 required fields present (launch_code optional)' 'PASS' ("proto={0}; host={1}; port={2}; secret length={3} bytes; launch_code present={4}; values not printed" -f $ho.proto, $ho.host, $hport, $secretBytes.Length, ($names -contains 'launch_code'))
       $nonce = ConvertTo-Base64Url ([byte[]](1..16))
       [IO.File]::WriteAllText((Join-Path $script:OutDir 'hs-body.json'), (ConvertTo-Json -InputObject @{ client_nonce = $nonce } -Compress), (New-Object Text.UTF8Encoding($false)))
       $hr = Invoke-Curl @('-X', 'POST', '-H', 'Content-Type: application/json', '--data-binary', ('@' + (Join-Path $script:OutDir 'hs-body.json')), ("http://127.0.0.1:{0}/api/local/handshake" -f $hport))
@@ -161,7 +165,7 @@ try {
       Add-Result 'HS-04' 'stdout carries only the hand-off line' $(if ($stdoutLines.Count -eq 1) { 'PASS' } else { 'FAIL' }) ("{0} non-empty line(s) after the handshake" -f $stdoutLines.Count)
       Remove-Item -LiteralPath (Join-Path $script:OutDir 'hs-body.json') -Force -ErrorAction SilentlyContinue
     } else {
-      Add-Result 'HS-01' 'hand-off line on stdout (AGENTIC_OS_HANDOFF=stdout, PROJECTS_PORT=0)' 'FAIL' ("no valid 'ready' line within 60 s (line={0}). A candidate without the capability model ignores AGENTIC_OS_HANDOFF (frozen v0.3.2 behaviour); the launcher contract is then not implemented." -f $(if ($line) { 'unparsable' } else { 'none' }))
+      Add-Result 'HS-01' 'hand-off line on stdout (AGENTIC_OS_HANDOFF=stdout, PROJECTS_PORT=0)' 'FAIL' ("no valid 'ready' line (missing fields: {1}) within 60 s (line={0}). A candidate without the capability model ignores AGENTIC_OS_HANDOFF (frozen v0.3.2 behaviour); the launcher contract is then not implemented." -f $(if ($line) { 'unparsable or incomplete' } else { 'none' }), ($missing -join ','))
     }
     Add-Result 'HS-05' 'launcher side (Rust: spawn with hand-off, constant-time proof check, open #lc= URL)' 'MANUAL' 'covered by MANUAL-CHECKLIST.md G-01..G-04; this script only tests the sidecar side of the contract'
   }

@@ -1,0 +1,24 @@
+# R0-prime build inputs are checked out byte-for-byte as committed (LF) on every platform, whatever core.autocrlf says.
+# Why: Git for Windows defaults to core.autocrlf=true. CRLF in a *.sh file breaks bash ("set: pipefail\r"), and CRLF in a
+# lock / pin / script changes its sha256 in packaging/dist/build-manifest.json (inputs_sha256), so the same commit would
+# describe a different input set on Windows. Scoped to the build tree on purpose; nothing else in the repository changes.
+/packaging/**/*.sh        text eol=lf
+/packaging/**/*.py        text eol=lf
+/packaging/**/*.ps1       text eol=lf
+/packaging/**/*.lock      text eol=lf
+/packaging/**/*.in        text eol=lf
+/packaging/**/*.env       text eol=lf
+/packaging/**/*.spec      text eol=lf
+/packaging/**/*.json      text eol=lf
+/packaging/*.sh           text eol=lf
+/packaging/*.py           text eol=lf
+/packaging/*.lock         text eol=lf
+/packaging/*.in           text eol=lf
+/packaging/*.env          text eol=lf
+/packaging/*.spec         text eol=lf
+/deploy/launcher/src-tauri/Cargo.lock    text eol=lf
+/deploy/launcher/src-tauri/Cargo.toml    text eol=lf
+/deploy/launcher/src-tauri/tauri.conf.json text eol=lf
+/deploy/launcher/src-tauri/src/*.rs      text eol=lf
+/deploy/launcher/rust-toolchain.toml     text eol=lf
+/.github/workflows/*.yml  text eol=lf

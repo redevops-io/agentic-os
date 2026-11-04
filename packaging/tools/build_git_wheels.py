@@ -80,10 +80,20 @@ def clean_build_dirs(repo: Path, dirs: list[str]) -> list[str]:
     return removed
 
 
+def clone_pinned(url: str, tag: str, dest: Path) -> None:
+    """Shallow clone of `tag`, checked out BYTE-FOR-BYTE as committed.
+
+    On Windows, Git for Windows defaults to core.autocrlf=true, which rewrites every text file to CRLF on checkout. The
+    wheel would then carry CRLF sources and verify_wheel_against_tree() (which compares with `git show <commit>:<path>`)
+    would fail for every .py file. The two -c options pin the checkout to LF for this clone only, whatever the user's
+    or the system's git configuration says (they are also recorded in the clone's own .git/config)."""
+    git("clone", "--quiet", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "--branch", tag, "--depth", "1", url, str(dest))
+
+
 def build_one(dep: dict, out: Path, work: Path, python: str) -> dict:
     name, tag = dep["name"], dep["tag"]
     repo = work / name
-    git("clone", "--quiet", "--branch", tag, "--depth", "1", dep["url"], str(repo))
+    clone_pinned(dep["url"], tag, repo)
     head = git("rev-parse", "HEAD^{commit}", cwd=repo)
     tag_obj = git("rev-parse", f"refs/tags/{tag}", cwd=repo)
     if head != dep["commit"]:

@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shlex
 import subprocess
 import sys
@@ -45,6 +46,21 @@ PY_DISTS = ["pip", "setuptools", "wheel", "hatchling", "pyinstaller", "pyinstall
             "altgraph", "macholib", "pefile", "pywin32-ctypes", "packaging"]
 RUNNER_ENV = ["ImageOS", "ImageVersion", "RUNNER_OS", "RUNNER_ARCH", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT",
               "GITHUB_SHA", "GITHUB_REF", "GITHUB_REPOSITORY", "GITHUB_WORKFLOW", "GITHUB_ACTIONS"]
+
+
+_MSYS_DRIVE = re.compile(r"^/([A-Za-z])(/.*)?$")
+
+
+def native_path(path: str, windows: bool | None = None) -> str:
+    """git-bash passes `name=/c/a/b` (an argument that does not start with `/`) to a native Windows Python UNCONVERTED;
+    open('/c/a/b') then names `<current drive>:\\c\\a\\b`. Convert a leading `/<drive>/...` to `<drive>:/...` on Windows only
+    (a path that exists as given is left alone)."""
+    if windows is None:
+        windows = os.name == "nt"
+    m = _MSYS_DRIVE.match(path)
+    if windows and m and not os.path.exists(path):
+        return f"{m.group(1).upper()}:{m.group(2) or '/'}"
+    return path
 
 
 def sha256_file(p: Path) -> str:
@@ -162,17 +178,20 @@ def main(argv: list[str] | None = None) -> int:
     if a.git_wheels and Path(a.git_wheels).exists():
         m["first_party_git_wheels"] = json.loads(Path(a.git_wheels).read_text())["git_wheels"]
     arts = m.setdefault("artifacts", {})
+    missing = []
     for spec in a.artifact:
         name, _, path = spec.partition("=")
-        p = Path(path)
+        p = Path(native_path(path))
         if p.is_file():
             arts[name] = {"path": str(p), "sha256": sha256_file(p), "size": p.stat().st_size}
         elif p.is_dir():
             files = {f.relative_to(p).as_posix(): sha256_file(f) for f in sorted(p.rglob("*")) if f.is_file()}
             arts[name] = {"path": str(p), "files": len(files), "tree_sha256": hashlib.sha256(
-                "\n".join(f"{k} {v}" for k, v in files.items()).encode()).hexdigest()}
+                "\n".join(f"{k} {v}" for k, v in files.items()).encode()).hexdigest(),
+                "sha256_by_file": files}   # the installers (.msi / .exe / .dmg / .deb) are individually recorded, not only as a tree
         else:
             arts[name] = {"path": str(p), "missing": True}
+            missing.append(f"{name}={path}")
     if a.stage:
         m.setdefault("stages", {})[a.stage] = {"completed_utc": m["generated_at_utc"]}
     for d in a.duration:
@@ -180,6 +199,11 @@ def main(argv: list[str] | None = None) -> int:
         m.setdefault("durations_seconds", {})[k] = float(v)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(m, indent=2, sort_keys=True) + "\n")
+    if missing:
+        # An artifact that was named but is not there must stop the build: a manifest without the hash of the sidecar or the
+        # launcher is not evidence (and on Windows it is the symptom of an unconverted git-bash path).
+        print("ERROR: artifact path(s) not found: " + ", ".join(missing), file=sys.stderr)
+        return 1
     return 0
 
 

@@ -24,7 +24,7 @@ REVIEW = [r"Remove-Item", r"Stop-Process", r"taskkill", r"Start-Process", r"msie
 KNOWN = set("""Add-Content Add-Member Add-Type Copy-Item ConvertFrom-Json ConvertTo-Json ForEach-Object Get-ChildItem Get-CimInstance Get-Command Get-Content Get-Culture
 Get-Date Get-FileHash Get-Item Get-ItemProperty Get-MpComputerStatus Get-NetFirewallRule Get-NetTCPConnection Get-Process Get-Random Get-UICulture Get-WinEvent Get-AuthenticodeSignature
 Format-Table New-Item New-Object Out-File Out-Null Out-String Read-Host Remove-Item Resolve-Path Select-Object Select-String Sort-Object Split-Path Start-Process Start-Sleep
-Start-Transcript Stop-Process Stop-Transcript Test-Path Where-Object Write-Error Write-Host Write-Output Get-Member Join-Path Get-Variable""".split())
+Start-Transcript Stop-Process Stop-Transcript Test-Path Where-Object Write-Error Write-Host Write-Output Write-Warning Get-Acl Get-MpThreatDetection Compress-Archive Get-ProcessMitigation Get-Service Get-Package Get-Member Join-Path Get-Variable""".split())
 
 def lex(text):
     """returns (code_text, problems). code_text has strings/comments blanked (newlines kept)."""

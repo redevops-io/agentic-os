@@ -88,9 +88,9 @@ try {
   if (-not $SidecarExe) {
     if (-not $InstallDir) { $st = Read-State; if ($st -and $st.installDir) { $InstallDir = $st.installDir } }
     if (-not $InstallDir) { $InstallDir = Find-InstallDir }
-    if ($InstallDir) { $SidecarExe = Join-Path $InstallDir 'redevops-sidecar.exe' }
+    if ($InstallDir) { $SidecarExe = Join-Path $InstallDir $script:SidecarExe }
   }
-  if (-not $SidecarExe -or -not (Test-Path -LiteralPath $SidecarExe)) { Add-Result 'BST-00' 'redevops-sidecar.exe present' 'FAIL' 'not found: run 01-Install.ps1 first or pass -SidecarExe'; throw 'stop' }
+  if (-not $SidecarExe -or -not (Test-Path -LiteralPath $SidecarExe)) { Add-Result 'BST-00' 'sidecar exe present' 'FAIL' 'not found: run 01-Install.ps1 first or pass -SidecarExe'; throw 'stop' }
   Write-Line ("sidecar: {0}  sha256 {1}" -f $SidecarExe, (Get-Sha256 $SidecarExe))
   $acp = $null; try { $acp = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Nls\CodePage').ACP } catch { }
   Add-Result 'BST-00' 'host ANSI code page (decides the redirected-stdout encoding)' 'INFO' ("ACP={0}. Results below apply to this ACP. cp1252 is the defect's trigger; a UTF-8 system locale (ACP 65001) or a fixed build shows no crash." -f $acp)

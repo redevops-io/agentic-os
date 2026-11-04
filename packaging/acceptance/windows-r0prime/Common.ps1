@@ -28,6 +28,49 @@ $script:LlmEnvNames = @('GROQ_API_KEY', 'CEREBRAS_API_KEY', 'OPENROUTER_API_KEY'
   'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'RDO_LLM_BASE_URL', 'RDO_LLM_API_KEY', 'RDO_LLM_MODEL',
   'MODEL_ENDPOINT', 'MODEL_NAME', 'RDO_LOCAL_MODEL_URL', 'RDO_LOCAL_MODEL')
 
+# ---- identity of the candidate under test: optional override from packaging/identity.json -----------------------------------------
+# The literals above are the R0-prime defaults (tests/test_r0prime_identity.py keeps them equal to packaging/identity.json). When an identity
+# file is found they are REPLACED from it, so a later rename needs no edit of the kit. Search order: $env:R0P_IDENTITY_FILE, identity.json next to
+# this file (copy it there when the kit runs off-repo), ..\..\identity.json (kit inside a checkout). $env:R0P_IDENTITY_LINE=frozen selects the
+# frozen v0.3.2 block (the default is "r0prime"). The sidecar name is not part of the R0-prime change and defaults to redevops-sidecar.
+$script:SidecarExe = 'redevops-sidecar.exe'
+$script:SidecarProcess = 'redevops-sidecar'
+$script:IdentitySource = 'built-in R0-prime literals (no identity.json found: copy packaging/identity.json next to Common.ps1 to follow a rename)'
+function Import-KitIdentity {
+  $line = $(if ($env:R0P_IDENTITY_LINE) { $env:R0P_IDENTITY_LINE } else { 'r0prime' })
+  $cands = @()
+  if ($env:R0P_IDENTITY_FILE) { $cands += $env:R0P_IDENTITY_FILE }
+  $cands += (Join-Path $PSScriptRoot 'identity.json')
+  $cands += (Join-Path $PSScriptRoot '..\..\identity.json')
+  foreach ($c in $cands) {
+    if (-not (Test-Path -LiteralPath $c)) { continue }
+    try {
+      $j = Get-Content -LiteralPath $c -Raw | ConvertFrom-Json
+      $b = $j.$line
+      if (-not $b -or -not $b.product_name -or -not $b.bundle_identifier -or -not $b.main_binary_name) { continue }
+      $parts = ([string]$b.bundle_identifier).Split('.')
+      $pub = $(if ($parts.Count -gt 1) { $parts[1] } else { [string]$b.bundle_identifier })
+      $script:ProductName = [string]$b.product_name
+      $script:AppVersion = [string]$b.version
+      $script:AppId = [string]$b.bundle_identifier
+      $script:LauncherProcess = [string]$b.main_binary_name
+      $script:LauncherExe = $script:LauncherProcess + '.exe'
+      $script:ManufacturerKey = 'HKCU:\Software\' + $pub + '\' + $script:ProductName
+      if ($b.sidecar_binary_name) { $script:SidecarProcess = [string]$b.sidecar_binary_name; $script:SidecarExe = $script:SidecarProcess + '.exe' }
+      $fz = $j.frozen
+      if ($fz -and $fz.product_name) {
+        $fparts = ([string]$fz.bundle_identifier).Split('.')
+        $script:FrozenProductName = [string]$fz.product_name; $script:FrozenAppId = [string]$fz.bundle_identifier
+        $script:FrozenLauncherProcess = [string]$fz.main_binary_name; $script:FrozenLauncherExe = $script:FrozenLauncherProcess + '.exe'
+        $script:FrozenManufacturerKey = 'HKCU:\Software\' + $fparts[1] + '\' + $script:FrozenProductName
+      }
+      $script:IdentitySource = ("{0} [{1}]" -f (Resolve-Path -LiteralPath $c).Path, $line)
+      return
+    } catch { }
+  }
+}
+Import-KitIdentity
+
 function Write-Line([string]$Text) { Write-Host $Text }
 
 function Test-IsAdmin {
@@ -46,6 +89,8 @@ function Get-Sha256([string]$Path) {
 function Write-EnvHeader {
   Write-Line '=== environment ==='
   Write-Line ("step              : {0}" -f $script:StepName)
+  Write-Line ("identity          : {0} {1}  launcher={2} sidecar={3} identifier={4}" -f $script:ProductName, $script:AppVersion, $script:LauncherExe, $script:SidecarExe, $script:AppId)
+  Write-Line ("identity source   : {0}" -f $script:IdentitySource)
   Write-Line ("hostname          : {0}" -f $env:COMPUTERNAME)
   try {
     $os = Get-CimInstance Win32_OperatingSystem
@@ -158,7 +203,7 @@ function Get-CandidateInstallDirs {
 }
 
 function Find-InstallDir {
-  foreach ($d in (Get-CandidateInstallDirs)) { if (Test-Path -LiteralPath (Join-Path $d 'redevops-sidecar.exe')) { return $d } }
+  foreach ($d in (Get-CandidateInstallDirs)) { if (Test-Path -LiteralPath (Join-Path $d $script:SidecarExe)) { return $d } }
   return $null
 }
 
@@ -198,6 +243,11 @@ function Test-PidAlive([int]$ProcessId) {
 
 function Get-Listeners([int]$Port) {
   try { return @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop | Select-Object LocalAddress, LocalPort, OwningProcess) } catch { return @() }
+}
+
+# Listeners (127.0.0.1 or any address) owned by one of the given process ids. A PyInstaller onefile sidecar's CHILD owns the socket.
+function Get-ListenersOf([int[]]$Pids) {
+  try { return @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object { $Pids -contains [int]$_.OwningProcess } | Select-Object LocalAddress, LocalPort, OwningProcess) } catch { return @() }
 }
 
 function Get-FreePort {
@@ -391,3 +441,40 @@ function Get-SignatureSummary([string]$Path) {
   if ($s.TimeStamperCertificate) { $ts = $s.TimeStamperCertificate.Subject }
   return [pscustomobject]@{ Status = [string]$s.Status; Message = $s.StatusMessage; Subject = $sub; Thumbprint = $tp; NotAfterUtc = $na; Timestamper = $ts }
 }
+
+
+# ---- ACL (icacls) --------------------------------------------------------------------------------------------------------------
+# Returns the output lines of `icacls <path>` (read-only). Each ACE line looks like  DOMAIN\Name:(OI)(CI)(F)  ; the first line starts with the path.
+function Get-IcaclsLines([string]$Path) {
+  $icacls = Get-Command icacls.exe -ErrorAction SilentlyContinue
+  if (-not $icacls) { return @() }
+  $out = & $icacls.Source $Path 2>&1
+  return @($out | ForEach-Object { [string]$_ } | Where-Object { $_.Trim() -and $_ -notmatch '^Successfully processed' })
+}
+
+# Names/SIDs that must NOT appear in the ACL of the private launch directory or of a redirect file (anything broader than the owner,
+# SYSTEM and Administrators): Everyone, Users, Authenticated Users, INTERACTIVE, plus a different user.
+function Get-BroadAclEntries([string[]]$IcaclsLines) {
+  $bad = @()
+  foreach ($l in $IcaclsLines) {
+    if ($l -match '(?i)(\bEveryone\b|BUILTIN\\Users\b|NT AUTHORITY\\Authenticated Users|NT AUTHORITY\\INTERACTIVE|\*S-1-1-0|\*S-1-5-32-545|\*S-1-5-11)\s*:') { $bad += $l.Trim() }
+  }
+  return $bad
+}
+
+# ---- PE header flags (read-only): ASLR / high-entropy ASLR / DEP / CFG ---------------------------------------------------------------
+function Get-PeFlags([string]$Path) {
+  try {
+    $fs = [IO.File]::OpenRead($Path)
+    try {
+      $br = New-Object IO.BinaryReader($fs)
+      $fs.Seek(0x3C, 'Begin') | Out-Null; $pe = $br.ReadInt32()
+      $fs.Seek($pe + 4 + 20 + 70, 'Begin') | Out-Null     # signature(4) + COFF header(20) + 70 bytes into the optional header = DllCharacteristics
+      $dc = $br.ReadUInt16()
+      return [pscustomobject]@{ DllCharacteristics = ('0x{0:X4}' -f $dc); DynamicBase = [bool]($dc -band 0x40); HighEntropyVA = [bool]($dc -band 0x20); NxCompat = [bool]($dc -band 0x100); GuardCF = [bool]($dc -band 0x4000); ForceIntegrity = [bool]($dc -band 0x80) }
+    } finally { $fs.Close() }
+  } catch { return $null }
+}
+
+# ---- HTTP over a raw socket (no curl) for the fake sidecar tests -------------------------------------------------------------------
+function Get-UtcStamp { return (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ') }

@@ -14,6 +14,12 @@ T0="$(now)"
 LOCK="$ROOT/deploy/launcher/src-tauri/Cargo.lock"
 [ -f "$LOCK" ] || { echo "Cargo.lock missing: run packaging/regen-cargo-lock.sh"; exit 1; }
 [ "$(rustc --version | cut -d' ' -f2)" = "$RUST_VERSION" ] || { echo "rustc is '$(rustc --version)', pinned $RUST_VERSION"; exit 1; }
+# The Windows locks, the SBOM target (build-notices.sh / build-sbom.sh) and the staged sidecar name are all x86_64-pc-windows-msvc:
+# refuse an ARM64 or GNU toolchain instead of producing a launcher that does not match them.
+if [ "$OS" = windows ]; then
+  HOST_TRIPLE="$(rustc -Vv | sed -n 's/^host: //p' | strip_cr)"
+  [ "$HOST_TRIPLE" = x86_64-pc-windows-msvc ] || { echo "ERROR: rustc host is '$HOST_TRIPLE', the Windows build needs x86_64-pc-windows-msvc"; exit 1; }
+fi
 # tauri-cli is `cargo tauri` (cargo install tauri-cli, as CI does) or the equivalent `tauri` binary of the npm package @tauri-apps/cli
 if cargo tauri --version >/dev/null 2>&1; then TAURI=(cargo tauri); elif command -v tauri >/dev/null 2>&1; then TAURI=(tauri); else echo "tauri-cli not found"; exit 1; fi
 [ "$("${TAURI[@]}" --version | awk '{print $NF}')" = "$TAURI_CLI_VERSION" ] || { echo "tauri-cli is '$("${TAURI[@]}" --version)', pinned $TAURI_CLI_VERSION"; exit 1; }
@@ -23,8 +29,8 @@ if cargo tauri --version >/dev/null 2>&1; then TAURI=(cargo tauri); elif command
 LIC="$ROOT/deploy/launcher/src-tauri/licenses"
 [ -f "$LIC/THIRD_PARTY_NOTICES.txt" ] && [ -f "$LIC/LICENSES-MANIFEST.json" ] || {
   echo "ERROR: $LIC is missing or incomplete: run packaging/build-notices.sh (build-all.sh does) before the launcher"; exit 1; }
-LICSHA="$("$(command -v python3 || command -v python)" -I -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$LIC/LICENSES-MANIFEST.json")"
-[ -f "$PK/dist/sidecar-licenses.sha256" ] && [ "$(cat "$PK/dist/sidecar-licenses.sha256")" = "$LICSHA" ] || {
+LICSHA="$("${MANIFEST_PYTHON:-$(command -v python3 || command -v python)}" -I -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$LIC/LICENSES-MANIFEST.json" | strip_cr)"
+[ -f "$PK/dist/sidecar-licenses.sha256" ] && [ "$(strip_cr < "$PK/dist/sidecar-licenses.sha256")" = "$LICSHA" ] || {
   echo "ERROR: the sidecar in packaging/dist does not embed the Licenses folder that will be bundled (pass 2 of build-sidecar.sh with REDEVOPS_LICENSES_DIR, then stage-sidecar.sh)"; exit 1; }
 cmp -s "$PK/dist/redevops-sidecar" "$ROOT/deploy/launcher/src-tauri/binaries/redevops-sidecar-$(rustc -Vv | sed -n 's/host: //p')" 2>/dev/null \
   || cmp -s "$PK/dist/redevops-sidecar.exe" "$ROOT/deploy/launcher/src-tauri/binaries/redevops-sidecar-$(rustc -Vv | sed -n 's/host: //p').exe" 2>/dev/null \

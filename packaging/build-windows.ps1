@@ -25,6 +25,19 @@ if ($rustc -ne $pins["RUST_VERSION"]) { throw "rustc is $rustc, pinned $($pins['
 $tauri = (cargo tauri --version).Split(" ")[-1]
 if ($tauri -ne $pins["TAURI_CLI_VERSION"]) { throw "tauri-cli is $tauri, pinned $($pins['TAURI_CLI_VERSION'])" }
 
+# The build is x86_64-pc-windows-msvc only: the wheel locks are win_amd64, the SBOM target and the staged sidecar name follow
+# the rustc host. An ARM64 or -gnu toolchain would produce something that does not match them: stop early.
+$hostLine = @(rustc -Vv | Where-Object { $_ -like "host: *" })[0]
+$hostTriple = $hostLine.Substring(6).Trim()
+if ($hostTriple -ne "x86_64-pc-windows-msvc") { throw "rustc host is $hostTriple, the Windows build needs x86_64-pc-windows-msvc" }
+
+# MAX_PATH: PyInstaller and cargo create deep trees under the checkout. Use a short root such as C:\r0p.
+if ($Root.Length -gt 60) { Write-Warning "the checkout path is $($Root.Length) characters long; build from a short path (for example C:\r0p) to stay clear of MAX_PATH" }
+# Tauri downloads WiX 3.14.1 and NSIS 3.11 into %LOCALAPPDATA%\tauri on first use and verifies them (SHA-256 / SHA-1 pinned inside
+# tauri-bundler 2.9.4); a directory that already exists is REUSED without re-hashing. For an evidence build start from a clean one.
+$toolCache = Join-Path $env:LOCALAPPDATA "tauri"
+if (Test-Path $toolCache) { Write-Warning "$toolCache exists: its WiX/NSIS files are reused as they are. Remove it (or build on a clean user profile) for an evidence build." }
+
 $bash = Join-Path ${env:ProgramFiles} "Git\bin\bash.exe"
 if (-not (Test-Path $bash)) { throw "Git for Windows bash.exe not found at $bash" }
 $env:UV_PYTHON_DOWNLOADS = "never"        # use the installed 3.12.10, never fetch another interpreter

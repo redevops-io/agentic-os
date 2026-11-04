@@ -44,7 +44,7 @@ FIRST="$(ls "$WH"/agentic_os-*.whl "$WH"/runtime_contracts-*.whl "$WH"/knowledge
 
 echo "== install PyInstaller $PYINSTALLER_VERSION + dependencies (build tool; hash-locked, from the index) =="
 "$FPY" -m pip install --quiet --require-hashes --no-deps -r "$LOCKS/build-tools-$OS.lock"
-"$FBIN/pyinstaller" --version | grep -qx "$PYINSTALLER_VERSION" || { echo "pyinstaller is not $PYINSTALLER_VERSION"; exit 1; }
+"$FBIN/pyinstaller" --version | strip_cr | grep -qx "$PYINSTALLER_VERSION" || { echo "pyinstaller is not $PYINSTALLER_VERSION"; exit 1; }
 
 echo "== freeze =="
 # SOURCE_DATE_EPOCH (commit time) and PYTHONHASHSEED are the knobs PyInstaller documents for
@@ -75,4 +75,4 @@ fi
 echo "== smoke test: the frozen binary imports + shows the bootstrap report =="
 # exit code is the device verdict; we only assert it runs. Scrubbed environment: the report must not touch
 # (or print) credentials of the build host.
-env -i PATH="$PATH" HOME="$TMP" TMPDIR="$TMP" "$BIN" bootstrap || true
+scrubbed_run "$TMP" "$BIN" bootstrap || true
