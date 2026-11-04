@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Interim CycloneDX component list for the notices generator.
 
-The SBOM generator that owns the real component list lives elsewhere under packaging/. Until its output
-is available, this script builds a CycloneDX 1.5 document with exactly the fields generate_notices.py
+STAND-IN, NOT USED BY ANY BUILD. The SBOM generator that owns the real component list is
+packaging/sbom/generate_sbom.py (it reads the BUILT sidecar archive); build-notices.sh feeds its output to
+generate_notices.py. This script is kept for tests and for an explicit dry run
+(build-licenses.sh --interim-lock). It builds a CycloneDX 1.5 document with exactly the fields generate_notices.py
 reads, from sources that already exist:
 
   --lock FILE            a pip requirements file with `name==version` pins (packaging/requirements.lock)

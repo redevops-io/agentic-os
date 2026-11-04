@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The frozen sidecar is a PyInstaller ONEFILE binary: at start it unpacks 61 ad-hoc-signed Mach-O libraries
+	     (libpython, _duckdb, cryptography, pydantic_core, OpenSSL ...) to $TMPDIR/_MEIxxxx and dlopen()s them.
+	     Under the hardened runtime, library validation only accepts libraries signed by Apple or with the SAME Team ID
+	     as the process. Those libraries are ad-hoc (no Team ID), so without this key dlopen of the embedded Python fails
+	     ("mapping process and mapped file (non-platform) have different Team IDs"). Verified empirically (see
+	     ent/matrix*.log). allow-unsigned-executable-memory and allow-jit were tested and are NOT needed. -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>

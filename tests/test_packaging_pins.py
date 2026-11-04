@@ -249,3 +249,78 @@ def test_compare_builds_reports_a_difference_and_its_class(tmp_path):
     assert "File: DIFFERENT" in text and "'LC_UUID': 16" in text
     (b / "launcher").write_bytes(hdr + body)
     assert cb.main() == 0 and "File: IDENTICAL" in out.read_text()
+
+
+# --- build order: one owner (build-all.sh); the workflow, the Windows driver and the README agree with it -----------
+def _scripts_in_order(text: str) -> list[str]:
+    return re.findall(r"(build-(?:wheelhouse|sidecar|notices|launcher|sbom)\.sh|stage-sidecar\.sh)", text)
+
+
+def test_build_all_order_is_wheelhouse_sidecar_notices_sidecar_stage_launcher_sbom():
+    seq = [s for s in _scripts_in_order("\n".join(l for l in (PK / "build-all.sh").read_text().splitlines()
+                                                  if not l.lstrip().startswith("#")))]
+    assert seq == ["build-wheelhouse.sh", "build-sidecar.sh", "build-notices.sh", "build-sidecar.sh",
+                   "stage-sidecar.sh", "build-launcher.sh", "build-sbom.sh"]
+    text = (PK / "build-all.sh").read_text()
+    # pass 2 (and only pass 2) embeds the Licenses folder
+    assert text.count("REDEVOPS_LICENSES_DIR=") == 1
+    assert text.index("REDEVOPS_LICENSES_DIR=") > text.index("build-notices.sh")
+    assert "check_notices_vs_sbom.py" in text and text.index("check_notices_vs_sbom.py") > text.index("build-sbom.sh")
+
+
+def test_workflow_and_windows_driver_follow_the_same_order():
+    yaml = pytest.importorskip("yaml")
+    wf = yaml.safe_load((ROOT / ".github/workflows/native-packaging.yml").read_text())
+    runs = "\n".join(s.get("run", "") for s in wf["jobs"]["bundle"]["steps"])
+    assert _scripts_in_order(runs) == ["build-wheelhouse.sh", "build-sidecar.sh", "build-notices.sh", "build-sidecar.sh",
+                                       "stage-sidecar.sh", "build-launcher.sh", "build-sbom.sh"]
+    # the pass-2 sidecar step carries REDEVOPS_LICENSES_DIR, pass 1 does not
+    sidecar_steps = [s for s in wf["jobs"]["bundle"]["steps"] if "build-sidecar.sh" in s.get("run", "")]
+    assert [("REDEVOPS_LICENSES_DIR" in (s.get("env") or {})) for s in sidecar_steps] == [False, True]
+    assert "check_notices_vs_sbom.py" in runs
+    ps1 = (PK / "build-windows.ps1").read_text()
+    assert 'Run-Step "build-all.sh"' in ps1
+    for forbidden in ("build-wheelhouse.sh", "build-launcher.sh", "stage-sidecar.sh"):
+        assert f'Run-Step "{forbidden}"' not in ps1, "the Windows driver must not list the steps a second time"
+
+
+def test_launcher_build_refuses_to_run_without_the_notices_or_the_pass_2_sidecar():
+    text = (PK / "build-launcher.sh").read_text()
+    assert "THIRD_PARTY_NOTICES.txt" in text and "sidecar-licenses.sha256" in text
+    assert text.index("sidecar-licenses.sha256") < text.index('"${TAURI[@]}" build')
+    assert "sidecar-licenses.sha256" in (PK / "build-sidecar.sh").read_text()
+
+
+def test_notices_are_derived_from_the_built_sbom_not_from_a_lock():
+    bn = (PK / "build-notices.sh").read_text()
+    assert "--sbom" in bn and "sbom-pass1/sbom.cdx.json" in bn and "requirements.lock" not in bn
+    bl = (PK / "notices" / "build-licenses.sh").read_text()
+    assert "requirements.lock" not in bl
+    # without --sbom the script refuses (the lock-derived stand-in needs the explicit --interim-lock)
+    r = subprocess.run(["bash", str(PK / "notices" / "build-licenses.sh"), "--platform", "macos", "--site-packages", str(ROOT)],
+                       capture_output=True, text=True)
+    assert r.returncode == 2 and "--sbom" in r.stderr
+
+
+def test_ubuntu_acceptance_uses_no_predictable_tmp_log_and_checks_the_gate():
+    text = (PK / "acceptance-ubuntu.sh").read_text()
+    assert "/tmp/rdo-serve.log" not in text and "mktemp" in text
+    assert "/api/projects" in text and "401" in text
+
+
+def test_candidate_script_refuses_signing_variables_and_a_non_empty_output_dir(tmp_path):
+    import os
+    if os.uname().sysname != "Darwin" or os.uname().machine != "arm64":
+        pytest.skip("macOS arm64 only")
+    script = str(PK / "candidate" / "build-local-macos-candidate.sh")
+    env = {**os.environ, "APPLE_SIGNING_IDENTITY": "x"}
+    r = subprocess.run(["bash", script, str(tmp_path / "out")], capture_output=True, text=True, env=env)
+    assert r.returncode == 2 and "signing-related variable" in r.stdout, r.stdout + r.stderr
+    (tmp_path / "full").mkdir()
+    (tmp_path / "full" / "x").write_text("x")
+    env2 = {k: v for k, v in os.environ.items() if not k.startswith(("APPLE_", "CODESIGN", "TAURI_SIGNING", "KEYCHAIN"))}
+    r = subprocess.run(["bash", script, str(tmp_path / "full")], capture_output=True, text=True, env=env2)
+    assert r.returncode == 2 and "not empty" in r.stdout
+    text = (PK / "candidate" / "build-local-macos-candidate.sh").read_text()
+    for bad in ("codesign --sign", "notarytool", "security import", "gh release", "git push"):
+        assert bad not in text

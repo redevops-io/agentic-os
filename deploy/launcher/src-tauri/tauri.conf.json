@@ -37,6 +37,7 @@
     "externalBin": ["binaries/redevops-sidecar"],
     "copyright": "Copyright (c) 2025-2026 RedevOps.",
     "resources": {"licenses/": "Licenses/"},
+    "macOS": {"minimumSystemVersion": "11.0"},
     "linux": {
       "deb": {
         "depends": []
