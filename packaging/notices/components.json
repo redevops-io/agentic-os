@@ -1,0 +1,208 @@
+{
+ "schema": 1,
+ "comment": "Static knowledge for components that no package metadata describes. Presence of a text is not a clearance; 'unverified' strings are shown in THIRD_PARTY_NOTICES.txt. Keys: <purltype>:<normalised name>[@version].",
+ "entries": {
+  "pypi:certifi": {
+   "decision": "D-LIC-4",
+   "note": "MPL-2.0. The wheel's LICENSE file is only the MPL notice header ('If a copy of the MPL was not distributed with this file...'); the full MPL-2.0 text is added from mozilla.org. cacert.pem (the Mozilla CA list) is its own source form; MPL-2.0 section 3.2 (Executable Form) handling is an owner/counsel decision.",
+   "texts": [
+    "MPL-2.0.txt"
+   ]
+  },
+  "pypi:cryptography": {
+   "decision": "D-LIC-6",
+   "note": "The wheel statically links OpenSSL 4.0.2 and 39 Rust crates; see the generic OpenSSL entry and its own SBOM inside the wheel."
+  },
+  "pypi:knowledge-frontier": {
+   "decision": "D-LIC-2",
+   "declared": "AGPL-3.0-or-later (plain; pyproject at tag v0.1.0)",
+   "missing_reason": "tag v0.1.0 has no LICENSE file; the LICENSE added on 2026-10-13 (commit d32a82af) is marked 'LICENSE INTENT INFERRED - owner to confirm'"
+  },
+  "pypi:redevops-connectors": {
+   "decision": "D-LIC-2",
+   "declared": "AGPL-3.0-or-later (pyproject at tag v0.1.0); later main declares the family licence",
+   "missing_reason": "tag v0.1.0 has no LICENSE file; the family-licence files added on 2026-10-13 (commit d990280a) are marked 'LICENSE INTENT INFERRED - owner to confirm'"
+  },
+  "pypi:runtime-contracts": {
+   "decision": "D-LIC-3",
+   "note": "Family licence (AGPL-3.0-or-later with the Commons Clause) per its own LICENSE.md."
+  },
+  "pypi:duckdb": {
+   "decision": "D-LIC-6",
+   "note": "Optional extra backend, included in the sidecar build (extras projects,duckdb). The wheel statically links third-party libraries whose notices are not separately listed."
+  },
+  "pypi:pyyaml": {
+   "note": "The compiled _yaml extension embeds libyaml; its notice is covered by the generic libyaml entry."
+  },
+  "pypi:pydantic-core": {
+   "note": "Embeds Rust crates; their notices are not separately listed (see decision D-LIC-6)."
+  },
+  "cargo:selectors": {
+   "texts": [
+    "MPL-2.0.txt"
+   ],
+   "declared": "MPL-2.0 (crates.io declaration)",
+   "decision": "D-LIC-13",
+   "unverified": "The crate package holds no licence file; the generic MPL-2.0 text is shown, without the crate's copyright notice. File-level copyleft (MPL-2.0 section 3.2) handling is as for certifi (D-LIC-4)."
+  }
+ },
+ "static_components": [
+  {
+   "name": "cpython",
+   "version": "3.12.10",
+   "declared": "PSF-2.0",
+   "present_in": [
+    "macos",
+    "windows"
+   ],
+   "decision": "D-LIC-6",
+   "texts": [
+    "CPython-3.12.10-LICENSE.txt",
+    "CPython-3.12.10-Doc-license.rst"
+   ],
+   "unverified": "Which bundled-library notices of Doc/license.rst apply to the shipped python.org-style build was not traced."
+  },
+  {
+   "name": "openssl",
+   "version": "3.0.16",
+   "declared": "Apache-2.0",
+   "present_in": [
+    "macos",
+    "windows"
+   ],
+   "decision": "D-LIC-6",
+   "texts": [
+    "OpenSSL-LICENSE.txt"
+   ],
+   "note": "libcrypto/libssl shipped beside the interpreter."
+  },
+  {
+   "name": "openssl-in-cryptography",
+   "version": "4.0.2",
+   "declared": "Apache-2.0 (expected)",
+   "present_in": [
+    "macos",
+    "windows"
+   ],
+   "decision": "D-LIC-6",
+   "texts": [
+    "OpenSSL-LICENSE.txt"
+   ],
+   "unverified": "The text shown is LICENSE.txt of upstream tag openssl-4.0.2 (byte-identical to 3.0.16); the statically linked bytes were not compared with that tag."
+  },
+  {
+   "name": "pyinstaller",
+   "version": "6.22.3",
+   "declared": "GPL-2.0-or-later with Bootloader Exception; runtime hooks Apache-2.0",
+   "present_in": [
+    "macos",
+    "windows"
+   ],
+   "decision": "D-LIC-6",
+   "texts": [
+    "PyInstaller-6.22.3-COPYING.txt"
+   ],
+   "unverified": "The version used by the R0 build was unpinned; 6.22.3 is the R0-prime pin."
+  },
+  {
+   "name": "react",
+   "version": "18.3.1",
+   "declared": "MIT",
+   "present_in": [
+    "macos",
+    "windows"
+   ],
+   "decision": "D-LIC-7",
+   "texts": [
+    "React-18.3.1-MIT-LICENSE.txt"
+   ],
+   "note": "Projects UI bundle (agentic_os/projects_ui/assets); version literal found in the bundle."
+  },
+  {
+   "name": "react-dom",
+   "version": "18.3.1",
+   "declared": "MIT",
+   "present_in": [
+    "macos",
+    "windows"
+   ],
+   "decision": "D-LIC-7",
+   "texts": [
+    "React-18.3.1-MIT-LICENSE.txt"
+   ]
+  },
+  {
+   "name": "scheduler",
+   "version": "0.23.2",
+   "declared": "MIT",
+   "present_in": [
+    "macos",
+    "windows"
+   ],
+   "decision": "D-LIC-7",
+   "texts": [
+    "React-18.3.1-MIT-LICENSE.txt"
+   ],
+   "unverified": "Version inferred from react-dom 18.3.1; the bundle banner names only scheduler.production.min.js. Other npm packages in the bundle were not enumerated (the npm lock of the UI build is not recorded)."
+  },
+  {
+   "name": "libyaml",
+   "version": "",
+   "declared": "MIT (expected)",
+   "present_in": [
+    "macos",
+    "windows"
+   ],
+   "decision": "D-LIC-6",
+   "texts": [],
+   "missing_reason": "libyaml is linked into PyYAML's _yaml extension; no libyaml licence text ships in the PyYAML wheel",
+   "unverified": "Presence in the frozen archive follows the wheel contents; not confirmed by a scan."
+  },
+  {
+   "name": "duckdb-embedded-libraries",
+   "version": "",
+   "declared": "various (not enumerated)",
+   "present_in": [
+    "macos",
+    "windows"
+   ],
+   "decision": "D-LIC-6",
+   "texts": [],
+   "missing_reason": "third-party libraries embedded in the DuckDB binary are not listed in the wheel's licence file"
+  },
+  {
+   "name": "microsoft-vc-runtime",
+   "version": "VCRUNTIME140 14.42.34438.0; ucrtbase 10.0.26100.1742",
+   "declared": "Microsoft proprietary (redistribution terms UNVERIFIED)",
+   "present_in": [
+    "windows"
+   ],
+   "decision": "D-LIC-6",
+   "texts": [],
+   "missing_reason": "Microsoft redistributable-code terms were not read",
+   "unverified": "Terms unread."
+  },
+  {
+   "name": "libffi",
+   "version": "8 (libffi-8.dll)",
+   "declared": "MIT (expected, UNVERIFIED)",
+   "present_in": [
+    "windows"
+   ],
+   "decision": "D-LIC-6",
+   "texts": [],
+   "missing_reason": "no libffi licence text collected; exact libffi version unknown (file name only)"
+  },
+  {
+   "name": "nsis-and-wix-installer-stubs",
+   "version": "",
+   "declared": "not read",
+   "present_in": [
+    "windows"
+   ],
+   "decision": "D-LIC-9",
+   "texts": [],
+   "missing_reason": "NSIS and WiX terms (tools and stub code that end up inside the installers) were not read"
+  }
+ ]
+}

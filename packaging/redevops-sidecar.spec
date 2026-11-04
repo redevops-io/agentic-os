@@ -20,6 +20,14 @@ for opt in ("redevops_connectors", "duckdb"):
         pass  # optional; absent in a minimal build
 
 datas = collect_data_files("agentic_os")  # includes agentic_os/projects_ui/** (the served UI)
+# Licence and notice files travel inside the sidecar too (extracted with it at run time): the output of
+# packaging/notices/stage_licenses.py. Fail the build if a directory is named but empty of the required files.
+import os
+_LIC = os.environ.get("REDEVOPS_LICENSES_DIR")
+if _LIC:
+    for _f in ("LICENSE", "LICENSE-COMMONS-CLAUSE", "LICENSE.md", "LICENSING.md", "THIRD_PARTY_NOTICES.txt"):
+        assert os.path.isfile(os.path.join(_LIC, _f)), f"REDEVOPS_LICENSES_DIR lacks {_f}"
+    datas += [(_LIC, "Licenses")]
 
 a = Analysis(
     ["sidecar_main.py"],

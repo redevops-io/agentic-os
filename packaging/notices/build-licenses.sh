@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Build the Licenses folder for one platform: SBOM (given, or interim) -> THIRD_PARTY_NOTICES.txt -> staged
+# folder that tauri.conf.json bundles (deploy/launcher/src-tauri/licenses/) and the sidecar spec can embed.
+#
+#   packaging/notices/build-licenses.sh --platform macos|windows --site-packages DIR [--crates-dir DIR]...
+#        [--sbom FILE | --lock FILE [--cargo-metadata FILE] [--frozen-modules FILE]] [--exclude NAME]...
+#        [--out DIR] [--dest DIR] [--fail-on-missing]
+#
+# --site-packages is the site-packages of the venv the sidecar was frozen from; --crates-dir is the cargo
+# registry source directory (`$CARGO_HOME/registry/src/<index>`) or a `cargo vendor` directory, after
+# `cargo fetch --locked`. Items without a licence text are listed in NOTICES_MISSING.md (decision items).
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"; ROOT="$(cd "$HERE/../.." && pwd)"
+PLATFORM=""; SBOM=""; LOCK="$ROOT/packaging/requirements.lock"; OUT="$ROOT/packaging/notices/out"; FAIL=""; DEST=()
+SITE=(); CRATES=(); EXCL=(); CARGO=(); FROZEN=()
+while [ $# -gt 0 ]; do case "$1" in
+  --platform) PLATFORM="$2"; shift 2;; --sbom) SBOM="$2"; shift 2;; --lock) LOCK="$2"; shift 2;;
+  --site-packages) SITE+=(--site-packages "$2"); shift 2;; --crates-dir) CRATES+=(--crates-dir "$2"); shift 2;;
+  --cargo-metadata) CARGO+=(--cargo-metadata "$2"); shift 2;; --frozen-modules) FROZEN=(--frozen-modules "$2"); shift 2;;
+  --exclude) EXCL+=(--exclude "$2"); shift 2;; --out) OUT="$2"; shift 2;; --dest) DEST=(--dest "$2"); shift 2;; --fail-on-missing) FAIL="--fail-on-missing"; shift;;
+  *) echo "unknown argument $1" >&2; exit 2;; esac; done
+[ -n "$PLATFORM" ] && [ ${#SITE[@]} -gt 0 ] || { echo "need --platform and --site-packages" >&2; exit 2; }
+mkdir -p "$OUT"
+if [ -z "$SBOM" ]; then
+  SBOM="$OUT/interim-sbom.cdx.json"
+  python3 -I "$HERE/interim_sbom.py" --lock "$LOCK" "${CARGO[@]+"${CARGO[@]}"}" "${FROZEN[@]+"${FROZEN[@]}"}" \
+      "${SITE[@]}" --platform "$PLATFORM" "${EXCL[@]+"${EXCL[@]}"}" --out "$SBOM"
+fi
+set +e
+python3 -I "$HERE/generate_notices.py" --sbom "$SBOM" "${SITE[@]}" "${CRATES[@]+"${CRATES[@]}"}" \
+    "${EXCL[@]+"${EXCL[@]}"}" --out "$OUT" --title "Agentic Apps ($PLATFORM)" $FAIL
+RC=$?
+set -e
+python3 -I "$HERE/stage_licenses.py" --notices-dir "$OUT" "${DEST[@]+"${DEST[@]}"}"
+exit $RC
