@@ -228,6 +228,14 @@ Written by agent `build` (branch `r0prime/build`): integration fixes, the local 
 | build-06 | **LSMinimumSystemVersion** was Tauri's default 10.13 while both Mach-O files are arm64 `minos 11.0`; set to 11.0 in `tauri.conf.json`. | OBSERVED (Info.plist of a local build) | none |
 | build-07 | **The 7 failing tests are macOS-specific:** `setrlimit(RLIMIT_AS)` below ~466 GiB fails with EINVAL on this macOS (27.0.1; even `bash -c 'ulimit -v 262144'`), and `agentic_os/mission/membrane.py` calls it unguarded in a `preexec_fn`, so the rootless containment backend fails closed (error) on macOS instead of running contained. Not caused by the ssh-agent or `APPROVAL_SECRET`. | OBSERVED | Owner: leave (the failure is closed), or have the containment code tolerate macOS (a product change, not made here). |
 
+## rc3-rlimit
+
+Written by agent `rlimit` (branch `rc3/rlimit`). Evidence levels as above.
+
+| Id | Item | Level | Needs |
+|---|---|---|---|
+| rlimit-01 | **build-07 dispositioned: keep fail-closed on macOS, make it explicit and tested (option A).** `LocalContainmentSandbox` now refuses on a platform that cannot enforce a memory ceiling (macOS) with `ContainmentUnsupported` (`containment_unsupported:<reason>`) before any process is created; a preexec failure elsewhere is a named `containment_setup_failed` (still closed, not swallowed). Linux path unchanged (RLIMIT_AS still set from the constraint). The device probe no longer claims `containment_supported` on macOS, so "Check this device" on macOS reports BLOCKED (it previously reported VERIFIED when Docker was found, which was false). Tests are platform-aware (macOS asserts the refusal, Linux runs the original assertions). Linux execution UNVERIFIED on this host. | OBSERVED (macOS) / STATIC + simulated (Linux) | Owner: accept option A, or decide on option B (run on macOS with the limits that work and no memory cap): NOT implemented, weakens containment, see `docs/RUNNING_AGENTIC_APPS_LOCAL.md` "Platform support: containment". |
+
 ## rc2
 
 Written by agent `rc2` (branch `r0prime/rc2`): distinct identity (decision 8), limitations documentation (decisions 4 and 5), certifi compatibility test (decision 6). Evidence levels as above.
