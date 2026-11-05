@@ -26,6 +26,7 @@ a:hover{text-decoration-thickness:2px}
 :focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:4px}
 [tabindex="-1"]:focus{outline:none}
 .mono{font-family:ui-monospace,Menlo,"Cascadia Mono",monospace}
+.mono,.note{overflow-wrap:anywhere}
 .skip{position:absolute;left:.5rem;top:-4rem;background:var(--accent-ink);color:var(--on-accent);padding:.5rem .75rem;border-radius:6px;z-index:10}
 .skip:focus{top:.5rem}
 .top{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;padding:.75rem 1.375rem;border-bottom:1px solid var(--line-soft);background:var(--panel)}

@@ -361,7 +361,9 @@
       filterTimer = window.setTimeout(function () { if (doc) { renderComponents($("filter").value.slice(0, 100)); } }, 200);
     });
     var main = $("about-main");
-    document.querySelector(".skip").addEventListener("click", function () { window.setTimeout(function () { main.focus(); }, 0); });
+    // The skip link moves focus itself (no fragment navigation: the browser would re-apply the fragment focus later, after the
+    // page content has rendered, and steal focus from whatever the person has reached by then).
+    document.querySelector(".skip").addEventListener("click", function (e) { e.preventDefault(); main.focus(); });
     load();
   });
 })();
