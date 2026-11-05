@@ -3,83 +3,57 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ReDevOps</title>
-    <style>
-      :root { color-scheme: light dark; font: 15px/1.5 system-ui, sans-serif; }
-      body { margin: 0; padding: 24px; }
-      h1 { font-size: 18px; margin: 0 0 4px; }
-      p.sub { margin: 0 0 20px; opacity: .7; }
-      button { font: inherit; padding: 10px 16px; margin: 0 8px 8px 0; border-radius: 8px;
-               border: 1px solid rgba(128,128,128,.4); background: transparent; cursor: pointer; }
-      button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
-      button.danger { color: #b91c1c; border-color: rgba(185,28,28,.5); }
-      pre { white-space: pre-wrap; background: rgba(128,128,128,.12); padding: 14px;
-            border-radius: 8px; min-height: 80px; margin-top: 16px; }
-      .adv { margin-top: 20px; padding-top: 12px; border-top: 1px solid rgba(128,128,128,.25); }
-      .adv h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; opacity: .6; margin: 0 0 8px; }
-      .adv[hidden] { display: none; }
-    </style>
+    <title>Agentic Apps R0-prime</title>
+    <!-- No inline script, no inline style, no event-handler attributes: the launcher webview CSP
+         (tauri.conf.json app.security.csp) allows only 'self' for scripts and styles. -->
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="app.css" />
+    <script src="app.js" defer></script>
   </head>
   <body>
-    <h1>ReDevOps</h1>
-    <p class="sub">Your apps as one governed system — runs natively, no Docker required.</p>
-    <p class="sub" id="release-line">Private candidate, release line r0-prime.</p>
+    <header>
+      <h1>Agentic Apps R0-prime</h1>
+    </header>
 
-    <button id="check">Check this device</button>
-    <button id="start" class="primary">Start &amp; open</button>
-    <button id="stop">Stop</button>
+    <main id="main">
+      <div id="view-main">
+        <p class="sub">Your apps as one governed system — runs natively, no Docker required.</p>
+        <p class="sub" id="release-line">Private candidate, release line r0-prime.</p>
 
-    <div class="adv" id="advanced" hidden>
-      <h2>Advanced · local containers (optional)</h2>
-      <p class="sub">Adds the observability stack + the rootless sandbox for untrusted agent code. Not needed for normal use.</p>
-      <button id="docker-up">Enable local containers</button>
-      <button id="docker-down">Disable</button>
-      <button id="docker-purge" class="danger">Remove container data</button>
-    </div>
+        <button id="check" type="button">Check this device</button>
+        <button id="start" type="button" class="primary">Start &amp; open</button>
+        <button id="stop" type="button">Stop</button>
 
-    <pre id="out">Click “Check this device” to begin.</pre>
+        <div class="adv" id="advanced" hidden>
+          <h2>Advanced · local containers (optional)</h2>
+          <p class="sub">Adds the observability stack + the rootless sandbox for untrusted agent code. Not needed for normal use.</p>
+          <button id="docker-up" type="button">Enable local containers</button>
+          <button id="docker-down" type="button">Disable</button>
+          <button id="docker-purge" type="button" class="danger">Remove container data</button>
+        </div>
 
-    <script>
-      const invoke = (name, args) => window.__TAURI__.core.invoke(name, args || {});
-      const out = document.getElementById("out");
-      const say = (t) => (out.textContent = t);
-      const run = (name) => async () => {
-        say("Working…");
-        try { say(await invoke(name) || "Done."); }
-        catch (e) { say("Error:\n" + e); }
-      };
+        <pre id="out" role="status" aria-live="polite" aria-label="Result">Click “Check this device” to begin.</pre>
 
-      document.getElementById("check").onclick = run("device_report");
+        <footer class="foot">
+          <button id="open-about" type="button" class="link" aria-controls="view-about">About / Legal</button>
+        </footer>
+      </div>
 
-      // Native-first: start the control plane from the frozen sidecar (no Docker), then open it.
-      document.getElementById("start").onclick = async () => {
-        say("Starting the control plane…");
-        try {
-          const url = await invoke("start_native");
-          await invoke("open_ui");
-          say("Running at " + url + " — opened in your browser." + (await legacyNote()));
-        } catch (e) { say("Error:\n" + e); }
-      };
-      document.getElementById("stop").onclick = run("stop_native");
+      <section id="view-about" aria-labelledby="about-title" hidden>
+        <button id="about-back" type="button" class="link">← Back</button>
+        <h2 id="about-title" tabindex="-1">About / Legal</h2>
+        <p class="note" id="about-private-note">Private candidate. Legal text shown here is a placeholder until the decision it depends on is recorded. This view does not state that any licence or legal requirement is met.</p>
+        <div id="about-status" role="status" aria-live="polite"></div>
+        <div id="about-error" role="alert" hidden></div>
+        <div id="about-body"></div>
 
-      // Advanced Docker controls appear only when Docker is actually present.
-      document.getElementById("docker-up").onclick = run("advanced_docker_up");
-      document.getElementById("docker-down").onclick = run("advanced_docker_down");
-      document.getElementById("docker-purge").onclick = async () => {
-        if (!confirm("Remove the container tier's data (volumes)? Native data is untouched.")) return;
-        await run("advanced_docker_purge")();
-      };
-      // Warn (never act) when an OLD unauthenticated service is still running on port 8787.
-      const legacyNote = async () => {
-        try {
-          const w = await invoke("legacy_service_warning");
-          return w ? "\n\nWARNING: " + w : "";
-        } catch (e) { return ""; }
-      };
-      legacyNote().then((n) => { if (n) say(out.textContent + n); });
-      invoke("docker_available").then((ok) => {
-        if (ok) document.getElementById("advanced").hidden = false;
-      }).catch(() => {});
-    </script>
+        <section id="viewer" role="region" aria-labelledby="viewer-title" tabindex="-1" hidden>
+          <h3 id="viewer-title"></h3>
+          <p class="note" id="viewer-note"></p>
+          <pre id="viewer-text" tabindex="0" aria-label="Text"></pre>
+          <button id="viewer-close" type="button">Close text</button>
+        </section>
+      </section>
+    </main>
   </body>
 </html>

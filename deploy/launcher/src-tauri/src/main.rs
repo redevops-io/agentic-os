@@ -8,7 +8,9 @@
 // SCAFFOLD — build/test on a machine with the Rust + Tauri toolchain and a GUI (see ../README.md).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod about;
 mod capability;
+mod guard;
 mod launch;
 mod lifecycle;
 mod opener;
@@ -226,6 +228,7 @@ fn context() -> tauri::Context {
 fn main() {
     let app = tauri::Builder::default()
         .manage(Server(Mutex::new(None)))
+        .plugin(guard::plugin())
         .invoke_handler(tauri::generate_handler![
             start_native,
             stop_native,
@@ -235,7 +238,9 @@ fn main() {
             docker_available,
             advanced_docker_up,
             advanced_docker_down,
-            advanced_docker_purge
+            advanced_docker_purge,
+            about::about_info,
+            about::about_text
         ])
         .build(context())
         .expect("error while building the ReDevOps launcher");
@@ -252,6 +257,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
 
     /// R0-prime defect c: the UI calls `window.__TAURI__.core.invoke`, which only exists when the
     /// global API script is compiled in (`app.withGlobalTauri`). v0.3.2 shipped without it (0
@@ -266,5 +272,112 @@ mod tests {
             "no global API script embedded in the context"
         );
         assert!(dump.contains("__TAURI_IIFE__"), "the embedded script is not the global API bundle");
+    }
+
+    /// The launcher webview CSP (RC3). The exact string is pinned here, in tauri.conf.json (compared by
+    /// tests/test_launcher_tauri_config.py) and in the headless-browser test, which serves the page with it.
+    const EXPECTED_CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; connect-src ipc: http://ipc.localhost; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'";
+
+    fn text_of(assets: &dyn tauri::Assets<tauri::Wry>, name: &str) -> String {
+        let key: tauri::utils::assets::AssetKey = name.into();
+        String::from_utf8(assets.get(&key).unwrap_or_else(|| panic!("{name} is not embedded")).into_owned()).unwrap()
+    }
+
+    #[test]
+    fn the_launcher_csp_is_compiled_in_exactly_as_configured() {
+        let ctx = context();
+        match &ctx.config().app.security.csp {
+            Some(tauri::utils::config::Csp::Policy(p)) => assert_eq!(p, EXPECTED_CSP),
+            other => panic!("app.security.csp must be the policy string, got {other:?}"),
+        }
+        // dev builds must not run under a different (looser) policy
+        assert!(ctx.config().app.security.dev_csp.is_none(), "no separate devCsp");
+        for forbidden in ["'unsafe-inline'", "'unsafe-eval'", "'wasm-unsafe-eval'", "*", "blob:", "filesystem:", "http:", "https:", "ws:", "wss:", "'strict-dynamic'"] {
+            assert!(!EXPECTED_CSP.split_whitespace().any(|t| t.trim_end_matches(';') == forbidden), "{forbidden}");
+        }
+        for must in ["default-src 'none'", "script-src 'self'", "style-src 'self'", "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'"] {
+            assert!(EXPECTED_CSP.contains(must), "{must}");
+        }
+    }
+
+    #[test]
+    fn the_other_security_options_are_left_at_their_strict_defaults() {
+        let ctx = context();
+        let sec = &ctx.config().app.security;
+        assert!(matches!(sec.dangerous_disable_asset_csp_modification, tauri::utils::config::DisabledCspModificationKind::Flag(false)));
+        assert!(!sec.asset_protocol.enable, "the asset protocol (file access from the page) stays off");
+        assert!(matches!(sec.pattern, tauri::utils::config::PatternKind::Brownfield));
+        assert!(sec.headers.as_ref().is_some_and(|h| h.x_content_type_options.is_some()));
+    }
+
+    /// The page's scripts are external files served from the app origin (script-src 'self'); there is no
+    /// inline script, inline style, inline handler or script URL for Tauri to hash or for a CSP to need.
+    #[test]
+    fn the_embedded_page_has_only_external_scripts_and_styles_and_nothing_else_ships() {
+        let ctx = context();
+        let mut names: Vec<String> = ctx.assets.iter().map(|(k, _)| k.to_string()).collect();
+        names.sort();
+        assert_eq!(names, ["/app.css", "/app.js", "/index.html"], "the webview may only be able to load these files");
+
+        let html = text_of(&*ctx.assets, "/index.html");
+        assert!(html.contains("<script src=\"app.js\" defer=\"\"></script>"), "{html}");
+        assert!(html.contains("<link rel=\"stylesheet\" href=\"app.css\">"), "{html}");
+        assert_eq!(html.matches("<script").count(), 1, "exactly one script element");
+        assert!(!html.contains("<style"), "no inline <style>");
+        assert!(!html.contains(" style="), "no style attributes");
+        assert!(!html.contains("javascript:") && !html.contains("<iframe") && !html.contains("<form") && !html.contains("<object") && !html.contains("<embed"));
+        assert!(!html.contains("<a "), "the page has no links: nothing that could navigate the webview");
+        let handlers = regex_free_on_attributes(&html);
+        assert!(handlers.is_empty(), "inline event handlers: {handlers:?}");
+        // Tauri adds a 'sha256-...' source to script-src for every .js file it embeds (the only hash source it
+        // can add here, since there is no inline script body); it must be exactly the hash of app.js.
+        let hashes: Vec<String> = ctx.assets.csp_hashes(&"/index.html".into()).map(|h| format!("{h:?}")).collect();
+        let source = format!("'sha256-{}'", b64(&Sha256::digest(text_of(&*ctx.assets, "/app.js").as_bytes())));
+        let want = format!("{:?}", tauri::utils::assets::CspHash::Script(&source));
+        assert_eq!(hashes, [want], "only the hash of app.js is expected on the document");
+
+        let js = text_of(&*ctx.assets, "/app.js");
+        for banned in ["eval(", "new Function", "innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "javascript:", "setTimeout(\"", "setInterval(\"", "http://", "https://", "fetch(", "XMLHttpRequest", "WebSocket", "window.open", "location.", "localStorage", "sessionStorage", "import("] {
+            assert!(!js.contains(banned), "app.js must not contain {banned}");
+        }
+        let css = text_of(&*ctx.assets, "/app.css");
+        assert!(!css.contains("@import") && !css.contains("url("), "app.css must not load anything");
+    }
+
+    fn b64(bytes: &[u8]) -> String {
+        const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut s = String::new();
+        for c in bytes.chunks(3) {
+            let n = (u32::from(c[0]) << 16) | (u32::from(*c.get(1).unwrap_or(&0)) << 8) | u32::from(*c.get(2).unwrap_or(&0));
+            for i in 0..4 {
+                if i <= c.len() { s.push(A[((n >> (18 - 6 * i)) & 63) as usize] as char) } else { s.push('=') }
+            }
+        }
+        s
+    }
+
+    /// `on<event>=` attributes in tag text (a CSP would block them; the page must not rely on any).
+    fn regex_free_on_attributes(html: &str) -> Vec<String> {
+        html.split(|c: char| c.is_whitespace() || c == '<')
+            .filter(|w| w.len() > 3 && w.starts_with("on") && w.contains('=') && w[2..].chars().take_while(|c| *c != '=').all(|c| c.is_ascii_lowercase()))
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Windows title and page title carry the product name of R0-prime (packaging/identity.json); the old
+    /// "ReDevOps" heading is gone and the page shows no logo.
+    #[test]
+    fn the_window_and_the_page_are_named_agentic_apps_r0_prime_and_carry_no_logo() {
+        let ctx = context();
+        let w = &ctx.config().app.windows[0];
+        assert_eq!(w.title, "Agentic Apps R0-prime");
+        assert_eq!(w.label, "main");
+        let html = text_of(&*ctx.assets, "/index.html");
+        assert!(html.contains("<title>Agentic Apps R0-prime</title>"));
+        assert!(html.contains("<h1>Agentic Apps R0-prime</h1>"));
+        assert!(!html.contains("ReDevOps"), "the old heading must be gone");
+        assert!(html.contains("Private candidate, release line r0-prime."));
+        assert!(!html.contains("<img") && !html.contains("<svg") && !html.contains("icon.") && !html.contains(".png") && !html.contains(".icns"));
+        assert!(html.contains("<link rel=\"icon\" href=\"data:,\">"), "an empty data: favicon so no icon request is made");
     }
 }
