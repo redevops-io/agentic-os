@@ -2,7 +2,7 @@
 """Stage the Licenses folder that every artifact carries.
 
 Reads the four product licence files from the repository root and the generated third-party files
-(THIRD_PARTY_NOTICES.txt, NOTICES_MISSING.md/.json from generate_notices.py) and writes them, plus a
+(THIRD_PARTY_NOTICES.txt, NOTICES_MISSING.md/.json from generate_notices.py, about.json from generate_about.py) and writes them, plus a
 sha256 manifest, into --dest (default: deploy/launcher/src-tauri/licenses, which tauri.conf.json bundles as
 Licenses/). Fails if anything is missing: an artifact without its licence files must not build.
 Standard library only.
@@ -18,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PRODUCT_FILES = ("LICENSE", "LICENSE-COMMONS-CLAUSE", "LICENSE.md", "LICENSING.md")
-GENERATED_FILES = ("THIRD_PARTY_NOTICES.txt", "NOTICES_MISSING.md", "NOTICES_MISSING.json")
+GENERATED_FILES = ("THIRD_PARTY_NOTICES.txt", "NOTICES_MISSING.md", "NOTICES_MISSING.json", "about.json")   # about.json: generate_about.py (copied when present)
 MANIFEST = "LICENSES-MANIFEST.json"
 REQUIRED = PRODUCT_FILES + ("THIRD_PARTY_NOTICES.txt", "NOTICES_MISSING.md")
 
