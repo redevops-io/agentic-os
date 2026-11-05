@@ -495,3 +495,14 @@ def test_the_page_has_no_console_errors_or_csp_violations_while_walking_the_view
     t.open_mission()
     assert t.page.evaluate("() => window.__csp") == []
     assert t.console_errors == [] and t.failed == []
+
+
+def test_rail_buttons_and_the_about_link_keep_their_names_when_the_rail_collapses(make_tab):
+    t = make_tab("narrow")
+    p = t.page
+    for v in VIEWS:
+        assert p.get_by_role("button", name=v, exact=True).count() == 1, v       # glyph is hidden, the label is the name
+    link = p.get_by_role("link", name="About and licences")
+    assert link.get_attribute("href") == "./about/" and link.is_visible()
+    box = link.bounding_box()
+    assert box["width"] >= 24 and box["height"] >= 24                           # WCAG 2.2 target size
