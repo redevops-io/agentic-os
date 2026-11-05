@@ -259,7 +259,8 @@ def test_the_six_buttons_call_the_stub_and_show_the_status_text(browser, served)
         page.click("#" + bid)
         if bid == "docker-purge":
             assert _calls(page) == [], "the first click only arms the button"
-            page.click("#" + bid)                                            # the second click confirms
+            _purge_ready(page)
+            page.click("#" + bid)                                            # the second, deliberate click confirms
         _wait(page, "(t) => document.getElementById('out').textContent.includes(t)", text)
         assert _calls(page) == commands, (bid, _calls(page))
     assert _viol(page) == [] and problems == []
@@ -281,17 +282,29 @@ def _purge_runs(page):
     return [n for n in _calls(page) if n == "advanced_docker_purge"]
 
 
+WAIT_LABEL = "Armed: confirm available in a moment"
+READY_LABEL = "Click again to confirm: remove container data"
+
+
+def _purge_ready(page):
+    """Wait (real time, at most 3 s) until the armed button accepts the confirming activation."""
+    _wait(page, "() => document.getElementById('docker-purge').textContent.startsWith('Click again')", timeout=3.0)
+    assert page.get_attribute("#docker-purge", "aria-disabled") in (None, "false")
+
+
 def test_one_click_on_remove_container_data_never_runs_it_it_arms_with_visible_text_and_a_live_message(browser, served):
     ctx, page, problems = _purge_page(browser, served)
     page.click("#docker-purge")
-    page.wait_for_timeout(300)
+    page.wait_for_timeout(200)
     assert _purge_runs(page) == []
-    assert page.locator("#docker-purge").inner_text() == "Click again to confirm: remove container data"
+    assert page.locator("#docker-purge").inner_text() == WAIT_LABEL and page.get_attribute("#docker-purge", "aria-disabled") == "true"
     assert "armed" in page.get_attribute("#docker-purge", "class")
     msg = page.locator("#purge-msg")
     assert "Not removed yet" in msg.inner_text() and msg.get_attribute("role") == "status" and msg.get_attribute("aria-live") == "polite"
     assert page.evaluate("window.__dialogs") == [], "no native dialog is used"
-    page.click("#docker-purge")                                              # the confirming click
+    _purge_ready(page)
+    assert page.locator("#docker-purge").inner_text() == READY_LABEL and "Not removed yet" in msg.inner_text() and "armed" in page.get_attribute("#docker-purge", "class")
+    page.click("#docker-purge")                                              # the confirming click, after the delay
     _wait(page, "() => document.getElementById('out').textContent.includes('containers purged')")
     assert _purge_runs(page) == ["advanced_docker_purge"]
     assert page.locator("#docker-purge").inner_text() == "Remove container data" and "armed" not in page.get_attribute("#docker-purge", "class")
@@ -308,7 +321,9 @@ def test_the_purge_is_operable_from_the_keyboard_and_focus_stays_on_the_button(b
     page.focus("#docker-purge")
     page.keyboard.press("Enter")
     assert page.evaluate("document.activeElement.id") == "docker-purge" and _purge_runs(page) == []
-    assert "Click again" in page.locator("#docker-purge").inner_text()
+    assert page.locator("#docker-purge").inner_text() == WAIT_LABEL
+    _purge_ready(page)
+    assert page.evaluate("document.activeElement.id") == "docker-purge", "the control keeps keyboard focus while it waits"
     page.keyboard.press("Space")                                              # the confirming activation
     _wait(page, "() => document.getElementById('out').textContent.includes('containers purged')")
     assert _purge_runs(page) == ["advanced_docker_purge"] and page.evaluate("document.activeElement.id") == "docker-purge"
@@ -322,7 +337,7 @@ def test_an_armed_purge_disarms_and_nothing_runs(browser, served, how):
         page.clock.install()
     page.focus("#docker-purge")
     page.keyboard.press("Enter")
-    assert "Click again" in page.locator("#docker-purge").inner_text()
+    assert page.locator("#docker-purge").inner_text() in (WAIT_LABEL, READY_LABEL)
     if how == "escape":
         page.keyboard.press("Escape")
     elif how == "blur":
@@ -602,6 +617,132 @@ def test_an_old_or_unknown_slot_state_is_never_shown_as_legal_text(browser, serv
     ctx.close()
 
 
+# ------------------------------------------------------------- F-1: the confirming activation is ignored for ~800 ms after arming
+def _click_count(page, n, gap_ms=0):
+    for _ in range(n):
+        page.click("#docker-purge")
+        if gap_ms:
+            page.wait_for_timeout(gap_ms)
+
+
+def test_a_double_click_does_not_run_the_purge_and_leaves_it_armed(browser, served):
+    ctx, page, problems = _purge_page(browser, served)
+    page.dblclick("#docker-purge")
+    page.wait_for_timeout(150)
+    assert _purge_runs(page) == [], "a double-click must not run the purge"
+    assert page.locator("#docker-purge").inner_text() == WAIT_LABEL and "armed" in page.get_attribute("#docker-purge", "class")
+    assert "Not removed yet" in page.locator("#purge-msg").inner_text()
+    _purge_ready(page)
+    page.wait_for_timeout(100)
+    assert _purge_runs(page) == [], "the ignored clicks did not become a confirmation later"
+    page.click("#docker-purge")                                              # a deliberate click after the delay
+    _wait(page, "() => document.getElementById('out').textContent.includes('containers purged')")
+    assert _purge_runs(page) == ["advanced_docker_purge"]
+    assert _viol(page) == [] and problems == []
+    ctx.close()
+
+
+def test_several_quick_clicks_never_run_the_purge_inside_the_delay(browser, served):
+    ctx, page, problems = _purge_page(browser, served)
+    page.evaluate("document.getElementById('docker-purge').click(); document.getElementById('docker-purge').click(); document.getElementById('docker-purge').click();")
+    page.wait_for_timeout(100)
+    assert _purge_runs(page) == []
+    ctx.close()
+
+
+def test_two_quick_enter_presses_do_not_run_the_purge(browser, served):
+    ctx, page, problems = _purge_page(browser, served)
+    page.focus("#docker-purge")
+    page.keyboard.press("Enter")
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(150)
+    assert _purge_runs(page) == [] and page.evaluate("document.activeElement.id") == "docker-purge"
+    assert page.locator("#docker-purge").inner_text() == WAIT_LABEL
+    page.keyboard.press("Space")
+    page.wait_for_timeout(100)
+    assert _purge_runs(page) == [], "Space inside the delay is ignored as well"
+    _purge_ready(page)
+    page.keyboard.press("Enter")                                              # a deliberate Enter after the delay still works
+    _wait(page, "() => document.getElementById('out').textContent.includes('containers purged')")
+    assert _purge_runs(page) == ["advanced_docker_purge"]
+    ctx.close()
+
+
+def test_a_held_down_enter_key_does_not_confirm_when_the_delay_has_passed(browser, served):
+    ctx, page, problems = _purge_page(browser, served)
+    page.focus("#docker-purge")
+    page.keyboard.down("Enter")                                               # arms
+    for _ in range(40):                                                       # auto-repeat for ~1.2 s, i.e. past the delay
+        page.keyboard.down("Enter")
+        page.wait_for_timeout(30)
+    page.keyboard.up("Enter")
+    page.wait_for_timeout(100)
+    assert _purge_runs(page) == [], "key auto-repeat must not confirm"
+    assert page.locator("#docker-purge").inner_text() == READY_LABEL and "armed" in page.get_attribute("#docker-purge", "class")
+    page.keyboard.press("Enter")                                              # a fresh, deliberate press does
+    _wait(page, "() => document.getElementById('out').textContent.includes('containers purged')")
+    assert _purge_runs(page) == ["advanced_docker_purge"]
+    ctx.close()
+
+
+def test_the_delay_is_about_800_ms_and_the_waiting_state_is_announced_and_accessible(browser, served):
+    ctx, page, problems = _purge_page(browser, served)
+    page.click("#docker-purge")
+    t0 = page.evaluate("performance.now()")
+    btn = page.locator("#docker-purge")
+    assert btn.get_attribute("aria-disabled") == "true" and btn.get_attribute("disabled") is None, "aria-disabled, never the disabled attribute (focus would be lost)"
+    assert "available in a moment" in page.locator("#purge-msg").inner_text() and "Not removed yet" in page.locator("#purge-msg").inner_text()
+    _purge_ready(page)
+    elapsed = page.evaluate("performance.now()") - t0
+    assert 650 <= elapsed <= 1500, elapsed
+    assert btn.get_attribute("disabled") is None and "Not removed yet" in page.locator("#purge-msg").inner_text()
+    ctx.close()
+
+
+def test_an_early_click_does_not_disarm_and_escape_still_disarms_inside_the_delay(browser, served):
+    ctx, page, problems = _purge_page(browser, served)
+    page.click("#docker-purge")
+    page.click("#docker-purge")                                              # ignored, stays armed
+    assert page.locator("#docker-purge").inner_text() == WAIT_LABEL
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(100)
+    assert page.locator("#docker-purge").inner_text() == "Remove container data" and page.get_attribute("#docker-purge", "aria-disabled") in (None, "false")
+    assert "Cancelled. Nothing was removed." in page.locator("#purge-msg").inner_text()
+    page.wait_for_timeout(1000)                                              # the cancelled delay timer must not re-enable anything
+    assert page.locator("#docker-purge").inner_text() == "Remove container data" and _purge_runs(page) == []
+    page.click("#docker-purge")                                              # re-arming starts a new delay
+    page.click("#docker-purge")
+    page.wait_for_timeout(100)
+    assert _purge_runs(page) == []
+    ctx.close()
+
+
+def test_blur_and_another_click_still_disarm_inside_the_delay(browser, served):
+    ctx, page, problems = _purge_page(browser, served)
+    page.click("#docker-purge")
+    page.click("#docker-down")
+    assert page.locator("#docker-purge").inner_text() == "Remove container data"
+    page.click("#docker-purge")
+    page.keyboard.press("Tab")
+    assert page.locator("#docker-purge").inner_text() == "Remove container data"
+    page.wait_for_timeout(1000)
+    assert _purge_runs(page) == []
+    ctx.close()
+
+
+def test_the_timeout_after_arming_is_still_eight_seconds(browser, served):
+    ctx, page, problems = _purge_page(browser, served)
+    page.clock.install()
+    page.click("#docker-purge")
+    page.clock.fast_forward(900)
+    assert page.locator("#docker-purge").inner_text() == READY_LABEL
+    page.clock.fast_forward(7000)
+    assert page.locator("#docker-purge").inner_text() == READY_LABEL, "still armed at ~7.9 s"
+    page.clock.fast_forward(300)
+    assert page.locator("#docker-purge").inner_text() == "Remove container data" and _purge_runs(page) == []
+    ctx.close()
+
+
 # --------------------------------------------------------------------------------------------- axe
 AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa", "best-practice"]
 
@@ -615,7 +756,7 @@ def _axe_source() -> str:
 
 @pytest.mark.parametrize("viewport", [(560, 640), (320, 640)], ids=["560x640", "narrow-320"])
 @pytest.mark.parametrize("scheme", ["light", "dark"])
-@pytest.mark.parametrize("state", ["main", "main-armed", "about", "about-viewer", "about-error", "about-states"])
+@pytest.mark.parametrize("state", ["main", "main-armed-waiting", "main-armed", "about", "about-viewer", "about-error", "about-states"])
 def test_axe_has_no_violation_in_the_launcher_page(browser, viewport, scheme, state):
     axe_src = _axe_source()
     a = _Server(UI, {"Content-Security-Policy": CSP, "X-Content-Type-Options": NOSNIFF})
@@ -623,9 +764,11 @@ def test_axe_has_no_violation_in_the_launcher_page(browser, viewport, scheme, st
         mode = "missing" if state == "about-error" else "ok"
         ctx, page, problems, _ = _open(browser, (a, a), _stub(mode, record_override=_all_states if state == "about-states" else None), viewport=viewport, scheme=scheme)
         _wait(page, "() => !document.getElementById('advanced').hidden")
-        if state == "main-armed":
+        if state in ("main-armed", "main-armed-waiting"):
             page.click("#docker-purge")
-            assert "Click again" in page.locator("#docker-purge").inner_text()
+            assert page.locator("#docker-purge").inner_text() == WAIT_LABEL
+            if state == "main-armed":
+                _purge_ready(page)
         elif state != "main":
             page.click("#open-about")
             page.wait_for_selector("#about-error:not([hidden])" if state == "about-error" else "#about-body h3")
