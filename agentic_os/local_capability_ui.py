@@ -27,7 +27,7 @@ def inject_shim_tag(html: str, base_path: str = "") -> str:
 
 
 def install_ui_bootstrap(app: Any, ui_dir: Any, base_path: str = "") -> frozenset:
-    """Register ``/``, ``/index.html`` (shim injected) and the shim route ahead of the static mount.
+    """Register ``/``, ``/index.html`` (shim injected), the shim route and the ``/about/`` pages ahead of the static mount.
     Returns the exact set of public (unauthenticated GET) paths."""
     from fastapi.responses import HTMLResponse, Response
     ui = Path(ui_dir)
@@ -43,4 +43,7 @@ def install_ui_bootstrap(app: Any, ui_dir: Any, base_path: str = "") -> frozense
     app.add_api_route("/", _index, methods=["GET"], include_in_schema=False)
     app.add_api_route("/index.html", _index, methods=["GET"], include_in_schema=False)
     app.add_api_route(SHIM_URL_PATH, _shim, methods=["GET"], include_in_schema=False)
-    return public_ui_paths(ui, extra=("/", "/index.html", SHIM_URL_PATH))
+    # The About and licences pages (about_ui.py): exact paths, static, public, read-only; they join the public set below.
+    from .about_ui import install_about
+    about_paths = install_about(app, base_path)
+    return public_ui_paths(ui, extra=("/", "/index.html", SHIM_URL_PATH, *about_paths))
