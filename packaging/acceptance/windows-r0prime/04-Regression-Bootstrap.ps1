@@ -66,6 +66,10 @@ function Invoke-BootstrapViaCmd {
 
 function Test-BootstrapResult {
   param($R, [string]$Id, [string]$Label)
+  # An EMPTY stderr file (the good case) came back from `$(if ... { ReadAllBytes })` as $null (PowerShell unrolls an empty array), and
+  # [Text.Encoding]::GetString($null) threw 'Array cannot be null' (BST-99, Windows Server 2022, 2026-11-05).
+  if ($null -eq $R.Err) { $R.Err = New-Object byte[] 0 }
+  if ($null -eq $R.Out) { $R.Out = New-Object byte[] 0 }
   $errText = [Text.Encoding]::UTF8.GetString([byte[]]$R.Err)
   $outLatin = [Text.Encoding]::GetEncoding(28591).GetString([byte[]]$R.Out)   # byte-transparent view for pattern checks
   $crash = ($errText -match 'UnicodeEncodeError|Traceback|PYI-\d+') 

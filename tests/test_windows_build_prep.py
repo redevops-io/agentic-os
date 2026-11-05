@@ -612,3 +612,10 @@ def test_acceptance_kit_step_04_restores_its_sidecarexe_parameter_after_common_a
     assert "$SidecarExe" not in code4.replace("$script:SidecarExe", "")
     s2 = (k / "02-Verify-Installed.ps1").read_text(encoding="utf-8")
     assert "$key -eq 'UNINSTALL' -and $arch -eq 'x86'" in s2
+
+
+def test_acceptance_kit_step_04_tolerates_an_empty_stderr_file():
+    """The success case has an EMPTY stderr; ReadAllBytes of it came back as $null through $(if ...) and GetString($null) threw (BST-99)."""
+    s = (PK / "acceptance/windows-r0prime/04-Regression-Bootstrap.ps1").read_text(encoding="utf-8")
+    i = s.index("function Test-BootstrapResult")
+    assert "if ($null -eq $R.Err) { $R.Err = New-Object byte[] 0 }" in s[i : i + 600]
