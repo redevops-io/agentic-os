@@ -534,6 +534,12 @@ mod tests {
         assert_eq!(icon.rgba()[3], 0, "top-left pixel is transparent (rounded corner)");
         let centre = (16 * 32 + 16) * 4;
         assert_eq!(icon.rgba()[centre + 3], 255);
+        // development builds on macOS also embed the first `.icns` (the Dock icon of an unbundled run): its size is the new file's
+        let icns_len = std::fs::metadata(concat!(env!("CARGO_MANIFEST_DIR"), "/icons/icon.icns")).unwrap().len();
+        let dump = format!("{ctx:?}");
+        if cfg!(target_os = "macos") && dump.contains("app_icon: Some(") {
+            assert!(dump.contains(&format!("app_icon: Some([u8; {icns_len}])")), "the embedded .icns is not icons/icon.icns");
+        }
     }
 
     /// Windows title and page title carry the product name of R0-prime (packaging/identity.json); the old
