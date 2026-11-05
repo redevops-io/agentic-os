@@ -25,14 +25,14 @@ B.op(op="reload", page=0); rel = B.ev(0, "fetch('/api/projects').then(r=>r.statu
 R.add("B-10b", "reload of the same tab keeps the session (sessionStorage): API 200, no banner", rel == 200 and txt == "", "OBSERVED-BROWSER", f"api={rel}")
 B.op(op="newpage"); r = B.op(op="goto", page=1, url=f"http://127.0.0.1:{pA}/", settle=1500)
 api_new = B.ev(1, "fetch('/api/projects').then(r=>r.status)"); txt_new, w_new = B.banner(1)
-R.add("B-10c", "SECOND TAB / bookmark / typed URL (no code, empty sessionStorage): API 401 and the page shows the banner 'Not signed in ... Open the app from its launcher'", api_new == 401 and "Not signed in" in txt_new and "launcher" in txt_new, "OBSERVED-BROWSER", txt_new[:140].replace("\n", " | "))
+R.add("B-10c", "SECOND TAB / bookmark / typed URL (no code, empty sessionStorage): API 401 and the page shows the sign-in panel ('Not signed in ... press \"Start & open\"', role=alert, U-02)", api_new == 401 and "Not signed in" in txt_new and 'press "Start & open"' in txt_new, "OBSERVED-BROWSER", txt_new[:140].replace("\n", " | "))
 r = B.op(op="goto", page=1, url=f"http://127.0.0.1:{pA}/api/projects"); R.add("B-10d", "direct address-bar navigation to /api/projects -> 401 JSON, no data", r.get("status") == 401, "OBSERVED-BROWSER", str(r.get("status")))
 r = B.op(op="goto", page=1, url=f"http://127.0.0.1:{pA}/docs"); R.add("B-10e", "address-bar /docs -> 401 (documented limitation)", r.get("status") == 401, "OBSERVED-BROWSER", str(r.get("status")))
 B.op(op="closectx")
 B.op(op="launch", profile=prof)  # browser restart, same profile, tabs NOT restored by the harness (cookies/localStorage persist)
 r = B.op(op="goto", page=0, url=f"http://127.0.0.1:{pA}/", settle=1500); txt, w_r = B.banner(0)
 api_r = B.ev(0, "fetch('/api/projects').then(r=>r.status)")
-R.add("B-10f", "browser restarted, tab reopened WITHOUT its sessionStorage: 401 + banner (what a restored tab shows when the browser does not restore storage)", api_r == 401 and "Not signed in" in txt, "OBSERVED-BROWSER", txt[:100].replace("\n", " | "))
+R.add("B-10f", "browser restarted, tab reopened WITHOUT its sessionStorage: 401 + sign-in panel (what a restored tab shows when the browser does not restore storage)", api_r == 401 and "Not signed in" in txt and 'press "Start & open"' in txt, "OBSERVED-BROWSER", txt[:100].replace("\n", " | "))
 # restored tab WITH sessionStorage restored (Chrome/Firefox do restore it): emulate by seeding the same key BEFORE the page scripts run
 B.op(op="newpage")
 r = B.op(op="goto", page=1, url=f"http://127.0.0.1:{pA}/robots-not-there", wait="commit")  # same origin, to be allowed to set storage

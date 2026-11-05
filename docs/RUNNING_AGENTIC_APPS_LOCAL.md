@@ -5,7 +5,7 @@ see when a page opens but shows no data, and how to fix it in a few seconds. Tec
 
 ## What you see
 
-* The page opens, but there is a red bar at the top: **"Not signed in to the local Agentic Apps service"**, and no project data.
+* The page shows a short panel titled **"Sign in from the Agentic Apps R0-prime window"** that says **"Not signed in to the local Agentic Apps service"**, and no project data.
 * Or a tool or a script that talks to the service gets **401** (the web word for "you are not signed in").
 
 Nothing is broken and no data was lost. The service only talks to a browser tab that it signed in itself.
@@ -29,11 +29,11 @@ makes that link for you when you press **Start & open**. The sign-in lives only 
 
 | What you did | What happens | What to do |
 |---|---|---|
-| Opened a **bookmark** of the app address | red bar, or the page cannot be reached (the port changes every time the launcher starts) | press **Start & open**; do not bookmark |
-| Reopened a tab after restarting the browser | red bar | close it, press **Start & open** |
-| **Typed or pasted** the address from the launcher window | red bar | use **Start & open** instead |
-| Opened a **second tab** by hand | the second tab shows the red bar; the first still works | press **Start & open** again for each extra tab |
-| Used the one-time address a second time, or after it expired | red bar | get a fresh one (**Start & open**, or restart `serve`) |
+| Opened a **bookmark** of the app address | the sign-in panel, or the page cannot be reached (the port changes every time the launcher starts) | press **Start & open**; do not bookmark |
+| Reopened a tab after restarting the browser | the sign-in panel | close it, press **Start & open** |
+| **Typed or pasted** the address from the launcher window | the sign-in panel | use **Start & open** instead |
+| Opened a **second tab** by hand | the second tab shows the sign-in panel; the first still works | press **Start & open** again for each extra tab |
+| Used the one-time address a second time, or after it expired | the sign-in panel | get a fresh one (**Start & open**, or restart `serve`) |
 | Started the service in a **container** | the one-time address is in the container log; a different published port gives a "not allowed" answer | read the address from the log; map the same port, or ask the person who runs it to list the address you use |
 | Signed in to an app with a **provider's "connect" page** that redirects back to Agentic Apps | the provider's last page shows an error instead of "Connected" | not supported in R0-prime; use a connection that takes a key or token you enter in the app |
 | Opened **/docs** or **/redoc** in the address bar | an error or a blank page | these pages are not available in the browser in R0-prime |
