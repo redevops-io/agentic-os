@@ -366,7 +366,7 @@ class SampleProjectionProvider:
         for a in apps:  # reflect the live connection set
             if a["provider"] in self.connected:
                 if a["state"] == "NOT_CONNECTED":
-                    a.update(state="VERIFIED_READ", health="ok", verified="Verified just now")
+                    a.update(state="VERIFIED_READ", health="ok", verified="Verified just now (sample)")
             else:
                 a.update(state="NOT_CONNECTED", health="mut")
         # A deployment can offer only a subset of apps via $PROJECTS_APPS; unset = all.
@@ -422,13 +422,13 @@ def _app(provider: str, display_name: str, used_for: str, state: str, health: st
 def _sample_apps() -> List[dict]:
     return [
         _app("whatsapp_business", "WhatsApp Business", "Receive customer messages and reply.",
-             "MISSION_READY", "warn", ["chat.message.send"], verified="Verified 2 days ago"),
+             "MISSION_READY", "warn", ["chat.message.send"], verified="Verified 2 days ago (sample)"),
         _app("hubspot", "HubSpot", "Find the customer and record the conversation.",
-             "MISSION_READY", "ok", ["crm.contact.upsert", "crm.note.create"], verified="Verified 11 min ago"),
+             "MISSION_READY", "ok", ["crm.contact.upsert", "crm.note.create"], verified="Verified 11 min ago (sample)"),
         _app("slack", "Slack", "Notifications, approvals, replies in threads.",
-             "MISSION_READY", "ok", ["chat.message.send", "approval.request", "chat.message.read"], verified="Verified 3 min ago"),
+             "MISSION_READY", "ok", ["chat.message.send", "approval.request", "chat.message.read"], verified="Verified 3 min ago (sample)"),
         _app("stripe", "Stripe", "Find charges and execute approved refunds.",
-             "MISSION_READY", "ok", ["billing.charge.find", "billing.refund.execute"], verified="Verified 5 min ago"),
+             "MISSION_READY", "ok", ["billing.charge.find", "billing.refund.execute"], verified="Verified 5 min ago (sample)"),
         _app("gmail", "Gmail", "Send email confirmations (optional).",
              "NOT_CONNECTED", "mut", ["email.message.send"]),
         _app("ayrshare", "Ayrshare", "Publish content to many venues in one call.",
@@ -457,8 +457,8 @@ def _sample_sources() -> List[dict]:
                 "391 indexed", {"discovered": 428, "indexed": 391, "skipped": 37},
                 allowed_content_types=["pdf", "docx", "markdown"], last="2 min ago", fp="a1b2c3"),
         _source("crm", "CRM database", "database", "postgres · localhost/customer_ops", "healthy",
-                "Live connection", {"schemas": 2, "tables": 42}, provider="postgres",
-                allowed_schemas=["public", "support"], denied=["billing.card_data", "hr.*"], last="live"),
+                "Sample connection", {"schemas": 2, "tables": 42}, provider="postgres",
+                allowed_schemas=["public", "support"], denied=["billing.card_data", "hr.*"], last="sample"),
         _source("gdrive", "Google Drive", "cloud_files", "Drive · Policies", "healthy",
                 "Synced 4 min ago", {"files": 1842, "indexed": 1842}, provider="google_drive", last="4 min ago"),
         _source("s3", "Support archive", "cloud_files", "s3://support-archive", "stale",
