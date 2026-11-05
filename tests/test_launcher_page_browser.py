@@ -369,7 +369,12 @@ def test_about_legal_works_from_the_keyboard_and_shows_the_record_as_text(browse
     low = (body + page.locator("#about-private-note").inner_text()).lower()
     for word in ("cleared", "compliant", "approved by counsel", "certified", "open source", "tamper-proof"):
         assert word not in low, word
-    assert "Private candidate." in page.locator("#about-private-note").inner_text()
+    note = page.locator("#about-private-note").inner_text()
+    assert note.startswith("Private candidate.") and "state of each legal slot" in note and "placeholder" not in note.lower()
+    # every slot shows its own state tag and its accessible name includes the state
+    assert page.locator(".slot .slot-tag").count() == 5
+    assert page.locator(".slot.pending").count() == 5
+    assert page.get_attribute(".slot >> nth=0", "aria-label") == "LEGAL.COPYRIGHT_LINE: Pending a decision"
     # the licence file list and the notices component list
     assert page.locator("ul[aria-label='Licence files'] li").count() == 5
     assert page.locator("ul[aria-label='Third-party components'] li").count() == 5          # 4 components + 1 reference notice
@@ -435,7 +440,7 @@ def test_record_values_are_rendered_as_text_never_as_markup(browser, served):
 
     def tamper(rec):
         rec["product"]["name"] = evil
-        rec["legal"]["slots"]["LEGAL.COPYRIGHT_LINE"] = {"state": "placeholder", "text": evil}
+        rec["legal"]["slots"]["LEGAL.COPYRIGHT_LINE"] = {"state": "pending", "tag": "Pending a decision", "text": evil}
         rec["legal"]["slots"]["LEGAL.NO_WARRANTY"]["text"] = evil + "2"
         rec["notices"]["components"][0]["name"] = evil
         rec["source_access"] = {"state": "offer-recorded", "location": "javascript:window.__pwn=6", "commit": evil}
@@ -467,6 +472,55 @@ def test_a_slot_with_text_in_the_record_is_shown_verbatim_and_an_unknown_state_f
     ctx.close()
 
 
+def _all_states(rec):
+    mod_ok, draft = "Approved fixture text.", "Draft fixture text."
+    prefix = "Unverified draft, not an approved text. This is a private candidate; nothing here is a legal statement or clearance.\n\n"
+    s = rec["legal"]["slots"]
+    s["LEGAL.COPYRIGHT_LINE"].update(state="approved-verified", tag="Approved text, signature verified", pending=[], text=mod_ok,
+                                      text_sha256=hashlib.sha256(mod_ok.encode()).hexdigest())
+    s["LEGAL.NO_WARRANTY"].update(state="unverified-draft", tag="Unverified draft, not an approved text", pending=[], text=prefix + draft,
+                                   text_sha256=hashlib.sha256(draft.encode()).hexdigest())
+    s["LEGAL.SECTION13_NOTICE"].update(state="not-applicable", tag="", pending=[], text="")
+
+
+def test_slot_states_have_a_visible_text_tag_a_distinct_style_and_an_accessible_name(browser, served):
+    ctx, page, problems, _ = _open(browser, served, _stub(record_override=_all_states))
+    page.click("#open-about")
+    page.wait_for_selector("#about-body h3")
+    assert page.locator(".slot").count() == 4                                    # the not-applicable slot is hidden
+    assert "LEGAL.SECTION13_NOTICE" not in page.locator("#about-body").inner_text()
+    ok = page.locator(".slot.approved-verified")
+    dr = page.locator(".slot.unverified-draft")
+    pe = page.locator(".slot.pending")
+    assert ok.count() == 1 and dr.count() == 1 and pe.count() == 2
+    assert ok.locator(".slot-tag").inner_text() == "Approved text, signature verified"
+    assert dr.locator(".slot-tag").inner_text() == "Unverified draft, not an approved text"
+    assert ok.get_attribute("aria-label") == "LEGAL.COPYRIGHT_LINE: Approved text, signature verified"
+    assert dr.get_attribute("aria-label") == "LEGAL.NO_WARRANTY: Unverified draft, not an approved text"
+    # the draft's own text carries its label first (inside the record text), verbatim
+    assert dr.locator(".slot-text").inner_text().startswith("Unverified draft, not an approved text. This is a private candidate;")
+    assert "Draft fixture text." in dr.locator(".slot-text").inner_text()
+    # distinct by more than colour: different border style/width, and only the approved one is solid
+    style = lambda loc: loc.evaluate("e => { const c = getComputedStyle(e); return [c.borderTopStyle, c.borderTopWidth] }")
+    assert style(ok) == ["solid", "2px"] and style(dr) == ["dashed", "3px"] and style(pe.first) == ["dashed", "2px"]
+    assert _viol(page) == [] and problems == []
+    ctx.close()
+
+
+def test_an_old_or_unknown_slot_state_is_never_shown_as_legal_text(browser, served):
+    def old(rec):
+        rec["legal"]["slots"]["LEGAL.COPYRIGHT_LINE"] = {"state": "filled", "text": "SHOULD NOT SHOW AS LEGAL TEXT"}
+        rec["legal"]["slots"]["LEGAL.NO_WARRANTY"] = {"state": "placeholder", "text": "ALSO NOT"}
+
+    ctx, page, problems, _ = _open(browser, served, _stub(record_override=old))
+    page.click("#open-about")
+    page.wait_for_selector("#about-body h3")
+    body = page.locator("#about-body").inner_text()
+    assert "SHOULD NOT SHOW" not in body and "ALSO NOT" not in body
+    assert body.count("[LEGAL TEXT NOT AVAILABLE IN THIS VIEW]") == 2 and body.count("State not recognised") == 2
+    ctx.close()
+
+
 # --------------------------------------------------------------------------------------------- axe
 AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa", "best-practice"]
 
@@ -480,13 +534,13 @@ def _axe_source() -> str:
 
 @pytest.mark.parametrize("viewport", [(560, 640), (320, 640)], ids=["560x640", "narrow-320"])
 @pytest.mark.parametrize("scheme", ["light", "dark"])
-@pytest.mark.parametrize("state", ["main", "about", "about-viewer", "about-error"])
+@pytest.mark.parametrize("state", ["main", "about", "about-viewer", "about-error", "about-states"])
 def test_axe_has_no_violation_in_the_launcher_page(browser, viewport, scheme, state):
     axe_src = _axe_source()
     a = _Server(UI, {"Content-Security-Policy": CSP, "X-Content-Type-Options": NOSNIFF})
     try:
         mode = "missing" if state == "about-error" else "ok"
-        ctx, page, problems, _ = _open(browser, (a, a), _stub(mode), viewport=viewport, scheme=scheme)
+        ctx, page, problems, _ = _open(browser, (a, a), _stub(mode, record_override=_all_states if state == "about-states" else None), viewport=viewport, scheme=scheme)
         _wait(page, "() => !document.getElementById('advanced').hidden")
         if state != "main":
             page.click("#open-about")

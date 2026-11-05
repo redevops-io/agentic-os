@@ -7,6 +7,7 @@
   --muted: #4c6164;
   --line: rgba(128, 128, 128, 0.45);
   --danger: #b91c1c;
+  --ok: #166534;
   --primary: #1d4ed8;
   --slot-bg: rgba(128, 128, 128, 0.1);
 }
@@ -16,6 +17,7 @@
     --fg: #ececec;
     --muted: #aebfbf;
     --danger: #fca5a5;
+    --ok: #86efac;
     --primary: #2563eb;
   }
 }
@@ -53,7 +55,13 @@ dl.facts dd { margin: 0; }
 .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
 .slot { border: 2px dashed var(--line); border-radius: 8px; padding: 8px 12px; margin: 0 0 10px; }
 .slot .slot-id { display: block; font-size: 12px; color: var(--muted); }
+.slot .slot-tag { display: inline-block; font-size: 12px; font-weight: 700; border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; margin: 2px 0 4px; }
 .slot .slot-text { display: block; white-space: pre-wrap; }
+/* only a verified approved text gets a solid border; a draft is a heavy dashed warning border PLUS its text tag */
+.slot.approved-verified { border-style: solid; border-color: var(--ok); }
+.slot.unverified-draft { border-style: dashed; border-width: 3px; border-color: var(--danger); }
+.slot.unverified-draft .slot-tag { border-color: var(--danger); color: var(--danger); }
+.slot.unknown { border-style: dotted; }
 ul.rows { list-style: none; margin: 0 0 12px; padding: 0; }
 ul.rows li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 4px 0; border-bottom: 1px solid var(--line); }
 ul.rows li .name { flex: 1 1 12em; }
@@ -66,6 +74,8 @@ label.filter { display: block; font-size: 13px; color: var(--muted); }
 #viewer { border-top: 1px solid var(--line); margin-top: 16px; }
 #viewer-text { max-height: 50vh; overflow: auto; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
 @media (forced-colors: active) {
-  .slot { border-style: dashed; }
+  .slot { border-color: CanvasText; }
+  .slot.unverified-draft { border-style: dashed; border-width: 3px; }
+  .slot.approved-verified { border-style: solid; }
   button.primary { border: 2px solid ButtonText; }
 }

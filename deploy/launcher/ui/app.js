@@ -87,22 +87,35 @@
     $("about-body").replaceChildren();
   };
 
-  // The record carries the slot text (redevops.about/1: legal.slots.<id>.text, the placeholder while a decision is
-  // open). It is shown verbatim as text. A slot without usable text fails safe to a neutral marker; the bracket
-  // marker composed from `decisions` is only a fallback for a record that has no text field.
-  const slotText = (key, slot) => {
+  // The record carries the final display text of each slot (redevops.about/1: legal.slots.<id>.text) and a fixed
+  // state tag. Both are shown verbatim as text. States: pending (placeholder text), approved-verified,
+  // unverified-draft (the label "Unverified draft, not an approved text." is already INSIDE text),
+  // not-applicable (hidden). Only approved-verified gets an "approved" look. An unknown state or a slot without
+  // text fails safe to a neutral marker and is never shown as legal text.
+  const SLOT_STATES = ["pending", "approved-verified", "unverified-draft"];
+  const slotState = (slot) => (SLOT_STATES.includes(obj(slot).state) ? obj(slot).state : "unknown");
+  const slotTag = (slot) => {
     const s = obj(slot);
-    if (typeof s.placeholder === "string" && s.placeholder) return s.placeholder;
+    return typeof s.tag === "string" && s.tag && slotState(slot) !== "unknown" ? s.tag : "State not recognised";
+  };
+  const slotText = (key, slot) => {
+    const s = obj(slot), st = slotState(slot);
+    if (st === "unknown") return "[LEGAL TEXT NOT AVAILABLE IN THIS VIEW]";
     if (typeof s.text === "string" && s.text) return s.text;
-    if (s.state === "placeholder") {
+    if (st === "pending") {
       const ids = arr(s.decisions).filter((d) => typeof d === "string" && /^[A-Za-z0-9.-]{1,24}$/.test(d));
-      const what = key.startsWith("DATA.") ? "VALUE" : "LEGAL TEXT";
-      return "[" + what + " PENDING DECISION" + (ids.length ? " " + ids.join(", ") : "") + "]";
+      return "[LEGAL TEXT PENDING DECISION" + (ids.length ? " " + ids.join(", ") : "") + "]";
     }
     return "[LEGAL TEXT NOT AVAILABLE IN THIS VIEW]";
   };
-  const slotBlock = (key, slot) =>
-    el("div", { class: "slot" }, el("span", { class: "slot-id", text: key }), el("span", { class: "slot-text", text: slotText(key, slot) }));
+  // The state is a visible text tag (not colour alone) and part of the group's accessible name.
+  const slotBlock = (key, slot) => {
+    const st = slotState(slot), tag = slotTag(slot);
+    return el("div", { class: "slot " + st, role: "group", "aria-label": key + ": " + tag },
+      el("span", { class: "slot-id", text: key }),
+      el("span", { class: "slot-tag", text: tag }),
+      el("span", { class: "slot-text", text: slotText(key, slot) }));
+  };
 
   const factRows = (rec) => {
     const p = obj(rec.product), b = obj(rec.build), src = obj(b.source);

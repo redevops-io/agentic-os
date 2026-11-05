@@ -107,8 +107,8 @@ owns `127.0.0.1:8787`. The launcher therefore treats it as one unit:
   `redevops.about/1`, written by `packaging/notices/generate_about.py`) and one of six fixed text files.
   The page never passes a path: the name must equal one of the six constants, the file must be a regular
   file under the size limit (2 MiB record, 4 MiB text), listed in the record with a sha256 that matches, and
-  valid UTF-8. No network, no sidecar: it works with the control plane stopped. Legal text slots are shown as
-  the placeholder from the record, as text only; the view states that nothing in it is a legal statement.
+  valid UTF-8. No network, no sidecar: it works with the control plane stopped. Each legal slot is shown with the record's own text and its fixed state tag (pending, approved-verified, unverified-draft; not-applicable is hidden), as text only; the
+  view states that nothing in it is a legal statement or clearance, and `about.rs` refuses a record whose slots do not follow `redevops.about/1` (old `placeholder`/`filled` states included).
 - Tests: `cargo test` (context CSP/page/ACL checks, `about.rs`, `guard.rs`), `tests/test_launcher_tauri_config.py`,
   `tests/test_launcher_about_contract.py`, and `tests/test_launcher_page_browser.py` (headless Chromium with the same
   CSP header and a stub `__TAURI__`; `RDO_BROWSER_TESTS=1`, `RDO_AXE_JS=<axe.min.js>`). The real WKWebView/WebView2,
