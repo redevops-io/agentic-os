@@ -182,7 +182,7 @@ function Get-InstalledProduct([string]$Name = $script:ProductName) {
         $pc = $null; if ($k.PSChildName -match '^\{[0-9A-Fa-f-]{36}\}$') { $pc = $k.PSChildName }
         $found += [pscustomobject]@{
           Hive = $r.Substring(0, 4); Key = $k.PSChildName; ProductCode = $pc; DisplayVersion = $p.DisplayVersion; Publisher = $p.Publisher
-          InstallLocation = $p.InstallLocation; UninstallString = $p.UninstallString; QuietUninstallString = $(if ($p.PSObject.Properties['QuietUninstallString']) { $p.QuietUninstallString } else { $null })
+          InstallLocation = $(if ($p.InstallLocation) { ([string]$p.InstallLocation).Trim('"') } else { $null }); UninstallString = $p.UninstallString; QuietUninstallString = $(if ($p.PSObject.Properties['QuietUninstallString']) { $p.QuietUninstallString } else { $null })
         }
       }
     }
