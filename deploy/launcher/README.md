@@ -22,7 +22,7 @@ The brain is `agentic_os/mission/bootstrap.py`:
 "One-click" honestly means *one action* that runs an agent-guided sequence — not that every
 configuration happens with zero interaction. The launcher shells out to the tested Python brain and
 to `docker compose`; it holds **no business logic**. On Windows it must ensure the **WSL2** Docker
-backend is present (the rootless containment membrane is POSIX-only — see `device_posture`); the
+backend is present (the rootless containment membrane needs a Linux/POSIX host that enforces memory limits, so it is also unavailable on macOS — see `device_posture` and `docs/RUNNING_AGENTIC_APPS_LOCAL.md`); the
 device report will say `local_container: deny … run inside WSL2` when it isn't.
 
 ## iOS / Apple
