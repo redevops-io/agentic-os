@@ -14,6 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 NOTICES = ROOT / "packaging" / "notices"
 
@@ -44,11 +46,53 @@ ALL_SLOT_DECISIONS = sorted({d for ids in SLOTS.values() for d in ids})
 SYNTH = "SYNTHETIC TEST TEXT for {slot}. Not a legal statement; written by the test suite only.\n"
 
 
+NAMESPACE = "redevops-legal-decision@v1"
+
+
+class Signer:
+    """A THROWAWAY test key (generated in a temp dir, never a real key) and its allowed-signers file. The key files are deleted by name."""
+
+    def __init__(self, tmp: Path, principal: str = "test-owner"):
+        self.dir = tmp / "signer"
+        self.dir.mkdir()
+        self.key = self.dir / "key"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "throwaway-test-key", "-f", str(self.key)], check=True,
+                       env={"PATH": "/usr/bin:/bin"}, capture_output=True)
+        pub = (self.dir / "key.pub").read_text().strip()
+        self.allowed = self.dir / "allowed-signers"
+        self.allowed.write_text(f'{principal} namespaces="{NAMESPACE}" {pub}\n')
+
+    def sign(self, path: Path, namespace: str = NAMESPACE, key: Path | None = None) -> Path:
+        sig = Path(str(path) + ".sig")
+        if sig.exists():
+            sig.unlink()
+        subprocess.run(["ssh-keygen", "-Y", "sign", "-q", "-f", str(key or self.key), "-n", namespace, str(path)], check=True,
+                       env={"PATH": "/usr/bin:/bin"}, capture_output=True)
+        return sig
+
+    def cleanup(self) -> None:
+        for n in ("key", "key.pub", "allowed-signers"):
+            try:
+                (self.dir / n).unlink()
+            except FileNotFoundError:
+                pass
+
+
+def sign_all(root: Path, signer: Signer) -> None:
+    """Sign the record of every DECIDED entry and every approved slot text of the gate file under `root`."""
+    for d in read_gate(root)["decisions"]:
+        if d["status"] == "DECIDED":
+            signer.sign(root / d["decision_reference"])
+            for v in (d.get("slot_texts") or {}).values():
+                if "file" in v and (root / v["file"]).is_file():
+                    signer.sign(root / v["file"])
+
+
 def make_root(tmp: Path) -> Path:
     """A throw-away repository root (a git repo with one commit) holding copies of what the About tools read."""
     r = tmp / "repo"
     for rel in ("agentic_os/about_record.py", "agentic_os/__init__.py", "pyproject.toml", "packaging/check-distribution-gate.py",
-                "packaging/identity.json", "packaging/distribution-gate.json", "deploy/launcher/src-tauri/tauri.conf.json",
+                "packaging/identity.json", "packaging/distribution-gate.json", "packaging/legal-allowed-signers", "deploy/launcher/src-tauri/tauri.conf.json",
                 "deploy/launcher/src-tauri/Cargo.toml", "LICENSE", "LICENSE-COMMONS-CLAUSE", "LICENSE.md", "LICENSING.md"):
         (r / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / rel, r / rel)
@@ -151,3 +195,32 @@ def stage_folder(root: Path, notices: Path, dest: Path) -> Path:
     """Stage like build-licenses.sh does: product files from `root`, generated files from `notices`."""
     assert stage.stage(notices, dest, root) == []
     return dest
+
+
+@pytest.fixture()
+def signer(tmp_path):
+    s = Signer(tmp_path)
+    yield s
+    s.cleanup()
+
+
+def trust(root: Path, signer: Signer) -> None:
+    """Make `signer` the allowed signer of the fixture repository `root` and sign every DECIDED record and approved text in it."""
+    (root / "packaging" / "legal-allowed-signers").write_text(signer.allowed.read_text())
+    sign_all(root, signer)
+
+
+def licenses_for(root: Path, work: Path, *, distribution: bool = False, platform: str = "macos-arm64") -> Path:
+    """A staged Licenses folder (real notices generator on a made-up SBOM, real about generator, real staging) consistent with the
+    repository `root` (identity, versions, gate). `root` becomes a git repository on first use."""
+    env = {"PATH": "/usr/bin:/bin:/opt/homebrew/bin", "HOME": str(work), "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"}
+    work.mkdir(parents=True, exist_ok=True)
+    if not (root / ".git").exists():
+        (root / ".gitignore").write_text("__pycache__/\n")
+        for args in (["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "fixture"]):
+            subprocess.run(["git", "-C", str(root), *args], check=True, env=env, capture_output=True)
+    notices = make_notices(work)
+    args = ["--notices-dir", str(notices), "--platform", platform, "--root", str(root)] + (["--distribution"] if distribution else [])
+    rc = gen_about.main(args)
+    assert rc == 0, rc
+    return stage_folder(root, notices, work / "Licenses")

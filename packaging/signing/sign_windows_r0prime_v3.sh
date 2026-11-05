@@ -51,7 +51,7 @@
 # Usage:
 #   sign_windows_r0prime_v3.sh --stage inner|container --input FILE --sha256 HEX [--input FILE2 --sha256 HEX2 ...] --outdir NEWDIR
 #        [--dry-run | --throwaway-test | --real --i-have-owner-authorization SHA --scope-file FILE]
-#        [--ledger DIR] [--allow-reuse] [--distribution] [--container-listing FILE]
+#        [--ledger DIR] [--allow-reuse] [--distribution] [--container-listing FILE] [--licenses-dir DIR]
 #        [--name "Application name"] [--url URL] [--throwaway-dir DIR] [--tsa-url LOCAL_URL]
 #        [--tools-dir DIR] [--ms-root-pem FILE] [--python FILE] [--verifier FILE]
 
@@ -142,6 +142,7 @@ NSIS_NAME="${PRODUCT}_${VERSION}_x64-setup.exe"
 FROZEN_MSI="$(idj frozen.product_name)_$(idj frozen.version)_x64_en-US.msi"
 FROZEN_NSIS="$(idj frozen.product_name)_$(idj frozen.version)_x64-setup.exe"
 
+LICDIR=""
 STAGE=""; MODE_DRY=0; MODE_THROW=0; MODE_REAL=0; AUTH_SHA=""; SCOPE_FILE=""; LEDGER=""; ALLOW_REUSE=0; DISTRIBUTION=0; LISTING=""
 APPNAME="$PRODUCT"; APPURL=""; OUTDIR=""; THROWAWAY_DIR="$SELF_DIR/dryrun/throwaway"; TSA_URL=""
 TOOLS_DIR="$SELF_DIR/tools"; MS_ROOT_PEM="$SELF_DIR/docs/pki/root2020.pem"
@@ -169,6 +170,7 @@ while [ $# -gt 0 ]; do
     --scope-file)       [ $# -ge 2 ] || die "--scope-file needs a value"; SCOPE_FILE="$2"; shift 2;;
     --ledger)           [ $# -ge 2 ] || die "--ledger needs a value"; LEDGER="$2"; shift 2;;
     --container-listing) [ $# -ge 2 ] || die "--container-listing needs a value"; LISTING="$2"; shift 2;;
+    --licenses-dir)     [ $# -ge 2 ] || die "--licenses-dir needs a value"; LICDIR="$2"; shift 2;;
     --allow-reuse)      ALLOW_REUSE=1; shift;;
     --distribution)     DISTRIBUTION=1; shift;;
     --dry-run)          MODE_DRY=1; shift;;
@@ -329,6 +331,18 @@ if [ -n "$LISTING" ]; then
   LISTING_SHA="$(sha "$R0P_TMP/listing.copy")"; LISTING_LINES="$(wc -l < "$R0P_TMP/listing.copy" | tr -d ' ')"
   [ "$LISTING_LINES" -ge 1 ] || die "--container-listing is empty"
   if [ "$MODE" = real ]; then [ "$LISTING_SHA" = "$S_container_listing_sha256" ] || die "scope file: container_listing_sha256 does not match --container-listing"; fi
+fi
+# RC3: in --real the container stage also needs the Licenses folder of the installer tree (from the build host) and checks its about.json
+# against the repository (gate, identity, versions, manifest; with --distribution a distribution record with no placeholder slot and valid
+# detached signatures). The folder is tied to the installers through the container listing: the sha256 of its about.json must appear in it.
+if [ "$MODE" = real ] && [ "$STAGE" = container ]; then
+  [ -n "$LICDIR" ] || die "stage container in --real needs --licenses-dir DIR (the Licenses folder of the installer tree, whose about.json is checked against the gate)"
+  [ -f "$LICDIR/about.json" ] && [ ! -L "$LICDIR/about.json" ] || die "--licenses-dir holds no regular about.json"
+  ABOUT_SHA="$(sha "$LICDIR/about.json")"
+  grep -qF "$ABOUT_SHA" "$R0P_TMP/listing.copy" || die "the sha256 of $LICDIR/about.json ($ABOUT_SHA) does not appear in the --container-listing: the folder is not the one in the installers"
+  r0p_about_check "$LICDIR" "$DISTRIBUTION" || die "the About record failed the check against the gate (see above); signing refused"
+else
+  [ -z "$LICDIR" ] || die "--licenses-dir is used only with --real --stage container"
 fi
 
 # ---- tools (not needed to print a plan)

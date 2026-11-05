@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pytest
 
+from .about_fixture import Signer, decide, licenses_for, read_gate, signer, trust  # noqa: F401  (signer is a pytest fixture)
+
 ROOT = Path(__file__).resolve().parents[1]
 SIGN = ROOT / "packaging" / "signing"
 MAC = SIGN / "sign_and_notarize_r0prime_macos_v3.sh"
@@ -81,6 +83,26 @@ def run(cmd, env, cwd=None, timeout=300, input=None):
 
 
 def make_tree(dest: Path) -> Path:
+    """`dest` is the packaging/ directory of a throw-away repository root (dest.parent): besides the signing scripts it receives the files the
+    About check reads (agentic_os/about_record.py, identity, versions, the product licence files, packaging/notices/check_about.py and
+    generate_about.py, an EMPTY packaging/legal-allowed-signers)."""
+    assert dest.name == "packaging", dest
+    _make_tree(dest)
+    root = dest.parent
+    for rel in ("agentic_os/about_record.py", "agentic_os/__init__.py", "pyproject.toml", "deploy/launcher/src-tauri/tauri.conf.json",
+                "deploy/launcher/src-tauri/Cargo.toml", "LICENSE", "LICENSE-COMMONS-CLAUSE", "LICENSE.md", "LICENSING.md"):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / rel, root / rel)
+    (dest / "notices").mkdir()
+    for n in ("check_about.py", "generate_about.py"):
+        shutil.copy(ROOT / "packaging" / "notices" / n, dest / "notices" / n)
+    shutil.copy(ROOT / "packaging" / "legal-allowed-signers", dest / "legal-allowed-signers")
+    (root / "agentic_os" / "projects_ui").mkdir(exist_ok=True)
+    (root / "agentic_os" / "projects_ui" / "index.html").write_text("<!doctype html>\n")
+    return dest
+
+
+def _make_tree(dest: Path) -> Path:
     """A private copy of packaging/ (signing scripts, identity.json, entitlement plist, gate files) for the stub tests of the --real paths. In the
     copy of signing-common.sh the single patch point `r0p_no_test_switch` is replaced by a no-op, because the PRODUCTION library refuses the
     unit-test switch in --real (R5-02); the copy therefore has another sha256, which the test scope files bind."""
@@ -112,7 +134,7 @@ def make_tree(dest: Path) -> Path:
     return dest
 
 
-HELPER = make_tree(Path(__import__("tempfile").mkdtemp(prefix="r0p-helper-")) / "t") / "signing" / HELPER_PROD.name       # patched copy (see make_tree)
+HELPER = make_tree(Path(__import__("tempfile").mkdtemp(prefix="r0p-helper-")) / "packaging") / "signing" / HELPER_PROD.name       # patched copy (see make_tree)
 
 
 def ledger_text(d: Path) -> str:
@@ -351,7 +373,8 @@ class Mac:
         self.log = tmp / "stub.log"
         self.log.write_text("")
         self.fixture = tmp / "fixture"
-        self.tree = make_tree(tmp / "mtree")
+        self.tree = make_tree(tmp / "mroot" / "packaging")
+        self.lic = licenses_for(self.tree.parent, tmp / "licwork")      # a REAL generated Licenses folder (about.json included), consistent with the tree
         self.script = self.tree / "signing" / MAC.name
         self.common = self.tree / "signing" / COMMON.name
         self.conf(NOTARY_MODE="ok")
@@ -385,8 +408,8 @@ class Mac:
                 "RedevopsReleaseLine": IDENT["release_line"], "CFBundleName": R0["product_name"]}
         (app / "Contents" / "Info.plist").write_bytes(plistlib.dumps(info))
         (app / "Contents" / "Resources" / "icon.icns").write_bytes(b"icns")
-        for n in ("LICENSE", "LICENSE.md", "LICENSING.md", "LICENSES-MANIFEST.json", "NOTICES_MISSING.json", "NOTICES_MISSING.md", "THIRD_PARTY_NOTICES.txt", "LICENSE-COMMONS-CLAUSE"):
-            (app / "Contents" / "Resources" / "Licenses" / n).write_text(f"{n}\n")
+        for f in self.lic.iterdir():
+            shutil.copy(f, app / "Contents" / "Resources" / "Licenses" / f.name)
         (fx / ".VolumeIcon.icns").write_bytes(b"icns")
         os.symlink("/Applications", fx / "Applications")
         for rel, text in (extra or {}).items():
@@ -920,7 +943,7 @@ class Ssh:
         self.manifest.write_text('{"files": {"a": "0"}}\n')
         self.keys = tmp / "keys"
         self.keys.mkdir()
-        self.tree = make_tree(tmp / "stree")                     # patched copy for the stub-tool --real tests (see make_tree)
+        self.tree = make_tree(tmp / "sroot" / "packaging")                     # patched copy for the stub-tool --real tests (see make_tree)
         self.tscript = self.tree / "signing" / SSH.name
         self.tcommon = self.tree / "signing" / COMMON.name
         self.key = self.make_key("k1", "signproc-TEST-KEY")     # a throwaway key for tests that need a key pair of their own
@@ -1511,7 +1534,7 @@ class Win:
         (self.tools / "jsign").mkdir(parents=True)
         (self.tools / "jsign" / "jsign-7.6.jar").write_bytes(b"stand-in jar")
         # a private copy of the script tree (patched library, see make_tree) with the pinned jar hash replaced by the stand-in's
-        tree = make_tree(tmp / "tree")
+        tree = make_tree(tmp / "wroot" / "packaging")
         text = (tree / "signing" / WIN.name).read_text()
         pin = "6cf58aa080e7ff82656f320cff8d4a3bff30408df8766806dcba3740dd839fa5"
         assert pin in text
@@ -1520,6 +1543,7 @@ class Win:
         self.script = tree / "signing" / WIN.name
         self.common = tree / "signing" / COMMON.name
         self.tree = tree
+        self.lic = licenses_for(tree.parent, tmp / "licwork", platform="windows-x64")     # the Licenses folder of the (stub) installer tree
         self.files = tmp / "files"
         self.files.mkdir()
 
@@ -1568,7 +1592,7 @@ class Win:
              "tool_az_sha256": sha_file(self.stubs / "az"), "tool_java_sha256": sha_file(self.stubs / "java"),
              "tool_python_sha256": sha_file(self.stubs / "py"), "tool_python_packages_sha256": sha_bytes(b"signify==0.0-stub\n"), "tool_python_pth_sha256": sha_bytes(b"\n"),
              "tool_osslsigncode_sha256": "none",
-             "container_listing_sha256": "none" if st == "inner" else sha_bytes(LISTING_TEXT)}
+             "container_listing_sha256": "none" if st == "inner" else sha_bytes(self.listing_text)}
         d.update(over)
         p = self.tmp / f"wscope-{len(list(self.tmp.glob('wscope-*')))}.txt"
         p.write_text("".join(f"{k}={v}\n" for k, v in d.items() if v is not None))
@@ -1576,9 +1600,14 @@ class Win:
 
     REAL_ENV = {"R0P_AZ_ENDPOINT": "https://eus.codesigning.azure.net/", "R0P_AZ_ACCOUNT": "stub-account", "R0P_AZ_PROFILE": "stub-profile", "R0P_AZ_EXPECTED_CN": "CN=Stub Test Org"}
 
+    @property
+    def listing_text(self) -> bytes:
+        """What the build host's listing of the installers holds: file names plus the sha256 of Licenses/about.json (RC3)."""
+        return LISTING_TEXT + f"{sha_file(self.lic / 'about.json')}  Licenses/about.json\n".encode()
+
     def listing(self) -> Path:
         p = self.tmp / "container-listing.txt"
-        p.write_bytes(LISTING_TEXT)
+        p.write_bytes(self.listing_text)
         return p
 
     def real(self, stage, pairs, sc, *args, env=None, ledger=True, **kw):
@@ -1587,6 +1616,8 @@ class Win:
         extra = ["--ledger", self.ledger] if ledger else []
         if stage == "container" and "--container-listing" not in args:
             extra += ["--container-listing", self.listing()]
+        if stage == "container" and "--licenses-dir" not in args:
+            extra += ["--licenses-dir", self.lic]
         return self.run(stage, pairs, "--real", "--i-have-owner-authorization", sha_file(sc), "--scope-file", sc, *extra, *args, **dict(e, **kw))
 
 
@@ -1740,7 +1771,7 @@ def test_windows_real_path_with_stubs_token_handling_ledger_and_two_stages(win):
     r4 = win.real("container", [(m, hm)], scc, outdir=win.tmp / "wout2")
     assert r4.returncode == 0, (r4.stdout, r4.stderr)
     ev2 = (win.tmp / "wout2" / "EVIDENCE.txt").read_text()
-    assert "stage:           container" in ev2 and "does NOT inspect the container contents" in ev2 and sha_bytes(LISTING_TEXT) in ev2
+    assert "stage:           container" in ev2 and "does NOT inspect the container contents" in ev2 and sha_bytes(win.listing_text) in ev2
     assert "Windows acceptance kit must check the installed files" in ev2
 
 

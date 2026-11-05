@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from .about_fixture import (ALL_SLOT_DECISIONS, NOTICES, ROOT, SLOTS, SYNTH, about_record, chk_about, decide, gate, gen_about,
+from .about_fixture import (ALL_SLOT_DECISIONS, signer, trust, NOTICES, ROOT, SLOTS, SYNTH, about_record, chk_about, decide, gate, gen_about,
                             make_notices, make_root, read_gate, run_generate, stage_folder, write_gate)
 
 FORBIDDEN = ("open source", "cleared", "compliant", "approved by counsel", "legally")
@@ -160,9 +160,10 @@ def test_open_decision_never_opens_the_text_file(env):
 
 @pytest.mark.parametrize("slot", sorted(SLOTS))
 @pytest.mark.parametrize("dist", [False, True], ids=["private", "distribution"])
-def test_decided_slot_with_a_matching_approved_text_is_filled(env, slot, dist):
+def test_decided_slot_with_a_matching_approved_text_is_filled(env, slot, dist, signer):
     root, notices = env
     decide(root, [i for i in SLOTS[slot]] + ALL_SLOT_DECISIONS)     # everything decided -> every slot is filled
+    trust(root, signer)                                              # a distribution record also needs valid detached signatures
     assert run_generate(root, notices, distribution=dist) == 0
     doc = _record(notices)
     s = doc["legal"]["slots"][slot]
@@ -217,9 +218,10 @@ def test_partly_decided_multi_decision_slot_stays_a_placeholder_naming_only_the_
     assert any("LEGAL.LICENCE_STATEMENT" in r for r in refusals)
 
 
-def test_section13_may_be_recorded_as_not_applicable_and_is_then_not_rendered(env):
+def test_section13_may_be_recorded_as_not_applicable_and_is_then_not_rendered(env, signer):
     root, notices = env
     decide(root, ALL_SLOT_DECISIONS, texts="na")
+    trust(root, signer)
     assert run_generate(root, notices, distribution=True) == 0
     s = _record(notices)["legal"]["slots"]["LEGAL.SECTION13_NOTICE"]
     assert s == {"state": "not-applicable", "decisions": ["D-LIC-5"], "pending": [], "text": ""}
@@ -290,7 +292,7 @@ def test_decided_but_incomplete_entry_is_an_error_in_every_mode(env):
 
 
 # ------------------------------------------------------------------------------------------- distribution detection
-@pytest.mark.parametrize("value,dist", [("", False), ("0", False), (" 0 ", False), ("1", True), ("true", True), ("false", True),
+@pytest.mark.parametrize("value,dist", [("", False), ("0", False), (" 0 ", True), ("0 ", True), (" ", True), ("1", True), ("true", True), ("false", True),
                                         ("no", True), ("off", True), ("2", True)])
 def test_environment_switch_fails_closed(env, monkeypatch, value, dist):
     root, notices = env
@@ -319,12 +321,14 @@ def test_gate_cli_about_slots_flag(tmp_path):
     assert r.returncode == 1 and "REFUSED" in r.stderr
 
 
-def test_gate_cli_all_decided_with_texts_passes_and_without_texts_is_a_slot_error(tmp_path):
+def test_gate_cli_all_decided_with_texts_passes_and_without_texts_is_a_slot_error(tmp_path, signer):
     root = make_root(tmp_path)
     ids = [d["id"] for d in read_gate(root)["decisions"] if d["blocks_distribution"]] + ALL_SLOT_DECISIONS
     decide(root, sorted(set(ids)))
+    trust(root, signer)
     base = [sys.executable, "-I", str(root / "packaging" / "check-distribution-gate.py"), "--platform", "macos", "--about-slots",
-            "--gate", str(root / "packaging" / "distribution-gate.json"), "--root", str(root)]
+            "--gate", str(root / "packaging" / "distribution-gate.json"), "--root", str(root),
+            "--allowed-signers", str(root / "packaging" / "legal-allowed-signers")]
     env_ = {"PATH": "/usr/bin:/bin"}
     r = subprocess.run(base + ["--distribution"], capture_output=True, text=True, env=env_)
     assert r.returncode == 0, r.stderr
