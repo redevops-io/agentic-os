@@ -15,7 +15,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 # /app/.agentic-os (the Context home when AGENTIC_OS_HOME is unset); both are created owned by
 # the service user so a fresh named volume mounted at /data inherits that ownership. An existing
 # root-owned /data volume from an earlier image must be chown'd to 10001 once before upgrading.
-RUN useradd --system --uid 10001 --user-group --create-home --shell /usr/sbin/nologin app \
+RUN groupadd --system --gid 10001 app \
+ && useradd --system --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin app \
  && mkdir -p /data /app/.agentic-os && chown app:app /data /app/.agentic-os
 USER 10001:10001
 EXPOSE 8080

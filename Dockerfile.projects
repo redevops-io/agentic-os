@@ -6,20 +6,23 @@
 # Bump deliberately: docker buildx imagetools inspect python:3.12-slim
 FROM python:3.12-slim@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54
 WORKDIR /app
-# git is required at install time: runtime-contracts + redevops-connectors are git dependencies.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends git \
-    && rm -rf /var/lib/apt/lists/*
 # Only what the wheel build needs (same set as the root Dockerfile), not the whole build context: a
 # local .env, key or evidence file in the checkout must not be able to land in an image layer.
 COPY pyproject.toml README.md modules.yaml LICENSE LICENSE-COMMONS-CLAUSE LICENSE.md LICENSING.md ./
 COPY agentic_os ./agentic_os
 COPY deploy/assets ./deploy/assets
-# PIP_NO_CACHE_DIR also reaches the isolated build-environment pip that --no-cache-dir does not.
-RUN PIP_NO_CACHE_DIR=1 pip install --no-cache-dir '.[projects]'
+# git is required at install time only: runtime-contracts + redevops-connectors are git dependencies.
+# Install it for the build and purge it in the same layer (as the root image does) so the runtime image
+# ships without it. PIP_NO_CACHE_DIR also reaches the isolated build-environment pip that --no-cache-dir
+# does not.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && PIP_NO_CACHE_DIR=1 pip install --no-cache-dir '.[projects]' \
+    && apt-get purge -y git && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 ENV PROJECTS_HOST=0.0.0.0 PROJECTS_PORT=8787
 # Run unprivileged. The app keeps its state under the service user's home (AGENTIC_OS_HOME / ~).
-RUN useradd --system --uid 10001 --user-group --create-home --shell /usr/sbin/nologin app
+RUN groupadd --system --gid 10001 app \
+    && useradd --system --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin app
 USER 10001:10001
 EXPOSE 8787
 # The static UI shell at / is served without the launch capability (every /api route and /health
