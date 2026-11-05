@@ -64,33 +64,7 @@ parts:
       - libwebkit2gtk-4.1-0
       - libayatana-appindicator3-1
       - xdg-utils
-    build-environment:
-      - LANG: C.UTF-8
-      # the build scripts expect exactly these tool versions (packaging/toolchain.env); they are installed into the part
-      # build directory below, never into the host, and the scripts re-check every version.
-      - UV_PYTHON_PREFERENCE: managed
     override-build: |
       set -eux
-      cd "$CRAFT_PART_SRC"
-      . packaging/toolchain.env
-      T="$CRAFT_PART_BUILD/tools"; mkdir -p "$T/bin"
-      export HOME="$CRAFT_PART_BUILD/home"; mkdir -p "$HOME"
-      export CARGO_HOME="$T/cargo" RUSTUP_HOME="$T/rustup" UV_INSTALL_DIR="$T/bin" UV_NO_MODIFY_PATH=1
-      export PATH="$T/bin:$CARGO_HOME/bin:$PATH"
-      curl --proto '=https' --tlsv1.2 -LsSf "https://astral.sh/uv/$UV_VERSION/install.sh" | sh
-      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$T/rustup-init.sh"
-      sh "$T/rustup-init.sh" -y --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION"
-      cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
-      # the same sequence as packaging/build-all.sh, with the .deb as the only bundle
-      export LAUNCHER_BUNDLES=deb
-      python3 -I packaging/check-distribution-gate.py --platform linux --about-slots
-      packaging/build-wheelhouse.sh
-      packaging/build-sidecar.sh
-      packaging/build-notices.sh
-      REDEVOPS_LICENSES_DIR="$PWD/deploy/launcher/src-tauri/licenses" packaging/build-sidecar.sh
-      packaging/stage-sidecar.sh
-      packaging/build-launcher.sh
-      DEB="$(ls deploy/launcher/src-tauri/target/release/bundle/deb/*.deb)"
-      dpkg-deb -x "$DEB" "$CRAFT_PART_INSTALL"
-      install -Dm755 snap/local/agentic-apps-snap "$CRAFT_PART_INSTALL/bin/agentic-apps-snap"
-      craftctl set version="$(python3 -I packaging/tools/identity.py get version)"
+      sh "$CRAFT_PART_SRC/snap/local/build-payload.sh" "$CRAFT_PART_SRC" "$CRAFT_PART_BUILD" "$CRAFT_PART_INSTALL"
+      craftctl set version="$(python3 -I "$CRAFT_PART_SRC/packaging/tools/identity.py" get version)"
