@@ -31,7 +31,7 @@
 #                        'Artifact Signing Certificate Profile Signer' role. The token is written by `az` into a 0600 file and read by
 #                        Jsign with --storepass file:...; it is never printed, never on a command line, never in the environment.
 #
-# SCOPE FILE (scope_version=2; KEY=VALUE; read ONCE into a private copy that is hashed and parsed; a TRIPWIRE against mistakes, NOT an
+# SCOPE FILE (scope_version=3; KEY=VALUE; read ONCE into a private copy that is hashed and parsed; a TRIPWIRE against mistakes, NOT an
 # authentication: the owner's own terminal and `az` login are the authentication): not_before/not_after (UTC, at most 24 h), script_sha256,
 # common_sha256, verifier_sha256, identity_json_sha256, stage, inputs_sha256 (sorted, comma separated), az_endpoint, az_account, az_profile,
 # expected_cn, gate_sha256, gate_tool_sha256, distribution=yes|no (must agree with --distribution), evidence_manifest_sha256, build_commit,
@@ -297,8 +297,9 @@ if [ "$MODE" = real ]; then
   r0p_mktmp
   r0p_scope_load "$SCOPE_FILE" "$AUTH_SHA" scope_version not_before not_after script_sha256 common_sha256 verifier_sha256 identity_json_sha256 \
     stage inputs_sha256 az_endpoint az_account az_profile expected_cn gate_sha256 gate_tool_sha256 distribution evidence_manifest_sha256 \
-    build_commit procedure_commit tool_az_sha256 tool_java_sha256 tool_python_sha256 tool_python_packages_sha256 tool_python_pth_sha256 tool_osslsigncode_sha256 container_listing_sha256
-  [ "$S_scope_version" = 2 ] || die "scope file: scope_version must be 2 (v3.1 format; see AUTHORIZATION-TEMPLATE.md)"
+    build_commit procedure_commit tool_az_sha256 tool_java_sha256 tool_python_sha256 tool_python_packages_sha256 tool_python_pth_sha256 tool_osslsigncode_sha256 container_listing_sha256 \
+    check_about_sha256 generate_about_sha256 about_record_sha256 legal_signers_sha256
+  [ "$S_scope_version" = 3 ] || die "scope file: scope_version must be 3 (RC3 format with the About pins; see AUTHORIZATION-TEMPLATE.md)"
   r0p_window_check "$S_not_before" "$S_not_after"
   [ "$S_script_sha256" = "$SELF_SHA" ] || die "scope file: script_sha256 does not match this script"
   [ "$S_common_sha256" = "$COMMON_SHA" ] || die "scope file: common_sha256 does not match signing-common.sh"
@@ -319,6 +320,8 @@ if [ "$MODE" = real ]; then
     [ -z "$LISTING" ] && [ "$S_container_listing_sha256" = none ] || die "scope file: container_listing_sha256 must be 'none' and no --container-listing given for stage inner"
   fi
   r0p_ledger_check "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE"
+  [[ "$S_check_about_sha256" =~ ^[0-9a-f]{64}$ && "$S_generate_about_sha256" =~ ^[0-9a-f]{64}$ && "$S_about_record_sha256" =~ ^[0-9a-f]{64}$ && "$S_legal_signers_sha256" =~ ^[0-9a-f]{64}$ ]] || die "scope file: check_about_sha256, generate_about_sha256, about_record_sha256 and legal_signers_sha256 must be 64 hex chars"
+  r0p_about_pins "$S_check_about_sha256" "$S_generate_about_sha256" "$S_about_record_sha256" "$S_legal_signers_sha256"
   r0p_gate windows "$DISTRIBUTION" "$S_gate_sha256" "$S_gate_tool_sha256"
 fi
 # the container listing (what the installers hold, from the build host) is read once into a private copy and recorded in the evidence
@@ -340,7 +343,7 @@ if [ "$MODE" = real ] && [ "$STAGE" = container ]; then
   [ -f "$LICDIR/about.json" ] && [ ! -L "$LICDIR/about.json" ] || die "--licenses-dir holds no regular about.json"
   ABOUT_SHA="$(sha "$LICDIR/about.json")"
   grep -qF "$ABOUT_SHA" "$R0P_TMP/listing.copy" || die "the sha256 of $LICDIR/about.json ($ABOUT_SHA) does not appear in the --container-listing: the folder is not the one in the installers"
-  r0p_about_check "$LICDIR" "$DISTRIBUTION" || die "the About record failed the check against the gate (see above); signing refused"
+  r0p_about_check "$LICDIR" "$DISTRIBUTION" "$S_build_commit" "$S_check_about_sha256" "$S_generate_about_sha256" "$S_about_record_sha256" "$S_gate_tool_sha256" "$S_legal_signers_sha256" || die "the About record failed the check against the gate (see above); signing refused"
 else
   [ -z "$LICDIR" ] || die "--licenses-dir is used only with --real --stage container"
 fi

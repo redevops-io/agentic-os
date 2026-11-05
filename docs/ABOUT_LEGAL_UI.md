@@ -96,12 +96,30 @@ No decision is DECIDED in this repository, no approved text file exists and no s
 
 ### Signing scripts
 
-`packaging/signing/signing-common.sh` `r0p_gate` now passes `--about-slots`; in `--real` mode the macOS script checks the
+`packaging/signing/signing-common.sh` `r0p_gate` passes `--about-slots`; in `--real` mode the macOS script checks the
 `Contents/Resources/Licenses/about.json` inside the dmg copy and the Windows container stage checks the `Licenses` folder of the installer
 tree (`--licenses-dir`, whose `about.json` sha256 must appear in the `--container-listing`) with `check_about.py` (plus `--distribution`
-when `--distribution` is given): the record must be consistent with the repository's gate, identity, versions and manifest, and for a
-distribution run be a distribution record without a placeholder slot. These are changes to `packaging/signing/**` made on the RC3
-branch only: the signing procedure needs a new independent review round before any RC3 signing.
+when `--distribution` is given): the record must be consistent with the repository's gate, identity, versions and manifest, its
+`build.source.commit` must equal the scope's `build_commit`, and for a distribution run it must be a distribution record without a pending
+or draft slot, with valid signatures and a pinned signer list.
+
+The check is pinned by the authorization scope (`scope_version` 3, macOS and Windows scope files; the SSHSIG manifest script keeps
+version 2): the scope binds `check_about_sha256`, `generate_about_sha256`, `about_record_sha256` and `legal_signers_sha256` (and, as before,
+`gate_tool_sha256`). The pins are verified before the gate runs, and the checker runs as `python -I -B` from a private copy of those files
+made in the work directory and re-hashed after copying (`--code-root`): it executes nothing from the repository tree that the scope does not
+bind. These are changes to `packaging/signing/**` made on the RC3 branch only: the signing procedure needs a new independent review round
+before any RC3 signing.
+
+### Known limits (documented, not fixed)
+
+* The gate reads records and texts with `O_NOFOLLOW` plus `fstat` after an `lstat` of every component, and hands `ssh-keygen` a private copy
+  of the signature. A hard link inside the repository to a file outside it is accepted (same inode, same bytes, and the bytes must still
+  hash to the recorded value and verify under a pinned key).
+* With `AGENTIC_OS_LOCAL_CAPABILITY=off` (hosted, no gate) the About routes exist but carry no CSP or frame-denial header, like the rest
+  of the service in that mode ("behind your own authentication").
+* The launcher's Windows file check is path-based for the `Licenses` folder (a junction swap between check and open remains; Windows
+  UNVERIFIED).
+* `ssh-keygen` is searched in `/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin` outside the signing scripts, which run with a fixed system PATH.
 
 ## Routes and the capability gate
 

@@ -30,7 +30,7 @@
 # packaging/signing/AUTHORIZATION-TEMPLATE.md). It is a TRIPWIRE against mistakes (wrong file, wrong script, wrong day, a repeat),
 # NOT an authentication: anyone who can write a scope file can satisfy it. The authentication is the owner's own terminal, keychain,
 # identity and notarytool profile.
-#   scope_version=2  not_before / not_after = YYYY-MM-DDTHH:MM:SSZ (UTC, at most 24 h apart)  script_sha256  common_sha256
+#   scope_version=3  not_before / not_after = YYYY-MM-DDTHH:MM:SSZ (UTC, at most 24 h apart)  script_sha256  common_sha256
 #   entitlements_sha256  identity_json_sha256  input_dmg_sha256  identity_sha256 (sha256 of the identity string)
 #   notary_profile_sha256 (sha256 of the profile NAME, or none)  team_id  notarize=yes|no  upload_to=apple-notary|none
 #   distribution=yes|no (must agree with --distribution)  gate_sha256  gate_tool_sha256  evidence_manifest_sha256
@@ -238,8 +238,9 @@ if [ "$MODE" = real ]; then
   r0p_mktmp
   r0p_scope_load "$SCOPE_FILE" "$AUTH_SHA" scope_version not_before not_after script_sha256 common_sha256 entitlements_sha256 \
     identity_json_sha256 input_dmg_sha256 identity_sha256 notary_profile_sha256 team_id notarize upload_to distribution \
-    gate_sha256 gate_tool_sha256 evidence_manifest_sha256 build_commit procedure_commit
-  [ "$S_scope_version" = 2 ] || die "scope file: scope_version must be 2 (v3.1 format; see AUTHORIZATION-TEMPLATE.md)"
+    gate_sha256 gate_tool_sha256 evidence_manifest_sha256 build_commit procedure_commit \
+    check_about_sha256 generate_about_sha256 about_record_sha256 legal_signers_sha256
+  [ "$S_scope_version" = 3 ] || die "scope file: scope_version must be 3 (RC3 format with the About pins; see AUTHORIZATION-TEMPLATE.md)"
   r0p_window_check "$S_not_before" "$S_not_after"
   [ "$S_script_sha256" = "$SELF_SHA" ] || die "scope file: script_sha256 does not match this script ($SELF_SHA)"
   [ "$S_common_sha256" = "$COMMON_SHA" ] || die "scope file: common_sha256 does not match signing-common.sh ($COMMON_SHA)"
@@ -257,6 +258,8 @@ if [ "$MODE" = real ]; then
   else [ "$S_notary_profile_sha256" = none ] || die "scope file: notary_profile_sha256 must be 'none' for a sign-only run"; fi
   case "$S_distribution:$DISTRIBUTION" in yes:1|no:0) ;; *) die "scope file says distribution=$S_distribution but --distribution is $( [ "$DISTRIBUTION" = 1 ] && echo given || echo not given ): they must agree";; esac
   r0p_ledger_check "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE"
+  [[ "$S_check_about_sha256" =~ ^[0-9a-f]{64}$ && "$S_generate_about_sha256" =~ ^[0-9a-f]{64}$ && "$S_about_record_sha256" =~ ^[0-9a-f]{64}$ && "$S_legal_signers_sha256" =~ ^[0-9a-f]{64}$ ]] || die "scope file: check_about_sha256, generate_about_sha256, about_record_sha256 and legal_signers_sha256 must be 64 hex chars"
+  r0p_about_pins "$S_check_about_sha256" "$S_generate_about_sha256" "$S_about_record_sha256" "$S_legal_signers_sha256"
   r0p_gate macos "$DISTRIBUTION" "$S_gate_sha256" "$S_gate_tool_sha256"
 fi
 
@@ -498,7 +501,7 @@ else
   [ -z "$(find "$RES/Licenses" -type f -perm -u+x | head -1)" ] || fail "a file in Resources/Licenses is executable"
   # RC3: the About record inside the artifact being signed must be consistent with the repository (gate, identity, versions, manifest); with
   # --distribution it must be a distribution record without a placeholder slot, and every legal record must carry a valid signature.
-  if [ "$MODE" = real ]; then r0p_about_check "$RES/Licenses" "$DISTRIBUTION" || fail "the About record (Resources/Licenses/about.json) inside the dmg failed the check against the gate (see above); signing refused"; fi
+  if [ "$MODE" = real ]; then r0p_about_check "$RES/Licenses" "$DISTRIBUTION" "$S_build_commit" "$S_check_about_sha256" "$S_generate_about_sha256" "$S_about_record_sha256" "$S_gate_tool_sha256" "$S_legal_signers_sha256" || fail "the About record (Resources/Licenses/about.json) inside the dmg failed the check against the gate (see above); signing refused"; fi
   ev ""; ev "INPUT binaries (before signing; ad-hoc/linker-signed by the build):"
   ev "  $MAIN_EXE sha256=$(sha "$MACOS/$MAIN_EXE")"; ev "  $SIDECAR_EXE sha256=$(sha "$MACOS/$SIDECAR_EXE")"
   ev "  Info.plist sha256=$(sha "$PL"); Licenses files: $NLIC"

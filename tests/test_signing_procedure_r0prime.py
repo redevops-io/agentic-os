@@ -71,6 +71,14 @@ def sha_file(p: Path) -> str:
     return sha_bytes(Path(p).read_bytes())
 
 
+def about_pins(tree: Path, lic: Path) -> dict:
+    """The RC3 About pins of a scope file (scope_version 3) for the private copy `tree` (a packaging/ directory) and the Licenses folder
+    `lic` of the artifact: the sha256 of every file the About check executes or reads as its signer list, and the authorized build commit."""
+    return {"check_about_sha256": sha_file(tree / "notices" / "check_about.py"), "generate_about_sha256": sha_file(tree / "notices" / "generate_about.py"),
+            "about_record_sha256": sha_file(tree.parent / "agentic_os" / "about_record.py"), "legal_signers_sha256": sha_file(tree / "legal-allowed-signers"),
+            "build_commit": json.loads((lic / "about.json").read_text())["build"]["source"]["commit"]}
+
+
 def clean_env(home: Path, path_dirs=(), **extra) -> dict:
     """An allowlist environment: nothing of the caller's environment is inherited."""
     env = {"PATH": ":".join([str(d) for d in path_dirs] + SYSTEM_PATH), "HOME": str(home), "LANG": "C"}
@@ -442,13 +450,14 @@ class Mac:
 
     def scope(self, **over) -> Path:
         now = datetime.now(timezone.utc)
-        d = {"scope_version": "2", "not_before": iso(now - timedelta(hours=1)), "not_after": iso(now + timedelta(hours=1)),
+        d = {"scope_version": "3", "not_before": iso(now - timedelta(hours=1)), "not_after": iso(now + timedelta(hours=1)),
              "script_sha256": sha_file(self.script), "common_sha256": sha_file(self.common), "entitlements_sha256": sha_file(ENT),
              "identity_json_sha256": sha_file(IDJSON), "input_dmg_sha256": sha_file(self.dmg),
              "identity_sha256": sha_bytes(TEST_IDENTITY.encode()), "notary_profile_sha256": sha_bytes(TEST_PROFILE.encode()),
              "team_id": "TESTTEAM01", "notarize": "yes", "upload_to": "apple-notary", "distribution": "no",
              "gate_sha256": sha_file(GATE_JSON), "gate_tool_sha256": sha_file(GATE_PY), "evidence_manifest_sha256": "e" * 64,
-             "build_commit": "b" * 40, "procedure_commit": "c" * 40}
+             "procedure_commit": "c" * 40}
+        d.update(about_pins(self.tree, self.lic))
         d.update(over)
         p = self.tmp / f"scope-{len(list(self.tmp.glob('scope-*')))}.txt"
         p.write_text("# test scope\n" + "".join(f"{k}={v}\n" for k, v in d.items() if v is not None))
@@ -670,7 +679,7 @@ SCOPE_REFUSALS = [
     ("distribution disagrees with the flag", dict(distribution="yes"), "distribution=yes"),
     ("unknown key", dict(surprise="1"), "unknown key"),
     ("missing key", dict(team_id=None), "required key 'team_id'"),
-    ("old version", dict(scope_version="1"), "scope_version must be 2"),
+    ("old version", dict(scope_version="1"), "scope_version must be 3"),
     ("inconsistent upload", dict(notarize="yes", upload_to="none"), "notarize/upload_to"),
 ]
 
@@ -1583,16 +1592,17 @@ class Win:
 
     def scope(self, st, pairs, **over) -> Path:
         now = datetime.now(timezone.utc)
-        d = {"scope_version": "2", "not_before": iso(now - timedelta(hours=1)), "not_after": iso(now + timedelta(hours=1)),
+        d = {"scope_version": "3", "not_before": iso(now - timedelta(hours=1)), "not_after": iso(now + timedelta(hours=1)),
              "script_sha256": sha_file(self.script), "common_sha256": sha_file(self.common), "verifier_sha256": sha_file(VERIFIER),
              "identity_json_sha256": sha_file(IDJSON), "stage": st, "inputs_sha256": ",".join(sorted(h for _, h in pairs)),
              "az_endpoint": "https://eus.codesigning.azure.net/", "az_account": "stub-account", "az_profile": "stub-profile", "expected_cn": "CN=Stub Test Org",
              "gate_sha256": sha_file(GATE_JSON), "gate_tool_sha256": sha_file(GATE_PY), "distribution": "no",
-             "evidence_manifest_sha256": "e" * 64, "build_commit": "b" * 40, "procedure_commit": "c" * 40,
+             "evidence_manifest_sha256": "e" * 64, "procedure_commit": "c" * 40,
              "tool_az_sha256": sha_file(self.stubs / "az"), "tool_java_sha256": sha_file(self.stubs / "java"),
              "tool_python_sha256": sha_file(self.stubs / "py"), "tool_python_packages_sha256": sha_bytes(b"signify==0.0-stub\n"), "tool_python_pth_sha256": sha_bytes(b"\n"),
              "tool_osslsigncode_sha256": "none",
              "container_listing_sha256": "none" if st == "inner" else sha_bytes(self.listing_text)}
+        d.update(about_pins(self.tree, self.lic))
         d.update(over)
         p = self.tmp / f"wscope-{len(list(self.tmp.glob('wscope-*')))}.txt"
         p.write_text("".join(f"{k}={v}\n" for k, v in d.items() if v is not None))
@@ -1697,7 +1707,7 @@ WIN_SCOPE_REFUSALS = [
     ("az tool hash", dict(tool_az_sha256="1" * 64), "tool_az_sha256"), ("java tool hash", dict(tool_java_sha256="1" * 64), "tool_java_sha256"),
     ("python tool hash", dict(tool_python_sha256="1" * 64), "tool_python_sha256"), ("python packages hash", dict(tool_python_packages_sha256="1" * 64), "tool_python_packages_sha256"), ("osslsigncode", dict(tool_osslsigncode_sha256="1" * 64), "tool_osslsigncode_sha256"),
     ("listing for inner", dict(container_listing_sha256="1" * 64), "container_listing_sha256"),
-    ("unknown", dict(extra="1"), "unknown key"), ("missing", dict(az_profile=None), "required key"), ("old version", dict(scope_version="1"), "scope_version must be 2"),
+    ("unknown", dict(extra="1"), "unknown key"), ("missing", dict(az_profile=None), "required key"), ("old version", dict(scope_version="1"), "scope_version must be 3"),
 ]
 
 
@@ -1747,7 +1757,7 @@ def test_windows_real_path_with_stubs_token_handling_ledger_and_two_stages(win):
     assert "STUBTOKEN" not in all_text(out) + r.stdout + r.stderr
     ev = (out / "EVIDENCE.txt").read_text()
     assert "stage:           inner" in ev and "role=launcher" in ev and "role=sidecar" in ev and "NOT yet in any installer" in ev
-    assert "TRIPWIRE" in ev and "PRIVATE-CANDIDATE" in ev and "tools (sha256)" in ev and "build commit " + "b" * 40 in ev
+    assert "TRIPWIRE" in ev and "PRIVATE-CANDIDATE" in ev and "tools (sha256)" in ev and "build commit " + about_pins(win.tree, win.lic)["build_commit"] in ev
     assert "/Users/" not in ev and "/private/" not in ev and "/var/folders" not in ev
     assert "PRIVATE-CANDIDATE SIGNING" in r.stdout, "the gate output and the loud statement are printed"
     assert (out / p.name).read_bytes().endswith(b"STUB-AUTHENTICODE-SIGNATURE") and sha_file(p) == h
@@ -2738,3 +2748,95 @@ def test_rc3_04_windows_licenses_dir_is_only_for_real_container(win):
     p, h = win.inner()
     r = win.run("inner", [(p, h)], "--licenses-dir", win.lic)
     assert r.returncode != 0
+
+
+# ====================================================================================================================
+# RC3 round-2 R2-02: the About check is pinned by the authorization scope (scope_version 3)
+# ====================================================================================================================
+ABOUT_PIN_KEYS = ("check_about_sha256", "generate_about_sha256", "about_record_sha256", "legal_signers_sha256")
+
+
+@pytest.mark.parametrize("key", ABOUT_PIN_KEYS)
+def test_r2_02_macos_scope_must_bind_each_about_file(mac, key):
+    r = mac.real(mac.scope(**{key: "1" * 64}))
+    assert r.returncode != 0 and f"{key} does not match" in r.stderr and not mac.calls("codesign")
+    r = mac.real(mac.scope(**{key: None}), out=mac.work / "out-missing")
+    assert r.returncode != 0 and f"required key '{key}' is missing" in r.stderr
+    r = mac.real(mac.scope(**{key: "nothex"}), out=mac.work / "out-bad")
+    assert r.returncode != 0 and "must be 64 hex chars" in r.stderr
+
+
+@pytest.mark.parametrize("rel", ["notices/check_about.py", "notices/generate_about.py", "legal-allowed-signers"])
+def test_r2_02_a_file_changed_after_the_scope_was_written_is_refused(mac, rel):
+    sc = mac.scope()
+    p = mac.tree / rel
+    p.write_text(p.read_text() + "\n# changed after the owner wrote the scope\n")
+    r = mac.real(sc)
+    assert r.returncode != 0 and "does not match" in r.stderr and not mac.calls("codesign")
+
+
+def test_r2_02_about_record_py_changed_after_the_scope_is_refused(mac):
+    sc = mac.scope()
+    p = mac.tree.parent / "agentic_os" / "about_record.py"
+    p.write_text(p.read_text() + "\n# changed\n")
+    r = mac.real(sc)
+    assert r.returncode != 0 and "about_record_sha256 does not match" in r.stderr and not mac.calls("codesign")
+
+
+def test_r2_02_the_record_commit_must_be_the_authorized_build_commit(mac):
+    r = mac.real(mac.scope(build_commit="d" * 40))
+    assert r.returncode != 0 and "is not the commit of the build that was authorized" in r.stderr and not mac.calls("codesign")
+    assert mac.real(mac.scope(), out=mac.work / "out-ok").returncode == 0           # the matching commit passes
+
+
+def test_r2_02_pins_are_checked_before_the_gate_and_before_anything_else_runs():
+    for script in (MAC, WIN):
+        code = code_of(script)
+        assert code.index("r0p_about_pins") < code.index("r0p_gate ")
+    c = code_of(COMMON)
+    assert 'python3 -I -B "$t/packaging/notices/check_about.py"' in c and "--code-root" in c and "--expect-commit" in c
+    for needle in ("about-check", "cat \"$pk/notices/check_about.py\"", "r0p_sha \"$t/packaging/notices/check_about.py\""):
+        assert needle in c, needle
+
+
+def test_r2_02_the_checker_executes_only_the_pinned_code_root(tmp_path):
+    """check_about loads about_record.py and the gate tool from --code-root, never from --root: poison copies in the data root are not run."""
+    from .about_fixture import chk_about, make_notices, make_root, run_generate, stage_folder
+    root, notices = make_root(tmp_path), make_notices(tmp_path)
+    assert run_generate(root, notices) == 0
+    lic = stage_folder(root, notices, tmp_path / "Licenses")
+    code = tmp_path / "code"
+    (code / "agentic_os").mkdir(parents=True)
+    (code / "packaging").mkdir()
+    shutil.copy(root / "agentic_os" / "about_record.py", code / "agentic_os" / "about_record.py")
+    shutil.copy(root / "packaging" / "check-distribution-gate.py", code / "packaging" / "check-distribution-gate.py")
+    for poisoned in (root / "agentic_os" / "about_record.py", root / "packaging" / "check-distribution-gate.py"):
+        poisoned.write_text("raise SystemExit('POISON executed from the data root')\n")
+    assert chk_about.check(lic, root=root, code_root=code) == []
+    assert chk_about.check(lic, root=root, code_root=code, expect_commit="0" * 40)            # wrong commit is reported
+    with pytest.raises(BaseException):
+        chk_about.check(lic, root=root)                                                         # without code_root it would run the poison
+
+
+@pytest.mark.parametrize("key", ABOUT_PIN_KEYS)
+def test_r2_02_windows_container_scope_binds_the_about_files(win, key):
+    p, h = win.inner()
+    m, hm = win.container()
+    sc = win.scope("container", [(m, hm)], **{key: "1" * 64})
+    r = win.real("container", [(m, hm)], sc, outdir=win.tmp / "wout-pin")
+    assert r.returncode == 2 and f"{key} does not match" in r.stderr
+
+
+def test_r2_02_windows_container_refuses_a_record_of_another_build(win):
+    m, hm = win.container()
+    sc = win.scope("container", [(m, hm)], build_commit="d" * 40)
+    r = win.real("container", [(m, hm)], sc, outdir=win.tmp / "wout-commit")
+    assert r.returncode == 2 and "is not the commit of the build that was authorized" in r.stderr
+
+
+def test_r2_02_template_documents_scope_version_3_and_the_pins():
+    t = (SIGN / "AUTHORIZATION-TEMPLATE.md").read_text()
+    for k in ABOUT_PIN_KEYS:
+        assert t.count(k + "=") == 2, k                      # macOS and Windows blocks
+    assert t.count("scope_version=3") == 2 and t.count("scope_version=2") == 1       # the SSHSIG manifest block is unchanged
+    assert "source.commit" in t and "independent" in t
