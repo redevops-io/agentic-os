@@ -136,9 +136,15 @@ SEPARATION_MSG = ("the published RELEASE key fingerprint is listed as a legal-de
 
 def separation_problems(allowed_signers: Path) -> list[str]:
     """The release key must not be a legal signer: problems for the allowed-signers file (the fingerprint list is checked by load_doc).
-    An error in EVERY build mode (a shared key defeats the separation whether or not a build is a distribution)."""
-    fps, _ = allowed_signer_fingerprints(allowed_signers)
-    return [f"{allowed_signers.name} lists the release key {RELEASE_KEY_FPR}: {SEPARATION_MSG}"] if RELEASE_KEY_FPR in fps else []
+    An error in EVERY build mode (a shared key defeats the separation whether or not a build is a distribution). A line this check cannot
+    read as a plain key line (it cannot be parsed, holds no usable key, or carries `cert-authority`, which would let every certificate
+    issued by the listed key sign) is a problem too, in every mode: the key it carries cannot be compared with the release key, so it must
+    not be accepted silently (the same strings anchor_problems reports). A missing file is not a line problem."""
+    fps, probs = allowed_signer_fingerprints(allowed_signers)
+    out = [p for p in probs if p.startswith("legal-allowed-signers line ")]
+    if RELEASE_KEY_FPR in fps:
+        out.append(f"{allowed_signers.name} lists the release key {RELEASE_KEY_FPR}: {SEPARATION_MSG}")
+    return out
 
 
 def load_doc(path: Path) -> dict:
