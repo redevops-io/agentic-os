@@ -544,3 +544,24 @@ def test_the_dated_check_runbook_names_the_script_and_the_frozen_hashes_that_the
         assert h in body and h in run
     assert "2026-11-07T03:13:00Z" in run and "2026-11-07T03:12:51Z" in run and "2026-11-07T03:13:00" in body
     assert (KIT / "tools/stage-for-windows-host.sh").is_file() and "Collect-Results.ps1" in run
+
+
+def test_venv_py_names_the_real_exe_when_the_bare_name_also_resolves(tmp_path):
+    """Defect found on Windows Server 2022 (2026-11-05): under git-bash `[ -x <venv>/Scripts/python ]` is true for python.exe, so venv_py
+    returned the extension-less path, which the native uv.exe rejects. Simulated here with BOTH names present (the bare name executable):
+    the .exe must win; with only the bare name (POSIX venv) the bare name is returned."""
+    both = tmp_path / "winvenv" / "Scripts"
+    both.mkdir(parents=True)
+    (both / "python.exe").write_text("x")
+    (both / "python").write_text("#!/bin/sh\n")
+    (both / "python").chmod(0o755)
+    posix = tmp_path / "posixvenv" / "bin"
+    posix.mkdir(parents=True)
+    (posix / "python").write_text("#!/bin/sh\n")
+    (posix / "python").chmod(0o755)
+    common = PK / "common.sh"
+    def run(venv):
+        r = subprocess.run([BASH, "-c", f'. "{common}"; venv_py "{venv}"'], capture_output=True, text=True, check=True)
+        return r.stdout.strip()
+    assert run(tmp_path / "winvenv").endswith("/Scripts/python.exe")
+    assert run(tmp_path / "posixvenv").endswith("/bin/python")

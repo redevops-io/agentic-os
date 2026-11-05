@@ -14,7 +14,10 @@ esac
 LOCKS="$PK/locks"
 # uv venv puts executables in bin/ on POSIX and Scripts/ on Windows git-bash.
 venv_bin() { if [ -d "$1/bin" ]; then echo "$1/bin"; else echo "$1/Scripts"; fi; }
-venv_py()  { local b; b="$(venv_bin "$1")"; if [ -x "$b/python" ]; then echo "$b/python"; else echo "$b/python.exe"; fi; }
+# On Windows git-bash `[ -x "$b/python" ]` is TRUE for an existing python.exe (MSYS resolves the missing .exe), so testing the bare name
+# first returned "<venv>/Scripts/python", a path the native uv.exe cannot find ("No virtual environment or system Python installation
+# found", build-wheelhouse.sh 2026-11-05 on Windows Server 2022). Test the real file name first.
+venv_py()  { local b; b="$(venv_bin "$1")"; if [ -f "$b/python.exe" ]; then echo "$b/python.exe"; else echo "$b/python"; fi; }
 # Windows (git-bash): a native Windows program writes text with CRLF line ends EVEN INTO A PIPE (Python's print() included),
 # and bash's $(...) strips only the "\n", so a captured version string or path would end in "\r" and compare unequal / name a
 # directory that does not exist. Pipe every captured native-program output that is compared or used as a path through strip_cr.
