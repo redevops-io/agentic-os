@@ -10,7 +10,10 @@ cd "$SRC"
 . packaging/toolchain.env
 T="$BUILD/tools"; mkdir -p "$T/bin" "$BUILD/home" "$BUILD/tmp"
 ENVV="PATH=$T/bin:$T/cargo/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=$BUILD/home TMPDIR=$BUILD/tmp LANG=C.UTF-8 TERM=dumb \
-CARGO_HOME=$T/cargo RUSTUP_HOME=$T/rustup UV_INSTALL_DIR=$T/bin UV_NO_MODIFY_PATH=1 UV_PYTHON_PREFERENCE=managed LAUNCHER_BUNDLES=deb"
+CARGO_HOME=$T/cargo RUSTUP_HOME=$T/rustup UV_INSTALL_DIR=$T/bin UV_NO_MODIFY_PATH=1 UV_PYTHON_PREFERENCE=managed LAUNCHER_BUNDLES=deb \
+GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0=$SRC"
+# (safe.directory for this one tree only: snapcraft --destructive-mode runs as root over a checkout owned by the invoking user, and
+#  packaging/notices/generate_about.py runs `git status` in it; no global git configuration is written)
 # shellcheck disable=SC2086
 run() { env -i $ENVV "$@"; }
 # the toolchain lives in the part build dir, never on the host; every version is re-checked by the pipeline's own scripts
