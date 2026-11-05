@@ -87,6 +87,33 @@ owns `127.0.0.1:8787`. The launcher therefore treats it as one unit:
   `packaging/check-sidecar-lifecycle.py` and `packaging/check-sidecar-locales.sh` against a frozen sidecar. The Windows paths are compile-checked
   only and still need a run on a Windows host.
 
+## Webview security and the About / Legal view (RC3)
+- **Window name.** The window title, the page `<title>` and the page heading are `Agentic Apps R0-prime`
+  (`packaging/identity.json`); the page carries the line "Private candidate, release line r0-prime." and no
+  logo (D-LIC-11 is unresolved: the bundle icons are untouched and listed in the RC3 launcher report).
+- **Content Security Policy** (`tauri.conf.json` `app.security.csp`), exactly:
+  `default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; connect-src ipc: http://ipc.localhost; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'`.
+  The page logic is the external `ui/app.js` and the styles `ui/app.css`: no inline script or style, no
+  event-handler attribute, no `eval`. `connect-src` admits only Tauri's IPC transport (`ipc://localhost` on
+  macOS/Linux, `http://ipc.localhost` on Windows); if a webview blocks it, Tauri falls back to its postMessage
+  channel. `img-src data:` is only the empty `data:,` favicon. Tauri appends the hash of `app.js` to
+  `script-src` at run time. The webview never loads the control plane's origin (the browser does).
+- **Least privilege.** `capabilities/default.json` lists only `allow-<command>` for the app's own commands
+  (generated from `APP_COMMANDS` in `build.rs`); no `core:*`, shell, fs, http, opener or other plugin permission.
+  `src/guard.rs` is a navigation guard: the webview can only be at the app's own origin
+  (`tauri://localhost`, `http(s)://tauri.localhost`, `about:blank`); anything else (including `127.0.0.1`) is cancelled.
+- **About / Legal view** (footer button "About / Legal"; Escape or Back returns). Two read-only commands,
+  `about_info` and `about_text(slug)` (`src/about.rs`), read the app's own `Licenses/about.json` (schema
+  `redevops.about/1`, written by `packaging/notices/generate_about.py`) and one of six fixed text files.
+  The page never passes a path: the name must equal one of the six constants, the file must be a regular
+  file under the size limit (2 MiB record, 4 MiB text), listed in the record with a sha256 that matches, and
+  valid UTF-8. No network, no sidecar: it works with the control plane stopped. Legal text slots are shown as
+  the placeholder from the record, as text only; the view states that nothing in it is a legal statement.
+- Tests: `cargo test` (context CSP/page/ACL checks, `about.rs`, `guard.rs`), `tests/test_launcher_tauri_config.py`,
+  `tests/test_launcher_about_contract.py`, and `tests/test_launcher_page_browser.py` (headless Chromium with the same
+  CSP header and a stub `__TAURI__`; `RDO_BROWSER_TESTS=1`, `RDO_AXE_JS=<axe.min.js>`). The real WKWebView/WebView2,
+  Tauri's injected scripts and the ACL at run time are covered only by the GUI acceptance checklist (rows D-05 to D-11).
+
 ## Status — precise
 
 **Software vertical: COMPLETE** — posture → LLM/PAIR resolution → capability plan → governed

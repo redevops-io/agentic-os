@@ -38,7 +38,7 @@ checked against it by `tests/test_r0prime_identity.py`. The frozen identity is r
 | Keychain / Credential Manager entries | none are created | none are created | not applicable |
 | `Info.plist` marker | absent | `RedevopsReleaseLine = r0-prime` | `deploy/launcher/src-tauri/Info.plist` (merged by tauri-cli) |
 | Build manifest | no field | `release_line: "r0-prime"` and `identity{...}` | `packaging/tools/build_manifest.py` |
-| Launcher window text | none | second sub-line "Private candidate, release line r0-prime." | `deploy/launcher/ui/index.html` (static text, no behaviour) |
+| Launcher window text | heading "ReDevOps" | heading and `<title>` "Agentic Apps R0-prime" (RC3; the "Re" mark is not used in the page, D-LIC-11), second sub-line "Private candidate, release line r0-prime." | `deploy/launcher/ui/index.html` (static text, no behaviour); window title in `tauri.conf.json` |
 | SBOM root component; notices title; source-offer build identity | `Agentic Apps (native build)`; `Agentic Apps (<platform>)` | `Agentic Apps R0-prime (native build)`; `Agentic Apps R0-prime (<platform>)`; a "product ... release line" line | `generate_sbom.py`, `build-licenses.sh`, `generate_source_offer.py` |
 
 ## 2. Why version 0.1.1 and not a pre-release form

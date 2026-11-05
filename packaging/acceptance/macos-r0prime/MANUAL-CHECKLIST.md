@@ -5,7 +5,7 @@ does each step, records `PASS`, `FAIL` or `NOT DONE` (never blank, never PASS wi
 `~/r0p-evidence/screenshots/` with **exactly that name**. Record the variant of the run on the first line of `~/r0p-evidence/notes.txt`:
 build (unsigned dev / signed candidate), dmg sha256, quarantine variant (Q / Q-set / N, `README.md`), network state, who ran it, date.
 
-The "Expected" column is a **prediction from the source code** (`deploy/launcher/ui/index.html`, `src-tauri/src/main.rs`,
+The "Expected" column is a **prediction from the source code** (`deploy/launcher/ui/index.html`, `ui/app.js`, `src-tauri/src/main.rs`,
 `agentic_os/local_capability_shim.js`, `docs/LOCAL_API_SECURITY.md`), not an observation: no one has launched this window yet. A different
 result is a finding, not a failed test of the checklist. Describe what you saw in your own words in `notes.txt`.
 
@@ -45,9 +45,21 @@ result is a finding, not a failed test of the checklist. Describe what you saw i
 
 | ID | Step | Expected | Record | Screenshot |
 |---|---|---|---|---|
-| D-01 | Look at the window. | Title "Agentic Apps R0-prime", about 560 x 640; heading "ReDevOps", the sub-line "Your apps as one governed system" and a second line "Private candidate, release line r0-prime."; three buttons: **Check this device**, **Start & open** (blue), **Stop**; a text box "Click \"Check this device\" to begin."; a Dock icon with the app's icon. Not blank. | what is shown; blank window? | `D-01-launcher-window.png` |
+| D-01 | Look at the window. | Title "Agentic Apps R0-prime", about 560 x 640; heading "Agentic Apps R0-prime" (RC3: no "ReDevOps" heading and no logo in the page), the sub-line "Your apps as one governed system" and a second line "Private candidate, release line r0-prime."; three buttons: **Check this device**, **Start & open** (blue), **Stop**; a text box "Click \"Check this device\" to begin."; a footer button **About / Legal**; a Dock icon with the app's icon (the bundle icons are unchanged in RC3 and still carry the "Re" mark: D-LIC-11 is an owner decision). Not blank. | what is shown; blank window? | `D-01-launcher-window.png` |
 | D-02 | Look for the "Advanced - local containers" section. | **Hidden** unless `docker` is found on the launcher's `PATH` (a Finder-launched app has the minimal `/usr/bin:/bin:/usr/sbin:/sbin`, so Docker Desktop's `/usr/local/bin/docker` is probably not found even if installed: INFERRED). The three Docker buttons (Enable local containers, Disable, Remove container data) are therefore probably **not reachable** from the GUI on a normal Mac. Record whether the section is visible. | visible yes/no | `D-02-advanced-section.png` |
 | D-03 | Any dialog from macOS (Local Network, Documents/Desktop access, notifications, Accessibility)? | none expected for loopback. | every dialog, its text, your answer | `P-01-permission-dialog-<n>.png` (one per dialog) |
+
+### RC3 additions (launcher webview CSP, About / Legal; all UNVERIFIED until a person runs them in the real window)
+
+| ID | Step | Expected | Record | Screenshot |
+|---|---|---|---|---|
+| D-05 | CSP: start the app from Finder as in C-01/C-02. | The window opens and shows the page fully styled (not blank, not unstyled text). The launcher starts. (The page is served under `default-src 'none'; script-src 'self'; style-src 'self'; ...`; a mistake in the policy would show a blank or unstyled window or dead buttons.) | blank/unstyled yes/no | `D-05-csp-window.png` |
+| D-06 | CSP: press every button in turn: **Check this device**, **Start & open**, **Stop** (and the three Advanced buttons if D-02 showed them). | Each one answers as in E-01, E-02, E-05, E-08: a text appears in the box; no button is dead. (Before RC3 this was the defect-c check; with the CSP it also proves Tauri's `ipc:` transport or its postMessage fallback works under the policy.) | per button: text shown | `D-06-buttons-under-csp.png` |
+| D-07 | CSP: open the web inspector if one is available (right-click > Inspect Element needs a debug build; on a release build skip and say so) or run `log stream --predicate 'subsystem == "com.apple.WebKit"' --info` in Terminal while pressing the buttons and opening About / Legal. | No "Refused to ..." / Content-Security-Policy / blocked-content message; no `Not allowed by ACL` message for a command. A message for `plugin:window|...`, `plugin:webview|...` or `plugin:event|...` (drag, zoom, print helpers that need a permission the launcher does not grant on purpose) is expected noise: record its text. | any such message, verbatim | `D-07-console.png` |
+| D-08 | About / Legal from the keyboard: Tab to **About / Legal**, press Return. | The view replaces the main view in the same window; focus is on the heading "About / Legal"; it lists Product and version (Agentic Apps R0-prime, 0.1.1, r0-prime, private-candidate, platform, commit), Copyright/warranty/licence slots each as a dashed placeholder `[LEGAL TEXT PENDING DECISION D-LIC-...]`, Source code access ("not published yet (private candidate)"), the licence files and the third-party list. Nothing says a licence or legal requirement is met. | what is shown; any value that looks wrong | `D-08-about-view.png` |
+| D-09 | In About / Legal: Tab to **View** next to `LICENSE`, press Return; then Escape; then Escape again. | The text of `LICENSE` appears in a scrollable box (Tab reaches it; arrow keys scroll); Escape closes it and focus returns to that View button; the second Escape returns to the main view with focus on **About / Legal**. VoiceOver (Cmd+F5) reads the heading, the placeholders and the View buttons with the file name. | what happened; VoiceOver output | `D-09-about-viewer.png` |
+| D-10 | With the control plane **not** started (and again after Stop), and with Wi-Fi off: open About / Legal. | Works the same: no service and no network are needed (it reads the app's own `Contents/Resources/Licenses/about.json`). If it shows "ABOUT_RECORD_MISSING", the build record is not in the bundle: record that. | state shown | `D-10-about-offline.png` |
+| D-11 | macOS menu bar: open the application menu **Agentic Apps R0-prime** > **About Agentic Apps R0-prime** (if present). | UNVERIFIED whether Tauri's default menu is shown. If an About panel opens, record its text exactly: it may print the bundle copyright line, which is outside the page and not covered by the placeholder policy (design question 8). | menu present yes/no; panel text | `D-11-menu-about.png` |
 
 ## E. The buttons (v0.3.2 defect c: all buttons were dead; defects a, b)
 
@@ -136,7 +148,7 @@ Mount the dmg again; each copy goes to its own folder under `~/Desktop/r0p-copie
 
 `A-01-account-standard.png A-02-devtools.png A-04-network.png B-01-dmg-xattr-hash.png B-02-dmg-open.png B-03-volume-window.png B-04-drag-to-applications.png
 B-05-copy-to-home-applications.png B-06-app-xattr.png C-01-gatekeeper-first-launch.png C-02-open-or-blocked.png C-03-xattr-spctl-after.png D-01-launcher-window.png
-D-02-advanced-section.png P-01-permission-dialog-<n>.png E-01-check-device.png E-02-start-open.png E-03-running-state.png E-04-start-twice.png E-05-stop.png
+D-02-advanced-section.png D-05-csp-window.png D-06-buttons-under-csp.png D-07-console.png D-08-about-view.png D-09-about-viewer.png D-10-about-offline.png D-11-menu-about.png P-01-permission-dialog-<n>.png E-01-check-device.png E-02-start-open.png E-03-running-state.png E-04-start-twice.png E-05-stop.png
 E-07-check-while-running.png E-08-docker-buttons.png F-01-browser-opens.png F-02-url-after-load.png F-03-ui-with-data.png F-04-history.png F-05-reload.png
 F-07-second-open.png F-08-after-browser-quit.png F-09-after-stop-reload.png G-02-window-closed.png G-04-force-quit.png G-06-login-items.png G-07-state-dirs.png
 H-01-offline-first-launch.png H-02-offline-dmg-mount.png I-01-finder-copy-xattr.png I-02-ditto-xattr.png I-03-copy-launch.png I-04-no-quarantine-launch.png
