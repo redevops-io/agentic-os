@@ -458,7 +458,7 @@
     "option": "a",
     "note": "Owner fact."
    },
-   "ships_meanwhile": "as before; LICENSING.md section 4 does not list the icons as covered",
+   "ships_meanwhile": "temporary neutral artwork generated from code (scripts/make_neutral_icons.py), not the previous mark; LICENSING.md section 4 does not list the icons as covered",
    "counsel_questions": [
     "Q29"
    ],

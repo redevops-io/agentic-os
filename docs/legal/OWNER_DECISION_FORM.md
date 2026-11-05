@@ -272,7 +272,7 @@ Date: ______________   Signature: ______________________________
 
 * Decides: **owner**. Applies to: all. Blocks distribution: yes. Status in the gate file when this form was generated: OPEN.
 * Question: Does the owner confirm that icons/* are first-party artwork under the family licence (matrix NAT-AS-icons: authorship/rights not recorded)?
-* Ships meanwhile (private candidate): as before; LICENSING.md section 4 does not list the icons as covered
+* Ships meanwhile (private candidate): temporary neutral artwork generated from code (scripts/make_neutral_icons.py), not the previous mark; LICENSING.md section 4 does not list the icons as covered
 * Counsel questions in `docs/legal/COUNSEL_BRIEF.md`: Q29
 * Evidence and consequences: [D-LIC-11](DECISION_PACKAGES.md#d-lic-11) in the decision packages
 
