@@ -205,3 +205,13 @@ def test_verifier_reproduces_the_audits_known_gaps_in_the_frozen_macos_sbom(caps
     assert "react 18.3.1" in out and "Projects UI bundle" in out                   # SC-11
     assert "idna: SBOM says 3.19" in out and "uvicorn: SBOM says 0.52.4" in out    # SC-03 stale lock
     assert "Rust crates statically linked into cryptography" in out
+
+
+def test_inventory_top_level_strips_every_platform_extension_tag():
+    """LNX-01: the DuckDB extension is _duckdb.cpython-312-aarch64-linux-gnu.so on Linux (three hyphen groups); the old pattern
+    allowed one, so the inventory named the top-level module '_duckdb.cpython-312-aarch64-linux-gnu' and the SBOM left the
+    archive entry unattributed."""
+    from packaging.sbom import inventory
+    rec = ["_duckdb.cpython-312-aarch64-linux-gnu.so", "_duckdb.cpython-312-x86_64-linux-gnu.so", "_x.cpython-312-darwin.so",
+           "_y.cp312-win_amd64.pyd", "duckdb/__init__.py", "duckdb-1.5.5.dist-info/RECORD"]
+    assert inventory._top_level_from_record(rec) == ["_duckdb", "_x", "_y", "duckdb"]

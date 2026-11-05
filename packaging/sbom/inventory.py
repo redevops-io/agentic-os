@@ -41,7 +41,7 @@ def _top_level_from_record(paths: list[str]) -> list[str]:
             continue
         head = p.split("/", 1)[0]
         if "/" not in p:  # single-file module / extension
-            head = re.sub(r"(\.cpython-\d+[a-z]*(-[a-z0-9_]+)?|\.cp\d+-\w+)?\.(py|so|pyd|dylib)$", "", head)
+            head = re.sub(r"(\.cpython-\d+[a-z]*(-[a-z0-9_]+)*|\.cp\d+-\w+)?\.(py|so|pyd|dylib)$", "", head)
             head = re.sub(r"\.abi3$", "", head)
         if head and head not in ("bin", "scripts", "data"):
             tops.add(head)
