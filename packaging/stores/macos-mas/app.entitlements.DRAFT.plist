@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  DRAFT, NOT USED BY ANY BUILD. Nothing in packaging/ or deploy/launcher/ references this file.
+	  Entitlements of the MAIN EXECUTABLE (the Tauri launcher) of a hypothetical Mac App Store flavour.
+	  Every key below is an OWNER DECISION (docs/release/MAC_APP_STORE.md section 5); none has been applied.
+	  Placeholders: TEAMID and the bundle identifier are NOT real values.
+	  Sign ONLY the main executable with this file. Never give it to nested code (Apple DTS, see MAC_APP_STORE.md sources).
+	-->
+
+	<!-- E1. Required by the Mac App Store for every executable. -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+
+	<!-- E2. The launcher connects to the sidecar on 127.0.0.1 (capability handshake, launch code); the sidecar's
+	     outbound calls (model providers, connectors) are made by a child that inherits this sandbox. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+
+	<!-- E3. The sidecar BINDS and LISTENS on 127.0.0.1:<port>, and the user's browser connects to it. A sandboxed
+	     process needs network.server to listen. The sidecar inherits this app's sandbox (helper file), so the
+	     key must be here. -->
+	<key>com.apple.security.network.server</key>
+	<true/>
+
+	<!-- E4/E5. Required in the entitlements when the app carries a provisioning profile (Tauri App Store guide).
+	     TEAMID and the identifier are placeholders. The identifier must equal CFBundleIdentifier and an App ID
+	     registered in the Developer account (OWNER DECISION: keep io.redevops.agentic-apps.r0prime or register a new one). -->
+	<key>com.apple.application-identifier</key>
+	<string>TEAMID.io.redevops.agentic-apps.r0prime</string>
+	<key>com.apple.developer.team-identifier</key>
+	<string>TEAMID</string>
+
+	<!--
+	  Deliberately ABSENT (and why):
+	    com.apple.security.cs.disable-library-validation  not needed when every Mach-O is signed with the same identity (onedir sidecar)
+	    com.apple.security.cs.allow-jit / allow-unsigned-executable-memory  tested NOT needed for the current sidecar (packaging/macos/sidecar.entitlements.plist)
+	    com.apple.security.files.user-selected.*  only if a "choose a project folder" feature is built (OWNER DECISION)
+	    com.apple.security.temporary-exception.*  App Review scrutinises them; none is proposed
+	    com.apple.security.application-groups, keychain-access-groups  not used by the current code
+	-->
+</dict>
+</plist>

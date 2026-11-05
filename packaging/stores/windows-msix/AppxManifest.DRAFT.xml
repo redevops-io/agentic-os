@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DRAFT, NOT USED BY ANY BUILD. Nothing in packaging/ or deploy/launcher/ references this file.
+  Draft package manifest for a hypothetical Microsoft Store MSIX of the Agentic Apps R0-prime launcher (x64, full trust).
+  NOT RUN: makeappx.exe (Windows SDK) is unavailable on the macOS host that wrote this, so the package was never built,
+  validated against the AppxManifest schema by MakeAppx, or checked with the Windows App Certification Kit.
+  Only XML well-formedness was checked (xmllint with the noout option). The element order follows the documented manifest schema
+  (Identity, Properties, Dependencies, Resources, Applications, Capabilities) but schema validity is UNVERIFIED.
+
+  Every PLACEHOLDER below is an OWNER DECISION or comes from Partner Center after the app name is reserved:
+    Identity/@Name and Identity/@Publisher are issued by Partner Center (Product identity page). Publisher must equal the
+    subject of the certificate that signs the package; for a Store submission the Store re-signs, so Publisher must be
+    the Store-issued CN=... value, NOT a value chosen here.
+  See docs/release/MICROSOFT_STORE.md.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap rescap">
+
+  <!-- Version is major.minor.build.revision. The Store reserves the last field (keep it 0), recalled from Store packaging
+       rules, not re-verified in this work. 0.1.1 is the launcher version in tauri.conf.json. ProcessorArchitecture: x64 only
+       today (packaging/build-windows.ps1 refuses any other host); an arm64 package would be a separate build and a bundle. -->
+  <Identity
+    Name="PLACEHOLDER.AgenticAppsR0Prime"
+    Publisher="CN=PLACEHOLDER-STORE-ISSUED-PUBLISHER-ID"
+    Version="0.1.1.0"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>Agentic Apps R0-prime</DisplayName>
+    <PublisherDisplayName>PLACEHOLDER (Partner Center publisher display name)</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <!-- 10.0.17763.0 = Windows 10 1809. OWNER DECISION: raise it if the WebView2 / Tauri minimum requires. -->
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <!-- Executable is the Tauri main binary (tauri.conf.json mainBinaryName = agentic-r0prime). The sidecar
+         redevops-sidecar.exe must sit NEXT TO it: deploy/launcher/src-tauri/src/main.rs looks for it in the directory of
+         current_exe(). It is started by the launcher with CreateProcess; it is not declared in the manifest. -->
+    <Application Id="AgenticApps" Executable="agentic-r0prime.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="Agentic Apps R0-prime"
+        Description="Governed AI control plane: your apps as one system. Runs a local control plane on this PC and opens it in your browser."
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png" />
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- Restricted capability. Required for every full-trust (medium integrity) Win32 app in an MSIX; the Store asks for a
+         justification on the Submission options page and may delay certification. Proposed justification text is in
+         docs/release/MICROSOFT_STORE.md. OWNER DECISION. -->
+    <rescap:Capability Name="runFullTrust" />
+
+    <!-- NOT declared on purpose: internetClient, internetClientServer, privateNetworkClientServer. Microsoft Learn says these
+         apply to AppContainer apps; a medium-integrity full-trust app is not in an AppContainer and does not need them.
+         Declaring them would add nothing for a full-trust process and would show extra capabilities on the Store listing.
+         If a Windows test shows loopback blocked, that is a FINDING to report, not a reason to add them silently. -->
+  </Capabilities>
+</Package>
