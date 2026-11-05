@@ -41,7 +41,6 @@ Notarize: submit the signed dmg to the Apple notary service (THIS UPLOADS THE SI
 | Script sha256 (`shasum -a 256 packaging/signing/sign_and_notarize_r0prime_macos_v3.sh`) and `signing-common.sh` sha256 | |
 | `packaging/identity.json` sha256; `packaging/distribution-gate.json` sha256; `packaging/check-distribution-gate.py` sha256 | |
 | RC3 About pins (scope_version 3): sha256 of `packaging/notices/check_about.py`, `packaging/notices/generate_about.py`, `agentic_os/about_record.py` and `packaging/legal-allowed-signers`; the build commit (40 hex) must be the `source.commit` of the about.json inside the artifact | |
-| RC3 About pins (scope_version 3): sha256 of `packaging/notices/check_about.py`, `packaging/notices/generate_about.py`, `agentic_os/about_record.py` and `packaging/legal-allowed-signers`; the build commit (40 hex) must be the `source.commit` of the about.json inside the artifact | |
 | Evidence manifest sha256 of the evidence set this dmg belongs to (obtained out of band) | |
 | Entitlement plist sha256 (`packaging/macos/sidecar.entitlements.plist`) | |
 | Identity: sha256 of the EXACT identity string you will export (`printf '%s' "$R0P_CODESIGN_IDENTITY" \| shasum -a 256`) | |
