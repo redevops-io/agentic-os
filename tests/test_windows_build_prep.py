@@ -607,6 +607,8 @@ def test_acceptance_kit_step_04_restores_its_sidecarexe_parameter_after_common_a
     and step 02 failed it for not being x64."""
     k = PK / "acceptance/windows-r0prime"
     s4 = (k / "04-Regression-Bootstrap.ps1").read_text(encoding="utf-8")
-    assert s4.index("Common.ps1") < s4.index("$PSBoundParameters.ContainsKey('SidecarExe')") < s4.index("Initialize-Step -Name '04-regression-bootstrap'")
+    assert s4.index("$SidecarPath = $SidecarExe") < s4.index(". (Join-Path $PSScriptRoot 'Common.ps1')")  # the caller's value is taken BEFORE Common.ps1 overwrites the variable
+    code4 = s4[s4.index("Initialize-Step -Name '04-regression-bootstrap'"):]
+    assert "$SidecarExe" not in code4.replace("$script:SidecarExe", "")
     s2 = (k / "02-Verify-Installed.ps1").read_text(encoding="utf-8")
     assert "$key -eq 'UNINSTALL' -and $arch -eq 'x86'" in s2
