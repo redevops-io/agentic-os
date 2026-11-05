@@ -111,8 +111,8 @@ def test_the_page_is_external_script_and_style_only():
         assert not re.search(r"""(?:src|href|action)\s*=\s*["']\s*(?:https?:)?//""", html), "external reference"
         assert 'rel="stylesheet" href="app.css"' in html
     js = (UI / "app.js").read_text(encoding="utf-8")
-    for banned in ("eval(", "new Function", "innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "javascript:", "http://", "https://", "fetch(", "XMLHttpRequest", "WebSocket", "window.open"):
-        assert banned not in js, banned
+    for banned in ("eval(", "new Function", "innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "javascript:", "http://", "https://", "fetch(", "XMLHttpRequest", "WebSocket", "window.open", "confirm(", "alert(", "prompt("):
+        assert banned not in js, banned      # native dialogs are silent no-ops in the macOS launcher webview
     assert sorted(p.name for p in UI.iterdir()) == ["app.css", "app.js", "index.html"], "only these files may be served to the webview"
 
 
@@ -163,3 +163,20 @@ def test_the_navigation_guard_is_installed_and_the_page_has_no_links():
     guard = (SRC / "src" / "guard.rs").read_text(encoding="utf-8")
     assert ".on_navigation(" in guard and '"tauri" => url.host_str() == Some("localhost")' in guard
     assert "<a " not in (UI / "index.html").read_text(encoding="utf-8")
+
+
+def test_the_guard_decides_per_os_and_does_not_allow_about_blank():
+    guard = (SRC / "src" / "guard.rs").read_text(encoding="utf-8").split("#[cfg(test)]")[0]
+    assert "pub fn navigation_allowed_on(url: &Url, windows: bool)" in guard
+    assert '"http" | "https" => windows && url.host_str() == Some("tauri.localhost")' in guard
+    assert '"about"' not in guard, "about:blank is refused"
+    assert "cfg!(windows)" in guard
+
+
+def test_posix_signals_are_turned_into_a_graceful_exit_and_the_handler_only_writes():
+    main = MAIN_RS.read_text(encoding="utf-8").split("#[cfg(test)]")[0]
+    assert "#[cfg(unix)]\nmod signals;" in main and "signals::start(" in main and "handle.exit(0)" in main
+    sig = (SRC / "src" / "signals.rs").read_text(encoding="utf-8")
+    assert "[libc::SIGTERM, libc::SIGINT, libc::SIGHUP]" in sig and "SIGKILL" not in sig.split("#[cfg(test)]")[0].replace("SIGKILL cannot be handled", "").replace("SIGKILL (and", "")
+    cargo = (SRC / "Cargo.toml").read_text(encoding="utf-8")
+    assert '[target.\'cfg(unix)\'.dependencies]\nlibc = "0.2"' in cargo       # already there: no new dependency

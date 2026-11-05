@@ -8,18 +8,26 @@
 use tauri::plugin::{Builder, TauriPlugin};
 use tauri::{Runtime, Url};
 
-/// The origins Tauri itself serves the bundled frontend from: `tauri://localhost` (macOS, Linux) and
-/// `http(s)://tauri.localhost` (Windows). `about:blank` is what a webview shows before the first load.
-pub fn navigation_allowed(url: &Url) -> bool {
+/// The origin Tauri serves the bundled frontend from, per OS (tauri 2.11 `tauri_protocol_url`): `tauri://localhost`
+/// on macOS and Linux, `http(s)://tauri.localhost` on Windows only. The `tauri.localhost` hosts are therefore NOT
+/// an app origin on macOS/Linux and are refused there; `tauri://localhost` stays allowed everywhere (harmless on
+/// Windows, where no webview serves it). `about:blank` is refused: the webview does not need it for the first
+/// load (OBSERVED natively on macOS: the launcher loads with it refused; a script that navigates to it would
+/// blank the launcher page). Windows initial load without `about:blank`: UNVERIFIED at run time.
+pub fn navigation_allowed_on(url: &Url, windows: bool) -> bool {
     if !url.username().is_empty() || url.password().is_some() || url.port().is_some() {
         return false;
     }
     match url.scheme() {
         "tauri" => url.host_str() == Some("localhost"),
-        "http" | "https" => url.host_str() == Some("tauri.localhost"),
-        "about" => url.as_str() == "about:blank",
+        "http" | "https" => windows && url.host_str() == Some("tauri.localhost"),
         _ => false,
     }
+}
+
+/// The decision for the OS this launcher was compiled for.
+pub fn navigation_allowed(url: &Url) -> bool {
+    navigation_allowed_on(url, cfg!(windows))
 }
 
 /// Plugin that cancels every navigation `navigation_allowed` refuses.
@@ -37,19 +45,33 @@ mod tests {
         navigation_allowed(&Url::parse(u).unwrap())
     }
 
+    fn on(u: &str, windows: bool) -> bool {
+        navigation_allowed_on(&Url::parse(u).unwrap(), windows)
+    }
+
     #[test]
-    fn the_apps_own_origins_are_allowed() {
-        for u in [
-            "tauri://localhost",
-            "tauri://localhost/",
-            "tauri://localhost/index.html",
-            "tauri://localhost/app.js",
-            "http://tauri.localhost/",
-            "https://tauri.localhost/index.html",
-            "about:blank",
-        ] {
-            assert!(ok(u), "{u}");
+    fn the_apps_own_origin_is_allowed_per_os() {
+        for u in ["tauri://localhost", "tauri://localhost/", "tauri://localhost/index.html", "tauri://localhost/app.js"] {
+            assert!(on(u, false) && on(u, true), "{u}"); // allowed on every OS
         }
+        for u in ["http://tauri.localhost/", "https://tauri.localhost/index.html", "http://tauri.localhost"] {
+            assert!(on(u, true), "{u} is the Windows app origin");
+            assert!(!on(u, false), "{u} is not an app origin on macOS/Linux");
+        }
+    }
+
+    #[test]
+    fn about_blank_is_refused_on_every_os() {
+        for w in [false, true] {
+            assert!(!on("about:blank", w) && !on("about:blank#x", w) && !on("about:srcdoc", w), "windows={w}");
+        }
+    }
+
+    #[test]
+    fn the_compiled_decision_follows_the_target_os() {
+        assert!(ok("tauri://localhost/"));
+        assert_eq!(ok("http://tauri.localhost/"), cfg!(windows));
+        assert!(!ok("about:blank"));
     }
 
     #[test]
@@ -78,7 +100,7 @@ mod tests {
             "ftp://tauri.localhost/",
             "ws://tauri.localhost/",
         ] {
-            assert!(!ok(u), "{u}");
+            assert!(!on(u, false) && !on(u, true), "{u}");
         }
     }
 }

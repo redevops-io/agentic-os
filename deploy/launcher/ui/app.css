@@ -7,6 +7,8 @@
   --muted: #4c6164;
   --line: rgba(128, 128, 128, 0.45);
   --danger: #b91c1c;
+  --danger-bg: #b91c1c;
+  --danger-fg: #ffffff;
   --ok: #166534;
   --primary: #1d4ed8;
   --slot-bg: rgba(128, 128, 128, 0.1);
@@ -17,6 +19,8 @@
     --fg: #ececec;
     --muted: #aebfbf;
     --danger: #fca5a5;
+    --danger-bg: #fca5a5;
+    --danger-fg: #1b1b1b;
     --ok: #86efac;
     --primary: #2563eb;
   }
@@ -37,6 +41,7 @@ button:focus-visible, input:focus-visible, pre:focus-visible, section:focus-visi
 }
 button.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
 button.danger { color: var(--danger); border-color: var(--danger); }
+button.danger.armed { background: var(--danger-bg); color: var(--danger-fg); border: 3px solid var(--danger-bg); font-weight: 700; }
 button.link { border: 0; padding: 4px 0; min-height: 28px; text-decoration: underline; color: var(--primary); }
 @media (prefers-color-scheme: dark) { button.link { color: #93b4ff; } }
 pre {
@@ -78,4 +83,5 @@ label.filter { display: block; font-size: 13px; color: var(--muted); }
   .slot.unverified-draft { border-style: dashed; border-width: 3px; }
   .slot.approved-verified { border-style: solid; }
   button.primary { border: 2px solid ButtonText; }
+  button.danger.armed { background: Highlight; color: HighlightText; border-color: ButtonText; }
 }

@@ -246,7 +246,6 @@ def test_page_loads_styled_with_no_violation_and_no_external_request(browser, se
 def test_the_six_buttons_call_the_stub_and_show_the_status_text(browser, served):
     ctx, page, problems, _ = _open(browser, served, _stub())
     _wait(page, "() => !document.getElementById('advanced').hidden")        # docker_available -> true in the stub
-    page.once("dialog", lambda d: d.accept())
     steps = [
         ("check", ["device_report"], "device report: ok"),
         ("start", ["start_native", "open_ui", "legacy_service_warning"], "Running at http://127.0.0.1:55555/"),
@@ -258,9 +257,91 @@ def test_the_six_buttons_call_the_stub_and_show_the_status_text(browser, served)
     for bid, commands, text in steps:
         page.evaluate("window.__calls.length = 0")
         page.click("#" + bid)
+        if bid == "docker-purge":
+            assert _calls(page) == [], "the first click only arms the button"
+            page.click("#" + bid)                                            # the second click confirms
         _wait(page, "(t) => document.getElementById('out').textContent.includes(t)", text)
         assert _calls(page) == commands, (bid, _calls(page))
     assert _viol(page) == [] and problems == []
+    ctx.close()
+
+
+# ---------------------------------------------------------------------------------- two-step purge (no native dialog)
+def _purge_page(browser, served):
+    stub = _stub() + """
+    window.__dialogs = [];
+    for (const n of ["confirm", "alert", "prompt"]) window[n] = (...a) => { window.__dialogs.push(n); return n === "confirm" ? false : null; };
+    """
+    ctx, page, problems, _ = _open(browser, served, stub)
+    _wait(page, "() => !document.getElementById('advanced').hidden")
+    return ctx, page, problems
+
+
+def _purge_runs(page):
+    return [n for n in _calls(page) if n == "advanced_docker_purge"]
+
+
+def test_one_click_on_remove_container_data_never_runs_it_it_arms_with_visible_text_and_a_live_message(browser, served):
+    ctx, page, problems = _purge_page(browser, served)
+    page.click("#docker-purge")
+    page.wait_for_timeout(300)
+    assert _purge_runs(page) == []
+    assert page.locator("#docker-purge").inner_text() == "Click again to confirm: remove container data"
+    assert "armed" in page.get_attribute("#docker-purge", "class")
+    msg = page.locator("#purge-msg")
+    assert "Not removed yet" in msg.inner_text() and msg.get_attribute("role") == "status" and msg.get_attribute("aria-live") == "polite"
+    assert page.evaluate("window.__dialogs") == [], "no native dialog is used"
+    page.click("#docker-purge")                                              # the confirming click
+    _wait(page, "() => document.getElementById('out').textContent.includes('containers purged')")
+    assert _purge_runs(page) == ["advanced_docker_purge"]
+    assert page.locator("#docker-purge").inner_text() == "Remove container data" and "armed" not in page.get_attribute("#docker-purge", "class")
+    # and it is armed again from scratch: another single click does not run it a second time
+    page.click("#docker-purge")
+    page.wait_for_timeout(200)
+    assert _purge_runs(page) == ["advanced_docker_purge"]
+    assert _viol(page) == [] and problems == []
+    ctx.close()
+
+
+def test_the_purge_is_operable_from_the_keyboard_and_focus_stays_on_the_button(browser, served):
+    ctx, page, problems = _purge_page(browser, served)
+    page.focus("#docker-purge")
+    page.keyboard.press("Enter")
+    assert page.evaluate("document.activeElement.id") == "docker-purge" and _purge_runs(page) == []
+    assert "Click again" in page.locator("#docker-purge").inner_text()
+    page.keyboard.press("Space")                                              # the confirming activation
+    _wait(page, "() => document.getElementById('out').textContent.includes('containers purged')")
+    assert _purge_runs(page) == ["advanced_docker_purge"] and page.evaluate("document.activeElement.id") == "docker-purge"
+    ctx.close()
+
+
+@pytest.mark.parametrize("how", ["escape", "blur", "other-button", "timeout", "about"])
+def test_an_armed_purge_disarms_and_nothing_runs(browser, served, how):
+    ctx, page, problems = _purge_page(browser, served)
+    if how == "timeout":
+        page.clock.install()
+    page.focus("#docker-purge")
+    page.keyboard.press("Enter")
+    assert "Click again" in page.locator("#docker-purge").inner_text()
+    if how == "escape":
+        page.keyboard.press("Escape")
+    elif how == "blur":
+        page.keyboard.press("Tab")
+    elif how == "other-button":
+        page.click("#docker-down")
+    elif how == "about":
+        page.click("#open-about")
+    else:
+        page.clock.fast_forward(8100)
+    page.wait_for_timeout(100)
+    assert page.locator("#docker-purge").inner_text() == "Remove container data"
+    assert "armed" not in page.get_attribute("#docker-purge", "class")
+    if how not in ("about",):
+        assert "Cancelled. Nothing was removed." in page.locator("#purge-msg").inner_text() or how == "other-button"
+    if how != "about":
+        page.click("#docker-purge")                                           # a later single click only arms again
+        page.wait_for_timeout(100)
+    assert _purge_runs(page) == []
     ctx.close()
 
 
@@ -534,7 +615,7 @@ def _axe_source() -> str:
 
 @pytest.mark.parametrize("viewport", [(560, 640), (320, 640)], ids=["560x640", "narrow-320"])
 @pytest.mark.parametrize("scheme", ["light", "dark"])
-@pytest.mark.parametrize("state", ["main", "about", "about-viewer", "about-error", "about-states"])
+@pytest.mark.parametrize("state", ["main", "main-armed", "about", "about-viewer", "about-error", "about-states"])
 def test_axe_has_no_violation_in_the_launcher_page(browser, viewport, scheme, state):
     axe_src = _axe_source()
     a = _Server(UI, {"Content-Security-Policy": CSP, "X-Content-Type-Options": NOSNIFF})
@@ -542,7 +623,10 @@ def test_axe_has_no_violation_in_the_launcher_page(browser, viewport, scheme, st
         mode = "missing" if state == "about-error" else "ok"
         ctx, page, problems, _ = _open(browser, (a, a), _stub(mode, record_override=_all_states if state == "about-states" else None), viewport=viewport, scheme=scheme)
         _wait(page, "() => !document.getElementById('advanced').hidden")
-        if state != "main":
+        if state == "main-armed":
+            page.click("#docker-purge")
+            assert "Click again" in page.locator("#docker-purge").inner_text()
+        elif state != "main":
             page.click("#open-about")
             page.wait_for_selector("#about-error:not([hidden])" if state == "about-error" else "#about-body h3")
         if state == "about-viewer":

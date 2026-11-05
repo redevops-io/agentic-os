@@ -103,6 +103,14 @@ owns `127.0.0.1:8787`. The launcher therefore treats it as one unit:
   (generated from `APP_COMMANDS` in `build.rs`); no `core:*`, shell, fs, http, opener or other plugin permission.
   `src/guard.rs` is a navigation guard: the webview can only be at the app's own origin
   (`tauri://localhost`, `http(s)://tauri.localhost`, `about:blank`); anything else (including `127.0.0.1`) is cancelled.
+- **Remove container data** (advanced section) needs two clicks: the webview has no native dialogs (confirm/alert/prompt are
+  silent no-ops in the macOS WKWebView), so the first click arms the button ("Click again to confirm: remove container data",
+  announced in a live region) and the second click within 8 s runs it; Escape, leaving the button, any other click or the
+  time-out disarms it. A single click never runs it.
+- **Navigation origin per OS.** `tauri://localhost` everywhere; `http(s)://tauri.localhost` only on Windows; `about:blank` is
+  refused. **Signals.** SIGTERM/SIGINT/SIGHUP request a graceful `exit(0)` (`src/signals.rs`, no new crate), so the Exit hook
+  stops the control plane and deletes the redirect pages; a second signal or 5 s without exit forces the same cleanup.
+  SIGKILL cannot be handled: the sidecar still stops through its stdin tether and the redirect pages (0600, 60 s) stay until the next sweep.
 - **About / Legal view** (footer button "About / Legal"; Escape or Back returns). Two read-only commands,
   `about_info` and `about_text(slug)` (`src/about.rs`), read the app's own `Licenses/about.json` (schema
   `redevops.about/1`, written by `packaging/notices/generate_about.py`) and one of six fixed text files.
