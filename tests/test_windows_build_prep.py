@@ -589,3 +589,13 @@ def test_build_tooling_never_decodes_with_the_locale_codec():
                 if name == "run" and "text" in kw and "encoding" not in kw:
                     bad.append(f"{f.relative_to(ROOT)}:{n.lineno} subprocess.run(text=True)")
     assert not bad, bad
+
+
+def test_windows_launcher_link_is_deterministic_by_default():
+    """Two Windows builds of one tree differed in 24 bytes of agentic-r0prime.exe (PE timestamp, debug-directory timestamps, PDB GUID).
+    build-launcher.sh must pass /Brepro on Windows (opt-out LAUNCHER_BREPRO=0) and only there."""
+    s = (PK / "build-launcher.sh").read_text(encoding="utf-8")
+    i = s.index('if [ "$OS" = windows ] && [ "${LAUNCHER_BREPRO:-1}" = 1 ]')
+    block = s[i : s.index("fi", i)]
+    assert "link-arg=/Brepro" in block
+    assert s.count("/Brepro") == 2 or "/Brepro" in block  # mentioned in the comment and the flag
