@@ -186,6 +186,22 @@ def test_propose_and_confirm_sources_scans_a_real_folder(tmp_path):
     assert connected[0]["stats"]["indexed"] == 2 and connected[0]["health"]["state"] == "healthy"
 
 
+def test_confirm_rejects_an_unknown_source_enum_with_422_not_a_500():
+    """UI-agent finding UIA-05 (release qualification 2026-11-05): POST /api/sources/confirm with a kind / access_mode / indexing_policy
+    that is not one of the enum values raised ValueError inside the handler and answered a bare HTTP 500 'Internal Server Error'
+    (plain text). A caller's malformed value is a 422 with a JSON detail naming the field; nothing is connected."""
+    c = TestClient(create_app(SampleProjectionProvider()), raise_server_exceptions=False)
+    for field, bad in (("kind", "bogus"), ("access_mode", "write_everything"), ("indexing_policy", "sometimes")):
+        r = c.post("/api/sources/confirm", json={"project_id": "p", "confirmed_by": "alex",
+                                                 "sources": [{"kind": "files", "location": "/nonexistent-uiagent", field: bad}]})
+        assert r.status_code == 422, (field, r.status_code, r.text[:80])
+        assert r.headers["content-type"].startswith("application/json")
+        assert field in r.json()["detail"][0]["loc"] or field in str(r.json()["detail"]), r.text[:200]
+    ok = c.post("/api/sources/confirm", json={"project_id": "p", "confirmed_by": "alex",
+                                              "sources": [{"kind": "files", "location": "/nonexistent-uiagent"}]})
+    assert ok.status_code == 200 and ok.json()[0]["health"]["state"] == "error"      # a missing folder is still reported, not rejected
+
+
 def test_confirm_routes_database_to_the_postgres_connector():
     from agentic_os.projects_api import confirm_and_connect_sources
     from agentic_os.sources import LocalFilesConnector, SourceConnectorRegistry
