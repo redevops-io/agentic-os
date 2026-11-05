@@ -52,6 +52,10 @@ Deny by default. Every request needs a session, except:
 * `GET`/`HEAD` of the static UI files (the exact set of files in the UI directory, plus `/` and
   `/index.html`, plus `/local-capability-shim.js`; dot-files, `/api/...` and `/docs`, `/redoc`,
   `/openapi.json` are never public);
+* `GET`/`HEAD` of the exact About paths registered by `agentic_os/about_ui.py`: `/about/`, `/about/app.js`,
+  `/about/app.css`, `/about/about.json` and one `/about/files/<slug>` per shipped licence file named in the
+  verified build record (`docs/ABOUT_LEGAL_UI.md`). No directory mount and no path parameter: any other
+  `/about/...` path, and any other method, is gated like everything else (401);
 * `POST /api/local/session` (exchange a launch code), `POST /api/local/handshake` and
   `POST /api/local/launch-code` (launcher, authenticated by HMAC proof), which are answered by the gate
   itself and never reach the app.
