@@ -10,8 +10,13 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
-COPY . /app
-RUN pip install --no-cache-dir '.[projects]'
+# Only what the wheel build needs (same set as the root Dockerfile), not the whole build context: a
+# local .env, key or evidence file in the checkout must not be able to land in an image layer.
+COPY pyproject.toml README.md modules.yaml LICENSE LICENSE-COMMONS-CLAUSE LICENSE.md LICENSING.md ./
+COPY agentic_os ./agentic_os
+COPY deploy/assets ./deploy/assets
+# PIP_NO_CACHE_DIR also reaches the isolated build-environment pip that --no-cache-dir does not.
+RUN PIP_NO_CACHE_DIR=1 pip install --no-cache-dir '.[projects]'
 ENV PROJECTS_HOST=0.0.0.0 PROJECTS_PORT=8787
 EXPOSE 8787
 CMD ["agentic-os-projects"]
