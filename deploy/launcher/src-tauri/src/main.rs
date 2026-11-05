@@ -364,6 +364,178 @@ mod tests {
             .collect()
     }
 
+    // ---- the compiled default window icon (RC3, D-LIC-11: temporary neutral artwork) -----------------------
+
+    /// Minimal zlib/DEFLATE decoder (stored, fixed and dynamic blocks; after RFC 1951 / zlib's puff.c), so the
+    /// test can decode `icons/32x32.png` without adding a dependency to the launcher.
+    fn inflate(zlib: &[u8]) -> Vec<u8> {
+        struct Bits<'a> { d: &'a [u8], pos: usize, bit: u32, cnt: u32 }
+        impl Bits<'_> {
+            fn need(&mut self, n: u32) -> u32 {
+                while self.cnt < n {
+                    self.bit |= (self.d[self.pos] as u32) << self.cnt;
+                    self.pos += 1;
+                    self.cnt += 8;
+                }
+                let v = self.bit & ((1u32 << n) - 1);
+                self.bit >>= n;
+                self.cnt -= n;
+                v
+            }
+        }
+        // canonical Huffman table: (count per length, symbols ordered by code)
+        fn build(lengths: &[u8]) -> ([u16; 16], Vec<u16>) {
+            let mut count = [0u16; 16];
+            for &l in lengths { count[l as usize] += 1; }
+            let mut offs = [0u16; 16];
+            for i in 1..15 { offs[i + 1] = offs[i] + count[i]; }
+            let mut syms = vec![0u16; lengths.len()];
+            for (sym, &l) in lengths.iter().enumerate() {
+                if l != 0 { syms[offs[l as usize] as usize] = sym as u16; offs[l as usize] += 1; }
+            }
+            (count, syms)
+        }
+        fn decode(b: &mut Bits, t: &([u16; 16], Vec<u16>)) -> usize {
+            let (mut code, mut first, mut index) = (0i32, 0i32, 0i32);
+            for len in 1..16 {
+                code |= b.need(1) as i32;
+                let c = t.0[len] as i32;
+                if code - c < first { return t.1[(index + (code - first)) as usize] as usize; }
+                index += c;
+                first += c;
+                first <<= 1;
+                code <<= 1;
+            }
+            panic!("bad huffman code");
+        }
+        const LBASE: [u16; 29] = [3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258];
+        const LEXT: [u8; 29] = [0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0];
+        const DBASE: [u16; 30] = [1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577];
+        const DEXT: [u8; 30] = [0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13];
+        assert_eq!(zlib[0] & 0x0f, 8, "zlib header: deflate");
+        let mut b = Bits { d: zlib, pos: 2, bit: 0, cnt: 0 };
+        let mut out: Vec<u8> = Vec::new();
+        loop {
+            let last = b.need(1);
+            match b.need(2) {
+                0 => {
+                    b.bit = 0;
+                    b.cnt = 0;
+                    let len = u16::from_le_bytes([zlib[b.pos], zlib[b.pos + 1]]) as usize;
+                    out.extend_from_slice(&zlib[b.pos + 4..b.pos + 4 + len]);
+                    b.pos += 4 + len;
+                }
+                kind @ (1 | 2) => {
+                    let (lt, dt) = if kind == 1 {
+                        let mut l = [8u8; 288];
+                        for x in l.iter_mut().take(256).skip(144) { *x = 9; }
+                        for x in l.iter_mut().take(280).skip(256) { *x = 7; }
+                        (build(&l), build(&[5u8; 30]))
+                    } else {
+                        let (nlen, ndist, ncode) = (b.need(5) as usize + 257, b.need(5) as usize + 1, b.need(4) as usize + 4);
+                        const ORDER: [usize; 19] = [16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15];
+                        let mut cl = [0u8; 19];
+                        for &o in ORDER.iter().take(ncode) { cl[o] = b.need(3) as u8; }
+                        let ct = build(&cl);
+                        let mut lens = vec![0u8; nlen + ndist];
+                        let mut i = 0;
+                        while i < nlen + ndist {
+                            let sym = decode(&mut b, &ct);
+                            if sym < 16 { lens[i] = sym as u8; i += 1; continue; }
+                            let (prev, rep) = match sym {
+                                16 => (lens[i - 1], 3 + b.need(2)),
+                                17 => (0, 3 + b.need(3)),
+                                _ => (0, 11 + b.need(7)),
+                            };
+                            for _ in 0..rep { lens[i] = prev; i += 1; }
+                        }
+                        (build(&lens[..nlen]), build(&lens[nlen..]))
+                    };
+                    loop {
+                        let sym = decode(&mut b, &lt);
+                        if sym < 256 { out.push(sym as u8); continue; }
+                        if sym == 256 { break; }
+                        let sym = sym - 257;
+                        let len = LBASE[sym] as usize + b.need(LEXT[sym] as u32) as usize;
+                        let ds = decode(&mut b, &dt);
+                        let dist = DBASE[ds] as usize + b.need(DEXT[ds] as u32) as usize;
+                        for _ in 0..len { out.push(out[out.len() - dist]); }
+                    }
+                }
+                _ => panic!("bad deflate block type"),
+            }
+            if last == 1 { break; }
+        }
+        out
+    }
+
+    /// Decode an 8-bit RGBA, non-interlaced PNG into (width, height, rgba) (all five filter types).
+    fn decode_rgba_png(png: &[u8]) -> (u32, u32, Vec<u8>) {
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        let (mut pos, mut idat, mut hdr) = (8usize, Vec::new(), None);
+        while pos < png.len() {
+            let len = u32::from_be_bytes(png[pos..pos + 4].try_into().unwrap()) as usize;
+            let tag = &png[pos + 4..pos + 8];
+            let data = &png[pos + 8..pos + 8 + len];
+            match tag {
+                b"IHDR" => hdr = Some((u32::from_be_bytes(data[0..4].try_into().unwrap()), u32::from_be_bytes(data[4..8].try_into().unwrap()), data[8], data[9], data[12])),
+                b"IDAT" => idat.extend_from_slice(data),
+                _ => {}
+            }
+            pos += 12 + len;
+        }
+        let (w, h, depth, colour, interlace) = hdr.expect("IHDR");
+        assert_eq!((depth, colour, interlace), (8, 6, 0), "the icon must be 8-bit RGBA, not interlaced");
+        let raw = inflate(&idat);
+        let stride = w as usize * 4;
+        assert_eq!(raw.len(), (stride + 1) * h as usize);
+        let mut px = vec![0u8; stride * h as usize];
+        for y in 0..h as usize {
+            let f = raw[y * (stride + 1)];
+            for x in 0..stride {
+                let cur = raw[y * (stride + 1) + 1 + x];
+                let a = if x >= 4 { px[y * stride + x - 4] } else { 0 };
+                let up = if y > 0 { px[(y - 1) * stride + x] } else { 0 };
+                let c = if x >= 4 && y > 0 { px[(y - 1) * stride + x - 4] } else { 0 };
+                px[y * stride + x] = cur.wrapping_add(match f {
+                    0 => 0,
+                    1 => a,
+                    2 => up,
+                    3 => ((a as u16 + up as u16) / 2) as u8,
+                    4 => {
+                        let p = a as i32 + up as i32 - c as i32;
+                        let (pa, pb, pc) = ((p - a as i32).abs(), (p - up as i32).abs(), (p - c as i32).abs());
+                        if pa <= pb && pa <= pc { a } else if pb <= pc { up } else { c }
+                    }
+                    _ => panic!("bad PNG filter"),
+                });
+            }
+        }
+        (w, h, px)
+    }
+
+    /// RC3 / D-LIC-11: the window icon compiled into the binary (tauri-codegen embeds `bundle.icon`'s first
+    /// `.png` as the default window icon on macOS and Linux) is the temporary neutral 32x32 artwork, decoded
+    /// RGBA for RGBA. A fingerprint of the previous artwork's pixels (taken from its decoded 32x32 RGBA, kept
+    /// as a hash only) must not match.
+    #[test]
+    fn the_compiled_default_window_icon_is_the_temporary_neutral_32x32() {
+        const OLD_RGBA_SHA256: &str = "c5070069b55e5bf69732713095d04e0f9e8079f13d0ffeec3f4d43acccd8b82c";
+        let ctx = context();
+        let icon = ctx.default_window_icon().expect("a default window icon is compiled in");
+        let file = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/icons/32x32.png")).unwrap();
+        let (w, h, rgba) = decode_rgba_png(&file);
+        assert_eq!((w, h), (32, 32));
+        assert_eq!((icon.width(), icon.height()), (32, 32), "the compiled icon is the 32x32 asset");
+        assert_eq!(icon.rgba(), &rgba[..], "compiled RGBA differs from icons/32x32.png");
+        let digest: String = Sha256::digest(icon.rgba()).iter().map(|b| format!("{b:02x}")).collect();
+        assert_ne!(digest, OLD_RGBA_SHA256, "the compiled icon is still the previous artwork");
+        // plain geometry: the corners are transparent, the centre is opaque
+        assert_eq!(icon.rgba()[3], 0, "top-left pixel is transparent (rounded corner)");
+        let centre = (16 * 32 + 16) * 4;
+        assert_eq!(icon.rgba()[centre + 3], 255);
+    }
+
     /// Windows title and page title carry the product name of R0-prime (packaging/identity.json); the old
     /// "ReDevOps" heading is gone and the page shows no logo.
     #[test]
