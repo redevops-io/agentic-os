@@ -160,6 +160,9 @@ def test_spec_embeds_licences_only_from_a_complete_directory(tmp_path, monkeypat
         _run_spec()
     for n in ("LICENSE", "LICENSE-COMMONS-CLAUSE", "LICENSE.md", "LICENSING.md", "THIRD_PARTY_NOTICES.txt"):
         (tmp_path / n).write_text("x")
+    with pytest.raises(AssertionError, match="lacks about.json"):      # RC3: the About record is part of the embedded folder
+        _run_spec()
+    (tmp_path / "about.json").write_text("{}")
     assert (str(tmp_path), "Licenses") in _run_spec()["datas"]
 
 
