@@ -128,7 +128,7 @@ customarily used for software interchange”, 6(b) a written offer “valid for 
 spare parts or customer support for that product model”, 6(d) “offering access from a designated place”. The artifacts carry no source
 and no offer. `packaging/SOURCE-OFFER.md` is a template with a placeholder for the offer wording; it lists the first-party commit,
 the pins and the third-party sources with hashes. The public repository has no R0-prime commit. The vendored UI is built from the
-`redevops-projects` repository and the npm lock is not recorded. The Commons Clause says “Any license notice or attribution required by
+`redevops-projects` repository; the source commit that built it is recorded in `packaging/ui-bundle-source.json` but is local and unpublished, and the npm lock file is not in this repository (only its git blob id and sha256 are recorded). The Commons Clause says “Any license notice or attribution required by
 the License must also include this Commons Clause License Condition notice.”
 
 * **Q13.** Which of AGPL 6(a) to (e) is adequate for installers downloaded as a dmg, an MSI and an NSIS exe? Does 6(a)'s "durable physical medium" language admit a download, and what does 6(d) require by "the same place"?

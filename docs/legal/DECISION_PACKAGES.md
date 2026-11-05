@@ -152,7 +152,7 @@ Licences present in the shipped binaries (from the 405-component notices of the 
 <a id="d-lic-7"></a>
 ## D-LIC-7 React and other JavaScript in the UI bundle (non-blocking)
 
-**Evidence (OBSERVED).** `agentic_os/projects_ui/assets/index-DolE0eja.js` (223508 bytes): the only `@license` and `Copyright` strings are four React banners (“Copyright (c) Facebook, Inc. and its affiliates.” x4); the MIT text of React 18.3.1 (identical bytes in react-dom and scheduler 0.23.2) is printed. The npm lock of the build is not in this repository (it lives in `redevops-projects`), so other bundled packages that carry no banner cannot be listed (UNVERIFIED). **Options:** (a) accept React-only; (b) record the redevops-projects tag/commit and lock and generate the UI notices from it. **Recommended default:** (b). **Decides:** owner.
+**Evidence (OBSERVED).** `agentic_os/projects_ui/assets/index-Bunz4yfu.js` (227537 bytes): the only `@license` and `Copyright` strings are four React banners (“Copyright (c) Facebook, Inc. and its affiliates.” x4); the MIT text of React 18.3.1 (identical bytes in react-dom and scheduler 0.23.2) is printed. The bundle is built from the LOCAL, UNPUBLISHED `redevops-projects` commit `d77c6a4ab657969583590bc5ceff5e7da1d22e81` (recorded with the git blob id and sha256 of its `package-lock.json` in `packaging/ui-bundle-source.json`; the lock file itself is not in this repository), so other bundled packages that carry no banner cannot be listed (UNVERIFIED). **Options:** (a) accept React-only; (b) record the redevops-projects tag/commit and lock and generate the UI notices from it. **Recommended default:** (b). **Decides:** owner.
 
 ---
 

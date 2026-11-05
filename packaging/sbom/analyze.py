@@ -375,6 +375,11 @@ def analyze(archive: Archive, inv: dict[str, dict], facts: dict | None = None, w
         agentic = inv.get("agentic-os")
         ui.version = (agentic or {}).get("version")
         ui.props["redevops:origin"] = "built from the separate redevops-projects repository and vendored into agentic_os; its npm lock is not in this repository"
+        ui_rec = HERE.parent / "ui-bundle-source.json"
+        if ui_rec.exists():
+            u = json.loads(ui_rec.read_text(encoding="utf-8"))
+            ui.props["redevops:origin"] += (f"; source commit {u['source_commit']} ("
+                                            + ("published" if u.get("source_commit_published") else "LOCAL, NOT PUBLISHED") + f"), npm lock git blob {u['package_lock_git_blob']}")
         ui.limitations.append("only package banners/version strings in the minified JS are read; other third-party code without a banner is not enumerable")
         ui.shipped_in.add("sidecar:PKG")
         ui.entries = [f"pkg:{e}" for e in ui_entries]
