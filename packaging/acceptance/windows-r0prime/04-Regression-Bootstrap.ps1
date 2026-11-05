@@ -21,6 +21,9 @@
 param([string]$InstallDir, [string]$SidecarExe, [string]$OutDir, [int]$TimeoutSec = 90)
 $ErrorActionPreference = 'Continue'
 . (Join-Path $PSScriptRoot 'Common.ps1')
+# Common.ps1 assigns $script:SidecarExe (the file NAME), which IS this script's -SidecarExe parameter: restore what the caller passed (or nothing),
+# else the lookup below takes the bare name for a path and BST-00 fails with 'not found' (Windows Server 2022, 2026-11-05).
+$SidecarExe = $(if ($PSBoundParameters.ContainsKey('SidecarExe')) { $PSBoundParameters['SidecarExe'] } else { $null })
 Initialize-Step -Name '04-regression-bootstrap' -OutDir $OutDir
 
 function Invoke-Bootstrap {

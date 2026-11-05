@@ -599,3 +599,14 @@ def test_windows_launcher_link_is_deterministic_by_default():
     block = s[i : s.index("fi", i)]
     assert "link-arg=/Brepro" in block
     assert s.count("/Brepro") == 2 or "/Brepro" in block  # mentioned in the comment and the flag
+
+
+def test_acceptance_kit_step_04_restores_its_sidecarexe_parameter_after_common_and_02_accepts_the_x86_nsis_uninstaller():
+    """Windows Server 2022, 2026-11-05 (kit defects, not candidate defects): (1) Common.ps1 sets $script:SidecarExe (a file NAME), which is step
+    04's own -SidecarExe parameter once dot-sourced, so BST-00 always failed 'not found'; (2) the NSIS uninstall.exe stub is a 32-bit PE by design
+    and step 02 failed it for not being x64."""
+    k = PK / "acceptance/windows-r0prime"
+    s4 = (k / "04-Regression-Bootstrap.ps1").read_text(encoding="utf-8")
+    assert s4.index("Common.ps1") < s4.index("$PSBoundParameters.ContainsKey('SidecarExe')") < s4.index("Initialize-Step -Name '04-regression-bootstrap'")
+    s2 = (k / "02-Verify-Installed.ps1").read_text(encoding="utf-8")
+    assert "$key -eq 'UNINSTALL' -and $arch -eq 'x86'" in s2
