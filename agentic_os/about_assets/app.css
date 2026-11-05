@@ -1,0 +1,86 @@
+/* About page. Self-contained: no external font, image or script. ASCII only. Tokens follow the vendored Projects UI with the
+   text colours that failed contrast in the UI audit replaced by darker values (>= 4.5:1 for text, >= 3:1 for borders). */
+:root{
+  --bg:#eef2f3; --panel:#ffffff; --panel-2:#f4f7f7; --ink:#0e1a1c; --ink-2:#3a4f52; --muted:#4c6164;
+  --line:#6f8588; --line-soft:#dde5e6; --accent-ink:#0a6d62; --on-accent:#ffffff;
+  --warn-ink:#6b3f03; --warn-wash:#f8ecda; --warn-line:#8a5208;
+  --bad-ink:#8f2018; --bad-wash:#f8e4e1; --ok-ink:#145c34; --ok-wash:#e0f1e7; --focus:#0a6d62; --radius:12px;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#0a1113; --panel:#111b1d; --panel-2:#162224; --ink:#e8f0f0; --ink-2:#b9c9ca; --muted:#9db1b3;
+    --line:#6c8587; --line-soft:#223133; --accent-ink:#6fdccf; --on-accent:#06201c;
+    --warn-ink:#f0c88a; --warn-wash:#2a2011; --warn-line:#d99a4c;
+    --bad-ink:#f2a39a; --bad-wash:#2c1613; --ok-ink:#8fdcae; --ok-wash:#12291d; --focus:#6fdccf;
+  }
+}
+*{box-sizing:border-box}
+html{font-size:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;font-size:.9375rem;line-height:1.5}
+h1,h2,h3,h4{margin:0;font-weight:600;letter-spacing:-.01em}
+h1{font-size:1.375rem} h2{font-size:1.125rem} h3{font-size:1rem}
+p{margin:.25rem 0 .75rem}
+a{color:var(--accent-ink);text-underline-offset:2px}
+a:hover{text-decoration-thickness:2px}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:4px}
+[tabindex="-1"]:focus{outline:none}
+.mono{font-family:ui-monospace,Menlo,"Cascadia Mono",monospace}
+.mono,.note{overflow-wrap:anywhere}
+.skip{position:absolute;left:.5rem;top:-4rem;background:var(--accent-ink);color:var(--on-accent);padding:.5rem .75rem;border-radius:6px;z-index:10}
+.skip:focus{top:.5rem}
+.top{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;padding:.75rem 1.375rem;border-bottom:1px solid var(--line-soft);background:var(--panel)}
+.brand{margin:0;font-weight:700}
+.top a{display:inline-flex;align-items:center;min-height:2.25rem}
+main{max-width:62rem;margin:0 auto;padding:1.375rem}
+.foot{max-width:62rem;margin:0 auto;padding:0 1.375rem 1.375rem}
+.card{background:var(--panel);border:1px solid var(--line-soft);border-radius:var(--radius);padding:1rem 1.125rem;margin:0 0 1rem}
+.card > h2{margin-bottom:.5rem}
+.card h3{margin:1rem 0 .25rem}
+dl.facts{display:grid;grid-template-columns:minmax(9rem,13rem) 1fr;gap:.375rem 1rem;margin:0}
+dl.facts dt{color:var(--ink-2);font-weight:600}
+dl.facts dd{margin:0;overflow-wrap:anywhere}
+.note{color:var(--muted);font-size:.8125rem}
+.tag{display:inline-block;font-size:.75rem;padding:0 .4rem;border-radius:4px;border:1px solid var(--line);color:var(--ink-2);margin-inline-start:.375rem}
+.slot-label{font-weight:600;color:var(--ink-2);margin-top:.5rem;display:block}
+.slot{display:block;margin:.375rem 0;padding:.5rem .75rem;border:2px dashed var(--warn-line);background:var(--warn-wash);color:var(--warn-ink);border-radius:8px;overflow-wrap:anywhere;white-space:pre-wrap}
+.slot small{display:block;font-weight:400;margin-top:.125rem}
+.slot.filled{border-style:solid;border-color:var(--ok-ink);background:var(--ok-wash);color:var(--ink)}
+.slot.filled small{color:var(--ink-2)}
+button{font:inherit;cursor:pointer;display:inline-flex;align-items:center;gap:.375rem;padding:.4375rem .8125rem;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--ink);min-height:2.25rem}
+button:hover{background:var(--panel-2)}
+input[type=search]{font:inherit;padding:.4375rem .625rem;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink);min-width:12rem;min-height:2.25rem}
+label{font-weight:600}
+.toolbar{display:flex;gap:.625rem;align-items:center;flex-wrap:wrap;margin:.5rem 0}
+ul.comps{list-style:none;margin:.5rem 0 0;padding:0;border:1px solid var(--line-soft);border-radius:8px}
+ul.comps li{display:grid;grid-template-columns:minmax(8rem,1.4fr) minmax(4rem,.6fr) minmax(8rem,1.6fr) auto;gap:.5rem 1rem;align-items:center;padding:.4375rem .75rem;border-top:1px solid var(--line-soft)}
+ul.comps li:first-child{border-top:0}
+ul.comps .nm{font-weight:600;overflow-wrap:anywhere}
+ul.comps .lic{color:var(--ink-2);overflow-wrap:anywhere}
+ul.comps.files li{grid-template-columns:minmax(9rem,1.3fr) minmax(8rem,2fr) 6.5rem auto}
+.badge-warn{display:inline-block;font-size:.75rem;padding:0 .4rem;border-radius:4px;background:var(--warn-wash);color:var(--warn-ink);border:1px solid var(--warn-line)}
+.viewer{border:1px solid var(--line);border-radius:8px;background:var(--panel);margin:.75rem 0 1rem;padding:0 0 .5rem}
+.viewer header{display:flex;gap:.5rem;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:.5rem .75rem;border-bottom:1px solid var(--line-soft)}
+.viewer .actions{display:inline-flex;gap:.5rem;flex-wrap:wrap}
+.viewer .note{margin:.25rem .75rem}
+.viewer pre{margin:0;padding:.75rem;max-height:18rem;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:.8125rem/1.45 ui-monospace,Menlo,"Cascadia Mono",monospace;color:var(--ink)}
+.state p{margin:.25rem 0}
+.callout{border-radius:8px;padding:.625rem .875rem;border:1px solid var(--line);background:var(--panel-2);margin:.5rem 0 1rem}
+.callout.err{border-color:var(--bad-ink);background:var(--bad-wash);color:var(--ink)}
+.callout.err h2{color:var(--bad-ink);font-size:1rem}
+.callout.info{border-color:var(--accent-ink)}
+.callout h2{font-size:1rem}
+.skeleton{display:block;height:.875rem;border-radius:4px;background:var(--line-soft);margin:.5rem 0}
+@media (max-width: 520px){
+  dl.facts{grid-template-columns:1fr}
+  dl.facts dt{margin-top:.5rem}
+  ul.comps li,ul.comps.files li{grid-template-columns:1fr auto}
+  ul.comps li .lic,ul.comps li .note{grid-column:1 / -1;order:3}
+  main{padding:.875rem}
+  .top{padding:.625rem .875rem}
+}
+@media (forced-colors: active){
+  .slot{border-color:CanvasText;background:Canvas;color:CanvasText}
+  .card,.viewer,ul.comps,.callout{border-color:CanvasText}
+}
+@media (prefers-reduced-motion: reduce){ *{animation:none!important;transition:none!important} }

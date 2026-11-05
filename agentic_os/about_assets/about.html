@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>About and licences</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<a class="skip" href="#about-main">Skip to About content</a>
+<header class="top">
+  <p class="brand"><span id="brand-name">Agentic Apps</span></p>
+  <nav aria-label="Page"><a id="back" href="../">Back to the application</a></nav>
+</header>
+<main id="about-main" tabindex="-1">
+  <h1>About and licences</h1>
+  <p class="note">This page needs no sign-in and shows no project data. It makes no request to the project API. Values come from the build record that ships with the application.</p>
+  <div id="state" role="status" aria-live="polite" class="state"><p>Loading build information...</p></div>
+  <noscript><p class="callout">This page needs scripting to read the build record. The licence files are in the Licenses folder of the application.</p></noscript>
+  <div id="content" hidden>
+    <section class="card" aria-labelledby="h-product">
+      <h2 id="h-product">Product and version</h2>
+      <dl class="facts" id="facts"></dl>
+    </section>
+    <section class="card" aria-labelledby="h-legal">
+      <h2 id="h-legal">Copyright, warranty and licence</h2>
+      <div id="legal"></div>
+      <p><a href="#h-texts">View the licence files that ship with this build</a></p>
+    </section>
+    <section class="card" aria-labelledby="h-source">
+      <h2 id="h-source">Source code access</h2>
+      <div id="source"></div>
+    </section>
+    <section class="card" id="sec-texts" aria-labelledby="h-texts">
+      <h2 id="h-texts" tabindex="-1">Licence files</h2>
+      <p class="note">The files are shown exactly as shipped in the Licenses folder, as plain text, without changes.</p>
+      <ul class="comps files" id="files" aria-label="Licence files"></ul>
+    </section>
+    <section class="card" id="sec-third" aria-labelledby="h-third">
+      <h2 id="h-third" tabindex="-1">Third-party components</h2>
+      <p id="third-intro"></p>
+      <div class="toolbar">
+        <label for="filter">Filter components</label>
+        <input id="filter" type="search" maxlength="100" autocomplete="off" placeholder="Name or licence">
+      </div>
+      <p id="filter-status" class="note" role="status" aria-live="polite"></p>
+      <ul class="comps" id="comps" aria-label="Third-party components"></ul>
+      <div id="refs-wrap" hidden>
+        <h3 id="h-refs">Libraries linked into a shipped binary</h3>
+        <ul class="comps" id="refs" aria-labelledby="h-refs"></ul>
+      </div>
+    </section>
+    <div id="viewer" class="viewer" role="group" aria-labelledby="v-title" hidden>
+      <header>
+        <h3 id="v-title" tabindex="-1"></h3>
+        <span class="actions">
+          <button type="button" id="v-copy">Copy text</button>
+          <button type="button" id="v-close">Close</button>
+        </span>
+      </header>
+      <p id="v-meta" class="note mono"></p>
+      <pre id="v-text" tabindex="0" role="region" aria-labelledby="v-title"></pre>
+      <p id="v-note" class="note"></p>
+    </div>
+    <p id="live" class="note" role="status" aria-live="polite"></p>
+  </div>
+</main>
+<footer class="foot">
+  <p class="note" id="foot-line">Agentic Apps</p>
+</footer>
+<script src="app.js"></script>
+</body>
+</html>
