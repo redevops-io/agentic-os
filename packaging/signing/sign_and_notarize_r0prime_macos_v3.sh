@@ -467,15 +467,30 @@ say "step 2: layout and identity checks on the staged app"
 if [ "$PLAN" = 1 ]; then
   out "  (checked when executing: $MAIN_EXE and $SIDECAR_EXE are the only executables and the only Mach-O files; both are arm64-only;"
   out "   Info.plist: CFBundleIdentifier=$BUNDLE_ID, CFBundleExecutable=$MAIN_EXE, version $VERSION/$BUNDLE_VERSION, LSMinimumSystemVersion 11.0, RedevopsReleaseLine=$RELEASE_LINE;"
-  out "   Resources/Licenses exists, its files are not executable; in --real its about.json passes check_about.py$( [ "$DISTRIBUTION" = 1 ] && echo ' --distribution'); no Frameworks/PlugIns/Helpers/XPCServices/_CodeSignature)"
+  out "   Resources/Licenses exists, its files are not executable; in --real its about.json passes check_about.py$( [ "$DISTRIBUTION" = 1 ] && echo ' --distribution'); no Frameworks/PlugIns/Helpers/XPCServices; an ad-hoc _CodeSignature/CodeResources seal is removed and replaced)"
 else
   [ -f "$MACOS/$MAIN_EXE" ] && [ -f "$MACOS/$SIDECAR_EXE" ] || fail "expected executables missing in the bundle ($MAIN_EXE, $SIDECAR_EXE)"
   # Contents/MacOS: exactly the two expected files
   NMACOS="$(find "$MACOS" -mindepth 1 | wc -l | tr -d ' ')"
   [ "$NMACOS" = 2 ] || fail "Contents/MacOS holds $NMACOS entries, expected exactly the launcher and the sidecar"
-  for d in Frameworks PlugIns Helpers XPCServices _CodeSignature SharedSupport Library; do
+  for d in Frameworks PlugIns Helpers XPCServices SharedSupport Library; do
     [ ! -e "$APP/Contents/$d" ] || fail "unexpected Contents/$d in the bundle (nested code we would not know to sign)"
   done
+  # rel/macos: the private unsigned candidate is sealed with the AD-HOC identity by its build (LAUNCHER_ADHOC_SIGN=1, check_adhoc_seal.py) so a quarantined
+  # copy is not reported as "damaged". That seal is the ONLY signature state accepted besides the linker's: Contents/_CodeSignature holding exactly one regular
+  # file CodeResources, and a bundle that codesign reports as Signature=adhoc with no certificate authority. It is removed from the STAGED copy (the input
+  # dmg is read-only) and replaced by the signing below (--force). Anything else in _CodeSignature, or a non-ad-hoc signature, is still refused.
+  if [ -e "$APP/Contents/_CodeSignature" ] || [ -L "$APP/Contents/_CodeSignature" ]; then
+    CSD="$APP/Contents/_CodeSignature"
+    [ -d "$CSD" ] && [ ! -L "$CSD" ] || fail "unexpected Contents/_CodeSignature in the bundle (not a plain directory)"
+    [ "$(find "$CSD" -mindepth 1 | wc -l | tr -d ' ')" = 1 ] && [ -f "$CSD/CodeResources" ] && [ ! -L "$CSD/CodeResources" ] \
+      || fail "unexpected content in Contents/_CodeSignature (only the ad-hoc seal's CodeResources is accepted)"
+    SEAL="$(codesign -dvvv "$APP" 2>&1)" || fail "codesign cannot read the bundle's existing signature"
+    printf '%s\n' "$SEAL" | grep -q '^Signature=adhoc' || fail "the bundle carries a signature that is not ad-hoc: refusing to replace it"
+    ! printf '%s\n' "$SEAL" | grep -q '^Authority=' || fail "the bundle carries a certificate-backed signature: refusing to replace it"
+    ev "input bundle carries the build's AD-HOC seal (Contents/_CodeSignature/CodeResources); removed from the staged copy, replaced by the signing below"
+    rm -f "$CSD/CodeResources"; rmdir "$CSD"
+  fi
   # no other executables, libraries or Mach-O files anywhere in the bundle
   EXTRA="$(find "$APP" -type f \( -perm -u+x -o -name '*.dylib' -o -name '*.so' \) ! -path "$MACOS/$MAIN_EXE" ! -path "$MACOS/$SIDECAR_EXE" | head -5)"
   [ -z "$EXTRA" ] || fail "unexpected executable/library files in the bundle (add them to the signing order first): $EXTRA"
