@@ -323,3 +323,23 @@ def test_about_routes_are_read_only():
     src = (ROOT / "agentic_os" / "about_ui.py").read_text()
     assert 'methods=["GET", "HEAD"]' in src and "POST" not in src and "PUT" not in src and "DELETE" not in src
     assert "StaticFiles" not in src and "mount(" not in src and "glob(" not in src and "listdir" not in src
+
+
+# ----------------------------------------------------------------------------------------------------------- wording
+FORBIDDEN = ("open source", "cleared", "compliant", "approved by counsel", "legally")
+
+
+def test_page_assets_and_generated_record_contain_no_forbidden_wording(folder):
+    """The page (html/js/css), the generated about.json and the placeholder text: none of the forbidden phrases. (The shipped
+    third-party notice texts and an owner-approved slot text are not product strings and are not linted.)"""
+    blobs = {n: (ASSETS / n).read_text(encoding="utf-8") for n in ("about.html", "app.js", "app.css")}
+    blobs["about.json"] = (folder / "about.json").read_text(encoding="utf-8")
+    for name, text in blobs.items():
+        low = text.lower()
+        assert not [w for w in FORBIDDEN if w in low], name
+    doc = json.loads(blobs["about.json"])
+    for sid, s in doc["legal"]["slots"].items():
+        assert s["state"] == "placeholder" and "private candidate" in s["text"] and "pending" in s["text"], sid
+    # no product licence statement is typed into the page: the family-licence phrase and the SPDX name appear nowhere in the assets
+    for name in ("about.html", "app.js", "app.css"):
+        assert "family licence" not in blobs[name].lower() and "agpl" not in blobs[name].lower() and "commons clause" not in blobs[name].lower().replace("commons clause file", "")
