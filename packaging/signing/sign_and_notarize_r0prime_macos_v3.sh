@@ -257,7 +257,7 @@ if [ "$MODE" = real ]; then
   if [ "$DO_NOTARIZE" = 1 ]; then [ "$S_notary_profile_sha256" = "$(sha_str "$NOTARY_PROFILE")" ] || die "scope file: notary_profile_sha256 does not match the profile name in R0P_NOTARY_PROFILE"
   else [ "$S_notary_profile_sha256" = none ] || die "scope file: notary_profile_sha256 must be 'none' for a sign-only run"; fi
   case "$S_distribution:$DISTRIBUTION" in yes:1|no:0) ;; *) die "scope file says distribution=$S_distribution but --distribution is $( [ "$DISTRIBUTION" = 1 ] && echo given || echo not given ): they must agree";; esac
-  r0p_ledger_check "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE"
+  r0p_ledger_check "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE" "dmg-$S_input_dmg_sha256"
   [[ "$S_check_about_sha256" =~ ^[0-9a-f]{64}$ && "$S_generate_about_sha256" =~ ^[0-9a-f]{64}$ && "$S_about_record_sha256" =~ ^[0-9a-f]{64}$ && "$S_legal_signers_sha256" =~ ^[0-9a-f]{64}$ ]] || die "scope file: check_about_sha256, generate_about_sha256, about_record_sha256 and legal_signers_sha256 must be 64 hex chars"
   r0p_about_pins "$S_check_about_sha256" "$S_generate_about_sha256" "$S_about_record_sha256" "$S_legal_signers_sha256"
   r0p_gate macos "$DISTRIBUTION" "$S_gate_sha256" "$S_gate_tool_sha256"
@@ -525,7 +525,7 @@ csign() {
 cs() { csign --options runtime "$@"; }
 if [ "$MODE" = real ]; then
   # the scope is consumed from here on (the first use of the keychain identity): a failed run burns it, as a failed submission is never reused
-  r0p_ledger_claim "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE" real "script=$SELF_SHA input=$ACTUAL_SHA"
+  r0p_ledger_claim "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE" real "script=$SELF_SHA input=$ACTUAL_SHA" "dmg-$ACTUAL_SHA"
   LEDGER_STARTED=1
 fi
 cs --identifier "$SIDECAR_ID" --entitlements "$ENTITLEMENTS" "$MACOS/$SIDECAR_EXE"

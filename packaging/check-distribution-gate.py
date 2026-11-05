@@ -117,6 +117,10 @@ DRAFT_PREFIX = ("Unverified draft, not an approved text. This is a private candi
                 "clearance.\n\n")
 RECORD_VERSION = "1"
 FP_RE = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
+# The published fingerprint of the RELEASE key (the same constant as RELEASE_KEY_FPR in packaging/signing/sign_manifest_sshsig.sh). The owner's
+# ssh-agent signs ANY namespace, so a key that is both the release signer and the legal-decision signer would make the legal gate exactly as
+# trustworthy as access to the release key: the gate REFUSES the release key as a legal signer, in every build mode. Choose a separate key.
+RELEASE_KEY_FPR = "SHA256:wUoE8wxKJpmtTH7GqWXMIl9/BW0SH1Isc5/w9HEiwqA"
 
 
 def is_distribution(flag: bool, env=None) -> bool:
@@ -124,6 +128,17 @@ def is_distribution(flag: bool, env=None) -> bool:
     # fail closed, NO trimming: only the empty string or exactly "0" means "private candidate"; every other value (including
     # whitespace-only, "0 " and " 0") is a distribution build
     return flag or str(env.get("REDEVOPS_DISTRIBUTION_BUILD", "")) not in ("", "0")
+
+
+SEPARATION_MSG = ("the published RELEASE key fingerprint is listed as a legal-decision signer. The owner's ssh-agent signs any namespace, so a "
+                  "shared key makes the legal gate only as trustworthy as access to the release key: choose a separate legal-decision key")
+
+
+def separation_problems(allowed_signers: Path) -> list[str]:
+    """The release key must not be a legal signer: problems for the allowed-signers file (the fingerprint list is checked by load_doc).
+    An error in EVERY build mode (a shared key defeats the separation whether or not a build is a distribution)."""
+    fps, _ = allowed_signer_fingerprints(allowed_signers)
+    return [f"{allowed_signers.name} lists the release key {RELEASE_KEY_FPR}: {SEPARATION_MSG}"] if RELEASE_KEY_FPR in fps else []
 
 
 def load_doc(path: Path) -> dict:
@@ -140,6 +155,9 @@ def load_doc(path: Path) -> dict:
     fps = doc.get("legal_signer_fingerprints", [])
     if not isinstance(fps, list) or any(not isinstance(f, str) or not FP_RE.match(f) for f in fps) or len(set(fps)) != len(fps):
         print("GATE FILE PROBLEM: legal_signer_fingerprints must be a list of distinct SHA256:<43 base64> fingerprints", file=sys.stderr)
+        raise SystemExit(2)
+    if RELEASE_KEY_FPR in fps:
+        print(f"GATE FILE PROBLEM: {SEPARATION_MSG}", file=sys.stderr)
         raise SystemExit(2)
     return doc
 
@@ -643,7 +661,7 @@ def main(argv=None) -> int:
     doc = load_doc(a.gate)
     decisions = doc["decisions"]
     signers = doc.get("legal_signer_fingerprints", [])
-    errs = validate(decisions, a.root)
+    errs = validate(decisions, a.root) + separation_problems(a.allowed_signers)
     if errs:
         for e in errs:
             print("GATE FILE PROBLEM:", e, file=sys.stderr)

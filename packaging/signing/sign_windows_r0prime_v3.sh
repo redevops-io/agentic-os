@@ -319,7 +319,7 @@ if [ "$MODE" = real ]; then
   else
     [ -z "$LISTING" ] && [ "$S_container_listing_sha256" = none ] || die "scope file: container_listing_sha256 must be 'none' and no --container-listing given for stage inner"
   fi
-  r0p_ledger_check "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE"
+  r0p_ledger_check "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE" "win-$STAGE-$(r0p_sha_str "$STAGE:$SORTED")"
   [[ "$S_check_about_sha256" =~ ^[0-9a-f]{64}$ && "$S_generate_about_sha256" =~ ^[0-9a-f]{64}$ && "$S_about_record_sha256" =~ ^[0-9a-f]{64}$ && "$S_legal_signers_sha256" =~ ^[0-9a-f]{64}$ ]] || die "scope file: check_about_sha256, generate_about_sha256, about_record_sha256 and legal_signers_sha256 must be 64 hex chars"
   r0p_about_pins "$S_check_about_sha256" "$S_generate_about_sha256" "$S_about_record_sha256" "$S_legal_signers_sha256"
   r0p_gate windows "$DISTRIBUTION" "$S_gate_sha256" "$S_gate_tool_sha256"
@@ -568,7 +568,7 @@ if [ "$MODE" = throwaway-test ]; then
 else
   validate_service_args      # again, immediately before the only token request (defence in depth)
   # the scope is consumed from here on (the first use of the owner's az session): a failed run burns it
-  r0p_ledger_claim "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE" real "script=$SELF_SHA stage=$STAGE inputs=$SORTED"
+  r0p_ledger_claim "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE" real "script=$SELF_SHA stage=$STAGE inputs=$SORTED" "win-$STAGE-$(r0p_sha_str "$STAGE:$SORTED")"
   LEDGER_STARTED=1
   TOKFILE="$TOKDIR/token"; RAW="$TOKDIR/raw"
   log "service: $ENDPOINT account=$ACCOUNT profile=$PROFILE"
