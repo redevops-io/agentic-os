@@ -1039,7 +1039,11 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
 
     @app.post("/api/sources/confirm")
     def _confirm(req: _ConfirmSourcesReq) -> List[dict]:
-        return confirm_and_connect_sources(req.project_id, req.sources, req.confirmed_by)
+        try:
+            return confirm_and_connect_sources(req.project_id, req.sources, req.confirmed_by)
+        except ValueError as e:     # an unknown kind / access_mode / indexing_policy is the caller's mistake (422), not a server fault (UIA-05)
+            from fastapi import HTTPException
+            raise HTTPException(status_code=422, detail=[{"loc": ["body", "sources"], "msg": str(e)[:200], "type": "value_error"}]) from None
 
     # Governed Agent Gateway — let an EXTERNAL agent (Claude/ChatGPT/Cursor) reach a read-only,
     # governed slice of this deployment over MCP + REST. Opt-in: mounted only when
