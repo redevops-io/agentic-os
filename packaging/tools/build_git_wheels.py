@@ -33,7 +33,7 @@ from pathlib import Path
 
 def git(*args: str, cwd: str | Path | None = None, check: bool = True) -> str:
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
-    r = subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True)
+    r = subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if check and r.returncode != 0:
         raise SystemExit(f"git {' '.join(args)} failed: {r.stderr.strip()}")
     return r.stdout.strip()
@@ -133,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--python", default=sys.executable, help="python of the build venv (backends installed)")
     ap.add_argument("--work", help="scratch dir for the clones (default: a temp dir)")
     a = ap.parse_args(argv)
-    pins = json.loads(Path(a.pins).read_text())["dependencies"]
+    pins = json.loads(Path(a.pins).read_text(encoding="utf-8"))["dependencies"]
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
     records = []
     with tempfile.TemporaryDirectory(dir=a.work) as td:
@@ -143,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
                   f"({rec['py_files_verified_against_commit']} .py files == commit)"
                   + (f"  removed: {', '.join(rec['removed_before_build'])}" if rec["removed_before_build"] else ""))
             records.append(rec)
-    Path(a.record).write_text(json.dumps({"git_wheels": records}, indent=2) + "\n")
+    Path(a.record).write_text(json.dumps({"git_wheels": records}, indent=2) + "\n", encoding="utf-8")
     return 0
 
 

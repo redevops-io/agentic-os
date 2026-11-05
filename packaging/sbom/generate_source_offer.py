@@ -45,10 +45,10 @@ def main() -> int:
     ap.add_argument("--sources", default=str(HERE / "source-offer" / "third-party-sources.json"))
     ap.add_argument("--build-manifest")
     a = ap.parse_args()
-    bom = json.loads(Path(a.sbom).read_text())
-    pins = {p["name"]: p for p in json.loads(Path(a.git_pins).read_text())["dependencies"]}
-    srcs = json.loads(Path(a.sources).read_text())["components"]
-    manifest = json.loads(Path(a.build_manifest).read_text()) if a.build_manifest and Path(a.build_manifest).exists() else {}
+    bom = json.loads(Path(a.sbom).read_text(encoding="utf-8"))
+    pins = {p["name"]: p for p in json.loads(Path(a.git_pins).read_text(encoding="utf-8"))["dependencies"]}
+    srcs = json.loads(Path(a.sources).read_text(encoding="utf-8"))["components"]
+    manifest = json.loads(Path(a.build_manifest).read_text(encoding="utf-8")) if a.build_manifest and Path(a.build_manifest).exists() else {}
     comps = bom["components"]
     missing: list[str] = []
 
@@ -149,11 +149,11 @@ def main() -> int:
     ns = nosrc or ["(none)"]
     for c in comps:  # Microsoft DLLs etc. flagged in the SBOM itself
         pass
-    text = Path(a.template).read_text()
+    text = Path(a.template).read_text(encoding="utf-8")
     for marker, body in (("build-inputs", ident), ("first-party", fp), ("third-party", tp), ("no-source", ns)):
         text = text.replace(f"<!-- GENERATED:{marker} -->", "\n".join(body))
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-    Path(a.out).write_text(text)
+    Path(a.out).write_text(text, encoding="utf-8")
     print(f"wrote {a.out}: {sum(len(r) for r in groups.values())} third-party source references, {len(nosrc)} without a nameable source")
     if missing:
         print("NO source-reference entry for: " + ", ".join(sorted(set(missing))[:20]) + (" ..." if len(set(missing)) > 20 else ""))

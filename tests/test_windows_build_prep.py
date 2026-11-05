@@ -565,3 +565,27 @@ def test_venv_py_names_the_real_exe_when_the_bare_name_also_resolves(tmp_path):
         return r.stdout.strip()
     assert run(tmp_path / "winvenv").endswith("/Scripts/python.exe")
     assert run(tmp_path / "posixvenv").endswith("/bin/python")
+
+
+def test_build_tooling_never_decodes_with_the_locale_codec():
+    """Defect found on Windows Server 2022 (2026-11-05): packaging/sbom/rustsbom.py ran `cargo metadata` with text=True, so the output was
+    decoded with the Windows ANSI code page (cp1252) and died on a UTF-8 byte (UnicodeDecodeError 0x81); the same applies on cp1251/cp932 hosts.
+    Every Path.read_text()/write_text() and every text-mode subprocess in the build tooling must name its encoding (AST check)."""
+    import ast
+
+    bad = []
+    for sub in ("sbom", "tools", "notices"):
+        for f in sorted((PK / sub).rglob("*.py")):
+            tree = ast.parse(f.read_text(encoding="utf-8"))
+            for n in ast.walk(tree):
+                if not isinstance(n, ast.Call):
+                    continue
+                kw = {k.arg for k in n.keywords}
+                name = n.func.attr if isinstance(n.func, ast.Attribute) else getattr(n.func, "id", "")
+                if name == "read_text" and n.args:
+                    continue  # importlib.metadata.Distribution.read_text(filename) / the notices module's own UTF-8 reader, not Path.read_text
+                if name in ("read_text", "write_text") and "encoding" not in kw and isinstance(n.func, ast.Attribute):
+                    bad.append(f"{f.relative_to(ROOT)}:{n.lineno} {name}")
+                if name == "run" and "text" in kw and "encoding" not in kw:
+                    bad.append(f"{f.relative_to(ROOT)}:{n.lineno} subprocess.run(text=True)")
+    assert not bad, bad

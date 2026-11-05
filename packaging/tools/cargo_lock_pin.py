@@ -30,13 +30,13 @@ from pathlib import Path
 
 
 def read_lock(p: Path) -> list[tuple[str, str]]:
-    d = tomllib.loads(p.read_text())
+    d = tomllib.loads(p.read_text(encoding="utf-8"))
     return [(x["name"], x["version"]) for x in d.get("package", [])]
 
 
 def read_rows(p: Path) -> list[tuple[str, str]]:
     rows = []
-    for line in p.read_text().splitlines():
+    for line in p.read_text(encoding="utf-8").splitlines():
         m = re.match(r"^(\S+) v(\S+)$", line.strip())
         if m:
             rows.append((m.group(1), m.group(2)))
@@ -92,7 +92,7 @@ def as_of_choice(name: str, cur: str, as_of: str) -> str | None:
 
 def cargo_update(mdir: Path, spec: str, ver: str) -> tuple[bool, str]:
     r = subprocess.run(["cargo", "update", "--manifest-path", str(mdir / "Cargo.toml"), "-p", spec, "--precise", ver],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     return r.returncode == 0, (r.stderr or r.stdout).strip().splitlines()[-1] if (r.stderr or r.stdout).strip() else ""
 
 
@@ -159,7 +159,7 @@ def main() -> int:
     rep = {"lock_rows": len(have), "recovered_rows": len(wanted), "matched": len(wanted) - len(unmatched),
            "unmatched_recovered_rows": unmatched, "lock_rows_not_in_recovered_set": extra, "log": log}
     if a.report:
-        Path(a.report).write_text(json.dumps(rep, indent=2) + "\n")
+        Path(a.report).write_text(json.dumps(rep, indent=2) + "\n", encoding="utf-8")
     print(f"lock rows: {len(have)}; recovered from CI: {len(wanted)}; matched: {len(wanted) - len(unmatched)}; "
           f"unmatched: {len(unmatched)}; lock rows outside the recovered set: {len(extra)}")
     for u in unmatched:
