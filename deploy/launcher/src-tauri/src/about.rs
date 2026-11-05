@@ -2,8 +2,9 @@
 // the application's own `Licenses` resource folder to the launcher page. Properties, each covered by a test:
 //   * the page never supplies a path: `about_text` takes a name that must equal one of six constants, and the
 //     file opened is built from the constant, never from the input;
-//   * the record `about.json` and each text have a size limit, are read through a bounded reader and must be
-//     regular files (a symlink or directory of the same name is refused);
+//   * the record `about.json` and each text are opened ONCE without following a link (the Licenses folder and the
+//     file can not be symlinks), typed and size-checked on the OPEN handle, and read from that same handle under a
+//     hard byte cap; there is no second path-based access (no lstat-then-open gap);
 //   * a text is only served when the build record lists it with a sha256 and the bytes match it;
 //   * a missing or malformed record gives a clear, coded message; nothing is created, written or fetched;
 //   * no network, no sidecar: it works with the control plane stopped.
@@ -89,24 +90,97 @@ impl fmt::Display for AboutError {
     }
 }
 
+/// Test seam: closures run at the two moments a path-based implementation would be racy. Production code passes none.
+#[derive(Default)]
+struct Hooks<'a> {
+    /// Runs right before the file is opened (a swap here must not be followed).
+    before_open: Option<&'a dyn Fn()>,
+    /// Runs right after the file is open (a swap here must not change what is read: the handle is already bound).
+    after_open: Option<&'a dyn Fn()>,
+}
+
+/// Open `dir/name` ONCE, without following a link, and return the open handle.
+/// Unix: the folder is opened with O_NOFOLLOW|O_DIRECTORY and the file with `openat` on that folder handle with
+/// O_NOFOLLOW (|O_NONBLOCK so a FIFO cannot block the call), so neither the `Licenses` folder nor the file can be a
+/// symlink and there is no second path lookup. Windows: the file is opened with FILE_FLAG_OPEN_REPARSE_POINT and
+/// the handle's attributes are checked for a reparse point; the folder is checked for a reparse point first
+/// (a path-based check, residual: a folder swapped for a junction between that check and the open).
+#[cfg(unix)]
+fn open_no_follow(dir: &Path, name: &str) -> std::io::Result<std::fs::File> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+    let cdir = CString::new(dir.as_os_str().as_bytes()).map_err(|_| std::io::ErrorKind::InvalidInput)?;
+    let cname = CString::new(name).map_err(|_| std::io::ErrorKind::InvalidInput)?;
+    // SAFETY: valid NUL-terminated strings; the returned descriptors are owned by OwnedFd/File immediately.
+    let dfd = unsafe { libc::open(cdir.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+    if dfd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let dirfd = unsafe { OwnedFd::from_raw_fd(dfd) };
+    let fd = unsafe { libc::openat(dirfd.as_raw_fd(), cname.as_ptr(), libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(unsafe { std::fs::File::from_raw_fd(fd) })
+}
+
+#[cfg(windows)]
+fn open_no_follow(dir: &Path, name: &str) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let dmeta = std::fs::symlink_metadata(dir)?;
+    if dmeta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !dmeta.is_dir() {
+        return Err(std::io::ErrorKind::NotFound.into());
+    }
+    let file = std::fs::OpenOptions::new().read(true).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(dir.join(name))?;
+    if file.metadata()?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(std::io::ErrorKind::NotFound.into());
+    }
+    Ok(file)
+}
+
+/// Is this open error "there is no usable regular file here" (absent, or a link/folder/odd node refused by the flags)?
+fn is_absent(e: &std::io::Error) -> bool {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        return true;
+    }
+    #[cfg(unix)]
+    if let Some(c) = e.raw_os_error() {
+        // ELOOP: O_NOFOLLOW met a symlink; ENOTDIR: the folder is not a folder; ENXIO/EISDIR: device-less FIFO / directory.
+        return [libc::ELOOP, libc::ENOTDIR, libc::ENXIO, libc::EISDIR].contains(&c);
+    }
+    false
+}
+
 /// Read a regular file `dir/name` (name is a constant of this module) into a string, bounded by `cap`.
+/// One open, no link followed; type and size are taken from the OPEN handle (fstat); the bytes are read from that
+/// same handle with a hard cap. No second path-based access happens after the open.
 fn read_capped(dir: &Path, name: &str, cap: u64, missing: AboutError, large: &'static str) -> Result<String, AboutError> {
-    let path = dir.join(name);
-    // symlink_metadata: a symlink (even one pointing at a regular file) is refused, so a planted link
-    // cannot make this view read a file outside the Licenses folder.
-    let meta = match std::fs::symlink_metadata(&path) {
-        Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(missing),
+    read_capped_hooked(dir, name, cap, missing, large, &Hooks::default())
+}
+
+fn read_capped_hooked(dir: &Path, name: &str, cap: u64, missing: AboutError, large: &'static str, hooks: &Hooks) -> Result<String, AboutError> {
+    if let Some(h) = hooks.before_open {
+        h();
+    }
+    let file = match open_no_follow(dir, name) {
+        Ok(f) => f,
+        Err(e) if is_absent(&e) => return Err(missing),
         Err(e) => return Err(AboutError::Io(e.kind())),
     };
+    if let Some(h) = hooks.after_open {
+        h();
+    }
+    let meta = file.metadata().map_err(|e| AboutError::Io(e.kind()))?;
     if !meta.is_file() {
-        return Err(missing);
+        return Err(missing); // FIFO, device, directory, socket
     }
     if meta.len() > cap {
         return Err(AboutError::TooLarge(large));
     }
-    let file = std::fs::File::open(&path).map_err(|e| AboutError::Io(e.kind()))?;
-    // Bounded again at read time (the file may grow between stat and read).
+    // Bounded again at read time (the file may grow after the fstat); the same handle is read.
     let mut buf = Vec::new();
     file.take(cap + 1).read_to_end(&mut buf).map_err(|e| AboutError::Io(e.kind()))?;
     if buf.len() as u64 > cap {
@@ -422,7 +496,155 @@ mod tests {
         for banned in ["TcpStream", "reqwest", "Command::new", "std::fs::write", "File::create", "remove_file", "create_dir", "std::env::var", "http://", "https://"] {
             assert!(!code.contains(banned), "about.rs must not use {banned}");
         }
+        assert!(!code.contains("File::open(") && !code.contains("fs::read("), "files are opened only through open_no_follow");
+        assert!(code.matches("fs::symlink_metadata").count() == 1, "the only path-based metadata call is the Windows folder check");
         assert!(code.contains("pub async fn about_info(app: tauri::AppHandle)"));
         assert!(code.contains("pub async fn about_text(app: tauri::AppHandle, slug: String)"));
+    }
+
+    // ---- RC3 review fix: open once without following links, fstat the open handle, read that handle ----
+
+    #[cfg(unix)]
+    fn read_hooked(d: &Path, name: &str, cap: u64, hooks: &Hooks) -> Result<String, AboutError> {
+        read_capped_hooked(d, name, cap, AboutError::FileMissing("x"), "cap", hooks)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_to_a_regular_file_is_never_opened_for_record_or_text() {
+        let d = build("nofollow-file");
+        let target = d.join("real-copy");
+        std::fs::write(&target, "text of LICENSE\nsecond line\n").unwrap();
+        std::fs::remove_file(d.join("LICENSE")).unwrap();
+        std::os::unix::fs::symlink(&target, d.join("LICENSE")).unwrap();
+        assert_eq!(read_hooked(&d, "LICENSE", 1024, &Hooks::default()).unwrap_err(), AboutError::FileMissing("x"));
+        assert_eq!(load_text(&d, "LICENSE").unwrap_err().code(), "ABOUT_FILE_MISSING");
+        // a dangling link and a link to a directory behave the same
+        std::os::unix::fs::symlink(d.join("nowhere"), d.join("dangling")).unwrap();
+        assert_eq!(read_hooked(&d, "dangling", 1024, &Hooks::default()).unwrap_err(), AboutError::FileMissing("x"));
+        std::os::unix::fs::symlink(&d, d.join("dirlink")).unwrap();
+        assert_eq!(read_hooked(&d, "dirlink", 1024, &Hooks::default()).unwrap_err(), AboutError::FileMissing("x"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_licenses_folder_itself_must_not_be_a_symlink() {
+        let real = build("nofollow-dir");
+        let link = real.parent().unwrap().join(format!("rdo-about-dirlink-{}", std::process::id()));
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert_eq!(load_record(&link).unwrap_err(), AboutError::RecordMissing);
+        assert_eq!(load_text(&link, "LICENSE").unwrap_err(), AboutError::RecordMissing);
+        assert!(load_record(&real).is_ok(), "the real folder still works");
+        // a regular FILE where the folder should be
+        let file_as_dir = real.join("LICENSE");
+        assert_eq!(load_record(&file_as_dir).unwrap_err(), AboutError::RecordMissing);
+        let _ = std::fs::remove_file(&link);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_swap_for_a_symlink_just_before_the_open_is_not_followed() {
+        // what an lstat-then-open implementation would have accepted: the check passes on a regular file, then the
+        // path is swapped for a link to a secret. Here the swap runs right before the single open.
+        let d = build("swap-before");
+        let secret = d.parent().unwrap().join(format!("rdo-about-secret-{}", std::process::id()));
+        std::fs::write(&secret, "SECRET").unwrap();
+        let swap = || {
+            std::fs::remove_file(d.join("LICENSE")).unwrap();
+            std::os::unix::fs::symlink(&secret, d.join("LICENSE")).unwrap();
+        };
+        let r = read_hooked(&d, "LICENSE", 1024, &Hooks { before_open: Some(&swap), after_open: None });
+        assert_eq!(r.unwrap_err(), AboutError::FileMissing("x"));
+        let _ = std::fs::remove_file(&secret);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_swap_after_the_open_does_not_change_what_is_read_the_handle_is_bound() {
+        let d = build("swap-after");
+        let secret = d.parent().unwrap().join(format!("rdo-about-secret2-{}", std::process::id()));
+        std::fs::write(&secret, "SECRET").unwrap();
+        let swap = || {
+            std::fs::remove_file(d.join("LICENSE")).unwrap();
+            std::os::unix::fs::symlink(&secret, d.join("LICENSE")).unwrap();
+        };
+        let got = read_hooked(&d, "LICENSE", 1024, &Hooks { before_open: None, after_open: Some(&swap) }).unwrap();
+        assert_eq!(got, "text of LICENSE\nsecond line\n", "the bytes come from the handle opened first, not from the path");
+        let _ = std::fs::remove_file(&secret);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_swap_of_the_licenses_folder_after_the_open_does_not_redirect_the_read() {
+        let d = build("swap-folder");
+        let other = scratch("swap-folder-other");
+        std::fs::write(other.join("LICENSE"), "EVIL").unwrap();
+        let moved = d.parent().unwrap().join(format!("rdo-about-moved-{}", std::process::id()));
+        let swap = || {
+            std::fs::rename(&d, &moved).unwrap();
+            std::os::unix::fs::symlink(&other, &d).unwrap();
+        };
+        let got = read_hooked(&d, "LICENSE", 1024, &Hooks { before_open: None, after_open: Some(&swap) }).unwrap();
+        assert_eq!(got, "text of LICENSE\nsecond line\n");
+        let _ = std::fs::remove_file(&d);
+        let _ = std::fs::rename(&moved, &d);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_is_refused_without_blocking() {
+        let d = scratch("fifo");
+        let p = std::ffi::CString::new(d.join("LICENSE").to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(p.as_ptr(), 0o600) }, 0);
+        // no writer exists: a blocking open would hang this test forever
+        assert_eq!(read_hooked(&d, "LICENSE", 1024, &Hooks::default()).unwrap_err(), AboutError::FileMissing("x"));
+        let rec = d.join(RECORD_FILE);
+        let r = std::ffi::CString::new(rec.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(r.as_ptr(), 0o600) }, 0);
+        assert_eq!(load_record(&d).unwrap_err(), AboutError::RecordMissing);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_size_cap_holds_on_the_handle_even_if_the_file_grows_after_the_size_check() {
+        let d = scratch("grow");
+        std::fs::write(d.join("LICENSE"), "small").unwrap();
+        let grow = || {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new().append(true).open(d.join("LICENSE")).unwrap();
+            f.write_all(&vec![b'a'; 4096]).unwrap();
+        };
+        let r = read_hooked(&d, "LICENSE", 100, &Hooks { before_open: None, after_open: Some(&grow) });
+        assert_eq!(r.unwrap_err(), AboutError::TooLarge("cap"));
+        // and a file already over the cap is refused from the handle's own size
+        std::fs::write(d.join("BIG"), vec![b'a'; 101]).unwrap();
+        assert_eq!(read_hooked(&d, "BIG", 100, &Hooks::default()).unwrap_err(), AboutError::TooLarge("cap"));
+        std::fs::write(d.join("EXACT"), vec![b'a'; 100]).unwrap();
+        assert_eq!(read_hooked(&d, "EXACT", 100, &Hooks::default()).unwrap().len(), 100);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_checksum_is_over_the_bytes_that_were_read_a_post_open_swap_cannot_make_a_mismatch_pass() {
+        // load_text hashes the returned bytes (read from the single handle); a different file at the path afterwards is irrelevant
+        let d = build("hash-bound");
+        let text = load_text(&d, "LICENSE").unwrap();
+        assert_eq!(sha(&text), recorded_sha256(&parse_record(&load_record(&d).unwrap()).unwrap(), "LICENSE").unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_errors_stay_path_free() {
+        let d = scratch("pathfree");
+        std::os::unix::fs::symlink(d.join("x"), d.join("LICENSE")).unwrap();
+        let msgs = [
+            read_hooked(&d, "LICENSE", 10, &Hooks::default()).unwrap_err().to_string(),
+            load_record(&d.join("none")).unwrap_err().to_string(),
+            AboutError::Io(std::io::ErrorKind::PermissionDenied).to_string(),
+        ];
+        for m in msgs {
+            assert!(!m.contains(d.to_str().unwrap()) && !m.contains("/private/") && !m.contains("/tmp"), "{m}");
+        }
     }
 }
