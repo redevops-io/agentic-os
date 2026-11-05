@@ -95,6 +95,13 @@ def test_classify_pkg_rules():
     assert c("pydantic-2.13.5.dist-info/METADATA") == ("dist-info", "pydantic")
     assert c("_duckdb.cp312-win_amd64.pyd") == ("top-level", "_duckdb")
     assert c("yaml/_yaml.cpython-312-darwin.so") == ("top-level", "yaml")
+    # Linux (x86_64 and aarch64): the extension tag has several hyphens, the interpreter is a shared library, and PyInstaller
+    # copies the GCC runtime from the build host. Before this was fixed these four entries were "unattributed" and the SBOM
+    # step of build-all.sh exited 1 on an Ubuntu host.
+    assert c("_cffi_backend.cpython-312-aarch64-linux-gnu.so") == ("top-level", "_cffi_backend")
+    assert c("_cffi_backend.cpython-312-x86_64-linux-gnu.so") == ("top-level", "_cffi_backend")
+    assert c("libpython3.12.so.1.0")[0] == "cpython"
+    assert c("libgcc_s.so.1") == ("gcc-runtime", "libgcc_s.so.1") and c("libstdc++.so.6") == ("gcc-runtime", "libstdc++.so.6")
 
 
 def test_openssl_banner_probe_finds_both_versions():
