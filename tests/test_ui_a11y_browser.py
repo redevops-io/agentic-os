@@ -381,13 +381,13 @@ def test_sidekick_mouse_close_paths_are_unchanged(make_tab):
     t = make_tab()
     p = t.page
     p.get_by_role("button", name="Ask Sidekick").first.click()
-    p.locator("div.sk[role=dialog].open").wait_for()
+    p.locator(".sk.open").wait_for()
     p.get_by_role("button", name="Close").click()
-    p.wait_for_function("() => !document.querySelector('div.sk[role=dialog]').classList.contains('open')")
+    p.wait_for_function("() => !document.querySelector('.sk:not(.msg)').classList.contains('open')")
     p.get_by_role("button", name="Ask Sidekick").first.click()
-    p.locator("div.sk[role=dialog].open").wait_for()
+    p.locator(".sk.open").wait_for()
     p.mouse.click(20, 400)                                                        # the backdrop
-    p.wait_for_function("() => !document.querySelector('div.sk[role=dialog]').classList.contains('open')")
+    p.wait_for_function("() => !document.querySelector('.sk:not(.msg)').classList.contains('open')")
 
 
 # ---------------------------------------------------------------------------------------------- sample data (U-04)
