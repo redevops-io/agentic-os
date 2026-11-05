@@ -31,35 +31,55 @@
   $("docker-down").onclick = run("advanced_docker_down");
   // The destructive purge needs two deliberate steps. The launcher webview (macOS WKWebView) has no native
   // dialogs (the three window dialog functions are silent no-ops), so the confirmation is in the page: the first click
-  // ARMS the button ("Click again to confirm"), a second click within PURGE_ARM_MS runs it. A single click never
-  // runs it. It disarms by itself after the time-out, on Escape, when focus leaves the button, and on any other
-  // click; the state is shown as text (and a colour change), and announced through the live region.
+  // ARMS the button, and a second, deliberate click runs it. A single click never runs it. The confirming activation is
+  // ignored for PURGE_CONFIRM_DELAY_MS after arming (a double-click, two quick Enter presses or a held key must not
+  // confirm); during that moment the button says so and is aria-disabled (never `disabled`: it keeps keyboard focus).
+  // It disarms by itself PURGE_ARM_MS after arming, on Escape, when focus leaves the button, and on any other click;
+  // the state is shown as text (and a colour change), and announced through the live region.
   const PURGE_ARM_MS = 8000;
+  const PURGE_CONFIRM_DELAY_MS = 800;
   const purge = $("docker-purge"), purgeMsg = $("purge-msg");
   const PURGE_LABEL = "Remove container data";
-  let purgeTimer = null;
+  let purgeTimer = null, purgeReadyTimer = null, purgeReady = false;
   const disarmPurge = (announce) => {
     if (purgeTimer === null) return;
     clearTimeout(purgeTimer);
+    clearTimeout(purgeReadyTimer);
     purgeTimer = null;
+    purgeReadyTimer = null;
+    purgeReady = false;
     purge.textContent = PURGE_LABEL;
     purge.classList.remove("armed");
+    purge.removeAttribute("aria-disabled");
     purgeMsg.textContent = announce ? "Cancelled. Nothing was removed." : "";
   };
   const armPurge = () => {
-    purge.textContent = "Click again to confirm: remove container data";
+    purgeReady = false;
+    purge.textContent = "Armed: confirm available in a moment";
     purge.classList.add("armed");
-    purgeMsg.textContent = "Not removed yet. Press the button again within 8 seconds to remove the container data. Native data is untouched.";
+    purge.setAttribute("aria-disabled", "true");
+    purgeMsg.textContent = "Not removed yet. Confirm becomes available in a moment; then press the button again to remove the container data. It cancels itself 8 seconds after the first press. Native data is untouched.";
+    purgeReadyTimer = setTimeout(() => {
+      purgeReady = true;
+      purge.textContent = "Click again to confirm: remove container data";
+      purge.removeAttribute("aria-disabled");
+      purgeMsg.textContent = "Not removed yet. Press the button again to remove the container data. It cancels itself 8 seconds after the first press. Native data is untouched.";
+    }, PURGE_CONFIRM_DELAY_MS);
     purgeTimer = setTimeout(() => disarmPurge(true), PURGE_ARM_MS);
   };
   purge.onclick = async () => {
     if (purgeTimer === null) { armPurge(); return; }
+    if (!purgeReady) return;            // inside the delay: the early activation is ignored and the button stays armed
     disarmPurge(false);
     await run("advanced_docker_purge")();
   };
   purge.onblur = () => disarmPurge(true);
   document.addEventListener("click", (ev) => { if (ev.target !== purge) disarmPurge(true); }, true);
-  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") disarmPurge(true); }, true);
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") disarmPurge(true);
+    // a held Enter auto-repeats keydown (and so click): the repeats of the button's own activation key never count
+    else if (ev.repeat && ev.target === purge && (ev.key === "Enter" || ev.key === " ")) ev.preventDefault();
+  }, true);
   // Warn (never act) when an OLD unauthenticated service is still running on port 8787.
   const legacyNote = async () => {
     try {

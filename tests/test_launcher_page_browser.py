@@ -268,12 +268,12 @@ def test_the_six_buttons_call_the_stub_and_show_the_status_text(browser, served)
 
 
 # ---------------------------------------------------------------------------------- two-step purge (no native dialog)
-def _purge_page(browser, served):
+def _purge_page(browser, served, viewport=(560, 640)):
     stub = _stub() + """
     window.__dialogs = [];
     for (const n of ["confirm", "alert", "prompt"]) window[n] = (...a) => { window.__dialogs.push(n); return n === "confirm" ? false : null; };
     """
-    ctx, page, problems, _ = _open(browser, served, stub)
+    ctx, page, problems, _ = _open(browser, served, stub, viewport=viewport)
     _wait(page, "() => !document.getElementById('advanced').hidden")
     return ctx, page, problems
 
@@ -626,7 +626,7 @@ def _click_count(page, n, gap_ms=0):
 
 
 def test_a_double_click_does_not_run_the_purge_and_leaves_it_armed(browser, served):
-    ctx, page, problems = _purge_page(browser, served)
+    ctx, page, problems = _purge_page(browser, served, viewport=(1100, 640))  # wide: the longer armed label must not re-wrap and move the button from under the pointer
     page.dblclick("#docker-purge")
     page.wait_for_timeout(150)
     assert _purge_runs(page) == [], "a double-click must not run the purge"
@@ -700,9 +700,9 @@ def test_the_delay_is_about_800_ms_and_the_waiting_state_is_announced_and_access
 
 
 def test_an_early_click_does_not_disarm_and_escape_still_disarms_inside_the_delay(browser, served):
-    ctx, page, problems = _purge_page(browser, served)
+    ctx, page, problems = _purge_page(browser, served, viewport=(1100, 640))  # wide: the longer armed label must not re-wrap and move the button from under the pointer
     page.click("#docker-purge")
-    page.click("#docker-purge")                                              # ignored, stays armed
+    page.evaluate("document.getElementById('docker-purge').click()")         # an early click (Playwright's own second click would take ~0.9 s): ignored, stays armed
     assert page.locator("#docker-purge").inner_text() == WAIT_LABEL
     page.keyboard.press("Escape")
     page.wait_for_timeout(100)
@@ -711,7 +711,7 @@ def test_an_early_click_does_not_disarm_and_escape_still_disarms_inside_the_dela
     page.wait_for_timeout(1000)                                              # the cancelled delay timer must not re-enable anything
     assert page.locator("#docker-purge").inner_text() == "Remove container data" and _purge_runs(page) == []
     page.click("#docker-purge")                                              # re-arming starts a new delay
-    page.click("#docker-purge")
+    page.evaluate("document.getElementById('docker-purge').click()")
     page.wait_for_timeout(100)
     assert _purge_runs(page) == []
     ctx.close()

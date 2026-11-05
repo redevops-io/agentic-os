@@ -85,3 +85,4 @@ label.filter { display: block; font-size: 13px; color: var(--muted); }
   button.primary { border: 2px solid ButtonText; }
   button.danger.armed { background: Highlight; color: HighlightText; border-color: ButtonText; }
 }
+button.danger.armed[aria-disabled="true"] { cursor: progress; }

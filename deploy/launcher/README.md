@@ -104,9 +104,11 @@ owns `127.0.0.1:8787`. The launcher therefore treats it as one unit:
   `src/guard.rs` is a navigation guard: the webview can only be at the app's own origin
   (`tauri://localhost`, `http(s)://tauri.localhost`, `about:blank`); anything else (including `127.0.0.1`) is cancelled.
 - **Remove container data** (advanced section) needs two clicks: the webview has no native dialogs (confirm/alert/prompt are
-  silent no-ops in the macOS WKWebView), so the first click arms the button ("Click again to confirm: remove container data",
-  announced in a live region) and the second click within 8 s runs it; Escape, leaving the button, any other click or the
-  time-out disarms it. A single click never runs it.
+  silent no-ops in the macOS WKWebView), so the first click arms the button (announced in a live region) and a second,
+  deliberate click runs it. A confirming click or Enter within about 800 ms of arming is ignored (a double-click, two quick Enter
+  presses or a held key never run it): the button reads "Armed: confirm available in a moment" and is `aria-disabled` (it keeps
+  keyboard focus), then "Click again to confirm: remove container data". Escape, leaving the button, any other click or the 8 s
+  time-out (counted from the first click) disarms it. A single click never runs it.
 - **Navigation origin per OS.** `tauri://localhost` everywhere; `http(s)://tauri.localhost` only on Windows; `about:blank` is
   refused. **Signals.** SIGTERM/SIGINT/SIGHUP request a graceful `exit(0)` (`src/signals.rs`, no new crate), so the Exit hook
   stops the control plane and deletes the redirect pages; a second signal or 5 s without exit forces the same cleanup.
