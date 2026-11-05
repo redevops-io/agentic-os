@@ -43,7 +43,9 @@ def test_only_the_plist_and_its_documentation_name_the_entitlement():
     allowed = {"packaging/macos/sidecar.entitlements.plist", "docs/MACOS_ENTITLEMENTS.md",
                "tests/test_macos_entitlements.py", "tests/test_signing_procedure_r0prime.py",
                # the macOS acceptance kit READS entitlements to verify them (no signing, no writing of the key)
-               "packaging/acceptance/macos-r0prime/SIGNING-READINESS.md", "packaging/acceptance/macos-r0prime/verify_dmg.sh"}
+               "packaging/acceptance/macos-r0prime/SIGNING-READINESS.md", "packaging/acceptance/macos-r0prime/verify_dmg.sh",
+               # the prepared signing/notarization runbook documents the one sidecar entitlement (no secret, nothing executed)
+               "docs/release/MACOS_SIGNING_NOTARIZATION_RUNBOOK.md"}
     # the macOS acceptance kit (incl. the gui harness) only READS/verifies the key on COPIES; it never writes it into the repository plist
     # packaging/signing/ (the prepared signing scripts and documents) READS the entitlement back to verify it and passes the repository plist to the sidecar signing only
     extra = {f for f in files if f not in allowed and not f.startswith(("packaging/DECISIONS", "reports/", "packaging/acceptance/macos-r0prime/", "packaging/signing/"))}
