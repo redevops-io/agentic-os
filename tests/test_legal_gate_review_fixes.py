@@ -249,3 +249,16 @@ def test_generator_exits_2_on_a_malformed_gate_file(tmp_path, monkeypatch):
     root, notices = make_root(tmp_path), make_notices(tmp_path)
     (root / "packaging" / "distribution-gate.json").write_text("{")
     assert run_generate(root, notices, monkeypatch=monkeypatch) == 2
+
+
+def test_check_about_distribution_also_verifies_the_signatures(tmp_path, signer):
+    from .about_fixture import chk_about
+    root = make_root(tmp_path)
+    decide(root, all_ids(root))
+    trust(root, signer)
+    lic = licenses_for(root, tmp_path / "work", distribution=True)
+    assert chk_about.check(lic, root=root, distribution=True) == []
+    # a signature disappears after the record was generated
+    (root / "docs/legal/approved/legal-no-warranty.en.txt.sig").unlink()
+    errs = chk_about.check(lic, root=root, distribution=True)
+    assert any("distribution:" in e and "LEGAL.NO_WARRANTY text" in e for e in errs)

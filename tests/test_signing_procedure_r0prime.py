@@ -2629,3 +2629,112 @@ def test_r6_documentation_states_the_residuals(tmp_path):
     assert "ledger.txt" not in doc and "--ledger \"$HOME/r0prime-signing-ledger\"" in doc
     tpl = (SIGN / "AUTHORIZATION-TEMPLATE.md").read_text()
     assert "tool_python_pth_sha256" in tpl and "fresh" in tpl
+
+
+# ====================================================================================================================
+# RC3 review fix RC3-04: the gate call passes --about-slots and the About record inside the artifact is checked
+# (packaging/signing/** was edited on the RC3 branch only: a new independent review round is needed before any RC3 signing)
+# ====================================================================================================================
+def _decide_everything(root: Path, signer) -> None:
+    ids = sorted({d["id"] for d in read_gate(root)["decisions"]})
+    decide(root, ids)
+    trust(root, signer)
+
+
+def test_rc3_04_both_gate_calls_pass_about_slots_and_the_about_check_exists():
+    code = code_of(COMMON)
+    assert code.count("--about-slots") >= 2 and "r0p_about_check()" in code and "check_about.py" in code
+    assert "r0p_about_check" in code_of(MAC) and "r0p_about_check" in code_of(WIN)
+    assert "--licenses-dir" in WIN.read_text()
+
+
+def test_rc3_04_the_private_run_prints_the_about_slot_state(mac):
+    r = mac.real(mac.scope())
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert "about slots: 5 of 5 are placeholders" in r.stdout
+
+
+def test_rc3_04_macos_real_refuses_a_dmg_without_the_about_record(mac):
+    (mac.fixture / APP_NAME / "Contents" / "Resources" / "Licenses" / "about.json").unlink()
+    r = mac.real(mac.scope())
+    assert r.returncode != 0 and "no Licenses/about.json" in r.stderr
+    assert not mac.calls("codesign"), "nothing is signed when the record check fails"
+
+
+def test_rc3_04_macos_real_refuses_a_tampered_about_record(mac):
+    p = mac.fixture / APP_NAME / "Contents" / "Resources" / "Licenses" / "about.json"
+    doc = json.loads(p.read_text())
+    doc["product"]["version"] = "9.9.9"
+    p.write_text(json.dumps(doc))
+    r = mac.real(mac.scope())
+    assert r.returncode != 0 and "failed check_about.py" in r.stderr and not mac.calls("codesign")
+
+
+def test_rc3_04_macos_real_refuses_a_record_that_disagrees_with_the_manifest_in_the_dmg(mac):
+    (mac.fixture / APP_NAME / "Contents" / "Resources" / "Licenses" / "LICENSE").write_text("altered after staging\n")
+    r = mac.real(mac.scope())
+    assert r.returncode != 0 and "failed check_about.py" in r.stderr and not mac.calls("codesign")
+
+
+def test_rc3_04_macos_adhoc_test_mode_does_not_need_the_record(mac):
+    (mac.fixture / APP_NAME / "Contents" / "Resources" / "Licenses" / "about.json").unlink()
+    r = mac.run(mode="--adhoc-test")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+
+
+def test_rc3_04_macos_distribution_signing_needs_a_distribution_record_and_valid_signatures(mac, signer):
+    root = mac.tree.parent
+    _decide_everything(root, signer)
+    gj = mac.tree / "distribution-gate.json"
+    # the dmg still carries the PRIVATE-candidate record built before the decisions: refused after the gate itself passed
+    r = mac.real(mac.scope(distribution="yes", gate_sha256=sha_file(gj)), "--distribution")
+    assert r.returncode != 0 and "distribution gate: passed" in r.stdout and "failed check_about.py" in r.stderr
+    assert "private-candidate record" in r.stderr and not mac.calls("codesign")
+    # a distribution record generated from the signed decisions passes the whole run
+    mac.lic = licenses_for(root, mac.tmp / "licwork-dist", distribution=True)
+    mac.reset_fixture()
+    r = mac.real(mac.scope(distribution="yes", gate_sha256=sha_file(gj)), "--distribution", out=mac.work / "out2")
+    assert r.returncode == 0, (r.stdout[-1500:], r.stderr[-1500:])
+    assert "distribution gate: passed" in r.stdout and mac.calls("codesign")
+
+
+def test_rc3_04_macos_distribution_gate_refuses_a_forged_but_unsigned_decision_set(mac, signer):
+    root = mac.tree.parent
+    ids = sorted({d["id"] for d in read_gate(root)["decisions"]})
+    decide(root, ids)                                         # DECIDED with invented records and NO signatures; the allowed-signers file stays empty
+    r = mac.real(mac.scope(distribution="yes", gate_sha256=sha_file(mac.tree / "distribution-gate.json")), "--distribution")
+    assert r.returncode != 0 and "REFUSES a distribution signing" in r.stderr and not mac.calls("codesign")
+    assert "no valid detached signature" in r.stderr
+
+
+def test_rc3_04_windows_container_real_needs_the_licenses_dir_and_a_matching_listing(win, tmp_path):
+    p, h = win.inner()
+    m, hm = win.container()
+    sc = win.scope("container", [(m, hm)])
+    # missing --licenses-dir
+    r = win.run("container", [(m, hm)], "--real", "--i-have-owner-authorization", sha_file(sc), "--scope-file", sc, "--ledger", win.ledger,
+                "--container-listing", win.listing(), outdir=win.tmp / "wout-a", **win.REAL_ENV)
+    assert r.returncode == 2 and "--licenses-dir" in r.stderr
+    # the listing does not contain the sha256 of the record
+    other = tmp_path / "other-listing.txt"
+    other.write_bytes(LISTING_TEXT)
+    sc2 = win.scope("container", [(m, hm)], container_listing_sha256=sha_file(other))
+    r = win.real("container", [(m, hm)], sc2, "--container-listing", other, outdir=win.tmp / "wout-b")
+    assert r.returncode == 2 and "does not appear in the --container-listing" in r.stderr
+    # a tampered record
+    bad = tmp_path / "bad-lic"
+    shutil.copytree(win.lic, bad)
+    doc = json.loads((bad / "about.json").read_text())
+    doc["product"]["version"] = "9.9.9"
+    (bad / "about.json").write_text(json.dumps(doc))
+    lst = tmp_path / "bad-listing.txt"
+    lst.write_bytes(LISTING_TEXT + f"{sha_file(bad / 'about.json')}  Licenses/about.json\n".encode())
+    sc3 = win.scope("container", [(m, hm)], container_listing_sha256=sha_file(lst))
+    r = win.real("container", [(m, hm)], sc3, "--container-listing", lst, "--licenses-dir", bad, outdir=win.tmp / "wout-c")
+    assert r.returncode == 2 and "failed check_about.py" in r.stderr
+
+
+def test_rc3_04_windows_licenses_dir_is_only_for_real_container(win):
+    p, h = win.inner()
+    r = win.run("inner", [(p, h)], "--licenses-dir", win.lic)
+    assert r.returncode != 0
