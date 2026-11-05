@@ -26,7 +26,7 @@ The sections are: `## licences` (agent `licences`), `## pins` (agent `pins`), `#
 | D-LIC-8 | Replacement of `hero.jpg` and its provenance | owner | neutral generated image |
 | D-LIC-9 | NSIS, WiX, Tauri (and WebView2) notices | owner/counsel | crate texts shipped; NSIS and WiX texts now in the Windows notices (lic2) |
 | D-LIC-10 | Licence acceptance pages and Appropriate Legal Notices in the UI | owner | no acceptance page, no UI notice |
-| D-LIC-11 | Launcher icons and mark: authorship and rights | owner | shipped as before |
+| D-LIC-11 | Launcher icons and mark: authorship and rights | owner | temporary neutral artwork (RC3 development; RC2 shipped the previous icons) |
 | D-LIC-12 | Source availability for object code (AGPL section 6) | owner | pointer in `LICENSING.md`, no offer |
 | D-LIC-13 | Components whose package holds no licence file | owner | resolved by fact except redevops-connectors (lic2): connectors is the only entry left in `NOTICES_MISSING.md` |
 | D-LIC-14 | Removing knowledge-frontier from the frozen sidecar | owner | removed by spec exclude (this branch) |
@@ -133,7 +133,7 @@ The sections are: `## licences` (agent `licences`), `## pins` (agent `pins`), `#
 
 * What: authorship and rights of `icons/*` (matrix NAT-AS-icons: "none stated; authorship/rights not recorded").
 * Options: owner confirms they are first-party artwork under the family licence, or excludes them from the licence statement.
-* Decides: owner. Ships meanwhile: as before; `LICENSING.md` section 4 does not list the icons as covered.
+* Decides: owner. Ships meanwhile: since RC3 development, TEMPORARY neutral artwork generated from code (`scripts/make_neutral_icons.py`), not the previous mark (RC2 shipped the previous icons, unchanged); `LICENSING.md` section 4 does not list the icons as covered. Status: OPEN.
 
 ### D-LIC-12 Source availability for object code (AGPL section 6)
 
