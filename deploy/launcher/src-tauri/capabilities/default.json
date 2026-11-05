@@ -1,6 +1,20 @@
 {
   "identifier": "default",
-  "description": "ReDevOps launcher — allow the main window to call the app commands.",
-  "windows": ["main"],
-  "permissions": ["core:default"]
+  "description": "Agentic Apps R0-prime launcher: the main window may call exactly its own commands. No core, shell, fs, http, opener or other plugin permission.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "allow-start-native",
+    "allow-stop-native",
+    "allow-open-ui",
+    "allow-legacy-service-warning",
+    "allow-device-report",
+    "allow-docker-available",
+    "allow-advanced-docker-up",
+    "allow-advanced-docker-down",
+    "allow-advanced-docker-purge",
+    "allow-about-info",
+    "allow-about-text"
+  ]
 }

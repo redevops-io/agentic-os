@@ -1,0 +1,71 @@
+/* Launcher page styles. External file: the launcher CSP has style-src 'self' (no inline styles). */
+:root {
+  color-scheme: light dark;
+  font: 15px/1.5 system-ui, sans-serif;
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --muted: #4c6164;
+  --line: rgba(128, 128, 128, 0.45);
+  --danger: #b91c1c;
+  --primary: #1d4ed8;
+  --slot-bg: rgba(128, 128, 128, 0.1);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1b1b;
+    --fg: #ececec;
+    --muted: #aebfbf;
+    --danger: #fca5a5;
+    --primary: #2563eb;
+  }
+}
+html { background: var(--bg); }
+body { margin: 0; padding: 24px; overflow-wrap: anywhere; background: var(--bg); color: var(--fg); }
+h1 { font-size: 18px; margin: 0 0 4px; }
+h2 { font-size: 16px; margin: 12px 0 8px; }
+h3 { font-size: 14px; margin: 16px 0 6px; }
+p.sub, p.note { margin: 0 0 12px; color: var(--muted); }
+p.note { font-size: 13px; }
+button {
+  font: inherit; min-height: 36px; padding: 6px 16px; margin: 0 8px 8px 0; border-radius: 8px;
+  border: 1px solid var(--line); background: transparent; color: inherit; cursor: pointer;
+}
+button:focus-visible, input:focus-visible, pre:focus-visible, section:focus-visible, h2:focus-visible {
+  outline: 3px solid Highlight; outline-offset: 2px;
+}
+button.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+button.danger { color: var(--danger); border-color: var(--danger); }
+button.link { border: 0; padding: 4px 0; min-height: 28px; text-decoration: underline; color: var(--primary); }
+@media (prefers-color-scheme: dark) { button.link { color: #93b4ff; } }
+pre {
+  white-space: pre-wrap; background: var(--slot-bg); padding: 14px; border-radius: 8px;
+  min-height: 80px; margin-top: 16px; font: inherit;
+}
+.adv { margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--line); }
+.adv h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0 0 8px; }
+.adv[hidden], [hidden] { display: none !important; }
+.foot { margin-top: 20px; padding-top: 8px; border-top: 1px solid var(--line); }
+
+/* About / Legal view */
+dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0 0 12px; }
+dl.facts dt { color: var(--muted); }
+dl.facts dd { margin: 0; }
+.mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+.slot { border: 2px dashed var(--line); border-radius: 8px; padding: 8px 12px; margin: 0 0 10px; }
+.slot .slot-id { display: block; font-size: 12px; color: var(--muted); }
+.slot .slot-text { display: block; white-space: pre-wrap; }
+ul.rows { list-style: none; margin: 0 0 12px; padding: 0; }
+ul.rows li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+ul.rows li .name { flex: 1 1 12em; }
+ul.rows li button { margin: 0; }
+.badge { border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; font-size: 12px; }
+#about-error { border: 2px solid var(--danger); border-radius: 8px; padding: 8px 12px; margin: 8px 0; }
+#about-error button { margin-top: 6px; }
+input[type="search"] { font: inherit; padding: 6px 8px; width: 100%; box-sizing: border-box; margin: 4px 0 8px; }
+label.filter { display: block; font-size: 13px; color: var(--muted); }
+#viewer { border-top: 1px solid var(--line); margin-top: 16px; }
+#viewer-text { max-height: 50vh; overflow: auto; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+@media (forced-colors: active) {
+  .slot { border-style: dashed; }
+  button.primary { border: 2px solid ButtonText; }
+}
