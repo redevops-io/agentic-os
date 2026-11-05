@@ -87,10 +87,13 @@
     $("about-body").replaceChildren();
   };
 
+  // The record carries the slot text (redevops.about/1: legal.slots.<id>.text, the placeholder while a decision is
+  // open). It is shown verbatim as text. A slot without usable text fails safe to a neutral marker; the bracket
+  // marker composed from `decisions` is only a fallback for a record that has no text field.
   const slotText = (key, slot) => {
     const s = obj(slot);
-    if (typeof s.placeholder === "string") return s.placeholder;
-    if (typeof s.text === "string") return s.text;
+    if (typeof s.placeholder === "string" && s.placeholder) return s.placeholder;
+    if (typeof s.text === "string" && s.text) return s.text;
     if (s.state === "placeholder") {
       const ids = arr(s.decisions).filter((d) => typeof d === "string" && /^[A-Za-z0-9.-]{1,24}$/.test(d));
       const what = key.startsWith("DATA.") ? "VALUE" : "LEGAL TEXT";
@@ -98,6 +101,8 @@
     }
     return "[LEGAL TEXT NOT AVAILABLE IN THIS VIEW]";
   };
+  const slotBlock = (key, slot) =>
+    el("div", { class: "slot" }, el("span", { class: "slot-id", text: key }), el("span", { class: "slot-text", text: slotText(key, slot) }));
 
   const factRows = (rec) => {
     const p = obj(rec.product), b = obj(rec.build), src = obj(b.source);
@@ -122,15 +127,15 @@
 
   const legalBlock = (rec) => {
     const slots = obj(obj(rec.legal).slots);
-    const keys = Object.keys(slots).filter((k) => /^[A-Z0-9_.]{1,64}$/.test(k));
+    const keys = Object.keys(slots).filter((k) => /^[A-Z0-9_.]{1,64}$/.test(k) && !k.startsWith("DATA.") && obj(slots[k]).state !== "not-applicable");
     keys.sort((a, b) => {
       const ia = SLOT_ORDER.indexOf(a), ib = SLOT_ORDER.indexOf(b);
       return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
     });
     const wrap = el("div", { role: "group", "aria-label": "Copyright, warranty and licence" });
     for (const k of keys) {
-      if (k.startsWith("DATA.")) continue; // data slots belong to the source section
-      wrap.append(el("div", { class: "slot" }, el("span", { class: "slot-id", text: k }), el("span", { class: "slot-text", text: slotText(k, slots[k]) })));
+      if (k === "LEGAL.SOURCE_OFFER") continue; // shown under "Source code access"
+      wrap.append(slotBlock(k, slots[k]));
     }
     if (!wrap.children.length) wrap.append(el("p", { class: "note", text: "No legal text slots are listed in this build record." }));
     return wrap;
@@ -142,18 +147,14 @@
     const wrap = el("div");
     if (sa.state === "not-published") {
       wrap.append(el("p", { text: "Source access for this build is not published yet (private candidate)." }));
-    } else if (sa.state === "published") {
-      const dl = el("dl", { class: "facts" });
-      if (str(sa.location)) dl.append(el("dt", { text: "Location" }), el("dd", { class: "mono", text: str(sa.location) }));
-      if (str(sa.commit)) dl.append(el("dt", { text: "Commit" }), el("dd", { class: "mono", text: str(sa.commit) }));
-      wrap.append(dl);
+    } else if (sa.state === "offer-recorded") {
+      wrap.append(el("p", { text: "A source access text is recorded for this build:" }));
     } else {
       wrap.append(el("p", { text: "Source access information is not available in this view." }));
     }
     for (const k of ["LEGAL.SOURCE_OFFER", "DATA.SOURCE_LOCATION", "DATA.SOURCE_COMMIT"]) {
-      if (slots[k] === undefined) continue;
-      if (sa.state === "published" && k.startsWith("DATA.")) continue;
-      wrap.append(el("div", { class: "slot" }, el("span", { class: "slot-id", text: k }), el("span", { class: "slot-text", text: slotText(k, slots[k]) })));
+      if (slots[k] === undefined || obj(slots[k]).state === "not-applicable") continue;
+      wrap.append(slotBlock(k, slots[k]));
     }
     return wrap;
   };
@@ -225,6 +226,17 @@
     return noticesBytes;
   };
 
+  // A notice is a byte range of the notices file as shipped (offset and length come from the record).
+  const viewNotice = (aria, title, n, off, len) => viewButton(aria, (b) => async () => {
+    setStatus("Loading " + title + "…");
+    try {
+      const bytes = await loadNotices();
+      if (off + len > bytes.length) throw new Error("ABOUT_OFFSET_MISMATCH: the notice position does not fit the notices file of this build.");
+      setStatus("");
+      openViewer(b, title, "Part of " + str(n.file) + ", as shipped.", new TextDecoder().decode(bytes.subarray(off, off + len)));
+    } catch (e) { setStatus("Could not show the text: " + e); }
+  });
+
   const componentRows = (rec, filter) => {
     const n = obj(rec.notices);
     const comps = arr(n.components);
@@ -245,19 +257,28 @@
       if (o.status === "text-not-found") li.append(el("span", { class: "badge", text: "Licence text not found in this build" }));
       const off = o.offset, len = o.length;
       if (Number.isInteger(off) && Number.isInteger(len) && off >= 0 && len > 0 && o.status !== "text-not-found") {
-        li.append(viewButton("View notice for " + label, (b) => async () => {
-          setStatus("Loading notice for " + label + "…");
-          try {
-            const bytes = await loadNotices();
-            if (off + len > bytes.length) throw new Error("ABOUT_OFFSET_MISMATCH: the notice position does not fit the notices file of this build.");
-            setStatus("");
-            openViewer(b, "Notice for " + label, "Part of " + str(n.file) + ", as shipped.", new TextDecoder().decode(bytes.subarray(off, off + len)));
-          } catch (e) { setStatus(String(e)); }
-        }));
+        li.append(viewNotice("View notice for " + label, "Notice for " + label, n, off, len));
       }
       ul.append(li);
     }
-    return { ul, matched, shown, total: comps.length };
+    // statically linked libraries that are not package components (same file, same slicing)
+    for (const r of arr(n.reference_notices)) {
+      const o = obj(r), title = str(o.title);
+      if (!title) continue;
+      if (f && !(title + " " + str(o.declared)).toLowerCase().includes(f)) continue;
+      matched++;
+      if (shown >= MAX_ROWS) continue;
+      shown++;
+      const li = el("li", null,
+        el("span", { class: "name", text: title }),
+        el("span", { class: "note", text: str(o.declared) ? "declared: " + str(o.declared) : "" }));
+      if (o.status === "text-not-found") li.append(el("span", { class: "badge", text: "Licence text not found in this build" }));
+      if (Number.isInteger(o.offset) && Number.isInteger(o.length) && o.offset >= 0 && o.length > 0 && o.status !== "text-not-found") {
+        li.append(viewNotice("View notice for " + title, "Notice for " + title, n, o.offset, o.length));
+      }
+      ul.append(li);
+    }
+    return { ul, matched, shown, total: comps.length + arr(n.reference_notices).length };
   };
 
   const noticesBlock = (rec) => {
@@ -280,7 +301,7 @@
     const draw = () => {
       const r = componentRows(rec, input.value);
       holder.replaceChildren(r.ul);
-      count.textContent = r.matched + " of " + r.total + " components" + (r.matched > r.shown ? " (first " + r.shown + " shown)" : "");
+      count.textContent = r.matched + " of " + r.total + " entries" + (r.matched > r.shown ? " (first " + r.shown + " shown)" : "");
     };
     input.oninput = () => { clearTimeout(timer); timer = setTimeout(draw, 150); };
     wrap.append(label, input, count, holder);

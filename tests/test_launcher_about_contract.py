@@ -65,10 +65,15 @@ def check_record(rec: dict, licenses: Path) -> None:
         assert hashlib.sha256(data).hexdigest() == entry["sha256"], name
         data.decode("utf-8")
     notices = (licenses / n["file"]).read_bytes()
+    assert n["component_count"] == len(n["components"])
+    for r in n["reference_notices"]:
+        assert isinstance(r["title"], str) and r["status"] in ("text-found", "text-not-found", "not-third-party")
+        section = notices[r["offset"] : r["offset"] + r["length"]].decode("utf-8")
+        assert re.match(r"={72}\n\[R\d{2}\] " + re.escape(r["title"]) + r"\n", section), r
     for c in n["components"]:
         assert isinstance(c["name"], str) and isinstance(c["version"], str) and isinstance(c["declared"], str)
         assert c["status"] in ("text-found", "text-not-found", "not-third-party")
-        if c["status"] == "text-found":
+        if c["status"] != "text-not-found":
             assert isinstance(c["offset"], int) and isinstance(c["length"], int) and c["length"] > 0
             assert c["offset"] + c["length"] <= len(notices)
             section = notices[c["offset"] : c["offset"] + c["length"]].decode("utf-8")
@@ -78,11 +83,13 @@ def check_record(rec: dict, licenses: Path) -> None:
     assert slots, "legal.slots"
     for sid, s in slots.items():
         assert SLOT_ID.match(sid), sid
-        assert s["state"] in ("placeholder", "filled")
-        assert all(isinstance(d, str) for d in s.get("decisions", []))
-        for opt in ("placeholder", "text"):
-            assert isinstance(s.get(opt, ""), str)
-    assert rec["source_access"]["state"] in ("not-published", "published")
+        assert s["state"] in ("placeholder", "filled", "not-applicable")
+        assert all(isinstance(d, str) for d in s["decisions"]) and isinstance(s["text"], str)
+        if s["state"] == "placeholder":      # the text the view shows verbatim says it is pending and private
+            assert s["text"].startswith("Legal text pending decision ") and "private candidate" in s["text"] and s["pending"]
+        if s["state"] == "filled":
+            assert s["text"].strip() and HEX64.match(s["text_sha256"]) and hashlib.sha256(s["text"].encode()).hexdigest() == s["text_sha256"]
+    assert rec["source_access"]["state"] in ("not-published", "offer-recorded")
     raw = json.dumps(rec)
     raw.encode("ascii")
     assert len(raw) <= 1024 * 1024
@@ -99,10 +106,30 @@ def test_fixture_follows_the_contract():
     check_record(rec, FIXTURE)
 
 
+def _generator_validator():
+    p = ROOT / "agentic_os" / "about_record.py"           # rc3about's strict validator (present once rc3/about is merged)
+    if not p.is_file():
+        pytest.skip("agentic_os/about_record.py is not in this tree yet")
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_about_record_contract", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_fixture_is_valid_for_the_generators_own_validator():
+    mod = _generator_validator()
+    rec = json.loads((FIXTURE / "about.json").read_text(encoding="utf-8"))
+    assert mod.validate_record(rec) == []
+    assert mod.MAX_BYTES_READ == 2 * 1024 * 1024 and mod.MAX_SERVED_FILE_BYTES == 4 * 1024 * 1024    # the launcher limits (about.rs)
+
+
 def test_fixture_legal_slots_are_all_placeholders_and_say_what_they_wait_for():
     rec = json.loads((FIXTURE / "about.json").read_text(encoding="utf-8"))
+    assert sorted(rec["legal"]["slots"]) == ["LEGAL.COPYRIGHT_LINE", "LEGAL.LICENCE_STATEMENT", "LEGAL.NO_WARRANTY", "LEGAL.SECTION13_NOTICE", "LEGAL.SOURCE_OFFER"]
     for sid, s in rec["legal"]["slots"].items():
-        assert s["state"] == "placeholder" and s["decisions"], sid
+        assert s["state"] == "placeholder" and s["decisions"] and s["pending"], sid
     assert rec["build"]["mode"] == "private-candidate" and rec["source_access"]["state"] == "not-published"
 
 

@@ -1,5 +1,9 @@
 {
  "build": {
+  "inputs": {
+   "gate_file_sha256": "c974e17b8e7321ce8c12983de3d0ed4a289821f579bbe0925b0181a4bc8e8d80",
+   "sbom_sha256": "98f3ae1ef67113d8140d4f6cb8d2830070e21ea48f091be519659846c771a374"
+  },
   "mode": "private-candidate",
   "platform": "macos-arm64",
   "source": {
@@ -8,53 +12,61 @@
    "describe": "fixture",
    "dirty_files": 0,
    "tree": "89abcdef0123456789abcdef0123456789abcdef"
+  },
+  "ui_bundle": {
+   "files": [
+    {
+     "bytes": 10,
+     "path": "assets/index-fixture.js",
+     "sha256": "d3ef7de562f9a4a34a9a0b05a112955fdecdd0102c3faae5eeb03a195091a5e4"
+    }
+   ],
+   "id": "index-fixture.js"
   }
  },
  "legal": {
   "slots": {
-   "DATA.SOURCE_COMMIT": {
-    "decisions": [
-     "pins-04"
-    ],
-    "state": "placeholder"
-   },
-   "DATA.SOURCE_LOCATION": {
-    "decisions": [
-     "D-LIC-12",
-     "pins-04"
-    ],
-    "state": "placeholder"
-   },
-   "LEGAL.CONVEYANCE": {
-    "decisions": [
-     "D-LIC-10"
-    ],
-    "state": "placeholder"
-   },
    "LEGAL.COPYRIGHT_LINE": {
     "decisions": [
      "D-LIC-1"
     ],
-    "state": "placeholder"
+    "pending": [
+     "D-LIC-1"
+    ],
+    "state": "placeholder",
+    "text": "Legal text pending decision D-LIC-1. This is a private candidate; nothing here is a legal statement or clearance."
    },
    "LEGAL.LICENCE_STATEMENT": {
     "decisions": [
      "D-LIC-1",
      "D-LIC-15"
     ],
-    "state": "placeholder"
+    "pending": [
+     "D-LIC-1",
+     "D-LIC-15"
+    ],
+    "state": "placeholder",
+    "text": "Legal text pending decision D-LIC-1, D-LIC-15. This is a private candidate; nothing here is a legal statement or clearance."
    },
    "LEGAL.NO_WARRANTY": {
     "decisions": [
      "D-LIC-10"
     ],
-    "state": "placeholder"
+    "pending": [
+     "D-LIC-10"
+    ],
+    "state": "placeholder",
+    "text": "Legal text pending decision D-LIC-10. This is a private candidate; nothing here is a legal statement or clearance."
    },
    "LEGAL.SECTION13_NOTICE": {
     "decisions": [
      "D-LIC-5"
     ],
-    "state": "placeholder"
+    "pending": [
+     "D-LIC-5"
+    ],
+    "state": "placeholder",
+    "text": "Legal text pending decision D-LIC-5. This is a private candidate; nothing here is a legal statement or clearance."
    },
    "LEGAL.SOURCE_OFFER": {
     "decisions": [
@@ -62,7 +74,13 @@
      "pins-03",
      "pins-04"
     ],
-    "state": "placeholder"
+    "pending": [
+     "D-LIC-12",
+     "pins-03",
+     "pins-04"
+    ],
+    "state": "placeholder",
+    "text": "Legal text pending decision D-LIC-12, pins-03, pins-04. This is a private candidate; nothing here is a legal statement or clearance."
    }
   }
  },
@@ -70,44 +88,57 @@
   {
    "bytes": 108,
    "file": "LICENSE",
-   "id": "license",
-   "label": "Licence text",
+   "id": "licence",
+   "label": "Licence file",
+   "role": "licence-file",
    "sha256": "9d92f8b4405ae09a3580e2aacc2271de02b7c36339fc2146869517efdc27daa8"
   },
   {
-   "bytes": 88,
+   "bytes": 52,
    "file": "LICENSE-COMMONS-CLAUSE",
-   "id": "license-commons-clause",
-   "label": "Licence condition",
-   "sha256": "7b2bae457962133920ec60365f91fee5f3793cbf29cfd6f8f7f46e9a56392736"
+   "id": "commons-clause",
+   "label": "Commons Clause file",
+   "role": "addendum-file",
+   "sha256": "db5cf6f88068d79a4916679658a5ebdaa8498db96f8cb24717a52696580fea9f"
   },
   {
    "bytes": 41,
    "file": "LICENSE.md",
-   "id": "license-md",
-   "label": "Licence file (markdown)",
+   "id": "licence-statement",
+   "label": "Licence statement file",
+   "role": "statement-file",
    "sha256": "731e77958f7d28cb680f2499671af061a37ca163b14c0e06f6207c4f9d08ee5f"
   },
   {
    "bytes": 43,
    "file": "LICENSING.md",
-   "id": "licensing-md",
-   "label": "Licensing overview",
+   "id": "licensing",
+   "label": "Licensing overview file",
+   "role": "overview-file",
    "sha256": "0c48cb897636db087d725b788325a07993dce5d6efcc0beb44bc59e06c52c2e4"
   },
   {
    "bytes": 90,
    "file": "NOTICES_MISSING.md",
-   "id": "notices-missing-md",
-   "label": "Notices not found",
+   "id": "notices-missing",
+   "label": "Components without a licence text in this build",
+   "role": "gaps-file",
    "sha256": "098bbc7f5c9577411759f5a61ee33a890147f28ec4be80ed2c944b4b67a4089e"
   }
  ],
  "notices": {
-  "bytes": 396,
+  "bytes": 771,
+  "component_count": 4,
   "components": [
    {
     "declared": "0BSD OR MIT OR Apache-2.0",
+    "files": [
+     {
+      "bytes": 10,
+      "label": "adler2-2.0.1/LICENSE",
+      "sha256": "7232a6cd56d3bb3138c12955964196f8c8269cf7e07bda6968e41a0b6774aa63"
+     }
+    ],
     "length": 130,
     "n": 1,
     "name": "adler2",
@@ -118,6 +149,13 @@
    },
    {
     "declared": "BSD-3-Clause",
+    "files": [
+     {
+      "bytes": 10,
+      "label": "starlette-1.6.0/LICENSE",
+      "sha256": "49154123b95143468aaef4e95aed02b7c601720f8c3296e76592204d9c1d0e4d"
+     }
+    ],
     "length": 136,
     "n": 2,
     "name": "starlette",
@@ -127,7 +165,8 @@
     "version": "1.6.0"
    },
    {
-    "declared": "not declared",
+    "declared": "See package",
+    "files": [],
     "length": 130,
     "n": 3,
     "name": "redevops-connectors",
@@ -135,6 +174,17 @@
     "status": "text-not-found",
     "type": "cargo",
     "version": "0.1.0"
+   },
+   {
+    "declared": "See repository",
+    "files": [],
+    "length": 138,
+    "n": 4,
+    "name": "agentic-os",
+    "offset": 396,
+    "status": "not-third-party",
+    "type": "pypi",
+    "version": "0.2.4"
    }
   ],
   "file": "THIRD_PARTY_NOTICES.txt",
@@ -144,8 +194,17 @@
     "version": "0.1.0"
    }
   ],
-  "reference_notices": [],
-  "sha256": "af18ffecce0d6a03b0c3edb83aad892a9d2132b4b4f19722ef562e1325ccba36"
+  "reference_notices": [
+   {
+    "declared": "MIT",
+    "id": "libyaml",
+    "length": 146,
+    "offset": 625,
+    "status": "text-found",
+    "title": "libyaml (statically linked, fixture)"
+   }
+  ],
+  "sha256": "5d704b7683d82f80028304705b81163cb9b059d8db8f6a513b30f8608ed209d6"
  },
  "product": {
   "bundle_identifier": "io.redevops.agentic-apps.r0prime",

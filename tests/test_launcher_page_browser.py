@@ -362,8 +362,9 @@ def test_about_legal_works_from_the_keyboard_and_shows_the_record_as_text(browse
     body = page.locator("#about-body").inner_text()
     assert "Agentic Apps R0-prime" in body and "0.1.1" in body and "r0-prime" in body and "private-candidate" in body
     # legal slots: placeholders only, with the decision they wait for; nothing that implies clearance
-    for marker in ("[LEGAL TEXT PENDING DECISION D-LIC-1]", "[LEGAL TEXT PENDING DECISION D-LIC-10]", "[LEGAL TEXT PENDING DECISION D-LIC-5]"):
-        assert marker in body, marker
+    for marker in ("Legal text pending decision D-LIC-1. This is a private candidate; nothing here is a legal statement or clearance.",
+                   "Legal text pending decision D-LIC-10.", "Legal text pending decision D-LIC-5."):
+        assert marker in body, marker                                    # the record's own text, verbatim
     assert "Source access for this build is not published yet (private candidate)." in body
     low = (body + page.locator("#about-private-note").inner_text()).lower()
     for word in ("cleared", "compliant", "approved by counsel", "certified", "open source", "tamper-proof"):
@@ -371,9 +372,9 @@ def test_about_legal_works_from_the_keyboard_and_shows_the_record_as_text(browse
     assert "Private candidate." in page.locator("#about-private-note").inner_text()
     # the licence file list and the notices component list
     assert page.locator("ul[aria-label='Licence files'] li").count() == 5
-    assert page.locator("ul[aria-label='Third-party components'] li").count() == 3
-    assert "Licence text not found in this build" in body
-    assert "3 components listed" in body and "not verified" in body
+    assert page.locator("ul[aria-label='Third-party components'] li").count() == 5          # 4 components + 1 reference notice
+    assert "Licence text not found in this build" in body and "libyaml" in body
+    assert "4 components listed" in body and "not verified" in body
     # keyboard: Tab to the "View LICENSE" button, Enter opens the viewer with the exact file text
     page.focus("button[aria-label='View LICENSE']")
     page.keyboard.press("Enter")
@@ -434,9 +435,11 @@ def test_record_values_are_rendered_as_text_never_as_markup(browser, served):
 
     def tamper(rec):
         rec["product"]["name"] = evil
-        rec["legal"]["slots"]["LEGAL.COPYRIGHT_LINE"] = {"state": "placeholder", "placeholder": evil}
+        rec["legal"]["slots"]["LEGAL.COPYRIGHT_LINE"] = {"state": "placeholder", "text": evil}
+        rec["legal"]["slots"]["LEGAL.NO_WARRANTY"]["text"] = evil + "2"
         rec["notices"]["components"][0]["name"] = evil
-        rec["source_access"] = {"state": "published", "location": "javascript:window.__pwn=6", "commit": evil}
+        rec["source_access"] = {"state": "offer-recorded", "location": "javascript:window.__pwn=6", "commit": evil}
+        rec["notices"]["reference_notices"][0]["title"] = evil
 
     ctx, page, problems, _ = _open(browser, served, _stub(record_override=tamper))
     page.click("#open-about")
@@ -450,8 +453,9 @@ def test_record_values_are_rendered_as_text_never_as_markup(browser, served):
 
 def test_a_slot_with_text_in_the_record_is_shown_verbatim_and_an_unknown_state_fails_safe(browser, served):
     def tweak(rec):
-        rec["legal"]["slots"]["LEGAL.COPYRIGHT_LINE"] = {"state": "placeholder", "placeholder": "[PLACEHOLDER VERBATIM FROM THE RECORD]"}
+        rec["legal"]["slots"]["LEGAL.COPYRIGHT_LINE"]["text"] = "[PLACEHOLDER VERBATIM FROM THE RECORD]"
         rec["legal"]["slots"]["LEGAL.NO_WARRANTY"] = {"state": "mystery"}
+        rec["legal"]["slots"]["LEGAL.SECTION13_NOTICE"] = {"state": "not-applicable", "decisions": ["D-LIC-5"], "pending": [], "text": ""}
 
     ctx, page, problems, _ = _open(browser, served, _stub(record_override=tweak))
     page.click("#open-about")
@@ -459,6 +463,7 @@ def test_a_slot_with_text_in_the_record_is_shown_verbatim_and_an_unknown_state_f
     body = page.locator("#about-body").inner_text()
     assert "[PLACEHOLDER VERBATIM FROM THE RECORD]" in body
     assert "[LEGAL TEXT NOT AVAILABLE IN THIS VIEW]" in body
+    assert "LEGAL.SECTION13_NOTICE" not in body                                 # a not-applicable slot is not shown
     ctx.close()
 
 

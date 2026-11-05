@@ -10,3 +10,12 @@ FIXTURE NOTICE TEXT for starlette 1.6.0
 [003] redevops-connectors 0.1.0
 (no licence text found)
 
+========================================================================
+[004] agentic-os 0.2.4
+FIXTURE NOTICE TEXT for agentic-os 0.2.4
+
+========================================================================
+REFERENCE NOTICES
+========================================================================
+[R01] libyaml (statically linked, fixture)
+FIXTURE REFERENCE NOTICE TEXT
