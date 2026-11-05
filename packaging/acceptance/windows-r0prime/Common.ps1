@@ -5,7 +5,8 @@
 
 $script:Results = New-Object System.Collections.ArrayList
 $script:StepName = 'step'
-$script:OutDir = $null
+# NOT reset here: Common.ps1 is dot-sourced by the step scripts, so $script:OutDir IS their -OutDir parameter; `$script:OutDir = $null` here discarded it
+# (every step then wrote to its own %TEMP%\r0prime-win-<stamp> and Run-All found no results-*.json). Initialize-Step sets it.
 $script:TranscriptPath = $null
 $script:ValidStatus = @('PASS', 'FAIL', 'MANUAL', 'INFO', 'SKIP')
 
