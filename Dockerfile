@@ -2,6 +2,9 @@
 # Bump deliberately: docker buildx imagetools inspect python:3.12-slim
 FROM python:3.12-slim@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54
 WORKDIR /app
+# Reproducible builds: pass --build-arg SOURCE_DATE_EPOCH=<unix time> (and --output ...,rewrite-timestamp=true).
+# Python then writes checked-hash .pyc files instead of mtime-stamped ones; unset, nothing changes.
+ARG SOURCE_DATE_EPOCH
 COPY pyproject.toml README.md modules.yaml LICENSE LICENSE-COMMONS-CLAUSE LICENSE.md LICENSING.md ./
 COPY agentic_os ./agentic_os
 COPY deploy/assets ./deploy/assets
@@ -10,7 +13,8 @@ COPY deploy/assets ./deploy/assets
 # isolated build-environment pip that --no-cache-dir does not (it left /root/.cache/pip in the image).
 RUN apt-get update && apt-get install -y --no-install-recommends git \
  && PIP_NO_CACHE_DIR=1 pip install --no-cache-dir . \
- && apt-get purge -y git && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+ && apt-get purge -y git && apt-get autoremove -y \
+ && rm -rf /var/lib/apt/lists/* /var/log/apt /var/log/dpkg.log /var/log/alternatives.log /var/cache/ldconfig/aux-cache
 # Run unprivileged. The control plane writes only under /data (permissions plane) and
 # /app/.agentic-os (the Context home when AGENTIC_OS_HOME is unset); both are created owned by
 # the service user so a fresh named volume mounted at /data inherits that ownership. An existing
