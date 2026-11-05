@@ -42,10 +42,16 @@ def _load(path: Path, name: str):
 
 
 def check(licenses_dir: Path, *, root: Path = ROOT, notices_report: Path | None = None, gate_path: Path | None = None,
-          distribution: bool = False, copies: tuple = ()) -> list[str]:
-    rec = _load(root / "agentic_os" / "about_record.py", "_about_record")
+          distribution: bool = False, copies: tuple = (), code_root: Path | None = None, allowed_signers: Path | None = None,
+          expect_commit: str | None = None) -> list[str]:
+    """`root` holds the DATA (identity, versions, gate file, product licence files); `code_root` (default: root) holds the CODE that is
+    executed (agentic_os/about_record.py and packaging/check-distribution-gate.py; generate_about.py is loaded from this script's own
+    directory). The signing scripts run a hash-verified private copy as code_root."""
+    code_root = code_root or root
+    rec = _load(code_root / "agentic_os" / "about_record.py", "_about_record")
     gen = _load(HERE / "generate_about.py", "_generate_about")
-    gate = gen.load_gate(root)
+    gate = gen.load_gate(code_root)
+    allowed = allowed_signers or (root / "packaging" / "legal-allowed-signers")
     errs: list[str] = []
     ap = licenses_dir / "about.json"
     if not ap.is_file():
@@ -129,12 +135,16 @@ def check(licenses_dir: Path, *, root: Path = ROOT, notices_report: Path | None 
     # --- legal slots against the gate file as it is now
     gate_path = gate_path or (root / "packaging" / "distribution-gate.json")
     try:
-        decisions = gate.load(gate_path)
+        gdoc = gate.load_doc(gate_path)
     except SystemExit:
         return errs + ["gate file unreadable or malformed"]
+    decisions, signers = gdoc["decisions"], gdoc.get("legal_signer_fingerprints", [])
+    if expect_commit is not None and doc["build"]["source"]["commit"] != expect_commit:
+        errs.append(f"the record's source.commit {doc['build']['source']['commit']} is not the commit of the build that was authorized "
+                    f"({expect_commit})")
     if doc["build"]["inputs"]["gate_file_sha256"] != hashlib.sha256(gate_path.read_bytes()).hexdigest():
         errs.append("the gate file changed after about.json was generated")
-    slots, slot_errs, refusals = gate.resolve_about_slots(decisions, root, distribution)
+    slots, slot_errs, refusals = gate.resolve_about_slots(decisions, root, distribution, allowed_signers=allowed, signers=signers)
     errs += [f"slot: {e}" for e in slot_errs]
     if slots != doc["legal"]["slots"]:
         errs.append("legal.slots differ from what the gate file and the approved texts give now")
@@ -144,7 +154,7 @@ def check(licenses_dir: Path, *, root: Path = ROOT, notices_report: Path | None 
         errs += [f"distribution: {r}" for r in refusals]
         pg = doc["build"]["platform"].split("-")[0]
         errs += [f"distribution: {r}" for r in gate.signature_problems(
-            decisions, root, root / "packaging" / "legal-allowed-signers", pg if pg in ("macos", "windows", "linux") else "all")]
+            decisions, root, allowed, pg if pg in ("macos", "windows", "linux") else "all", signers)]
 
     # --- wording
     for s in rec.record_strings(doc):
@@ -167,13 +177,17 @@ def main(argv=None) -> int:
     ap.add_argument("--notices-report", type=Path)
     ap.add_argument("--gate", type=Path)
     ap.add_argument("--root", type=Path, default=ROOT, help="repository root (tests only)")
+    ap.add_argument("--code-root", type=Path, help="directory holding the code to execute (agentic_os/about_record.py, packaging/"
+                    "check-distribution-gate.py); default --root. The signing scripts pass a hash-verified private copy")
+    ap.add_argument("--allowed-signers", type=Path, help="allowed-signers file (default: <root>/packaging/legal-allowed-signers)")
+    ap.add_argument("--expect-commit", help="the record's build.source.commit must equal this 40-hex commit (the authorized build)")
     ap.add_argument("--distribution", action="store_true")
     ap.add_argument("--copy", action="append", default=[], type=Path, help="another copy that must be byte-identical (repeatable)")
     a = ap.parse_args(argv)
     gen = _load(HERE / "generate_about.py", "_generate_about")
-    dist = gen.load_gate(a.root).is_distribution(a.distribution)
+    dist = gen.load_gate(a.code_root or a.root).is_distribution(a.distribution)
     errs = check(a.licenses_dir, root=a.root, notices_report=a.notices_report, gate_path=a.gate, distribution=dist,
-                 copies=tuple(a.copy))
+                 copies=tuple(a.copy), code_root=a.code_root, allowed_signers=a.allowed_signers, expect_commit=a.expect_commit)
     for e in errs:
         print("FAIL:", e, file=sys.stderr)
     print("about.json is consistent" if not errs else f"{len(errs)} problem(s)")

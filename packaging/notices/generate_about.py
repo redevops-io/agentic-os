@@ -11,9 +11,11 @@ licence files at the repository root, the vendored Projects UI bundle, git (comm
 path, host name, user name, wall-clock time or hash of the artifact that contains the record can get in.
 
 LEGAL SLOTS. The record carries five slots (LEGAL.COPYRIGHT_LINE, LEGAL.LICENCE_STATEMENT, LEGAL.SOURCE_OFFER,
-LEGAL.NO_WARRANTY, LEGAL.SECTION13_NOTICE). A slot is filled only when every decision it lists is DECIDED in the gate file and the
-primary decision's `slot_texts` entry names an approved text file whose sha256 matches (rules in check-distribution-gate.py). While
-a decision is OPEN the slot is the neutral placeholder and its text file is never opened. This script writes no legal text.
+LEGAL.NO_WARRANTY, LEGAL.SECTION13_NOTICE). A slot is "approved-verified" only when every decision it lists is DECIDED in the gate file, the
+primary decision's `slot_texts` entry names an approved text file whose sha256 matches, AND the signatures and the signed record
+headers verify against the signer list (rules in check-distribution-gate.py). While a decision is OPEN the slot is the neutral
+placeholder ("pending") and its text file is never opened; a DECIDED slot whose signatures do not verify is an "unverified-draft"
+that carries its own label inside the text and is never shown as ordinary legal text. This script writes no legal text.
 
 A hash match between a DECIDED entry and its files proves consistency only, not who decided (see check-distribution-gate.py). A
 DISTRIBUTION build therefore also needs a valid detached signature (packaging/legal-allowed-signers) on every decision record and
@@ -160,19 +162,21 @@ def build_record(*, notices_dir: Path, root: Path = ROOT, gate_path: Path | None
     gate = load_gate(root)
     gate_path = gate_path or (root / "packaging" / "distribution-gate.json")
     try:
-        decisions = gate.load(gate_path)
+        gdoc = gate.load_doc(gate_path)
     except SystemExit:
         raise Refused(2, ["gate file unreadable or malformed (see the message above)"])
+    decisions, signers = gdoc["decisions"], gdoc.get("legal_signer_fingerprints", [])
+    allowed = root / "packaging" / "legal-allowed-signers"
     errs = gate.validate(decisions, root)
     if errs:
         raise Refused(2, [f"gate file problem: {e}" for e in errs])
-    slots, slot_errs, refusals = gate.resolve_about_slots(decisions, root, distribution)
+    slots, slot_errs, refusals = gate.resolve_about_slots(decisions, root, distribution, allowed_signers=allowed, signers=signers)
     if slot_errs:
         raise Refused(2, [f"about slot problem: {e}" for e in slot_errs])
     if distribution and refusals:
         raise Refused(3, ["DISTRIBUTION BUILD REFUSED: the About page has legal slots without an approved text"] + refusals)
     platform_gate = platform.split("-")[0] if platform.split("-")[0] in ("macos", "windows", "linux") else "all"
-    sig = gate.signature_problems(decisions, root, root / "packaging" / "legal-allowed-signers", platform_gate)
+    sig = gate.signature_problems(decisions, root, allowed, platform_gate, signers)
     if distribution and sig:
         raise Refused(3, ["DISTRIBUTION BUILD REFUSED: a legal record or approved text has no valid detached signature "
                           "(a hash match alone proves consistency, not who decided)"] + sig)
@@ -228,7 +232,7 @@ def build_record(*, notices_dir: Path, root: Path = ROOT, gate_path: Path | None
         "notices": {"file": NOTICES_FILE, "bytes": len(notices_raw), "sha256": hashlib.sha256(notices_raw).hexdigest(),
                     "component_count": len(components), "components": components, "reference_notices": reference, "missing": missing},
         "legal": {"slots": slots},
-        "source_access": {"state": "offer-recorded" if slots["LEGAL.SOURCE_OFFER"]["state"] == "filled" else "not-published"},
+        "source_access": {"state": "offer-recorded" if slots["LEGAL.SOURCE_OFFER"]["state"] == "approved-verified" else "not-published"},
         "ui": {"entry": True, "locales": ["en"]},
     }
     rec = load_record_module(root)
@@ -267,7 +271,7 @@ def main(argv=None) -> int:
     rec = load_record_module(a.root)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(rec.canonical_bytes(doc))
-    n = sum(1 for s in doc["legal"]["slots"].values() if s["state"] == "placeholder")
+    n = sum(1 for s in doc["legal"]["slots"].values() if s["state"] == "pending")
     print(f"about.json: {len(doc['notices']['components'])} components, {n} of {len(doc['legal']['slots'])} legal slots are "
           f"placeholders, mode {doc['build']['mode']} -> {out}")
     return 0

@@ -83,11 +83,13 @@ def check_record(rec: dict, licenses: Path) -> None:
     assert slots, "legal.slots"
     for sid, s in slots.items():
         assert SLOT_ID.match(sid), sid
-        assert s["state"] in ("placeholder", "filled", "not-applicable")
+        assert s["state"] in ("pending", "approved-verified", "unverified-draft", "not-applicable")
         assert all(isinstance(d, str) for d in s["decisions"]) and isinstance(s["text"], str)
-        if s["state"] == "placeholder":      # the text the view shows verbatim says it is pending and private
+        if s["state"] == "pending":      # the text the view shows verbatim says it is pending and private
             assert s["text"].startswith("Legal text pending decision ") and "private candidate" in s["text"] and s["pending"]
-        if s["state"] == "filled":
+        if s["state"] == "unverified-draft":      # the label is INSIDE the text the view shows verbatim (R2-01)
+            assert s["text"].startswith("Unverified draft, not an approved text.") and HEX64.match(s["text_sha256"])
+        if s["state"] == "approved-verified":
             assert s["text"].strip() and HEX64.match(s["text_sha256"]) and hashlib.sha256(s["text"].encode()).hexdigest() == s["text_sha256"]
     assert rec["source_access"]["state"] in ("not-published", "offer-recorded")
     raw = json.dumps(rec)
@@ -129,7 +131,7 @@ def test_fixture_legal_slots_are_all_placeholders_and_say_what_they_wait_for():
     rec = json.loads((FIXTURE / "about.json").read_text(encoding="utf-8"))
     assert sorted(rec["legal"]["slots"]) == ["LEGAL.COPYRIGHT_LINE", "LEGAL.LICENCE_STATEMENT", "LEGAL.NO_WARRANTY", "LEGAL.SECTION13_NOTICE", "LEGAL.SOURCE_OFFER"]
     for sid, s in rec["legal"]["slots"].items():
-        assert s["state"] == "placeholder" and s["decisions"] and s["pending"], sid
+        assert s["state"] == "pending" and s["decisions"] and s["pending"], sid
     assert rec["build"]["mode"] == "private-candidate" and rec["source_access"]["state"] == "not-published"
 
 

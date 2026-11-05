@@ -54,7 +54,7 @@ def _decided(d, tmp_path, signer=None):
     """A DECIDED copy of `d` with an invented record in tmp_path. With `signer` (a THROWAWAY test key) the record is also signed."""
     d = copy.deepcopy(d)
     record = tmp_path / f"{d['id']}.signed.txt"
-    record.write_text("signed by the owner\n")
+    record.write_text(f"redevops-legal-decision: 1\ndecision: {d['id']}\noption: {d['options'][0]['key']}\n\nsigned by the owner\n")
     if signer is not None:
         signer.sign(record)
     d.update(status="DECIDED", chosen_option=d["options"][0]["key"], decision_reference=record.name,
@@ -65,9 +65,12 @@ def _decided(d, tmp_path, signer=None):
     return d
 
 
-def _write(tmp_path, decisions):
+def _write(tmp_path, decisions, signer=None):
     p = tmp_path / "gate.json"
-    p.write_text(json.dumps({"schema": 1, "decisions": decisions}))
+    doc = {"schema": 1, "decisions": decisions}
+    if signer is not None:
+        doc["legal_signer_fingerprints"] = [signer.fingerprint]       # the gate file pins the key of the allowed-signers file
+    p.write_text(json.dumps(doc))
     return p
 
 
@@ -150,13 +153,13 @@ def test_a_forged_decision_record_is_not_accepted(tmp_path):
 
 def test_a_non_default_gate_file_says_it_is_not_valid_for_signing(tmp_path, signer):
     ds = [_decided(d, tmp_path, signer) if d["blocks_distribution"] else d for d in _decisions()]
-    r = _run("--platform", "all", "--distribution", gate_file=_write(tmp_path, ds), allowed=signer.allowed)
+    r = _run("--platform", "all", "--distribution", gate_file=_write(tmp_path, ds, signer), allowed=signer.allowed)
     assert r.returncode == 0 and "NOT valid for signing" in r.stderr
 
 
 def test_all_blockers_decided_with_a_signed_written_record_passes(tmp_path, signer):
     ds = [_decided(d, tmp_path, signer) if d["blocks_distribution"] else d for d in _decisions()]
-    p = _write(tmp_path, ds)
+    p = _write(tmp_path, ds, signer)
     r = _run("--platform", "all", "--distribution", gate_file=p, allowed=signer.allowed)
     assert r.returncode == 0, r.stderr
     assert "DECIDED with a written record" in r.stdout and "valid detached signature" in r.stdout
@@ -183,7 +186,7 @@ def test_one_open_blocker_is_enough_to_refuse(tmp_path):
 def test_platform_scope_windows_only_blockers_do_not_stop_a_macos_build(tmp_path, signer):
     ds = [_decided(d, tmp_path, signer) if d["blocks_distribution"] and "windows" not in d["scope"] and d["scope"] != ["qa"] else d
           for d in _decisions()]
-    p = _write(tmp_path, ds)
+    p = _write(tmp_path, ds, signer)
     assert _run("--platform", "macos", "--distribution", gate_file=p, allowed=signer.allowed).returncode == 0
     r = _run("--platform", "windows", "--distribution", gate_file=p)
     assert r.returncode == 1 and "pins-08" in r.stderr and "D-LIC-9" in r.stderr

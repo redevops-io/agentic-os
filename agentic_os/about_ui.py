@@ -51,6 +51,19 @@ NOT_AVAILABLE = (b"The About page is not available in this installation. "
                  b"The licence files are in the Licenses folder of the application.\n")
 
 
+_LOGGED: set = set()
+
+
+def _log_once(msg: str) -> None:
+    """One ASCII line per distinct message and process (the app object is built more than once at start-up: the module-level app of
+    projects_api and the one `serve` builds)."""
+    if msg in _LOGGED:
+        return
+    _LOGGED.add(msg)
+    sys.stderr.write(msg + "\n")
+    sys.stderr.flush()
+
+
 def find_licenses_dir() -> Optional[Path]:
     """Where the Licenses folder is: the PyInstaller bundle first; from a checkout, ``$AGENTIC_OS_LICENSES_DIR`` (tests, development)
     and then the folder the launcher build stages. A frozen sidecar never looks anywhere else (no environment override)."""
@@ -140,17 +153,15 @@ def install_about(app: Any, base_path: str = "", licenses_dir: Optional[Path] = 
     except OSError as e:
         # A missing About asset must never stop the control plane: one ASCII log line, no About routes except a plain-text 404
         # note on /about/ (the shell's About link then shows that note instead of the gate's 401).
-        sys.stderr.write(f"about: an About page asset is unreadable ({e.__class__.__name__}); the About page is disabled, "
-                         "the rest of the service is not affected\n")
-        sys.stderr.flush()
+        _log_once(f"about: an About page asset is unreadable ({e.__class__.__name__}); the About page is disabled, "
+                  "the rest of the service is not affected")
         app.add_api_route("/about/", unavailable, methods=["GET", "HEAD"], include_in_schema=False)
         app.state.about_state = AboutState()
         return frozenset({"/about/"})
     try:
         state = load_state(licenses_dir if licenses_dir is not None else find_licenses_dir())
     except Exception as e:                      # never let the legal-notices page take the service down
-        sys.stderr.write(f"about: the build record could not be loaded ({e.__class__.__name__}); the About page shows an error\n")
-        sys.stderr.flush()
+        _log_once(f"about: the build record could not be loaded ({e.__class__.__name__}); the About page shows an error")
         state = AboutState().fail(ERR_INVALID)
 
     def reply(request: Request, body: bytes, media: str, sha: str) -> Response:

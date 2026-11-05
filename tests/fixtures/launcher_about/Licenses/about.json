@@ -33,7 +33,8 @@
     "pending": [
      "D-LIC-1"
     ],
-    "state": "placeholder",
+    "state": "pending",
+    "tag": "Pending a decision",
     "text": "Legal text pending decision D-LIC-1. This is a private candidate; nothing here is a legal statement or clearance."
    },
    "LEGAL.LICENCE_STATEMENT": {
@@ -45,7 +46,8 @@
      "D-LIC-1",
      "D-LIC-15"
     ],
-    "state": "placeholder",
+    "state": "pending",
+    "tag": "Pending a decision",
     "text": "Legal text pending decision D-LIC-1, D-LIC-15. This is a private candidate; nothing here is a legal statement or clearance."
    },
    "LEGAL.NO_WARRANTY": {
@@ -55,7 +57,8 @@
     "pending": [
      "D-LIC-10"
     ],
-    "state": "placeholder",
+    "state": "pending",
+    "tag": "Pending a decision",
     "text": "Legal text pending decision D-LIC-10. This is a private candidate; nothing here is a legal statement or clearance."
    },
    "LEGAL.SECTION13_NOTICE": {
@@ -65,7 +68,8 @@
     "pending": [
      "D-LIC-5"
     ],
-    "state": "placeholder",
+    "state": "pending",
+    "tag": "Pending a decision",
     "text": "Legal text pending decision D-LIC-5. This is a private candidate; nothing here is a legal statement or clearance."
    },
    "LEGAL.SOURCE_OFFER": {
@@ -79,7 +83,8 @@
      "pins-03",
      "pins-04"
     ],
-    "state": "placeholder",
+    "state": "pending",
+    "tag": "Pending a decision",
     "text": "Legal text pending decision D-LIC-12, pins-03, pins-04. This is a private candidate; nothing here is a legal statement or clearance."
    }
   }

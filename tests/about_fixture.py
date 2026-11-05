@@ -61,6 +61,9 @@ class Signer:
         pub = (self.dir / "key.pub").read_text().strip()
         self.allowed = self.dir / "allowed-signers"
         self.allowed.write_text(f'{principal} namespaces="{NAMESPACE}" {pub}\n')
+        out = subprocess.run(["ssh-keygen", "-l", "-f", str(self.dir / "key.pub")], check=True, env={"PATH": "/usr/bin:/bin"},
+                             capture_output=True, text=True).stdout
+        self.fingerprint = out.split()[1]                       # SHA256:...
 
     def sign(self, path: Path, namespace: str = NAMESPACE, key: Path | None = None) -> Path:
         sig = Path(str(path) + ".sig")
@@ -145,20 +148,28 @@ def write_gate(root: Path, doc: dict) -> None:
     (root / "packaging" / "distribution-gate.json").write_text(json.dumps(doc, indent=1))
 
 
+def record_text(d: dict, slots: dict | None = None, extra: str = "synthetic signed record") -> str:
+    """The machine-readable header of a decision record (see check-distribution-gate.py) plus a synthetic free-text body."""
+    lines = ["redevops-legal-decision: 1", f"decision: {d['id']}", f"option: {d['chosen_option']}"]
+    for slot, v in (slots if slots is not None else d.get("slot_texts") or {}).items():
+        lines.append(f"slot: {slot} " + ("not-applicable" if v.get("not_applicable") else f"sha256 {v['sha256']}"))
+    return "\n".join(lines) + f"\n\n{extra} for {d['id']}\n"
+
+
 def decide(root: Path, ids, *, texts: str = "ok") -> None:
-    """Mark the gate entries `ids` DECIDED with a synthetic written record. texts: ok | none | missing | mismatch | na (section 13)."""
+    """Mark the gate entries `ids` DECIDED with a synthetic written record (machine-readable header included). texts: ok | none | missing |
+    mismatch | na (section 13). Nothing is signed here (see trust())."""
     doc = read_gate(root)
     for d in doc["decisions"]:
         if d["id"] not in ids:
             continue
         rec = root / "docs" / "legal" / "decisions" / f"{d['id']}.signed.txt"
         rec.parent.mkdir(parents=True, exist_ok=True)
-        rec.write_text(f"synthetic signed record for {d['id']}\n")
         d.update(status="DECIDED", chosen_option=d["options"][0]["key"], decision_reference=rec.relative_to(root).as_posix(),
-                 decision_sha256=hashlib.sha256(rec.read_bytes()).hexdigest(), decided_by="test-owner", decided_on="2026-12-01")
+                 decided_by="test-owner", decided_on="2026-12-01")
         if "counsel" in d["decides"]:
             d["counsel_reference"] = "synthetic counsel reference"
-        mine = {s: ids_ for s, ids_ in SLOTS.items() if ids_[0] == d["id"]}
+        mine = {s_: ids_ for s_, ids_ in SLOTS.items() if ids_[0] == d["id"]}
         if texts != "none" and mine:
             st = {}
             for slot in mine:
@@ -176,6 +187,8 @@ def decide(root: Path, ids, *, texts: str = "ok") -> None:
                     f.unlink()
                 st[slot] = {"file": f.relative_to(root).as_posix(), "sha256": sha}
             d["slot_texts"] = st
+        rec.write_text(record_text(d))
+        d["decision_sha256"] = hashlib.sha256(rec.read_bytes()).hexdigest()
     write_gate(root, doc)
 
 
@@ -205,8 +218,12 @@ def signer(tmp_path):
 
 
 def trust(root: Path, signer: Signer) -> None:
-    """Make `signer` the allowed signer of the fixture repository `root` and sign every DECIDED record and approved text in it."""
+    """Make `signer` the allowed signer of the fixture repository `root` (allowed-signers file AND the gate file's fingerprint list) and
+    sign every DECIDED record and approved text in it."""
     (root / "packaging" / "legal-allowed-signers").write_text(signer.allowed.read_text())
+    doc = read_gate(root)
+    doc["legal_signer_fingerprints"] = [signer.fingerprint]
+    write_gate(root, doc)
     sign_all(root, signer)
 
 

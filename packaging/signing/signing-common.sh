@@ -264,21 +264,52 @@ r0p_gate() {
 }
 
 # About record of the artifact being signed (RC3) --------------------------------------------------------------------------
-# r0p_about_check LICENSES_DIR DISTRIBUTION(0/1): the Licenses folder INSIDE the artifact (the app's Contents/Resources/Licenses taken from
-# the dmg copy; the Licenses folder of the installer tree on Windows) must hold an about.json that passes packaging/notices/check_about.py
-# against the repository copies of the gate file, identity, versions and the folder's own manifest. With DISTRIBUTION=1 the record must be
-# a distribution record without a placeholder slot and every legal record must carry a valid detached signature. Returns non-zero (the
-# caller fails) instead of dying, so the evidence of the run records the reason. A hash in the record proves consistency, not authorship.
+# The code and data this check uses are pinned by the authorization scope (scope_version 3), like every other file that decides or
+# executes during a run: check_about.py, generate_about.py, agentic_os/about_record.py, packaging/legal-allowed-signers and (already)
+# packaging/check-distribution-gate.py. A hash in the record or in the gate file proves consistency, not authorship.
+#
+# r0p_about_pins CHECK_SHA GEN_SHA REC_SHA SIGNERS_SHA : the repository copies must be the ones the scope binds (dies otherwise).
+r0p_about_pins() {
+  local pk="$SELF_DIR/.." root="$SELF_DIR/../.." h
+  h="$(r0p_sha "$pk/notices/check_about.py")";        [ "$h" = "$1" ] || die "scope file: check_about_sha256 does not match packaging/notices/check_about.py ($h)"
+  h="$(r0p_sha "$pk/notices/generate_about.py")";     [ "$h" = "$2" ] || die "scope file: generate_about_sha256 does not match packaging/notices/generate_about.py ($h)"
+  h="$(r0p_sha "$root/agentic_os/about_record.py")";  [ "$h" = "$3" ] || die "scope file: about_record_sha256 does not match agentic_os/about_record.py ($h)"
+  h="$(r0p_sha "$pk/legal-allowed-signers")";         [ "$h" = "$4" ] || die "scope file: legal_signers_sha256 does not match packaging/legal-allowed-signers ($h)"
+}
+# r0p_about_check LICENSES_DIR DISTRIBUTION(0/1) BUILD_COMMIT CHECK_SHA GEN_SHA REC_SHA GATE_TOOL_SHA SIGNERS_SHA : the Licenses folder INSIDE the
+# artifact (the app's Contents/Resources/Licenses taken from the dmg copy; the Licenses folder of the installer tree on Windows) must hold an
+# about.json that passes check_about.py against the repository copies of the gate file, identity, versions and the folder's own manifest, and
+# whose build.source.commit is the authorized build_commit. The checker runs as `python -I -B` from a PRIVATE COPY of the pinned files, made
+# in the private work directory and re-hashed after copying: it imports nothing unpinned. With DISTRIBUTION=1 the record must be a distribution
+# record without a pending or draft slot and every legal record must carry a valid detached signature (signer list pinned by fingerprint).
+# Returns non-zero (the caller fails) instead of dying, so the evidence of the run records the reason.
 r0p_about_check() {
-  local dir="$1" dist="$2" chk="$SELF_DIR/../notices/check_about.py" root="$SELF_DIR/../.." rc=0
-  [ -f "$chk" ] && [ -f "$root/agentic_os/about_record.py" ] || { echo "ERROR: packaging/notices/check_about.py or agentic_os/about_record.py is missing next to packaging/" >&2; return 1; }
+  local dir="$1" dist="$2" commit="$3" csha="$4" gsha="$5" rsha="$6" tsha="$7" ssha="$8"
+  local pk="$SELF_DIR/.." root="$SELF_DIR/../.." t rc=0 h
+  [ -f "$pk/notices/check_about.py" ] && [ -f "$root/agentic_os/about_record.py" ] || { echo "ERROR: packaging/notices/check_about.py or agentic_os/about_record.py is missing next to packaging/" >&2; return 1; }
   [ -d "$dir" ] && [ ! -L "$dir" ] || { echo "ERROR: the artifact has no Licenses folder to check ($dir)" >&2; return 1; }
   [ -f "$dir/about.json" ] && [ ! -L "$dir/about.json" ] || { echo "ERROR: the artifact has no Licenses/about.json (an RC3 artifact must carry the About record)" >&2; return 1; }
+  [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || { echo "ERROR: the authorized build commit is not a 40-hex id" >&2; return 1; }
   [ -x /usr/bin/python3 ] || { echo "ERROR: /usr/bin/python3 not found: the About record cannot be checked" >&2; return 1; }
+  [ -n "${R0P_TMP:-}" ] || r0p_mktmp
+  t="$R0P_TMP/about-check"
+  mkdir -p "$t/agentic_os" "$t/packaging/notices" || { echo "ERROR: cannot create the private work directory for the About check" >&2; return 1; }
+  cat "$pk/notices/check_about.py"       > "$t/packaging/notices/check_about.py"       || return 1
+  cat "$pk/notices/generate_about.py"    > "$t/packaging/notices/generate_about.py"    || return 1
+  cat "$root/agentic_os/about_record.py" > "$t/agentic_os/about_record.py"             || return 1
+  cat "$pk/check-distribution-gate.py"   > "$t/packaging/check-distribution-gate.py"   || return 1
+  cat "$pk/legal-allowed-signers"        > "$t/packaging/legal-allowed-signers"        || return 1
+  h="$(r0p_sha "$t/packaging/notices/check_about.py")";     [ "$h" = "$csha" ] || { echo "ERROR: the private copy of check_about.py ($h) is not the one the scope binds" >&2; return 1; }
+  h="$(r0p_sha "$t/packaging/notices/generate_about.py")";  [ "$h" = "$gsha" ] || { echo "ERROR: the private copy of generate_about.py ($h) is not the one the scope binds" >&2; return 1; }
+  h="$(r0p_sha "$t/agentic_os/about_record.py")";           [ "$h" = "$rsha" ] || { echo "ERROR: the private copy of about_record.py ($h) is not the one the scope binds" >&2; return 1; }
+  h="$(r0p_sha "$t/packaging/check-distribution-gate.py")"; [ "$h" = "$tsha" ] || { echo "ERROR: the private copy of the gate tool ($h) is not the one the scope binds" >&2; return 1; }
+  h="$(r0p_sha "$t/packaging/legal-allowed-signers")";      [ "$h" = "$ssha" ] || { echo "ERROR: the private copy of legal-allowed-signers ($h) is not the one the scope binds" >&2; return 1; }
   if [ "$dist" = 1 ]; then
-    /usr/bin/python3 -I "$chk" --licenses-dir "$dir" --root "$root" --distribution || rc=$?
+    /usr/bin/python3 -I -B "$t/packaging/notices/check_about.py" --licenses-dir "$dir" --root "$root" --code-root "$t" \
+      --allowed-signers "$t/packaging/legal-allowed-signers" --expect-commit "$commit" --distribution || rc=$?
   else
-    /usr/bin/python3 -I "$chk" --licenses-dir "$dir" --root "$root" || rc=$?
+    /usr/bin/python3 -I -B "$t/packaging/notices/check_about.py" --licenses-dir "$dir" --root "$root" --code-root "$t" \
+      --allowed-signers "$t/packaging/legal-allowed-signers" --expect-commit "$commit" || rc=$?
   fi
   [ "$rc" -eq 0 ] || { echo "ERROR: the About record inside the artifact failed check_about.py (exit $rc)" >&2; return 1; }
   return 0

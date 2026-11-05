@@ -40,6 +40,7 @@ Notarize: submit the signed dmg to the Apple notary service (THIS UPLOADS THE SI
 | Input dmg name as built (the script derives the output name from `packaging/identity.json`) | |
 | Script sha256 (`shasum -a 256 packaging/signing/sign_and_notarize_r0prime_macos_v3.sh`) and `signing-common.sh` sha256 | |
 | `packaging/identity.json` sha256; `packaging/distribution-gate.json` sha256; `packaging/check-distribution-gate.py` sha256 | |
+| RC3 About pins (scope_version 3): sha256 of `packaging/notices/check_about.py`, `packaging/notices/generate_about.py`, `agentic_os/about_record.py` and `packaging/legal-allowed-signers`; the build commit (40 hex) must be the `source.commit` of the about.json inside the artifact | |
 | Evidence manifest sha256 of the evidence set this dmg belongs to (obtained out of band) | |
 | Entitlement plist sha256 (`packaging/macos/sidecar.entitlements.plist`) | |
 | Identity: sha256 of the EXACT identity string you will export (`printf '%s' "$R0P_CODESIGN_IDENTITY" \| shasum -a 256`) | |
@@ -50,9 +51,17 @@ Notarize: submit the signed dmg to the Apple notary service (THIS UPLOADS THE SI
 | Where the signed dmg may be kept | |
 | Entitlement decision: the sidecar-only `com.apple.security.cs.disable-library-validation` is accepted for THIS named build, residual risk R1 read | [ ] accepted |
 
+**RC3 (scope_version 3, macOS and Windows scope files only; the SSHSIG manifest script is unchanged and keeps scope_version 2).** The About check
+that runs inside `--real` is pinned like everything else that executes: the scope binds `check_about_sha256`, `generate_about_sha256`,
+`about_record_sha256` and `legal_signers_sha256` (and, as before, `gate_tool_sha256` for `check-distribution-gate.py`). The checker runs as
+`python -I -B` from a private copy of those files made in the script's work directory and re-hashed after copying. The `source.commit` in the
+about.json inside the artifact must equal the scope's `build_commit`; a mismatch refuses the run before anything is signed. `legal_signers_sha256`
+binds the signer list only as repository data: the owner confirms the key fingerprints in `legal_signer_fingerprints` against an independent
+channel (their published key page) before a distribution run.
+
 Scope file `scope-macos.txt`:
 ```
-scope_version=2
+scope_version=3
 not_before=YYYY-MM-DDTHH:MM:SSZ
 not_after=YYYY-MM-DDTHH:MM:SSZ
 script_sha256=<script sha256>
@@ -71,6 +80,10 @@ gate_tool_sha256=<packaging/check-distribution-gate.py sha256>
 evidence_manifest_sha256=<manifest sha256>
 build_commit=<40 hex>
 procedure_commit=<40 hex>
+check_about_sha256=<packaging/notices/check_about.py sha256>
+generate_about_sha256=<packaging/notices/generate_about.py sha256>
+about_record_sha256=<agentic_os/about_record.py sha256>
+legal_signers_sha256=<packaging/legal-allowed-signers sha256>
 ```
 (`notarize=no`, `upload_to=none` and `notary_profile_sha256=none` for a sign-only run; then do not pass `--notarize`. `distribution=yes` only together with `--distribution`.)
 
@@ -103,7 +116,7 @@ What: Authenticode-sign the files listed below with the secure timestamp. [ ] ap
 
 Scope file `scope-win-inner.txt`:
 ```
-scope_version=2
+scope_version=3
 not_before=YYYY-MM-DDTHH:MM:SSZ
 not_after=YYYY-MM-DDTHH:MM:SSZ
 script_sha256=<script sha256>
@@ -122,6 +135,10 @@ distribution=no
 evidence_manifest_sha256=<manifest sha256>
 build_commit=<40 hex>
 procedure_commit=<40 hex>
+check_about_sha256=<packaging/notices/check_about.py sha256>
+generate_about_sha256=<packaging/notices/generate_about.py sha256>
+about_record_sha256=<agentic_os/about_record.py sha256>
+legal_signers_sha256=<packaging/legal-allowed-signers sha256>
 tool_az_sha256=<sha256 of the az executable the fixed PATH + R0P_TOOLS_DIR resolves to>
 tool_java_sha256=<sha256 of the java executable>
 tool_python_sha256=<sha256 of the python executable given to --python>

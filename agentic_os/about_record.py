@@ -33,7 +33,11 @@ SLOT_DECISIONS: Dict[str, List[str]] = {
     "LEGAL.SECTION13_NOTICE": ["D-LIC-5"],
 }
 OMITTABLE_SLOTS = ("LEGAL.SECTION13_NOTICE",)
-SLOT_STATES = ("placeholder", "filled", "not-applicable")
+SLOT_STATES = ("pending", "approved-verified", "unverified-draft", "not-applicable")
+SLOT_TAGS = {"pending": "Pending a decision", "approved-verified": "Approved text, signature verified",
+             "unverified-draft": "Unverified draft, not an approved text", "not-applicable": ""}
+DRAFT_PREFIX = ("Unverified draft, not an approved text. This is a private candidate; nothing here is a legal statement or "
+                "clearance.\n\n")
 BUILD_MODES = ("private-candidate", "distribution")
 SOURCE_ACCESS_STATES = ("not-published", "offer-recorded")
 PLACEHOLDER_PREFIX = "Legal text pending decision "
@@ -285,36 +289,47 @@ def _legal(c: _Ctx, legal: Any, build: Any, source_access: Any) -> None:
         if not isinstance(s, dict):
             c.bad(w, "must be an object")
             continue
-        optional = ("text_sha256",) if s.get("state") == "filled" else ()
-        if not c.obj(w, s, ("state", "decisions", "pending", "text"), optional):
+        has_sha = s.get("state") in ("approved-verified", "unverified-draft")
+        if not c.obj(w, s, ("state", "tag", "decisions", "pending", "text") + (("text_sha256",) if has_sha else ())):
             continue
         st = s["state"]
         if st not in SLOT_STATES:
             c.bad(w + ".state", f"must be one of {SLOT_STATES}")
             continue
+        if s["tag"] != SLOT_TAGS[st]:
+            c.bad(w + ".tag", f"must be {SLOT_TAGS[st]!r}")
         if s["decisions"] != ids:
             c.bad(w + ".decisions", f"must be {ids}")
         if not isinstance(s["pending"], list) or any(p not in ids for p in s["pending"]):
             c.bad(w + ".pending", "must list decisions of this slot")
             continue
         text = s["text"]
-        if not isinstance(text, str) or len(text) > MAX_SLOT_TEXT_CHARS:
-            c.bad(w + ".text", f"must be a string of at most {MAX_SLOT_TEXT_CHARS} characters")
+        if not isinstance(text, str) or len(text) > MAX_SLOT_TEXT_CHARS + len(DRAFT_PREFIX):
+            c.bad(w + ".text", f"must be a string of at most {MAX_SLOT_TEXT_CHARS} characters (plus the draft label)")
             continue
-        if st == "placeholder":
+        if st == "pending":
             if not s["pending"]:
-                c.bad(w, "placeholder without a pending decision")
+                c.bad(w, "pending slot without a pending decision")
             if not text.startswith(PLACEHOLDER_PREFIX) or "private candidate" not in text or "pending" not in text:
                 c.bad(w + ".text", "a placeholder must say that the text is pending a decision and that this is a private candidate")
             if mode == "distribution":
-                c.bad(w, "a distribution record must not carry a placeholder")
-        elif st == "filled":
+                c.bad(w, "a distribution record must not carry a pending slot")
+        elif st == "approved-verified":
             if s["pending"]:
-                c.bad(w, "filled slot with a pending decision")
+                c.bad(w, "approved slot with a pending decision")
             if not text.strip():
                 c.bad(w + ".text", "empty")
             if hashlib.sha256(text.encode("utf-8")).hexdigest() != s.get("text_sha256"):
                 c.bad(w + ".text_sha256", "does not match the text")
+        elif st == "unverified-draft":
+            if s["pending"]:
+                c.bad(w, "a draft has no pending decision")
+            if not text.startswith(DRAFT_PREFIX):
+                c.bad(w + ".text", "an unverified draft must start with its label (it is never shown as ordinary legal text)")
+            elif hashlib.sha256(text[len(DRAFT_PREFIX):].encode("utf-8")).hexdigest() != s.get("text_sha256"):
+                c.bad(w + ".text_sha256", "does not match the draft text")
+            if mode == "distribution":
+                c.bad(w, "a distribution record must not carry an unverified draft")
         else:                                           # not-applicable
             if sid not in OMITTABLE_SLOTS:
                 c.bad(w + ".state", "this slot cannot be omitted")
@@ -326,8 +341,8 @@ def _legal(c: _Ctx, legal: Any, build: Any, source_access: Any) -> None:
             c.bad("source_access.state", f"must be one of {SOURCE_ACCESS_STATES}")
         else:
             offer = slots["LEGAL.SOURCE_OFFER"]
-            if isinstance(offer, dict) and (st == "offer-recorded") != (offer.get("state") == "filled"):
-                c.bad("source_access.state", "must be offer-recorded exactly when LEGAL.SOURCE_OFFER is filled")
+            if isinstance(offer, dict) and (st == "offer-recorded") != (offer.get("state") == "approved-verified"):
+                c.bad("source_access.state", "must be offer-recorded exactly when LEGAL.SOURCE_OFFER is approved-verified")
 
 
 def parse_record(raw: bytes) -> "tuple[Optional[Dict[str, Any]], List[str]]":
@@ -370,7 +385,7 @@ def forbidden_in(text: str) -> List[str]:
 
 
 def record_strings(doc: Any) -> List[str]:
-    """Every string of the record except the text of a FILLED slot (owner-approved wording)."""
+    """Every string of the record except the text of an approved-verified slot or unverified draft (the owner's wording)."""
     out: List[str] = []
 
     def walk(v: Any, skip_text: bool = False) -> None:
@@ -380,7 +395,7 @@ def record_strings(doc: Any) -> List[str]:
             for x in v:
                 walk(x)
         elif isinstance(v, dict):
-            filled = v.get("state") == "filled" and "text_sha256" in v
+            filled = v.get("state") in ("approved-verified", "unverified-draft") and "text_sha256" in v
             for k, x in v.items():
                 out.append(k)
                 if filled and k == "text":

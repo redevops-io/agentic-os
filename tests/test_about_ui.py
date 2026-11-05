@@ -18,7 +18,7 @@ import agentic_os.about_ui as about_ui
 from agentic_os.local_capability import LocalCapability
 from agentic_os.projects_api import SampleProjectionProvider, mounted_app
 
-from .about_fixture import about_record, decide, make_notices, make_root, read_gate, run_generate, stage_folder
+from .about_fixture import about_record, decide, make_notices, make_root, read_gate, run_generate, signer, stage_folder, trust
 
 PORT = 8787
 BASE_URL = f"http://127.0.0.1:{PORT}"
@@ -307,15 +307,16 @@ def test_frozen_sidecar_ignores_the_environment_override(folder, monkeypatch, tm
 
 
 # ----------------------------------------------------------------------------------------------------------- filled slots
-def test_a_filled_slot_reaches_the_record_the_page_reads(tmp_path, monkeypatch):
+def test_a_filled_slot_reaches_the_record_the_page_reads(tmp_path, monkeypatch, signer):
     root = make_root(tmp_path)
     notices = make_notices(tmp_path)
     decide(root, ["D-LIC-10"])
+    trust(root, signer)
     assert run_generate(root, notices) == 0
     lic = stage_folder(root, notices, tmp_path / "Licenses")
     c = app_for(lic, monkeypatch)
     slot = c.get("/about/about.json").json()["legal"]["slots"]["LEGAL.NO_WARRANTY"]
-    assert slot["state"] == "filled" and slot["text"].startswith("SYNTHETIC TEST TEXT")
+    assert slot["state"] == "approved-verified" and slot["text"].startswith("SYNTHETIC TEST TEXT")
 
 
 # ----------------------------------------------------------------------------------------------------------- no new state change
@@ -339,13 +340,25 @@ def test_page_assets_and_generated_record_contain_no_forbidden_wording(folder):
         assert not [w for w in FORBIDDEN if w in low], name
     doc = json.loads(blobs["about.json"])
     for sid, s in doc["legal"]["slots"].items():
-        assert s["state"] == "placeholder" and "private candidate" in s["text"] and "pending" in s["text"], sid
+        assert s["state"] == "pending" and "private candidate" in s["text"] and "pending" in s["text"], sid
     # no product licence statement is typed into the page: the family-licence phrase and the SPDX name appear nowhere in the assets
     for name in ("about.html", "app.js", "app.css"):
         assert "family licence" not in blobs[name].lower() and "agpl" not in blobs[name].lower() and "commons clause" not in blobs[name].lower().replace("commons clause file", "")
 
 
 # ----------------------------------------------------------------------------------------------------------- RC3 review fixes
+def test_the_missing_asset_log_line_is_printed_once_per_process(folder, monkeypatch, tmp_path, capsys):
+    import shutil
+    broken = tmp_path / "assets"
+    shutil.copytree(ASSETS, broken)
+    (broken / "app.css").unlink()
+    monkeypatch.setattr(about_ui, "_ASSET_DIR", broken)
+    monkeypatch.setattr(about_ui, "_LOGGED", set())
+    app_for(folder, monkeypatch)
+    app_for(folder, monkeypatch)                    # a second app object (module-level app and serve()) must not log again
+    assert [ln for ln in capsys.readouterr().err.splitlines() if ln.startswith("about:")].__len__() == 1
+
+
 def test_a_missing_about_asset_does_not_stop_the_service(folder, monkeypatch, tmp_path, capsys):
     """RC3-05: one ASCII log line, no About routes but a plain-text 404 note on /about/, the control plane keeps working."""
     import shutil
@@ -353,6 +366,7 @@ def test_a_missing_about_asset_does_not_stop_the_service(folder, monkeypatch, tm
     shutil.copytree(ASSETS, broken)
     (broken / "app.js").unlink()
     monkeypatch.setattr(about_ui, "_ASSET_DIR", broken)
+    monkeypatch.setattr(about_ui, "_LOGGED", set())
     c = app_for(folder, monkeypatch)                       # must not raise
     err = capsys.readouterr().err
     lines = [ln for ln in err.splitlines() if ln.startswith("about:")]
@@ -372,6 +386,7 @@ def test_a_record_loader_crash_does_not_stop_the_service(folder, monkeypatch, ca
     def boom(_):
         raise RuntimeError("boom")
     monkeypatch.setattr(about_ui, "load_state", boom)
+    monkeypatch.setattr(about_ui, "_LOGGED", set())
     c = app_for(folder, monkeypatch)
     assert "about: the build record could not be loaded (RuntimeError)" in capsys.readouterr().err
     assert c.get("/about/about.json").json()["error"]["code"] == about_ui.ERR_INVALID
