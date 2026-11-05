@@ -253,7 +253,8 @@ fn main() {
     #[cfg(unix)]
     {
         let handle = app.handle().clone();
-        if let Err(e) = signals::start(move |sig, n| {
+        // If the handlers cannot be installed the OS default action stays (no output: this crate prints nothing).
+        let _ = signals::start(move |sig, n| {
             let h = handle.clone();
             let force = move || {
                 h.state::<Server>().stop();
@@ -268,9 +269,7 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_secs(5));
                 force();
             });
-        }) {
-            eprintln!("launcher: could not install the signal handlers ({}); SIGTERM keeps its default action", e.kind());
-        }
+        });
     }
 
     app.run(|app_handle, event| {
