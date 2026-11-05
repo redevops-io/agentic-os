@@ -18,5 +18,13 @@ COPY deploy/assets ./deploy/assets
 # PIP_NO_CACHE_DIR also reaches the isolated build-environment pip that --no-cache-dir does not.
 RUN PIP_NO_CACHE_DIR=1 pip install --no-cache-dir '.[projects]'
 ENV PROJECTS_HOST=0.0.0.0 PROJECTS_PORT=8787
+# Run unprivileged. The app keeps its state under the service user's home (AGENTIC_OS_HOME / ~).
+RUN useradd --system --uid 10001 --user-group --create-home --shell /usr/sbin/nologin app
+USER 10001:10001
 EXPOSE 8787
+# The static UI shell at / is served without the launch capability (every /api route and /health
+# answer 401 without it), so it is the unauthenticated liveness signal. Honours PROJECTS_PORT and
+# PROJECTS_BASE_PATH; the in-container Host header is 127.0.0.1:<port>, which the host check allows.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD ["python", "-c", "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:%s%s/' % (os.environ.get('PROJECTS_PORT','8787'), os.environ.get('PROJECTS_BASE_PATH','').rstrip('/')), timeout=3)"]
 CMD ["agentic-os-projects"]
