@@ -60,7 +60,9 @@ BUILDER=aos-rel-builder
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$REPO/pyproject.toml" | head -1)
 SHORT=$(git -C "$REPO" rev-parse --short=7 HEAD)
 TAG=${OCI_TAG:-$VERSION-$SHORT}
-SDE=${OCI_SOURCE_DATE_EPOCH:-$(git -C "$REPO" log -1 --format=%ct)}
+# SOURCE_DATE_EPOCH = commit time of the BUILD INPUTS (not of HEAD), so a docs or script commit does not
+# change the image digests.
+SDE=${OCI_SOURCE_DATE_EPOCH:-$(git -C "$REPO" log -1 --format=%ct -- Dockerfile Dockerfile.projects pyproject.toml agentic_os deploy/assets modules.yaml README.md LICENSE LICENSE-COMMONS-CLAUSE LICENSE.md LICENSING.md)}
 PLATFORMS=linux/amd64,linux/arm64
 # name:Dockerfile:container port:local test port
 IMAGES=("redevops-runtime:Dockerfile:8080:55301" "redevops-projects:Dockerfile.projects:8787:55302")
