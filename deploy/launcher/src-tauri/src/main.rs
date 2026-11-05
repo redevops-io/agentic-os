@@ -14,6 +14,8 @@ mod guard;
 mod launch;
 mod lifecycle;
 mod opener;
+#[cfg(unix)]
+mod signals;
 
 use launch::Running;
 use lifecycle::StopOutcome;
@@ -245,6 +247,32 @@ fn main() {
         .build(context())
         .expect("error while building the ReDevOps launcher");
 
+    // SIGTERM / SIGINT / SIGHUP become a graceful `exit(0)` request so the Exit hook below runs (stops the control
+    // plane, deletes the redirect pages). A second signal, or an exit that does not happen within 5 s, forces the
+    // same cleanup and ends the process. SIGKILL cannot be handled (documented in signals.rs).
+    #[cfg(unix)]
+    {
+        let handle = app.handle().clone();
+        if let Err(e) = signals::start(move |sig, n| {
+            let h = handle.clone();
+            let force = move || {
+                h.state::<Server>().stop();
+                opener::cleanup_all();
+                std::process::exit(signals::exit_code_for(sig));
+            };
+            if n > 1 {
+                force();
+            }
+            handle.exit(0);
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                force();
+            });
+        }) {
+            eprintln!("launcher: could not install the signal handlers ({}); SIGTERM keeps its default action", e.kind());
+        }
+    }
+
     app.run(|app_handle, event| {
         // Quit (Cmd+Q, last window closed, tray/menu quit): never leave the control plane behind.
         if let tauri::RunEvent::Exit = event {
@@ -337,7 +365,7 @@ mod tests {
         assert_eq!(hashes, [want], "only the hash of app.js is expected on the document");
 
         let js = text_of(&*ctx.assets, "/app.js");
-        for banned in ["eval(", "new Function", "innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "javascript:", "setTimeout(\"", "setInterval(\"", "http://", "https://", "fetch(", "XMLHttpRequest", "WebSocket", "window.open", "location.", "localStorage", "sessionStorage", "import("] {
+        for banned in ["eval(", "new Function", "innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "javascript:", "setTimeout(\"", "setInterval(\"", "http://", "https://", "fetch(", "XMLHttpRequest", "WebSocket", "window.open", "confirm(", "alert(", "prompt(", "location.", "localStorage", "sessionStorage", "import("] {
             assert!(!js.contains(banned), "app.js must not contain {banned}");
         }
         let css = text_of(&*ctx.assets, "/app.css");
