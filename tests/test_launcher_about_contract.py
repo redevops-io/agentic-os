@@ -150,10 +150,53 @@ def test_the_page_never_composes_a_path_or_url_and_never_claims_clearance():
     low = (js + html).lower()
     for word in FORBIDDEN:
         assert word not in low, word
-    assert "private candidate" in low and "placeholder" in low
+    assert "private candidate" in low and "state of each legal slot" in low
+    # the old note ("legal text shown here is a placeholder") is false for an approved or draft slot
+    assert "shown here is a placeholder" not in low
+    assert "legally" not in low
 
 
 @pytest.mark.skipif(not (ROOT / "packaging" / "notices" / "out" / "about.json").is_file(), reason="no generated about.json in this tree")
 def test_a_generated_record_follows_the_contract():
     out = ROOT / "packaging" / "notices" / "out"
     check_record(json.loads((out / "about.json").read_text(encoding="utf-8")), out)
+
+
+# ---- round 2: slot states pending | approved-verified | unverified-draft | not-applicable ----
+def _states_record() -> dict:
+    """The fixture with one slot in every state (texts built the way the generator builds them)."""
+    mod = _generator_validator()
+    rec = json.loads((FIXTURE / "about.json").read_text(encoding="utf-8"))
+    ok, draft = "Approved fixture text.", "Draft fixture text."
+    s = rec["legal"]["slots"]
+    s["LEGAL.COPYRIGHT_LINE"].update(state="approved-verified", tag=mod.SLOT_TAGS["approved-verified"], pending=[], text=ok,
+                                      text_sha256=hashlib.sha256(ok.encode()).hexdigest())
+    s["LEGAL.NO_WARRANTY"].update(state="unverified-draft", tag=mod.SLOT_TAGS["unverified-draft"], pending=[], text=mod.DRAFT_PREFIX + draft,
+                                   text_sha256=hashlib.sha256(draft.encode()).hexdigest())
+    s["LEGAL.SECTION13_NOTICE"].update(state="not-applicable", tag="", pending=[], text="")
+    return rec
+
+
+def test_every_state_validates_with_the_generators_validator_and_the_contract_check():
+    mod = _generator_validator()
+    rec = _states_record()
+    assert mod.validate_record(rec) == []
+    check_record(rec, FIXTURE)
+
+
+def test_the_old_states_are_rejected_by_the_generators_validator():
+    mod = _generator_validator()
+    for old in ("placeholder", "filled"):
+        rec = json.loads((FIXTURE / "about.json").read_text(encoding="utf-8"))
+        rec["legal"]["slots"]["LEGAL.COPYRIGHT_LINE"]["state"] = old
+        assert mod.validate_record(rec), old
+
+
+def test_the_launchers_slot_constants_equal_the_generators():
+    mod = _generator_validator()
+    src = ABOUT_RS.read_text(encoding="utf-8")
+    tags = re.findall(r'\("([a-z-]+)", "([^"]*)"\),', re.search(r"SLOT_TAGS: \[\(&str, &str\); 4\] = \[(.*?)\];", src, re.S).group(1))
+    assert dict(tags) == mod.SLOT_TAGS
+    assert re.search(r'DRAFT_PREFIX: &str = "(.*?)";', src).group(1).replace("\\n", "\n") == mod.DRAFT_PREFIX
+    assert re.search(r'PLACEHOLDER_PREFIX: &str = "(.*?)";', src).group(1) == mod.PLACEHOLDER_PREFIX
+    assert re.findall(r'"([a-z-]+)"', re.search(r"SOURCE_ACCESS_STATES: \[&str; 2\] = \[(.*?)\];", src).group(1)) == list(mod.SOURCE_ACCESS_STATES)

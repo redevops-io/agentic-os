@@ -189,8 +189,52 @@ fn read_capped_hooked(dir: &Path, name: &str, cap: u64, missing: AboutError, lar
     String::from_utf8(buf).map_err(|_| AboutError::NotText)
 }
 
+/// Slot states of `redevops.about/1` (agentic_os/about_record.py) with their fixed tags. The old `placeholder` /
+/// `filled` states no longer exist and are refused. A contract test compares these constants with about_record.py.
+pub const SLOT_TAGS: [(&str, &str); 4] = [
+    ("pending", "Pending a decision"),
+    ("approved-verified", "Approved text, signature verified"),
+    ("unverified-draft", "Unverified draft, not an approved text"),
+    ("not-applicable", ""),
+];
+/// The label an unverified draft carries INSIDE its text (so no renderer can show it as ordinary legal text).
+pub const DRAFT_PREFIX: &str = "Unverified draft, not an approved text. This is a private candidate; nothing here is a legal statement or clearance.\n\n";
+pub const PLACEHOLDER_PREFIX: &str = "Legal text pending decision ";
+pub const SOURCE_ACCESS_STATES: [&str; 2] = ["not-published", "offer-recorded"];
+
+/// Check the legal slots and `source_access` the way the view relies on them (a subset of validate_record).
+fn check_legal(v: &serde_json::Value) -> Result<(), AboutError> {
+    const BAD: AboutError = AboutError::RecordInvalid("its legal slots do not follow redevops.about/1");
+    let slots = v.get("legal").and_then(|l| l.get("slots")).and_then(|s| s.as_object()).ok_or(BAD)?;
+    for slot in slots.values() {
+        let state = slot.get("state").and_then(|s| s.as_str()).ok_or(BAD)?;
+        let tag = slot.get("tag").and_then(|s| s.as_str()).ok_or(BAD)?;
+        let text = slot.get("text").and_then(|s| s.as_str()).ok_or(BAD)?;
+        let want = SLOT_TAGS.iter().find(|(s, _)| *s == state).map(|(_, t)| *t).ok_or(BAD)?;
+        if tag != want {
+            return Err(BAD);
+        }
+        let sha = slot.get("text_sha256").and_then(|s| s.as_str());
+        let sha_of = |s: &str| hex(&Sha256::digest(s.as_bytes()));
+        let ok = match state {
+            "pending" => text.starts_with(PLACEHOLDER_PREFIX),
+            "approved-verified" => !text.trim().is_empty() && sha == Some(sha_of(text).as_str()),
+            "unverified-draft" => text.starts_with(DRAFT_PREFIX) && sha == Some(sha_of(&text[DRAFT_PREFIX.len()..]).as_str()),
+            _ => text.is_empty(), // not-applicable
+        };
+        if !ok {
+            return Err(BAD);
+        }
+    }
+    let state = v.get("source_access").and_then(|s| s.get("state")).and_then(|s| s.as_str());
+    if !state.is_some_and(|s| SOURCE_ACCESS_STATES.contains(&s)) {
+        return Err(AboutError::RecordInvalid("its source_access state is not one the view knows"));
+    }
+    Ok(())
+}
+
 /// Parse and minimally validate the record text. The page validates the shape in more detail; this is the
-/// gate that keeps a malformed or foreign file from being handed over as "the build record".
+/// gate that keeps a malformed, foreign or old-schema file from being handed over as "the build record".
 fn parse_record(text: &str) -> Result<serde_json::Value, AboutError> {
     let v: serde_json::Value =
         serde_json::from_str(text).map_err(|_| AboutError::RecordInvalid("it is not valid JSON"))?;
@@ -200,6 +244,7 @@ fn parse_record(text: &str) -> Result<serde_json::Value, AboutError> {
     if v.get("schema").and_then(|s| s.as_str()) != Some(RECORD_SCHEMA) {
         return Err(AboutError::RecordInvalid("its schema is not redevops.about/1"));
     }
+    check_legal(&v)?;
     Ok(v)
 }
 
@@ -281,6 +326,14 @@ mod tests {
         hex(&Sha256::digest(text.as_bytes()))
     }
 
+    /// A `legal` + `source_access` block in the redevops.about/1 shape (all slots pending).
+    fn legal_block() -> serde_json::Value {
+        let ph = |ids: &[&str]| serde_json::json!({"state": "pending", "tag": "Pending a decision", "decisions": ids, "pending": ids,
+            "text": format!("Legal text pending decision {}. This is a private candidate; nothing here is a legal statement or clearance.", ids.join(", "))});
+        serde_json::json!({"slots": {
+            "LEGAL.COPYRIGHT_LINE": ph(&["D-LIC-1"]), "LEGAL.NO_WARRANTY": ph(&["D-LIC-10"]), "LEGAL.SECTION13_NOTICE": ph(&["D-LIC-5"])}})
+    }
+
     /// A folder with the six files and a record that lists them (fixture copy of the redevops.about/1 shape).
     fn build(tag: &str) -> std::path::PathBuf {
         let d = scratch(tag);
@@ -298,6 +351,8 @@ mod tests {
             "product": {"name": "Agentic Apps R0-prime"},
             "licence_files": files,
             "notices": {"file": "THIRD_PARTY_NOTICES.txt", "bytes": notices.len(), "sha256": sha(&notices), "components": []},
+            "legal": legal_block(),
+            "source_access": {"state": "not-published"},
         });
         std::fs::write(d.join(RECORD_FILE), serde_json::to_string(&rec).unwrap()).unwrap();
         d
@@ -339,6 +394,7 @@ mod tests {
             ("[]", "not a JSON object"),
             ("\"redevops.about/1\"", "not a JSON object"),
             ("{}", "schema"),
+            ("{\"schema\": \"redevops.about/1\"}", "legal slots"),
             ("{\"schema\": \"redevops.about/2\"}", "schema"),
             ("{\"schema\": 1}", "schema"),
         ] {
@@ -434,7 +490,7 @@ mod tests {
         let d = scratch("limit");
         let body = "a".repeat(MAX_TEXT_BYTES as usize);
         std::fs::write(d.join("LICENSE"), &body).unwrap();
-        let rec = serde_json::json!({"schema": RECORD_SCHEMA, "licence_files": [{"file": "LICENSE", "sha256": sha(&body)}]});
+        let rec = serde_json::json!({"schema": RECORD_SCHEMA, "legal": legal_block(), "source_access": {"state": "not-published"}, "licence_files": [{"file": "LICENSE", "sha256": sha(&body)}]});
         std::fs::write(d.join(RECORD_FILE), rec.to_string()).unwrap();
         assert_eq!(load_text(&d, "LICENSE").unwrap().len() as u64, MAX_TEXT_BYTES);
         std::fs::write(d.join("LICENSE"), format!("{body}a")).unwrap();
@@ -646,5 +702,54 @@ mod tests {
         for m in msgs {
             assert!(!m.contains(d.to_str().unwrap()) && !m.contains("/private/") && !m.contains("/tmp"), "{m}");
         }
+    }
+
+    // ---- round 2: the new slot states; the old ones are refused ----
+
+    fn with_slot(slot: serde_json::Value) -> String {
+        let mut rec = serde_json::json!({"schema": RECORD_SCHEMA, "legal": legal_block(), "source_access": {"state": "not-published"}});
+        rec["legal"]["slots"]["LEGAL.COPYRIGHT_LINE"] = slot;
+        rec.to_string()
+    }
+
+    #[test]
+    fn the_new_slot_states_are_accepted_with_their_fixed_tags() {
+        let approved = "Approved text body.";
+        let draft = "Draft body.";
+        for slot in [
+            serde_json::json!({"state": "pending", "tag": "Pending a decision", "decisions": ["D-LIC-1"], "pending": ["D-LIC-1"], "text": "Legal text pending decision D-LIC-1. private candidate"}),
+            serde_json::json!({"state": "approved-verified", "tag": "Approved text, signature verified", "decisions": [], "pending": [], "text": approved, "text_sha256": sha(approved)}),
+            serde_json::json!({"state": "unverified-draft", "tag": "Unverified draft, not an approved text", "decisions": [], "pending": [], "text": format!("{DRAFT_PREFIX}{draft}"), "text_sha256": sha(draft)}),
+            serde_json::json!({"state": "not-applicable", "tag": "", "decisions": [], "pending": [], "text": ""}),
+        ] {
+            assert!(parse_record(&with_slot(slot.clone())).is_ok(), "{slot}");
+        }
+    }
+
+    #[test]
+    fn the_old_states_wrong_tags_and_unlabelled_drafts_are_refused() {
+        let bad = [
+            serde_json::json!({"state": "placeholder", "decisions": ["D-LIC-1"], "pending": ["D-LIC-1"], "text": "Legal text pending decision D-LIC-1."}),
+            serde_json::json!({"state": "filled", "tag": "Approved text, signature verified", "text": "x", "text_sha256": sha("x")}),
+            serde_json::json!({"state": "mystery", "tag": "", "text": ""}),
+            serde_json::json!({"state": "pending", "tag": "Approved text, signature verified", "text": "Legal text pending decision D-LIC-1."}),
+            serde_json::json!({"state": "pending", "text": "Legal text pending decision D-LIC-1."}),
+            serde_json::json!({"state": "pending", "tag": "Pending a decision", "text": "some other text"}),
+            // a draft without its label inside the text is refused: it would look like ordinary legal text
+            serde_json::json!({"state": "unverified-draft", "tag": "Unverified draft, not an approved text", "text": "Draft body.", "text_sha256": sha("Draft body.")}),
+            serde_json::json!({"state": "unverified-draft", "tag": "Unverified draft, not an approved text", "text": format!("{DRAFT_PREFIX}Draft body."), "text_sha256": sha("other")}),
+            serde_json::json!({"state": "approved-verified", "tag": "Approved text, signature verified", "text": "Approved.", "text_sha256": sha("other")}),
+            serde_json::json!({"state": "approved-verified", "tag": "Approved text, signature verified", "text": "Approved."}),
+            serde_json::json!({"state": "not-applicable", "tag": "", "text": "text"}),
+        ];
+        for slot in bad {
+            let e = parse_record(&with_slot(slot.clone())).unwrap_err();
+            assert_eq!(e.code(), "ABOUT_RECORD_INVALID", "{slot}");
+        }
+        // source_access outside the two known states, or missing
+        let mut rec = serde_json::json!({"schema": RECORD_SCHEMA, "legal": legal_block(), "source_access": {"state": "published"}});
+        assert_eq!(parse_record(&rec.to_string()).unwrap_err().code(), "ABOUT_RECORD_INVALID");
+        rec.as_object_mut().unwrap().remove("source_access");
+        assert_eq!(parse_record(&rec.to_string()).unwrap_err().code(), "ABOUT_RECORD_INVALID");
     }
 }
