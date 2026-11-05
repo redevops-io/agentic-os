@@ -1999,7 +1999,8 @@ def test_macos_distribution_gate_private_statement_and_enforcement(mac):
     # with --distribution the gate is enforced: open blockers refuse BEFORE anything is signed or uploaded
     n = len(mac.calls())
     sc = mac.scope(distribution="yes")
-    r = mac.real(sc, "--distribution", out=mac.work / "dist")
+    # (the dmg was already used by the run above: the artifact claim of the ledger needs the owner's explicit --allow-reuse, so that this test reaches the gate)
+    r = mac.real(sc, "--distribution", "--allow-reuse", out=mac.work / "dist")
     assert r.returncode == 1 and "REFUSES a distribution signing" in r.stderr and "D-LIC-1" in r.stderr
     assert not (mac.work / "dist").exists()
     assert len(mac.calls()) == n, "the refused run started no tool at all"
