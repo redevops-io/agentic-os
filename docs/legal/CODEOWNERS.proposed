@@ -1,0 +1,13 @@
+# PROPOSED code-owners entries (a draft for the owner; NOT active). GitHub reads .github/CODEOWNERS only; installing this
+# is the owner's call. Replace the placeholder with the owner's login (or a team) first.
+#
+# Why: a DECIDED entry in the gate file, its record and the approved texts are plain repository data. The hash match in the gate
+# is a tripwire against mistakes and proves no authorship (see the docstring of packaging/check-distribution-gate.py). Review by the
+# owner on every change to these paths, together with the detached signatures a distribution build requires, closes that gap.
+#
+# Install (owner): copy the three lines below into .github/CODEOWNERS and turn on "Require review from Code Owners" for the
+# protected branch.
+
+/docs/legal/**                       REPLACE-WITH-OWNER-LOGIN
+/packaging/distribution-gate.json    REPLACE-WITH-OWNER-LOGIN
+/packaging/legal-allowed-signers     REPLACE-WITH-OWNER-LOGIN

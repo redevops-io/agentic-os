@@ -15,9 +15,13 @@ LEGAL.NO_WARRANTY, LEGAL.SECTION13_NOTICE). A slot is filled only when every dec
 primary decision's `slot_texts` entry names an approved text file whose sha256 matches (rules in check-distribution-gate.py). While
 a decision is OPEN the slot is the neutral placeholder and its text file is never opened. This script writes no legal text.
 
+A hash match between a DECIDED entry and its files proves consistency only, not who decided (see check-distribution-gate.py). A
+DISTRIBUTION build therefore also needs a valid detached signature (packaging/legal-allowed-signers) on every decision record and
+approved text it relies on; a private build prints a warning when one does not verify.
+
 Exit codes: 0 = record written; 2 = inputs or gate file malformed, or a DECIDED slot whose approved text is missing or does not
 match (an error in EVERY build mode); 3 = DISTRIBUTION build (REDEVOPS_DISTRIBUTION_BUILD anything other than empty or exactly 0,
-or --distribution) with a slot that is still a placeholder: nothing is written and any older about.json in the output directory is
+or --distribution) with a slot that is still a placeholder or a record without a valid signature: nothing is written and any older about.json in the output directory is
 removed. Standard library only.
 """
 from __future__ import annotations
@@ -157,8 +161,8 @@ def build_record(*, notices_dir: Path, root: Path = ROOT, gate_path: Path | None
     gate_path = gate_path or (root / "packaging" / "distribution-gate.json")
     try:
         decisions = gate.load(gate_path)
-    except SystemExit as e:
-        raise Refused(2, [str(e)])
+    except SystemExit:
+        raise Refused(2, ["gate file unreadable or malformed (see the message above)"])
     errs = gate.validate(decisions, root)
     if errs:
         raise Refused(2, [f"gate file problem: {e}" for e in errs])
@@ -167,6 +171,13 @@ def build_record(*, notices_dir: Path, root: Path = ROOT, gate_path: Path | None
         raise Refused(2, [f"about slot problem: {e}" for e in slot_errs])
     if distribution and refusals:
         raise Refused(3, ["DISTRIBUTION BUILD REFUSED: the About page has legal slots without an approved text"] + refusals)
+    platform_gate = platform.split("-")[0] if platform.split("-")[0] in ("macos", "windows", "linux") else "all"
+    sig = gate.signature_problems(decisions, root, root / "packaging" / "legal-allowed-signers", platform_gate)
+    if distribution and sig:
+        raise Refused(3, ["DISTRIBUTION BUILD REFUSED: a legal record or approved text has no valid detached signature "
+                          "(a hash match alone proves consistency, not who decided)"] + sig)
+    for w in sig:
+        print("ABOUT: WARNING:", w, "(a distribution build would be refused)", file=sys.stderr)
 
     try:
         ident = json.loads((identity_path or root / "packaging" / "identity.json").read_text(encoding="utf-8"))

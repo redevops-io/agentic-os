@@ -47,6 +47,8 @@ _ASSETS = {                      # url path -> (file, media type)
 }
 ERR_INVALID, ERR_MISMATCH, ERR_MANIFEST = "ABOUT_RECORD_INVALID", "ABOUT_HASH_MISMATCH", "ABOUT_MANIFEST_MISSING"
 ENV_DIR = "AGENTIC_OS_LICENSES_DIR"
+NOT_AVAILABLE = (b"The About page is not available in this installation. "
+                 b"The licence files are in the Licenses folder of the application.\n")
 
 
 def find_licenses_dir() -> Optional[Path]:
@@ -127,9 +129,29 @@ def install_about(app: Any, base_path: str = "", licenses_dir: Optional[Path] = 
     ``base_path`` is accepted for symmetry with ``install_ui_bootstrap``; every URL inside the pages is relative."""
     if not ENTRY_ENABLED:
         return frozenset()
-    state = load_state(licenses_dir if licenses_dir is not None else find_licenses_dir())
-    assets = {path: ((_ASSET_DIR / name).read_bytes(), media) for path, (name, media) in _ASSETS.items()}
     paths = set()
+
+    def unavailable(request: Request) -> Response:
+        return Response(NOT_AVAILABLE, status_code=404, media_type="text/plain; charset=utf-8",
+                        headers={"Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff"})
+
+    try:
+        assets = {path: ((_ASSET_DIR / name).read_bytes(), media) for path, (name, media) in _ASSETS.items()}
+    except OSError as e:
+        # A missing About asset must never stop the control plane: one ASCII log line, no About routes except a plain-text 404
+        # note on /about/ (the shell's About link then shows that note instead of the gate's 401).
+        sys.stderr.write(f"about: an About page asset is unreadable ({e.__class__.__name__}); the About page is disabled, "
+                         "the rest of the service is not affected\n")
+        sys.stderr.flush()
+        app.add_api_route("/about/", unavailable, methods=["GET", "HEAD"], include_in_schema=False)
+        app.state.about_state = AboutState()
+        return frozenset({"/about/"})
+    try:
+        state = load_state(licenses_dir if licenses_dir is not None else find_licenses_dir())
+    except Exception as e:                      # never let the legal-notices page take the service down
+        sys.stderr.write(f"about: the build record could not be loaded ({e.__class__.__name__}); the About page shows an error\n")
+        sys.stderr.flush()
+        state = AboutState().fail(ERR_INVALID)
 
     def reply(request: Request, body: bytes, media: str, sha: str) -> Response:
         etag = f'"{sha}"'

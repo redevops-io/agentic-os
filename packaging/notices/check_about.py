@@ -130,8 +130,8 @@ def check(licenses_dir: Path, *, root: Path = ROOT, notices_report: Path | None 
     gate_path = gate_path or (root / "packaging" / "distribution-gate.json")
     try:
         decisions = gate.load(gate_path)
-    except SystemExit as e:
-        return errs + [str(e)]
+    except SystemExit:
+        return errs + ["gate file unreadable or malformed"]
     if doc["build"]["inputs"]["gate_file_sha256"] != hashlib.sha256(gate_path.read_bytes()).hexdigest():
         errs.append("the gate file changed after about.json was generated")
     slots, slot_errs, refusals = gate.resolve_about_slots(decisions, root, distribution)
@@ -142,6 +142,9 @@ def check(licenses_dir: Path, *, root: Path = ROOT, notices_report: Path | None 
         if doc["build"]["mode"] != "distribution":
             errs.append("distribution build but the record is a private-candidate record")
         errs += [f"distribution: {r}" for r in refusals]
+        pg = doc["build"]["platform"].split("-")[0]
+        errs += [f"distribution: {r}" for r in gate.signature_problems(
+            decisions, root, root / "packaging" / "legal-allowed-signers", pg if pg in ("macos", "windows", "linux") else "all")]
 
     # --- wording
     for s in rec.record_strings(doc):

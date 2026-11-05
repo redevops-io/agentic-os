@@ -2,18 +2,34 @@
 """Distribution gate: refuse a DISTRIBUTION build while a distribution-blocking decision is OPEN.
 
   python3 -I packaging/check-distribution-gate.py [--platform macos|windows|linux|qa|all] [--distribution] [--gate FILE]
-                                                  [--about-slots]
+                                                  [--about-slots] [--allowed-signers FILE]
 
 A distribution build is one with --distribution or ANY value of the environment variable REDEVOPS_DISTRIBUTION_BUILD other than
-exactly `0` or empty (fail closed: `1`, `true`, `yes`, `on`, `y`, `false`, `no` ... all mean distribution). A PRIVATE candidate build (neither set) prints the open decisions and exits 0: private candidates stay
+the empty string or exactly `0` (fail closed, no trimming: `1`, `true`, `yes`, `on`, `y`, `false`, `no`, `0 ` (with a space), ` `
+all mean distribution). A PRIVATE candidate build (neither set) prints the open decisions and exits 0: private candidates stay
 on the owner's machine and are not distribution.
 
-Exit codes: 0 = allowed (private build, or every applicable blocker is DECIDED and complete); 1 = distribution build
-refused (a blocker is OPEN or a DECIDED entry is incomplete); 2 = the gate file itself is malformed. (packaging/build-all.sh
-and the candidate script turn any non-zero exit of this gate into exit 3.)
+Exit codes: 0 = allowed (private build, or every applicable blocker is DECIDED, complete and signed); 1 = distribution build
+refused (a blocker is OPEN, a DECIDED entry is incomplete, or a signature is missing or invalid); 2 = the gate file itself is
+malformed (or an About slot text is missing or does not match). (packaging/build-all.sh and the candidate script turn any non-zero
+exit of this gate into exit 3.)
+
+WHAT THE GATE PROVES, AND WHAT IT DOES NOT. A DECIDED entry is plain repository data. The hash check (decision_sha256, the sha256 of a
+slot text) proves CONSISTENCY between the entry and the files it names: it is a tripwire against drift and mistakes (a file edited
+after it was recorded, a path that points nowhere). It does NOT prove who decided or that anybody approved anything: whoever can
+edit this repository can write a DECIDED entry, an invented "signed record" and a matching hash (OBSERVED in the RC3 security review:
+all 21 decisions marked DECIDED with invented one-line files passed). Authenticity comes only from the detached signatures below,
+which a DISTRIBUTION build additionally requires; the gate never judges licences or legal text.
+
+SIGNATURES (distribution builds). For every DECIDED decision that blocks distribution on the platform (and every decision a
+legal slot lists) the record named by decision_reference must have a detached OpenSSH signature `<record>.sig`, and every approved slot
+text `<file>.sig`: an SSHSIG in the namespace `redevops-legal-decision@v1`, verified with `ssh-keygen -Y verify` against
+packaging/legal-allowed-signers (public keys only, written by the owner; it ships EMPTY, so with no signer every DECIDED entry fails
+a distribution build, on purpose, until the owner adds a key). A private build only prints a WARNING for a DECIDED entry whose
+signature does not verify. This script never creates or handles a private key. A CODEOWNERS draft is docs/legal/CODEOWNERS.proposed.
 
 About / legal slots (RC3): the About page of the application carries five legal slots (ABOUT_SLOTS below). A slot is FILLED
-only when EVERY decision it lists is DECIDED here (with its hash-matched written record) AND the primary decision (the first one
+only when EVERY decision it lists is DECIDED here (with its written record, whose hash matches) AND the primary decision (the first one
 listed) carries a `slot_texts` entry naming an approved text file of the repository and the sha256 of that file, and the file
 matches. `slot_texts` is an object on a DECIDED entry:
 
@@ -21,15 +37,16 @@ matches. `slot_texts` is an object on a DECIDED entry:
 
 (file: a relative path of the form docs/legal/approved/<name>.txt; LEGAL.SECTION13_NOTICE alone may instead be
 {"not_applicable": true} when the recorded decision is "no statement"). An OPEN entry must not carry slot_texts, and an OPEN
-slot never has its text file read. With --about-slots this script also resolves the slots: a DECIDED slot whose text is missing,
-unreadable or does not match its hash is an error in EVERY build mode (exit 2); in a DISTRIBUTION build an unfilled slot refuses
-the build (exit 1). packaging/notices/generate_about.py applies the same rules (exit 3 there) when it writes the About record.
+slot never has its text file read. The record and the text files must be regular files of the repository: a symlink (the file or
+any directory below the repository root) is refused. With --about-slots this script also resolves the slots: a DECIDED slot whose
+text is missing, unreadable or does not match its hash is an error in EVERY build mode (exit 2); in a DISTRIBUTION build an
+unfilled slot refuses the build (exit 1). packaging/notices/generate_about.py applies the same rules (exit 3 there) when it writes
+the About record.
 
 The gate file is packaging/distribution-gate.json. Only a person can mark a decision DECIDED, by editing that file after
 the owner has signed docs/legal/OWNER_DECISION_FORM.md: the entry must then carry chosen_option, decision_reference,
-decision_sha256 (sha256 of the signed record; if decision_reference is a file of this repository the hash is verified),
-decided_by and decided_on, and counsel_reference when 'decides' includes counsel. The gate does not judge licences: it
-checks that the written decisions exist. Standard library only, Python 3.9+.
+decision_sha256 (sha256 of the written record, which must be a regular file of this repository), decided_by and decided_on, and
+counsel_reference when 'decides' includes counsel. Standard library only, Python 3.9+.
 """
 from __future__ import annotations
 
@@ -39,12 +56,17 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import stat
+import subprocess
 import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 DEFAULT_GATE = HERE / "distribution-gate.json"
+DEFAULT_ALLOWED_SIGNERS = HERE / "legal-allowed-signers"
+SIG_NAMESPACE = "redevops-legal-decision@v1"
 PLATFORMS = ("macos", "windows", "linux", "qa", "all")
 DECIDES = ("owner", "counsel", "owner+counsel")
 REQUIRED_KEYS = ("id", "title", "question", "decides", "scope", "blocks_distribution", "status", "options",
@@ -69,17 +91,20 @@ PLACEHOLDER = ("Legal text pending decision {ids}. This is a private candidate; 
 
 def is_distribution(flag: bool, env=None) -> bool:
     env = os.environ if env is None else env
-    # fail closed: only an empty value or exactly "0" means "private candidate"; every other value is a distribution build
-    return flag or str(env.get("REDEVOPS_DISTRIBUTION_BUILD", "")).strip() not in ("", "0")
+    # fail closed, NO trimming: only the empty string or exactly "0" means "private candidate"; every other value (including
+    # whitespace-only, "0 " and " 0") is a distribution build
+    return flag or str(env.get("REDEVOPS_DISTRIBUTION_BUILD", "")) not in ("", "0")
 
 
 def load(path: Path) -> list[dict]:
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
-        raise SystemExit(f"gate file {path} unreadable: {e}")
-    if doc.get("schema") != 1 or not isinstance(doc.get("decisions"), list) or not doc["decisions"]:
-        raise SystemExit(f"gate file {path}: schema 1 with a non-empty 'decisions' list expected")
+        print(f"GATE FILE PROBLEM: gate file {path} unreadable: {e}", file=sys.stderr)
+        raise SystemExit(2)
+    if not isinstance(doc, dict) or doc.get("schema") != 1 or not isinstance(doc.get("decisions"), list) or not doc["decisions"]:
+        print(f"GATE FILE PROBLEM: gate file {path}: schema 1 with a non-empty 'decisions' list expected", file=sys.stderr)
+        raise SystemExit(2)
     return doc["decisions"]
 
 
@@ -146,6 +171,29 @@ def _slot_texts_problems(d: dict) -> list[str]:
     return errs
 
 
+def unsafe_repo_file(root: Path, rel: str) -> str:
+    """"" when `rel` is a regular file of the repository reached WITHOUT a symlink: every component below `root` is lstat-ed (no
+    symlink, directories for all but the last, a regular file at the end). Otherwise the reason."""
+    cur = Path(root)
+    parts = Path(rel).parts
+    if not parts:
+        return "empty path"
+    for n, part in enumerate(parts):
+        cur = cur / part
+        try:
+            st = os.lstat(cur)
+        except OSError:
+            return "not a file of the repository"
+        if stat.S_ISLNK(st.st_mode):
+            return f"{'/'.join(parts[:n + 1])} is a symbolic link"
+        last = n == len(parts) - 1
+        if last and not stat.S_ISREG(st.st_mode):
+            return "not a regular file"
+        if not last and not stat.S_ISDIR(st.st_mode):
+            return f"{'/'.join(parts[:n + 1])} is not a directory"
+    return ""
+
+
 def _decided_problems(d: dict, keys: list, root: Path) -> list[str]:
     i, errs = d["id"], []
     if d.get("chosen_option") not in keys:
@@ -163,10 +211,11 @@ def _decided_problems(d: dict, keys: list, root: Path) -> list[str]:
             errs.append(f"{i}: decision_reference must be a relative path of a file in the repository, not {ref!r}")
         else:
             p = root / ref
-            if not p.is_file():
-                errs.append(f"{i}: decision_reference {ref!r} is not a file of the repository")
+            why = unsafe_repo_file(root, ref)
+            if why:
+                errs.append(f"{i}: decision_reference {ref!r} is not a regular file of the repository ({why})")
             elif hashlib.sha256(p.read_bytes()).hexdigest() != h:
-                errs.append(f"{i}: decision_sha256 does not match {ref}")
+                errs.append(f"{i}: decision_sha256 does not match {ref} (the hash proves consistency with the file, not who decided)")
     if not str(d.get("decided_by") or "").strip():
         errs.append(f"{i}: DECIDED without decided_by")
     try:
@@ -213,6 +262,9 @@ def resolve_about_slots(decisions: list[dict], root: Path = ROOT, distribution: 
             if d is None:
                 errors.append(f"{slot}: decision {i} is not in the gate file")
                 broken = True
+            elif not d.get("blocks_distribution"):
+                errors.append(f"{slot}: decision {i} must stay blocks_distribution=true (it feeds a legal slot)")
+                broken = True
             elif d.get("status") != "DECIDED":
                 pending.append(i)
             else:
@@ -239,13 +291,17 @@ def resolve_about_slots(decisions: list[dict], root: Path = ROOT, distribution: 
         if not isinstance(rel, str) or not SLOT_TEXT_RE.match(rel) or not re.fullmatch(r"[0-9a-f]{64}", str(want)):
             errors.append(f"{slot}: slot_texts entry is malformed")
             continue
+        why = unsafe_repo_file(root, rel)
+        if why:
+            errors.append(f"{slot}: approved text file {rel} is not a regular file of the repository ({why})")
+            continue
         try:
             raw = read(root / rel)
         except OSError as e:
             errors.append(f"{slot}: approved text file {rel} unreadable: {e.__class__.__name__}")
             continue
         if hashlib.sha256(raw).hexdigest() != want:
-            errors.append(f"{slot}: approved text file {rel} does not match its recorded sha256")
+            errors.append(f"{slot}: approved text file {rel} does not match its recorded sha256 (a hash match proves consistency, not approval)")
             continue
         if len(raw) > SLOT_TEXT_MAX_BYTES or not raw.strip():
             errors.append(f"{slot}: approved text file {rel} is empty or larger than {SLOT_TEXT_MAX_BYTES} bytes")
@@ -262,6 +318,67 @@ def resolve_about_slots(decisions: list[dict], root: Path = ROOT, distribution: 
     return slots, errors, refusals
 
 
+def _ssh_keygen() -> str:
+    return shutil.which("ssh-keygen", path="/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin") or ""
+
+
+def verify_sshsig(root: Path, rel: str, allowed_signers: Path) -> str:
+    """"" when `<rel>.sig` is a valid SSHSIG (namespace redevops-legal-decision@v1) over the bytes of `rel` made by a key listed in
+    `allowed_signers`; otherwise the reason. Both files must be regular files of the repository (no symlinks). Uses
+    `ssh-keygen -Y find-principals` and `-Y verify`; nothing is signed here and no private key is read."""
+    try:
+        listed = [ln for ln in Path(allowed_signers).read_text(encoding="utf-8").splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    except OSError:
+        return f"allowed-signers file {allowed_signers} is unreadable"
+    if not listed:
+        return "packaging/legal-allowed-signers lists no signer (the owner has not supplied a public key yet), so no signature can verify"
+    for name in (rel, rel + ".sig"):
+        why = unsafe_repo_file(root, name)
+        if why:
+            return f"{name}: {why}"
+    kg = _ssh_keygen()
+    if not kg:
+        return "ssh-keygen not found (needed to verify the detached signature)"
+    sig, data = str(Path(root) / (rel + ".sig")), (Path(root) / rel).read_bytes()
+    env = {"PATH": "/usr/bin:/bin"}
+    try:
+        fp = subprocess.run([kg, "-Y", "find-principals", "-s", sig, "-f", str(allowed_signers)], capture_output=True, timeout=30, env=env)
+        principals = [x.strip() for x in fp.stdout.decode("utf-8", "replace").splitlines() if x.strip()] if fp.returncode == 0 else []
+        for who in principals:
+            vr = subprocess.run([kg, "-Y", "verify", "-f", str(allowed_signers), "-I", who, "-n", SIG_NAMESPACE, "-s", sig],
+                                input=data, capture_output=True, timeout=30, env=env)
+            if vr.returncode == 0:
+                return ""
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"ssh-keygen failed: {e.__class__.__name__}"
+    return (f"{rel}.sig is not a valid {SIG_NAMESPACE} signature of {rel} by a listed signer "
+            "(missing, tampered, wrong namespace or unknown key)")
+
+
+def signature_problems(decisions: list[dict], root: Path = ROOT, allowed_signers: Path = DEFAULT_ALLOWED_SIGNERS,
+                       platform: str = "all") -> list[str]:
+    """Signature problems of every DECIDED decision that blocks distribution on `platform`, of every DECIDED decision a legal slot lists
+    and of every approved slot text. A distribution build refuses on any; a private build prints them as warnings."""
+    slot_ids = {i for spec in ABOUT_SLOTS.values() for i in spec["decisions"]}
+    needed: dict[str, str] = {}                          # file -> label
+    for d in decisions:
+        if d.get("status") != "DECIDED":
+            continue
+        if d in applicable(decisions, platform) or d.get("id") in slot_ids:
+            ref = str(d.get("decision_reference") or "")
+            if ref:
+                needed.setdefault(ref, f"{d.get('id')} record")
+        for slot, v in (d.get("slot_texts") or {}).items():
+            if isinstance(v, dict) and isinstance(v.get("file"), str):
+                needed.setdefault(v["file"], f"{slot} text")
+    out = []
+    for rel, label in sorted(needed.items()):
+        why = verify_sshsig(root, rel, allowed_signers)
+        if why:
+            out.append(f"{label}: {why}")
+    return out
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--platform", default="all", choices=PLATFORMS)
@@ -270,11 +387,15 @@ def main(argv=None) -> int:
                     help="gate file (default: the repository copy; a different file is for tests only and is never valid for signing)")
     ap.add_argument("--root", type=Path, default=ROOT,
                     help="directory against which decision_reference paths are resolved (default: the repository; tests only)")
+    ap.add_argument("--allowed-signers", type=Path, default=DEFAULT_ALLOWED_SIGNERS,
+                    help="public keys that may sign legal records (default: packaging/legal-allowed-signers; a different file is "
+                         "for tests only and is never valid for signing)")
     ap.add_argument("--about-slots", action="store_true",
                     help="also resolve the About legal slots (see the module docstring): errors exit 2, an unfilled slot "
                          "refuses a distribution build")
     a = ap.parse_args(argv)
-    if a.gate.resolve() != DEFAULT_GATE.resolve() or a.root.resolve() != ROOT.resolve():
+    if (a.gate.resolve() != DEFAULT_GATE.resolve() or a.root.resolve() != ROOT.resolve()
+            or a.allowed_signers.resolve() != DEFAULT_ALLOWED_SIGNERS.resolve()):
         print("NOTE: non-default --gate/--root: this result is NOT valid for signing or release decisions", file=sys.stderr)
     decisions = load(a.gate)
     errs = validate(decisions, a.root)
@@ -295,6 +416,8 @@ def main(argv=None) -> int:
     total = len(applicable(decisions, a.platform))
     ids = ", ".join(d["id"] for d in blockers)
     if not dist:
+        for w in signature_problems(decisions, a.root, a.allowed_signers, a.platform):
+            print(f"WARNING: {w} (a distribution build would be refused)", file=sys.stderr)
         print(f"distribution gate (platform {a.platform}): PRIVATE CANDIDATE build, not a distribution; "
               f"{len(blockers)} of {total} distribution-blocking decisions are OPEN" + (f": {ids}" if blockers else ""))
         return 0
@@ -312,7 +435,15 @@ def main(argv=None) -> int:
         for r in refusals:
             print(f"  - {r}", file=sys.stderr)
         return 1
-    print(f"distribution gate (platform {a.platform}): all {total} distribution-blocking decisions are DECIDED with a written record")
+    sig = signature_problems(decisions, a.root, a.allowed_signers, a.platform)
+    if sig:
+        print(f"distribution gate (platform {a.platform}): DISTRIBUTION BUILD REFUSED; {len(sig)} legal record(s) or text(s) have no "
+              "valid detached signature (a hash match alone proves consistency, not who decided):", file=sys.stderr)
+        for r in sig:
+            print(f"  - {r}", file=sys.stderr)
+        return 1
+    print(f"distribution gate (platform {a.platform}): all {total} distribution-blocking decisions are DECIDED with a written record "
+          "and a valid detached signature (this proves who signed, not that the decision is right)")
     return 0
 
 

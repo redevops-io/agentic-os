@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pytest
 
+from .about_fixture import Signer, decide, licenses_for, read_gate, signer, trust  # noqa: F401  (signer is a pytest fixture)
+
 ROOT = Path(__file__).resolve().parents[1]
 SIGN = ROOT / "packaging" / "signing"
 MAC = SIGN / "sign_and_notarize_r0prime_macos_v3.sh"
@@ -81,6 +83,26 @@ def run(cmd, env, cwd=None, timeout=300, input=None):
 
 
 def make_tree(dest: Path) -> Path:
+    """`dest` is the packaging/ directory of a throw-away repository root (dest.parent): besides the signing scripts it receives the files the
+    About check reads (agentic_os/about_record.py, identity, versions, the product licence files, packaging/notices/check_about.py and
+    generate_about.py, an EMPTY packaging/legal-allowed-signers)."""
+    assert dest.name == "packaging", dest
+    _make_tree(dest)
+    root = dest.parent
+    for rel in ("agentic_os/about_record.py", "agentic_os/__init__.py", "pyproject.toml", "deploy/launcher/src-tauri/tauri.conf.json",
+                "deploy/launcher/src-tauri/Cargo.toml", "LICENSE", "LICENSE-COMMONS-CLAUSE", "LICENSE.md", "LICENSING.md"):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / rel, root / rel)
+    (dest / "notices").mkdir()
+    for n in ("check_about.py", "generate_about.py"):
+        shutil.copy(ROOT / "packaging" / "notices" / n, dest / "notices" / n)
+    shutil.copy(ROOT / "packaging" / "legal-allowed-signers", dest / "legal-allowed-signers")
+    (root / "agentic_os" / "projects_ui").mkdir(exist_ok=True)
+    (root / "agentic_os" / "projects_ui" / "index.html").write_text("<!doctype html>\n")
+    return dest
+
+
+def _make_tree(dest: Path) -> Path:
     """A private copy of packaging/ (signing scripts, identity.json, entitlement plist, gate files) for the stub tests of the --real paths. In the
     copy of signing-common.sh the single patch point `r0p_no_test_switch` is replaced by a no-op, because the PRODUCTION library refuses the
     unit-test switch in --real (R5-02); the copy therefore has another sha256, which the test scope files bind."""
@@ -112,7 +134,7 @@ def make_tree(dest: Path) -> Path:
     return dest
 
 
-HELPER = make_tree(Path(__import__("tempfile").mkdtemp(prefix="r0p-helper-")) / "t") / "signing" / HELPER_PROD.name       # patched copy (see make_tree)
+HELPER = make_tree(Path(__import__("tempfile").mkdtemp(prefix="r0p-helper-")) / "packaging") / "signing" / HELPER_PROD.name       # patched copy (see make_tree)
 
 
 def ledger_text(d: Path) -> str:
@@ -351,7 +373,8 @@ class Mac:
         self.log = tmp / "stub.log"
         self.log.write_text("")
         self.fixture = tmp / "fixture"
-        self.tree = make_tree(tmp / "mtree")
+        self.tree = make_tree(tmp / "mroot" / "packaging")
+        self.lic = licenses_for(self.tree.parent, tmp / "licwork")      # a REAL generated Licenses folder (about.json included), consistent with the tree
         self.script = self.tree / "signing" / MAC.name
         self.common = self.tree / "signing" / COMMON.name
         self.conf(NOTARY_MODE="ok")
@@ -385,8 +408,8 @@ class Mac:
                 "RedevopsReleaseLine": IDENT["release_line"], "CFBundleName": R0["product_name"]}
         (app / "Contents" / "Info.plist").write_bytes(plistlib.dumps(info))
         (app / "Contents" / "Resources" / "icon.icns").write_bytes(b"icns")
-        for n in ("LICENSE", "LICENSE.md", "LICENSING.md", "LICENSES-MANIFEST.json", "NOTICES_MISSING.json", "NOTICES_MISSING.md", "THIRD_PARTY_NOTICES.txt", "LICENSE-COMMONS-CLAUSE"):
-            (app / "Contents" / "Resources" / "Licenses" / n).write_text(f"{n}\n")
+        for f in self.lic.iterdir():
+            shutil.copy(f, app / "Contents" / "Resources" / "Licenses" / f.name)
         (fx / ".VolumeIcon.icns").write_bytes(b"icns")
         os.symlink("/Applications", fx / "Applications")
         for rel, text in (extra or {}).items():
@@ -920,7 +943,7 @@ class Ssh:
         self.manifest.write_text('{"files": {"a": "0"}}\n')
         self.keys = tmp / "keys"
         self.keys.mkdir()
-        self.tree = make_tree(tmp / "stree")                     # patched copy for the stub-tool --real tests (see make_tree)
+        self.tree = make_tree(tmp / "sroot" / "packaging")                     # patched copy for the stub-tool --real tests (see make_tree)
         self.tscript = self.tree / "signing" / SSH.name
         self.tcommon = self.tree / "signing" / COMMON.name
         self.key = self.make_key("k1", "signproc-TEST-KEY")     # a throwaway key for tests that need a key pair of their own
@@ -1511,7 +1534,7 @@ class Win:
         (self.tools / "jsign").mkdir(parents=True)
         (self.tools / "jsign" / "jsign-7.6.jar").write_bytes(b"stand-in jar")
         # a private copy of the script tree (patched library, see make_tree) with the pinned jar hash replaced by the stand-in's
-        tree = make_tree(tmp / "tree")
+        tree = make_tree(tmp / "wroot" / "packaging")
         text = (tree / "signing" / WIN.name).read_text()
         pin = "6cf58aa080e7ff82656f320cff8d4a3bff30408df8766806dcba3740dd839fa5"
         assert pin in text
@@ -1520,6 +1543,7 @@ class Win:
         self.script = tree / "signing" / WIN.name
         self.common = tree / "signing" / COMMON.name
         self.tree = tree
+        self.lic = licenses_for(tree.parent, tmp / "licwork", platform="windows-x64")     # the Licenses folder of the (stub) installer tree
         self.files = tmp / "files"
         self.files.mkdir()
 
@@ -1568,7 +1592,7 @@ class Win:
              "tool_az_sha256": sha_file(self.stubs / "az"), "tool_java_sha256": sha_file(self.stubs / "java"),
              "tool_python_sha256": sha_file(self.stubs / "py"), "tool_python_packages_sha256": sha_bytes(b"signify==0.0-stub\n"), "tool_python_pth_sha256": sha_bytes(b"\n"),
              "tool_osslsigncode_sha256": "none",
-             "container_listing_sha256": "none" if st == "inner" else sha_bytes(LISTING_TEXT)}
+             "container_listing_sha256": "none" if st == "inner" else sha_bytes(self.listing_text)}
         d.update(over)
         p = self.tmp / f"wscope-{len(list(self.tmp.glob('wscope-*')))}.txt"
         p.write_text("".join(f"{k}={v}\n" for k, v in d.items() if v is not None))
@@ -1576,9 +1600,14 @@ class Win:
 
     REAL_ENV = {"R0P_AZ_ENDPOINT": "https://eus.codesigning.azure.net/", "R0P_AZ_ACCOUNT": "stub-account", "R0P_AZ_PROFILE": "stub-profile", "R0P_AZ_EXPECTED_CN": "CN=Stub Test Org"}
 
+    @property
+    def listing_text(self) -> bytes:
+        """What the build host's listing of the installers holds: file names plus the sha256 of Licenses/about.json (RC3)."""
+        return LISTING_TEXT + f"{sha_file(self.lic / 'about.json')}  Licenses/about.json\n".encode()
+
     def listing(self) -> Path:
         p = self.tmp / "container-listing.txt"
-        p.write_bytes(LISTING_TEXT)
+        p.write_bytes(self.listing_text)
         return p
 
     def real(self, stage, pairs, sc, *args, env=None, ledger=True, **kw):
@@ -1587,6 +1616,8 @@ class Win:
         extra = ["--ledger", self.ledger] if ledger else []
         if stage == "container" and "--container-listing" not in args:
             extra += ["--container-listing", self.listing()]
+        if stage == "container" and "--licenses-dir" not in args:
+            extra += ["--licenses-dir", self.lic]
         return self.run(stage, pairs, "--real", "--i-have-owner-authorization", sha_file(sc), "--scope-file", sc, *extra, *args, **dict(e, **kw))
 
 
@@ -1740,7 +1771,7 @@ def test_windows_real_path_with_stubs_token_handling_ledger_and_two_stages(win):
     r4 = win.real("container", [(m, hm)], scc, outdir=win.tmp / "wout2")
     assert r4.returncode == 0, (r4.stdout, r4.stderr)
     ev2 = (win.tmp / "wout2" / "EVIDENCE.txt").read_text()
-    assert "stage:           container" in ev2 and "does NOT inspect the container contents" in ev2 and sha_bytes(LISTING_TEXT) in ev2
+    assert "stage:           container" in ev2 and "does NOT inspect the container contents" in ev2 and sha_bytes(win.listing_text) in ev2
     assert "Windows acceptance kit must check the installed files" in ev2
 
 
@@ -2598,3 +2629,112 @@ def test_r6_documentation_states_the_residuals(tmp_path):
     assert "ledger.txt" not in doc and "--ledger \"$HOME/r0prime-signing-ledger\"" in doc
     tpl = (SIGN / "AUTHORIZATION-TEMPLATE.md").read_text()
     assert "tool_python_pth_sha256" in tpl and "fresh" in tpl
+
+
+# ====================================================================================================================
+# RC3 review fix RC3-04: the gate call passes --about-slots and the About record inside the artifact is checked
+# (packaging/signing/** was edited on the RC3 branch only: a new independent review round is needed before any RC3 signing)
+# ====================================================================================================================
+def _decide_everything(root: Path, signer) -> None:
+    ids = sorted({d["id"] for d in read_gate(root)["decisions"]})
+    decide(root, ids)
+    trust(root, signer)
+
+
+def test_rc3_04_both_gate_calls_pass_about_slots_and_the_about_check_exists():
+    code = code_of(COMMON)
+    assert code.count("--about-slots") >= 2 and "r0p_about_check()" in code and "check_about.py" in code
+    assert "r0p_about_check" in code_of(MAC) and "r0p_about_check" in code_of(WIN)
+    assert "--licenses-dir" in WIN.read_text()
+
+
+def test_rc3_04_the_private_run_prints_the_about_slot_state(mac):
+    r = mac.real(mac.scope())
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert "about slots: 5 of 5 are placeholders" in r.stdout
+
+
+def test_rc3_04_macos_real_refuses_a_dmg_without_the_about_record(mac):
+    (mac.fixture / APP_NAME / "Contents" / "Resources" / "Licenses" / "about.json").unlink()
+    r = mac.real(mac.scope())
+    assert r.returncode != 0 and "no Licenses/about.json" in r.stderr
+    assert not mac.calls("codesign"), "nothing is signed when the record check fails"
+
+
+def test_rc3_04_macos_real_refuses_a_tampered_about_record(mac):
+    p = mac.fixture / APP_NAME / "Contents" / "Resources" / "Licenses" / "about.json"
+    doc = json.loads(p.read_text())
+    doc["product"]["version"] = "9.9.9"
+    p.write_text(json.dumps(doc))
+    r = mac.real(mac.scope())
+    assert r.returncode != 0 and "failed check_about.py" in r.stderr and not mac.calls("codesign")
+
+
+def test_rc3_04_macos_real_refuses_a_record_that_disagrees_with_the_manifest_in_the_dmg(mac):
+    (mac.fixture / APP_NAME / "Contents" / "Resources" / "Licenses" / "LICENSE").write_text("altered after staging\n")
+    r = mac.real(mac.scope())
+    assert r.returncode != 0 and "failed check_about.py" in r.stderr and not mac.calls("codesign")
+
+
+def test_rc3_04_macos_adhoc_test_mode_does_not_need_the_record(mac):
+    (mac.fixture / APP_NAME / "Contents" / "Resources" / "Licenses" / "about.json").unlink()
+    r = mac.run(mode="--adhoc-test")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+
+
+def test_rc3_04_macos_distribution_signing_needs_a_distribution_record_and_valid_signatures(mac, signer):
+    root = mac.tree.parent
+    _decide_everything(root, signer)
+    gj = mac.tree / "distribution-gate.json"
+    # the dmg still carries the PRIVATE-candidate record built before the decisions: refused after the gate itself passed
+    r = mac.real(mac.scope(distribution="yes", gate_sha256=sha_file(gj)), "--distribution")
+    assert r.returncode != 0 and "distribution gate: passed" in r.stdout and "failed check_about.py" in r.stderr
+    assert "private-candidate record" in r.stderr and not mac.calls("codesign")
+    # a distribution record generated from the signed decisions passes the whole run
+    mac.lic = licenses_for(root, mac.tmp / "licwork-dist", distribution=True)
+    mac.reset_fixture()
+    r = mac.real(mac.scope(distribution="yes", gate_sha256=sha_file(gj)), "--distribution", out=mac.work / "out2")
+    assert r.returncode == 0, (r.stdout[-1500:], r.stderr[-1500:])
+    assert "distribution gate: passed" in r.stdout and mac.calls("codesign")
+
+
+def test_rc3_04_macos_distribution_gate_refuses_a_forged_but_unsigned_decision_set(mac, signer):
+    root = mac.tree.parent
+    ids = sorted({d["id"] for d in read_gate(root)["decisions"]})
+    decide(root, ids)                                         # DECIDED with invented records and NO signatures; the allowed-signers file stays empty
+    r = mac.real(mac.scope(distribution="yes", gate_sha256=sha_file(mac.tree / "distribution-gate.json")), "--distribution")
+    assert r.returncode != 0 and "REFUSES a distribution signing" in r.stderr and not mac.calls("codesign")
+    assert "no valid detached signature" in r.stderr
+
+
+def test_rc3_04_windows_container_real_needs_the_licenses_dir_and_a_matching_listing(win, tmp_path):
+    p, h = win.inner()
+    m, hm = win.container()
+    sc = win.scope("container", [(m, hm)])
+    # missing --licenses-dir
+    r = win.run("container", [(m, hm)], "--real", "--i-have-owner-authorization", sha_file(sc), "--scope-file", sc, "--ledger", win.ledger,
+                "--container-listing", win.listing(), outdir=win.tmp / "wout-a", **win.REAL_ENV)
+    assert r.returncode == 2 and "--licenses-dir" in r.stderr
+    # the listing does not contain the sha256 of the record
+    other = tmp_path / "other-listing.txt"
+    other.write_bytes(LISTING_TEXT)
+    sc2 = win.scope("container", [(m, hm)], container_listing_sha256=sha_file(other))
+    r = win.real("container", [(m, hm)], sc2, "--container-listing", other, outdir=win.tmp / "wout-b")
+    assert r.returncode == 2 and "does not appear in the --container-listing" in r.stderr
+    # a tampered record
+    bad = tmp_path / "bad-lic"
+    shutil.copytree(win.lic, bad)
+    doc = json.loads((bad / "about.json").read_text())
+    doc["product"]["version"] = "9.9.9"
+    (bad / "about.json").write_text(json.dumps(doc))
+    lst = tmp_path / "bad-listing.txt"
+    lst.write_bytes(LISTING_TEXT + f"{sha_file(bad / 'about.json')}  Licenses/about.json\n".encode())
+    sc3 = win.scope("container", [(m, hm)], container_listing_sha256=sha_file(lst))
+    r = win.real("container", [(m, hm)], sc3, "--container-listing", lst, "--licenses-dir", bad, outdir=win.tmp / "wout-c")
+    assert r.returncode == 2 and "failed check_about.py" in r.stderr
+
+
+def test_rc3_04_windows_licenses_dir_is_only_for_real_container(win):
+    p, h = win.inner()
+    r = win.run("inner", [(p, h)], "--licenses-dir", win.lic)
+    assert r.returncode != 0

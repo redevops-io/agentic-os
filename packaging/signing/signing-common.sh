@@ -253,12 +253,33 @@ r0p_gate() {
   [ "$(r0p_sha "$gp")" = "$tsha" ] || die "scope file: gate_tool_sha256 does not match packaging/check-distribution-gate.py ($(r0p_sha "$gp"))"
   [ -x /usr/bin/python3 ] || die "/usr/bin/python3 not found: the distribution gate cannot be run"
   if [ "$dist" = 1 ]; then
-    /usr/bin/python3 -I "$gp" --platform "$platform" --distribution || rc=$?
-    [ "$rc" -eq 0 ] || die "the distribution gate REFUSES a distribution signing for platform $platform (exit $rc): decisions are OPEN or the gate file is malformed"
-    echo "distribution gate: passed for platform $platform (written decisions exist; this is not a legal conclusion)"
+    /usr/bin/python3 -I "$gp" --platform "$platform" --distribution --about-slots || rc=$?
+    [ "$rc" -eq 0 ] || die "the distribution gate REFUSES a distribution signing for platform $platform (exit $rc): decisions are OPEN, a legal slot has no approved text, a record has no valid detached signature, or the gate file is malformed"
+    echo "distribution gate: passed for platform $platform (written decisions with valid detached signatures exist; this is not a legal conclusion)"
   else
-    /usr/bin/python3 -I "$gp" --platform "$platform" || rc=$?
-    [ "$rc" -eq 0 ] || die "the distribution gate file is malformed (exit $rc)"
+    /usr/bin/python3 -I "$gp" --platform "$platform" --about-slots || rc=$?
+    [ "$rc" -eq 0 ] || die "the distribution gate file is malformed or an About slot text does not match (exit $rc)"
     echo "*** PRIVATE-CANDIDATE SIGNING: signing and notarization do NOT imply permission to distribute. The decisions above are not cleared by this run."
   fi
+}
+
+# About record of the artifact being signed (RC3) --------------------------------------------------------------------------
+# r0p_about_check LICENSES_DIR DISTRIBUTION(0/1): the Licenses folder INSIDE the artifact (the app's Contents/Resources/Licenses taken from
+# the dmg copy; the Licenses folder of the installer tree on Windows) must hold an about.json that passes packaging/notices/check_about.py
+# against the repository copies of the gate file, identity, versions and the folder's own manifest. With DISTRIBUTION=1 the record must be
+# a distribution record without a placeholder slot and every legal record must carry a valid detached signature. Returns non-zero (the
+# caller fails) instead of dying, so the evidence of the run records the reason. A hash in the record proves consistency, not authorship.
+r0p_about_check() {
+  local dir="$1" dist="$2" chk="$SELF_DIR/../notices/check_about.py" root="$SELF_DIR/../.." rc=0
+  [ -f "$chk" ] && [ -f "$root/agentic_os/about_record.py" ] || { echo "ERROR: packaging/notices/check_about.py or agentic_os/about_record.py is missing next to packaging/" >&2; return 1; }
+  [ -d "$dir" ] && [ ! -L "$dir" ] || { echo "ERROR: the artifact has no Licenses folder to check ($dir)" >&2; return 1; }
+  [ -f "$dir/about.json" ] && [ ! -L "$dir/about.json" ] || { echo "ERROR: the artifact has no Licenses/about.json (an RC3 artifact must carry the About record)" >&2; return 1; }
+  [ -x /usr/bin/python3 ] || { echo "ERROR: /usr/bin/python3 not found: the About record cannot be checked" >&2; return 1; }
+  if [ "$dist" = 1 ]; then
+    /usr/bin/python3 -I "$chk" --licenses-dir "$dir" --root "$root" --distribution || rc=$?
+  else
+    /usr/bin/python3 -I "$chk" --licenses-dir "$dir" --root "$root" || rc=$?
+  fi
+  [ "$rc" -eq 0 ] || { echo "ERROR: the About record inside the artifact failed check_about.py (exit $rc)" >&2; return 1; }
+  return 0
 }

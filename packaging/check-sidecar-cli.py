@@ -54,10 +54,10 @@ def run_case(cmd: list[str], args: list[str]) -> tuple[int, bytes, bytes, list[s
 def main(argv=None) -> int:
     a = list(sys.argv[1:] if argv is None else argv)
     if a[:1] == ["--python-entry"]:
-        cmd = [sys.executable, "-I", a[1]]
+        cmd = [sys.executable, "-I", str(Path(a[1]).resolve())]       # each case runs in a scratch directory: never a relative path
         env_py = True
     else:
-        cmd = [a[0] if a else str(Path(__file__).resolve().parent / "dist" / "redevops-sidecar")]
+        cmd = [str(Path(a[0]).resolve()) if a else str(Path(__file__).resolve().parent / "dist" / "redevops-sidecar")]
         env_py = False
     bad = 0
     for args, want_rc, stream in CASES:

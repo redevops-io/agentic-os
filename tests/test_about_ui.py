@@ -343,3 +343,57 @@ def test_page_assets_and_generated_record_contain_no_forbidden_wording(folder):
     # no product licence statement is typed into the page: the family-licence phrase and the SPDX name appear nowhere in the assets
     for name in ("about.html", "app.js", "app.css"):
         assert "family licence" not in blobs[name].lower() and "agpl" not in blobs[name].lower() and "commons clause" not in blobs[name].lower().replace("commons clause file", "")
+
+
+# ----------------------------------------------------------------------------------------------------------- RC3 review fixes
+def test_a_missing_about_asset_does_not_stop_the_service(folder, monkeypatch, tmp_path, capsys):
+    """RC3-05: one ASCII log line, no About routes but a plain-text 404 note on /about/, the control plane keeps working."""
+    import shutil
+    broken = tmp_path / "assets"
+    shutil.copytree(ASSETS, broken)
+    (broken / "app.js").unlink()
+    monkeypatch.setattr(about_ui, "_ASSET_DIR", broken)
+    c = app_for(folder, monkeypatch)                       # must not raise
+    err = capsys.readouterr().err
+    lines = [ln for ln in err.splitlines() if ln.startswith("about:")]
+    assert len(lines) == 1 and "FileNotFoundError" in lines[0]
+    lines[0].encode("ascii")
+    r = c.get("/about/")
+    assert r.status_code == 404 and r.headers["content-type"].startswith("text/plain")
+    assert b"not available" in r.content and b"Licenses folder" in r.content and no_cors(r)
+    assert r.headers["content-security-policy"] == CSP
+    for other in ("/about/app.js", "/about/about.json", "/about/files/licence", "/about/app.css"):
+        assert c.get(other).status_code == 401
+    assert c.get("/").status_code == 200 and c.get("/api/projects").status_code == 401       # the control plane and the gate are unaffected
+    assert c.post("/about/").status_code in (401, 403)
+
+
+def test_a_record_loader_crash_does_not_stop_the_service(folder, monkeypatch, capsys):
+    def boom(_):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(about_ui, "load_state", boom)
+    c = app_for(folder, monkeypatch)
+    assert "about: the build record could not be loaded (RuntimeError)" in capsys.readouterr().err
+    assert c.get("/about/about.json").json()["error"]["code"] == about_ui.ERR_INVALID
+    assert c.get("/about/").status_code == 200
+
+
+def test_about_routes_exist_in_hosted_mode_without_the_gate(folder, monkeypatch):
+    """INFO 1: AGENTIC_OS_LOCAL_CAPABILITY=off style app (no capability): the static public routes are registered so the link works."""
+    monkeypatch.setenv("AGENTIC_OS_LICENSES_DIR", str(folder))
+    c = TestClient(mounted_app("", SampleProjectionProvider()), base_url=BASE_URL)
+    assert c.get("/about/").status_code == 200
+    r = c.get("/about/about.json")
+    assert r.status_code == 200 and r.json()["schema"] == "redevops.about/1"
+    assert c.get("/about/files/licence").content == (folder / "LICENSE").read_bytes()
+    assert c.get("/about/files/nope").status_code == 404
+    assert c.get("/api/projects").status_code == 200                # hosted mode: the API is open, as documented
+    assert c.post("/about/about.json").status_code == 405
+
+
+def test_sidecar_cli_check_script_accepts_a_relative_entry_path():
+    import subprocess
+    import sys
+    r = subprocess.run([sys.executable, "-I", "packaging/check-sidecar-cli.py", "--python-entry", "packaging/sidecar_main.py"], cwd=ROOT,
+                       capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"}, timeout=300)
+    assert r.returncode == 0 and "fail-closed" in r.stdout, (r.stdout[-400:], r.stderr[-400:])

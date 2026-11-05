@@ -464,7 +464,7 @@ say "step 2: layout and identity checks on the staged app"
 if [ "$PLAN" = 1 ]; then
   out "  (checked when executing: $MAIN_EXE and $SIDECAR_EXE are the only executables and the only Mach-O files; both are arm64-only;"
   out "   Info.plist: CFBundleIdentifier=$BUNDLE_ID, CFBundleExecutable=$MAIN_EXE, version $VERSION/$BUNDLE_VERSION, LSMinimumSystemVersion 11.0, RedevopsReleaseLine=$RELEASE_LINE;"
-  out "   Resources/Licenses exists, its files are not executable; no Frameworks/PlugIns/Helpers/XPCServices/_CodeSignature)"
+  out "   Resources/Licenses exists, its files are not executable; in --real its about.json passes check_about.py$( [ "$DISTRIBUTION" = 1 ] && echo ' --distribution'); no Frameworks/PlugIns/Helpers/XPCServices/_CodeSignature)"
 else
   [ -f "$MACOS/$MAIN_EXE" ] && [ -f "$MACOS/$SIDECAR_EXE" ] || fail "expected executables missing in the bundle ($MAIN_EXE, $SIDECAR_EXE)"
   # Contents/MacOS: exactly the two expected files
@@ -496,6 +496,9 @@ else
   NLIC="$(find "$RES/Licenses" -type f -print0 | tr -cd '\0' | wc -c | tr -d ' ')"       # NUL-counted: names with newlines are counted once
   [ "$NLIC" -ge 1 ] || fail "Contents/Resources/Licenses holds no files"
   [ -z "$(find "$RES/Licenses" -type f -perm -u+x | head -1)" ] || fail "a file in Resources/Licenses is executable"
+  # RC3: the About record inside the artifact being signed must be consistent with the repository (gate, identity, versions, manifest); with
+  # --distribution it must be a distribution record without a placeholder slot, and every legal record must carry a valid signature.
+  if [ "$MODE" = real ]; then r0p_about_check "$RES/Licenses" "$DISTRIBUTION" || fail "the About record (Resources/Licenses/about.json) inside the dmg failed the check against the gate (see above); signing refused"; fi
   ev ""; ev "INPUT binaries (before signing; ad-hoc/linker-signed by the build):"
   ev "  $MAIN_EXE sha256=$(sha "$MACOS/$MAIN_EXE")"; ev "  $SIDECAR_EXE sha256=$(sha "$MACOS/$SIDECAR_EXE")"
   ev "  Info.plist sha256=$(sha "$PL"); Licenses files: $NLIC"
