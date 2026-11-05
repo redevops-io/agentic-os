@@ -6,6 +6,12 @@
 #     (a Cargo.toml change that is not in the lock FAILS the build instead of silently re-resolving)
 #   * LAUNCHER_BUNDLES (default: all targets in tauri.conf.json for the host) can be narrowed, e.g.
 #     LAUNCHER_BUNDLES=app on macOS builds only the .app (no dmg: the dmg step drives Finder/AppleScript)
+#   * LAUNCHER_ADHOC_SIGN=1 (macOS only; the private unsigned candidate script sets it): the bundler seals the .app with the AD-HOC
+#     identity `-` (sidecar and launcher first, then the bundle), no hardened runtime, no entitlements, no timestamp, no keychain. Without
+#     it the bundle carries only the linker's signature on the launcher and `codesign --verify --deep --strict` fails ("code has no
+#     resources but signature indicates they must be present"), which Gatekeeper reports as "is damaged" for a quarantined download
+#     instead of the normal "unidentified developer" path. This is NOT release signing: the reviewed Developer ID procedure
+#     (packaging/signing/**) re-signs every file with --force. tauri.conf.json is not changed (tests/test_macos_entitlements.py).
 #
 # Run after build-sidecar.sh + stage-sidecar.sh (externalBin). Extends packaging/dist/build-manifest.json.
 set -euo pipefail
@@ -50,6 +56,12 @@ fi
 cd "$ROOT/deploy/launcher"
 BUNDLES=()
 [ -n "${LAUNCHER_BUNDLES:-}" ] && BUNDLES=(--bundles "$LAUNCHER_BUNDLES")
+if [ "${LAUNCHER_ADHOC_SIGN:-0}" = 1 ]; then
+  [ "$OS" = macos ] || { echo "ERROR: LAUNCHER_ADHOC_SIGN=1 is for macOS only"; exit 1; }
+  # never next to a real signing identity: the ad-hoc seal must not be confused with (or replaced by) a release signature
+  if env | grep -qE '^(APPLE_SIGNING_IDENTITY|APPLE_CERTIFICATE|APPLE_ID|APPLE_API_KEY|APPLE_TEAM_ID)='; then echo "ERROR: LAUNCHER_ADHOC_SIGN=1 with an Apple signing variable set"; exit 1; fi
+  BUNDLES+=(--config '{"bundle":{"macOS":{"signingIdentity":"-","hardenedRuntime":false}}}')
+fi
 # cargo's own args go after `--`.
 "${TAURI[@]}" build ${BUNDLES[@]+"${BUNDLES[@]}"} -- --locked
 
