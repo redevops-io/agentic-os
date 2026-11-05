@@ -60,7 +60,7 @@ if (-not $SkipUninstall) { $null = Invoke-Step '07-Uninstall.ps1' @() }
 
 # ---- aggregate ----
 $rows = @()
-foreach ($f in (Get-ChildItem -LiteralPath $OutDir -Filter 'results-*.json' | Sort-Object Name)) { $rows += @((Get-Content -LiteralPath $f.FullName -Raw | ConvertFrom-Json)) }
+foreach ($f in (Get-ChildItem -LiteralPath $OutDir -Filter 'results-*.json' | Sort-Object Name)) { $rows += @((Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8 | ConvertFrom-Json)) }
 $rows = @($rows)
 $manualAlways = @(
   [pscustomobject]@{ Step = 'manual'; Id = 'M-01..M-03'; Name = 'SmartScreen / UAC / MOTW on an interactive, browser-downloaded install'; Status = 'MANUAL'; Detail = 'MANUAL-CHECKLIST.md' },

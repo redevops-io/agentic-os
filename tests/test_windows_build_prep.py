@@ -619,3 +619,18 @@ def test_acceptance_kit_step_04_tolerates_an_empty_stderr_file():
     s = (PK / "acceptance/windows-r0prime/04-Regression-Bootstrap.ps1").read_text(encoding="utf-8")
     i = s.index("function Test-BootstrapResult")
     assert "if ($null -eq $R.Err) { $R.Err = New-Object byte[] 0 }" in s[i : i + 600]
+
+
+def test_acceptance_kit_reads_its_own_utf8_json_as_utf8():
+    """Non-ASCII user name (Windows Server 2022, PowerShell 5.1, 2026-11-05): state.json / results-*.json are written as UTF-8 without BOM but were
+    read with Get-Content -Raw, which decodes them with the ANSI code page, so every step after 01 looked for the install dir at a mojibake
+    path (BIN-00/LCH-00/BST-00 'not found'). Every Get-Content ... -Raw | ConvertFrom-Json must say -Encoding UTF8."""
+    import re
+
+    k = PK / "acceptance/windows-r0prime"
+    bad = []
+    for f in sorted(k.glob("*.ps1")):
+        for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            if re.search(r"Get-Content[^|]*-Raw\s*\|\s*ConvertFrom-Json", line) and "-Encoding UTF8" not in line:
+                bad.append(f"{f.name}:{n}")
+    assert not bad, bad

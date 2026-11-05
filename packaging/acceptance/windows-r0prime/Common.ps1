@@ -46,7 +46,7 @@ function Import-KitIdentity {
   foreach ($c in $cands) {
     if (-not (Test-Path -LiteralPath $c)) { continue }
     try {
-      $j = Get-Content -LiteralPath $c -Raw | ConvertFrom-Json
+      $j = Get-Content -LiteralPath $c -Raw -Encoding UTF8 | ConvertFrom-Json
       $b = $j.$line
       if (-not $b -or -not $b.product_name -or -not $b.bundle_identifier -or -not $b.main_binary_name) { continue }
       $parts = ([string]$b.bundle_identifier).Split('.')
@@ -211,14 +211,14 @@ function Find-InstallDir {
 function Save-State([hashtable]$State) {
   $p = Join-Path $script:OutDir 'state.json'
   $cur = @{}
-  if (Test-Path -LiteralPath $p) { $o = Get-Content -LiteralPath $p -Raw | ConvertFrom-Json; foreach ($n in $o.PSObject.Properties.Name) { $cur[$n] = $o.$n } }
+  if (Test-Path -LiteralPath $p) { $o = Get-Content -LiteralPath $p -Raw -Encoding UTF8 | ConvertFrom-Json; foreach ($n in $o.PSObject.Properties.Name) { $cur[$n] = $o.$n } }
   foreach ($k in $State.Keys) { $cur[$k] = $State[$k] }
   [IO.File]::WriteAllText($p, (ConvertTo-Json -InputObject $cur), (New-Object Text.UTF8Encoding($false)))
 }
 
 function Read-State {
   $p = Join-Path $script:OutDir 'state.json'
-  if (Test-Path -LiteralPath $p) { return (Get-Content -LiteralPath $p -Raw | ConvertFrom-Json) }
+  if (Test-Path -LiteralPath $p) { return (Get-Content -LiteralPath $p -Raw -Encoding UTF8 | ConvertFrom-Json) }
   return $null
 }
 
