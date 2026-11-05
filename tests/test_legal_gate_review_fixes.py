@@ -48,12 +48,15 @@ def test_forgery_all_21_decided_with_invented_files_now_fails_a_distribution_bui
     assert len(all_ids(root)) == 21
     base = ["--platform", "all", "--distribution", "--about-slots"]
     r = gate_cli(root, *base)                                       # the shipped, EMPTY allowed-signers file
-    assert r.returncode == 1 and "no valid detached signature" in r.stderr and "lists no signer" in r.stderr
+    assert r.returncode == 1 and "not an approved, signature-verified text" in r.stderr and "lists no signer" in r.stderr
     # even with a signer listed, unsigned files are refused
     s = Signer(tmp_path)
     try:
+        doc = read_gate(root)
+        doc["legal_signer_fingerprints"] = [s.fingerprint]
+        write_gate(root, doc)
         r = gate_cli(root, *base, allowed=s.allowed)
-        assert r.returncode == 1 and "not a valid redevops-legal-decision@v1 signature" in r.stderr or "no valid detached signature" in r.stderr
+        assert r.returncode == 1 and "D-LIC-5 record" in r.stderr and ".sig" in r.stderr
         sign_all(root, s)
         assert gate_cli(root, *base, allowed=s.allowed).returncode == 0          # only the owner's key makes it pass
     finally:
@@ -81,7 +84,7 @@ def test_private_build_with_a_bad_signature_warns_and_continues(tmp_path, monkey
     assert r.returncode == 0 and "WARNING" in r.stderr and "D-LIC-10" in r.stderr and "distribution build would be refused" in r.stderr
     assert run_generate(root, notices, monkeypatch=monkeypatch) == 0
     assert "WARNING" in capsys.readouterr().err
-    assert json.loads((notices / "about.json").read_bytes())["legal"]["slots"]["LEGAL.NO_WARRANTY"]["state"] == "filled"
+    assert json.loads((notices / "about.json").read_bytes())["legal"]["slots"]["LEGAL.NO_WARRANTY"]["state"] == "unverified-draft"
 
 
 def test_valid_signature_passes_and_each_defect_fails(tmp_path, signer):
@@ -89,39 +92,39 @@ def test_valid_signature_passes_and_each_defect_fails(tmp_path, signer):
     decide(root, ["D-LIC-10"])
     rec = "docs/legal/decisions/D-LIC-10.signed.txt"
     txt = "docs/legal/approved/legal-no-warranty.en.txt"
-    allowed = signer.allowed
+    allowed, fp = signer.allowed, [signer.fingerprint]
     for rel in (rec, txt):
         signer.sign(root / rel)
-        assert gate.verify_sshsig(root, rel, allowed) == "", rel
-    assert gate.signature_problems(read_gate(root)["decisions"], root, allowed, "macos") == []
+        assert gate.verify_sshsig(root, rel, allowed, fp) == "", rel
+    assert gate.signature_problems(read_gate(root)["decisions"], root, allowed, "macos", fp) == []
 
     # tampered after signing
     (root / rec).write_text((root / rec).read_text() + "edited\n")
-    assert "not a valid redevops-legal-decision@v1 signature" in gate.verify_sshsig(root, rec, allowed)
+    assert "not a valid redevops-legal-decision@v1 signature" in gate.verify_sshsig(root, rec, allowed, fp)
     # wrong namespace
     signer.sign(root / txt, namespace="other-namespace@v1")
-    assert "not a valid" in gate.verify_sshsig(root, txt, allowed)
+    assert "not a valid" in gate.verify_sshsig(root, txt, allowed, fp)
     # signed by another key
     other = Signer(tmp_path / "other-dir" if (tmp_path / "other-dir").mkdir() is None else tmp_path)
     try:
         other.sign(root / txt)
-        assert "not a valid" in gate.verify_sshsig(root, txt, allowed)
-        assert gate.verify_sshsig(root, txt, other.allowed) == ""
+        assert "not a valid" in gate.verify_sshsig(root, txt, allowed, fp)
+        assert gate.verify_sshsig(root, txt, other.allowed, [other.fingerprint]) == ""
     finally:
         other.cleanup()
     # missing signature
     (root / (txt + ".sig")).unlink()
-    assert "not a regular file" in gate.verify_sshsig(root, txt, allowed) or "not a file" in gate.verify_sshsig(root, txt, allowed)
+    assert "not a regular file" in gate.verify_sshsig(root, txt, allowed, fp) or "not a file" in gate.verify_sshsig(root, txt, allowed, fp)
     # an allowed-signers line that restricts the namespace elsewhere does not authorise this namespace
     signer.sign(root / txt)
     restricted = tmp_path / "restricted"
     restricted.write_text(signer.allowed.read_text().replace(f'namespaces="{NAMESPACE}"', 'namespaces="something-else"'))
-    assert "not a valid" in gate.verify_sshsig(root, txt, restricted)
+    assert "not a valid" in gate.verify_sshsig(root, txt, restricted, fp)
     # empty / comment-only allowed signers
     empty = tmp_path / "empty"
     empty.write_text("# nothing\n\n")
-    assert "lists no signer" in gate.verify_sshsig(root, txt, empty)
-    assert "unreadable" in gate.verify_sshsig(root, txt, tmp_path / "absent")
+    assert "lists no signer" in gate.verify_sshsig(root, txt, empty, [])
+    assert "unreadable" in gate.verify_sshsig(root, txt, tmp_path / "absent", fp)
 
 
 def test_the_signature_must_cover_the_exact_bytes_of_every_listed_file(tmp_path, signer):
@@ -129,9 +132,10 @@ def test_the_signature_must_cover_the_exact_bytes_of_every_listed_file(tmp_path,
     decide(root, ["D-LIC-10", "D-LIC-5"])
     sign_all(root, signer)
     decisions = read_gate(root)["decisions"]
-    assert gate.signature_problems(decisions, root, signer.allowed, "macos") == []
+    fp = [signer.fingerprint]
+    assert gate.signature_problems(decisions, root, signer.allowed, "macos", fp) == []
     (root / "docs/legal/approved/legal-section13-notice.en.txt").write_text("changed bytes\n")
-    probs = gate.signature_problems(decisions, root, signer.allowed, "macos")
+    probs = gate.signature_problems(decisions, root, signer.allowed, "macos", fp)
     assert len(probs) == 1 and "LEGAL.SECTION13_NOTICE text" in probs[0]
 
 
@@ -217,7 +221,7 @@ def test_symlinked_signature_file_is_refused(tmp_path, signer):
     real.write_bytes(sig.read_bytes())
     sig.unlink()
     os.symlink(real, sig)
-    assert "symbolic link" in gate.verify_sshsig(root, txt, signer.allowed)
+    assert "symbolic link" in gate.verify_sshsig(root, txt, signer.allowed, [signer.fingerprint])
 
 
 def test_unsafe_repo_file_helper(tmp_path):

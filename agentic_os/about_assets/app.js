@@ -141,13 +141,19 @@
     document.title = "About and licences - " + p.name + " " + p.version;
   }
 
+  // One block per slot. The text of the record is the FINAL display text (the build tool puts the label of an unverified draft inside
+  // it), shown verbatim as text; the visible state tag comes from the record too. Only the state approved-verified gets the "approved"
+  // look: anything else (pending, unverified draft, an unknown state) keeps the dashed border and its tag.
   function slotBlock(id, slot) {
-    var filled = slot.state === "filled";
-    var box = el("div", { "class": "slot" + (filled ? " filled" : ""), "data-slot": id });
-    var t = el("span", { text: slot.text });
-    if (filled) { t.setAttribute("lang", "en"); }
+    var approved = slot.state === "approved-verified";
+    var draft = slot.state === "unverified-draft";
+    var box = el("div", { "class": "slot" + (approved ? " filled" : "") + (draft ? " draft" : ""), "data-slot": id, "data-state": String(slot.state).slice(0, 24) });
+    var tag = typeof slot.tag === "string" && slot.tag ? slot.tag : (approved ? "Approved text, signature verified" : "Pending a decision");
+    box.appendChild(el("span", { "class": "slot-tag", text: tag }));
+    var t = el("span", { "class": "slot-text", text: slot.text });
+    if (approved) { t.setAttribute("lang", "en"); }
     box.appendChild(t);
-    box.appendChild(el("small", { text: "Slot " + id + (filled ? "." : ". Pending a decision.") }));
+    box.appendChild(el("small", { text: "Slot " + id + "." }));
     return box;
   }
 

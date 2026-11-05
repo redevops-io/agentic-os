@@ -1,4 +1,4 @@
-# PROPOSED code-owners entries (a draft for the owner; NOT active). GitHub reads .github/CODEOWNERS only; installing this
+# PROPOSED code-owners entries (a draft for the owner; NOT active: it has no effect while it sits here). GitHub reads .github/CODEOWNERS only; installing this
 # is the owner's call. Replace the placeholder with the owner's login (or a team) first.
 #
 # Why: a DECIDED entry in the gate file, its record and the approved texts are plain repository data. The hash match in the gate

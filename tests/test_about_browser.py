@@ -20,7 +20,7 @@ AXE = os.environ.get("RDO_AXE_JS", "")
 if os.environ.get("RDO_BROWSER_TESTS") == "1" and not (AXE and Path(AXE).is_file()):
     pytestmark = pytest.mark.skip(reason="set RDO_AXE_JS to the path of axe.min.js")
 
-from .about_fixture import make_notices, make_root, run_generate, stage_folder  # noqa: E402
+from .about_fixture import Signer, decide, make_notices, make_root, run_generate, stage_folder, trust  # noqa: E402
 
 AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa", "best-practice"]
 
@@ -261,3 +261,56 @@ def test_viewer_works_under_the_real_csp(browser, srv, folder):
     assert "checked in this page" in page.inner_text("#v-meta")
     assert errors == [], errors          # no "Refused to ..." CSP violation, no console error
     ctx.close()
+
+
+def _server_with_decided_slot(tmp_path_factory, name, signed):
+    tmp = tmp_path_factory.mktemp(name)
+    os.environ.pop("REDEVOPS_DISTRIBUTION_BUILD", None)
+    root, notices = make_root(tmp), make_notices(tmp)
+    decide(root, ["D-LIC-10"])
+    signer = None
+    if signed:
+        signer = Signer(tmp)
+        trust(root, signer)
+    assert run_generate(root, notices) == 0
+    lic = stage_folder(root, notices, tmp / "Licenses")
+    if signer:
+        signer.cleanup()
+    return Server(lic, None)
+
+
+def test_unverified_text_is_tagged_as_a_draft_and_never_looks_approved(browser, tmp_path_factory):
+    """R2-01: DECIDED but unsigned text (the review's FORGED TEXT scenario) is shown only as a labelled draft, in every build mode."""
+    s = _server_with_decided_slot(tmp_path_factory, "draft", signed=False)
+    try:
+        ctx, page, errors, _ = open_page(browser, s.base, bypass_csp=True)
+        ready(page)
+        block = page.locator('[data-slot="LEGAL.NO_WARRANTY"]')
+        assert block.get_attribute("data-state") == "unverified-draft"
+        assert "Unverified draft, not an approved text" in block.locator(".slot-tag").inner_text()
+        text = block.locator(".slot-text").inner_text()
+        assert text.startswith("Unverified draft, not an approved text.") and "SYNTHETIC TEST TEXT" in text
+        assert "draft" in (block.get_attribute("class") or "") and "filled" not in (block.get_attribute("class") or "")
+        assert page.locator(".slot.filled").count() == 0
+        assert axe(page) == []
+        assert errors == [], errors
+        ctx.close()
+    finally:
+        s.stop()
+
+
+def test_signed_text_is_tagged_approved_verified(browser, tmp_path_factory):
+    s = _server_with_decided_slot(tmp_path_factory, "approved", signed=True)
+    try:
+        ctx, page, errors, _ = open_page(browser, s.base, bypass_csp=True)
+        ready(page)
+        block = page.locator('[data-slot="LEGAL.NO_WARRANTY"]')
+        assert block.get_attribute("data-state") == "approved-verified"
+        assert block.locator(".slot-tag").inner_text() == "Approved text, signature verified"
+        assert "filled" in (block.get_attribute("class") or "")
+        assert block.locator(".slot-text").inner_text().startswith("SYNTHETIC TEST TEXT")
+        assert page.locator('[data-slot="LEGAL.COPYRIGHT_LINE"] .slot-tag').inner_text() == "Pending a decision"
+        assert axe(page) == []
+        ctx.close()
+    finally:
+        s.stop()

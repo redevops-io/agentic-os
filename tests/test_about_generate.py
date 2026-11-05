@@ -126,7 +126,7 @@ def test_source_facts_come_from_git_not_from_the_clock(env):
 
 # ------------------------------------------------------------------------------------------- generator: slot matrix
 def _all_placeholders(doc):
-    return all(s["state"] == "placeholder" for s in doc["legal"]["slots"].values())
+    return all(s["state"] == "pending" for s in doc["legal"]["slots"].values())
 
 
 def test_private_build_with_every_decision_open_has_neutral_placeholders(env):
@@ -153,7 +153,7 @@ def test_open_decision_never_opens_the_text_file(env):
             d["slot_texts"] = {"LEGAL.NO_WARRANTY": {"file": "docs/legal/approved/draft.en.txt", "sha256": "0" * 64}}
     reads = []
     slots, errs, refusals = gate.resolve_about_slots(doc["decisions"], root, False, read=lambda p: reads.append(p) or b"x")
-    assert reads == [] and errs == [] and slots["LEGAL.NO_WARRANTY"]["state"] == "placeholder"
+    assert reads == [] and errs == [] and slots["LEGAL.NO_WARRANTY"]["state"] == "pending"
     # the gate validator refuses that file outright (an OPEN entry carries no slot_texts)
     assert any("OPEN but carries" in e for e in gate.validate(doc["decisions"], root))
 
@@ -167,7 +167,8 @@ def test_decided_slot_with_a_matching_approved_text_is_filled(env, slot, dist, s
     assert run_generate(root, notices, distribution=dist) == 0
     doc = _record(notices)
     s = doc["legal"]["slots"][slot]
-    assert s["state"] == "filled" and s["pending"] == [] and s["text"] == SYNTH.format(slot=slot)
+    assert s["state"] == "approved-verified" and s["pending"] == [] and s["text"] == SYNTH.format(slot=slot)
+    assert s["tag"] == "Approved text, signature verified"
     assert s["text_sha256"] == hashlib.sha256(s["text"].encode()).hexdigest()
     assert doc["build"]["mode"] == ("distribution" if dist else "private-candidate")
     assert doc["source_access"] == {"state": "offer-recorded"}
@@ -199,8 +200,8 @@ def test_distribution_build_with_an_open_slot_fails_with_exit_3_and_writes_nothi
     # the same inputs are fine for a private candidate (placeholder for that slot only)
     assert run_generate(root, notices) == 0
     doc = _record(notices)
-    assert doc["legal"]["slots"][slot]["state"] == "placeholder"
-    assert sum(s["state"] == "placeholder" for s in doc["legal"]["slots"].values()) == sum(
+    assert doc["legal"]["slots"][slot]["state"] == "pending"
+    assert sum(s["state"] == "pending" for s in doc["legal"]["slots"].values()) == sum(
         1 for ids in SLOTS.values() if set(ids) & set(open_ids))
 
 
@@ -210,10 +211,10 @@ def test_partly_decided_multi_decision_slot_stays_a_placeholder_naming_only_the_
     reads = []
     doc = read_gate(root)
     slots, errs, refusals = gate.resolve_about_slots(doc["decisions"], root, True, read=lambda p: reads.append(p) or p.read_bytes())
-    assert errs == [] and slots["LEGAL.LICENCE_STATEMENT"]["state"] == "placeholder"
+    assert errs == [] and slots["LEGAL.LICENCE_STATEMENT"]["state"] == "pending"
     assert slots["LEGAL.LICENCE_STATEMENT"]["pending"] == ["D-LIC-15"] and "D-LIC-15" in slots["LEGAL.LICENCE_STATEMENT"]["text"]
     assert "D-LIC-1," not in slots["LEGAL.LICENCE_STATEMENT"]["text"] and "D-LIC-1." not in slots["LEGAL.LICENCE_STATEMENT"]["text"]
-    assert slots["LEGAL.COPYRIGHT_LINE"]["state"] == "filled"
+    assert slots["LEGAL.COPYRIGHT_LINE"]["state"] == "unverified-draft"      # decided, but nothing is signed here
     assert all("licence_statement" not in str(p).lower() for p in reads)      # the partly decided slot's file is not read
     assert any("LEGAL.LICENCE_STATEMENT" in r for r in refusals)
 
@@ -224,7 +225,7 @@ def test_section13_may_be_recorded_as_not_applicable_and_is_then_not_rendered(en
     trust(root, signer)
     assert run_generate(root, notices, distribution=True) == 0
     s = _record(notices)["legal"]["slots"]["LEGAL.SECTION13_NOTICE"]
-    assert s == {"state": "not-applicable", "decisions": ["D-LIC-5"], "pending": [], "text": ""}
+    assert s == {"state": "not-applicable", "tag": "", "decisions": ["D-LIC-5"], "pending": [], "text": ""}
     # only the omittable slot may be recorded that way
     doc = read_gate(root)
     for d in doc["decisions"]:
@@ -386,8 +387,12 @@ def _mut(doc, fn):
     ("placeholder without private-candidate wording", lambda d: d["legal"]["slots"]["LEGAL.NO_WARRANTY"].update(
         text="Legal text pending decision D-LIC-10.")),
     ("placeholder in a distribution record", lambda d: d["build"].update(mode="distribution")),
-    ("filled slot with bad text hash", lambda d: d["legal"]["slots"]["LEGAL.NO_WARRANTY"].update(
-        state="filled", pending=[], text="x", text_sha256="0" * 64)),
+    ("approved slot with bad text hash", lambda d: d["legal"]["slots"]["LEGAL.NO_WARRANTY"].update(
+        state="approved-verified", tag="Approved text, signature verified", pending=[], text="x", text_sha256="0" * 64)),
+    ("draft without its label", lambda d: d["legal"]["slots"]["LEGAL.NO_WARRANTY"].update(
+        state="unverified-draft", tag="Unverified draft, not an approved text", pending=[], text="x", text_sha256=hashlib.sha256(b"x").hexdigest())),
+    ("wrong tag", lambda d: d["legal"]["slots"]["LEGAL.NO_WARRANTY"].update(tag="Approved text, signature verified")),
+    ("old state name", lambda d: d["legal"]["slots"]["LEGAL.NO_WARRANTY"].update(state="placeholder")),
     ("non-omittable slot not-applicable", lambda d: d["legal"]["slots"]["LEGAL.NO_WARRANTY"].update(
         state="not-applicable", pending=[], text="")),
     ("source access without offer", lambda d: d["source_access"].update(state="offer-recorded")),

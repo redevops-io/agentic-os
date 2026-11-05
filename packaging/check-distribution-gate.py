@@ -25,13 +25,32 @@ SIGNATURES (distribution builds). For every DECIDED decision that blocks distrib
 legal slot lists) the record named by decision_reference must have a detached OpenSSH signature `<record>.sig`, and every approved slot
 text `<file>.sig`: an SSHSIG in the namespace `redevops-legal-decision@v1`, verified with `ssh-keygen -Y verify` against
 packaging/legal-allowed-signers (public keys only, written by the owner; it ships EMPTY, so with no signer every DECIDED entry fails
-a distribution build, on purpose, until the owner adds a key). A private build only prints a WARNING for a DECIDED entry whose
-signature does not verify. This script never creates or handles a private key. A CODEOWNERS draft is docs/legal/CODEOWNERS.proposed.
+a distribution build, on purpose, until the owner adds a key). A signature proves which key signed the exact bytes and nothing else.
 
-About / legal slots (RC3): the About page of the application carries five legal slots (ABOUT_SLOTS below). A slot is FILLED
-only when EVERY decision it lists is DECIDED here (with its written record, whose hash matches) AND the primary decision (the first one
-listed) carries a `slot_texts` entry naming an approved text file of the repository and the sha256 of that file, and the file
-matches. `slot_texts` is an object on a DECIDED entry:
+THE SIGNED RECORD BINDS MEANING (R2-01). A decision record starts with a machine-readable header, up to the first empty line:
+
+    redevops-legal-decision: 1
+    decision: <decision id>
+    option: <chosen option key>
+    slot: <slot id> sha256 <64 hex of the approved text>        (one line per slot the decision authorizes; or "slot: <id> not-applicable")
+
+The gate parses these fields from the VERIFIED bytes and compares them with the gate entry (id, chosen_option, the slot set and the hash of each
+slot text), so one signed record or text cannot be re-used for another decision, option or slot, and a text signed alone (without a record
+line naming its slot and hash) is not enough.
+
+THE SIGNER LIST IS PINNED, NOT AUTHENTICATED (R2-01). The gate file's `legal_signer_fingerprints` (SHA256 fingerprints, ships EMPTY) must name
+exactly the keys of packaging/legal-allowed-signers, no more and no fewer, or no signature verifies. BOTH files are repository data: the
+pairing makes a one-sided change (a key added to the signers file alone) fail, it does not stop a repository writer who edits both. Before any
+distribution build the owner confirms the fingerprints against an independent channel (their published key page): a procedure step, not a code
+guarantee. This script never creates, chooses or handles a key. A private build only prints a WARNING for a DECIDED entry whose signature or
+binding does not verify. docs/legal/CODEOWNERS.proposed is a draft, inactive until the owner installs it.
+
+About / legal slots (RC3): the About page of the application carries five legal slots (ABOUT_SLOTS below). A slot becomes
+"approved-verified" (the only state that shows a text as an approved text) only when EVERY decision it lists is DECIDED here (with its written
+record, whose hash matches) AND the primary decision (the first one listed) carries a `slot_texts` entry naming an approved text file of
+the repository and the sha256 of that file, the file matches, AND the signatures and the signed record headers verify (above). A DECIDED slot
+that does not verify is an "unverified-draft": its text is shown only with a label inside it ("Unverified draft, not an approved text.")
+in EVERY build mode; an OPEN slot is "pending" (the neutral placeholder); an omitted slot is "not-applicable". `slot_texts` is an object on a DECIDED entry:
 
     "slot_texts": {"LEGAL.NO_WARRANTY": {"file": "docs/legal/approved/no-warranty.en.txt", "sha256": "<64 hex>"}}
 
@@ -51,15 +70,18 @@ counsel_reference when 'decides' includes counsel. Standard library only, Python
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime
 import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -87,6 +109,14 @@ SLOT_TEXT_RE = re.compile(r"^docs/legal/approved/[A-Za-z0-9._-]+\.txt$")
 SLOT_TEXT_MAX_BYTES = 16384
 PLACEHOLDER = ("Legal text pending decision {ids}. This is a private candidate; nothing here is a legal statement "
                "or clearance.")
+# States of a slot in the About record. approved-verified is the ONLY state that shows a text as an approved text; a text that is not
+# backed by verified signatures is never shown as ordinary legal text (unverified-draft carries this label inside the text itself).
+TAGS = {"pending": "Pending a decision", "approved-verified": "Approved text, signature verified",
+        "unverified-draft": "Unverified draft, not an approved text", "not-applicable": ""}
+DRAFT_PREFIX = ("Unverified draft, not an approved text. This is a private candidate; nothing here is a legal statement or "
+                "clearance.\n\n")
+RECORD_VERSION = "1"
+FP_RE = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
 
 
 def is_distribution(flag: bool, env=None) -> bool:
@@ -96,7 +126,9 @@ def is_distribution(flag: bool, env=None) -> bool:
     return flag or str(env.get("REDEVOPS_DISTRIBUTION_BUILD", "")) not in ("", "0")
 
 
-def load(path: Path) -> list[dict]:
+def load_doc(path: Path) -> dict:
+    """The gate file as a dict (schema 1, a non-empty decisions list, a valid legal_signer_fingerprints list). A malformed file prints
+    `GATE FILE PROBLEM` and exits 2."""
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
@@ -105,7 +137,15 @@ def load(path: Path) -> list[dict]:
     if not isinstance(doc, dict) or doc.get("schema") != 1 or not isinstance(doc.get("decisions"), list) or not doc["decisions"]:
         print(f"GATE FILE PROBLEM: gate file {path}: schema 1 with a non-empty 'decisions' list expected", file=sys.stderr)
         raise SystemExit(2)
-    return doc["decisions"]
+    fps = doc.get("legal_signer_fingerprints", [])
+    if not isinstance(fps, list) or any(not isinstance(f, str) or not FP_RE.match(f) for f in fps) or len(set(fps)) != len(fps):
+        print("GATE FILE PROBLEM: legal_signer_fingerprints must be a list of distinct SHA256:<43 base64> fingerprints", file=sys.stderr)
+        raise SystemExit(2)
+    return doc
+
+
+def load(path: Path) -> list[dict]:
+    return load_doc(path)["decisions"]
 
 
 def validate(decisions: list[dict], root: Path = ROOT) -> list[str]:
@@ -194,6 +234,28 @@ def unsafe_repo_file(root: Path, rel: str) -> str:
     return ""
 
 
+def read_repo_file(root: Path, rel: str, cap: int = 1 << 20) -> bytes:
+    """Bytes of a regular file of the repository, opened WITHOUT following a symlink (O_NOFOLLOW) and checked with fstat on the open
+    handle, after every path component was lstat-ed. Raises OSError otherwise (also above `cap` bytes)."""
+    why = unsafe_repo_file(root, rel)
+    if why:
+        raise OSError(why)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
+    fd = os.open(os.path.join(str(root), rel), flags)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("not a regular file")
+        with os.fdopen(fd, "rb") as fh:
+            fd = -1
+            data = fh.read(cap + 1)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    if len(data) > cap:
+        raise OSError("file too large")
+    return data
+
+
 def _decided_problems(d: dict, keys: list, root: Path) -> list[str]:
     i, errs = d["id"], []
     if d.get("chosen_option") not in keys:
@@ -210,12 +272,13 @@ def _decided_problems(d: dict, keys: list, root: Path) -> list[str]:
         if not ref or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", ref) or Path(ref).is_absolute() or ".." in Path(ref).parts:
             errs.append(f"{i}: decision_reference must be a relative path of a file in the repository, not {ref!r}")
         else:
-            p = root / ref
-            why = unsafe_repo_file(root, ref)
-            if why:
-                errs.append(f"{i}: decision_reference {ref!r} is not a regular file of the repository ({why})")
-            elif hashlib.sha256(p.read_bytes()).hexdigest() != h:
-                errs.append(f"{i}: decision_sha256 does not match {ref} (the hash proves consistency with the file, not who decided)")
+            try:
+                raw_rec = read_repo_file(root, ref)
+            except OSError as e:
+                errs.append(f"{i}: decision_reference {ref!r} is not a regular file of the repository ({e})")
+            else:
+                if hashlib.sha256(raw_rec).hexdigest() != h:
+                    errs.append(f"{i}: decision_sha256 does not match {ref} (the hash proves consistency with the file, not who decided)")
     if not str(d.get("decided_by") or "").strip():
         errs.append(f"{i}: DECIDED without decided_by")
     try:
@@ -241,19 +304,242 @@ def open_blockers(decisions: list[dict], platform: str, root: Path = ROOT) -> li
     return out
 
 
-def resolve_about_slots(decisions: list[dict], root: Path = ROOT, distribution: bool = False,
-                        read=None) -> tuple[dict, list[str], list[str]]:
+# ------------------------------------------------------------------------------------------------ signed record format
+_HDR_LINE = re.compile(r"^([a-z-]+): (.+)$")
+_SLOT_LINE = re.compile(r"^(LEGAL\.[A-Z0-9_]+) (?:sha256 ([0-9a-f]{64})|(not-applicable))$")
+
+
+def parse_decision_record(raw: bytes) -> tuple[dict, list[str]]:
+    """The machine-readable header of a decision record: the first lines up to the first empty line, exactly
+
+        redevops-legal-decision: 1
+        decision: <decision id>
+        option: <chosen option key>
+        slot: <slot id> sha256 <64 hex>        (zero or more; the slot ids the decision authorizes, with the sha256 of each text)
+        slot: <slot id> not-applicable
+
+    Free text may follow after an empty line. Returns ({"version","decision","option","slots": {slot: sha|"not-applicable"}}, problems)."""
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return {}, ["the record is not UTF-8"]
+    head = []
+    for ln in text.split("\n"):
+        if ln == "":
+            break
+        head.append(ln)
+    out: dict = {"slots": {}}
+    probs: list[str] = []
+    if not head or head[0] != f"redevops-legal-decision: {RECORD_VERSION}":
+        return {}, [f"the record does not start with the header line 'redevops-legal-decision: {RECORD_VERSION}'"]
+    for ln in head[1:]:
+        m = _HDR_LINE.match(ln)
+        if not m:
+            probs.append(f"header line is not 'key: value': {ln[:40]!r}")
+            continue
+        k, v = m.group(1), m.group(2).strip()
+        if k == "slot":
+            sm = _SLOT_LINE.match(v)
+            if not sm:
+                probs.append(f"malformed slot line: {v[:60]!r}")
+            elif sm.group(1) in out["slots"]:
+                probs.append(f"slot {sm.group(1)} listed twice")
+            else:
+                out["slots"][sm.group(1)] = sm.group(2) or "not-applicable"
+        elif k in ("decision", "option"):
+            if k in out:
+                probs.append(f"{k} given twice")
+            out[k] = v
+        else:
+            probs.append(f"unknown header key {k!r}")
+    for k in ("decision", "option"):
+        if k not in out:
+            probs.append(f"header lacks '{k}:'")
+    return out, probs
+
+
+def binding_problems(d: dict, hdr: dict) -> list[str]:
+    """Compare what the SIGNED record says with the gate entry: decision id, chosen option and the slots (with the sha256 of each text)
+    it authorizes. One signed record can therefore not stand for another decision, another option or another slot."""
+    i, errs = d.get("id"), []
+    if hdr.get("decision") != i:
+        errs.append(f"{i}: the signed record is for decision {hdr.get('decision')!r}, not {i!r}")
+    if hdr.get("option") != d.get("chosen_option"):
+        errs.append(f"{i}: the signed record names option {hdr.get('option')!r}, the gate entry {d.get('chosen_option')!r}")
+    want = {}
+    for slot, v in (d.get("slot_texts") or {}).items():
+        want[slot] = "not-applicable" if isinstance(v, dict) and v.get("not_applicable") is True else (v or {}).get("sha256")
+    have = hdr.get("slots", {})
+    if have != want:
+        extra, missing = sorted(set(have) - set(want)), sorted(set(want) - set(have))
+        diff = sorted(k for k in set(have) & set(want) if have[k] != want[k])
+        errs.append(f"{i}: the signed record authorizes different slots than the gate entry names "
+                    f"(only in the record: {extra}; only in the gate entry: {missing}; text hash differs: {diff})")
+    return errs
+
+
+# ------------------------------------------------------------------------------------------------ signer list
+_KEYTYPE = re.compile(r"^(ssh-ed25519|ssh-rsa|ssh-dss|ecdsa-sha2-nistp(?:256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)$")
+
+
+def allowed_signer_fingerprints(path: Path) -> tuple[list[str], list[str]]:
+    """The SHA256 fingerprints (ssh-keygen -l style) of the keys listed in an allowed-signers file, and parse problems."""
+    fps: list[str] = []
+    probs: list[str] = []
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return [], [f"allowed-signers file {path} is unreadable"]
+    for n, ln in enumerate(lines, 1):
+        if not ln.strip() or ln.lstrip().startswith("#"):
+            continue
+        try:
+            toks = shlex.split(ln)
+        except ValueError:
+            probs.append(f"legal-allowed-signers line {n} cannot be parsed")
+            continue
+        idx = next((k for k, t in enumerate(toks) if _KEYTYPE.match(t) and k + 1 < len(toks)), -1)
+        if idx < 0 or "cert-authority" in ln:
+            probs.append(f"legal-allowed-signers line {n} is not a plain 'principal [options] key-type base64-key' line")
+            continue
+        try:
+            blob = base64.b64decode(toks[idx + 1], validate=True)
+        except ValueError:
+            probs.append(f"legal-allowed-signers line {n} holds an invalid key")
+            continue
+        fps.append("SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("="))
+    return fps, probs
+
+
+def anchor_problems(allowed_signers: Path, signers) -> list[str]:
+    """packaging/legal-allowed-signers and the gate file's legal_signer_fingerprints must list exactly the same keys (both are
+    repository data: the owner confirms the fingerprints against an independent channel before a distribution build)."""
+    fps, probs = allowed_signer_fingerprints(allowed_signers)
+    out = list(probs)
+    for f in fps:
+        if f not in signers:
+            out.append(f"the key {f} in legal-allowed-signers is not listed in legal_signer_fingerprints of the gate file")
+    for f in signers:
+        if f not in fps:
+            out.append(f"the fingerprint {f} in legal_signer_fingerprints has no key in legal-allowed-signers")
+    return out
+
+
+def _ssh_keygen() -> str:
+    return shutil.which("ssh-keygen", path="/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin") or ""
+
+
+def verify_sshsig_bytes(root: Path, rel: str, allowed_signers: Path, signers=()) -> tuple[bytes, str]:
+    """(bytes, "") when `<rel>.sig` is a valid SSHSIG (namespace redevops-legal-decision@v1) over the bytes of `rel` made by a key listed
+    in `allowed_signers` (whose keys must equal the gate file's legal_signer_fingerprints); otherwise (b"", reason). Both files are read
+    without following symlinks; the signature is handed to ssh-keygen as a private copy. Nothing is signed and no private key is read."""
+    anchor = anchor_problems(allowed_signers, signers)
+    if anchor:
+        return b"", anchor[0]
+    try:
+        listed = [ln for ln in Path(allowed_signers).read_text(encoding="utf-8").splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    except OSError:
+        return b"", f"allowed-signers file {allowed_signers} is unreadable"
+    if not listed:
+        return b"", "packaging/legal-allowed-signers lists no signer (the owner has not supplied a public key yet), so no signature can verify"
+    try:
+        data = read_repo_file(root, rel)
+        sigbytes = read_repo_file(root, rel + ".sig", 1 << 16)
+    except OSError as e:
+        return b"", f"{rel}: {e}"
+    kg = _ssh_keygen()
+    if not kg:
+        return b"", "ssh-keygen not found (needed to verify the detached signature)"
+    env = {"PATH": "/usr/bin:/bin"}
+    try:
+        with tempfile.TemporaryDirectory(prefix="legal-sig-") as td:
+            sig = Path(td) / "record.sig"
+            sig.write_bytes(sigbytes)
+            fp = subprocess.run([kg, "-Y", "find-principals", "-s", str(sig), "-f", str(allowed_signers)], capture_output=True, timeout=30, env=env)
+            principals = [x.strip() for x in fp.stdout.decode("utf-8", "replace").splitlines() if x.strip()] if fp.returncode == 0 else []
+            for who in principals:
+                vr = subprocess.run([kg, "-Y", "verify", "-f", str(allowed_signers), "-I", who, "-n", SIG_NAMESPACE, "-s", str(sig)],
+                                    input=data, capture_output=True, timeout=30, env=env)
+                if vr.returncode == 0:
+                    return data, ""
+    except (OSError, subprocess.SubprocessError) as e:
+        return b"", f"ssh-keygen failed: {e.__class__.__name__}"
+    return b"", (f"{rel}.sig is not a valid {SIG_NAMESPACE} signature of {rel} by a listed signer "
+                 "(missing, tampered, wrong namespace or unknown key)")
+
+
+def verify_sshsig(root: Path, rel: str, allowed_signers: Path, signers=()) -> str:
+    return verify_sshsig_bytes(root, rel, allowed_signers, signers)[1]
+
+
+def _record_problems(d: dict, root: Path, allowed: Path, signers, cache: dict) -> list[str]:
+    """Signature and content binding of the decision record of a DECIDED entry (cached per record)."""
+    ref = str(d.get("decision_reference") or "")
+    key = ("rec", d.get("id"), ref)
+    if key not in cache:
+        data, why = verify_sshsig_bytes(root, ref, allowed, signers)
+        if why:
+            cache[key] = [f"{d.get('id')} record: {why}"]
+        else:
+            hdr, probs = parse_decision_record(data)
+            cache[key] = [f"{d.get('id')} record: {p}" for p in probs] if probs else binding_problems(d, hdr)
+    return cache[key]
+
+
+def _text_problems(rel: str, label: str, root: Path, allowed: Path, signers, cache: dict) -> list[str]:
+    key = ("txt", rel)
+    if key not in cache:
+        why = verify_sshsig_bytes(root, rel, allowed, signers)[1]
+        cache[key] = [f"{label} text: {why}"] if why else []
+    return cache[key]
+
+
+def signature_problems(decisions: list[dict], root: Path = ROOT, allowed_signers: Path = DEFAULT_ALLOWED_SIGNERS,
+                       platform: str = "all", signers=()) -> list[str]:
+    """Signature and binding problems of every DECIDED decision that blocks distribution on `platform`, of every DECIDED decision a legal
+    slot lists and of every approved slot text. A distribution build refuses on any; a private build prints them as warnings."""
+    slot_ids = {i for spec in ABOUT_SLOTS.values() for i in spec["decisions"]}
+    anchor = anchor_problems(allowed_signers, signers)
+    if anchor and any(d.get("status") == "DECIDED" for d in decisions):
+        return [f"signer list: {m}" for m in anchor]            # reported once, not once per record
+    cache: dict = {}
+    out: list[str] = []
+    texts: dict[str, str] = {}
+    for d in decisions:
+        if d.get("status") != "DECIDED":
+            continue
+        if d in applicable(decisions, platform) or d.get("id") in slot_ids:
+            out += _record_problems(d, root, allowed_signers, signers, cache)
+        for slot, v in (d.get("slot_texts") or {}).items():
+            if isinstance(v, dict) and isinstance(v.get("file"), str):
+                texts.setdefault(v["file"], slot)
+    for rel, slot in sorted(texts.items()):
+        out += _text_problems(rel, slot, root, allowed_signers, signers, cache)
+    return list(dict.fromkeys(out))
+
+
+# ------------------------------------------------------------------------------------------------ About slots
+def resolve_about_slots(decisions: list[dict], root: Path = ROOT, distribution: bool = False, read=None,
+                        allowed_signers: Path = DEFAULT_ALLOWED_SIGNERS, signers=()) -> tuple[dict, list[str], list[str]]:
     """Resolve the About slots. Returns (slots, errors, refusals).
 
-    slots: slot id -> {"state": "placeholder"|"filled"|"not-applicable", "decisions": [...], "pending": [...], "text": str,
-    "text_sha256": hex (filled only)}. errors apply in EVERY build mode (a decision without its text, a text that does not match
-    its hash, a decision missing from the gate file, a DECIDED entry that is incomplete). refusals apply to a DISTRIBUTION build
-    only (a slot that is still a placeholder). The text file of a slot is read ONLY when every decision it lists is DECIDED."""
-    read = read or (lambda p: Path(p).read_bytes())
+    slots: slot id -> {"state": pending|approved-verified|unverified-draft|not-applicable, "tag": fixed label, "decisions": [...],
+    "pending": [...], "text": the FINAL display text (every renderer shows it verbatim), "text_sha256": hex (the sha256 of the approved
+    text file; approved-verified and unverified-draft only)}.
+      pending           some listed decision is OPEN: the neutral placeholder; the text file is never opened.
+      approved-verified every listed decision is DECIDED, the text file matches its recorded sha256 AND the signatures of the records and
+                        the text verify against the signer list (which equals the gate file's legal_signer_fingerprints) AND each signed
+                        record names this decision, option, slot and text hash.
+      unverified-draft  all DECIDED and the text file matches, but a signature or binding does not verify: the text is shown ONLY with the
+                        label DRAFT_PREFIX inside it (never as ordinary legal text), in every build mode.
+    errors apply in EVERY build mode (a decision without its text, a text that does not match its hash, a symlink, a decision missing from
+    the gate file, a DECIDED entry that is incomplete). refusals apply to a DISTRIBUTION build only (a slot that is not approved-verified)."""
+    read = read or (lambda p: read_repo_file(root, Path(p).relative_to(root).as_posix()))
     by_id = {d.get("id"): d for d in decisions}
     slots: dict = {}
     errors: list[str] = []
     refusals: list[str] = []
+    cache: dict = {}
     for slot, spec in ABOUT_SLOTS.items():
         ids = list(spec["decisions"])
         pending, broken = [], False
@@ -274,9 +560,13 @@ def resolve_about_slots(decisions: list[dict], root: Path = ROOT, distribution: 
                     broken = True
         if broken:
             continue
+
+        def placeholder(pend):
+            slots[slot] = {"state": "pending", "tag": TAGS["pending"], "decisions": ids, "pending": pend,
+                           "text": PLACEHOLDER.format(ids=", ".join(pend))}
+
         if pending:                                   # OPEN: placeholder; no text file is ever opened
-            slots[slot] = {"state": "placeholder", "decisions": ids, "pending": pending,
-                           "text": PLACEHOLDER.format(ids=", ".join(pending))}
+            placeholder(pending)
             if distribution:
                 refusals.append(f"{slot}: decision(s) {', '.join(pending)} OPEN")
             continue
@@ -284,8 +574,14 @@ def resolve_about_slots(decisions: list[dict], root: Path = ROOT, distribution: 
         if entry is None:
             errors.append(f"{slot}: {', '.join(ids)} DECIDED but {ids[0]} has no slot_texts entry for it")
             continue
+        verify = [f"{slot}: {m}" for i in ids for m in _record_problems(by_id[i], root, allowed_signers, signers, cache)]
         if entry.get("not_applicable") is True and spec["omittable"]:
-            slots[slot] = {"state": "not-applicable", "decisions": ids, "pending": [], "text": ""}
+            if verify:                                # an unverified "no statement" does not hide the slot
+                placeholder(ids)
+                if distribution:
+                    refusals.append(verify[0])
+            else:
+                slots[slot] = {"state": "not-applicable", "tag": TAGS["not-applicable"], "decisions": ids, "pending": [], "text": ""}
             continue
         rel, want = entry.get("file", ""), entry.get("sha256", "")
         if not isinstance(rel, str) or not SLOT_TEXT_RE.match(rel) or not re.fullmatch(r"[0-9a-f]{64}", str(want)):
@@ -314,69 +610,16 @@ def resolve_about_slots(decisions: list[dict], root: Path = ROOT, distribution: 
         if any(ord(c) < 32 and c not in "\n\t" for c in text) or "\r" in text:
             errors.append(f"{slot}: approved text file {rel} holds control characters (LF line ends only)")
             continue
-        slots[slot] = {"state": "filled", "decisions": ids, "pending": [], "text": text, "text_sha256": want}
+        verify += [f"{slot}: {m}" for m in _text_problems(rel, slot, root, allowed_signers, signers, cache)]
+        if verify:
+            slots[slot] = {"state": "unverified-draft", "tag": TAGS["unverified-draft"], "decisions": ids, "pending": [],
+                           "text": DRAFT_PREFIX + text, "text_sha256": want}
+            if distribution:
+                refusals.append(f"{slot}: not an approved text ({verify[0]})")
+        else:
+            slots[slot] = {"state": "approved-verified", "tag": TAGS["approved-verified"], "decisions": ids, "pending": [],
+                           "text": text, "text_sha256": want}
     return slots, errors, refusals
-
-
-def _ssh_keygen() -> str:
-    return shutil.which("ssh-keygen", path="/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin") or ""
-
-
-def verify_sshsig(root: Path, rel: str, allowed_signers: Path) -> str:
-    """"" when `<rel>.sig` is a valid SSHSIG (namespace redevops-legal-decision@v1) over the bytes of `rel` made by a key listed in
-    `allowed_signers`; otherwise the reason. Both files must be regular files of the repository (no symlinks). Uses
-    `ssh-keygen -Y find-principals` and `-Y verify`; nothing is signed here and no private key is read."""
-    try:
-        listed = [ln for ln in Path(allowed_signers).read_text(encoding="utf-8").splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
-    except OSError:
-        return f"allowed-signers file {allowed_signers} is unreadable"
-    if not listed:
-        return "packaging/legal-allowed-signers lists no signer (the owner has not supplied a public key yet), so no signature can verify"
-    for name in (rel, rel + ".sig"):
-        why = unsafe_repo_file(root, name)
-        if why:
-            return f"{name}: {why}"
-    kg = _ssh_keygen()
-    if not kg:
-        return "ssh-keygen not found (needed to verify the detached signature)"
-    sig, data = str(Path(root) / (rel + ".sig")), (Path(root) / rel).read_bytes()
-    env = {"PATH": "/usr/bin:/bin"}
-    try:
-        fp = subprocess.run([kg, "-Y", "find-principals", "-s", sig, "-f", str(allowed_signers)], capture_output=True, timeout=30, env=env)
-        principals = [x.strip() for x in fp.stdout.decode("utf-8", "replace").splitlines() if x.strip()] if fp.returncode == 0 else []
-        for who in principals:
-            vr = subprocess.run([kg, "-Y", "verify", "-f", str(allowed_signers), "-I", who, "-n", SIG_NAMESPACE, "-s", sig],
-                                input=data, capture_output=True, timeout=30, env=env)
-            if vr.returncode == 0:
-                return ""
-    except (OSError, subprocess.SubprocessError) as e:
-        return f"ssh-keygen failed: {e.__class__.__name__}"
-    return (f"{rel}.sig is not a valid {SIG_NAMESPACE} signature of {rel} by a listed signer "
-            "(missing, tampered, wrong namespace or unknown key)")
-
-
-def signature_problems(decisions: list[dict], root: Path = ROOT, allowed_signers: Path = DEFAULT_ALLOWED_SIGNERS,
-                       platform: str = "all") -> list[str]:
-    """Signature problems of every DECIDED decision that blocks distribution on `platform`, of every DECIDED decision a legal slot lists
-    and of every approved slot text. A distribution build refuses on any; a private build prints them as warnings."""
-    slot_ids = {i for spec in ABOUT_SLOTS.values() for i in spec["decisions"]}
-    needed: dict[str, str] = {}                          # file -> label
-    for d in decisions:
-        if d.get("status") != "DECIDED":
-            continue
-        if d in applicable(decisions, platform) or d.get("id") in slot_ids:
-            ref = str(d.get("decision_reference") or "")
-            if ref:
-                needed.setdefault(ref, f"{d.get('id')} record")
-        for slot, v in (d.get("slot_texts") or {}).items():
-            if isinstance(v, dict) and isinstance(v.get("file"), str):
-                needed.setdefault(v["file"], f"{slot} text")
-    out = []
-    for rel, label in sorted(needed.items()):
-        why = verify_sshsig(root, rel, allowed_signers)
-        if why:
-            out.append(f"{label}: {why}")
-    return out
 
 
 def main(argv=None) -> int:
@@ -397,7 +640,9 @@ def main(argv=None) -> int:
     if (a.gate.resolve() != DEFAULT_GATE.resolve() or a.root.resolve() != ROOT.resolve()
             or a.allowed_signers.resolve() != DEFAULT_ALLOWED_SIGNERS.resolve()):
         print("NOTE: non-default --gate/--root: this result is NOT valid for signing or release decisions", file=sys.stderr)
-    decisions = load(a.gate)
+    doc = load_doc(a.gate)
+    decisions = doc["decisions"]
+    signers = doc.get("legal_signer_fingerprints", [])
     errs = validate(decisions, a.root)
     if errs:
         for e in errs:
@@ -406,17 +651,19 @@ def main(argv=None) -> int:
     dist = is_distribution(a.distribution)
     refusals: list[str] = []
     if a.about_slots:
-        slots, slot_errs, refusals = resolve_about_slots(decisions, a.root, dist)
+        slots, slot_errs, refusals = resolve_about_slots(decisions, a.root, dist, allowed_signers=a.allowed_signers, signers=signers)
         if slot_errs:
             for e in slot_errs:
                 print("ABOUT SLOT PROBLEM:", e, file=sys.stderr)
             return 2
-        print(f"about slots: {sum(1 for s in slots.values() if s['state'] == 'placeholder')} of {len(slots)} are placeholders")
+        counts = {st: sum(1 for x in slots.values() if x["state"] == st) for st in TAGS}
+        print(f"about slots: {counts['pending']} of {len(slots)} are placeholders (pending), {counts['approved-verified']} approved-verified, "
+              f"{counts['unverified-draft']} unverified-draft, {counts['not-applicable']} not-applicable")
     blockers = open_blockers(decisions, a.platform, a.root)
     total = len(applicable(decisions, a.platform))
     ids = ", ".join(d["id"] for d in blockers)
     if not dist:
-        for w in signature_problems(decisions, a.root, a.allowed_signers, a.platform):
+        for w in signature_problems(decisions, a.root, a.allowed_signers, a.platform, signers):
             print(f"WARNING: {w} (a distribution build would be refused)", file=sys.stderr)
         print(f"distribution gate (platform {a.platform}): PRIVATE CANDIDATE build, not a distribution; "
               f"{len(blockers)} of {total} distribution-blocking decisions are OPEN" + (f": {ids}" if blockers else ""))
@@ -431,11 +678,11 @@ def main(argv=None) -> int:
         return 1
     if refusals:
         print(f"distribution gate (platform {a.platform}): DISTRIBUTION BUILD REFUSED; {len(refusals)} About legal slot(s) "
-              "are not filled with an approved text:", file=sys.stderr)
+              "are not an approved, signature-verified text:", file=sys.stderr)
         for r in refusals:
             print(f"  - {r}", file=sys.stderr)
         return 1
-    sig = signature_problems(decisions, a.root, a.allowed_signers, a.platform)
+    sig = signature_problems(decisions, a.root, a.allowed_signers, a.platform, signers)
     if sig:
         print(f"distribution gate (platform {a.platform}): DISTRIBUTION BUILD REFUSED; {len(sig)} legal record(s) or text(s) have no "
               "valid detached signature (a hash match alone proves consistency, not who decided):", file=sys.stderr)
