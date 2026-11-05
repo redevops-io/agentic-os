@@ -24,6 +24,11 @@ and network isolation need OS namespaces — a `"strict"` backend (bubblewrap/ns
 into the same seam and adds bind-mounted paths + `--unshare-net`; remote execution
 additionally needs host attestation. This backend enforces what is enforceable rootless
 and refuses to *pretend* to do the rest.
+
+Platform support: Linux only. macOS refuses every finite memory rlimit (``RLIMIT_AS``/``DATA``/``RSS``
+fail with EINVAL), so the memory ceiling cannot be enforced there; the backend then FAILS CLOSED with
+:class:`ContainmentUnsupported` instead of running a capability without it (see
+:func:`membrane_supported`). It is never degraded to "the limits that work".
 """
 from __future__ import annotations
 
@@ -44,7 +49,9 @@ from runtime_contracts.models import (
     ExecutionEnvelope,
     ExecutionReceipt,
 )
-from .device_posture import DevicePosture, ExecutionClass, admit, PostureDenied
+from .device_posture import (
+    DevicePosture, ExecutionClass, PostureDenied, admit, containment_unsupported_reason,
+)
 
 # ── Envelope validation ────────────────────────────────────────────────────────
 
@@ -98,6 +105,17 @@ class EnvelopeGate:
 class ContainmentError(RuntimeError):
     """The contained process violated its constraint (killed on a resource ceiling, or
     the capability raised). Surfaces as a named refusal, never a silent pass."""
+
+
+class ContainmentUnsupported(ContainmentError):
+    """This platform has no containment backend (it cannot enforce the memory ceiling). The
+    capability was NOT started. Message form: ``containment_unsupported:<reason>``. Never degraded
+    to an uncontained or partially contained run: an owner who wants that must say so explicitly."""
+
+
+def membrane_supported() -> bool:
+    """True iff the rootless membrane can enforce all of its ceilings on this host (Linux)."""
+    return containment_unsupported_reason() == ""
 
 
 # Child entrypoint. Reads {capability, inputs} on stdin, imports "module:attr", runs it,
@@ -171,6 +189,9 @@ class LocalContainmentSandbox:
                 constraint = admit(self.posture, self.execution_class, constraint)
             except PostureDenied as e:
                 raise ContainmentError(str(e))
+        reason = containment_unsupported_reason()
+        if reason:      # fail closed BEFORE any process is created; never run without the ceilings
+            raise ContainmentUnsupported(f"containment_unsupported:{reason}")
         scrubbed = {k: os.environ[k] for k in self.env_passthrough if k in os.environ}
         scrubbed.setdefault("PATH", "/usr/bin:/bin")
         # Import paths are not secrets — preserve them so the capability resolves, while
@@ -189,6 +210,11 @@ class LocalContainmentSandbox:
                 )
             except subprocess.TimeoutExpired:
                 raise ContainmentError("duration_exceeded")
+            except subprocess.SubprocessError as exc:
+                # preexec_fn failed (a ceiling could not be applied): the child never reached exec,
+                # so the capability did not run. Fail closed with a named error; never swallow.
+                raise ContainmentError(
+                    f"containment_setup_failed: a resource ceiling could not be applied ({exc})")
         if proc.returncode != 0:
             # Non-zero: killed on a resource ceiling (OOM/CPU) or the capability raised.
             raise ContainmentError(
