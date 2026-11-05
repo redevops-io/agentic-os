@@ -160,6 +160,22 @@ def _in_viewport(box, size):
     return box is not None and box["x"] >= -0.5 and box["y"] >= -0.5 and box["x"] + box["width"] <= w + 0.5 and box["y"] + box["height"] <= h + 0.5
 
 
+# ---------------------------------------------------------------------------------------------- the bundle under test
+def test_the_server_serves_the_recorded_bundle_bytes(make_tab):
+    """What the browser downloads is the vendored, recorded bundle (not a stale copy or a rebuild)."""
+    import hashlib
+    import json
+    rec = json.loads((Path(__file__).resolve().parents[1] / "packaging" / "ui-bundle-source.json").read_text(encoding="utf-8"))
+    t = make_tab()
+    for rel, want in rec["files"].items():
+        if rel == "index.html":
+            continue
+        r = t.ctx.request.get(t.server["url"] + rel)
+        assert r.status == 200 and hashlib.sha256(r.body()).hexdigest() == want, rel
+    scripts = t.page.evaluate("() => [...document.scripts].map(s => s.src).filter(Boolean)")
+    assert any(s.endswith("/assets/" + [k for k in rec["files"] if k.endswith(".js")][0].split("/")[-1]) for s in scripts), scripts
+
+
 # ---------------------------------------------------------------------------------------------- UIA-01
 def test_uia01_sidekick_panel_shows_the_welcome_text_and_the_reply(make_tab):
     t = make_tab()
