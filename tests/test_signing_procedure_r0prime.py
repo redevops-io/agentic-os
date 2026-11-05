@@ -2840,3 +2840,130 @@ def test_r2_02_template_documents_scope_version_3_and_the_pins():
         assert t.count(k + "=") == 2, k                      # macOS and Windows blocks
     assert t.count("scope_version=3") == 2 and t.count("scope_version=2") == 1       # the SSHSIG manifest block is unchanged
     assert "source.commit" in t and "independent" in t
+
+
+# ====================================================================================================================
+# RC3 scope review S3-02: the ledger's one-use is keyed on the scope FILE and now also on the INPUT ARTIFACT
+# (packaging/signing/** edited on the RC3 branch only; the changed signing files need an independent review round before any RC3 signing)
+# ====================================================================================================================
+def _submits(mac) -> int:
+    return len([c for c in mac.calls("xcrun") if "submit" in c])
+
+
+def _rewritten_scope(mac, **over):
+    """The reviewer's reproducer: the SAME facts, a window that differs by a little (a different byte string, hence a different scope sha256)."""
+    now = datetime.now(timezone.utc)
+    return mac.scope(not_before=iso(now - timedelta(hours=2, seconds=3)), **over)
+
+
+def test_s3_02_a_rewritten_scope_for_the_same_dmg_cannot_notarize_twice(mac):
+    sc = mac.scope()
+    assert mac.real(sc).returncode == 0 and _submits(mac) == 1
+    sc2 = _rewritten_scope(mac)
+    assert sha_file(sc2) != sha_file(sc)
+    calls = len(mac.calls())
+    r = mac.real(sc2, out=mac.work / "out2")
+    assert r.returncode == 1 and "input artifact (dmg-" in r.stderr and "needs --allow-reuse" in r.stderr
+    assert not (mac.work / "out2").exists() and len(mac.calls()) == calls and _submits(mac) == 1, "no second notarytool call, no tool started"
+    # the refusal burned nothing new: the rewritten scope is still unused
+    assert sha_file(sc2) not in " ".join(ledger_claims(mac.ledger))
+    led = ledger_text(mac.ledger)
+    assert led.count("event=started") == 1 and f"artifact=dmg-{sha_file(mac.dmg)}" in led
+    assert f"dmg-{sha_file(mac.dmg)}" in ledger_claims(mac.ledger)
+
+
+def test_s3_02_allow_reuse_repeats_the_artifact_and_records_it(mac):
+    assert mac.real(mac.scope()).returncode == 0
+    sc2 = _rewritten_scope(mac)
+    r = mac.real(sc2, "--allow-reuse", out=mac.work / "out2")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert "this input artifact (dmg-" in r.stdout and "--allow-reuse" in r.stdout and _submits(mac) == 2
+    led = ledger_text(mac.ledger)
+    assert led.count("event=started") == 2 and "artifact_reuse=1" in led and "allow_reuse=1" in led
+
+
+def test_s3_02_a_failed_run_burns_the_artifact_claim_too(mac):
+    mac.conf(NOTARY_MODE="invalid")
+    assert mac.real(mac.scope()).returncode != 0
+    assert f"dmg-{sha_file(mac.dmg)}" in ledger_claims(mac.ledger)
+    mac.conf(NOTARY_MODE="ok")
+    r = mac.real(_rewritten_scope(mac), out=mac.work / "retry")
+    assert r.returncode == 1 and "already used by an earlier real run" in r.stderr and _submits(mac) == 1
+
+
+def test_s3_02_another_dmg_is_a_new_artifact(mac):
+    assert mac.real(mac.scope()).returncode == 0
+    other = mac.work / "input" / "other.dmg"
+    other.write_bytes(b"another stub dmg")
+    sc = mac.scope(input_dmg_sha256=sha_file(other))
+    r = mac.real(sc, input_dmg=other, out=mac.work / "out-other")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert len([c for c in ledger_claims(mac.ledger) if c.startswith("dmg-")]) == 2
+
+
+def test_s3_02_a_removed_artifact_claim_is_detected_by_the_chain(mac):
+    assert mac.real(mac.scope()).returncode == 0
+    (mac.ledger / "claims" / f"dmg-{sha_file(mac.dmg)}").rmdir()
+    r = mac.real(_rewritten_scope(mac), out=mac.work / "out2")
+    assert r.returncode == 1 and "artifact as started but its claim is missing" in r.stderr and _submits(mac) == 1
+
+
+def test_s3_02_artifact_keys_are_validated(tmp_path):
+    led = tmp_path / "ledger"
+    for bad in ("dmg-xyz", "../x", "dmg-" + "A" * 64, "win-other-" + "a" * 64, "x"):
+        r = lib(tmp_path, f'r0p_ledger_check "{led}" {S64} 0 "{bad}"')
+        assert r.returncode == 1 and "invalid artifact key" in r.stderr, bad
+    good = "dmg-" + "cd" * 32
+    assert lib(tmp_path, f'r0p_ledger_check "{led}" {S64} 0 "{good}"; r0p_ledger_claim "{led}" {S64} 0 real x "{good}"').returncode == 0
+    r = lib(tmp_path, f'r0p_ledger_check "{led}" {"ef" * 32} 0 "{good}"')
+    assert r.returncode == 1 and "already used by an earlier real run" in r.stderr
+    r = lib(tmp_path, f'r0p_ledger_claim "{led}" {"ef" * 32} 0 real x "{good}"')
+    assert r.returncode == 1 and "already claimed" in r.stderr and ledger_claims(led) == [good, S64] or ledger_claims(led) == sorted([good, S64])
+
+
+def test_s3_02_parallel_runs_of_one_artifact_with_different_scopes_exactly_one_wins(tmp_path):
+    led = tmp_path / "ledger"
+    art = "dmg-" + "12" * 32
+    procs = [subprocess.Popen(["/bin/bash", "-p", "-c", 'die() { echo "ERROR: $*" >&2; exit 1; }; set -euo pipefail; . "%s"; r0p_ledger_claim "%s" %s 0 real x %s' % (COMMON, led, f"{i:02x}" * 32, art)],
+                              env=clean_env(tmp_path), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for i in range(12)]
+    outs = [(p.communicate(timeout=60)[1], p.returncode) for p in procs]
+    assert sum(1 for _, rc in outs if rc == 0) == 1, outs
+    assert all("already claimed" in e for e, rc in outs if rc != 0)
+    assert ledger_text(led).count("event=started") == 1
+
+
+def test_s3_02_windows_a_rewritten_scope_for_the_same_inputs_is_refused(win):
+    p, h = win.inner("launcher")
+    sc = win.scope("inner", [(p, h)])
+    assert win.real("inner", [(p, h)], sc).returncode == 0
+    n = len(win.log.read_text().splitlines())
+    sc2 = win.scope("inner", [(p, h)], not_before=iso(datetime.now(timezone.utc) - timedelta(hours=2, seconds=3)))
+    r = win.real("inner", [(p, h)], sc2, outdir=win.tmp / "wout-2")
+    assert r.returncode == 2 and "input artifact (win-inner-" in r.stderr and len(win.log.read_text().splitlines()) == n, "no second token request or signing call"
+    r = win.real("inner", [(p, h)], sc2, "--allow-reuse", outdir=win.tmp / "wout-3")
+    assert r.returncode == 0 and "artifact_reuse=1" in ledger_text(win.ledger)
+    # a different stage is a different artifact key
+    m, hm = win.container()
+    assert win.real("container", [(m, hm)], win.scope("container", [(m, hm)]), outdir=win.tmp / "wout-4").returncode == 0
+
+
+def test_s3_02_sshsig_a_rewritten_scope_for_the_same_manifest_is_refused(ssh):
+    fake = make_fake_tools(ssh, ssh.key)
+    sock = ssh.tmp / "agent.sock"
+    s = bind_unix_socket(sock)
+    try:
+        run1 = lambda sc, sig, *x: ssh.run(*real_args(ssh, sc, sig), *x, path_dirs=[fake], SSH_AUTH_SOCK=str(sock), R0P_ALLOW_NONSYSTEM_TOOLS="stub-test", script=ssh.tscript)
+        sc = ssh_scope(ssh, tree=True)
+        assert run1(sc, ssh.outside / "a.sig").returncode == 0
+        sc2 = ssh_scope(ssh, tree=True, not_before=iso(datetime.now(timezone.utc) - timedelta(hours=2, seconds=3)))
+        r = run1(sc2, ssh.outside / "b.sig")
+        assert r.returncode == 1 and "input artifact (manifest-" in r.stderr and not (ssh.outside / "b.sig").exists()
+        assert run1(sc2, ssh.outside / "b.sig", "--allow-reuse").returncode == 0
+        assert "artifact_reuse=1" in ledger_text(ssh.tmp / "ledger")
+    finally:
+        s.close()
+
+
+def test_s3_02_the_template_sentence_is_true():
+    t = (SIGN / "AUTHORIZATION-TEMPLATE.md").read_text()
+    assert "one submission only" in t and "same input artifact" in t

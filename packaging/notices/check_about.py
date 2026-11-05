@@ -139,6 +139,7 @@ def check(licenses_dir: Path, *, root: Path = ROOT, notices_report: Path | None 
     except SystemExit:
         return errs + ["gate file unreadable or malformed"]
     decisions, signers = gdoc["decisions"], gdoc.get("legal_signer_fingerprints", [])
+    errs += [f"signers: {m}" for m in gate.separation_problems(allowed)]
     if expect_commit is not None and doc["build"]["source"]["commit"] != expect_commit:
         errs.append(f"the record's source.commit {doc['build']['source']['commit']} is not the commit of the build that was authorized "
                     f"({expect_commit})")

@@ -125,6 +125,10 @@ r0p_window_check() {
 #   events/NNNNNN.txt  one line per event, created with O_EXCL (noclobber) so a planted symlink or file is never followed or overwritten;
 #                      each line carries the sha256 of the previous event file (a hash chain)
 #   claims/<scope sha> one directory per scope file, created with mkdir (atomic): the first run that claims a scope wins, a parallel run loses
+#   claims/<artifact key> (RC3) one directory per INPUT ARTIFACT (dmg-<sha256 of the input dmg>, win-<stage>-<hash of the sorted inputs>,
+#                      manifest-<sha256 of the manifest>), claimed the same way: a second real run for the same artifact is refused even when the
+#                      scope FILE is new (a scope rewritten one second later is a different file), unless --allow-reuse is given; the reuse is
+#                      recorded in the event (artifact_reuse=1). A failed run burns the artifact claim exactly as it burns the scope claim.
 #   LENGTH             "<number of events> <sha256 of the last event file>", rewritten after each event (detects deletion of the last events)
 #   lock/              mkdir lock held while events are appended
 # The chain and LENGTH make tampering with the middle or the tail DETECTABLE; they cannot stop the owner's own account from deleting the whole
@@ -152,10 +156,10 @@ r0p_ledger_prepare() {
   fi
 }
 # r0p_ledger_verify LEDGER : chain intact, numbering contiguous, not shorter than the recorded length; prints nothing; sets R0P_LEDGER_N / R0P_LEDGER_LAST
-R0P_LEDGER_N=0; R0P_LEDGER_LAST="$R0P_ZERO64"; R0P_LEDGER_STARTED=" "
+R0P_LEDGER_N=0; R0P_LEDGER_LAST="$R0P_ZERO64"; R0P_LEDGER_STARTED=" "; R0P_LEDGER_ARTIFACTS=" "
 r0p_ledger_verify() {
-  local l="$1" n=0 prev="$R0P_ZERO64" f rec_n rec_h line sc
-  R0P_LEDGER_STARTED=" "
+  local l="$1" n=0 prev="$R0P_ZERO64" f rec_n rec_h line sc ak
+  R0P_LEDGER_STARTED=" "; R0P_LEDGER_ARTIFACTS=" "
   read -r rec_n rec_h < "$l/LENGTH" 2>/dev/null || die "ledger: LENGTH is missing or unreadable"
   [[ "$rec_n" =~ ^[0-9]+$ && "$rec_h" =~ ^[0-9a-f]{64}$ ]] || die "ledger: LENGTH is malformed"
   for f in "$l"/events/*.txt; do
@@ -165,7 +169,10 @@ r0p_ledger_verify() {
     [ "${f##*/}" = "$(printf '%06d' "$n").txt" ] || die "ledger: event numbering has a gap or an unexpected file at $f"
     IFS= read -r line < "$f" || true
     case "$line" in "seq=$n prev=$prev "*) ;; *) die "ledger: the hash chain is broken at event $n (the ledger was modified)";; esac
-    case "$line" in *" event=started"*) sc="${line#* scope=}"; R0P_LEDGER_STARTED="$R0P_LEDGER_STARTED${sc%% *} ";; esac
+    case "$line" in *" event=started"*)
+      sc="${line#* scope=}"; R0P_LEDGER_STARTED="$R0P_LEDGER_STARTED${sc%% *} "
+      case "$line" in *" artifact="*) ak="${line#* artifact=}"; R0P_LEDGER_ARTIFACTS="$R0P_LEDGER_ARTIFACTS${ak%% *} ";; esac;;
+    esac
     prev="$(r0p_sha "$f")"
     if [ "$n" -eq "$rec_n" ] && [ "$prev" != "$rec_h" ]; then die "ledger: event $n does not match the recorded length file (the ledger was modified)"; fi
   done
@@ -183,20 +190,32 @@ r0p_ledger_lock() {
 r0p_ledger_unlock() { /bin/rmdir "$1/lock" 2>/dev/null || true; }
 # "used" is decided from BOTH the claim directory and the verified chain (round 6, R6-02): a scope that the chain records as started but whose claim
 # directory is missing means someone removed the claim (tamper) and is refused even with --allow-reuse.
-r0p_ledger_tamper_check() { # LEDGER SCOPE : after r0p_ledger_verify
+r0p_ledger_tamper_check() { # LEDGER SCOPE [ARTIFACT_KEY] : after r0p_ledger_verify
   case "$R0P_LEDGER_STARTED" in
     *" $2 "*) [ -d "$1/claims/$2" ] || die "ledger: the chain records this scope as started but its claim is missing (the claims directory was tampered with); refusing";;
   esac
+  if [ -n "${3:-}" ]; then
+    case "$R0P_LEDGER_ARTIFACTS" in
+      *" $3 "*) [ -d "$1/claims/$3" ] || die "ledger: the chain records this artifact as started but its claim is missing (the claims directory was tampered with); refusing";;
+    esac
+  fi
 }
+# an artifact key names the input of the run: dmg-<64 hex>, win-<stage>-<64 hex>, manifest-<64 hex> (never anything else: it is a directory name)
+r0p_ledger_artifact_ok() { [[ "$1" =~ ^(dmg|manifest)-[0-9a-f]{64}$ || "$1" =~ ^win-(inner|container)-[0-9a-f]{64}$ ]] || die "ledger: invalid artifact key"; }
 # r0p_ledger_check LEDGER SCOPE_SHA ALLOW_REUSE : read-only early refusal (the atomic claim comes later)
 r0p_ledger_check() {
-  local l="$1" s="$2" allow="$3"
+  local l="$1" s="$2" allow="$3" art="${4:-}"
+  [ -z "$art" ] || r0p_ledger_artifact_ok "$art"
   r0p_ledger_prepare "$l"
   r0p_ledger_verify "$l"
-  r0p_ledger_tamper_check "$l" "$s"
+  r0p_ledger_tamper_check "$l" "$s" "$art"
   if [ -d "$l/claims/$s" ]; then
     if [ "$allow" = 1 ]; then echo "NOTE: --allow-reuse: this scope file was used before (see the ledger); reuse is recorded"
     else die "this scope file (sha256 $s) was already used (it is in the ledger). Write a NEW scope file for a new run, or pass --allow-reuse after deciding that a repeat is intended"; fi
+  fi
+  if [ -n "$art" ] && [ -d "$l/claims/$art" ]; then
+    if [ "$allow" = 1 ]; then echo "NOTE: --allow-reuse: this input artifact ($art) was used by an earlier real run (see the ledger); the repeat, including any second upload or signing request, is recorded"
+    else die "this input artifact ($art) was already used by an earlier real run (it is in the ledger), even though the scope file is new. A second signing or notarization of the same artifact needs --allow-reuse, decided and recorded by the owner"; fi
   fi
 }
 # The locked sections run in a SUBSHELL so that a `die` inside (broken chain, symlink, existing event file) ends only the subshell: the parent then
@@ -229,17 +248,27 @@ r0p_ledger_append() { r0p_ledger_in_lock "$1" r0p_ledger_append_locked "$@"; }
 # r0p_ledger_claim LEDGER SCOPE_SHA ALLOW_REUSE MODE DETAIL : ATOMICALLY claim the scope (mkdir), then record "started". Exactly one of several
 # parallel runs of the same scope wins; the others stop here, before any use of the owner's session. A claim is never released.
 r0p_ledger_claim_locked() {
-  local l="$1" s="$2" allow="$3"
+  local l="$1" s="$2" allow="$3" art="${4:-}"
   r0p_ledger_verify "$l"
-  r0p_ledger_tamper_check "$l" "$s"
+  r0p_ledger_tamper_check "$l" "$s" "$art"
+  # the ARTIFACT claim comes first, so a refused repeat of an artifact burns nothing new
+  if [ -n "$art" ]; then
+    if /bin/mkdir "$l/claims/$art" 2>/dev/null; then :
+    elif [ "$allow" = 1 ]; then echo "NOTE: --allow-reuse: the input artifact $art was claimed before; this repeat is recorded"
+    else die "this input artifact ($art) is already claimed (used by an earlier real run, or by a parallel run); refusing"; fi
+  fi
   if /bin/mkdir "$l/claims/$s" 2>/dev/null; then :
   elif [ "$allow" = 1 ]; then echo "NOTE: --allow-reuse: the scope was claimed before; this repeat is recorded"
   else die "this scope file (sha256 $s) is already claimed (used before, or by a parallel run); refusing"; fi
 }
+# r0p_ledger_claim LEDGER SCOPE_SHA ALLOW_REUSE MODE DETAIL [ARTIFACT_KEY]
 r0p_ledger_claim() {
+  local art="${6:-}" reuse=""
+  [ -z "$art" ] || r0p_ledger_artifact_ok "$art"
   r0p_ledger_prepare "$1"
-  r0p_ledger_in_lock "$1" r0p_ledger_claim_locked "$1" "$2" "$3"
-  r0p_ledger_append "$1" "$2" "$4" started "${5:-}${3:+ allow_reuse=$3}"
+  [ -z "$art" ] || { [ ! -d "$1/claims/$art" ] || reuse=" artifact_reuse=1"; }
+  r0p_ledger_in_lock "$1" r0p_ledger_claim_locked "$1" "$2" "$3" "$art"
+  r0p_ledger_append "$1" "$2" "$4" started "${5:-}${art:+ artifact=$art}${reuse}${3:+ allow_reuse=$3}"
 }
 
 # distribution gate -----------------------------------------------------------------------------------------------------

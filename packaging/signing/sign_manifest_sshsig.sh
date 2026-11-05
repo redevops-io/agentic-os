@@ -228,7 +228,7 @@ if [ "$MODE" = real ]; then
   [ "$S_key_fingerprint" = "$FPR" ] || die "scope file: key_fingerprint does not match the public key"
   [ "$S_namespace" = "$NAMESPACE" ] || die "scope file: namespace must be $NAMESPACE"
   [[ "$S_build_commit" =~ ^[0-9a-f]{40}$ ]] && [[ "$S_procedure_commit" =~ ^[0-9a-f]{40}$ ]] || die "scope file: build_commit and procedure_commit must be 40-hex git commit ids"
-  r0p_ledger_check "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE"
+  r0p_ledger_check "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE" "manifest-$ACTUAL_SHA"
 else
   [ -z "$AUTH_SHA$SCOPE_FILE$LEDGER" ] && [ "$ALLOW_REUSE" = 0 ] || die "--i-have-owner-authorization/--scope-file/--ledger/--allow-reuse are for --real only"
   if [ "$MODE" = self-test ]; then [ -z "${SSH_AUTH_SOCK:-}" ] || die "--self-test never uses an agent (SSH_AUTH_SOCK is set)"; fi
@@ -281,7 +281,7 @@ if [ "$MODE" = real ]; then
   [ -z "$(ls -A "$R0P_TMP/pub" | grep -v '^release.pub$' || true)" ] || die "unexpected files beside the public key copy"
   AGENT_LIST="$(env -i "PATH=$PATH" "HOME=$R0P_TMP/home" "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" "$SSHADD" -l 2>/dev/null)" || die "ssh-add -l could not list the owner's agent (is it running, and is the key loaded?); refusing: this script never falls back to a key file"
   echo "$AGENT_LIST" | awk '{print $2}' | grep -qx -F "$FPR" || die "the owner's agent does not hold the key $FPR; refusing (no fallback to a private key file, no prompt)"
-  r0p_ledger_claim "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE" real "script=$(sha "$SELF") manifest=$ACTUAL_SHA key=$FPR"
+  r0p_ledger_claim "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE" real "script=$(sha "$SELF") manifest=$ACTUAL_SHA key=$FPR" "manifest-$ACTUAL_SHA"
   echo "+ ssh-keygen -Y sign -U -n $NAMESPACE -f <private copy of the public key>   # the owner's ssh-agent signs"
   env -i "PATH=$PATH" "HOME=$R0P_TMP/home" "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" SSH_ASKPASS=/usr/bin/false SSH_ASKPASS_REQUIRE=never \
     "$KEYGEN" -Y sign -U -n "$NAMESPACE" -f "$R0P_TMP/pub/release.pub" <"$R0P_TMP/manifest" >"$R0P_TMP/sig" 2>"$R0P_TMP/sign.err" \

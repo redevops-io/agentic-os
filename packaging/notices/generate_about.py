@@ -167,7 +167,7 @@ def build_record(*, notices_dir: Path, root: Path = ROOT, gate_path: Path | None
         raise Refused(2, ["gate file unreadable or malformed (see the message above)"])
     decisions, signers = gdoc["decisions"], gdoc.get("legal_signer_fingerprints", [])
     allowed = root / "packaging" / "legal-allowed-signers"
-    errs = gate.validate(decisions, root)
+    errs = gate.validate(decisions, root) + gate.separation_problems(allowed)
     if errs:
         raise Refused(2, [f"gate file problem: {e}" for e in errs])
     slots, slot_errs, refusals = gate.resolve_about_slots(decisions, root, distribution, allowed_signers=allowed, signers=signers)
