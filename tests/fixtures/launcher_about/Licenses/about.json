@@ -1,0 +1,175 @@
+{
+ "build": {
+  "mode": "private-candidate",
+  "platform": "macos-arm64",
+  "source": {
+   "commit": "0123456789abcdef0123456789abcdef01234567",
+   "commit_time_utc": "2026-11-04T00:00:00Z",
+   "describe": "fixture",
+   "dirty_files": 0,
+   "tree": "89abcdef0123456789abcdef0123456789abcdef"
+  }
+ },
+ "legal": {
+  "slots": {
+   "DATA.SOURCE_COMMIT": {
+    "decisions": [
+     "pins-04"
+    ],
+    "state": "placeholder"
+   },
+   "DATA.SOURCE_LOCATION": {
+    "decisions": [
+     "D-LIC-12",
+     "pins-04"
+    ],
+    "state": "placeholder"
+   },
+   "LEGAL.CONVEYANCE": {
+    "decisions": [
+     "D-LIC-10"
+    ],
+    "state": "placeholder"
+   },
+   "LEGAL.COPYRIGHT_LINE": {
+    "decisions": [
+     "D-LIC-1"
+    ],
+    "state": "placeholder"
+   },
+   "LEGAL.LICENCE_STATEMENT": {
+    "decisions": [
+     "D-LIC-1",
+     "D-LIC-15"
+    ],
+    "state": "placeholder"
+   },
+   "LEGAL.NO_WARRANTY": {
+    "decisions": [
+     "D-LIC-10"
+    ],
+    "state": "placeholder"
+   },
+   "LEGAL.SECTION13_NOTICE": {
+    "decisions": [
+     "D-LIC-5"
+    ],
+    "state": "placeholder"
+   },
+   "LEGAL.SOURCE_OFFER": {
+    "decisions": [
+     "D-LIC-12",
+     "pins-03",
+     "pins-04"
+    ],
+    "state": "placeholder"
+   }
+  }
+ },
+ "licence_files": [
+  {
+   "bytes": 108,
+   "file": "LICENSE",
+   "id": "license",
+   "label": "Licence text",
+   "sha256": "9d92f8b4405ae09a3580e2aacc2271de02b7c36339fc2146869517efdc27daa8"
+  },
+  {
+   "bytes": 88,
+   "file": "LICENSE-COMMONS-CLAUSE",
+   "id": "license-commons-clause",
+   "label": "Licence condition",
+   "sha256": "7b2bae457962133920ec60365f91fee5f3793cbf29cfd6f8f7f46e9a56392736"
+  },
+  {
+   "bytes": 41,
+   "file": "LICENSE.md",
+   "id": "license-md",
+   "label": "Licence file (markdown)",
+   "sha256": "731e77958f7d28cb680f2499671af061a37ca163b14c0e06f6207c4f9d08ee5f"
+  },
+  {
+   "bytes": 43,
+   "file": "LICENSING.md",
+   "id": "licensing-md",
+   "label": "Licensing overview",
+   "sha256": "0c48cb897636db087d725b788325a07993dce5d6efcc0beb44bc59e06c52c2e4"
+  },
+  {
+   "bytes": 90,
+   "file": "NOTICES_MISSING.md",
+   "id": "notices-missing-md",
+   "label": "Notices not found",
+   "sha256": "098bbc7f5c9577411759f5a61ee33a890147f28ec4be80ed2c944b4b67a4089e"
+  }
+ ],
+ "notices": {
+  "bytes": 396,
+  "components": [
+   {
+    "declared": "0BSD OR MIT OR Apache-2.0",
+    "length": 130,
+    "n": 1,
+    "name": "adler2",
+    "offset": 0,
+    "status": "text-found",
+    "type": "cargo",
+    "version": "2.0.1"
+   },
+   {
+    "declared": "BSD-3-Clause",
+    "length": 136,
+    "n": 2,
+    "name": "starlette",
+    "offset": 130,
+    "status": "text-found",
+    "type": "pypi",
+    "version": "1.6.0"
+   },
+   {
+    "declared": "not declared",
+    "length": 130,
+    "n": 3,
+    "name": "redevops-connectors",
+    "offset": 266,
+    "status": "text-not-found",
+    "type": "cargo",
+    "version": "0.1.0"
+   }
+  ],
+  "file": "THIRD_PARTY_NOTICES.txt",
+  "missing": [
+   {
+    "name": "redevops-connectors",
+    "version": "0.1.0"
+   }
+  ],
+  "reference_notices": [],
+  "sha256": "af18ffecce0d6a03b0c3edb83aad892a9d2132b4b4f19722ef562e1325ccba36"
+ },
+ "product": {
+  "bundle_identifier": "io.redevops.agentic-apps.r0prime",
+  "launcher": {
+   "binary": "agentic-r0prime",
+   "version": "0.1.1"
+  },
+  "name": "Agentic Apps R0-prime",
+  "release_line": "r0-prime",
+  "sidecar": {
+   "binary": "redevops-sidecar",
+   "python_package": "agentic-os",
+   "python_package_version": "0.2.4"
+  },
+  "version": "0.1.1"
+ },
+ "schema": "redevops.about/1",
+ "source_access": {
+  "state": "not-published"
+ },
+ "ui": {
+  "entry": true,
+  "locales": [
+   "en"
+  ]
+ }
+}

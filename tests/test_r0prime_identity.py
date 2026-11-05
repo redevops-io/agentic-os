@@ -121,7 +121,8 @@ def test_info_plist_carries_the_release_line_marker_and_nothing_that_changes_beh
 def test_launcher_window_shows_the_release_line_as_static_text():
     html = (ROOT / "deploy" / "launcher" / "ui" / "index.html").read_text(encoding="utf-8")
     assert f"release line {RAW['release_line']}" in html
-    assert 'id="release-line"' in html and "<script" in html          # text only: the three invoke() commands are unchanged
+    assert 'id="release-line"' in html and "<script" in html          # text only: the invoke() commands are unchanged (script is the external app.js since RC3)
+    assert "<title>Agentic Apps R0-prime</title>" in html and "<h1>Agentic Apps R0-prime</h1>" in html and "ReDevOps" not in html
     assert re.search(r'<p class="sub" id="release-line">[^<]*</p>', html)
 
 
