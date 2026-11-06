@@ -303,8 +303,10 @@ class Runner:
         if not any(p["node_id"] == node.id for p in self.rt.repo.pending_reconciliation(mission_id)):
             raise RunnerError(f"{step} has no unresolved reconciliation")
         reason = reason or f"looked the marker of {st['op_id']} up in {st['app']}"
+        row = self.svc.oplog.get(st["op_id"])
+        recorded = bool(row and row["state"] == "applied")      # another executor finished it and recorded it: confirm, do not look for a second one
         try:
-            found = self.svc.adapters[st["app"]].find(st)
+            found = dict(row["result"]) if recorded else self.svc.adapters[st["app"]].find(st)
         except AppError as e:
             self.svc.emit("AosddReconcileRefused", mission_id, {"step": step, "actor": actor, "why": f"cannot read {st['app']}: {e.kind} {e.status}"})
             raise RunnerError(f"cannot decide: {st['app']} could not be read ({e.kind} {e.status})") from None
@@ -313,8 +315,9 @@ class Runner:
             self.svc.emit("AosddReconciled", mission_id, {"step": step, "op_id": st["op_id"], "actor": actor, "found": False})
             return self.rt.reconcile_node(mission_id, node.id, executed=False, actor=actor, reason=reason,
                                           evidence={"kind": "provider_record", "reference": f"{st['app']}: no record carries {st['op_id']}"})
-        found.update(step=st["step"], app=st["app"], op_id=st["op_id"], capability=st["capability"], adopted=True, expect=st["expect"],
-                     note="adopted by reconciliation: the application already held a record carrying this op's marker")
+        if not recorded:
+            found.update(step=st["step"], app=st["app"], op_id=st["op_id"], capability=st["capability"], adopted=True, expect=st["expect"],
+                         note="adopted by reconciliation: the application already held a record carrying this op's marker")
         quotation = ""
         if st["step"] != "S1":
             for e in self.svc.store.for_mission(mission_id):
@@ -325,9 +328,10 @@ class Runner:
                                                         "checks": rep["checks"], "method": rep["method"], "reader": rep["reader"], "expect": st["expect"], "during": "reconcile"})
         if rep["status"] != VERIFIED:
             raise RunnerError(f"the record found for {step} did not verify against the plan ({rep['status']}); it is NOT adopted")
-        self.svc.oplog.resolve_applied(st["op_id"], str(found["native_id"]), found, f"{actor}: found by marker")
-        self.svc.emit("AosddOpApplied", mission_id, {"op_id": st["op_id"], "step": st["step"], "native_id": found["native_id"], "native_ids": found["native_ids"], "ui_url": found["ui_url"],
-                                                     "ui_url_note": found.get("ui_url_note", ""), "created": False, "adopted": True, "fence": None, "via": "reconcile"})
+        if not recorded:
+            self.svc.oplog.resolve_applied(st["op_id"], str(found["native_id"]), found, f"{actor}: found by marker")
+            self.svc.emit("AosddOpApplied", mission_id, {"op_id": st["op_id"], "step": st["step"], "native_id": found["native_id"], "native_ids": found["native_ids"], "ui_url": found["ui_url"],
+                                                         "ui_url_note": found.get("ui_url_note", ""), "created": False, "adopted": True, "fence": None, "via": "reconcile"})
         self.svc.emit("AosddReconciled", mission_id, {"step": step, "op_id": st["op_id"], "actor": actor, "found": True, "native_id": found["native_id"]})
         return self.rt.reconcile_node(mission_id, node.id, executed=True, actor=actor, reason=reason, result=found,
                                       evidence={"kind": "provider_record", "reference": f"{st['app']}:{found['native_id']}", "provider_ref": str(found["native_id"])})

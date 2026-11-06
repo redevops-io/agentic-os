@@ -500,3 +500,73 @@ def test_an_application_that_is_down_before_the_write_is_a_definite_refusal_not_
     rec = reconstruct(env.events_path, mid)
     assert rec["steps"][2]["outcome"] == "refused" and rec["mission_classification"] == COMPENSATED
     assert env.stack.count("twenty", "POST") == 0 and env.stack.quotations.keys() == {"SAL-QTN-2026-00001"}
+
+
+# ---- profile, execution authorization, CLI, two executors ---------------------------------------------------------------------------
+def test_authority_is_enforced_in_the_default_development_profile_and_in_production(env, monkeypatch):
+    from agentic_os.mission.profile import profile
+    assert profile() == "development"                                                  # the base would NOT enforce the envelope here
+    r = env.runner()
+    mid = r.submit("DEV", REF)
+    r.approve_plan(mid, "alice", r.plan(mid)["plan_sha256"], grant_ttl_s=-5)             # an expired envelope still stops the mission
+    assert env.stack.writes() == [] and state(r, mid) is MissionState.FAILED
+    monkeypatch.setenv("AGENTIC_OS_PROFILE", "production")
+    r2, mid2 = go(env, "PROD")                                                           # and production (durable guard required) works
+    assert state(r2, mid2) is MissionState.SUCCEEDED and len(env.stack.writes()) == 5
+
+
+def test_a_write_without_a_dispatch_authorization_is_refused_before_anything_is_sent(env):
+    r = env.runner()
+    mid = r.submit("EA", REF)
+    plan = r.plan(mid)
+    r.svc.emit("AosddPlanApproved", mid, approvals.mint(APPROVAL_SECRET, mid, plan, "alice"))
+    r.issue_write_grant(mid, plan, "alice")
+    from agentic_os.integrations.aosdd.client import AosddOperatorClient, AosddRefusal
+    with pytest.raises(AosddRefusal, match="no_execution_authorization"):
+        AosddOperatorClient(r.svc)._write(mid, plan["steps"][0]["capability"], {"plan": {"plan": plan}}, None)
+    assert env.stack.writes() == []
+    assert r.svc.oplog.get(plan["steps"][0]["op_id"])["state"] == "planned"             # the refusal released the claim: nothing in flight
+
+
+def test_reconcile_refuses_to_guess_when_the_application_cannot_be_read(env):
+    env.stack.fail("erpnext", "POST", "/api/resource/Quotation", 0, times=1, commit=True)
+    r, mid = go(env)
+    assert state(r, mid) is MissionState.WAITING_RECONCILIATION
+    env.stack.fail("erpnext", "GET", "/api/resource/Quotation", 502, times=3)
+    with pytest.raises(RunnerError, match="cannot decide"):
+        r.reconcile(mid, "S1", "ops@example")
+    assert state(r, mid) is MissionState.WAITING_RECONCILIATION and r.svc.oplog.get([s for s in r.plan(mid)["steps"] if s["step"] == "S1"][0]["op_id"])["state"] == "unknown"
+
+
+def test_cli_reconstruct_reads_only_the_ledger(env, capsys):
+    r, mid = go(env)
+    from agentic_os.integrations.aosdd import cli
+    assert cli.main(["--state", env.dir, "reconstruct", "--mission", mid]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["state"] == "succeeded" and len(out["steps"]) == 4
+
+
+def test_two_executors_on_one_approved_mission_perform_each_write_once(env):
+    """Runner A is inside S1's request when runner B (another process over the same files) resumes the same mission."""
+    import threading
+    entered, release = threading.Event(), threading.Event()
+    env.stack.block("erpnext", "POST", "/api/resource/Quotation", entered, release)
+    ra = env.runner(owner="exec-A")
+    mid = ra.submit("TWO", REF)
+    plan = ra.plan(mid)
+    t = threading.Thread(target=lambda: ra.approve_plan(mid, "alice", plan["plan_sha256"]))
+    t.start()
+    assert entered.wait(10)
+    rb = env.runner(owner="exec-B")
+    rb.resume(mid, "ops@example", "second executor")                                      # B must not send S1 again
+    release.set()
+    t.join(30)
+    assert env.stack.count("erpnext", "POST") == 1 and len([q for q in env.stack.quotations.values() if q["docstatus"] == 0]) == 1
+    assert env.stack.count("lago", "PUT") <= 1 and len(env.stack.tasks) <= 1 and sum(1 for m in env.stack.messages if m["private"]) <= 1
+    # honest limit of the base runtime: the loser parks the shared mission for reconciliation; one explicit operator action completes it
+    r3 = env.runner()
+    r3.attach(mid)
+    assert state(r3, mid) is MissionState.WAITING_RECONCILIATION
+    r3.reconcile(mid, "S1", "ops@example", "executor B refused S1 while A was running it; A recorded it")
+    assert state(r3, mid) is MissionState.SUCCEEDED
+    assert env.stack.count("erpnext", "POST") == 1 and env.stack.count("lago", "PUT") == 1 and len(env.stack.tasks) == 1 and sum(1 for m in env.stack.messages if m["private"]) == 1
