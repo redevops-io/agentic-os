@@ -620,10 +620,13 @@ def propose_sources(project_id: str, text: str):
     assumptions: List[str] = []
     questions: List[str] = []
 
-    for m in re.finditer(r"(~?/[\w./\-]+)", t):  # any unix-ish path
-        proposed.append(ProposedSource(kind=SourceKind.FILES, location=m.group(1),
+    # any unix-ish path, a Windows drive path (C:\dir or C:/dir) or a UNC path (\\server\share\dir). One alternation, so the tail of a
+    # Windows path ("/dir" of C:/dir) is never read again as a unix path; trailing sentence punctuation is not part of a Windows path.
+    for m in re.finditer(r"([A-Za-z]:[\\/][^\s\"'<>|?*]*|\\\\[^\s\\\"'<>|?*]+\\[^\s\"'<>|?*]+|~?/[\w./\-]+)", t):
+        loc = m.group(1).rstrip(".,;:)") if (m.group(1)[1:2] == ":" or m.group(1).startswith("\\\\")) else m.group(1)
+        proposed.append(ProposedSource(kind=SourceKind.FILES, location=loc,
                                        access_mode=AccessMode.READ_ONLY, indexing_policy=IndexingPolicy.AUTOMATIC))
-        assumptions.append(f"{m.group(1)} — read-only, automatic indexing, common document types")
+        assumptions.append(f"{loc} — read-only, automatic indexing, common document types")
     if "postgres" in tl or "database" in tl or "db " in tl:
         loc = "localhost/customer_ops"
         mm = re.search(r"database on ([\w.:/\-]+)", tl)
