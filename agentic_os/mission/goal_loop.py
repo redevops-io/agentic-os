@@ -436,6 +436,17 @@ class GoalLoop:
                 it = self._begin(loop_id, st)
                 continue
             m = rt._missions.get(it.mission_id) or rt.rehydrate(it.mission_id)
+            if m.state not in _TERMINAL_MISSION and rt.is_reconstructed(m.id):
+                # rehydrated from the log: running it again needs a resume authorization (replay boundary). Unattended resume exists
+                # only when a service principal is configured and holds the grant; otherwise the loop waits for a person.
+                from .runtime import ResumeNotAuthorized  # noqa: PLC0415
+                try:
+                    rt._require_execution_authority(m.id)
+                except ResumeNotAuthorized:
+                    try:
+                        rt.service_resume(m.id)
+                    except ResumeNotAuthorized:
+                        return self._wait(loop_id, st, "waiting_human", detail="resume not authorized: the mission was reconstructed from the log")
             if m.state not in _TERMINAL_MISSION:
                 block = self._hard_limit(st, it)
                 if block:

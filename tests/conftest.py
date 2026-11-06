@@ -27,6 +27,25 @@ def _permissions_dev_key(monkeypatch):
     yield
 
 
+# The replay boundary (a mission rebuilt from the log is read-only until `grant_resume`) is enforced by these modules. Every
+# other test that rehydrates a runtime does so to exercise restart MECHANICS (parking, fork recovery, reconciliation,
+# idempotent dispatch), not authorization, so for them the check is opened by this fixture. The gate itself is never
+# opened for the modules below, nor for any test that sets REPLAY_GATE_ENFORCED = True at module level.
+_REPLAY_GATE_MODULES = ("test_evidence_replay_authorization", "test_replay_residuals", "test_evidence_query_boundary",
+                        "test_evidence_query_artifacts", "test_replay_gate_default")
+
+
+@pytest.fixture(autouse=True)
+def _replay_gate_open_for_restart_mechanics(request, monkeypatch):
+    mod = request.module
+    if mod.__name__.rsplit(".", 1)[-1] in _REPLAY_GATE_MODULES or getattr(mod, "REPLAY_GATE_ENFORCED", False):
+        yield
+        return
+    from agentic_os.mission.runtime import MissionRuntime
+    monkeypatch.setattr(MissionRuntime, "_require_execution_authority", lambda self, mission_id, need=None: None)
+    yield
+
+
 @pytest.fixture(autouse=True)
 def _no_hosted_oauth(monkeypatch):
     """The Projects API builds its hosted-OAuth connector ONCE from the environment and caches it in module globals. A developer who has exported real OAuth client credentials (to wire a live

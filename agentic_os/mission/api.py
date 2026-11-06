@@ -135,11 +135,14 @@ def build_router(runtime: MissionRuntime):
         edit = strip_approval_keys(dict(body.edit)) if body.edit else None
         c = caller_of(request)
         actor = "admin" if c is None or c.role == "admin" else f"{c.role}:{c.tenant}"
-        from .runtime import ApprovalError  # noqa: PLC0415
+        from .runtime import ApprovalError, ResumeNotAuthorized  # noqa: PLC0415
         try:
             runtime.approve(mid, body.node_id, body.decision, edit, actor=actor)
         except ApprovalError as e:
             raise HTTPException(409, str(e))
+        except ResumeNotAuthorized:
+            # a mission reconstructed from the log is read-only until a resume authorization is granted (replay boundary)
+            raise HTTPException(403, "mission was reconstructed from the log; resuming it needs a resume authorization")
         return _mission_view(mid)
 
     class Reconcile(BaseModel):
