@@ -47,7 +47,7 @@ def load_inventory(a) -> dict[str, dict]:
     if a.inventory_env:
         parts.append(INV.from_environment(a.inventory_env))
     if a.inventory_json:
-        parts.append(json.loads(Path(a.inventory_json).read_text()))
+        parts.append(json.loads(Path(a.inventory_json).read_text(encoding="utf-8")))
     if a.wheelhouse:
         parts.append(INV.from_wheels(a.wheelhouse))
     if not parts:
@@ -58,7 +58,7 @@ def load_inventory(a) -> dict[str, dict]:
 def load_json(p: str | None) -> dict:
     if not p:
         return {}
-    d = json.loads(Path(p).read_text())
+    d = json.loads(Path(p).read_text(encoding="utf-8"))
     d.setdefault("_source", Path(p).name)
     return d
 

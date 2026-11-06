@@ -198,19 +198,19 @@ def main() -> int:
     # --- sbom -------------------------------------------------------------------------------
     sba, sbb = A / "sbom" / "sbom.cdx.json", B / "sbom" / "sbom.cdx.json"
     if sba.exists() and sbb.exists():
-        ja, jb = json.loads(sba.read_text()), json.loads(sbb.read_text())
+        ja, jb = json.loads(sba.read_text(encoding="utf-8")), json.loads(sbb.read_text(encoding="utf-8"))
         rep["sbom"] = {"identical_bytes": sba.read_bytes() == sbb.read_bytes(), "components_a": len(ja["components"]), "components_b": len(jb["components"]),
                        "serial_a": ja["serialNumber"], "serial_b": jb["serialNumber"]}
         P(f"## SBOM\n\nbyte-identical: {sba.read_bytes() == sbb.read_bytes()}; components {len(ja['components'])} / {len(jb['components'])}.\n")
     ma, mb = A / "build-manifest.json", B / "build-manifest.json"
     if ma.exists() and mb.exists():
-        ja, jb = json.loads(ma.read_text()), json.loads(mb.read_text())
+        ja, jb = json.loads(ma.read_text(encoding="utf-8")), json.loads(mb.read_text(encoding="utf-8"))
         rep["manifest"] = {"inputs_equal": ja.get("inputs_sha256") == jb.get("inputs_sha256"), "toolchain_equal": ja.get("toolchain") == jb.get("toolchain"),
                            "source_equal": ja.get("source") == jb.get("source"), "durations_a": ja.get("durations_seconds"), "durations_b": jb.get("durations_seconds")}
         P(f"## Build manifest\n\ninput hashes equal: {rep['manifest']['inputs_equal']}; toolchain record equal: {rep['manifest']['toolchain_equal']}; durations A {ja.get('durations_seconds')} B {jb.get('durations_seconds')}.\n")
-    Path(ns.out).write_text("\n".join(out) + "\n")
+    Path(ns.out).write_text("\n".join(out) + "\n", encoding="utf-8")
     if ns.json:
-        Path(ns.json).write_text(json.dumps(rep, indent=1, sort_keys=True) + "\n")
+        Path(ns.json).write_text(json.dumps(rep, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     print("\n".join(out))
     return 0
 

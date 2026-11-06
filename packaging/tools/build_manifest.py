@@ -73,7 +73,7 @@ def sha256_file(p: Path) -> str:
 
 def run(cmd: str, cwd: Path | None = None) -> str | None:
     try:
-        r = subprocess.run(shlex.split(cmd), capture_output=True, text=True, timeout=60, cwd=cwd)
+        r = subprocess.run(shlex.split(cmd), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, cwd=cwd)
     except (OSError, subprocess.SubprocessError):
         return None
     out = (r.stdout or r.stderr).strip()
@@ -158,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     root = Path(a.root).resolve()
     out = Path(a.out)
-    m = json.loads(out.read_text()) if out.exists() else {}
+    m = json.loads(out.read_text(encoding="utf-8")) if out.exists() else {}
     m["schema"] = SCHEMA
     m["generated_at_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     m["source"] = git_info(root)
@@ -176,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.wheelhouse:
         m["wheelhouse"] = wheelhouse_info(Path(a.wheelhouse))
     if a.git_wheels and Path(a.git_wheels).exists():
-        m["first_party_git_wheels"] = json.loads(Path(a.git_wheels).read_text())["git_wheels"]
+        m["first_party_git_wheels"] = json.loads(Path(a.git_wheels).read_text(encoding="utf-8"))["git_wheels"]
     arts = m.setdefault("artifacts", {})
     missing = []
     for spec in a.artifact:
@@ -198,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
         k, _, v = d.partition("=")
         m.setdefault("durations_seconds", {})[k] = float(v)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(m, indent=2, sort_keys=True) + "\n")
+    out.write_text(json.dumps(m, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if missing:
         # An artifact that was named but is not there must stop the build: a manifest without the hash of the sidecar or the
         # launcher is not evidence (and on Windows it is the symptom of an unconverted git-bash path).

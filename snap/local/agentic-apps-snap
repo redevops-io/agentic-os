@@ -1,0 +1,11 @@
+#!/bin/sh
+# Entry point of the snap. Everything that must survive a snap refresh goes to $SNAP_USER_COMMON, which snapd keeps across
+# revisions WITHOUT copying; $SNAP_USER_DATA (HOME) is versioned and copied on every refresh. The launcher then runs exactly
+# as in the .deb: it starts the sibling frozen sidecar (usr/bin/redevops-sidecar) on 127.0.0.1 and opens the browser.
+# Nothing here requests or widens a permission.
+set -eu
+export AGENTIC_OS_HOME="$SNAP_USER_COMMON/agentic-os"
+export REDEVOPS_SECRET_DIR="$SNAP_USER_COMMON/secrets"
+umask 077
+mkdir -p "$AGENTIC_OS_HOME" "$REDEVOPS_SECRET_DIR"
+exec "$SNAP/usr/bin/agentic-r0prime" "$@"

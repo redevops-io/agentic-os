@@ -48,8 +48,8 @@ def main() -> int:
     ap.add_argument("--existing", help="previous output: entries are reused, only missing ones are fetched")
     ap.add_argument("--no-download", action="store_true", help="do not download release tarballs to hash them")
     a = ap.parse_args()
-    bom = json.loads(Path(a.sbom).read_text())
-    prev = json.loads(Path(a.existing).read_text())["components"] if a.existing and Path(a.existing).exists() else {}
+    bom = json.loads(Path(a.sbom).read_text(encoding="utf-8"))
+    prev = json.loads(Path(a.existing).read_text(encoding="utf-8"))["components"] if a.existing and Path(a.existing).exists() else {}
     out: dict[str, dict] = dict(prev)
     for c in bom["components"]:
         pr = props(c)
@@ -102,7 +102,7 @@ def main() -> int:
         out[ident] = ent
         print(f"  {ident}: {'unresolved: ' + ent['unresolved'] if 'unresolved' in ent else ent['source']['type']}")
     Path(a.out).write_text(json.dumps({"_comment": "Generator input for packaging/sbom/generate_source_offer.py; collected by packaging/tools/collect_source_refs.py. Entries marked unresolved are NOT sources.",
-                                       "components": dict(sorted(out.items()))}, indent=1) + "\n")
+                                       "components": dict(sorted(out.items()))}, indent=1) + "\n", encoding="utf-8")
     print(f"{len(out)} entries -> {a.out}")
     return 0
 

@@ -257,7 +257,7 @@ class Signer:
             raise Refused(f"the throwaway key has mode {oct(mode)}, expected 0o600")
         fp = run(["ssh-keygen", "-l", "-f", self.pub], env=self.env)
         self.fingerprint = fp.stdout.decode().split()[1]
-        self.allowed_line = f'dev-fixture-signer namespaces="{NAMESPACE}" ' + self.pub.read_text().strip() + "\n"
+        self.allowed_line = f'dev-fixture-signer namespaces="{NAMESPACE}" ' + self.pub.read_text(encoding="utf-8").strip() + "\n"
         self.deleted = False
 
     def sign(self, path: Path, namespace: str = NAMESPACE) -> Path:
@@ -348,9 +348,9 @@ def build_baseline(slots_spec: dict, tmp: Path, root: Path, signer: Signer, deci
         assert sha256_file(root / rel) == sha256_file(REPO / rel), f"{rel} in the fixture differs from the repository code"
     ui = root / "agentic_os" / "projects_ui"
     (ui / "assets").mkdir(parents=True)
-    (ui / "index.html").write_text("<!doctype html><title>dev fixture</title>\n")
-    (ui / "assets" / "index-DEVFIXTURE1.js").write_text("// dev fixture bundle\n")
-    (root / ".gitignore").write_text("__pycache__/\n")
+    (ui / "index.html").write_text("<!doctype html><title>dev fixture</title>\n", encoding="utf-8")
+    (ui / "assets" / "index-DEVFIXTURE1.js").write_text("// dev fixture bundle\n", encoding="utf-8")
+    (root / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
     fx = Fixture(root, signer)
     doc = fx.gate()
     doc["purpose"] = "DEV FIXTURE gate file written by dev_signer_e2e.py: every decision below is a SYNTHETIC fixture entry, not a decision."
@@ -396,23 +396,23 @@ def make_notices(tmp: Path, gen_notices) -> Path:
     site = tmp / "site"
     d = site / "alpha-1.0.dist-info"
     (d / "licenses").mkdir(parents=True)
-    (d / "METADATA").write_text("Name: alpha\nVersion: 1.0\nLicense-Expression: MIT\n")
-    (d / "licenses" / "LICENSE").write_text("DEV FIXTURE licence text of alpha\n")
+    (d / "METADATA").write_text("Name: alpha\nVersion: 1.0\nLicense-Expression: MIT\n", encoding="utf-8")
+    (d / "licenses" / "LICENSE").write_text("DEV FIXTURE licence text of alpha\n", encoding="utf-8")
     g = site / "gamma-3.0.dist-info"
     g.mkdir()
-    (g / "METADATA").write_text("Name: gamma\nVersion: 3.0\n")
+    (g / "METADATA").write_text("Name: gamma\nVersion: 3.0\n", encoding="utf-8")
     texts = tmp / "texts"
     texts.mkdir()
-    (texts / "REF.txt").write_text("DEV FIXTURE reference text\n")
+    (texts / "REF.txt").write_text("DEV FIXTURE reference text\n", encoding="utf-8")
     sbom = tmp / "sbom.cdx.json"
     sbom.write_text(json.dumps({
         "bomFormat": "CycloneDX", "specVersion": "1.5", "metadata": {"properties": [{"name": "redevops:limitation:L-X", "value": "yes"}]},
         "components": [{"type": "library", "name": "alpha", "version": "1.0", "purl": "pkg:pypi/alpha@1.0"},
-                       {"type": "library", "name": "gamma", "version": "3.0", "purl": "pkg:pypi/gamma@3.0"}]}))
+                       {"type": "library", "name": "gamma", "version": "3.0", "purl": "pkg:pypi/gamma@3.0"}]}), encoding="utf-8")
     comps = tmp / "components.json"
     comps.write_text(json.dumps({"entries": {}, "static_components": [],
                                  "reference_notices": [{"id": "libx", "limitation": "L-X", "title": "Lib X (dev fixture)",
-                                                        "declared": "MIT", "texts": ["REF.txt"], "decision": "D-LIC-6"}]}))
+                                                        "declared": "MIT", "texts": ["REF.txt"], "decision": "D-LIC-6"}]}), encoding="utf-8")
     out = tmp / "notices-baseline"
     gen_notices.run(sbom, [site], [], texts, comps, out, "DEV FIXTURE", [])
     return out
@@ -588,7 +588,7 @@ def evaluate(row: Row, fx: Fixture, tmp: Path, notices_base: Path, py: str) -> N
     if m and r.returncode:
         row.detail.append("generator (private): " + m)
     if r.returncode == 0:
-        doc = json.loads((notices / "about.json").read_text())
+        doc = json.loads((notices / "about.json").read_text(encoding="utf-8"))
         row.states = {k: v["state"] for k, v in doc["legal"]["slots"].items()}
         rec = rec_module()
         bad = rec.validate_record(doc)                                      # the launcher view contract (shared validator)
@@ -606,7 +606,7 @@ def evaluate(row: Row, fx: Fixture, tmp: Path, notices_base: Path, py: str) -> N
             row.problems.append("distribution generator exit 0 but no about.json")
         else:
             rec = rec_module()
-            doc = json.loads((outd / "about.json").read_text())
+            doc = json.loads((outd / "about.json").read_text(encoding="utf-8"))
             if rec.validate_record(doc) or doc["build"]["mode"] != "distribution":
                 row.problems.append("the distribution record is not valid / not a distribution record")
             else:
@@ -820,7 +820,7 @@ def main(argv=None) -> int:
         build_baseline(gate_mod.ABOUT_SLOTS, tmp, baseline_root, key1)
         (tmp / "notices-work").mkdir()
         notices_base = make_notices(tmp / "notices-work", gen_notices)
-        print(f"fixture repository root with {len(json.loads((baseline_root / 'packaging/distribution-gate.json').read_text())['decisions'])} "
+        print(f"fixture repository root with {len(json.loads((baseline_root / 'packaging/distribution-gate.json').read_text(encoding="utf-8"))['decisions'])} "
               "DEV FIXTURE decisions, synthetic signed records and synthetic texts built")
         rows: list = []
         todo = []
@@ -900,7 +900,7 @@ def main(argv=None) -> int:
                   f"{end['allowed_signers_sha256'][:16]}..., fingerprints [], {end['decisions_open']} of {end['decisions_total']} decisions OPEN, "
                   "gate file and working tree status identical, no private key file in the repository)")
     if a.json and results:
-        a.json.write_text(json.dumps(results, indent=1, sort_keys=True) + "\n")
+        a.json.write_text(json.dumps(results, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     print("RESULT:", {0: "PASS", 1: "FAIL", EXIT_REFUSED: "REFUSED"}[rc])
     return rc
 

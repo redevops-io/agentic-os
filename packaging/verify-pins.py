@@ -68,7 +68,7 @@ def norm(n: str) -> str:
 
 def read_env(p: Path) -> dict[str, str]:
     d = {}
-    for line in p.read_text().splitlines():
+    for line in p.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
@@ -82,7 +82,7 @@ def parse_lock(p: Path) -> tuple[dict[str, str], list[str]]:
     problems: list[str] = []
     cur = None
     hashes: dict[str, int] = {}
-    for raw in p.read_text().splitlines():
+    for raw in p.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
@@ -100,7 +100,7 @@ def parse_lock(p: Path) -> tuple[dict[str, str], list[str]]:
 
 
 def frozen_set(os_name: str) -> dict[str, str]:
-    d = json.loads((PK / "evidence" / "frozen-ci-wheels.json").read_text())
+    d = json.loads((PK / "evidence" / "frozen-ci-wheels.json").read_text(encoding="utf-8"))
     out = {}
     for f in d["platforms"][os_name]:
         parts = f[:-4].split("-")
@@ -126,7 +126,7 @@ def main() -> int:
     if not re.fullmatch(r"\d+\.\d+\.\d+", env.get("PYTHON_VERSION", "")):
         problems.append("toolchain.env: PYTHON_VERSION must be an exact x.y.z")
 
-    py = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    py = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     deps = list(py.get("dependencies", []))
     for e in BUILT_EXTRAS:
         deps += py.get("optional-dependencies", {}).get(e, [])
@@ -137,7 +137,7 @@ def main() -> int:
             git_deps[norm(m.group(1))] = (m.group(2), m.group(3))
         else:
             third.append(d.replace(" ", ""))
-    pins = json.loads((PK / "git-pins.json").read_text())["dependencies"]
+    pins = json.loads((PK / "git-pins.json").read_text(encoding="utf-8"))["dependencies"]
     pinmap = {norm(p["name"]): p for p in pins}
     if set(git_deps) != set(pinmap):
         problems.append(f"git deps in pyproject {sorted(git_deps)} != git-pins.json {sorted(pinmap)}")
@@ -154,7 +154,7 @@ def main() -> int:
         for k in ("tag_object", "commit"):
             if not re.fullmatch(r"[0-9a-f]{40}", p[k]):
                 problems.append(f"{n}: git-pins {k} is not a 40-hex sha")
-    req_in = [l.strip().replace(" ", "") for l in (PK / "requirements.in").read_text().splitlines()
+    req_in = [l.strip().replace(" ", "") for l in (PK / "requirements.in").read_text(encoding="utf-8").splitlines()
               if l.strip() and not l.strip().startswith("#")]
     if sorted(req_in) != sorted(third):
         problems.append(f"requirements.in {sorted(req_in)} != pyproject third-party deps {sorted(third)}")
@@ -214,7 +214,7 @@ def main() -> int:
 
     cl = ROOT / "deploy/launcher/src-tauri/Cargo.lock"
     if cl.exists():
-        c = tomllib.loads(cl.read_text())
+        c = tomllib.loads(cl.read_text(encoding="utf-8"))
         names = {(x["name"], x["version"]) for x in c["package"]}
         for need in [("tauri", "2.11.5"), ("tauri-build", "2.6.3"), ("serde", "1.0.229"), ("serde_json", "1.0.151"), ("redevops-launcher", "0.1.1")]:
             if need not in names:

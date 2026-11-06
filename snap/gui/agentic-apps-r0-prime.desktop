@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Agentic Apps R0-prime
+Comment=Governed AI control plane - your apps as one system (private R0-prime build)
+Exec=agentic-apps-r0-prime
+Icon=${SNAP}/meta/gui/icon.png
+Terminal=false
+Categories=Development;
+StartupWMClass=agentic-r0prime

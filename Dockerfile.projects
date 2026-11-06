@@ -1,19 +1,41 @@
 # Self-hosted ReDevOps Projects — the Projects UI + API on one origin.
 #   docker build -f Dockerfile.projects -t redevops-projects .
 #   docker run -p 8787:8787 redevops-projects          # → http://localhost:8787
-# The prebuilt UI (pinned redevops-projects release, packaging/projects_ui.lock.json) is fetched and
-# sha256-verified by the wheel build hook, so no Node build is needed here (the build needs network access).
-FROM python:3.12-slim
+# The UI bundle ships in the wheel (agentic_os/projects_ui, the pinned artifact vendored into the build context: see
+# packaging/projects_ui.lock.json), so no Node build and no download is needed here (AGENTIC_OS_SKIP_UI_FETCH=1 on the install RUN).
+# Base pinned by the index digest (python 3.12.16-slim-trixie, multi-arch: linux/amd64 + linux/arm64).
+# Bump deliberately: docker buildx imagetools inspect python:3.12-slim
+FROM python:3.12-slim@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54
 WORKDIR /app
-# git is required at install time: runtime-contracts + redevops-connectors are git dependencies.
+# Reproducible builds: pass --build-arg SOURCE_DATE_EPOCH=<unix time> (and --output ...,rewrite-timestamp=true).
+# Python then writes checked-hash .pyc files instead of mtime-stamped ones; unset, nothing changes.
+ARG SOURCE_DATE_EPOCH
+# Only what the wheel build needs (same set as the root Dockerfile), not the whole build context: a
+# local .env, key or evidence file in the checkout must not be able to land in an image layer.
+COPY pyproject.toml README.md modules.yaml hatch_build.py LICENSE LICENSE-COMMONS-CLAUSE LICENSE.md LICENSING.md ./
+COPY agentic_os ./agentic_os
+COPY deploy/assets ./deploy/assets
+# git is required at install time only: runtime-contracts + redevops-connectors are git dependencies.
+# Install it for the build and purge it in the same layer (as the root image does) so the runtime image
+# ships without it. PIP_NO_CACHE_DIR also reaches the isolated build-environment pip that --no-cache-dir
+# does not.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git \
-    && rm -rf /var/lib/apt/lists/*
-COPY . /app
-RUN pip install --no-cache-dir '.[projects]'
+    && AGENTIC_OS_SKIP_UI_FETCH=1 PIP_NO_CACHE_DIR=1 pip install --no-cache-dir '.[projects]' \
+    && apt-get purge -y git && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/* /var/log/apt /var/log/dpkg.log /var/log/alternatives.log /var/cache/ldconfig/aux-cache
 # A hosted container is not a desktop: it has no launcher to hand a session to, and sits behind the control plane's own token
 # gating and the operator's edge controls. The explicit opt-out of the local capability gate is therefore set here (origin/main's
 # behaviour); without it `agentic-os-projects` serves behind the gate and fails closed.
 ENV PROJECTS_HOST=0.0.0.0 PROJECTS_PORT=8787 AGENTIC_OS_LOCAL_CAPABILITY=off
+# Run unprivileged. The app keeps its state under the service user's home (AGENTIC_OS_HOME / ~).
+RUN groupadd --system --gid 10001 app \
+    && useradd --system --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin app
+USER 10001:10001
 EXPOSE 8787
+# The static UI shell at / is served without the launch capability (every /api route and /health
+# answer 401 without it), so it is the unauthenticated liveness signal. Honours PROJECTS_PORT and
+# PROJECTS_BASE_PATH; the in-container Host header is 127.0.0.1:<port>, which the host check allows.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD ["python", "-c", "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:%s%s/' % (os.environ.get('PROJECTS_PORT','8787'), os.environ.get('PROJECTS_BASE_PATH','').rstrip('/')), timeout=3)"]
 CMD ["agentic-os-projects"]

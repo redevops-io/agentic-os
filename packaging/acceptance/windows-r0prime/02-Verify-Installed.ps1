@@ -40,7 +40,7 @@ try {
     $vi = $fi.VersionInfo
     $arch = Get-PeMachine $f
     Write-Line ("{0}  {1}  {2} bytes  PE={3}  FileVersion={4}  ProductName={5}" -f $h, $n, $fi.Length, $arch, $vi.FileVersion, $vi.ProductName)
-    Add-Result ('BIN-' + $key + '-A') ("$n hash + architecture") $(if ($arch -eq 'x64') { 'PASS' } else { 'FAIL' }) ("sha256={0} size={1} PE={2}" -f $h, $fi.Length, $arch)
+    Add-Result ('BIN-' + $key + '-A') ("$n hash + architecture") $(if ($arch -eq 'x64' -or ($key -eq 'UNINSTALL' -and $arch -eq 'x86')) { 'PASS' } else { 'FAIL' }) ("sha256={0} size={1} PE={2}{3}" -f $h, $fi.Length, $arch, $(if ($key -eq 'UNINSTALL' -and $arch -eq 'x86') { ' (the NSIS uninstaller stub is 32-bit by design)' } else { '' }))
     if ($expected.ContainsKey($n.ToLower())) {
       Add-Result ('BIN-' + $key + '-H') ("$n hash vs expected file") $(if ($expected[$n.ToLower()] -eq $h) { 'PASS' } else { 'FAIL' }) ("expected {0}" -f $expected[$n.ToLower()])
     }

@@ -43,11 +43,20 @@ def test_only_the_plist_and_its_documentation_name_the_entitlement():
     allowed = {"packaging/macos/sidecar.entitlements.plist", "docs/MACOS_ENTITLEMENTS.md",
                "tests/test_macos_entitlements.py", "tests/test_signing_procedure_r0prime.py",
                # the macOS acceptance kit READS entitlements to verify them (no signing, no writing of the key)
-               "packaging/acceptance/macos-r0prime/SIGNING-READINESS.md", "packaging/acceptance/macos-r0prime/verify_dmg.sh"}
+               "packaging/acceptance/macos-r0prime/SIGNING-READINESS.md", "packaging/acceptance/macos-r0prime/verify_dmg.sh",
+               # the prepared signing/notarization runbook documents the one sidecar entitlement (no secret, nothing executed)
+               "docs/release/MACOS_SIGNING_NOTARIZATION_RUNBOOK.md",
+               # store-packaging documents and the DRAFT Mac App Store plist NAME the key only to say it is NOT proposed there (the draft
+               # plists are asserted below never to carry it as a <key>); the release inventory lists the one provisional sidecar entitlement
+               "docs/release/MAC_APP_STORE.md", "docs/release/RELEASE_INVENTORY.md",
+               "packaging/stores/macos-mas/app.entitlements.DRAFT.plist"}
     # the macOS acceptance kit (incl. the gui harness) only READS/verifies the key on COPIES; it never writes it into the repository plist
     # packaging/signing/ (the prepared signing scripts and documents) READS the entitlement back to verify it and passes the repository plist to the sidecar signing only
     extra = {f for f in files if f not in allowed and not f.startswith(("packaging/DECISIONS", "reports/", "packaging/acceptance/macos-r0prime/", "packaging/signing/"))}
     assert not extra, extra
+    # the store drafts must never GRANT the key (they only mention it as absent)
+    for f in ("packaging/stores/macos-mas/app.entitlements.DRAFT.plist", "packaging/stores/macos-mas/helper.entitlements.DRAFT.plist"):
+        assert f"<key>{KEY}</key>" not in (ROOT / f).read_text(encoding="utf-8"), f
 
 
 def test_minimum_system_version_matches_the_arm64_binaries():

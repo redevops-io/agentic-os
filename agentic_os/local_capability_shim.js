@@ -8,6 +8,8 @@
  *    of the same tab resumes the session; a new tab or a bookmark needs a fresh launch code.
  * 3. Wrap window.fetch so same-origin /api/ requests wait for (1)/(2) and carry the X-Agentic-Session
  *    and X-Agentic-CSRF headers.
+ * 4. Tell the user when the local service is gone or failing: the vendored bundle has no error state and shows
+ *    "Loading..." for ever when a request fails. One non-blocking role=alert notice (see showNotice).
  * The code never reaches the server in a URL, a log line, or a Referer. No eval, no inline script.
  */
 (function () {
@@ -110,6 +112,41 @@
     if (document.body) { show(); } else { document.addEventListener("DOMContentLoaded", show); }
   }
 
+  // Service-lost notice (UI-agent finding UIA-02). When the sidecar has stopped (network error) or answers HTTP 5xx, the vendored
+  // bundle has no error state: it keeps "Loading..." on screen with no message. ONE role=alert strip tells the user what happened and
+  // which launcher button to press. It is non-blocking by construction: it never moves focus, never hides or inerts the app, adds no
+  // controls, and is removed as soon as a later same-origin /api/ request is answered below 500. It is not shown while the sign-in
+  // panel owns the page, and failures of other origins or aborted requests never raise it. DOM APIs and one <style> element only.
+  var NOTICE_TEXT_GONE = "The local Agentic Apps service is not responding. It may have stopped, so this page cannot load data. " +
+    "Go back to the Agentic Apps R0-prime window and press \"Start & open\" to start it again and get a fresh link; " +
+    "this page cannot reconnect on its own.";
+  var NOTICE_CSS =
+    ".ao-notice{position:fixed;left:0;right:0;bottom:0;z-index:2147483000;box-sizing:border-box;max-height:40vh;overflow:auto;" +
+    "padding:12px 16px;background:#fff4d6;color:#3a2a00;border-top:2px solid #b45309;" +
+    "font:14px/1.45 system-ui,-apple-system,'Segoe UI',sans-serif}" +
+    "@media (prefers-color-scheme:dark){.ao-notice{background:#2b2000;color:#ffe9a8;border-top-color:#f59e0b}}";
+  var notice = null;
+  var noticeStyled = false;
+  function showNotice(status) {
+    if (shown || !document.body) { return; }
+    var text = status ? "The local Agentic Apps service returned an error (HTTP " + status + "). " +
+      "Reload this page; if it keeps happening, go back to the Agentic Apps R0-prime window and press \"Start & open\" to restart it." :
+      NOTICE_TEXT_GONE;
+    if (!noticeStyled) {
+      noticeStyled = true;
+      (document.head || document.body).appendChild(el("style", null, NOTICE_CSS));
+    }
+    if (notice) { notice.textContent = text; return; }
+    notice = el("div", { "class": "ao-notice", role: "alert", id: "agentic-service-notice" }, text);
+    document.body.appendChild(notice);
+  }
+  function clearNotice() {
+    if (notice) {
+      try { notice.remove(); } catch (e) { /* ignore */ }
+      notice = null;
+    }
+  }
+
   function adopt(j) {
     if (j && j.session_token && j.csrf_token) {
       token = j.session_token;
@@ -157,7 +194,12 @@
       o.credentials = "omit";
       return origFetch(input, o).then(function (r) {
         if (r.status === 401) { forget(); signInPanel(); }
+        else if (r.status >= 500) { showNotice(r.status); }
+        else { clearNotice(); }
         return r;
+      }, function (e) {
+        if (!(e && e.name === "AbortError")) { showNotice(0); }
+        throw e;
       });
     });
   };

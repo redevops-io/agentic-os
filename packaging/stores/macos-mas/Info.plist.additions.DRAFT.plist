@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  DRAFT, NOT USED BY ANY BUILD. Keys a Mac App Store flavour would MERGE into the bundle Info.plist (Tauri merges
+	  deploy/launcher/src-tauri/Info.plist; tauri.conf.json would also need bundle.category). Values are proposals.
+	  The existing key RedevopsReleaseLine (identity.json) is untouched and not repeated here.
+	-->
+
+	<!-- App Store category. tauri.conf.json already says "DeveloperTool" (bundle.category), which Tauri is expected to map to this value (not verified here). -->
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.developer-tools</string>
+
+	<!-- Matches bundle.macOS.minimumSystemVersion in tauri.conf.json today (11.0). The Tauri App Store guide uses 12.0 for Apple-silicon-only. OWNER DECISION. -->
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+
+	<!-- Keep the copyright line byte-equal to tauri.conf.json bundle.copyright and to D-LIC-1. -->
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright (c) 2025-2026 RedevOps.</string>
+
+	<!--
+	  ITSAppUsesNonExemptEncryption is REQUIRED by App Store Connect (Tauri App Store guide) but its VALUE is an export-compliance
+	  determination only the owner (and counsel) can make: the product uses TLS, HMAC-SHA256 and the cryptography wheel.
+	  It is therefore NOT written here. When decided, add:
+	      <key>ITSAppUsesNonExemptEncryption</key><false/>   (or <true/> plus ITSEncryptionExportComplianceCode)
+	-->
+
+	<!--
+	  Deliberately absent: NSAppTransportSecurity (the launcher opens sockets directly; no URLSession/WKWebView load of http),
+	  NSLocalNetworkUsageDescription (127.0.0.1 is not the local network), usage-description keys for camera, microphone,
+	  contacts, calendars (the code requests none).
+	-->
+</dict>
+</plist>

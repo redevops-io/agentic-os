@@ -121,7 +121,7 @@ def section_offsets(raw: bytes, records: list[dict], refs: list[dict]) -> tuple[
 # ----------------------------------------------------------------------------------------------------- source facts
 def git_facts(root: Path) -> dict:
     def g(*a: str) -> str:
-        r = subprocess.run(["git", "-C", str(root), *a], capture_output=True, text=True, timeout=60)
+        r = subprocess.run(["git", "-C", str(root), *a], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
         if r.returncode != 0:
             raise ValueError(f"git {' '.join(a)} failed: {r.stderr.strip()[:200]}")
         return r.stdout.strip()

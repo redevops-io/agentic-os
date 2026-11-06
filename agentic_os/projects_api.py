@@ -298,6 +298,9 @@ class SampleProjectionProvider:
     intervention_store: Any = None
     #: serialises dedupe-check + append of the in-memory working copy and the durable file
     _outcome_lock: Any = field(default_factory=__import__("threading").Lock, repr=False, compare=False)
+    #: sources a user confirmed in this process, by project id. IN MEMORY ONLY: nothing is written anywhere and a restart
+    #: forgets them (persistence beyond the process is an owner decision, limitation L-1 of the macOS report: the desktop app persists no data). Listed with a "(this session only)" marker.
+    session_sources: Dict[str, List[dict]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.policy_registry is None:
@@ -709,7 +712,7 @@ class SampleProjectionProvider:
         for a in apps:  # reflect the live connection set
             if a["provider"] in self.connected:
                 if a["state"] == "NOT_CONNECTED":
-                    a.update(state="VERIFIED_READ", health="ok", verified="Verified just now")
+                    a.update(state="VERIFIED_READ", health="ok", verified="Verified just now (sample)")
             else:
                 a.update(state="NOT_CONNECTED", health="mut")
         # A deployment can offer only a subset of apps via $PROJECTS_APPS; unset = all.
@@ -722,8 +725,17 @@ class SampleProjectionProvider:
         return {"provider": provider, "state": "VERIFIED_READ", "connected": True,
                 "detail": "connected (sample: simulated hosted OAuth)"}
 
-    def sources(self, _pid: str) -> List[dict]:
-        return _sample_sources()
+    def sources(self, pid: str) -> List[dict]:
+        return _sample_sources() + [dict(s) for s in self.session_sources.get(pid, [])]
+
+    def remember_sources(self, pid: str, projections: List[dict]) -> None:
+        """Keep confirmed sources for the life of this process (in memory; the same source id replaces its earlier entry)."""
+        kept = self.session_sources.setdefault(pid, [])
+        for p in projections:
+            mark = dict(p, session_only=True)
+            if not str(mark.get("name", "")).endswith(SESSION_ONLY):
+                mark["name"] = f"{mark.get('name', '')}{SESSION_ONLY}"
+            kept[:] = [k for k in kept if k.get("source_id") != mark.get("source_id")] + [mark]
 
     def runtime(self, _pid: str) -> dict:
         return _sample_runtime()
@@ -753,6 +765,9 @@ class SampleProjectionProvider:
         }
 
 
+SESSION_ONLY = " (this session only)"
+
+
 def _app(provider: str, display_name: str, used_for: str, state: str, health: str,
          caps: List[str], **extra: Any) -> Dict[str, Any]:
     return {"provider": provider, "display_name": display_name, "used_for": used_for,
@@ -765,13 +780,13 @@ def _app(provider: str, display_name: str, used_for: str, state: str, health: st
 def _sample_apps() -> List[dict]:
     return [
         _app("whatsapp_business", "WhatsApp Business", "Receive customer messages and reply.",
-             "MISSION_READY", "warn", ["chat.message.send"], verified="Verified 2 days ago"),
+             "MISSION_READY", "warn", ["chat.message.send"], verified="Verified 2 days ago (sample)"),
         _app("hubspot", "HubSpot", "Find the customer and record the conversation.",
-             "MISSION_READY", "ok", ["crm.contact.upsert", "crm.note.create"], verified="Verified 11 min ago"),
+             "MISSION_READY", "ok", ["crm.contact.upsert", "crm.note.create"], verified="Verified 11 min ago (sample)"),
         _app("slack", "Slack", "Notifications, approvals, replies in threads.",
-             "MISSION_READY", "ok", ["chat.message.send", "approval.request", "chat.message.read"], verified="Verified 3 min ago"),
+             "MISSION_READY", "ok", ["chat.message.send", "approval.request", "chat.message.read"], verified="Verified 3 min ago (sample)"),
         _app("stripe", "Stripe", "Find charges and execute approved refunds.",
-             "MISSION_READY", "ok", ["billing.charge.find", "billing.refund.execute"], verified="Verified 5 min ago"),
+             "MISSION_READY", "ok", ["billing.charge.find", "billing.refund.execute"], verified="Verified 5 min ago (sample)"),
         _app("gmail", "Gmail", "Send email confirmations (optional).",
              "NOT_CONNECTED", "mut", ["email.message.send"]),
         _app("ayrshare", "Ayrshare", "Publish content to many venues in one call.",
@@ -800,8 +815,8 @@ def _sample_sources() -> List[dict]:
                 "391 indexed", {"discovered": 428, "indexed": 391, "skipped": 37},
                 allowed_content_types=["pdf", "docx", "markdown"], last="2 min ago", fp="a1b2c3"),
         _source("crm", "CRM database", "database", "postgres · localhost/customer_ops", "healthy",
-                "Live connection", {"schemas": 2, "tables": 42}, provider="postgres",
-                allowed_schemas=["public", "support"], denied=["billing.card_data", "hr.*"], last="live"),
+                "Sample connection", {"schemas": 2, "tables": 42}, provider="postgres",
+                allowed_schemas=["public", "support"], denied=["billing.card_data", "hr.*"], last="sample"),
         _source("gdrive", "Google Drive", "cloud_files", "Drive · Policies", "healthy",
                 "Synced 4 min ago", {"files": 1842, "indexed": 1842}, provider="google_drive", last="4 min ago"),
         _source("s3", "Support archive", "cloud_files", "s3://support-archive", "stale",
@@ -1908,9 +1923,13 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
         # control token (fail closed: 503 when unset, 401 when wrong).
         specs = authorize_source_locations(req.sources, authorization)
         try:
-            return confirm_and_connect_sources(req.project_id, specs, req.confirmed_by)
-        except ValueError as e:                       # unknown kind / access mode / embedded NUL: the caller's input
-            raise HTTPException(422, str(e))
+            out = confirm_and_connect_sources(req.project_id, specs, req.confirmed_by)
+            keep = getattr(prov, "remember_sources", None)       # the sample provider lists what was confirmed, this session only
+            if keep is not None:
+                keep(req.project_id, out)
+            return out
+        except ValueError as e:     # an unknown kind / access_mode / indexing_policy / embedded NUL is the caller's mistake (422), not a server fault (UIA-05)
+            raise HTTPException(status_code=422, detail=[{"loc": ["body", "sources"], "msg": str(e)[:200], "type": "value_error"}]) from None
 
     # Governed Agent Gateway — let an EXTERNAL agent (Claude/ChatGPT/Cursor) reach a read-only,
     # governed slice of this deployment over MCP + REST. Opt-in: mounted only when

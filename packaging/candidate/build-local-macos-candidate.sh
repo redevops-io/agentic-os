@@ -62,7 +62,7 @@ for d in packaging/dist packaging/build packaging/wheelhouse packaging/notices/o
 done
 
 echo "== 2. build-all.sh (CI=true, app + dmg) =="
-( cd "$ROOT" && CI=true LAUNCHER_BUNDLES=app,dmg "$PK/build-all.sh" ) 2>&1 | tee "$OUT/logs/build-all.log" | tail -5
+( cd "$ROOT" && CI=true LAUNCHER_BUNDLES=app,dmg LAUNCHER_ADHOC_SIGN=1 "$PK/build-all.sh" ) 2>&1 | tee "$OUT/logs/build-all.log" | tail -5
 [ -d "$BD/macos/$APPNAME" ] || { echo "no .app produced"; exit 1; }
 DMG="$(ls "$BD"/dmg/*.dmg | head -1)"
 
@@ -82,6 +82,12 @@ cp "$PK/macos/sidecar.entitlements.plist" "$OUT/signing-inputs/"
 python3 -I "$PK/sbom/generate_source_offer.py" --sbom "$PK/dist/sbom/sbom.cdx.json" --out "$OUT/SOURCE-OFFER.md" --template "$PK/SOURCE-OFFER.md" \
   --git-pins "$PK/git-pins.json" --sources "$PK/source-offer/third-party-sources.json" --build-manifest "$PK/dist/build-manifest.json"
 
+echo "== 3b. the bundle must be consistently AD-HOC sealed (never Developer ID, never hardened runtime, no entitlements) =="
+# An unsealed bundle (only the linker signature on the launcher) makes Gatekeeper say "is damaged" for a quarantined download;
+# a consistent ad-hoc seal gives the normal "unidentified developer" path. This is not release signing (packaging/signing/** re-signs everything).
+python3 -I "$HERE/check_adhoc_seal.py" "$OUT/$APPNAME" | tee "$OUT/listings/adhoc-seal-check.txt" \
+  || { echo "the .app is not consistently ad-hoc sealed: see listings/adhoc-seal-check.txt"; exit 1; }
+
 echo "== 4. listings, dmg contents, Mach-O facts =="
 APP="$OUT/$APPNAME"
 (cd "$APP" && find . -type f | sort | while read -r f; do echo "$(shasum -a 256 "$f" | cut -d' ' -f1)  $(stat -f '%z %Sp' "$f")  $f"; done) > "$OUT/listings/app-contents.txt"
@@ -90,6 +96,8 @@ M="$(mktemp -d)"; hdiutil attach -readonly -nobrowse -noautoopen -noverify -moun
     if [ -L "$f" ]; then echo "symlink  $f -> $(readlink "$f")"; else echo "$(shasum -a 256 "$f" | cut -d' ' -f1)  $(stat -f %z "$f")  $f"; fi; done ) > "$OUT/listings/dmg-contents.txt"
 if diff <(cd "$M/$APPNAME" && find . -type f | sort | xargs shasum -a 256) <(cd "$APP" && find . -type f | sort | xargs shasum -a 256) >/dev/null; then
   echo "the .app inside the dmg has file hashes identical to the .app copy" > "$OUT/listings/dmg-vs-app.txt"; else echo "DIFFERENT" > "$OUT/listings/dmg-vs-app.txt"; fi
+codesign --verify --deep --strict --verbose=2 "$M/$APPNAME" > "$OUT/listings/dmg-app-codesign-verify.txt" 2>&1 \
+  || { echo "the .app inside the dmg does not verify (codesign --verify --deep --strict): see listings/dmg-app-codesign-verify.txt"; exit 1; }
 hdiutil detach "$M" >/dev/null; rmdir "$M"; M=""
 { echo "## Info.plist"; plutil -p "$APP/Contents/Info.plist"; echo; for f in "$APP/Contents/MacOS/"*; do echo "--- $(basename "$f")"; lipo -archs "$f"; vtool -show-build "$f" | grep -E "platform|minos|sdk"; codesign -dv "$f" 2>&1 | grep -E "Identifier|flags|Signature|TeamIdentifier"; echo "entitlements:"; codesign -d --entitlements - "$f" 2>&1 | grep -v '^Executable' || true; done
   echo "--- bundle"; codesign -dv "$APP" 2>&1 | grep -E "Format|Signature|Sealed|TeamIdentifier" || true; codesign --verify --deep --strict "$APP" 2>&1 | head -2 || true; } > "$OUT/listings/app-info-and-macho-facts.txt" 2>&1
@@ -123,7 +131,7 @@ cat > "$OUT/README-LOCAL-BUILD.md" <<EOF
 | Builder identity | **local**: the developer Mac named in \`environment/local-build-environment.txt\`. NOT a GitHub Actions run. |
 | Commit / tree | \`$COMMIT\` / \`$TREE\` (build manifest: \`build-manifest.json\`) |
 | Built | $(date -u +%Y-%m-%dT%H:%M:%SZ) |
-| Signing | **none**. No identity, keychain, notarization or stapling was used; the .app bundle has no seal (\`codesign --verify\` fails by design) and carries only the linker/ad-hoc signatures of its Mach-O files. Gatekeeper will refuse it on another Mac. |
+| Signing | **none for release: no Developer ID identity, keychain, notarization or stapling was used.** The .app is consistently sealed with the AD-HOC identity (\`codesign -s -\`: sidecar and launcher first, then the bundle; no hardened runtime, no entitlements, no timestamp; \`listings/adhoc-seal-check.txt\`), so \`codesign --verify --deep --strict\` passes and a quarantined copy gets Gatekeeper's normal "cannot verify / unidentified developer" refusal instead of "is damaged". Gatekeeper still REJECTS it on another Mac (\`spctl --assess\` rejected). To run a private copy see docs/release/MACOS_SIGNING_NOTARIZATION_RUNBOOK.md, section "Running the unsigned private build locally". |
 | dmg | \`$DMGNAME\`, sha256 \`$DMGSHA\`. Built with CI=true: the Finder/AppleScript window styling is skipped, so the disk image has no custom layout. The dmg bytes are not reproducible (timestamps); the .app file hashes inside are listed in \`listings/\`. |
 | Toolchain | CPython $PYTHON_VERSION, PyInstaller $PYINSTALLER_VERSION, rustc $RUST_VERSION, tauri-cli $TAURI_CLI_VERSION (from \`packaging/toolchain.env\`; actual local versions in \`environment/\`). |
 

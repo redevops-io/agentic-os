@@ -767,7 +767,7 @@ const src = fs.readFileSync(process.argv[2], 'utf8');
 const mode = process.argv[3];
 const log = [];
 const store = {};
-if (mode === 'reload') store['agentic_os.session'] = 'STORED-TOKEN';
+if (mode === 'reload' || mode === 'neterr' || mode === 'e500') store['agentic_os.session'] = 'STORED-TOKEN';
 const location = { origin: 'http://127.0.0.1:8787', href: 'http://127.0.0.1:8787/',
   pathname: '/', search: '', hash: mode === 'code' ? '#lc=' + 'A'.repeat(43) : '' };
 const history = { replaceState(_a, _b, url) { log.push(['replaceState', url]); location.hash = ''; } };
@@ -775,6 +775,8 @@ class Headers { constructor(h){ this.m = {}; if (h instanceof Headers) Object.as
   set(k,v){ this.m[k.toLowerCase()] = v; } get(k){ return this.m[k.toLowerCase()]; } }
 const hdrs = (o) => o && o.headers && (o.headers instanceof Headers ? o.headers.m : o.headers);
 const fetchImpl = (u, o) => { log.push(['fetch', String(u), (o && o.method) || 'GET', o && o.credentials, hdrs(o) || null, (o && o.body) || null, location.hash]);
+  if (mode === 'neterr' && !String(u).endsWith('/api/local/session') && !String(u).includes('/api/sidekick')) return Promise.reject(new TypeError('Failed to fetch'));
+  if (mode === 'e500' && String(u).endsWith('/api/projects')) return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({}) });
   const ok = String(u).endsWith('/api/local/session') && (mode !== 'none');
   const status = ok ? 200 : (String(u).endsWith('/api/local/session') ? 401 : 200);
   return Promise.resolve({ ok: status === 200, status, json: () => Promise.resolve({ session_token: 'SESSIONTOKEN', csrf_token: 'CSRFTOKEN' }) }); };
@@ -787,6 +789,7 @@ class El {
   set textContent(v) { this._text = String(v); }
   get textContent() { return [this._text].concat(this.children.map((c) => c.textContent)).filter(Boolean).join(' '); }
   focus() { document.activeElement = this; }
+  remove() { const i = document.body.children.indexOf(this); if (i >= 0) document.body.children.splice(i, 1); }
   toJSON() { return { tag: this.tag, attrs: this.attrs, text: this._text, children: this.children }; }
 }
 const root = new El('div'); root.attrs.id = 'root';
@@ -798,11 +801,15 @@ const ctx = { window, document, location, history, URL, Headers, Object, JSON, P
 vm.createContext(ctx);
 vm.runInContext(src.replace('window.fetch.bind(window)', 'window.fetch'), ctx);
 (async () => {
-  await ctx.window.fetch('/api/projects');
-  await ctx.window.fetch('/api/sidekick', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-  await ctx.window.fetch('https://example.org/api/x');
+  const snaps = [];
+  const call = async (...a) => { try { await ctx.window.fetch(...a); } catch (e) { log.push(['rejected', String(e)]); }
+    snaps.push({ n: document.body.children.length, texts: document.body.children.map((e) => e.textContent), roles: document.body.children.map((e) => e.attrs.role || ''),
+      root: Object.assign({}, root.attrs), focus: document.activeElement && document.activeElement.tag }); };
+  await call('/api/projects');
+  await call('/api/sidekick', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  await call('https://example.org/api/x');
   const panels = document.body.children;
-  console.log(JSON.stringify({ log, store, banner: panels.length, texts: panels.map((e) => e.textContent), panels,
+  console.log(JSON.stringify({ log, store, snaps, banner: panels.length, texts: panels.map((e) => e.textContent), panels,
     root: root.attrs, styles: document.head.children.length, focus: document.activeElement && document.activeElement.tag }));
 })();
 """
@@ -909,6 +916,33 @@ def test_shim_signed_in_paths_do_not_show_the_panel(tmp_path):
     for mode in ("code", "reload"):
         r = _run_shim(tmp_path, mode)
         assert r["banner"] == 0 and r["root"] == {"id": "root"}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+@pytest.mark.parametrize("mode,expect", [("neterr", "not responding"), ("e500", "HTTP 500")])
+def test_shim_tells_the_user_when_the_local_service_is_gone_or_failing_and_clears_it_on_recovery(tmp_path, mode, expect):
+    """UI-agent finding (rel/uiagent-macos, release qualification 2026-11-05): when the sidecar is stopped or fails, the vendored
+    bundle shows "Loading..." forever with no message (it has no error state). The shim, which already wraps every same-origin
+    /api/ fetch, shows ONE non-blocking role=alert notice naming the launcher button, never moves focus, never hides the app, and
+    removes the notice when a later same-origin /api/ request gets any HTTP answer below 500. Cross-origin requests are ignored."""
+    r = _run_shim(tmp_path, mode)
+    s1, s2, s3 = r["snaps"]
+    assert s1["n"] == 1 and s1["roles"] == ["alert"], s1                           # the first /api/projects failure shows the notice
+    text = s1["texts"][0]
+    assert expect in text, text
+    assert 'press "Start & open"' in text and "Agentic Apps R0-prime window" in text and "ReDevOps" not in text
+    assert "#lc=" not in text and "secret" not in text.lower() and "token" not in text.lower()
+    assert s1["focus"] is None and s1["root"] == {"id": "root"}                    # non-blocking: focus stays, the app is not hidden/inert
+    assert s2["n"] == 0, s2                                                       # a later POST /api/sidekick that is answered clears it
+    assert s3["n"] == 0, s3                                                       # a failing CROSS-ORIGIN request never raises the notice
+    assert not [e for e in r["log"] if e[0] == "replaceState"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_shim_service_notice_does_not_replace_or_double_the_signed_out_panel(tmp_path):
+    r = _run_shim(tmp_path, "none")                                                # signed out: the sign-in panel owns the page
+    assert [s["n"] for s in r["snaps"]] == [1, 1, 1]                                # one panel, never a second element
+    assert r["texts"][0].startswith("Sign in from the Agentic Apps R0-prime window")
 
 
 def test_shim_keeps_the_csp_as_strict_as_before():

@@ -53,7 +53,7 @@ def main() -> int:
     ap.add_argument("--python", default=sys.executable)
     a = ap.parse_args()
     root = Path(a.root).resolve()
-    epoch = subprocess.run(["git", "show", "-s", "--format=%ct", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
+    epoch = subprocess.run(["git", "show", "-s", "--format=%ct", "HEAD"], cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace").stdout.strip()
     env = dict(os.environ, PIP_DISABLE_PIP_VERSION_CHECK="1")
     if epoch.isdigit():
         env["SOURCE_DATE_EPOCH"] = epoch

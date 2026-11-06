@@ -14,3 +14,10 @@ build
 **/*.key
 **/.env
 .local
+**/.env.*
+!**/.env.example
+**/*.pem
+**/*.p12
+**/*.pfx
+**/id_rsa*
+**/id_ed25519*

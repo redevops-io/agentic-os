@@ -17,7 +17,7 @@ def cargo_metadata(manifest: str | Path, triple: str, locked: bool = True) -> di
     cmd = ["cargo", "metadata", "--format-version", "1", "--filter-platform", triple, "--manifest-path", str(manifest)]
     if locked:
         cmd.insert(2, "--locked")
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if r.returncode != 0:
         raise SystemExit(f"cargo metadata failed: {r.stderr.strip()[:500]}")
     return json.loads(r.stdout)
@@ -26,7 +26,7 @@ def cargo_metadata(manifest: str | Path, triple: str, locked: bool = True) -> di
 def lock_checksums(lock_path: str | Path) -> dict[tuple[str, str], str]:
     import tomllib
 
-    d = tomllib.loads(Path(lock_path).read_text())
+    d = tomllib.loads(Path(lock_path).read_text(encoding="utf-8"))
     return {(p["name"], p["version"]): p.get("checksum", "") for p in d.get("package", [])}
 
 

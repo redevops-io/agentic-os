@@ -22,7 +22,7 @@ def resolve_set(mdir: Path, triple: str, locked: bool = True) -> set[tuple[str, 
     cmd = ["cargo", "metadata", "--format-version", "1", "--filter-platform", triple, "--manifest-path", str(mdir / "Cargo.toml")]
     if locked:
         cmd.insert(2, "--locked")
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if r.returncode != 0:
         raise SystemExit(f"cargo metadata failed for {triple}: {r.stderr.strip()[:400]}")
     d = json.loads(r.stdout)
@@ -43,7 +43,7 @@ def main() -> int:
     bad = 0
     for os_, triple in TARGETS.items():
         f = Path(a.targets) / f"compiled-crates-{os_}.txt"
-        compiled = {(m.group(1), m.group(2)) for l in f.read_text().splitlines() if (m := re.match(r"^(\S+) v(\S+)$", l.strip())) and m.group(1) != "redevops-launcher"}
+        compiled = {(m.group(1), m.group(2)) for l in f.read_text(encoding="utf-8").splitlines() if (m := re.match(r"^(\S+) v(\S+)$", l.strip())) and m.group(1) != "redevops-launcher"}
         have = resolve_set(Path(a.manifest_dir), triple, locked=(Path(a.manifest_dir) / "Cargo.lock").exists())
         missing = sorted(compiled - have)
         extra = sorted(have - compiled)
