@@ -158,10 +158,6 @@ class TestStaticDefaults:
         body = "\n".join(l.split("#", 1)[0] for l in text.splitlines())
         assert "docker.sock" not in body and "privileged: true" not in body
 
-    @pytest.mark.xfail(
-        condition=not (ROOT / "scripts" / "release" / "oci_prepare.sh").exists(), strict=True,
-        reason="this line's Dockerfile is not yet hardened (floating base, root, no HEALTHCHECK): converge the OCI hardening "
-               "from post-rc/oci-release before the release (docs/release/CONTAINER_ACCEPTANCE_CRITERIA.md, section 7)")
     def test_dockerfile_meets_the_image_criteria(self):
         for name in ("Dockerfile", "Dockerfile.projects"):
             f = ROOT / name
