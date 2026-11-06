@@ -36,7 +36,7 @@ or still `REPLACE_ME`. The ingress hint that each script prints at the end names
 
 `tests/test_no_private_topology.py` runs `scripts/check_private_topology.py` over every tracked text file. It fails on:
 
-* a private-range address (RFC 1918, link-local, shared address space `100.64.0.0/10`, IPv6 unique-local and link-local)
+* a private-range address (RFC 1918, link-local, the RFC 6598 shared address space, IPv6 unique-local and link-local)
   that is not in `scripts/private_topology_allowlist.json`;
 * a development host alias, an `ssh` alias for the hypervisor, a home or scratch-session path, a private build-host
   directory, a MAC address, a `.lan`/`.internal`/`.corp`/`.ts.net` host name or a personal-provider mailbox that is not
@@ -45,8 +45,8 @@ or still `REPLACE_ME`. The ingress hint that each script prints at the end names
   belongs to a category that can never be listed.
 
 The allow-list holds, per file and per literal, the synthetic fixtures that network-guard code and its tests need
-(they must classify private addresses, so they contain some) and product names such as the Proxmox VE deployment
-skill. Do not widen it to make a check pass: replace the value with a documentation value or a configuration point.
+(they must classify private addresses, so they contain some) and the names of hypervisor products in the deployment
+skills. Do not widen it to make a check pass: replace the value with a documentation value or a configuration point.
 
 ```bash
 python scripts/check_private_topology.py              # list violations (exit 1)

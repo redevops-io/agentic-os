@@ -301,6 +301,12 @@
     "proxmox"
    ]
   },
+  "docs/DEPLOYMENT_ADDRESSES.md": {
+   "reason": "Synthetic internal service names used as inputs to hostname-classification code, tests or documentation; none identifies a real host.",
+   "names": [
+    "example.internal"
+   ]
+  },
   "tests/test_agent_gateway_error_hardening.py": {
    "reason": "Synthetic internal service names used as inputs to hostname-classification code, tests or documentation; none identifies a real host.",
    "names": [

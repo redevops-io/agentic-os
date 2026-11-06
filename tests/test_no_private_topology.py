@@ -142,6 +142,18 @@ def test_other_private_topology_categories(text, cat):
     assert cat in _cats(text)
 
 
+@pytest.mark.parametrize("text", [
+    "p = '/Users/runner/work'", "p = '/Users/USER/Desktop'", "p = '/Users/Public/x'", "p = '/Users/me/x'", "p = '/Users/tester/x'",
+    "p = '/Users/Shared/x'", "p = '/Users/you/x'", r"p = 'C:\Users\...\x'", r"p = 'C:\Users\Public\x'", "p = '/Users/x/y.py'"])
+def test_generic_placeholder_home_paths_are_not_findings(text):
+    assert _scan(text) == []
+
+
+def test_a_named_home_path_is_still_a_finding_next_to_a_placeholder():
+    assert "home-path" in _cats("cp /Users/runner/a /Users/" + "someone/b")
+    assert "home-path" in _cats("p = '/Users/" + "runnerx/a'")
+
+
 def test_public_contact_and_placeholder_mailboxes_are_not_findings():
     assert _scan("mail redevops@redevops.io or a@acme.example or jane@acme.com") == []
 
@@ -255,3 +267,13 @@ def test_cli_exit_codes(tmp_path, capsys):
     assert "ip-private" in out and "a.py:1" in out and "1 violation" in out
     (tmp_path / "a.py").write_text("A = 1\n", encoding="utf-8")
     assert cpt.main(["--root", str(tmp_path)]) == 0
+
+
+@pytest.mark.skipif(__import__("shutil").which("git") is None, reason="git is required")
+def test_untracked_files_are_scanned_and_ignored_files_are_not(tmp_path):
+    import subprocess
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text("local.env\n", encoding="utf-8")
+    (tmp_path / "new.py").write_text(f'A = "{PRIV_10}"\n', encoding="utf-8")        # never committed
+    (tmp_path / "local.env").write_text(f"HOST={PRIV_10}\n", encoding="utf-8")      # ignored by git: the owner's local file
+    assert [f.path for f in cpt.violations(tmp_path, allow={})] == ["new.py"]

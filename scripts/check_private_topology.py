@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Keep private network topology out of the repository (stdlib only).
 
+Scanned: every tracked file and every untracked file that git does not ignore (so a leak is seen before it is committed).
+
 The public source must not carry the address plan, host aliases, home paths or personal mailboxes of the machines
 it was developed on. This scanner finds them in every tracked text file and compares them with a reviewed allow-list
 of synthetic fixtures (`scripts/private_topology_allowlist.json`). `tests/test_no_private_topology.py` runs it in
@@ -61,7 +63,9 @@ _TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 _SSH_PROXMOX = re.compile(r"(?i)\bssh\b[^\n]{0,60}?\bproxmox\b|ssh_host\s*=\s*['\"]proxmox['\"]"
                           r"|_SSH['\"]?\s*,?\s*(?:\(default\s+)?['\"]proxmox['\"]")
 _TECH = re.compile(r"(?i)proxmox")
-_HOME = re.compile(r"(?:/Users/(?!Shared\b|x/|\*)[A-Za-z0-9._-]+|[A-Za-z]:\\Users\\[A-Za-z0-9._-]+|/private/tmp/claude[\w./-]*"
+# Generic placeholders (CI runners, documentation names) are not a person's home directory.
+_GENERIC_USERS = r"(?:Shared|Public|runner|user|USER|User|tester|me|you|name|username|USERNAME|x|\.\.\.|\*)(?![A-Za-z0-9._-])"
+_HOME = re.compile(r"(?:/Users/(?!" + _GENERIC_USERS + r")[A-Za-z0-9._-]+|[A-Za-z]:\\Users\\(?!" + _GENERIC_USERS + r")[A-Za-z0-9._-]+|/private/tmp/claude[\w./-]*"
                    r"|/tmp/claude-\d+[\w./-]*)")
 _HOST_PATH = re.compile(r"/mnt/backup/projects|/projects/(?:agentic-os|core-install|gtm)\b|/main/cloudflared")
 # Lower-case host names only (so `DataClass.INTERNAL` and `threading.local` are not names); `.local` only as a URL or
@@ -147,7 +151,7 @@ def scan_text(path: str, text: str) -> List[Finding]:
 
 def tracked_files(root: Path) -> List[str]:
     try:
-        raw = subprocess.run(["git", "-C", str(root), "ls-files", "-z"], capture_output=True, check=True, timeout=60).stdout
+        raw = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"], capture_output=True, check=True, timeout=60).stdout
         return [p for p in raw.decode("utf-8", "replace").split("\0") if p]
     except (OSError, subprocess.SubprocessError):
         found = []
