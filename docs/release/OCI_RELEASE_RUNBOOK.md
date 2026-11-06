@@ -83,9 +83,9 @@ Use only if the keyless workflow cannot be used. `docs/release/oci-promote-owner
 It runs a dry run by default and writes only with `--execute`. Preconditions: you are logged in to the registry in that terminal; the staged index
 is signed and attested with the release key (`cosign sign --key <managed key>` by digest, `cosign attest --type cyclonedx|slsaprovenance1` on each
 per-architecture digest, from a signing config without a transparency-log service unless one is wanted), whose public half is published through
-a channel other than the registry. It copies only the allow-list (the index, the manifests it lists, and the `sha256-<hex>.sig` / `.att` tags of
-the index and each image), requires exactly one signature per `.sig` tag and exactly two attestations per `.att` tag (so a signature by a throwaway
-or unknown key is refused), refuses an existing destination tag (404-only), asserts digest equality for the index and every child before and after
+a channel other than the registry. It copies only the allow-list (the index, the manifests it lists, and the cosign 3 referrer tags `sha256-<hex of the subject digest>` of
+the index and its children), requires exactly 1 sigstore bundle on the index and exactly 3 on each image (its signature and two attestations), so a
+signature by a throwaway or unknown key is refused, refuses an existing destination tag (404-only), asserts digest equality for the index and every child before and after
 the copy, verifies at the destination, proves that no earlier tag of the destination moved, and checks the package link and the labels.
 The key is a dedicated cosign key in a managed service; never reuse the release-manifest signing key, an SSH key, a GPG key or a Developer ID
 credential. With a transparency-log-free signature, consumers need `--insecure-ignore-tlog`; say so in the release notes.

@@ -14,13 +14,16 @@
 # environment); the source index is signed and attested with the release key whose public half is --pub.
 #
 # Allow-list (nothing else is copied): the index (by digest), the manifests the index lists (per-architecture images and BuildKit
-# attestation manifests), and for each per-architecture image and the index the cosign tags sha256-<hex>.sig / .att of that digest.
-# Not copied, by construction: every other tag of the staged repository (for example a 'tampered' or '<tag>-rebuild' tag), every
-# other digest, and any signature or attestation that is not the single release-key one (a .sig tag must hold exactly 1 signature,
-# a .att tag exactly 2: cyclonedx + slsaprovenance1).
+# attestation manifests), and the cosign artifacts of those digests. cosign 3 stores them as OCI referrers; on a registry without the
+# referrers API (GHCR is assumed to be one; UNVERIFIED) they are found under the fallback tag sha256-<hex of the subject digest>, an
+# index of referrer manifests of type application/vnd.dev.sigstore.bundle.v0.3+json. Exactly these are expected and copied:
+# the index: 1 bundle (the signature); each per-architecture image: 3 bundles (the signature and 2 attestations); each attestation
+# manifest: 0 or 1. Any other count or artifact type means foreign or additional signature material and the run is refused.
+# Not copied, by construction: every other tag of the staged repository (for example a 'tampered' or '<tag>-rebuild' tag) and every
+# other digest.
 set -euo pipefail
 
-ORAS_FLAGS=() COSIGN_FLAGS=()
+ORAS_FLAGS=() COSIGN_FLAGS=() CP_FLAGS=()
 # tag_state REF -> prints exists | absent | error:<first line>. 'absent' ONLY for the registry's 404 (oras prints exactly
 # 'Error response from registry: failed to find "REF": REF: not found'); every other failure (401/403/429/5xx, DNS, TLS, refused,
 # timeout, malformed answer) is 'error' and stops the run: a network problem must never read as "the tag does not exist".
@@ -51,7 +54,7 @@ host_of() { echo "${1%%/*}"; }
 is_local() { case "$(host_of "$1")" in 127.0.0.1:*|localhost:*) return 0;; *) return 1;; esac; }
 if [ -n "${PROMOTE_LOCAL_REHEARSAL:-}" ]; then
   is_local "$SRC" && is_local "$DST" || die "PROMOTE_LOCAL_REHEARSAL is only accepted when both registries are on this machine"
-  ORAS_FLAGS=(--plain-http); COSIGN_FLAGS=(--allow-http-registry)
+  ORAS_FLAGS=(--plain-http); CP_FLAGS=(--from-plain-http --to-plain-http); COSIGN_FLAGS=(--allow-http-registry)
 fi
 [ "$NOTLOG" = 1 ] && COSIGN_FLAGS+=(--insecure-ignore-tlog=true)
 
@@ -86,29 +89,47 @@ for d in "${CHILDREN[@]}"; do
   [ "$(fetch_raw "$SRC@$d" | sha_of)" = "$d" ] || die "child manifest $d does not hash to its digest at the source"
 done
 
-# ---- 2. verify the staged material with the RELEASE key before anything is copied; exact signature counts
+# ---- 2. verify the staged material with the RELEASE key before anything is copied; exact referrer counts and types
 hex() { echo "${1#sha256:}"; }
 VFLAGS=(--key "$PUB" ${COSIGN_FLAGS[@]+"${COSIGN_FLAGS[@]}"})
-cosign verify ${VFLAGS[@]+"${VFLAGS[@]}"} "$SRC@$INDEX" > /dev/null 2>&1 || die "cosign verify failed for the staged index"
-SIGTAGS=("sha256-$(hex "$INDEX").sig")
-ATTTAGS=()
+BUNDLE_TYPE=application/vnd.dev.sigstore.bundle.v0.3+json
+cosign verify "${VFLAGS[@]}" "$SRC@$INDEX" > /dev/null 2>&1 || die "cosign verify failed for the staged index"
 for d in "${IMAGES[@]}"; do
-  cosign verify ${VFLAGS[@]+"${VFLAGS[@]}"} "$SRC@$d" > /dev/null 2>&1 || die "cosign verify failed for $d"
+  cosign verify "${VFLAGS[@]}" "$SRC@$d" > /dev/null 2>&1 || die "cosign verify failed for $d"
   for ty in cyclonedx slsaprovenance1; do
-    cosign verify-attestation ${VFLAGS[@]+"${VFLAGS[@]}"} --type "$ty" "$SRC@$d" > /dev/null 2>&1 || die "attestation $ty failed to verify for $d"
+    cosign verify-attestation "${VFLAGS[@]}" --type "$ty" "$SRC@$d" > /dev/null 2>&1 || die "attestation $ty failed to verify for $d"
   done
-  SIGTAGS+=("sha256-$(hex "$d").sig"); ATTTAGS+=("sha256-$(hex "$d").att")
 done
-for t in "${SIGTAGS[@]}"; do
-  n=$(fetch_raw "$SRC:$t" | jq '.layers | length'); [ "$n" = 1 ] || die "$t holds $n signatures, expected exactly 1 (foreign or additional signature material)"
+REFTAGS=()            # the fallback tags to copy
+check_referrers() {   # subject exact|max N
+  local subj=$1 mode=$2 want=$3 tag st raw n bad
+  tag="sha256-$(hex "$subj")"
+  st=$(tag_state "$SRC:$tag")
+  case "$st" in
+    exists) ;;
+    absent) if [ "$mode" = max ]; then return 0; fi; die "no signature material at the source for $subj (tag $tag)";;
+    *) die "cannot read $SRC:$tag ($st)";;
+  esac
+  raw=$(fetch_raw "$SRC:$tag")
+  n=$(printf '%s' "$raw" | jq '.manifests | length')
+  bad=$(printf '%s' "$raw" | jq --arg t "$BUNDLE_TYPE" '[.manifests[] | select(.artifactType != $t)] | length')
+  [ "$bad" = 0 ] || die "$tag lists $bad referrers that are not sigstore bundles (foreign material)"
+  if [ "$mode" = exact ]; then
+    [ "$n" = "$want" ] || die "$tag lists $n signature/attestation bundles, expected exactly $want (foreign or additional material)"
+  else
+    [ "$n" -le "$want" ] || die "$tag lists $n bundles, expected at most $want"
+  fi
+  REFTAGS+=("$tag")
+}
+check_referrers "$INDEX" exact 1
+for d in "${CHILDREN[@]}"; do
+  is_image=0; for i in "${IMAGES[@]}"; do if [ "$i" = "$d" ]; then is_image=1; fi; done
+  if [ "$is_image" = 1 ]; then check_referrers "$d" exact 3; else check_referrers "$d" max 1; fi
 done
-for t in "${ATTTAGS[@]}"; do
-  n=$(fetch_raw "$SRC:$t" | jq '.layers | length'); [ "$n" = 2 ] || die "$t holds $n attestations, expected exactly 2"
-done
-note "staged index, ${#IMAGES[@]} images, signatures and attestations verified with $PUB; signature counts exact"
+note "staged index and ${#IMAGES[@]} images verified with $PUB; referrer counts exact: ${#REFTAGS[@]} referrer tags in the allow-list"
 
 # ---- 3. destination guards: no tag we are about to write may exist; any non-404 answer stops the run
-WRITE_TAGS=("${TAGS[@]}" "${SIGTAGS[@]}" "${ATTTAGS[@]}")
+WRITE_TAGS=("${TAGS[@]}" "${REFTAGS[@]}")
 for t in "${WRITE_TAGS[@]}"; do
   st=$(tag_state "$DST:$t")
   case "$st" in
@@ -127,16 +148,19 @@ if [ "$EXECUTE" != 1 ]; then
   note "DRY RUN: would write, in order:"
   echo "  oras cp -r $SRC@$INDEX $DST:${TAGS[0]}"
   for t in "${TAGS[@]:1}"; do echo "  oras tag $DST:${TAGS[0]} $t"; done
-  for t in "${SIGTAGS[@]}" "${ATTTAGS[@]}"; do echo "  oras cp $SRC:$t $DST:$t"; done
+  for t in "${REFTAGS[@]}"; do echo "  oras cp -r $SRC:$t $DST:$t"; done
   echo "  then: digest-equality of the index and every child at $DST, cosign verify of everything, pre-existing tags unchanged, repository link null, no source label"
   exit 0
 fi
 
 # ---- 4. write. First write to the destination package = publication for an existing public package.
 note "EXECUTE: copying (digests are preserved; oras copies manifest bytes unchanged)"
-oras cp -r ${ORAS_FLAGS[@]+"${ORAS_FLAGS[@]}"} "$SRC@$INDEX" "$DST:${TAGS[0]}"
+oras cp -r ${CP_FLAGS[@]+"${CP_FLAGS[@]}"} "$SRC@$INDEX" "$DST:${TAGS[0]}"
 for t in "${TAGS[@]:1}"; do oras tag ${ORAS_FLAGS[@]+"${ORAS_FLAGS[@]}"} "$DST:${TAGS[0]}" "$t"; done
-for t in "${SIGTAGS[@]}" "${ATTTAGS[@]}"; do oras cp ${ORAS_FLAGS[@]+"${ORAS_FLAGS[@]}"} "$SRC:$t" "$DST:$t"; done
+for t in "${REFTAGS[@]}"; do oras cp -r ${CP_FLAGS[@]+"${CP_FLAGS[@]}"} "$SRC:$t" "$DST:$t"; done
+for t in "${REFTAGS[@]}"; do   # the referrer indexes arrive byte-identical
+  [ "$(fetch_raw "$SRC:$t" | sha_of)" = "$(fetch_raw "$DST:$t" | sha_of)" ] || die "AFTER COPY: referrer index $t differs from the source"
+done
 
 # ---- 5. post-copy proof: equality for the index and every child, the tags resolve to the index, everything verifies, nothing moved
 [ "$(fetch_raw "$DST@$INDEX" | sha_of)" = "$INDEX" ] || die "AFTER COPY: destination index bytes differ from $INDEX"

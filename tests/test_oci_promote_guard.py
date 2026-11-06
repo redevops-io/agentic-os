@@ -90,7 +90,7 @@ def test_the_draft_never_builds_and_refuses_what_it_should():
     code = "\n".join(l for l in SCRIPT.read_text().splitlines() if not l.lstrip().startswith("#"))
     assert "docker build" not in code and "buildx build" not in code
     for needle in ("must be a staged-* package", "must not be a staged-* package", "tags are never overwritten", "cannot establish that",
-                   "is only accepted when both registries are on this machine", "holds $n signatures, expected exactly 1",
+                   "is only accepted when both registries are on this machine", "(foreign or additional material)", "are not sigstore bundles",
                    "AFTER COPY: pre-existing tag", "AFTER COPY: destination index bytes differ"):
         assert needle in code.replace("the source repository ", "").replace("the destination ", "") or needle in code, needle
     assert "EXECUTE=0" in code and 'if [ "$EXECUTE" != 1 ]' in code        # dry run by default
