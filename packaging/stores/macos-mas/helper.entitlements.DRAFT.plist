@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  DRAFT, NOT USED BY ANY BUILD.
+	  Entitlements of the NESTED EXECUTABLE (the frozen sidecar, redevops-sidecar) of a hypothetical Mac App Store flavour.
+	  Exactly these two keys, nothing else: a nested executable that carries only unrestricted entitlements needs no
+	  provisioning profile of its own; a restricted entitlement would need its own profile and App ID (Apple DTS,
+	  https://developer.apple.com/forums/thread/733942). Owner decision: MAC_APP_STORE.md section 5.
+	  The sandbox itself (network.client/server, file access) is INHERITED from the main executable.
+	-->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.inherit</key>
+	<true/>
+</dict>
+</plist>
