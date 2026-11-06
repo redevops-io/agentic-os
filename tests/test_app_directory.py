@@ -475,3 +475,18 @@ def test_no_port_or_host_is_written_in_the_module():
     import agentic_os.app_directory as ad
     src = Path(ad.__file__).read_text()
     assert not re.search(r"localhost:\d|127\.0\.0\.1:\d|https?://[a-z0-9.-]+\.[a-z]{2,}", src.replace("https://example", ""))
+
+
+def test_the_shipped_example_config_loads_without_errors():
+    from pathlib import Path
+    ex = Path(__file__).resolve().parents[1] / "config.app-directory.example.yaml"
+    dd = load_directory(ex)
+    assert dd.errors == [] and set(dd.apps) == {"support", "books"}
+    r = dd.record_link(ALICE, FakeCeiling("apps.support.open", "apps.support.records.conversation"), "support", "conversation",
+                       {"account_id": "1", "conversation_id": "42"})
+    assert r["url"] == "https://support.example.com/app/accounts/1/conversations/42"
+
+
+def test_open_url_is_canonicalised_scheme_and_host_lower_case():
+    s = d(app_cfg(ui_url="HTTPS://Extra.Example.COM/App/")).listing(ALICE, FakeCeiling("apps.extra.open"))
+    assert s[0]["open"]["url"] == "https://extra.example.com/App/"

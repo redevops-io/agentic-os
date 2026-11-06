@@ -1,0 +1,50 @@
+# Projects app directory: which applications a person can open from Projects, and how to deep-link into them.
+# Point AGENTIC_OS_APP_DIRECTORY at a copy of this file. Nothing here is a default: with no file the directory
+# is empty. Hosts below are placeholders; use the addresses people actually reach the applications at.
+#
+# Rules the loader enforces (an entry that breaks one is skipped and logged, the rest still load):
+#   * only apps with `ui: public-to-user` can ever be listed; `none` / `internal` entries are not even kept;
+#   * ui_url is an https URL on a fully qualified host (or an origin-relative path on Projects' own origin);
+#     plain http only to a loopback host and only with policy.allow_loopback_http; no credentials, no fragment;
+#   * a record `template` is a path under the app's own ui_url path; every {placeholder} needs an anchored
+#     pattern that cannot match / \ ? # % or a dot segment; values are checked, then percent-encoded;
+#   * who sees what is NOT in this file: the permission ceiling decides (apps.<id>.open,
+#     apps.<id>.records.<kind>, apps.<id>.inspect) through the identity plane or, with
+#     AGENTIC_OS_APP_DIRECTORY_CEILING=grants, the grant store the control plane's Permissions page edits.
+policy:
+  allowed_schemes: [https]
+  allow_loopback_http: false
+  allowed_hosts: ["*.example.com"]        # optional: pin every app to your domain
+
+apps:
+  - id: support
+    module: agentic-support               # optional: display name and tagline from modules.yaml
+    ui: public-to-user
+    auth: app-login                       # app-login | sso | none: what the person meets after clicking
+    ui_url: https://support.example.com/app
+    records:
+      conversation:
+        label: Conversation
+        template: /app/accounts/{account_id}/conversations/{conversation_id}
+        params:
+          account_id: '^[0-9]{1,10}$'
+          conversation_id: '^[0-9]{1,12}$'
+        ref_pattern: '^conversation:(?P<account_id>[0-9]+):(?P<conversation_id>[0-9]+)$'   # for "support:conversation:1:42" references
+    inspect:                              # the app's own view of one mission execution, if it has one
+      template: /app/executions/{mission_id}
+      params:
+        mission_id: '^[A-Za-z0-9_-]{1,64}$'
+    bindings:                             # which receipt step carries which record
+      support.resolve:
+        kind: conversation
+        params:
+          account_id: '=1'                # '=' is a literal
+          conversation_id: result.conversation_id
+
+  - id: books
+    ui: public-to-user
+    auth: sso
+    ui_url: https://books.example.com/    # an app with no record or execution view: those buttons show "Not available"
+
+  - id: infra
+    ui: none                              # an API-only operator: never listed

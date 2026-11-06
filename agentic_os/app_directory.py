@@ -153,8 +153,8 @@ def _check_path(path: str, what: str) -> None:
             raise DirectoryConfigError(f"{what}: dot segment in path")
 
 
-def _parse_ui_url(value: Any, policy: Policy) -> Tuple[Optional[str], str]:
-    """Return ``(origin or None, base_path)``. ``None`` origin = an origin-relative path on Projects' own origin."""
+def _parse_ui_url(value: Any, policy: Policy) -> Tuple[Optional[str], str, str]:
+    """Return ``(origin or None, base_path, canonical url)``. ``None`` origin = an origin-relative path on Projects' own origin."""
     if not isinstance(value, str) or not value or not _PRINTABLE.fullmatch(value):
         raise DirectoryConfigError("ui_url: must be a printable ASCII string")
     if "\\" in value or "#" in value or "%" in value or "?" in value:
@@ -163,7 +163,7 @@ def _parse_ui_url(value: Any, policy: Policy) -> Tuple[Optional[str], str]:
         raise DirectoryConfigError("ui_url: protocol-relative URLs are not allowed")
     if value.startswith("/"):
         _check_path(value, "ui_url")
-        return None, value.rstrip("/") or "/"
+        return None, value.rstrip("/") or "/", value
     parts = urlsplit(value)
     scheme = parts.scheme.lower()
     if scheme not in ("https", "http"):
@@ -194,7 +194,7 @@ def _parse_ui_url(value: Any, policy: Policy) -> Tuple[Optional[str], str]:
     _check_path(path, "ui_url")
     hostpart = f"[{host}]" if ":" in host else host
     origin = f"{scheme}://{hostpart}" + (f":{port}" if port else "")
-    return origin, path.rstrip("/") or "/"
+    return origin, path.rstrip("/") or "/", origin + path
 
 
 def _under(path: str, base: str) -> bool:
@@ -369,8 +369,7 @@ def _parse_entry(raw: Any, policy: Policy, registry: Any) -> Optional[AppEntry]:
     has_open = "ui_url" in raw
     origin, base, ui_url = None, "/", ""
     if has_open:
-        origin, base = _parse_ui_url(raw["ui_url"], policy)
-        ui_url = raw["ui_url"]
+        origin, base, ui_url = _parse_ui_url(raw["ui_url"], policy)
     recs_raw, records = raw.get("records") or {}, {}
     if not isinstance(recs_raw, dict):
         raise DirectoryConfigError(f"{app_id}: records must be a mapping")
