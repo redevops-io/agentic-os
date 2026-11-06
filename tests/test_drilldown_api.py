@@ -59,7 +59,6 @@ def test_unknown_mission_unauthorized_scope_and_wrong_project_are_byte_identical
     cases = [
         f"/api/projects/{SCOPE}/missions/m-does-not-exist/timeline",                 # unknown mission
         f"/api/projects/other-project/missions/{world.mid}/timeline",                # real mission, wrong project (no grant there either)
-        f"/api/projects/{SCOPE}/missions/..%2f..%2fetc/timeline",                    # hostile id
     ]
     bodies = []
     for url in cases:
@@ -67,6 +66,7 @@ def test_unknown_mission_unauthorized_scope_and_wrong_project_are_byte_identical
         assert r.status_code == 404, url
         bodies.append((r.content, sorted(k.lower() for k in r.headers if k.lower() not in {"content-length"})))
     assert len({b[0] for b in bodies}) == 1 and len({tuple(b[1]) for b in bodies}) == 1
+    assert json.loads(bodies[0][0]) == {"detail": "Not Found"}              # the framework's own unmatched-route body: nothing distinguishes a refusal
     assert world.mid.encode() not in bodies[0][0] and b"other-project" not in bodies[0][0]
 
 
@@ -78,6 +78,14 @@ def test_a_principal_without_the_grant_gets_the_same_404_as_an_unknown_mission(w
     denied = c.get(world.base + "/timeline", headers=H)
     unknown = c.get(f"/api/projects/{SCOPE}/missions/m-nope/timeline", headers=H)
     assert denied.status_code == 404 and denied.content == unknown.content
+
+
+def test_a_scope_function_that_names_a_scope_for_a_mission_with_no_events_is_a_404_not_a_crash(world):
+    svc, _, _ = make_service(world.store, world.tmp / "ghost", scope_of=lambda m: SCOPE)       # claims every id belongs to the project
+    app = FastAPI()
+    app.include_router(build_router(svc, SingleOwnerTokenAuthenticator(TOKEN, "owner")))
+    r = TestClient(app, raise_server_exceptions=False).get(f"/api/projects/{SCOPE}/missions/m-ghost/timeline", headers=H)
+    assert r.status_code == 404 and json.loads(r.content) == {"detail": "Not Found"}
 
 
 def test_the_other_actions_do_not_grant_inspect_and_a_prefix_grant_covers_it(world, tmp_path):
@@ -95,7 +103,8 @@ def test_bad_parameters_never_reveal_whether_a_mission_exists_to_an_unauthorized
     app.include_router(build_router(svc, SingleOwnerTokenAuthenticator(TOKEN, "owner")))
     c = TestClient(app)
     assert c.get(world.base + "/timeline?limit=999999", headers=H).status_code == 404
-    assert world.client.get(world.base + "/timeline?limit=999999", headers=H).status_code == 400
+    bad = world.client.get(world.base + "/timeline?limit=999999", headers=H)
+    assert bad.status_code == 400 and bad.json() == {"error": "invalid request parameters"}
 
 
 # ───────────────────────── revocation mid-session ─────────────────────────

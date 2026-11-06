@@ -36,12 +36,14 @@ def env(monkeypatch):
 
 def _timeline_all(svc, mid, limit=500):
     entries, after = [], 0
-    while True:
+    for _ in range(10_000):                                        # a cursor that does not advance must fail the test, not hang it
         page = svc.timeline(owner(), mid, after_seq=after, limit=limit)
         entries += page["entries"]
         if page["page"]["next_after_seq"] is None:
             return entries, page
+        assert page["page"]["next_after_seq"] > after, "the cursor did not advance"
         after = page["page"]["next_after_seq"]
+    raise AssertionError("pagination did not terminate")
 
 
 # ───────────────────────── cites are real and reproducible ─────────────────────────
@@ -291,12 +293,12 @@ def test_a_pinned_ref_is_verified_when_the_resolved_bytes_match_and_flagged_when
 
 def test_a_resolver_that_raises_is_source_offline(tmp_path):
     def boom(_ref):
-        raise ConnectionError("down")
+        raise ConnectionError("RESOLVER-INTERNAL-ERR-77")
     store = _store_with_refs(["discovery:finding-1"])
     svc, _, _ = make_service(store, tmp_path, scope_of=lambda m: SCOPE, resolver=boom)
     item = next(i for i in svc.evidence_list(owner(), "m1")["items"] if i["kind"] == "mission_evidence_ref")
     out = svc.evidence_inspect(owner(), "m1", item["id"])
-    assert out["content"]["reason"] == "source_offline" and "down" not in json.dumps(out)
+    assert out["content"]["reason"] == "source_offline" and "RESOLVER-INTERNAL-ERR-77" not in json.dumps(out)
 
 
 # ───────────────────────── partial failure and gates are shown, not smoothed over ─────────────────────────
@@ -353,6 +355,7 @@ def test_a_duckdb_ledger_gives_the_same_cites_as_the_jsonl_ledger(tmp_path, env)
     duckdb = pytest.importorskip("duckdb")
     from agentic_os.mission.event_backends import DuckDBEventStore
     db = DuckDBEventStore(str(tmp_path / "ledger.duckdb"))
+    db.append("MissionCreated", "m1", {"goal": "g"})
     for i in range(3):
         db.append("NodeSucceeded", "m1", {"node_id": f"n{i}", "capability": "c", "result": {"i": i, "f": 1.5}})
     db.close()
@@ -394,7 +397,7 @@ def test_the_service_cannot_reach_an_executor_or_a_runtime():
         assert forbidden not in src, f"drilldown must not reference {forbidden}"
     # the only .append( allowed is the audit sink's
     appends = re.findall(r"[\w.]*\.append\(", src)
-    assert all(a.startswith("self.audit") or a in {"out.append(", "items.append(", "entries.append(", "unavailable.append(", "parts.append(", "keys.append(", "rows.append("} for a in appends), appends
+    assert all(a.startswith("self.audit") or a in {"out.append(", "items.append(", "entries.append(", "unavailable.append(", "gaps.append(", "parts.append(", "keys.append(", "rows.append("} for a in appends), appends
     sig = inspect.signature(__import__("agentic_os.drilldown", fromlist=["DrilldownService"]).DrilldownService.__init__)
     assert "executor" not in sig.parameters and "runtime" not in sig.parameters
 
