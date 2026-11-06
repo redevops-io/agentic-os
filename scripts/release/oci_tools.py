@@ -315,7 +315,7 @@ def cmd_layer_scan(save_tar: str, topology_scanner: str) -> dict:
         needles = [l.strip() for l in open(nf, encoding="utf-8") if l.strip()]
     t, m, cfg, blob = _load_save(save_tar)
     name_rx = re.compile(r"(^|/)(\.git(/|$)|\.env($|\.)|id_rsa|id_ed25519|[^/]*\.(pem|key|p12|pfx)$|\.permissions\.key$|permissions\.env$)")
-    public_cert = ("etc/ssl/certs/", "usr/share/ca-certificates/", "usr/local/lib/python3.12/site-packages/certifi/")
+    public_cert = ("etc/ssl/certs/", "usr/lib/ssl/", "usr/share/ca-certificates/", "usr/local/lib/python3.12/site-packages/certifi/")
     sp = "usr/local/lib/python3.12/site-packages/"
     own_prefix = ("app/", sp + "agentic_os/", sp + "runtime_contracts/", sp + "discovery_runtime/", sp + "knowledge_frontier/", sp + "redevops_")
     files: dict[str, dict] = {}           # path -> {"layer": i, "hits": [...], "name_hit": bool}
