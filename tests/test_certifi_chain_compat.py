@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "packaging" / "tools"))
 import certifi_chain_compat as cc  # noqa: E402
 
-x509 = pytest.importorskip("cryptography.x509")
+from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import ec  # noqa: E402
 from cryptography.x509.oid import NameOID  # noqa: E402

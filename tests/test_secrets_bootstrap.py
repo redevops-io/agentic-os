@@ -457,7 +457,7 @@ def test_push_cli_without_vault_fails(tmp_path, monkeypatch, capsys):
 
 
 def test_operator_startup_warns_once_without_secret(monkeypatch, caplog, tmp_path):
-    pytest.importorskip("fastapi")
+    import fastapi  # noqa: F401  (required test dependency: absent must FAIL, never skip)
     monkeypatch.delenv(APPROVAL, raising=False)
     monkeypatch.setenv("REDEVOPS_SECRETS_FILE", str(tmp_path / "none.env"))
     caplog.set_level(logging.WARNING, logger="agentic_os.operator")

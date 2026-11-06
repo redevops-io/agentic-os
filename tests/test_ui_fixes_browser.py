@@ -54,7 +54,7 @@ def axe_source():
 
 @pytest.fixture(scope="module")
 def server():
-    uvicorn = pytest.importorskip("uvicorn")
+    import uvicorn
     from agentic_os.local_capability import LocalCapability
     from agentic_os.projects_api import SampleProjectionProvider, mounted_app
     s = socket.socket()

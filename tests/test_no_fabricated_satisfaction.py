@@ -197,7 +197,7 @@ def test_module_service_csat_tile_is_unknown():
 
 
 def test_module_service_every_numeric_tile_is_marked_demo():
-    pytest.importorskip("fastapi")
+    import fastapi  # noqa: F401  (required test dependency: absent must FAIL, never skip)
     import importlib.util, re, sys
     spec = importlib.util.spec_from_file_location("module_service_f3", ROOT / "deploy" / "module_service.py")
     m = importlib.util.module_from_spec(spec); sys.modules["module_service_f3"] = m; spec.loader.exec_module(m)

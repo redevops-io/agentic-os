@@ -104,7 +104,7 @@ def test_live_sentinel_inspection_readonly():
     import os
     if os.environ.get("REDEVOPS_LIVE_TESTS") != "1":
         pytest.skip("live smoke test: set REDEVOPS_LIVE_TESTS=1 to run against sentinel.redevops.io")
-    httpx = pytest.importorskip("httpx")
+    import httpx
     try:
         r = httpx.get("https://sentinel.redevops.io/health", timeout=8.0)
     except Exception:

@@ -11,7 +11,7 @@ from agentic_os.mission.event_backends import (
     DuckDBEventStore, PostgresEventStore, build_durable_event_store, build_event_store, open_event_store,
 )
 
-duckdb = pytest.importorskip("duckdb")
+import duckdb
 
 
 def _conformance(store):

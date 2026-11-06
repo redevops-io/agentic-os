@@ -52,6 +52,14 @@ jobs:
         run: |
           pytest -v -p no:cacheprovider -rs tests/test_agent_gateway_fastmcp_http.py tests/test_agent_gateway_fastmcp.py | tee "$RUNNER_TEMP/fastmcp.out"
           if grep -q "SKIPPED" "$RUNNER_TEMP/fastmcp.out"; then echo "::error::a FastMCP transport test was skipped (is the mcp extra installed?)"; exit 1; fi
+      - name: The drill-down contract tests must run, not skip
+        # jsonschema and the pinned duckdb are required test dependencies ([dev] extra): a skip here means the environment is wrong
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/apps
+        run: |
+          pytest -v -p no:cacheprovider -rs tests/test_drilldown_contract.py tests/test_drilldown_api.py tests/test_required_test_dependencies.py | tee "$RUNNER_TEMP/drilldown.out"
+          if grep -q "SKIPPED" "$RUNNER_TEMP/drilldown.out"; then echo "::error::a drill-down contract test was skipped (is the [dev] extra installed?)"; exit 1; fi
       - name: Per-app suites
         # One run per app: several apps share test file basenames (test_operator.py, ...), and each app is its own
         # deployable. (apps/pytest.ini also makes a single `pytest apps` work via importlib import mode.)

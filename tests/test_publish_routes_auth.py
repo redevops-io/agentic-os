@@ -1,7 +1,7 @@
 """A live publish must be released by an authenticated approver; the actor comes from the credential."""
 import pytest
 
-pytest.importorskip("fastapi")
+import fastapi  # noqa: F401  (required test dependency: absent must FAIL, never skip)
 from fastapi.testclient import TestClient  # noqa: E402
 
 from agentic_os.content import Channel, ContentBrief, FakePublisher, NoOpPublisher  # noqa: E402

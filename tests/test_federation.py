@@ -14,7 +14,7 @@ _SK = pathlib.Path(__file__).resolve().parents[1] / "deploy" / "sidekick-devops"
 if str(_SK) not in sys.path:
     sys.path.insert(0, str(_SK))
 
-fastapi = pytest.importorskip("fastapi")
+import fastapi
 from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 

@@ -33,7 +33,7 @@ sys.path.insert(0, str(PK))
 sys.path.insert(0, str(PK / "tools"))
 sys.path.insert(0, str(ROOT / "tests"))
 
-yaml = pytest.importorskip("yaml")
+import yaml
 FROZEN = Path(os.environ["FROZEN_EVIDENCE_DIR"]) if os.environ.get("FROZEN_EVIDENCE_DIR") else Path("/nonexistent-frozen-evidence")
 BASH = shutil.which("bash") or "/bin/bash"
 

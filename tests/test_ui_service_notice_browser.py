@@ -37,7 +37,7 @@ def _stop(srv, th):
 
 def test_notice_appears_when_the_service_stops_and_clears_when_it_returns():
     pw_mod = pytest.importorskip("playwright.sync_api")
-    pytest.importorskip("uvicorn")
+    import uvicorn  # noqa: F401  (required test dependency: absent must FAIL, never skip)
     from agentic_os.local_capability import LocalCapability
     from agentic_os.projects_api import SampleProjectionProvider, mounted_app
     s = socket.socket()

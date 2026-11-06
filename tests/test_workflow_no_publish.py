@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-yaml = pytest.importorskip("yaml")
+import yaml
 ROOT = Path(__file__).resolve().parent.parent
 
 PUBLISH_ACTIONS = ("softprops/action-gh-release", "actions/create-release", "actions/upload-release-asset",

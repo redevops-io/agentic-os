@@ -23,7 +23,7 @@ import time
 import pytest
 
 pytest.importorskip("fastmcp", reason="the optional [mcp] extra (fastmcp) is not installed")
-pytest.importorskip("uvicorn", reason="uvicorn is not installed")
+import uvicorn  # noqa: F401  (required test dependency: absent must FAIL, never skip)
 
 import uvicorn                                                          # noqa: E402
 from fastmcp import Client                                              # noqa: E402

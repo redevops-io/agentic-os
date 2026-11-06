@@ -8,7 +8,7 @@ import threading
 
 import pytest
 
-pytest.importorskip("httpx")
+import httpx  # noqa: F401  (required test dependency: absent must FAIL, never skip)
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

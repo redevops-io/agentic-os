@@ -86,7 +86,7 @@ def test_failed_publish_marks_artifact_failed_with_receipt():
 
 
 def test_http_app_serves_ui_and_decision(monkeypatch):
-    pytest.importorskip("fastapi")
+    import fastapi  # noqa: F401  (required test dependency: absent must FAIL, never skip)
     from starlette.testclient import TestClient
     from agentic_os.projects import ProjectsServer, create_projects_app
     server = ProjectsServer()

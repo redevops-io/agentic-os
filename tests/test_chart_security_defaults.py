@@ -23,7 +23,7 @@ import subprocess
 
 import pytest
 
-yaml = pytest.importorskip("yaml")
+import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CHART = ROOT / "deploy" / "reference-system" / "redevops-runtime"

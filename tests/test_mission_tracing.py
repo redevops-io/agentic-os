@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-pytest.importorskip("runtime_contracts")
+import runtime_contracts  # noqa: F401  (required test dependency: absent must FAIL, never skip)
 
 from agentic_os.mission.executor import Executor, InMemoryOperatorClient
 from agentic_os.mission.security_monitor import SecurityMonitor

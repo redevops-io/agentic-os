@@ -11,7 +11,7 @@ from agentic_os.mission.executor import Executor, InMemoryOperatorClient, Operat
 from agentic_os.mission.security_monitor import SecurityMonitor
 from agentic_os.mission.types import Node
 
-pytest.importorskip("runtime_contracts")
+import runtime_contracts  # noqa: F401  (required test dependency: absent must FAIL, never skip)
 from runtime_contracts import GovernanceDisposition   # noqa: E402
 
 # Declared capability surface (from the registry, not the agent): what each capability may reach.

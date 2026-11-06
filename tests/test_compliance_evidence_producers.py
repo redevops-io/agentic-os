@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("runtime_contracts")
+import runtime_contracts  # noqa: F401  (required test dependency: absent must FAIL, never skip)
 from runtime_contracts import ControlEvidence, ControlStatus, RuntimeStream
 
 from agentic_os.compliance import RuntimeEvidenceProducer, mission_evidence, system_evidence

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("fastapi")
+import fastapi  # noqa: F401  (required test dependency: absent must FAIL, never skip)
 from agentic_os.app_kit.mission_launcher import MissionRuntimeLauncher  # noqa: E402
 from agentic_os.mission.types import MissionState  # noqa: E402
 from tests import test_mission_inputs_delivery_and_explicit_planning as base  # noqa: E402

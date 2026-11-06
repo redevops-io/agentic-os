@@ -268,7 +268,7 @@ def test_build_manifest_records_tools_and_never_the_environment(tmp_path, monkey
 
 
 def test_workflow_parses_and_runs_the_pinned_steps_in_order():
-    yaml = pytest.importorskip("yaml")
+    import yaml
     wf = yaml.safe_load((ROOT / ".github/workflows/native-packaging.yml").read_text())
     names = [s.get("name", s.get("uses", "")) for s in wf["jobs"]["bundle"]["steps"]]
     runs = [s.get("run", "") for s in wf["jobs"]["bundle"]["steps"]]
@@ -320,7 +320,7 @@ def test_build_all_order_is_wheelhouse_sidecar_notices_sidecar_stage_launcher_sb
 
 
 def test_workflow_and_windows_driver_follow_the_same_order():
-    yaml = pytest.importorskip("yaml")
+    import yaml
     wf = yaml.safe_load((ROOT / ".github/workflows/native-packaging.yml").read_text())
     runs = "\n".join(s.get("run", "") for s in wf["jobs"]["bundle"]["steps"])
     assert _scripts_in_order(runs) == ["build-wheelhouse.sh", "build-sidecar.sh", "build-notices.sh", "build-sidecar.sh",

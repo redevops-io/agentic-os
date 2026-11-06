@@ -26,7 +26,7 @@ from tests.drilldown_support import (
     CHATWOOT_SENTINEL, SCOPE, TWENTY_SENTINEL, completed_mission, failed_mission, gated_mission, make_service, oracle_event_sha256,
     owner, rewrite_jsonl_line, set_env)
 
-jsonschema = pytest.importorskip("jsonschema")
+import jsonschema   # REQUIRED test dependency (pyproject [dev]): a missing one fails collection, it never skips the contract tests
 
 
 @pytest.fixture()
@@ -352,7 +352,7 @@ def test_the_answer_after_a_restart_is_byte_identical(tmp_path, env):
 
 
 def test_a_duckdb_ledger_gives_the_same_cites_as_the_jsonl_ledger(tmp_path, env):
-    duckdb = pytest.importorskip("duckdb")
+    import duckdb
     from agentic_os.mission.event_backends import DuckDBEventStore
     db = DuckDBEventStore(str(tmp_path / "ledger.duckdb"))
     db.append("MissionCreated", "m1", {"goal": "g"})

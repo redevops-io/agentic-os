@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("fastapi")
+import fastapi  # noqa: F401  (required test dependency: absent must FAIL, never skip)
 from starlette.testclient import TestClient  # noqa: E402
 
 from agentic_os.content import (  # noqa: E402

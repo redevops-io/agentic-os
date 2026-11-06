@@ -31,7 +31,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+# Test dependencies. jsonschema and the pinned duckdb are REQUIRED, not optional: the drill-down contract tests validate every response
+# against its JSON Schema and the durable-ledger / evidence tests run on the pinned embedded DuckDB. A missing one fails the suite
+# (tests/test_required_test_dependencies.py); it never skips a test.
+dev = ["pytest>=8.0", "jsonschema>=4.18,<5", "duckdb==1.5.5"]
 # Durable event-store backends (the event log is also the audit log). Optional: the default
 # store is zero-dependency in-memory/JSONL. See agentic_os.mission.event_backends.
 duckdb = ["duckdb==1.5.5"]        # embedded single-file ledger (standalone); pinned to the version the packaging locks and the evidence-boundary tests use
