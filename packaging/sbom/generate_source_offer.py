@@ -95,7 +95,7 @@ def main() -> int:
     if any(props(c).get("redevops:key") == "ui-bundle" for c in comps):
         ui_rec_path = HERE / "ui-bundle-source.json"
         if ui_rec_path.exists():
-            u = json.loads(ui_rec_path.read_text())
+            u = json.loads(ui_rec_path.read_text(encoding="utf-8"))
             published = "published" if u.get("source_commit_published") else "NOT PUBLISHED"
             fp.append(md_row(["Projects UI bundle (agentic_os/projects_ui, minified JavaScript + CSS)", "see agentic-os", u["repository"],
                               "(none: local, unpublished commit)" if not u.get("source_commit_published") else "see record", "-", f"`{u['source_commit']}`",
