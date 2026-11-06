@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Deploy the intrinsic-security + telemetry showcase to proxmox (demo.redevops.io/security), :8099.
+# Deploy the intrinsic-security + telemetry showcase to the demo host (demo.redevops.io/security), :8099.
 # Standalone — does NOT touch the live control-plane. Stages the real v0.3.0 kernel + contracts.
 set -euo pipefail
-HOST="${SEC_HOST:-192.168.40.105}"
-HOST_DIR="${SEC_HOST_DIR:-/projects/agentic-os/security-demo}"
+. "$(cd "$(dirname "$0")" && pwd)/../lib/deploy-env.sh"; deploy_load_env
+deploy_require SEC_HOST "the SSH address of the target host"
+HOST="$SEC_HOST"; HOST_DIR="${SEC_HOST_DIR:-/opt/agentic-os/security-demo}"
 SRC="$(cd "$(dirname "$0")" && pwd)"                         # .../agentic-os/deploy/security-showcase-demo
 AGENTIC="$(cd "$SRC/../.." && pwd)"                          # agentic-os repo root (has agentic_os)
-RC="${RUNTIME_CONTRACTS:-/mnt/backup/projects/runtime-contracts}"
+deploy_require RUNTIME_CONTRACTS "a checkout of the runtime-contracts package"
+RC="$RUNTIME_CONTRACTS"
 
 STAGE="$(mktemp -d)"; trap 'rm -rf "$STAGE"' EXIT
 echo "== stage build context (kernel + contracts) =="
@@ -30,4 +32,4 @@ curl -s http://127.0.0.1:8099/api/security/scenario 2>/dev/null | head -c 160; e
 REMOTE
 
 echo
-echo "== ingress: add a demo.redevops.io path rule ^/(security|api/security) -> 192.168.40.105:8099"
+echo "== ingress: add a demo.redevops.io path rule ^/(security|api/security) -> $HOST:8099"

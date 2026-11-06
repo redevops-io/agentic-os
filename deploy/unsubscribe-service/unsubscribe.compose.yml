@@ -8,6 +8,6 @@ services:
     ports:
       - "${UNSUB_PORT:-8103}:8103"
     volumes:
-      - /projects/gtm/suppression:/data      # persist opt-outs across restarts
+      - ${UNSUB_DATA_DIR:-./data}:/data      # persist opt-outs across restarts (deploy.sh sets UNSUB_DATA_DIR)
     security_opt:
       - apparmor=docker-contextos

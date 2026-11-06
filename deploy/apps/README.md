@@ -2,7 +2,7 @@
 
 The four-business-systems agentic suite, packaged to run on one Docker host
 (self-host or a cloud VM). This is the same stack that runs at
-`demo.redevops.io/demo`, with the proxmox-specific bits (cloudflared, host
+`demo.redevops.io/demo`, with the demo-host-specific bits (cloudflared, host
 networking, the local registry) removed and every image pulled from GHCR.
 
 ## What deploys
@@ -16,7 +16,7 @@ networking, the local registry) removed and every image pulled from GHCR.
 
 The domain agents include the **learning + discovery** engine. All images are
 public — no registry login. The runtimes + control plane underneath install
-separately (see `/projects/core-install`).
+separately (see the `core-install` checkout of the install scripts).
 
 ## Prerequisites
 

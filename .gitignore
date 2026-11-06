@@ -28,3 +28,5 @@ permissions.env
 *.permissions.env
 .permissions.key
 .local/
+# deployment addresses of a private target host (docs/DEPLOYMENT_ADDRESSES.md)
+deploy/deploy.local.env

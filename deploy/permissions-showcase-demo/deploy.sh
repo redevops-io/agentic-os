@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy the data-access permissions plane showcase to proxmox (demo.redevops.io/permissions), :8109.
+# Deploy the data-access permissions plane showcase to the demo host (demo.redevops.io/permissions), :8109.
 # Standalone + v6-native — does NOT resurrect the retired control-plane. Stages the real kernel
 # permissions module (agentic_os.permissions + views) only. DO NOT run it from a script you have not read.
 #
@@ -11,8 +11,9 @@
 # The container runs as uid 10001 (read-only root fs, no capabilities): a volume created by an earlier root image needs ONE `chown -R 10001:10001` (see the Dockerfile).
 # The app binds ONE address (PERM_BIND_HOST, default: the host address cloudflared reaches), never 0.0.0.0.
 set -euo pipefail
-HOST="${PERM_HOST:-192.168.40.105}"
-HOST_DIR="${PERM_HOST_DIR:-/projects/agentic-os/permissions-demo}"
+. "$(cd "$(dirname "$0")" && pwd)/../lib/deploy-env.sh"; deploy_load_env
+deploy_require PERM_HOST "the SSH address of the target host"
+HOST="$PERM_HOST"; HOST_DIR="${PERM_HOST_DIR:-/opt/agentic-os/permissions-demo}"
 SRC="$(cd "$(dirname "$0")" && pwd)"                         # .../agentic-os/deploy/permissions-showcase-demo
 AGENTIC="$(cd "$SRC/../.." && pwd)"                          # agentic-os repo root (has agentic_os)
 
@@ -58,5 +59,5 @@ echo -n "page:   "; curl -s -o /dev/null -w "/permissions -> %{http_code}\n" "ht
 REMOTE
 
 echo
-echo "== ingress: add demo.redevops.io path rule ^/(permissions|api/demo|api/permissions) -> 192.168.40.105:8109 (api/permissions is the ADMIN API: it answers 401 without the admin key)"
-echo "   (edit /main/cloudflared/config.yml BEFORE the bare demo.redevops.io catch-all, then restart cloudflared)"
+echo "== ingress: add demo.redevops.io path rule ^/(permissions|api/demo|api/permissions) -> $HOST:8109 (api/permissions is the ADMIN API: it answers 401 without the admin key)"
+echo "   (edit the cloudflared config on the demo host BEFORE the bare demo.redevops.io catch-all, then restart cloudflared)"
