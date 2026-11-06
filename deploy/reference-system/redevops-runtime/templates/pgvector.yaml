@@ -1,4 +1,7 @@
 {{- if and (eq .Values.retriever.backend "pgvector") .Values.retriever.pgvector.bundled.enabled }}
+# Bundled demo database (opt-in). The password comes from an existing Secret (key POSTGRES_PASSWORD), never from values; the
+# image is pinned by digest; the pod runs as the image's postgres user with a read-only root filesystem (writable: the data
+# volume, /var/run/postgresql, /tmp). The runtime builds its DSN from the same Secret.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -8,6 +11,7 @@ metadata:
     app.kubernetes.io/component: pgvector
 spec:
   replicas: 1
+  strategy: { type: Recreate }
   selector:
     matchLabels:
       app.kubernetes.io/instance: {{ .Release.Name }}
@@ -18,12 +22,33 @@ spec:
         {{- include "rr.labels" . | nindent 8 }}
         app.kubernetes.io/component: pgvector
     spec:
+      serviceAccountName: {{ include "rr.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: postgres
-          image: {{ .Values.retriever.pgvector.bundled.image }}
+          image: {{ include "rr.pinnedImage" (dict "ref" .Values.retriever.pgvector.bundled.image "what" "retriever.pgvector.bundled.image") | quote }}
+          imagePullPolicy: {{ .Values.runtime.image.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            privileged: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+            seccompProfile: { type: RuntimeDefault }
           env:
             - { name: POSTGRES_USER, value: redevops }
-            - { name: POSTGRES_PASSWORD, value: redevops }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ required "retriever.pgvector.bundled.passwordSecret is required when the bundled pgvector is enabled: create the Secret first (key POSTGRES_PASSWORD)" .Values.retriever.pgvector.bundled.passwordSecret | quote }}, key: POSTGRES_PASSWORD }
             - { name: POSTGRES_DB, value: redevops_rag }
             # Point PGDATA at a SUBDIRECTORY of the mounted volume. Most dynamically-provisioned PVs are
             # ext4-formatted and ship a lost+found at the mount root, which makes `initdb` refuse to use the
@@ -31,14 +56,28 @@ spec:
             - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
           ports:
             - { name: postgres, containerPort: 5432 }
+          startupProbe:
+            exec: { command: ["pg_isready", "-U", "redevops"] }
+            periodSeconds: 5
+            failureThreshold: 36
           readinessProbe:
             exec: { command: ["pg_isready", "-U", "redevops"] }
-            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec: { command: ["pg_isready", "-U", "redevops"] }
+            periodSeconds: 20
+          resources: {{ toYaml .Values.retriever.pgvector.bundled.resources | nindent 12 }}
           volumeMounts:
             - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: run, mountPath: /var/run/postgresql }
+            - { name: tmp, mountPath: /tmp }
       volumes:
         - name: data
           persistentVolumeClaim: { claimName: {{ include "rr.fullname" . }}-pgvector }
+        - name: run
+          emptyDir: { sizeLimit: 16Mi }
+        - name: tmp
+          emptyDir: { sizeLimit: {{ .Values.runtime.scratch.tmpSize }} }
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -60,6 +99,7 @@ metadata:
   name: {{ include "rr.fullname" . }}-pgvector
   labels: {{- include "rr.labels" . | nindent 4 }}
 spec:
+  type: ClusterIP
   selector:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/component: pgvector

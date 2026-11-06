@@ -22,19 +22,19 @@ spec:
         {{- with .Values.podAnnotations }}{{ toYaml . | nindent 8 }}{{- end }}
     spec:
       serviceAccountName: {{ include "rr.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      securityContext: {{ toYaml .Values.runtime.podSecurityContext | nindent 8 }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{ toYaml . | nindent 8 }}
       {{- end }}
       containers:
         - name: runtime
-          {{- if and .Values.security.enabled .Values.security.image.repository }}
-          # Enterprise runtime image — bundles runtime-plugins-enterprise so the security/telemetry planes
-          # can be injected at boot (the public image cannot import the private package).
-          image: "{{ .Values.security.image.repository }}:{{ .Values.security.image.tag }}"
-          {{- else }}
-          image: "{{ .Values.runtime.image.repository }}:{{ .Values.runtime.image.tag }}"
-          {{- end }}
+          # An immutable reference (repo@sha256:...) or a fixed version tag; the render fails when neither is set (rr.imageRef).
+          # With security.enabled and security.image.repository this is the enterprise image (bundles
+          # runtime-plugins-enterprise; the public image cannot import the private package).
+          image: {{ include "rr.runtimeImage" . | quote }}
           imagePullPolicy: {{ .Values.runtime.image.pullPolicy }}
+          securityContext: {{ toYaml .Values.runtime.securityContext | nindent 12 }}
           ports:
             - name: http
               containerPort: {{ .Values.runtime.http.port }}
@@ -51,8 +51,33 @@ spec:
                   key: PERMISSIONS_KEY
             - name: PERMISSIONS_DIR
               value: /var/lib/redevops/ledger/permissions
+            # read-only root filesystem: everything the service writes goes to the emptyDir mounts below
+            - name: HOME
+              value: /tmp
+            - name: AGENTIC_OS_HOME
+              value: /data
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            {{- if .Values.retriever.pgvector.bundled.enabled }}
+            - name: RDO_PGVECTOR_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ required "retriever.pgvector.bundled.passwordSecret is required when the bundled pgvector is enabled: create the Secret first (key POSTGRES_PASSWORD)" .Values.retriever.pgvector.bundled.passwordSecret | quote }}, key: POSTGRES_PASSWORD }
+            {{- end }}
+            {{- if and .Values.retriever.pgvector.dsnSecret (not .Values.retriever.pgvector.bundled.enabled) }}
+            - name: RDO_PGVECTOR_DSN
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.retriever.pgvector.dsnSecret | quote }}, key: RDO_PGVECTOR_DSN }
+            {{- else }}
             - name: RDO_PGVECTOR_DSN
               value: {{ include "rr.pgvectorDsn" . | quote }}
+            {{- end }}
+            {{- if .Values.runtime.controlTokenSecret }}
+            # Bearer token for the runtime's mutating routes (POST /missions, /approvals, /up, ...), from an existing Secret.
+            # Without it those routes answer 503 (fail closed); /health and the probes below need no credential.
+            - name: AGENTIC_OS_CONTROL_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.runtime.controlTokenSecret | quote }}, key: AGENTIC_OS_CONTROL_TOKEN }
+            {{- end }}
             {{- if .Values.model.apiKeySecret }}
             - name: OPENAI_API_KEY
               valueFrom:
@@ -113,27 +138,45 @@ spec:
             - name: OTEL_SERVICE_NAME
               value: {{ .Values.telemetry.otel.serviceName | quote }}
             {{- end }}
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            {{- toYaml .Values.runtime.probes.startup | nindent 12 }}
           readinessProbe:
             httpGet: { path: /health, port: http }
-            initialDelaySeconds: 5
+            {{- toYaml .Values.runtime.probes.readiness | nindent 12 }}
           livenessProbe:
             httpGet: { path: /health, port: http }
-            initialDelaySeconds: 10
+            {{- toYaml .Values.runtime.probes.liveness | nindent 12 }}
           resources: {{ toYaml .Values.runtime.resources | nindent 12 }}
           volumeMounts:
             - name: config
               mountPath: /etc/redevops
-            {{- if .Values.runtime.mission.ledger.persistent }}
+              readOnly: true
+            # the writable paths of the read-only root filesystem (docs/release/OCI_RELEASE_RUNBOOK.md, "Writable paths")
+            - name: tmp
+              mountPath: /tmp
+            - name: data
+              mountPath: /data
+            - name: aos-home
+              mountPath: /app/.agentic-os
+            # the ledger / permissions directory: the PVC when persistent, else a scratch volume (read-only root)
             - name: ledger
               mountPath: /var/lib/redevops/ledger
-            {{- end }}
       volumes:
         - name: config
           configMap: { name: {{ include "rr.fullname" . }}-config }
-        {{- if .Values.runtime.mission.ledger.persistent }}
+        - name: tmp
+          emptyDir: { sizeLimit: {{ .Values.runtime.scratch.tmpSize }} }
+        - name: data
+          emptyDir: { sizeLimit: {{ .Values.runtime.scratch.dataSize }} }
+        - name: aos-home
+          emptyDir: { sizeLimit: {{ .Values.runtime.scratch.tmpSize }} }
         - name: ledger
+          {{- if .Values.runtime.mission.ledger.persistent }}
           persistentVolumeClaim: { claimName: {{ include "rr.fullname" . }}-ledger }
-        {{- end }}
+          {{- else }}
+          emptyDir: { sizeLimit: {{ .Values.runtime.scratch.dataSize }} }
+          {{- end }}
 ---
 {{- if .Values.runtime.mission.ledger.persistent }}
 apiVersion: v1
@@ -159,6 +202,7 @@ metadata:
     {{- include "rr.labels" . | nindent 4 }}
     app.kubernetes.io/component: runtime
 spec:
+  type: {{ .Values.runtime.service.type }}
   selector:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/component: runtime

@@ -21,6 +21,13 @@ spec:
         {{- include "rr.labels" . | nindent 8 }}
         app.kubernetes.io/component: model
     spec:
+      serviceAccountName: {{ include "rr.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      securityContext:
+        seccompProfile: { type: RuntimeDefault }
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.amd.nodeSelector }}
       nodeSelector: {{ toYaml . | nindent 8 }}
       {{- end }}
@@ -29,17 +36,27 @@ spec:
       {{- end }}
       containers:
         - name: vllm
-          image: {{ .Values.model.server.image }}
+          # pinned by digest (rr.pinnedImage): a tag such as :latest, or a placeholder digest, fails the render
+          image: {{ include "rr.pinnedImage" (dict "ref" .Values.model.server.image "what" "model.server.image") | quote }}
+          imagePullPolicy: {{ .Values.runtime.image.pullPolicy }}
+          securityContext: {{ toYaml .Values.model.server.securityContext | nindent 12 }}
           args:
             - "--model={{ .Values.model.server.servedModelId }}"
             - "--served-model-name={{ .Values.model.server.servedModelId }}"
             - "--port=8000"
           ports:
             - { name: http, containerPort: 8000 }
+          startupProbe:                  # weights load can take many minutes
+            httpGet: { path: /v1/models, port: http }
+            periodSeconds: 15
+            failureThreshold: 80
           readinessProbe:
             httpGet: { path: /v1/models, port: http }
-            initialDelaySeconds: 60
             periodSeconds: 15
+          livenessProbe:
+            httpGet: { path: /v1/models, port: http }
+            periodSeconds: 30
+            failureThreshold: 5
           resources:
             requests:
               {{- toYaml .Values.model.server.resources.requests | nindent 14 }}
@@ -54,6 +71,7 @@ metadata:
   name: {{ include "rr.fullname" . }}-model
   labels: {{- include "rr.labels" . | nindent 4 }}
 spec:
+  type: ClusterIP
   selector:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/component: model

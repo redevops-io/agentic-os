@@ -5,9 +5,8 @@ metadata:
   labels:
     {{- include "rr.labels" . | nindent 4 }}
 data:
-  # Governed-execution config the runtime reads at boot. These are the differentiators a plain
-  # blueprint doesn't carry: deny-by-default grants, an event-sourced replayable ledger, an approval
-  # gate on side effects, and mandatory verification (terminal-state replay).
+  # Governed-execution settings the chart records for the operator. The runtime image does NOT read this file today
+  # (nothing opens /etc/redevops/runtime.yaml); behaviour is set by environment variables (see README "Security defaults").
   runtime.yaml: |
     retriever:
       backend: {{ .Values.retriever.backend | quote }}

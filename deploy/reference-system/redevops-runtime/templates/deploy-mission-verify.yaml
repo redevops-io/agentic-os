@@ -4,6 +4,8 @@
 # post-install/post-upgrade Helm hook runs acceptance checks against the freshly deployed runtime and,
 # on any failure, fails the release (hook-failed) — the deployment equivalent of a mission that gates
 # instead of silently proceeding. The Job's logs are the deployment Outcome's evidence.
+# The hook runs the RUNTIME image itself (python is in it), so there is no third-party curl image to pin, and it carries the
+# same hardening as the runtime pod.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -20,28 +22,53 @@ spec:
   activeDeadlineSeconds: {{ .Values.deployMission.verify.timeoutSeconds }}
   template:
     metadata:
-      labels: {{- include "rr.labels" . | nindent 8 }}
+      labels:
+        {{- include "rr.labels" . | nindent 8 }}
+        app.kubernetes.io/component: deploy-mission-verify
     spec:
       restartPolicy: Never
+      serviceAccountName: {{ include "rr.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      securityContext: {{ toYaml .Values.runtime.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: verify
-          image: {{ .Values.deployMission.verify.image }}
-          command: ["/bin/sh", "-c"]
+          image: {{ include "rr.runtimeImage" . | quote }}
+          imagePullPolicy: {{ .Values.runtime.image.pullPolicy }}
+          securityContext: {{ toYaml .Values.runtime.securityContext | nindent 12 }}
+          env:
+            - { name: HOME, value: /tmp }
+            - { name: PYTHONDONTWRITEBYTECODE, value: "1" }
+            - { name: BASE, value: "http://{{ include "rr.fullname" . }}:{{ .Values.runtime.http.port }}" }
+            - { name: CHECKS, value: {{ join " " .Values.deployMission.verify.checks | quote }} }
+          command: ["python", "-c"]
           args:
             - |
-              set -eu
-              BASE="http://{{ include "rr.fullname" . }}:{{ .Values.runtime.http.port }}"
-              echo "deployment-mission :: verifying $BASE"
+              import os, sys, time, urllib.request
+              base = os.environ["BASE"]
+              print("deployment-mission :: verifying " + base, flush=True)
               # wait for the runtime to accept traffic, then assert each acceptance check returns 2xx.
-              for path in {{ range .Values.deployMission.verify.checks }}{{ . }} {{ end }}; do
-                echo "  check GET $path"
-                for i in $(seq 1 30); do
-                  code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE$path" || echo 000)
-                  case "$code" in
-                    2*) echo "    ok ($code)"; break ;;
-                    *)  if [ "$i" = "30" ]; then echo "    FAIL ($code) after retries"; exit 1; fi; sleep 4 ;;
-                  esac
-                done
-              done
-              echo "deployment-mission :: PASS — governed deployment verified, Outcome recorded"
+              for path in os.environ["CHECKS"].split():
+                  print("  check GET " + path, flush=True)
+                  for i in range(1, 31):
+                      try:
+                          code = urllib.request.urlopen(base + path, timeout=5).status
+                      except Exception as exc:
+                          code = getattr(exc, "code", 0)
+                      if 200 <= code < 300:
+                          print("    ok (%s)" % code, flush=True)
+                          break
+                      if i == 30:
+                          print("    FAIL (%s) after retries" % code, flush=True)
+                          sys.exit(1)
+                      time.sleep(4)
+              print("deployment-mission :: PASS - governed deployment verified, Outcome recorded", flush=True)
+          resources: {{ toYaml .Values.deployMission.verify.resources | nindent 12 }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 16Mi }
 {{- end }}
