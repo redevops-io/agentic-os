@@ -9,4 +9,4 @@ uvicorn>=0.29
 pydantic>=2.6
 httpx>=0.27
 cryptography>=42
-duckdb>=1.0
+duckdb==1.5.5
