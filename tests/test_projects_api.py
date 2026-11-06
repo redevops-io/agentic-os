@@ -257,3 +257,66 @@ def test_sidekick_reply_is_deterministic_and_pure():
     # the reply helper is usable without HTTP (unit-level)
     r = sidekick_reply({"section": "Missions"}, "why does this need approval?")
     assert "tier-4" in r["text"].lower()
+
+
+# ---- UIA-07 (release qualification): a confirmed source is listed, for this session only -------------------------------------
+def _confirm(c, folder, project="customer-ops"):
+    return c.post("/api/sources/confirm", json={"project_id": project, "confirmed_by": "alex",
+                                                "sources": [{"kind": "files", "location": str(folder)}]})
+
+
+def test_a_confirmed_source_appears_in_the_sources_list_marked_this_session_only(tmp_path):
+    (tmp_path / "a.pdf").write_text("x")
+    c = TestClient(create_app(SampleProjectionProvider()))
+    before = c.get("/api/projects/customer-ops/sources").json()
+    r = _confirm(c, tmp_path)
+    assert r.status_code == 200 and r.json()[0]["stats"]["indexed"] == 1
+    after = c.get("/api/projects/customer-ops/sources").json()
+    assert len(after) == len(before) + 1
+    new = [s for s in after if s["location"] == str(tmp_path)]
+    assert len(new) == 1
+    assert new[0]["name"].endswith("(this session only)") and new[0]["session_only"] is True
+    assert new[0]["health"]["state"] == "healthy" and new[0]["stats"]["indexed"] == 1
+    assert [s for s in after if s["location"] != str(tmp_path)] == before        # the sample sources are unchanged
+    # the confirm response itself is the unchanged projection (no marker added there, nothing else leaked)
+    assert "session_only" not in r.json()[0] and not r.json()[0]["name"].endswith("(this session only)")
+    # confirming the same folder again does not list it twice
+    _confirm(c, tmp_path)
+    assert len([s for s in c.get("/api/projects/customer-ops/sources").json() if s["location"] == str(tmp_path)]) == 1
+
+
+def test_a_confirmed_source_is_kept_in_memory_only_a_new_process_does_not_have_it(tmp_path, monkeypatch):
+    (tmp_path / "a.pdf").write_text("x")
+    work = tmp_path / "cwd"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    files_before = sorted(p.name for p in tmp_path.iterdir())
+    c = TestClient(create_app(SampleProjectionProvider()))
+    _confirm(c, tmp_path)
+    assert any(s["location"] == str(tmp_path) for s in c.get("/api/projects/customer-ops/sources").json())
+    assert list(work.iterdir()) == [] and sorted(p.name for p in tmp_path.iterdir()) == files_before     # nothing written anywhere
+    fresh = TestClient(create_app(SampleProjectionProvider()))                                            # "restart"
+    assert not any(s["location"] == str(tmp_path) for s in fresh.get("/api/projects/customer-ops/sources").json())
+
+
+def test_session_sources_are_per_provider_instance_and_per_project(tmp_path):
+    a = TestClient(create_app(SampleProjectionProvider()))
+    b = TestClient(create_app(SampleProjectionProvider()))
+    _confirm(a, tmp_path, project="other-project")
+    assert not any(s["location"] == str(tmp_path) for s in a.get("/api/projects/customer-ops/sources").json())
+    assert any(s["location"] == str(tmp_path) for s in a.get("/api/projects/other-project/sources").json())
+    assert not any(s["location"] == str(tmp_path) for s in b.get("/api/projects/other-project/sources").json())
+
+
+def test_a_rejected_confirm_adds_nothing_and_a_missing_folder_is_listed_as_an_error(tmp_path):
+    c = TestClient(create_app(SampleProjectionProvider()), raise_server_exceptions=False)
+    n = len(c.get("/api/projects/customer-ops/sources").json())
+    r = c.post("/api/sources/confirm", json={"project_id": "customer-ops", "confirmed_by": "alex",
+                                             "sources": [{"kind": "bogus", "location": str(tmp_path)}]})
+    assert r.status_code == 422 and r.headers["content-type"].startswith("application/json")        # UIA-05 unchanged
+    assert len(c.get("/api/projects/customer-ops/sources").json()) == n
+    gone = tmp_path / "does-not-exist"
+    ok = _confirm(c, gone)
+    assert ok.status_code == 200 and ok.json()[0]["health"]["state"] == "error"
+    listed = [s for s in c.get("/api/projects/customer-ops/sources").json() if s["location"] == str(gone)]
+    assert len(listed) == 1 and listed[0]["health"]["state"] == "error"                              # reported, not hidden
