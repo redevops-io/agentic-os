@@ -23,6 +23,7 @@ Categories
   home-path      `/Users/<name>`, `C:\\Users\\<name>`, scratch directories of a coding session. NEVER allow-listable.
   host-path      directories of a private build or deploy host. NEVER allow-listable.
   internal-name  a host under .lan/.internal/.corp/.home.arpa/.intranet/.ts.net, or a `.local` URL host (allowed per file and literal).
+  credential     a retired predictable default credential (allowed only where a file refuses it or records its removal).
   email          a mailbox at a personal mail provider (allowed only as third-party attribution in licence texts).
 
 Allow-list entries are per file and per literal. Hard categories cannot be allow-listed at all; the guard test asserts that.
@@ -50,11 +51,15 @@ SKIP_NAMES = ("uv.lock", "package-lock.json", "Cargo.lock", "yarn.lock", "pnpm-l
 
 # sha256 of the first three octets of the original development network, and of the normalised development host aliases.
 OWNER_NET_HASHES = frozenset({"446b7b82d940f9b516a5d72a2114f6e9064067614c6d47b0428addb9ee1de655"})
-ALIAS_HASHES = frozenset({"be5958004db9bedd0631253a85a30a63bcca72ea7edd359a90c6e5ccb6b0f4ca"})
+ALIAS_HASHES = frozenset({
+    "be5958004db9bedd0631253a85a30a63bcca72ea7edd359a90c6e5ccb6b0f4ca",   # a development machine
+    "dd2180105e7e92e3eb45489626eed27b52a1ff26119c6c1ca7b9cc71aa727226",   # a maintainer's account login
+    "3b0a1afc691d06ef9d01598d27f471d4c54097ff13680d059dcdedc00d059955",   # a sample device name that was a person's
+})
 
 HARD = frozenset({"ip-owner-net", "alias-host", "alias-ssh", "mac", "home-path", "host-path"})
 CATEGORIES = ("ip-private", "ip-owner-net", "alias-host", "alias-ssh", "tech-term", "mac", "home-path", "host-path",
-              "internal-name", "email")
+              "internal-name", "email", "credential")
 
 _V4 = re.compile(r"(?<![\w.])(?<![A-Za-z0-9]-)((?:\d{1,3})\.(?:\d{1,3})\.(?:\d{1,3})\.(?:\d{1,3}))(?![\w-]|\.\d)")
 _V6 = re.compile(r"(?<![\w:])((?:f[cd][0-9a-f]{2}|fe[89ab][0-9a-f]):[0-9a-f:]*)", re.I)
@@ -62,6 +67,8 @@ _MAC = re.compile(r"(?<![0-9A-Fa-f:-])((?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})(
 _TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 _SSH_PROXMOX = re.compile(r"(?i)\bssh\b[^\n]{0,60}?\bproxmox\b|ssh_host\s*=\s*['\"]proxmox['\"]"
                           r"|_SSH['\"]?\s*,?\s*(?:\(default\s+)?['\"]proxmox['\"]")
+# A predictable (retired) default credential. It may only appear where a file refuses it, or records that it was removed.
+_CREDENTIAL = re.compile(r"refcore-dev-key")
 _TECH = re.compile(r"(?i)proxmox")
 # Generic placeholders (CI runners, documentation names) are not a person's home directory.
 _GENERIC_USERS = r"(?:Shared|Public|runner|user|USER|User|tester|me|you|name|username|USERNAME|x|\.\.\.|\*)(?![A-Za-z0-9._-])"
@@ -133,6 +140,8 @@ def scan_text(path: str, text: str) -> List[Finding]:
             out.append(Finding(path, no, "alias-host", a, ctx))
         for m in _SSH_PROXMOX.finditer(line):
             out.append(Finding(path, no, "alias-ssh", m.group(0).strip(), ctx))
+        for m in _CREDENTIAL.finditer(line):
+            out.append(Finding(path, no, "credential", m.group(0), ctx))
         for m in _TECH.finditer(line):
             out.append(Finding(path, no, "tech-term", m.group(0).lower(), ctx))
         for m in _HOME.finditer(line):
@@ -191,7 +200,7 @@ def is_allowed(f: Finding, allow: Dict[str, dict]) -> bool:
     entry = allow.get(f.path)
     if not entry:
         return False
-    key = {"ip-private": "addresses", "tech-term": "terms", "internal-name": "names", "email": "emails"}[f.category]
+    key = {"ip-private": "addresses", "tech-term": "terms", "internal-name": "names", "email": "emails", "credential": "credentials"}[f.category]
     return f.literal.lower() in [x.lower() for x in entry.get(key, [])]
 
 

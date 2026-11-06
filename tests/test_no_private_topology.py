@@ -36,6 +36,9 @@ CGNAT = _ip(100, 70, 1, 2)
 # A private address in the network of the original development hosts (built from its hash-pinned prefix at test time).
 OWNER_NET = _ip(192, 168, 40, 77)
 ALIAS = "evo" + "-x" + "2"
+LOGIN = "ary" + "bach"                      # a maintainer account login (matched by hash)
+DEVICE = "laptop" + "-" + "alex"            # a sample device name that was a person's
+KEY = "refcore" + "-dev-" + "key"           # a retired predictable credential
 
 
 def _scan(text, path="x.py"):
@@ -107,6 +110,22 @@ def test_development_host_aliases_are_detected_in_every_spelling():
     assert cpt.is_allowed(f, {"x.py": {"names": [ALIAS], "terms": [ALIAS], "reason": "r"}}) is False
 
 
+def test_a_maintainer_login_and_the_personal_sample_device_name_are_hard_aliases():
+    for text in (f"merge button operated by the `{LOGIN}` account", f"https://github.com/{LOGIN}/x", f"peer {DEVICE} login expired", f"'{DEVICE}'"):
+        assert "alias-host" in _cats(text), text
+    f = _scan(f"`{LOGIN}` account")[0]
+    assert cpt.is_allowed(f, {"x.py": {"names": [LOGIN], "terms": [LOGIN], "reason": "r" * 30}}) is False
+    assert _scan("peer example-laptop and the maintainer account that merges") == []
+
+
+def test_a_retired_predictable_credential_is_found_and_allowed_only_per_file_with_a_reason():
+    f = _scan(f"- REFCORE_API_KEY=${{REFCORE_API_KEY:-{KEY}}}", "c.yml")[0]
+    assert f.category == "credential" and f.literal == KEY
+    assert cpt.is_allowed(f, {"c.yml": {"credentials": [KEY], "reason": "the deny-list of the service that refuses it"}})
+    assert not cpt.is_allowed(f, {"d.yml": {"credentials": [KEY], "reason": "the deny-list of the service that refuses it"}})
+    assert not cpt.is_allowed(f, {})
+
+
 def test_ssh_aliases_for_the_hypervisor_are_hard():
     for text in ("ssh " + "prox" + "mox 'bash -s'", "ssh -o BatchMode=yes root@" + "prox" + "mox x", 'DockerDeployer(ssh_host="' + "prox" + 'mox")',
                  'os.environ.get("RDO_X_SSH", "' + "prox" + 'mox")'):
@@ -167,16 +186,16 @@ def allow():
 
 
 def test_allowlist_entries_are_specific_reviewed_and_still_needed(allow):
-    keys = {"reason", "addresses", "terms", "names", "emails"}
+    keys = {"reason", "addresses", "terms", "names", "emails", "credentials"}
     for path, entry in allow.items():
         assert not re.search(r"[*?\[\]]", path), f"wildcard path in the allow-list: {path}"
         assert (ROOT / path).is_file(), f"stale allow-list path: {path}"
         assert path not in cpt.SELF_EXCLUDED
         assert set(entry) <= keys, f"{path}: unknown keys {set(entry) - keys}"
         assert len(entry.get("reason", "")) >= 20, f"{path}: needs a written reason"
-        assert any(entry.get(k) for k in ("addresses", "terms", "names", "emails")), f"{path}: empty entry"
+        assert any(entry.get(k) for k in ("addresses", "terms", "names", "emails", "credentials")), f"{path}: empty entry"
         text = (ROOT / path).read_text(encoding="utf-8", errors="replace").lower()
-        for k in ("addresses", "terms", "names", "emails"):
+        for k in ("addresses", "terms", "names", "emails", "credentials"):
             vals = entry.get(k, [])
             assert vals == sorted(set(v.lower() for v in vals)) or vals == sorted(set(vals)), f"{path}.{k}: keep it sorted and unique"
             for lit in vals:
