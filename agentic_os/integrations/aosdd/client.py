@@ -148,6 +148,10 @@ class AosddOperatorClient:
             raise
         try:
             found = adapter.find(step)
+        except AppError as e:
+            e.not_applied = True        # the lookup is a read: nothing was written, so whatever it said, the step did not take effect
+            return self._failed(mission_id, step, op, claim, e)
+        try:
             if found is not None and found.get("partial"):      # a half-applied write: complete it (write is resumable), do not adopt it
                 found = None
             adopted = found is not None

@@ -358,7 +358,11 @@ def test_failure_at_s3_compensates_s2_then_s1_in_reverse_order_each_verified(env
     assert [rec["steps"][1]["node_id"], rec["steps"][0]["node_id"]] == order                              # S2 first, then S1
     for s in rec["steps"][:2]:
         assert s["compensation"]["readback"]["status"] == "VERIFIED"
-    assert r.rt._missions[mid].outcome["rolled_back"] is True
+    out = r.rt._missions[mid].outcome
+    assert out["rolled_back"] is False and out["compensation_clean_rollback"] is False and "residual" in out["compensation_note"]        # never a silent claim of a clean rollback
+    r2 = env.runner()
+    r2.attach(mid)
+    assert r2.rt._missions[mid].outcome["rolled_back"] is False                                                    # nor after a restart
 
 
 def test_failure_at_s4_compensates_s3_s2_s1_and_records_the_twenty_residual(env):
@@ -487,3 +491,12 @@ def test_config_and_services_repr_never_contain_credentials(env):
     r = env.runner()
     blob = repr(env.cfg) + repr(r.svc.writers) + repr(r.svc.readback.c) + str(vars(r.svc.cfg))
     assert all(s not in blob for s in _all_secrets())
+
+
+def test_an_application_that_is_down_before_the_write_is_a_definite_refusal_not_an_unknown(env):
+    env.stack.fail("twenty", "GET", "/rest/tasks/", 502, times=9)                 # the lookup (a read) fails with a gateway error: nothing was written
+    r, mid = go(env)
+    assert state(r, mid) is MissionState.FAILED                                   # not parked for reconciliation: the write was never sent
+    rec = reconstruct(env.events_path, mid)
+    assert rec["steps"][2]["outcome"] == "refused" and rec["mission_classification"] == COMPENSATED
+    assert env.stack.count("twenty", "POST") == 0 and env.stack.quotations.keys() == {"SAL-QTN-2026-00001"}

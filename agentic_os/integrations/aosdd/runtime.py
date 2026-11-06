@@ -143,6 +143,25 @@ class AosddMissionRuntime(MissionRuntime):
     def _saga(self, m, plan, world) -> None:
         self._undo_uncommitted(m, plan)
         super()._saga(m, plan, world)
+        self._no_clean_rollback_claim(m)
+
+    def _outcome_from_log(self, m):
+        return self._guard_outcome(super()._outcome_from_log(m))
+
+    def _no_clean_rollback_claim(self, m) -> None:
+        m.outcome = self._guard_outcome(m.outcome)
+
+    @staticmethod
+    def _guard_outcome(out):
+        """The base sets ``rolled_back`` when every effect was read back as gone. All four writes leave a declared residual (soft-deleted
+        Twenty rows, a Chatwoot tombstone, a rewritten Lago metadata set, a consumed ERPNext number): that is 'compensated with residual
+        effects', never a clean rollback. The receipt carries the residuals; this flag must not say otherwise."""
+        if isinstance(out, dict) and out.get("rolled_back"):
+            out = dict(out)
+            out["rolled_back"] = False
+            out["compensation_clean_rollback"] = False
+            out["compensation_note"] = "effects were compensated and read back as gone, but residual effects remain (see the receipt); this is not a clean rollback"
+        return out
 
     def _undo_uncommitted(self, m, plan) -> None:
         status = self.repo.node_status(m.id)

@@ -30,7 +30,7 @@ UNDO_CAPS, VERIFY_CAPS = tuple(UNDO.values()), tuple(VERIFY.values())
 #: the argument each write is scoped by in the owner's grant (a top-level resolved input; see AosddMissionRuntime._resolve_inputs)
 RESOURCE_ARG = {"S1": "party", "S2": "invoice_lago_id", "S3": "company_id", "S4": "conversation_id"}
 RESIDUAL = {
-    "S1": ["a deleted ERPNext draft may leave a Deleted Document log row (NOT CHECKED)", "the SAL-QTN number is consumed from the series (ids are not unique over time)"],
+    "S1": ["a deleted ERPNext draft may leave a Deleted Document log row (NOT CHECKED)", "ERPNext naming-series numbers are reused after a delete, so a SAL-QTN id is not unique over time (observed: SAL-QTN-2026-00002 reused)"],
     "S2": ["the invoice metadata set was rewritten (cleared); valid only when our entry was the only entry"],
     "S3": ["soft-deleted Twenty task and taskTarget rows remain; their ids cannot be re-created (a new attempt needs a new op id)"],
     "S4": ["a 'This message was deleted' tombstone remains in the Chatwoot conversation"],
