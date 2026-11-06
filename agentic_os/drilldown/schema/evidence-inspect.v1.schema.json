@@ -1,0 +1,251 @@
+{
+  "$defs": {
+    "actor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/unavailable"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "available": {
+              "const": true
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "available",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "cite": {
+      "additionalProperties": false,
+      "properties": {
+        "event_seq": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "event_sha256": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "event_seq",
+        "event_sha256"
+      ],
+      "type": "object"
+    },
+    "produced_by": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/unavailable"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "capability": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "node_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "node_id",
+            "capability"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "origin": {
+          "const": "event_log"
+        },
+        "read_only": {
+          "const": true
+        },
+        "sample_data": {
+          "const": false
+        },
+        "store": {
+          "additionalProperties": false,
+          "properties": {
+            "backend": {
+              "type": "string"
+            },
+            "durability": {
+              "enum": [
+                "durable",
+                "volatile",
+                "unknown"
+              ]
+            }
+          },
+          "required": [
+            "backend",
+            "durability"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "origin",
+        "sample_data",
+        "read_only",
+        "store"
+      ],
+      "type": "object"
+    },
+    "unavailable": {
+      "additionalProperties": false,
+      "properties": {
+        "available": {
+          "const": false
+        },
+        "detail": {
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "not_recorded",
+            "not_authorized",
+            "redacted",
+            "expired",
+            "source_offline",
+            "too_large",
+            "integrity_failed"
+          ]
+        }
+      },
+      "required": [
+        "available",
+        "reason",
+        "detail"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "urn:redevops:schema:aos.drilldown.evidence-inspect/v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "cite": {
+      "$ref": "#/$defs/cite"
+    },
+    "content": {
+      "description": "any JSON value, or an unavailable object"
+    },
+    "content_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "content_sha256_basis": {
+      "enum": [
+        "computed_at_read_time",
+        null
+      ]
+    },
+    "id": {
+      "type": "string"
+    },
+    "integrity": {
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "type": "string"
+        },
+        "computed_sha256": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "recorded_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "enum": [
+            "recorded_hash_verified",
+            "recorded_hash_mismatch",
+            "recorded_hash_unchecked",
+            "no_recorded_hash"
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "recorded_sha256",
+        "basis"
+      ],
+      "type": "object"
+    },
+    "kind": {
+      "enum": [
+        "verification",
+        "claim",
+        "evidence_record",
+        "node_result",
+        "mission_evidence_ref"
+      ]
+    },
+    "mission_id": {
+      "type": "string"
+    },
+    "produced_by": {
+      "$ref": "#/$defs/produced_by"
+    },
+    "provenance": {
+      "$ref": "#/$defs/provenance"
+    },
+    "reference": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schema": {
+      "const": "aos.drilldown.evidence-inspect/v1"
+    }
+  },
+  "required": [
+    "schema",
+    "mission_id",
+    "id",
+    "kind",
+    "reference",
+    "content",
+    "content_sha256",
+    "content_sha256_basis",
+    "integrity",
+    "produced_by",
+    "cite",
+    "provenance"
+  ],
+  "title": "Evidence item",
+  "type": "object"
+}

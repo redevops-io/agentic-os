@@ -1,0 +1,350 @@
+{
+  "$defs": {
+    "actor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/unavailable"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "available": {
+              "const": true
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "available",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "cite": {
+      "additionalProperties": false,
+      "properties": {
+        "event_seq": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "event_sha256": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "event_seq",
+        "event_sha256"
+      ],
+      "type": "object"
+    },
+    "entry": {
+      "additionalProperties": false,
+      "properties": {
+        "actor": {
+          "$ref": "#/$defs/actor"
+        },
+        "capability": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "category": {
+          "enum": [
+            "lifecycle",
+            "plan",
+            "node",
+            "approval",
+            "policy",
+            "verification",
+            "world",
+            "evidence",
+            "replay",
+            "other"
+          ]
+        },
+        "cite": {
+          "$ref": "#/$defs/cite"
+        },
+        "node_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "ok",
+            "failed",
+            "denied",
+            "pending",
+            "info"
+          ]
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/unavailable"
+            },
+            {
+              "type": "object"
+            }
+          ]
+        },
+        "seq": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "ts": {
+          "type": "number"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "seq",
+        "ts",
+        "type",
+        "category",
+        "outcome",
+        "node_id",
+        "capability",
+        "summary",
+        "actor",
+        "payload",
+        "cite"
+      ],
+      "type": "object"
+    },
+    "produced_by": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/unavailable"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "capability": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "node_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "node_id",
+            "capability"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "origin": {
+          "const": "event_log"
+        },
+        "read_only": {
+          "const": true
+        },
+        "sample_data": {
+          "const": false
+        },
+        "store": {
+          "additionalProperties": false,
+          "properties": {
+            "backend": {
+              "type": "string"
+            },
+            "durability": {
+              "enum": [
+                "durable",
+                "volatile",
+                "unknown"
+              ]
+            }
+          },
+          "required": [
+            "backend",
+            "durability"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "origin",
+        "sample_data",
+        "read_only",
+        "store"
+      ],
+      "type": "object"
+    },
+    "unavailable": {
+      "additionalProperties": false,
+      "properties": {
+        "available": {
+          "const": false
+        },
+        "detail": {
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "not_recorded",
+            "not_authorized",
+            "redacted",
+            "expired",
+            "source_offline",
+            "too_large",
+            "integrity_failed"
+          ]
+        }
+      },
+      "required": [
+        "available",
+        "reason",
+        "detail"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "urn:redevops:schema:aos.drilldown.timeline/v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "entries": {
+      "items": {
+        "$ref": "#/$defs/entry"
+      },
+      "type": "array"
+    },
+    "head": {
+      "additionalProperties": false,
+      "properties": {
+        "event_count": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lineage_sha256": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "mission_state": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seq": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "event_count",
+        "lineage_sha256",
+        "mission_state"
+      ],
+      "type": "object"
+    },
+    "lineage_check": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "not_requested"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": [
+                "match",
+                "mismatch"
+              ]
+            },
+            "upto_seq": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "status",
+            "upto_seq"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "mission_id": {
+      "type": "string"
+    },
+    "page": {
+      "additionalProperties": false,
+      "properties": {
+        "after_seq": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "limit": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "next_after_seq": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "returned": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "after_seq",
+        "limit",
+        "returned",
+        "next_after_seq"
+      ],
+      "type": "object"
+    },
+    "provenance": {
+      "$ref": "#/$defs/provenance"
+    },
+    "schema": {
+      "const": "aos.drilldown.timeline/v1"
+    }
+  },
+  "required": [
+    "schema",
+    "mission_id",
+    "provenance",
+    "head",
+    "page",
+    "entries",
+    "lineage_check"
+  ],
+  "title": "Mission timeline page",
+  "type": "object"
+}

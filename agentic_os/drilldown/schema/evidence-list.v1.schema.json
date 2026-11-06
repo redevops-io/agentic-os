@@ -1,0 +1,282 @@
+{
+  "$defs": {
+    "actor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/unavailable"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "available": {
+              "const": true
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "available",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "cite": {
+      "additionalProperties": false,
+      "properties": {
+        "event_seq": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "event_sha256": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "event_seq",
+        "event_sha256"
+      ],
+      "type": "object"
+    },
+    "item": {
+      "additionalProperties": false,
+      "properties": {
+        "capability": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cite": {
+          "$ref": "#/$defs/cite"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "verification",
+            "claim",
+            "evidence_record",
+            "node_result",
+            "mission_evidence_ref"
+          ]
+        },
+        "node_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "capability",
+        "node_id",
+        "summary",
+        "cite"
+      ],
+      "type": "object"
+    },
+    "produced_by": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/unavailable"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "capability": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "node_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "node_id",
+            "capability"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "origin": {
+          "const": "event_log"
+        },
+        "read_only": {
+          "const": true
+        },
+        "sample_data": {
+          "const": false
+        },
+        "store": {
+          "additionalProperties": false,
+          "properties": {
+            "backend": {
+              "type": "string"
+            },
+            "durability": {
+              "enum": [
+                "durable",
+                "volatile",
+                "unknown"
+              ]
+            }
+          },
+          "required": [
+            "backend",
+            "durability"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "origin",
+        "sample_data",
+        "read_only",
+        "store"
+      ],
+      "type": "object"
+    },
+    "unavailable": {
+      "additionalProperties": false,
+      "properties": {
+        "available": {
+          "const": false
+        },
+        "detail": {
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "not_recorded",
+            "not_authorized",
+            "redacted",
+            "expired",
+            "source_offline",
+            "too_large",
+            "integrity_failed"
+          ]
+        }
+      },
+      "required": [
+        "available",
+        "reason",
+        "detail"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "urn:redevops:schema:aos.drilldown.evidence-list/v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "coverage": {
+      "additionalProperties": false,
+      "properties": {
+        "claims": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "evidence_records": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lineage_complete": {
+          "type": "boolean"
+        },
+        "mission_evidence_refs": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "node_results": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unavailable": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "type": "string"
+              },
+              "reason": {
+                "enum": [
+                  "not_recorded",
+                  "not_authorized",
+                  "redacted",
+                  "expired",
+                  "source_offline",
+                  "too_large",
+                  "integrity_failed"
+                ]
+              },
+              "what": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "what",
+              "reason",
+              "detail"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "verifications": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "claims",
+        "evidence_records",
+        "verifications",
+        "node_results",
+        "mission_evidence_refs",
+        "lineage_complete",
+        "unavailable"
+      ],
+      "type": "object"
+    },
+    "items": {
+      "items": {
+        "$ref": "#/$defs/item"
+      },
+      "type": "array"
+    },
+    "mission_id": {
+      "type": "string"
+    },
+    "provenance": {
+      "$ref": "#/$defs/provenance"
+    },
+    "schema": {
+      "const": "aos.drilldown.evidence-list/v1"
+    }
+  },
+  "required": [
+    "schema",
+    "mission_id",
+    "provenance",
+    "items",
+    "coverage"
+  ],
+  "title": "Mission evidence list",
+  "type": "object"
+}
