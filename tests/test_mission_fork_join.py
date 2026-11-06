@@ -18,6 +18,7 @@ from agentic_os.mission.fork_join import (
 from agentic_os.mission.store import EventStore
 from agentic_os.mission.types import Budget, MissionState, NodeCost
 from tests._fork_support import CountingOperator, CrashingStore, GRANTS, build, spec, types
+from tests._service_resume import authorize_service, rehydrate_authorized  # noqa: E402
 
 
 # ───────────────────────── pure model ─────────────────────────
@@ -718,7 +719,7 @@ def test_crash_at_every_event_boundary_resumes_without_duplicate_effects(tmp_pat
         store2 = EventStore(path)
         rt2, _, _ = build(store=store2, op=op, concurrency=2)
         rt2._missions.clear()
-        rt2.rehydrate(m.id, policy_refs=GRANTS)
+        rehydrate_authorized(rt2, m.id, policy_refs=GRANTS)
         res = rt2.forks.run_fork(m.id, mkspec())
         st = res.state.to_dict()
         got = {b["branch_id"]: b["status"] for b in st["branches"]}
@@ -769,7 +770,7 @@ def test_crash_during_publish_republishes_idempotently(tmp_path):
     assert "ObservationWritten" not in [e.type for e in EventStore(path).for_mission(m.id)]
     rt2, _, _ = build(store=EventStore(path), op=op)
     rt2._missions.clear()
-    rt2.rehydrate(m.id, policy_refs=GRANTS)
+    rehydrate_authorized(rt2, m.id, policy_refs=GRANTS)
     rt2.forks.run_fork(m.id, s)
     rt2.forks.run_fork(m.id, s)                          # and again: still exactly once
     obs = [e.payload["key"] for e in rt2.store.for_mission(m.id) if e.type == "ObservationWritten"]
@@ -784,7 +785,7 @@ def test_restart_does_not_reexecute_completed_branches(tmp_path):
     before = dict(op.calls)
     rt2, _, _ = build(store=EventStore(path), op=op)
     rt2._missions.clear()
-    rt2.rehydrate(m.id, policy_refs=GRANTS)
+    rehydrate_authorized(rt2, m.id, policy_refs=GRANTS)
     rt2.forks.run_fork(m.id, s)
     assert op.calls == before
 

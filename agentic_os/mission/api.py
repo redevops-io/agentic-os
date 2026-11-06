@@ -11,7 +11,7 @@ from typing import Any
 from .api_gate import GATE, admin_only, caller_of, public
 from .control_auth import approver_tokens, tenant_limits
 from .approval import strip_approval_keys
-from .runtime import MissionRuntime
+from .runtime import MissionRuntime, ResumeNotAuthorized
 from .simulator import simulate
 from .types import Budget, to_jsonable
 
@@ -138,6 +138,9 @@ def build_router(runtime: MissionRuntime):
         from .runtime import ApprovalError  # noqa: PLC0415
         try:
             runtime.approve(mid, body.node_id, body.decision, edit, actor=actor)
+        except ResumeNotAuthorized:
+            # a mission reconstructed from the log is read-only until a resume authorization is granted (replay boundary)
+            raise HTTPException(403, "mission was reconstructed from the log; resuming it needs a resume authorization")
         except ApprovalError as e:
             raise HTTPException(409, str(e))
         return _mission_view(mid)

@@ -28,6 +28,7 @@ from agentic_os.mission.store import EventStore
 from agentic_os.mission.types import Budget, MissionState
 from agentic_os.mission.waitstate import Wait, classify
 from tests._fork_support import CountingOperator, CrashingStore, GRANTS, build_registry
+from tests._service_resume import authorize_service, rehydrate_authorized  # noqa: E402
 
 NOW = time.time()
 EVIDENCE = {"kind": "provider_record", "reference": "provider dashboard, charge ch_b, 2026-10-24 09:14"}
@@ -88,7 +89,7 @@ class World:
         fork_join._LIVE_OWNERS.clear()            # the old process is gone: its driver claims and its in-process lock are not
         fork_join._DRIVER_LOCKS.clear()           # visible to the new one (the old driver thread here is only a zombie)
         rt = self.boot()
-        rt.rehydrate(mid, policy_refs=GRANTS)
+        rehydrate_authorized(rt, mid, policy_refs=GRANTS)
         return rt
 
 

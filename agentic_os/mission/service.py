@@ -16,12 +16,12 @@ from .event_backends import build_event_store
 from . import pilots
 
 
-def build_pilot_runtime(store_path: str | None = None, planner: Planner | None = None) -> MissionRuntime:
+def build_pilot_runtime(store_path: str | None = None, planner: Planner | None = None, service_resume=None) -> MissionRuntime:
     operators = pilots.build_pilot_operators()
     registry = pilots.build_pilot_registry(operators)
     client = LocalOperatorClient(operators)
     return MissionRuntime(registry, Executor(client), store=build_event_store(store_path),
-                          planner=planner or default_planner())
+                          planner=planner or default_planner(), service_resume=service_resume)
 
 
 class RehydrateFailed(RuntimeError):
@@ -52,7 +52,7 @@ def rehydrate_in_flight(rt: MissionRuntime, strict: bool | None = None) -> list[
         if rt.repo.state(mid) in terminal:
             continue
         try:
-            m = rt.rehydrate(mid)
+            m = rt.rehydrate_for_service(mid)     # resumable only with an explicit rt.service_resume; otherwise restored read-only
             restored.append(mid)
             created = next((e for e in rt.store.for_mission(mid) if e.type == "MissionCreated"), None)
             if created is not None and "budget" not in created.payload:
@@ -69,10 +69,10 @@ def rehydrate_in_flight(rt: MissionRuntime, strict: bool | None = None) -> list[
     return restored
 
 
-def mount(app, runtime: MissionRuntime | None = None) -> MissionRuntime:
+def mount(app, runtime: MissionRuntime | None = None, service_resume=None) -> MissionRuntime:
     from .control_auth import validate_config
     validate_config()                      # fail at startup on duplicate / colliding tokens
-    rt = runtime or build_pilot_runtime()
+    rt = runtime or build_pilot_runtime(service_resume=service_resume)
     rehydrate_in_flight(rt)                # in-flight missions survive a restart (approve / GET work again)
     app.include_router(build_router(rt))
     app.include_router(build_capabilities_router(rt))

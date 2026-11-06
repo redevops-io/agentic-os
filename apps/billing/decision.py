@@ -190,7 +190,7 @@ def resume_parked(loop: ClosedLoop) -> Dict[str, Any]:
         inputs = _scope_inputs(rec)
         try:
             with loop.launcher.planner.scoped(inputs):
-                loop.runtime.rehydrate(mid, inputs=inputs)
+                loop.runtime.rehydrate_for_service(mid, inputs=inputs)
         except Exception as e:  # noqa: BLE001 — ReplayError / ReplayDivergence / UnrecoverableAuthority ...
             report["skipped"][mid] = f"{type(e).__name__}: {e}"
             continue

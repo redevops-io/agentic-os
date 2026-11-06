@@ -231,8 +231,11 @@ class MissionRegistry:
     """
 
     def __init__(self, *, owner: str, channel_factory: Optional[Callable[[], AttentionChannel]] = None,
-                 persist_path: Optional[str] = None, mission_store_dir: Optional[str] = None):
+                 persist_path: Optional[str] = None, mission_store_dir: Optional[str] = None, service_resume=None):
         self.owner = owner
+        #: explicit unattended-resume authority for runs rehydrated after a restart (MissionRuntime.ServiceResume); None = the
+        #: rehydrated run is read-only until a person/permission grants a resume (the default)
+        self.service_resume = service_resume
         self.channel_factory = channel_factory
         self.persist_path = persist_path
         self.mission_store_dir = mission_store_dir
@@ -296,7 +299,8 @@ class MissionRegistry:
             return None
         ch = self.channel_factory() if self.channel_factory else None
         rec.run = RevenueMissionRun.rehydrate(rec.opportunity, owner=self.owner,
-                                              store=EventStore(path=rec.store_path), channel=ch)
+                                              store=EventStore(path=rec.store_path), channel=ch,
+                                              service_resume=self.service_resume)
         return rec.run
 
     # ── forecast ↔ solicitation linkage ──

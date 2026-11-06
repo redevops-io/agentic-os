@@ -1,14 +1,28 @@
-# demo.redevops.io/evidence — Historical Evidence Plane / Evidence Explorer (standalone).
+# demo.redevops.io/evidence - Historical Evidence Plane / Evidence Explorer (AUTHENTICATED profile).
 #   evidence-api :8101 (FastAPI) persists a REAL benchmark run through the open EvidenceStore seam
-#   (runtime_contracts.store.FileEvidenceStore), then serves a DuckDB SQL query UI over the saved rows.
+#   (runtime_contracts.store.FileEvidenceStore), then serves a sandboxed, audited, read-only SQL query UI over the saved rows.
+#   Requires EVIDENCE_EXPLORER_TOKEN (>= 24 chars) in the environment; it refuses to start without it.
+#   The anonymous public synthetic demo is a different profile: evidence-demo.public.compose.yml.
 #   cloudflared: demo.redevops.io /^(evidence|api/evidence)/ -> 192.168.40.105:8101
 services:
   evidence-api:
-    build: .
+    build:
+      context: .
+      target: authenticated
     image: ${EVIDENCE_API_IMAGE:-evidence-demo:latest}
     container_name: evidence-api
     restart: unless-stopped
+    environment:
+      EVIDENCE_EXPLORER_TOKEN: ${EVIDENCE_EXPLORER_TOKEN:?set EVIDENCE_EXPLORER_TOKEN (>= 24 characters)}
+      # origin/main's grant store never generates a key implicitly (v0.4.0): provision it once with `make permissions-key`
+      PERMISSIONS_KEY: ${PERMISSIONS_KEY:?set PERMISSIONS_KEY (create it once with make permissions-key)}
     ports:
       - "${EVIDENCE_EDGE_PORT:-8101}:8101"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+      - /var/lib/evidence:size=64m,uid=10001
+    cap_drop: [ALL]
     security_opt:
       - apparmor=docker-contextos
+      - no-new-privileges:true

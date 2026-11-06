@@ -18,6 +18,7 @@ from agentic_os.mission.fork_join import (
 from agentic_os.mission.store import EventStore
 from agentic_os.mission.types import CapabilitySpec, MissionState, NodeCost
 from tests._fork_support import GRANTS, CountingOperator, build, make_rt, spec, types
+from tests._service_resume import authorize_service, rehydrate_authorized  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -86,6 +87,7 @@ def test_two_controller_instances_on_one_log_dispatch_exactly_once():
 _PROC = textwrap.dedent("""
     import sys, time, os
     from tests._fork_support import make_rt, spec, GRANTS, record_effect
+    from tests._service_resume import rehydrate_authorized
     from agentic_os.mission.store import EventStore
     from agentic_os.mission.fork_join import ForkError
     path, mid, role, effects = sys.argv[1:5]
@@ -97,7 +99,7 @@ _PROC = textwrap.dedent("""
             record_effect(effects, inputs["tag"])
             return {"ok": True}
     rt = make_rt(EventStore(path), Op())
-    rt.rehydrate(mid, policy_refs=GRANTS)
+    rehydrate_authorized(rt, mid, policy_refs=GRANTS)
     if role == "B":                       # wait until A has claimed the fork
         for _ in range(400):
             if "ForkDriverClaimed" in open(path).read():
@@ -316,7 +318,7 @@ def test_post_restart_approval_resumes_only_with_a_matching_registered_spec(tmp_
     s = ForkSpec("f1", [BranchSpec("g", "w.gated", inputs={"tag": "g"})], JoinSpec())
     assert rt.forks.run_fork(m.id, s).status == "parked"
     rt2 = make_rt(EventStore(path), op)
-    rt2.rehydrate(m.id, policy_refs=GRANTS)
+    rehydrate_authorized(rt2, m.id, policy_refs=GRANTS)
     node = branch_node_id(m.id, "f1", "g")
     with pytest.raises(ForkError, match="spec_drift"):
         rt2.forks.register_spec(m.id, ForkSpec("f1", [BranchSpec("g", "w.gated", inputs={"tag": "CHANGED"})], JoinSpec()))

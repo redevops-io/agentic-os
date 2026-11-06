@@ -52,7 +52,35 @@ from .types import (
 from .context_view import epoch_from_refs, plan_fingerprint
 from .policy import MissionPolicy
 
+import hashlib as _hashlib
+import json as _json
+import time as _time
+
 _TERMINAL = {NodeState.DONE, NodeState.SKIPPED, NodeState.COMPENSATED}
+def _wall() -> float:
+    """Wall-clock seconds (module-level so tests can move time)."""
+    return _time.time()
+
+
+class ResumeNotAuthorized(PermissionError):
+    """Execution was attempted on a mission whose state was RECONSTRUCTED from the log (replay) without a current
+    resume/re-execute authorization. Raised at the lowest execution layer, before any tool is called or event written."""
+
+
+class ServiceResume:
+    """EXPLICIT configuration for unattended resume: the service principal a process runs as when it rehydrates a mission and
+    drives it without a human present (boot, goal loop, the revenue runner, the billing decision hand-off). It is NEVER a default:
+    a runtime constructed without it refuses to run any rehydrated mission (``ResumeNotAuthorized``), and ``rehydrate_for_service``
+    then only restores the mission read-only. ``principal`` must hold ``evidence.<scope>.resume`` (``scope`` = the mission's tenant id)
+    on ``ceiling`` (a permission-plane ceiling, see ``evidence_query.authz``); every use is on the log (``ReplayAuthorized`` with the
+    actor, or ``ReplayRefused``). It never satisfies ``reexecute`` and never stands in for a human approval: nodes behind a gate still
+    need a currently valid, bound approval."""
+
+    def __init__(self, principal, ceiling) -> None:
+        if principal is None or ceiling is None:
+            raise ValueError("a service resume needs both a principal and a permission ceiling")
+        self.principal, self.ceiling = principal, ceiling
+
 #: DEFAULT business value (USD) per mission kind — the fallback only. The effective value is resolved by
 #: :func:`business_value_for` from, in order: the runtime's ``business_values`` map, the mission's own
 #: ``inputs["business_value_usd"]``, a registered app's ``OutcomeKind.value_usd`` (matching ``key``), the
@@ -219,6 +247,10 @@ class MissionRuntime:
         secure_executor_for=None,
         authority=None,
         authority_key=None,
+        approval_grant_ttl_s: float | None = None,
+        resume_grant_ttl_s: float = 900.0,
+        approval_ttl_s: float | None = None,        # deprecated alias of approval_grant_ttl_s (the name collided with the request TTL)
+        service_resume: "ServiceResume | None" = None,   # unattended resume: explicit, default None = refuse (owner decision 2026-11-06)
     ):
         from .profile import assert_authority  # noqa: PLC0415
         if authority is not None:
@@ -279,6 +311,18 @@ class MissionRuntime:
         #: `approval_scope` so replay evidence does not imply an old event
         #: recorded information it never held.
         self._legacy_approvals: set[str] = set()
+        # Replay boundary. A mission whose in-memory state came from `rehydrate` is RECONSTRUCTED: reading it is free, but
+        # executing it (run / approve / resume / saga / any tool call) needs a current grant obtained through
+        # `grant_resume` (permission plane check), and only approvals bound to the CURRENT plan/evidence/intent and
+        # unexpired are honoured - a historical approval receipt is evidence, never authority.
+        self.approval_grant_ttl_s = float(86400.0 if approval_grant_ttl_s is None and approval_ttl_s is None
+                                          else (approval_grant_ttl_s if approval_grant_ttl_s is not None else approval_ttl_s))
+        self.approval_ttl_s = self.approval_grant_ttl_s     # deprecated alias (read-only by convention)
+        self.resume_grant_ttl_s = float(resume_grant_ttl_s)
+        self.service_resume = service_resume
+        self._reconstructed: set[str] = set()
+        self._resume_grants: dict[str, dict] = {}
+        self._not_honoured: set[tuple] = set()
 
     @property
     def forks(self):
@@ -573,7 +617,11 @@ class MissionRuntime:
     # ── run loop (resumable) ──────────────────────────────────────────────────
     def _executor_for(self, m: Mission) -> Executor:
         """The executor a mission runs on: its cached per-mission secured executor when the security planes
-        are wired, else the shared open executor. Cached by mission id so `run()` and `_saga()` agree."""
+        are wired, else the shared open executor. Cached by mission id so `run()` and `_saga()` agree.
+
+        This is also the single choke point every tool invocation passes through (run, concurrent waves, sagas), so the
+        replay authorization is enforced here as well as at the public entry points."""
+        self._require_execution_authority(m.id)
         if self._secure_executor_for is None:
             ex = self.executor
         else:
@@ -683,6 +731,7 @@ class MissionRuntime:
     def run(self, mission_id: str) -> Mission:
         """Drive the mission. One driver at a time per mission: concurrent callers queue and then observe the
         folded state, so a ready node is dispatched once."""
+        self._require_execution_authority(mission_id)     # replay boundary: a reconstructed mission does not run without a grant
         with self._run_lock(mission_id):
             m = self._run_locked(mission_id)
         if m.state in (MissionState.SUCCEEDED, MissionState.FAILED, MissionState.CANCELLED,
@@ -1626,6 +1675,7 @@ class MissionRuntime:
 
     def _approve_locked(self, mission_id: str, node_id: str, decision: str = "approve",
                         edit: dict | None = None, actor: str = "") -> Mission:
+        self._require_execution_authority(mission_id)     # replay boundary (top of the locked body: forks and direct callers pass here too)
         m = self._missions[mission_id]
         # fork-branch approvals are handled (and fail closed) by the fork controller, before the generic guards
         if isinstance(node_id, str) and ":fork:" in node_id and self.forks.owns(mission_id, node_id):   # fork branch approvals
@@ -1689,10 +1739,17 @@ class MissionRuntime:
             # swap is exactly when a human's yes should stop applying, because
             # what they approved is not what would run.
             _shown = self._parked_digest(mission_id, node_id)
+            granted_at = _wall()
             self.store.append("ApprovalGranted", mission_id, {
                 "node_id": node_id, "edit": edit, **({"approver": actor} if actor else {}),
+                # what the approver was SHOWN (inputs_sha256) and what plan/evidence it was GIVEN FOR (binding) are complementary
                 **({"inputs_sha256": _shown} if _shown else {}),
-                "capability": self._capability_of(mission_id, node_id)})
+                "capability": self._capability_of(mission_id, node_id),
+                # Bound to the exact plan + evidence + intent it was given for, and time-limited: a replay only honours
+                # an approval whose binding equals the CURRENT one and which has not expired (grant lifetime, distinct from the
+                # request TTL in _approval_ttl_s(), which bounds how long an UNANSWERED request stays answerable).
+                "binding": self._approval_binding(m, mission_id, node_id),
+                "granted_at": granted_at, "expires_at": granted_at + self.approval_grant_ttl_s})
             self.store.append("NodeResumed", mission_id, {"node_id": node_id})
             return self.run(mission_id)
         self.store.append("ApprovalRejected", mission_id, {"node_id": node_id})
@@ -1708,7 +1765,9 @@ class MissionRuntime:
 
     # ── sagas / failure / success ──────────────────────────────────────────────
     def _saga(self, m: Mission, plan: ExecutionPlan, world: WorldState) -> None:
-        """Explicit-only compensation (docs/COMPENSATION.md): see compensation_runner.run_saga."""
+        """Explicit-only compensation (docs/COMPENSATION.md): see compensation_runner.run_saga. Compensations are side effects too:
+        they reach tools only through _executor_for, which enforces the replay authorization."""
+        self._require_execution_authority(m.id)     # replay boundary at the entry: run_saga settles/writes events even when nothing is undone
         from .compensation_runner import run_saga  # noqa: PLC0415
         run_saga(self, m, plan)
 
@@ -1803,6 +1862,8 @@ class MissionRuntime:
         version they ran under; not-yet-terminal nodes see the new grants (the verifier/policy plane
         read them live). A revoke invalidates open approvals; a retroactive revoke that a completed
         side effect relied on is a violation → compensate + fail."""
+        if retroactive and revoke:                   # may compensate (execute) - needs the same authority as a run
+            self._require_execution_authority(mission_id)
         m = self._missions[mission_id]
         prev = self.governance.policy_version(mission_id)
         before = list(m.policy_refs)
@@ -1863,6 +1924,7 @@ class MissionRuntime:
         return m
 
     def resume(self, mission_id: str, *, actor: str) -> Mission:
+        self._require_execution_authority(mission_id)
         m = self._missions[mission_id]
         if m.state != MissionState.PAUSED:
             return m
@@ -1890,6 +1952,8 @@ class MissionRuntime:
         control. Each mission's demand is estimated from its plan; admitted missions run (to
         completion or their next human gate) and release their reservation. Returns the admission
         order — deterministic, so replay reproduces it."""
+        for mid in mission_ids:                      # all-or-nothing: no mission runs if any is not authorized
+            self._require_execution_authority(mid)
         sched = CrossMissionScheduler(pools, aging_rate=aging_rate)
         priorities, deadlines, owners = priorities or {}, deadlines or {}, owners or {}
         for mid in mission_ids:
@@ -1986,6 +2050,19 @@ class MissionRuntime:
                 "recommendations": [to_jsonable(r) for r in self.learners.recommendations()]}
 
     # ── restart / rehydrate ────────────────────────────────────────────────────
+    def rehydrate_for_service(self, mission_id: str, policy_refs: list[str] | None = None,
+                              inputs: dict | None = None, policy: "MissionPolicy | None" = None) -> Mission:
+        """``rehydrate`` for a caller that will go on to RUN the mission without a human (boot, goal loop, revenue runner, billing
+        hand-off). Without a configured :class:`ServiceResume` it is exactly ``rehydrate``: the mission is restored read-only and a later
+        ``run`` raises ``ResumeNotAuthorized`` (the default). With one, the service principal is checked against the permission plane for
+        ``evidence.<mission tenant>.resume`` and the grant is recorded (``ReplayAuthorized``/``ReplayRefused``)."""
+        m = self.rehydrate(mission_id, policy_refs, inputs, policy)
+        sr = self.service_resume
+        if sr is not None:
+            self.grant_resume(mission_id, principal=sr.principal, ceiling=sr.ceiling,
+                              scope=str(getattr(m, "tenant", "") or "default"), action="resume")
+        return m
+
     def rehydrate(self, mission_id: str, policy_refs: list[str] | None = None,
                   inputs: dict | None = None, policy: "MissionPolicy | None" = None) -> Mission:
         """Rebuild a mission from the log (see ``_rehydrate``). If any step fails, nothing of the half-built
@@ -2110,6 +2187,8 @@ class MissionRuntime:
                 m.default_failure_policy, m.default_policy_source = _e.payload["to"], "reresolved"
         m.state = self.repo.state(mission_id) or MissionState.PLANNING
         self._missions[mission_id] = m
+        self._reconstructed.add(mission_id)          # reconstruction is read-only; executing it needs `grant_resume`
+        self._resume_grants.pop(mission_id, None)
 
         # A mission created from a sealed intent replans from that intent, which
         # the log carries whole. Storing only `intent_hash` would prove the
@@ -2233,6 +2312,7 @@ class MissionRuntime:
         Unlike ``rehydrate``, this is allowed to produce a different plan — it is not replay. It does not
         itself execute; the new plan runs through the normal ``run()`` gates."""
         m = self._missions.get(mission_id) or self.rehydrate(mission_id)
+        self._require_execution_authority(mission_id, need="reexecute")   # a new program needs the re-execute grant
         before = self._last_plan_meta(mission_id) or {}
         old_fp, old_epoch = before.get("plan_fingerprint", ""), m.context_epoch_id
         # adopt the current evidence identity (re-sealed intent = Discovery re-ran against new evidence)
@@ -2304,11 +2384,12 @@ class MissionRuntime:
         replay — a worse fault than the one it would close, and one this
         project has a name for.
         """
-        granted, invalidated = {}, set()
+        granted, invalidated, payloads = {}, set(), {}
         for e in self.store.for_mission(mission_id):
             if e.type == "ApprovalGranted":
                 granted[e.payload["node_id"]] = e.payload.get("capability")
                 invalidated.discard(e.payload["node_id"])      # a later grant supersedes an earlier invalidation
+                payloads[e.payload["node_id"]] = e.payload
             elif e.type == "ApprovalInvalidated":
                 invalidated.add(e.payload["node_id"])
 
@@ -2326,7 +2407,91 @@ class MissionRuntime:
             if node_id in current and current[node_id] != approved_capability:
                 continue
             still_applies.add(node_id)
-        return still_applies - invalidated
+        out = still_applies - invalidated
+        if plan is not None and mission_id in self._reconstructed:
+            out = self._bound_only(mission_id, out, payloads)
+        return out
+
+    def _bound_only(self, mission_id: str, node_ids: set, payloads: dict) -> set:
+        """Replay rule: of the cached approvals, honour only those bound to the CURRENT plan/evidence/intent and not
+        expired. Everything else is evidence of a past decision and the node goes back to its gate; each refusal is
+        recorded once per (node, reason)."""
+        m = self._missions[mission_id]
+        keep = set()
+        for nid in node_ids:
+            p = payloads.get(nid, {})
+            reason = ""
+            if not p.get("binding"):
+                reason = "unbound"
+            elif p["binding"] != self._approval_binding(m, mission_id, nid):
+                reason = "binding_mismatch"
+            elif float(p.get("expires_at") or 0) < _wall():
+                reason = "expired"
+            if not reason:
+                keep.add(nid)
+            elif (mission_id, nid, reason) not in self._not_honoured:
+                self._not_honoured.add((mission_id, nid, reason))
+                self.store.append("ApprovalNotHonoured", mission_id, {"node_id": nid, "reason": reason})
+        return keep
+
+    # ── replay boundary ──────────────────────────────────────────────────────
+    def is_reconstructed(self, mission_id: str) -> bool:
+        return mission_id in self._reconstructed
+
+    def _binding_base(self, m: Mission, mission_id: str) -> dict:
+        plan = self._plans.get(mission_id)
+        fp = ""
+        if plan is not None:
+            fp = plan_fingerprint(self._signature(plan), security=self._security_envelope(m))
+        return {"mission_id": mission_id, "plan_fingerprint": fp, "context_epoch_id": getattr(m, "context_epoch_id", "") or "",
+                "intent_content_hash": getattr(m, "intent_content_hash", "") or "",
+                "evidence_refs": sorted(getattr(m, "evidence_refs", []) or [])}
+
+    def _approval_binding(self, m: Mission, mission_id: str, node_id: str) -> str:
+        """sha256 over the plan fingerprint, ContextEpoch, intent hash, evidence refs, node and its capability."""
+        body = dict(self._binding_base(m, mission_id), node_id=node_id, capability=self._capability_of(mission_id, node_id))
+        return "sha256:" + _hashlib.sha256(_json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+    def _require_execution_authority(self, mission_id: str, need: str | None = None) -> None:
+        if mission_id not in self._reconstructed:
+            return
+        g = self._resume_grants.get(mission_id)
+        if g is None or g["expires_at"] < _wall():
+            raise ResumeNotAuthorized(f"{mission_id}: reconstructed from the log; resuming it needs a current resume authorization")
+        if need == "reexecute" and g["action"] != "reexecute":
+            raise ResumeNotAuthorized(f"{mission_id}: re-planning needs the re-execute authorization")
+
+    def grant_resume(self, mission_id: str, *, principal, ceiling, scope: str, action: str = "resume") -> dict:
+        """Ask the permission plane whether ``principal`` may ``action`` (``resume`` | ``reexecute``) on ``scope`` and,
+        if so, open a short-lived grant on this mission. Refusals are recorded in the log and raise. The grant is
+        NOT an approval: nodes behind a gate still need a currently valid, bound approval."""
+        from ..evidence_query.authz import allowed, perm
+        if action not in ("resume", "reexecute"):
+            raise ValueError("action must be resume or reexecute")
+        if mission_id not in self._missions:
+            raise KeyError(mission_id)
+        who = getattr(principal, "id", "") or ""
+        try:
+            ok = allowed(ceiling, principal, perm(scope, action))
+        except ValueError:
+            ok = False
+        # the evidence scope IS the tenant id: a grant for one tenant's scope never resumes another tenant's mission
+        mt = str(getattr(self._missions[mission_id], "tenant", "") or "")
+        if ok and mt and mt != str(scope):
+            self.store.append("ReplayRefused", mission_id, {"actor": who, "scope": str(scope)[:64], "action": action,
+                                                            "reason": "scope_tenant_mismatch"})
+            raise ResumeNotAuthorized(f"{mission_id}: the scope is not this mission's tenant")
+        if not ok:
+            self.store.append("ReplayRefused", mission_id, {"actor": who, "scope": str(scope)[:64], "action": action,
+                                                            "reason": "not_authorized"})
+            raise ResumeNotAuthorized(f"{mission_id}: not authorized to {action}")
+        g = {"action": action, "actor": who, "scope": scope, "expires_at": _wall() + self.resume_grant_ttl_s}
+        self._resume_grants[mission_id] = g
+        self.store.append("ReplayAuthorized", mission_id,
+                          {"actor": who, "scope": scope, "action": action, "expires_at": g["expires_at"],
+                           "binding": "sha256:" + _hashlib.sha256(_json.dumps(self._binding_base(self._missions[mission_id], mission_id),
+                                                                              sort_keys=True, separators=(",", ":")).encode()).hexdigest()})
+        return dict(g)
 
     LEGACY_UNSCOPED_APPROVAL = "LEGACY_UNSCOPED_APPROVAL"
 

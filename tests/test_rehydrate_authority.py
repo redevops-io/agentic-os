@@ -4,6 +4,7 @@ import pytest
 from agentic_os.mission.policy import Effect, MissionPolicy, PolicyRule
 from agentic_os.mission.service import build_pilot_runtime
 from agentic_os.mission.types import Budget
+from tests._service_resume import TEST_SERVICE, authorize_service, rehydrate_authorized  # noqa: E402
 
 
 def _rt(path):
@@ -72,7 +73,12 @@ def test_service_restores_in_flight_missions(tmp_path, monkeypatch):
     mount(b)
     c = TestClient(b)
     assert c.get(f"/missions/{mid}", headers=H).status_code == 200
-    assert c.post(f"/missions/{mid}/approve", json={"node_id": node}, headers=H).status_code == 200
+    # without an explicit service resume the restored mission is read-only: an attended approval over HTTP is a 403 (replay boundary)
+    assert c.post(f"/missions/{mid}/approve", json={"node_id": node}, headers=H).status_code == 403
+    # a process configured with a resume authority (MissionRuntime service_resume) continues exactly where it stopped
+    d = FastAPI()
+    mount(d, service_resume=TEST_SERVICE)
+    assert TestClient(d).post(f"/missions/{mid}/approve", json={"node_id": node}, headers=H).status_code == 200
 
 
 def _mark_legacy(path, drop):
@@ -134,7 +140,7 @@ def test_concurrent_approvals_dispatch_once(tmp_path):
     rt.run(m.id)
     nid = rt.repo.pending_human(m.id)["node_id"]
     rt2 = _rt(p)
-    rt2.rehydrate(m.id)
+    rehydrate_authorized(rt2, m.id)
     res = []
 
     def go():

@@ -14,6 +14,7 @@ from agentic_os.mission.registry import CapabilityRegistry
 from agentic_os.mission.runtime import MissionRuntime
 from agentic_os.mission.store import EventStore
 from agentic_os.mission.types import MissionState
+from tests._service_resume import authorize_service, rehydrate_authorized  # noqa: E402
 
 GRANTS = ["billing:write", "support:write", "books:write", "compliance:write"]
 
@@ -151,7 +152,7 @@ def test_onboarding_restart_resume_does_not_repeat_completed_steps():
     m = rt.create_mission("Onboard", policy_refs=GRANTS, template="onboarding")
     rt.run(m.id)
     rt2 = MissionRuntime(reg, Executor(CC()), store=store)
-    rt2.rehydrate(m.id)
+    rehydrate_authorized(rt2, m.id)
     rt2.approve(m.id, rt2.repo.pending_human(m.id)["node_id"], "approve")
     assert rt2._missions[m.id].state == MissionState.SUCCEEDED
     assert counts == {"billing.create_subscription": 1, "support.send_onboarding": 1,

@@ -21,6 +21,7 @@ from agentic_os.mission.runtime import MissionRuntime
 from agentic_os.mission.store import EventStore
 from agentic_os.mission.types import (
     CapabilityManifest, CapabilitySpec, ExecutionIntent, IntentStep, MissionState, NodeState)
+from tests._service_resume import authorize_service, rehydrate_authorized  # noqa: E402
 
 NOW = time.time()
 EVIDENCE = {"kind": "provider_record", "reference": "provider dashboard, payment pi_123, 2026-10-24 09:14"}
@@ -123,7 +124,7 @@ class World:
 
     def restart(self, mid, mode="ok") -> MissionRuntime:
         rt = self.boot(mode)
-        rt.rehydrate(mid)
+        rehydrate_authorized(rt, mid)
         return rt
 
 

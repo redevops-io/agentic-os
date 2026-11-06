@@ -163,7 +163,11 @@ def _build_app():
         if _RT.repo.state(mid) is None:
             raise HTTPException(404, "unknown mission")
         body = await request.json()
-        _RT.approve(mid, body.get("node_id"), body.get("decision", "approve"))
+        from .runtime import ResumeNotAuthorized
+        try:
+            _RT.approve(mid, body.get("node_id"), body.get("decision", "approve"))
+        except ResumeNotAuthorized:
+            raise HTTPException(403, "mission was reconstructed from the log; resuming it needs a resume authorization")
         return _mission_head(mid)
 
     # ── bridge: one control surface over the DEPLOYED agents (their /capabilities + /invoke) ──────────

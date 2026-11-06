@@ -13,6 +13,7 @@ from __future__ import annotations
 import copy
 
 from agentic_os.mission.types import MissionState
+from tests._service_resume import TEST_SERVICE
 from agentic_os.revenue import (
     AutoFollowupPolicy, IngestAction, MissionRegistry, QualifiedOpportunity, RecordingChannel,
 )
@@ -38,7 +39,8 @@ HANDOFF = {
 def _registry(tmp_path):
     return MissionRegistry(owner="Alex", channel_factory=lambda: RecordingChannel(name="telegram"),
                            persist_path=str(tmp_path / "registry.jsonl"),
-                           mission_store_dir=str(tmp_path / "missions"))
+                           mission_store_dir=str(tmp_path / "missions"),
+                           service_resume=TEST_SERVICE)          # the restarted process is a service with an explicit resume authority
 
 
 def test_restart_rediscovery_is_unchanged_no_duplicate_lead(tmp_path):

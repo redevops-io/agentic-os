@@ -37,6 +37,7 @@ from typing import Any, Callable, Iterable, Optional, Protocol
 
 from .ownership import FencedEventStore, MissionLeases
 from .reconcile import ReconciliationError, validate_evidence
+from .runtime import ResumeNotAuthorized
 from .types import MissionState, NodeState
 
 _TERMINAL_MISSION = (MissionState.SUCCEEDED, MissionState.FAILED, MissionState.CANCELLED, MissionState.COMPENSATION_FAILED)
@@ -435,7 +436,7 @@ class GoalLoop:
                     return self._wait(loop_id, st, "waiting_reconciliation")      # never start a new attempt around an unknown
                 it = self._begin(loop_id, st)
                 continue
-            m = rt._missions.get(it.mission_id) or rt.rehydrate(it.mission_id)
+            m = rt._missions.get(it.mission_id) or rt.rehydrate_for_service(it.mission_id)
             if m.state not in _TERMINAL_MISSION:
                 block = self._hard_limit(st, it)
                 if block:
@@ -500,6 +501,11 @@ class GoalLoop:
                         self.rt.run(m.id)
                 else:
                     self.rt.run(m.id)
+        except ResumeNotAuthorized:
+            # a rehydrated mission needs an explicit service principal (MissionRuntime(service_resume=...)): without one the loop waits
+            # for a human instead of resuming unattended (nothing was dispatched; nothing was written but this wait)
+            self._wait(loop_id, self.state(loop_id), "waiting_human", detail="resume_not_authorized: no service principal is configured")
+            return False
         finally:
             for cid, why in lost:                          # recorded by the thread that owns the loop's log, after the run
                 try:

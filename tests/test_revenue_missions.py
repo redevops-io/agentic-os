@@ -11,6 +11,7 @@ from agentic_os.revenue import (
     RevenueOpportunity, RevenueMissionRun, SendMode, next_action_invariant,
 )
 from agentic_os.revenue.fleet import revenue_fleet
+from tests._service_resume import authorize_service, rehydrate_authorized  # noqa: E402
 
 
 def _lead(**kw) -> RevenueOpportunity:
@@ -106,7 +107,7 @@ def test_restart_resume_from_event_log(tmp_path):
     # crash + restart: fresh store from disk + fresh runtime, then approve
     reg, client = revenue_fleet(opp)
     rt2 = MissionRuntime(reg, Executor(client), store=EventStore(path=str(tmp_path / "rev.jsonl")))
-    rt2.rehydrate(run.mission_id)
+    rehydrate_authorized(rt2, run.mission_id)
     rt2.approve(run.mission_id, node_id, "approve")
     assert rt2._missions[run.mission_id].state is MissionState.SUCCEEDED
 

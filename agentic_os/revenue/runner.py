@@ -50,7 +50,7 @@ class RevenueMissionRun:
 
     @classmethod
     def rehydrate(cls, opp: RevenueOpportunity, *, owner: str, store: EventStore,
-                  channel: Optional[AttentionChannel] = None) -> "RevenueMissionRun":
+                  channel: Optional[AttentionChannel] = None, service_resume=None) -> "RevenueMissionRun":
         """Rebuild a live run from a durable event store after a restart — EXACT REPLAY, no re-execution.
 
         The mission's state (parked at the send gate, drafted response, CRM id) is folded back from the
@@ -60,8 +60,8 @@ class RevenueMissionRun:
         opp.owner = owner or opp.owner
         self.opp = opp
         reg, client = revenue_fleet(opp)
-        self.rt = MissionRuntime(reg, Executor(client), store=store)
-        self.rt.rehydrate(opp.mission_id, policy_refs=_POLICY_REFS)
+        self.rt = MissionRuntime(reg, Executor(client), store=store, service_resume=service_resume)
+        self.rt.rehydrate_for_service(opp.mission_id, policy_refs=_POLICY_REFS)
         self.gateway = OwnerAttentionGateway(channel)
         self.mission_id = opp.mission_id
         self._absorb_draft()

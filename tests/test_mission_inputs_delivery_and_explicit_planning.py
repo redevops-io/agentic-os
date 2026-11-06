@@ -16,6 +16,7 @@ from agentic_os.mission.planner import ExplicitCapabilityPlanner
 from agentic_os.mission.registry import CapabilityRegistry
 from agentic_os.mission.runtime import MissionRuntime
 from agentic_os.mission.types import MissionState
+from tests._service_resume import authorize_service, rehydrate_authorized  # noqa: E402
 
 S = "k2-secret"
 seen: list = []
@@ -158,7 +159,7 @@ def test_rehydrate_with_correct_inputs_delivers_them(monkeypatch):
     rt = _rt(op)
     mid = _gated_launch(rt)
     rt2 = _rt(op, store=rt.store)
-    m = rt2.rehydrate(mid, inputs={"account_id": "A1", "email": EMAIL, "_approval": True})
+    m = rehydrate_authorized(rt2, mid, inputs={"account_id": "A1", "email": EMAIL, "_approval": True})
     assert m.selected_capability == "billing.dunning" and m.bind_selected and m.intervention_id == "iv-1"
     assert m.inputs == {"account_id": "A1", "email": EMAIL}
     rt2.approve(mid, rt2.repo.pending_human(mid)["node_id"], "approve")
@@ -182,7 +183,7 @@ def test_rehydrate_without_inputs_never_runs_handler_with_partial_scope(monkeypa
     rt = _rt(op)
     mid = _gated_launch(rt)
     rt2 = _rt(op, store=rt.store)
-    m = rt2.rehydrate(mid)
+    m = rehydrate_authorized(rt2, mid)
     assert m.inputs == {} and m.inputs_unavailable
     rt2.approve(mid, rt2.repo.pending_human(mid)["node_id"], "approve")
     assert seen == []
@@ -197,7 +198,7 @@ def test_opt_in_records_values_and_restores_from_log(monkeypatch):
     mid = _gated_launch(rt)
     assert EMAIL in _ledger_text(rt, mid)
     rt2 = _rt(op, store=rt.store)
-    m = rt2.rehydrate(mid)
+    m = rehydrate_authorized(rt2, mid)
     assert m.inputs == {"account_id": "A1", "email": EMAIL} and not m.inputs_unavailable
     rt2.approve(mid, rt2.repo.pending_human(mid)["node_id"], "approve")
     assert seen[-1][1]["email"] == EMAIL
