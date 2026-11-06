@@ -64,5 +64,5 @@ not a shortcut around the diagram. The same shape governs the social plane: a `S
 its content digest to a `Decision`, and an edited draft (new digest) voids the approval.
 
 ## Tests
-`PYTHONPATH=/mnt/backup/projects/discovery-runtime .venv/bin/python -m pytest tests/test_external_agent_gateway.py`
+`PYTHONPATH=<your discovery-runtime checkout> .venv/bin/python -m pytest tests/test_external_agent_gateway.py`
 (the core path needs only `.venv`; `discovery_runtime` is used by the social/Learn phases).

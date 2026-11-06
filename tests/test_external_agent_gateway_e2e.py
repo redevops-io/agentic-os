@@ -10,7 +10,7 @@ Proves the full realized chain composes end to end:
 And the negative twin: mutate or replay the authorization and prove ZERO external execution — no operator
 invocation, no ActionReceipt claiming success, no provider task submitted.
 
-Run:  PYTHONPATH=/mnt/backup/projects/discovery-runtime .venv/bin/python -m pytest \
+Run:  PYTHONPATH=<your discovery-runtime checkout> .venv/bin/python -m pytest \
         tests/test_external_agent_gateway_e2e.py -q      (or `uv run pytest` in the aligned env)
 """
 from __future__ import annotations

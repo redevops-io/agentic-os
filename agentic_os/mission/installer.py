@@ -12,7 +12,7 @@ The :class:`Deployer` is a seam, mirroring the matcher seam in P0.3:
 * :class:`StubDeployer` — in-process, for offline unit tests (endpoints are pre-assigned and a
   canned ``/capabilities`` is injected via ``fetch``).
 * :class:`DockerDeployer` — real containers on a docker host, local or over SSH (so the tests
-  run against **proxmox containers** without any Windows/macOS/iOS hardware). It runs a tiny
+  run against **containers on a remote docker host** without any Windows/macOS/iOS hardware). It runs a tiny
   embedded stub operator via ``python:3.12-alpine`` — no image to build or publish.
 
 The install itself is posture-gated: :func:`install` refuses a plan that is not
@@ -224,7 +224,7 @@ def _emit(store, event: str, scope: str, outcome: ModuleOutcome) -> None:
         store.append(event, scope, outcome.canonical_form())
 
 
-# ── DockerDeployer — real containers (local or over SSH, e.g. proxmox) ────────────────────
+# ── DockerDeployer — real containers (local or over SSH to a docker host) ────────────────────
 
 # A tiny stdlib-only operator: serves GET /capabilities (federation contract) + /health + POST
 # /invoke. Run via python:3.12-alpine with no bind-mount or image build — operator name and the
@@ -254,8 +254,8 @@ HTTPServer(("0.0.0.0", 8080), H).serve_forever()
 class DockerDeployer:
     """Deploy each module as a real container on a docker host — local, or remote over SSH.
 
-    For the proxmox integration test: ``DockerDeployer(ssh_host="proxmox", host="192.168.40.105",
-    manifests={...})``. Each module runs the embedded stub operator (no image to build); the
+    For the remote-docker integration test: ``DockerDeployer(ssh_host="<ssh target>", host="<address the modules
+    are reachable at>", manifests={...})`` (both come from the environment, see docs/DEPLOYMENT_ADDRESSES.md). Each module runs the embedded stub operator (no image to build); the
     installer then verifies its ``/capabilities`` over the LAN exactly as federation would.
     """
 

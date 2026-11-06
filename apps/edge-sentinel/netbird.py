@@ -62,8 +62,8 @@ def _nb_post(path: str, body: dict):
 
 # A clearly-labelled sample so the review demos before a NetBird is wired to the stack.
 _NB_SAMPLE_PEERS = [
-    {"name": "evo-x2-control", "connected": True, "os": "Ubuntu 24.04", "ip": "100.92.0.1", "login_expired": False, "ssh_enabled": True, "approval_required": False, "groups": [{"name": "control-plane"}]},
-    {"name": "proxmox-01", "connected": True, "os": "Debian 12", "ip": "100.92.0.2", "login_expired": False, "ssh_enabled": False, "approval_required": False, "groups": [{"name": "cores"}]},
+    {"name": "build-host-linux", "connected": True, "os": "Ubuntu 24.04", "ip": "100.92.0.1", "login_expired": False, "ssh_enabled": True, "approval_required": False, "groups": [{"name": "control-plane"}]},
+    {"name": "hypervisor-01", "connected": True, "os": "Debian 12", "ip": "100.92.0.2", "login_expired": False, "ssh_enabled": False, "approval_required": False, "groups": [{"name": "cores"}]},
     {"name": "laptop-alex", "connected": False, "os": "macOS 15", "ip": "100.92.0.7", "login_expired": True, "ssh_enabled": True, "approval_required": False, "groups": [{"name": "admins"}]},
     {"name": "contractor-vm", "connected": True, "os": "Windows 11", "ip": "100.92.0.9", "login_expired": False, "ssh_enabled": True, "approval_required": True, "groups": [{"name": "All"}]},
 ]

@@ -189,7 +189,7 @@ class OpenAICompatModel:
 def sidekick_model_from_env(env: Optional[Dict[str, str]] = None) -> Optional[ChatModel]:
     """Build the Sidekick fallback model from the deployment's environment, or ``None`` if unset.
 
-    ``SIDEKICK_MODEL_BASE_URL`` — an OpenAI-compatible base (e.g. http://192.168.40.201:8000).
+    ``SIDEKICK_MODEL_BASE_URL`` — an OpenAI-compatible base (e.g. http://localhost:8000).
     ``SIDEKICK_MODEL_NAME`` — optional model id (auto-discovered from /v1/models if omitted).
     ``SIDEKICK_MODEL_API_KEY`` — optional bearer token for gated endpoints."""
     e = env if env is not None else os.environ

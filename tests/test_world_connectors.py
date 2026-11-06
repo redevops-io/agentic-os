@@ -1,7 +1,7 @@
 """GTM connectors — HubSpot / Salesforce / Postmark. Offline: HTTP is monkeypatched; no network, no secrets.
 
 Live verification (Salesforce ping ✓, Postmark real send to self ✓, HubSpot via HUBSPOT_SERVICE_KEY ✓) was
-done manually against the real APIs on evo-x2; these tests lock the request shapes + graceful degradation.
+done manually against the real APIs on a maintainer workstation; these tests lock the request shapes + graceful degradation.
 """
 from __future__ import annotations
 

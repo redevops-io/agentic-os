@@ -1,6 +1,6 @@
 """Social Intelligence + Governed Social Execution plane (agent-gateway/v1) — S1-S7, S10.
 
-Run:  PYTHONPATH=/mnt/backup/projects/discovery-runtime .venv/bin/python -m pytest \
+Run:  PYTHONPATH=<your discovery-runtime checkout> .venv/bin/python -m pytest \
         tests/test_social_intelligence.py -q
 """
 from __future__ import annotations

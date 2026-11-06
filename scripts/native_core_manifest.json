@@ -186,7 +186,7 @@
   "tests/test_identifier_ranges_generator.py",
   "tests/test_inbox_approval_hardening.py",
   "tests/test_installer.py",
-  "tests/test_installer_proxmox.py",
+  "tests/test_installer_remote_docker.py",
   "tests/test_intervention_record.py",
   "tests/test_keepassxc_store.py",
   "tests/test_learning.py",
