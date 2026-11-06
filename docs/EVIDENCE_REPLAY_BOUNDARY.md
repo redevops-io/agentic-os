@@ -243,7 +243,19 @@ answer when no OS sandbox is usable.
   (`test_restart_resume_from_event_log`, `test_unified_two_domain`) and `mission/demo.py` now call `grant_resume` after
   `rehydrate`: the intended behaviour change.
 
-Mutation check of the boundary: `$S/post-rc/mutate_d1.py` (47 mutants incl. fail-open variants); result in the report.
+Mutation check of the boundary (throw-away worktree, runner kept with the private reports): 52 mutants including the fail-open
+variants (external access on, configuration unlocked, scope filter skipped, authorization/authentication skipped, guard removed,
+worker environment leaked, symlink/`..` checks removed, integrity check off, OS-sandbox rules removed, timeout/row/byte/memory caps
+removed, audit failure swallowed, each replay check removed, approval binding/expiry ignored, artifacts opened read-write, public
+profile limiter/scope override removed). All 52 are killed by the tests at the final commit. Mutation also found three problems that
+were fixed: a streaming row-cap test was missing, a view-validation test was missing, and a `_saga` check was redundant (deleted).
+Removing the statement guard fails only the tests that expect a guard refusal; every host-file/network/extension vector still fails
+in the worker.
+
+Linux: the four new test files were also run in a disposable `python:3.12-slim` container (uid 1000, source mounted read-only,
+duckdb 1.5.5): 149 passed, 2 skipped (the two OS-sandbox tests; no usable `bwrap`/`unshare` inside Docker Desktop, so the backend
+probe falls back to `none`). The DuckDB-layer, guard, artifact, replay and profile tests therefore pass on Linux; the Linux OS
+sandbox itself is unverified.
 
 ## 10. AGPL core versus Enterprise
 
