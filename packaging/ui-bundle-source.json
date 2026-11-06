@@ -3,12 +3,12 @@
  "repository": "https://github.com/redevops-io/redevops-projects",
  "base_commit": "5114b56012511a292eff0e505fdbd0d8b00544f8",
  "base_commit_public": true,
- "source_commit": "d77c6a4ab657969583590bc5ceff5e7da1d22e81",
- "source_tree": "d3c08d66a198a80cae0792db3a20066e56777dfe",
+ "source_commit": "2fdef7f5590a562aa3de7aaabde8239603824b01",
+ "source_tree": "0b23e32d9c2ce8d99530166dc7e447df0125905e",
  "source_commit_published": false,
- "source_status": "local unpublished commit (branch rel/ui-v2 of a local clone, 7 commits above the local accessibility series tip 54dfc5f4b0e6d8963397480192f4b05baef7816a); not pushed, no pull request, no tag",
- "previous_source_commit": "54dfc5f4b0e6d8963397480192f4b05baef7816a",
- "previous_bundle": "assets/index-BAPoIP6S.js sha256 632cc95eb87626af68bea344d21bcdaa5253b74bd6008ebf136fbadb460146f6",
+ "source_status": "local unpublished commit (branch rel/ui-v3 of a local clone, 9 commits above the local accessibility series tip 54dfc5f4b0e6d8963397480192f4b05baef7816a); not pushed, no pull request, no tag",
+ "previous_source_commit": "d77c6a4ab657969583590bc5ceff5e7da1d22e81",
+ "previous_bundle": "assets/index-Bunz4yfu.js sha256 2e948ebbe81a962b18dfaff7d905325836e43e14a0db94eba1f9584b03648e19 (built from d77c6a4a; before it assets/index-BAPoIP6S.js sha256 632cc95eb87626af68bea344d21bcdaa5253b74bd6008ebf136fbadb460146f6 from 54dfc5f4)",
  "package_json_git_blob": "1454a8b11020b4b62d972e7d4905bc421437ec3c",
  "package_json_sha256": "8726ce4fe42f8c9dab510a320453258fe6985e0c6755f9d7bb80b3436f81088d",
  "package_lock_git_blob": "e158d96bf1671fc780c100a563b9461cb262514b",
@@ -25,8 +25,8 @@
   "reproduced": "built twice (in place, and in a fresh clone with its own npm ci): index.html, the JavaScript and the CSS are byte-identical"
  },
  "files": {
-  "index.html": "1b21bd5f78c9b893382bf09eeff076e6f2f7addf3c01c7b7b9d4994e1104736f",
-  "assets/index-Bunz4yfu.js": "2e948ebbe81a962b18dfaff7d905325836e43e14a0db94eba1f9584b03648e19",
+  "index.html": "00c01e492e51062776a5419c714ab004db6d908e57ed3f272dff981a342a6f92",
+  "assets/index-C4jFACLN.js": "e3c382f4ac50670550da72ccfe7dba2a3b5aa1f550c7ad1e77d17e9db272082e",
   "assets/index-D7he0cZO.css": "0d25987b396142352753781b63b08564f5e2a684724e8f595047624519ad5528"
  }
 }

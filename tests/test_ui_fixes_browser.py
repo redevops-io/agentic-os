@@ -436,6 +436,7 @@ def test_uia06_no_enabled_control_in_any_view_is_silently_dead(make_tab):
     dead, effective, dis_ok, dis_bad = _sweep(t, VIEWS)
     assert not dead, dead
     assert not dis_bad, dis_bad                                   # every disabled control says why
+    print(f"UIA-06 sweep: {effective} controls with an effect, {len(dis_ok)} disabled with a title, 0 dead")
     assert effective >= 50 and len(dis_ok) >= 8, (effective, dis_ok)
 
 
