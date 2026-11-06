@@ -1504,7 +1504,19 @@ def select_provider(*, persist_path: Optional[str] = None) -> ProjectionProvider
     return SampleProjectionProvider(persist_path=persist_path, intervention_store=istore)
 
 
-def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: Optional[List[str]] = None) -> FastAPI:
+def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: Optional[List[str]] = None,
+               capability: Optional[Any] = None, base_path: str = "") -> FastAPI:
+    """Build the Projects app.
+
+    ``capability`` (an :class:`agentic_os.local_capability.LocalCapability`) is the desktop/sidecar addition:
+    it puts the whole app behind the local capability gate (deny by default: every route, /docs, /redoc,
+    /openapi.json and the agent gateway need a session; only the static UI is public) and forbids CORS.
+    The gate is OUTERMOST: it wraps the route-authorization layer, so an unauthenticated caller is refused
+    before any route policy runs. ``capability=None`` (the default) leaves the app exactly as ``origin/main``
+    builds it (hosted/library/test use: token gating and route authorization are unchanged); never run that on
+    a desktop. ``allow_origins`` / ``$PROJECTS_CORS_ORIGINS`` is an explicit opt-in to CORS (no wildcard
+    default; refused together with a capability). ``base_path`` is set by :func:`mounted_app`, which then
+    installs the gate on the outermost app itself."""
     # a deployment sets $OUTCOME_STORE_PATH to persist the learning loop's outcomes across restarts
     import os as _os_env
     prov: ProjectionProvider = provider or select_provider(
@@ -1520,6 +1532,8 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
         app.add_middleware(
             CORSMiddleware, allow_origins=origins,
             allow_methods=["*"], allow_headers=["*"])
+    if capability is not None and origins:
+        raise ValueError("allow_origins / PROJECTS_CORS_ORIGINS (CORS) cannot be combined with the local capability gate")
 
     @app.get("/api/projects")
     def _projects() -> List[dict]:
@@ -1908,15 +1922,28 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     # the /api routes above always win. The UI is built with VITE_PROJECTS_API="/", so it calls
     # this service's /api directly. `pip install 'agentic-os[projects]'` ships the bundle.
     ui = _ui_dir()
+    public: Any = frozenset()
     if ui is not None:
+        if capability is not None:
+            from .local_capability_ui import install_ui_bootstrap
+            public = install_ui_bootstrap(app, ui, base_path)   # index.html + shim, ahead of the mount
         from fastapi.staticfiles import StaticFiles
         app.mount("/", StaticFiles(directory=str(ui), html=True), name="projects-ui")
+    if capability is not None:
+        app.state.local_public_paths = public
 
     # F22: the same enforcement layer the apps use. In the production profile a write route with no policy, or without an authenticated
     # context, is refused before the handler runs; elsewhere nothing is blocked (the demo keeps working).
     from agentic_os.app_kit import route_authz as _route_authz
     from agentic_os.projects_route_policy import APP as _APP, PROJECTS_ROUTE_POLICIES
     _route_authz.install(app, _APP, PROJECTS_ROUTE_POLICIES)
+
+    # The local capability gate is installed LAST so it is the OUTERMOST middleware (Starlette runs the last-added first):
+    # an unauthenticated desktop caller is refused before route authorization runs. With a base path, mounted_app gates
+    # the OUTER app instead.
+    if capability is not None and not base_path:
+        from .local_capability import install
+        install(app, capability, public_paths=public)
 
     return app
 
@@ -1942,28 +1969,27 @@ def mounted_app(base_path: str = "", provider: Optional[ProjectionProvider] = No
     a URL sub-path — cloudflared routes ``demo.redevops.io/projects`` → this service without
     stripping, so the app serves ``/projects/api`` + ``/projects/`` (the UI must be built with a
     matching ``base``). Without ``base_path`` the app serves at the origin root."""
-    inner = create_app(provider, **kw)
     base = (base_path or "").rstrip("/")
+    inner = create_app(provider, base_path=base, **kw)
     if not base:
         return inner
     outer = FastAPI(title="ReDevOps Projects", version="0.1.0")
     outer.mount(base, inner)   # Starlette strips the prefix before the inner app sees it
+    if kw.get("capability") is not None:     # the gate must wrap the outermost app (its /docs too)
+        from .local_capability import install
+        install(outer, kw["capability"], base_path=base, public_paths=inner.state.local_public_paths)
     return outer
 
 
 def main() -> None:
-    """Console entrypoint (``agentic-os-projects``): serve the Projects UI + API on one origin,
-    optionally under ``$PROJECTS_BASE_PATH``."""
-    import os
-    import uvicorn
-    from agentic_os.secrets.bootstrap import ensure_secrets
-    ensure_secrets()  # non-fatal; generates missing platform secrets once (docs/SECRETS.md)
-    host = os.environ.get("PROJECTS_HOST", "127.0.0.1")
-    port = int(os.environ.get("PROJECTS_PORT", "8787"))
-    base = os.environ.get("PROJECTS_BASE_PATH", "")
-    served = "UI + API" if _ui_dir() is not None else "API only (no UI bundle found)"
-    print(f"ReDevOps Projects — {served} on http://{host}:{port}{base or ''}")
-    uvicorn.run(mounted_app(base), host=host, port=port)
+    """Console entrypoint (``agentic-os-projects`` / the sidecar's ``serve``): serve the Projects UI + API
+    on one origin behind the local capability gate. See :mod:`agentic_os.local_serve`.
+
+    Hosted deployments (the container image, the chart) that sit behind their own control-plane token gating
+    and edge controls opt out explicitly with ``AGENTIC_OS_LOCAL_CAPABILITY=off``; that path is exactly what
+    ``origin/main`` ran (secrets bootstrap, ``PROJECTS_HOST``/``PROJECTS_PORT``/``PROJECTS_BASE_PATH``)."""
+    from .local_serve import serve
+    serve()
 
 
 # Module-level app for `uvicorn agentic_os.projects_api:app` (honours $PROJECTS_BASE_PATH).

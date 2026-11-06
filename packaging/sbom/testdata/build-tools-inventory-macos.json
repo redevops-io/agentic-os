@@ -1,0 +1,273 @@
+{
+ "altgraph": {
+  "embedded_sboms": [],
+  "home_page": "https://altgraph.readthedocs.io",
+  "licence": {
+   "classifiers": [
+    "License :: OSI Approved :: MIT License"
+   ],
+   "expression": null,
+   "license": "MIT",
+   "license_files": [
+    "LICENSE"
+   ]
+  },
+  "license_files_in_dist": [
+   "altgraph-0.17.5.dist-info/LICENSE"
+  ],
+  "name": "altgraph",
+  "norm": "altgraph",
+  "project_urls": [
+   "Documentation, https://altgraph.readthedocs.io/en/latest/",
+   "Issue tracker, https://github.com/ronaldoussoren/altgraph/issues",
+   "Repository, https://github.com/ronaldoussoren/altgraph"
+  ],
+  "requires": [],
+  "source": "environment",
+  "summary": "Python graph (network) package",
+  "top_level": [
+   "altgraph"
+  ],
+  "version": "0.17.5"
+ },
+ "macholib": {
+  "embedded_sboms": [],
+  "home_page": "http://github.com/ronaldoussoren/macholib",
+  "licence": {
+   "classifiers": [
+    "License :: OSI Approved :: MIT License"
+   ],
+   "expression": null,
+   "license": "MIT",
+   "license_files": [
+    "LICENSE"
+   ]
+  },
+  "license_files_in_dist": [
+   "macholib-1.16.4.dist-info/LICENSE"
+  ],
+  "name": "macholib",
+  "norm": "macholib",
+  "project_urls": [
+   "Documentation, https://macholib.readthedocs.io/en/latest/",
+   "Issue tracker, https://github.com/ronaldoussoren/macholib/issues",
+   "Repository, https://github.com/ronaldoussoren/macholib"
+  ],
+  "requires": [
+   "altgraph >=0.17"
+  ],
+  "source": "environment",
+  "summary": "Mach-O header analysis and editing",
+  "top_level": [
+   "macholib"
+  ],
+  "version": "1.16.4"
+ },
+ "packaging": {
+  "embedded_sboms": [],
+  "home_page": null,
+  "licence": {
+   "classifiers": [],
+   "expression": "Apache-2.0 OR BSD-2-Clause",
+   "license": null,
+   "license_files": [
+    "LICENSE",
+    "LICENSE.APACHE",
+    "LICENSE.BSD"
+   ]
+  },
+  "license_files_in_dist": [
+   "packaging-26.3.dist-info/licenses/LICENSE",
+   "packaging-26.3.dist-info/licenses/LICENSE.APACHE",
+   "packaging-26.3.dist-info/licenses/LICENSE.BSD",
+   "packaging/licenses/__init__.py",
+   "packaging/licenses/_spdx.py"
+  ],
+  "name": "packaging",
+  "norm": "packaging",
+  "project_urls": [
+   "Documentation, https://packaging.pypa.io/",
+   "Source, https://github.com/pypa/packaging"
+  ],
+  "requires": [],
+  "source": "environment",
+  "summary": "Core utilities for Python packages",
+  "top_level": [
+   "packaging"
+  ],
+  "version": "26.3"
+ },
+ "pyinstaller": {
+  "embedded_sboms": [],
+  "home_page": null,
+  "licence": {
+   "classifiers": [
+    "License :: OSI Approved :: GNU General Public License v2 (GPLv2)"
+   ],
+   "expression": null,
+   "license": "GPLv2-or-later with a special exception which allows to use PyInstaller to build and distribute non-free programs (including commercial ones)",
+   "license_files": [
+    "COPYING.txt"
+   ]
+  },
+  "license_files_in_dist": [
+   "pyinstaller-6.22.3.dist-info/licenses/COPYING.txt"
+  ],
+  "name": "pyinstaller",
+  "norm": "pyinstaller",
+  "project_urls": [
+   "Homepage, https://pyinstaller.org",
+   "Documentation, https://pyinstaller.org",
+   "Source Code, https://github.com/pyinstaller/pyinstaller",
+   "Release Notes, https://pyinstaller.org/en/stable/CHANGES.html"
+  ],
+  "requires": [
+   "altgraph",
+   "importlib-metadata>=4.6; python_version < '3.10'",
+   "macholib>=1.8; sys_platform == 'darwin'",
+   "packaging>=22.0",
+   "pefile>=2022.5.30; sys_platform == 'win32'",
+   "pyinstaller-hooks-contrib>=2026.7",
+   "pywin32-ctypes>=0.2.1; sys_platform == 'win32'",
+   "setuptools>=42.0.0",
+   "argcomplete; extra == 'completion'",
+   "execnet>=1.5.0; extra == 'hook-testing'",
+   "psutil; extra == 'hook-testing'",
+   "pytest>=2.7.3; extra == 'hook-testing'"
+  ],
+  "source": "environment",
+  "summary": "PyInstaller bundles a Python application and all its dependencies into a single package.",
+  "top_level": [
+   "PyInstaller"
+  ],
+  "version": "6.22.3"
+ },
+ "pyinstaller-hooks-contrib": {
+  "embedded_sboms": [],
+  "home_page": "https://github.com/pyinstaller/pyinstaller-hooks-contrib",
+  "licence": {
+   "classifiers": [
+    "License :: OSI Approved :: Apache Software License",
+    "License :: OSI Approved :: GNU General Public License v2 (GPLv2)"
+   ],
+   "expression": null,
+   "license": null,
+   "license_files": [
+    "LICENSE"
+   ]
+  },
+  "license_files_in_dist": [
+   "pyinstaller_hooks_contrib-2026.7.dist-info/licenses/LICENSE"
+  ],
+  "name": "pyinstaller-hooks-contrib",
+  "norm": "pyinstaller-hooks-contrib",
+  "project_urls": [],
+  "requires": [
+   "importlib_metadata>=4.6; python_version < \"3.10\"",
+   "packaging>=22.0"
+  ],
+  "source": "environment",
+  "summary": "Community maintained hooks for PyInstaller",
+  "top_level": [
+   "_pyinstaller_hooks_contrib"
+  ],
+  "version": "2026.7"
+ },
+ "setuptools": {
+  "embedded_sboms": [],
+  "home_page": null,
+  "licence": {
+   "classifiers": [],
+   "expression": "MIT",
+   "license": null,
+   "license_files": [
+    "LICENSE"
+   ]
+  },
+  "license_files_in_dist": [
+   "setuptools-84.0.0.dist-info/licenses/LICENSE",
+   "setuptools/_vendor/autocommand-2.2.2.dist-info/LICENSE",
+   "setuptools/_vendor/backports.tarfile-1.2.0.dist-info/LICENSE",
+   "setuptools/_vendor/importlib_metadata-8.7.1.dist-info/licenses/LICENSE",
+   "setuptools/_vendor/jaraco.text-4.0.0.dist-info/LICENSE",
+   "setuptools/_vendor/jaraco_context-6.1.0.dist-info/licenses/LICENSE",
+   "setuptools/_vendor/jaraco_functools-4.4.0.dist-info/licenses/LICENSE",
+   "setuptools/_vendor/more_itertools-10.8.0.dist-info/licenses/LICENSE",
+   "setuptools/_vendor/packaging-26.0.dist-info/licenses/LICENSE",
+   "setuptools/_vendor/packaging-26.0.dist-info/licenses/LICENSE.APACHE",
+   "setuptools/_vendor/packaging-26.0.dist-info/licenses/LICENSE.BSD",
+   "setuptools/_vendor/packaging/licenses/__init__.py",
+   "setuptools/_vendor/packaging/licenses/_spdx.py",
+   "setuptools/_vendor/platformdirs-4.4.0.dist-info/licenses/LICENSE",
+   "setuptools/_vendor/tomli-2.4.0.dist-info/licenses/LICENSE",
+   "setuptools/_vendor/wheel-0.46.3.dist-info/licenses/LICENSE.txt",
+   "setuptools/_vendor/zipp-3.23.0.dist-info/licenses/LICENSE"
+  ],
+  "name": "setuptools",
+  "norm": "setuptools",
+  "project_urls": [
+   "Source, https://github.com/pypa/setuptools",
+   "Documentation, https://setuptools.pypa.io/",
+   "Changelog, https://setuptools.pypa.io/en/stable/history.html"
+  ],
+  "requires": [
+   "pytest!=8.1.*,>=6; extra == \"test\"",
+   "virtualenv>=13.0.0; extra == \"test\"",
+   "wheel>=0.44.0; extra == \"test\"",
+   "pip>=19.1; extra == \"test\"",
+   "packaging>=24.2; extra == \"test\"",
+   "jaraco.envs>=2.2; extra == \"test\"",
+   "pytest-xdist>=3; extra == \"test\"",
+   "jaraco.path>=3.7.2; extra == \"test\"",
+   "build[virtualenv]>=1.0.3; extra == \"test\"",
+   "filelock>=3.4.0; extra == \"test\"",
+   "ini2toml[lite]>=0.14; extra == \"test\"",
+   "tomli-w>=1.0.0; extra == \"test\"",
+   "pytest-timeout; extra == \"test\"",
+   "pytest-perf; sys_platform != \"cygwin\" and extra == \"test\"",
+   "jaraco.develop>=7.21; (python_version >= \"3.9\" and sys_platform != \"cygwin\") and extra == \"test\"",
+   "pytest-home>=0.5; extra == \"test\"",
+   "pytest-subprocess; extra == \"test\"",
+   "pyproject-hooks!=1.1; extra == \"test\"",
+   "jaraco.test>=5.5; extra == \"test\"",
+   "sphinx>=3.5; extra == \"doc\"",
+   "jaraco.packaging>=9.3; extra == \"doc\"",
+   "rst.linker>=1.9; extra == \"doc\"",
+   "furo; extra == \"doc\"",
+   "sphinx-lint; extra == \"doc\"",
+   "jaraco.tidelift>=1.4; extra == \"doc\"",
+   "pygments-github-lexers==0.0.5; extra == \"doc\"",
+   "sphinx-favicon; extra == \"doc\"",
+   "sphinx-inline-tabs; extra == \"doc\"",
+   "sphinx-reredirects; extra == \"doc\"",
+   "sphinxcontrib-towncrier; extra == \"doc\"",
+   "sphinx-notfound-page<2,>=1; extra == \"doc\"",
+   "pyproject-hooks!=1.1; extra == \"doc\"",
+   "towncrier<24.7; extra == \"doc\"",
+   "packaging>=24.2; extra == \"core\"",
+   "more_itertools>=8.8; extra == \"core\"",
+   "jaraco.text>=3.7; extra == \"core\"",
+   "importlib_metadata>=6; python_version < \"3.10\" and extra == \"core\"",
+   "tomli>=2.0.1; python_version < \"3.11\" and extra == \"core\"",
+   "wheel>=0.43.0; extra == \"core\"",
+   "jaraco.functools>=4; extra == \"core\"",
+   "more_itertools; extra == \"core\"",
+   "pytest-checkdocs>=2.14; extra == \"check\"",
+   "pytest-ruff>=0.2.1; sys_platform != \"cygwin\" and extra == \"check\"",
+   "ruff>=0.13.0; sys_platform != \"cygwin\" and extra == \"check\"",
+   "pytest-cov; extra == \"cover\"",
+   "pytest-enabler>=3.4; extra == \"enabler\"",
+   "pytest-mypy>=1.0.1; platform_python_implementation != \"PyPy\" and extra == \"type\"",
+   "mypy==1.18.*; extra == \"type\"",
+   "importlib_metadata>=7.0.2; python_version < \"3.10\" and extra == \"type\"",
+   "jaraco.develop>=7.21; sys_platform != \"cygwin\" and extra == \"type\""
+  ],
+  "source": "environment",
+  "summary": "Most extensible Python build backend with support for C/C++ extension modules",
+  "top_level": [
+   "_distutils_hack",
+   "setuptools"
+  ],
+  "version": "84.0.0"
+ }
+}

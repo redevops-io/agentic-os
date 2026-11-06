@@ -1,62 +1,53 @@
-# Windows build — mirrors the verified Linux flow (build-wheelhouse.sh + build-sidecar.sh +
-# stage-sidecar.sh + `cargo tauri build`) in PowerShell, for the Proxmox Win11 image.
+# Windows build - runs the SAME pinned bash recipe as CI (git-bash), so the Windows and Linux/macOS
+# builds cannot drift: ONE script, packaging/build-all.sh, owns the order (wheelhouse -> sidecar pass 1 ->
+# notices -> sidecar pass 2 -> stage -> launcher -> SBOM -> notices check). The launcher build fails without the
+# notices, so the steps must not be listed here a second time. Every input is pinned by packaging/toolchain.env + packaging/locks/*
+# (requirements-windows.lock is installed with --require-hashes; the launcher builds with cargo --locked).
 #
-# Prereqs on the image (one-time): Rust (x86_64-pc-windows-msvc) + VS Build Tools C++ workload;
-# uv (astral); Git; WebView2 runtime (present on Win11); `cargo install tauri-cli --version ^2`.
-# Produces: an .msi + .nsis under deploy\launcher\src-tauri\target\release\bundle\.
+# Prereqs on the image (one-time): Git for Windows (provides bash.exe), uv, CPython EXACTLY 3.12.10 (the
+# scripts refuse any other interpreter), Rust 1.98.1 (x86_64-pc-windows-msvc) + VS Build Tools C++ workload,
+# WebView2 runtime (present on Win11), `cargo install tauri-cli --version 2.11.4 --locked`.
+# Produces: an .msi + .nsis under deploy\launcher\src-tauri\target\release\bundle\ and
+#           packaging\dist\{build-manifest.json,sbom\*}.
 #
-# NOTE: authored to match the Linux build proven on evo-x2; run + verify on the Win image (this
-# script has not been executed here).
+# NOTE: edited to match the pinned recipe; NOT executed on Windows in the R0-prime pins work
+# (UNVERIFIED on Windows; the scripts it calls are exercised on macOS only).
 $ErrorActionPreference = "Stop"
-$Root  = Split-Path -Parent $PSScriptRoot
-$WH    = Join-Path $Root "packaging\wheelhouse"
-$Extras = "projects,duckdb"
-$Py    = "3.12"
-$GitDeps = @(
-  "runtime-contracts @ git+https://github.com/redevops-io/runtime-contracts.git@v0.3.4",
-  "redevops-connectors @ git+https://github.com/redevops-io/redevops-connectors.git@main"
-)
+$Root = Split-Path -Parent $PSScriptRoot
 
-Remove-Item -Recurse -Force $WH -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force $WH | Out-Null
-$Build = Join-Path $env:TEMP "rdo-build"; $Verify = Join-Path $env:TEMP "rdo-verify"
-Remove-Item -Recurse -Force $Build,$Verify -ErrorAction SilentlyContinue
+# toolchain.env is the single source of truth: read the pins and fail early on a mismatch.
+$pins = @{}
+Get-Content (Join-Path $PSScriptRoot "toolchain.env") | ForEach-Object {
+  if ($_ -match '^\s*([A-Z_]+)=(.*)$') { $pins[$Matches[1]] = $Matches[2].Trim() }
+}
+$rustc = (rustc --version).Split(" ")[1]
+if ($rustc -ne $pins["RUST_VERSION"]) { throw "rustc is $rustc, pinned $($pins['RUST_VERSION'])" }
+$tauri = (cargo tauri --version).Split(" ")[-1]
+if ($tauri -ne $pins["TAURI_CLI_VERSION"]) { throw "tauri-cli is $tauri, pinned $($pins['TAURI_CLI_VERSION'])" }
 
-Write-Host "== 1/4 wheelhouse: git-pinned deps -> normal wheels =="
-uv venv --seed --python $Py $Build
-$BPip = Join-Path $Build "Scripts\pip.exe"
-& $BPip wheel --wheel-dir $WH @GitDeps
+# The build is x86_64-pc-windows-msvc only: the wheel locks are win_amd64, the SBOM target and the staged sidecar name follow
+# the rustc host. An ARM64 or -gnu toolchain would produce something that does not match them: stop early.
+$hostLine = @(rustc -Vv | Where-Object { $_ -like "host: *" })[0]
+$hostTriple = $hostLine.Substring(6).Trim()
+if ($hostTriple -ne "x86_64-pc-windows-msvc") { throw "rustc host is $hostTriple, the Windows build needs x86_64-pc-windows-msvc" }
 
-Write-Host "== 2/4 sanitize pyproject (git+https direct refs -> plain names) =="
-$Src = Join-Path $env:TEMP "rdo-src"
-Remove-Item -Recurse -Force $Src -ErrorAction SilentlyContinue
-robocopy $Root $Src /E /XD .git "$($Root)\packaging\wheelhouse" __pycache__ | Out-Null
-$pp = Join-Path $Src "pyproject.toml"
-(Get-Content $pp -Raw) -replace '"([A-Za-z0-9_.\-]+)\s*@\s*git\+https://[^"]+"', '"$1"' | Set-Content $pp
+# MAX_PATH: PyInstaller and cargo create deep trees under the checkout. Use a short root such as C:\r0p.
+if ($Root.Length -gt 60) { Write-Warning "the checkout path is $($Root.Length) characters long; build from a short path (for example C:\r0p) to stay clear of MAX_PATH" }
+# Tauri downloads WiX 3.14.1 and NSIS 3.11 into %LOCALAPPDATA%\tauri on first use and verifies them (SHA-256 / SHA-1 pinned inside
+# tauri-bundler 2.9.4); a directory that already exists is REUSED without re-hashing. For an evidence build start from a clean one.
+$toolCache = Join-Path $env:LOCALAPPDATA "tauri"
+if (Test-Path $toolCache) { Write-Warning "$toolCache exists: its WiX/NSIS files are reused as they are. Remove it (or build on a clean user profile) for an evidence build." }
 
-Write-Host "== 3/4 wheels for the sanitized suite =="
-& $BPip wheel --wheel-dir $WH --find-links $WH "$Src[$Extras]"
+$bash = Join-Path ${env:ProgramFiles} "Git\bin\bash.exe"
+if (-not (Test-Path $bash)) { throw "Git for Windows bash.exe not found at $bash" }
+$env:UV_PYTHON_DOWNLOADS = "never"        # use the installed 3.12.10, never fetch another interpreter
+$env:UV_PYTHON_PREFERENCE = "only-system"
+$env:MANIFEST_PYTHON = "python"
 
-Write-Host "== 4/4 freeze the sidecar (offline) =="
-uv venv --seed --python $Py $Verify
-$VPip = Join-Path $Verify "Scripts\pip.exe"
-& $VPip install --no-index --find-links $WH "agentic-os[$Extras]"
-& $VPip install "pyinstaller>=6.0"
-Push-Location (Join-Path $Root "packaging")
-& (Join-Path $Verify "Scripts\pyinstaller.exe") --clean --noconfirm `
-    --distpath (Join-Path $Root "packaging\dist") --workpath (Join-Path $Root "packaging\build") `
-    redevops-sidecar.spec
-Pop-Location
-
-Write-Host "== stage sidecar for Tauri (windows-msvc triple) =="
-$triple = (rustc -Vv | Select-String "host:").ToString().Split(" ")[-1]
-$dest = Join-Path $Root "deploy\launcher\src-tauri\binaries"
-New-Item -ItemType Directory -Force $dest | Out-Null
-Copy-Item (Join-Path $Root "packaging\dist\redevops-sidecar.exe") `
-          (Join-Path $dest "redevops-sidecar-$triple.exe") -Force
-
-Write-Host "== build the installer(s) =="
-Push-Location (Join-Path $Root "deploy\launcher")
-cargo tauri build
-Pop-Location
-Write-Host "done — see deploy\launcher\src-tauri\target\release\bundle\ (.msi / .nsis)"
+function Run-Step($script) {
+  Write-Host "== $script =="
+  & $bash -lc "cd '$($Root -replace '\\','/')' && ./packaging/$script"
+  if ($LASTEXITCODE -ne 0) { throw "$script failed ($LASTEXITCODE)" }
+}
+Run-Step "build-all.sh"
+Write-Host "done - see deploy\launcher\src-tauri\target\release\bundle\ (.msi / .nsis) and packaging\dist\"

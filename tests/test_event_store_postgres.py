@@ -18,9 +18,9 @@ import pytest
 from agentic_os.mission.store import MissionRepository
 from agentic_os.mission.event_backends import PostgresEventStore
 
-pytestmark = pytest.mark.skipif(
+pytestmark = [pytest.mark.live, pytest.mark.skipif(
     os.environ.get("RDO_PROXMOX_IT") != "1",
-    reason="proxmox integration test (set RDO_PROXMOX_IT=1 to run)")
+    reason="proxmox integration test (set RDO_PROXMOX_IT=1 to run)")]
 
 SSH = os.environ.get("RDO_PROXMOX_SSH", "proxmox")
 HOST = os.environ.get("RDO_PROXMOX_HOST", "192.168.40.105")

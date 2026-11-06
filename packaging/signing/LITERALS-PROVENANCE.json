@@ -1,0 +1,85 @@
+{
+  "purpose": "Every 40/64-hex digest and every SHA256: fingerprint written by hand in packaging/signing/** (scripts and documents), with where it comes from. tests/test_signing_procedure_r0prime.py extracts all such tokens and refuses any that is not listed here, and re-verifies each entry against its source when the source is available (R0P_PROVENANCE_SOURCES = the scratch/evidence root; entries whose source is not available are skipped by the test, not assumed). Abbreviated forms in documents (first 8 hex ... last 4 hex) must be a prefix/suffix of a listed value.",
+  "entries": [
+    {
+      "value": "SHA256:wUoE8wxKJpmtTH7GqWXMIl9/BW0SH1Isc5/w9HEiwqA",
+      "kind": "ssh-fingerprint",
+      "meaning": "published fingerprint of the existing release key (namespace redevops-qa-release@v1)",
+      "source": "evidence set final3: SIGNING_REQUEST.md section 3 and VERIFY.md section 6 (the owner publishes the public key at redevops.io/.well-known/redevops-signing-key.txt; `ssh-keygen -lf` on it prints this value); the PUBLIC key itself is committed as packaging/signing/release-signing-key.pub and `ssh-keygen -lf` on it is checked in every test run",
+      "check": [
+        {
+          "type": "ssh_keygen_fingerprint",
+          "file": "packaging/signing/release-signing-key.pub"
+        },
+        {
+          "type": "text_in_files",
+          "files": [
+            "r0prime/candidate/evidence-macos-arm64-unsigned-final3/SIGNING_REQUEST.md",
+            "r0prime/candidate/evidence-macos-arm64-unsigned-final3/VERIFY.md"
+          ]
+        }
+      ]
+    },
+    {
+      "value": "6cf58aa080e7ff82656f320cff8d4a3bff30408df8766806dcba3740dd839fa5",
+      "kind": "sha256",
+      "meaning": "jsign-7.6.jar (GitHub release digest), the pin of the frozen Windows script",
+      "source": "frozen sign_windows_artifact_signing_v2.sh constant JSIGN_SHA256 (v0.3.2 line)",
+      "check": {
+        "type": "text_in_files",
+        "files": [
+          "windows-agentic-apps-v0.3.2/sign_windows_artifact_signing_v2.sh"
+        ]
+      }
+    },
+    {
+      "value": "f40042e2e5f7e8ef8189fed15519aece42c3bfa2",
+      "kind": "sha1",
+      "meaning": "SHA-1 of the Microsoft Identity Verification Root CA 2020 (docs/pki/root2020.pem of the frozen set)",
+      "source": "frozen sign_windows_artifact_signing_v2.sh constant MS_ROOT_SHA1 (also printed in its --help)",
+      "check": {
+        "type": "text_in_files",
+        "files": [
+          "windows-agentic-apps-v0.3.2/sign_windows_artifact_signing_v2.sh"
+        ],
+        "case_insensitive": true
+      }
+    },
+    {
+      "value": "e43b6f0f1dbb5587712cce2fe773053aeaece8a60381c37787f2e18bdeeb7de3",
+      "kind": "sha256",
+      "meaning": "verify_signature_v2.py (the frozen verifier, copied byte-identically into packaging/signing/)",
+      "source": "recomputed from the file in the repository and from the frozen original",
+      "check": {
+        "type": "repo_file_sha256",
+        "file": "packaging/signing/verify_signature_v2.py"
+      }
+    },
+    {
+      "value": "484a195ede63c62164d70ffe395a83b77c391841af02d418c16f1db3d4e73af7",
+      "kind": "sha256",
+      "meaning": "frozen sign_and_notarize_macos_v2.sh",
+      "source": "evidence final3 SIGNING_REQUEST.md section 7, recomputed from the frozen file",
+      "check": {
+        "type": "file_sha256",
+        "file": "macos-agentic-apps-v0.3.2/sign_and_notarize_macos_v2.sh"
+      }
+    },
+    {
+      "value": "a16c3687c4ef1b7c7b734c24d182c3dc6eb386d1d26fcad7c445cedc6b3d3cbc",
+      "kind": "sha256",
+      "meaning": "sha256 of release-manifest.json of evidence set final3 (the unsigned set named by owner decision 2026-11-04)",
+      "source": "BRIEF2.md; recomputed from release-manifest.json of the set",
+      "check": {
+        "type": "file_sha256",
+        "file": "r0prime/candidate/evidence-macos-arm64-unsigned-final3/release-manifest.json"
+      }
+    }
+  ],
+  "not_in_these_files": [
+    "the macOS Team ID",
+    "the Windows leaf thumbprint",
+    "the frozen baseline sums digest",
+    "any identity string"
+  ]
+}

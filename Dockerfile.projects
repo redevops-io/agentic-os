@@ -11,6 +11,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY . /app
 RUN pip install --no-cache-dir '.[projects]'
-ENV PROJECTS_HOST=0.0.0.0 PROJECTS_PORT=8787
+# A hosted container is not a desktop: it has no launcher to hand a session to, and sits behind the control plane's own token
+# gating and the operator's edge controls. The explicit opt-out of the local capability gate is therefore set here (origin/main's
+# behaviour); without it `agentic-os-projects` serves behind the gate and fails closed.
+ENV PROJECTS_HOST=0.0.0.0 PROJECTS_PORT=8787 AGENTIC_OS_LOCAL_CAPABILITY=off
 EXPOSE 8787
 CMD ["agentic-os-projects"]

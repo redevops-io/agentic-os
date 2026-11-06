@@ -14,9 +14,13 @@ API_BASE="${BASE%/}"; [ -z "$API_BASE" ] && API_BASE="/"    # VITE_PROJECTS_API:
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 [ -f "$UI_REPO/package.json" ] || { echo "redevops-projects not found at $UI_REPO" >&2; exit 1; }
 ( cd "$UI_REPO" && VITE_PROJECTS_API="$API_BASE" npm run build -- --base="$BASE" )
+# hero.jpg here is the neutral placeholder drawn by scripts/make_neutral_hero.py (the image that used to be
+# vendored carried third-party generator metadata and unread terms): keep it across re-vendoring.
+HERO_KEEP="$(mktemp)"; cp "$ROOT/agentic_os/projects_ui/hero.jpg" "$HERO_KEEP"
 rm -rf "$ROOT/agentic_os/projects_ui"
 mkdir -p "$ROOT/agentic_os/projects_ui"
 cp -r "$UI_REPO/dist/"* "$ROOT/agentic_os/projects_ui/"
 # mark it as a deliberate local build so scripts/fetch_projects_ui.py (wheel-build hook) does not replace it
 echo "local-build" > "$ROOT/agentic_os/projects_ui/.pinned-sha256"
+cp "$HERO_KEEP" "$ROOT/agentic_os/projects_ui/hero.jpg"; rm -f "$HERO_KEEP"
 echo "vendored $UI_REPO/dist (base=$BASE, api=$API_BASE) -> agentic_os/projects_ui/"

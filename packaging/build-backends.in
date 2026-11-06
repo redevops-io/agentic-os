@@ -1,0 +1,8 @@
+# Build backends used OFFLINE-from-hashes to build the first-party wheels with --no-build-isolation
+# (so no unpinned backend is ever fetched at build time). setuptools: runtime-contracts. hatchling:
+# knowledge-frontier, redevops-connectors, agentic-os. Versions = latest as of LOCK_EXCLUDE_NEWER
+# (the same as an isolated build of the frozen run would have fetched).
+pip==26.2.1
+setuptools==84.0.0
+wheel
+hatchling

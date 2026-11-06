@@ -1,0 +1,27 @@
+Facts quoted by docs/legal/QA_BUNDLE_HANDOFF.md.
+Source: r0-audit/licences/licence_matrix.json (the frozen R0 audit matrix, 2026-11-04), rows below, verbatim fields; and https://htmldog.com/terms/ re-fetched 2026-11-04 (page sha256 6cd966bab56129131def7eb70f2208f27ee9988280a39bdad78c80e487daff9b).
+
+### QA-EV-rf-htmldog-tabs
+component: the tab styles of robot/htmldata/rebot/report.css, adapted from an article of HTML Dog
+declared_licence: unverified
+evidence_status: unverified
+notices_shipped: no
+owner_decision: none yet
+severity: BLOCKER
+severity_reason: Status unverified: only an attribution comment; the source site terms (read 2026-11-03) state "Material may not be used for profit without the express permission" and name no licence; whether they bind the adapted rules is undecided; the wheel cannot be modified to remove them.
+residual: the rules are short and generic and the article's terms of use were not read; the comment is an attribution, not a licence
+
+### QA-EV-rf-tablesorter-2.30.5
+component: jQuery tablesorter (Mottie fork) in robot/htmldata/lib/jquery.tablesorter.min.js
+declared_licence: (MIT OR GPL-2.0)
+evidence_status: declared_only
+notices_shipped: partial
+owner_decision: conditional acceptance (2026-11-03, conditions recorded in matrix)
+severity: MAJOR
+severity_reason: Declared "(MIT OR GPL-2.0)" by upstream; no licence text for the fork, shipped min.js has no header; owner chose MIT conditionally (2026-11-03) - public-distribution confirmation and extension to the common.css blue-theme styles/icons not decided.
+residual: the four statements that say '(MIT OR GPL-2.0)' or 'MIT or GPLv2' and the header that says 'MIT and GPL' differ in wording; the shipped minified file carries no notice at all, so everything here travels in THIRD_PARTY_NOTICES; the original repository's text covers that repository, and the fork has no text of its own
+
+### htmldog.com/terms (text of the 'Copyright' section as fetched)
+All material on this website is copyright HTML Dog. All moral rights are hereby asserted.
+Content may be quoted if accompanied by a credit to HTML Dog and a link to (or statement of, if the credit is not published on the web) the relevant page on HTML Dog.
+Material may not be used for profit without the express permission.

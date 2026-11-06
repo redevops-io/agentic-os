@@ -13,6 +13,18 @@ hidden = collect_submodules("agentic_os") + collect_submodules("uvicorn") + [
     "uvicorn.loops.auto", "uvicorn.protocols.http.auto",
     "uvicorn.protocols.websockets.auto", "uvicorn.lifespan.on",
 ]
+# Shipped-but-unexercised: nothing in the serve/bootstrap import closure imports `knowledge-frontier` (AST scan,
+# blocked-import run and frozen run: tests/test_sidecar_excludes.py), and its licence is an inference
+# ([OWNER DECISION D-LIC-2]), so the frozen sidecar leaves it out. The two shim modules go with it: they cannot
+# import without it.
+UNEXERCISED = ("knowledge_frontier", "agentic_os.knowledge_frontier", "agentic_os.knowledge_frontier_backtest")
+hidden = [h for h in hidden if h not in UNEXERCISED]
+# Build-tool leftovers ([OWNER DECISION D-LIC-17]): PyInstaller's own `pyi_rth_setuptools` runtime hook pulls setuptools
+# (130 modules, with its vendored jaraco.* / backports.* / wheel), `_distutils_hack` and `packaging` into the archive
+# because setuptools sits in the freeze venv as a PyInstaller dependency. No first-party or shipped third-party module
+# imports them (AST scan + frozen run: tests/test_sidecar_build_only_excludes.py), none of the three is in the shipped
+# wheel lock, and none has a licence text in the notices. Leaving them out changes no behaviour.
+BUILD_ONLY = ("setuptools", "pkg_resources", "_distutils_hack", "packaging")
 for opt in ("redevops_connectors", "duckdb"):
     try:
         hidden += collect_submodules(opt)
@@ -20,6 +32,14 @@ for opt in ("redevops_connectors", "duckdb"):
         pass  # optional; absent in a minimal build
 
 datas = collect_data_files("agentic_os")  # includes agentic_os/projects_ui/** (the served UI)
+# Licence and notice files travel inside the sidecar too (extracted with it at run time): the output of
+# packaging/notices/stage_licenses.py. Fail the build if a directory is named but empty of the required files.
+import os
+_LIC = os.environ.get("REDEVOPS_LICENSES_DIR")
+if _LIC:
+    for _f in ("LICENSE", "LICENSE-COMMONS-CLAUSE", "LICENSE.md", "LICENSING.md", "THIRD_PARTY_NOTICES.txt"):
+        assert os.path.isfile(os.path.join(_LIC, _f)), f"REDEVOPS_LICENSES_DIR lacks {_f}"
+    datas += [(_LIC, "Licenses")]
 
 a = Analysis(
     ["sidecar_main.py"],
@@ -30,7 +50,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter", "matplotlib", "redevops_rag", "sentence_transformers", "torch"],
+    excludes=["tkinter", "matplotlib", "redevops_rag", "sentence_transformers", "torch", *UNEXERCISED, *BUILD_ONLY],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

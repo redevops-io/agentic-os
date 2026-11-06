@@ -3,16 +3,23 @@
 # wheelhouse+sidecar+Tauri bundle from day one (unsigned) so the recipe stays portable.
 # Signing/notarization + winget/Homebrew wiring switch on per-OS in P2 (gated on secrets).
 #
-# The desktop launcher ("Agentic Apps") is versioned as its OWN product line, INDEPENDENT of
-# the stack's v* git tags (the stack is at v0.3.x; the app is at v0.2.0). Release it with an
-# `apps-v*` tag (e.g. `apps-v0.2.0`) so a stack tag never piggyback-triggers a desktop build,
-# and the app version in deploy/launcher/src-tauri/tauri.conf.json matches the tag.
+# R0-prime pins (packaging/PINS.md): every build input is an exact version, hash-locked or SHA-pinned:
+#   * actions pinned by commit SHA (the tag they were resolved from is in the comment)
+#   * runner images by NAME (macos-14 / windows-2022 / ubuntu-24.04); the image VERSION still floats and
+#     is recorded in packaging/dist/build-manifest.json (ImageVersion)
+#   * CPython 3.12.10, Rust 1.98.1, tauri-cli 2.11.4, uv 0.12.16 (packaging/toolchain.env)
+#   * Python wheels `--require-hashes` (packaging/locks), Rust crates `--locked` (Cargo.lock)
+# Nothing here signs or publishes: the `release` job of the frozen workflow is REMOVED (see the end of the file).
 name: native-packaging
+
+permissions:
+  contents: read     # read-only token for every job; nothing in this workflow writes to the repository or to releases
 
 on:
   workflow_dispatch:
   push:
-    tags: ["apps-v*"]   # desktop-launcher release line only (no `paths` filter: a release tag always builds)
+    tags: ["v*"]
+    paths: ["packaging/**", "deploy/launcher/**", ".github/workflows/native-packaging.yml"]
 
 jobs:
   bundle:
@@ -20,22 +27,34 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest    # → .deb + AppImage   (release target now)
-          - os: windows-latest   # → .msi / .nsis      (unsigned until P2)
+          - os: ubuntu-24.04     # → .deb + AppImage   (release target now)
+          - os: windows-2022     # → .msi / .nsis      (unsigned until P2; the frozen v0.3.2 run used windows-latest = windows-2025)
           - os: macos-14         # → .dmg (arm64)       (unsigned/un-notarized until P2)
-          # macos-13 (Intel/x86_64) dropped for good — current macOS (26/Tahoe+) no longer runs on
-          # Intel Macs and Rosetta is being retired, so an x86_64 slice would target machines that
-          # can't run the OS anyway. arm64 is the only macOS build. (GitHub is also retiring the
-          # Intel runners, which queued the leg indefinitely and blocked the release.)
+          # macos-13 (Intel/x86_64) dropped — GitHub is retiring the Intel runners and jobs queue
+          # indefinitely. Ship arm64 macOS for now; add Intel via a universal2 build later.
     runs-on: ${{ matrix.os }}
+    env:
+      # uv must use the interpreter installed below (exactly 3.12.10) and never fetch another one.
+      UV_PYTHON_PREFERENCE: only-system
+      UV_PYTHON_DOWNLOADS: never
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: CPython 3.12.10 (exact; packaging/toolchain.env PYTHON_VERSION)
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.12.10"
+          check-latest: false
 
       - name: Install uv (drives the Python 3.12 bundle build)
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
+        with:
+          version: "0.12.16"   # packaging/toolchain.env UV_VERSION
 
-      - name: Rust toolchain (Tauri)
-        uses: dtolnay/rust-toolchain@stable
+      - name: Rust toolchain 1.98.1 (Tauri; packaging/toolchain.env RUST_VERSION)
+        uses: dtolnay/rust-toolchain@18f0487477426dce244608110aa2660c2893deb7  # branch 1.98.1
+        with:
+          toolchain: "1.98.1"
 
       - name: Linux bundle deps (Tauri needs GTK/WebKit; only on Linux)
         if: runner.os == 'Linux'
@@ -44,34 +63,78 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
             libayatana-appindicator3-dev patchelf rsync
 
+      - name: Pins are consistent (pyproject, git pins, locks, frozen CI wheel list, Cargo.lock)
+        shell: bash
+        run: python -I packaging/verify-pins.py
+
       - name: Task 1 — reproducible wheelhouse (kills git+https from the user path)
         shell: bash
         run: ./packaging/build-wheelhouse.sh
 
-      - name: Task 2 — freeze the Python sidecar
+      - name: Task 2 — freeze the Python sidecar (pass 1; the archive the notices are derived from)
         shell: bash
+        run: ./packaging/build-sidecar.sh
+
+      - name: Task 3 — licence notices from the SBOM of the built archive (packaging/notices; needs network for cargo fetch)
+        shell: bash
+        run: ./packaging/build-notices.sh
+
+      - name: Task 2b — freeze again, embedding the Licenses folder
+        shell: bash
+        env:
+          REDEVOPS_LICENSES_DIR: ${{ github.workspace }}/deploy/launcher/src-tauri/licenses
         run: ./packaging/build-sidecar.sh
 
       - name: Stage sidecar for Tauri externalBin
         shell: bash
         run: ./packaging/stage-sidecar.sh
 
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2" --locked
+      - name: Install Tauri CLI 2.11.4 (packaging/toolchain.env TAURI_CLI_VERSION)
+        run: cargo install tauri-cli --version 2.11.4 --locked
 
-      - name: Task 4 — build the native installer(s)
-        working-directory: deploy/launcher
-        run: cargo tauri build
+      - name: Task 4 — build the native installer(s) (cargo --locked against the committed Cargo.lock)
+        shell: bash
+        env:
+          MANIFEST_PYTHON: python
+        run: ./packaging/build-launcher.sh
+
+      - name: Shipped-component SBOM from the built artifacts (generate + verify; fails on an unlisted component)
+        shell: bash
+        run: ./packaging/build-sbom.sh
+
+      - name: Closing check - the staged notices describe exactly the components of the final SBOM
+        shell: bash
+        run: python -I packaging/notices/check_notices_vs_sbom.py --sbom packaging/dist/sbom/sbom.cdx.json --notices-report packaging/notices/out/notices-report.json --licenses-dir deploy/launcher/src-tauri/licenses --exclude knowledge-frontier
+
+      # Windows only: the launcher's own tests on a real Windows host (nothing signs, nothing publishes). `cargo test --locked`
+      # runs the Windows Job Object test (stop kills the grandchild); the two --ignored tests start the REAL sidecar built above
+      # (RDO_SIDECAR), do the hand-off + HMAC handshake, exchange a launch code, flood the handshake and stop the tree.
+      # continue-on-error: a failing test must not discard the unsigned build; the log is uploaded with the artifact either way.
+      - name: Launcher tests on Windows (Job Object, real-sidecar start / handshake / stop)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        timeout-minutes: 25
+        shell: bash
+        working-directory: deploy/launcher/src-tauri
+        env:
+          RDO_SIDECAR: ${{ github.workspace }}\packaging\dist\redevops-sidecar.exe
+        run: |
+          mkdir -p ../../../packaging/dist
+          { cargo test --locked && cargo test --locked -- --ignored --test-threads=1 real_sidecar_start_handshake real_sidecar_survives; } 2>&1 | tee ../../../packaging/dist/launcher-tests-windows.log
 
       # --- Signing / notarization: staged (decision 4). Enabled per-OS in P2 when secrets exist. ---
       # - name: Sign & notarize (macOS)   if: runner.os == 'macOS' && secrets.APPLE_ID ...
       # - name: Sign (Windows)            if: runner.os == 'Windows' && secrets.WIN_CERT ...
 
       - name: Upload installers
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: redevops-${{ matrix.os }}
           path: |
+            packaging/dist/build-manifest.json
+            packaging/dist/sbom/*
+            packaging/dist/launcher-tests-windows.log
+            packaging/wheelhouse/WHEELS.sha256
             deploy/launcher/src-tauri/target/release/bundle/**/*.deb
             deploy/launcher/src-tauri/target/release/bundle/**/*.AppImage
             deploy/launcher/src-tauri/target/release/bundle/**/*.msi
@@ -81,46 +144,22 @@ jobs:
 
   acceptance-ubuntu:
     needs: bundle
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with: { name: redevops-ubuntu-latest, path: dist }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with: { name: redevops-ubuntu-24.04, path: dist }
       - name: Clean-machine acceptance (install the .deb, reach a served control plane, no Docker)
         run: ./packaging/acceptance-ubuntu.sh "$(find dist -name '*.deb' | head -1)"
 
-  # On an `apps-v*` tag, collect every OS's installers and publish them as GitHub Release
-  # assets — the public download page for the desktop app. (Unsigned until signing secrets
-  # are wired in P2; the release notes flag the Gatekeeper/SmartScreen workaround.)
-  release:
-    needs: [bundle, acceptance-ubuntu]
-    if: startsWith(github.ref, 'refs/tags/apps-v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download all OS installer artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-      - name: Flatten installer files
-        run: |
-          mkdir -p release
-          find dist -type f \( -name '*.deb' -o -name '*.AppImage' -o -name '*.msi' \
-            -o -name '*.exe' -o -name '*.dmg' \) -exec cp {} release/ \;
-          ls -la release/
-      - name: Publish installers to the GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: release/*
-          fail_on_unmatched_files: false
-          generate_release_notes: true
-          body: |
-            **ReDevOps Agentic Apps — desktop control surface.** Native installers for Linux, Windows and macOS.
-
-            These builds are **not yet code-signed/notarized**:
-            - **macOS**: right-click the app → **Open** (once) to bypass Gatekeeper.
-            - **Windows**: SmartScreen → **More info → Run anyway**.
-
-            The desktop app is the control surface; the Runtime/app services deploy separately (see
-            https://redevops.io/projects/apps-install).
+  # ---------------------------------------------------------------------------------------------
+  # NO RELEASE / PUBLISH JOB (R0-prime, decision pins-05).
+  # The v0.3.2 workflow had a `release` job here that, on any `v*` tag, downloaded every OS's installers and
+  # published them as GitHub Release assets with softprops/action-gh-release (permissions: contents: write),
+  # UNSIGNED. That job is removed from this tree: no workflow in this repository can create a release or
+  # publish an artifact. Build jobs only; their outputs stay workflow artifacts (private to the repository).
+  # Publication needs (1) a separate, explicit owner authorization and (2) SIGNED artifacts (macOS Developer ID
+  # + notarization, Windows Authenticode); a publishing job is then added by that decision's own change,
+  # with the signing steps in front of it. The old job is in git history at feeca065
+  # (.github/workflows/native-packaging.yml). tests/test_workflow_no_publish.py enforces this.
+  # ---------------------------------------------------------------------------------------------

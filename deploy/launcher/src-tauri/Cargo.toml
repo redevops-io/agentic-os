@@ -1,43 +1,39 @@
 [package]
 name = "redevops-launcher"
-version = "0.1.0"
-description = "ReDevOps desktop shell — a native window around the same Today-first UI the browser uses"
+version = "0.1.1"
+description = "ReDevOps Launcher — native one-click for the agentic app (Windows/macOS)"
 edition = "2021"
-license = "AGPL-3.0-or-later"
+# No SPDX `license` field: the family licence (AGPL-3.0-or-later with the Commons Clause) has no
+# registered SPDX id, and plain "AGPL-3.0-or-later" would omit the Commons Clause. See LICENSING.md.
+license-file = "../../../LICENSING.md"
+publish = false
 
-# The desktop shell is a DELIVERY SURFACE, not a control plane: it holds a connection (URL + a credential in the OS
-# keychain), shows the deployment's own UI, and adds native affordances (tray, deep links, window restore). It owns no
-# approvals, scheduling, case storage, notification state or agent execution — see ../DESKTOP.md.
+# SCAFFOLD: not built in CI. `cargo tauri dev` / `cargo tauri build` on a dev machine.
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-single-instance = "2"
-tauri-plugin-window-state = "2"
-tauri-plugin-deep-link = "2"
+tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-url = "2"
-zeroize = "1"
-tokio = { version = "1", features = ["time"] }
-# plain blocking HTTP with rustls (no OpenSSL on Windows/Linux); redirects are disabled in code
-ureq = { version = "2", default-features = false, features = ["tls"] }
-# OS credential store: Keychain (macOS), Credential Manager (Windows), Secret Service (Linux). No plaintext fallback.
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+# Capability handshake (src/capability.rs): HMAC-SHA256 is built on sha2, the client nonce on getrandom.
+# Both packages are already in the tauri tree (sha2 0.10.x, getrandom 0.3.x): direct edges only.
+sha2 = "0.10"
+getrandom = "0.3"
 
-# Linux only: tauri-plugin-deep-link 2.6.2 builds `ini::ParseOption { .. }` with a struct literal, which stops compiling once
-# rust-ini adds fields (0.21.2+ did). Found by CI — a macOS lockfile never compiles that Linux-only path. Remove this pin when
-# the plugin is fixed upstream.
-[target.'cfg(target_os = "linux")'.dependencies]
-rust-ini = "=0.21.1"
+# Sidecar lifecycle (src/lifecycle.rs). Both crates are already in the resolved tree through
+# tauri/tao/wry (libc 0.2.x everywhere, windows-sys 0.61.x on Windows); listing them here adds
+# no new package to Cargo.lock, only a direct edge + feature flags.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
-# Test-only hook: load the deployment, read what the page rendered, report it to a local port, exit. Never shipped.
-selftest = []
-
-[profile.release]
-lto = true
-codegen-units = 1
-strip = true

@@ -16,10 +16,15 @@ Native installer (.deb / AppImage / .msi / .dmg)
 ## Build order (one reproducible recipe → all platforms)
 
 ```bash
-./packaging/build-wheelhouse.sh   # Task 1: wheels + requirements.lock; proves offline --no-index install
-./packaging/build-sidecar.sh      # Task 2: freeze → packaging/dist/redevops-sidecar
-./packaging/stage-sidecar.sh      # place it as Tauri externalBin (per target triple)
-cd deploy/launcher && cargo tauri build   # Task 4: emits the native installer(s) for the host OS
+./packaging/build-all.sh          # the whole recipe below, in this order (the one place that owns the order)
+#   build-wheelhouse.sh            Task 1: hash-locked wheelhouse from pinned inputs; proves an offline --no-index --require-hashes install
+#   build-sidecar.sh               Task 2, pass 1: freeze -> packaging/dist/redevops-sidecar (the archive the notices are derived from)
+#   build-notices.sh               SBOM of that archive -> THIRD_PARTY_NOTICES / NOTICES_MISSING -> deploy/launcher/src-tauri/licenses
+#   REDEVOPS_LICENSES_DIR=... build-sidecar.sh   Task 2, pass 2: freeze again, embedding the Licenses folder
+#   stage-sidecar.sh               place it as Tauri externalBin (per target triple)
+#   build-launcher.sh              Task 4: cargo tauri build -- --locked (refuses to run without the notices / the pass-2 sidecar)
+#   build-sbom.sh                  shipped-component SBOM from the BUILT artifacts + verifier (fails on an unlisted component)
+#   notices/check_notices_vs_sbom.py   closing check: the staged notices describe exactly the final SBOM
 ```
 
 CI runs exactly this across ubuntu/windows/macos: `.github/workflows/native-packaging.yml`.
@@ -36,7 +41,7 @@ CI runs exactly this across ubuntu/windows/macos: `.github/workflows/native-pack
 | **Task 6 — CI matrix** | ✍️ workflow authored; Windows/macOS build the identical recipe (unsigned until signing staged in, decision 4) |
 
 Verified end-to-end on **evo-x2 (Ubuntu 26.04)** with Rust 1.98.1 + WebKitGTK 4.1 + tauri-cli 2.11.4
-+ CPython 3.12. Product/package name is **`agentic-apps`** (display "Agentic Apps"); the full icon set
++ CPython 3.12. Product/package name is **`agentic-apps`** (display "Agentic Apps") on the frozen v0.3.2 line; the R0-prime line has its own product name `Agentic Apps R0-prime`, launcher binary `agentic-r0prime`, bundle id and version (`identity.json`, `docs/R0_PRIME_IDENTITY.md`); the full icon set
 (`.ico` + `.icns` + PNGs) is generated. Windows/macOS use the identical recipe on their build hosts —
 see **`BUILD-hosts.md`** (Ubuntu → evo-x2 ✅, Windows → Proxmox Win11 image via `build-windows.ps1`,
 macOS → AWS EC2 Mac dedicated host). Only signing/notarization + winget/Homebrew wiring remain (P2).
@@ -48,4 +53,6 @@ macOS → AWS EC2 Mac dedicated host). Only signing/notarization + winget/Homebr
   brain's `default_llm`. Same contract as the parked try-container (`SIDEKICK_MODEL_*`).
 - **Docker is advanced/opt-in:** the launcher's `advanced_docker_*` commands enable the container tier
   (observability combo + rootless code-exec membrane); nothing here requires it.
-- Build artifacts (`wheelhouse/`, `dist/`, `build/`) are git-ignored; `requirements.lock` is committed.
+- Build artifacts (`wheelhouse/`, `dist/`, `build/`) are git-ignored. The Python locks (`packaging/locks/*.lock`, hash-locked per OS)
+  and `deploy/launcher/src-tauri/Cargo.lock` are committed; the old `requirements.lock` (a pip-freeze output that disagreed with the
+  build) is gone. See **`PINS.md`** for every pin, how to regenerate it, and what is and is not reproducible.

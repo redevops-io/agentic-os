@@ -1,0 +1,468 @@
+{
+ "schema": 1,
+ "comment": "Static knowledge for components that no package metadata describes. Presence of a text is not a clearance; 'unverified' strings are shown in THIRD_PARTY_NOTICES.txt. Keys: <purltype>:<normalised name>[@version].",
+ "entries": {
+  "pypi:certifi": {
+   "decision": "D-LIC-4",
+   "note": "MPL-2.0. The wheel's LICENSE file is only the MPL notice header ('If a copy of the MPL was not distributed with this file...'); the full MPL-2.0 text is added from mozilla.org. cacert.pem (the Mozilla CA list) is its own source form; MPL-2.0 section 3.2 (Executable Form) handling is an owner/counsel decision.",
+   "texts": [
+    "MPL-2.0.txt"
+   ]
+  },
+  "pypi:cryptography": {
+   "decision": "D-LIC-6",
+   "note": "The wheel statically links OpenSSL 4.0.2 and 39 Rust crates; see the generic OpenSSL entry and its own SBOM inside the wheel."
+  },
+  "pypi:knowledge-frontier": {
+   "decision": "D-LIC-2",
+   "declared": "AGPL-3.0-or-later (plain; pyproject at tag v0.1.0)",
+   "missing_reason": "tag v0.1.0 has no LICENSE file; the LICENSE added on 2026-10-13 (commit d32a82af) is marked 'LICENSE INTENT INFERRED - owner to confirm'"
+  },
+  "pypi:redevops-connectors": {
+   "decision": "D-LIC-2",
+   "declared": "AGPL-3.0-or-later (pyproject at tag v0.1.0); later main declares the family licence",
+   "missing_reason": "tag v0.1.0 has no LICENSE file; the family-licence files added on 2026-10-13 (commit d990280a) are marked 'LICENSE INTENT INFERRED - owner to confirm'"
+  },
+  "pypi:runtime-contracts": {
+   "decision": "D-LIC-3",
+   "note": "Family licence (AGPL-3.0-or-later with the Commons Clause) per its own LICENSE.md."
+  },
+  "pypi:duckdb": {
+   "decision": "D-LIC-6",
+   "note": "Optional extra backend, included in the sidecar build (extras projects,duckdb). The wheel statically links third-party libraries whose notices are not separately listed."
+  },
+  "pypi:pyyaml": {
+   "note": "The compiled _yaml extension embeds libyaml; its notice is covered by the generic libyaml entry."
+  },
+  "pypi:pydantic-core": {
+   "note": "Embeds Rust crates; their notices are not separately listed (see decision D-LIC-6)."
+  },
+  "cargo:selectors": {
+   "texts": [
+    "MPL-2.0.txt"
+   ],
+   "declared": "MPL-2.0 (crates.io declaration)",
+   "decision": "D-LIC-13",
+   "unverified": "The crate package holds no licence file; the generic MPL-2.0 text is shown, without the crate's copyright notice. File-level copyleft (MPL-2.0 section 3.2) handling is as for certifi (D-LIC-4)."
+  },
+  "npm:react": {
+   "decision": "D-LIC-7",
+   "texts": [
+    "React-18.3.1-MIT-LICENSE.txt"
+   ],
+   "note": "MIT licence text of the React 18.3.1 repository (the same text for react, react-dom and scheduler); the vendored UI bundle carries the licence banners only."
+  },
+  "npm:react-dom": {
+   "decision": "D-LIC-7",
+   "texts": [
+    "React-18.3.1-MIT-LICENSE.txt"
+   ],
+   "note": "MIT licence text of the React 18.3.1 repository (the same text for react, react-dom and scheduler); the vendored UI bundle carries the licence banners only."
+  },
+  "npm:scheduler": {
+   "decision": "D-LIC-7",
+   "texts": [
+    "React-18.3.1-MIT-LICENSE.txt"
+   ],
+   "note": "MIT licence text of the React 18.3.1 repository (the same text for react, react-dom and scheduler); the vendored UI bundle carries the licence banners only."
+  },
+  "key:certifi-bundle": {
+   "decision": "D-LIC-4",
+   "texts": [
+    "MPL-2.0.txt"
+   ],
+   "texts_from_wheel": false,
+   "declared": "MPL-2.0",
+   "note": "Mozilla CA certificate bundle (cacert.pem) inside certifi, MPL-2.0. The text shown is the full MPL-2.0; the certifi wheel's own LICENSE (an MPL notice header) is listed under the certifi component."
+  },
+  "key:pyinstaller-runtime": {
+   "decision": "D-LIC-6",
+   "texts": [
+    "PyInstaller-6.22.3-COPYING.txt"
+   ],
+   "texts_from_wheel": false,
+   "note": "PyInstaller COPYING.txt: GPL-2.0-or-later with the Bootloader Exception; runtime hooks Apache-2.0. Its bootloader and pyimod runtime are inside the sidecar executable."
+  },
+  "key:launcher": {
+   "not_third_party": "first-party: the Agentic Apps launcher; its licence is the product licence (LICENSING.md). Its third-party crates are listed individually.",
+   "decision": ""
+  },
+  "key:sidecar": {
+   "not_third_party": "first-party: the frozen sidecar executable; its contents are listed component by component.",
+   "decision": ""
+  },
+  "key:ui-bundle": {
+   "not_third_party": "first-party: the vendored Projects UI bundle (agentic_os/projects_ui); the product licence applies (LICENSING.md); the React libraries inside it are listed as react / react-dom.",
+   "decision": ""
+  },
+  "key:asset:agentic_os/projects_ui/hero.jpg": {
+   "not_third_party": "first-party asset: the neutral generated placeholder that replaced the original image in R0-prime (scripts/make_neutral_hero.py); the provenance statement is owner decision D-LIC-8.",
+   "decision": "D-LIC-8"
+  },
+  "key:platform:wkwebview": {
+   "not_third_party": "system component of macOS (WKWebView / WebKit): linked as an operating-system library, not redistributed in the artifact.",
+   "decision": ""
+  },
+  "key:licenses-folder": {
+   "not_third_party": "first-party: the Licenses folder itself (product licence files and these notices), embedded in the sidecar by the second freeze pass",
+   "decision": ""
+  },
+  "cargo:objc2": {
+   "decision": "D-LIC-18",
+   "note": "The crate is derived from Apple SDKs shipped with Xcode; its repository states that it is unclear whether distributing derived works is allowed under the Xcode licence (madsmtm/objc2 LICENSE.md, 'Apple SDKs'). The crate package carries no licence file and the upstream repository root holds only a licence-selection statement (LICENSE.md), not the MIT/Zlib/Apache texts. Owner/counsel decision.",
+   "texts": [
+    "objc2-LICENSE-MIT.txt"
+   ],
+   "unverified": "The standard MIT / Zlib / Apache-2.0 texts shown are from the madsmtm/objc2 repository at a LATER commit (8a5abacd, 2026-03-18 'Include license text in the repository'); the commit the packaged crate was built from holds only the licence-selection statement LICENSE.md (shown too, as UPSTREAM-SOURCE). The copyright line of the later text ('Copyright 2026 Mads Marquart') was not checked against the packaged version."
+  },
+  "cargo:block2": {
+   "decision": "D-LIC-18",
+   "note": "The crate is derived from Apple SDKs shipped with Xcode; its repository states that it is unclear whether distributing derived works is allowed under the Xcode licence (madsmtm/objc2 LICENSE.md, 'Apple SDKs'). The crate package carries no licence file and the upstream repository root holds only a licence-selection statement (LICENSE.md), not the MIT/Zlib/Apache texts. Owner/counsel decision.",
+   "texts": [
+    "objc2-LICENSE-MIT.txt"
+   ],
+   "unverified": "The standard MIT / Zlib / Apache-2.0 texts shown are from the madsmtm/objc2 repository at a LATER commit (8a5abacd, 2026-03-18 'Include license text in the repository'); the commit the packaged crate was built from holds only the licence-selection statement LICENSE.md (shown too, as UPSTREAM-SOURCE). The copyright line of the later text ('Copyright 2026 Mads Marquart') was not checked against the packaged version."
+  },
+  "cargo:dispatch2": {
+   "decision": "D-LIC-18",
+   "note": "The crate is derived from Apple SDKs shipped with Xcode; its repository states that it is unclear whether distributing derived works is allowed under the Xcode licence (madsmtm/objc2 LICENSE.md, 'Apple SDKs'). The crate package carries no licence file and the upstream repository root holds only a licence-selection statement (LICENSE.md), not the MIT/Zlib/Apache texts. Owner/counsel decision.",
+   "texts": [
+    "objc2-LICENSE-ZLIB.txt",
+    "objc2-LICENSE-APACHE.txt",
+    "objc2-LICENSE-MIT.txt"
+   ],
+   "unverified": "The standard MIT / Zlib / Apache-2.0 texts shown are from the madsmtm/objc2 repository at a LATER commit (8a5abacd, 2026-03-18 'Include license text in the repository'); the commit the packaged crate was built from holds only the licence-selection statement LICENSE.md (shown too, as UPSTREAM-SOURCE). The copyright line of the later text ('Copyright 2026 Mads Marquart') was not checked against the packaged version."
+  },
+  "cargo:objc2-app-kit": {
+   "decision": "D-LIC-18",
+   "note": "The crate is derived from Apple SDKs shipped with Xcode; its repository states that it is unclear whether distributing derived works is allowed under the Xcode licence (madsmtm/objc2 LICENSE.md, 'Apple SDKs'). The crate package carries no licence file and the upstream repository root holds only a licence-selection statement (LICENSE.md), not the MIT/Zlib/Apache texts. Owner/counsel decision.",
+   "texts": [
+    "objc2-LICENSE-ZLIB.txt",
+    "objc2-LICENSE-APACHE.txt",
+    "objc2-LICENSE-MIT.txt"
+   ],
+   "unverified": "The standard MIT / Zlib / Apache-2.0 texts shown are from the madsmtm/objc2 repository at a LATER commit (8a5abacd, 2026-03-18 'Include license text in the repository'); the commit the packaged crate was built from holds only the licence-selection statement LICENSE.md (shown too, as UPSTREAM-SOURCE). The copyright line of the later text ('Copyright 2026 Mads Marquart') was not checked against the packaged version."
+  },
+  "cargo:objc2-core-foundation": {
+   "decision": "D-LIC-18",
+   "note": "The crate is derived from Apple SDKs shipped with Xcode; its repository states that it is unclear whether distributing derived works is allowed under the Xcode licence (madsmtm/objc2 LICENSE.md, 'Apple SDKs'). The crate package carries no licence file and the upstream repository root holds only a licence-selection statement (LICENSE.md), not the MIT/Zlib/Apache texts. Owner/counsel decision.",
+   "texts": [
+    "objc2-LICENSE-ZLIB.txt",
+    "objc2-LICENSE-APACHE.txt",
+    "objc2-LICENSE-MIT.txt"
+   ],
+   "unverified": "The standard MIT / Zlib / Apache-2.0 texts shown are from the madsmtm/objc2 repository at a LATER commit (8a5abacd, 2026-03-18 'Include license text in the repository'); the commit the packaged crate was built from holds only the licence-selection statement LICENSE.md (shown too, as UPSTREAM-SOURCE). The copyright line of the later text ('Copyright 2026 Mads Marquart') was not checked against the packaged version."
+  },
+  "cargo:objc2-core-graphics": {
+   "decision": "D-LIC-18",
+   "note": "The crate is derived from Apple SDKs shipped with Xcode; its repository states that it is unclear whether distributing derived works is allowed under the Xcode licence (madsmtm/objc2 LICENSE.md, 'Apple SDKs'). The crate package carries no licence file and the upstream repository root holds only a licence-selection statement (LICENSE.md), not the MIT/Zlib/Apache texts. Owner/counsel decision.",
+   "texts": [
+    "objc2-LICENSE-ZLIB.txt",
+    "objc2-LICENSE-APACHE.txt",
+    "objc2-LICENSE-MIT.txt"
+   ],
+   "unverified": "The standard MIT / Zlib / Apache-2.0 texts shown are from the madsmtm/objc2 repository at a LATER commit (8a5abacd, 2026-03-18 'Include license text in the repository'); the commit the packaged crate was built from holds only the licence-selection statement LICENSE.md (shown too, as UPSTREAM-SOURCE). The copyright line of the later text ('Copyright 2026 Mads Marquart') was not checked against the packaged version."
+  },
+  "cargo:objc2-encode": {
+   "decision": "D-LIC-18",
+   "note": "The crate is derived from Apple SDKs shipped with Xcode; its repository states that it is unclear whether distributing derived works is allowed under the Xcode licence (madsmtm/objc2 LICENSE.md, 'Apple SDKs'). The crate package carries no licence file and the upstream repository root holds only a licence-selection statement (LICENSE.md), not the MIT/Zlib/Apache texts. Owner/counsel decision.",
+   "texts": [
+    "objc2-LICENSE-MIT.txt"
+   ],
+   "unverified": "The standard MIT / Zlib / Apache-2.0 texts shown are from the madsmtm/objc2 repository at a LATER commit (8a5abacd, 2026-03-18 'Include license text in the repository'); the commit the packaged crate was built from holds only the licence-selection statement LICENSE.md (shown too, as UPSTREAM-SOURCE). The copyright line of the later text ('Copyright 2026 Mads Marquart') was not checked against the packaged version."
+  },
+  "cargo:objc2-exception-helper": {
+   "decision": "D-LIC-18",
+   "note": "The crate is derived from Apple SDKs shipped with Xcode; its repository states that it is unclear whether distributing derived works is allowed under the Xcode licence (madsmtm/objc2 LICENSE.md, 'Apple SDKs'). The crate package carries no licence file and the upstream repository root holds only a licence-selection statement (LICENSE.md), not the MIT/Zlib/Apache texts. Owner/counsel decision.",
+   "texts": [
+    "objc2-LICENSE-ZLIB.txt",
+    "objc2-LICENSE-APACHE.txt",
+    "objc2-LICENSE-MIT.txt"
+   ],
+   "unverified": "The standard MIT / Zlib / Apache-2.0 texts shown are from the madsmtm/objc2 repository at a LATER commit (8a5abacd, 2026-03-18 'Include license text in the repository'); the commit the packaged crate was built from holds only the licence-selection statement LICENSE.md (shown too, as UPSTREAM-SOURCE). The copyright line of the later text ('Copyright 2026 Mads Marquart') was not checked against the packaged version."
+  },
+  "cargo:objc2-foundation": {
+   "decision": "D-LIC-18",
+   "note": "The crate is derived from Apple SDKs shipped with Xcode; its repository states that it is unclear whether distributing derived works is allowed under the Xcode licence (madsmtm/objc2 LICENSE.md, 'Apple SDKs'). The crate package carries no licence file and the upstream repository root holds only a licence-selection statement (LICENSE.md), not the MIT/Zlib/Apache texts. Owner/counsel decision.",
+   "texts": [
+    "objc2-LICENSE-MIT.txt"
+   ],
+   "unverified": "The standard MIT / Zlib / Apache-2.0 texts shown are from the madsmtm/objc2 repository at a LATER commit (8a5abacd, 2026-03-18 'Include license text in the repository'); the commit the packaged crate was built from holds only the licence-selection statement LICENSE.md (shown too, as UPSTREAM-SOURCE). The copyright line of the later text ('Copyright 2026 Mads Marquart') was not checked against the packaged version."
+  },
+  "cargo:objc2-io-surface": {
+   "decision": "D-LIC-18",
+   "note": "The crate is derived from Apple SDKs shipped with Xcode; its repository states that it is unclear whether distributing derived works is allowed under the Xcode licence (madsmtm/objc2 LICENSE.md, 'Apple SDKs'). The crate package carries no licence file and the upstream repository root holds only a licence-selection statement (LICENSE.md), not the MIT/Zlib/Apache texts. Owner/counsel decision.",
+   "texts": [
+    "objc2-LICENSE-ZLIB.txt",
+    "objc2-LICENSE-APACHE.txt",
+    "objc2-LICENSE-MIT.txt"
+   ],
+   "unverified": "The standard MIT / Zlib / Apache-2.0 texts shown are from the madsmtm/objc2 repository at a LATER commit (8a5abacd, 2026-03-18 'Include license text in the repository'); the commit the packaged crate was built from holds only the licence-selection statement LICENSE.md (shown too, as UPSTREAM-SOURCE). The copyright line of the later text ('Copyright 2026 Mads Marquart') was not checked against the packaged version."
+  },
+  "cargo:objc2-web-kit": {
+   "decision": "D-LIC-18",
+   "note": "The crate is derived from Apple SDKs shipped with Xcode; its repository states that it is unclear whether distributing derived works is allowed under the Xcode licence (madsmtm/objc2 LICENSE.md, 'Apple SDKs'). The crate package carries no licence file and the upstream repository root holds only a licence-selection statement (LICENSE.md), not the MIT/Zlib/Apache texts. Owner/counsel decision.",
+   "texts": [
+    "objc2-LICENSE-ZLIB.txt",
+    "objc2-LICENSE-APACHE.txt",
+    "objc2-LICENSE-MIT.txt"
+   ],
+   "unverified": "The standard MIT / Zlib / Apache-2.0 texts shown are from the madsmtm/objc2 repository at a LATER commit (8a5abacd, 2026-03-18 'Include license text in the repository'); the commit the packaged crate was built from holds only the licence-selection statement LICENSE.md (shown too, as UPSTREAM-SOURCE). The copyright line of the later text ('Copyright 2026 Mads Marquart') was not checked against the packaged version."
+  },
+  "cargo:r-efi": {
+   "decision": "D-LIC-13",
+   "package_files": [
+    "AUTHORS"
+   ],
+   "declared": "MIT OR Apache-2.0 OR LGPL-2.1-or-later (Cargo.toml)",
+   "note": "The crate package (and the upstream repository at the packaged commit db87f6c8, tag v5.2.0) holds no LICENSE file. The licence statement of the project is in its AUTHORS file, which is shown here verbatim: it says the project is triple-licensed (MIT, Apache-2.0, LGPL-2.1-or-later) and reproduces the MIT permission notice and the Apache-2.0 and LGPL-2.1+ notice headers, with the copyright lines of Red Hat, Microsoft and David Rheinsberg. The full Apache-2.0 and LGPL-2.1 texts are not part of the package. The crate is in the dependency graph of the Windows launcher build and in the macOS set as a transitive dependency; the choice among the three licences is the redistributor's (register item D-LIC-13).",
+   "unverified": "AUTHORS is the package's own file (sha256 recorded in notices-report.json) and was compared with AUTHORS at upstream commit db87f6c8 (identical); a licence statement in AUTHORS rather than in a LICENSE file is a fact about this crate, not a clearance."
+  }
+ },
+ "static_components": [
+  {
+   "name": "cpython",
+   "version": "3.12.10",
+   "declared": "PSF-2.0",
+   "present_in": [
+    "macos",
+    "windows"
+   ],
+   "decision": "D-LIC-6",
+   "texts": [
+    "CPython-3.12.10-LICENSE.txt",
+    "CPython-3.12.10-Doc-license.rst"
+   ],
+   "unverified": "Which bundled-library notices of Doc/license.rst apply to the shipped python.org-style build was not traced."
+  },
+  {
+   "name": "openssl",
+   "version": "3.0.16",
+   "declared": "Apache-2.0",
+   "present_in": [
+    "macos",
+    "windows"
+   ],
+   "decision": "D-LIC-6",
+   "texts": [
+    "OpenSSL-LICENSE.txt"
+   ],
+   "note": "libcrypto/libssl shipped beside the interpreter."
+  },
+  {
+   "name": "openssl-in-cryptography",
+   "version": "4.0.2",
+   "declared": "Apache-2.0 (expected)",
+   "present_in": [
+    "macos",
+    "windows"
+   ],
+   "decision": "D-LIC-6",
+   "texts": [
+    "OpenSSL-LICENSE.txt"
+   ],
+   "unverified": "The text shown is LICENSE.txt of upstream tag openssl-4.0.2 (byte-identical to 3.0.16); the statically linked bytes were not compared with that tag."
+  },
+  {
+   "name": "pyinstaller",
+   "version": "6.22.3",
+   "declared": "GPL-2.0-or-later with Bootloader Exception; runtime hooks Apache-2.0",
+   "present_in": [
+    "macos",
+    "windows"
+   ],
+   "decision": "D-LIC-6",
+   "texts": [
+    "PyInstaller-6.22.3-COPYING.txt"
+   ],
+   "unverified": "The version used by the R0 build was unpinned; 6.22.3 is the R0-prime pin."
+  },
+  {
+   "name": "react",
+   "version": "18.3.1",
+   "declared": "MIT",
+   "present_in": [
+    "macos",
+    "windows"
+   ],
+   "decision": "D-LIC-7",
+   "texts": [
+    "React-18.3.1-MIT-LICENSE.txt"
+   ],
+   "note": "Projects UI bundle (agentic_os/projects_ui/assets); version literal found in the bundle."
+  },
+  {
+   "name": "react-dom",
+   "version": "18.3.1",
+   "declared": "MIT",
+   "present_in": [
+    "macos",
+    "windows"
+   ],
+   "decision": "D-LIC-7",
+   "texts": [
+    "React-18.3.1-MIT-LICENSE.txt"
+   ]
+  },
+  {
+   "name": "scheduler",
+   "version": "0.23.2",
+   "declared": "MIT",
+   "present_in": [
+    "macos",
+    "windows"
+   ],
+   "decision": "D-LIC-7",
+   "texts": [
+    "React-18.3.1-MIT-LICENSE.txt"
+   ],
+   "unverified": "Version inferred from react-dom 18.3.1; the bundle banner names only scheduler.production.min.js. Other npm packages in the bundle were not enumerated (the npm lock of the UI build is not recorded)."
+  },
+  {
+   "name": "libyaml",
+   "version": "",
+   "declared": "MIT (expected)",
+   "present_in": [
+    "macos",
+    "windows"
+   ],
+   "decision": "D-LIC-6",
+   "texts": [],
+   "missing_reason": "libyaml is linked into PyYAML's _yaml extension; no libyaml licence text ships in the PyYAML wheel",
+   "unverified": "Presence in the frozen archive follows the wheel contents; not confirmed by a scan."
+  },
+  {
+   "name": "duckdb-embedded-libraries",
+   "version": "",
+   "declared": "various (not enumerated)",
+   "present_in": [
+    "macos",
+    "windows"
+   ],
+   "decision": "D-LIC-6",
+   "texts": [],
+   "missing_reason": "third-party libraries embedded in the DuckDB binary are not listed in the wheel's licence file"
+  },
+  {
+   "name": "microsoft-vc-runtime",
+   "version": "VCRUNTIME140 14.42.34438.0; ucrtbase 10.0.26100.1742",
+   "declared": "Microsoft proprietary (redistribution terms UNVERIFIED)",
+   "present_in": [
+    "windows"
+   ],
+   "decision": "D-LIC-6",
+   "texts": [],
+   "missing_reason": "no licence text ships: Microsoft's terms for these files were READ (docs/legal/COUNSEL_BRIEF.md section 7) and name two different regimes (Visual Studio 'Distributable Code' for files from the VS redist folder; the separate 'Visual C++ 2015-2022 Runtime' licence for the Redistributable package) - which of them governs the copies inside the Python installation the build used is not established",
+   "unverified": "Terms read 2026-11-04 (learn.microsoft.com pages and the Visual C++ 2015-2022 Runtime licence document, sha256 in docs/legal/sources/MANIFEST.json); provenance of the shipped copies and the governing terms are for counsel."
+  },
+  {
+   "name": "libffi",
+   "version": "8 (libffi-8.dll)",
+   "declared": "MIT (libffi LICENSE at v3.4.4)",
+   "present_in": [
+    "windows"
+   ],
+   "decision": "D-LIC-6",
+   "texts": [
+    "libffi-3.4.4-LICENSE.txt"
+   ],
+   "unverified": "libffi-8.dll was not read; the text is libffi 3.4.4's (the version CPython v3.12.10 PCbuild/get_externals.bat names for its Windows build)."
+  },
+  {
+   "name": "nsis-and-wix-installer-stubs",
+   "version": "",
+   "declared": "NSIS: zlib/libpng, bzip2 and Common Public License 1.0 parts (COPYING); WiX Toolset v3: Microsoft Reciprocal License",
+   "present_in": [
+    "windows"
+   ],
+   "decision": "D-LIC-9",
+   "texts": [
+    "NSIS-trunk-COPYING.txt",
+    "WiX3-LICENSE.txt"
+   ],
+   "unverified": "No Windows installer was built here: which NSIS or WiX files end up inside an installer, the NSIS version and the compression used are UNVERIFIED (tauri-bundler 2.10.4 downloads NSIS 3.13 and WiX 3.14.1 and defaults to LZMA). The NSIS text is the trunk COPYING of 2026-11-04."
+  }
+ ],
+ "reference_notices": [
+  {
+   "id": "libyaml",
+   "limitation": "L-LIBYAML",
+   "title": "libyaml (statically linked into PyYAML's _yaml extension)",
+   "declared": "MIT",
+   "decision": "D-LIC-6",
+   "texts": [
+    "libyaml-0.2.5-License.txt"
+   ],
+   "note": "PyYAML 6.0.3's CI builds its wheels against libyaml ref 0.2.5; the text is yaml/libyaml tag 0.2.5 License.",
+   "unverified": "The libyaml version linked in the shipped _yaml extension was not read from the binary."
+  },
+  {
+   "id": "libffi",
+   "limitation": "L-LIBFFI",
+   "title": "libffi (linked by _cffi_backend and CPython's _ctypes)",
+   "declared": "MIT",
+   "decision": "D-LIC-6",
+   "texts": [
+    "libffi-3.4.4-LICENSE.txt"
+   ],
+   "note": "libffi v3.4.4 LICENSE (the version CPython v3.12.10 names for its Windows build).",
+   "unverified": "The libffi actually linked on macOS (system or bundled) and in the shipped Windows file libffi-8.dll was not read."
+  },
+  {
+   "id": "cpython-interpreter-libraries",
+   "limitation": "L-CPYTHON-EXT",
+   "title": "Libraries observed inside the interpreter library of the local macOS candidate (python-build-standalone CPython 3.12.10): bzip2, Tcl/Tk, expat",
+   "declared": "bzip2 licence; Tcl/Tk licence (BSD-style); MIT (expat)",
+   "decision": "D-LIC-6",
+   "texts": [
+    "bzip2-1.0.8-LICENSE.txt",
+    "Tcl-8.6.14-license.terms.txt",
+    "Tk-8.6.14-license.terms.txt",
+    "expat-2.6.3-COPYING.txt"
+   ],
+   "note": "Version banners found by `strings` in libpython3.12.dylib of the interpreter that built the local candidate: OpenSSL 3.0.16 (text shown under OpenSSL), expat_2.6.3, bzip2 1.0.8, Tcl/Tk 8.6.14 (statically inside the library although tkinter is excluded from the sidecar archive), libmpdec (BSD-2, covered by CPython's Doc/license.rst acknowledgements).",
+   "unverified": "Read from one interpreter build (python-build-standalone via uv). The CI builds use the runner image's python.org CPython (pins-06), whose linked libraries are a different set; a build of that interpreter was not examined."
+  },
+  {
+   "id": "duckdb-third-party",
+   "limitation": "L-DUCKDB",
+   "title": "DuckDB and the third-party libraries of its source tree (statically embedded in the _duckdb extension)",
+   "declared": "MIT (DuckDB); various (third_party)",
+   "decision": "D-LIC-6",
+   "texts": [
+    "duckdb-1.5.5-LICENSE.txt",
+    "duckdb-1.5.5-third_party-brotli-LICENSE.txt",
+    "duckdb-1.5.5-third_party-concurrentqueue-LICENSE.txt",
+    "duckdb-1.5.5-third_party-fast_float-LICENSE.txt",
+    "duckdb-1.5.5-third_party-fastpforlib-LICENSE.txt",
+    "duckdb-1.5.5-third_party-fmt-LICENSE.txt",
+    "duckdb-1.5.5-third_party-fsst-LICENSE.txt",
+    "duckdb-1.5.5-third_party-httplib-LICENSE.txt",
+    "duckdb-1.5.5-third_party-hyperloglog-LICENSE.txt",
+    "duckdb-1.5.5-third_party-jaro_winkler-LICENSE.txt",
+    "duckdb-1.5.5-third_party-jemalloc-LICENSE.txt",
+    "duckdb-1.5.5-third_party-libpg_query-LICENSE.txt",
+    "duckdb-1.5.5-third_party-lz4-LICENSE.txt",
+    "duckdb-1.5.5-third_party-mbedtls-LICENSE.txt",
+    "duckdb-1.5.5-third_party-miniz-LICENSE.txt",
+    "duckdb-1.5.5-third_party-parquet-LICENSE.txt",
+    "duckdb-1.5.5-third_party-pcg-LICENSE.txt",
+    "duckdb-1.5.5-third_party-pdqsort-LICENSE.txt",
+    "duckdb-1.5.5-third_party-re2-LICENSE.txt",
+    "duckdb-1.5.5-third_party-ska_sort-LICENSE.txt",
+    "duckdb-1.5.5-third_party-skiplist-LICENSE.txt",
+    "duckdb-1.5.5-third_party-snappy-LICENSE.txt",
+    "duckdb-1.5.5-third_party-snowball-LICENSE.txt",
+    "duckdb-1.5.5-third_party-tdigest-LICENSE.txt",
+    "duckdb-1.5.5-third_party-tdigest-NOTICES.txt",
+    "duckdb-1.5.5-third_party-thrift-thrift-LICENSE.txt",
+    "duckdb-1.5.5-third_party-utf8proc-LICENSE.txt",
+    "duckdb-1.5.5-third_party-vergesort-LICENSE.txt",
+    "duckdb-1.5.5-third_party-yyjson-LICENSE.txt",
+    "duckdb-1.5.5-third_party-zstd-LICENSE.txt"
+   ],
+   "note": "Texts of the DuckDB source tree at tag v1.5.5 (commit d8cdaa33): the root LICENSE and every third_party/*/LICENSE (and tdigest NOTICES).",
+   "unverified": "Which of these third-party libraries are linked into the shipped _duckdb extension was NOT established; the whole tree's licence files are shown so that none is missing."
+  }
+ ]
+}

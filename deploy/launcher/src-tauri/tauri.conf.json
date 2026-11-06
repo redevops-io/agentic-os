@@ -1,29 +1,29 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Agentic Apps",
-  "version": "0.2.0",
-  "identifier": "io.redevops.agentic-apps",
-  "mainBinaryName": "agentic-apps",
+  "productName": "Agentic Apps R0-prime",
+  "version": "0.1.1",
+  "identifier": "io.redevops.agentic-apps.r0prime",
+  "mainBinaryName": "agentic-r0prime",
   "build": {
     "frontendDist": "../ui"
   },
   "app": {
-    "windows": [],
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Agentic Apps R0-prime",
+        "width": 560,
+        "height": 640,
+        "resizable": true
+      }
+    ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
-    },
-    "withGlobalTauri": true
+      "csp": null
+    }
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "deb",
-      "appimage",
-      "msi",
-      "nsis",
-      "dmg",
-      "app"
-    ],
+    "targets": ["deb", "appimage", "msi", "nsis", "dmg", "app"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -32,23 +32,16 @@
       "icons/icon.ico"
     ],
     "category": "DeveloperTool",
-    "shortDescription": "Governed AI control plane \u2014 your apps as one system",
+    "shortDescription": "Governed AI control plane — your apps as one system",
     "longDescription": "ReDevOps runs your business apps as one governed agentic system: connect apps, run missions across them, approve the consequential steps. One suite installer, native, bring your own model (hosted or local). No Docker required.",
-    "externalBin": [
-      "binaries/redevops-sidecar"
-    ],
+    "externalBin": ["binaries/redevops-sidecar"],
+    "copyright": "Copyright (c) 2025-2026 RedevOps.",
+    "resources": {"licenses/": "Licenses/"},
+    "macOS": {"minimumSystemVersion": "11.0", "bundleVersion": "0.1.1"},
+    "windows": {"wix": {"upgradeCode": "f13fc625-f77d-5c30-b308-a3c3ec1045fc"}},
     "linux": {
       "deb": {
         "depends": []
-      }
-    }
-  },
-  "plugins": {
-    "deep-link": {
-      "desktop": {
-        "schemes": [
-          "redevops"
-        ]
       }
     }
   }

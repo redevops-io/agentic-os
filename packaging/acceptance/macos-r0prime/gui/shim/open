@@ -1,0 +1,14 @@
+#!/bin/bash
+# PATH shim for /usr/bin/open (test harness). Logs its argv, then hands the file to a CONTROLLED headless
+# Chromium with a disposable profile (never the owner's browser). Returns at once, like the real open.
+umask 077
+{ printf '%s argv:' "$(/bin/date +%s)"; for a in "$@"; do printf ' [%s]' "$a"; done; printf '\n'; } >> "${RDO_SHIM_LOG:-/dev/null}"
+f="${1:-}"
+[ -n "$f" ] || exit 1
+[ -n "${RDO_SHIM_NOBROWSER:-}" ] && exit 0   # scenarios that drive their own browser from the logged path
+mkdir -p "$RDO_BROWSER_OUT"
+# env -i again: the browser driver gets only what it needs
+nohup /usr/bin/env -i HOME="$HOME" TMPDIR="$TMPDIR" PATH=/usr/bin:/bin \
+  PWCORE="$RDO_PWCORE" CHROMIUM="$RDO_CHROMIUM" UD="$RDO_BROWSER_UD" OUT="$RDO_BROWSER_OUT" \
+  "$RDO_NODE" "$GUI_DIR/browser/open_flow.mjs" "$f" >> "$RDO_BROWSER_OUT/open_flow.log" 2>&1 < /dev/null &
+exit 0

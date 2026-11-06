@@ -161,7 +161,7 @@ STACK_KNOWLEDGE: Tuple[KnowledgeEntry, ...] = (
                   "license", "licence", "licensing", "agpl", "pay", "subscription", "trial"),
         question="What does it cost, and how is it licensed?",
         answer=(
-            "The core stack is source-available under the family licence (AGPL-3.0-or-later with the "
+            "The core stack is source-available (family licence: AGPL-3.0-or-later with the "
             "Commons Clause), not open source. You can self-host it on your own infrastructure, including "
             "inside a company for its own business, with no licence fee; the Commons Clause removes the "
             "right to charge third parties for the software, for hosting it, or for support or consulting "

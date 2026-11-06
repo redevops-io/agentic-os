@@ -1,0 +1,6 @@
+# Pinned Rust toolchain for the Agentic Apps launcher. Matches RUST_VERSION in packaging/toolchain.env.
+# (rustup reads this when the build runs below deploy/launcher; the CI workflow also installs exactly
+# this version with dtolnay/rust-toolchain.)
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"

@@ -1,0 +1,49 @@
+{
+  "_comment": "First-party git dependencies built into the wheelhouse. pip's VCS syntax accepts ONE ref, so pyproject.toml pins the TAG and this file pins the tag object AND the peeled commit; packaging/tools/build_git_wheels.py clones the tag, fails unless HEAD == commit, and builds from the clean clone. The pins follow pyproject.toml of the converged trunk (origin/main's tags: runtime-contracts v0.3.14, discovery-runtime v0.1.19, knowledge-frontier v0.2.0); the RC line's earlier pins (runtime-contracts v0.3.4, knowledge-frontier v0.1.0) are superseded, see packaging/PINS.md.",
+  "dependencies": [
+    {
+      "name": "runtime-contracts",
+      "version": "0.3.14",
+      "url": "https://github.com/redevops-io/runtime-contracts.git",
+      "tag": "v0.3.14",
+      "tag_object": "73ff21c2019f57afb026585bb58b357e6ac88d91",
+      "commit": "80e727d8d08b3d8bef371fefd0dedee8a77666f8",
+      "build_backend": "setuptools",
+      "committed_build_dirs": [],
+      "note": "v0.3.14 is the first tag without the stale committed build/lib that earlier tags ship (checked 2026-11-06: no committed build/ or dist/ in the tag's tree)."
+    },
+    {
+      "name": "discovery-runtime",
+      "version": "0.1.19",
+      "url": "https://github.com/redevops-io/discovery-runtime.git",
+      "tag": "v0.1.19",
+      "tag_object": "5c25b79d43aefea497d3c891b2d4983b01869d29",
+      "commit": "b49f66c60e25ea54273f2d23845db027d21db762",
+      "build_backend": "setuptools",
+      "committed_build_dirs": [],
+      "note": "Added by the converged trunk: origin/main depends on it (pyproject pins v0.1.19, which requires runtime-contracts v0.3.14). Licence status of this component is not decided here."
+    },
+    {
+      "name": "knowledge-frontier",
+      "version": "0.2.0",
+      "url": "https://github.com/redevops-io/knowledge-frontier.git",
+      "tag": "v0.2.0",
+      "tag_object": "189029f4ba8852a3af90ad1384c35bba6f29b080",
+      "commit": "057258ae51e19ed6d3d69834093a794457fa4ffd",
+      "build_backend": "hatchling",
+      "committed_build_dirs": [],
+      "note": "Pinned by tag v0.2.0 as origin/main pins it. Agent `licences` may exclude it from the shipped set; this pin is not a decision to ship it. Its licence is inferred (D-LIC-14 stays OPEN)."
+    },
+    {
+      "name": "redevops-connectors",
+      "version": "0.1.0",
+      "url": "https://github.com/redevops-io/redevops-connectors.git",
+      "tag": "v0.1.0",
+      "tag_object": "f36bdf554f32b5737689f48d1a7dec41185d287a",
+      "commit": "7fbb9ec4d4faff1dea2e238a94495bc1951b56bc",
+      "build_backend": "hatchling",
+      "committed_build_dirs": [],
+      "note": "Replaces the floating @main of the frozen build. v0.1.0 is the exact commit the frozen CI run cloned; main has since moved (15 commits as of 2026-11-04)."
+    }
+  ]
+}

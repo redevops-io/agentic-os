@@ -21,9 +21,10 @@ echo "sidecar: $SIDE"
 
 echo "== start the control plane NATIVELY (no Docker) =="
 RDO_SIDECAR="$SIDE"; export RDO_SIDECAR
-"$SIDE" serve >/tmp/rdo-serve.log 2>&1 &
+LOG="$(mktemp)"                      # not a predictable /tmp path (review SR-14)
+"$SIDE" serve >"$LOG" 2>&1 &
 PID=$!
-trap 'kill $PID 2>/dev/null || true' EXIT
+trap 'kill $PID 2>/dev/null || true; rm -f "$LOG"' EXIT
 
 echo "== wait for http://127.0.0.1:8787 to serve the UI =="
 ok=0
@@ -31,8 +32,11 @@ for i in $(seq 1 30); do
   if curl -fsS http://127.0.0.1:8787/ >/dev/null 2>&1; then ok=1; break; fi
   sleep 1
 done
-[ "$ok" = 1 ] || { echo "FAIL: control plane did not serve"; tail -20 /tmp/rdo-serve.log; exit 1; }
+[ "$ok" = 1 ] || { echo "FAIL: control plane did not serve"; tail -20 "$LOG"; exit 1; }
 echo "PASS: control plane served natively (no Docker, no system Python/Git)."
+code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/api/projects || true)"
+[ "$code" = 401 ] || { echo "FAIL: /api/projects answered $code without a session (expected 401: local capability gate)"; exit 1; }
+echo "PASS: the API needs the session (401 without it)."
 
 echo "== device-readiness brain runs from the frozen binary =="
 "$SIDE" bootstrap || true   # exit code is the device verdict; we assert it RUNS
