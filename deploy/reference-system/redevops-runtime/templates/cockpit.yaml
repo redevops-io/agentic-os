@@ -18,14 +18,36 @@ spec:
         {{- include "rr.labels" . | nindent 8 }}
         app.kubernetes.io/component: cockpit
     spec:
+      serviceAccountName: {{ include "rr.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      securityContext: {{ toYaml .Values.cockpit.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: cockpit
-          image: "{{ .Values.cockpit.image.repository }}:{{ .Values.cockpit.image.tag }}"
+          image: {{ include "rr.imageRef" (dict "image" .Values.cockpit.image "what" "cockpit.image") | quote }}
+          imagePullPolicy: {{ .Values.runtime.image.pullPolicy }}
+          securityContext: {{ toYaml .Values.cockpit.securityContext | nindent 12 }}
           env:
             - name: RDO_RUNTIME_URL
               value: "http://{{ include "rr.fullname" . }}:{{ .Values.runtime.http.port }}"
+            - name: HOME
+              value: /tmp
           ports:
             - { name: http, containerPort: {{ .Values.cockpit.service.port }} }
+          readinessProbe:
+            tcpSocket: { port: http }
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: http }
+            periodSeconds: 20
+          resources: {{ toYaml .Values.cockpit.resources | nindent 12 }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: {{ .Values.runtime.scratch.tmpSize }} }
 ---
 apiVersion: v1
 kind: Service

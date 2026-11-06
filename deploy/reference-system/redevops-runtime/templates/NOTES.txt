@@ -1,10 +1,11 @@
-ReDevOps Runtime Reference System — {{ .Chart.Version }} (appVersion {{ .Chart.AppVersion }})
+ReDevOps Runtime Reference System — {{ .Chart.Version }}
 
 The stack is installed as a governed deployment mission. The post-install verification hook
 ({{ include "rr.fullname" . }}-verify) has already asserted the acceptance checks; if it failed,
 this release failed with it — that is the point.
 
-Runtime service:   {{ include "rr.fullname" . }}:{{ .Values.runtime.http.port }}   (HTTP{{ if .Values.runtime.grpc.enabled }} + gRPC {{ .Values.runtime.grpc.port }}{{ end }})
+Runtime service:   {{ include "rr.fullname" . }}:{{ .Values.runtime.http.port }}   (HTTP{{ if .Values.runtime.grpc.enabled }} + gRPC {{ .Values.runtime.grpc.port }}{{ end }}; {{ .Values.runtime.service.type }}, no Ingress)
+Runtime image:     {{ include "rr.runtimeImage" . }}
 Retrieval:         {{ .Values.retriever.backend }}{{ if and (eq .Values.retriever.backend "pgvector") .Values.retriever.pgvector.bundled.enabled }} (bundled pgvector){{ end }}
 Model endpoint:    {{ include "rr.modelEndpoint" . | default "(none — missions still run; narration/answer arms disabled)" }}
 {{- if .Values.model.server.enabled }}
@@ -17,6 +18,26 @@ Cockpit UI:        kubectl -n {{ .Release.Namespace }} port-forward svc/{{ inclu
 Smoke it:
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "rr.fullname" . }} {{ .Values.runtime.http.port }}:{{ .Values.runtime.http.port }} &
   curl localhost:{{ .Values.runtime.http.port }}/health
+
+Security posture of this release (docs/release/CONTAINER_ACCEPTANCE_CRITERIA.md):
+  * non-root (uid 10001), all capabilities dropped, no privilege escalation, seccomp RuntimeDefault, read-only root
+    filesystem with explicit writable volumes, no service-account token mounted.
+{{- if .Values.networkPolicy.enabled }}
+  * default-deny NetworkPolicy: only this release's verify hook{{ if .Values.cockpit.enabled }} and cockpit{{ end }} (plus networkPolicy.ingress.from) can reach the runtime.
+{{- else }}
+  * WARNING: networkPolicy.enabled=false: nothing restricts who can reach the runtime inside the cluster.
+{{- end }}
+{{- if not .Values.runtime.controlTokenSecret }}
+  * WARNING: runtime.controlTokenSecret is not set: the runtime's mutating routes answer 503 (fail closed) and only
+    /health works. Create a Secret with key AGENTIC_OS_CONTROL_TOKEN and set runtime.controlTokenSecret to its name.
+{{- end }}
+{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.egress.restrict (or .Values.model.endpoint .Values.telemetry.otel.enabled .Values.retriever.pgvector.dsn .Values.retriever.pgvector.dsnSecret .Values.security.siemEndpoint .Values.security.credentialBroker.vault.addr) }}
+  * WARNING: external endpoints are configured (model, OTLP, Postgres, SIEM or Vault) but the runtime egress is restricted to
+    DNS and this release's own services. Allow them with networkPolicy.egress.extraRules or they will not be reachable.
+{{- end }}
+{{- if and .Values.runtime.image.tag (not .Values.runtime.image.digest) }}
+  * NOTE: the image is referenced by a version tag, which a registry can re-point. Prefer runtime.image.digest (sha256:...).
+{{- end }}
 
 What makes this a Reference System and not just a chart: execution inside the stack is deterministic,
 replayable and provenance-carrying (deny-by-default grants, an event-sourced ledger, verification on),

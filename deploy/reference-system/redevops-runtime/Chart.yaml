@@ -7,8 +7,10 @@ description: >-
   itself is a governed, verifiable Mission, and execution inside the stack is deterministic,
   replayable and provenance-carrying. Runs on any Kubernetes; ROCm/Instinct-ready.
 type: application
-version: 0.3.1
-appVersion: "0.3.1"
+# 0.4.0-pre.1: BREAKING chart (no default image, hardened pods, NetworkPolicy; see README "Upgrading from chart 0.3.x").
+# The owner sets the final chart version at release. There is deliberately no appVersion: the image is chosen by
+# runtime.image.digest / runtime.image.tag, and the previous appVersion "0.3.1" named an affected image.
+version: 0.4.0-pre.1
 keywords:
   - redevops
   - context-runtime
