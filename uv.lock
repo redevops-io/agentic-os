@@ -71,7 +71,7 @@ requires-dist = [
     { name = "agentic-os", extras = ["projects"], marker = "extra == 'slack'" },
     { name = "cryptography", specifier = ">=42" },
     { name = "discovery-runtime", git = "https://github.com/redevops-io/discovery-runtime.git?rev=v0.1.19" },
-    { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=1.0" },
+    { name = "duckdb", marker = "extra == 'duckdb'", specifier = "==1.5.5" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=4.0" },
     { name = "google-auth", marker = "extra == 'gsc'", specifier = ">=2.0" },

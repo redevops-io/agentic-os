@@ -33,7 +33,7 @@ dependencies = [
 dev = ["pytest>=8.0"]
 # Durable event-store backends (the event log is also the audit log). Optional: the default
 # store is zero-dependency in-memory/JSONL. See agentic_os.mission.event_backends.
-duckdb = ["duckdb>=1.0"]         # embedded single-file ledger (standalone)
+duckdb = ["duckdb==1.5.5"]        # embedded single-file ledger (standalone); pinned to the version uv.lock resolves and the evidence-boundary tests use
 # Google Search Console search-performance sensor (content search signals). Optional: the
 # behavior sensor (Umami) works without it. See agentic_os.integrations.gsc.
 gsc = ["google-auth>=2.0", "requests>=2.28"]
