@@ -229,6 +229,8 @@ stage_layers() {
     docker history --no-trunc --format '{{.CreatedBy}}' "$REG/$n@$ad" > "$OUT/scans/$n-$a.history.txt"
     docker save "$REG/$n@$ad" -o "$W/$n-$a.tar"
     python3 -I "$TOOLS" secretscan "$W/$n-$a.tar" > "$OUT/scans/$n-$a.secretscan.json"
+    python3 -I "$TOOLS" layer-scan "$W/$n-$a.tar" "$REPO/scripts/check_private_topology.py" > "$OUT/scans/$n-$a.layerscan.json"
+    python3 -I "$TOOLS" config-check "$REG/$n@$ad" "$OCI_VERSION_LABEL" "$REVISION" "$n" > "$OUT/scans/$n-$a.configcheck.json" || true
     python3 -I -c "
 import json
 d=json.load(open('$OUT/scans/$n-$a.secretscan.json'))
@@ -240,6 +242,28 @@ print(json.dumps({'image':'$n','arch':'$a','layers':d['layers'],'user':d['config
 import json,sys
 for l in sys.stdin:
     d=json.loads(l); print(d['image'],d['arch'],'user=%s healthcheck=%s name_hits=%d pattern_hits=%d history_secret_like=%d' % (d['user'],d['healthcheck'],len(d['suspicious_file_names']),len(d['pattern_hits']),len(d['history_secret_like'])))"
+
+  say "layers: private-identifier scan and configuration check"
+  python3 -I - "$OUT/scans" > "$R/layer-scan-summary.txt" <<'PYEOF' || { cat "$R/layer-scan-summary.txt"; say "layers FAILED: private identifier, secret-like file or configuration problem in an image"; return 1; }
+import glob, json, sys
+bad = 0
+for f in sorted(glob.glob(sys.argv[1] + "/*.layerscan.json")):
+    d = json.load(open(f)); name = f.rsplit("/", 1)[1][:-len(".layerscan.json")]
+    SP = "usr/local/lib/python3.12/site-packages/"
+    own = [h for h in d["hits"] if h["path"].startswith(("app/", SP + "agentic_os/", SP + "runtime_contracts/", SP + "discovery_runtime/", SP + "knowledge_frontier/", SP + "redevops_"))]
+    print(name, "files=%d hits=%d own_code_hits=%d secret_like_names=%d" % (d["text_files_scanned"], len(d["hits"]), len(own), len(d["secret_like_file_names"])))
+    for h in d["hits"][:40]:
+        print("   ", h["category"], h["path"], h["line"], h["literal"])
+    bad += len(own) + len(d["secret_like_file_names"])
+for f in sorted(glob.glob(sys.argv[1] + "/*.configcheck.json")):
+    try:
+        d = json.load(open(f))
+    except ValueError:
+        print(f, "UNREADABLE"); bad += 1; continue
+    print(f.rsplit("/", 1)[1], "problems:", d["problems"] or "none"); bad += len(d["problems"])
+sys.exit(1 if bad else 0)
+PYEOF
+  cat "$R/layer-scan-summary.txt"
 }
 
 cosign_env() { COSIGN_PASSWORD=$(cat "$K/password") "$@"; }
@@ -328,7 +352,8 @@ services:
   runtime:
     image: $REG/redevops-runtime@$ridx
     ports: ["127.0.0.1:55303:8080"]
-    environment: ["AGENTIC_OS_HOME=/data"]
+    # the grant store refuses to start without its key: supply it from a secret store (a throwaway value here)
+    environment: ["AGENTIC_OS_HOME=/data", "PERMISSIONS_KEY=\${PERMISSIONS_KEY:?set PERMISSIONS_KEY}"]
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -338,7 +363,6 @@ services:
   projects:
     image: $REG/redevops-projects@$pidx
     ports: ["127.0.0.1:55304:8787"]
-    environment: ["PROJECTS_ALLOWED_HOSTS=127.0.0.1:55304"]
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -362,7 +386,7 @@ spec:
       containers:
         - name: runtime
           image: $REG/redevops-runtime@$ridx
-          env: [{name: AGENTIC_OS_HOME, value: /data}]
+          env: [{name: AGENTIC_OS_HOME, value: /data}, {name: PERMISSIONS_KEY, valueFrom: {secretKeyRef: {name: redevops-permissions-key, key: PERMISSIONS_KEY}}}]
           ports: [{name: http, containerPort: 8080}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           readinessProbe: {httpGet: {path: /health, port: http}, initialDelaySeconds: 5}
@@ -372,6 +396,7 @@ spec:
 EOF
   echo "note: k8s.yaml is an example only: not applied and not schema-validated (no cluster)" | tee -a "$R/verify.txt"
   # run the digest-pinned compose example as a consumer would (verification above already passed)
+  export PERMISSIONS_KEY; PERMISSIONS_KEY=$(openssl rand -base64 32)      # throwaway, never printed
   docker compose -p $NAME_PREFIX-consumer -f "$OUT/consumer/compose.yaml" up -d --pull always > "$L/compose-up.log" 2>&1 || { echo "POSITIVE-TEST-FAILED: compose up" | tee -a "$R/verify.txt"; POS_BAD=1; }
   local ok=0
   for i in $(seq 1 100); do
@@ -395,7 +420,7 @@ stage_run() {
     [ "$a" = arm64 ] && hp=$lp || hp=$((lp + 100))
     docker rm -f "$cn" > /dev/null 2>&1 || true
     extra=(--read-only --cap-drop ALL --security-opt no-new-privileges:true --tmpfs /tmp)
-    if [ "$n" = redevops-runtime ]; then extra+=(-e AGENTIC_OS_HOME=/data --tmpfs /data:uid=10001,gid=10001 --tmpfs /app/.agentic-os:uid=10001,gid=10001); else extra+=(-e "PROJECTS_ALLOWED_HOSTS=127.0.0.1:$hp" --tmpfs /home/app:uid=10001,gid=10001); fi
+    if [ "$n" = redevops-runtime ]; then extra+=(-e AGENTIC_OS_HOME=/data -e "PERMISSIONS_KEY=$(openssl rand -base64 32)" --tmpfs /data:uid=10001,gid=10001 --tmpfs /app/.agentic-os:uid=10001,gid=10001); else extra+=(--tmpfs /home/app:uid=10001,gid=10001); fi
     t0
     docker run -d --name "$cn" --platform "linux/$a" -p "127.0.0.1:$hp:$cp" --label $NAME_PREFIX=1 "${extra[@]}" "$REG/$n@$ad" > /dev/null
     st=starting
