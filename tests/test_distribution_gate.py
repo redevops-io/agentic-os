@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from .about_fixture import Signer, signer  # noqa: F401  (signer is a pytest fixture)
+
 ROOT = Path(__file__).resolve().parents[1]
 GATE_PY = ROOT / "packaging" / "check-distribution-gate.py"
 GATE_JSON = ROOT / "packaging" / "distribution-gate.json"
@@ -35,8 +37,10 @@ def _env(**extra):
     return env
 
 
-def _run(*args, gate_file=None, **env):
+def _run(*args, gate_file=None, allowed=None, **env):
     cmd = [sys.executable, "-I", str(GATE_PY), *args]
+    if allowed:
+        cmd += ["--allowed-signers", str(allowed)]
     if gate_file:
         cmd += ["--gate", str(gate_file), "--root", str(Path(gate_file).parent)]   # records of a test gate live beside it
     return subprocess.run(cmd, capture_output=True, text=True, env=_env(**env), timeout=60)
@@ -46,10 +50,13 @@ def _decisions():
     return json.loads(GATE_JSON.read_text(encoding="utf-8"))["decisions"]
 
 
-def _decided(d, tmp_path):
+def _decided(d, tmp_path, signer=None):
+    """A DECIDED copy of `d` with an invented record in tmp_path. With `signer` (a THROWAWAY test key) the record is also signed."""
     d = copy.deepcopy(d)
     record = tmp_path / f"{d['id']}.signed.txt"
-    record.write_text("signed by the owner\n")
+    record.write_text(f"redevops-legal-decision: 1\ndecision: {d['id']}\noption: {d['options'][0]['key']}\n\nsigned by the owner\n")
+    if signer is not None:
+        signer.sign(record)
     d.update(status="DECIDED", chosen_option=d["options"][0]["key"], decision_reference=record.name,
              decision_sha256=hashlib.sha256(record.read_bytes()).hexdigest(), decided_by="owner",
              decided_on="2026-12-01")
@@ -58,9 +65,12 @@ def _decided(d, tmp_path):
     return d
 
 
-def _write(tmp_path, decisions):
+def _write(tmp_path, decisions, signer=None):
     p = tmp_path / "gate.json"
-    p.write_text(json.dumps({"schema": 1, "decisions": decisions}))
+    doc = {"schema": 1, "decisions": decisions}
+    if signer is not None:
+        doc["legal_signer_fingerprints"] = [signer.fingerprint]       # the gate file pins the key of the allowed-signers file
+    p.write_text(json.dumps(doc))
     return p
 
 
@@ -120,8 +130,13 @@ def test_only_empty_or_zero_means_a_private_build_everything_else_is_distributio
     """Fail closed (round 4, R4-09): any other value, including 'on', 'enabled', 'y', 'false' and 'no', is a distribution build."""
     for v in ("", "0"):
         assert _run("--platform", "macos", REDEVOPS_DISTRIBUTION_BUILD=v).returncode == 0
-    assert gate.is_distribution(False, {"REDEVOPS_DISTRIBUTION_BUILD": " 0 "}) is False
-    for v in ("1", "true", "yes", "on", "enabled", "y", "false", "no", "TRUE", "2", "off"):
+    # RC3-03: no trimming. Whitespace-padded values are NOT private (the nit accepted in round 5 is closed)
+    for v in (" 0 ", "0 ", " 0", " ", "\t", "0\n", "00", "\u00a0"):
+        assert gate.is_distribution(False, {"REDEVOPS_DISTRIBUTION_BUILD": v}) is True, repr(v)
+    assert gate.is_distribution(False, {}) is False and gate.is_distribution(False, {"REDEVOPS_DISTRIBUTION_BUILD": ""}) is False
+    assert gate.is_distribution(False, {"REDEVOPS_DISTRIBUTION_BUILD": "0"}) is False
+    assert gate.is_distribution(True, {"REDEVOPS_DISTRIBUTION_BUILD": "0"}) is True        # the flag wins
+    for v in ("1", "true", "yes", "on", "enabled", "y", "false", "no", "TRUE", "2", "off", " ", "0 "):
         assert gate.is_distribution(False, {"REDEVOPS_DISTRIBUTION_BUILD": v}) is True, v
         r = _run("--platform", "macos", REDEVOPS_DISTRIBUTION_BUILD=v)
         assert r.returncode == 1 and "DISTRIBUTION BUILD REFUSED" in r.stderr, v
@@ -136,18 +151,27 @@ def test_a_forged_decision_record_is_not_accepted(tmp_path):
         assert _run("--platform", "all", "--distribution", gate_file=_write(tmp_path, ds)).returncode == 2, bad
 
 
-def test_a_non_default_gate_file_says_it_is_not_valid_for_signing(tmp_path):
-    ds = [_decided(d, tmp_path) if d["blocks_distribution"] else d for d in _decisions()]
-    r = _run("--platform", "all", "--distribution", gate_file=_write(tmp_path, ds))
+def test_a_non_default_gate_file_says_it_is_not_valid_for_signing(tmp_path, signer):
+    ds = [_decided(d, tmp_path, signer) if d["blocks_distribution"] else d for d in _decisions()]
+    r = _run("--platform", "all", "--distribution", gate_file=_write(tmp_path, ds, signer), allowed=signer.allowed)
     assert r.returncode == 0 and "NOT valid for signing" in r.stderr
 
 
-def test_all_blockers_decided_with_a_written_record_passes(tmp_path):
+def test_all_blockers_decided_with_a_signed_written_record_passes(tmp_path, signer):
+    ds = [_decided(d, tmp_path, signer) if d["blocks_distribution"] else d for d in _decisions()]
+    p = _write(tmp_path, ds, signer)
+    r = _run("--platform", "all", "--distribution", gate_file=p, allowed=signer.allowed)
+    assert r.returncode == 0, r.stderr
+    assert "DECIDED with a written record" in r.stdout and "valid detached signature" in r.stdout
+
+
+def test_all_blockers_decided_without_signatures_is_refused_in_a_distribution_build(tmp_path, signer):
+    """RC3-01: the hash match alone proves consistency, not authorship: unsigned records never pass a distribution build."""
     ds = [_decided(d, tmp_path) if d["blocks_distribution"] else d for d in _decisions()]
     p = _write(tmp_path, ds)
-    r = _run("--platform", "all", "--distribution", gate_file=p)
-    assert r.returncode == 0, r.stderr
-    assert "DECIDED with a written record" in r.stdout
+    r = _run("--platform", "all", "--distribution", gate_file=p, allowed=signer.allowed)
+    assert r.returncode == 1 and "no valid detached signature" in r.stderr
+    assert _run("--platform", "all", gate_file=p, allowed=signer.allowed).returncode == 0          # a private build only warns
 
 
 def test_one_open_blocker_is_enough_to_refuse(tmp_path):
@@ -159,11 +183,11 @@ def test_one_open_blocker_is_enough_to_refuse(tmp_path):
     assert r.returncode == 1 and ds[0]["id"] in r.stderr
 
 
-def test_platform_scope_windows_only_blockers_do_not_stop_a_macos_build(tmp_path):
-    ds = [_decided(d, tmp_path) if d["blocks_distribution"] and "windows" not in d["scope"] and d["scope"] != ["qa"] else d
+def test_platform_scope_windows_only_blockers_do_not_stop_a_macos_build(tmp_path, signer):
+    ds = [_decided(d, tmp_path, signer) if d["blocks_distribution"] and "windows" not in d["scope"] and d["scope"] != ["qa"] else d
           for d in _decisions()]
-    p = _write(tmp_path, ds)
-    assert _run("--platform", "macos", "--distribution", gate_file=p).returncode == 0
+    p = _write(tmp_path, ds, signer)
+    assert _run("--platform", "macos", "--distribution", gate_file=p, allowed=signer.allowed).returncode == 0
     r = _run("--platform", "windows", "--distribution", gate_file=p)
     assert r.returncode == 1 and "pins-08" in r.stderr and "D-LIC-9" in r.stderr
     r = _run("--platform", "qa", "--distribution", gate_file=p)

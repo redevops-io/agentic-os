@@ -779,18 +779,31 @@ const fetchImpl = (u, o) => { log.push(['fetch', String(u), (o && o.method) || '
   const status = ok ? 200 : (String(u).endsWith('/api/local/session') ? 401 : 200);
   return Promise.resolve({ ok: status === 200, status, json: () => Promise.resolve({ session_token: 'SESSIONTOKEN', csrf_token: 'CSRFTOKEN' }) }); };
 const sessionStorage = { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = v; }, removeItem: (k) => { delete store[k]; } };
-const created = [];
+class El {
+  constructor(tag) { this.tag = tag; this.attrs = {}; this.children = []; this._text = ''; }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
+  appendChild(c) { this.children.push(c); return c; }
+  set textContent(v) { this._text = String(v); }
+  get textContent() { return [this._text].concat(this.children.map((c) => c.textContent)).filter(Boolean).join(' '); }
+  focus() { document.activeElement = this; }
+  toJSON() { return { tag: this.tag, attrs: this.attrs, text: this._text, children: this.children }; }
+}
+const root = new El('div'); root.attrs.id = 'root';
+const document = { currentScript: { src: 'http://127.0.0.1:8787/local-capability-shim.js' }, activeElement: null,
+  body: new El('body'), head: new El('head'), addEventListener() {},
+  getElementById(id) { return id === 'root' ? root : null; }, createElement(t) { return new El(t); } };
 const window = { fetch: fetchImpl, location, history, sessionStorage };
-const ctx = { window, document: { currentScript: { src: 'http://127.0.0.1:8787/local-capability-shim.js' },
-  body: { appendChild(e){ created.push(e.text); } }, addEventListener(){}, createElement(){ const e = { setAttribute(){}, set textContent(v){ e.text = v; } }; return e; } },
-  location, history, URL, Headers, Object, JSON, Promise };
+const ctx = { window, document, location, history, URL, Headers, Object, JSON, Promise };
 vm.createContext(ctx);
 vm.runInContext(src.replace('window.fetch.bind(window)', 'window.fetch'), ctx);
 (async () => {
   await ctx.window.fetch('/api/projects');
   await ctx.window.fetch('/api/sidekick', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
   await ctx.window.fetch('https://example.org/api/x');
-  console.log(JSON.stringify({ log, store, banner: created.length, texts: created }));
+  const panels = document.body.children;
+  console.log(JSON.stringify({ log, store, banner: panels.length, texts: panels.map((e) => e.textContent), panels,
+    root: root.attrs, styles: document.head.children.length, focus: document.activeElement && document.activeElement.tag }));
 })();
 """
 
@@ -841,18 +854,76 @@ def test_shim_resumes_a_reloaded_tab_from_session_storage_and_a_new_tab_needs_a_
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
-def test_shim_banner_tells_a_user_what_to_press_and_what_does_not_sign_in(tmp_path):
-    """Text only (R0-prime decision 5): the banner names the launcher button and the three things that cannot sign in on their own."""
+def test_shim_signed_out_panel_tells_a_user_what_to_press_and_what_does_not_sign_in(tmp_path):
+    """Text (R0-prime decision 5, U-02): the sign-in panel names the launcher button and the three things that
+    cannot sign in on their own; the developer sentence is behind a <details>; the window is called
+    "Agentic Apps R0-prime"."""
     r = _run_shim(tmp_path, "none")
     assert len(r["texts"]) == 1
     text = r["texts"][0]
-    assert text.startswith("Not signed in to the local Agentic Apps service")
+    assert "Not signed in to the local Agentic Apps service" in text
     assert 'press "Start & open"' in text                                          # the launcher button (deploy/launcher/ui/index.html)
     for word in ("bookmark", "restored tab", "second tab", "works once", "one-time URL"):
         assert word in text, word
+    assert "Agentic Apps R0-prime window" in text and "ReDevOps" not in text
     assert "#lc=" not in text and "secret" not in text.lower()                      # never mentions a credential value
     ui = (ROOT / "deploy" / "launcher" / "ui" / "index.html").read_text(encoding="utf-8")
-    assert "Start &amp; open" in ui                                                # the button the banner names exists
+    assert "Start &amp; open" in ui                                                # the button the panel names exists
+
+
+def _walk(node):
+    yield node
+    for c in node["children"]:
+        yield from _walk(c)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_shim_signed_out_panel_structure_replaces_the_dead_shell_and_takes_focus(tmp_path):
+    """U-02: ONE <main> with an <h1> that takes focus, a role=alert message, the developer sentence in a closed
+    <details>, the About hook as a relative link, and the dead UI shell (#root) hidden + inert. No fixed strip."""
+    r = _run_shim(tmp_path, "none")
+    assert r["banner"] == 1 and r["root"].get("hidden") == "" and r["root"].get("inert") == ""
+    assert r["root"].get("aria-hidden") == "true"
+    assert r["focus"] == "h1"
+    panel = r["panels"][0]
+    nodes = list(_walk(panel))
+    assert panel["tag"] == "main" and panel["attrs"]["id"] == "agentic-signin"
+    assert [n["text"] for n in nodes if n["tag"] == "h1"] == ["Sign in from the Agentic Apps R0-prime window"]
+    alerts = [n for n in nodes if n["attrs"].get("role") == "alert"]
+    assert len(alerts) == 1 and "Not signed in to the local Agentic Apps service" in " ".join(
+        c["text"] for c in alerts[0]["children"])
+    details = [n for n in nodes if n["tag"] == "details"]
+    assert len(details) == 1 and "open" not in details[0]["attrs"]
+    dev_text = " ".join(n["text"] for n in _walk(details[0]))
+    assert "serve command" in dev_text and "container" in dev_text and "one-time URL" in dev_text
+    assert not any("serve command" in n["text"] for n in nodes if n not in list(_walk(details[0])))
+    links = [n for n in nodes if n["tag"] == "a"]
+    assert [(n["attrs"]["href"], n["text"]) for n in links] == [("./about/", "About and licences")]
+    assert r["styles"] == 1
+    css = [c for c in nodes if c["tag"] == "main"]
+    assert css                                                                       # (style lives in <head>)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_shim_signed_in_paths_do_not_show_the_panel(tmp_path):
+    for mode in ("code", "reload"):
+        r = _run_shim(tmp_path, mode)
+        assert r["banner"] == 0 and r["root"] == {"id": "root"}
+
+
+def test_shim_keeps_the_csp_as_strict_as_before():
+    """The panel is built with DOM APIs and one <style> element: no inline script, no eval, no inline event
+    handler attributes and no new network request in the shim; the CSP string is unchanged."""
+    js = (ROOT / "agentic_os" / "local_capability_shim.js").read_text(encoding="utf-8")
+    assert not re.search(r"\beval\(|new Function\(|innerHTML|insertAdjacentHTML|document\.write|setTimeout\(\s*[\"']", js)
+    assert not re.search(r"\bon[a-z]+\s*=", js.replace("onerror", ""))
+    assert js.count("origFetch(") == 4                                           # unchanged: exchange, resume, wrapper pass-through x2
+    assert "XMLHttpRequest" not in js and "sendBeacon" not in js and "new WebSocket" not in js
+    app, *_ = make()
+    assert client(app).get("/").headers["content-security-policy"] == (
+        "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+        "font-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; "
+        "frame-ancestors 'none'; object-src 'none'")
 
 
 # --------------------------------------------------------------------------- real processes

@@ -5,8 +5,7 @@ Never put a key, token, password, certificate password, Apple credential or ssh-
 public facts (hashes, a Team ID, a certificate CN, a fingerprint, dates) and the NAMES of things you export in your own shell.
 
 **The scope file is a TRIPWIRE against mistakes, not an authentication** (procedure section 3.4): anyone who can write a text file can make one that passes. Your own terminal, keychain identity,
-notarytool profile, `az` login and ssh-agent are what authenticate a real run; no script and no agent holds them. Scope files are **version 2** (below): a UTC window of at most 24 hours, a one-time ledger,
-commit ids, the evidence manifest digest and the hashes of the shared library, `identity.json` and the distribution gate are part of them.
+notarytool profile, `az` login and ssh-agent are what authenticate a real run; no script and no agent holds them. Scope files are **version 3** for the macOS and Windows scripts and **version 2** for the SSHSIG manifest script (below; the exact key lists are checked against the scripts by a test): a UTC window of at most 24 hours, a one-time ledger keyed on the scope file AND on the input artifact, the hashes of the shared library, `identity.json`, the distribution gate and (version 3) the About check and the signer list are part of them. Section 5a lists which fields the scripts check and which only you attest.
 
 How a scope file works: you write the facts below as `KEY=VALUE` lines in a plain text file (`#` comments allowed, no other syntax, unknown or repeated keys are refused). You give the SHA-256 of
 that file to the script as `--i-have-owner-authorization <sha256>` and the file as `--scope-file`. The script compares every fact with what it is about to use and refuses on any difference, so an
@@ -22,10 +21,10 @@ review but cannot approve it.
 * This is a PRIVATE candidate signing: [ ] yes (scope `distribution=no`; the run prints the open decisions and the statement that signing does not imply permission to distribute)  [ ] no, it is a DISTRIBUTION candidate (scope `distribution=yes` and `--distribution`: the script runs `check-distribution-gate.py --platform <p> --distribution` itself and refuses while any blocker is OPEN; decisions recorded in `docs/legal/OWNER_DECISION_FORM.md`).
 * Signing does not publish, tag, release or upload anything except what a block below names. Where the signed files may be stored afterwards: ______________________
 * Time window of this session (UTC): from ____-__-__T__:__:__Z to ____-__-__T__:__:__Z (at most 24 hours; the scripts refuse a longer one). Outside it nothing may be signed under this authorization.
-* Ledger DIRECTORY (absolute path, outside the repository, created by the script; hash-chained events; a scope file already claimed in it is refused unless `--allow-reuse` is given and recorded): ______________________
-* Build commit (40 hex, the commit the dmg/installers were built from) and procedure commit (40 hex, the commit of `packaging/signing`): ______________________ / ______________________ (recorded in the evidence, not verified by the scripts)
+* Ledger DIRECTORY (absolute path, outside the repository, created by the script; hash-chained events; a scope file already claimed in it is refused unless `--allow-reuse` is given and recorded; so is a second real run for the same INPUT ARTIFACT, even with a new scope file: claims/<artifact key>): ______________________
+* Build commit (40 hex, the commit the dmg/installers were built from) and procedure commit (40 hex, the commit of `packaging/signing`): ______________________ / ______________________ (the build commit IS verified, see section 5a: macOS `--real` against the `source.commit` of the about.json inside the dmg, Windows `container` stage against the Licenses folder you pass; the Windows `inner` stage and the SSHSIG script verify nothing; the procedure commit binds nothing at run time and is only printed in the evidence)
 * Who runs the commands, at their own terminal: ______________________ . Who reviews the output (not the person who ran it): ______________________
-* Evidence set the dmg belongs to (directory, manifest sha256 obtained out of band): ______________________ / ______________________________________________________________
+* Evidence set the dmg belongs to (directory, manifest sha256 obtained out of band; the manifest digest in the scope is format-checked and recorded, it binds nothing at run time: you and the reviewer compare it): ______________________ / ______________________________________________________________
 
 ---------------------------------------------------------------------------------------------------------------------------------------
 
@@ -40,6 +39,7 @@ Notarize: submit the signed dmg to the Apple notary service (THIS UPLOADS THE SI
 | Input dmg name as built (the script derives the output name from `packaging/identity.json`) | |
 | Script sha256 (`shasum -a 256 packaging/signing/sign_and_notarize_r0prime_macos_v3.sh`) and `signing-common.sh` sha256 | |
 | `packaging/identity.json` sha256; `packaging/distribution-gate.json` sha256; `packaging/check-distribution-gate.py` sha256 | |
+| RC3 About pins (scope_version 3): sha256 of `packaging/notices/check_about.py`, `packaging/notices/generate_about.py`, `agentic_os/about_record.py` and `packaging/legal-allowed-signers`; the build commit (40 hex) must be the `source.commit` of the about.json inside the artifact | |
 | Evidence manifest sha256 of the evidence set this dmg belongs to (obtained out of band) | |
 | Entitlement plist sha256 (`packaging/macos/sidecar.entitlements.plist`) | |
 | Identity: sha256 of the EXACT identity string you will export (`printf '%s' "$R0P_CODESIGN_IDENTITY" \| shasum -a 256`) | |
@@ -50,9 +50,17 @@ Notarize: submit the signed dmg to the Apple notary service (THIS UPLOADS THE SI
 | Where the signed dmg may be kept | |
 | Entitlement decision: the sidecar-only `com.apple.security.cs.disable-library-validation` is accepted for THIS named build, residual risk R1 read | [ ] accepted |
 
+**RC3 (scope_version 3, macOS and Windows scope files only; the SSHSIG manifest script keeps scope_version 2 and now also claims the manifest in the ledger).** The About check
+that runs inside `--real` is pinned like everything else that executes: the scope binds `check_about_sha256`, `generate_about_sha256`,
+`about_record_sha256` and `legal_signers_sha256` (and, as before, `gate_tool_sha256` for `check-distribution-gate.py`). The checker runs as
+`python -I -B` from a private copy of those files made in the script's work directory and re-hashed after copying. The `source.commit` in the
+about.json inside the artifact must equal the scope's `build_commit`; a mismatch refuses the run before anything is signed. `legal_signers_sha256`
+binds the signer list only as repository data: the owner confirms the key fingerprints in `legal_signer_fingerprints` against an independent
+channel (their published key page) before a distribution run.
+
 Scope file `scope-macos.txt`:
 ```
-scope_version=2
+scope_version=3
 not_before=YYYY-MM-DDTHH:MM:SSZ
 not_after=YYYY-MM-DDTHH:MM:SSZ
 script_sha256=<script sha256>
@@ -71,6 +79,10 @@ gate_tool_sha256=<packaging/check-distribution-gate.py sha256>
 evidence_manifest_sha256=<manifest sha256>
 build_commit=<40 hex>
 procedure_commit=<40 hex>
+check_about_sha256=<packaging/notices/check_about.py sha256>
+generate_about_sha256=<packaging/notices/generate_about.py sha256>
+about_record_sha256=<agentic_os/about_record.py sha256>
+legal_signers_sha256=<packaging/legal-allowed-signers sha256>
 ```
 (`notarize=no`, `upload_to=none` and `notary_profile_sha256=none` for a sign-only run; then do not pass `--notarize`. `distribution=yes` only together with `--distribution`.)
 
@@ -80,7 +92,7 @@ read -r R0P_CODESIGN_IDENTITY; read -r R0P_NOTARY_PROFILE; export R0P_CODESIGN_I
 packaging/signing/sign_and_notarize_r0prime_macos_v3.sh --real --notarize --i-have-owner-authorization "$(shasum -a 256 scope-macos.txt | awk '{print $1}')" \
     --scope-file scope-macos.txt --ledger <absolute ledger path> --input-dmg <copy of the dmg> --expected-sha256 <input dmg sha256> --out-dir <new directory>
 ```
-I understand: one submission only; a failed or timed-out submission is never retried or re-uploaded without my explicit new OK; the output of a failed run is never used.
+I understand: one submission only; a failed or timed-out submission is never retried or re-uploaded without my explicit new OK; the output of a failed run is never used. The ledger enforces this per same input artifact (the sha256 of the input dmg): a second real run for the same dmg is refused even when the scope file is a new one, unless I pass `--allow-reuse` myself (the repeat is recorded in the ledger); a failed or timed-out run burns the artifact claim as it burns the scope claim.
 
 Signed: ______________________  Date: ____-__-__
 
@@ -103,7 +115,7 @@ What: Authenticode-sign the files listed below with the secure timestamp. [ ] ap
 
 Scope file `scope-win-inner.txt`:
 ```
-scope_version=2
+scope_version=3
 not_before=YYYY-MM-DDTHH:MM:SSZ
 not_after=YYYY-MM-DDTHH:MM:SSZ
 script_sha256=<script sha256>
@@ -122,6 +134,10 @@ distribution=no
 evidence_manifest_sha256=<manifest sha256>
 build_commit=<40 hex>
 procedure_commit=<40 hex>
+check_about_sha256=<packaging/notices/check_about.py sha256>
+generate_about_sha256=<packaging/notices/generate_about.py sha256>
+about_record_sha256=<agentic_os/about_record.py sha256>
+legal_signers_sha256=<packaging/legal-allowed-signers sha256>
 tool_az_sha256=<sha256 of the az executable the fixed PATH + R0P_TOOLS_DIR resolves to>
 tool_java_sha256=<sha256 of the java executable>
 tool_python_sha256=<sha256 of the python executable given to --python>
@@ -141,7 +157,7 @@ Signed: ______________________  Date: ____-__-__
 
 Same table and scope file as section 2 with `stage=container`, the two installer names exactly as derived from `packaging/identity.json`, and `inputs_sha256` the hashes of the REBUILT installers (rebuilt from the signed inner files).
 `container_listing_sha256` is the sha256 of the file list of the rebuilt installers made on the Windows build host (pass it with `--container-listing FILE`). The container signing does NOT inspect the installers; you or the reviewer check that
-list (inner file hashes equal to the signed ones) before the run.
+list (inner file hashes equal to the signed ones) before the run. **RC3: `--real --stage container` also REQUIRES `--licenses-dir DIR`**, the `Licenses` folder of the installer tree from the build host: its `about.json` sha256 must appear in the container listing, and `check_about.py` (pinned by the scope, run from a private verified copy) checks it against the repository (gate, identity, versions, its own manifest, the scope's `build_commit` equal to its `source.commit`, and with `--distribution` a distribution record with valid signatures). Pass `--licenses-dir` only with `--real --stage container`. The script does not tie the folder to the installers except through the listing, does not examine the sidecar's embedded copy, and does not check that the record's platform is Windows.
 [ ] approved. This stage is run inside the same certificate period and authorization window as stage `inner` where possible.
 
 Signed: ______________________  Date: ____-__-__
@@ -175,11 +191,26 @@ build_commit=<40 hex>
 procedure_commit=<40 hex>
 ```
 (The published release fingerprint is `SHA256:wUoE8wxKJpmtTH7GqWXMIl9/BW0SH1Isc5/w9HEiwqA`; confirm it with `ssh-keygen -lf <public key>`.) Pass `--ledger <absolute path>`.
+The ledger also claims the manifest (`claims/manifest-<sha256>`): a second real signing of the same manifest needs `--allow-reuse`, even with a new scope file. **Use a separate key for legal decisions**: the owner's ssh-agent signs any namespace, so a legal-decision signer that is also this release key would make the legal gate only as trustworthy as access to the release key; the gate REFUSES the release fingerprint as a legal signer (use a separate legal-decision key).
 I load the key into MY agent myself; no script reads the private key; the key is never exported. The script refuses unless my agent lists the key's fingerprint, and never falls back to a key file.
 
 Signed: ______________________  Date: ____-__-__
 
 ---------------------------------------------------------------------------------------------------------------------------------------
+
+## 5a. Which scope fields and statements are machine-checked, and which are not (RC3, scope_version 3)
+
+**Checked by the scripts at run time (a difference refuses the run):** the exact `scope_version` (3 for macOS and Windows, 2 for SSHSIG), the UTC window (at most 24 hours), `script_sha256`, `common_sha256`, `identity_json_sha256`, `entitlements_sha256` (macOS), `verifier_sha256` (Windows), the input hashes (`input_dmg_sha256`; Windows `stage` and `inputs_sha256`; SSHSIG `manifest_sha256`), `identity_sha256`, `notary_profile_sha256` and `team_id` (macOS), the Azure coordinates and `expected_cn` (Windows), `notarize`/`upload_to` and `distribution` (must equal the flags), `gate_sha256` and `gate_tool_sha256`, the four About pins `check_about_sha256`, `generate_about_sha256`, `about_record_sha256`, `legal_signers_sha256` (the checker runs from a private copy re-hashed against them), the Windows tool hashes and `container_listing_sha256`.
+**`build_commit` is verified** against the `source.commit` of the about.json inside the artifact in exactly these places: the macOS dmg in `--real` (its `Resources/Licenses`), and the Windows `container` stage in `--real` (the folder given with `--licenses-dir`). It is NOT verified in the Windows `inner` stage (there is no record to compare) or by the SSHSIG script; there it is format-checked and recorded.
+**These bind nothing at run time (format-checked and printed in the evidence only):** `procedure_commit` and `evidence_manifest_sha256`. You and the independent reviewer compare them.
+**Owner-attested only (nothing checks them):** where the signed files may be stored, who runs and who reviews, the notarization time-box (the script has its own `--notary-timeout`), the certificate validity window, the quota acknowledgement, the dated frozen-signature check, the entitlement acceptance, the evidence-set directory, the ticks for gates G1 to G10, and the legal-decision signer confirmation below.
+**Not in the scope at all:** `--ledger` (use ONE ledger: a fresh directory defeats the one-use control), `--out-dir`, `--protected-dir`, the notary timeouts, `--tools-dir`, `--ms-root-pem`, `--url`, `--name`.
+
+**Legal-decision signer (before any distribution run).** The legal gate checks detached signatures against `packaging/legal-allowed-signers`, pinned by `legal_signer_fingerprints` in the gate file. Both are repository data. You: (1) choose a separate legal-decision key, NOT the release key (the gate refuses the published release fingerprint, `SHA256:wUoE8wxKJpmtTH7GqWXMIl9/BW0SH1Isc5/w9HEiwqA`, in either list); (2) confirm its fingerprint against an independent channel (your published key page) before the run; this step is a procedure step, not a code guarantee. [ ] done: fingerprint ____________________________________________
+
+**Accepted limits (documented, not fixed in code).**
+1. The About check re-reads some DATA after it was hashed or pinned (the gate file, `identity.json`, `tauri.conf.json`, `Cargo.toml`, `pyproject.toml`, `agentic_os/__init__.py`, `docs/legal/**`, the `.sig` files): a concurrent writer of the same user could swap one between the hash and the read. The code is pinned and run from a private copy; the data is not. Mitigation: run from a clean checkout of the exact commit on the signing host that nobody else writes to.
+2. The About check proves "this record is consistent with the repository and carries the authorized commit", not "this record belongs to this artifact": the record's platform is not compared with the script's platform, `dirty_files` is not enforced, the Windows `inner` stage binds no commit, unlisted extra files in `Licenses/` are not rejected, and the sidecar's embedded copy of the record (what the browser About page serves) is not examined in a signing run (build-all compares it at build time).
 
 ## 5. What this authorization does NOT cover
 

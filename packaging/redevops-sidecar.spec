@@ -37,7 +37,7 @@ datas = collect_data_files("agentic_os")  # includes agentic_os/projects_ui/** (
 import os
 _LIC = os.environ.get("REDEVOPS_LICENSES_DIR")
 if _LIC:
-    for _f in ("LICENSE", "LICENSE-COMMONS-CLAUSE", "LICENSE.md", "LICENSING.md", "THIRD_PARTY_NOTICES.txt"):
+    for _f in ("LICENSE", "LICENSE-COMMONS-CLAUSE", "LICENSE.md", "LICENSING.md", "THIRD_PARTY_NOTICES.txt", "about.json"):
         assert os.path.isfile(os.path.join(_LIC, _f)), f"REDEVOPS_LICENSES_DIR lacks {_f}"
     datas += [(_LIC, "Licenses")]
 

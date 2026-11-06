@@ -76,7 +76,7 @@ python3 -I "$PK/tools/check_bundle_identity.py" --app "$OUT/$APPNAME" --dmg "$OU
   || { echo "the built bundle does not carry the R0-prime identity: see listings/identity-check.txt"; exit 1; }
 cp "$PK"/dist/sbom/* "$OUT/sbom/"; cp "$PK/dist/build-manifest.json" "$OUT/"; cp "$PK/dist/freeze-venv-pip-freeze.txt" "$OUT/environment/"
 L="$ROOT/deploy/launcher/src-tauri/licenses"
-cp "$L"/THIRD_PARTY_NOTICES.txt "$L"/NOTICES_MISSING.md "$L"/NOTICES_MISSING.json "$L"/LICENSES-MANIFEST.json "$OUT/notices/"
+cp "$L"/THIRD_PARTY_NOTICES.txt "$L"/NOTICES_MISSING.md "$L"/NOTICES_MISSING.json "$L"/about.json "$L"/LICENSES-MANIFEST.json "$OUT/notices/"
 cp "$PK/notices/out/notices-report.json" "$OUT/notices/"; cp "$PK/notices/out/crate-sources/fetch-report.json" "$OUT/notices/crate-fetch-report.json"
 cp "$PK/macos/sidecar.entitlements.plist" "$OUT/signing-inputs/"
 python3 -I "$PK/sbom/generate_source_offer.py" --sbom "$PK/dist/sbom/sbom.cdx.json" --out "$OUT/SOURCE-OFFER.md" --template "$PK/SOURCE-OFFER.md" \

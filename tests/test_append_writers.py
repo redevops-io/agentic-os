@@ -216,7 +216,7 @@ ALLOWED_APPENDERS = {
     "apps/compliance/core.py::_append_chained": (1, "the ledger append runs under _ledger_lock"),
     "apps/agentic-privacy/core.py::_audit": (1, "audit append under the app's own store lock (separate change)"),
     "apps/books/seed_erpnext.py::<module>": (1, "a dev seed script's own log file, not a data store"),
-    "deploy/launcher/selftest/run.py::launch": (1, "a Linux/macOS harness redirecting a child process's output to a log"),
+    "deploy/desktop-shell-main/selftest/run.py::launch": (1, "a Linux/macOS harness redirecting a child process's output to a log"),
 }
 
 _FILE_HANDLERS = ("FileHandler", "RotatingFileHandler", "TimedRotatingFileHandler", "WatchedFileHandler")

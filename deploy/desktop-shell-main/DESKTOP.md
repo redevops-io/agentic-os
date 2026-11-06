@@ -132,7 +132,7 @@ the web UI built from the desktop branch, because the pinned UI release predates
 ## Verifying it
 
 ```bash
-cd deploy/launcher/src-tauri
+cd deploy/desktop-shell-main/src-tauri
 cargo test --locked                                    # 31 unit + local-socket tests (policy, secrets, probe, health, deep links)
 cargo build --features selftest,custom-protocol        # the test hook is compiled in ONLY with this feature
 python3 ../selftest/run.py --binary target/debug/redevops-launcher --url http://127.0.0.1:8799 \

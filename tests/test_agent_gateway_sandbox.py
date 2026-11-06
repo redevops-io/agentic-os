@@ -17,6 +17,7 @@ from agentic_os.overlays import Principal
 from agentic_os.agent_gateway import (
     AgentGateway, GatewayPrincipal, GatewayRequest, GatewayStatus, register_sandbox_capability)
 from agentic_os.agent_gateway.registry import CapabilityRegistry
+from agentic_os.mission.membrane import membrane_supported
 
 
 class _FakeSandbox:
@@ -98,4 +99,10 @@ def test_default_backend_runs_a_capability_in_real_containment():
     r = gw.invoke(GatewayRequest(_gp(), "sandbox.execute",
                                  {"capability": "agentic_os.agent_gateway.sandbox:echo_capability",
                                   "inputs": {"x": 1}}))
+    if not membrane_supported():
+        # macOS: the memory ceiling cannot be applied. The gateway must surface the named refusal to the caller and
+        # must not have run the capability (no output), rather than run it uncontained.
+        assert r.status is not GatewayStatus.OK and r.output is None
+        assert r.error.startswith("memory_ceiling_unenforceable") and "RLIMIT_AS" in r.error
+        return
     assert r.status is GatewayStatus.OK and r.output == {"echo": {"x": 1}}

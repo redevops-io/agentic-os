@@ -186,7 +186,7 @@ Licences present in the shipped binaries (from the 405-component notices of the 
 <a id="d-lic-11"></a>
 ## D-LIC-11 Launcher icons and the "Re" mark
 
-Authorship and rights of `deploy/launcher/src-tauri/icons/*` are not recorded in any file (matrix NAT-AS-icons). **Options:** (a) the owner confirms first-party artwork under the family licence; (b) exclude the icons from the licence statement and record their terms. **Recommended default:** (a). **Decides:** owner (a fact only the owner has). **Counsel:** Q29.
+Authorship and rights of `deploy/launcher/src-tauri/icons/*` are not recorded in any file (matrix NAT-AS-icons). **Options:** (a) the owner confirms first-party artwork under the family licence; (b) exclude the icons from the licence statement and record their terms. **Recommended default:** (a). **Decides:** owner (a fact only the owner has). **Counsel:** Q29. **Ships meanwhile (RC3 development):** TEMPORARY neutral artwork generated from code (`scripts/make_neutral_icons.py`, no letters, no third-party content); the previous "Re" mark is not retained while this decision is open. Status: unchanged, OPEN.
 
 ---
 

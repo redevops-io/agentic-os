@@ -112,3 +112,45 @@ def test_success_receipt_is_bound_to_the_envelope():
     r = sb.receipt(e, {"echo": {"x": 1}}, started=1.0, finished=2.0)
     assert r.envelope_binding == e.binding and r.outcome == "executed"
     assert r.side_effect_digest.startswith("rcv1:")
+
+
+# ── platform support probe (from the RC line, kept after the convergence) ─────────────────────────
+# The RC line refused EVERY run on macOS (``ContainmentUnsupported``); origin/main's per-request rule governs the membrane now (a memory
+# ceiling that cannot be applied is refused by name, ``CapabilityUnavailable``; see tests/test_native_posture_and_membrane.py). What
+# remains of the RC work is the platform-level answer the device report uses, tested here.
+import subprocess                                                      # noqa: E402
+import sys                                                             # noqa: E402
+
+from agentic_os.mission import device_posture                          # noqa: E402
+from agentic_os.mission.membrane import membrane_supported             # noqa: E402
+
+
+def test_membrane_is_supported_on_linux_and_not_on_macos():
+    """Pins the probe to the platform, so a wrong 'unsupported' on Linux cannot make the containment tests above pass vacuously."""
+    if sys.platform.startswith("linux"):
+        assert membrane_supported() is True
+    if sys.platform == "darwin":
+        assert membrane_supported() is False
+        reason = device_posture.containment_unsupported_reason()
+        assert "RLIMIT_AS" in reason and "darwin" in reason
+
+
+@pytest.mark.parametrize("plat, supported", [("linux", True), ("darwin", False), ("win32", False)])
+def test_support_probe_by_platform(monkeypatch, plat, supported):
+    monkeypatch.setattr(device_posture, "_host_platform", lambda: plat)
+    assert membrane_supported() is supported
+    assert (device_posture.containment_unsupported_reason() == "") is supported
+
+
+def test_a_ceiling_request_on_a_platform_that_cannot_apply_it_starts_no_process(monkeypatch):
+    """macOS-shaped host: a memory ceiling is requested, none can be applied: refused by name before any child exists."""
+    from agentic_os.mission import membrane
+    monkeypatch.setattr(membrane, "memory_ceiling_enforceable", lambda: False)
+
+    def _no_spawn(*a, **k):
+        raise AssertionError("a process was started although the memory ceiling cannot be enforced")
+    monkeypatch.setattr(subprocess, "run", _no_spawn)
+    monkeypatch.setattr(subprocess, "Popen", _no_spawn)
+    with pytest.raises(membrane.CapabilityUnavailable) as ei:
+        _sandbox().invoke("op", f"{CAP}:echo", {"x": 1}, "idem-1")
+    assert ei.value.capability == "memory_ceiling" and str(ei.value).startswith("memory_ceiling_unenforceable")

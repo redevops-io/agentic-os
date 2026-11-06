@@ -11,6 +11,7 @@ not be collected. It does not say that anything is cleared; open items are in
 | `interim_sbom.py` | stand-in SBOM generator (lock + `cargo metadata` + frozen-archive module list + `components.json`); replace by the real SBOM when the SBOM generator under `packaging/` lands |
 | `components.json` | knowledge no package metadata carries: texts for CPython, OpenSSL, PyInstaller, React, certifi (MPL-2.0), plus the items with no text (each with a reason and a `D-LIC-n` id) |
 | `texts/` | reference licence texts fetched from upstream, with `MANIFEST.json` (source URL, sha256) |
+| `generate_about.py`, `check_about.py` | the About record `about.json` (schema `redevops.about/1`) with the legal-slot machinery, and its closing check; see [../../docs/ABOUT_LEGAL_UI.md](../../docs/ABOUT_LEGAL_UI.md) |
 | `stage_licenses.py` | copies `LICENSE`, `LICENSE-COMMONS-CLAUSE`, `LICENSE.md`, `LICENSING.md` and the generated files into one `Licenses` folder with `LICENSES-MANIFEST.json` |
 | `build-licenses.sh` | the three steps above in one command |
 | `check_artifact_manifest.py` | fails if an unpacked artifact (or a path listing) lacks `Licenses/<file>`; verifies hashes against the manifest |

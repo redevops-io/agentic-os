@@ -8,10 +8,14 @@
 // SCAFFOLD — build/test on a machine with the Rust + Tauri toolchain and a GUI (see ../README.md).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod about;
 mod capability;
+mod guard;
 mod launch;
 mod lifecycle;
 mod opener;
+#[cfg(unix)]
+mod signals;
 
 use launch::Running;
 use lifecycle::StopOutcome;
@@ -226,6 +230,7 @@ fn context() -> tauri::Context {
 fn main() {
     let app = tauri::Builder::default()
         .manage(Server(Mutex::new(None)))
+        .plugin(guard::plugin())
         .invoke_handler(tauri::generate_handler![
             start_native,
             stop_native,
@@ -235,10 +240,37 @@ fn main() {
             docker_available,
             advanced_docker_up,
             advanced_docker_down,
-            advanced_docker_purge
+            advanced_docker_purge,
+            about::about_info,
+            about::about_text
         ])
         .build(context())
         .expect("error while building the ReDevOps launcher");
+
+    // SIGTERM / SIGINT / SIGHUP become a graceful `exit(0)` request so the Exit hook below runs (stops the control
+    // plane, deletes the redirect pages). A second signal, or an exit that does not happen within 5 s, forces the
+    // same cleanup and ends the process. SIGKILL cannot be handled (documented in signals.rs).
+    #[cfg(unix)]
+    {
+        let handle = app.handle().clone();
+        // If the handlers cannot be installed the OS default action stays (no output: this crate prints nothing).
+        let _ = signals::start(move |sig, n| {
+            let h = handle.clone();
+            let force = move || {
+                h.state::<Server>().stop();
+                opener::cleanup_all();
+                std::process::exit(signals::exit_code_for(sig));
+            };
+            if n > 1 {
+                force();
+            }
+            handle.exit(0);
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                force();
+            });
+        });
+    }
 
     app.run(|app_handle, event| {
         // Quit (Cmd+Q, last window closed, tray/menu quit): never leave the control plane behind.
@@ -252,6 +284,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
 
     /// R0-prime defect c: the UI calls `window.__TAURI__.core.invoke`, which only exists when the
     /// global API script is compiled in (`app.withGlobalTauri`). v0.3.2 shipped without it (0
@@ -266,5 +299,290 @@ mod tests {
             "no global API script embedded in the context"
         );
         assert!(dump.contains("__TAURI_IIFE__"), "the embedded script is not the global API bundle");
+    }
+
+    /// The launcher webview CSP (RC3). The exact string is pinned here, in tauri.conf.json (compared by
+    /// tests/test_launcher_tauri_config.py) and in the headless-browser test, which serves the page with it.
+    const EXPECTED_CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; connect-src ipc: http://ipc.localhost; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'";
+
+    fn text_of(assets: &dyn tauri::Assets<tauri::Wry>, name: &str) -> String {
+        let key: tauri::utils::assets::AssetKey = name.into();
+        String::from_utf8(assets.get(&key).unwrap_or_else(|| panic!("{name} is not embedded")).into_owned()).unwrap()
+    }
+
+    #[test]
+    fn the_launcher_csp_is_compiled_in_exactly_as_configured() {
+        let ctx = context();
+        match &ctx.config().app.security.csp {
+            Some(tauri::utils::config::Csp::Policy(p)) => assert_eq!(p, EXPECTED_CSP),
+            other => panic!("app.security.csp must be the policy string, got {other:?}"),
+        }
+        // dev builds must not run under a different (looser) policy
+        assert!(ctx.config().app.security.dev_csp.is_none(), "no separate devCsp");
+        for forbidden in ["'unsafe-inline'", "'unsafe-eval'", "'wasm-unsafe-eval'", "*", "blob:", "filesystem:", "http:", "https:", "ws:", "wss:", "'strict-dynamic'"] {
+            assert!(!EXPECTED_CSP.split_whitespace().any(|t| t.trim_end_matches(';') == forbidden), "{forbidden}");
+        }
+        for must in ["default-src 'none'", "script-src 'self'", "style-src 'self'", "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'"] {
+            assert!(EXPECTED_CSP.contains(must), "{must}");
+        }
+    }
+
+    #[test]
+    fn the_other_security_options_are_left_at_their_strict_defaults() {
+        let ctx = context();
+        let sec = &ctx.config().app.security;
+        assert!(matches!(sec.dangerous_disable_asset_csp_modification, tauri::utils::config::DisabledCspModificationKind::Flag(false)));
+        assert!(!sec.asset_protocol.enable, "the asset protocol (file access from the page) stays off");
+        assert!(matches!(sec.pattern, tauri::utils::config::PatternKind::Brownfield));
+        assert!(sec.headers.as_ref().is_some_and(|h| h.x_content_type_options.is_some()));
+    }
+
+    /// The page's scripts are external files served from the app origin (script-src 'self'); there is no
+    /// inline script, inline style, inline handler or script URL for Tauri to hash or for a CSP to need.
+    #[test]
+    fn the_embedded_page_has_only_external_scripts_and_styles_and_nothing_else_ships() {
+        let ctx = context();
+        let mut names: Vec<String> = ctx.assets.iter().map(|(k, _)| k.to_string()).collect();
+        names.sort();
+        assert_eq!(names, ["/app.css", "/app.js", "/index.html"], "the webview may only be able to load these files");
+
+        let html = text_of(&*ctx.assets, "/index.html");
+        assert!(html.contains("<script src=\"app.js\" defer=\"\"></script>"), "{html}");
+        assert!(html.contains("<link rel=\"stylesheet\" href=\"app.css\">"), "{html}");
+        assert_eq!(html.matches("<script").count(), 1, "exactly one script element");
+        assert!(!html.contains("<style"), "no inline <style>");
+        assert!(!html.contains(" style="), "no style attributes");
+        assert!(!html.contains("javascript:") && !html.contains("<iframe") && !html.contains("<form") && !html.contains("<object") && !html.contains("<embed"));
+        assert!(!html.contains("<a "), "the page has no links: nothing that could navigate the webview");
+        let handlers = regex_free_on_attributes(&html);
+        assert!(handlers.is_empty(), "inline event handlers: {handlers:?}");
+        // Tauri adds a 'sha256-...' source to script-src for every .js file it embeds (the only hash source it
+        // can add here, since there is no inline script body); it must be exactly the hash of app.js.
+        let hashes: Vec<String> = ctx.assets.csp_hashes(&"/index.html".into()).map(|h| format!("{h:?}")).collect();
+        let source = format!("'sha256-{}'", b64(&Sha256::digest(text_of(&*ctx.assets, "/app.js").as_bytes())));
+        let want = format!("{:?}", tauri::utils::assets::CspHash::Script(&source));
+        assert_eq!(hashes, [want], "only the hash of app.js is expected on the document");
+
+        let js = text_of(&*ctx.assets, "/app.js");
+        for banned in ["eval(", "new Function", "innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "javascript:", "setTimeout(\"", "setInterval(\"", "http://", "https://", "fetch(", "XMLHttpRequest", "WebSocket", "window.open", "confirm(", "alert(", "prompt(", "location.", "localStorage", "sessionStorage", "import("] {
+            assert!(!js.contains(banned), "app.js must not contain {banned}");
+        }
+        let css = text_of(&*ctx.assets, "/app.css");
+        assert!(!css.contains("@import") && !css.contains("url("), "app.css must not load anything");
+    }
+
+    fn b64(bytes: &[u8]) -> String {
+        const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut s = String::new();
+        for c in bytes.chunks(3) {
+            let n = (u32::from(c[0]) << 16) | (u32::from(*c.get(1).unwrap_or(&0)) << 8) | u32::from(*c.get(2).unwrap_or(&0));
+            for i in 0..4 {
+                if i <= c.len() { s.push(A[((n >> (18 - 6 * i)) & 63) as usize] as char) } else { s.push('=') }
+            }
+        }
+        s
+    }
+
+    /// `on<event>=` attributes in tag text (a CSP would block them; the page must not rely on any).
+    fn regex_free_on_attributes(html: &str) -> Vec<String> {
+        html.split(|c: char| c.is_whitespace() || c == '<')
+            .filter(|w| w.len() > 3 && w.starts_with("on") && w.contains('=') && w[2..].chars().take_while(|c| *c != '=').all(|c| c.is_ascii_lowercase()))
+            .map(str::to_string)
+            .collect()
+    }
+
+    // ---- the compiled default window icon (RC3, D-LIC-11: temporary neutral artwork) -----------------------
+
+    /// Minimal zlib/DEFLATE decoder (stored, fixed and dynamic blocks; after RFC 1951 / zlib's puff.c), so the
+    /// test can decode `icons/32x32.png` without adding a dependency to the launcher.
+    fn inflate(zlib: &[u8]) -> Vec<u8> {
+        struct Bits<'a> { d: &'a [u8], pos: usize, bit: u32, cnt: u32 }
+        impl Bits<'_> {
+            fn need(&mut self, n: u32) -> u32 {
+                while self.cnt < n {
+                    self.bit |= (self.d[self.pos] as u32) << self.cnt;
+                    self.pos += 1;
+                    self.cnt += 8;
+                }
+                let v = self.bit & ((1u32 << n) - 1);
+                self.bit >>= n;
+                self.cnt -= n;
+                v
+            }
+        }
+        // canonical Huffman table: (count per length, symbols ordered by code)
+        fn build(lengths: &[u8]) -> ([u16; 16], Vec<u16>) {
+            let mut count = [0u16; 16];
+            for &l in lengths { count[l as usize] += 1; }
+            let mut offs = [0u16; 16];
+            for i in 1..15 { offs[i + 1] = offs[i] + count[i]; }
+            let mut syms = vec![0u16; lengths.len()];
+            for (sym, &l) in lengths.iter().enumerate() {
+                if l != 0 { syms[offs[l as usize] as usize] = sym as u16; offs[l as usize] += 1; }
+            }
+            (count, syms)
+        }
+        fn decode(b: &mut Bits, t: &([u16; 16], Vec<u16>)) -> usize {
+            let (mut code, mut first, mut index) = (0i32, 0i32, 0i32);
+            for len in 1..16 {
+                code |= b.need(1) as i32;
+                let c = t.0[len] as i32;
+                if code - c < first { return t.1[(index + (code - first)) as usize] as usize; }
+                index += c;
+                first += c;
+                first <<= 1;
+                code <<= 1;
+            }
+            panic!("bad huffman code");
+        }
+        const LBASE: [u16; 29] = [3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258];
+        const LEXT: [u8; 29] = [0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0];
+        const DBASE: [u16; 30] = [1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577];
+        const DEXT: [u8; 30] = [0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13];
+        assert_eq!(zlib[0] & 0x0f, 8, "zlib header: deflate");
+        let mut b = Bits { d: zlib, pos: 2, bit: 0, cnt: 0 };
+        let mut out: Vec<u8> = Vec::new();
+        loop {
+            let last = b.need(1);
+            match b.need(2) {
+                0 => {
+                    b.bit = 0;
+                    b.cnt = 0;
+                    let len = u16::from_le_bytes([zlib[b.pos], zlib[b.pos + 1]]) as usize;
+                    out.extend_from_slice(&zlib[b.pos + 4..b.pos + 4 + len]);
+                    b.pos += 4 + len;
+                }
+                kind @ (1 | 2) => {
+                    let (lt, dt) = if kind == 1 {
+                        let mut l = [8u8; 288];
+                        for x in l.iter_mut().take(256).skip(144) { *x = 9; }
+                        for x in l.iter_mut().take(280).skip(256) { *x = 7; }
+                        (build(&l), build(&[5u8; 30]))
+                    } else {
+                        let (nlen, ndist, ncode) = (b.need(5) as usize + 257, b.need(5) as usize + 1, b.need(4) as usize + 4);
+                        const ORDER: [usize; 19] = [16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15];
+                        let mut cl = [0u8; 19];
+                        for &o in ORDER.iter().take(ncode) { cl[o] = b.need(3) as u8; }
+                        let ct = build(&cl);
+                        let mut lens = vec![0u8; nlen + ndist];
+                        let mut i = 0;
+                        while i < nlen + ndist {
+                            let sym = decode(&mut b, &ct);
+                            if sym < 16 { lens[i] = sym as u8; i += 1; continue; }
+                            let (prev, rep) = match sym {
+                                16 => (lens[i - 1], 3 + b.need(2)),
+                                17 => (0, 3 + b.need(3)),
+                                _ => (0, 11 + b.need(7)),
+                            };
+                            for _ in 0..rep { lens[i] = prev; i += 1; }
+                        }
+                        (build(&lens[..nlen]), build(&lens[nlen..]))
+                    };
+                    loop {
+                        let sym = decode(&mut b, &lt);
+                        if sym < 256 { out.push(sym as u8); continue; }
+                        if sym == 256 { break; }
+                        let sym = sym - 257;
+                        let len = LBASE[sym] as usize + b.need(LEXT[sym] as u32) as usize;
+                        let ds = decode(&mut b, &dt);
+                        let dist = DBASE[ds] as usize + b.need(DEXT[ds] as u32) as usize;
+                        for _ in 0..len { out.push(out[out.len() - dist]); }
+                    }
+                }
+                _ => panic!("bad deflate block type"),
+            }
+            if last == 1 { break; }
+        }
+        out
+    }
+
+    /// Decode an 8-bit RGBA, non-interlaced PNG into (width, height, rgba) (all five filter types).
+    fn decode_rgba_png(png: &[u8]) -> (u32, u32, Vec<u8>) {
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        let (mut pos, mut idat, mut hdr) = (8usize, Vec::new(), None);
+        while pos < png.len() {
+            let len = u32::from_be_bytes(png[pos..pos + 4].try_into().unwrap()) as usize;
+            let tag = &png[pos + 4..pos + 8];
+            let data = &png[pos + 8..pos + 8 + len];
+            match tag {
+                b"IHDR" => hdr = Some((u32::from_be_bytes(data[0..4].try_into().unwrap()), u32::from_be_bytes(data[4..8].try_into().unwrap()), data[8], data[9], data[12])),
+                b"IDAT" => idat.extend_from_slice(data),
+                _ => {}
+            }
+            pos += 12 + len;
+        }
+        let (w, h, depth, colour, interlace) = hdr.expect("IHDR");
+        assert_eq!((depth, colour, interlace), (8, 6, 0), "the icon must be 8-bit RGBA, not interlaced");
+        let raw = inflate(&idat);
+        let stride = w as usize * 4;
+        assert_eq!(raw.len(), (stride + 1) * h as usize);
+        let mut px = vec![0u8; stride * h as usize];
+        for y in 0..h as usize {
+            let f = raw[y * (stride + 1)];
+            for x in 0..stride {
+                let cur = raw[y * (stride + 1) + 1 + x];
+                let a = if x >= 4 { px[y * stride + x - 4] } else { 0 };
+                let up = if y > 0 { px[(y - 1) * stride + x] } else { 0 };
+                let c = if x >= 4 && y > 0 { px[(y - 1) * stride + x - 4] } else { 0 };
+                px[y * stride + x] = cur.wrapping_add(match f {
+                    0 => 0,
+                    1 => a,
+                    2 => up,
+                    3 => ((a as u16 + up as u16) / 2) as u8,
+                    4 => {
+                        let p = a as i32 + up as i32 - c as i32;
+                        let (pa, pb, pc) = ((p - a as i32).abs(), (p - up as i32).abs(), (p - c as i32).abs());
+                        if pa <= pb && pa <= pc { a } else if pb <= pc { up } else { c }
+                    }
+                    _ => panic!("bad PNG filter"),
+                });
+            }
+        }
+        (w, h, px)
+    }
+
+    /// RC3 / D-LIC-11: the window icon compiled into the binary (tauri-codegen embeds `bundle.icon`'s first
+    /// `.png` as the default window icon on macOS and Linux) is the temporary neutral 32x32 artwork, decoded
+    /// RGBA for RGBA. A fingerprint of the previous artwork's pixels (taken from its decoded 32x32 RGBA, kept
+    /// as a hash only) must not match.
+    #[test]
+    fn the_compiled_default_window_icon_is_the_temporary_neutral_32x32() {
+        const OLD_RGBA_SHA256: &str = "c5070069b55e5bf69732713095d04e0f9e8079f13d0ffeec3f4d43acccd8b82c";
+        let ctx = context();
+        let icon = ctx.default_window_icon().expect("a default window icon is compiled in");
+        let file = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/icons/32x32.png")).unwrap();
+        let (w, h, rgba) = decode_rgba_png(&file);
+        assert_eq!((w, h), (32, 32));
+        assert_eq!((icon.width(), icon.height()), (32, 32), "the compiled icon is the 32x32 asset");
+        assert_eq!(icon.rgba(), &rgba[..], "compiled RGBA differs from icons/32x32.png");
+        let digest: String = Sha256::digest(icon.rgba()).iter().map(|b| format!("{b:02x}")).collect();
+        assert_ne!(digest, OLD_RGBA_SHA256, "the compiled icon is still the previous artwork");
+        // plain geometry: the corners are transparent, the centre is opaque
+        assert_eq!(icon.rgba()[3], 0, "top-left pixel is transparent (rounded corner)");
+        let centre = (16 * 32 + 16) * 4;
+        assert_eq!(icon.rgba()[centre + 3], 255);
+        // development builds on macOS also embed the first `.icns` (the Dock icon of an unbundled run): its size is the new file's
+        let icns_len = std::fs::metadata(concat!(env!("CARGO_MANIFEST_DIR"), "/icons/icon.icns")).unwrap().len();
+        let dump = format!("{ctx:?}");
+        if cfg!(target_os = "macos") && dump.contains("app_icon: Some(") {
+            assert!(dump.contains(&format!("app_icon: Some([u8; {icns_len}])")), "the embedded .icns is not icons/icon.icns");
+        }
+    }
+
+    /// Windows title and page title carry the product name of R0-prime (packaging/identity.json); the old
+    /// "ReDevOps" heading is gone and the page shows no logo.
+    #[test]
+    fn the_window_and_the_page_are_named_agentic_apps_r0_prime_and_carry_no_logo() {
+        let ctx = context();
+        let w = &ctx.config().app.windows[0];
+        assert_eq!(w.title, "Agentic Apps R0-prime");
+        assert_eq!(w.label, "main");
+        let html = text_of(&*ctx.assets, "/index.html");
+        assert!(html.contains("<title>Agentic Apps R0-prime</title>"));
+        assert!(html.contains("<h1>Agentic Apps R0-prime</h1>"));
+        assert!(!html.contains("ReDevOps"), "the old heading must be gone");
+        assert!(html.contains("Private candidate, release line r0-prime."));
+        assert!(!html.contains("<img") && !html.contains("<svg") && !html.contains("icon.") && !html.contains(".png") && !html.contains(".icns"));
+        assert!(html.contains("<link rel=\"icon\" href=\"data:,\">"), "an empty data: favicon so no icon request is made");
     }
 }

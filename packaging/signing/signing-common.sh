@@ -125,6 +125,10 @@ r0p_window_check() {
 #   events/NNNNNN.txt  one line per event, created with O_EXCL (noclobber) so a planted symlink or file is never followed or overwritten;
 #                      each line carries the sha256 of the previous event file (a hash chain)
 #   claims/<scope sha> one directory per scope file, created with mkdir (atomic): the first run that claims a scope wins, a parallel run loses
+#   claims/<artifact key> (RC3) one directory per INPUT ARTIFACT (dmg-<sha256 of the input dmg>, win-<stage>-<hash of the sorted inputs>,
+#                      manifest-<sha256 of the manifest>), claimed the same way: a second real run for the same artifact is refused even when the
+#                      scope FILE is new (a scope rewritten one second later is a different file), unless --allow-reuse is given; the reuse is
+#                      recorded in the event (artifact_reuse=1). A failed run burns the artifact claim exactly as it burns the scope claim.
 #   LENGTH             "<number of events> <sha256 of the last event file>", rewritten after each event (detects deletion of the last events)
 #   lock/              mkdir lock held while events are appended
 # The chain and LENGTH make tampering with the middle or the tail DETECTABLE; they cannot stop the owner's own account from deleting the whole
@@ -152,10 +156,10 @@ r0p_ledger_prepare() {
   fi
 }
 # r0p_ledger_verify LEDGER : chain intact, numbering contiguous, not shorter than the recorded length; prints nothing; sets R0P_LEDGER_N / R0P_LEDGER_LAST
-R0P_LEDGER_N=0; R0P_LEDGER_LAST="$R0P_ZERO64"; R0P_LEDGER_STARTED=" "
+R0P_LEDGER_N=0; R0P_LEDGER_LAST="$R0P_ZERO64"; R0P_LEDGER_STARTED=" "; R0P_LEDGER_ARTIFACTS=" "
 r0p_ledger_verify() {
-  local l="$1" n=0 prev="$R0P_ZERO64" f rec_n rec_h line sc
-  R0P_LEDGER_STARTED=" "
+  local l="$1" n=0 prev="$R0P_ZERO64" f rec_n rec_h line sc ak
+  R0P_LEDGER_STARTED=" "; R0P_LEDGER_ARTIFACTS=" "
   read -r rec_n rec_h < "$l/LENGTH" 2>/dev/null || die "ledger: LENGTH is missing or unreadable"
   [[ "$rec_n" =~ ^[0-9]+$ && "$rec_h" =~ ^[0-9a-f]{64}$ ]] || die "ledger: LENGTH is malformed"
   for f in "$l"/events/*.txt; do
@@ -165,7 +169,10 @@ r0p_ledger_verify() {
     [ "${f##*/}" = "$(printf '%06d' "$n").txt" ] || die "ledger: event numbering has a gap or an unexpected file at $f"
     IFS= read -r line < "$f" || true
     case "$line" in "seq=$n prev=$prev "*) ;; *) die "ledger: the hash chain is broken at event $n (the ledger was modified)";; esac
-    case "$line" in *" event=started"*) sc="${line#* scope=}"; R0P_LEDGER_STARTED="$R0P_LEDGER_STARTED${sc%% *} ";; esac
+    case "$line" in *" event=started"*)
+      sc="${line#* scope=}"; R0P_LEDGER_STARTED="$R0P_LEDGER_STARTED${sc%% *} "
+      case "$line" in *" artifact="*) ak="${line#* artifact=}"; R0P_LEDGER_ARTIFACTS="$R0P_LEDGER_ARTIFACTS${ak%% *} ";; esac;;
+    esac
     prev="$(r0p_sha "$f")"
     if [ "$n" -eq "$rec_n" ] && [ "$prev" != "$rec_h" ]; then die "ledger: event $n does not match the recorded length file (the ledger was modified)"; fi
   done
@@ -183,20 +190,32 @@ r0p_ledger_lock() {
 r0p_ledger_unlock() { /bin/rmdir "$1/lock" 2>/dev/null || true; }
 # "used" is decided from BOTH the claim directory and the verified chain (round 6, R6-02): a scope that the chain records as started but whose claim
 # directory is missing means someone removed the claim (tamper) and is refused even with --allow-reuse.
-r0p_ledger_tamper_check() { # LEDGER SCOPE : after r0p_ledger_verify
+r0p_ledger_tamper_check() { # LEDGER SCOPE [ARTIFACT_KEY] : after r0p_ledger_verify
   case "$R0P_LEDGER_STARTED" in
     *" $2 "*) [ -d "$1/claims/$2" ] || die "ledger: the chain records this scope as started but its claim is missing (the claims directory was tampered with); refusing";;
   esac
+  if [ -n "${3:-}" ]; then
+    case "$R0P_LEDGER_ARTIFACTS" in
+      *" $3 "*) [ -d "$1/claims/$3" ] || die "ledger: the chain records this artifact as started but its claim is missing (the claims directory was tampered with); refusing";;
+    esac
+  fi
 }
+# an artifact key names the input of the run: dmg-<64 hex>, win-<stage>-<64 hex>, manifest-<64 hex> (never anything else: it is a directory name)
+r0p_ledger_artifact_ok() { [[ "$1" =~ ^(dmg|manifest)-[0-9a-f]{64}$ || "$1" =~ ^win-(inner|container)-[0-9a-f]{64}$ ]] || die "ledger: invalid artifact key"; }
 # r0p_ledger_check LEDGER SCOPE_SHA ALLOW_REUSE : read-only early refusal (the atomic claim comes later)
 r0p_ledger_check() {
-  local l="$1" s="$2" allow="$3"
+  local l="$1" s="$2" allow="$3" art="${4:-}"
+  [ -z "$art" ] || r0p_ledger_artifact_ok "$art"
   r0p_ledger_prepare "$l"
   r0p_ledger_verify "$l"
-  r0p_ledger_tamper_check "$l" "$s"
+  r0p_ledger_tamper_check "$l" "$s" "$art"
   if [ -d "$l/claims/$s" ]; then
     if [ "$allow" = 1 ]; then echo "NOTE: --allow-reuse: this scope file was used before (see the ledger); reuse is recorded"
     else die "this scope file (sha256 $s) was already used (it is in the ledger). Write a NEW scope file for a new run, or pass --allow-reuse after deciding that a repeat is intended"; fi
+  fi
+  if [ -n "$art" ] && [ -d "$l/claims/$art" ]; then
+    if [ "$allow" = 1 ]; then echo "NOTE: --allow-reuse: this input artifact ($art) was used by an earlier real run (see the ledger); the repeat, including any second upload or signing request, is recorded"
+    else die "this input artifact ($art) was already used by an earlier real run (it is in the ledger), even though the scope file is new. A second signing or notarization of the same artifact needs --allow-reuse, decided and recorded by the owner"; fi
   fi
 }
 # The locked sections run in a SUBSHELL so that a `die` inside (broken chain, symlink, existing event file) ends only the subshell: the parent then
@@ -229,17 +248,27 @@ r0p_ledger_append() { r0p_ledger_in_lock "$1" r0p_ledger_append_locked "$@"; }
 # r0p_ledger_claim LEDGER SCOPE_SHA ALLOW_REUSE MODE DETAIL : ATOMICALLY claim the scope (mkdir), then record "started". Exactly one of several
 # parallel runs of the same scope wins; the others stop here, before any use of the owner's session. A claim is never released.
 r0p_ledger_claim_locked() {
-  local l="$1" s="$2" allow="$3"
+  local l="$1" s="$2" allow="$3" art="${4:-}"
   r0p_ledger_verify "$l"
-  r0p_ledger_tamper_check "$l" "$s"
+  r0p_ledger_tamper_check "$l" "$s" "$art"
+  # the ARTIFACT claim comes first, so a refused repeat of an artifact burns nothing new
+  if [ -n "$art" ]; then
+    if /bin/mkdir "$l/claims/$art" 2>/dev/null; then :
+    elif [ "$allow" = 1 ]; then echo "NOTE: --allow-reuse: the input artifact $art was claimed before; this repeat is recorded"
+    else die "this input artifact ($art) is already claimed (used by an earlier real run, or by a parallel run); refusing"; fi
+  fi
   if /bin/mkdir "$l/claims/$s" 2>/dev/null; then :
   elif [ "$allow" = 1 ]; then echo "NOTE: --allow-reuse: the scope was claimed before; this repeat is recorded"
   else die "this scope file (sha256 $s) is already claimed (used before, or by a parallel run); refusing"; fi
 }
+# r0p_ledger_claim LEDGER SCOPE_SHA ALLOW_REUSE MODE DETAIL [ARTIFACT_KEY]
 r0p_ledger_claim() {
+  local art="${6:-}" reuse=""
+  [ -z "$art" ] || r0p_ledger_artifact_ok "$art"
   r0p_ledger_prepare "$1"
-  r0p_ledger_in_lock "$1" r0p_ledger_claim_locked "$1" "$2" "$3"
-  r0p_ledger_append "$1" "$2" "$4" started "${5:-}${3:+ allow_reuse=$3}"
+  [ -z "$art" ] || { [ ! -d "$1/claims/$art" ] || reuse=" artifact_reuse=1"; }
+  r0p_ledger_in_lock "$1" r0p_ledger_claim_locked "$1" "$2" "$3" "$art"
+  r0p_ledger_append "$1" "$2" "$4" started "${5:-}${art:+ artifact=$art}${reuse}${3:+ allow_reuse=$3}"
 }
 
 # distribution gate -----------------------------------------------------------------------------------------------------
@@ -253,12 +282,64 @@ r0p_gate() {
   [ "$(r0p_sha "$gp")" = "$tsha" ] || die "scope file: gate_tool_sha256 does not match packaging/check-distribution-gate.py ($(r0p_sha "$gp"))"
   [ -x /usr/bin/python3 ] || die "/usr/bin/python3 not found: the distribution gate cannot be run"
   if [ "$dist" = 1 ]; then
-    /usr/bin/python3 -I "$gp" --platform "$platform" --distribution || rc=$?
-    [ "$rc" -eq 0 ] || die "the distribution gate REFUSES a distribution signing for platform $platform (exit $rc): decisions are OPEN or the gate file is malformed"
-    echo "distribution gate: passed for platform $platform (written decisions exist; this is not a legal conclusion)"
+    /usr/bin/python3 -I "$gp" --platform "$platform" --distribution --about-slots || rc=$?
+    [ "$rc" -eq 0 ] || die "the distribution gate REFUSES a distribution signing for platform $platform (exit $rc): decisions are OPEN, a legal slot has no approved text, a record has no valid detached signature, or the gate file is malformed"
+    echo "distribution gate: passed for platform $platform (written decisions with valid detached signatures exist; this is not a legal conclusion)"
   else
-    /usr/bin/python3 -I "$gp" --platform "$platform" || rc=$?
-    [ "$rc" -eq 0 ] || die "the distribution gate file is malformed (exit $rc)"
+    /usr/bin/python3 -I "$gp" --platform "$platform" --about-slots || rc=$?
+    [ "$rc" -eq 0 ] || die "the distribution gate file is malformed or an About slot text does not match (exit $rc)"
     echo "*** PRIVATE-CANDIDATE SIGNING: signing and notarization do NOT imply permission to distribute. The decisions above are not cleared by this run."
   fi
+}
+
+# About record of the artifact being signed (RC3) --------------------------------------------------------------------------
+# The code and data this check uses are pinned by the authorization scope (scope_version 3), like every other file that decides or
+# executes during a run: check_about.py, generate_about.py, agentic_os/about_record.py, packaging/legal-allowed-signers and (already)
+# packaging/check-distribution-gate.py. A hash in the record or in the gate file proves consistency, not authorship.
+#
+# r0p_about_pins CHECK_SHA GEN_SHA REC_SHA SIGNERS_SHA : the repository copies must be the ones the scope binds (dies otherwise).
+r0p_about_pins() {
+  local pk="$SELF_DIR/.." root="$SELF_DIR/../.." h
+  h="$(r0p_sha "$pk/notices/check_about.py")";        [ "$h" = "$1" ] || die "scope file: check_about_sha256 does not match packaging/notices/check_about.py ($h)"
+  h="$(r0p_sha "$pk/notices/generate_about.py")";     [ "$h" = "$2" ] || die "scope file: generate_about_sha256 does not match packaging/notices/generate_about.py ($h)"
+  h="$(r0p_sha "$root/agentic_os/about_record.py")";  [ "$h" = "$3" ] || die "scope file: about_record_sha256 does not match agentic_os/about_record.py ($h)"
+  h="$(r0p_sha "$pk/legal-allowed-signers")";         [ "$h" = "$4" ] || die "scope file: legal_signers_sha256 does not match packaging/legal-allowed-signers ($h)"
+}
+# r0p_about_check LICENSES_DIR DISTRIBUTION(0/1) BUILD_COMMIT CHECK_SHA GEN_SHA REC_SHA GATE_TOOL_SHA SIGNERS_SHA : the Licenses folder INSIDE the
+# artifact (the app's Contents/Resources/Licenses taken from the dmg copy; the Licenses folder of the installer tree on Windows) must hold an
+# about.json that passes check_about.py against the repository copies of the gate file, identity, versions and the folder's own manifest, and
+# whose build.source.commit is the authorized build_commit. The checker runs as `python -I -B` from a PRIVATE COPY of the pinned files, made
+# in the private work directory and re-hashed after copying: it imports nothing unpinned. With DISTRIBUTION=1 the record must be a distribution
+# record without a pending or draft slot and every legal record must carry a valid detached signature (signer list pinned by fingerprint).
+# Returns non-zero (the caller fails) instead of dying, so the evidence of the run records the reason.
+r0p_about_check() {
+  local dir="$1" dist="$2" commit="$3" csha="$4" gsha="$5" rsha="$6" tsha="$7" ssha="$8"
+  local pk="$SELF_DIR/.." root="$SELF_DIR/../.." t rc=0 h
+  [ -f "$pk/notices/check_about.py" ] && [ -f "$root/agentic_os/about_record.py" ] || { echo "ERROR: packaging/notices/check_about.py or agentic_os/about_record.py is missing next to packaging/" >&2; return 1; }
+  [ -d "$dir" ] && [ ! -L "$dir" ] || { echo "ERROR: the artifact has no Licenses folder to check ($dir)" >&2; return 1; }
+  [ -f "$dir/about.json" ] && [ ! -L "$dir/about.json" ] || { echo "ERROR: the artifact has no Licenses/about.json (an RC3 artifact must carry the About record)" >&2; return 1; }
+  [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || { echo "ERROR: the authorized build commit is not a 40-hex id" >&2; return 1; }
+  [ -x /usr/bin/python3 ] || { echo "ERROR: /usr/bin/python3 not found: the About record cannot be checked" >&2; return 1; }
+  [ -n "${R0P_TMP:-}" ] || r0p_mktmp
+  t="$R0P_TMP/about-check"
+  mkdir -p "$t/agentic_os" "$t/packaging/notices" || { echo "ERROR: cannot create the private work directory for the About check" >&2; return 1; }
+  cat "$pk/notices/check_about.py"       > "$t/packaging/notices/check_about.py"       || return 1
+  cat "$pk/notices/generate_about.py"    > "$t/packaging/notices/generate_about.py"    || return 1
+  cat "$root/agentic_os/about_record.py" > "$t/agentic_os/about_record.py"             || return 1
+  cat "$pk/check-distribution-gate.py"   > "$t/packaging/check-distribution-gate.py"   || return 1
+  cat "$pk/legal-allowed-signers"        > "$t/packaging/legal-allowed-signers"        || return 1
+  h="$(r0p_sha "$t/packaging/notices/check_about.py")";     [ "$h" = "$csha" ] || { echo "ERROR: the private copy of check_about.py ($h) is not the one the scope binds" >&2; return 1; }
+  h="$(r0p_sha "$t/packaging/notices/generate_about.py")";  [ "$h" = "$gsha" ] || { echo "ERROR: the private copy of generate_about.py ($h) is not the one the scope binds" >&2; return 1; }
+  h="$(r0p_sha "$t/agentic_os/about_record.py")";           [ "$h" = "$rsha" ] || { echo "ERROR: the private copy of about_record.py ($h) is not the one the scope binds" >&2; return 1; }
+  h="$(r0p_sha "$t/packaging/check-distribution-gate.py")"; [ "$h" = "$tsha" ] || { echo "ERROR: the private copy of the gate tool ($h) is not the one the scope binds" >&2; return 1; }
+  h="$(r0p_sha "$t/packaging/legal-allowed-signers")";      [ "$h" = "$ssha" ] || { echo "ERROR: the private copy of legal-allowed-signers ($h) is not the one the scope binds" >&2; return 1; }
+  if [ "$dist" = 1 ]; then
+    /usr/bin/python3 -I -B "$t/packaging/notices/check_about.py" --licenses-dir "$dir" --root "$root" --code-root "$t" \
+      --allowed-signers "$t/packaging/legal-allowed-signers" --expect-commit "$commit" --distribution || rc=$?
+  else
+    /usr/bin/python3 -I -B "$t/packaging/notices/check_about.py" --licenses-dir "$dir" --root "$root" --code-root "$t" \
+      --allowed-signers "$t/packaging/legal-allowed-signers" --expect-commit "$commit" || rc=$?
+  fi
+  [ "$rc" -eq 0 ] || { echo "ERROR: the About record inside the artifact failed check_about.py (exit $rc)" >&2; return 1; }
+  return 0
 }

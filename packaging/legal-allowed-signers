@@ -1,0 +1,15 @@
+# Allowed signers for legal decision records and approved legal texts (OpenSSH allowed_signers format; PUBLIC KEYS ONLY).
+#
+# A DISTRIBUTION build (packaging/check-distribution-gate.py) requires, for every DECIDED blocking decision, a detached SSHSIG
+# `<record>.sig` over the record named by decision_reference and `<file>.sig` over every approved slot text under docs/legal/approved/,
+# in the namespace `redevops-legal-decision@v1`, made by a key listed HERE. It is verified with `ssh-keygen -Y verify`.
+#
+# This file ships EMPTY on purpose: with no signer listed, every DECIDED entry fails a distribution build until the owner supplies a
+# public key. Private builds are unaffected (they only print a warning for a DECIDED entry whose signature does not verify).
+#
+# To add a signer (the owner does this when they start deciding), append one line and commit it. NEVER put a private key here:
+#   <principal> namespaces="redevops-legal-decision@v1" <key type> <base64 public key> <comment>
+# Sign a record with the owner's own key on the owner's own machine:
+#   ssh-keygen -Y sign -f <private key file> -n redevops-legal-decision@v1 <record>      (writes <record>.sig)
+# Changes to this file, to packaging/distribution-gate.json and to docs/legal/** should need the owner's review (see
+# docs/legal/CODEOWNERS.proposed). A signature proves who signed the file, not that the decision is right.

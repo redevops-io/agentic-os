@@ -24,6 +24,12 @@ and network isolation need OS namespaces — a `"strict"` backend (bubblewrap/ns
 into the same seam and adds bind-mounted paths + `--unshare-net`; remote execution
 additionally needs host attestation. This backend enforces what is enforceable rootless
 and refuses to *pretend* to do the rest.
+
+Platform support: Linux only. macOS refuses every finite memory rlimit (``RLIMIT_AS``/``DATA``/``RSS``
+fail with EINVAL), so the memory ceiling cannot be enforced there; when a ceiling is requested the backend FAILS
+CLOSED with :class:`CapabilityUnavailable` instead of running a capability without it. It is never degraded to
+"the limits that work". (Convergence stage 2b: origin/main's per-request semantics govern the membrane; the RC
+line's platform-wide ``ContainmentUnsupported`` refusal was dropped, see :func:`membrane_supported` for what remains.)
 """
 from __future__ import annotations
 
@@ -44,7 +50,9 @@ from runtime_contracts.models import (
     ExecutionEnvelope,
     ExecutionReceipt,
 )
-from .device_posture import DevicePosture, ExecutionClass, admit, PostureDenied
+from .device_posture import (
+    DevicePosture, ExecutionClass, PostureDenied, admit, containment_unsupported_reason,
+)
 
 try:
     import resource                       # POSIX only: the rlimit mechanism the ceilings below are applied with
@@ -112,6 +120,14 @@ class CapabilityUnavailable(ContainmentError):
     def __init__(self, capability: str, message: str):
         super().__init__(message)
         self.capability = capability
+
+
+def membrane_supported() -> bool:
+    """True iff this host is one where the rootless membrane is supported at all (Linux/POSIX with an enforceable RLIMIT_AS), by the
+    platform decision the device report uses (``device_posture.containment_unsupported_reason``). The membrane itself decides per
+    request (:class:`CapabilityUnavailable` when a memory ceiling is requested that this host cannot apply); this is the stricter,
+    platform-level answer behind "Check this device" (BLOCKED on macOS)."""
+    return containment_unsupported_reason() == ""
 
 
 # Child entrypoint. Reads {capability, inputs} on stdin, imports "module:attr", runs it,
@@ -258,6 +274,11 @@ class LocalContainmentSandbox:
                 )
             except subprocess.TimeoutExpired:
                 raise ContainmentError("duration_exceeded")
+            except subprocess.SubprocessError as exc:
+                # preexec_fn failed (a ceiling could not be applied): the child never reached exec,
+                # so the capability did not run. Fail closed with a named error; never swallow.
+                raise ContainmentError(
+                    f"containment_setup_failed: a resource ceiling could not be applied ({exc})")
         if proc.returncode != 0:
             # Non-zero: killed on a resource ceiling (OOM/CPU) or the capability raised.
             raise ContainmentError(

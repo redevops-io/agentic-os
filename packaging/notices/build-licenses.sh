@@ -41,5 +41,10 @@ python3 -I "$HERE/generate_notices.py" --sbom "$SBOM" "${SITE[@]}" "${CRATES[@]+
     "${EXCL[@]+"${EXCL[@]}"}" --out "$OUT" --title "$(python3 -I "$ROOT/packaging/tools/identity.py" get product_name) ($PLATFORM)" $FAIL
 RC=$?
 set -e
+# The About record (schema redevops.about/1) is generated from the notices just written, the identity, git and the legal-slot
+# gate. In a DISTRIBUTION build (REDEVOPS_DISTRIBUTION_BUILD anything but empty or 0) a legal slot without an approved text makes
+# this step fail with exit 3 and no about.json is written.
+case "$PLATFORM" in macos) ABOUT_PLATFORM="macos-$(uname -m | sed 's/aarch64/arm64/')" ;; windows) ABOUT_PLATFORM="windows-x64" ;; *) ABOUT_PLATFORM="$PLATFORM-$(uname -m | sed 's/aarch64/arm64/; s/_/-/')" ;; esac
+python3 -I "$HERE/generate_about.py" --notices-dir "$OUT" --platform "$ABOUT_PLATFORM"
 python3 -I "$HERE/stage_licenses.py" --notices-dir "$OUT" "${DEST[@]+"${DEST[@]}"}"
 exit $RC

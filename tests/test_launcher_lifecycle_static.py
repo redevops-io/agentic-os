@@ -95,7 +95,7 @@ def test_sr07_legacy_listener_is_only_reported_never_adopted_or_killed():
     assert "LEGACY_PORT: u16 = 8787" in launch and "from_millis(300)" in launch
     main = _src("main.rs")
     assert "legacy_service_warning" in main
-    ui = (ROOT / "deploy" / "launcher" / "ui" / "index.html").read_text(encoding="utf-8")
+    ui = (ROOT / "deploy" / "launcher" / "ui" / "app.js").read_text(encoding="utf-8")   # the page logic is external since RC3 (CSP)
     assert 'invoke("legacy_service_warning")' in ui
 
 

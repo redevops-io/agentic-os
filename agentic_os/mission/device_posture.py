@@ -33,6 +33,7 @@ import os
 import platform as _platform
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Dict, Tuple
@@ -209,8 +210,16 @@ def derive(facts: DeviceFacts) -> DevicePosture:
         classes[ExecutionClass.LOCAL_CONTAINER] = Decision.ALLOW
     else:
         classes[ExecutionClass.LOCAL_CONTAINER] = Decision.DENY
-        reasons.append("containment unsupported on this platform "
-                       "(rootless membrane needs a POSIX host; on Windows run inside WSL2)")
+        # The reason text is part of the posture id (rcv1 over reasons): the generic text is origin/main's and must not move
+        # (tests/test_native_posture_and_membrane.py pins ids computed with it). The macOS-specific wording is the RC line's and
+        # applies only to a darwin platform, which has no pinned id.
+        if str(facts.platform).startswith("darwin"):
+            reasons.append("containment unsupported on this platform "
+                           "(the rootless membrane needs a Linux/POSIX host that enforces memory limits: "
+                           "not macOS; on Windows run inside WSL2)")
+        else:
+            reasons.append("containment unsupported on this platform "
+                           "(rootless membrane needs a POSIX host; on Windows run inside WSL2)")
 
     # HOST_PROCESS — only on a hardened device, and never without a human.
     if facts.disk_encryption and facts.secure_credential_store:
@@ -320,15 +329,42 @@ def _probe_secure_credential_store(platform_str: str) -> bool:
                 or shutil.which("kwalletd5"))
 
 
-def _probe_containment_supported() -> bool:
-    # The rootless membrane uses `resource.setrlimit` + subprocess preexec — POSIX only.
-    if os.name != "posix":
-        return False
+#: Platforms whose kernel refuses a finite address-space / data-segment / RSS rlimit, so the
+#: rootless membrane cannot enforce its memory ceiling there. macOS: `setrlimit(RLIMIT_AS, <466 GiB)`
+#: fails with EINVAL (even `ulimit -v`), and RLIMIT_DATA/RLIMIT_RSS likewise. The membrane
+#: therefore FAILS CLOSED on these platforms rather than run a capability without its ceiling.
+_MEMORY_CEILING_UNENFORCEABLE = ("darwin",)
+
+
+def _host_platform() -> str:
+    """``sys.platform`` of the host (one seam, so tests can simulate another platform)."""
+    return sys.platform
+
+
+def containment_unsupported_reason() -> str:
+    """Why the rootless membrane cannot enforce its ceilings on this host, or "" if it can.
+
+    A stable, human-readable reason (it reaches the launcher's device report, the posture
+    ledger and the agent gateway's error). Decided from the platform, not by trial: the
+    answer must be deterministic and must never depend on running a capability uncontained.
+    """
+    plat = _host_platform()
+    if plat.startswith(_MEMORY_CEILING_UNENFORCEABLE):
+        return (f"{plat}: the kernel refuses a finite RLIMIT_AS/RLIMIT_DATA/RLIMIT_RSS, so a "
+                "memory ceiling cannot be enforced (no containment backend; run on Linux)")
+    if os.name != "posix" or plat.startswith(("win", "cygwin")):
+        return f"{plat}: the rootless membrane needs a POSIX host (on Windows run inside WSL2)"
     try:
         import resource  # noqa: F401
-        return True
     except ImportError:
-        return False
+        return f"{plat}: the `resource` module is unavailable"
+    return ""
+
+
+def _probe_containment_supported() -> bool:
+    # The rootless membrane uses `resource.setrlimit` + subprocess preexec, and needs a kernel that
+    # honours RLIMIT_AS: Linux (incl. WSL2). Not macOS (see _MEMORY_CEILING_UNENFORCEABLE).
+    return containment_unsupported_reason() == ""
 
 
 def probe_device() -> DeviceFacts:

@@ -22,7 +22,9 @@ from agentic_os.mission.device_posture import (
     record_posture, latest_posture,
 )
 from agentic_os.mission.store import EventStore
-from agentic_os.mission.membrane import LocalContainmentSandbox, ContainmentError
+from agentic_os.mission import device_posture
+from agentic_os.mission.membrane import (
+    LocalContainmentSandbox, ContainmentError)
 
 ECHO = "agentic_os.mission._membrane_selftest:echo"
 
@@ -72,6 +74,21 @@ def test_windows_native_denies_local_container_with_wsl2_hint():
     assert p.verdict is Verdict.BLOCKED
     assert p.classes[ExecutionClass.LOCAL_CONTAINER] is Decision.DENY
     assert any("WSL2" in r for r in p.reasons)
+
+
+def test_macos_has_no_containment_backend_so_the_device_is_blocked():
+    """The posture must not claim containment macOS cannot provide (no memory-ceiling enforcement)."""
+    facts = replace(VERIFIED_FACTS, platform="darwin-arm64", containment_supported=False)
+    p = derive(facts)
+    assert p.verdict is Verdict.BLOCKED
+    assert all(d is Decision.DENY for d in p.classes.values())
+    assert any("not macOS" in r for r in p.reasons)
+
+
+@pytest.mark.parametrize("plat, supported", [("linux", True), ("darwin", False), ("win32", False)])
+def test_probe_reports_containment_by_platform(monkeypatch, plat, supported):
+    monkeypatch.setattr(device_posture, "_host_platform", lambda: plat)
+    assert probe_device().containment_supported is supported
 
 
 def test_public_exposure_makes_ingress_reviewable_not_denied():
@@ -203,5 +220,5 @@ def test_membrane_runs_within_posture_and_clamps():
 def test_membrane_refuses_a_denied_execution_class():
     sb = LocalContainmentSandbox(posture=derive(VERIFIED_FACTS),
                                  execution_class=ExecutionClass.PUBLIC_INGRESS)
-    with pytest.raises(ContainmentError):
+    with pytest.raises(ContainmentError, match="execution_class_denied"):
         sb.invoke("op", ECHO, {}, "k2")

@@ -6,10 +6,10 @@ name: desktop-shell
 
 on:
   pull_request:
-    paths: ["deploy/launcher/**", ".github/workflows/desktop-shell.yml"]
+    paths: ["deploy/desktop-shell-main/**", ".github/workflows/desktop-shell.yml"]
   push:
     branches: ["main"]
-    paths: ["deploy/launcher/**", ".github/workflows/desktop-shell.yml"]
+    paths: ["deploy/desktop-shell-main/**", ".github/workflows/desktop-shell.yml"]
   workflow_dispatch:
 
 permissions:
@@ -25,7 +25,7 @@ jobs:
     timeout-minutes: 45
     defaults:
       run:
-        working-directory: deploy/launcher/src-tauri
+        working-directory: deploy/desktop-shell-main/src-tauri
     steps:
       - uses: actions/checkout@v4
 
@@ -40,7 +40,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: deploy/launcher/src-tauri
+          workspaces: deploy/desktop-shell-main/src-tauri
 
       # tauri-build insists the externalBin exists for the target triple; a stub is enough to compile and test.
       - name: Stub the sidecar for the host triple

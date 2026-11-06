@@ -1926,7 +1926,11 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     if ui is not None:
         if capability is not None:
             from .local_capability_ui import install_ui_bootstrap
-            public = install_ui_bootstrap(app, ui, base_path)   # index.html + shim, ahead of the mount
+            public = install_ui_bootstrap(app, ui, base_path)   # index.html + shim + About pages, ahead of the mount
+        else:
+            # hosted deployment without the gate: the About pages are static and public anyway; register them so the UI's link works
+            from .about_ui import install_about
+            install_about(app, base_path)
         from fastapi.staticfiles import StaticFiles
         app.mount("/", StaticFiles(directory=str(ui), html=True), name="projects-ui")
     if capability is not None:

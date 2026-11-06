@@ -31,7 +31,7 @@
 #                        'Artifact Signing Certificate Profile Signer' role. The token is written by `az` into a 0600 file and read by
 #                        Jsign with --storepass file:...; it is never printed, never on a command line, never in the environment.
 #
-# SCOPE FILE (scope_version=2; KEY=VALUE; read ONCE into a private copy that is hashed and parsed; a TRIPWIRE against mistakes, NOT an
+# SCOPE FILE (scope_version=3; KEY=VALUE; read ONCE into a private copy that is hashed and parsed; a TRIPWIRE against mistakes, NOT an
 # authentication: the owner's own terminal and `az` login are the authentication): not_before/not_after (UTC, at most 24 h), script_sha256,
 # common_sha256, verifier_sha256, identity_json_sha256, stage, inputs_sha256 (sorted, comma separated), az_endpoint, az_account, az_profile,
 # expected_cn, gate_sha256, gate_tool_sha256, distribution=yes|no (must agree with --distribution), evidence_manifest_sha256, build_commit,
@@ -51,7 +51,7 @@
 # Usage:
 #   sign_windows_r0prime_v3.sh --stage inner|container --input FILE --sha256 HEX [--input FILE2 --sha256 HEX2 ...] --outdir NEWDIR
 #        [--dry-run | --throwaway-test | --real --i-have-owner-authorization SHA --scope-file FILE]
-#        [--ledger DIR] [--allow-reuse] [--distribution] [--container-listing FILE]
+#        [--ledger DIR] [--allow-reuse] [--distribution] [--container-listing FILE] [--licenses-dir DIR]
 #        [--name "Application name"] [--url URL] [--throwaway-dir DIR] [--tsa-url LOCAL_URL]
 #        [--tools-dir DIR] [--ms-root-pem FILE] [--python FILE] [--verifier FILE]
 
@@ -142,6 +142,7 @@ NSIS_NAME="${PRODUCT}_${VERSION}_x64-setup.exe"
 FROZEN_MSI="$(idj frozen.product_name)_$(idj frozen.version)_x64_en-US.msi"
 FROZEN_NSIS="$(idj frozen.product_name)_$(idj frozen.version)_x64-setup.exe"
 
+LICDIR=""
 STAGE=""; MODE_DRY=0; MODE_THROW=0; MODE_REAL=0; AUTH_SHA=""; SCOPE_FILE=""; LEDGER=""; ALLOW_REUSE=0; DISTRIBUTION=0; LISTING=""
 APPNAME="$PRODUCT"; APPURL=""; OUTDIR=""; THROWAWAY_DIR="$SELF_DIR/dryrun/throwaway"; TSA_URL=""
 TOOLS_DIR="$SELF_DIR/tools"; MS_ROOT_PEM="$SELF_DIR/docs/pki/root2020.pem"
@@ -169,6 +170,7 @@ while [ $# -gt 0 ]; do
     --scope-file)       [ $# -ge 2 ] || die "--scope-file needs a value"; SCOPE_FILE="$2"; shift 2;;
     --ledger)           [ $# -ge 2 ] || die "--ledger needs a value"; LEDGER="$2"; shift 2;;
     --container-listing) [ $# -ge 2 ] || die "--container-listing needs a value"; LISTING="$2"; shift 2;;
+    --licenses-dir)     [ $# -ge 2 ] || die "--licenses-dir needs a value"; LICDIR="$2"; shift 2;;
     --allow-reuse)      ALLOW_REUSE=1; shift;;
     --distribution)     DISTRIBUTION=1; shift;;
     --dry-run)          MODE_DRY=1; shift;;
@@ -295,8 +297,9 @@ if [ "$MODE" = real ]; then
   r0p_mktmp
   r0p_scope_load "$SCOPE_FILE" "$AUTH_SHA" scope_version not_before not_after script_sha256 common_sha256 verifier_sha256 identity_json_sha256 \
     stage inputs_sha256 az_endpoint az_account az_profile expected_cn gate_sha256 gate_tool_sha256 distribution evidence_manifest_sha256 \
-    build_commit procedure_commit tool_az_sha256 tool_java_sha256 tool_python_sha256 tool_python_packages_sha256 tool_python_pth_sha256 tool_osslsigncode_sha256 container_listing_sha256
-  [ "$S_scope_version" = 2 ] || die "scope file: scope_version must be 2 (v3.1 format; see AUTHORIZATION-TEMPLATE.md)"
+    build_commit procedure_commit tool_az_sha256 tool_java_sha256 tool_python_sha256 tool_python_packages_sha256 tool_python_pth_sha256 tool_osslsigncode_sha256 container_listing_sha256 \
+    check_about_sha256 generate_about_sha256 about_record_sha256 legal_signers_sha256
+  [ "$S_scope_version" = 3 ] || die "scope file: scope_version must be 3 (RC3 format with the About pins; see AUTHORIZATION-TEMPLATE.md)"
   r0p_window_check "$S_not_before" "$S_not_after"
   [ "$S_script_sha256" = "$SELF_SHA" ] || die "scope file: script_sha256 does not match this script"
   [ "$S_common_sha256" = "$COMMON_SHA" ] || die "scope file: common_sha256 does not match signing-common.sh"
@@ -316,7 +319,9 @@ if [ "$MODE" = real ]; then
   else
     [ -z "$LISTING" ] && [ "$S_container_listing_sha256" = none ] || die "scope file: container_listing_sha256 must be 'none' and no --container-listing given for stage inner"
   fi
-  r0p_ledger_check "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE"
+  r0p_ledger_check "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE" "win-$STAGE-$(r0p_sha_str "$STAGE:$SORTED")"
+  [[ "$S_check_about_sha256" =~ ^[0-9a-f]{64}$ && "$S_generate_about_sha256" =~ ^[0-9a-f]{64}$ && "$S_about_record_sha256" =~ ^[0-9a-f]{64}$ && "$S_legal_signers_sha256" =~ ^[0-9a-f]{64}$ ]] || die "scope file: check_about_sha256, generate_about_sha256, about_record_sha256 and legal_signers_sha256 must be 64 hex chars"
+  r0p_about_pins "$S_check_about_sha256" "$S_generate_about_sha256" "$S_about_record_sha256" "$S_legal_signers_sha256"
   r0p_gate windows "$DISTRIBUTION" "$S_gate_sha256" "$S_gate_tool_sha256"
 fi
 # the container listing (what the installers hold, from the build host) is read once into a private copy and recorded in the evidence
@@ -329,6 +334,18 @@ if [ -n "$LISTING" ]; then
   LISTING_SHA="$(sha "$R0P_TMP/listing.copy")"; LISTING_LINES="$(wc -l < "$R0P_TMP/listing.copy" | tr -d ' ')"
   [ "$LISTING_LINES" -ge 1 ] || die "--container-listing is empty"
   if [ "$MODE" = real ]; then [ "$LISTING_SHA" = "$S_container_listing_sha256" ] || die "scope file: container_listing_sha256 does not match --container-listing"; fi
+fi
+# RC3: in --real the container stage also needs the Licenses folder of the installer tree (from the build host) and checks its about.json
+# against the repository (gate, identity, versions, manifest; with --distribution a distribution record with no placeholder slot and valid
+# detached signatures). The folder is tied to the installers through the container listing: the sha256 of its about.json must appear in it.
+if [ "$MODE" = real ] && [ "$STAGE" = container ]; then
+  [ -n "$LICDIR" ] || die "stage container in --real needs --licenses-dir DIR (the Licenses folder of the installer tree, whose about.json is checked against the gate)"
+  [ -f "$LICDIR/about.json" ] && [ ! -L "$LICDIR/about.json" ] || die "--licenses-dir holds no regular about.json"
+  ABOUT_SHA="$(sha "$LICDIR/about.json")"
+  grep -qF "$ABOUT_SHA" "$R0P_TMP/listing.copy" || die "the sha256 of $LICDIR/about.json ($ABOUT_SHA) does not appear in the --container-listing: the folder is not the one in the installers"
+  r0p_about_check "$LICDIR" "$DISTRIBUTION" "$S_build_commit" "$S_check_about_sha256" "$S_generate_about_sha256" "$S_about_record_sha256" "$S_gate_tool_sha256" "$S_legal_signers_sha256" || die "the About record failed the check against the gate (see above); signing refused"
+else
+  [ -z "$LICDIR" ] || die "--licenses-dir is used only with --real --stage container"
 fi
 
 # ---- tools (not needed to print a plan)
@@ -551,7 +568,7 @@ if [ "$MODE" = throwaway-test ]; then
 else
   validate_service_args      # again, immediately before the only token request (defence in depth)
   # the scope is consumed from here on (the first use of the owner's az session): a failed run burns it
-  r0p_ledger_claim "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE" real "script=$SELF_SHA stage=$STAGE inputs=$SORTED"
+  r0p_ledger_claim "$LEDGER" "$AUTH_SHA" "$ALLOW_REUSE" real "script=$SELF_SHA stage=$STAGE inputs=$SORTED" "win-$STAGE-$(r0p_sha_str "$STAGE:$SORTED")"
   LEDGER_STARTED=1
   TOKFILE="$TOKDIR/token"; RAW="$TOKDIR/raw"
   log "service: $ENDPOINT account=$ACCOUNT profile=$PROFILE"
