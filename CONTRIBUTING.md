@@ -10,6 +10,7 @@
    or *Field validated* and add a card under `docs/evidence/`. Quote licence file names and titles; do not
    characterize licences.
 5. Releases: follow [docs/RELEASING.md](docs/RELEASING.md); never delete or rewrite tags.
-6. Security issues: [SECURITY.md](SECURITY.md), not a public issue.
+6. Deployment addresses, host names and local paths never go into a committed file: see [docs/DEPLOYMENT_ADDRESSES.md](docs/DEPLOYMENT_ADDRESSES.md) (`tests/test_no_private_topology.py` enforces it).
+7. Security issues: [SECURITY.md](SECURITY.md), not a public issue.
 
 Contributions are under the repository [LICENSE.md](LICENSE.md).

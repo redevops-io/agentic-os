@@ -126,7 +126,7 @@ one.
 
 All authoring commits in this repository are by RedevOps (Alex Mats, under two
 git identities). The remaining commits are GitHub merge commits produced by the
-`arybach` account operating the merge button on `redevops-io/*` branches, which
+maintainer account that merges on `redevops-io/*` branches, which
 introduce no third-party authorship. On that basis RedevOps holds the copyright
 needed to relicense. Recorded here because relicensing over outside
 contributions without a CLA is the usual way this goes wrong, and the check

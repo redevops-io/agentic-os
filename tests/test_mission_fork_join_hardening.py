@@ -88,6 +88,9 @@ _PROC = textwrap.dedent("""
     from tests._fork_support import make_rt, spec, GRANTS, record_effect
     from agentic_os.mission.store import EventStore
     from agentic_os.mission.fork_join import ForkError
+    from agentic_os.mission.runtime import MissionRuntime
+    # this child tests fork-dispatch exclusivity across processes, not the replay authorization (tests/test_replay_residuals.py)
+    MissionRuntime._require_execution_authority = lambda self, mission_id, need=None: None
     path, mid, role, effects = sys.argv[1:5]
     class Op:
         def invoke(self, operator, capability, inputs, key, *, secrets=None):

@@ -165,7 +165,8 @@ class FakeVault:
         return {}
 
 
-VENV = {"VAULT_ADDR": "http://v:8200", "VAULT_TOKEN": "t"}
+MOUNT = "kv-test"          # the mount is always selected explicitly: there is no default (tests/test_vault_mount_required.py)
+VENV = {"VAULT_ADDR": "http://v:8200", "VAULT_TOKEN": "t", "REDEVOPS_VAULT_MOUNT": MOUNT}
 
 
 def test_vault_merge_adds_only_missing(tmp_path):
@@ -177,7 +178,7 @@ def test_vault_merge_adds_only_missing(tmp_path):
     assert v.data["OTHER"] == "1" and v.data[TWENTY] == keep
     assert set(v.data) == {"OTHER", *NAMES}
     assert not b.file.exists() and not (tmp_path / ".bashrc").exists()
-    assert v.calls[-1][1] == "http://v:8200/v1/vibexgen/data/agentic-os/stack"
+    assert v.calls[-1][1] == f"http://v:8200/v1/{MOUNT}/data/agentic-os/stack"
     before = dict(v.data)
     b.init()
     assert v.data == before and sum(c[0] == "POST" for c in v.calls) == 1
@@ -185,7 +186,7 @@ def test_vault_merge_adds_only_missing(tmp_path):
 
 def test_vault_custom_path_and_missing_secret(tmp_path):
     v = FakeVault(None)
-    mk(tmp_path, {**VENV, "VAULT_MOUNT": "kv", "REDEVOPS_VAULT_PATH": "a/b"}, vault_transport=v).init()
+    mk(tmp_path, {**VENV, "REDEVOPS_VAULT_MOUNT": "kv", "REDEVOPS_VAULT_PATH": "a/b"}, vault_transport=v).init()
     assert v.calls[-1][1].endswith("/v1/kv/data/a/b") and set(v.data) == set(NAMES)
 
 
@@ -208,7 +209,7 @@ def run(tmp_path, monkeypatch, argv, capsys, env=None, **kw):
     for k, v in {"HOME": str(tmp_path), "REDEVOPS_SECRETS_FILE": str(tmp_path / "s.env"),
                  **(env or {})}.items():
         monkeypatch.setenv(k, v)
-    for n in (*NAMES, "VAULT_ADDR", "VAULT_TOKEN", "VAULT_MOUNT", "REDEVOPS_VAULT_PATH"):
+    for n in (*NAMES, "VAULT_ADDR", "VAULT_TOKEN", "VAULT_MOUNT", "REDEVOPS_VAULT_MOUNT", "REDEVOPS_VAULT_PATH"):
         monkeypatch.delenv(n, raising=False)
     rc = cli.main(argv)
     return rc, capsys.readouterr()
@@ -341,10 +342,10 @@ def test_shell_bootstrap_script_idempotent(tmp_path):
 
 # ── defaults + push ───────────────────────────────────────────────────────────────────────────────────
 
-def test_default_vault_location_is_live_bundle(tmp_path):
+def test_default_vault_path_under_the_selected_mount(tmp_path):
     b = mk(tmp_path, VENV, vault_transport=FakeVault({}))
-    assert b.vault_location() == "vault:vibexgen/agentic-os/stack"
-    assert b.vault().url == "http://v:8200/v1/vibexgen/data/agentic-os/stack"
+    assert b.vault_location() == f"vault:{MOUNT}/agentic-os/stack"
+    assert b.vault().url == f"http://v:8200/v1/{MOUNT}/data/agentic-os/stack"
 
 
 class CasVault(FakeVault):
@@ -442,7 +443,7 @@ def test_push_reads_secrets_file_and_never_prints_values(tmp_path, monkeypatch, 
     (tmp_path / "s.env").write_text(f"{APPROVAL}={sec}\n")
     v = CasVault({})
     monkeypatch.setattr(bs.Bootstrap, "vault",
-                        lambda self: bs.VaultBundle("http://v:8200", "t", "vibexgen", "agentic-os/stack", v))
+                        lambda self: bs.VaultBundle("http://v:8200", "t", MOUNT, "agentic-os/stack", v))
     monkeypatch.setattr(bs.Bootstrap, "vault_configured", lambda self: True)
     rc, out = run(tmp_path, monkeypatch, ["secrets", "push", "--yes", "--only", APPROVAL], capsys)
     assert rc == 0 and v.data == {APPROVAL: sec}

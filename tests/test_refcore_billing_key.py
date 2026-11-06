@@ -106,7 +106,8 @@ def test_the_retired_key_appears_only_in_the_refusal_list():
         if top.is_file() and top.suffix in {".md", ".yml", ".yaml", ".toml"} and top.name != "CHANGELOG.md" \
                 and RETIRED in top.read_text(encoding="utf-8"):
             hits.append(top.name)
-    assert hits == ["deploy/refcore-billing/app.py"]
+    # the service's own refusal list, and the two files of the topology guard that police the key by name
+    assert sorted(hits) == ["deploy/refcore-billing/app.py", "scripts/check_private_topology.py", "scripts/private_topology_allowlist.json"]
 
 
 def test_the_compose_files_require_the_values_and_default_none_of_them():

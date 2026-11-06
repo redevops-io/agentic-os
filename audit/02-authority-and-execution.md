@@ -11,12 +11,12 @@ Baseline audit reports, 2026-10-23. Findings and their status: [README.md](READM
 ## Workstream B: Identity, Authority and Policy Audit
 
 Branch `audit/agent-security-reliability-2026-10-23`. Read-only audit; the only file written is this one.
-Date: 2026-10-23. Paths are relative to `/Users/arybach/agentic-os` unless noted.
+Date: 2026-10-23. Paths are relative to `<repo>` unless noted.
 
 Labels: CONFIRMED (read in code, or reproduced with a probe), INFERRED (follows from code, not exercised), UNTESTED (no test covers it).
 Severity: P0 (exploitable now, high impact), P1 (real gap on a consequential path), P2 (hardening).
 
-Probe script (not in repo): `/private/tmp/claude-501/-Users-arybach-agentic-os/30e85532-95c8-480d-aadc-1f976c943ab3/scratchpad/probe_b.py`.
+Probe script (not in repo): `<session scratch>/probe_b.py`.
 
 Terms used below: there are two authorization stacks.
 - Mission stack (`agentic_os/mission/*`): `MissionRuntime`, `PolicyDecisionPlane`, HMAC approval tokens, operator `/invoke`.
@@ -223,7 +223,7 @@ Not exhaustively verified per capability: operators outside the apps listed (mar
 
 ### Scenario coverage
 
-Tests run with `/private/tmp/claude-501/.../scratchpad/venv` (python 3.13, has fastapi): `PYTHONDONTWRITEBYTECODE=1 python -m pytest -p no:cacheprovider ...`. Results:
+Tests run with `<session scratch>/venv` (python 3.13, has fastapi): `PYTHONDONTWRITEBYTECODE=1 python -m pytest -p no:cacheprovider ...`. Results:
 
 - Run 1 (approval_token, gateway approvals/egress, authorization_correctness, tenant_limits, policy_scope, mission_api_default_deny, secret_stores, rehydrate_authority, external_agent_gateway, execution_context, mission_policy, policy_decision, security_telemetry, membrane): 239 passed, 5 failed. All 5 are `tests/test_membrane.py` (`subprocess.SubprocessError: Exception occurred in preexec_fn`), an environment issue (RLIMIT setup in `preexec_fn` on macOS arm64); not a product regression. INFERRED environmental.
 - Run 2 (governance, oauth, fork_join, conformance_forgery, strip_approval, stack_knowledge, agent_gateway*, e2e, operator_sdk, gate_notify, security_durable_sink): 269 passed, 80 skipped, 2 failed: `test_agent_gateway_sandbox.py::test_default_backend_runs_a_capability_in_real_containment` (same preexec cause) and `test_security_durable_sink.py::test_durable_and_queryable_on_duckdb_backend` (duckdb backend, not investigated; likely a missing optional dependency).
@@ -287,9 +287,9 @@ G4 (approval mutation between park and resume; Inbox single-use, TTL, self-appro
 
 ## Workstream C: execution integrity audit (read-only)
 
-Repo: /Users/arybach/agentic-os, branch audit/agent-security-reliability-2026-10-23. Date 2026-10-23.
+Repo: <repo>, branch audit/agent-security-reliability-2026-10-23. Date 2026-10-23.
 Labels: CONFIRMED (read code and/or ran it), INFERRED (code reading only), UNTESTED. Severity P0 (can cause an unrecorded or duplicate real-world side effect or false "done" in a production path), P1, P2.
-Paths below are relative to /Users/arybach/agentic-os/agentic_os unless stated.
+Paths below are relative to <repo>/agentic_os unless stated.
 
 Tests run (venv-ent, py3.12, offline, fsync off): tests/test_operator_sdk.py test_mission.py test_integration_phase1_events.py test_revenue_restart.py test_reliability_order.py test_verification.py test_mission_concurrency.py test_compensation_authorization.py test_rehydrate_outcome.py test_event_log_reproducibility.py test_approval_token.py test_integration_obligation.py test_experiment_payout_reconciliation.py: 153 passed. The placeholder-guard test (a copy of agent-harness-dev, run from the scratchpad) passed 25/25. Probe script: scratchpad/probe_c.py.
 
@@ -395,7 +395,7 @@ Fix (C5, P1): add `prev_hash` and `entry_hash = sha256(prev_hash || canonical(ev
 
 ### 7. Placeholder-contamination guard (scenario 11)
 
-- Located: /Users/arybach/projects/agent-harness-dev/agent_harness/context.py:26-47 (`_PLACEHOLDER_START`, `_PLACEHOLDER_ANYWHERE`, `placeholder_in`, `placeholder_arg`) and agent_harness/loop.py:151-158. Stub producers: context-runtime/context_runtime/compression/transcript.py:28,131,210,221, plus `ELIDED` and `chars omitted to save context` in context.py:22,87.
+- Located: <agent-harness-dev checkout>/agent_harness/context.py:26-47 (`_PLACEHOLDER_START`, `_PLACEHOLDER_ANYWHERE`, `placeholder_in`, `placeholder_arg`) and agent_harness/loop.py:151-158. Stub producers: context-runtime/context_runtime/compression/transcript.py:28,131,210,221, plus `ELIDED` and `chars omitted to save context` in context.py:22,87.
 - Behaviour: before a tool call runs, every top-level string arg is checked; a hit returns "ERROR: argument 'X' is a context placeholder ... Nothing was run" as the tool result, emits `placeholder_blocked`, and counts a tool error. Also: PinSet keeps task instructions verbatim; archive-id redirect in read_file.
 - Regression test: tests/test_context_correctness.py::test_an_action_carrying_a_placeholder_is_refused_not_run (reproduces the observed `write_file` with "[archived A0048: 17339 chars] ..." and asserts only the real write reached the tool), plus parametrized `test_placeholder_text_is_recognised` and `test_real_content_is_not_mistaken_for_a_placeholder`. CONFIRMED: 25 passed (run on a copy in the scratchpad; the dev dir was not touched).
 - Gaps (CONFIRMED by running `placeholder_arg`):

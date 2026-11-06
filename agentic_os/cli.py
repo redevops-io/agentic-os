@@ -115,7 +115,7 @@ def _secrets_cmd(args, b=None, stdin_tty=None) -> int:
             print(f"  secrets file : {f}   (compose: --env-file {f})")
             print(f"  read it      : grep '^NAME=' {f}" if b.plat != "windows" else
                   f"  read it      : Select-String '^NAME=' {f}  |  [Environment]::GetEnvironmentVariable('NAME','User')")
-            print("  vault        : vault kv get -field=NAME <mount>/<REDEVOPS_VAULT_PATH>  (default vibexgen/agentic-os/stack; VAULT_MOUNT=vibexgen)")
+            print("  vault        : vault kv get -field=NAME <mount>/<REDEVOPS_VAULT_PATH>  (mount: REDEVOPS_VAULT_MOUNT, required, no default; path default agentic-os/stack)")
             if b.plat == "macos":
                 print("  keychain     : security find-generic-password -s redevops -a NAME -w")
             if b.plat == "windows":

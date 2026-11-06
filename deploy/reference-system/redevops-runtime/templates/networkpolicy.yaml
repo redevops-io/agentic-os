@@ -1,0 +1,151 @@
+{{- if .Values.networkPolicy.enabled }}
+# Default-deny network policy for every workload of this release (requires a CNI that enforces NetworkPolicy; others ignore it).
+#  runtime : ingress only from this release's verify hook and cockpit, plus networkPolicy.ingress.from; egress only to DNS, the
+#            bundled pgvector / model server, and networkPolicy.egress.extraRules (model endpoint, OTLP, Vault, SIEM, external DB).
+#  pgvector: ingress only from the runtime; no egress.      model: ingress only from the runtime.
+#  cockpit : ingress only from networkPolicy.ingress.from;  egress to the runtime and DNS.
+# kubelet probes and `kubectl port-forward` are node-originated and are not blocked by standard CNIs.
+{{- $np := .Values.networkPolicy }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "rr.fullname" . }}-runtime
+  labels:
+    {{- include "rr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: runtime
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "rr.selector" (dict "root" . "component" "runtime") | nindent 6 }}
+  policyTypes:
+    - Ingress
+    {{- if $np.egress.restrict }}
+    - Egress
+    {{- end }}
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "rr.selector" (dict "root" . "component" "deploy-mission-verify") | nindent 14 }}
+        {{- if .Values.cockpit.enabled }}
+        - podSelector:
+            matchLabels:
+              {{- include "rr.selector" (dict "root" . "component" "cockpit") | nindent 14 }}
+        {{- end }}
+        {{- with $np.ingress.from }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - { protocol: TCP, port: {{ .Values.runtime.http.port }} }
+        {{- if .Values.runtime.grpc.enabled }}
+        - { protocol: TCP, port: {{ .Values.runtime.grpc.port }} }
+        {{- end }}
+  {{- if $np.egress.restrict }}
+  egress:
+    - to:
+        {{- toYaml $np.egress.dnsTo | nindent 8 }}
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    {{- if and (eq .Values.retriever.backend "pgvector") .Values.retriever.pgvector.bundled.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "rr.selector" (dict "root" . "component" "pgvector") | nindent 14 }}
+      ports:
+        - { protocol: TCP, port: 5432 }
+    {{- end }}
+    {{- if .Values.model.server.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "rr.selector" (dict "root" . "component" "model") | nindent 14 }}
+      ports:
+        - { protocol: TCP, port: 8000 }
+    {{- end }}
+    {{- with $np.egress.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+{{- if and (eq .Values.retriever.backend "pgvector") .Values.retriever.pgvector.bundled.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "rr.fullname" . }}-pgvector
+  labels:
+    {{- include "rr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pgvector
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "rr.selector" (dict "root" . "component" "pgvector") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "rr.selector" (dict "root" . "component" "runtime") | nindent 14 }}
+      ports:
+        - { protocol: TCP, port: 5432 }
+  egress: []
+{{- end }}
+{{- if .Values.model.server.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "rr.fullname" . }}-model
+  labels:
+    {{- include "rr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: model
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "rr.selector" (dict "root" . "component" "model") | nindent 6 }}
+  policyTypes: [Ingress]        # egress left open on purpose: the server downloads model weights
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "rr.selector" (dict "root" . "component" "runtime") | nindent 14 }}
+      ports:
+        - { protocol: TCP, port: 8000 }
+{{- end }}
+{{- if .Values.cockpit.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "rr.fullname" . }}-cockpit
+  labels:
+    {{- include "rr.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cockpit
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "rr.selector" (dict "root" . "component" "cockpit") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    {{- with $np.ingress.from }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - { protocol: TCP, port: {{ $.Values.cockpit.service.port }} }
+    {{- else }}
+    []
+    {{- end }}
+  egress:
+    - to:
+        {{- toYaml $np.egress.dnsTo | nindent 8 }}
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "rr.selector" (dict "root" . "component" "runtime") | nindent 14 }}
+      ports:
+        - { protocol: TCP, port: {{ .Values.runtime.http.port }} }
+{{- end }}
+{{- end }}

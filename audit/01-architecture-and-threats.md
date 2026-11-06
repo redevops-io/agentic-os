@@ -10,7 +10,7 @@ Baseline audit reports, 2026-10-23. Findings and their status: [README.md](READM
 
 ## Architecture map (workstream A)
 
-Branch `audit/agent-security-reliability-2026-10-23`, 2026-10-23. Labels: CONFIRMED = code read (and/or existing test run), INFERRED = deduced, UNTESTED = no test exercised it. Paths are relative to `/Users/arybach/agentic-os` unless prefixed `~/projects/`.
+Branch `audit/agent-security-reliability-2026-10-23`, 2026-10-23. Labels: CONFIRMED = code read (and/or existing test run), INFERRED = deduced, UNTESTED = no test exercised it. Paths are relative to `<repo>` unless prefixed `~/projects/`.
 Targeted existing tests run (all pass, read-only): `tests/test_agent_gateway*.py` (48 pass, 1 skip), `test_approval_token.py`, `test_app_routes_strip_approval.py`, `test_compensation_authorization.py`, `test_agent_gateway_approvals/writes/egress.py` (122 pass).
 
 ### 1. Repos and versions
@@ -85,7 +85,7 @@ Plus app-local Basic-auth approval (`OPERATOR_BASIC_AUTH`) minting `_approval` (
 
 ## Data flow: one workflow end to end (workstream A)
 
-Workflow traced: **an authenticated caller asks the Mission API for a customer refund (`billing.refund`, moves money out, Lago credit note)**. This is the highest-consequence path that crosses every stage (trigger, principal, plan, model call, tool proposal, authorization, approval, dispatch, external effect, verifier, receipt). Labels: CONFIRMED = code read; INFERRED = deduced; UNTESTED = no test run covers it. All paths relative to `/Users/arybach/agentic-os`.
+Workflow traced: **an authenticated caller asks the Mission API for a customer refund (`billing.refund`, moves money out, Lago credit note)**. This is the highest-consequence path that crosses every stage (trigger, principal, plan, model call, tool proposal, authorization, approval, dispatch, external effect, verifier, receipt). Labels: CONFIRMED = code read; INFERRED = deduced; UNTESTED = no test run covers it. All paths relative to `<repo>`.
 Existing tests that exercise parts of this chain and passed on this branch: `tests/test_approval_token.py`, `test_app_routes_strip_approval.py`, `test_compensation_authorization.py` (122 passed together with gateway approvals/writes/egress tests). A single full end-to-end run of this exact refund chain was NOT executed (UNTESTED as one flow; Lago is external).
 
 | # | Stage | Function (file:line) | What happens | Label |

@@ -6,7 +6,7 @@ Offline, no keys. Shows the four seams working together:
   3. gated paid lookups are recorded in the evidence-value ledger (§8/WP8);
   4. the evaluation harness (§9) turns the ledger into per-provider retain/review/drop verdicts.
 
-Run:  PYTHONPATH=/mnt/backup/projects/runtime-contracts python examples/intelligence_demo.py
+Run:  PYTHONPATH=<your runtime-contracts checkout> python examples/intelligence_demo.py
 """
 from __future__ import annotations
 

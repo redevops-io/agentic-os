@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Provision a Windows 11 acceptance VM on the Proxmox (PVE) host for P0.1 launcher testing.
 #
-# Run ON the PVE host (or: ssh proxmox 'bash -s' < provision-win11-vm.sh). It creates a VM with
+# Run ON the PVE host (or: ssh <pve-host> 'bash -s' < provision-win11-vm.sh). It creates a VM with
 # the settings Windows 11 requires — q35 + UEFI (OVMF) + TPM 2.0 + Secure Boot, VirtIO SCSI/NET —
 # auto-downloads the VirtIO driver ISO, and attaches both ISOs so Windows setup can load the
 # VirtIO storage/network drivers. The Windows 11 ISO itself is NOT auto-fetched (Microsoft serves

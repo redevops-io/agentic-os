@@ -4,7 +4,7 @@
 **verified Mission** — *without opening a shell or editing configuration*. Passing
 `cargo tauri build` is necessary but not sufficient.
 
-Tested on a **Proxmox Win11 VM** provisioned like a customer machine (no dev tools
+Tested on a **Windows 11 VM** provisioned like a customer machine (no dev tools
 pre-installed), so the launcher's prerequisite detection (Edge Sentinel) is genuinely exercised.
 Provision with [`provision-win11-vm.sh`](provision-win11-vm.sh).
 

@@ -1,0 +1,421 @@
+{
+ "_comment": "Reviewed synthetic fixtures and product names that the private-topology guard (scripts/check_private_topology.py) accepts. One entry per file and literal; development host aliases, home paths, build-host paths, MAC addresses and the original development network can never be listed. Add an entry only with a reason a reviewer can verify.",
+ "files": {
+  "CHANGELOG.md": {
+   "reason": "Names the retired predictable development key where a file refuses it as a value (deny-list or its tests) or records that it was removed; it is never used as a default.",
+   "credentials": [
+    "refcore-dev-key"
+   ]
+  },
+  "agentic_os/control_plane.py": {
+   "reason": "Proxmox VE is named as a supported deployment target or hypervisor product (documentation, skill, template or example goal), not as a host alias.",
+   "terms": [
+    "proxmox"
+   ]
+  },
+  "apps/document-editor/README.md": {
+   "reason": "Synthetic internal service names used as inputs to hostname-classification code, tests or documentation; none identifies a real host.",
+   "names": [
+    "docedit.internal"
+   ]
+  },
+  "apps/document-editor/integration/README.md": {
+   "reason": "Default gateway address of the Docker bridge network (a documented Docker convention), overridable by environment variable.",
+   "addresses": [
+    "172.17.0.1"
+   ]
+  },
+  "apps/document-editor/integration/conftest.py": {
+   "reason": "Default gateway address of the Docker bridge network (a documented Docker convention), overridable by environment variable.",
+   "addresses": [
+    "172.17.0.1"
+   ]
+  },
+  "apps/document-editor/integration/run_throwaway.py": {
+   "reason": "Default gateway address of the Docker bridge network (a documented Docker convention), overridable by environment variable.",
+   "addresses": [
+    "172.17.0.1"
+   ]
+  },
+  "apps/document-editor/safe_fetch.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host.",
+   "addresses": [
+    "100.100.100.200",
+    "100.64.0.0",
+    "169.254.169.254",
+    "169.254.170.2",
+    "fd00:ec2::254"
+   ]
+  },
+  "apps/document-editor/test_onlyoffice_edit_unit.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host.",
+   "addresses": [
+    "169.254.169.254"
+   ]
+  },
+  "apps/document-editor/test_onlyoffice_unit.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host.",
+   "addresses": [
+    "169.254.169.254"
+   ]
+  },
+  "apps/document-editor/test_review_fixes.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host. Synthetic internal service names used as inputs to hostname-classification code, tests or documentation; none identifies a real host.",
+   "addresses": [
+    "10.0.0.1",
+    "10.0.0.5",
+    "169.254.1.1",
+    "192.168.1.1"
+   ],
+   "names": [
+    "docedit.internal"
+   ]
+  },
+  "apps/document-editor/test_safe_fetch.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host.",
+   "addresses": [
+    "10.0.0.1",
+    "10.0.0.5",
+    "10.1.2.3",
+    "100.100.100.200",
+    "100.64.0.1",
+    "169.254.1.1",
+    "169.254.169.254",
+    "169.254.170.2",
+    "172.16.0.1",
+    "192.168.1.1",
+    "fc00::1",
+    "fd00:ec2::254",
+    "fe80::1"
+   ]
+  },
+  "apps/document-editor/transport.py": {
+   "reason": "Synthetic internal service names used as inputs to hostname-classification code, tests or documentation; none identifies a real host.",
+   "names": [
+    "docedit.internal"
+   ]
+  },
+  "apps/edge-sentinel/ipguard.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host.",
+   "addresses": [
+    "10.0.0.0",
+    "100.64.0.0",
+    "169.254.0.0",
+    "172.16.0.0",
+    "192.168.0.0",
+    "fc00::",
+    "fe80::"
+   ]
+  },
+  "apps/edge-sentinel/netbird.py": {
+   "reason": "Clearly labelled sample peers for the NetBird review demo (overlay addresses in the shared address space); no real host.",
+   "addresses": [
+    "100.92.0.1",
+    "100.92.0.2",
+    "100.92.0.7",
+    "100.92.0.9"
+   ]
+  },
+  "apps/edge-sentinel/response.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host.",
+   "addresses": [
+    "10.0.0.1",
+    "10.0.0.15"
+   ]
+  },
+  "apps/edge-sentinel/test_block_guard_and_approval_state.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host.",
+   "addresses": [
+    "10.0.0.1",
+    "10.1.2.3",
+    "10.98.1.2",
+    "10.99.0.0",
+    "10.99.1.2",
+    "100.64.1.1",
+    "169.254.169.254",
+    "172.16.5.5",
+    "172.31.255.255",
+    "192.168.1.1",
+    "fc00::1",
+    "fd12::",
+    "fd12::5",
+    "fd12::7",
+    "fe80::1"
+   ]
+  },
+  "apps/edge-sentinel/test_converged_breadth.py": {
+   "reason": "Synthetic internal service names used as inputs to hostname-classification code, tests or documentation; none identifies a real host.",
+   "names": [
+    "example.internal"
+   ]
+  },
+  "apps/edge-sentinel/test_enrichment.py": {
+   "reason": "Synthetic internal service names used as inputs to hostname-classification code, tests or documentation; none identifies a real host.",
+   "names": [
+    "gateway.internal"
+   ]
+  },
+  "apps/edge-sentinel/test_operator.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host.",
+   "addresses": [
+    "10.0.0.0",
+    "10.0.0.1",
+    "10.0.0.15"
+   ]
+  },
+  "apps/edge-sentinel/test_ratelimit_and_scan.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host.",
+   "addresses": [
+    "10.0.0.1",
+    "10.0.0.2",
+    "10.9.9.9"
+   ]
+  },
+  "apps/edge-sentinel/test_response.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host.",
+   "addresses": [
+    "10.0.0.1",
+    "10.0.0.15"
+   ]
+  },
+  "apps/growth-assistant/README.md": {
+   "reason": "Proxmox VE is named as a supported deployment target or hypervisor product (documentation, skill, template or example goal), not as a host alias.",
+   "terms": [
+    "proxmox"
+   ]
+  },
+  "apps/infra/core.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host.",
+   "addresses": [
+    "100.100.100.200",
+    "169.254.169.254"
+   ]
+  },
+  "apps/infra/test_operator.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host. Synthetic internal service names used as inputs to hostname-classification code, tests or documentation; none identifies a real host.",
+   "addresses": [
+    "10.0.0.0",
+    "10.0.0.5",
+    "10.0.0.7",
+    "169.254.169.254"
+   ],
+   "names": [
+    "box.corp"
+   ]
+  },
+  "apps/market-radar/test_watch_url.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host.",
+   "addresses": [
+    "169.254.169.254"
+   ]
+  },
+  "deploy/egress/proxy.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host.",
+   "addresses": [
+    "10.0.0.1",
+    "100.64.0.0"
+   ]
+  },
+  "deploy/egress/selftest.sh": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host.",
+   "addresses": [
+    "169.254.169.254"
+   ]
+  },
+  "deploy/k8s/networkpolicy-egress.yaml": {
+   "reason": "CIDR deny-list of the egress network policy: reserved ranges that pods must never reach, not hosts.",
+   "addresses": [
+    "10.0.0.0",
+    "100.64.0.0",
+    "169.254.0.0",
+    "172.16.0.0",
+    "192.168.0.0"
+   ]
+  },
+  "deploy/launcher/autounattend/README.md": {
+   "reason": "Proxmox VE is named as a supported deployment target or hypervisor product (documentation, skill, template or example goal), not as a host alias.",
+   "terms": [
+    "proxmox"
+   ]
+  },
+  "deploy/launcher/autounattend/autounattend.xml": {
+   "reason": "Proxmox VE is named as a supported deployment target or hypervisor product (documentation, skill, template or example goal), not as a host alias.",
+   "terms": [
+    "proxmox"
+   ]
+  },
+  "deploy/launcher/autounattend/build-and-run.sh": {
+   "reason": "Proxmox VE is named as a supported deployment target or hypervisor product (documentation, skill, template or example goal), not as a host alias.",
+   "terms": [
+    "proxmox"
+   ]
+  },
+  "deploy/launcher/provision-win11-vm.sh": {
+   "reason": "Proxmox VE is named as a supported deployment target or hypervisor product (documentation, skill, template or example goal), not as a host alias.",
+   "terms": [
+    "proxmox"
+   ]
+  },
+  "deploy/launcher/src-tauri/src/config.rs": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host.",
+   "addresses": [
+    "192.168.1.20"
+   ]
+  },
+  "deploy/refcore-billing/app.py": {
+   "reason": "Names the retired predictable development key where a file refuses it as a value (deny-list or its tests) or records that it was removed; it is never used as a default.",
+   "credentials": [
+    "refcore-dev-key"
+   ]
+  },
+  "deploy/sidekick-devops/README.md": {
+   "reason": "Synthetic internal service names used as inputs to hostname-classification code, tests or documentation; none identifies a real host. Proxmox VE is named as a supported deployment target or hypervisor product (documentation, skill, template or example goal), not as a host alias.",
+   "terms": [
+    "proxmox"
+   ],
+   "names": [
+    "sidekick.internal"
+   ]
+  },
+  "deploy/sidekick-devops/helm/values.yaml": {
+   "reason": "Synthetic internal service names used as inputs to hostname-classification code, tests or documentation; none identifies a real host.",
+   "names": [
+    "sidekick.internal"
+   ]
+  },
+  "deploy/sidekick-devops/skills/deployment-proxmox/REFERENCE.md": {
+   "reason": "Proxmox VE is named as a supported deployment target or hypervisor product (documentation, skill, template or example goal), not as a host alias.",
+   "terms": [
+    "proxmox"
+   ]
+  },
+  "deploy/sidekick-devops/skills/deployment-proxmox/SKILL.md": {
+   "reason": "Proxmox VE is named as a supported deployment target or hypervisor product (documentation, skill, template or example goal), not as a host alias.",
+   "terms": [
+    "proxmox"
+   ]
+  },
+  "deploy/sidekick-devops/skills/deployment-skypilot/SKILL.md": {
+   "reason": "Proxmox VE is named as a supported deployment target or hypervisor product (documentation, skill, template or example goal), not as a host alias.",
+   "terms": [
+    "proxmox"
+   ]
+  },
+  "deploy/sidekick-devops/skills/deployment-stack-selection/REFERENCE.md": {
+   "reason": "Proxmox VE is named as a supported deployment target or hypervisor product (documentation, skill, template or example goal), not as a host alias.",
+   "terms": [
+    "proxmox"
+   ]
+  },
+  "deploy/sidekick-devops/skills/deployment-stack-selection/SKILL.md": {
+   "reason": "Proxmox VE is named as a supported deployment target or hypervisor product (documentation, skill, template or example goal), not as a host alias.",
+   "terms": [
+    "proxmox"
+   ]
+  },
+  "docs/DEPLOYMENT_ADDRESSES.md": {
+   "reason": "Synthetic internal service names used as inputs to hostname-classification code, tests or documentation; none identifies a real host.",
+   "names": [
+    "example.internal"
+   ]
+  },
+  "tests/test_agent_gateway_error_hardening.py": {
+   "reason": "Synthetic internal service names used as inputs to hostname-classification code, tests or documentation; none identifies a real host.",
+   "names": [
+    "db.internal",
+    "mail.internal"
+   ]
+  },
+  "tests/test_app_llm.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host. Synthetic internal service names used as inputs to hostname-classification code, tests or documentation; none identifies a real host. Proxmox VE is named as a supported deployment target or hypervisor product (documentation, skill, template or example goal), not as a host alias.",
+   "addresses": [
+    "10.0.0.9"
+   ],
+   "terms": [
+    "proxmox"
+   ],
+   "names": [
+    "model.internal"
+   ]
+  },
+  "tests/test_egress_proxy.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host. Synthetic internal service names used as inputs to hostname-classification code, tests or documentation; none identifies a real host.",
+   "addresses": [
+    "10.0.0.1",
+    "10.0.0.5",
+    "10.1.2.3",
+    "100.64.0.1",
+    "169.254.169.254",
+    "172.16.0.9",
+    "192.168.1.1",
+    "fc00::1",
+    "fe80::1"
+   ],
+   "names": [
+    "model.internal"
+   ]
+  },
+  "tests/test_external_agent_gateway.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host.",
+   "addresses": [
+    "10.0.0.0"
+   ]
+  },
+  "tests/test_intelligence_adapters.py": {
+   "reason": "Synthetic internal service names used as inputs to hostname-classification code, tests or documentation; none identifies a real host.",
+   "names": [
+    "yente.local"
+   ]
+  },
+  "tests/test_pp_page_hardening.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host.",
+   "addresses": [
+    "10.0.0.0",
+    "10.1.2.3"
+   ]
+  },
+  "tests/test_production.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host.",
+   "addresses": [
+    "10.0.0.5"
+   ]
+  },
+  "tests/test_refcore_billing_key.py": {
+   "reason": "Names the retired predictable development key where a file refuses it as a value (deny-list or its tests) or records that it was removed; it is never used as a default.",
+   "credentials": [
+    "refcore-dev-key"
+   ]
+  },
+  "tests/test_safe_url.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host. Synthetic internal service names used as inputs to hostname-classification code, tests or documentation; none identifies a real host.",
+   "addresses": [
+    "10.0.0.1",
+    "10.0.0.5",
+    "169.254.169.254"
+   ],
+   "names": [
+    "a.cluster.local",
+    "host.corp"
+   ]
+  },
+  "tests/test_secure_defaults.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host.",
+   "addresses": [
+    "192.168.1.5"
+   ]
+  },
+  "tests/test_security_profile_status.py": {
+   "reason": "Synthetic internal service names used as inputs to hostname-classification code, tests or documentation; none identifies a real host.",
+   "names": [
+    "proxy.internal"
+   ]
+  },
+  "tests/test_sentinel_feed.py": {
+   "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host.",
+   "addresses": [
+    "10.0.0.5",
+    "169.254.169.254"
+   ]
+  }
+ }
+}

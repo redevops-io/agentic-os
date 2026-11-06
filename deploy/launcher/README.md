@@ -44,8 +44,8 @@ That end-to-end path (Sentinel prerequisites → default LLM → Sidekick outcom
 Twenty key provisioned → Mission parks → approve → executes → **survives a reboot**) is the real
 proof. See [ACCEPTANCE.md](ACCEPTANCE.md) for the exact steps and the snapshot matrix.
 
-## Test environment — a Proxmox Windows 11 VM (not a dev laptop)
-Windows is tested on a **Win11 VM on our Proxmox host**, provisioned like a *customer* machine
+## Test environment — a Windows 11 VM (not a dev laptop)
+Windows is tested on a **Win11 VM on a hypervisor host**, provisioned like a *customer* machine
 (no dev tools pre-installed) so the installer's prerequisite detection is actually exercised.
 Provision it with [`provision-win11-vm.sh`](provision-win11-vm.sh); snapshot to pristine and
 re-run the installer repeatedly. Tauri recommends real VMs / CI over Linux→Windows
@@ -60,7 +60,7 @@ cargo tauri build      # produce a .dmg (macOS) / .msi (Windows)
 
 Distribution: notarized `.dmg` + `brew install --cask` (macOS); `.msi` + `winget` (Windows).
 
-**macOS + iOS are not virtualized on this PC Proxmox box** (Apple's licence permits macOS
+**macOS + iOS are not virtualized on a PC hypervisor box** (Apple's licence permits macOS
 virtualization only on Apple hardware, and there is no supported iOS VM image — the route is
 Xcode + the iOS Simulator on a Mac). Those targets use a **hosted/rented Mac**; a physical
 iPhone is only needed later for push/backgrounding/Keychain/real-network acceptance.

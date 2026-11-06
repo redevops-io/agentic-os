@@ -1,6 +1,6 @@
 """External Agent Gateway (agent-gateway/v1) — conformance + adversarial tests.
 
-Run:  PYTHONPATH=/mnt/backup/projects/discovery-runtime .venv/bin/python -m pytest \
+Run:  PYTHONPATH=<your discovery-runtime checkout> .venv/bin/python -m pytest \
         tests/test_external_agent_gateway.py -q
 (discovery_runtime is only needed for the Learn-boundary tests; the core path needs only .venv.)
 """

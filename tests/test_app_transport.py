@@ -35,13 +35,13 @@ def test_transport_posts_to_the_routed_endpoints_network_route(monkeypatch):
 
     endpoint = ModelEndpoint(model_id="qwen", provider="selfhost",
                              boundary=ExecutionBoundary.IN_BOUNDARY, accepts=DC.SECRET,
-                             network_route="http://evo-x2:8000/v1")
+                             network_route="http://model-host:8000/v1")
     llm = GovernedLLM(GovernedModelRouter([endpoint], mode=PrivacyMode.PRIVATE_WITH_ENGINEERING_ASSIST),
                       transport=OpenAICompatibleTransport(api_key="k"))
     res = llm.complete("hi", classifications=(DC.CUSTOMER_RESTRICTED,))
 
     assert res.text == "hello from qwen"
-    assert calls["url"] == "http://evo-x2:8000/v1/chat/completions"   # the routed endpoint's route
+    assert calls["url"] == "http://model-host:8000/v1/chat/completions"   # the routed endpoint's route
     assert calls["model"] == "qwen"
     assert calls["auth"] == "Bearer k"
     assert res.receipt.crossed_boundary is False

@@ -54,6 +54,13 @@ def rehydrate_in_flight(rt: MissionRuntime, strict: bool | None = None) -> list[
         try:
             m = rt.rehydrate(mid)
             restored.append(mid)
+            # A restored mission is read-only until it is authorized to resume (replay boundary). Nothing resumes by default;
+            # with AGENTIC_OS_RESUME_SERVICE_PRINCIPAL set and holding evidence.<scope>.resume, it is authorized here.
+            if os.environ.get("AGENTIC_OS_RESUME_SERVICE_PRINCIPAL", "").strip():
+                try:
+                    rt.service_resume(mid)
+                except PermissionError as e:
+                    log.warning("mission %s restored read-only: %s", mid, e)
             created = next((e for e in rt.store.for_mission(mid) if e.type == "MissionCreated"), None)
             if created is not None and "budget" not in created.payload:
                 log.warning("mission %s: no recorded budget, restored with the default", mid)

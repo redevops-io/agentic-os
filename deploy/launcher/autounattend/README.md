@@ -12,10 +12,10 @@ guest agent (a plain MSI). Swap to VirtIO later for performance if desired.
 
 ## Run
 ```bash
-# on the PVE host (or: ssh proxmox 'bash -s' < build-and-run.sh)
+# on the PVE host (or: ssh <pve-host> 'bash -s' < build-and-run.sh)
 bash deploy/launcher/autounattend/build-and-run.sh
 # then wait for the guest agent (install done + first logon + qemu-ga):
-ssh proxmox 'while ! qm agent 9001 ping 2>/dev/null; do sleep 30; done; echo AGENT_UP'
+ssh <pve-host> 'while ! qm agent 9001 ping 2>/dev/null; do sleep 30; done; echo AGENT_UP'
 # then run the tests inside Windows from the host:
 qm guest exec 9001 -- cmd /c ver           # smoke: guest exec works
 ```

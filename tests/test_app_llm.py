@@ -144,7 +144,7 @@ def test_in_boundary_endpoint_refuses_a_public_host(monkeypatch):
     # loopback / private / allowlisted public are in-boundary
     monkeypatch.setenv("REDEVOPS_LLM_BASE_URL", "http://127.0.0.1:8000/v1")
     assert default_in_boundary_endpoint() is not None
-    monkeypatch.setenv("REDEVOPS_LLM_BASE_URL", "http://192.168.40.9:8000/v1")
+    monkeypatch.setenv("REDEVOPS_LLM_BASE_URL", "http://10.0.0.9:8000/v1")
     assert default_in_boundary_endpoint() is not None
     monkeypatch.setenv("REDEVOPS_LLM_BASE_URL", "https://llm.mycorp.com/v1")
     assert default_in_boundary_endpoint() is None                      # public DNS not trusted by default

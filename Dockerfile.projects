@@ -1,16 +1,47 @@
-# Self-hosted ReDevOps Projects — the Projects UI + API on one origin.
+# Self-hosted ReDevOps Projects: the Projects UI + API on one origin.
 #   docker build -f Dockerfile.projects -t redevops-projects .
-#   docker run -p 8787:8787 redevops-projects          # → http://localhost:8787
-# The prebuilt UI (pinned redevops-projects release, packaging/projects_ui.lock.json) is fetched and
-# sha256-verified by the wheel build hook, so no Node build is needed here (the build needs network access).
-FROM python:3.12-slim
+#   docker run -p 127.0.0.1:8787:8787 redevops-projects   # -> http://127.0.0.1:8787 (loopback publish; see docs)
+# The UI bundle is fetched at build time by the wheel build hook (hatch_build.py -> scripts/fetch_projects_ui.py) from the
+# release pinned, with its sha256, in packaging/projects_ui.lock.json; no Node build is needed here.
+# Base pinned by the index digest (python 3.12-slim-trixie, multi-arch: linux/amd64 + linux/arm64).
+# Bump deliberately: docker buildx imagetools inspect python:3.12-slim
+FROM python:3.12-slim@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54
 WORKDIR /app
-# git is required at install time: runtime-contracts + redevops-connectors are git dependencies.
+# Reproducible builds: pass --build-arg SOURCE_DATE_EPOCH=<unix time> (and --output ...,rewrite-timestamp=true).
+ARG SOURCE_DATE_EPOCH
+# Only what the wheel build and the UI fetch hook need (not the whole build context): a local .env, key or evidence file
+# in the checkout must not be able to land in an image layer.
+COPY pyproject.toml README.md modules.yaml hatch_build.py LICENSE LICENSE-COMMONS-CLAUSE LICENSE.md ./
+COPY scripts/fetch_projects_ui.py ./scripts/fetch_projects_ui.py
+COPY packaging/projects_ui.lock.json ./packaging/projects_ui.lock.json
+COPY agentic_os ./agentic_os
+COPY deploy/assets ./deploy/assets
+# git is required at install time only (git-pinned dependencies): install it for the build and purge it in the same
+# layer. The import check fails THIS build if the contract package or the first module that needs it cannot be imported.
+# pip, setuptools and wheel are removed last: the image installs nothing at run time and ships no package manager.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git \
-    && rm -rf /var/lib/apt/lists/*
-COPY . /app
-RUN pip install --no-cache-dir '.[projects]'
+    && PIP_NO_CACHE_DIR=1 pip install --no-cache-dir '.[projects]' \
+    && (cd / && python -c "import runtime_contracts, agentic_os.sources") \
+    && apt-get purge -y git && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/* /var/log/apt /var/log/dpkg.log /var/log/alternatives.log /var/cache/ldconfig/aux-cache \
+    && pip uninstall -y pip setuptools wheel
 ENV PROJECTS_HOST=0.0.0.0 PROJECTS_PORT=8787
+# Run unprivileged. The app keeps its state under the service user's home (AGENTIC_OS_HOME / ~). /app stays root-owned.
+RUN groupadd --system --gid 10001 app \
+    && useradd --system --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin app
+USER 10001:10001
 EXPOSE 8787
+# The static UI shell at / is served without the launch capability, so it is the unauthenticated liveness signal.
+# Honours PROJECTS_PORT and PROJECTS_BASE_PATH; the in-container Host header is 127.0.0.1:<port>.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD ["python", "-c", "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:%s%s/' % (os.environ.get('PROJECTS_PORT','8787'), os.environ.get('PROJECTS_BASE_PATH','').rstrip('/')), timeout=3)"]
+# Image metadata (set by scripts/release/oci_prepare.sh from the release tag and the source commit; empty when built by hand).
+ARG OCI_VERSION
+ARG OCI_REVISION
+LABEL org.opencontainers.image.title="redevops-projects" \
+      org.opencontainers.image.description="ReDevOps Projects (UI and API)" \
+      org.opencontainers.image.version="$OCI_VERSION" \
+      org.opencontainers.image.revision="$OCI_REVISION" \
+      org.opencontainers.image.vendor="ReDevOps"
 CMD ["agentic-os-projects"]

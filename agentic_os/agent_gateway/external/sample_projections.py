@@ -29,7 +29,7 @@ SAMPLE_SNAPSHOT: Dict[str, dict] = {
     "/api/network/review": {"peers": 4, "connected": 3, "risks": [
         {"kind": "broad_policy", "severity": "high", "detail": "policy Default allows All->All"},
         {"kind": "unapproved_peer", "severity": "high", "detail": "peer contractor-vm pending approval"},
-        {"kind": "login_expired", "severity": "medium", "detail": "peer laptop-alex login expired"}]},
+        {"kind": "login_expired", "severity": "medium", "detail": "peer example-laptop login expired"}]},
 }
 
 

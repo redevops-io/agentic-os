@@ -3,7 +3,9 @@ services:
   control-plane:
     build: .
     command: uvicorn agentic_os.control_plane:app --host 0.0.0.0 --port 8080
-    ports: ["8080:8080"]
+    # Published on loopback only. To reach it from another machine set AOS_BIND_ADDR to a specific interface address:
+    # 0.0.0.0 exposes the control plane to every network the host is on (docs/release/CONTAINER_ACCEPTANCE_CRITERIA.md).
+    ports: ["${AOS_BIND_ADDR:-127.0.0.1}:8080:8080"]
     environment:
       - AGENTIC_OS_CONFIG=/app/config.yaml
       - AGENTIC_OS_HOME=/data

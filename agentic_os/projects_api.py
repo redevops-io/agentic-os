@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import html as _html
 
+from . import __version__
+
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Protocol, Set, Tuple
 
@@ -1511,7 +1513,7 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
         persist_path=(_os_env.environ.get("OUTCOME_STORE_PATH", "").strip() or None))
     from fastapi import Body
     from fastapi.responses import HTMLResponse
-    app = FastAPI(title="ReDevOps Projects API", version="0.1.0")
+    app = FastAPI(title="ReDevOps Projects API", version=__version__)
     # Same-origin only by default (the bundled UI is served from this app, so it needs no CORS). Cross-origin
     # access is opt-in: `allow_origins=` or $PROJECTS_CORS_ORIGINS (comma-separated origins).
     origins = allow_origins or [o.strip() for o in _os_env.environ.get("PROJECTS_CORS_ORIGINS", "").split(",")
@@ -1946,7 +1948,7 @@ def mounted_app(base_path: str = "", provider: Optional[ProjectionProvider] = No
     base = (base_path or "").rstrip("/")
     if not base:
         return inner
-    outer = FastAPI(title="ReDevOps Projects", version="0.1.0")
+    outer = FastAPI(title="ReDevOps Projects", version=__version__)
     outer.mount(base, inner)   # Starlette strips the prefix before the inner app sees it
     return outer
 

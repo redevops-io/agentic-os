@@ -22,9 +22,10 @@ log = logging.getLogger("agentic_os.secrets")
 BEGIN = "# >>> redevops secrets (managed) >>>"
 END = "# <<< redevops secrets (managed) <<<"
 KEYRING_SERVICE = "redevops"
-# Live bundle: KV v2 mount `vibexgen`, path `agentic-os/stack` (API path vibexgen/data/agentic-os/stack).
-DEFAULT_VAULT_MOUNT = "vibexgen"
+# The bundle lives at KV v2 path `agentic-os/stack` under a mount that the deployment selects with REDEVOPS_VAULT_MOUNT
+# (alias: VAULT_MOUNT). There is no default mount: a Vault lookup without one stops with VaultMountMissing.
 DEFAULT_VAULT_PATH = "agentic-os/stack"
+VAULT_MOUNT_VARS = ("REDEVOPS_VAULT_MOUNT", "VAULT_MOUNT")
 
 
 class SecretsError(RuntimeError):
@@ -33,6 +34,10 @@ class SecretsError(RuntimeError):
 
 class VaultCasConflict(SecretsError):
     pass
+
+
+class VaultMountMissing(SecretsError):
+    """Vault is configured (VAULT_ADDR and VAULT_TOKEN) but no KV v2 mount was selected. Never swallowed or defaulted."""
 
 
 # ── locations ──────────────────────────────────────────────────────────────────────────────────────────
@@ -257,9 +262,17 @@ class Bootstrap:
     def vault_configured(self) -> bool:
         return bool(self.environ.get("VAULT_ADDR") and self.environ.get("VAULT_TOKEN"))
 
+    def vault_mount(self) -> str:
+        for name in VAULT_MOUNT_VARS:
+            value = (self.environ.get(name) or "").strip()
+            if value:
+                return value
+        raise VaultMountMissing("Vault is configured (VAULT_ADDR and VAULT_TOKEN are set) but no KV v2 mount is selected: "
+                                "set REDEVOPS_VAULT_MOUNT to the mount that holds the secrets bundle. There is no default mount.")
+
     def vault(self) -> VaultBundle:
         return VaultBundle(self.environ["VAULT_ADDR"], self.environ["VAULT_TOKEN"],
-                           self.environ.get("VAULT_MOUNT", DEFAULT_VAULT_MOUNT),
+                           self.vault_mount(),
                            self.environ.get("REDEVOPS_VAULT_PATH", DEFAULT_VAULT_PATH), self.vault_transport)
 
     def vault_location(self) -> str:
@@ -425,6 +438,8 @@ class Bootstrap:
         if self.vault_configured():
             try:
                 vd = self.vault().read()
+            except VaultMountMissing:
+                raise
             except SecretsError:
                 vd = None
         rows = []

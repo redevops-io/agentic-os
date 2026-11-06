@@ -13,7 +13,7 @@ from agentic_os.agent_gateway.external.sample_projections import deployment_insp
 NET_RISKS = [
     {"kind": "broad_policy", "severity": "high", "detail": "policy 'Default' rule 'Default' allows All→All (all) — over-broad"},
     {"kind": "unapproved_peer", "severity": "high", "detail": "peer 'contractor-vm' is pending approval — unapproved device on the network"},
-    {"kind": "login_expired", "severity": "medium", "detail": "peer 'laptop-alex' has an expired login — should re-authenticate"}]
+    {"kind": "login_expired", "severity": "medium", "detail": "peer 'example-laptop' has an expired login — should re-authenticate"}]
 BACKUPS = {"total": 5, "ok": 4, "never": ["listmonk (lifecycle)"], "no_offsite": ["lago (billing)"], "unencrypted": []}
 ACTIVITY = {"connected": True, "has_threat": False, "kpis": [{"label": "Active decisions", "value": "0"}], "decisions": []}
 

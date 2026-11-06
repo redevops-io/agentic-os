@@ -14,9 +14,48 @@ fullnameOverride: ""
 runtime:
   image:
     repository: ghcr.io/redevops-io/redevops-runtime
-    tag: "0.3.1"                   # matches Chart.appVersion; publish this tag before the one-click deploy
+    # NO DEFAULT IMAGE. The published tags 0.3.0, 0.3.1 and v6 are deprecated and unsupported, so the chart refuses them
+    # and renders only when one of these is set:
+    digest: ""                     # PREFERRED, immutable: sha256:<64 lowercase hex>  -> repository@sha256:...
+    tag: ""                        # or a fixed MAJOR.MINOR.PATCH version tag (never latest, stable, v6, 0.3.0, 0.3.1)
+    # Once a release image is published AND verified (signature + attestations), the default may become its digest in a
+    # follow-up commit (see docs/release/CONTAINER_ACCEPTANCE_CRITERIA.md, section "When the image is public").
     pullPolicy: IfNotPresent
   replicas: 1
+  # Name of an EXISTING Secret holding the key AGENTIC_OS_CONTROL_TOKEN (a long random value; never put it in values).
+  # The runtime's mutating routes answer 503 until it is set, then require `Authorization: Bearer <token>`; /health (the
+  # probes) never needs it. So the token is REQUIRED for any use beyond the health checks. Create it with:
+  #   kubectl create secret generic <name> --from-literal=AGENTIC_OS_CONTROL_TOKEN="$(openssl rand -hex 32)"
+  controlTokenSecret: ""
+  service:
+    type: ClusterIP                # exposure (NodePort / LoadBalancer) only by an explicit value; the chart has no Ingress
+  # Pod and container hardening (the acceptance criteria). Maps MERGE with these defaults, so a single field can be
+  # overridden explicitly, e.g. --set runtime.securityContext.readOnlyRootFilesystem=false.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001               # the image's `app` user (Dockerfile: USER 10001:10001)
+    runAsGroup: 10001
+    fsGroup: 10001                 # makes the ledger volume writable by the service user
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile: { type: RuntimeDefault }
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    privileged: false
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true   # writable paths are the explicit emptyDir mounts in templates/runtime.yaml
+    capabilities: { drop: ["ALL"] }
+    seccompProfile: { type: RuntimeDefault }
+  # Size caps of the writable emptyDir mounts (/tmp, /data = AGENTIC_OS_HOME, /app/.agentic-os).
+  scratch:
+    tmpSize: 256Mi
+    dataSize: 1Gi
+  # Explicit health checks: GET /health on the http port (open without a credential).
+  probes:
+    startup:   { periodSeconds: 5, timeoutSeconds: 3, failureThreshold: 30 }
+    readiness: { periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3 }
+    liveness:  { periodSeconds: 20, timeoutSeconds: 3, failureThreshold: 3 }
   http:
     port: 8080
   grpc:
@@ -25,7 +64,8 @@ runtime:
   resources:
     requests: { cpu: "500m", memory: "512Mi" }
     limits:   { cpu: "2",    memory: "2Gi" }
-  # Governed-execution defaults baked into the runtime config (see templates/configmap.yaml).
+  # Governed-execution settings recorded in the ConfigMap (templates/configmap.yaml). The runtime image does not read the
+  # ConfigMap; only ledger.persistent has an effect here (the grants volume is a PVC instead of an emptyDir).
   mission:
     # deny-by-default: no capability runs without an explicit grant.
     denyByDefault: true
@@ -59,7 +99,8 @@ security:
   enabled: false
   image:
     repository: ""                # e.g. ghcr.io/redevops-io/redevops-runtime-enterprise (bundles the plugins)
-    tag: "0.3.1"
+    digest: ""                    # REQUIRED with a repository: sha256:<64 hex> (or a fixed version tag below); no default
+    tag: ""
   sandbox:
     enabled: true                 # route isolation-declaring capabilities through the SubprocessSandbox (fail-closed)
   # ── authority-scoped credential brokerage (runtime-contracts SecretStore/CredentialBroker seams) ──
@@ -101,11 +142,18 @@ retriever:
   pgvector:
     # Point at Azure Database for PostgreSQL / AWS RDS / Cloud SQL + pgvector, or the bundled one below.
     dsn: ""                       # e.g. postgres://user:pass@host:5432/redevops_rag?sslmode=require
+    dsnSecret: ""                 # preferred over dsn: name of an existing Secret with key RDO_PGVECTOR_DSN
     bundled:
-      enabled: true               # deploy an in-cluster pgvector Postgres for a self-contained demo
-      image: pgvector/pgvector:pg16
+      enabled: false              # opt-in demo database (it was on by default with a literal password; now off, see README)
+      # Third-party image, pinned by digest (the pg16 index digest also used in deploy/apps/compose.yml; resolved on the
+      # registry 2026-11-06, not security-scanned here). Runs as the image's postgres user (uid 999) with a read-only root.
+      image: pgvector/pgvector@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
+      passwordSecret: ""          # REQUIRED when enabled: name of an existing Secret with key POSTGRES_PASSWORD
       size: 10Gi
       storageClass: ""
+      resources:
+        requests: { cpu: "250m", memory: "256Mi" }
+        limits:   { cpu: "1",    memory: "1Gi" }
 
 # ── model endpoint (OpenAI-compatible). Point at an existing endpoint, OR bundle a ROCm/vLLM server. ──
 model:
@@ -117,7 +165,15 @@ model:
   # reference system on Supermicro AMD Instinct (MI300X / MI350X 8-GPU) nodes.
   server:
     enabled: false
-    image: rocm/vllm:latest       # ROCm vLLM image (DEMO default; PIN BY DIGEST in prod — see profiles/amd-instinct.yaml)
+    image: ""                     # REQUIRED when enabled, pinned by digest: rocm/vllm@sha256:<64 hex> (no tag, no default; see profiles/amd-instinct.yaml)
+    # GPU image: its user and cache paths are not verified, so runAsNonRoot and the read-only root filesystem are NOT forced
+    # here (documented exceptions); the rest of the hardening (no privilege escalation, drop ALL, seccomp) applies.
+    securityContext:
+      allowPrivilegeEscalation: false
+      privileged: false
+      readOnlyRootFilesystem: false
+      capabilities: { drop: ["ALL"] }
+      seccompProfile: { type: RuntimeDefault }
     servedModelId: "meta-llama/Llama-3.1-8B-Instruct"
     gpus: 1                        # AMD GPUs to request (amd.com/gpu)
     resources:
@@ -131,7 +187,25 @@ cockpit:
   enabled: false
   image:
     repository: ghcr.io/redevops-io/cockpit
-    tag: v6
+    digest: ""                    # REQUIRED when enabled (sha256:<64 hex>) or a fixed version tag; no default (the old v6 tag is refused)
+    tag: ""
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile: { type: RuntimeDefault }
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    privileged: false
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities: { drop: ["ALL"] }
+    seccompProfile: { type: RuntimeDefault }
+  resources:
+    requests: { cpu: "50m",  memory: "64Mi" }
+    limits:   { cpu: "500m", memory: "256Mi" }
   service:
     type: ClusterIP
     port: 8240
@@ -150,7 +224,10 @@ amd:
 deployMission:
   verify:
     enabled: true
-    image: curlimages/curl:8.10.1
+    # The hook runs the RUNTIME image itself (python urllib, no third-party curl image to pin); there is no `image` value.
+    resources:
+      requests: { cpu: "10m",  memory: "32Mi" }
+      limits:   { cpu: "200m", memory: "128Mi" }
     # acceptance checks the hook runs (HTTP GET against the runtime; non-2xx fails the release).
     checks:
       - /health
@@ -159,6 +236,23 @@ deployMission:
 serviceAccount:
   create: true
   name: ""
+  automountServiceAccountToken: false   # the runtime does not call the Kubernetes API; no token is mounted
 
 podAnnotations: {}
+# Pull secrets for PRIVATE packages (for example a staged-* package on GHCR): [{ name: ghcr-pull }]
 imagePullSecrets: []
+
+# ── network: default-deny NetworkPolicy (needs a CNI that enforces NetworkPolicy; others ignore the object) ──
+# ENABLED BY DEFAULT: a default install touches only DNS and (when enabled) the bundled pgvector / model server, all
+# allowed below, and the verify hook and cockpit of this release are allowed in. Anything else is an explicit opt-in:
+# add the callers to ingress.from and every external endpoint (model.endpoint, OTLP, Vault, SIEM, an external Postgres
+# DSN, connected modules) to egress.extraRules. The chart prints a warning in NOTES when it sees such endpoints.
+networkPolicy:
+  enabled: true
+  ingress:
+    from: []                      # extra NetworkPolicyPeer entries allowed to reach the runtime, e.g. [{ namespaceSelector: { matchLabels: { team: edge } } }]
+  egress:
+    restrict: true                # false = leave the runtime egress unrestricted (not recommended)
+    dnsTo:                        # where DNS lives (port 53 udp/tcp)
+      - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+    extraRules: []                # raw NetworkPolicyEgressRule entries, e.g. [{ to: [{ ipBlock: { cidr: 198.51.100.0/24 } }], ports: [{ port: 8000 }] }]
