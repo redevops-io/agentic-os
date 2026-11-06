@@ -7,7 +7,7 @@ usable (and testable) without the web dependency.
 
 from typing import Any
 
-from .runtime import MissionRuntime
+from .runtime import MissionRuntime, ResumeNotAuthorized
 from .simulator import simulate
 from .types import Budget, to_jsonable
 
@@ -74,7 +74,11 @@ def build_router(runtime: MissionRuntime):
 
     @router.post("/{mid}/approve")
     def approve(mid: str, body: Approve):
-        runtime.approve(mid, body.node_id, body.decision, body.edit)
+        try:
+            runtime.approve(mid, body.node_id, body.decision, body.edit)
+        except ResumeNotAuthorized:
+            # a mission reconstructed from the log is read-only until a resume authorization is granted (replay boundary)
+            raise HTTPException(403, "mission was reconstructed from the log; resuming it needs a resume authorization")
         return _mission_view(mid)
 
     @router.get("/{mid}/events")

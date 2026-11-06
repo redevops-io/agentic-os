@@ -78,6 +78,10 @@ def main() -> None:
     rt2 = MissionRuntime(reg, Executor(client), store=store)
     m2 = rt2.rehydrate(m.id)
     print(f"[restart] rehydrated {m2.id} from the event log; state={m2.state.value}")
+    # a reconstructed mission needs an explicit resume authorization; this demo is a single local owner
+    from ..evidence_query.authz import StaticCeiling
+    from ..overlays import Principal
+    rt2.grant_resume(m.id, principal=Principal("local-owner"), ceiling=StaticCeiling({"evidence.local"}), scope="local")
     rt2.approve(m.id, pending["node_id"], "approve")
     print(f"[restart] after approval: state={rt2._missions[m.id].state.value}\n")
 

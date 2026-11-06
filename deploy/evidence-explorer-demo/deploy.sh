@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Deploy the Evidence Explorer to proxmox (demo.redevops.io/evidence), :8101.
+# AUTHENTICATED profile only (the anonymous public synthetic profile is evidence-demo.public.compose.yml: owner decision).
 # Standalone — does NOT touch the control-plane. Stages the real v0.3.0 kernel + contracts (incl. the
 # runtime_contracts.store EvidenceStore seam), persists a real benchmark run, serves a DuckDB SQL UI.
 set -euo pipefail
@@ -13,7 +14,7 @@ STAGE="$(mktemp -d)"; trap 'rm -rf "$STAGE"' EXIT
 echo "== stage build context (kernel + contracts incl. store seam) =="
 rsync -aH --exclude __pycache__ --exclude '*.pyc' "$AGENTIC/agentic_os" "$STAGE/"
 rsync -aH --exclude __pycache__ --exclude '*.pyc' "$RC/runtime_contracts" "$STAGE/"
-cp "$SRC/app.py" "$SRC/Dockerfile" "$SRC/evidence-demo.compose.yml" "$STAGE/"
+cp "$SRC"/*.py "$SRC/Dockerfile" "$SRC"/evidence-demo*.compose.yml "$STAGE/"
 
 echo "== sync -> $HOST:$HOST_DIR =="
 ssh "root@$HOST" "mkdir -p $HOST_DIR"
@@ -22,6 +23,9 @@ rsync -aH --delete --exclude '.git' "$STAGE"/ "root@$HOST:$HOST_DIR/"
 ssh "root@$HOST" EV_HOST_DIR="$HOST_DIR" 'bash -s' <<'REMOTE'
 set -e
 cd "$EV_HOST_DIR"
+# The authenticated profile refuses to start without a token (D-1). Provide it in $EV_HOST_DIR/.env on the host
+# (EVIDENCE_EXPLORER_TOKEN=<>=24 random characters>, mode 0600); this script never carries or prints it.
+[ -f .env ] && grep -q '^EVIDENCE_EXPLORER_TOKEN=.\{24,\}' .env || { echo "missing EVIDENCE_EXPLORER_TOKEN in $EV_HOST_DIR/.env"; exit 1; }
 EVIDENCE_EDGE_PORT=8101 docker compose -p evidence-demo -f evidence-demo.compose.yml up -d --build
 for i in $(seq 1 30); do
   curl -s --max-time 6 http://127.0.0.1:8101/healthz 2>/dev/null | grep -q '"ok":true' && { echo healthy; break; }

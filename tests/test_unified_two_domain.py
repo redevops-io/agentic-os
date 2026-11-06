@@ -67,6 +67,9 @@ def test_two_domain_mission_end_to_end_with_restart(tmp_path, creds):
     assert m2.id == m.id and rt2.repo.state(m.id) == MissionState.WAITING_HUMAN   # durable suspend
 
     # ── approve on the rehydrated runtime → resume → side effect executes ─────
+    from agentic_os.evidence_query.authz import StaticCeiling
+    from agentic_os.overlays import Principal
+    rt2.grant_resume(m.id, principal=Principal("owner"), ceiling=StaticCeiling({"evidence.local"}), scope="local")
     node_id = rt2.repo.pending_human(m.id)["node_id"]
     rt2.approve(m.id, node_id, "approve")
     assert rt2.repo.state(m.id) == MissionState.SUCCEEDED

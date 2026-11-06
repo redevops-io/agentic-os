@@ -1,0 +1,27 @@
+# PUBLIC SYNTHETIC profile (anonymous, read-only, synthetic data only). OWNER DECISION to deploy; nothing else starts it.
+# Deliberately has: no volumes (no host mounts), no Docker socket, no secrets, no credentials in the environment, a read-only
+# root filesystem, all capabilities dropped, no-new-privileges, resource limits. Put it on its own network/hostname.
+services:
+  evidence-public:
+    build:
+      context: .
+      target: public-synthetic
+    image: ${EVIDENCE_PUBLIC_IMAGE:-evidence-demo-public:latest}
+    container_name: evidence-public
+    restart: unless-stopped
+    environment:
+      EVIDENCE_RATE_PER_MIN: "20"
+      EVIDENCE_RATE_GLOBAL_PER_MIN: "120"
+    ports:
+      - "${EVIDENCE_PUBLIC_PORT:-8111}:8101"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+      - /var/lib/evidence:size=64m,uid=10001
+    cap_drop: [ALL]
+    security_opt:
+      - apparmor=docker-contextos
+      - no-new-privileges:true
+    mem_limit: 1g
+    pids_limit: 128
+    cpus: 1.0
