@@ -1,5 +1,5 @@
 {
- "_comment": "Where the vendored Projects UI bundle (agentic_os/projects_ui) comes from. Read by packaging/sbom/generate_source_offer.py and packaging/sbom/analyze.py and checked against the files by tests/test_ui_bundle_source_record.py. The source commit is a LOCAL, UNPUBLISHED commit: the public redevops-projects repository does not contain it, so this record is NOT a source offer (decisions D-LIC-12 and pins-04 stay OPEN). index.html, the JavaScript and the CSS are build output; hero.jpg is not (the neutral placeholder is kept by scripts/build_projects_ui.sh).",
+ "_comment": "Where the Projects UI bundle (agentic_os/projects_ui) comes from. On the converged trunk it is NOT tracked in git: scripts/fetch_projects_ui.py (run by the wheel build hook, so by `pip install -e .` too) unpacks the pinned artifact packaging/ui-artifacts/projects-ui-root-2fdef7f5.tgz (packaging/projects_ui.lock.json) into agentic_os/projects_ui, offline. Read by packaging/sbom/generate_source_offer.py and packaging/sbom/analyze.py and checked against the files by tests/test_ui_bundle_source_record.py. The source commit is a LOCAL, UNPUBLISHED commit: the public redevops-projects repository does not contain it, so this record is NOT a source offer (decisions D-LIC-12 and pins-04 stay OPEN). index.html, the JavaScript and the CSS are build output; hero.jpg is not (the neutral placeholder is kept by scripts/build_projects_ui.sh).",
  "repository": "https://github.com/redevops-io/redevops-projects",
  "base_commit": "5114b56012511a292eff0e505fdbd0d8b00544f8",
  "base_commit_public": true,
@@ -28,5 +28,13 @@
   "index.html": "00c01e492e51062776a5419c714ab004db6d908e57ed3f272dff981a342a6f92",
   "assets/index-C4jFACLN.js": "e3c382f4ac50670550da72ccfe7dba2a3b5aa1f550c7ad1e77d17e9db272082e",
   "assets/index-D7he0cZO.css": "0d25987b396142352753781b63b08564f5e2a684724e8f595047624519ad5528"
+ },
+ "artifact": {
+  "path": "packaging/ui-artifacts/projects-ui-root-2fdef7f5.tgz",
+  "sha256": "a5b5ef13e489c2e57444afc875cef485e7aa7e997e50782a000d45ec3d7b3654",
+  "lock": "packaging/projects_ui.lock.json",
+  "pack_recipe": "scripts/make_projects_ui_artifact.py",
+  "url": "",
+  "url_note": "no release has been published for it; a later publication only fills in the lock's url"
  }
 }

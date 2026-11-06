@@ -28,3 +28,6 @@ conformance/vectors/* text eol=lf
 /deploy/launcher/src-tauri/src/*.rs      text eol=lf
 /deploy/launcher/rust-toolchain.toml     text eol=lf
 /.github/workflows/*.yml  text eol=lf
+
+# the pinned Projects UI artifact is binary
+*.tgz binary

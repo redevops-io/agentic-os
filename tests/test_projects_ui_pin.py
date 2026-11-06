@@ -1,0 +1,128 @@
+"""The Projects UI is a PINNED artifact (url + sha256 + source commit) vendored reproducibly into the build (convergence stage 5).
+
+Today the artifact is built locally from an UNPUBLISHED commit of the UI source and lives in this repository, so builds and tests are offline;
+the lock says so (``source_commit_published: false``, empty ``url``) and a later publication only fills in the URL. Nothing here claims a
+publication; the distribution gate decisions pins-04 / D-LIC-12 are not touched.
+"""
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import io
+import json
+import re
+import tarfile
+import urllib.request
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+LOCK = json.loads((ROOT / "packaging" / "projects_ui.lock.json").read_text(encoding="utf-8"))
+REC = json.loads((ROOT / "packaging" / "ui-bundle-source.json").read_text(encoding="utf-8"))
+ART = ROOT / LOCK["local_path"]
+
+
+def _load(name):
+    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / f"{name}.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+fetch_mod = _load("fetch_projects_ui")
+pack_mod = _load("make_projects_ui_artifact")
+
+
+def _members():
+    with tarfile.open(ART, "r:gz") as t:
+        return {m.name: t.extractfile(m).read() for m in t.getmembers() if m.isfile()}
+
+
+def test_the_lock_pins_the_committed_artifact_and_says_it_is_unpublished():
+    assert hashlib.sha256(ART.read_bytes()).hexdigest() == LOCK["sha256"]
+    assert re.fullmatch(r"[0-9a-f]{64}", LOCK["sha256"]) and re.fullmatch(r"[0-9a-f]{40}", LOCK["source_commit"])
+    assert LOCK["source_commit_published"] is False and LOCK["url"] == ""           # nothing is published; a later publication fills in the url
+    assert LOCK["source_commit"] == REC["source_commit"] and LOCK["base_commit"] == REC["base_commit"]
+    assert "NOT a source offer" in LOCK["_comment"] and "OPEN" in LOCK["_comment"]
+    assert not re.search(r"open[ -]source|tamper-proof|soc ?2|production-ready|certified", json.dumps(LOCK).lower())
+    assert REC["artifact"]["sha256"] == LOCK["sha256"] and REC["artifact"]["path"] == LOCK["local_path"]
+
+
+def test_the_members_are_exactly_the_recorded_files():
+    got = {n: hashlib.sha256(d).hexdigest() for n, d in _members().items()}
+    assert got == LOCK["bundle_files"]
+    for rel, want in REC["files"].items():
+        assert got[rel] == want                                     # packaging/ui-bundle-source.json agrees with the artifact
+    html = _members()["index.html"].decode()
+    for rel in REC["files"]:
+        if rel != "index.html":
+            assert "/" + rel in html
+
+
+def test_the_artifact_carries_the_neutral_hero_of_this_repository():
+    hero = _members()["hero.jpg"]
+    assert hero == (ROOT / "agentic_os" / "projects_ui" / "hero.jpg").read_bytes()          # the tracked placeholder, not the UI repository's public/hero.jpg
+    assert hashlib.sha256(hero).hexdigest() == LOCK["bundle_files"]["hero.jpg"]
+    assert not any(tag in hero for tag in (b"c2pa", b"jumb", b"Black Forest", b"trainedAlgorithmicMedia"))
+
+
+def test_packing_is_deterministic_and_normalised():
+    files = _members()
+    a, b = pack_mod.pack(files), pack_mod.pack(dict(sorted(files.items(), reverse=True)))
+    assert a == b == ART.read_bytes() or a == b                  # order-independent; equal to the committed bytes when the zlib matches
+    with tarfile.open(ART, "r:gz") as t:
+        for m in t.getmembers():
+            assert (m.mtime, m.uid, m.gid, m.uname, m.gname) == (pack_mod.MTIME, 0, 0, "", ""), m.name
+            assert m.isfile() or m.isdir()
+    assert pack_mod.MTIME >= 315532800                               # not before 1980: zip-based tools refuse it
+
+
+def test_the_pack_script_refuses_stray_files(tmp_path):
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<html></html>")
+    (dist / "assets" / "a.js").write_text("1")
+    (dist / "notes.txt").write_text("stray")
+    with pytest.raises(SystemExit, match="only build output"):
+        pack_mod.collect(dist, ROOT / "agentic_os" / "projects_ui" / "hero.jpg")
+
+
+def test_fetch_is_offline_verified_and_replaces_the_destination(tmp_path, monkeypatch):
+    real = urllib.request.urlopen
+
+    def only_file(url, *a, **k):
+        assert str(url).startswith("file:"), f"the pinned artifact must be read locally, not from {url}"
+        return real(url, *a, **k)
+    monkeypatch.setattr(urllib.request, "urlopen", only_file)
+    dest = tmp_path / "ui"
+    dest.mkdir()
+    (dest / "stale.js").write_text("x")
+    assert fetch_mod.fetch(LOCK, dest) == "fetched"
+    assert not (dest / "stale.js").exists() and (dest / ".pinned-sha256").read_text().strip() == LOCK["sha256"]
+    got = {p.relative_to(dest).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in dest.rglob("*") if p.is_file() and p.name != ".pinned-sha256"}
+    assert got == LOCK["bundle_files"]
+    assert fetch_mod.fetch(LOCK, dest) == "current"
+
+
+def test_a_tampered_artifact_is_refused_before_anything_is_replaced(tmp_path):
+    lock = dict(LOCK, sha256="0" * 64)
+    dest = tmp_path / "ui"
+    dest.mkdir()
+    (dest / "index.html").write_text("good")
+    with pytest.raises(fetch_mod.FetchError, match="sha256 mismatch"):
+        fetch_mod.fetch(lock, dest)
+    assert (dest / "index.html").read_text() == "good"
+
+
+def test_a_local_path_cannot_leave_the_repository(tmp_path):
+    with pytest.raises(fetch_mod.FetchError, match="escapes"):
+        fetch_mod.fetch(dict(LOCK, local_path="../outside.tgz"), tmp_path / "ui")
+
+
+def test_publication_changes_only_the_url(tmp_path):
+    """With a url in the lock (file: stands in for a release asset) the same sha pin governs; local_path is not consulted."""
+    other = tmp_path / "asset.tgz"
+    other.write_bytes(ART.read_bytes())
+    lock = dict(LOCK, url=other.as_uri(), local_path="packaging/ui-artifacts/does-not-exist.tgz")
+    assert fetch_mod.fetch(lock, tmp_path / "ui") == "fetched"

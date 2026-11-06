@@ -142,3 +142,26 @@ introduced (discovery-runtime, runtime-contracts (pyyaml) and knowledge-frontier
 **Not done here:** the wheelhouse build (`build_git_wheels.py`) and the SBOM/notices regeneration for these three pins have not been
 re-run on the trunk; the licence status of discovery-runtime and knowledge-frontier v0.2.0 is not decided (D-LIC items stay OPEN). The earlier
 sections above describe the RC line's pins and are historical for the first-party rows.
+
+## The Projects UI: a pinned artifact, built locally, unpublished (converged trunk, 2026-11-06)
+
+`agentic_os/projects_ui/` is a build OUTPUT (git-ignored; only the neutral `hero.jpg` is tracked). It is produced from ONE pinned artifact:
+`packaging/projects_ui.lock.json` = sha256 + source commit + where to read it. `scripts/fetch_projects_ui.py` verifies the sha256 BEFORE
+anything is extracted (and rejects any member that would leave the destination); the wheel build hook (`hatch_build.py`) runs it, so
+`pip install -e .`, `pip wheel .` (wheelhouse, sidecar) and `docker build -f Dockerfile.projects .` all get the same bytes, offline.
+
+| Field | Value |
+|---|---|
+| artifact | `packaging/ui-artifacts/projects-ui-root-2fdef7f5.tgz`, sha256 `a5b5ef13...3654` (checked into the repository; `local_path`) |
+| `url` | empty: no release of `redevops-projects` has been published for it. A later publication fills it in; nothing else changes |
+| source commit | `2fdef7f5590a562aa3de7aaabde8239603824b01` (branch `rel/ui-v3` of a LOCAL clone; `source_commit_published: false`), public base `5114b560...` |
+| contents | `index.html`, `assets/index-C4jFACLN.js`, `assets/index-D7he0cZO.css` (build output) + the neutral `hero.jpg` of this repository |
+| recipe | clean `git archive` of the source commit; `env -i`, node v24.22.2, npm 11.19.1, `npm ci`, `VITE_PROJECTS_API=/ npm run build -- --base=/`; pack with `scripts/make_projects_ui_artifact.py` (sorted members, fixed mtime, gzip mtime 0) |
+| reproduced | the three build-output hashes were identical in two earlier sessions and again on the trunk; two consecutive packs are byte-identical. The archive bytes depend on the zlib in use, so the portable invariant is the per-member hash list (`bundle_files`); the archive hash is what is pinned |
+
+This is NOT a source offer and not a publication: `packaging/ui-bundle-source.json` keeps the provenance (decisions pins-04, pins-10 and
+D-LIC-12 stay OPEN, the distribution gate is unchanged and still refuses). **What the artifact is not:** it is the accessibility-series UI
+(UIA-01..12) on the old public base; it does NOT contain the Today-first views of the public `redevops-projects` v0.2.0 release that
+`origin/main` fetched (`previous_pin`, sha256 `a84b7ce4...`). The API of this trunk still serves the Today routes; the served UI does not
+draw them until the drill-down/Today views are put on top of this series (later workstream) or the lock is switched back. Tests:
+`tests/test_projects_ui_pin.py` (9), `tests/test_fetch_projects_ui.py`, `tests/test_ui_bundle_source_record.py`.

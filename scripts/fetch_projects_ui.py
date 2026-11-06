@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Fetch the pinned, prebuilt Projects UI into agentic_os/projects_ui/ (the UI source is redevops-projects).
 
-The pin lives in packaging/projects_ui.lock.json (release version + asset + sha256). The download is
+The pin lives in packaging/projects_ui.lock.json (sha256 + where to read it: a published release asset ``url``, or the artifact checked into
+this repository ``local_path`` while no release exists; plus the source commit and its published/unpublished status). The download is
 verified against the pinned sha256 BEFORE anything is extracted or replaced, and the archive is rejected if
 any member would land outside the destination. An empty pin means "not pinned yet": nothing is fetched and
 the vendored bundle already in the tree is used (see scripts/build_projects_ui.sh to build from a local clone).
@@ -45,6 +46,22 @@ def _safe_extract(blob: bytes, dest: Path) -> None:
         tar.extractall(dest, filter="data")
 
 
+def _source_url(lock: dict) -> str:
+    """Where the pinned artifact is read from: an explicit ``url`` in the lock (a published release asset), else the artifact that
+    lives in this repository (``local_path``, offline), else the conventional GitHub release URL of ``version``/``asset``. The sha256 pin
+    is verified whichever source is used."""
+    if lock.get("url"):
+        return lock["url"]
+    if lock.get("local_path"):
+        p = (ROOT / lock["local_path"]).resolve()
+        if ROOT not in p.parents:
+            raise FetchError(f"local_path escapes the repository: {lock['local_path']!r}")
+        if not p.is_file():
+            raise FetchError(f"the pinned local artifact is missing: {lock['local_path']}")
+        return p.as_uri()
+    return f"https://github.com/{lock['repo']}/releases/download/{lock['version']}/{lock['asset']}"
+
+
 def fetch(lock: dict, dest: Path, *, url: Optional[str] = None) -> str:
     """Returns 'unpinned', 'local', 'current' or 'fetched'. Raises FetchError on any verification failure."""
     want = (lock.get("sha256") or "").strip().lower()
@@ -55,10 +72,10 @@ def fetch(lock: dict, dest: Path, *, url: Optional[str] = None) -> str:
         return "local"
     if marker == want and (dest / "index.html").exists():
         return "current"
-    if not lock.get("version") or not lock.get("asset"):
-        raise FetchError("lock has a sha256 but no version/asset")
-    url = url or f"https://github.com/{lock['repo']}/releases/download/{lock['version']}/{lock['asset']}"
-    with urllib.request.urlopen(url, timeout=60) as r:  # noqa: S310 - https release URL or an explicit --url
+    if not lock.get("local_path") and not lock.get("url") and (not lock.get("version") or not lock.get("asset")):
+        raise FetchError("lock has a sha256 but no version/asset, url or local_path")
+    url = url or _source_url(lock)
+    with urllib.request.urlopen(url, timeout=60) as r:  # noqa: S310 - https release URL, the repository's own pinned artifact (file:), or an explicit --url
         blob = r.read()
     got = hashlib.sha256(blob).hexdigest()
     if got != want:

@@ -1,6 +1,36 @@
 {
-  "repo": "redevops-io/redevops-projects",
+ "_comment": "The pinned Projects UI artifact: url + sha256 + source commit. TODAY the artifact is built LOCALLY from an UNPUBLISHED commit of the UI source (source_commit_published=false) and lives in this repository (local_path), so builds and tests are offline and reproducible; no release of redevops-projects has been published for it, so `url` is empty and this record is NOT a source offer (decisions pins-04, pins-10 and D-LIC-12 stay OPEN; packaging/ui-bundle-source.json carries the same provenance). A later publication changes only `url` (the release asset URL) and, if the published commit differs, source_commit/sha256; scripts/fetch_projects_ui.py verifies the sha256 before anything is extracted, whichever source it reads. `previous_pin` is the public release v0.2.0 the main line fetched before (Today-first UI): NOT contained in this artifact, see the convergence report.",
+ "repo": "redevops-io/redevops-projects",
+ "version": "local+2fdef7f5",
+ "asset": "projects-ui-root.tgz",
+ "sha256": "a5b5ef13e489c2e57444afc875cef485e7aa7e997e50782a000d45ec3d7b3654",
+ "url": "",
+ "local_path": "packaging/ui-artifacts/projects-ui-root-2fdef7f5.tgz",
+ "source_commit": "2fdef7f5590a562aa3de7aaabde8239603824b01",
+ "source_tree": "0b23e32d9c2ce8d99530166dc7e447df0125905e",
+ "source_commit_published": false,
+ "base_commit": "5114b56012511a292eff0e505fdbd0d8b00544f8",
+ "base_commit_public": true,
+ "bundle_files": {
+  "index.html": "00c01e492e51062776a5419c714ab004db6d908e57ed3f272dff981a342a6f92",
+  "assets/index-C4jFACLN.js": "e3c382f4ac50670550da72ccfe7dba2a3b5aa1f550c7ad1e77d17e9db272082e",
+  "assets/index-D7he0cZO.css": "0d25987b396142352753781b63b08564f5e2a684724e8f595047624519ad5528",
+  "hero.jpg": "8b1470ffde8d64990b7be1d9759c971fa0f3169f4cfb1884968645de6961a7fb"
+ },
+ "recipe": {
+  "build": [
+   "npm ci",
+   "VITE_PROJECTS_API=/ npm run build -- --base=/"
+  ],
+  "node": "v24.22.2",
+  "npm": "11.19.1",
+  "environment": "env -i with PATH, throwaway HOME and TMPDIR, LANG and an isolated npm cache; VITE_PROJECTS_API=/ is the only build variable passed; built from a clean `git archive` of source_commit",
+  "pack": "scripts/make_projects_ui_artifact.py DIST packaging/ui-artifacts/projects-ui-root-2fdef7f5.tgz (sorted members, mtime 2020-01-01Z, uid/gid 0, gzip mtime 0; the neutral hero.jpg of this repository replaces the UI repository's public/hero.jpg)",
+  "reproduced": "index.html, the JavaScript and the CSS were built three times in clean environments (two earlier sessions, and the convergence trunk on 2026-11-06) with identical sha256; two consecutive packs give an identical archive. The archive bytes also depend on the zlib in use; the member hashes above are the portable invariant, the archive sha256 is what is pinned."
+ },
+ "previous_pin": {
   "version": "v0.2.0",
-  "asset": "projects-ui-root.tgz",
-  "sha256": "a84b7ce43de10538fb256df8a7be931ee2687bbbb58ed0f19bc06fbd00c9a5e6"
+  "sha256": "a84b7ce43de10538fb256df8a7be931ee2687bbbb58ed0f19bc06fbd00c9a5e6",
+  "note": "public release asset fetched by origin/main; Today-first UI (Today, capture, batch triage, notifications, routing, deployment-inspection and social-intelligence cards). The accessibility series (UIA-01..12) is NOT in it and the Today-first views are NOT in the current artifact."
+ }
 }

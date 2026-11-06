@@ -1,8 +1,8 @@
 # Self-hosted ReDevOps Projects — the Projects UI + API on one origin.
 #   docker build -f Dockerfile.projects -t redevops-projects .
 #   docker run -p 127.0.0.1:8787:8787 redevops-projects          # → http://localhost:8787 (loopback only; see docs/CONTROL_PLANE_SECURITY.md)
-# The UI bundle ships in the wheel (agentic_os/projects_ui, the pinned artifact vendored into the build context: see
-# packaging/projects_ui.lock.json), so no Node build and no download is needed here (AGENTIC_OS_SKIP_UI_FETCH=1 on the install RUN).
+# The UI bundle ships in the wheel (agentic_os/projects_ui): the wheel build hook unpacks the pinned artifact that lives in this repository
+# (packaging/projects_ui.lock.json -> packaging/ui-artifacts/), verifying its sha256, so no Node build and no download is needed here.
 # Base pinned by the index digest (python 3.12.16-slim-trixie, multi-arch: linux/amd64 + linux/arm64).
 # Bump deliberately: docker buildx imagetools inspect python:3.12-slim
 FROM python:3.12-slim@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54
@@ -13,6 +13,9 @@ ARG SOURCE_DATE_EPOCH
 # Only what the wheel build needs (same set as the root Dockerfile), not the whole build context: a
 # local .env, key or evidence file in the checkout must not be able to land in an image layer.
 COPY pyproject.toml README.md modules.yaml hatch_build.py LICENSE LICENSE-COMMONS-CLAUSE LICENSE.md LICENSING.md ./
+COPY scripts/fetch_projects_ui.py ./scripts/fetch_projects_ui.py
+COPY packaging/projects_ui.lock.json ./packaging/projects_ui.lock.json
+COPY packaging/ui-artifacts ./packaging/ui-artifacts
 COPY agentic_os ./agentic_os
 COPY deploy/assets ./deploy/assets
 # git is required at install time only: runtime-contracts + redevops-connectors are git dependencies.
@@ -21,7 +24,7 @@ COPY deploy/assets ./deploy/assets
 # does not.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git \
-    && AGENTIC_OS_SKIP_UI_FETCH=1 PIP_NO_CACHE_DIR=1 pip install --no-cache-dir '.[projects]' \
+    && PIP_NO_CACHE_DIR=1 pip install --no-cache-dir '.[projects]' \
     && apt-get purge -y git && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/* /var/log/apt /var/log/dpkg.log /var/log/alternatives.log /var/cache/ldconfig/aux-cache
 # The image serves behind the local capability gate (agentic_os.local_serve): a one-time launch URL is printed on stderr and every
