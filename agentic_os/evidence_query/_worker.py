@@ -43,12 +43,8 @@ def _apply_rlimits(req: dict) -> None:
             resource.setrlimit(soft_hard, (val, val))
         except (ValueError, OSError):
             pass
-    if sys.platform.startswith("linux"):
-        try:
-            mem = int(lim.get("memory_mb", 256)) * 1024 * 1024 * 6
-            resource.setrlimit(resource.RLIMIT_AS, (mem, mem))
-        except (ValueError, OSError):
-            pass
+    # RLIMIT_AS is deliberately NOT set: DuckDB/glibc reserve large virtual ranges, so an address-space cap makes ordinary queries
+    # fail intermittently (seen on Linux). Memory is bounded by DuckDB's memory_limit, the RSS watchdog below and the container cgroup.
 
 
 def _start_watchdog(memory_mb: int) -> None:

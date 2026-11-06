@@ -99,6 +99,15 @@ def test_sealed_grant_store_denies(tmp_path):
         svc.query(owner(), "alpha", "SELECT 1")
 
 
+def test_view_definitions_are_validated_at_registration():
+    for bad in ("SELECT * FROM read_text('/etc/hosts')", "SELECT * FROM other_scope_table", "DROP TABLE t", "SELECT getenv('A')",
+                "SELECT * FROM t; SELECT 1", "SELECT * FROM information_schema.tables"):
+        cat = ScopeCatalog()
+        with pytest.raises(ValueError):
+            cat.register_scope("s", [DatasetSpec("t", (("x", "VARCHAR"),), rows=[])], views=[ViewSpec("v", bad)])
+    ScopeCatalog().register_scope("s", [DatasetSpec("t", (("x", "VARCHAR"),), rows=[])], views=[ViewSpec("v", "SELECT x FROM t")])
+
+
 def test_scope_ids_are_restricted(tmp_path):
     cat = ScopeCatalog()
     for bad in ("a.b", "A", "", "x y", "../x", "a" * 80):
@@ -452,10 +461,10 @@ def test_worker_cannot_reach_a_loopback_listener_at_the_os_level():
 
 def test_os_sandbox_blocks_host_reads_and_writes(host):
     st = W.sandbox_status()
-    s = W.selftest("os_files", read=host["canary"], write=host["out"])
-    assert s["write_ok"] is False and not os.path.exists(host["out"])        # rlimit + (where available) sandbox
     if not st["file_read_blocked"]:
-        pytest.skip(f"no OS file sandbox on this host ({st['backend']})")
+        pytest.skip(f"no OS file sandbox on this host ({st['backend']}); rlimits/DuckDB layers are tested separately")
+    s = W.selftest("os_files", read=host["canary"], write=host["out"])        # this probe runs WITHOUT the rlimits: sandbox only
+    assert s["write_ok"] is False and not os.path.exists(host["out"])
     assert s["read_ok"] is False
 
 
