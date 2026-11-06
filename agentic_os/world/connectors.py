@@ -246,7 +246,7 @@ class ApolloSender:
 
 
 class PostmarkConnector:
-    """Transactional email via Postmark. Uses a SERVER token (from Vault vibexgen/postmark/redevops), not the
+    """Transactional email via Postmark. Uses a SERVER token (from your Vault, for example at <mount>/postmark/redevops), not the
     account token — the account token cannot send. ``from_addr`` must be on a verified sender signature."""
 
     def __init__(self, server_token: str, *, from_addr: str = "hello@redevops.io") -> None:

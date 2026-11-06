@@ -59,10 +59,11 @@ def test_every_vault_operation_stops_without_a_mount_and_none_swallows_it(tmp_pa
     assert t.calls == []
 
 
-def test_the_startup_hook_reports_the_missing_mount_by_name_and_does_nothing_else(tmp_path, caplog):
+def test_the_startup_hook_reports_the_missing_mount_by_name_and_does_nothing_else(tmp_path, caplog, monkeypatch):
+    monkeypatch.setenv("REDEVOPS_SECRETS_AUTO", "1")
     t = FakeVault()
-    with caplog.at_level("WARNING"):
-        assert bs.ensure_secrets(environ={**BASE, "HOME": str(tmp_path)}, keyring=None, vault_transport=t, home=tmp_path) is None
+    caplog.set_level("WARNING", logger="agentic_os.secrets")
+    assert bs.ensure_secrets(environ={**BASE, "HOME": str(tmp_path)}, keyring=None, vault_transport=t, home=tmp_path) is None
     assert "REDEVOPS_VAULT_MOUNT" in caplog.text and t.calls == [] and not (tmp_path / ".config").exists()
 
 

@@ -17,6 +17,7 @@ where a deployment must supply a value.
 | Checkout of the `runtime-contracts` package staged into a build context | `RUNTIME_CONTRACTS` | none: the script stops |
 | Where the unsubscribe ledger persists on the target | `U_DATA_DIR` (deploy script), `UNSUB_DATA_DIR` (compose) | `<host dir>/data` |
 | Integration tests against a remote Docker host (`tests/test_installer_remote_docker.py`, `tests/test_event_store_postgres.py`) | `RDO_REMOTE_DOCKER_IT=1`, `RDO_REMOTE_DOCKER_SSH`, `RDO_REMOTE_DOCKER_HOST` | skipped; with `RDO_REMOTE_DOCKER_IT=1` and a variable unset, the test fails naming it |
+| Vault KV mount for the platform secrets bundle | `REDEVOPS_VAULT_MOUNT` (alias `VAULT_MOUNT`) | none: with `VAULT_ADDR` + `VAULT_TOKEN` set and no mount, every Vault operation stops with an error naming the variable |
 | Document-editor integration tests: how the container reaches the host | `DOCEDITOR_IT_HOST_ADDR` | the Docker bridge gateway |
 
 A default local install needs none of these: services bind to `127.0.0.1` and the model endpoint is `localhost`.

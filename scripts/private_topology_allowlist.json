@@ -1,6 +1,12 @@
 {
  "_comment": "Reviewed synthetic fixtures and product names that the private-topology guard (scripts/check_private_topology.py) accepts. One entry per file and literal; development host aliases, home paths, build-host paths, MAC addresses and the original development network can never be listed. Add an entry only with a reason a reviewer can verify.",
  "files": {
+  "CHANGELOG.md": {
+   "reason": "Names the retired predictable development key where a file refuses it as a value (deny-list or its tests) or records that it was removed; it is never used as a default.",
+   "credentials": [
+    "refcore-dev-key"
+   ]
+  },
   "agentic_os/control_plane.py": {
    "reason": "Proxmox VE is named as a supported deployment target or hypervisor product (documentation, skill, template or example goal), not as a host alias.",
    "terms": [
@@ -256,6 +262,12 @@
     "192.168.1.20"
    ]
   },
+  "deploy/refcore-billing/app.py": {
+   "reason": "Names the retired predictable development key where a file refuses it as a value (deny-list or its tests) or records that it was removed; it is never used as a default.",
+   "credentials": [
+    "refcore-dev-key"
+   ]
+  },
   "deploy/sidekick-devops/README.md": {
    "reason": "Synthetic internal service names used as inputs to hostname-classification code, tests or documentation; none identifies a real host. Proxmox VE is named as a supported deployment target or hypervisor product (documentation, skill, template or example goal), not as a host alias.",
    "terms": [
@@ -366,6 +378,12 @@
    "reason": "Reserved ranges and synthetic addresses that the SSRF, egress or proxy-trust code and its tests must classify as private; none identifies a real host.",
    "addresses": [
     "10.0.0.5"
+   ]
+  },
+  "tests/test_refcore_billing_key.py": {
+   "reason": "Names the retired predictable development key where a file refuses it as a value (deny-list or its tests) or records that it was removed; it is never used as a default.",
+   "credentials": [
+    "refcore-dev-key"
    ]
   },
   "tests/test_safe_url.py": {

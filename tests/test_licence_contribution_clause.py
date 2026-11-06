@@ -27,9 +27,14 @@ def test_no_licence_copy_names_a_personal_login():
 
 
 def test_the_clause_describes_the_merging_account_by_role_and_keeps_its_meaning():
+    checked = 0
     for rel in _licence_files():
         text = (ROOT / rel).read_text(encoding="utf-8")
+        if "## Contribution history" not in text:        # a fixture or a third-party LICENSE.md, not a copy of ours
+            continue
+        checked += 1
         flat = re.sub(r"\s+", " ", text)
         assert "GitHub merge commits produced by the maintainer account that merges on `redevops-io/*` branches, which introduce no third-party authorship." in flat, rel
         assert "On that basis RedevOps holds the copyright needed to relicense." in flat, rel
         assert text.count("## Contribution history") == 1, rel
+    assert checked >= 1
