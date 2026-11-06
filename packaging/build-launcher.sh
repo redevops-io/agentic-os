@@ -53,6 +53,13 @@ if [ "${LAUNCHER_REMAP_PATHS:-1}" = 1 ] && [ "$OS" != windows ]; then
   export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }--remap-path-prefix=$CH=/cargo-home --remap-path-prefix=$ROOT=/src"
   echo "launcher: RUSTFLAGS=$RUSTFLAGS"
 fi
+# Windows: link.exe stamps the PE TimeDateStamp, the debug-directory timestamps and a random PDB GUID into agentic-r0prime.exe, so two builds of the
+# same tree on the same host differed in 24 bytes (2026-11-05, Windows Server 2022: sidecar byte-identical, launcher not; NSIS/MSI differ downstream).
+# /Brepro makes them a function of the content. It changes no mitigation (ASLR/DEP/CFG flags are unaffected). LAUNCHER_BREPRO=0 builds without.
+if [ "$OS" = windows ] && [ "${LAUNCHER_BREPRO:-1}" = 1 ]; then
+  export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=/Brepro"
+  echo "launcher: RUSTFLAGS=$RUSTFLAGS"
+fi
 cd "$ROOT/deploy/launcher"
 BUNDLES=()
 [ -n "${LAUNCHER_BUNDLES:-}" ] && BUNDLES=(--bundles "$LAUNCHER_BUNDLES")

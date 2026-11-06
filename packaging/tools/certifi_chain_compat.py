@@ -433,7 +433,7 @@ def main(argv: list[str] | None = None) -> int:
                             break
         if a.extra:
             cat = "extra"
-            for line in Path(a.extra).read_text().splitlines():
+            for line in Path(a.extra).read_text(encoding="utf-8").splitlines():
                 line = line.strip()
                 if line.startswith("#"):
                     cat = line.lstrip("# ").split(" (")[0].strip() or "extra"      # "# name (free text)" -> name
@@ -476,7 +476,7 @@ def main(argv: list[str] | None = None) -> int:
         with open(a.results, newline="") as f:
             rows = list(csv.DictReader(f))
         s = summarise(rows, a.old, a.new, a.system, a.removed_root)
-        Path(a.out).write_text(json.dumps(s, indent=2, sort_keys=True) + "\n")
+        Path(a.out).write_text(json.dumps(s, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(json.dumps({k: (v if not isinstance(v, list) else len(v)) for k, v in s.items() if k != "tally"}))
         return 1 if s["regressions"] else 0
     return 2

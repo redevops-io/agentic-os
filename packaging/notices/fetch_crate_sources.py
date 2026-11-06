@@ -124,8 +124,8 @@ def upstream_licences(dest: Path) -> str:
     vcs, toml = dest / ".cargo_vcs_info.json", dest / "Cargo.toml"
     if not vcs.is_file() or not toml.is_file():
         return "no .cargo_vcs_info.json: no upstream commit to fetch from"
-    sha1 = json.loads(vcs.read_text()).get("git", {}).get("sha1", "")
-    path_in_vcs = json.loads(vcs.read_text()).get("path_in_vcs", "")
+    sha1 = json.loads(vcs.read_text(encoding="utf-8")).get("git", {}).get("sha1", "")
+    path_in_vcs = json.loads(vcs.read_text(encoding="utf-8")).get("path_in_vcs", "")
     m = re.search(r'^repository\s*=\s*"https?://github\.com/([^/"]+/[^/".]+)', toml.read_text(encoding="utf-8", errors="replace"), re.M)
     if not m or not re.fullmatch(r"[0-9a-f]{40}", sha1):
         return "repository is not on GitHub or the commit is unknown"

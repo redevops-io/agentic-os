@@ -61,7 +61,7 @@ def rust_components(a, comps: list[Comp], launcher: Comp | None) -> tuple[list[C
     notes: dict[str, str] = {}
     if not (a.cargo_manifest or a.cargo_metadata_json):
         return [], notes
-    meta = json.loads(Path(a.cargo_metadata_json).read_text()) if a.cargo_metadata_json else rustsbom.cargo_metadata(a.cargo_manifest, a.cargo_target)
+    meta = json.loads(Path(a.cargo_metadata_json).read_text(encoding="utf-8")) if a.cargo_metadata_json else rustsbom.cargo_metadata(a.cargo_manifest, a.cargo_target)
     sums = rustsbom.lock_checksums(a.cargo_lock) if a.cargo_lock else {}
     out = []
     for cr in rustsbom.crates(meta, sums):
@@ -117,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--timestamp", help="ISO timestamp (default: SOURCE_DATE_EPOCH / commit time of the build manifest / now)")
     a = ap.parse_args(argv)
     arc, inv, res, facts, manifest = run_analysis(a)
-    pins = json.loads(Path(a.git_pins).read_text()) if a.git_pins else {}
+    pins = json.loads(Path(a.git_pins).read_text(encoding="utf-8")) if a.git_pins else {}
     first_party_refs(res, pins, manifest)
     comps = list(res.comps.values())
 
@@ -126,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     tauri_ver = None
     product_name = "Agentic Apps"
     if a.tauri_conf:
-        tconf = json.loads(Path(a.tauri_conf).read_text())
+        tconf = json.loads(Path(a.tauri_conf).read_text(encoding="utf-8"))
         tauri_ver = tconf.get("version")
         product_name = tconf.get("productName") or product_name
     if a.launcher_bin or a.cargo_manifest or a.cargo_metadata_json:
@@ -178,17 +178,17 @@ def main(argv: list[str] | None = None) -> int:
 
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "sbom.cdx.json").write_text(json.dumps(bom, indent=2, sort_keys=True) + "\n")
+    (out / "sbom.cdx.json").write_text(json.dumps(bom, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     attrib = {}
     for k, key in sorted(res.attribution.items()):
         kind, name = k.split(":", 1)
         data = arc.read(name) if kind == "pkg" else arc.pyz_read(name)
         attrib[k] = {"component": key, **({"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)} if data else {})}
     (out / "archive-attribution.json").write_text(json.dumps({"archive": arc.source, "archive_sha256": arc.source_sha256,
-                                                              "unattributed": res.unattributed, "entries": attrib}, indent=1, sort_keys=True) + "\n")
+                                                              "unattributed": res.unattributed, "entries": attrib}, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     inputs = {"archive": arc.source, "archive_sha256": arc.source_sha256, "wheelhouse": [v["wheel_sha256"] for v in inv.values() if v.get("wheel_sha256")],
               "facts": a.facts, "has_bytes": arc.has_bytes, "cargo_lock": a.cargo_lock}
-    (out / "sbom-inputs.json").write_text(json.dumps(inputs, indent=1, sort_keys=True) + "\n")
+    (out / "sbom-inputs.json").write_text(json.dumps(inputs, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     n_un = len(res.unattributed)
     print(f"SBOM: {len(bom['components'])} components -> {out / 'sbom.cdx.json'}; attribution of {len(attrib)} archive entries; unattributed: {n_un}")
     return 1 if (n_un or res.problems) else 0

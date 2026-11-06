@@ -102,13 +102,13 @@ def dump_environment() -> dict[str, dict]:
 def from_environment(python: str) -> dict[str, dict]:
     import subprocess
 
-    out = subprocess.run([python, "-I", str(Path(__file__).resolve()), "--dump"], capture_output=True, text=True, check=True).stdout
+    out = subprocess.run([python, "-I", str(Path(__file__).resolve()), "--dump"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout
     return json.loads(out)
 
 
 def parse_lock(path: str | Path) -> dict[str, dict]:
     inv: dict[str, dict] = {}
-    for line in Path(path).read_text().splitlines():
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
         m = re.match(r"^([A-Za-z0-9_.\-]+)==([^\s\;]+)", line.strip())
         if m:
             inv[norm(m.group(1))] = {"name": m.group(1), "version": m.group(2), "norm": norm(m.group(1)), "source": "lock",

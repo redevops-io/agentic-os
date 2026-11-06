@@ -22,7 +22,7 @@ from .archive import Archive
 from .inventory import module_owner_map, norm
 
 HERE = Path(__file__).resolve().parent
-STDLIB = set((HERE / "stdlib_312.txt").read_text().split())
+STDLIB = set((HERE / "stdlib_312.txt").read_text(encoding="utf-8").split())
 FIRST_PARTY = {"agentic-os", "runtime-contracts", "knowledge-frontier", "redevops-connectors"}
 OPENSSL_BANNER = re.compile(rb"OpenSSL (\d+\.\d+\.\d+[a-z]?)(?:-[a-z0-9]+)? +(\d{1,2} [A-Z][a-z]{2} \d{4})")
 NATIVE_EXT = (".so", ".dylib", ".dll", ".pyd")

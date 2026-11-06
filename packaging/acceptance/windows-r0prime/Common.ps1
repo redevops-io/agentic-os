@@ -5,7 +5,8 @@
 
 $script:Results = New-Object System.Collections.ArrayList
 $script:StepName = 'step'
-$script:OutDir = $null
+# NOT reset here: Common.ps1 is dot-sourced by the step scripts, so $script:OutDir IS their -OutDir parameter; `$script:OutDir = $null` here discarded it
+# (every step then wrote to its own %TEMP%\r0prime-win-<stamp> and Run-All found no results-*.json). Initialize-Step sets it.
 $script:TranscriptPath = $null
 $script:ValidStatus = @('PASS', 'FAIL', 'MANUAL', 'INFO', 'SKIP')
 
@@ -45,7 +46,7 @@ function Import-KitIdentity {
   foreach ($c in $cands) {
     if (-not (Test-Path -LiteralPath $c)) { continue }
     try {
-      $j = Get-Content -LiteralPath $c -Raw | ConvertFrom-Json
+      $j = Get-Content -LiteralPath $c -Raw -Encoding UTF8 | ConvertFrom-Json
       $b = $j.$line
       if (-not $b -or -not $b.product_name -or -not $b.bundle_identifier -or -not $b.main_binary_name) { continue }
       $parts = ([string]$b.bundle_identifier).Split('.')
@@ -182,7 +183,7 @@ function Get-InstalledProduct([string]$Name = $script:ProductName) {
         $pc = $null; if ($k.PSChildName -match '^\{[0-9A-Fa-f-]{36}\}$') { $pc = $k.PSChildName }
         $found += [pscustomobject]@{
           Hive = $r.Substring(0, 4); Key = $k.PSChildName; ProductCode = $pc; DisplayVersion = $p.DisplayVersion; Publisher = $p.Publisher
-          InstallLocation = $p.InstallLocation; UninstallString = $p.UninstallString; QuietUninstallString = $(if ($p.PSObject.Properties['QuietUninstallString']) { $p.QuietUninstallString } else { $null })
+          InstallLocation = $(if ($p.InstallLocation) { ([string]$p.InstallLocation).Trim('"') } else { $null }); UninstallString = $p.UninstallString; QuietUninstallString = $(if ($p.PSObject.Properties['QuietUninstallString']) { $p.QuietUninstallString } else { $null })
         }
       }
     }
@@ -210,14 +211,14 @@ function Find-InstallDir {
 function Save-State([hashtable]$State) {
   $p = Join-Path $script:OutDir 'state.json'
   $cur = @{}
-  if (Test-Path -LiteralPath $p) { $o = Get-Content -LiteralPath $p -Raw | ConvertFrom-Json; foreach ($n in $o.PSObject.Properties.Name) { $cur[$n] = $o.$n } }
+  if (Test-Path -LiteralPath $p) { $o = Get-Content -LiteralPath $p -Raw -Encoding UTF8 | ConvertFrom-Json; foreach ($n in $o.PSObject.Properties.Name) { $cur[$n] = $o.$n } }
   foreach ($k in $State.Keys) { $cur[$k] = $State[$k] }
   [IO.File]::WriteAllText($p, (ConvertTo-Json -InputObject $cur), (New-Object Text.UTF8Encoding($false)))
 }
 
 function Read-State {
   $p = Join-Path $script:OutDir 'state.json'
-  if (Test-Path -LiteralPath $p) { return (Get-Content -LiteralPath $p -Raw | ConvertFrom-Json) }
+  if (Test-Path -LiteralPath $p) { return (Get-Content -LiteralPath $p -Raw -Encoding UTF8 | ConvertFrom-Json) }
   return $null
 }
 

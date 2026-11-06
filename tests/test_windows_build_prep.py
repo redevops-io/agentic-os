@@ -544,3 +544,93 @@ def test_the_dated_check_runbook_names_the_script_and_the_frozen_hashes_that_the
         assert h in body and h in run
     assert "2026-11-07T03:13:00Z" in run and "2026-11-07T03:12:51Z" in run and "2026-11-07T03:13:00" in body
     assert (KIT / "tools/stage-for-windows-host.sh").is_file() and "Collect-Results.ps1" in run
+
+
+def test_venv_py_names_the_real_exe_when_the_bare_name_also_resolves(tmp_path):
+    """Defect found on Windows Server 2022 (2026-11-05): under git-bash `[ -x <venv>/Scripts/python ]` is true for python.exe, so venv_py
+    returned the extension-less path, which the native uv.exe rejects. Simulated here with BOTH names present (the bare name executable):
+    the .exe must win; with only the bare name (POSIX venv) the bare name is returned."""
+    both = tmp_path / "winvenv" / "Scripts"
+    both.mkdir(parents=True)
+    (both / "python.exe").write_text("x")
+    (both / "python").write_text("#!/bin/sh\n")
+    (both / "python").chmod(0o755)
+    posix = tmp_path / "posixvenv" / "bin"
+    posix.mkdir(parents=True)
+    (posix / "python").write_text("#!/bin/sh\n")
+    (posix / "python").chmod(0o755)
+    common = PK / "common.sh"
+    def run(venv):
+        r = subprocess.run([BASH, "-c", f'. "{common}"; venv_py "{venv}"'], capture_output=True, text=True, check=True)
+        return r.stdout.strip()
+    assert run(tmp_path / "winvenv").endswith("/Scripts/python.exe")
+    assert run(tmp_path / "posixvenv").endswith("/bin/python")
+
+
+def test_build_tooling_never_decodes_with_the_locale_codec():
+    """Defect found on Windows Server 2022 (2026-11-05): packaging/sbom/rustsbom.py ran `cargo metadata` with text=True, so the output was
+    decoded with the Windows ANSI code page (cp1252) and died on a UTF-8 byte (UnicodeDecodeError 0x81); the same applies on cp1251/cp932 hosts.
+    Every Path.read_text()/write_text() and every text-mode subprocess in the build tooling must name its encoding (AST check)."""
+    import ast
+
+    bad = []
+    for sub in ("sbom", "tools", "notices"):
+        for f in sorted((PK / sub).rglob("*.py")):
+            tree = ast.parse(f.read_text(encoding="utf-8"))
+            for n in ast.walk(tree):
+                if not isinstance(n, ast.Call):
+                    continue
+                kw = {k.arg for k in n.keywords}
+                name = n.func.attr if isinstance(n.func, ast.Attribute) else getattr(n.func, "id", "")
+                if name == "read_text" and n.args:
+                    continue  # importlib.metadata.Distribution.read_text(filename) / the notices module's own UTF-8 reader, not Path.read_text
+                if name in ("read_text", "write_text") and "encoding" not in kw and isinstance(n.func, ast.Attribute):
+                    bad.append(f"{f.relative_to(ROOT)}:{n.lineno} {name}")
+                if name == "run" and "text" in kw and "encoding" not in kw:
+                    bad.append(f"{f.relative_to(ROOT)}:{n.lineno} subprocess.run(text=True)")
+    assert not bad, bad
+
+
+def test_windows_launcher_link_is_deterministic_by_default():
+    """Two Windows builds of one tree differed in 24 bytes of agentic-r0prime.exe (PE timestamp, debug-directory timestamps, PDB GUID).
+    build-launcher.sh must pass /Brepro on Windows (opt-out LAUNCHER_BREPRO=0) and only there."""
+    s = (PK / "build-launcher.sh").read_text(encoding="utf-8")
+    i = s.index('if [ "$OS" = windows ] && [ "${LAUNCHER_BREPRO:-1}" = 1 ]')
+    block = s[i : s.index("fi", i)]
+    assert "link-arg=/Brepro" in block
+    assert s.count("/Brepro") == 2 or "/Brepro" in block  # mentioned in the comment and the flag
+
+
+def test_acceptance_kit_step_04_restores_its_sidecarexe_parameter_after_common_and_02_accepts_the_x86_nsis_uninstaller():
+    """Windows Server 2022, 2026-11-05 (kit defects, not candidate defects): (1) Common.ps1 sets $script:SidecarExe (a file NAME), which is step
+    04's own -SidecarExe parameter once dot-sourced, so BST-00 always failed 'not found'; (2) the NSIS uninstall.exe stub is a 32-bit PE by design
+    and step 02 failed it for not being x64."""
+    k = PK / "acceptance/windows-r0prime"
+    s4 = (k / "04-Regression-Bootstrap.ps1").read_text(encoding="utf-8")
+    assert s4.index("$SidecarPath = $SidecarExe") < s4.index(". (Join-Path $PSScriptRoot 'Common.ps1')")  # the caller's value is taken BEFORE Common.ps1 overwrites the variable
+    code4 = s4[s4.index("Initialize-Step -Name '04-regression-bootstrap'"):]
+    assert "$SidecarExe" not in code4.replace("$script:SidecarExe", "")
+    s2 = (k / "02-Verify-Installed.ps1").read_text(encoding="utf-8")
+    assert "$key -eq 'UNINSTALL' -and $arch -eq 'x86'" in s2
+
+
+def test_acceptance_kit_step_04_tolerates_an_empty_stderr_file():
+    """The success case has an EMPTY stderr; ReadAllBytes of it came back as $null through $(if ...) and GetString($null) threw (BST-99)."""
+    s = (PK / "acceptance/windows-r0prime/04-Regression-Bootstrap.ps1").read_text(encoding="utf-8")
+    i = s.index("function Test-BootstrapResult")
+    assert "if ($null -eq $R.Err) { $R.Err = New-Object byte[] 0 }" in s[i : i + 600]
+
+
+def test_acceptance_kit_reads_its_own_utf8_json_as_utf8():
+    """Non-ASCII user name (Windows Server 2022, PowerShell 5.1, 2026-11-05): state.json / results-*.json are written as UTF-8 without BOM but were
+    read with Get-Content -Raw, which decodes them with the ANSI code page, so every step after 01 looked for the install dir at a mojibake
+    path (BIN-00/LCH-00/BST-00 'not found'). Every Get-Content ... -Raw | ConvertFrom-Json must say -Encoding UTF8."""
+    import re
+
+    k = PK / "acceptance/windows-r0prime"
+    bad = []
+    for f in sorted(k.glob("*.ps1")):
+        for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            if re.search(r"Get-Content[^|]*-Raw\s*\|\s*ConvertFrom-Json", line) and "-Encoding UTF8" not in line:
+                bad.append(f"{f.name}:{n}")
+    assert not bad, bad

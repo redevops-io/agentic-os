@@ -86,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--report", help="write the findings as JSON")
     ap.add_argument("--expect-fail", action="store_true", help="exit 0 only if the verifier FAILS (documents known gaps of a foreign SBOM)")
     a = ap.parse_args(argv)
-    bom = json.loads(Path(a.sbom).read_text())
+    bom = json.loads(Path(a.sbom).read_text(encoding="utf-8"))
     idx = index_sbom(bom)
     arc, inv, res, facts, manifest = run_analysis(a)
     findings: list[dict] = []
@@ -125,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
     # launcher crate graph: every crate cargo resolves for the target must be listed
     exp_crates: set[tuple[str, str]] = set()
     if a.cargo_manifest or a.cargo_metadata_json:
-        meta = json.loads(Path(a.cargo_metadata_json).read_text()) if a.cargo_metadata_json else rustsbom.cargo_metadata(a.cargo_manifest, a.cargo_target)
+        meta = json.loads(Path(a.cargo_metadata_json).read_text(encoding="utf-8")) if a.cargo_metadata_json else rustsbom.cargo_metadata(a.cargo_manifest, a.cargo_target)
         listed_c = {(c["name"], c["version"]) for c in idx if c["eco"] == "cargo"}
         for cr in rustsbom.crates(meta, {}):
             exp_crates.add((cr["name"], cr["version"]))
@@ -175,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"-- archive: {arc.source} ({len(arc.pkg)} PKG entries, {len(arc.pyz)} PYZ modules); SBOM: {Path(a.sbom).name} ({len(idx)} components)")
     print(f"-- result: {len(fails)} FAIL, {len(warns)} WARN")
     if a.report:
-        Path(a.report).write_text(json.dumps({"sbom": a.sbom, "archive": arc.source, "fails": len(fails), "warns": len(warns), "findings": findings}, indent=1) + "\n")
+        Path(a.report).write_text(json.dumps({"sbom": a.sbom, "archive": arc.source, "fails": len(fails), "warns": len(warns), "findings": findings}, indent=1) + "\n", encoding="utf-8")
     if a.expect_fail:
         return 0 if fails else 1
     return 1 if fails else 0

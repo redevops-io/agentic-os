@@ -20,6 +20,9 @@
 [CmdletBinding()]
 param([string]$InstallDir, [string]$SidecarExe, [string]$OutDir, [int]$TimeoutSec = 90)
 $ErrorActionPreference = 'Continue'
+# Common.ps1 assigns $script:SidecarExe (the file NAME), which IS this script's -SidecarExe parameter once dot-sourced: take the caller's value first and
+# use $SidecarPath below, else the lookup took the bare name for a path and BST-00 failed 'not found' (Windows Server 2022, 2026-11-05).
+$SidecarPath = $SidecarExe
 . (Join-Path $PSScriptRoot 'Common.ps1')
 Initialize-Step -Name '04-regression-bootstrap' -OutDir $OutDir
 
@@ -63,6 +66,10 @@ function Invoke-BootstrapViaCmd {
 
 function Test-BootstrapResult {
   param($R, [string]$Id, [string]$Label)
+  # An EMPTY stderr file (the good case) came back from `$(if ... { ReadAllBytes })` as $null (PowerShell unrolls an empty array), and
+  # [Text.Encoding]::GetString($null) threw 'Array cannot be null' (BST-99, Windows Server 2022, 2026-11-05).
+  if ($null -eq $R.Err) { $R.Err = New-Object byte[] 0 }
+  if ($null -eq $R.Out) { $R.Out = New-Object byte[] 0 }
   $errText = [Text.Encoding]::UTF8.GetString([byte[]]$R.Err)
   $outLatin = [Text.Encoding]::GetEncoding(28591).GetString([byte[]]$R.Out)   # byte-transparent view for pattern checks
   $crash = ($errText -match 'UnicodeEncodeError|Traceback|PYI-\d+') 
@@ -85,24 +92,24 @@ function Test-BootstrapResult {
 }
 
 try {
-  if (-not $SidecarExe) {
+  if (-not $SidecarPath) {
     if (-not $InstallDir) { $st = Read-State; if ($st -and $st.installDir) { $InstallDir = $st.installDir } }
     if (-not $InstallDir) { $InstallDir = Find-InstallDir }
-    if ($InstallDir) { $SidecarExe = Join-Path $InstallDir $script:SidecarExe }
+    if ($InstallDir) { $SidecarPath = Join-Path $InstallDir $script:SidecarExe }
   }
-  if (-not $SidecarExe -or -not (Test-Path -LiteralPath $SidecarExe)) { Add-Result 'BST-00' 'sidecar exe present' 'FAIL' 'not found: run 01-Install.ps1 first or pass -SidecarExe'; throw 'stop' }
-  Write-Line ("sidecar: {0}  sha256 {1}" -f $SidecarExe, (Get-Sha256 $SidecarExe))
+  if (-not $SidecarPath -or -not (Test-Path -LiteralPath $SidecarPath)) { Add-Result 'BST-00' 'sidecar exe present' 'FAIL' 'not found: run 01-Install.ps1 first or pass -SidecarExe'; throw 'stop' }
+  Write-Line ("sidecar: {0}  sha256 {1}" -f $SidecarPath, (Get-Sha256 $SidecarPath))
   $acp = $null; try { $acp = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Nls\CodePage').ACP } catch { }
   Add-Result 'BST-00' 'host ANSI code page (decides the redirected-stdout encoding)' 'INFO' ("ACP={0}. Results below apply to this ACP. cp1252 is the defect's trigger; a UTF-8 system locale (ACP 65001) or a fixed build shows no crash." -f $acp)
 
-  $r1 = Invoke-Bootstrap -Tag 'v1-pipes-default' -Exe $SidecarExe
+  $r1 = Invoke-Bootstrap -Tag 'v1-pipes-default' -Exe $SidecarPath
   Test-BootstrapResult $r1 'BST-01' 'V1 stdout/stderr redirected to PIPES (as the launcher does), default ANSI code page'
-  $r2 = Invoke-BootstrapViaCmd -Tag 'v2-file-default' -Exe $SidecarExe -Chcp ''
+  $r2 = Invoke-BootstrapViaCmd -Tag 'v2-file-default' -Exe $SidecarPath -Chcp ''
   Test-BootstrapResult $r2 'BST-02' 'V2 stdout redirected to a FILE via cmd.exe, default ANSI code page'
-  $r3 = Invoke-Bootstrap -Tag 'v3-utf8env' -Exe $SidecarExe -ExtraEnv @{ PYTHONUTF8 = '1'; PYTHONIOENCODING = 'utf-8' }
+  $r3 = Invoke-Bootstrap -Tag 'v3-utf8env' -Exe $SidecarPath -ExtraEnv @{ PYTHONUTF8 = '1'; PYTHONIOENCODING = 'utf-8' }
   Test-BootstrapResult $r3 'BST-03' 'V3 PIPES with PYTHONUTF8=1 PYTHONIOENCODING=utf-8 (frozen binaries ignore both; a PASS here must also hold without them)'
   foreach ($cp in @('437', '866', '932')) {
-    $r = Invoke-BootstrapViaCmd -Tag ("v4-chcp$cp") -Exe $SidecarExe -Chcp $cp
+    $r = Invoke-BootstrapViaCmd -Tag ("v4-chcp$cp") -Exe $SidecarPath -Chcp $cp
     Test-BootstrapResult $r ("BST-04-$cp") ("V4 FILE redirect after 'chcp $cp' (console OEM page only; NOT a non-Latin ANSI simulation)")
   }
   # identical runs must give identical output (determinism / idempotency)
