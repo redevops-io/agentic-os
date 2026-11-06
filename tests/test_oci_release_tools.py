@@ -81,18 +81,34 @@ def test_layer_scan_reports_private_identifiers_names_and_needles(tmp_path, monk
         "usr/lib/id_rsa": b"not really a key\n",
     }
     r = oci_tools.cmd_layer_scan(_archive(tmp_path, [{"app/ok.txt": b"hello\n"}, dirty]), SCANNER)
-    cats = {h["category"] for h in r["hits"]}
-    assert {"ip-private", "home-path", "needle"} <= cats, r["hit_counts"]
-    assert any(h["path"] == "app/c.sh" for h in r["hits"])
+    cats = {h["category"] for h in r["own_code_hits"]}
+    assert {"ip-private", "home-path", "needle"} <= cats, r["own_code_hits"]
+    assert any(h["path"] == "app/c.sh" for h in r["own_code_hits"])
     names = {n["path"] for n in r["secret_like_file_names"]}
     assert {"app/.env", "usr/lib/id_rsa"} <= names
-    assert all(h["layer"] == 1 for h in r["hits"])
+    assert all(h["layer"] == 1 for h in r["own_code_hits"])
 
 
 def test_layer_scan_is_quiet_on_clean_content(tmp_path, monkeypatch):
     monkeypatch.delenv("OCI_EXTRA_NEEDLES", raising=False)
     r = oci_tools.cmd_layer_scan(_archive(tmp_path, [{"app/ok.py": b"print('hello')\nHOST='127.0.0.1'\nNET='198.51.100.0/24'\n"}]), SCANNER)
-    assert r["hits"] == [] and r["secret_like_file_names"] == []
+    assert r["own_code_hits"] == [] and r["other_hit_counts"] == {} and r["secret_like_file_names"] == []
+
+
+def test_layer_scan_sees_the_final_filesystem_not_deleted_files(tmp_path, monkeypatch):
+    monkeypatch.delenv("OCI_EXTRA_NEEDLES", raising=False)
+    dirty = ("HOST = '10.77." + "3.9'\n").encode()
+    layers = [{"app/old.py": dirty, "usr/lib/id_rsa": b"x\n", "app/keep.py": b"print(1)\n"}, {"app/.wh.old.py": b"", "usr/lib/.wh.id_rsa": b""}]
+    r = oci_tools.cmd_layer_scan(_archive(tmp_path, layers), SCANNER)
+    assert r["own_code_hits"] == [] and r["secret_like_file_names"] == [] and r["files_in_final_fs"] == 1
+    r2 = oci_tools.cmd_layer_scan(_archive(tmp_path, layers[:1]), SCANNER)          # without the deleting layer the same content is reported
+    assert r2["own_code_hits"] and r2["secret_like_file_names"]
+
+
+def test_public_ca_bundle_files_are_not_key_material(tmp_path, monkeypatch):
+    monkeypatch.delenv("OCI_EXTRA_NEEDLES", raising=False)
+    r = oci_tools.cmd_layer_scan(_archive(tmp_path, [{"etc/ssl/certs/ISRG_Root_X1.pem": b"-----BEGIN CERTIFICATE-----\n"}]), SCANNER)
+    assert r["secret_like_file_names"] == []
 
 
 def test_the_prepare_script_pins_the_release_identity_rules():

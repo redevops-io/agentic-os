@@ -243,18 +243,20 @@ import json,sys
 for l in sys.stdin:
     d=json.loads(l); print(d['image'],d['arch'],'user=%s healthcheck=%s name_hits=%d pattern_hits=%d history_secret_like=%d' % (d['user'],d['healthcheck'],len(d['suspicious_file_names']),len(d['pattern_hits']),len(d['history_secret_like'])))"
 
-  say "layers: private-identifier scan and configuration check"
-  python3 -I - "$OUT/scans" > "$R/layer-scan-summary.txt" <<'PYEOF' || { cat "$R/layer-scan-summary.txt"; say "layers FAILED: private identifier, secret-like file or configuration problem in an image"; return 1; }
+  say "layers: private-identifier scan (final filesystem) and configuration check"
+  rm -f "$R/QUALIFICATION-FINDINGS"
+  python3 -I - "$OUT/scans" > "$R/layer-scan-summary.txt" <<'PYEOF' || { echo "layer scan or configuration findings: see layer-scan-summary.txt" > "$R/QUALIFICATION-FINDINGS"; say "layers: FINDINGS (the run continues; the script exits 4 at the end)"; }
 import glob, json, sys
 bad = 0
 for f in sorted(glob.glob(sys.argv[1] + "/*.layerscan.json")):
     d = json.load(open(f)); name = f.rsplit("/", 1)[1][:-len(".layerscan.json")]
-    SP = "usr/local/lib/python3.12/site-packages/"
-    own = [h for h in d["hits"] if h["path"].startswith(("app/", SP + "agentic_os/", SP + "runtime_contracts/", SP + "discovery_runtime/", SP + "knowledge_frontier/", SP + "redevops_"))]
-    print(name, "files=%d hits=%d own_code_hits=%d secret_like_names=%d" % (d["text_files_scanned"], len(d["hits"]), len(own), len(d["secret_like_file_names"])))
-    for h in d["hits"][:40]:
-        print("   ", h["category"], h["path"], h["line"], h["literal"])
-    bad += len(own) + len(d["secret_like_file_names"])
+    print(name, "final_fs_files=%d scanned=%d own_code_hits=%d secret_like_names=%d other_hits=%s" % (
+        d["files_in_final_fs"], d["text_files_scanned"], len(d["own_code_hits"]), len(d["secret_like_file_names"]), d["other_hit_counts"]))
+    for h in d["own_code_hits"][:40]:
+        print("   OWN", h["category"], h["path"], h["line"], h["literal"])
+    for n in d["secret_like_file_names"][:20]:
+        print("   NAME", n["path"])
+    bad += len(d["own_code_hits"]) + len(d["secret_like_file_names"])
 for f in sorted(glob.glob(sys.argv[1] + "/*.configcheck.json")):
     try:
         d = json.load(open(f))
@@ -471,4 +473,5 @@ for s in ${OCI_STAGES:-$ALL}; do
   say "=== stage $s"
   "stage_$s"
 done
+if [ -f "$R/QUALIFICATION-FINDINGS" ]; then say "QUALIFICATION FINDINGS: $(cat "$R/QUALIFICATION-FINDINGS")"; exit 4; fi
 say "done; results in $OUT/results (summary files: DIGESTS.txt repro.txt sbom-compare.jsonl scan-summary.jsonl secretscan-summary.jsonl verify.txt run-summary.jsonl)"

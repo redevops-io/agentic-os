@@ -296,10 +296,13 @@ def cmd_config_check(tag: str, version: str, revision: str, title: str) -> dict:
 
 
 def cmd_layer_scan(save_tar: str, topology_scanner: str) -> dict:
-    """Private-identifier scan of EVERY file of EVERY layer (text files up to 3 MB) with the repository's own topology scanner
-    (scripts/check_private_topology.py): private addresses, owner network, host/ssh aliases, MACs, home paths, personal mail,
-    credentials; plus the literal personal login names and owner-host strings passed in OCI_EXTRA_NEEDLES (a file of lines).
-    Also lists any .git, .env, key, pem file name. Reports file, line, category and the matched literal; no file content."""
+    """Private-identifier scan of the FINAL filesystem of an image (every layer applied in order, whiteouts honoured, so a file that a later layer
+    deleted, for example the pip of the base image, is not reported). Text files up to 3 MB are scanned with the repository's own topology scanner
+    (scripts/check_private_topology.py): private addresses, owner network, host/ssh aliases, MACs, home paths, personal mail, credentials; plus the
+    literal strings in the file named by OCI_EXTRA_NEEDLES (one per line). File names for .git, .env, key and certificate-key material are listed (the
+    public CA bundle under etc/ssl/certs and usr/share/ca-certificates is not key material). Reports file, line, category and the matched literal; no
+    file content. Hits under the image's own code (app/, agentic_os, runtime_contracts, discovery_runtime, knowledge_frontier, redevops_*) are
+    `own_code`; everything else is base-OS or interpreter content, reported by category and count."""
     import importlib.util
     import os
     spec = importlib.util.spec_from_file_location("cpt", topology_scanner)
@@ -311,30 +314,57 @@ def cmd_layer_scan(save_tar: str, topology_scanner: str) -> dict:
     if nf and os.path.exists(nf):
         needles = [l.strip() for l in open(nf, encoding="utf-8") if l.strip()]
     t, m, cfg, blob = _load_save(save_tar)
-    hits, names, scanned = [], [], 0
     name_rx = re.compile(r"(^|/)(\.git(/|$)|\.env($|\.)|id_rsa|id_ed25519|[^/]*\.(pem|key|p12|pfx)$|\.permissions\.key$|permissions\.env$)")
+    public_cert = ("etc/ssl/certs/", "usr/share/ca-certificates/", "usr/local/lib/python3.12/site-packages/certifi/")
+    sp = "usr/local/lib/python3.12/site-packages/"
+    own_prefix = ("app/", sp + "agentic_os/", sp + "runtime_contracts/", sp + "discovery_runtime/", sp + "knowledge_frontier/", sp + "redevops_")
+    files: dict[str, dict] = {}           # path -> {"layer": i, "hits": [...], "name_hit": bool}
+
+    def drop(prefix: str, exact: bool) -> None:
+        for k in [k for k in files if k == prefix or (not exact and k.startswith(prefix + "/"))]:
+            del files[k]
+
     for i, layer in enumerate(m["layers"]):
         lt, members = _layer_entries(blob(layer["digest"]))
         for mem in members:
-            if name_rx.search(mem.name) and not mem.isdir() and "site-packages/certifi" not in mem.name:
-                names.append({"layer": i, "path": mem.name})
-            if not mem.isfile() or mem.size == 0 or mem.size > 3_000_000:
+            name = mem.name.lstrip("./")
+            base = os.path.basename(name)
+            if base == ".wh..wh..opq":
+                parent = os.path.dirname(name)
+                for k in [k for k in files if k.startswith(parent + "/")] if parent else list(files):
+                    del files[k]
                 continue
-            data = lt.extractfile(mem).read()
-            if b"\x00" in data[:4096]:
+            if base.startswith(".wh."):
+                drop(os.path.join(os.path.dirname(name), base[4:]), exact=False)
                 continue
-            text = data.decode("utf-8", "replace")
-            scanned += 1
-            for f in cpt.scan_text(mem.name, text):
-                if f.category == "tech-term":
-                    continue
-                hits.append({"layer": i, "path": mem.name, "line": f.line, "category": f.category, "literal": f.literal})
-            for nd in needles:
-                if nd in text:
-                    line = text[:text.index(nd)].count("\n") + 1
-                    hits.append({"layer": i, "path": mem.name, "line": line, "category": "needle", "literal": nd})
-    return {"layers": len(m["layers"]), "text_files_scanned": scanned, "hits": hits,
-            "hit_counts": dict(Counter(h["category"] for h in hits)), "secret_like_file_names": names}
+            if mem.isdir():
+                continue
+            files.pop(name, None)
+            ent = {"layer": i, "hits": [], "name_hit": bool(name_rx.search(name)) and not name.startswith(public_cert)}
+            if mem.isfile() and 0 < mem.size <= 3_000_000:
+                data = lt.extractfile(mem).read()
+                if b"\x00" not in data[:4096]:
+                    text = data.decode("utf-8", "replace")
+                    for f in cpt.scan_text(name, text):
+                        if f.category != "tech-term":
+                            ent["hits"].append({"line": f.line, "category": f.category, "literal": f.literal})
+                    for nd in needles:
+                        if nd in text:
+                            ent["hits"].append({"line": text[:text.index(nd)].count("\n") + 1, "category": "needle", "literal": nd})
+                    ent["scanned"] = True
+            files[name] = ent
+    own, other = [], Counter()
+    scanned = 0
+    for path, ent in files.items():
+        scanned += 1 if ent.get("scanned") else 0
+        for h in ent["hits"]:
+            if path.startswith(own_prefix):
+                own.append({"layer": ent["layer"], "path": path, **h})
+            else:
+                other[h["category"]] += 1
+    names = [{"layer": e["layer"], "path": p} for p, e in files.items() if e["name_hit"]]
+    return {"layers": len(m["layers"]), "files_in_final_fs": len(files), "text_files_scanned": scanned, "own_code_hits": own,
+            "other_hit_counts": dict(other), "secret_like_file_names": names}
 
 
 def main(argv: list[str]) -> int:
