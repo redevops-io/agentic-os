@@ -498,6 +498,14 @@ def test_row_cap_truncates_and_reports(tmp_path):
     assert len(r.rows) == 100 and r.truncated is True
 
 
+def test_row_cap_is_applied_while_streaming_not_after_materialising(tmp_path):
+    svc, _ = make_service(tmp_path, limits=Limits(timeout_s=8, memory_mb=64, max_rows=50))
+    import time
+    t = time.time()
+    r = svc.query(owner(), "alpha", "SELECT i, repeat('y', 200) FROM range(300000000) t(i)")
+    assert len(r.rows) == 50 and r.truncated is True and time.time() - t < 8
+
+
 def test_result_bytes_cap(tmp_path):
     svc, _ = make_service(tmp_path, limits=Limits(timeout_s=20, max_result_bytes=2000))
     with pytest.raises(QueryRefused) as e:
@@ -561,3 +569,28 @@ def test_audit_failure_fails_the_query_closed(tmp_path):
     with pytest.raises(QueryRefused) as e:
         svc.query(owner(), "alpha", "SELECT 1")
     assert e.value.code == "audit_unavailable"
+
+
+# ───────────────────────── the real mission ledger as a scoped dataset ─────────────────────────
+def test_duckdb_event_ledger_is_inspectable_per_mission_scope(tmp_path):
+    from agentic_os.evidence_query import EvidenceQueryService, MemoryAuditSink, event_store_dataset
+    from agentic_os.mission.event_backends import DuckDBEventStore
+    from tests.evidence_query_support import make_ceiling
+    ledger_path = str(tmp_path / "ledger.duckdb")
+    store = DuckDBEventStore(ledger_path)
+    store.append("MissionCreated", "m-1", {"goal": "refund Sarah"})
+    store.append("NodeSucceeded", "m-1", {"capability": "billing.refund"})
+    store.append("MissionCreated", "m-2", {"goal": "SECRET-OTHER-PROJECT"})
+    cat = ScopeCatalog()
+    cat.register_scope("proj-1", [event_store_dataset(store, mission_ids=["m-1"])])
+    cat.register_scope("proj-2", [event_store_dataset(store, mission_ids=["m-2"])])
+    svc = EvidenceQueryService(cat, make_ceiling(tmp_path / "p", [("owner", "evidence.proj-1.inspect")]), MemoryAuditSink(), limits=Limits(timeout_s=20))
+    before = (os.stat(ledger_path).st_mtime_ns, os.stat(ledger_path).st_size)
+    r = svc.query(owner(), "proj-1", "SELECT type, json_extract_string(payload, '$.capability') cap FROM events ORDER BY seq")
+    assert r.rows == [["MissionCreated", None], ["NodeSucceeded", "billing.refund"]]
+    assert "SECRET-OTHER-PROJECT" not in repr(r.rows)
+    with pytest.raises(QueryRefused):
+        svc.query(owner(), "proj-2", "SELECT * FROM events")
+    assert (os.stat(ledger_path).st_mtime_ns, os.stat(ledger_path).st_size) == before          # the ledger file was not touched
+    store.append("NodeSucceeded", "m-1", {"capability": "later"})                              # live data: next query sees it
+    assert svc.query(owner(), "proj-1", "SELECT count(*) FROM events").rows == [[3]]

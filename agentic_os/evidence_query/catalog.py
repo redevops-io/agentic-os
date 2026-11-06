@@ -14,7 +14,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .artifacts import ArtifactFile
 from .errors import ArtifactError, IntegrityError
@@ -33,6 +33,7 @@ class DatasetSpec:
     columns: Tuple[Tuple[str, str], ...]
     rows: Optional[Sequence[dict]] = None
     artifact: Optional[ArtifactFile] = None
+    loader: Optional[Callable[[], Sequence[dict]]] = None      # rows produced fresh at each query (e.g. from the runtime ledger)
 
     def __post_init__(self):
         if not NAME_RE.match(self.name) or self.name in RESERVED or self.name.startswith("duckdb_"):
@@ -44,8 +45,8 @@ class DatasetSpec:
             if not NAME_RE.match(c) or c in seen or str(t).upper() not in TYPES:
                 raise ValueError("invalid column definition")
             seen.add(c)
-        if (self.rows is None) == (self.artifact is None):
-            raise ValueError("exactly one of rows / artifact")
+        if sum(x is not None for x in (self.rows, self.artifact, self.loader)) != 1:
+            raise ValueError("exactly one of rows / artifact / loader")
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,24 @@ def rows_sha256(rows: Sequence[dict]) -> str:
     return hashlib.sha256(json.dumps(list(rows), sort_keys=True, default=str, separators=(",", ":")).encode()).hexdigest()
 
 
+EVENT_COLUMNS = (("seq", "BIGINT"), ("ts", "DOUBLE"), ("type", "VARCHAR"), ("mission_id", "VARCHAR"), ("payload", "JSON"))
+
+
+def event_store_dataset(store: Any, *, name: str = "events", mission_ids: Optional[Sequence[str]] = None) -> DatasetSpec:
+    """Expose (a slice of) a mission event ledger - any ``EventStore``/``DuckDBEventStore``/``PostgresEventStore`` - as a scoped
+    dataset. The ledger itself is never handed to the worker: rows are read through the store's own API at query time."""
+    wanted = None if mission_ids is None else set(mission_ids)
+
+    def load() -> list:
+        out = []
+        for e in store.all():
+            if wanted is not None and e.mission_id not in wanted:
+                continue
+            out.append({"seq": e.seq, "ts": e.ts, "type": e.type, "mission_id": e.mission_id, "payload": e.payload})
+        return out
+    return DatasetSpec(name, EVENT_COLUMNS, loader=load)
+
+
 class ScopeCatalog:
     def __init__(self) -> None:
         self._scopes: Dict[str, Tuple[Tuple[DatasetSpec, ...], Tuple[ViewSpec, ...]]] = {}
@@ -137,6 +156,9 @@ class ScopeCatalog:
         for d in ds:
             if d.artifact is not None:
                 rows, digest = d.artifact.load()
+            elif d.loader is not None:
+                rows = list(d.loader())
+                digest = rows_sha256(rows)
             else:
                 rows, digest = list(d.rows), rows_sha256(d.rows)
             cols = tuple((c, str(t).upper()) for c, t in d.columns)   # column projection: only declared columns leave

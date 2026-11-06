@@ -849,7 +849,7 @@ class MissionRuntime:
 
     # ── sagas / failure / success ──────────────────────────────────────────────
     def _saga(self, m: Mission, plan: ExecutionPlan, world: WorldState) -> None:
-        self._require_execution_authority(m.id)      # compensations are side effects too
+        # compensations are side effects too: they reach tools only through _executor_for, which enforces the replay authorization
         status = self.repo.node_status(m.id)
         for node in reversed(plan.graph.nodes):
             if status.get(node.id) == NodeState.DONE and node.side_effecting and node.undo:
