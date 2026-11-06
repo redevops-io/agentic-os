@@ -85,11 +85,11 @@ volume (`PERMISSIONS_DIR=/var/lib/redevops/ledger/permissions`). The probes need
    from the registry after the notice period.
 5. Re-run the tests above and the matrix; update the exceptions table if an exception was closed.
 
-## 7. Status on this branch
+## 7. Status
 
-`main`'s `Dockerfile` does not yet meet C1, C4 or the pinned-base part of C5 (it builds from the floating `python:3.12-slim`,
-runs as root and has no `HEALTHCHECK`); the hardened Dockerfile, the compose loopback publish and the OCI qualification
-script are on the RC line `post-rc/oci-release`. The chart does not depend on the Dockerfile for C1 to C4: it forces uid 10001,
-the read-only root, the writable volumes and the probes itself, so it also runs a root-built image unprivileged. Converging the
-image hardening into `main` is a prerequisite for the release; the root `docker-compose.yml` on this branch publishes on
-loopback (C6).
+Both release Dockerfiles (`Dockerfile`, `Dockerfile.projects`) meet C1 (uid 10001), C4 (`HEALTHCHECK`) and the pinned-base part
+of C5 (base by index digest), copy an explicit file set, remove pip/setuptools/wheel from the final layers and carry the OCI
+labels title, description, version, revision and vendor (never source, url, documentation or licenses).
+`tests/test_dockerfiles_hardened.py` checks this statically; `scripts/release/oci_prepare.sh` builds and qualifies the result.
+The chart does not depend on the Dockerfile for C1 to C4: it forces uid 10001, the read-only root, the writable volumes and
+the probes itself. The root `docker-compose.yml` publishes on loopback (C6).
