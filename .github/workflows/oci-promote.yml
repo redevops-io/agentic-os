@@ -1,0 +1,200 @@
+# Promote an ALREADY STAGED image to its public name, sign it keyless and attest it. This workflow never builds.
+#
+# Trigger: workflow_dispatch only, from refs/heads/main only. It runs in the protected environment `release-promotion`
+# (required reviewers; the repository owner creates the environment). Procedure and owner steps: docs/release/OCI_RELEASE_RUNBOOK.md.
+#
+# Inputs name a digest that was staged privately and qualified locally. The job
+#   1. asserts the staged index and each per-architecture manifest hash to the digests given (equality before the copy),
+#   2. refuses if any destination tag exists (registry API status: 404 = absent; every other status or error stops the run),
+#   3. copies the index and the manifests it lists to the public name (`imagetools create` from one index source; no other
+#      manifest, tag or signature of the staged repository is copied) and asserts equality again after the copy,
+#   4. signs the index and each image by digest with the workflow's OIDC identity (cosign keyless) and attests the BuildKit SBOM and
+#      provenance that are part of the index,
+#   5. verifies with the identity pinned to THIS workflow file at refs/heads/main (exact string, no pattern),
+#   6. checks that the package is not linked to a repository and that no image carries a source/url/documentation/licenses label.
+# Publication happens at step 3 for a public destination. No third-party action is used (cosign comes from `go install` of a
+# version tag, verified by the Go checksum database), so there is nothing to pin by SHA.
+name: oci-promote
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Image name to promote"
+        type: choice
+        required: true
+        options: [redevops-runtime, redevops-projects]
+      staged_index_digest:
+        description: "Index digest staged at ghcr.io/<owner>/staged-<image> (sha256:<64 hex>)"
+        type: string
+        required: true
+      amd64_digest:
+        description: "linux/amd64 image digest listed in that index"
+        type: string
+        required: true
+      arm64_digest:
+        description: "linux/arm64 image digest listed in that index"
+        type: string
+        required: true
+      tags:
+        description: "Public tags to create, space separated: MAJOR.MINOR.PATCH and/or MAJOR.MINOR.PATCH-<12 hex>"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    runs-on: ubuntu-24.04
+    environment: release-promotion
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    env:
+      OWNER: redevops-io
+      IMAGE: ${{ inputs.image }}
+      INDEX: ${{ inputs.staged_index_digest }}
+      AMD64: ${{ inputs.amd64_digest }}
+      ARM64: ${{ inputs.arm64_digest }}
+      TAGS: ${{ inputs.tags }}
+      COSIGN_VERSION: v3.1.4
+      IDENTITY: https://github.com/redevops-io/agentic-os/.github/workflows/oci-promote.yml@refs/heads/main
+      ISSUER: https://token.actions.githubusercontent.com
+    steps:
+      - name: Only the protected branch of this repository
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || { echo "workflow_dispatch only"; exit 1; }
+          [ "$GITHUB_REF" = refs/heads/main ] || { echo "refs/heads/main only (got $GITHUB_REF)"; exit 1; }
+          [ "$GITHUB_REPOSITORY" = redevops-io/agentic-os ] || { echo "wrong repository"; exit 1; }
+
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          dre='^sha256:[0-9a-f]{64}$'
+          for d in "$INDEX" "$AMD64" "$ARM64"; do [[ "$d" =~ $dre ]] || { echo "malformed digest"; exit 1; }; done
+          [ "$AMD64" != "$ARM64" ] || { echo "per-architecture digests must differ"; exit 1; }
+          [ -n "$TAGS" ] || { echo "no tags"; exit 1; }
+          for t in $TAGS; do
+            [[ "$t" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9a-f]{12})?$ ]] || { echo "tag '$t' is not a version tag (never latest or a moving tag)"; exit 1; }
+          done
+
+      - name: Install cosign (go install of a version tag; sum.golang.org verifies the module)
+        run: |
+          set -euo pipefail
+          GOBIN="$RUNNER_TEMP/bin" go install "github.com/sigstore/cosign/v3/cmd/cosign@${COSIGN_VERSION}"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Log in to ghcr.io with the job token
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Staged index and per-architecture manifests hash to the given digests (before)
+        run: |
+          set -euo pipefail
+          SRC="ghcr.io/$OWNER/staged-$IMAGE"
+          sum() { sha256sum | awk '{print "sha256:" $1}'; }
+          raw=$(docker buildx imagetools inspect "$SRC@$INDEX" --raw)
+          [ "$(printf '%s' "$raw" | sum)" = "$INDEX" ] || { echo "the staged index bytes do not hash to $INDEX"; exit 1; }
+          printf '%s' "$raw" | jq -e '.mediaType | test("image.index|manifest.list")' > /dev/null
+          got_amd=$(printf '%s' "$raw" | jq -r '.manifests[] | select(.platform.os=="linux" and .platform.architecture=="amd64") | .digest')
+          got_arm=$(printf '%s' "$raw" | jq -r '.manifests[] | select(.platform.os=="linux" and .platform.architecture=="arm64") | .digest')
+          [ "$got_amd" = "$AMD64" ] || { echo "amd64 digest in the index is $got_amd, input says $AMD64"; exit 1; }
+          [ "$got_arm" = "$ARM64" ] || { echo "arm64 digest in the index is $got_arm, input says $ARM64"; exit 1; }
+          for d in $(printf '%s' "$raw" | jq -r '.manifests[].digest'); do
+            [ "$(docker buildx imagetools inspect "$SRC@$d" --raw | sum)" = "$d" ] || { echo "child $d does not hash to its digest"; exit 1; }
+          done
+          echo "staged index $INDEX verified: $(printf '%s' "$raw" | jq '.manifests | length') manifests"
+
+      - name: Refuse if a destination tag exists (404 = absent; any other answer stops the run)
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          reg_token=$(curl -sS --fail-with-body -u "$GITHUB_ACTOR:$TOKEN" "https://ghcr.io/token?service=ghcr.io&scope=repository:$OWNER/$IMAGE:pull" | jq -r .token)
+          [ -n "$reg_token" ] && [ "$reg_token" != null ] || { echo "could not obtain a registry token: not treating this as 'absent'"; exit 1; }
+          accept='application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json'
+          for t in $TAGS; do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' -I -H "Authorization: Bearer $reg_token" -H "Accept: $accept" "https://ghcr.io/v2/$OWNER/$IMAGE/manifests/$t") \
+              || { echo "network error while checking $t: not treating this as 'absent'"; exit 1; }
+            case "$code" in
+              404) echo "tag $t is absent";;
+              200) echo "destination tag $IMAGE:$t already exists: tags are never overwritten"; exit 1;;
+              *)   echo "unexpected HTTP $code while checking $t: stopping"; exit 1;;
+            esac
+          done
+
+      - name: Copy by digest (publication for a public destination)
+        run: |
+          set -euo pipefail
+          SRC="ghcr.io/$OWNER/staged-$IMAGE"; DST="ghcr.io/$OWNER/$IMAGE"
+          args=(); for t in $TAGS; do args+=(--tag "$DST:$t"); done
+          docker buildx imagetools create "${args[@]}" "$SRC@$INDEX"
+
+      - name: Destination manifests equal the staged ones (after)
+        run: |
+          set -euo pipefail
+          DST="ghcr.io/$OWNER/$IMAGE"
+          sum() { sha256sum | awk '{print "sha256:" $1}'; }
+          raw=$(docker buildx imagetools inspect "$DST@$INDEX" --raw)
+          [ "$(printf '%s' "$raw" | sum)" = "$INDEX" ] || { echo "AFTER COPY: destination index differs"; exit 1; }
+          for d in $(printf '%s' "$raw" | jq -r '.manifests[].digest'); do
+            [ "$(docker buildx imagetools inspect "$DST@$d" --raw | sum)" = "$d" ] || { echo "AFTER COPY: child $d differs"; exit 1; }
+          done
+          for t in $TAGS; do
+            [ "$(docker buildx imagetools inspect "$DST:$t" --raw | sum)" = "$INDEX" ] || { echo "AFTER COPY: $t does not resolve to $INDEX"; exit 1; }
+          done
+
+      - name: Sign by digest and attest the BuildKit SBOM and provenance (keyless)
+        env:
+          COSIGN_YES: "true"
+        run: |
+          set -euo pipefail
+          DST="ghcr.io/$OWNER/$IMAGE"
+          cosign sign "$DST@$INDEX" "$DST@$AMD64" "$DST@$ARM64"
+          for pair in "amd64:$AMD64" "arm64:$ARM64"; do
+            arch=${pair%%:*}; dig=${pair#*:}
+            docker buildx imagetools inspect "$DST@$INDEX" --format '{{json .SBOM}}' | jq -c --arg k "linux/$arch" '.[$k].SPDX' > "$RUNNER_TEMP/sbom-$arch.json"
+            docker buildx imagetools inspect "$DST@$INDEX" --format '{{json .Provenance}}' | jq -c --arg k "linux/$arch" '.[$k].SLSA' > "$RUNNER_TEMP/prov-$arch.json"
+            [ "$(jq length "$RUNNER_TEMP/sbom-$arch.json")" -gt 0 ] && [ "$(jq length "$RUNNER_TEMP/prov-$arch.json")" -gt 0 ] || { echo "no BuildKit SBOM/provenance for $arch"; exit 1; }
+            cosign attest --type spdxjson --predicate "$RUNNER_TEMP/sbom-$arch.json" "$DST@$dig"
+            cosign attest --type slsaprovenance1 --predicate "$RUNNER_TEMP/prov-$arch.json" "$DST@$dig"
+          done
+
+      - name: Verify with the identity pinned to this workflow at refs/heads/main
+        run: |
+          set -euo pipefail
+          DST="ghcr.io/$OWNER/$IMAGE"
+          for ref in "$DST@$INDEX" "$DST@$AMD64" "$DST@$ARM64"; do
+            cosign verify --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" "$ref" > /dev/null
+          done
+          for dig in "$AMD64" "$ARM64"; do
+            for ty in spdxjson slsaprovenance1; do
+              cosign verify-attestation --type "$ty" --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" "$DST@$dig" > /dev/null
+            done
+          done
+          echo "verified: $DST@$INDEX signed by $IDENTITY"
+
+      - name: The package stays unlinked and the images carry no source/url/documentation/licenses label
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          DST="ghcr.io/$OWNER/$IMAGE"
+          for dig in "$AMD64" "$ARM64"; do
+            docker buildx imagetools inspect "$DST@$dig" --format '{{json .Image}}' \
+              | jq -e '[((.config.Labels // {}) | keys[]) | select(test("^org\\.opencontainers\\.image\\.(source|url|documentation|licenses)$"))] | length == 0' > /dev/null \
+              || { echo "label present on $dig"; exit 1; }
+          done
+          code=$(curl -sS -o "$RUNNER_TEMP/pkg.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+                 "https://api.github.com/orgs/$OWNER/packages/container/$IMAGE")
+          [ "$code" = 200 ] || { echo "package API answered HTTP $code: verify by hand that the package has NO connected repository (runbook)"; exit 1; }
+          jq -e '.repository == null' "$RUNNER_TEMP/pkg.json" > /dev/null \
+            || { echo "the package is LINKED to a repository: disconnect it in the package settings now (runbook), the promotion itself is complete"; exit 1; }
+          echo "package repository link: null"

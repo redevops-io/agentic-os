@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# DRAFT, NOT ENABLED. Owner-terminal promotion of an already-staged, already-signed image to its public name
+# (the managed-key fallback of docs/release/OCI_RELEASE_RUNBOOK.md; the primary path is the keyless workflow).
+#
+# It PROMOTES: it never builds. Default is a DRY RUN: every read-only check runs and the writes are printed. Add --execute to write.
+# Publication happens at the first write to the destination package (for an existing public package such as redevops-runtime that
+# is the moment a new public tag appears there), so run the dry run first and read it.
+#
+#   oci-promote-owner.sh --src ghcr.io/ORG/staged-NAME --dst ghcr.io/ORG/NAME --index sha256:<64 hex> \
+#       --tag 0.5.0 --tag 0.5.0-<12 hex> --pub cosign.pub [--no-tlog] [--package-api orgs/ORG/packages/container/NAME] [--execute]
+#
+# Preconditions (checked): oras >= 1.2, cosign >= 2, jq, shasum; you are logged in to the registry in THIS terminal with a token
+# that can read the staged package and write the destination package (docker login / oras login; nothing is read from this script's
+# environment); the source index is signed and attested with the release key whose public half is --pub.
+#
+# Allow-list (nothing else is copied): the index (by digest), the manifests the index lists (per-architecture images and BuildKit
+# attestation manifests), and for each per-architecture image and the index the cosign tags sha256-<hex>.sig / .att of that digest.
+# Not copied, by construction: every other tag of the staged repository (for example a 'tampered' or '<tag>-rebuild' tag), every
+# other digest, and any signature or attestation that is not the single release-key one (a .sig tag must hold exactly 1 signature,
+# a .att tag exactly 2: cyclonedx + slsaprovenance1).
+set -euo pipefail
+
+ORAS_FLAGS=() COSIGN_FLAGS=()
+# tag_state REF -> prints exists | absent | error:<first line>. 'absent' ONLY for the registry's 404 (oras prints exactly
+# 'Error response from registry: failed to find "REF": REF: not found'); every other failure (401/403/429/5xx, DNS, TLS, refused,
+# timeout, malformed answer) is 'error' and stops the run: a network problem must never read as "the tag does not exist".
+tag_state() {  # uses ORAS_FLAGS
+  local ref=$1 err rc=0
+  err=$(oras manifest fetch --descriptor ${ORAS_FLAGS[@]+"${ORAS_FLAGS[@]}"} "$ref" 2>&1 > /dev/null) || rc=$?
+  if [ "$rc" = 0 ]; then echo exists; return; fi
+  if [ "$err" = "Error response from registry: failed to find \"$ref\": $ref: not found" ]; then echo absent; return; fi
+  echo "error:$(echo "$err" | head -1)"
+}
+
+# (unit tests source the functions only)
+if [ -n "${PROMOTE_FUNCTIONS_ONLY:-}" ]; then return 0 2>/dev/null || exit 0; fi
+
+SRC="" DST="" INDEX="" PUB="" EXECUTE=0 NOTLOG=0 PKGAPI="" TAGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --src) SRC=$2; shift 2;; --dst) DST=$2; shift 2;; --index) INDEX=$2; shift 2;; --tag) TAGS+=("$2"); shift 2;;
+    --pub) PUB=$2; shift 2;; --no-tlog) NOTLOG=1; shift;; --package-api) PKGAPI=$2; shift 2;; --execute) EXECUTE=1; shift;;
+    *) echo "unknown argument $1" >&2; exit 2;;
+  esac
+done
+die() { echo "REFUSED: $*" >&2; exit 1; }
+note() { echo "[promote] $*" >&2; }
+
+# ---- local rehearsal switch: ONLY for registries on this machine (plain HTTP); never accepted for a remote registry
+host_of() { echo "${1%%/*}"; }
+is_local() { case "$(host_of "$1")" in 127.0.0.1:*|localhost:*) return 0;; *) return 1;; esac; }
+if [ -n "${PROMOTE_LOCAL_REHEARSAL:-}" ]; then
+  is_local "$SRC" && is_local "$DST" || die "PROMOTE_LOCAL_REHEARSAL is only accepted when both registries are on this machine"
+  ORAS_FLAGS=(--plain-http); COSIGN_FLAGS=(--allow-http-registry)
+fi
+[ "$NOTLOG" = 1 ] && COSIGN_FLAGS+=(--insecure-ignore-tlog=true)
+
+# ---- 0. argument and tool preconditions
+for t in oras cosign jq shasum; do command -v "$t" > /dev/null || die "$t is not installed"; done
+[[ "$INDEX" =~ ^sha256:[0-9a-f]{64}$ ]] || die "--index must be sha256:<64 lowercase hex>"
+[ -f "$PUB" ] || die "--pub: public key file not found"
+[ "${#TAGS[@]}" -ge 1 ] || die "at least one --tag"
+for t in "${TAGS[@]}"; do
+  [[ "$t" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9a-f]{12})?$ ]] || die "tag '$t' is not MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-<12 hex> (never latest or a moving tag)"
+done
+src_name=${SRC##*/}; dst_name=${DST##*/}
+[[ "$src_name" == staged-* ]] || die "the source repository must be a staged-* package"
+[[ "$dst_name" != staged-* ]] || die "the destination must not be a staged-* package"
+[ "$SRC" != "$DST" ] && [ "$(host_of "$SRC")" = "$(host_of "$DST")" ] || die "source and destination must be different repositories on one registry"
+
+sha_of() { shasum -a 256 | awk '{print "sha256:" $1}'; }
+fetch_raw() { oras manifest fetch ${ORAS_FLAGS[@]+"${ORAS_FLAGS[@]}"} "$1"; }          # raw manifest bytes on stdout
+
+# ---- 1. the staged index: its bytes hash to the digest we were given; list the allow-list from it
+note "reading the staged index $SRC@$INDEX"
+raw=$(fetch_raw "$SRC@$INDEX") || die "cannot read the staged index (not logged in, wrong name, or network)"
+[ "$(printf '%s' "$raw" | sha_of)" = "$INDEX" ] || die "the staged index bytes do not hash to $INDEX"
+printf '%s' "$raw" | jq -e '.mediaType | test("image.index|manifest.list")' > /dev/null || die "$INDEX is not an image index"
+CHILDREN=() IMAGES=()      # (plain loops only: this must run on the bash 3.2 that macOS ships)
+while IFS= read -r d; do CHILDREN+=("$d"); done < <(printf '%s' "$raw" | jq -r '.manifests[].digest')
+while IFS= read -r d; do IMAGES+=("$d"); done < <(printf '%s' "$raw" | jq -r '.manifests[] | select((.annotations["vnd.docker.reference.type"] // "") != "attestation-manifest") | .digest')
+[ "${#IMAGES[@]}" -ge 1 ] || die "the index lists no image"
+for d in "${CHILDREN[@]}"; do [[ "$d" =~ ^sha256:[0-9a-f]{64}$ ]] || die "malformed child digest in the index"; done
+note "allow-list: index + ${#CHILDREN[@]} child manifests (${#IMAGES[@]} images)"
+for d in "${CHILDREN[@]}"; do
+  [ "$(fetch_raw "$SRC@$d" | sha_of)" = "$d" ] || die "child manifest $d does not hash to its digest at the source"
+done
+
+# ---- 2. verify the staged material with the RELEASE key before anything is copied; exact signature counts
+hex() { echo "${1#sha256:}"; }
+VFLAGS=(--key "$PUB" ${COSIGN_FLAGS[@]+"${COSIGN_FLAGS[@]}"})
+cosign verify ${VFLAGS[@]+"${VFLAGS[@]}"} "$SRC@$INDEX" > /dev/null 2>&1 || die "cosign verify failed for the staged index"
+SIGTAGS=("sha256-$(hex "$INDEX").sig")
+ATTTAGS=()
+for d in "${IMAGES[@]}"; do
+  cosign verify ${VFLAGS[@]+"${VFLAGS[@]}"} "$SRC@$d" > /dev/null 2>&1 || die "cosign verify failed for $d"
+  for ty in cyclonedx slsaprovenance1; do
+    cosign verify-attestation ${VFLAGS[@]+"${VFLAGS[@]}"} --type "$ty" "$SRC@$d" > /dev/null 2>&1 || die "attestation $ty failed to verify for $d"
+  done
+  SIGTAGS+=("sha256-$(hex "$d").sig"); ATTTAGS+=("sha256-$(hex "$d").att")
+done
+for t in "${SIGTAGS[@]}"; do
+  n=$(fetch_raw "$SRC:$t" | jq '.layers | length'); [ "$n" = 1 ] || die "$t holds $n signatures, expected exactly 1 (foreign or additional signature material)"
+done
+for t in "${ATTTAGS[@]}"; do
+  n=$(fetch_raw "$SRC:$t" | jq '.layers | length'); [ "$n" = 2 ] || die "$t holds $n attestations, expected exactly 2"
+done
+note "staged index, ${#IMAGES[@]} images, signatures and attestations verified with $PUB; signature counts exact"
+
+# ---- 3. destination guards: no tag we are about to write may exist; any non-404 answer stops the run
+WRITE_TAGS=("${TAGS[@]}" "${SIGTAGS[@]}" "${ATTTAGS[@]}")
+for t in "${WRITE_TAGS[@]}"; do
+  st=$(tag_state "$DST:$t")
+  case "$st" in
+    absent) ;;
+    exists) die "destination tag $DST:$t already exists (tags are never overwritten)";;
+    *) die "cannot establish that $DST:$t is absent ($st)";;
+  esac
+done
+# the destination's current tags are recorded so we can prove afterwards that none of them moved
+BEFORE=$(oras repo tags ${ORAS_FLAGS[@]+"${ORAS_FLAGS[@]}"} "$DST" 2> /dev/null || true)
+BEFORE_FILE=$(mktemp); : > "$BEFORE_FILE"
+for t in $BEFORE; do echo "$t $(oras manifest fetch --descriptor ${ORAS_FLAGS[@]+${ORAS_FLAGS[@]+"${ORAS_FLAGS[@]}"}} "$DST:$t" | jq -r .digest)" >> "$BEFORE_FILE"; done
+note "destination guards passed for ${#WRITE_TAGS[@]} tags; $(wc -l < "$BEFORE_FILE" | tr -d ' ') pre-existing tags recorded"
+
+if [ "$EXECUTE" != 1 ]; then
+  note "DRY RUN: would write, in order:"
+  echo "  oras cp -r $SRC@$INDEX $DST:${TAGS[0]}"
+  for t in "${TAGS[@]:1}"; do echo "  oras tag $DST:${TAGS[0]} $t"; done
+  for t in "${SIGTAGS[@]}" "${ATTTAGS[@]}"; do echo "  oras cp $SRC:$t $DST:$t"; done
+  echo "  then: digest-equality of the index and every child at $DST, cosign verify of everything, pre-existing tags unchanged, repository link null, no source label"
+  exit 0
+fi
+
+# ---- 4. write. First write to the destination package = publication for an existing public package.
+note "EXECUTE: copying (digests are preserved; oras copies manifest bytes unchanged)"
+oras cp -r ${ORAS_FLAGS[@]+"${ORAS_FLAGS[@]}"} "$SRC@$INDEX" "$DST:${TAGS[0]}"
+for t in "${TAGS[@]:1}"; do oras tag ${ORAS_FLAGS[@]+"${ORAS_FLAGS[@]}"} "$DST:${TAGS[0]}" "$t"; done
+for t in "${SIGTAGS[@]}" "${ATTTAGS[@]}"; do oras cp ${ORAS_FLAGS[@]+"${ORAS_FLAGS[@]}"} "$SRC:$t" "$DST:$t"; done
+
+# ---- 5. post-copy proof: equality for the index and every child, the tags resolve to the index, everything verifies, nothing moved
+[ "$(fetch_raw "$DST@$INDEX" | sha_of)" = "$INDEX" ] || die "AFTER COPY: destination index bytes differ from $INDEX"
+for d in "${CHILDREN[@]}"; do [ "$(fetch_raw "$DST@$d" | sha_of)" = "$d" ] || die "AFTER COPY: destination child $d differs"; done
+for t in "${TAGS[@]}"; do
+  [ "$(oras manifest fetch --descriptor ${ORAS_FLAGS[@]+"${ORAS_FLAGS[@]}"} "$DST:$t" | jq -r .digest)" = "$INDEX" ] || die "AFTER COPY: $DST:$t does not resolve to $INDEX"
+done
+cosign verify ${VFLAGS[@]+"${VFLAGS[@]}"} "$DST@$INDEX" > /dev/null 2>&1 || die "AFTER COPY: cosign verify failed at the destination (index)"
+for d in "${IMAGES[@]}"; do
+  cosign verify ${VFLAGS[@]+"${VFLAGS[@]}"} "$DST@$d" > /dev/null 2>&1 || die "AFTER COPY: cosign verify failed for $d"
+  for ty in cyclonedx slsaprovenance1; do
+    cosign verify-attestation ${VFLAGS[@]+"${VFLAGS[@]}"} --type "$ty" "$DST@$d" > /dev/null 2>&1 || die "AFTER COPY: attestation $ty failed for $d"
+  done
+done
+while read -r t was; do
+  now=$(oras manifest fetch --descriptor ${ORAS_FLAGS[@]+${ORAS_FLAGS[@]+"${ORAS_FLAGS[@]}"}} "$DST:$t" | jq -r .digest)
+  [ "$now" = "$was" ] || die "AFTER COPY: pre-existing tag $t MOVED ($was -> $now)"
+done < "$BEFORE_FILE"
+rm -f "$BEFORE_FILE"
+# no source/url/documentation/licenses label on any image of the index
+for d in "${IMAGES[@]}"; do
+  cfg=$(fetch_raw "$DST@$d" | jq -r .config.digest)
+  oras blob fetch ${ORAS_FLAGS[@]+"${ORAS_FLAGS[@]}"} --output - "$DST@$cfg" | jq -e '[(.config.Labels // {}) | keys[] | select(test("^org\\.opencontainers\\.image\\.(source|url|documentation|licenses)$"))] | length == 0' > /dev/null \
+    || die "AFTER COPY: image $d carries a source/url/documentation/licenses label"
+done
+# the package must stay unlinked from any repository (check IMMEDIATELY after the first write)
+if [ -n "$PKGAPI" ]; then
+  command -v gh > /dev/null || die "gh is needed for --package-api"
+  gh api "$PKGAPI" | jq -e '.repository == null' > /dev/null || die "the package is LINKED to a repository: disconnect it in the package settings now (see the runbook), then re-run this check"
+  note "package repository link is null"
+else
+  note "NOTE: --package-api not given: verify by hand that the package page shows NO connected repository"
+fi
+note "promotion complete and verified: $DST@$INDEX tags: ${TAGS[*]}"
