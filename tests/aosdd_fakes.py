@@ -38,9 +38,17 @@ def config_dict(**over) -> dict:
     return d
 
 
+class Crash(BaseException):
+    """The runtime process was killed (not an Exception: nothing in the runtime may catch it, exactly like SIGKILL)."""
+
+
 class FakeStack:
     def __init__(self):
         self.calls: list[tuple] = []          # (app, method, path)
+        self.roles: list[str] = []            # the credential role of each call, parallel to ``calls``
+        self.crashes: list[dict] = []
+        self.hooks: list[dict] = []
+        self.blocks: list[dict] = []
         self.faults: list[dict] = []
         self.revoked: set = set()             # (app, role)
         self.denied_write_roles = {"twenty": "reader", "erpnext": "reader"}
@@ -64,6 +72,16 @@ class FakeStack:
         self.faults.append({"app": app, "method": method, "sub": path_substr, "status": status, "times": times,
                             "commit": commit, "body": body})
 
+    def crash(self, app, method, path_substr, after_effect=True):
+        """Raise ``Crash`` the first time this request arrives: after the effect was applied (the reply is lost) or before it."""
+        self.crashes.append({"app": app, "method": method, "sub": path_substr, "after": after_effect, "done": False})
+
+    def on_effect(self, app, method, path_substr, fn):
+        self.hooks.append({"app": app, "method": method, "sub": path_substr, "fn": fn})
+
+    def block(self, app, method, path_substr, entered, release):
+        self.blocks.append({"app": app, "method": method, "sub": path_substr, "entered": entered, "release": release, "used": False})
+
     def revoke(self, app, role="writer"):
         self.revoked.add((app, role))
 
@@ -79,6 +97,16 @@ class FakeStack:
         path = req.url[len(BASES[app]):]
         self.calls.append((app, req.method, path))
         role = self._role(app, req.headers)
+        self.roles.append(role or "none")
+        for b in self.blocks:
+            if not b["used"] and b["app"] == app and b["method"] == req.method and b["sub"] in path:
+                b["used"] = True
+                b["entered"].set()
+                b["release"].wait(20)
+        cr = next((c for c in self.crashes if not c["done"] and c["app"] == app and c["method"] == req.method and c["sub"] in path), None)
+        if cr and not cr["after"]:
+            cr["done"] = True
+            raise Crash(f"killed before {req.method} {path}")
         if role is None or (app, role) in self.revoked:
             body = {"statusCode": 403, "messages": ["This API Key is revoked"]} if (role and app == "twenty") else {"error": "Invalid Access Token"}
             return Resp(403 if (role and app == "twenty") else 401, body, json.dumps(body))
@@ -90,6 +118,12 @@ class FakeStack:
             fault["times"] -= 1
             return Resp(fault["status"], fault["body"] or {"error": "injected"}, json.dumps(fault["body"] or {"error": "injected"}))
         resp = getattr(self, "_" + app)(req, path)
+        for h in self.hooks:
+            if h["app"] == app and h["method"] == req.method and h["sub"] in path:
+                h["fn"](self)
+        if cr and cr["after"]:
+            cr["done"] = True
+            raise Crash(f"killed after {req.method} {path} was applied")
         if fault and fault["commit"]:
             fault["times"] -= 1
             return Resp(0, {"transport_error": "TimeoutError"}, "TimeoutError")

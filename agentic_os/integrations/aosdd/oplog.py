@@ -57,6 +57,8 @@ class OpLog:
                       "capability TEXT NOT NULL, target_digest TEXT NOT NULL, attempt INTEGER NOT NULL, state TEXT NOT NULL, owner TEXT, "
                       "fence INTEGER NOT NULL DEFAULT 0, lease_until REAL, native_id TEXT, result TEXT, error TEXT, "
                       "created REAL NOT NULL, updated REAL NOT NULL)")
+            c.execute("CREATE TABLE IF NOT EXISTS cases (case_key TEXT NOT NULL, attempt INTEGER NOT NULL, mission_id TEXT, created REAL NOT NULL, "
+                      "PRIMARY KEY (case_key, attempt))")
             c.execute("CREATE TABLE IF NOT EXISTS opevents (seq INTEGER PRIMARY KEY AUTOINCREMENT, op_id TEXT NOT NULL, ts REAL NOT NULL, "
                       "state TEXT NOT NULL, note TEXT)")
 
@@ -107,6 +109,25 @@ class OpLog:
 
     def history(self, op: str) -> list:
         return [dict(r) for r in self._conn().execute("SELECT ts, state, note FROM opevents WHERE op_id=? ORDER BY seq", (op,))]
+
+    # ---- cases: one mission per (case key, attempt), across processes -------------------------------------------------------
+    def open_case(self, case_key: str, attempt: int) -> "tuple[bool, str | None]":
+        """(True, None) for the caller that must create the mission; (False, mission_id) for every later submit of the same case/attempt
+        (mission_id is None while the creator has not finished: the caller must not create a second one)."""
+        with self._tx() as c:
+            cur = c.execute("INSERT OR IGNORE INTO cases (case_key, attempt, mission_id, created) VALUES (?,?,NULL,?)", (case_key, int(attempt), self.clock()))
+            if cur.rowcount == 1:
+                return True, None
+            row = c.execute("SELECT mission_id FROM cases WHERE case_key=? AND attempt=?", (case_key, int(attempt))).fetchone()
+            return False, row["mission_id"]
+
+    def bind_case(self, case_key: str, attempt: int, mission_id: str) -> None:
+        with self._tx() as c:
+            c.execute("UPDATE cases SET mission_id=? WHERE case_key=? AND attempt=? AND mission_id IS NULL", (mission_id, case_key, int(attempt)))
+
+    def release_case(self, case_key: str, attempt: int) -> None:
+        with self._tx() as c:
+            c.execute("DELETE FROM cases WHERE case_key=? AND attempt=? AND mission_id IS NULL", (case_key, int(attempt)))
 
     # ---- transitions ------------------------------------------------------------------------------------------------
     def plan_op(self, op: str, mission_id: str, step: str, app: str, capability: str, target_digest: str, attempt: int = 1) -> dict:
