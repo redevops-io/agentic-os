@@ -234,8 +234,54 @@ Availability for a private repository depends on the GitHub plan (verify before 
    `AGENTIC_OS_HOME=/data`) and `/app/.agentic-os` (fleet workdir, ephemeral). The Projects image needs a
    writable home (`/home/app`) and, when the container port is mapped to a different host port,
    `PROJECTS_ALLOWED_HOSTS` set to the exact `Host` value (see `docs/LOCAL_API_SECURITY.md`, L6).
-5. Upgrading from an earlier image that ran as root: an existing root-owned `/data` volume must be
+5. Control-plane credential: the `redevops-runtime` image fails closed. With no `AGENTIC_OS_CONTROL_TOKEN` (or legacy
+   `AGENTIC_OS_API_KEY`) the mutating routes (`POST /missions`, `/missions/{id}/approve`, `/up`, `/down`, `/dispatch`,
+   `/approvals/*`, `/api/permissions/*`) and the mission reads answer 503, while `/health` (the HEALTHCHECK and the
+   Helm probes) stays open. Supply the token at run time (compose `environment`, Kubernetes Secret via
+   `runtime.controlTokenSecret`), never in the image. Details: `docs/CONTROL_PLANE_SECURITY.md`.
+6. Network exposure: publish on loopback unless you have a reason not to. Compose uses
+   `"${AOS_BIND_ADDR:-127.0.0.1}:8080:8080"`, `docker run` examples use `-p 127.0.0.1:8080:8080` and
+   `-p 127.0.0.1:8787:8787`. WARNING: `AOS_BIND_ADDR=0.0.0.0` (or a `-p 8080:8080` without an address) exposes the control
+   plane to every network the host is on; do it only with the token set, behind your own TLS reverse proxy and a host
+   firewall rule (`docs/CONTROL_PLANE_SECURITY.md`, "Network exposure"). The `redevops-projects` image has its own
+   launch-code/session gate (the one-time launch URL is printed on the container's stderr), but it is a single-user
+   desktop-style gate, not multi-user authentication; do not publish it beyond a trusted network. A deployment that has its own authentication in front (origin/main's hosted mode) opts out of that gate at run time with `-e AGENTIC_OS_LOCAL_CAPABILITY=off`; the image never ships with it.
+7. Permission-grant reads (`GET /api/permissions/grants`, `/status`, `POST /api/permissions/preview`, `/authorize`) use
+   the grant-administration credential; a valid credential that this route does not accept is a 403, an unknown one a 401.
+8. The Evidence Explorer demo (`deploy/evidence-explorer-demo`) is NOT part of either release image and is not an image
+   entrypoint. Its authenticated profile is a deployment recipe only. Its public synthetic profile
+   (`evidence-demo.public.compose.yml`, `public_app.py`) has NOT been approved for deployment. If it is ever deployed, all of
+   these must hold first: a host with no bind mounts of host paths, no Docker socket and no credentials of any kind in the
+   container or its environment; an egress policy that denies all outbound traffic from the container; and
+   `EVIDENCE_REQUIRE_OS_SANDBOX=1` so the query worker refuses to run without an OS sandbox. See
+   `docs/EVIDENCE_REPLAY_BOUNDARY.md`. The wheel inside the images contains `agentic_os/evidence_query`, which is dormant:
+   the images do not install `duckdb` (optional extra, pinned `==1.5.5`), nothing in the control plane or the Projects
+   server imports or starts it, and only the mission-runtime replay gate (a rehydrated mission cannot run without a resume
+   grant) ships active.
+9. Upgrading from an earlier image that ran as root: an existing root-owned `/data` volume must be
    `chown`ed to uid/gid 10001 once.
+
+## 8a. Earlier published tags: which are affected, and what consumers should do
+
+Inventory read-only from the GHCR package listing (nothing pulled). Source revisions are inferred from package creation
+times and git history, not from build metadata; confidence is stated per tag. All three public tags and both private
+enterprise tags carry the control plane that ran OPEN by default.
+
+| Package : tag | Index digest | Published (UTC) | Source revision (inferred) | Confidence | Open default present |
+|---|---|---|---|---|---|
+| `redevops-runtime:v6` | `sha256:cabbdd8d...` | 2026-08-05 18:43 | `main` at 531e9957 (2026-08-04) or branch `v6` (2ba565af, 2026-07-15) | low-medium | yes |
+| `redevops-runtime:0.3.0` | `sha256:a134be71...` | 2026-08-25 00:52 | 63d9824d (2026-08-24 20:50 EDT, "build fixes for the 0.3.0 image", two minutes before) | high | yes |
+| `redevops-runtime:0.3.1` | `sha256:9d0315d8...` | 2026-09-13 23:13 | git tag `v0.3.1` (73e33735) per the chart commit 8bed4739 ("rebuilt at the v0.3.1 release"); could be `main` of that day (2ea6a633) | medium | yes |
+| `redevops-runtime-enterprise:0.3.0` / `0.3.1` (private) | `sha256:6519f506...` / `sha256:9e9ac348...` | 2026-08-25 00:52 / 2026-09-13 23:31 | same revisions as the public tags, plus private plugins | medium | yes (same control plane) |
+
+"Open default" means: with no `AGENTIC_OS_API_KEY` set the mutating routes (`/up`, `/down`, `/dispatch`, `/approvals/*`,
+`POST /api/permissions/grants`) and every `/missions` route are unauthenticated, the grant list is readable, the
+module proxy accepted `..%2f` tails, and the image runs as root and listens on 0.0.0.0:8080. The control plane became
+fail-closed upstream in v0.3.28 (routes) and v0.3.29 (mission API); every earlier tag is affected.
+
+Consumer guidance (text for the release notes and the deprecation notice):
+
+> Images published before the fail-closed release (`redevops-runtime` `v6`, `0.3.0`, `0.3.1`, and the matching `redevops-runtime-enterprise` tags, which have not been analysed) run the control plane without authentication and as root, and the bundled compose files publish port 8080 on all interfaces. Measured on the three public digests (amd64, default configuration): `POST /missions`, mission approval, permission-grant writes and every read answer 200 without credentials. Setting `AGENTIC_OS_API_KEY` is only a PARTIAL mitigation: it protects `POST`/`DELETE /api/permissions/grants` and `POST /approvals/{id}/{decision}` (header `X-API-Key`; a Bearer token is rejected), while mission creation and approval, `/simulate`, every GET, `POST /api/permissions/authorize` and `/preview` and the module proxy stay open. The only measure that covers every route is network isolation: publish on 127.0.0.1 or a private network only, firewall or NetworkPolicy the port, or put an authenticating reverse proxy in front. Do not expose these images to any network you do not fully control, review the missions, approvals and grants they hold, and move to the replacement image once it is published, which refuses requests until `AGENTIC_OS_CONTROL_TOKEN` is set. The old tags are deprecated and will not be updated. (Images are identified by digest: the `0.3.0` image is not the git tag `v0.3.0`.)
 
 ## 9. Rollback and revocation
 

@@ -1,6 +1,6 @@
 # Self-hosted ReDevOps Projects — the Projects UI + API on one origin.
 #   docker build -f Dockerfile.projects -t redevops-projects .
-#   docker run -p 8787:8787 redevops-projects          # → http://localhost:8787
+#   docker run -p 127.0.0.1:8787:8787 redevops-projects          # → http://localhost:8787 (loopback only; see docs/CONTROL_PLANE_SECURITY.md)
 # The UI bundle ships in the wheel (agentic_os/projects_ui, the pinned artifact vendored into the build context: see
 # packaging/projects_ui.lock.json), so no Node build and no download is needed here (AGENTIC_OS_SKIP_UI_FETCH=1 on the install RUN).
 # Base pinned by the index digest (python 3.12.16-slim-trixie, multi-arch: linux/amd64 + linux/arm64).
@@ -24,10 +24,11 @@ RUN apt-get update \
     && AGENTIC_OS_SKIP_UI_FETCH=1 PIP_NO_CACHE_DIR=1 pip install --no-cache-dir '.[projects]' \
     && apt-get purge -y git && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/* /var/log/apt /var/log/dpkg.log /var/log/alternatives.log /var/cache/ldconfig/aux-cache
-# A hosted container is not a desktop: it has no launcher to hand a session to, and sits behind the control plane's own token
-# gating and the operator's edge controls. The explicit opt-out of the local capability gate is therefore set here (origin/main's
-# behaviour); without it `agentic-os-projects` serves behind the gate and fails closed.
-ENV PROJECTS_HOST=0.0.0.0 PROJECTS_PORT=8787 AGENTIC_OS_LOCAL_CAPABILITY=off
+# The image serves behind the local capability gate (agentic_os.local_serve): a one-time launch URL is printed on stderr and every
+# /api route needs the session it opens. That is the secure default for a single-user container. A deployment that sits behind its own
+# control-plane token gating and edge controls (origin/main's hosted mode, e.g. a demo behind a tunnel) opts out EXPLICITLY at run
+# time with `-e AGENTIC_OS_LOCAL_CAPABILITY=off`; the opt-out is never baked into the image.
+ENV PROJECTS_HOST=0.0.0.0 PROJECTS_PORT=8787
 # Run unprivileged. The app keeps its state under the service user's home (AGENTIC_OS_HOME / ~).
 RUN groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin app
