@@ -22,6 +22,7 @@ from .permissions_http import (create_kwargs as _perm_create_kwargs, json_object
 from pydantic import BaseModel
 
 from . import channels, views
+from . import __version__
 from .context import Context
 from .fleet import Fleet
 from .registry import Module, Registry
@@ -138,7 +139,7 @@ def _build() -> Fleet:
 
 # No Swagger UI / ReDoc (they load scripts from a CDN without integrity checks) and no anonymous route inventory: /openapi.json needs the fleet credential.
 _perm_warn_throttle()
-app = FastAPI(title="agentic-os control plane", version="0.1.0", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="agentic-os control plane", version=__version__, docs_url=None, redoc_url=None, openapi_url=None)
 # the permissions page and admin API: security headers, no-store; every trailing-slash redirect is relative (never the Host header or http)
 app.add_middleware(_SecurityHeaders, scope_prefixes=("/permissions", "/api/permissions"), no_store_prefixes=("/api/permissions",))
 fleet = _build()
