@@ -88,7 +88,7 @@ def classify_pkg(name: str, stdlib: set[str] = STDLIB) -> tuple[str, str]:
         return "sidecar", "sidecar"
     if n.startswith("Licenses/"):   # the Licenses folder embedded by the sidecar spec (REDEVOPS_LICENSES_DIR)
         return "licenses", "licenses-folder"
-    if n == "base_library.zip" or re.fullmatch(r"python3?\d*\.dll|libpython[\d.]*\.dylib|Python|Python\.framework/.*", n) or "/lib-dynload/" in low:
+    if n == "base_library.zip" or re.fullmatch(r"python3?\d*\.dll|libpython[\d.]*\.dylib|libpython[\d.]*\.so[.\d]*|Python|Python\.framework/.*", n) or "/lib-dynload/" in low:
         return "cpython", "cpython"
     if re.fullmatch(r"(vcruntime140(_1)?|ucrtbase|msvcp140\w*|concrt140|vcomp140)\.dll", base):
         return "ms-dll", base
@@ -98,11 +98,15 @@ def classify_pkg(name: str, stdlib: set[str] = STDLIB) -> tuple[str, str]:
         return "openssl-lib", base
     if re.fullmatch(r"libffi[-.\d]*\.(dylib|dll|so[.\d]*)", base):
         return "libffi", base
+    # Linux: PyInstaller copies these two GCC runtime libraries from the BUILD HOST into the archive (libstdc++ for the DuckDB and
+    # other C++ extensions, libgcc_s for it and for pthread cancellation); their version is not discoverable from the files.
+    if re.fullmatch(r"(libgcc_s|libstdc\+\+)\.so[.\d]*", base):
+        return "gcc-runtime", base
     m = re.match(r"^([A-Za-z0-9_.]+?)-(\d[^/]*)\.dist-info/", n)
     if m:
         return "dist-info", norm(m.group(1))
     top = n.split("/", 1)[0]
-    stem = re.sub(r"(\.cpython-\d+[a-z]*-[a-z0-9_]+|\.cp\d+-\w+|\.abi3)?\.(py|so|pyd|dylib|dll)$", "", top)
+    stem = re.sub(r"(\.cpython-\d+[a-z]*-[a-z0-9_]+(-[a-z0-9_]+)*|\.cp\d+-\w+|\.abi3)?\.(py|so|pyd|dylib|dll)$", "", top)
     if "/" not in n and base.endswith(".pyd") and stem in stdlib:
         return "cpython", "cpython"
     return "top-level", stem
@@ -195,8 +199,8 @@ def analyze(archive: Archive, inv: dict[str, dict], facts: dict | None = None, w
             key = "licenses-folder"
         elif rule == "cpython":
             key = "cpython"
-        elif rule in ("openssl-lib", "libffi", "ms-dll", "ms-apiset"):
-            key = f"{rule}:{hint}" if rule in ("ms-dll", "libffi") else ("ms-apiset" if rule == "ms-apiset" else "openssl-dynamic")
+        elif rule in ("openssl-lib", "libffi", "ms-dll", "ms-apiset", "gcc-runtime"):
+            key = f"{rule}:{hint}" if rule in ("ms-dll", "libffi", "gcc-runtime") else ("ms-apiset" if rule == "ms-apiset" else "openssl-dynamic")
         elif rule == "dist-info":
             c = pypi(hint)
             key = c.key if c else None
@@ -350,6 +354,14 @@ def analyze(archive: Archive, inv: dict[str, dict], facts: dict | None = None, w
             c.name, c.version = "libffi", None
             c.limitations.append("version not discoverable: the shipped library carries only its soname")
             c.props["redevops:licence-note"] = "none asserted"
+
+    # GCC runtime libraries copied from the Linux build host ---------------------------------------
+    for k, c in A.comps.items():
+        if k.startswith("gcc-runtime:"):
+            c.name, c.version, c.kind = k.split(":", 1)[1], None, "library"
+            c.limitations.append("version not discoverable: PyInstaller copied the library from the build host and the file carries only its soname")
+            c.props["redevops:licence-note"] = "none asserted (the GCC runtime libraries are published under GPL-3.0-or-later with the GCC Runtime Library Exception; not read from the file)"
+            c.props["redevops:role"] = "GCC runtime library shipped inside the Linux PyInstaller archive"
 
     # certifi bundle ---------------------------------------------------------------------------
     cert = inv.get("certifi")

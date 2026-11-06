@@ -1,0 +1,70 @@
+# Ubuntu Snap Store packaging of Agentic Apps R0-prime (PRIVATE, UNSUBMITTED draft: nothing here has been
+# registered, uploaded or reviewed by the Snap Store; see docs/release/SNAP_STORE.md for every decision it needs).
+#
+# Design: the snap carries EXACTLY the payload of the .deb that `cargo tauri build --bundles deb` produces from the
+# pinned pipeline (packaging/build-wheelhouse.sh -> build-sidecar.sh -> build-notices.sh -> build-sidecar.sh ->
+# stage-sidecar.sh -> build-launcher.sh), unpacked with dpkg-deb. There is no second build recipe: whatever the pins
+# say for the .deb they say for the snap.
+#
+# Confinement is STRICT, with the smallest interface set the app needs and nothing more:
+#   network       the control plane calls hosted-model / connector APIs the user configures (outbound)
+#   network-bind  the control plane listens on 127.0.0.1 (the local UI + API)
+#   + the `gnome` extension's own plugs (desktop, desktop-legacy, gsettings, opengl, wayland, x11) for the GTK/WebKit window
+# NOT requested: home, removable-media, docker, system-files, ssh-keys, password-manager-service, process-control,
+# classic confinement. The launcher's optional "advanced containers" buttons run `docker compose` on the HOST; inside a
+# strict snap there is no docker binary and no docker socket, so they fail closed with "failed to launch" (documented
+# owner decision O-SNAP-2 in docs/release/SNAP_STORE.md).
+name: agentic-apps-r0-prime         # PLACEHOLDER: the store name must be registered by the owner (`snapcraft register`)
+title: Agentic Apps R0-prime
+base: core24
+adopt-info: app
+summary: Governed AI control plane - your apps as one system (private R0-prime build)
+description: |
+  Agentic Apps R0-prime runs a small control plane on your own computer (127.0.0.1 only) and shows its pages in
+  your web browser. Connect apps, run missions across them, approve the consequential steps. Bring your own model.
+  No Docker required. Private, unsigned build for testing; not a release.
+grade: devel                        # `stable` only when the owner decides to release; the store refuses devel on stable/candidate
+confinement: strict
+platforms:
+  amd64:
+  arm64:
+
+environment:
+  # Persistent data must survive a snap refresh WITHOUT being copied per revision ($SNAP_USER_DATA is versioned and is
+  # copied by snapd on every refresh): the app's home-relative stores go to $SNAP_USER_COMMON (see bin/agentic-apps-snap).
+  RDO_SNAP: "1"
+
+apps:
+  agentic-apps-r0-prime:
+    command: bin/agentic-apps-snap
+    extensions: [gnome]
+    plugs: [network, network-bind]
+
+parts:
+  app:
+    plugin: nil
+    source: .
+    source-type: local
+    build-packages:
+      - build-essential
+      - curl
+      - git
+      - pkg-config
+      - ca-certificates
+      - dpkg-dev
+      - file
+      - libssl-dev
+      - libwebkit2gtk-4.1-dev
+      - libgtk-3-dev
+      - librsvg2-dev
+      - libayatana-appindicator3-dev
+      - patchelf
+      - rsync
+    stage-packages:
+      - libwebkit2gtk-4.1-0
+      - libayatana-appindicator3-1
+      - xdg-utils
+    override-build: |
+      set -eux
+      sh "$CRAFT_PART_SRC/snap/local/build-payload.sh" "$CRAFT_PART_SRC" "$CRAFT_PART_BUILD" "$CRAFT_PART_INSTALL"
+      craftctl set version="$(python3 -I "$CRAFT_PART_SRC/packaging/tools/identity.py" get version)"

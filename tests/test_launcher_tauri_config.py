@@ -180,3 +180,15 @@ def test_posix_signals_are_turned_into_a_graceful_exit_and_the_handler_only_writ
     assert "[libc::SIGTERM, libc::SIGINT, libc::SIGHUP]" in sig and "SIGKILL" not in sig.split("#[cfg(test)]")[0].replace("SIGKILL cannot be handled", "").replace("SIGKILL (and", "")
     cargo = (SRC / "Cargo.toml").read_text(encoding="utf-8")
     assert '[target.\'cfg(unix)\'.dependencies]\nlibc = "0.2"' in cargo       # already there: no new dependency
+
+
+def test_the_deb_depends_on_the_program_the_launcher_uses_to_open_the_browser():
+    """LNX-03: opener.rs hands the private redirect page to `xdg-open` on Linux. A minimal Ubuntu install (server image,
+    container, some desktop spins) does not have xdg-utils, and the package did not depend on it, so "Start & open" failed with
+    "could not open the browser: entity not found" (observed on Ubuntu 24.04 aarch64). The generated Depends (libwebkit2gtk,
+    libgtk) comes from Tauri; this pins the one the launcher needs for the opener."""
+    opener = (LAUNCHER / "src-tauri" / "src" / "opener.rs").read_text(encoding="utf-8")
+    assert '"xdg-open"' in opener, "the Linux opener changed: update this test and the deb depends together"
+    depends = _conf()["bundle"]["linux"]["deb"]["depends"]
+    assert "xdg-utils" in depends, depends
+    assert all(isinstance(d, str) and d for d in depends)

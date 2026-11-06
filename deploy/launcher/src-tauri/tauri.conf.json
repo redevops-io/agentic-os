@@ -44,7 +44,7 @@
     "windows": {"wix": {"upgradeCode": "f13fc625-f77d-5c30-b308-a3c3ec1045fc"}},
     "linux": {
       "deb": {
-        "depends": []
+        "depends": ["xdg-utils"]
       }
     }
   }
