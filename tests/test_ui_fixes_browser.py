@@ -99,7 +99,9 @@ class Tab:
         self.server, self.axe_source = server, axe_source
         self.requests: list[tuple[str, str]] = []
         self.console_errors: list[str] = []
-        self.page.on("request", lambda r: self.requests.append((r.method, r.url)))
+        self.acting: list[tuple[str, str]] = []                   # fetch/xhr and non-GET requests (what a control "sent")
+        self.page.on("request", lambda r: (self.requests.append((r.method, r.url)),
+                                           self.acting.append((r.method, r.url)) if r.resource_type in ("fetch", "xhr") or r.method not in ("GET", "HEAD") else None))
         self.page.on("console", lambda m: self.console_errors.append(m.text) if m.type == "error" else None)
         self.page.on("pageerror", lambda e: self.console_errors.append(str(e)))
 
@@ -361,3 +363,123 @@ def test_a_walk_over_every_view_makes_no_non_loopback_request_and_no_console_err
     t.page.locator("div.sk[role=dialog].open").wait_for()
     assert t.console_errors == []
     assert t.requests and all(urlsplit(u).hostname == "127.0.0.1" for _, u in t.requests if urlsplit(u).scheme in ("http", "https"))
+
+
+# ---------------------------------------------------------------------------------------------- UIA-06 sweep (every control)
+CONTROLS_JS = """() => {
+  const m = document.querySelector('main'); if (!m) return [];
+  document.querySelectorAll('[data-uia-i]').forEach(e => e.removeAttribute('data-uia-i'));
+  const out = []; let i = 0;
+  for (const b of m.querySelectorAll('button, [role=button], summary')) {
+    const cs = getComputedStyle(b), r = b.getBoundingClientRect();
+    if (cs.visibility === 'hidden' || cs.display === 'none' || r.width === 0 || r.height === 0) continue;
+    b.setAttribute('data-uia-i', String(i));
+    const selected = ['aria-selected', 'aria-pressed', 'aria-current', 'aria-expanded'].some(a => b.getAttribute(a) === 'true');
+    out.push({ i, name: (b.getAttribute('aria-label') || b.innerText || b.title || '').replace(/\\s+/g, ' ').trim().slice(0, 60),
+               disabled: b.disabled === true || b.getAttribute('aria-disabled') === 'true', selected, title: b.title || '' });
+    i++;
+  }
+  return out;
+}"""
+SNAPSHOT_JS = """() => JSON.stringify({
+  t: document.body.innerText, u: location.href,
+  d: [...document.querySelectorAll('[role=dialog]')].filter(d => !d.closest('[inert]') && getComputedStyle(d).visibility !== 'hidden').length,
+  s: [...document.querySelectorAll('[aria-selected],[aria-pressed],[aria-expanded],[aria-current]')].map(e => ['aria-selected', 'aria-pressed', 'aria-expanded', 'aria-current'].map(a => e.getAttribute(a)).join('/')).join(','),
+  a: document.querySelectorAll('[role=alert]').length,
+  dis: [...document.querySelectorAll('main button')].map(b => b.disabled ? 1 : 0).join('') })"""
+
+
+def _sweep(t, views, prepare=None):
+    """The macOS UI pack's UIA-06 method: a fresh page per control, click it, and require a visible change, a request or a message.
+    Returns (dead, effective, disabled_with_title, disabled_without_title)."""
+    p = t.page
+    dead, effective, dis_ok, dis_bad = [], 0, [], []
+    for view in views:
+        def fresh():
+            p.reload(wait_until="load")
+            p.wait_for_selector("button.nav")
+            if prepare:
+                prepare(p)
+            t.view(view)
+            p.wait_for_timeout(200)
+        fresh()
+        controls = p.evaluate(CONTROLS_JS)
+        for c in controls:
+            label = f"{view}: {c['name'] or '(no name)'}"
+            if c["disabled"]:
+                (dis_ok if c["title"] else dis_bad).append(label)
+                continue
+            if c["selected"]:
+                continue
+            fresh()
+            again = p.evaluate(CONTROLS_JS)
+            if c["i"] >= len(again) or again[c["i"]]["name"] != c["name"]:
+                dead.append(f"{label}: not found again after a reload")
+                continue
+            before = p.evaluate(SNAPSHOT_JS)
+            n0 = len(t.acting)
+            try:
+                p.locator(f'[data-uia-i="{c["i"]}"]').click(timeout=2500, no_wait_after=True)
+            except Exception as e:                        # noqa: BLE001
+                dead.append(f"{label}: click failed {type(e).__name__}")
+                continue
+            p.wait_for_timeout(300)
+            if p.evaluate(SNAPSHOT_JS) == before and len(t.acting) == n0:
+                dead.append(f"{label}: no visible change, no request, no message")
+            else:
+                effective += 1
+    return dead, effective, dis_ok, dis_bad
+
+
+def test_uia06_no_enabled_control_in_any_view_is_silently_dead(make_tab):
+    t = make_tab()
+    dead, effective, dis_ok, dis_bad = _sweep(t, VIEWS)
+    assert not dead, dead
+    assert not dis_bad, dis_bad                                   # every disabled control says why
+    assert effective >= 50 and len(dis_ok) >= 8, (effective, dis_ok)
+
+
+def test_uia06_sidekick_send_is_disabled_while_the_field_is_empty_in_the_panel_and_the_view(make_tab):
+    t = make_tab()
+    p = t.page
+    p.keyboard.press("Control+k")
+    dlg = p.locator("div.sk[role=dialog].open")
+    dlg.wait_for()
+    send = dlg.get_by_role("button", name="Send")
+    assert send.is_disabled()
+    dlg.get_by_role("textbox").fill("   ")
+    assert send.is_disabled()
+    dlg.get_by_role("textbox").fill("hello")
+    assert send.is_enabled()
+    send.click()
+    assert dlg.get_by_role("textbox").evaluate("el => document.activeElement === el"), "focus stays in the field after sending"
+    assert send.is_disabled()
+    p.keyboard.press("Escape")
+    t.view("Sidekick")
+    view_send = p.locator("section.content").get_by_role("button", name="Send")
+    assert view_send.is_disabled()
+    p.get_by_role("textbox", name="Ask Sidekick").fill("hello")
+    assert view_send.is_enabled()
+    t.shot("uia06-send-states")
+
+
+def test_uia06_details_is_disabled_for_apps_with_nothing_to_show_and_the_sweep_finds_no_dead_control_there(make_tab):
+    """The connector setup guides (installed in the frozen sidecar) list apps with no capabilities; reproduce that with a response rewrite."""
+    import json
+
+    def strip(route):
+        r = route.fetch()
+        apps = r.json()
+        for a in apps:
+            if a.get("provider") not in ("hubspot", "slack"):          # those two have context evidence, so their panel is not empty
+                a["capabilities"] = []
+        route.fulfill(response=r, body=json.dumps(apps), headers={**r.headers, "content-type": "application/json"})
+
+    t = make_tab()
+    t.page.route("**/api/projects/*/apps", strip)
+    dead, effective, dis_ok, dis_bad = _sweep(t, ["Apps"])
+    assert not dead, dead
+    assert not dis_bad, dis_bad
+    assert len([d for d in dis_ok if d.endswith("Details")]) == 2, dis_ok       # whatsapp and stripe
+    assert effective >= 2
+    t.shot("uia06-apps-details-disabled")
