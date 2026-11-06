@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import html as _html
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Protocol, Set, Tuple
 
@@ -1519,8 +1520,27 @@ def select_provider(*, persist_path: Optional[str] = None) -> ProjectionProvider
     return SampleProjectionProvider(persist_path=persist_path, intervention_store=istore)
 
 
+class _RecordLinkReq(BaseModel):
+    model_config = {"extra": "forbid"}          # a caller cannot smuggle in a url / host / redirect target
+    app: str = Field(max_length=64)
+    kind: str = Field(max_length=64)
+    params: Dict[str, Any] = Field(default_factory=dict, max_length=16)
+
+
+class _RefLinkReq(BaseModel):
+    model_config = {"extra": "forbid"}
+    ref: str = Field(max_length=300)
+
+
+_DIRECTORY_NOTICE = ("The application directory needs an authenticated principal and a configured directory; "
+                     "none is available to this request, so nothing is listed.")
+_MISSION_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
 def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: Optional[List[str]] = None,
-               capability: Optional[Any] = None, base_path: str = "") -> FastAPI:
+               capability: Optional[Any] = None, base_path: str = "",
+               app_directory: Optional[Any] = None, ceiling: Optional[Any] = None,
+               principal_resolver: Optional[Any] = None) -> FastAPI:
     """Build the Projects app.
 
     ``capability`` (an :class:`agentic_os.local_capability.LocalCapability`) is the desktop/sidecar addition:
@@ -1911,6 +1931,91 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
         # ask" surface (how creds are handled, is my data local/cloud, what can a connected app see…).
         from agentic_os.stack_knowledge import help_questions
         return list(help_questions())
+
+    # ── application directory: Open App / Open Record / Inspect Execution LINKS from configured routes ──
+    # Links only: no proxy, no redirect, no credential, session or launch code is ever forwarded. What a caller
+    # sees is computed here from its permission ceiling; an app outside it is indistinguishable from a missing one.
+    from .app_directory import DirectoryNotFound, ceiling_from_env, directory_from_env
+    directory = app_directory if app_directory is not None else directory_from_env()
+    dir_ceiling = ceiling if ceiling is not None else ceiling_from_env()
+    gate_on = capability is not None
+
+    def _principal(request: Request) -> Any:
+        try:
+            if principal_resolver is not None:
+                return principal_resolver(request)
+            if gate_on:      # the capability gate already authenticated the (single, local) session holder
+                from .overlays import identity_provider
+                return identity_provider().authenticate("")
+        except Exception:    # noqa: BLE001 - an identity failure is "no principal", never "everyone"
+            return None
+        return None          # the legacy open surface has no authenticated principal: fail closed
+
+    def _not_found() -> HTTPException:
+        return HTTPException(status_code=404, detail="not found")
+
+    def _invalid() -> HTTPException:
+        return HTTPException(status_code=422, detail={"code": "invalid_record_reference"})   # never echoes the value
+
+    @app.get("/api/app-directory")
+    def _app_directory(request: Request) -> dict:
+        who = _principal(request)
+        if who is None:
+            return {"apps": [], "notice": _DIRECTORY_NOTICE}
+        return {"apps": directory.listing(who, dir_ceiling)}
+
+    async def _body(request: Request, model: Any) -> Any:
+        """Parse the JSON body ourselves: FastAPI's default 422 echoes the offending input, and these requests
+        carry the references being validated. Small bodies only; anything malformed is one generic 422."""
+        raw = await request.body()
+        if len(raw) > 8192:
+            raise _invalid()
+        try:
+            return model.model_validate_json(raw)
+        except Exception:    # noqa: BLE001 - pydantic ValidationError / bad JSON: never reflected back
+            raise _invalid() from None
+
+    @app.post("/api/app-directory/record-link")
+    async def _app_directory_record(request: Request) -> dict:
+        req = await _body(request, _RecordLinkReq)
+        who = _principal(request)
+        if who is None:
+            raise _not_found()
+        try:
+            return directory.record_link(who, dir_ceiling, req.app, req.kind, req.params)
+        except DirectoryNotFound:
+            raise _not_found() from None
+        except ValueError:
+            raise _invalid() from None
+
+    @app.post("/api/app-directory/ref-link")
+    async def _app_directory_ref(request: Request) -> dict:
+        req = await _body(request, _RefLinkReq)
+        who = _principal(request)
+        if who is None:
+            raise _not_found()
+        try:
+            return directory.ref_link(who, dir_ceiling, req.ref)
+        except DirectoryNotFound:
+            raise _not_found() from None
+        except ValueError:
+            raise _invalid() from None
+
+    @app.get("/api/app-directory/receipts/{mission_id}")
+    def _app_directory_receipt(mission_id: str, request: Request) -> dict:
+        if not _MISSION_ID.fullmatch(mission_id):
+            raise _not_found()
+        who = _principal(request)
+        if who is None:
+            return {"records": [], "inspect": [], "notice": _DIRECTORY_NOTICE}
+        fn = getattr(prov, "mission_receipt", None)
+        if fn is None:
+            return {"records": [], "inspect": [],
+                    "notice": "This deployment's provider does not expose runtime receipts, so there is nothing to link."}
+        receipt = fn(mission_id)
+        if not receipt:
+            raise _not_found()
+        return directory.links_for_receipt(who, dir_ceiling, receipt)
 
     @app.post("/api/sources/propose")
     def _propose(req: _ProposeSourcesReq) -> dict:
