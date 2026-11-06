@@ -3,7 +3,7 @@
 router:
   monthly_budget_usd: 200
   tiers:
-    - name: local        # ~free; the bulk of the work runs here (your EVO-X2 / proxmox box)
+    - name: local        # ~free; the bulk of the work runs here (your own GPU box)
       base_url: http://localhost:11434/v1
       model: qwen3.5-122b
       api_key: EMPTY

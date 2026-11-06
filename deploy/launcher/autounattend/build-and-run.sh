@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the autounattend ISO and start a hands-off Windows 11 install on Proxmox VM 9001.
-# Run ON the PVE host (or: ssh proxmox 'bash -s' < build-and-run.sh). Idempotent-ish; re-runnable.
+# Run ON the PVE host (or: ssh <pve-host> 'bash -s' < build-and-run.sh). Idempotent-ish; re-runnable.
 #
 # Makes the install DRIVER-FREE by switching the VM to a SATA disk (native AHCI) + e1000 NIC
 # (native driver) — so the unattended install needs no VirtIO injection. The VirtIO CD stays
@@ -53,4 +53,4 @@ qm start "$VMID"
 echo "  started; sending boot keypresses…"
 for t in 2 3 4 6 9 13; do sleep "$t"; qm sendkey "$VMID" ret >/dev/null 2>&1 || true; qm sendkey "$VMID" spc >/dev/null 2>&1 || true; done
 echo "== install underway. Poll for the guest agent (install done + first logon + qemu-ga):"
-echo "   ssh proxmox 'while ! qm agent $VMID ping 2>/dev/null; do sleep 30; done; echo AGENT_UP'"
+echo "   ssh <pve-host> 'while ! qm agent $VMID ping 2>/dev/null; do sleep 30; done; echo AGENT_UP'"

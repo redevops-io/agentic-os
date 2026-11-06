@@ -63,7 +63,7 @@ _SSH_PROXMOX = re.compile(r"(?i)\bssh\b[^\n]{0,60}?\bproxmox\b|ssh_host\s*=\s*['
 _TECH = re.compile(r"(?i)proxmox")
 _HOME = re.compile(r"(?:/Users/(?!Shared\b|x/|\*)[A-Za-z0-9._-]+|[A-Za-z]:\\Users\\[A-Za-z0-9._-]+|/private/tmp/claude[\w./-]*"
                    r"|/tmp/claude-\d+[\w./-]*)")
-_HOST_PATH = re.compile(r"/mnt/backup/projects|/projects/(?:agentic-os|core-install)\b|/main/cloudflared")
+_HOST_PATH = re.compile(r"/mnt/backup/projects|/projects/(?:agentic-os|core-install|gtm)\b|/main/cloudflared")
 # Lower-case host names only (so `DataClass.INTERNAL` and `threading.local` are not names); `.local` only as a URL or
 # user@ host, because `x.local` is also ordinary attribute access in code and `.env.local` is a file name.
 _INTERNAL = re.compile(r"(?<![\w.-])((?:[a-z0-9][a-z0-9-]*\.)+(?:lan|internal|corp|intranet|home\.arpa|ts\.net))(?![\w-])")
@@ -120,7 +120,7 @@ def scan_text(path: str, text: str) -> List[Finding]:
                 cat = "ip-owner-net" if _sha(".".join(lit.split(".")[:3])) in OWNER_NET_HASHES else "ip-private"
                 out.append(Finding(path, no, cat, lit, ctx))
         for m in _V6.finditer(line):
-            lit = m.group(1).rstrip(":.") if m.group(1).count(":") >= 2 else ""
+            lit = m.group(1).rstrip(".") if m.group(1).count(":") >= 2 else ""
             if lit:
                 out.append(Finding(path, no, "ip-private", lit, ctx))
         for m in _MAC.finditer(line):

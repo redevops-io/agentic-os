@@ -1,11 +1,11 @@
 # Windows build — mirrors the verified Linux flow (build-wheelhouse.sh + build-sidecar.sh +
-# stage-sidecar.sh + `cargo tauri build`) in PowerShell, for the Proxmox Win11 image.
+# stage-sidecar.sh + `cargo tauri build`) in PowerShell, for a Windows 11 VM image.
 #
 # Prereqs on the image (one-time): Rust (x86_64-pc-windows-msvc) + VS Build Tools C++ workload;
 # uv (astral); Git; WebView2 runtime (present on Win11); `cargo install tauri-cli --version ^2`.
 # Produces: an .msi + .nsis under deploy\launcher\src-tauri\target\release\bundle\.
 #
-# NOTE: authored to match the Linux build proven on evo-x2; run + verify on the Win image (this
+# NOTE: authored to match the Linux build proven on the Ubuntu build host; run + verify on the Win image (this
 # script has not been executed here).
 $ErrorActionPreference = "Stop"
 $Root  = Split-Path -Parent $PSScriptRoot

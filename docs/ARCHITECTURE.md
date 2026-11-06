@@ -58,6 +58,6 @@ The public-facing runtime taxonomy on redevops.io — **Discovery Runtime · Exe
 
 ## Why a router, not a model
 
-The thesis is cost: keep >90% of agent work on local hardware (an EVO-X2 / proxmox box running
+The thesis is cost: keep >90% of agent work on local hardware (your own GPU box running
 `llama.cpp`/`ollama`) and pay for premium tokens only on the hard minority. The router makes
 that policy declarative (`config.yaml`) and per-task (`Task.capability`).

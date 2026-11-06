@@ -1,6 +1,6 @@
 # demo.redevops.io/security — intrinsic-security + telemetry showcase (standalone).
 #   security-api :8099 (FastAPI) runs the REAL SecurityMonitor over a canned scenario.
-#   cloudflared: demo.redevops.io /^(security|api/security)/ -> 192.168.40.105:8099
+#   cloudflared: demo.redevops.io /^(security|api/security)/ -> <demo-host>:8099
 services:
   security-api:
     build: .

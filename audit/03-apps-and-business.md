@@ -14,7 +14,7 @@ Method: static read of source + test names. No tests were executed, no docker, n
 Labels: CONFIRMED = read in code (file:line). INFERRED = follows from code but needs a live system to prove. UNTESTED = no test found.
 Severity: CRITICAL / HIGH / MEDIUM / LOW.
 
-Paths are relative to `/Users/arybach/agentic-os`.
+Paths are relative to `<repo>`.
 
 ---
 
@@ -244,7 +244,7 @@ Note: there is no "archive lookup" feature in this repo (`grep archive` hits onl
 Status vocabulary: IMPLEMENTED (product code does it, with tests) / PARTIAL (some of the row, gaps named) / CONNECTOR_ONLY (the underlying OSS core does it; AOS adds no agent capability) / NOT_PRESENT / UNKNOWN.
 Finding labels: CONFIRMED (read in code) / INFERRED (follows from code, needs live proof) / UNTESTED. Severity: CRITICAL/HIGH/MEDIUM/LOW.
 Method: static read; tests were NOT executed. "Test" = test exists by that name; I did not run it.
-Paths relative to `/Users/arybach/agentic-os`. Product capability and README/marketing claim are shown separately.
+Paths relative to `<repo>`. Product capability and README/marketing claim are shown separately.
 
 Key marketing sources: Guide card text `apps/guide/core.py:22-37` (what users are told), app READMEs (`apps/billing/README.md`, `apps/books/README.md`, `apps/compliance/README.md`), and canned demo `deploy/module_service.py` (explicitly "mock data", `deploy/module_service.py:1-12`).
 

@@ -3,7 +3,7 @@
 The real `VoiceSessionProvider` behind the `agentic_os.interaction` seams: NVIDIA's
 [NeMo Voice Agent](https://github.com/NVIDIA-NeMo/labs-Voice-Agent) running **fully local** —
 streaming ASR + diarization + LLM + TTS over one WebSocket, no cloud keys. This directory records the
-exact bring-up used on the `proxmox` GPU box so it's reproducible.
+exact bring-up used on a GPU host so it's reproducible.
 
 ## Pinned refs (verified 2026-09-05, dependency spike)
 
