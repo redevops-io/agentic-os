@@ -135,6 +135,9 @@ class SampleProjectionProvider:
     #: optional durable backing for the outcome log ($OUTCOME_STORE_PATH). When set, recorded outcomes
     #: are appended to a JSONL file and reloaded on start — so learned selection survives a restart.
     persist_path: Optional[str] = None
+    #: sources a user confirmed in this process, by project id. IN MEMORY ONLY: nothing is written anywhere and a restart
+    #: forgets them (persistence beyond the process is an owner decision, limitation L-1 of the macOS report: the desktop app persists no data). Listed with a "(this session only)" marker.
+    session_sources: Dict[str, List[dict]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         # rehydrate the in-memory working copy from durable storage, so learning resumes where it left off
@@ -379,8 +382,17 @@ class SampleProjectionProvider:
         return {"provider": provider, "state": "VERIFIED_READ", "connected": True,
                 "detail": "connected (sample: simulated hosted OAuth)"}
 
-    def sources(self, _pid: str) -> List[dict]:
-        return _sample_sources()
+    def sources(self, pid: str) -> List[dict]:
+        return _sample_sources() + [dict(s) for s in self.session_sources.get(pid, [])]
+
+    def remember_sources(self, pid: str, projections: List[dict]) -> None:
+        """Keep confirmed sources for the life of this process (in memory; the same source id replaces its earlier entry)."""
+        kept = self.session_sources.setdefault(pid, [])
+        for p in projections:
+            mark = dict(p, session_only=True)
+            if not str(mark.get("name", "")).endswith(SESSION_ONLY):
+                mark["name"] = f"{mark.get('name', '')}{SESSION_ONLY}"
+            kept[:] = [k for k in kept if k.get("source_id") != mark.get("source_id")] + [mark]
 
     def runtime(self, _pid: str) -> dict:
         return _sample_runtime()
@@ -408,6 +420,9 @@ class SampleProjectionProvider:
             "sources": self.sources(project_id),
             "runtime": self.runtime(project_id),
         }
+
+
+SESSION_ONLY = " (this session only)"
 
 
 def _app(provider: str, display_name: str, used_for: str, state: str, health: str,
@@ -1040,7 +1055,11 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     @app.post("/api/sources/confirm")
     def _confirm(req: _ConfirmSourcesReq) -> List[dict]:
         try:
-            return confirm_and_connect_sources(req.project_id, req.sources, req.confirmed_by)
+            out = confirm_and_connect_sources(req.project_id, req.sources, req.confirmed_by)
+            keep = getattr(prov, "remember_sources", None)       # the sample provider lists what was confirmed, this session only
+            if keep is not None:
+                keep(req.project_id, out)
+            return out
         except ValueError as e:     # an unknown kind / access_mode / indexing_policy is the caller's mistake (422), not a server fault (UIA-05)
             from fastapi import HTTPException
             raise HTTPException(status_code=422, detail=[{"loc": ["body", "sources"], "msg": str(e)[:200], "type": "value_error"}]) from None
