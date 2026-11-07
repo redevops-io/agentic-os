@@ -25,7 +25,7 @@ class Unreadable(RuntimeError):
 
 
 def reader_clients(cfg: AosddConfig, transport: Transport) -> "dict[str, AppHttp]":
-    return {a: AppHttp(a, cfg.base_urls[a], auth_for(a, cfg.reader[a]), transport, cfg.redactor, read_only=True, role="reader") for a in cfg.reader}
+    return {a: AppHttp(a, cfg.base_urls[a], auth_for(a, cfg.reader[a]), transport, cfg.redactor, timeout=cfg.http_timeout_s, read_only=True, role="reader") for a in cfg.reader}
 
 
 class ReadBack:

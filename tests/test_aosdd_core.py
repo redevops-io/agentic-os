@@ -12,7 +12,7 @@ import threading
 import pytest
 
 sys.path.insert(0, os.path.dirname(__file__))
-from aosdd_fakes import APPROVAL_SECRET, BASES, FakeStack, config_dict  # noqa: E402
+from aosdd_fakes import APPROVAL_SECRET, BASES, FakeStack, config_dict, make_config, reader_dict  # noqa: E402
 
 from agentic_os.integrations.aosdd import opid
 from agentic_os.integrations.aosdd.config import AosddConfig, ConfigError, Secret, load_config
@@ -23,6 +23,25 @@ from agentic_os.integrations.aosdd.redact import Redactor
 
 
 # ---- configuration --------------------------------------------------------------------------------------------------
+def _from(d=None, **kw):
+    return AosddConfig.from_dict(d if d is not None else config_dict(), approval_secret=kw.pop("approval_secret", APPROVAL_SECRET), reader=kw.pop("reader", reader_dict()), **kw)
+
+
+def _write(path, obj, mode=0o600):
+    path.write_text(json.dumps(obj))
+    os.chmod(path, mode)
+    return str(path)
+
+
+def _files(tmp_path, **over):
+    """The three separate secret sources, as files."""
+    cfg = config_dict(**over)
+    v = _write(tmp_path / "verifier.json", {"schema": "aosdd.verifier/1", "reader": reader_dict()})
+    a = _write(tmp_path / "approval.key", {"schema": "aosdd.approval-key/1", "key": APPROVAL_SECRET})
+    c = _write(tmp_path / "config.json", {**cfg, "verifier_file": v, "approval_key_file": a})
+    return c, v, a
+
+
 def test_integration_is_disabled_without_an_explicit_config_file():
     assert load_config({}) is None
     assert load_config({"AOSDD_CONFIG_FILE": ""}) is None
@@ -32,36 +51,99 @@ def test_config_has_no_defaults_for_urls_or_credentials():
     d = config_dict()
     del d["base_urls"]["lago"]
     with pytest.raises(ConfigError, match="base_urls.lago"):
-        AosddConfig.from_dict(d)
+        _from(d)
     d = config_dict()
     d["writer"]["twenty"] = {}
     with pytest.raises(ConfigError, match="writer.twenty"):
-        AosddConfig.from_dict(d)
+        _from(d)
 
 
-def test_config_refuses_non_loopback_urls_and_short_approval_secret():
+def test_config_refuses_non_loopback_urls_and_a_short_approval_key():
     d = config_dict()
     d["base_urls"]["twenty"] = "https://crm.example.com"
     with pytest.raises(ConfigError, match="not loopback"):
-        AosddConfig.from_dict(d)
-    with pytest.raises(ConfigError, match="approval_secret"):
-        AosddConfig.from_dict(config_dict(approval_secret="short"))
+        _from(d)
+    with pytest.raises(ConfigError, match="at least 32"):
+        _from(approval_secret="short")
 
 
-def test_config_file_must_be_private_and_secrets_never_print(tmp_path):
-    p = tmp_path / "c.json"
-    p.write_text(json.dumps(config_dict()))
-    os.chmod(p, 0o644)
+def test_config_files_must_be_private_and_secrets_never_print(tmp_path):
+    c, v, a = _files(tmp_path)
+    os.chmod(c, 0o644)
     with pytest.raises(ConfigError, match="chmod 600"):
-        AosddConfig.from_file(str(p))
-    os.chmod(p, 0o600)
-    cfg = AosddConfig.from_file(str(p))
-    assert load_config({"AOSDD_CONFIG_FILE": str(p)}) == cfg or load_config({"AOSDD_CONFIG_FILE": str(p)}) is not None
-    for v in cfg.secret_values():
-        assert v not in repr(cfg) and v not in str(cfg.writer) and v not in repr(cfg.reader) and v not in repr(cfg.approval_secret)
+        AosddConfig.from_file(c)
+    os.chmod(c, 0o600)
+    os.chmod(a, 0o640)
+    with pytest.raises(ConfigError, match="chmod 600"):
+        AosddConfig.from_file(c)
+    os.chmod(a, 0o600)
+    cfg = AosddConfig.from_file(c)
+    assert load_config({"AOSDD_CONFIG_FILE": c}) is not None
+    assert cfg.verifier_source == "verifier.json" and cfg.approval_source == "approval.key"
+    for sec in cfg.secret_values():
+        assert sec not in repr(cfg) and sec not in str(cfg.writer) and sec not in repr(cfg.reader) and sec not in repr(cfg.approval_secret)
     assert repr(Secret("abc123456")) == "Secret(<redacted>)"
     with pytest.raises(TypeError):
         __import__("pickle").dumps(Secret("abc123456"))
+
+
+# ---- item 9: the approval signing key has its own source -------------------------------------------------------------------
+def test_approval_key_and_reader_may_not_live_in_the_application_config():
+    with pytest.raises(ConfigError, match="approval_secret.*own secret file"):
+        _from({**config_dict(), "approval_secret": APPROVAL_SECRET})
+    with pytest.raises(ConfigError, match="reader.*own secret file"):
+        _from({**config_dict(), "reader": reader_dict()})
+
+
+def test_the_same_value_or_file_for_approval_and_application_credentials_is_refused(tmp_path):
+    d = config_dict()
+    d["writer"]["lago"]["api_key"] = APPROVAL_SECRET                       # the signing key reused as an application credential
+    with pytest.raises(ConfigError, match="equals an application credential"):
+        _from(d)
+    c, v, a = _files(tmp_path)
+    with pytest.raises(ConfigError, match="different file from the application config"):
+        AosddConfig.from_file(c, approval_key_file=c)
+    with pytest.raises(ConfigError, match="different file from the application config"):
+        AosddConfig.from_file(c, verifier_file=c)
+    with pytest.raises(ConfigError, match="verifier file and the approval key file must be different"):
+        AosddConfig.from_file(c, approval_key_file=v)
+    cfg_no_paths = _write(tmp_path / "bare.json", config_dict())
+    with pytest.raises(ConfigError, match="own file"):
+        AosddConfig.from_file(cfg_no_paths)                                 # no key file configured: refuse, never fall back to a value in the config
+
+
+def test_approval_key_file_can_come_from_the_environment_and_wrong_schemas_are_refused(tmp_path):
+    c, v, a = _files(tmp_path)
+    bare = _write(tmp_path / "bare.json", config_dict())
+    cfg = load_config({"AOSDD_CONFIG_FILE": bare, "AOSDD_APPROVAL_KEY_FILE": a, "AOSDD_VERIFIER_FILE": v})
+    assert cfg is not None and cfg.approval_secret.reveal() == APPROVAL_SECRET
+    wrong = _write(tmp_path / "wrong.key", {"schema": "aosdd.config/1", "key": APPROVAL_SECRET})
+    with pytest.raises(ConfigError, match="approval-key"):
+        AosddConfig.from_file(c, approval_key_file=wrong)
+
+
+def test_redaction_covers_the_approval_key_and_every_application_credential():
+    cfg = _from()
+    blob = " | ".join(cfg.secret_values())
+    out = cfg.redactor.text(blob + " Authorization: token erpKEYwriter:erpSECRETwriter")
+    for sec in cfg.secret_values():
+        assert sec not in out
+    assert APPROVAL_SECRET in cfg.secret_values()
+
+
+# ---- item 6: lease >= http timeout ------------------------------------------------------------------------------------------------
+def test_lease_is_never_shorter_than_the_http_timeout(tmp_path):
+    assert _from().lease_ttl_s == 120.0 and _from().http_timeout_s == 30.0                    # provisional default: 120 s lease
+    with pytest.raises(ConfigError, match="lease_ttl_s.*>=.*http_timeout_s"):
+        _from({**config_dict(), "lease_ttl_s": 20, "http_timeout_s": 30})
+    assert _from({**config_dict(), "lease_ttl_s": 30, "http_timeout_s": 30}).lease_ttl_s == 30     # equal is allowed
+    # the wiring refuses too: a ledger whose lease is shorter than the configured HTTP timeout
+    from agentic_os.integrations.aosdd.services import Services
+    with pytest.raises(ConfigError, match="shorter than the HTTP timeout"):
+        Services(_from(), None, OpLog(str(tmp_path / "o.db"), lease_ttl_s=5), None, transport=FakeStack())
+    # and every client built from the config uses that timeout
+    svc = Services(_from(), None, OpLog(str(tmp_path / "o2.db"), lease_ttl_s=120), None, transport=FakeStack())
+    assert all(h.timeout == 30.0 for h in svc.writers.values()) and all(h.timeout == 30.0 for h in svc.readback.c.values())
 
 
 # ---- redaction ---------------------------------------------------------------------------------------------------------
@@ -79,7 +161,7 @@ def test_redactor_scrubs_values_encodings_pairs_and_shapes():
 
 # ---- HTTP seam ---------------------------------------------------------------------------------------------------------
 def _cfg():
-    return AosddConfig.from_dict(config_dict())
+    return make_config()
 
 
 def test_read_only_client_refuses_every_method_but_get():

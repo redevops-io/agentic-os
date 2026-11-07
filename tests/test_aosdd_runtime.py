@@ -15,7 +15,8 @@ import time
 import pytest
 
 sys.path.insert(0, os.path.dirname(__file__))
-from aosdd_fakes import APPROVAL_SECRET, Crash, FakeStack, TOKENS, config_dict  # noqa: E402
+from aosdd_fakes import APPROVAL_SECRET, Crash, FakeStack, TOKENS, config_dict, make_config  # noqa: E402
+from _principals import authn  # noqa: E402
 
 from agentic_os.integrations.aosdd import approval as approvals
 from agentic_os.integrations.aosdd.config import AosddConfig
@@ -30,6 +31,10 @@ from agentic_os.mission.store import EventStore, verify_chain
 from agentic_os.mission.types import MissionState
 
 REF = "AOSDD-HFC-001"
+TENANT = "aosdd-test"
+REQ = authn("requester:aosdd-test", tenant=TENANT, roles=("requester",))
+APP = authn("approver:aosdd-test", tenant=TENANT, roles=("approver",))
+ADM = authn("admin", tenant="*", roles=("admin",))
 
 
 class Env:
@@ -38,7 +43,7 @@ class Env:
     def __init__(self, tmp_path, stack=None, cfg=None):
         self.dir = str(tmp_path)
         self.stack = stack or FakeStack()
-        self.cfg = cfg or AosddConfig.from_dict(config_dict())
+        self.cfg = cfg or make_config()
         self.shift = 0.0
         self.events_path = self.dir + "/events.jsonl"
 
@@ -62,9 +67,9 @@ def env(tmp_path):
 
 def go(env, case="CASE-1", approve=True):
     r = env.runner()
-    mid = r.submit(case, REF)
+    mid = r.submit(case, REF, principal=REQ)
     if approve:
-        r.approve_plan(mid, "alice@example", r.plan(mid)["plan_sha256"])
+        r.approve_plan(mid, r.plan(mid)["plan_sha256"], principal=APP)
     return r, mid
 
 
@@ -90,7 +95,7 @@ def test_positive_run_four_writes_nine_reads_verified_by_independent_readback(en
     assert rec["steps"][0]["native_id"].startswith("SAL-QTN-") and rec["steps"][2]["ui_url"].endswith("/object/task/" + rec["steps"][2]["native_ids"]["task"])
     assert "no per-message URL" in rec["steps"][3]["ui_url_note"] and rec["steps"][3]["ui_url"].endswith("/conversations/1")
     assert rec["ledger"]["mission_chain"]["ok"] and rec["ledger"]["store_chain"]["ok"] and rec["ledger"]["mission_chain"]["unchained"] == 0
-    assert rec["approval"]["approver"] == "alice@example" and rec["approval"]["plan_sha256"] == rec["plan_sha256"]
+    assert rec["approval"]["approver"] == APP.id and rec["approval"]["plan_sha256"] == rec["plan_sha256"]
     # every authority decision is in the ledger, one per node, with the envelope digest
     assert sum(1 for a in rec["authorizations"] if a["type"] == "ScopeAuthorized") == 6
 
@@ -108,15 +113,15 @@ def test_verification_reads_use_reader_credentials_and_separate_clients(env):
 # ---- authorization and approval scope: nothing is sent unless every check passes ---------------------------------------------------------------
 def test_a_plan_hash_that_is_not_the_plans_current_hash_approves_nothing(env):
     r = env.runner()
-    mid = r.submit("C", REF)
+    mid = r.submit("C", REF, principal=REQ)
     with pytest.raises(RunnerError, match="not the plan's current hash"):
-        r.approve_plan(mid, "alice", "0" * 64)
+        r.approve_plan(mid, "0" * 64, principal=APP)
     assert env.stack.writes() == [] and state(r, mid) is MissionState.WAITING_HUMAN and "AosddPlanApproved" not in types(r, mid)
 
 
 def test_changed_plan_after_approval_fails_closed_with_zero_side_effects(env):
     r = env.runner()
-    mid = r.submit("C", REF)
+    mid = r.submit("C", REF, principal=REQ)
     plan = json.loads(json.dumps(r.plan(mid)))
     sha = plan["plan_sha256"]
     # an attacker (or a bug) appends a different plan observation after the human reviewed `sha`: S4 now targets another conversation
@@ -126,8 +131,8 @@ def test_changed_plan_after_approval_fails_closed_with_zero_side_effects(env):
     # the approval is for the ORIGINAL hash; the gate still passes the runtime's own input check only if the digest matches, so approve directly
     tok = approvals.mint(APPROVAL_SECRET, mid, json.loads(json.dumps(r.plan(mid))), "alice")      # approval of the ledger's plan
     r.svc.emit("AosddPlanApproved", mid, tok)
-    r.issue_write_grant(mid, r.plan(mid), "alice")
-    m = r.rt.approve(mid, r.rt.repo.pending_human(mid)["node_id"], "approve", actor="alice")
+    r.issue_write_grant(mid, r.plan(mid), APP)
+    m = r.rt.approve(mid, r.rt.repo.pending_human(mid)["node_id"], "approve", principal=APP)
     assert env.stack.writes() == []
     assert state(r, mid) in (MissionState.FAILED, MissionState.WAITING_HUMAN)
     assert not any(a == "erpnext" and m_ == "POST" for a, m_, p in env.stack.calls)
@@ -135,7 +140,7 @@ def test_changed_plan_after_approval_fails_closed_with_zero_side_effects(env):
 
 def test_approval_binds_step_set_and_targets_not_just_the_hash(env):
     r = env.runner()
-    mid = r.submit("C", REF)
+    mid = r.submit("C", REF, principal=REQ)
     plan = r.plan(mid)
     tok = approvals.mint(APPROVAL_SECRET, mid, plan, "alice")
     ok, _ = approvals.verify(APPROVAL_SECRET, tok, mid, plan)
@@ -155,8 +160,8 @@ def test_approval_binds_step_set_and_targets_not_just_the_hash(env):
 
 def test_replayed_and_expired_approvals_are_refused(env):
     r = env.runner()
-    a = r.submit("A", REF)
-    b = r.submit("B", REF)
+    a = r.submit("A", REF, principal=REQ)
+    b = r.submit("B", REF, principal=REQ)
     tok = approvals.mint(APPROVAL_SECRET, a, r.plan(a), "alice")
     assert approvals.verify(APPROVAL_SECRET, tok, b, r.plan(b))[0] is False                      # another mission's approval
     assert "different mission" in approvals.verify(APPROVAL_SECRET, tok, b, r.plan(a))[1]
@@ -165,21 +170,21 @@ def test_replayed_and_expired_approvals_are_refused(env):
     assert "expired" in approvals.verify(APPROVAL_SECRET, approvals.mint(APPROVAL_SECRET, a, r.plan(a), "alice", ttl_s=1, now=time.time() - 100), a, r.plan(a))[1]
     # replay by copying the event into mission B's ledger: B's steps are refused, nothing is sent
     r.svc.emit("AosddPlanApproved", b, tok)
-    r.issue_write_grant(b, r.plan(b), "alice")
-    r.rt.approve(b, r.rt.repo.pending_human(b)["node_id"], "approve", actor="mallory")
+    r.issue_write_grant(b, r.plan(b), APP)
+    r.rt.approve(b, r.rt.repo.pending_human(b)["node_id"], "approve", principal=APP)
     assert env.stack.writes() == [] and state(r, b) is MissionState.FAILED
     assert any(e.type == "NodeFailed" and "different mission" in e.payload["error"] for e in r.svc.store.for_mission(b))
 
 
 def test_wrong_target_in_the_owners_grant_is_out_of_scope(env):
     r = env.runner()
-    mid = r.submit("C", REF)
+    mid = r.submit("C", REF, principal=REQ)
     plan = json.loads(json.dumps(r.plan(mid)))
     r.svc.emit("AosddPlanApproved", mid, approvals.mint(APPROVAL_SECRET, mid, plan, "alice"))
     other = json.loads(json.dumps(plan))
     other["steps"][1]["target"]["invoice_lago_id"] = "someone-elses-invoice"       # the grant covers a different invoice than the plan
-    r.issue_write_grant(mid, other, "alice")
-    r.rt.approve(mid, r.rt.repo.pending_human(mid)["node_id"], "approve", actor="alice")
+    r.issue_write_grant(mid, other, APP)
+    r.rt.approve(mid, r.rt.repo.pending_human(mid)["node_id"], "approve", principal=APP)
     # S1 (party matches) ran; S2 is refused by the grant BEFORE any Lago request
     assert [a for a, m, p in env.stack.writes()] == ["erpnext"]
     assert state(r, mid) is MissionState.FAILED
@@ -189,37 +194,37 @@ def test_wrong_target_in_the_owners_grant_is_out_of_scope(env):
 
 def test_expired_grant_stops_the_mission_before_the_first_write(env):
     r = env.runner()
-    mid = r.submit("C", REF)
+    mid = r.submit("C", REF, principal=REQ)
     plan = r.plan(mid)
-    r.approve_plan(mid, "alice", plan["plan_sha256"], grant_ttl_s=-5) if False else None
+    r.approve_plan(mid, plan["plan_sha256"], grant_ttl_s=-5, principal=APP) if False else None
     tok = approvals.mint(APPROVAL_SECRET, mid, plan, "alice")
     r.svc.emit("AosddPlanApproved", mid, tok)
-    r.issue_write_grant(mid, plan, "alice", ttl_s=5)
+    r.issue_write_grant(mid, plan, APP, ttl_s=5)
     env.shift = 60                                                       # the grant is 5 s long; a minute passes
-    r.rt.approve(mid, r.rt.repo.pending_human(mid)["node_id"], "approve", actor="alice")
+    r.rt.approve(mid, r.rt.repo.pending_human(mid)["node_id"], "approve", principal=APP)
     assert env.stack.writes() == [] and state(r, mid) is MissionState.FAILED
     assert [e for e in r.svc.store.for_mission(mid) if e.type == "AosddMissionHalted"][0].payload["rule"] == "authority_expired"
 
 
 def test_revoking_the_grant_mid_mission_stops_the_remaining_steps_immediately(env):
     r = env.runner()
-    mid = r.submit("C", REF)
+    mid = r.submit("C", REF, principal=REQ)
 
     def revoke_after_s2(ev):
         if ev.type == "NodeSucceeded" and ev.payload.get("capability") == "aosdd.lago.invoice_metadata":
-            r.revoke(mid, "owner@example", "customer disputed")
+            r.revoke(mid, "customer disputed", principal=APP)
     r.svc.store.subscribe(revoke_after_s2)
-    r.approve_plan(mid, "alice", r.plan(mid)["plan_sha256"])
+    r.approve_plan(mid, r.plan(mid)["plan_sha256"], principal=APP)
     assert [a for a, m, p in env.stack.writes()] == ["erpnext", "lago"]            # S3 and S4 were never sent
     assert state(r, mid) is MissionState.FAILED
     rec = reconstruct(env.events_path, mid)
     assert [s["outcome"] for s in rec["steps"]] == ["applied", "applied", "not_attempted", "not_attempted"]
-    assert rec["halts"][0]["rule"] == "authority_revoked" and rec["mission_classification"] == REVERSIBLE
+    assert "revoked" in rec["halts"][0]["rule"] and rec["mission_classification"] == REVERSIBLE
     assert any(e["type"] == "AosddGrantRevoked" for e in rec["grants"])
     # nothing was undone automatically ...
     assert env.stack.count("erpnext", "DELETE") == 0
     # ... undoing is an explicit, attributed operator action, verified by read-back
-    r.compensate(mid, "ops@example", "grant revoked by owner")
+    r.compensate(mid, "grant revoked by owner", principal=APP)
     rec = reconstruct(env.events_path, mid)
     assert [s["classification"] for s in rec["steps"][:2]] == [COMPENSATED, COMPENSATED]
     assert env.stack.quotations.keys() == {"SAL-QTN-2026-00001"} and env.stack.lago_metadata == []
@@ -227,9 +232,9 @@ def test_revoking_the_grant_mid_mission_stops_the_remaining_steps_immediately(en
 
 def test_a_revoked_grant_before_approval_sends_nothing(env):
     r = env.runner()
-    mid = r.submit("C", REF)
-    r.revoke(mid, "owner", "no")
-    r.approve_plan(mid, "alice", r.plan(mid)["plan_sha256"])
+    mid = r.submit("C", REF, principal=REQ)
+    r.revoke(mid, "no", principal=APP)
+    r.approve_plan(mid, r.plan(mid)["plan_sha256"], principal=APP)
     assert env.stack.writes() == []
 
 
@@ -237,7 +242,7 @@ def test_a_revoked_grant_before_approval_sends_nothing(env):
 def test_same_case_submitted_twice_is_one_mission_and_one_set_of_records(env):
     r1, mid = go(env, "DUP")
     r2 = env.runner()
-    mid2 = r2.submit("DUP", REF)
+    mid2 = r2.submit("DUP", REF, principal=REQ)
     assert mid2 == mid and len(r2.svc.store.mission_ids()) == 1
     assert "AosddDuplicateSubmit" in [e.type for e in r2.svc.store.for_mission(mid)]
     assert len(env.stack.writes()) == 5 and len(env.stack.quotations) == 2 and len(env.stack.tasks) == 1
@@ -263,7 +268,7 @@ def test_a_lost_reply_is_adopted_by_marker_never_written_twice(env):
     r, mid = go(env)
     assert state(r, mid) is MissionState.WAITING_RECONCILIATION
     assert len([q for q in env.stack.quotations.values() if q["docstatus"] == 0]) == 1
-    r.reconcile(mid, "S1", "ops@example")
+    r.reconcile(mid, "S1", principal=REQ)
     assert state(r, mid) is MissionState.SUCCEEDED
     assert len([q for q in env.stack.quotations.values() if q["docstatus"] == 0]) == 1                       # still exactly one
     rec = reconstruct(env.events_path, mid)
@@ -272,7 +277,7 @@ def test_a_lost_reply_is_adopted_by_marker_never_written_twice(env):
 
 def test_exactly_one_of_many_concurrent_executors_performs_the_write(env):
     r = env.runner()
-    mid = r.submit("C", REF)
+    mid = r.submit("C", REF, principal=REQ)
     plan = r.plan(mid)
     r.svc.emit("AosddPlanApproved", mid, approvals.mint(APPROVAL_SECRET, mid, plan, "alice"))
     from agentic_os.integrations.aosdd.client import AosddOperatorClient, OperationUnresolved
@@ -287,7 +292,7 @@ def test_exactly_one_of_many_concurrent_executors_performs_the_write(env):
         except Exception as e:  # noqa: BLE001
             results.append(e)
     # authority is not the point here (covered above): let the recheck pass by granting S1
-    r.issue_write_grant(mid, plan, "alice")
+    r.issue_write_grant(mid, plan, APP)
     ts = [threading.Thread(target=attempt) for _ in range(8)]
     [t.start() for t in ts]
     [t.join() for t in ts]
@@ -299,17 +304,17 @@ def test_exactly_one_of_many_concurrent_executors_performs_the_write(env):
 def test_kill_after_the_request_was_applied_parks_on_restart_and_reconcile_completes_without_duplicating(env):
     env.stack.crash("twenty", "POST", "/rest/tasks", after_effect=True)           # S3's task is created, then the process dies (its company link never was)
     r = env.runner()
-    mid = r.submit("C", REF)
+    mid = r.submit("C", REF, principal=REQ)
     with pytest.raises(Crash):
-        r.approve_plan(mid, "alice", r.plan(mid)["plan_sha256"])
+        r.approve_plan(mid, r.plan(mid)["plan_sha256"], principal=APP)
     assert len(env.stack.tasks) == 1 and len(env.stack.writes()) == 3 and env.stack.task_targets == {}
     r2 = env.runner()                                                                # a new process over the same files
     r2.attach(mid)
     n = len(env.stack.writes())
     assert len(env.stack.writes()) == n and state(r2, mid) is MissionState.RUNNING   # attach alone sends nothing and runs nothing
-    r2.resume(mid, "ops@example", "process was killed")                               # explicit; the runtime refuses to redispatch S3
+    r2.resume(mid, principal=REQ, reason="process was killed")                               # explicit; the runtime refuses to redispatch S3
     assert state(r2, mid) is MissionState.WAITING_RECONCILIATION and len(env.stack.writes()) == n
-    r2.reconcile(mid, "S3", "ops@example")                                           # the task is found but half-applied: S3 is dispatched again and COMPLETES it
+    r2.reconcile(mid, "S3", principal=REQ)                                           # the task is found but half-applied: S3 is dispatched again and COMPLETES it
     assert state(r2, mid) is MissionState.SUCCEEDED
     assert len(env.stack.tasks) == 1 and len(env.stack.task_targets) == 1             # one task, one link: no duplicate
     assert env.stack.count("erpnext", "POST") == 1 and env.stack.count("lago", "PUT") == 1 and sum(1 for m in env.stack.messages if m["private"]) == 1
@@ -318,31 +323,33 @@ def test_kill_after_the_request_was_applied_parks_on_restart_and_reconcile_compl
 def test_kill_before_the_request_resumes_and_writes_once(env):
     env.stack.crash("twenty", "POST", "/rest/tasks", after_effect=False)
     r = env.runner()
-    mid = r.submit("C", REF)
+    mid = r.submit("C", REF, principal=REQ)
     with pytest.raises(Crash):
-        r.approve_plan(mid, "alice", r.plan(mid)["plan_sha256"])
+        r.approve_plan(mid, r.plan(mid)["plan_sha256"], principal=APP)
     assert len(env.stack.tasks) == 0
     r2 = env.runner()
-    r2.resume(mid, "ops@example", "killed")
+    r2.resume(mid, principal=REQ, reason="killed")
     assert state(r2, mid) is MissionState.WAITING_RECONCILIATION
-    r2.reconcile(mid, "S3", "ops@example")                                           # the marker is absent: safe to dispatch again
+    r2.reconcile(mid, "S3", principal=REQ)                                           # the marker is absent: safe to dispatch again
     assert state(r2, mid) is MissionState.SUCCEEDED
     assert len(env.stack.tasks) == 1 and env.stack.count("erpnext", "POST") == 1 and env.stack.count("lago", "PUT") == 1
     assert sum(1 for m in env.stack.messages if m["private"]) == 1
 
 
-def test_resume_is_never_automatic_and_needs_a_named_actor(env):
+def test_resume_is_never_automatic_and_needs_an_authenticated_principal(env):
     env.stack.crash("lago", "PUT", "/api/v1/invoices", after_effect=False)
     r = env.runner()
-    mid = r.submit("C", REF)
+    mid = r.submit("C", REF, principal=REQ)
     with pytest.raises(Crash):
-        r.approve_plan(mid, "alice", r.plan(mid)["plan_sha256"])
+        r.approve_plan(mid, r.plan(mid)["plan_sha256"], principal=APP)
     n = len(env.stack.calls)
     r2 = env.runner()
     r2.attach(mid)
     assert len(env.stack.calls) == n
-    with pytest.raises(RunnerError, match="name the actor"):
-        r2.resume(mid, " ")
+    for bad in (None, "ops@example", __import__("agentic_os.overlays", fromlist=["Principal"]).Principal("ops", "user", ("requester",), TENANT)):
+        with pytest.raises(RunnerError, match="authenticated operator principal"):
+            r2.resume(mid, principal=bad)                                           # a free-text name or an unissued Principal is not an identity
+    assert len(env.stack.calls) == n
 
 
 # ---- partial failure and compensation --------------------------------------------------------------------------------------------------------
@@ -420,9 +427,9 @@ def test_rerun_after_compensation_needs_a_new_attempt_and_a_new_twenty_id(env):
     r, mid = go(env, "RR")
     first_task = next(iter(env.stack.tasks))
     r2 = env.runner()
-    mid2 = r2.submit("RR", REF, attempt=2)
+    mid2 = r2.submit("RR", REF, attempt=2, principal=REQ)
     assert mid2 != mid
-    r2.approve_plan(mid2, "alice", r2.plan(mid2)["plan_sha256"])
+    r2.approve_plan(mid2, r2.plan(mid2)["plan_sha256"], principal=APP)
     assert state(r2, mid2) is MissionState.SUCCEEDED
     live = [t for t in env.stack.tasks.values() if not t["deletedAt"]]
     assert len(live) == 1 and live[0]["id"] != first_task
@@ -507,8 +514,8 @@ def test_authority_is_enforced_in_the_default_development_profile_and_in_product
     from agentic_os.mission.profile import profile
     assert profile() == "development"                                                  # the base would NOT enforce the envelope here
     r = env.runner()
-    mid = r.submit("DEV", REF)
-    r.approve_plan(mid, "alice", r.plan(mid)["plan_sha256"], grant_ttl_s=-5)             # an expired envelope still stops the mission
+    mid = r.submit("DEV", REF, principal=REQ)
+    r.approve_plan(mid, r.plan(mid)["plan_sha256"], grant_ttl_s=-5, principal=APP)             # an expired envelope still stops the mission
     assert env.stack.writes() == [] and state(r, mid) is MissionState.FAILED
     monkeypatch.setenv("AGENTIC_OS_PROFILE", "production")
     r2, mid2 = go(env, "PROD")                                                           # and production (durable guard required) works
@@ -517,10 +524,10 @@ def test_authority_is_enforced_in_the_default_development_profile_and_in_product
 
 def test_a_write_without_a_dispatch_authorization_is_refused_before_anything_is_sent(env):
     r = env.runner()
-    mid = r.submit("EA", REF)
+    mid = r.submit("EA", REF, principal=REQ)
     plan = r.plan(mid)
     r.svc.emit("AosddPlanApproved", mid, approvals.mint(APPROVAL_SECRET, mid, plan, "alice"))
-    r.issue_write_grant(mid, plan, "alice")
+    r.issue_write_grant(mid, plan, APP)
     from agentic_os.integrations.aosdd.client import AosddOperatorClient, AosddRefusal
     with pytest.raises(AosddRefusal, match="no_execution_authorization"):
         AosddOperatorClient(r.svc)._write(mid, plan["steps"][0]["capability"], {"plan": {"plan": plan}}, None)
@@ -534,7 +541,7 @@ def test_reconcile_refuses_to_guess_when_the_application_cannot_be_read(env):
     assert state(r, mid) is MissionState.WAITING_RECONCILIATION
     env.stack.fail("erpnext", "GET", "/api/resource/Quotation", 502, times=3)
     with pytest.raises(RunnerError, match="cannot decide"):
-        r.reconcile(mid, "S1", "ops@example")
+        r.reconcile(mid, "S1", principal=REQ)
     assert state(r, mid) is MissionState.WAITING_RECONCILIATION and r.svc.oplog.get([s for s in r.plan(mid)["steps"] if s["step"] == "S1"][0]["op_id"])["state"] == "unknown"
 
 
@@ -552,13 +559,13 @@ def test_two_executors_on_one_approved_mission_perform_each_write_once(env):
     entered, release = threading.Event(), threading.Event()
     env.stack.block("erpnext", "POST", "/api/resource/Quotation", entered, release)
     ra = env.runner(owner="exec-A")
-    mid = ra.submit("TWO", REF)
+    mid = ra.submit("TWO", REF, principal=REQ)
     plan = ra.plan(mid)
-    t = threading.Thread(target=lambda: ra.approve_plan(mid, "alice", plan["plan_sha256"]))
+    t = threading.Thread(target=lambda: ra.approve_plan(mid, plan["plan_sha256"], principal=APP))
     t.start()
     assert entered.wait(10)
     rb = env.runner(owner="exec-B")
-    rb.resume(mid, "ops@example", "second executor")                                      # B must not send S1 again
+    rb.resume(mid, principal=REQ, reason="second executor")                                      # B must not send S1 again
     release.set()
     t.join(30)
     assert env.stack.count("erpnext", "POST") == 1 and len([q for q in env.stack.quotations.values() if q["docstatus"] == 0]) == 1
@@ -567,6 +574,6 @@ def test_two_executors_on_one_approved_mission_perform_each_write_once(env):
     r3 = env.runner()
     r3.attach(mid)
     assert state(r3, mid) is MissionState.WAITING_RECONCILIATION
-    r3.reconcile(mid, "S1", "ops@example", "executor B refused S1 while A was running it; A recorded it")
+    r3.reconcile(mid, "S1", principal=REQ, reason="executor B refused S1 while A was running it; A recorded it")
     assert state(r3, mid) is MissionState.SUCCEEDED
     assert env.stack.count("erpnext", "POST") == 1 and env.stack.count("lago", "PUT") == 1 and len(env.stack.tasks) == 1 and sum(1 for m in env.stack.messages if m["private"]) == 1

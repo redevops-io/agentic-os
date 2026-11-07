@@ -16,7 +16,7 @@ from agentic_os.mission.authority import Action
 from . import approval as approvals
 from . import opid
 from .capabilities import GATE_CAP, RESOURCE_ARG, STEP_OF, UNDO, VERIFY, WRITE_CAPS
-from .context import CAPABILITY, build_plan, plan_sha256, read_context, step_of
+from .context import CAPABILITY, IDEMPOTENCY_NOTE, build_plan, plan_sha256, read_context, step_of
 from .http import AppError
 from .oplog import Claim
 from .services import Services
@@ -85,7 +85,7 @@ class AosddOperatorClient:
 
     def _gate(self, mission_id: str, inputs: dict) -> dict:
         plan = (inputs.get("plan") or {}).get("plan") or {}
-        ok, why = approvals.verify(self.svc.cfg.approval_secret.reveal(), self.svc.approval_for(mission_id), mission_id, plan, now=self.svc.clock())
+        ok, why = approvals.verify(self.svc.approval_key(), self.svc.approval_for(mission_id), mission_id, plan, now=self.svc.clock())
         if not ok:
             raise AosddRefusal("plan_not_approved", why)
         return {"status": "ok", "executed": True, "plan_sha256": plan["plan_sha256"]}
@@ -120,7 +120,7 @@ class AosddOperatorClient:
         q = inputs.get("quotation")
         quotation = q.get("native_id", "") if isinstance(q, dict) else (q or "")
         args = step_args(plan, step, quotation)
-        ok, why = approvals.verify(svc.cfg.approval_secret.reveal(), svc.approval_for(mission_id), mission_id, plan, now=svc.clock())
+        ok, why = approvals.verify(svc.approval_key(), svc.approval_for(mission_id), mission_id, plan, now=svc.clock())
         if not ok:
             raise AosddRefusal("plan_not_approved", why)
         op = step["op_id"]
@@ -158,12 +158,14 @@ class AosddOperatorClient:
             res = found if adopted else adapter.write(step, {"quotation": quotation})
         except AppError as e:
             return self._failed(mission_id, step, op, claim, e)
-        res.update(step=step["step"], app=step["app"], op_id=op, capability=capability, adopted=adopted, expect=step["expect"], fence=claim.fence)
+        res.update(step=step["step"], app=step["app"], op_id=op, capability=capability, adopted=adopted, expect=step["expect"], fence=claim.fence,
+                   idempotency=step["idempotency"], idempotency_note=IDEMPOTENCY_NOTE[step["app"]])
         if adopted:
             res["note"] = "the application already held a record carrying this op's marker; adopted, nothing written"
         svc.oplog.record_applied(op, claim.fence, str(res["native_id"]), res)
         svc.emit("AosddOpApplied", mission_id, {"op_id": op, "step": step["step"], "native_id": res["native_id"], "native_ids": res["native_ids"], "ui_url": res["ui_url"],
-                                                "ui_url_note": res.get("ui_url_note", ""), "created": res["created"], "adopted": adopted, "fence": claim.fence})
+                                                "ui_url_note": res.get("ui_url_note", ""), "created": res["created"], "adopted": adopted, "fence": claim.fence,
+                                                "idempotency": step["idempotency"]})
         return res
 
     def _failed(self, mission_id: str, step: dict, op: str, claim: Claim, e: AppError):

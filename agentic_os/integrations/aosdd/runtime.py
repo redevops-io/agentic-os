@@ -24,6 +24,7 @@ from agentic_os.mission.types import Budget, MissionState, NodeState, Verificati
 from agentic_os.mission.verify import CompositeVerifier
 
 from . import approval as approvals
+from . import identity
 from . import opid
 from .capabilities import (GATE_CAP, PERM_READ, PERM_WRITE, READ_CAPS, RESOURCE_ARG, STEP_OF, UNDO, VERIFY, WRITE_CAPS, AosddPlanner,
                            build_registry, goal_for)
@@ -118,7 +119,7 @@ class AosddMissionRuntime(MissionRuntime):
         world = self._world(m.id)
         inputs = self._resolve_inputs(m, world, node)
         plan_d = (inputs.get("plan") or {}).get("plan") or {}
-        ok, why = approvals.verify(self.svc.cfg.approval_secret.reveal(), self.svc.approval_for(m.id), m.id, plan_d, now=self.svc.clock())
+        ok, why = approvals.verify(self.svc.approval_key(), self.svc.approval_for(m.id), m.id, plan_d, now=self.svc.clock())
         rule = "plan_not_approved"
         if ok:
             ledger_plan = self.svc.plan_for(m.id)
@@ -197,46 +198,75 @@ class RunnerError(RuntimeError):
     pass
 
 
+def _lit_resource(step: dict) -> str:
+    return _lit(str(step["target"][RESOURCE_ARG[step["step"]]]))
+
+
 class Runner:
-    """Operator actions. Nothing here runs by itself: submit, approve, resume, reconcile, compensate and revoke are each an explicit call
-    with a named actor, and each leaves a record in the mission ledger."""
+    """Operator actions. Nothing here runs by itself: submit, approve, revoke, resume, reconcile and compensate are each an explicit
+    call by an AUTHENTICATED principal (``identity.OperatorAuth``), recorded with that principal in the mission ledger."""
 
     def __init__(self, svc: Services, *, grant_ttl_s: float = 900.0):
         self.svc = svc
         self.rt = AosddMissionRuntime(svc)
         self.grant_ttl_s = grant_ttl_s
+        self._live: set = set()          # missions created or resumed (grant_resume'd) in THIS process
 
-    # ---- envelopes (the owner's grants) ------------------------------------------------------------------------------------------------------------
+    # ---- identity ------------------------------------------------------------------------------------------------------------------------
+    def _who(self, principal, action: str):
+        try:
+            return identity.require(principal, action, self.svc.cfg.tenant, self.rt.principal_verifier())
+        except identity.NotPermitted as e:
+            raise RunnerError(str(e)) from None
+
+    def _ensure_live(self, mission_id: str, principal) -> None:
+        """A mission rebuilt from the ledger is read-only until the permission plane grants a resume to the principal that asks (base
+        ``grant_resume``); the grant belongs to that principal. Nothing runs here."""
+        if mission_id not in self.rt._missions:
+            self.rt.rehydrate(mission_id)
+        if mission_id in self.rt._reconstructed and mission_id not in self._live:
+            self.rt.grant_resume(mission_id, principal=principal, ceiling=identity.RoleCeiling(), scope=self.svc.cfg.tenant)
+            self._live.add(mission_id)
+
+    # ---- envelopes (the owner's grants) ------------------------------------------------------------------------------------------------------
     def _envelope(self, mission_id: str, grants: tuple, goal: str, ttl_s: float, principal: str) -> AuthorityEnvelope:
         now = self.svc.clock()
         return AuthorityEnvelope(tenant=self.svc.cfg.tenant, principal=principal, mission_id=mission_id, goal=goal, grants=grants,
                                  budget=AutonomyBudget(usd=0.0, max_actions=32, max_parallel=1), issued_at=now - 1, expires_at=now + ttl_s)
 
-    def issue_read_grant(self, mission_id: str, principal: str, goal: str = "") -> AuthorityEnvelope:
-        env = self._envelope(mission_id, tuple(Grant(c, max_tier=0) for c in READ_CAPS), goal, self.grant_ttl_s, principal)
+    def issue_read_grant(self, mission_id: str, principal, goal: str = "") -> AuthorityEnvelope:
+        env = self._envelope(mission_id, tuple(Grant(c, max_tier=0) for c in READ_CAPS + (GATE_CAP,)), goal, self.grant_ttl_s, principal.id)
         self.svc.guard.envelopes.put(env)
-        self.svc.emit("AosddGrantIssued", mission_id, {"phase": "read", "digest": env.digest(), "expires_at": env.expires_at, "grants": [g.capability for g in env.grants]})
+        self.svc.emit("AosddGrantIssued", mission_id, {"phase": "read", "digest": env.digest(), "expires_at": env.expires_at, "grants": [g.capability for g in env.grants],
+                                                       "principal": principal.record()})
         return env
 
-    def issue_write_grant(self, mission_id: str, plan: dict, principal: str, ttl_s: "float | None" = None) -> AuthorityEnvelope:
-        grants = [Grant(c, max_tier=0) for c in READ_CAPS]
+    def issue_write_grant(self, mission_id: str, plan: dict, principal, ttl_s: "float | None" = None) -> AuthorityEnvelope:
+        """The owner's grant for exactly this plan: each write on its exact target (max one call), and the matching compensation scope
+        (`compensate:<capability>`, same target) so an automatic rollback after a later failure is authorized. Revoking the envelope
+        withdraws both; a compensation after a revocation is then an explicit operator action (`Runner.compensate`)."""
+        grants = [Grant(c, max_tier=0) for c in READ_CAPS + (GATE_CAP,)]       # a human approval is not authority: the gate node needs a grant too
         for s in plan["steps"]:
-            val = str(s["target"][RESOURCE_ARG[s["step"]]])
-            grants.append(Grant(s["capability"], resources=((RESOURCE_ARG[s["step"]], (_lit(val),)),), max_tier=1, max_calls=1))
-        env = self._envelope(mission_id, tuple(grants), f"plan {plan['plan_sha256']}", self.grant_ttl_s if ttl_s is None else ttl_s, principal)
+            sel = ((RESOURCE_ARG[s["step"]], (_lit_resource(s),)),)
+            grants.append(Grant(s["capability"], resources=sel, max_tier=1, max_calls=1))
+            grants.append(Grant("compensate:" + s["capability"], resources=sel, max_tier=1))
+        env = self._envelope(mission_id, tuple(grants), f"plan {plan['plan_sha256']}", self.grant_ttl_s if ttl_s is None else ttl_s, principal.id)
         self.svc.guard.envelopes.put(env)
         self.svc.emit("AosddGrantIssued", mission_id, {"phase": "write", "digest": env.digest(), "plan_sha256": plan["plan_sha256"], "expires_at": env.expires_at,
+                                                       "principal": principal.record(),
                                                        "grants": [{"capability": g.capability, "resources": [[k, list(v)] for k, v in g.resources], "max_calls": g.max_calls} for g in env.grants]})
         return env
 
     # ---- submit / approve ------------------------------------------------------------------------------------------------------------------------------------
-    def submit(self, case_key: str, customer_ref: str, *, attempt: int = 1, principal: str = "operator:aosdd") -> str:
+    def submit(self, case_key: str, customer_ref: str, *, principal, attempt: int = 1) -> str:
         """One mission per (case key, attempt), across processes. A second submit returns the first mission and runs nothing."""
+        self._who(principal, "submit")
         created, existing = self.svc.oplog.open_case(case_key, attempt)
         if not created:
             if existing is None:
                 raise RunnerError(f"case {case_key!r} attempt {attempt} is being created by another process")
-            self.svc.emit("AosddDuplicateSubmit", existing, {"case_key": case_key, "attempt": attempt, "by": self.svc.owner, "action": "returned the existing mission; nothing started"})
+            self.svc.emit("AosddDuplicateSubmit", existing, {"case_key": case_key, "attempt": attempt, "by": self.svc.owner, "principal": principal.record(),
+                                                             "action": "returned the existing mission; nothing started"})
             return existing
         try:
             m = self.rt.create_mission(goal_for(customer_ref, case_key, attempt), policy_refs=[PERM_READ, PERM_WRITE], template="aosdd_revenue_recovery",
@@ -245,7 +275,8 @@ class Runner:
             self.svc.oplog.release_case(case_key, attempt)
             raise
         self.svc.oplog.bind_case(case_key, attempt, m.id)
-        self.svc.emit("AosddCaseOpened", m.id, {"case_key": case_key, "attempt": attempt, "customer_ref": customer_ref, "principal": principal, "tenant": self.svc.cfg.tenant})
+        self._live.add(m.id)
+        self.svc.emit("AosddCaseOpened", m.id, {"case_key": case_key, "attempt": attempt, "customer_ref": customer_ref, "principal": principal.record(), "tenant": self.svc.cfg.tenant})
         self.issue_read_grant(m.id, principal, m.goal)
         self.rt.run(m.id)
         return m.id
@@ -256,49 +287,53 @@ class Runner:
             raise RunnerError("this mission has no plan yet")
         return p
 
-    def approve_plan(self, mission_id: str, approver: str, plan_sha256_seen: str, *, ttl_s: int = approvals.DEFAULT_TTL_S, grant_ttl_s: "float | None" = None):
-        """The human approves THE HASH THEY REVIEWED. A hash that is not the plan's current hash is refused and nothing is recorded as approved."""
+    def approve_plan(self, mission_id: str, plan_sha256_seen: str, *, principal, ttl_s: int = approvals.DEFAULT_TTL_S, grant_ttl_s: "float | None" = None):
+        """The approver approves THE HASH THEY REVIEWED. A hash that is not the plan's current hash is refused and nothing is recorded as approved."""
+        self._who(principal, "approve")
+        self._ensure_live(mission_id, principal)
         plan = self.plan(mission_id)
         if plan_sha256(plan) != plan["plan_sha256"] or plan["plan_sha256"] != plan_sha256_seen:
-            self.svc.emit("AosddApprovalRefused", mission_id, {"approver": approver, "presented": plan_sha256_seen, "actual": plan["plan_sha256"], "reason": "plan_sha256 differs"})
+            self.svc.emit("AosddApprovalRefused", mission_id, {"principal": principal.record(), "presented": plan_sha256_seen, "actual": plan["plan_sha256"], "reason": "plan_sha256 differs"})
             raise RunnerError("the approved plan_sha256 is not the plan's current hash; nothing was approved")
         pend = self.rt.repo.pending_human(mission_id) or {}
         if pend.get("capability") != GATE_CAP:
             raise RunnerError("the mission is not waiting at the plan approval gate")
         if self.svc.approval_for(mission_id):
             raise RunnerError("this mission's plan is already approved")
-        tok = approvals.mint(self.svc.cfg.approval_secret.reveal(), mission_id, plan, approver, ttl_s=ttl_s, now=self.svc.clock())
+        tok = approvals.mint(self.svc.approval_key(), mission_id, plan, principal.id, ttl_s=ttl_s, now=self.svc.clock())
+        tok["claims"]["principal"] = principal.record()
+        tok["sig"] = approvals.sign(self.svc.approval_key(), tok["claims"])
         self.svc.emit("AosddPlanApproved", mission_id, tok)
-        m = self.rt._missions[mission_id]
-        self.issue_write_grant(mission_id, plan, approver, grant_ttl_s)
-        return self.rt.approve(mission_id, pend["node_id"], "approve", actor=approver)
+        self.issue_write_grant(mission_id, plan, principal, grant_ttl_s)
+        return self.rt.approve(mission_id, pend["node_id"], "approve", principal=principal)
 
-    def revoke(self, mission_id: str, actor: str, reason: str) -> None:
+    def revoke(self, mission_id: str, reason: str, *, principal) -> None:
         """Durable and immediate: the next decision of ANY process sees it (SqliteEnvelopeStore.revoke)."""
+        self._who(principal, "revoke")
         self.svc.guard.envelopes.revoke(mission_id)
-        self.svc.emit("AosddGrantRevoked", mission_id, {"actor": actor, "reason": reason, "at": self.svc.clock()})
+        self.svc.emit("AosddGrantRevoked", mission_id, {"principal": principal.record(), "reason": reason, "at": self.svc.clock()})
 
     # ---- restart / explicit resume ---------------------------------------------------------------------------------------------------------------------------
     def attach(self, mission_id: str):
         """Rebuild the mission from the ledger after a restart. This NEVER runs anything: resuming is a separate, explicit act."""
         return self.rt.rehydrate(mission_id)
 
-    def resume(self, mission_id: str, actor: str, reason: str = ""):
-        if not str(actor).strip():
-            raise RunnerError("resume is an operator action: name the actor")
-        if mission_id not in self.rt._missions:
-            self.attach(mission_id)
-        self.svc.emit("AosddResumeRequested", mission_id, {"actor": actor, "reason": reason, "owner": self.svc.owner})
-        return self.rt.run(mission_id)
+    def resume(self, mission_id: str, *, principal, reason: str = ""):
+        self._who(principal, "resume")
+        self._ensure_live(mission_id, principal)
+        self.svc.emit("AosddResumeRequested", mission_id, {"principal": principal.record(), "reason": reason, "owner": self.svc.owner})
+        return self.rt.run(mission_id, principal=principal)
 
     # ---- reconcile ----------------------------------------------------------------------------------------------------------------------------------------------------
-    def reconcile(self, mission_id: str, step: str, actor: str, reason: str = ""):
+    def reconcile(self, mission_id: str, step: str, *, principal, reason: str = ""):
         """Resolve a step whose outcome is UNKNOWN by LOOKING in the application for the op's marker: found -> adopt (and read back);
-        absent -> the step may be dispatched again under a fresh reservation. The runtime performs no write here."""
-        if mission_id not in self.rt._missions:
-            self.attach(mission_id)
+        absent -> the step may be dispatched again under a fresh reservation. The runtime performs no write here. If the application
+        cannot be read completely the answer is "cannot decide" and nothing changes."""
+        self._who(principal, "reconcile")
+        self._ensure_live(mission_id, principal)
         plan = self.plan(mission_id)
         st = step_of(plan, step)
+        actor = principal.id
         node = next(n for n in self.rt._plans[mission_id].graph.nodes if n.capability == st["capability"])
         if not any(p["node_id"] == node.id for p in self.rt.repo.pending_reconciliation(mission_id)):
             raise RunnerError(f"{step} has no unresolved reconciliation")
@@ -308,16 +343,16 @@ class Runner:
         try:
             found = dict(row["result"]) if recorded else self.svc.adapters[st["app"]].find(st)
         except AppError as e:
-            self.svc.emit("AosddReconcileRefused", mission_id, {"step": step, "actor": actor, "why": f"cannot read {st['app']}: {e.kind} {e.status}"})
-            raise RunnerError(f"cannot decide: {st['app']} could not be read ({e.kind} {e.status})") from None
+            self.svc.emit("AosddReconcileRefused", mission_id, {"step": step, "principal": principal.record(), "why": f"cannot read {st['app']}: {e.kind} {e.status}"})
+            raise RunnerError(f"cannot decide: {st['app']} could not be read completely ({e.kind} {e.status}); state stays unknown, nothing written, nothing adopted") from None
         if found is None or found.get("partial"):
             self.svc.oplog.resolve_not_applied(st["op_id"], f"{actor}: marker absent in {st['app']}")
-            self.svc.emit("AosddReconciled", mission_id, {"step": step, "op_id": st["op_id"], "actor": actor, "found": False})
-            return self.rt.reconcile_node(mission_id, node.id, executed=False, actor=actor, reason=reason,
+            self.svc.emit("AosddReconciled", mission_id, {"step": step, "op_id": st["op_id"], "principal": principal.record(), "found": False})
+            return self.rt.reconcile_node(mission_id, node.id, executed=False, reason=reason, principal=principal,
                                           evidence={"kind": "provider_record", "reference": f"{st['app']}: no record carries {st['op_id']}"})
         if not recorded:
             found.update(step=st["step"], app=st["app"], op_id=st["op_id"], capability=st["capability"], adopted=True, expect=st["expect"],
-                         note="adopted by reconciliation: the application already held a record carrying this op's marker")
+                         idempotency=st.get("idempotency"), note="adopted by reconciliation: the application already held a record carrying this op's marker")
         quotation = ""
         if st["step"] != "S1":
             for e in self.svc.store.for_mission(mission_id):
@@ -331,22 +366,17 @@ class Runner:
         if not recorded:
             self.svc.oplog.resolve_applied(st["op_id"], str(found["native_id"]), found, f"{actor}: found by marker")
             self.svc.emit("AosddOpApplied", mission_id, {"op_id": st["op_id"], "step": st["step"], "native_id": found["native_id"], "native_ids": found["native_ids"], "ui_url": found["ui_url"],
-                                                         "ui_url_note": found.get("ui_url_note", ""), "created": False, "adopted": True, "fence": None, "via": "reconcile"})
-        self.svc.emit("AosddReconciled", mission_id, {"step": step, "op_id": st["op_id"], "actor": actor, "found": True, "native_id": found["native_id"]})
-        return self.rt.reconcile_node(mission_id, node.id, executed=True, actor=actor, reason=reason, result=found,
+                                                         "ui_url_note": found.get("ui_url_note", ""), "created": False, "adopted": True, "fence": None, "via": "reconcile",
+                                                         "idempotency": st.get("idempotency")})
+        self.svc.emit("AosddReconciled", mission_id, {"step": step, "op_id": st["op_id"], "principal": principal.record(), "found": True, "native_id": found["native_id"]})
+        return self.rt.reconcile_node(mission_id, node.id, executed=True, reason=reason, result=found, principal=principal,
                                       evidence={"kind": "provider_record", "reference": f"{st['app']}:{found['native_id']}", "provider_ref": str(found["native_id"])})
 
-    # ---- explicit compensation -----------------------------------------------------------------------------------------------------------------------------------------------
-    def compensate(self, mission_id: str, actor: str, reason: str):
-        """Undo the completed steps in reverse order, each verified by read-back. Explicit and attributed; never automatic after a halt."""
-        if not str(actor).strip() or len(str(reason).strip()) < 8:
-            raise RunnerError("compensation needs a named actor and a reason")
-        if mission_id not in self.rt._missions:
-            self.attach(mission_id)
-        m = self.rt._missions[mission_id]
-        self.svc.emit("AosddCompensationRequested", mission_id, {"actor": actor, "reason": reason})
-        self.rt._saga(m, self.rt._plans[mission_id], self.rt._world(mission_id))
-        if m.state is MissionState.SUCCEEDED:
-            self.rt._set_state(m, MissionState.CANCELLED)
-            self.svc.emit("MissionCancelled", mission_id, {"reason": "operator compensation: " + reason})
-        return m
+    # ---- explicit compensation -----------------------------------------------------------------------------------------------------------------------------------------
+    def compensate(self, mission_id: str, reason: str, *, principal):
+        """Undo the completed steps, newest first, each verified by read-back: the base's operator compensation (authenticated principal,
+        `mission.<tenant>.compensate`, a stated reason, re-checked before every step's undo). Never automatic after a halt."""
+        self._who(principal, "compensate")
+        self._ensure_live(mission_id, principal)
+        self.svc.emit("AosddCompensationRequested", mission_id, {"principal": principal.record(), "reason": reason})
+        return self.rt.compensate(mission_id, principal=principal, ceiling=identity.RoleCeiling(), reason=reason, scope=self.svc.cfg.tenant)

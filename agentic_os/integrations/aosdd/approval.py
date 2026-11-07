@@ -24,7 +24,7 @@ def _key(secret: str) -> bytes:
     return hmac.new(secret.encode(), b"redevops/aosdd/plan-approval/v1", hashlib.sha256).digest()
 
 
-def _sign(secret: str, claims: dict) -> str:
+def sign(secret: str, claims: dict) -> str:
     return hmac.new(_key(secret), opid.canonical(claims).encode(), hashlib.sha256).hexdigest()
 
 
@@ -34,7 +34,7 @@ def mint(secret: str, mission_id: str, plan: dict, approver: str, *, ttl_s: int 
     t = time.time() if now is None else now
     claims = {"kind": KIND, "mission_id": mission_id, "plan_sha256": plan_sha256(plan), "steps": step_binding(plan),
               "approver": str(approver).strip(), "iat": t, "exp": t + ttl_s, "nonce": _secrets.token_hex(12)}
-    return {"claims": claims, "sig": _sign(secret, claims)}
+    return {"claims": claims, "sig": sign(secret, claims)}
 
 
 def verify(secret: str, approval: "dict | None", mission_id: str, plan: dict, *, now: "float | None" = None) -> "tuple[bool, str]":
@@ -43,7 +43,7 @@ def verify(secret: str, approval: "dict | None", mission_id: str, plan: dict, *,
         if not isinstance(approval, dict) or not isinstance(approval.get("claims"), dict):
             return False, "no plan approval is recorded for this mission"
         c = approval["claims"]
-        if not hmac.compare_digest(str(approval.get("sig", "")), _sign(secret, c)):
+        if not hmac.compare_digest(str(approval.get("sig", "")), sign(secret, c)):
             return False, "the plan approval signature does not verify"
         if c.get("kind") != KIND:
             return False, "not a plan approval"

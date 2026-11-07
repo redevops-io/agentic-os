@@ -7,7 +7,7 @@ from agentic_os.mission.store import EventStore, MemoryEventStore
 from agentic_os.mission.types import to_jsonable
 
 from .apps import adapters
-from .config import AosddConfig
+from .config import AosddConfig, ConfigError
 from .http import AppHttp, Transport, UrllibTransport, auth_for
 from .oplog import OpLog, new_owner
 from .redact import Redactor
@@ -39,11 +39,17 @@ class Services:
     def __init__(self, cfg: AosddConfig, store, oplog: OpLog, guard, *, transport: "Transport | None" = None,
                  clock=time.time, owner: "str | None" = None):
         self.cfg, self.store, self.oplog, self.guard, self.clock = cfg, store, oplog, guard, clock
+        if oplog.lease_ttl_s < cfg.http_timeout_s:
+            raise ConfigError(f"the operation lease ({oplog.lease_ttl_s}s) is shorter than the HTTP timeout ({cfg.http_timeout_s}s): a request could outlive its lease")
         self.transport = transport or UrllibTransport()
         self.owner = owner or new_owner()
-        self.writers = {a: AppHttp(a, cfg.base_urls[a], auth_for(a, cfg.writer[a]), self.transport, cfg.redactor, role="writer") for a in cfg.writer}
+        self.writers = {a: AppHttp(a, cfg.base_urls[a], auth_for(a, cfg.writer[a]), self.transport, cfg.redactor, timeout=cfg.http_timeout_s, role="writer") for a in cfg.writer}
         self.adapters = adapters(self.writers, cfg.base_urls, cfg.account_id)
         self.readback = ReadBack(cfg, self.transport)        # its own reader clients: no object shared with self.writers
+
+    def approval_key(self) -> str:
+        """The plan-approval signing key (its own secret source, never an application credential)."""
+        return self.cfg.approval_secret.reveal()
 
     def emit(self, type: str, mission_id: str, payload: dict):          # noqa: A003
         return self.store.append(type, mission_id, payload)

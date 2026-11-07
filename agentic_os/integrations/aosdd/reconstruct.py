@@ -17,7 +17,7 @@ from agentic_os.mission import compensation as C
 from agentic_os.mission.store import EventStore, MissionRepository, verify_chain
 
 from .capabilities import RESIDUAL
-from .context import CAPABILITY, step_of
+from .context import CAPABILITY, IDEMPOTENCY_NOTE, step_of
 from .http import network_disabled
 
 SCHEMA = "aosdd.receipt/1"
@@ -34,7 +34,7 @@ def _last(events, type_, **match):
 
 def reconstruct(source, mission_id: str) -> dict:
     with network_disabled():
-        store = source if hasattr(source, "for_mission") else EventStore(source)
+        store = source if hasattr(source, "for_mission") else EventStore(source, strict=False)       # read-only: a log that fails its anchor is REPORTED, never written
         return _fold(store, mission_id)
 
 
@@ -43,6 +43,7 @@ def _fold(store, mid: str) -> dict:
     if not ev:
         raise KeyError(f"no events for mission {mid}")
     chain = verify_chain(ev)
+    anchor = store.check_integrity(mid) if hasattr(store, "check_integrity") else None
     whole = verify_chain(store.all())
     repo = MissionRepository(store)
     status = repo.node_status(mid)
@@ -56,6 +57,9 @@ def _fold(store, mid: str) -> dict:
         "schema": SCHEMA, "mission_id": mid, "state": (repo.state(mid).value if repo.state(mid) else None),
         "case": (opened.payload if opened else None), "goal": repo.goal(mid),
         "ledger": {"events": len(ev), "head": ev[-1].hash, "mission_chain": {"ok": chain.ok, "checked": chain.checked, "unchained": chain.unchained, "reason": chain.reason},
+                   "ledger_anchor": (None if anchor is None else {"ok": anchor.ok, "status": anchor.status, "reason": anchor.reason, "records": anchor.count, "anchored": anchor.anchored,
+                                                       "protects_against": "a log cut off at the end, or rewritten behind the anchor, by a writer who cannot also rewrite the anchor",
+                                                       "does_not_protect_against": "a writer who can rewrite the log and its anchor consistently (no HMAC key is required or assumed unless AGENTIC_OS_ANCHOR_KEY is set)"}),
                    "store_chain": {"ok": whole.ok, "checked": whole.checked, "unchained": whole.unchained, "reason": whole.reason}},
         "context_pack": ((ctx_e.payload.get("result") or {}).get("context_pack") if ctx_e else None),
         "plan": plan, "plan_sha256": (plan or {}).get("plan_sha256"),
@@ -65,7 +69,7 @@ def _fold(store, mid: str) -> dict:
         "authorizations": [{"seq": e.seq, "type": e.type, "capability": e.payload.get("capability"), "grant_index": e.payload.get("grant_index"),
                             "rule": e.payload.get("rule"), "envelope_digest": e.payload.get("envelope_digest")}
                            for e in ev if e.type in ("ScopeAuthorized", "AuthorityDeclined")],
-        "halts": [dict(e.payload, seq=e.seq, type=e.type) for e in ev if e.type in ("AosddMissionHalted", "AosddStepRefused", "AosddApprovalRefused")],
+        "halts": [dict(e.payload, seq=e.seq, type=e.type) for e in ev if e.type in ("AosddMissionHalted", "AosddStepRefused", "AosddApprovalRefused", "ExecutionAuthorityRefused", "AuthorityDeclined", "PrincipalRefused")],
         "duplicates": [dict(e.payload, seq=e.seq, type=e.type) for e in ev if e.type in ("AosddDuplicateSubmit", "AosddOpReplayed")],
         "resumes": [dict(e.payload, seq=e.seq, type=e.type) for e in ev if e.type in ("AosddResumeRequested", "AosddReconciled", "AosddCompensationRequested")],
         "steps": [], "mission_classification": NONE, "residual_effects": [],
@@ -110,7 +114,8 @@ def _step(ev, ps: dict, plan: dict, status: dict, comp: dict) -> dict:
            "verification": ({"status": v_last["status"], "method": v_last["method"], "reader": v_last["reader"], "checks": v_last["checks"]} if v_last else None),
            "compensation": ({"status": c.get("status"), "attempts": c.get("attempts"), "undo_result": undo[-1].payload if undo else None,
                               "readback": ({"status": undo_ver[-1].payload["status"], "checks": undo_ver[-1].payload["checks"]} if undo_ver else None)} if c else None),
-           "residual": [], "declared_residual": RESIDUAL[ps["step"]]}
+           "residual": [], "declared_residual": RESIDUAL[ps["step"]],
+           "idempotency": ps.get("idempotency"), "idempotency_note": IDEMPOTENCY_NOTE.get(ps["app"], "")}
     if undo_ver:
         out["residual"] = undo_ver[-1].payload.get("residual") or []
     if not out["attempted"]:

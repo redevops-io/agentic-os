@@ -31,11 +31,20 @@ def config_dict(**over) -> dict:
          "base_urls": dict(BASES),
          "writer": {"chatwoot": {"token": TOKENS["chatwoot"]["writer"]}, "twenty": {"token": TOKENS["twenty"]["writer"]},
                     "erpnext": {"api_key": "erpKEYwriter", "api_secret": "erpSECRETwriter"}, "lago": {"api_key": TOKENS["lago"]["writer"]}},
-         "reader": {"chatwoot": {"token": TOKENS["chatwoot"]["reader"]}, "twenty": {"token": TOKENS["twenty"]["reader"]},
-                    "erpnext": {"api_key": "erpKEYreader", "api_secret": "erpSECRETreader"}, "lago": {"api_key": TOKENS["lago"]["reader"]}},
-         "approval_secret": APPROVAL_SECRET}
+         }
     d.update(over)
     return d
+
+
+def reader_dict() -> dict:
+    return {"chatwoot": {"token": TOKENS["chatwoot"]["reader"]}, "twenty": {"token": TOKENS["twenty"]["reader"]},
+            "erpnext": {"api_key": "erpKEYreader", "api_secret": "erpSECRETreader"}, "lago": {"api_key": TOKENS["lago"]["reader"]}}
+
+
+def make_config(**over):
+    """The application config, the verifier credentials and the approval key arrive from three separate sources."""
+    from agentic_os.integrations.aosdd.config import AosddConfig
+    return AosddConfig.from_dict(config_dict(**over), approval_secret=APPROVAL_SECRET, reader=reader_dict(), verifier_source="verifier.json", approval_source="approval.key")
 
 
 class Crash(BaseException):

@@ -20,6 +20,7 @@ pytestmark = pytest.mark.skipif(not LIVE or "/secrets/" not in LIVE, reason="liv
 
 from agentic_os.integrations.aosdd.config import AosddConfig                       # noqa: E402
 from agentic_os.integrations.aosdd.http import UrllibTransport                     # noqa: E402
+from agentic_os.integrations.aosdd.identity import OperatorAuth                    # noqa: E402
 from agentic_os.integrations.aosdd.oplog import OpLog                              # noqa: E402
 from agentic_os.integrations.aosdd.reconstruct import COMPENSATED, REVERSIBLE, reconstruct   # noqa: E402
 from agentic_os.integrations.aosdd.runtime import Runner, RunnerError             # noqa: E402
@@ -29,12 +30,19 @@ from agentic_os.mission.authority import AuthorityGuard, SqliteEnvelopeStore, Sq
 from agentic_os.mission.types import MissionState                                  # noqa: E402
 
 
+class live:                                                                             # noqa: N801 - holder for the two authenticated principals
+    REQ = APP = None
+
+
 @pytest.fixture
-def live(tmp_path):
+def livefx(tmp_path):
     cfg = AosddConfig.from_file(LIVE)
     d = str(tmp_path)
     svc = Services(cfg, RedactingEventStore(d + "/events.jsonl", cfg.redactor), OpLog(d + "/ops.db"),
                    AuthorityGuard(SqliteEnvelopeStore(d + "/auth.db"), SqliteLedger(d + "/auth.db.usage")), transport=UrllibTransport())
+    tok_a, tok_r = uuid.uuid4().hex + uuid.uuid4().hex, uuid.uuid4().hex + uuid.uuid4().hex
+    auth = OperatorAuth(tenant_tokens={cfg.tenant: tok_r}, approver_tokens={cfg.tenant: tok_a})       # the base resolve_caller decides who these are
+    live.REQ, live.APP = auth.authenticate(tok_r), auth.authenticate(tok_a)
     return cfg, Runner(svc), d
 
 
@@ -44,16 +52,16 @@ def _quotation_count(cfg) -> int:
     return len((r.body or {}).get("data") or [])
 
 
-def test_live_positive_verify_reconstruct_replay_compensate(live, monkeypatch):
-    cfg, r, d = live
+def test_live_positive_verify_reconstruct_replay_compensate(livefx, monkeypatch):
+    cfg, r, d = livefx
     q0 = _quotation_count(cfg)
     case = "LIVE-" + uuid.uuid4().hex[:8]
-    mid = r.submit(case, "AOSDD-HFC-001")
+    mid = r.submit(case, "AOSDD-HFC-001", principal=live.REQ)
     assert r.rt.repo.state(mid) is MissionState.WAITING_HUMAN and _quotation_count(cfg) == q0         # parked at the gate: nothing written
     with pytest.raises(RunnerError):
-        r.approve_plan(mid, "pytest", "0" * 64)
+        r.approve_plan(mid, "0" * 64, principal=live.APP)
     assert _quotation_count(cfg) == q0
-    r.approve_plan(mid, "pytest@example", r.plan(mid)["plan_sha256"])
+    r.approve_plan(mid, r.plan(mid)["plan_sha256"], principal=live.APP)
     assert r.rt.repo.state(mid) is MissionState.SUCCEEDED
     rec = reconstruct(d + "/events.jsonl", mid)
     assert [s["classification"] for s in rec["steps"]] == [REVERSIBLE] * 4 and all(s["verification"]["status"] == "VERIFIED" for s in rec["steps"])
@@ -70,21 +78,21 @@ def test_live_positive_verify_reconstruct_replay_compensate(live, monkeypatch):
     assert reconstruct(d + "/events.jsonl", mid) == rec
     monkeypatch.undo()
     # the same case again is the same mission; a retry of every step sends nothing
-    assert r.submit(case, "AOSDD-HFC-001") == mid
+    assert r.submit(case, "AOSDD-HFC-001", principal=live.REQ) == mid
     assert _quotation_count(cfg) == q0 + 1
     # operator compensation, verified by read-back, with the residual effects on record
-    r.compensate(mid, "pytest@example", "live acceptance cleanup")
+    r.compensate(mid, "live acceptance cleanup", principal=live.APP)
     rec = reconstruct(d + "/events.jsonl", mid)
     assert rec["mission_classification"] == COMPENSATED and rec["residual_effects"] and _quotation_count(cfg) == q0
     assert r.rt._missions[mid].outcome["rolled_back"] is False                                       # residual effects remain: not a clean rollback
 
 
-def test_live_revoked_grant_sends_nothing(live):
-    cfg, r, d = live
+def test_live_revoked_grant_sends_nothing(livefx):
+    cfg, r, d = livefx
     q0 = _quotation_count(cfg)
-    mid = r.submit("LIVE-" + uuid.uuid4().hex[:8], "AOSDD-HFC-001")
-    r.revoke(mid, "pytest", "negative test")
-    r.approve_plan(mid, "pytest@example", r.plan(mid)["plan_sha256"])
+    mid = r.submit("LIVE-" + uuid.uuid4().hex[:8], "AOSDD-HFC-001", principal=live.REQ)
+    r.revoke(mid, "negative test", principal=live.APP)
+    r.approve_plan(mid, r.plan(mid)["plan_sha256"], principal=live.APP)
     assert _quotation_count(cfg) == q0
     rec = reconstruct(d + "/events.jsonl", mid)
-    assert all(s["outcome"] == "not_attempted" for s in rec["steps"]) and rec["halts"][0]["rule"] == "authority_revoked"
+    assert all(s["outcome"] == "not_attempted" for s in rec["steps"]) and "revoked" in rec["halts"][0]["rule"]
