@@ -188,8 +188,8 @@ def test_wrong_target_in_the_owners_grant_is_out_of_scope(env):
     # S1 (party matches) ran; S2 is refused by the grant BEFORE any Lago request
     assert [a for a, m, p in env.stack.writes()] == ["erpnext"]
     assert state(r, mid) is MissionState.FAILED
-    halt = [e for e in r.svc.store.for_mission(mid) if e.type == "AosddMissionHalted"][0].payload
-    assert halt["rule"] == "authority_resource_out_of_scope" and halt["effects_remaining"] == ["aosdd.erpnext.quotation_draft"]
+    halt = r.rt._missions[mid].outcome
+    assert halt["rule"] == "resource_out_of_scope" and halt["effects_remaining"] == ["aosdd.erpnext.quotation_draft"]
 
 
 def test_expired_grant_stops_the_mission_before_the_first_write(env):
@@ -203,7 +203,7 @@ def test_expired_grant_stops_the_mission_before_the_first_write(env):
     env.shift = 60                                                       # the grant is 5 s long; a minute passes
     r.rt.approve(mid, r.rt.repo.pending_human(mid)["node_id"], "approve", principal=APP)
     assert env.stack.writes() == [] and state(r, mid) is MissionState.FAILED
-    assert [e for e in r.svc.store.for_mission(mid) if e.type == "AosddMissionHalted"][0].payload["rule"] == "authority_expired"
+    assert r.rt._missions[mid].outcome["rule"] == "expired"
 
 
 def test_revoking_the_grant_mid_mission_stops_the_remaining_steps_immediately(env):
@@ -593,7 +593,7 @@ def test_base_refuses_an_escalation_instead_of_parking_a_human_gate(env):
     r.rt.approve(mid, r.rt.repo.pending_human(mid)["node_id"], "approve", principal=APP)
     assert env.stack.writes() == [] and state(r, mid) is MissionState.FAILED                      # refused, not parked as WAITING_HUMAN
     out = r.rt._missions[mid].outcome
-    assert "tier_over_grant" in out["blocked"]
+    assert out["blocked"] == "authority_denied" and out["rule"] == "tier_over_grant"
     assert out["effects_remaining"] == [] and "none performed" in out["compensation"]
 
 
@@ -604,3 +604,26 @@ def test_base_enforces_the_envelope_in_the_development_profile_without_an_overri
     mid = r.submit("DEVP", REF, principal=REQ)
     r.approve_plan(mid, r.plan(mid)["plan_sha256"], principal=APP, grant_ttl_s=-5)
     assert env.stack.writes() == [] and state(r, mid) is MissionState.FAILED
+
+
+def test_a_halt_by_the_base_lists_what_remains_and_says_nothing_was_undone(env):
+    """Used to need `_halt` / `_block_authority` overrides: the base outcome now carries effects_remaining and the no-compensation note."""
+    from agentic_os.integrations.aosdd.runtime import AosddMissionRuntime
+    assert "_block_authority" not in AosddMissionRuntime.__dict__
+    r = env.runner()
+    mid = r.submit("HALT", REF, principal=REQ)
+    r.svc.store.subscribe(lambda ev: r.revoke(mid, "owner changed their mind", principal=APP) if ev.type == "NodeSucceeded" and ev.payload.get("capability") == "aosdd.lago.invoice_metadata" else None)
+    r.approve_plan(mid, r.plan(mid)["plan_sha256"], principal=APP)
+    out = r.rt._missions[mid].outcome
+    assert out["blocked"] == "authority_denied" and out["rule"] == "revoked"
+    assert out["effects_remaining"] == ["aosdd.erpnext.quotation_draft", "aosdd.lago.invoice_metadata"] and "none performed" in out["compensation"]
+    assert [a for a, m_, p in env.stack.writes()] == ["erpnext", "lago"]                       # S3 and S4 were never sent
+    # AOS-DD's own pre-dispatch refusal (a retargeted plan) goes through the same base outcome
+    r2 = env.runner()
+    mid2 = r2.submit("HALT2", REF, principal=REQ)
+    plan = r2.plan(mid2)
+    r2.svc.emit("AosddPlanApproved", mid2, approvals.mint(APPROVAL_SECRET, mid2, plan, APP.id))
+    r2.issue_write_grant(mid2, plan, APP)
+    r2.svc.emit("ObservationWritten", mid2, {"key": "plan", "value": {"status": "ok", "executed": True, "plan": {**plan, "attempt": 9}, "plan_sha256": plan["plan_sha256"]}, "source": "evil", "confidence": 100.0, "source_type": "human", "source_ref": ""})
+    r2.rt.approve(mid2, r2.rt.repo.pending_human(mid2)["node_id"], "approve", principal=APP)
+    assert [e for e in r2.svc.store.for_mission(mid2) if e.type in ("AosddMissionHalted", "AosddStepRefused", "ApprovalInvalidated")]

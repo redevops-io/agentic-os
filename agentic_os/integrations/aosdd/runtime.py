@@ -97,14 +97,12 @@ class AosddMissionRuntime(MissionRuntime):
 
     # ---- authority: the base enforces the envelope in every profile; an ESCALATE (a limit the owner could extend) is a refusal here, not a gate
     def _halt(self, m, node, rule: str, reason: str) -> None:
+        """A plan/approval/op-id refusal (AOS-DD's own checks). The base writes the outcome (`effects_remaining`, "nothing was undone") and the
+        state; only the AOS-DD event is added here."""
+        from types import SimpleNamespace  # noqa: PLC0415
         done = [n.capability for n in self._plans[m.id].graph.nodes if self.repo.node_status(m.id).get(n.id) == NodeState.DONE and n.side_effecting]
-        m.outcome = {"blocked": rule, "node": node.id, "capability": node.capability, "reason": reason, "effects_remaining": done,
-                     "compensation": "none performed: undoing completed steps is a separate, explicit operator action"}
         self.store.append("AosddMissionHalted", m.id, {"node_id": node.id, "capability": node.capability, "rule": rule, "reason": reason, "effects_remaining": done})
-        self._set_state(m, MissionState.FAILED)
-
-    def _block_authority(self, m, node, res) -> None:
-        self._halt(m, node, "authority_" + (res.rule if res else "no_authority"), res.reason if res else "no authority is recorded for this mission")
+        self._block_authority(m, node, SimpleNamespace(rule=rule, reason=reason, amendment=None))
 
     def _pre_exec_ok(self, m, plan, node) -> bool:
         if node.capability not in WRITE_CAPS:
