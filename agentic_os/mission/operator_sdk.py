@@ -10,6 +10,10 @@ An app declares its capabilities (syscalls) once and gets, for free:
 This is the seam that turns `agents/<app>` (today: an AgentConsole) into a Mission Runtime
 operator without changing how the app runs standalone.
 
+`POST /invoke` is decided by `invoke_gate.py` in every execution profile: a side-effecting capability runs only for an authenticated identity with
+current, scoped authority and the applicable approval; the only non-production stand-in is an explicit, named `AuthorityTestPolicy`
+(`Operator(test_policy=...)`). Every decision is audited. `Operator.invoke()` (in-process, used by `LocalOperatorClient`) is the trusted path and is not gated.
+
 Idempotency cache: per-process, bounded LRU (AGENTIC_OS_IDEMPOTENCY_MAX, default 10000). Only results that
 are not failure-shaped (``mission.verify.result_failed``) are cached — a failed or raised call re-executes
 on retry (a side-effect-free staged ``pending_approval`` result is cached; the approved retry has its own key). With multiple replicas the cache is not shared (see ``approval.SharedStore``).
@@ -23,6 +27,7 @@ from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from typing import Callable
 
+from .authority_policy import AuthorityTestPolicy
 from .compensation import CompensationSpec, coerce as coerce_compensation
 from .types import CapabilityManifest, CapabilitySpec, NodeCost, to_jsonable
 
@@ -134,10 +139,31 @@ CURRENT_IDEMPOTENCY_KEY: "_cv.ContextVar[str]" = _cv.ContextVar("operator_idempo
 
 
 class Operator:
-    """One app's capability operator: manifest + handlers + idempotency dedupe."""
+    """One app's capability operator: manifest + handlers + idempotency dedupe.
 
-    def __init__(self, name: str, capabilities: list[Capability]):
+    ``POST /invoke`` (``router()``) runs a side-effecting capability only for an authenticated identity with current, scoped authority and
+    the applicable approval, in every execution profile (``invoke_gate``). ``test_policy`` is the one non-production way to run without
+    an envelope or an approval: an explicit, named ``AuthorityTestPolicy`` (constructor argument, ``AGENTIC_OS_OPERATOR_TEST_POLICY`` file,
+    or this class attribute set by a test suite). With none configured every side-effecting /invoke is refused. In production a policy
+    given to the constructor or the environment raises ``ProfileError`` and the class attribute is ignored."""
+
+    #: non-production only: the explicit, named stand-in for an owner's envelope / approval on /invoke (see authority_policy.py). None = none.
+    test_policy: "AuthorityTestPolicy | None" = None
+
+    def __init__(self, name: str, capabilities: list[Capability], *, test_policy: "AuthorityTestPolicy | None" = None,
+                 audit_store=None, authority_keys=None, principal_verifier=None):
         self.name = name
+        from .invoke_gate import ENV_REMOVED_FLAG, InvokeAudit, InvokeGate, test_policy_from_env  # noqa: PLC0415
+        from .profile import ProfileError, is_production  # noqa: PLC0415
+        configured = test_policy if test_policy is not None else test_policy_from_env()
+        if configured is not None:
+            if is_production():
+                raise ProfileError("an AuthorityTestPolicy is never honoured in the production profile: the owner's envelope and a human "
+                                   "approval are the only authority there")
+            self.test_policy = configured
+        if os.environ.get(ENV_REMOVED_FLAG, "").strip() == "1":
+            _log.warning("%s is no longer honoured: a mandatory approval is waived only by an explicit AuthorityTestPolicy that lists the "
+                         "capability under 'unapproved' (non-production only)", ENV_REMOVED_FLAG)
         for c in capabilities:
             c.spec.operator = c.spec.operator or name
         self.manifest = CapabilityManifest(operator=name, capabilities=[c.spec for c in capabilities])
@@ -156,6 +182,9 @@ class Operator:
         self.authority = _operator_authority()
         self.calls: "deque[tuple[str, str]]" = deque(maxlen=10_000)  # (capability, idempotency_key) — recent, for assertions
         self._inflight: dict[tuple, dict] = {}   # dedupe key -> {"done": Event, "result": ..., "ok": bool}
+        # the /invoke decision (identity, authority, approval) and its audit trail
+        self.gate = InvokeGate(self, audit=InvokeAudit(name, audit_store) if audit_store is not None else None,
+                               authority_keys=authority_keys, principal_verifier=principal_verifier)
 
     def invoke(self, capability: str, inputs: dict, idempotency_key: str = "",
                *, secrets: "dict | None" = None) -> dict:
@@ -290,7 +319,7 @@ class Operator:
 
     # ── HTTP surface (mount into the app's FastAPI) ──────────────────────────
     def router(self):
-        from fastapi import APIRouter, Header, HTTPException, Request
+        from fastapi import APIRouter, Header, HTTPException, Request, Response
         from pydantic import BaseModel
 
         _warn_if_no_approval_secret(self.name)
@@ -310,18 +339,27 @@ class Operator:
             """Effective security posture of THIS operator, for readiness checks and Edge Sentinel."""
             from .profile import status  # noqa: PLC0415
             from ..app_gate import authorization_fields  # noqa: PLC0415
-            return {**status(self.authority, replay_durable=bool(getattr(self.replay_guard, "durable", None)
-                                                                 or type(self.replay_guard).__name__ == "SqliteReplayGuard")), **authorization_fields(self.name)}
+            posture = status(self.authority, replay_durable=bool(getattr(self.replay_guard, "durable", None)
+                                                                 or type(self.replay_guard).__name__ == "SqliteReplayGuard"))
+            tp = self.gate.policy()
+            if tp is not None:
+                posture["warnings"] = [*posture["warnings"], f"/invoke runs under the explicit test policy {tp.name!r} (non-production only)"]
+                posture["ok"] = False
+            # what a side-effecting /invoke needs, in every profile; the test policy in force (if any) is named here
+            invoke = {"identity_required": True, "authority_checked_at_call_time": True, "approval_enforced": True,
+                      "test_policy": ({**tp.to_record(), "digest": tp.digest()} if tp is not None else None)}
+            return {**posture, **authorization_fields(self.name), "invoke": invoke}
 
         @router.get("/capabilities")
         def capabilities():
             return to_jsonable(self.manifest)
 
         @router.post("/invoke")
-        def invoke(request: Request, body: InvokeBody, idempotency_key: str | None = Header(default=None),
+        def invoke(request: Request, response: Response, body: InvokeBody, idempotency_key: str | None = Header(default=None),
                    authorization: str | None = Header(default=None),
                    x_control_token: str | None = Header(default=None, alias="X-Control-Token")):
             from .control_auth import authorize_operator_invoke  # noqa: PLC0415
+            from .invoke_gate import InvokeRefused  # noqa: PLC0415
             # KD-4: the CALLER credential is X-Control-Token (or, for existing callers, Authorization: Bearer); with the header present Authorization belongs to the END USER's identity
             hdr = request.headers
             duplicated = len(hdr.getlist("x-control-token")) > 1 or len(hdr.getlist("authorization")) > 1          # BB-02
@@ -333,6 +371,13 @@ class Operator:
                 if claimed not in (None, "") and str(claimed) != caller.tenant:
                     raise HTTPException(403, "tenant does not match the authenticated credential")
             key = body.idempotency_key or idempotency_key or ""
+            gate = self.gate
+            # 1. IDENTITY (all profiles): a side-effecting call needs an authenticated principal (or the named test identity of an explicit test policy).
+            #    Decided before anything single-use is consumed. The credential-less development caller is not an identity.
+            try:
+                who = gate.identify(caller, body.capability, key)
+            except InvokeRefused as e:
+                raise HTTPException(e.status, e.message, headers=e.headers or None)
             # AUTHORISE, THEN APPROVE, THEN EXECUTE: the grant is asked BEFORE anything about approval. A caller who may not run the capability gets the denial, never an approval prompt, a 403 about
             # execution authorization or a 404 (those would reveal that the capability exists and has side effects, and let the caller queue requests for the approvers), and a denied call consumes
             # nothing single-use (an approval token or an execution-authorization nonce is verified only below). A no-op when permissions are not requested.
@@ -345,9 +390,8 @@ class Operator:
             # handler execute (it stages / stays pending instead). The runtime delivers a real approval through
             # the trusted in-process invoke (co-located) or an authenticated internal channel — never this open
             # endpoint — so legitimate approval flows are unaffected.
-            from .approval import strip_approval_keys, verify_approval_token  # noqa: PLC0415
+            from .approval import approval_token_binding, strip_approval_keys, verify_approval_token  # noqa: PLC0415
             from .execution_auth import strip_exec_auth_keys, verify_execution_authorization  # noqa: PLC0415
-            from .profile import is_production  # noqa: PLC0415
             inputs = strip_exec_auth_keys(strip_approval_keys(body.inputs or {}))
             # An execution authorization is the proof a trusted control point decided THIS call. It is verified before
             # anything else and the mission identity is taken from its signed claims, never from the request body.
@@ -362,6 +406,7 @@ class Operator:
                     inputs["_mission"] = claims["mission_id"]       # a forged body mission_id changes nothing
             # A runtime-delivered approval arrives ONLY as a signed, operator/capability/inputs-bound,
             # single-use token. Verified => inject the marker AFTER the strip. Anything else => ignored (stages).
+            marker, approval_mission = None, ""
             if body.approval_token:
                 marker = verify_approval_token(None, body.approval_token, operator=self.name,
                                                capability=body.capability, inputs=inputs,
@@ -369,28 +414,25 @@ class Operator:
                                                replay_guard=self.replay_guard)
                 if marker is not None:
                     inputs["_approval"] = marker
+                    approval_mission = approval_token_binding(body.approval_token).get("mission_id") or ""
                 else:
                     _warn_unverified_approval()
             spec = self._specs.get(body.capability)
-            if (is_production() and spec is not None and spec.side_effecting and claims is None
-                    and not inputs.get("_approval")):
-                # Authentication is not authority: a valid operator/tenant token does not by itself authorise a
-                # consequential action. Refuse BEFORE the handler: it neither runs nor stages.
-                raise HTTPException(403, "execution authorization required: a side-effecting capability needs a "
-                                         "human approval or an execution authorization issued after the owner's "
-                                         "envelope and policy were evaluated")
-            if spec is not None and spec.approval_required and claims is not None and not inputs.get("_approval"):
-                # defence in depth: an execution authorization (envelope/standing grant) can never stand in for a
-                # capability's MANDATORY approval, whoever issued it
-                raise HTTPException(403, "this capability requires a human approval; an execution authorization "
-                                         "cannot satisfy it")
-            if (spec is not None and spec.approval_required and claims is None and not inputs.get("_approval")
-                    and not _unapproved_invoke_allowed()):
-                # F21: `approval_required` is the capability's own statement that a human decides. It is enforced on
-                # EVERY path and in EVERY profile: without a verified human approval the handler does not run, it
-                # stages (the same preview the mission runtime treats as "not executed").
+            # 2 + 3. CURRENT SCOPED AUTHORITY and the APPLICABLE APPROVAL (all profiles, see invoke_gate.py). Refused here, the handler neither runs nor stages.
+            try:
+                decision = gate.authorize(who, body.capability, inputs, claims=claims, approval=marker,
+                                          approval_mission=approval_mission, key=key)
+            except InvokeRefused as e:
+                raise HTTPException(e.status, e.message, headers=e.headers or None)
+            if decision.stage:
+                # F21: `approval_required` is the capability's own statement that a human decides, in EVERY profile: without a verified
+                # human approval the handler does not run, it stages (the same preview the mission runtime treats as "not executed").
                 return {"result": pending_approval(body.capability, reason="approval_required",
                                                    message="this capability needs a human approval; nothing was done")}
+            if decision.basis.startswith("test_policy:") or who.test_identity:
+                response.headers["X-Authority-Basis"] = decision.basis or f"test_policy:{who.test_identity}"
+            if decision.approval.startswith("waived:"):
+                response.headers["X-Authority-Approval"] = decision.approval        # a mandatory approval was waived by the named test policy
             if claims is not None and claims.get("dispatch_by") == "operator":
                 # A direct-action authorization: the reservation is still RESERVED and THIS is the dispatch. Only one
                 # caller on one replica can win it, and a swept/expired/released reservation can never be dispatched.
@@ -414,14 +456,6 @@ class Operator:
 
 
 _WARN_AT: dict = {}
-
-
-def _unapproved_invoke_allowed() -> bool:
-    """An explicit, named test/demo override. Never honoured in production, and never the default in any profile: development
-    does not silently reinterpret a capability's approval requirement."""
-    import os  # noqa: PLC0415
-    from .profile import is_production  # noqa: PLC0415
-    return os.environ.get("AGENTIC_OS_ALLOW_UNAPPROVED_INVOKE", "").strip() == "1" and not is_production()
 
 
 def _operator_authority():

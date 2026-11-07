@@ -32,18 +32,38 @@ class AuthorityTestPolicy:
     reason: str
     allow: tuple[str, ...] = ()              # fnmatch patterns of capabilities allowed to execute
     compensate: tuple[str, ...] = ()         # fnmatch patterns of FORWARD capabilities whose compensation is allowed
-    anonymous_operators: bool = False        # approve / reject / resume / compensate without an authenticated principal
+    anonymous_operators: bool = False        # approve / reject / resume / compensate (and, at an operator's /invoke, call) without an authenticated principal
+    unapproved: tuple[str, ...] = ()         # operator /invoke only: fnmatch patterns of capabilities whose mandatory approval this policy waives
 
     def __post_init__(self) -> None:
         if not str(self.name).strip() or not str(self.reason).strip():
             raise ValueError("a test policy needs a name and a stated reason")
         object.__setattr__(self, "allow", tuple(str(p) for p in self.allow))
         object.__setattr__(self, "compensate", tuple(str(p) for p in self.compensate))
+        object.__setattr__(self, "unapproved", tuple(str(p) for p in self.unapproved))
 
     @classmethod
-    def allow_all(cls, name: str, reason: str, *, anonymous_operators: bool = True) -> "AuthorityTestPolicy":
-        """Every capability may run and be compensated. Deliberately verbose to read at the call site."""
-        return cls(name=name, reason=reason, allow=(ANY,), compensate=(ANY,), anonymous_operators=anonymous_operators)
+    def allow_all(cls, name: str, reason: str, *, anonymous_operators: bool = True, unapproved: bool = False) -> "AuthorityTestPolicy":
+        """Every capability may run and be compensated. Deliberately verbose to read at the call site. ``unapproved=True`` also waives
+        every capability's mandatory approval at an operator's /invoke (the runtime never reads it)."""
+        return cls(name=name, reason=reason, allow=(ANY,), compensate=(ANY,), anonymous_operators=anonymous_operators,
+                   unapproved=(ANY,) if unapproved else ())
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "AuthorityTestPolicy":
+        """Build a policy from a JSON object. Unknown keys are an error (a typo must not silently narrow or widen a policy)."""
+        if not isinstance(d, dict):
+            raise ValueError("a test policy is a JSON object")
+        known = {"name", "reason", "allow", "compensate", "anonymous_operators", "unapproved"}
+        extra = sorted(set(d) - known)
+        if extra:
+            raise ValueError(f"unknown test policy field(s): {', '.join(extra)}")
+        for k in ("allow", "compensate", "unapproved"):
+            if k in d and (not isinstance(d[k], (list, tuple)) or not all(isinstance(p, str) for p in d[k])):
+                raise ValueError(f"test policy {k!r} must be a list of capability patterns")
+        return cls(name=str(d.get("name", "")), reason=str(d.get("reason", "")), allow=tuple(d.get("allow", ())),
+                   compensate=tuple(d.get("compensate", ())), anonymous_operators=d.get("anonymous_operators", False) is True,
+                   unapproved=tuple(d.get("unapproved", ())))
 
     def permits(self, capability: str) -> bool:
         return any(fnmatchcase(capability, p) for p in self.allow)
@@ -51,9 +71,15 @@ class AuthorityTestPolicy:
     def permits_compensation(self, capability: str) -> bool:
         return any(fnmatchcase(capability, p) for p in self.compensate)
 
+    def waives_approval(self, capability: str) -> bool:
+        return any(fnmatchcase(capability, p) for p in self.unapproved)
+
     def to_record(self) -> dict[str, Any]:
-        return {"name": self.name, "reason": self.reason, "allow": list(self.allow), "compensate": list(self.compensate),
-                "anonymous_operators": bool(self.anonymous_operators)}
+        rec = {"name": self.name, "reason": self.reason, "allow": list(self.allow), "compensate": list(self.compensate),
+               "anonymous_operators": bool(self.anonymous_operators)}
+        if self.unapproved:                  # present only when used, so the record and digest of an existing policy do not change
+            rec["unapproved"] = list(self.unapproved)
+        return rec
 
     def digest(self) -> str:
         return "sha256:" + hashlib.sha256(json.dumps(self.to_record(), sort_keys=True, separators=(",", ":")).encode()).hexdigest()

@@ -173,7 +173,10 @@ def configure(mp: MonkeyPatch, mode: str, workdir: str) -> None:
     mp.setenv("SENTINEL_RATE_BURST", "1000000000")                           # edge-sentinel's per-IP limiter answers 429 before the handler: not what is swept
     mp.setenv("SENTINEL_RATE_PER_MIN", "1000000000")
     mp.setenv("AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS", "1")                    # the operator's own HTTP credential is tested elsewhere; this sweep tests the authorization
-    mp.setenv("AGENTIC_OS_ALLOW_UNAPPROVED_INVOKE", "1")
+    from agentic_os.mission.authority_policy import AuthorityTestPolicy                            # the sweep declares its named test policy (no ambient development allowance)
+    from agentic_os.mission.operator_sdk import Operator
+    mp.setattr(Operator, "test_policy", AuthorityTestPolicy.allow_all(
+        "sweep-operator-default", "the sweep tests route authorization, not operator authority", anonymous_operators=True, unapproved=True))
     mp.setattr(app_gate, "_GATES", {})
     mp.setattr(app_gate, "_ENTERPRISE", {})
     mp.setattr(app_gate, "_PROCESS_AUTHORIZER", None)

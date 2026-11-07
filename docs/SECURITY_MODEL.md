@@ -106,8 +106,8 @@ keeps those apart.
 
 | Profile | Meaning |
 |---|---|
-| `production` | A durable authority store, guard and ledger are required; the mission runtime, gateway and Fleet refuse to start without one. Every mission node is checked against the owner's envelope. Operators refuse a side-effecting call that has no approval or execution authorization, and require a durable, shared replay store. |
-| `development` | Local mode: durability is not required. The mission runtime enforces an envelope when the mission has one and otherwise refuses side effects unless it was given an explicit test policy (see "Execution authority in every profile" below). |
+| `production` | A durable authority store, guard and ledger are required; the mission runtime, gateway and Fleet refuse to start without one. Every mission node is checked against the owner's envelope. Operators require a durable, shared replay store. |
+| `development` | Local mode: durability is not required. The mission runtime and an operator's `/invoke` enforce authority exactly as in production, and otherwise refuse side effects unless an explicit, named test policy was configured (see "Execution authority in every profile" and "The operator boundary" below). |
 | `test` | Injected guards and clocks; durability not required. Same rule as `development`. |
 
 An **unset** profile behaves as `development` and logs a warning (once per component). The mission runtime no longer runs
@@ -125,13 +125,53 @@ token, no anonymous operator access).
 
 ### The operator boundary
 
-In production an operator's `POST /invoke` runs a **side-effecting** capability only if the call carries one of:
+An operator's `POST /invoke` runs a **side-effecting** capability only when all three of the following hold, in **every** profile
+(`production`, `development`, `test` and unset). The profile does not change what is required; it only decides whether an explicit test
+policy may stand in (see below). Implementation: `agentic_os/mission/invoke_gate.py`, called from `Operator.router()`.
 
-1. a **human approval token** (`approval.py`): unchanged, bound to operator, capability, mission, node and inputs, single-use; or
-2. an **execution authorization** (`execution_auth.py`): issued only after the owner's envelope and policy were evaluated.
+1. **An authenticated identity.** An `AuthenticatedPrincipal` (`mission/principal.py`) built from the caller credential that
+   `control_auth` accepted (`X-Control-Token`, or `Authorization: Bearer` for existing callers; admin or tenant token). The credential-less
+   caller that `AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS=1` allows in development is marked `anonymous` and is not an identity: it can call a
+   read-only capability, never a side-effecting one (401). The flag is not honoured in production at all (503, as if unset).
+2. **Current, scoped authority**, evaluated when the call arrives with `AuthorityGuard.check` (revocation, expiry, delegation chain, scope,
+   resources, tier, wall clock; no counter moves), never remembered from an earlier decision:
+   * a verified **execution authorization** (`execution_auth.py`, below): the operator reads the reservation behind it from the shared
+     authority ledger, takes the envelope key from there, and checks that envelope again. A reservation it cannot find, or one for another
+     capability or tenant, is a refusal. An operator with no authority store cannot re-evaluate: it refuses in production, and outside
+     production accepts the signed authorization as the control point's decision (the audit record says `execution_authorization`);
+   * or a verified **human approval** bound to a mission whose envelope covers the call (the mission's own key, then `<tenant>:direct`, or
+     whatever `Operator(authority_keys=...)` returns). An approval alone is not authority;
+   * or, outside production only, an explicit **test policy** that lists the capability, and only while no envelope covers the call.
+   A tenant credential acts only for its own tenant; the all-tenant admin credential acts for the tenant of the authorization or envelope.
+3. **The applicable approval.** A capability declared `approval_required` runs only with a verified approval token bound to its exact inputs;
+   an execution authorization can never stand in for it (403). Without one the call stages (`pending_approval`, nothing runs) after authority
+   has been established, so a caller without authority gets the refusal, not an approval prompt. An envelope verdict of `ESCALATE` (a tier or
+   amount past the grant) also needs a verified approval. A human approval satisfies an `ESCALATE`; it never overrides a `DENY` (revoked,
+   expired, forbidden, out of scope, integrity failure).
 
-A valid operator or tenant token alone is refused with 403 *before* the handler runs (it neither executes nor stages).
-Reads need only authentication.
+**Read-only capabilities** (not `side_effecting`, not `approval_required`) need a credential whenever one is configured and no envelope
+outside production. This is the rule the mission runtime applies to a read-only node. In production a read-only call still needs the
+authenticated credential; the operator does not evaluate an envelope for it.
+
+**Test policy (non-production only).** With nothing configured, every side-effecting `/invoke` is refused (401 for no identity, 403
+otherwise) and no handler runs. The only way to run without an envelope or approval is an `AuthorityTestPolicy` (`mission/authority_policy.py`)
+given to `Operator(test_policy=...)`, read from the JSON file named by `AGENTIC_OS_OPERATOR_TEST_POLICY`, or set as the class attribute
+`Operator.test_policy` by a test suite: a name, a stated reason, `allow` patterns, `anonymous_operators` (the credential-less caller then runs
+as the named test identity `test-identity:<name>`, recorded as unauthenticated) and `unapproved` patterns (the capabilities whose mandatory
+approval it waives). It is shown by `GET /_security` (`invoke.test_policy`, and a warning), in the `X-Authority-Basis` response header (and `X-Authority-Approval` when it waived an approval) and in
+every audit record. It never overrides an envelope that denies the call. In production a policy given to the constructor or the environment
+raises `ProfileError` and a class-level default is ignored. `AGENTIC_OS_ALLOW_UNAPPROVED_INVOKE` is no longer read (a warning says so).
+
+**Audit.** Every refusal, staged call and side-effecting allow is recorded: operator, capability, who (id, kind, tenant, method,
+authenticated or test identity), tenant, mission, reservation, envelope key and digest, rule, reason, authority basis, approval state, profile,
+test policy, a SHA-256 of the inputs (never the inputs), idempotency key. Records go to a bounded in-memory ring (`Operator.gate.audit.recent`),
+the `agentic_os.operator.audit` logger and, when `AGENTIC_OS_OPERATOR_AUDIT_LOG` (or `Operator(audit_store=...)`) names a hash-chained
+`EventStore`, to that log (stream `operator-invoke:<operator>`). With a durable store configured, a side-effecting call whose allow
+record cannot be written is refused (503) instead of run unrecorded. A plain read is kept in the ring only.
+
+**What a refusal says.** The wording is fixed: `authentication required: ...` (401) or `execution authorization required: this call is not
+authorised` (403), whatever the reason. It does not say whether an envelope, a mission, a reservation or the capability exists; an unknown
+capability is refused like a real one. The rule and reason are in the audit record only.
 
 An execution authorization is bound to: operator, capability, tenant, mission, node, attempt, reservation (lease), envelope
 digest, idempotency key and the canonical effective inputs. Change a recipient, an amount, the capability or the key and it no
@@ -151,8 +191,13 @@ as an approval or the reverse. An authorization can never satisfy a capability t
 fresh authorization exists for that attempt, so the effect cannot be retried by minting another token. Reconcile it
 (`AuthorityGuard.reconcile(lease, executed)`) after an independent check.
 
-Operators that share the runtime's `AGENTIC_OS_AUTHORITY_DB` settle (or mark UNKNOWN) the reservation behind an authorization they
-consumed; required for the direct-action flow, redundant with the runtime for mission calls.
+Operators that share the runtime's `AGENTIC_OS_AUTHORITY_DB` re-evaluate the envelope behind an authorization on arrival and settle (or mark
+UNKNOWN) the reservation behind one they consumed; the shared database is required for the direct-action flow and for the call-time check.
+
+Limits: `Operator.invoke()` (the in-process path used by `LocalOperatorClient` and by tests) is not the HTTP surface and does not run this
+gate: its caller is the trusted runtime, which has already decided. The `principal` proof is an in-process HMAC (see "Operator principals").
+Execution authorizations are re-evaluated only by an operator that can read the authority ledger; one without it relies on the signature and the
+120 second lifetime outside production, and refuses in production.
 
 ### The apps' own REST routes
 
@@ -175,7 +220,7 @@ Contexts: **human** (operator credential, admin token, or a tenant token that ho
 On a multiplexed `/agent/run` route an agent earns an approval marker only for actions listed in the route's `agent_actions` (none by default).
 
 `approval_required` is enforced on every operator `/invoke` in every profile: without a verified human approval the handler does not run
-(`AGENTIC_OS_ALLOW_UNAPPROVED_INVOKE=1` is a non-production testing override).
+(a mandatory approval is waived only by an explicit, named test policy that lists the capability under `unapproved`, outside production; see "The operator boundary").
 
 Adding a write route without a policy fails CI. See `audit/operator_capability_inventory.md` (generated by `scripts/audit_operator_capabilities.py`)
 and findings F20 to F22 in `audit/autonomy-authority-audit.md`, including what this does NOT cover (the kernel services, and network egress).
@@ -728,7 +773,7 @@ rest on can be checked. This section describes what the code does; the tests nam
   `False` refuses it (`authority_denied`), for a runtime whose human decision is made elsewhere. A mission stopped by an authority refusal lists
   `outcome.effects_remaining` (the side effects that ran and stay) and says no compensation was performed. Tests:
   `tests/test_authority_gate_options.py`.
-* **Not covered:** the operator HTTP `/invoke` surface keeps its own profile rules (above); the dispatch check is a mission-runtime check.
+* **Operator HTTP `/invoke`:** the same rules apply there in every profile, with their own decision and audit ("The operator boundary" above); the dispatch check in this list is the mission runtime's.
 
 ### Compensation authority
 

@@ -96,7 +96,7 @@ def default_issuer() -> PrincipalIssuer:
 def principal_of_caller(caller) -> AuthenticatedPrincipal:
     """The principal behind an authenticated ``control_auth.Caller``: ``admin`` (all tenants), ``approver:<tenant>`` or
     ``requester:<tenant>``. Only call this with the result of ``resolve_caller`` (i.e. after the token was checked)."""
-    if caller is None:
+    if caller is None or getattr(caller, "anonymous", False):
         raise PrincipalRequired("no authenticated caller")
     tenant = getattr(caller, "tenant", None)
     role = getattr(caller, "role", "") or "admin"
