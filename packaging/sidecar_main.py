@@ -116,9 +116,8 @@ def main(argv=None) -> int:
         return 0
     if "--exit-on-stdin-eof" in flags:
         threading.Thread(target=_watch_stdin, name="launcher-tether", daemon=True).start()
-    from agentic_os.projects_api import main as serve
-    serve()
-    return 0
+    from agentic_os.projects_entry import main as serve   # a bad PROJECTS_DRILLDOWN_* configuration: one stderr line, exit 1, no traceback
+    return serve()
 
 
 if __name__ == "__main__":

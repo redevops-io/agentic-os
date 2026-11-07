@@ -1194,9 +1194,10 @@ def test_launcher_mode_reports_bind_conflict_without_a_secret_and_refuses_non_lo
 
 
 def test_sidecar_main_serve_path_goes_through_the_gate():
-    """packaging/sidecar_main.py (the frozen entry) calls projects_api.main(): same gate."""
+    """packaging/sidecar_main.py (the frozen entry) calls projects_entry.main(), which calls projects_api.main(): same gate."""
     src = (ROOT / "packaging" / "sidecar_main.py").read_text()
-    assert "from agentic_os.projects_api import main as serve" in src
+    assert "from agentic_os.projects_entry import main as serve" in src
+    assert "from .projects_api import main as serve" in (ROOT / "agentic_os" / "projects_entry.py").read_text()
     api = (ROOT / "agentic_os" / "projects_api.py").read_text()
     assert "from .local_serve import serve" in api
 
