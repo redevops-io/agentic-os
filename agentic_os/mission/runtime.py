@@ -1364,14 +1364,19 @@ class MissionRuntime:
         THIS dispatch used was settled/released by someone else in the meantime (another executor took the step over and the ledger moved
         on). An UNKNOWN reservation is not superseded: that is the ordinary "outcome unknown" park."""
         held = self._dispatched_leases().get((str(m.id), node.id), "")
-        state = ""
+        state, resolved_by = "", ""
         if held and self.authority is not None:
             rec = self.authority.lease(held)
             state = rec["state"] if rec else "gone"
+            resolved_by = str(((rec or {}).get("meta") or {}).get("reconcile_status") or "")
         if e is not None and getattr(e, "stale_generation", False) is True:
             return {"lease_id": held, "lease_state": state, "why": "the executor reported that its claim was superseded"}
-        if state in ("settled", "released", "gone"):
-            return {"lease_id": held, "lease_state": state, "why": f"its reservation is already {state}: another executor took the step over"}
+        # A reservation is settled/released by the executor itself in the normal course (the operator settles its own authorization), so the
+        # state alone says nothing. It is a takeover when RECONCILIATION resolved it (reconcile_node, the probe supervisor: they record
+        # `reconcile_status` on the reservation) or when the record is gone.
+        if state == "gone" or (state in ("settled", "released") and resolved_by):
+            return {"lease_id": held, "lease_state": state, "why": f"its reservation was already {state}"
+                    + (f" by reconciliation ({resolved_by})" if resolved_by else "") + ": another executor took the step over"}
         return None
 
     def _park_stale(self, m: Mission, node, kind: str, detail: str, stale: dict) -> bool:

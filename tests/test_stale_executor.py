@@ -51,6 +51,13 @@ class Board:
                 "crm.finish": lambda i: (self.calls.append("crm.finish"), {"executed": True})[1]}
 
 
+def resolved_by_reconciliation(board, lease_id, *, executed):
+    """What `reconcile_node` / the probe supervisor do to a reservation when another executor (or a person) resolves it: the ledger transition AND the
+    `reconcile_status` record. (The executor settling its OWN reservation, as an operator does after executing, leaves no such record.)"""
+    assert board.rt.authority.reconcile(lease_id, executed=executed)
+    board.rt.authority.annotate(lease_id, reconcile_status="resolved_manually", resolved_by="another-executor")
+
+
 def run(board, *, guard=None):
     reg = CapabilityRegistry()
     reg.register(CapabilityManifest("m", specs()))
@@ -81,7 +88,7 @@ def assert_parked_not_failed_not_compensated(rt, m, board):
 def test_a_late_exception_after_the_reservation_was_settled_elsewhere_is_stale_evidence_and_never_runs_the_saga():
     guard, _ = guard_with(*COMPENSATE_ALL)
     board = Board()
-    board.takeover = lambda lid: board.rt.authority.reconcile(lid, executed=True)      # another executor finished the step and settled it
+    board.takeover = lambda lid: resolved_by_reconciliation(board, lid, executed=True)      # another executor finished the step and settled it
     board.late = lambda: (_ for _ in ()).throw(RuntimeError("connection reset after the request was sent"))
     rt, m = run(board, guard=guard)
     assert_parked_not_failed_not_compensated(rt, m, board)
@@ -93,7 +100,7 @@ def test_a_late_exception_after_the_reservation_was_settled_elsewhere_is_stale_e
 def test_a_late_exception_that_claims_nothing_was_applied_is_still_not_acted_on_when_the_step_was_taken_over():
     guard, _ = guard_with(*COMPENSATE_ALL)
     board = Board()
-    board.takeover = lambda lid: board.rt.authority.reconcile(lid, executed=True)
+    board.takeover = lambda lid: resolved_by_reconciliation(board, lid, executed=True)
     board.late = lambda: (_ for _ in ()).throw(NotApplied("the old request was refused"))     # not_applied is a claim about THAT request only
     rt, m = run(board, guard=guard)
     assert_parked_not_failed_not_compensated(rt, m, board)
@@ -102,7 +109,7 @@ def test_a_late_exception_that_claims_nothing_was_applied_is_still_not_acted_on_
 def test_a_late_success_after_the_reservation_was_released_elsewhere_is_not_committed():
     guard, _ = guard_with(*COMPENSATE_ALL)
     board = Board()
-    board.takeover = lambda lid: board.rt.authority.reconcile(lid, executed=False)     # someone proved it did not apply and returned the reservation
+    board.takeover = lambda lid: resolved_by_reconciliation(board, lid, executed=False)     # someone proved it did not apply and returned the reservation
     rt, m = run(board, guard=guard)                                                    # ... and then this executor answers with a success
     assert_parked_not_failed_not_compensated(rt, m, board)
     assert "NodeSucceeded" not in [e.type for e in rt.store.for_mission(m.id) if e.payload.get("node_id") and e.payload.get("capability") == "res.b"]
@@ -169,3 +176,33 @@ def test_a_reservation_already_marked_unknown_by_someone_else_is_the_ordinary_pa
     t = types_of(rt, m)
     assert m.state is MissionState.WAITING_RECONCILIATION and "ReconciliationRequired" in t
     assert "StaleResultRecorded" not in t and "NodeFailed" not in t and board.undone == []
+
+
+def test_an_executor_that_settles_its_own_reservation_and_then_answers_is_the_normal_path_not_a_takeover():
+    """The operator settles the authorization it executed under before the runtime hears the answer (operator_sdk). That is not a stale answer."""
+    guard, _ = guard_with(*COMPENSATE_ALL)
+    board = Board()
+    board.takeover = lambda lid: board.rt.authority.settle(lid)
+    rt, m = run(board, guard=guard)
+    t = types_of(rt, m)
+    assert "StaleResultRecorded" not in t and m.state is MissionState.SUCCEEDED and board.calls == ["res.a", "res.b", "crm.finish"]
+
+
+def test_an_executor_that_settles_its_own_reservation_and_then_fails_is_still_a_failure_of_the_step():
+    guard, _ = guard_with(*COMPENSATE_ALL)
+    board = Board()
+    board.takeover = lambda lid: board.rt.authority.settle(lid)
+    board.late = lambda: (_ for _ in ()).throw(NotApplied("the provider refused the request"))
+    rt, m = run(board, guard=guard)
+    t = types_of(rt, m)
+    assert "StaleResultRecorded" not in t and "NodeFailed" in t and sorted(board.undone) == ["a"]
+
+
+def test_a_reservation_that_is_gone_from_the_ledger_is_treated_as_superseded_and_parks():
+    guard, _ = guard_with(*COMPENSATE_ALL)
+    board = Board()
+    board.takeover = lambda lid: setattr(board.rt.authority, "lease", lambda _lid: None)       # the record behind the reservation cannot be found
+    board.late = lambda: (_ for _ in ()).throw(RuntimeError("connection reset after the request was sent"))
+    rt, m = run(board, guard=guard)
+    assert_parked_not_failed_not_compensated(rt, m, board)
+    assert ev(rt, m.id, "StaleResultRecorded")[0]["lease_state"] == "gone"
