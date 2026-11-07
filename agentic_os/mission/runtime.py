@@ -65,6 +65,13 @@ def _wall() -> float:
     return _time.time()
 
 
+class StaleExecution(RuntimeError):
+    """An executor reports that it lost its claim on a step (a newer generation exists) before it could record its answer. Whatever it
+    sent is evidence of a possible duplicate effect, never the step's outcome (see ``MissionRuntime._fail_node``)."""
+    stale_generation = True
+    not_applied = False
+
+
 class ResumeNotAuthorized(PermissionError):
     """Execution was attempted on a mission whose state was RECONSTRUCTED from the log (replay) without a current
     resume/re-execute authorization. Raised at the lowest execution layer, before any tool is called or event written."""
@@ -1130,6 +1137,9 @@ class MissionRuntime:
     def _leases(self) -> dict:
         return self.__dict__.setdefault("_authority_leases", {})
 
+    def _dispatched_leases(self) -> dict:
+        return self.__dict__.setdefault("_authority_dispatched", {})
+
     def _lease_of(self, m: Mission, node_id: str):
         return self._leases().get((str(m.id), node_id)) if self.authority is not None else None
 
@@ -1140,6 +1150,7 @@ class MissionRuntime:
         ent = self._lease_of(m, node.id)
         if not ent or not self.authority.dispatch_once(ent[0]):
             return None
+        self._dispatched_leases()[(str(m.id), node.id)] = ent[0]       # which reservation THIS dispatch used (see _superseded)
         ref = self._effect_ref(node.capability, inputs)
         self.authority.annotate(ent[0], dispatched_at=time.time(), execution_id=getattr(node, "idempotency_key", "") or None,
                                 idempotency_key=getattr(node, "idempotency_key", "") or None, effect_ref=ref or None)
@@ -1321,6 +1332,34 @@ class MissionRuntime:
                                                   "reconciled": True})
         self._meter(m, node, "ok")
 
+    def _superseded(self, m: Mission, node, e=None) -> "dict | None":
+        """Is the executor now answering for this node SUPERSEDED, i.e. no longer the one that owns the step? True (a dict naming the
+        reservation and why) when the executor itself says so (``stale_generation``, e.g. :class:`StaleExecution`), or when the reservation
+        THIS dispatch used was settled/released by someone else in the meantime (another executor took the step over and the ledger moved
+        on). An UNKNOWN reservation is not superseded: that is the ordinary "outcome unknown" park."""
+        held = self._dispatched_leases().get((str(m.id), node.id), "")
+        state = ""
+        if held and self.authority is not None:
+            rec = self.authority.lease(held)
+            state = rec["state"] if rec else "gone"
+        if e is not None and getattr(e, "stale_generation", False) is True:
+            return {"lease_id": held, "lease_state": state, "why": "the executor reported that its claim was superseded"}
+        if state in ("settled", "released", "gone"):
+            return {"lease_id": held, "lease_state": state, "why": f"its reservation is already {state}: another executor took the step over"}
+        return None
+
+    def _park_stale(self, m: Mission, node, kind: str, detail: str, stale: dict) -> bool:
+        """A superseded executor's answer (``kind`` = failure | result) is EVIDENCE of a possible duplicate effect, not an outcome: record it,
+        keep the step UNCERTAIN and park the mission for an operator. NO NodeFailed, NO saga (compensating work another executor completed
+        because this one was late would be wrong), NO commit of the result and NO automatic retry."""
+        self.store.append("StaleResultRecorded", m.id, {
+            "node_id": node.id, "capability": node.capability, "kind": kind, "detail": detail[:300], "lease_id": stale["lease_id"],
+            "lease_state": stale["lease_state"], "why": stale["why"],
+            "action": "parked for operator reconciliation; nothing retried, nothing committed, nothing compensated", "at": time.time()})
+        self._meter(m, node, "error")
+        self._park_for_reconciliation(m, node, "stale: a superseded executor's answer arrived; a duplicate effect is possible")
+        return False
+
     def _unknown_lease(self, m: Mission, node) -> str:
         """The reservation id if this node's reservation is UNKNOWN (it may have executed), else ''."""
         ent = self._lease_of(m, node.id)
@@ -1444,7 +1483,13 @@ class MissionRuntime:
 
     def _fail_node(self, m: Mission, plan: ExecutionPlan, world: WorldState, node, e) -> bool:
         """The operator raised — record, learn, compensate, fail. Shared by the serial and concurrent
-        paths so failure semantics are identical."""
+        paths so failure semantics are identical.
+
+        An answer from an executor that has been SUPERSEDED (see ``_superseded``) is not this step's failure: it is recorded as stale
+        evidence and the mission is parked for an operator, with no saga, no retry and no failure."""
+        stale = self._superseded(m, node, e)
+        if stale is not None:
+            return self._park_stale(m, node, "failure", f"{type(e).__name__}: {str(e)[:200]}", stale)
         self._lease_failed(m, node.id, ran=True, executed=False if getattr(e, "not_applied", False) else None)
         if self._unknown_lease(m, node):
             # The call may have been sent, so this is neither a failure nor safe to repeat. Park the mission; do not compensate
@@ -1465,7 +1510,12 @@ class MissionRuntime:
         """Apply a successful operator result: verify before it becomes authoritative, commit to world
         state, emit the success event. This mutates shared world/learning state, so the concurrent path
         calls it SERIALLY in deterministic node order after the parallel operator invocations have joined
-        — the network wait overlaps, the state transition does not."""
+        — the network wait overlaps, the state transition does not.
+
+        A result from an executor that has been SUPERSEDED (``_superseded``) is not committed: it is stale evidence (see ``_fail_node``)."""
+        stale = self._superseded(m, node)
+        if stale is not None:
+            return self._park_stale(m, node, "result", f"a result arrived after the step was taken over: {str(result)[:200]}", stale)
         node.result = result
         # A capability that ran WITHOUT a runtime approval and answered "staged / awaiting approval" did NOT
         # execute: it must not be committed as a success (the hole where an ungated node's

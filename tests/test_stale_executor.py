@@ -23,7 +23,7 @@ class Board:
 
     def __init__(self):
         self.calls, self.undone, self.rt, self.m = [], [], None, None
-        self.takeover = lambda lease_id: None
+        self.takeover = None
         self.late = lambda: {"executed": True, "b": 1}
 
     def lease_of_b(self):
@@ -42,7 +42,8 @@ class Board:
 
         def b(i):
             self.calls.append("res.b")
-            self.takeover(self.lease_of_b())
+            if self.takeover is not None:
+                self.takeover(self.lease_of_b())
             return self.late()
         return {"res.a": lambda i: (self.calls.append("res.a"), {"executed": True, "a": 1})[1], "res.b": b,
                 "res.undo_a": undo("a"), "res.undo_b": undo("b"),
@@ -157,3 +158,14 @@ def test_a_normal_success_is_unchanged():
     rt, m = run(board, guard=guard)
     t = types_of(rt, m)
     assert "StaleResultRecorded" not in t and board.calls == ["res.a", "res.b", "crm.finish"] and m.state is MissionState.SUCCEEDED
+
+
+def test_a_reservation_already_marked_unknown_by_someone_else_is_the_ordinary_park_not_a_stale_record():
+    guard, _ = guard_with(*COMPENSATE_ALL)
+    board = Board()
+    board.takeover = lambda lid: board.rt.authority.unknown(lid)                       # a watchdog marked the outcome unknown while the call was in flight
+    board.late = lambda: (_ for _ in ()).throw(RuntimeError("timeout after the request was sent"))
+    rt, m = run(board, guard=guard)
+    t = types_of(rt, m)
+    assert m.state is MissionState.WAITING_RECONCILIATION and "ReconciliationRequired" in t
+    assert "StaleResultRecorded" not in t and "NodeFailed" not in t and board.undone == []
