@@ -75,6 +75,21 @@ USER app
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD python -c "import os,urllib.request as u; u.urlopen('http://127.0.0.1:%s/health' % os.environ['PORT'], timeout=3)"
 ENV PORT=8203 PYTHONPATH=/app
+# The bind is declared, not hard-coded (P9): the image says it binds every interface — inside a network
+# namespace that is how a container is served — and the app's startup guard checks that declaration before
+# a single request is served. What the image deliberately does NOT do is enable exposure for you:
+# SENTINEL_ALLOW_EXPOSURE is the deployment's decision, made on the run/compose command together with an
+# operator credential (independently enforced on every execution route), e.g.
+#   docker run -e SENTINEL_ALLOW_EXPOSURE=1 -e SENTINEL_BASIC_AUTH_USER=... -e SENTINEL_BASIC_AUTH_PASS=... ...
+# A deliberately open read-only demo (execution stays authenticated and dry-run) must say so itself:
+#   -e SENTINEL_ALLOW_UNAUTHENTICATED_EXPOSURE=1
+# BREAKING by design: this image, started WITHOUT that deployment decision, refuses to come up.
+ENV SENTINEL_BIND_HOST=0.0.0.0
 EXPOSE 8203
 
-CMD ["uvicorn", "edge_sentinel.app:app", "--host", "0.0.0.0", "--port", "8203"]
+# Shell form so the declared bind host and port above are the ones actually bound. `exec` is what makes that safe:
+# the shell replaces itself with uvicorn, so uvicorn is still PID 1 and still receives SIGTERM for the graceful
+# shutdown the container depends on. The app module is quoted because the kernel entrypoint guard
+# (tests/test_app_dockerfiles.py) requires the package-qualified target to appear quoted, and a JSON-array CMD
+# would escape those quotes; a flat `app:app` target cannot resolve the package-relative imports.
+CMD exec uvicorn "edge_sentinel.app:app" --host "$SENTINEL_BIND_HOST" --port "$PORT"
