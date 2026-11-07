@@ -151,7 +151,10 @@ triage → core.triage(blurb=_llm_blurb) → agentic_os.app.llm.governed_text(
   kernel refuses to *label* a public host as in-boundary rather than issue a receipt that would claim it.
 - **What actually goes out, when you enable it:** a one-sentence instruction plus up to six active
   decision values with their scenario and severity — real source addresses from your CrowdSec store,
-  classified `CUSTOMER_CONFIDENTIAL`. That is why the routing label is verified rather than trusted.
+  classified `CUSTOMER_CONFIDENTIAL`. The kernel forms its judgement from the configured host — an
+  internal-suffix name, a loopback or private address, or a host you have allowlisted — so the
+  in-boundary label is verified by host form unless you allowlist a host, which the kernel then accepts
+  on your word.
 - **Model identity.** `REDEVOPS_LLM_MODEL` (default `DeepSeek-V4-Flash`) is the identifier your
   endpoint is asked for. It names the request; it does not establish which model answered. This
   README makes no claim about any specific model or vendor.
