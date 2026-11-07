@@ -320,6 +320,13 @@ def classify_steps(rt, m, plan, status, folded) -> "tuple[list[dict], list[dict]
     in_plan = {n.id for n in plan.graph.nodes}
     # a fork branch is not a plan node; once a compensation was recorded for it, it is an applied step too
     applied += [(nid, st.get("capability") or "", st.get("undo") or "") for nid, st in sorted(folded.items()) if nid not in in_plan]
+    # a superseded executor's late answer (StaleResultRecorded) is a POSSIBLE DUPLICATE EFFECT the log cannot tie to a recorded step result
+    stale = {}
+    for e in rt.store.for_mission(m.id):
+        if e.type == "StaleResultRecorded" and e.payload.get("node_id"):
+            stale.setdefault(e.payload["node_id"], e.payload)
+    seen = {a[0] for a in applied}
+    applied += [(n.id, n.capability, n.undo) for n in plan.graph.nodes if n.id in stale and n.id not in seen and n.side_effecting]
     for nid, capability, undo in applied:
         spec = rt.registry.get(capability) if capability else None
         cs = C.coerce(getattr(spec, "compensation", None)) if spec is not None else None
@@ -345,6 +352,11 @@ def classify_steps(rt, m, plan, status, folded) -> "tuple[list[dict], list[dict]
             res.append({"effect": ("the undo ran but nothing proved the effect is gone" if kind == "unverified"
                                    else f"the step's effect remains: compensation {comp}" + (f" ({why})" if why else "")),
                         "kind": kind, "source": "classification"})
+        if nid in stale:
+            cls = UNCERTAIN
+            why = why or "a superseded executor's answer arrived"
+            res.append({"effect": "possible duplicate effect: a superseded executor's answer arrived for this step (StaleResultRecorded); the application may hold a second record",
+                        "kind": "possible_duplicate", "source": "stale_result"})
         steps.append({"node_id": nid, "capability": capability, "classification": cls, "compensation": comp,
                       "verification": verification, "reason": why, "residual_effects": res})
         residuals += [{"node_id": nid, "capability": capability, **r} for r in res]

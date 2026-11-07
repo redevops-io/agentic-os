@@ -20,9 +20,13 @@ def mission_receipt(rt, mission_id: str) -> Dict[str, Any]:
     steps: List[Dict[str, Any]] = []
     approvals: List[Dict[str, Any]] = []
     outcome: Dict[str, Any] | None = None
+    stale: List[Dict[str, Any]] = []
     for e in rt.repo.timeline(mission_id):
         t, p = e.get("type"), e.get("payload") or {}
-        if t == "NodeSucceeded":
+        if t == "StaleResultRecorded":          # a superseded executor's late answer: a possible duplicate effect, never an outcome
+            stale.append({"seq": e.get("seq"), "node_id": p.get("node_id"), "capability": p.get("capability"), "kind": p.get("kind"),
+                          "terminal": bool(p.get("terminal")), "mission_state": p.get("mission_state", "")})
+        elif t == "NodeSucceeded":
             steps.append({"seq": e.get("seq"), "node_id": p.get("node_id"),
                           "capability": p.get("capability"), "result": p.get("result")})
         elif t == "ApprovalGranted":
@@ -52,6 +56,7 @@ def mission_receipt(rt, mission_id: str) -> Dict[str, Any]:
     return {
         **({"authority": {"basis": basis}} if basis else {}),
         **({"ledger_anchor": anchor} if anchor else {}),     # the tail anchor (tail truncation); absent for a log that has none yet
+        **({"stale_results": stale} if stale else {}),      # possible duplicate effects (superseded executors' answers), listed so nobody reads the mission as clean
         **({"rollback": rollback} if rollback else {}),     # what authorised the actions: the owner's envelope and/or a named test policy
         "mission_id": mission_id,
         "goal": rt.repo.goal(mission_id),
