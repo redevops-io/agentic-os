@@ -855,7 +855,15 @@ except Exception:  # noqa: BLE001
     _Principal = None
 
 
-def _principal(role: str = "", scope: str = ""):
+def _vuln_principal(role: str = "", scope: str = ""):
+    """The Doris vuln-DB principal (role + row-scope) for an outgoing advisory query.
+
+    Named `_vuln_principal`, NOT `_principal`: a second `_principal(request)` exists further down this
+    module (the AUTHENTICATED OPERATOR NAME for the case-response route). Two module-level defs of one
+    name bind the LAST one, so every `_principal()` call here resolved to the operator helper and raised
+    `TypeError: _principal() missing 1 required positional argument: 'request'` — silently swallowed by the
+    `except Exception` around scan enrichment, and a hard 400 on `vuln_db_lookup` — whenever Doris was
+    reachable. Test: test_vuln_db_principal.py (P7)."""
     if _Principal is None:
         return None
     role = (role or os.environ.get("VULN_DB_ROLE", "security")).lower()
@@ -1078,7 +1086,7 @@ def _t_scan_app(a: dict) -> dict:
     enrich = {}
     if _VDB is not None:
         try:
-            enrich = _VDB.enrich(r.findings, _principal())   # cross-reference our NVD/OSV vuln-DB
+            enrich = _VDB.enrich(r.findings, _vuln_principal())   # cross-reference our NVD/OSV vuln-DB
         except Exception:  # noqa: BLE001
             enrich = {}
     fixes = "\n".join(f"  • {f['action']}  ({f['severity']} · {f['id']})" + (" — ✓ in our vuln-DB" if f["id"] in enrich else "")
@@ -1208,7 +1216,7 @@ def _t_vuln_lookup(a: dict) -> dict:
     a = a or {}
     pkg = a.get("package") or a.get("pkg") or ""
     cve = a.get("cve") or a.get("id") or a.get("cve_id") or ""
-    rows = _VDB.lookup(package=pkg or None, cve=cve or None, principal=_principal())
+    rows = _VDB.lookup(package=pkg or None, cve=cve or None, principal=_vuln_principal())
     if not rows:
         return {"text": f"Our vuln-DB has no records for {('CVE ' + cve) if cve else ('package ' + pkg) or 'that'}.", "data": []}
     lines = [f"{r['cve_id']} · {r['package']} ({r.get('ecosystem') or '—'}) · cvss {r.get('cvss', 0)} → "
