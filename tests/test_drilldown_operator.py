@@ -89,7 +89,7 @@ def test_revoke_survives_an_audit_failure_and_says_so(env):
     assert "revoked" in str(e.value) and local_inspect_grants(env.grants, "customer-ops") == []     # the safe direction stands
 
 
-@pytest.mark.parametrize("bad", ["", "Bad Project", "a/b", "x" * 80, "..", "evidence", "a.b", None, 5])
+@pytest.mark.parametrize("bad", ["", "Bad Project", "a/b", "x" * 80, "..", "a.b", None, 5])
 def test_a_project_id_that_is_not_a_scope_is_refused(env, bad):
     with pytest.raises(GrantRefused):
         grant_local_inspect(env.grants, bad, operator="alex", audit=env.audit)

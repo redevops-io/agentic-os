@@ -127,6 +127,28 @@ def _secrets_cmd(args, b=None, stdin_tty=None) -> int:
     return 0
 
 
+def _drilldown_access_cmd(args, store) -> int:
+    """Give / take away the local owner's permission to read one project's recorded mission history (drill-down). Recorded in the
+    drill-down audit log (``--audit``, required: an unrecorded grant is not offered). See agentic_os/drilldown/operator.py."""
+    import getpass
+    from .drilldown.operator import LOCAL_OWNER_ID, GrantRefused, grant_local_inspect, revoke_local_inspect
+    from .evidence_query import JsonlAuditSink
+    who = args.operator or getpass.getuser()
+    audit = JsonlAuditSink(args.audit)
+    try:
+        if args.pcmd == "allow-drilldown":
+            g = grant_local_inspect(store, args.project, operator=who, audit=audit)
+            print(f"  granted: {LOCAL_OWNER_ID} may read the recorded history of project {args.project} (evidence.{args.project}.inspect, grant {g.id}); recorded in {args.audit}")
+            print(f"  revoke : agentic-os permissions revoke-drilldown --project {args.project} --audit {args.audit}" + (f" --dir {args.dir}" if args.dir else ""))
+            return 0
+        n = revoke_local_inspect(store, args.project, operator=who, audit=audit)
+        print(f"  revoked {n} grant(s) of {LOCAL_OWNER_ID} on project {args.project}; recorded in {args.audit}; effective on the next request")
+        return 0
+    except GrantRefused as e:
+        print(f"  error: {e}", file=sys.stderr)
+        return 2
+
+
 def _permissions_cmd(args) -> int:
     from . import permissions_setup as ps
     from .permissions import GrantStorageError, GrantStore
@@ -204,6 +226,8 @@ def _permissions_cmd(args) -> int:
             n = store.recover_counter()
             print(f"  recorded: the rollback counter is re-established at {n}")
             return 0
+        if args.pcmd in ("allow-drilldown", "revoke-drilldown"):
+            return _drilldown_access_cmd(args, store)
         if args.pcmd == "list":
             for g in sorted(store.list(), key=lambda g: (g.resource_name, g.subject)):
                 print(f"  {g.id}  {g.subject_kind}:{g.subject}  {g.resource_kind}:{g.resource_name}  {','.join(g.actions)}  by {g.created_by}")
@@ -248,6 +272,13 @@ def main(argv: list[str] | None = None) -> int:
     pai = sperm.add_parser("audit-identifiers", help="read-only: list stored grants whose names break the current identifier contract (nothing is changed)")
     pai.add_argument("--dir", default=None)
     pai.add_argument("--json", action="store_true", help="machine-readable report")
+    for name, text in (("allow-drilldown", "give the local session holder the permission to read one project's recorded mission history (default: no one has it)"),
+                       ("revoke-drilldown", "take that permission away again (effective on the next request)")):
+        pd = sperm.add_parser(name, help=text)
+        pd.add_argument("--project", required=True, help="the project id (the permission scope), e.g. customer-ops")
+        pd.add_argument("--audit", required=True, help="the drill-down audit log (PROJECTS_DRILLDOWN_AUDIT_PATH): the action is recorded there")
+        pd.add_argument("--dir", default=None, help="permissions directory (PROJECTS_DRILLDOWN_GRANTS_DIR; default: $PERMISSIONS_DIR or ~/.config/redevops/permissions)")
+        pd.add_argument("--operator", default=None, help="who is doing this (default: the OS user name)")
     pk = sperm.add_parser("key", help="create a PERMISSIONS_KEY env file for Docker Compose / Kubernetes (the key is never printed)")
     pk.add_argument("--env-file", required=True, help="the new 0600 file to write PERMISSIONS_KEY=... into (never overwritten)")
     pk.add_argument("--from-key-file", default=None, help="reuse the key of an existing key file (continuity for a running deployment)")
