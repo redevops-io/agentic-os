@@ -32,6 +32,9 @@ from hashlib import sha256
 from typing import Any, Mapping, Protocol
 
 CONTRACT_VERSION = "mission-authority/v1"
+#: Compensation (an undo) is authorised by its own grants: ``compensate:<forward capability>``. A forward grant, even a bare
+#: ``*``, does not cover it (see ``AuthorityGuard.check_compensation``).
+COMPENSATE_PREFIX = "compensate:"
 
 
 class Lease(str, Enum):
@@ -844,7 +847,7 @@ class AuthorityGuard:
         """May this authority start a child mission? Reserves one unit of the child quota when it may."""
         return _delegation(self, mission_id, tenant)
 
-    def _scope(self, mission_id: str, tenant: str, action: Action) -> "tuple[AuthorityEnvelope | None, float, Decision]":
+    def _scope(self, mission_id: str, tenant: str, action: Action, grant_prefix: str = "") -> "tuple[AuthorityEnvelope | None, float, Decision]":
         """The scope half of a decision, with no counters touched: the envelope exists in this tenant, is not revoked, its chain is intact,
         and it covers the action. Returns (envelope, now, decision); the decision is not ALLOW when anything fails."""
         env = self.envelopes.get(mission_id)
@@ -856,6 +859,11 @@ class AuthorityGuard:
         bad = self.chain_denial(env, now)
         if bad is not None:
             return env, now, bad
+        if grant_prefix:
+            # only grants that name this kind of action count: a wildcard forward grant must not stand in for it
+            view = replace(env, grants=tuple(g for g in env.grants if g.capability.startswith(grant_prefix)))
+            return env, now, replace(evaluate(view, action, now=now, current_epoch=self.envelopes.epoch(env.tenant)),
+                                     envelope_digest=env.digest())
         return env, now, evaluate(env, action, now=now, current_epoch=self.envelopes.epoch(env.tenant))
 
     def check(self, mission_id: str, tenant: str, action: Action) -> Decision:
@@ -863,6 +871,19 @@ class AuthorityGuard:
         mission's time allowance are checked; nothing is reserved and no counter moves. The gateway uses it to revalidate a caller before
         serving a stored result of an earlier call, which executes nothing and so must not consume the call allowance."""
         env, now, dec = self._scope(mission_id, tenant, action)
+        if dec.verdict is not Verdict.ALLOW:
+            return dec
+        if now - env.issued_at > env.budget.wall_clock_s > 0:
+            return Decision(Verdict.DENY, "wall_clock_exhausted", "the mission's time allowance is used up",
+                            {"extend_budget": {"wall_clock_s": True}}, dec.envelope_digest)
+        return dec
+
+    def check_compensation(self, mission_id: str, tenant: str, capability: str, arguments: "Mapping[str, Any] | None" = None) -> Decision:
+        """May the undo of ``capability`` run RIGHT NOW? Only grants whose capability starts with ``compensate:`` are considered (so a
+        grant on the forward action, wildcard or not, never implies its undo); revocation, expiry, the delegation chain and the
+        forbidden list apply as for any action. Nothing is reserved and no counter moves."""
+        action = Action(capability=COMPENSATE_PREFIX + capability, arguments=dict(arguments or {}), risk_tier=1, side_effecting=True)
+        env, now, dec = self._scope(mission_id, tenant, action, COMPENSATE_PREFIX)
         if dec.verdict is not Verdict.ALLOW:
             return dec
         if now - env.issued_at > env.budget.wall_clock_s > 0:

@@ -36,8 +36,9 @@ EV_ACKNOWLEDGED = "CompensationAcknowledged"             # a human accepts that 
 EV_UNDECLARED_TARGET = "CompensationUndeclaredTarget"    # warning: declared undo is not a registered capability
 EV_SKIPPED = "CompensationSkipped"                       # declared precondition not met / not evaluable: NOT executed
 EV_RETAINED = "EffectsRetained"                          # mission-level record of every effect that remains
+EV_DENIED = "CompensationDenied"                         # the undo was NOT authorized when it came to run: nothing was executed
 COMPENSATION_EVENTS = (EV_REQUESTED, EV_AUTHORIZED, EV_EXECUTED, EV_VERIFIED, EV_FAILED, EV_APPROVAL_REQUIRED,
-                       EV_APPROVED, EV_ACKNOWLEDGED, EV_UNDECLARED_TARGET, EV_SKIPPED)
+                       EV_APPROVED, EV_ACKNOWLEDGED, EV_UNDECLARED_TARGET, EV_SKIPPED, EV_DENIED)
 
 #: Per-action disposition on failure (``CompensationSpec.disposition``). "" == COMPENSATE: a completed action that
 #: declares a compensation is eligible when the mission's failure policy is COMPENSATE_DECLARED. PRESERVE: this
@@ -474,6 +475,8 @@ def fold_compensation(events: Iterable[Any]) -> dict[str, dict]:
             cur.update(status="acknowledged", actor=p.get("actor"), ack_reason=p.get("reason", ""))
         elif t == EV_SKIPPED:
             cur.update(status="skipped", reason=p.get("reason", ""))
+        elif t == EV_DENIED:
+            cur.update(status="denied", reason=f"{p.get('rule', '')}: {p.get('reason', '')}".strip(": "))
     for v in out.values():
         v.pop("_seen", None)
     return out
@@ -482,7 +485,9 @@ def fold_compensation(events: Iterable[Any]) -> dict[str, dict]:
 def summarize(folded: dict[str, dict]) -> dict:
     """Mission-outcome view of a fold. ``compensated`` holds ONLY verified compensations."""
     by = lambda st: sorted(n for n, v in folded.items() if v["status"] == st)  # noqa: E731
-    return {"compensated": by("compensated"), "compensated_unverified": by("executed_unverified"),
+    denied = {n: v["reason"] for n, v in sorted(folded.items()) if v["status"] == "denied"}
+    return {**({"compensation_denied": denied} if denied else {}),     # present only when something was denied: receipts of other logs are unchanged
+            "compensated": by("compensated"), "compensated_unverified": by("executed_unverified"),
             "compensation_failed": {n: v["reason"] for n, v in sorted(folded.items())
                                     if v["status"] in ("failed", "approval_required")},
             "compensation_acknowledged": by("acknowledged"),

@@ -69,6 +69,30 @@ class ResumeNotAuthorized(PermissionError):
     resume/re-execute authorization. Raised at the lowest execution layer, before any tool is called or event written."""
 
 
+class CompensationNotAuthorized(PermissionError):
+    """An operator asked to compensate a mission's applied steps without the ``mission.<scope>.compensate`` permission."""
+
+
+class _OperatorCompensation:
+    """The authority of an explicit operator compensation: an authenticated principal and, when a ceiling is given, its
+    ``mission.<scope>.compensate`` permission, both read again each time a step's undo is about to run. Without a ceiling the
+    caller (an authenticated control-plane route) has already applied its own role rules."""
+
+    def __init__(self, principal, ceiling, scope: str) -> None:
+        self.principal, self.ceiling, self.scope = principal, ceiling, scope
+
+    def decide(self, rt, m, node):
+        from .authority import Decision, Verdict  # noqa: PLC0415
+        basis = f"operator:{getattr(self.principal, 'id', '')}"
+        if not rt.principal_verifier().verify(self.principal):
+            return Decision(Verdict.DENY, "operator_not_authenticated", "the operator's principal is not authenticated"), basis
+        if self.ceiling is not None:
+            from ..evidence_query.authz import allowed  # noqa: PLC0415
+            if not allowed(self.ceiling, self.principal, rt._compensate_permission(self.scope)):
+                return Decision(Verdict.DENY, "operator_not_authorized", f"the operator lacks {rt._compensate_permission(self.scope)}"), basis
+        return Decision(Verdict.ALLOW, "operator", f"explicit compensation by {getattr(self.principal, 'id', '')}"), basis
+
+
 class ServiceResume:
     """EXPLICIT configuration for unattended resume: the service principal a process runs as when it rehydrates a mission and
     drives it without a human present (boot, goal loop, the revenue runner, the billing decision hand-off). It is NEVER a default:
@@ -1925,12 +1949,95 @@ class MissionRuntime:
         return "approver"
 
     # ── sagas / failure / success ──────────────────────────────────────────────
-    def _saga(self, m: Mission, plan: ExecutionPlan, world: WorldState) -> None:
+    def _saga(self, m: Mission, plan: ExecutionPlan, world: WorldState, *, authorizer=None) -> None:
         """Explicit-only compensation (docs/COMPENSATION.md): see compensation_runner.run_saga. Compensations are side effects too:
-        they reach tools only through _executor_for, which enforces the replay authorization."""
+        they reach tools only through _executor_for, which enforces the replay authorization, and each undo is authorized when it is
+        about to run (``_compensation_authority``)."""
         self._require_execution_authority(m.id)     # replay boundary at the entry: run_saga settles/writes events even when nothing is undone
         from .compensation_runner import run_saga  # noqa: PLC0415
-        run_saga(self, m, plan)
+        run_saga(self, m, plan, authorizer)
+
+    def _compensate_permission(self, scope: str) -> str:
+        from ..evidence_query.authz import _SCOPE  # noqa: PLC0415
+        if not isinstance(scope, str) or not _SCOPE.match(scope):
+            raise ValueError("invalid permission scope")
+        return f"mission.{scope}.compensate"
+
+    def _compensation_authority(self, m: Mission, node, authorizer=None):
+        """-> (Decision, basis): may the undo of this applied node run RIGHT NOW? The forward step's authorization is not consulted.
+        An explicit operator action supplies its own ``authorizer``; otherwise the owner's ``compensate:<capability>`` grant decides
+        (revocation and expiry included) or, outside production and with no envelope, the explicit test policy's ``compensate`` list."""
+        from .authority import Decision, Verdict  # noqa: PLC0415
+        if authorizer is not None:
+            return authorizer.decide(self, m, node)
+        guard = self.authority
+        if guard is not None and m.tenant:
+            key = self._authority_key(m)
+            if key:
+                try:
+                    args = {k: v for k, v in self._resolve_inputs(m, self._world(m.id), node).items() if not str(k).startswith("_")}
+                except Exception:  # noqa: BLE001 - selectors then have nothing to match: the check fails closed
+                    args = {}
+                res = guard.check_compensation(key, m.tenant, node.capability, args)
+                if res.rule != "no_authority":
+                    return res, "envelope"
+        if self._production():
+            return Decision(Verdict.DENY, "no_authority", "no authority envelope covers the compensation of this mission"), ""
+        tp = self._active_test_policy()
+        if tp is not None and tp.permits_compensation(node.capability):
+            self._note_test_policy(m)
+            self.store.append("TestPolicyAuthorized", m.id, {"node_id": node.id, "capability": node.capability, "phase": "compensate",
+                                                             "policy": tp.name, "digest": tp.digest()})
+            return Decision(Verdict.ALLOW, "test_policy", f"allowed by test policy {tp.name}"), f"test_policy:{tp.name}"
+        return Decision(Verdict.DENY, "no_authority",
+                        "no authority envelope covers this mission and no explicit test policy lists this capability under compensate"), ""
+
+    def compensate(self, mission_id: str, *, principal, ceiling, reason: str, scope: "str | None" = None,
+                   node_id: "str | None" = None) -> Mission:
+        """EXPLICIT operator compensation of steps the mission already applied (all of them, newest first, or one ``node_id``).
+
+        This is the one way to undo applied steps when no automatic authority covers it (a denied or revoked envelope, a
+        PRESERVE_ONLY policy, a succeeded mission). It needs (1) an authenticated principal for this mission's tenant, (2) the
+        permission ``mission.<scope>.compensate`` on ``ceiling`` (default scope: the mission's tenant, else ``default``), checked
+        here and again before each step's undo, and (3) a stated reason. Each step still goes through the compensation runner:
+        its own request, authorization, execution, read-back and receipt. A mission rebuilt from the log needs ``grant_resume`` first.
+        A succeeded or parked mission ends CANCELLED; a failed one stays FAILED, or COMPENSATION_FAILED if anything remains."""
+        from .compensation_runner import InterventionError, run_saga  # noqa: PLC0415
+        from .compensation_policy import FailurePolicy  # noqa: PLC0415
+        if mission_id not in self._missions:
+            raise KeyError(mission_id)
+        if len(str(reason).strip()) < 8:
+            raise ValueError("compensation needs a stated reason of at least a few words")
+        with self._run_lock(mission_id):
+            self._require_execution_authority(mission_id, principal=principal)
+            ident = self._operator_identity(mission_id, principal, "", "compensate")
+            if principal is None:
+                self.store.append("PrincipalRefused", mission_id, {"action": "compensate", "reason": "unauthenticated", "claimed_id": ""})
+                raise PrincipalRequired("compensate: an authenticated principal is required")
+            m = self._missions[mission_id]
+            sc = str(scope if scope is not None else (m.tenant or "default"))
+            if m.tenant and sc != str(m.tenant):
+                self.store.append("CompensationOperatorRefused", mission_id, {"principal": ident["principal"], "scope": sc[:64], "reason": "scope_tenant_mismatch"})
+                raise CompensationNotAuthorized(f"{mission_id}: the scope is not this mission's tenant")
+            authorizer = _OperatorCompensation(principal, ceiling, sc)
+            probe, _basis = authorizer.decide(self, m, None)
+            if not probe.allowed:
+                self.store.append("CompensationOperatorRefused", mission_id, {"principal": ident["principal"], "scope": sc[:64], "reason": "not_authorized"})
+                raise CompensationNotAuthorized(f"{mission_id}: {probe.reason}")
+            if m.state is MissionState.RUNNING:
+                raise InterventionError("the mission is running; suspend or cancel it before compensating")
+            self.store.append("CompensationOperatorRequested", mission_id, {
+                "principal": ident["principal"], "scope": sc, "reason": str(reason).strip()[:500], "node_id": node_id, "state": m.state.value})
+            plan = self._plans[mission_id]
+            run_saga(self, m, plan, authorizer, FailurePolicy.COMPENSATE_DECLARED, node_id)
+            out = dict(m.outcome or {})
+            if m.state in (MissionState.FAILED, MissionState.COMPENSATION_FAILED):
+                self._set_state(m, MissionState.COMPENSATION_FAILED if out.get("compensation_incomplete") else MissionState.FAILED)
+            elif m.state is not MissionState.CANCELLED:
+                self.store.append("MissionCancelled", mission_id, {"reason": "operator compensation: " + str(reason).strip()[:200]})
+                m.outcome = {**out, "success": False, "reason": "compensated by an operator"}
+                self._set_state(m, MissionState.CANCELLED)
+            return m
 
     def compensation_intervention(self, mission_id: str, action: str, *, actor: str = "", reason: str = "",
                                   node_id: str | None = None, principal=None) -> Mission:
@@ -1943,7 +2050,9 @@ class MissionRuntime:
         ident = self._operator_identity(mission_id, principal, actor, f"compensation.{action}")
         if m.state not in (MissionState.COMPENSATION_FAILED, MissionState.FAILED):
             raise InterventionError(f"mission is {m.state.value}; compensation interventions apply to a failed mission")
-        intervene(self, m, action, actor=ident.get("approver", ""), reason=reason, node_id=node_id, identity=ident)
+        # the route that called this authenticated the credential and applied its role rules: that is the operator's authority for a retry
+        authorizer = _OperatorCompensation(principal, None, str(m.tenant or "default")) if principal is not None else None
+        intervene(self, m, action, actor=ident.get("approver", ""), reason=reason, node_id=node_id, identity=ident, authorizer=authorizer)
         self._set_state(m, MissionState.COMPENSATION_FAILED if (m.outcome or {}).get("compensation_incomplete")
                         else MissionState.FAILED)
         return m
