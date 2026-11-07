@@ -153,7 +153,8 @@ class AosddOperatorClient:
             return res
         if claim.status in ("held", "reconcile"):
             svc.emit("AosddOpUnresolved", mission_id, {"op_id": op, "step": step["step"], "claim": claim.status, "holder": claim.owner})
-            self._uncertain(mission_id, step, f"claim is {claim.status}", claim.fence)
+            if claim.status == "reconcile":                  # a live holder (`held`) is work in progress, not an unknown outcome
+                self._uncertain(mission_id, step, "the previous claim ended without a recorded outcome (unknown or lease expired)", claim.fence)
             raise OperationUnresolved(f"{step['step']}: operation {op} is {claim.status}: it may already exist; reconcile it from the application, do not repeat it")
         if claim.status == "accepted":
             raise AosddRefusal("op_accepted_uncertain", f"{op} was accepted as uncertain by an approver; it is not retried")
