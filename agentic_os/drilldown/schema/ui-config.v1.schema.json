@@ -1,0 +1,163 @@
+{
+  "$id": "urn:redevops:schema:aos.ui-config/v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "authority": {
+      "additionalProperties": false,
+      "properties": {
+        "configured": {
+          "type": "boolean"
+        },
+        "verified": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "configured"
+      ],
+      "type": "object"
+    },
+    "data_source": {
+      "enum": [
+        "sample",
+        "runtime"
+      ]
+    },
+    "drilldown": {
+      "additionalProperties": false,
+      "properties": {
+        "integrity": {
+          "additionalProperties": false,
+          "properties": {
+            "anchored_records": {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "records": {
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "status": {
+              "enum": [
+                "unanchored",
+                "ok",
+                "lagging",
+                "truncated",
+                "mismatch",
+                "invalid",
+                "not_reported"
+              ]
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        "mounted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "mounted",
+        "integrity"
+      ],
+      "type": "object"
+    },
+    "projections": {
+      "additionalProperties": false,
+      "properties": {
+        "basis": {
+          "enum": [
+            "sample",
+            "unreported"
+          ]
+        }
+      },
+      "required": [
+        "basis"
+      ],
+      "type": "object"
+    },
+    "schema": {
+      "const": "aos.ui-config/v1"
+    },
+    "stores": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "durable": {
+            "type": "boolean"
+          },
+          "integrity": {
+            "additionalProperties": false,
+            "properties": {
+              "anchored_records": {
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "records": {
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "status": {
+                "enum": [
+                  "unanchored",
+                  "ok",
+                  "lagging",
+                  "truncated",
+                  "mismatch",
+                  "invalid",
+                  "not_reported"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "event_log"
+            ]
+          }
+        },
+        "required": [
+          "role",
+          "kind",
+          "durable",
+          "integrity"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema",
+    "data_source",
+    "projections",
+    "drilldown",
+    "stores",
+    "authority"
+  ],
+  "title": "Projects UI configuration (data source)",
+  "type": "object"
+}

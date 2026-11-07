@@ -152,18 +152,18 @@ anything is extracted (and rejects any member that would leave the destination);
 
 | Field | Value |
 |---|---|
-| artifact | `packaging/ui-artifacts/projects-ui-root-ee958a01.tgz`, 153,630 bytes, sha256 `cc2abd7c...6769a` (checked into the repository; `local_path`) |
+| artifact | `packaging/ui-artifacts/projects-ui-root-312a811a.tgz`, 156,959 bytes, sha256 `5639c828...1005` (checked into the repository; `local_path`) |
 | `url` | empty: no release of `redevops-projects` has been published for it. A later publication fills it in; nothing else changes |
-| source commit | `ee958a0174421d29f0e510ed31b602fd0ee8a154` (tree `bb56089a...`; branch `ui/evidence-tracing` of a LOCAL clone; `source_commit_published: false`), public base `5114b560...`, and it merges the public release `v0.2.0` (`84f17fce...`) |
-| contents | `index.html`, `assets/index-XAbPLomz.js` (374,422 bytes), `assets/index-5NRK8P9N.css` (build output) + the neutral `hero.jpg` of this repository |
+| source commit | `312a811a9e697b0176aa2c058165209266a4be9a` (tree `bfb10944...`; branch `ui/partly-sample` of a LOCAL clone, from `ui/runtime-mode` `2f24719e`, from `ui/evidence-tracing` `ee958a01`; `source_commit_published: false`), public base `5114b560...`, and it merges the public release `v0.2.0` (`84f17fce...`) |
+| contents | `index.html`, `assets/index-BVpeLTWy.js` (384,286 bytes), `assets/index-sPje_5GF.css` (build output) + the neutral `hero.jpg` of this repository |
 | recipe | clean `git archive` of the source commit; `env -i`, node v24.22.2, npm 11.19.1, `npm ci`, `VITE_PROJECTS_API=/ npm run build -- --base=/`; pack with `scripts/make_projects_ui_artifact.py` (sorted members, fixed mtime, gzip mtime 0) |
 | reproduced | three builds, each in its own throwaway HOME, TMPDIR and npm cache, gave identical `index.html`, JavaScript and CSS; three consecutive packs are byte-identical. The archive bytes depend on the zlib in use, so the portable invariant is the per-member hash list (`bundle_files`); the archive hash is what is pinned |
-| `previous_pin` | chain: `local+2fdef7f5` (`packaging/ui-artifacts/projects-ui-root-2fdef7f5.tgz`, sha256 `a5b5ef13...3654`, kept in the repository) then the public `v0.2.0` asset (sha256 `a84b7ce4...`). Going back is a lock edit |
+| `previous_pin` | chain: `local+2f24719e` (`packaging/ui-artifacts/projects-ui-root-2f24719e.tgz`, sha256 `ff5224fa...fd341`: the same views without the Partly sample chip), then `local+ee958a01` (`packaging/ui-artifacts/projects-ui-root-ee958a01.tgz`, sha256 `cc2abd7c...6769a`: the same views with the Sample chip taken from a build flag), then `local+2fdef7f5` (`packaging/ui-artifacts/projects-ui-root-2fdef7f5.tgz`, sha256 `a5b5ef13...3654`), then the public `v0.2.0` asset (sha256 `a84b7ce4...`). Every local artifact is kept in the repository. Going back is a lock edit |
 
 This is NOT a source offer and not a publication: `packaging/ui-bundle-source.json` keeps the provenance (decisions pins-04, pins-10 and
 D-LIC-12 stay OPEN, the distribution gate is unchanged and still refuses). **What the artifact is:** the Today-first views of `v0.2.0`
 (Today, quick capture, batch triage, notifications, routing, deployment-inspection and social-intelligence cards) together with the accessibility
-series (UIA-01..12), the application-directory tab, and the mission drill-down (Summary, Tasks, Evidence with Inspect, Timeline, Graph, World State,
+series (UIA-01..12), the application-directory tab, and the mission drill-down (whose data source, Sample chip included, is what the RUNNING SERVER reports at `GET /api/ui-config`: there is no build flag, one artifact serves a sample and a runtime-backed deployment; a runtime server whose provider-backed pages are still sample gets a "Partly sample" chip with a keyboard-reachable explanation) (Summary, Tasks, Evidence with Inspect, Timeline, Graph, World State,
 EXPLAIN, Replay; read-only). **What it shows on the desktop:** the sidecar serves the sample provider, which has no drill-down routes; the
 drill-down views therefore show the sample mission detail labelled as sample and say that no recorded history is available. Recorded data appears only
 when a server that mounts the drill-down router (`agentic_os/drilldown`, not yet mounted by `projects_api.create_app`) answers. The npm lock file

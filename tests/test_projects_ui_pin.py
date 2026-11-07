@@ -140,12 +140,29 @@ def test_the_bundle_carries_both_the_today_first_views_and_the_accessibility_ser
         assert s in js, s
 
 
+def test_the_bundle_takes_its_data_source_from_the_running_server_not_a_build_flag():
+    """One artifact serves a sample deployment and a runtime-backed one: it asks GET /api/ui-config, and the build flag is gone."""
+    js = next(v for k, v in _members().items() if k.endswith(".js")).decode("utf-8")
+    for s in ("/api/ui-config", "aos.ui-config/v1", "Data source unknown", "Where this data comes from is not known", "Sample data",
+              "This list comes from the sample projection", "Partly sample", "partly-note", "only for missions your session has been granted access to"):
+        assert s in js, s
+    assert "VITE_PROJECTS_SAMPLE_DATA" not in js and "SAMPLE_DATA" not in js
+
+
 def test_the_pin_chain_keeps_the_replaced_artifacts_and_ends_at_the_public_release():
     prev = LOCK["previous_pin"]
-    assert prev["version"] == "local+2fdef7f5" and prev["source_commit_published"] is False
+    assert prev["version"] == "local+2f24719e" and prev["source_commit_published"] is False
     old = ROOT / prev["local_path"]
     assert old.is_file() and hashlib.sha256(old.read_bytes()).hexdigest() == prev["sha256"]          # going back is a lock edit
-    assert prev["previous_pin"]["version"] == "v0.2.0" and re.fullmatch(r"[0-9a-f]{64}", prev["previous_pin"]["sha256"])
+    mid = prev["previous_pin"]
+    assert mid["version"] == "local+ee958a01" and mid["source_commit_published"] is False
+    mid_file = ROOT / mid["local_path"]
+    assert mid_file.is_file() and hashlib.sha256(mid_file.read_bytes()).hexdigest() == mid["sha256"]
+    older = mid["previous_pin"]
+    assert older["version"] == "local+2fdef7f5" and older["source_commit_published"] is False
+    older_file = ROOT / older["local_path"]
+    assert older_file.is_file() and hashlib.sha256(older_file.read_bytes()).hexdigest() == older["sha256"]
+    assert older["previous_pin"]["version"] == "v0.2.0" and re.fullmatch(r"[0-9a-f]{64}", older["previous_pin"]["sha256"])
     assert LOCK["merged_public_release"]["tag"] == "v0.2.0" and REC["merged_public_release"] == {"tag": "v0.2.0", "commit": LOCK["merged_public_release"]["commit"]}
     assert LOCK["source_commit"] != prev["source_commit"] and LOCK["source_commit_published"] is False and LOCK["url"] == ""
 

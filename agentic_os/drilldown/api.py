@@ -23,7 +23,10 @@ _ERRORS = {401: {"error": "authentication required"}, 404: {"detail": "Not Found
            503: {"error": "the audit log is unavailable; nothing was returned"}}
 
 
-def build_router(service, authenticator: Authenticator):
+def build_router(service, authenticator: Optional[Authenticator] = None, *, principal_source=None):
+    """``authenticator``: the Bearer path (``Authorization: Bearer <credential>``). ``principal_source``: an object with
+    ``principal_of(request)`` that decides who the caller is on its own terms (the local-session bridge) and REPLACES the Bearer path:
+    one mount, one way in. With neither, nobody is authenticated."""
     from fastapi import APIRouter, Request
     from fastapi.responses import Response
 
@@ -33,6 +36,13 @@ def build_router(service, authenticator: Authenticator):
         return Response(content=canonical(body), status_code=status, media_type="application/json", headers={**_HEADERS, **(extra or {})})
 
     def _principal(request: Request):
+        if principal_source is not None:
+            try:
+                return principal_source.principal_of(request)
+            except Exception:                               # noqa: BLE001 - a broken source authenticates nobody
+                return None
+        if authenticator is None:
+            return None
         h = request.headers.get("authorization", "")
         if not h.lower().startswith("bearer "):
             return None

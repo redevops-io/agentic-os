@@ -17,6 +17,10 @@ OUTCOMES = ("ok", "failed", "denied", "pending", "info")
 EVIDENCE_KINDS = ("verification", "claim", "evidence_record", "node_result", "mission_evidence_ref")
 INTEGRITY_STATUSES = ("recorded_hash_verified", "recorded_hash_mismatch", "recorded_hash_unchecked", "no_recorded_hash")
 DURABILITY = ("durable", "volatile", "unknown")
+#: what the store's own checks can say about the log (``mission.integrity``) plus ``not_reported`` for a store that runs none
+ANCHOR_STATUSES = ("unanchored", "ok", "lagging", "truncated", "mismatch", "invalid", "not_reported")
+UI_CONFIG_SCHEMA_ID = "aos.ui-config/v1"
+DATA_SOURCES = ("sample", "runtime")
 
 MAX_LIMIT = 500
 MAX_PAYLOAD_BYTES = 4096
