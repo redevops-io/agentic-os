@@ -158,7 +158,7 @@ otherwise) and no handler runs. The only way to run without an envelope or appro
 given to `Operator(test_policy=...)`, read from the JSON file named by `AGENTIC_OS_OPERATOR_TEST_POLICY`, or set as the class attribute
 `Operator.test_policy` by a test suite: a name, a stated reason, `allow` patterns, `anonymous_operators` (the credential-less caller then runs
 as the named test identity `test-identity:<name>`, recorded as unauthenticated) and `unapproved` patterns (the capabilities whose mandatory
-approval it waives). It is shown by `GET /_security` (`invoke.test_policy`, and a warning), in the `X-Authority-Basis` response header and in
+approval it waives). It is shown by `GET /_security` (`invoke.test_policy`, and a warning), in the `X-Authority-Basis` response header (and `X-Authority-Approval` when it waived an approval) and in
 every audit record. It never overrides an envelope that denies the call. In production a policy given to the constructor or the environment
 raises `ProfileError` and a class-level default is ignored. `AGENTIC_OS_ALLOW_UNAPPROVED_INVOKE` is no longer read (a warning says so).
 

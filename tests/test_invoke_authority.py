@@ -567,7 +567,7 @@ def test_a_mandatory_approval_stages_unless_a_test_policy_waives_it_by_name(make
     w2 = make(profile, test_policy=AuthorityTestPolicy("waives", "waives the bank change approval", allow=("crm.*",), unapproved=("crm.bank_change",)))
     r2 = w2.call("crm.bank_change", {"iban": "X"})
     assert r2.status_code == 200 and not is_staged(r2.json()["result"]) and [x[0] for x in w2.ran] == ["bank"]
-    assert w2.events("allowed")[-1]["approval"] == "waived:waives"
+    assert w2.events("allowed")[-1]["approval"] == "waived:waives" and r2.headers["x-authority-approval"] == "waived:waives"
     assert w2.call("crm.report", {}, key="k2").status_code == 200 and is_staged(w2.call("crm.report", {}, key="k3").json()["result"])
 
 

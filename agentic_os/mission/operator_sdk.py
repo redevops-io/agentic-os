@@ -429,8 +429,10 @@ class Operator:
                 # human approval the handler does not run, it stages (the same preview the mission runtime treats as "not executed").
                 return {"result": pending_approval(body.capability, reason="approval_required",
                                                    message="this capability needs a human approval; nothing was done")}
-            if decision.basis.startswith("test_policy:") or who.test_identity or decision.approval.startswith("waived:"):
+            if decision.basis.startswith("test_policy:") or who.test_identity:
                 response.headers["X-Authority-Basis"] = decision.basis or f"test_policy:{who.test_identity}"
+            if decision.approval.startswith("waived:"):
+                response.headers["X-Authority-Approval"] = decision.approval        # a mandatory approval was waived by the named test policy
             if claims is not None and claims.get("dispatch_by") == "operator":
                 # A direct-action authorization: the reservation is still RESERVED and THIS is the dispatch. Only one
                 # caller on one replica can win it, and a swept/expired/released reservation can never be dispatched.
