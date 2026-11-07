@@ -315,6 +315,8 @@ are not usable in a browser (the JSON at `/openapi.json` is, with a session).
 
 ## 7. Residual risks and limits (read these)
 
+Folder registration on the desktop uses an authority of the sidecar's own that the validated session can use for that purpose only: see [DESKTOP_SOURCE_REGISTRATION.md](DESKTOP_SOURCE_REGISTRATION.md) for the routes, the folder policy, the audit and what it does not protect.
+
 1. **Same-user malware is out of scope.** A process running as the same OS user can read the launcher's
    memory (the secret), the browser's `sessionStorage` or memory (the session), or attach to the sidecar.
    The capability only raises the bar against web pages, other users, and stale processes.

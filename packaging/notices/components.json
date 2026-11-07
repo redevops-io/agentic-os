@@ -369,6 +369,18 @@
    "unverified": "libffi-8.dll was not read; the text is libffi 3.4.4's (the version CPython v3.12.10 PCbuild/get_externals.bat names for its Windows build)."
   },
   {
+   "name": "sqlite",
+   "version": "",
+   "declared": "Public domain (the SQLite project's dedication; not read from the shipped file)",
+   "present_in": [
+    "windows"
+   ],
+   "decision": "D-LIC-6",
+   "texts": [],
+   "missing_reason": "SQLite is in the public domain: the project ships no licence file and CPython's sqlite3.dll carries none. The project's own dedication (the notice at the top of its source files) is not part of what is shipped and no text was fetched",
+   "unverified": "sqlite3.dll was not read and its version is unknown (CPython's Windows distribution bundles it from its externals). Whether a notice text is wanted for a public-domain component is for counsel (D-LIC-6)."
+  },
+  {
    "name": "nsis-and-wix-installer-stubs",
    "version": "",
    "declared": "NSIS: zlib/libpng, bzip2 and Common Public License 1.0 parts (COPYING); WiX Toolset v3: Microsoft Reciprocal License",

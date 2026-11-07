@@ -198,3 +198,12 @@ def _app_gate_state_is_per_test(monkeypatch):
     app_gate.reset_state()
     yield
     app_gate.reset_state()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_source_registration_audit(monkeypatch, tmp_path_factory):
+    """The desktop sidecar audits every folder registration under the per-user application-data directory (agentic_os/desktop_sources.py). No test may
+    write there: every test gets its own audit location, outside its ``tmp_path``. A test of the default location passes explicit arguments."""
+    d = tmp_path_factory.mktemp("srcaudit")
+    monkeypatch.setenv("AGENTIC_OS_SOURCES_AUDIT_PATH", str(d / "audit" / "source-registrations.jsonl"))
+    yield

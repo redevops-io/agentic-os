@@ -24,6 +24,7 @@ PROJECTS_ROUTE_POLICIES = {
     "POST /api/sidekick": P("projects.sidekick", "authority_required"),
     "POST /api/sources/propose": P("projects.propose_sources", "read_only", rationale="proposes sources from text; nothing is connected"),
     "POST /api/sources/confirm": P("projects.confirm_sources", "human_only", rationale="confirming what the system may read is a person's decision"),
+    "POST /api/sources/remove": P("projects.remove_source", "authority_required", rationale="forgets a source registered in this process; it only narrows what the system may read (desktop: the validated launch session, hosted: the control token)"),
     "POST /api/app-directory/record-link": P("projects.app_directory_record_link", "authority_required", rationale="computes a link from configured routes, filtered by the caller's permission ceiling; nothing is stored, fetched or forwarded (in production it needs an authenticated context, as the directory does)"),
     "POST /api/app-directory/ref-link": P("projects.app_directory_ref_link", "authority_required", rationale="validates a record reference and computes a link; nothing is stored, fetched or forwarded (in production it needs an authenticated context, as the directory does)"),
     f"POST {PREFIX}/capture": P("projects.capture", "authority_required"),

@@ -30,6 +30,8 @@ from first_party import first_party_names  # noqa: E402  (packaging/tools/first_
 FIRST_PARTY = set(first_party_names())
 OPENSSL_BANNER = re.compile(rb"OpenSSL (\d+\.\d+\.\d+[a-z]?)(?:-[a-z0-9]+)? +(\d{1,2} [A-Z][a-z]{2} \d{4})")
 NATIVE_EXT = (".so", ".dylib", ".dll", ".pyd")
+#: SQLite's own identification string (SQLITE_SOURCE_ID): the check-in date and the hash of the source it was built from. It does not name a version.
+SQLITE_SOURCE_ID = re.compile(rb"(20\d\d-\d\d-\d\d \d\d:\d\d:\d\d) ([0-9a-f]{40,64})(?![0-9a-f])")
 
 
 @dataclass
@@ -102,6 +104,11 @@ def classify_pkg(name: str, stdlib: set[str] = STDLIB) -> tuple[str, str]:
         return "openssl-lib", base
     if re.fullmatch(r"libffi[-.\d]*\.(dylib|dll|so[.\d]*)", base):
         return "libffi", base
+    # SQLite: CPython's Windows distribution ships sqlite3.dll beside _sqlite3.pyd and PyInstaller bundles it once anything imports sqlite3 (W-SBOM-1);
+    # a distribution-packaged Python on Linux or macOS may load a libsqlite3 shared library the same way. SQLite is not CPython and is not PSF-licensed
+    # (the project dedicates it to the public domain), so it is its own component, as libffi and the Microsoft runtime DLLs are.
+    if re.fullmatch(r"sqlite3\.dll|libsqlite3[-.\d]*\.(dylib|dll|so[.\d]*)", base):
+        return "sqlite", base
     # Linux: PyInstaller copies these two GCC runtime libraries from the BUILD HOST into the archive (libstdc++ for the DuckDB and
     # other C++ extensions, libgcc_s for it and for pthread cancellation); their version is not discoverable from the files.
     if re.fullmatch(r"(libgcc_s|libstdc\+\+)\.so[.\d]*", base):
@@ -114,6 +121,11 @@ def classify_pkg(name: str, stdlib: set[str] = STDLIB) -> tuple[str, str]:
     if "/" not in n and base.endswith(".pyd") and stem in stdlib:
         return "cpython", "cpython"
     return "top-level", stem
+
+
+def probe_sqlite(data: bytes) -> list[tuple[str, str]]:
+    """(check-in date, source hash) of every SQLITE_SOURCE_ID string in a SQLite library. It identifies the source it was built from; the version is not read from it."""
+    return sorted({(m.group(1).decode(), m.group(2).decode()) for m in SQLITE_SOURCE_ID.finditer(data)})
 
 
 def probe_openssl(data: bytes) -> list[tuple[str, str]]:
@@ -203,8 +215,8 @@ def analyze(archive: Archive, inv: dict[str, dict], facts: dict | None = None, w
             key = "licenses-folder"
         elif rule == "cpython":
             key = "cpython"
-        elif rule in ("openssl-lib", "libffi", "ms-dll", "ms-apiset", "gcc-runtime"):
-            key = f"{rule}:{hint}" if rule in ("ms-dll", "libffi", "gcc-runtime") else ("ms-apiset" if rule == "ms-apiset" else "openssl-dynamic")
+        elif rule in ("openssl-lib", "libffi", "ms-dll", "ms-apiset", "gcc-runtime", "sqlite"):
+            key = f"{rule}:{hint}" if rule in ("ms-dll", "libffi", "gcc-runtime", "sqlite") else ("ms-apiset" if rule == "ms-apiset" else "openssl-dynamic")
         elif rule == "dist-info":
             c = pypi(hint)
             key = c.key if c else None
@@ -358,6 +370,27 @@ def analyze(archive: Archive, inv: dict[str, dict], facts: dict | None = None, w
             c.name, c.version = "libffi", None
             c.limitations.append("version not discoverable: the shipped library carries only its soname")
             c.props["redevops:licence-note"] = "none asserted"
+
+    # SQLite (sqlite3.dll shipped with CPython's Windows distribution; libsqlite3 elsewhere) ------------------------------------
+    for k, c in A.comps.items():
+        if k.startswith("sqlite:"):
+            fv = facts.get("sqlite_version")
+            c.name, c.version, c.kind = "SQLite", fv, "library"
+            c.purl = f"pkg:generic/sqlite@{fv}" if fv else None
+            c.licence = {"name": "Public domain (declared by the SQLite project)", "source": "SQLite project, https://www.sqlite.org/copyright.html (not read from the shipped file)"}
+            c.props["redevops:role"] = (f"the SQLite library file {k.split(':', 1)[1]} that CPython's distribution ships beside _sqlite3 and that is bundled because code imports sqlite3; "
+                                        "a component separate from CPython, not covered by the CPython licence")
+            c.props["redevops:licence-note"] = "the project's own public-domain dedication; no licence text ships with CPython's copy of the file"
+            if fv:
+                c.evidence.append(f"facts file ({facts.get('_source', 'facts')}): sqlite_version {fv}")
+            else:
+                c.limitations.append("version not discoverable: the shipped file carries no version resource; pass the interpreter's sqlite3.sqlite_version as facts.sqlite_version")
+            ids = []
+            for e in archived(k):
+                data = archive.read(e) if archive.has_bytes else None
+                ids += probe_sqlite(data) if data else []
+            for date, digest in sorted(set(ids)):
+                c.evidence.append(f'SQLITE_SOURCE_ID "{date} {digest}" found in the shipped file')
 
     # GCC runtime libraries copied from the Linux build host ---------------------------------------
     for k, c in A.comps.items():
