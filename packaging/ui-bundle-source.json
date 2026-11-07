@@ -1,14 +1,14 @@
 {
- "_comment": "Where the Projects UI bundle (agentic_os/projects_ui) comes from. On the converged trunk it is NOT tracked in git: scripts/fetch_projects_ui.py (run by the wheel build hook, so by `pip install -e .` too) unpacks the pinned artifact packaging/ui-artifacts/projects-ui-root-5751e9e5.tgz (packaging/projects_ui.lock.json) into agentic_os/projects_ui, offline. Read by packaging/sbom/generate_source_offer.py and packaging/sbom/analyze.py and checked against the files by tests/test_ui_bundle_source_record.py. The source commit is a LOCAL, UNPUBLISHED commit: the public redevops-projects repository does not contain it, so this record is NOT a source offer (decisions D-LIC-12 and pins-04 stay OPEN). index.html, the JavaScript and the CSS are build output; hero.jpg is not (the neutral placeholder is kept by scripts/build_projects_ui.sh).",
+ "_comment": "Where the Projects UI bundle (agentic_os/projects_ui) comes from. On the converged trunk it is NOT tracked in git: scripts/fetch_projects_ui.py (run by the wheel build hook, so by `pip install -e .` too) unpacks the pinned artifact packaging/ui-artifacts/projects-ui-root-9a1788b1.tgz (packaging/projects_ui.lock.json) into agentic_os/projects_ui, offline. Read by packaging/sbom/generate_source_offer.py and packaging/sbom/analyze.py and checked against the files by tests/test_ui_bundle_source_record.py. The source commit is a LOCAL, UNPUBLISHED commit: the public redevops-projects repository does not contain it, so this record is NOT a source offer (decisions D-LIC-12 and pins-04 stay OPEN). index.html, the JavaScript and the CSS are build output; hero.jpg is not (the neutral placeholder is kept by scripts/build_projects_ui.sh).",
  "repository": "https://github.com/redevops-io/redevops-projects",
  "base_commit": "5114b56012511a292eff0e505fdbd0d8b00544f8",
  "base_commit_public": true,
- "source_commit": "5751e9e5ccd0fbc461e4290ee188877d177c184b",
- "source_tree": "433669f8cb8db928fdb28b2a2da7e177fa4c6787",
+ "source_commit": "9a1788b187ca5ee0f2592b3c6cdf7df6c3257cf6",
+ "source_tree": "ffb17b00d5d192194aa29cab434e6791b74b9bfa",
  "source_commit_published": false,
- "source_status": "local unpublished commit (branch ui/event-summaries of a local clone, from ui/partly-sample 312a811a (from ui/runtime-mode 2f24719e) (itself from ui/evidence-tracing ee958a01); adds the \"Partly sample\" chip for a runtime server whose provider-backed pages are still sample): the Sample chip and every sample-versus-recorded decision come from GET /api/ui-config (what the running server reports) instead of the VITE_PROJECTS_SAMPLE_DATA build flag, which is removed; the Settings > Data source panel, the tail-anchor wording and the browser harness that runs the real product are added. Below that: the merge of the public release v0.2.0 (84f17fce) into the local accessibility series rel/ui-v3 (2fdef7f5), the application-directory tab and the mission drill-down views. not pushed, no pull request, no tag; adds the drill-down flags (uncertain step, late result, incomplete compensation), the plain-words mission state and the read-back evidence rows for real AOS-DD missions",
- "previous_source_commit": "312a811a9e697b0176aa2c058165209266a4be9a",
- "previous_bundle": "assets/index-BVpeLTWy.js sha256 8d5583c165f39b379bb100ad1903310e322234f43e46c716072188ee899b7ca8 (built from 312a811a, the same views without the flags); before it assets/index-owr9wUfq.js from 2f24719e, assets/index-XAbPLomz.js from ee958a01",
+ "source_status": "local unpublished commit (branch ui/focus-fix of a local clone, from ui/event-summaries 5751e9e5 (from ui/partly-sample 312a811a) (from ui/runtime-mode 2f24719e) (itself from ui/evidence-tracing ee958a01); adds the \"Partly sample\" chip for a runtime server whose provider-backed pages are still sample): the Sample chip and every sample-versus-recorded decision come from GET /api/ui-config (what the running server reports) instead of the VITE_PROJECTS_SAMPLE_DATA build flag, which is removed; the Settings > Data source panel, the tail-anchor wording and the browser harness that runs the real product are added. Below that: the merge of the public release v0.2.0 (84f17fce) into the local accessibility series rel/ui-v3 (2fdef7f5), the application-directory tab and the mission drill-down views. not pushed, no pull request, no tag; adds the drill-down flags (uncertain step, late result, incomplete compensation), the plain-words mission state and the read-back evidence rows for real AOS-DD missions; adds one shared keyboard focus indicator (the top-bar Ask Sidekick input had none) and the focus tests",
+ "previous_source_commit": "5751e9e5ccd0fbc461e4290ee188877d177c184b",
+ "previous_bundle": "assets/index-3A6-zSpX.js sha256 8079a61e00981d9534740bbc33a4a127615a8e5ed5fdd2c3beee976d22373c9c (built from 5751e9e5, before the focus fix); before it assets/index-BVpeLTWy.js from 312a811a, assets/index-owr9wUfq.js from 2f24719e",
  "package_json_git_blob": "1fae6a7db7899b5ef1a45d4a5c5a2a7a960204f8",
  "package_json_sha256": "7f5d60f109331d32b1e9c684203a815e1b641c09d41d3c75f74d9667d75c8c98",
  "package_lock_git_blob": "af8ed38d2074179e60e0d974987be1092ee8c770",
@@ -25,13 +25,13 @@
   "reproduced": "built three times from a clean git archive of the source commit, each in its own throwaway HOME, TMPDIR and npm cache (env -i, node v24.22.2, npm 11.19.1): index.html, the JavaScript and the CSS are byte-identical (and identical to the development build)"
  },
  "files": {
-  "index.html": "656cdec52feeda2ae1af5c8b25d0ab9ca1705a01518d24682ce475007c5a57e4",
-  "assets/index-3A6-zSpX.js": "8079a61e00981d9534740bbc33a4a127615a8e5ed5fdd2c3beee976d22373c9c",
-  "assets/index-DImUCcMe.css": "07da7c2aad5667aa20e7bf1195f78d51ee87b138aac898183150329c032af9e8"
+  "index.html": "82de733ae5dd8d4b3c22215c7400f04b4b8169d85928c32a0298049b55b5ecb6",
+  "assets/index-CQBlOi68.js": "de044ae9f2657c5d79665b632fb71c46f997fe88c5b72116812c7df44218e82c",
+  "assets/index-BXcNWP0I.css": "13b11143e911aacda99b8787d96068f73b8e8dcea29c86b935af9061db828359"
  },
  "artifact": {
-  "path": "packaging/ui-artifacts/projects-ui-root-5751e9e5.tgz",
-  "sha256": "eccf15961fa74bc2856837d6ed703a9155006149b429d0620e44928cd8ec5a31",
+  "path": "packaging/ui-artifacts/projects-ui-root-9a1788b1.tgz",
+  "sha256": "a463cfec611580bb208032bef0b267425482926b0c202095297e022e57cd37cd",
   "lock": "packaging/projects_ui.lock.json",
   "pack_recipe": "scripts/make_projects_ui_artifact.py",
   "url": "",

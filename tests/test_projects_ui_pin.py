@@ -160,26 +160,28 @@ def test_the_bundle_flags_uncertain_stale_and_incomplete_compensation_in_plain_w
     assert "application-enforced" not in js and "rolled back cleanly" not in js
 
 
+def test_the_bundle_gives_every_focusable_element_one_visible_keyboard_focus_ring():
+    """WCAG 2.4.7: the previous pin had an inline `outline: none` on the top-bar Ask Sidekick input (found by the native accessibility harness).
+    The shipped bytes carry the one shared :focus-visible rule from a --focus token, a forced-colors rule, and no inline outline removal."""
+    m = _members()
+    js = next(v for k, v in m.items() if k.endswith(".js")).decode("utf-8")
+    css = next(v for k, v in m.items() if k.endswith(".css")).decode("utf-8")
+    assert re.search(r":focus-visible\{outline:var\(--focus-w\) solid var\(--focus\);outline-offset:var\(--focus-off\)\}", css)
+    assert "--focus:var(--accent)" in css and "forced-colors:active){:focus-visible{outline:2px solid Highlight" in css
+    assert 'outline:"none"' not in js and "outlineStyle" not in js
+
+
 def test_the_pin_chain_keeps_the_replaced_artifacts_and_ends_at_the_public_release():
-    prev = LOCK["previous_pin"]
-    assert prev["version"] == "local+312a811a" and prev["source_commit_published"] is False
-    old = ROOT / prev["local_path"]
-    assert old.is_file() and hashlib.sha256(old.read_bytes()).hexdigest() == prev["sha256"]          # going back is a lock edit
-    chip = prev["previous_pin"]
-    assert chip["version"] == "local+2f24719e" and chip["source_commit_published"] is False
-    chip_file = ROOT / chip["local_path"]
-    assert chip_file.is_file() and hashlib.sha256(chip_file.read_bytes()).hexdigest() == chip["sha256"]
-    mid = chip["previous_pin"]
-    assert mid["version"] == "local+ee958a01" and mid["source_commit_published"] is False
-    mid_file = ROOT / mid["local_path"]
-    assert mid_file.is_file() and hashlib.sha256(mid_file.read_bytes()).hexdigest() == mid["sha256"]
-    older = mid["previous_pin"]
-    assert older["version"] == "local+2fdef7f5" and older["source_commit_published"] is False
-    older_file = ROOT / older["local_path"]
-    assert older_file.is_file() and hashlib.sha256(older_file.read_bytes()).hexdigest() == older["sha256"]
-    assert older["previous_pin"]["version"] == "v0.2.0" and re.fullmatch(r"[0-9a-f]{64}", older["previous_pin"]["sha256"])
+    chain = ["local+5751e9e5", "local+312a811a", "local+2f24719e", "local+ee958a01", "local+2fdef7f5"]
+    node = LOCK
+    for want in chain:
+        node = node["previous_pin"]
+        assert node["version"] == want and node["source_commit_published"] is False, want
+        f = ROOT / node["local_path"]
+        assert f.is_file() and hashlib.sha256(f.read_bytes()).hexdigest() == node["sha256"], want          # going back is a lock edit
+    assert node["previous_pin"]["version"] == "v0.2.0" and re.fullmatch(r"[0-9a-f]{64}", node["previous_pin"]["sha256"])
     assert LOCK["merged_public_release"]["tag"] == "v0.2.0" and REC["merged_public_release"] == {"tag": "v0.2.0", "commit": LOCK["merged_public_release"]["commit"]}
-    assert LOCK["source_commit"] != prev["source_commit"] and LOCK["source_commit_published"] is False and LOCK["url"] == ""
+    assert LOCK["source_commit"] != LOCK["previous_pin"]["source_commit"] and LOCK["source_commit_published"] is False and LOCK["url"] == ""
 
 
 def test_the_record_states_that_the_npm_lock_changed_only_by_the_licence_field():
