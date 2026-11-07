@@ -228,7 +228,11 @@ def test_entry_point_inventory_is_pinned():
         "agentic_os/agent_gateway/external/inbound.py", "agentic_os/app_kit/mission_launcher.py", "agentic_os/content/runner.py",
         "agentic_os/mission/from_sidekick.py", "agentic_os/mission/goal_loop.py",
         "agentic_os/revenue/discovery_bridge.py", "agentic_os/revenue/gateway.py", "agentic_os/revenue/runner.py",
-        "apps/billing/decision.py"}, sorted(found)
+        "apps/billing/decision.py",
+        # AOS-DD operator runner and CLI (integrations/aosdd): every rehydrate/resume/approve goes through Runner._ensure_live, which obtains the
+        # base resume grant (grant_resume: authenticated principal + permission ceiling) for the principal that asks, and the base
+        # ResumeNotAuthorized guard applies regardless (tests/test_aosdd_identity.py, test_aosdd_runtime.py)
+        "agentic_os/integrations/aosdd/cli.py", "agentic_os/integrations/aosdd/runtime.py"}, sorted(found)
 
 
 # ───────────────────────── authorization: permissions + bound approvals ─────────────────────────
