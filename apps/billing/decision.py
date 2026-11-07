@@ -117,19 +117,22 @@ class ClosedLoop:
     lock: Any = field(default_factory=threading.RLock)               # serialises observe/refit (scheduler vs HTTP)
 
 
-def build_billing_runtime(on_dunning=None, store=None):
+def build_billing_runtime(on_dunning=None, store=None, service_resume=None):
     """(MissionRuntime, BillingPlanner) built from this app's operator via the in-process LocalOperatorClient.
-    ``store`` is the mission EventStore (durable JSONL when given, so parked missions survive a restart)."""
+    ``store`` is the mission EventStore (durable JSONL when given, so parked missions survive a restart).
+    ``service_resume`` is the explicit unattended-resume authority (``MissionRuntime.ServiceResume``): None (the default) means a
+    process restarted over a durable log restores its parked missions read-only and cannot run them."""
     op = build_billing_operator(on_dunning=on_dunning)
     registry = CapabilityRegistry()
     registry.register(op.manifest)
     planner = BillingPlanner()
-    rt = MissionRuntime(registry, Executor(LocalOperatorClient({op.name: op})), store=store, planner=planner)
+    rt = MissionRuntime(registry, Executor(LocalOperatorClient({op.name: op})), store=store, planner=planner,
+                        service_resume=service_resume)
     return rt, planner
 
 
 def build_loop(state_dir: Optional[str] = None, *, clock: Callable[[], float] = time.time,
-               resume: bool = True) -> ClosedLoop:
+               resume: bool = True, service_resume=None) -> ClosedLoop:
     """Wire a ClosedLoop. ``state_dir`` (or $BILLING_STATE_DIR) => durable JSONL stores for interventions,
     outcomes, observations, promoted policies AND the mission event log (so a restart can still approve a
     parked mission); else everything is in-memory. With a state dir and ``resume`` the parked missions are
@@ -141,7 +144,7 @@ def build_loop(state_dir: Optional[str] = None, *, clock: Callable[[], float] = 
         os.makedirs(state_dir, exist_ok=True)
         mission_store = EventStore(path=os.path.join(state_dir, "missions.jsonl"))
     rt, planner = build_billing_runtime(on_dunning=lambda mid, res: results.__setitem__(str(mid), res),
-                                        store=mission_store)
+                                        store=mission_store, service_resume=service_resume)
     launcher = ScopedLauncher(rt)
     launcher.planner = planner
     policies = PolicyRegistry()

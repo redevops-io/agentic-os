@@ -12,6 +12,7 @@ from agentic_os.mission.store import EventStore
 from agentic_os.mission.types import MissionState
 
 from sky.operator import build_sky_operator
+from tests._service_resume import TEST_SERVICE
 
 _DRYRUN = """\
  CLOUD   INSTANCE        vCPUs   Mem(GB)   ACCELERATORS   REGION/ZONE     COST ($)   CHOSEN
@@ -134,8 +135,8 @@ def test_restart_resume_does_not_relaunch_the_cluster():
     rt = MissionRuntime(reg, Executor(cc), store=store)
     m = rt.create_mission("place", policy_refs=["*"], template="sky_deploy")
     rt.run(m.id)                                                        # parks on the launch gate
-    rt2 = MissionRuntime(reg, Executor(cc), store=store)
-    rt2.rehydrate(m.id)
+    rt2 = MissionRuntime(reg, Executor(cc), store=store, service_resume=TEST_SERVICE)   # the restarted process is a service with an explicit resume authority
+    rt2.rehydrate_for_service(m.id)
     m2 = rt2._missions[m.id]
     while m2.state == MissionState.WAITING_HUMAN:
         rt2.approve(m.id, rt2.repo.pending_human(m.id)["node_id"], "approve")

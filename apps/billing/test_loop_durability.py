@@ -5,6 +5,7 @@ A "restart" is simulated by building NEW process objects (runtime, stores, launc
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
 import types
@@ -16,6 +17,7 @@ from agentic_os.mission.types import MissionState
 from agentic_os.policy_promotion import STATIC_POLICY
 
 from billing import core, decision, loop_api
+from tests._service_resume import TEST_SERVICE
 from billing.test_closed_loop import AUTH, DAY, NOW, FakeLago, _decide
 
 
@@ -31,8 +33,10 @@ def lago(monkeypatch):
 
 
 def _boot(state_dir, clock=None):
+    """A (re)started billing process over ``state_dir``. A restarted process is a SERVICE with an explicit resume authority: since the
+    replay boundary a rehydrated mission is read-only until one exists and unattended resume is never a default (service_resume=None)."""
     clock = clock or {"now": NOW}
-    return decision.build_loop(str(state_dir), clock=lambda: clock["now"]), clock
+    return decision.build_loop(str(state_dir), clock=lambda: clock["now"], service_resume=TEST_SERVICE), clock
 
 
 def test_restart_can_approve_a_parked_mission(lago, tmp_path):
@@ -206,6 +210,7 @@ def test_app_startup_resumes_parked_missions(lago, tmp_path, monkeypatch, load_a
     monkeypatch.delenv("BILLING_OUTCOME_INTERVAL_S", raising=False)
     mid = _decide(_boot(tmp_path)[0]).mission_id
     loop_api.set_loop(None)
+    monkeypatch.setattr(decision, "build_loop", functools.partial(decision.build_loop, service_resume=TEST_SERVICE))   # the restarted service's explicit authority
     try:
         with TestClient(load_app("billing").app) as c:                 # lifespan => startup hook => resume
             assert mid in loop_api.get_loop().launched
