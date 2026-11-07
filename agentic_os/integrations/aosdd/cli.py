@@ -11,6 +11,8 @@ runtime records. There is no ``--actor``: a free-text name is not an identity (s
     ... reconcile --mission M --step S3 [--reason TEXT]
     ... revoke --mission M --reason TEXT
     ... compensate --mission M --reason TEXT
+    ... redispatch --mission M --step S1 --reason TEXT   (approver only: re-send an UNCERTAIN ERPNext/Chatwoot step after a complete lookup found nothing)
+    ... accept-uncertain --mission M --step S1 --reason TEXT   (approver only: close an uncertain step as it is; the mission is cancelled)
     ... status --mission M
     python -m agentic_os.integrations.aosdd.cli --state DIR reconstruct --mission M      (reads only events.jsonl and its anchor; no config, no network)
     python -m agentic_os.integrations.aosdd.cli --state DIR verify                       (integrity of the event log + anchor, the operation ledger and the authority store)
@@ -116,6 +118,8 @@ def main(argv=None) -> int:
     s = sub.add_parser("reconcile"); s.add_argument("--mission", required=True); s.add_argument("--step", required=True); s.add_argument("--reason", default="")
     s = sub.add_parser("revoke"); s.add_argument("--mission", required=True); s.add_argument("--reason", required=True)
     s = sub.add_parser("compensate"); s.add_argument("--mission", required=True); s.add_argument("--reason", required=True)
+    s = sub.add_parser("redispatch"); s.add_argument("--mission", required=True); s.add_argument("--step", required=True); s.add_argument("--reason", required=True)
+    s = sub.add_parser("accept-uncertain"); s.add_argument("--mission", required=True); s.add_argument("--step", required=True); s.add_argument("--reason", required=True)
     s = sub.add_parser("status"); s.add_argument("--mission", required=True)
     s = sub.add_parser("reconstruct"); s.add_argument("--mission", required=True)
     sub.add_parser("verify")
@@ -157,6 +161,12 @@ def main(argv=None) -> int:
         elif a.cmd == "revoke":
             r.revoke(a.mission, a.reason, principal=who)
             _out(cfg, {"mission_id": a.mission, "revoked": True, "by": who.record()})
+        elif a.cmd == "redispatch":
+            r.redispatch(a.mission, a.step, a.reason, principal=who)
+            _out(cfg, summary(r, a.mission))
+        elif a.cmd == "accept-uncertain":
+            r.accept_uncertain(a.mission, a.step, a.reason, principal=who)
+            _out(cfg, summary(r, a.mission))
         elif a.cmd == "compensate":
             r.compensate(a.mission, a.reason, principal=who)
             _out(cfg, summary(r, a.mission))
