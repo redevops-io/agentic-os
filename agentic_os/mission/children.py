@@ -50,6 +50,7 @@ from typing import Any, Callable, Optional
 
 from .approval import _b64, _secret_bytes, _unb64, canonical
 from .authority import AuthorityEnvelope, AuthorityError, AutonomyBudget, Grant, Verdict
+from .integrity import IntegrityError
 
 KIND = "child_cred/v1"
 ACTIVE, CLOSED, REVOKED = "active", "closed", "revoked"
@@ -273,6 +274,8 @@ class ChildCredentialVerifier:
             return Verified(True, {"child_id": d["child_id"], "key": d["child_id"], "principal": d["principal"], "tenant": d["tenant"],
                                    "parent_key": d["parent_key"], "role": d["role"], "depth": int(d["depth"]),
                                    "envelope_digest": d["envelope_digest"]}, "")
+        except IntegrityError as e:                  # the store that holds the envelope fails its own integrity check: a refusal, never "malformed" and never a pass
+            return Verified(False, None, f"authority_integrity: {type(e).__name__}")
         except Exception as e:  # noqa: BLE001 - a malformed token of any shape fails closed
             return Verified(False, None, f"malformed: {type(e).__name__}")
 
@@ -393,7 +396,10 @@ class ChildSpawner:
             self._refuse(parent_key, role, "no_signing_secret", "no secret is configured to sign child credentials")
         if not str(role).strip() or not grants:
             self._refuse(parent_key, role, "invalid", "a role and at least one grant are required")
-        parent = g.envelopes.get(parent_key)
+        try:
+            parent = g.envelopes.get(parent_key)
+        except IntegrityError as e:                  # a store that fails its integrity check authorises nothing: refuse, do not raise through
+            self._refuse(parent_key, role, "authority_integrity", f"the authority store failed its integrity check: {type(e).__name__}")
         # 1. may the parent delegate at all (revoked, expired, chain, may_delegate, quota)? Reserves one unit of the child quota.
         dec, _ = g.authorize_delegation(parent_key, tenant)
         if not dec.allowed:
@@ -469,7 +475,10 @@ class ChildSpawner:
         """A DELIBERATE rotation (a suspected leak, a change of bound client): a new token id, every earlier one stops verifying at once.
         Not needed to keep a running mission going: the lease heartbeat does that with the same token."""
         row = self.registry.get(child_id)
-        env = self.guard.envelopes.get(child_id)
+        try:
+            env = self.guard.envelopes.get(child_id)
+        except IntegrityError as e:
+            raise SpawnRefused("authority_integrity", f"the authority store failed its integrity check: {type(e).__name__}")
         now = self.clock()
         if row is None or row["status"] != ACTIVE or env is None or not now < env.expires_at:
             raise SpawnRefused("not_active", "this child is not active")
@@ -489,12 +498,15 @@ class ChildSpawner:
         for a child that is finished, expired, or whose chain is no longer valid: a heartbeat can revive a lapse, never a revocation."""
         now = self.clock()
         row = self.registry.get(child_id)
-        env = self.guard.envelopes.get(child_id)
-        if row is None or row["status"] != ACTIVE or env is None or not now < min(env.expires_at, float(row["expires_at"])):
-            return False
-        if self.guard.envelopes.is_revoked(env.mission_id) or env.revocation_epoch < self.guard.envelopes.epoch(env.tenant):
-            return False
-        if self.guard.chain_denial(env, now) is not None:
+        try:
+            env = self.guard.envelopes.get(child_id)
+            if row is None or row["status"] != ACTIVE or env is None or not now < min(env.expires_at, float(row["expires_at"])):
+                return False
+            if self.guard.envelopes.is_revoked(env.mission_id) or env.revocation_epoch < self.guard.envelopes.epoch(env.tenant):
+                return False
+            if self.guard.chain_denial(env, now) is not None:
+                return False
+        except IntegrityError:                       # a store that fails its integrity check keeps nothing alive
             return False
         return self.registry.touch(child_id, now + self.lease_ttl_s)
 
