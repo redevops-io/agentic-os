@@ -26,12 +26,18 @@ BETA_ROWS = [
 CANARY = "HOST-CANARY-9f3c1d7e-do-not-leak"
 
 
+def _authn(p: Principal):
+    """The principal as the authentication layer issues it after checking a credential (resume grants require this)."""
+    from agentic_os.mission.principal import default_issuer
+    return default_issuer().issue(p, method="test-login")
+
+
 def owner() -> Principal:
-    return Principal("owner", "user", ("operator",))
+    return _authn(Principal("owner", "user", ("operator",)))
 
 
 def stranger() -> Principal:
-    return Principal("stranger", "user", ())
+    return _authn(Principal("stranger", "user", ()))
 
 
 def make_ceiling(tmp_path, grants):

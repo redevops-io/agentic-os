@@ -51,6 +51,9 @@ from .types import (
 )
 from .context_view import epoch_from_refs, plan_fingerprint
 from .policy import MissionPolicy
+from .authority_policy import AuthorityTestPolicy
+from .integrity import IntegrityError
+from .principal import ALL_TENANTS, AuthenticatedPrincipal, PrincipalError, PrincipalRequired, default_issuer
 
 import hashlib as _hashlib
 import json as _json
@@ -67,6 +70,30 @@ class ResumeNotAuthorized(PermissionError):
     resume/re-execute authorization. Raised at the lowest execution layer, before any tool is called or event written."""
 
 
+class CompensationNotAuthorized(PermissionError):
+    """An operator asked to compensate a mission's applied steps without the ``mission.<scope>.compensate`` permission."""
+
+
+class _OperatorCompensation:
+    """The authority of an explicit operator compensation: an authenticated principal and, when a ceiling is given, its
+    ``mission.<scope>.compensate`` permission, both read again each time a step's undo is about to run. Without a ceiling the
+    caller (an authenticated control-plane route) has already applied its own role rules."""
+
+    def __init__(self, principal, ceiling, scope: str) -> None:
+        self.principal, self.ceiling, self.scope = principal, ceiling, scope
+
+    def decide(self, rt, m, node):
+        from .authority import Decision, Verdict  # noqa: PLC0415
+        basis = f"operator:{getattr(self.principal, 'id', '')}"
+        if not rt.principal_verifier().verify(self.principal):
+            return Decision(Verdict.DENY, "operator_not_authenticated", "the operator's principal is not authenticated"), basis
+        if self.ceiling is not None:
+            from ..evidence_query.authz import allowed  # noqa: PLC0415
+            if not allowed(self.ceiling, self.principal, rt._compensate_permission(self.scope)):
+                return Decision(Verdict.DENY, "operator_not_authorized", f"the operator lacks {rt._compensate_permission(self.scope)}"), basis
+        return Decision(Verdict.ALLOW, "operator", f"explicit compensation by {getattr(self.principal, 'id', '')}"), basis
+
+
 class ServiceResume:
     """EXPLICIT configuration for unattended resume: the service principal a process runs as when it rehydrates a mission and
     drives it without a human present (boot, goal loop, the revenue runner, the billing decision hand-off). It is NEVER a default:
@@ -79,6 +106,9 @@ class ServiceResume:
     def __init__(self, principal, ceiling) -> None:
         if principal is None or ceiling is None:
             raise ValueError("a service resume needs both a principal and a permission ceiling")
+        if not isinstance(principal, AuthenticatedPrincipal):
+            raise ValueError("a service resume needs an authenticated principal (issued by the authentication layer, "
+                             "see mission/principal.py), not a bare identity")
         self.principal, self.ceiling = principal, ceiling
 
 #: DEFAULT business value (USD) per mission kind — the fallback only. The effective value is resolved by
@@ -251,8 +281,15 @@ class MissionRuntime:
         resume_grant_ttl_s: float = 900.0,
         approval_ttl_s: float | None = None,        # deprecated alias of approval_grant_ttl_s (the name collided with the request TTL)
         service_resume: "ServiceResume | None" = None,   # unattended resume: explicit, default None = refuse (owner decision 2026-11-06)
+        test_policy: "AuthorityTestPolicy | None" = None,  # non-production only: the explicit, named stand-in for an owner's envelope
+        principal_verifier=None,                          # checks the proof on an AuthenticatedPrincipal; default = this process's authentication layer
     ):
-        from .profile import assert_authority  # noqa: PLC0415
+        from .profile import ProfileError, assert_authority, is_production  # noqa: PLC0415
+        if test_policy is not None:
+            if is_production():
+                raise ProfileError("an AuthorityTestPolicy is never honoured in the production profile: "
+                                   "the owner's envelope is the only authority there")
+            self.test_policy = test_policy
         if authority is not None:
             self.authority = authority
         if authority_key is not None:
@@ -320,6 +357,7 @@ class MissionRuntime:
         self.approval_ttl_s = self.approval_grant_ttl_s     # deprecated alias (read-only by convention)
         self.resume_grant_ttl_s = float(resume_grant_ttl_s)
         self.service_resume = service_resume
+        self._principal_verifier = principal_verifier
         self._reconstructed: set[str] = set()
         self._resume_grants: dict[str, dict] = {}
         self._not_honoured: set[tuple] = set()
@@ -728,10 +766,11 @@ class MissionRuntime:
                 lk = self._run_locks[mission_id] = threading.RLock()
             return lk
 
-    def run(self, mission_id: str) -> Mission:
+    def run(self, mission_id: str, *, principal=None) -> Mission:
         """Drive the mission. One driver at a time per mission: concurrent callers queue and then observe the
-        folded state, so a ready node is dispatched once."""
-        self._require_execution_authority(mission_id)     # replay boundary: a reconstructed mission does not run without a grant
+        folded state, so a ready node is dispatched once. A ``principal`` is only needed to show who is driving a
+        reconstructed mission: the resume grant belongs to the principal that obtained it."""
+        self._require_execution_authority(mission_id, principal=principal)     # replay boundary: a reconstructed mission does not run without a grant
         with self._run_lock(mission_id):
             m = self._run_locked(mission_id)
         if m.state in (MissionState.SUCCEEDED, MissionState.FAILED, MissionState.CANCELLED,
@@ -889,12 +928,21 @@ class MissionRuntime:
     #: mission-authority/v1. An `AuthorityGuard` (owner/platform-issued, trusted state) that may stand in for an
     #: ORDINARY approval gate when a node's decision is `standing_eligible`. Unset by default: behaviour unchanged.
     authority = None
+    #: Non-production only: an explicit, named stand-in for an owner's envelope (see authority_policy.py). None = no such policy.
+    test_policy: "AuthorityTestPolicy | None" = None
+    #: An action inside a grant's scope but past a limit or tier (ESCALATE) parks as an ordinary human gate. False: it is refused
+    #: (authority_denied), for a runtime whose human decision is made elsewhere (for example one plan approval).
+    escalation_parks: bool = True
     authority_key = None          # optional callable(mission) -> envelope id
 
     def _authority_key(self, m: Mission) -> str:
         if callable(self.authority_key):
             return self.authority_key(m)
-        if self.authority.envelopes.get(str(m.id)) is not None:
+        try:
+            has_own = self.authority.envelopes.get(str(m.id)) is not None
+        except IntegrityError:                      # a store that fails its integrity check has an envelope we cannot read: the guard refuses
+            return str(m.id)
+        if has_own:
             return str(m.id)
         p = m.principal
         subject = getattr(p, "subject", None) or getattr(p, "id", None) or (p if isinstance(p, str) else "")
@@ -919,28 +967,125 @@ class MissionRuntime:
           "authority_denied" production only: the envelope does not allow this action (hard stop)
         The policy DENY is handled by the caller before this is reached (`decision.denied`)."""
         from .authority import Standing, Verdict  # noqa: PLC0415
-        from .profile import is_production  # noqa: PLC0415
         from .types import ApprovalRule  # noqa: PLC0415
         guard = self.authority
-        production = is_production()
         if decision.required:
             # a mandatory / un-migrated / legacy gate is never offered to the guard (standing_eligible is False)
             if guard is None or not getattr(decision, "standing_eligible", False) or not m.tenant:
                 return "park", None
             res = self._authorize(m, node, decision, world, inputs, Standing(decision.risk_fired, decision.risk_waivable), attempt)
             return ("run" if res is not None and res.allowed else "park"), res
-        if guard is None or not production:
-            return "run", None                      # development/test: scope enforcement is an explicit opt-in
-        res = self._authorize(m, node, decision, world, inputs, None, attempt)
-        if res is not None and res.allowed:
-            return "run", res
-        if res is not None and res.verdict is Verdict.ESCALATE:
-            decision.required = True                # the envelope must be extended: ordinary human gate
-            decision.rules = list(decision.rules) + [ApprovalRule.AUTHORITY.value]
-            if graph is not None and not decision.packet:
-                decision.packet = self.policy_plane._packet(node, m, decision.risk, decision.rules, graph)
-            return "park", res
+        # The same rule in every profile: the owner's envelope decides. Only when the mission has NO envelope does the
+        # profile matter, and then only as an explicit, recorded test policy (never an ambient allow).
+        if guard is not None:
+            res = self._authorize(m, node, decision, world, inputs, None, attempt)
+            if res is not None and res.allowed:
+                return "run", res
+            if res is not None and res.verdict is Verdict.ESCALATE and self.escalation_parks:
+                decision.required = True                # the envelope must be extended: ordinary human gate
+                decision.rules = list(decision.rules) + [ApprovalRule.AUTHORITY.value]
+                if graph is not None and not decision.packet:
+                    decision.packet = self.policy_plane._packet(node, m, decision.risk, decision.rules, graph)
+                return "park", res
+            if res is None or res.rule != "no_authority" or self._production():
+                return "authority_denied", res
+        elif self._production():
+            return "authority_denied", None
+        return self._local_authority(m, node, decision)
+
+    def _live_authority(self, m: Mission, node, inputs: dict):
+        """The authority decision for this action RIGHT NOW, with no counter touched: the owner's envelope when the mission has one
+        (revocation, expiry, delegation chain, scope), else the profile's fallback (production: none; otherwise an explicit test
+        policy for a side effect). Read at the moment it is needed; nothing here is remembered from the gate or from an approval."""
+        from .authority import Decision, Verdict  # noqa: PLC0415
+        guard = self.authority
+        if guard is not None and m.tenant:
+            key = self._authority_key(m)
+            if key:
+                res = guard.check(key, m.tenant, self._action_for(m, node, self._world(m.id), inputs))
+                if res.rule != "no_authority":
+                    return res
+        if self._production():
+            return Decision(Verdict.DENY, "no_authority", "no authority envelope covers this mission")
+        if not node.side_effecting:
+            return Decision(Verdict.ALLOW, "read_only", "no side effect to authorise")
+        tp = self._active_test_policy()
+        if tp is not None and tp.permits(node.capability):
+            return Decision(Verdict.ALLOW, "test_policy", f"allowed by test policy {tp.name}")
+        return Decision(Verdict.DENY, "no_authority",
+                        "no authority envelope covers this mission and no explicit test policy lists this capability")
+
+    def _execution_refusal(self, m: Mission, node, inputs: dict, *, phase: str = "dispatch"):
+        """None when this action is inside current authority; else the refusing Decision, already recorded with its reason.
+
+        Called immediately before each dispatch, AFTER the gate and any approval, on every execution path. A human approval is not
+        authority: it can satisfy an ESCALATE (a limit or tier the owner may extend: that is what asking a human is for) but never
+        a DENY (revoked, expired, forbidden, out of scope, no envelope)."""
+        from .authority import Verdict  # noqa: PLC0415
+        approved = self._approval_marker(m.id, node.id) is not None
+        res = self._live_authority(m, node, inputs)
+        if res.allowed or (res.verdict is Verdict.ESCALATE and approved):
+            return None
+        self.store.append("ExecutionAuthorityRefused", m.id, {
+            "node_id": node.id, "capability": node.capability, "phase": phase, "approved": approved,
+            "verdict": res.verdict.value, "rule": res.rule, "reason": res.reason, "envelope_digest": res.envelope_digest})
+        return res
+
+    def _production(self) -> bool:
+        from .profile import is_production  # noqa: PLC0415
+        return is_production()
+
+    def _active_test_policy(self) -> "AuthorityTestPolicy | None":
+        """The explicit test policy in force, or None. Never in production, whatever the class or instance says."""
+        return None if self._production() else self.test_policy
+
+    def _local_authority(self, m: Mission, node, decision):
+        """No envelope covers this mission, outside production. A node with no side effect runs (nothing to authorise). A
+        side effect runs only under an explicit test policy that lists its capability; otherwise it is refused."""
+        from .authority import Decision, Verdict  # noqa: PLC0415
+        if not node.side_effecting:
+            return "run", None
+        tp = self._active_test_policy()
+        if tp is not None and tp.permits(node.capability):
+            self._note_test_policy(m)
+            self.store.append("TestPolicyAuthorized", m.id, {"node_id": node.id, "capability": node.capability, "phase": "execute",
+                                                             "policy": tp.name, "digest": tp.digest()})
+            return "run", Decision(Verdict.ALLOW, "test_policy", f"allowed by test policy {tp.name}")
+        why = ("no authority envelope covers this mission and no explicit test policy is configured: side effects are refused"
+               if tp is None else f"test policy {tp.name!r} does not list {node.capability}: side effects are refused")
+        res = Decision(Verdict.DENY, "no_authority", why)
+        self.store.append("AuthorityDeclined", m.id, {"node_id": node.id, "capability": node.capability, "rules": list(decision.rules),
+                                                      "verdict": res.verdict.value, "rule": res.rule, "reason": why, "amendment": None})
         return "authority_denied", res
+
+    def _note_test_policy(self, m: Mission) -> None:
+        """Record the test policy in force once per mission (name, reason, scope, digest)."""
+        tp = self._active_test_policy()
+        if tp is None or any(e.type == "TestPolicyActive" for e in self.store.for_mission(m.id)):
+            return
+        self.store.append("TestPolicyActive", m.id, {**tp.to_record(), "digest": tp.digest()})
+
+    def authority_posture(self) -> dict:
+        """What authorises side effects in this runtime: the profile, whether an envelope guard is wired, and the explicit test
+        policy if one is in force (name, reason, scope, digest). For status endpoints and startup logs."""
+        from .profile import profile  # noqa: PLC0415
+        tp = self._active_test_policy()
+        return {"profile": profile(), "guard_configured": self.authority is not None,
+                "guard_durable": bool(getattr(self.authority, "durable", False)),
+                "test_policy": ({**tp.to_record(), "digest": tp.digest()} if tp is not None else None)}
+
+    def _authority_basis(self, mission_id: str) -> list:
+        """What authorised this mission's actions, folded from its log: ``envelope`` and/or ``test_policy:<name>``."""
+        basis: list = []
+        for e in self.store.for_mission(mission_id):
+            b = ""
+            if e.type in ("ScopeAuthorized", "StandingGrantApplied"):
+                b = "envelope"
+            elif e.type == "TestPolicyAuthorized":
+                b = f"test_policy:{e.payload.get('policy', '')}"
+            if b and b not in basis:
+                basis.append(b)
+        return basis
 
     def _authorize(self, m: Mission, node, decision, world: WorldState, inputs, standing, attempt=None):
         """Evaluate the exact effective action against the owner's envelope and reserve its counters atomically."""
@@ -1086,8 +1231,8 @@ class MissionRuntime:
                     return True
         return False
 
-    def reconcile_node(self, mission_id: str, node_id: str, *, executed: bool, evidence: dict, actor: str, reason: str,
-                       result: "dict | None" = None, resume: bool = True) -> Mission:
+    def reconcile_node(self, mission_id: str, node_id: str, *, executed: bool, evidence: dict, actor: str = "", reason: str,
+                       result: "dict | None" = None, resume: bool = True, principal=None) -> Mission:
         """Resolve a node parked in WAITING_RECONCILIATION with evidence, and resume THIS mission.
 
         `executed=False`: the provider shows the effect did not happen. The reservation is released and the node runs again under a
@@ -1100,6 +1245,8 @@ class MissionRuntime:
         rerun. `resume=False` leaves the mission PAUSED for the owner to resume."""
         from .reconcile import ReconciliationConflict, ReconciliationError, validate_evidence  # noqa: PLC0415
         ev = validate_evidence(evidence)
+        ident = self._operator_identity(mission_id, principal, actor, "reconcile")
+        actor = ident.get("approver", "")
         if not str(actor).strip():
             raise ReconciliationError("the person reconciling must be named")
         if len(str(reason).strip()) < 8:
@@ -1153,6 +1300,7 @@ class MissionRuntime:
                 self._complete_from_reconciliation(m, plan, node, ev, str(actor).strip(), result)
             self.store.append("ReconciliationResolved", mission_id, {
                 "node_id": node_id, "lease_id": lid, "executed": bool(executed), "actor": str(actor).strip(),
+                **{k: v for k, v in ident.items() if k != "approver"},
                 "reason": str(reason).strip()[:500], "evidence": ev, "provider_ref": provider_ref, "at": time.time()})
             self._leases().pop((str(m.id), node_id), None)
             if m.state in terminal:
@@ -1227,9 +1375,13 @@ class MissionRuntime:
 
     def _block_authority(self, m: Mission, node, res) -> None:
         """Production: the envelope forbids this action. Like a policy DENY it is a hard stop with an actionable reason."""
+        status = self.repo.node_status(m.id)
+        left = [n.capability for n in self._plans[m.id].graph.nodes if n.side_effecting and status.get(n.id) == NodeState.DONE]
         m.outcome = {"blocked": "authority_denied", "node": node.id, "capability": node.capability,
                      "rule": res.rule if res else "no_authority", "reason": res.reason if res else "",
-                     "amendment": res.amendment if res else None}
+                     "amendment": res.amendment if res else None,
+                     # what this refusal leaves in place, and that nothing was undone: undoing it is a separate, authorized action (compensate())
+                     "effects_remaining": left, "compensation": "none performed: undoing completed steps is a separate, explicitly authorized action"}
         self.lifecycle.dispatch(GateReached(mission_id=m.id, node_id=node.id, capability=node.capability))
         self._set_state(m, MissionState.FAILED)
 
@@ -1272,6 +1424,10 @@ class MissionRuntime:
         if not self._pre_exec_ok(m, plan, node):
             return False
         inputs = self._resolve_inputs(m, world, node)
+        refused = self._execution_refusal(m, node, inputs)       # current authority, after any approval, at the moment of dispatch
+        if refused is not None:
+            self._block_authority(m, node, refused)
+            return False
         # The reservation is taken BEFORE the dispatch is recorded: a refused re-dispatch must not look like another attempt, or the
         # attempt count (restored from these events on restart) would drift and the next re-gate could miss the unresolved reservation.
         claims = self._lease_dispatched(m, node, inputs)
@@ -1418,6 +1574,10 @@ class MissionRuntime:
             if not self._pre_exec_ok(m, plan, node):     # admit (fail-closed) before any dispatch, like serial
                 return False
             inputs = self._resolve_inputs(m, world, node)
+            refused = self._execution_refusal(m, node, inputs)       # as in `_execute`: per node, just before its dispatch
+            if refused is not None:
+                self._block_authority(m, node, refused)
+                return False
             claims = self._lease_dispatched(m, node, inputs)         # before the event: see `_execute`
             if claims is None and self._lease_of(m, node.id) is not None:
                 return self._refuse_redispatch(m, plan, node)
@@ -1667,19 +1827,54 @@ class MissionRuntime:
                 parked.discard(e.payload.get("node_id"))
         return parked
 
+    # ── operator identity ──────────────────────────────────────────────────────
+    def principal_verifier(self):
+        return self._principal_verifier if self._principal_verifier is not None else default_issuer()
+
+    def _operator_identity(self, mission_id: str, principal, actor: str, action: str) -> dict:
+        """Who is acting, as a record for the log. With a principal: its proof is verified and its tenant must be the mission's (or
+        the all-tenant admin); otherwise the action is refused and the refusal recorded. Without one, only an explicit test policy
+        that allows anonymous operators lets it through, and the record says the actor was NOT authenticated."""
+        m = self._missions.get(mission_id)
+
+        def refuse(reason: str, exc, claimed: str = ""):
+            self.store.append("PrincipalRefused", mission_id, {"action": action, "reason": reason, "claimed_id": str(claimed)[:64]})
+            return exc
+
+        if principal is not None:
+            if not self.principal_verifier().verify(principal):
+                raise refuse("not_authenticated", PrincipalError(f"{action}: the principal is not authenticated"), getattr(principal, "id", ""))
+            if m is not None and m.tenant and principal.tenant not in (m.tenant, ALL_TENANTS):
+                raise refuse("tenant_mismatch", PrincipalError(f"{action}: the principal does not belong to this mission's tenant"), principal.id)
+            return {"approver": principal.id, "principal": principal.record(), "authenticated": True}
+        tp = self._active_test_policy()
+        if tp is not None and tp.anonymous_operators:
+            return {**({"approver": str(actor)[:200]} if str(actor).strip() else {}), "authenticated": False, "basis": f"test_policy:{tp.name}"}
+        raise refuse("unauthenticated", PrincipalRequired(f"{action}: an authenticated principal is required (a free-text actor is not an identity)"))
+
+    @staticmethod
+    def _principal_binding(binding: str, ident: dict) -> str:
+        """Ties an approval's plan/evidence binding to the principal recorded with it, so a replay honours the approval only if
+        both are intact."""
+        p = ident.get("principal") or {}
+        body = _json.dumps({"binding": binding, "id": p.get("id"), "tenant": p.get("tenant"), "method": p.get("method"),
+                            "issuer": p.get("issuer")}, sort_keys=True, separators=(",", ":"))
+        return "sha256:" + _hashlib.sha256(body.encode()).hexdigest()
+
     def approve(self, mission_id: str, node_id: str, decision: str = "approve",
-                edit: dict | None = None, actor: str = "") -> Mission:
+                edit: dict | None = None, actor: str = "", *, principal=None) -> Mission:
         # serialised with run(): of several concurrent approvals of one gate, one records and dispatches
         with self._run_lock(mission_id):
-            return self._approve_locked(mission_id, node_id, decision, edit, actor)
+            return self._approve_locked(mission_id, node_id, decision, edit, actor, principal)
 
     def _approve_locked(self, mission_id: str, node_id: str, decision: str = "approve",
-                        edit: dict | None = None, actor: str = "") -> Mission:
+                        edit: dict | None = None, actor: str = "", principal=None) -> Mission:
         self._require_execution_authority(mission_id)     # replay boundary (top of the locked body: forks and direct callers pass here too)
         m = self._missions[mission_id]
+        ident = self._operator_identity(mission_id, principal, actor, "approve")
         # fork-branch approvals are handled (and fail closed) by the fork controller, before the generic guards
         if isinstance(node_id, str) and ":fork:" in node_id and self.forks.owns(mission_id, node_id):   # fork branch approvals
-            return self.forks.approve_branch(mission_id, node_id, decision, edit)
+            return self.forks.approve_branch(mission_id, node_id, decision, edit, identity=ident)
         # A terminal mission has nothing to approve: without this a bogus reject re-entered the saga of a
         # COMPENSATION_FAILED mission (consumed retry attempts, duplicate MissionOutcome). The node must also
         # be one that is actually awaiting a human.
@@ -1704,16 +1899,16 @@ class MissionRuntime:
                 key, value, source="human", confidence=100.0,
                 source_type="human", source_ref=f"human-task:{pending.get('id', '')}")
             self.store.append("BeliefResolved", mission_id,
-                              {"key": key, "value": value, "node_id": node_id})
+                              {"key": key, "value": value, "node_id": node_id, **ident})
             self.store.append("NodeResumed", mission_id, {"node_id": node_id})
             return self.run(mission_id)
         # a verification gate: accept (override) commits the result; reject fails the mission
         if pending.get("kind") == "verification" and pending.get("node_id") == node_id:
             if decision in ("accept", "approve"):
-                self.store.append("VerificationOverridden", mission_id, {"node_id": node_id})
+                self.store.append("VerificationOverridden", mission_id, {"node_id": node_id, **ident})
                 self.store.append("NodeResumed", mission_id, {"node_id": node_id})
                 return self.run(mission_id)     # re-runs; _verify_ok now skips the gate → committed
-            self.store.append("VerificationRejected", mission_id, {"node_id": node_id})
+            self.store.append("VerificationRejected", mission_id, {"node_id": node_id, **ident})
             self.store.append("NodeSkipped", mission_id, {"node_id": node_id})
             plan = self._plans[mission_id]
             self._saga(m, plan, self._world(mission_id))   # a rejected gate unwinds committed upstream effects
@@ -1740,19 +1935,21 @@ class MissionRuntime:
             # what they approved is not what would run.
             _shown = self._parked_digest(mission_id, node_id)
             granted_at = _wall()
+            _binding = self._approval_binding(m, mission_id, node_id)
             self.store.append("ApprovalGranted", mission_id, {
-                "node_id": node_id, "edit": edit, **({"approver": actor} if actor else {}),
+                "node_id": node_id, "edit": edit, **ident,
+                **({"principal_binding": self._principal_binding(_binding, ident)} if ident.get("authenticated") else {}),
                 # what the approver was SHOWN (inputs_sha256) and what plan/evidence it was GIVEN FOR (binding) are complementary
                 **({"inputs_sha256": _shown} if _shown else {}),
                 "capability": self._capability_of(mission_id, node_id),
                 # Bound to the exact plan + evidence + intent it was given for, and time-limited: a replay only honours
                 # an approval whose binding equals the CURRENT one and which has not expired (grant lifetime, distinct from the
                 # request TTL in _approval_ttl_s(), which bounds how long an UNANSWERED request stays answerable).
-                "binding": self._approval_binding(m, mission_id, node_id),
+                "binding": _binding,
                 "granted_at": granted_at, "expires_at": granted_at + self.approval_grant_ttl_s})
             self.store.append("NodeResumed", mission_id, {"node_id": node_id})
             return self.run(mission_id)
-        self.store.append("ApprovalRejected", mission_id, {"node_id": node_id})
+        self.store.append("ApprovalRejected", mission_id, {"node_id": node_id, **ident})
         self.store.append("NodeSkipped", mission_id, {"node_id": node_id})
         plan = self._plans[mission_id]
         self._saga(m, plan, self._world(mission_id))   # a rejected gate unwinds committed upstream effects
@@ -1764,24 +1961,110 @@ class MissionRuntime:
         return "approver"
 
     # ── sagas / failure / success ──────────────────────────────────────────────
-    def _saga(self, m: Mission, plan: ExecutionPlan, world: WorldState) -> None:
+    def _saga(self, m: Mission, plan: ExecutionPlan, world: WorldState, *, authorizer=None) -> None:
         """Explicit-only compensation (docs/COMPENSATION.md): see compensation_runner.run_saga. Compensations are side effects too:
-        they reach tools only through _executor_for, which enforces the replay authorization."""
+        they reach tools only through _executor_for, which enforces the replay authorization, and each undo is authorized when it is
+        about to run (``_compensation_authority``)."""
         self._require_execution_authority(m.id)     # replay boundary at the entry: run_saga settles/writes events even when nothing is undone
         from .compensation_runner import run_saga  # noqa: PLC0415
-        run_saga(self, m, plan)
+        run_saga(self, m, plan, authorizer)
 
-    def compensation_intervention(self, mission_id: str, action: str, *, actor: str, reason: str = "",
-                                  node_id: str | None = None) -> Mission:
+    def _compensate_permission(self, scope: str) -> str:
+        from ..evidence_query.authz import _SCOPE  # noqa: PLC0415
+        if not isinstance(scope, str) or not _SCOPE.match(scope):
+            raise ValueError("invalid permission scope")
+        return f"mission.{scope}.compensate"
+
+    def _compensation_authority(self, m: Mission, node, authorizer=None):
+        """-> (Decision, basis): may the undo of this applied node run RIGHT NOW? The forward step's authorization is not consulted.
+        An explicit operator action supplies its own ``authorizer``; otherwise the owner's ``compensate:<capability>`` grant decides
+        (revocation and expiry included) or, outside production and with no envelope, the explicit test policy's ``compensate`` list."""
+        from .authority import Decision, Verdict  # noqa: PLC0415
+        if authorizer is not None:
+            return authorizer.decide(self, m, node)
+        guard = self.authority
+        if guard is not None and m.tenant:
+            key = self._authority_key(m)
+            if key:
+                try:
+                    args = {k: v for k, v in self._resolve_inputs(m, self._world(m.id), node).items() if not str(k).startswith("_")}
+                except Exception:  # noqa: BLE001 - selectors then have nothing to match: the check fails closed
+                    args = {}
+                res = guard.check_compensation(key, m.tenant, node.capability, args)
+                if res.rule != "no_authority":
+                    return res, "envelope"
+        if self._production():
+            return Decision(Verdict.DENY, "no_authority", "no authority envelope covers the compensation of this mission"), ""
+        tp = self._active_test_policy()
+        if tp is not None and tp.permits_compensation(node.capability):
+            self._note_test_policy(m)
+            self.store.append("TestPolicyAuthorized", m.id, {"node_id": node.id, "capability": node.capability, "phase": "compensate",
+                                                             "policy": tp.name, "digest": tp.digest()})
+            return Decision(Verdict.ALLOW, "test_policy", f"allowed by test policy {tp.name}"), f"test_policy:{tp.name}"
+        return Decision(Verdict.DENY, "no_authority",
+                        "no authority envelope covers this mission and no explicit test policy lists this capability under compensate"), ""
+
+    def compensate(self, mission_id: str, *, principal, ceiling, reason: str, scope: "str | None" = None,
+                   node_id: "str | None" = None) -> Mission:
+        """EXPLICIT operator compensation of steps the mission already applied (all of them, newest first, or one ``node_id``).
+
+        This is the one way to undo applied steps when no automatic authority covers it (a denied or revoked envelope, a
+        PRESERVE_ONLY policy, a succeeded mission). It needs (1) an authenticated principal for this mission's tenant, (2) the
+        permission ``mission.<scope>.compensate`` on ``ceiling`` (default scope: the mission's tenant, else ``default``), checked
+        here and again before each step's undo, and (3) a stated reason. Each step still goes through the compensation runner:
+        its own request, authorization, execution, read-back and receipt. A mission rebuilt from the log needs ``grant_resume`` first.
+        A succeeded or parked mission ends CANCELLED; a failed one stays FAILED, or COMPENSATION_FAILED if anything remains."""
+        from .compensation_runner import InterventionError, run_saga  # noqa: PLC0415
+        from .compensation_policy import FailurePolicy  # noqa: PLC0415
+        if mission_id not in self._missions:
+            raise KeyError(mission_id)
+        if len(str(reason).strip()) < 8:
+            raise ValueError("compensation needs a stated reason of at least a few words")
+        with self._run_lock(mission_id):
+            self._require_execution_authority(mission_id, principal=principal)
+            ident = self._operator_identity(mission_id, principal, "", "compensate")
+            if principal is None:
+                self.store.append("PrincipalRefused", mission_id, {"action": "compensate", "reason": "unauthenticated", "claimed_id": ""})
+                raise PrincipalRequired("compensate: an authenticated principal is required")
+            m = self._missions[mission_id]
+            sc = str(scope if scope is not None else (m.tenant or "default"))
+            if m.tenant and sc != str(m.tenant):
+                self.store.append("CompensationOperatorRefused", mission_id, {"principal": ident["principal"], "scope": sc[:64], "reason": "scope_tenant_mismatch"})
+                raise CompensationNotAuthorized(f"{mission_id}: the scope is not this mission's tenant")
+            authorizer = _OperatorCompensation(principal, ceiling, sc)
+            probe, _basis = authorizer.decide(self, m, None)
+            if not probe.allowed:
+                self.store.append("CompensationOperatorRefused", mission_id, {"principal": ident["principal"], "scope": sc[:64], "reason": "not_authorized"})
+                raise CompensationNotAuthorized(f"{mission_id}: {probe.reason}")
+            if m.state is MissionState.RUNNING:
+                raise InterventionError("the mission is running; suspend or cancel it before compensating")
+            self.store.append("CompensationOperatorRequested", mission_id, {
+                "principal": ident["principal"], "scope": sc, "reason": str(reason).strip()[:500], "node_id": node_id, "state": m.state.value})
+            plan = self._plans[mission_id]
+            run_saga(self, m, plan, authorizer, FailurePolicy.COMPENSATE_DECLARED, node_id)
+            out = dict(m.outcome or {})
+            if m.state in (MissionState.FAILED, MissionState.COMPENSATION_FAILED):
+                self._set_state(m, MissionState.COMPENSATION_FAILED if out.get("compensation_incomplete") else MissionState.FAILED)
+            elif m.state is not MissionState.CANCELLED:
+                self.store.append("MissionCancelled", mission_id, {"reason": "operator compensation: " + str(reason).strip()[:200]})
+                m.outcome = {**out, "success": False, "reason": "compensated by an operator"}
+                self._set_state(m, MissionState.CANCELLED)
+            return m
+
+    def compensation_intervention(self, mission_id: str, action: str, *, actor: str = "", reason: str = "",
+                                  node_id: str | None = None, principal=None) -> Mission:
         """Guarded operator path for a mission that needs a human after compensation (retry | approve |
         acknowledge | verify_manually). Reached ONLY via the authenticated /missions/{mid}/compensation/*
         routes (control token + tenant check + approver rule); every call records who/when/why in the log.
         Raises compensation_runner.InterventionError (-> 409) on a wrong state or nothing to do."""
         from .compensation_runner import InterventionError, intervene  # noqa: PLC0415
         m = self._missions[mission_id]
+        ident = self._operator_identity(mission_id, principal, actor, f"compensation.{action}")
         if m.state not in (MissionState.COMPENSATION_FAILED, MissionState.FAILED):
             raise InterventionError(f"mission is {m.state.value}; compensation interventions apply to a failed mission")
-        intervene(self, m, action, actor=actor, reason=reason, node_id=node_id)
+        # the route that called this authenticated the credential and applied its role rules: that is the operator's authority for a retry
+        authorizer = _OperatorCompensation(principal, None, str(m.tenant or "default")) if principal is not None else None
+        intervene(self, m, action, actor=ident.get("approver", ""), reason=reason, node_id=node_id, identity=ident, authorizer=authorizer)
         self._set_state(m, MissionState.COMPENSATION_FAILED if (m.outcome or {}).get("compensation_incomplete")
                         else MissionState.FAILED)
         return m
@@ -1917,19 +2200,21 @@ class MissionRuntime:
                     out.append(n.id)
         return out
 
-    def suspend(self, mission_id: str, *, actor: str, reason: str) -> Mission:
+    def suspend(self, mission_id: str, *, actor: str = "", reason: str, principal=None) -> Mission:
+        ident = self._operator_identity(mission_id, principal, actor, "suspend")
         m = self._missions[mission_id]
-        self.store.append("MissionSuspended", mission_id, {"actor": actor, "reason": reason})
+        self.store.append("MissionSuspended", mission_id, {"actor": ident.get("approver", ""), "reason": reason, **ident})
         self._set_state(m, MissionState.PAUSED)
         return m
 
-    def resume(self, mission_id: str, *, actor: str) -> Mission:
-        self._require_execution_authority(mission_id)
+    def resume(self, mission_id: str, *, actor: str = "", principal=None) -> Mission:
+        self._require_execution_authority(mission_id, principal=principal)
+        ident = self._operator_identity(mission_id, principal, actor, "resume")
         m = self._missions[mission_id]
         if m.state != MissionState.PAUSED:
             return m
-        self.store.append("MissionResumed", mission_id, {"actor": actor})
-        return self.run(mission_id)
+        self.store.append("MissionResumed", mission_id, {"actor": ident.get("approver", ""), **ident})
+        return self.run(mission_id, principal=principal)
 
     def promote_recommendation(self, kind: str, subject: str, *, actor: str):
         """Governance-driven promotion of a P9b recommendation — the auditable mutation that lets a
@@ -2043,6 +2328,7 @@ class MissionRuntime:
                 "not_reversible": ((self._missions.get(mission_id).outcome or {}).get("not_reversible", [])
                                    if self._missions.get(mission_id) else []),
                 "state": st.value if st else None, "steps": steps, "world_state": world,
+                "authority": {"basis": self._authority_basis(mission_id), **self.authority_posture()},
                 "pending_human": self.repo.pending_human(mission_id),
                 "evidence": self.evidence.ledger(mission_id),
                 "decisions": self._node_decisions(mission_id),
@@ -2108,6 +2394,11 @@ class MissionRuntime:
         manufacturing an unrecorded one — one keeps a narrow permission alive,
         the other invents a broad one.
         """
+        check = getattr(self.store, "check_integrity", None)
+        if check is not None:                              # a log cut off at the end, or rewritten behind its anchor, is not replayed
+            rep = check(mission_id)
+            if not rep.ok:
+                raise ReplayError(f"{mission_id}: the event log failed its integrity check ({rep.status}): {rep.reason}")
         goal = self.repo.goal(mission_id)
         created = next(e for e in self.store.for_mission(mission_id) if e.type == "MissionCreated")
         recorded = created.payload.get("policy_refs")
@@ -2425,6 +2716,8 @@ class MissionRuntime:
                 reason = "unbound"
             elif p["binding"] != self._approval_binding(m, mission_id, nid):
                 reason = "binding_mismatch"
+            elif p.get("principal") is not None and p.get("principal_binding") != self._principal_binding(p["binding"], p):
+                reason = "principal_binding_mismatch"       # the recorded approver was changed after the fact
             elif float(p.get("expires_at") or 0) < _wall():
                 reason = "expired"
             if not reason:
@@ -2452,12 +2745,14 @@ class MissionRuntime:
         body = dict(self._binding_base(m, mission_id), node_id=node_id, capability=self._capability_of(mission_id, node_id))
         return "sha256:" + _hashlib.sha256(_json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
-    def _require_execution_authority(self, mission_id: str, need: str | None = None) -> None:
+    def _require_execution_authority(self, mission_id: str, need: str | None = None, principal=None) -> None:
         if mission_id not in self._reconstructed:
             return
         g = self._resume_grants.get(mission_id)
         if g is None or g["expires_at"] < _wall():
             raise ResumeNotAuthorized(f"{mission_id}: reconstructed from the log; resuming it needs a current resume authorization")
+        if principal is not None and g.get("principal_id") and getattr(principal, "id", None) != g["principal_id"]:
+            raise ResumeNotAuthorized(f"{mission_id}: the resume authorization was granted to another principal")
         if need == "reexecute" and g["action"] != "reexecute":
             raise ResumeNotAuthorized(f"{mission_id}: re-planning needs the re-execute authorization")
 
@@ -2471,6 +2766,10 @@ class MissionRuntime:
         if mission_id not in self._missions:
             raise KeyError(mission_id)
         who = getattr(principal, "id", "") or ""
+        if not self.principal_verifier().verify(principal):
+            self.store.append("ReplayRefused", mission_id, {"actor": who, "scope": str(scope)[:64], "action": action,
+                                                            "reason": "unauthenticated_principal"})
+            raise ResumeNotAuthorized(f"{mission_id}: the principal is not authenticated")
         try:
             ok = allowed(ceiling, principal, perm(scope, action))
         except ValueError:
@@ -2485,10 +2784,10 @@ class MissionRuntime:
             self.store.append("ReplayRefused", mission_id, {"actor": who, "scope": str(scope)[:64], "action": action,
                                                             "reason": "not_authorized"})
             raise ResumeNotAuthorized(f"{mission_id}: not authorized to {action}")
-        g = {"action": action, "actor": who, "scope": scope, "expires_at": _wall() + self.resume_grant_ttl_s}
+        g = {"action": action, "actor": who, "principal_id": who, "scope": scope, "expires_at": _wall() + self.resume_grant_ttl_s}
         self._resume_grants[mission_id] = g
         self.store.append("ReplayAuthorized", mission_id,
-                          {"actor": who, "scope": scope, "action": action, "expires_at": g["expires_at"],
+                          {"actor": who, "principal": principal.record(), "scope": scope, "action": action, "expires_at": g["expires_at"],
                            "binding": "sha256:" + _hashlib.sha256(_json.dumps(self._binding_base(self._missions[mission_id], mission_id),
                                                                               sort_keys=True, separators=(",", ":")).encode()).hexdigest()})
         return dict(g)

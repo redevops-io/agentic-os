@@ -1,4 +1,6 @@
 """Rehydrate restores recorded tenant, budget, policy and grant changes; the HTTP service restores in-flight missions."""
+import os
+
 import pytest
 
 from agentic_os.mission.policy import Effect, MissionPolicy, PolicyRule
@@ -211,7 +213,9 @@ def test_legacy_budget_is_clamped_to_the_tenant_ceiling(tmp_path, monkeypatch):
     rows = [json.loads(x) for x in open(p)]
     for d in rows:
         d["payload"].pop("budget", None) if d["type"] == "MissionCreated" else None
+        d.pop("hash", None), d.pop("prev", None)                  # a log from before budgets were recorded also predates the hash chain
     open(p, "w").write("".join(json.dumps(d) + "\n" for d in rows))
+    os.unlink(str(p) + ".anchor")                                 # ... and the tail anchor
     assert _rt(p).rehydrate(m.id).budget.usd == 1.5
     monkeypatch.setenv("AGENTIC_OS_TENANT_LIMITS", json.dumps({"acme": {"budget_usd": 100}}))
     assert _rt(p).rehydrate(m.id).budget.usd == 5.0          # never above the default

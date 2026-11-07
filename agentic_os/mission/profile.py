@@ -2,7 +2,9 @@
 
 * ``production``  - durable authority store, guard and ledger are REQUIRED; startup fails if any is missing, and
                     every node is checked against the owner's envelope (no envelope = no autonomous action).
-* ``development`` - the permissive local mode is allowed, but it is an explicit choice and is logged.
+* ``development`` - local mode: durable authority is not required. The mission runtime still enforces an owner's envelope when a
+                    mission has one, and refuses side effects when it has none unless the runtime was given an explicit, named
+                    ``AuthorityTestPolicy`` (see ``authority_policy.py``). There is no ambient "development allows" default.
 * ``test``        - injected guards and deterministic clocks; durability is not required.
 
 Selected by ``AGENTIC_OS_PROFILE``. ``AGENTIC_OS_REQUIRE_AUTHORITY=1`` is kept as an alias for ``production``.
@@ -37,7 +39,9 @@ def profile() -> str:
         return PRODUCTION
     if not _warned:
         _warned = True
-        _log.warning("%s is not set: running as 'development' - authority is NOT enforced. "
+        _log.warning("%s is not set: running as 'development' - the production requirements (durable authority store, operator "
+                     "authorization, replay protection) are NOT enforced; the mission runtime still refuses side effects without an "
+                     "envelope or an explicit test policy. "
                      "Set %s=production (and AGENTIC_OS_AUTHORITY_DB) for any deployment that acts on real systems.",
                      ENV_PROFILE, ENV_PROFILE)
     return DEVELOPMENT
@@ -77,7 +81,7 @@ def status(guard=None, *, replay_durable: "bool | None" = None) -> dict:
         "AGENTIC_OS_REQUIRE_AUTHORITY", "").strip().lower() in ("1", "true", "yes", "on")
     warnings = []
     if prof != PRODUCTION:
-        warnings.append(f"profile is '{prof}': authority is not enforced")
+        warnings.append(f"profile is '{prof}': the production requirements (durable authority, operator authorization) are not enforced")
     if not explicit:
         warnings.append(f"{ENV_PROFILE} is not set (defaulted to development)")
     if guard is not None and not getattr(guard, "durable", False):

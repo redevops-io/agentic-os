@@ -11,6 +11,7 @@ from typing import Any
 from .api_gate import GATE, admin_only, caller_of, public
 from .control_auth import approver_tokens, tenant_limits
 from .approval import strip_approval_keys
+from .principal import PrincipalError
 from .runtime import MissionRuntime, ResumeNotAuthorized
 from .simulator import simulate
 from .types import Budget, to_jsonable
@@ -50,6 +51,14 @@ def build_router(runtime: MissionRuntime):
         """404 for unknown AND for another tenant's mission (no existence leak)."""
         if mid not in runtime._missions or not _visible(mid, request):
             raise HTTPException(404, "mission not found")
+
+    def _principal(caller):
+        """The authenticated principal behind the credential (never a name taken from the request body). The router gate resolves a
+        caller for every POST; if it ever did not, the action is refused."""
+        from .principal import principal_of_caller  # noqa: PLC0415
+        if caller is None:
+            raise HTTPException(401, "an authenticated credential is required for this action")
+        return principal_of_caller(caller)
 
     def _deny_approver(request: Request) -> None:
         c = caller_of(request)
@@ -134,13 +143,14 @@ def build_router(runtime: MissionRuntime):
         # authority is the authenticated decision above + the signed token the operator verifies at /invoke.
         edit = strip_approval_keys(dict(body.edit)) if body.edit else None
         c = caller_of(request)
-        actor = "admin" if c is None or c.role == "admin" else f"{c.role}:{c.tenant}"
         from .runtime import ApprovalError  # noqa: PLC0415
         try:
-            runtime.approve(mid, body.node_id, body.decision, edit, actor=actor)
+            runtime.approve(mid, body.node_id, body.decision, edit, principal=_principal(c))
         except ResumeNotAuthorized:
             # a mission reconstructed from the log is read-only until a resume authorization is granted (replay boundary)
             raise HTTPException(403, "mission was reconstructed from the log; resuming it needs a resume authorization")
+        except PrincipalError as e:
+            raise HTTPException(403, str(e))
         except ApprovalError as e:
             raise HTTPException(409, str(e))
         return _mission_view(mid)
@@ -167,11 +177,10 @@ def build_router(runtime: MissionRuntime):
             raise HTTPException(403, "reconciliation requires an approver or admin credential, not a requester credential")
         if body.outcome not in ("executed", "not_executed"):
             raise HTTPException(422, "outcome must be 'executed' or 'not_executed'")
-        actor = "admin" if c.role == "admin" else f"{c.role}:{c.tenant}"
         from .reconcile import ReconciliationConflict, ReconciliationError  # noqa: PLC0415
         try:
-            runtime.reconcile_node(mid, body.node_id, executed=body.outcome == "executed", evidence=body.evidence, actor=actor,
-                                   reason=body.reason, result=body.result, resume=body.resume)
+            runtime.reconcile_node(mid, body.node_id, executed=body.outcome == "executed", evidence=body.evidence,
+                                   reason=body.reason, result=body.result, resume=body.resume, principal=_principal(c))
         except ReconciliationConflict as e:
             raise HTTPException(409, str(e))
         except ReconciliationError as e:
@@ -200,11 +209,10 @@ def build_router(runtime: MissionRuntime):
                 raise HTTPException(403, "this compensation action requires an approver credential")
         else:
             _deny_approver(request)
-        actor = "admin" if c is None or c.role == "admin" else f"{c.role}:{c.tenant}"
         from .compensation_runner import InterventionError  # noqa: PLC0415
         try:
-            runtime.compensation_intervention(mid, action, actor=actor, reason=(body.reason or "")[:500],
-                                              node_id=body.node_id)
+            runtime.compensation_intervention(mid, action, reason=(body.reason or "")[:500], node_id=body.node_id,
+                                              principal=_principal(c))
         except InterventionError as e:
             raise HTTPException(409, str(e))
         return _mission_view(mid)

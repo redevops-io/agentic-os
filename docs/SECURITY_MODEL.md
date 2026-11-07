@@ -11,6 +11,7 @@ Control plane, security profile and the operator authority boundary, approval to
 - [Gate notifications](#gate-notifications) (was `GATE_NOTIFICATIONS.md`)
 - [Child agents](#child-agents)
 - [Context integrity and the sentinel feed](#context-integrity-and-the-sentinel-feed)
+- [Execution authority in every profile, operator principals and integrity records](#execution-authority-in-every-profile-operator-principals-and-integrity-records)
 
 ## Control-plane auth, idempotency cache and multi-replica limits
 
@@ -106,11 +107,11 @@ keeps those apart.
 | Profile | Meaning |
 |---|---|
 | `production` | A durable authority store, guard and ledger are required; the mission runtime, gateway and Fleet refuse to start without one. Every mission node is checked against the owner's envelope. Operators refuse a side-effecting call that has no approval or execution authorization, and require a durable, shared replay store. |
-| `development` | Permissive local mode. Explicit and logged. |
-| `test` | Injected guards and clocks; durability not required. |
+| `development` | Local mode: durability is not required. The mission runtime enforces an envelope when the mission has one and otherwise refuses side effects unless it was given an explicit test policy (see "Execution authority in every profile" below). |
+| `test` | Injected guards and clocks; durability not required. Same rule as `development`. |
 
-An **unset** profile behaves as `development` and logs a warning (once per component), so an install without an envelope
-database keeps working. `AGENTIC_OS_REQUIRE_AUTHORITY=1` is kept as an alias for `production`. Any other value is an error.
+An **unset** profile behaves as `development` and logs a warning (once per component). The mission runtime no longer runs
+side effects in `development` without an envelope or a test policy; an install that has neither must declare one. `AGENTIC_OS_REQUIRE_AUTHORITY=1` is kept as an alias for `production`. Any other value is an error.
 Official production deployments must set `AGENTIC_OS_PROFILE=production` explicitly; the Compose file passes the variable
 through to every service that decides authority (empty means development).
 
@@ -698,3 +699,78 @@ With `AGENTIC_OS_PERMISSIONS=1` every app acts as ONE local user, taken from `pr
 (a store provisioned before profiles existed) the principal is the default local user `local`: the app logs a warning naming the file and the fix, and `local` can do only what grants for `local` allow (none unless
 someone created them). Note: basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write. The quickstart therefore protects against callers who are not the machine's user, not against another process running as that user: anything that can read the permissions directory
 and key already holds the grants.
+
+## Execution authority in every profile, operator principals and integrity records
+
+Purpose: the mission runtime decides whether an action may run from the same inputs in every profile, and the records those decisions
+rest on can be checked. This section describes what the code does; the tests named here are the evidence for each statement.
+
+### Execution authority in every profile
+
+* **The gate** (`MissionRuntime._authority_gate`) evaluates the owner's envelope in `production`, `development` and `test`. The profile
+  only matters when a mission has no envelope: `production` then refuses; the other profiles refuse a side-effecting node unless the
+  runtime was given an `AuthorityTestPolicy`. A node with no side effect runs without an envelope outside production. A revoked,
+  expired or out-of-scope envelope is a refusal in every profile and is never overridden by a test policy.
+* **Test policy** (`mission/authority_policy.py`): a named, immutable object with a stated reason and two lists of capability patterns
+  (`allow`, `compensate`) and an `anonymous_operators` flag. It is recorded in the mission log (`TestPolicyActive` once,
+  `TestPolicyAuthorized` per decision, with its name and digest) and is visible in `MissionRuntime.authority_posture()`, `explain()` and the
+  mission receipt (`authority.basis`). In `production` constructing a runtime with one raises `ProfileError` and an inherited class-level
+  default is ignored. It does not reserve counters and does not stand in for a human approval. The test suite declares one named policy in
+  `tests/conftest.py`; the demos and the pilot runtime declare their own by name. Tests: `tests/test_authority_fail_closed.py`.
+* **At dispatch** (`MissionRuntime._execution_refusal`): immediately before each side effect, after the gate and any approval, on the serial,
+  concurrent-wave and fork-branch paths, the runtime asks the authority again with no counter touched (`AuthorityGuard.check`: revocation,
+  expiry, delegation chain, scope; or the test policy). A human approval can satisfy an `ESCALATE` (a limit or tier the owner may extend)
+  and never a `DENY`. A refusal is recorded as `ExecutionAuthorityRefused` (rule, reason, whether the node was approved), the reservation
+  taken at the gate is released, and the mission stops with `outcome.blocked = authority_denied`. A mission rebuilt from the log is still
+  read-only until `grant_resume` ([EVIDENCE_REPLAY_BOUNDARY.md](EVIDENCE_REPLAY_BOUNDARY.md)); this check is in addition. Tests:
+  `tests/test_execution_authority.py`.
+* **Options.** `MissionRuntime.escalation_parks` (default `True`): an action past a grant's limit or tier parks as an ordinary human gate;
+  `False` refuses it (`authority_denied`), for a runtime whose human decision is made elsewhere. A mission stopped by an authority refusal lists
+  `outcome.effects_remaining` (the side effects that ran and stay) and says no compensation was performed. Tests:
+  `tests/test_authority_gate_options.py`.
+* **Not covered:** the operator HTTP `/invoke` surface keeps its own profile rules (above); the dispatch check is a mission-runtime check.
+
+### Compensation authority
+
+An undo is a side effect and has its own authority, read when the undo is about to run: the envelope must hold a grant on
+`compensate:<capability>` (`AuthorityGuard.check_compensation` considers only grants with that prefix, so a forward grant, even `*`, does
+not imply it), or outside production and with no envelope the test policy must list the capability under `compensate`. A denied undo runs
+nothing, is recorded as `CompensationDenied`, and leaves the step a retained effect (`compensation_not_authorized`); the outcome says
+`compensation_state` (`none | complete | partial | denied | incomplete`) and `rolled_back` stays false. `MissionRuntime.compensate()` is the explicit
+operator action for steps a mission already applied: an authenticated principal for the mission's tenant, the permission
+`mission.<scope>.compensate` on a ceiling (checked on entry and before each step), a stated reason, and `grant_resume` for a rebuilt
+mission. See [COMPENSATION.md](COMPENSATION.md) sections 4 and 11. Tests: `tests/test_compensation_authority.py`.
+
+### Operator principals
+
+`approve`, `reject`, `suspend`, `resume`, `reconcile_node`, `compensation_intervention` and `compensate` take an `AuthenticatedPrincipal`
+(`mission/principal.py`): an `overlays.Principal` with a proof, issued by `PrincipalIssuer` when the authentication layer has checked a
+credential. The `/missions` routes build it from the authenticated `control_auth.Caller` (never from the request body); the single-owner
+evidence authenticator issues one for the owner token. The runtime verifies the proof, requires the principal's tenant to be the mission's
+(or the all-tenant admin), and writes `principal` (id, kind, roles, tenant, method, issuer) into the approval, rejection, resume,
+reconciliation and compensation records. An approval also carries `principal_binding`, so a rebuilt mission does not honour an approval whose
+recorded principal was changed. `grant_resume` needs an authenticated principal and the grant belongs to the principal that obtained it.
+Without a principal an action is refused unless the test policy sets `anonymous_operators`; the record then says `authenticated: false`.
+
+What it is not: the base has no identity provider, and the proof only says that the principal came through this process's authentication
+layer (key: random per process, or `AGENTIC_OS_PRINCIPAL_KEY`). Code running in the same process can call the issuer. Internal callers that approve
+without a principal (for example `content/runner.py`, `revenue/gateway.py`, `app_kit/mission_launcher.py`, `agent_gateway/mission_adapter.py`) are
+refused until they pass one, or, outside production, until their runtime has a test policy that allows anonymous operators. Tests: `tests/test_operator_principal.py`.
+
+### Integrity of the event log and the authority store
+
+* **Event log tail anchor** (`mission/integrity.py`, `EventStore`): the hash chain detects an edited or mid-chain-deleted event but not
+  events cut off the end. After every append the store atomically replaces `<log>.anchor` (record count, last sequence, running head hash;
+  optionally an HMAC with `AGENTIC_OS_ANCHOR_KEY`). Opening a log whose records are fewer than the anchor vouches for, or whose prefix does not
+  hash to the anchored head (a re-chained edit), raises `LogIntegrityError` (or opens read-only with `strict=False`); `rehydrate` refuses to rebuild
+  a mission from a log that fails `check_integrity()`. A log ahead of its anchor (a stop between append and anchor) is accepted and caught up.
+  Tests: `tests/test_event_log_anchor.py`.
+* **Authority store** (`SqliteEnvelopeStore`): every put, revoke and revoke_all is also written to a hash-chained `authority_log` in the same
+  transaction, with the head in `<db>.chain`. The chain, the anchor and every envelope version, revocation and epoch are verified against
+  each other when the store is opened, and `get` / `is_revoked` / `epoch` run an incremental check before they answer. A deleted revocation
+  raises instead of reading as "not revoked"; the guard answers `DENY authority_integrity`, which no test policy or approval overrides.
+  Databases from before the log are adopted once (trust on first use). Tests: `tests/test_authority_store_integrity.py`.
+* **What these do not detect:** a log or database with no anchor yet is trusted on first use; a writer who can rewrite both the log (or database)
+  and its anchor, and with a key also holds the key, can make them agree again. The anchor is only as far from the writer as where it is kept
+  (another file system or host, write-once storage, or a head copied into a system the log's writer cannot edit). The in-memory, DuckDB and
+  Postgres event backends and the usage ledger/leases have no anchor. The tests include a case for each limit.

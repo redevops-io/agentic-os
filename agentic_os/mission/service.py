@@ -20,8 +20,12 @@ def build_pilot_runtime(store_path: str | None = None, planner: Planner | None =
     operators = pilots.build_pilot_operators()
     registry = pilots.build_pilot_registry(operators)
     client = LocalOperatorClient(operators)
+    from .authority_policy import AuthorityTestPolicy  # noqa: PLC0415
+    from .profile import is_production  # noqa: PLC0415
+    # the pilot operators are in-process stubs: outside production the runtime declares that, by name (an owner's envelope is the only authority in production)
+    policy = None if is_production() else AuthorityTestPolicy.allow_all("pilot-operators", "in-process stub pilot operators; no external system is touched")
     return MissionRuntime(registry, Executor(client), store=build_event_store(store_path),
-                          planner=planner or default_planner(), service_resume=service_resume)
+                          planner=planner or default_planner(), service_resume=service_resume, test_policy=policy)
 
 
 class RehydrateFailed(RuntimeError):

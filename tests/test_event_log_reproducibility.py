@@ -114,6 +114,8 @@ class TestAnUnrecordedAuthorityIsRefusedNotInvented:
         for event in store.for_mission(mission.id):
             if event.type == "MissionCreated":
                 event.payload.pop("policy_refs")
+        for event in store.all():                       # a log from before policy was recorded also predates the hash chain
+            event.hash, event.prev = "", ""
         with pytest.raises(UnrecoverableAuthority) as raised:
             _runtime(store).rehydrate(mission.id)
         assert "policy_refs" in str(raised.value)
@@ -125,6 +127,8 @@ class TestAnUnrecordedAuthorityIsRefusedNotInvented:
         for event in store.for_mission(mission.id):
             if event.type == "MissionCreated":
                 event.payload.pop("policy_refs")
+        for event in store.all():                       # a log from before policy was recorded also predates the hash chain
+            event.hash, event.prev = "", ""
         restored = _runtime(store).rehydrate(mission.id,
                                              policy_refs=["billing:write"])
         assert restored.policy_refs == ["billing:write"]

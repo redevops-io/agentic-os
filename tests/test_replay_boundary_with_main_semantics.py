@@ -19,6 +19,7 @@ from agentic_os.mission.runtime import MissionRuntime, ResumeNotAuthorized, Serv
 from agentic_os.mission.store import EventStore
 from agentic_os.mission.types import MissionState
 from agentic_os.overlays import Principal
+from tests._principals import authn
 from tests.evidence_query_support import make_ceiling, owner
 from tests.test_evidence_replay_authorization import GATED, _boot, _gate_node, _grant, _restart
 
@@ -95,7 +96,7 @@ def test_unattended_resume_is_refused_by_default(tmp_path):
 def test_a_configured_service_principal_resumes_and_is_on_the_log(tmp_path):
     path, reg, client, mid = _boot(tmp_path)
     rec = None
-    svc = Principal("svc-resumer", "service", ())
+    svc = authn(Principal("svc-resumer", "service", ()))
     ceil = make_ceiling(tmp_path / "p", [("svc-resumer", "evidence.default.resume")])
     from agentic_os.mission.executor import InMemoryOperatorClient
     rec = InMemoryOperatorClient(client._handlers)
@@ -109,7 +110,7 @@ def test_a_configured_service_principal_resumes_and_is_on_the_log(tmp_path):
 
 def test_a_service_principal_without_the_permission_is_refused_and_recorded(tmp_path):
     path, reg, client, mid = _boot(tmp_path)
-    svc = Principal("svc-resumer", "service", ())
+    svc = authn(Principal("svc-resumer", "service", ()))
     ceil = make_ceiling(tmp_path / "p", [("someone-else", "evidence.default.resume")])
     rt2 = MissionRuntime(reg, Executor(client), store=EventStore(path=path), service_resume=ServiceResume(svc, ceil))
     with pytest.raises(ResumeNotAuthorized):
@@ -119,7 +120,7 @@ def test_a_service_principal_without_the_permission_is_refused_and_recorded(tmp_
 
 def test_a_service_resume_never_satisfies_reexecute(tmp_path):
     path, reg, client, mid = _boot(tmp_path)
-    svc = Principal("svc-resumer", "service", ())
+    svc = authn(Principal("svc-resumer", "service", ()))
     ceil = make_ceiling(tmp_path / "p", [("svc-resumer", "evidence.default.resume")])
     rt2 = MissionRuntime(reg, Executor(client), store=EventStore(path=path), service_resume=ServiceResume(svc, ceil))
     rt2.rehydrate_for_service(mid)
@@ -131,4 +132,4 @@ def test_service_resume_needs_both_a_principal_and_a_ceiling():
     with pytest.raises(ValueError):
         ServiceResume(None, object())
     with pytest.raises(ValueError):
-        ServiceResume(Principal("x", "service", ()), None)
+        ServiceResume(authn(Principal("x", "service", ())), None)

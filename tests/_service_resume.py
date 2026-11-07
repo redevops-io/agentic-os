@@ -11,7 +11,9 @@ from agentic_os.evidence_query.authz import StaticCeiling
 from agentic_os.mission.runtime import ServiceResume
 from agentic_os.overlays import Principal
 
-TEST_SERVICE = ServiceResume(Principal("test-service", "service", ()), StaticCeiling({"evidence"}))
+from tests._principals import authn  # noqa: E402
+
+TEST_SERVICE = ServiceResume(authn(Principal("test-service", "service", ())), StaticCeiling({"evidence"}))
 
 
 def authorize_service(rt):

@@ -4,6 +4,12 @@
 > `post-rc/evidence-boundary` only. Licence wording: source-available (family licence: AGPL-3.0-or-later with the Commons Clause).
 > This is not a production-readiness claim.
 
+> Related runtime authority work (see [SECURITY_MODEL.md](SECURITY_MODEL.md), "Execution authority in every profile, operator principals and
+> integrity records"): a mission rebuilt from the log stays read-only until `grant_resume`, and that is unchanged. In addition, `grant_resume`
+> and `ServiceResume` now require an authenticated principal and the grant belongs to the principal that obtained it; `rehydrate` refuses a log
+> that fails its tail-anchor or hash-chain check; and a resumed mission still passes the current-authority check immediately before each side
+> effect, so a resume grant and a valid approval do not outlive a revoked or narrowed envelope.
+
 ## 1. Purpose
 
 DuckDB stays a core component of Agentic OS audit, evidence retrieval and replay, and expressive SQL over authorized runtime
