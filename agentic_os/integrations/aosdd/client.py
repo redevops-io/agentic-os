@@ -2,13 +2,17 @@
 
 ``invoke`` is what ``Executor.run`` calls for every node. For the write capabilities it
   1. re-checks the plan and the op id (a changed plan or target is refused before anything is sent),
-  2. persists the operation and takes a fenced claim in the durable operation ledger (BEFORE any request),
+  2. persists the operation and takes a claim with a NEW generation in the durable operation ledger (BEFORE any request),
   3. re-checks the owner's authority (revocation / expiry / scope) immediately before the first byte leaves,
-  4. looks the application up by the op's marker (adopt, never duplicate), and only then writes once,
-  5. records the outcome (applied / refused / unknown) in the operation ledger and the mission's hash-chained ledger.
-An answer that proves the request did not take effect (credential, permission, validation, duplicate, conflict) is raised with
-``not_applied=True``; a timeout, a transport failure or a 5xx raises with ``not_applied=False`` so the runtime parks the step
-as UNKNOWN for reconciliation instead of failing or repeating it."""
+  4. looks the application up by the op's marker or derived id (adopt, never a second record), then re-checks that it still holds the
+     generation, and only then writes,
+  5. records the outcome (applied / refused / unknown) under the generation it holds; a result offered by a holder that was superseded is
+     kept as `stale-generation` evidence and NOT applied.
+This is at-most-once ATTEMPTED + reconcile-before-retry, not exactly-once external execution: Twenty (client id) and Lago (metadata key)
+reject a duplicate themselves; ERPNext and Chatwoot do not, so for them a lookup by marker is all that stands between a retry and a second
+record, and an outcome that cannot be read is UNKNOWN. An answer that proves the request did not take effect (credential, permission,
+validation, duplicate, conflict) is raised with ``not_applied=True``; a timeout, a transport failure, a 5xx or an incomplete read raises with
+``not_applied=False`` so the runtime parks the step as UNKNOWN for reconciliation instead of failing or repeating it."""
 from __future__ import annotations
 
 from agentic_os.mission.authority import Action
@@ -18,7 +22,7 @@ from . import opid
 from .capabilities import GATE_CAP, RESOURCE_ARG, STEP_OF, UNDO, VERIFY, WRITE_CAPS
 from .context import CAPABILITY, IDEMPOTENCY_NOTE, build_plan, plan_sha256, read_context, step_of
 from .http import AppError
-from .oplog import Claim
+from .oplog import Claim, FencingError
 from .services import Services
 
 
@@ -29,6 +33,12 @@ class AosddRefusal(RuntimeError):
     def __init__(self, rule: str, message: str):
         super().__init__(f"{rule}: {message}")
         self.rule = rule
+
+
+class StaleGeneration(RuntimeError):
+    """This executor lost its claim (a newer generation exists) before it could record its result. Whatever it sent is evidence of a
+    possible second record, not a result: ``stale-generation`` is written, nothing is applied, and the step needs reconciliation."""
+    not_applied = False
 
 
 class OperationUnresolved(RuntimeError):
@@ -149,12 +159,18 @@ class AosddOperatorClient:
         try:
             found = adapter.find(step)
         except AppError as e:
-            e.not_applied = True        # the lookup is a read: nothing was written, so whatever it said, the step did not take effect
+            e.not_applied = True        # the lookup is a read (and a lookup that cannot complete adopts and writes nothing): the step did not take effect
             return self._failed(mission_id, step, op, claim, e)
         try:
             if found is not None and found.get("partial"):      # a half-applied write: complete it (write is resumable), do not adopt it
                 found = None
             adopted = found is not None
+            if not adopted:
+                try:
+                    svc.oplog.check_fence(op, claim.fence)       # still the current generation, lease not expired, right before the request
+                except FencingError as fe:
+                    svc.emit("AosddOpSuperseded", mission_id, {"op_id": op, "step": step["step"], "fence": claim.fence, "why": str(fe)})
+                    raise OperationUnresolved(f"{step['step']}: this executor's claim (generation {claim.fence}) was superseded before the request was sent; nothing was sent") from None
             res = found if adopted else adapter.write(step, {"quotation": quotation})
         except AppError as e:
             return self._failed(mission_id, step, op, claim, e)
@@ -162,22 +178,37 @@ class AosddOperatorClient:
                    idempotency=step["idempotency"], idempotency_note=IDEMPOTENCY_NOTE[step["app"]])
         if adopted:
             res["note"] = "the application already held a record carrying this op's marker; adopted, nothing written"
-        svc.oplog.record_applied(op, claim.fence, str(res["native_id"]), res)
+        try:
+            svc.oplog.record_applied(op, claim.fence, str(res["native_id"]), res)
+        except FencingError as fe:
+            return self._stale(mission_id, step, op, claim, res, str(fe))
         svc.emit("AosddOpApplied", mission_id, {"op_id": op, "step": step["step"], "native_id": res["native_id"], "native_ids": res["native_ids"], "ui_url": res["ui_url"],
                                                 "ui_url_note": res.get("ui_url_note", ""), "created": res["created"], "adopted": adopted, "fence": claim.fence,
                                                 "idempotency": step["idempotency"]})
         return res
 
+    def _stale(self, mission_id: str, step: dict, op: str, claim: Claim, res: dict, why: str):
+        """The request was sent (or answered) by a holder that no longer owns the claim: record it as evidence, apply nothing."""
+        svc = self.svc
+        svc.oplog.record_stale(op, claim.fence, str(res.get("native_id", "")), res, why)
+        svc.emit("AosddOpStale", mission_id, {"op_id": op, "step": step["step"], "fence": claim.fence, "native_id": res.get("native_id"), "outcome": "stale-generation", "why": why})
+        raise StaleGeneration(f"{step['step']}: stale-generation: this executor's result ({res.get('native_id')}) arrived after generation {claim.fence} was superseded; recorded as evidence, not applied")
+
     def _failed(self, mission_id: str, step: dict, op: str, claim: Claim, e: AppError):
         svc = self.svc
         info = {"op_id": op, "step": step["step"], "app": e.app, "kind": e.kind, "status": e.status, "message": e.message[:300],
                 "residual": getattr(e, "residual", None)}
-        if e.not_applied:
-            svc.oplog.record_refused(op, claim.fence, f"{e.kind} {e.status}")
-            svc.emit("AosddOpRefused", mission_id, {**info, "rule": e.kind, "outcome": "not_applied"})
-        else:
-            svc.oplog.record_unknown(op, claim.fence, f"{e.kind} {e.status}")
-            svc.emit("AosddOpUnknown", mission_id, {**info, "outcome": "unknown"})
+        try:
+            if e.not_applied:
+                svc.oplog.record_refused(op, claim.fence, f"{e.kind} {e.status}")
+                svc.emit("AosddOpRefused", mission_id, {**info, "rule": e.kind, "outcome": "not_applied"})
+            else:
+                svc.oplog.record_unknown(op, claim.fence, f"{e.kind} {e.status}")
+                svc.emit("AosddOpUnknown", mission_id, {**info, "outcome": "unknown"})
+        except FencingError as fe:
+            svc.oplog.record_stale(op, claim.fence, "", {"error": f"{e.kind} {e.status}"}, str(fe))
+            svc.emit("AosddOpStale", mission_id, {"op_id": op, "step": step["step"], "fence": claim.fence, "outcome": "stale-generation", "error": f"{e.kind} {e.status}"})
+            raise StaleGeneration(f"{step['step']}: stale-generation: the {e.kind} answer arrived after this executor's claim was superseded") from None
         raise e
 
     # ---- compensation ----------------------------------------------------------------------------------------------------------------
@@ -194,18 +225,30 @@ class AosddOperatorClient:
             raise AosddRefusal("nothing_to_undo", f"{op} has no applied effect in the operation ledger")
         if row["state"] == "compensated":
             return {"status": "ok", "executed": True, "undone": True, "note": "already compensated", "op_id": op}
-        svc.oplog.begin_compensation(op)
-        svc.emit("AosddUndoIntent", mission_id, {"op_id": op, "step": step["step"], "native_id": row["native_id"]})
+        gen = svc.oplog.begin_compensation(op)             # a NEW generation: a second compensator (or a stale one) cannot record over it
+        if gen is None:
+            return {"undo_error": f"{op}: another compensation holds the claim; not repeated", "op_id": op}
+        svc.emit("AosddUndoIntent", mission_id, {"op_id": op, "step": step["step"], "native_id": row["native_id"], "fence": gen})
         try:
             out = svc.adapters[step["app"]].undo(step, row["result"] or fwd)
         except AppError as e:
-            svc.oplog.end_compensation(op, False, f"{e.kind} {e.status}")
-            svc.emit("AosddUndoResult", mission_id, {"op_id": op, "step": step["step"], "ok": False, "kind": e.kind, "status": e.status, "message": e.message[:300]})
-            return {"undo_error": f"{e.app} {e.kind} {e.status}: {e.message[:200]}", "op_id": op}
+            return self._end_undo(mission_id, step, op, gen, False, f"{e.kind} {e.status}", {"undo_error": f"{e.app} {e.kind} {e.status}: {e.message[:200]}", "op_id": op})
         ok = bool(out.get("undone"))
-        svc.oplog.end_compensation(op, ok, out.get("undo_error", ""))
-        svc.emit("AosddUndoResult", mission_id, {"op_id": op, "step": step["step"], "ok": ok, "result": out})
+        fin = self._end_undo(mission_id, step, op, gen, ok, out.get("undo_error", ""), out)
+        if fin is not out:                                    # superseded: not applied
+            return fin
         out["op_id"] = op
+        return out
+
+    def _end_undo(self, mission_id: str, step: dict, op: str, gen: int, ok: bool, note: str, out: dict) -> dict:
+        svc = self.svc
+        try:
+            svc.oplog.end_compensation(op, gen, ok, note)
+        except FencingError as fe:
+            svc.oplog.record_stale(op, gen, "", {"undo": out}, str(fe))
+            svc.emit("AosddUndoResult", mission_id, {"op_id": op, "step": step["step"], "ok": False, "outcome": "stale-generation", "why": str(fe)})
+            return {"undo_error": f"stale-generation: this compensation (generation {gen}) was superseded; not applied", "op_id": op}
+        svc.emit("AosddUndoResult", mission_id, {"op_id": op, "step": step["step"], "ok": ok, "result": out, "fence": gen})
         return out
 
     def _absent(self, mission_id: str, forward: str, inputs: dict) -> dict:

@@ -53,7 +53,7 @@ class Env:
     def services(self, owner=None):
         guard = AuthorityGuard(SqliteEnvelopeStore(self.dir + "/auth.db"), SqliteLedger(self.dir + "/auth.db.usage"), clock=self.now)
         store = RedactingEventStore(self.events_path, self.cfg.redactor)
-        return Services(self.cfg, store, OpLog(self.dir + "/ops.db"), guard, transport=self.stack, clock=self.now, owner=owner)
+        return Services(self.cfg, store, OpLog(self.dir + "/ops.db", lease_ttl_s=self.cfg.lease_ttl_s, clock=self.now), guard, transport=self.stack, clock=self.now, owner=owner)
 
     def runner(self, owner=None, **kw):
         return Runner(self.services(owner), **kw)

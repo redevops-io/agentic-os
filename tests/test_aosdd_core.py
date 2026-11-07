@@ -311,7 +311,8 @@ def test_same_op_id_with_a_different_target_is_a_conflict_and_compensated_ops_ar
         log.plan_op("aosdd.m.S1.a1.abc", "m", "S1", "erpnext", "cap", "OTHER", 1)
     c = log.claim("aosdd.m.S1.a1.abc", "A")
     log.record_applied("aosdd.m.S1.a1.abc", c.fence, "SAL-1", {})
-    assert log.begin_compensation("aosdd.m.S1.a1.abc")
-    log.end_compensation("aosdd.m.S1.a1.abc", True)
+    gen = log.begin_compensation("aosdd.m.S1.a1.abc")
+    assert gen == c.fence + 1
+    log.end_compensation("aosdd.m.S1.a1.abc", gen, True)
     assert log.claim("aosdd.m.S1.a1.abc", "A").status == "compensated"       # a re-run needs a NEW attempt (new op id)
     assert [h["state"] for h in log.history("aosdd.m.S1.a1.abc")][-3:] == ["applied", "compensating", "compensated"]
