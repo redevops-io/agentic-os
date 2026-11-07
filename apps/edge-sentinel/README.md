@@ -82,17 +82,28 @@ python3 seed.py
 #   → SEED_OK bouncer=meridian-agent added=6 decisions=6 alerts=6
 #   → Wrote .env
 
-# 2. Install deps + run the service
-pip install -r requirements.txt          # add --break-system-packages on PEP-668 hosts
-python3 -m uvicorn app:app --host 0.0.0.0 --port 8203
+# 2. Install and run (P1: the app is a package — the console script is the quickstart)
+python3 -m pip install .                 # from this directory; add --break-system-packages on PEP-668 hosts
+edge-sentinel --help                     # runs from any cwd, including this one
+edge-sentinel serve --port 8203
+#   `serve` binds 127.0.0.1 by default and needs the agentic-os kernel installed (documented refusal
+#   otherwise — the kernel seam is audit item P2, counsel-gated). It never binds a reachable
+#   interface unless asked: see security.py / SENTINEL_ALLOW_EXPOSURE below.
+#   Do NOT run `python3 -m uvicorn app:app` from this directory: `-m` puts it ahead of the standard
+#   library, where operator.py shadows the stdlib `operator` and breaks Python before the app starts.
 #   app.py auto-loads .env, so CROWDSEC_BOUNCER_KEY is picked up with no manual copy.
 
 # Or with Docker (point the LAPI URL at the CrowdSec service; the socket is NOT mounted, see "Docker access" below):
 docker build -t edge-sentinel .
-docker run -e AGENTIC_OS_PERMISSIONS=off --rm -p 8203:8203 \
+docker run --rm -p 8203:8203 \
+  -e SENTINEL_ALLOW_EXPOSURE=1 -e SENTINEL_BASIC_AUTH_USER=<operator> -e SENTINEL_BASIC_AUTH_PASS=<secret> \
+  -e AGENTIC_OS_PERMISSIONS=off \
   -e CROWDSEC_LAPI_URL=http://host.docker.internal:8086 \
   -e CROWDSEC_BOUNCER_KEY=<key from .env> \
   edge-sentinel
+#   A `-p` publish is a deployment decision made twice over (P9): the image declares its bind, but it
+#   refuses to come up without SENTINEL_ALLOW_EXPOSURE=1 plus an operator credential — or the named
+#   read-only-demo opt-out SENTINEL_ALLOW_UNAUTHENTICATED_EXPOSURE=1 (execution stays authenticated, dry-run).
 ```
 
 ## Environment variables
@@ -104,6 +115,8 @@ docker run -e AGENTIC_OS_PERMISSIONS=off --rm -p 8203:8203 \
 | `CROWDSEC_CONTAINER` | `agentic-cores-crowdsec-1` | Container name for `cscli` (alerts, ban enforcement). |
 | `CROWDSEC_FRONT_URL` | `http://localhost:8086` | Link for the "Open CrowdSec metrics ↗" button (CrowdSec is CLI-managed; this is the LAPI endpoint). |
 | `PORT` | `8203` | uvicorn bind port. |
+| `SENTINEL_BIND_HOST` | `127.0.0.1` | Bind interface (P9). A reachable bind needs `SENTINEL_ALLOW_EXPOSURE=1` **and** an operator credential (`SENTINEL_BASIC_AUTH_USER`/`_PASS`, or the shared `PARTNERS_BASIC_AUTH_*` pair) or the named `SENTINEL_ALLOW_UNAUTHENTICATED_EXPOSURE=1`; the startup guard refuses otherwise. |
+| `WAZUH_TLS_VERIFY` | on | Certificate verification for the Wazuh API (P9). Set to a CA bundle path for a private CA; `off` skips verification and is labelled as such wherever an operator reads it. |
 | `ANTHROPIC_API_KEY` | _(optional)_ | If set, `triage` adds an LLM reasoning blurb (model `claude-opus-4-8`). The endpoint works fully without it — actions are deterministic CrowdSec/cscli calls. |
 
 | `SENTINEL_PROTECTED_IPS`, `SENTINEL_HOST_IPS` | _(empty)_ | Comma-separated addresses/CIDRs that are never banned (in addition to this host, its gateway, the LAPI host and the requesting operator). |
