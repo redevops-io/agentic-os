@@ -100,11 +100,29 @@ class ReadBack:
         tl = (((t.body or {}).get("data") or {}).get("taskTargets") or []) if t.status == 200 else []
         self._chk(out, "taskTarget -> expected company", ex["target_company_id"], [x.get("targetCompanyId") for x in tl], any(x.get("targetCompanyId") == ex["target_company_id"] for x in tl))
 
+    def _chatwoot_messages(self, cid: int) -> list:
+        """ALL messages (the verifier's own pagination, same fail-closed rule: anything short of an empty last page is UNREADABLE)."""
+        from .apps import MESSAGE_PAGE_CAP  # noqa: PLC0415 - a constant only; no adapter or write code is imported
+        base, out, seen, before = "/api/v1/accounts/%d/conversations/%d/messages" % (self.account, cid), [], set(), None
+        for _ in range(MESSAGE_PAGE_CAP):
+            r = self._get("chatwoot", base + ("" if before is None else "?before=%d" % before))
+            pl = (r.body or {}).get("payload") if r.status == 200 and isinstance(r.body, dict) else None
+            if not isinstance(pl, list):
+                raise Unreadable(f"chatwoot: message page unreadable (HTTP {r.status})")
+            if not pl:
+                return out
+            ids = [m.get("id") for m in pl]
+            if any(not isinstance(i, int) for i in ids) or not [i for i in ids if i not in seen]:
+                raise Unreadable("chatwoot: message pagination did not advance")
+            seen.update(ids)
+            out.extend(pl)
+            before = min(ids)
+        raise Unreadable(f"chatwoot: message pagination hit the {MESSAGE_PAGE_CAP}-page cap")
+
     def _v_chatwoot(self, step, res, out, ctx):
         ex = step["expect"]
         cid = step["target"]["conversation_id"]
-        r = self._get("chatwoot", "/api/v1/accounts/%d/conversations/%d/messages" % (self.account, cid))
-        pl = (r.body or {}).get("payload", []) if r.status == 200 else []
+        pl = self._chatwoot_messages(cid)
         live = [m for m in pl if ex["marker"] in (m.get("content") or "") and not (m.get("content_attributes") or {}).get("deleted")]
         self._chk(out, "live notes carrying the marker (count)", 1, len(live), len(live) == 1)
         if live:
@@ -151,8 +169,7 @@ class ReadBack:
 
     def _a_chatwoot(self, step, res, out, residual):
         cid = step["target"]["conversation_id"]
-        r = self._get("chatwoot", "/api/v1/accounts/%d/conversations/%d/messages" % (self.account, cid))
-        pl = (r.body or {}).get("payload", []) if r.status == 200 else []
+        pl = self._chatwoot_messages(cid)
         marked = [m for m in pl if step["expect"]["marker"] in (m.get("content") or "")]
         live = [m for m in marked if not (m.get("content_attributes") or {}).get("deleted")]
         self._chk(out, "live notes carrying the marker (count)", 0, len(live), r.status == 200 and not live)

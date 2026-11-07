@@ -16,6 +16,9 @@ from . import opid
 from .http import AppError, AppHttp
 from .context import LAGO_KEY, q
 
+#: A conversation can hold more messages than one page (Chatwoot returns the newest 20; `?before=<id>` the 20 older than that id). The marker
+#: lookup must see ALL of them: follow the pages until an empty one, up to this many pages; anything short of that is "incomplete".
+MESSAGE_PAGE_CAP = 100
 UI_NOTE_CHATWOOT = "Chatwoot has no per-message URL; the link opens the conversation that contains the note"
 
 
@@ -189,10 +192,32 @@ class Chatwoot:
         return _ok({"native_id": mid, "native_ids": {"message": mid, "conversation": cid}, "conversation_id": cid, "created": created, "provider_ref": str(mid),
                     "ui_url": ui_url("chatwoot", self.base, account=self.account, conversation=cid), "ui_url_note": UI_NOTE_CHATWOOT}, **extra)
 
+    def all_messages(self, cid: int) -> list:
+        """Every message of the conversation, newest page first, following `before=` until an empty page. FAILS CLOSED (AppError kind
+        `incomplete`) when it cannot be completed: a page that is not a list, a page that does not advance, a failed request, or the page cap."""
+        base = self._acct("/conversations/%d/messages" % cid)
+        out, seen, before = [], set(), None
+        for _ in range(MESSAGE_PAGE_CAP):
+            try:
+                r = self.h.check(self.h.get(base + ("" if before is None else "?before=%d" % before)), (200,), op="chatwoot.find")
+            except AppError as e:
+                raise AppError("chatwoot", "incomplete", e.status, f"message pagination failed after {len(out)} message(s): {e.kind} {e.status}", op="chatwoot.find") from None
+            pl = r.body.get("payload") if isinstance(r.body, dict) else None
+            if not isinstance(pl, list):
+                raise AppError("chatwoot", "incomplete", 200, "a message page without a payload list: partial read", op="chatwoot.find")
+            if not pl:
+                return out
+            ids = [m.get("id") for m in pl]
+            if any(not isinstance(i, int) for i in ids) or not [i for i in ids if i not in seen]:
+                raise AppError("chatwoot", "incomplete", 200, "message pagination did not advance", op="chatwoot.find")
+            seen.update(ids)
+            out.extend(pl)
+            before = min(ids)
+        raise AppError("chatwoot", "incomplete", 200, f"message pagination hit the {MESSAGE_PAGE_CAP}-page cap: the marker lookup cannot be completed", op="chatwoot.find")
+
     def _live_notes(self, step: dict) -> list:
         cid, marker = step["target"]["conversation_id"], step["derived"]["marker"]
-        r = self.h.check(self.h.get(self._acct("/conversations/%d/messages" % cid)), (200,), op="chatwoot.find")
-        return [m for m in r.body.get("payload", []) if m.get("private") and marker in (m.get("content") or "") and not (m.get("content_attributes") or {}).get("deleted")]
+        return [m for m in self.all_messages(cid) if m.get("private") and marker in (m.get("content") or "") and not (m.get("content_attributes") or {}).get("deleted")]
 
     def find(self, step: dict) -> "dict | None":
         live = self._live_notes(step)

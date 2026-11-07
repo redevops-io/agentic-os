@@ -352,3 +352,87 @@ def test_the_event_log_anchor_is_active_and_a_truncated_log_is_reported_and_refu
     assert cut["ledger_anchor"]["ok"] is False and cut["ledger_anchor"]["status"] == "truncated"
     with pytest.raises(LogIntegrityError):
         env.runner()                                                                                # a runtime will not open (and so not append to) a truncated log
+
+
+# ---- item 11: Chatwoot message pagination, fail closed ----------------------------------------------------------------------------------------------
+def _s4(r, mid):
+    return r.plan(mid)["steps"][3]
+
+
+def test_the_marker_lookup_follows_every_page_of_a_long_conversation(tmp_path):
+    env = Env(tmp_path)
+    r, mid = go(env, "PAGE")
+    st = _s4(r, mid)
+    env.stack.add_notes(45)                                                                  # the S4 note is now 45 messages deep (3 pages)
+    found = r.svc.adapters["chatwoot"].find(st)
+    assert found is not None and found["native_id"] == [e for e in r.svc.store.for_mission(mid) if e.type == "AosddOpApplied"][-1].payload["native_id"]
+    assert env.stack.count("chatwoot", "GET", "before=") >= 2                                  # it really paged back
+    # and the independent verifier pages too: it does not stop at the newest 20 and call the note missing
+    from agentic_os.integrations.aosdd.verify import ReadBack
+    rep = ReadBack(env.cfg, env.stack).verify(st, found)
+    assert rep["status"] == "VERIFIED"
+
+
+def test_a_fully_paged_lookup_that_finds_nothing_is_a_real_absence(tmp_path):
+    env = Env(tmp_path)
+    r, mid, plan = _prepare(env, "PAGE0")
+    env.stack.add_notes(45)
+    assert r.svc.adapters["chatwoot"].find(plan["steps"][3]) is None
+
+
+def test_an_incomplete_lookup_fails_closed_no_write_no_adoption(tmp_path):
+    from agentic_os.integrations.aosdd import apps
+    from agentic_os.integrations.aosdd.http import AppError
+    env = Env(tmp_path)
+    r, mid = go(env, "PAGE2")
+    st = _s4(r, mid)
+    env.stack.add_notes(45)
+    # (a) the page cap is reached before the conversation is exhausted
+    old = apps.MESSAGE_PAGE_CAP
+    apps.MESSAGE_PAGE_CAP = 2
+    try:
+        with pytest.raises(AppError) as e:
+            r.svc.adapters["chatwoot"].find(st)
+        assert e.value.kind == "incomplete" and not e.value.not_applied and "cap" in e.value.message
+    finally:
+        apps.MESSAGE_PAGE_CAP = old
+    # (b) a page request fails halfway
+    env.stack.fail("chatwoot", "GET", "before=", 502, times=1)
+    with pytest.raises(AppError) as e:
+        r.svc.adapters["chatwoot"].find(st)
+    assert e.value.kind == "incomplete"
+    # (c) a page that is not a message list
+    env.stack.fail("chatwoot", "GET", "before=", 200, times=1, body={"meta": {}})
+    with pytest.raises(AppError) as e:
+        r.svc.adapters["chatwoot"].find(st)
+    assert e.value.kind == "incomplete"
+
+
+def test_reconcile_of_a_chatwoot_note_in_a_long_conversation_refuses_to_guess(tmp_path):
+    env = Env(tmp_path)
+    env.stack.fail("chatwoot", "POST", "/messages", 0, times=1, commit=True)                  # the note was written, the reply lost
+    r, mid = go(env, "PAGE3")
+    assert state(r, mid) is MissionState.WAITING_RECONCILIATION
+    env.stack.add_notes(45)
+    env.stack.fail("chatwoot", "GET", "before=", 502, times=1)                                # the older pages cannot be read
+    from agentic_os.integrations.aosdd.runtime import RunnerError
+    st = _s4(r, mid)
+    with pytest.raises(RunnerError, match="cannot decide"):
+        r.reconcile(mid, "S4", principal=REQ)
+    row = r.svc.oplog.get(st["op_id"])
+    assert row["state"] == "unknown" and sum(1 for m in env.stack.messages if "aosdd." in m["content"]) == 1      # still unknown; no second note; nothing adopted
+    n = env.stack.count("chatwoot", "POST")
+    r.reconcile(mid, "S4", principal=REQ)                                                    # pages readable now: found by marker 45 messages deep, adopted
+    assert env.stack.count("chatwoot", "POST") == n and state(r, mid) is MissionState.SUCCEEDED
+    assert r.svc.oplog.get(st["op_id"])["state"] == "applied"
+
+
+def test_an_incomplete_verifier_read_is_unreadable_never_verified(tmp_path):
+    env = Env(tmp_path)
+    r, mid = go(env, "PAGE4")
+    st = _s4(r, mid)
+    env.stack.add_notes(45)
+    from agentic_os.integrations.aosdd.verify import ReadBack
+    env.stack.fail("chatwoot", "GET", "before=", 502, times=1)
+    rep = ReadBack(env.cfg, env.stack).verify(st, {"native_id": r.svc.oplog.get(st["op_id"])["native_id"], "native_ids": {}})
+    assert rep["status"] == "UNREADABLE"

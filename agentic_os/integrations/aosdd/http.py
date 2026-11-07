@@ -25,7 +25,7 @@ from .config import Secret
 from .redact import NULL, Redactor
 
 DEFINITE = ("credential", "permission", "rejected", "duplicate", "conflict", "not_found")
-AMBIGUOUS = ("unavailable", "server")
+AMBIGUOUS = ("unavailable", "server", "incomplete")      # incomplete: a paged read that could not be completed (cap, error, malformed or non-advancing page)
 
 
 class NetworkTouched(RuntimeError):

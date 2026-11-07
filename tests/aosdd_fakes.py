@@ -150,6 +150,11 @@ class FakeStack:
     def _ok(body, status=200):
         return Resp(status, body, json.dumps(body))
 
+    def add_notes(self, n, text="filler"):
+        for _ in range(n):
+            self._mid += 1
+            self.messages.append({"id": self._mid, "content": f"{text} {self._mid}", "private": True, "message_type": 1, "conversation_id": 1, "content_attributes": {}})
+
     @staticmethod
     def _qs(path):
         u = urllib.parse.urlsplit(path)
@@ -276,7 +281,9 @@ class FakeStack:
             return self._ok({"payload": [{"id": 1, "status": "open", "inbox_id": 1}]})
         if p == "/api/v1/accounts/1/conversations/1/messages":
             if req.method == "GET":
-                return self._ok({"payload": [dict(m) for m in self.messages]})
+                before = qs.get("before", [None])[0]
+                pool = [m for m in self.messages if before is None or m["id"] < int(before)]
+                return self._ok({"payload": [dict(m) for m in pool[-20:]]})              # newest 20, oldest first; ?before= pages back
             if req.method == "POST":
                 b = json.loads(req.body)
                 self._mid += 1
