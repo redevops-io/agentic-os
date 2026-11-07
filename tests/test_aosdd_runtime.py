@@ -627,3 +627,18 @@ def test_a_halt_by_the_base_lists_what_remains_and_says_nothing_was_undone(env):
     r2.svc.emit("ObservationWritten", mid2, {"key": "plan", "value": {"status": "ok", "executed": True, "plan": {**plan, "attempt": 9}, "plan_sha256": plan["plan_sha256"]}, "source": "evil", "confidence": 100.0, "source_type": "human", "source_ref": ""})
     r2.rt.approve(mid2, r2.rt.repo.pending_human(mid2)["node_id"], "approve", principal=APP)
     assert [e for e in r2.svc.store.for_mission(mid2) if e.type in ("AosddMissionHalted", "AosddStepRefused", "ApprovalInvalidated")]
+
+
+def test_revocation_between_the_gate_and_the_dispatch_is_stopped_by_the_base_execution_check(env):
+    """`_pre_exec_ok` no longer runs its own final authority check: the base re-reads current authority right before each dispatch."""
+    r = env.runner()
+    mid = r.submit("WIN", REF, principal=REQ)
+    S1 = "aosdd.erpnext.quotation_draft"
+    r.svc.store.subscribe(lambda ev: r.revoke(mid, "revoked inside the window", principal=APP)
+                          if ev.type == "ScopeAuthorized" and ev.payload.get("capability") == S1 else None)     # after the gate's decision, before the dispatch
+    r.approve_plan(mid, r.plan(mid)["plan_sha256"], principal=APP)
+    assert env.stack.writes() == [] and state(r, mid) is MissionState.FAILED
+    refused = [e.payload for e in r.svc.store.for_mission(mid) if e.type == "ExecutionAuthorityRefused"]
+    assert refused and refused[0]["rule"] == "revoked" and refused[0]["capability"] == S1
+    src = open(__import__("agentic_os.integrations.aosdd.runtime", fromlist=["x"]).__file__).read()
+    assert "authority.check(" not in src                               # the duplicate final check is gone from AOS-DD

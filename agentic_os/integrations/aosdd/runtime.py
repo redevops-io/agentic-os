@@ -120,11 +120,6 @@ class AosddMissionRuntime(MissionRuntime):
             step = step_of(plan_d, STEP_OF[node.capability])
             if inputs.get("op_id") != step["op_id"] or not opid.valid(step["op_id"], m.id, step["step"], step["target"], plan_d["attempt"]):
                 ok, why, rule = False, "the operation id is not derived from this mission, step and target", "op_id_mismatch"
-        if ok:
-            args = {k: v for k, v in inputs.items() if not str(k).startswith("_")}
-            dec = self.authority.check(self._authority_key(m), m.tenant, Action(capability=node.capability, arguments=args, risk_tier=1, side_effecting=True))
-            if not dec.allowed:
-                ok, why, rule = False, dec.reason, "authority_" + dec.rule
         if not ok:
             self.store.append("AosddStepRefused", m.id, {"node_id": node.id, "capability": node.capability, "rule": rule, "reason": why, "side_effects": 0})
             self._halt(m, node, rule, why)
