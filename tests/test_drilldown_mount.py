@@ -622,3 +622,17 @@ def test_a_receipt_is_written_for_every_grant_revocation_and_read_and_the_chain_
     assert kinds == [("drilldown.grant", "ok"), ("drilldown.timeline", "ok"), ("drilldown.evidence", "ok"), ("drilldown.revoke", "ok"), ("drilldown.timeline", "refused")]
     assert w.audit.verify() == (True, 5)
     assert all(r["side_effects"] == 0 for r in receipts(w))
+
+
+# ───────────────────────── the sidecar refuses to start on a bad drill-down configuration ─────────────────────────
+def test_the_sidecar_refuses_to_start_on_a_partial_drilldown_configuration_and_writes_no_secret(tmp_path):
+    """Importing the app builds it; a partial PROJECTS_DRILLDOWN_* environment is an error then, before any socket is bound or any hand-off
+    record (secret, launch code) is written. (The launcher sees the process end without a ready record.)"""
+    import subprocess
+    import sys
+    env = {k: os.environ[k] for k in ("PATH", "HOME", "TMPDIR", "LANG") if k in os.environ}
+    env.update({"PYTHONDONTWRITEBYTECODE": "1", "PROJECTS_PORT": "0", "AGENTIC_OS_HANDOFF": "stdout", "PROJECTS_DRILLDOWN_EVENT_PATH": str(tmp_path / "ev.jsonl")})
+    p = subprocess.run([sys.executable, "-c", "from agentic_os.projects_api import main; main()"], env=env, capture_output=True, text=True, timeout=60)
+    assert p.returncode != 0
+    assert "PROJECTS_DRILLDOWN_PROJECT" in p.stderr and "partly configured" in p.stderr
+    assert p.stdout.strip() == ""                                    # no hand-off record: no secret, no launch code
