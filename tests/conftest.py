@@ -7,8 +7,16 @@ exercise a real adapter opt back in with an explicit ``monkeypatch.setenv``.
 """
 import os
 import re
+from pathlib import Path
 
 import pytest
+
+# --- the session must run against THIS worktree's code (tests/_env_guard.py, tests/test_env_guard.py) --------------------------------------------------
+# An environment with agentic_os installed from ANOTHER worktree passes in-process tests (pytest puts this repository on sys.path) and fails the ones that start a
+# subprocess. Resolve agentic_os the way such a subprocess does, and stop with both paths and the fix when it is not inside this repository.
+# Only applies to the repository's own tests/ (tests/test_live_guard.py runs a copy of this file in a temp directory).
+_ROOT = Path(__file__).resolve().parent.parent
+_IS_REPO_TESTS = (_ROOT / "pyproject.toml").is_file() and (_ROOT / "agentic_os").is_dir() and Path(__file__).resolve().parent.name == "tests"
 
 # --- live tests are opt-in (R0-prime): an ambient credential alone never triggers a live call ------------------------
 # Tests marked ``live`` (real provider/bot/infrastructure calls) run only with REDEVOPS_ALLOW_LIVE_TESTS=1. Unless that
@@ -22,6 +30,12 @@ _HIDDEN: dict = {}
 
 
 def pytest_configure(config):
+    if _IS_REPO_TESTS:
+        from tests import _env_guard
+        try:
+            _env_guard.check_session(_ROOT)
+        except AssertionError as e:
+            raise pytest.UsageError(str(e)) from None
     config.addinivalue_line("markers", "live: calls a real external service or infrastructure; runs only with REDEVOPS_ALLOW_LIVE_TESTS=1")
     if not ALLOW_LIVE:
         for name in [n for n in os.environ if _CRED_NAME.search(n)]:
