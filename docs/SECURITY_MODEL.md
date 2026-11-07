@@ -828,11 +828,12 @@ refused until they pass one, or, outside production, until their runtime has a t
   executor completed because this one was late would be wrong), no commit of the late result and no automatic retry. An executor is superseded when it
   says so (`stale_generation`, for example the `StaleExecution` exception) or when the reservation its dispatch used was resolved by reconciliation
   (`reconcile_node`, the probe supervisor) or is missing from the authority ledger. A reservation that the executor itself settled, as an operator does
-  after executing, is the normal path and is not a takeover. Tests: `tests/test_stale_executor.py`, `tests/test_aosdd_stale_race.py`.
+  after executing, is the normal path and is not a takeover. This covers plan nodes (serial and concurrent waves); a fork branch has its own fencing and
+  is not covered by `_superseded`. Tests: `tests/test_stale_executor.py`, `tests/test_aosdd_stale_race.py`.
 * **An automatic retry needs a declared guarantee.** A capability declares `idempotency` (`CapabilitySpec.idempotency`, set by the operator's builder
   in-process, never read from a remote `/capabilities` document): `provider-enforced` (the provider rejects a second identical request),
   `marker-reconciled` (looked up by a marker; absence is evidence, not proof) or `none` (the default, also when undeclared). The reconciliation
   supervisor, which acts as the `system-probe` service principal, may re-dispatch a side-effecting node from an authoritative-negative probe only for
-  `provider-enforced`. For every other capability `reconcile_node` records `AutomaticRetryRefused`, leaves the reservation and the mission as they are,
+  `provider-enforced` (a plan node or a fork branch alike). For every other capability `reconcile_node` records `AutomaticRetryRefused`, leaves the reservation and the mission as they are,
   the supervisor job escalates to a person, and only an authenticated operator's `reconcile_node` can send the step again. Positive evidence, a
   person's own call, a read-only node and a provider-enforced capability are unchanged. Tests: `tests/test_automatic_retry_idempotency.py`.
