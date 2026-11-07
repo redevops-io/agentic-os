@@ -269,8 +269,6 @@ def check_folder(raw: Any, *, home: Optional[str] = None, env: Optional[Mapping[
             return no("invalid_path")
         if parts[1].endswith("$"):
             return no("unc_admin_share")
-        if len(parts) == 2:
-            return no("share_root")
         unc_parts = parts
         comps = parts[2:]
     elif _DRIVE.match(s):

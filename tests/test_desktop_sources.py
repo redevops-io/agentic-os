@@ -559,7 +559,20 @@ def test_the_audit_log_is_a_verifiable_hash_chain_with_an_anchor_and_is_private(
     edited = json.loads(lines[0])
     edited["path"] = "/somewhere/else"
     w.audit_path.write_text("\n".join([json.dumps(edited), lines[1]]) + "\n")
-    assert log.verify()["ok"] is False
+    rep = log.verify()
+    assert rep["ok"] is False and rep["status"] == "chain"
+    # an edit that keeps the chain intact but changes what the anchor vouches for is a mismatch
+    first = json.loads(lines[0])
+    body = {k: v for k, v in first.items() if k not in ("prev", "hash")}
+    body["path"] = "/somewhere/else"
+    from agentic_os.evidence_query.audit import JsonlAuditSink
+    first2 = dict(body, prev=first["prev"], hash=JsonlAuditSink._h(body, first["prev"]))
+    second = json.loads(lines[1])
+    second2 = dict({k: v for k, v in second.items() if k not in ("prev", "hash")}, prev=first2["hash"])
+    second2["hash"] = JsonlAuditSink._h({k: v for k, v in second2.items() if k not in ("prev", "hash")}, first2["hash"])
+    w.audit_path.write_text(json.dumps(first2) + "\n" + json.dumps(second2) + "\n")
+    rep = log.verify()
+    assert rep["ok"] is False and rep["status"] == "mismatch"                                  # re-chained, but no longer what the anchor vouched for
     # a log cut short of its anchor is reported
     w.audit_path.write_text(lines[0] + "\n")
     rep = log.verify()
@@ -664,3 +677,62 @@ def test_sources_are_in_memory_only_a_new_process_has_none(w):
     c = TestClient(fresh, base_url=BASE)
     c.headers["X-Agentic-Session"] = c.post("/api/local/session", json={"code": cap.issue_launch_code()}).json()["session_token"]
     assert [s for s in c.get(f"/api/projects/{PROJECT}/sources").json() if s.get("session_only")] == []
+
+
+# ----------------------------------------------------------------------------------------------------------------------------------
+# the authority's own guards, without the gate in front (defence in depth)
+# ----------------------------------------------------------------------------------------------------------------------------------
+def test_a_configured_token_of_any_kind_withholds_the_authority_at_the_authority_itself(w):
+    live = w.cap.new_session(HOST)[1]
+    req = request_with(None, {SESSION_SCOPE_KEY: live})
+    assert w.authority.authorization_for(req, "POST /api/sources/confirm") is not None
+    for env in ("AGENTIC_OS_CONTROL_TOKEN", "AGENTIC_OS_TENANT_TOKENS", "AGENTIC_OS_APPROVER_TOKENS"):
+        w.mp.setenv(env, "x" * 40 if env == "AGENTIC_OS_CONTROL_TOKEN" else "acme=" + "t" * 40)
+        assert w.authority.authorization_for(req, "POST /api/sources/confirm") is None, env
+        w.mp.delenv(env)
+
+
+def test_the_authority_routes_refuse_a_request_with_no_live_session_by_themselves(w):
+    from fastapi import HTTPException
+    d = w.folder()
+    prov = w.provider
+    bare = request_with()
+    with pytest.raises(HTTPException) as e:
+        w.authority.confirm(bare, project_id=PROJECT, confirmed_by="x", sources=[{"kind": "files", "location": str(d)}], prov=prov,
+                            connect=lambda *a, **k: pytest.fail("connected without a session"), roots=[])
+    assert e.value.status_code == 401
+    with pytest.raises(HTTPException) as e:
+        w.authority.remove(bare, project_id=PROJECT, source_id="x", prov=prov)
+    assert e.value.status_code == 401
+    with pytest.raises(HTTPException):
+        w.authority.require(None)
+    with pytest.raises(HTTPException):
+        w.authority.require("Bearer wrong")
+    with pytest.raises(HTTPException):
+        w.authority.require("Basic " + b64url(w.authority._token))
+    w.authority.require("Bearer " + b64url(w.authority._token))                                     # only the real value passes
+
+
+def test_proposals_of_a_session_that_ended_are_dropped(w):
+    d = w.folder()
+    w.propose(d)
+    assert len(w.authority._proposals) == 1
+    w.client.delete("/api/local/session", headers={"X-Agentic-CSRF": w.csrf})
+    c2, _ = w.session()
+    c2.get(f"/api/projects/{PROJECT}/sources")
+    assert w.authority._proposals == []
+
+
+def test_copying_and_pickling_are_refused_by_each_hook(w):
+    import copy
+    import pickle
+    with pytest.raises(TypeError):
+        w.authority.__reduce__()
+    with pytest.raises(TypeError):
+        w.authority.__reduce_ex__(2)
+    assert "<DesktopSourceAuthority>" == repr(w.authority) == str(w.authority)
+    for proto in range(0, pickle.HIGHEST_PROTOCOL + 1):
+        with pytest.raises(TypeError):
+            pickle.dumps(w.authority, protocol=proto)
+    with pytest.raises(TypeError):
+        copy.deepcopy({"a": w.authority})

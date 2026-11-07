@@ -427,3 +427,51 @@ def test_a_path_the_policy_cannot_examine_is_refused_not_crashed(home, monkeypat
         raise OSError(13, "denied")
     d = check_folder("/tmp", home=str(home), env={}, realpath=boom)
     assert not d.ok and d.code in ("not_found", "invalid_path")
+
+
+# ----------------------------------------------------------------------------------------------------------------------------------
+# each form of the comparison matters on its own (found by mutation: a rule that another rule happened to cover)
+# ----------------------------------------------------------------------------------------------------------------------------------
+def test_a_home_reached_through_a_symlinked_prefix_still_protects_the_real_location(tmp_path):
+    real_parent = tmp_path / "real_parent"
+    (real_parent / "home" / ".ssh").mkdir(parents=True)
+    link_parent = tmp_path / "link_parent"
+    os.symlink(real_parent, link_parent)                       # like /var -> /private/var on macOS
+    home = str(link_parent / "home")
+    d = check_folder(str(real_parent / "home" / ".ssh"), home=home, env={})
+    assert not d.ok and d.code == "protected_location"          # the candidate's real path is compared with the protected entry's real path
+    d = check_folder(str(real_parent / "home"), home=home, env={})
+    assert not d.ok and d.code == "home_directory"
+
+
+def test_the_lexical_path_is_judged_even_when_the_operating_system_resolves_it_somewhere_harmless(tmp_path, home):
+    (home / ".ssh").mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    d = check_folder(str(home / ".ssh"), home=str(home), env={}, realpath=lambda p: str(elsewhere))
+    assert not d.ok and d.code == "protected_location"          # a link AT the protected location is protected, whatever it points to
+    d = check_folder(str(home), home=str(home), env={}, realpath=lambda p: str(elsewhere))
+    assert not d.ok and d.code == "home_directory"
+
+
+def test_a_folder_that_resolves_to_a_drive_or_filesystem_root_is_refused_by_its_real_path():
+    rp, st = fake_fs(["C:\\data\\pdfs", "E:\\"], links={"C:\\data\\pdfs": "E:\\"})
+    d = check_folder("C:\\data\\pdfs", home=WHOME, env={}, windows=True, realpath=rp, stat_fn=st)
+    assert not d.ok and d.code == "drive_root"
+    d = check_folder("/anything", home="/home/a", env={}, realpath=lambda p: "/", stat_fn=lambda p: types.SimpleNamespace(st_mode=stat.S_IFDIR))
+    assert not d.ok and d.code in ("filesystem_root", "contains_protected_location")
+
+
+def test_an_environment_given_location_is_compared_in_its_nfc_form(tmp_path, home):
+    base = tmp_path / "résumé-store"
+    (base / "inner").mkdir(parents=True)
+    nfd = unicodedata.normalize("NFD", str(base))
+    assert nfd != str(base)
+    d = check_folder(str(base / "inner"), home=str(home), env={"AGENTIC_OS_HOME": nfd})
+    assert not d.ok and d.code == "protected_location"
+
+
+def test_a_share_root_is_refused_on_its_own_even_before_resolution():
+    # the UNC text rule, not the later normalisation, is what answers a bare share
+    assert win("\\\\server\\share").code == "share_root" and win("\\\\server\\share\\").code == "share_root"
+    assert win("\\\\server\\share\\.").code == "share_root" and win("\\\\server\\share\\x\\..").code == "share_root"
