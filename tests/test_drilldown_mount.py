@@ -570,3 +570,55 @@ def test_when_a_bridge_is_installed_a_bearer_credential_is_not_a_second_way_in(t
     hosted_only = FastAPI()
     hosted_only.include_router(build_router(_service_of(w.cfg), SingleOwnerTokenAuthenticator(tok, "owner")))
     assert TestClient(hosted_only).get(w.base + "/timeline", headers={"Authorization": f"Bearer {tok}"}).status_code == 200
+
+
+# ───────────────────────── fail closed ─────────────────────────
+def test_the_bridge_fails_closed_when_the_issuer_is_missing_or_broken():
+    from agentic_os.local_capability import SESSION_SCOPE_KEY
+    cap = LocalCapability(port=PORT)
+    _tok, sess = cap.new_session("127.0.0.1:8787")
+
+    class Broken:
+        def issue(self, *a, **k):
+            raise RuntimeError("no key")
+    assert LocalSessionBridge(cap, issuer=Broken()).principal_of(_request({SESSION_SCOPE_KEY: sess})) is None
+
+    class NoCapability:
+        def session_is_live(self, s):
+            raise RuntimeError("broken")
+    assert LocalSessionBridge(NoCapability()).principal_of(_request({SESSION_SCOPE_KEY: sess})) is None
+
+
+def test_an_unreadable_or_tampered_grant_store_denies_it_does_not_open_and_does_not_500(tmp_path, monkeypatch):
+    w = world(tmp_path, monkeypatch, grant=True)
+    assert w.client.get(w.base + "/timeline").status_code == 200
+    enc = os.path.join(w.grants.dir, "grants.enc")
+    assert os.path.exists(enc)
+    open(enc, "wb").write(b"not an encrypted grant store")
+    r = w.client.get(w.base + "/timeline")
+    assert r.status_code == 404 and r.json() == NOT_FOUND
+
+
+def test_a_ceiling_that_raises_denies(tmp_path, monkeypatch):
+    w = world(tmp_path, monkeypatch, grant=True)
+
+    class Boom:
+        def allows(self, principal, permission):
+            raise RuntimeError("boom")
+    cfg = DrilldownConfig(store=w.store, grants=w.grants, audit=w.audit, project_id=SCOPE, ceiling=Boom())
+    app = create_app(SampleProjectionProvider(), capability=w.cap, drilldown=cfg)
+    c = TestClient(app, base_url=BASE_URL)
+    _login(c, w.cap)
+    assert c.get(w.base + "/timeline").status_code == 404
+
+
+def test_a_receipt_is_written_for_every_grant_revocation_and_read_and_the_chain_verifies(tmp_path, monkeypatch):
+    w = world(tmp_path, monkeypatch, grant=True)
+    w.client.get(w.base + "/timeline")
+    w.client.get(w.base + "/evidence")
+    revoke_local_inspect(w.grants, SCOPE, operator="test-operator", audit=w.audit)
+    w.client.get(w.base + "/timeline")
+    kinds = [(r["kind"], r.get("outcome")) for r in receipts(w)]
+    assert kinds == [("drilldown.grant", "ok"), ("drilldown.timeline", "ok"), ("drilldown.evidence", "ok"), ("drilldown.revoke", "ok"), ("drilldown.timeline", "refused")]
+    assert w.audit.verify() == (True, 5)
+    assert all(r["side_effects"] == 0 for r in receipts(w))
