@@ -21,7 +21,8 @@ import pytest
 from tests.test_sidecar_excludes import PKG, ROOT, _run_spec
 
 BUILD_ONLY = ("setuptools", "pkg_resources", "_distutils_hack", "packaging")
-# stdlib modules that the archive held only because of the three above (observed: baseline vs excluded archive)
+# stdlib modules that the archive held only because of the three above (observed: baseline vs excluded archive). `site` is also
+# kept out explicitly (SITE_NOT_FROZEN in the spec): agentic_os/trusted_import.py imports it under try/except ImportError (D-NEW-3)
 ONLY_VIA_SETUPTOOLS = ("pydoc", "pydoc_data", "rlcompleter", "site", "_sitebuiltins")
 
 

@@ -108,7 +108,7 @@ def test_serve_and_bootstrap_run_with_knowledge_frontier_imports_blocked():
     assert res["loaded"] == []
 
 
-def _run_spec():
+def _run_spec(extra_globals=None):
     """Execute the PyInstaller spec with stubs; return (Analysis kwargs, hidden imports passed in)."""
     captured: dict = {}
 
@@ -133,7 +133,7 @@ def _run_spec():
         code = Path(os.environ.get("SIDECAR_SPEC") or ROOT / "packaging" / "redevops-sidecar.spec").read_text(
             encoding="utf-8")
         exec(compile(code, "redevops-sidecar.spec", "exec"),
-             {"Analysis": Analysis, "PYZ": lambda *a, **k: None, "EXE": lambda *a, **k: None, "__name__": "spec"})
+             {"Analysis": Analysis, "PYZ": lambda *a, **k: None, "EXE": lambda *a, **k: None, "__name__": "spec", **(extra_globals or {})})
     finally:
         for k, v in saved.items():
             if v is None:

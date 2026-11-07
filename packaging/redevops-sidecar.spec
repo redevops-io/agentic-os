@@ -25,6 +25,12 @@ hidden = [h for h in hidden if h not in UNEXERCISED]
 # imports them (AST scan + frozen run: tests/test_sidecar_build_only_excludes.py), none of the three is in the shipped
 # wheel lock, and none has a licence text in the notices. Leaving them out changes no behaviour.
 BUILD_ONLY = ("setuptools", "pkg_resources", "_distutils_hack", "packaging")
+# `site` ([D-NEW-3]): agentic_os/trusted_import.py imports it inside try/except ImportError to add site.getsitepackages() and the user site to
+# the interpreter's trusted package directories. A frozen app has neither (the bootloader starts CPython without the site import and the
+# bundle holds no site-packages), but the import pulled `site`, `_sitebuiltins`, `pydoc`, `pydoc_data` and `rlcompleter` into the archive
+# (1008 -> 1424 names). Excluded, `import site` raises ImportError and trusted_import falls back to sysconfig alone; the frozen probe
+# (packaging/probes/trusted_import_probe.py, tests/test_frozen_trusted_import.py) shows its verdicts on planted packages unchanged.
+SITE_NOT_FROZEN = ("site",)
 for opt in ("redevops_connectors", "duckdb"):
     try:
         hidden += collect_submodules(opt)
@@ -50,7 +56,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter", "matplotlib", "redevops_rag", "sentence_transformers", "torch", *UNEXERCISED, *BUILD_ONLY],
+    excludes=["tkinter", "matplotlib", "redevops_rag", "sentence_transformers", "torch", *UNEXERCISED, *BUILD_ONLY, *SITE_NOT_FROZEN],
     noarchive=False,
 )
 pyz = PYZ(a.pure)
