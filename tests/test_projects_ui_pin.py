@@ -126,3 +126,30 @@ def test_publication_changes_only_the_url(tmp_path):
     other.write_bytes(ART.read_bytes())
     lock = dict(LOCK, url=other.as_uri(), local_path="packaging/ui-artifacts/does-not-exist.tgz")
     assert fetch_mod.fetch(lock, tmp_path / "ui") == "fetched"
+
+
+# ---------------------------------------------------------------------------------------------------------------- the 2026-11-06 re-pin
+def test_the_bundle_carries_both_the_today_first_views_and_the_accessibility_series_and_the_drilldown():
+    """The previous pin lacked the Today-first views of v0.2.0 (the convergence report's material finding). A regression guard on the bytes."""
+    js = next(v for k, v in _members().items() if k.endswith(".js")).decode("utf-8")
+    today_first = ("Quick capture", "Deployment inspection", "Social intelligence", "Notifications")                # v0.2.0 line
+    a11y = ("Skip to main content", "About and licences")                                                           # UIA series
+    drilldown = ("aos.drilldown.timeline/", "aos.drilldown.evidence-inspect/", "Sample data, not a record", "Access changed while you were viewing",
+                 "Approve and Reject are not available here")
+    for s in today_first + a11y + drilldown:
+        assert s in js, s
+
+
+def test_the_pin_chain_keeps_the_replaced_artifacts_and_ends_at_the_public_release():
+    prev = LOCK["previous_pin"]
+    assert prev["version"] == "local+2fdef7f5" and prev["source_commit_published"] is False
+    old = ROOT / prev["local_path"]
+    assert old.is_file() and hashlib.sha256(old.read_bytes()).hexdigest() == prev["sha256"]          # going back is a lock edit
+    assert prev["previous_pin"]["version"] == "v0.2.0" and re.fullmatch(r"[0-9a-f]{64}", prev["previous_pin"]["sha256"])
+    assert LOCK["merged_public_release"]["tag"] == "v0.2.0" and REC["merged_public_release"] == {"tag": "v0.2.0", "commit": LOCK["merged_public_release"]["commit"]}
+    assert LOCK["source_commit"] != prev["source_commit"] and LOCK["source_commit_published"] is False and LOCK["url"] == ""
+
+
+def test_the_record_states_that_the_npm_lock_changed_only_by_the_licence_field():
+    assert REC["lock_unchanged_since_base"] is False
+    assert "no dependency was added" in REC["lock_change_since_base"]

@@ -1,19 +1,19 @@
 {
- "_comment": "Where the Projects UI bundle (agentic_os/projects_ui) comes from. On the converged trunk it is NOT tracked in git: scripts/fetch_projects_ui.py (run by the wheel build hook, so by `pip install -e .` too) unpacks the pinned artifact packaging/ui-artifacts/projects-ui-root-2fdef7f5.tgz (packaging/projects_ui.lock.json) into agentic_os/projects_ui, offline. Read by packaging/sbom/generate_source_offer.py and packaging/sbom/analyze.py and checked against the files by tests/test_ui_bundle_source_record.py. The source commit is a LOCAL, UNPUBLISHED commit: the public redevops-projects repository does not contain it, so this record is NOT a source offer (decisions D-LIC-12 and pins-04 stay OPEN). index.html, the JavaScript and the CSS are build output; hero.jpg is not (the neutral placeholder is kept by scripts/build_projects_ui.sh).",
+ "_comment": "Where the Projects UI bundle (agentic_os/projects_ui) comes from. On the converged trunk it is NOT tracked in git: scripts/fetch_projects_ui.py (run by the wheel build hook, so by `pip install -e .` too) unpacks the pinned artifact packaging/ui-artifacts/projects-ui-root-ee958a01.tgz (packaging/projects_ui.lock.json) into agentic_os/projects_ui, offline. Read by packaging/sbom/generate_source_offer.py and packaging/sbom/analyze.py and checked against the files by tests/test_ui_bundle_source_record.py. The source commit is a LOCAL, UNPUBLISHED commit: the public redevops-projects repository does not contain it, so this record is NOT a source offer (decisions D-LIC-12 and pins-04 stay OPEN). index.html, the JavaScript and the CSS are build output; hero.jpg is not (the neutral placeholder is kept by scripts/build_projects_ui.sh).",
  "repository": "https://github.com/redevops-io/redevops-projects",
  "base_commit": "5114b56012511a292eff0e505fdbd0d8b00544f8",
  "base_commit_public": true,
- "source_commit": "2fdef7f5590a562aa3de7aaabde8239603824b01",
- "source_tree": "0b23e32d9c2ce8d99530166dc7e447df0125905e",
+ "source_commit": "ee958a0174421d29f0e510ed31b602fd0ee8a154",
+ "source_tree": "bb56089ad9f9f320f42eb6bc7d3ec22efd768a4c",
  "source_commit_published": false,
- "source_status": "local unpublished commit (branch rel/ui-v3 of a local clone, 9 commits above the local accessibility series tip 54dfc5f4b0e6d8963397480192f4b05baef7816a); not pushed, no pull request, no tag",
- "previous_source_commit": "d77c6a4ab657969583590bc5ceff5e7da1d22e81",
- "previous_bundle": "assets/index-Bunz4yfu.js sha256 2e948ebbe81a962b18dfaff7d905325836e43e14a0db94eba1f9584b03648e19 (built from d77c6a4a; before it assets/index-BAPoIP6S.js sha256 632cc95eb87626af68bea344d21bcdaa5253b74bd6008ebf136fbadb460146f6 from 54dfc5f4)",
- "package_json_git_blob": "1454a8b11020b4b62d972e7d4905bc421437ec3c",
- "package_json_sha256": "8726ce4fe42f8c9dab510a320453258fe6985e0c6755f9d7bb80b3436f81088d",
- "package_lock_git_blob": "e158d96bf1671fc780c100a563b9461cb262514b",
- "package_lock_sha256": "3d73cf6a63b41c30ee894f0be5edfca67ec54438da9d64d801f5200ff942c069",
- "lock_unchanged_since_base": true,
+ "source_status": "local unpublished commit (branch ui/evidence-tracing of a local clone): a merge of the public release v0.2.0 (84f17fce) into the local accessibility series rel/ui-v3 (2fdef7f5), plus the application-directory tab (cherry-picked from the local post-rc/app-directory-ui branch) and the mission drill-down views; not pushed, no pull request, no tag",
+ "previous_source_commit": "2fdef7f5590a562aa3de7aaabde8239603824b01",
+ "previous_bundle": "assets/index-C4jFACLN.js sha256 e3c382f4ac50670550da72ccfe7dba2a3b5aa1f550c7ad1e77d17e9db272082e (built from 2fdef7f5, the accessibility series without the Today-first views; before it assets/index-Bunz4yfu.js from d77c6a4a and assets/index-BAPoIP6S.js from 54dfc5f4)",
+ "package_json_git_blob": "1fae6a7db7899b5ef1a45d4a5c5a2a7a960204f8",
+ "package_json_sha256": "7f5d60f109331d32b1e9c684203a815e1b641c09d41d3c75f74d9667d75c8c98",
+ "package_lock_git_blob": "af8ed38d2074179e60e0d974987be1092ee8c770",
+ "package_lock_sha256": "376e2cd283f3c5fd8c240c85450805e52c4cb952326d09f64622f79dc0b58554",
+ "lock_unchanged_since_base": false,
  "build": {
   "node": "v24.22.2",
   "npm": "11.19.1",
@@ -22,19 +22,24 @@
    "npm ci",
    "VITE_PROJECTS_API=/ npm run build -- --base=/"
   ],
-  "reproduced": "built twice (in place, and in a fresh clone with its own npm ci): index.html, the JavaScript and the CSS are byte-identical"
+  "reproduced": "built three times from a clean git archive of the source commit, each in its own throwaway HOME, TMPDIR and npm cache (env -i, node v24.22.2, npm 11.19.1): index.html, the JavaScript and the CSS are byte-identical"
  },
  "files": {
-  "index.html": "00c01e492e51062776a5419c714ab004db6d908e57ed3f272dff981a342a6f92",
-  "assets/index-C4jFACLN.js": "e3c382f4ac50670550da72ccfe7dba2a3b5aa1f550c7ad1e77d17e9db272082e",
-  "assets/index-D7he0cZO.css": "0d25987b396142352753781b63b08564f5e2a684724e8f595047624519ad5528"
+  "index.html": "c08cd7d0f85b7193a36d7f5a595ca0c240e987500f6fdb3ec6205b4870bce360",
+  "assets/index-XAbPLomz.js": "36cc4070773177e9644d6b379eda2a27ac0f1de14a610676611d60ddf02e93ea",
+  "assets/index-5NRK8P9N.css": "ea0579acc13115f6b42816252a7526d2426756830ff3cee1b49dcad5338bd653"
  },
  "artifact": {
-  "path": "packaging/ui-artifacts/projects-ui-root-2fdef7f5.tgz",
-  "sha256": "a5b5ef13e489c2e57444afc875cef485e7aa7e997e50782a000d45ec3d7b3654",
+  "path": "packaging/ui-artifacts/projects-ui-root-ee958a01.tgz",
+  "sha256": "cc2abd7c41c0aa8434ab668e2dfa13fb6c1d73a66e072162cb306f5f57d6769a",
   "lock": "packaging/projects_ui.lock.json",
   "pack_recipe": "scripts/make_projects_ui_artifact.py",
   "url": "",
   "url_note": "no release has been published for it; a later publication only fills in the lock's url"
- }
+ },
+ "merged_public_release": {
+  "tag": "v0.2.0",
+  "commit": "84f17fceddb84d1af909a5919b5efbb2956b2b22"
+ },
+ "lock_change_since_base": "one added line in package.json and in package-lock.json (the package licence field \"SEE LICENSE IN LICENSE.md\" that arrived with v0.2.0); no dependency was added, removed or changed"
 }
