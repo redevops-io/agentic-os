@@ -10,6 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tests._proc_support import child_env
+
 ROOT = Path(__file__).resolve().parent.parent
 
 SAMPLE = '''
@@ -41,7 +43,8 @@ def test_live_call_runs_when_allowed():
 def run(tmp: Path, sample: str, allow: bool):
     (tmp / "conftest.py").write_text((ROOT / "tests" / "conftest.py").read_text())
     (tmp / "test_sample.py").write_text(sample)
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("REDEVOPS_ALLOW", "PYTEST"))}
+    # the child's conftest copy imports agentic_os (a fixture): give it THIS repository explicitly (the session guard in tests/conftest.py separately checks that the ambient install is this repository's)
+    env = {k: v for k, v in child_env().items() if not k.startswith(("REDEVOPS_ALLOW", "PYTEST"))}
     env.update(FAKE_PROVIDER_API_KEY="k-not-a-real-key", FAKE_BOT_TOKEN="t-not-real", SSH_AUTH_SOCK="/tmp/not-a-socket")
     if allow:
         env["REDEVOPS_ALLOW_LIVE_TESTS"] = "1"

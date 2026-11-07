@@ -2,6 +2,7 @@
 
 1. Fork and branch from `main`.
 2. `pip install -e ".[dev,duckdb]"`, then `PYTHONPATH=$PWD:$PWD/apps pytest -p no:cacheprovider tests`
+   To run the suite in an environment bound to your worktree (and have the session stop if `agentic_os` would be imported from another one), use `scripts/testenv/make_env.sh` and `run_tests.sh`; see [scripts/testenv/README.md](scripts/testenv/README.md).
    (see [docs/CONFORMANCE.md](docs/CONFORMANCE.md) for the conformance gate and per-app suites).
    On macOS ten containment tests are skipped, by name and with the reason: the platform refuses an address-space limit (`RLIMIT_AS`), so the membrane refuses to run with a memory ceiling there and
    the property cannot be tested. CI runs them on Linux, and a test fails on Linux if the runner stops allowing the limit. Exported OAuth client credentials are cleared by `tests/conftest.py`.
