@@ -133,6 +133,7 @@ class EventStore:
         self._anchor = (AnchorFile(anchor_path or path + ".anchor", anchor_key if anchor_key is not None else anchor_key_from_env())
                         if (path and anchor) else None)
         self._anchor_warned = False
+        self._shrunk = False                  # set when the file is found shorter than what was already read (see _read_tail)
         self.integrity = IntegrityReport(True, "unanchored", "no anchor configured" if self._anchor is None else "")
         rec, bad = None, None
         if self._anchor is not None:
@@ -157,6 +158,12 @@ class EventStore:
             return 0
         added = 0
         with open(self._path, "rb") as fh:
+            if os.fstat(fh.fileno()).st_size < self._offset:
+                # The file is SHORTER than what this store has already folded in: it was truncated or replaced behind us. What is in
+                # memory is not the log any more, so say so (the integrity report) and write nothing at the old offset.
+                self._shrunk = True
+                self.integrity = IntegrityReport(False, "truncated", "the log file is now shorter than what this store had already read: "
+                                                                     "it was truncated or replaced", len(self._events), len(self._events))
             fh.seek(self._offset)
             data = fh.read()
         end = data.rfind(b"\n") + 1
@@ -199,6 +206,8 @@ class EventStore:
     def _check_anchor(self, rec: "dict | None", bad: "IntegrityError | None" = None) -> IntegrityReport:
         """Compare the in-memory log with an anchor record that was read BEFORE the log was (see ``__init__``)."""
         n = len(self._events)
+        if self._shrunk:
+            return self.integrity
         if bad is not None:
             return IntegrityReport(False, "invalid", str(bad), n, 0)
         if rec is None:
@@ -215,6 +224,23 @@ class EventStore:
             return IntegrityReport(True, "lagging", f"the log is {n - k} record(s) ahead of its anchor (refreshed by the next append)", n, k)
         return IntegrityReport(True, "ok", "", n, k)
 
+    def check_anchor(self) -> IntegrityReport:
+        """The tail-anchor check ALONE (no hash chain), against the log as it is NOW: what ``check_integrity`` reports before it looks at
+        the chain. Lets a reader say which of the two checks failed."""
+        rec, bad = None, None
+        if self._anchor is not None:
+            try:
+                rec = self._anchor.read()                  # before the log is read: see __init__
+            except IntegrityError as e:
+                bad = e
+        with self._lock:
+            self._read_tail()
+            if self._shrunk:
+                return self.integrity
+            if self._anchor is None:
+                return IntegrityReport(True, "unanchored", "no anchor configured", len(self._events), 0)
+            return self._check_anchor(rec, bad)
+
     def check_integrity(self, mission_id: str | None = None) -> IntegrityReport:
         """The anchor check against the log as it is NOW, plus the hash chain (one mission's, or all). Used before a mission is
         rebuilt from the log; ``ok`` is False if either fails."""
@@ -230,6 +256,8 @@ class EventStore:
                 rep = self._check_anchor(rec, bad)
                 if not rep.ok:
                     return rep
+            elif self._shrunk:
+                return self.integrity
             else:
                 rep = IntegrityReport(True, "unanchored", "no anchor configured", len(self._events), 0)
             events = [e for e in self._events if mission_id is None or e.mission_id == mission_id]
@@ -285,6 +313,8 @@ class EventStore:
                 _files.touch_private(self._path)           # Windows: the log is created private, never under the parent's ACL
                 with open(self._path, "ab") as fh, _locks.locked(fh):     # flock on POSIX, LockFileEx on Windows; no lock means no append
                     self._read_tail()                      # see other writers' events first, so seq is global
+                    if not self.integrity.ok:              # the file was cut behind us just now: nothing is written at the old offset
+                        raise LogIntegrityError(f"{self._path}: {self.integrity.reason}; nothing was written")
                     size = os.fstat(fh.fileno()).st_size
                     prefix = b""
                     if size > self._offset:                # a torn partial record from a crashed writer
@@ -373,6 +403,11 @@ class MemoryEventStore:
     def verify(self) -> ChainReport:
         with self._lock:
             return verify_chain(list(self._events))
+
+    def check_anchor(self) -> IntegrityReport:
+        """Nothing durable to anchor in memory."""
+        with self._lock:
+            return IntegrityReport(True, "unanchored", "in-memory store: no anchor", len(self._events), 0)
 
     def check_integrity(self, mission_id: str | None = None) -> IntegrityReport:
         """The hash chain (nothing durable to anchor in memory)."""
