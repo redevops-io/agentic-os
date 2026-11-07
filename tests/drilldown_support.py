@@ -72,7 +72,8 @@ def failed_mission(path: str):
 
 
 def owner() -> Principal:
-    return Principal("owner", "user", ("operator",))
+    from agentic_os.mission.principal import default_issuer
+    return default_issuer().issue(Principal("owner", "user", ("operator",)), method="test-login")
 
 
 def ceiling_for(tmp_path, grants=(("owner", f"evidence.{SCOPE}.inspect"),)):

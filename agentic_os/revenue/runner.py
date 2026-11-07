@@ -36,11 +36,12 @@ class RevenueMissionRun:
     """A live Revenue Mission: opened, parked at the send gate, awaiting resolution."""
 
     def __init__(self, opp: RevenueOpportunity, *, owner: str,
-                 channel: Optional[AttentionChannel] = None, store: Optional[EventStore] = None):
+                 channel: Optional[AttentionChannel] = None, store: Optional[EventStore] = None,
+                 authority=None, test_policy=None):
         opp.owner = owner or opp.owner
         self.opp = opp
         reg, client = revenue_fleet(opp)
-        self.rt = MissionRuntime(reg, Executor(client), store=store or EventStore())
+        self.rt = MissionRuntime(reg, Executor(client), store=store or EventStore(), authority=authority, test_policy=test_policy)
         self.gateway = OwnerAttentionGateway(channel)
         m = self.rt.create_mission(goal=opp.summary, policy_refs=_POLICY_REFS, template="inbound_lead")
         self.mission_id = m.id

@@ -1000,6 +1000,11 @@ class ForkJoinController:
                 self._append_failed(m, st, bs, attempt, "admission_refused", ran=False)
                 started = True
                 continue
+            refused = rt._execution_refusal(m, node, self._inputs(m, by_id[bs.branch_id], node, bs))   # current authority, after any approval
+            if refused is not None:
+                self._append_failed(m, st, bs, attempt, "authority_denied", ran=False, error=refused.reason or "authority_denied")
+                started = True
+                continue
             if not self._acquire_slot(m, lim):
                 break
             submitted = False
@@ -1265,7 +1270,7 @@ class ForkJoinController:
         rt._set_state(m, MissionState.WAITING_HUMAN)
 
     def approve_branch(self, mission_id: str, node_id: str, decision: str = "approve",
-                       edit: dict | None = None) -> Mission:
+                       edit: dict | None = None, identity: "dict | None" = None) -> Mission:
         """Called by ``MissionRuntime.approve`` for a branch node id. Only a currently parked branch can be
         approved/rejected (no pre-approval). The approval is bound to the branch's capability."""
         rt = self.rt
@@ -1296,10 +1301,10 @@ class ForkJoinController:
             if decision == "approve":
                 rt.store.append("ApprovalGranted", mission_id, {
                     "node_id": node_id, "edit": edit, "capability": b.capability,
-                    "fork_id": st.fork_id, "branch_id": b.branch_id})
+                    "fork_id": st.fork_id, "branch_id": b.branch_id, **(identity or {})})
                 rt.store.append("NodeResumed", mission_id, {"node_id": node_id})
             else:
-                rt.store.append("ApprovalRejected", mission_id, {"node_id": node_id})
+                rt.store.append("ApprovalRejected", mission_id, {"node_id": node_id, **(identity or {})})
                 rt.store.append("NodeSkipped", mission_id, {"node_id": node_id})
                 self._append_failed(m, st, b, max(b.attempt, 1), "approval_rejected", ran=False)
         spec = self._specs.get((mission_id, st.fork_id))

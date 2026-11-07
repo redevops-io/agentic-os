@@ -162,8 +162,15 @@ def build_unified_runtime(store_path: str, *, tenant: str = "Meridian Wealth Man
     executor = Executor(LocalOperatorClient(operators), authority=authority, broker=broker,
                         credentials_for=_credentials_for, authority_for=_authority_for)
     store = EventStore(path=store_path)
-    rt = MissionRuntime(reg, executor, store=store, planner=UnifiedTwoDomainPlanner())
+    rt = MissionRuntime(reg, executor, store=store, planner=UnifiedTwoDomainPlanner(), test_policy=_demo_policy())
     return rt, reg
+
+
+def _demo_policy():
+    """The unified demo runs synthetic in-process operators: it declares that by name (never in the production profile)."""
+    from .authority_policy import AuthorityTestPolicy  # noqa: PLC0415
+    from .profile import is_production  # noqa: PLC0415
+    return None if is_production() else AuthorityTestPolicy.allow_all("unified-demo", "synthetic two-domain demo operators; no external system is touched")
 
 
 def seed_mission(rt, *, goal: str = "Sync the pilot account from Revenue into Support",

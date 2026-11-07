@@ -39,7 +39,20 @@ def mission_receipt(rt, mission_id: str) -> Dict[str, Any]:
     from .store import verify_chain  # noqa: PLC0415
     chain = verify_chain(list(rt.store.for_mission(mission_id)))
     head = rt.store.head(mission_id) if hasattr(rt.store, "head") else ""
+    basis = rt._authority_basis(mission_id) if hasattr(rt, "_authority_basis") else []
+    rollback = None
+    if folded:                                  # a compensation was attempted, denied or recorded: the receipt says how it classifies
+        from .compensation_runner import outcome_from_log  # noqa: PLC0415
+        o = outcome_from_log(rt, mission_id)
+        rollback = {"rolled_back": o.get("rolled_back", False), "compensation_state": o.get("compensation_state", "none"),
+                    "steps": o.get("step_classification", []), "residual_effects": o.get("residual_effects", [])}
+    integ = getattr(rt.store, "integrity", None)
+    anchor = ({"status": integ.status, "anchored": integ.anchored, "records": integ.count}
+              if integ is not None and getattr(integ, "status", "unanchored") != "unanchored" else None)
     return {
+        **({"authority": {"basis": basis}} if basis else {}),
+        **({"ledger_anchor": anchor} if anchor else {}),     # the tail anchor (tail truncation); absent for a log that has none yet
+        **({"rollback": rollback} if rollback else {}),     # what authorised the actions: the owner's envelope and/or a named test policy
         "mission_id": mission_id,
         "goal": rt.repo.goal(mission_id),
         "state": (state.value if isinstance(state, MissionState) else state),

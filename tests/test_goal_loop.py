@@ -10,6 +10,7 @@ import time
 
 import pytest
 
+from tests._principals import authn  # noqa: E402
 from agentic_os.mission.authority import (
     AuthorityEnvelope, AuthorityGuard, AutonomyBudget, Grant, SqliteEnvelopeStore, SqliteLedger)
 from agentic_os.mission.executor import Executor, InMemoryOperatorClient
@@ -498,7 +499,7 @@ def test_an_unknown_outcome_holds_the_loop_and_the_same_mission_finishes_after_r
     # evidence arrives: the SAME mission resumes (it does not resend b), and the loop finishes on it
     nb = rt.repo.pending_reconciliation(mid)[0]["node_id"]
     with L.leases.acquire(mid, owner="ops-console"):                        # a managed mission is only written by its lease holder
-        rt.reconcile_node(mid, nb, executed=True, evidence=EVIDENCE, actor="ops@acme", reason="charge is in the dashboard", result={"charge": "ch_b"})
+        rt.reconcile_node(mid, nb, executed=True, evidence=EVIDENCE, principal=authn("ops@acme"), reason="charge is in the dashboard", result={"charge": "ch_b"})
     st = loop.run(lid)
     assert st.status == "completed" and len(st.iterations) == 1
     assert L.provider.effects == {"a": 1, "b": 1, "c": 1} and L.provider.calls.count("b") == 1

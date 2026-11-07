@@ -18,7 +18,7 @@ import datetime as _dt
 import hashlib
 import json
 import os
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from enum import Enum
 from typing import Any, Iterable
 
@@ -36,8 +36,9 @@ EV_ACKNOWLEDGED = "CompensationAcknowledged"             # a human accepts that 
 EV_UNDECLARED_TARGET = "CompensationUndeclaredTarget"    # warning: declared undo is not a registered capability
 EV_SKIPPED = "CompensationSkipped"                       # declared precondition not met / not evaluable: NOT executed
 EV_RETAINED = "EffectsRetained"                          # mission-level record of every effect that remains
+EV_DENIED = "CompensationDenied"                         # the undo was NOT authorized when it came to run: nothing was executed
 COMPENSATION_EVENTS = (EV_REQUESTED, EV_AUTHORIZED, EV_EXECUTED, EV_VERIFIED, EV_FAILED, EV_APPROVAL_REQUIRED,
-                       EV_APPROVED, EV_ACKNOWLEDGED, EV_UNDECLARED_TARGET, EV_SKIPPED)
+                       EV_APPROVED, EV_ACKNOWLEDGED, EV_UNDECLARED_TARGET, EV_SKIPPED, EV_DENIED)
 
 #: Per-action disposition on failure (``CompensationSpec.disposition``). "" == COMPENSATE: a completed action that
 #: declares a compensation is eligible when the mission's failure policy is COMPENSATE_DECLARED. PRESERVE: this
@@ -114,6 +115,8 @@ class CompensationSpec:
     authorization_policy: str = ""          # "" | HUMAN_APPROVAL (== requires_approval) | EVIDENCE_BOUND
     incurs_ongoing_cost: bool = False       # the retained effect keeps costing money (provisioned infrastructure):
                                             # a failed mission REPORTS its resource ids + estimated cost (or "unknown")
+    residual_effects: list = field(default_factory=list)   # what remains even after a verified undo (a tombstone, a consumed number...):
+                                            # a compensation with residuals is "compensated", never a clean rollback
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -164,6 +167,9 @@ def coerce(value: Any) -> CompensationSpec | None:
             if spec.incurs_ongoing_cost:
                 raise ValueError("compensation.disposition=CLEANUP is for temporary resources: a cost-bearing "
                                  "(incurs_ongoing_cost) effect is retained and reported, never auto-cleaned")
+        if not isinstance(spec.residual_effects, (list, tuple)) or any(not isinstance(x, str) or not x.strip() for x in spec.residual_effects):
+            raise ValueError("compensation.residual_effects must be a list of non-empty texts")
+        spec.residual_effects = [x.strip() for x in spec.residual_effects]
         if spec.authorization_policy not in AUTH_POLICIES:
             raise ValueError(f"unknown compensation authorization_policy {spec.authorization_policy!r}")
         if spec.authorization_policy == AUTH_EVIDENCE and spec.requires_approval:
@@ -427,6 +433,21 @@ def receipt_for(node_id: str, undo: str, idempotency_key: str, result: Any) -> d
 
 
 # ── fold (replay) ────────────────────────────────────────────────────────────────────────────────────────────
+def residuals_of(result: Any) -> list[dict]:
+    """The residual effects an undo REPORTS in its result: ``residual_effects`` (texts or ``{"effect": ...}`` dicts) and/or
+    ``residual_unknown: true`` (the capability cannot say what is left). Each is ``{effect, kind, source: "undo_result"}``."""
+    out: list[dict] = []
+    if isinstance(result, dict):
+        raw = result.get("residual_effects")
+        for item in (raw if isinstance(raw, (list, tuple)) else ([raw] if raw else [])):
+            text = str(item.get("effect", "")) if isinstance(item, dict) else str(item)
+            if text.strip():
+                out.append({"effect": text.strip(), "kind": "residual", "source": "undo_result"})
+        if result.get("residual_unknown"):
+            out.append({"effect": "the undo reports that what remains is unknown", "kind": "unknown", "source": "undo_result"})
+    return out
+
+
 def fold_compensation(events: Iterable[Any]) -> dict[str, dict]:
     """Per-node compensation status folded from the durable log (events are objects with ``type``/``payload``
     or dicts). status: requested | approval_required | authorized | executed_unverified | compensated | failed
@@ -443,6 +464,8 @@ def fold_compensation(events: Iterable[Any]) -> dict[str, dict]:
             continue
         cur = out.setdefault(nid, {"status": "requested", "undo": p.get("undo"), "reason": "", "attempts": 0,
                                    "attempt": 0, "approval": None, "method": None})
+        if p.get("capability") and not cur.get("capability"):
+            cur["capability"] = p["capability"]                  # the forward capability, kept so a step that is not in the plan (a fork branch) is named
         if t == EV_REQUESTED:
             # a duplicated log record must not bump `attempts` (it would exhaust the cap): dedupe by the
             # attempt number, else by event id for a legacy record that carries none
@@ -465,7 +488,7 @@ def fold_compensation(events: Iterable[Any]) -> dict[str, dict]:
         elif t == EV_AUTHORIZED:
             cur["status"] = "authorized"
         elif t == EV_EXECUTED:
-            cur.update(status="executed_unverified", receipt=p.get("receipt"))
+            cur.update(status="executed_unverified", receipt=p.get("receipt"), result=p.get("result"))
         elif t == EV_VERIFIED:
             cur.update(status="compensated", method=p.get("method"), actor=p.get("actor"))
         elif t == EV_FAILED:
@@ -474,6 +497,8 @@ def fold_compensation(events: Iterable[Any]) -> dict[str, dict]:
             cur.update(status="acknowledged", actor=p.get("actor"), ack_reason=p.get("reason", ""))
         elif t == EV_SKIPPED:
             cur.update(status="skipped", reason=p.get("reason", ""))
+        elif t == EV_DENIED:
+            cur.update(status="denied", reason=f"{p.get('rule', '')}: {p.get('reason', '')}".strip(": "))
     for v in out.values():
         v.pop("_seen", None)
     return out
@@ -482,7 +507,9 @@ def fold_compensation(events: Iterable[Any]) -> dict[str, dict]:
 def summarize(folded: dict[str, dict]) -> dict:
     """Mission-outcome view of a fold. ``compensated`` holds ONLY verified compensations."""
     by = lambda st: sorted(n for n, v in folded.items() if v["status"] == st)  # noqa: E731
-    return {"compensated": by("compensated"), "compensated_unverified": by("executed_unverified"),
+    denied = {n: v["reason"] for n, v in sorted(folded.items()) if v["status"] == "denied"}
+    return {**({"compensation_denied": denied} if denied else {}),     # present only when something was denied: receipts of other logs are unchanged
+            "compensated": by("compensated"), "compensated_unverified": by("executed_unverified"),
             "compensation_failed": {n: v["reason"] for n, v in sorted(folded.items())
                                     if v["status"] in ("failed", "approval_required")},
             "compensation_acknowledged": by("acknowledged"),

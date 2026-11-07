@@ -87,7 +87,10 @@ class SingleOwnerTokenAuthenticator:
         if not credential:
             return None
         cand = hashlib.sha256(credential.encode()).digest()
-        return self.principal if hmac.compare_digest(cand, self._digest) else None
+        if not hmac.compare_digest(cand, self._digest):
+            return None
+        from ..mission.principal import default_issuer          # noqa: PLC0415 - the principal carries the proof that it was authenticated here
+        return default_issuer().issue(self.principal, method="owner-token")
 
 
 class StaticCeiling:

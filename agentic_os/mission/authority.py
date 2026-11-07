@@ -21,6 +21,7 @@ durable ledger is used. No model is consulted.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -31,7 +32,12 @@ from fnmatch import fnmatchcase
 from hashlib import sha256
 from typing import Any, Mapping, Protocol
 
+from .integrity import AnchorFile, GENESIS, IntegrityError, anchor_key_from_env
+
 CONTRACT_VERSION = "mission-authority/v1"
+#: Compensation (an undo) is authorised by its own grants: ``compensate:<forward capability>``. A forward grant, even a bare
+#: ``*``, does not cover it (see ``AuthorityGuard.check_compensation``).
+COMPENSATE_PREFIX = "compensate:"
 
 
 class Lease(str, Enum):
@@ -654,42 +660,88 @@ class MemoryEnvelopeStore:
         return mission_id in self._revoked
 
 
+class AuthorityIntegrityError(IntegrityError):
+    """The durable authority store disagrees with its own hash chain or anchor (a grant edited or removed, a revocation deleted, the
+    chain cut or rewritten). Decisions fail closed: the guard answers DENY ``authority_integrity``."""
+
+
+def _rec_hash(prev: str, seq: int, kind: str, key: str, body: str) -> str:
+    return "sha256:" + sha256(f"{prev}|{seq}|{kind}|{key}|{body}".encode("utf-8")).hexdigest()
+
+
 class SqliteEnvelopeStore:
-    """Durable authority: survives restarts and is shared by replicas on the same database file. Every `put`
-    is a new immutable version (history is kept for audit); `get` returns the latest. Revocation is durable
-    and takes effect on the next decision of any process."""
+    """Durable authority: survives restarts and is shared by replicas on the same database file. Every `put` is a new immutable
+    version (history is kept for audit); `get` returns the latest. Revocation is durable and takes effect on the next decision of any
+    process.
+
+    Integrity. Every put, revoke and revoke_all is also appended to a hash-chained ``authority_log`` IN THE SAME TRANSACTION as the
+    state it changes, and the chain head is kept in a separate anchor file (``<db>.chain``). The whole chain, and the state tables
+    against it (each envelope version's body and digest, the revoked set, each tenant's epoch), are verified when the store is
+    opened (``AuthorityIntegrityError`` otherwise); ``get`` / ``is_revoked`` / ``epoch`` run an incremental version before they
+    answer: the verified tail is still there unchanged, new records chain, the anchor is not ahead of the log, and the one thing being
+    asked about agrees with the log. A database from before the log existed is adopted once (trust on first use) and protected from
+    then on. Not covered: a writer who can rewrite the database and the anchor file consistently (mission/integrity.py)."""
     durable = True
 
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, *, verify: bool = True, anchor: bool = True, anchor_key: "bytes | None" = None) -> None:
         self.path = path
+        self._anchor = AnchorFile(path + ".chain", anchor_key if anchor_key is not None else anchor_key_from_env()) if anchor else None
+        self._seen: "tuple[int, str] | None" = None          # (seq, hash) of the last record this process verified
+        self._tlock = threading.Lock()
+        self._warned = False
         with self._conn() as c:
             c.execute("CREATE TABLE IF NOT EXISTS envelopes (mission_id TEXT, version INTEGER, digest TEXT NOT NULL, "
                       "body TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY (mission_id, version))")
             c.execute("CREATE TABLE IF NOT EXISTS epochs (tenant TEXT PRIMARY KEY, epoch INTEGER NOT NULL)")
             c.execute("CREATE TABLE IF NOT EXISTS revoked (mission_id TEXT PRIMARY KEY, at REAL NOT NULL)")
+            c.execute("CREATE TABLE IF NOT EXISTS authority_log (seq INTEGER PRIMARY KEY, kind TEXT NOT NULL, key TEXT NOT NULL, "
+                      "body TEXT NOT NULL, prev TEXT NOT NULL, hash TEXT NOT NULL)")
+            c.execute("CREATE INDEX IF NOT EXISTS authority_log_kind_key ON authority_log (kind, key, seq)")
+        self._adopt_legacy()
+        if verify:
+            self.verify()
 
     def _conn(self) -> sqlite3.Connection:
         c = sqlite3.connect(self.path, timeout=30, isolation_level=None)
         c.execute("PRAGMA journal_mode=WAL")
         return c
 
-    def get(self, mission_id):
-        c = self._conn()
-        try:
-            r = c.execute("SELECT body FROM envelopes WHERE mission_id=? ORDER BY version DESC LIMIT 1", (mission_id,)).fetchone()
-        finally:
-            c.close()
-        return AuthorityEnvelope.from_dict(json.loads(r[0])) if r else None
+    # ── the log ────────────────────────────────────────────────────────────────────────────────────────────
+    @staticmethod
+    def _append(c, kind: str, key: str, body: dict) -> "tuple[int, str]":
+        """Append one record inside the caller's transaction."""
+        row = c.execute("SELECT seq, hash FROM authority_log ORDER BY seq DESC LIMIT 1").fetchone()
+        prev_seq, prev = row if row else (0, GENESIS)
+        seq = prev_seq + 1
+        b = json.dumps(body, sort_keys=True, separators=(",", ":"))
+        h = _rec_hash(prev, seq, kind, key, b)
+        c.execute("INSERT INTO authority_log (seq, kind, key, body, prev, hash) VALUES (?,?,?,?,?,?)", (seq, kind, key, b, prev, h))
+        return seq, h
 
-    def put(self, env):
-        body = json.dumps(env.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    def _publish(self, seq: int, h: str) -> None:
+        """After COMMIT: the anchor says how far the chain has got. A lagging anchor is harmless (a concurrent writer may have moved
+        on); one that cannot be written is reported once and leaves the chain itself intact."""
+        with self._tlock:
+            if self._seen is None or self._seen[0] < seq:
+                self._seen = (seq, h)
+        if self._anchor is None:
+            return
+        try:
+            self._anchor.write({"count": seq, "last_seq": seq, "head": h, "updated": time.time()}, fsync=_fsync_on())
+        except OSError as e:
+            if not self._warned:
+                self._warned = True
+                import logging  # noqa: PLC0415
+                logging.getLogger(__name__).warning("authority anchor %s could not be written (%s): truncation of %s is not detectable",
+                                                    self._anchor.path, e, self.path)
+
+    def _tx(self, fn):
         c = self._conn()
         try:
             c.execute("BEGIN IMMEDIATE")
-            v = c.execute("SELECT COALESCE(MAX(version),0)+1 FROM envelopes WHERE mission_id=?", (env.mission_id,)).fetchone()[0]
-            c.execute("INSERT INTO envelopes (mission_id, version, digest, body, created) VALUES (?,?,?,?,?)",
-                      (env.mission_id, v, env.digest(), body, time.time()))
+            out = fn(c)
             c.execute("COMMIT")
+            return out
         except BaseException:
             try:
                 c.execute("ROLLBACK")
@@ -699,33 +751,241 @@ class SqliteEnvelopeStore:
         finally:
             c.close()
 
+    def _adopt_legacy(self) -> None:
+        """A database written before the log existed: record what it holds, once, so it is covered from now on. If an anchor already
+        vouches for records the log no longer has, that is not a legacy database: it is a cut chain, and it is refused."""
+        def go(c):
+            if c.execute("SELECT COUNT(*) FROM authority_log").fetchone()[0]:
+                return None
+            try:
+                rec = self._anchor.read() if self._anchor is not None else None
+            except IntegrityError as e:
+                raise AuthorityIntegrityError(str(e)) from None
+            if rec is not None and rec["count"] > 0:
+                raise AuthorityIntegrityError(f"{self.path}: the authority log is empty but its anchor vouches for {rec['count']} record(s): truncated")
+            last = None
+            for mid, ver, digest, body, created in c.execute("SELECT mission_id, version, digest, body, created FROM envelopes ORDER BY mission_id, version").fetchall():
+                try:
+                    real = AuthorityEnvelope.from_dict(json.loads(body)).digest()
+                except Exception:  # noqa: BLE001
+                    real = ""
+                if real != digest:
+                    raise AuthorityIntegrityError(f"{self.path}: envelope {mid} v{ver} does not match its recorded digest (cannot adopt a tampered database)")
+                last = self._append(c, "put", mid, {"version": ver, "digest": digest, "body_sha256": sha256(body.encode()).hexdigest(),
+                                                    "at": created, "adopted": True})
+            for (mid, at) in c.execute("SELECT mission_id, at FROM revoked ORDER BY mission_id").fetchall():
+                last = self._append(c, "revoke", mid, {"at": at, "adopted": True})
+            for (tenant, ep) in c.execute("SELECT tenant, epoch FROM epochs ORDER BY tenant").fetchall():
+                for i in range(int(ep)):
+                    last = self._append(c, "revoke_all", tenant, {"epoch": i + 1, "adopted": True})
+            return last
+        last = self._tx(go)
+        if last is not None:
+            self._publish(*last)
+
+    def _walk(self, rows, prev: str, expect: int):
+        """Check that `rows` (consecutive, ascending) continue a chain whose last hash is `prev` and whose next seq is `expect`."""
+        for seq, kind, key, body, p, h in rows:
+            if seq != expect:
+                raise AuthorityIntegrityError(f"{self.path}: the authority log has a gap or is reordered at record {expect} (found {seq})")
+            if p != prev or _rec_hash(prev, seq, kind, key, body) != h:
+                raise AuthorityIntegrityError(f"{self.path}: the authority log's hash chain is broken at record {seq}")
+            prev, expect = h, expect + 1
+        return prev, expect
+
+    def _anchor_rec(self) -> "dict | None":
+        """The anchor record. Read BEFORE the log is: a writer commits the record first and moves the anchor second, so an anchor read
+        first is never ahead of a log read afterwards (read in the other order, a concurrent commit looks like truncation)."""
+        if self._anchor is None:
+            return None
+        try:
+            return self._anchor.read()
+        except IntegrityError as e:
+            raise AuthorityIntegrityError(str(e)) from None
+
+    def _check_anchor(self, c, n: int, rec: "dict | None") -> None:
+        if rec is None or rec["count"] == 0:
+            return
+        k = rec["count"]
+        if n < k:
+            raise AuthorityIntegrityError(f"{self.path}: the authority log was truncated: it has {n} record(s) and its anchor vouches for {k}")
+        row = c.execute("SELECT hash FROM authority_log WHERE seq=?", (k,)).fetchone()
+        if row is None or row[0] != rec["head"]:
+            raise AuthorityIntegrityError(f"{self.path}: the authority log disagrees with its anchor at record {k}: rewritten")
+
+    # ── verification ───────────────────────────────────────────────────────────────────────────────────────
+    def verify(self) -> dict:
+        """Verify the whole chain, the anchor and every state row against the log. Raises AuthorityIntegrityError; else a summary."""
+        rec = self._anchor_rec()
+        c = self._conn()
+        try:
+            c.execute("BEGIN")
+            rows = c.execute("SELECT seq, kind, key, body, prev, hash FROM authority_log ORDER BY seq").fetchall()
+            head, nxt = self._walk(rows, GENESIS, 1)
+            n = nxt - 1
+            self._check_anchor(c, n, rec)
+            puts: dict = {}
+            revoked: set = set()
+            epochs: dict = {}
+            for seq, kind, key, body, _p, _h in rows:
+                d = json.loads(body)
+                if kind == "put":
+                    puts[(key, int(d["version"]))] = (d["digest"], d["body_sha256"])
+                elif kind == "revoke":
+                    revoked.add(key)
+                elif kind == "revoke_all":
+                    epochs[key] = epochs.get(key, 0) + 1
+            have = {}
+            for mid, ver, digest, body in c.execute("SELECT mission_id, version, digest, body FROM envelopes").fetchall():
+                have[(mid, ver)] = (digest, body)
+            if set(have) != set(puts):
+                raise AuthorityIntegrityError(f"{self.path}: the envelope versions do not match the authority log "
+                                              f"(extra: {sorted(set(have) - set(puts))[:3]}, missing: {sorted(set(puts) - set(have))[:3]})")
+            for k, (digest, body) in have.items():
+                self._check_envelope(k[0], k[1], digest, body, puts[k])
+            if {r[0] for r in c.execute("SELECT mission_id FROM revoked")} != revoked:
+                raise AuthorityIntegrityError(f"{self.path}: the revocations do not match the authority log (a revocation was added or deleted)")
+            if {t: e for t, e in c.execute("SELECT tenant, epoch FROM epochs") if e} != epochs:
+                raise AuthorityIntegrityError(f"{self.path}: a tenant revocation epoch does not match the authority log")
+        finally:
+            try:
+                c.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            c.close()
+        with self._tlock:
+            self._seen = (n, head) if n else (0, GENESIS)
+        return {"status": "ok", "records": n, "head": head}
+
+    def _check_envelope(self, mid: str, ver: int, digest: str, body: str, logged) -> None:
+        want_digest, want_body = logged
+        try:
+            real = AuthorityEnvelope.from_dict(json.loads(body)).digest()
+        except Exception:  # noqa: BLE001
+            real = ""
+        if digest != want_digest or sha256(body.encode()).hexdigest() != want_body or real != want_digest:
+            raise AuthorityIntegrityError(f"{self.path}: envelope {mid} v{ver} does not match the authority log (edited)")
+
+    def _guard(self, c, rec: "dict | None") -> None:
+        """Incremental check inside the caller's read transaction: the verified tail is unchanged, new records chain, the anchor is
+        not ahead. Raises AuthorityIntegrityError."""
+        with self._tlock:
+            seen = self._seen
+        if seen is None:
+            raise AuthorityIntegrityError(f"{self.path}: the store was not verified")
+        if seen[0]:
+            row = c.execute("SELECT hash FROM authority_log WHERE seq=?", (seen[0],)).fetchone()
+            if row is None or row[0] != seen[1]:
+                raise AuthorityIntegrityError(f"{self.path}: a verified authority record was removed or changed (log truncated or rewritten)")
+        rows = c.execute("SELECT seq, kind, key, body, prev, hash FROM authority_log WHERE seq>? ORDER BY seq", (seen[0],)).fetchall()
+        head, nxt = self._walk(rows, seen[1], seen[0] + 1)
+        self._check_anchor(c, nxt - 1, rec)
+        if rows:
+            with self._tlock:
+                if self._seen is not None and self._seen[0] < nxt - 1:
+                    self._seen = (nxt - 1, head)
+
+    def _logged(self, c, kind: str, key: str):
+        return c.execute("SELECT body FROM authority_log WHERE kind=? AND key=? ORDER BY seq DESC LIMIT 1", (kind, key)).fetchone()
+
+    # ── reads (each checks what it is about to answer against the log) ─────────────────────────────────────
+    def get(self, mission_id):
+        rec = self._anchor_rec()
+        c = self._conn()
+        try:
+            c.execute("BEGIN")
+            self._guard(c, rec)
+            logged = self._logged(c, "put", mission_id)
+            r = c.execute("SELECT version, digest, body FROM envelopes WHERE mission_id=? ORDER BY version DESC LIMIT 1", (mission_id,)).fetchone()
+            if logged is None:
+                if r is not None:
+                    raise AuthorityIntegrityError(f"{self.path}: envelope {mission_id} is in the store but not in the authority log")
+                return None
+            d = json.loads(logged[0])
+            if r is None or r[0] != d["version"]:
+                raise AuthorityIntegrityError(f"{self.path}: envelope {mission_id} does not match the authority log (latest version missing or replaced)")
+            self._check_envelope(mission_id, r[0], r[1], r[2], (d["digest"], d["body_sha256"]))
+            return AuthorityEnvelope.from_dict(json.loads(r[2]))
+        finally:
+            try:
+                c.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            c.close()
+
+    def put(self, env):
+        body = json.dumps(env.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+        def go(c):
+            v = c.execute("SELECT COALESCE(MAX(version),0)+1 FROM envelopes WHERE mission_id=?", (env.mission_id,)).fetchone()[0]
+            now = time.time()
+            c.execute("INSERT INTO envelopes (mission_id, version, digest, body, created) VALUES (?,?,?,?,?)",
+                      (env.mission_id, v, env.digest(), body, now))
+            return self._append(c, "put", env.mission_id, {"version": v, "digest": env.digest(), "body_sha256": sha256(body.encode()).hexdigest(), "at": now})
+        self._publish(*self._tx(go))
+
     def versions(self, mission_id: str) -> list[tuple[int, str]]:
         with self._conn() as c:
             return list(c.execute("SELECT version, digest FROM envelopes WHERE mission_id=? ORDER BY version", (mission_id,)))
 
     def epoch(self, tenant):
-        with self._conn() as c:
-            r = c.execute("SELECT epoch FROM epochs WHERE tenant=?", (tenant,)).fetchone()
-        return r[0] if r else 0
-
-    def revoke_all(self, tenant):
+        rec = self._anchor_rec()
         c = self._conn()
         try:
-            c.execute("BEGIN IMMEDIATE")
-            c.execute("INSERT INTO epochs (tenant, epoch) VALUES (?,1) ON CONFLICT(tenant) DO UPDATE SET epoch=epoch+1", (tenant,))
-            e = c.execute("SELECT epoch FROM epochs WHERE tenant=?", (tenant,)).fetchone()[0]
-            c.execute("COMMIT")
-            return e
+            c.execute("BEGIN")
+            self._guard(c, rec)
+            r = c.execute("SELECT epoch FROM epochs WHERE tenant=?", (tenant,)).fetchone()
+            n = c.execute("SELECT COUNT(*) FROM authority_log WHERE kind='revoke_all' AND key=?", (tenant,)).fetchone()[0]
+            if (r[0] if r else 0) != n:
+                raise AuthorityIntegrityError(f"{self.path}: the revocation epoch of tenant {tenant!r} does not match the authority log")
+            return n
         finally:
+            try:
+                c.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
             c.close()
 
+    def revoke_all(self, tenant):
+        def go(c):
+            c.execute("INSERT INTO epochs (tenant, epoch) VALUES (?,1) ON CONFLICT(tenant) DO UPDATE SET epoch=epoch+1", (tenant,))
+            e = c.execute("SELECT epoch FROM epochs WHERE tenant=?", (tenant,)).fetchone()[0]
+            return e, self._append(c, "revoke_all", tenant, {"epoch": e, "at": time.time()})
+        e, rec = self._tx(go)
+        self._publish(*rec)
+        return e
+
     def revoke(self, mission_id):
-        with self._conn() as c:
-            c.execute("INSERT OR IGNORE INTO revoked (mission_id, at) VALUES (?,?)", (mission_id, time.time()))
+        def go(c):
+            now = time.time()
+            cur = c.execute("INSERT OR IGNORE INTO revoked (mission_id, at) VALUES (?,?)", (mission_id, now))
+            return self._append(c, "revoke", mission_id, {"at": now}) if cur.rowcount == 1 else None
+        rec = self._tx(go)
+        if rec is not None:
+            self._publish(*rec)
 
     def is_revoked(self, mission_id):
-        with self._conn() as c:
-            return c.execute("SELECT 1 FROM revoked WHERE mission_id=?", (mission_id,)).fetchone() is not None
+        rec = self._anchor_rec()
+        c = self._conn()
+        try:
+            c.execute("BEGIN")
+            self._guard(c, rec)
+            row = c.execute("SELECT 1 FROM revoked WHERE mission_id=?", (mission_id,)).fetchone() is not None
+            logged = self._logged(c, "revoke", mission_id) is not None
+            if row != logged:
+                raise AuthorityIntegrityError(f"{self.path}: the revocation of {mission_id!r} does not match the authority log "
+                                              f"({'a revocation was deleted' if logged else 'a revocation was added'})")
+            return row
+        finally:
+            try:
+                c.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            c.close()
+
+
+def _fsync_on() -> bool:
+    return os.environ.get("AGENTIC_OS_EVENT_FSYNC", "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 # ── evaluation ──────────────────────────────────────────────────────────────────────────────────────
@@ -844,9 +1104,15 @@ class AuthorityGuard:
         """May this authority start a child mission? Reserves one unit of the child quota when it may."""
         return _delegation(self, mission_id, tenant)
 
-    def _scope(self, mission_id: str, tenant: str, action: Action) -> "tuple[AuthorityEnvelope | None, float, Decision]":
+    def _scope(self, mission_id: str, tenant: str, action: Action, grant_prefix: str = "") -> "tuple[AuthorityEnvelope | None, float, Decision]":
         """The scope half of a decision, with no counters touched: the envelope exists in this tenant, is not revoked, its chain is intact,
         and it covers the action. Returns (envelope, now, decision); the decision is not ALLOW when anything fails."""
+        try:
+            return self._scope_checked(mission_id, tenant, action, grant_prefix)
+        except IntegrityError as e:                  # a tampered store is a refusal that nothing downstream may override, never "no envelope"
+            return None, 0.0, Decision(Verdict.DENY, "authority_integrity", f"the authority store failed its integrity check: {e}")
+
+    def _scope_checked(self, mission_id: str, tenant: str, action: Action, grant_prefix: str = "") -> "tuple[AuthorityEnvelope | None, float, Decision]":
         env = self.envelopes.get(mission_id)
         if env is None or env.tenant != tenant:      # unknown, or another tenant's: indistinguishable
             return None, 0.0, Decision(Verdict.DENY, "no_authority", "no authority is recorded for this mission")
@@ -856,6 +1122,11 @@ class AuthorityGuard:
         bad = self.chain_denial(env, now)
         if bad is not None:
             return env, now, bad
+        if grant_prefix:
+            # only grants that name this kind of action count: a wildcard forward grant must not stand in for it
+            view = replace(env, grants=tuple(g for g in env.grants if g.capability.startswith(grant_prefix)))
+            return env, now, replace(evaluate(view, action, now=now, current_epoch=self.envelopes.epoch(env.tenant)),
+                                     envelope_digest=env.digest())
         return env, now, evaluate(env, action, now=now, current_epoch=self.envelopes.epoch(env.tenant))
 
     def check(self, mission_id: str, tenant: str, action: Action) -> Decision:
@@ -863,6 +1134,19 @@ class AuthorityGuard:
         mission's time allowance are checked; nothing is reserved and no counter moves. The gateway uses it to revalidate a caller before
         serving a stored result of an earlier call, which executes nothing and so must not consume the call allowance."""
         env, now, dec = self._scope(mission_id, tenant, action)
+        if dec.verdict is not Verdict.ALLOW:
+            return dec
+        if now - env.issued_at > env.budget.wall_clock_s > 0:
+            return Decision(Verdict.DENY, "wall_clock_exhausted", "the mission's time allowance is used up",
+                            {"extend_budget": {"wall_clock_s": True}}, dec.envelope_digest)
+        return dec
+
+    def check_compensation(self, mission_id: str, tenant: str, capability: str, arguments: "Mapping[str, Any] | None" = None) -> Decision:
+        """May the undo of ``capability`` run RIGHT NOW? Only grants whose capability starts with ``compensate:`` are considered (so a
+        grant on the forward action, wildcard or not, never implies its undo); revocation, expiry, the delegation chain and the
+        forbidden list apply as for any action. Nothing is reserved and no counter moves."""
+        action = Action(capability=COMPENSATE_PREFIX + capability, arguments=dict(arguments or {}), risk_tier=1, side_effecting=True)
+        env, now, dec = self._scope(mission_id, tenant, action, COMPENSATE_PREFIX)
         if dec.verdict is not Verdict.ALLOW:
             return dec
         if now - env.issued_at > env.budget.wall_clock_s > 0:
@@ -988,6 +1272,13 @@ def authority_from_env() -> "AuthorityGuard | None":
 
 
 def _delegation(guard: "AuthorityGuard", mission_id: str, tenant: str) -> tuple[Decision, "AuthorityEnvelope | None"]:
+    try:
+        return _delegation_checked(guard, mission_id, tenant)
+    except IntegrityError as e:
+        return Decision(Verdict.DENY, "authority_integrity", f"the authority store failed its integrity check: {e}"), None
+
+
+def _delegation_checked(guard: "AuthorityGuard", mission_id: str, tenant: str) -> tuple[Decision, "AuthorityEnvelope | None"]:
     env = guard.envelopes.get(mission_id)
     if env is None or env.tenant != tenant:
         return Decision(Verdict.DENY, "no_authority", "no authority is recorded for this mission"), None

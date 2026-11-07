@@ -59,6 +59,27 @@ def _no_live_cores(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _explicit_test_authority_policy(monkeypatch):
+    """Side effects are refused unless the owner's envelope covers them or the runtime was given an explicit, named test policy
+    (agentic_os/mission/authority_policy.py); there is no silent "development allows" default. The suite builds thousands of
+    runtimes without an envelope, so it declares ONE named policy here, recorded in every mission log it touches
+    (``TestPolicyActive``). Tests of the fail-closed behaviour use the ``no_test_policy`` fixture."""
+    from agentic_os.mission.authority_policy import AuthorityTestPolicy
+    from agentic_os.mission.runtime import MissionRuntime
+    monkeypatch.setattr(MissionRuntime, "test_policy", AuthorityTestPolicy.allow_all(
+        "pytest-suite-default", "the test suite builds runtimes without owner envelopes; this named policy is its declaration"))
+    yield
+
+
+@pytest.fixture
+def no_test_policy(monkeypatch):
+    """Remove the suite's default test policy: the runtime then behaves as an unconfigured deployment (fail closed)."""
+    from agentic_os.mission.runtime import MissionRuntime
+    monkeypatch.setattr(MissionRuntime, "test_policy", None)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _permissions_dev_key(monkeypatch):
     """The grant store never generates a key implicitly: it needs PERMISSIONS_KEY or an existing key file. The suite
     builds many throw-away stores in temp directories, so the TEST ENVIRONMENT opts into the explicit development-only

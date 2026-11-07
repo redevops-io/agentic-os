@@ -24,13 +24,13 @@ class ContentMissionRun:
 
     def __init__(self, brief: ContentBrief, *, owner: str = "",
                  generator: Optional[Generator] = None, publisher: Optional[Publisher] = None,
-                 store: Optional[EventStore] = None):
+                 store: Optional[EventStore] = None, authority=None, test_policy=None):
         brief.owner = owner or brief.owner
         self.brief = brief
         self.campaign = ContentCampaign(brief=brief)
         reg, client = content_fleet(brief, generator=generator or FakeGenerator(),
                                     publisher=publisher or FakePublisher(), campaign=self.campaign)
-        self.rt = MissionRuntime(reg, Executor(client), store=store or EventStore())
+        self.rt = MissionRuntime(reg, Executor(client), store=store or EventStore(), authority=authority, test_policy=test_policy)
         m = self.rt.create_mission(goal=brief.key_message, policy_refs=POLICY_REFS,
                                    template="content_distribution")
         self.mission_id = m.id

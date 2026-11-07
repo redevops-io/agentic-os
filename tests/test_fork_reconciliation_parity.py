@@ -16,6 +16,7 @@ import time
 import pytest
 
 from agentic_os.mission import fork_join
+from tests._principals import authn  # noqa: E402
 from agentic_os.mission.authority import (
     AuthorityEnvelope, AuthorityGuard, AutonomyBudget, Grant, SqliteEnvelopeStore, SqliteLedger)
 from agentic_os.mission.executor import Executor
@@ -204,7 +205,7 @@ def test_evidence_that_it_executed_completes_the_branch_and_the_same_fork_finish
     assert rt2.forks.run_fork(m.id, three()).status == "awaiting_reconciliation"
     nb = branch_node_id(m.id, FID, "B")
     ka, kb = key(m.id, "A"), key(m.id, "B")
-    rt2.reconcile_node(m.id, nb, executed=True, evidence=EVIDENCE, actor="ops@acme", reason="charge ch_b is in the dashboard")
+    rt2.reconcile_node(m.id, nb, executed=True, evidence=EVIDENCE, principal=authn("ops@acme"), reason="charge ch_b is in the dashboard")
     st = fold_fork(rt2.store.for_mission(m.id), FID)
     assert st.closed == "satisfied" and [b.status for b in st.ordered()] == ["succeeded"] * 3
     assert st.branches["B"].result["reconciled"] is True and st.branches["B"].result["reconciled_by"] == "ops@acme"
@@ -225,7 +226,7 @@ def test_authoritative_negative_retries_the_branch_as_a_new_attempt_under_a_fres
     nb = branch_node_id(m.id, FID, "B")
     k1, k2 = key(m.id, "B", 1), key(m.id, "B", 2)
     assert w.op.sent(k1) == 1 and w.op.sent(k2) == 0
-    rt1.reconcile_node(m.id, nb, executed=False, evidence=EVIDENCE, actor="ops@acme", reason="provider shows no charge for this key")
+    rt1.reconcile_node(m.id, nb, executed=False, evidence=EVIDENCE, principal=authn("ops@acme"), reason="provider shows no charge for this key")
     st = fold_fork(rt1.store.for_mission(m.id), FID)
     assert st.closed == "satisfied" and st.branches["B"].attempt == 2
     assert w.op.sent(k1) == 1 and w.op.sent(k2) == 1 and w.op.effects.get(k1) is None and w.op.effects[k2] == 1
@@ -239,7 +240,7 @@ def test_authoritative_negative_with_no_attempts_left_fails_the_branch_cleanly(t
     m = w.mission(rt)
     w.op.timeout_keys = {key(m.id, "B")}
     assert rt.forks.run_fork(m.id, three(max_b=1)).status == "awaiting_reconciliation"
-    rt.reconcile_node(m.id, branch_node_id(m.id, FID, "B"), executed=False, evidence=EVIDENCE, actor="ops@acme",
+    rt.reconcile_node(m.id, branch_node_id(m.id, FID, "B"), executed=False, evidence=EVIDENCE, principal=authn("ops@acme"),
                       reason="provider shows no charge for this key")
     st = fold_fork(rt.store.for_mission(m.id), FID)
     assert st.closed == "failed" and st.branches["B"].status == "failed" and st.branches["B"].reason == "reconciled_not_executed"
@@ -312,7 +313,7 @@ def test_a_failed_join_waits_for_the_unknown_branch_instead_of_compensating_arou
     assert not any(e.type == "JoinFailed" for e in rt.store.for_mission(m.id))
     assert rt._missions[m.id].state == MissionState.WAITING_RECONCILIATION
     rt.forks.register_spec(m.id, three())
-    rt.reconcile_node(m.id, branch_node_id(m.id, FID, "B"), executed=True, evidence=EVIDENCE, actor="ops@acme",
+    rt.reconcile_node(m.id, branch_node_id(m.id, FID, "B"), executed=True, evidence=EVIDENCE, principal=authn("ops@acme"),
                       reason="charge ch_b is in the dashboard")
     st = fold_fork(rt.store.for_mission(m.id), FID)
     assert st.closed == "failed" and st.branches["B"].status == "succeeded"
@@ -331,7 +332,7 @@ def test_cancelling_leaves_the_unknown_effect_reported_and_the_reconciliation_op
     assert [p["node_id"] for p in rt.repo.pending_reconciliation(m.id)] == [branch_node_id(m.id, FID, "B")]
     assert lease(rt.authority, m.id, "B") == "unknown"
     # a later confirmation is kept as a LATE receipt: it never changes a branch the fork gave up on
-    rt.reconcile_node(m.id, branch_node_id(m.id, FID, "B"), executed=True, evidence=EVIDENCE, actor="ops@acme",
+    rt.reconcile_node(m.id, branch_node_id(m.id, FID, "B"), executed=True, evidence=EVIDENCE, principal=authn("ops@acme"),
                       reason="charge ch_b is in the dashboard", result={"charge": "ch_b"})
     st = fold_fork(rt.store.for_mission(m.id), FID)
     assert st.branches["B"].status == "cancelled" and len(st.late_results) == 1 and rt.repo.pending_reconciliation(m.id) == []
@@ -468,12 +469,12 @@ def test_a_second_resolution_the_other_way_is_a_conflict_and_the_same_one_is_ide
     w.op.timeout_keys = {key(m.id, "B")}
     rt.forks.run_fork(m.id, three())
     nb = branch_node_id(m.id, FID, "B")
-    rt.reconcile_node(m.id, nb, executed=True, evidence=EVIDENCE, actor="ops@acme", reason="charge ch_b is in the dashboard",
+    rt.reconcile_node(m.id, nb, executed=True, evidence=EVIDENCE, principal=authn("ops@acme"), reason="charge ch_b is in the dashboard",
                       result={"charge": "ch_b"})
     n = len(rt.store.for_mission(m.id))
     with pytest.raises(ReconciliationConflict):
-        rt.reconcile_node(m.id, nb, executed=False, evidence=EVIDENCE, actor="ops2@acme", reason="no, it is not in the dashboard")
-    rt.reconcile_node(m.id, nb, executed=True, evidence=EVIDENCE, actor="ops@acme", reason="charge ch_b is in the dashboard",
+        rt.reconcile_node(m.id, nb, executed=False, evidence=EVIDENCE, principal=authn("ops2@acme"), reason="no, it is not in the dashboard")
+    rt.reconcile_node(m.id, nb, executed=True, evidence=EVIDENCE, principal=authn("ops@acme"), reason="charge ch_b is in the dashboard",
                       result={"charge": "ch_b"})
     assert len(rt.store.for_mission(m.id)) == n                          # repeating the decision changes nothing
     assert w.op.sent(key(m.id, "B")) == 1
@@ -486,9 +487,8 @@ def test_reconciling_a_branch_requires_the_same_evidence_as_a_plan_node(tmp_path
     w.op.timeout_keys = {key(m.id, "B")}
     rt.forks.run_fork(m.id, three())
     nb = branch_node_id(m.id, FID, "B")
-    for kw in (dict(evidence={}, actor="a", reason="a good reason here"),
-               dict(evidence=EVIDENCE, actor=" ", reason="a good reason here"),
-               dict(evidence=EVIDENCE, actor="a", reason="x")):
+    for kw in (dict(evidence={}, principal=authn("a"), reason="a good reason here"),      # who is acting is an authenticated principal (test_operator_principal.py)
+               dict(evidence=EVIDENCE, principal=authn("a"), reason="x")):
         with pytest.raises(ReconciliationError):
             rt.reconcile_node(m.id, nb, executed=True, **kw)
     assert [p["node_id"] for p in rt.repo.pending_reconciliation(m.id)] == [nb]          # nothing changed
@@ -504,7 +504,7 @@ def test_a_branch_that_produces_a_fact_needs_the_real_result(tmp_path, monkeypat
     assert rt.forks.run_fork(m.id, s()).status == "awaiting_reconciliation"
     nb = branch_node_id(m.id, FID, "B")
     with pytest.raises(ReconciliationError, match="real result"):
-        rt.reconcile_node(m.id, nb, executed=True, evidence=EVIDENCE, actor="ops@acme", reason="charge ch_b is in the dashboard")
+        rt.reconcile_node(m.id, nb, executed=True, evidence=EVIDENCE, principal=authn("ops@acme"), reason="charge ch_b is in the dashboard")
     assert lease(rt.authority, m.id, "B") == "unknown"
 
 

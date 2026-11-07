@@ -158,6 +158,22 @@ with `_node = {node}:undo` so a signed token is bound to the compensation, never
 * A target that equals the forward capability, or is itself a forward action of the same plan, is refused
   (`compensation_target_is_forward_action`), at registration, in the runner and in `Executor.compensate`.
 
+* **Execution authority (separate from the above and from the forward step).** Before each undo runs, the runtime asks whether
+  compensation of that capability is authorized *now*: the owner's envelope must hold a grant on `compensate:<capability>` (only
+  grants with that prefix count, so a forward grant or a bare `*` does not imply it; revocation, expiry and the delegation chain
+  apply), or, outside production and with no envelope, the explicit test policy must list the capability under `compensate`.
+  A denied undo is not executed; it is recorded as `CompensationDenied` (`rule`, `reason`, `effect_remains`), repeated denials of the
+  same reason are not repeated in the log, the step becomes a retained effect with reason `compensation_not_authorized`, and
+  the mission ends `COMPENSATION_FAILED` with `compensation_incomplete`. `retry` (the authenticated route) runs the saga again
+  under the caller's principal; `acknowledge` accepts that the effect remains.
+* **Explicit operator compensation.** `MissionRuntime.compensate(mission_id, principal=, ceiling=, reason=, scope=None, node_id=None)`
+  undoes steps the mission already applied (newest first, or one `node_id`) when no automatic authority covers it. It needs an
+  authenticated principal for the mission's tenant, the permission `mission.<scope>.compensate` on `ceiling` (checked on entry and again
+  before each step), and a reason of at least a few words; a mission rebuilt from the log needs `grant_resume` first. The failure
+  policy does not limit it. Each step still has its own request, authorization (`CompensationAuthorized.authority_basis` =
+  `operator:<id>`), execution, read-back and receipt. Records: `CompensationOperatorRequested` / `CompensationOperatorRefused`.
+  A succeeded or parked mission ends `CANCELLED`; a failed one stays `FAILED` (or `COMPENSATION_FAILED` if anything remains).
+
 ## 5. Verification
 
 After the compensating action succeeds, the runtime invokes the declared `compensation.verify` read-back
@@ -410,3 +426,36 @@ approval-gated).
 | in-flight missions frozen at COMPENSATE_DECLARED | unchanged behaviour + `LegacyFailurePolicyNotice`; `AGENTIC_OS_RERESOLVE_LEGACY_POLICY=1` to re-resolve |
 | outcome keys | + `completed_steps`, `recovery_actions`, `retained_costs`; `EffectsRetained` payload carries them |
 | `CompensationSpec` | + `disposition: CLEANUP`, + `incurs_ongoing_cost` |
+
+## 11. Rollback classification and residual effects
+
+`rolled_back` used to be true whenever every undo had been read back. It is now true only when **every applied step is compensated and
+verified by an independent read-back, none has a residual effect, and no compensation was denied or left incomplete.**
+
+Per applied (side-effecting, done or since undone) step, `outcome.step_classification` has one of:
+
+| classification | meaning |
+|---|---|
+| `reversible` | an undo is declared and none has been run (not yet attempted, or left by policy) |
+| `compensated` | the undo ran and was verified; may still carry residuals |
+| `irreversible-uncertain` | no undo is declared, or the undo failed, was denied, skipped, unverified, awaits approval or was acknowledged: the effect may still be there |
+
+and its `residual_effects`, each `{effect, kind, source}`:
+
+* `source: declared`: the capability states what remains after a verified undo: `compensation.residual_effects: ["a tombstone row remains", ...]`;
+* `source: undo_result`: the undo's own result says so: `residual_effects: [...]` (texts or `{"effect": ...}`) and/or `residual_unknown: true`
+  (`kind: unknown`);
+* `source: classification`: `unverified` (the undo ran but nothing proved the effect gone, or it was verified manually and not by read-back) or
+  `retained` (the effect remains because the undo failed, was denied or was skipped, or none is declared).
+
+The outcome also has the flat list `residual_effects` (with `node_id` and `capability`), `compensation_state` and `compensation_denied`; the
+mission receipt has `rollback` (`rolled_back`, `compensation_state`, `steps`, `residual_effects`) when a compensation was recorded. The same
+function builds all of it live and from the log after a restart. A fork branch that was compensated appears as a step too.
+
+| Was | Now |
+|---|---|
+| `rolled_back` true when the read-backs passed | also false when a verified compensation declares or reports a residual effect, or any step is not `compensated` |
+| outcome keys | + `step_classification`, `residual_effects`, `compensation_state`, `compensation_denied` |
+| `CompensationSpec` | + `residual_effects` (list of texts, default empty) |
+| fold of `CompensationExecuted` | keeps the undo `result` and the forward `capability` on each node |
+
