@@ -36,8 +36,10 @@ def test_planted_packages_are_untrusted_and_never_executed_in_the_frozen_runtime
     assert r["planted_code_ran"] == []
 
 
-def test_the_frozen_runtime_has_no_site_module_and_the_probe_still_decides(tmp_path):
+def test_site_is_not_from_the_archive_and_the_probe_still_decides(tmp_path):
     p, r = _run(tmp_path)
-    assert r["site_loaded"] is False                 # excluded by the spec: the guarded import fell back to sysconfig
+    # excluded from the archive by the spec; CPython 3.11+ provides `site` as a built-in frozen module (or, on an interpreter without
+    # it, the guarded import left site = None). Either way it did not come from the PyInstaller archive.
+    assert r["site_origin"] in ("frozen", None), r["site_origin"]
     assert r["ok"] is True
     assert "Traceback" not in p.stderr

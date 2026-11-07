@@ -23,7 +23,7 @@ first_party_wheels "$FPY" "$WH"
 export SOURCE_DATE_EPOCH="$(git -C "$ROOT" show -s --format=%ct HEAD 2>/dev/null || echo 315532800)"
 export PYTHONHASHSEED=1
 cd "$PK"
-"$FBIN/pyinstaller" --clean --noconfirm --distpath "$PK/dist" --workpath "$PK/build-probe" probes/trusted-import-probe.spec
+"$FBIN/pyinstaller" --clean --noconfirm --distpath "$PK/dist" --workpath "$PK/build/probe" probes/trusted-import-probe.spec
 BIN="$PK/dist/redevops-trusted-import-probe"; [ -f "$BIN.exe" ] && BIN="$BIN.exe"
 [ -f "$BIN" ] || { echo "probe not built"; exit 1; }
 echo "probe: $BIN"

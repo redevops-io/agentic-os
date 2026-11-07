@@ -26,10 +26,11 @@ hidden = [h for h in hidden if h not in UNEXERCISED]
 # wheel lock, and none has a licence text in the notices. Leaving them out changes no behaviour.
 BUILD_ONLY = ("setuptools", "pkg_resources", "_distutils_hack", "packaging")
 # `site` ([D-NEW-3]): agentic_os/trusted_import.py imports it inside try/except ImportError to add site.getsitepackages() and the user site to
-# the interpreter's trusted package directories. A frozen app has neither (the bootloader starts CPython without the site import and the
-# bundle holds no site-packages), but the import pulled `site`, `_sitebuiltins`, `pydoc`, `pydoc_data` and `rlcompleter` into the archive
-# (1008 -> 1424 names). Excluded, `import site` raises ImportError and trusted_import falls back to sysconfig alone; the frozen probe
-# (packaging/probes/trusted_import_probe.py, tests/test_frozen_trusted_import.py) shows its verdicts on planted packages unchanged.
+# the interpreter's trusted package directories. The import pulled `site`, `_sitebuiltins`, `pydoc`, `pydoc_data` and `rlcompleter` into
+# the archive (1008 -> 1424 names). CPython 3.11+ carries `site` as a built-in FROZEN module, so excluding it from the archive changes
+# nothing at run time (the frozen probe shows `site` loaded from the interpreter, origin "frozen", and the same verdicts with and without
+# the exclusion); on an interpreter without it, `import site` raises ImportError and trusted_import falls back to sysconfig alone.
+# (packaging/probes/trusted_import_probe.py, tests/test_frozen_trusted_import.py)
 SITE_NOT_FROZEN = ("site",)
 for opt in ("redevops_connectors", "duckdb"):
     try:

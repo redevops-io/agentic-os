@@ -42,6 +42,18 @@ def _plant(attack: Path, marker_dir: Path) -> None:
             (info / "direct_url.json").write_text(json.dumps({"url": "file://" + str(attack), "dir_info": {"editable": True}}))
 
 
+def _site_origin():
+    m = sys.modules.get("site")
+    if m is None:
+        return None
+    spec = getattr(m, "__spec__", None)
+    origin = getattr(spec, "origin", None)
+    if origin == "frozen":
+        return "frozen"
+    loader = type(getattr(m, "__loader__", None)).__name__
+    return "archive" if "Pyi" in loader else "file"
+
+
 def run(workdir: Path) -> dict:
     from agentic_os import trusted_import as ti
 
@@ -65,6 +77,9 @@ def run(workdir: Path) -> dict:
     out = {
         "frozen": bool(getattr(sys, "frozen", False)),
         "site_loaded": "site" in sys.modules and sys.modules["site"] is not None,
+        # where `site` came from: "frozen" = CPython's own built-in frozen module (3.11+), "file" = a site.py on disk, "archive" = a
+        # module inside the PyInstaller archive (what the sidecar spec excludes), None = not loaded
+        "site_origin": _site_origin(),
         "trusted_dirs_exist": all(Path(d).is_dir() for d in dirs),
         "trusted_dirs_count": len(dirs),
         "planted_status": status,
