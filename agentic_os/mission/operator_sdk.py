@@ -80,7 +80,8 @@ def capability(name: str, handler: Handler, *, provides: list[str] | None = None
                max_parallelism: int | None = None,
                compensation: "dict | CompensationSpec | None" = None,
                irreversible: "bool | str" = False,
-               mission_owned_temporary: bool = False) -> Capability:
+               mission_owned_temporary: bool = False,
+               idempotency: str = "") -> Capability:
     """Ergonomic builder for one capability + its handler.
 
     Compensation (docs/COMPENSATION.md, explicit-only): a consequential capability DECLARES either
@@ -92,7 +93,12 @@ def capability(name: str, handler: Handler, *, provides: list[str] | None = None
     The security fields (v0.3.x, all optional) are the metadata the opt-in Executor security seams read:
     `required_authority` feeds the delegated-authority gate (`authority_for`), `isolation_class` the
     sandbox seam (`isolation_for`), and `network`/`data_classifications` the SecurityMonitor's
-    boundary telemetry. Declaring nothing leaves the capability unchanged."""
+    boundary telemetry. Declaring nothing leaves the capability unchanged.
+
+    ``idempotency`` declares what a repeated identical request does at the provider: ``"provider-enforced"`` (the provider rejects a second
+    identical request), ``"marker-reconciled"`` (looked up by a marker; absence is only evidence) or ``"none"``/``""`` (unknown, the default).
+    Only ``provider-enforced`` lets the runtime re-dispatch the step on its own after an unknown outcome; every other value needs an
+    authenticated operator (see ``MissionRuntime.reconcile_node``)."""
     comp = coerce_compensation(compensation)
     irr_note = irreversible.strip() if isinstance(irreversible, str) else ""
     irreversible = bool(irreversible)       # `irreversible="why"` carries the mandatory note
@@ -108,7 +114,7 @@ def capability(name: str, handler: Handler, *, provides: list[str] | None = None
         required_authority=required_authority or [], isolation_class=isolation_class,
         network=network or [], data_classifications=data_classifications or [],
         concurrency_mode=concurrency_mode, concurrency_key=concurrency_key,
-        resource_keys=resource_keys or [], max_parallelism=max_parallelism,
+        resource_keys=resource_keys or [], max_parallelism=max_parallelism, idempotency=idempotency,
     )
     return Capability(spec=spec, handler=handler)
 

@@ -82,6 +82,24 @@ class NodeCost:
 
 
 # ─── capabilities (syscalls) ─────────────────────────────────────────────────
+#: What a capability DECLARES about a REPEATED identical request, i.e. whether the runtime may send a side-effecting step again on its own
+#: after an unknown outcome:
+#:   provider-enforced  the provider itself rejects a second identical request (a unique key / idempotency key it enforces): a repeat cannot
+#:                      create a second effect. The ONLY value that lets the runtime re-dispatch automatically (the reconciliation supervisor).
+#:   marker-reconciled  the provider does not de-duplicate; the integration looks the effect up by a marker before writing. A lookup can miss
+#:                      (visibility lag), so absence is evidence, not a licence: a retry needs an authenticated operator.
+#:   none / ""          nothing is known (the default). Treated as ``none``: never re-dispatched automatically.
+IDEMPOTENCY_PROVIDER_ENFORCED = "provider-enforced"
+IDEMPOTENCY_MARKER_RECONCILED = "marker-reconciled"
+IDEMPOTENCY_NONE = "none"
+IDEMPOTENCY_VALUES = ("", IDEMPOTENCY_NONE, IDEMPOTENCY_MARKER_RECONCILED, IDEMPOTENCY_PROVIDER_ENFORCED)
+
+
+def automatic_retry_allowed(idempotency: "str | None") -> bool:
+    """May the runtime re-dispatch a side-effecting step without a person? Only when the capability declares provider-enforced idempotency."""
+    return idempotency == IDEMPOTENCY_PROVIDER_ENFORCED
+
+
 @dataclass
 class CapabilitySpec:
     """One capability an operator (app) exposes. Metadata is what makes the planner smart."""
@@ -127,6 +145,13 @@ class CapabilitySpec:
     concurrency_key: str = ""        # resource-key template resolved from inputs, e.g. "crm:account:{account_id}"
     resource_keys: list[str] = field(default_factory=list)   # static conflict keys held while running (e.g. "k8s:cluster:prod")
     max_parallelism: int | None = None   # max concurrent holders of this cap's key(s); None -> mode default (exclusive=1)
+    # ── retry surface — what the capability guarantees about a repeated request (see IDEMPOTENCY_* above). Declared in-process by the
+    # operator's builder, NEVER read from a remote /capabilities document (a remote claim of provider-enforced idempotency is not evidence).
+    idempotency: str = ""
+
+    def __post_init__(self) -> None:
+        if self.idempotency not in IDEMPOTENCY_VALUES:
+            raise ValueError(f"{self.name}: idempotency must be one of {', '.join(repr(v) for v in IDEMPOTENCY_VALUES if v)} (got {self.idempotency!r})")
 
     def key(self) -> str:
         return self.name

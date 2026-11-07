@@ -117,3 +117,23 @@ def test_a_declaration_is_validated_and_carried_by_the_builder():
 def test_a_remote_manifest_cannot_declare_its_own_provider_enforced_idempotency():
     spec = _spec_from_json({"name": "x.y", "operator": "x", "side_effecting": True, "idempotency": "provider-enforced"})
     assert spec.idempotency == ""
+
+
+# ── backward compatible for read-only nodes ──────────────────────────────────────────────────────────────────────────────────────
+def test_a_read_only_node_is_still_redispatched_automatically_after_an_authoritative_negative(tmp_path, monkeypatch):
+    """No side effect, nothing to duplicate: the declaration is about side effects only."""
+    import test_mission_park_resume as park
+    real = park.registry
+
+    def read_only_second(idempotency=""):
+        reg = real(idempotency)
+        reg.get("op.second").side_effecting = False
+        return reg
+    monkeypatch.setattr(park, "registry", read_only_second)
+    x = build(tmp_path, monkeypatch, probes=NEG)
+    pend = x.rt.repo.pending_reconciliation(x.mid)
+    assert pend and pend[0]["capability"] == "op.second"
+    rep = tick(x, 31)
+    assert rep.resolved == [x.lease()] and not rep.escalated
+    assert second_calls(x) == 1 and x.rt._missions[x.mid].state == MissionState.SUCCEEDED
+    assert not events(x.rt, x.mid, "AutomaticRetryRefused")

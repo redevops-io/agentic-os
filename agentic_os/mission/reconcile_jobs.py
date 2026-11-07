@@ -258,8 +258,8 @@ class ReconciliationSupervisor:
         """The supervisor acts on a provider's own answer (a probe), not on a person's word: it is recorded as a service principal
         issued for this purpose (``method: system-probe``), so the log tells it apart from a human reconciliation."""
         from ..overlays import Principal  # noqa: PLC0415
-        from .principal import ALL_TENANTS, default_issuer  # noqa: PLC0415
-        return default_issuer().issue(Principal(f"system:reconciliation:{adapter}", "service", ("system",), ALL_TENANTS), method="system-probe")
+        from .principal import ALL_TENANTS, SYSTEM_PROBE_METHOD, default_issuer  # noqa: PLC0415
+        return default_issuer().issue(Principal(f"system:reconciliation:{adapter}", "service", ("system",), ALL_TENANTS), method=SYSTEM_PROBE_METHOD)
 
     def _emit(self, kind: str, job: dict, **extra) -> None:
         try:

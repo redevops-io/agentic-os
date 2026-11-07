@@ -104,7 +104,8 @@ def test_confirmed_executed_settles_restores_the_result_and_resumes_the_same_mis
 
 
 def test_authoritative_negative_releases_re_gates_and_retries_the_action_exactly_once(tmp_path, monkeypatch):
-    x = build(tmp_path, monkeypatch, mode="crash_before_effect", probes=[("op.*", absent(), Q_STRICT)])
+    # automatic re-dispatch is allowed only for a capability that DECLARES provider-enforced idempotency (tests/test_automatic_retry_idempotency.py)
+    x = build(tmp_path, monkeypatch, mode="crash_before_effect", probes=[("op.*", absent(), Q_STRICT)], idempotency="provider-enforced")
     rep = tick(x, 31)
     assert rep.resolved and x.rt._missions[x.mid].state == MissionState.SUCCEEDED
     assert second_calls(x) == 1 and x.w.provider.effects == {"first": 1, "second": 1, "third": 1}       # the action ran once, after proof
@@ -210,7 +211,7 @@ def test_confirmed_executed_that_later_steps_need_but_carries_no_result_escalate
 
 # ── eventual consistency: the adapter declares it; the supervisor enforces it ────────────
 def test_an_eventually_consistent_negative_is_not_trusted_inside_the_visibility_window_but_is_after_it(tmp_path, monkeypatch):
-    x = build(tmp_path, monkeypatch, probes=[("op.*", absent(), Q_EVENTUAL)])
+    x = build(tmp_path, monkeypatch, probes=[("op.*", absent(), Q_EVENTUAL)], idempotency="provider-enforced")   # re-dispatch needs the declaration
     lease = x.lease()
     dispatched = x.jobs.get(lease)["dispatched_at"]
     assert x.jobs.get(lease)["next_at"] >= dispatched + 600                                           # no probe before the window can say anything

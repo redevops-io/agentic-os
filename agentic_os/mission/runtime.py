@@ -1287,6 +1287,7 @@ class MissionRuntime:
             node = next((n for n in plan.graph.nodes if n.id == node_id), None)
             if node is None:
                 raise ReconciliationError("unknown node")
+            self._refuse_automatic_retry(mission_id, node, executed, ident, rec)
             if executed and node.produces and self._downstream_reads(plan, node.produces) and not result:
                 raise ReconciliationError(f"later steps read '{node.produces}', which this node produces: supply the provider's "
                                           "real result so they run on facts, not on a placeholder")
@@ -1320,6 +1321,31 @@ class MissionRuntime:
                 self._set_state(m, MissionState.PAUSED)
                 return m
             return self._run_locked(mission_id)
+
+    def _refuse_automatic_retry(self, mission_id: str, node, executed: bool, ident: dict, rec: dict) -> None:
+        """"It did not happen" releases the reservation and lets the step be sent AGAIN. When the caller is the reconciliation supervisor (a service
+        principal issued ``system-probe``: it acts on a probe, not on a person's word), that is an AUTOMATIC retry, which is prohibited unless the
+        capability declares provider-enforced idempotency: absence in a lookup is evidence, not proof (a provider can still process a request it
+        received), and nothing else prevents a second effect. The step then stays UNCERTAIN: recorded, the reservation untouched, the mission parked,
+        and only an authenticated operator action (this same call with a person's principal) can send it again."""
+        from .principal import SYSTEM_PROBE_METHOD  # noqa: PLC0415
+        from .reconcile import ReconciliationError  # noqa: PLC0415
+        from .types import automatic_retry_allowed  # noqa: PLC0415
+        if executed or not node.side_effecting:
+            return
+        if (ident.get("principal") or {}).get("method") != SYSTEM_PROBE_METHOD:
+            return                                              # a person's decision: authenticated, recorded, theirs
+        spec = self.registry.get(node.capability)
+        declared = getattr(spec, "idempotency", "") or ""
+        if automatic_retry_allowed(declared):
+            return
+        self.store.append("AutomaticRetryRefused", mission_id, {
+            "node_id": node.id, "capability": node.capability, "idempotency": declared or "none", "actor": str(ident.get("approver", "")),
+            "lease_id": rec.get("lease_id", ""), "uncertain": True,
+            "why": "the capability does not declare provider-enforced idempotency, so nothing prevents a second effect",
+            "next": "an authenticated operator reconciles this node (reconcile_node with a person's principal)", "at": time.time()})
+        raise ReconciliationError(f"{node.capability}: not re-dispatched automatically: the capability does not declare provider-enforced idempotency "
+                                  f"(declared: {declared or 'none'}); the step stays uncertain and needs an authenticated operator")
 
     def _complete_from_reconciliation(self, m: Mission, plan: ExecutionPlan, node, ev: dict, actor: str, result) -> None:
         """Mark a node done from evidence that it executed. It becomes the same durable fact `_finish` records (a NodeSucceeded and

@@ -28,6 +28,8 @@ from ..overlays import Principal
 ENV_KEY = "AGENTIC_OS_PRINCIPAL_KEY"
 #: tenant of a principal that may act for every tenant (the unscoped admin credential)
 ALL_TENANTS = "*"
+#: ``method`` of the service principal the reconciliation supervisor acts as (it acts on a provider's probe, not on a person's word)
+SYSTEM_PROBE_METHOD = "system-probe"
 
 
 class PrincipalError(PermissionError):
