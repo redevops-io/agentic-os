@@ -104,6 +104,9 @@ def _step(ev, ps: dict, plan: dict, status: dict, comp: dict) -> dict:
     adopted_rec = t("AosddReconciled")
     undo, undo_ver = t("AosddUndoResult"), t("AosddUndoVerified")
     c = comp.get(node_id or "", {})
+    # a step completed by a person's "it did happen" must have a VERIFIED adoption (independent read-back during reconcile) AND the recorded application record
+    said_done = [e for e in ev if e.type == "ReconciliationResolved" and node_id and e.payload.get("node_id") == node_id and e.payload.get("executed") is True]
+    asserted = bool(said_done) and not (bool(applied) and any(v.payload.get("during") == "reconcile" and v.payload.get("status") == "VERIFIED" for v in ver))
     v_last = ver[-1].payload if ver else None
     a = applied[-1].payload if applied else None
     out = {"step": ps["step"], "app": ps["app"], "capability": ps["capability"], "op_id": op, "node_id": node_id,
@@ -124,7 +127,7 @@ def _step(ev, ps: dict, plan: dict, status: dict, comp: dict) -> dict:
                           "absence_observed": [a_.payload.get("observed_at") for a_ in absent],
                           "redispatch": ([{"principal": r_.payload["principal"]["id"], "reason": r_.payload["reason"]} for r_ in redis] or None),
                           "accepted_as_is": ({"principal": acc[-1].payload["principal"]["id"], "reason": acc[-1].payload["reason"]} if acc else None)} if (unc or stale or acc) else None),
-           "residual": [], "declared_residual": RESIDUAL[ps["step"]],
+           "asserted_without_read_back": asserted, "residual": [], "declared_residual": RESIDUAL[ps["step"]],
            "idempotency": ps.get("idempotency"), "retry_policy": ps.get("retry_policy"), "idempotency_note": IDEMPOTENCY_NOTE.get(ps["app"], "")}
     if undo_ver:
         out["residual"] = undo_ver[-1].payload.get("residual") or []
@@ -136,7 +139,10 @@ def _step(ev, ps: dict, plan: dict, status: dict, comp: dict) -> dict:
     if acc:
         out["residual"] = list(out["residual"]) + [{"what": "the outcome was accepted as uncertain by an approver: the effect may or may not exist in the application; nothing was retried",
                                                       "native_ids": {"recorded_in_ledger": out["native_id"]}}]
-    if stale or acc:
+    if asserted:
+        out["residual"] = list(out["residual"]) + [{"what": "MARKED DONE BY ASSERTION: the step was completed from a person's claim that it happened, without a verified adoption (independent read-back of the "
+                                                      "application's record). Nothing here shows the effect exists", "native_ids": {"recorded_in_ledger": out["native_id"]}}]
+    if stale or acc or asserted:
         out["classification"] = UNCERTAIN              # a possible duplicate (stale generation) or an accepted unknown: never reported as clean, whatever else happened
     elif not out["attempted"]:
         out["classification"] = NONE

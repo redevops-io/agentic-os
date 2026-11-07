@@ -84,6 +84,8 @@ def operator(args):
 
 def build(args) -> "tuple[Runner, AosddConfig]":
     cfg = AosddConfig.from_file(args.config)
+    for w in cfg.tenant_warnings():
+        print(f"WARNING: {w}", file=sys.stderr)
     os.makedirs(args.state, exist_ok=True)
     guard = AuthorityGuard(SqliteEnvelopeStore(args.state + "/authority.db"), SqliteLedger(args.state + "/authority.db.usage"))
     store = RedactingEventStore(args.state + "/events.jsonl", cfg.redactor)
@@ -138,7 +140,10 @@ def main(argv=None) -> int:
         _out(None, reconstruct(a.state + "/events.jsonl", a.mission))
         return 0
     if a.cmd == "verify":
-        _out(None, verify_state(a.state))
+        rep = verify_state(a.state)
+        if a.config:                              # with the config: warnings (never errors) about how the missions will be seen
+            rep["warnings"] = AosddConfig.from_file(a.config).tenant_warnings()
+        _out(None, rep)
         return 0
     if not a.config:
         ap.error("--config is required")

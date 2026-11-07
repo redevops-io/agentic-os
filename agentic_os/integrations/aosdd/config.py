@@ -23,6 +23,17 @@ move ``approval_secret`` into its own 0600 file ``{"schema": "aosdd.approval-key
 still contains ``approval_secret`` or ``reader`` is refused, so a half-migrated deployment fails at start rather than keeping the old layout.
 Approvals signed under the old key do not verify under the new one (mint a new key, re-approve open missions).
 
+Tenant and the Projects drill-down. The drill-down (``docs/PROJECTS_DRILLDOWN_MOUNT.md``) hides a mission recorded under another tenant, and the
+local-owner principal that the desktop's launch session maps to carries the tenant ``agentic_os.overlays.DEFAULT_TENANT`` = ``default``
+(``LOCAL_OWNER_TENANT`` below). AOS-DD records every mission under this config's ``tenant`` key, and the operator-token file maps each role to
+a token per tenant (``requester_tokens`` / ``approver_tokens`` keyed by that tenant). To see an AOS-DD mission in the drill-down run it under
+``"tenant": "default"`` (and key the operator tokens by ``default``), and give the local owner the read permission with
+``agentic-os permissions allow-drilldown --project <PROJECTS_DRILLDOWN_PROJECT>``; the drill-down needs ``PROJECTS_DRILLDOWN_EVENT_PATH`` (the AOS-DD
+``events.jsonl``), ``PROJECTS_DRILLDOWN_PROJECT``, ``PROJECTS_DRILLDOWN_GRANTS_DIR`` and ``PROJECTS_DRILLDOWN_AUDIT_PATH``
+(``PROJECTS_DRILLDOWN_AUTHORITY_DB`` optional: the AOS-DD ``authority.db``). With any other tenant the mission is real and the receipt is complete, but the
+drill-down says "No recorded history to show". The drill-down rule is not changed. AOS-DD logs a WARNING at start-up and ``cli verify --config`` reports
+it under ``warnings`` (never an error).
+
 File shape of the application config::
 
     {"schema": "aosdd.config/1", "tenant": "...", "account_id": 1, "erp_company": "...",
@@ -39,6 +50,8 @@ import stat
 import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any
+
+from agentic_os.overlays import DEFAULT_TENANT
 
 from .redact import Redactor
 
@@ -79,6 +92,9 @@ class Secret:
         raise TypeError("a Secret is never pickled")
 
 
+LOCAL_OWNER_TENANT = DEFAULT_TENANT          # the tenant of the Projects drill-down's local-owner principal (agentic_os/drilldown/mount.py)
+
+
 @dataclass(frozen=True)
 class AosddConfig:
     tenant: str
@@ -94,6 +110,15 @@ class AosddConfig:
     approval_source: str = ""
     shared_writer_reader: tuple = ()      # apps whose verifier credential is the SAME secret as the writer's (no scoped credential exists)
     redactor: Redactor = field(default_factory=Redactor, compare=False, repr=False)
+
+    def tenant_warnings(self) -> list:
+        """Non-fatal: the mission would not be visible to the Projects drill-down's local-owner session (see the module docstring)."""
+        if self.tenant == LOCAL_OWNER_TENANT:
+            return []
+        return [f"config key 'tenant' is {self.tenant!r}, not {LOCAL_OWNER_TENANT!r}: the Projects drill-down shows a mission only to a principal of the same tenant, and its "
+                f"local-owner session carries {LOCAL_OWNER_TENANT!r}, so these missions will read 'No recorded history to show' there (the receipt and the ledger are unaffected). "
+                f"To make them visible set \"tenant\": \"{LOCAL_OWNER_TENANT}\" in the AOS-DD config (and key the operator tokens by it), point PROJECTS_DRILLDOWN_EVENT_PATH at the "
+                f"events.jsonl, and run `agentic-os permissions allow-drilldown` (evidence.<project>.inspect)"]
 
     @classmethod
     def from_dict(cls, d: dict, *, approval_secret: str, reader: dict, verifier_source: str = "", approval_source: str = "") -> "AosddConfig":

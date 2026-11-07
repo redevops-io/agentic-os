@@ -11,7 +11,9 @@ What this subclass adds (each is a gap in the base for this scenario, recorded i
     set/targets), the plan integrity, and the live grant (revocation, expiry, scope);
   * ``_resolve_inputs`` exposes the step's target as top-level arguments so the grant's resource selectors apply to them;
   * the verifier is the independent read-back; a rejected/unverified write is compensated like any completed one;
-  * a refusal HALTS the mission (no automatic compensation: undoing is a separate, explicit operator action)."""
+  * a refusal HALTS the mission (no automatic compensation: undoing is a separate, explicit operator action);
+  * ``reconcile_node(executed=False)`` for an uncertain ERPNext/Chatwoot write is narrowed (``_redispatch_guard``): a person's re-send needs the approver role, a
+    stated reason, a recorded absence, quiescence and a fresh complete lookup, on top of the base rule that only a person may send it again."""
 from __future__ import annotations
 
 import time
@@ -19,8 +21,10 @@ import time
 from agentic_os.mission import compensation as C
 from agentic_os.mission.authority import Action, AuthorityEnvelope, AutonomyBudget, Grant
 from agentic_os.mission.executor import Executor
+from agentic_os.mission.principal import SYSTEM_PROBE_METHOD
+from agentic_os.mission.reconcile import ReconciliationError
 from agentic_os.mission.runtime import MissionRuntime
-from agentic_os.mission.types import Budget, MissionState, NodeState, VerificationDecision, VerificationResult
+from agentic_os.mission.types import Budget, MissionState, NodeState, VerificationDecision, VerificationResult, automatic_retry_allowed
 from agentic_os.mission.verify import CompositeVerifier
 
 from . import approval as approvals
@@ -31,6 +35,7 @@ from .capabilities import (GATE_CAP, PERM_READ, PERM_WRITE, READ_CAPS, RESOURCE_
 from .client import AosddOperatorClient, AosddRefusal, step_args
 from .context import CAPABILITY, OUTCOME, auto_retry_allowed, plan_sha256, step_of
 from .http import AppError
+from .oplog import OpError
 from .services import Services
 from .verify import VERIFIED, UNREADABLE
 
@@ -138,6 +143,141 @@ class AosddMissionRuntime(MissionRuntime):
                                                                "automatic_retry": auto_retry_allowed(st["idempotency"])})
         super()._park_for_reconciliation(m, node, reason)
 
+    # ---- a PERSON's re-send of an uncertain step (AOS-DD-specific hardening on top of the base rule) ---------------------------------------------
+    def reconcile_node(self, mission_id: str, node_id: str, *, executed: bool, evidence: dict, actor: str = "", reason: str,
+                       result: "dict | None" = None, resume: bool = True, principal=None):
+        """Narrowed override of the base ``reconcile_node``: only "it did NOT happen, send it again" (``executed=False``) for an AOS-DD WRITE node that is
+        waiting for reconciliation and whose provider does not enforce idempotency (ERPNext, Chatwoot) is held to the AOS-DD conditions
+        (:meth:`_redispatch_guard`) BEFORE the base runs. Everything else is the base, unchanged: positive evidence, provider-enforced steps, other
+        nodes, and the supervisor path (which the base itself refuses for these steps: ``AutomaticRetryRefused``). The guard runs under the mission's run
+        lock, which the base then takes again (it is re-entrant), so two concurrent re-sends cannot both pass."""
+        if mission_id in self._plans:
+            with self._run_lock(mission_id):
+                node = next((n for n in self._plans[mission_id].graph.nodes if n.id == node_id), None)
+                if node is not None and node.capability in WRITE_CAPS and any(p["node_id"] == node.id for p in self.repo.pending_reconciliation(mission_id)):
+                    if executed:
+                        result = self._verified_adoption(mission_id, node, reason, principal, result)       # the application's verified record replaces whatever the caller typed
+                    else:
+                        self._redispatch_guard(mission_id, node, reason, principal)
+                return super().reconcile_node(mission_id, node_id, executed=executed, evidence=evidence, actor=actor, reason=reason, result=result, resume=resume,
+                                              principal=principal)
+        return super().reconcile_node(mission_id, node_id, executed=executed, evidence=evidence, actor=actor, reason=reason, result=result, resume=resume,
+                                      principal=principal)
+
+    def _verified_adoption(self, mission_id: str, node, reason: str, principal, asserted) -> dict:
+        """"It DID happen" for an AOS-DD write step is accepted only after the independent read-back confirms the record. The runtime looks the record up in the
+        application itself (or confirms the one another executor recorded), requires an authenticated principal whose role may reconcile or redispatch
+        (the supervisor's system-probe principal needs no role but gets the same read-back) and a stated reason, checks that a native id the caller
+        asserted is the application's, runs ``ReadBack.verify`` against the plan, and only then records the adoption (operation ledger + events). The record
+        returned is the APPLICATION'S, never the caller's ``result``. Anything else raises :class:`AdoptionRefused`; nothing is recorded as done."""
+        plan_d = self.svc.plan_for(mission_id)
+        if plan_d is None:
+            raise AdoptionRefused("no plan is recorded for this mission, so the step cannot be checked")
+        st = step_of(plan_d, STEP_OF[node.capability])
+        step, op = st["step"], st["op_id"]
+
+        def refuse(why: str):
+            who = principal.record() if hasattr(principal, "record") else None
+            self.svc.emit("AosddAdoptionRefused", mission_id, {"step": step, "op_id": op, "principal": who, "reason": why})
+            raise AdoptionRefused(why)
+        if getattr(principal, "method", None) != SYSTEM_PROBE_METHOD:
+            try:
+                try:
+                    identity.require(principal, "reconcile", self.svc.cfg.tenant, self.principal_verifier())
+                except identity.NotPermitted:
+                    identity.require(principal, "redispatch", self.svc.cfg.tenant, self.principal_verifier())
+            except identity.NotPermitted as e:
+                refuse(str(e))
+        if len(str(reason).strip()) < 8:
+            refuse("adoption needs a stated reason")
+        row = self.svc.oplog.get(op)
+        recorded = bool(row and row["state"] == "applied")      # another executor finished it and recorded it: confirm, do not look for a second one
+        try:
+            found = dict(row["result"]) if recorded else self.svc.adapters[st["app"]].find(st)
+        except AppError as e:
+            self.svc.emit("AosddReconcileRefused", mission_id, {"step": step, "principal": principal.record() if hasattr(principal, "record") else None,
+                                                                "why": f"cannot read {st['app']}: {e.kind} {e.status}"})
+            refuse(f"cannot decide: {st['app']} could not be read completely ({e.kind} {e.status}); state stays unknown, nothing written, nothing adopted")
+        if found is None or found.get("partial"):
+            refuse(f"no record carrying the marker of {op} is in {st['app']}: nothing to adopt")
+        if isinstance(asserted, dict) and asserted.get("native_id") not in (None, "") and str(asserted["native_id"]) != str(found["native_id"]):
+            refuse(f"the asserted native id {asserted['native_id']} does not match the record the application holds ({found['native_id']}); nothing adopted")
+        if not recorded:
+            found.update(step=st["step"], app=st["app"], op_id=op, capability=st["capability"], adopted=True, expect=st["expect"], idempotency=st.get("idempotency"),
+                         note="adopted by reconciliation: the application already held a record carrying this op's marker")
+        quotation = ""
+        if st["step"] != "S1":
+            for e in self.svc.store.for_mission(mission_id):
+                if e.type == "NodeSucceeded" and e.payload.get("capability") == CAPABILITY["S1"]:
+                    quotation = (e.payload.get("result") or {}).get("native_id", "")
+        rep = self.svc.readback.verify(st, found, {"quotation": quotation})
+        self.svc.emit("AosddStepVerified", mission_id, {"op_id": op, "step": step, "native_id": found["native_id"], "status": rep["status"], "checks": rep["checks"],
+                                                        "method": rep["method"], "reader": rep["reader"], "credential_source": rep["credential_source"],
+                                                        "read_only_kind": rep["read_only_kind"], "same_secret_as_writer": rep["same_secret_as_writer"], "expect": st["expect"],
+                                                        "during": "reconcile"})
+        if rep["status"] != VERIFIED:
+            refuse(f"the record found for {step} did not verify against the plan ({rep['status']}); it is NOT adopted")
+        actor = getattr(principal, "id", "system")
+        if not recorded:
+            self.svc.oplog.resolve_applied(op, str(found["native_id"]), found, f"{actor}: found by marker")
+            self.svc.emit("AosddOpApplied", mission_id, {"op_id": op, "step": step, "native_id": found["native_id"], "native_ids": found["native_ids"], "ui_url": found["ui_url"],
+                                                         "ui_url_note": found.get("ui_url_note", ""), "created": False, "adopted": True, "fence": None, "via": "reconcile",
+                                                         "idempotency": st.get("idempotency")})
+        self.svc.emit("AosddReconciled", mission_id, {"step": step, "op_id": op, "principal": principal.record() if hasattr(principal, "record") else None, "found": True,
+                                                      "native_id": found["native_id"]})
+        return found
+
+    def _redispatch_guard(self, mission_id: str, node, reason: str, principal) -> None:
+        """The conditions for a person to send an UNCERTAIN, non-provider-enforced step again. Raises :class:`RedispatchRefused` (recording
+        ``AosddRedispatchRefused``) unless all hold: an authenticated principal whose role may ``redispatch`` (approver/admin, of this tenant); a stated
+        reason; an earlier reconcile RECORDED the absence of the record; quiescence (the earlier lease expired at least one HTTP timeout ago); a FRESH complete
+        lookup that still finds nothing (the caller's own evidence is not consulted). On success the operation is released for a new generation and
+        ``AosddRedispatchAuthorized`` is recorded with the principal, the reason and the evidence. Absence is never proof: the record says so."""
+        plan_d = self.svc.plan_for(mission_id)
+        spec = self.registry.get(node.capability)
+        if plan_d is None:
+            st = None
+        else:
+            st = step_of(plan_d, STEP_OF[node.capability])
+        if st is not None and auto_retry_allowed(st["idempotency"]) and automatic_retry_allowed(getattr(spec, "idempotency", "") or ""):
+            return                                      # provider-enforced: a repeat of the same op id is safe; the base rule is enough
+        if getattr(principal, "method", None) == SYSTEM_PROBE_METHOD:
+            return                                      # the supervisor path: the base refuses it for a non-provider-enforced node (AutomaticRetryRefused)
+        step, op = (st["step"], st["op_id"]) if st else (STEP_OF[node.capability], "")
+
+        def refuse(why: str):
+            who = principal.record() if hasattr(principal, "record") else None
+            self.svc.emit("AosddRedispatchRefused", mission_id, {"step": step, "op_id": op, "principal": who, "reason": why})
+            raise RedispatchRefused(f"redispatch refused: {why}")
+        if st is None:
+            refuse("no plan is recorded for this mission, so the step cannot be checked")
+        try:
+            identity.require(principal, "redispatch", self.svc.cfg.tenant, self.principal_verifier())
+        except identity.NotPermitted as e:
+            refuse(str(e))
+        if len(str(reason).strip()) < 8:
+            refuse("redispatch needs a stated reason")
+        obs = self.svc.oplog.absent_observation(op)
+        quiet = self.svc.oplog.quiet_since(op)
+        if obs is None:
+            refuse("no reconcile has observed the absence of the record yet")
+        now = self.svc.clock()
+        if quiet is None or now < quiet + self.svc.cfg.http_timeout_s:
+            refuse("too early: the earlier request may still be in flight or being processed (wait until its lease expired plus one HTTP timeout)")
+        try:
+            found = self.svc.adapters[st["app"]].find(st)
+        except AppError as e:
+            refuse(f"cannot decide: {st['app']} could not be read completely ({e.kind} {e.status})")
+        if found is not None and not found.get("partial"):
+            refuse("a record carrying the marker exists now: reconcile it (adopt) instead")
+        try:
+            self.svc.oplog.resolve_not_applied(op, f"redispatch authorized by {principal.id}: {reason}")
+        except OpError as e:
+            refuse(f"the operation cannot be released: {e}")
+        self.svc.emit("AosddRedispatchAuthorized", mission_id, {"step": step, "op_id": op, "principal": principal.record(), "reason": reason, "absence_observed": obs,
+                                                                "fresh_lookup_complete": True, "quiet_since": quiet, "at": now,
+                                                                "residual_risk": "the application may still process the earlier request; a stale-generation record will show it"})
+
     # ---- compensation of an effect that exists but never committed (read-back rejected it) ---------------------------------------------------------
     def _saga(self, m, plan, world, *, authorizer=None) -> None:
         self._undo_uncommitted(m, plan, authorizer)
@@ -181,6 +321,14 @@ class AosddMissionRuntime(MissionRuntime):
 # ---------------------------------------------------------------------------------------------------------------- operator facade
 class RunnerError(RuntimeError):
     pass
+
+
+class AdoptionRefused(ReconciliationError):
+    """A person's claim that an uncertain write DID happen was refused: the independent read-back did not confirm a record (nothing was recorded as done)."""
+
+
+class RedispatchRefused(ReconciliationError):
+    """A person's re-send of an uncertain step was refused by the AOS-DD guard (nothing was sent, the operation was not released)."""
 
 
 def _lit_resource(step: dict) -> str:
@@ -345,28 +493,11 @@ class Runner:
             self.svc.emit("AosddReconciled", mission_id, {"step": step, "op_id": st["op_id"], "principal": principal.record(), "found": False})
             return self.rt.reconcile_node(mission_id, node.id, executed=False, reason=reason, principal=principal,
                                           evidence={"kind": "provider_record", "reference": f"{st['app']}: no record carries {st['op_id']}"})
-        if not recorded:
-            found.update(step=st["step"], app=st["app"], op_id=st["op_id"], capability=st["capability"], adopted=True, expect=st["expect"],
-                         idempotency=st.get("idempotency"), note="adopted by reconciliation: the application already held a record carrying this op's marker")
-        quotation = ""
-        if st["step"] != "S1":
-            for e in self.svc.store.for_mission(mission_id):
-                if e.type == "NodeSucceeded" and e.payload.get("capability") == CAPABILITY["S1"]:
-                    quotation = (e.payload.get("result") or {}).get("native_id", "")
-        rep = self.svc.readback.verify(st, found, {"quotation": quotation})
-        self.svc.emit("AosddStepVerified", mission_id, {"op_id": st["op_id"], "step": st["step"], "native_id": found["native_id"], "status": rep["status"],
-                                                        "checks": rep["checks"], "method": rep["method"], "reader": rep["reader"], "credential_source": rep["credential_source"],
-                                                        "read_only_kind": rep["read_only_kind"], "same_secret_as_writer": rep["same_secret_as_writer"], "expect": st["expect"], "during": "reconcile"})
-        if rep["status"] != VERIFIED:
-            raise RunnerError(f"the record found for {step} did not verify against the plan ({rep['status']}); it is NOT adopted")
-        if not recorded:
-            self.svc.oplog.resolve_applied(st["op_id"], str(found["native_id"]), found, f"{actor}: found by marker")
-            self.svc.emit("AosddOpApplied", mission_id, {"op_id": st["op_id"], "step": st["step"], "native_id": found["native_id"], "native_ids": found["native_ids"], "ui_url": found["ui_url"],
-                                                         "ui_url_note": found.get("ui_url_note", ""), "created": False, "adopted": True, "fence": None, "via": "reconcile",
-                                                         "idempotency": st.get("idempotency")})
-        self.svc.emit("AosddReconciled", mission_id, {"step": step, "op_id": st["op_id"], "principal": principal.record(), "found": True, "native_id": found["native_id"]})
-        return self.rt.reconcile_node(mission_id, node.id, executed=True, reason=reason, result=found, principal=principal,
-                                      evidence={"kind": "provider_record", "reference": f"{st['app']}:{found['native_id']}", "provider_ref": str(found["native_id"])})
+        try:          # the record exists: the runtime's own verified adoption (lookup, independent read-back, ledger, events) is the only way a step becomes done
+            return self.rt.reconcile_node(mission_id, node.id, executed=True, reason=reason, principal=principal,
+                                          evidence={"kind": "provider_record", "reference": f"{st['app']}: a record carries {st['op_id']} (verified by independent read-back)"})
+        except AdoptionRefused as e:
+            raise RunnerError(str(e)) from None
 
     # ---- the explicit ways out of an UNCERTAIN step (approver only) --------------------------------------------------------------------------
     def _pending_uncertain(self, mission_id: str, step: str):
@@ -378,40 +509,21 @@ class Runner:
         return st, node
 
     def redispatch(self, mission_id: str, step: str, reason: str, *, principal):
-        """Re-send an uncertain step whose provider does not enforce idempotency. Needs: the approver role, a stated reason, an earlier
-        `reconcile` that observed absence, a quiescence period (the earlier lease expired at least one HTTP timeout ago, so the earlier
-        request is no longer in its executor's hands), and a FRESH complete lookup that still finds nothing. Absence is never proof (an
-        application can still process a request it received); this is the operator accepting that residual risk, on the record."""
+        """Re-send an uncertain step whose provider does not enforce idempotency. The conditions (approver role, stated reason, an earlier reconcile that
+        observed absence, quiescence of the earlier lease plus one HTTP timeout, a FRESH complete lookup that still finds nothing) are enforced by
+        ``AosddMissionRuntime._redispatch_guard`` inside ``reconcile_node``, the same guard a direct call to the runtime meets; this method only
+        names the step and reports a refusal. Absence is never proof (an application can still process a request it received); the approver accepts
+        that residual risk, on the record."""
         self._who(principal, "redispatch")
-        if len(str(reason).strip()) < 8:
-            raise RunnerError("redispatch needs a stated reason")
         self._ensure_live(mission_id, principal)
         st, node = self._pending_uncertain(mission_id, step)
         if auto_retry_allowed(st["idempotency"]):
             raise RunnerError(f"{step} is provider-enforced: use reconcile (a repeat of the same op id is safe)")
-        op = st["op_id"]
-
-        def refuse(why):
-            self.svc.emit("AosddRedispatchRefused", mission_id, {"step": step, "op_id": op, "principal": principal.record(), "reason": why})
-            raise RunnerError(f"redispatch refused: {why}")
-        obs = self.svc.oplog.absent_observation(op)
-        quiet = self.svc.oplog.quiet_since(op)
-        if obs is None:
-            refuse("no reconcile has observed the absence of the record yet")
-        now = self.svc.clock()
-        if quiet is None or now < quiet + self.svc.cfg.http_timeout_s:
-            refuse("too early: the earlier request may still be in flight or being processed (wait until its lease expired plus one HTTP timeout)")
         try:
-            found = self.svc.adapters[st["app"]].find(st)
-        except AppError as e:
-            refuse(f"cannot decide: {st['app']} could not be read completely ({e.kind} {e.status})")
-        if found is not None and not found.get("partial"):
-            refuse("a record carrying the marker exists now: reconcile it (adopt) instead")
-        self.svc.oplog.resolve_not_applied(op, f"redispatch authorized by {principal.id}: {reason}")
-        self.svc.emit("AosddRedispatchAuthorized", mission_id, {"step": step, "op_id": op, "principal": principal.record(), "reason": reason, "absence_observed": obs,
-                                                                "fresh_lookup_complete": True, "quiet_since": quiet, "at": now, "residual_risk": "the application may still process the earlier request; a stale-generation record will show it"})
-        return self.rt.reconcile_node(mission_id, node.id, executed=False, reason=reason, principal=principal,       # a person: the base allows it, the supervisor it does not
-                                      evidence={"kind": "provider_record", "reference": f"{st['app']}: no record carries {op} (fresh complete lookup)"})
+            return self.rt.reconcile_node(mission_id, node.id, executed=False, reason=reason, principal=principal,       # a person: the base allows it, the supervisor it does not
+                                          evidence={"kind": "provider_record", "reference": f"{st['app']}: no record carries {st['op_id']} (fresh complete lookup)"})
+        except RedispatchRefused as e:
+            raise RunnerError(str(e)) from None
 
     def accept_uncertain(self, mission_id: str, step: str, reason: str, *, principal):
         """An approver accepts the uncertain outcome as it is: the step is not retried and not claimed to have happened; the mission is

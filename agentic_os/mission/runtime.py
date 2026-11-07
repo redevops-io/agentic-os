@@ -1382,7 +1382,23 @@ class MissionRuntime:
     def _park_stale(self, m: Mission, node, kind: str, detail: str, stale: dict) -> bool:
         """A superseded executor's answer (``kind`` = failure | result) is EVIDENCE of a possible duplicate effect, not an outcome: record it,
         keep the step UNCERTAIN and park the mission for an operator. NO NodeFailed, NO saga (compensating work another executor completed
-        because this one was late would be wrong), NO commit of the result and NO automatic retry."""
+        because this one was late would be wrong), NO commit of the result and NO automatic retry.
+
+        The decision is made from the LOG's state of the mission, not from this driver's in-memory view (another driver may have finished the
+        mission meanwhile). A mission the log already shows FAILED, CANCELLED or COMPENSATION_FAILED stays as it is: the answer is recorded as
+        evidence only (``terminal``), the step is UNCERTAIN with a ``possible_duplicate`` residual (``classify_steps``), and nothing is parked,
+        re-opened, retried, committed or compensated: a later ``reconcile_node`` has nothing pending to resume. A SUCCEEDED mission is parked for
+        an operator as before; a mission that is still running is parked as before."""
+        logged = self.repo.state(m.id)
+        if logged in (MissionState.FAILED, MissionState.CANCELLED, MissionState.COMPENSATION_FAILED):
+            self.store.append("StaleResultRecorded", m.id, {
+                "node_id": node.id, "capability": node.capability, "kind": kind, "detail": detail[:300], "lease_id": stale["lease_id"],
+                "lease_state": stale["lease_state"], "why": stale["why"], "terminal": True, "mission_state": logged.value,
+                "action": f"the mission is already {logged.value} in the log: evidence only; the mission is not re-opened, nothing is retried, committed or compensated; "
+                          "a possible duplicate effect is listed as a residual of the step", "at": time.time()})
+            self._meter(m, node, "error")
+            m.state = logged                                    # this driver's view follows the log; no event, so nothing is written over the terminal state
+            return False
         self.store.append("StaleResultRecorded", m.id, {
             "node_id": node.id, "capability": node.capability, "kind": kind, "detail": detail[:300], "lease_id": stale["lease_id"],
             "lease_state": stale["lease_state"], "why": stale["why"],
