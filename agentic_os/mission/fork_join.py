@@ -1133,7 +1133,7 @@ class ForkJoinController:
         return next((x.max_attempts for x in (spec.branches if spec else []) if x.branch_id == bs.branch_id), bs.max_attempts)
 
     def reconcile_branch(self, m: Mission, mission_id: str, node_id: str, *, executed: bool, evidence: dict, actor: str,
-                         reason: str, result: "dict | None" = None, resume: bool = True) -> Mission:
+                         reason: str, result: "dict | None" = None, resume: bool = True, ident: "dict | None" = None) -> Mission:
         """`MissionRuntime.reconcile_node` for a fork branch. Same rules as a plan node (validated first; the ledger's atomic
         transition decides, the first resolver wins; repeating the same decision converges), and the same fork continues:
         branches that succeeded are not rerun, branches still waiting stay waiting, the fork is driven again from its log."""
@@ -1159,6 +1159,10 @@ class ForkJoinController:
                 raise ReconciliationConflict(f"this node was already reconciled as "
                                              f"{'executed' if prior.get('executed') else 'not executed'} by {prior.get('actor')}")
             return self._after_reconcile(m, mission_id, st.fork_id, resume)
+        from types import SimpleNamespace  # noqa: PLC0415
+        spec = rt.registry.get(b.capability)           # an unknown capability is treated as side-effecting: fail closed
+        rt._refuse_automatic_retry(mission_id, SimpleNamespace(id=node_id, capability=b.capability, side_effecting=True if spec is None else bool(spec.side_effecting)),
+                                   executed, ident or {}, rec)        # the same rule as a plan node: no AUTOMATIC retry without provider-enforced idempotency
         if executed and b.produces and not result:
             raise ReconciliationError(f"branch {b.branch_id} produces '{b.produces}': supply the provider's real result so the "
                                       "fork's join publishes facts, not a placeholder")

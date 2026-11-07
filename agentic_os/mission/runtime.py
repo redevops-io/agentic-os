@@ -1271,7 +1271,7 @@ class MissionRuntime:
             if ":fork:" in node_id and self.forks.owns(mission_id, node_id):
                 # a fork branch is reconciled under the same contract; the fork controller applies it to the branch and resumes the fork
                 return self.forks.reconcile_branch(m, mission_id, node_id, executed=executed, evidence=ev, actor=actor,
-                                                   reason=reason, result=result, resume=resume)
+                                                   reason=reason, result=result, resume=resume, ident=ident)
             pend = {p["node_id"]: p for p in self.repo.pending_reconciliation(mission_id)}
             rec = pend.get(node_id)
             if rec is None:
