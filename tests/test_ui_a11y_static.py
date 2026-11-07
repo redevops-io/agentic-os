@@ -124,7 +124,8 @@ def test_sidekick_is_a_dialog_with_a_name_and_the_closed_panel_is_hidden(js, css
 def test_sample_data_chip_and_no_live_claim(js, css):
     assert "Sample data" in js and ".samplechip" in css and "dashed" in css
     assert "Healthy (sample)" in js and "Secured (sample)" in js
-    assert re.search(r'children:\[\w+\.project\.name,\w+\?"":" · live"\]', js), "the eyebrow is the project name"
+    assert re.search(r'className:"eyebrow",children:\w+\.project\.name\}', js), "the eyebrow is the project name and nothing else"
+    assert " · live" not in js, "no 'live' claim: whether data is sample comes from the running server (GET /api/ui-config), and nothing here can back 'live'"
 
 
 # ----------------------------------------------------------------------------- About hook (U-03)
