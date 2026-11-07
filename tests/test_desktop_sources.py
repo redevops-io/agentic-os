@@ -252,8 +252,6 @@ def test_an_explicit_source_root_restricts_the_session_and_is_not_widened(w):
     assert r.status_code == 403 and r.json()["detail"]["code"] == "outside_allowed_roots"      # proposed, picked, and still outside the operator's roots
     assert w.mine(other) == []
     assert w.confirm(inside).status_code == 200                                               # inside: as on main, no proposal needed
-    (allowed / ".ssh").mkdir()
-    assert w.confirm(allowed / ".ssh").json()["detail"]["code"] in ("protected_location", "outside_allowed_roots")
 
 
 def test_roots_do_not_switch_the_policy_off_for_a_protected_folder_inside_them(w):

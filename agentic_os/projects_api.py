@@ -738,6 +738,15 @@ class SampleProjectionProvider:
                 mark["name"] = f"{mark.get('name', '')}{SESSION_ONLY}"
             kept[:] = [k for k in kept if k.get("source_id") != mark.get("source_id")] + [mark]
 
+    def forget_source(self, pid: str, source_id: str) -> bool:
+        """Forget a session source (a user's removal, or the end of the session that registered it). The sample sources are not removable."""
+        kept = self.session_sources.get(pid, [])
+        left = [k for k in kept if k.get("source_id") != source_id]
+        if len(left) == len(kept):
+            return False
+        self.session_sources[pid] = left
+        return True
+
     def runtime(self, _pid: str) -> dict:
         return _sample_runtime()
 
@@ -1365,6 +1374,11 @@ class _ConfirmSourcesReq(BaseModel):
     confirmed_by: str = ""
 
 
+class _RemoveSourceReq(BaseModel):
+    project_id: str = "customer-ops"
+    source_id: str = ""
+
+
 def mount_agent_gateway(app: "FastAPI", prov: "ProjectionProvider") -> bool:
     """Expose a read-only, governed slice of this deployment to external agents over MCP + REST
     (the Governed Agent Gateway). Opt-in: does nothing unless ``AGENT_GATEWAY_TOKEN`` is set — the
@@ -1568,6 +1582,11 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     from fastapi import Body
     from fastapi.responses import HTMLResponse
     app = FastAPI(title="ReDevOps Projects API", version="0.1.0")
+    # The desktop sidecar's own control authority for registering a source folder (agentic_os/desktop_sources.py): only when the app is behind the
+    # local capability gate. A hosted app (no gate) has none and behaves exactly as origin/main.
+    from .desktop_sources import DesktopSourceAuthority
+    desktop = DesktopSourceAuthority(capability) if capability is not None else None
+    app.state.desktop_sources = desktop
     # Same-origin only by default (the bundled UI is served from this app, so it needs no CORS). Cross-origin
     # access is opt-in: `allow_origins=` or $PROJECTS_CORS_ORIGINS (comma-separated origins).
     origins = allow_origins or [o.strip() for o in _os_env.environ.get("PROJECTS_CORS_ORIGINS", "").split(",")
@@ -1916,6 +1935,8 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
 
     @app.get("/api/projects/{project_id}/sources")
     def _sources(project_id: str) -> List[dict]:
+        if desktop is not None:
+            desktop.sweep(prov)         # what a signed-out or expired session registered is gone on this request
         return prov.sources(project_id)
 
     @app.get("/api/projects/{project_id}/runtime")
@@ -2027,16 +2048,25 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
         return directory.links_for_receipt(who, dir_ceiling, receipt)
 
     @app.post("/api/sources/propose")
-    def _propose(req: _ProposeSourcesReq) -> dict:
-        return propose_sources(req.project_id, req.text).to_dict()
+    def _propose(req: _ProposeSourcesReq, request: Request) -> dict:
+        out = propose_sources(req.project_id, req.text).to_dict()
+        if desktop is not None:         # remember which folders THIS session was offered: the user's pick that a later confirm must match
+            desktop.note_proposal(request, req.project_id, out.get("sources", []))
+        return out
 
     @app.post("/api/sources/confirm")
-    def _confirm(req: _ConfirmSourcesReq, authorization: Optional[str] = Header(default=None)) -> List[dict]:
+    def _confirm(req: _ConfirmSourcesReq, request: Request, authorization: Optional[str] = Header(default=None)) -> List[dict]:
         # A ``files`` source makes THIS server walk a client-chosen path, so an anonymous caller may only
         # confirm folders under an operator-allowed root ($PROJECTS_SOURCE_ROOTS); anything else needs the
         # control token (fail closed: 503 when unset, 401 when wrong).
-        specs = authorize_source_locations(req.sources, authorization)
+        # Behind the desktop gate with no control token configured, the sidecar's own authority decides instead (the validated launch session,
+        # a folder picked in a proposal, the folder policy, an audit record); see agentic_os/desktop_sources.py.
         try:
+            if desktop is not None and desktop.available():
+                out = desktop.confirm(request, project_id=req.project_id, confirmed_by=req.confirmed_by, sources=req.sources, prov=prov,
+                                      connect=lambda *a, **k: confirm_and_connect_sources(*a, **k), roots=_source_roots())
+                return out
+            specs = authorize_source_locations(req.sources, authorization)
             out = confirm_and_connect_sources(req.project_id, specs, req.confirmed_by)
             keep = getattr(prov, "remember_sources", None)       # the sample provider lists what was confirmed, this session only
             if keep is not None:
@@ -2044,6 +2074,19 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
             return out
         except ValueError as e:     # an unknown kind / access_mode / indexing_policy / embedded NUL is the caller's mistake (422), not a server fault (UIA-05)
             raise HTTPException(status_code=422, detail=[{"loc": ["body", "sources"], "msg": str(e)[:200], "type": "value_error"}]) from None
+
+    @app.post("/api/sources/remove")
+    def _remove_source(req: _RemoveSourceReq, request: Request, authorization: Optional[str] = Header(default=None)) -> dict:
+        # Forget a source that was registered in this process. Desktop: the validated launch session (it takes effect on the next request).
+        # Hosted: the control token, like a confirm outside the allowed roots.
+        if desktop is not None and desktop.available():
+            return desktop.remove(request, project_id=req.project_id, source_id=req.source_id, prov=prov)
+        from agentic_os.mission.control_auth import require_control_token
+        require_control_token(authorization)
+        forget = getattr(prov, "forget_source", None)
+        if forget is None or not forget(req.project_id, req.source_id):
+            raise HTTPException(404, detail={"code": "source_not_found", "message": "No such registered source.", "path": ""})
+        return {"removed": True, "source_id": req.source_id}
 
     # ── mission drill-down + the data-source report. Registered here, ahead of the UI's catch-all mount below. Read-only GET routes
     # (no write route, so no entry in PROJECTS_ROUTE_POLICIES); absent entirely when no runtime-backed store is configured.
