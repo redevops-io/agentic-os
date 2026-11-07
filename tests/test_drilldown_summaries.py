@@ -126,6 +126,8 @@ def test_free_text_fields_never_reach_a_summary(etype):
     for k in FREE_TEXT:
         if k in payload or k in ("message", "why", "detail", "reason", "next"):
             payload[k] = "SENTINEL-FREE-TEXT <i>x</i>"
+    if etype in ("AosddApprovalRefused", "CompensationOperatorRefused", "PrincipalRefused"):
+        base = summary_of(etype, dict(payload))                    # these three name a reason only when it is one of the runtime's closed tokens
     s = summary_of(etype, payload)
     assert "SENTINEL" not in s and s == base, (etype, s)
 

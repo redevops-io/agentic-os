@@ -208,6 +208,10 @@ class DrilldownService:
             if e.type == "VerificationRecorded":
                 items.append({"id": str(p.get("id") or f"verification:{e.seq}"), "kind": "verification", "capability": cap, "node_id": nid,
                               "summary": fold.summary_of("VerificationRecorded", p), "cite": fold.cite(e), "_event": e})
+            elif e.type in ("AosddStepVerified", "AosddUndoVerified"):
+                # an independent read-back the AOS-DD integration recorded (checks, the verifier kind exactly as recorded): a verification item
+                items.append({"id": f"{'readback' if e.type == 'AosddStepVerified' else 'undo-readback'}:{e.seq}", "kind": "verification", "capability": None,
+                              "node_id": None, "summary": fold.summary_of(e.type, p), "cite": fold.cite(e), "_event": e})
             elif e.type == "ClaimRaised":
                 items.append({"id": str(p.get("id") or f"claim:{e.seq}"), "kind": "claim", "capability": None, "node_id": None,
                               "summary": (str(p.get("statement"))[:200] if p.get("statement") else "Claim raised"), "cite": fold.cite(e), "_event": e})

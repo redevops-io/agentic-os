@@ -11,6 +11,7 @@ import json
 import re
 from typing import Any, Iterable, Optional
 
+from . import summaries
 from .models import MAX_PAYLOAD_BYTES, unavailable
 
 
@@ -82,10 +83,15 @@ _OK = {"NodeSucceeded", "ApprovalGranted", "NodeCompensated", "BeliefResolved", 
 
 
 def category_of(t: str) -> str:
-    return CATEGORY_OF.get(t, "other")
+    return CATEGORY_OF.get(t) or summaries.CATEGORY_OVERRIDES.get(t, "other")
 
 
 def outcome_of(t: str, p: dict) -> str:
+    if summaries.known(t):                              # the AOS-DD events and the operator-relevant base events (summaries.py)
+        try:
+            return summaries.outcome(t, p if isinstance(p, dict) else {})
+        except Exception:                               # noqa: BLE001
+            return "info"
     if t == "MissionOutcome":
         return "ok" if p.get("success") else "failed"
     if t == "VerificationRecorded":
@@ -141,7 +147,7 @@ def summary_of(t: str, p: dict) -> str:
     """A fixed template over recorded fields. A field the event lacks is omitted, never replaced by a guess."""
     tpl = _TEMPLATES.get(t)
     if tpl is None:
-        return t
+        return summaries.summary(t, p) if summaries.known(t) else t
     flat = _Missing({k: v for k, v in p.items() if isinstance(v, (str, int, float))})
     text = tpl.format_map(flat)
     text = re.sub(r"\(revision \)", "", text)
@@ -154,6 +160,8 @@ def summary_of(t: str, p: dict) -> str:
 def actor_of(p: dict) -> dict:
     for key in ("actor", "approver", "principal"):
         v = p.get(key)
+        if isinstance(v, dict):                         # a recorded principal (AuthenticatedPrincipal.record()): its id is the actor
+            v = v.get("id")
         if isinstance(v, str) and v:
             return {"available": True, "value": v[:120]}
     return unavailable("not_recorded", "the event records no actor, approver or principal")
