@@ -79,7 +79,7 @@ def build(args) -> "tuple[Runner, AosddConfig]":
     transport = UrllibTransport()
     if args.hold_after_response:
         transport = _HoldTransport(transport, cfg.base_urls[args.hold_after_response], args.state + "/HELD")
-    svc = Services(cfg, store, OpLog(args.state + "/ops.db"), guard, transport=transport)
+    svc = Services(cfg, store, OpLog(args.state + "/ops.db", lease_ttl_s=cfg.lease_ttl_s), guard, transport=transport)
     if args.pause_after:
         def hook(ev):
             if ev.type == "NodeSucceeded" and ev.payload.get("capability") == args.pause_after:
