@@ -12,6 +12,10 @@ Design points (each is pinned by a test):
   takes effect on the next one.
 * **Cited or unavailable.** Every entry carries the seq and sha256 of the event it was derived from; a field the log does
   not hold is an ``unavailable`` object with a reason, never a guess.
+* **The principal is verified, not believed.** The service accepts only a principal that carries the proof the authentication layer
+  issued (``mission.principal``: not a plain ``Principal``, not another issuer's, not edited, not older than ``principal_max_age_s``),
+  and a mission recorded under a tenant is visible only to that tenant's principal (or the all-tenant one). Anything else is the same
+  401 as no credential (verification) or the same 404 as an unknown mission (tenant).
 * **Audited.** Each read appends a hash-chained receipt (who, scope, mission, head, lineage digest, counts, zero side
   effects); if the audit sink cannot write, nothing is returned.
 """
@@ -19,13 +23,14 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from typing import Any, Callable, Optional
 
 from ..evidence_query.audit import AuditSink, new_receipt
 from ..evidence_query.authz import Ceiling, allowed, perm
 from ..evidence_query.replay import lineage_digest
 from . import fold
-from .models import (EVIDENCE_INSPECT_SCHEMA_ID, EVIDENCE_LIST_SCHEMA_ID, MAX_LIMIT, TIMELINE_SCHEMA_ID, DrilldownRefused, unavailable)
+from .models import (ANCHOR_STATUSES, EVIDENCE_INSPECT_SCHEMA_ID, EVIDENCE_LIST_SCHEMA_ID, MAX_LIMIT, TIMELINE_SCHEMA_ID, DrilldownRefused, unavailable)
 
 _PIN = re.compile(r"#(sha256:[0-9a-f]{64})$")
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
@@ -42,13 +47,20 @@ def _int(v: Any, lo: int, hi: Optional[int] = None) -> int:
 
 
 class DrilldownService:
+    #: a principal is issued for one request; one older than this is a replay of an earlier authentication
+    PRINCIPAL_MAX_AGE_S = 300.0
+
     def __init__(self, store, ceiling: Ceiling, audit: AuditSink, *, scope_for: Callable[[str], Optional[str]],
-                 resolver: Optional[Callable[[str], Any]] = None):
+                 resolver: Optional[Callable[[str], Any]] = None, verifier: Optional[Callable[[Any], bool]] = None,
+                 clock: Callable[[], float] = time.time, principal_max_age_s: float = PRINCIPAL_MAX_AGE_S):
         self.store = store
         self.ceiling = ceiling
         self.audit = audit
         self.scope_for = scope_for
         self.resolver = resolver
+        self._verifier = verifier
+        self._clock = clock
+        self.principal_max_age_s = float(principal_max_age_s)
 
     # ───────────────────────── plumbing ─────────────────────────
     def _record(self, kind: str, principal: Any, scope: str, mission_id: str, **fields) -> None:
@@ -58,8 +70,40 @@ class DrilldownService:
         except Exception:                                   # noqa: BLE001 - an unwritable audit log fails the request closed
             raise DrilldownRefused("audit_unavailable") from None
 
+    def _verified(self, principal: Any) -> bool:
+        """True only for a principal the authentication layer issued, recently. Fails closed on any error."""
+        try:
+            if self._verifier is not None:
+                ok = bool(self._verifier(principal))
+            else:
+                from ..mission.principal import default_issuer      # noqa: PLC0415 - the process's authentication-layer issuer
+                ok = default_issuer().verify(principal)
+            if not ok:
+                return False
+            issued = getattr(principal, "issued_at", None)
+            if isinstance(issued, (int, float)) and not isinstance(issued, bool) and issued > 0:
+                return -5.0 <= self._clock() - float(issued) <= self.principal_max_age_s
+            return self._verifier is not None                 # a principal with no issue time is believable only to an injected verifier
+        except Exception:                                   # noqa: BLE001
+            return False
+
+    @staticmethod
+    def _tenant_ok(principal: Any, events: list) -> bool:
+        """A mission recorded under a tenant is for that tenant's principal (or the all-tenant admin) only; one recorded under none is open
+        to whoever holds the project grant."""
+        from ..mission.principal import ALL_TENANTS             # noqa: PLC0415
+        created = events[0].payload if events and isinstance(events[0].payload, dict) else {}
+        tenant = created.get("tenant")
+        if not (isinstance(tenant, str) and tenant):
+            return True
+        return getattr(principal, "tenant", None) in (tenant, ALL_TENANTS)
+
     def _authorize(self, kind: str, principal: Any, mission_id: str, project_id: Optional[str]) -> tuple:
-        """Returns (scope, events) or raises not_found. Unknown, other-project and unauthorized are indistinguishable."""
+        """Returns (scope, events) or raises not_found / unauthenticated. Unknown, other-project, other-tenant and unauthorized are
+        indistinguishable."""
+        if not self._verified(principal):
+            self._record(kind, None, "", mission_id, outcome="refused", reason="unauthenticated")      # nothing the caller claims is trusted or written
+            raise DrilldownRefused("unauthenticated")
         scope = None
         try:
             scope = self.scope_for(mission_id) if isinstance(mission_id, str) else None
@@ -73,8 +117,14 @@ class DrilldownService:
                 ok = False
         events = []
         if ok:
+            refresh = getattr(self.store, "refresh", None)       # a log another process appends to: read what is there NOW
+            if callable(refresh):
+                try:
+                    refresh()
+                except Exception:                               # noqa: BLE001 - serve what is loaded; the integrity report says the rest
+                    pass
             events = list(self.store.for_mission(mission_id))
-            ok = bool(events) and events[0].type == "MissionCreated"
+            ok = bool(events) and events[0].type == "MissionCreated" and self._tenant_ok(principal, events)
         if not ok:
             self._record(kind, principal, scope if isinstance(scope, str) else "", mission_id, outcome="refused", reason="not_authorized")
             raise DrilldownRefused("not_found")
@@ -87,6 +137,24 @@ class DrilldownService:
     def _head(events: list) -> dict:
         return {"seq": events[-1].seq, "event_count": len(events), "lineage_sha256": lineage_digest(events),
                 "mission_state": fold.mission_state(events)}
+
+    def _chain(self, events: list) -> Optional[dict]:
+        """What the store's own checks say about this mission's log, or None for a store that runs none (then the UI says the server did
+        not report it). ``ok`` is False if the hash chain of this mission OR the tail anchor of the log fails; ``anchored`` is True only
+        when the anchor matches the log exactly."""
+        check = getattr(self.store, "check_integrity", None)
+        if not callable(check):
+            return None
+        from ..mission.store import verify_chain                # noqa: PLC0415
+        try:
+            anchor_fn = getattr(self.store, "check_anchor", None)
+            a = anchor_fn() if callable(anchor_fn) else check()
+            ch = verify_chain(events)
+        except Exception:                                       # noqa: BLE001 - a store that fails to check reports nothing
+            return None
+        status = a.status if a.status in ANCHOR_STATUSES else "not_reported"
+        return {"ok": bool(ch.ok and a.ok), "checked": ch.checked, "unchained": ch.unchained, "scope": "this mission",
+                "anchored": status == "ok", "anchor": {"status": status, "records": int(a.count), "anchored_records": int(a.anchored)}}
 
     # ───────────────────────── Timeline ─────────────────────────
     def timeline(self, principal: Any, mission_id: str, *, project_id: Optional[str] = None, after_seq: Any = 0, limit: Any = 100,
@@ -121,6 +189,9 @@ class DrilldownService:
                "page": {"after_seq": after, "limit": lim, "returned": len(entries),
                         "next_after_seq": (entries[-1]["seq"] if len(later) > lim else None)},
                "entries": entries, "lineage_check": check}
+        chain = self._chain(events)
+        if chain is not None:
+            out["chain"] = chain
         self._record("drilldown.timeline", principal, scope, mission_id, outcome="ok", reason="", head_seq=head["seq"],
                      lineage_sha256=head["lineage_sha256"], returned=len(entries))
         return out

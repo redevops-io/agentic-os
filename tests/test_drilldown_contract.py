@@ -392,12 +392,18 @@ def test_the_service_cannot_reach_an_executor_or_a_runtime():
     import inspect
     import agentic_os.drilldown as pkg
     root = os.path.dirname(pkg.__file__)
-    src = "\n".join(open(os.path.join(root, f)).read() for f in sorted(os.listdir(root)) if f.endswith(".py"))
+    # operator.py is the explicit operator ACTION (grant / revoke the inspect permission, with an audit receipt); it is not on the read path
+    # and is checked on its own below. Everything else in the package is the read path and the mount.
+    src = "\n".join(open(os.path.join(root, f)).read() for f in sorted(os.listdir(root)) if f.endswith(".py") and f != "operator.py")
+    op = open(os.path.join(root, "operator.py")).read()
+    assert set(re.findall(r"[\w.]*\.append\(", op)) == {"audit.append("}
+    for forbidden in ("MissionRuntime", "rehydrate", "Executor", "OperatorClient", "grant_resume", ".run(", "re_evaluate", "subprocess", "urllib", "requests", "httpx"):
+        assert forbidden not in op, f"the operator action must not reference {forbidden}"
     for forbidden in ("MissionRuntime", "rehydrate", "Executor", "OperatorClient", "grant_resume", ".run(", "re_evaluate", "subprocess", "urllib", "requests", "httpx"):
         assert forbidden not in src, f"drilldown must not reference {forbidden}"
     # the only .append( allowed is the audit sink's
     appends = re.findall(r"[\w.]*\.append\(", src)
-    assert all(a.startswith("self.audit") or a in {"out.append(", "items.append(", "entries.append(", "unavailable.append(", "gaps.append(", "parts.append(", "keys.append(", "rows.append("} for a in appends), appends
+    assert all(a.startswith("self.audit") or a in {"out.append(", "items.append(", "entries.append(", "unavailable.append(", "gaps.append(", "parts.append(", "keys.append(", "rows.append(", "stores.append("} for a in appends), appends
     sig = inspect.signature(__import__("agentic_os.drilldown", fromlist=["DrilldownService"]).DrilldownService.__init__)
     assert "executor" not in sig.parameters and "runtime" not in sig.parameters
 

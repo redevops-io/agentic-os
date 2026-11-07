@@ -224,6 +224,67 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "chain": {
+      "additionalProperties": false,
+      "properties": {
+        "anchor": {
+          "additionalProperties": false,
+          "properties": {
+            "anchored_records": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "records": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "status": {
+              "enum": [
+                "unanchored",
+                "ok",
+                "lagging",
+                "truncated",
+                "mismatch",
+                "invalid",
+                "not_reported"
+              ]
+            }
+          },
+          "required": [
+            "status",
+            "records",
+            "anchored_records"
+          ],
+          "type": "object"
+        },
+        "anchored": {
+          "type": "boolean"
+        },
+        "checked": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "unchained": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ok",
+        "checked",
+        "unchained",
+        "scope",
+        "anchored",
+        "anchor"
+      ],
+      "type": "object"
+    },
     "entries": {
       "items": {
         "$ref": "#/$defs/entry"

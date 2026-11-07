@@ -10,8 +10,8 @@ import json
 import os
 from typing import Dict
 
-from .models import (CATEGORIES, DURABILITY, EVIDENCE_INSPECT_SCHEMA_ID, EVIDENCE_KINDS, EVIDENCE_LIST_SCHEMA_ID, INTEGRITY_STATUSES, OUTCOMES,
-                     TIMELINE_SCHEMA_ID, UNAVAILABLE_REASONS)
+from .models import (ANCHOR_STATUSES, CATEGORIES, DATA_SOURCES, DURABILITY, EVIDENCE_INSPECT_SCHEMA_ID, EVIDENCE_KINDS, EVIDENCE_LIST_SCHEMA_ID, INTEGRITY_STATUSES, OUTCOMES,
+                     TIMELINE_SCHEMA_ID, UI_CONFIG_SCHEMA_ID, UNAVAILABLE_REASONS)
 
 DRAFT = "https://json-schema.org/draft/2020-12/schema"
 SHA = {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
@@ -51,7 +51,12 @@ def timeline_schema() -> dict:
         "entries": {"type": "array", "items": {"$ref": "#/$defs/entry"}},
         "lineage_check": {"anyOf": [_obj({"status": {"const": "not_requested"}}),
                                     _obj({"status": {"enum": ["match", "mismatch"]}, "upto_seq": {"type": "integer", "minimum": 0}})]},
-    })
+        # present only when the store runs its own integrity checks (anchor + hash chain); absent = "not reported by this server"
+        "chain": _obj({"ok": {"type": "boolean"}, "checked": {"type": "integer", "minimum": 0}, "unchained": {"type": "integer", "minimum": 0},
+                       "scope": {"type": "string"}, "anchored": {"type": "boolean"},
+                       "anchor": _obj({"status": {"enum": list(ANCHOR_STATUSES)}, "records": {"type": "integer", "minimum": 0},
+                                       "anchored_records": {"type": "integer", "minimum": 0}})}),
+    }, required=["schema", "mission_id", "provenance", "head", "page", "entries", "lineage_check"])
     return {"$schema": DRAFT, "$id": "urn:redevops:schema:" + TIMELINE_SCHEMA_ID, "title": "Mission timeline page", **top, "$defs": defs}
 
 
@@ -86,9 +91,29 @@ def evidence_inspect_schema() -> dict:
     return {"$schema": DRAFT, "$id": "urn:redevops:schema:" + EVIDENCE_INSPECT_SCHEMA_ID, "title": "Evidence item", **top, "$defs": defs}
 
 
+def _integrity_obj() -> dict:
+    return _obj({"status": {"enum": list(ANCHOR_STATUSES)}, "records": {"type": ["integer", "null"], "minimum": 0},
+                 "anchored_records": {"type": ["integer", "null"], "minimum": 0}}, required=["status"])
+
+
+def ui_config_schema() -> dict:
+    """GET /api/ui-config: what the running server says about where its data comes from. Closed: a build flag, a guess or a field the
+    server did not verify has no place in it. ``runtime`` only when a runtime-backed store is configured AND the drill-down routes are
+    mounted; ``stores`` and the integrity facts are given only to an authenticated caller."""
+    store = _obj({"role": {"enum": ["event_log"]}, "kind": {"type": "string"}, "durable": {"type": "boolean"}, "integrity": _integrity_obj()})
+    top = _obj({
+        "schema": {"const": UI_CONFIG_SCHEMA_ID}, "data_source": {"enum": list(DATA_SOURCES)},
+        "projections": _obj({"basis": {"enum": ["sample", "unreported"]}}),
+        "drilldown": _obj({"mounted": {"type": "boolean"}, "integrity": _integrity_obj()}),
+        "stores": {"type": "array", "items": store},
+        "authority": _obj({"configured": {"type": "boolean"}, "verified": {"type": "boolean"}}, required=["configured"]),
+    })
+    return {"$schema": DRAFT, "$id": "urn:redevops:schema:" + UI_CONFIG_SCHEMA_ID, "title": "Projects UI configuration (data source)", **top}
+
+
 def generated() -> Dict[str, dict]:
     return {"timeline.v1.schema.json": timeline_schema(), "evidence-list.v1.schema.json": evidence_list_schema(),
-            "evidence-inspect.v1.schema.json": evidence_inspect_schema()}
+            "evidence-inspect.v1.schema.json": evidence_inspect_schema(), "ui-config.v1.schema.json": ui_config_schema()}
 
 
 def write(directory: str | None = None) -> None:

@@ -71,6 +71,7 @@ def test_a_stale_principal_is_a_replay_and_is_refused(tmp_path, monkeypatch):
     with pytest.raises(DrilldownRefused) as e:
         svc.timeline(p, mid)
     assert e.value.code == "unauthenticated"
+    now["t"] = time.time()
     svc.timeline(issue(), mid)                                              # a freshly authenticated one is fine
 
 
