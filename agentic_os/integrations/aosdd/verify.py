@@ -178,6 +178,6 @@ class ReadBack:
         pl = self._chatwoot_messages(cid)
         marked = [m for m in pl if step["expect"]["marker"] in (m.get("content") or "")]
         live = [m for m in marked if not (m.get("content_attributes") or {}).get("deleted")]
-        self._chk(out, "live notes carrying the marker (count)", 0, len(live), r.status == 200 and not live)
+        self._chk(out, "live notes carrying the marker (count)", 0, len(live), not live)
         tomb = [m["id"] for m in pl if (m.get("content_attributes") or {}).get("deleted") and m.get("id") == res.get("native_id")]
         residual.append({"what": "a 'This message was deleted' tombstone remains in the conversation", "message_id": res.get("native_id"), "tombstone_listed": bool(tomb)})

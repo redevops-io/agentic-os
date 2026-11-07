@@ -30,6 +30,8 @@ import time
 
 from agentic_os.mission.authority import AuthorityGuard, SqliteEnvelopeStore, SqliteLedger
 
+from agentic_os.mission.integrity import IntegrityError
+
 from .config import AosddConfig
 from .identity import AuthenticationFailed, OperatorAuth
 from .http import Request, Resp, UrllibTransport
@@ -126,7 +128,11 @@ def main(argv=None) -> int:
         return 0
     if not a.config:
         ap.error("--config is required")
-    r, cfg = build(a)
+    try:
+        r, cfg = build(a)
+    except IntegrityError as e:                  # a ledger that fails its anchor/chain is refused at open; nothing is read or written
+        _out(None, {"error": f"integrity: {type(e).__name__}: {e}"})
+        return 3
     try:
         if a.cmd == "status":
             r.attach(a.mission)
@@ -157,6 +163,9 @@ def main(argv=None) -> int:
     except (RunnerError, AuthenticationFailed) as e:
         _out(cfg, {"error": str(e)})
         return 2
+    except IntegrityError as e:
+        _out(cfg, {"error": f"integrity: {type(e).__name__}: {e}"})
+        return 3
     return 0
 
 

@@ -448,3 +448,16 @@ def test_the_receipt_records_per_step_which_verifier_credential_and_which_kind_o
                      "S3": ("server-enforced", "verifier.json", False), "S4": ("get-only-by-code", "verifier.json", True)}
     # and the verifier really did use the reader credentials, on a client that cannot write
     assert all(h.read_only for h in r.svc.readback.c.values()) and all(r.svc.readback.c[a] is not r.svc.writers[a] for a in r.svc.writers)
+
+
+def test_compensating_a_completed_mission_undoes_all_four_steps_including_the_chatwoot_note(tmp_path):
+    """Regression (found on the real stack): the absence read-back of the Chatwoot note raised a NameError after the pagination change."""
+    env = Env(tmp_path)
+    r, mid = go(env, "ALL4")
+    r.compensate(mid, "operator undoes the whole mission", principal=APP)
+    rec = reconstruct(env.events_path, mid)
+    assert [s["classification"] for s in rec["steps"]] == ["compensated"] * 4
+    assert all(s["compensation"]["readback"]["status"] == "VERIFIED" for s in rec["steps"])
+    assert any("tombstone" in x["what"] for x in rec["steps"][3]["residual"])
+    assert sum(1 for m in env.stack.messages if m["private"] and not m["content_attributes"].get("deleted")) == 0
+    assert r.rt._missions[mid].outcome["compensation_state"] == "complete" and r.rt._missions[mid].outcome["rolled_back"] is False
