@@ -52,6 +52,7 @@ from .types import (
 from .context_view import epoch_from_refs, plan_fingerprint
 from .policy import MissionPolicy
 from .authority_policy import AuthorityTestPolicy
+from .integrity import IntegrityError
 from .principal import ALL_TENANTS, AuthenticatedPrincipal, PrincipalError, PrincipalRequired, default_issuer
 
 import hashlib as _hashlib
@@ -934,7 +935,11 @@ class MissionRuntime:
     def _authority_key(self, m: Mission) -> str:
         if callable(self.authority_key):
             return self.authority_key(m)
-        if self.authority.envelopes.get(str(m.id)) is not None:
+        try:
+            has_own = self.authority.envelopes.get(str(m.id)) is not None
+        except IntegrityError:                      # a store that fails its integrity check has an envelope we cannot read: the guard refuses
+            return str(m.id)
+        if has_own:
             return str(m.id)
         p = m.principal
         subject = getattr(p, "subject", None) or getattr(p, "id", None) or (p if isinstance(p, str) else "")
