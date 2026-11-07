@@ -819,3 +819,20 @@ refused until they pass one, or, outside production, until their runtime has a t
   and its anchor, and with a key also holds the key, can make them agree again. The anchor is only as far from the writer as where it is kept
   (another file system or host, write-once storage, or a head copied into a system the log's writer cannot edit). The in-memory, DuckDB and
   Postgres event backends and the usage ledger/leases have no anchor. The tests include a case for each limit.
+
+### Uncertain outcomes: superseded executors and automatic retries
+
+* **A superseded executor's answer is evidence, not an outcome** (`MissionRuntime._superseded`, `_park_stale`). When the executor now answering for a
+  step is no longer the one that owns it, its exception or result is recorded as `StaleResultRecorded` (what arrived, the reservation and its state),
+  the step stays uncertain, and the mission parks in `WAITING_RECONCILIATION` for an operator. No `NodeFailed`, no saga (compensating work another
+  executor completed because this one was late would be wrong), no commit of the late result and no automatic retry. An executor is superseded when it
+  says so (`stale_generation`, for example the `StaleExecution` exception) or when the reservation its dispatch used was resolved by reconciliation
+  (`reconcile_node`, the probe supervisor) or is missing from the authority ledger. A reservation that the executor itself settled, as an operator does
+  after executing, is the normal path and is not a takeover. Tests: `tests/test_stale_executor.py`, `tests/test_aosdd_stale_race.py`.
+* **An automatic retry needs a declared guarantee.** A capability declares `idempotency` (`CapabilitySpec.idempotency`, set by the operator's builder
+  in-process, never read from a remote `/capabilities` document): `provider-enforced` (the provider rejects a second identical request),
+  `marker-reconciled` (looked up by a marker; absence is evidence, not proof) or `none` (the default, also when undeclared). The reconciliation
+  supervisor, which acts as the `system-probe` service principal, may re-dispatch a side-effecting node from an authoritative-negative probe only for
+  `provider-enforced`. For every other capability `reconcile_node` records `AutomaticRetryRefused`, leaves the reservation and the mission as they are,
+  the supervisor job escalates to a person, and only an authenticated operator's `reconcile_node` can send the step again. Positive evidence, a
+  person's own call, a read-only node and a provider-enforced capability are unchanged. Tests: `tests/test_automatic_retry_idempotency.py`.
