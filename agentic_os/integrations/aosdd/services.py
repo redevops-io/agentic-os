@@ -1,6 +1,7 @@
 """Wiring: the redacting hash-chained ledger, and the bundle of services the operator client and the runtime share."""
 from __future__ import annotations
 
+import logging
 import time
 
 from agentic_os.mission.store import EventStore, MemoryEventStore
@@ -12,6 +13,9 @@ from .http import AppHttp, Transport, UrllibTransport, auth_for
 from .oplog import OpLog, new_owner
 from .redact import Redactor
 from .verify import ReadBack
+
+
+log = logging.getLogger("agentic_os.integrations.aosdd")
 
 
 class _Redacting:
@@ -41,6 +45,8 @@ class Services:
         self.cfg, self.store, self.oplog, self.guard, self.clock = cfg, store, oplog, guard, clock
         if oplog.lease_ttl_s < cfg.http_timeout_s:
             raise ConfigError(f"the operation lease ({oplog.lease_ttl_s}s) is shorter than the HTTP timeout ({cfg.http_timeout_s}s): a request could outlive its lease")
+        for w in cfg.tenant_warnings():                  # never an error: the integration works, only the Projects drill-down will not show the missions
+            log.warning("AOS-DD tenant / Projects drill-down visibility: %s", w)
         self.transport = transport or UrllibTransport()
         self.owner = owner or new_owner()
         self.writers = {a: AppHttp(a, cfg.base_urls[a], auth_for(a, cfg.writer[a]), self.transport, cfg.redactor, timeout=cfg.http_timeout_s, role="writer") for a in cfg.writer}
