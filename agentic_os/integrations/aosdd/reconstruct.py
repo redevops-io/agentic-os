@@ -62,6 +62,7 @@ def _fold(store, mid: str) -> dict:
                                                        "protects_against": "a log cut off at the end, or rewritten behind the anchor, by a writer who cannot also rewrite the anchor",
                                                        "does_not_protect_against": "a writer who can rewrite the log and its anchor consistently (no HMAC key is required or assumed unless AGENTIC_OS_ANCHOR_KEY is set)"}),
         "context_pack": ((ctx_e.payload.get("result") or {}).get("context_pack") if ctx_e else None),
+        "verifier": (_last(ev, "AosddVerifierProvenance").payload if _last(ev, "AosddVerifierProvenance") else None),
         "plan": plan, "plan_sha256": (plan or {}).get("plan_sha256"),
         "approval": ({"approver": appr.payload["claims"]["approver"], "plan_sha256": appr.payload["claims"]["plan_sha256"], "steps": appr.payload["claims"]["steps"],
                       "expires_at": appr.payload["claims"]["exp"], "signature_present": bool(appr.payload.get("sig"))} if appr else None),
@@ -111,9 +112,10 @@ def _step(ev, ps: dict, plan: dict, status: dict, comp: dict) -> dict:
            "adopted": (a["adopted"] if a else None) or bool([r for r in adopted_rec if r.payload.get("found")]),
            "outcome": ("applied" if a else "unknown" if unknown else "refused" if refused else "not_attempted"),
            "error": (refused[-1].payload if refused else unknown[-1].payload if unknown else None),
-           "verification": ({"status": v_last["status"], "method": v_last["method"], "reader": v_last["reader"], "checks": v_last["checks"]} if v_last else None),
+           "verification": ({"status": v_last["status"], "method": v_last["method"], "reader": v_last["reader"], "read_only_kind": v_last.get("read_only_kind"),
+                          "credential_source": v_last.get("credential_source"), "same_secret_as_writer": v_last.get("same_secret_as_writer"), "checks": v_last["checks"]} if v_last else None),
            "compensation": ({"status": c.get("status"), "attempts": c.get("attempts"), "undo_result": undo[-1].payload if undo else None,
-                              "readback": ({"status": undo_ver[-1].payload["status"], "checks": undo_ver[-1].payload["checks"]} if undo_ver else None)} if c else None),
+                              "readback": ({"status": undo_ver[-1].payload["status"], "checks": undo_ver[-1].payload["checks"], "read_only_kind": undo_ver[-1].payload.get("read_only_kind")} if undo_ver else None)} if c else None),
            "residual": [], "declared_residual": RESIDUAL[ps["step"]],
            "idempotency": ps.get("idempotency"), "idempotency_note": IDEMPOTENCY_NOTE.get(ps["app"], "")}
     if undo_ver:

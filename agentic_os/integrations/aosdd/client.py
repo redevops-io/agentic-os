@@ -258,6 +258,7 @@ class AosddOperatorClient:
         row = svc.oplog.get(step["op_id"]) or {}
         rep = svc.readback.verify_absent(step, (row.get("result") or inputs.get("result") or {}))
         svc.emit("AosddUndoVerified", mission_id, {"op_id": step["op_id"], "step": step["step"], "status": rep["status"], "checks": rep["checks"],
-                                                   "reader": rep["reader"], "residual": rep["residual_observed"]})
+                                                   "reader": rep["reader"], "read_only_kind": rep["read_only_kind"], "credential_source": rep["credential_source"],
+                                                   "same_secret_as_writer": rep["same_secret_as_writer"], "residual": rep["residual_observed"]})
         return {"status": "ok", "executed": True, "verified": rep["status"] == "VERIFIED", "observed": rep["checks"], "digest": opid.sha256_hex(rep["checks"]),
                 "residual": rep["residual_observed"]}

@@ -316,3 +316,15 @@ def test_same_op_id_with_a_different_target_is_a_conflict_and_compensated_ops_ar
     log.end_compensation("aosdd.m.S1.a1.abc", gen, True)
     assert log.claim("aosdd.m.S1.a1.abc", "A").status == "compensated"       # a re-run needs a NEW attempt (new op id)
     assert [h["state"] for h in log.history("aosdd.m.S1.a1.abc")][-3:] == ["applied", "compensating", "compensated"]
+
+
+# ---- item 10: verifier credential provenance ---------------------------------------------------------------------------------------
+def test_every_verification_states_its_credential_source_and_what_enforces_read_only():
+    from agentic_os.integrations.aosdd.config import READ_ONLY_KIND
+    cfg = _cfg()
+    assert READ_ONLY_KIND == {"erpnext": "server-enforced", "twenty": "server-enforced", "chatwoot": "get-only-by-code", "lago": "get-only-by-code"}
+    prov = cfg.verifier_provenance()
+    assert prov["source"] == "verifier.json" and set(prov["apps"]) == {"chatwoot", "twenty", "erpnext", "lago"}
+    # the fixtures give Chatwoot and Lago the SAME secret for reading as for writing (no scoped credential exists): the receipt says so
+    assert prov["apps"]["chatwoot"]["same_secret_as_writer"] and prov["apps"]["lago"]["same_secret_as_writer"]
+    assert not prov["apps"]["twenty"]["same_secret_as_writer"] and not prov["apps"]["erpnext"]["same_secret_as_writer"]

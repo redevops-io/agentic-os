@@ -32,6 +32,12 @@ class ReadBack:
     def __init__(self, cfg: AosddConfig, transport: Transport):
         self.c = reader_clients(cfg, transport)
         self.account = cfg.account_id
+        self.prov = cfg.verifier_provenance()
+
+    def _prov(self, app: str) -> dict:
+        """Which credential the verification used and what ENFORCES its read-only-ness (server side, or only this GET-only client)."""
+        a = self.prov["apps"][app]
+        return {"credential_source": self.prov["source"], "read_only_kind": a["read_only"], "same_secret_as_writer": a["same_secret_as_writer"]}
 
     # ---- helpers ----------------------------------------------------------------------------------------------------
     @staticmethod
@@ -57,7 +63,7 @@ class ReadBack:
             status, out = UNREADABLE, out + [{"check": "readable", "expected": True, "observed": str(e), "ok": False}]
         except AppError as e:
             status, out = UNREADABLE, out + [{"check": "readable", "expected": True, "observed": f"{e.kind} {e.status}", "ok": False}]
-        return {"status": status, "checks": out, "method": "independent_readback", "reader": READER_NOTE[step["app"]], "step": step["step"]}
+        return {"status": status, "checks": out, "method": "independent_readback", "reader": READER_NOTE[step["app"]], "step": step["step"], **self._prov(step["app"])}
 
     def _v_erpnext(self, step, res, out, ctx):
         ex, name = step["expect"], res["native_id"]
@@ -141,7 +147,7 @@ class ReadBack:
             status = VERIFIED if out and all(c["ok"] for c in out) else NOT_VERIFIED
         except (Unreadable, AppError) as e:
             status, out = UNREADABLE, out + [{"check": "readable", "expected": True, "observed": str(e), "ok": False}]
-        return {"status": status, "checks": out, "method": "independent_readback", "reader": READER_NOTE[step["app"]], "step": step["step"], "residual_observed": residual}
+        return {"status": status, "checks": out, "method": "independent_readback", "reader": READER_NOTE[step["app"]], "step": step["step"], "residual_observed": residual, **self._prov(step["app"])}
 
     def _a_erpnext(self, step, res, out, residual):
         r = self._get("erpnext", "/api/resource/Quotation?filters=%s&fields=%s" % (q(json.dumps([["title", "=", step["expect"]["title"]]])), q('["name"]')))

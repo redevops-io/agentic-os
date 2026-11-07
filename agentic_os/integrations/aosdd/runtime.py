@@ -59,7 +59,7 @@ class AosddVerifier(CompositeVerifier):
         rep = self.svc.readback.verify(step, result, ctx)
         self.svc.emit("AosddStepVerified", mission.id, {"op_id": step["op_id"], "step": step["step"], "native_id": result.get("native_id"),
                                                         "status": rep["status"], "checks": rep["checks"], "method": rep["method"], "reader": rep["reader"],
-                                                        "expect": step["expect"]})
+                                                        "credential_source": rep["credential_source"], "read_only_kind": rep["read_only_kind"], "same_secret_as_writer": rep["same_secret_as_writer"], "expect": step["expect"]})
         detail = "; ".join(f"{c['check']}={'ok' if c['ok'] else 'FAIL'}" for c in rep["checks"])[:600]
         checks = list(base.checks) + [{"stage": "independent_readback", "passed": rep["status"] == VERIFIED, "detail": detail}]
         if base.decision == VerificationDecision.REJECT or rep["status"] not in (VERIFIED, UNREADABLE):
@@ -251,6 +251,7 @@ class Runner:
         self.svc.oplog.bind_case(case_key, attempt, m.id)
         self._live.add(m.id)
         self.svc.emit("AosddCaseOpened", m.id, {"case_key": case_key, "attempt": attempt, "customer_ref": customer_ref, "principal": principal.record(), "tenant": self.svc.cfg.tenant})
+        self.svc.emit("AosddVerifierProvenance", m.id, self.svc.cfg.verifier_provenance())
         self.issue_read_grant(m.id, principal, m.goal)
         self.rt.run(m.id)
         return m.id
@@ -334,7 +335,8 @@ class Runner:
                     quotation = (e.payload.get("result") or {}).get("native_id", "")
         rep = self.svc.readback.verify(st, found, {"quotation": quotation})
         self.svc.emit("AosddStepVerified", mission_id, {"op_id": st["op_id"], "step": st["step"], "native_id": found["native_id"], "status": rep["status"],
-                                                        "checks": rep["checks"], "method": rep["method"], "reader": rep["reader"], "expect": st["expect"], "during": "reconcile"})
+                                                        "checks": rep["checks"], "method": rep["method"], "reader": rep["reader"], "credential_source": rep["credential_source"],
+                                                        "read_only_kind": rep["read_only_kind"], "same_secret_as_writer": rep["same_secret_as_writer"], "expect": st["expect"], "during": "reconcile"})
         if rep["status"] != VERIFIED:
             raise RunnerError(f"the record found for {step} did not verify against the plan ({rep['status']}); it is NOT adopted")
         if not recorded:
