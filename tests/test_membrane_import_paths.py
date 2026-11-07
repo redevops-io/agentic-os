@@ -42,9 +42,11 @@ def test_the_childs_path_order_is_standard_library_then_the_parents_paths_then_s
     d = write(tmp_path, "membrane_probe_path.py", "def where(inputs):\n    import sys\n    return {'path': list(sys.path)}\n")
     monkeypatch.syspath_prepend(str(d))
     path = sandbox().invoke("op", "membrane_probe_path:where", {}, "k")["path"]
-    stdlib = sysconfig.get_paths()["stdlib"]
-    mine = path.index(str(d))
-    assert path.index(stdlib) < mine                                            # the standard library always wins
+    # compare real paths: sysconfig can name the standard library through a symlink (Homebrew's /opt/homebrew/opt/python@3.12 -> Cellar/...) while sys.path holds the resolved directory
+    real = [os.path.realpath(p) for p in path]
+    stdlib = os.path.realpath(sysconfig.get_paths()["stdlib"])
+    mine = real.index(os.path.realpath(str(d)))
+    assert real.index(stdlib) < mine                                            # the standard library always wins
     sp = [i for i, p in enumerate(path) if p.endswith(("site-packages", "dist-packages"))]
     if sp:
         assert mine < sp[0]                                                      # project code still beats an installed copy
