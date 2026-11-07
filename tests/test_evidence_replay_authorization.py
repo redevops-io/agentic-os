@@ -299,6 +299,9 @@ def test_expired_approval_is_not_honoured(tmp_path, monkeypatch):
     rt1.approve(mid, nid, "approve")
     monkeypatch.undo()
     monkeypatch.setenv("PERMISSIONS_ALLOW_GENERATED_KEY_DEV", "1")        # undo() also reverted tests/conftest.py's autouse development-key opt-in
+    from agentic_os.mission.authority_policy import AuthorityTestPolicy
+    monkeypatch.setattr(MissionRuntime, "test_policy", AuthorityTestPolicy.allow_all(     # ... and its autouse test policy
+        "replay-test", "this test undoes the suite fixtures mid-way and declares its own policy"))
     real = rtmod._wall()
     monkeypatch.setattr(rtmod, "_wall", lambda: real + 3600)                         # an hour later, ttl was 60s
     rt2, rec = _restart(path, reg, client)

@@ -9,6 +9,7 @@ parked mission and drives it to completion. No LLM, no Dagster, no network.
 """
 from __future__ import annotations
 
+from .authority_policy import AuthorityTestPolicy
 from .executor import Executor, InMemoryOperatorClient
 from .registry import CapabilityRegistry
 from .runtime import MissionRuntime
@@ -58,6 +59,10 @@ def build_fleet() -> tuple[CapabilityRegistry, InMemoryOperatorClient]:
     return reg, InMemoryOperatorClient(handlers)
 
 
+#: the demo fleet's handlers are in-process stubs with no external effect: the demo declares that, by name, instead of relying on a default
+DEMO_POLICY = AuthorityTestPolicy.allow_all("demo-fleet", "in-process stub operators; no external system is touched")
+
+
 def _print_timeline(rt: MissionRuntime, mid: str) -> None:
     for e in rt.repo.timeline(mid):
         print(f"  [{e['seq']:>2}] {e['type']:<20} {str(e['payload'])[:76]}")
@@ -66,7 +71,7 @@ def _print_timeline(rt: MissionRuntime, mid: str) -> None:
 def main() -> None:
     reg, client = build_fleet()
     store = EventStore()
-    rt = MissionRuntime(reg, Executor(client), store=store)
+    rt = MissionRuntime(reg, Executor(client), store=store, test_policy=DEMO_POLICY)
 
     grants = ["billing:write", "support:write", "books:write", "compliance:write"]
     m = rt.create_mission("Onboard a new customer", policy_refs=grants, template="onboarding")
@@ -81,7 +86,7 @@ def main() -> None:
     print(f"Human task: {pending['prompt']}  assignee={pending['assignee']}\n")
 
     # --- RESTART: a brand-new runtime on the SAME event log picks the mission up mid-flight ---
-    rt2 = MissionRuntime(reg, Executor(client), store=store)
+    rt2 = MissionRuntime(reg, Executor(client), store=store, test_policy=DEMO_POLICY)
     m2 = rt2.rehydrate(m.id)
     print(f"[restart] rehydrated {m2.id} from the event log; state={m2.state.value}")
     # a reconstructed mission needs an explicit resume authorization; this demo is a single local owner

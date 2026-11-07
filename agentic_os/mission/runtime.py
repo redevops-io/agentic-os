@@ -51,6 +51,7 @@ from .types import (
 )
 from .context_view import epoch_from_refs, plan_fingerprint
 from .policy import MissionPolicy
+from .authority_policy import AuthorityTestPolicy
 
 import hashlib as _hashlib
 import json as _json
@@ -251,8 +252,14 @@ class MissionRuntime:
         resume_grant_ttl_s: float = 900.0,
         approval_ttl_s: float | None = None,        # deprecated alias of approval_grant_ttl_s (the name collided with the request TTL)
         service_resume: "ServiceResume | None" = None,   # unattended resume: explicit, default None = refuse (owner decision 2026-11-06)
+        test_policy: "AuthorityTestPolicy | None" = None,  # non-production only: the explicit, named stand-in for an owner's envelope
     ):
-        from .profile import assert_authority  # noqa: PLC0415
+        from .profile import ProfileError, assert_authority, is_production  # noqa: PLC0415
+        if test_policy is not None:
+            if is_production():
+                raise ProfileError("an AuthorityTestPolicy is never honoured in the production profile: "
+                                   "the owner's envelope is the only authority there")
+            self.test_policy = test_policy
         if authority is not None:
             self.authority = authority
         if authority_key is not None:
@@ -889,6 +896,8 @@ class MissionRuntime:
     #: mission-authority/v1. An `AuthorityGuard` (owner/platform-issued, trusted state) that may stand in for an
     #: ORDINARY approval gate when a node's decision is `standing_eligible`. Unset by default: behaviour unchanged.
     authority = None
+    #: Non-production only: an explicit, named stand-in for an owner's envelope (see authority_policy.py). None = no such policy.
+    test_policy: "AuthorityTestPolicy | None" = None
     authority_key = None          # optional callable(mission) -> envelope id
 
     def _authority_key(self, m: Mission) -> str:
@@ -919,28 +928,87 @@ class MissionRuntime:
           "authority_denied" production only: the envelope does not allow this action (hard stop)
         The policy DENY is handled by the caller before this is reached (`decision.denied`)."""
         from .authority import Standing, Verdict  # noqa: PLC0415
-        from .profile import is_production  # noqa: PLC0415
         from .types import ApprovalRule  # noqa: PLC0415
         guard = self.authority
-        production = is_production()
         if decision.required:
             # a mandatory / un-migrated / legacy gate is never offered to the guard (standing_eligible is False)
             if guard is None or not getattr(decision, "standing_eligible", False) or not m.tenant:
                 return "park", None
             res = self._authorize(m, node, decision, world, inputs, Standing(decision.risk_fired, decision.risk_waivable), attempt)
             return ("run" if res is not None and res.allowed else "park"), res
-        if guard is None or not production:
-            return "run", None                      # development/test: scope enforcement is an explicit opt-in
-        res = self._authorize(m, node, decision, world, inputs, None, attempt)
-        if res is not None and res.allowed:
-            return "run", res
-        if res is not None and res.verdict is Verdict.ESCALATE:
-            decision.required = True                # the envelope must be extended: ordinary human gate
-            decision.rules = list(decision.rules) + [ApprovalRule.AUTHORITY.value]
-            if graph is not None and not decision.packet:
-                decision.packet = self.policy_plane._packet(node, m, decision.risk, decision.rules, graph)
-            return "park", res
+        # The same rule in every profile: the owner's envelope decides. Only when the mission has NO envelope does the
+        # profile matter, and then only as an explicit, recorded test policy (never an ambient allow).
+        if guard is not None:
+            res = self._authorize(m, node, decision, world, inputs, None, attempt)
+            if res is not None and res.allowed:
+                return "run", res
+            if res is not None and res.verdict is Verdict.ESCALATE:
+                decision.required = True                # the envelope must be extended: ordinary human gate
+                decision.rules = list(decision.rules) + [ApprovalRule.AUTHORITY.value]
+                if graph is not None and not decision.packet:
+                    decision.packet = self.policy_plane._packet(node, m, decision.risk, decision.rules, graph)
+                return "park", res
+            if res is None or res.rule != "no_authority" or self._production():
+                return "authority_denied", res
+        elif self._production():
+            return "authority_denied", None
+        return self._local_authority(m, node, decision)
+
+    def _production(self) -> bool:
+        from .profile import is_production  # noqa: PLC0415
+        return is_production()
+
+    def _active_test_policy(self) -> "AuthorityTestPolicy | None":
+        """The explicit test policy in force, or None. Never in production, whatever the class or instance says."""
+        return None if self._production() else self.test_policy
+
+    def _local_authority(self, m: Mission, node, decision):
+        """No envelope covers this mission, outside production. A node with no side effect runs (nothing to authorise). A
+        side effect runs only under an explicit test policy that lists its capability; otherwise it is refused."""
+        from .authority import Decision, Verdict  # noqa: PLC0415
+        if not node.side_effecting:
+            return "run", None
+        tp = self._active_test_policy()
+        if tp is not None and tp.permits(node.capability):
+            self._note_test_policy(m)
+            self.store.append("TestPolicyAuthorized", m.id, {"node_id": node.id, "capability": node.capability, "phase": "execute",
+                                                             "policy": tp.name, "digest": tp.digest()})
+            return "run", Decision(Verdict.ALLOW, "test_policy", f"allowed by test policy {tp.name}")
+        why = ("no authority envelope covers this mission and no explicit test policy is configured: side effects are refused"
+               if tp is None else f"test policy {tp.name!r} does not list {node.capability}: side effects are refused")
+        res = Decision(Verdict.DENY, "no_authority", why)
+        self.store.append("AuthorityDeclined", m.id, {"node_id": node.id, "capability": node.capability, "rules": list(decision.rules),
+                                                      "verdict": res.verdict.value, "rule": res.rule, "reason": why, "amendment": None})
         return "authority_denied", res
+
+    def _note_test_policy(self, m: Mission) -> None:
+        """Record the test policy in force once per mission (name, reason, scope, digest)."""
+        tp = self._active_test_policy()
+        if tp is None or any(e.type == "TestPolicyActive" for e in self.store.for_mission(m.id)):
+            return
+        self.store.append("TestPolicyActive", m.id, {**tp.to_record(), "digest": tp.digest()})
+
+    def authority_posture(self) -> dict:
+        """What authorises side effects in this runtime: the profile, whether an envelope guard is wired, and the explicit test
+        policy if one is in force (name, reason, scope, digest). For status endpoints and startup logs."""
+        from .profile import profile  # noqa: PLC0415
+        tp = self._active_test_policy()
+        return {"profile": profile(), "guard_configured": self.authority is not None,
+                "guard_durable": bool(getattr(self.authority, "durable", False)),
+                "test_policy": ({**tp.to_record(), "digest": tp.digest()} if tp is not None else None)}
+
+    def _authority_basis(self, mission_id: str) -> list:
+        """What authorised this mission's actions, folded from its log: ``envelope`` and/or ``test_policy:<name>``."""
+        basis: list = []
+        for e in self.store.for_mission(mission_id):
+            b = ""
+            if e.type in ("ScopeAuthorized", "StandingGrantApplied"):
+                b = "envelope"
+            elif e.type == "TestPolicyAuthorized":
+                b = f"test_policy:{e.payload.get('policy', '')}"
+            if b and b not in basis:
+                basis.append(b)
+        return basis
 
     def _authorize(self, m: Mission, node, decision, world: WorldState, inputs, standing, attempt=None):
         """Evaluate the exact effective action against the owner's envelope and reserve its counters atomically."""
@@ -2043,6 +2111,7 @@ class MissionRuntime:
                 "not_reversible": ((self._missions.get(mission_id).outcome or {}).get("not_reversible", [])
                                    if self._missions.get(mission_id) else []),
                 "state": st.value if st else None, "steps": steps, "world_state": world,
+                "authority": {"basis": self._authority_basis(mission_id), **self.authority_posture()},
                 "pending_human": self.repo.pending_human(mission_id),
                 "evidence": self.evidence.ledger(mission_id),
                 "decisions": self._node_decisions(mission_id),

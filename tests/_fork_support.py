@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import time
 
+from agentic_os.mission.authority_policy import AuthorityTestPolicy
 from agentic_os.mission.demo import build_fleet
 from agentic_os.mission.executor import Executor
 from agentic_os.mission.fork_join import BranchSpec, ForkSpec, JoinSpec, SimulatedCrash
@@ -13,6 +14,8 @@ from agentic_os.mission.store import EventStore
 from agentic_os.mission.types import Budget, CapabilitySpec, CapabilityManifest, NodeCost
 
 GRANTS = ["billing:write", "support:write", "books:write", "compliance:write", "w:write"]
+#: the fork/join helpers build runtimes with no owner envelope (some in subprocesses, where conftest's default does not apply): this is their declaration
+FORK_TEST_POLICY = AuthorityTestPolicy.allow_all("fork-join-test-helpers", "fork/join tests run synthetic operators without an owner envelope")
 
 
 class CountingOperator:
@@ -98,7 +101,7 @@ def build_registry(extra_caps=()):
 
 def make_rt(store, op, *, concurrency=1, extra_caps=(), poll_s=0.002):
     """A runtime with no mission (for restart / second-process scenarios that rehydrate one from the log)."""
-    rt = MissionRuntime(build_registry(extra_caps), Executor(op), store=store, max_concurrency=concurrency)
+    rt = MissionRuntime(build_registry(extra_caps), Executor(op), store=store, max_concurrency=concurrency, test_policy=FORK_TEST_POLICY)
     rt.forks.poll_s = poll_s
     return rt
 
@@ -107,7 +110,7 @@ def build(store=None, op=None, *, grants=None, budget=None, fork_budget=None, te
           limits=None, clock=None, poll_s=0.002):
     reg = build_registry(extra_caps)
     op = op or CountingOperator()
-    rt = MissionRuntime(reg, Executor(op), store=store or EventStore(), max_concurrency=concurrency)
+    rt = MissionRuntime(reg, Executor(op), store=store or EventStore(), max_concurrency=concurrency, test_policy=FORK_TEST_POLICY)
     if limits is not None or clock is not None:
         from agentic_os.mission.fork_join import ForkJoinController
         rt._forks = ForkJoinController(rt, limits=limits, **({"clock": clock} if clock else {}), poll_s=poll_s)

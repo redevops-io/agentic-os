@@ -39,7 +39,9 @@ def mission_receipt(rt, mission_id: str) -> Dict[str, Any]:
     from .store import verify_chain  # noqa: PLC0415
     chain = verify_chain(list(rt.store.for_mission(mission_id)))
     head = rt.store.head(mission_id) if hasattr(rt.store, "head") else ""
+    basis = rt._authority_basis(mission_id) if hasattr(rt, "_authority_basis") else []
     return {
+        **({"authority": {"basis": basis}} if basis else {}),     # what authorised the actions: the owner's envelope and/or a named test policy
         "mission_id": mission_id,
         "goal": rt.repo.goal(mission_id),
         "state": (state.value if isinstance(state, MissionState) else state),
