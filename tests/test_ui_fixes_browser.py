@@ -24,14 +24,16 @@ from urllib.parse import urlsplit
 
 import pytest
 
+from tests._ui_nav import go_view, open_panel
+
 pytestmark = pytest.mark.skipif(os.environ.get("RDO_BROWSER_TESTS") != "1",
                                 reason="browser tests are opt-in: set RDO_BROWSER_TESTS=1")
 
 AXE_PATH = os.environ.get("RDO_AXE_PATH", "")
 SHOTS = os.environ.get("RDO_UIV2_SHOTS", "")
-VIEWS = ["Overview", "Missions", "Workflows", "Sidekick", "Attention", "Discovery", "Sources", "Apps",
+VIEWS = ["Today", "Overview", "Missions", "Workflows", "Sidekick", "Attention", "Discovery", "Sources", "Apps",
          "Activity", "Settings"]
-SIZES = {"desktop": (1280, 800), "narrow": (390, 844), "zoom400": (320, 256), "short": (1280, 520)}
+SIZES = {"desktop": (1280, 800), "narrow": (390, 844), "zoom400": (320, 256), "short": (1280, 360)}
 AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa", "best-practice"]
 # moderate best-practice rules that the earlier baseline already reported (see test_ui_a11y_browser.py)
 BASELINE_MODERATE = {"region", "landmark-one-main", "page-has-heading-one", "bypass"}
@@ -113,10 +115,7 @@ class Tab:
         return self
 
     def view(self, name):
-        btn = self.page.locator("button.nav").filter(has=self.page.locator("span.lbl", has_text=re.compile(f"^{name}$")))
-        btn.scroll_into_view_if_needed()
-        btn.click()
-        self.page.wait_for_function("() => !document.body.innerText.includes('Loading…')")
+        go_view(self.page, name)
         return self
 
     def api_calls(self):
@@ -207,7 +206,7 @@ def test_uia01_sidekick_view_shows_the_welcome_text_and_the_add_source_action(ma
     chat = p.locator("section.content")
     welcome = chat.locator(".msg").first
     assert "I carry your current context" in welcome.inner_text() and welcome.is_visible()
-    p.get_by_role("textbox", name="Ask Sidekick").fill(f"use the files in {tmp_path} as context")
+    p.locator("main").get_by_role("textbox", name="Ask Sidekick").fill(f"use the files in {tmp_path} as context")
     p.get_by_role("button", name="Send").click()
     ok = p.get_by_role("button", name=re.compile("Looks right"))
     ok.wait_for(state="visible")
@@ -218,25 +217,25 @@ def test_uia01_sidekick_view_shows_the_welcome_text_and_the_add_source_action(ma
 
 # ---------------------------------------------------------------------------------------------- UIA-03
 @pytest.mark.parametrize("which", ["Approve", "Reject"])
-def test_uia03_approve_and_reject_are_honest_and_one_shot(make_tab, which):
+def test_uia03_approve_and_reject_are_honest_placeholders_that_send_nothing(make_tab, which):
+    """The mission detail no longer lets a sample mission 'decide': Approve and Reject are disabled placeholders with a visible explanation
+    (the runtime's approval path is not reported as qualified), so pressing them cannot claim an effect or send a request."""
     t = make_tab()
     p = t.page
     t.view("Missions")
     p.get_by_role("button", name="Refund Sarah Chen").first.click()
     p.get_by_role("heading", name="Refund Sarah Chen", level=1).wait_for()
+    btn = p.get_by_test_id("approval-placeholder").get_by_role("button", name=which, exact=True)
+    btn.wait_for()
+    assert btn.is_disabled()
+    why = p.locator("#approval-why").inner_text()
+    assert "do nothing and nothing is sent" in why
     before = len(t.requests)
-    p.get_by_role("button", name=which, exact=True).click()
-    msg = p.locator("[role=status]").filter(has_text="Sample: nothing was recorded")
-    msg.wait_for(state="visible")
-    text = msg.inner_text()
-    assert which in text and "no one was notified" in text
+    btn.click(force=True, no_wait_after=True)                       # a disabled control: nothing may happen
     body = p.inner_text("body")
-    assert not re.search(r"will execute|GovernedEnvelope|customer is notified|no money moves", body, re.I)
-    assert p.get_by_role("button", name="Approve", exact=True).is_disabled()
-    assert p.get_by_role("button", name="Reject", exact=True).is_disabled()
-    assert [r for r in t.requests[before:] if "/api/" in r[1]] == []     # no new backend API, no request at all
-    assert p.evaluate("() => document.activeElement && document.activeElement.getAttribute('role')") == "status"
-    t.shot(f"uia03-{which.lower()}-sample")
+    assert not re.search(r"will execute|GovernedEnvelope|customer is notified|no money moves|Sample: nothing was recorded", body, re.I)
+    assert [r for r in t.requests[before:] if "/api/" in r[1]] == []
+    t.shot(f"uia03-{which.lower()}-placeholder")
 
 
 # ---------------------------------------------------------------------------------------------- UIA-04
@@ -244,11 +243,11 @@ def test_uia03_approve_and_reject_are_honest_and_one_shot(make_tab, which):
 def test_uia04_every_rail_destination_and_the_about_link_are_reachable(make_tab, size):
     t = make_tab(size)
     p = t.page
-    rail = p.locator("nav.rail")
-    assert p.evaluate("() => getComputedStyle(document.querySelector('nav.rail')).overflowY") == "auto"
+    rail = p.locator("div.rail")
+    assert p.evaluate("() => getComputedStyle(document.querySelector('div.rail')).overflowY") == "auto"
     assert rail.evaluate("el => el.scrollHeight > el.clientHeight"), "this window is meant to be shorter than the rail"
     # keyboard: focusing the last items brings them into view inside the rail (the rail scrolls, the page does not)
-    for name in ["Settings", "Activity", "Apps", "Sources"]:
+    for name in ["Settings", "Activity", "Automations", "Connections"]:
         b = p.get_by_role("button", name=name, exact=True)
         b.focus()
         assert _in_viewport(b.bounding_box(), t.size), (name, b.bounding_box())
@@ -293,20 +292,20 @@ def test_uia09_forced_colors_mark_the_current_section(make_tab):
     p = t.page
     assert p.evaluate("() => matchMedia('(forced-colors: active)').matches")
     t.view("Missions")
-    cur = p.locator("button.nav[aria-current=true]")
-    other = p.locator("button.nav[aria-current=false]").first
+    cur = p.locator("button.nav[aria-current=page]")
+    other = p.locator("button.nav:not([aria-current])").first
     assert cur.count() == 1
     cs = cur.evaluate("el => { const s = getComputedStyle(el); return [s.borderLeftWidth, s.borderLeftStyle, s.borderLeftColor]; }")
     assert cs[0] == "4px" and cs[1] == "solid" and cs[2] not in ("rgba(0, 0, 0, 0)", "transparent"), cs
     assert other.evaluate("el => getComputedStyle(el).borderLeftWidth") == "0px"
-    assert "Missions" in cur.inner_text()
+    assert "Work" in cur.inner_text()                                # Missions lives in the Work place
     t.shot("uia09-forced-colors-current-item")
 
 
 def test_uia09_the_normal_theme_does_not_change(make_tab):
     t = make_tab()
     t.view("Missions")
-    assert t.page.locator("button.nav[aria-current=true]").evaluate("el => getComputedStyle(el).borderLeftWidth") == "0px"
+    assert t.page.locator("button.nav[aria-current=page]").evaluate("el => getComputedStyle(el).borderLeftWidth") == "0px"
 
 
 # ---------------------------------------------------------------------------------------------- UIA-12
@@ -394,6 +393,15 @@ def _sweep(t, views, prepare=None):
     Returns (dead, effective, disabled_with_title, disabled_without_title)."""
     p = t.page
     dead, effective, dis_ok, dis_bad = [], 0, [], []
+    # the notification toasts float over the lower right of the page until dismissed (that is their job); the sweep acknowledges them once so
+    # that a control under one is judged by what it does, not by where a toast happens to be. The acknowledgement is kept by the server.
+    p.wait_for_timeout(500)
+    for _ in range(12):
+        btn = p.locator(".toasts").get_by_role("button", name=re.compile("^Dismiss"))
+        if btn.count() == 0:
+            break
+        btn.first.click()
+        p.wait_for_timeout(150)
     for view in views:
         def fresh():
             p.reload(wait_until="load")
@@ -459,7 +467,7 @@ def test_uia06_sidekick_send_is_disabled_while_the_field_is_empty_in_the_panel_a
     t.view("Sidekick")
     view_send = p.locator("section.content").get_by_role("button", name="Send")
     assert view_send.is_disabled()
-    p.get_by_role("textbox", name="Ask Sidekick").fill("hello")
+    p.locator("main").get_by_role("textbox", name="Ask Sidekick").fill("hello")
     assert view_send.is_enabled()
     t.shot("uia06-send-states")
 

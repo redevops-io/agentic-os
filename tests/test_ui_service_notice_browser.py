@@ -59,7 +59,7 @@ def test_notice_appears_when_the_service_stops_and_clears_when_it_returns():
             page.wait_for_selector("h1.h")
             assert page.locator("#agentic-service-notice").count() == 0        # healthy: no notice
             _stop(srv, th)                                                     # the sidecar goes away under the open tab
-            page.get_by_role("button", name="Workflows").click()
+            page.get_by_role("button", name="Automations").click()
             notice = page.locator("#agentic-service-notice")
             notice.wait_for()
             assert notice.get_attribute("role") == "alert"
@@ -67,10 +67,10 @@ def test_notice_appears_when_the_service_stops_and_clears_when_it_returns():
             assert "not responding" in text and "Start & open" in text and "Agentic Apps R0-prime window" in text
             focus = page.evaluate("document.activeElement && document.activeElement.tagName")
             assert focus != "DIV" and page.locator("#root[hidden], #root[inert]").count() == 0   # focus not stolen, app not hidden
-            assert page.get_by_role("button", name="Overview").is_visible()                       # the shell stays usable
+            assert page.get_by_role("button", name="Work").is_visible()                       # the shell stays usable
             assert page.locator("#agentic-signin").count() == 0                                   # this is not the signed-out panel
             srv, th = _serve(app, port)                                        # the service returns (same session, same port)
-            page.get_by_role("button", name="Missions").click()
+            page.get_by_role("button", name="Work").click()
             page.wait_for_selector("#agentic-service-notice", state="detached")
             page.get_by_role("heading", level=1).first.wait_for()
             browser.close()

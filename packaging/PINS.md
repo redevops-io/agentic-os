@@ -152,16 +152,21 @@ anything is extracted (and rejects any member that would leave the destination);
 
 | Field | Value |
 |---|---|
-| artifact | `packaging/ui-artifacts/projects-ui-root-2fdef7f5.tgz`, sha256 `a5b5ef13...3654` (checked into the repository; `local_path`) |
+| artifact | `packaging/ui-artifacts/projects-ui-root-ee958a01.tgz`, 153,630 bytes, sha256 `cc2abd7c...6769a` (checked into the repository; `local_path`) |
 | `url` | empty: no release of `redevops-projects` has been published for it. A later publication fills it in; nothing else changes |
-| source commit | `2fdef7f5590a562aa3de7aaabde8239603824b01` (branch `rel/ui-v3` of a LOCAL clone; `source_commit_published: false`), public base `5114b560...` |
-| contents | `index.html`, `assets/index-C4jFACLN.js`, `assets/index-D7he0cZO.css` (build output) + the neutral `hero.jpg` of this repository |
+| source commit | `ee958a0174421d29f0e510ed31b602fd0ee8a154` (tree `bb56089a...`; branch `ui/evidence-tracing` of a LOCAL clone; `source_commit_published: false`), public base `5114b560...`, and it merges the public release `v0.2.0` (`84f17fce...`) |
+| contents | `index.html`, `assets/index-XAbPLomz.js` (374,422 bytes), `assets/index-5NRK8P9N.css` (build output) + the neutral `hero.jpg` of this repository |
 | recipe | clean `git archive` of the source commit; `env -i`, node v24.22.2, npm 11.19.1, `npm ci`, `VITE_PROJECTS_API=/ npm run build -- --base=/`; pack with `scripts/make_projects_ui_artifact.py` (sorted members, fixed mtime, gzip mtime 0) |
-| reproduced | the three build-output hashes were identical in two earlier sessions and again on the trunk; two consecutive packs are byte-identical. The archive bytes depend on the zlib in use, so the portable invariant is the per-member hash list (`bundle_files`); the archive hash is what is pinned |
+| reproduced | three builds, each in its own throwaway HOME, TMPDIR and npm cache, gave identical `index.html`, JavaScript and CSS; three consecutive packs are byte-identical. The archive bytes depend on the zlib in use, so the portable invariant is the per-member hash list (`bundle_files`); the archive hash is what is pinned |
+| `previous_pin` | chain: `local+2fdef7f5` (`packaging/ui-artifacts/projects-ui-root-2fdef7f5.tgz`, sha256 `a5b5ef13...3654`, kept in the repository) then the public `v0.2.0` asset (sha256 `a84b7ce4...`). Going back is a lock edit |
 
 This is NOT a source offer and not a publication: `packaging/ui-bundle-source.json` keeps the provenance (decisions pins-04, pins-10 and
-D-LIC-12 stay OPEN, the distribution gate is unchanged and still refuses). **What the artifact is not:** it is the accessibility-series UI
-(UIA-01..12) on the old public base; it does NOT contain the Today-first views of the public `redevops-projects` v0.2.0 release that
-`origin/main` fetched (`previous_pin`, sha256 `a84b7ce4...`). The API of this trunk still serves the Today routes; the served UI does not
-draw them until the drill-down/Today views are put on top of this series (later workstream) or the lock is switched back. Tests:
-`tests/test_projects_ui_pin.py` (9), `tests/test_fetch_projects_ui.py`, `tests/test_ui_bundle_source_record.py`.
+D-LIC-12 stay OPEN, the distribution gate is unchanged and still refuses). **What the artifact is:** the Today-first views of `v0.2.0`
+(Today, quick capture, batch triage, notifications, routing, deployment-inspection and social-intelligence cards) together with the accessibility
+series (UIA-01..12), the application-directory tab, and the mission drill-down (Summary, Tasks, Evidence with Inspect, Timeline, Graph, World State,
+EXPLAIN, Replay; read-only). **What it shows on the desktop:** the sidecar serves the sample provider, which has no drill-down routes; the
+drill-down views therefore show the sample mission detail labelled as sample and say that no recorded history is available. Recorded data appears only
+when a server that mounts the drill-down router (`agentic_os/drilldown`, not yet mounted by `projects_api.create_app`) answers. The npm lock file
+differs from the base by one line (the package `license` field); no dependency was added.
+Tests:
+`tests/test_projects_ui_pin.py` (12), `tests/test_fetch_projects_ui.py`, `tests/test_ui_bundle_source_record.py`.
