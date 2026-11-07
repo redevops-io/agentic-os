@@ -248,7 +248,7 @@ def test_case_differences_and_unicode_normalisation_do_not_get_around_the_list(t
     # the protected entry is built from the NFC home; the request spells the same folder with a decomposed accent and different case
     d = check_folder(os.path.join(nfd_home, ".SSH"), home=str(h), env={})
     assert not d.ok and d.code in ("protected_location", "not_found") and d.code != "ok"
-    d2 = check_folder(unicodedata.normalize("NFD", str(h)).replace(".", "."), home=nfd_home, env={})
+    d2 = check_folder(nfd_home, home=nfd_home, env={})
     assert not d2.ok and d2.code == "home_directory"
     # mixed case: the policy is case-insensitive even where the filesystem is not (it can only refuse more, never less)
     d3 = check_folder(os.path.join(str(h), ".SsH", "inner"), home=str(h), env={})
@@ -264,8 +264,10 @@ def fake_fs(dirs, links=None, short=None):
     short = {k.casefold(): v for k, v in (short or {}).items()}
 
     def realpath(p):
-        key = p.replace("/", "\\").rstrip("\\").casefold()
-        return short.get(key, links.get(key, p.replace("/", "\\").rstrip("\\") or p))
+        import ntpath
+        n = ntpath.normpath(p)                       # what the OS does with ., .. and slashes
+        key = n.rstrip("\\").casefold()
+        return short.get(key, links.get(key, n))
 
     def stat_fn(p):
         key = p.replace("/", "\\").rstrip("\\").casefold()
