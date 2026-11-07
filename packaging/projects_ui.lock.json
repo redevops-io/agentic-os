@@ -1,13 +1,13 @@
 {
- "_comment": "The pinned Projects UI artifact: url + sha256 + source commit. TODAY the artifact is built LOCALLY from an UNPUBLISHED commit of the UI source (source_commit_published=false) and lives in this repository (local_path), so builds and tests are offline and reproducible; no release of redevops-projects has been published for it, so `url` is empty and this record is NOT a source offer (decisions pins-04, pins-10 and D-LIC-12 stay OPEN; packaging/ui-bundle-source.json carries the same provenance). The source commit MERGES the public release v0.2.0 (Today-first views: Today, capture, batch triage, notifications, routing, deployment-inspection and social-intelligence cards) into the local accessibility series (UIA-01..12) and adds the mission drill-down views (Summary, Tasks, Evidence with Inspect, Timeline, Graph, World State, EXPLAIN, Replay). The Sample chip and every sample-versus-recorded decision come from what the RUNNING SERVER reports (GET /api/ui-config), not from a build flag: this one artifact serves a sample deployment and a runtime-backed one. When the server says runtime but the provider-backed pages (Missions list, Overview, Today) are still the sample projection, the top bar shows a \"Partly sample\" chip with a keyboard-reachable explanation, decided from the same report. `previous_pin` is the artifact this one replaces (the previous local build, whose Sample chip was a build flag; its own previous_pin chain goes back through the accessibility series to the public v0.2.0), which stays in the repository: going back is a lock edit. scripts/fetch_projects_ui.py verifies the sha256 before anything is extracted, whichever source it reads. The mission views also flag, in words and a glyph with the cites of the events, a step whose outcome is unknown, a late (stale) result and a compensation that did not complete cleanly, show the mission state in plain words (the raw state kept), and list independent read-backs as evidence with the verifier kind as recorded.",
+ "_comment": "The pinned Projects UI artifact: url + sha256 + source commit. TODAY the artifact is built LOCALLY from an UNPUBLISHED commit of the UI source (source_commit_published=false) and lives in this repository (local_path), so builds and tests are offline and reproducible; no release of redevops-projects has been published for it, so `url` is empty and this record is NOT a source offer (decisions pins-04, pins-10 and D-LIC-12 stay OPEN; packaging/ui-bundle-source.json carries the same provenance). The source commit MERGES the public release v0.2.0 (Today-first views: Today, capture, batch triage, notifications, routing, deployment-inspection and social-intelligence cards) into the local accessibility series (UIA-01..12) and adds the mission drill-down views (Summary, Tasks, Evidence with Inspect, Timeline, Graph, World State, EXPLAIN, Replay). The Sample chip and every sample-versus-recorded decision come from what the RUNNING SERVER reports (GET /api/ui-config), not from a build flag: this one artifact serves a sample deployment and a runtime-backed one. When the server says runtime but the provider-backed pages (Missions list, Overview, Today) are still the sample projection, the top bar shows a \"Partly sample\" chip with a keyboard-reachable explanation, decided from the same report. `previous_pin` is the artifact this one replaces (the previous local build, whose Sample chip was a build flag; its own previous_pin chain goes back through the accessibility series to the public v0.2.0), which stays in the repository: going back is a lock edit. scripts/fetch_projects_ui.py verifies the sha256 before anything is extracted, whichever source it reads. The mission views also flag, in words and a glyph with the cites of the events, a step whose outcome is unknown, a late (stale) result and a compensation that did not complete cleanly, show the mission state in plain words (the raw state kept), and list independent read-backs as evidence with the verifier kind as recorded. Keyboard focus is visible on every focusable element from one shared :focus-visible ring (a --focus token, a system colour in forced-colors mode).",
  "repo": "redevops-io/redevops-projects",
- "version": "local+5751e9e5",
+ "version": "local+9a1788b1",
  "asset": "projects-ui-root.tgz",
- "sha256": "eccf15961fa74bc2856837d6ed703a9155006149b429d0620e44928cd8ec5a31",
+ "sha256": "a463cfec611580bb208032bef0b267425482926b0c202095297e022e57cd37cd",
  "url": "",
- "local_path": "packaging/ui-artifacts/projects-ui-root-5751e9e5.tgz",
- "source_commit": "5751e9e5ccd0fbc461e4290ee188877d177c184b",
- "source_tree": "433669f8cb8db928fdb28b2a2da7e177fa4c6787",
+ "local_path": "packaging/ui-artifacts/projects-ui-root-9a1788b1.tgz",
+ "source_commit": "9a1788b187ca5ee0f2592b3c6cdf7df6c3257cf6",
+ "source_tree": "ffb17b00d5d192194aa29cab434e6791b74b9bfa",
  "source_commit_published": false,
  "base_commit": "5114b56012511a292eff0e505fdbd0d8b00544f8",
  "base_commit_public": true,
@@ -17,9 +17,9 @@
   "note": "public release of redevops-projects, merged into the source commit; not an ancestor of the accessibility series base"
  },
  "bundle_files": {
-  "index.html": "656cdec52feeda2ae1af5c8b25d0ab9ca1705a01518d24682ce475007c5a57e4",
-  "assets/index-3A6-zSpX.js": "8079a61e00981d9534740bbc33a4a127615a8e5ed5fdd2c3beee976d22373c9c",
-  "assets/index-DImUCcMe.css": "07da7c2aad5667aa20e7bf1195f78d51ee87b138aac898183150329c032af9e8",
+  "index.html": "82de733ae5dd8d4b3c22215c7400f04b4b8169d85928c32a0298049b55b5ecb6",
+  "assets/index-CQBlOi68.js": "de044ae9f2657c5d79665b632fb71c46f997fe88c5b72116812c7df44218e82c",
+  "assets/index-BXcNWP0I.css": "13b11143e911aacda99b8787d96068f73b8e8dcea29c86b935af9061db828359",
   "hero.jpg": "8b1470ffde8d64990b7be1d9759c971fa0f3169f4cfb1884968645de6961a7fb"
  },
  "recipe": {
@@ -30,41 +30,49 @@
   "node": "v24.22.2",
   "npm": "11.19.1",
   "environment": "env -i with PATH, throwaway HOME and TMPDIR, LANG and an isolated npm cache; VITE_PROJECTS_API=/ is the only build variable passed; built from a clean `git archive` of source_commit",
-  "pack": "scripts/make_projects_ui_artifact.py DIST packaging/ui-artifacts/projects-ui-root-5751e9e5.tgz (sorted members, mtime 2020-01-01Z, uid/gid 0, gzip mtime 0; the neutral hero.jpg of this repository replaces the UI repository's public/hero.jpg)",
+  "pack": "scripts/make_projects_ui_artifact.py DIST packaging/ui-artifacts/projects-ui-root-9a1788b1.tgz (sorted members, mtime 2020-01-01Z, uid/gid 0, gzip mtime 0; the neutral hero.jpg of this repository replaces the UI repository's public/hero.jpg)",
   "reproduced": "index.html, the JavaScript and the CSS were built three times from a clean `git archive` of source_commit, each in its own throwaway HOME, TMPDIR and npm cache under env -i (node v24.22.2, npm 11.19.1, npm ci), on 2026-11-06 with identical sha256 (and identical to the development build); three consecutive packs give an identical archive. The archive bytes also depend on the zlib in use; the member hashes above are the portable invariant, the archive sha256 is what is pinned."
  },
  "previous_pin": {
-  "version": "local+312a811a",
-  "sha256": "5639c828e641fa30973a893e3507e5eeb06c30ad402210ef74b6eb9d94c61005",
-  "local_path": "packaging/ui-artifacts/projects-ui-root-312a811a.tgz",
-  "source_commit": "312a811a9e697b0176aa2c058165209266a4be9a",
+  "version": "local+5751e9e5",
+  "sha256": "eccf15961fa74bc2856837d6ed703a9155006149b429d0620e44928cd8ec5a31",
+  "local_path": "packaging/ui-artifacts/projects-ui-root-5751e9e5.tgz",
+  "source_commit": "5751e9e5ccd0fbc461e4290ee188877d177c184b",
   "source_commit_published": false,
-  "note": "the same views with the 'Partly sample' chip, before the drill-down flags for an uncertain step, a late (stale) result and a compensation that did not complete cleanly, the plain-words mission state, and the read-back evidence rows. Kept in the repository so that reverting is a lock edit.",
+  "note": "the same views before the keyboard-focus fix: the top-bar 'Ask Sidekick' input had an inline `outline: none` and no focus indicator (WCAG 2.4.7; found by the native accessibility harness, rows A11Y-FOCUS and A11Y-FOCUS-FORCED), and a focused control in a sideways-scrolling table could have its ring cut at 320 px. Kept in the repository so that reverting is a lock edit.",
   "previous_pin": {
-   "version": "local+2f24719e",
-   "sha256": "ff5224fa555090713240c8eb8c96192338e685d20e8ffa0783eb7570c4bfd341",
-   "local_path": "packaging/ui-artifacts/projects-ui-root-2f24719e.tgz",
-   "source_commit": "2f24719ef17eb90aeaccb05249b5f584da3a3e99",
+   "version": "local+312a811a",
+   "sha256": "5639c828e641fa30973a893e3507e5eeb06c30ad402210ef74b6eb9d94c61005",
+   "local_path": "packaging/ui-artifacts/projects-ui-root-312a811a.tgz",
+   "source_commit": "312a811a9e697b0176aa2c058165209266a4be9a",
    "source_commit_published": false,
-   "note": "the same views and the same data-source report, with a Sample chip that was either on (sample) or off (runtime) and so said nothing about provider-backed pages that are still sample in a runtime deployment. Kept in the repository so that reverting is a lock edit.",
+   "note": "the same views with the 'Partly sample' chip, before the drill-down flags for an uncertain step, a late (stale) result and a compensation that did not complete cleanly, the plain-words mission state, and the read-back evidence rows. Kept in the repository so that reverting is a lock edit.",
    "previous_pin": {
-    "version": "local+ee958a01",
-    "sha256": "cc2abd7c41c0aa8434ab668e2dfa13fb6c1d73a66e072162cb306f5f57d6769a",
-    "local_path": "packaging/ui-artifacts/projects-ui-root-ee958a01.tgz",
-    "source_commit": "ee958a0174421d29f0e510ed31b602fd0ee8a154",
+    "version": "local+2f24719e",
+    "sha256": "ff5224fa555090713240c8eb8c96192338e685d20e8ffa0783eb7570c4bfd341",
+    "local_path": "packaging/ui-artifacts/projects-ui-root-2f24719e.tgz",
+    "source_commit": "2f24719ef17eb90aeaccb05249b5f584da3a3e99",
     "source_commit_published": false,
-    "note": "Today-first views + accessibility series (UIA-01..12) + the read-only mission drill-down, with the Sample chip and every sample-versus-recorded decision taken from a BUILD FLAG (VITE_PROJECTS_SAMPLE_DATA, default on): one artifact could not serve a runtime-backed deployment without a second build. Kept in the repository so that reverting is a lock edit.",
+    "note": "the same views and the same data-source report, with a Sample chip that was either on (sample) or off (runtime) and so said nothing about provider-backed pages that are still sample in a runtime deployment. Kept in the repository so that reverting is a lock edit.",
     "previous_pin": {
-     "version": "local+2fdef7f5",
-     "sha256": "a5b5ef13e489c2e57444afc875cef485e7aa7e997e50782a000d45ec3d7b3654",
-     "local_path": "packaging/ui-artifacts/projects-ui-root-2fdef7f5.tgz",
-     "source_commit": "2fdef7f5590a562aa3de7aaabde8239603824b01",
+     "version": "local+ee958a01",
+     "sha256": "cc2abd7c41c0aa8434ab668e2dfa13fb6c1d73a66e072162cb306f5f57d6769a",
+     "local_path": "packaging/ui-artifacts/projects-ui-root-ee958a01.tgz",
+     "source_commit": "ee958a0174421d29f0e510ed31b602fd0ee8a154",
      "source_commit_published": false,
-     "note": "the accessibility series (UIA-01..12) on the old public base 5114b560 only: it does NOT contain the Today-first views and has one shared body for every mission tab. Kept in the repository so that reverting is a lock edit.",
+     "note": "Today-first views + accessibility series (UIA-01..12) + the read-only mission drill-down, with the Sample chip and every sample-versus-recorded decision taken from a BUILD FLAG (VITE_PROJECTS_SAMPLE_DATA, default on): one artifact could not serve a runtime-backed deployment without a second build. Kept in the repository so that reverting is a lock edit.",
      "previous_pin": {
-      "version": "v0.2.0",
-      "sha256": "a84b7ce43de10538fb256df8a7be931ee2687bbbb58ed0f19bc06fbd00c9a5e6",
-      "note": "public release asset fetched by origin/main; Today-first UI (Today, capture, batch triage, notifications, routing, deployment-inspection and social-intelligence cards). The accessibility series (UIA-01..12) is NOT in it and the Today-first views are NOT in the current artifact."
+      "version": "local+2fdef7f5",
+      "sha256": "a5b5ef13e489c2e57444afc875cef485e7aa7e997e50782a000d45ec3d7b3654",
+      "local_path": "packaging/ui-artifacts/projects-ui-root-2fdef7f5.tgz",
+      "source_commit": "2fdef7f5590a562aa3de7aaabde8239603824b01",
+      "source_commit_published": false,
+      "note": "the accessibility series (UIA-01..12) on the old public base 5114b560 only: it does NOT contain the Today-first views and has one shared body for every mission tab. Kept in the repository so that reverting is a lock edit.",
+      "previous_pin": {
+       "version": "v0.2.0",
+       "sha256": "a84b7ce43de10538fb256df8a7be931ee2687bbbb58ed0f19bc06fbd00c9a5e6",
+       "note": "public release asset fetched by origin/main; Today-first UI (Today, capture, batch triage, notifications, routing, deployment-inspection and social-intelligence cards). The accessibility series (UIA-01..12) is NOT in it and the Today-first views are NOT in the current artifact."
+      }
      }
     }
    }
