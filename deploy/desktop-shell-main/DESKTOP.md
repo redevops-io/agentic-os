@@ -101,7 +101,7 @@ Service has no credential store, and the shell then refuses to save a token (no 
 
 ## Release order (a real dependency)
 
-The sidecar serves the Projects UI pinned in `packaging/projects_ui.lock.json` (currently the local, unpublished `local+312a811a`: the public
+The sidecar serves the Projects UI pinned in `packaging/projects_ui.lock.json` (currently the local, unpublished `local+5751e9e5`: the public
 `redevops-projects` v0.2.0 Today-first views merged with the accessibility series, plus the mission drill-down, whose "Sample data" chip and every sample-versus-recorded decision come from what the running server reports, `GET /api/ui-config`). To publish it: push the UI
 source commit and tag a `redevops-projects` release → set the lock's `url` → cut an `agentic-os` release → rebuild the sidecar.
 
