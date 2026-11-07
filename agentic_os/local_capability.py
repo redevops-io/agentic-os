@@ -58,6 +58,11 @@ _LOOPBACK_NAMES = ("127.0.0.1", "localhost", "[::1]")
 _HOST_ANY_PORT = re.compile(r"^(127\.0\.0\.1|localhost|\[::1\])(:\d{1,5})?$")
 _B64URL = re.compile(r"^[A-Za-z0-9_-]+$")
 _MAX_BODY = 4096
+#: ASGI scope key under which the gate hands the application the ``Session`` it has JUST validated for this request. Only the gate
+#: writes it (it removes any inbound value first); a header, query parameter or body cannot reach the scope. Server-side code that
+#: needs to know "this request passed the capability gate" (the drill-down's session-to-principal bridge) reads it and re-checks it
+#: with :meth:`LocalCapability.session_is_live`.
+SESSION_SCOPE_KEY = "agentic_os.local_session"
 
 
 def b64url(raw: bytes) -> str:
@@ -253,6 +258,15 @@ class LocalCapability:
                         found = sess
             return found
 
+    def session_is_live(self, sess: object) -> bool:
+        """True only for a ``Session`` THIS capability issued that has not expired or been dropped. Identity, not equality: a look-alike
+        object (same fields) is not a session."""
+        if not isinstance(sess, Session):
+            return False
+        with self._lock:
+            self._purge_sessions()
+            return any(s is sess for _d, s in self._sessions)
+
     def drop_session(self, sess: Session) -> None:
         with self._lock:
             self._sessions = [(d, s) for d, s in self._sessions if s is not sess]
@@ -372,6 +386,8 @@ class LocalCapabilityMiddleware:
             return
         if kind != "http":
             return
+        if SESSION_SCOPE_KEY in scope:               # never believe a value that arrived with the request: only this gate sets it
+            scope = {k: v for k, v in scope.items() if k != SESSION_SCOPE_KEY}
         await self._http(scope, receive, send)
 
     # -------------------------------------------------------------- helpers
@@ -496,7 +512,8 @@ class LocalCapabilityMiddleware:
             if len(presented) != 1 or not _ct_equal(presented[0], sess.csrf):
                 await self._reply(send, 403, "csrf_invalid", "missing or invalid CSRF header")
                 return
-        await self.app(scope, self._guard_receive(receive), self._wrap_send(send, no_store=True))
+        # The request is authenticated: tell the application WHICH session it was (a new scope; the server's own is untouched).
+        await self.app({**scope, SESSION_SCOPE_KEY: sess}, self._guard_receive(receive), self._wrap_send(send, no_store=True))
 
     def _wrap_send(self, send: Callable, *, no_store: bool) -> Callable:
         async def wrapped(message: Dict[str, Any]) -> None:
