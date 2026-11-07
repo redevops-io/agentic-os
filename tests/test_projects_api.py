@@ -381,3 +381,19 @@ def test_a_rejected_confirm_adds_nothing_and_a_missing_folder_is_listed_as_an_er
     assert ok.status_code == 200 and ok.json()[0]["health"]["state"] == "error"
     listed = [s for s in c.get("/api/projects/customer-ops/sources").json() if s["location"] == str(gone)]
     assert len(listed) == 1 and listed[0]["health"]["state"] == "error"                              # reported, not hidden
+
+
+# ---- Windows folder paths in the Sidekick "use the files in <folder> as context" interpreter (found on Windows Server 2022, 2026-11-06) ----
+def test_propose_recognises_windows_drive_and_unc_paths_and_does_not_misread_them_as_unix_paths():
+    from agentic_os.projects_api import propose_sources
+    for text, want in [
+        (r"use the files in C:\uisample as context", r"C:\uisample"),
+        (r"use the files in C:\Users\Alex\Documents\policies as context", r"C:\Users\Alex\Documents\policies"),
+        ("use the files in D:/data/pdfs as context", "D:/data/pdfs"),
+        (r"use the files in \\fileserver\share\docs as context", r"\\fileserver\share\docs"),
+    ]:
+        p = propose_sources("customer-ops", text)
+        assert [s.location for s in p.sources] == [want], (text, [s.location for s in p.sources])
+    # the unix-style behaviour is unchanged, and a Windows path does not also yield a bogus "/..." path from its tail
+    assert [s.location for s in propose_sources("customer-ops", "use the files in /tmp/a-b/c.d as context").sources] == ["/tmp/a-b/c.d"]
+    assert [s.location for s in propose_sources("customer-ops", "use ~/docs and C:/x/y as context").sources] == ["~/docs", "C:/x/y"]
