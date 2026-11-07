@@ -116,13 +116,57 @@ docker run -e AGENTIC_OS_PERMISSIONS=off --rm -p 8203:8203 \
 | `PORT` | `8203` | uvicorn bind port. |
 | `SENTINEL_BIND_HOST` | `127.0.0.1` | Bind interface (P9). A reachable bind needs `SENTINEL_ALLOW_EXPOSURE=1` **and** an operator credential (`SENTINEL_BASIC_AUTH_USER`/`_PASS`, or the shared `PARTNERS_BASIC_AUTH_*` pair) or the named `SENTINEL_ALLOW_UNAUTHENTICATED_EXPOSURE=1`; the startup guard refuses otherwise. |
 | `WAZUH_TLS_VERIFY` | on | Certificate verification for the Wazuh API (P9). Set to a CA bundle path for a private CA; `off` skips verification and is labelled as such wherever an operator reads it. |
-| `ANTHROPIC_API_KEY` | _(optional)_ | If set, `triage` adds an LLM reasoning blurb (model `claude-opus-4-8`). The endpoint works fully without it — actions are deterministic CrowdSec/cscli calls. |
+| `REDEVOPS_LLM_BASE_URL` | _(unset)_ | Optional one-sentence narration on `triage`, inherited from the kernel. Unset — or a host the kernel will not treat as in-boundary — means **no model call at all**; the deterministic summary stands. Model id `REDEVOPS_LLM_MODEL`, bearer `OPENAI_API_KEY`. Nothing here reads an Anthropic key, and no model vendor is named by this app — see [Alert triage and the model boundary](#alert-triage-and-the-model-boundary). |
 
 | `SENTINEL_PROTECTED_IPS`, `SENTINEL_HOST_IPS` | _(empty)_ | Comma-separated addresses/CIDRs that are never banned (in addition to this host, its gateway, the LAPI host and the requesting operator). |
 | `SENTINEL_BLOCK_ALLOW_NETWORKS` | _(empty)_ | CIDRs inside which private/reserved space may be banned. Loopback, link-local, multicast and unspecified space is never bannable. |
 | `SENTINEL_BLOCK_ALLOW_WIDE_CIDR` | _(off)_ | Allow ranges wider than /24 (IPv4) or /64 (IPv6). |
 | `SENTINEL_BLOCK_MAX_HOURS` | `168` | Cap for a ban duration. |
 | `SENTINEL_STATE_DIR` | _(unset)_ | Directory for the durable approval state (atomic, private file). Unset keeps state in memory only; an unreadable file makes decisions and executions fail closed. |
+### Alert triage and the model boundary
+
+`triage` is deterministic: it counts active decisions and alerts, breaks them down by severity and names
+the top scenarios. That output is complete by itself, and every executable action (`block_ip`,
+`approve_block`) is a CrowdSec/`cscli` call that never passes through a model.
+
+The optional one-sentence narration follows one path, and only one:
+
+```
+triage → core.triage(blurb=_llm_blurb) → agentic_os.app.llm.governed_text(
+             classifications=(CUSTOMER_CONFIDENTIAL,))
+         → the single endpoint derived from REDEVOPS_LLM_BASE_URL
+```
+
+- **No vendor key, no vendor name.** The app reads no `ANTHROPIC_API_KEY` and contains no provider
+  endpoint of its own; an earlier helper that posted to a vendor API directly was replaced by the
+  governed route, and `apps/edge-sentinel/test_llm_egress.py` fails if a direct model `POST`
+  reappears. `OPENAI_API_KEY` is the bearer token sent to *your* endpoint because the wire format is
+  OpenAI-compatible — it is not a subscription to that vendor.
+- **One candidate, not a pool.** `governed_text` registers exactly one endpoint, labelled
+  `self-hosted` / `IN_BOUNDARY`, so there is no external endpoint for this call to fall back to.
+  `REDEVOPS_PRIVACY_MODE` still governs the rest of the kernel, but it cannot widen this call.
+- **Fail-closed, in every direction.** Unset `REDEVOPS_LLM_BASE_URL`, a host that is not private,
+  loopback or link-local (and not in `REDEVOPS_LLM_IN_BOUNDARY_HOSTS`), a refused route, a timeout or
+  a transport error all return no narration; the summary stands and nothing is retried elsewhere. The
+  kernel refuses to *label* a public host as in-boundary rather than issue a receipt that would claim it.
+- **What actually goes out, when you enable it:** a one-sentence instruction plus up to six active
+  decision values with their scenario and severity — real source addresses from your CrowdSec store,
+  classified `CUSTOMER_CONFIDENTIAL`. That is why the routing label is verified rather than trusted.
+- **Model identity.** `REDEVOPS_LLM_MODEL` (default `DeepSeek-V4-Flash`) is the identifier your
+  endpoint is asked for. It names the request; it does not establish which model answered. This
+  README makes no claim about any specific model or vendor.
+- **What this does *not* promise.** Enabling narration sends data out of this process, over the network,
+  to the endpoint you configured. Nothing here asserts that it stays on one machine, one datacentre or
+  one jurisdiction — the boundary is *your* network boundary, and how that endpoint terminates TLS,
+  authenticates, logs or retains what it receives is yours, not something this repository can verify.
+  If you cannot route alert data there, leave `REDEVOPS_LLM_BASE_URL` unset: the app loses a sentence of
+  prose and nothing else.
+
+`REDEVOPS_LLM_SETTINGS_FILE` can hold the endpoint, model and a non-secret key reference instead of the
+environment. The narration is read-only: it cannot block, unban or reach the Docker socket, and P9's
+exposure and credential rules apply to it exactly as to every other route.
+
+
 
 ### Approval workflow
 
@@ -148,8 +192,9 @@ The sentinel can also read alerts from the CrowdSec LAPI with a machine (watcher
     `cscli decisions add` to enforce the ban, then refreshes the dashboard cache. Without
     `SENTINEL_BLOCK_ENABLED` this route returns a **dry run**: the response says `Dry run: nothing was blocked`.
     Executing a real block from this route needs an operator credential and that enable flag.
-  - `"triage"` → summarizes active decisions + alerts (severity mix, top scenarios);
-    adds a one-line LLM reasoning blurb iff `ANTHROPIC_API_KEY` is set.
+  - `"triage"` → summarizes active decisions + alerts (severity mix, top scenarios); the summary is
+    deterministic and complete on its own, and a one-sentence narration is appended only when a
+    governed in-boundary model is configured (see below) — never an extra call to a vendor API.
 
 ## Docker access (least privilege)
 
