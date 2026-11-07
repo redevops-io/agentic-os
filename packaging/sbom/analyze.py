@@ -13,6 +13,7 @@ import hashlib
 import json
 import plistlib
 import re
+import sys
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,7 +24,10 @@ from .inventory import module_owner_map, norm
 
 HERE = Path(__file__).resolve().parent
 STDLIB = set((HERE / "stdlib_312.txt").read_text(encoding="utf-8").split())
-FIRST_PARTY = {"agentic-os", "runtime-contracts", "knowledge-frontier", "redevops-connectors"}
+sys.path.insert(0, str(HERE.parent / "tools"))
+from first_party import first_party_names  # noqa: E402  (packaging/tools/first_party.py: git-pins.json + agentic-os)
+
+FIRST_PARTY = set(first_party_names())
 OPENSSL_BANNER = re.compile(rb"OpenSSL (\d+\.\d+\.\d+[a-z]?)(?:-[a-z0-9]+)? +(\d{1,2} [A-Z][a-z]{2} \d{4})")
 NATIVE_EXT = (".so", ".dylib", ".dll", ".pyd")
 

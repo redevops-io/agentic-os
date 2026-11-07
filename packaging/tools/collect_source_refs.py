@@ -21,7 +21,10 @@ import urllib.request
 from pathlib import Path
 
 UA = {"User-Agent": "redevops-pins-source-offer (redevops@redevops.io)"}
-FIRST_PARTY = {"agentic-os", "runtime-contracts", "knowledge-frontier", "redevops-connectors"}
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from first_party import first_party_names  # noqa: E402  (git-pins.json + agentic-os)
+
+FIRST_PARTY = set(first_party_names())
 
 
 def get_json(url: str):

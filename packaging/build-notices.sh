@@ -26,7 +26,7 @@ uv pip install --python "$TPY" --require-hashes --no-deps -r "$LOCKS/build-tools
 # 2. site-packages of the shipped set (dist-info licence files) from the wheelhouse, offline and hash-checked
 uv venv --python "$PYTHON_VERSION" "$TMP/site" >/dev/null; SPY="$(venv_py "$TMP/site")"
 uv pip install --python "$SPY" --no-index --find-links "$WH" --require-hashes --no-deps -r "$LOCKS/requirements-$OS.lock" >/dev/null
-FIRST="$(ls "$WH"/agentic_os-*.whl "$WH"/runtime_contracts-*.whl "$WH"/knowledge_frontier-*.whl "$WH"/redevops_connectors-*.whl)"
+first_party_wheels "$TPY" "$WH"
 # shellcheck disable=SC2086
 uv pip install --python "$SPY" --no-index --find-links "$WH" --no-deps $FIRST >/dev/null
 SITE="$("$SPY" -c 'import sysconfig;print(sysconfig.get_paths()["purelib"])' | strip_cr)"

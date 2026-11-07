@@ -54,3 +54,16 @@ now() { date +%s; }
 # identity KEY: one field of the R0-prime identity (packaging/identity.json via packaging/tools/identity.py), e.g.
 # `identity main_binary_name`, `identity app_bundle`, `identity dmg_macos_arm64`. Standard-library python, no side effect.
 identity() { "$(command -v python3 || command -v python)" -I "$PK/tools/identity.py" get "$1" | tr -d '\r'; }
+# first_party_wheels PYTHON WHEELHOUSE -> sets FIRST to the newline-separated paths of the first-party wheels.
+# The list comes from packaging/git-pins.json (+ agentic-os) via packaging/tools/first_party.py, never from a hand-written
+# glob (D-NEW-1). Stops the calling script, with the tool's message, when a pin has no wheel or a wheel has no pin.
+first_party_wheels() {
+  local out w
+  out="$("$1" -I "$PK/tools/first_party.py" wheels --wheelhouse "$2" --lock "$LOCKS/requirements-$OS.lock" | strip_cr)" \
+    || { echo "ERROR: the wheelhouse $2 does not match packaging/git-pins.json and the lock for $OS (see above)" >&2; exit 1; }
+  FIRST=""
+  while IFS= read -r w; do
+    if [ -n "$w" ]; then FIRST="${FIRST:+$FIRST$'\n'}$2/$w"; fi
+  done <<< "$out"
+  [ -n "$FIRST" ] || { echo "ERROR: no first-party wheels found in $2" >&2; exit 1; }
+}
