@@ -704,3 +704,20 @@ def test_partial_compensation_is_reported_as_partial_never_as_rolled_back(env):
     assert {m["key"] for m in env.stack.lago_metadata} == {"aosdd_recovery", "other_system"}   # ... S2 left alone: its undo refused and the foreign entry is untouched
     rec = reconstruct(env.events_path, mid)
     assert [s["classification"] for s in rec["steps"][:2]] == [COMPENSATED, UNCERTAIN] and rec["mission_classification"] == UNCERTAIN
+
+
+def test_an_approval_forged_into_the_ledger_between_steps_halts_the_mission_before_dispatch(env):
+    """`_pre_exec_ok` (AOS-DD's own plan/approval check, kept) refuses at the next step: the HMAC needs the signing key the ledger writer does not have."""
+    r = env.runner()
+    mid = r.submit("FORGE", REF, principal=REQ)
+
+    def forge(ev):
+        if ev.type == "NodeSucceeded" and ev.payload.get("capability") == "aosdd.erpnext.quotation_draft":
+            good = r.svc.approval_for(mid)
+            r.svc.emit("AosddPlanApproved", mid, {"claims": {**good["claims"], "approver": "mallory"}, "sig": good["sig"]})
+    r.svc.store.subscribe(forge)
+    r.approve_plan(mid, r.plan(mid)["plan_sha256"], principal=APP)
+    assert [a for a, m_, p in env.stack.writes()] == ["erpnext"]                                   # S1 ran under the genuine approval; S2 never left
+    halt = [e.payload for e in r.svc.store.for_mission(mid) if e.type == "AosddMissionHalted"]
+    assert halt and halt[0]["rule"] == "plan_not_approved" and "signature" in halt[0]["reason"]
+    assert [e for e in r.svc.store.for_mission(mid) if e.type == "AosddStepRefused" and e.payload["side_effects"] == 0]
