@@ -106,6 +106,27 @@ def test_normalise_pure_rewrites_only_sysconfigdata_modules_and_writes_to_the_wo
     assert "/home/u1" in sc.read_text()                                                     # the interpreter's own file is not modified
 
 
+def test_the_cached_code_object_of_a_rewritten_module_is_dropped_so_pyinstaller_compiles_the_new_source(tmp_path):
+    """PyInstaller 6 prefers the module graph's cached code object to the entry's path: without this the rewrite is silently ignored
+    (found by building: the first version of the hook produced byte-identical sidecars)."""
+    t = _tool()
+    sc = tmp_path / "_sysconfigdata__linux_x.py"
+    sc.write_text(SAMPLE)
+    cache = {"_sysconfigdata__linux_x": object(), "other": object()}
+    t.normalise_pure([("_sysconfigdata__linux_x", str(sc), "PYMODULE")], tmp_path / "w",
+                     ["/home/u1/.local/share/uv/python/cpython-3.12.10-linux-aarch64-gnu"], code_cache=cache)
+    assert set(cache) == {"other"}
+
+
+def test_a_module_that_needs_no_rewrite_keeps_its_cached_code(tmp_path):
+    t = _tool()
+    sc = tmp_path / "_sysconfigdata__linux_x.py"
+    sc.write_text('VERSION = "3.12"\n')
+    cache = {"_sysconfigdata__linux_x": object()}
+    out = t.normalise_pure([("_sysconfigdata__linux_x", str(sc), "PYMODULE")], tmp_path / "w", ["/nowhere"], code_cache=cache)
+    assert out[0][1] == str(sc) and "_sysconfigdata__linux_x" in cache
+
+
 def test_the_sidecar_spec_runs_the_normalisation_on_the_analysis_result():
     src = (ROOT / "packaging" / "redevops-sidecar.spec").read_text()
     assert "normalise_sysconfigdata" in src and "normalise_pure" in src

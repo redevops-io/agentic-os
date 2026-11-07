@@ -27,9 +27,13 @@ def normalise(source: str, prefixes) -> str:
     return out
 
 
-def normalise_pure(pure, workdir, prefixes):
+def normalise_pure(pure, workdir, prefixes, code_cache=None):
     """A copy of PyInstaller's `Analysis.pure` list ((name, path, typecode) entries) in which each `_sysconfigdata*` source that mentions
-    one of `prefixes` is replaced by a normalised copy written under `workdir`. Entries are otherwise returned untouched."""
+    one of `prefixes` is replaced by a normalised copy written under `workdir`. Entries are otherwise returned untouched.
+
+    PyInstaller 6 compiles the modules the module graph already read from its CODE CACHE (name -> code object, keyed by the identity of
+    `Analysis.pure`) and only compiles from the entry's path when the cache has no entry. So the changed source is used only if the
+    cached code object of that module is dropped: pass that dict as `code_cache` (the spec does); the entry is removed here."""
     out = []
     for entry in pure:
         name, src, typ = entry[0], entry[1], entry[2]
@@ -41,5 +45,7 @@ def normalise_pure(pure, workdir, prefixes):
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_text(new, encoding="utf-8")
                 entry = (name, str(dest), typ, *entry[3:])
+                if code_cache is not None:
+                    code_cache.pop(name, None)
         out.append(entry)
     return out

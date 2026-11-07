@@ -69,8 +69,14 @@ _pk = next(d for d in (_here, os.path.dirname(_here), os.path.join(_here, "packa
            if os.path.isfile(os.path.join(d, "tools", "normalise_sysconfigdata.py")))
 sys.path.insert(0, os.path.join(_pk, "tools"))
 from normalise_sysconfigdata import normalise_pure
+try:
+    from PyInstaller.config import CONF as _CONF          # the module graph's code cache: PYZ uses it in preference to the source path
+    _code_cache = _CONF["code_cache"].get(id(a.pure))
+    assert _code_cache is not None, "PyInstaller keeps no code cache for Analysis.pure: update packaging/tools/normalise_sysconfigdata.py"
+except ImportError:                                       # the spec tests run it with PyInstaller stubbed
+    _code_cache = None
 a.pure[:] = normalise_pure(a.pure, os.path.join(_pk, "build", "normalised"),
-                           [sys.base_prefix, sys.prefix, sys.exec_prefix, sys.base_exec_prefix])
+                           [sys.base_prefix, sys.prefix, sys.exec_prefix, sys.base_exec_prefix], code_cache=_code_cache)
 pyz = PYZ(a.pure)
 exe = EXE(
     pyz, a.scripts, a.binaries, a.datas, [],
