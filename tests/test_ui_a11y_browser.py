@@ -24,11 +24,13 @@ from pathlib import Path
 
 import pytest
 
+from tests._ui_nav import go_view, open_panel
+
 pytestmark = pytest.mark.skipif(os.environ.get("RDO_BROWSER_TESTS") != "1",
                                 reason="browser tests are opt-in: set RDO_BROWSER_TESTS=1")
 
 AXE_PATH = os.environ.get("RDO_AXE_PATH", "")
-VIEWS = ["Overview", "Missions", "Workflows", "Sidekick", "Attention", "Discovery", "Sources", "Apps",
+VIEWS = ["Today", "Overview", "Missions", "Workflows", "Sidekick", "Attention", "Discovery", "Sources", "Apps",
          "Activity", "Settings"]
 VIEWPORTS = {"desktop": (1280, 800), "narrow": (390, 844)}
 AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa", "best-practice"]
@@ -121,8 +123,7 @@ class Tab:
         return self
 
     def view(self, name):
-        self.page.locator("button.nav").filter(has=self.page.locator("span.lbl", has_text=re.compile(f"^{name}$"))).click()
-        self.page.wait_for_function("() => !document.body.innerText.includes('Loading…')")
+        go_view(self.page, name)
         return self
 
     def open_mission(self, title="Refund Sarah Chen"):
@@ -166,7 +167,7 @@ def _state(tab, name):
     elif name == "mission-detail":
         tab.open_mission()
     elif name == "sidekick-panel-open":
-        tab.page.get_by_role("button", name="Ask Sidekick").first.click()
+        open_panel(tab.page)
         tab.page.locator("div.sk[role=dialog].open").wait_for()
     elif name == "workflow-detail":
         tab.view("Workflows")
@@ -225,7 +226,7 @@ def test_no_aria_selected_outside_tabs_and_tab_structure(make_tab):
             for tab in tl.locator("[role=tab]").all():
                 panel_id = tab.get_attribute("aria-controls")
                 assert p.locator(f"#{panel_id}[role=tabpanel]").count() == 1, (state, panel_id)
-        assert p.locator("[aria-current=true]").count() == 1                         # A-4: the rail
+        assert p.locator("button.nav[aria-current=page]").count() == 1                # A-4: the rail (the current place)
 
 
 def test_tabs_arrow_home_end_move_selection_and_filters_expose_aria_pressed(make_tab):
@@ -234,7 +235,7 @@ def test_tabs_arrow_home_end_move_selection_and_filters_expose_aria_pressed(make
     p = t.page
     p.get_by_role("tab", name="General").focus()
     p.keyboard.press("ArrowRight")
-    assert p.get_by_role("tab", name="Members").get_attribute("aria-selected") == "true"
+    assert p.get_by_role("tab", name="Notifications").get_attribute("aria-selected") == "true"      # the Today-first UI adds Notifications after General
     p.keyboard.press("End")
     assert p.get_by_role("tab", name="Retention").get_attribute("aria-selected") == "true"
     p.keyboard.press("Home")
@@ -323,10 +324,10 @@ def test_sidekick_recent_rows_and_discovery_links_are_buttons(make_tab):
     p.get_by_role("tab", name="Recent").click()
     p.locator("button.rowbtn", has_text="Connect Google Drive").focus()
     p.keyboard.press("Enter")
-    assert p.get_by_role("textbox", name="Ask Sidekick").input_value() == "Connect Google Drive"
+    assert p.locator("main").get_by_role("textbox", name="Ask Sidekick").input_value() == "Connect Google Drive"
     t.view("Discovery")
     assert p.locator("span.chiplink").count() == 0 and p.locator("button.chiplink").count() >= 3
-    p.get_by_role("button", name="Ask Sidekick").first.click()                    # the dead chiplink now opens the panel
+    open_panel(p)                    # the dead chiplink now opens the panel
     p.locator("div.sk[role=dialog].open").wait_for()
 
 
@@ -348,7 +349,7 @@ def test_sidekick_opens_as_a_dialog_with_focus_trap_escape_and_focus_return(make
     t.view("Missions")
     p = t.page
     if how == "ask-click":
-        p.get_by_role("button", name="Ask Sidekick").first.click()
+        open_panel(p)
     else:
         p.locator("button.rowbtn").first.focus()
         p.keyboard.press("Control+k" if how == "ctrl-k" else "Meta+k")
@@ -372,7 +373,7 @@ def test_sidekick_opens_as_a_dialog_with_focus_trap_escape_and_focus_return(make
     assert p.locator(".backdrop.open").count() == 0
     active = p.evaluate("() => { const a = document.activeElement; return a.className + '|' + (a.getAttribute('aria-label') || a.innerText.slice(0, 20)); }")
     if how == "ask-click":
-        assert active.startswith("ask|"), active
+        assert active.endswith("|Ask Sidekick"), active                         # the top bar is itself the input now
     else:
         assert "rowbtn" in active, active                                         # back to the element that had focus
 
@@ -380,11 +381,11 @@ def test_sidekick_opens_as_a_dialog_with_focus_trap_escape_and_focus_return(make
 def test_sidekick_mouse_close_paths_are_unchanged(make_tab):
     t = make_tab()
     p = t.page
-    p.get_by_role("button", name="Ask Sidekick").first.click()
+    open_panel(p)
     p.locator(".sk.open").wait_for()
     p.get_by_role("button", name="Close").click()
     p.wait_for_function("() => !document.querySelector('.sk:not(.msg)').classList.contains('open')")
-    p.get_by_role("button", name="Ask Sidekick").first.click()
+    open_panel(p)
     p.locator(".sk.open").wait_for()
     p.mouse.click(20, 400)                                                        # the backdrop
     p.wait_for_function("() => !document.querySelector('.sk:not(.msg)').classList.contains('open')")
@@ -414,6 +415,7 @@ def test_sample_data_marking_is_visible_in_the_viewport_on_every_view(make_tab, 
 def test_overview_eyebrow_is_the_project_name_and_status_pills_say_sample(make_tab):
     t = make_tab()
     p = t.page
+    t.view("Overview")                                                  # the first screen is Today now; the project's own summary is Work > Summary
     assert p.locator("section.content .eyebrow").first.inner_text().strip().lower() == "customer operations"
     assert p.locator(".topbar .pill").inner_text().strip() == "Healthy (sample)"
     assert p.locator(".brand .txt").inner_text().strip() == "Agentic Apps R0-prime"         # the product name, no "ReDevOps" mark
@@ -439,7 +441,7 @@ def test_signed_out_page_is_one_focusable_sign_in_panel(make_tab, size):
     assert "Loading" not in p.inner_text("body")
     root = p.locator("#root")
     assert root.get_attribute("hidden") is not None and root.get_attribute("inert") is not None
-    assert p.locator("[role=alert]").count() == 1
+    assert p.locator("[role=alert]:visible").count() == 1
     assert p.evaluate("() => getComputedStyle(document.querySelector('[role=alert]')).position") != "fixed"
     assert p.locator(".topbar:visible").count() == 0
     # the developer sentence is behind a closed <details>, operable with the keyboard
@@ -457,7 +459,8 @@ def test_signed_out_page_is_one_focusable_sign_in_panel(make_tab, size):
     # axe: nothing, including region / main / h1
     assert t.axe() == {}
     # the sidecar saw exactly one unauthenticated read and no write
-    assert [(m, s) for m, u, s in t.api] == [("GET", 401)], t.api
+    # the Today-first landing reads three things (the feed, the capture list, the notifications): every one is a GET and every one is refused
+    assert t.api and all((m, s) == ("GET", 401) for m, u, s in t.api), t.api
     assert t.console_errors == [x for x in t.console_errors if "401" in x], t.console_errors
 
 
@@ -465,7 +468,7 @@ def test_a_401_during_a_session_shows_the_panel_again(make_tab):
     t = make_tab()
     p = t.page
     t.server["cap"]._sessions.clear()                               # the server forgets the session (restart / eviction)
-    t.view("Missions")                                              # the next API call answers 401
+    p.locator("button.nav").filter(has_text="Work").click()         # the next API call answers 401
     p.wait_for_selector("#agentic-signin")
     assert p.locator("button.nav:visible").count() == 0
     # a new tab without the fragment is signed out; the signed-in tab did not leak anything
@@ -500,8 +503,8 @@ def test_the_page_has_no_console_errors_or_csp_violations_while_walking_the_view
 def test_rail_buttons_and_the_about_link_keep_their_names_when_the_rail_collapses(make_tab):
     t = make_tab("narrow")
     p = t.page
-    for v in VIEWS:
-        assert p.get_by_role("button", name=v, exact=True).count() == 1, v       # glyph is hidden, the label is the name
+    for v in ["Today", "Work", "Activity", "Automations", "Connections", "Settings"]:
+        assert p.get_by_role("button", name=re.compile(f"^{v}\\b")).count() == 1, v   # glyph is hidden, the label is the name (Today also names its count)
     link = p.get_by_role("link", name="About and licences")
     assert link.get_attribute("href") == "./about/" and link.is_visible()
     box = link.bounding_box()
