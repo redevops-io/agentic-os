@@ -47,10 +47,13 @@ CROWDSEC_LAPI_URL = os.environ.get("CROWDSEC_LAPI_URL", "http://localhost:8086")
 CROWDSEC_BOUNCER_KEY = os.environ.get("CROWDSEC_BOUNCER_KEY", "")
 CROWDSEC_CONTAINER = os.environ.get("CROWDSEC_CONTAINER", "agentic-cores-crowdsec-1")
 CROWDSEC_FRONT_URL = os.environ.get("CROWDSEC_FRONT_URL", "http://localhost:8086").rstrip("/")
-# How to invoke docker for `cscli` (alerts). On the host this needs `sudo docker`; inside a container it needs
-# Docker access that the operator provides (never the raw socket: see the README, "Docker access"), with
-# DOCKER_CMD="docker" (no sudo). Override via env.
-DOCKER_CMD = os.environ.get("DOCKER_CMD", "sudo docker").split()
+# How to invoke docker for `cscli` (alerts). P9: the request path never calls sudo — an interactive
+# `Password:` prompt inside an HTTP handler hangs the worker and turns a page view into a privileged
+# action. The default is plain `docker`: on a host, give the service user docker access; inside a
+# container the operator provides docker access without the raw socket (README, "Docker access").
+# If an operator truly needs an escalation wrapper, they set DOCKER_CMD themselves; _docker_cmd keeps
+# any `sudo` in it strictly non-interactive (-n), so it can only ever fail fast, never prompt.
+DOCKER_CMD = os.environ.get("DOCKER_CMD", "docker").split()
 
 TENANT = "Meridian Wealth Management"
 SUBTITLE = "Network security & systems, triaged and explained by an agent — on a real CrowdSec core, with a human in the loop before any block."
@@ -61,9 +64,20 @@ def _headers() -> dict:
     return {"X-Api-Key": CROWDSEC_BOUNCER_KEY, "Content-Type": "application/json"}
 
 
+def _docker_cmd() -> list[str]:
+    """The docker invocation for this process, never interactive. If an operator configured a `sudo`
+    wrapper anyway, it is forced to `-n` (non-interactive): sudo then fails immediately instead of
+    printing `Password:` into a request handler and hanging the worker waiting for input nobody can give."""
+    cmd = list(DOCKER_CMD)
+    if cmd and cmd[0] == "sudo" and "-n" not in cmd and "--non-interactive" not in cmd:
+        cmd.insert(1, "-n")
+    return cmd
+
+
 def _cscli(args: list[str]) -> tuple[int, str, str]:
-    """Run `cscli <args>` inside the CrowdSec container. `sudo` for the docker socket."""
-    cmd = [*DOCKER_CMD, "exec", CROWDSEC_CONTAINER, "cscli", *args]
+    """Run `cscli <args>` inside the CrowdSec container. Plain `docker` by default (P9): the request
+    path never invokes sudo, and an operator-supplied escalation is enforced non-interactive."""
+    cmd = [*_docker_cmd(), "exec", CROWDSEC_CONTAINER, "cscli", *args]
     try:
         p = subprocess.run(cmd, text=True, capture_output=True, timeout=20)
         return p.returncode, p.stdout, p.stderr
