@@ -95,9 +95,8 @@ edge-sentinel serve --port 8203
 
 # Or with Docker (point the LAPI URL at the CrowdSec service; the socket is NOT mounted, see "Docker access" below):
 docker build -t edge-sentinel .
-docker run --rm -p 8203:8203 \
+docker run -e AGENTIC_OS_PERMISSIONS=off --rm -p 8203:8203 \
   -e SENTINEL_ALLOW_EXPOSURE=1 -e SENTINEL_BASIC_AUTH_USER=<operator> -e SENTINEL_BASIC_AUTH_PASS=<secret> \
-  -e AGENTIC_OS_PERMISSIONS=off \
   -e CROWDSEC_LAPI_URL=http://host.docker.internal:8086 \
   -e CROWDSEC_BOUNCER_KEY=<key from .env> \
   edge-sentinel

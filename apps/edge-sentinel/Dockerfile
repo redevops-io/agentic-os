@@ -87,6 +87,9 @@ ENV PORT=8203 PYTHONPATH=/app
 ENV SENTINEL_BIND_HOST=0.0.0.0
 EXPOSE 8203
 
-# Shell form so the declared bind host and port above are the ones actually bound (exec keeps PID 1 so
-# SIGTERM still reaches uvicorn for the graceful shutdown the container depends on).
-CMD ["sh", "-c", "exec uvicorn edge_sentinel.app:app --host \"$SENTINEL_BIND_HOST\" --port \"$PORT\""]
+# Shell form so the declared bind host and port above are the ones actually bound. `exec` is what makes that safe:
+# the shell replaces itself with uvicorn, so uvicorn is still PID 1 and still receives SIGTERM for the graceful
+# shutdown the container depends on. The app module is quoted because the kernel entrypoint guard
+# (tests/test_app_dockerfiles.py) requires the package-qualified target to appear quoted, and a JSON-array CMD
+# would escape those quotes; a flat `app:app` target cannot resolve the package-relative imports.
+CMD exec uvicorn "edge_sentinel.app:app" --host "$SENTINEL_BIND_HOST" --port "$PORT"

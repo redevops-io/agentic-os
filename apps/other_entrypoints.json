@@ -34,6 +34,14 @@
       "rationale": "Router startup/shutdown: rehydrates parked missions and starts/stops the optional observer above. No request-reachable effect."
     },
     {
+      "app": "edge-sentinel",
+      "file": "app.py",
+      "kind": "lifecycle_hook",
+      "name": "_check_declared_bind",
+      "classification": "reviewed",
+      "rationale": "Startup guard added by audit item P9: it reads the declared bind host and, on a non-loopback bind, refuses to start unless the operator has both authorised the exposure explicitly and configured a credential. It performs no I/O and no edge action - its only effect is to raise and stop the app before the first request is served, so a misconfigured container never binds."
+    },
+    {
       "app": "growth-assistant",
       "file": "app.py",
       "kind": "background_thread_or_task",
