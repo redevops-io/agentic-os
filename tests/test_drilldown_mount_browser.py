@@ -144,6 +144,7 @@ def test_no_grant_then_grant_then_revoke_through_the_product_mount(browser, prod
             assert "No recorded history to show" in text and "not been granted access" in text and "does not say which of these applies" in text, (v, text)
             assert p.locator("[data-basis]").count() == 0, v
             assert p.locator(".samplechip").count() == 0, v
+            assert p.get_by_role("button", name="Partly sample").count() == 1, v        # runtime server, provider-backed pages still sample
         # 2. the operator grants inspect for the project (recorded in the audit log); the same open session now reads all eight views
         grant_local_inspect(product.grants, product.scope, operator="browser-test", audit=product.audit)
         for v in VIEWS:
@@ -153,6 +154,7 @@ def test_no_grant_then_grant_then_revoke_through_the_product_mount(browser, prod
             bases = set(p.eval_on_selector_all(".mview [data-basis]", "els => els.map(e => e.getAttribute('data-basis'))"))
             assert bases == {"recorded"}, (v, bases)
             assert p.locator(".samplechip").count() == 0, v
+            assert p.get_by_role("button", name="Partly sample").count() == 1, v        # the chip does not hide that these views are recorded: each says so itself
         # 3. the operator revokes while the page is open: the next Refresh says so and removes the content
         t.go(f"/missions/{product.mid}/timeline")
         p.wait_for_selector(".tl")

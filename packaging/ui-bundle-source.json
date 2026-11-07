@@ -1,14 +1,14 @@
 {
- "_comment": "Where the Projects UI bundle (agentic_os/projects_ui) comes from. On the converged trunk it is NOT tracked in git: scripts/fetch_projects_ui.py (run by the wheel build hook, so by `pip install -e .` too) unpacks the pinned artifact packaging/ui-artifacts/projects-ui-root-2f24719e.tgz (packaging/projects_ui.lock.json) into agentic_os/projects_ui, offline. Read by packaging/sbom/generate_source_offer.py and packaging/sbom/analyze.py and checked against the files by tests/test_ui_bundle_source_record.py. The source commit is a LOCAL, UNPUBLISHED commit: the public redevops-projects repository does not contain it, so this record is NOT a source offer (decisions D-LIC-12 and pins-04 stay OPEN). index.html, the JavaScript and the CSS are build output; hero.jpg is not (the neutral placeholder is kept by scripts/build_projects_ui.sh).",
+ "_comment": "Where the Projects UI bundle (agentic_os/projects_ui) comes from. On the converged trunk it is NOT tracked in git: scripts/fetch_projects_ui.py (run by the wheel build hook, so by `pip install -e .` too) unpacks the pinned artifact packaging/ui-artifacts/projects-ui-root-312a811a.tgz (packaging/projects_ui.lock.json) into agentic_os/projects_ui, offline. Read by packaging/sbom/generate_source_offer.py and packaging/sbom/analyze.py and checked against the files by tests/test_ui_bundle_source_record.py. The source commit is a LOCAL, UNPUBLISHED commit: the public redevops-projects repository does not contain it, so this record is NOT a source offer (decisions D-LIC-12 and pins-04 stay OPEN). index.html, the JavaScript and the CSS are build output; hero.jpg is not (the neutral placeholder is kept by scripts/build_projects_ui.sh).",
  "repository": "https://github.com/redevops-io/redevops-projects",
  "base_commit": "5114b56012511a292eff0e505fdbd0d8b00544f8",
  "base_commit_public": true,
- "source_commit": "2f24719ef17eb90aeaccb05249b5f584da3a3e99",
- "source_tree": "9195264dc6bbaeb484073df4a2009f2398e3784b",
+ "source_commit": "312a811a9e697b0176aa2c058165209266a4be9a",
+ "source_tree": "bfb109440a0d59fded5b69d0fd89adca53948f81",
  "source_commit_published": false,
- "source_status": "local unpublished commit (branch ui/runtime-mode of a local clone, from ui/evidence-tracing ee958a01): the Sample chip and every sample-versus-recorded decision come from GET /api/ui-config (what the running server reports) instead of the VITE_PROJECTS_SAMPLE_DATA build flag, which is removed; the Settings > Data source panel, the tail-anchor wording and the browser harness that runs the real product are added. Below that: the merge of the public release v0.2.0 (84f17fce) into the local accessibility series rel/ui-v3 (2fdef7f5), the application-directory tab and the mission drill-down views. not pushed, no pull request, no tag",
- "previous_source_commit": "ee958a0174421d29f0e510ed31b602fd0ee8a154",
- "previous_bundle": "assets/index-XAbPLomz.js sha256 36cc4070773177e9644d6b379eda2a27ac0f1de14a610676611d60ddf02e93ea (built from ee958a01, the same views with a build-flag Sample chip); before it assets/index-C4jFACLN.js from 2fdef7f5, assets/index-Bunz4yfu.js from d77c6a4a and assets/index-BAPoIP6S.js from 54dfc5f4",
+ "source_status": "local unpublished commit (branch ui/partly-sample of a local clone, from ui/runtime-mode 2f24719e (itself from ui/evidence-tracing ee958a01); adds the \"Partly sample\" chip for a runtime server whose provider-backed pages are still sample): the Sample chip and every sample-versus-recorded decision come from GET /api/ui-config (what the running server reports) instead of the VITE_PROJECTS_SAMPLE_DATA build flag, which is removed; the Settings > Data source panel, the tail-anchor wording and the browser harness that runs the real product are added. Below that: the merge of the public release v0.2.0 (84f17fce) into the local accessibility series rel/ui-v3 (2fdef7f5), the application-directory tab and the mission drill-down views. not pushed, no pull request, no tag",
+ "previous_source_commit": "2f24719ef17eb90aeaccb05249b5f584da3a3e99",
+ "previous_bundle": "assets/index-owr9wUfq.js sha256 da54adcd5c9be2070456dcab32146d2c0eb87504066f342ca7cc9b606be73f0e (built from 2f24719e, the same views without the Partly sample chip); before it assets/index-XAbPLomz.js from ee958a01, assets/index-C4jFACLN.js from 2fdef7f5",
  "package_json_git_blob": "1fae6a7db7899b5ef1a45d4a5c5a2a7a960204f8",
  "package_json_sha256": "7f5d60f109331d32b1e9c684203a815e1b641c09d41d3c75f74d9667d75c8c98",
  "package_lock_git_blob": "af8ed38d2074179e60e0d974987be1092ee8c770",
@@ -25,13 +25,13 @@
   "reproduced": "built three times from a clean git archive of the source commit, each in its own throwaway HOME, TMPDIR and npm cache (env -i, node v24.22.2, npm 11.19.1): index.html, the JavaScript and the CSS are byte-identical (and identical to the development build)"
  },
  "files": {
-  "index.html": "c6fa7c77e0650891c30dc16302d401fa4532faac5baec280c1d2f5f3868fd3b2",
-  "assets/index-owr9wUfq.js": "da54adcd5c9be2070456dcab32146d2c0eb87504066f342ca7cc9b606be73f0e",
-  "assets/index-CXf8UWsO.css": "97c5175579f26172253f65a189155c6003ea811c657517d3b57d170421ad72dd"
+  "index.html": "cc6b894daafb4451d4fb8aeef2b9609835e4439ad32eb490dfd879aef70da760",
+  "assets/index-BVpeLTWy.js": "8d5583c165f39b379bb100ad1903310e322234f43e46c716072188ee899b7ca8",
+  "assets/index-sPje_5GF.css": "2f78f852ceffef089dad4b29f854afab8feaf7239cf8b2175e6a2267204f4fac"
  },
  "artifact": {
-  "path": "packaging/ui-artifacts/projects-ui-root-2f24719e.tgz",
-  "sha256": "ff5224fa555090713240c8eb8c96192338e685d20e8ffa0783eb7570c4bfd341",
+  "path": "packaging/ui-artifacts/projects-ui-root-312a811a.tgz",
+  "sha256": "5639c828e641fa30973a893e3507e5eeb06c30ad402210ef74b6eb9d94c61005",
   "lock": "packaging/projects_ui.lock.json",
   "pack_recipe": "scripts/make_projects_ui_artifact.py",
   "url": "",
