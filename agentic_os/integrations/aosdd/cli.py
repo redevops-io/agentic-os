@@ -20,6 +20,7 @@ runtime records. There is no ``--actor``: a free-text name is not an identity (s
 Test hooks (never used by the library; they let a harness kill the process at an exact point):
     --pause-after CAPABILITY      after that node's NodeSucceeded, write PAUSED and wait for GO (or be killed)
     --hold-after-response APP     after the first write response from APP is received (before it is recorded), write HELD and wait for GO
+    --hold-before-request APP     right before the first write request to APP is sent, write HELD and wait for GO (kill here: nothing was sent)
 Everything printed goes through the configured redactor."""
 from __future__ import annotations
 
@@ -44,16 +45,22 @@ from .services import RedactingEventStore, Services
 
 
 class _HoldTransport:
-    def __init__(self, inner, app_base: str, flag: str):
-        self.inner, self.base, self.flag, self.done = inner, app_base, flag, False
+    def __init__(self, inner, app_base: str, flag: str, before: bool = False):
+        self.inner, self.base, self.flag, self.done, self.before = inner, app_base, flag, False, before
+
+    def _hold(self, text: str) -> None:
+        self.done = True
+        open(self.flag, "w").write(text)
+        while not os.path.exists(os.path.dirname(self.flag) + "/GO"):
+            time.sleep(0.1)
 
     def send(self, req: Request) -> Resp:
+        hit = not self.done and req.method != "GET" and req.url.startswith(self.base)
+        if hit and self.before:                       # the process can be killed here: the request was NOT sent
+            self._hold(f"{req.method} {req.url.split('?')[0]} -> (held before sending)")
         resp = self.inner.send(req)
-        if not self.done and req.method != "GET" and req.url.startswith(self.base):
-            self.done = True
-            open(self.flag, "w").write(f"{req.method} {req.url.split('?')[0]} -> {resp.status}")
-            while not os.path.exists(os.path.dirname(self.flag) + "/GO"):
-                time.sleep(0.1)
+        if hit and not self.before:                   # ... or here: the request was sent and answered, the answer not yet recorded
+            self._hold(f"{req.method} {req.url.split('?')[0]} -> {resp.status}")
         return resp
 
 
@@ -83,6 +90,8 @@ def build(args) -> "tuple[Runner, AosddConfig]":
     transport = UrllibTransport()
     if args.hold_after_response:
         transport = _HoldTransport(transport, cfg.base_urls[args.hold_after_response], args.state + "/HELD")
+    elif args.hold_before_request:
+        transport = _HoldTransport(transport, cfg.base_urls[args.hold_before_request], args.state + "/HELD", before=True)
     svc = Services(cfg, store, OpLog(args.state + "/ops.db", lease_ttl_s=cfg.lease_ttl_s), guard, transport=transport)
     if args.pause_after:
         def hook(ev):
@@ -110,6 +119,7 @@ def main(argv=None) -> int:
     ap.add_argument("--grant-ttl", type=float, default=900.0)
     ap.add_argument("--pause-after")
     ap.add_argument("--hold-after-response")
+    ap.add_argument("--hold-before-request")
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("submit"); s.add_argument("--case", required=True); s.add_argument("--attempt", type=int, default=1); s.add_argument("--ref", default="AOSDD-HFC-001")
     s = sub.add_parser("approve"); s.add_argument("--mission", required=True); s.add_argument("--plan-sha256", required=True)
