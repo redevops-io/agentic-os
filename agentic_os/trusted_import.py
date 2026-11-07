@@ -11,10 +11,14 @@ from __future__ import annotations
 import importlib
 import importlib.metadata as md
 import importlib.util as iu
-import site
 import sys
 import sysconfig
 from pathlib import Path
+
+try:
+    import site
+except ImportError:        # the frozen sidecar leaves `site` (and pydoc, rlcompleter ...) out of the archive: packaging/redevops-sidecar.spec
+    site = None            # the interpreter's own package directories then come from sysconfig alone (a frozen app has no site-packages)
 
 
 def _resolved(path) -> "Path | None":
@@ -47,15 +51,16 @@ def _trusted_dirs() -> "list[Path]":
     never an arbitrary ``sys.path`` entry."""
     out: "list[Path]" = []
     cands = [sysconfig.get_paths().get("purelib"), sysconfig.get_paths().get("platlib")]
-    try:
-        cands += list(site.getsitepackages())
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        if site.ENABLE_USER_SITE:
-            cands.append(site.getusersitepackages())
-    except Exception:  # noqa: BLE001
-        pass
+    if site is not None:
+        try:
+            cands += list(site.getsitepackages())
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if site.ENABLE_USER_SITE:
+                cands.append(site.getusersitepackages())
+        except Exception:  # noqa: BLE001
+            pass
     for c in cands:
         p = _resolved(c) if c else None
         if p is not None and p not in out and p.is_dir():

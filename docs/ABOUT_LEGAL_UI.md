@@ -20,7 +20,7 @@ Design record: `ABOUT_LEGAL_UI_DESIGN.md` and `DECISION-DEPENDENCIES.md` (RC3 pl
 
 `about.json` is ASCII, at most 1 MiB (the sidecar refuses more than 2 MiB), canonical (sorted keys, one-space indent). Every field is
 named in the generator (allowlist): product identity from `packaging/identity.json`; commit, tree, dirty count, commit time and
-describe from git; the Projects UI bundle file hashes; the sha256 of the SBOM the notices came from and of the gate file; the
+describe from git; the Projects UI bundle file hashes and, when `packaging/projects_ui.lock.json` pins the bundle, that pin (`ui_bundle.pin`: version, artifact sha256, source commit and whether it is published, and what the bytes were checked against; the generator reads the files from the `agentic_os` wheel in `packaging/wheelhouse` and refuses the build if any file differs from the pin); the sha256 of the SBOM the notices came from and of the gate file; the
 licence files (name, size, sha256); per third-party component the name, version, declared licence, status, the files found and the
 byte offset and length of its section in `THIRD_PARTY_NOTICES.txt`; the five legal slots; `source_access.state`. It contains no
 path, host or user name, no wall-clock time (the commit time is used) and no hash of the artifact that carries it. Declared licences

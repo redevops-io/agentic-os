@@ -15,7 +15,10 @@ import json
 import sys
 from pathlib import Path
 
-FIRST_PARTY = {"agentic-os", "runtime-contracts", "knowledge-frontier", "redevops-connectors"}
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+from first_party import first_party_names  # noqa: E402  (packaging/tools/first_party.py: git-pins.json + agentic-os)
+
+FIRST_PARTY = set(first_party_names())
 HERE = Path(__file__).resolve().parent.parent
 
 

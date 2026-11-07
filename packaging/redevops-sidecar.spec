@@ -25,6 +25,13 @@ hidden = [h for h in hidden if h not in UNEXERCISED]
 # imports them (AST scan + frozen run: tests/test_sidecar_build_only_excludes.py), none of the three is in the shipped
 # wheel lock, and none has a licence text in the notices. Leaving them out changes no behaviour.
 BUILD_ONLY = ("setuptools", "pkg_resources", "_distutils_hack", "packaging")
+# `site` ([D-NEW-3]): agentic_os/trusted_import.py imports it inside try/except ImportError to add site.getsitepackages() and the user site to
+# the interpreter's trusted package directories. The import pulled `site`, `_sitebuiltins`, `pydoc`, `pydoc_data` and `rlcompleter` into
+# the archive (1008 -> 1424 names). CPython 3.11+ carries `site` as a built-in FROZEN module, so excluding it from the archive changes
+# nothing at run time (the frozen probe shows `site` loaded from the interpreter, origin "frozen", and the same verdicts with and without
+# the exclusion); on an interpreter without it, `import site` raises ImportError and trusted_import falls back to sysconfig alone.
+# (packaging/probes/trusted_import_probe.py, tests/test_frozen_trusted_import.py)
+SITE_NOT_FROZEN = ("site",)
 for opt in ("redevops_connectors", "duckdb"):
     try:
         hidden += collect_submodules(opt)
@@ -50,9 +57,26 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter", "matplotlib", "redevops_rag", "sentence_transformers", "torch", *UNEXERCISED, *BUILD_ONLY],
+    excludes=["tkinter", "matplotlib", "redevops_rag", "sentence_transformers", "torch", *UNEXERCISED, *BUILD_ONLY, *SITE_NOT_FROZEN],
     noarchive=False,
 )
+# [D-NEW-4] The interpreter's `_sysconfigdata__<platform>` holds the absolute path it is installed at; without this two builds with the
+# interpreter at different paths differ in that one module (and so in the pass-1 SBOM digest and the Licenses files). The prefix becomes a
+# fixed token in the module's source before the archive is written. See packaging/tools/normalise_sysconfigdata.py.
+import sys
+_here = globals().get("SPECPATH") or os.getcwd()
+_pk = next(d for d in (_here, os.path.dirname(_here), os.path.join(_here, "packaging"))
+           if os.path.isfile(os.path.join(d, "tools", "normalise_sysconfigdata.py")))
+sys.path.insert(0, os.path.join(_pk, "tools"))
+from normalise_sysconfigdata import normalise_pure
+try:
+    from PyInstaller.config import CONF as _CONF          # the module graph's code cache: PYZ uses it in preference to the source path
+    _code_cache = _CONF["code_cache"].get(id(a.pure))
+    assert _code_cache is not None, "PyInstaller keeps no code cache for Analysis.pure: update packaging/tools/normalise_sysconfigdata.py"
+except ImportError:                                       # the spec tests run it with PyInstaller stubbed
+    _code_cache = None
+a.pure[:] = normalise_pure(a.pure, os.path.join(_pk, "build", "normalised"),
+                           [sys.base_prefix, sys.prefix, sys.exec_prefix, sys.base_exec_prefix], code_cache=_code_cache)
 pyz = PYZ(a.pure)
 exe = EXE(
     pyz, a.scripts, a.binaries, a.datas, [],

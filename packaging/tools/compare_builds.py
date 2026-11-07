@@ -23,6 +23,9 @@ import json
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import first_party  # noqa: E402  (git-pins.json + agentic-os)
+
 
 def sha(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
@@ -130,7 +133,7 @@ def main() -> int:
         diff = sorted(k for k in wa if k in wb and wb[k] != wa[k])
         rep["wheelhouse"] = {"identical": same, "different": diff, "only_a": sorted(set(wa) - set(wb)), "only_b": sorted(set(wb) - set(wa))}
         P(f"## Wheelhouse\n\n{len(same)} of {len(wa)} wheels byte-identical; different: {', '.join(diff) or 'none'}; only in A: {sorted(set(wa) - set(wb)) or 'none'}; only in B: {sorted(set(wb) - set(wa)) or 'none'}.\n")
-        first = [k for k in wa if k.split('-')[0] in ("agentic_os", "runtime_contracts", "knowledge_frontier", "redevops_connectors")]
+        first = [k for k in wa if first_party.dist_of(k) in first_party.first_party_names()]
         P("First-party wheels (built from source with SOURCE_DATE_EPOCH): " + ", ".join(f"{k}: {'IDENTICAL' if wb.get(k) == wa[k] else 'DIFFERENT'}" for k in sorted(first)) + "\n")
 
     # --- sidecar ----------------------------------------------------------------------------

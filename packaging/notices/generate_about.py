@@ -35,6 +35,7 @@ import json
 import re
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -148,6 +149,117 @@ def ui_bundle(ui_dir: Path | None) -> dict:
     return {"id": ident, "files": files}
 
 
+# ----------------------------------------------------------------------------------------- the pinned Projects UI (D-NEW-2)
+# The bundle is NOT tracked in git on the converged trunk: scripts/fetch_projects_ui.py unpacks the artifact pinned in
+# packaging/projects_ui.lock.json into the WHEEL build tree. The bytes that ship are therefore the ones in the agentic_os wheel
+# (packaging/wheelhouse), not the checkout's agentic_os/projects_ui (which holds only hero.jpg). The record states the pin and the
+# bytes are compared with it here; any difference refuses the build. Standard library only and self-contained: the signing scripts
+# run a hash-verified private copy of this file next to check_about.py.
+UI_LOCK = ("packaging", "projects_ui.lock.json")
+UI_WHEEL_PREFIX = "agentic_os/projects_ui/"
+UI_MARKER = ".pinned-sha256"
+
+
+def load_ui_lock(root: Path) -> dict | None:
+    """The Projects UI pin, or None when there is no lock file or it pins nothing (the vendored-bundle case)."""
+    p = root.joinpath(*UI_LOCK)
+    if not p.is_file():
+        return None
+    lock = json.loads(p.read_text(encoding="utf-8"))
+    return lock if (lock.get("sha256") or "").strip() else None
+
+
+def ui_files_from_dir(d: Path) -> tuple[dict, str | None]:
+    """{path: (bytes, sha256)} of the bundle files (dot files excluded) and the content of the pin marker, or None."""
+    files, marker = {}, None
+    if d.is_dir():
+        for f in sorted(p for p in d.rglob("*") if p.is_file()):
+            rel = f.relative_to(d).as_posix()
+            if rel == UI_MARKER:
+                marker = f.read_text(encoding="utf-8").strip()
+            elif not any(part.startswith(".") for part in rel.split("/")):
+                files[rel] = (f.stat().st_size, sha256_file(f))
+    return files, marker
+
+
+def ui_files_from_wheel(whl: Path) -> tuple[dict, str | None]:
+    files, marker = {}, None
+    with zipfile.ZipFile(whl) as z:
+        for i in sorted(z.infolist(), key=lambda i: i.filename):
+            n = i.filename
+            if not n.startswith(UI_WHEEL_PREFIX) or n.endswith("/"):
+                continue
+            rel = n[len(UI_WHEEL_PREFIX):]
+            data = z.read(i)
+            if rel == UI_MARKER:
+                marker = data.decode("utf-8").strip()
+            elif not any(part.startswith(".") for part in rel.split("/")):
+                files[rel] = (len(data), hashlib.sha256(data).hexdigest())
+    return files, marker
+
+
+def find_agentic_os_wheel(root: Path) -> Path | None:
+    found = sorted(root.joinpath("packaging", "wheelhouse").glob("agentic_os-*.whl"))
+    if len(found) > 1:
+        raise ValueError("more than one agentic_os wheel in packaging/wheelhouse: " + ", ".join(p.name for p in found))
+    return found[0] if found else None
+
+
+def verify_ui_pin(lock: dict, files: dict, marker: str | None, root: Path) -> list[str]:
+    """Problems comparing the bundle that ships (files: {path: (bytes, sha256)}) with the pin; [] when they agree."""
+    want = lock.get("bundle_files")
+    if not isinstance(want, dict) or not want:
+        return ["packaging/projects_ui.lock.json pins an artifact but lists no bundle_files hashes"]
+    if not re.fullmatch(r"[0-9a-f]{40}", str(lock.get("source_commit") or "")):
+        return ["packaging/projects_ui.lock.json has no usable source_commit"]
+    problems = []
+    for rel in sorted(want):
+        if rel not in files:
+            problems.append(f"Projects UI bundle file {rel} is missing (the pin lists it)")
+        elif files[rel][1] != want[rel]:
+            problems.append(f"Projects UI bundle file {rel} does not match the pin: expected {want[rel]}, found {files[rel][1]}")
+    for rel in sorted(set(files) - set(want)):
+        problems.append(f"Projects UI bundle file {rel} is not in the pinned bundle")
+    if marker != lock["sha256"]:
+        problems.append("the Projects UI pin marker is not the pinned artifact sha256 "
+                        f"(expected {lock['sha256']}, found {marker if marker else 'none'}); the bundle did not come from the pinned artifact")
+    local = lock.get("local_path")
+    if local:
+        art = (root / local)
+        if art.is_file() and sha256_file(art) != lock["sha256"]:
+            problems.append(f"the pinned Projects UI artifact in the repository does not hash to the pin {lock['sha256']}")
+    return problems
+
+
+def ui_pin_record(lock: dict, how: str) -> dict:
+    return {"version": str(lock.get("version", "")), "artifact_sha256": lock["sha256"], "source_commit": lock["source_commit"],
+            "source_commit_published": bool(lock.get("source_commit_published")), "verified_against": how}
+
+
+def ui_bundle_for_record(root: Path, ui_dir: Path | None) -> dict:
+    """The record's ui_bundle. Pinned: read from --ui-dir, else the agentic_os wheel of the wheelhouse, else the checkout directory;
+    verified against the pin; ValueError (-> exit 2) on any mismatch. Unpinned: the directory as before."""
+    lock = load_ui_lock(root)
+    if lock is None:
+        return ui_bundle(ui_dir if ui_dir is not None else root / "agentic_os" / "projects_ui")
+    how = "directory"
+    if ui_dir is not None:
+        files, marker = ui_files_from_dir(ui_dir)
+    else:
+        whl = find_agentic_os_wheel(root)
+        if whl is not None:
+            files, marker = ui_files_from_wheel(whl)
+            how = "wheel"
+        else:
+            files, marker = ui_files_from_dir(root / "agentic_os" / "projects_ui")
+    problems = verify_ui_pin(lock, files, marker, root)
+    if problems:
+        raise ValueError("Projects UI bundle does not match packaging/projects_ui.lock.json: " + "; ".join(problems[:6]))
+    rows = [{"path": p, "bytes": files[p][0], "sha256": files[p][1]} for p in sorted(files)]
+    ident = next((Path(r["path"]).name for r in rows if re.fullmatch(r"assets/index-[A-Za-z0-9_-]+\.js", r["path"])), "none")
+    return {"id": ident, "files": rows, "pin": ui_pin_record(lock, how)}
+
+
 def pyproject_version(root: Path) -> str:
     m = re.search(r'^version\s*=\s*"([^"]+)"', (root / "pyproject.toml").read_text(encoding="utf-8"), re.M)
     if not m:
@@ -205,6 +317,11 @@ def build_record(*, notices_dir: Path, root: Path = ROOT, gate_path: Path | None
     except (OSError, KeyError, ValueError, TypeError) as e:
         raise Refused(2, [f"input problem: {e.__class__.__name__}: {str(e)[:200]}"])
 
+    try:
+        ui_rec = ui_bundle_for_record(root, ui_dir)
+    except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile) as e:
+        raise Refused(2, [f"input problem: {e.__class__.__name__}: {e}"])
+
     components = []
     for i, (r, (off, ln)) in enumerate(zip(records, offsets), 1):
         components.append({
@@ -226,7 +343,7 @@ def build_record(*, notices_dir: Path, root: Path = ROOT, gate_path: Path | None
         "build": {
             "mode": "distribution" if distribution else "private-candidate", "platform": platform,
             "source": {k: src[k] for k in ("commit", "tree", "dirty_files", "commit_time_utc", "describe")},
-            "ui_bundle": ui_bundle(ui_dir if ui_dir is not None else root / "agentic_os" / "projects_ui"),
+            "ui_bundle": ui_rec,
             "inputs": {"sbom_sha256": report["sbom_sha256"], "gate_file_sha256": gate_hash}},
         "licence_files": licence_files,
         "notices": {"file": NOTICES_FILE, "bytes": len(notices_raw), "sha256": hashlib.sha256(notices_raw).hexdigest(),

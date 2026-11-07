@@ -22,7 +22,8 @@ uv pip install --python "$PY" --require-hashes --no-deps -r "$PK/locks/pip.lock"
 mkdir -p "$TMP/win"
 "$PY" -m pip download -q --platform win_amd64 --python-version 3.12 --implementation cp --abi cp312 --only-binary=:all: --require-hashes --no-deps \
     -r "$PK/locks/requirements-windows.lock" -d "$TMP/win" 2>"$OUT/win-download.err" || echo "(windows wheel download failed: see $OUT/win-download.err)"
-cp "$PK"/wheelhouse/agentic_os-*.whl "$PK"/wheelhouse/runtime_contracts-*.whl "$PK"/wheelhouse/knowledge_frontier-*.whl "$PK"/wheelhouse/redevops_connectors-*.whl "$TMP/win/"
+# the first-party wheels: the set git-pins.json defines (+ agentic-os), not a hand-written list (D-NEW-1)
+for w in $("$PY" -I "$PK/tools/first_party.py" wheels --wheelhouse "$PK/wheelhouse" --lock "$PK/locks/requirements-macos.lock" | tr -d '\r'); do cp "$PK/wheelhouse/$w" "$TMP/win/"; done
 TOOLS="$HERE/testdata/build-tools-inventory-macos.json"
 run() { # name expected(0|1) args...
   local name="$1" want="$2"; shift 2

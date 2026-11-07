@@ -144,6 +144,29 @@ def wheelhouse_info(wh: Path) -> list[dict]:
     return rows
 
 
+def projects_ui_info(root: Path, wh: Path) -> dict | None:
+    """The pinned Projects UI as it is PACKED: the bundle files of the agentic_os wheel in `wh`, compared with
+    packaging/projects_ui.lock.json (the same verification generate_about.py applies to the About record). None when nothing is pinned
+    or the wheelhouse holds no agentic_os wheel; ValueError when the bytes differ from the pin."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_about_gen", Path(__file__).resolve().parent.parent / "notices" / "generate_about.py")
+    gen = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gen)
+    lock = gen.load_ui_lock(root)
+    wheels = sorted(wh.glob("agentic_os-*.whl"))
+    if lock is None or not wheels:
+        return None
+    if len(wheels) > 1:
+        raise ValueError("more than one agentic_os wheel in " + str(wh))
+    files, marker = gen.ui_files_from_wheel(wheels[0])
+    problems = gen.verify_ui_pin(lock, files, marker, root)
+    if problems:
+        raise ValueError("Projects UI bundle in " + wheels[0].name + " does not match packaging/projects_ui.lock.json: " + "; ".join(problems[:6]))
+    return {**gen.ui_pin_record(lock, "wheel"), "wheel": wheels[0].name,
+            "lock_sha256": sha256_file(root / "packaging" / "projects_ui.lock.json"),
+            "bundle_files": {p: files[p][1] for p in sorted(files)}}
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--root", required=True)
@@ -175,6 +198,13 @@ def main(argv: list[str] | None = None) -> int:
                    "note": "The image NAME is pinned in the workflow; the image VERSION (ImageVersion) is not controllable and is recorded here."}
     if a.wheelhouse:
         m["wheelhouse"] = wheelhouse_info(Path(a.wheelhouse))
+        try:
+            ui = projects_ui_info(root, Path(a.wheelhouse))
+        except (OSError, ValueError, KeyError) as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 1
+        if ui is not None:
+            m["projects_ui"] = ui
     if a.git_wheels and Path(a.git_wheels).exists():
         m["first_party_git_wheels"] = json.loads(Path(a.git_wheels).read_text(encoding="utf-8"))["git_wheels"]
     arts = m.setdefault("artifacts", {})

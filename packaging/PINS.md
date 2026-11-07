@@ -170,3 +170,11 @@ when a server that mounts the drill-down router (`agentic_os/drilldown`, not yet
 differs from the base by one line (the package `license` field); no dependency was added.
 Tests:
 `tests/test_projects_ui_pin.py` (12), `tests/test_fetch_projects_ui.py`, `tests/test_ui_bundle_source_record.py`.
+
+## Build fixes after the 0.6.0-rc1 native qualification
+
+* **The first-party wheel list has one source.** `packaging/git-pins.json` (plus `agentic-os`, built from the checkout) defines it; `packaging/tools/first_party.py` derives it. `build-wheelhouse.sh`, `build-sidecar.sh` and `build-notices.sh` call `first_party_wheels` (`common.sh`) instead of a hand-written glob, and the SBOM, source-offer, source-refs and build-comparison tools read the same set. A pin without a wheel, a wheel without a pin or a missing locked wheel stops the build with the package named. (rc1 listed four names while the pins built five, so `pip check` failed in step 4.) Test: `tests/test_first_party_wheels.py`.
+* **The About record and the build manifest record the pinned Projects UI.** `generate_about.py` reads the files from the `agentic_os` wheel in `packaging/wheelhouse` (the bytes that ship), compares each with `packaging/projects_ui.lock.json` and fails the build on any difference; `ui_bundle.pin` carries the version, artifact sha256, source commit and the published flag, and `build-manifest.json` has the same under `projects_ui`. Test: `tests/test_about_ui_pin.py`.
+* **`site` stays out of the frozen sidecar.** The spec excludes it (`SITE_NOT_FROZEN`); `trusted_import` imports it under `try/except ImportError`. `packaging/probes/` freezes a probe with the sidecar's own spec to show `trusted_import` refusing planted packages inside the PyInstaller runtime. Tests: `tests/test_trusted_import_frozen_safe.py`, opt-in `tests/test_frozen_trusted_import.py`.
+* **The sidecar does not depend on where the build interpreter is installed.** `packaging/tools/normalise_sysconfigdata.py` (called from the spec) replaces the interpreter prefix inside `_sysconfigdata__<platform>`. Test: `tests/test_sidecar_sysconfigdata_normalised.py`.
+* **A bad `PROJECTS_DRILLDOWN_*` configuration prints one line.** `agentic_os/projects_entry.py` is the entry of `serve` and `agentic-os-projects`. Test: `tests/test_projects_entry_refusal.py`.

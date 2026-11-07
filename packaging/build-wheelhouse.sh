@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Task 1 — the reproducible wheelhouse: every shipped Python component as a wheel, from PINNED inputs.
 #
-#   third-party (21)  pip download --only-binary --require-hashes -r locks/requirements-<os>.lock
-#   first-party (4)   built from CLEAN, verified clones of the pinned tags (runtime-contracts,
-#                     knowledge-frontier, redevops-connectors: packaging/git-pins.json) and from the
-#                     tracked files of this checkout (agentic-os), with backends installed from
+#   third-party       pip download --only-binary --require-hashes -r locks/requirements-<os>.lock (21 wheels)
+#   first-party       built from CLEAN, verified clones of the pinned tags (every entry of
+#                     packaging/git-pins.json) and from the tracked files of this checkout (agentic-os),
+#                     with backends installed from
 #                     locks/build-backends-<os>.lock and `--no-build-isolation`
 #
 # No unpinned build input remains: the interpreter must be exactly CPython $PYTHON_VERSION, pip/
@@ -49,7 +49,7 @@ uv venv --python "$PYTHON_VERSION" "$TMP/verify" >/dev/null
 VPY="$(venv_py "$TMP/verify")"
 uv pip install --python "$VPY" --no-index --find-links "$WH" --require-hashes --no-deps \
     -r "$LOCKS/requirements-$OS.lock" >/dev/null
-FIRST="$(ls "$WH"/agentic_os-*.whl "$WH"/runtime_contracts-*.whl "$WH"/knowledge_frontier-*.whl "$WH"/redevops_connectors-*.whl)"
+first_party_wheels "$BPY" "$WH"
 # shellcheck disable=SC2086
 uv pip install --python "$VPY" --no-index --find-links "$WH" --no-deps $FIRST >/dev/null
 uv pip check --python "$VPY"
@@ -73,5 +73,5 @@ cp "$TMP/git-wheels.json" "$WH/first-party-wheels.json"
 "$BPY" -I "$PK/tools/build_manifest.py" --root "$ROOT" --out "$PK/dist/build-manifest.json" --stage wheelhouse --record-python \
     --wheelhouse "$WH" --git-wheels "$TMP/git-wheels.json" --cmd 'uv="uv --version"' --duration "wheelhouse=$(( $(now) - T0 ))"
 echo
-echo "wheelhouse: $(ls "$WH"/*.whl | wc -l | tr -d ' ') wheels in $WH   (expected 25 = 21 third-party + 4 first-party)"
+echo "wheelhouse: $("$BPY" -I "$PK/tools/first_party.py" summary --wheelhouse "$WH" --lock "$LOCKS/requirements-$OS.lock" | strip_cr) in $WH   (first-party set: packaging/git-pins.json + agentic-os)"
 echo "OK — the suite installs fully offline from hash-checked wheels; git+https is gone from the end-user path."

@@ -7,7 +7,7 @@
 # Pinned: CPython $PYTHON_VERSION (exact), pip $PIP_VERSION, PyInstaller $PYINSTALLER_VERSION and its
 # dependencies (setuptools, packaging, altgraph, macholib | pefile, pyinstaller-hooks-contrib) from
 # locks/build-tools-<os>.lock with --require-hashes; the shipped wheels from locks/requirements-<os>.lock
-# with --require-hashes (+ the four first-party wheels from the wheelhouse, verified by hash against the
+# with --require-hashes (+ the first-party wheels from the wheelhouse, verified by hash against the
 # wheelhouse manifest written by build-wheelhouse.sh).
 #
 # Output: packaging/dist/redevops-sidecar (Linux/macOS) or redevops-sidecar.exe (Windows),
@@ -37,7 +37,7 @@ PY
 
 echo "== install the shipped set OFFLINE: third-party by hash, first-party from the wheelhouse =="
 "$FPY" -m pip install --quiet --no-index --find-links "$WH" --require-hashes --no-deps -r "$LOCKS/requirements-$OS.lock"
-FIRST="$(ls "$WH"/agentic_os-*.whl "$WH"/runtime_contracts-*.whl "$WH"/knowledge_frontier-*.whl "$WH"/redevops_connectors-*.whl)"
+first_party_wheels "$FPY" "$WH"
 # shellcheck disable=SC2086
 "$FPY" -m pip install --quiet --no-index --find-links "$WH" --no-deps $FIRST
 "$FPY" -m pip check
