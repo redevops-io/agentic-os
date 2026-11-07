@@ -272,8 +272,9 @@ The `/missions` API is default-deny: every non-GET route AND every read except t
 token (optionally tenant-scoped via `AGENTIC_OS_TENANT_TOKENS`, optional distinct approvers via
 `AGENTIC_OS_APPROVER_TOKENS`; `AGENTIC_OS_GATE_READS=0` opts out of read gating, unsafe off loopback).
 Operator `POST /invoke` takes the same bearer credentials (admin or tenant; approver tokens are refused) and returns 503
-when none is configured; `AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS=1` opens it for local development only (ignored once any
-token is set). The runtime's HTTP operator client sends `AGENTIC_OS_CONTROL_TOKEN` automatically.
+when none is configured; `AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS=1` lets the credential-less caller reach read-only capabilities in local
+development only (ignored once any token is set, never honoured in production; a side-effecting call still needs an authenticated identity,
+current authority and any required approval, or an explicit named test policy). The runtime's HTTP operator client sends `AGENTIC_OS_CONTROL_TOKEN` automatically.
 The Projects API is same-origin by default (`PROJECTS_CORS_ORIGINS` opts in). See
 [docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md#control-plane-auth-idempotency-cache-and-multi-replica-limits).
 
