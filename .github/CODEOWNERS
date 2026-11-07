@@ -1,0 +1,12 @@
+# Review ownership for this repository.
+#
+# Entries name GitHub identities that were verified against the organisation at the time of writing
+# (`gh api orgs/redevops-io/members`), because GitHub silently ignores a CODEOWNERS entry for anyone
+# who is not a collaborator on the repository - an unverified name here would look like coverage and
+# provide none. No teams are listed because the organisation has none. Add a path rule when a second
+# reviewer exists and has been verified the same way; do not add a name to fill the file out.
+#
+# Requesting review is a separate step from branch protection, which is configured in repository
+# settings rather than in this file.
+
+* @arybach

@@ -1,0 +1,11 @@
+# Issue-form configuration. `contact_links` are the only place a form can point someone away from
+# opening a public issue; the URL below is the file in this repository that defines the private
+# channel, so the routing and the policy stay in one place rather than being duplicated here.
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security issue privately
+    url: https://github.com/redevops-io/agentic-os/blob/main/SECURITY.md
+    about: Do not open a public issue for anything that could be exploited. SECURITY.md gives the contact and what to include.
+  - name: Contribution and testing conventions
+    url: https://github.com/redevops-io/agentic-os/blob/main/CONTRIBUTING.md
+    about: How to install, run the suite, and label evidence before proposing a change.
