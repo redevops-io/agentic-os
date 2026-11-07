@@ -167,9 +167,9 @@ cosign attest --key azurekms://<vault>.vault.azure.net/<key> --signing-config si
 * Consumers verify with the published public key:
 
 ```bash
-cosign verify --key cosign.pub --insecure-ignore-tlog ghcr.io/redevops-io/<name>@sha256:<index digest>
-cosign verify-attestation --key cosign.pub --type cyclonedx       --insecure-ignore-tlog <name>@sha256:<arch digest>
-cosign verify-attestation --key cosign.pub --type slsaprovenance1 --insecure-ignore-tlog <name>@sha256:<arch digest>
+cosign verify --key cosign.pub --insecure-ignore-tlog "ghcr.io/redevops-io/<name>@sha256:<index digest>"
+cosign verify-attestation --key cosign.pub --type cyclonedx       --insecure-ignore-tlog "<name>@sha256:<arch digest>"
+cosign verify-attestation --key cosign.pub --type slsaprovenance1 --insecure-ignore-tlog "<name>@sha256:<arch digest>"
 ```
 
   (`--insecure-ignore-tlog` is correct here only because no transparency-log entry was made; say so in the
