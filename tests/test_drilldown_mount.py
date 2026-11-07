@@ -521,3 +521,52 @@ def test_create_app_reads_the_environment_when_no_config_is_injected(tmp_path, m
     c2 = TestClient(create_app(SampleProjectionProvider(), capability=cap2), base_url=BASE_URL)
     _login(c2, cap2)
     assert c2.get("/api/ui-config").json()["data_source"] == "sample"
+
+
+# ───────────────────────── found by mutation ─────────────────────────
+def test_the_gate_removes_an_inbound_session_key_even_on_a_public_path():
+    """The key is only ever the gate's own. On a path the gate lets through unauthenticated (the static UI) the application must still not
+    see a value that arrived with the request."""
+    import asyncio
+    from agentic_os.local_capability import SESSION_SCOPE_KEY, LocalCapabilityMiddleware
+    cap = LocalCapability(port=PORT)
+    _tok, sess = cap.new_session("127.0.0.1:8787")
+    seen = {}
+
+    async def probe(scope, receive, send):
+        seen["scope"] = scope
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    async def run():
+        mw = LocalCapabilityMiddleware(probe, cap, public_paths=("/pub",))
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(m):
+            pass
+        scope = {"type": "http", "method": "GET", "path": "/pub", "raw_path": b"/pub", "query_string": b"", "headers": [(b"host", b"127.0.0.1:8787")],
+                 "scheme": "http", "http_version": "1.1", "server": ("127.0.0.1", PORT), "client": ("127.0.0.1", 1), "root_path": "", SESSION_SCOPE_KEY: sess}
+        await mw(scope, receive, send)
+    asyncio.run(run())
+    assert SESSION_SCOPE_KEY not in seen["scope"]
+
+
+def test_when_a_bridge_is_installed_a_bearer_credential_is_not_a_second_way_in(tmp_path, monkeypatch):
+    """Router level: with BOTH a Bearer authenticator and a principal source given, the source decides alone."""
+    from fastapi import FastAPI
+    from agentic_os.drilldown.api import build_router
+    from agentic_os.evidence_query import SingleOwnerTokenAuthenticator
+    from agentic_os.drilldown.mount import _service_of
+    w = world(tmp_path, monkeypatch)
+    tok = "owner-token-0123456789-abcdefghij"
+    w.grants.add("user", "owner", "tool", f"evidence.{SCOPE}.inspect", actions=["read"], created_by="t")
+    app = FastAPI()
+    app.include_router(build_router(_service_of(w.cfg), SingleOwnerTokenAuthenticator(tok, "owner"), principal_source=LocalSessionBridge(w.cap)))
+    c = TestClient(app)
+    assert c.get(w.base + "/timeline", headers={"Authorization": f"Bearer {tok}"}).status_code == 401
+    assert build_router(_service_of(w.cfg), SingleOwnerTokenAuthenticator(tok, "owner"))                      # and the Bearer-only router still exists
+    hosted_only = FastAPI()
+    hosted_only.include_router(build_router(_service_of(w.cfg), SingleOwnerTokenAuthenticator(tok, "owner")))
+    assert TestClient(hosted_only).get(w.base + "/timeline", headers={"Authorization": f"Bearer {tok}"}).status_code == 200
