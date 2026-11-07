@@ -149,12 +149,27 @@ def test_the_bundle_takes_its_data_source_from_the_running_server_not_a_build_fl
     assert "VITE_PROJECTS_SAMPLE_DATA" not in js and "SAMPLE_DATA" not in js
 
 
+def test_the_bundle_flags_uncertain_stale_and_incomplete_compensation_in_plain_words():
+    """The mission views flag what the log says is uncertain, late or not cleanly undone, and never call a residual a clean rollback."""
+    js = next(v for k, v in _members().items() if k.endswith(".js")).decode("utf-8")
+    for s in ("Outcome unknown: the effect may or may not exist.", "A late result from an earlier attempt was recorded; a duplicate effect is possible.",
+              "Compensation was denied; the effect remains.", "this is not a clean rollback.", "Waiting for an operator to reconcile an uncertain step",
+              "Compensated (undone)", "State as recorded", "Needs attention: uncertain, late or incomplete steps", "Verifier kind as recorded:",
+              "the application did not enforce it as read-only", "recorded as enforced read-only by the server"):
+        assert s in js, s
+    assert "application-enforced" not in js and "rolled back cleanly" not in js
+
+
 def test_the_pin_chain_keeps_the_replaced_artifacts_and_ends_at_the_public_release():
     prev = LOCK["previous_pin"]
-    assert prev["version"] == "local+2f24719e" and prev["source_commit_published"] is False
+    assert prev["version"] == "local+312a811a" and prev["source_commit_published"] is False
     old = ROOT / prev["local_path"]
     assert old.is_file() and hashlib.sha256(old.read_bytes()).hexdigest() == prev["sha256"]          # going back is a lock edit
-    mid = prev["previous_pin"]
+    chip = prev["previous_pin"]
+    assert chip["version"] == "local+2f24719e" and chip["source_commit_published"] is False
+    chip_file = ROOT / chip["local_path"]
+    assert chip_file.is_file() and hashlib.sha256(chip_file.read_bytes()).hexdigest() == chip["sha256"]
+    mid = chip["previous_pin"]
     assert mid["version"] == "local+ee958a01" and mid["source_commit_published"] is False
     mid_file = ROOT / mid["local_path"]
     assert mid_file.is_file() and hashlib.sha256(mid_file.read_bytes()).hexdigest() == mid["sha256"]
