@@ -2382,6 +2382,11 @@ class MissionRuntime:
         manufacturing an unrecorded one — one keeps a narrow permission alive,
         the other invents a broad one.
         """
+        check = getattr(self.store, "check_integrity", None)
+        if check is not None:                              # a log cut off at the end, or rewritten behind its anchor, is not replayed
+            rep = check(mission_id)
+            if not rep.ok:
+                raise ReplayError(f"{mission_id}: the event log failed its integrity check ({rep.status}): {rep.reason}")
         goal = self.repo.goal(mission_id)
         created = next(e for e in self.store.for_mission(mission_id) if e.type == "MissionCreated")
         recorded = created.payload.get("policy_refs")

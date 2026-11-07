@@ -40,7 +40,8 @@ def test_deleting_or_reordering_an_event_is_detected(tmp_path):
     lines = path.read_text().splitlines()
     del lines[2]                                                          # drop NodeDispatched
     path.write_text("\n".join(lines) + "\n")
-    rep = EventStore(str(path)).verify()
+    assert EventStore(str(path), strict=False).integrity.status == "truncated"    # the anchor notices the shorter log too (tests/test_event_log_anchor.py)
+    rep = EventStore(str(path), anchor=False).verify()
     assert not rep.ok and "missing" in rep.reason
 
 

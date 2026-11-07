@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol, runtime_checkable
 
 from .._platform import files as _files, locks as _locks
+from .integrity import (AnchorFile, GENESIS, IntegrityError, IntegrityReport, LogIntegrityError, anchor_key_from_env, chain_step)
 from .types import (
     Mission, MissionState, ExecutionPlan, ExecutionGraph, Node, NodeState,
     Belief, HumanTask, now, new_id, to_jsonable,
@@ -113,7 +114,14 @@ class EventStore:
     """Append-only log. In-memory list, optionally persisted to a JSONL file and reloaded on
     startup so a restart can rebuild every mission's state (the durability guarantee)."""
 
-    def __init__(self, path: str | None = None):
+    def __init__(self, path: str | None = None, *, anchor: bool = True, anchor_path: str | None = None,
+                 anchor_key: "bytes | None" = None, strict: bool = True):
+        """``anchor``: keep a tail anchor next to the log (``<path>.anchor``, or ``anchor_path``): after every append the record
+        count, last sequence and running head hash are replaced atomically, so records cut off the END of the log are detected when
+        it is opened (see mission/integrity.py for what that does and does not protect against). ``anchor_key`` (default
+        ``$AGENTIC_OS_ANCHOR_KEY``, optional) adds an HMAC. ``strict``: opening a log that disagrees with its anchor raises
+        ``LogIntegrityError``; non-strict opens it for inspection, refuses every append, and ``reanchor()`` is the explicit way to
+        accept it as it is."""
         self._events: list[Event] = []
         self._seq = 0
         self._lock = threading.Lock()
@@ -121,9 +129,26 @@ class EventStore:
         self._path = path
         self._heads: dict[str, str] = {}     # mission_id -> hash of its last event (the chain head)
         self._offset = 0            # bytes of the JSONL already folded into memory
+        self._log_heads: list[str] = []      # running head after each event (index i = after i+1 events)
+        self._anchor = (AnchorFile(anchor_path or path + ".anchor", anchor_key if anchor_key is not None else anchor_key_from_env())
+                        if (path and anchor) else None)
+        self._anchor_warned = False
+        self.integrity = IntegrityReport(True, "unanchored", "no anchor configured" if self._anchor is None else "")
+        rec, bad = None, None
+        if self._anchor is not None:
+            # The anchor is read BEFORE the log: another process appends the event first and moves the anchor second, so an anchor read
+            # first can never be ahead of a log read afterwards (read in the other order, a concurrent append looks like truncation).
+            try:
+                rec = self._anchor.read()
+            except IntegrityError as e:
+                bad = e
         if path and os.path.exists(path):
             with self._lock:
                 self._read_tail()
+        if self._anchor is not None:
+            self.integrity = self._check_anchor(rec, bad)
+            if not self.integrity.ok and strict:
+                raise LogIntegrityError(f"{path}: {self.integrity.reason}")
 
     def _read_tail(self) -> int:
         """Fold records written past ``_offset`` (by any process) into memory. A final line without a newline is
@@ -150,14 +175,95 @@ class EventStore:
             if not line:
                 continue
             d = json.loads(line.decode("utf-8"))
-            self._events.append(Event(type=d["type"], mission_id=d["mission_id"], payload=d["payload"],
-                                      seq=d["seq"], ts=d["ts"], prev=d.get("prev", ""), hash=d.get("hash", "")))
+            ev = Event(type=d["type"], mission_id=d["mission_id"], payload=d["payload"],
+                       seq=d["seq"], ts=d["ts"], prev=d.get("prev", ""), hash=d.get("hash", ""))
+            self._events.append(ev)
+            self._extend_head(ev)
             if d.get("hash"):
                 self._heads[d["mission_id"]] = d["hash"]
             self._seq = max(self._seq, d["seq"])
             added += 1
         self._offset += consumed
         return added
+
+    def _extend_head(self, ev: "Event") -> None:
+        """Fold one event into the running head over the whole log (its chain hash, or a hash of its content if it predates chaining)."""
+        h = ev.hash or entry_hash("", ev.seq, ev.ts, ev.type, ev.mission_id, ev.payload)
+        self._log_heads.append(chain_step(self._log_heads[-1] if self._log_heads else GENESIS, h))
+
+    def log_head(self) -> str:
+        """Running head over every event in the log, in order (what the anchor records). Caller need not hold the lock."""
+        with self._lock:
+            return self._log_heads[-1] if self._log_heads else GENESIS
+
+    def _check_anchor(self, rec: "dict | None", bad: "IntegrityError | None" = None) -> IntegrityReport:
+        """Compare the in-memory log with an anchor record that was read BEFORE the log was (see ``__init__``)."""
+        n = len(self._events)
+        if bad is not None:
+            return IntegrityReport(False, "invalid", str(bad), n, 0)
+        if rec is None:
+            return IntegrityReport(True, "unanchored", "no anchor yet: the first append creates one", n, 0)
+        k = rec["count"]
+        if n < k:
+            return IntegrityReport(False, "truncated", f"the log was truncated: it has {n} record(s) but its anchor vouches for {k} "
+                                                      f"({k - n} cut off the end)", n, k)
+        head = self._log_heads[k - 1] if k else GENESIS
+        if head != rec["head"]:
+            return IntegrityReport(False, "mismatch", f"the first {k} record(s) of the log do not hash to the anchored head: "
+                                                     "the log was rewritten behind its anchor", n, k)
+        if n > k:
+            return IntegrityReport(True, "lagging", f"the log is {n - k} record(s) ahead of its anchor (refreshed by the next append)", n, k)
+        return IntegrityReport(True, "ok", "", n, k)
+
+    def check_integrity(self, mission_id: str | None = None) -> IntegrityReport:
+        """The anchor check against the log as it is NOW, plus the hash chain (one mission's, or all). Used before a mission is
+        rebuilt from the log; ``ok`` is False if either fails."""
+        rec, bad = None, None
+        if self._anchor is not None:
+            try:
+                rec = self._anchor.read()                  # before the log is read: see __init__
+            except IntegrityError as e:
+                bad = e
+        with self._lock:
+            self._read_tail()
+            if self._anchor is not None:
+                rep = self._check_anchor(rec, bad)
+                if not rep.ok:
+                    return rep
+            else:
+                rep = IntegrityReport(True, "unanchored", "no anchor configured", len(self._events), 0)
+            events = [e for e in self._events if mission_id is None or e.mission_id == mission_id]
+            chain = verify_chain(events)
+        if not chain.ok:
+            return IntegrityReport(False, "chain", f"{chain.reason} (seq {chain.first_bad_seq})", rep.count, rep.anchored)
+        return rep
+
+    def _write_anchor(self) -> None:
+        """Replace the anchor with the log's current extent. Called after the event is durable, under the log's lock."""
+        n = len(self._events)
+        rec = {"count": n, "last_seq": self._events[-1].seq if n else 0, "head": self._log_heads[-1] if n else GENESIS}
+        try:
+            self._anchor.write(rec, fsync=_fsync_enabled())
+        except OSError as e:                      # the log is already durable; a read-only anchor location must not lose the event
+            if not self._anchor_warned:
+                self._anchor_warned = True
+                import logging  # noqa: PLC0415
+                logging.getLogger(__name__).warning("event log anchor %s could not be written (%s): tail truncation of %s is not detectable",
+                                                    self._anchor.path, e, self._path)
+            return
+        self.integrity = IntegrityReport(True, "ok", "", n, n)
+
+    def reanchor(self) -> None:
+        """Accept the log as it is and write a fresh anchor for it. An explicit operator decision (for example after investigating
+        a truncation); it is how a store opened with ``strict=False`` becomes writable again. Records nothing in the log."""
+        if self._anchor is None:
+            raise IntegrityError("this store has no anchor")
+        with self._lock:
+            self._read_tail()
+            n = len(self._events)
+            self._anchor.write({"count": n, "last_seq": self._events[-1].seq if n else 0,
+                                "head": self._log_heads[-1] if n else GENESIS}, fsync=_fsync_enabled())
+            self.integrity = IntegrityReport(True, "ok", "", n, n)
 
     def _load(self) -> None:
         with self._lock:
@@ -171,6 +277,8 @@ class EventStore:
 
     def append(self, type: str, mission_id: str, payload: dict[str, Any]) -> Event:
         with self._lock:
+            if not self.integrity.ok:
+                raise LogIntegrityError(f"{self._path}: {self.integrity.reason}; nothing was written (reanchor() accepts the log as it is)")
             if self._path:
                 # The exclusive inter-process lock is taken on the log file itself (no sidecar file), so
                 # read-only parent directories and single-file bind mounts work.
@@ -197,6 +305,9 @@ class EventStore:
                     self._seq = ev.seq
                     self._heads[mission_id] = ev.hash
                     self._events.append(ev)
+                    self._extend_head(ev)
+                    if self._anchor is not None:
+                        self._write_anchor()               # after the event is durable, inside the cross-process lock
             else:
                 self._seq += 1
                 ev = Event(type=type, mission_id=mission_id, payload=to_jsonable(payload), seq=self._seq)
@@ -204,6 +315,7 @@ class EventStore:
                 ev.hash = entry_hash(ev.prev, ev.seq, ev.ts, ev.type, ev.mission_id, ev.payload)
                 self._heads[mission_id] = ev.hash
                 self._events.append(ev)
+                self._extend_head(ev)
         for cb in list(self._subscribers):
             try:
                 cb(ev)
@@ -261,6 +373,14 @@ class MemoryEventStore:
     def verify(self) -> ChainReport:
         with self._lock:
             return verify_chain(list(self._events))
+
+    def check_integrity(self, mission_id: str | None = None) -> IntegrityReport:
+        """The hash chain (nothing durable to anchor in memory)."""
+        with self._lock:
+            chain = verify_chain([e for e in self._events if mission_id is None or e.mission_id == mission_id])
+            n = len(self._events)
+        return IntegrityReport(True, "unanchored", "in-memory store: no anchor", n, 0) if chain.ok else \
+            IntegrityReport(False, "chain", f"{chain.reason} (seq {chain.first_bad_seq})", n, 0)
 
     def append(self, type: str, mission_id: str, payload: dict[str, Any]) -> Event:
         with self._lock:
