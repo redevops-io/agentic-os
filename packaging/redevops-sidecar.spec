@@ -60,6 +60,17 @@ a = Analysis(
     excludes=["tkinter", "matplotlib", "redevops_rag", "sentence_transformers", "torch", *UNEXERCISED, *BUILD_ONLY, *SITE_NOT_FROZEN],
     noarchive=False,
 )
+# [D-NEW-4] The interpreter's `_sysconfigdata__<platform>` holds the absolute path it is installed at; without this two builds with the
+# interpreter at different paths differ in that one module (and so in the pass-1 SBOM digest and the Licenses files). The prefix becomes a
+# fixed token in the module's source before the archive is written. See packaging/tools/normalise_sysconfigdata.py.
+import sys
+_here = globals().get("SPECPATH") or os.getcwd()
+_pk = next(d for d in (_here, os.path.dirname(_here), os.path.join(_here, "packaging"))
+           if os.path.isfile(os.path.join(d, "tools", "normalise_sysconfigdata.py")))
+sys.path.insert(0, os.path.join(_pk, "tools"))
+from normalise_sysconfigdata import normalise_pure
+a.pure[:] = normalise_pure(a.pure, os.path.join(_pk, "build", "normalised"),
+                           [sys.base_prefix, sys.prefix, sys.exec_prefix, sys.base_exec_prefix])
 pyz = PYZ(a.pure)
 exe = EXE(
     pyz, a.scripts, a.binaries, a.datas, [],
