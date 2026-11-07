@@ -65,8 +65,8 @@ def transient(retry_after=None):
 
 
 def build(tmp_path, monkeypatch, *, probes=(), chain=True, mode="crash_before_effect", policy=POLICY, notifier=None, leases=None, jobs=None,
-          deep=False):
-    w, mid, rt = crash_then_restart(tmp_path, monkeypatch, mode=mode, chain=chain, deep=deep)
+          deep=False, idempotency=""):
+    w, mid, rt = crash_then_restart(tmp_path, monkeypatch, mode=mode, chain=chain, deep=deep, idempotency=idempotency)
     rt.run(mid)                                                   # parks (and runs anything independent of the unknown node)
     clock = Clock()
     jobs = jobs or ReconcileJobs(str(tmp_path / "jobs.db"))

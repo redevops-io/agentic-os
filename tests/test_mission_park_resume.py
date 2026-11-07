@@ -60,13 +60,16 @@ class Plan:
         return ExecutionIntent(mission_id=mission_id, steps=steps)
 
 
-def registry():
+def registry(idempotency: str = ""):
+    """`idempotency` is what the four forward capabilities DECLARE about a repeated request ("" = nothing declared, which the runtime treats as
+    unsafe to repeat automatically; "provider-enforced" = the provider itself rejects a second identical request)."""
+    kw = {"idempotency": idempotency} if idempotency else {}
     reg = CapabilityRegistry()
     reg.register(CapabilityManifest("op", [
-        CapabilitySpec("op.first", "op", provides=["done1"], side_effecting=True, undo="op.undo"),
-        CapabilitySpec("op.second", "op", provides=["done2"], side_effecting=True, undo="op.undo"),
-        CapabilitySpec("op.third", "op", provides=["done3"], side_effecting=True, undo="op.undo"),
-        CapabilitySpec("op.fourth", "op", provides=["done4"], side_effecting=True, undo="op.undo"),
+        CapabilitySpec("op.first", "op", provides=["done1"], side_effecting=True, undo="op.undo", **kw),
+        CapabilitySpec("op.second", "op", provides=["done2"], side_effecting=True, undo="op.undo", **kw),
+        CapabilitySpec("op.third", "op", provides=["done3"], side_effecting=True, undo="op.undo", **kw),
+        CapabilitySpec("op.fourth", "op", provides=["done4"], side_effecting=True, undo="op.undo", **kw),
         CapabilitySpec("op.undo", "op", side_effecting=True)]))
     return reg
 
@@ -98,9 +101,10 @@ def handlers(p: Provider, mode: str):
 class World:
     """A durable process: the same event log and authority ledger across 'restarts'."""
 
-    def __init__(self, tmp, monkeypatch, provider=None, guard=True, chain=True, deep=False):
+    def __init__(self, tmp, monkeypatch, provider=None, guard=True, chain=True, deep=False, idempotency=""):
         monkeypatch.setenv("AGENTIC_OS_PROFILE", "test")
         self.tmp, self.provider, self.guard_on, self.chain, self.deep = tmp, provider or Provider(), guard, chain, deep
+        self.idempotency = idempotency
         self.log = str(tmp / "events.jsonl")
         self.db = str(tmp / "auth.db")
         if guard:
@@ -114,7 +118,7 @@ class World:
         if self.guard_on:
             kw = dict(authority=AuthorityGuard(SqliteEnvelopeStore(self.db), SqliteLedger(self.db + ".usage")),
                       authority_key=lambda m: "env")
-        return MissionRuntime(registry(), Executor(InMemoryOperatorClient(handlers(self.provider, mode))),
+        return MissionRuntime(registry(self.idempotency), Executor(InMemoryOperatorClient(handlers(self.provider, mode))),
                               store=EventStore(self.log), planner=Plan(self.chain, self.deep), **kw)
 
     def new_mission(self, rt):
@@ -128,8 +132,8 @@ class World:
         return rt
 
 
-def crash_then_restart(tmp, monkeypatch, *, guard=True, mode="crash_before_effect", chain=True, deep=False):
-    w = World(tmp, monkeypatch, guard=guard, chain=chain, deep=deep)
+def crash_then_restart(tmp, monkeypatch, *, guard=True, mode="crash_before_effect", chain=True, deep=False, idempotency=""):
+    w = World(tmp, monkeypatch, guard=guard, chain=chain, deep=deep, idempotency=idempotency)
     rt = w.boot(mode)
     m = w.new_mission(rt)
     with pytest.raises(Crash):
