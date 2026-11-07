@@ -109,6 +109,13 @@ def test_a_read_back_with_the_writers_credential_names_the_kind_exactly_as_recor
     assert "application-enforced" not in s and "read-only" not in s
 
 
+def test_plurals_follow_the_counts():
+    assert summary_of("AosddMissionHalted", {"capability": "c", "rule": "r", "effects_remaining": ["a", "b"]}).endswith("2 earlier effects remain")
+    assert summary_of("AosddMissionHalted", {"capability": "c", "rule": "r", "effects_remaining": []}) == "Mission halted: c, rule r"
+    assert summary_of("EffectsRetained", {"retained_effects": [1], "incomplete_steps": [1, 2]}) == "Effects retained: 1 retained, 2 steps incomplete"
+    assert summary_of("AosddGrantIssued", {"phase": "read", "grants": ["a"]}) == "Authority issued (read): 1 grant"
+
+
 def test_an_undo_with_no_residual_does_not_mention_residual_effects():
     p = dict(CASES["AosddUndoVerified"][0], residual=[])
     assert "residual" not in summary_of("AosddUndoVerified", p)
