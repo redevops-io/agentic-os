@@ -1000,6 +1000,11 @@ class ForkJoinController:
                 self._append_failed(m, st, bs, attempt, "admission_refused", ran=False)
                 started = True
                 continue
+            refused = rt._execution_refusal(m, node, self._inputs(m, by_id[bs.branch_id], node, bs))   # current authority, after any approval
+            if refused is not None:
+                self._append_failed(m, st, bs, attempt, "authority_denied", ran=False, error=refused.reason or "authority_denied")
+                started = True
+                continue
             if not self._acquire_slot(m, lim):
                 break
             submitted = False

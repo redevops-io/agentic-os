@@ -954,6 +954,44 @@ class MissionRuntime:
             return "authority_denied", None
         return self._local_authority(m, node, decision)
 
+    def _live_authority(self, m: Mission, node, inputs: dict):
+        """The authority decision for this action RIGHT NOW, with no counter touched: the owner's envelope when the mission has one
+        (revocation, expiry, delegation chain, scope), else the profile's fallback (production: none; otherwise an explicit test
+        policy for a side effect). Read at the moment it is needed; nothing here is remembered from the gate or from an approval."""
+        from .authority import Decision, Verdict  # noqa: PLC0415
+        guard = self.authority
+        if guard is not None and m.tenant:
+            key = self._authority_key(m)
+            if key:
+                res = guard.check(key, m.tenant, self._action_for(m, node, self._world(m.id), inputs))
+                if res.rule != "no_authority":
+                    return res
+        if self._production():
+            return Decision(Verdict.DENY, "no_authority", "no authority envelope covers this mission")
+        if not node.side_effecting:
+            return Decision(Verdict.ALLOW, "read_only", "no side effect to authorise")
+        tp = self._active_test_policy()
+        if tp is not None and tp.permits(node.capability):
+            return Decision(Verdict.ALLOW, "test_policy", f"allowed by test policy {tp.name}")
+        return Decision(Verdict.DENY, "no_authority",
+                        "no authority envelope covers this mission and no explicit test policy lists this capability")
+
+    def _execution_refusal(self, m: Mission, node, inputs: dict, *, phase: str = "dispatch"):
+        """None when this action is inside current authority; else the refusing Decision, already recorded with its reason.
+
+        Called immediately before each dispatch, AFTER the gate and any approval, on every execution path. A human approval is not
+        authority: it can satisfy an ESCALATE (a limit or tier the owner may extend: that is what asking a human is for) but never
+        a DENY (revoked, expired, forbidden, out of scope, no envelope)."""
+        from .authority import Verdict  # noqa: PLC0415
+        approved = self._approval_marker(m.id, node.id) is not None
+        res = self._live_authority(m, node, inputs)
+        if res.allowed or (res.verdict is Verdict.ESCALATE and approved):
+            return None
+        self.store.append("ExecutionAuthorityRefused", m.id, {
+            "node_id": node.id, "capability": node.capability, "phase": phase, "approved": approved,
+            "verdict": res.verdict.value, "rule": res.rule, "reason": res.reason, "envelope_digest": res.envelope_digest})
+        return res
+
     def _production(self) -> bool:
         from .profile import is_production  # noqa: PLC0415
         return is_production()
@@ -1340,6 +1378,10 @@ class MissionRuntime:
         if not self._pre_exec_ok(m, plan, node):
             return False
         inputs = self._resolve_inputs(m, world, node)
+        refused = self._execution_refusal(m, node, inputs)       # current authority, after any approval, at the moment of dispatch
+        if refused is not None:
+            self._block_authority(m, node, refused)
+            return False
         # The reservation is taken BEFORE the dispatch is recorded: a refused re-dispatch must not look like another attempt, or the
         # attempt count (restored from these events on restart) would drift and the next re-gate could miss the unresolved reservation.
         claims = self._lease_dispatched(m, node, inputs)
@@ -1486,6 +1528,10 @@ class MissionRuntime:
             if not self._pre_exec_ok(m, plan, node):     # admit (fail-closed) before any dispatch, like serial
                 return False
             inputs = self._resolve_inputs(m, world, node)
+            refused = self._execution_refusal(m, node, inputs)       # as in `_execute`: per node, just before its dispatch
+            if refused is not None:
+                self._block_authority(m, node, refused)
+                return False
             claims = self._lease_dispatched(m, node, inputs)         # before the event: see `_execute`
             if claims is None and self._lease_of(m, node.id) is not None:
                 return self._refuse_redispatch(m, plan, node)
