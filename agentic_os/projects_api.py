@@ -1540,7 +1540,7 @@ _MISSION_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: Optional[List[str]] = None,
                capability: Optional[Any] = None, base_path: str = "",
                app_directory: Optional[Any] = None, ceiling: Optional[Any] = None,
-               principal_resolver: Optional[Any] = None) -> FastAPI:
+               principal_resolver: Optional[Any] = None, drilldown: Optional[Any] = None) -> FastAPI:
     """Build the Projects app.
 
     ``capability`` (an :class:`agentic_os.local_capability.LocalCapability`) is the desktop/sidecar addition:
@@ -1551,7 +1551,13 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     builds it (hosted/library/test use: token gating and route authorization are unchanged); never run that on
     a desktop. ``allow_origins`` / ``$PROJECTS_CORS_ORIGINS`` is an explicit opt-in to CORS (no wildcard
     default; refused together with a capability). ``base_path`` is set by :func:`mounted_app`, which then
-    installs the gate on the outermost app itself."""
+    installs the gate on the outermost app itself.
+
+    ``drilldown`` (a :class:`agentic_os.drilldown.mount.DrilldownConfig`; default: built from the ``PROJECTS_DRILLDOWN_*`` environment,
+    which is unset unless an operator sets it) mounts the read-only mission drill-down routes ahead of the UI. Without it the routes do
+    not exist and ``GET /api/ui-config`` reports ``data_source: "sample"``. Behind the capability gate the caller is the local owner
+    (a gate-validated session, bridged to a principal that still needs the ``evidence.<project>.inspect`` grant); without the gate it
+    is a Bearer credential through ``control_auth``. See ``agentic_os/drilldown/mount.py``."""
     # a deployment sets $OUTCOME_STORE_PATH to persist the learning loop's outcomes across restarts
     import os as _os_env
     prov: ProjectionProvider = provider or select_provider(
@@ -2035,6 +2041,20 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
             return out
         except ValueError as e:     # an unknown kind / access_mode / indexing_policy / embedded NUL is the caller's mistake (422), not a server fault (UIA-05)
             raise HTTPException(status_code=422, detail=[{"loc": ["body", "sources"], "msg": str(e)[:200], "type": "value_error"}]) from None
+
+    # ── mission drill-down + the data-source report. Registered here, ahead of the UI's catch-all mount below. Read-only GET routes
+    # (no write route, so no entry in PROJECTS_ROUTE_POLICIES); absent entirely when no runtime-backed store is configured.
+    from .drilldown.mount import DrilldownMount, drilldown_from_env, sample_report
+    dd_cfg = drilldown if drilldown is not None else drilldown_from_env()
+    dd = DrilldownMount(dd_cfg, capability) if dd_cfg is not None else None
+    if dd is not None:
+        dd.install(app)
+
+    @app.get("/api/ui-config")
+    def _ui_config(request: Request) -> dict:
+        """Where this server's data comes from (aos.ui-config/v1). The UI takes its Sample chip and every sample-versus-recorded
+        decision from this, never from a build flag."""
+        return dd.report(request, prov) if dd is not None else sample_report(prov)
 
     # Governed Agent Gateway — let an EXTERNAL agent (Claude/ChatGPT/Cursor) reach a read-only,
     # governed slice of this deployment over MCP + REST. Opt-in: mounted only when
