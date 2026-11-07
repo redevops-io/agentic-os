@@ -652,3 +652,55 @@ def test_no_aosdd_override_of_the_rollback_claim_remains():
     from agentic_os.integrations.aosdd.runtime import AosddMissionRuntime
     for name in ("_guard_outcome", "_no_clean_rollback_claim", "_outcome_from_log", "_authority_gate", "_block_authority"):
         assert name not in AosddMissionRuntime.__dict__, name
+
+
+# ---- compensation has its own authority (base) -----------------------------------------------------------------------------------------
+def approve_without_compensation_scope(env, case):
+    r = env.runner()
+    mid = r.submit(case, REF, principal=REQ)
+    plan = r.plan(mid)
+    r.svc.emit("AosddPlanApproved", mid, approvals.mint(APPROVAL_SECRET, mid, plan, APP.id))
+    r.issue_write_grant(mid, plan, APP, with_compensation=False)           # the forward steps are granted; undoing them is NOT
+    r.rt.approve(mid, r.rt.repo.pending_human(mid)["node_id"], "approve", principal=APP)
+    return r, mid
+
+
+def test_compensation_without_its_own_scope_is_denied_and_the_effects_stay_on_the_record(env):
+    env.stack.fail("twenty", "POST", "/rest/tasks", 403, times=5, body={"statusCode": 403, "messages": ["This API Key is revoked"]})
+    r, mid = approve_without_compensation_scope(env, "DENY")
+    assert state(r, mid) is MissionState.COMPENSATION_FAILED
+    out = r.rt._missions[mid].outcome
+    assert out["compensation_state"] == "denied" and out["rolled_back"] is False and out["compensation_denied"]
+    assert len(env.stack.quotations) == 2 and len(env.stack.lago_metadata) == 1 and env.stack.count("erpnext", "DELETE") == 0       # nothing was undone
+    rec = reconstruct(env.events_path, mid)
+    assert [s["classification"] for s in rec["steps"][:2]] == [UNCERTAIN, UNCERTAIN]
+    # the explicit operator action is its own authority: a requester may not, an approver may, and each undo is verified
+    with pytest.raises(RunnerError, match="may not compensate"):
+        r.compensate(mid, "undo after a denied automatic rollback", principal=REQ)
+    assert len(env.stack.quotations) == 2
+    r.compensate(mid, "undo after a denied automatic rollback", principal=APP)
+    assert env.stack.quotations.keys() == {"SAL-QTN-2026-00001"} and env.stack.lago_metadata == []
+    rec = reconstruct(env.events_path, mid)
+    assert [s["classification"] for s in rec["steps"][:2]] == [COMPENSATED, COMPENSATED]
+    assert any(e.type == "CompensationOperatorRequested" and e.payload["principal"]["id"] == APP.id for e in r.svc.store.for_mission(mid))
+
+
+def test_an_uncommitted_effect_is_not_undone_without_compensation_authority_either(env):
+    env.stack.on_effect("erpnext", "POST", "/api/resource/Quotation", lambda st: [q for q in st.quotations.values() if q.get("title", "").startswith("AOSDD-")][0].update(grand_total=1.0))
+    r, mid = approve_without_compensation_scope(env, "DENY2")
+    assert state(r, mid) in (MissionState.FAILED, MissionState.COMPENSATION_FAILED)
+    assert len(env.stack.quotations) == 2                                              # the unverified draft is still there: no authority to delete it
+    assert [e for e in r.svc.store.for_mission(mid) if e.type == "CompensationDenied" and e.payload.get("uncommitted")]
+
+
+def test_partial_compensation_is_reported_as_partial_never_as_rolled_back(env):
+    """S2's undo refuses (foreign metadata appeared after our write: replace-whole-set would clobber it); S1's undo succeeds."""
+    env.stack.on_effect("lago", "PUT", "/api/v1/invoices", lambda st: st.lago_metadata.append({"lago_id": "foreign", "key": "other_system", "value": "keep me"}))
+    env.stack.fail("twenty", "POST", "/rest/tasks", 403, times=5, body={"statusCode": 403, "messages": ["This API Key is revoked"]})
+    r, mid = go(env, "PART")
+    out = r.rt._missions[mid].outcome
+    assert state(r, mid) is MissionState.COMPENSATION_FAILED and out["compensation_state"] == "partial" and out["rolled_back"] is False
+    assert env.stack.quotations.keys() == {"SAL-QTN-2026-00001"}                       # S1 undone ...
+    assert {m["key"] for m in env.stack.lago_metadata} == {"aosdd_recovery", "other_system"}   # ... S2 left alone: its undo refused and the foreign entry is untouched
+    rec = reconstruct(env.events_path, mid)
+    assert [s["classification"] for s in rec["steps"][:2]] == [COMPENSATED, UNCERTAIN] and rec["mission_classification"] == UNCERTAIN

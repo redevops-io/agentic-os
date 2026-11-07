@@ -128,10 +128,10 @@ class AosddMissionRuntime(MissionRuntime):
 
     # ---- compensation of an effect that exists but never committed (read-back rejected it) ---------------------------------------------------------
     def _saga(self, m, plan, world, *, authorizer=None) -> None:
-        self._undo_uncommitted(m, plan)
+        self._undo_uncommitted(m, plan, authorizer)
         super()._saga(m, plan, world, authorizer=authorizer)
 
-    def _undo_uncommitted(self, m, plan) -> None:
+    def _undo_uncommitted(self, m, plan, authorizer=None) -> None:
         status = self.repo.node_status(m.id)
         plan_d = self.svc.plan_for(m.id)
         if not plan_d:
@@ -145,6 +145,12 @@ class AosddMissionRuntime(MissionRuntime):
                 continue
             key, undo = f"{node.idempotency_key}:undo:1", UNDO[node.capability]
             base = {"node_id": node.id, "capability": node.capability, "undo": undo, "idempotency_key": key, "attempt": 1}
+            decision, _basis = self._compensation_authority(m, node, authorizer)       # its own authority, read now (the base's rule, same as for a completed step)
+            if not decision.allowed:
+                if not any(e.type == C.EV_DENIED and e.payload.get("node_id") == node.id for e in self.store.for_mission(m.id)):
+                    self.store.append(C.EV_DENIED, m.id, {"node_id": node.id, "capability": node.capability, "undo": undo, "rule": decision.rule, "reason": decision.reason,
+                                                          "phase": "compensate", "effect_remains": True, "envelope_digest": decision.envelope_digest, "uncommitted": True})
+                continue
             self.store.append(C.EV_REQUESTED, m.id, {**base, "policy": "COMPENSATE_DECLARED", "reversibility": "REVERSIBLE_EXPLICIT", "uncommitted": True,
                                                      "why": "the effect exists but the independent read-back did not verify it"})
             out = self.client.invoke(node.operator, undo, {"result": row["result"], "_mission": m.id}, key)
@@ -208,7 +214,7 @@ class Runner:
                                                        "principal": principal.record()})
         return env
 
-    def issue_write_grant(self, mission_id: str, plan: dict, principal, ttl_s: "float | None" = None) -> AuthorityEnvelope:
+    def issue_write_grant(self, mission_id: str, plan: dict, principal, ttl_s: "float | None" = None, *, with_compensation: bool = True) -> AuthorityEnvelope:
         """The owner's grant for exactly this plan: each write on its exact target (max one call), and the matching compensation scope
         (`compensate:<capability>`, same target) so an automatic rollback after a later failure is authorized. Revoking the envelope
         withdraws both; a compensation after a revocation is then an explicit operator action (`Runner.compensate`)."""
@@ -216,7 +222,8 @@ class Runner:
         for s in plan["steps"]:
             sel = ((RESOURCE_ARG[s["step"]], (_lit_resource(s),)),)
             grants.append(Grant(s["capability"], resources=sel, max_tier=1, max_calls=1))
-            grants.append(Grant("compensate:" + s["capability"], resources=sel, max_tier=1))
+            if with_compensation:
+                grants.append(Grant("compensate:" + s["capability"], resources=sel, max_tier=1))
         env = self._envelope(mission_id, tuple(grants), f"plan {plan['plan_sha256']}", self.grant_ttl_s if ttl_s is None else ttl_s, principal.id)
         self.svc.guard.envelopes.put(env)
         self.svc.emit("AosddGrantIssued", mission_id, {"phase": "write", "digest": env.digest(), "plan_sha256": plan["plan_sha256"], "expires_at": env.expires_at,

@@ -124,7 +124,7 @@ def _step(ev, ps: dict, plan: dict, status: dict, comp: dict) -> dict:
         out["classification"] = UNCERTAIN
     elif c and c.get("status") == "compensated":
         out["classification"] = COMPENSATED
-    elif c and c.get("status") in ("failed", "executed_unverified", "skipped", "approval_required", "acknowledged"):
+    elif c and c.get("status") in ("failed", "executed_unverified", "skipped", "approval_required", "acknowledged", "denied"):
         out["classification"] = UNCERTAIN
     elif out["outcome"] == "applied":
         out["classification"] = REVERSIBLE
