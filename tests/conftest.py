@@ -154,13 +154,26 @@ def _isolate_platform_secrets(monkeypatch, tmp_path):
 
 @pytest.fixture(autouse=True)
 def _operator_invoke_open_for_legacy_tests(monkeypatch):
-    """Operator /invoke fails closed without a credential; pre-existing handler tests exercise it directly, so
-    they opt into the documented dev flag. Auth tests clear it explicitly."""
+    """An operator's /invoke runs a side-effecting capability only for an authenticated identity with current authority and the applicable
+    approval (agentic_os/mission/invoke_gate.py); there is no "development allows" default. The suite's handler-level tests call /invoke
+    without envelopes, so they declare ONE explicit, named test policy here (with the credential-less caller accepted as its named test
+    identity, and the mandatory approval waived because those tests drive the handlers' own staging). It is recorded in every audit
+    record they produce. Tests of the real behaviour use the ``no_operator_test_policy`` fixture."""
+    from agentic_os.mission.authority_policy import AuthorityTestPolicy
+    from agentic_os.mission.operator_sdk import Operator
     monkeypatch.setenv("AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS", "1")
-    # F21: `approval_required` is enforced on every /invoke path in every profile. These handler-level tests drive the
-    # handlers directly (including their own staging), so they opt into the explicit, non-production testing override.
-    # The default behaviour has its own tests (tests/test_invoke_approval_required.py) which clear it.
-    monkeypatch.setenv("AGENTIC_OS_ALLOW_UNAPPROVED_INVOKE", "1")
+    monkeypatch.setattr(Operator, "test_policy", AuthorityTestPolicy.allow_all(
+        "pytest-operator-default", "the suite's handler-level tests call /invoke without owner envelopes; this named policy is its declaration",
+        anonymous_operators=True, unapproved=True))
+    yield
+
+
+@pytest.fixture
+def no_operator_test_policy(monkeypatch):
+    """Remove the suite's default operator test policy: /invoke then behaves as an unconfigured deployment (fail closed)."""
+    from agentic_os.mission.operator_sdk import Operator
+    monkeypatch.setattr(Operator, "test_policy", None)
+    monkeypatch.delenv("AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS", raising=False)
     yield
 
 

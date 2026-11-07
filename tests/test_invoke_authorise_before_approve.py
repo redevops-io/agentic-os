@@ -16,9 +16,12 @@ from fastapi.testclient import TestClient
 
 from agentic_os import app_gate
 from agentic_os.mission.approval import mint_approval_token
+from agentic_os.mission.authority_policy import AuthorityTestPolicy
 from agentic_os.mission.operator_sdk import Operator, capability
 from agentic_os.mission.verify import is_staged
 
+#: the explicit, named test policy these tests run under: capabilities may run without an envelope, and NO approval is waived
+LISTS_BUT_DOES_NOT_WAIVE = AuthorityTestPolicy("authorise-before-approve", "lists the capabilities under test and waives no approval", allow=("aao.*", "growth-assistant.*", "assistant.*", "plain.*"))
 SECRET = _secrets.token_hex(24)
 CTL = "control-token-" + "c" * 24
 
@@ -44,7 +47,7 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setattr(app_gate, "_cr_default_authorizer", lambda: check)
     ran = []
     op = Operator("aao", [capability("aao.refund", lambda i: (ran.append(i), {"refunded": True})[1], side_effecting=True, approval_required=True),
-                          capability("aao.lookup", lambda i: (ran.append(i), {"found": True})[1])])
+                          capability("aao.lookup", lambda i: (ran.append(i), {"found": True})[1])], test_policy=LISTS_BUT_DOES_NOT_WAIVE)
     app = FastAPI()
     app.include_router(op.router())
     app.add_middleware(app_gate.RequestContext)
@@ -121,7 +124,8 @@ def test_basic_mode_unprovisioned_and_read_only_profiles_are_denied_before_appro
 
     def client():
         app_gate.install_gate("growth-assistant")
-        op = Operator("growth-assistant", [capability("assistant.push_assets", lambda i: {"pushed": True}, side_effecting=True, approval_required=True)])
+        op = Operator("growth-assistant", [capability("assistant.push_assets", lambda i: {"pushed": True}, side_effecting=True, approval_required=True)],
+                      test_policy=LISTS_BUT_DOES_NOT_WAIVE)
         app = FastAPI()
         app.include_router(op.router())
         return TestClient(app, raise_server_exceptions=False)
@@ -142,7 +146,8 @@ def test_without_permissions_requested_nothing_changes(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENTIC_OS_REPLAY_DB", str(tmp_path / "replay.db"))
     monkeypatch.setattr(app_gate, "_GATES", {})
     monkeypatch.setattr(app_gate, "_ENTERPRISE", {})
-    op = Operator("plain", [capability("plain.refund", lambda i: {"ok": True}, side_effecting=True, approval_required=True)])
+    op = Operator("plain", [capability("plain.refund", lambda i: {"ok": True}, side_effecting=True, approval_required=True)],
+                  test_policy=LISTS_BUT_DOES_NOT_WAIVE)
     app = FastAPI()
     app.include_router(op.router())
     c = TestClient(app, raise_server_exceptions=False)

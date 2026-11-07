@@ -59,6 +59,7 @@ class Caller:
     ``role``: "admin" | "requester" (tenant token) | "approver" (AGENTIC_OS_APPROVER_TOKENS)."""
     tenant: "str | None" = None
     role: str = "admin"
+    anonymous: bool = False      # True only for the explicit local-development "no credential" caller: it is NOT an authenticated identity
 
 
 def _parse_pairs(env: str) -> "dict[str, str]":
@@ -186,12 +187,16 @@ def resolve_caller(authorization: "str | None", control_token: "str | None" = No
 def authorize_operator_invoke(authorization: "str | None", control_token: "str | None" = None, *, duplicated: bool = False) -> Caller:
     """Gate for an operator's ``POST /invoke``. Same credentials as the other control routes (admin or tenant token, in ``X-Control-Token`` or, for existing callers, ``Authorization: Bearer``;
     the user's identity token travels in ``Authorization`` and is never read here when ``X-Control-Token`` is present); an approver-only token is refused (403). With NO token configured it fails closed (503) unless
-    ``AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS=1`` is set explicitly (local development only). Once any token is
-    configured the flag is ignored and a valid bearer token is always required."""
+    ``AGENTIC_OS_OPERATOR_ALLOW_ANONYMOUS=1`` is set explicitly (local development only, never in production). Once any token is
+    configured the flag is ignored and a valid bearer token is always required. The anonymous caller is marked ``anonymous=True``:
+    it is not an authenticated identity and cannot, by itself, authorise a side effect."""
     from fastapi import HTTPException  # noqa: PLC0415
     if not any_token_configured():
-        if os.environ.get(ENV_OPERATOR_ANON, "").strip() == "1":
-            return Caller(None, "admin")
+        from .profile import is_production  # noqa: PLC0415
+        if os.environ.get(ENV_OPERATOR_ANON, "").strip() == "1" and not is_production():
+            # An UNAUTHENTICATED caller, never an identity: reads may run, a side-effecting call is refused unless an explicit, named test
+            # policy accepts anonymous operators (operator_sdk / invoke_gate). Never honoured in production.
+            return Caller(None, "admin", anonymous=True)
         raise HTTPException(503, f"operator /invoke is disabled: {ENV_TOKEN} (or {ENV_TENANT_TOKENS}) is not set. "
                                  "Set a long random secret and send 'Authorization: Bearer <token>'.")
     if duplicated:                           # BB-02: a repeated X-Control-Token or Authorization header is a request-smuggling signal: refuse it, whichever copy would have been valid

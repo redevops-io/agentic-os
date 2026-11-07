@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from agentic_os.mission.approval import mint_approval_token
+from agentic_os.mission.authority_policy import AuthorityTestPolicy
 from agentic_os.mission.execution_auth import mint_execution_authorization
 from agentic_os.mission.operator_sdk import Operator, capability
 from agentic_os.mission.verify import is_staged
@@ -25,9 +26,12 @@ class Ran:
         self.calls = []
 
 
-@pytest.fixture
-def world(monkeypatch, tmp_path):
-    """Default posture: no testing override, signing secret and control token configured."""
+#: the explicit, named test policy these tests run under: it lets the fin.* capabilities run without an envelope (non-production) and
+#: waives NO approval, so the approval requirement is what is being tested
+LISTS_BUT_DOES_NOT_WAIVE = AuthorityTestPolicy("approval-required-tests", "lists fin.* so the approval requirement is what is tested", allow=("fin.*",))
+
+
+def build(monkeypatch, tmp_path, policy):
     for k in ("AGENTIC_OS_ALLOW_UNAPPROVED_INVOKE", "AGENTIC_OS_PROFILE", "AGENTIC_OS_REQUIRE_AUTHORITY"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("AGENTIC_OS_APPROVAL_SECRET", SECRET)
@@ -39,10 +43,16 @@ def world(monkeypatch, tmp_path):
                    side_effecting=True, approval_required=True),
         capability("fin.report", lambda i: (ran.calls.append(("report", i)), {"ok": True})[1], approval_required=True),
         capability("fin.lookup", lambda i: (ran.calls.append(("lookup", i)), {"found": True})[1]),
-    ])
+    ], test_policy=policy)
     app = FastAPI()
     app.include_router(op.router())
     return ran, TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.fixture
+def world(monkeypatch, tmp_path):
+    """Default posture: signing secret and control token configured, an explicit test policy that waives no approval."""
+    return build(monkeypatch, tmp_path, LISTS_BUT_DOES_NOT_WAIVE)
 
 
 def call(c, cap, inputs=None, **extra):
@@ -106,14 +116,15 @@ def test_an_execution_authorization_cannot_stand_in_for_a_mandatory_approval(wor
     assert call(c, "fin.refund", {"amount": 5}, authorization=tok).status_code == 403 and ran.calls == []
 
 
-def test_the_explicit_testing_override_works_in_development_only(world, monkeypatch):
-    ran, c = world
-    monkeypatch.setenv("AGENTIC_OS_ALLOW_UNAPPROVED_INVOKE", "1")
+def test_a_test_policy_that_names_the_capability_in_unapproved_waives_it_in_development_only(monkeypatch, tmp_path):
+    waiver = AuthorityTestPolicy("waives-refund", "the refund approval is out of scope for this test", allow=("fin.*",), unapproved=("fin.refund",))
+    ran, c = build(monkeypatch, tmp_path, waiver)
     monkeypatch.setenv("AGENTIC_OS_PROFILE", "development")
     assert call(c, "fin.refund", {"amount": 5}).json()["result"] == {"refunded": True} and len(ran.calls) == 1
+    assert is_staged(call(c, "fin.report").json()["result"])                    # only the capability it names
     monkeypatch.setenv("AGENTIC_OS_PROFILE", "production")
     r = call(c, "fin.refund", {"amount": 6})
-    assert r.status_code == 403 and len(ran.calls) == 1                     # production ignores the override
+    assert r.status_code == 403 and len(ran.calls) == 1                     # production ignores the policy
 
 
 def test_capabilities_that_do_not_declare_an_approval_are_unaffected(world):

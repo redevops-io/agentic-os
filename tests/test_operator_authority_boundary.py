@@ -6,6 +6,7 @@ exact call, single-use across replicas, and its mission identity comes from sign
 from __future__ import annotations
 
 import secrets as _secrets
+import time
 
 import pytest
 from fastapi import FastAPI
@@ -74,6 +75,14 @@ def envelope(*grants, key="acme:direct", **kw):
                 grants=grants, budget=AutonomyBudget(usd=1000, max_actions=1000))
     base.update(kw)
     return AuthorityEnvelope(**base)
+
+
+def backing_lease(env, lease_id, cap, *, key, tier=1):
+    """What the control point leaves behind when it issues an execution authorization: the reservation, in the shared ledger, that the
+    operator reads back (the capability, tenant and envelope key) to evaluate the envelope again when the call arrives."""
+    store, ledger, guard = env
+    ledger.reserve_lease(lease_id, key, {"actions": 1.0}, {}, None, time.time(),
+                         {"capability": cap, "tenant": "acme", "tier": tier, "side_effecting": True})
 
 
 def replica(calls):
@@ -236,6 +245,8 @@ def test_authorization_cannot_pass_as_an_approval_nor_the_reverse(env):
 
 
 def test_human_approval_still_authorizes_in_production(env):
+    store, _, _ = env
+    store.put(envelope(Grant("crm.send"), key="m1"))             # a human approval is no longer authority on its own: the mission's envelope must cover the call
     calls = Calls()
     seen = []
     op, c = replica(calls)
@@ -267,11 +278,21 @@ def test_reads_need_only_authentication_in_production(env):
     assert r.status_code == 200 and r.json()["result"]["found"] is True
 
 
-def test_development_profile_is_unchanged(env, monkeypatch):
+def test_development_profile_has_no_ambient_allowance(env, monkeypatch):
+    """Development used to run a side-effecting call with only a token. It now needs the same authority as production, unless an explicit,
+    named test policy says otherwise (and then the response and the audit trail say so)."""
+    from agentic_os.mission.authority_policy import AuthorityTestPolicy
+    from agentic_os.mission.operator_sdk import Operator
     monkeypatch.setenv("AGENTIC_OS_PROFILE", "development")
+    monkeypatch.setattr(Operator, "test_policy", None)
     calls = Calls()
     _, c = replica(calls)
-    assert invoke(c, "crm.send", {"recipient": "a@customer.com"}).status_code == 200 and len(calls.sent) == 1
+    assert invoke(c, "crm.send", {"recipient": "a@customer.com"}).status_code == 403 and calls.sent == []
+    monkeypatch.setattr(Operator, "test_policy", AuthorityTestPolicy("dev-walkthrough", "an explicit local policy", allow=("crm.send",)))
+    calls = Calls()
+    _, c = replica(calls)
+    r = invoke(c, "crm.send", {"recipient": "a@customer.com"})
+    assert r.status_code == 200 and len(calls.sent) == 1 and r.headers["x-authority-basis"] == "test_policy:dev-walkthrough"
 
 
 def test_production_operator_cannot_start_without_a_durable_replay_store(monkeypatch):
@@ -346,6 +367,8 @@ def test_runtime_issued_authorization_replayed_on_another_replica_is_denied_by_n
     calls_a, calls_b = Calls(), Calls()
     _, ca = replica(calls_a)
     _, cb = replica(calls_b)                                      # different process memory, same durable replay db
+    env[0].put(envelope(Grant("crm.send"), key="env-x"))
+    backing_lease(env, "m-1:n-1:a1", "crm.send", key="env-x")
     tok = mint_execution_authorization(SECRET, operator="crm", capability="crm.send", tenant="acme", mission_id="m-1",
                                        node_id="n-1", lease_id="m-1:n-1:a1", attempt=1, envelope_digest="d",
                                        inputs={"recipient": "a@customer.com"}, idempotency_key="idem-1",
@@ -367,6 +390,8 @@ def test_authorization_is_bound_to_the_idempotency_key(env):
 
 
 def test_an_execution_authorization_can_never_satisfy_a_mandatory_approval_capability(env):
+    env[0].put(envelope(Grant("crm.bank_change", max_tier=3), key="env-x"))
+    backing_lease(env, "m-1:n-1:a1", "crm.bank_change", key="env-x")
     calls = Calls()
     op, c = replica(calls)
     op._handlers["crm.bank_change"] = lambda i: (calls.sent.append(i), {"changed": True})[1]

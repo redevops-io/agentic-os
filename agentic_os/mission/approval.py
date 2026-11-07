@@ -150,6 +150,16 @@ def verify_approval_token(secret: "bytes | str | None" = None, token: object = N
         return None
 
 
+def approval_token_binding(token: str) -> dict:
+    """The mission and node the SIGNED payload of an approval token binds (None = unbound). Call it only for a token that
+    ``verify_approval_token`` accepted; it does not verify anything itself."""
+    try:
+        d = json.loads(_unb64(token.split(".")[0]))
+        return {"mission_id": _norm_id(d.get("mission_id")), "node_id": _norm_id(d.get("node_id"))}
+    except Exception:  # noqa: BLE001
+        return {"mission_id": None, "node_id": None}
+
+
 @runtime_checkable
 class SharedStore(Protocol):
     """SEAM for multi-replica deployments (no implementation shipped). ``ReplayGuard`` and the Operator
