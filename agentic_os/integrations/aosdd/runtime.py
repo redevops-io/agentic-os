@@ -77,6 +77,7 @@ class AosddMissionRuntime(MissionRuntime):
         reg = build_registry()
         self.svc = svc
         self.client = AosddOperatorClient(svc)
+        self.escalation_parks = False       # base option: an envelope that would have to be extended REFUSES the step instead of parking a human gate
         super().__init__(reg, Executor(self.client), store=svc.store, planner=AosddPlanner(),
                          verifier=AosddVerifier(reg, lambda m: set(m.policy_refs), svc), authority=svc.guard,
                          authority_key=lambda m: str(m.id), **kw)
@@ -94,15 +95,7 @@ class AosddMissionRuntime(MissionRuntime):
             r.update(step_args(plan, step, q.get("native_id", "") if isinstance(q, dict) else (q or "")))
         return r
 
-    # ---- authority: enforced in every profile --------------------------------------------------------------------------------------------------
-    def _authority_gate(self, m, node, decision, world, *, graph=None, inputs=None, attempt=None):
-        if decision.required:               # the plan-approval gate: a human decides; there is no standing grant for it
-            return "park", None
-        res = self._authorize(m, node, decision, world, inputs, None, attempt)
-        if res is not None and res.allowed:
-            return "run", res
-        return "authority_denied", res      # an envelope that must be extended is NOT an approval gate here: fail closed
-
+    # ---- authority: the base enforces the envelope in every profile; an ESCALATE (a limit the owner could extend) is a refusal here, not a gate
     def _halt(self, m, node, rule: str, reason: str) -> None:
         done = [n.capability for n in self._plans[m.id].graph.nodes if self.repo.node_status(m.id).get(n.id) == NodeState.DONE and n.side_effecting]
         m.outcome = {"blocked": rule, "node": node.id, "capability": node.capability, "reason": reason, "effects_remaining": done,

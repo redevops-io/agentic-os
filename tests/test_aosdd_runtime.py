@@ -577,3 +577,30 @@ def test_two_executors_on_one_approved_mission_perform_each_write_once(env):
     r3.reconcile(mid, "S1", principal=REQ, reason="executor B refused S1 while A was running it; A recorded it")
     assert state(r3, mid) is MissionState.SUCCEEDED
     assert env.stack.count("erpnext", "POST") == 1 and env.stack.count("lago", "PUT") == 1 and len(env.stack.tasks) == 1 and sum(1 for m in env.stack.messages if m["private"]) == 1
+
+
+# ---- the base now provides what the AOS-DD overrides used to ---------------------------------------------------------------------------
+def test_base_refuses_an_escalation_instead_of_parking_a_human_gate(env):
+    """Used to need an `_authority_gate` override. The base option `escalation_parks=False` makes a grant that is too small a refusal."""
+    r = env.runner()
+    assert r.rt.escalation_parks is False
+    mid = r.submit("ESC", REF, principal=REQ)
+    plan = r.plan(mid)
+    r.svc.emit("AosddPlanApproved", mid, approvals.mint(APPROVAL_SECRET, mid, plan, APP.id))
+    env_ = r.issue_write_grant(mid, plan, APP)
+    small = [__import__("dataclasses").replace(g, max_tier=0) if g.capability == plan["steps"][0]["capability"] else g for g in env_.grants]
+    r.svc.guard.envelopes.put(__import__("dataclasses").replace(env_, grants=tuple(small)))       # the owner's grant for S1 may not run a side effect unattended
+    r.rt.approve(mid, r.rt.repo.pending_human(mid)["node_id"], "approve", principal=APP)
+    assert env.stack.writes() == [] and state(r, mid) is MissionState.FAILED                      # refused, not parked as WAITING_HUMAN
+    out = r.rt._missions[mid].outcome
+    assert "tier_over_grant" in out["blocked"]
+    assert out["effects_remaining"] == [] and "none performed" in out["compensation"]
+
+
+def test_base_enforces_the_envelope_in_the_development_profile_without_an_override(env):
+    from agentic_os.integrations.aosdd.runtime import AosddMissionRuntime
+    assert "_authority_gate" not in AosddMissionRuntime.__dict__            # the duplicate override is gone
+    r = env.runner()
+    mid = r.submit("DEVP", REF, principal=REQ)
+    r.approve_plan(mid, r.plan(mid)["plan_sha256"], principal=APP, grant_ttl_s=-5)
+    assert env.stack.writes() == [] and state(r, mid) is MissionState.FAILED
