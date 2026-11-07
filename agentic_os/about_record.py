@@ -48,6 +48,8 @@ HEX64 = re.compile(r"^[0-9a-f]{64}$")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 _VERSION = re.compile(r"^[0-9]+(\.[0-9]+){0,3}([-+][0-9A-Za-z.+-]{1,40})?$")
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+_PINVERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$")
+UI_PIN_VERIFIED = ("wheel", "directory")
 _FILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _BIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _TOKEN = re.compile(r"^[a-z0-9][a-z0-9.-]{0,31}$")
@@ -183,8 +185,10 @@ def _build(c: _Ctx, b: Any) -> None:
         c.text("build.source.commit_time_utc", s["commit_time_utc"], _TIME, 20)
         c.text("build.source.describe", s["describe"], _DESCRIBE, 100)
     u = b["ui_bundle"]
-    if c.obj("build.ui_bundle", u, ("id", "files")):
+    if c.obj("build.ui_bundle", u, ("id", "files"), ("pin",)):
         c.text("build.ui_bundle.id", u["id"], _FILE, 64)
+        if "pin" in u:
+            _ui_pin(c, u["pin"])
         if c.lst("build.ui_bundle.files", u["files"], 64):
             for k, f in enumerate(u["files"]):
                 w = f"build.ui_bundle.files[{k}]"
@@ -196,6 +200,21 @@ def _build(c: _Ctx, b: Any) -> None:
     if c.obj("build.inputs", i, ("sbom_sha256", "gate_file_sha256")):
         c.hexs("build.inputs.sbom_sha256", i["sbom_sha256"])
         c.hexs("build.inputs.gate_file_sha256", i["gate_file_sha256"])
+
+
+def _ui_pin(c: _Ctx, p: Any) -> None:
+    """The pinned Projects UI (packaging/projects_ui.lock.json) the bundle was verified against at build time. Optional: older records
+    and unpinned builds carry no pin."""
+    w = "build.ui_bundle.pin"
+    if not c.obj(w, p, ("version", "artifact_sha256", "source_commit", "source_commit_published", "verified_against")):
+        return
+    c.text(w + ".version", p["version"], _PINVERSION, 40)
+    c.hexs(w + ".artifact_sha256", p["artifact_sha256"])
+    c.hexs(w + ".source_commit", p["source_commit"], HEX40)
+    if not isinstance(p["source_commit_published"], bool):
+        c.bad(w + ".source_commit_published", "must be true or false")
+    if p["verified_against"] not in UI_PIN_VERIFIED:
+        c.bad(w + ".verified_against", f"must be one of {UI_PIN_VERIFIED}")
 
 
 def _licence_files(c: _Ctx, files: Any) -> None:

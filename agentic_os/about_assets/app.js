@@ -132,6 +132,10 @@
     fact(dl, "Launcher", p.launcher.binary + " " + p.launcher.version);
     var ui = b.ui_bundle || { id: "none", files: [] };
     fact(dl, "Projects UI bundle", ui.id, true);
+    if (ui.pin) {
+      fact(dl, "Projects UI pin", ui.pin.version + ", artifact " + ui.pin.artifact_sha256 + ", source commit " + ui.pin.source_commit +
+        (ui.pin.source_commit_published ? " (published)" : " (not published)") + ", bundle files checked against the pin in the " + ui.pin.verified_against, true);
+    }
 
     renderLegal();
     renderSource();
