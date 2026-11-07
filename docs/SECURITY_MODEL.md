@@ -829,7 +829,10 @@ refused until they pass one, or, outside production, until their runtime has a t
   says so (`stale_generation`, for example the `StaleExecution` exception) or when the reservation its dispatch used was resolved by reconciliation
   (`reconcile_node`, the probe supervisor) or is missing from the authority ledger. A reservation that the executor itself settled, as an operator does
   after executing, is the normal path and is not a takeover. This covers plan nodes (serial and concurrent waves); a fork branch has its own fencing and
-  is not covered by `_superseded`. Tests: `tests/test_stale_executor.py`, `tests/test_aosdd_stale_race.py`.
+  is not covered by `_superseded`. The decision to park is taken from the LOG's state of the mission, not from the receiving driver's in-memory view: when the log already
+  shows the mission FAILED, CANCELLED or COMPENSATION_FAILED, the answer is recorded as `StaleResultRecorded` (`terminal: true`) as evidence only, the mission stays as it is
+  (nothing is parked, re-opened, retried or compensated), the step is `irreversible-uncertain` with a `possible_duplicate` residual (`outcome_from_log`) and the receipt lists
+  `stale_results`; a SUCCEEDED mission is still parked for an operator. Tests: `tests/test_stale_executor.py`, `tests/test_stale_terminal_mission.py`, `tests/test_aosdd_stale_race.py`.
 * **An automatic retry needs a declared guarantee.** A capability declares `idempotency` (`CapabilitySpec.idempotency`, set by the operator's builder
   in-process, never read from a remote `/capabilities` document): `provider-enforced` (the provider rejects a second identical request),
   `marker-reconciled` (looked up by a marker; absence is evidence, not proof) or `none` (the default, also when undeclared). The reconciliation
