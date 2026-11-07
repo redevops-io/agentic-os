@@ -171,8 +171,26 @@ def test_the_bundle_gives_every_focusable_element_one_visible_keyboard_focus_rin
     assert 'outline:"none"' not in js and "outlineStyle" not in js
 
 
+def test_the_bundle_says_every_source_refusal_in_fixed_words_and_can_remove_a_registered_folder():
+    """A refused or failed Connect / Looks right / Remove was silent in the previous pin (the promise rejected and nothing was shown). The shipped
+    bytes carry one fixed sentence per server refusal code (the server's own message text is never rendered), an alert, and a Remove control with
+    an in-page question for a folder registered in this session."""
+    js = next(v for k, v in _members().items() if k.endswith(".js")).decode("utf-8")
+    for s in ("Your whole home folder can't be connected. Pick a folder inside it, for example Documents.",
+              "That folder holds credentials, browser data, system files or this app's own data, so it can't be connected.",
+              "Enter the full path of the folder, starting from the top", "Only a folder you picked in a proposal can be connected. Ask Sidekick to use it as context",
+              "The registration could not be recorded, so nothing was registered.", "That source is already gone, so there is nothing to remove.",
+              "You're signed out of this app session, so ", "This app session has ended, so ", "Can't reach the runtime, so ",
+              "/api/sources/remove", "Yes, remove", "Your files are not changed; the folder just stops being available as evidence until you add it again."):
+        assert s in js, s
+    for server_words in ("cannot be registered as a source", "A local session is required."):
+        assert server_words not in js, server_words                           # the page's words, never the server's
+    css = next(v for k, v in _members().items() if k.endswith(".css")).decode("utf-8")
+    assert ".problem{" in css and ".confirm{" in css
+
+
 def test_the_pin_chain_keeps_the_replaced_artifacts_and_ends_at_the_public_release():
-    chain = ["local+5751e9e5", "local+312a811a", "local+2f24719e", "local+ee958a01", "local+2fdef7f5"]
+    chain = ["local+9a1788b1", "local+5751e9e5", "local+312a811a", "local+2f24719e", "local+ee958a01", "local+2fdef7f5"]
     node = LOCK
     for want in chain:
         node = node["previous_pin"]
