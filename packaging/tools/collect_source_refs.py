@@ -96,6 +96,11 @@ def main() -> int:
                 ent["source"] = {"type": "none", "note": "Microsoft redistributable runtime: binary-only; no source is published by this project (see decision register)"}
             elif key.startswith("libffi"):
                 ent["unresolved"] = "libffi version not discoverable from the shipped library; source cannot be named"
+            elif key.startswith("sqlite:"):
+                ent["unresolved"] = ("SQLite is in the public domain and every release is published by the SQLite project (https://www.sqlite.org/); "
+                                     + (f"version {ver} comes from a facts file, not from the shipped file, and the release archive URL is not resolved here"
+                                        if ver else "the version of the shipped file is not read from it (CPython's copy carries no version resource)")
+                                     + ", so the matching source is not named")
             else:
                 continue
         except (urllib.error.URLError, KeyError, ValueError, StopIteration) as e:
