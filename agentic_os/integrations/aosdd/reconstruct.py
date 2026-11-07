@@ -99,6 +99,8 @@ def _step(ev, ps: dict, plan: dict, status: dict, comp: dict) -> dict:
     applied, intents = t("AosddOpApplied"), t("AosddOpIntent")
     unknown, refused = t("AosddOpUnknown"), t("AosddOpRefused")
     ver = t("AosddStepVerified")
+    unc, stale = t("AosddStepUncertain"), t("AosddOpStale")
+    acc, redis, absent = t("AosddUncertainAccepted"), t("AosddRedispatchAuthorized"), t("AosddAbsenceObserved")
     adopted_rec = t("AosddReconciled")
     undo, undo_ver = t("AosddUndoResult"), t("AosddUndoVerified")
     c = comp.get(node_id or "", {})
@@ -116,11 +118,27 @@ def _step(ev, ps: dict, plan: dict, status: dict, comp: dict) -> dict:
                           "credential_source": v_last.get("credential_source"), "same_secret_as_writer": v_last.get("same_secret_as_writer"), "checks": v_last["checks"]} if v_last else None),
            "compensation": ({"status": c.get("status"), "attempts": c.get("attempts"), "undo_result": undo[-1].payload if undo else None,
                               "readback": ({"status": undo_ver[-1].payload["status"], "checks": undo_ver[-1].payload["checks"], "read_only_kind": undo_ver[-1].payload.get("read_only_kind")} if undo_ver else None)} if c else None),
+           "uncertain": ({"marked": True, "reasons": list(dict.fromkeys(u.payload["why"] for u in unc)), "retry_policy": ps.get("retry_policy"),
+                          "automatic_retry": bool(unc[-1].payload.get("automatic_retry")),
+                          "stale_native_ids": [s.payload.get("native_id") for s in stale if s.payload.get("native_id")],
+                          "absence_observed": [a_.payload.get("observed_at") for a_ in absent],
+                          "redispatch": ([{"principal": r_.payload["principal"]["id"], "reason": r_.payload["reason"]} for r_ in redis] or None),
+                          "accepted_as_is": ({"principal": acc[-1].payload["principal"]["id"], "reason": acc[-1].payload["reason"]} if acc else None)} if (unc or stale or acc) else None),
            "residual": [], "declared_residual": RESIDUAL[ps["step"]],
-           "idempotency": ps.get("idempotency"), "idempotency_note": IDEMPOTENCY_NOTE.get(ps["app"], "")}
+           "idempotency": ps.get("idempotency"), "retry_policy": ps.get("retry_policy"), "idempotency_note": IDEMPOTENCY_NOTE.get(ps["app"], "")}
     if undo_ver:
         out["residual"] = undo_ver[-1].payload.get("residual") or []
-    if not out["attempted"]:
+    stale_ids = out["uncertain"]["stale_native_ids"] if out["uncertain"] else []
+    if stale or stale_ids:
+        out["residual"] = list(out["residual"]) + [{"what": "POSSIBLE DUPLICATE EFFECT: a superseded executor's request also reached the application after its lease expired. "
+                                                      "It was recorded as stale-generation evidence and never applied; the duplicate is NOT removed by compensation of the recorded record",
+                                                      "native_ids": {"recorded_in_ledger": out["native_id"], "stale_executor": stale_ids or "unknown (the stale executor's answer carried no id)"}}]
+    if acc:
+        out["residual"] = list(out["residual"]) + [{"what": "the outcome was accepted as uncertain by an approver: the effect may or may not exist in the application; nothing was retried",
+                                                      "native_ids": {"recorded_in_ledger": out["native_id"]}}]
+    if stale or acc:
+        out["classification"] = UNCERTAIN              # a possible duplicate (stale generation) or an accepted unknown: never reported as clean, whatever else happened
+    elif not out["attempted"]:
         out["classification"] = NONE
     elif out["outcome"] in ("unknown",) or (out["outcome"] == "applied" and (not v_last or v_last["status"] != "VERIFIED") and not (c and c.get("status") == "compensated")):
         out["classification"] = UNCERTAIN

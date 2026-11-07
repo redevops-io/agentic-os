@@ -133,6 +133,10 @@ class AosddConfig:
         if http_t <= 0 or lease < http_t:
             raise ConfigError(f"lease_ttl_s ({lease}) must be >= http_timeout_s ({http_t}): a lease shorter than a request can expire while that request is in flight")
         shared = tuple(a for a in APPS if all(creds["writer"][a][f] == creds["reader"][a][f] for f in _FIELDS[a]))
+        for a in APPS:
+            if READ_ONLY_KIND[a].startswith("get-only-by-code") and a not in shared:
+                raise ConfigError(f"verifier.{a}: {a} offers no server-enforced read-only credential, so the verifier must use the writer's own secret and be described that way; "
+                                  "a different secret would still be write-capable and would only look scoped")
         red = Redactor()
         red.add(sec)
         for role in creds.values():
@@ -176,14 +180,21 @@ class AosddConfig:
         return out
 
     def verifier_provenance(self) -> dict:
-        """What a receipt says about the verifier's credentials: which file, and per app whether the server ENFORCES read-only or the
-        verifier is only a GET-only client by code (and whether its secret is the writer's own)."""
+        """What a receipt says about the verifier's credentials: which file, and per app whether the SERVER refuses writes with that
+        credential, or the verifier shares the writer's credential and only this code keeps it to GET."""
         return {"source": self.verifier_source or "(inline, tests)",
                 "apps": {a: {"read_only": READ_ONLY_KIND[a], "same_secret_as_writer": a in self.shared_writer_reader} for a in APPS}}
 
 
-#: per application: does the server refuse writes made with the verifier's credential? (probed on the stack; see the report)
-READ_ONLY_KIND = {"erpnext": "server-enforced", "twenty": "server-enforced", "chatwoot": "get-only-by-code", "lago": "get-only-by-code"}
+#: Per application, what stops the verifier from writing. Two values only:
+#:   server-enforced                              the SERVER refuses a write made with the verifier credential (ERPNext reader role -> 403;
+#:                                                Twenty read-only API key -> 400 PERMISSION_DENIED; probed on the stack)
+#:   get-only-by-code-shared-writer-credential    Chatwoot and Lago OSS have no such credential: the verifier uses the WRITER'S OWN secret.
+#:                                                What keeps it from writing is only this code (a separate GET-only client on a separate code
+#:                                                path, sharing no objects with the writer). It is independent READ-BACK CODE, not a read-only
+#:                                                credential and not application-enforced.
+READ_ONLY_KIND = {"erpnext": "server-enforced", "twenty": "server-enforced",
+                  "chatwoot": "get-only-by-code-shared-writer-credential", "lago": "get-only-by-code-shared-writer-credential"}
 
 
 def _read_private(path: str) -> dict:

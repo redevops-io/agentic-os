@@ -20,7 +20,7 @@ from agentic_os.mission.authority import Action
 from . import approval as approvals
 from . import opid
 from .capabilities import GATE_CAP, RESOURCE_ARG, STEP_OF, UNDO, VERIFY, WRITE_CAPS
-from .context import CAPABILITY, IDEMPOTENCY_NOTE, build_plan, plan_sha256, read_context, step_of
+from .context import CAPABILITY, IDEMPOTENCY_NOTE, RETRY_POLICY, auto_retry_allowed, build_plan, plan_sha256, read_context, step_of
 from .http import AppError
 from .oplog import Claim, FencingError
 from .services import Services
@@ -37,8 +37,13 @@ class AosddRefusal(RuntimeError):
 
 class StaleGeneration(RuntimeError):
     """This executor lost its claim (a newer generation exists) before it could record its result. Whatever it sent is evidence of a
-    possible second record, not a result: ``stale-generation`` is written, nothing is applied, and the step needs reconciliation."""
+    possible second record, not a result: ``stale-generation`` is written, nothing is applied, the step is UNCERTAIN (possible duplicate
+    effect) and needs an operator. Never retried, never compensated automatically."""
     not_applied = False
+
+    def __init__(self, message: str, native_id=None):
+        super().__init__(message)
+        self.native_id = native_id
 
 
 class OperationUnresolved(RuntimeError):
@@ -136,6 +141,11 @@ class AosddOperatorClient:
         op = step["op_id"]
         svc.oplog.plan_op(op, mission_id, step["step"], step["app"], capability, opid.target_digest(step["target"]), plan["attempt"])
         claim: Claim = svc.oplog.claim(op, svc.owner)
+        if claim.status == "reconcile" and auto_retry_allowed(step["idempotency"]):
+            # The PROVIDER rejects a second request with this op id (Twenty: client id; Lago: identical metadata entry), so repeating the
+            # SAME op id cannot create a second effect: take the claim over (new generation) and look first, then write.
+            svc.emit("AosddOpRetried", mission_id, {"op_id": op, "step": step["step"], "policy": RETRY_POLICY[step["idempotency"]], "previous_fence": claim.fence})
+            claim = svc.oplog.claim(op, svc.owner, takeover=True)
         if claim.status == "applied":                      # a retry of a step that already took effect: return it, send nothing
             res = dict(claim.row["result"])
             res.update(created=False, adopted=res.get("adopted", False), replayed=True)
@@ -143,7 +153,10 @@ class AosddOperatorClient:
             return res
         if claim.status in ("held", "reconcile"):
             svc.emit("AosddOpUnresolved", mission_id, {"op_id": op, "step": step["step"], "claim": claim.status, "holder": claim.owner})
+            self._uncertain(mission_id, step, f"claim is {claim.status}", claim.fence)
             raise OperationUnresolved(f"{step['step']}: operation {op} is {claim.status}: it may already exist; reconcile it from the application, do not repeat it")
+        if claim.status == "accepted":
+            raise AosddRefusal("op_accepted_uncertain", f"{op} was accepted as uncertain by an approver; it is not retried")
         if claim.status == "compensated":
             raise AosddRefusal("op_compensated", f"{op} was compensated; a re-run needs a new attempt (new op id): Twenty keeps soft-deleted ids")
         adapter = svc.adapters[step["app"]]
@@ -173,9 +186,21 @@ class AosddOperatorClient:
                     raise OperationUnresolved(f"{step['step']}: this executor's claim (generation {claim.fence}) was superseded before the request was sent; nothing was sent") from None
             res = found if adopted else adapter.write(step, {"quotation": quotation})
         except AppError as e:
-            return self._failed(mission_id, step, op, claim, e)
+            if e.kind == "duplicate" and auto_retry_allowed(step["idempotency"]):
+                # the provider refused a duplicate of this op id: the record exists; adopt it (verified later by the read-back)
+                try:
+                    again = adapter.find(step)
+                except AppError:
+                    again = None
+                if again is not None and not again.get("partial"):
+                    res, adopted = again, True
+                    res["note"] = "the provider rejected a repeat of this op id as a duplicate; the existing record was adopted"
+                else:
+                    return self._failed(mission_id, step, op, claim, e)
+            else:
+                return self._failed(mission_id, step, op, claim, e)
         res.update(step=step["step"], app=step["app"], op_id=op, capability=capability, adopted=adopted, expect=step["expect"], fence=claim.fence,
-                   idempotency=step["idempotency"], idempotency_note=IDEMPOTENCY_NOTE[step["app"]])
+                   idempotency=step["idempotency"], idempotency_note=IDEMPOTENCY_NOTE[step["app"]], retry_policy=RETRY_POLICY[step["idempotency"]])
         if adopted:
             res["note"] = "the application already held a record carrying this op's marker; adopted, nothing written"
         try:
@@ -187,12 +212,21 @@ class AosddOperatorClient:
                                                 "idempotency": step["idempotency"]})
         return res
 
+    def _uncertain(self, mission_id: str, step: dict, why: str, fence: int, extra: "dict | None" = None) -> None:
+        """Mark the step UNCERTAIN on the ledger together with what the policy allows next. For a step whose class is not provider-enforced
+        the policy is operator-only: nothing re-sends it automatically."""
+        self.svc.emit("AosddStepUncertain", mission_id, {"op_id": step["op_id"], "step": step["step"], "app": step["app"], "why": why, "fence": fence,
+                                                         "idempotency": step["idempotency"], "retry_policy": RETRY_POLICY[step["idempotency"]],
+                                                         "automatic_retry": auto_retry_allowed(step["idempotency"]), **(extra or {})})
+
     def _stale(self, mission_id: str, step: dict, op: str, claim: Claim, res: dict, why: str):
         """The request was sent (or answered) by a holder that no longer owns the claim: record it as evidence, apply nothing."""
         svc = self.svc
         svc.oplog.record_stale(op, claim.fence, str(res.get("native_id", "")), res, why)
         svc.emit("AosddOpStale", mission_id, {"op_id": op, "step": step["step"], "fence": claim.fence, "native_id": res.get("native_id"), "outcome": "stale-generation", "why": why})
-        raise StaleGeneration(f"{step['step']}: stale-generation: this executor's result ({res.get('native_id')}) arrived after generation {claim.fence} was superseded; recorded as evidence, not applied")
+        self._uncertain(mission_id, step, "stale-generation: a superseded executor's request also reached the application (possible duplicate effect)", claim.fence,
+                        extra={"stale_native_id": res.get("native_id"), "stale_native_ids": res.get("native_ids")})
+        raise StaleGeneration(f"{step['step']}: stale-generation: this executor's result ({res.get('native_id')}) arrived after generation {claim.fence} was superseded; recorded as evidence, not applied", res.get("native_id"))
 
     def _failed(self, mission_id: str, step: dict, op: str, claim: Claim, e: AppError):
         svc = self.svc
@@ -205,9 +239,11 @@ class AosddOperatorClient:
             else:
                 svc.oplog.record_unknown(op, claim.fence, f"{e.kind} {e.status}")
                 svc.emit("AosddOpUnknown", mission_id, {**info, "outcome": "unknown"})
+                self._uncertain(mission_id, step, f"{e.kind} {e.status}: the outcome is unknown", claim.fence)
         except FencingError as fe:
             svc.oplog.record_stale(op, claim.fence, "", {"error": f"{e.kind} {e.status}"}, str(fe))
             svc.emit("AosddOpStale", mission_id, {"op_id": op, "step": step["step"], "fence": claim.fence, "outcome": "stale-generation", "error": f"{e.kind} {e.status}"})
+            self._uncertain(mission_id, step, f"stale-generation: the {e.kind} answer of a superseded executor", claim.fence)
             raise StaleGeneration(f"{step['step']}: stale-generation: the {e.kind} answer arrived after this executor's claim was superseded") from None
         raise e
 

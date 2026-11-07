@@ -1,9 +1,11 @@
 """Independent read-back: the only thing that can mark a step VERIFIED.
 
-Nothing here touches the write path: its own ``AppHttp`` instances are built from the READER credentials (Twenty read-only key,
-ERPNext read-only user; Chatwoot and Lago OSS have no read-only role, so their single credential is used through a client that
-refuses every method but GET), it never imports the adapters' write functions, and it never consults the runtime's recorded
-result for anything but the app-native id it must look up. A step is VERIFIED only if every check against the expectation fixed
+Nothing here touches the write path: its own ``AppHttp`` instances are separate objects on a separate code path that refuses every
+method but GET; it never imports the adapters' write functions, and it never consults the runtime's recorded result for anything but
+the app-native id it must look up. Credentials differ by application. ERPNext (reader role) and Twenty (read-only API key) are
+SERVER-ENFORCED: the application itself refuses a write with that credential. Chatwoot and Lago OSS offer no such credential, so the
+verifier SHARES THE WRITER'S CREDENTIAL there (``read_only_kind: get-only-by-code-shared-writer-credential``): independent read-back
+code, not a read-only credential. A step is VERIFIED only if every check against the expectation fixed
 at plan time passes. Transport failure is UNREADABLE (never VERIFIED, never silently NOT_VERIFIED)."""
 from __future__ import annotations
 
@@ -15,9 +17,9 @@ from .context import q
 from .http import AppError, AppHttp, Transport, auth_for
 
 VERIFIED, NOT_VERIFIED, UNREADABLE = "VERIFIED", "NOT_VERIFIED", "UNREADABLE"
-READER_NOTE = {"twenty": "read-only API key", "erpnext": "read-only user (AOS Read Only)",
-               "chatwoot": "integration agent token, GET only (Chatwoot has no read-only role)",
-               "lago": "organization API key, GET only (Lago OSS has no scoped keys)"}
+READER_NOTE = {"twenty": "read-only API key (server-enforced)", "erpnext": "reader role AOS Read Only (server-enforced)",
+               "chatwoot": "the writer's own agent token, used by a separate GET-only client (not server-enforced)",
+               "lago": "the writer's own organization API key, used by a separate GET-only client (not server-enforced)"}
 
 
 class Unreadable(RuntimeError):
@@ -35,7 +37,7 @@ class ReadBack:
         self.prov = cfg.verifier_provenance()
 
     def _prov(self, app: str) -> dict:
-        """Which credential the verification used and what ENFORCES its read-only-ness (server side, or only this GET-only client)."""
+        """Which credential the verification used and what keeps it from writing: the server, or (shared writer credential) only this code."""
         a = self.prov["apps"][app]
         return {"credential_source": self.prov["source"], "read_only_kind": a["read_only"], "same_secret_as_writer": a["same_secret_as_writer"]}
 

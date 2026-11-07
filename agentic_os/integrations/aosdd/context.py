@@ -18,9 +18,23 @@ OUTCOME = {"S1": "quotation", "S2": "invoice_metadata", "S3": "crm_task", "S4": 
 #: What the PROVIDER does about a repeated write, per app. Only provider-enforced is a guarantee; for the others the adapter looks the record up by
 #: its marker before writing (marker-reconciled) and an outcome that cannot be read is UNKNOWN. None of this is exactly-once external execution.
 IDEMPOTENCY = {"twenty": "provider-enforced", "lago": "provider-enforced", "erpnext": "marker-reconciled", "chatwoot": "marker-reconciled"}
+#: What an UNKNOWN outcome (timeout, lost reply, 5xx, incomplete read, crash after dispatch, stale generation) allows, derived from the class:
+#:   auto-same-op-id  the provider itself rejects a second identical request, so repeating the SAME op id cannot create a second effect:
+#:                    reconcile (a lookup) may re-dispatch it in the same call.
+#:   operator-only    nothing in the provider prevents a second effect: the step is UNCERTAIN, nothing re-sends it automatically anywhere
+#:                    (scheduler, failure policy, resume, reconcile); the only ways forward are an adopted-and-verified record, or an
+#:                    explicit, authenticated APPROVER action (`redispatch` after a complete lookup found nothing and a quiescence period
+#:                    passed, or `accept_uncertain`), each recorded with the principal and a reason.
+RETRY_POLICY = {"provider-enforced": "auto-same-op-id", "marker-reconciled": "operator-only", "none": "operator-only"}
+
+
+def auto_retry_allowed(idempotency: str) -> bool:
+    return RETRY_POLICY.get(idempotency, "operator-only") == "auto-same-op-id"
+
+
 IDEMPOTENCY_NOTE = {
-    "twenty": "Twenty rejects a second record with the same client id (400 duplicate key): a repeat cannot create a second task",
-    "lago": "Lago rejects an unchanged duplicate metadata entry (422 value_already_exist); a different concurrent write is not de-duplicated, so the adapter also refuses to overwrite foreign metadata",
+    "twenty": "Twenty rejects a second record with the same client id (400 duplicate key task_pkey, observed): a repeat of the same op id cannot create a second task",
+    "lago": "Lago rejects an unchanged duplicate metadata entry (422 value_already_exist, observed): a repeat of the same op id (same key and value) cannot create a second entry. It does NOT stop a DIFFERENT concurrent writer (the update replaces the whole set), so the adapter also refuses to overwrite foreign metadata",
     "erpnext": "ERPNext does not de-duplicate: at-most-once attempted + reconcile-before-retry (lookup by title marker); the outcome can be unknown",
     "chatwoot": "Chatwoot does not de-duplicate: at-most-once attempted + reconcile-before-retry (lookup by content marker over ALL pages); the outcome can be unknown",
 }
@@ -147,12 +161,12 @@ def build_plan(mission_id: str, sig: dict, ctx: list, *, erp_company: str, accou
                          ops["S1"], sig["erpnext_invoice"]["name"], sig["erpnext_invoice"]["outstanding_amount"], sig["erpnext_invoice"]["due_date"], inv["number"]),
                      "items": [{"item_code": "Platform Subscription - Annual", "qty": 1, "rate": offer}]},
          "expect": {"title": opid.erp_title(ops["S1"]), "docstatus": 0, "party_name": party, "grand_total": offer},
-         "link": "ERPNext /desk/quotation/<name>", "idempotency": IDEMPOTENCY["erpnext"]},
+         "link": "ERPNext /desk/quotation/<name>", "idempotency": IDEMPOTENCY["erpnext"], "retry_policy": RETRY_POLICY[IDEMPOTENCY["erpnext"]]},
         {"step": "S2", "app": "lago", "capability": CAPABILITY["S2"], "outcome": OUTCOME["S2"], "op_id": ops["S2"], "target": tgt["S2"], "derived": {},
          "payload": {"metadata_key": LAGO_KEY, "value": "<op_id> <quotation name from S1>"},
          "expect": {"metadata_key": LAGO_KEY, "value_prefix": ops["S2"], "payment_status": "pending", "payment_overdue": True,
                     "total_due_amount_cents": inv["total_due_amount_cents"]},
-         "link": "Lago invoice.web_url from the API", "idempotency": IDEMPOTENCY["lago"]},
+         "link": "Lago invoice.web_url from the API", "idempotency": IDEMPOTENCY["lago"], "retry_policy": RETRY_POLICY[IDEMPOTENCY["lago"]]},
         {"step": "S3", "app": "twenty", "capability": CAPABILITY["S3"], "outcome": OUTCOME["S3"], "op_id": ops["S3"], "target": tgt["S3"],
          "derived": {"task_id": opid.twenty_uuid(ops["S3"], "task"), "target_id": opid.twenty_uuid(ops["S3"], "target")},
          "payload": {"title": "Recover overdue invoice - Harborview Freight Co (%s)" % inv["number"], "status": "TODO",
@@ -160,13 +174,13 @@ def build_plan(mission_id: str, sig: dict, ctx: list, *, erp_company: str, accou
                          mission_id, inv["number"], inv["total_due_amount_cents"] / 100, inv["currency"], sig["erpnext_invoice"]["name"], sig["chatwoot"]["conversation_id"]),
                      "due_in_days": 2},
          "expect": {"title_contains": inv["number"], "status": "TODO", "target_company_id": sig["twenty"]["company_id"]},
-         "link": "Twenty /object/task/<uuid>", "idempotency": IDEMPOTENCY["twenty"]},
+         "link": "Twenty /object/task/<uuid>", "idempotency": IDEMPOTENCY["twenty"], "retry_policy": RETRY_POLICY[IDEMPOTENCY["twenty"]]},
         {"step": "S4", "app": "chatwoot", "capability": CAPABILITY["S4"], "outcome": OUTCOME["S4"], "op_id": ops["S4"], "target": tgt["S4"],
          "derived": {"marker": opid.chatwoot_marker(ops["S4"])},
          "payload": {"body": "Internal note: invoice %s is overdue (%s). A renewal offer ({quotation}) was drafted in ERPNext and a follow-up task was created for "
                              "the account owner in Twenty. Do not quote prices to the customer until the task owner confirms." % (inv["number"], inv["payment_due_date"])},
          "expect": {"private": True, "marker": opid.chatwoot_marker(ops["S4"]), "conversation_id": sig["chatwoot"]["conversation_id"]},
-         "link": "Chatwoot conversation (no per-message URL exists)", "idempotency": IDEMPOTENCY["chatwoot"]},
+         "link": "Chatwoot conversation (no per-message URL exists)", "idempotency": IDEMPOTENCY["chatwoot"], "retry_policy": RETRY_POLICY[IDEMPOTENCY["chatwoot"]]},
     ]
     plan = {"schema": "aosdd.plan/1", "mission_id": mission_id, "attempt": attempt, "customer_ref": sig["customer_ref"],
             "context_sha256": _h([c["record_sha256"] for c in ctx]), "steps": steps}

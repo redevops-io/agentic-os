@@ -16,7 +16,8 @@ person; the proof is the base in-process HMAC (a third party cannot verify it, i
 re-authenticated per command); the file holding the expected tokens is a secret of the same trust zone as the application
 credentials, but it is a DIFFERENT file and its values are never accepted as application credentials or approval keys.
 
-Role -> action:  requester: submit, resume, reconcile   approver: approve, revoke, resume, compensate   admin: all."""
+Role -> action:  requester: submit, resume, reconcile   approver: approve, revoke, resume, compensate, redispatch, accept_uncertain   admin: all.
+(`redispatch` and `accept_uncertain` are the only ways forward for an UNCERTAIN step whose provider does not enforce idempotency.)"""
 from __future__ import annotations
 
 import json
@@ -28,8 +29,8 @@ from dataclasses import dataclass
 from agentic_os.mission import control_auth as CA
 from agentic_os.mission.principal import ALL_TENANTS, AuthenticatedPrincipal, PrincipalError, principal_of_caller
 
-ACTIONS = ("submit", "approve", "revoke", "resume", "reconcile", "compensate")
-ROLE_ACTIONS = {"admin": set(ACTIONS), "approver": {"approve", "revoke", "resume", "compensate"}, "requester": {"submit", "resume", "reconcile"}}
+ACTIONS = ("submit", "approve", "revoke", "resume", "reconcile", "compensate", "redispatch", "accept_uncertain")
+ROLE_ACTIONS = {"admin": set(ACTIONS), "approver": {"approve", "revoke", "resume", "compensate", "redispatch", "accept_uncertain"}, "requester": {"submit", "resume", "reconcile"}}
 _ENV_LOCK = threading.Lock()
 _ENV_KEYS = (CA.ENV_TOKEN, CA.ENV_TENANT_TOKENS, CA.ENV_APPROVER_TOKENS)
 

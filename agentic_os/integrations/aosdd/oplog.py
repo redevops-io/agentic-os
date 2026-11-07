@@ -39,6 +39,7 @@ from agentic_os.mission.integrity import GENESIS, AnchorFile, IntegrityError, an
 APPLIED, PLANNED, INFLIGHT, UNKNOWN = "applied", "planned", "inflight", "unknown"
 COMPENSATING, COMPENSATED, COMP_FAILED = "compensating", "compensated", "comp_failed"
 STALE = "stale-generation"
+ACCEPTED = "accepted-uncertain"       # an approver closed an uncertain step without retrying it and without claiming it happened
 
 
 class OpError(RuntimeError):
@@ -197,7 +198,7 @@ class OpLog:
                 if r["prev"] != prev or _rec_hash(r["prev"], r["seq"], r["kind"], r["op_id"], r["body"]) != r["hash"]:
                     raise OpLogIntegrityError(f"{self.path}: the operation chain's hash chain is broken at record {r['seq']}")
                 prev, expect = r["hash"], expect + 1
-                if r["kind"] not in ("case", "case_release", "stale"):
+                if r["kind"] not in ("case", "case_release", "stale", "absent_observed"):
                     last_by_op[r["op_id"]] = json.loads(r["body"])
             self._check_anchor(c, len(rows), rec)
             if not rows and c.execute("SELECT COUNT(*) FROM ops").fetchone()[0]:
@@ -235,7 +236,7 @@ class OpLog:
             prev, expect = r["hash"], expect + 1
         self._check_anchor(c, expect - 1, rec)
         row = c.execute("SELECT * FROM ops WHERE op_id=?", (op,)).fetchone()
-        last = c.execute("SELECT body FROM oplog_chain WHERE op_id=? AND kind NOT IN ('case','case_release','stale') ORDER BY seq DESC LIMIT 1", (op,)).fetchone()
+        last = c.execute("SELECT body FROM oplog_chain WHERE op_id=? AND kind NOT IN ('case','case_release','stale','absent_observed') ORDER BY seq DESC LIMIT 1", (op,)).fetchone()
         if row is None and last is not None:
             raise OpLogIntegrityError(f"{self.path}: operation {op} is in the chain but not in the ledger (deleted)")
         if row is not None and (last is None or json.loads(last["body"]) != self._body_of(row)):
@@ -305,9 +306,11 @@ class OpLog:
             self._log_op(c, "plan", op)
             return self._d(c.execute("SELECT * FROM ops WHERE op_id=?", (op,)).fetchone())
 
-    def claim(self, op: str, owner: str) -> Claim:
+    def claim(self, op: str, owner: str, *, takeover: bool = False) -> Claim:
         """Take the right to send the request for ``op`` (persisted before any request, verified before it is granted), or learn why not.
-        Every ``acquired`` claim has a NEW generation (``fence``); whoever holds an older one is stale."""
+        Every ``acquired`` claim has a NEW generation (``fence``); whoever holds an older one is stale. ``takeover=True`` lets the caller
+        claim an UNKNOWN (or lease-expired) operation: it is for steps whose PROVIDER rejects a duplicate (same op id), never for the
+        others (the policy lives in ``client.AosddOperatorClient``)."""
         with self._tx() as c:
             self._check_op(c, op)
             row = c.execute("SELECT * FROM ops WHERE op_id=?", (op,)).fetchone()
@@ -318,13 +321,15 @@ class OpLog:
                 return Claim("applied", op, row["fence"], row["owner"] or "", self._d(row))
             if st in (COMPENSATING, COMPENSATED, COMP_FAILED):
                 return Claim("compensated", op, row["fence"], row["owner"] or "", self._d(row))
-            if st == UNKNOWN or (st == INFLIGHT and (row["lease_until"] or 0) <= now):
+            if st == ACCEPTED:
+                return Claim("accepted", op, row["fence"], row["owner"] or "", self._d(row))
+            if (st == UNKNOWN or (st == INFLIGHT and (row["lease_until"] or 0) <= now)) and not takeover:
                 return Claim("reconcile", op, row["fence"], row["owner"] or "", self._d(row))
             if st == INFLIGHT and row["owner"] != owner:
                 return Claim("held", op, row["fence"], row["owner"] or "", self._d(row))
             fence = row["fence"] + 1                          # a re-entry by the same executor is a new generation too
             c.execute("UPDATE ops SET state=?, owner=?, fence=?, lease_until=?, updated=? WHERE op_id=?", (INFLIGHT, owner, fence, now + self.lease_ttl_s, now, op))
-            self._hist(c, op, INFLIGHT, f"owner={owner} fence={fence}")
+            self._hist(c, op, INFLIGHT, f"owner={owner} fence={fence}" + (" takeover (provider-enforced idempotency)" if takeover and st in (UNKNOWN, INFLIGHT) else ""))
             self._log_op(c, "claim", op)
             return Claim("acquired", op, fence, owner, self._d(c.execute("SELECT * FROM ops WHERE op_id=?", (op,)).fetchone()))
 
@@ -373,6 +378,38 @@ class OpLog:
             cur = c.execute("SELECT fence, state FROM ops WHERE op_id=?", (op,)).fetchone()
             self._hist(c, op, STALE, f"generation {fence} (current {cur['fence'] if cur else '?'}, {cur['state'] if cur else '?'}): {native_id} {note}")
             self._append(c, "stale", op, {"stale_fence": fence, "current_fence": cur["fence"] if cur else None, "native_id": str(native_id), "result_sha256": _sha(result), "note": note[:200]})
+
+    def stale_count(self, op: str) -> int:
+        return len(self.stale_results(op))
+
+    # ---- uncertain outcomes: absence evidence and the explicit ways out -----------------------------------------------------------
+    def quiet_since(self, op: str) -> "float | None":
+        """When the last claim's lease ran out (the earlier request is, at the earliest, abandoned by its executor then)."""
+        row = self.get(op)
+        return None if row is None or row["state"] not in (UNKNOWN, INFLIGHT) else row["lease_until"]
+
+    def observe_absent(self, op: str, evidence: dict) -> None:
+        """A COMPLETE lookup found no record carrying the marker. Recorded (chain + history); the state does NOT change: absence is evidence,
+        never a licence. Only an approver's `redispatch` acts on it."""
+        with self._tx() as c:
+            self._check_op(c, op)
+            self._hist(c, op, "absent-observed", _canon(evidence)[:250])
+            self._append(c, "absent_observed", op, evidence)
+
+    def absent_observation(self, op: str) -> "dict | None":
+        r = self._conn().execute("SELECT body FROM oplog_chain WHERE op_id=? AND kind='absent_observed' ORDER BY seq DESC LIMIT 1", (op,)).fetchone()
+        return json.loads(r["body"]) if r else None
+
+    def accept_uncertain(self, op: str, note: str) -> None:
+        """An approver accepts the outcome as it is: not retried, not claimed to have happened (terminal for this op)."""
+        with self._tx() as c:
+            self._check_op(c, op)
+            row = c.execute("SELECT * FROM ops WHERE op_id=?", (op,)).fetchone()
+            if row is None or row["state"] not in (UNKNOWN, INFLIGHT):
+                raise OpError(f"{op}: only an uncertain operation can be accepted as is")
+            c.execute("UPDATE ops SET state=?, lease_until=NULL, fence=fence+1, updated=? WHERE op_id=?", (ACCEPTED, self.clock(), op))
+            self._hist(c, op, ACCEPTED, note)
+            self._log_op(c, "accepted_uncertain", op)
 
     def resolve_applied(self, op: str, native_id: str, result: dict, note: str) -> None:
         """Reconciliation FOUND the record in the application (by marker): adopt it. No second write."""

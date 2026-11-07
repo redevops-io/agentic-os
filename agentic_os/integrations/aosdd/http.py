@@ -1,4 +1,4 @@
-"""HTTP for the AOS-DD adapters: one transport seam, error classification, and a read-only client.
+"""HTTP for the AOS-DD adapters: one transport seam, error classification, and a GET-only client.
 
 * ``Transport.send`` is the ONLY place a socket is opened. Tests inject a fake; reconstruction runs inside
   ``network_disabled()`` so that any connector call raises ``NetworkTouched`` (proof that rebuilding a finished mission from
@@ -6,8 +6,8 @@
 * ``AppError`` carries a classification the runtime understands: ``not_applied`` is True only for answers that prove the
   request did not take effect (credential / permission / validation / duplicate / conflict). A timeout, a transport failure
   or a 5xx is ``unavailable``/``server``: the effect may exist, so the runtime parks the step as UNKNOWN instead of failing it.
-* ``AppHttp`` builds the auth header at send time from a ``Secret``; ``read_only=True`` refuses any method but GET, which is
-  how the verifier is kept on a code path that cannot write.
+* ``AppHttp`` builds the auth header at send time from a ``Secret``; ``read_only=True`` refuses any method but GET (a GET-only client:
+  a property of this code, not of the credential), which is how the verifier is kept on a code path that does not write.
 """
 from __future__ import annotations
 

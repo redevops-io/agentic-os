@@ -322,7 +322,8 @@ def test_same_op_id_with_a_different_target_is_a_conflict_and_compensated_ops_ar
 def test_every_verification_states_its_credential_source_and_what_enforces_read_only():
     from agentic_os.integrations.aosdd.config import READ_ONLY_KIND
     cfg = _cfg()
-    assert READ_ONLY_KIND == {"erpnext": "server-enforced", "twenty": "server-enforced", "chatwoot": "get-only-by-code", "lago": "get-only-by-code"}
+    assert READ_ONLY_KIND == {"erpnext": "server-enforced", "twenty": "server-enforced",
+                              "chatwoot": "get-only-by-code-shared-writer-credential", "lago": "get-only-by-code-shared-writer-credential"}
     prov = cfg.verifier_provenance()
     assert prov["source"] == "verifier.json" and set(prov["apps"]) == {"chatwoot", "twenty", "erpnext", "lago"}
     # the fixtures give Chatwoot and Lago the SAME secret for reading as for writing (no scoped credential exists): the receipt says so

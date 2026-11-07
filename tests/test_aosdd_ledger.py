@@ -444,8 +444,8 @@ def test_the_receipt_records_per_step_which_verifier_credential_and_which_kind_o
     rec = reconstruct(env.events_path, mid)
     assert rec["verifier"]["source"] == "verifier.json"
     kinds = {s["step"]: (s["verification"]["read_only_kind"], s["verification"]["credential_source"], s["verification"]["same_secret_as_writer"]) for s in rec["steps"]}
-    assert kinds == {"S1": ("server-enforced", "verifier.json", False), "S2": ("get-only-by-code", "verifier.json", True),
-                     "S3": ("server-enforced", "verifier.json", False), "S4": ("get-only-by-code", "verifier.json", True)}
+    assert kinds == {"S1": ("server-enforced", "verifier.json", False), "S2": ("get-only-by-code-shared-writer-credential", "verifier.json", True),
+                     "S3": ("server-enforced", "verifier.json", False), "S4": ("get-only-by-code-shared-writer-credential", "verifier.json", True)}
     # and the verifier really did use the reader credentials, on a client that cannot write
     assert all(h.read_only for h in r.svc.readback.c.values()) and all(r.svc.readback.c[a] is not r.svc.writers[a] for a in r.svc.writers)
 
