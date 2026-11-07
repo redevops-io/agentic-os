@@ -837,3 +837,13 @@ refused until they pass one, or, outside production, until their runtime has a t
   `provider-enforced` (a plan node or a fork branch alike). For every other capability `reconcile_node` records `AutomaticRetryRefused`, leaves the reservation and the mission as they are,
   the supervisor job escalates to a person, and only an authenticated operator's `reconcile_node` can send the step again. Positive evidence, a
   person's own call, a read-only node and a provider-enforced capability are unchanged. Tests: `tests/test_automatic_retry_idempotency.py`.
+* **AOS-DD: a person's re-send is held to more than the base asks (deliberate, AOS-DD-specific).** The base allows any authenticated person to call
+  `reconcile_node(executed=False)` for an uncertain step. For an AOS-DD mission whose step is not provider-enforced (ERPNext, Chatwoot), the AOS-DD
+  runtime narrows that call (`AosddMissionRuntime.reconcile_node`, `_redispatch_guard`): it is refused, with nothing sent and the operation not
+  released (`AosddRedispatchRefused`), unless the principal is an authenticated approver or admin of the mission's tenant, a reason is stated, an earlier
+  reconcile RECORDED that the record was absent, the earlier lease expired at least one HTTP timeout ago, and a fresh complete lookup still finds nothing
+  (the caller's own evidence is not consulted). The conditions sit where the re-send happens, so a caller holding the runtime object meets them as well as
+  `Runner.redispatch`, which uses the same guard. Provider-enforced steps, positive evidence ("it did happen") and the supervisor path (which the base
+  refuses) are not changed by it. Absence is evidence, not proof; the approver's authorization records that residual risk. Tests:
+  `tests/test_aosdd_redispatch_guard.py`, `tests/test_aosdd_retry_policy.py`. Not covered: a person's `reconcile_node(executed=True, result=...)`
+  records an effect on the caller's word, without the read-back that `Runner.reconcile` performs.

@@ -11,7 +11,9 @@ What this subclass adds (each is a gap in the base for this scenario, recorded i
     set/targets), the plan integrity, and the live grant (revocation, expiry, scope);
   * ``_resolve_inputs`` exposes the step's target as top-level arguments so the grant's resource selectors apply to them;
   * the verifier is the independent read-back; a rejected/unverified write is compensated like any completed one;
-  * a refusal HALTS the mission (no automatic compensation: undoing is a separate, explicit operator action)."""
+  * a refusal HALTS the mission (no automatic compensation: undoing is a separate, explicit operator action);
+  * ``reconcile_node(executed=False)`` for an uncertain ERPNext/Chatwoot write is narrowed (``_redispatch_guard``): a person's re-send needs the approver role, a
+    stated reason, a recorded absence, quiescence and a fresh complete lookup, on top of the base rule that only a person may send it again."""
 from __future__ import annotations
 
 import time
@@ -19,8 +21,10 @@ import time
 from agentic_os.mission import compensation as C
 from agentic_os.mission.authority import Action, AuthorityEnvelope, AutonomyBudget, Grant
 from agentic_os.mission.executor import Executor
+from agentic_os.mission.principal import SYSTEM_PROBE_METHOD
+from agentic_os.mission.reconcile import ReconciliationError
 from agentic_os.mission.runtime import MissionRuntime
-from agentic_os.mission.types import Budget, MissionState, NodeState, VerificationDecision, VerificationResult
+from agentic_os.mission.types import Budget, MissionState, NodeState, VerificationDecision, VerificationResult, automatic_retry_allowed
 from agentic_os.mission.verify import CompositeVerifier
 
 from . import approval as approvals
@@ -31,6 +35,7 @@ from .capabilities import (GATE_CAP, PERM_READ, PERM_WRITE, READ_CAPS, RESOURCE_
 from .client import AosddOperatorClient, AosddRefusal, step_args
 from .context import CAPABILITY, OUTCOME, auto_retry_allowed, plan_sha256, step_of
 from .http import AppError
+from .oplog import OpError
 from .services import Services
 from .verify import VERIFIED, UNREADABLE
 
@@ -138,6 +143,75 @@ class AosddMissionRuntime(MissionRuntime):
                                                                "automatic_retry": auto_retry_allowed(st["idempotency"])})
         super()._park_for_reconciliation(m, node, reason)
 
+    # ---- a PERSON's re-send of an uncertain step (AOS-DD-specific hardening on top of the base rule) ---------------------------------------------
+    def reconcile_node(self, mission_id: str, node_id: str, *, executed: bool, evidence: dict, actor: str = "", reason: str,
+                       result: "dict | None" = None, resume: bool = True, principal=None):
+        """Narrowed override of the base ``reconcile_node``: only "it did NOT happen, send it again" (``executed=False``) for an AOS-DD WRITE node that is
+        waiting for reconciliation and whose provider does not enforce idempotency (ERPNext, Chatwoot) is held to the AOS-DD conditions
+        (:meth:`_redispatch_guard`) BEFORE the base runs. Everything else is the base, unchanged: positive evidence, provider-enforced steps, other
+        nodes, and the supervisor path (which the base itself refuses for these steps: ``AutomaticRetryRefused``). The guard runs under the mission's run
+        lock, which the base then takes again (it is re-entrant), so two concurrent re-sends cannot both pass."""
+        if not executed and mission_id in self._plans:
+            with self._run_lock(mission_id):
+                node = next((n for n in self._plans[mission_id].graph.nodes if n.id == node_id), None)
+                if node is not None and node.capability in WRITE_CAPS and any(p["node_id"] == node.id for p in self.repo.pending_reconciliation(mission_id)):
+                    self._redispatch_guard(mission_id, node, reason, principal)
+                return super().reconcile_node(mission_id, node_id, executed=executed, evidence=evidence, actor=actor, reason=reason, result=result, resume=resume,
+                                              principal=principal)
+        return super().reconcile_node(mission_id, node_id, executed=executed, evidence=evidence, actor=actor, reason=reason, result=result, resume=resume,
+                                      principal=principal)
+
+    def _redispatch_guard(self, mission_id: str, node, reason: str, principal) -> None:
+        """The conditions for a person to send an UNCERTAIN, non-provider-enforced step again. Raises :class:`RedispatchRefused` (recording
+        ``AosddRedispatchRefused``) unless all hold: an authenticated principal whose role may ``redispatch`` (approver/admin, of this tenant); a stated
+        reason; an earlier reconcile RECORDED the absence of the record; quiescence (the earlier lease expired at least one HTTP timeout ago); a FRESH complete
+        lookup that still finds nothing (the caller's own evidence is not consulted). On success the operation is released for a new generation and
+        ``AosddRedispatchAuthorized`` is recorded with the principal, the reason and the evidence. Absence is never proof: the record says so."""
+        plan_d = self.svc.plan_for(mission_id)
+        spec = self.registry.get(node.capability)
+        if plan_d is None:
+            st = None
+        else:
+            st = step_of(plan_d, STEP_OF[node.capability])
+        if st is not None and auto_retry_allowed(st["idempotency"]) and automatic_retry_allowed(getattr(spec, "idempotency", "") or ""):
+            return                                      # provider-enforced: a repeat of the same op id is safe; the base rule is enough
+        if getattr(principal, "method", None) == SYSTEM_PROBE_METHOD:
+            return                                      # the supervisor path: the base refuses it for a non-provider-enforced node (AutomaticRetryRefused)
+        step, op = (st["step"], st["op_id"]) if st else (STEP_OF[node.capability], "")
+
+        def refuse(why: str):
+            who = principal.record() if hasattr(principal, "record") else None
+            self.svc.emit("AosddRedispatchRefused", mission_id, {"step": step, "op_id": op, "principal": who, "reason": why})
+            raise RedispatchRefused(f"redispatch refused: {why}")
+        if st is None:
+            refuse("no plan is recorded for this mission, so the step cannot be checked")
+        try:
+            identity.require(principal, "redispatch", self.svc.cfg.tenant, self.principal_verifier())
+        except identity.NotPermitted as e:
+            refuse(str(e))
+        if len(str(reason).strip()) < 8:
+            refuse("redispatch needs a stated reason")
+        obs = self.svc.oplog.absent_observation(op)
+        quiet = self.svc.oplog.quiet_since(op)
+        if obs is None:
+            refuse("no reconcile has observed the absence of the record yet")
+        now = self.svc.clock()
+        if quiet is None or now < quiet + self.svc.cfg.http_timeout_s:
+            refuse("too early: the earlier request may still be in flight or being processed (wait until its lease expired plus one HTTP timeout)")
+        try:
+            found = self.svc.adapters[st["app"]].find(st)
+        except AppError as e:
+            refuse(f"cannot decide: {st['app']} could not be read completely ({e.kind} {e.status})")
+        if found is not None and not found.get("partial"):
+            refuse("a record carrying the marker exists now: reconcile it (adopt) instead")
+        try:
+            self.svc.oplog.resolve_not_applied(op, f"redispatch authorized by {principal.id}: {reason}")
+        except OpError as e:
+            refuse(f"the operation cannot be released: {e}")
+        self.svc.emit("AosddRedispatchAuthorized", mission_id, {"step": step, "op_id": op, "principal": principal.record(), "reason": reason, "absence_observed": obs,
+                                                                "fresh_lookup_complete": True, "quiet_since": quiet, "at": now,
+                                                                "residual_risk": "the application may still process the earlier request; a stale-generation record will show it"})
+
     # ---- compensation of an effect that exists but never committed (read-back rejected it) ---------------------------------------------------------
     def _saga(self, m, plan, world, *, authorizer=None) -> None:
         self._undo_uncommitted(m, plan, authorizer)
@@ -181,6 +255,10 @@ class AosddMissionRuntime(MissionRuntime):
 # ---------------------------------------------------------------------------------------------------------------- operator facade
 class RunnerError(RuntimeError):
     pass
+
+
+class RedispatchRefused(ReconciliationError):
+    """A person's re-send of an uncertain step was refused by the AOS-DD guard (nothing was sent, the operation was not released)."""
 
 
 def _lit_resource(step: dict) -> str:
@@ -378,40 +456,21 @@ class Runner:
         return st, node
 
     def redispatch(self, mission_id: str, step: str, reason: str, *, principal):
-        """Re-send an uncertain step whose provider does not enforce idempotency. Needs: the approver role, a stated reason, an earlier
-        `reconcile` that observed absence, a quiescence period (the earlier lease expired at least one HTTP timeout ago, so the earlier
-        request is no longer in its executor's hands), and a FRESH complete lookup that still finds nothing. Absence is never proof (an
-        application can still process a request it received); this is the operator accepting that residual risk, on the record."""
+        """Re-send an uncertain step whose provider does not enforce idempotency. The conditions (approver role, stated reason, an earlier reconcile that
+        observed absence, quiescence of the earlier lease plus one HTTP timeout, a FRESH complete lookup that still finds nothing) are enforced by
+        ``AosddMissionRuntime._redispatch_guard`` inside ``reconcile_node``, the same guard a direct call to the runtime meets; this method only
+        names the step and reports a refusal. Absence is never proof (an application can still process a request it received); the approver accepts
+        that residual risk, on the record."""
         self._who(principal, "redispatch")
-        if len(str(reason).strip()) < 8:
-            raise RunnerError("redispatch needs a stated reason")
         self._ensure_live(mission_id, principal)
         st, node = self._pending_uncertain(mission_id, step)
         if auto_retry_allowed(st["idempotency"]):
             raise RunnerError(f"{step} is provider-enforced: use reconcile (a repeat of the same op id is safe)")
-        op = st["op_id"]
-
-        def refuse(why):
-            self.svc.emit("AosddRedispatchRefused", mission_id, {"step": step, "op_id": op, "principal": principal.record(), "reason": why})
-            raise RunnerError(f"redispatch refused: {why}")
-        obs = self.svc.oplog.absent_observation(op)
-        quiet = self.svc.oplog.quiet_since(op)
-        if obs is None:
-            refuse("no reconcile has observed the absence of the record yet")
-        now = self.svc.clock()
-        if quiet is None or now < quiet + self.svc.cfg.http_timeout_s:
-            refuse("too early: the earlier request may still be in flight or being processed (wait until its lease expired plus one HTTP timeout)")
         try:
-            found = self.svc.adapters[st["app"]].find(st)
-        except AppError as e:
-            refuse(f"cannot decide: {st['app']} could not be read completely ({e.kind} {e.status})")
-        if found is not None and not found.get("partial"):
-            refuse("a record carrying the marker exists now: reconcile it (adopt) instead")
-        self.svc.oplog.resolve_not_applied(op, f"redispatch authorized by {principal.id}: {reason}")
-        self.svc.emit("AosddRedispatchAuthorized", mission_id, {"step": step, "op_id": op, "principal": principal.record(), "reason": reason, "absence_observed": obs,
-                                                                "fresh_lookup_complete": True, "quiet_since": quiet, "at": now, "residual_risk": "the application may still process the earlier request; a stale-generation record will show it"})
-        return self.rt.reconcile_node(mission_id, node.id, executed=False, reason=reason, principal=principal,       # a person: the base allows it, the supervisor it does not
-                                      evidence={"kind": "provider_record", "reference": f"{st['app']}: no record carries {op} (fresh complete lookup)"})
+            return self.rt.reconcile_node(mission_id, node.id, executed=False, reason=reason, principal=principal,       # a person: the base allows it, the supervisor it does not
+                                          evidence={"kind": "provider_record", "reference": f"{st['app']}: no record carries {st['op_id']} (fresh complete lookup)"})
+        except RedispatchRefused as e:
+            raise RunnerError(str(e)) from None
 
     def accept_uncertain(self, mission_id: str, step: str, reason: str, *, principal):
         """An approver accepts the uncertain outcome as it is: the step is not retried and not claimed to have happened; the mission is

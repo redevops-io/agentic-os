@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from aosdd_fakes import Crash  # noqa: E402
 from test_aosdd_runtime import ADM, APP, REF, REQ, Env, go, state  # noqa: E402
 
-from agentic_os.integrations.aosdd.runtime import AosddMissionRuntime
+from agentic_os.integrations.aosdd.runtime import AosddMissionRuntime, RedispatchRefused
 from agentic_os.mission.reconcile import ReconciliationError
 from agentic_os.mission.types import MissionState
 
@@ -191,7 +191,7 @@ def test_runner_redispatch_goes_through_the_same_guard(tmp_path, monkeypatch):
     r.redispatch(mid, "S1", WHY, principal=APP)
     assert calls and state(r, mid) is MissionState.SUCCEEDED
     # and a refusal by the guard is what Runner.redispatch reports
-    monkeypatch.setattr(AosddMissionRuntime, "_redispatch_guard", lambda self, *a, **k: (_ for _ in ()).throw(ReconciliationError("guard says no")))
+    monkeypatch.setattr(AosddMissionRuntime, "_redispatch_guard", lambda self, *a, **k: (_ for _ in ()).throw(RedispatchRefused("guard says no")))
     (tmp_path / "second").mkdir()
     env2 = Env(tmp_path / "second")
     r2, mid2 = parked(env2, "G11")
