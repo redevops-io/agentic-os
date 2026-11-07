@@ -138,23 +138,6 @@ class AosddMissionRuntime(MissionRuntime):
                                                                "automatic_retry": auto_retry_allowed(st["idempotency"])})
         super()._park_for_reconciliation(m, node, reason)
 
-    def reconcile_node(self, mission_id, node_id, *, executed, evidence, actor="", reason, result=None, resume=True, principal=None):
-        """The base lets ANY authorized caller declare "it did not happen" and re-dispatch in the same call (the reconciliation supervisor
-        does it from a probe). For a step whose provider does not enforce idempotency that is the automatic retry this integration forbids:
-        only `Runner.redispatch` (an approver, with a reason, after a complete lookup and the quiescence period) sets the one-shot token."""
-        from agentic_os.mission.reconcile import ReconciliationError  # noqa: PLC0415
-        node = next((n for n in self._plans[mission_id].graph.nodes if n.id == node_id), None) if mission_id in self._plans else None
-        if node is not None and node.capability in WRITE_CAPS and executed is False:
-            plan_d = self.svc.plan_for(mission_id) or {}
-            st = step_of(plan_d, STEP_OF[node.capability]) if plan_d else None
-            if st is not None and not auto_retry_allowed(st["idempotency"]) and self._redispatch_token != (mission_id, st["op_id"]):
-                self.store.append("AosddRedispatchRefused", mission_id, {"node_id": node_id, "step": st["step"], "idempotency": st["idempotency"],
-                                                                         "reason": "an uncertain step is re-dispatched only by an approver's explicit redispatch"})
-                raise ReconciliationError(f"{st['step']}: the provider does not enforce idempotency; re-dispatching an uncertain step needs an approver's explicit redispatch")
-        return super().reconcile_node(mission_id, node_id, executed=executed, evidence=evidence, actor=actor, reason=reason, result=result, resume=resume, principal=principal)
-
-    _redispatch_token = None
-
     # ---- compensation of an effect that exists but never committed (read-back rejected it) ---------------------------------------------------------
     def _saga(self, m, plan, world, *, authorizer=None) -> None:
         self._undo_uncommitted(m, plan, authorizer)
@@ -427,12 +410,8 @@ class Runner:
         self.svc.oplog.resolve_not_applied(op, f"redispatch authorized by {principal.id}: {reason}")
         self.svc.emit("AosddRedispatchAuthorized", mission_id, {"step": step, "op_id": op, "principal": principal.record(), "reason": reason, "absence_observed": obs,
                                                                 "fresh_lookup_complete": True, "quiet_since": quiet, "at": now, "residual_risk": "the application may still process the earlier request; a stale-generation record will show it"})
-        self.rt._redispatch_token = (mission_id, op)
-        try:
-            return self.rt.reconcile_node(mission_id, node.id, executed=False, reason=reason, principal=principal,
-                                          evidence={"kind": "provider_record", "reference": f"{st['app']}: no record carries {op} (fresh complete lookup)"})
-        finally:
-            self.rt._redispatch_token = None
+        return self.rt.reconcile_node(mission_id, node.id, executed=False, reason=reason, principal=principal,       # a person: the base allows it, the supervisor it does not
+                                      evidence={"kind": "provider_record", "reference": f"{st['app']}: no record carries {op} (fresh complete lookup)"})
 
     def accept_uncertain(self, mission_id: str, step: str, reason: str, *, principal):
         """An approver accepts the uncertain outcome as it is: the step is not retried and not claimed to have happened; the mission is

@@ -177,16 +177,18 @@ def test_an_uncertain_non_provider_enforced_step_is_never_taken_over_by_the_clie
 
 # ---- nothing in the base can re-send an uncertain step ---------------------------------------------------------------------------------------------
 def test_the_base_reconcile_path_cannot_redispatch_an_uncertain_non_provider_enforced_step(tmp_path):
-    """The reconciliation supervisor calls reconcile_node(executed=False, resume=True) from a probe. For ERPNext/Chatwoot that is refused."""
+    """The reconciliation supervisor calls reconcile_node(executed=False, resume=True) from a probe. For ERPNext/Chatwoot that is refused by the BASE
+    runtime (the capability declares marker-reconciled idempotency): AutomaticRetryRefused, nothing sent, the reservation untouched."""
     env = Env(tmp_path)
     r, mid = crashed(env, "E6", "erpnext", "POST", "/api/resource/Quotation", after=False)
     node = next(n for n in r.rt._plans[mid].graph.nodes if n.capability == S1_CAP)
     n = env.stack.count("erpnext", "POST")
     system = authn("system:probe", tenant="*", roles=("admin",), method="system-probe")
-    with pytest.raises(ReconciliationError, match="explicit redispatch"):
+    with pytest.raises(ReconciliationError, match="does not declare provider-enforced idempotency"):
         r.rt.reconcile_node(mid, node.id, executed=False, evidence={"kind": "provider_record", "reference": "probe: nothing found"}, reason="the probe says it did not happen", principal=system)
     assert env.stack.count("erpnext", "POST") == n and state(r, mid) is MissionState.WAITING_RECONCILIATION
-    assert [e for e in r.svc.store.for_mission(mid) if e.type == "AosddRedispatchRefused"]
+    refused = [e for e in r.svc.store.for_mission(mid) if e.type == "AutomaticRetryRefused"]
+    assert len(refused) == 1 and refused[0].payload["capability"] == S1_CAP and refused[0].payload["idempotency"] == "marker-reconciled" and refused[0].payload["uncertain"] is True
 
 
 def _fork_with_unknown_outcome(env, case, bypass_admission):
@@ -252,3 +254,11 @@ def test_an_approver_can_accept_an_uncertain_outcome_as_is_which_cancels_the_mis
     assert any("accepted as uncertain" in x["what"] for x in s1["residual"])
     with pytest.raises(RunnerError):
         r.redispatch(mid, "S1", "owner decided to retry the step", principal=APP)             # a closed uncertainty is not re-opened
+
+
+def test_each_write_capability_declares_what_its_provider_does_about_a_repeat():
+    """The base runtime re-dispatches on its own only for a capability that declares provider-enforced idempotency; AOS-DD declares it per application."""
+    from agentic_os.integrations.aosdd.capabilities import WRITE_CAPS, specs
+    declared = {s.name.rsplit(".", 2)[-2]: s.idempotency for s in specs() if s.name in WRITE_CAPS}
+    assert declared == {"erpnext": "marker-reconciled", "lago": "provider-enforced", "twenty": "provider-enforced", "chatwoot": "marker-reconciled"}
+    assert all(s.idempotency == "" for s in specs() if s.name not in WRITE_CAPS)

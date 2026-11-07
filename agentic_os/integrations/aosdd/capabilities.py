@@ -14,7 +14,7 @@ import re
 from agentic_os.mission.registry import CapabilityRegistry
 from agentic_os.mission.types import CapabilityManifest, CapabilitySpec, ExecutionIntent, IntentStep, NodeCost
 
-from .context import APP, CAPABILITY, OUTCOME
+from .context import APP, CAPABILITY, IDEMPOTENCY, OUTCOME
 
 OPERATOR = "aosdd"
 PERM_READ, PERM_WRITE = "aosdd:read", "aosdd:write"
@@ -37,14 +37,15 @@ RESIDUAL = {
 }
 
 
-def _spec(name, *, side=False, perm=PERM_READ, outs=None, ins=None, provides=(), undo=None, verify=None, approval=False, irreversible="", notes="", residual=()):
+def _spec(name, *, side=False, perm=PERM_READ, outs=None, ins=None, provides=(), undo=None, verify=None, approval=False, irreversible="", notes="", residual=(),
+          idempotency=""):
     comp = None
     if undo:
         comp = {"supported": True, "capability": undo, "reversibility": "REVERSIBLE_EXPLICIT", "requires_approval": False, "verify": verify, "notes": notes,
                 "residual_effects": list(residual)}
     return CapabilitySpec(name=name, operator=OPERATOR, inputs=ins or {}, outputs=outs or {}, cost=NodeCost(), permissions=[perm], deterministic=not side,
                           side_effecting=side, compensation=comp, irreversible=bool(irreversible), irreversible_note=irreversible, approval_required=approval,
-                          provides=list(provides), concurrency_mode="exclusive" if side else "read_only")
+                          provides=list(provides), concurrency_mode="exclusive" if side else "read_only", idempotency=idempotency)
 
 
 def specs() -> list:
@@ -53,7 +54,8 @@ def specs() -> list:
            _spec(GATE_CAP, outs={"status": "str"}, provides=["plan_approval"], approval=True)]
     for step, cap in CAPABILITY.items():
         out.append(_spec(cap, side=True, perm=PERM_WRITE, outs={"native_id": "str"}, provides=[OUTCOME[step]], undo=UNDO[cap], verify=VERIFY[cap],
-                         notes="; ".join(RESIDUAL[step]), residual=RESIDUAL[step]))
+                         notes="; ".join(RESIDUAL[step]), residual=RESIDUAL[step],
+                         idempotency=IDEMPOTENCY[APP[step]]))       # what the PROVIDER does about a repeat (context.IDEMPOTENCY): only provider-enforced may be re-sent by the base on its own
         out.append(_spec(UNDO[cap], side=True, perm=PERM_WRITE, irreversible="a compensating delete/clear cannot itself be undone; residual: " + "; ".join(RESIDUAL[step])))
         out.append(_spec(VERIFY[cap], perm=PERM_READ, outs={"verified": "bool"}))
     return out
