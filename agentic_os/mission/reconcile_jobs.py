@@ -253,6 +253,14 @@ class ReconciliationSupervisor:
         self.clock, self.rng = clock, rng or random.Random()
         self.notifier, self.on_event, self.leases, self.claim_s = notifier, on_event or (lambda ev: None), mission_leases, claim_s
 
+    @staticmethod
+    def _system_principal(adapter: str):
+        """The supervisor acts on a provider's own answer (a probe), not on a person's word: it is recorded as a service principal
+        issued for this purpose (``method: system-probe``), so the log tells it apart from a human reconciliation."""
+        from ..overlays import Principal  # noqa: PLC0415
+        from .principal import ALL_TENANTS, default_issuer  # noqa: PLC0415
+        return default_issuer().issue(Principal(f"system:reconciliation:{adapter}", "service", ("system",), ALL_TENANTS), method="system-probe")
+
     def _emit(self, kind: str, job: dict, **extra) -> None:
         try:
             self.on_event({"type": kind, "job_id": job["job_id"], "mission_id": job["mission_id"], "capability": job["capability"],
@@ -371,7 +379,7 @@ class ReconciliationSupervisor:
             return
         try:
             with (lease_ctx or _Null()):
-                self.rt.reconcile_node(mid, job["node_id"], executed=executed, evidence=ev, actor=f"system:reconciliation:{v.adapter}",
+                self.rt.reconcile_node(mid, job["node_id"], executed=executed, evidence=ev, principal=self._system_principal(v.adapter),
                                        reason=("the provider lookup confirmed the effect" if executed else
                                                "the provider authoritatively confirmed the effect did not happen"),
                                        result=r.result if executed else None, resume=True)

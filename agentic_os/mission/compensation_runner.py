@@ -524,7 +524,8 @@ class InterventionError(ValueError):
     """Wrong state / unknown node / nothing to do. Routes map this to 409/404."""
 
 
-def intervene(rt, m, action: str, *, actor: str, reason: str = "", node_id: str | None = None) -> None:
+def intervene(rt, m, action: str, *, actor: str, reason: str = "", node_id: str | None = None, identity: "dict | None" = None) -> None:
+    who = {k: v for k, v in (identity or {}).items() if k != "approver"}      # principal record / authenticated flag of the operator
     folded = C.fold_compensation(rt.store.for_mission(m.id))
     plan = rt._plans[m.id]
     now = time.time()
@@ -535,7 +536,7 @@ def intervene(rt, m, action: str, *, actor: str, reason: str = "", node_id: str 
             raise InterventionError("no failed compensation is retryable (none failed, or max attempts reached: "
                                     "acknowledge instead)")
         rt.store.append("CompensationRetryRequested", m.id, {"actor": actor, "reason": reason, "node_ids": retryable,
-                                                             "at": now})
+                                                             "at": now, **who})
         run_saga(rt, m, plan)
     elif action == "approve":
         v = folded.get(node_id or "")
@@ -558,7 +559,7 @@ def intervene(rt, m, action: str, *, actor: str, reason: str = "", node_id: str 
             raise InterventionError("the compensation inputs changed since approval was requested")
         rt.store.append(C.EV_APPROVED, m.id, {
             "node_id": node_id, "mission_id": m.id, "undo": node.undo, "attempt": v["attempt"],
-            "inputs_sha256": digest, "approver": actor, "reason": reason, "at": now, "exp": now + APPROVAL_TTL_S})
+            "inputs_sha256": digest, "approver": actor, "reason": reason, "at": now, "exp": now + APPROVAL_TTL_S, **who})
         run_saga(rt, m, plan)
     elif action in ("acknowledge", "verify_manually"):
         want = ("failed", "approval_required", "executed_unverified", "skipped") if action == "acknowledge" \
@@ -569,11 +570,11 @@ def intervene(rt, m, action: str, *, actor: str, reason: str = "", node_id: str 
         for nid in targets:
             if action == "acknowledge":
                 rt.store.append(C.EV_ACKNOWLEDGED, m.id, {"node_id": nid, "actor": actor, "reason": reason,
-                                                          "undo": folded[nid].get("undo"), "at": now})
+                                                          "undo": folded[nid].get("undo"), "at": now, **who})
             else:
                 rt.store.append(C.EV_VERIFIED, m.id, {"node_id": nid, "undo": folded[nid].get("undo"),
                                                       "method": "manual", "actor": actor, "reason": reason,
-                                                      "at": now})
+                                                      "at": now, **who})
         settle(rt, m, plan)
     else:
         raise InterventionError(f"unknown compensation action {action!r}")

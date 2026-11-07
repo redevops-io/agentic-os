@@ -92,7 +92,9 @@ def main() -> None:
     # a reconstructed mission needs an explicit resume authorization; this demo is a single local owner
     from ..evidence_query.authz import StaticCeiling
     from ..overlays import Principal
-    rt2.grant_resume(m.id, principal=Principal("local-owner"), ceiling=StaticCeiling({"evidence.local"}), scope="local")
+    # the demo plays the authentication layer for the single local owner
+    from .principal import default_issuer
+    rt2.grant_resume(m.id, principal=default_issuer().issue(Principal("local-owner"), method="demo-local"), ceiling=StaticCeiling({"evidence.local"}), scope="local")
     rt2.approve(m.id, pending["node_id"], "approve")
     print(f"[restart] after approval: state={rt2._missions[m.id].state.value}\n")
 

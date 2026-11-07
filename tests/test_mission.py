@@ -152,7 +152,8 @@ def test_restart_resume_from_event_log(tmp_path):
     # a reconstructed mission is read-only until a resume authorization is granted (replay boundary, D-1)
     from agentic_os.evidence_query.authz import StaticCeiling
     from agentic_os.overlays import Principal
-    rt2.grant_resume(m.id, principal=Principal("owner"), ceiling=StaticCeiling({"evidence.local"}), scope="local")
+    from tests._principals import authn
+    rt2.grant_resume(m.id, principal=authn("owner"), ceiling=StaticCeiling({"evidence.local"}), scope="local")
     rt2.approve(m.id, node_id, "approve")
     assert rt2._missions[m.id].state == MissionState.SUCCEEDED
 

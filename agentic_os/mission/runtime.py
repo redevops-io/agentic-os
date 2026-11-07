@@ -52,6 +52,7 @@ from .types import (
 from .context_view import epoch_from_refs, plan_fingerprint
 from .policy import MissionPolicy
 from .authority_policy import AuthorityTestPolicy
+from .principal import ALL_TENANTS, AuthenticatedPrincipal, PrincipalError, PrincipalRequired, default_issuer
 
 import hashlib as _hashlib
 import json as _json
@@ -80,6 +81,9 @@ class ServiceResume:
     def __init__(self, principal, ceiling) -> None:
         if principal is None or ceiling is None:
             raise ValueError("a service resume needs both a principal and a permission ceiling")
+        if not isinstance(principal, AuthenticatedPrincipal):
+            raise ValueError("a service resume needs an authenticated principal (issued by the authentication layer, "
+                             "see mission/principal.py), not a bare identity")
         self.principal, self.ceiling = principal, ceiling
 
 #: DEFAULT business value (USD) per mission kind — the fallback only. The effective value is resolved by
@@ -253,6 +257,7 @@ class MissionRuntime:
         approval_ttl_s: float | None = None,        # deprecated alias of approval_grant_ttl_s (the name collided with the request TTL)
         service_resume: "ServiceResume | None" = None,   # unattended resume: explicit, default None = refuse (owner decision 2026-11-06)
         test_policy: "AuthorityTestPolicy | None" = None,  # non-production only: the explicit, named stand-in for an owner's envelope
+        principal_verifier=None,                          # checks the proof on an AuthenticatedPrincipal; default = this process's authentication layer
     ):
         from .profile import ProfileError, assert_authority, is_production  # noqa: PLC0415
         if test_policy is not None:
@@ -327,6 +332,7 @@ class MissionRuntime:
         self.approval_ttl_s = self.approval_grant_ttl_s     # deprecated alias (read-only by convention)
         self.resume_grant_ttl_s = float(resume_grant_ttl_s)
         self.service_resume = service_resume
+        self._principal_verifier = principal_verifier
         self._reconstructed: set[str] = set()
         self._resume_grants: dict[str, dict] = {}
         self._not_honoured: set[tuple] = set()
@@ -735,10 +741,11 @@ class MissionRuntime:
                 lk = self._run_locks[mission_id] = threading.RLock()
             return lk
 
-    def run(self, mission_id: str) -> Mission:
+    def run(self, mission_id: str, *, principal=None) -> Mission:
         """Drive the mission. One driver at a time per mission: concurrent callers queue and then observe the
-        folded state, so a ready node is dispatched once."""
-        self._require_execution_authority(mission_id)     # replay boundary: a reconstructed mission does not run without a grant
+        folded state, so a ready node is dispatched once. A ``principal`` is only needed to show who is driving a
+        reconstructed mission: the resume grant belongs to the principal that obtained it."""
+        self._require_execution_authority(mission_id, principal=principal)     # replay boundary: a reconstructed mission does not run without a grant
         with self._run_lock(mission_id):
             m = self._run_locked(mission_id)
         if m.state in (MissionState.SUCCEEDED, MissionState.FAILED, MissionState.CANCELLED,
@@ -1192,8 +1199,8 @@ class MissionRuntime:
                     return True
         return False
 
-    def reconcile_node(self, mission_id: str, node_id: str, *, executed: bool, evidence: dict, actor: str, reason: str,
-                       result: "dict | None" = None, resume: bool = True) -> Mission:
+    def reconcile_node(self, mission_id: str, node_id: str, *, executed: bool, evidence: dict, actor: str = "", reason: str,
+                       result: "dict | None" = None, resume: bool = True, principal=None) -> Mission:
         """Resolve a node parked in WAITING_RECONCILIATION with evidence, and resume THIS mission.
 
         `executed=False`: the provider shows the effect did not happen. The reservation is released and the node runs again under a
@@ -1206,6 +1213,8 @@ class MissionRuntime:
         rerun. `resume=False` leaves the mission PAUSED for the owner to resume."""
         from .reconcile import ReconciliationConflict, ReconciliationError, validate_evidence  # noqa: PLC0415
         ev = validate_evidence(evidence)
+        ident = self._operator_identity(mission_id, principal, actor, "reconcile")
+        actor = ident.get("approver", "")
         if not str(actor).strip():
             raise ReconciliationError("the person reconciling must be named")
         if len(str(reason).strip()) < 8:
@@ -1259,6 +1268,7 @@ class MissionRuntime:
                 self._complete_from_reconciliation(m, plan, node, ev, str(actor).strip(), result)
             self.store.append("ReconciliationResolved", mission_id, {
                 "node_id": node_id, "lease_id": lid, "executed": bool(executed), "actor": str(actor).strip(),
+                **{k: v for k, v in ident.items() if k != "approver"},
                 "reason": str(reason).strip()[:500], "evidence": ev, "provider_ref": provider_ref, "at": time.time()})
             self._leases().pop((str(m.id), node_id), None)
             if m.state in terminal:
@@ -1781,19 +1791,54 @@ class MissionRuntime:
                 parked.discard(e.payload.get("node_id"))
         return parked
 
+    # ── operator identity ──────────────────────────────────────────────────────
+    def principal_verifier(self):
+        return self._principal_verifier if self._principal_verifier is not None else default_issuer()
+
+    def _operator_identity(self, mission_id: str, principal, actor: str, action: str) -> dict:
+        """Who is acting, as a record for the log. With a principal: its proof is verified and its tenant must be the mission's (or
+        the all-tenant admin); otherwise the action is refused and the refusal recorded. Without one, only an explicit test policy
+        that allows anonymous operators lets it through, and the record says the actor was NOT authenticated."""
+        m = self._missions.get(mission_id)
+
+        def refuse(reason: str, exc, claimed: str = ""):
+            self.store.append("PrincipalRefused", mission_id, {"action": action, "reason": reason, "claimed_id": str(claimed)[:64]})
+            return exc
+
+        if principal is not None:
+            if not self.principal_verifier().verify(principal):
+                raise refuse("not_authenticated", PrincipalError(f"{action}: the principal is not authenticated"), getattr(principal, "id", ""))
+            if m is not None and m.tenant and principal.tenant not in (m.tenant, ALL_TENANTS):
+                raise refuse("tenant_mismatch", PrincipalError(f"{action}: the principal does not belong to this mission's tenant"), principal.id)
+            return {"approver": principal.id, "principal": principal.record(), "authenticated": True}
+        tp = self._active_test_policy()
+        if tp is not None and tp.anonymous_operators:
+            return {**({"approver": str(actor)[:200]} if str(actor).strip() else {}), "authenticated": False, "basis": f"test_policy:{tp.name}"}
+        raise refuse("unauthenticated", PrincipalRequired(f"{action}: an authenticated principal is required (a free-text actor is not an identity)"))
+
+    @staticmethod
+    def _principal_binding(binding: str, ident: dict) -> str:
+        """Ties an approval's plan/evidence binding to the principal recorded with it, so a replay honours the approval only if
+        both are intact."""
+        p = ident.get("principal") or {}
+        body = _json.dumps({"binding": binding, "id": p.get("id"), "tenant": p.get("tenant"), "method": p.get("method"),
+                            "issuer": p.get("issuer")}, sort_keys=True, separators=(",", ":"))
+        return "sha256:" + _hashlib.sha256(body.encode()).hexdigest()
+
     def approve(self, mission_id: str, node_id: str, decision: str = "approve",
-                edit: dict | None = None, actor: str = "") -> Mission:
+                edit: dict | None = None, actor: str = "", *, principal=None) -> Mission:
         # serialised with run(): of several concurrent approvals of one gate, one records and dispatches
         with self._run_lock(mission_id):
-            return self._approve_locked(mission_id, node_id, decision, edit, actor)
+            return self._approve_locked(mission_id, node_id, decision, edit, actor, principal)
 
     def _approve_locked(self, mission_id: str, node_id: str, decision: str = "approve",
-                        edit: dict | None = None, actor: str = "") -> Mission:
+                        edit: dict | None = None, actor: str = "", principal=None) -> Mission:
         self._require_execution_authority(mission_id)     # replay boundary (top of the locked body: forks and direct callers pass here too)
         m = self._missions[mission_id]
+        ident = self._operator_identity(mission_id, principal, actor, "approve")
         # fork-branch approvals are handled (and fail closed) by the fork controller, before the generic guards
         if isinstance(node_id, str) and ":fork:" in node_id and self.forks.owns(mission_id, node_id):   # fork branch approvals
-            return self.forks.approve_branch(mission_id, node_id, decision, edit)
+            return self.forks.approve_branch(mission_id, node_id, decision, edit, identity=ident)
         # A terminal mission has nothing to approve: without this a bogus reject re-entered the saga of a
         # COMPENSATION_FAILED mission (consumed retry attempts, duplicate MissionOutcome). The node must also
         # be one that is actually awaiting a human.
@@ -1818,16 +1863,16 @@ class MissionRuntime:
                 key, value, source="human", confidence=100.0,
                 source_type="human", source_ref=f"human-task:{pending.get('id', '')}")
             self.store.append("BeliefResolved", mission_id,
-                              {"key": key, "value": value, "node_id": node_id})
+                              {"key": key, "value": value, "node_id": node_id, **ident})
             self.store.append("NodeResumed", mission_id, {"node_id": node_id})
             return self.run(mission_id)
         # a verification gate: accept (override) commits the result; reject fails the mission
         if pending.get("kind") == "verification" and pending.get("node_id") == node_id:
             if decision in ("accept", "approve"):
-                self.store.append("VerificationOverridden", mission_id, {"node_id": node_id})
+                self.store.append("VerificationOverridden", mission_id, {"node_id": node_id, **ident})
                 self.store.append("NodeResumed", mission_id, {"node_id": node_id})
                 return self.run(mission_id)     # re-runs; _verify_ok now skips the gate → committed
-            self.store.append("VerificationRejected", mission_id, {"node_id": node_id})
+            self.store.append("VerificationRejected", mission_id, {"node_id": node_id, **ident})
             self.store.append("NodeSkipped", mission_id, {"node_id": node_id})
             plan = self._plans[mission_id]
             self._saga(m, plan, self._world(mission_id))   # a rejected gate unwinds committed upstream effects
@@ -1854,19 +1899,21 @@ class MissionRuntime:
             # what they approved is not what would run.
             _shown = self._parked_digest(mission_id, node_id)
             granted_at = _wall()
+            _binding = self._approval_binding(m, mission_id, node_id)
             self.store.append("ApprovalGranted", mission_id, {
-                "node_id": node_id, "edit": edit, **({"approver": actor} if actor else {}),
+                "node_id": node_id, "edit": edit, **ident,
+                **({"principal_binding": self._principal_binding(_binding, ident)} if ident.get("authenticated") else {}),
                 # what the approver was SHOWN (inputs_sha256) and what plan/evidence it was GIVEN FOR (binding) are complementary
                 **({"inputs_sha256": _shown} if _shown else {}),
                 "capability": self._capability_of(mission_id, node_id),
                 # Bound to the exact plan + evidence + intent it was given for, and time-limited: a replay only honours
                 # an approval whose binding equals the CURRENT one and which has not expired (grant lifetime, distinct from the
                 # request TTL in _approval_ttl_s(), which bounds how long an UNANSWERED request stays answerable).
-                "binding": self._approval_binding(m, mission_id, node_id),
+                "binding": _binding,
                 "granted_at": granted_at, "expires_at": granted_at + self.approval_grant_ttl_s})
             self.store.append("NodeResumed", mission_id, {"node_id": node_id})
             return self.run(mission_id)
-        self.store.append("ApprovalRejected", mission_id, {"node_id": node_id})
+        self.store.append("ApprovalRejected", mission_id, {"node_id": node_id, **ident})
         self.store.append("NodeSkipped", mission_id, {"node_id": node_id})
         plan = self._plans[mission_id]
         self._saga(m, plan, self._world(mission_id))   # a rejected gate unwinds committed upstream effects
@@ -1885,17 +1932,18 @@ class MissionRuntime:
         from .compensation_runner import run_saga  # noqa: PLC0415
         run_saga(self, m, plan)
 
-    def compensation_intervention(self, mission_id: str, action: str, *, actor: str, reason: str = "",
-                                  node_id: str | None = None) -> Mission:
+    def compensation_intervention(self, mission_id: str, action: str, *, actor: str = "", reason: str = "",
+                                  node_id: str | None = None, principal=None) -> Mission:
         """Guarded operator path for a mission that needs a human after compensation (retry | approve |
         acknowledge | verify_manually). Reached ONLY via the authenticated /missions/{mid}/compensation/*
         routes (control token + tenant check + approver rule); every call records who/when/why in the log.
         Raises compensation_runner.InterventionError (-> 409) on a wrong state or nothing to do."""
         from .compensation_runner import InterventionError, intervene  # noqa: PLC0415
         m = self._missions[mission_id]
+        ident = self._operator_identity(mission_id, principal, actor, f"compensation.{action}")
         if m.state not in (MissionState.COMPENSATION_FAILED, MissionState.FAILED):
             raise InterventionError(f"mission is {m.state.value}; compensation interventions apply to a failed mission")
-        intervene(self, m, action, actor=actor, reason=reason, node_id=node_id)
+        intervene(self, m, action, actor=ident.get("approver", ""), reason=reason, node_id=node_id, identity=ident)
         self._set_state(m, MissionState.COMPENSATION_FAILED if (m.outcome or {}).get("compensation_incomplete")
                         else MissionState.FAILED)
         return m
@@ -2031,19 +2079,21 @@ class MissionRuntime:
                     out.append(n.id)
         return out
 
-    def suspend(self, mission_id: str, *, actor: str, reason: str) -> Mission:
+    def suspend(self, mission_id: str, *, actor: str = "", reason: str, principal=None) -> Mission:
+        ident = self._operator_identity(mission_id, principal, actor, "suspend")
         m = self._missions[mission_id]
-        self.store.append("MissionSuspended", mission_id, {"actor": actor, "reason": reason})
+        self.store.append("MissionSuspended", mission_id, {"actor": ident.get("approver", ""), "reason": reason, **ident})
         self._set_state(m, MissionState.PAUSED)
         return m
 
-    def resume(self, mission_id: str, *, actor: str) -> Mission:
-        self._require_execution_authority(mission_id)
+    def resume(self, mission_id: str, *, actor: str = "", principal=None) -> Mission:
+        self._require_execution_authority(mission_id, principal=principal)
+        ident = self._operator_identity(mission_id, principal, actor, "resume")
         m = self._missions[mission_id]
         if m.state != MissionState.PAUSED:
             return m
-        self.store.append("MissionResumed", mission_id, {"actor": actor})
-        return self.run(mission_id)
+        self.store.append("MissionResumed", mission_id, {"actor": ident.get("approver", ""), **ident})
+        return self.run(mission_id, principal=principal)
 
     def promote_recommendation(self, kind: str, subject: str, *, actor: str):
         """Governance-driven promotion of a P9b recommendation — the auditable mutation that lets a
@@ -2540,6 +2590,8 @@ class MissionRuntime:
                 reason = "unbound"
             elif p["binding"] != self._approval_binding(m, mission_id, nid):
                 reason = "binding_mismatch"
+            elif p.get("principal") is not None and p.get("principal_binding") != self._principal_binding(p["binding"], p):
+                reason = "principal_binding_mismatch"       # the recorded approver was changed after the fact
             elif float(p.get("expires_at") or 0) < _wall():
                 reason = "expired"
             if not reason:
@@ -2567,12 +2619,14 @@ class MissionRuntime:
         body = dict(self._binding_base(m, mission_id), node_id=node_id, capability=self._capability_of(mission_id, node_id))
         return "sha256:" + _hashlib.sha256(_json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
-    def _require_execution_authority(self, mission_id: str, need: str | None = None) -> None:
+    def _require_execution_authority(self, mission_id: str, need: str | None = None, principal=None) -> None:
         if mission_id not in self._reconstructed:
             return
         g = self._resume_grants.get(mission_id)
         if g is None or g["expires_at"] < _wall():
             raise ResumeNotAuthorized(f"{mission_id}: reconstructed from the log; resuming it needs a current resume authorization")
+        if principal is not None and g.get("principal_id") and getattr(principal, "id", None) != g["principal_id"]:
+            raise ResumeNotAuthorized(f"{mission_id}: the resume authorization was granted to another principal")
         if need == "reexecute" and g["action"] != "reexecute":
             raise ResumeNotAuthorized(f"{mission_id}: re-planning needs the re-execute authorization")
 
@@ -2586,6 +2640,10 @@ class MissionRuntime:
         if mission_id not in self._missions:
             raise KeyError(mission_id)
         who = getattr(principal, "id", "") or ""
+        if not self.principal_verifier().verify(principal):
+            self.store.append("ReplayRefused", mission_id, {"actor": who, "scope": str(scope)[:64], "action": action,
+                                                            "reason": "unauthenticated_principal"})
+            raise ResumeNotAuthorized(f"{mission_id}: the principal is not authenticated")
         try:
             ok = allowed(ceiling, principal, perm(scope, action))
         except ValueError:
@@ -2600,10 +2658,10 @@ class MissionRuntime:
             self.store.append("ReplayRefused", mission_id, {"actor": who, "scope": str(scope)[:64], "action": action,
                                                             "reason": "not_authorized"})
             raise ResumeNotAuthorized(f"{mission_id}: not authorized to {action}")
-        g = {"action": action, "actor": who, "scope": scope, "expires_at": _wall() + self.resume_grant_ttl_s}
+        g = {"action": action, "actor": who, "principal_id": who, "scope": scope, "expires_at": _wall() + self.resume_grant_ttl_s}
         self._resume_grants[mission_id] = g
         self.store.append("ReplayAuthorized", mission_id,
-                          {"actor": who, "scope": scope, "action": action, "expires_at": g["expires_at"],
+                          {"actor": who, "principal": principal.record(), "scope": scope, "action": action, "expires_at": g["expires_at"],
                            "binding": "sha256:" + _hashlib.sha256(_json.dumps(self._binding_base(self._missions[mission_id], mission_id),
                                                                               sort_keys=True, separators=(",", ":")).encode()).hexdigest()})
         return dict(g)

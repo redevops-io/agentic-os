@@ -22,7 +22,7 @@ from agentic_os.mission.executor import Executor                             # n
 from agentic_os.mission.runtime import MissionRuntime, ResumeNotAuthorized   # noqa: E402
 from agentic_os.mission.store import EventStore                              # noqa: E402
 from agentic_os.mission.types import Budget, MissionState                    # noqa: E402
-from agentic_os.overlays import Principal                                    # noqa: E402
+from tests._principals import authn                                         # noqa: E402
 
 GRANTS = ["billing:write", "support:write", "books:write", "compliance:write"]
 NOW = 9_000_000.0
@@ -109,7 +109,7 @@ def test_approval_does_not_outlive_a_narrowed_envelope():
 
 def test_an_approved_node_under_a_test_policy_still_needs_the_policy_to_list_it(no_test_policy):
     rec = Recording()
-    pol = AuthorityTestPolicy("no-compliance", "approval alone must not be enough", allow=("billing.*", "support.*", "books.*"))
+    pol = AuthorityTestPolicy("no-compliance", "approval alone must not be enough", allow=("billing.*", "support.*", "books.*"), anonymous_operators=True)
     rt = MissionRuntime(rec.reg, Executor(rec), store=EventStore(), test_policy=pol)
     m = rt.create_mission("Onboard a new customer", policy_refs=GRANTS, template="onboarding", budget=Budget(usd=100.0))
     nid = park_at_consent(rt, m)
@@ -121,12 +121,12 @@ def test_an_approved_node_under_a_test_policy_still_needs_the_policy_to_list_it(
 
 def test_an_approved_node_with_no_envelope_and_no_policy_is_refused(no_test_policy):
     rec = Recording()
-    pol = AuthorityTestPolicy.allow_all("temporary", "lets the plan reach its gate")
+    pol = AuthorityTestPolicy.allow_all("temporary", "lets the plan reach its gate", anonymous_operators=True)
     rt = MissionRuntime(rec.reg, Executor(rec), store=EventStore(), test_policy=pol)
     m = rt.create_mission("Onboard a new customer", policy_refs=GRANTS, template="onboarding", budget=Budget(usd=100.0))
     nid = park_at_consent(rt, m)
     rt.test_policy = None                                                  # the policy is withdrawn while the gate is open
-    rt.approve(m.id, nid, "approve")
+    rt.approve(m.id, nid, "approve", principal=authn("alice"))
     assert CONSENT not in rec.calls and m.state is MissionState.FAILED
 
 
@@ -188,7 +188,7 @@ def test_a_replayed_approved_node_needs_both_the_resume_grant_and_current_author
     rt2.rehydrate(m.id)
     with pytest.raises(ResumeNotAuthorized):                               # still read-only after the rebuild
         rt2.approve(m.id, nid, "approve")
-    rt2.grant_resume(m.id, principal=Principal("owner"), ceiling=StaticCeiling({"evidence.acme"}), scope="acme")
+    rt2.grant_resume(m.id, principal=authn("owner"), ceiling=StaticCeiling({"evidence.acme"}), scope="acme")
     es.revoke("env-1")                                                     # resume is allowed; the envelope is not
     rt2.approve(m.id, nid, "approve")
     assert CONSENT not in rec2.calls and rt2._missions[m.id].state is MissionState.FAILED
