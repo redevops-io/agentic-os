@@ -16,6 +16,7 @@ validation, duplicate, conflict) is raised with ``not_applied=True``; a timeout,
 from __future__ import annotations
 
 from agentic_os.mission.authority import Action
+from agentic_os.mission.runtime import StaleExecution
 
 from . import approval as approvals
 from . import opid
@@ -35,11 +36,11 @@ class AosddRefusal(RuntimeError):
         self.rule = rule
 
 
-class StaleGeneration(RuntimeError):
+class StaleGeneration(StaleExecution):
     """This executor lost its claim (a newer generation exists) before it could record its result. Whatever it sent is evidence of a
     possible second record, not a result: ``stale-generation`` is written, nothing is applied, the step is UNCERTAIN (possible duplicate
-    effect) and needs an operator. Never retried, never compensated automatically."""
-    not_applied = False
+    effect) and needs an operator. Never retried, never compensated automatically: the base runtime (``MissionRuntime._fail_node``) records
+    it as ``StaleResultRecorded`` and parks the mission, as it does for every superseded executor."""
 
     def __init__(self, message: str, native_id=None):
         super().__init__(message)

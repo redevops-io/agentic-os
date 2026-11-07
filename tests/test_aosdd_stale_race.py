@@ -59,7 +59,7 @@ def test_a_request_completing_after_lease_expiry_is_stale_evidence_only_and_park
     ev = EventStore(env.events_path, strict=False).for_mission(mid)
     types = [e.type for e in ev]
     late = types[types.index("AosddOpStale"):]
-    assert "AosddStepUncertain" in late and "AosddStaleResultParked" in late and "ReconciliationRequired" in late
+    assert "AosddStepUncertain" in late and "StaleResultRecorded" in late and "ReconciliationRequired" in late
     unc = [e.payload for e in ev if e.type == "AosddStepUncertain" and e.payload.get("stale_native_id")]
     assert unc and unc[-1]["stale_native_id"] == stale[0]["native_id"] and unc[-1]["automatic_retry"] is False and "possible duplicate effect" in unc[-1]["why"]
     # parked for the operator; no automatic retry, no automatic compensation, no failure

@@ -28,7 +28,7 @@ from . import identity
 from . import opid
 from .capabilities import (GATE_CAP, PERM_READ, PERM_WRITE, READ_CAPS, RESOURCE_ARG, STEP_OF, UNDO, VERIFY, WRITE_CAPS, AosddPlanner,
                            build_registry, goal_for)
-from .client import AosddOperatorClient, AosddRefusal, StaleGeneration, step_args
+from .client import AosddOperatorClient, AosddRefusal, step_args
 from .context import CAPABILITY, OUTCOME, auto_retry_allowed, plan_sha256, step_of
 from .http import AppError
 from .services import Services
@@ -127,18 +127,6 @@ class AosddMissionRuntime(MissionRuntime):
         return True
 
     # ---- uncertain outcomes: nothing re-sends a step whose provider does not enforce idempotency -------------------------------------------
-    def _fail_node(self, m, plan, world, node, e) -> bool:
-        """A superseded executor's late result is EVIDENCE of a possible duplicate effect, not a failure of the step: the mission is parked for
-        an operator. No NodeFailed, no saga (compensating B's work because A was late would be wrong), no failure of the mission."""
-        if isinstance(e, StaleGeneration):
-            self.store.append("AosddStaleResultParked", m.id, {"node_id": node.id, "capability": node.capability, "stale_native_id": e.native_id,
-                                                               "action": "parked for operator reconciliation; nothing retried, nothing compensated"})
-            self._lease_failed(m, node.id, ran=True, executed=None)
-            self._meter(m, node, "error")
-            self._park_for_reconciliation(m, node, "stale-generation: a superseded executor's request also reached the application; possible duplicate effect")
-            return False
-        return super()._fail_node(m, plan, world, node, e)
-
     def _park_for_reconciliation(self, m, node, reason: str) -> None:
         """Every park of a write step is an UNCERTAIN outcome: mark it on the ledger with what the retry policy allows next."""
         if node.capability in WRITE_CAPS:
