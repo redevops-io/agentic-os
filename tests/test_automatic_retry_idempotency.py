@@ -137,3 +137,63 @@ def test_a_read_only_node_is_still_redispatched_automatically_after_an_authorita
     assert rep.resolved == [x.lease()] and not rep.escalated
     assert second_calls(x) == 1 and x.rt._missions[x.mid].state == MissionState.SUCCEEDED
     assert not events(x.rt, x.mid, "AutomaticRetryRefused")
+
+
+# ── fork branches obey the same rule (they are reconciled through the same call) ────────────────────────────────────────────────────
+def _fork_unknown_branch(tmp_path, monkeypatch, declared):
+    """A fork whose branch B went UNKNOWN (sent, timed out, never applied) and a supervisor whose probe says, authoritatively, that it did not happen."""
+    import random
+    import time
+    import test_fork_reconciliation_parity as fp
+    from agentic_os.mission.probes import ProbeRegistry
+    from agentic_os.mission.reconcile_jobs import ReconcileJobs, ReconciliationSupervisor, RetryPolicy
+    real = fp.build_registry
+
+    def declaring(*a, **k):
+        reg = real(*a, **k)
+        if declared:
+            reg.get("w.write").idempotency = declared
+        return reg
+    monkeypatch.setattr(fp, "build_registry", declaring)
+    w = fp.World(tmp_path, monkeypatch)
+    w.op.applied_on_timeout = False
+    rt = w.boot()
+    m = w.mission(rt)
+    w.op.timeout_keys = {fp.key(m.id, "B")}
+    spec = fp.three(max_b=2)
+    assert rt.forks.run_fork(m.id, spec).status == "awaiting_reconciliation"
+    rt.forks.register_spec(m.id, spec)
+    reg = ProbeRegistry()
+    reg.register("w.*", absent(), Q_STRICT)
+    now = [time.time()]
+    sup = ReconciliationSupervisor(rt, ReconcileJobs(str(tmp_path / "jobs.db")), reg, owner="sup-1", clock=lambda: now[0], rng=random.Random(1),
+                                   policy=RetryPolicy(max_probes=3, initial_s=1, max_s=5, factor=2.0, jitter=0.0))
+    assert sup.scan() == 1
+    now[0] += 60
+    return w, rt, m, sup, fp
+
+
+def test_a_fork_branch_is_not_retried_automatically_unless_its_capability_is_provider_enforced(tmp_path, monkeypatch):
+    w, rt, m, sup, fp = _fork_unknown_branch(tmp_path, monkeypatch, declared="")
+    rep = sup.tick()
+    assert rep.escalated and not rep.resolved
+    assert w.op.sent(fp.key(m.id, "B", 2)) == 0 and w.op.sent(fp.key(m.id, "B", 1)) == 1                    # the branch was NOT sent again
+    assert fp.status(rt, m.id)["B"] == "reconciling" and fp.lease(rt.authority, m.id, "B", 1) in ("dispatched", "unknown")
+    refused = events(rt, m.id, "AutomaticRetryRefused")
+    assert len(refused) == 1 and refused[0]["capability"] == "w.write" and refused[0]["uncertain"] is True
+
+
+def test_a_fork_branch_of_a_provider_enforced_capability_is_retried_as_before(tmp_path, monkeypatch):
+    w, rt, m, sup, fp = _fork_unknown_branch(tmp_path, monkeypatch, declared="provider-enforced")
+    rep = sup.tick()
+    assert rep.resolved and not rep.escalated
+    assert w.op.sent(fp.key(m.id, "B", 2)) == 1 and fp.fold_fork(rt.store.for_mission(m.id), fp.FID).closed == "satisfied"
+    assert not events(rt, m.id, "AutomaticRetryRefused")
+
+
+def test_a_person_can_still_retry_the_fork_branch(tmp_path, monkeypatch):
+    w, rt, m, sup, fp = _fork_unknown_branch(tmp_path, monkeypatch, declared="")
+    sup.tick()
+    rt.reconcile_node(m.id, fp.branch_node_id(m.id, fp.FID, "B"), executed=False, evidence=EV, reason="the owner decided to send it again",
+                      principal=authn("ops@acme"))
+    assert w.op.sent(fp.key(m.id, "B", 2)) == 1
