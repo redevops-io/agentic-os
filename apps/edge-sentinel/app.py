@@ -30,6 +30,12 @@ Config (env; seed.py writes agents/edge-sentinel/.env automatically):
   CROWDSEC_CONTAINER  docker container name, default agentic-cores-crowdsec-1
   CROWDSEC_FRONT_URL  link for the "Open CrowdSec metrics" button
   PORT                uvicorn port, default 8203
+  SENTINEL_BIND_HOST  interface to bind, default 127.0.0.1 (loopback). A reachable bind also needs
+                      SENTINEL_ALLOW_EXPOSURE=1, and either an operator credential or
+                      SENTINEL_ALLOW_UNAUTHENTICATED_EXPOSURE=1 — see security.py.
+  SENTINEL_BASIC_AUTH_USER / _PASS  operator credentials for execution (Basic auth; fail-closed 503 unset)
+  SENTINEL_BLOCK_ENABLED            default OFF: an authenticated execution is a dry run without it
+  WAZUH_TLS_VERIFY    default on; `off` skips certificate verification, `/<path>` uses a private CA bundle
   REDEVOPS_LLM_BASE_URL  OPTIONAL in-boundary model; if set (and actually in-boundary) `triage` adds an LLM
                       blurb via the governed router. The endpoint works fully without it.
 """
@@ -71,11 +77,15 @@ from . import netbird  # noqa: E402 — NetBird zero-trust access review
 from . import portabase  # noqa: E402 — Portabase backup/continuity coverage
 from . import deploy_scan  # noqa: E402 — runtime-DAST proxy to the deploy-scan MCP service
 from . import permissions_ui  # noqa: E402 — live vuln-DB permissions demo
+from . import security as _security  # noqa: E402 — secure defaults: loopback bind, TLS verify, headers (P9)
 from .core import (  # noqa: E402
     TENANT, SUBTITLE, crowdsec_connected, fetch_activity, _severity,
 )
 
 PORT = int(os.environ.get("PORT", "8203"))
+# What the app listens on when run by `python -m edge-sentinel.app` (P9). A container sets
+# SENTINEL_BIND_HOST explicitly, because a container is reachable by design; a laptop gets loopback.
+BIND_HOST = _security.resolve_bind_host()
 
 def _strip_approval(obj):
     """Drop every caller-supplied ``_approval*`` / ``__approval*`` key (any case), recursively.
@@ -99,6 +109,29 @@ _route_authz.install(app, _APP, _ROUTE_POLICIES)   # one enforcement layer for e
 app.add_middleware(_RequestContext)   # the active gate (basic or enterprise) sees THIS request's principal in every route
 
 
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    """Every response carries the same baseline headers (P9). setdefault, so a route that states its own
+    policy — a download, an embed — keeps its own rather than being overwritten by ours."""
+    response = await call_next(request)
+    for _h, _v in _security.SECURITY_HEADERS.items():
+        response.headers.setdefault(_h, _v)
+    return response
+
+
+@app.on_event("startup")
+def _check_declared_bind():
+    """A process started by someone else's `uvicorn --host` cannot be stopped from here, so the container
+    image declares its bind host in the environment (SENTINEL_BIND_HOST) and this checks the declaration
+    before it serves a request: a reachable port with no credentials and no explicit opt-out raises
+    ExposureRefused, which fails the uvicorn startup outright — the refusal is confirmed by the test that
+    enters the app's lifespan. Unset means the guard has nothing to check — the `python -m
+    edge-sentinel.app` path guards itself and prints the refusal as a startup error."""
+    _declared = os.environ.get("SENTINEL_BIND_HOST", "").strip()
+    if _declared:
+        _security.exposure_guard(_declared)
+
+
 # --- MD3 styling (BASE_CSS reused verbatim from deploy/module_service.py) -----
 BASE_CSS = """
 :root{
@@ -114,8 +147,8 @@ BASE_CSS = """
   --sp-1:4px;--sp-2:8px;--sp-3:12px;--sp-4:16px;--sp-5:24px;--sp-6:32px;--sp-7:40px;--sp-8:48px;
   --radius-sm:8px;--radius-md:12px;--radius-lg:16px;--radius-xl:28px;--radius-pill:999px;
   --shadow-1:0 1px 2px rgba(0,0,0,.45);--shadow-2:0 2px 6px rgba(0,0,0,.5);
-  --font-sans:"Roboto",system-ui,-apple-system,"Segoe UI",sans-serif;
-  --font-mono:"Roboto Mono",ui-monospace,"SF Mono",monospace;
+  --font-sans:system-ui,-apple-system,"Segoe UI","Roboto",sans-serif;
+  --font-mono:ui-monospace,"SF Mono","Roboto Mono",monospace;
 }
 *{box-sizing:border-box}
 .display-l{font:400 57px/64px var(--font-sans);letter-spacing:-.25px}
@@ -186,12 +219,12 @@ a{color:var(--primary);text-decoration:none}
 .mono{font-family:var(--font-mono);font-feature-settings:"tnum"}
 """
 
-FONT_LINK = (
-    '<link rel="preconnect" href="https://fonts.googleapis.com">'
-    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
-    '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?'
-    'family=Roboto:wght@400;500&family=Roboto+Mono:wght@400;500&display=swap">'
-)
+# No third-party font request (P9): a page view used to fetch Roboto from fonts.googleapis.com and
+# fonts.gstatic.com, which leaks every view of a SOC dashboard to Google, breaks an offline or air-gapped
+# host, and contradicts a content policy of 'self'. Roboto is still first-choice-by-name in the CSS above
+# when the machine has it installed; otherwise the system UI/mono stack renders. FONT_LINK stays a name
+# the page templates interpolate so this decision has one home and a missing-font page is impossible.
+FONT_LINK = ""
 
 
 def _esc(v) -> str:
@@ -1012,12 +1045,17 @@ _WZ_TOKEN: dict = {"t": None}
 def _wazuh_get(path: str) -> dict:
     if not WAZUH_PASS:
         return {}
+    # Certificate verification is ON by default (P9). Wazuh ships a self-signed certificate, so the old
+    # unconditional verify=False turned every deployment into a no-verify deployment. An operator with a
+    # private CA should set WAZUH_TLS_VERIFY to a CA bundle path (httpx accepts one); WAZUH_TLS_VERIFY=off
+    # is the deliberate opt-out, and _t_wazuh_status says so in the answer the operator reads.
+    _verify = _security.tls_verify_or_ca("WAZUH_TLS_VERIFY")
     try:
         if not _WZ_TOKEN["t"]:
-            r = httpx.get(WAZUH_API + "/security/user/authenticate", auth=(WAZUH_USER, WAZUH_PASS), verify=False, timeout=10.0)
+            r = httpx.get(WAZUH_API + "/security/user/authenticate", auth=(WAZUH_USER, WAZUH_PASS), verify=_verify, timeout=10.0)
             _WZ_TOKEN["t"] = r.json()["data"]["token"]
         h = {"Authorization": "Bearer " + _WZ_TOKEN["t"]}
-        return httpx.get(WAZUH_API + path, headers=h, verify=False, timeout=10.0).json()
+        return httpx.get(WAZUH_API + path, headers=h, verify=_verify, timeout=10.0).json()
     except Exception:  # noqa: BLE001
         _WZ_TOKEN["t"] = None
         return {}
@@ -1034,8 +1072,9 @@ def _t_wazuh_status(_a: dict) -> dict:
     total = c.get("total", active + disc)
     return {"text": f"Wazuh manager is reachable: {active} active agent(s), {disc} disconnected, {total} enrolled "
             f"(agent counts only; no Wazuh alerts or detections are read). "
-            + ("No endpoints are enrolled as Wazuh agents." if total == 0 else ""),
-            "data": c}
+            + ("No endpoints are enrolled as Wazuh agents." if total == 0 else "")
+            + _security.tls_verify_note("WAZUH_TLS_VERIFY"),
+            "data": {**c, "tls_verified": _security.tls_verify("WAZUH_TLS_VERIFY")}}
 
 
 # ─── Per-app supply-chain scanning — cover EVERY agentic app's open-source dependencies ───
@@ -1551,13 +1590,21 @@ async def agent_run(request: Request) -> JSONResponse:
 
 
 if __name__ == "__main__":  # pragma: no cover
+    import sys
+
     import uvicorn
 
     from agentic_os.app_gate import require_explicit_setting_when_exposed as _exposed
 
-    _exposed("0.0.0.0")   # a reachable bind needs an explicit permissions setting
+    try:
+        _security.exposure_guard(BIND_HOST)   # P9: a reachable bind is something you ask for, twice over —
+        _exposed(BIND_HOST)                   # once here (credentials) and once in the kernel (permissions)
+    except _security.ExposureRefused as _refused:
+        # The application exception becomes the user-facing startup error here, at the process boundary:
+        # nothing is printed to the dashboard, nothing binds a port, the shell gets exit code 1.
+        sys.exit(f"edge-sentinel: startup refused: {_refused}")
 
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
+    uvicorn.run(app, host=BIND_HOST, port=PORT)
 
 
 # ── Mission Runtime operator surface (Phase-1 production wiring) ──
