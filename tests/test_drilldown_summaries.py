@@ -47,6 +47,7 @@ CASES = {
     "AosddAbsenceObserved": ({"step": "S1", "op_id": OP, "principal": P, "complete_lookup": True, "state": "still UNCERTAIN: nothing was re-sent", "next": "x"}, "node", "pending", "Absence observed: step S1, lookup complete"),
     "AosddRedispatchAuthorized": ({"step": "S1", "op_id": OP, "principal": P, "reason": "x", "residual_risk": "a duplicate effect is possible"}, "approval", "ok", "Redispatch authorized by approver:default: step S1; residual risk recorded"),
     "AosddRedispatchRefused": ({"step": "S1", "op_id": OP, "principal": P, "reason": "too early"}, "approval", "denied", "Redispatch refused: step S1"),
+    "AosddAdoptionRefused": ({"step": "S1", "op_id": OP, "principal": P, "reason": "the application holds a different record"}, "approval", "denied", "Adoption of the effect refused by approver:default: step S1; nothing was recorded as done"),
     "RedispatchRefused": ({"node_id": "nd_1", "capability": "aosdd.chatwoot.private_note", "lease_id": "l"}, "node", "denied", "Redispatch refused: aosdd.chatwoot.private_note"),
     "AosddReconciled": ({"step": "S4", "op_id": OP, "principal": P, "found": True, "native_id": 2}, "node", "ok", "Reconciled by approver:default: step S4, the effect was found (native id 2)"),
     "AosddReconcileRefused": ({"step": "S4", "principal": P, "why": "cannot read chatwoot: incomplete 200"}, "node", "denied", "Reconciliation refused: step S4"),

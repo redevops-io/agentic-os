@@ -203,6 +203,7 @@ _ROWS: Dict[str, Tuple[str, Any, Callable[[dict], str]]] = {
     "RedispatchRefused": ("node", "denied", _cap_line("Redispatch refused")),
     "AosddReconciled": ("node", "ok", _reconciled),
     "AosddReconcileRefused": ("node", "denied", lambda p: f"Reconciliation refused: {_step(p)}"),
+    "AosddAdoptionRefused": ("approval", "denied", lambda p: f"Adoption of the effect refused{_by(p)}: {_step(p)}; nothing was recorded as done"),
     "AosddUncertainAccepted": ("node", "info", lambda p: f"Uncertain outcome accepted as it is{_by(p)}: {_step(p)}; not retried and not claimed to have happened"),
     "AosddResumeRequested": ("lifecycle", "info", lambda p: f"Resume requested{_by(p)}"),
     "AosddCompensationRequested": ("lifecycle", "info", lambda p: f"Compensation requested{_by(p)}"),
