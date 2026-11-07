@@ -366,10 +366,14 @@ def test_failure_at_s3_compensates_s2_then_s1_in_reverse_order_each_verified(env
     for s in rec["steps"][:2]:
         assert s["compensation"]["readback"]["status"] == "VERIFIED"
     out = r.rt._missions[mid].outcome
-    assert out["rolled_back"] is False and out["compensation_clean_rollback"] is False and "residual" in out["compensation_note"]        # never a silent claim of a clean rollback
+    # the base reports it, with no AOS-DD override: compensated and read back, but residual effects remain -> never a clean rollback
+    assert out["rolled_back"] is False and out["compensation_state"] == "complete"
+    assert [c["classification"] for c in out["step_classification"]] == ["compensated", "compensated"]
+    assert {r_["capability"] for r_ in out["residual_effects"]} == {"aosdd.erpnext.quotation_draft", "aosdd.lago.invoice_metadata"}
+    assert all(r_["source"] == "declared" for r_ in out["residual_effects"])
     r2 = env.runner()
     r2.attach(mid)
-    assert r2.rt._missions[mid].outcome["rolled_back"] is False                                                    # nor after a restart
+    assert r2.rt._missions[mid].outcome["rolled_back"] is False and r2.rt._missions[mid].outcome["residual_effects"] == out["residual_effects"]     # nor after a restart
 
 
 def test_failure_at_s4_compensates_s3_s2_s1_and_records_the_twenty_residual(env):
@@ -642,3 +646,9 @@ def test_revocation_between_the_gate_and_the_dispatch_is_stopped_by_the_base_exe
     assert refused and refused[0]["rule"] == "revoked" and refused[0]["capability"] == S1
     src = open(__import__("agentic_os.integrations.aosdd.runtime", fromlist=["x"]).__file__).read()
     assert "authority.check(" not in src                               # the duplicate final check is gone from AOS-DD
+
+
+def test_no_aosdd_override_of_the_rollback_claim_remains():
+    from agentic_os.integrations.aosdd.runtime import AosddMissionRuntime
+    for name in ("_guard_outcome", "_no_clean_rollback_claim", "_outcome_from_log", "_authority_gate", "_block_authority"):
+        assert name not in AosddMissionRuntime.__dict__, name

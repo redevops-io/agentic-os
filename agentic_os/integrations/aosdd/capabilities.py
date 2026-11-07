@@ -37,10 +37,11 @@ RESIDUAL = {
 }
 
 
-def _spec(name, *, side=False, perm=PERM_READ, outs=None, ins=None, provides=(), undo=None, verify=None, approval=False, irreversible="", notes=""):
+def _spec(name, *, side=False, perm=PERM_READ, outs=None, ins=None, provides=(), undo=None, verify=None, approval=False, irreversible="", notes="", residual=()):
     comp = None
     if undo:
-        comp = {"supported": True, "capability": undo, "reversibility": "REVERSIBLE_EXPLICIT", "requires_approval": False, "verify": verify, "notes": notes}
+        comp = {"supported": True, "capability": undo, "reversibility": "REVERSIBLE_EXPLICIT", "requires_approval": False, "verify": verify, "notes": notes,
+                "residual_effects": list(residual)}
     return CapabilitySpec(name=name, operator=OPERATOR, inputs=ins or {}, outputs=outs or {}, cost=NodeCost(), permissions=[perm], deterministic=not side,
                           side_effecting=side, compensation=comp, irreversible=bool(irreversible), irreversible_note=irreversible, approval_required=approval,
                           provides=list(provides), concurrency_mode="exclusive" if side else "read_only")
@@ -52,7 +53,7 @@ def specs() -> list:
            _spec(GATE_CAP, outs={"status": "str"}, provides=["plan_approval"], approval=True)]
     for step, cap in CAPABILITY.items():
         out.append(_spec(cap, side=True, perm=PERM_WRITE, outs={"native_id": "str"}, provides=[OUTCOME[step]], undo=UNDO[cap], verify=VERIFY[cap],
-                         notes="; ".join(RESIDUAL[step])))
+                         notes="; ".join(RESIDUAL[step]), residual=RESIDUAL[step]))
         out.append(_spec(UNDO[cap], side=True, perm=PERM_WRITE, irreversible="a compensating delete/clear cannot itself be undone; residual: " + "; ".join(RESIDUAL[step])))
         out.append(_spec(VERIFY[cap], perm=PERM_READ, outs={"verified": "bool"}))
     return out
