@@ -40,8 +40,15 @@ def mission_receipt(rt, mission_id: str) -> Dict[str, Any]:
     chain = verify_chain(list(rt.store.for_mission(mission_id)))
     head = rt.store.head(mission_id) if hasattr(rt.store, "head") else ""
     basis = rt._authority_basis(mission_id) if hasattr(rt, "_authority_basis") else []
+    rollback = None
+    if folded:                                  # a compensation was attempted, denied or recorded: the receipt says how it classifies
+        from .compensation_runner import outcome_from_log  # noqa: PLC0415
+        o = outcome_from_log(rt, mission_id)
+        rollback = {"rolled_back": o.get("rolled_back", False), "compensation_state": o.get("compensation_state", "none"),
+                    "steps": o.get("step_classification", []), "residual_effects": o.get("residual_effects", [])}
     return {
-        **({"authority": {"basis": basis}} if basis else {}),     # what authorised the actions: the owner's envelope and/or a named test policy
+        **({"authority": {"basis": basis}} if basis else {}),
+        **({"rollback": rollback} if rollback else {}),     # what authorised the actions: the owner's envelope and/or a named test policy
         "mission_id": mission_id,
         "goal": rt.repo.goal(mission_id),
         "state": (state.value if isinstance(state, MissionState) else state),
