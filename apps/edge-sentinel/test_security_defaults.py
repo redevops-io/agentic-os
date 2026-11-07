@@ -40,7 +40,7 @@ def test_the_default_bind_is_loopback(monkeypatch):
 def test_unreachable_hosts_are_not_called_loopback():
     for h in ("127.0.0.1", "localhost", "::1", "127.0.0.53"):
         assert security.is_loopback(h), h
-    for h in ("0.0.0.0", "0", "::", "10.0.0.7", "192.168.40.8", "0.0.0.0:8203"):
+    for h in ("0.0.0.0", "0", "::", "10.0.0.7", "192.0.2.1", "0.0.0.0:8203"):
         assert not security.is_loopback(h), h
 
 
