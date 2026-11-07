@@ -930,6 +930,9 @@ class MissionRuntime:
     authority = None
     #: Non-production only: an explicit, named stand-in for an owner's envelope (see authority_policy.py). None = no such policy.
     test_policy: "AuthorityTestPolicy | None" = None
+    #: An action inside a grant's scope but past a limit or tier (ESCALATE) parks as an ordinary human gate. False: it is refused
+    #: (authority_denied), for a runtime whose human decision is made elsewhere (for example one plan approval).
+    escalation_parks: bool = True
     authority_key = None          # optional callable(mission) -> envelope id
 
     def _authority_key(self, m: Mission) -> str:
@@ -978,7 +981,7 @@ class MissionRuntime:
             res = self._authorize(m, node, decision, world, inputs, None, attempt)
             if res is not None and res.allowed:
                 return "run", res
-            if res is not None and res.verdict is Verdict.ESCALATE:
+            if res is not None and res.verdict is Verdict.ESCALATE and self.escalation_parks:
                 decision.required = True                # the envelope must be extended: ordinary human gate
                 decision.rules = list(decision.rules) + [ApprovalRule.AUTHORITY.value]
                 if graph is not None and not decision.packet:
@@ -1372,9 +1375,13 @@ class MissionRuntime:
 
     def _block_authority(self, m: Mission, node, res) -> None:
         """Production: the envelope forbids this action. Like a policy DENY it is a hard stop with an actionable reason."""
+        status = self.repo.node_status(m.id)
+        left = [n.capability for n in self._plans[m.id].graph.nodes if n.side_effecting and status.get(n.id) == NodeState.DONE]
         m.outcome = {"blocked": "authority_denied", "node": node.id, "capability": node.capability,
                      "rule": res.rule if res else "no_authority", "reason": res.reason if res else "",
-                     "amendment": res.amendment if res else None}
+                     "amendment": res.amendment if res else None,
+                     # what this refusal leaves in place, and that nothing was undone: undoing it is a separate, authorized action (compensate())
+                     "effects_remaining": left, "compensation": "none performed: undoing completed steps is a separate, explicitly authorized action"}
         self.lifecycle.dispatch(GateReached(mission_id=m.id, node_id=node.id, capability=node.capability))
         self._set_state(m, MissionState.FAILED)
 

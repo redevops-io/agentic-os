@@ -724,6 +724,10 @@ rest on can be checked. This section describes what the code does; the tests nam
   taken at the gate is released, and the mission stops with `outcome.blocked = authority_denied`. A mission rebuilt from the log is still
   read-only until `grant_resume` ([EVIDENCE_REPLAY_BOUNDARY.md](EVIDENCE_REPLAY_BOUNDARY.md)); this check is in addition. Tests:
   `tests/test_execution_authority.py`.
+* **Options.** `MissionRuntime.escalation_parks` (default `True`): an action past a grant's limit or tier parks as an ordinary human gate;
+  `False` refuses it (`authority_denied`), for a runtime whose human decision is made elsewhere. A mission stopped by an authority refusal lists
+  `outcome.effects_remaining` (the side effects that ran and stay) and says no compensation was performed. Tests:
+  `tests/test_authority_gate_options.py`.
 * **Not covered:** the operator HTTP `/invoke` surface keeps its own profile rules (above); the dispatch check is a mission-runtime check.
 
 ### Compensation authority
