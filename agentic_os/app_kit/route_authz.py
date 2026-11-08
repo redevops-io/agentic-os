@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
 from typing import Any
 
+from agentic_os.app_kit.reachability import arrived_on_loopback
 from agentic_os.mission.approval import strip_approval_keys
 from agentic_os.mission.execution_auth import strip_exec_auth_keys, verify_execution_authorization
 from agentic_os.mission.profile import is_production
@@ -49,6 +50,25 @@ WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 HEADER_EXEC = "x-execution-authorization"
 HEADER_SERVICE = "x-service-token"
 MAX_BODY = 1_000_000
+
+# Whether a policy is enforced today is decided by the execution profile, and the shipped deployment files
+# leave that profile unset — which means the default `docker compose up` computes every policy and then acts
+# on none of them. `exposure` is an alternative posture, added by the 2026-11-08 audit and OFF by default so
+# no existing deployment or test changes behaviour with this commit: with
+# AGENTIC_OS_ROUTE_AUTHZ_ENFORCE=exposure, a policy is enforced whenever the connection did NOT arrive over
+# loopback, so an app reachable from outside its own host enforces regardless of how the profile is set, while
+# a developer talking to 127.0.0.1 keeps the permissive local behaviour. It is request-time rather than
+# startup-time because the accepted socket is the only reachability fact this layer can actually observe.
+ENV_ENFORCE = "AGENTIC_OS_ROUTE_AUTHZ_ENFORCE"
+
+
+def enforces(scope: dict) -> bool:
+    """True when a policy decision on THIS request must be acted on."""
+    if is_production():
+        return True
+    return (os.environ.get(ENV_ENFORCE, "").strip().lower() == "exposure"
+            and not arrived_on_loopback(scope))
+
 
 _marker: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar("route_authz_marker", default=None)
 
@@ -262,7 +282,7 @@ class RouteAuthzMiddleware:
             # A write request that matches no declared policy: either a real route nobody classified, or a path that
             # does not exist. Production refuses both (fail closed); the CI registry test catches the first.
             label = f"{'WS' if scope['type'] == 'websocket' else scope['method']} {scope['path']}"
-            if is_production():
+            if enforces(scope):
                 return await self._refuse(scope, send, 403, f"{label} has no authorization policy")
             if label not in self._warned:
                 self._warned.add(label)
@@ -278,7 +298,7 @@ class RouteAuthzMiddleware:
                            replay_guard=self.replay_guard)
         allowed, status, reason, marker = decide(policy, ctx, body, app_name=self.app_name)
         scope.setdefault("state", {})["authz"] = ctx
-        if not allowed and is_production():
+        if not allowed and enforces(scope):
             return await self._refuse(scope, send, status, reason)
         token = _marker.set(marker)
         try:
