@@ -198,6 +198,25 @@ BASE_CSS = """
 .pill--neutral{background:var(--surface-container-highest);color:var(--on-surface-variant)}
 .pill__dot{width:6px;height:6px;border-radius:50%;background:currentColor}
 .table{width:100%;border-collapse:collapse;font-size:14px}
+/* UI audit 2026-11-11 (medium): the page held 947px of unshrinkable content at 834/390/320. `min-width:0`
+   everywhere changed nothing (measured); the floor was the *automatic* table layout algorithm, whose min-content
+   width is imposed on every ancestor — `table-layout:fixed` alone took the document from 947px to 360px at a
+   320px viewport. Cells need overflow-wrap because fixed layout otherwise clips an unbreakable token. The table
+   keeps the 592px its six columns want *inside* a focusable scroller, so columns scroll rather than crush to
+   ~45px; tabindex="0" because a scrollable region a keyboard user cannot reach is a new finding
+   (axe scrollable-region-focusable), not a fix. */
+.table{table-layout:fixed}
+.table th,.table td{overflow-wrap:anywhere}
+.table-scroll{overflow-x:auto;max-width:100%;-webkit-overflow-scrolling:touch;overscroll-behavior-inline:contain}
+.table-scroll>table{width:max(100%,592px)}
+/* The scroller only clamps if the box it sits in is allowed to be narrower than its content; a flex/grid item's
+   automatic minimum size is otherwise its min-content width, which is how a 592px table reaches 641px. */
+.card,.table-scroll{min-width:0}
+/* UI audit 2026-11-11 (low), found at the 320px reference width: the scenario bars carried a fixed 200px label
+   column, so the row could not fit any narrower than 200+56+2×16=288px. Under 561px the bar moves to its own
+   line and the label takes the full width; above it the layout is byte-for-byte the audited design. */
+.barlist__label{min-width:0;overflow-wrap:anywhere}
+@media(max-width:560px){.barlist__row{grid-template-columns:minmax(0,1fr) 56px}.barlist__row>.bar{grid-column:1/-2}}
 .table th{text-align:left;color:var(--on-surface-muted);font:500 12px/16px var(--font-sans);letter-spacing:.5px;text-transform:uppercase;padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--outline-variant)}
 .table td{padding:var(--sp-3) var(--sp-4);color:var(--on-surface);border-bottom:1px solid var(--outline-variant)}
 .table td.num{text-align:right;font-family:var(--font-mono);font-feature-settings:"tnum"}
@@ -225,6 +244,12 @@ a{color:var(--primary);text-decoration:none}
 .barlist__row{display:grid;grid-template-columns:200px 1fr 56px;align-items:center;gap:var(--sp-4)}
 .barlist__label{color:var(--on-surface-variant);font:400 13px/18px var(--font-mono)}
 .barlist__pct{text-align:right;font-family:var(--font-mono);font-feature-settings:"tnum";font-size:13px;color:var(--on-surface-variant)}
+/* UI audit 2026-11-11 (low), found at the 320px reference width: the scenario bars carried a fixed 200px label
+   column, so a row could not fit narrower than 200+56+2×16=288px. Under 561px the label takes the width and the
+   bar drops to its own line; above it the layout is the audited design. Placed after the definition it overrides,
+   because a media query adds no specificity — earlier in this sheet it silently did nothing. */
+.barlist__label{min-width:0;overflow-wrap:anywhere}
+@media(max-width:560px){.barlist__row{grid-template-columns:minmax(0,1fr) 56px}.barlist__row>.bar{grid-column:1/-2}}
 .footer{color:var(--on-surface-muted);font:400 12px/16px var(--font-sans);text-align:center;padding-top:var(--sp-2)}
 .status-banner{display:flex;align-items:center;gap:var(--sp-4);padding:var(--sp-4) var(--sp-5);border-radius:var(--radius-md);border-left:4px solid var(--success);background:var(--success-container);color:var(--on-surface)}
 .status-banner--threat{border-left-color:var(--danger);background:var(--danger-container)}
@@ -239,7 +264,7 @@ a{color:var(--primary);text-decoration:none}
 .feed__meta{font:400 12px/16px var(--font-sans);color:var(--on-surface-muted)}
 .feed__src{font-family:var(--font-mono);color:var(--on-surface-variant)}
 .feed__time{flex:0 0 auto;font:400 12px/16px var(--font-mono);color:var(--on-surface-muted)}
-.mono{font-family:var(--font-mono);font-feature-settings:"tnum"}
+.mono{font-family:var(--font-mono);font-feature-settings:"tnum";overflow-wrap:anywhere}
 """
 
 # No third-party font request (P9): a page view used to fetch Roboto from fonts.googleapis.com and
@@ -489,10 +514,11 @@ def _decisions_table(data: dict) -> str:
         "<div class='card'>"
         "<div class='card__head'><h2 class='card__title'>Attack sources · active decisions</h2>"
         "<span class='pill pill--info'><span class='pill__dot'></span>GET /v1/decisions</span></div>"
-        "<table class='table'><thead><tr>"
+        "<div class='table-scroll' tabindex='0' role='region' aria-label='Attack sources table, scrollable horizontally'>"
+        "<table class='table' aria-label='Attack sources with active decisions'><thead><tr>"
         "<th>Source</th><th>Scope</th><th>Scenario</th><th>Severity</th><th>Expires in</th><th>Action</th>"
         "</tr></thead>"
-        f"<tbody>{rows}</tbody></table>"
+        f"<tbody>{rows}</tbody></table></div>"
         "<div class='body-s' style='color:#9b99a1'>Entries tagged manual (cscli) were added by hand with cscli: demo sample "
         "history or an approved block. Entries tagged sample history were marked as such when they were added. Neither is a "
         "detection by a CrowdSec scenario.</div>"
@@ -525,10 +551,15 @@ def _live_badge(is_live: bool, hint: str) -> str:
     return f"<span style='background:#241f14;color:#e0b000;border:1px solid #6b5a1e;border-radius:5px;padding:2px 9px;font-size:11px;font-weight:700'>SAMPLE DATA — {_esc(hint)}</span>"
 
 
-def _tbl(headers: list[str], rows: list[list[str]]) -> str:
+def _tbl(headers: list[str], rows: list[list[str]], *, label: str) -> str:
+    """A table the panels can reuse. `label` is required, not optional: a table with no accessible name is
+    announced as "table, 6 columns" and the reader has to guess which one they are reading. Making the
+    argument mandatory means a future panel cannot forget it, and a call site that does fails loudly at
+    render time instead of shipping a silent accessibility finding."""
     h = "".join(f"<th style='text-align:left;padding:7px 10px;color:#9b99a1;font-weight:600;border-bottom:1px solid #2f2f33'>{_esc(x)}</th>" for x in headers)
     body = "".join("<tr>" + "".join(f"<td style='padding:7px 10px;border-bottom:1px solid #1f1f22'>{c}</td>" for c in r) + "</tr>" for r in rows)
-    return f"<table style='width:100%;border-collapse:collapse;font-size:13px'><thead><tr>{h}</tr></thead><tbody>{body}</tbody></table>"
+    return (f"<div class='table-scroll' tabindex='0'><table aria-label='{_esc(label)}' "
+            f"style='width:100%;border-collapse:collapse;font-size:13px'><thead><tr>{h}</tr></thead><tbody>{body}</tbody></table></div>")
 
 
 def _risk_list(risks: list[dict]) -> str:
@@ -665,10 +696,11 @@ def _cases_panel(summaries: list[dict]) -> str:
         "<b>real kick-off is operator-authenticated</b> and needs an enable flag (SENTINEL_BLOCK_ENABLED); without it this execute "
         "step is a <b>dry run</b>: nothing is blocked, and the edge is never touched on approve or reject. Cases are rebuilt from the alerts "
         "CrowdSec currently holds, including hand-added (cscli) entries that may be sample history.</div>"
-        "<table class='table'><thead><tr>"
+        "<div class='table-scroll' tabindex='0' role='region' aria-label='Investigation cases table, scrollable horizontally'>"
+        "<table class='table' aria-label='Investigation cases and their state'><thead><tr>"
         "<th>Severity</th><th>Case</th><th>Status</th><th>Evidence</th><th>Replay</th><th>Response</th>"
         "</tr></thead>"
-        f"<tbody>{rows}</tbody></table>"
+        f"<tbody>{rows}</tbody></table></div>"
         "<script>\n"
         "async function esRespond(cid,rid,approve){\n"
         "  const r = await fetch(`/api/cases/${cid}/respond`,{method:'POST',"
@@ -1605,6 +1637,13 @@ def index() -> str:
         blocks += "<section class='shell' style='margin-top:var(--sp-4)'>" + _SENTINEL_CONSOLE.panel_html("sentinel") + "</section>"
     if blocks:
         page = page.replace("<footer", blocks + "<footer", 1)
+    # UI audit 2026-11-11: the page exposed no main landmark (axe `region`, and a screen-reader user's only
+    # way to skip to the content). Everything between <body> and <footer> *is* the main content here, so it
+    # is wrapped rather than restructured. A page that has no footer to close against is left untouched —
+    # an unbalanced tag is worse than the missing landmark it replaces.
+    if "<main" not in page and "<footer" in page:
+        page = page.replace("<footer", "</main><footer", 1)
+        page = _cr_re.sub(r"(<body[^>]*>)", lambda m: m.group(1) + "<main>", page, count=1)
     page = _cr_re.sub(r"(<body[^>]*>)", lambda m: m.group(1) + _cr_banner(), page, count=1)
     if "CONTEXT RUNTIME" not in page:
         page = _cr_banner() + page
