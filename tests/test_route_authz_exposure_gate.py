@@ -16,6 +16,8 @@ covered.
 """
 from __future__ import annotations
 
+import os
+import re
 import secrets as _secrets
 
 import pytest
@@ -63,7 +65,8 @@ def _app():
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     for k in ("AGENTIC_OS_PROFILE", "AGENTIC_OS_REQUIRE_AUTHORITY", ra.ENV_ENFORCE,
-              "AGENTIC_OS_SERVICE_TOKENS", "AGENTIC_OS_TENANT_TOKENS", "OPERATOR_BASIC_AUTH"):
+              "AGENTIC_OS_SERVICE_TOKENS", "AGENTIC_OS_TENANT_TOKENS", "OPERATOR_BASIC_AUTH",
+              ra.ENV_FORWARDED_ALLOW_IPS, ra.ENV_BEHIND_PROXY, "AGENTIC_OS_BIND_HOST", "HOST"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("AGENTIC_OS_APPROVAL_SECRET", SECRET)
 
@@ -88,13 +91,17 @@ def test_a_scope_without_a_server_address_counts_as_exposed():
 
 # ── today's behaviour, pinned so a future default flip is a deliberate act ─────────────────────────────
 
-def test_a_deniable_write_is_not_actually_refused_while_the_profile_is_unset():
-    """The finding, as an executable statement: an anonymous write to an authority_required route reaches the
-    handler on a default deployment. If this test starts failing, enforcement has become the default — which
-    is the point, and it should be loud rather than silent."""
+def test_an_anonymous_write_to_an_authority_required_route_is_now_refused_by_default():
+    """The finding, and its closure, as one executable statement.
+
+    Before this change an anonymous write to an `authority_required` route reached the handler on a default
+    deployment (profile unset ⇒ every policy advisory) — the exact behaviour this test used to pin. Enforcement
+    is now the default for a routable peer, so the same request is refused and the handler never runs. No
+    profile, authority store or owner envelope is involved: the peer address alone decides.
+    """
     c, calls = _client(EXTERNAL)
-    assert c.post("/act", json={}).status_code == 200
-    assert calls == ["/act"], "the handler ran, and that is the gap"
+    assert c.post("/act", json={}).status_code == 401
+    assert calls == [], "the handler must not run"
 
 
 # ── the proposed posture: reachability decides, not memory ─────────────────────────────────────────────
@@ -148,22 +155,57 @@ def test_reads_and_the_public_classes_stay_open_in_exposure_mode(monkeypatch):
     assert calls == ["/intake", "/run"]
 
 
-def test_enforcement_is_unchanged_when_the_new_variable_is_absent():
-    """The commit that introduces this must change nothing by default."""
+def test_enforcement_is_the_default_for_a_routable_peer_and_opt_in_for_a_local_one():
+    """The posture flipped: enforcement is what a deployment gets without asking for it."""
+    assert ra.enforces({"server": ("10.0.0.7", 80)}) is True       # routable peer: enforced
+    assert ra.enforces({"server": ("172.17.0.4", 80)}) is True     # a container edge address, not loopback
+    assert ra.enforces({"server": ("127.0.0.1", 80)}) is False     # nothing declared in front: local
+    assert ra.enforces({"server": ("testserver", 80)}) is False    # in-process harness: no network peer
+
+
+def test_a_same_host_proxy_declared_in_front_of_the_process_enforces(monkeypatch):
+    """The hole the socket cannot see, closed by the one fact the operator has to state.
+
+    A reverse proxy terminating on the same host connects over 127.0.0.1, so the accepted socket is identical
+    to a developer's own request (tests/test_mproxy_write_containment.py pins that). Uvicorn's
+    FORWARDED_ALLOW_IPS — which any deployment that parses X-Forwarded-For already sets — is the declaration
+    that loopback peers may be carrying somebody else's request, and it flips the posture on its own.
+    """
+    monkeypatch.delenv(ra.ENV_ENFORCE, raising=False)
+    monkeypatch.setenv(ra.ENV_FORWARDED_ALLOW_IPS, "127.0.0.1")
+    assert ra.enforces({"server": ("127.0.0.1", 80)}) is True
+    monkeypatch.delenv(ra.ENV_FORWARDED_ALLOW_IPS)
+    monkeypatch.setenv(ra.ENV_BEHIND_PROXY, "1")                   # the explicit form, same effect
+    assert ra.enforces({"server": ("127.0.0.1", 80)}) is True
+
+
+def test_a_published_bind_host_enforces_whatever_the_socket_says(monkeypatch):
+    """`0.0.0.0`/`::`/a named bind means other machines can reach this process; loopback peers then prove
+    nothing about who is upstream."""
+    monkeypatch.delenv(ra.ENV_ENFORCE, raising=False)
+    for host in ("0.0.0.0", "::", "172.17.0.4", "api.example.com"):
+        monkeypatch.setenv("AGENTIC_OS_BIND_HOST", host)
+        assert ra.enforces({"server": ("127.0.0.1", 80)}) is True, host
+    monkeypatch.setenv("AGENTIC_OS_BIND_HOST", "127.0.0.1")
+    assert ra.enforces({"server": ("127.0.0.1", 80)}) is False     # genuinely bound to loopback
+
+
+def test_an_unrecognised_posture_enforces_rather_than_relaxing(monkeypatch):
+    """A typo in a security-relevant variable must not silently turn enforcement off."""
+    monkeypatch.setenv(ra.ENV_ENFORCE, "advisory-ish")
+    assert ra.enforces({"server": ("127.0.0.1", 80)}) is True
+
+
+def test_the_explicit_opt_outs_still_work_for_the_uses_they_exist_for(monkeypatch):
+    """`profile` is the documented escape hatch for tooling that predates the audit; `always` is stricter than
+    the default. Both are stated, neither is the default."""
+    monkeypatch.setenv(ra.ENV_ENFORCE, "profile")
     assert ra.enforces({"server": ("10.0.0.7", 80)}) is False
-    assert ra.enforces({"server": ("127.0.0.1", 80)}) is False
+    monkeypatch.setenv(ra.ENV_ENFORCE, "always")
+    assert ra.enforces({"server": ("127.0.0.1", 80)}) is True
 
 
-# ── the deployment gap, encoded so it cannot be quietly re-introduced ─────────────────────────────────
-
-_XF = """A shipped compose file publishes a port while leaving AGENTIC_OS_PROFILE unset.
-
-That combination IS the route-policy bypass: the service is reachable from outside its host and enforces none
-of its declared write policies. Closing it means choosing between `AGENTIC_OS_PROFILE=production` (which also
-requires a durable authority store and an owner envelope, so it is an operator provisioning decision) and
-`AGENTIC_OS_ROUTE_AUTHZ_ENFORCE=exposure`. This test is strict-xfail: it fails-as-expected while the shipped
-files are unchanged, and it turns into a hard failure the moment any one file is fixed — which is the signal
-to finish the job across every published service rather than leave a half-enforced fleet."""
+# ── deployment compliance: every published service states what fronts it (audit item 6) ───────────────
 
 
 def _published_services():
@@ -186,17 +228,76 @@ def _published_services():
             if not (svc.get("ports") or []):
                 continue
             env = " ".join(str(e) for e in (svc.get("environment") or []))
-            out.append((str(f.relative_to(root)), name, env))
+            # Only services running Agentic OS code can read our variables; a digest-pinned third-party image
+            # (Caddy, Twenty, Metabase, Postiz) is part of the topology but not a service this check can make
+            # declare anything. Including them would bury the services that can act.
+            ours = bool(svc.get("build")) or "agentic" in str(svc.get("image", "")).lower()
+            if ours:
+                out.append((str(f.relative_to(root)), name, env))
     return out
 
 
 def test_the_audit_counts_published_services_before_blaming_the_code():
-    """The xfail below needs real published services to mean anything; this one keeps it honest."""
+    """The compliance checks below need real published services to mean anything; this keeps them honest."""
     assert len(_published_services()) >= 5
 
 
-@pytest.mark.xfail(strict=True, reason=_XF)
-def test_no_shipped_compose_publishes_a_port_with_the_profile_left_unset():
+def test_no_shipped_service_opts_out_of_enforcement():
+    """No shipped deployment may turn enforcement off. `profile` restores the pre-audit posture and `always`
+    is stricter than the default; the offending value is named so the review comment is unambiguous."""
     offenders = [(f, name) for f, name, env in _published_services()
-                 if "AGENTIC_OS_PROFILE=" not in env or "${AGENTIC_OS_PROFILE:-}" in env]
-    assert not offenders, f"{len(offenders)} published service(s) run with no enforcement posture: {offenders[:6]}"
+                 if re.search(r"AGENTIC_OS_ROUTE_AUTHZ_ENFORCE=(profile|off|none|0)\b", env)]
+    assert not offenders, f"published service(s) that disable enforcement: {offenders}"
+
+
+# Every published service that has not yet stated whether a proxy forwards to it, as of 2026-11-08. This is
+# the to-do list, pinned so it can only get shorter: clearing an entry means adding the line to that service,
+# and adding a new published service without the line makes this check fail.
+FRONT_UNDECLARED_BASELINE = {
+    ("deploy/apps/compose.egress.yml", "forward-twenty"),
+    ("deploy/apps/compose.egress.yml", "forward-metabase"),
+    ("deploy/apps/compose.egress.yml", "forward-postiz"),
+    ("deploy/projects-sidekick/compose.yml", "projects-sidekick"),
+    ("docker-compose.yml", "control-plane"),
+}
+
+
+def _front_undeclared():
+    declares = re.compile(r"FORWARDED_ALLOW_IPS=\S|AGENTIC_OS_BEHIND_PROXY=\S")
+    return {(f, name) for f, name, env in _published_services() if not declares.search(env)}
+
+
+def test_every_published_service_says_whether_it_sits_behind_a_proxy():
+    """Each published service must declare its own front, so none inherits another service's answer.
+
+    Enforcement no longer depends on a production profile, a durable authority store or an owner envelope, so
+    the whole fix is one line on the service — either of:
+
+      - FORWARDED_ALLOW_IPS=127.0.0.1        # something on this host forwards requests here
+      - AGENTIC_OS_BEHIND_PROXY=0            # nothing does; only this machine can reach us
+
+    A service that never answers is still enforced for every routable peer; what it leaves open is the
+    same-host-proxy case specifically, which is why the line has to be written down rather than assumed.
+    The set below is the remaining work, and it may only shrink.
+    """
+    silent = _front_undeclared()
+    assert silent - FRONT_UNDECLARED_BASELINE == set(), (
+        f"new published service(s) with no declared front — add FORWARDED_ALLOW_IPS=... or "
+        f"AGENTIC_OS_BEHIND_PROXY=... to each: {sorted(silent - FRONT_UNDECLARED_BASELINE)}")
+    cleared = FRONT_UNDECLARED_BASELINE - silent
+    assert cleared == set(), (
+        f"{sorted(cleared)} now declare a front: delete them from FRONT_UNDECLARED_BASELINE so the list "
+        f"stays the real remaining work")
+
+
+def test_the_front_declaration_actually_changes_the_posture():
+    """The compliance list above is only worth having if the declaration does something: the same loopback
+    request is advisory without it and enforced with it."""
+    scope = {"server": ("127.0.0.1", 80)}
+    assert ra.enforces(scope) is False
+    os.environ[ra.ENV_FORWARDED_ALLOW_IPS] = "127.0.0.1"
+    try:
+        assert ra.enforces(scope) is True
+    finally:
+        del os.environ[ra.ENV_FORWARDED_ALLOW_IPS]
+

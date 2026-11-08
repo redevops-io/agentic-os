@@ -116,6 +116,41 @@ database keeps working. `AGENTIC_OS_REQUIRE_AUTHORITY=1` is kept as an alias for
 Official production deployments must set `AGENTIC_OS_PROFILE=production` explicitly; the Compose file passes the variable
 through to every service that decides authority (empty means development).
 
+### Route-policy enforcement does not wait for the profile
+
+A profile asks for provisioning a deployment may not have done yet (a durable authority store, an owner envelope), and
+the shipped Compose files leave the profile unset — so enforcement used to be the one thing an operator got only by
+opting in. That is inverted: an app's declared write-route policies are **enforced by default**, and advisory behaviour
+has to be earned by a request that cannot have come from the network.
+
+| The request… | Posture |
+|---|---|
+| arrived on a routable address (a container edge like `172.17.0.4`, a LAN address, anything not loopback) | **enforced** |
+| arrived over loopback, and the service declared `FORWARDED_ALLOW_IPS` or `AGENTIC_OS_BEHIND_PROXY` | **enforced** |
+| arrived over loopback, nothing declared in front, and the process is not bound to a published address | advisory |
+| was produced by an in-process test harness (no IP peer at all) | advisory |
+| any request under `AGENTIC_OS_PROFILE=production` | **enforced** |
+
+`AGENTIC_OS_ROUTE_AUTHZ_ENFORCE` overrides the computation: `always` enforces everywhere, `profile` restores the
+pre-2026-11-08 behaviour (enforce only in production), unset is the default above. An unrecognised value enforces —
+a typo in a security variable is not a licence to stop enforcing.
+
+**Trusted network ranges are configured by stating what fronts the service, per service:**
+
+- `FORWARDED_ALLOW_IPS=127.0.0.1` — uvicorn's own switch, the address of the proxy that terminates in front of this
+  process; its presence means loopback peers may be carrying somebody else's request.
+- `AGENTIC_OS_BEHIND_PROXY=1` — the same statement for a service that does not parse `X-Forwarded-For` at all.
+- `AGENTIC_OS_BIND_HOST=0.0.0.0` (or `::`, or a named address) — the process is reachable from other machines, so a
+  loopback peer proves nothing about who is upstream.
+
+The one fact no process can observe about itself is who opened a loopback connection, and no header can supply it:
+a proxy terminating on the same host connects over `127.0.0.1`, byte-for-byte like a developer on the machine. That
+is why the statement is required per published service
+(`tests/test_route_authz_exposure_gate.py` lists the ones still missing it, and the list may only shrink), and why
+`tests/test_route_authz_real_topology.py` demonstrates both the gap and its closure over real sockets. Reads and
+public intake are unaffected: `decide()` never refuses them, so this is not a blanket authentication wall.
+
+
 **See the posture:** `GET /health` on the control plane (with the fleet credential) and on the suite server include `security`; every operator serves
 `GET /_security`. A deployment that is in development mode, or whose guard or replay store is not durable, shows
 `"ok": false` with the reasons: wire that into readiness checks and Edge Sentinel.

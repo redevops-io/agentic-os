@@ -31,6 +31,7 @@ from __future__ import annotations
 import base64
 import contextvars
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -51,23 +52,92 @@ HEADER_EXEC = "x-execution-authorization"
 HEADER_SERVICE = "x-service-token"
 MAX_BODY = 1_000_000
 
-# Whether a policy is enforced today is decided by the execution profile, and the shipped deployment files
-# leave that profile unset — which means the default `docker compose up` computes every policy and then acts
-# on none of them. `exposure` is an alternative posture, added by the 2026-11-08 audit and OFF by default so
-# no existing deployment or test changes behaviour with this commit: with
-# AGENTIC_OS_ROUTE_AUTHZ_ENFORCE=exposure, a policy is enforced whenever the connection did NOT arrive over
-# loopback, so an app reachable from outside its own host enforces regardless of how the profile is set, while
-# a developer talking to 127.0.0.1 keeps the permissive local behaviour. It is request-time rather than
-# startup-time because the accepted socket is the only reachability fact this layer can actually observe.
+# Whether a policy is acted on used to be decided solely by the execution profile, and the shipped deployment
+# files leave that profile unset: the default `docker compose up` computed every policy and honoured none of
+# them. The posture below is decided per request from facts the process can actually observe, and it fails
+# closed — enforcement is the default, and a deployment has to say something true about itself to opt out.
+#
+#   enforce  — the decision is returned to the client (403) instead of logged and allowed through.
+#   advisory — the decision is computed and recorded, and the request proceeds (local development).
+#
+# A request is enforced unless it is PROVEN local, where proven local means all of:
+#   * it arrived over loopback, and
+#   * nothing is declared as sitting in front of this process (a proxy that forwards would arrive over
+#     loopback too — see agentic_os/app_kit/reachability.py), and
+#   * the deployment has not published itself (bind host beyond loopback), and
+#   * it is not a production profile (production always enforces).
+# `AGENTIC_OS_ROUTE_AUTHZ_ENFORCE` overrides the computation: `profile` restores the pre-audit behaviour
+# (enforce iff production), `always` enforces everywhere including loopback, and the unset default is `auto`.
 ENV_ENFORCE = "AGENTIC_OS_ROUTE_AUTHZ_ENFORCE"
+# Uvicorn's own "I sit behind a proxy on these addresses" switch. Its presence is the operator telling us
+# that loopback peers may be forwarding other people's requests, so loopback stops being proof of locality.
+ENV_FORWARDED_ALLOW_IPS = "FORWARDED_ALLOW_IPS"
+# A deployment may declare that nothing but this machine can reach it. It is an operator statement, not a
+# measurement; it is honoured only together with a loopback arrival, and it is logged at startup.
+ENV_BEHIND_PROXY = "AGENTIC_OS_BEHIND_PROXY"
+
+
+def _behind_proxy_declared() -> bool:
+    return bool(os.environ.get(ENV_FORWARDED_ALLOW_IPS, "").strip()
+                or os.environ.get(ENV_BEHIND_PROXY, "").strip().lower() in ("1", "true", "yes"))
+
+
+def _bind_is_published() -> bool:
+    """The bind host this process was told to use. `0.0.0.0`/`::`/a named address means other machines can
+    reach it; only an explicit loopback bind counts as unpublished."""
+    host = (os.environ.get("AGENTIC_OS_BIND_HOST", "") or os.environ.get("HOST", "")).strip().lower()
+    if not host or host in ("localhost", "127.0.0.1", "::1"):
+        return False
+    try:
+        return not ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return True                       # a name we cannot place counts as published
+
+
+def _peer(scope: dict):
+    """The address the socket arrived on, as an IP object, or None when there is no network peer at all.
+
+    The ASGI `server` entry is written by the server implementation, never by the caller: a real uvicorn always
+    puts the numeric local address of the accepted socket there. A non-IP value (`testserver`) or a missing one
+    can therefore only come from an in-process harness, which no remote client can produce or influence.
+    """
+    host = ((scope or {}).get("server") or ("", 0))[0] or ""
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        return None
 
 
 def enforces(scope: dict) -> bool:
-    """True when a policy decision on THIS request must be acted on."""
+    """True when a policy decision on THIS request must be acted on rather than recorded.
+
+    Enforcement is the default. Advisory behaviour requires the request to be unreachably local AND the process
+    not to have published itself, so a deployment gets nothing for free: an address it cannot place, a proxy in
+    front of it, or a published bind host all mean the policies are enforced.
+    """
     if is_production():
         return True
-    return (os.environ.get(ENV_ENFORCE, "").strip().lower() == "exposure"
-            and not arrived_on_loopback(scope))
+    mode = os.environ.get(ENV_ENFORCE, "").strip().lower() or "auto"
+    if mode == "profile":
+        return False                      # production already returned above: pre-audit behaviour
+    if mode == "always":
+        return True
+    if mode == "exposure":                # the interim posture, kept for operators who set it
+        return not arrived_on_loopback(scope)
+    if mode != "auto":
+        return True                       # an unrecognised posture is not a licence to stop enforcing
+    if _bind_is_published():
+        return True                       # the operator told us other machines can reach this process
+    peer = _peer(scope)
+    if peer is None:
+        return False                      # in-process harness: there is no network peer to have come from
+    if peer.is_loopback:
+        # A forwarding proxy also arrives over loopback, so loopback is only locality when nothing is declared
+        # in front of the process. Uvicorn's FORWARDED_ALLOW_IPS is that declaration.
+        return _behind_proxy_declared()
+    return True                           # a routable peer (container network, LAN, internet)
+
+
 
 
 _marker: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar("route_authz_marker", default=None)
