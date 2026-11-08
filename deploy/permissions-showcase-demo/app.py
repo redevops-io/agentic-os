@@ -29,6 +29,7 @@ from starlette.concurrency import run_in_threadpool
 from agentic_os import permissions as _perm
 from agentic_os import permissions_demo as _demo
 from agentic_os import views
+from agentic_os.app_kit import ops_surface as ops
 from agentic_os.permissions_http import (SecurityHeaders as _SecurityHeaders, warn_if_unprotected_throttle as _warn_throttle, create_kwargs as _create_kwargs, json_object as _json_obj,
                                          require_permissions_admin as _require_admin, secure_page as _secure_page, update_fields as _update_fields)
 
@@ -38,6 +39,13 @@ _warn_throttle()
 # No /docs, /redoc or /openapi.json (the admin routes are not advertised), and no trailing-slash redirects (a 404, never a Host-derived Location).
 app = FastAPI(title="ReDevOps — Data-Access Permissions Plane", docs_url=None, redoc_url=None, openapi_url=None, redirect_slashes=False)
 app.add_middleware(_SecurityHeaders, no_store_prefixes=("/api/permissions",))
+# Which commit is answering. `/healthz` below says the process is up; it cannot say what it is, and a probe
+# of this deployment had no way to ask (see agentic_os/app_kit/ops_surface.py). Four non-secret fields.
+# `with_healthz=False` because this unit defines its own /healthz further down this file, and the installer's
+# duplicate check can only see routes that exist when it is called — asking for one here would shadow the
+# unit's answer, which deploy.sh matches on.
+ops.install_build_identity(app, with_healthz=False)
+
 
 _SEED = ([
     {"id": "seed-support-crm-customers", "subject_kind": "app", "subject": "support", "resource_kind": "table",
