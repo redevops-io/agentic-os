@@ -17,8 +17,10 @@ either direction — fails until the owner classifies them.
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
+import sys
 import urllib.request
 from pathlib import Path
 
@@ -141,11 +143,125 @@ def test_public_journey_live(ep):
         assert ep["marker"] in body, (ep["id"], "live marker missing")
 
 
+LIVE_SAFE_METHODS = ("GET", "HEAD")
+# The live surface is defined by this filter, not by a workflow's `-k` expression: what cannot be sent
+# cannot be sent by accident. A live POST/PUT/PATCH/DELETE probe would execute the mutation it exists to
+# detect if a guard had regressed. Refusal of those methods is proven offline
+# (test_protected_operation_refused_anonymous_local), against the repo's own apps, with a state-change check.
+LIVE_PROBES = [ep for ep in CONTRACT["protected_anonymous"] if ep["method"] in LIVE_SAFE_METHODS]
+
+
 @pytest.mark.skipif(not LIVE, reason="live demo probe runs in the nightly workflow (DEMO_BASE_URL)")
-@pytest.mark.parametrize("ep", CONTRACT["protected_anonymous"], ids=lambda e: e["id"])
+@pytest.mark.parametrize("ep", LIVE_PROBES, ids=lambda e: e["id"])
 def test_protected_refused_live(ep):
     status = _live_status(ep["method"], ep["path"])
     assert status >= 400, f"{ep['id']}: live privileged route served anonymously ({status})"
+
+
+def test_no_mutating_probe_can_ever_be_sent_at_the_live_demo():
+    """The negative test above is structurally incapable of writing."""
+    assert LIVE_PROBES, "the anonymous read probes should not silently vanish"
+    assert {e["method"] for e in LIVE_PROBES} <= set(LIVE_SAFE_METHODS)
+    skipped = [e["id"] for e in CONTRACT["protected_anonymous"] if e["method"] not in LIVE_SAFE_METHODS]
+    assert skipped, "the contract should still carry write routes, refused offline rather than live"
+
+
+def test_the_live_probe_script_issues_only_get_and_head(monkeypatch):
+    """Every request the nightly script sends is captured and asserted read-only — not just the code path
+    this run happens to exercise: urllib.request.urlopen is replaced, so a mutating call would surface here
+    as a recorded method rather than reaching a hosted demo."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "probe_ro", Path(__file__).resolve().parents[1] / "scripts" / "probe_public_demo.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    sent = []
+
+    class Resp:
+        status = 404
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b"{}"
+
+    def fake_urlopen(req, timeout=None):
+        sent.append(req.get_method())
+        return Resp()
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", fake_urlopen)
+    mod.main()
+    assert sent, "the probe sent nothing — the capture is not working"
+    assert set(sent) <= {"GET", "HEAD"}, f"the live probe issued mutating methods: {sorted(set(sent))}"
+
+
+def test_a_widened_live_status_tolerates_a_missing_marker_but_a_pinned_status_never_does(monkeypatch, capsys):
+    """The behaviour this fix exists for, in both directions.
+
+    An older deployed build answers 404 where the contract pins 200; `live_status` records that known drift,
+    and demanding the body marker from a 404 reports one condition twice and buries which surface drifted.
+    A response that DOES match the pinned status is still checked strictly — including a designed non-2xx
+    whose marker lives in the error body. The contract is narrowed to the one journey under test so the exit
+    code can only be about that journey.
+    """
+    import importlib.util
+    import urllib.request as ur
+    spec = importlib.util.spec_from_file_location(
+        "probe_marker", Path(__file__).resolve().parents[1] / "scripts" / "probe_public_demo.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    widened = [dict(ep) for ep in mod.CONTRACT["public_journeys"] if ep.get("live_status")]
+    assert widened, "this test needs the widened entry it was written for (/api/demo/scenarios)"
+    ep = widened[0]
+    assert 200 in ep["status"] and 404 in ep["live_status"] and ep.get("marker")
+    monkeypatch.setattr(mod, "CONTRACT", {"public_journeys": [ep], "pending_owner": [], "protected_anonymous": []})
+
+    def run(status, body):
+        class Resp:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return body.encode()
+
+        def fake(req, timeout=None):
+            if status >= 400:
+                raise ur.HTTPError(req.full_url, status, "x", {}, io.BytesIO(body.encode()))
+            return Resp()
+
+        monkeypatch.setattr(mod.urllib.request, "urlopen", fake)
+        code = mod.main()
+        return code, capsys.readouterr().out
+
+    # 1. widened drift: an older build's 404 is tolerated, reported once, and NOT doubled into a marker failure
+    code, out = run(404, "")
+    assert code == 0, f"widened live drift must pass: {out}"
+    assert "widened live drift" in out and "marker check skipped" in out, f"drift must stay visible: {out}"
+    assert "VIOLATED" not in out
+
+    # 2. a response that matches the pinned status is still checked strictly
+    code, out = run(200, "no marker here")
+    assert code == 1 and "live marker" in out, f"a pinned-status response with a missing marker must fail: {out}"
+    assert run(200, ep["marker"])[0] == 0
+
+    # 3. a designed non-2xx whose marker lives in the error body keeps its strict check (e.g. /unsubscribe 400)
+    designed = [dict(e, status=[400], live_status=None) for e in mod.CONTRACT["public_journeys"] if e.get("marker")]
+    assert designed
+    monkeypatch.setattr(mod, "CONTRACT", {"public_journeys": designed, "pending_owner": [],
+                                          "protected_anonymous": []})
+    code, out = run(400, "no marker")
+    assert code == 1 and "live marker" in out, f"a pinned 400 must still be marker-checked: {out}"
+    assert run(400, designed[0]["marker"])[0] == 0
 
 
 # ---- the contract file, the nightly probe and the job that runs it ------------------------------------
