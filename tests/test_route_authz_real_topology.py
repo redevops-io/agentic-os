@@ -19,6 +19,7 @@ import pathlib
 import socket
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 import urllib.error
@@ -225,5 +226,105 @@ def test_the_only_advisory_path_is_an_explicit_direct_statement(proxied_app):
     assert t.direct() == 200, "a machine-local client in a declared-direct deployment still gets advisory"
     assert t.post() == 200, "…and so does anything relayed to that loopback socket: the statement is the risk"
     assert t.read("/read") == 200
+
+
+# ── the Unix-socket topology: a peer the process cannot place is NOT an in-process call ────────────────
+#
+# `server` is written by the server, never by the client, but it is not always an address. Captured from a
+# real uvicorn (see the test below, which re-captures it rather than trusting this comment): over a Unix
+# domain socket it reports the socket *path* as `server` and `client=None`. Before this gate existed, that
+# shape matched the in-process-harness branch and made every route policy advisory — on nginx-fronting-
+# uvicorn-`--uds`, a common hardened topology. The test below proves both halves: the shape uvicorn really
+# produces, and that the posture for it is enforcement.
+
+_UDS_SHAPE = {"type": "http", "path": "/m/write", "method": "POST",
+              "headers": [(b"host", b"x")], "query_string": b"", "root_path": ""}
+
+
+def _uds_scope(path: str):
+    s = dict(_UDS_SHAPE)
+    s["server"] = (path, 0)          # exactly what uvicorn puts there
+    s["client"] = None               # …and exactly what it puts here
+    return s
+
+
+def test_a_unix_socket_peer_is_unknown_provenance_and_enforces(monkeypatch):
+    from agentic_os.app_kit import route_authz as ra
+    for k in ("AGENTIC_OS_ROUTE_AUTHZ_ENFORCE", "AGENTIC_OS_BEHIND_PROXY",
+              "AGENTIC_OS_BIND_HOST", "HOST", "FORWARDED_ALLOW_IPS", "AGENTIC_OS_PROFILE"):
+        monkeypatch.delenv(k, raising=False)
+    # the same development defaults under which a test harness is advisory…
+    assert ra.enforces({"server": ("testserver", 80), "client": ("testclient", 50000)}) is False
+    assert ra.enforces({"path": "/m/write", "method": "POST"}) is False     # hand-built, no socket at all
+    # …must enforce for a socket that reports a path and no client
+    assert ra.enforces(_uds_scope("/run/agentic-os/app.sock")) is True
+    assert ra.enforces(_uds_scope("/tmp/sp.sock")) is True
+
+
+@pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="platform without unix domain sockets")
+def test_uvicorn_over_a_unix_socket_reports_the_shape_this_gate_depends_on():
+    """Re-captures the scope from a live uvicorn instead of asserting a remembered shape.
+
+    Speaks plain HTTP over the socket with the stdlib so no extra client library is needed, and asks the
+    served app to echo what its middleware saw. If uvicorn ever changes what it writes to `server`/`client`,
+    this test says so here rather than the gate quietly becoming advisory again.
+    """
+    pytest.importorskip("uvicorn")
+    import json
+    from agentic_os.app_kit import route_authz as ra
+
+    src = textwrap.dedent("""
+        import sys, uvicorn
+        from fastapi import FastAPI
+        app = FastAPI()
+        seen = {}
+        @app.middleware("http")
+        async def capture(request, call_next):
+            seen["server"] = list(request.scope.get("server") or [])
+            seen["client"] = request.scope.get("client")
+            return await call_next(request)
+        @app.get("/scope")
+        def scope():
+            return {"server": seen.get("server"), "client": seen.get("client")}
+        uvicorn.run(app, uds=sys.argv[1], log_level="critical")
+    """)
+    # macOS caps socket paths at ~104 chars, so pytest's tmp_path is unusable here
+    sock = pathlib.Path(f"/tmp/es_uds_{os.getpid()}.sock")
+    if sock.exists():
+        sock.unlink()
+    proc = subprocess.Popen([sys.executable, "-c", src + "\n", str(sock)],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        for _ in range(150):
+            if sock.exists():
+                break
+            time.sleep(0.1)
+        else:
+            pytest.fail("uvicorn did not create the unix socket")
+        conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        conn.settimeout(15)
+        conn.connect(str(sock))
+        conn.sendall(b"GET /scope HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
+        raw = b""
+        while True:
+            chunk = conn.recv(65536)
+            if not chunk:
+                break
+            raw += chunk
+        conn.close()
+        body = raw.split(b"\r\n\r\n", 1)[1]
+        seen = json.loads(body)
+        assert seen["server"], f"uvicorn wrote no server entry over UDS: {seen}"
+        assert "/" in str(seen["server"][0]), f"expected the socket path in server, got {seen['server']}"
+        assert seen["client"] is None, f"expected no client identity over UDS, got {seen['client']}"
+        # and the posture for the shape this server actually produces is enforcement
+        assert ra.enforces(_uds_scope(str(seen["server"][0]))) is True
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        sock.unlink(missing_ok=True)
 
 

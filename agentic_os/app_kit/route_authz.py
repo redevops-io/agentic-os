@@ -110,17 +110,50 @@ def _bind_is_published() -> bool:
 
 
 def _peer(scope: dict):
-    """The address the socket arrived on, as an IP object, or None when there is no network peer at all.
+    """The address the socket arrived on, as an IP object, or None when the entry is not an address.
 
-    The ASGI `server` entry is written by the server implementation, never by the caller: a real uvicorn always
-    puts the numeric local address of the accepted socket there. A non-IP value (`testserver`) or a missing one
-    can therefore only come from an in-process harness, which no remote client can produce or influence.
+    The ASGI `server` entry is written by the server implementation, never by the caller, so a remote client
+    cannot forge it. It is not, however, always an address: uvicorn over a Unix socket reports the socket
+    *path* there (`server=("/run/app.sock", 0)`) and reports **no client at all** (`client=None`). An
+    unplaceable `server` therefore means "this process cannot tell where the request came from", which is
+    not the same statement as "no request came from anywhere" — see `_in_process_harness` for that call.
     """
     host = ((scope or {}).get("server") or ("", 0))[0] or ""
     try:
         return ipaddress.ip_address(host)
     except ValueError:
         return None
+
+
+def _in_process_harness(scope: dict) -> bool:
+    """True only for a request no socket carried — an in-process call, which is the one case that gets the
+    advisory posture without a peer address.
+
+    Two shapes reach `_peer` as None and they must not be conflated:
+
+    * a real socket this process cannot place, because the transport put the **socket path** in `server`:
+      uvicorn on a Unix domain socket reports `server=("/run/app.sock", 0)` and `client=None`. nginx-fronting
+      uvicorn-`--uds` is a common hardened topology and looks exactly like this from the inside;
+    * a request with no accepted socket: no `server` entry at all, or a non-address **label** such as the
+      `testserver` a test transport writes.
+
+    A path is not a hostname: a value containing a path separator can only name a socket, so the first case
+    is unknown provenance and enforces. Treating it as a harness would leave every policy advisory on a
+    deployment that is in practice behind a front — a fail-open resting on the assumption that only tests
+    hide the peer. A bare label stays advisory: every harness in this repository produces one, and no
+    network client can forge `server` at all.
+
+    Residual and stated rather than hidden: the ASGI spec makes `server` optional, so a server that omits it
+    on a routable socket would read as in-process. uvicorn sets it — verified over both TCP and a Unix socket
+    in tests/test_route_authz_real_topology.py; other fronts are unverified here, so a deployment on anything
+    other than uvicorn should set `AGENTIC_OS_ROUTE_AUTHZ_ENFORCE=always` until it has checked.
+    """
+    scope = scope or {}
+    server = scope.get("server")
+    if not server:
+        return True                                        # no accepted socket: built in process
+    name = str(server[0] or "")
+    return "/" not in name                                 # a label is a harness; a path is a socket
 
 
 def enforces(scope: dict) -> bool:
@@ -146,7 +179,10 @@ def enforces(scope: dict) -> bool:
         return True                       # the operator told us other machines can reach this process
     peer = _peer(scope)
     if peer is None:
-        return False                      # in-process harness: there is no network peer to have come from
+        # An unplaceable peer is not the same as no peer. Only a request that no socket carried — an
+        # in-process call — stays advisory; a socket that reports neither an address we can place nor any
+        # client identity is unknown provenance, and unknown provenance enforces.
+        return not _in_process_harness(scope)
     if peer.is_loopback:
         return front_declaration() != "direct"    # loopback + undeclared provenance enforces
     return True                           # a routable peer (container network, LAN, internet)
