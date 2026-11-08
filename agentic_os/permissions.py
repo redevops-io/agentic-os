@@ -155,13 +155,23 @@ class Grant:
     masked_columns: list = field(default_factory=list)
     created_by: str = ""
     at: float = 0.0
+    # contract v1 (authz_contract): optional tenancy + revocation epoch. Absent/empty is EXACTLY the
+    # pre-contract single-operator grant: same stored bytes, same decisions, same digests.
+    tenant: str = ""
+    revocation_epoch: int = 0
 
     def to_dict(self) -> dict:
-        return {"id": self.id, "subject_kind": self.subject_kind, "subject": self.subject,
-                "resource_kind": self.resource_kind, "resource_name": self.resource_name,
-                "actions": self.actions, "row_scope": self.row_scope, "row_column": self.row_column,
-                "row_values": self.row_values, "masked_columns": self.masked_columns,
-                "created_by": self.created_by, "at": self.at}
+        d = {"id": self.id, "subject_kind": self.subject_kind, "subject": self.subject,
+             "resource_kind": self.resource_kind, "resource_name": self.resource_name,
+             "actions": self.actions, "row_scope": self.row_scope, "row_column": self.row_column,
+             "row_values": self.row_values, "masked_columns": self.masked_columns,
+             "created_by": self.created_by, "at": self.at}
+        # written only when set, so a legacy grant re-serializes byte-identically (PR-A compatibility pin)
+        if self.tenant:
+            d["tenant"] = self.tenant
+        if self.revocation_epoch:
+            d["revocation_epoch"] = self.revocation_epoch
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "Grant":
@@ -170,7 +180,8 @@ class Grant:
                    actions=(["read"] if d.get("actions") is None else d["actions"]), row_scope=d.get("row_scope", "all"),
                    row_column=d.get("row_column", "owner"), row_values=d.get("row_values") or [],
                    masked_columns=d.get("masked_columns") or [], created_by=d.get("created_by", ""),
-                   at=d.get("at", 0.0))
+                   at=d.get("at", 0.0), tenant=d.get("tenant") or "",
+                   revocation_epoch=int(d.get("revocation_epoch") or 0))
 
     def covers(self, resource_name: str) -> bool:
         if not isinstance(resource_name, str) or not isinstance(self.resource_name, str):
@@ -271,6 +282,10 @@ def grant_problem(g: "Grant") -> str | None:
         return "row_column must be a clean column name (non-blank, no padding, no commas) for an own/in grant"
     if g.row_scope == "in" and not isinstance(g.row_values, (list, tuple, set, frozenset)):
         return "row_values must be a list"
+    if g.tenant and not _ids.valid_identifier(g.tenant):     # contract v1: a set tenant must be a clean id
+        return "tenant is not a valid identifier"
+    if type(g.revocation_epoch) is not int or g.revocation_epoch < 0:
+        return "revocation_epoch must be a non-negative integer"
     return None
 
 
@@ -319,10 +334,19 @@ class AccessDecision:
     # rule masks it (exposed iff some matching rule exposes it). Empty for a decision with no per-grant detail
     # (a privileged bypass, a denial, a hand-built decision): then ``row_filter``/``masked_columns`` apply uniformly.
     rules: list = field(default_factory=list)
+    # contract v1 (authz_contract): echo of the tenancy/epoch the decision was evaluated under.
+    # Empty/0 is the pre-contract shape — omitted from to_dict, so every existing response is byte-identical.
+    tenant: str = ""
+    decision_epoch: int = 0
 
     def to_dict(self) -> dict:
-        return {"allowed": self.allowed, "reason": self.reason, "row_filter": self.row_filter,
-                "masked_columns": self.masked_columns, "rules": self.rules}
+        d = {"allowed": self.allowed, "reason": self.reason, "row_filter": self.row_filter,
+             "masked_columns": self.masked_columns, "rules": self.rules}
+        if self.tenant:
+            d["tenant"] = self.tenant
+        if self.decision_epoch:
+            d["decision_epoch"] = self.decision_epoch
+        return d
 
     @property
     def per_row_masks(self) -> bool:
