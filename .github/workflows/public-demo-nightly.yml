@@ -29,10 +29,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # Installed first because the read-only proof below is a test, and a test needs its imports. Nothing in
-      # this step talks to the demo.
-      - name: Install the kernel + dev extras
-        run: python -m pip install --quiet -e ".[dev]"
+      # Installed first because the read-only proof below is a test, and a test needs its imports. The duckdb
+      # extra is the same one the main test workflow installs: the offline contract checks boot the repo's own
+      # demo apps, and the evidence app's durable store needs it. Nothing in this step talks to the demo.
+      - name: Install the kernel + dev + duckdb extras
+        run: python -m pip install --quiet -e ".[dev,duckdb]"
       # Runs BEFORE any request leaves the runner, and decides whether this job may touch the network at all:
       # it asserts every request the live steps can issue is GET/HEAD (the live probe set is filtered in the
       # test module, and the script's own requests are captured and inspected). If it goes red, nothing below
