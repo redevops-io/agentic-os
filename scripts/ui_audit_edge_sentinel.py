@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sys
 import time
@@ -28,10 +29,20 @@ OUT = Path(sys.argv[2])
 LABEL = sys.argv[3]
 OUT.mkdir(parents=True, exist_ok=True)
 
-#: `narrow` is 320 CSS px, the width SC 1.4.10 (Reflow) actually measures at. Without it the audit could
-#: report a reflow pass while a 947 px table sat just below the smallest width it tested — which is what
-#: happened on the first run.
+#: `narrow` is 320 CSS px, the width SC 1.4.10 (Reflow) is assessed at. It is a default rather than an
+#: opt-in: a criterion nobody enables is not a criterion, and the first run of this audit passed reflow
+#: while a 947 px table sat below the smallest width it tested.
 VIEWPORTS = {"narrow": (320, 720), "mobile": (390, 844), "tablet": (834, 1112), "desktop": (1440, 900)}
+#: Extra viewports on top of the defaults: UI_AUDIT_EXTRA_VIEWPORTS="tablet-portrait=600x900". Additive
+#: never replacing, so every earlier run's numbers stay comparable.
+for _extra in str(os.environ.get("UI_AUDIT_EXTRA_VIEWPORTS", "")).split(","):
+    if "=" in _extra:
+        _name, _dim = _extra.strip().split("=", 1)
+        try:
+            _w, _h = (int(x) for x in _dim.lower().split("x", 1))
+            VIEWPORTS[_name] = (_w, _h)
+        except ValueError:
+            print(f"ignoring malformed extra viewport {_extra!r}", file=sys.stderr)
 findings: list = []
 notes: dict = {}
 # Every journey in this harness runs against one surface, and the signature has to say so: the same defect
@@ -327,8 +338,8 @@ with sync_playwright() as pw:
               h1: document.querySelectorAll('h1').length,
               main: document.querySelectorAll('main').length,
               lang: document.documentElement.getAttribute('lang'), skips,
-              unnamed_tables: [...document.querySelectorAll('table')]
-                 .filter(t => !t.querySelector('caption,[aria-label],[aria-labelledby]')).length};
+              unnamed_tables: [...document.querySelectorAll('table')].filter(t =>
+                 !t.querySelector('caption') && !t.getAttribute('aria-label') && !t.getAttribute('aria-labelledby')).length};
     }""")
     p = shot(page3, "a11y")
     record("every visible control has an accessible name", "no unnamed controls",

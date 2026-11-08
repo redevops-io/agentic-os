@@ -209,9 +209,11 @@ def panel() -> str:
                             _app._esc(rule.get("protocol", "all")) + (":" + ",".join(rule.get("ports") or []) if rule.get("ports") else ""),
                             "<span style='color:#ff6b6b'>over-broad</span>" if broad else "<span style='color:#4fd1c5'>scoped</span>"])
     body = (_app._card(f"Peers &nbsp; {_app._live_badge(snap['live'], 'set NETBIRD_API_TOKEN')}",
-                       _app._tbl(["Peer", "OS", "Overlay IP", "Groups", "State", "Flags"], prows))
+                       _app._tbl(["Peer", "OS", "Overlay IP", "Groups", "State", "Flags"], prows,
+                                 label="NetBird peers: device, operating system, overlay address, groups and state"))
             + _app._card(f"Access policies &nbsp; {_app._live_badge(snap['live'], 'set NETBIRD_API_TOKEN')}",
-                         _app._tbl(["Policy", "Source → Destination", "Proto", "Verdict"], polrows))
+                         _app._tbl(["Policy", "Source → Destination", "Proto", "Verdict"], polrows,
+                                   label="NetBird access policies: name, source to destination, protocol and verdict"))
             + _app._card(f"Risks &amp; least-privilege &nbsp; {_app._live_badge(snap['live'], 'set NETBIRD_API_TOKEN')}", _app._risk_list(risks(snap))
                          + "<p style='color:#9b99a1;font-size:12px;margin:10px 0 0'>Ask the agent to <b>draft an additional, narrower policy</b> — it is staged and waits for your approval. Applying it only adds a policy; the broad rule stays until someone disables it in NetBird.</p>"))
     return _app._panel_shell("Network Access", "Review of NetBird peers, policies and posture, with an approval-gated draft of a narrower policy." + ("" if snap["live"] else " SAMPLE DATA: nothing on this page was read from a NetBird."), body)
