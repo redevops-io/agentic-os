@@ -120,35 +120,42 @@ through to every service that decides authority (empty means development).
 
 A profile asks for provisioning a deployment may not have done yet (a durable authority store, an owner envelope), and
 the shipped Compose files leave the profile unset — so enforcement used to be the one thing an operator got only by
-opting in. That is inverted: an app's declared write-route policies are **enforced by default**, and advisory behaviour
-has to be earned by a request that cannot have come from the network.
+opting in. That is inverted: an app's declared write-route policies are **enforced by default**, and the advisory
+posture has to be claimed with a statement about the deployment.
 
 | The request… | Posture |
 |---|---|
 | arrived on a routable address (a container edge like `172.17.0.4`, a LAN address, anything not loopback) | **enforced** |
-| arrived over loopback, and the service declared `FORWARDED_ALLOW_IPS` or `AGENTIC_OS_BEHIND_PROXY` | **enforced** |
-| arrived over loopback, nothing declared in front, and the process is not bound to a published address | advisory |
-| was produced by an in-process test harness (no IP peer at all) | advisory |
+| arrived over loopback, and the front is **undeclared** — provenance unknown | **enforced** |
+| arrived over loopback, and the service declared `FORWARDED_ALLOW_IPS` or `AGENTIC_OS_BEHIND_PROXY=1` | **enforced** |
+| any request while the process states a published bind host (`AGENTIC_OS_BIND_HOST` beyond loopback) | **enforced** |
 | any request under `AGENTIC_OS_PROFILE=production` | **enforced** |
+| arrived over loopback **and** the service declared `AGENTIC_OS_BEHIND_PROXY=0` | advisory |
+| was produced by an in-process harness (no IP peer at all) | advisory |
+
+Loopback is not proof of locality: a reverse proxy terminating on the same host connects over `127.0.0.1`, and the
+accepted socket is then identical to a developer's own request. That is why an *unknown* front enforces — the bypass
+a loopback default would leave is demonstrated end to end in `tests/test_route_authz_real_topology.py`, on a real
+uvicorn behind a real forwarding proxy.
 
 `AGENTIC_OS_ROUTE_AUTHZ_ENFORCE` overrides the computation: `always` enforces everywhere, `profile` restores the
 pre-2026-11-08 behaviour (enforce only in production), unset is the default above. An unrecognised value enforces —
 a typo in a security variable is not a licence to stop enforcing.
 
-**Trusted network ranges are configured by stating what fronts the service, per service:**
+**Trusted network ranges are configured per service, by stating two facts:**
 
-- `FORWARDED_ALLOW_IPS=127.0.0.1` — uvicorn's own switch, the address of the proxy that terminates in front of this
-  process; its presence means loopback peers may be carrying somebody else's request.
-- `AGENTIC_OS_BEHIND_PROXY=1` — the same statement for a service that does not parse `X-Forwarded-For` at all.
-- `AGENTIC_OS_BIND_HOST=0.0.0.0` (or `::`, or a named address) — the process is reachable from other machines, so a
-  loopback peer proves nothing about who is upstream.
+- `AGENTIC_OS_BEHIND_PROXY=1` / `FORWARDED_ALLOW_IPS=127.0.0.1` — something forwards other callers' requests to this
+  process (uvicorn's own switch, the address of the proxy whose `X-Forwarded-For` is trusted).
+- `AGENTIC_OS_BEHIND_PROXY=0` — nothing forwards here; a loopback peer really is a client on this machine. This is
+  the **only** route to the advisory posture, and it is a claim about topology, not a default.
+- `AGENTIC_OS_BIND_HOST=0.0.0.0` (or `::`, or a named address) — other machines can reach this process, which
+  outranks the front statement and enforces everything.
 
-The one fact no process can observe about itself is who opened a loopback connection, and no header can supply it:
-a proxy terminating on the same host connects over `127.0.0.1`, byte-for-byte like a developer on the machine. That
-is why the statement is required per published service
-(`tests/test_route_authz_exposure_gate.py` lists the ones still missing it, and the list may only shrink), and why
-`tests/test_route_authz_real_topology.py` demonstrates both the gap and its closure over real sockets. Reads and
-public intake are unaffected: `decide()` never refuses them, so this is not a blanket authentication wall.
+Both are required in the shipped Compose files for every published first-party service
+(`tests/test_route_authz_exposure_gate.py` checks it, and names any service that loses one). Reads and public intake
+are unaffected: `decide()` never refuses them, so enforcing the deniable classes is not a blanket authentication
+wall — the public demo journeys stay open, verified through the proxy and directly.
+
 
 
 **See the posture:** `GET /health` on the control plane (with the fleet credential) and on the suite server include `security`; every operator serves

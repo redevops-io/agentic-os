@@ -155,12 +155,29 @@ def test_reads_and_the_public_classes_stay_open_in_exposure_mode(monkeypatch):
     assert calls == ["/intake", "/run"]
 
 
-def test_enforcement_is_the_default_for_a_routable_peer_and_opt_in_for_a_local_one():
-    """The posture flipped: enforcement is what a deployment gets without asking for it."""
+def test_enforcement_is_the_default_for_every_network_peer_including_loopback():
+    """Unknown provenance enforces. A loopback peer is not proof of locality — a same-host proxy is loopback
+    too — so the only peers that get advisory behaviour are ones that cannot have come from the network."""
     assert ra.enforces({"server": ("10.0.0.7", 80)}) is True       # routable peer: enforced
     assert ra.enforces({"server": ("172.17.0.4", 80)}) is True     # a container edge address, not loopback
-    assert ra.enforces({"server": ("127.0.0.1", 80)}) is False     # nothing declared in front: local
+    assert ra.enforces({"server": ("127.0.0.1", 80)}) is True      # loopback with an unknown front: enforced
+    assert ra.enforces({"server": ("::1", 80)}) is True            # … on IPv6 loopback as well
     assert ra.enforces({"server": ("testserver", 80)}) is False    # in-process harness: no network peer
+
+
+def test_advisory_behaviour_requires_an_explicit_direct_declaration(monkeypatch):
+    """The single way to get the advisory posture over a network socket: state that nothing forwards here."""
+    monkeypatch.delenv(ra.ENV_ENFORCE, raising=False)
+    scope = {"server": ("127.0.0.1", 80)}
+    assert ra.enforces(scope) is True                              # undeclared provenance
+    monkeypatch.setenv(ra.ENV_BEHIND_PROXY, "unknown")
+    assert ra.enforces(scope) is True                              # a value that is not an answer
+    monkeypatch.setenv(ra.ENV_BEHIND_PROXY, "0")
+    assert ra.enforces(scope) is False                             # the explicit statement
+    assert ra.front_declaration() == "direct"
+    monkeypatch.setenv(ra.ENV_BEHIND_PROXY, "1")
+    assert ra.enforces(scope) is True
+    assert ra.front_declaration() == "proxied"
 
 
 def test_a_same_host_proxy_declared_in_front_of_the_process_enforces(monkeypatch):
@@ -172,22 +189,31 @@ def test_a_same_host_proxy_declared_in_front_of_the_process_enforces(monkeypatch
     that loopback peers may be carrying somebody else's request, and it flips the posture on its own.
     """
     monkeypatch.delenv(ra.ENV_ENFORCE, raising=False)
+    monkeypatch.delenv(ra.ENV_BEHIND_PROXY, raising=False)
     monkeypatch.setenv(ra.ENV_FORWARDED_ALLOW_IPS, "127.0.0.1")
+    assert ra.front_declaration() == "proxied"
     assert ra.enforces({"server": ("127.0.0.1", 80)}) is True
-    monkeypatch.delenv(ra.ENV_FORWARDED_ALLOW_IPS)
-    monkeypatch.setenv(ra.ENV_BEHIND_PROXY, "1")                   # the explicit form, same effect
+    # a proxy declaration outranks a `direct` statement: the more specific fact about the front wins
+    monkeypatch.setenv(ra.ENV_BEHIND_PROXY, "0")
+    assert ra.front_declaration() == "proxied"
     assert ra.enforces({"server": ("127.0.0.1", 80)}) is True
 
 
 def test_a_published_bind_host_enforces_whatever_the_socket_says(monkeypatch):
     """`0.0.0.0`/`::`/a named bind means other machines can reach this process; loopback peers then prove
-    nothing about who is upstream."""
+    nothing about who is upstream, and no front statement can make them local."""
     monkeypatch.delenv(ra.ENV_ENFORCE, raising=False)
     for host in ("0.0.0.0", "::", "172.17.0.4", "api.example.com"):
         monkeypatch.setenv("AGENTIC_OS_BIND_HOST", host)
         assert ra.enforces({"server": ("127.0.0.1", 80)}) is True, host
+        monkeypatch.setenv(ra.ENV_BEHIND_PROXY, "0")               # a published port stays enforced
+        assert ra.enforces({"server": ("127.0.0.1", 80)}) is True, host
     monkeypatch.setenv("AGENTIC_OS_BIND_HOST", "127.0.0.1")
-    assert ra.enforces({"server": ("127.0.0.1", 80)}) is False     # genuinely bound to loopback
+    monkeypatch.delenv(ra.ENV_BEHIND_PROXY)
+    assert ra.enforces({"server": ("127.0.0.1", 80)}) is True      # bind known-loopback, front still unknown
+    monkeypatch.setenv(ra.ENV_BEHIND_PROXY, "0")
+    assert ra.enforces({"server": ("127.0.0.1", 80)}) is False     # … until the deployment says "direct"
+
 
 
 def test_an_unrecognised_posture_enforces_rather_than_relaxing(monkeypatch):
@@ -205,7 +231,12 @@ def test_the_explicit_opt_outs_still_work_for_the_uses_they_exist_for(monkeypatc
     assert ra.enforces({"server": ("127.0.0.1", 80)}) is True
 
 
-# ── deployment compliance: every published service states what fronts it (audit item 6) ───────────────
+# ── deployment compliance: every published service states its front and its bind (audit items 1 and 6) ─
+# Enforcement is the default and unknown provenance enforces, so "published port with the profile left
+# unset" is no longer a bypass and the old fleet-wide strict-xfail tripwire is obsolete. What these checks
+# hold the deployments to is the part no process can observe for itself: whether something forwards to it,
+# and what it binds. Both are one line per service, and the real-socket demonstration of why they matter is
+# in tests/test_route_authz_real_topology.py.
 
 
 def _published_services():
@@ -250,10 +281,10 @@ def test_no_shipped_service_opts_out_of_enforcement():
     assert not offenders, f"published service(s) that disable enforcement: {offenders}"
 
 
-# Every published service that has not yet stated whether a proxy forwards to it, as of 2026-11-08. This is
-# the to-do list, pinned so it can only get shorter: clearing an entry means adding the line to that service,
-# and adding a new published service without the line makes this check fail.
-FRONT_UNDECLARED_BASELINE = {
+# The five published first-party services that shipped with no front declaration (audit of 2026-11-08). Each
+# one is now stated in its own compose file; this set is asserted empty so the fix cannot quietly regress, and
+# so the list stays readable as what was wrong rather than what is still permitted.
+FORMERLY_UNDECLARED = {
     ("deploy/apps/compose.egress.yml", "forward-twenty"),
     ("deploy/apps/compose.egress.yml", "forward-metabase"),
     ("deploy/apps/compose.egress.yml", "forward-postiz"),
@@ -267,34 +298,61 @@ def _front_undeclared():
     return {(f, name) for f, name, env in _published_services() if not declares.search(env)}
 
 
-def test_every_published_service_says_whether_it_sits_behind_a_proxy():
-    """Each published service must declare its own front, so none inherits another service's answer.
+def test_the_five_formerly_undeclared_services_now_state_their_front():
+    """The audit named five; all five now declare, and any that regresses fails here by name."""
+    still_silent = FORMERLY_UNDECLARED & _front_undeclared()
+    assert still_silent == set(), f"service(s) that lost their front declaration: {sorted(still_silent)}"
 
-    Enforcement no longer depends on a production profile, a durable authority store or an owner envelope, so
-    the whole fix is one line on the service — either of:
+
+
+
+def test_every_published_service_declares_its_front():
+    """Every published first-party service states whether something forwards to it. This used to be a list of
+    outstanding work; the five services now declare it, so the check is a requirement with no exceptions.
+
+    Accepted declarations:
 
       - FORWARDED_ALLOW_IPS=127.0.0.1        # something on this host forwards requests here
-      - AGENTIC_OS_BEHIND_PROXY=0            # nothing does; only this machine can reach us
+      - AGENTIC_OS_BEHIND_PROXY=1            # the same statement without parsing X-Forwarded-For
+      - AGENTIC_OS_BEHIND_PROXY=0            # nothing forwards to us; loopback peers are local clients
 
-    A service that never answers is still enforced for every routable peer; what it leaves open is the
-    same-host-proxy case specifically, which is why the line has to be written down rather than assumed.
-    The set below is the remaining work, and it may only shrink.
+    A published service that says nothing is still enforced for every peer, so silence is not a bypass; it is
+    a missing piece of documentation that would matter the day someone adds `AGENTIC_OS_BIND_HOST=127.0.0.1`
+    or wonders why a local request behaves differently from a remote one.
     """
     silent = _front_undeclared()
-    assert silent - FRONT_UNDECLARED_BASELINE == set(), (
-        f"new published service(s) with no declared front — add FORWARDED_ALLOW_IPS=... or "
-        f"AGENTIC_OS_BEHIND_PROXY=... to each: {sorted(silent - FRONT_UNDECLARED_BASELINE)}")
-    cleared = FRONT_UNDECLARED_BASELINE - silent
-    assert cleared == set(), (
-        f"{sorted(cleared)} now declare a front: delete them from FRONT_UNDECLARED_BASELINE so the list "
-        f"stays the real remaining work")
+    assert silent == set(), (
+        f"published service(s) with no declared front — add FORWARDED_ALLOW_IPS=... or "
+        f"AGENTIC_OS_BEHIND_PROXY=0|1 to each: {sorted(silent)}")
+
+
+def test_every_published_service_also_declares_its_bind():
+    """A published service states its bind host too, so the posture is decided from stated facts rather than
+    inferred from a uvicorn command line buried three lines away.
+
+    `AGENTIC_OS_BIND_HOST` beyond loopback means other machines can reach the process, and that outranks any
+    front statement: everything is enforced. Writing it down is what makes "why is this request enforced?"
+    answerable from the compose file alone.
+    """
+    missing = {(f, name) for f, name, env in _published_services()
+               if not re.search(r"AGENTIC_OS_BIND_HOST=\S", env)}
+    assert missing == set(), (
+        f"published service(s) with no stated bind host — add AGENTIC_OS_BIND_HOST=0.0.0.0 (published) or "
+        f"=127.0.0.1 (machine-local) to each: {sorted(missing)}")
+
+
 
 
 def test_the_front_declaration_actually_changes_the_posture():
-    """The compliance list above is only worth having if the declaration does something: the same loopback
-    request is advisory without it and enforced with it."""
+    """The compliance list above is only worth having if the declaration does something: an undeclared
+    loopback request is enforced, and the explicit `direct` statement is what makes it advisory."""
     scope = {"server": ("127.0.0.1", 80)}
-    assert ra.enforces(scope) is False
+    assert ra.enforces(scope) is True
+    os.environ[ra.ENV_BEHIND_PROXY] = "0"
+    try:
+        assert ra.enforces(scope) is False
+    finally:
+        del os.environ[ra.ENV_BEHIND_PROXY]
     os.environ[ra.ENV_FORWARDED_ALLOW_IPS] = "127.0.0.1"
     try:
         assert ra.enforces(scope) is True

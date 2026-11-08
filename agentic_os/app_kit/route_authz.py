@@ -55,31 +55,46 @@ MAX_BODY = 1_000_000
 # Whether a policy is acted on used to be decided solely by the execution profile, and the shipped deployment
 # files leave that profile unset: the default `docker compose up` computed every policy and honoured none of
 # them. The posture below is decided per request from facts the process can actually observe, and it fails
-# closed — enforcement is the default, and a deployment has to say something true about itself to opt out.
+# closed: enforcement is what a deployment gets without asking, and the only way to get the advisory posture
+# is to state something true about the deployment.
 #
-#   enforce  — the decision is returned to the client (403) instead of logged and allowed through.
-#   advisory — the decision is computed and recorded, and the request proceeds (local development).
+#   enforce  — the decision is returned to the client (401/403) instead of logged and allowed through.
+#   advisory — the decision is computed and recorded, and the request proceeds (declared-local development).
 #
-# A request is enforced unless it is PROVEN local, where proven local means all of:
-#   * it arrived over loopback, and
-#   * nothing is declared as sitting in front of this process (a proxy that forwards would arrive over
-#     loopback too — see agentic_os/app_kit/reachability.py), and
-#   * the deployment has not published itself (bind host beyond loopback), and
-#   * it is not a production profile (production always enforces).
+# A request is enforced unless one of these is positively true:
+#   * the request was produced by an in-process harness (no network peer exists at all), or
+#   * the peer is loopback AND the deployment declared that nothing forwards to it
+#     (`AGENTIC_OS_BEHIND_PROXY=0`).
+# Unknown provenance enforces. In particular a loopback peer with no declaration enforces, because a reverse
+# proxy terminating on the same host connects over 127.0.0.1 and is indistinguishable at the socket — see
+# agentic_os/app_kit/reachability.py and tests/test_route_authz_real_topology.py, which demonstrate both the
+# ambiguity and its closure.
 # `AGENTIC_OS_ROUTE_AUTHZ_ENFORCE` overrides the computation: `profile` restores the pre-audit behaviour
-# (enforce iff production), `always` enforces everywhere including loopback, and the unset default is `auto`.
+# (enforce iff production), `always` enforces everywhere, and the unset default is `auto`.
 ENV_ENFORCE = "AGENTIC_OS_ROUTE_AUTHZ_ENFORCE"
 # Uvicorn's own "I sit behind a proxy on these addresses" switch. Its presence is the operator telling us
 # that loopback peers may be forwarding other people's requests, so loopback stops being proof of locality.
 ENV_FORWARDED_ALLOW_IPS = "FORWARDED_ALLOW_IPS"
-# A deployment may declare that nothing but this machine can reach it. It is an operator statement, not a
-# measurement; it is honoured only together with a loopback arrival, and it is logged at startup.
+# The deployment's statement about what fronts it: `0`/`false`/`no` says nothing forwards to this process
+# (loopback really is a local client); `1`/`true`/`yes` says something does. Any other value, including the
+# unset default, is UNKNOWN and enforces — the absence of a statement is not evidence of locality.
 ENV_BEHIND_PROXY = "AGENTIC_OS_BEHIND_PROXY"
 
 
-def _behind_proxy_declared() -> bool:
-    return bool(os.environ.get(ENV_FORWARDED_ALLOW_IPS, "").strip()
-                or os.environ.get(ENV_BEHIND_PROXY, "").strip().lower() in ("1", "true", "yes"))
+def front_declaration() -> str:
+    """`proxied`, `direct`, or `unknown` — what the deployment has stated about its front.
+
+    `unknown` is the default and is treated as exposed. A deployment that wants the advisory posture has to
+    say `AGENTIC_OS_BEHIND_PROXY=0`, which is a claim about its own topology rather than a default.
+    """
+    if os.environ.get(ENV_FORWARDED_ALLOW_IPS, "").strip():
+        return "proxied"                  # uvicorn is parsing forwarded headers: loopback peers may relay
+    value = os.environ.get(ENV_BEHIND_PROXY, "").strip().lower()
+    if value in ("1", "true", "yes"):
+        return "proxied"
+    if value in ("0", "false", "no"):
+        return "direct"
+    return "unknown"
 
 
 def _bind_is_published() -> bool:
@@ -111,9 +126,10 @@ def _peer(scope: dict):
 def enforces(scope: dict) -> bool:
     """True when a policy decision on THIS request must be acted on rather than recorded.
 
-    Enforcement is the default. Advisory behaviour requires the request to be unreachably local AND the process
-    not to have published itself, so a deployment gets nothing for free: an address it cannot place, a proxy in
-    front of it, or a published bind host all mean the policies are enforced.
+    Enforcement is the default. Advisory behaviour is available in exactly two situations — an in-process
+    request with no network peer, or a loopback peer in a deployment that declared itself directly reachable —
+    and nothing else buys it: an address the process cannot place, a declared proxy, an unknown front, or a
+    published bind host all mean the declared policies are enforced.
     """
     if is_production():
         return True
@@ -132,10 +148,9 @@ def enforces(scope: dict) -> bool:
     if peer is None:
         return False                      # in-process harness: there is no network peer to have come from
     if peer.is_loopback:
-        # A forwarding proxy also arrives over loopback, so loopback is only locality when nothing is declared
-        # in front of the process. Uvicorn's FORWARDED_ALLOW_IPS is that declaration.
-        return _behind_proxy_declared()
+        return front_declaration() != "direct"    # loopback + undeclared provenance enforces
     return True                           # a routable peer (container network, LAN, internet)
+
 
 
 

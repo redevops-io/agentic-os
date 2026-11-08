@@ -13,6 +13,7 @@ routable-peer cases stay in the scope-value tests where they can be asserted hon
 """
 from __future__ import annotations
 
+import dataclasses
 import os
 import pathlib
 import socket
@@ -22,6 +23,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from typing import Callable
 
 import pytest
 
@@ -49,6 +51,14 @@ async def act(request: Request):
 
 ra.install(app, "topo", {"POST /act": P("topo.act", "authority_required")})
 '''
+
+
+@dataclasses.dataclass
+class Topology:
+    """How to reach a running app: through the same-host proxy, straight at it, or reading a public path."""
+    post: Callable[[], int]      # authority-required write via the proxy
+    read: Callable[[str], int]   # anonymous public read via the proxy
+    direct: Callable[[], int]    # authority-required write straight to the app, no proxy
 
 
 def _free_port() -> int:
@@ -90,6 +100,8 @@ def proxied_app():
             env["FORWARDED_ALLOW_IPS"] = "127.0.0.1"
         elif front == "behind":
             env["AGENTIC_OS_BEHIND_PROXY"] = "1"
+        elif front == "direct":
+            env["AGENTIC_OS_BEHIND_PROXY"] = "0"
         server = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "_route_authz_topo_app:app", "--host", "127.0.0.1",
              "--port", str(app_port), "--log-level", "warning"], cwd=str(HERE), env=env)
@@ -142,7 +154,17 @@ def proxied_app():
             except urllib.error.HTTPError as e:
                 return e.code
 
-        return post, get
+        def direct() -> int:
+            """No proxy in the path: the client dials the app, so the peer really is a local client."""
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{app_port}/act", data=b'{"goal":"sync the account"}', method="POST",
+                headers={"content-type": "application/json"})
+            try:
+                return urllib.request.urlopen(req, timeout=10).status
+            except urllib.error.HTTPError as e:
+                return e.code
+
+        return Topology(post=post, read=get, direct=direct)
 
     try:
         yield serve
@@ -157,23 +179,51 @@ def proxied_app():
         src.unlink(missing_ok=True)
 
 
-def test_an_undeclared_same_host_front_leaves_the_policy_advisory(proxied_app):
-    """The gap, on the record: a forwarding proxy arrives over loopback, so the socket cannot tell it from a
-    developer and the declared policy is computed but not acted on. No header closes this — the fix is the
-    declaration the deployment-compliance check requires."""
-    post, _ = proxied_app()
-    assert post() == 200, "an undeclared front is indistinguishable at the accepted socket"
+def test_an_undeclared_same_host_proxy_is_enforced_not_trusted(proxied_app):
+    """The bypass this item exists to close, checked on real sockets.
+
+    A same-host forwarding proxy connects over 127.0.0.1, so the accepted socket cannot tell it from a
+    developer's own request. Provenance is therefore *unknown*, and unknown provenance enforces: the
+    authority-required write is refused and the handler never runs. Before the fix this request was allowed.
+    """
+    t = proxied_app()
+    assert t.post() == 401, "an undeclared loopback peer must not be trusted as local"
+    assert t.read("/read") == 200, "while the anonymous public read journey keeps working, enforced or not"
+
+
+def test_direct_access_with_unknown_provenance_is_also_enforced(proxied_app):
+    """The other half of the same rule, on the same running server: dial the app itself, no proxy in the
+    path. A genuine local client and a same-host relay look identical here, so both are treated as unknown
+    provenance and enforced — which is exactly why locality has to be declared, not assumed."""
+    t = proxied_app()
+    assert t.direct() == 401
+    assert t.post() == 401
 
 
 def test_declaring_the_front_refuses_the_same_request_end_to_end(proxied_app):
-    """Same code, same client, same proxy topology; only the operator's statement about the front differs."""
-    post, get = proxied_app(front="forwarded")
-    assert post() == 401, "the authority-required write must be refused, not recorded"
-    assert get("/read") == 200, "and the public read journey keeps working through the same declared front"
+    """Same code, same client, same proxy topology; the operator's statement about the front changes nothing
+    about the outcome now that unknown provenance already enforces — it only makes the reason explicit."""
+    t = proxied_app(front="forwarded")
+    assert t.post() == 401, "the authority-required write must be refused, not recorded"
+    assert t.read("/read") == 200, "and the public read journey keeps working through the same declared front"
 
 
 def test_the_explicit_behind_proxy_declaration_is_equivalent(proxied_app):
     """For a deployment that does not parse X-Forwarded-For at all, AGENTIC_OS_BEHIND_PROXY=1 says the same
     thing about the topology and must have the same effect."""
-    post, _ = proxied_app(front="behind")
-    assert post() == 401
+    assert proxied_app(front="behind").post() == 401
+
+
+def test_the_only_advisory_path_is_an_explicit_direct_statement(proxied_app):
+    """What the advisory posture now costs: a written claim that nothing forwards to this process.
+
+    This is the deployment that says "only this machine can reach me". Shown on the same proxy fixture so the
+    risk is visible: make that statement and a same-host proxy's forwarded write is allowed through again.
+    The compliance check exists so nobody makes it by accident.
+    """
+    t = proxied_app(front="direct")
+    assert t.direct() == 200, "a machine-local client in a declared-direct deployment still gets advisory"
+    assert t.post() == 200, "…and so does anything relayed to that loopback socket: the statement is the risk"
+    assert t.read("/read") == 200
+
+
