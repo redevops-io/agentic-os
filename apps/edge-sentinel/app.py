@@ -38,6 +38,9 @@ Config (env; seed.py writes agents/edge-sentinel/.env automatically):
   WAZUH_TLS_VERIFY    default on; `off` skips certificate verification, `/<path>` uses a private CA bundle
   REDEVOPS_LLM_BASE_URL  OPTIONAL in-boundary model; if set (and actually in-boundary) `triage` adds an LLM
                       blurb via the governed router. The endpoint works fully without it.
+  EDGE_SENTINEL_DEMO  opt-in fixture core for demos and UI acceptance: reads come from synthetic RFC 5737
+                      data and every CrowdSec side effect is refused at core. It grants no exposure and no
+                      exemption from the rules above — see fixture_mode.py.
 """
 from __future__ import annotations
 
@@ -78,9 +81,15 @@ from . import portabase  # noqa: E402 — Portabase backup/continuity coverage
 from . import deploy_scan  # noqa: E402 — runtime-DAST proxy to the deploy-scan MCP service
 from . import permissions_ui  # noqa: E402 — live vuln-DB permissions demo
 from . import security as _security  # noqa: E402 — secure defaults: loopback bind, TLS verify, headers (P9)
+from . import fixture_mode  # noqa: E402 — opt-in fixture core for demos and UI acceptance (P4)
 from .core import (  # noqa: E402
     TENANT, SUBTITLE, crowdsec_connected, fetch_activity, _severity,
 )
+
+# Installed before the app object exists, so no request can be served against a half-swapped core. The
+# P9 exposure guard reads its own variables and runs regardless: demo mode is about where data comes
+# from, never about who may reach the app.
+_FIXTURE_REPORT = fixture_mode.install_if_enabled()
 
 PORT = int(os.environ.get("PORT", "8203"))
 # What the app listens on when run by `python -m edge-sentinel.app` (P9). A container sets
@@ -102,6 +111,17 @@ def _strip_approval(obj):
 
 
 app = FastAPI(title="edge-sentinel (Meridian Wealth Management · core: CrowdSec)")
+
+
+@app.exception_handler(fixture_mode.DemoRefused)
+async def _demo_refused(request, exc: fixture_mode.DemoRefused):
+    """A fixture-mode refusal is a policy decision, not a server fault: 403 with the reason, and the same
+    shape every other refusal here uses. It exists because the refusal is raised from `core`, well below
+    the route that triggered it — no handler has to remember to check the mode."""
+    return JSONResponse(status_code=403, content={"ok": False, "refused": "demo_mode",
+                                                  "reason": str(exc),
+                                                  "synthetic": True})
+
 
 from agentic_os.app_kit import route_authz as _route_authz  # noqa: E402
 from .route_policy import APP as _APP, ROUTE_POLICIES as _ROUTE_POLICIES  # noqa: E402
@@ -1347,7 +1367,11 @@ _SENTINEL_CONSOLE = _build_sentinel_console(_AgentConsole, _crtool) if _AgentCon
 @app.get("/health")
 def health() -> dict:
     sh = live.state_health()
-    return _with_authorization(_GATE_APP, {"status": "ok" if sh["ok"] else "degraded", "core": "crowdsec", "connected": crowdsec_connected(),
+    # core.crowdsec_connected(), not the name imported at module load: in fixture mode that alias still
+    # points at the original function, and a health endpoint that reports the pre-swap function would
+    # be reporting a connection that does not exist.
+    return _with_authorization(_GATE_APP, {"status": "ok" if sh["ok"] else "degraded", "core": "crowdsec",
+            "connected": core.crowdsec_connected(), "demo": fixture_mode.status(),
             "state": sh})
 
 
@@ -1526,6 +1550,15 @@ def index() -> str:
     import re as _cr_re
     page = render(fetch_activity())
     blocks = ""
+    _demo = fixture_mode.status()
+    if _demo["enabled"]:
+        # The label is on the page, not only in a config file: a screenshot of a demo must be
+        # self-identifying, because a screenshot is the thing that outlives the conversation about it.
+        blocks += ("<section class='shell' style='margin-top:var(--sp-4)'><div role='status' class='panel' "
+                   "style='border-left:4px solid #b45309;padding:var(--sp-3)'>"
+                   f"<strong>{html.escape(_demo['tag'])}</strong> — every alert, decision and figure on this "
+                   "page is synthetic fixture data. No CrowdSec core was read to produce it, and no CrowdSec "
+                   "side effect can be performed from this page.</div></section>")
     try:
         live.sync_cases()
         blocks += ("<section class='shell' style='margin-top:var(--sp-4)'>"
