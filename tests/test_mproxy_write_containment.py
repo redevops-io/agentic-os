@@ -344,3 +344,50 @@ def test_a_real_server_forwards_a_loopback_write_end_to_end(tmp_path, cp_mod, up
 
 
 
+
+# ── the boundary the socket rule cannot cross (owner item, 2026-11-08) ────────────────────────────────
+# These tests are not asserting an aspiration; they pin a consequence the design accepts, so nobody later
+# reads "arrived over loopback" as "came from a human on this machine".
+
+def test_a_same_host_proxy_forwarding_an_internet_request_is_treated_as_local(cp_mod, upstream):
+    """Loopback-forwarded traffic may originate externally, and the gate cannot tell otherwise.
+
+    A reverse proxy terminating on the SAME host connects to us over 127.0.0.1, so from the accepted socket
+    there is nothing left to distinguish it: the request carries a public client address in X-Forwarded-For
+    and CF-Connecting-IP, names the public host, and is still forwarded, because the local address the kernel
+    delivered it on was loopback. No header can open the gate (see
+    test_no_header_can_claim_the_request_came_from_loopback), and no header can close this gap either — the
+    two tests together are the whole story of what the socket knows.
+
+    The deployment consequence: a same-host proxy that does not authenticate its own callers is part of the
+    trusted surface of this process, not a defence in front of it. If the edge authenticates (or terminates
+    outside the host, as the next test covers), that is where the caller decision belongs.
+    """
+    name, seen = upstream
+    c = TestClient(cp_mod.app, base_url=LOOPBACK)
+    r = c.post(f"/m/{name}/api/agent/chat", content=b'{"text":"go"}',
+               headers={"host": "demo.example", "x-forwarded-for": "203.0.113.7",
+                        "cf-connecting-ip": "203.0.113.7", "x-real-ip": "203.0.113.7"})
+    assert r.status_code == 200, "a same-host proxy's forwarded write is forwarded"
+    assert seen, "the module saw the request the internet sent"
+
+
+def test_an_edge_terminating_off_host_is_not_loopback_and_is_refused(cp_mod, upstream):
+    """The other half: Cloudflare Tunnel / a container edge reaches the app on an interface address, which is
+    not loopback, so the same request arriving that way is refused and reaches nobody."""
+    name, seen = upstream
+    c = TestClient(cp_mod.app, base_url="http://172.17.0.4:8080")
+    r = c.post(f"/m/{name}/api/agent/chat", content=b'{"text":"go"}',
+               headers={"cf-connecting-ip": "203.0.113.7"})
+    assert r.status_code == 403
+    assert seen == [], "a refusal must not reach the module"
+
+
+def test_the_security_model_still_documents_the_trusted_surface():
+    """The gap is a deployment fact, so it lives in the security model — and if someone edits that wording
+    out, this fails rather than letting the caveat quietly disappear from the documentation."""
+    doc = (Path(__file__).resolve().parents[1] / "docs" / "SECURITY_MODEL.md").read_text().lower()
+    assert "loopback" in doc and ("same host" in doc or "same-host" in doc), (
+        "docs/SECURITY_MODEL.md must keep stating that a same-host proxy is inside the trusted surface")
+
+
