@@ -1,0 +1,43 @@
+{
+  "doc": "Public-demo compatibility contract (owner clarification 2026-11-08). Authorization changes are action/resource-scoped: no blanket authentication at domain, subdomain, router, middleware or /m/* level on intentionally-public demo hosts. A documented public journey returning anything but its pinned response is a RELEASE BLOCKER. 'local' = the repo app runnable with TestClient (CI functionality+containment); 'live' = the hosted surface (nightly availability+response contract, scripts/probe_public_demo.py). classification pending-owner entries pin TODAY's behaviour so nothing changes silently. Baseline captured 2026-11-08 (audit 2026-11-08 §10).",
+  "version": 1,
+  "live_base": "https://demo.redevops.io",
+  "apps": {
+    "permissions": "deploy/permissions-showcase-demo/app.py",
+    "security": "deploy/security-showcase-demo/app.py",
+    "evidence": "deploy/evidence-explorer-demo/app.py",
+    "worlds": "deploy/world-canvas-demo/app.py",
+    "attention": "deploy/attention-console/app.py",
+    "admin": "deploy/admin-console/app.py"
+  },
+  "public_journeys": [
+    {"id": "permissions-page", "app": "permissions", "path": "/permissions", "status": [200], "marker": "Permissions · Agentic OS"},
+    {"id": "permissions-scenarios", "app": "permissions", "path": "/api/demo/scenarios", "status": [200], "marker": "[", "json": true,
+     "live_note": "404 live (older build deployed); pinned locally, live probe status-widened until the demo host is redeployed", "live_status": [200, 404]},
+    {"id": "security-page", "app": "security", "path": "/security", "status": [200], "marker": "Intrinsic Security · Agentic OS"},
+    {"id": "security-scenario", "app": "security", "path": "/api/security/scenario", "status": [200], "marker": "leased_authority", "json": true},
+    {"id": "evidence-page", "app": "evidence", "path": "/evidence", "status": [200], "marker": "Evidence Explorer · Agentic OS"},
+    {"id": "evidence-summary", "app": "evidence", "path": "/api/evidence/summary", "status": [200], "marker": "families", "json": true},
+    {"id": "worlds-page", "app": "worlds", "path": "/worlds", "status": [200], "marker": "Execution Canvas · Agentic OS"},
+    {"id": "worlds-api", "app": "worlds", "path": "/api/worlds", "status": [200], "marker": "[", "json": true},
+    {"id": "attention-page", "app": "attention", "path": "/attention", "status": [200], "marker": "Attention · ReDevOps Business OS"},
+    {"id": "attention-api", "app": "attention", "path": "/api/attention", "status": [200], "marker": "{", "json": true},
+    {"id": "unsubscribe-page", "app": null, "path": "/unsubscribe", "status": [400], "marker": "unsubscribe", "live_only": true,
+     "note": "by design: the page needs the emailed ?code=; the guidance page is the public behaviour"},
+    {"id": "marketing-root", "app": null, "path": "https://redevops.io/", "status": [200], "marker": "ReDevOps", "live_only": true}
+  ],
+  "pending_owner": [
+    {"id": "admin-page", "app": "admin", "path": "/admin", "pinned_status": [200], "marker": "Admin · ReDevOps Business OS",
+     "question": "Admin/governance-shaped console served anonymously on the demo host; presumed synthetic world-runtime demo. Confirm intended-public or designate protected (audit §10 flag 1)."},
+    {"id": "admin-api", "app": "admin", "path": "/api/admin", "pinned_status": [200], "marker": "governance_clean", "json": true,
+     "question": "same as admin-page: anonymous state read; pin holds today's behaviour until the owner classifies it"}
+  ],
+  "protected_anonymous": [
+    {"id": "grants-status", "app": "permissions", "method": "GET", "path": "/api/permissions/status", "deny": [401, 403, 503], "live_note": "403 at the Cloudflare edge today; app-level 503 when PERMISSIONS_ADMIN_KEY is unset — both are denials; the contract accepts either layer but never 2xx"},
+    {"id": "grants-list", "app": "permissions", "method": "GET", "path": "/api/permissions/grants", "deny": [401, 403, 503]},
+    {"id": "grants-create", "app": "permissions", "method": "POST", "path": "/api/permissions/grants", "deny": [400, 401, 403, 503], "no_state_change": true},
+    {"id": "grants-preview", "app": "permissions", "method": "POST", "path": "/api/permissions/preview", "deny": [400, 401, 403, 503]},
+    {"id": "grants-authorize", "app": "permissions", "method": "POST", "path": "/api/permissions/authorize", "deny": [400, 401, 403, 503]},
+    {"id": "grants-delete", "app": "permissions", "method": "DELETE", "path": "/api/permissions/grants/nonexistent", "deny": [401, 403, 404, 503]}
+  ]
+}
