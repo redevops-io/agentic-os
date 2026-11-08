@@ -215,22 +215,23 @@ async def app(scope, receive, send):
 '''
 
 
-def _free_port():
+def _free_port(host="127.0.0.1"):
     import socket
-    s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
+    fam = socket.AF_INET6 if ":" in host else socket.AF_INET
+    s = socket.socket(fam, socket.SOCK_STREAM); s.bind((host, 0)); p = s.getsockname()[1]; s.close(); return p
 
 
-def _serve(tmp_path, source, port):
+def _serve(tmp_path, source, port, host="127.0.0.1"):
     import subprocess, sys, time
     (tmp_path / "echo_app.py").write_text(source)
-    proc = subprocess.Popen([sys.executable, "-m", "uvicorn", "echo_app:app", "--host", "127.0.0.1",
+    proc = subprocess.Popen([sys.executable, "-m", "uvicorn", "echo_app:app", "--host", host,
                              "--port", str(port), "--log-level", "critical"],
                             cwd=str(tmp_path), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         for _ in range(80):                                   # up to 8s for the socket to open
             try:
                 import socket
-                with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                with socket.create_connection((host, port), timeout=0.5):
                     return proc
             except OSError:
                 if proc.poll() is not None:
@@ -256,6 +257,34 @@ def test_a_real_server_reports_the_accepted_local_address_as_the_server_scope(tm
             assert reported == "127.0.0.1", f"bind {bind}: scope['server'] said {reported}"
         finally:
             proc.terminate(); proc.wait(timeout=10)
+
+
+def test_a_real_ipv6_loopback_connection_reports_and_reads_as_loopback(tmp_path, cp_mod):
+    """The IPv6 half of the same claim, over a real socket.
+
+    TestClient cannot express an IPv6 base_url (Starlette splits it on ":"), so before this the `::1` branch
+    of the gate rested on hand-written scope values. Here a real uvicorn on `::` is dialled at `::1`: the
+    server reports `::1` and the classifier calls it loopback — and a `::`-bind request that arrived on a
+    routable v6 address is not loopback.
+
+    It takes `cp_mod` for the environment isolation it provides (a scratch permissions dir and home), not for
+    the module: importing `control_plane` cold, as this file's other real-socket tests never do, reaches the
+    default grant store, which refuses to run unencrypted outside a provisioned host.
+    """
+    import json
+    import urllib.request
+    from agentic_os.control_plane import _arrived_on_loopback
+    port = _free_port("::1")
+    proc = _serve(tmp_path, _ECHO, port, host="::")
+    try:
+        with urllib.request.urlopen(f"http://[::1]:{port}/", timeout=10) as r:
+            reported = json.loads(r.read())["server"][0]
+    finally:
+        proc.terminate(); proc.wait(timeout=10)
+    assert reported == "::1", f"a :: bind dialled at ::1 reported {reported!r}"
+    assert _arrived_on_loopback({"server": (reported, port)}) is True
+    # the same wildcard bind, arrived on over a routable v6 address: not loopback, so writes are refused
+    assert _arrived_on_loopback({"server": ("2a01:4f8:1234::9", port)}) is False
 
 
 def test_a_real_server_forwards_a_loopback_write_end_to_end(tmp_path, cp_mod, upstream):
