@@ -6,7 +6,13 @@
 #   the public kernel's permissions module — does NOT resurrect the control-plane.
 services:
   permissions-api:
-    build: .
+    build:
+      context: .
+      # The commit this image was built from, so /api/version can name it (deploy.sh exports both from the
+      # source checkout; an unexported build says "unknown" rather than claiming something).
+      args:
+        AGENTIC_OS_BUILD_REVISION: ${AGENTIC_OS_BUILD_REVISION:-unknown}
+        AGENTIC_OS_BUILD_TIME: ${AGENTIC_OS_BUILD_TIME:-unknown}
     image: ${PERM_API_IMAGE:-permissions-demo:latest}
     container_name: permissions-api
     restart: unless-stopped
