@@ -63,6 +63,35 @@ def test_grant_problem_on_contract_fields(tenant, epoch, expect):
     assert grant_problem(g) == expect
 
 
+@pytest.mark.parametrize("bad", ["abc", [1], 1.5, True, -3, None, {"a": 1}, 123.0])
+def test_a_malformed_epoch_is_refused_never_repaired(bad):
+    """The kernel's rule for stored data: a malformed field makes the grant unusable; it is never quietly
+    fixed. `int(...)` here would have turned 1.5 and True into a legal-looking epoch 1."""
+    g = Grant(**{**_legacy_grant().to_dict(), "revocation_epoch": bad})
+    assert grant_problem(g) == "revocation_epoch must be a non-negative integer"
+
+
+@pytest.mark.parametrize("bad", [123, ["a"], {"a": 1}])
+def test_a_non_string_tenant_is_refused_not_stringified(bad):
+    g = Grant(**{**_legacy_grant().to_dict(), "tenant": bad})
+    assert grant_problem(g) == "tenant is not a valid identifier"
+
+
+def test_a_stored_malformed_epoch_drops_that_grant_alone(tmp_path, monkeypatch):
+    """End to end: one corrupt contract field disables its own grant and leaves its neighbours working."""
+    monkeypatch.setenv("PERMISSIONS_ALLOW_PLAINTEXT_DEV", "1")
+    good = _legacy_grant().to_dict()
+    good.update(id="g-good", subject="amy")
+    bad = {**good, "id": "g-bad", "revocation_epoch": 1.5}
+    (tmp_path / "grants.jsonl").write_text(
+        json.dumps({"version": 1, "grants": [good, bad], "meta": {"counter": 2}}) + "\n")
+    plane = PermissionsPlane(GrantStore(str(tmp_path), allow_plaintext_dev=True))
+    d = plane.authorize(Identity(user="amy", app="crm"), "table", "crm.customers", "read")
+    assert d.allowed, "the well-formed grant must still authorise"
+    assert plane.store.malformed == 1, "exactly the corrupt grant is dropped"
+    assert all(g.revocation_epoch != 1.5 for g in plane.store.list())
+
+
 def test_stored_legacy_grant_roundtrips_unchanged(tmp_path, monkeypatch):
     """A grant written before the contract, stored as plaintext JSONL bytes, is read and matched WITHOUT
     gaining keys — the on-disk shape is part of the compatibility surface. tests/conftest.py gives the suite a

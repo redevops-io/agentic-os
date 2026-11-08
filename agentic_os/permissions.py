@@ -181,7 +181,9 @@ class Grant:
                    row_column=d.get("row_column", "owner"), row_values=d.get("row_values") or [],
                    masked_columns=d.get("masked_columns") or [], created_by=d.get("created_by", ""),
                    at=d.get("at", 0.0), tenant=d.get("tenant") or "",
-                   revocation_epoch=int(d.get("revocation_epoch") or 0))
+                   # NOT coerced: a non-integer epoch stays what it is so grant_problem refuses the grant,
+                   # the same way every other malformed stored field is refused rather than repaired.
+                   revocation_epoch=d.get("revocation_epoch") or 0)
 
     def covers(self, resource_name: str) -> bool:
         if not isinstance(resource_name, str) or not isinstance(self.resource_name, str):
