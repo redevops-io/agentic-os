@@ -19,24 +19,72 @@ from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 
+# The contract lives next to this script, not on an installed path: the audit is run from a checkout.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ui_audit_contract     # noqa: E402 — the agentic-tests evidence contract, projected for this repo
+
 BASE = sys.argv[1].rstrip("/")
 OUT = Path(sys.argv[2])
 LABEL = sys.argv[3]
 OUT.mkdir(parents=True, exist_ok=True)
 
-VIEWPORTS = {"desktop": (1440, 900), "tablet": (834, 1112), "mobile": (390, 844)}
+#: `narrow` is 320 CSS px, the width SC 1.4.10 (Reflow) actually measures at. Without it the audit could
+#: report a reflow pass while a 947 px table sat just below the smallest width it tested — which is what
+#: happened on the first run.
+VIEWPORTS = {"narrow": (320, 720), "mobile": (390, 844), "tablet": (834, 1112), "desktop": (1440, 900)}
 findings: list = []
 notes: dict = {}
+# Every journey in this harness runs against one surface, and the signature has to say so: the same defect
+# on the dashboard and on a plane panel is two different regressions.
+notes["current_surface"] = "dashboard"
+CONTRACT_ERRORS: list = []         # every way this run's evidence fails the contract; gates the exit code
 BAD_STATUS: list = []          # any 4xx/5xx seen on a subresource
 CONSOLE: list = []             # console errors + pageexceptions, all journeys
 NET: list = []                 # every request the page made
 
 
-def record(area, expected, observed, verdict, severity="info", evidence=None):
-    findings.append({"area": area, "expected": expected, "observed": observed,
-                     "verdict": verdict, "severity": severity, "evidence": evidence or []})
+def _px(value):
+    """`'947px'` -> 947.0; anything not a length (auto, normal, NaN from a missing table) -> 0."""
+    try:
+        return float(str(value).replace("px", "").strip())
+    except ValueError:
+        return 0.0
+
+
+def record(area, expected, observed, verdict, severity="info", evidence=None, *,
+           criterion="", target="", surface="", certainty=None, layer=None,
+           evidence_ref="", recommendation=""):
+    """Record one journey result, in the agentic-tests evidence contract's terms.
+
+    Defaults are honest rather than permissive: every check in this harness measures a fact out of the DOM
+    or the HTTP exchange, so a deterministic check is CONFIRMED by construction — it observed the thing it
+    reports. A check that *interprets* (an error-artefact pattern, an axe needs-review) must pass
+    `layer=HEURISTIC`, which makes it UNCERTAIN by default and takes away its power to mark a release
+    blocker. `criterion`/`target` stay empty on checks that can only pass: they produce no finding and so
+    need no signature. The gate rejects an issue that cites neither, so a *failure* cannot hide behind a
+    blank field.
+    """
+    layer = layer or ui_audit_contract.Layer.DETERMINISTIC
+    if certainty is None:
+        certainty = (ui_audit_contract.Certainty.UNCERTAIN if layer != ui_audit_contract.Layer.DETERMINISTIC
+                     else ui_audit_contract.Certainty.CONFIRMED)
+    refs = [e for e in (evidence or []) if ui_audit_contract.is_valid_ref_name(str(e))]
+    f, errors = ui_audit_contract.finding(
+        area, expected, observed, verdict, severity, criterion=criterion, target=target,
+        surface=surface or notes.get("current_surface", ""), certainty=certainty, layer=layer,
+        evidence_ref=evidence_ref or (refs[0] if refs else ""), recommendation=recommendation)
+    f["expected"], f["observed"], f["evidence"] = expected, observed, list(evidence or [])
+    f["area"] = area          # the report and the notes key on `area`; the contract calls it `dimension`
+    # An issue that cites no criterion and no target cannot be clustered, compared or asserted on later, so
+    # it is not evidence of a defect — it is a note that something looked wrong.
+    if verdict == "fail" and not criterion and not target:
+        CONTRACT_ERRORS.append(f"{area}: a reported issue must cite a criterion and/or a target")
+    findings.append(f)
+    CONTRACT_ERRORS.extend(errors)
     mark = {"pass": "PASS", "fail": "FAIL", "observe": "OBSV"}.get(verdict, verdict.upper())
-    print(f"[{mark:4}] {severity:7} {area}: {observed if len(str(observed)) < 220 else str(observed)[:220] + '…'}")
+    text = str(observed)
+    print(f"[{mark:4}] {severity:7} {area}: {text if len(text) < 220 else text[:220] + '…'}")
+
 
 
 def _attach(page, tag):
@@ -97,19 +145,45 @@ with sync_playwright() as pw:
                             right: Math.round(e.getBoundingClientRect().right),
                             over: Math.round(e.scrollWidth - e.clientWidth),
                             ws: getComputedStyle(e).whiteSpace, mw: getComputedStyle(e).minWidth,
+                            tl: getComputedStyle(e).tableLayout, w: Math.round(e.getBoundingClientRect().width),
                             txt: (e.textContent || '').trim().slice(0, 46)}))
                 .filter(o => o.right > cw || o.over > 0)
-                .sort((a, b) => b.right - a.right || b.over - a.over).slice(0, 4)""", cw)
+                .sort((a, b) => b.right - a.right || b.over - a.over).slice(0, 12)""", cw)
             notes[f"overflow_{vp}"] = culprit
         detail = f"scrollWidth={sw} clientWidth={cw}"
-        if sw > cw + 1:
-            worst = "; ".join("%s.%s right=%d over=%d ws=%s minw=%s" %
-                              (c["tag"], c["cls"], c["right"], c["over"], c["ws"], c["mw"])
-                              for c in notes.get(f"overflow_{vp}", []))
-            detail += " | " + worst
-        record("no horizontal overflow", f"scrollWidth <= clientWidth at {vp}",
-               detail, "pass" if sw <= cw + 1 else "fail",
-               "low" if vp != "mobile" else "medium")
+        if sw <= cw + 1:
+            record("no horizontal overflow", f"scrollWidth <= clientWidth at {vp}", detail, "pass",
+                   "info", criterion="1.4.10", target="document", evidence_ref=p)
+        else:
+            # The element that is wide is usually not the element that *cannot shrink*: a `section.shell` or
+            # a `div.card` is wide because a descendant forces the page, and reporting it as the defect
+            # produces a signature that comes back for every unrelated overflow. A cause is an element that
+            # overflows its own content box, carries a min-width, or is an auto-layout table wider than the
+            # viewport — the three things that actually refuse to shrink.
+            offenders = {}
+            for o in notes.get(f"overflow_{vp}", []):
+                cls = (o["cls"] or "").split()[0] if o["cls"] else ""
+                sel = f"{o['tag']}.{cls}" if cls else o["tag"]
+                refuses_to_shrink = (o["over"] > 0 or _px(o["mw"]) > 0
+                                     or (o["tag"] == "table" and o["tl"] == "auto" and o["w"] > cw))
+                if refuses_to_shrink:
+                    offenders.setdefault(sel, o)
+            if not offenders:
+                # nothing refuses to shrink, yet the page still overflows: that is worth reporting, but as a
+                # page-level finding with the widest suspects named, because no element can be blamed yet
+                widest = notes.get(f"overflow_{vp}", [])[:2]
+                offenders["document"] = widest[0] if widest else {"right": sw, "over": sw - cw,
+                                                                  "ws": "?", "mw": "?"}
+            for sel, o in offenders.items():
+                record("no horizontal overflow", f"no element refuses to shrink below {cw}px at {vp}",
+                       f"{sel} width/right={o['right']} self-overflow={o['over']} min-width={o['mw']} "
+                       f"table-layout={o.get('tl', 'n/a')} white-space={o['ws']} "
+                       f"(viewport {cw}px; page scrollWidth {sw})",
+                       "fail", "medium" if vp in ("mobile", "narrow") else "low",
+                       criterion="1.4.10", target=sel, evidence_ref=p,
+                       recommendation="let this element wrap or scroll inside its container instead of "
+                                      "pushing the page; automatic table layout and fixed widths are the "
+                                      "usual causes")
         ctx.close()
 
     # ---- J2: the demo label is on the page, and honest -----------------------------------------
@@ -134,7 +208,11 @@ with sync_playwright() as pw:
     artefacts = [w for w in ("Traceback", "Internal Server Error", "NameError", "KeyError") if w in body]
     artefacts += [w for w in ("nan", "None", "undefined") if re.search(rf"(?<![\w.-]){w}(?![\w-])", body)]
     record("no raw error artefacts on the page", "no traceback, exception name, or bare None/nan token",
-           f"found={artefacts or 'none'}", "pass" if not artefacts else "fail", "medium")
+           f"found={artefacts or 'none'}", "pass" if not artefacts else "fail", "medium",
+           criterion="no-error-artefacts", target="body",
+           # Heuristic on purpose: this check pattern-matches text, so it can flag review but must never be
+           # the thing that blocks a release — a confirmed deterministic check owns that call.
+           layer=ui_audit_contract.Layer.HEURISTIC)
     notes["body_head"] = re.sub(r"\s+", " ", body[:600])
 
     # ---- J4: the health endpoint describes the mode the UI is showing ---------------------------
@@ -255,17 +333,28 @@ with sync_playwright() as pw:
     p = shot(page3, "a11y")
     record("every visible control has an accessible name", "no unnamed controls",
            f"{a11y['unnamed']} of {a11y['controls']} unnamed",
-           "pass" if a11y["unnamed"] == 0 else "fail", "medium", [p])
-    record("one h1 and a main landmark", "exactly one h1 and at least one <main>",
-           f"h1={a11y['h1']} main={a11y['main']}",
-           "pass" if a11y["h1"] == 1 and a11y["main"] >= 1 else "fail", "medium")
+           "pass" if a11y["unnamed"] == 0 else "fail", "medium", [p],
+           criterion="4.1.2", target="button,a,input,select", evidence_ref=p)
+    # One criterion per record. These two used to be a single journey, which meant a missing <main> and a
+    # duplicated <h1> shared one finding, one severity and one signature — so the report could not tell you
+    # which page defect you had, and neither could a regression check.
+    record("exactly one h1", "exactly one <h1> on the page", f"h1={a11y['h1']}",
+           "pass" if a11y["h1"] == 1 else "fail", "medium", [p],
+           criterion="1.3.1", target="h1", evidence_ref=p)
+    record("a main landmark exists", "at least one <main>, so a screen reader can skip to the content",
+           f"main={a11y['main']}",
+           "pass" if a11y["main"] >= 1 else "fail", "medium", [p],
+           criterion="1.3.1", target="body", evidence_ref=p)
     record("document language declared", "html[lang] set, so a screen reader picks the right voice",
-           f"lang={a11y['lang']!r}", "pass" if a11y["lang"] else "fail", "low")
+           f"lang={a11y['lang']!r}", "pass" if a11y["lang"] else "fail", "low",
+           criterion="3.1.1", target="html", evidence_ref=p)
     record("heading levels do not skip", "no h1 -> h3 jumps", f"skips={a11y['skips']}",
-           "pass" if a11y["skips"] == 0 else "fail", "low")
+           "pass" if a11y["skips"] == 0 else "fail", "low",
+           criterion="1.3.1", target="h1,h2,h3,h4", evidence_ref=p)
     record("tables are identifiable", "each table carries a caption or aria label",
            f"{a11y['unnamed_tables']} unnamed table(s)",
-           "pass" if a11y["unnamed_tables"] == 0 else "fail", "low")
+           "pass" if a11y["unnamed_tables"] == 0 else "fail", "low",
+           criterion="1.3.1", target="table", evidence_ref=p)
     page3.keyboard.press("Tab")
     f1 = page3.evaluate("() => document.activeElement.tagName")
     ring = page3.evaluate("""() => { const s = getComputedStyle(document.activeElement);
@@ -273,7 +362,8 @@ with sync_playwright() as pw:
     record("keyboard focus lands on a control and is visible",
            "Tab reaches an interactive element and a focus ring is drawn",
            f"focused={f1} visible_ring={ring}",
-           "pass" if f1 not in ("BODY", "HTML") and ring else "fail", "medium")
+           "pass" if f1 not in ("BODY", "HTML") and ring else "fail", "medium",
+           criterion="2.4.7", target=":focus", evidence_ref=p)
     ctx3.close()
     browser.close()
 
@@ -294,7 +384,10 @@ with sync_playwright() as pw:
     loopback_only = bool(hosts) and all(h.startswith("127.0.0.1:") for h in hosts)
     record("every request stayed on loopback", "all requests to 127.0.0.1:<port>; never demo.redevops.io, "
            "never a CrowdSec LAPI, never an outbound host",
-           f"{len(NET)} requests to {hosts}", "pass" if loopback_only else "fail", "block")
+           f"{len(NET)} requests to {hosts}", "pass" if loopback_only else "fail", "block",
+           criterion="no-side-effect", target="document",
+           recommendation="an audit run that reached a host outside loopback has contacted a real service; "
+                          "treat the run as a disclosure incident, not a test failure")
 
     env = {"base": BASE, "label": LABEL, "viewports": VIEWPORTS, "requests_seen": len(NET),
            "requests": NET, "console_errors": CONSOLE, "bad_status": BAD_STATUS, **notes}
@@ -304,10 +397,11 @@ with sync_playwright() as pw:
              f"- target `{BASE}` · headless Chromium · viewports {', '.join(VIEWPORTS)}",
              f"- requests observed: {len(NET)} · console errors: {len(hard)}",
              f"- findings: {n('pass')} pass · {n('fail')} fail · {n('observe')} observed", "",
-             "| verdict | severity | area | observed |", "|---|---|---|---|"]
+             "| verdict | severity | criterion | target | evidence | area | observed |", "|---|---|---|---|---|---|---|"]
     for f in findings:
-        lines.append(f"| {f['verdict']} | {f['severity']} | {f['area']} | "
-                     + str(f["observed"]).replace("|", "/").replace("\n", " ")[:190] + " |")
+        lines.append(f"| {f['verdict']} | {f['severity_label']} | {f['criterion'] or '—'} | "
+                     f"{f['target'] or '—'} | {f['evidence_ref'] or '—'} | {f['area']} | "
+                     + str(f["observed"]).replace("|", "/").replace("\n", " ")[:150] + " |")
     (OUT / f"{LABEL}-audit.md").write_text("\n".join(lines) + "\n")
     # An evidence manifest: every artefact this run produced, digested, so a screenshot in a review thread
     # can be tied back to the run that made it. Screenshots are not committed (they are multi-megabyte);
@@ -316,10 +410,31 @@ with sync_playwright() as pw:
                  "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
                 for p in sorted(OUT.glob(f"{LABEL}-*")) if p.name != f"{LABEL}-evidence-manifest.json"]
     (OUT / f"{LABEL}-evidence-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    blockers = [f for f in findings if f["verdict"] == "fail" and f["severity"] in ("block", "high")]
+    # ---- the contract gate ---------------------------------------------------------------------------
+    # The verdict is now the contract's, not a count of scary words: blockers come only from confirmed
+    # deterministic severity-0 findings, and the run cannot pass on evidence it cannot verify.
+    verdict = ui_audit_contract.project(
+        findings, url=BASE, journey="edge-sentinel fixture dashboard",
+        surfaces=list(VIEWPORTS))
+    evidence_errors = ui_audit_contract.validate_evidence(findings, OUT)
+    hits = ui_audit_contract.regression_hits(verdict["signatures"])
+    contract_errors = CONTRACT_ERRORS + evidence_errors
+    (OUT / f"{LABEL}-contract.json").write_text(
+        json.dumps({"verdict": verdict, "contract_errors": contract_errors,
+                    "known_defect_signatures_still_present": hits}, indent=2) + "\n")
+    blockers = verdict["blockers"]
     print(f"\nwrote {OUT / (LABEL + '-audit.md')}")
-    print(f"blockers: {len(blockers)}")
-    sys.exit(1 if blockers else 0)
+    print(f"contract status: {verdict['status']} · blockers: {len(blockers)} · "
+          f"escalations: {len(verdict['escalations'])} · measured: {verdict['measured']}")
+    for e in contract_errors:
+        print(f"CONTRACT VIOLATION: {e}")
+    for h in hits:
+        print(f"REGRESSION: known defect signature still reported: {h}")
+    # Green requires three things, not one: nothing to fix, evidence behind every claim, and no known
+    # defect coming back. A run that reports PASS while its own findings have no artifacts is the failure
+    # mode this gate exists to make impossible.
+    sys.exit(0 if (verdict["status"] == ui_audit_contract.Status.PASS
+                   and not contract_errors and not hits) else 1)
 
 
 
