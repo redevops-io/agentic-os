@@ -1528,6 +1528,8 @@ async def api_case_execute(case_id: str, request: Request,
         return JSONResponse({"error": f"unknown case or request ({case_id}/{request_id})"}, status_code=404)
     except live.ExecutionError as e:
         return JSONResponse({"error": str(e)}, status_code=409)
+    except fixture_mode.DemoRefused:
+        raise  # a policy refusal, not a client error: the registered handler answers 403 refused=demo_mode
     except Exception as e:  # noqa: BLE001 — e.g. GovernanceError refusing an ungoverned action
         return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=400)
     return JSONResponse(out)

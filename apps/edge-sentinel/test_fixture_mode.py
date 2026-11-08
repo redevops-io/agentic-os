@@ -150,6 +150,35 @@ def test_the_write_path_cannot_reach_the_core_even_when_blocks_are_enabled(demo,
     assert hits == [], f"the write path reached the CrowdSec boundary: {hits}"
 
 
+def test_an_approved_kickoff_refuses_before_any_state_is_written(demo):
+    """The UI audit found the real shape of this bug (fixture-audit.md, J5).
+
+    With `SENTINEL_BLOCK_ENABLED=1` the kick-off marked the action FAILED and persisted that *before* `core`
+    refused, so a demo deployment showed "last attempt failed · retry" — a policy decision reported as an
+    outage — and the route returned HTTP 200 with a FAILED receipt instead of the 403 refusal. Nothing ever
+    reached CrowdSec, so a test that only asserted "no side effect" stayed green. What must be true is that
+    the refusal happens before anything is written and the action is left exactly as the operator set it.
+    """
+    demo.install({})
+    live = importlib.import_module("edge-sentinel.live")
+    CaseStore = importlib.import_module("edge-sentinel.case_store").CaseStore
+    st = CaseStore()
+    live.sync_cases(st, alerts_fn=lambda: [{"scenario": "crowdsecurity/ssh-bf",
+                                            "source": {"value": "192.0.2.73", "scope": "Ip"},
+                                            "created_at": "2026-11-07T10:00:00Z", "events_count": 9}])
+    cid = next(iter(st.cases))
+    rid = live.case_summaries(st)[0]["open_action"]["request_id"]
+    live.decide(cid, rid, approved=True, actor="operator:test", st=st)
+    assert live.case_summaries(st)[0]["open_action"]["state"] == "APPROVED"
+
+    with pytest.raises(fixture_mode.DemoRefused):
+        live.execute(cid, rid, actor="operator:test", st=st, enabled=True)
+
+    assert live.case_summaries(st)[0]["open_action"]["state"] == "APPROVED", \
+        "a refusal must not leave the case in a retryable FAILED state"
+    assert st.receipts == {}, "a refused demo must not record a FAILED receipt"
+
+
 def test_the_refusal_surfaces_as_a_403_not_a_500(demo, load_app):
     """The refusal is raised deep in `core`; the operator still needs a clean answer, not a stack trace."""
     demo.install({})

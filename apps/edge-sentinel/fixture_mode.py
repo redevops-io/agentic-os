@@ -114,6 +114,18 @@ def fixture_alerts() -> List[dict]:
 _INSTALLED: Dict[str, object] = {}          # name -> original, non-empty only while installed
 
 
+def refuse_if_enabled(what: str) -> None:
+    """Raise when the fixture core is installed. For call sites that are about to perform a CrowdSec side
+    effect *and* record state around it: `core` already refuses, but by then a caller such as
+    `live.execute()` has marked the action FAILED and persisted that, which leaves a demo deployment with a
+    phantom 'last attempt failed · retry' the operator never caused. Refusing here is the same policy
+    decision, made before anything is written, so it surfaces as a refusal rather than as an outage."""
+    if _INSTALLED:
+        raise DemoRefused(
+            f"{what} refused: {DEMO_ENV} is on, so no CrowdSec side effect is permitted. "
+            "Unset the variable to operate against a real core.")
+
+
 def _refusing(core, what: str) -> Callable[..., dict]:
     def _refuse(*args, **kwargs):
         raise DemoRefused(
