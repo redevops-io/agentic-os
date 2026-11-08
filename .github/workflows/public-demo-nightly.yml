@@ -29,9 +29,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      # Runs FIRST, offline, and decides whether this job may touch the network at all: it asserts every
-      # request the live steps can issue is GET/HEAD (the live probe set is filtered in the test module, and
-      # the script's own requests are captured and inspected). If it goes red, nothing below reaches a demo.
+      # Installed first because the read-only proof below is a test, and a test needs its imports. Nothing in
+      # this step talks to the demo.
+      - name: Install the kernel + dev extras
+        run: python -m pip install --quiet -e ".[dev]"
+      # Runs BEFORE any request leaves the runner, and decides whether this job may touch the network at all:
+      # it asserts every request the live steps can issue is GET/HEAD (the live probe set is filtered in the
+      # test module, and the script's own requests are captured and inspected). If it goes red, nothing below
+      # reaches a demo.
       - name: Prove this job cannot send a mutating request
         run: python -m pytest -q tests/test_public_demo_contract.py -k "not live"
       - name: Probe the hosted demo against its pinned contract
@@ -39,6 +44,4 @@ jobs:
       - name: Run the contract's own live checks (anonymous reads only; the same tests CI skips offline)
         env:
           DEMO_BASE_URL: https://demo.redevops.io
-        run: |
-          python -m pip install --quiet -e ".[dev]"
-          python -m pytest -q tests/test_public_demo_contract.py -k live
+        run: python -m pytest -q tests/test_public_demo_contract.py -k live
