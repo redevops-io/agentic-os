@@ -30,10 +30,24 @@ if _ENV_FILE.exists():
 
 DEPLOY_SCAN_MCP_URL = os.getenv("DEPLOY_SCAN_MCP_URL", "")
 
+#: Tools that make the service *do* something to a live deployment. `scan_start` launches active probe
+#: traffic against a target; the two reads are JSON-RPC POSTs to the same service but change nothing.
+_WRITE_TOOLS = frozenset({"scan_start"})
+
 
 def _call(tool: str, arguments: dict) -> dict:
+    from . import fixture_mode     # lazy, as in live.py: keeps this module importable standalone
     if not DEPLOY_SCAN_MCP_URL:
         return {"error": "runtime scanning is unavailable (DEPLOY_SCAN_MCP_URL unset)"}
+    # Audit 2026-11-11 (PR #613 review): demo mode refused CrowdSec effects only, so a fixture demo with a
+    # reachable DEPLOY_SCAN_MCP_URL would have sent real scan traffic at a real deployment while presenting
+    # itself as synthetic. Active scanning is a side effect against somebody's service — refused outright.
+    if tool in _WRITE_TOOLS:
+        fixture_mode.refuse_if_enabled(f"deploy-scan {tool}")
+    elif fixture_mode.read_refusal(f"deploy-scan {tool}"):
+        # Reads refuse quietly into the module's existing `{"error": …}` shape, which the panel already
+        # renders as unavailable; a demo whose evidence says nothing left the process has to mean it.
+        return {"error": fixture_mode.read_refusal(f"deploy-scan {tool}")}
     try:
         r = httpx.post(DEPLOY_SCAN_MCP_URL,
                        json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",

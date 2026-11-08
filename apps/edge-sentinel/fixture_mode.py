@@ -49,7 +49,33 @@ STORIES: Dict[str, str] = {
 
 
 class DemoRefused(RuntimeError):
-    """A CrowdSec side effect was attempted while the demo fixture core was installed."""
+    """A CrowdSec side effect was attempted while the demo fixture core was installed.
+
+    The name predates the wider boundary and is kept deliberately: it is the exception the route layer maps to
+    a 403 policy decision, and every refusal in demo mode — CrowdSec or any other external service — deserves
+    that same honest status rather than a 500 or, worse, a silent success.
+    """
+
+
+DEMO_SCOPES = ("crowdsec", "netbird", "portabase", "deploy_scan", "wazuh", "clamav", "llm")
+
+#: The note a *read* boundary returns instead of touching the network. Reads refuse quietly because every
+#: plane panel already has a labelled sample/unavailable path: the point is that no request leaves, not that
+#: the operator sees a stack trace. Writes raise `DemoRefused` — see `refuse_if_enabled`.
+def read_refusal(what: str) -> Optional[str]:
+    """A refusal note when the fixture core is installed, else None (meaning: proceed with the read)."""
+    if not _INSTALLED:
+        return None
+    return (f"{SYNTHETIC_TAG}: {what} was not read — {DEMO_ENV} is on, and demo mode reads no external "
+            "service. Unset the variable to operate against real integrations.")
+
+
+def write_refusal(what: str) -> Optional[str]:
+    """The message `refuse_if_enabled` raises with, or None when the fixture core is not installed."""
+    if not _INSTALLED:
+        return None
+    return (f"{what} refused: {DEMO_ENV} is on, so no external side effect is permitted. "
+            "Unset the variable to operate against a real integration.")
 
 
 def _env(env: Optional[dict]) -> dict:
@@ -115,15 +141,19 @@ _INSTALLED: Dict[str, object] = {}          # name -> original, non-empty only w
 
 
 def refuse_if_enabled(what: str) -> None:
-    """Raise when the fixture core is installed. For call sites that are about to perform a CrowdSec side
-    effect *and* record state around it: `core` already refuses, but by then a caller such as
-    `live.execute()` has marked the action FAILED and persisted that, which leaves a demo deployment with a
-    phantom 'last attempt failed · retry' the operator never caused. Refusing here is the same policy
-    decision, made before anything is written, so it surfaces as a refusal rather than as an outage."""
-    if _INSTALLED:
-        raise DemoRefused(
-            f"{what} refused: {DEMO_ENV} is on, so no CrowdSec side effect is permitted. "
-            "Unset the variable to operate against a real core.")
+    """Raise when the fixture core is installed. For call sites that are about to perform an external side
+    effect *and* record state around it — a CrowdSec decision, a NetBird policy, a deploy-scan job.
+
+    Two reasons this exists at every boundary rather than once in `core`. First, a caller such as
+    `live.execute()` marks the action FAILED and persists that *before* touching the edge, so by the time a
+    patched `core.block_ip` refuses, a demo deployment already has a phantom 'last attempt failed · retry' the
+    operator never caused. Second, and more importantly, only the caller knows whether the effect it is about
+    to trigger leaves the process at all: refusing inside `core` says nothing about NetBird or deploy-scan.
+    Refusing here is the same policy decision, made before any I/O or state write, so it surfaces as a
+    refusal rather than as an outage or, worse, as a succeeded mutation of a live third party."""
+    msg = write_refusal(what)
+    if msg is not None:
+        raise DemoRefused(msg)
 
 
 def _refusing(core, what: str) -> Callable[..., dict]:
@@ -195,8 +225,13 @@ def uninstall() -> dict:
 
 
 def status() -> dict:
-    """Current mode, for /health and for the dashboard banner."""
-    return {"enabled": bool(_INSTALLED), "tag": SYNTHETIC_TAG if _INSTALLED else ""}
+    """Current mode, for /health and for the dashboard banner.
+
+    `scopes` names every integration demo mode holds back, so a reader of the evidence can tell what the
+    synthetic label covers instead of inferring it. It is a statement about the boundary, not a claim that
+    those integrations are configured — an unconfigured one would refuse nothing anyway."""
+    return {"enabled": bool(_INSTALLED), "tag": SYNTHETIC_TAG if _INSTALLED else "",
+            "scopes": list(DEMO_SCOPES) if _INSTALLED else []}
 
 
 def install_if_enabled(env: Optional[dict] = None) -> Optional[dict]:
