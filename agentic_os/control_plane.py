@@ -40,23 +40,35 @@ COCKPIT_URL = os.environ.get("COCKPIT_URL", "https://demo.redevops.io/cockpit")
 # Issue #528, second half: DEMO_READ_ONLY above is opt-IN, and no shipped configuration set it, while
 # deploy/docker-compose.yml runs `uvicorn agentic_os.control_plane:app --host 0.0.0.0`. So the module
 # proxy forwarded anonymous POSTs to module services on every deployment reachable from outside the host.
-# Writes through /m/* are now refused unless the connection ARRIVED on a loopback bind. The decision reads
-# the ASGI `server` scope — the address the server accepted the socket on, chosen by uvicorn, not by the
-# caller — so neither Host nor X-Forwarded-For nor any Cloudflare header can talk it open, and a test that
-# dials the app directly (no edge in front) gets the same answer as the hosted deployment.
+# Writes through /m/* are now refused unless the connection ARRIVED over loopback.
+#
+# The input is the ASGI `server` scope. Verified against a real uvicorn (not TestClient): it carries the
+# local address of the ACCEPTED SOCKET, per connection — a 0.0.0.0 bind dialled via loopback reports
+# 127.0.0.1, and a `::` bind dialled via ::1 reports ::1. So the rule is "this TCP peer reached us over
+# the loopback interface", which the caller cannot influence: no Host, X-Forwarded-For or Cloudflare
+# header changes which local address the kernel delivered the connection on.
+#
+# What that deliberately does NOT claim: a reverse proxy terminating ON THIS HOST connects to us over
+# loopback, so its writes are forwarded. The gate is a property of the socket, not of who is upstream —
+# an edge that terminates outside the host (the Cloudflare tunnel container, for instance) arrives on the
+# container's interface address and is refused. If the proxy in front of this port is same-host and does
+# not authenticate callers itself, it is part of the trusted surface, and that belongs in the deployment
+# review rather than in this route. See docs/SECURITY_MODEL.md.
 DEMO_ALLOW_WRITES = os.environ.get("DEMO_ALLOW_WRITES", "0") == "1"
 if DEMO_ALLOW_WRITES:
     logging.getLogger("agentic_os.control_plane").warning(
-        "DEMO_ALLOW_WRITES=1: /m/<module>/api/* POSTs are forwarded on ANY bind, including 0.0.0.0. "
+        "DEMO_ALLOW_WRITES=1: /m/<module>/api/* POSTs are forwarded on ANY connection, loopback or not. "
         "Only set this where a caller-authenticating proxy really is in front of this port.")
 
 
 def _arrived_on_loopback(scope: dict) -> bool:
-    """True only when the socket this request came in on is provably loopback.
+    """True only when the socket this request arrived on is loopback.
 
-    Anything that is not a loopback IP — a wildcard bind, an interface address, a bare hostname such as
-    TestClient's `testserver`, or a missing scope — answers False. Unknown is treated as exposed, because
-    that is the safe reading of an address we cannot place inside the host.
+    Reads the `server` entry of the ASGI scope, which uvicorn fills with the local address of the accepted
+    socket (verified against a real server). Anything that is not a loopback IP — a container interface
+    address such as 172.17.0.4, a LAN address, a bare hostname like TestClient's `testserver`, or a missing
+    scope — answers False. Unknown is treated as exposed, because that is the safe reading of an address we
+    cannot place inside the host.
     """
     host = (scope.get("server") or ("", 0))[0] or ""
     try:
@@ -452,8 +464,9 @@ async def module_api(name: str, path: str, request: Request) -> Response:
     through (CF-Connecting-IP / X-Forwarded-For) so a module can rate-limit.
 
     READS are public by product decision (issue #528: the demo dashboards and their read APIs stay
-    anonymous). WRITES are not: a POST is forwarded only on a loopback bind, or on a bind the operator
-    has explicitly declared safe with DEMO_ALLOW_WRITES=1. See the note on DEMO_ALLOW_WRITES.
+    anonymous). WRITES are not: a POST is forwarded only when the connection arrived over loopback, or the
+    operator has explicitly declared the port safe with DEMO_ALLOW_WRITES=1. See the note on
+    DEMO_ALLOW_WRITES for what the socket test does and does not cover.
     """
     name = _resolve_module_name(name)
     base = MODULE_SERVICES.get(name)

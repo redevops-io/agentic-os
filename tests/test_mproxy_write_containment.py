@@ -12,7 +12,9 @@ and one test tries to.
 from __future__ import annotations
 
 import http.server
+import socket
 import threading
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -62,10 +64,13 @@ def upstream(cp_mod, monkeypatch):
 
 
 LOOPBACK = "http://127.0.0.1:8080"
-# The shipped compose binds 0.0.0.0 (deploy/docker-compose.yml:29); an interface address is the other way
-# a real host answers beyond the machine. The IPv6 wildcard ("::") is covered in the classification test
-# below: Starlette's TestClient parses its base_url by splitting on ":", so it cannot express an IPv6
-# host — the scope value it would produce is what matters, and that is asserted directly.
+# TestClient's base_url decides what the request's `server` scope says the connection was delivered on —
+# that is the value the gate reads, so this is how a bind is simulated here. 10.0.0.7 is the realistic
+# public case (a LAN or container-interface address, e.g. the 172.17.0.4 a Docker network reports);
+# 0.0.0.0 is not a value a real server reports (uvicorn reports the accepted socket's address, verified in
+# the real-socket tests below) and is kept deliberately to prove any non-loopback value fails closed.
+# An IPv6 host cannot be expressed this way at all — Starlette parses base_url by splitting on ":" — so
+# "::" and "::1" are asserted on the classifier directly.
 PUBLIC_BINDS = ["http://0.0.0.0:8080", "http://10.0.0.7:8080"]
 
 
@@ -138,14 +143,51 @@ def test_a_traversal_is_still_a_400_before_any_write_policy(cp_mod, upstream):
     assert seen == [], "nothing — malformed or refused — may reach the module"
 
 
+def test_a_refusal_changes_no_persistent_state(cp_mod, upstream, tmp_path):
+    """403 is not enough: a refused write must leave nothing behind, in the module or on this host.
+
+    Every file the control plane can persist (the grant store, the home directory it writes under) is
+    fingerprinted by content hash, several refused writes are issued across two public binds, and the
+    fingerprint must come back byte-identical — with the module recording no request at all.
+    """
+    import hashlib
+
+    def fingerprint(root):
+        out = {}
+        base = Path(root)
+        if not base.exists():
+            return {"<absent>": ""}
+        for p in sorted(base.rglob("*")):
+            key = str(p.relative_to(base))
+            out[key] = hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else "<dir>"
+        return out
+
+    perm_dir = tmp_path / "perm"
+    home_dir = tmp_path / "home"
+    perm_dir.mkdir(parents=True, exist_ok=True)
+    home_dir.mkdir(parents=True, exist_ok=True)
+    before = (fingerprint(perm_dir), fingerprint(home_dir))
+    name, seen = upstream
+    for bind in PUBLIC_BINDS:
+        c = TestClient(cp_mod.app, base_url=bind)
+        for tail in ("agent/chat", "agent/run", "billing/post", "x"):
+            assert c.post(f"/m/{name}/api/{tail}", content=b'{"text":"go"}').status_code == 403, tail
+        assert c.post(f"/m/{name}/api/agent/chat", content=b"{}",
+                      headers={"host": "localhost"}).status_code == 403
+    assert (fingerprint(perm_dir), fingerprint(home_dir)) == before, "a refused write persisted something"
+    assert seen == [], "a refused write reached the module"
+
+
 @pytest.mark.parametrize("host,expect", [
     ("127.0.0.1", True), ("127.0.0.53", True), ("::1", True),
     ("0.0.0.0", False), ("::", False), ("10.0.0.7", False), ("192.168.1.9", False),
+    ("172.17.0.4", False),        # what a Docker container interface reports — the hosted-demo value
     ("testserver", False), ("localhost", False), ("", False),
 ])
 def test_bind_classification_is_by_ip_not_by_name(host, expect):
-    """uvicorn reports the resolved address it bound, so a bare name is never evidence of loopback;
-    treating `localhost` or TestClient's `testserver` as safe would be a guess, so it is refused."""
+    """A bare name is never evidence of loopback. uvicorn reports the accepted socket's local address here
+    (verified in the real-socket tests below), so `localhost` and TestClient's `testserver` would be a
+    guess about a value a real server never produces — and a guess in the permissive direction is refused."""
     from agentic_os.control_plane import _arrived_on_loopback
     assert _arrived_on_loopback({"server": (host, 8080)}) is expect
 
@@ -155,4 +197,121 @@ def test_a_scope_without_a_usable_server_address_is_treated_as_public():
     assert _arrived_on_loopback({}) is False
     assert _arrived_on_loopback({"server": None}) is False
     assert _arrived_on_loopback({"server": ("", 0)}) is False
+
+
+# ── the mechanism itself, over a real socket ───────────────────────────────────────────────────────
+# Everything above drives TestClient, whose `server` value comes from base_url — it is a claim about the
+# classifier, not about uvicorn. These two run a real uvicorn over a real TCP connection, because the gate
+# is only as good as what the server actually puts in scope["server"].
+
+_ECHO = '''
+import json
+from starlette.responses import JSONResponse
+async def app(scope, receive, send):
+    body = json.dumps({"server": list(scope.get("server", []))}).encode()
+    await send({"type": "http.response.start", "status": 200,
+                "headers": [(b"content-type", b"application/json")]})
+    await send({"type": "http.response.body", "body": body})
+'''
+
+
+def _free_port():
+    import socket
+    s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
+
+
+def _serve(tmp_path, source, port):
+    import subprocess, sys, time
+    (tmp_path / "echo_app.py").write_text(source)
+    proc = subprocess.Popen([sys.executable, "-m", "uvicorn", "echo_app:app", "--host", "127.0.0.1",
+                             "--port", str(port), "--log-level", "critical"],
+                            cwd=str(tmp_path), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        for _ in range(80):                                   # up to 8s for the socket to open
+            try:
+                import socket
+                with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                    return proc
+            except OSError:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.1)
+    except Exception:
+        pass
+    proc.terminate()
+    pytest.skip("could not start a real uvicorn for the socket-semantics check")
+
+
+def test_a_real_server_reports_the_accepted_local_address_as_the_server_scope(tmp_path):
+    """A 0.0.0.0 bind dialled from loopback reports 127.0.0.1, not the bind string — which is why the rule
+    is 'arrived over loopback' rather than 'bound to loopback', and why it holds for IPv6 too."""
+    import json
+    import urllib.request
+    for bind, dial in (("127.0.0.1", "127.0.0.1"), ("0.0.0.0", "127.0.0.1")):
+        port = _free_port()
+        proc = _serve(tmp_path, _ECHO, port)
+        try:
+            with urllib.request.urlopen(f"http://{dial}:{port}/", timeout=10) as r:
+                reported = json.loads(r.read())["server"][0]
+            assert reported == "127.0.0.1", f"bind {bind}: scope['server'] said {reported}"
+        finally:
+            proc.terminate(); proc.wait(timeout=10)
+
+
+def test_a_real_server_forwards_a_loopback_write_end_to_end(tmp_path, cp_mod, upstream):
+    """The whole route over a real TCP connection: real uvicorn, real socket, no TestClient anywhere.
+
+    The refusal side is covered above by driving the classifier with the address values a real server
+    produces (a container's 172.17.0.4, a LAN address) — dialling a non-loopback address from this test
+    host is blocked by the host firewall, so it is asserted where it can be asserted honestly rather than
+    faked here.
+    """
+    import os
+    import subprocess
+    import sys
+    import time
+    import urllib.error
+    import urllib.request
+
+    name, seen = upstream
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(cp_mod.__file__)))
+    perm_dir = tmp_path / "perm"
+    override = "MODULE_SERVICE_" + name.replace("-", "_").replace(".", "_")
+    env = {**os.environ, "PYTHONPATH": repo_root, "PERMISSIONS_DIR": str(perm_dir),
+           "AGENTIC_OS_HOME": str(tmp_path / "home"), "PERMISSIONS_ALLOW_GENERATED_KEY_DEV": "1",
+           override: cp_mod.MODULE_SERVICES[name]}      # the fixture already points this module at the stub
+    env.pop("DEMO_READ_ONLY", None)
+    env.pop("DEMO_ALLOW_WRITES", None)
+    port = _free_port()
+    proc = subprocess.Popen([sys.executable, "-m", "uvicorn", "agentic_os.control_plane:app",
+                             "--host", "127.0.0.1", "--port", str(port), "--log-level", "critical"],
+                            cwd=repo_root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        for _ in range(120):                                  # control_plane imports slowly; allow 20s
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                    break
+            except OSError:
+                if proc.poll() is not None:
+                    pytest.skip("control_plane would not start under uvicorn here")
+                time.sleep(0.1)
+        else:
+            pytest.skip("control_plane did not open its socket in time")
+
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/m/{name}/api/agent/chat",
+                                     data=b'{"text":"go"}', method="POST",
+                                     headers={"content-type": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            assert r.status == 200, "a write over a real loopback socket must still be forwarded"
+        assert ("POST", "/api/agent/chat") in seen, "the module behind the proxy must have received it"
+    except urllib.error.HTTPError as e:
+        pytest.fail(f"real-socket loopback write was refused ({e.code}): {e.read()[:200]!r}")
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
 
