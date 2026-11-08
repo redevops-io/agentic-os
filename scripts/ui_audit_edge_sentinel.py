@@ -403,13 +403,6 @@ with sync_playwright() as pw:
                      f"{f['target'] or '—'} | {f['evidence_ref'] or '—'} | {f['area']} | "
                      + str(f["observed"]).replace("|", "/").replace("\n", " ")[:150] + " |")
     (OUT / f"{LABEL}-audit.md").write_text("\n".join(lines) + "\n")
-    # An evidence manifest: every artefact this run produced, digested, so a screenshot in a review thread
-    # can be tied back to the run that made it. Screenshots are not committed (they are multi-megabyte);
-    # this is what makes them checkable anyway.
-    manifest = [{"file": p.name, "bytes": p.stat().st_size,
-                 "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
-                for p in sorted(OUT.glob(f"{LABEL}-*")) if p.name != f"{LABEL}-evidence-manifest.json"]
-    (OUT / f"{LABEL}-evidence-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     # ---- the contract gate ---------------------------------------------------------------------------
     # The verdict is now the contract's, not a count of scary words: blockers come only from confirmed
     # deterministic severity-0 findings, and the run cannot pass on evidence it cannot verify.
@@ -422,6 +415,16 @@ with sync_playwright() as pw:
     (OUT / f"{LABEL}-contract.json").write_text(
         json.dumps({"verdict": verdict, "contract_errors": contract_errors,
                     "known_defect_signatures_still_present": hits}, indent=2) + "\n")
+    # An evidence manifest: every artefact this run produced, digested, so a screenshot in a review thread
+    # can be tied back to the run that made it. Screenshots are not committed (they are multi-megabyte);
+    # this is what makes them checkable anyway. It is written LAST, over everything the run produced: on a
+    # re-run into an existing directory, a manifest written before the contract file would list the previous
+    # run's contract JSON and then watch it be overwritten — a self-reported hash mismatch on a run in which
+    # nothing was wrong, which is exactly the kind of finding that teaches people to ignore the manifest.
+    manifest = [{"file": p.name, "bytes": p.stat().st_size,
+                 "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
+                for p in sorted(OUT.glob(f"{LABEL}-*")) if p.name != f"{LABEL}-evidence-manifest.json"]
+    (OUT / f"{LABEL}-evidence-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     blockers = verdict["blockers"]
     print(f"\nwrote {OUT / (LABEL + '-audit.md')}")
     print(f"contract status: {verdict['status']} · blockers: {len(blockers)} · "
