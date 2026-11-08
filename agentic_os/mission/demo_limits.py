@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import threading
 import time
 from typing import Callable, Dict, Optional, Tuple
 
@@ -28,6 +29,7 @@ ENV_RATE_PER_MIN = "UNIFIED_SIDEKICK_REQUESTS_PER_MIN"
 ENV_BURST = "UNIFIED_SIDEKICK_BURST"
 ENV_MISSION_LIMIT = "UNIFIED_DEMO_MISSION_LIMIT"
 ENV_TRUSTED_PROXY_IPS = "UNIFIED_TRUSTED_PROXY_IPS"
+ENV_MAX_TRACKED_CALLERS = "UNIFIED_DEMO_MAX_TRACKED_CALLERS"
 
 # Defaults for a demo: enough for a person clicking through the journey, far short of a flooding rate.
 # The burst is deliberately above what one journey costs rather than at it: the desktop posts to this route
@@ -37,6 +39,11 @@ ENV_TRUSTED_PROXY_IPS = "UNIFIED_TRUSTED_PROXY_IPS"
 DEFAULT_RATE_PER_MIN = 20
 DEFAULT_BURST = 8
 DEFAULT_MISSION_LIMIT = 25
+# How many distinct callers one process remembers. When the proxy IS declared, the caller key comes from
+# X-Forwarded-For, which the client chooses — so an unbounded map here is a client-controlled memory leak,
+# measured at 20k entries for 20k forged header values. Entries are also reclaimed once a bucket has fully
+# refilled (see _prune_locked), so this is the ceiling, not the usual occupancy.
+DEFAULT_MAX_TRACKED_CALLERS = 4096
 
 
 class RateLimited(Exception):
@@ -99,30 +106,83 @@ class DemoLimits:
     """
 
     def __init__(self, *, per_min: Optional[int] = None, burst: Optional[int] = None,
-                 mission_limit: Optional[int] = None, clock: Callable[[], float] = time.monotonic):
+                 mission_limit: Optional[int] = None, clock: Callable[[], float] = time.monotonic,
+                 max_tracked_callers: Optional[int] = None):
         self.per_min = per_min if per_min is not None else _env_int(ENV_RATE_PER_MIN, DEFAULT_RATE_PER_MIN)
         self.burst = burst if burst is not None else _env_int(ENV_BURST, DEFAULT_BURST)
         self.mission_limit = (mission_limit if mission_limit is not None
                               else _env_int(ENV_MISSION_LIMIT, DEFAULT_MISSION_LIMIT))
+        self.max_tracked_callers = (max_tracked_callers if max_tracked_callers is not None
+                                    else _env_int(ENV_MAX_TRACKED_CALLERS, DEFAULT_MAX_TRACKED_CALLERS))
         self.clock = clock
         self._buckets: Dict[str, Tuple[float, float]] = {}
+        self._lock = threading.Lock()
         self.missions_created = 0
+        self.overflow_collapses = 0
+
+    @property
+    def tracked_callers(self) -> int:
+        """How many callers this process currently holds a bucket for. Bounded by `max_tracked_callers`."""
+        return len(self._buckets)
 
     @property
     def _refill_per_second(self) -> float:
         return self.per_min / 60.0
 
+    _OVERFLOW_KEY = "<shared-overflow>"
+
+    def _seconds_to_full(self) -> float:
+        rate = self._refill_per_second
+        return (float(self.burst) / rate) if rate > 0 else 0.0
+
+    def _prune_locked(self, now: float) -> None:
+        """Forget every caller whose bucket has already refilled.
+
+        A bucket at full is, by the refill arithmetic below, indistinguishable from one that does not exist:
+        both admit up to `burst` immediately. So reclaiming idle callers cannot change any future decision —
+        it only stops a caller-keyed map from growing without bound.
+        """
+        full = float(self.burst)
+        horizon = self._seconds_to_full()
+        for k in [k for k, (tokens, last) in self._buckets.items()
+                  if tokens >= full - 1e-9 or (now - last) >= horizon]:
+            del self._buckets[k]
+
+    def _resolve_key_locked(self, key: str, now: float) -> str:
+        """Which bucket this caller actually uses, keeping the map inside its ceiling."""
+        if key in self._buckets or len(self._buckets) < self.max_tracked_callers:
+            return key
+        self._prune_locked(now)
+        if len(self._buckets) < self.max_tracked_callers:
+            return key
+        # Nothing idle to reclaim, so the map is genuinely full of live callers. Fold the newcomer into one
+        # shared bucket: sharing a budget is stricter than not limiting, and an exhausted table must never
+        # turn into an unlimited one. Live callers are NOT evicted to make room — evicting would hand each new
+        # key of a flood a fresh full bucket, which is the opposite of what this is for. The map is therefore
+        # bounded at `max_tracked_callers` per-caller buckets plus this one shared slot.
+        self.overflow_collapses += 1
+        return self._OVERFLOW_KEY
+
     def take(self, key: str) -> None:
-        """Spend one token for `key`, or raise RateLimited saying how long to wait."""
+        """Spend one token for `key`, or raise RateLimited saying how long to wait.
+
+        The whole read-compute-write runs under a lock. Measured on CPython 3.12 the budget happened to be
+        exact without one, but only because the interpreter did not switch threads between reading a bucket
+        and storing it — a guarantee about the GIL, not about the limiter, and void on a free-threaded build.
+        A limit whose value depends on a thread switch is not a limit, and the test for it would be flaky in
+        exactly the way the CI timing assertion this repository just removed was.
+        """
         now = self.clock()
-        tokens, last = self._buckets.get(key, (float(self.burst), now))
-        tokens = min(float(self.burst), tokens + (now - last) * self._refill_per_second)
-        if tokens < 1.0:
-            self._buckets[key] = (tokens, now)
-            wait = (1.0 - tokens) / self._refill_per_second
-            raise RateLimited("this demo surface is rate limited; send the next request a little later",
-                              retry_after=int(wait) + 1)
-        self._buckets[key] = (tokens - 1.0, now)
+        with self._lock:
+            key = self._resolve_key_locked(key, now)
+            tokens, last = self._buckets.get(key, (float(self.burst), now))
+            tokens = min(float(self.burst), tokens + (now - last) * self._refill_per_second)
+            if tokens < 1.0:
+                self._buckets[key] = (tokens, now)
+                wait = (1.0 - tokens) / self._refill_per_second
+                raise RateLimited("this demo surface is rate limited; send the next request a little later",
+                                  retry_after=int(wait) + 1)
+            self._buckets[key] = (tokens - 1.0, now)
 
     def check_mission_quota(self, live_missions: int) -> None:
         """Refuse before a mission is created. `live_missions` is what this process is already holding open."""
