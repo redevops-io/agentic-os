@@ -325,6 +325,13 @@ def execute(case_id: str, request_id: str, *, actor: str, st: CaseStore | None =
     if enabled is None:
         from .auth import block_enabled
         enabled = block_enabled()
+    if enabled:
+        # Audit item P4: with the fixture core installed, a real kick-off is refused here — before the
+        # action is marked FAILED and persisted below in _execute_claimed. Refusing at `core` alone still
+        # stopped the ban, but left the case showing "last attempt failed · retry", which misreports a
+        # policy decision as an outage. Dry run (enabled False) is unaffected: it touches nothing.
+        from . import fixture_mode
+        fixture_mode.refuse_if_enabled("execute")
     with _LOCK:
         case, req = _resolve(st, case_id, request_id)
         if req.state not in (ActionState.APPROVED, ActionState.FAILED):

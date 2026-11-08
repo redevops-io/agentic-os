@@ -18,6 +18,8 @@ from pathlib import Path
 
 import httpx
 
+from . import fixture_mode     # demo-mode boundary: no external read, and no side effect at all
+
 # Idempotent .env load (mirrors core.py) so the module is self-sufficient when imported standalone.
 _ENV_FILE = Path(__file__).resolve().parent / ".env"
 if _ENV_FILE.exists():
@@ -33,6 +35,8 @@ PORTABASE_FRONT_URL = os.environ.get("PORTABASE_FRONT_URL", PORTABASE_API_URL).r
 
 
 def _pb_get(path: str):
+    if fixture_mode.read_refusal("Portabase backup coverage"):     # demo mode reads nothing outside the process
+        return None
     if not PORTABASE_API_TOKEN:
         return None
     try:

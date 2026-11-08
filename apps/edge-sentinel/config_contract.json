@@ -14,6 +14,8 @@
     { "name": "PARTNERS_BASIC_AUTH_USER", "owner": "edge-sentinel", "default": "", "purpose": "Shared operator credential pair accepted as an alternative to SENTINEL_BASIC_AUTH_*." },
     { "name": "PARTNERS_BASIC_AUTH_PASS", "owner": "edge-sentinel", "default": "", "purpose": "Password half of the shared operator credential pair." },
     { "name": "SENTINEL_BLOCK_ENABLED", "owner": "edge-sentinel", "default": "off", "purpose": "Without it an authenticated execution is a dry run." },
+    { "name": "EDGE_SENTINEL_DEMO", "owner": "edge-sentinel", "default": "", "purpose": "Opt-in fixture core (P4): reads come from synthetic RFC 5737 data, and no external side effect is performed - block_ip/unblock_ip/cscli refuse at core and NetBird, Portabase, deploy-scan, Wazuh, ClamAV and the model are held back too, so demo mode reads no external service and changes none. /health reports the scope as demo.scopes. Grants no exposure and no exemption from the bind, exposure and credential rules." },
+    { "name": "EDGE_SENTINEL_DEMO_SCENARIO", "owner": "edge-sentinel", "default": "mixed", "purpose": "Which fixture story to serve: mixed, or unavailable so LAPI reads fail and KPIs report 'not read'; an unknown value falls back to mixed." },
     { "name": "SENTINEL_PROTECTED_IPS", "owner": "edge-sentinel", "default": "", "purpose": "Addresses/CIDRs that are never banned." },
     { "name": "SENTINEL_HOST_IPS", "owner": "edge-sentinel", "default": "", "purpose": "This host's own addresses, treated as protected." },
     { "name": "SENTINEL_BLOCK_ALLOW_NETWORKS", "owner": "edge-sentinel", "default": "", "purpose": "CIDRs inside which private/reserved space may be banned; loopback, link-local, multicast and unspecified are never bannable." },
