@@ -9,11 +9,13 @@ Exit code 1 if any journey with severity>=block fails.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 
@@ -185,6 +187,19 @@ with sync_playwright() as pw:
                    "403 refused=demo_mode with a reason; nothing blocked, no receipt claiming execution",
                    f"status={rr.status} body={json.dumps(body_j)[:200]}",
                    "pass" if refused else "fail", "block")
+            # The point of refusing before writing: the case must look exactly as the operator left it. A
+            # refusal recorded as a failed attempt shows "last attempt failed · retry" — an outage that
+            # never happened, and retryable state the operator did not cause.
+            page3x.reload()
+            page3x.wait_for_timeout(500)
+            txt = page3x.inner_text("body")
+            pstate = shot(page3x, "after-refusal")
+            record("a refusal leaves no failed attempt and no retry state in the UI",
+                   'the case still reads "approved · awaiting operator"; "last attempt failed" appears nowhere',
+                   f"failed_state_shown={'last attempt failed' in txt.lower()} "
+                   f"awaiting_operator_shown={'awaiting operator' in txt.lower()}",
+                   "pass" if "last attempt failed" not in txt.lower() and "awaiting operator" in txt.lower()
+                   else "fail", "block", [pstate])
         an = page.request.post(f"{BASE}/api/cases/{cid}/execute",
                                headers={"Content-Type": "application/json"},
                                data=json.dumps({"request_id": rid}))
@@ -270,9 +285,19 @@ with sync_playwright() as pw:
     record("no unexpected HTTP failures on subresources", "no 4xx/5xx other than deliberate refusals",
            f"{len(BAD_STATUS)} seen" + (f", e.g. {BAD_STATUS[:2]}" if BAD_STATUS else ""),
            "pass" if not BAD_STATUS else "fail", "medium")
+    # Isolation, evidenced rather than asserted: the point is that a UI audit cannot reach anything real.
+    # demo.redevops.io is named because auth.py says the hosted demo shares this operator mechanism, so it
+    # is the nearest thing to a real destination an audit could wrongly hit. CROWDSEC_LAPI_URL is unset for
+    # the audit, so even a stray core read would default to localhost:8086 — and with the fixture core
+    # installed, core's reads and writes are replaced before any request is served.
+    hosts = sorted({urlparse(r["url"]).netloc for r in NET})
+    loopback_only = bool(hosts) and all(h.startswith("127.0.0.1:") for h in hosts)
+    record("every request stayed on loopback", "all requests to 127.0.0.1:<port>; never demo.redevops.io, "
+           "never a CrowdSec LAPI, never an outbound host",
+           f"{len(NET)} requests to {hosts}", "pass" if loopback_only else "fail", "block")
 
     env = {"base": BASE, "label": LABEL, "viewports": VIEWPORTS, "requests_seen": len(NET),
-           "console_errors": CONSOLE, "bad_status": BAD_STATUS, **notes}
+           "requests": NET, "console_errors": CONSOLE, "bad_status": BAD_STATUS, **notes}
     (OUT / f"{LABEL}-audit.json").write_text(json.dumps({"environment": env, "findings": findings}, indent=2))
     n = lambda v: sum(1 for f in findings if f["verdict"] == v)
     lines = [f"# Edge Sentinel UI audit — {LABEL}", "",
@@ -284,6 +309,13 @@ with sync_playwright() as pw:
         lines.append(f"| {f['verdict']} | {f['severity']} | {f['area']} | "
                      + str(f["observed"]).replace("|", "/").replace("\n", " ")[:190] + " |")
     (OUT / f"{LABEL}-audit.md").write_text("\n".join(lines) + "\n")
+    # An evidence manifest: every artefact this run produced, digested, so a screenshot in a review thread
+    # can be tied back to the run that made it. Screenshots are not committed (they are multi-megabyte);
+    # this is what makes them checkable anyway.
+    manifest = [{"file": p.name, "bytes": p.stat().st_size,
+                 "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
+                for p in sorted(OUT.glob(f"{LABEL}-*")) if p.name != f"{LABEL}-evidence-manifest.json"]
+    (OUT / f"{LABEL}-evidence-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     blockers = [f for f in findings if f["verdict"] == "fail" and f["severity"] in ("block", "high")]
     print(f"\nwrote {OUT / (LABEL + '-audit.md')}")
     print(f"blockers: {len(blockers)}")
