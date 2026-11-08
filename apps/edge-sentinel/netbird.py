@@ -19,6 +19,8 @@ from pathlib import Path
 
 import httpx
 
+from . import fixture_mode     # demo-mode boundary: no external read, and no side effect at all
+
 # Idempotent .env load so the module is self-sufficient when imported standalone (importlib /
 # the Mission Runtime operator) without app.py having run its own loader first — mirrors core.py.
 _ENV_FILE = Path(__file__).resolve().parent / ".env"
@@ -36,6 +38,10 @@ NETBIRD_FRONT_URL = os.environ.get("NETBIRD_FRONT_URL", "https://app.netbird.io"
 
 def _nb_get(path: str):
     """GET the NetBird REST API. Returns parsed JSON, or None if unconfigured/unreachable."""
+    # Demo mode reads nothing outside the process. Returning None is the module's existing "unconfigured"
+    # shape, which the panel already labels SAMPLE DATA — so the refusal is honest and the page still works.
+    if fixture_mode.read_refusal("NetBird peers and policies"):
+        return None
     if not NETBIRD_API_TOKEN:
         return None
     try:
@@ -48,6 +54,11 @@ def _nb_get(path: str):
 
 
 def _nb_post(path: str, body: dict):
+    # The mutating boundary. Audit 2026-11-11 (PR #613 review): with the fixture core installed and
+    # SENTINEL_BLOCK_ENABLED=1 — the most permissive write configuration the app has, and the one a realistic
+    # demo uses — this call reached NETBIRD_API_URL (default https://api.netbird.io/api) and created a real
+    # policy while the page said it was synthetic. Refuse before the bytes leave.
+    fixture_mode.refuse_if_enabled(f"NetBird POST {path}")
     if not NETBIRD_API_TOKEN:
         return None, "NETBIRD_API_TOKEN not set — point NETBIRD_API_URL/TOKEN at a NetBird management API"
     try:

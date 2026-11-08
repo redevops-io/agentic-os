@@ -83,8 +83,11 @@ from . import permissions_ui  # noqa: E402 — live vuln-DB permissions demo
 from . import security as _security  # noqa: E402 — secure defaults: loopback bind, TLS verify, headers (P9)
 from . import fixture_mode  # noqa: E402 — opt-in fixture core for demos and UI acceptance (P4)
 from .core import (  # noqa: E402
-    TENANT, SUBTITLE, crowdsec_connected, fetch_activity, _severity,
+    TENANT, SUBTITLE, fetch_activity, _severity,
 )
+# `crowdsec_connected` is deliberately NOT imported by name: `core.crowdsec_connected()` is called where it
+# matters (see /health), and a bare alias taken at module load would keep pointing at the real LAPI probe
+# after fixture_mode swaps the core — a live reachability check inside a deployment that says it is synthetic.
 
 # Installed before the app object exists, so no request can be served against a half-swapped core. The
 # P9 exposure guard reads its own variables and runs regardless: demo mode is about where data comes
@@ -702,6 +705,11 @@ def _cases_panel(summaries: list[dict]) -> str:
 # direct-HTTP and no external-provider fallback.
 def _llm_blurb(prompt: str) -> str | None:
     """A short reasoning blurb from the GOVERNED in-boundary model, or None (deterministic output stands)."""
+    # Demo mode makes no model call. Returning None is this function's designed degradation — the triage
+    # panel's deterministic text is what the demo is actually demonstrating — and it keeps the demo's claim
+    # that nothing left the process true even on a host where an in-boundary model IS configured.
+    if fixture_mode.read_refusal("model call"):
+        return None
     try:
         from agentic_os.app.llm import governed_text
         from agentic_os.governance.classification import DataClassification
@@ -718,6 +726,13 @@ class _GovernedConsoleModel:
 
     def complete(self, req):
         from types import SimpleNamespace
+        # Same boundary as `_llm_blurb`, and it must be here too: this is a second, independent path to the
+        # model, reached by the console's own turn loop. DemoRefused subclasses RuntimeError, so the console's
+        # existing fallback still catches it if it chooses to; if it propagates, the registered handler answers
+        # 403. Either way the demo makes no model call.
+        _demo_read = fixture_mode.read_refusal("console model call")
+        if _demo_read:
+            raise fixture_mode.DemoRefused(_demo_read)
         from agentic_os.app.llm import governed_text
         from agentic_os.governance.classification import DataClassification
         prompt = "\n\n".join(str(m.get("content", "")) for m in req.messages)
@@ -1047,6 +1062,12 @@ def _t_malware_scan(a: dict) -> dict:
     if path is None:
         return {"text": f"Refused: scan path must be an absolute path under {CLAMAV_SCAN_BASE}.",
                 "data": {"refused": True}}
+    # Demo mode opens no socket. This one matters more than it looks: a scan is the app asking another
+    # container to walk a host filesystem, so a demo that reached a live clamd would have read real files
+    # on the operator's machine while presenting the answer as fixture output.
+    _demo_read = fixture_mode.read_refusal("ClamAV scan")
+    if _demo_read:
+        return {"text": _demo_read, "data": {"refused": "demo_mode", "synthetic": True}}
     try:
         if _clamd("PING") != "PONG":
             return {"text": "ClamAV is not responding.", "data": {}}
@@ -1064,6 +1085,10 @@ _WZ_TOKEN: dict = {"t": None}
 
 def _wazuh_get(path: str) -> dict:
     if not WAZUH_PASS:
+        return {}
+    # Demo mode reads nothing outside the process. `{}` is this helper's existing "not reachable" shape,
+    # which `_t_wazuh_status` already renders as an honest unavailable answer.
+    if fixture_mode.read_refusal("Wazuh agent counts"):
         return {}
     # Certificate verification is ON by default (P9). Wazuh ships a self-signed certificate, so the old
     # unconditional verify=False turned every deployment into a no-verify deployment. An operator with a
@@ -1556,11 +1581,19 @@ def index() -> str:
     if _demo["enabled"]:
         # The label is on the page, not only in a config file: a screenshot of a demo must be
         # self-identifying, because a screenshot is the thing that outlives the conversation about it.
+        # Audit 2026-11-11 (PR #613 review): the sentence used to speak only of CrowdSec, which was true but
+        # narrower than what a reader took from it — NetBird, Portabase, deploy-scan, Wazuh, ClamAV and the
+        # model were not covered. The boundary now reaches all of them, so the sentence says what the code
+        # guarantees instead of one integration's share of it.
         blocks += ("<section class='shell' style='margin-top:var(--sp-4)'><div role='status' class='panel' "
                    "style='border-left:4px solid #b45309;padding:var(--sp-3)'>"
                    f"<strong>{html.escape(_demo['tag'])}</strong> — every alert, decision and figure on this "
-                   "page is synthetic fixture data. No CrowdSec core was read to produce it, and no CrowdSec "
-                   "side effect can be performed from this page.</div></section>")
+                   "page is synthetic fixture data. No CrowdSec core was read to produce it, and no side "
+                   "effect is performed from this page in demo mode: CrowdSec, NetBird, Portabase, "
+                   "deploy-scan, Wazuh, ClamAV and the model are all held back, so nothing here reads or "
+                   "changes a live service. Unset "
+                   f"<code>{html.escape(fixture_mode.DEMO_ENV)}</code> to operate against real "
+                   "integrations.</div></section>")
     try:
         live.sync_cases()
         blocks += ("<section class='shell' style='margin-top:var(--sp-4)'>"
