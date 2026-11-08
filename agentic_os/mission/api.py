@@ -16,6 +16,16 @@ from .simulator import simulate
 from .types import Budget, to_jsonable
 
 
+def _tenancy_enabled() -> bool:
+    """Does this deployment define tenants? A tenant config we cannot read counts as YES: the rule this
+    serves is that a tenant claim needs a principal, and an unreadable config proves nothing safe."""
+    from .control_auth import ConfigError, tenant_tokens  # noqa: PLC0415
+    try:
+        return bool(tenant_tokens())
+    except ConfigError:
+        return True
+
+
 def build_router(runtime: MissionRuntime):
     from fastapi import APIRouter, HTTPException, Request
     from pydantic import BaseModel, Field
@@ -73,6 +83,15 @@ def build_router(runtime: MissionRuntime):
     def create(body: CreateMission, request: Request):
         _deny_approver(request)
         c = caller_of(request)
+        if c is None and _tenancy_enabled():
+            # Defence in depth, not a new behaviour on any mounted router in this repo: build_router
+            # attaches GATE, whose non-GET branch always resolves a caller (503 unconfigured, 401 invalid),
+            # so an unauthenticated POST cannot reach a handler here. A mount that drops the dependency
+            # would otherwise let an anonymous caller pick the tenant of a governed mission — the one thing
+            # tenancy exists to prevent. An isolated single-operator demo (no tenant tokens configured)
+            # is untouched.
+            raise HTTPException(401, "this deployment is tenancy-enabled: a mission must be created by an "
+                                     "authenticated caller, not by a tenant named in the request body")
         tenant = c.tenant if (c is not None and c.tenant is not None) else body.tenant
         req_usd = body.budget_usd
         if req_usd is not None and (not math.isfinite(req_usd) or req_usd < 0):

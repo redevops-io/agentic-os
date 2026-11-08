@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import os
 from dataclasses import asdict
@@ -35,6 +36,45 @@ CONFIG_PATH = os.environ.get("AGENTIC_OS_CONFIG", "config.yaml")
 # ad-hoc per app. Set DEMO_READ_ONLY=1 for the public demo; unset (0) for local/dev.
 DEMO_READ_ONLY = os.environ.get("DEMO_READ_ONLY", "0") == "1"
 COCKPIT_URL = os.environ.get("COCKPIT_URL", "https://demo.redevops.io/cockpit")
+
+# Issue #528, second half: DEMO_READ_ONLY above is opt-IN, and no shipped configuration set it, while
+# deploy/docker-compose.yml runs `uvicorn agentic_os.control_plane:app --host 0.0.0.0`. So the module
+# proxy forwarded anonymous POSTs to module services on every deployment reachable from outside the host.
+# Writes through /m/* are now refused unless the connection ARRIVED over loopback.
+#
+# The input is the ASGI `server` scope. Verified against a real uvicorn (not TestClient): it carries the
+# local address of the ACCEPTED SOCKET, per connection — a 0.0.0.0 bind dialled via loopback reports
+# 127.0.0.1, and a `::` bind dialled via ::1 reports ::1. So the rule is "this TCP peer reached us over
+# the loopback interface", which the caller cannot influence: no Host, X-Forwarded-For or Cloudflare
+# header changes which local address the kernel delivered the connection on.
+#
+# What that deliberately does NOT claim: a reverse proxy terminating ON THIS HOST connects to us over
+# loopback, so its writes are forwarded. The gate is a property of the socket, not of who is upstream —
+# an edge that terminates outside the host (the Cloudflare tunnel container, for instance) arrives on the
+# container's interface address and is refused. If the proxy in front of this port is same-host and does
+# not authenticate callers itself, it is part of the trusted surface, and that belongs in the deployment
+# review rather than in this route. See docs/SECURITY_MODEL.md.
+DEMO_ALLOW_WRITES = os.environ.get("DEMO_ALLOW_WRITES", "0") == "1"
+if DEMO_ALLOW_WRITES:
+    logging.getLogger("agentic_os.control_plane").warning(
+        "DEMO_ALLOW_WRITES=1: /m/<module>/api/* POSTs are forwarded on ANY connection, loopback or not. "
+        "Only set this where a caller-authenticating proxy really is in front of this port.")
+
+
+def _arrived_on_loopback(scope: dict) -> bool:
+    """True only when the socket this request arrived on is loopback.
+
+    Reads the `server` entry of the ASGI scope, which uvicorn fills with the local address of the accepted
+    socket (verified against a real server). Anything that is not a loopback IP — a container interface
+    address such as 172.17.0.4, a LAN address, a bare hostname like TestClient's `testserver`, or a missing
+    scope — answers False. Unknown is treated as exposed, because that is the safe reading of an address we
+    cannot place inside the host.
+    """
+    host = (scope.get("server") or ("", 0))[0] or ""
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _authorize_mutation(x_api_key: str | None, authorization: str | None, *key_envs: str) -> None:
@@ -422,25 +462,41 @@ async def module_api(name: str, path: str, request: Request) -> Response:
     and therefore stays private (never reachable through demo.redevops.io). This is
     the public surface for chat + read-only data. The real client IP is passed
     through (CF-Connecting-IP / X-Forwarded-For) so a module can rate-limit.
+
+    READS are public by product decision (issue #528: the demo dashboards and their read APIs stay
+    anonymous). WRITES are not: a POST is forwarded only when the connection arrived over loopback, or the
+    operator has explicitly declared the port safe with DEMO_ALLOW_WRITES=1. See the note on
+    DEMO_ALLOW_WRITES for what the socket test does and does not cover.
     """
     name = _resolve_module_name(name)
     base = MODULE_SERVICES.get(name)
     if base is None:
         raise HTTPException(404, f"no module {name}")
+    # Shape first: a traversal or escape is a 400 on every bind, so this route answers the same question
+    # to an anonymous caller whether or not writes happen to be open here.
+    path = _safe_proxy_path(path)
     # Read-only demo: the dashboards (GET) stay live, but the app's mutating surface — the
     # /api/agent chat, whose tools make real core calls — is gated off. Governed actions run in
     # the Mission cockpit. (Reads/SSE are GET and pass through.)
-    if DEMO_READ_ONLY and request.method == "POST":
-        return JSONResponse(status_code=403, content={
-            "read_only": True,
-            "message": "This is a read-only demo view. Governed actions run through the Mission cockpit.",
-            "cockpit": COCKPIT_URL,
-        })
+    if request.method == "POST":
+        if DEMO_READ_ONLY:
+            return JSONResponse(status_code=403, content={
+                "read_only": True,
+                "message": "This is a read-only demo view. Governed actions run through the Mission cockpit.",
+                "cockpit": COCKPIT_URL,
+            })
+        if not DEMO_ALLOW_WRITES and not _arrived_on_loopback(request.scope):
+            return JSONResponse(status_code=403, content={
+                "write_refused": True,
+                "message": "Writes through the module proxy are refused on a non-loopback bind: this port is "
+                           "reachable beyond the host and the proxy adds no caller authentication of its own. "
+                           "Call the module's own API through a caller-authenticating proxy, or set "
+                           "DEMO_ALLOW_WRITES=1 on a deployment where that proxy is really in place.",
+            })
     client_ip = (request.headers.get("cf-connecting-ip")
                  or (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
                  or (request.client.host if request.client else ""))
     body = await request.body()
-    path = _safe_proxy_path(path)
     url = f"{base}/api/{path}"
     fwd_headers = {"content-type": request.headers.get("content-type", "application/json"),
                    "x-forwarded-for": client_ip}
