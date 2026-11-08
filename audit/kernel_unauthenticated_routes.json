@@ -12,11 +12,6 @@
       "handler": "resolve"
     },
     {
-      "file": "mission/api.py",
-      "route": "POST ",
-      "handler": "create"
-    },
-    {
       "file": "mission/unified_server.py",
       "route": "POST /api/sidekick",
       "handler": "sidekick"
