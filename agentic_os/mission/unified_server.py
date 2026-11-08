@@ -94,6 +94,17 @@ def _build_app():
     async def sidekick(request: Request):
         """Minimal NL-intent surface: a cross-domain sync intent seeds the governed two-domain Mission."""
         body = await request.json()
+        if not isinstance(body, dict):
+            body = {}
+        # This surface creates the governed DEMO mission under the runtime's own identity: goal, account and
+        # grants come from seed_mission, so an anonymous caller gets a demo mission or nothing. A tenant name
+        # or a grant list in the body used to be ignored silently, which is the kind of quiet tolerance that
+        # turns into a real cross-tenant path the day a handler starts reading the field. Refusing it is the
+        # isolation boundary of the synthetic demo, and it is not authentication: the route still answers
+        # anonymously, exactly as the demo journey expects.
+        if body.get("tenant") or body.get("policy_refs"):
+            raise HTTPException(400, "this surface creates the demo mission with its own identity; a request "
+                                     "cannot name a tenant or choose grants here")
         t = str(body.get("text") or "").lower()
         if any(w in t for w in ("sync", "support", "account", "pilot", "onboard", "revenue")):
             m = seed_mission(_RT)
