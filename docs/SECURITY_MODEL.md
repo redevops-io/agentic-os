@@ -700,3 +700,35 @@ With `AGENTIC_OS_PERMISSIONS=1` every app acts as ONE local user, taken from `pr
 (a store provisioned before profiles existed) the principal is the default local user `local`: the app logs a warning naming the file and the fix, and `local` can do only what grants for `local` allow (none unless
 someone created them). Note: basic permissions authorise the app INSTANCE, not callers: an instance with write grants lets every caller who can reach it write. The quickstart therefore protects against callers who are not the machine's user, not against another process running as that user: anything that can read the permissions directory
 and key already holds the grants.
+
+## The anonymous demo surfaces are bounded without being closed
+
+Two surfaces answer without a credential by design, because that is what makes the guided journey work: the
+unified desktop's `/api/sidekick`, and the intelligence router in demo mode. Bounding them with a credential
+would end the journey, so the bound is placed on **work** instead of on identity. Both bounds are checked
+before anything consequential, and this is the property the tests hold: a refused request creates no mission,
+writes no event, and calls no provider.
+
+`agentic_os/mission/demo_limits.py` holds both:
+
+* **Rate limit** — a token bucket per caller (`UNIFIED_SIDEKICK_REQUESTS_PER_MIN`, `UNIFIED_SIDEKICK_BURST`).
+  Per-caller keying trusts one address only: the socket peer. `X-Forwarded-For` is consulted when, and only
+  when, the operator declares the proxy in `UNIFIED_TRUSTED_PROXY_IPS` **and** the socket really came from it.
+  A spoofed forwarded header therefore buys no fresh budget; behind an *undeclared* same-host proxy every
+  caller shares one bucket, which collapses toward stricter rather than looser.
+* **Resource quota** — how many demo missions the process will create (`UNIFIED_DEMO_MISSION_LIMIT`), checked
+  twice: against missions still parked at the approval gate, and against the process's lifetime total. A demo
+  mission parks until a human resolves it, so the open count is the live resource; the lifetime total is what
+  bounds work when missions terminate quickly and holds nothing open. It recovers with the process, not with
+  the caller, which is deliberate on an anonymous surface.
+
+Defaults are set above what one visit costs (20/min, burst 8) rather than at it: a limit that fires inside a
+legitimate visit is a defect, not a defence. An unparseable or zero value falls back to the default instead of
+meaning "unlimited".
+
+The intelligence router is confined the same way it is opened: `build_router(..., synthetic_demo_tenants=...)`
+declares up front which tenants the open surface may address, and a body naming any other tenant is refused
+before the service is reached. `/api/sidekick` refuses `tenant` and `policy_refs` outright — the route creates
+the demo mission under its own identity, and silently tolerating those fields is the kind of quiet tolerance
+that becomes a cross-tenant path the day a handler starts reading them. Neither is authentication, and neither
+is claimed to be: they bound what an anonymous caller can ask for, not who can ask.

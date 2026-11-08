@@ -26,6 +26,7 @@ from agentic_os.intelligence import IntelligenceService, build_router  # noqa: E
 from agentic_os.intelligence.auth import StaticBearerAuthenticator  # noqa: E402
 from agentic_os.intelligence.families import SupplyGraph, supply_registry, supply_synthesize  # noqa: E402
 from agentic_os.mission import unified_server  # noqa: E402
+from agentic_os.mission.demo_limits import DemoLimits  # noqa: E402
 
 RESOLVE = "/v1/intelligence/supply/shortage_risk"
 DEMO_TENANTS = ("demo-acme", "demo-beta")
@@ -57,6 +58,17 @@ def _client(**kw):
     app = FastAPI()
     app.include_router(build_router(_service(), **kw))
     return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _roomy_demo_budget(monkeypatch):
+    """These tests are about *isolation*: which tenant a body may name, which fields a surface owns. The
+    anonymous surface also carries a rate limit and a mission quota (tests/test_demo_rate_limits.py proves
+    both bind), and its module-level bucket is shared by every test in the process — so a fourth rapid post
+    would answer 429 here and hide the contract under test. Production limits are untouched; this installs a
+    limiter with headroom for the module's handful of requests."""
+    monkeypatch.setattr(unified_server, "_LIMITS", DemoLimits(per_min=1000, burst=1000, mission_limit=1000))
+    monkeypatch.setattr(unified_server, "_MISSIONS", [])
 
 
 # ── intelligence: the open demo, unchanged, and the isolated one ───────────────────────────────────────
