@@ -18,6 +18,7 @@ import tempfile
 from typing import Any, Dict, List
 
 from .control_auth import require_control_token
+from .demo_limits import DemoLimits, RateLimited, caller_key
 from .receipt import mission_receipt
 from .types import MissionState
 from .unified_demo import build_unified_runtime, connections_view, seed_mission
@@ -29,6 +30,20 @@ _RT, _ = build_unified_runtime(_STORE)
 from . import gate_notify as _gate_notify
 _gate_notify.install_from_env(_RT)      # opt-in (AGENTIC_OS_GATE_NOTIFY=1 + a recipient); a no-op otherwise
 _MISSIONS: List[str] = []
+
+# The anonymous demo surfaces are bounded by work, not by identity: a token bucket per caller and a cap on
+# how many demo missions this process will create. See agentic_os/mission/demo_limits.py for why the socket
+# peer keys the bucket and what an operator has to declare for a proxy to change that.
+_LIMITS = DemoLimits()
+
+
+def _open_demo_missions() -> int:
+    """Missions this process is still holding open — created and parked at a human, not yet resolved.
+
+    A demo mission parks at the approval gate and stays there, so this is the resource a quota has to bound;
+    counting every mission ever created would never fall and would eventually refuse a fresh demo.
+    """
+    return sum(1 for mid in _MISSIONS if _RT.repo.pending_human(mid))
 
 # The deployed agents the bridge reaches (same URL map the console uses). Empty in local/demo mode → the
 # bridge simply finds no deployed capabilities; set these to point one Sidekick UI at all deployed apps.
@@ -93,10 +108,36 @@ def _build_app():
     @app.post("/api/sidekick")
     async def sidekick(request: Request):
         """Minimal NL-intent surface: a cross-domain sync intent seeds the governed two-domain Mission."""
+        # First thing, before the body is even read: this route answers anonymously, so per-caller work has
+        # to be bounded by something other than a credential. A refused request stops here — no mission is
+        # created, no event is written, and no provider is called.
+        try:
+            _LIMITS.take(caller_key(request.scope))
+        except RateLimited as e:
+            raise HTTPException(429, str(e), headers={"Retry-After": str(e.retry_after)}) from None
         body = await request.json()
+        if not isinstance(body, dict):
+            body = {}
+        # This surface creates the governed DEMO mission under the runtime's own identity: goal, account and
+        # grants come from seed_mission, so an anonymous caller gets a demo mission or nothing. A tenant name
+        # or a grant list in the body used to be ignored silently, which is the kind of quiet tolerance that
+        # turns into a real cross-tenant path the day a handler starts reading the field. Refusing it is the
+        # isolation boundary of the synthetic demo, and it is not authentication: the route still answers
+        # anonymously, exactly as the demo journey expects.
+        if body.get("tenant") or body.get("policy_refs"):
+            raise HTTPException(400, "this surface creates the demo mission with its own identity; a request "
+                                     "cannot name a tenant or choose grants here")
         t = str(body.get("text") or "").lower()
         if any(w in t for w in ("sync", "support", "account", "pilot", "onboard", "revenue")):
+            # The resource quota, checked before the mission exists rather than after: a demo mission parks
+            # at the approval gate until a human resolves it, so unbounded requests would accumulate parked
+            # missions and their event history in this process.
+            try:
+                _LIMITS.check_mission_quota(_open_demo_missions())
+            except RateLimited as e:
+                raise HTTPException(429, str(e), headers={"Retry-After": str(e.retry_after)}) from None
             m = seed_mission(_RT)
+            _LIMITS.mission_created()
             _MISSIONS.append(m.id)
             state = _RT.repo.state(m.id)
             return {"reply": "Started a governed Mission: read the CRM account, then sync it into Support. "

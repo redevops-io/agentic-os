@@ -35,13 +35,32 @@ def _result_dict(res: IntelligenceResult) -> dict:
     return {**res.canonical_form(), "request_id": res.fingerprint()}
 
 
-def build_router(service: IntelligenceService, *, authenticator: Optional[IntelligenceAuthenticator] = None):
+def build_router(service: IntelligenceService, *, authenticator: Optional[IntelligenceAuthenticator] = None,
+                 synthetic_demo_tenants: "tuple[str, ...] | list[str]" = ()):
+    """Build the intelligence router.
+
+    Three postures, deliberately distinct rather than a single on/off switch:
+
+    * ``authenticator=...``                              — authenticated; the principal's tenant is authoritative.
+    * ``synthetic_demo_tenants=("demo-acme", ...)``       — the ISOLATED synthetic demo: no credential is asked
+      for, but a caller can only ever address a tenant that was declared up front, so the open surface cannot
+      be pointed at a real customer's data by naming it in the body.
+    * neither                                            — today's unauthenticated demo, where the body's
+      ``tenant`` is used as sent. Kept as-is so no existing demo or test changes; it is what the 2026-11-08
+      audit flagged, and it is logged as such on every build.
+    """
     from fastapi import APIRouter, Depends, HTTPException, Header, Request
     from pydantic import BaseModel
 
-    if authenticator is None:
+    allowed_demo = tuple(str(t).strip() for t in synthetic_demo_tenants if str(t).strip())
+    if authenticator is None and not allowed_demo:
         log.warning("intelligence router built WITHOUT an authenticator: unauthenticated demo mode, the request "
-                    "body's tenant is used as sent. Pass authenticator=... before serving real data.")
+                    "body's tenant is used as sent. Pass authenticator=... before serving real data, or "
+                    "synthetic_demo_tenants=(...) to keep the open surface confined to synthetic tenants.")
+    elif authenticator is None:
+        log.warning("intelligence router built in ISOLATED synthetic-demo mode: only %s are addressable, and any "
+                    "other tenant named in a request body is refused.", ", ".join(allowed_demo))
+
 
     def _who(request: Request, authorization: Optional[str] = Header(default=None)) -> None:
         principal = authenticator.authenticate(authorization)
@@ -55,9 +74,16 @@ def build_router(service: IntelligenceService, *, authenticator: Optional[Intell
                        dependencies=[Depends(_who)] if authenticator is not None else [])
 
     def _tenant(request: Request, claimed: str) -> str:
-        """The tenant of a call: the body's value in demo mode; the principal's when authenticated."""
+        """The tenant of a call: the principal's when authenticated; in the isolated demo only a declared
+        synthetic tenant; in the plain demo (kept for compatibility) the body's value as sent."""
         if authenticator is None:
-            return claimed
+            if not allowed_demo:
+                return claimed
+            want = (claimed or allowed_demo[0]).strip()
+            if want not in allowed_demo:
+                raise HTTPException(403, "this demo is isolated to synthetic tenants; the tenant named in the "
+                                         "request is not one of them")
+            return want
         principal = getattr(request.state, "intelligence_principal", None)
         if principal is None:
             raise HTTPException(401, "unauthorized", headers={"WWW-Authenticate": "Bearer"})
