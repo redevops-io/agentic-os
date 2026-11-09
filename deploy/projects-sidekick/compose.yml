@@ -24,6 +24,14 @@ services:
       # ── Optional: external-agent endpoints + channel credentials, as needed ──
       - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
       - WHATSAPP_ACCESS_TOKEN=${WHATSAPP_ACCESS_TOKEN:-}
+      # What fronts this service (docs/SECURITY_MODEL.md, "Route-policy enforcement does not wait for the
+      # profile"). The port is published, so the bind inside the container has to be routable and every peer
+      # address is enforced; `AGENTIC_OS_BEHIND_PROXY=0` states that as shipped nothing forwards to it.
+      # Front it with a reverse proxy and set FORWARDED_ALLOW_IPS=<proxy address> instead — leaving the front
+      # unstated enforces too, so the only way to get the advisory (development) posture is to claim the
+      # service is reachable from this machine only, which a published port does not support.
+      - AGENTIC_OS_BIND_HOST=${AGENTIC_OS_BIND_HOST:-0.0.0.0}
+      - AGENTIC_OS_BEHIND_PROXY=${AGENTIC_OS_BEHIND_PROXY:-0}
     extra_hosts:
       - "host.docker.internal:host-gateway"   # lets the container reach a model on the host (ollama/llama.cpp)
     restart: unless-stopped

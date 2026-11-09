@@ -31,6 +31,7 @@ from __future__ import annotations
 import base64
 import contextvars
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -38,6 +39,7 @@ from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
 from typing import Any
 
+from agentic_os.app_kit.reachability import arrived_on_loopback
 from agentic_os.mission.approval import strip_approval_keys
 from agentic_os.mission.execution_auth import strip_exec_auth_keys, verify_execution_authorization
 from agentic_os.mission.profile import is_production
@@ -49,6 +51,145 @@ WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 HEADER_EXEC = "x-execution-authorization"
 HEADER_SERVICE = "x-service-token"
 MAX_BODY = 1_000_000
+
+# Whether a policy is acted on used to be decided solely by the execution profile, and the shipped deployment
+# files leave that profile unset: the default `docker compose up` computed every policy and honoured none of
+# them. The posture below is decided per request from facts the process can actually observe, and it fails
+# closed: enforcement is what a deployment gets without asking, and the only way to get the advisory posture
+# is to state something true about the deployment.
+#
+#   enforce  — the decision is returned to the client (401/403) instead of logged and allowed through.
+#   advisory — the decision is computed and recorded, and the request proceeds (declared-local development).
+#
+# A request is enforced unless one of these is positively true:
+#   * the request was produced by an in-process harness (no network peer exists at all), or
+#   * the peer is loopback AND the deployment declared that nothing forwards to it
+#     (`AGENTIC_OS_BEHIND_PROXY=0`).
+# Unknown provenance enforces. In particular a loopback peer with no declaration enforces, because a reverse
+# proxy terminating on the same host connects over 127.0.0.1 and is indistinguishable at the socket — see
+# agentic_os/app_kit/reachability.py and tests/test_route_authz_real_topology.py, which demonstrate both the
+# ambiguity and its closure.
+# `AGENTIC_OS_ROUTE_AUTHZ_ENFORCE` overrides the computation: `profile` restores the pre-audit behaviour
+# (enforce iff production), `always` enforces everywhere, and the unset default is `auto`.
+ENV_ENFORCE = "AGENTIC_OS_ROUTE_AUTHZ_ENFORCE"
+# Uvicorn's own "I sit behind a proxy on these addresses" switch. Its presence is the operator telling us
+# that loopback peers may be forwarding other people's requests, so loopback stops being proof of locality.
+ENV_FORWARDED_ALLOW_IPS = "FORWARDED_ALLOW_IPS"
+# The deployment's statement about what fronts it: `0`/`false`/`no` says nothing forwards to this process
+# (loopback really is a local client); `1`/`true`/`yes` says something does. Any other value, including the
+# unset default, is UNKNOWN and enforces — the absence of a statement is not evidence of locality.
+ENV_BEHIND_PROXY = "AGENTIC_OS_BEHIND_PROXY"
+
+
+def front_declaration() -> str:
+    """`proxied`, `direct`, or `unknown` — what the deployment has stated about its front.
+
+    `unknown` is the default and is treated as exposed. A deployment that wants the advisory posture has to
+    say `AGENTIC_OS_BEHIND_PROXY=0`, which is a claim about its own topology rather than a default.
+    """
+    if os.environ.get(ENV_FORWARDED_ALLOW_IPS, "").strip():
+        return "proxied"                  # uvicorn is parsing forwarded headers: loopback peers may relay
+    value = os.environ.get(ENV_BEHIND_PROXY, "").strip().lower()
+    if value in ("1", "true", "yes"):
+        return "proxied"
+    if value in ("0", "false", "no"):
+        return "direct"
+    return "unknown"
+
+
+def _bind_is_published() -> bool:
+    """The bind host this process was told to use. `0.0.0.0`/`::`/a named address means other machines can
+    reach it; only an explicit loopback bind counts as unpublished."""
+    host = (os.environ.get("AGENTIC_OS_BIND_HOST", "") or os.environ.get("HOST", "")).strip().lower()
+    if not host or host in ("localhost", "127.0.0.1", "::1"):
+        return False
+    try:
+        return not ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return True                       # a name we cannot place counts as published
+
+
+def _peer(scope: dict):
+    """The address the socket arrived on, as an IP object, or None when the entry is not an address.
+
+    The ASGI `server` entry is written by the server implementation, never by the caller, so a remote client
+    cannot forge it. It is not, however, always an address: uvicorn over a Unix socket reports the socket
+    *path* there (`server=("/run/app.sock", 0)`) and reports **no client at all** (`client=None`). An
+    unplaceable `server` therefore means "this process cannot tell where the request came from", which is
+    not the same statement as "no request came from anywhere" — see `_in_process_harness` for that call.
+    """
+    host = ((scope or {}).get("server") or ("", 0))[0] or ""
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        return None
+
+
+def _in_process_harness(scope: dict) -> bool:
+    """True only for a request no socket carried — an in-process call, which is the one case that gets the
+    advisory posture without a peer address.
+
+    Two shapes reach `_peer` as None and they must not be conflated:
+
+    * a real socket this process cannot place, because the transport put the **socket path** in `server`:
+      uvicorn on a Unix domain socket reports `server=("/run/app.sock", 0)` and `client=None`. nginx-fronting
+      uvicorn-`--uds` is a common hardened topology and looks exactly like this from the inside;
+    * a request with no accepted socket: no `server` entry at all, or a non-address **label** such as the
+      `testserver` a test transport writes.
+
+    A path is not a hostname: a value containing a path separator can only name a socket, so the first case
+    is unknown provenance and enforces. Treating it as a harness would leave every policy advisory on a
+    deployment that is in practice behind a front — a fail-open resting on the assumption that only tests
+    hide the peer. A bare label stays advisory: every harness in this repository produces one, and no
+    network client can forge `server` at all.
+
+    Residual and stated rather than hidden: the ASGI spec makes `server` optional, so a server that omits it
+    on a routable socket would read as in-process. uvicorn sets it — verified over both TCP and a Unix socket
+    in tests/test_route_authz_real_topology.py; other fronts are unverified here, so a deployment on anything
+    other than uvicorn should set `AGENTIC_OS_ROUTE_AUTHZ_ENFORCE=always` until it has checked.
+    """
+    scope = scope or {}
+    server = scope.get("server")
+    if not server:
+        return True                                        # no accepted socket: built in process
+    name = str(server[0] or "")
+    return "/" not in name                                 # a label is a harness; a path is a socket
+
+
+def enforces(scope: dict) -> bool:
+    """True when a policy decision on THIS request must be acted on rather than recorded.
+
+    Enforcement is the default. Advisory behaviour is available in exactly two situations — an in-process
+    request with no network peer, or a loopback peer in a deployment that declared itself directly reachable —
+    and nothing else buys it: an address the process cannot place, a declared proxy, an unknown front, or a
+    published bind host all mean the declared policies are enforced.
+    """
+    if is_production():
+        return True
+    mode = os.environ.get(ENV_ENFORCE, "").strip().lower() or "auto"
+    if mode == "profile":
+        return False                      # production already returned above: pre-audit behaviour
+    if mode == "always":
+        return True
+    if mode == "exposure":                # the interim posture, kept for operators who set it
+        return not arrived_on_loopback(scope)
+    if mode != "auto":
+        return True                       # an unrecognised posture is not a licence to stop enforcing
+    if _bind_is_published():
+        return True                       # the operator told us other machines can reach this process
+    peer = _peer(scope)
+    if peer is None:
+        # An unplaceable peer is not the same as no peer. Only a request that no socket carried — an
+        # in-process call — stays advisory; a socket that reports neither an address we can place nor any
+        # client identity is unknown provenance, and unknown provenance enforces.
+        return not _in_process_harness(scope)
+    if peer.is_loopback:
+        return front_declaration() != "direct"    # loopback + undeclared provenance enforces
+    return True                           # a routable peer (container network, LAN, internet)
+
+
+
+
 
 _marker: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar("route_authz_marker", default=None)
 
@@ -262,7 +403,7 @@ class RouteAuthzMiddleware:
             # A write request that matches no declared policy: either a real route nobody classified, or a path that
             # does not exist. Production refuses both (fail closed); the CI registry test catches the first.
             label = f"{'WS' if scope['type'] == 'websocket' else scope['method']} {scope['path']}"
-            if is_production():
+            if enforces(scope):
                 return await self._refuse(scope, send, 403, f"{label} has no authorization policy")
             if label not in self._warned:
                 self._warned.add(label)
@@ -278,7 +419,7 @@ class RouteAuthzMiddleware:
                            replay_guard=self.replay_guard)
         allowed, status, reason, marker = decide(policy, ctx, body, app_name=self.app_name)
         scope.setdefault("state", {})["authz"] = ctx
-        if not allowed and is_production():
+        if not allowed and enforces(scope):
             return await self._refuse(scope, send, status, reason)
         token = _marker.set(marker)
         try:

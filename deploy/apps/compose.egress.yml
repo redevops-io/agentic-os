@@ -52,6 +52,12 @@ services:
     entrypoint: ["python", "/usr/local/bin/egress-forward"]
     command: ["--listen", "0.0.0.0:3000", "--to", "twenty:3000"]
     ports: ["${TWENTY_PORT:-3010}:3000"]
+    # Stated front (docs/SECURITY_MODEL.md). This is a TCP relay, not an ASGI app: it hosts no route policies
+    # of its own, and the declaration records its topology — it binds 0.0.0.0, publishes one port, and
+    # nothing forwards to it. What it relays to (Twenty) is where route policy would apply.
+    environment:
+      - AGENTIC_OS_BIND_HOST=0.0.0.0
+      - AGENTIC_OS_BEHIND_PROXY=0
     networks: [apps, edge]
     depends_on: [twenty]
     read_only: true
@@ -63,6 +69,10 @@ services:
     entrypoint: ["python", "/usr/local/bin/egress-forward"]
     command: ["--listen", "0.0.0.0:3000", "--to", "metabase:3000"]
     ports: ["${METABASE_PORT:-3001}:3000"]
+    # Stated front (docs/SECURITY_MODEL.md). TCP relay, not an ASGI app: no route policies of its own.
+    environment:
+      - AGENTIC_OS_BIND_HOST=0.0.0.0
+      - AGENTIC_OS_BEHIND_PROXY=0
     networks: [apps, edge]
     depends_on: [metabase]
     read_only: true
@@ -74,6 +84,10 @@ services:
     entrypoint: ["python", "/usr/local/bin/egress-forward"]
     command: ["--listen", "0.0.0.0:5000", "--to", "postiz:5000"]
     ports: ["${POSTIZ_PORT:-4200}:5000"]
+    # Stated front (docs/SECURITY_MODEL.md). TCP relay, not an ASGI app: no route policies of its own.
+    environment:
+      - AGENTIC_OS_BIND_HOST=0.0.0.0
+      - AGENTIC_OS_BEHIND_PROXY=0
     networks: [apps, edge]
     depends_on: [postiz]
     read_only: true

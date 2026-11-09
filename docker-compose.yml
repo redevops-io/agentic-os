@@ -7,6 +7,14 @@ services:
     environment:
       - AGENTIC_OS_CONFIG=/app/config.yaml
       - AGENTIC_OS_HOME=/data
+      # What fronts this service, stated rather than assumed (docs/SECURITY_MODEL.md, "Route-policy
+      # enforcement does not wait for the profile"). The uvicorn command below binds 0.0.0.0 and the port is
+      # published, so other machines can reach it and every peer address — loopback included — is enforced.
+      # `AGENTIC_OS_BEHIND_PROXY=0` records that nothing forwards to this container as shipped; put a reverse
+      # proxy in front of it and set FORWARDED_ALLOW_IPS=<proxy address> instead, so forwarded requests are
+      # read as forwarded and not as machine-local.
+      - AGENTIC_OS_BIND_HOST=0.0.0.0
+      - AGENTIC_OS_BEHIND_PROXY=0
       # The fleet routes (dispatch, up/down, approvals, jobs, fleet, status) answer 503 until one of these is set (both empty by default).
       - AGENTIC_OS_CONTROL_TOKEN=${AGENTIC_OS_CONTROL_TOKEN:-}
       - AGENTIC_OS_API_KEY=${AGENTIC_OS_API_KEY:-}

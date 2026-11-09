@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 import logging
 import os
 from dataclasses import asdict
@@ -23,6 +22,7 @@ from .permissions_http import (create_kwargs as _perm_create_kwargs, json_object
 from pydantic import BaseModel
 
 from . import channels, views
+from .app_kit.reachability import arrived_on_loopback
 from .context import Context
 from .fleet import Fleet
 from .registry import Module, Registry
@@ -64,17 +64,11 @@ if DEMO_ALLOW_WRITES:
 def _arrived_on_loopback(scope: dict) -> bool:
     """True only when the socket this request arrived on is loopback.
 
-    Reads the `server` entry of the ASGI scope, which uvicorn fills with the local address of the accepted
-    socket (verified against a real server). Anything that is not a loopback IP — a container interface
-    address such as 172.17.0.4, a LAN address, a bare hostname like TestClient's `testserver`, or a missing
-    scope — answers False. Unknown is treated as exposed, because that is the safe reading of an address we
-    cannot place inside the host.
+    The implementation lives in agentic_os.app_kit.reachability, which the module proxy and the app write-route
+    guard now share; this name is kept because the module proxy's callers and tests refer to it here. See that
+    module for what the socket answer does and does not prove about who is upstream.
     """
-    host = (scope.get("server") or ("", 0))[0] or ""
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
+    return arrived_on_loopback(scope)
 
 
 def _authorize_mutation(x_api_key: str | None, authorization: str | None, *key_envs: str) -> None:
