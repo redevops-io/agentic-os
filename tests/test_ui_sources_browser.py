@@ -31,6 +31,7 @@ SHOTS = os.environ.get("RDO_UISRC_SHOTS", "")
 RESULT = os.environ.get("RDO_UISRC_RESULT", "")
 AXE_PATH = os.environ.get("RDO_AXE_PATH", "")
 MEASURED: dict = {}
+BASELINE_SEEN: list = []                       # the allowed moderate best-practice findings axe reported (recorded, never hidden)
 AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa", "best-practice"]
 WCAG_TAGS = {"wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"}
 # moderate best-practice rules every view of this UI already has (tests/test_ui_a11y_browser.py BASELINE_MODERATE): allowed, nothing else
@@ -936,6 +937,7 @@ def axe_run(page, axe_source, tags=AXE_TAGS, exclude=None):
 def judge(violations):
     """WCAG A/AA violations must be none; moderate best-practice rules the whole UI already carries (BASELINE_MODERATE) are allowed, nothing else."""
     bad = [v for v in violations if v["id"] not in BASELINE_MODERATE]
+    BASELINE_SEEN.extend({"id": v["id"], "impact": v["impact"], "count": v["count"]} for v in violations if v["id"] in BASELINE_MODERATE)
     return bad
 
 
@@ -992,7 +994,8 @@ def test_f_axe_finds_nothing_on_the_sources_view_and_the_sidekick_in_every_new_s
         page.wait_for_timeout(300)
         results["sidekick-panel"] = judge(axe_run(page, axe_source, exclude=EXCLUDE[scheme]))
         shot(page, f"f-{scheme}-{width}-sidekick-panel")
-        MEASURED.setdefault("axe", {})[f"{scheme}-{width}"] = results
+        MEASURED.setdefault("axe", {})[f"{scheme}-{width}"] = {k: len(v) for k, v in results.items()}
+        MEASURED["axe_baseline_moderate_seen"] = sorted({(b["id"], b["impact"]) for b in BASELINE_SEEN})
         for state, bad in results.items():
             assert bad == [], (scheme, width, state, bad)
     finally:
