@@ -41,3 +41,17 @@ PROJECTS_ROUTE_POLICIES = {
     f"POST {PREFIX}/today/{{item_id}}/dismiss": P("projects.today_dismiss", "authority_required"),
     f"POST {PREFIX}/today/{{item_id}}/simulate-outcome": P("projects.today_simulate_outcome", "human_only", rationale="a demo-only simulation of an outcome; never an agent's call"),
 }
+
+#: The two POST routes the Governed Agent Gateway adds when ``AGENT_GATEWAY_TOKEN`` is set (see ``mount_agent_gateway``). They are in a
+#: separate table because the routes exist only then: the Projects API merges this table into its policies exactly when the gateway is
+#: mounted, so a policy never outlives its route. Both are `read_only` for the route layer on purpose: the gateway authenticates every call
+#: itself (a static bearer compared in constant time; a missing or wrong bearer is a 401 from the gateway) and wires READ capabilities only,
+#: so the route layer has no state change to authorise. Writes, mission delegation and the sandbox are not exposed on this surface.
+AGENT_GATEWAY_ROUTE_POLICIES = {
+    "POST /api/agent-gateway/capabilities/{name}/invoke": P(
+        "projects.agent_gateway_invoke", "read_only",
+        rationale="invokes a READ capability of the governed agent gateway; the gateway authenticates the call with its own bearer, applies its permission check and egress policy, and audits it. No write capability is registered on this surface"),
+    "POST /api/agent-gateway/mcp": P(
+        "projects.agent_gateway_mcp", "read_only",
+        rationale="the gateway's MCP endpoint: every method goes through the same bearer check, permission check, egress policy and audit as the REST route, and only read capabilities are registered"),
+}

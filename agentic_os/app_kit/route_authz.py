@@ -356,6 +356,9 @@ def install(app, app_name: str, policies: dict, *, replay_guard=None) -> None:
             for k, v in policies.items()}
     app.add_middleware(RouteAuthzMiddleware, owner=app, app_name=app_name, policies=norm,
                        replay_guard=replay_guard or default_replay_guard())
+    # added after, so it runs BEFORE authorization: a hostile body is refused (400) before anything parses it (rc2, G5)
+    from agentic_os.app_kit.json_depth import JsonDepthMiddleware
+    app.add_middleware(JsonDepthMiddleware)
     app.state.route_policies = norm
 
 

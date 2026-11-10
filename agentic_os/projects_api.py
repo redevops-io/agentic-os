@@ -2116,7 +2116,7 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     # governed slice of this deployment over MCP + REST. Opt-in: mounted only when
     # AGENT_GATEWAY_TOKEN is set. Every call runs the one governed path (permissions → egress →
     # audit); writes/mission-delegation are NOT exposed here (read-only surface).
-    mount_agent_gateway(app, prov)
+    gateway_mounted = mount_agent_gateway(app, prov)
 
     # Serve the bundled Projects UI at the SAME origin as the API (no CORS) — mounted LAST so
     # the /api routes above always win. The UI is built with VITE_PROJECTS_API="/", so it calls
@@ -2139,8 +2139,8 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     # F22: the same enforcement layer the apps use. In the production profile a write route with no policy, or without an authenticated
     # context, is refused before the handler runs; elsewhere nothing is blocked (the demo keeps working).
     from agentic_os.app_kit import route_authz as _route_authz
-    from agentic_os.projects_route_policy import APP as _APP, PROJECTS_ROUTE_POLICIES
-    _route_authz.install(app, _APP, PROJECTS_ROUTE_POLICIES)
+    from agentic_os.projects_route_policy import AGENT_GATEWAY_ROUTE_POLICIES, APP as _APP, PROJECTS_ROUTE_POLICIES
+    _route_authz.install(app, _APP, {**PROJECTS_ROUTE_POLICIES, **(AGENT_GATEWAY_ROUTE_POLICIES if gateway_mounted else {})})
 
     # The local capability gate is installed LAST so it is the OUTERMOST middleware (Starlette runs the last-added first):
     # an unauthenticated desktop caller is refused before route authorization runs. With a base path, mounted_app gates
