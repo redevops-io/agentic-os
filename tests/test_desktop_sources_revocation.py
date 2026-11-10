@@ -486,6 +486,17 @@ def test_an_old_handle_is_dead_after_remove_even_when_the_same_folder_is_registe
     w.authority.lease(again.session, PROJECT, again.source_id).check()
 
 
+def test_a_lease_is_bound_to_the_epoch_it_was_taken_in(w):
+    d = w.folder()
+    w.pick(d)
+    reg = regs(w)[0]
+    lease = w.authority.lease(reg.session, PROJECT, reg.source_id)
+    lease.check()
+    reg.generation += 1                                                    # the registration moved to a later epoch (what a re-registration does to a NEW object)
+    with pytest.raises(ds.SourceRevoked):
+        lease.check()
+
+
 def test_a_lease_from_another_session_is_refused(w):
     d = w.folder()
     w.pick(d)
