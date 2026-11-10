@@ -93,3 +93,21 @@ Copy the secrets file (or the Vault path) to an encrypted location; do not commi
 ## Mission input values and the ledger
 
 `MissionCreated` records a launcher-selected mission's input KEYS and an `inputs_sha256` digest, never the values (inputs may hold customer data, and the ledger is append-only). `MissionRuntime.rehydrate(mission_id, inputs=...)` must be re-supplied the values and verifies them against the digest (mismatch raises `ReplayError`); without them the selected node fails with `inputs_unavailable` rather than running with partial scope. Setting `AGENTIC_OS_RECORD_MISSION_INPUT_VALUES=1` records the values in the immutable ledger instead (replay becomes self-contained, but the values can no longer be erased and appear in anything that projects the ledger); enable it only for non-personal inputs.
+
+## Secret references and the tenant
+
+A secret reference (`backend:namespace/path`, for example `file:llm/provider`; `env:NAME` has no namespace) names where a secret lives, and
+`agentic_os.secrets.resolve.read_secret` reads it through the credential broker on every use. runtime-contracts v0.3.15 and later refuse a
+credential request unless the request tenant equals the tenant of the authority's principal **and** the reference's namespace equals that tenant
+(`TENANT_MISMATCH`), the authority has not expired (`AUTHORITY_EXPIRED`) and the request names the authority (`AUTHORITY_MISMATCH`).
+
+`read_secret` takes its tenant from one of three places, in this order:
+
+1. the `tenant` argument, used as given (a caller that acts for a tenant passes the tenant of its authenticated principal); an empty or malformed tenant is refused;
+2. `REDEVOPS_LOCAL_TENANT`, when the deployment sets it: every reference must then live in that namespace (`env:` references are read as that tenant);
+3. otherwise the single-user rule: the local user is the only tenant and a reference's namespace is that user's tenant, so `file:llm/provider` is read as tenant `llm` and `env:NAME` as `default`.
+
+The single-user rule separates nothing between the namespaces of one user's store; it reads any reference the local user configured. A deployment that
+wants the namespaces kept apart sets `REDEVOPS_LOCAL_TENANT` or passes `tenant`. A refusal returns no value and logs the reason code and the reference
+(never the secret); the LLM key then degrades to the local-server sentinel `EMPTY`.
+Tests: `tests/test_read_secret_tenant.py`, `tests/test_credential_gate_shipped_paths.py`.
