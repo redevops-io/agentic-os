@@ -9,13 +9,20 @@ route-authorization layer, so the authorization layer never parses a hostile bod
 """
 from __future__ import annotations
 
+import re
+
 MAX_JSON_DEPTH = 64
 
 _BODY_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
+_OUTSIDE = re.compile(rb'[\[\]{}"]')     # the only bytes that matter outside a string
+_INSIDE = re.compile(rb'["\\]')           # the only bytes that matter inside one: the closing quote and a backslash
+
+
 class JsonDepthScanner:
-    """Incremental scanner: feed it chunks, it reports whether the depth limit was passed."""
+    """Incremental scanner: feed it chunks, it reports whether the depth limit was passed. It jumps from one significant byte to the next with
+    a compiled regular expression, so the cost is proportional to the number of brackets and quotes, not to the size of the strings."""
 
     __slots__ = ("max_depth", "depth", "in_string", "escaped")
 
@@ -24,31 +31,37 @@ class JsonDepthScanner:
 
     def feed(self, chunk: bytes) -> bool:
         """True when the nesting depth is now greater than ``max_depth``."""
-        if not chunk:
-            return False
-        if not self.in_string and self.depth + chunk.count(b"[") + chunk.count(b"{") <= self.max_depth:
-            # cannot exceed the limit even if every opener were nested: only the string state needs tracking, and only if a quote is present
-            if b'"' not in chunk:
-                self.depth = max(0, self.depth + chunk.count(b"[") + chunk.count(b"{") - chunk.count(b"]") - chunk.count(b"}"))
-                return False
+        n = len(chunk)
+        pos = 0
         depth, in_string, escaped, limit = self.depth, self.in_string, self.escaped, self.max_depth
-        for b in chunk:
+        while pos < n:
             if in_string:
-                if escaped:
+                if escaped:                       # the byte after a backslash is part of the string, whatever it is
                     escaped = False
-                elif b == 0x5C:        # backslash
-                    escaped = True
-                elif b == 0x22:        # closing quote
+                    pos += 1
+                    continue
+                m = _INSIDE.search(chunk, pos)
+                if m is None:
+                    break
+                pos = m.end()
+                if chunk[m.start()] == 0x22:
                     in_string = False
-            elif b == 0x22:
-                in_string = True
-            elif b == 0x5B or b == 0x7B:
-                depth += 1
-                if depth > limit:
-                    self.depth, self.in_string, self.escaped = depth, in_string, escaped
-                    return True
-            elif b == 0x5D or b == 0x7D:
-                if depth:
+                else:
+                    escaped = True
+            else:
+                m = _OUTSIDE.search(chunk, pos)
+                if m is None:
+                    break
+                pos = m.end()
+                b = chunk[m.start()]
+                if b == 0x22:
+                    in_string = True
+                elif b == 0x5B or b == 0x7B:
+                    depth += 1
+                    if depth > limit:
+                        self.depth, self.in_string, self.escaped = depth, in_string, escaped
+                        return True
+                elif depth:
                     depth -= 1
         self.depth, self.in_string, self.escaped = depth, in_string, escaped
         return False
