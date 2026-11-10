@@ -75,6 +75,9 @@ def _fd_identity(fd: int):
     return (st.st_dev, st.st_ino, st.st_mode, st.st_rdev)
 
 
+_FD_ALREADY_REPORTED: set = set()          # a descriptor whose loss has been reported is not watched again: later tests may legitimately reuse its number
+
+
 @pytest.fixture(autouse=True)
 def _fd_integrity_guard(request):
     watched = [2]
@@ -85,11 +88,13 @@ def _fd_integrity_guard(request):
             watched.append(saved)
     except ImportError:                                                         # a pytest without that plugin layout: fd 2 only
         pass
+    watched = [fd for fd in watched if fd not in _FD_ALREADY_REPORTED]
     before = {fd: _fd_identity(fd) for fd in watched}
     yield
     after = {fd: _fd_identity(fd) for fd in watched}
     changed = {fd: (before[fd], after[fd]) for fd in watched if after[fd] != before[fd]}
     if changed:
+        _FD_ALREADY_REPORTED.update(changed)
         pytest.fail("this test closed or replaced a file descriptor it does not own: " + "; ".join(
             f"fd {fd}{' (stderr)' if fd == 2 else ' (the copy of stderr that pytest saved for faulthandler)'}: {b} -> {a}" for fd, (b, a) in changed.items())
             + ". Use descriptors you created yourself (os.dup, fcntl F_DUPFD) or do it in a child process; see tests/test_fd_guard.py", pytrace=False)

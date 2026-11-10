@@ -41,6 +41,14 @@ def test_clean_after_the_clobbering_test():
     pass
 '''
 
+# the same, followed by a test that leaves a file open: it gets the freed number, so the number's identity differs again at the end of THAT test
+SAMPLE_REUSE = SAMPLE.rstrip().rsplit("def test_clean_after", 1)[0] + '''_LEAKED = []
+
+
+def test_reuses_the_freed_number_and_keeps_it_open():
+    _LEAKED.append(os.open(os.devnull, os.O_RDONLY))      # the lowest free descriptor: the number the previous test freed
+'''
+
 
 def _session(tmp: Path, sample: str, *args: str):
     (tmp / "conftest.py").write_text((ROOT / "tests" / "conftest.py").read_text())
@@ -60,6 +68,15 @@ def test_a_test_that_closes_the_saved_descriptor_fails_at_its_own_teardown(tmp_p
     assert "3 passed, 1 error" in out, out
     # the guard does not hide anything: pytest's own unconfigure still reports the lost descriptor
     assert "Bad file descriptor" in out, out
+
+
+def test_only_the_first_test_to_lose_the_descriptor_is_blamed_not_the_ones_that_reuse_its_number(tmp_path):
+    r = _session(tmp_path, SAMPLE_REUSE)
+    out = r.stdout + r.stderr
+    assert r.returncode != 0, out
+    assert "ERROR at teardown of test_clobbers_the_descriptor_pytest_saved" in out, out
+    assert "test_reuses_the_freed_number_and_keeps_it_open" not in out.split("short test summary info")[-1], out
+    assert "3 passed, 1 error" in out, out
 
 
 def test_a_session_whose_tests_keep_their_hands_off_the_saved_descriptor_is_clean(tmp_path):
