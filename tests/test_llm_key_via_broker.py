@@ -213,3 +213,48 @@ def test_rotate_without_a_stored_reference_is_refused(cfg):
     from agentic_os.app.llm_admin import ProviderChangeRefused, rotate_key
     with pytest.raises(ProviderChangeRefused):
         rotate_key(str(cfg), new_key="x")
+
+
+# ── an unreadable key reference sends nothing (independent review RS-05) ────────────────────────────────────────
+
+def test_no_key_configured_still_means_a_keyless_local_server(cfg, a, monkeypatch):
+    """No key reference: OPENAI_API_KEY, else the placeholder "EMPTY" for a keyless local server. This is the case that must not change."""
+    save_llm_settings(str(cfg), base_url=a.url, model="m", key_ref="")
+    assert llm_api_key(load_llm_settings()) == "EMPTY"
+    assert governed_text("hi") == "hello from A" and a.seen[-1]["auth"] == "Bearer EMPTY"
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-key")
+    assert llm_api_key(load_llm_settings()) == "ambient-key"
+
+
+@pytest.mark.parametrize("why", ["absent", "tenant-mismatch"])
+def test_an_unreadable_key_reference_sends_no_request_and_says_why(cfg, a, monkeypatch, caplog, why):
+    import logging
+    store_secret("file:llm/provider", "the-real-key")
+    ref = "file:llm/provider" if why == "tenant-mismatch" else "file:llm/missing"
+    if why == "tenant-mismatch":
+        monkeypatch.setenv("REDEVOPS_LOCAL_TENANT", "globex")          # the deployment's tenant is not the key's namespace
+    save_llm_settings(str(cfg), base_url=a.url, model="m", key_ref=ref)
+    caplog.set_level(logging.INFO)
+    assert governed_text("hi") is None                                 # degrades, as for any transport failure
+    assert a.seen == []                                                # and nothing reached the provider, not even "Bearer EMPTY"
+    assert "model call not made" in caplog.text and ref in caplog.text
+    assert "the-real-key" not in caplog.text
+    if why == "tenant-mismatch":
+        assert "TENANT_MISMATCH" in caplog.text                        # the reason code is in the log
+
+
+def test_the_provider_test_call_reports_an_unreadable_key_and_sends_nothing(cfg, a, monkeypatch):
+    from agentic_os.app.llm_admin import test_provider
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-key-must-not-be-used")
+    st = save_llm_settings(str(cfg), base_url=a.url, model="m", key_ref="file:llm/missing")
+    assert test_provider(st) == {"ok": False, "status": 0, "error": "LLMKeyUnavailable"}
+    assert a.seen == []
+
+
+def test_the_error_names_the_reference_and_never_a_value(cfg, a):
+    from agentic_os.app.llm_settings import LLMKeyUnavailable
+    store_secret("file:llm/provider", "the-real-key")
+    save_llm_settings(str(cfg), base_url=a.url, model="m", key_ref="file:llm/missing")
+    with pytest.raises(LLMKeyUnavailable) as e:
+        llm_api_key(load_llm_settings())
+    assert "file:llm/missing" in str(e.value) and "the-real-key" not in str(e.value)
