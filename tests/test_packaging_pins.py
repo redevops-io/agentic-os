@@ -88,16 +88,18 @@ def test_git_pins_record_tag_object_and_commit():
         assert p["tag_object"] != p["commit"]   # annotated tags: the two differ
 
 
-def test_uv_lock_agrees_with_the_first_party_pins():
-    """uv.lock records each first-party git dependency as ``rev=<tag>#<commit>``; it must say what git-pins.json and pyproject say,
-    and the runtime-contracts pin of the project and the one discovery-runtime requires must be the same tag (pip rejects a mismatch)."""
-    lock = (ROOT / "uv.lock").read_text()
+@pytest.mark.parametrize("lock", ["uv.lock", "integrations/voice-pipecat/uv.lock"])
+def test_uv_lock_agrees_with_the_first_party_pins(lock):
+    """Each uv.lock records a first-party git dependency as ``rev=<tag>#<commit>``; it must say what git-pins.json says. The voice integration's lock
+    follows the root pyproject (agentic-os is a path source there), so it carries the same two pins and its CI job `uv lock --check` needs them current."""
+    text = (ROOT / lock).read_text()
     pins = {p["name"]: p for p in json.loads((PK / "git-pins.json").read_text())["dependencies"]}
-    for name in ("runtime-contracts", "discovery-runtime", "knowledge-frontier"):
+    names = ("runtime-contracts", "discovery-runtime") + (("knowledge-frontier",) if lock == "uv.lock" else ())
+    for name in names:
         p = pins[name]
-        assert f'source = {{ git = "{p["url"]}?rev={p["tag"]}#{p["commit"]}" }}' in lock, name
-        assert f'name = "{name}"\nversion = "{p["version"]}"\n' in lock, name
-    # the lock's discovery-runtime entry depends on runtime-contracts and the project pins one tag of it
+        assert f'source = {{ git = "{p["url"]}?rev={p["tag"]}#{p["commit"]}" }}' in text, (lock, name)
+        assert f'name = "{name}"\nversion = "{p["version"]}"\n' in text, (lock, name)
+        assert f'{{ name = "{name}", git = "{p["url"]}?rev={p["tag"]}" }}' in text, (lock, name)   # the requires-dist edge names the same tag
     assert pins["runtime-contracts"]["tag"] == "v0.3.17"
 
 

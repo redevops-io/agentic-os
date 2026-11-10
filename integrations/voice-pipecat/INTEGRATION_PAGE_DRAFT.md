@@ -172,7 +172,7 @@ This package imports agentic-os and carries the repository's licence files (`LIC
 | cffi | 2.1.1 | MIT-0 | - | - | LICENSE |
 | click | 8.5.0 | BSD-3-Clause | - | - | LICENSE.txt |
 | cryptography | 50.0.2 | Apache-2.0 OR BSD-3-Clause | - | - | LICENSE, LICENSE.APACHE, LICENSE.BSD |
-| discovery-runtime | 0.1.19 | - | AGPL-3.0-or-later WITH Commons-Clause | - | LICENSE, LICENSE-COMMONS-CLAUSE, LICENSE.md |
+| discovery-runtime | 0.1.21 | - | AGPL-3.0-or-later WITH Commons-Clause | - | LICENSE, LICENSE-COMMONS-CLAUSE, LICENSE.md |
 | docopt | 0.6.2 | - | MIT | MIT License | LICENSE-MIT |
 | docstring_parser | 0.18.0 | - | MIT | MIT License | LICENSE.md |
 | fastapi | 0.162.0 | MIT | - | - | LICENSE |
@@ -214,7 +214,7 @@ This package imports agentic-os and carries the repository's licence files (`LIC
 | python-dotenv | 1.2.4 | - | BSD-3-Clause | - | LICENSE |
 | PyYAML | 6.0.3 | - | MIT | MIT License | LICENSE |
 | resampy | 0.4.3 | - | ISC | ISC License (ISCL) | LICENSE.md |
-| runtime-contracts | 0.3.14 | - | AGPL-3.0-or-later WITH Commons-Clause | - | LICENSE, LICENSE-COMMONS-CLAUSE, LICENSE.md |
+| runtime-contracts | 0.3.17 | - | AGPL-3.0-or-later WITH Commons-Clause | - | LICENSE, LICENSE-COMMONS-CLAUSE, LICENSE.md |
 | sentencex | 1.0.31 | MIT | - | MIT License | - |
 | sniffio | 1.3.1 | - | MIT OR Apache-2.0 | MIT License; Apache Software License | LICENSE, LICENSE.APACHE2, LICENSE.MIT |
 | soundfile | 0.13.1 | - | BSD 3-Clause License | BSD License | COPYING, LICENSE |
