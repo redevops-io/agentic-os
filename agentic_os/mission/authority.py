@@ -21,7 +21,9 @@ durable ledger is used. No model is consulted.
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -38,6 +40,62 @@ CONTRACT_VERSION = "mission-authority/v1"
 #: Compensation (an undo) is authorised by its own grants: ``compensate:<forward capability>``. A forward grant, even a bare
 #: ``*``, does not cover it (see ``AuthorityGuard.check_compensation``).
 COMPENSATE_PREFIX = "compensate:"
+
+
+# ── selector grammar ────────────────────────────────────────────────────────────────────────────────
+#: Capability names and resource selectors are fnmatch globs over opaque strings, restricted by this grammar (docs/ARCHITECTURE.md,
+#: "Authority selectors"). A selector pattern is 1..MAX_SELECTOR_LEN characters, with no control characters, no leading or trailing
+#: whitespace, no ``..`` path segment, no ``**`` (write ``*``) and balanced ``[...]`` classes. A value is matched only when it has no
+#: control characters (a newline would let ``*`` span two targets), no ``..`` path segment, and no ``,`` or ``;`` unless the pattern
+#: itself contains that character (so ``*@customer.com`` cannot admit ``x@evil.io,a@customer.com``). Nothing is canonicalised or decoded.
+MAX_SELECTOR_LEN = 512
+MAX_VALUE_LEN = 4096
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+_SEGMENT_SPLIT = re.compile(r"[\\/]")
+_LIST_SEPARATORS = ",;"
+
+
+class SelectorError(ValueError):
+    """A capability pattern or resource selector that is outside the documented grammar."""
+
+
+def validate_selector(pattern: Any, *, what: str = "selector") -> str:
+    """Return ``pattern`` unchanged when it is inside the grammar; raise :class:`SelectorError` otherwise."""
+    if not isinstance(pattern, str) or not pattern:
+        raise SelectorError(f"{what} must be a non-empty string")
+    if len(pattern) > MAX_SELECTOR_LEN:
+        raise SelectorError(f"{what} is longer than {MAX_SELECTOR_LEN} characters")
+    if _CONTROL.search(pattern):
+        raise SelectorError(f"{what} contains a control character")
+    if pattern != pattern.strip():
+        raise SelectorError(f"{what} has leading or trailing whitespace")
+    if "**" in pattern:
+        raise SelectorError(f"{what} contains '**' (use a single '*')")
+    if any(seg == ".." for seg in _SEGMENT_SPLIT.split(pattern)):
+        raise SelectorError(f"{what} contains a '..' path segment")
+    i, n = 0, len(pattern)
+    while i < n:
+        if pattern[i] == "[":
+            j = i + 1
+            if j < n and pattern[j] == "!":
+                j += 1
+            if j < n and pattern[j] == "]":
+                j += 1
+            k = pattern.find("]", j)
+            if k < 0:
+                raise SelectorError(f"{what} has an unclosed '['")
+            i = k
+        i += 1
+    return pattern
+
+
+def _safe_value(value: str, pattern: str) -> bool:
+    """May ``value`` be matched against ``pattern`` at all? (See the grammar above.)"""
+    if len(value) > MAX_VALUE_LEN or _CONTROL.search(value):
+        return False
+    if any(seg == ".." for seg in _SEGMENT_SPLIT.split(value)):
+        return False
+    return all(ch not in value or ch in pattern for ch in _LIST_SEPARATORS)
 
 
 class Lease(str, Enum):
@@ -76,6 +134,12 @@ class Grant:
     covers_dynamic_risk: bool = False      # owner opt-in: may also stand in for a score-based risk gate (never regulatory)
 
     def __post_init__(self) -> None:
+        validate_selector(self.capability, what="grant capability")
+        for key, patterns in self.resources:
+            if not isinstance(key, str) or not key or not patterns:
+                raise SelectorError("a resource selector needs an argument name and at least one pattern")
+            for pat in patterns:
+                validate_selector(pat, what=f"resource selector for {key!r}")
         # one canonical number type per field, so a digest is the same before and after a JSON round-trip
         for f, t in (("max_amount", float), ("max_total_amount", float), ("max_calls", int), ("rate_calls", int)):
             v = getattr(self, f)
@@ -991,18 +1055,41 @@ def _fsync_on() -> bool:
 # ── evaluation ──────────────────────────────────────────────────────────────────────────────────────
 def _matches(value: Any, patterns: tuple[str, ...]) -> bool:
     vals = value if isinstance(value, (list, tuple)) else [value]
-    return bool(vals) and all(isinstance(v, str) and any(fnmatchcase(v, p) for p in patterns) for v in vals)
+    return bool(vals) and all(isinstance(v, str) and any(_safe_value(v, p) and fnmatchcase(v, p) for p in patterns) for v in vals)
 
 
 def _amount(grant: Grant, args: Mapping[str, Any]) -> float | None:
+    """The amount an action asks for, or None when it names none. A value that is not a finite, non-negative number comes back as NaN
+    (invalid): a negative amount must never lower a running total, so it is not an amount at all."""
     raw = args.get(grant.amount_param)
     if raw is None:
         return None
+    if isinstance(raw, bool):
+        return float("nan")
     try:
         v = float(raw)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return float("nan")
-    return v
+    return v if math.isfinite(v) and v >= 0 else float("nan")
+
+
+def _valid_amount(v: float | None) -> bool:
+    return v is None or (math.isfinite(v) and v >= 0)
+
+
+def _clean_actual(actual: "Mapping[str, float] | None") -> "dict[str, float] | None":
+    """Settlement figures can only ever consume: a negative or non-finite figure is dropped, so the reserved amount stays charged."""
+    if actual is None:
+        return None
+    out = {}
+    for k, v in actual.items():
+        try:
+            f = float(v)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if math.isfinite(f) and f >= 0 and not isinstance(v, bool):
+            out[k] = f
+    return out
 
 
 def evaluate(env: AuthorityEnvelope, action: Action, *, now: float | None = None, current_epoch: int = 0) -> Decision:
@@ -1037,7 +1124,10 @@ def evaluate(env: AuthorityEnvelope, action: Action, *, now: float | None = None
         if not ok:
             continue
         amt = _amount(g, action.arguments)
-        if g.max_amount is not None and amt is not None and not (amt <= g.max_amount):
+        limited = g.max_amount is not None or g.max_total_amount is not None
+        if limited and not _valid_amount(amt):
+            dec = d(Verdict.DENY, "amount_invalid", f"{g.amount_param} is not a finite, non-negative number")
+        elif g.max_amount is not None and amt is not None and not (amt <= g.max_amount):
             dec = d(Verdict.ESCALATE, "amount_over_limit",
                     f"{g.amount_param} {amt} exceeds the per-action limit {g.max_amount}",
                     {"raise_limit": {"capability": g.capability, "max_amount": amt}})
@@ -1117,6 +1207,10 @@ class AuthorityGuard:
         if env is None or env.tenant != tenant:      # unknown, or another tenant's: indistinguishable
             return None, 0.0, Decision(Verdict.DENY, "no_authority", "no authority is recorded for this mission")
         now = self.clock()
+        if not grant_prefix and action.capability.startswith(COMPENSATE_PREFIX):
+            # the prefix belongs to undo grants: a forward capability may not borrow it (nor be covered by a compensate: grant)
+            return env, now, Decision(Verdict.DENY, "reserved_prefix", f"{COMPENSATE_PREFIX!r} is reserved for compensation grants",
+                                      None, env.digest())
         if self.envelopes.is_revoked(env.mission_id):
             return env, now, Decision(Verdict.DENY, "revoked", "this authority was revoked", None, env.digest())
         bad = self.chain_denial(env, now)
@@ -1176,6 +1270,8 @@ class AuthorityGuard:
         gi = dec.grant_index
         g = env.grants[gi]
         amt = _amount(g, action.arguments)
+        if not _valid_amount(amt):         # evaluate() refuses this for a limited grant; an unlimited one simply books nothing
+            amt = 0.0
         amt = 0.0 if amt is None else amt
         deltas = {"actions": 1.0, "usd": float(action.cost_usd), "tokens": float(action.tokens),
                   f"g{gi}:calls": 1.0, f"g{gi}:amount": amt}
@@ -1211,7 +1307,7 @@ class AuthorityGuard:
         return bool(lease_id) and self.ledger.lease_dispatch_once(lease_id)
 
     def settle(self, lease_id: str, actual: Mapping[str, float] | None = None) -> bool:
-        return bool(lease_id) and self.ledger.lease_settle(lease_id, actual)
+        return bool(lease_id) and self.ledger.lease_settle(lease_id, _clean_actual(actual))
 
     def release(self, lease_id: str) -> bool:
         """Only valid before dispatch (the action provably did not leave)."""
@@ -1222,7 +1318,7 @@ class AuthorityGuard:
 
     def reconcile(self, lease_id: str, executed: bool, actual: Mapping[str, float] | None = None) -> bool:
         """An independent check says the effect did (or did not) happen: settle actual consumption or return it."""
-        return bool(lease_id) and self.ledger.lease_reconcile(lease_id, executed, actual)
+        return bool(lease_id) and self.ledger.lease_reconcile(lease_id, executed, _clean_actual(actual))
 
     def outstanding(self, key: str | None = None, detail: bool = False) -> list:
         return self.ledger.leases_outstanding(key, detail)
