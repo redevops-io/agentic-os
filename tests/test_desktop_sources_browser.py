@@ -219,8 +219,8 @@ def test_remove_then_reload_shows_it_gone_and_sign_out_ends_the_old_tab_and_a_ne
         r = api(page, "DELETE", "/api/local/session")
         assert r["status"] == 200
         assert authority._registrations == [] and authority._proposals == []         # gone with the session, before any further request
-        # the old tab's next request meets the signed-out wording
-        go_view(page, "Sources")
+        # the old tab's next request meets the signed-out wording (the first rail click already makes a request, and the panel replaces the shell)
+        page.locator("button.nav").filter(has=page.locator("span.lbl", has_text=re.compile("^Connections$"))).click()
         page.get_by_text("Not signed in to the local Agentic Apps service").first.wait_for()
         shot(page, "dsrc-7-old-tab-signed-out")
         out["old_tab_after_sign_out"] = page.locator("#agentic-signin").inner_text()[:200]
