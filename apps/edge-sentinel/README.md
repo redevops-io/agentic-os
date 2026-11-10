@@ -11,6 +11,8 @@
 
 # edge-sentinel — agent layer + SOC dashboard over a real CrowdSec core
 
+> **Status.** An independent reference application and service. It is not part of the AgenticOS desktop build (no sidecar contains it, and the launcher does not start it) and nothing in the desktop release depends on it. The only coupling is the opt-in, read-only `PROJECTS_INSPECTION_TARGET` client in the Projects API. It has no Host, Origin or CSRF protection of its own, so run it on loopback or behind an authenticating front end.
+
 A sibling of [`apps/billing`](../billing) (the reference vertical slice), same pattern,
 new core. It wraps the running self-hosted **CrowdSec** instance (the open-source
 detection & decision engine) with:
@@ -84,7 +86,7 @@ python3 seed.py
 
 # 2. Install deps + run the service
 pip install -r requirements.txt          # add --break-system-packages on PEP-668 hosts
-python3 -m uvicorn app:app --host 0.0.0.0 --port 8203
+python3 -m uvicorn app:app --host 127.0.0.1 --port 8203   # bind a non-loopback address only behind your own authenticating front end
 #   app.py auto-loads .env, so CROWDSEC_BOUNCER_KEY is picked up with no manual copy.
 
 # Or with Docker (point the LAPI URL at the CrowdSec service; the socket is NOT mounted, see "Docker access" below):
@@ -104,7 +106,6 @@ docker run -e AGENTIC_OS_PERMISSIONS=off --rm -p 8203:8203 \
 | `CROWDSEC_CONTAINER` | `agentic-cores-crowdsec-1` | Container name for `cscli` (alerts, ban enforcement). |
 | `CROWDSEC_FRONT_URL` | `http://localhost:8086` | Link for the "Open CrowdSec metrics ↗" button (CrowdSec is CLI-managed; this is the LAPI endpoint). |
 | `PORT` | `8203` | uvicorn bind port. |
-| `ANTHROPIC_API_KEY` | _(optional)_ | If set, `triage` adds an LLM reasoning blurb (model `claude-opus-4-8`). The endpoint works fully without it — actions are deterministic CrowdSec/cscli calls. |
 
 | `SENTINEL_PROTECTED_IPS`, `SENTINEL_HOST_IPS` | _(empty)_ | Comma-separated addresses/CIDRs that are never banned (in addition to this host, its gateway, the LAPI host and the requesting operator). |
 | `SENTINEL_BLOCK_ALLOW_NETWORKS` | _(empty)_ | CIDRs inside which private/reserved space may be banned. Loopback, link-local, multicast and unspecified space is never bannable. |
@@ -136,8 +137,7 @@ The sentinel can also read alerts from the CrowdSec LAPI with a machine (watcher
     `cscli decisions add` to enforce the ban, then refreshes the dashboard cache. Without
     `SENTINEL_BLOCK_ENABLED` this route returns a **dry run**: the response says `Dry run: nothing was blocked`.
     Executing a real block from this route needs an operator credential and that enable flag.
-  - `"triage"` → summarizes active decisions + alerts (severity mix, top scenarios);
-    adds a one-line LLM reasoning blurb iff `ANTHROPIC_API_KEY` is set.
+  - `"triage"` → summarizes active decisions + alerts (severity mix, top scenarios). It is deterministic: no language model is called and no `ANTHROPIC_API_KEY` is read.
 
 ## Docker access (least privilege)
 
