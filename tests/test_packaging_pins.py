@@ -79,8 +79,8 @@ def test_git_pins_record_tag_object_and_commit():
     assert pins["runtime-contracts"]["tag"] == "v0.3.17"
     assert pins["runtime-contracts"]["tag_object"] == "977f553286bdb56ec392788aa54afb1ad397286c"
     assert pins["discovery-runtime"]["tag"] == "v0.1.21"
-    assert pins["discovery-runtime"]["tag_object"] == "c1d171f51d4195d13255ac59f859e18548232232"
-    assert pins["discovery-runtime"]["commit"] == "4014092139de8b4e3251b335919c188711eeb3f4"
+    assert pins["discovery-runtime"]["tag_object"] == "b53a886f424dc7688b8ffac8b687613c62cdd746"
+    assert pins["discovery-runtime"]["commit"] == "3856bca7440ed4af80718c78a9c3f85d996c3a50"
     assert pins["knowledge-frontier"]["commit"].startswith("057258ae")
     assert pins["runtime-contracts"]["committed_build_dirs"] == []     # v0.3.17 (like v0.3.14) carries no stale build/lib
     for p in pins.values():
