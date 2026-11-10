@@ -1,14 +1,14 @@
 {
- "_comment": "Where the Projects UI bundle (agentic_os/projects_ui) comes from. On the converged trunk it is NOT tracked in git: scripts/fetch_projects_ui.py (run by the wheel build hook, so by `pip install -e .` too) unpacks the pinned artifact packaging/ui-artifacts/projects-ui-root-9a1788b1.tgz (packaging/projects_ui.lock.json) into agentic_os/projects_ui, offline. Read by packaging/sbom/generate_source_offer.py and packaging/sbom/analyze.py and checked against the files by tests/test_ui_bundle_source_record.py. The source commit is a LOCAL, UNPUBLISHED commit: the public redevops-projects repository does not contain it, so this record is NOT a source offer (decisions D-LIC-12 and pins-04 stay OPEN). index.html, the JavaScript and the CSS are build output; hero.jpg is not (the neutral placeholder is kept by scripts/build_projects_ui.sh).",
+ "_comment": "Where the Projects UI bundle (agentic_os/projects_ui) comes from. On the converged trunk it is NOT tracked in git: scripts/fetch_projects_ui.py (run by the wheel build hook, so by `pip install -e .` too) unpacks the pinned artifact packaging/ui-artifacts/projects-ui-root-ea9e53e5.tgz (packaging/projects_ui.lock.json) into agentic_os/projects_ui, offline. Read by packaging/sbom/generate_source_offer.py and packaging/sbom/analyze.py and checked against the files by tests/test_ui_bundle_source_record.py. The source commit is a LOCAL, UNPUBLISHED commit: the public redevops-projects repository does not contain it, so this record is NOT a source offer (decisions D-LIC-12 and pins-04 stay OPEN). index.html, the JavaScript and the CSS are build output; hero.jpg is not (the neutral placeholder is kept by scripts/build_projects_ui.sh).",
  "repository": "https://github.com/redevops-io/redevops-projects",
  "base_commit": "5114b56012511a292eff0e505fdbd0d8b00544f8",
  "base_commit_public": true,
- "source_commit": "9a1788b187ca5ee0f2592b3c6cdf7df6c3257cf6",
- "source_tree": "ffb17b00d5d192194aa29cab434e6791b74b9bfa",
+ "source_commit": "ea9e53e56b4cbaa1afb22404a6468695e49c24fa",
+ "source_tree": "7eb444ff333c6ebb3b4368fbbf3480942c2ba5f4",
  "source_commit_published": false,
- "source_status": "local unpublished commit (branch ui/focus-fix of a local clone, from ui/event-summaries 5751e9e5 (from ui/partly-sample 312a811a) (from ui/runtime-mode 2f24719e) (itself from ui/evidence-tracing ee958a01); adds the \"Partly sample\" chip for a runtime server whose provider-backed pages are still sample): the Sample chip and every sample-versus-recorded decision come from GET /api/ui-config (what the running server reports) instead of the VITE_PROJECTS_SAMPLE_DATA build flag, which is removed; the Settings > Data source panel, the tail-anchor wording and the browser harness that runs the real product are added. Below that: the merge of the public release v0.2.0 (84f17fce) into the local accessibility series rel/ui-v3 (2fdef7f5), the application-directory tab and the mission drill-down views. not pushed, no pull request, no tag; adds the drill-down flags (uncertain step, late result, incomplete compensation), the plain-words mission state and the read-back evidence rows for real AOS-DD missions; adds one shared keyboard focus indicator (the top-bar Ask Sidekick input had none) and the focus tests",
- "previous_source_commit": "5751e9e5ccd0fbc461e4290ee188877d177c184b",
- "previous_bundle": "assets/index-3A6-zSpX.js sha256 8079a61e00981d9534740bbc33a4a127615a8e5ed5fdd2c3beee976d22373c9c (built from 5751e9e5, before the focus fix); before it assets/index-BVpeLTWy.js from 312a811a, assets/index-owr9wUfq.js from 2f24719e",
+ "source_status": "local unpublished commit (branch ui/source-errors of a local clone, from ui/focus-fix 9a1788b1 (from ui/event-summaries 5751e9e5) (from ui/partly-sample 312a811a) (from ui/runtime-mode 2f24719e) (itself from ui/evidence-tracing ee958a01); adds the \"Partly sample\" chip for a runtime server whose provider-backed pages are still sample): the Sample chip and every sample-versus-recorded decision come from GET /api/ui-config (what the running server reports) instead of the VITE_PROJECTS_SAMPLE_DATA build flag, which is removed; the Settings > Data source panel, the tail-anchor wording and the browser harness that runs the real product are added. Below that: the merge of the public release v0.2.0 (84f17fce) into the local accessibility series rel/ui-v3 (2fdef7f5), the application-directory tab and the mission drill-down views. not pushed, no pull request, no tag; adds the drill-down flags (uncertain step, late result, incomplete compensation), the plain-words mission state and the read-back evidence rows for real AOS-DD missions; adds one shared keyboard focus indicator (the top-bar Ask Sidekick input had none) and the focus tests; says every refusal and failure of connecting, proposing and removing a source in fixed words keyed by the server's refusal code, and adds Remove (with an in-page question) for a folder registered in the session",
+ "previous_source_commit": "9a1788b187ca5ee0f2592b3c6cdf7df6c3257cf6",
+ "previous_bundle": "assets/index-CQBlOi68.js sha256 de044ae9f2657c5d79665b632fb71c46f997fe88c5b72116812c7df44218e82c (built from 9a1788b1, before the source wording and Remove); before it assets/index-3A6-zSpX.js from 5751e9e5, assets/index-BVpeLTWy.js from 312a811a, assets/index-owr9wUfq.js from 2f24719e",
  "package_json_git_blob": "1fae6a7db7899b5ef1a45d4a5c5a2a7a960204f8",
  "package_json_sha256": "7f5d60f109331d32b1e9c684203a815e1b641c09d41d3c75f74d9667d75c8c98",
  "package_lock_git_blob": "af8ed38d2074179e60e0d974987be1092ee8c770",
@@ -25,13 +25,13 @@
   "reproduced": "built three times from a clean git archive of the source commit, each in its own throwaway HOME, TMPDIR and npm cache (env -i, node v24.22.2, npm 11.19.1): index.html, the JavaScript and the CSS are byte-identical (and identical to the development build)"
  },
  "files": {
-  "index.html": "82de733ae5dd8d4b3c22215c7400f04b4b8169d85928c32a0298049b55b5ecb6",
-  "assets/index-CQBlOi68.js": "de044ae9f2657c5d79665b632fb71c46f997fe88c5b72116812c7df44218e82c",
-  "assets/index-BXcNWP0I.css": "13b11143e911aacda99b8787d96068f73b8e8dcea29c86b935af9061db828359"
+  "index.html": "6663be95bff535d3f5eba83f0775d988ee5550d0f82ddaf68365e03b8e7d2363",
+  "assets/index-76LJRJ18.js": "828bb55cbbdbc60df8ecad9fffc76ec3c0d2ba918c9b072d0d1d92b3a728649c",
+  "assets/index-BzggwPVV.css": "d45f63f33ef15dd5bc8a363936e8705e34bd06f1fd3e48f41464809d3d91bdce"
  },
  "artifact": {
-  "path": "packaging/ui-artifacts/projects-ui-root-9a1788b1.tgz",
-  "sha256": "a463cfec611580bb208032bef0b267425482926b0c202095297e022e57cd37cd",
+  "path": "packaging/ui-artifacts/projects-ui-root-ea9e53e5.tgz",
+  "sha256": "b202abc5e2c2cf63fa26854a1d299d71e78267d18f4201bfc745e5c218517b73",
   "lock": "packaging/projects_ui.lock.json",
   "pack_recipe": "scripts/make_projects_ui_artifact.py",
   "url": "",
