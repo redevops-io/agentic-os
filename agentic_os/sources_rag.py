@@ -23,7 +23,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from .sources import EvidenceRef
 from .sources_postgres import RetrievedEvidence
@@ -59,7 +59,12 @@ class RagIndexer:
     db_dir: str = field(default_factory=lambda: os.path.join(os.getcwd(), ".rag"))
     rag_factory: RagFactory = default_rag
     clock: Callable[[], str] = _now
+    #: Asked before a retrieval and again before its result is returned: ``authorize(project_id, source_id)`` raises when the source is not
+    #: registered for the caller (the desktop authority binds ``authorize_current``, agentic_os/desktop_sources.py). It may return an object
+    #: with ``check()``, which is then called for the second ask (so a source removed and registered again in between is not the same one).
+    authorize: Optional[Callable[[str, str], Any]] = None
     _stores: Dict[tuple, RagStore] = field(default_factory=dict)
+    _dropped: set = field(default_factory=set)
 
     def _path(self, project_id: str, source_id: str) -> str:
         """The index file of ONE (project, source), injective and always inside `db_dir`. Ordinary ids (lower-case letters, digits, `.` and `-`, no `_`) keep the historical name `<project>_<source>.duckdb`, which
@@ -80,6 +85,8 @@ class RagIndexer:
 
     def _store(self, project_id: str, source_id: str) -> RagStore:
         key = (project_id, source_id)                                  # the pair itself: "a:b"+"c" and "a"+"b:c" are different stores
+        if key in self._dropped:
+            raise PermissionError("the index of this source was dropped")
         if key not in self._stores:
             os.makedirs(self.db_dir, exist_ok=True)
             self._stores[key] = self.rag_factory(self._path(project_id, source_id))
@@ -89,6 +96,7 @@ class RagIndexer:
     def index(self, project_id: str, source_id: str, paths: Sequence[str]) -> int:
         """Index the source's content and return the chunk count. ``redevops_rag`` indexes a
         folder, so we index the common root of the eligible files."""
+        self._dropped.discard((project_id, source_id))                 # indexing (again) is a new registration's own content
         paths = [p for p in paths if p]
         if not paths:
             return 0
@@ -98,11 +106,33 @@ class RagIndexer:
         stats = self._store(project_id, source_id).index(root)
         return int(stats.get("chunks", 0) or 0)
 
+    def drop(self, project_id: str, source_id: str) -> None:
+        """Forget the source's index: close the store, delete its database file (and write-ahead log), and refuse any later use of the key until
+        it is indexed again."""
+        key = (project_id, source_id)
+        self._dropped.add(key)
+        store = self._stores.pop(key, None)
+        close = getattr(store, "close", None)
+        if callable(close):
+            close()
+        base = self._path(project_id, source_id)
+        for path in (base, base + ".wal"):
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+
     # ── retrieval → query evidence (same shape as Postgres) ───────────────────────
     def retrieve(self, project_id: str, source_id: str, query: str, *, k: int = 5) -> RetrievedEvidence:
         """Retrieve content evidence for a query — one EvidenceRef per hit (``kind="chunk"``),
         the snippet as its summary. The materialised counterpart to Postgres's SQL evidence."""
+        lease = self.authorize(project_id, source_id) if self.authorize is not None else None
         hits = self._store(project_id, source_id).search(query, k=k) or []
+        if self.authorize is not None:                                 # a Remove or sign-out that landed during the search: the hits are discarded
+            if lease is not None and hasattr(lease, "check"):
+                lease.check()
+            else:
+                self.authorize(project_id, source_id)
         refs = tuple(
             EvidenceRef(source_id=source_id, ref=f"rag:{source_id}:{h.get('filename', '?')}#{i}",
                         kind="chunk", summary=_snippet(h.get("text", "")))

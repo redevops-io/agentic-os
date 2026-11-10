@@ -302,6 +302,9 @@ class Indexer(Protocol):
 
     def index(self, project_id: str, source_id: str, paths: Sequence[str]) -> int: ...
 
+    # An indexer that keeps content SHOULD also offer ``drop(project_id, source_id)``: the desktop authority calls it when a registration is
+    # removed or its session ends (agentic_os/desktop_sources.py). One that retrieves SHOULD offer ``authorize`` (see RagIndexer).
+
 
 @dataclass
 class CountingIndexer:
@@ -310,6 +313,9 @@ class CountingIndexer:
 
     def index(self, project_id: str, source_id: str, paths: Sequence[str]) -> int:
         return len(list(paths))
+
+    def drop(self, project_id: str, source_id: str) -> None:
+        """Nothing to drop: this stand-in keeps no content, only the count it returned."""
 
 
 class SourceConnector(Protocol):
