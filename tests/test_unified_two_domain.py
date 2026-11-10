@@ -108,31 +108,54 @@ def test_connections_view_is_credential_invisible(creds):
     assert TWENTY_SENTINEL not in json.dumps(view) and CHATWOOT_SENTINEL not in json.dumps(view)
 
 
-def test_insufficient_authority_blocks_the_side_effect(tmp_path, creds):
-    """If the mission authority does not cover support:write, the gated side effect never runs — the
-    credential is never granted. Proves authority (not just approval) gates the consequential action."""
+def _run_with_authority(tmp_path, authority, name):
     from agentic_os.mission.registry import CapabilityRegistry
     from agentic_os.mission.unified_demo import (
         UnifiedTwoDomainPlanner, _authority_for, _credentials_for)
-    from runtime_contracts import (
-        AuthorityContext, EnvironmentSecretStore, LocalCredentialBroker, PrincipalRef)
+    from runtime_contracts import EnvironmentSecretStore, LocalCredentialBroker
     from agentic_os.mission.store import EventStore
 
     ops = build_unified_operators()
     reg = CapabilityRegistry()
     for op in ops.values():
         reg.register(op.manifest)
-    # authority WITHOUT support:write
-    authority = AuthorityContext(authority_id="weak", principal=PrincipalRef(id="weak", kind="service"),
-                                 purpose="pilot", scope=("crm:read",))
     ex = Executor(LocalOperatorClient(ops), authority=authority,
                   broker=LocalCredentialBroker(EnvironmentSecretStore()),
                   credentials_for=_credentials_for, authority_for=_authority_for)
-    rt = MissionRuntime(reg, ex, store=EventStore(path=str(tmp_path / "weak.jsonl")),
+    rt = MissionRuntime(reg, ex, store=EventStore(path=str(tmp_path / name)),
                         planner=UnifiedTwoDomainPlanner())
     m = rt.create_mission("cross-domain", policy_refs=["crm:read", "support:write"])
     rt.run(m.id)
-    rt.approve(m.id, rt.repo.pending_human(m.id)["node_id"], "approve")
-    # the support side-effect must NOT have produced a contact
-    assert not any("native_id" in r for r in rt.repo.node_results(m.id).values())
+    pending = rt.repo.pending_human(m.id)
+    if pending is not None:
+        rt.approve(m.id, pending["node_id"], "approve")
+    return rt, m
+
+
+def test_insufficient_authority_blocks_the_side_effect(tmp_path, creds):
+    """If the mission authority does not cover support:write, the gated side effect never runs — the
+    credential is never granted. Proves authority (not just approval) gates the consequential action."""
+    from runtime_contracts import AuthorityContext, PrincipalRef
+
+    # authority WITHOUT support:write (same tenant as the demo's: the credential gate refuses a tenant-less authority before the scope is looked at)
+    authority = AuthorityContext(authority_id="weak", principal=PrincipalRef(id="weak", kind="service", tenant="Meridian Wealth Management"),
+                                 purpose="pilot", scope=("crm:read",))
+    rt, m = _run_with_authority(tmp_path, authority, "weak.jsonl")
+    results = rt.repo.node_results(m.id).values()
+    # the CRM read passed the credential gate and ran; the support side-effect must NOT have produced a contact
+    assert any("account" in r for r in results)
+    assert not any("native_id" in r for r in results)
+    assert rt.repo.state(m.id) == MissionState.FAILED
+
+
+def test_an_authority_with_no_tenant_is_refused_at_the_first_credential(tmp_path, creds):
+    """runtime-contracts >= 0.3.15 binds a credential to the authority's tenant: with none, even the CRM read (which the
+    scope would allow) is refused, so nothing runs. The scope test above is only meaningful because it names the tenant."""
+    from runtime_contracts import AuthorityContext, PrincipalRef
+
+    authority = AuthorityContext(authority_id="untenanted", principal=PrincipalRef(id="untenanted", kind="service"),
+                                 purpose="pilot", scope=("crm:read", "support:write"))
+    rt, m = _run_with_authority(tmp_path, authority, "untenanted.jsonl")
+    results = list(rt.repo.node_results(m.id).values())
+    assert not any("account" in r for r in results) and not any("native_id" in r for r in results)
     assert rt.repo.state(m.id) == MissionState.FAILED

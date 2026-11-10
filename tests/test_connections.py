@@ -52,7 +52,7 @@ def test_connect_then_capability_reads_credential_through_the_broker(tmp_path):
     seen = {}
     broker = ProductionCredentialBroker(store)
     ex = Executor(InMemoryOperatorClient({"data.enrich": lambda i, s: seen.update(v=s["pdl"].bytes()) or {}}),
-                  authority=AuthorityContext(authority_id="a", principal=PrincipalRef(id="p"),
+                  authority=AuthorityContext(authority_id="a", principal=PrincipalRef(id="p", tenant=ref.namespace),
                                              scope=("data:person.search",)),
                   broker=broker,
                   credentials_for=lambda n: (CredentialRequirement(

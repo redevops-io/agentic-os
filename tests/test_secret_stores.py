@@ -25,8 +25,8 @@ from runtime_contracts.secrets_local.store import SecretAccessError
 KEY = base64.b64decode(base64.b64encode(bytes(range(32))))  # a deterministic 32-byte AES-256 key
 
 
-def _authority(scopes=("repo:deploy",)):
-    return AuthorityContext(authority_id="ctx", principal=PrincipalRef(id="p", tenant="acme"),
+def _authority(scopes=("repo:deploy",), tenant="acme"):
+    return AuthorityContext(authority_id="ctx", principal=PrincipalRef(id="p", tenant=tenant),
                             purpose="use", scope=tuple(scopes))
 
 
@@ -43,7 +43,7 @@ def _resolve_through_broker(broker, ref, *, production_required=False, authority
         return (CredentialRequirement(name="cred", required_scopes=("repo:deploy",), secret_ref=ref,
                                       production_broker_required=production_required, max_ttl_seconds=300),)
     ex = Executor(InMemoryOperatorClient({"do": handler}),
-                  authority=authority or _authority(), broker=broker, credentials_for=creds_for)
+                  authority=authority or _authority(tenant=ref.namespace or "acme"), broker=broker, credentials_for=creds_for)
     ex.run(Node(capability="do", operator="op"), {})
     return seen.get("v")
 

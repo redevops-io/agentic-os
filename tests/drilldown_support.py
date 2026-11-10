@@ -60,7 +60,9 @@ def failed_mission(path: str):
     reg = CapabilityRegistry()
     for op in ops.values():
         reg.register(op.manifest)
-    authority = AuthorityContext(authority_id="weak", principal=PrincipalRef(id="weak", kind="service"),
+    # the weak authority differs from the demo's only in its scope: it carries the demo's tenant (the credential gate refuses a tenant-less
+    # authority before the scope is looked at, and this test is about the scope)
+    authority = AuthorityContext(authority_id="weak", principal=PrincipalRef(id="weak", kind="service", tenant="Meridian Wealth Management"),
                                  purpose="pilot", scope=("crm:read",))
     ex = Executor(LocalOperatorClient(ops), authority=authority, broker=LocalCredentialBroker(EnvironmentSecretStore()),
                   credentials_for=_credentials_for, authority_for=_authority_for)

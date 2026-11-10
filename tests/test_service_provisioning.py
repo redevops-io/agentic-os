@@ -48,7 +48,7 @@ def test_identity_resolves_through_the_credential_broker(tmp_path):
 
     seen = {}
     ex = Executor(InMemoryOperatorClient({"svc.call": lambda i, s: seen.update(v=s["svc"].bytes()) or {}}),
-                  authority=AuthorityContext(authority_id="a", principal=PrincipalRef(id="p"),
+                  authority=AuthorityContext(authority_id="a", principal=PrincipalRef(id="p", tenant=ident.secret_ref.namespace),
                                              scope=("svc:use",)),
                   broker=ProductionCredentialBroker(store),
                   credentials_for=lambda n: (CredentialRequirement(
