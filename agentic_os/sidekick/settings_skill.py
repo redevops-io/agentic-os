@@ -69,6 +69,7 @@ def make_handler(*, prompt_secret: Optional[Callable[[str], str]] = None, settin
 
     def handler(action: str = "show", **inputs: Any) -> Dict[str, Any]:
         from agentic_os.app import llm_admin, llm_settings  # noqa: PLC0415
+        from agentic_os.secrets.resolve import SecretReferenceError  # noqa: PLC0415
         if action not in _ACTIONS:
             return {"status": "refused", "reason": f"action must be one of {list(_ACTIONS)}"}
         bad = [k for k in inputs if k.lower() in _FORBIDDEN_INPUTS]
@@ -144,8 +145,13 @@ def make_handler(*, prompt_secret: Optional[Callable[[str], str]] = None, settin
         if persist == "store" and not key_value:
             return {"status": "refused", "reason": "no key was provided"}
         store_value = key_value if persist == "store" else None
-        res = llm_admin.set_provider(path, base_url=base_url, model=model, key_ref=key_ref, key_value=store_value,
-                                     allow_external_host=allow_external, test=True, **store_cfg)
+        try:
+            res = llm_admin.set_provider(path, base_url=base_url, model=model, key_ref=key_ref, key_value=store_value,
+                                         allow_external_host=allow_external, test=True, **store_cfg)
+        except SecretReferenceError as e:
+            # the reference is outside the tenant of this deployment (REDEVOPS_LOCAL_TENANT / the handler's tenant) or malformed:
+            # set_provider stopped before it wrote the key or the settings, and the message is a fixed text, never a value
+            return {"status": "refused", "action": action, "reason": str(e), "nothing_changed": True}
         # for env_ref nothing is stored, but the provider is still tested with the exported key
         return {"status": "applied" if res.get("changed") else "rolled_back", "action": action, "receipt": res,
                 "approved_digest": digest}

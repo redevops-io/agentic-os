@@ -142,3 +142,61 @@ def test_it_is_discoverable_and_invocable_through_the_sidekick_orchestrator(env)
     assert hit.capability.capability_id == CAPABILITY_ID and hit.capability.bound
     res = orch.invoke(CAPABILITY_ID, action="show")
     assert res.data["status"] == "ok"
+
+
+# ── an approved change whose key reference is outside the deployment's tenant is refused, not raised (differential re-review RR-1) ──
+
+def _victim(env):
+    from agentic_os.secrets import store_secret
+    store_secret("file:llm/provider", "own-original")
+    store_secret("file:victim/token", "victim-original")
+
+
+def test_with_a_pinned_tenant_an_approved_change_inside_it_is_applied(env, strict, monkeypatch):
+    monkeypatch.setenv("REDEVOPS_LOCAL_TENANT", "llm")
+    monkeypatch.setenv("MY_PROVIDER_KEY", "good-key-7777")
+    out, _ = _approved(_h(), action="set", base_url=strict.url, model="m", key_ref="file:llm/provider",
+                       persist="store", key_env="MY_PROVIDER_KEY")
+    assert out["status"] == "applied" and out["receipt"]["test"]["ok"]
+    assert (env / "secrets" / "llm" / "provider").read_text() == "good-key-7777"
+    assert load_llm_settings().key_ref == "file:llm/provider"
+
+
+@pytest.mark.parametrize("how", ["pinned-by-environment", "tenant-given-to-the-handler"])
+def test_an_approved_change_outside_the_tenant_is_refused_and_nothing_is_written(env, strict, monkeypatch, caplog, how):
+    import logging
+    _victim(env)
+    kw = {}
+    if how == "pinned-by-environment":
+        monkeypatch.setenv("REDEVOPS_LOCAL_TENANT", "llm")
+    else:
+        kw["tenant"] = "llm"
+    monkeypatch.setenv("MY_PROVIDER_KEY", "ATTACKER-NEW-VALUE")
+    caplog.set_level(logging.INFO)
+    out, _ = _approved(_h(**kw), action="set", base_url=strict.url, model="m", key_ref="file:victim/token",
+                       persist="store", key_env="MY_PROVIDER_KEY")           # no exception escapes the handler
+    assert out["status"] == "refused" and out["nothing_changed"] is True
+    assert "nothing was written" in out["reason"] and "ATTACKER-NEW-VALUE" not in str(out) and "victim-original" not in str(out)
+    assert (env / "secrets" / "victim" / "token").read_text() == "victim-original"       # the other namespace is untouched
+    assert (env / "secrets" / "llm" / "provider").read_text() == "own-original"
+    assert not (env / "llm.json").exists()                                               # the settings are unchanged (none were created)
+    assert strict.seen == []                                                             # and the provider was never called
+    assert "ATTACKER-NEW-VALUE" not in caplog.text and "victim-original" not in caplog.text
+
+
+def test_a_refused_change_leaves_existing_settings_byte_for_byte(env, strict, monkeypatch):
+    _victim(env)
+    monkeypatch.setenv("MY_PROVIDER_KEY", "good-key-7777")
+    _approved(_h(), action="set", base_url=strict.url, model="m", key_ref="file:llm/provider", persist="store", key_env="MY_PROVIDER_KEY")
+    before = (env / "llm.json").read_bytes()
+    monkeypatch.setenv("REDEVOPS_LOCAL_TENANT", "llm")
+    out, _ = _approved(_h(), action="set", base_url=strict.url, model="other-model", key_ref="file:victim/token",
+                       persist="store", key_env="MY_PROVIDER_KEY")
+    assert out["status"] == "refused" and (env / "llm.json").read_bytes() == before
+
+
+def test_a_malformed_reference_is_refused_the_same_way(env, strict, monkeypatch):
+    monkeypatch.setenv("MY_PROVIDER_KEY", "good-key-7777")
+    out, _ = _approved(_h(), action="set", base_url=strict.url, model="m", key_ref="file:llm/..\\victim\\token",
+                       persist="store", key_env="MY_PROVIDER_KEY")
+    assert out["status"] == "refused" and not (env / "llm.json").exists()
