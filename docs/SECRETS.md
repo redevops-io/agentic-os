@@ -103,11 +103,28 @@ credential request unless the request tenant equals the tenant of the authority'
 
 `read_secret` takes its tenant from one of three places, in this order:
 
-1. the `tenant` argument, used as given (a caller that acts for a tenant passes the tenant of its authenticated principal); an empty or malformed tenant is refused;
-2. `REDEVOPS_LOCAL_TENANT`, when the deployment sets it: every reference must then live in that namespace (`env:` references are read as that tenant);
+1. the `tenant` argument, used as given (an embedding caller names it; nothing in this edition authenticates a principal for `read_secret`); an empty or malformed tenant is refused;
+2. `REDEVOPS_LOCAL_TENANT`, when the deployment sets it: every namespaced reference must then live in that namespace (`env:` references are read as that tenant);
 3. otherwise the single-user rule: the local user is the only tenant and a reference's namespace is that user's tenant, so `file:llm/provider` is read as tenant `llm` and `env:NAME` as `default`.
 
-The single-user rule separates nothing between the namespaces of one user's store; it reads any reference the local user configured. A deployment that
-wants the namespaces kept apart sets `REDEVOPS_LOCAL_TENANT` or passes `tenant`. A refusal returns no value and logs the reason code and the reference
-(never the secret); the LLM key then degrades to the local-server sentinel `EMPTY`.
-Tests: `tests/test_read_secret_tenant.py`, `tests/test_credential_gate_shipped_paths.py`.
+`store_secret` follows the same tenant: a reference outside it is refused and nothing is written. A reference may not contain a backslash or a
+non-printable character.
+
+The single-user rule separates nothing between the namespaces of one user's store; it reads any reference the local user configured. This
+edition has no tenant identity: `REDEVOPS_LOCAL_TENANT` pins one local tenant for a single deployment, so that a reference in another namespace of
+the same store is refused. It is not tenant isolation (tenant isolation is an Enterprise capability, [EDITION_BOUNDARY.md](EDITION_BOUNDARY.md), B1).
+
+**A refusal and an unreadable key.** A refusal returns no value and logs the reason code and the reference (never the secret). When the
+model-provider settings name a key reference (`key_ref`) that cannot be read (refused by the gate, absent, locked), `llm_api_key` raises
+`LLMKeyUnavailable`: no request is sent, `governed_text` returns `None` and logs `model call not made`, and the provider test call reports
+`LLMKeyUnavailable`. With no `key_ref` the behaviour is unchanged: `OPENAI_API_KEY`, else the placeholder `EMPTY` for a keyless local server.
+
+**Known limitations** (the independent review, `review-read-secret.md`; each is stated, not hidden):
+
+* `env:NAME` references have no namespace, so any environment variable of the process can be named, whatever the pin; the settings file and an approved Sidekick change are the only ways to name one.
+* `read_secret` issues its own one-call authority: it carries no expiry (the 60-second grant bounds it) and its scope and authority id come from the call itself, so on this path `AUTHORITY_EXPIRED`, `AUTHORITY_MISMATCH` and the scope check cannot fire. The gate is a consistency check there, not authentication. Authority expiry is checked when the grant is issued, not at redemption.
+* The store implementations in runtime-contracts resolve a symlink inside the store root before the confinement check, so a link that a local user places across namespaces is followed; on case-insensitive file systems (macOS, Windows defaults) the namespaces `Acme` and `acme` share storage. Both need write access to the store and are reported upstream, not changed here.
+* `REDEVOPS_LOCAL_TENANT` and the `tenant` argument have an effect only with runtime-contracts >= 0.3.15; the pin in `pyproject.toml`, `packaging/git-pins.json` and `uv.lock` (checked by `tests/test_packaging_pins.py`) is what guarantees it.
+* `ConnectionManager` and `ServiceIdentityBroker` keep their secrets in feature namespaces (the connection's domain, `identities`) and read the stores directly; the credential gate does not apply to them there. Through the mission `Executor`, an authority whose tenant is a real tenant is refused for those references (`TENANT_MISMATCH`), because the namespace is not that tenant; making the namespaces per-tenant is a prerequisite for multi-tenant use of these stores.
+* The Windows path-separator case of `parse_ref` (a backslash) is rejected by construction and was analysed with the Windows path rules, not run on a Windows host.
+Tests: `tests/test_read_secret_tenant.py`, `tests/test_credential_gate_shipped_paths.py`, `tests/test_read_secret_review_hardening.py`, `tests/test_llm_key_via_broker.py`.

@@ -12,16 +12,18 @@ not expired (``AUTHORITY_EXPIRED``) and the request names the authority (``AUTHO
 its own one-call service authority, so the tenant it puts in that authority decides what the gate can protect. The
 tenant comes from exactly three places, in this order, and from nowhere else:
 
-1. the ``tenant`` argument, when the caller names one (a multi-tenant caller passes the tenant of its authenticated
-   principal). It is used as given, never repaired: an empty or malformed tenant is refused, and a tenant that differs
-   from the reference's namespace is refused by the contract (``TENANT_MISMATCH``);
-2. the local tenant the deployment configures in ``REDEVOPS_LOCAL_TENANT``. Every reference must then live in that
-   namespace (``env:`` references, which have none, are read as that tenant);
+1. the ``tenant`` argument, when the caller names one (an embedding caller names it; nothing in this edition
+   authenticates a principal for ``read_secret``). It is used as given, never repaired: an empty or malformed tenant is
+   refused, and a tenant that differs from the reference's namespace is refused by the contract (``TENANT_MISMATCH``);
+2. the local tenant the deployment configures in ``REDEVOPS_LOCAL_TENANT``. Every namespaced reference must then live in
+   that namespace (``env:`` references, which have none, are read as that tenant). It pins one local tenant; it is not
+   tenant isolation (docs/EDITION_BOUNDARY.md, B1);
 3. otherwise the single-user desktop rule, stated here and not inferred: the local user is the only tenant, and the
    secret store's namespace is that user's tenant, so the tenant is the namespace of the reference (``file:llm/provider``
    -> ``llm``; ``env:NAME`` -> ``default``). This rule gives no isolation between namespaces of one user's store, and
-   claims none: it keeps the pre-0.3.15 behaviour of reading any reference the local user configured. A deployment
-   that wants the namespaces separated sets ``REDEVOPS_LOCAL_TENANT`` or passes ``tenant``.
+   claims none: it keeps the pre-0.3.15 behaviour of reading any reference the local user configured. Setting
+   ``REDEVOPS_LOCAL_TENANT`` or passing ``tenant`` narrows reads and writes to one namespace; it does not cover ``env:``
+   references. See docs/SECRETS.md, "Known limitations".
 
 A refusal returns ``None`` and logs the reason code and the reference (a reference names a location and never holds a
 value); no log line, return value or exception text of this module carries secret material."""
