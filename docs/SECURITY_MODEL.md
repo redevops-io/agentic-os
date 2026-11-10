@@ -6,6 +6,8 @@ Control plane, security profile and the operator authority boundary, approval to
 
 - [Control-plane auth, idempotency cache and multi-replica limits](#control-plane-auth-idempotency-cache-and-multi-replica-limits) (was `CONTROL_PLANE_SECURITY.md`)
 - [Security profile and the operator authority boundary](#security-profile-and-the-operator-authority-boundary) (was `SECURITY_PROFILE.md`)
+- [Authority selectors and amounts](#authority-selectors-and-amounts) (rc2)
+- [Hosted default-profile posture](#hosted-default-profile-posture)
 - [Signed approval tokens (HTTP operators)](#signed-approval-tokens-http-operators) (was `APPROVAL_TOKENS.md`)
 - [Permissions plane — access-control admin](#permissions-plane--access-control-admin) (was `permissions.md`)
 - [Gate notifications](#gate-notifications) (was `GATE_NOTIFICATIONS.md`)
@@ -261,6 +263,46 @@ The serial mission loop enforces `deadline`, `wall_clock_s` (active run time of 
 `HardLimitReached` event and a reason. A reservation that may already have produced an effect is never sent again: the runtime refuses a second dispatch in every
 profile, and `mission/reconcile.py` settles or releases it only when an independent probe proves the outcome, otherwise it stays counted and is flagged for a person
 (`python -m agentic_os.mission.reconcile list|run|resolve`). No provider probes ship yet, so today unknown outcomes need a person.
+
+## Authority selectors and amounts
+
+An authority envelope's grants name a capability and may restrict arguments. Both are `fnmatch` globs over opaque strings, and since
+0.6.0-rc2 they follow this grammar. Nothing is decoded, normalised or canonicalised: a downstream handler that decodes percent-escapes or
+resolves paths sees what the gate matched, so a capability that does either must apply its own check as well.
+
+**A pattern** (a grant's capability or one resource selector) is rejected when the grant is built, or an envelope is loaded, if it:
+
+* is empty, longer than 512 characters, or has leading or trailing whitespace;
+* contains a control character (U+0000 to U+001F, U+007F to U+009F, U+2028, U+2029);
+* contains `**` (write a single `*`; there is no recursive form) or a `..` path segment (segments are split on `/` and `\`);
+* has a `[` with no closing `]`.
+
+`*` matches any run of characters, `?` one character, `[abc]` and `[!abc]` a class; every other character matches itself. A resource
+selector needs an argument name and at least one pattern; a missing argument never matches.
+
+**A value** is matched against a pattern only when it is a string of at most 4,096 characters with no control character and no `..` path
+segment, and, if it contains `,` or `;`, only against a pattern that itself contains that character. So `*@customer.com` admits
+`ann@customer.com` but neither `x@evil.io,ann@customer.com` nor an address with a newline in it, and `/data/acme/*` admits
+`/data/acme/q3/report.csv` but not `/data/acme/../other/f`. Each element of a list argument is checked on its own.
+
+**A forward capability may not start with `compensate:`.** That prefix names the undo grants (`compensate:<capability>`), which are the only
+grants considered for a compensation; a forward action using it is refused (`reserved_prefix`).
+
+**An amount** (the argument named by a grant's `amount_param`, default `amount`) must be a finite number that is not negative; a boolean,
+text that is not a number, `NaN`, an infinity or a negative number is refused (`amount_invalid`) on a grant that has `max_amount` or
+`max_total_amount`. Before rc2 a negative amount passed the per-action limit and reduced the running total, so
+`-1000, -1000, 900, 900, 900` all ran against a cumulative limit of 1,000. A grant with no amount limit does not look at the argument.
+Settlement figures can only consume: a negative or non-finite actual is ignored and the reserved amount stays charged.
+
+## Hosted default-profile posture
+
+The Projects API and the control plane are demo surfaces unless the deployment says otherwise. With no gate configured and
+`AGENTIC_OS_PROFILE` unset, every write route runs, and routes marked `human_only` (approve, promotion cycle, connect an app) accept anonymous
+callers, because route authorization enforces only in the production profile. Nothing durable is written by the anonymous lanes, but a
+deployment that forgets `AGENTIC_OS_PROFILE=production` is open. A hosted deployment must set the production profile (which also requires a
+durable authority store, durable replay protection and an authenticated context on every write) and put the control plane behind its own front
+end; the `/m/<module>/api/*` proxy forwards no caller credentials and is anonymous unless blocked at the edge or `DEMO_READ_ONLY=1`. The desktop
+build does not have this posture: its sidecar refuses every request without a valid launch session.
 
 ## Signed approval tokens (HTTP operators)
 

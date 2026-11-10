@@ -43,8 +43,8 @@ COMPENSATE_PREFIX = "compensate:"
 
 
 # ── selector grammar ────────────────────────────────────────────────────────────────────────────────
-#: Capability names and resource selectors are fnmatch globs over opaque strings, restricted by this grammar (docs/ARCHITECTURE.md,
-#: "Authority selectors"). A selector pattern is 1..MAX_SELECTOR_LEN characters, with no control characters, no leading or trailing
+#: Capability names and resource selectors are fnmatch globs over opaque strings, restricted by this grammar (docs/SECURITY_MODEL.md,
+#: "Authority selectors and amounts"). A selector pattern is 1..MAX_SELECTOR_LEN characters, with no control characters, no leading or trailing
 #: whitespace, no ``..`` path segment, no ``**`` (write ``*``) and balanced ``[...]`` classes. A value is matched only when it has no
 #: control characters (a newline would let ``*`` span two targets), no ``..`` path segment, and no ``,`` or ``;`` unless the pattern
 #: itself contains that character (so ``*@customer.com`` cannot admit ``x@evil.io,a@customer.com``). Nothing is canonicalised or decoded.

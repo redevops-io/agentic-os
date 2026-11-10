@@ -1,0 +1,120 @@
+{
+  "schema": "edition-boundary/1",
+  "document": "docs/EDITION_BOUNDARY.md",
+  "enterprise_packages": [
+    "context_runtime_enterprise",
+    "runtime_security_enterprise",
+    "credentials_enterprise",
+    "agentic_os_enterprise"
+  ],
+  "import_allowlist": [
+    "agentic_os/app_gate.py",
+    "agentic_os/tool_actions.py",
+    "agentic_os/trusted_import.py",
+    "agentic_os/mission/factory.py"
+  ],
+  "enterprise_vocabulary": [
+    "sso",
+    "oidc",
+    "saml",
+    "scim",
+    "jwks",
+    "abac",
+    "break_glass",
+    "tenant_provision"
+  ],
+  "vocabulary_exceptions": [],
+  "community": [
+    {
+      "capability": "governance: approval gates, policy rules, authority envelopes, audit and event chains",
+      "test": "tests/test_authority_enforcement.py"
+    },
+    {
+      "capability": "tool execution controls: operator /invoke authority, execution authorization",
+      "test": "tests/test_invoke_authority.py"
+    },
+    {
+      "capability": "route authorization",
+      "test": "tests/test_route_authz.py"
+    },
+    {
+      "capability": "basic grants and resource permissions, basic row and column restrictions",
+      "test": "apps/test_basic_permissions_apps.py"
+    },
+    {
+      "capability": "single-host capability revocation epochs",
+      "test": "tests/test_authority_store_integrity.py"
+    },
+    {
+      "capability": "local single-user identity, no header identity, no admin bypass",
+      "test": "tests/test_local_capability.py"
+    },
+    {
+      "capability": "extension seams with standalone defaults",
+      "test": "tests/test_execution_context.py"
+    },
+    {
+      "capability": "enterprise capability requested without the package fails closed",
+      "test": "apps/test_app_gate_startup.py"
+    },
+    {
+      "capability": "the enterprise package is imported only when it is an installed distribution",
+      "test": "tests/test_dr02_enterprise_import_trust.py"
+    }
+  ],
+  "enterprise_only": [
+    {
+      "capability": "tenant identity on the permissions plane",
+      "test": "tests/test_permissions_agpl_regression.py::test_ENTERPRISE_identities_carry_a_tenant",
+      "pin": "strict xfail"
+    },
+    {
+      "capability": "revocation across conversations and caches",
+      "test": "tests/test_permissions_agpl_regression.py::test_ENTERPRISE_revocation_invalidates_held_context",
+      "pin": "strict xfail"
+    },
+    {
+      "capability": "graph and document-level authorization",
+      "test": "tests/test_permissions_agpl_regression.py::test_ENTERPRISE_graph_traversal_is_authorised_per_node",
+      "pin": "strict xfail"
+    },
+    {
+      "capability": "SSO and RBAC/ABAC identity integration",
+      "test": "tests/test_permissions_agpl_regression.py::test_ENTERPRISE_identities_come_from_an_identity_provider",
+      "pin": "strict xfail"
+    },
+    {
+      "capability": "tenant and epoch fields on a permissions grant, tenant argument on authorize (B3)",
+      "test": "tests/test_edition_boundary.py::test_grants_and_authorize_carry_no_tenant_or_epoch_b3",
+      "pin": "assertion"
+    },
+    {
+      "capability": "no plug-in entry points or enterprise dependency declared",
+      "test": "tests/test_edition_boundary.py::test_no_entry_point_group_and_no_enterprise_dependency",
+      "pin": "assertion"
+    }
+  ],
+  "decisions": {
+    "B1": "enterprise; the single-deployment tenant labelling shipped since v0.3.43 is kept, is not an isolation guarantee, and does not grow",
+    "B2": "community",
+    "B3": "not an enforced authorization; no tenant or epoch field on a permissions Grant in this tree"
+  },
+  "legacy_tenant_surface": {
+    "note": "pre-existing since v0.3.43; pinned so it cannot grow without a change to this file and to docs/EDITION_BOUNDARY.md",
+    "env_variables": [
+      "AGENTIC_OS_FORK_TENANT_LIMITS",
+      "AGENTIC_OS_TENANT",
+      "AGENTIC_OS_TENANT_LIMITS",
+      "AGENTIC_OS_TENANT_TOKENS"
+    ],
+    "modules": [
+      "agentic_os/app_kit/route_authz.py",
+      "agentic_os/desktop_sources.py",
+      "agentic_os/fleet.py",
+      "agentic_os/mission/control_auth.py",
+      "agentic_os/mission/fork_join.py",
+      "agentic_os/mission/profile.py",
+      "agentic_os/projects/approver_auth.py"
+    ]
+  }
+}
