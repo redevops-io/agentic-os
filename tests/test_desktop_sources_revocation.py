@@ -165,6 +165,80 @@ def test_shutdown_of_the_app_revokes_every_registration(tmp_path, monkeypatch):
     assert ("remove", "shutdown") in audit_pairs(world)
 
 
+def test_the_capabilitys_own_purge_of_an_expired_session_revokes_at_that_moment(w):
+    d = w.folder()
+    w.pick(d)
+    w.authority._stop_sweeper()                                # only the capability's report can act now
+    regs(w)[0].session.expires = (0.0, 0.0)
+    assert w.cap.sweep_expired() == 1
+    assert regs(w) == [] and w.rec.live == set() and w.authority._proposals == []
+
+
+def test_any_request_that_makes_the_gate_purge_an_expired_session_revokes_its_registrations(w):
+    d = w.folder()
+    w.pick(d)
+    c2, _ = w.session()
+    w.authority._stop_sweeper()
+    regs(w)[0].session.expires = (0.0, 0.0)
+    assert c2.get(f"/api/projects/{PROJECT}/runtime").status_code == 200       # a different session's request: the gate purges while looking its own up
+    assert regs(w) == [] and w.rec.live == set()
+
+
+def test_a_session_that_vanished_without_telling_anyone_is_caught_by_the_sweep_and_by_the_sweeper(w):
+    d = w.folder()
+    w.pick(d)
+    sess = regs(w)[0].session
+    w.authority._stop_sweeper()
+    w.cap._sessions = [(dg, s) for dg, s in w.cap._sessions if s is not sess]  # gone from the store, no notification
+    assert len(regs(w)) == 1
+    w.authority.sweep()
+    assert regs(w) == [] and w.rec.live == set()
+    # and the sweeper thread does the same on its own
+    e = w.folder("e")
+    c2, csrf2 = w.session()
+    w.pick(e, client=c2, csrf=csrf2)
+    sess2 = regs(w)[0].session
+    w.cap._sessions = [(dg, s) for dg, s in w.cap._sessions if s is not sess2]
+    w.authority._ensure_sweeper()
+    w.authority._wake.set()
+    assert wait_for(lambda: regs(w) == [])
+
+
+def test_two_live_sessions_that_compare_equal_are_still_two_sessions(w):
+    d = w.folder()
+    w.pick(d)
+    first = regs(w)[0].session
+    other = w.cap.new_session(HOST)[1]
+    other.csrf, other.expires, other.host = first.csrf, first.expires, first.host
+    assert other == first and other is not first
+    assert w.authority.live_projections_for(other, PROJECT) == []
+    with pytest.raises(ds.SourceRevoked):
+        w.authority.lease(other, PROJECT, regs(w)[0].source_id)
+
+
+def test_the_marker_of_a_session_only_source_is_the_one_the_provider_uses():
+    from agentic_os import projects_api
+    assert ds.SESSION_ONLY == projects_api.SESSION_ONLY
+
+
+def test_the_changed_modules_import_nothing_dynamically_and_nothing_outside_the_project_and_the_standard_library():
+    """Packaging (`collect_submodules('agentic_os')`) needs no change: no `importlib`, `__import__` or import by computed name was added."""
+    import ast
+    import importlib.util
+    allowed_third_party = {"fastapi", "starlette", "pydantic"}
+    for name in ("agentic_os.desktop_sources", "agentic_os.local_capability", "agentic_os.sources_rag", "agentic_os.sources"):
+        tree = ast.parse(Path(importlib.util.find_spec(name).origin).read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "__import__":
+                pytest.fail(f"{name}: __import__")
+            if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "import_module":
+                pytest.fail(f"{name}: import_module")
+            mods = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ""] if isinstance(node, ast.ImportFrom) and not node.level else []
+            for m in mods:
+                top = m.split(".")[0]
+                assert top in sys.stdlib_module_names or top in allowed_third_party or top in {"agentic_os", "redevops_rag", "runtime_contracts"}, (name, m)
+
+
 def test_the_end_of_one_session_leaves_another_sessions_registrations_alone(w):
     d1, d2 = w.folder("one"), w.folder("two")
     w.pick(d1)

@@ -189,3 +189,57 @@ def test_a_refused_registration_shows_what_today(browser, product):
         ctx.close()
         if RESULT:
             Path(RESULT).write_text(json.dumps(out, indent=1, default=str))
+
+
+def test_remove_then_reload_shows_it_gone_and_sign_out_ends_the_old_tab_and_a_new_session_has_no_sources(browser, product):
+    """Revocation as the person sees it: register, Remove (the route the UI will call), reload: gone. Register again, sign out from the page:
+    the old tab's next request gets the signed-out panel, the server already holds no registration, and a NEW session (a new launch code) lists no
+    sources and cannot confirm the folder without a new pick."""
+    out = {}
+    real = os.path.realpath(product.folder)
+    ctx, page, log = new_tab(browser, product)
+    try:
+        sidekick_ask(page, f"use the files in {product.folder} as context").click()
+        page.get_by_text(re.compile(r"Added .*uisample")).wait_for()
+        listed = json.loads(api(page, "GET", "/api/projects/customer-ops/sources")["text"])
+        sid = [s for s in listed if s["location"] == real][0]["source_id"]
+        authority = product.app.state.desktop_sources
+        assert api(page, "POST", "/api/sources/remove", {"project_id": "customer-ops", "source_id": sid})["status"] == 200
+        assert authority._registrations == []                                         # revoked before the response, not at the next request
+        page.reload()
+        page.wait_for_selector("button.nav")
+        go_view(page, "Sources")
+        assert page.get_by_text(re.compile(r"uisample")).count() == 0
+        shot(page, "dsrc-6-removed-after-reload")
+        out["after_remove_reload_lists_it"] = False
+        # register again, then sign out from the page itself
+        sidekick_ask(page, f"use the files in {product.folder} as context").click()
+        page.get_by_text(re.compile(r"Added .*uisample")).wait_for()
+        assert len(authority._registrations) == 1
+        r = api(page, "DELETE", "/api/local/session")
+        assert r["status"] == 200
+        assert authority._registrations == [] and authority._proposals == []         # gone with the session, before any further request
+        # the old tab's next request meets the signed-out wording
+        go_view(page, "Sources")
+        page.get_by_text("Not signed in to the local Agentic Apps service").first.wait_for()
+        shot(page, "dsrc-7-old-tab-signed-out")
+        out["old_tab_after_sign_out"] = page.locator("#agentic-signin").inner_text()[:200]
+        assert page.get_by_text(re.compile(r"uisample")).count() == 0
+        # a new session starts with zero registrations and the old pick is not valid for it
+        ctx2, page2, log2 = new_tab(browser, product)
+        try:
+            go_view(page2, "Sources")
+            assert page2.get_by_text(re.compile(r"uisample")).count() == 0
+            assert [s for s in json.loads(api(page2, "GET", "/api/projects/customer-ops/sources")["text"]) if s.get("session_only")] == []
+            c = api(page2, "POST", "/api/sources/confirm", {"project_id": "customer-ops", "confirmed_by": "you", "sources": [{"kind": "files", "location": str(product.folder)}]})
+            assert c["status"] == 403 and json.loads(c["text"])["detail"]["code"] == "not_proposed"
+            shot(page2, "dsrc-8-new-session-no-sources")
+        finally:
+            ctx2.close()
+        recs = [(x["action"], x["reason"]) for x in (json.loads(l) for l in product.audit.read_text().splitlines())]
+        assert recs == [("register", "ok"), ("remove", "user_request"), ("register", "ok"), ("session_end", "session_ended"), ("remove", "session_ended"), ("refuse", "not_proposed")]
+        assert authority.audit.verify()["status"] == "ok"
+    finally:
+        ctx.close()
+        if RESULT:
+            Path(RESULT).with_name("revocation-measured.json").write_text(json.dumps(out, indent=1, default=str))
