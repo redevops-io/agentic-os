@@ -1009,3 +1009,26 @@ def test_confirm_racing_sign_out_over_http_always_ends_with_nothing_registered_a
     recs = w.audit()
     assert len([r for r in recs if r["action"] == "register"]) == len([r for r in recs if r["action"] == "remove" and r["reason"] == "session_ended"])
     assert w.authority.audit.verify()["ok"] is True
+
+
+def test_no_route_serves_a_registered_folders_content_or_takes_a_source_id_but_remove(w):
+    """The access-path inventory (docs): the only routes that mention sources, and none with a source-id parameter, a file or a preview."""
+    seen = set()
+    for route in w.app.routes:
+        path = getattr(route, "path", "")
+        if "source" in path or "{source" in path or "file" in path or "preview" in path:
+            seen.add((path, tuple(sorted(getattr(route, "methods", None) or ()))))
+        assert "{source_id" not in path and "{src" not in path, path
+    assert seen == {("/api/projects/{project_id}/sources", ("GET",)), ("/api/sources/propose", ("POST",)),
+                    ("/api/sources/confirm", ("POST",)), ("/api/sources/remove", ("POST",))}
+
+
+def test_the_ui_config_report_and_the_other_get_routes_carry_no_registration(w):
+    d = w.folder("zz-unique-folder-name")
+    w.pick(d)
+    sid = sid_of(w, d)
+    for path in ("/api/ui-config", "/api/projects", f"/api/projects/{PROJECT}/missions", f"/api/projects/{PROJECT}/apps", f"/api/projects/{PROJECT}/runtime",
+                 f"/api/projects/{PROJECT}/templates", f"/api/projects/{PROJECT}/activity", f"/api/projects/{PROJECT}/discovery", f"/api/projects/{PROJECT}/attention",
+                 f"/api/projects/{PROJECT}/today", "/api/app-directory", "/api/sidekick/help"):
+        r = w.client.get(path)
+        assert sid not in r.text and "zz-unique-folder-name" not in r.text, path
