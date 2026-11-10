@@ -63,7 +63,7 @@ def build_secret_store(backend: str | None = None, **cfg: Any):
     backend = (backend or os.environ.get("REDEVOPS_SECRET_BACKEND") or "env").lower()
     make = _STORES.get(backend)
     if make is None:
-        raise ValueError(f"unknown secret backend '{backend}' (one of {sorted(_STORES)})")
+        raise ValueError(f"unknown secret backend (one of {sorted(_STORES)})")      # the token is not echoed: a key pasted as a reference must not reach a traceback
     return make(**cfg)
 
 

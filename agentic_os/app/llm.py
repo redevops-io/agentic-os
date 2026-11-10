@@ -19,6 +19,7 @@ receipt), which is what most governance tests and dry runs need.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Optional, Protocol, Tuple
 
@@ -186,7 +187,13 @@ def governed_text(prompt: str, *, classifications: Tuple[DataClassification, ...
     ep = default_in_boundary_endpoint()
     if ep is None:
         return None
-    gov = GovernedLLM.from_env(endpoints=(ep,), transport=OpenAICompatibleTransport.from_env())
+    from agentic_os.app.llm_settings import LLMKeyUnavailable
+    try:
+        transport = OpenAICompatibleTransport.from_env()
+    except LLMKeyUnavailable as e:
+        logging.getLogger(__name__).warning("model call not made: %s", e)         # the configured key cannot be read: degrade, send nothing
+        return None
+    gov = GovernedLLM.from_env(endpoints=(ep,), transport=transport)
     try:
         res = gov.complete(prompt, task_class=task_class,
                            classifications=classifications or (DEFAULT_UNCLASSIFIED_AS,),

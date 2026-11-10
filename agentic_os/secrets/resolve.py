@@ -52,7 +52,9 @@ class SecretReferenceError(ValueError):
 def parse_ref(ref: str) -> Tuple[str, str, str]:
     """``backend:namespace/path`` -> (backend, namespace, path). ``env:NAME`` -> ("env", "", "NAME")."""
     backend, sep, rest = (ref or "").strip().partition(":")
-    if not sep or not backend or not rest or any(c in ref for c in "\n\r\x00"):
+    # no backslash (a Windows path separator would step around the ``..`` check and the namespace binding) and no control, format or
+    # separator character (log forging, invisible look-alikes): the reference is text an operator or a model proposes
+    if not sep or not backend or not rest or any(c in ref for c in "\n\r\x00\\") or not ref.isprintable():
         raise SecretReferenceError("a secret reference looks like 'backend:namespace/path'")
     if backend == "env":
         return "env", "", rest
@@ -129,10 +131,16 @@ def read_secret(ref: str, *, purpose: str = "llm-provider", capability: str = "l
             pass
 
 
-def store_secret(ref: str, value: str, **store_cfg: Any) -> SecretRef:
+def store_secret(ref: str, value: str, *, tenant: Optional[str] = None, **store_cfg: Any) -> SecretRef:
     """Write ``value`` where ``ref`` points (create or replace). Returns the reference (never the value). The
-    env backend is read-only: persist the key in a real store or keep using your exported variable."""
+    env backend is read-only: persist the key in a real store or keep using your exported variable.
+
+    A write follows the same tenant as a read (``tenant`` argument, else ``REDEVOPS_LOCAL_TENANT``, else the reference's own
+    namespace): a reference outside that tenant is refused and nothing is written."""
     backend, ns, path = parse_ref(ref)
+    if backend != "env" and local_tenant(ns, tenant) != ns:
+        _log.warning("secret reference %s not written: it is outside the tenant of this call", ref)
+        raise SecretReferenceError("that reference is outside the tenant of this call (REDEVOPS_LOCAL_TENANT or the tenant argument); nothing was written")
     if backend == "env":
         raise SecretReferenceError("an env reference is read-only: export the variable yourself, or choose a store "
                                    "(file, encrypted-file, keyring, vault, keepassxc) to persist the key")

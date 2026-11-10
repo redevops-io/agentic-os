@@ -37,8 +37,11 @@ def _is_inside(base_url: str, extra_hosts: Tuple[str, ...] = ()) -> bool:
 def test_provider(settings: LLMSettings, key: Optional[str] = None, *, timeout: float = 20.0) -> Dict[str, Any]:
     """One minimal chat completion against ``settings``. Reports ok / HTTP status / error CLASS only (never a body
     or a key)."""
-    from .llm_settings import llm_api_key  # noqa: PLC0415
-    api_key = key if key is not None else llm_api_key(settings)
+    from .llm_settings import LLMKeyUnavailable, llm_api_key  # noqa: PLC0415
+    try:
+        api_key = key if key is not None else llm_api_key(settings)
+    except LLMKeyUnavailable:
+        return {"ok": False, "status": 0, "error": "LLMKeyUnavailable"}          # nothing was sent
     url = settings.base_url.rstrip("/") + "/chat/completions"
     body = json.dumps({"model": settings.model, "max_tokens": 1,
                        "messages": [{"role": "user", "content": "ping"}]}).encode()

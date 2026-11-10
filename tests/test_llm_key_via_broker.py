@@ -89,10 +89,12 @@ def test_the_settings_file_never_holds_the_key(cfg, a):
     assert oct(os.stat(cfg).st_mode & 0o777) == "0o600"
 
 
-def test_an_unreadable_reference_degrades_and_never_falls_back_to_another_credential(cfg, a, monkeypatch):
+def test_an_unreadable_reference_fails_closed_and_never_falls_back_to_another_credential(cfg, a, monkeypatch):
+    from agentic_os.app.llm_settings import LLMKeyUnavailable
     monkeypatch.setenv("OPENAI_API_KEY", "ambient-key-must-not-be-used")
     save_llm_settings(str(cfg), base_url=a.url, model="m", key_ref="file:llm/missing")
-    assert llm_api_key(load_llm_settings()) == "EMPTY"
+    with pytest.raises(LLMKeyUnavailable):
+        llm_api_key(load_llm_settings())
 
 
 def test_a_public_provider_is_still_refused_until_its_host_is_explicitly_allowed(cfg):

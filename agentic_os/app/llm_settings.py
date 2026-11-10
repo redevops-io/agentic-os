@@ -29,6 +29,12 @@ class SettingsError(ValueError):
     pass
 
 
+class LLMKeyUnavailable(RuntimeError):
+    """The settings name a key reference that could not be read (refused by the credential gate, absent, locked or unreadable). Raised
+    instead of sending the request with a placeholder key. The message names the reference (a location, never a value); the reason
+    code is in the log line ``agentic_os.secrets.resolve`` writes."""
+
+
 @dataclass(frozen=True)
 class LLMSettings:
     base_url: str = ""
@@ -103,14 +109,17 @@ def save_llm_settings(path: str, *, base_url: str, model: str, key_ref: str = ""
 
 def llm_api_key(settings: LLMSettings) -> str:
     """The key for THIS call: from the secret reference when one is set (resolved through the broker now, so a
-    rotation is live), else OPENAI_API_KEY from the environment, else the local-server sentinel ``EMPTY``."""
+    rotation is live; ``LLMKeyUnavailable`` when it cannot be read), else OPENAI_API_KEY from the environment, else the
+    local-server sentinel ``EMPTY`` (no key configured)."""
     if settings.key_ref:
         from agentic_os.secrets.resolve import read_secret  # noqa: PLC0415
         value = read_secret(settings.key_ref)
         if value:
             return value
-        return "EMPTY"            # reference set but unreadable: never fall back to a different credential
-    return os.environ.get("OPENAI_API_KEY", "EMPTY") or "EMPTY"
+        # a reference is set but unreadable: no request goes out with a placeholder key, and no other credential is tried
+        raise LLMKeyUnavailable(f"the model-provider key {settings.key_ref!r} could not be read, so no request was sent "
+                                "(the reason code is in the agentic_os.secrets.resolve log)")
+    return os.environ.get("OPENAI_API_KEY", "EMPTY") or "EMPTY"       # no key configured: a keyless local server
 
 
-__all__ = ["LLMSettings", "SettingsError", "SETTINGS_FILE_ENV", "load_llm_settings", "save_llm_settings", "llm_api_key"]
+__all__ = ["LLMSettings", "SettingsError", "LLMKeyUnavailable", "SETTINGS_FILE_ENV", "load_llm_settings", "save_llm_settings", "llm_api_key"]

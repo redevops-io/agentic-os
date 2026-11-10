@@ -150,15 +150,18 @@ def test_a_malformed_configured_tenant_is_refused_and_not_ignored(stores, monkey
 
 
 def test_an_empty_configured_tenant_means_not_configured(stores, monkeypatch):
-    """compose files export ``REDEVOPS_LOCAL_TENANT=${REDEVOPS_LOCAL_TENANT:-}``: empty is unset, the single-user rule applies."""
+    """An empty value (an exported but unset variable) means not configured: the single-user rule applies."""
     monkeypatch.setenv(LOCAL_TENANT_ENV, "")
     assert read_secret("file:llm/provider") == SECRET
 
 
-def test_the_llm_key_degrades_to_the_sentinel_when_the_tenant_does_not_match(stores, monkeypatch):
+def test_the_llm_key_fails_closed_when_the_tenant_does_not_match(stores, monkeypatch):
+    from agentic_os.app.llm_settings import LLMKeyUnavailable
     monkeypatch.setenv(LOCAL_TENANT_ENV, "acme")
     monkeypatch.setenv("OPENAI_API_KEY", "ambient-key-must-not-be-used")
-    assert llm_api_key(LLMSettings(key_ref="file:llm/provider")) == "EMPTY"
+    with pytest.raises(LLMKeyUnavailable) as e:
+        llm_api_key(LLMSettings(key_ref="file:llm/provider"))
+    assert SECRET not in str(e.value) and "ambient-key" not in str(e.value)
 
 
 # ── (vi) nothing logs or returns the secret ─────────────────────────────────────────────────────────────────────

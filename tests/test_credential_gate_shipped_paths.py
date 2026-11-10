@@ -198,12 +198,13 @@ def test_a_service_identity_reference_is_read_only_for_its_own_namespace(tmp_pat
 # ── read_secret: the LLM key, KeePassXC and the provider settings ───────────────────────────────────────────────
 
 def test_the_llm_key_path_refuses_a_cross_tenant_read(tmp_path, monkeypatch):
-    from agentic_os.app.llm_settings import LLMSettings, llm_api_key
+    from agentic_os.app.llm_settings import LLMKeyUnavailable, LLMSettings, llm_api_key
     monkeypatch.setenv("REDEVOPS_SECRET_DIR", str(tmp_path))
     store_secret("file:llm/provider", SECRET)
     assert llm_api_key(LLMSettings(key_ref="file:llm/provider")) == SECRET
     monkeypatch.setenv("REDEVOPS_LOCAL_TENANT", "globex")                 # the deployment's tenant is not the secret's namespace
-    assert llm_api_key(LLMSettings(key_ref="file:llm/provider")) == "EMPTY"
+    with pytest.raises(LLMKeyUnavailable):
+        llm_api_key(LLMSettings(key_ref="file:llm/provider"))
 
 
 def test_keepassxc_refuses_a_cross_tenant_read():
@@ -222,8 +223,9 @@ def test_keepassxc_refuses_a_cross_tenant_read():
         os.environ.pop("KP_MASTER", None)
 
 
-def test_the_provider_settings_skill_reads_the_previous_key_for_its_own_namespace_only(tmp_path, monkeypatch):
-    """``set_provider`` reads the previous key (for the rollback) with ``read_secret(key_ref, **store_cfg)``."""
+def test_the_provider_settings_skill_cannot_read_or_overwrite_another_tenants_key(tmp_path, monkeypatch):
+    """``set_provider`` reads the previous key (for the rollback) with ``read_secret(key_ref, **store_cfg)`` and writes the new one with
+    ``store_secret(key_ref, ..., **store_cfg)``: a tenant that is not the reference's namespace reads nothing and writes nothing."""
     from agentic_os.app import llm_admin
     import agentic_os.secrets.resolve as resolve
     monkeypatch.setenv("REDEVOPS_SECRET_DIR", str(tmp_path / "s"))
@@ -241,5 +243,8 @@ def test_the_provider_settings_skill_reads_the_previous_key_for_its_own_namespac
     llm_admin.set_provider(settings, **kw)
     assert seen == ["previous-key"]
     seen.clear()
-    llm_admin.set_provider(settings, tenant="globex", **kw)           # a cross-tenant request for the previous key
+    kw2 = dict(kw, key_value="overwritten")
+    with pytest.raises(resolve.SecretReferenceError):                 # a cross-tenant request is refused before anything is written
+        llm_admin.set_provider(settings, tenant="globex", **kw2)
     assert seen == [None]
+    assert real("file:llm/provider") == "new-key"                     # the key the first (own-namespace) call stored is untouched
