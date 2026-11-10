@@ -590,7 +590,7 @@ class DesktopSourceAuthority:
                     self._sweeper = None
                 return None
             nearest = min(self.capability.time_left(s) for s in held)
-        return max(0.02, min(nearest + 0.02, SWEEP_MAX_WAIT_S))
+        return max(0.05, min(nearest + 0.02, SWEEP_MAX_WAIT_S))          # never a busy loop, even if a dead session could not be removed
 
     def _stop_sweeper(self) -> None:
         with self._lock:
