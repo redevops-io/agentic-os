@@ -65,8 +65,8 @@ def test_pyproject_git_dependencies_are_tag_pinned_not_branch_pinned():
         assert re.search(r"@v\d+\.\d+\.\d+$", d), f"{d} is not pinned to a release tag"
     text = " ".join(git)
     # the converged trunk follows origin/main's first-party pins (the RC line's v0.3.4 / v0.1.0 are superseded; packaging/PINS.md)
-    assert "runtime-contracts.git@v0.3.14" in text
-    assert "discovery-runtime.git@v0.1.19" in text
+    assert "runtime-contracts.git@v0.3.17" in text
+    assert "discovery-runtime.git@v0.1.21" in text
     assert "knowledge-frontier.git@v0.2.0" in text
     assert "redevops-connectors.git@v0.1.0" in text
     assert "redevops-connectors.git@main" not in (ROOT / "pyproject.toml").read_text()
@@ -75,14 +75,30 @@ def test_pyproject_git_dependencies_are_tag_pinned_not_branch_pinned():
 def test_git_pins_record_tag_object_and_commit():
     pins = {p["name"]: p for p in json.loads((PK / "git-pins.json").read_text())["dependencies"]}
     assert pins["redevops-connectors"]["commit"] == "7fbb9ec4d4faff1dea2e238a94495bc1951b56bc"
-    assert pins["runtime-contracts"]["commit"] == "80e727d8d08b3d8bef371fefd0dedee8a77666f8"
-    assert pins["runtime-contracts"]["tag"] == "v0.3.14"
-    assert pins["discovery-runtime"]["commit"] == "b49f66c60e25ea54273f2d23845db027d21db762"
+    assert pins["runtime-contracts"]["commit"] == "f465e50185c3dbe99860bb4a29fc1ddd0d5cdafa"
+    assert pins["runtime-contracts"]["tag"] == "v0.3.17"
+    assert pins["runtime-contracts"]["tag_object"] == "977f553286bdb56ec392788aa54afb1ad397286c"
+    assert pins["discovery-runtime"]["tag"] == "v0.1.21"
+    assert pins["discovery-runtime"]["tag_object"] == "c1d171f51d4195d13255ac59f859e18548232232"
+    assert pins["discovery-runtime"]["commit"] == "4014092139de8b4e3251b335919c188711eeb3f4"
     assert pins["knowledge-frontier"]["commit"].startswith("057258ae")
-    assert pins["runtime-contracts"]["committed_build_dirs"] == []     # v0.3.14 is the first tag without the stale build/lib
+    assert pins["runtime-contracts"]["committed_build_dirs"] == []     # v0.3.17 (like v0.3.14) carries no stale build/lib
     for p in pins.values():
         assert re.fullmatch(r"[0-9a-f]{40}", p["tag_object"]) and re.fullmatch(r"[0-9a-f]{40}", p["commit"])
         assert p["tag_object"] != p["commit"]   # annotated tags: the two differ
+
+
+def test_uv_lock_agrees_with_the_first_party_pins():
+    """uv.lock records each first-party git dependency as ``rev=<tag>#<commit>``; it must say what git-pins.json and pyproject say,
+    and the runtime-contracts pin of the project and the one discovery-runtime requires must be the same tag (pip rejects a mismatch)."""
+    lock = (ROOT / "uv.lock").read_text()
+    pins = {p["name"]: p for p in json.loads((PK / "git-pins.json").read_text())["dependencies"]}
+    for name in ("runtime-contracts", "discovery-runtime", "knowledge-frontier"):
+        p = pins[name]
+        assert f'source = {{ git = "{p["url"]}?rev={p["tag"]}#{p["commit"]}" }}' in lock, name
+        assert f'name = "{name}"\nversion = "{p["version"]}"\n' in lock, name
+    # the lock's discovery-runtime entry depends on runtime-contracts and the project pins one tag of it
+    assert pins["runtime-contracts"]["tag"] == "v0.3.17"
 
 
 @pytest.mark.parametrize("os_name", ["macos", "windows", "linux"])

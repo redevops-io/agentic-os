@@ -70,7 +70,7 @@ requires-dist = [
     { name = "agentic-os", extras = ["projects"], marker = "extra == 'microsoft'" },
     { name = "agentic-os", extras = ["projects"], marker = "extra == 'slack'" },
     { name = "cryptography", specifier = ">=42" },
-    { name = "discovery-runtime", git = "https://github.com/redevops-io/discovery-runtime.git?rev=v0.1.19" },
+    { name = "discovery-runtime", git = "https://github.com/redevops-io/discovery-runtime.git?rev=v0.1.21" },
     { name = "duckdb", marker = "extra == 'duckdb'", specifier = ">=1.0" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=4.0" },
@@ -85,7 +85,7 @@ requires-dist = [
     { name = "redevops-connectors", marker = "extra == 'projects'", git = "https://github.com/redevops-io/redevops-connectors.git?rev=v0.1.0" },
     { name = "redevops-rag", marker = "extra == 'rag'", git = "https://github.com/redevops-io/redevops-rag.git?rev=v0.4.0" },
     { name = "requests", marker = "extra == 'gsc'", specifier = ">=2.28" },
-    { name = "runtime-contracts", git = "https://github.com/redevops-io/runtime-contracts.git?rev=v0.3.14" },
+    { name = "runtime-contracts", git = "https://github.com/redevops-io/runtime-contracts.git?rev=v0.3.17" },
     { name = "uvicorn", specifier = ">=0.29" },
 ]
 provides-extras = ["dev", "duckdb", "gsc", "postgres", "rag", "connectors", "projects", "google", "microsoft", "slack", "office", "mcp"]
@@ -648,8 +648,8 @@ wheels = [
 
 [[package]]
 name = "discovery-runtime"
-version = "0.1.19"
-source = { git = "https://github.com/redevops-io/discovery-runtime.git?rev=v0.1.19#b49f66c60e25ea54273f2d23845db027d21db762" }
+version = "0.1.21"
+source = { git = "https://github.com/redevops-io/discovery-runtime.git?rev=v0.1.21#4014092139de8b4e3251b335919c188711eeb3f4" }
 dependencies = [
     { name = "runtime-contracts" },
 ]
@@ -2426,8 +2426,8 @@ wheels = [
 
 [[package]]
 name = "runtime-contracts"
-version = "0.3.14"
-source = { git = "https://github.com/redevops-io/runtime-contracts.git?rev=v0.3.14#80e727d8d08b3d8bef371fefd0dedee8a77666f8" }
+version = "0.3.17"
+source = { git = "https://github.com/redevops-io/runtime-contracts.git?rev=v0.3.17#f465e50185c3dbe99860bb4a29fc1ddd0d5cdafa" }
 dependencies = [
     { name = "pyyaml" },
 ]

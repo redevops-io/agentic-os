@@ -1,27 +1,27 @@
 {
-  "_comment": "First-party git dependencies built into the wheelhouse. pip's VCS syntax accepts ONE ref, so pyproject.toml pins the TAG and this file pins the tag object AND the peeled commit; packaging/tools/build_git_wheels.py clones the tag, fails unless HEAD == commit, and builds from the clean clone. The pins follow pyproject.toml of the converged trunk (origin/main's tags: runtime-contracts v0.3.14, discovery-runtime v0.1.19, knowledge-frontier v0.2.0); the RC line's earlier pins (runtime-contracts v0.3.4, knowledge-frontier v0.1.0) are superseded, see packaging/PINS.md.",
+  "_comment": "First-party git dependencies built into the wheelhouse. pip's VCS syntax accepts ONE ref, so pyproject.toml pins the TAG and this file pins the tag object AND the peeled commit; packaging/tools/build_git_wheels.py clones the tag, fails unless HEAD == commit, and builds from the clean clone. The pins follow pyproject.toml of the converged trunk (runtime-contracts v0.3.17, discovery-runtime v0.1.21, knowledge-frontier v0.2.0); the RC line's earlier pins (runtime-contracts v0.3.4, knowledge-frontier v0.1.0) are superseded, see packaging/PINS.md.",
   "dependencies": [
     {
       "name": "runtime-contracts",
-      "version": "0.3.14",
+      "version": "0.3.17",
       "url": "https://github.com/redevops-io/runtime-contracts.git",
-      "tag": "v0.3.14",
-      "tag_object": "73ff21c2019f57afb026585bb58b357e6ac88d91",
-      "commit": "80e727d8d08b3d8bef371fefd0dedee8a77666f8",
+      "tag": "v0.3.17",
+      "tag_object": "977f553286bdb56ec392788aa54afb1ad397286c",
+      "commit": "f465e50185c3dbe99860bb4a29fc1ddd0d5cdafa",
       "build_backend": "setuptools",
       "committed_build_dirs": [],
-      "note": "v0.3.14 is the first tag without the stale committed build/lib that earlier tags ship (checked 2026-11-06: no committed build/ or dist/ in the tag's tree)."
+      "note": "v0.3.14 was the first tag without the stale committed build/lib that earlier tags ship (checked 2026-11-06); v0.3.17 (checked 2026-11-10 from the read-only mirror: tree 239dae0a, no committed build/ or dist/) keeps that. v0.3.15 added the credential tenant-binding gate."
     },
     {
       "name": "discovery-runtime",
-      "version": "0.1.19",
+      "version": "0.1.21",
       "url": "https://github.com/redevops-io/discovery-runtime.git",
-      "tag": "v0.1.19",
-      "tag_object": "5c25b79d43aefea497d3c891b2d4983b01869d29",
-      "commit": "b49f66c60e25ea54273f2d23845db027d21db762",
+      "tag": "v0.1.21",
+      "tag_object": "c1d171f51d4195d13255ac59f859e18548232232",
+      "commit": "4014092139de8b4e3251b335919c188711eeb3f4",
       "build_backend": "setuptools",
       "committed_build_dirs": [],
-      "note": "Added by the converged trunk: origin/main depends on it (pyproject pins v0.1.19, which requires runtime-contracts v0.3.14). Licence status of this component is not decided here."
+      "note": "v0.1.21 requires runtime-contracts v0.3.17 exactly (v0.1.19 and v0.1.20 require v0.3.14, so pip cannot resolve either together with v0.3.17). UNPUBLISHED at the time of this pin: the tag exists only as a local annotated tag object in a private scratch clone; the pin is valid once that tag object is pushed unchanged. Licence status of this component is not decided here."
     },
     {
       "name": "knowledge-frontier",

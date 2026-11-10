@@ -178,3 +178,18 @@ Tests:
 * **`site` stays out of the frozen sidecar.** The spec excludes it (`SITE_NOT_FROZEN`); `trusted_import` imports it under `try/except ImportError`. `packaging/probes/` freezes a probe with the sidecar's own spec to show `trusted_import` refusing planted packages inside the PyInstaller runtime. Tests: `tests/test_trusted_import_frozen_safe.py`, opt-in `tests/test_frozen_trusted_import.py`.
 * **The sidecar does not depend on where the build interpreter is installed.** `packaging/tools/normalise_sysconfigdata.py` (called from the spec) replaces the interpreter prefix inside `_sysconfigdata__<platform>`. Test: `tests/test_sidecar_sysconfigdata_normalised.py`.
 * **A bad `PROJECTS_DRILLDOWN_*` configuration prints one line.** `agentic_os/projects_entry.py` is the entry of `serve` and `agentic-os-projects`. Test: `tests/test_projects_entry_refusal.py`.
+
+## runtime-contracts v0.3.17 and discovery-runtime v0.1.21 (branch `candidate/0.6.0-rc2-contracts-0.3.17`, 2026-11-10)
+
+`pyproject.toml`, `uv.lock`, `git-pins.json` and `.github/workflows/native-core.yml` move runtime-contracts from **v0.3.14** to **v0.3.17**
+(tag object `977f5532`, commit `f465e501`, tree `239dae0a`; no committed `build/` or `dist/`; `committed_build_dirs` stays empty) and discovery-runtime
+from **v0.1.19** to **v0.1.21** (tag object `c1d171f5`, commit `40140921`). discovery-runtime requires its runtime-contracts exactly: v0.1.19 and v0.1.20 require
+v0.3.14, so v0.1.21 (which changes only that pin and the version strings of v0.1.20) is what resolves with v0.3.17. **v0.1.21 is not published**: the tag
+object above exists as a local annotated tag in a private scratch clone, and the pin holds only once that same object is pushed. knowledge-frontier
+v0.2.0, redevops-connectors v0.1.0 and redevops-rag v0.4.0 do not depend on runtime-contracts and keep their pins.
+
+The behaviour that matters at run time arrived in runtime-contracts v0.3.15: a credential request is denied (`TENANT_MISMATCH`, `AUTHORITY_MISMATCH`, `AUTHORITY_EXPIRED`)
+unless its tenant equals the authority principal's tenant, its secret namespace equals that tenant, the authority id matches and the authority has not expired.
+`agentic_os/secrets/resolve.py::read_secret` states where its tenant comes from (the `tenant` argument, else `REDEVOPS_LOCAL_TENANT`, else the namespace of the
+reference for the single-user desktop). Tests: `tests/test_read_secret_tenant.py`, `tests/test_credential_gate_shipped_paths.py`.
+The wheelhouse, SBOM and notices are not regenerated here and every native artifact must be rebuilt from this pin.
