@@ -61,6 +61,40 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip)
 
 
+# ── descriptor guard: a test must not close or replace a file descriptor it does not own ─────────────────────────────────────────────
+# pytest's faulthandler plugin saves a duplicate of stderr in a descriptor of its own and closes it in pytest_unconfigure, after the last test. A test that
+# dup2-ed over that number and closed it (tests/test_signing_procedure_r0prime.py did, with fixed numbers 9, 12, 20, ...) made the run end with
+# "OSError: [Errno 9] Bad file descriptor" and exit status 1 although every test passed, with nothing naming the test. This fixture compares, per test, the identity
+# of that descriptor and of fd 2 before the test's setup and after its last teardown (it is the first autouse fixture, so it is finalized last), and fails THAT test.
+# It restores nothing, hides nothing and does not change how the session ends (pytest's own unconfigure still reports a lost descriptor). Cost: a few fstat calls per test.
+def _fd_identity(fd: int):
+    try:
+        st = os.fstat(fd)
+    except OSError as e:
+        return ("closed", e.errno)
+    return (st.st_dev, st.st_ino, st.st_mode, st.st_rdev)
+
+
+@pytest.fixture(autouse=True)
+def _fd_integrity_guard(request):
+    watched = [2]
+    try:
+        from _pytest.faulthandler import fault_handler_stderr_fd_key
+        saved = request.config.stash.get(fault_handler_stderr_fd_key, None)      # absent under ``-p no:faulthandler``
+        if isinstance(saved, int):
+            watched.append(saved)
+    except ImportError:                                                         # a pytest without that plugin layout: fd 2 only
+        pass
+    before = {fd: _fd_identity(fd) for fd in watched}
+    yield
+    after = {fd: _fd_identity(fd) for fd in watched}
+    changed = {fd: (before[fd], after[fd]) for fd in watched if after[fd] != before[fd]}
+    if changed:
+        pytest.fail("this test closed or replaced a file descriptor it does not own: " + "; ".join(
+            f"fd {fd}{' (stderr)' if fd == 2 else ' (the copy of stderr that pytest saved for faulthandler)'}: {b} -> {a}" for fd, (b, a) in changed.items())
+            + ". Use descriptors you created yourself (os.dup, fcntl F_DUPFD) or do it in a child process; see tests/test_fd_guard.py", pytrace=False)
+
+
 _CORE_ENV = ("TWENTY_BASE_URL", "TWENTY_API_KEY", "LAGO_API_URL", "LAGO_API_KEY",
              "CHATWOOT_BASE_URL", "CHATWOOT_API_TOKEN", "CHATWOOT_ACCOUNT_ID")
 

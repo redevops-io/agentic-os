@@ -2232,22 +2232,32 @@ def test_r5_03_nothing_path_resolved_runs_before_the_scrub(tmp_path):
             assert word not in selfblock, (s.name, word)
 
 
+# A fresh process that opens `argv[1]` on each of the given descriptor numbers and then replaces itself with the command that follows. The numbers are free in
+# a fresh interpreter. Doing this in the pytest process (os.dup2 onto fixed numbers, then os.close) replaced and closed descriptors it does not own, among them the
+# copy of stderr that pytest's faulthandler plugin closes at the end of the session: the run then ended with "Bad file descriptor" and exit status 1 (tests/test_fd_guard.py).
+_EXEC_WITH_OPEN_FDS = (
+    "import os, sys\n"
+    "src = os.open(sys.argv[1], os.O_RDONLY)\n"
+    "for n in map(int, sys.argv[2].split(',')):\n"
+    "    os.dup2(src, n)\n"
+    "    os.set_inheritable(n, True)\n"
+    "os.close(src)\n"
+    "os.execv(sys.argv[3], sys.argv[3:])\n")
+_INHERITED_FDS = (9, 12, 20, 64, 100, 200)
+
+
 def test_r5_inherited_file_descriptors_are_closed(mac):
-    fds = []
-    for n in (9, 12, 20, 64, 100, 200):
-        fd = os.open(__file__, os.O_RDONLY)
-        os.dup2(fd, n)
-        os.close(fd)
-        fds.append(n)
-    try:
-        a = ["/bin/bash", mac.script, "--adhoc-test", "--input-dmg", mac.dmg, "--expected-sha256", sha_file(mac.dmg), "--out-dir", mac.out]
-        r = subprocess.run([str(x) for x in a], env=mac.env(), capture_output=True, text=True, pass_fds=fds)
-    finally:
-        for n in fds:
-            os.close(n)
+    def under_open_fds(cmd):
+        return subprocess.run([sys.executable, "-c", _EXEC_WITH_OPEN_FDS, __file__, ",".join(map(str, _INHERITED_FDS)), *[str(x) for x in cmd]],
+                              env=mac.env(), capture_output=True, text=True)
+    # control: without the script's scrub the descriptors really are open in the command that is started (so the assertion below can fail)
+    c = under_open_fds(["/bin/ls", "/dev/fd"])
+    assert c.returncode == 0 and set(map(str, _INHERITED_FDS)) <= set(c.stdout.split()), c.stdout + c.stderr
+    a = ["/bin/bash", mac.script, "--adhoc-test", "--input-dmg", mac.dmg, "--expected-sha256", sha_file(mac.dmg), "--out-dir", mac.out]
+    r = under_open_fds(a)
     assert r.returncode == 0, r.stderr
     seen = set(" ".join((mac.state / "codesign-fds").read_text().split("\n")).split())
-    assert not (seen & {"9", "12", "20", "64", "100", "200"}), seen
+    assert not (seen & set(map(str, _INHERITED_FDS))), seen
 
 
 @pytest.mark.parametrize("value", ["stub-test", "1", "anything"])
