@@ -36,6 +36,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import re
 import secrets
 import threading
@@ -43,6 +44,8 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable, Deque, Dict, Iterable, List, Optional, Tuple
+
+log = logging.getLogger(__name__)
 
 PROTO = "agentic-os-local-capability/1"
 SESSION_HEADER = "x-agentic-session"    # lower-case: ASGI header names are lower-case
@@ -148,6 +151,7 @@ class LocalCapability:
         self._codes: List[Tuple[bytes, Tuple[float, float]]] = []
         self._challenges: List[Tuple[bytes, Tuple[float, float]]] = []
         self._sessions: List[Tuple[bytes, Session]] = []
+        self._end_listeners: List[Callable[[List[Session]], None]] = []
         # Two independent budgets: noise on the launch-code exchange (any local process can send
         # it) must never lock the launcher out of minting codes.
         self.limiter = _FailureLimiter(clock, max_failures, failure_window)        # POST /api/local/session
@@ -238,16 +242,17 @@ class LocalCapability:
         sess = Session(csrf=secrets.token_urlsafe(32), expires=self._deadline(self.session_ttl),
                        host=(host or "").strip().lower())
         with self._lock:
-            self._purge_sessions()
+            ended = self._purge_sessions()
             if len(self._sessions) >= self.MAX_SESSIONS:
-                self._sessions.pop(0)
+                ended.append(self._sessions.pop(0)[1])               # the store pushes the oldest session out: that is an end too
             self._sessions.append((_digest(token), sess))
+        self._notify_ended(ended)
         return token, sess
 
     def find_session(self, tokens: Iterable[str], host: str = "") -> Optional[Session]:
         h = (host or "").strip().lower()
         with self._lock:
-            self._purge_sessions()
+            ended = self._purge_sessions()
             found: Optional[Session] = None
             for tok in tokens:
                 if not isinstance(tok, str) or len(tok) > 128:
@@ -256,7 +261,8 @@ class LocalCapability:
                 for stored, sess in self._sessions:
                     if hmac.compare_digest(stored, d) and sess.host == h:
                         found = sess
-            return found
+        self._notify_ended(ended)
+        return found
 
     def session_is_live(self, sess: object) -> bool:
         """True only for a ``Session`` THIS capability issued that has not expired or been dropped. Identity, not equality: a look-alike
@@ -264,15 +270,56 @@ class LocalCapability:
         if not isinstance(sess, Session):
             return False
         with self._lock:
-            self._purge_sessions()
-            return any(s is sess for _d, s in self._sessions)
+            ended = self._purge_sessions()
+            live = any(s is sess for _d, s in self._sessions)
+        self._notify_ended(ended)
+        return live
 
     def drop_session(self, sess: Session) -> None:
+        """End a session (sign-out). Whatever was registered under it (``add_session_end_listener``) is revoked before this returns."""
         with self._lock:
+            dropped = [s for _d, s in self._sessions if s is sess]
             self._sessions = [(d, s) for d, s in self._sessions if s is not sess]
+        self._notify_ended(dropped)
 
-    def _purge_sessions(self) -> None:
-        self._sessions = [(d, s) for d, s in self._sessions if self._alive(s.expires)]
+    def sweep_expired(self) -> int:
+        """Drop the sessions whose deadline has passed and tell the listeners, with no request involved. Returns how many ended."""
+        with self._lock:
+            ended = self._purge_sessions()
+        self._notify_ended(ended)
+        return len(ended)
+
+    def time_left(self, sess: object) -> float:
+        """Seconds until ``sess`` expires by the earlier of the two clocks (0.0 when it is not a session of this capability, or is over)."""
+        if not isinstance(sess, Session):
+            return 0.0
+        return max(0.0, min(sess.expires[0] - self._clock(), sess.expires[1] - self._wall()))
+
+    def add_session_end_listener(self, fn: Callable[[List[Session]], None]) -> None:
+        """``fn(sessions)`` is called, synchronously and WITHOUT this object's lock held, for every session that ends by sign-out, expiry or
+        being pushed out of the store. It is how something that a session owns (desktop source registrations) is revoked at once instead of
+        when the next request looks. A listener that raises is logged (the exception type only) and ignored: it must not keep a sign-out from completing."""
+        with self._lock:
+            self._end_listeners.append(fn)
+
+    def _notify_ended(self, ended: List[Session]) -> None:
+        if not ended:
+            return
+        with self._lock:
+            listeners = list(self._end_listeners)
+        for fn in listeners:
+            try:
+                fn(list(ended))
+            except Exception as e:                                  # noqa: BLE001 - a listener's failure never blocks the session's end
+                log.warning("a session-end listener failed: %s", type(e).__name__)
+
+    def _purge_sessions(self) -> List[Session]:
+        """Remove expired sessions (caller holds the lock) and return them so the caller can notify AFTER releasing it."""
+        keep, gone = [], []
+        for d, s in self._sessions:                                 # each session is judged once, so none can be dropped without being reported
+            (keep if self._alive(s.expires) else gone).append((d, s))
+        self._sessions = keep
+        return [s for _d, s in gone]
 
     def _purge(self, store: List[Tuple[bytes, Tuple[float, float]]]) -> None:
         store[:] = [(d, e) for d, e in store if self._alive(e)]

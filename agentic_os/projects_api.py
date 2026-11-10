@@ -302,6 +302,9 @@ class SampleProjectionProvider:
     #: sources a user confirmed in this process, by project id. IN MEMORY ONLY: nothing is written anywhere and a restart
     #: forgets them (persistence beyond the process is an owner decision, limitation L-1 of the macOS report: the desktop app persists no data). Listed with a "(this session only)" marker.
     session_sources: Dict[str, List[dict]] = field(default_factory=dict)
+    #: Set by ``create_app`` behind the desktop gate: ``view(project_id)`` returns the registrations of the REQUEST'S OWN session, judged at the
+    #: moment of the call (agentic_os/desktop_sources.py). The sources a desktop session registers live there, never in ``session_sources``.
+    session_source_view: Optional[Callable[[str], List[dict]]] = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.policy_registry is None:
@@ -727,7 +730,8 @@ class SampleProjectionProvider:
                 "detail": "connected (sample: simulated hosted OAuth)"}
 
     def sources(self, pid: str) -> List[dict]:
-        return _sample_sources() + [dict(s) for s in self.session_sources.get(pid, [])]
+        view = self.session_source_view
+        return _sample_sources() + [dict(s) for s in self.session_sources.get(pid, [])] + (view(pid) if view is not None else [])
 
     def remember_sources(self, pid: str, projections: List[dict]) -> None:
         """Keep confirmed sources for the life of this process (in memory; the same source id replaces its earlier entry)."""
@@ -1587,6 +1591,12 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     from .desktop_sources import DesktopSourceAuthority
     desktop = DesktopSourceAuthority(capability) if capability is not None else None
     app.state.desktop_sources = desktop
+    if desktop is not None:
+        from .desktop_sources import SessionContextMiddleware, close_on_shutdown
+        app.add_middleware(SessionContextMiddleware)            # the request's gate-validated session, for code that has no Request
+        close_on_shutdown(app, desktop)                         # the end of the process revokes every registration
+        if hasattr(prov, "session_source_view"):
+            prov.session_source_view = desktop.current_projections
     # Same-origin only by default (the bundled UI is served from this app, so it needs no CORS). Cross-origin
     # access is opt-in: `allow_origins=` or $PROJECTS_CORS_ORIGINS (comma-separated origins).
     origins = allow_origins or [o.strip() for o in _os_env.environ.get("PROJECTS_CORS_ORIGINS", "").split(",")
@@ -1936,7 +1946,7 @@ def create_app(provider: Optional[ProjectionProvider] = None, *, allow_origins: 
     @app.get("/api/projects/{project_id}/sources")
     def _sources(project_id: str) -> List[dict]:
         if desktop is not None:
-            desktop.sweep(prov)         # what a signed-out or expired session registered is gone on this request
+            desktop.sweep()
         return prov.sources(project_id)
 
     @app.get("/api/projects/{project_id}/runtime")
@@ -2169,6 +2179,9 @@ def mounted_app(base_path: str = "", provider: Optional[ProjectionProvider] = No
         return inner
     outer = FastAPI(title="ReDevOps Projects", version="0.1.0")
     outer.mount(base, inner)   # Starlette strips the prefix before the inner app sees it
+    if getattr(inner.state, "desktop_sources", None) is not None:      # a mounted app's own lifespan is not run: the outer one closes it
+        from .desktop_sources import close_on_shutdown
+        close_on_shutdown(outer, inner.state.desktop_sources)
     if kw.get("capability") is not None:     # the gate must wrap the outermost app (its /docs too)
         from .local_capability import install
         install(outer, kw["capability"], base_path=base, public_paths=inner.state.local_public_paths)

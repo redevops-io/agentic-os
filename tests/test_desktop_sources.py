@@ -5,7 +5,7 @@ set") because origin/main's control-token check sits behind a gate that offers n
 (``agentic_os/desktop_sources.py``): a random per-process token in memory that no route, header, log, audit record or environment variable ever
 carries; used server-side, after the gate has validated the session, for the enumerated folder-registration routes only; folders are exactly
 what the user picked in a proposal, checked by ``source_folder_policy``; every registration, refusal and removal is a hash-chained, anchored
-audit record; removal (and the end of the session) takes effect on the next request.
+audit record; removal and the end of the session take effect before their response (docs: revocation).
 """
 from __future__ import annotations
 
@@ -173,7 +173,9 @@ def test_two_folders_are_two_sources_and_removing_one_leaves_the_other(w):
     assert len(ma) == 1 and len(mb) == 1 and ma[0]["source_id"] != mb[0]["source_id"]
     assert w.remove(ma[0]["source_id"]).status_code == 200
     assert w.mine(a) == [] and len(w.mine(b)) == 1
-    assert w.confirm(a).status_code == 200                                         # still proposed: a re-register is allowed within the proposal's life
+    assert w.confirm(a).json()["detail"]["code"] == "not_proposed"                 # the pick went with the registration: a replayed confirm cannot bring it back
+    assert w.mine(a) == []
+    assert w.pick(a).status_code == 200                                            # a new pick can
     assert len(w.mine(a)) == 1
 
 
@@ -620,9 +622,9 @@ def test_nothing_but_the_audit_log_is_written_to_disk(w, monkeypatch):
 
 
 # ----------------------------------------------------------------------------------------------------------------------------------
-# revocation: removal and the end of the session take effect on the next request
+# revocation: removal and the end of the session take effect before their response
 # ----------------------------------------------------------------------------------------------------------------------------------
-def test_removal_takes_effect_on_the_next_request_and_a_second_removal_is_a_404(w):
+def test_removal_takes_effect_before_it_returns_and_a_second_removal_is_a_404(w):
     d = w.folder()
     w.pick(d)
     sid = w.mine(d)[0]["source_id"]
@@ -646,12 +648,13 @@ def test_removal_needs_the_session_the_csrf_header_and_the_same_project(w):
     assert len(w.mine(d)) == 1
 
 
-def test_signing_out_forgets_what_that_session_registered_on_the_next_request(w):
+def test_signing_out_forgets_what_that_session_registered_before_it_returns(w):
     d = w.folder()
     w.pick(d)
-    c2, csrf2 = w.session()                                                                              # the user opened a second window
-    assert len(w.mine(d, client=c2)) == 1
+    c2, csrf2 = w.session()                                                                              # a second window has a session of its own
+    assert w.mine(d, client=c2) == [] and len(w.mine(d)) == 1                                           # registrations are session-scoped
     assert w.client.delete("/api/local/session", headers={"X-Agentic-CSRF": w.csrf}).status_code == 200  # sign-out of the first
+    assert w.authority._registrations == []                                                             # gone before any further request
     assert w.mine(d, client=c2) == []
     assert [(r["action"], r["reason"]) for r in w.audit()][-1] == ("remove", "session_ended")
     # a new session in the same process starts with none of them, and the folder needs a new pick
