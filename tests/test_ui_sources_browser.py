@@ -833,3 +833,393 @@ def test_g_a_folder_name_with_markup_characters_is_text_everywhere_it_is_shown(b
         assert pwned(page)
     finally:
         ctx.close()
+
+
+# ---------------------------------------------------------------------------------------------- (e) keyboard only
+def tab_to(page, tag=None, text=None, label=None, role=None, limit=400):
+    """Press Tab until the focused element matches (all given conditions); nothing but the keyboard moves focus."""
+    js = """([tag, text, label, role]) => { const e = document.activeElement; if (!e || e === document.body) return false;
+        if (tag && e.tagName.toLowerCase() !== tag) return false;
+        if (text && !new RegExp(text).test((e.innerText || '').trim())) return false;
+        if (label && !new RegExp(label).test(e.getAttribute('aria-label') || '')) return false;
+        if (role && e.getAttribute('role') !== role) return false;
+        return true; }"""
+    for _ in range(limit):
+        page.keyboard.press("Tab")
+        if page.evaluate(js, [tag, text, label, role]):
+            return active(page)
+    raise AssertionError(f"Tab did not reach tag={tag} text={text} label={label} role={role} in {limit} presses; at {active(page)}")
+
+
+def test_e_the_whole_flow_works_with_the_keyboard_alone(browser, start):
+    p = start()
+    ctx, page, log = new_tab(browser, p)
+    kb = page.keyboard
+    steps = []
+    try:
+        folder = p.folders["alpha-contracts"]
+        page.evaluate("() => { document.activeElement && document.activeElement.blur(); }")
+        # Sidekick: Settings > Sidekick, by keyboard
+        tab_to(page, tag="button", text="Settings$"); kb.press("Enter")
+        tab_to(page, tag="button", text="^Sidekick$"); kb.press("Enter")
+        steps.append("reach Sidekick")
+        tab_to(page, tag="textarea", label="Ask Sidekick")
+        kb.type(f"use the files in {folder} as context")
+        tab_to(page, tag="button", text="^Send$"); kb.press("Enter")
+        tab_to(page, tag="button", text="Looks right")
+        steps.append("proposal")
+        with page.expect_response(lambda r: r.url.endswith("/api/sources/confirm")) as ri:
+            kb.press("Enter")
+        assert ri.value.status == 200
+        page.get_by_text(re.compile(r"Added .*alpha-contracts")).wait_for()
+        steps.append("looks right -> connected")
+        # a refusal by keyboard: Connections > Data sources > Add source > Local files > a folder path > Connect & scan
+        page.evaluate("() => { document.activeElement && document.activeElement.blur(); }")
+        tab_to(page, tag="button", text="Connections$"); kb.press("Enter")
+        tab_to(page, tag="button", text="^Data sources$"); kb.press("Enter")
+        tab_to(page, role="tab", text="^Connected$")                                      # a tablist is one Tab stop: arrow keys move inside it
+        kb.press("ArrowRight")
+        assert active(page)["text"] == "Add source"
+        kb.press("Enter")
+        tab_to(page, tag="button", text="^Local files$"); kb.press("Enter")
+        tab_to(page, tag="input", label="Folder path")
+        kb.press("Control+A" if os.uname().sysname != "Darwin" else "Meta+A")
+        kb.type(str(p.home))
+        tab_to(page, tag="button", text="^Connect & scan$")
+        with page.expect_response(lambda r: r.url.endswith("/api/sources/confirm")) as ri:
+            kb.press("Enter")
+        assert ri.value.status == 403 and ri.value.json()["detail"]["code"] == "home_directory"
+        alert(page).first.wait_for(state="visible")
+        assert expected("home_directory", "confirm") in alert(page).first.inner_text()
+        steps.append("refusal shown")
+        # the alert is reachable and dismissable by keyboard; focus returns to the folder field with the text kept
+        tab_to(page, tag="button", text="^Dismiss$")
+        assert page.evaluate("() => document.activeElement.closest('.problem') !== null")
+        kb.press("Enter")
+        assert alert(page).count() == 0 and active(page)["label"] == "Folder path"
+        assert page.get_by_label("Folder path").input_value() == str(p.home)
+        steps.append("dismissed by keyboard")
+        # Remove by keyboard
+        page.evaluate("() => { document.activeElement.blur(); }")
+        tab_to(page, role="tab", text="^Add source$")
+        kb.press("ArrowLeft")
+        assert active(page)["text"] == "Connected"
+        kb.press("Enter")
+        tab_to(page, tag="button", label="^Remove alpha-contracts")
+        kb.press("Enter")
+        assert active(page)["text"] == "Keep"
+        kb.press("Tab")
+        assert active(page)["text"] == "Yes, remove"
+        kb.press("Enter")
+        page.locator(".removed-note").filter(has_text="Removed alpha-contracts").wait_for()
+        page.wait_for_function("() => document.activeElement && document.activeElement.classList.contains('removed-note')", timeout=3000)
+        assert mine(page) == []
+        steps.append("removed by keyboard")
+        shot(page, "e-keyboard-flow-end")
+        # Escape cancels a question opened by keyboard
+        MEASURED["keyboard_steps"] = steps
+        assert log["dialogs"] == []
+    finally:
+        ctx.close()
+
+
+# ---------------------------------------------------------------------------------------------- (f) axe, focus ring, small screens, forced colours
+def axe_run(page, axe_source, tags=AXE_TAGS, exclude=None):
+    """``exclude``: CSS selectors left out of the run (used only for the left rail under forced-colors emulation, where axe's colour-contrast model
+    does not know the UA overrides the colours; the views under test are never excluded)."""
+    page.evaluate(axe_source)                                                         # injected over CDP: the page's CSP is not loosened
+    ctx_arg = {"exclude": [[x] for x in exclude]} if exclude else None
+    return page.evaluate("""async ([tags, ctx]) => { const r = await axe.run(ctx || document, {runOnly: {type: 'tag', values: tags}});
+        return r.violations.map(v => ({id: v.id, impact: v.impact, nodes: v.nodes.map(n => n.target.join(' ')).slice(0, 5), count: v.nodes.length, help: v.help})); }""", [tags, ctx_arg])
+
+
+def judge(violations):
+    """WCAG A/AA violations must be none; moderate best-practice rules the whole UI already carries (BASELINE_MODERATE) are allowed, nothing else."""
+    bad = [v for v in violations if v["id"] not in BASELINE_MODERATE]
+    return bad
+
+
+EXCLUDE = {"light": None, "dark": None, "forced-colors": [".rail"]}
+SCHEMES = {
+    "light": dict(color_scheme="light"),
+    "dark": dict(color_scheme="dark"),
+    "forced-colors": dict(color_scheme="light", forced_colors="active"),
+}
+
+
+def put_sources_in_every_state(page, p):
+    """Sources view with a session source, the Remove question open and a refusal alert showing: the states the change introduced."""
+    register_via_sidekick(page, p.folders["alpha-contracts"])
+    sources_listing(page)
+    remove_button(page, "alpha-contracts").click()
+    page.get_by_role("group", name=re.compile("^Remove alpha")).wait_for()
+
+
+@pytest.mark.parametrize("scheme", list(SCHEMES))
+@pytest.mark.parametrize("width", [1280, 320])
+def test_f_axe_finds_nothing_on_the_sources_view_and_the_sidekick_in_every_new_state(browser, start, axe_source, scheme, width):
+    p = start()
+    ctx, page, log = new_tab(browser, p, width=width, height=800 if width > 400 else 700)
+    try:
+        page.emulate_media(**SCHEMES[scheme])
+        results = {}
+        # Sources: Remove question open
+        put_sources_in_every_state(page, p)
+        results["sources-remove-question"] = judge(axe_run(page, axe_source, exclude=EXCLUDE[scheme]))
+        shot(page, f"f-{scheme}-{width}-sources-remove-question")
+        # Sources: failed removal alert inside the card
+        route_json(page, "/api/sources/remove", 503, {"detail": {"code": "audit_unavailable", "message": "x", "path": ""}})
+        page.get_by_role("button", name="Yes, remove").click()
+        alert(page).first.wait_for(state="visible")
+        results["sources-remove-alert"] = judge(axe_run(page, axe_source, exclude=EXCLUDE[scheme]))
+        shot(page, f"f-{scheme}-{width}-sources-remove-alert")
+        page.unroute("**/api/sources/remove")
+        # Sources: Add form with a refusal alert
+        inp = open_add_form(page)
+        connect_scan(page, str(p.home))
+        alert(page).first.wait_for(state="visible")
+        results["sources-add-alert"] = judge(axe_run(page, axe_source, exclude=EXCLUDE[scheme]))
+        shot(page, f"f-{scheme}-{width}-sources-add-alert")
+        # Sidekick view with a refusal alert, then with a proposal
+        ok = sidekick_propose(page, p.home)
+        with page.expect_response(lambda r: r.url.endswith("/api/sources/confirm")):
+            ok.click()
+        alert(page).first.wait_for(state="visible")
+        results["sidekick-alert"] = judge(axe_run(page, axe_source, exclude=EXCLUDE[scheme]))
+        shot(page, f"f-{scheme}-{width}-sidekick-alert")
+        # Sidekick panel (the drawer opened from the top bar)
+        open_panel(page)
+        page.wait_for_timeout(300)
+        results["sidekick-panel"] = judge(axe_run(page, axe_source, exclude=EXCLUDE[scheme]))
+        shot(page, f"f-{scheme}-{width}-sidekick-panel")
+        MEASURED.setdefault("axe", {})[f"{scheme}-{width}"] = results
+        for state, bad in results.items():
+            assert bad == [], (scheme, width, state, bad)
+    finally:
+        ctx.close()
+
+
+RING_JS = """() => {
+  const e = document.activeElement;
+  const cs = getComputedStyle(e);
+  const parse = (c) => { const m = c.match(/rgba?\\(([^)]+)\\)/); if (!m) return null; const a = m[1].split(/[ ,\\/]+/).filter(Boolean).map(Number); return {r: a[0], g: a[1], b: a[2], a: a.length > 3 ? a[3] : 1}; };
+  let layers = [];
+  for (let n = e.parentElement; n; n = n.parentElement) { const b = parse(getComputedStyle(n).backgroundColor); if (b && b.a > 0) { layers.push(b); if (b.a >= 0.99) break; } }
+  let bg = {r: 255, g: 255, b: 255};
+  for (const l of layers.reverse()) { bg = {r: l.r * l.a + bg.r * (1 - l.a), g: l.g * l.a + bg.g * (1 - l.a), b: l.b * l.a + bg.b * (1 - l.a)}; }
+  return {tag: e.tagName.toLowerCase(), name: (e.getAttribute('aria-label') || e.innerText || '').trim().slice(0, 40),
+          outlineStyle: cs.outlineStyle, outlineWidth: parseFloat(cs.outlineWidth), outlineColor: cs.outlineColor, outlineOffset: cs.outlineOffset,
+          boxShadow: cs.boxShadow, bg: bg, focusVisible: e.matches(':focus-visible')};
+}"""
+
+
+def lum(c):
+    def f(v):
+        v = v / 255
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2])
+
+
+def contrast(a, b):
+    la, lb = lum(a), lum(b)
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def ring_of(page):
+    return page.evaluate(RING_JS)
+
+
+def check_ring(r, forced=False):
+    assert r["focusVisible"], r
+    assert r["outlineStyle"] != "none" and r["outlineWidth"] > 0, r                  # a visible ring (width > 0)
+    if forced:
+        return None
+    m = re.match(r"rgba?\((\d+),\s*(\d+),\s*(\d+)", r["outlineColor"])
+    col = [int(x) for x in m.groups()]
+    ratio = contrast(col, [r["bg"]["r"], r["bg"]["g"], r["bg"]["b"]])
+    assert ratio >= 3.0, (ratio, r)
+    return round(ratio, 2)
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark", "forced-colors"])
+def test_f_every_new_control_has_the_shared_visible_focus_ring_with_3_to_1_contrast(browser, start, scheme):
+    p = start()
+    ctx, page, log = new_tab(browser, p)
+    kb = page.keyboard
+    out = {}
+    try:
+        page.emulate_media(**SCHEMES[scheme])
+        forced = scheme == "forced-colors"
+        register_via_sidekick(page, p.folders["alpha-contracts"])
+        # Sidekick controls: field and Send, then the alert's Dismiss after a refusal
+        go_view(page, "Sidekick")
+        page.evaluate("() => document.activeElement.blur()")
+        tab_to(page, tag="textarea", label="Ask Sidekick")
+        out["sidekick-field"] = check_ring(ring_of(page), forced)
+        kb.type(f"use the files in {p.home} as context")
+        tab_to(page, tag="button", text="^Send$")
+        out["sidekick-send"] = check_ring(ring_of(page), forced)
+        kb.press("Enter")
+        tab_to(page, tag="button", text="Looks right")
+        out["looks-right"] = check_ring(ring_of(page), forced)
+        kb.press("Enter")
+        alert(page).first.wait_for(state="visible")
+        tab_to(page, tag="button", text="^Dismiss$")
+        assert page.evaluate("() => document.activeElement.closest('.problem') !== null")
+        out["alert-dismiss"] = check_ring(ring_of(page), forced)
+        # Sources: Remove, Keep, Yes remove; Folder path, Connect & scan
+        sources_listing(page)
+        page.evaluate("() => document.activeElement.blur()")
+        tab_to(page, tag="button", label="^Remove alpha-contracts")
+        out["remove"] = check_ring(ring_of(page), forced)
+        kb.press("Enter")
+        out["keep"] = check_ring(ring_of(page), forced)
+        shot(page, f"f-ring-{scheme}-keep")
+        kb.press("Tab")
+        out["yes-remove"] = check_ring(ring_of(page), forced)
+        kb.press("Escape")
+        open_add_form(page)
+        page.get_by_label("Folder path").fill(str(p.home))
+        page.evaluate("() => document.activeElement.blur()")
+        tab_to(page, tag="input", label="Folder path")
+        out["folder-path"] = check_ring(ring_of(page), forced)
+        tab_to(page, tag="button", text="^Connect & scan$")
+        out["connect-scan"] = check_ring(ring_of(page), forced)
+        kb.press("Enter")
+        alert(page).first.wait_for(state="visible")
+        tab_to(page, tag="button", text="^Dismiss$")
+        out["add-dismiss"] = check_ring(ring_of(page), forced)
+        shot(page, f"f-ring-{scheme}-dismiss")
+        MEASURED.setdefault("focus_ring_contrast", {})[scheme] = out
+    finally:
+        ctx.close()
+
+
+@pytest.mark.parametrize("width", [320, 390])
+@pytest.mark.parametrize("scheme", ["light", "forced-colors"])
+def test_f_at_small_widths_nothing_scrolls_sideways_and_the_alert_and_question_fit(browser, start, width, scheme):
+    p = start()
+    ctx, page, log = new_tab(browser, p, width=width, height=700)
+    try:
+        page.emulate_media(**SCHEMES[scheme])
+        long_path = str(p.home)
+        register_via_sidekick(page, p.folders["alpha-contracts"])
+        sources_listing(page)
+        remove_button(page, "alpha-contracts").click()
+        grp = page.get_by_role("group", name=re.compile("^Remove alpha"))
+        grp.wait_for()
+        box = grp.bounding_box()
+        assert box["x"] >= 0 and box["x"] + box["width"] <= width + 0.5, box
+        for b in ("Keep", "Yes, remove"):
+            bb = page.get_by_role("button", name=b).bounding_box()
+            assert bb["width"] > 0 and bb["x"] + bb["width"] <= width + 0.5, (b, bb)
+        assert page.evaluate("() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
+        shot(page, f"f-{width}-{scheme}-remove-question")
+        page.keyboard.press("Escape")
+        open_add_form(page)
+        connect_scan(page, long_path)
+        a = alert(page).first
+        a.wait_for(state="visible")
+        bb = a.bounding_box()
+        assert bb["x"] >= 0 and bb["x"] + bb["width"] <= width + 0.5, bb
+        dismiss = a.get_by_role("button", name="Dismiss", exact=True).bounding_box()
+        assert dismiss["x"] + dismiss["width"] <= width + 0.5 and dismiss["width"] >= 24 and dismiss["height"] >= 24     # WCAG 2.5.8 target size
+        assert page.evaluate("() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1"), "page scrolls sideways"
+        assert a.evaluate("e => e.scrollWidth <= e.clientWidth + 1")                                                     # the long path wraps inside the alert
+        shot(page, f"f-{width}-{scheme}-alert")
+        # not colour only: the title and the sentence carry the meaning; the border is a second cue
+        assert a.locator("strong").inner_text().startswith("That folder can't be connected")
+        assert a.evaluate("e => getComputedStyle(e).borderTopStyle") == "solid"
+    finally:
+        ctx.close()
+
+
+def covered_fraction(page, locator):
+    """Fraction of 3x5 sample points of the element that another element (not inside it) covers or that are outside the viewport."""
+    return locator.evaluate("""e => { const r = e.getBoundingClientRect(); let hit = 0, n = 0;
+        for (const fx of [0.1, 0.5, 0.9]) for (const fy of [0.1, 0.3, 0.5, 0.7, 0.9]) { n++;
+          const x = r.left + r.width * fx, y = r.top + r.height * fy;
+          if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) { hit++; continue; }
+          const t = document.elementFromPoint(x, y); if (!t || !e.contains(t)) hit++; }
+        return hit / n; }""")
+
+
+def test_f_the_refusal_alerts_are_visible_without_scrolling_at_1280_by_800(browser, start):
+    """Records what a sighted person sees right after a refusal (alert fully on screen, not covered by the fixed notification tray)."""
+    p = start()
+    ctx, page, log = new_tab(browser, p)
+    try:
+        inp = open_add_form(page)
+        connect_scan(page, str(p.home))
+        a = alert(page).first
+        a.wait_for(state="visible")
+        MEASURED["alert_visibility_1280x800"] = {"connect_and_scan_hidden_or_covered_fraction": covered_fraction(page, a)}
+        ok = sidekick_propose(page, p.home)
+        with page.expect_response(lambda r: r.url.endswith("/api/sources/confirm")):
+            ok.click()
+        a = alert(page).first
+        a.wait_for(state="visible")
+        MEASURED["alert_visibility_1280x800"]["sidekick_hidden_or_covered_fraction"] = covered_fraction(page, a)
+        MEASURED["alert_visibility_1280x800"]["sidekick_alert_top_vs_viewport"] = a.evaluate("e => [Math.round(e.getBoundingClientRect().top), innerHeight]")
+        a.scroll_into_view_if_needed()
+        page.wait_for_timeout(300)
+        MEASURED["alert_visibility_1280x800"]["sidekick_after_scroll"] = covered_fraction(page, a)
+        shot(page, "f-sidekick-alert-scrolled")
+    finally:
+        ctx.close()
+
+
+@pytest.mark.xfail(strict=True, reason="DEFECT UI-SRC-D1: after a refused 'Looks right - connect' the Sidekick's alert is rendered below the Send button, 2 px inside an 800 px "
+                   "viewport, and nothing scrolls it into view or moves focus to it: a sighted person sees no change (screen readers hear the role=alert)")
+def test_f_defect_the_sidekick_alert_is_on_screen_after_a_refusal_at_1280_by_800(browser, start):
+    p = start()
+    ctx, page, log = new_tab(browser, p)
+    try:
+        ok = sidekick_propose(page, p.home)
+        with page.expect_response(lambda r: r.url.endswith("/api/sources/confirm")):
+            ok.click()
+        a = alert(page).first
+        a.wait_for(state="visible")
+        page.wait_for_timeout(300)
+        assert a.evaluate("e => { const r = e.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; }")
+    finally:
+        ctx.close()
+
+
+@pytest.mark.xfail(strict=True, reason="DEFECT UI-SRC-D2: the fixed 'Needs you' notification tray (bottom right) overlaps part of the refusal alert at 1280x800; "
+                   "the alert text is partly covered until the tray is dismissed")
+def test_f_defect_the_notification_tray_does_not_cover_the_refusal_alert_at_1280_by_800(browser, start):
+    p = start()
+    ctx, page, log = new_tab(browser, p)
+    try:
+        open_add_form(page)
+        connect_scan(page, str(p.home))
+        a = alert(page).first
+        a.wait_for(state="visible")
+        assert covered_fraction(page, a) == 0
+    finally:
+        ctx.close()
+
+
+def test_h_sample_mode_source_registration_is_a_real_but_session_only_write_while_the_other_sample_controls_are_disabled(browser, start):
+    """A sample deployment (GET /api/ui-config data_source = sample) shows the 'Sample data' chip. The Sources actions that need a scanner are disabled
+    with 'Not available in this build'; Connect & scan, Looks right and Remove are NOT disabled: they act on the sidecar's in-memory, session-only registry
+    (the server contract), and say so ('(this session only)')."""
+    p = start()
+    ctx, page, log = new_tab(browser, p)
+    try:
+        cfg = json.loads(api(page, "GET", "/api/ui-config")["text"])
+        assert cfg["data_source"] == "sample"
+        assert page.get_by_text("Sample data").first.is_visible()
+        register_via_sidekick(page, p.folders["alpha-contracts"])
+        sources_listing(page)
+        card = card_of(page, "alpha-contracts")
+        for name in ("View evidence", "Rescan"):
+            b = card.get_by_role("button", name=name)
+            assert b.is_disabled() and b.get_attribute("title") == "Not available in this build"
+        assert card.get_by_role("button", name=re.compile("^Remove ")).is_enabled() and card.get_by_role("button", name="Permissions").is_enabled()
+        assert page.get_by_text("(this session only)").count() >= 1
+        MEASURED["sample_mode"] = {"ui_config": cfg, "disabled": ["View evidence", "Rescan"], "enabled": ["Connect & scan", "Looks right", "Remove"]}
+    finally:
+        ctx.close()
