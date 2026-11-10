@@ -1201,6 +1201,8 @@ class AuthorityGuard:
             return self._scope_checked(mission_id, tenant, action, grant_prefix)
         except IntegrityError as e:                  # a tampered store is a refusal that nothing downstream may override, never "no envelope"
             return None, 0.0, Decision(Verdict.DENY, "authority_integrity", f"the authority store failed its integrity check: {e}")
+        except SelectorError as e:                   # a stored envelope whose selectors are outside the grammar is refused, never half-read
+            return None, 0.0, Decision(Verdict.DENY, "authority_malformed", f"the stored authority has a malformed selector: {e}")
 
     def _scope_checked(self, mission_id: str, tenant: str, action: Action, grant_prefix: str = "") -> "tuple[AuthorityEnvelope | None, float, Decision]":
         env = self.envelopes.get(mission_id)

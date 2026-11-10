@@ -216,3 +216,13 @@ def test_the_sqlite_envelope_store_round_trips_a_valid_grant(tmp_path):
     e = env(Grant("mail.send", resources=(("to", ("*@customer.com",)),), max_amount=5))
     store.put(e)
     assert store.get("m1").digest() == e.digest() and time.time() > 0
+
+
+def test_a_stored_envelope_with_a_malformed_selector_is_a_denial_not_an_exception():
+    class Bad(MemoryEnvelopeStore):
+        def get(self, mission_id):
+            raise SelectorError("grant capability contains a control character")
+    store = Bad()
+    g = AuthorityGuard(store, MemoryLedger(), clock=lambda: NOW + 1)
+    for dec in (g.check("m1", "acme", act("x")), g.authorize("m1", "acme", act("x")), g.check_compensation("m1", "acme", "x")):
+        assert dec.verdict is Verdict.DENY and dec.rule == "authority_malformed"
