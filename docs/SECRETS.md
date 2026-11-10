@@ -119,7 +119,7 @@ model-provider settings name a key reference (`key_ref`) that cannot be read (re
 `LLMKeyUnavailable`: no request is sent, `governed_text` returns `None` and logs `model call not made`, and the provider test call reports
 `LLMKeyUnavailable`. With no `key_ref` the behaviour is unchanged: `OPENAI_API_KEY`, else the placeholder `EMPTY` for a keyless local server.
 
-**Known limitations** (the independent review, `review-read-secret.md`; each is stated, not hidden):
+**Known limitations** (found by an independent review of this change; each is stated, not hidden):
 
 * `env:NAME` references have no namespace, so any environment variable of the process can be named, whatever the pin; the settings file and an approved Sidekick change are the only ways to name one.
 * `read_secret` issues its own one-call authority: it carries no expiry (the 60-second grant bounds it) and its scope and authority id come from the call itself, so on this path `AUTHORITY_EXPIRED`, `AUTHORITY_MISMATCH` and the scope check cannot fire. The gate is a consistency check there, not authentication. Authority expiry is checked when the grant is issued, not at redemption.

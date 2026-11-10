@@ -1,4 +1,4 @@
-"""Hardening pinned by the independent review of read_secret (xrepo/review-read-secret.md): RS-03 (writes follow the tenant), RS-06 (backslash and
+"""Hardening pinned by an independent review of read_secret: RS-03 (writes follow the tenant), RS-06 (backslash and
 non-printable characters in a reference), RS-11 (the backend token is not echoed) and the three mutants the first tests did not kill (RS-08):
 a non-printable tenant, the authority's expiry and the authority's scope."""
 import logging

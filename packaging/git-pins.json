@@ -21,7 +21,7 @@
       "commit": "3856bca7440ed4af80718c78a9c3f85d996c3a50",
       "build_backend": "setuptools",
       "committed_build_dirs": [],
-      "note": "v0.1.21 requires runtime-contracts v0.3.17 exactly (v0.1.19 and v0.1.20 require v0.3.14, so pip cannot resolve either together with v0.3.17). UNPUBLISHED at the time of this pin: the tag exists only as a local annotated tag object in a private scratch clone; the pin is valid once that tag object is pushed unchanged. Licence status of this component is not decided here."
+      "note": "v0.1.21 requires runtime-contracts v0.3.17 exactly (v0.1.19 and v0.1.20 require v0.3.14, so pip cannot resolve either together with v0.3.17). Licence status of this component is not decided here."
     },
     {
       "name": "knowledge-frontier",
