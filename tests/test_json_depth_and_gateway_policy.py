@@ -100,10 +100,45 @@ def test_a_chunked_deep_body_is_refused_as_soon_as_the_limit_is_passed():
     assert r.status_code == 400 and not any(seen)
 
 
+def test_text_and_json_like_content_types_are_inspected_in_any_case_and_with_any_method():
+    c, seen = bare()
+    for ctype in ("text/plain", "TEXT/PLAIN; charset=utf-8", "application/json", "Application/JSON; charset=utf-8",
+                  "application/vnd.api+json", "application/ld+json", ""):
+        h = {"content-type": ctype} if ctype else {}
+        assert c.post("/echo", content=nest(70).encode(), headers=h).status_code == 400, ctype
+    app = FastAPI()
+
+    @app.api_route("/any", methods=["PUT", "PATCH", "DELETE"])
+    async def any_(request: Request):
+        return {"n": len(await request.body())}
+
+    ra.install(app, "demo", {f"{m} /any": P("demo.any", "read_only", rationale="test route") for m in ("PUT", "PATCH", "DELETE")})
+    c2 = TestClient(app, raise_server_exceptions=True)
+    for m in ("PUT", "PATCH", "DELETE"):
+        assert c2.request(m, "/any", content=nest(70).encode(), headers={"content-type": "application/json"}).status_code == 400, m
+        assert c2.request(m, "/any", content=nest(10).encode(), headers={"content-type": "application/json"}).status_code == 200, m
+
+
+def test_a_handler_that_parses_text_plain_as_json_cannot_be_driven_into_a_500():
+    app = FastAPI()
+
+    @app.post("/lenient")
+    async def lenient(request: Request):
+        return {"keys": len(await request.json())}                 # request.json() ignores the content type
+
+    ra.install(app, "demo", {"POST /lenient": P("demo.lenient", "read_only", rationale="test route")})
+    c = TestClient(app, raise_server_exceptions=True)
+    assert c.post("/lenient", content=nest(5000).encode(), headers={"content-type": "text/plain"}).status_code == 400
+    assert c.post("/lenient", content=b'{"a": 1}', headers={"content-type": "text/plain"}).status_code == 200
+
+
 def test_other_content_types_are_not_inspected_and_a_get_is_never_inspected():
     c, seen = bare()
-    r = c.post("/echo", content=nest(500).encode(), headers={"content-type": "text/plain"})
-    assert r.status_code == 200 and len(seen) == 1
+    for ctype in ("application/x-www-form-urlencoded", "multipart/form-data; boundary=x", "application/octet-stream", "image/png"):
+        r = c.post("/echo", content=nest(500).encode(), headers={"content-type": ctype})
+        assert r.status_code == 200, ctype
+    assert len([x for x in seen if x]) == 4
+    seen.clear()
     r = c.post("/echo", content=nest(500).encode(), headers={"content-type": "application/vnd.api+json"})
     assert r.status_code == 400
     assert c.get("/echo").status_code == 405                                                # not a body method of the route; not our 400
@@ -204,3 +239,63 @@ def test_the_gateway_exposes_no_write_capability(dev):
     d = c.post("/api/agent-gateway/mcp", headers={"Authorization": f"Bearer {GW}", "content-type": "application/json"},
                content=nest(2000).encode())
     assert d.status_code == 400
+
+
+# ── the two gateway POST routes are read-only (the basis for their read_only route policies) ───────────────
+MUTATORS = {"connect_app", "remember_sources", "forget_source", "set_session_source_view", "record_outcome", "capture", "resolve_capture",
+            "archive_capture", "today_batch", "today_approve", "today_dismiss", "today_snooze", "today_reconcile", "apply_batch"}
+
+
+class Spy(SampleProjectionProvider):
+    def __init__(self):
+        super().__init__()
+        object.__setattr__(self, "_calls", [])
+
+    def __getattribute__(self, name):
+        v = super().__getattribute__(name)
+        if callable(v) and not name.startswith("_") and name != "__class__":
+            super().__getattribute__("_calls").append(name)
+        return v
+
+
+def test_every_gateway_call_path_only_reads(dev):
+    from agentic_os.agent_gateway.capabilities import READ_CAPABILITIES
+
+    dev.setenv("AGENT_GATEWAY_TOKEN", GW)
+    spy = Spy()
+    app = create_app(spy)
+    c = TestClient(app, raise_server_exceptions=True)
+    good = {"Authorization": f"Bearer {GW}"}
+    listed = c.get("/api/agent-gateway/capabilities", headers=good).json()["capabilities"]
+    assert listed and all(x["risk_tier"] == 0 and x["side_effecting"] is False and x["approval"] == "auto" for x in listed)
+    assert {x["name"] for x in listed} <= {m.name for m in READ_CAPABILITIES}
+    before = json.dumps([spy.sources("customer-ops"), spy.connected and sorted(spy.connected)], sort_keys=True, default=str)
+    spy._calls.clear()
+    args = {"project_id": "customer-ops", "mission_id": "4821", "query": "x", "limit": 3}
+    for x in listed:
+        assert c.post(f"/api/agent-gateway/capabilities/{x['name']}/invoke", headers=good, json=args).status_code == 200
+        assert c.post("/api/agent-gateway/mcp", headers=good, json={"method": "tools/call", "params": {"name": x["name"], "arguments": args}}).status_code == 200
+    assert set(spy._calls) and not (set(spy._calls) & MUTATORS), spy._calls
+    assert set(spy._calls) <= {"projects", "overview", "missions", "mission_detail", "attention", "sources", "workflows", "discovery", "apps",
+                               "runtime", "templates", "workflows"}, set(spy._calls)
+    spy._calls.clear()
+    assert json.dumps([spy.sources("customer-ops"), spy.connected and sorted(spy.connected)], sort_keys=True, default=str) == before   # no state moved
+
+
+def test_the_gateway_refuses_every_write_capability_by_name_and_every_mcp_method_but_two(dev):
+    from agentic_os.agent_gateway import capabilities as caps
+
+    dev.setenv("AGENT_GATEWAY_TOKEN", GW)
+    spy = Spy()
+    c = TestClient(create_app(spy), raise_server_exceptions=True)
+    good = {"Authorization": f"Bearer {GW}"}
+    writes = [m for m in vars(caps).values() if getattr(m, "side_effecting", False)]
+    assert writes, "the module defines write capabilities that must stay unreachable here"
+    spy._calls.clear()
+    for m in writes:
+        assert c.post(f"/api/agent-gateway/capabilities/{m.name}/invoke", headers=good, json={"goal": "x", "mission_id": "4821"}).json()["status"] == "denied", m.name
+        r = c.post("/api/agent-gateway/mcp", headers=good, json={"method": "tools/call", "params": {"name": m.name, "arguments": {}}}).json()
+        assert r.get("status") == "denied" or "error" in r, (m.name, r)
+    for method in ("sampling/createMessage", "resources/read", "prompts/get", "tasks/create", "initialize", "tools/execute", ""):
+        assert "error" in c.post("/api/agent-gateway/mcp", headers=good, json={"method": method, "params": {}}).json(), method
+    assert not (set(spy._calls) & MUTATORS), spy._calls

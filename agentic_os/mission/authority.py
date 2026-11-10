@@ -341,6 +341,8 @@ class MemoryLedger:
 
     def reserve(self, key, deltas, limits, rate=None, now=None):
         now = time.time() if now is None else now
+        if (bad := _bad_delta(deltas)) is not None:
+            return bad
         with self._lock:
             cur = self._c[key]
             for name, d in deltas.items():
@@ -377,6 +379,8 @@ class MemoryLedger:
 
     def reserve_lease(self, lease_id, key, deltas, limits, rate=None, now=None, meta=None):
         now = time.time() if now is None else now
+        if (bad := _bad_delta(deltas)) is not None:
+            return bad
         with self._lock:
             row = self._leases().get(lease_id)
             if row and row["state"] != Lease.RELEASED.value:
@@ -511,6 +515,8 @@ class SqliteLedger:
 
     def reserve(self, key, deltas, limits, rate=None, now=None):
         now = time.time() if now is None else now
+        if (bad := _bad_delta(deltas)) is not None:
+            return bad
         c = self._conn()
         try:
             c.execute("BEGIN IMMEDIATE")
@@ -569,6 +575,8 @@ class SqliteLedger:
 
     def reserve_lease(self, lease_id, key, deltas, limits, rate=None, now=None, meta=None):
         now = time.time() if now is None else now
+        if (bad := _bad_delta(deltas)) is not None:
+            return bad
 
         def go(c):
             row = c.execute("SELECT state FROM leases WHERE lease_id=?", (lease_id,)).fetchone()
@@ -906,7 +914,10 @@ class SqliteEnvelopeStore:
                 raise AuthorityIntegrityError(f"{self.path}: the envelope versions do not match the authority log "
                                               f"(extra: {sorted(set(have) - set(puts))[:3]}, missing: {sorted(set(puts) - set(have))[:3]})")
             for k, (digest, body) in have.items():
-                self._check_envelope(k[0], k[1], digest, body, puts[k])
+                try:
+                    self._check_envelope(k[0], k[1], digest, body, puts[k])
+                except SelectorError:
+                    pass          # bytes match the log (checked above): one unreadable envelope is denied when used; it does not stop the store opening
             if {r[0] for r in c.execute("SELECT mission_id FROM revoked")} != revoked:
                 raise AuthorityIntegrityError(f"{self.path}: the revocations do not match the authority log (a revocation was added or deleted)")
             if {t: e for t, e in c.execute("SELECT tenant, epoch FROM epochs") if e} != epochs:
@@ -925,6 +936,12 @@ class SqliteEnvelopeStore:
         want_digest, want_body = logged
         try:
             real = AuthorityEnvelope.from_dict(json.loads(body)).digest()
+        except SelectorError:
+            # A selector outside the grammar (stored by a release that did not validate): the stored bytes must still be exactly what the log
+            # recorded, so this is not tampering; the envelope is unreadable, and the caller turns that into an `authority_malformed` denial.
+            if digest != want_digest or sha256(body.encode()).hexdigest() != want_body:
+                raise AuthorityIntegrityError(f"{self.path}: envelope {mid} v{ver} does not match the authority log (edited)") from None
+            raise
         except Exception:  # noqa: BLE001
             real = ""
         if digest != want_digest or sha256(body.encode()).hexdigest() != want_body or real != want_digest:
@@ -1090,6 +1107,19 @@ def _clean_actual(actual: "Mapping[str, float] | None") -> "dict[str, float] | N
         if math.isfinite(f) and f >= 0 and not isinstance(v, bool):
             out[k] = f
     return out
+
+
+def _bad_delta(deltas: "Mapping[str, float]") -> "str | None":
+    """The name of the first counter delta that is negative or not finite, else None. A reservation only ever ADDS consumption, so a
+    ledger refuses such a delta instead of letting it lower a running total."""
+    for name, d in deltas.items():
+        try:
+            f = float(d)
+        except (TypeError, ValueError, OverflowError):
+            return name
+        if isinstance(d, bool) or not math.isfinite(f) or f < 0:
+            return name
+    return None
 
 
 def evaluate(env: AuthorityEnvelope, action: Action, *, now: float | None = None, current_epoch: int = 0) -> Decision:
@@ -1275,6 +1305,9 @@ class AuthorityGuard:
         if not _valid_amount(amt):         # evaluate() refuses this for a limited grant; an unlimited one simply books nothing
             amt = 0.0
         amt = 0.0 if amt is None else amt
+        if _bad_delta({"usd": action.cost_usd, "tokens": action.tokens}) is not None:
+            return Decision(Verdict.DENY, "amount_invalid", "the action's cost or token estimate is not a finite, non-negative number",
+                            None, dec.envelope_digest)
         deltas = {"actions": 1.0, "usd": float(action.cost_usd), "tokens": float(action.tokens),
                   f"g{gi}:calls": 1.0, f"g{gi}:amount": amt}
         limits = {"actions": float(env.budget.max_actions), "usd": float(env.budget.usd),

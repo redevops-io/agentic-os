@@ -226,3 +226,132 @@ def test_a_stored_envelope_with_a_malformed_selector_is_a_denial_not_an_exceptio
     g = AuthorityGuard(store, MemoryLedger(), clock=lambda: NOW + 1)
     for dec in (g.check("m1", "acme", act("x")), g.authorize("m1", "acme", act("x")), g.check_compensation("m1", "acme", "x")):
         assert dec.verdict is Verdict.DENY and dec.rule == "authority_malformed"
+
+
+# ── accounting: an invalid figure never moves a counter, with or without explicit amount limits ──────────────
+INVALID = [-1, -0.01, float("nan"), float("inf"), float("-inf"), "abc", "-5", "1e999", [5], True]
+GRANT_SHAPES = {
+    "no limits": Grant("pay.send"),
+    "per-action only": Grant("pay.send", max_amount=100),
+    "cumulative only": Grant("pay.send", max_total_amount=100),
+    "both": Grant("pay.send", max_amount=100, max_total_amount=100),
+    "call and rate limits only": Grant("pay.send", max_calls=50, rate_calls=50),
+}
+
+
+def _ledger(kind, tmp_path):
+    return MemoryLedger() if kind == "memory" else SqliteLedger(str(tmp_path / "usage.db"))
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+@pytest.mark.parametrize("lease", [False, True], ids=["plain", "leased"])
+@pytest.mark.parametrize("shape", sorted(GRANT_SHAPES))
+@pytest.mark.parametrize("bad", INVALID, ids=repr)
+def test_an_invalid_amount_never_lowers_or_moves_an_amount_counter(kind, lease, shape, bad, tmp_path):
+    ledger = _ledger(kind, tmp_path)
+    g = guard(env(GRANT_SHAPES[shape]), ledger)
+    before = dict(ledger.used("m1"))
+    d = g.authorize("m1", "acme", act(amount=bad), lease_id="L1" if lease else "")
+    used = ledger.used("m1")
+    # whatever the verdict, no amount counter is ever below zero, and an amount counter never moves because of an invalid figure
+    assert all(v >= 0 for v in used.values()), used
+    assert used.get("g0:amount", 0.0) == 0.0, (shape, bad, d.verdict, used)
+    if GRANT_SHAPES[shape].max_amount is not None or GRANT_SHAPES[shape].max_total_amount is not None:
+        assert d.verdict is Verdict.DENY and used == before                  # refused: nothing at all was booked
+    # the allowance is exactly as it was: a full-size valid spend still fits
+    assert g.authorize("m1", "acme", act(amount=100), lease_id="L2" if lease else "").verdict in (Verdict.ALLOW, Verdict.ESCALATE)
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+def test_valid_amounts_are_booked_exactly(kind, tmp_path):
+    ledger = _ledger(kind, tmp_path)
+    g = guard(env(Grant("pay.send", max_total_amount=100)), ledger)
+    assert g.authorize("m1", "acme", act(amount=30)).verdict is Verdict.ALLOW
+    assert g.authorize("m1", "acme", act(amount="12.5")).verdict is Verdict.ALLOW
+    assert ledger.used("m1")["g0:amount"] == pytest.approx(42.5)
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+def test_a_negative_or_non_finite_cost_or_token_estimate_is_refused_and_books_nothing(kind, tmp_path):
+    ledger = _ledger(kind, tmp_path)
+    g = guard(env(Grant("pay.send")), ledger)
+    for cost, tokens in ((-5.0, 0), (float("nan"), 0), (float("inf"), 0), (0.0, -100)):
+        d = g.authorize("m1", "acme", Action("pay.send", {}, risk_tier=1, side_effecting=True, cost_usd=cost, tokens=tokens))
+        assert d.verdict is Verdict.DENY and d.rule == "amount_invalid", (cost, tokens)
+    assert ledger.used("m1") == {}
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+def test_the_ledgers_themselves_refuse_a_negative_or_non_finite_delta(kind, tmp_path):
+    ledger = _ledger(kind, tmp_path)
+    assert ledger.reserve("k", {"actions": 1.0, "g0:amount": 10.0}, {}) is None
+    for bad in (-1.0, float("nan"), float("inf"), float("-inf")):
+        assert ledger.reserve("k", {"g0:amount": bad}, {}) == "g0:amount"
+        assert ledger.reserve_lease("Lx", "k", {"g0:amount": bad}, {}) == "g0:amount"
+    assert ledger.used("k") == {"actions": 1.0, "g0:amount": 10.0}
+    assert ledger.lease_state("Lx") is None
+
+
+# ── a malformed selector in a PERSISTED envelope (real SQLite store, valid hash chain) ─────────────────────
+def _malformed_grant(capability, resources=()):
+    g = object.__new__(Grant)                     # bypasses the constructor's validation: what an older release could have stored
+    for k, v in dict(capability=capability, resources=resources, max_tier=1, amount_param="amount", max_amount=None,
+                     max_total_amount=None, max_calls=None, rate_calls=None, rate_window_s=3600.0, covers_dynamic_risk=False).items():
+        object.__setattr__(g, k, v)
+    return g
+
+
+@pytest.mark.parametrize("bad", [
+    dict(capability="pay.\nsend"), dict(capability="pay.**"), dict(capability="pay.[send"),
+    dict(capability="pay.send", resources=(("to", ("/data/../x",)),)),
+    dict(capability="pay.send", resources=(("to", ("a\x00b",)),)),
+    dict(capability="pay.send", resources=(("to", ("",)),)),
+], ids=lambda d: repr(d)[:50])
+def test_a_persisted_malformed_selector_is_a_denial_for_every_entry_point(bad, tmp_path):
+    path = str(tmp_path / "authority.db")
+    store = SqliteEnvelopeStore(path)
+    store.put(env(_malformed_grant(**bad)))                 # stored and hash-chained as written
+    store2 = SqliteEnvelopeStore(path)                      # a fresh process opening the same file: it opens
+    with pytest.raises(SelectorError):
+        store2.get("m1")
+    g = AuthorityGuard(store2, SqliteLedger(path + ".usage"), clock=lambda: NOW + 1)
+    for dec in (g.check("m1", "acme", act("pay.send", to="x")), g.authorize("m1", "acme", act("pay.send", to="x")),
+                g.authorize("m1", "acme", act("pay.send", to="x"), lease_id="L1"), g.check_compensation("m1", "acme", "pay.send")):
+        assert dec.verdict is Verdict.DENY and dec.rule == "authority_malformed"
+    assert SqliteLedger(path + ".usage").used("m1") == {}                    # and nothing was reserved
+
+
+def test_a_persisted_well_formed_envelope_still_works_from_a_fresh_process(tmp_path):
+    path = str(tmp_path / "authority.db")
+    SqliteEnvelopeStore(path).put(env(Grant("pay.send", resources=(("to", ("*@customer.com",)),), max_total_amount=100)))
+    g = AuthorityGuard(SqliteEnvelopeStore(path), SqliteLedger(path + ".usage"), clock=lambda: NOW + 1)
+    assert g.authorize("m1", "acme", act("pay.send", to="a@customer.com", amount=5)).verdict is Verdict.ALLOW
+    assert g.authorize("m1", "acme", act("pay.send", to="a@evil.io,b@customer.com", amount=5)).verdict is Verdict.DENY
+
+
+def test_a_tampered_envelope_is_still_an_integrity_failure_not_a_malformed_selector(tmp_path):
+    import sqlite3
+
+    path = str(tmp_path / "authority.db")
+    SqliteEnvelopeStore(path).put(env(Grant("pay.send")))
+    c = sqlite3.connect(path)
+    body = c.execute("SELECT body FROM envelopes WHERE mission_id='m1'").fetchone()[0]
+    c.execute("UPDATE envelopes SET body=? WHERE mission_id='m1'", (body.replace('"pay.send"', '"pay.**"'),))   # edited into a malformed selector
+    c.commit()
+    c.close()
+    from agentic_os.mission.authority import AuthorityIntegrityError
+    with pytest.raises(AuthorityIntegrityError):                       # opening a tampered store is refused outright
+        SqliteEnvelopeStore(path)
+    g = AuthorityGuard(SqliteEnvelopeStore(path, verify=False), SqliteLedger(path + ".usage"), clock=lambda: NOW + 1)
+    dec = g.authorize("m1", "acme", act("pay.send"))                    # and a store opened without the up-front pass still catches it per read
+    assert dec.verdict is Verdict.DENY and dec.rule == "authority_integrity"
+
+
+def test_one_unreadable_envelope_does_not_stop_the_store_opening_for_the_others(tmp_path):
+    path = str(tmp_path / "authority.db")
+    s0 = SqliteEnvelopeStore(path)
+    s0.put(env(_malformed_grant("pay.**"), mission_id="bad"))
+    s0.put(env(Grant("pay.send"), mission_id="good"))
+    g = AuthorityGuard(SqliteEnvelopeStore(path), SqliteLedger(path + ".usage"), clock=lambda: NOW + 1)   # opens: bytes match the log
+    assert g.authorize("good", "acme", act("pay.send")).verdict is Verdict.ALLOW
+    assert g.authorize("bad", "acme", act("pay.send")).rule == "authority_malformed"

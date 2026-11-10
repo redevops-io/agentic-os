@@ -3,8 +3,8 @@
 Python's JSON decoder (and the validation layers on top of it) recurse once per nesting level, so a body such as ``[[[[...`` a thousand
 levels deep raised ``RecursionError`` inside request parsing and the caller got an HTTP 500. This pure-ASGI middleware counts ``[`` / ``{``
 nesting while the body streams in (string contents and escapes are skipped, nothing is buffered or parsed) and answers a controlled
-``400 {"detail": "JSON nested too deeply"}`` as soon as the depth passes ``max_depth``; the application is told the client went away, so it
-never sees the body. It applies to POST / PUT / PATCH / DELETE requests whose content type is JSON (or absent). It is installed OUTSIDE the
+``400 {"detail": "JSON nested too deeply"}`` as soon as the depth passes ``max_depth``; the application is stopped, so it
+never sees the body. It applies to POST / PUT / PATCH / DELETE requests whose content type is JSON, absent or text/* (a handler may parse any of them as JSON). Form, multipart and binary bodies are not inspected. It is installed OUTSIDE the
 route-authorization layer, so the authorization layer never parses a hostile body either.
 """
 from __future__ import annotations
@@ -67,6 +67,10 @@ class JsonDepthScanner:
         return False
 
 
+class _TooDeep(Exception):
+    """Raised into the application's receive() once the 400 is out, so the handler stops instead of parsing an empty body."""
+
+
 class JsonDepthMiddleware:
     def __init__(self, app, max_depth: int = MAX_JSON_DEPTH) -> None:
         self.app, self.max_depth = app, max_depth
@@ -80,7 +84,8 @@ class JsonDepthMiddleware:
             if k == b"content-type":
                 ctype = v.lower()
                 break
-        return not ctype or b"json" in ctype
+        # JSON, no declared type, or text/*: Starlette's request.json() does not look at the content type, so a handler may parse a text/plain body as JSON
+        return not ctype or b"json" in ctype or ctype.startswith(b"text/")
 
     async def __call__(self, scope, receive, send):
         if not self._applies(scope):
@@ -109,8 +114,11 @@ class JsonDepthMiddleware:
         async def _receive():
             msg = await receive()
             if msg["type"] == "http.request" and scanner.feed(msg.get("body", b"")):
-                await _reject()             # answer now, then tell the app the client is gone
-                return {"type": "http.disconnect"}
+                await _reject()             # answer now, then stop the application: it never sees the body
+                raise _TooDeep()
             return msg
 
-        await self.app(scope, _receive, _send)
+        try:
+            await self.app(scope, _receive, _send)
+        except _TooDeep:
+            pass
