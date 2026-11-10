@@ -346,6 +346,81 @@ def test_the_agent_gateway_sources_search_follows_the_registration(tmp_path, mon
     assert regs(world) == []
 
 
+ENDINGS = ("removed", "signed_out", "expired", "restarted")
+
+
+@pytest.mark.parametrize("ending", ENDINGS)
+def test_after_each_way_a_registration_can_end_every_access_path_refuses_and_returns_no_content(tmp_path, monkeypatch, ending):
+    """The inventory of read paths (docs, "access paths"): listing, overview, agent gateway, guarded read, index retrieval, remove, confirm, with
+    the session that made the registration, with another live session, and (restart) with the old credentials against a new process."""
+    from agentic_os.sources_rag import RagIndexer
+    monkeypatch.setenv("AGENT_GATEWAY_TOKEN", GW)
+    world = World(tmp_path, monkeypatch)
+    monkeypatch.setenv("AGENT_GATEWAY_TOKEN", GW)
+    world.app = create_app(world.provider, capability=world.cap)
+    world.client, world.csrf = world.session()
+    rag = RagIndexer(db_dir=str(tmp_path / "rag"), rag_factory=FakeRag)
+    world.authority.indexer = rag
+    d = world.folder("topsecret-quarterly")
+    world.pick(d)
+    reg = regs(world)[0]
+    sid, sess = reg.source_id, reg.session
+    old_headers = {"X-Agentic-Session": world.client.headers["X-Agentic-Session"], "X-Agentic-CSRF": world.csrf}
+    other, other_csrf = world.session()
+    with ds.acting_as(sess):
+        assert rag.retrieve(PROJECT, sid, "q").record_count == 1                    # control: before the ending the paths do answer
+    assert sid in world.client.get(f"/api/projects/{PROJECT}/sources").text
+
+    if ending == "removed":
+        assert world.remove(sid).status_code == 200
+    elif ending == "signed_out":
+        assert signout(world).status_code == 200
+    elif ending == "expired":
+        world.authority._stop_sweeper()
+        sess.expires = (0.0, 0.0)
+    else:
+        app2, cap2, c2, csrf2 = _fresh_process(world)
+        world = type("W2", (), dict(app=app2, authority=app2.state.desktop_sources, cap=cap2, client=c2, csrf=csrf2))
+
+    gw = {"Authorization": f"Bearer {GW}"}
+    texts = []
+    live_client, live_csrf = (world.client, world.csrf) if ending == "removed" else (other, other_csrf)
+    if ending == "restarted":
+        live_client, live_csrf = world.client, world.csrf
+    texts.append(live_client.get(f"/api/projects/{PROJECT}/sources").text)
+    texts.append(live_client.get(f"/api/projects/{PROJECT}/overview").text)
+    texts.append(live_client.post("/api/sidekick", json={"text": "use the files in topsecret-quarterly", "ctx": {}}).text)
+    for t in texts:
+        assert sid not in t and "topsecret-quarterly" not in t.replace("use the files in topsecret-quarterly", ""), (ending, t[:200])
+    # the old credentials: refused by the gate once the session is gone (signed out, restarted); removed/expired are refused by the authority below
+    stale = TestClient(world.app, base_url=BASE, raise_server_exceptions=False)
+    if ending in ("signed_out", "restarted"):
+        for method, path, body in (("GET", f"/api/projects/{PROJECT}/sources", None), ("GET", f"/api/projects/{PROJECT}/overview", None),
+                                   ("POST", "/api/sources/remove", {"project_id": PROJECT, "source_id": sid}),
+                                   ("POST", "/api/sources/confirm", {"project_id": PROJECT, "confirmed_by": "x", "sources": [{"kind": "files", "location": str(d)}]}),
+                                   ("POST", "/api/agent-gateway/capabilities/sources.search/invoke", {"query": "x", "limit": 100})):
+            r = stale.request(method, path, json=body, headers={**old_headers, **gw})
+            assert r.status_code == 401 and sid not in r.text, (ending, path, r.status_code)
+    gwr = live_client.post("/api/agent-gateway/capabilities/sources.search/invoke", headers={**gw, "X-Agentic-CSRF": live_csrf}, json={"query": "x", "limit": 100})
+    assert gwr.status_code == 200 and sid not in gwr.text and "topsecret-quarterly" not in gwr.text
+    # authority level: the read paths with the session object that made the registration
+    if ending != "restarted":
+        auth = world.authority
+        assert auth.live_projections_for(sess, PROJECT) == [] if ending != "removed" else [s for s in auth.live_projections_for(sess, PROJECT) if s["source_id"] == sid] == []
+        with pytest.raises(ds.SourceRevoked):
+            auth.guarded_read(sess, PROJECT, sid, lambda view: "CONTENT")
+        with ds.acting_as(sess), pytest.raises(ds.SourceRevoked):
+            rag.retrieve(PROJECT, sid, "q")
+    else:
+        auth = world.authority
+        assert auth.live_projections_for(sess, PROJECT) == []                       # the old Session object is not one this capability issued
+        with pytest.raises(ds.SourceRevoked):
+            auth.guarded_read(sess, PROJECT, sid, lambda view: "CONTENT")
+    if ending == "removed":
+        r = world.remove(sid)
+        assert r.status_code == 404
+
+
 def test_a_listing_request_in_flight_when_the_session_ends_returns_no_registration(w):
     d = w.folder()
     w.pick(d)
@@ -901,3 +976,36 @@ def test_listings_racing_with_register_remove_and_sign_out_never_show_a_registra
     for t in ts:
         t.join(10)
     assert violations == [] and regs(w) == []
+
+
+def test_confirm_racing_sign_out_over_http_always_ends_with_nothing_registered_and_a_matching_audit(w):
+    """Real threads, real routes, many rounds: whichever of the two wins, after the sign-out has returned the table, the proposals and the
+    indexed content are empty, and every `register` record has its `remove`/`session_ended` (a confirm that lost the race says 401)."""
+    outcomes = []
+    for i in range(25):
+        c, csrf = w.session()
+        d = w.folder(f"race{i}")
+        assert w.propose(d, client=c, csrf=csrf).status_code == 200
+        c_out = TestClient(w.app, base_url=BASE, raise_server_exceptions=False)
+        c_out.headers["X-Agentic-Session"] = c.headers["X-Agentic-Session"]
+        start, results = threading.Barrier(2), {}
+
+        def confirm():
+            start.wait(5)
+            results["confirm"] = w.confirm(d, client=c, csrf=csrf).status_code
+
+        def out():
+            start.wait(5)
+            results["out"] = c_out.delete("/api/local/session", headers={"X-Agentic-CSRF": csrf}).status_code
+
+        ts = [threading.Thread(target=confirm), threading.Thread(target=out)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(20)
+        assert results["out"] == 200 and results["confirm"] in (200, 401), results
+        outcomes.append(results["confirm"])
+        assert regs(w) == [] and w.rec.live == set() and w.authority._proposals == [], (i, results)
+    recs = w.audit()
+    assert len([r for r in recs if r["action"] == "register"]) == len([r for r in recs if r["action"] == "remove" and r["reason"] == "session_ended"])
+    assert w.authority.audit.verify()["ok"] is True

@@ -632,6 +632,8 @@ class DesktopSourceAuthority:
             elif d.ok and not self._was_proposed(sess, project_id, sfp.lexical_key(raw, home=home)):
                 d = sfp.FolderDecision(False, "not_proposed", d.normalised, d.real)
             if not d.ok:
+                if d.code == "not_proposed" and not self._alive(sess):      # the proposals went with a session that ended while this request ran: that is a 401
+                    raise _session_required()
                 self._audit_best_effort(self._receipt("refuse", "refused", d.code, project_id, d.normalised, d.real or _real_for_audit(d.normalised)))
                 raise _refusal(d.code, d.normalised)
             planned.append((s, d))
