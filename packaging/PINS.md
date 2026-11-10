@@ -183,7 +183,7 @@ Tests:
 
 `pyproject.toml`, `uv.lock`, `git-pins.json` and `.github/workflows/native-core.yml` move runtime-contracts from **v0.3.14** to **v0.3.17**
 (tag object `977f5532`, commit `f465e501`, tree `239dae0a`; no committed `build/` or `dist/`; `committed_build_dirs` stays empty) and discovery-runtime
-from **v0.1.19** to **v0.1.21** (tag object `b53a886f`, commit `3856bca7`; based on v0.1.19, so its licence files are byte-identical to v0.1.19's). discovery-runtime requires its runtime-contracts exactly: v0.1.19 and v0.1.20 require
+from **v0.1.19** to **v0.1.21** (tag object `043117dc`, commit `3856bca7`; based on v0.1.19, so its licence files are byte-identical to v0.1.19's). discovery-runtime requires its runtime-contracts exactly: v0.1.19 and v0.1.20 require
 v0.3.14, so v0.1.21 (which changes only that pin and the version strings of v0.1.19) is what resolves with v0.3.17. **v0.1.21 is not published**: the tag
 object above exists as a local annotated tag in a private scratch clone, and the pin holds only once that same object is pushed. knowledge-frontier
 v0.2.0, redevops-connectors v0.1.0 and redevops-rag v0.4.0 do not depend on runtime-contracts and keep their pins.
