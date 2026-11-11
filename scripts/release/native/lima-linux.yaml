@@ -1,0 +1,19 @@
+# Lima instance for the Linux native build of release 0.6.0: Ubuntu 24.04 aarch64 server cloud image, pinned by release date and sha256 (the same image as the c317 run), no host mounts.
+minimumLimaVersion: 2.0.0
+images:
+- location: "https://cloud-images.ubuntu.com/releases/noble/release-20260926/ubuntu-24.04-server-cloudimg-arm64.img"
+  arch: "aarch64"
+  digest: "sha256:1d6bffe64b848468ac97f821d369a4846d983de1800ccf6b5ec8853e85cefc55"
+  variant: "server"
+mounts: null
+cpus: 6
+memory: 8GiB
+vmType: vz
+disk: 60GiB
+arch: aarch64
+containerd:
+  user: false
+  system: false
+portForwards:
+- guestPortRange: [1, 65535]
+  ignore: true

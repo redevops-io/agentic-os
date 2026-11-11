@@ -95,10 +95,6 @@
    "not_third_party": "first-party: the vendored Projects UI bundle (agentic_os/projects_ui); the product licence applies (LICENSING.md); the React libraries inside it are listed as react / react-dom.",
    "decision": ""
   },
-  "key:asset:agentic_os/projects_ui/hero.jpg": {
-   "not_third_party": "first-party asset: the neutral generated placeholder that replaced the original image in R0-prime (scripts/make_neutral_hero.py); the provenance statement is owner decision D-LIC-8.",
-   "decision": "D-LIC-8"
-  },
   "key:platform:wkwebview": {
    "not_third_party": "system component of macOS (WKWebView / WebKit): linked as an operating-system library, not redistributed in the artifact.",
    "decision": ""

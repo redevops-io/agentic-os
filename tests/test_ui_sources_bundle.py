@@ -158,7 +158,7 @@ def test_the_artifact_hash_and_every_member_hash_equal_the_lock():
     assert hashlib.sha256(ART.read_bytes()).hexdigest() == LOCK["sha256"]
     got = {n: hashlib.sha256(d).hexdigest() for n, d in _members().items()}
     assert got == LOCK["bundle_files"]
-    assert LOCK["version"] == "local+ea9e53e5" and LOCK["source_commit"].startswith("ea9e53e5")
+    assert LOCK["version"] == "local+ea9e53e5-nohero" and LOCK["source_commit"].startswith("ea9e53e5")
 
 
 def test_the_unpacked_bundle_in_the_package_is_the_pinned_one_when_present():
@@ -170,7 +170,7 @@ def test_the_unpacked_bundle_in_the_package_is_the_pinned_one_when_present():
 
 
 def test_the_pin_chain_is_intact_down_to_the_public_release():
-    chain = ["local+9a1788b1", "local+5751e9e5", "local+312a811a", "local+2f24719e", "local+ee958a01", "local+2fdef7f5"]
+    chain = ["local+ea9e53e5", "local+9a1788b1", "local+5751e9e5", "local+312a811a", "local+2f24719e", "local+ee958a01", "local+2fdef7f5"]
     node = LOCK
     for want in chain:
         node = node["previous_pin"]

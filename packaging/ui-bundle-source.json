@@ -30,12 +30,17 @@
   "assets/index-BzggwPVV.css": "d45f63f33ef15dd5bc8a363936e8705e34bd06f1fd3e48f41464809d3d91bdce"
  },
  "artifact": {
-  "path": "packaging/ui-artifacts/projects-ui-root-ea9e53e5.tgz",
-  "sha256": "b202abc5e2c2cf63fa26854a1d299d71e78267d18f4201bfc745e5c218517b73",
+  "path": "packaging/ui-artifacts/projects-ui-root-ea9e53e5-nohero.tgz",
+  "sha256": "b4a7d83ce14967b3e4541f64380c7b1cb15fcfceb7e19fea149a3391d480534d",
   "lock": "packaging/projects_ui.lock.json",
   "pack_recipe": "scripts/make_projects_ui_artifact.py",
   "url": "",
-  "url_note": "no release has been published for it; a later publication only fills in the lock's url"
+  "url_note": "no release has been published for it; a later publication only fills in the lock's url",
+  "previous": {
+   "path": "packaging/ui-artifacts/projects-ui-root-ea9e53e5.tgz",
+   "sha256": "b202abc5e2c2cf63fa26854a1d299d71e78267d18f4201bfc745e5c218517b73",
+   "note": "the same build output plus hero.jpg; superseded by D-LIC-8 option c, kept as history, not shipped"
+  }
  },
  "merged_public_release": {
   "tag": "v0.2.0",

@@ -96,9 +96,9 @@
       "note": "Record the redevops-projects commit and npm lock and generate the UI notices from it (packaging/ui-bundle-source.json holds the record)."
     },
     "D-LIC-8": {
-      "option": "b",
-      "note": "Option b, provenance recorded: the shipped hero is the deterministic output of scripts/make_neutral_hero.py; generator and file hashes are in docs/legal/ARTWORK_PROVENANCE.md and enforced by tests. No authorship or rights are asserted.",
-      "owner_statement": "Provenance, not a rights claim: the shipped hero image is the recorded output of scripts/make_neutral_hero.py (docs/legal/ARTWORK_PROVENANCE.md). The earlier image with third-party generator metadata is not shipped. Whether rights exist in script output written by an AI coding agent is NOT asserted here and stays with counsel (Q28)."
+      "option": "c",
+      "note": "Option c, owner direction 2026-11-11: the hero image is removed from the product (file, generator script, and the pinned UI artifact, which is repacked without it: sha256 b4a7d83c...). Nothing is attested for an image that is not distributed.",
+      "owner_statement": "The hero image is removed from the product: no hero.jpg ships, the pinned Projects UI artifact has no image member, and no authorship or ownership is attested for it (docs/legal/ARTWORK_PROVENANCE.md section 1). The built UI still contains a sample item that points at /hero.jpg; that picture cannot load."
     },
     "D-LIC-9": {
       "option": "a",
@@ -309,14 +309,14 @@
     },
     {
       "id": "T10",
-      "text": "Artwork: D-LIC-8 and D-LIC-11 are prepared as option b (provenance recorded in docs/legal/ARTWORK_PROVENANCE.md, no authorship or rights asserted) in this approval. They become decided only if the owner signs it. Not covered by any record: apps/social-autopilot/reel/assets/hero.jpg and the 18 images in deploy/assets/repos/ (listed in the provenance record, not part of the desktop product's shipped set). Rights in script output written by an AI coding agent remain a counsel question (Q28, Q29)."
+      "text": "Artwork: D-LIC-8 is prepared as option c (hero image removed from the product) and D-LIC-11 as option b (generated neutral launcher icons, provenance and hashes in docs/legal/ARTWORK_PROVENANCE.md, no authorship or rights asserted). They become decided only if the owner signs the approval. Not covered by any record: apps/social-autopilot/reel/assets/hero.jpg and the 18 images in deploy/assets/repos/ (listed in the provenance record, not part of the desktop product's shipped set). Rights in script output written by an AI coding agent remain a counsel question (Q29). The built UI keeps one sample item whose picture path is /hero.jpg; that picture cannot load."
     }
   ],
   "owner_direction_2026_11_11": {
     "recorded": "Owner replies of 2026-11-11 to the conflict register; policy direction, not a signature.",
     "commons_clause": "A: keep AGPL-3.0-or-later with the Commons Clause on the core, as decided on 2026-11-10. No relicensing is started and no replacement licence tags are created. D-LIC-3 and the apps-versus-core questions (N1, N2) stay OPEN for counsel. The intended commercial protections against competing redistribution and commercialization of modified copies are kept.",
     "D-LIC-2": "kept as drafted: the family-licence statement for connectors and knowledge-frontier, subject to verification of their licensing and the existing release gates (T1 still needs licence files in those repositories; no tag is created by this work).",
-    "artwork": "2026-11-11 later direction: use option b or c where the gate permits; prefer reproducibly generated neutral artwork; remove unverified artwork; no authorship assertion. Prepared as option b for BOTH D-LIC-8 and D-LIC-11 (provenance recorded, nothing attested). Option b of D-LIC-8 is worded 'supply an image whose rights the owner holds'; this document does not claim that, and the owner decides by signing whether b or the removal (c) is meant.",
+    "artwork": "2026-11-11 later direction: D-LIC-8 option c (remove the hero image; no attestation for an image not distributed); D-LIC-11 option b for the generated neutral launcher icons, provided the generator script, provenance record and hashes verify (docs/legal/ARTWORK_PROVENANCE.md; tests/test_launcher_icons.py).",
     "kept": "all other owner decisions, the minimal Linux signing option (P-LIN a), and the counsel and security gates.",
     "authorized_engineering": "preparation of the missing signing packages and orchestrator stages S5 to S7. Signing, publishing, pushing and tagging are NOT authorized until the approvals and verification steps are complete.",
     "licensing_model": "No change to the licensing model is authorized.",

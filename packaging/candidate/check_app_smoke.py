@@ -196,7 +196,7 @@ def api_checks(label: str, port: int, code: str) -> None:
             ok = False
     check(f"{label}: /openapi.json with the session header is 200 (defect d)", ok, f"status {st}, {npaths} paths")
     st, hd, _ = http(port, "GET", "/hero.jpg")
-    check(f"{label}: /hero.jpg is served as image/jpeg", st == 200 and hd.get("content-type", "").startswith("image/jpeg"), f"status {st}")
+    check(f"{label}: /hero.jpg is NOT served as an image (D-LIC-8 option c: the image is removed from the product)", not hd.get("content-type", "").startswith("image/"), f"status {st}, {hd.get('content-type')}")
     st, hd, _ = http(port, "GET", "/api/projects", sess, host="evil.example")
     check(f"{label}: a foreign Host header is refused (DNS rebinding)", st in (400, 403), f"status {st}")
     st, hd, _ = http(port, "OPTIONS", "/api/projects", {"Origin": "http://evil.example", "Access-Control-Request-Method": "POST"})

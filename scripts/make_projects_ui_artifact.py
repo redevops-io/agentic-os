@@ -5,11 +5,11 @@ Reproducible by construction: members sorted by path, regular files and director
 refuse timestamps before 1980), uid/gid 0, empty owner names, mode 0644 (0755 for directories), gzip header mtime 0 and no file name in the header. The same input directory therefore gives the same archive bytes
 (and the same sha256) on every machine and every run.
 
-The artifact carries the build output (index.html, assets/**) plus the neutral placeholder ``hero.jpg`` from this repository (the UI
-repository's own public/hero.jpg is NOT shipped: it is the image that carried third-party generator metadata). Anything else in ``dist`` is
-rejected, so a stray file cannot ride along.
+The artifact carries the build output (index.html, assets/**) and NOTHING else. There is no hero image: D-LIC-8 was decided as option c (remove the image from
+the product), so a ``hero.jpg`` in ``dist`` (the UI repository's own public/hero.jpg is the image that carried third-party generator metadata) is dropped and never packed.
+Anything else in ``dist`` that is not .html/.js/.css is rejected, so a stray file cannot ride along.
 
-  scripts/make_projects_ui_artifact.py DIST_DIR OUT.tgz [--hero agentic_os/projects_ui/hero.jpg]
+  scripts/make_projects_ui_artifact.py DIST_DIR OUT.tgz
 Prints the sha256 of OUT.tgz and the sha256 of every member (the values the lock and packaging/ui-bundle-source.json record).
 """
 from __future__ import annotations
@@ -23,25 +23,23 @@ import tarfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_HERO = ROOT / "agentic_os" / "projects_ui" / "hero.jpg"
 ALLOWED_SUFFIXES = {".html", ".js", ".css"}
 MTIME = 1577836800   # 2020-01-01T00:00:00Z
 
 
-def collect(dist: Path, hero: Path) -> dict:
+def collect(dist: Path) -> dict:
     files = {}
     for p in sorted(dist.rglob("*")):
         if not p.is_file():
             continue
         rel = p.relative_to(dist).as_posix()
         if rel == "hero.jpg":
-            continue                                   # replaced by the neutral hero below
+            continue                                   # D-LIC-8 option c: the image is not part of the product, whatever the UI build output contains
         if p.suffix not in ALLOWED_SUFFIXES or p.is_symlink():
             raise SystemExit(f"refusing to pack {rel!r}: only build output (.html/.js/.css) is allowed")
         files[rel] = p.read_bytes()
     if "index.html" not in files:
         raise SystemExit("dist has no index.html")
-    files["hero.jpg"] = hero.read_bytes()
     return dict(sorted(files.items()))
 
 
@@ -67,9 +65,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("dist", type=Path)
     ap.add_argument("out", type=Path)
-    ap.add_argument("--hero", type=Path, default=DEFAULT_HERO)
     a = ap.parse_args(argv)
-    files = collect(a.dist, a.hero)
+    files = collect(a.dist)
     blob = pack(files)
     a.out.parent.mkdir(parents=True, exist_ok=True)
     a.out.write_bytes(blob)

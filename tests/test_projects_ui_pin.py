@@ -60,11 +60,23 @@ def test_the_members_are_exactly_the_recorded_files():
             assert "/" + rel in html
 
 
-def test_the_artifact_carries_the_neutral_hero_of_this_repository():
-    hero = _members()["hero.jpg"]
-    assert hero == (ROOT / "agentic_os" / "projects_ui" / "hero.jpg").read_bytes()          # the tracked placeholder, not the UI repository's public/hero.jpg
-    assert hashlib.sha256(hero).hexdigest() == LOCK["bundle_files"]["hero.jpg"]
-    assert not any(tag in hero for tag in (b"c2pa", b"jumb", b"Black Forest", b"trainedAlgorithmicMedia"))
+def test_the_artifact_carries_no_image_at_all():
+    """D-LIC-8 option c: the hero image is removed from the product. The artifact is build output only, in the lock and in the archive."""
+    names = set(_members())
+    assert "hero.jpg" not in names and "hero.jpg" not in LOCK["bundle_files"]
+    assert not any(n.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".ico")) for n in names), names
+    assert not (ROOT / "agentic_os" / "projects_ui" / "hero.jpg").exists() and not (ROOT / "scripts" / "make_neutral_hero.py").exists()
+
+
+def test_the_replaced_artifact_differs_only_by_the_hero_and_is_kept_as_history():
+    prev = LOCK["previous_pin"]
+    old = ROOT / prev["local_path"]
+    assert prev["version"] == "local+ea9e53e5" and hashlib.sha256(old.read_bytes()).hexdigest() == prev["sha256"]
+    with tarfile.open(old, "r:gz") as t:
+        before = {m.name: hashlib.sha256(t.extractfile(m).read()).hexdigest() for m in t.getmembers() if m.isfile()}
+    after = {n: hashlib.sha256(d).hexdigest() for n, d in _members().items()}
+    assert set(before) - set(after) == {"hero.jpg"} and set(after) <= set(before)
+    assert all(before[n] == after[n] for n in after)                                        # index.html, the JavaScript and the CSS are byte-identical
 
 
 def test_packing_is_deterministic_and_normalised():
@@ -85,7 +97,7 @@ def test_the_pack_script_refuses_stray_files(tmp_path):
     (dist / "assets" / "a.js").write_text("1")
     (dist / "notes.txt").write_text("stray")
     with pytest.raises(SystemExit, match="only build output"):
-        pack_mod.collect(dist, ROOT / "agentic_os" / "projects_ui" / "hero.jpg")
+        pack_mod.collect(dist)
 
 
 def test_fetch_is_offline_verified_and_replaces_the_destination(tmp_path, monkeypatch):
@@ -190,7 +202,7 @@ def test_the_bundle_says_every_source_refusal_in_fixed_words_and_can_remove_a_re
 
 
 def test_the_pin_chain_keeps_the_replaced_artifacts_and_ends_at_the_public_release():
-    chain = ["local+9a1788b1", "local+5751e9e5", "local+312a811a", "local+2f24719e", "local+ee958a01", "local+2fdef7f5"]
+    chain = ["local+ea9e53e5", "local+9a1788b1", "local+5751e9e5", "local+312a811a", "local+2f24719e", "local+ee958a01", "local+2fdef7f5"]
     node = LOCK
     for want in chain:
         node = node["previous_pin"]
@@ -199,7 +211,8 @@ def test_the_pin_chain_keeps_the_replaced_artifacts_and_ends_at_the_public_relea
         assert f.is_file() and hashlib.sha256(f.read_bytes()).hexdigest() == node["sha256"], want          # going back is a lock edit
     assert node["previous_pin"]["version"] == "v0.2.0" and re.fullmatch(r"[0-9a-f]{64}", node["previous_pin"]["sha256"])
     assert LOCK["merged_public_release"]["tag"] == "v0.2.0" and REC["merged_public_release"] == {"tag": "v0.2.0", "commit": LOCK["merged_public_release"]["commit"]}
-    assert LOCK["source_commit"] != LOCK["previous_pin"]["source_commit"] and LOCK["source_commit_published"] is False and LOCK["url"] == ""
+    assert LOCK["source_commit"] == LOCK["previous_pin"]["source_commit"]                     # the same UI source; only the image was dropped from the artifact
+    assert LOCK["source_commit"] != LOCK["previous_pin"]["previous_pin"]["source_commit"] and LOCK["source_commit_published"] is False and LOCK["url"] == ""
 
 
 def test_the_record_states_that_the_npm_lock_changed_only_by_the_licence_field():

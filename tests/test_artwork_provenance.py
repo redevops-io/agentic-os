@@ -21,4 +21,5 @@ def test_the_record_asserts_no_authorship_or_rights_and_lists_unverified_images(
     for bad in ("first-party artwork", "we own", "the owner holds", "copyright (c)"):
         assert bad not in low, bad
     assert "apps/social-autopilot/reel/assets/hero.jpg" in t and "deploy/assets/repos/agentic-os.png" in t
-    assert "Black Forest Labs" in t and "no longer shipped" in t
+    assert "Black Forest Labs" in t and "REMOVED from the product (D-LIC-8, option c)" in t
+    assert "absent (checked now)" in t and "no image member" in t and "**PRESENT" not in t and "**IMAGE MEMBERS" not in t

@@ -78,7 +78,7 @@ _BLOCKED_RUN = textwrap.dedent('''
     c = TestClient(create_app(SampleProjectionProvider()))
     codes = {p: c.get(p).status_code for p in
              ("/", "/api/projects", "/api/projects/customer-ops/overview", "/api/projects/customer-ops/apps",
-              "/api/projects/customer-ops/missions", "/hero.jpg")}
+              "/api/projects/customer-ops/missions")}
     guides = c.get("/api/projects/customer-ops/apps").json()
 
     # bootstrap closure: `sidecar_main bootstrap` runs agentic_os.mission.bootstrap as __main__
@@ -196,7 +196,12 @@ def test_frozen_sidecar_has_no_knowledge_frontier_and_still_serves(tmp_path):
         port, code = int(m.group(1)), m.group(2)
         base = f"http://127.0.0.1:{port}"
         assert urllib.request.urlopen(f"{base}/", timeout=5).status == 200
-        assert urllib.request.urlopen(f"{base}/hero.jpg", timeout=5).status == 200
+        import urllib.error
+        try:
+            urllib.request.urlopen(f"{base}/hero.jpg", timeout=5)
+            raise AssertionError("/hero.jpg must not be served: the image is removed from the product (D-LIC-8 option c)")
+        except urllib.error.HTTPError as e:
+            assert e.code == 404
         try:
             urllib.request.urlopen(f"{base}/api/projects", timeout=5)
             raise AssertionError("/api/projects must need a session")

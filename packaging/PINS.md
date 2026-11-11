@@ -152,7 +152,7 @@ anything is extracted (and rejects any member that would leave the destination);
 
 | Field | Value |
 |---|---|
-| artifact | `packaging/ui-artifacts/projects-ui-root-ea9e53e5.tgz`, 162,769 bytes, sha256 `b202abc5...7b73` (checked into the repository; `local_path`) |
+| artifact | `packaging/ui-artifacts/projects-ui-root-ea9e53e5-nohero.tgz`, 123,862 bytes, sha256 `b4a7d83c...534d` (checked into the repository; `local_path`); the superseded `projects-ui-root-ea9e53e5.tgz` (sha256 `b202abc5...7b73`, the same build output plus the hero image) is kept as history, not shipped |
 | `url` | empty: no release of `redevops-projects` has been published for it. A later publication fills it in; nothing else changes |
 | source commit | `ea9e53e56b4cbaa1afb22404a6468695e49c24fa` (tree `7eb444ff...`; branch `ui/source-errors` of a LOCAL clone, from `ui/focus-fix` `9a1788b1`, from `ui/event-summaries` `5751e9e5`, from `ui/partly-sample` `312a811a`, from `ui/runtime-mode` `2f24719e`, from `ui/evidence-tracing` `ee958a01`; `source_commit_published: false`), public base `5114b560...`, and it merges the public release `v0.2.0` (`84f17fce...`) |
 | contents | `index.html`, `assets/index-76LJRJ18.js` (400,961 bytes), `assets/index-BzggwPVV.css` (build output) + the neutral `hero.jpg` of this repository |
@@ -200,3 +200,8 @@ The wheelhouse, SBOM and notices are not regenerated here and every native artif
 `license` metadata, a README line, the patch version): no code changed (`git diff v0.1.0 v0.1.1` and `git diff v0.2.0 v0.2.1` list those files). The tags were created in local clones and pushed ONLY to the workspace
 mirrors (`xrepo/repos/*.git`); nothing was pushed to GitHub, no published tag was rewritten. The pinned URLs name GitHub, so a build from these pins needs the two tags pushed first (publication step, pins-04).
 Licence note: the v0.1.0 and v0.2.0 pyprojects declared plain AGPL-3.0-or-later; the new tags apply the family licence (AGPL-3.0-or-later with the Commons Clause) that the owner stated for D-LIC-2 in the signed release approval.
+
+## 2026-11-11: the hero image is removed (D-LIC-8, option c)
+The pinned Projects UI artifact is repacked WITHOUT `hero.jpg`: `projects-ui-root-ea9e53e5-nohero.tgz` (sha256 `b4a7d83ce14967b3e4541f64380c7b1cb15fcfceb7e19fea149a3391d480534d`). `index.html`, the JavaScript and the CSS are byte-identical to the superseded
+artifact (same sha256 each); only the image member is gone. `agentic_os/projects_ui/hero.jpg` and `scripts/make_neutral_hero.py` are deleted from the repository; the API sample no longer carries a preview path; the smoke check now asserts that
+`/hero.jpg` is not served as an image. Known effect: the built UI keeps one sample item whose picture path is `/hero.jpg`, which cannot load. `docs/legal/ARTWORK_PROVENANCE.md` records the facts.

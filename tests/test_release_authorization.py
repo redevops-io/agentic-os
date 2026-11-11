@@ -108,7 +108,7 @@ def test_rendered_document_is_deterministic_draft_and_names_only_owner_only_deci
     owner = sorted(d for d, e in gate_state(repo).items() if e["decides"] == "owner")
     assert sorted(ids) == owner                                              # every owner-only decision; none is struck in the manifest at this commit
     assert "D-LIC-8" in ids and "D-LIC-11" in ids and "NOT in this signature" not in text
-    assert "ARTWORK_PROVENANCE.md" in text and "NOT asserted here" in text                    # the artwork decisions carry provenance statements, not authorship attestations
+    assert "ARTWORK_PROVENANCE.md" in text and "no authorship or ownership is attested" in text                    # the artwork decisions carry provenance statements, not authorship attestations
     assert "first-party artwork of the owner or the company" not in text
     for c in ("D-LIC-3", "D-LIC-1", "pins-03", "D-LIC-18", "pins-08"):
         assert c not in ids

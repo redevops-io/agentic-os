@@ -152,7 +152,7 @@ def ui_bundle(ui_dir: Path | None) -> dict:
 # ----------------------------------------------------------------------------------------- the pinned Projects UI (D-NEW-2)
 # The bundle is NOT tracked in git on the converged trunk: scripts/fetch_projects_ui.py unpacks the artifact pinned in
 # packaging/projects_ui.lock.json into the WHEEL build tree. The bytes that ship are therefore the ones in the agentic_os wheel
-# (packaging/wheelhouse), not the checkout's agentic_os/projects_ui (which holds only hero.jpg). The record states the pin and the
+# (packaging/wheelhouse), not the checkout's agentic_os/projects_ui (which holds no tracked file since the hero image was removed, D-LIC-8 option c). The record states the pin and the
 # bytes are compared with it here; any difference refuses the build. Standard library only and self-contained: the signing scripts
 # run a hash-verified private copy of this file next to check_about.py.
 UI_LOCK = ("packaging", "projects_ui.lock.json")

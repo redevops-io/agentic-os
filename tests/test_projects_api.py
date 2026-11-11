@@ -88,7 +88,7 @@ def test_outreach_mission_detail_has_the_provider_ui_gate_and_artifacts():
     assert act["status"] == "waiting" and "PROVIDER_UI_REQUIRED" in act["why"]
     # created artifacts surface as context, hero carries an image preview
     hero = next(c for c in d["context_used"] if c["source_id"] == "asset")
-    assert hero["preview"] == "/hero.jpg"
+    assert hero["preview"] is None                      # D-LIC-8 option c: no image ships
 
 
 def test_outreach_template_is_offered():
@@ -136,8 +136,9 @@ def test_serves_the_bundled_projects_ui_at_one_origin():
     assert "assets/" in root.text  # the built SPA shell references its bundle
     # the API still wins for /api/* (mounted before the static catch-all)
     assert client.get("/api/projects").status_code == 200
-    # a bundled asset (the generated hero) is served too
-    assert client.get("/hero.jpg").status_code == 200
+    # the hero image is removed from the product (D-LIC-8 option c): nothing is served at its old path
+    gone = client.get("/hero.jpg")
+    assert gone.status_code == 404 and not gone.headers.get("content-type", "").startswith("image/")
 
 
 def test_template_readiness_reflects_real_connection_state():

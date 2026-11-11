@@ -338,11 +338,11 @@
     "option": "a",
     "note": "For the candidate; (b) when an asset exists."
    },
-   "ships_meanwhile": "the neutral generated placeholder",
+   "ships_meanwhile": "no hero image: it is removed from the product (owner direction of 2026-11-11, option c; the decision becomes a record only when the owner signs the approval)",
    "counsel_questions": [
     "Q28"
    ],
-   "facts_resolved_by_lic2": "Placeholder script and test present; the original (C2PA: Black Forest Labs API) is no longer shipped.",
+   "facts_resolved_by_lic2": "The original (C2PA: Black Forest Labs API) is no longer shipped. The neutral generated placeholder and its generator script have been removed from the repository and from the pinned UI artifact (history: commit e9742de; artifact sha256 b4a7d83c... carries no image).",
    "package": "docs/legal/DECISION_PACKAGES.md#d-lic-8",
    "chosen_option": null,
    "decision_reference": null,

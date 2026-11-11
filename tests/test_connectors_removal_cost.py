@@ -38,7 +38,7 @@ PROBE = textwrap.dedent('''
         "with_setup_url": sum(1 for a in apps if a.get("setup_url")),
         "with_required_scopes": sum(1 for a in apps if a.get("required_scopes")),
         "other_routes": {p: c.get(p).status_code for p in ("/", "/api/projects", "/api/projects/customer-ops/overview",
-                                                           "/api/projects/customer-ops/missions", "/hero.jpg")},
+                                                           "/api/projects/customer-ops/missions")},
     }))
 ''')
 

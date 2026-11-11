@@ -161,6 +161,8 @@ Licences present in the shipped binaries (from the 405-component notices of the 
 
 **Question.** May the neutral generated placeholder be treated as first-party artwork under the family licence?
 
+**Update 2026-11-11 (owner direction).** The hero image is removed from the product (option c): `agentic_os/projects_ui/hero.jpg` and `scripts/make_neutral_hero.py` are deleted (history: commit e9742de), the pinned UI artifact is repacked without the image (`projects-ui-root-ea9e53e5-nohero.tgz`, sha256 `b4a7d83c...`; the three build-output members are byte-identical to the superseded artifact), and no authorship or ownership is attested for an image that is not distributed. The evidence paragraph below is history. See `docs/legal/ARTWORK_PROVENANCE.md`.
+
 **Evidence.** The original image carried C2PA metadata naming "Black Forest Labs API" and is no longer shipped. The replacement is drawn by `scripts/make_neutral_hero.py` (Pillow, gradient and shapes, no model output, no photograph, no metadata segments; `tests/test_hero_asset.py`). It was written and run by an AI coding agent on 2026-11-04. Whether that makes the output the owner's to license is a counsel point (Q28). **Options:** (a) confirm first-party artwork; (b) supply an image whose rights the owner holds; (c) remove the image. **Recommended default:** (a) for the candidate, (b) when an asset exists. **Decides:** owner.
 
 ---

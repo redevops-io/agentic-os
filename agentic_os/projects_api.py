@@ -957,7 +957,7 @@ def _outreach_evidence() -> Dict[str, Any]:
         {"source_id": "asset", "source_name": "Generated hero asset", "provider": "fal.ai", "kind": "artifact",
          "evidence_kind": "file", "retrieved": None, "identity": {"version": "v1"},
          "refs": [{"ref": "artifact:hero", "summary": "conceptual hero — apps + DB + doc → one governed system"}],
-         "preview": "/hero.jpg", "why": "optional creative asset (copy is required; asset is not)"},
+         "preview": None, "why": "optional creative asset (copy is required; asset is not); no image ships with the product"},
     ]
     return {"steps": steps, "context_used": context_used,
             "context_plan_note": "Logical outreach workflow is provider-independent; activation is a physical "
