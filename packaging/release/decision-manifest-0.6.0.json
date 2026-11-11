@@ -157,7 +157,7 @@
   "platform_signing": {
     "macos": {
       "decision_id": "P-MAC",
-      "scope": "Developer ID Application signing, notarization with the keychain profile, stapling of the dmg only. Reuses the c317 signing script and scope format; it cannot run until a signing package revision 5 exists (T6), because the c317 package's checks assume a private candidate.",
+      "scope": "Developer ID Application signing, notarization with the keychain profile, stapling of the dmg only. Reuses the c317 signing script and the scope format byte for byte; the signing package for a distribution run is generated from the release commit and the built dmg by scripts/release/signing_package.py (orchestrator stage S5) and its output is checked by scripts/release/verify_signed.py (S7).",
       "identity": "Developer ID Application: ReDevOps.io LLC (Q8A92DM4T7)",
       "identity_sha256": "8ee6c415e6960823c248718496b89e7e08dcf8414ee95282aeabf2b36b0d7ed3",
       "team_id": "Q8A92DM4T7",
@@ -181,7 +181,7 @@
       "certificate_validity_note": "Public Trust certificates last 3 days; signatures rely on the Microsoft RFC 3161 timestamp.",
       "needs_owner_at_run_time": [
         "az login by the owner (an identity holding 'Artifact Signing Certificate Profile Signer')",
-        "the owner-authorization sha256 of the scope file, produced by the Windows signing package step (that step does not exist yet for this commit, T5/T6)"
+        "the owner-authorization sha256 of the scope file: the Windows signing package (scripts/release/signing_package.py build --platform windows) writes the scope draft; the owner fills the window and the host-tool hashes in a copy and passes that copy's sha256"
       ],
       "never_in_this_document": [
         "tokens",
@@ -211,7 +211,7 @@
     },
     {
       "id": "X-2",
-      "text": "Post-run verifier check 4 of the c317 package reports a known false FAIL on Developer-ID-signed bundles (__LINKEDIT vmsize differs by page rounding after the signature is removed). The owner accepted it for the c317 run; the correction belongs in the macOS signing package revision 5 (T6). Until revision 5 exists the macOS signing step does not run.",
+      "text": "Post-run check 4 of the c317 package (revision 4.1) reported a known false FAIL on Developer-ID-signed bundles (__LINKEDIT vmsize differs by page rounding after the signature is removed); the owner accepted it for the c317 run. For this release the check is replaced in scripts/release/verify_signed.py: the signature is removed from BOTH the input's and the signed binary and the two results must be byte-identical, so no pinned hash and no false FAIL. The replacement has been run on ad-hoc signed fixtures only, not on a Developer-ID-signed release.",
       "source": "C317_SIGNING_RUN_RECORD_2026-11-10.md; independent review of the run"
     },
     {
@@ -293,7 +293,7 @@
     },
     {
       "id": "T6",
-      "text": "The macOS signing package of the c317 run (revision 4.1) cannot be reused unchanged for a distribution run: verify_prerun asserts that the distribution gate REFUSES and pins the c317 commit and hashes, make_scope writes distribution=no and the c317 file names, and verify_postrun check 4 is defective (X-2). A package revision 5 with those changes, its tests and an independent review is required before the macOS signing step can run. The signing script itself and the scope format are reused."
+      "text": "macOS signing package for a distribution run: the c317 package (revision 4.1) cannot be reused (its pre-run check asserts that the gate REFUSES, it pins c317 constants, writes distribution=no, and its post-run check 4 is defective, X-2). Replaced by scripts/release/signing_package.py (derives every value from the release commit, distribution=yes, gate must ALLOW, no constants) and scripts/release/verify_signed.py, with tests. Status: it has run on synthetic fixtures and ad-hoc signed dmgs only; no real distribution build exists (the gate refuses), the Developer ID signing and notarization of this lineage has run only in the c317 private candidate run, and the tooling has had no independent review yet."
     },
     {
       "id": "T7",
@@ -301,7 +301,7 @@
     },
     {
       "id": "T8",
-      "text": "Orchestrator stages S5 (signing packages), S6 (signing) and S7 (verification) are not implemented: S5 reports BLOCKED for macOS, S6 lists owner-terminal steps, S7 lists checks. A real run therefore stops before any signing, and S8 (push and tag) refuses to run until S0 to S7 have PASSED in the same run."
+      "text": "Orchestrator stages S5 (signing packages), S6 (owner signing) and S7 (verification) and S9 (result) are implemented and tested on synthetic fixtures. S6 never signs: it reports OWNER until the owner's outputs are in place and then PASS; S7 verifies them. They have not run on a real release, because S1 stops first while counsel decisions are open. S8 (push and tag) still refuses unless S0 to S7 PASSED in the same run."
     },
     {
       "id": "T9",

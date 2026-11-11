@@ -11,9 +11,9 @@ Stages (the order the release needs):
   S3 build                            macOS here (packaging/candidate/build-local-macos-candidate.sh, distribution flag); Windows and Linux: native job packs
                                       are generated from the proven c317 scripts and their artifacts are ingested (the hosts are driven by their packs)
   S4 artifact verification            SHA256SUMS verify; the About record of every artifact names R, a distribution record, no placeholder
-  S5 signing packages                 per platform; macOS needs a package REVISION 5 that does not exist yet (see BLOCKED)
-  S6 authorized signing               owner's terminal only; uses the owner's keychain / az login / ssh-agent; never reads a key file
-  S7 signature and notarization verification
+  S5 signing packages                 scripts/release/signing_package.py: evidence manifest, macOS package, Windows inner package (container and SSHSIG packages are built by the owner flow)
+  S6 authorized signing               owner's terminal only; OWNER until the owner's outputs are in <evidence>/signed/, then PASS; never reads a key file
+  S7 signature and notarization verification   scripts/release/verify_signed.py over the owner's outputs (a Mac for macOS)
   S8 publish commit and tag (pins-04) owner's git credentials; only after S0..S7 passed and only with --push
   S9 consolidated release manifest and evidence report
 
@@ -43,6 +43,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import approval  # noqa: E402
+import signing_package as sp  # noqa: E402
+import verify_signed as vs  # noqa: E402
 
 ENV = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin", "LC_ALL": "C", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"}
 PLATFORMS = ("macos", "windows", "linux")
@@ -58,7 +60,7 @@ class Res:
 
     @property
     def status(self) -> str:
-        order = ["FAIL", "BLOCKED", "OWNER", "WOULD", "INFO", "PASS"]
+        order = ["FAIL", "BLOCKED", "OWNER", "WOULD", "PASS", "INFO"]      # INFO rows are notes: they never turn a stage whose checks passed into a non-PASS
         got = {s for s, _ in self.rows}
         for s in order:
             if s in got:
@@ -261,6 +263,15 @@ def native_pack(ctx, platform: str) -> tuple[Path | None, list[str]]:
     return out, left
 
 
+def build_reusable(d: Path, commit: str) -> bool:
+    """A build folder from an earlier pass of THIS evidence directory is reused only if it has SHA256SUMS, a dmg or installer, an About record, and every About record
+    names this release commit; anything else is rebuilt."""
+    if not (d / "SHA256SUMS").is_file():
+        return False
+    found = sorted(d.rglob("about.json"))
+    return bool(found) and all(json.loads(f.read_text(encoding="utf-8")).get("build", {}).get("source", {}).get("commit") == commit for f in found)
+
+
 def s3(ctx) -> Res:
     r = Res("S3")
     out_mac = ctx.evidence / "artifacts" / "macos"
@@ -268,7 +279,9 @@ def s3(ctx) -> Res:
     if ctx.dry:
         r.add("WOULD", f"macOS (this Mac, arm64): {cmd}")
     else:
-        if sys.platform != "darwin":
+        if build_reusable(out_mac, git("rev-parse", "HEAD")):
+            r.add("PASS", f"macOS: the build in {out_mac} is from this release commit (SHA256SUMS and About records agree); reused, not rebuilt")
+        elif sys.platform != "darwin":
             r.add("FAIL", "the macOS build needs this Mac")
         else:
             q = sh(["bash", "packaging/candidate/build-local-macos-candidate.sh", str(out_mac)], env={**ENV, "REDEVOPS_DISTRIBUTION_BUILD": "1", "HOME": os.environ.get("HOME", "")}, timeout=14400)
@@ -282,22 +295,15 @@ def s3(ctx) -> Res:
             r.add("FAIL", f"{p}: {left[0]}")
             continue
         r.add("INFO" if not left else "FAIL", f"{p}: job pack generated from the c317 scripts ({'no commit or tree literal of c317 left' if not left else 'literals left in: ' + ', '.join(left[:6])}); host: {what}")
-        r.add("WOULD" if ctx.dry else "OWNER", f"{p}: run the pack's scripts for the host (see native-pack/{p}); then place the artifacts and SHA256SUMS under {ctx.evidence}/artifacts/{p}/ for S4 (T5: not yet run for this commit)")
+        placed = ctx.evidence / "artifacts" / p
+        if not ctx.dry and build_reusable(placed, git("rev-parse", "HEAD")):
+            r.add("PASS", f"{p}: artifacts for this release commit are in {placed} (S4 verifies them)")
+        else:
+            r.add("WOULD" if ctx.dry else "OWNER", f"{p}: run the pack's scripts for the host (see native-pack/{p}); then place the artifacts, their About records and SHA256SUMS under {placed}/ and run this command again with the same --evidence-dir (T5: not yet run for this commit)")
     return r
 
 
-def about_checks(artdir: Path, commit: str) -> list[tuple[str, str]]:
-    out = []
-    for f in sorted(artdir.rglob("about.json")):
-        a = json.loads(f.read_text(encoding="utf-8"))
-        b = a.get("build", {})
-        src = b.get("source", {})
-        out.append(("PASS" if src.get("commit") == commit else "FAIL", f"{f.name}: source.commit {str(src.get('commit'))[:8]} == release commit"))
-        out.append(("PASS" if b.get("mode") == "distribution" else "FAIL", f"{f.name}: build mode is {b.get('mode')!r}"))
-        out.append(("PASS" if str(src.get("dirty_files", "0")) in ("0", "False") else "FAIL", f"{f.name}: dirty_files {src.get('dirty_files')}"))
-        pend = [k for k, v in a.get("legal", {}).get("slots", {}).items() if v.get("state") != "approved-verified"]
-        out.append(("PASS" if not pend else "FAIL", f"{f.name}: legal slots not approved-verified: {pend or 'none'}"))
-    return out or [("FAIL", f"no about.json under {artdir}")]
+about_checks = sp.about_findings
 
 
 def s4(ctx) -> Res:
@@ -319,33 +325,143 @@ def s4(ctx) -> Res:
     return r
 
 
+def artifacts_dir(ctx) -> Path:
+    return ctx.evidence / "artifacts"
+
+
 def s5(ctx) -> Res:
+    """Signing packages, derived from the release commit by scripts/release/signing_package.py. Built here: the evidence manifest of the build, the macOS package,
+    and the Windows inner-stage package. Built LATER by the owner flow, because they need files that exist only after signing: the Windows container package (needs the
+    installers rebuilt from the signed inner files) and the SSHSIG package (needs the release manifest of the signed files). Each runbook says so."""
     r = Res("S5")
     man = manifest()
     mac, win = man["platform_signing"]["macos"], man["platform_signing"]["windows"]
-    r.add("BLOCKED", "macOS: the signing package of the c317 run (revision 4.1) cannot be reused unchanged for a distribution run. Its verify_prerun asserts that the "
-                     "distribution gate REFUSES and pins the c317 commit and hashes; make_scope writes distribution=no and the c317 file names; verify_postrun check 4 reports a known false FAIL (X-2). "
-                     "A package REVISION 5 with those changes, its tests and an independent review is required (T6). Scope values for it are in the signed manifest: "
-                     f"identity sha256 {mac['identity_sha256'][:12]}..., team {mac['team_id']}, notary profile sha256 {mac['notary_profile_sha256'][:12]}..., distribution=yes.")
-    r.add("INFO", f"Windows: scope = stage inner then container; Azure {win['azure_endpoint']} account {win['azure_account']} profile {win['azure_certificate_profile']} CN {win['azure_expected_cn']} (non-secret, from the manifest); script packaging/signing/sign_windows_r0prime_v3.sh --dry-run is the default")
-    r.add("INFO", "Linux: SHA256SUMS of the artifacts is added to the release evidence manifest; signed by packaging/signing/sign_manifest_sshsig.sh (P-LIN option a)")
+    r.add("INFO", f"macOS scope facts (non-secret, from the approved manifest): identity sha256 {mac['identity_sha256'][:12]}..., team {mac['team_id']}, notary profile sha256 {mac['notary_profile_sha256'][:12]}..., notarize yes, distribution yes")
+    r.add("INFO", f"Windows scope facts: Azure {win['azure_endpoint']} account {win['azure_account']} profile {win['azure_certificate_profile']} CN {win['azure_expected_cn']}; stage inner, then container")
+    r.add("INFO", "Linux (P-LIN a): SHA256 of each package in the release manifest plus one SSHSIG over that manifest; no per-package signature")
+    if ctx.dry:
+        r.add("WOULD", f"python3 -I scripts/release/signing_package.py evidence-manifest --artifacts {artifacts_dir(ctx)} --commit HEAD --out {ctx.evidence}/evidence-manifest.json")
+        r.add("WOULD", f"signing_package.py build --platform macos ... --out {ctx.evidence}/signing-packages/macos; then verify (the distribution gate must ALLOW macOS)")
+        r.add("WOULD", f"signing_package.py build --platform windows --stage inner --input <artifacts/windows/inner/*.exe> ... --out {ctx.evidence}/signing-packages/windows-inner; then verify")
+        r.add("INFO", "later, by the owner flow: the Windows container package after the rebuild, the release manifest and the SSHSIG package (runbook of each package)")
+        return r
+    head = git("rev-parse", "HEAD")
+    arts = artifacts_dir(ctx)
+    ev_file = ctx.evidence / "evidence-manifest.json"
+    pk = ctx.evidence / "signing-packages"
+    try:
+        tree = git("rev-parse", "HEAD^{tree}")
+        data = sp.evidence_manifest(arts, head, tree, sp.sha_b(approval.show(head, approval.DOC_REL, ROOT)))
+    except (sp.Refused, RuntimeError, subprocess.CalledProcessError) as e:
+        r.add("FAIL", f"evidence manifest: {e}")
+        return r
+    if ev_file.exists() and ev_file.read_bytes() != data:
+        r.add("FAIL", f"{ev_file} exists and differs from the manifest of the artifacts now in {arts}: the artifacts changed after an earlier pass; use a new --evidence-dir")
+        return r
+    ev_file.parent.mkdir(parents=True, exist_ok=True)
+    ev_file.write_bytes(data)
+    r.add("PASS", f"evidence manifest {sp.sha_b(data)[:12]}... written for the artifacts of release commit {head[:8]}")
+    jobs = [("macos", {"artifacts": arts, "evid": ev_file}, pk / "macos")]
+    inner_dir = arts / "windows" / "inner"
+    inner = sorted(inner_dir.glob("*.exe")) if inner_dir.is_dir() else []
+    if inner:
+        sums = sp.parse_sums(arts / "windows")
+        unbound = [f.name for f in inner if sums.get(f"inner/{f.name}") != sp.sha_f(f)]
+        if unbound:
+            r.add("FAIL", f"windows inner files not listed with their sha256 in {arts}/windows/SHA256SUMS: {unbound}")
+        else:
+            jobs.append(("windows", {"stage": "inner", "inputs": inner, "evid": ev_file}, pk / "windows-inner"))
+    else:
+        r.add("BLOCKED", f"windows: no inner executables under {inner_dir}. The Windows build host produces launcher-, sidecar- and uninstaller-<sha256>.exe with packaging/signing/r0prime_win_signcommand.sh; place them there and list them in SHA256SUMS")
+    for plat, kw, out in jobs:
+        label = out.name
+        try:
+            if not out.exists():
+                sp.build(plat, ROOT, head, out, **kw)
+                r.add("PASS", f"{label}: signing package built in {out}")
+            else:
+                r.add("INFO", f"{label}: package from an earlier pass found in {out}; verified, not rebuilt")
+            for s, text in sp.verify_package(out, ROOT, artifacts=arts):
+                r.add(s, f"{label}: {text}")
+        except (sp.Refused, RuntimeError) as e:
+            r.add("FAIL", f"{label}: {e}")
+    r.add("INFO", f"owner runbooks: {pk}/*/OPERATOR_RUNBOOK.md (each runs at the owner's terminal; the container and SSHSIG packages are built there)")
     return r
+
+
+SIGNED_DIRS = (("macos", "macOS"), ("windows-inner", "Windows inner stage"), ("windows-container", "Windows container stage"))
 
 
 def s6(ctx) -> Res:
+    """Authorized signing: owner's terminal only. A real run reports OWNER until the owner's outputs are in place under <evidence>/signed/, then PASS (S7 verifies them
+    cryptographically). Nothing here signs, reads a key or contacts a service."""
     r = Res("S6")
-    r.add("OWNER", "macOS: the revision-5 run steps at the owner's Mac terminal (Developer ID identity in the login keychain, notary profile 'redevops'); not runnable until S5 exists")
-    r.add("OWNER", "Windows: packaging/signing/sign_windows_r0prime_v3.sh --stage inner (then rebuild the containers on the Windows host), then --stage container, each with --real "
-                   "--i-have-owner-authorization <scope sha256> --scope-file FILE (the Windows signing package writes and hashes the scope file; that step does not exist yet for this commit); the owner exports R0P_AZ_ENDPOINT, R0P_AZ_ACCOUNT, R0P_AZ_PROFILE, R0P_AZ_EXPECTED_CN from the manifest and has run `az login`")
-    r.add("OWNER", "Linux: packaging/signing/sign_manifest_sshsig.sh over the release evidence manifest with the release key in the owner's ssh-agent (P-LIN a)")
+    base = ctx.evidence / "signed"
+    steps = [("macOS", "signing-packages/macos", "signed/macos", "Developer ID identity and the `redevops` notary profile in the owner's login keychain"),
+             ("Windows inner stage", "signing-packages/windows-inner", "signed/windows-inner", "the owner's `az login` (Artifact Signing Certificate Profile Signer)"),
+             ("Windows container stage", "(built after the installers are rebuilt from the signed inner files)", "signed/windows-container", "the owner's `az login`"),
+             ("Linux release manifest (P-LIN a)", "(built from the release manifest of the signed files)", "RELEASE_MANIFEST_0.6.0.json.sig", "the release key in the owner's ssh-agent")]
+    for name, pkg, outp, who in steps:
+        have = (ctx.evidence / outp).exists() and (not (ctx.evidence / outp).is_dir() or any((ctx.evidence / outp).iterdir()))
+        if ctx.dry:
+            r.add("WOULD", f"{name}: the owner runs {pkg}/OPERATOR_RUNBOOK.md at their terminal ({who}); outputs go to {ctx.evidence}/{outp}")
+        elif have:
+            r.add("PASS", f"{name}: the owner's output is in place at {ctx.evidence}/{outp} (S7 verifies it)")
+        else:
+            r.add("OWNER", f"{name}: not done. Run {pkg}/OPERATOR_RUNBOOK.md at your terminal ({who}); place the output at {ctx.evidence}/{outp}; then re-run the orchestrator with the same --evidence-dir")
     return r
+
+
+def _fold(r: Res, rows, label: str):
+    for s, text in rows:
+        r.add({"XFAIL": "FAIL"}.get(s, s), f"{label}: {text}")
 
 
 def s7(ctx) -> Res:
     r = Res("S7")
-    r.add("WOULD", "macOS: codesign --verify --deep --strict, spctl --assess, xcrun stapler validate, Team ID Q8A92DM4T7 on every Mach-O, revision-5 verify_postrun")
-    r.add("WOULD", "Windows: the script's own offline verification (signature chain to the Microsoft Identity Verification Root CA 2020, CN, RFC 3161 timestamp) for MSI and NSIS exe")
-    r.add("WOULD", "Linux: ssh-keygen -Y verify of the manifest signature, then shasum -c of the .deb and the AppImage against the manifest")
+    if ctx.dry:
+        r.add("WOULD", "macOS: verify_signed.py macos: codesign --verify --strict on the dmg and the app, Developer ID chain and Team ID Q8A92DM4T7 on every Mach-O, hardened runtime, sidecar entitlements equal to the repository file, stapler validate, spctl, notary log Accepted, content equal to the unsigned input (signature removed from both binaries), About record in distribution mode")
+        r.add("WOULD", "Windows: verify_signed.py windows per stage: real mode, distribution gate enforced, release commit and CN recorded, SHA256SUMS verified, signed files differ from the inputs; optional independent Authenticode re-verification with the pinned verifier")
+        r.add("WOULD", "Linux: verify_signed.py sshsig: SSHSIG over the release manifest by the published release key, namespace redevops-qa-release@v1, every .deb/.AppImage hash equal to the manifest; the manifest regenerates identically from the verified outputs")
+        return r
+    head = git("rev-parse", "HEAD")
+    man = manifest()
+    base = ctx.evidence / "signed"
+    work = ctx.evidence / "s7"
+    work.mkdir(parents=True, exist_ok=True)
+    mac_out = base / "macos"
+    dmgs = sorted((ctx.evidence / "artifacts" / "macos").glob("*.dmg"))
+    if not mac_out.is_dir() or len(dmgs) != 1:
+        r.add("FAIL", f"macOS: need {mac_out} and exactly one unsigned dmg under artifacts/macos")
+    else:
+        _fold(r, vs.macos(mac_out, dmgs[0], man["platform_signing"]["macos"]["team_id"], head, Path(tempfile.mkdtemp(prefix="macos-", dir=work)), src=ROOT).rows, "macOS")
+    for stage in ("inner", "container"):
+        out = base / f"windows-{stage}"
+        pkg = ctx.evidence / "signing-packages" / f"windows-{stage}"
+        if not out.is_dir():
+            r.add("FAIL", f"Windows {stage}: {out} is missing")
+            continue
+        _fold(r, vs.windows(out, stage, head, man["platform_signing"]["windows"]["azure_expected_cn"], pkg if pkg.is_dir() else None, None, None).rows, f"Windows {stage}")
+    rm, sig = ctx.evidence / "RELEASE_MANIFEST_0.6.0.json", ctx.evidence / "RELEASE_MANIFEST_0.6.0.json.sig"
+    if not rm.is_file() or not sig.is_file():
+        r.add("FAIL", f"Linux: {rm.name} and its .sig are missing from {ctx.evidence}")
+    else:
+        _fold(r, vs.sshsig(rm, sig, ROOT / "packaging/signing/release-signing-key.pub", head, ctx.evidence / "artifacts" / "linux").rows, "Linux")
+        # the signed manifest must be exactly what the verified outputs give (nothing was swapped after signing): macOS dmg and Windows container files, Linux packages
+        sv = ctx.evidence
+        tmp_ev = Path(tempfile.mkdtemp(prefix="view-", dir=work))
+        (tmp_ev / "signed").mkdir()
+        os.symlink(base / "macos", tmp_ev / "signed" / "macos")
+        os.symlink(base / "windows-container", tmp_ev / "signed" / "windows-container")
+        os.symlink(sv / "artifacts", tmp_ev / "artifacts")
+        if (sv / "evidence-manifest.json").is_file():
+            shutil.copyfile(sv / "evidence-manifest.json", tmp_ev / "evidence-manifest.json")
+        try:
+            same = vs.release_manifest(tmp_ev, head, ROOT) == rm.read_bytes()
+        except sp.Refused as e:
+            r.add("FAIL", f"release manifest cannot be regenerated: {e}")
+        else:
+            r.add("PASS" if same else "FAIL", "the signed release manifest is exactly what the verified signed outputs give" if same else "the signed release manifest differs from what the signed outputs give (something changed after the manifest was made)")
     return r
 
 
@@ -401,9 +517,43 @@ def s8(ctx) -> Res:
     return r
 
 
+def base_commit():
+    try:
+        return git("rev-parse", "HEAD^") if (ROOT / approval.DOC_REL).is_file() else None
+    except RuntimeError:
+        return None
+
+
 def s9(ctx) -> Res:
+    """The consolidated manifest of the run and the evidence report. It states plainly whether S0..S7 all PASSed in this run; it never turns a stage that did not pass into a pass."""
     r = Res("S9")
-    r.add("WOULD", f"write {ctx.evidence}/RELEASE_MANIFEST_0.6.0.json and RELEASE_EVIDENCE_REPORT_0.6.0.md: commits F and R, the approval digest, gate state per platform, test and scan results, every artifact name and sha256, signature and notarization results, exceptions accepted (X-1..X-11)")
+    if ctx.dry:
+        r.add("WOULD", f"write {ctx.evidence}/RELEASE_RESULT_0.6.0.json and RELEASE_EVIDENCE_REPORT_0.6.0.md: commits F and R, the approval digest, the gate state per platform, the result of every stage, the artifact names and sha256 of the signed release manifest, the exceptions accepted (X-1..X-13) and the blockers that remain")
+        return r
+    man = manifest()
+    head = git("rev-parse", "HEAD")
+    verified = all(ctx.results.get(f"S{k}") == "PASS" for k in range(8))
+    rm = ctx.evidence / "RELEASE_MANIFEST_0.6.0.json"
+    gate = {}
+    for p in PLATFORMS:
+        q = py("packaging/check-distribution-gate.py", "--platform", p, "--distribution", "--about-slots")
+        gate[p] = "ALLOWED" if q.returncode == 0 else "REFUSED"
+    doc = {"schema": "redevops.release-result/1", "release": man["release"], "release_commit": head, "release_tree": git("rev-parse", "HEAD^{tree}"),
+           "base_commit_F": base_commit(),
+           "approval_sha256": sha_file(ROOT / approval.DOC_REL) if (ROOT / approval.DOC_REL).is_file() else None,
+           "release_manifest_sha256": sha_file(rm) if rm.is_file() else None, "gate": gate, "stages": ctx.results,
+           "all_of_S0_to_S7_passed_in_this_run": verified, "published": ctx.results.get("S8") == "PASS",
+           "exceptions_accepted": [e["id"] for e in man["exceptions_and_accepted_risks"]], "blockers_listed": [b["id"] for b in man["technical_blockers"]]}
+    out = ctx.evidence / "RELEASE_RESULT_0.6.0.json"
+    out.write_text(json.dumps(doc, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    lines = [f"# Release evidence report 0.6.0 (generated by the orchestrator)", "",
+             f"* release commit `{head}`; approval sha256 `{doc['approval_sha256']}`", f"* S0..S7 all PASS in this run: **{'yes' if verified else 'NO'}**; published: **{'yes' if doc['published'] else 'no'}**",
+             f"* gate per platform: {', '.join(f'{k} {v}' for k, v in gate.items())}", "", "| Stage | Result |", "|---|---|"]
+    lines += [f"| {k} | {v} |" for k, v in sorted(ctx.results.items())]
+    lines += ["", "Exceptions accepted by the owner's signature: " + ", ".join(doc["exceptions_accepted"]) + ".", "",
+              "This report is evidence of what the orchestrator checked. It is not a legal conclusion and it does not replace the counsel decisions."]
+    (ctx.evidence / "RELEASE_EVIDENCE_REPORT_0.6.0.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    r.add("PASS" if verified else "INFO", f"wrote {out.name} and the report; S0..S7 {'all passed' if verified else 'did NOT all pass: the result says so'}")
     return r
 
 
