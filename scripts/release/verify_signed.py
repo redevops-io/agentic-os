@@ -7,9 +7,12 @@
   verify_signed.py release-manifest --evidence DIR --commit R --repo DIR --out FILE
 
 The macOS verifier replaces the c317 post-run script: no commit, tree or hash constants (every expectation comes from the run's input dmg, the release
-commit and the repository's own entitlements file), a distribution run is expected (the PRIVATE-CANDIDATE statement is a failure), and check 4 of the
-c317 script (X-2: the sidecar with its signature removed equals a pinned hash, a false FAIL on Developer-ID bundles because the signature removal
-rounds __LINKEDIT) is replaced by the same signature removal applied to BOTH the input's and the signed binary, which must then be byte-identical.
+commit and the repository's own entitlements file) and a distribution run is expected (the PRIVATE-CANDIDATE statement is a failure). Check 4 of the c317
+script (X-2) compared the sidecar with its signature removed to a pinned hash and reported a false FAIL on Developer-ID bundles. Removing the signature from
+BOTH binaries is not enough: the two results still differ in the `vmsize` of the __LINKEDIT segment (page rounding), measured on the real c317 pair. Here the
+two stripped binaries are compared after that one field is zeroed (the Mach-O load commands are parsed; any other difference is still a FAIL).
+The Windows verifier needs the pinned Authenticode verifier and the signed package: without them it FAILS (the records in the output folder are text that a
+hand-written folder can imitate). The ad-hoc mode of the macOS verifier is a TEST mode: it prints a banner and exits 3, never 0.
 `spctl` and `codesign --verify` may ask Apple for a revocation or ticket lookup by hash; --offline skips the spctl rows. --expect-adhoc is for testing
 the verifier on an ad-hoc signed fixture: the Developer ID rows are then reported as XFAIL and not counted. Standard library only.
 """
@@ -25,6 +28,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 from pathlib import Path
@@ -68,7 +72,39 @@ def print_rows(r: Rows) -> int:
         print(f"{s:5} {t}")
     n = r.failed
     print(f"SUMMARY: PASS={sum(1 for s, _ in r.rows if s == 'PASS')} FAIL={n} XFAIL={sum(1 for s, _ in r.rows if s == 'XFAIL')}")
+    if r.adhoc:
+        print("NOT A RELEASE VERIFICATION: --expect-adhoc counts the Developer ID rows as expected failures; exit code 3 whatever the rows say")
+        return 3
     return 1 if n else 0
+
+
+def is_commit(c: str) -> bool:
+    return re.fullmatch(r"[0-9a-f]{40}", c or "") is not None
+
+
+def macho_normalize(b: bytes) -> bytes:
+    """Zero the vmsize of the __LINKEDIT segment in every 64-bit little-endian Mach-O slice (thin or fat). Nothing else is touched. `codesign --remove-signature`
+    leaves that field page-rounded differently depending on how the signature was written; a change anywhere else still changes the hash."""
+    b = bytearray(b)
+
+    def one(off: int) -> None:
+        if struct.unpack_from("<I", b, off)[0] != 0xFEEDFACF:
+            raise ValueError("not a 64-bit little-endian Mach-O")
+        ncmds = struct.unpack_from("<I", b, off + 16)[0]
+        p = off + 32
+        for _ in range(ncmds):
+            cmd, size = struct.unpack_from("<II", b, p)
+            if size < 8:
+                raise ValueError("malformed load command")
+            if cmd == 0x19 and bytes(b[p + 8:p + 24]).rstrip(b"\0") == b"__LINKEDIT":
+                struct.pack_into("<Q", b, p + 32, 0)
+            p += size
+    if struct.unpack_from(">I", b, 0)[0] == 0xCAFEBABE:
+        for i in range(struct.unpack_from(">I", b, 4)[0]):
+            one(struct.unpack_from(">I", b, 8 + 20 * i + 8)[0])
+    else:
+        one(0)
+    return bytes(b)
 
 
 def _chain_rows(r: Rows, dump: str, label: str, team: str):
@@ -106,7 +142,7 @@ def _stripped_sha(binary: Path, work: Path, name: str) -> str:
     shutil.copyfile(binary, c)
     c.chmod(0o755)
     sh(["/usr/bin/codesign", "--remove-signature", str(c)])
-    return sp.sha_f(c)
+    return sp.sha_b(macho_normalize(c.read_bytes()))
 
 
 def _root_items(mnt: Path) -> list[str]:
@@ -115,6 +151,9 @@ def _root_items(mnt: Path) -> list[str]:
 
 def macos(out: Path, input_dmg: Path, team: str, commit: str, work: Path, src: Path | None = None, offline: bool = False, adhoc: bool = False) -> Rows:
     r = Rows(adhoc)
+    if not is_commit(commit):
+        r.bad("--commit must be the 40-hex release commit")
+        return r
     if sys.platform != "darwin":
         r.bad("the macOS verification needs a Mac (codesign, hdiutil, spctl, stapler)")
         return r
@@ -209,21 +248,34 @@ def macos(out: Path, input_dmg: Path, team: str, commit: str, work: Path, src: P
                     r.dev(not got, f"no entitlements on {n}", f"entitlements on {n}: {got}")
             r.dev(not ents(app), "no entitlements on the bundle", "entitlements on the bundle")
             r.info("4. content equal to the unsigned input (only the signature changed)")
-            same, diff = 0, []
-            for rel in ["Contents/Info.plist"] + sorted(p.relative_to(app_in).as_posix() for p in (app_in / "Contents" / "Resources").rglob("*") if p.is_file()):
-                a, b = app / rel, app_in / rel
-                if a.is_file() and b.is_file() and sp.sha_f(a) == sp.sha_f(b):
-                    same += 1
-                else:
-                    diff.append(rel)
-            r.cond(not diff, f"Info.plist and all {same - 1} Resources files are byte-identical to the unsigned input", f"files differ from the unsigned input: {diff[:4]}")
-            extra = sorted(p.relative_to(app).as_posix() for p in (app / "Contents" / "Resources").rglob("*") if p.is_file()) if (app / "Contents" / "Resources").is_dir() else []
-            r.cond(extra == sorted(p.relative_to(app_in).as_posix() for p in (app_in / "Contents" / "Resources").rglob("*") if p.is_file()), "no Resources file was added or removed", "the Resources file lists differ")
+
+            def tree(a: Path) -> dict:
+                out = {}
+                for q in sorted(a.rglob("*")):
+                    rel = q.relative_to(a).as_posix()
+                    if rel.startswith("Contents/_CodeSignature"):
+                        continue
+                    if q.is_symlink():
+                        out[rel] = "link:" + os.readlink(q)
+                    elif q.is_file():
+                        out[rel] = sp.sha_f(q)
+                return out
+            ts, ti = tree(app), tree(app_in)
+            exe_rel = {f"Contents/MacOS/{n}" for n in execs}
+            diff = sorted(k for k in set(ts) | set(ti) if k not in exe_rel and ts.get(k) != ti.get(k))
+            r.cond(not diff, f"every file of the app except the executables and _CodeSignature is byte-identical to the unsigned input ({len(ts) - len(exe_rel)} files)", f"files added, removed or changed against the unsigned input: {diff[:5]}")
+            rd = sorted(p.name for p in ms.iterdir() if p.is_file() and not p.is_symlink() and p.name not in (".DS_Store",))
+            rdiff = [n for n in rd if not (mi / n).is_file() or sp.sha_f(ms / n) != sp.sha_f(mi / n)]
+            r.cond(not rdiff, "the other files at the dmg root are identical to the input's", f"dmg root files that differ from the input: {rdiff}")
             (work / "strip").mkdir()
             for n in execs:
-                a = _stripped_sha(macos_dir / n, work / "strip", "signed-" + n)
-                b = _stripped_sha(app_in / "Contents" / "MacOS" / n, work / "strip", "input-" + n)
-                r.cond(a == b, f"{n}: with the signature removed from BOTH the signed and the input binary the code is byte-identical (X-2 corrected)", f"{n}: the code differs from the unsigned input after signature removal on both")
+                try:
+                    a = _stripped_sha(macos_dir / n, work / "strip", "signed-" + n)
+                    b = _stripped_sha(app_in / "Contents" / "MacOS" / n, work / "strip", "input-" + n)
+                except ValueError as e:
+                    r.bad(f"{n}: {e}")
+                    continue
+                r.cond(a == b, f"{n}: with the signature removed from both and the __LINKEDIT vmsize field zeroed, the code is byte-identical to the unsigned input", f"{n}: the code differs from the unsigned input after signature removal on both (and __LINKEDIT vmsize zeroed)")
             abt = app / "Contents" / "Resources" / "Licenses" / "about.json"
             if abt.is_file():
                 d = json.loads(abt.read_text())
@@ -249,11 +301,17 @@ def macos(out: Path, input_dmg: Path, team: str, commit: str, work: Path, src: P
 
 
 def windows(out: Path, stage: str, commit: str, expect_cn: str | None, package: Path | None, vpy: Path | None, verifier: Path | None) -> Rows:
+    """Needs the signed package (to tie the outputs to the inputs) and the pinned Authenticode verifier with the python of its environment: without either the result is FAIL.
+    The records in the folder (EVIDENCE.txt, SHA256SUMS) are text that a hand-written folder can imitate; only the verifier looks at the signatures."""
     r = Rows()
+    if not is_commit(commit):
+        r.bad("--commit must be the 40-hex release commit")
+        return r
+    cn = (expect_cn or "")[3:] if (expect_cn or "").startswith("CN=") else (expect_cn or "")     # the signing script records the name without the CN= prefix
     r.info("1. the run's own records")
     r.cond(not (out / "FAILED").exists(), "no FAILED marker", "a FAILED marker exists: the run failed")
     for f in ("EVIDENCE.txt", "SHA256SUMS"):
-        r.cond((out / f).is_file() and (out / f).stat().st_size > 0, f"{f} present", f"{f} missing")
+        r.cond((out / f).is_file() and not (out / f).is_symlink() and (out / f).stat().st_size > 0, f"{f} present", f"{f} missing")
     if not (out / "SHA256SUMS").is_file() or not (out / "EVIDENCE.txt").is_file():
         return r
     try:
@@ -261,33 +319,41 @@ def windows(out: Path, stage: str, commit: str, expect_cn: str | None, package: 
     except sp.Refused as e:
         r.bad(str(e))
         return r
-    bad = [n for n, h in sums.items() if not (out / n).is_file() or sp.sha_f(out / n) != h]
-    r.cond(not bad, f"SHA256SUMS verifies ({len(sums)} signed files)", f"SHA256SUMS does not verify: {bad[:3]}")
+    bad = [n for n, h in sums.items() if not sp.regular_inside(out, n) or sp.sha_f(out / n) != h]
+    r.cond(not bad, f"SHA256SUMS verifies ({len(sums)} signed files)", f"SHA256SUMS does not verify (or a path is a symlink or leaves the folder): {bad[:3]}")
     ev = (out / "EVIDENCE.txt").read_text(errors="replace")
     r.cond(re.search(r"^mode:\s+real\s*$", ev, re.M) is not None, "EVIDENCE.txt: mode real (not a throwaway test)", "EVIDENCE.txt does not record mode real")
     r.cond(re.search(rf"^stage:\s+{stage} ", ev, re.M) is not None, f"EVIDENCE.txt: stage {stage}", f"EVIDENCE.txt does not record stage {stage}")
     r.cond("distribution:    gate enforced (--distribution) and passed" in ev, "EVIDENCE.txt: the distribution gate was enforced and passed", "EVIDENCE.txt does not record an enforced distribution gate")
     r.cond("PRIVATE-CANDIDATE" not in ev, "EVIDENCE.txt carries no PRIVATE-CANDIDATE statement", "EVIDENCE.txt carries the PRIVATE-CANDIDATE statement")
     r.cond(f"build commit {commit}" in ev, f"EVIDENCE.txt binds the release commit {commit[:8]}", f"EVIDENCE.txt does not bind the release commit {commit[:8]}")
-    if expect_cn:
-        r.cond(f"equal to '{expect_cn}' (exact match)" in ev, f"EVIDENCE.txt: the signer CN had to equal '{expect_cn}'", f"EVIDENCE.txt does not record the CN check for '{expect_cn}'")
-    if package is not None:
+    if cn:
+        r.cond(f"equal to '{cn}' (exact match)" in ev, f"EVIDENCE.txt: the signer CN had to equal '{cn}'", f"EVIDENCE.txt does not record the CN check for '{cn}'")
+    else:
+        r.bad("no --expect-cn: the signer name is not checked")
+    if package is None or not (package / "PACKAGE.json").is_file():
+        r.bad("no signed package (--package): the outputs cannot be tied to the inputs the owner authorized")
+    else:
         info = json.loads((package / "PACKAGE.json").read_text())
         ins = {i["name"]: i["sha256"] for i in info["inputs"]}
-        r.cond(info.get("stage") == stage, f"the package is for stage {stage}", "the package is for another stage")
+        r.cond(info.get("stage") == stage and info.get("release_commit") == commit, f"the package is for stage {stage} and release commit {commit[:8]}", "the package is for another stage or commit")
         r.cond(set(sums) == set(ins), "the signed files are exactly the inputs by name", f"signed {sorted(sums)} vs inputs {sorted(ins)}")
         same = [n for n in sums if ins.get(n) == sums[n]]
         r.cond(not same, "every signed file differs from its unsigned input", f"unchanged from the input (not signed): {same}")
-    if vpy and verifier:
-        q = sh([str(vpy), "-I", str(verifier), "--require-timestamp", *(["--expect-cn", expect_cn] if expect_cn else []), "--expect-eku", "1.3.6.1.5.5.7.3.3", *[str(out / n) for n in sorted(sums)]], env={"PATH": "/usr/bin:/bin"})
-        r.cond(q.returncode == 0, "independent re-verification with the pinned verifier: signature, CN, timestamp", f"independent verification failed: {(q.stdout + q.stderr).strip()[:160]}")
+    if vpy is None or verifier is None or not vpy.is_file() or not verifier.is_file():
+        r.bad("no Authenticode verification: give --verifier-python (the python of the signify environment) and --verifier (packaging/signing/verify_signature_v2.py)")
     else:
-        r.info("no --verifier-python/--verifier given: the signing script's own verification (recorded in EVIDENCE.txt) is the only verification of the Authenticode chain")
+        q = sh([str(vpy), "-I", str(verifier), "--require-timestamp", *(["--expect-cn", cn] if cn else []), "--expect-eku", "1.3.6.1.5.5.7.3.3", "--expect-eku", "1.3.6.1.4.1.311.97.1.0",
+                *[str(out / n) for n in sorted(sums)]], env={"PATH": "/usr/bin:/bin"})
+        r.cond(q.returncode == 0, "the pinned verifier accepts every signed file: Authenticode signature, signer CN, RFC 3161 timestamp, code-signing EKU", f"the pinned verifier refuses: {(q.stdout + q.stderr).strip()[:200]}")
     return r
 
 
 def sshsig(manifest: Path, sig: Path, pubkey: Path, commit: str, artifacts: Path | None, expect_fpr: str = sp.RELEASE_KEY_FPR) -> Rows:
     r = Rows()
+    if not is_commit(commit):
+        r.bad("--commit must be the 40-hex release commit")
+        return r
     doc = json.loads(manifest.read_text())
     r.cond(doc.get("release_commit") == commit, f"the manifest names the release commit {commit[:8]}", "the manifest names another release commit")
     fpr = sp.fingerprint(pubkey)
@@ -304,29 +370,31 @@ def sshsig(manifest: Path, sig: Path, pubkey: Path, commit: str, artifacts: Path
     if artifacts is not None:
         want = {f["name"]: f["sha256"] for f in doc.get("platforms", {}).get("linux", [])}
         r.cond(bool(want), f"the manifest lists {len(want)} Linux file(s)", "the manifest lists no Linux file")
-        bad = [n for n, h in want.items() if not (artifacts / n).is_file() or sp.sha_f(artifacts / n) != h]
+        bad = [n for n, h in want.items() if not sp.regular_inside(artifacts, n) or sp.sha_f(artifacts / n) != h]
         r.cond(not bad, "every Linux file in the artifacts folder has the sha256 the signed manifest lists", f"Linux files that differ from the signed manifest: {bad}")
     return r
 
 
 def release_manifest(evidence: Path, commit: str, repo: Path) -> bytes:
+    if not is_commit(commit):
+        raise sp.Refused("--commit must be the 40-hex release commit")
     c, tree = sp.resolve(repo, commit)
     approval = sp.sha_b(subprocess.run(["git", "-C", str(repo), "show", f"{c}:{sp.APPROVAL}"], capture_output=True, env=sp.ENV, check=True).stdout)
     evid = evidence / "evidence-manifest.json"
     plats: dict = {}
-    mac = sorted((evidence / "signed" / "macos").glob("*.dmg"))
+    mac = sorted(p for p in (evidence / "signed" / "macos").glob("*.dmg") if sp.regular_inside(evidence / "signed" / "macos", p.name))
     if len(mac) != 1:
         raise sp.Refused("expected exactly one signed dmg under signed/macos")
     plats["macos"] = [{"name": mac[0].name, "size": mac[0].stat().st_size, "sha256": sp.sha_f(mac[0])}]
     win = evidence / "signed" / "windows-container"
     sums = sp.parse_sums(win)
-    plats["windows"] = [{"name": n, "size": (win / n).stat().st_size, "sha256": h} for n, h in sorted(sums.items()) if (win / n).is_file() and sp.sha_f(win / n) == h]
+    plats["windows"] = [{"name": n, "size": (win / n).stat().st_size, "sha256": h} for n, h in sorted(sums.items()) if sp.regular_inside(win, n) and sp.sha_f(win / n) == h]
     if len(plats["windows"]) != len(sums):
         raise sp.Refused("a file of signed/windows-container does not match its SHA256SUMS")
     lin = evidence / "artifacts" / "linux"
     lsums = sp.parse_sums(lin)
     for n, h in lsums.items():
-        if not (lin / n).is_file() or sp.sha_f(lin / n) != h:
+        if not sp.regular_inside(lin, n) or sp.sha_f(lin / n) != h:
             raise sp.Refused(f"a Linux build file ({n}) does not match its SHA256SUMS")
     plats["linux"] = [{"name": n, "size": (lin / n).stat().st_size, "sha256": h} for n, h in sorted(lsums.items()) if "/" not in n and n.lower().endswith(sp.DELIVERABLE["linux"])]
     if not plats["linux"]:

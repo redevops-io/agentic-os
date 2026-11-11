@@ -167,10 +167,11 @@ def test_s6_reports_owner_until_the_owners_outputs_exist_and_never_signs(orch):
     assert q.returncode == 1 and "## S6 Authorized signing (owner's terminal): **OWNER**" in q.stdout
     for name in ("macOS", "Windows inner stage", "Windows container stage", "Linux release manifest (P-LIN a)"):
         assert f"`OWNER` {name}: not done" in q.stdout
-    for d in ("signed/macos", "signed/windows-inner", "signed/windows-container"):
+    for d in ("signed/macos", "signed/windows-inner", "signed/windows-container", "release", "release-sig"):
         (ev / d).mkdir(parents=True)
         (ev / d / "x").write_text("x")
-    (ev / "RELEASE_MANIFEST_0.6.0.json.sig").write_text("x")
+    (ev / "release/release-manifest.json").write_text("{}")
+    (ev / "release-sig/release-manifest.json.sig").write_text("x")
     q2 = run_orch(r, ev, "S6")
     assert q2.returncode == 0 and "## S6 Authorized signing (owner's terminal): **PASS**" in q2.stdout
     assert "`PASS` macOS: the owner's output is in place" in q2.stdout and not (ev / "ledger").exists()
@@ -180,7 +181,7 @@ def test_s7_fails_closed_when_nothing_was_signed(orch):
     r, c, ev = orch
     q = run_orch(r, ev, "S7")
     assert q.returncode == 1 and "## S7 Signature and notarization verification: **FAIL**" in q.stdout
-    for needle in ("macOS: need", "Windows inner: ", "Windows container: ", "Linux: RELEASE_MANIFEST_0.6.0.json"):
+    for needle in ("macOS: need", "Windows inner: ", "Windows container: ", "Linux: release/release-manifest.json"):
         assert needle in q.stdout, needle
     assert "`PASS`" not in q.stdout.split("## S7")[1].split("## Blockers")[0]
 

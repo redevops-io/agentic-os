@@ -211,7 +211,7 @@
     },
     {
       "id": "X-2",
-      "text": "Post-run check 4 of the c317 package (revision 4.1) reported a known false FAIL on Developer-ID-signed bundles (__LINKEDIT vmsize differs by page rounding after the signature is removed); the owner accepted it for the c317 run. For this release the check is replaced in scripts/release/verify_signed.py: the signature is removed from BOTH the input's and the signed binary and the two results must be byte-identical, so no pinned hash and no false FAIL. The replacement has been run on ad-hoc signed fixtures only, not on a Developer-ID-signed release.",
+      "text": "Post-run check 4 of the c317 package (revision 4.1) reported a known false FAIL on Developer-ID-signed bundles (the __LINKEDIT vmsize differs by page rounding after the signature is removed); the owner accepted it for the c317 run. For this release the check is replaced in scripts/release/verify_signed.py: the signature is removed from both the input's and the signed binary and the __LINKEDIT vmsize field is zeroed in both before comparing (removing the signature from both alone was found by the independent review NOT to be enough). Acceptance on real data: run against the c317 Developer-ID signed pair, every signature and content row passes, both executables included, and only the three rows that say 'private candidate' fail (an acceptance run recorded in the records folder; the matching test in tests/test_release_signing_package.py skips unless the c317 signing folder is under the test's HOME). It has not been run on a release build, which does not exist yet.",
       "source": "C317_SIGNING_RUN_RECORD_2026-11-10.md; independent review of the run"
     },
     {
@@ -289,11 +289,11 @@
     },
     {
       "id": "T5",
-      "text": "The Windows and Linux native build hosts are driven by per-pass script packs under native-c317/ (an Azure VM and a Lima VM). They are not parametrized for a new commit; the orchestrator generates a pack by substituting the commit, tree and host names and the pack has not yet been run for the release commit."
+      "text": "The Windows and Linux native build hosts are driven by per-pass script packs under native-c317/ (an Azure VM and a Lima VM). They are not parametrized for a new commit; the orchestrator generates a pack by substituting the commit, tree and host names and the pack has not yet been run for the release commit. Layout: the c317 packs name the About record lic-about.json and put deliverables in sub-folders (f1/, f2/, b1/, b2/); the orchestrator's S4/S5 expect about.json and top-level deliverables next to SHA256SUMS, so the first real pack run needs its output arranged (or the tool adapted) before S4 can pass; S4/S5 fail closed meanwhile."
     },
     {
       "id": "T6",
-      "text": "macOS signing package for a distribution run: the c317 package (revision 4.1) cannot be reused (its pre-run check asserts that the gate REFUSES, it pins c317 constants, writes distribution=no, and its post-run check 4 is defective, X-2). Replaced by scripts/release/signing_package.py (derives every value from the release commit, distribution=yes, gate must ALLOW, no constants) and scripts/release/verify_signed.py, with tests. Status: it has run on synthetic fixtures and ad-hoc signed dmgs only; no real distribution build exists (the gate refuses), the Developer ID signing and notarization of this lineage has run only in the c317 private candidate run, and the tooling has had no independent review yet."
+      "text": "macOS signing package for a distribution run: the c317 package (revision 4.1) cannot be reused (its pre-run check asserts that the gate REFUSES, it pins c317 constants, writes distribution=no, and its post-run check 4 is defective, X-2). Replaced by scripts/release/signing_package.py (derives every value from the release commit, distribution=yes, gate must ALLOW, no constants) and scripts/release/verify_signed.py, with tests. Status: scope files were checked by an independent review against the keys and comparisons of the real signing scripts; the macOS verifier was run on the real c317 signed pair (see X-2); the runbooks and the Windows and SSHSIG paths have run only on synthetic fixtures; the signing scripts' real paths have not been run for this lineage except the c317 private macOS run. The first independent review REJECTED the first version (six required findings, all fixed with tests); a review of the fixes is recorded in the records folder."
     },
     {
       "id": "T7",
@@ -301,7 +301,7 @@
     },
     {
       "id": "T8",
-      "text": "Orchestrator stages S5 (signing packages), S6 (owner signing) and S7 (verification) and S9 (result) are implemented and tested on synthetic fixtures. S6 never signs: it reports OWNER until the owner's outputs are in place and then PASS; S7 verifies them. They have not run on a real release, because S1 stops first while counsel decisions are open. S8 (push and tag) still refuses unless S0 to S7 PASSED in the same run."
+      "text": "Orchestrator stages S5 (signing packages), S6 (owner signing), S7 (verification) and S9 (result) are implemented and tested on synthetic fixtures. S6 never signs: it reports OWNER until the owner's outputs are in place and then PASS; S7 verifies them (for Windows only with the pinned Authenticode verifier and the signed package, otherwise it FAILS). They have not run on a real release, because S1 stops first while counsel decisions are open. S8 (push and tag) still refuses unless S0 to S7 PASSED in the same run."
     },
     {
       "id": "T9",

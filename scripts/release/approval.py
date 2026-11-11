@@ -141,6 +141,8 @@ def render(commit: str, root: Path = ROOT, include: set | None = None) -> str:
         include = {d["id"] for d in all_ob} - set(owner_struck)
     if not include or not include <= {d["id"] for d in all_ob}:
         raise SystemExit("include must be a non-empty subset of the owner-only decisions")
+    if include & set(owner_struck):
+        raise SystemExit(f"the manifest records {sorted(include & set(owner_struck))} as struck by the owner; a document that covers a struck decision is never rendered")
     ob = [d for d in all_ob if d["id"] in include]
     struck = [d for d in all_ob if d not in ob]
     other = [d for d in gate["decisions"] if d["decides"] != "owner"]

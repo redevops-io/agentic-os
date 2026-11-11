@@ -231,10 +231,12 @@ def test_a_filled_macos_scope_is_accepted_by_the_real_parser(built, tmp_path):
 def test_the_runbook_names_exact_commands_and_stops_on_a_refusing_gate(built):
     repo, c, a, e, out = built
     rb = (out / "OPERATOR_RUNBOOK.md").read_text()
-    for needle in ("git -C \"$REPO\" archive", "signing_package.py verify", "sign_and_notarize_r0prime_macos_v3.sh", "--real", "--distribution", "--ledger",
+    for needle in ("git -C \"$REPO\" archive", "signing_package.py\" verify", "sign_and_notarize_r0prime_macos_v3.sh", "--real", "--distribution", "--ledger",
                    "verify_signed.py macos", "ALLOW (exit 0)", "does not publish, push or tag"):
         assert needle in rb, needle
     assert "R0P_NOTARY_PROFILE='redevops'" in rb
+    assert "mkdir ledger" not in rb and 'LEDGER="$HOME/Documents/r0prime-signing-ledger"' in rb and '--ledger "$LEDGER"' in rb
+    assert 'echo "REFUSED' in rb and "exit 1" in rb and "return 1" not in rb
 
 
 # ---------------------------------------------------------------------------------------------------------------- Windows packages
@@ -259,7 +261,11 @@ def test_windows_inner_package_names_roles_and_leaves_host_pins_to_the_signing_h
     a = art(tmp_path, c)
     e = evid(repo, c, a, tmp_path)
     out = tmp_path / "pkg-win-inner"
-    sp.build("windows", repo, c, out, stage="inner", inputs=win_inputs(tmp_path), evid=e)
+    ins = win_inputs(tmp_path)
+    (a / "windows/inner").mkdir()
+    for f in ins:
+        shutil.copy(f, a / "windows/inner" / f.name)
+    sp.build("windows", repo, c, out, stage="inner", inputs=ins, evid=e)
     sc = sp.parse_scope((out / "scope/scope-windows-inner.DRAFT.txt").read_text())
     assert len(sc) == 30 and sc["stage"] == "inner" and sc["distribution"] == "yes" and sc["container_listing_sha256"] == "none"
     assert sc["az_endpoint"] == "https://eus.codesigning.azure.net/" and sc["az_profile"] == "redevops-public" and sc["expected_cn"] == "CN=ReDevOps.io LLC"
@@ -405,49 +411,94 @@ def test_sshsig_verification_accepts_the_right_signature_and_refuses_tampering(t
 
 
 # ---------------------------------------------------------------------------------------------------------------- Windows output verification
-def win_out(tmp_path, c, *, mode="real", private=False, stage="inner", cn="CN=ReDevOps.io LLC", extra=""):
+WIN_SCRIPT = ROOT / "packaging/signing/sign_windows_r0prime_v3.sh"
+
+
+def script_cn_line(cn_with_prefix: str) -> str:
+    """The `subject check:` line exactly as sign_windows_r0prime_v3.sh writes it into EVIDENCE.txt (taken from the script, not invented here)."""
+    src = WIN_SCRIPT.read_text()
+    assert 'EXPECTED_CN="${EXPECTED_SUBJECT#CN=}"' in src            # the script strips the CN= prefix before it records the name
+    line = next(ln for ln in src.splitlines() if 'echo "subject check:' in ln)
+    template = line.split('echo "', 1)[1].rsplit('"', 1)[0]
+    return template.replace("$EXPECTED_CN", cn_with_prefix[3:])
+
+
+def stub_verifier(tmp_path, rc=0):
+    v = tmp_path / f"verify_stub{rc}.py"
+    v.write_text(f"import sys\nsys.exit({rc})\n")
+    return Path(sys.executable), v
+
+
+def win_pkg(repo, tmp_path, stage="inner"):
+    c = g(repo, "rev-parse", "HEAD")
+    e = evid(repo, c, art(tmp_path / "wa", c) if (tmp_path / "wa").mkdir() is None else None, tmp_path)
+    ins = win_inputs(_sub(tmp_path, "wi"))
+    pkg = sp.build("windows", repo, c, tmp_path / "wpkg", stage="inner", inputs=ins, evid=e)
+    return c, pkg, ins
+
+
+def win_out_for(tmp_path, c, pkg_inputs, *, mode="real", private=False, stage="inner", cn="CN=ReDevOps.io LLC", sign=True):
     d = tmp_path / "winout"
     d.mkdir()
-    (d / "a-signed.exe").write_bytes(b"signed")
-    (d / "SHA256SUMS").write_text(f"{hashlib.sha256(b'signed').hexdigest()}  a-signed.exe\n")
+    lines = []
+    for f in pkg_inputs:
+        data = f.read_bytes() + (b"+signature" if sign else b"")
+        (d / f.name).write_bytes(data)
+        lines.append(f"{hashlib.sha256(data).hexdigest()}  {f.name}\n")
+    (d / "SHA256SUMS").write_text("".join(lines))
     (d / "EVIDENCE.txt").write_text("\n".join([f"mode:            {mode}", f"stage:           {stage} (x)", f"scope binds:     build commit {c}; procedure commit {c}",
                                                "distribution:    PRIVATE-CANDIDATE signing: signing does NOT imply permission to distribute" if private else "distribution:    gate enforced (--distribution) and passed",
-                                               f"subject check:   signer certificate must carry exactly one CN, equal to '{cn}' (exact match)", extra]) + "\n")
+                                               script_cn_line(cn)]) + "\n")
     return d
 
 
-def test_windows_output_verification_checks_the_run_records(tmp_path):
-    c = "c" * 40
-    d = win_out(tmp_path, c)
-    r = vs.windows(d, "inner", c, "CN=ReDevOps.io LLC", None, None, None)
+def test_windows_output_verification_accepts_what_the_script_writes_and_needs_the_package_and_the_verifier(repo, tmp_path):
+    commit(repo, "r", rc=0)
+    c, pkg, ins = win_pkg(repo, tmp_path)
+    d = win_out_for(tmp_path, c, ins)
+    py, ok_v = stub_verifier(tmp_path, 0)
+    r = vs.windows(d, "inner", c, "CN=ReDevOps.io LLC", pkg, py, ok_v)
     assert r.failed == 0, r.rows
-    assert any("only verification" in t for s, t in r.rows if s == "INFO")        # honest about what it did not verify independently
-    for kw, why in (({"mode": "throwaway-test"}, "mode real"), ({"private": True}, "distribution gate"), ({"stage": "container"}, "stage inner")):
-        d2 = tmp_path / why.replace(" ", "_")
-        d2.mkdir()
-        r2 = vs.windows(win_out(d2, c, **kw), "inner", c, "CN=ReDevOps.io LLC", None, None, None)
-        assert r2.failed >= 1, kw
-    d3 = tmp_path / "other"
-    d3.mkdir()
-    assert vs.windows(win_out(d3, c), "inner", "d" * 40, None, None, None, None).failed >= 1
-    d4 = tmp_path / "cn"
-    d4.mkdir()
-    assert vs.windows(win_out(d4, c), "inner", c, "CN=Someone Else", None, None, None).failed >= 1
+    assert any("only the verifier looks" not in t for s, t in r.rows)
+    # no verifier, no package, no CN: each is a FAIL, not an INFO
+    assert any("no Authenticode verification" in t for s, t in vs.windows(d, "inner", c, "CN=ReDevOps.io LLC", pkg, None, None).rows if s == "FAIL")
+    assert any("no signed package" in t for s, t in vs.windows(d, "inner", c, "CN=ReDevOps.io LLC", None, py, ok_v).rows if s == "FAIL")
+    assert any("signer name is not checked" in t for s, t in vs.windows(d, "inner", c, None, pkg, py, ok_v).rows if s == "FAIL")
+    py2, bad_v = stub_verifier(tmp_path, 1)
+    assert any("pinned verifier refuses" in t for s, t in vs.windows(d, "inner", c, "CN=ReDevOps.io LLC", pkg, py2, bad_v).rows if s == "FAIL")
 
 
-def test_windows_output_must_differ_from_the_inputs_and_match_the_package(repo, tmp_path):
-    c = commit(repo, "r", rc=0)
-    e = evid(repo, c, art(tmp_path, c), tmp_path)
-    ins = win_inputs(tmp_path)
-    pkg = sp.build("windows", repo, c, tmp_path / "p", stage="inner", inputs=ins, evid=e)
-    d = tmp_path / "o"
-    d.mkdir()
-    for f in ins:
-        (d / f.name).write_bytes(f.read_bytes())                                   # NOT signed: identical to the input
-    (d / "SHA256SUMS").write_text("".join(f"{hashlib.sha256(f.read_bytes()).hexdigest()}  {f.name}\n" for f in ins))
-    (d / "EVIDENCE.txt").write_text(f"mode:            real\nstage:           inner (x)\nscope binds:     build commit {c}\ndistribution:    gate enforced (--distribution) and passed\n")
-    r = vs.windows(d, "inner", c, None, pkg, None, None)
-    assert any("unchanged from the input" in t for s, t in r.rows if s == "FAIL")
+def test_windows_output_refuses_a_hand_written_folder_an_unsigned_copy_and_the_wrong_run(repo, tmp_path):
+    commit(repo, "r", rc=0)
+    c, pkg, ins = win_pkg(repo, tmp_path)
+    py, ok_v = stub_verifier(tmp_path, 0)
+    cases = {"mode": dict(mode="throwaway-test"), "private": dict(private=True), "stage": dict(stage="container"), "unsigned": dict(sign=False)}
+    for name, kw in cases.items():
+        d = _sub(tmp_path, name)
+        r = vs.windows(win_out_for(d, c, ins, **kw), "inner", c, "CN=ReDevOps.io LLC", pkg, py, ok_v)
+        assert r.failed >= 1, name
+    d = _sub(tmp_path, "othercommit")
+    assert vs.windows(win_out_for(d, c, ins), "inner", "d" * 40, "CN=ReDevOps.io LLC", pkg, py, ok_v).failed >= 1
+    d = _sub(tmp_path, "cn")
+    assert vs.windows(win_out_for(d, c, ins), "inner", c, "CN=Someone Else", pkg, py, ok_v).failed >= 1
+    d = _sub(tmp_path, "short")
+    assert vs.windows(win_out_for(d, c, ins), "inner", "", "CN=ReDevOps.io LLC", pkg, py, ok_v).failed == 1      # an empty commit would match any text
+    d = _sub(tmp_path, "container")
+    assert any("another stage" in t for s, t in vs.windows(win_out_for(d, c, ins), "container", c, "CN=ReDevOps.io LLC", pkg, py, ok_v).rows if s == "FAIL")
+
+
+def test_windows_output_refuses_a_symlinked_signed_file(repo, tmp_path):
+    commit(repo, "r", rc=0)
+    c, pkg, ins = win_pkg(repo, tmp_path)
+    py, ok_v = stub_verifier(tmp_path, 0)
+    d = win_out_for(tmp_path, c, ins)
+    victim = d / ins[0].name
+    data = victim.read_bytes()
+    victim.unlink()
+    elsewhere = tmp_path / "elsewhere.exe"
+    elsewhere.write_bytes(data)
+    os.symlink(elsewhere, victim)
+    assert any("symlink" in t for s, t in vs.windows(d, "inner", c, "CN=ReDevOps.io LLC", pkg, py, ok_v).rows if s == "FAIL")
 
 
 # ---------------------------------------------------------------------------------------------------------------- release manifest
@@ -511,7 +562,7 @@ def test_macos_verifier_on_an_adhoc_fixture_counts_only_the_non_developer_id_row
     r = vs.macos(out, inp, "ABCDE12345", "c" * 40, tmp_path / "work", src=ROOT, offline=True, adhoc=True)
     assert r.failed == 0, [x for x in r.rows if x[0] == "FAIL"]
     assert any(s == "XFAIL" and "Developer ID" in t for s, t in r.rows)                       # the Developer ID rows are not met by an ad-hoc fixture
-    assert any(s == "PASS" and "byte-identical" in t and "X-2 corrected" in t for s, t in r.rows)
+    assert any(s == "PASS" and "byte-identical" in t and "__LINKEDIT" in t for s, t in r.rows)
     # the same fixture is REFUSED as a real run: no Developer ID chain, no team, no notary records
     r2 = vs.macos(out, inp, "ABCDE12345", "c" * 40, tmp_path / "work2", src=ROOT, offline=True, adhoc=False)
     assert r2.failed >= 5
@@ -548,6 +599,136 @@ def test_the_new_modules_use_only_the_standard_library_and_read_no_credentials()
     for name in ("signing_package.py", "verify_signed.py"):
         text = (ROOT / "scripts/release" / name).read_text()
         imports = {ln.split()[1].split(".")[0] for ln in text.splitlines() if ln.startswith(("import ", "from ")) and "__future__" not in ln}
-        assert imports <= {"sys", "argparse", "hashlib", "json", "os", "re", "shutil", "subprocess", "tempfile", "pathlib", "signing_package"}, imports
+        assert imports <= {"sys", "argparse", "hashlib", "json", "os", "re", "shutil", "subprocess", "tempfile", "pathlib", "signing_package", "struct"}, imports
         for pat in (r"\.ssh", r"\.azure", r"find-identity", r"security ", r"urllib", r"requests", r"socket", r"curl ", r"keychain-profile"):
             assert not __import__("re").search(pat, "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith(("#", '"', "'")) and "w(" not in ln and "print(" not in ln)), (name, pat)
+
+
+def test_runbooks_use_the_one_persistent_ledger_and_the_names_the_scripts_accept(repo, tmp_path):
+    c = commit(repo, "r", rc=0)
+    a = art(tmp_path, c)
+    e = evid(repo, c, a, tmp_path)
+    win = sp.build("windows", repo, c, tmp_path / "w", stage="inner", inputs=win_inputs(_sub(tmp_path, "wi")), evid=e)
+    wb = (win / "OPERATOR_RUNBOOK.md").read_text()
+    for needle in ('--tools-dir "$TOOLS"', '--python "$PY"', "R0P_TOOLS_DIR", '--ledger "$LEDGER"', "verify_signature_v2.py", '--package "$PKG"', "signing-packages/windows-container"):
+        assert needle in wb, needle
+    assert "mkdir ledger" not in wb and "'CN=ReDevOps.io LLC'" in wb
+    m = tmp_path / "m.json"
+    m.write_text(json.dumps({"release_commit": c, "platforms": {}}))
+    ss = sp.build("sshsig", repo, c, tmp_path / "s", release_manifest=m)
+    sb = (ss / "OPERATOR_RUNBOOK.md").read_text()
+    assert "manifest/release-manifest.json" in sb and "sig/release-manifest.json.sig" in sb and "RELEASE_MANIFEST_0.6.0" not in sb
+    assert 'cmp "$BASE/manifest/release-manifest.json"' in sb and "mkdir ledger" not in sb
+    # the facts in the runbook are the manifest's, not literals of this tool
+    man = json.loads((repo / sp.MANIFEST).read_text())
+    assert man["platform_signing"]["windows"]["azure_account"] in wb
+
+
+def test_a_package_appears_under_its_final_name_only_when_complete_and_a_leftover_is_refused(repo, tmp_path, monkeypatch):
+    c = commit(repo, "r", rc=0)
+    a = art(tmp_path, c)
+    e = evid(repo, c, a, tmp_path)
+    out = tmp_path / "pkg"
+    monkeypatch.setattr(sp, "checksums", lambda p: (_ for _ in ()).throw(RuntimeError("disk full")))
+    with pytest.raises(RuntimeError):
+        sp.build("macos", repo, c, out, artifacts=a, evid=e)
+    assert not out.exists() and not (tmp_path / "pkg.building").exists()
+    monkeypatch.undo()
+    (tmp_path / "pkg.building").mkdir()
+    with pytest.raises(sp.Refused, match="interrupted"):
+        sp.build("macos", repo, c, out, artifacts=a, evid=e)
+
+
+def test_a_damaged_package_is_a_fail_row_and_a_package_of_another_run_is_refused(built, tmp_path):
+    repo, c, a, e, out = built
+    ev_sha = hashlib.sha256(e.read_bytes()).hexdigest()
+    assert not any(s == "FAIL" for s, t in sp.verify_package(out, repo, artifacts=a, expect_commit=c, expect_evidence_sha=ev_sha))
+    rows = sp.verify_package(out, repo, artifacts=a, expect_commit="0" * 40, expect_evidence_sha="1" * 64)
+    assert any(s == "FAIL" and "another release commit" in t for s, t in rows) and any(s == "FAIL" and "different evidence manifest" in t for s, t in rows)
+    (out / "PACKAGE.json").write_text("{")
+    r = sp.verify_package(out, repo, artifacts=a)
+    assert r[0][0] == "FAIL" and "cannot be verified" in r[0][1]
+    (out / "PACKAGE.json").unlink()
+    assert sp.verify_package(out, repo)[0][0] == "FAIL"
+
+
+def test_about_records_must_be_complete_distribution_records(tmp_path):
+    def rec(**over):
+        d = {"build": {"mode": "distribution", "source": {"commit": "c" * 40, "dirty_files": 0}}, "legal": {"slots": {"a": {"state": "approved-verified"}}}}
+        for k, v in over.items():
+            d[k] = v
+        f = tmp_path / "about.json"
+        f.write_text(json.dumps(d))
+        return sp.about_findings(tmp_path, "c" * 40)
+    assert all(s == "PASS" for s, t in rec())
+    assert any(s == "FAIL" for s, t in rec(legal={"slots": {}}))                                              # no slots is not "all approved"
+    assert any(s == "FAIL" for s, t in rec(legal={}))
+    assert any(s == "FAIL" and "dirty_files" in t for s, t in rec(build={"mode": "distribution", "source": {"commit": "c" * 40}}))   # a missing field is not 0
+    assert any(s == "FAIL" for s, t in rec(build="x"))
+    (tmp_path / "about.json").write_text("{")
+    assert any(s == "FAIL" and "unreadable" in t for s, t in sp.about_findings(tmp_path, "c" * 40))
+
+
+def test_sha256sums_paths_may_not_leave_the_folder_through_symlinks(repo, tmp_path):
+    c = commit(repo, "r", rc=0)
+    a = art(tmp_path, c)
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "x.deb").write_bytes(b"deb")
+    shutil.rmtree(a / "linux/notices")
+    os.symlink(other, a / "linux/notices")
+    (a / "linux/SHA256SUMS").write_text(f"{hashlib.sha256(b'deb').hexdigest()}  ./app_0.6.0_amd64.deb\n{hashlib.sha256(b'deb').hexdigest()}  ./notices/x.deb\n")
+    with pytest.raises(sp.Refused, match="symlink"):
+        evid(repo, c, a, tmp_path)
+    assert sp.regular_inside(a / "linux", "app_0.6.0_amd64.deb") and not sp.regular_inside(a / "linux", "notices/x.deb")
+
+
+# ---------------------------------------------------------------------------------------------------------------- Mach-O normalization (X-2)
+def fake_macho(vmsize: int, tail: bytes = b"code") -> bytes:
+    import struct
+    seg = struct.pack("<II16sQQQQiiII", 0x19, 72, b"__LINKEDIT", 0x1000, vmsize, 0, 0x100, 1, 1, 0, 0)
+    hdr = struct.pack("<IiiIIIII", 0xFEEDFACF, 0x0100000C, 0, 2, 1, len(seg), 0, 0)
+    return hdr + seg + tail
+
+
+def test_macho_normalization_ignores_only_the_linkedit_vmsize():
+    a, b = fake_macho(0x2490000), fake_macho(0x248C000)
+    assert a != b and vs.macho_normalize(a) == vs.macho_normalize(b)
+    assert vs.macho_normalize(fake_macho(0x2490000, b"code")) != vs.macho_normalize(fake_macho(0x2490000, b"CODE"))      # any other byte still counts
+    import struct
+    fat = struct.pack(">II", 0xCAFEBABE, 1) + struct.pack(">iiIII", 0x0100000C, 0, 28, len(a), 0) + a
+    assert vs.macho_normalize(fat) == vs.macho_normalize(struct.pack(">II", 0xCAFEBABE, 1) + struct.pack(">iiIII", 0x0100000C, 0, 28, len(b), 0) + b)
+    with pytest.raises(ValueError):
+        vs.macho_normalize(b"#!/bin/sh\necho not a Mach-O file\n")
+
+
+C317 = Path.home() / "Documents" / "r0prime-signing-c317-d9935d59"
+
+
+@pytest.mark.skipif(not (DARWIN and (C317 / "out-real").is_dir() and (C317 / "in").is_dir()), reason="needs this Mac's c317 signing folder (a real Developer-ID signed and notarized pair)")
+def test_macos_verifier_on_the_real_c317_signed_pair_fails_only_the_private_candidate_rows(tmp_path):
+    """Acceptance for X-2: on the REAL Developer-ID dmg and its unsigned input every signature and content row passes (executables included); exactly the three rows that say
+    'this was a private candidate' fail. Read-only: the verifier works on copies in its own work folder; offline, so spctl is skipped."""
+    dmg = next((C317 / "in").glob("*.dmg"))
+    r = vs.macos(C317 / "out-real", dmg, "Q8A92DM4T7", "016143ff1a8ab39524d1f042916dcf01298d9d04", tmp_path / "w", src=ROOT, offline=True)
+    failed = [t for s, t in r.rows if s == "FAIL"]
+    assert len(failed) == 3, failed
+    assert any("enforced distribution gate" in t for t in failed) and any("PRIVATE-CANDIDATE" in t for t in failed) and any("about.json: mode 'private-candidate'" in t for t in failed)
+    assert sum(1 for s, t in r.rows if s == "PASS" and "byte-identical to the unsigned input" in t and "__LINKEDIT" in t) == 2
+
+
+def test_the_adhoc_mode_is_a_test_mode_and_never_exits_zero(capsys):
+    r = vs.Rows(adhoc=True)
+    r.ok("x")
+    assert vs.print_rows(r) == 3 and "NOT A RELEASE VERIFICATION" in capsys.readouterr().out
+    r2 = vs.Rows()
+    r2.ok("x")
+    assert vs.print_rows(r2) == 0
+
+
+def test_commits_must_be_40_hex_everywhere():
+    for bad in ("", "abc123", "G" * 40, "0" * 39):
+        assert not vs.is_commit(bad)
+    assert vs.is_commit("a" * 40)
+    assert vs.macos(Path("/x"), Path("/y"), "ABCDE12345", "abc", Path("/z")).failed == 1
+    assert vs.sshsig(Path("/x"), Path("/y"), Path("/z"), "", None).failed == 1

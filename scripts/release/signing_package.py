@@ -89,6 +89,8 @@ def git(repo: Path, *a) -> str:
 
 
 def resolve(repo: Path, rev: str) -> tuple[str, str]:
+    if not rev or rev.startswith("-"):
+        raise Refused("a commit is required")
     c = git(repo, "rev-parse", rev + "^{commit}")
     return c, git(repo, "rev-parse", c + "^{tree}")
 
@@ -101,6 +103,19 @@ def extract(repo: Path, commit: str, dest: Path) -> None:
     a.stdout.close()
     if a.wait() or t.returncode:
         raise Refused(f"cannot extract {commit}: {t.stderr.decode(errors='replace')[:200]}")
+
+
+def regular_inside(base: Path, name: str) -> bool:
+    """`base/name` is a regular file, no component of the path below `base` is a symlink, and the resolved path stays inside `base`."""
+    p = base
+    for part in name.split("/"):
+        p = p / part
+        if p.is_symlink():
+            return False
+    try:
+        return p.is_file() and p.resolve().is_relative_to(base.resolve())
+    except OSError:
+        return False
 
 
 def pins(src: Path) -> dict[str, str]:
@@ -144,16 +159,23 @@ DELIVERABLE = {"macos": (".dmg",), "windows": (".msi", ".exe"), "linux": (".deb"
 
 
 def about_findings(artdir: Path, commit: str) -> list[tuple[str, str]]:
+    """Every About record under `artdir` must name the release commit, be a distribution record with `dirty_files` present and 0, and have a non-empty set of legal
+    slots that are all approved-verified. A missing field is a FAIL, not a default."""
     out = []
     for f in sorted(artdir.rglob("about.json")):
-        a = json.loads(f.read_text(encoding="utf-8"))
-        b = a.get("build", {})
-        src = b.get("source", {})
+        try:
+            a = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            out.append(("FAIL", f"{f.name}: unreadable ({type(e).__name__})"))
+            continue
+        b = a.get("build", {}) if isinstance(a.get("build"), dict) else {}
+        src = b.get("source", {}) if isinstance(b.get("source"), dict) else {}
         out.append(("PASS" if src.get("commit") == commit else "FAIL", f"{f.name}: source.commit {str(src.get('commit'))[:8]} == release commit"))
         out.append(("PASS" if b.get("mode") == "distribution" else "FAIL", f"{f.name}: build mode is {b.get('mode')!r}"))
-        out.append(("PASS" if str(src.get("dirty_files", "0")) in ("0", "False") else "FAIL", f"{f.name}: dirty_files {src.get('dirty_files')}"))
-        pend = [k for k, v in a.get("legal", {}).get("slots", {}).items() if v.get("state") != "approved-verified"]
-        out.append(("PASS" if not pend else "FAIL", f"{f.name}: legal slots not approved-verified: {pend or 'none'}"))
+        out.append(("PASS" if str(src.get("dirty_files")) in ("0", "False") else "FAIL", f"{f.name}: dirty_files {src.get('dirty_files')!r} (must be present and 0)"))
+        slots = a.get("legal", {}).get("slots", {}) if isinstance(a.get("legal"), dict) else {}
+        pend = [k for k, v in slots.items() if not isinstance(v, dict) or v.get("state") != "approved-verified"]
+        out.append(("PASS" if slots and not pend else "FAIL", f"{f.name}: legal slots {sorted(slots) or 'MISSING'}; not approved-verified: {pend or 'none'}"))
     return out or [("FAIL", f"no about.json under {artdir}")]
 
 
@@ -169,8 +191,8 @@ def evidence_manifest(artifacts: Path, commit: str, tree: str, approval_sha: str
         sums = parse_sums(d)
         for name, h in sorted(sums.items()):
             f = d / name
-            if not f.is_file() or f.is_symlink():
-                raise Refused(f"{p}: {name} listed in SHA256SUMS is not a regular file")
+            if not regular_inside(d, name):
+                raise Refused(f"{p}: {name} listed in SHA256SUMS is not a regular file inside the folder (missing, a symlink, or outside)")
             if sha_f(f) != h:
                 raise Refused(f"{p}: {name} does not match SHA256SUMS")
         files = [{"name": n, "size": (d / n).stat().st_size, "sha256": h} for n, h in sorted(sums.items()) if "/" not in n and n.lower().endswith(DELIVERABLE[p])]
@@ -266,127 +288,151 @@ def fingerprint(pub: Path) -> str:
 # ------------------------------------------------------------------------------------------------------------ runbooks
 def runbook(platform: str, stage: str | None, commit: str, pkgname: str, scope_name: str, extra: dict) -> str:
     c8 = commit[:8]
+    f = extra["facts"]
+    mac, win = f["macos"], f["windows"]
+    cn = win["azure_expected_cn"]
     L: list[str] = []
     w = L.append
     w(f"# Operator runbook: release 0.6.0 signing, {platform}{(' ' + stage) if stage else ''} (release commit {commit})")
     w("")
     w("Run these blocks at **your own terminal**. Nothing here is run by an agent. No block reads a private key file; the Developer ID identity stays in your login keychain, the notary profile in your keychain, the Azure token comes from your `az login`, the SSHSIG key from your ssh-agent. A scope file is a tripwire against mistakes, not an authentication.")
     w("")
-    w("Stop at the first line that says REFUSED, ERROR or FAIL. Do not edit a scope file by hand: the signing script refuses a file whose hash is not the one you pass.")
+    w("Save each block to a file and run it with `bash -e FILE` (or paste it into a terminal you can afford to close): a `REFUSED` line ends the block with `exit`. Stop at the first line that says REFUSED, ERROR or FAIL. Do not edit a scope file by hand: the signing script refuses a file whose hash is not the one you pass.")
     w("")
     w("## 0. A fresh working folder and the release tree")
     w("")
     w("```sh")
-    w(f"REPO=~/agentic-os                       # your clone that holds the release commit R = {commit}")
-    w(f"BASE=~/Documents/agenticos-0.6.0-signing-{c8}-{platform}{('-' + stage) if stage else ''}")
-    w('[ ! -e "$BASE" ] || { echo "REFUSED: $BASE exists"; false; }')
-    w('mkdir -p "$BASE" && cd "$BASE"')
-    w(f'git -C "$REPO" cat-file -e {commit}^{{commit}} && git -C "$REPO" archive --format=tar {commit} | (mkdir src && tar -x -C src)')
-    w("PKG=<the package folder you were given (it holds PACKAGE.json)>")
+    w('EVID="<the evidence folder of the orchestrator run>"      # replace the placeholder with the real folder')
+    w(f'REPO="$HOME/agentic-os"                                   # your clone that holds the release commit R = {commit}')
+    w(f'BASE="$HOME/Documents/agenticos-0.6.0-signing-{c8}-{platform}{("-" + stage) if stage else ""}"')
+    w('LEDGER="$HOME/Documents/r0prime-signing-ledger"           # the ONE persistent ledger of all signing runs (one-time claims survive between runs); never create it by hand, the script prepares it')
+    w('[ -d "$EVID" ] || { echo "REFUSED: set EVID to the evidence folder"; exit 1; }')
+    w('[ ! -e "$BASE" ] || { echo "REFUSED: $BASE exists"; exit 1; }')
+    w('mkdir -p "$BASE" && cd "$BASE" || exit 1')
+    w(f'git -C "$REPO" cat-file -e {commit}^{{commit}} && git -C "$REPO" archive --format=tar {commit} | (mkdir "$BASE/src" && tar -x -C "$BASE/src") || {{ echo "REFUSED: cannot extract the release commit"; exit 1; }}')
+    if platform == "sshsig":
+        w('mkdir -p "$BASE/manifest" "$BASE/sig" "$BASE/pkg"')
+    pk = {"macos": "macos", "windows": f"windows-{stage}"}.get(platform)
+    if pk:
+        w(f'PKG="$EVID/signing-packages/{pk}"; [ -f "$PKG/PACKAGE.json" ] || {{ echo "REFUSED: no package at $PKG"; exit 1; }}')
     w("```")
     w("")
     w("## 1. Verify the package and the inputs against the release commit (read-only, no secret)")
     w("")
     w("```sh")
-    arts = extra.get("artifacts_hint", "<the evidence folder>/artifacts")
-    w(f'python3 -I src/scripts/release/signing_package.py verify --package "$PKG" --repo "$REPO" --src src --artifacts {arts}')
+    if pk:
+        w(f'python3 -I "$BASE/src/scripts/release/signing_package.py" verify --package "$PKG" --repo "$REPO" --src "$BASE/src" --artifacts "$EVID/artifacts"')
+    else:
+        w('# the SSHSIG package is built in step 2 and verified there')
     w("```")
     w("")
-    w("It re-derives every value of the scope draft from the release commit, checks the inputs, checks that no placeholder other than the window (and, on Windows, the host-tool hashes) is left, parses the draft with the REAL parser of the signing script, and runs the distribution gate for this platform: the gate must ALLOW (exit 0). If the gate refuses, the release is not authorized yet and nothing below may run.")
+    w("`verify` re-derives every value of the scope draft from the release commit, checks the inputs, checks that no placeholder other than the window (and, on Windows, the host-tool hashes) is left, parses the draft with the scope loader and window check of the pinned `signing-common.sh` (the key list and format checks are those of `check_scope_parse.sh`; the signing script's own further checks run in step 3), and runs the distribution gate for this platform: the gate must ALLOW (exit 0). If the gate refuses, the release is not authorized yet and nothing below may run.")
     w("")
     if platform == "macos":
         w("## 2. The dmg and the window")
         w("")
         w("```sh")
-        w('mkdir in && cp -p "<the unsigned dmg from the build>" in/')
-        w(f'DMG="$(ls in/*.dmg)"; echo "$(shasum -a 256 "$DMG")"        # must equal input_dmg_sha256 in the scope draft: {extra["dmg_sha"]}')
-        w(f'SCOPE_SHA="$(bash src/packaging/signing/release/fill_scope_window.sh "$PKG/scope/{scope_name}" "$BASE/scope-macos.txt")"; echo "$SCOPE_SHA"')
-        w(f'bash src/packaging/signing/release/check_scope_parse.sh --src src --kind macos "$BASE/scope-macos.txt"')
+        w('mkdir "$BASE/in" && cp -p "$EVID/artifacts/macos/"*.dmg "$BASE/in/" && DMG="$(ls "$BASE"/in/*.dmg)"')
+        w(f'shasum -a 256 "$DMG"        # must equal input_dmg_sha256 in the scope draft: {extra["dmg_sha"]}')
+        w('SCOPE_SHA="$(bash "$BASE/src/packaging/signing/release/fill_scope_window.sh" "$PKG/scope/scope-macos.DRAFT.txt" "$BASE/scope-macos.txt")"; echo "$SCOPE_SHA"')
+        w('bash "$BASE/src/packaging/signing/release/check_scope_parse.sh" --src "$BASE/src" --kind macos "$BASE/scope-macos.txt"')
         w("```")
         w("")
         w("## 3. Sign and notarize (the real run)")
         w("")
         w("```sh")
-        w("export R0P_CODESIGN_IDENTITY='Developer ID Application: ReDevOps.io LLC (Q8A92DM4T7)'   # the exact string of your keychain identity (sha256 is in the scope)")
-        w("export R0P_NOTARY_PROFILE='redevops'                                                    # the notarytool keychain profile NAME")
-        w(f'mkdir ledger && src/packaging/signing/sign_and_notarize_r0prime_macos_v3.sh --input-dmg "$DMG" --expected-sha256 {extra["dmg_sha"]} --out-dir "$BASE/out" \\')
-        w('  --real --i-have-owner-authorization "$SCOPE_SHA" --scope-file "$BASE/scope-macos.txt" --notarize --distribution --ledger "$BASE/ledger"')
+        w(f"export R0P_CODESIGN_IDENTITY='{mac['identity']}'   # the exact string of your keychain identity (its sha256 is in the scope)")
+        w(f"export R0P_NOTARY_PROFILE='{mac['notary_profile_name']}'                                                    # the notarytool keychain profile NAME")
+        w(f'"$BASE/src/packaging/signing/sign_and_notarize_r0prime_macos_v3.sh" --input-dmg "$DMG" --expected-sha256 {extra["dmg_sha"]} --out-dir "$BASE/out" \\')
+        w('  --real --i-have-owner-authorization "$SCOPE_SHA" --scope-file "$BASE/scope-macos.txt" --notarize --distribution --ledger "$LEDGER"')
         w("unset R0P_CODESIGN_IDENTITY R0P_NOTARY_PROFILE")
         w("```")
         w("")
-        w("It uploads the signed dmg to Apple once, with no automatic retry. If the submission fails or times out, do not resubmit without deciding to.")
+        w("It uploads the signed dmg to Apple once, with no automatic retry. If the submission fails or times out, decide by the ledger (`$LEDGER/events/`), not by feel, as in the c317 runbook: do not resubmit without deciding to.")
         w("")
-        w("## 4. Verify the result (no credential)")
+        w("## 4. Verify the result (no credential) and hand it to the orchestrator")
         w("")
         w("```sh")
-        w(f'python3 -I src/scripts/release/verify_signed.py macos --out "$BASE/out" --input-dmg "$DMG" --team-id Q8A92DM4T7 --commit {commit} --src src --work "$BASE/verify-work"')
+        w(f'python3 -I "$BASE/src/scripts/release/verify_signed.py" macos --out "$BASE/out" --input-dmg "$DMG" --team-id {mac["team_id"]} --commit {commit} --src "$BASE/src" --work "$BASE/verify-work"')
+        w('mkdir -p "$EVID/signed" && cp -Rp "$BASE/out" "$EVID/signed/macos"')
         w("```")
         w("")
-        w(f"Place the verified output where the orchestrator expects it: `<evidence folder>/signed/macos/` (the whole `out` folder), then run `scripts/release/release_orchestrate.sh --run --expect-signer-fingerprint <your key> --stages S0,S1,S2,S3,S4,S5,S6,S7` again with the same `--evidence-dir`.")
+        w("`verify_signed.py macos` asks Apple (revocation, notarization ticket by hash) unless you add `--offline`; it uploads nothing. It is this step, not the orchestrator, that verifies macOS first; the orchestrator verifies it again in S7 once all four owner steps (macOS, Windows inner, Windows container, Linux manifest) are in place: then run `scripts/release/release_orchestrate.sh --run --workspace <workspace> --evidence-dir \"$EVID\" --expect-signer-fingerprint <your legal-decision key> --windows-verifier-python <signify python> --stages S0,S1,S2,S3,S4,S5,S6,S7` (S2 runs the full test suite; S6 reports OWNER until every output is in place).")
     elif platform == "windows":
-        w("## 2. Host-tool hashes and the window (on the machine that will sign)")
+        w("## 2. The signing host's tools, the host-tool hashes and the window")
         w("")
         w("```sh")
-        w(f'python3 -I src/scripts/release/signing_package.py windows-tool-pins --scope-in "$PKG/scope/{scope_name}" --scope-out "$BASE/scope-host.txt" --tools-dir src/packaging/signing/tools --python <the signify venv python>')
-        w(f'SCOPE_SHA="$(bash src/packaging/signing/release/fill_scope_window.sh "$BASE/scope-host.txt" "$BASE/scope-windows-{stage}.txt")"; echo "$SCOPE_SHA"')
-        w(f'bash src/packaging/signing/release/check_scope_parse.sh --src src --kind windows "$BASE/scope-windows-{stage}.txt"')
+        w('TOOLS="<the tools folder: holds jsign/jsign-7.6.jar, jdk/ and optionally ossbuild/>"')
+        w('PY="<the python of the venv that has signify>"')
+        w('export R0P_TOOLS_DIR="<the folder that holds az, for example /opt/homebrew/bin>"')
+        w('[ -f "$TOOLS/jsign/jsign-7.6.jar" ] && [ -x "$PY" ] || { echo "REFUSED: set TOOLS and PY"; exit 1; }')
+        w('python3 -I "$BASE/src/scripts/release/signing_package.py" windows-tool-pins --scope-in "$PKG/scope/' + scope_name + '" --scope-out "$BASE/scope-host.txt" --tools-dir "$TOOLS" --python "$PY"')
+        w(f'SCOPE_SHA="$(bash "$BASE/src/packaging/signing/release/fill_scope_window.sh" "$BASE/scope-host.txt" "$BASE/scope-windows-{stage}.txt")"; echo "$SCOPE_SHA"')
+        w(f'bash "$BASE/src/packaging/signing/release/check_scope_parse.sh" --src "$BASE/src" --kind windows "$BASE/scope-windows-{stage}.txt"')
         w("```")
         w("")
-        w("`windows-tool-pins` mirrors the way the signing script computes the pins; if the script still reports `tool_..._sha256 does not match`, it prints the value it found, and the scope is regenerated with that value instead of editing the file.")
+        w("`windows-tool-pins` computes the pins in the way the signing script does, from the same `TOOLS`, `PY` and `R0P_TOOLS_DIR` that step 3 uses; if the script still reports `tool_..._sha256 does not match`, it prints the value it found, and the scope is regenerated with that value instead of being edited.")
         w("")
         w("## 3. Sign (the real run)")
         w("")
         w("```sh")
         w("az login                                  # your identity, holding 'Artifact Signing Certificate Profile Signer'")
-        w("export R0P_AZ_ENDPOINT='https://eus.codesigning.azure.net/' R0P_AZ_ACCOUNT='redevops' R0P_AZ_PROFILE='redevops-public' R0P_AZ_EXPECTED_CN='CN=ReDevOps.io LLC'")
+        w(f"export R0P_AZ_ENDPOINT='{win['azure_endpoint']}' R0P_AZ_ACCOUNT='{win['azure_account']}' R0P_AZ_PROFILE='{win['azure_certificate_profile']}' R0P_AZ_EXPECTED_CN='{cn}'")
         ins = " ".join(f'--input "<{n}>" --sha256 {h}' for n, h in extra.get("inputs", []))
-        listing = ' --container-listing "<the listing file>" --licenses-dir "<the Licenses folder of the installer tree>"' if stage == "container" else ""
-        w(f'mkdir ledger && src/packaging/signing/sign_windows_r0prime_v3.sh --stage {stage} {ins} --outdir "$BASE/out" \\')
-        w(f'  --real --i-have-owner-authorization "$SCOPE_SHA" --scope-file "$BASE/scope-windows-{stage}.txt" --distribution --ledger "$BASE/ledger"{listing}')
-        w("unset R0P_AZ_ENDPOINT R0P_AZ_ACCOUNT R0P_AZ_PROFILE R0P_AZ_EXPECTED_CN")
+        listing = ' --container-listing "<the listing file; it must contain the sha256 of the Licenses/about.json of the installer tree>" --licenses-dir "<the Licenses folder of the installer tree>"' if stage == "container" else ""
+        w(f'"$BASE/src/packaging/signing/sign_windows_r0prime_v3.sh" --stage {stage} {ins} --outdir "$BASE/out" --tools-dir "$TOOLS" --python "$PY" \\')
+        w(f'  --real --i-have-owner-authorization "$SCOPE_SHA" --scope-file "$BASE/scope-windows-{stage}.txt" --distribution --ledger "$LEDGER"{listing}')
+        w("unset R0P_AZ_ENDPOINT R0P_AZ_ACCOUNT R0P_AZ_PROFILE R0P_AZ_EXPECTED_CN R0P_TOOLS_DIR")
         w("```")
         w("")
-        w("The token is written by `az` into a private file and never printed. This script's real path has not run before this release; it has been tested with stubs and a throwaway key only.")
+        w("The token is written by `az` into a private file and never printed. This script's real path has not run before this release; it has been tested with stubs and a throwaway key only. Add `--ms-root-pem <Microsoft Identity Verification Root CA 2020 pem>` if you have it (an informational osslsigncode check only).")
         w("")
         if stage == "inner":
             w("## 4. Next: rebuild the installers, then the container stage")
             w("")
-            w("Hand the signed inner files back to the Windows build host (`packaging/signing/r0prime_win_signcommand.sh apply`), rebuild the MSI and the NSIS setup exe from them, copy the rebuilt installers and their listing back, then build the container package:")
+            w("Hand the signed inner files back to the Windows build host (`packaging/signing/r0prime_win_signcommand.sh apply`), rebuild the MSI and the NSIS setup exe from them, copy the rebuilt installers and their listing back, then build the container package where the orchestrator looks for it:")
             w("")
             w("```sh")
-            w(f'python3 -I src/scripts/release/signing_package.py build --platform windows --stage container --commit {commit} --repo "$REPO" --input "<MSI>" --input "<NSIS setup exe>" --container-listing "<listing>" --evidence-manifest "$PKG/evidence/evidence-manifest.json" --out "$BASE/../<new package folder>"')
+            w(f'python3 -I "$BASE/src/scripts/release/signing_package.py" build --platform windows --stage container --commit {commit} --repo "$REPO" --input "<MSI>" --input "<NSIS setup exe>" --container-listing "<listing>" --evidence-manifest "$EVID/evidence-manifest.json" --out "$EVID/signing-packages/windows-container"')
             w("```")
-        w("")
-        w("## 5. Verify the result (no credential)")
+            w("")
+        w("## 5. Verify the result (no credential; the pinned Authenticode verifier is required) and hand it to the orchestrator")
         w("")
         w("```sh")
-        w(f'python3 -I src/scripts/release/verify_signed.py windows --out "$BASE/out" --stage {stage} --commit {commit} --expect-cn "CN=ReDevOps.io LLC"')
+        w(f'python3 -I "$BASE/src/scripts/release/verify_signed.py" windows --out "$BASE/out" --stage {stage} --commit {commit} --expect-cn "{cn}" --package "$PKG" \\')
+        w('  --verifier-python "$PY" --verifier "$BASE/src/packaging/signing/verify_signature_v2.py"')
+        w(f'mkdir -p "$EVID/signed" && cp -Rp "$BASE/out" "$EVID/signed/windows-{stage}"')
         w("```")
         w("")
-        w(f"Place the verified folder at `<evidence folder>/signed/windows-{stage}/`; the container stage output is the Windows deliverable.")
+        w(f"The container stage output is the Windows deliverable. The orchestrator's S7 needs `--windows-verifier-python \"$PY\"` to repeat this check.")
     else:
-        w("## 2. The release manifest and the window")
+        w("## 2. The release manifest, the package and the window")
         w("")
         w("```sh")
-        w(f'python3 -I src/scripts/release/verify_signed.py release-manifest --evidence <evidence folder> --commit {commit} --repo "$REPO" --out "$BASE/RELEASE_MANIFEST_0.6.0.json"')
-        w(f'python3 -I src/scripts/release/signing_package.py build --platform sshsig --commit {commit} --repo "$REPO" --manifest "$BASE/RELEASE_MANIFEST_0.6.0.json" --out "$BASE/pkg"')
-        w('SCOPE_SHA="$(bash src/packaging/signing/release/fill_scope_window.sh "$BASE/pkg/scope/scope-sshsig.DRAFT.txt" "$BASE/scope-sshsig.txt")"; echo "$SCOPE_SHA"')
-        w('bash src/packaging/signing/release/check_scope_parse.sh --src src --kind sshsig "$BASE/scope-sshsig.txt"')
+        w(f'python3 -I "$BASE/src/scripts/release/verify_signed.py" release-manifest --evidence "$EVID" --commit {commit} --repo "$REPO" --out "$BASE/manifest/release-manifest.json"')
+        w(f'python3 -I "$BASE/src/scripts/release/signing_package.py" build --platform sshsig --commit {commit} --repo "$REPO" --manifest "$BASE/manifest/release-manifest.json" --out "$BASE/pkg/package"')
+        w('python3 -I "$BASE/src/scripts/release/signing_package.py" verify --package "$BASE/pkg/package" --repo "$REPO" --src "$BASE/src"')
+        w('SCOPE_SHA="$(bash "$BASE/src/packaging/signing/release/fill_scope_window.sh" "$BASE/pkg/package/scope/scope-sshsig.DRAFT.txt" "$BASE/scope-sshsig.txt")"; echo "$SCOPE_SHA"')
+        w('bash "$BASE/src/packaging/signing/release/check_scope_parse.sh" --src "$BASE/src" --kind sshsig "$BASE/scope-sshsig.txt"')
         w("```")
+        w("")
+        w("The signing script accepts only a manifest named `release-manifest.json`, and `--sig-out` must be outside the manifest's folder: that is why the layout above is used.")
         w("")
         w("## 3. Sign with your ssh-agent (policy P-LIN a: checksums plus one detached signature)")
         w("")
         w("```sh")
-        w(f'ssh-add -l | grep {RELEASE_KEY_FPR}   # the release key must be in YOUR agent; the script refuses otherwise')
-        w(f'mkdir ledger && src/packaging/signing/sign_manifest_sshsig.sh --manifest "$BASE/RELEASE_MANIFEST_0.6.0.json" --pubkey src/packaging/signing/release-signing-key.pub \\')
-        w(f'  --expected-sha256 "$(shasum -a 256 "$BASE/RELEASE_MANIFEST_0.6.0.json" | cut -d" " -f1)" --expected-fingerprint {RELEASE_KEY_FPR} \\')
-        w('  --real --i-have-owner-authorization "$SCOPE_SHA" --scope-file "$BASE/scope-sshsig.txt" --ledger "$BASE/ledger" --sig-out "$BASE/RELEASE_MANIFEST_0.6.0.json.sig"')
+        w(f'ssh-add -l | grep -q {RELEASE_KEY_FPR} || {{ echo "REFUSED: the release key is not in your agent"; exit 1; }}')
+        w(f'"$BASE/src/packaging/signing/sign_manifest_sshsig.sh" --manifest "$BASE/manifest/release-manifest.json" --pubkey "$BASE/src/packaging/signing/release-signing-key.pub" \\')
+        w(f'  --expected-sha256 "$(shasum -a 256 "$BASE/manifest/release-manifest.json" | cut -d" " -f1)" --expected-fingerprint {RELEASE_KEY_FPR} \\')
+        w('  --real --i-have-owner-authorization "$SCOPE_SHA" --scope-file "$BASE/scope-sshsig.txt" --ledger "$LEDGER" --sig-out "$BASE/sig/release-manifest.json.sig"')
         w("```")
         w("")
-        w("## 4. Verify (no credential)")
+        w("## 4. Verify (no credential) and hand both files to the orchestrator")
         w("")
         w("```sh")
-        w(f'python3 -I src/scripts/release/verify_signed.py sshsig --manifest "$BASE/RELEASE_MANIFEST_0.6.0.json" --sig "$BASE/RELEASE_MANIFEST_0.6.0.json.sig" --pubkey src/packaging/signing/release-signing-key.pub --artifacts <evidence folder>/artifacts/linux --commit {commit}')
+        w(f'python3 -I "$BASE/src/scripts/release/verify_signed.py" sshsig --manifest "$BASE/manifest/release-manifest.json" --sig "$BASE/sig/release-manifest.json.sig" --pubkey "$BASE/src/packaging/signing/release-signing-key.pub" --artifacts "$EVID/artifacts/linux" --commit {commit}')
+        w('mkdir -p "$EVID/release" "$EVID/release-sig" && cp -p "$BASE/manifest/release-manifest.json" "$EVID/release/" && cp -p "$BASE/sig/release-manifest.json.sig" "$EVID/release-sig/"')
+        w('cmp "$BASE/manifest/release-manifest.json" "$EVID/release/release-manifest.json" && cmp "$BASE/sig/release-manifest.json.sig" "$EVID/release-sig/release-manifest.json.sig" && echo copies identical')
         w("```")
     w("")
     w("## What this does not do")
@@ -484,25 +530,50 @@ def build(platform: str, repo: Path, rev: str, out: Path, *, artifacts: Path | N
         else:
             raise Refused("platform must be macos, windows or sshsig")
         info["scope"] = scope_name
+        extra["facts"] = man["platform_signing"]
         pkgname = out.name
         files[f"scope/{scope_name}"] = scope
         files["OPERATOR_RUNBOOK.md"] = runbook(platform, stage, commit, pkgname, scope_name, extra)
         files["PACKAGE.json"] = json.dumps(info, indent=1, sort_keys=True) + "\n"
-        out.mkdir(parents=True)
-        for rel, data in files.items():
-            write(out / rel, data)
-        if evid is not None:
-            write(out / "evidence/evidence-manifest.json", evid.read_bytes())
-        for tool in ("fill_scope_window.sh", "check_scope_parse.sh"):
-            write(out / "tools" / tool, (src / "packaging/signing/release" / tool).read_bytes(), 0o755)
-        write(out / "CHECKSUMS.sha256", checksums(out))
+        building = out.parent / (out.name + ".building")       # a package appears under its final name only when it is complete
+        if building.exists():
+            raise Refused(f"{building} exists: an earlier build was interrupted; remove that folder by name and build again")
+        building.mkdir(parents=True)
+        try:
+            for rel, data in files.items():
+                write(building / rel, data)
+            if evid is not None:
+                write(building / "evidence/evidence-manifest.json", evid.read_bytes())
+            for tool in ("fill_scope_window.sh", "check_scope_parse.sh"):
+                write(building / "tools" / tool, (src / "packaging/signing/release" / tool).read_bytes(), 0o755)
+            write(building / "CHECKSUMS.sha256", checksums(building))
+            building.rename(out)
+        except BaseException:
+            shutil.rmtree(building, ignore_errors=True)
+            raise
         return out
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
 # ------------------------------------------------------------------------------------------------------------ verify
-def verify_package(pkg: Path, repo: Path, src_dir: Path | None = None, artifacts: Path | None = None, gate: bool = True) -> list[tuple[str, str]]:
+def verify_package(pkg: Path, repo: Path, src_dir: Path | None = None, artifacts: Path | None = None, gate: bool = True, expect_commit: str | None = None,
+                   expect_evidence_sha: str | None = None) -> list[tuple[str, str]]:
+    """Read-only verification. A damaged or half-written package is a FAIL row, never a traceback. `expect_commit` and `expect_evidence_sha` tie a package found from an
+    earlier pass to THIS run's release commit and evidence manifest."""
+    try:
+        rows = _verify_package(pkg, repo, src_dir, artifacts, gate)
+        info = json.loads((pkg / "PACKAGE.json").read_text(encoding="utf-8"))
+    except (OSError, KeyError, ValueError, TypeError, IndexError, Refused) as e:
+        return [("FAIL", f"the package cannot be verified ({type(e).__name__}: {str(e)[:120]})")]
+    if expect_commit is not None:
+        rows.append(("PASS" if info.get("release_commit") == expect_commit else "FAIL", f"the package is for this run's release commit {expect_commit[:8]}" if info.get("release_commit") == expect_commit else f"the package is for another release commit ({str(info.get('release_commit'))[:8]}), not {expect_commit[:8]}"))
+    if expect_evidence_sha is not None:
+        rows.append(("PASS" if info.get("evidence_manifest_sha256") == expect_evidence_sha else "FAIL", "the package binds this run's evidence manifest" if info.get("evidence_manifest_sha256") == expect_evidence_sha else "the package binds a different evidence manifest than this run's"))
+    return rows
+
+
+def _verify_package(pkg: Path, repo: Path, src_dir: Path | None = None, artifacts: Path | None = None, gate: bool = True) -> list[tuple[str, str]]:
     rows: list[tuple[str, str]] = []
     add = lambda ok, t: rows.append(("PASS" if ok else "FAIL", t))
     info = json.loads((pkg / "PACKAGE.json").read_text(encoding="utf-8"))
@@ -558,6 +629,9 @@ def verify_package(pkg: Path, repo: Path, src_dir: Path | None = None, artifacts
                 "scope: identity and notary-profile hashes are the sha256 of the strings the approved manifest names")
             add(ent["identity"].endswith(f"({ent['team_id']})") and kv["team_id"] == ent["team_id"], "scope: Team ID agrees with the identity string")
         # inputs against the artifacts
+        if artifacts is not None and plat == "windows" and stage == "inner":
+            bad = [i["name"] for i in info["inputs"] if not regular_inside(artifacts / "windows" / "inner", i["name"]) or sha_f(artifacts / "windows" / "inner" / i["name"]) != i["sha256"]]
+            add(not bad, "the inner files in the artifacts folder have the sha256 values the scope binds" if not bad else f"inner files that differ from the scope: {bad}")
         if artifacts is not None and plat == "macos":
             f = artifacts / "macos" / info["inputs"][0]["name"]
             add(f.is_file() and sha_f(f) == info["inputs"][0]["sha256"], "the dmg in the artifacts folder has the sha256 the scope binds")
@@ -618,7 +692,7 @@ def windows_pin_values(tools_dir: Path, py: Path, env_path: str = "/usr/bin:/bin
     if (venv / "lib").is_dir():
         for f in sorted((venv / "lib").rglob("*.pth")):
             rel = f.relative_to(venv)
-            if len(rel.parts) <= 5 and f.is_file():
+            if len(rel.parts) <= 6 and f.is_file() and not f.is_symlink():     # `find lib -maxdepth 5 -type f`: the file may sit five levels below lib
                 pth.append(f"{rel.as_posix()} {sha_f(f)}")
         pth.sort()
     ossl = tools_dir / "ossbuild" / "osslsigncode"
