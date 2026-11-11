@@ -20,6 +20,8 @@ New-Item -Force -ItemType Directory C:\tools\uv | Out-Null; Expand-Archive "$d\u
 Step 'vsbuildtools'; Get-Web 'https://aka.ms/vs/17/release/vs_BuildTools.exe' "$d\vs_BuildTools.exe"; "vs_BuildTools.exe sha256 $(Sha "$d\vs_BuildTools.exe")"
 $p = Start-Process "$d\vs_BuildTools.exe" -ArgumentList '--quiet','--wait','--norestart','--nocache','--add','Microsoft.VisualStudio.Component.VC.Tools.x86.x64','--add','Microsoft.VisualStudio.Component.Windows11SDK.22621','--includeRecommended' -Wait -PassThru
 "vs exit code $($p.ExitCode)"
+# native tools (rustup, cargo) write progress to stderr, which PowerShell turns into errors under 'Stop': from here on errors are checked by file existence instead
+$ErrorActionPreference='Continue'
 # --- machine PATH / env
 Step 'env'
 $m=[Environment]::GetEnvironmentVariable('Path','Machine')
@@ -30,7 +32,7 @@ foreach($x in 'C:\tools\uv','C:\Program Files\7-Zip','C:\rust\cargo\bin'){ if($m
 $env:RUSTUP_HOME='C:\rust\rustup'; $env:CARGO_HOME='C:\rust\cargo'
 # --- rustup / rustc 1.98.1
 Step 'rustup'; Get-Web 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe' "$d\rustup-init.exe"; "rustup-init sha256 $(Sha "$d\rustup-init.exe")"
-& "$d\rustup-init.exe" -y --default-toolchain 1.98.1 --profile minimal --default-host x86_64-pc-windows-msvc 2>&1 | Select -Last 5
+& "$d\rustup-init.exe" -y --default-toolchain 1.98.1 --profile minimal --default-host x86_64-pc-windows-msvc 2>&1 | Out-String | Select -Last 5
 # machine-level git config: no CRLF conversion
 & 'C:\Program Files\Git\cmd\git.exe' config --system core.autocrlf false
 & 'C:\Program Files\Git\cmd\git.exe' config --system core.longpaths true
@@ -51,3 +53,6 @@ $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine')
 # cl.exe/link.exe need the VS environment: cargo (msvc) finds it itself through vswhere
 & C:\rust\cargo\bin\cargo.exe install tauri-cli --version 2.11.4 --locked 2>&1 | Select -Last 15
 & C:\rust\cargo\bin\cargo.exe tauri --version
+$need = @('C:\Program Files\Git\cmd\git.exe','C:\Program Files\Python312\python.exe','C:\tools\uv\uv.exe','C:\rust\cargo\bin\rustc.exe','C:\rust\cargo\bin\cargo-tauri.exe','C:\Program Files\7-Zip\7z.exe')
+$missing = $need | ? { -not (Test-Path $_) }
+if($missing){ "TOOLCHAIN-INCOMPLETE: $($missing -join '; ')" } else { 'TOOLCHAIN-OK' }

@@ -91,6 +91,7 @@ PY
 BASE="https://$SA.blob.core.windows.net/qual"
 log "bootstrap"; vmrun bootstrap "$W/w_bootstrap.ps1" 1 "Base=$BASE" "SasHex=$SASHEX" "Names=lib.ps1,w_job.ps1,w_build.ps1" > "$OUT/evidence/bootstrap.txt" 2>&1
 log "toolchain (git, python, 7-zip, uv, VS Build Tools, rust, tauri-cli)"; vmrun toolchain "$W/w_toolchain.ps1" 1 > "$OUT/evidence/toolchain.log" 2>&1
+grep -q "^TOOLCHAIN-OK" "$OUT/evidence/toolchain.log" || { log "the toolchain step did not finish (see evidence/toolchain.log): stopping before any build"; exit 4; }
 build() { # LABEL ROOT [SDE]
   log "build $1 in $2 ${3:+(SOURCE_DATE_EPOCH=$3)}"
   local js; js="{\"Label\":\"$1\",\"Root\":\"$(printf '%s' "$2" | sed 's/\\/\\\\/g')\",\"Commit\":\"$COMMIT\",\"Tree\":\"$TREE\",\"BundleSha\":\"$BSHA\",\"Sde\":\"${3:-}\"}"

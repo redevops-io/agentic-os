@@ -193,7 +193,7 @@ Date: ______________   Signature: ______________________________
 
 * Decides: **owner**. Applies to: all. Blocks distribution: yes. Status in the gate file when this form was generated: OPEN.
 * Question: Does the owner confirm that the neutral generated placeholder (drawn by scripts/make_neutral_hero.py, no model output, no photograph) may be treated as first-party artwork under the family licence?
-* Ships meanwhile (private candidate): the neutral generated placeholder
+* Ships meanwhile (private candidate): no hero image: it is removed from the product (owner direction of 2026-11-11, option c; the decision becomes a record only when the owner signs the approval)
 * Counsel questions in `docs/legal/COUNSEL_BRIEF.md`: Q28
 * Evidence and consequences: [D-LIC-8](DECISION_PACKAGES.md#d-lic-8) in the decision packages
 
