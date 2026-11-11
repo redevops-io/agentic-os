@@ -17,8 +17,10 @@ while [ $# -gt 0 ]; do case "$1" in --repo) REPO="$2"; shift 2;; --ref) REF="$2"
 [ -z "$(git -C "$REPO" status --porcelain)" ] || { echo "REFUSED: the repository is not clean" >&2; exit 2; }
 TREE="$(git -C "$REPO" rev-parse "$COMMIT^{tree}")"
 SDE="$(git -C "$REPO" show -s --format=%ct "$COMMIT")"
-mkdir -p "$OUT"/{artifacts,evidence,home,lima} && OUT="$(cd "$OUT" && pwd -P)"
-export LIMA_HOME="$OUT/lima" HOME="$OUT/home"
+mkdir -p "$OUT"/{artifacts,evidence,home} && OUT="$(cd "$OUT" && pwd -P)"
+# Lima puts a unix socket under LIMA_HOME and the path limit is about 100 characters: the instance home is a SHORT directory (throwaway; the VM is deleted at the end)
+LIMA_HOME="/private/tmp/aol-${COMMIT:0:6}"; mkdir -p "$LIMA_HOME"
+export LIMA_HOME HOME="$OUT/home"
 L() { env -i PATH="$PATH" HOME="$HOME" LIMA_HOME="$LIMA_HOME" LANG=C limactl "$@"; }
 S() { L shell --tty=false "$VM" -- bash -lc "$1"; }     # run a command in the VM
 log() { echo "[$(date -u +%H:%M:%SZ)] $*" | tee -a "$OUT/evidence/driver.log"; }
