@@ -1,9 +1,9 @@
 #!/bin/bash -p
 # windows_run.sh : the Windows native build of a release commit on a disposable Azure VM, driven from this Mac with the owner's EXISTING authenticated `az` session. Nothing is signed, pushed,
 # tagged, published or uploaded outside the throwaway resource group; the group is deleted at the end (unless --keep) and the deletion is checked. Cost: about 2 USD (public retail estimate
-# for a Standard_D8s_v5 and a 256 GB disk for a few hours); a larger spend or a credential request stops the run.
+# for a Standard_D8s_v4 and a 256 GB disk for a few hours); a larger spend or a credential request stops the run.
 #
-#   windows_run.sh --repo DIR --ref REF --commit SHA40 --out NEWDIR --mirrors DIR [--location eastus] [--keep]
+#   windows_run.sh --repo DIR --ref REF --commit SHA40 --out NEWDIR --mirrors DIR [--location eastus] [--size Standard_D8s_v4] [--keep]
 #
 # It builds the commit twice in two directories (as the c317 run did), then twice in ONE directory without SOURCE_DATE_EPOCH and twice with it (the reproducibility experiment).
 # The VM admin password is generated, held in a shell variable only and never printed or written; no inbound port is opened (run-command goes through the Azure agent).
@@ -11,8 +11,8 @@ set -euo pipefail
 PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"; W="$HERE/windows"
 REAL_HOME="$HOME"
-REPO=""; REF=""; COMMIT=""; OUT=""; MIRRORS=""; LOC="eastus"; KEEP=0
-while [ $# -gt 0 ]; do case "$1" in --repo) REPO="$2"; shift 2;; --ref) REF="$2"; shift 2;; --commit) COMMIT="$2"; shift 2;; --out) OUT="$2"; shift 2;; --mirrors) MIRRORS="$2"; shift 2;; --location) LOC="$2"; shift 2;; --keep) KEEP=1; shift;; *) echo "unknown $1" >&2; exit 2;; esac; done
+REPO=""; REF=""; COMMIT=""; OUT=""; MIRRORS=""; LOC="eastus"; SIZE="Standard_D8s_v4"; KEEP=0
+while [ $# -gt 0 ]; do case "$1" in --repo) REPO="$2"; shift 2;; --ref) REF="$2"; shift 2;; --commit) COMMIT="$2"; shift 2;; --out) OUT="$2"; shift 2;; --mirrors) MIRRORS="$2"; shift 2;; --location) LOC="$2"; shift 2;; --size) SIZE="$2"; shift 2;; --keep) KEEP=1; shift;; *) echo "unknown $1" >&2; exit 2;; esac; done
 [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] && [ -d "$REPO" ] && [ -n "$REF" ] && [ -n "$OUT" ] && [ -d "$MIRRORS/redevops-connectors.git" ] && [ -d "$MIRRORS/knowledge-frontier.git" ] || { sed -n 2,12p "$0" >&2; exit 2; }
 [ ! -e "$OUT" ] || { echo "REFUSED: $OUT exists" >&2; exit 2; }
 [ "$(git -C "$REPO" rev-parse "$REF^{commit}")" = "$COMMIT" ] || { echo "REFUSED: $REF is not $COMMIT" >&2; exit 2; }
@@ -24,6 +24,7 @@ log() { echo "[$(date -u +%H:%M:%SZ)] $*" | tee -a "$OUT/evidence/driver.log"; }
 az account show --query "{subscription:name,user:user.name}" -o tsv >/dev/null 2>&1 || { echo "REFUSED: no authenticated Azure CLI session (log in yourself first); this driver never logs in for you" >&2; exit 2; }
 TAG="$(date -u +%Y%m%d)-${COMMIT:0:6}"; RG="aos-rel-win-$TAG"; SA="aosrel$(openssl rand -hex 6)"; VM="winbuild"
 [ "$(az group exists -n "$RG")" = false ] || { echo "REFUSED: resource group $RG exists" >&2; exit 2; }
+[ -n "$(az vm list-skus -l "$LOC" --resource-type virtualMachines --query "[?name=='$SIZE' && length(restrictions)==\`0\`].name" -o tsv)" ] || { echo "REFUSED: VM size $SIZE is restricted or unknown in $LOC for this subscription (pick another with --size)" >&2; exit 2; }
 DEL_BY="$(date -u -v+3d +%Y-%m-%d)"
 cleanup() {
   if [ "$KEEP" = 0 ]; then
@@ -54,9 +55,9 @@ SASHEX="$(printf '%s' "$SAS" | xxd -p | tr -d '\n')"
 up() { az storage blob upload --account-name "$SA" --account-key "$KEY" -c qual -n "$2" -f "$1" --overwrite -o none --no-progress; }
 up "$OUT/artifacts/src-${COMMIT:0:8}.bundle" in/src.bundle; up "$OUT/tmp/mirror.tar" in/mirror.tar
 for f in lib.ps1 w_job.ps1 w_build.ps1; do up "$W/$f" "scripts/$f"; done
-log "creating the VM (Standard_D8s_v5, Windows Server 2022, 256 GB, no inbound port)"
+log "creating the VM ($SIZE, Windows Server 2022, 256 GB, no inbound port)"
 PW="Aa1!$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-20)"
-az vm create -g "$RG" -n "$VM" --image MicrosoftWindowsServer:WindowsServer:2022-datacenter-azure-edition:latest --size Standard_D8s_v5 --admin-username azadmin --admin-password "$PW" \
+az vm create -g "$RG" -n "$VM" --image MicrosoftWindowsServer:WindowsServer:2022-datacenter-azure-edition:latest --size "$SIZE" --admin-username azadmin --admin-password "$PW" \
    --os-disk-size-gb 256 --storage-sku Premium_LRS --public-ip-sku Standard --nsg-rule NONE --tags purpose=release-qualification -o none
 unset PW
 az vm show -g "$RG" -n "$VM" --query "{size:hardwareProfile.vmSize,image:storageProfile.imageReference,disk:storageProfile.osDisk.diskSizeGb}" -o json > "$OUT/evidence/vm.json"
