@@ -39,6 +39,43 @@ until that review is finished no document states that the applications are clear
 with the Commons Clause; applications: AGPL-3.0-only; third-party: original licences). The gate entry stays OPEN until the owner's signed decision
 record exists (`docs/legal/OWNER_DECISION_FORM.md`); this paragraph is not that record.
 
+### Schedule of components
+
+Which part of this repository, and of what the artifacts contain, falls into which category. The path-by-path inventory is
+[docs/legal/COMPONENT_LICENCE_INVENTORY.md](docs/legal/COMPONENT_LICENCE_INVENTORY.md) (generated, and tested so that every tracked
+file belongs to exactly one row). This schedule states the owner's intent; it does not decide any legal question.
+
+**Schedule A: the ReDevOps core platform (category 1: AGPL-3.0-or-later with the Commons Clause).** The "Software" of
+[LICENSE-COMMONS-CLAUSE](LICENSE-COMMONS-CLAUSE) is understood to mean these components (see "Scope of the Commons Clause condition" in
+[LICENSE.md](LICENSE.md)):
+
+| # | Component | Where |
+|---|---|---|
+| A1 | the agentic-os control plane and Projects API (Python package `agentic_os`) | `agentic_os/` |
+| A2 | the sidecar `redevops-sidecar` that freezes A1 | `packaging/sidecar_main.py`, `packaging/redevops-sidecar.spec`, `packaging/stage-sidecar.sh` |
+| A3 | the launcher `redevops-launcher` (Tauri shell) and the desktop shell of the main line | `deploy/launcher/`, `deploy/desktop-shell-main/` |
+| A4 | the Projects UI as shipped in the sidecar (built from the separate `redevops-projects` repository; `[OWNER DECISION D-LIC-2]`: that repository's own statement was not re-read for this schedule) | `agentic_os/projects_ui` (fetched at build from `packaging/ui-artifacts/`, pinned by `packaging/projects_ui.lock.json`) |
+| A5 | the desktop distribution built from A1 to A4 (macOS `.dmg`, Windows `.msi` and NSIS `.exe`, Linux `.deb` and AppImage), and its notice and About files | build output of `packaging/` |
+| A6 | the platform's packaging, notice, signing and gate tooling, scripts, deployment files, demo services, documentation, tests, conformance and audit material, CI workflows and the optional voice integration | `packaging/` (except the paths in B3), `scripts/`, `deploy/` (except `deploy/launcher/` and `deploy/desktop-shell-main/`, which are A3), `docs/` (except `docs/legal/sources/`), `tests/`, `integrations/`, `conformance/`, `audit/`, `examples/`, `snap/`, `.github/`, root files |
+
+**Schedule B: excluded from the core, with the category they fall into.**
+
+| # | What | Category and licence | Where |
+|---|---|---|---|
+| B1 | the 21 applications | category 2: GNU AGPL-3.0-only, without the Commons Clause | `apps/<name>/`, each with `apps/<name>/LICENSE` |
+| B2 | third-party cores that the applications wrap, and everything inside the third-party Python wheels, Rust crates, CPython, OpenSSL, PyInstaller, Microsoft runtime files, installer stubs and JavaScript libraries that the artifacts contain | category 3: their own licences, unchanged | listed in `THIRD_PARTY_NOTICES.txt`, `NOTICES_MISSING.md`, `packaging/notices/components.json` |
+| B3 | third-party texts kept verbatim in this repository | category 3: their own licences | `packaging/notices/texts/`, `docs/legal/sources/`, `packaging/ui-artifacts/` (the React, ReactDOM and scheduler part is MIT) |
+| B4 | the standard licence texts | the FSF text of the GNU AGPL version 3 and the Commons Clause v1.0 text, unchanged | `LICENSE`, `LICENSE-COMMONS-CLAUSE` |
+
+**Schedule C: separate repositories whose code the artifacts contain.** `runtime-contracts` (v0.3.17), `discovery-runtime` (v0.1.21),
+`redevops-connectors` (v0.1.0) and `knowledge-frontier` (v0.2.0) are pinned in `packaging/git-pins.json`. Each declares its own licence in
+its own repository (the inventory lists what each declares). The statement in section 1 is not a statement about them, and cannot supply a
+licence file that a pinned tag lacks (`[OWNER DECISION D-LIC-2]`).
+
+**Material that cannot be covered automatically.** Authorship by an AI agent (four commits), the mapping of three author identities to one
+rightsholder, images and icons without an authorship record, and the wrapped third-party cores are listed as flags F1 to F9 in the inventory.
+They are for the owner and counsel (D-LIC-2, D-LIC-8, D-LIC-11, N4); a statement in this file does not make them covered.
+
 ## 2. The texts
 
 | File | What it is |
@@ -47,6 +84,7 @@ record exists (`docs/legal/OWNER_DECISION_FORM.md`); this paragraph is not that 
 | [LICENSE-COMMONS-CLAUSE](LICENSE-COMMONS-CLAUSE) | the "Commons Clause" License Condition v1.0, naming `agentic-os` as the Software and RedevOps as the Licensor |
 | [LICENSE.md](LICENSE.md) | the owner's statement of the combination, the effective date (2026-08-08) and the reasoning |
 | this file | which artifact carries which statement (section 3) and the open points (section 5) |
+| [docs/legal/COMPONENT_LICENCE_INVENTORY.md](docs/legal/COMPONENT_LICENCE_INVENTORY.md) | the path-by-path inventory behind the schedule above, with the flags |
 
 The build configuration places the three licence files and this file in a
 `Licenses` folder of each artifact, together with `THIRD_PARTY_NOTICES.txt`
@@ -154,6 +192,13 @@ depending on `agentic-os`") describes the owner's position for the family;
 whether it settles the question for third-party components is for counsel. The same review covers the relationship between the
 AGPL-3.0-only applications under `apps/`, which import the core, and the Commons Clause that the core carries; the owner's decision of 2026-11-10
 fixes the intended licences, it does not answer that legal question.
+
+**Unresolved, for counsel: AGPL sections 7 and 10 and the Commons Clause.** Section 7 treats a non-permissive additional term as a "further
+restriction" and section 10 forbids imposing further restrictions on the rights the AGPL grants. The Commons Clause removes the right to
+Sell. Whether the Clause can stand beside the AGPL in this arrangement, in a combined binary and in the relationship between the core and
+the AGPL-3.0-only applications, is not decided by this repository. The scope text in `LICENSE.md`, Schedules A to C above and the
+inventory are documentation of the intent; none of them resolves the question, and none may be cited as if it did. Until counsel
+answers (D-LIC-3, D-LIC-1, questions N1 and N2 in the counsel packet), the artifacts remain private candidates.
 
 `[OWNER DECISION D-LIC-5]` What "users interacting with it remotely through a
 computer network" (section 13) means for the sidecar, which serves the UI on a

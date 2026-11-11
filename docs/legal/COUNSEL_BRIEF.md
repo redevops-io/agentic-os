@@ -207,6 +207,33 @@ outreach template says "open-source runtime stack". The QA bundle is a separate 
 * **Q31.** Does calling the product "open-source" in a shipped template, against `LICENSE.md`, create any issue?
 * **Q32.** For the QA bundle: what is needed for the HTML Dog-derived tab styles (terms quoted in the hand-off), tablesorter's MIT election, and the plain-AGPL `agent-harness` tree inside a family-licence bundle?
 
+### 4.12 Three licence categories: questions added 2026-11-11 (N1 to N4)
+
+Facts: the owner's licensing decision of 2026-11-10 sets three categories (core: AGPL-3.0-or-later with the Commons Clause; the 21 applications
+under `apps/`: AGPL-3.0-only; third-party components: their own licences). `LICENSING.md` (Schedules A to C) and
+`docs/legal/COMPONENT_LICENCE_INVENTORY.md` record the intended category of every path and flag what cannot be covered automatically. These
+questions are numbered N1 to N4 because they extend the Q1 to Q32 above and are decided together with D-LIC-1 and D-LIC-3.
+
+**N1.** The applications import the core (about 190 files under `apps/` import `agentic_os`). Is it consistent to license the applications
+under AGPL-3.0-only while they depend on a core that carries the Commons Clause? In what sense does the dependency attach the core's terms
+to the applications, or the applications' terms to a combined work? Is an AGPL section 7 additional permission, a separate-services
+arrangement or another mechanism needed, and what should the applications sentence in `LICENSE.md` and `LICENSING.md` say?
+
+**N2.** The Commons Clause names `agentic-os` as the Software. Does it validly cover the components of Schedule A, and the scope text in
+`LICENSE.md` ("Scope of the Commons Clause condition"), without changing the standard text? Does the statement of 2026-11-10 conflict with
+the 2026-08-08 relicensing record in `LICENSE.md` (releases at or before `v0.1.0` stay AGPL-3.0-or-later alone)?
+
+**N3.** Contributor terms are an open owner decision (`CONTRIBUTING.md`). What inbound licence and mechanism fits the applications and the
+core? A DCO certifies origin and does not by itself grant relicensing or enforcement rights; a CLA is not automatically required to accept
+contributions. Outside contributions are not being merged until this is decided.
+
+**N4.** `LICENSE.md` (Contribution history) says all authoring commits are by RedevOps. The inventory (flags F1 and F2) records four commits
+authored by an AI agent and three author identities of the owner. Is the statement adequate as written, and what evidence should accompany
+it before outside contributions are accepted?
+
+Unresolved and not answered by this repository: whether the Commons Clause is a further restriction under AGPL sections 7 and 10 (Q4 to
+Q6, D-LIC-3).
+
 ## 5. What has not been verified
 
 The binaries were not scanned for linked libraries beyond version banners in one interpreter build; the CI interpreter (python.org

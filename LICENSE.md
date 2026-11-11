@@ -127,6 +127,27 @@ unchanged by this file, and is still a design question — whether `mission-sdk`
 *owns* runtime semantics or merely *translates* them — before it is a legal
 one.
 
+## Scope of the Commons Clause condition ("the Software")
+
+`LICENSE-COMMONS-CLAUSE` is the standard Commons Clause License Condition v1.0 with its three fill-in lines (Software: `agentic-os`;
+License: AGPL-3.0-or-later; Licensor: RedevOps). It is kept exactly as it is. This section states what the Licensor means by
+"the Software" there, so that the one-word name is not read wider or narrower than intended. It is drafted for counsel (question N2);
+until counsel has reviewed it, it records the Licensor's intent and is not a legal conclusion.
+
+* **The Software is the ReDevOps core platform** as listed in Schedule A of `LICENSING.md`: the first-party work in this repository outside
+  `apps/` (the `agentic_os` control plane and Projects API, the sidecar, the launcher and desktop shell, the Projects UI as shipped, the
+  packaging, tooling and documentation), and the desktop distribution built from it. `docs/legal/COMPONENT_LICENCE_INVENTORY.md` maps
+  every path of the repository to a category.
+* **The Software does not include** the 21 applications under `apps/`, which are licensed under AGPL-3.0-only without the Commons Clause
+  (Schedule B of `LICENSING.md`), nor any third-party component, which keeps its own licence. The condition is not a condition on rights
+  that a person holds in those under their own licences.
+* **Other packages of the family** (`runtime-contracts`, `discovery-runtime`, `redevops-connectors`, `knowledge-frontier`) are separate
+  repositories. Each carries its own licence statement and, where it uses the Commons Clause, its own definition of its Software; this
+  repository's statement does not replace or extend theirs (Schedule C of `LICENSING.md`).
+* **Not answered here.** Whether the Commons Clause may sit beside AGPL-3.0, which forbids "further restrictions" (sections 7 and 10),
+  and how the condition applies to an application that imports the core, are open questions for counsel (`[OWNER DECISION D-LIC-3]`
+  in `LICENSING.md`). Neither this section nor any other documentation change resolves them.
+
 ## Contribution history
 
 All authoring commits in this repository are by RedevOps (Alex Mats, under two
@@ -135,8 +156,7 @@ git identities). The remaining commits are GitHub merge commits produced by the
 introduce no third-party authorship. On that basis RedevOps holds the copyright
 needed to relicense. Recorded here because relicensing over outside
 contributions without a CLA is the usual way this goes wrong, and the check
-should be visible rather than assumed. Outside contributions are governed by
-`CONTRIBUTING.md`: a DCO sign-off for the applications under `apps/`, and a
-contributor licence agreement (text pending counsel) for the core platform.
+should be visible rather than assumed. Contributor terms for outside
+contributions are an open decision (see `CONTRIBUTING.md`).
 
 This file states the terms and the reasoning. It is not legal advice.

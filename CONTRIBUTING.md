@@ -15,12 +15,10 @@
 
 ## Licence of contributions and contributor terms
 
-* **Applications under `apps/`** (GNU AGPL-3.0-only, no Commons Clause): your contribution is made under GNU AGPL-3.0-only. Every commit must carry a
-  `Signed-off-by: Your Name <you@example.org>` line (`git commit -s`), which certifies the Developer Certificate of Origin, version 1.1
-  (<https://developercertificate.org/>).
-* **The core platform and everything else outside `apps/`** (AGPL-3.0-or-later with the Commons Clause, [LICENSE.md](LICENSE.md)): outside contributions are
-  accepted only after you have signed the ReDevOps Contributor Licence Agreement, so that RedevOps can keep the core under one licence, enforce the Commons
-  Clause and relicense. `[OWNER DECISION: contributor terms]` The text of that agreement is not written yet and needs counsel; until it exists, outside
-  contributions to the core are not merged.
-* **Third-party code** may be contributed only if its licence is compatible with the destination above; it keeps its original licence, copyright notice and
-  attribution, and must be listed in the notices.
+Contributions to the applications under `apps/` are made under GNU AGPL-3.0-only (the licence of that app). Contributions to the core platform and to
+everything else outside `apps/` are made under the core's licence, [LICENSE.md](LICENSE.md) (AGPL-3.0-or-later with the Commons Clause). Third-party code
+keeps its original licence, copyright notice and attribution, and must be listed in the notices.
+
+`[OWNER DECISION: contributor terms]` Whether outside contributions need a DCO sign-off, a contributor licence agreement, or neither, and for which parts
+of the repository, is not decided and needs legal advice. (A DCO certifies where code comes from; it does not by itself grant relicensing rights. A CLA is
+not automatically required to accept contributions.) Until it is decided, outside contributions are not being merged.
