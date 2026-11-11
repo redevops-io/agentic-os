@@ -183,7 +183,7 @@ def test_a_distribution_build_still_refuses_while_counsel_decisions_are_open(env
     assert r.returncode == 1
     for cid in ("D-LIC-3", "D-LIC-4", "D-LIC-5", "pins-03", "D-LIC-1", "D-LIC-18"):
         assert cid in r.stderr, cid
-    for oid in ("D-LIC-2", "D-LIC-8", "D-LIC-11", "D-LIC-13", "D-LIC-15", "pins-04"):
+    for oid in ("D-LIC-2", "D-LIC-13", "D-LIC-15", "pins-04"):
         assert f"{oid}:" not in r.stderr or "open" not in r.stderr.split(f"{oid}:")[1][:60].lower(), oid
 
 

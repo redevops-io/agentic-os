@@ -89,6 +89,21 @@ def owner_only(gate: dict, root: Path = ROOT) -> list[dict]:
     return [d for d in gate["decisions"] if d["decides"] == "owner"]
 
 
+def struck_by_owner(man: dict, gate: dict, root: Path = ROOT) -> dict:
+    """{decision id: reason} of the owner-only decisions that the manifest records as struck by the owner. Refuses a struck id that is not an
+    owner-only decision (a counsel decision cannot be 'struck': it is simply not covered) and an empty or non-text reason."""
+    ids = {d["id"] for d in owner_only(gate, root)}
+    out = {}
+    for i, m in man["decisions"].items():
+        if "struck" in m:
+            if i not in ids:
+                raise SystemExit(f"manifest strikes {i}, which is not an owner-only decision")
+            if not isinstance(m["struck"], str) or not m["struck"].strip():
+                raise SystemExit(f"manifest strikes {i} without a reason")
+            out[i] = m["struck"].strip()
+    return out
+
+
 def header_lines(commit: str, tree: str, man_sha: str, man: dict, gate: dict, include: set | None = None, root: Path = ROOT) -> list[str]:
     out = ["redevops-legal-decision: 2", f"bundle: {BUNDLE_NAME}", f"base-commit: {commit}", f"base-tree: {tree}", f"manifest-sha256: {man_sha}"]
     for d in owner_only(gate, root):
@@ -121,9 +136,12 @@ def render(commit: str, root: Path = ROOT, include: set | None = None) -> str:
         if i not in decs or m["option"] not in [o["key"] for o in decs[i]["options"]]:
             raise SystemExit(f"manifest names an unknown decision or option: {i} {m['option']}")
     all_ob = owner_only(gate, root)
-    if include is not None and (not include or not include <= {d["id"] for d in all_ob}):
+    owner_struck = struck_by_owner(man, gate, root)
+    if include is None:
+        include = {d["id"] for d in all_ob} - set(owner_struck)
+    if not include or not include <= {d["id"] for d in all_ob}:
         raise SystemExit("include must be a non-empty subset of the owner-only decisions")
-    ob = [d for d in all_ob if include is None or d["id"] in include]
+    ob = [d for d in all_ob if d["id"] in include]
     struck = [d for d in all_ob if d not in ob]
     other = [d for d in gate["decisions"] if d["decides"] != "owner"]
     L: list[str] = []
@@ -142,7 +160,12 @@ def render(commit: str, root: Path = ROOT, include: set | None = None) -> str:
     w(f"By signing this document once you would, **for release 0.6.0 built from the release commit derived from `{commit}`** (tree `{tree}`):")
     w("")
     w(f"1. **Record {len(ob)} owner-only decisions** ({', '.join(d['id'] for d in ob)}) with the options in section 4. They are mapped onto their existing gate identifiers; each stays a separate entry in `packaging/distribution-gate.json`." + (f" Struck by the owner, NOT recorded and still OPEN: {', '.join(d['id'] for d in struck)}." if struck else ""))
-    w("2. **State the facts in section 4 as the owner's own** (marked *attests*): first-party authorship of the hero placeholder and of the launcher icons, and the licence intent for the sibling packages.")
+    att = [d["id"] for d in ob if man["decisions"][d["id"]].get("attests")]
+    stm = [d["id"] for d in ob if man["decisions"][d["id"]].get("owner_statement")]
+    facts = ([f"the attested facts of {', '.join(att)}"] if att else []) + ([f"the licence statement of {', '.join(stm)}"] if stm else [])
+    left_out = sorted(set(owner_struck) & {d["id"] for d in struck})
+    w("2. **State the facts in section 4 as the owner's own** (marked *attests* or *Owner statement*): " + ("; ".join(facts) if facts else "none in this document") + "." +
+      (f" No attestation is made for {', '.join(left_out)}: they are left out (section 4)." if left_out else ""))
     w("3. **Accept the exceptions and risks in section 7** for this release.")
     w("4. **Authorize the release workflow in section 6 to run at your terminal**: build macOS, Windows and Linux from the release commit; sign macOS with the Developer ID identity and notarize with the `redevops` profile; sign Windows through Azure Artifact Signing with your own `az` login; apply the Linux policy you choose in P-LIN; and, only after every stage has passed and with your typed confirmation, **push the release commit as the branch `release/0.6.0` and the tag `v0.6.0` to the remote you name** (pins-04). Nothing is uploaded, released or deployed by it.")
     w("")
@@ -233,6 +256,13 @@ def render(commit: str, root: Path = ROOT, include: set | None = None) -> str:
         if extra:
             w(f"* **{d['id']}.** " + " ".join(extra))
     w("")
+    if struck:
+        w("**Owner-only decisions NOT in this signature (stay OPEN, still block a distribution build):**")
+        w("")
+        for d in struck:
+            why = owner_struck.get(d["id"]) or "left out when this document was rendered with --strike"
+            w(f"* **{d['id']}** {esc(d['title'])}: {esc(why)}")
+        w("")
     w("The gate classes these decisions as owner decisions (the set of counsel-named decisions is frozen inside the gate, not read from the gate file). Several of them list counsel questions (last column); counsel has not answered them and this approval does not claim otherwise. An owner who prefers to wait for counsel on D-LIC-2 (Q7, Q8, Q4) or on any other row can have the document re-rendered without that decision (`approval.py render --strike ID`); the struck decision then stays OPEN and the document has a different digest. A hand-edited document is refused.")
     w("")
     w("## 5. Decisions that name counsel (NOT covered; stay OPEN)")
@@ -357,6 +387,8 @@ def verify(doc: Path, commit: str | None = None, root: Path = ROOT) -> list[str]
     for i, o in h["decisions"].items():
         if want.get(i) != o:
             errs.append(f"{i}: not an owner-only decision of the manifest with option {o!r}")
+    for i in sorted(set(h["decisions"]) & set(struck_by_owner(man, gate, root))):
+        errs.append(f"{i}: the manifest records this decision as struck by the owner; a document that covers it is refused")
     if errs:
         return errs
     if text != render(full, root, include=set(h["decisions"])):
@@ -475,7 +507,8 @@ def main(argv=None) -> int:
             ids = {d["id"] for d in owner_only(load(full)[2])}
             if not set(a_.strike) <= ids:
                 raise SystemExit(f"--strike names a decision that is not owner-only: {sorted(set(a_.strike) - ids)}")
-            inc = ids - set(a_.strike)
+            m_, g_ = load(full)[1], load(full)[2]
+            inc = ids - set(a_.strike) - set(struck_by_owner(m_, g_))
         a_.out.write_text(render(a_.commit, include=inc), encoding="utf-8")
         print(sha(a_.out.read_bytes()), a_.out)
         return 0

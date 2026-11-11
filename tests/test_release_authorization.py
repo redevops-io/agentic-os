@@ -106,7 +106,10 @@ def test_rendered_document_is_deterministic_draft_and_names_only_owner_only_deci
     assert head[0] == "redevops-legal-decision: 2"
     ids = [ln.split()[1] for ln in head if ln.startswith("decision: ")]
     owner = sorted(d for d, e in gate_state(repo).items() if e["decides"] == "owner")
-    assert sorted(ids) == owner
+    assert sorted(ids) == sorted(set(owner) - {"D-LIC-8", "D-LIC-11"})      # struck by the owner 2026-11-11, recorded in the manifest
+    assert "D-LIC-8" not in ids and "D-LIC-11" not in ids
+    assert "NOT in this signature" in text and "D-LIC-8" in text.split("NOT in this signature", 1)[1][:700]
+    assert "The hero image that ships in the Projects UI" not in text and "are first-party artwork of the owner or the company" not in text
     for c in ("D-LIC-3", "D-LIC-1", "pins-03", "D-LIC-18", "pins-08"):
         assert c not in ids
     assert "DRAFT - NOT AUTHORIZED" in text and "Counsel reference" in text
@@ -122,10 +125,10 @@ def test_verify_refuses_a_tampered_document_and_a_wrong_commit(repo, tmp_path):
     bad = run([sys.executable, "-I", "scripts/release/approval.py", "verify", "--doc", str(doc)], repo)
     assert bad.returncode == 1 and "byte-identical" in bad.stderr
     doc2 = render(repo, tmp_path)
-    doc2.write_text(doc2.read_text().replace("decision: D-LIC-8 a", "decision: D-LIC-8 b"))
+    doc2.write_text(doc2.read_text().replace("decision: D-LIC-13 a", "decision: D-LIC-13 b"))
     assert run([sys.executable, "-I", "scripts/release/approval.py", "verify", "--doc", str(doc2)], repo).returncode == 1
     doc3 = render(repo, tmp_path)
-    doc3.write_text(doc3.read_text().replace("decision: D-LIC-8 a", "decision: D-LIC-8 a\ndecision: D-LIC-3 d", 1))
+    doc3.write_text(doc3.read_text().replace("decision: D-LIC-13 a", "decision: D-LIC-13 a\ndecision: D-LIC-3 d", 1))
     r = run([sys.executable, "-I", "scripts/release/approval.py", "verify", "--doc", str(doc3)], repo)
     assert r.returncode == 1 and "not an owner-only decision of the manifest" in r.stderr
 
@@ -152,7 +155,9 @@ def test_one_signature_one_commit_and_the_gate_accepts_exactly_the_owner_only_de
                        "packaging/distribution-gate.json", "packaging/legal-allowed-signers"]
     g = gate_state(repo)
     for i, e in g.items():
-        if e["decides"] == "owner":
+        if e["decides"] == "owner" and i in ("D-LIC-8", "D-LIC-11"):
+            assert e["status"] == "OPEN" and e["decision_sha256"] is None, i      # struck by the owner: never recorded
+        elif e["decides"] == "owner":
             assert e["status"] == "DECIDED" and e["decision_sha256"] == digest and e["decided_on"] == time.strftime("%Y-%m-%d", time.gmtime()), i
         else:
             assert e["status"] == "OPEN", i
@@ -312,7 +317,7 @@ def test_authorize_with_a_struck_document_records_only_the_remaining_decisions(r
     code, out = drive(repo, doc, key, [digest, key["fpr"], "Alex Rybachek"])
     assert code == 0, out
     g = gate_state(repo)
-    assert g["D-LIC-2"]["status"] == "OPEN" and g["D-LIC-8"]["status"] == "DECIDED"
+    assert g["D-LIC-2"]["status"] == "OPEN" and g["D-LIC-13"]["status"] == "DECIDED" and g["D-LIC-8"]["status"] == "OPEN"
     assert run([sys.executable, "-I", "scripts/release/approval.py", "check"], repo).returncode == 0
 
 
@@ -375,3 +380,39 @@ def test_s8_refuses_unless_every_earlier_stage_passed_in_the_same_run(repo, tmp_
     assert run(["git", "ls-remote", str(bare)], tmp_path).stdout.strip() == ""
     r = run([sys.executable, "-I", "scripts/release/release_orchestrate.py", "--run", "--stages", "S8", "--push", "--remote", "--upload-pack=x", "--workspace", str(repo)], repo)
     assert r.returncode != 0 or "plain remote name" in r.stdout
+
+
+def test_a_document_that_covers_a_decision_the_owner_struck_is_refused(repo, tmp_path):
+    doc = render(repo, tmp_path)
+    doc.write_text(doc.read_text().replace("decision: D-LIC-13 a", "decision: D-LIC-13 a\ndecision: D-LIC-8 a", 1))
+    r = run([sys.executable, "-I", "scripts/release/approval.py", "verify", "--doc", str(doc)], repo)
+    assert r.returncode == 1 and "struck by the owner" in r.stderr
+
+
+def test_the_struck_artwork_decisions_stay_open_and_keep_blocking(repo, tmp_path, key):
+    doc = render(repo, tmp_path)
+    digest = run([sys.executable, "-I", "scripts/release/approval.py", "digest", "--doc", str(doc)], repo).stdout.strip()
+    code, out = drive(repo, doc, key, [digest, key["fpr"], "Alex Rybachek"])
+    assert code == 0, out
+    g = gate_state(repo)
+    for i in ("D-LIC-8", "D-LIC-11"):
+        assert g[i]["status"] == "OPEN" and g[i]["blocks_distribution"] is True
+    r = run([sys.executable, "-I", "packaging/check-distribution-gate.py", "--platform", "macos", "--distribution"], repo)
+    assert r.returncode == 1 and "D-LIC-8" in r.stderr and "D-LIC-11" in r.stderr
+
+
+def test_the_manifest_cannot_strike_a_counsel_decision_or_give_no_reason(repo, tmp_path):
+    import json as _j
+    p = repo / "packaging/release/decision-manifest-0.6.0.json"
+    m = _j.loads(p.read_text())
+    m["decisions"]["D-LIC-3"]["struck"] = "no"
+    p.write_text(_j.dumps(m, indent=2) + "\n")
+    run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qam", "strike counsel"], repo)
+    r = run([sys.executable, "-I", "scripts/release/approval.py", "render", "--commit", "HEAD", "--out", str(tmp_path / "x.md")], repo)
+    assert r.returncode != 0 and "not an owner-only decision" in (r.stderr + r.stdout)
+    m["decisions"]["D-LIC-3"].pop("struck")
+    m["decisions"]["D-LIC-8"]["struck"] = "  "
+    p.write_text(_j.dumps(m, indent=2) + "\n")
+    run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qam", "strike without reason"], repo)
+    r = run([sys.executable, "-I", "scripts/release/approval.py", "render", "--commit", "HEAD", "--out", str(tmp_path / "y.md")], repo)
+    assert r.returncode != 0 and "without a reason" in (r.stderr + r.stdout)
