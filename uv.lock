@@ -80,13 +80,13 @@ requires-dist = [
     { name = "google-auth", marker = "extra == 'gsc'", specifier = ">=2.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4.18,<5" },
-    { name = "knowledge-frontier", git = "https://github.com/redevops-io/knowledge-frontier.git?rev=v0.2.0" },
+    { name = "knowledge-frontier", git = "https://github.com/redevops-io/knowledge-frontier.git?rev=v0.2.1" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.1" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "redevops-connectors", marker = "extra == 'connectors'", git = "https://github.com/redevops-io/redevops-connectors.git?rev=v0.1.0" },
-    { name = "redevops-connectors", marker = "extra == 'projects'", git = "https://github.com/redevops-io/redevops-connectors.git?rev=v0.1.0" },
+    { name = "redevops-connectors", marker = "extra == 'connectors'", git = "https://github.com/redevops-io/redevops-connectors.git?rev=v0.1.1" },
+    { name = "redevops-connectors", marker = "extra == 'projects'", git = "https://github.com/redevops-io/redevops-connectors.git?rev=v0.1.1" },
     { name = "redevops-rag", marker = "extra == 'rag'", git = "https://github.com/redevops-io/redevops-rag.git?rev=v0.4.0" },
     { name = "requests", marker = "extra == 'gsc'", specifier = ">=2.28" },
     { name = "runtime-contracts", git = "https://github.com/redevops-io/runtime-contracts.git?rev=v0.3.17" },
@@ -1159,8 +1159,8 @@ wheels = [
 
 [[package]]
 name = "knowledge-frontier"
-version = "0.2.0"
-source = { git = "https://github.com/redevops-io/knowledge-frontier.git?rev=v0.2.0#057258ae51e19ed6d3d69834093a794457fa4ffd" }
+version = "0.2.1"
+source = { git = "https://github.com/redevops-io/knowledge-frontier.git?rev=v0.2.1#ed224d73d4ab65c14f1f205b1a957f6cc8eb0967" }
 
 [[package]]
 name = "markdown-it-py"
@@ -2116,8 +2116,8 @@ wheels = [
 
 [[package]]
 name = "redevops-connectors"
-version = "0.1.0"
-source = { git = "https://github.com/redevops-io/redevops-connectors.git?rev=v0.1.0#7fbb9ec4d4faff1dea2e238a94495bc1951b56bc" }
+version = "0.1.1"
+source = { git = "https://github.com/redevops-io/redevops-connectors.git?rev=v0.1.1#4358493c8c58c75bc7dd2c29bd12df7be5eccb0f" }
 
 [[package]]
 name = "redevops-rag"

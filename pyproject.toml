@@ -22,7 +22,7 @@ dependencies = [
     "discovery-runtime @ git+https://github.com/redevops-io/discovery-runtime.git@v0.1.21",
     # The domain-neutral learn/teach-next primitive, shared with learnerbot.ai. `agentic_os.
     # knowledge_frontier` re-exports it; the apps-stack adapter stays in priority_engine.
-    "knowledge-frontier @ git+https://github.com/redevops-io/knowledge-frontier.git@v0.2.0",
+    "knowledge-frontier @ git+https://github.com/redevops-io/knowledge-frontier.git@v0.2.1",
     "pyyaml>=6.0",
     "fastapi>=0.110",
     "uvicorn>=0.29",
@@ -51,11 +51,11 @@ rag = ["redevops-rag @ git+https://github.com/redevops-io/redevops-rag.git@v0.4.
 # reasons about integrations (manifest, wizard, ConnectPlan) with no connector dependency;
 # this pulls the runtime plugin that actually connects/executes against SaaS providers.
 # See agentic_os.integrations.live.
-connectors = ["redevops-connectors @ git+https://github.com/redevops-io/redevops-connectors.git@v0.1.0"]
+connectors = ["redevops-connectors @ git+https://github.com/redevops-io/redevops-connectors.git@v0.1.1"]
 # The served Projects app (UI + API on one origin). fastapi/uvicorn are already base deps and
 # the UI bundle ships in the wheel, so serving needs nothing extra; this pulls the connector
 # plugin so the running app can actually connect apps and sources (live), not just render.
-projects = ["redevops-connectors @ git+https://github.com/redevops-io/redevops-connectors.git@v0.1.0"]
+projects = ["redevops-connectors @ git+https://github.com/redevops-io/redevops-connectors.git@v0.1.1"]
 # Per-app extras. The base install is already minimal — the connector plugin is stdlib-only
 # (urllib), so an app extra is about *selecting/enabling* an app, not shrinking a download.
 # Each pulls the `projects` plugin (the plane the app connects through); pair it with

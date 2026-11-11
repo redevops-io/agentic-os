@@ -193,3 +193,10 @@ unless its tenant equals the authority principal's tenant, its secret namespace 
 `agentic_os/secrets/resolve.py::read_secret` states where its tenant comes from (the `tenant` argument, else `REDEVOPS_LOCAL_TENANT`, else the namespace of the
 reference for the single-user desktop). Tests: `tests/test_read_secret_tenant.py`, `tests/test_credential_gate_shipped_paths.py`.
 The wheelhouse, SBOM and notices are not regenerated here and every native artifact must be rebuilt from this pin.
+
+## 2026-11-11: sibling licence tags (T1 / D-LIC-2)
+`redevops-connectors` v0.1.0 -> **v0.1.1** (tag object `04d398445d6169f8ebd9807ea68dfd439afb90cf`, commit `4358493c8c58c75bc7dd2c29bd12df7be5eccb0f`) and `knowledge-frontier` v0.2.0 -> **v0.2.1**
+(tag object `d2b52a08f7917dd8d3f18ba9e332d78d7546a339`, commit `ed224d73d4ab65c14f1f205b1a957f6cc8eb0967`). Each is the previously pinned tree plus the licence files only (LICENSE, LICENSE-COMMONS-CLAUSE, LICENSE.md, the
+`license` metadata, a README line, the patch version): no code changed (`git diff v0.1.0 v0.1.1` and `git diff v0.2.0 v0.2.1` list those files). The tags were created in local clones and pushed ONLY to the workspace
+mirrors (`xrepo/repos/*.git`); nothing was pushed to GitHub, no published tag was rewritten. The pinned URLs name GitHub, so a build from these pins needs the two tags pushed first (publication step, pins-04).
+Licence note: the v0.1.0 and v0.2.0 pyprojects declared plain AGPL-3.0-or-later; the new tags apply the family licence (AGPL-3.0-or-later with the Commons Clause) that the owner stated for D-LIC-2 in the signed release approval.

@@ -25,25 +25,25 @@
     },
     {
       "name": "knowledge-frontier",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "url": "https://github.com/redevops-io/knowledge-frontier.git",
-      "tag": "v0.2.0",
-      "tag_object": "189029f4ba8852a3af90ad1384c35bba6f29b080",
-      "commit": "057258ae51e19ed6d3d69834093a794457fa4ffd",
+      "tag": "v0.2.1",
+      "tag_object": "d2b52a08f7917dd8d3f18ba9e332d78d7546a339",
+      "commit": "ed224d73d4ab65c14f1f205b1a957f6cc8eb0967",
       "build_backend": "hatchling",
       "committed_build_dirs": [],
-      "note": "Pinned by tag v0.2.0 as origin/main pins it. Agent `licences` may exclude it from the shipped set; this pin is not a decision to ship it. Its licence is inferred (D-LIC-14 stays OPEN)."
+      "note": "Pinned by tag v0.2.1 = v0.2.0 plus licence files only (AGPL-3.0-or-later with the Commons Clause, per the owner's D-LIC-2 statement). Agent `licences` may exclude it from the shipped set; this pin is not a decision to ship it (D-LIC-14). The tag exists in the workspace mirror; it must be pushed to the public repository before a binary is distributed (pins-04)."
     },
     {
       "name": "redevops-connectors",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "url": "https://github.com/redevops-io/redevops-connectors.git",
-      "tag": "v0.1.0",
-      "tag_object": "f36bdf554f32b5737689f48d1a7dec41185d287a",
-      "commit": "7fbb9ec4d4faff1dea2e238a94495bc1951b56bc",
+      "tag": "v0.1.1",
+      "tag_object": "04d398445d6169f8ebd9807ea68dfd439afb90cf",
+      "commit": "4358493c8c58c75bc7dd2c29bd12df7be5eccb0f",
       "build_backend": "hatchling",
       "committed_build_dirs": [],
-      "note": "Replaces the floating @main of the frozen build. v0.1.0 is the exact commit the frozen CI run cloned; main has since moved (15 commits as of 2026-11-04)."
+      "note": "v0.1.1 = v0.1.0 (the commit the frozen CI run cloned) plus the licence files of d990280 only, version 0.1.1; main has moved further and is NOT pinned. Licence: AGPL-3.0-or-later with the Commons Clause, per the owner's D-LIC-2 statement. The tag exists in the workspace mirror; it must be pushed to the public repository before a binary is distributed (pins-04)."
     }
   ]
 }

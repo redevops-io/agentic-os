@@ -164,7 +164,7 @@ def render(commit: str, root: Path = ROOT, include: set | None = None) -> str:
     w(f"1. **Record {len(ob)} owner-only decisions** ({', '.join(d['id'] for d in ob)}) with the options in section 4. They are mapped onto their existing gate identifiers; each stays a separate entry in `packaging/distribution-gate.json`." + (f" Struck by the owner, NOT recorded and still OPEN: {', '.join(d['id'] for d in struck)}." if struck else ""))
     att = [d["id"] for d in ob if man["decisions"][d["id"]].get("attests")]
     stm = [d["id"] for d in ob if man["decisions"][d["id"]].get("owner_statement")]
-    facts = ([f"the attested facts of {', '.join(att)}"] if att else []) + ([f"the licence statement of {', '.join(stm)}"] if stm else [])
+    facts = ([f"the attested facts of {', '.join(att)}"] if att else []) + ([f"the owner statements of {', '.join(stm)}"] if stm else [])
     left_out = sorted(set(owner_struck) & {d["id"] for d in struck})
     w("2. **State the facts in section 4 as the owner's own** (marked *attests* or *Owner statement*): " + ("; ".join(facts) if facts else "none in this document") + "." +
       (f" No attestation is made for {', '.join(left_out)}: they are left out (section 4)." if left_out else ""))

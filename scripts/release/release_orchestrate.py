@@ -304,6 +304,15 @@ def s3(ctx) -> Res:
             continue
         r.add("INFO" if not left else "FAIL", f"{p}: job pack generated from the c317 scripts ({'no commit or tree literal of c317 left' if not left else 'literals left in: ' + ', '.join(left[:6])}); host: {what}")
         placed = ctx.evidence / "artifacts" / p
+        packout = Path(ctx.workspace) / "native-release" / p / "artifacts"
+        if not ctx.dry and not placed.exists() and (packout / "SHA256SUMS").is_file():
+            import arrange_native          # imported here: only a run that has pack output needs it
+            try:
+                cmp = arrange_native.arrange(p, packout, placed)
+                r.add("PASS", f"{p}: pack output arranged into {placed} (builds {cmp['builds']}; the two builds are {'byte-identical' if cmp['all_identical'] else 'NOT byte-identical: recorded in native-compare.json'})")
+            except sp.Refused as e:
+                r.add("FAIL", f"{p}: pack output refused: {e}")
+                continue
         if not ctx.dry and build_reusable(placed, git("rev-parse", "HEAD")):
             r.add("PASS", f"{p}: artifacts for this release commit are in {placed} (S4 verifies them)")
         else:

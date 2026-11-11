@@ -68,9 +68,9 @@ file belongs to exactly one row). This schedule states the owner's intent; it do
 | B4 | the standard licence texts | the FSF text of the GNU AGPL version 3 and the Commons Clause v1.0 text, unchanged | `LICENSE`, `LICENSE-COMMONS-CLAUSE` |
 
 **Schedule C: separate repositories whose code the artifacts contain.** `runtime-contracts` (v0.3.17), `discovery-runtime` (v0.1.21),
-`redevops-connectors` (v0.1.0) and `knowledge-frontier` (v0.2.0) are pinned in `packaging/git-pins.json`. Each declares its own licence in
+`redevops-connectors` (v0.1.1) and `knowledge-frontier` (v0.2.1) are pinned in `packaging/git-pins.json`. Each declares its own licence in
 its own repository (the inventory lists what each declares). The statement in section 1 is not a statement about them, and cannot supply a
-licence file that a pinned tag lacks (`[OWNER DECISION D-LIC-2]`).
+licence file that a pinned tag lacks (`[OWNER DECISION D-LIC-2]`). The v0.1.1 and v0.2.1 tags are the earlier pinned tags plus licence files only (AGPL-3.0-or-later with the Commons Clause, as the owner stated for D-LIC-2); they exist in the workspace mirror and must be pushed to the public repositories before a binary is distributed.
 
 **Material that cannot be covered automatically.** Authorship by an AI agent (four commits), the mapping of three author identities to one
 rightsholder, images and icons without an authorship record, and the wrapped third-party cores are listed as flags F1 to F9 in the inventory.

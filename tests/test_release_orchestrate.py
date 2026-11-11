@@ -80,7 +80,7 @@ def orch(tmp_path):
     for rel in set(sp.PIN_FILES) - {sp.APPROVAL, sp.APPROVAL + ".sig", "packaging/check-distribution-gate.py"}:
         (r / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / rel, r / rel)
-    for f in ("approval.py", "release_orchestrate.py", "release_orchestrate.sh"):
+    for f in ("approval.py", "release_orchestrate.py", "release_orchestrate.sh", "arrange_native.py"):
         shutil.copy2(ROOT / "scripts/release" / f, r / "scripts/release" / f)
     (r / sp.APPROVAL).parent.mkdir(parents=True, exist_ok=True)
     (r / sp.APPROVAL).write_text("synthetic approval\n")
@@ -232,3 +232,26 @@ def test_info_rows_do_not_turn_a_passing_stage_into_a_non_pass():
     r2.add("PASS", "ok")
     r2.add("OWNER", "owner step")
     assert r2.status == "OWNER"
+
+
+def test_s3_arranges_native_pack_output_and_refuses_a_tampered_pack(orch):
+    from .test_release_arrange_native import make_pack
+    r, c, ev = orch
+    ws = ev.parent / "ws"
+    for plat in ("linux", "windows"):
+        (ws / f"native-c317/{plat}/scripts").mkdir(parents=True, exist_ok=True)
+        (ws / f"native-c317/{plat}/scripts/x.sh").write_text("true\n")
+    shutil.rmtree(ev / "artifacts/linux")
+    shutil.rmtree(ev / "artifacts/windows")
+    pack = make_pack(ev.parent, "linux", name="p1", commit=c)
+    (ws / "native-release/linux").mkdir(parents=True)
+    shutil.move(str(pack), ws / "native-release/linux/artifacts")
+    q = run_orch(r, ev, "S3")
+    assert "`PASS` linux: pack output arranged into" in q.stdout and "`PASS` linux: artifacts for this release commit are in" in q.stdout
+    assert (ev / "artifacts/linux/about.json").is_file() and (ev / "artifacts/linux/native-compare.json").is_file()
+    assert "`OWNER` windows: run the pack's scripts" in q.stdout
+    # a tampered pack is refused
+    shutil.rmtree(ev / "artifacts/linux")
+    (ws / "native-release/linux/artifacts/b1/app_0.6.0_arm64.deb").write_bytes(b"swapped")
+    q2 = run_orch(r, ev, "S3")
+    assert "`FAIL` linux: pack output refused" in q2.stdout and not (ev / "artifacts/linux").exists()

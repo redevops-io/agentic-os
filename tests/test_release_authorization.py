@@ -106,10 +106,10 @@ def test_rendered_document_is_deterministic_draft_and_names_only_owner_only_deci
     assert head[0] == "redevops-legal-decision: 2"
     ids = [ln.split()[1] for ln in head if ln.startswith("decision: ")]
     owner = sorted(d for d, e in gate_state(repo).items() if e["decides"] == "owner")
-    assert sorted(ids) == sorted(set(owner) - {"D-LIC-8", "D-LIC-11"})      # struck by the owner 2026-11-11, recorded in the manifest
-    assert "D-LIC-8" not in ids and "D-LIC-11" not in ids
-    assert "NOT in this signature" in text and "D-LIC-8" in text.split("NOT in this signature", 1)[1][:700]
-    assert "The hero image that ships in the Projects UI" not in text and "are first-party artwork of the owner or the company" not in text
+    assert sorted(ids) == owner                                              # every owner-only decision; none is struck in the manifest at this commit
+    assert "D-LIC-8" in ids and "D-LIC-11" in ids and "NOT in this signature" not in text
+    assert "ARTWORK_PROVENANCE.md" in text and "NOT asserted here" in text                    # the artwork decisions carry provenance statements, not authorship attestations
+    assert "first-party artwork of the owner or the company" not in text
     for c in ("D-LIC-3", "D-LIC-1", "pins-03", "D-LIC-18", "pins-08"):
         assert c not in ids
     assert "DRAFT - NOT AUTHORIZED" in text and "Counsel reference" in text
@@ -155,9 +155,7 @@ def test_one_signature_one_commit_and_the_gate_accepts_exactly_the_owner_only_de
                        "packaging/distribution-gate.json", "packaging/legal-allowed-signers"]
     g = gate_state(repo)
     for i, e in g.items():
-        if e["decides"] == "owner" and i in ("D-LIC-8", "D-LIC-11"):
-            assert e["status"] == "OPEN" and e["decision_sha256"] is None, i      # struck by the owner: never recorded
-        elif e["decides"] == "owner":
+        if e["decides"] == "owner":
             assert e["status"] == "DECIDED" and e["decision_sha256"] == digest and e["decided_on"] == time.strftime("%Y-%m-%d", time.gmtime()), i
         else:
             assert e["status"] == "OPEN", i
@@ -317,7 +315,7 @@ def test_authorize_with_a_struck_document_records_only_the_remaining_decisions(r
     code, out = drive(repo, doc, key, [digest, key["fpr"], "Alex Rybachek"])
     assert code == 0, out
     g = gate_state(repo)
-    assert g["D-LIC-2"]["status"] == "OPEN" and g["D-LIC-13"]["status"] == "DECIDED" and g["D-LIC-8"]["status"] == "OPEN"
+    assert g["D-LIC-2"]["status"] == "OPEN" and g["D-LIC-13"]["status"] == "DECIDED" and g["D-LIC-8"]["status"] == "DECIDED"
     assert run([sys.executable, "-I", "scripts/release/approval.py", "check"], repo).returncode == 0
 
 
@@ -382,21 +380,34 @@ def test_s8_refuses_unless_every_earlier_stage_passed_in_the_same_run(repo, tmp_
     assert r.returncode != 0 or "plain remote name" in r.stdout
 
 
+def strike_in_manifest(repo, ids):
+    import json as _j
+    p = repo / "packaging/release/decision-manifest-0.6.0.json"
+    m = _j.loads(p.read_text())
+    for i in ids:
+        m["decisions"][i]["struck"] = "left out by the owner (test)"
+    p.write_text(_j.dumps(m, indent=2) + "\n")
+    run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qam", "strike"], repo)
+
+
 def test_a_document_that_covers_a_decision_the_owner_struck_is_refused(repo, tmp_path):
+    strike_in_manifest(repo, ["D-LIC-8"])
     doc = render(repo, tmp_path)
-    doc.write_text(doc.read_text().replace("decision: D-LIC-13 a", "decision: D-LIC-13 a\ndecision: D-LIC-8 a", 1))
+    assert "decision: D-LIC-8" not in doc.read_text().split("\n\n")[0] and "NOT in this signature" in doc.read_text()
+    doc.write_text(doc.read_text().replace("decision: D-LIC-13 a", "decision: D-LIC-13 a\ndecision: D-LIC-8 b", 1))
     r = run([sys.executable, "-I", "scripts/release/approval.py", "verify", "--doc", str(doc)], repo)
     assert r.returncode == 1 and "struck by the owner" in r.stderr
 
 
-def test_the_struck_artwork_decisions_stay_open_and_keep_blocking(repo, tmp_path, key):
+def test_a_struck_decision_stays_open_and_keeps_blocking(repo, tmp_path, key):
+    strike_in_manifest(repo, ["D-LIC-8", "D-LIC-11"])
     doc = render(repo, tmp_path)
     digest = run([sys.executable, "-I", "scripts/release/approval.py", "digest", "--doc", str(doc)], repo).stdout.strip()
     code, out = drive(repo, doc, key, [digest, key["fpr"], "Alex Rybachek"])
     assert code == 0, out
     g = gate_state(repo)
     for i in ("D-LIC-8", "D-LIC-11"):
-        assert g[i]["status"] == "OPEN" and g[i]["blocks_distribution"] is True
+        assert g[i]["status"] == "OPEN" and g[i]["blocks_distribution"] is True and g[i]["decision_sha256"] is None
     r = run([sys.executable, "-I", "packaging/check-distribution-gate.py", "--platform", "macos", "--distribution"], repo)
     assert r.returncode == 1 and "D-LIC-8" in r.stderr and "D-LIC-11" in r.stderr
 

@@ -49,8 +49,8 @@ These are separate repositories pinned in `packaging/git-pins.json`. Each declar
 |---|---|---|---|
 | `runtime-contracts` | v0.3.17 | family licence (AGPL-3.0-or-later with the Commons Clause) per its own `LICENSE.md`; its `mission-sdk` is Apache-2.0 on purpose | D-LIC-3 |
 | `discovery-runtime` | v0.1.21 | licence status not decided here | D-LIC-3 |
-| `redevops-connectors` | v0.1.0 | AGPL-3.0-or-later declared in its pyproject at the pinned tag; the tag has no licence file | D-LIC-2 |
-| `knowledge-frontier` | v0.2.0 | AGPL-3.0-or-later (plain), licence file marked "LICENSE INTENT INFERRED - owner to confirm"; not in the sidecar | D-LIC-2, D-LIC-14 |
+| `redevops-connectors` | v0.1.1 | family licence (AGPL-3.0-or-later with the Commons Clause) per its own `LICENSE.md` at the pinned tag (v0.1.0 had no licence file and declared plain AGPL in its pyproject; v0.1.1 adds the files) | D-LIC-2 |
+| `knowledge-frontier` | v0.2.1 | family licence (AGPL-3.0-or-later with the Commons Clause) per its own `LICENSE.md` at the pinned tag (v0.2.0 had no licence file; its master carries a plain AGPL LICENSE that the tag does not); not in the sidecar | D-LIC-2, D-LIC-14 |
 
 The Projects UI bundle is a fifth such component (flag F4). Third-party Python wheels, Rust crates, CPython, OpenSSL, PyInstaller, the Microsoft runtime files and installer stubs are listed with their texts in `THIRD_PARTY_NOTICES.txt` (`packaging/notices/components.json`); they are category 3 and out of the schedule of the core.
 

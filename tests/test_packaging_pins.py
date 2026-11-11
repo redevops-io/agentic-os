@@ -67,21 +67,21 @@ def test_pyproject_git_dependencies_are_tag_pinned_not_branch_pinned():
     # the converged trunk follows origin/main's first-party pins (the RC line's v0.3.4 / v0.1.0 are superseded; packaging/PINS.md)
     assert "runtime-contracts.git@v0.3.17" in text
     assert "discovery-runtime.git@v0.1.21" in text
-    assert "knowledge-frontier.git@v0.2.0" in text
-    assert "redevops-connectors.git@v0.1.0" in text
+    assert "knowledge-frontier.git@v0.2.1" in text
+    assert "redevops-connectors.git@v0.1.1" in text
     assert "redevops-connectors.git@main" not in (ROOT / "pyproject.toml").read_text()
 
 
 def test_git_pins_record_tag_object_and_commit():
     pins = {p["name"]: p for p in json.loads((PK / "git-pins.json").read_text())["dependencies"]}
-    assert pins["redevops-connectors"]["commit"] == "7fbb9ec4d4faff1dea2e238a94495bc1951b56bc"
+    assert pins["redevops-connectors"]["commit"] == "4358493c8c58c75bc7dd2c29bd12df7be5eccb0f"
     assert pins["runtime-contracts"]["commit"] == "f465e50185c3dbe99860bb4a29fc1ddd0d5cdafa"
     assert pins["runtime-contracts"]["tag"] == "v0.3.17"
     assert pins["runtime-contracts"]["tag_object"] == "977f553286bdb56ec392788aa54afb1ad397286c"
     assert pins["discovery-runtime"]["tag"] == "v0.1.21"
     assert pins["discovery-runtime"]["tag_object"] == "043117dc9026e96d760e90b5b9a541879932ccc0"
     assert pins["discovery-runtime"]["commit"] == "3856bca7440ed4af80718c78a9c3f85d996c3a50"
-    assert pins["knowledge-frontier"]["commit"].startswith("057258ae")
+    assert pins["knowledge-frontier"]["commit"].startswith("ed224d73")
     assert pins["runtime-contracts"]["committed_build_dirs"] == []     # v0.3.17 (like v0.3.14) carries no stale build/lib
     for p in pins.values():
         assert re.fullmatch(r"[0-9a-f]{40}", p["tag_object"]) and re.fullmatch(r"[0-9a-f]{40}", p["commit"])
