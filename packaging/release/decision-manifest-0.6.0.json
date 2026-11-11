@@ -1,0 +1,145 @@
+{
+  "schema": "redevops.release-approval/1",
+  "release": "0.6.0",
+  "status": "DRAFT - NOT AUTHORIZED",
+  "_comment": "Machine-readable source of the consolidated owner approval (docs: scripts/release/build_owner_approval.py renders RELEASE_OWNER_APPROVAL_0.6.0.md from this file, packaging/distribution-gate.json and the git commit it is run on). It holds choices and verified facts, never a secret, a signature or a timestamp. Nothing in this file authorizes anything; only a valid detached signature over the rendered approval document does (packaging/check-distribution-gate.py, record header version 2). Counsel-dependent decisions are listed here so the whole picture is in one place, but they are NEVER covered by the owner signature.",
+  "owner": {
+    "signature_name_on_prior_forms": "Alex Rybachek",
+    "initials_on_prior_forms": "AR",
+    "git_author_name": "Alex Mats",
+    "contact": "redevops@redevops.io",
+    "signature_format": "Signed: ____<name>____  Date: ____<date>____  (as on AUTHORIZATION_REQUEST.OWNER-COPY.md, 2026-11-10)",
+    "sources": [
+      "SIGNING_C317_OWNER_COPY/AUTHORIZATION_REQUEST.OWNER-COPY.md (signed and dated by the owner 2026-11-10)",
+      "SIGNING_C317_OWNER_COPY/OWNER_DECISIONS_RECORD_2026-11-10.md",
+      "git log of the repository (author names)"
+    ],
+    "note_to_confirm": "Two names appear in the records: the signature name on the 2026-11-10 form and the git author name. The owner states below which name signs this approval; nothing here decides it."
+  },
+  "company": {
+    "legal_name_in_signing_records": "ReDevOps.io LLC",
+    "location_in_signing_records": "Aventura, Florida, US",
+    "apple_developer_id": "Developer ID Application: ReDevOps.io LLC (Q8A92DM4T7)",
+    "apple_team_id": "Q8A92DM4T7",
+    "azure_identity_validation": "31b37fcd-8c3a-4280-a402-bad98f4728a8 (ReDevOps.io LLC, valid to 2028-12-27)",
+    "copyright_holder_in_licence_files": "RedevOps",
+    "sources": [
+      "CROSS_PLATFORM_READINESS_REPORT_2026-11-04.md and R0_RELEASE_READINESS_AUDIT_2026-11-04.md (Developer ID and Azure identity facts, observed 2026-11-04)",
+      "LICENSE.md and LICENSING.md (copyright line 'Copyright (c) 2025-2026 RedevOps.')"
+    ],
+    "fact_to_confirm": "The licence files name 'RedevOps' as copyright holder and Licensor; the signing identities name 'ReDevOps.io LLC'. Whether these are the same legal person is a fact only the owner can state (D-LIC-1); the approval records the question and does not answer it."
+  },
+  "source": {
+    "protected_refs": {
+      "frozen_c317_commit": "016143ff1a8ab39524d1f042916dcf01298d9d04",
+      "frozen_c317_tree": "71ad4586e1f40c5d989143f504d956487f4f244b",
+      "licensing_candidate_f823e238": "f823e238cdf28d174343830d86d9e0862bf7f59b",
+      "licensing_alignment_8401311b": "8401311bc4c31cbadb712092a865078820aa95c3",
+      "rc2_fallback_549e6282": "549e628249cfbb9bd0d4e8c34be3654971c3cf93"
+    },
+    "release_commit_rule": "The approval names the release-preparation commit F (the commit the document is generated on). The release commit R is F plus ONLY: docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md and its .sig, the owner's public key in packaging/legal-allowed-signers and packaging/distribution-gate.json (legal_signer_fingerprints and the DECIDED entries of the bundled decisions). The orchestrator refuses R unless git shows exactly that.",
+    "tag_proposal": "v0.6.0",
+    "tag_note": "The tag is proposed, not created. It is created and pushed only by the orchestrator, only after every gate passes."
+  },
+  "artifacts_existing": {
+    "frozen_c317_unsigned_dmg_sha256": "d9935d59c3a95fbd09617a687c7de327e0cc140bd659dfbd4a8a852a6d441642",
+    "signed_notarized_private_dmg_sha256": "e32a1075328eec1dc4b002d9430009295a3cf50a4a13ceb11a2df1387872dadd",
+    "signed_dmg_status": "PRIVATE candidate (distribution=no). It is preserved unchanged and can never become the distributed artifact.",
+    "signing_package_c317": "signing-c317/ revision 4.1, CHECKSUMS sha256 9a71b471201e598e32f2367951d7c980f5a83510a318e39c11377c84d4bf635d, 206 files (preserved)",
+    "records_dir": "~/Documents/60_Security_Audits_Code_Review/RELEASE_QUALIFICATION_2026-11-06/",
+    "backup_mirror": "/Volumes/backup/agenticos-0.6.0-rc2-evidence/c317-candidate-v0.3.17/"
+  },
+  "artifacts_to_build": {
+    "macos": ["Agentic Apps dmg (arm64) built from R"],
+    "windows": ["MSI", "NSIS setup exe"],
+    "linux": [".deb", "AppImage"],
+    "excluded": ["strict snap (SNAP-D1 unresolved, excluded from the initial 0.6.0 by owner decision)"]
+  },
+  "decisions": {
+    "D-LIC-1": {"option": "a", "note": "Short statement and copyright line as written; counsel confirms or drafts (b); the legal-person fact is the owner's (see company.fact_to_confirm)."},
+    "D-LIC-2": {"option": "a", "note": "Owner states the licence intent in writing and the maintainers add licence files in NEW tagged releases of redevops-connectors and knowledge-frontier; R0-prime pins the new tags. Approving (a) does NOT create those tags: they are actions in other repositories (technical blocker T1).", "owner_statement": "Licence intent: redevops-connectors and knowledge-frontier are licensed as the family licence (AGPL-3.0-or-later with the Commons Clause) unless the owner writes otherwise here before signing."},
+    "D-LIC-3": {"option": "d", "note": "Counsel decides whether the Commons Clause can stand beside the AGPL (sections 7 and 10) in a combined binary. Unresolved; documentation does not settle it."},
+    "D-LIC-4": {"option": "a", "note": "MPL-2.0 handling for certifi cacert.pem and the five static MPL crates; wording by counsel."},
+    "D-LIC-5": {"option": "c", "note": "Counsel first on AGPL section 13 for the loopback-served UI."},
+    "D-LIC-6": {"option": "a", "note": "Notice texts for CPython, OpenSSL, PyInstaller and statically linked libraries; counsel on Q19 to Q22."},
+    "D-LIC-7": {"option": "b", "note": "Record the redevops-projects commit and npm lock and generate the UI notices from it (packaging/ui-bundle-source.json holds the record)."},
+    "D-LIC-8": {"option": "a", "note": "Owner confirms the neutral placeholder (scripts/make_neutral_hero.py) is first-party artwork.", "attests": ["The hero image that ships in the Projects UI is the neutral placeholder drawn by scripts/make_neutral_hero.py (no model output, no photograph) and is first-party artwork under the family licence."]},
+    "D-LIC-9": {"option": "a", "note": "Windows only: NSIS and WiX notices; WebView2 bootstrapper stays outside the redistribution; counsel before a Windows distribution."},
+    "D-LIC-10": {"option": "c", "note": "Whether AGPL 5(d) requires Appropriate Legal Notices and an installer acceptance page; counsel."},
+    "D-LIC-11": {"option": "a", "note": "Owner confirms the launcher icons and the mark are first-party artwork.", "attests": ["The launcher icons and the 'Re' mark in deploy/launcher/src-tauri/icons and deploy/desktop-shell-main/src-tauri/icons are first-party artwork of the owner or the company, with no third-party rights attached; authorship is not recorded in the repository today."]},
+    "D-LIC-12": {"option": "d", "note": "Source availability for object code (AGPL section 6): counsel chooses the mechanism; engineering can produce an accompanying archive."},
+    "D-LIC-13": {"option": "a", "note": "Accept the per-item evidence table for components whose package holds no licence file, with the UNVERIFIED notes."},
+    "D-LIC-14": {"option": "a", "note": "knowledge-frontier stays excluded from the frozen sidecar."},
+    "D-LIC-15": {"option": "a", "note": "The shipped outreach template already reads 'a source-available runtime stack' (no 'open source'); option (a) names the longer family wording. The owner accepts the current wording or asks for the longer form before signing."},
+    "D-LIC-16": {"option": "b", "note": "QA bundle only (redevops-qa repository); not part of this release."},
+    "D-LIC-17": {"option": "a", "note": "Accept the engineering resolution on shipped-but-unexercised components (setuptools, packaging, _distutils_hack left out; duckdb kept)."},
+    "D-LIC-18": {"option": "b", "note": "macOS only: objc2 crates described upstream as derived from Apple SDKs; counsel before any macOS distribution."},
+    "pins-03": {"option": "a", "note": "What a source offer must contain and how long it lasts; counsel."},
+    "pins-04": {"option": "a", "note": "Publish the exact release commit and tag it before any binary is distributed. This approval includes the push authorization described in section 6 of the document; the push runs only at the owner's terminal, only after every gate passes."},
+    "pins-08": {"option": "d", "note": "Windows only: Microsoft terms for the redistributable DLLs in the Windows sidecar; counsel."}
+  },
+  "platform_signing": {
+    "macos": {
+      "decision_id": "P-MAC",
+      "scope": "Developer ID Application signing, notarization with the keychain profile, stapling of the dmg only; reuses the proven c317 procedure and tools (signing package revision 4.1 tooling, inputs replaced by the hashes of the new build).",
+      "identity": "Developer ID Application: ReDevOps.io LLC (Q8A92DM4T7)",
+      "identity_sha256": "8ee6c415e6960823c248718496b89e7e08dcf8414ee95282aeabf2b36b0d7ed3",
+      "team_id": "Q8A92DM4T7",
+      "notary_profile_name": "redevops",
+      "notary_profile_sha256": "e0378cd483b7c9187c21a64c2a6b6746c93b0eceaef09663d47f6137da856b90",
+      "notarize": true,
+      "staple": "dmg only",
+      "distribution": "yes (only if the gate passes for macos)",
+      "entitlement": "sidecar only: com.apple.security.cs.disable-library-validation (accepted by the owner 2026-11-10, residual risk R1, docs/MACOS_ENTITLEMENTS.md)",
+      "preserved": "the c317 signed and notarized private dmg e32a1075... and signing package 4.1 are never modified",
+      "runs_at": "the owner's Mac terminal (keychain identity and notary profile); no agent runs it"
+    },
+    "windows": {
+      "decision_id": "P-WIN",
+      "scope": "Authenticode signing of the launcher, sidecar and NSIS uninstaller (stage inner) and then of the MSI and NSIS setup exe (stage container) with Jsign 7.6 against Azure Artifact Signing, RFC 3161 timestamp; script packaging/signing/sign_windows_r0prime_v3.sh --real.",
+      "azure_endpoint": "https://eus.codesigning.azure.net/",
+      "azure_account": "redevops",
+      "azure_certificate_profile": "redevops-public",
+      "azure_expected_cn": "CN=ReDevOps.io LLC",
+      "azure_region": "East US",
+      "certificate_validity_note": "Public Trust certificates last 3 days; signatures rely on the Microsoft RFC 3161 timestamp.",
+      "needs_owner_at_run_time": ["az login by the owner (an identity holding 'Artifact Signing Certificate Profile Signer')", "the scope file's owner-authorization sha256 (printed by the orchestrator)"],
+      "never_in_this_document": ["tokens", "az state", "keys"],
+      "known_status": "The script's --real path (version r0prime-win-3) has never run; the earlier v1 script ran once on 2026-11-04 against the same account and profile (3 sign-API calls)."
+    },
+    "linux": {
+      "decision_id": "P-LIN",
+      "recommended": "a",
+      "options": {
+        "a": "Checksums plus one detached SSHSIG over the release evidence manifest (which lists the sha256 of the .deb and the AppImage), made with the existing release key through the owner's ssh-agent (packaging/signing/sign_manifest_sshsig.sh, approval M-01). The packages themselves are not individually signed. No new key, no repository infrastructure.",
+        "b": "Option (a) plus a detached GPG signature (.asc) per package. Needs a new GPG key and its publication; not established today.",
+        "c": "A signed apt repository (Release/InRelease). Needs repository hosting and a signing key; not established today.",
+        "d": "Checksums only (SHA256SUMS), no signature."
+      },
+      "why_a": "It reuses a mechanism that already exists, reviewed and tested, binds every artifact hash to a key the owner already controls, and invents no mandatory requirement. Users verify the manifest signature, then the package hash. Packages are not covered by a native package-signing scheme; that is a stated limitation, not a defect.",
+      "note": "No Linux package-signing requirement has been established by the owner; (a) is a recommendation."
+    }
+  },
+  "exceptions_and_accepted_risks": [
+    {"id": "X-1", "text": "Sidecar entitlement com.apple.security.cs.disable-library-validation (residual risk R1), accepted by the owner for the c317 build on 2026-11-10; re-accepted here for the release build only if the owner signs this approval.", "source": "docs/MACOS_ENTITLEMENTS.md; OWNER_DECISIONS_RECORD_2026-11-10.md"},
+    {"id": "X-2", "text": "Post-run verifier check 4 reports a known false FAIL on Developer-ID-signed bundles (__LINKEDIT vmsize differs by page rounding after the signature is removed). The orchestrator reports the verifier's raw result and requires an explicit flag to continue past exactly this known item.", "source": "C317_SIGNING_RUN_RECORD_2026-11-10.md; independent review of the run"},
+    {"id": "X-3", "text": "Evidence-manifest SSHSIG (M-01) was ticked 'yes' on the c317 form but never performed; it remains a separate step (Linux option a uses the same mechanism).", "source": "OWNER_DECISIONS_RECORD_2026-11-10.md"},
+    {"id": "X-4", "text": "LITERALS-PROVENANCE.json is verified for self-consistency only, not against its sources (gate G12 was waived for c317).", "source": "AUTHORIZATION_REQUEST.OWNER-COPY.md"},
+    {"id": "X-5", "text": "The AppImage bytes depend on the Linux build host's apt state (LNX-C1, measured: 8 gstreamer libraries differ between two builds on different hosts).", "source": "reports/c317/native-linux.md"},
+    {"id": "X-6", "text": "The Windows launcher is not byte-reproducible across Visual Studio Build Tools patch versions (PE Rich header, measured), because the installer bootstrapper floats.", "source": "reports/c317/native-windows.md"},
+    {"id": "X-7", "text": "The strict snap is excluded from the initial 0.6.0 (SNAP-D1 unresolved).", "source": "owner decision recorded in the release decisions"},
+    {"id": "X-8", "text": "The Projects UI source commit that produced the shipped bundle is a local, unpublished commit of the redevops-projects repository; publishing it is part of pins-04.", "source": "packaging/ui-bundle-source.json"},
+    {"id": "X-9", "text": "Four commits are authored by an AI agent identity and three author identities map to one rightsholder; LICENSE.md's contribution-history sentence is for counsel (N4).", "source": "docs/legal/COMPONENT_LICENCE_INVENTORY.md flags F1 and F2"},
+    {"id": "X-10", "text": "The licence statement of the Projects UI repository was not re-read for the core schedule (D-LIC-2, flag F4).", "source": "LICENSING.md Schedule A4"},
+    {"id": "X-11", "text": "Windows installers are signed with Public Trust certificates whose own validity is 3 days; trust after expiry depends on the timestamp.", "source": "records of the 2026-11-04 Azure signing run"}
+  ],
+  "technical_blockers": [
+    {"id": "T1", "text": "D-LIC-2 option (a) needs new tagged releases of redevops-connectors and knowledge-frontier that contain licence files, and packaging/git-pins.json, PINS.md, the SBOM and the source offer updated to those tags. Today the pin is redevops-connectors v0.1.0 (no licence file). These are actions in other repositories."},
+    {"id": "T2", "text": "No legal-decision key exists in packaging/legal-allowed-signers (it ships empty). The owner creates a key separate from the release key (the gate refuses the release key as a legal signer) and confirms its fingerprint through an independent channel."},
+    {"id": "T3", "text": "The About page has five legal slots (copyright line, licence statement, source offer, no-warranty, section 13 notice). Each needs an approved text file with its own detached signature, and each slot lists decisions that include counsel decisions. A distribution build is refused until they are filled."},
+    {"id": "T4", "text": "pins-04 needs the release commit and tag to be pushed to the public repository before a binary is distributed; no push has been made."},
+    {"id": "T5", "text": "The Windows and Linux native build hosts are driven by per-pass script packs under native-c317/ (an Azure VM and a Lima VM). They are not parametrized for a new commit; the orchestrator generates a pack by substituting the commit, tree and host names and the pack has not yet been run for the release commit."},
+    {"id": "T6", "text": "A new macOS signing scope (input hashes of the new dmg) has to be generated for the new build; the tooling of package revision 4.1 is reused unchanged, so its independent review still applies, but verifier check 4 stays defective (X-2)."},
+    {"id": "T7", "text": "The release orchestrator itself (this branch) is new and has not been independently reviewed."}
+  ]
+}

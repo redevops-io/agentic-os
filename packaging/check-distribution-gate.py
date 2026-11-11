@@ -27,6 +27,12 @@ text `<file>.sig`: an SSHSIG in the namespace `redevops-legal-decision@v1`, veri
 packaging/legal-allowed-signers (public keys only, written by the owner; it ships EMPTY, so with no signer every DECIDED entry fails
 a distribution build, on purpose, until the owner adds a key). A signature proves which key signed the exact bytes and nothing else.
 
+CONSOLIDATED OWNER APPROVAL (header version 2). One detached signature over one approval document may cover several decisions, but ONLY
+decisions whose `decides` is exactly "owner": the header lists `decision: <id> <option>` lines plus base-commit, base-tree and manifest-sha256,
+all taken from the verified bytes (parse_bundle_record). A decision that names counsel (decides "counsel" or "owner+counsel") is never covered by
+a bundle, and a bundle authorizes no About-slot text; those keep their own version-1 record, counsel_reference and slot texts. The signature,
+namespace and signer list are exactly those of a version-1 record; nothing here relaxes them.
+
 THE SIGNED RECORD BINDS MEANING (R2-01). A decision record starts with a machine-readable header, up to the first empty line:
 
     redevops-legal-decision: 1
@@ -382,6 +388,88 @@ def parse_decision_record(raw: bytes) -> tuple[dict, list[str]]:
     return out, probs
 
 
+BUNDLE_VERSION = "2"
+_HEX40 = re.compile(r"^[0-9a-f]{40}$")
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+_BUNDLE_HDR_LINE = re.compile(r"^([a-z0-9-]+): (.+)$")
+_BUNDLE_DECISION = re.compile(r"^([A-Za-z][A-Za-z0-9-]*) ([a-z0-9]{1,4})$")
+
+
+def parse_bundle_record(raw: bytes) -> tuple[dict, list[str]]:
+    """The machine-readable header of a CONSOLIDATED OWNER APPROVAL (one signature for several decisions), exactly
+
+        redevops-legal-decision: 2
+        bundle: <name>
+        base-commit: <40 hex>
+        base-tree: <40 hex>
+        manifest-sha256: <64 hex>
+        decision: <decision id> <option key>          (one or more)
+
+    Free text follows after an empty line. A bundle can authorize ONLY decisions whose `decides` is exactly "owner" (a decision that names
+    counsel is never covered by it, see bundle_binding_problems) and it authorizes NO About-slot text (a `slot:` line is refused). The
+    base-commit, base-tree and manifest-sha256 lines are bound by the signature; the gate does not resolve them against git (the release
+    orchestrator does). Returns ({"version","bundle","base-commit","base-tree","manifest-sha256","decisions": {id: option}}, problems)."""
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return {}, ["the record is not UTF-8"]
+    head = []
+    for ln in text.split("\n"):
+        if ln == "":
+            break
+        head.append(ln)
+    if not head or head[0] != f"redevops-legal-decision: {BUNDLE_VERSION}":
+        return {}, [f"the record does not start with the header line 'redevops-legal-decision: {BUNDLE_VERSION}'"]
+    out: dict = {"decisions": {}}
+    probs: list[str] = []
+    for ln in head[1:]:
+        m = _BUNDLE_HDR_LINE.match(ln)
+        if not m:
+            probs.append(f"header line is not 'key: value': {ln[:40]!r}")
+            continue
+        k, v = m.group(1), m.group(2).strip()
+        if k == "decision":
+            dm = _BUNDLE_DECISION.match(v)
+            if not dm:
+                probs.append(f"malformed decision line: {v[:60]!r}")
+            elif dm.group(1) in out["decisions"]:
+                probs.append(f"decision {dm.group(1)} listed twice")
+            else:
+                out["decisions"][dm.group(1)] = dm.group(2)
+        elif k in ("bundle", "base-commit", "base-tree", "manifest-sha256"):
+            if k in out:
+                probs.append(f"{k} given twice")
+            out[k] = v
+        elif k == "slot":
+            probs.append("a bundle cannot authorize an About-slot text (slot line refused)")
+        else:
+            probs.append(f"unknown header key {k!r}")
+    for k, rx in (("base-commit", _HEX40), ("base-tree", _HEX40), ("manifest-sha256", _HEX64)):
+        if not rx.match(str(out.get(k, ""))):
+            probs.append(f"header lacks a valid '{k}:'")
+    if not str(out.get("bundle", "")).strip():
+        probs.append("header lacks 'bundle:'")
+    if not out["decisions"]:
+        probs.append("header lists no decision")
+    return out, probs
+
+
+def bundle_binding_problems(d: dict, hdr: dict) -> list[str]:
+    """What the SIGNED bundle says versus the gate entry. The entry must be listed in the bundle with the same option; its `decides` must be
+    exactly "owner" (counsel and owner+counsel decisions are never covered by a bundle: they keep their own record and counsel_reference);
+    and the entry must carry no slot_texts (a bundle authorizes none)."""
+    i, errs = d.get("id"), []
+    if i not in hdr.get("decisions", {}):
+        errs.append(f"{i}: the signed bundle does not list this decision")
+    elif hdr["decisions"][i] != d.get("chosen_option"):
+        errs.append(f"{i}: the signed bundle names option {hdr['decisions'][i]!r}, the gate entry {d.get('chosen_option')!r}")
+    if d.get("decides") != "owner":
+        errs.append(f"{i}: decides is {d.get('decides')!r}; a consolidated owner approval covers owner-only decisions, never one that names counsel")
+    if d.get("slot_texts"):
+        errs.append(f"{i}: a consolidated owner approval authorizes no About-slot text, but the gate entry names slot_texts")
+    return errs
+
+
 def binding_problems(d: dict, hdr: dict) -> list[str]:
     """Compare what the SIGNED record says with the gate entry: decision id, chosen option and the slots (with the sha256 of each text)
     it authorizes. One signed record can therefore not stand for another decision, another option or another slot."""
@@ -505,8 +593,13 @@ def _record_problems(d: dict, root: Path, allowed: Path, signers, cache: dict) -
         if why:
             cache[key] = [f"{d.get('id')} record: {why}"]
         else:
-            hdr, probs = parse_decision_record(data)
-            cache[key] = [f"{d.get('id')} record: {p}" for p in probs] if probs else binding_problems(d, hdr)
+            first = data.split(b"\n", 1)[0]
+            if first == f"redevops-legal-decision: {BUNDLE_VERSION}".encode():
+                hdr, probs = parse_bundle_record(data)
+                cache[key] = [f"{d.get('id')} record: {p}" for p in probs] if probs else bundle_binding_problems(d, hdr)
+            else:
+                hdr, probs = parse_decision_record(data)
+                cache[key] = [f"{d.get('id')} record: {p}" for p in probs] if probs else binding_problems(d, hdr)
     return cache[key]
 
 
