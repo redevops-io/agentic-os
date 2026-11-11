@@ -63,7 +63,16 @@ unset PW
 az vm show -g "$RG" -n "$VM" --query "{size:hardwareProfile.vmSize,image:storageProfile.imageReference,disk:storageProfile.osDisk.diskSizeGb}" -o json > "$OUT/evidence/vm.json"
 vmrun() { # NAME FILE LIB(0|1) [key=value ...]
   local name="$1" file="$2" lib="$3"; shift 3; local p="$OUT/tmp/$name.ps1"
-  { if [ "$lib" = 1 ]; then cat "$W/lib.ps1"; fi; cat "$file"; } > "$p"
+  # a PowerShell param() block must be the first statement: it is moved in front of the prepended lib.ps1
+  python3 - "$W/lib.ps1" "$file" "$lib" > "$p" <<'PY'
+import re, sys
+libf, f, uselib = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
+body = open(f, encoding="utf-8").read().split("\n")
+param = [l for l in body if re.match(r"^param\(.*\)\s*$", l)][:1]
+body = [l for l in body if not (param and l == param[0])]
+out = param + ([open(libf, encoding="utf-8").read()] if uselib else []) + body
+sys.stdout.write("\n".join(out))
+PY
   local ts; ts="$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$OUT/evidence/runlogs"
   if [ $# -gt 0 ]; then
     az vm run-command invoke -g "$RG" -n "$VM" --command-id RunPowerShellScript --scripts @"$p" --parameters "$@" -o json > "$OUT/evidence/runlogs/$name-$ts.json" 2> "$OUT/evidence/runlogs/$name-$ts.err" || true
