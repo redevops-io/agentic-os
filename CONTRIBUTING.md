@@ -13,4 +13,14 @@
 5. Releases: follow [docs/RELEASING.md](docs/RELEASING.md); never delete or rewrite tags.
 6. Security issues: [SECURITY.md](SECURITY.md), not a public issue.
 
-Contributions are under the repository [LICENSE.md](LICENSE.md).
+## Licence of contributions and contributor terms
+
+* **Applications under `apps/`** (GNU AGPL-3.0-only, no Commons Clause): your contribution is made under GNU AGPL-3.0-only. Every commit must carry a
+  `Signed-off-by: Your Name <you@example.org>` line (`git commit -s`), which certifies the Developer Certificate of Origin, version 1.1
+  (<https://developercertificate.org/>).
+* **The core platform and everything else outside `apps/`** (AGPL-3.0-or-later with the Commons Clause, [LICENSE.md](LICENSE.md)): outside contributions are
+  accepted only after you have signed the ReDevOps Contributor Licence Agreement, so that RedevOps can keep the core under one licence, enforce the Commons
+  Clause and relicense. `[OWNER DECISION: contributor terms]` The text of that agreement is not written yet and needs counsel; until it exists, outside
+  contributions to the core are not merged.
+* **Third-party code** may be contributed only if its licence is compatible with the destination above; it keeps its original licence, copyright notice and
+  attribution, and must be listed in the notices.

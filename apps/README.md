@@ -1,8 +1,10 @@
 # Reference apps
 
 The reference application implementations that run on the Mission Runtime — one focused
-agentic system per business function. (Each `apps/*/LICENSE` is a plain AGPL-3.0 text and each app is declared AGPL-3.0-only in the root `LICENSE.md`, while the repository
-root [LICENSE.md](../LICENSE.md) is titled "source-available, not open source".) Each app is the *implementation* (agents +
+agentic system per business function. (**Licence: every app in this directory is licensed under GNU AGPL-3.0-only, without the Commons Clause.** Each `apps/<name>/LICENSE` is the GNU AGPL
+version 3 text; `SPDX-License-Identifier: AGPL-3.0-only`. The control plane in the repository root is a different category: its
+[LICENSE.md](../LICENSE.md) is "source-available, not open source" (AGPL-3.0-or-later with the Commons Clause). Third-party cores that the apps wrap keep their own
+licences. How the apps relate to the core they import is under legal review, D-LIC-3 in [LICENSING.md](../LICENSING.md).) Each app is the *implementation* (agents +
 operators + core logic + seed data); the **deployment** is kept separate — a self-contained compose
 demo lives in [`../deploy/`](../deploy/), while the full Terraform / Ansible / k3s machinery is
 maintained separately — so you can run these apps under your own infrastructure.

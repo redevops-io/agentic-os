@@ -419,7 +419,7 @@ Licensor:  RedevOps
 
 ## licence-md-effective: LICENSE.md: effective point of the relicensing
 
-Source: `LICENSE.md` lines 20 to 34; file sha256 `9a3975d8b47e6b8bb11d53f41bee7ac3fab1d151a0a46a1238b9f06301e62a6b`.
+Source: `LICENSE.md` lines 24 to 38; file sha256 `4ad6037f83edebb89a4466acc516509468fa48457e01b5b44be695a9bac7cf98`.
 
 ~~~text
 ## Effective point, and what stays as it was
@@ -441,7 +441,7 @@ only shows its current licence cannot answer it.
 
 ## licence-md-permits: LICENSE.md: what the licence permits and does not
 
-Source: `LICENSE.md` lines 36 to 46; file sha256 `9a3975d8b47e6b8bb11d53f41bee7ac3fab1d151a0a46a1238b9f06301e62a6b`.
+Source: `LICENSE.md` lines 40 to 50; file sha256 `4ad6037f83edebb89a4466acc516509468fa48457e01b5b44be695a9bac7cf98`.
 
 ~~~text
 ## What this permits, and what it does not
@@ -459,7 +459,7 @@ support whose value derives entirely or substantially from it.
 
 ## licence-md-downstream: LICENSE.md: what this means for anything depending on agentic-os
 
-Source: `LICENSE.md` lines 93 to 123; file sha256 `9a3975d8b47e6b8bb11d53f41bee7ac3fab1d151a0a46a1238b9f06301e62a6b`.
+Source: `LICENSE.md` lines 99 to 128; file sha256 `4ad6037f83edebb89a4466acc516509468fa48457e01b5b44be695a9bac7cf98`.
 
 ~~~text
 ## What this means for anything depending on `agentic-os`
@@ -470,22 +470,21 @@ AGPL's network obligation and the Commons Clause's restriction on selling. A
 third party wanting the semantics without the terms has to write their own
 implementation.
 
-### The applications under `apps/` are an exception — AGPL-3.0-only
+### The applications under `apps/` — AGPL-3.0-only
 
-The reference applications in `apps/` are deliberately licensed **AGPL-3.0-only,
-WITHOUT the Commons Clause** — each carries its own `apps/<name>/LICENSE` (the
-standard GNU AGPLv3 text), so each app is declared AGPL-3.0-only in this file
-(its own LICENSE file is the standard AGPLv3 text and does not itself limit the
-version) and is not intended to carry the Commons Clause that the kernel carries.
-This file does not call the apps open source: that description waits for the
-additional permission below to be final and to have had legal review. The
-paragraph above would otherwise extend the Commons Clause onto them
-because they import the Commons-Clause kernel. Reconciling the two requires an
-AGPL §7 **additional permission** granting the apps the right to import the
-kernel without inheriting the Commons Clause; that legal text is being finalized
-separately and will be added here. Until then, each app's own `AGPL-3.0-only`
-LICENSE is authoritative for that app, and the kernel's Commons Clause is not
-intended to attach to the `apps/` tree.
+The 21 applications in `apps/` are licensed under the **GNU Affero General Public
+License, version 3.0 only (`AGPL-3.0-only`), WITHOUT the Commons Clause and without
+any other commercial restriction**. Each carries its own `apps/<name>/LICENSE`
+(the standard GNU AGPLv3 text, which does not itself limit the version); this
+file and `LICENSING.md` declare the version as 3.0 only.
+
+The paragraph above ("What this means for anything depending on `agentic-os`")
+states the position for the core platform and for software built on it. It is
+not intended to attach the Commons Clause to the `apps/` tree. Whether the two
+can be combined as intended, and whether an AGPL §7 additional permission is
+needed, is under legal review (`[OWNER DECISION D-LIC-3]` in `LICENSING.md`);
+no text here says that question is settled. If counsel requires an additional
+permission, its text will be added here after the review.
 
 `runtime-contracts/LICENSE.md` records the one case still open: `mission-sdk`
 is Apache-2.0 deliberately, and becomes a work based on a Commons-Clause
@@ -497,7 +496,7 @@ one.
 
 ## licence-md-contrib: LICENSE.md: contribution history
 
-Source: `LICENSE.md` lines 125 to 135; file sha256 `9a3975d8b47e6b8bb11d53f41bee7ac3fab1d151a0a46a1238b9f06301e62a6b`.
+Source: `LICENSE.md` lines 130 to 142; file sha256 `4ad6037f83edebb89a4466acc516509468fa48457e01b5b44be695a9bac7cf98`.
 
 ~~~text
 ## Contribution history
@@ -508,7 +507,9 @@ git identities). The remaining commits are GitHub merge commits produced by the
 introduce no third-party authorship. On that basis RedevOps holds the copyright
 needed to relicense. Recorded here because relicensing over outside
 contributions without a CLA is the usual way this goes wrong, and the check
-should be visible rather than assumed.
+should be visible rather than assumed. Outside contributions are governed by
+`CONTRIBUTING.md`: a DCO sign-off for the applications under `apps/`, and a
+contributor licence agreement (text pending counsel) for the core platform.
 
 This file states the terms and the reasoning. It is not legal advice.
 ~~~

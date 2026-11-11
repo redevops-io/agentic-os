@@ -27,8 +27,8 @@ independently validated. "Production-ready" is not claimed.
 
 - Alpha API; many modules in `agentic_os/` and `apps/` are reference implementations with seed data.
 - Router example config is illustrative.
-- Licence: `LICENSE.md` is titled "source-available, not open source" (AGPL-3.0-or-later WITH Commons-Clause);
-  `apps/*/LICENSE` are plain AGPL text.
+- Licence: the core platform is "source-available, not open source" per `LICENSE.md` (AGPL-3.0-or-later WITH Commons-Clause);
+  the 21 apps under `apps/` are AGPL-3.0-only (`apps/*/LICENSE` hold the AGPL text); third-party components keep their own licences.
 
 ## Known gaps
 

@@ -4,8 +4,8 @@
 
 **The integrated control plane and Mission kernel of ReDevOps Runtime.**
 
-[![License: AGPL-3.0 + Commons Clause](https://img.shields.io/badge/License-AGPL--3.0%20%2B%20Commons%20Clause-blue.svg)](LICENSE.md) ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg) ![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8.svg) ![maturity](https://img.shields.io/badge/maturity-alpha%20%2F%20reference-orange.svg) [![NVIDIA Inception](https://img.shields.io/badge/NVIDIA-Inception%20Program%20Member-76B900.svg)](https://www.nvidia.com/en-us/startups/)
-&nbsp;·&nbsp; self-hosted &nbsp;·&nbsp; source-available (see [LICENSE.md](LICENSE.md))
+[![Core: AGPL-3.0 + Commons Clause](https://img.shields.io/badge/Core-AGPL--3.0%20%2B%20Commons%20Clause-blue.svg)](LICENSE.md) [![Apps: AGPL-3.0-only](https://img.shields.io/badge/Apps-AGPL--3.0--only-blue.svg)](apps/README.md) ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg) ![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8.svg) ![maturity](https://img.shields.io/badge/maturity-alpha%20%2F%20reference-orange.svg) [![NVIDIA Inception](https://img.shields.io/badge/NVIDIA-Inception%20Program%20Member-76B900.svg)](https://www.nvidia.com/en-us/startups/)
+&nbsp;·&nbsp; self-hosted &nbsp;·&nbsp; core source-available, apps AGPL-3.0-only (see [LICENSE.md](LICENSE.md))
 
 </div>
 
@@ -50,7 +50,7 @@ observed on 2026-10-15; the compose path was **not** run for this documentation 
 
 Alpha. Single maintainer organization; no independent validation. The ">90% on local hardware" figure is a design
 thesis, not a measurement. Example router config is illustrative. The hosted demo is a demo, not a production
-claim. This repository is source-available under a licence that restricts selling it; it is not "open source".
+claim. The core platform in this repository is source-available under a licence that restricts selling it; it is not "open source". The applications under `apps/` are AGPL-3.0-only.
 Known gaps: [STATUS.md](STATUS.md).
 
 ## Naming
@@ -252,8 +252,15 @@ target was ">90%"); that share has **not been measured**. See
 
 ## License
 
-**Source-available, not open source** (the wording of [LICENSE.md](LICENSE.md)): AGPL-3.0-or-later **WITH** the Commons
-Clause. `LICENSE.md` is the licence this README quotes. Self-host freely, including inside a company for its own business. What
+Three licence categories (details in [LICENSING.md](LICENSING.md)):
+
+1. **The ReDevOps core platform** (core, control plane, sidecar, launcher, Projects UI) is **source-available, not open source** (the wording of
+   [LICENSE.md](LICENSE.md)): AGPL-3.0-or-later **WITH** the Commons Clause.
+2. **The 21 applications under `apps/`** are licensed under **AGPL-3.0-only**, without the Commons Clause (see [apps/README.md](apps/README.md)).
+3. **Bundled third-party components** keep their own licences; their texts and notices are preserved in `THIRD_PARTY_NOTICES.txt`. The terms
+   here do not replace or override them.
+
+The rest of this section is about the core platform. `LICENSE.md` is the licence this README quotes. Self-host freely, including inside a company for its own business. What
 the Clause removes is the right to *sell it* — to charge third parties for the
 software, for hosting it, or for services whose value derives substantially
 from it. That is the part redevops.io reserves.

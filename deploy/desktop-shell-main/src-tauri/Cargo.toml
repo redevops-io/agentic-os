@@ -3,7 +3,9 @@ name = "redevops-launcher"
 version = "0.1.0"
 description = "ReDevOps desktop shell — a native window around the same Today-first UI the browser uses"
 edition = "2021"
-license = "AGPL-3.0-or-later"
+# No SPDX `license` field: the core platform is AGPL-3.0-or-later with the Commons Clause, which has no registered SPDX id, and a plain
+# "AGPL-3.0-or-later" would omit the Commons Clause. The statement is in LICENSING.md (same pattern as deploy/launcher/src-tauri/Cargo.toml).
+license-file = "../../../LICENSING.md"
 
 # The desktop shell is a DELIVERY SURFACE, not a control plane: it holds a connection (URL + a credential in the OS
 # keychain), shows the deployment's own UI, and adds native affordances (tray, deep links, window restore). It owns no

@@ -20,7 +20,7 @@ owner; the owner records decisions in `docs/legal/OWNER_DECISION_FORM.md`; the m
   public repository has no R0-prime commit (OBSERVED). First-party siblings built into the product: `runtime-contracts` v0.3.4 (family
   licence), `redevops-connectors` v0.1.0 (licence status: Q7), and a vendored UI bundle built from the separate `redevops-projects`
   repository (its npm lock is not recorded). `knowledge-frontier` v0.1.0 was removed from the frozen binary.
-* **Licence the owner states.** “Agentic Apps and the agentic-os control plane are source-available (family licence: AGPL-3.0-or-later
+* **Licence the owner states.** “The ReDevOps core platform (the agentic-os control plane, sidecar, launcher, Projects UI and the Agentic Apps desktop distribution that contains them) is source-available (family licence: AGPL-3.0-or-later
   with the Commons Clause).” with the identifier `LicenseRef-AGPL-3.0-or-later-with-Commons-Clause` and the line “Copyright (c)
   2025-2026 RedevOps.” (`LICENSING.md`, `LICENSE.md`). The files `LICENSE` (GNU AGPL v3, 19 November 2007), `LICENSE-COMMONS-CLAUSE`
   and `LICENSE.md` are in the repository and in the shipped `Licenses/` folder (EXACT_TEXTS `commons-clause`, `licence-md-*`).

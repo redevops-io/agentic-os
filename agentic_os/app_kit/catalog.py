@@ -17,8 +17,9 @@ CATALOG_HEADER = (
     "# GENERATED from the app manifests' deploy blocks (agentic_os.app_kit.catalog). Do not hand-edit\n"
     "# the app entries — change the app's manifest.py deploy=DeploySpec(...) and regenerate.\n"
     "# App source lives in the agentic-os monorepo under apps/<name>.\n"
-    "# Licensing varies per module. This control plane is AGPL-3.0-or-later WITH Commons Clause, which\n"
-    "# is source-available rather than open source — do not infer either from here.\n"
+    "# Licensing varies per module. The control plane is AGPL-3.0-or-later WITH Commons Clause (source-available,\n"
+    "# not open source); the apps under apps/ are AGPL-3.0-only; third-party cores keep their own licences. Do not\n"
+    "# infer one from another.\n"
 )
 
 

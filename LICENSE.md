@@ -11,6 +11,10 @@ Copyright (c) 2025-2026 RedevOps.
 
     SPDX-License-Identifier: LicenseRef-AGPL-3.0-or-later-with-Commons-Clause
 
+This statement is the licence of the ReDevOps core platform. The 21 applications under `apps/` are licensed separately, under
+**AGPL-3.0-only** without the Commons Clause (see "The applications under `apps/`" below), and bundled third-party components keep their own
+licences (see `LICENSING.md`). It is not a statement about those.
+
 There is no registered SPDX identifier for this combination — Commons Clause is
 a licence *condition*, not an SPDX exception — so a `LicenseRef-` name is used.
 Tooling expecting a standard identifier will report this project as
@@ -88,7 +92,9 @@ instead.
 
 Descriptions of the *third-party* cores each module is built on — Lago,
 Chatwoot, Umami, Listmonk, changedetection.io — are unchanged. Those really are
-open source, and it is their licence being described, not this one.
+open source, and it is their licence being described, not this one. Bundled
+third-party components keep their original licences; the terms in this file do
+not replace or override them.
 
 ## What this means for anything depending on `agentic-os`
 
@@ -98,22 +104,21 @@ AGPL's network obligation and the Commons Clause's restriction on selling. A
 third party wanting the semantics without the terms has to write their own
 implementation.
 
-### The applications under `apps/` are an exception — AGPL-3.0-only
+### The applications under `apps/` — AGPL-3.0-only
 
-The reference applications in `apps/` are deliberately licensed **AGPL-3.0-only,
-WITHOUT the Commons Clause** — each carries its own `apps/<name>/LICENSE` (the
-standard GNU AGPLv3 text), so each app is declared AGPL-3.0-only in this file
-(its own LICENSE file is the standard AGPLv3 text and does not itself limit the
-version) and is not intended to carry the Commons Clause that the kernel carries.
-This file does not call the apps open source: that description waits for the
-additional permission below to be final and to have had legal review. The
-paragraph above would otherwise extend the Commons Clause onto them
-because they import the Commons-Clause kernel. Reconciling the two requires an
-AGPL §7 **additional permission** granting the apps the right to import the
-kernel without inheriting the Commons Clause; that legal text is being finalized
-separately and will be added here. Until then, each app's own `AGPL-3.0-only`
-LICENSE is authoritative for that app, and the kernel's Commons Clause is not
-intended to attach to the `apps/` tree.
+The 21 applications in `apps/` are licensed under the **GNU Affero General Public
+License, version 3.0 only (`AGPL-3.0-only`), WITHOUT the Commons Clause and without
+any other commercial restriction**. Each carries its own `apps/<name>/LICENSE`
+(the standard GNU AGPLv3 text, which does not itself limit the version); this
+file and `LICENSING.md` declare the version as 3.0 only.
+
+The paragraph above ("What this means for anything depending on `agentic-os`")
+states the position for the core platform and for software built on it. It is
+not intended to attach the Commons Clause to the `apps/` tree. Whether the two
+can be combined as intended, and whether an AGPL §7 additional permission is
+needed, is under legal review (`[OWNER DECISION D-LIC-3]` in `LICENSING.md`);
+no text here says that question is settled. If counsel requires an additional
+permission, its text will be added here after the review.
 
 `runtime-contracts/LICENSE.md` records the one case still open: `mission-sdk`
 is Apache-2.0 deliberately, and becomes a work based on a Commons-Clause
@@ -130,6 +135,8 @@ git identities). The remaining commits are GitHub merge commits produced by the
 introduce no third-party authorship. On that basis RedevOps holds the copyright
 needed to relicense. Recorded here because relicensing over outside
 contributions without a CLA is the usual way this goes wrong, and the check
-should be visible rather than assumed.
+should be visible rather than assumed. Outside contributions are governed by
+`CONTRIBUTING.md`: a DCO sign-off for the applications under `apps/`, and a
+contributor licence agreement (text pending counsel) for the core platform.
 
 This file states the terms and the reasoning. It is not legal advice.

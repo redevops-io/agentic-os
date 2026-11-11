@@ -11,7 +11,7 @@ meanwhile, in [packaging/DECISIONS-REQUIRED.md](packaging/DECISIONS-REQUIRED.md)
 ## 1. The statement
 
 <!-- licence-statement:begin -->
-Agentic Apps and the agentic-os control plane are source-available (family licence: AGPL-3.0-or-later with the Commons Clause).
+The ReDevOps core platform (the agentic-os control plane, sidecar, launcher, Projects UI and the Agentic Apps desktop distribution that contains them) is source-available (family licence: AGPL-3.0-or-later with the Commons Clause).
 
 SPDX-License-Identifier: LicenseRef-AGPL-3.0-or-later-with-Commons-Clause
 <!-- licence-statement:end -->
@@ -23,11 +23,21 @@ reports the project as unrecognised.
 
 Copyright line, as written in [LICENSE.md](LICENSE.md): "Copyright (c) 2025-2026 RedevOps."
 
-`[OWNER DECISION D-LIC-1]` The wording of section 1 is the wording already used
-by the repository (`LICENSE.md`, `README.md`, `modules.yaml`) and by the
-evidence of the earlier native release. Whether it is the final public
-statement for the packages, and whether the short form above is acceptable in
-place of a longer one, is for the owner.
+### The three licence categories
+
+| Category | Licence | Where the text is |
+|---|---|---|
+| 1. ReDevOps core platform: the agentic-os core, control plane, sidecar, launcher, Projects UI, and other ReDevOps platform components, except where a component states otherwise | GNU AGPL-3.0-or-later with the Commons Clause (source-available; not OSI-approved open source, because the Commons Clause adds a commercial restriction) | [LICENSE](LICENSE), [LICENSE-COMMONS-CLAUSE](LICENSE-COMMONS-CLAUSE), [LICENSE.md](LICENSE.md) |
+| 2. The 21 applications under `apps/` | GNU AGPL-3.0-only, without the Commons Clause and without other commercial restrictions (`SPDX-License-Identifier: AGPL-3.0-only`) | `apps/<name>/LICENSE` (the GNU AGPL version 3 text) and [apps/README.md](apps/README.md) |
+| 3. Bundled third-party components | Their own licences. These terms do not replace or override them; their texts, copyright notices and attributions are preserved in `THIRD_PARTY_NOTICES.txt` and the source-distribution obligations they carry remain | `THIRD_PARTY_NOTICES.txt`, `NOTICES_MISSING.md` |
+
+Public documents describe the core and the desktop distribution as source-available and never as an unrestricted open-source product.
+How the AGPL-3.0-only applications relate to the Commons-Clause core they depend on is under legal review (`[OWNER DECISION D-LIC-3]`, section 6);
+until that review is finished no document states that the applications are cleared to be combined with the core.
+
+`[OWNER DECISION D-LIC-1]` The three-category wording of section 1 follows the owner's licensing decision of 2026-11-10 (core: AGPL-3.0-or-later
+with the Commons Clause; applications: AGPL-3.0-only; third-party: original licences). The gate entry stays OPEN until the owner's signed decision
+record exists (`docs/legal/OWNER_DECISION_FORM.md`); this paragraph is not that record.
 
 ## 2. The texts
 
@@ -82,8 +92,8 @@ Not covered by it:
   `redevops-connectors`, `knowledge-frontier`), each of which declares its own
   licence in its own repository; two of those declarations are marked there as
   inferred (`[OWNER DECISION D-LIC-2]`);
-* `apps/*/LICENSE`: per-app licence files in this repository (plain
-  AGPL-3.0). They are not part of the artifacts;
+* the applications under `apps/` (category 2: GNU AGPL-3.0-only, without the Commons Clause): their per-app `apps/*/LICENSE` files are the
+  GNU AGPL version 3 text. The applications are not part of the desktop artifacts, which contain only the core platform;
 * releases tagged at or before `v0.1.0`, which `LICENSE.md` says were
   distributed under AGPL-3.0-or-later alone.
 
@@ -141,7 +151,9 @@ combined binary that also contains code under plain AGPL-3.0 or other
 licences, in light of AGPL section 7 ("further restrictions") and section 10,
 quoted above. The text of `LICENSE.md` ("What this means for anything
 depending on `agentic-os`") describes the owner's position for the family;
-whether it settles the question for third-party components is for counsel.
+whether it settles the question for third-party components is for counsel. The same review covers the relationship between the
+AGPL-3.0-only applications under `apps/`, which import the core, and the Commons Clause that the core carries; the owner's decision of 2026-11-10
+fixes the intended licences, it does not answer that legal question.
 
 `[OWNER DECISION D-LIC-5]` What "users interacting with it remotely through a
 computer network" (section 13) means for the sidecar, which serves the UI on a
