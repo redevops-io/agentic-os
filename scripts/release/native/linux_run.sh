@@ -36,7 +36,7 @@ log "creating the VM"; L create --name="$VM" --tty=false "$HERE/lima-linux.yaml"
 L start "$VM" >>"$OUT/evidence/driver.log" 2>&1; log "VM started"
 L copy "$OUT/artifacts/src-${COMMIT:0:8}.bundle" "$VM:src.bundle"; L copy "$OUT/artifacts/mirror.tar" "$VM:mirror.tar"
 L copy "$OUT/evidence/toolchain.env" "$VM:/tmp/toolchain.env"
-for f in vm_provision.sh vm_build.sh vm_collect.sh; do L copy "$HERE/$f" "$VM:$f"; done
+for f in vm_provision.sh vm_build.sh vm_collect.sh vm_compare.sh; do L copy "$HERE/$f" "$VM:$f"; done
 S 'mkdir -p ~/mirror && tar -C ~/mirror -xf ~/mirror.tar && ls ~/mirror'
 log "provisioning (pins from packaging/toolchain.env)"; S 'bash ~/vm_provision.sh' >"$OUT/evidence/provision.log" 2>&1
 S 'uname -a; lsb_release -d; . ~/.cargo/env; rustc --version; cargo --version; cargo tauri --version; ~/.local/bin/uv --version; git --version' > "$OUT/evidence/vm-versions.txt" 2>&1 || true
@@ -47,8 +47,9 @@ build() { # LABEL NAME [SDE]
 build b1 b1;  build b2 b2           # two directories, no SOURCE_DATE_EPOCH: the c317 comparison
 build bx x1;  build bx x2           # ONE directory built twice, no SOURCE_DATE_EPOCH: separates path effects from time effects
 build by y1 "$SDE"; build by y2 "$SDE"   # ONE directory built twice with SOURCE_DATE_EPOCH = the commit time
+log "comparing the collected builds inside the VM"
+for pair in "b1 b2" "x1 x2" "y1 y2"; do set -- $pair; S "bash ~/vm_compare.sh $1 $2" > "$OUT/evidence/compare-$1-$2.out" 2>&1 || true; done
 log "copying the artifacts out"
 S 'cd ~ && tar -cf art.tar art' && L copy "$VM:art.tar" "$OUT/artifacts/art.tar" && tar -C "$OUT/artifacts" -xf "$OUT/artifacts/art.tar" && rm -f "$OUT/artifacts/art.tar"
-for n in b1 b2 x1 x2 y1 y2; do S "cat ~/build-*.log | head -0; true" >/dev/null; done
 ( cd "$OUT/artifacts" && find . -type f ! -name SHA256SUMS | LC_ALL=C sort | while IFS= read -r f; do shasum -a 256 "$f"; done > SHA256SUMS )
 log "done: $(wc -l < "$OUT/artifacts/SHA256SUMS" | tr -d ' ') files hashed"
