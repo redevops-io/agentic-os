@@ -386,6 +386,9 @@ def apply(doc: Path, pubkey: Path, decided_by: str, date: str, root: Path = ROOT
     pk = pubkey.read_text(encoding="utf-8").strip()
     if not re.fullmatch(r"(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com) [A-Za-z0-9+/=]+( [^\n]*)?", pk) or "PRIVATE" in pk or "\n" in pk:
         raise SystemExit("the public key file must hold exactly one public key line")
+    current = (root / GATE).read_text(encoding="utf-8")
+    if json.dumps(json.loads(current), indent=1, ensure_ascii=False) + "\n" != current:
+        raise SystemExit("the gate file is not in its canonical one-space-indent form; refusing to reformat it")
     target = root / DOC_REL
     for q in (root / "docs", root / "docs/legal", root / "docs/legal/approved", target, Path(str(target) + ".sig"), root / GATE, root / ALLOWED):
         if q.is_symlink():
@@ -406,9 +409,6 @@ def apply(doc: Path, pubkey: Path, decided_by: str, date: str, root: Path = ROOT
                      decided_by=decided_by, decided_on=date)
             changed.append(d["id"])
     g["legal_signer_fingerprints"] = sorted(set(g.get("legal_signer_fingerprints", [])) | {fp})
-    unchanged = json.dumps(json.loads(orig), indent=1, ensure_ascii=False) + "\n"
-    if unchanged != orig:
-        raise SystemExit("the gate file is not in its canonical one-space-indent form; refusing to reformat it")
     gate_path.write_text(json.dumps(g, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
     al = root / ALLOWED
     lines = al.read_text(encoding="utf-8").splitlines() if al.exists() else []

@@ -218,9 +218,9 @@ def test_s0_rejects_a_release_commit_signed_by_a_key_the_owner_did_not_name(repo
     doc = render(repo, tmp_path)
     forged_fp = sign_and_commit_with(repo, tmp_path, key, doc)
     out = s0_rows(repo, key["fpr"])                                   # the owner's real fingerprint
-    assert "`FAIL` exactly one signer was added" in out or "`FAIL` signer list" in out
+    assert "`FAIL` signer lists" in out
     out2 = s0_rows(repo, forged_fp)                                   # only the fingerprint the commit itself chose would pass that row
-    assert "`PASS` exactly one signer was added, and it is the key you named" in out2
+    assert "`PASS` both signer lists name exactly one key, the one you named" in out2
     no_expect = run([sys.executable, "-I", "scripts/release/release_orchestrate.py", "--run", "--stages", "S0", "--workspace", str(repo), "--evidence-dir", str(repo.parent / "ev")], repo).stdout
     assert "no --expect-signer-fingerprint" in no_expect
 
@@ -326,3 +326,52 @@ def test_the_gate_file_formatting_is_preserved(repo, tmp_path, key):
     import difflib
     changed = sum(1 for ln in difflib.unified_diff(before.splitlines(), after.splitlines(), lineterm="", n=0) if ln[:1] in "+-" and ln[:3] not in ("+++", "---"))
     assert changed < 120, changed                       # the status fields of nine entries and one fingerprint, not a reformat of the file
+
+
+def test_s0_rejects_a_signature_by_a_pre_listed_attacker_key_even_if_the_owner_key_is_added(repo, tmp_path, key):
+    """Finding N1: F already lists the attacker's key; the document is signed by the attacker; the owner's PUBLIC key is added by apply."""
+    atk = tmp_path / "atk"
+    atk.mkdir()
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(atk / "k")], check=True, env={"PATH": "/usr/bin:/bin"})
+    afp = subprocess.run(["ssh-keygen", "-l", "-f", str(atk / "k.pub")], capture_output=True, text=True).stdout.split()[1]
+    pub = (atk / "k.pub").read_text().split()
+    (repo / "packaging/legal-allowed-signers").write_text(f'atk namespaces="redevops-legal-decision@v1" {pub[0]} {pub[1]}\n')
+    g = json.loads((repo / "packaging/distribution-gate.json").read_text())
+    g["legal_signer_fingerprints"] = [afp]
+    (repo / "packaging/distribution-gate.json").write_text(json.dumps(g, indent=1, ensure_ascii=False) + "\n")
+    run(["git", "add", "-A"], repo)
+    run(["git", "-c", "commit.gpgsign=false", "commit", "-qm", "F2 lists a signer"], repo)
+    doc = render(repo, tmp_path)
+    run([sys.executable, "-I", "scripts/release/approval.py", "apply", "--doc", str(doc), "--pubkey", str(key["pub"]), "--decided-by", "x", "--date", "2026-12-01"], repo)
+    subprocess.run(["ssh-keygen", "-Y", "sign", "-q", "-f", str(atk / "k"), "-n", "redevops-legal-decision@v1", str(doc)], check=True, env={"PATH": "/usr/bin:/bin"})
+    shutil.copyfile(str(doc) + ".sig", repo / "docs/legal/approved/RELEASE_OWNER_APPROVAL_0.6.0.md.sig")
+    run(["git", "add", "-A"], repo)
+    run(["git", "-c", "commit.gpgsign=false", "commit", "-qm", f"r\n\nSigner-key-fingerprint: {key['fpr']}\n"], repo)
+    out = s0_rows(repo, key["fpr"])
+    assert "`FAIL` signer lists" in out or "`FAIL` signature by the named key" in out
+    assert "`PASS` the signature verifies against a list that holds only the key you named" not in out
+
+
+def test_a_crafted_signer_line_is_read_the_way_the_gate_reads_it(repo, tmp_path, key):
+    doc = render(repo, tmp_path)
+    sign_and_commit_with(repo, tmp_path, key, doc)
+    own = key["pub"].read_text().split()
+    line = (repo / "packaging/legal-allowed-signers").read_text().strip().splitlines()[-1]
+    atk_blob = line.split()[-1]
+    crafted = f'p namespaces="redevops-legal-decision@v1\\" ssh-ed25519 {own[1]} \\"" ssh-ed25519 {atk_blob}\n'
+    (repo / "packaging/legal-allowed-signers").write_text(crafted)
+    run(["git", "add", "-A"], repo)
+    run(["git", "-c", "commit.gpgsign=false", "commit", "-q", "--amend", "--no-edit"], repo)
+    out = s0_rows(repo, key["fpr"])
+    assert "`PASS` both signer lists name exactly one key" not in out
+
+
+def test_s8_refuses_unless_every_earlier_stage_passed_in_the_same_run(repo, tmp_path):
+    bare = tmp_path / "remote.git"
+    run(["git", "init", "-q", "--bare", str(bare)], tmp_path)
+    run(["git", "remote", "add", "origin", str(bare)], repo)
+    r = run([sys.executable, "-I", "scripts/release/release_orchestrate.py", "--run", "--stages", "S8", "--push", "--remote", "origin", "--workspace", str(repo), "--evidence-dir", str(tmp_path / "ev")], repo)
+    assert "refused: stages that did not PASS in this same run" in r.stdout
+    assert run(["git", "ls-remote", str(bare)], tmp_path).stdout.strip() == ""
+    r = run([sys.executable, "-I", "scripts/release/release_orchestrate.py", "--run", "--stages", "S8", "--push", "--remote", "--upload-pack=x", "--workspace", str(repo)], repo)
+    assert r.returncode != 0 or "plain remote name" in r.stdout

@@ -170,7 +170,7 @@
       "notarize": true,
       "staple": "dmg only",
       "distribution": "yes (only if the gate passes for macos)",
-      "entitlement": "sidecar only: com.apple.security.cs.disable-library-validation (accepted by the owner 2026-11-10, residual risk R1, docs/MACOS_ENTITLEMENTS.md)",
+      "entitlement": "the one sidecar-only library-validation entitlement in packaging/macos/sidecar.entitlements.plist, exactly as it stands (accepted by the owner 2026-11-10, residual risk R1, docs/MACOS_ENTITLEMENTS.md)",
       "preserved": "the c317 signed and notarized private dmg e32a1075... and signing package 4.1 are never modified",
       "runs_at": "the owner's Mac terminal (keychain identity and notary profile); no agent runs it"
     },
@@ -210,7 +210,7 @@
   "exceptions_and_accepted_risks": [
     {
       "id": "X-1",
-      "text": "Sidecar entitlement com.apple.security.cs.disable-library-validation (residual risk R1), accepted by the owner for the c317 build on 2026-11-10; re-accepted here for the release build only if the owner signs this approval.",
+      "text": "The sidecar-only library-validation entitlement in packaging/macos/sidecar.entitlements.plist (residual risk R1), accepted by the owner for the c317 build on 2026-11-10; re-accepted here for the release build only if the owner signs this approval.",
       "source": "docs/MACOS_ENTITLEMENTS.md; OWNER_DECISIONS_RECORD_2026-11-10.md"
     },
     {

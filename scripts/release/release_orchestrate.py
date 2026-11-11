@@ -98,20 +98,11 @@ def gate_json(root: Path = ROOT) -> dict:
 
 
 # ---------------------------------------------------------------------------------------------------------------- stages
-def key_fp_of_line(line: str) -> str:
-    """Fingerprint of the key on one allowed-signers line (type and blob are the last two tokens before an optional comment)."""
-    toks = line.split()
-    kt = next((k for k, x in enumerate(toks) if x.startswith(("ssh-", "ecdsa-", "sk-"))), None)
-    if kt is None or kt + 1 >= len(toks):
-        return ""
-    q = sh(["ssh-keygen", "-l", "-f", "-"], input=f"{toks[kt]} {toks[kt + 1]}\n", env={"PATH": "/usr/bin:/bin"})
-    return q.stdout.split()[1] if q.returncode == 0 and q.stdout.split() else ""
-
-
 def s0(ctx) -> Res:
     r = Res("S0")
     man = manifest()
     head = git("rev-parse", "HEAD")
+    ctx.head0 = head
     clean = not git("status", "--porcelain")
     r.add("PASS" if clean else "FAIL", "worktree clean" if clean else "worktree is not clean")
     for name, sha in man["source"]["protected_refs"].items():
@@ -157,19 +148,18 @@ def s0(ctx) -> Res:
     if top(gate_old) != top(gate_new):
         bad.append("top-level fields")
     r.add("PASS" if not bad else "FAIL", "gate file changed only in the bundled decisions' status fields and the signer list" if not bad else f"gate file: unexpected changes {bad}")
-    # the signer: exactly one key was added, to both lists, and it is the key the owner named
-    fp_old, fp_new = list(gate_old.get("legal_signer_fingerprints", [])), list(gate_new.get("legal_signer_fingerprints", []))
-    added_fp = [x for x in fp_new if x not in fp_old]
-    al_old = approval.show(parent, approval.ALLOWED).decode().splitlines()
-    al_new = (ROOT / approval.ALLOWED).read_text(encoding="utf-8").splitlines()
-    added_lines = [ln for ln in al_new if ln not in al_old]
-    removed = [ln for ln in al_old if ln not in al_new]
-    line_fp = key_fp_of_line(added_lines[0]) if len(added_lines) == 1 else ""
-    signer_ok = added_fp == [expect] and len(added_lines) == 1 and not removed and line_fp == expect and set(fp_new) == set(fp_old) | {expect}
-    r.add("PASS" if signer_ok else "FAIL", f"exactly one signer was added, and it is the key you named ({expect})" if signer_ok else
-          f"signer list: added fingerprints {added_fp}, added lines {len(added_lines)}, removed {len(removed)}, line key {line_fp or 'unreadable'}, expected {expect}")
+    # the signer: after the change, BOTH lists name exactly one key and it is the key the owner named (parsed by the gate's own functions, so a
+    # crafted line cannot be read differently here and there). The signature is then verified against a list that holds only that key.
+    gm = approval.gate_mod()
+    fps_file, fp_probs = gm.allowed_signer_fingerprints(ROOT / approval.ALLOWED)
+    fp_json = list(gate_new.get("legal_signer_fingerprints", []))
+    signer_ok = not fp_probs and fps_file == [expect] and fp_json == [expect]
+    r.add("PASS" if signer_ok else "FAIL", f"both signer lists name exactly one key, the one you named ({expect})" if signer_ok else
+          f"signer lists: allowed-signers {fps_file} {fp_probs}, gate file {fp_json}; expected exactly [{expect}]")
+    _, why = gm.verify_sshsig_bytes(ROOT, approval.DOC_REL, ROOT / approval.ALLOWED, [expect])
+    r.add("PASS" if signer_ok and not why else "FAIL", "the signature verifies against a list that holds only the key you named" if signer_ok and not why else f"signature by the named key: {why or 'signer lists wrong'}")
     msg = git("log", "-1", "--format=%B")
-    r.add("PASS" if f"Signer-key-fingerprint: {expect}" in msg else "FAIL", "the release commit message records the same key fingerprint")
+    r.add("PASS" if f"Signer-key-fingerprint: {expect}" in msg.splitlines() else "FAIL", "the release commit message records the same key fingerprint")
     errs = approval.verify(doc, parent)
     r.add("PASS" if not errs else "FAIL", "approval document is byte-identical to the render for F and its decision set" if not errs else f"approval document: {errs}")
     allowed_ids = {d["id"] for d in approval.owner_only(gate_new)}
@@ -372,9 +362,27 @@ def s8(ctx) -> Res:
     if not ctx.remote:
         r.add("FAIL", "--remote NAME is required with --push")
         return r
-    bad = [s for s, st in ctx.results.items() if s != "S8" and st != "PASS"]
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", ctx.remote):
+        r.add("FAIL", "the remote name is not a plain remote name")
+        return r
+    need = [f"S{k}" for k in range(8)]
+    bad = [s for s in need if ctx.results.get(s) != "PASS"]
     if bad:
-        r.add("FAIL", f"refused: stages that did not PASS in this run: {bad}")
+        r.add("FAIL", f"refused: stages that did not PASS in this same run: {bad}")
+        return r
+    head = git("rev-parse", "HEAD")
+    problems = []
+    if getattr(ctx, "head0", None) != head:
+        problems.append("HEAD changed since S0")
+    if git("status", "--porcelain"):
+        problems.append("worktree is not clean")
+    base = approval.parse_header((ROOT / approval.DOC_REL).read_text(encoding="utf-8"))["base-commit"]
+    if git("rev-parse", "HEAD^") != base:
+        problems.append("HEAD^ is not the base commit named in the approval")
+    if not ctx.expect_fp:
+        problems.append("no expected signer fingerprint")
+    if problems:
+        r.add("FAIL", "refused: " + "; ".join(problems))
         return r
     url = git("remote", "get-url", ctx.remote)
     sys.stdout.write(f"About to tag {git('rev-parse', 'HEAD')} as {tag} and push branch {branch} and the tag to {ctx.remote} = {url}\nType exactly: push {tag} to {url}\n> ")
@@ -443,6 +451,7 @@ class Ctx:
         self.dry, self.workspace, self.evidence = dry, workspace, evidence
         self.expect_fp, self.push, self.remote = expect_fp, push, remote
         self.results: dict[str, str] = {}
+        self.head0 = None
 
 
 def main(argv=None) -> int:
